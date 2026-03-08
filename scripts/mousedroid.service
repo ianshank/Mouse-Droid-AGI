@@ -1,0 +1,15 @@
+[Unit]
+Description=MouseDroid AGI — MSE-6 Autonomous Navigation
+After=network.target
+
+[Service]
+Type=simple
+User=jetson
+WorkingDirectory=/opt/mousedroid
+ExecStart=/opt/mousedroid/venv/bin/python -m mousedroid.main --config /etc/mousedroid/jetson_production.yaml
+Restart=on-failure
+RestartSec=5
+Environment=MOUSEDROID_MOCK_HARDWARE=false
+
+[Install]
+WantedBy=multi-user.target

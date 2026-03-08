@@ -1,0 +1,137 @@
+"""LLM Gateway — NL mission to velocity command pipeline.
+
+Uses llama-cpp-python for local inference on Jetson Orin Nano.
+Optional dependency: ``pip install mousedroid[llm]``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from typing import TYPE_CHECKING, Any
+
+from mousedroid.llm_gateway.protocol import GoalVector
+from mousedroid.logging.setup import get_logger
+
+if TYPE_CHECKING:
+    from mousedroid.llm_gateway.config import GatewayConfig
+
+_log = get_logger(__name__)
+
+# Normalisation constants for velocity targets (module-level, not inline).
+_MAX_VX_NORM_MPS: float = 0.5
+_MAX_VY_NORM_MPS: float = 0.3
+_MAX_OMEGA_NORM_RADS: float = 2.0
+
+_SYSTEM_PROMPT: str = (
+    "You are a Star Wars MSE-6 Mouse Droid navigation controller. "
+    "Given a natural language mission, output a JSON object with keys "
+    '"vx" (forward, -1 to 1), "vy" (lateral, -1 to 1), "omega" (rotation, -1 to 1). '
+    "Respond with ONLY the JSON object."
+)
+
+
+class LLMGateway:
+    """NL mission -> GoalVector translation via local LLM.
+
+    Requires ``llama-cpp-python`` to be installed. ``start()`` raises
+    ``RuntimeError`` if the dependency is missing.
+    """
+
+    def __init__(self, cfg: GatewayConfig) -> None:
+        """Initialise gateway.
+
+        Args:
+            cfg: Gateway configuration.
+        """
+        self._cfg = cfg
+        self._model: Any = None
+
+    async def start(self) -> None:
+        """Load model and warm up.
+
+        Raises:
+            RuntimeError: If llama-cpp-python is not installed.
+        """
+        try:
+            await asyncio.to_thread(self._load_model)
+        except ImportError as exc:
+            msg = "llama-cpp-python is required: pip install mousedroid[llm]"
+            raise RuntimeError(msg) from exc
+        _log.info("llm_gateway_started", model=str(self._cfg.model_path))
+
+    def _load_model(self) -> None:  # pragma: no cover
+        """Load GGUF model (blocking, run via to_thread)."""
+        from llama_cpp import Llama
+
+        self._model = Llama(
+            model_path=str(self._cfg.model_path),
+            n_threads=self._cfg.n_threads,
+            n_gpu_layers=self._cfg.n_gpu_layers,
+        )
+
+    async def translate_mission(self, nl_command: str) -> GoalVector:
+        """Translate NL mission to GoalVector.
+
+        Args:
+            nl_command: Natural language mission description.
+
+        Returns:
+            GoalVector with normalised velocity targets.
+
+        Raises:
+            ValueError: If nl_command is empty.
+        """
+        if not nl_command.strip():
+            msg = "nl_command must be non-empty"
+            raise ValueError(msg)
+
+        if self._model is None:
+            _log.warning("llm_gateway_not_started")
+            return GoalVector()
+
+        prompt = f"{_SYSTEM_PROMPT}\n\nMission: {nl_command}\n\nJSON:"
+        raw = await asyncio.to_thread(self._infer_sync, prompt)
+        return self._parse_response(raw)
+
+    def _infer_sync(self, prompt: str) -> str:  # pragma: no cover
+        """Run blocking LLM inference (via to_thread).
+
+        Args:
+            prompt: Full prompt string.
+
+        Returns:
+            Raw model output text.
+        """
+        output = self._model(
+            prompt,
+            max_tokens=self._cfg.max_tokens,
+            temperature=self._cfg.temperature,
+            stop=self._cfg.stop_tokens,
+        )
+        return str(output["choices"][0]["text"])
+
+    def _parse_response(self, raw: str) -> GoalVector:
+        """Parse LLM JSON response into GoalVector.
+
+        Args:
+            raw: Raw JSON string from LLM.
+
+        Returns:
+            Parsed GoalVector with clamped values.
+        """
+        try:
+            data = json.loads(raw.strip())
+            return GoalVector(
+                vx_target=max(-1.0, min(1.0, float(data.get("vx", 0.0)))),
+                vy_target=max(-1.0, min(1.0, float(data.get("vy", 0.0)))),
+                omega_target=max(-1.0, min(1.0, float(data.get("omega", 0.0)))),
+            )
+        except (json.JSONDecodeError, KeyError, TypeError):
+            _log.warning("llm_parse_failed", raw=raw)
+            return GoalVector()
+
+    async def stop(self) -> None:
+        """Unload model and release memory."""
+        self._model = None
+        _log.info("llm_gateway_stopped")

@@ -1,0 +1,20 @@
+platform: mouse_droid
+mock_hardware: false
+debug: false
+
+jetson:
+  tensorrt_enabled: true
+  gpu_memory_fraction: 0.7
+  power_mode: "15W"
+  dla_enabled: false
+  precision: "fp16"
+  workspace_gb: 2.0
+
+logging:
+  level: "INFO"
+  format: "json"
+
+experience:
+  path: "/home/jetson/mousedroid_experience"
+  map_size_gb: 40
+  flush_every_n: 60

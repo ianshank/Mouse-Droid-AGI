@@ -1,0 +1,119 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mousedroid"
+version = "0.1.0"
+description = "MouseDroidAGI — Star Wars MSE-6 Agentic World Model on Jetson Orin Nano"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.1",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.7",
+    "structlog>=23.0",
+    "lmdb>=1.4",
+    "numpy>=1.24",
+    "pyyaml>=6.0",
+    "msgpack>=1.0",
+    "networkx>=3.0",
+    "faiss-cpu>=1.7",
+]
+
+[project.optional-dependencies]
+hardware = [
+    "Jetson.GPIO>=2.1",
+    "pyserial>=3.5",
+    "picamera2>=0.3",
+]
+jetson = [
+    "tensorrt>=8.0",
+    "pycuda>=2022.1",
+]
+llm = [
+    "llama-cpp-python>=0.2",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=4.0",
+    "pytest-xdist>=3.0",
+    "hypothesis>=6.80",
+    "ruff>=0.4",
+    "mypy>=1.5",
+]
+
+[project.scripts]
+mousedroid = "mousedroid.main:cli_entry"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mousedroid"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests", "tools"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "PT",
+    "S", "ANN", "D", "T20",
+]
+ignore = ["D100", "D104", "D107", "D203", "D213", "S101", "ANN401", "TCH", "TC"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["D", "ANN", "S101", "S108"]
+"tools/**/*.py" = ["D", "ANN", "T20"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "mousedroid.config.schema",
+    "mousedroid.llm_gateway.config",
+    "mousedroid.world_model.encoder",
+    "mousedroid.world_model.rssm",
+    "mousedroid.world_model.mcts",
+    "mousedroid.scaling.moe",
+    "mousedroid.scaling.adaptive",
+    "mousedroid.reward.model",
+    "mousedroid.learning.progressive",
+    "mousedroid.curiosity.icm",
+    "mousedroid.growth.distillation",
+]
+disallow_subclassing_any = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "slow: marks tests as slow",
+    "hardware: marks tests requiring real hardware",
+]
+addopts = "-v --tb=short"
+
+[tool.coverage.run]
+source = ["src/mousedroid"]
+omit = [
+    "*/tests/*",
+    "*/main.py",
+    "*/hardware/sensors/ultrasonic.py",
+    "*/hardware/camera/imx500.py",
+]
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.",
+    "pass",
+    "\\.\\.\\.",
+]

@@ -1,0 +1,7 @@
+platform: mouse_droid
+mock_hardware: true
+debug: true
+
+logging:
+  level: "DEBUG"
+  format: "console"
