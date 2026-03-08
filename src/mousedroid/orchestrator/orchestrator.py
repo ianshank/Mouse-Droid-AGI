@@ -138,13 +138,13 @@ class MouseDroidOrchestrator:
             vision_features = await self._camera.capture_features()
             valid_mask[0] = 1.0
         except Exception:
-            _log.warning("vision_capture_failed")
+            _log.warning("vision_capture_failed", exc_info=True)
 
         try:
             distance_m = await self._distance_sensor.read_distance_m()
             valid_mask[1] = 1.0
         except Exception:
-            _log.warning("distance_read_failed")
+            _log.warning("distance_read_failed", exc_info=True)
 
         try:
             encoders = await self._esp32.read_encoders()
@@ -155,7 +155,7 @@ class MouseDroidOrchestrator:
             )
             valid_mask[2] = 1.0
         except Exception:
-            _log.warning("motor_state_read_failed")
+            _log.warning("motor_state_read_failed", exc_info=True)
 
         return MouseDroidObservationBundle(
             _timestamp=time.monotonic(),

@@ -43,6 +43,9 @@ _CURIOSITY_CHANNELS: tuple[str, ...] = (
 )
 """Named curiosity channels for aggregation."""
 
+_POLICY_HIDDEN_DIM: int = 64
+"""Hidden layer dimensionality for PolicyMLP and ValueMLP networks."""
+
 
 # ---------------------------------------------------------------------------
 # Utility helpers
@@ -254,7 +257,7 @@ class PolicyMLP:
 
     def __init__(self, input_dim: int = 128, action_dim: int = 2) -> None:
         rng = np.random.default_rng(100)
-        hidden = 64
+        hidden = _POLICY_HIDDEN_DIM
         self._w1 = rng.standard_normal((input_dim, hidden)).astype(np.float32) * 0.01
         self._b1 = np.zeros(hidden, dtype=np.float32)
         self._w2 = rng.standard_normal((hidden, action_dim)).astype(np.float32) * 0.01
@@ -284,7 +287,7 @@ class ValueMLP:
 
     def __init__(self, input_dim: int = 128) -> None:
         rng = np.random.default_rng(101)
-        hidden = 64
+        hidden = _POLICY_HIDDEN_DIM
         self._w1 = rng.standard_normal((input_dim, hidden)).astype(np.float32) * 0.01
         self._b1 = np.zeros(hidden, dtype=np.float32)
         self._w2 = rng.standard_normal((hidden, 1)).astype(np.float32) * 0.01

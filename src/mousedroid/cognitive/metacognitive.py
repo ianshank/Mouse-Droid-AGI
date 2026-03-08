@@ -32,6 +32,12 @@ _N_CAPABILITIES: int = 8
 _EMA_DEFAULT_ALPHA: float = 0.1
 """Default EMA blending factor (higher = faster tracking)."""
 
+_TARGET_LOOP_MS: float = 33.0
+"""Target control loop duration in milliseconds (30 Hz)."""
+
+_LOOP_SCORE_SCALE: float = 100.0
+"""Scaling factor for loop-timing capability degradation."""
+
 _CAPABILITY_NAMES: tuple[str, ...] = (
     "navigation",
     "obstacle_avoidance",
@@ -159,8 +165,14 @@ class MetacognitiveModel:
         if "bdi_score" in metrics:
             new_caps[idx_map["bdi"]] = float(metrics["bdi_score"])
         if "loop_time_ms" in metrics:
-            # Target 33 ms (30 Hz). Score drops linearly beyond that.
-            score = float(np.clip(1.0 - (metrics["loop_time_ms"] - 33.0) / 100.0, 0.0, 1.0))
+            # Score drops linearly beyond _TARGET_LOOP_MS.
+            score = float(
+                np.clip(
+                    1.0 - (metrics["loop_time_ms"] - _TARGET_LOOP_MS) / _LOOP_SCORE_SCALE,
+                    0.0,
+                    1.0,
+                )
+            )
             new_caps[idx_map["loop_timing"]] = score
         if "comm_score" in metrics:
             new_caps[idx_map["communication"]] = float(metrics["comm_score"])

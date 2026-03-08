@@ -1,8 +1,11 @@
-"""Tests for WiFiESP32Driver."""
+"""Tests for WiFiESP32Driver — full coverage."""
 
 from __future__ import annotations
 
-from mousedroid.comms.wifi_driver import WiFiESP32Driver, _clamp
+from unittest.mock import AsyncMock, patch
+
+from mousedroid.comms._utils import clamp as _clamp
+from mousedroid.comms.wifi_driver import WiFiESP32Driver
 from mousedroid.config.schema import ESP32Config
 
 
@@ -45,3 +48,51 @@ def test_clamp():
     assert _clamp(0.5, -1.0, 1.0) == 0.5
     assert _clamp(-2.0, -1.0, 1.0) == -1.0
     assert _clamp(3.0, -1.0, 1.0) == 1.0
+
+
+# -- Async method tests with mocked HTTP --
+
+
+async def test_send_velocity():
+    driver = _make_driver()
+    with patch.object(driver, "_post_json", new_callable=AsyncMock, return_value={}):
+        await driver.send_velocity(0.3, -0.1, 0.5)
+    assert driver._last_velocity == (0.3, -0.1, 0.5)
+
+
+async def test_read_encoders():
+    driver = _make_driver()
+    mock_data = {"lv": 0.5, "rv": 0.3, "ox": 1.0, "oy": 2.0, "h": 0.1, "ts": 100.0}
+    with patch.object(driver, "_get_json", new_callable=AsyncMock, return_value=mock_data):
+        reading = await driver.read_encoders()
+    assert reading.left_velocity_mps == 0.5
+    assert reading.right_velocity_mps == 0.3
+    assert reading.odometry_x_m == 1.0
+
+
+async def test_read_encoders_empty_response():
+    driver = _make_driver()
+    with patch.object(driver, "_get_json", new_callable=AsyncMock, return_value={}):
+        reading = await driver.read_encoders()
+    assert reading.left_velocity_mps == 0.0
+
+
+async def test_get_battery_voltage():
+    driver = _make_driver()
+    with patch.object(driver, "_get_json", new_callable=AsyncMock, return_value={"v": 11.8}):
+        voltage = await driver.get_battery_voltage()
+    assert voltage == 11.8
+
+
+async def test_get_battery_voltage_empty():
+    driver = _make_driver()
+    with patch.object(driver, "_get_json", new_callable=AsyncMock, return_value={}):
+        voltage = await driver.get_battery_voltage()
+    assert voltage == 0.0
+
+
+async def test_emergency_stop():
+    driver = _make_driver()
+    with patch.object(driver, "_post_json", new_callable=AsyncMock, return_value={}):
+        await driver.emergency_stop()
+    assert driver._last_velocity == (0.0, 0.0, 0.0)

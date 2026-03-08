@@ -1,4 +1,8 @@
+"""Tests for HealthMonitor — full coverage."""
+
 from __future__ import annotations
+
+from unittest.mock import patch
 
 import pytest
 
@@ -46,3 +50,47 @@ async def test_check_health_ok_status_with_zero_temp(monitor: HealthMonitor) -> 
     result = await monitor.check_health()
     assert result["status"] == "ok"
     assert result["gpu_temp_c"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_read_gpu_temp_valid_sysfs() -> None:
+    monitor = HealthMonitor(HealthConfig(), JetsonConfig())
+    with patch.object(HealthMonitor, "_read_sysfs", return_value="55000"):
+        temp = await monitor.read_gpu_temp_c()
+    assert temp == 55.0
+
+
+@pytest.mark.asyncio
+async def test_read_gpu_load_valid_sysfs() -> None:
+    monitor = HealthMonitor(HealthConfig(), JetsonConfig())
+    with patch.object(HealthMonitor, "_read_sysfs", return_value="750"):
+        load = await monitor.read_gpu_load_pct()
+    assert load == 75.0
+
+
+@pytest.mark.asyncio
+async def test_check_health_warning() -> None:
+    health_cfg = HealthConfig(gpu_temp_warn_c=50.0, gpu_temp_critical_c=80.0)
+    monitor = HealthMonitor(health_cfg, JetsonConfig())
+    with patch.object(HealthMonitor, "_read_sysfs", return_value="55000"):
+        result = await monitor.check_health()
+    assert result["status"] == "warning"
+    assert result["gpu_temp_c"] == 55.0
+
+
+@pytest.mark.asyncio
+async def test_check_health_critical() -> None:
+    health_cfg = HealthConfig(gpu_temp_warn_c=50.0, gpu_temp_critical_c=80.0)
+    monitor = HealthMonitor(health_cfg, JetsonConfig())
+    with patch.object(HealthMonitor, "_read_sysfs", return_value="85000"):
+        result = await monitor.check_health()
+    assert result["status"] == "critical"
+    assert result["gpu_temp_c"] == 85.0
+
+
+@pytest.mark.asyncio
+async def test_read_gpu_temp_value_error() -> None:
+    monitor = HealthMonitor(HealthConfig(), JetsonConfig())
+    with patch.object(HealthMonitor, "_read_sysfs", return_value="not_a_number"):
+        temp = await monitor.read_gpu_temp_c()
+    assert temp == 0.0

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from mousedroid.llm_gateway.config import GatewayConfig
@@ -54,7 +56,6 @@ async def test_translate_mission_whitespace_raises(gateway: LLMGateway):
 
 
 async def test_translate_mission_without_start_returns_default(gateway: LLMGateway):
-    # model is None (not started), should return default GoalVector
     result = await gateway.translate_mission("go forward")
     assert result == GoalVector()
 
@@ -91,3 +92,20 @@ async def test_stop_sets_model_to_none(gateway: LLMGateway):
     gateway._model = "fake_model"
     await gateway.stop()
     assert gateway._model is None
+
+
+async def test_start_raises_without_llama_cpp(gateway: LLMGateway):
+    with (
+        patch.object(gateway, "_load_model", side_effect=ImportError("no llama")),
+        pytest.raises(RuntimeError, match="llama-cpp-python"),
+    ):
+        await gateway.start()
+
+
+async def test_translate_mission_with_model(gateway: LLMGateway):
+    gateway._model = MagicMock()
+    raw_json = '{"vx": 0.7, "vy": 0.0, "omega": -0.2}'
+    with patch.object(gateway, "_infer_sync", return_value=raw_json):
+        result = await gateway.translate_mission("go forward fast")
+    assert result.vx_target == 0.7
+    assert result.omega_target == -0.2

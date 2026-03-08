@@ -1,3 +1,5 @@
+"""Tests for ToolRegistry — full coverage including builtins."""
+
 from __future__ import annotations
 
 import pytest
@@ -58,3 +60,73 @@ def test_names_property(registry: ToolRegistry) -> None:
 
 def test_get_returns_none_for_missing(registry: ToolRegistry) -> None:
     assert registry.get("missing") is None
+
+
+def test_register_duplicate_warns(registry: ToolRegistry) -> None:
+    spec = ToolSpec(name="dup", description="", handler=_dummy_handler)
+    registry.register(spec)
+    registry.register(spec)  # Should warn but not raise
+    assert len(registry) == 1
+
+
+# -- Built-in tool handler dispatch tests --
+
+
+@pytest.mark.asyncio
+async def test_dispatch_health_check() -> None:
+    reg = create_default_registry()
+    result = await reg.dispatch("health_check")
+    assert result["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_calibrate_ultrasonic() -> None:
+    reg = create_default_registry()
+    result = await reg.dispatch("calibrate_ultrasonic")
+    assert result["status"] == "calibration_complete"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_esp32_diagnostics() -> None:
+    reg = create_default_registry()
+    result = await reg.dispatch("esp32_diagnostics")
+    assert result["status"] == "esp32_ok"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_tensorrt_compile() -> None:
+    reg = create_default_registry()
+    result = await reg.dispatch("tensorrt_compile")
+    assert result["status"] == "compilation_pending"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_benchmark_latency() -> None:
+    reg = create_default_registry()
+    result = await reg.dispatch("benchmark_latency")
+    assert result["status"] == "benchmark_pending"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_export_experience() -> None:
+    reg = create_default_registry()
+    result = await reg.dispatch("export_experience", path="/tmp/test_export")
+    assert result["status"] == "exported"
+    assert result["path"] == "/tmp/test_export"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_translate_nl_mission() -> None:
+    reg = create_default_registry()
+    result = await reg.dispatch("translate_nl_mission", mission="go left")
+    assert result["status"] == "translated"
+    assert result["mission"] == "go left"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_system_info() -> None:
+    reg = create_default_registry()
+    result = await reg.dispatch("system_info")
+    assert "platform" in result
+    assert "python" in result
+    assert "machine" in result

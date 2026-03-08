@@ -9,6 +9,7 @@ import asyncio
 import json
 from typing import TYPE_CHECKING, Any
 
+from mousedroid.comms._utils import clamp as _clamp
 from mousedroid.comms.protocol import EncoderReading
 from mousedroid.logging.setup import get_logger
 
@@ -176,15 +177,3 @@ class SerialESP32Driver:
         return line.decode().strip()
 
 
-def _clamp(value: float, lo: float, hi: float) -> float:
-    """Clamp a value between lo and hi.
-
-    Args:
-        value: Value to clamp.
-        lo: Lower bound.
-        hi: Upper bound.
-
-    Returns:
-        Clamped value.
-    """
-    return max(lo, min(hi, value))

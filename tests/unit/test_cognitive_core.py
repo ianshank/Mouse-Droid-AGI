@@ -1,4 +1,8 @@
+"""Tests for CognitiveCore — full coverage including slow loop."""
+
 from __future__ import annotations
+
+import asyncio
 
 import numpy as np
 
@@ -68,3 +72,58 @@ def test_tick_fast_with_curiosity_scores() -> None:
     }
     action, _violations = core.tick_fast(obs)
     assert isinstance(action, np.ndarray)
+
+
+async def test_slow_loop_processes_observation() -> None:
+    core = _make_core()
+    await core.start()
+
+    # Enqueue observation directly to avoid fast-path dimension mismatch.
+    # The slow loop's BDI expects 256-d, but fast path uses 128-d policy.
+    obs = {
+        "state": np.random.default_rng(42).standard_normal(256).astype(np.float32),
+        "battery_v": 12.0,
+        "loop_time_ms": 25.0,
+    }
+    core._slow_queue.put_nowait(obs)
+
+    # Give the slow loop time to process
+    await asyncio.sleep(0.5)
+
+    assert core._latest_bdi != {}
+    assert "belief" in core._latest_bdi
+    assert "intentions" in core._latest_bdi
+
+    await core.stop()
+
+
+async def test_slow_loop_timeout_continues() -> None:
+    core = _make_core()
+    await core.start()
+    # Don't put anything in the queue — the loop should timeout and continue
+    await asyncio.sleep(0.1)
+    assert not core._slow_task.done()
+    await core.stop()
+
+
+def test_tick_fast_with_context_keys() -> None:
+    core = _make_core()
+    obs = {
+        "state": np.zeros(128, dtype=np.float32),
+        "battery_v": 11.0,
+        "obstacle_dist_m": 0.1,
+        "mcts_sims": 4,
+    }
+    action, violations = core.tick_fast(obs)
+    assert isinstance(action, np.ndarray)
+    # Should have violations for low battery, close obstacle, low mcts_sims
+    assert len(violations) > 0
+
+
+async def test_start_idempotent() -> None:
+    core = _make_core()
+    await core.start()
+    first_task = core._slow_task
+    await core.start()  # Should not create a second task
+    assert core._slow_task is first_task
+    await core.stop()
