@@ -24,28 +24,57 @@ env/
 
 # Testing / Coverage
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
 
 # LMDB experience storage
 *.mdb
 mousedroid_experience/
+*_experience/
 
-# TensorRT engines (device-specific, never commit)
+# TensorRT / ONNX (device-specific compiled artefacts — never commit)
 *.engine
 *.trt
-
-# Jetson
 *.onnx
+*.plan
+
+# Jetson / CUDA
+*.cubin
+*.fatbin
+
+# Model weights (large binary files — use Hugging Face Hub instead)
+weights/
+*.npz.bak
+*.pt
+*.pth
+*.gguf
+*.bin
 
 # OS
 .DS_Store
 Thumbs.db
+._*
 
-# Env
+# Environment / Secrets
 .env
 .env.local
+*.env
+secrets.yaml
 
 # Logs
 *.log
+logs/
+
+# Training artefacts
+checkpoints/
+runs/
+wandb/
+mlruns/
+
+# Docs build
+docs/_build/
+site/
