@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import structlog
 import torch
 from torch import Tensor
 from torch.utils.data import Dataset
+
+_log = structlog.get_logger(__name__)
 
 
 class RSSMSequenceDataset(Dataset[tuple[Tensor, ...]]):
@@ -28,16 +31,23 @@ class RSSMSequenceDataset(Dataset[tuple[Tensor, ...]]):
 
     def __init__(self, data_path: Path | str, seq_len: int = 50) -> None:
         self._episodes: list[list[dict[str, Tensor]]] = torch.load(
-            data_path, weights_only=False,
+            data_path,
+            weights_only=False,
         )
         self._seq_len = seq_len
+        _log.info(
+            "dataset_loaded",
+            path=str(data_path),
+            n_episodes=len(self._episodes),
+            seq_len=seq_len,
+        )
 
-    def __len__(self) -> int:
+    def __len__(self) -> int:  # noqa: D105
         return len(self._episodes)
 
-    def __getitem__(self, idx: int) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    def __getitem__(self, idx: int) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:  # noqa: D105
         episode = self._episodes[idx]
-        T = min(len(episode), self._seq_len)
+        seq_t = min(len(episode), self._seq_len)
 
         # Infer dims from first transition
         first = episode[0]
@@ -51,7 +61,7 @@ class RSSMSequenceDataset(Dataset[tuple[Tensor, ...]]):
         valid_mask = torch.zeros(self._seq_len, 3)
         actions = torch.zeros(self._seq_len, action_dim)
 
-        for t in range(T):
+        for t in range(seq_t):
             step = episode[t]
             vision[t] = step["vision"]
             ultrasonic[t] = step["ultrasonic"]

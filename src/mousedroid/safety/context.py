@@ -29,5 +29,12 @@ class SafetyContext:
     gpu_temp_c: float = 0.0
     esp32_connected: bool = True
 
+    # Three Laws of Robotics context
+    human_detected: bool = False
+    human_dist_m: float = math.inf
+    human_needs_help: bool = False
+    commanded_action: tuple[float, ...] | None = None
+    law_violations: tuple[str, ...] = ()
+
     # Computed
     is_emergency: bool = False

@@ -41,7 +41,8 @@ class HealthMonitor:
         """
         try:
             raw = await asyncio.to_thread(
-                self._read_sysfs, str(self._jetson_cfg.thermal_zone_path),
+                self._read_sysfs,
+                str(self._jetson_cfg.thermal_zone_path),
             )
             return float(raw.strip()) / _MILLIDEGREE_DIVISOR
         except (FileNotFoundError, ValueError):
@@ -56,7 +57,8 @@ class HealthMonitor:
         """
         try:
             raw = await asyncio.to_thread(
-                self._read_sysfs, str(self._jetson_cfg.gpu_load_path),
+                self._read_sysfs,
+                str(self._jetson_cfg.gpu_load_path),
             )
             return float(raw.strip()) / _LOAD_PERCENTAGE_DIVISOR
         except (FileNotFoundError, ValueError):

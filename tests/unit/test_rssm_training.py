@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
 import torch
 
 from mousedroid.config.schema import ModelConfig, Settings, TrainingConfig
@@ -87,7 +86,10 @@ class TestRSSMTrainingLoop:
 
             for t in range(seq_len):
                 obs_embed = rssm.encoder(
-                    vision[:, t], ultrasonic[:, t], motor_state[:, t], valid_mask[:, t],
+                    vision[:, t],
+                    ultrasonic[:, t],
+                    motor_state[:, t],
+                    valid_mask[:, t],
                 )
                 prev_action = actions[:, max(0, t - 1)]
                 gru_input = torch.cat([z, prev_action], dim=-1)
@@ -122,7 +124,9 @@ class TestRSSMTrainingLoop:
 
         # Compare weights
         for (k1, v1), (k2, v2) in zip(
-            rssm.state_dict().items(), rssm2.state_dict().items(),
+            rssm.state_dict().items(),
+            rssm2.state_dict().items(),
+            strict=True,
         ):
             assert k1 == k2
             assert torch.allclose(v1, v2)

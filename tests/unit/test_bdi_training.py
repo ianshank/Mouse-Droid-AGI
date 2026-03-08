@@ -5,8 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-
-from mousedroid.cognitive.bdi_model import NeuralBDI
 from training.collect_annotations import INTENTION_LABELS, label_intention
 from training.train_bdi import (
     train_affect_estimator,
@@ -15,12 +13,16 @@ from training.train_bdi import (
     train_intention_predictor,
 )
 
+from mousedroid.cognitive.bdi_model import NeuralBDI
+
+_N_CLASSES = len(INTENTION_LABELS)
+
 
 def _make_dummy_data(n: int = 200) -> tuple[np.ndarray, np.ndarray]:
     """Create small dummy dataset for fast tests."""
     rng = np.random.default_rng(99)
     observations = rng.standard_normal((n, 256)).astype(np.float32)
-    intentions = rng.integers(0, 8, size=n).astype(np.int64)
+    intentions = rng.integers(0, _N_CLASSES, size=n).astype(np.int64)
     return observations, intentions
 
 
@@ -57,9 +59,15 @@ class TestIntentionPredictor:
         belief_w = train_belief_encoder(obs, lr=1e-3, epochs=2, batch_size=32)
         desire_w = train_desire_encoder(obs, belief_w, lr=1e-3, epochs=2, batch_size=32)
         intent_w = train_intention_predictor(
-            obs, intentions, belief_w, desire_w, lr=1e-3, epochs=2, batch_size=32,
+            obs,
+            intentions,
+            belief_w,
+            desire_w,
+            lr=1e-3,
+            epochs=2,
+            batch_size=32,
         )
-        assert intent_w["w1"].shape == (64, 8)
+        assert intent_w["w1"].shape == (64, _N_CLASSES)
 
 
 class TestAffectEstimator:
@@ -68,12 +76,24 @@ class TestAffectEstimator:
         belief_w = train_belief_encoder(obs, lr=1e-3, epochs=2, batch_size=32)
         desire_w = train_desire_encoder(obs, belief_w, lr=1e-3, epochs=2, batch_size=32)
         intent_w = train_intention_predictor(
-            obs, intentions, belief_w, desire_w, lr=1e-3, epochs=2, batch_size=32,
+            obs,
+            intentions,
+            belief_w,
+            desire_w,
+            lr=1e-3,
+            epochs=2,
+            batch_size=32,
         )
         affect_w = train_affect_estimator(
-            obs, belief_w, desire_w, intent_w, lr=1e-3, epochs=2, batch_size=32,
+            obs,
+            belief_w,
+            desire_w,
+            intent_w,
+            lr=1e-3,
+            epochs=2,
+            batch_size=32,
         )
-        assert affect_w["w1"].shape == (72, 2)
+        assert affect_w["w1"].shape == (64 + _N_CLASSES, 2)
 
 
 class TestNeuralBDILoadsTrained:
@@ -85,10 +105,22 @@ class TestNeuralBDILoadsTrained:
         belief_w = train_belief_encoder(obs, lr=1e-3, epochs=2, batch_size=32)
         desire_w = train_desire_encoder(obs, belief_w, lr=1e-3, epochs=2, batch_size=32)
         intent_w = train_intention_predictor(
-            obs, intentions, belief_w, desire_w, lr=1e-3, epochs=2, batch_size=32,
+            obs,
+            intentions,
+            belief_w,
+            desire_w,
+            lr=1e-3,
+            epochs=2,
+            batch_size=32,
         )
         affect_w = train_affect_estimator(
-            obs, belief_w, desire_w, intent_w, lr=1e-3, epochs=2, batch_size=32,
+            obs,
+            belief_w,
+            desire_w,
+            intent_w,
+            lr=1e-3,
+            epochs=2,
+            batch_size=32,
         )
 
         # Save in the format NeuralBDI expects
@@ -107,13 +139,13 @@ class TestNeuralBDILoadsTrained:
         assert "affect" in result
         assert result["belief"].shape == (128,)
         assert result["desire"].shape == (64,)
-        assert result["intentions"].shape == (8,)
+        assert result["intentions"].shape == (_N_CLASSES,)
         assert result["affect"].shape == (2,)
 
 
 class TestLabelIntention:
     def test_all_labels_valid(self) -> None:
-        assert len(INTENTION_LABELS) == 8
+        assert len(INTENTION_LABELS) == 10
 
     def test_low_battery_returns_charge(self) -> None:
         from mousedroid.sensing.bundle import MouseDroidObservationBundle

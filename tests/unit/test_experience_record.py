@@ -48,6 +48,7 @@ def test_schema_version_is_always_1() -> None:
 
 def test_deserialize_wrong_schema_version_raises() -> None:
     import msgpack
+
     bad_data = msgpack.packb({"schema_version": 99})
     with pytest.raises(ValueError, match="Unknown schema version"):
         MouseDroidExperienceRecord.deserialize(bad_data)
@@ -62,6 +63,7 @@ def test_deserialize_any_dispatches_correctly() -> None:
 
 def test_deserialize_any_unknown_version_raises() -> None:
     import msgpack
+
     bad_data = msgpack.packb({"schema_version": 999})
     with pytest.raises(ValueError, match="Unknown schema version"):
         deserialize_any(bad_data)

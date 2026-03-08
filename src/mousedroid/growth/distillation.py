@@ -40,7 +40,8 @@ class KnowledgeDistiller:
         self._alpha = alpha
         self._optimizer = nn.utils.clip_grad.clip_grad_norm_  # placeholder reference
         self._student_optimizer = __import__("torch").optim.Adam(
-            student.parameters(), lr=lr,
+            student.parameters(),
+            lr=lr,
         )
 
         # Freeze teacher.

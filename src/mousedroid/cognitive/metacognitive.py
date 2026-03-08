@@ -186,9 +186,7 @@ class MetacognitiveModel:
         Returns:
             Mapping from capability name to current score ``[0, 1]``.
         """
-        return {
-            name: float(self._capabilities[i]) for i, name in enumerate(_CAPABILITY_NAMES)
-        }
+        return {name: float(self._capabilities[i]) for i, name in enumerate(_CAPABILITY_NAMES)}
 
     def geometric_mean(self) -> float:
         """Compute the geometric mean of all capability scores.

@@ -20,6 +20,7 @@ from mousedroid.cognitive.constitutional_rl import (
 )
 from mousedroid.config.schema import Settings
 from mousedroid.reward.model import MultiObjectiveRewardModel
+from mousedroid.safety.three_laws import RoboticsLawChecker
 from mousedroid.world_model.rssm import RSSM
 
 _log = structlog.get_logger(__name__)
@@ -42,17 +43,17 @@ def _gae(
     Returns:
         Tuple of ``(advantages, returns)``.
     """
-    T = len(rewards)
-    advantages = np.zeros(T, dtype=np.float32)
+    n_steps = len(rewards)
+    advantages = np.zeros(n_steps, dtype=np.float32)
     last_gae = 0.0
 
-    for t in reversed(range(T)):
+    for t in reversed(range(n_steps)):
         next_value = values[t + 1] if t + 1 < len(values) else 0.0
         delta = rewards[t] + gamma * next_value - values[t]
         last_gae = delta + gamma * gae_lambda * last_gae
         advantages[t] = last_gae
 
-    returns = advantages + np.array(values[:T], dtype=np.float32)
+    returns = advantages + np.array(values[:n_steps], dtype=np.float32)
     return advantages, returns
 
 
@@ -122,7 +123,8 @@ def _ppo_update(
             # Simple weight perturbation toward better actions
             h_pre = state @ policy._w1 + policy._b1
             h_mask = (h_pre > 0).astype(np.float32)
-            policy._w2 += grad_scale * np.outer(h_mask * (state @ policy._w1 + policy._b1) * (h_pre > 0), direction) * 0.001
+            hidden_act = h_mask * h_pre * (h_pre > 0)
+            policy._w2 += grad_scale * np.outer(hidden_act, direction) * 0.001
             policy._b2 += grad_scale * direction * 0.001
 
             # Value update
@@ -168,8 +170,12 @@ def train_constitutional_rl(
     rssm.load_state_dict(torch.load(rssm_checkpoint, map_location=device, weights_only=True))
     rssm.eval()
 
-    # Build reward model
-    reward_model = MultiObjectiveRewardModel(cfg.model, cfg.reward).to(device)
+    # Build reward model with Three Laws integration
+    reward_model = MultiObjectiveRewardModel(
+        cfg.model,
+        cfg.reward,
+        law_cfg=cfg.three_laws,
+    ).to(device)
 
     # Init policy and value networks
     policy = PolicyMLP(input_dim=cfg.model.latent_dim, action_dim=cfg.model.action_dim)
@@ -179,8 +185,11 @@ def train_constitutional_rl(
         policy.load(policy_init_path)
         _log.info("policy_loaded", path=str(policy_init_path))
 
-    # Constitutional checker
-    checker = ConstitutionalChecker(ConstitutionalRLConfig())
+    # Three Laws checker (runs first)
+    law_checker = RoboticsLawChecker.from_config(cfg.three_laws)
+
+    # Constitutional checker (delegates to law checker)
+    checker = ConstitutionalChecker(ConstitutionalRLConfig(), law_checker=law_checker)
 
     # Training loop
     n_episodes = ppo_cfg.n_training_episodes
@@ -205,7 +214,7 @@ def train_constitutional_rl(
             action_np = policy.forward(state_np)
 
             # Log probability (unit Gaussian)
-            log_prob = -0.5 * float(np.sum(action_np ** 2))
+            log_prob = -0.5 * float(np.sum(action_np**2))
             log_probs.append(log_prob)
 
             # Constitutional check
@@ -216,7 +225,9 @@ def train_constitutional_rl(
 
             # Step in world model
             action_tensor = torch.as_tensor(
-                safe_action, dtype=torch.float32, device=device,
+                safe_action,
+                dtype=torch.float32,
+                device=device,
             ).unsqueeze(0)
             h, z, pred_reward = rssm.imagine_step(action_tensor, h, z)
 
@@ -225,8 +236,11 @@ def train_constitutional_rl(
                 obs_recon = rssm.decode(h, z)
                 reward_scalar = reward_model(obs_recon).item()
 
-            # Zero reward on violations
-            if violations:
+            # Stricter penalties for law violations
+            law1_violations = [v for v in violations if v.startswith("[Law 1]")]
+            if law1_violations:
+                reward_scalar = -1.0  # Large negative for harm violations
+            elif violations:
                 reward_scalar = 0.0
 
             rewards.append(reward_scalar)
@@ -237,11 +251,13 @@ def train_constitutional_rl(
 
         # PPO update
         losses = _ppo_update(
-            policy, value_fn,
+            policy,
+            value_fn,
             np.array(states),
             np.array(actions_taken),
             np.array(log_probs, dtype=np.float32),
-            advantages, returns,
+            advantages,
+            returns,
             ppo_cfg.clip_epsilon,
             cfg.training.learning_rate,
             ppo_cfg.ppo_epochs,
@@ -258,6 +274,9 @@ def train_constitutional_rl(
     # Validation
     _log.info("validation_starting", n_episodes=ppo_cfg.n_validation_episodes)
     total_violations = 0
+    total_law1_violations = 0
+    total_law2_violations = 0
+    total_law3_violations = 0
     val_rewards: list[float] = []
 
     for _ep in range(ppo_cfg.n_validation_episodes):
@@ -272,9 +291,14 @@ def train_constitutional_rl(
             context = {"battery_v": 12.0, "obstacle_dist_m": 2.0, "mcts_sims": 50}
             safe_action, violations = checker.check(action_np, context)
             total_violations += len(violations)
+            total_law1_violations += sum(1 for v in violations if v.startswith("[Law 1]"))
+            total_law2_violations += sum(1 for v in violations if v.startswith("[Law 2]"))
+            total_law3_violations += sum(1 for v in violations if v.startswith("[Law 3]"))
 
             action_tensor = torch.as_tensor(
-                safe_action, dtype=torch.float32, device=device,
+                safe_action,
+                dtype=torch.float32,
+                device=device,
             ).unsqueeze(0)
             h, z, pred_reward = rssm.imagine_step(action_tensor, h, z)
             ep_reward += pred_reward.item()
@@ -283,6 +307,9 @@ def train_constitutional_rl(
 
     validation_results: dict[str, object] = {
         "total_violations": total_violations,
+        "law1_violations": total_law1_violations,
+        "law2_violations": total_law2_violations,
+        "law3_violations": total_law3_violations,
         "mean_reward": round(float(np.mean(val_rewards)), 4),
         "n_episodes": ppo_cfg.n_validation_episodes,
     }

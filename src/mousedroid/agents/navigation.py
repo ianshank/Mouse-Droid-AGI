@@ -61,6 +61,14 @@ class MouseDroidNavigationAgent:
             _log.warning("emergency_stop", reason="safety_emergency")
             return torch.zeros(self._action_dim)
 
+        # Law 1: Human proximity — full stop
+        if safety_ctx.human_detected and safety_ctx.human_dist_m < 0.5:
+            _log.warning(
+                "law1_human_proximity_stop",
+                human_dist_m=safety_ctx.human_dist_m,
+            )
+            return torch.zeros(self._action_dim)
+
         if not safety_ctx.forward_clearance_ok:
             _log.info("reverse_action", distance_m=safety_ctx.ultrasonic_dist_m)
             action = torch.zeros(self._action_dim)
@@ -105,9 +113,11 @@ class MouseDroidNavigationAgent:
             with torch.no_grad():
                 for step in range(depth):
                     h_sim, z_sim, reward = self._world_model.imagine_step(
-                        candidate, h_sim, z_sim,
+                        candidate,
+                        h_sim,
+                        z_sim,
                     )
-                    total_reward += (gamma ** step) * reward.item()
+                    total_reward += (gamma**step) * reward.item()
 
             if total_reward > best_reward:
                 best_reward = total_reward

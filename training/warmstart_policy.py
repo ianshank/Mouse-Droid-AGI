@@ -15,7 +15,7 @@ import structlog
 import torch
 
 from mousedroid.cognitive.constitutional_rl import PolicyMLP
-from mousedroid.config.schema import MCTSConfig, ModelConfig, Settings
+from mousedroid.config.schema import MCTSConfig, Settings
 from mousedroid.world_model.mcts import MCTSPlanner
 from mousedroid.world_model.rssm import RSSM
 from training.rssm_dataset import RSSMSequenceDataset
@@ -57,7 +57,10 @@ def compute_latent_statistics(
         with torch.no_grad():
             for t in range(vision.shape[1]):
                 obs_embed = rssm.encoder(
-                    vision[:, t], ultrasonic[:, t], motor_state[:, t], valid_mask[:, t],
+                    vision[:, t],
+                    ultrasonic[:, t],
+                    motor_state[:, t],
+                    valid_mask[:, t],
                 )
                 prev_action = actions[:, max(0, t - 1)]
                 gru_input = torch.cat([z, prev_action], dim=-1)
@@ -94,7 +97,8 @@ def warmstart_policy(
 
     # Scale first-layer weights by inverse latent std for normalisation
     scale = 1.0 / latent_std[:input_dim] if len(latent_std) >= input_dim else np.ones(input_dim)
-    policy._w1 = policy._w1 * scale[:, np.newaxis] if scale.shape[0] == policy._w1.shape[0] else policy._w1
+    if scale.shape[0] == policy._w1.shape[0]:
+        policy._w1 = policy._w1 * scale[:, np.newaxis]
 
     # Shift bias toward latent mean
     if len(latent_mean) >= input_dim:

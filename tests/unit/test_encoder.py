@@ -26,8 +26,11 @@ def test_constructor_creates_submodules(encoder: MultimodalEncoder) -> None:
 
 def test_constructor_custom_dims() -> None:
     cfg = ModelConfig(
-        vision_dim=64, obs_dim=32, vision_proj_dim=16,
-        ultrasonic_proj_dim=8, motor_proj_dim=8,
+        vision_dim=64,
+        obs_dim=32,
+        vision_proj_dim=16,
+        ultrasonic_proj_dim=8,
+        motor_proj_dim=8,
     )
     enc = MultimodalEncoder(cfg)
     assert enc.vision_proj.in_features == 64

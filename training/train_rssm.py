@@ -84,7 +84,10 @@ def train_rssm(
             for t in range(seq_len):
                 # Encode observation
                 obs_embed = rssm.encoder(
-                    vision[:, t], ultrasonic[:, t], motor_state[:, t], valid_mask[:, t],
+                    vision[:, t],
+                    ultrasonic[:, t],
+                    motor_state[:, t],
+                    valid_mask[:, t],
                 )
 
                 # GRU step
@@ -106,7 +109,10 @@ def train_rssm(
 
                 # KL loss
                 kl = rssm._kl_divergence(
-                    post_mean, post_logvar, prior_mean, prior_logvar,
+                    post_mean,
+                    post_logvar,
+                    prior_mean,
+                    prior_logvar,
                 )
                 total_kl = total_kl + kl
 
@@ -151,17 +157,22 @@ def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(description="RSSM pretraining")
     parser.add_argument(
-        "--config", type=str, default="config/mock_hardware.yaml",
+        "--config",
+        type=str,
+        default="config/mock_hardware.yaml",
         help="Path to YAML config file",
     )
     parser.add_argument(
-        "--data", type=str, default=None,
+        "--data",
+        type=str,
+        default=None,
         help="Path to sequences.pt (default: cfg.training.data_dir/sequences.pt)",
     )
     args = parser.parse_args()
 
     # Load config
     import yaml
+
     with open(args.config) as f:
         overrides = yaml.safe_load(f) or {}
     cfg = Settings(**overrides)

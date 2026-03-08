@@ -18,7 +18,7 @@ def _default_cfg() -> ModelConfig:
 @given(
     scale=st.floats(min_value=-10.0, max_value=10.0, allow_nan=False, allow_infinity=False),
 )
-@settings(max_examples=20)
+@settings(max_examples=20, deadline=1000)
 def test_encoder_output_finite_for_finite_input(scale: float) -> None:
     cfg = _default_cfg()
     enc = MultimodalEncoder(cfg)

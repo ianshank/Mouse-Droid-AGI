@@ -102,7 +102,10 @@ class MouseDroidOrchestrator:
         # Plan + Act
         with torch.no_grad():
             self._h, self._z, _, surprise = self._world_model.observe_step(
-                observation, self._prev_action, self._h, self._z,
+                observation,
+                self._prev_action,
+                self._h,
+                self._z,
             )
 
         if safety_ctx.is_emergency:

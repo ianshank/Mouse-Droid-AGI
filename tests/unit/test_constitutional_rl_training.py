@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+from training.train_constitutional_rl import _gae, _ppo_update
 
 from mousedroid.cognitive.constitutional_rl import (
     ConstitutionalChecker,
@@ -10,7 +11,6 @@ from mousedroid.cognitive.constitutional_rl import (
     PolicyMLP,
     ValueMLP,
 )
-from training.train_constitutional_rl import _gae, _ppo_update
 
 
 class TestGAE:
@@ -29,7 +29,7 @@ class TestGAE:
     def test_zero_rewards(self) -> None:
         rewards = [0.0, 0.0, 0.0]
         values = [0.0, 0.0, 0.0]
-        advantages, returns = _gae(rewards, values, gamma=0.99, gae_lambda=0.95)
+        advantages, _returns = _gae(rewards, values, gamma=0.99, gae_lambda=0.95)
 
         np.testing.assert_allclose(advantages, 0.0, atol=1e-6)
 
@@ -48,9 +48,13 @@ class TestPPOUpdate:
         returns = np.random.randn(10).astype(np.float32)
 
         losses = _ppo_update(
-            policy, value_fn,
-            states, actions, old_log_probs,
-            advantages, returns,
+            policy,
+            value_fn,
+            states,
+            actions,
+            old_log_probs,
+            advantages,
+            returns,
             clip_epsilon=0.2,
             lr=1e-3,
             n_epochs=2,
@@ -72,11 +76,14 @@ class TestConstitutionalRewardZeroing:
     def test_safe_action_no_violations(self) -> None:
         checker = ConstitutionalChecker()
         action = np.array([0.1, 0.0], dtype=np.float64)
-        _, violations = checker.check(action, {
-            "battery_v": 12.0,
-            "obstacle_dist_m": 2.0,
-            "mcts_sims": 50,
-        })
+        _, violations = checker.check(
+            action,
+            {
+                "battery_v": 12.0,
+                "obstacle_dist_m": 2.0,
+                "mcts_sims": 50,
+            },
+        )
         assert violations == []
 
     def test_trivially_safe_policy_no_violations(self) -> None:
@@ -94,11 +101,14 @@ class TestConstitutionalRewardZeroing:
         for _ in range(100):
             state = np.random.randn(8).astype(np.float32)
             action = policy.forward(state)
-            _, violations = checker.check(action, {
-                "battery_v": 12.0,
-                "obstacle_dist_m": 2.0,
-                "mcts_sims": 50,
-            })
+            _, violations = checker.check(
+                action,
+                {
+                    "battery_v": 12.0,
+                    "obstacle_dist_m": 2.0,
+                    "mcts_sims": 50,
+                },
+            )
             total_violations += len(violations)
 
         assert total_violations == 0

@@ -89,9 +89,7 @@ class MCTSPlanner:
         if node.visit_count == 0:
             return float("inf")
         exploitation = node.mean_value
-        exploration = self._cfg.ucb_c * math.sqrt(
-            math.log(parent_visits) / node.visit_count
-        )
+        exploration = self._cfg.ucb_c * math.sqrt(math.log(parent_visits) / node.visit_count)
         return exploitation + exploration
 
     def _select_child(self, node: _Node) -> _Node:

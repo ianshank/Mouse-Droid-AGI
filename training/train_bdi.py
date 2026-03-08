@@ -11,24 +11,18 @@ from pathlib import Path
 import numpy as np
 import structlog
 
+from mousedroid.utils.numpy_ops import relu as _relu
+from mousedroid.utils.numpy_ops import softmax as _softmax
+from training.collect_annotations import INTENTION_LABELS
+
 _log = structlog.get_logger(__name__)
 
-# Dimensions matching bdi_model.py constants
+# Dimensions matching bdi_model.py / ModelConfig defaults
 _OBS_DIM = 256
 _BELIEF_DIM = 128
 _DESIRE_DIM = 64
-_INTENTION_CLASSES = 8
+_INTENTION_CLASSES = len(INTENTION_LABELS)
 _AFFECT_DIM = 2
-
-
-def _relu(x: np.ndarray) -> np.ndarray:
-    return np.maximum(x, 0.0)
-
-
-def _softmax(x: np.ndarray) -> np.ndarray:
-    shifted = x - np.max(x, axis=-1, keepdims=True)
-    e = np.exp(shifted)
-    return e / (e.sum(axis=-1, keepdims=True) + 1e-8)
 
 
 def _cross_entropy(logits: np.ndarray, labels: np.ndarray) -> float:
@@ -70,7 +64,7 @@ def train_belief_encoder(
         n_batches = 0
 
         for start in range(0, n - batch_size + 1, batch_size):
-            idx = perm[start:start + batch_size]
+            idx = perm[start : start + batch_size]
             x = observations[idx]
 
             # Forward
@@ -142,7 +136,7 @@ def train_desire_encoder(
         n_batches = 0
 
         for start in range(0, n - batch_size + 1, batch_size):
-            idx = perm[start:start + batch_size]
+            idx = perm[start : start + batch_size]
             x = beliefs[idx]
 
             # Forward
@@ -205,7 +199,7 @@ def train_intention_predictor(
         n_batches = 0
 
         for start in range(0, n - batch_size + 1, batch_size):
-            idx = perm[start:start + batch_size]
+            idx = perm[start : start + batch_size]
             x = desires[idx]
             y = intentions[idx]
 
@@ -283,7 +277,7 @@ def train_affect_estimator(
         n_batches = 0
 
         for start in range(0, n - batch_size + 1, batch_size):
-            idx = perm[start:start + batch_size]
+            idx = perm[start : start + batch_size]
             x = inputs[idx]
             y = targets[idx]
 
@@ -295,7 +289,7 @@ def train_affect_estimator(
 
             # Backward through tanh
             d_pred = 2.0 * (pred - y) / y.shape[0]
-            d_raw = d_pred * (1.0 - pred ** 2)
+            d_raw = d_pred * (1.0 - pred**2)
 
             d_w1 = x.T @ d_raw / batch_size
             d_b1 = d_raw.mean(axis=0)
@@ -350,14 +344,26 @@ def train_bdi(
 
     # Stage 3: IntentionPredictor
     intention_weights = train_intention_predictor(
-        observations, intentions, belief_weights, desire_weights, lr, epochs, batch_size,
+        observations,
+        intentions,
+        belief_weights,
+        desire_weights,
+        lr,
+        epochs,
+        batch_size,
     )
     np.savez(output_dir / "intention.npz", **intention_weights)
     _log.info("intention_predictor_saved")
 
     # Stage 4: AffectEstimator
     affect_weights = train_affect_estimator(
-        observations, belief_weights, desire_weights, intention_weights, lr, epochs, batch_size,
+        observations,
+        belief_weights,
+        desire_weights,
+        intention_weights,
+        lr,
+        epochs,
+        batch_size,
     )
     np.savez(output_dir / "affect.npz", **affect_weights)
     _log.info("affect_estimator_saved")

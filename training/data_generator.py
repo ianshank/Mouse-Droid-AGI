@@ -10,7 +10,6 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import torch
 
 from mousedroid.config.schema import Settings
@@ -47,7 +46,8 @@ class SyntheticSequenceGenerator:
         self._cfg = cfg
 
     async def _run_episode(
-        self, max_steps: int,
+        self,
+        max_steps: int,
     ) -> list[dict[str, Any]]:
         """Run a single episode and collect transitions.
 
@@ -61,9 +61,9 @@ class SyntheticSequenceGenerator:
         await orchestrator.start()
 
         transitions: list[dict[str, Any]] = []
-        h = torch.zeros(1, self._cfg.model.hidden_dim)
-        z = torch.zeros(1, self._cfg.model.latent_dim)
-        prev_action = torch.zeros(1, self._cfg.model.action_dim)
+        torch.zeros(1, self._cfg.model.hidden_dim)
+        torch.zeros(1, self._cfg.model.latent_dim)
+        torch.zeros(1, self._cfg.model.action_dim)
 
         for _ in range(max_steps):
             obs = await orchestrator._sense()
@@ -72,15 +72,15 @@ class SyntheticSequenceGenerator:
             # Random action for data collection
             action = torch.tanh(torch.randn(1, self._cfg.model.action_dim))
 
-            transitions.append({
-                "vision": obs_tensors["vision"],
-                "ultrasonic": obs_tensors["ultrasonic"],
-                "motor_state": obs_tensors["motor_state"],
-                "valid_mask": obs_tensors["valid_mask"],
-                "action": action.squeeze(0),
-            })
-
-            prev_action = action
+            transitions.append(
+                {
+                    "vision": obs_tensors["vision"],
+                    "ultrasonic": obs_tensors["ultrasonic"],
+                    "motor_state": obs_tensors["motor_state"],
+                    "valid_mask": obs_tensors["valid_mask"],
+                    "action": action.squeeze(0),
+                }
+            )
 
         await orchestrator.stop()
         return transitions

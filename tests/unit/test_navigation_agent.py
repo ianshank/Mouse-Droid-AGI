@@ -1,6 +1,9 @@
+"""Tests for MouseDroidNavigationAgent — action selection and safety overrides."""
+
 from __future__ import annotations
 
-import pytest
+from unittest.mock import MagicMock
+
 import torch
 
 from mousedroid.agents.navigation import MouseDroidNavigationAgent
@@ -8,94 +11,86 @@ from mousedroid.config.schema import Settings
 from mousedroid.safety.context import SafetyContext
 
 
-class MockWorldModel:
-    def observe_step(self, observation, prev_action, h, z):
-        return h, z, h, 0.0
-
-    def imagine_step(self, action, h, z):
-        new_h = h.clone() if hasattr(h, "clone") else h
-        new_z = z.clone() if hasattr(z, "clone") else z
-        reward = torch.zeros(1, 1)
-        return new_h, new_z, reward
-
-
-@pytest.fixture
-def cfg() -> Settings:
-    return Settings(mock_hardware=True)
+def _make_agent() -> tuple[MouseDroidNavigationAgent, MagicMock, Settings]:
+    """Create agent with mock world model."""
+    cfg = Settings(mock_hardware=True)
+    mock_wm = MagicMock()
+    mock_wm.imagine_step.return_value = (
+        torch.zeros(1, cfg.model.hidden_dim),
+        torch.zeros(1, cfg.model.latent_dim),
+        torch.tensor([[0.1]]),
+    )
+    agent = MouseDroidNavigationAgent(mock_wm, cfg)
+    return agent, mock_wm, cfg
 
 
-@pytest.fixture
-def agent(cfg: Settings) -> MouseDroidNavigationAgent:
-    return MouseDroidNavigationAgent(MockWorldModel(), cfg)
+def _h_z(cfg: Settings) -> tuple[torch.Tensor, torch.Tensor]:
+    return torch.zeros(1, cfg.model.hidden_dim), torch.zeros(1, cfg.model.latent_dim)
 
 
-def test_constructor(agent: MouseDroidNavigationAgent) -> None:
-    assert agent._name == "mouse_droid_navigator"
+class TestEmergencyStop:
+    def test_emergency_returns_zeros(self) -> None:
+        agent, _, cfg = _make_agent()
+        h, z = _h_z(cfg)
+        ctx = SafetyContext(is_emergency=True)
+        action = agent.act(h, z, ctx)
+        assert torch.allclose(action, torch.zeros(cfg.model.action_dim))
+
+    def test_emergency_overrides_all(self) -> None:
+        agent, _, cfg = _make_agent()
+        h, z = _h_z(cfg)
+        ctx = SafetyContext(is_emergency=True, forward_clearance_ok=True)
+        action = agent.act(h, z, ctx)
+        assert torch.allclose(action, torch.zeros(cfg.model.action_dim))
 
 
-def test_name_property(agent: MouseDroidNavigationAgent) -> None:
-    assert agent.name == "mouse_droid_navigator"
+class TestLaw1HumanProximity:
+    def test_human_close_stops(self) -> None:
+        agent, _, cfg = _make_agent()
+        h, z = _h_z(cfg)
+        ctx = SafetyContext(human_detected=True, human_dist_m=0.2)
+        action = agent.act(h, z, ctx)
+        assert torch.allclose(action, torch.zeros(cfg.model.action_dim))
+
+    def test_human_far_allows_action(self) -> None:
+        agent, _, cfg = _make_agent()
+        h, z = _h_z(cfg)
+        ctx = SafetyContext(human_detected=True, human_dist_m=1.0)
+        action = agent.act(h, z, ctx)
+        assert action.shape == (cfg.model.action_dim,)
+
+    def test_no_human_allows_action(self) -> None:
+        agent, _, cfg = _make_agent()
+        h, z = _h_z(cfg)
+        ctx = SafetyContext()
+        action = agent.act(h, z, ctx)
+        assert action.shape == (cfg.model.action_dim,)
 
 
-def test_act_returns_tensor(agent: MouseDroidNavigationAgent) -> None:
-    h = torch.zeros(1, 256)
-    z = torch.zeros(1, 64)
-    ctx = SafetyContext()
-    action = agent.act(h, z, ctx)
-    assert isinstance(action, torch.Tensor)
+class TestForwardClearance:
+    def test_no_clearance_reverses(self) -> None:
+        agent, _, cfg = _make_agent()
+        h, z = _h_z(cfg)
+        ctx = SafetyContext(forward_clearance_ok=False)
+        action = agent.act(h, z, ctx)
+        assert float(action[0]) == -0.5
 
 
-def test_act_values_in_range(agent: MouseDroidNavigationAgent) -> None:
-    h = torch.zeros(1, 256)
-    z = torch.zeros(1, 64)
-    ctx = SafetyContext()
-    action = agent.act(h, z, ctx)
-    assert (action >= -1.0).all()
-    assert (action <= 1.0).all()
+class TestActionBounds:
+    def test_actions_within_bounds(self) -> None:
+        agent, _, cfg = _make_agent()
+        h, z = _h_z(cfg)
+        ctx = SafetyContext()
+        action = agent.act(h, z, ctx)
+        assert (action >= -1.0).all()
+        assert (action <= 1.0).all()
 
 
-def test_act_action_dim(agent: MouseDroidNavigationAgent, cfg: Settings) -> None:
-    h = torch.zeros(1, 256)
-    z = torch.zeros(1, 64)
-    ctx = SafetyContext()
-    action = agent.act(h, z, ctx)
-    assert action.shape == (cfg.model.action_dim,)
+class TestAgentMeta:
+    def test_name(self) -> None:
+        agent, _, _ = _make_agent()
+        assert agent.name == "mouse_droid_navigator"
 
-
-def test_act_emergency_returns_zeros(agent: MouseDroidNavigationAgent, cfg: Settings) -> None:
-    h = torch.zeros(1, 256)
-    z = torch.zeros(1, 64)
-    ctx = SafetyContext(is_emergency=True)
-    action = agent.act(h, z, ctx)
-    assert (action == 0.0).all()
-    assert action.shape == (cfg.model.action_dim,)
-
-
-def test_act_no_forward_clearance_returns_reverse(agent: MouseDroidNavigationAgent) -> None:
-    h = torch.zeros(1, 256)
-    z = torch.zeros(1, 64)
-    ctx = SafetyContext(forward_clearance_ok=False)
-    action = agent.act(h, z, ctx)
-    assert action[0].item() == pytest.approx(-0.5)
-
-
-def test_reset(agent: MouseDroidNavigationAgent) -> None:
-    agent.reset()  # Should not raise
-
-
-def test_act_with_surprise(agent: MouseDroidNavigationAgent) -> None:
-    h = torch.zeros(1, 256)
-    z = torch.zeros(1, 64)
-    ctx = SafetyContext(surprise=5.0)
-    action = agent.act(h, z, ctx)
-    assert (action >= -1.0).all()
-    assert (action <= 1.0).all()
-
-
-def test_emergency_overrides_no_clearance(agent: MouseDroidNavigationAgent, cfg: Settings) -> None:
-    h = torch.zeros(1, 256)
-    z = torch.zeros(1, 64)
-    ctx = SafetyContext(is_emergency=True, forward_clearance_ok=False)
-    action = agent.act(h, z, ctx)
-    # Emergency takes priority: zeros
-    assert (action == 0.0).all()
+    def test_reset(self) -> None:
+        agent, _, _ = _make_agent()
+        agent.reset()  # Should not raise

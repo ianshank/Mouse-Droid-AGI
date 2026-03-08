@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
 import torch
+from training.data_generator import _bundle_to_tensors
 
 from mousedroid.sensing.bundle import MouseDroidObservationBundle
-from training.data_generator import _bundle_to_tensors
 
 
 class TestBundleToTensors:
@@ -48,13 +47,15 @@ class TestRSSMSequenceDataset:
         for _ in range(5):
             ep = []
             for _ in range(10):
-                ep.append({
-                    "vision": torch.randn(16),
-                    "ultrasonic": torch.randn(1),
-                    "motor_state": torch.randn(4),
-                    "valid_mask": torch.ones(3),
-                    "action": torch.randn(3),
-                })
+                ep.append(
+                    {
+                        "vision": torch.randn(16),
+                        "ultrasonic": torch.randn(1),
+                        "motor_state": torch.randn(4),
+                        "valid_mask": torch.ones(3),
+                        "action": torch.randn(3),
+                    }
+                )
             episodes.append(ep)
 
         data_path = tmp_path / "sequences.pt"
@@ -66,13 +67,18 @@ class TestRSSMSequenceDataset:
     def test_dataset_item_shapes(self, tmp_path: Path) -> None:
         from training.rssm_dataset import RSSMSequenceDataset
 
-        episodes = [[{
-            "vision": torch.randn(16),
-            "ultrasonic": torch.randn(1),
-            "motor_state": torch.randn(4),
-            "valid_mask": torch.ones(3),
-            "action": torch.randn(3),
-        } for _ in range(10)]]
+        episodes = [
+            [
+                {
+                    "vision": torch.randn(16),
+                    "ultrasonic": torch.randn(1),
+                    "motor_state": torch.randn(4),
+                    "valid_mask": torch.ones(3),
+                    "action": torch.randn(3),
+                }
+                for _ in range(10)
+            ]
+        ]
 
         data_path = tmp_path / "sequences.pt"
         torch.save(episodes, data_path)
@@ -90,13 +96,18 @@ class TestRSSMSequenceDataset:
         from training.rssm_dataset import RSSMSequenceDataset
 
         # Episode with only 3 steps, but seq_len=10
-        episodes = [[{
-            "vision": torch.ones(16),
-            "ultrasonic": torch.ones(1),
-            "motor_state": torch.ones(4),
-            "valid_mask": torch.ones(3),
-            "action": torch.ones(3),
-        } for _ in range(3)]]
+        episodes = [
+            [
+                {
+                    "vision": torch.ones(16),
+                    "ultrasonic": torch.ones(1),
+                    "motor_state": torch.ones(4),
+                    "valid_mask": torch.ones(3),
+                    "action": torch.ones(3),
+                }
+                for _ in range(3)
+            ]
+        ]
 
         data_path = tmp_path / "sequences.pt"
         torch.save(episodes, data_path)

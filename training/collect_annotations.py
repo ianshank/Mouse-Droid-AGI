@@ -19,36 +19,53 @@ from mousedroid.sensing.bundle import MouseDroidObservationBundle
 
 _log = structlog.get_logger(__name__)
 
-# 8 intention classes
+# 10 intention classes (expanded for Three Laws)
 INTENTION_LABELS = [
-    "explore",           # 0
-    "approach_target",   # 1
-    "avoid_obstacle",    # 2
-    "backtrack",         # 3
-    "wait",              # 4
-    "turn",              # 5
-    "charge",            # 6
-    "idle",              # 7
+    "explore",  # 0
+    "approach_target",  # 1
+    "avoid_obstacle",  # 2
+    "backtrack",  # 3
+    "wait",  # 4
+    "turn",  # 5
+    "charge",  # 6
+    "idle",  # 7
+    "protect_human",  # 8  — Law 1: human proximity triggered
+    "obey_command",  # 9  — Law 2: following commanded action
 ]
 
 
 def label_intention(
     action: np.ndarray,
     obs: MouseDroidObservationBundle,
+    *,
+    human_detected: bool = False,
+    human_dist_m: float = float("inf"),
+    commanded_action: np.ndarray | None = None,
 ) -> int:
     """Assign an intention label based on heuristic rules.
 
     Args:
         action: Action vector ``[vx, vy, omega]``.
         obs: Observation bundle with sensor readings.
+        human_detected: Whether a human is detected nearby.
+        human_dist_m: Distance to nearest human in metres.
+        commanded_action: Externally commanded action, if any.
 
     Returns:
-        Integer intention class index (0-7).
+        Integer intention class index (0-9).
     """
     speed = float(np.linalg.norm(action[:2])) if len(action) >= 2 else abs(float(action[0]))
     omega = abs(float(action[2])) if len(action) >= 3 else 0.0
     distance = obs.distance_m
     battery = obs.motor_state[3] if len(obs.motor_state) > 3 else 12.0
+
+    # Law 1: Human proximity → protect_human
+    if human_detected and human_dist_m < 0.5:
+        return 8  # protect_human
+
+    # Law 2: Commanded action → obey_command
+    if commanded_action is not None:
+        return 9  # obey_command
 
     # Low battery → charge intention
     if battery < 10.8:
@@ -100,13 +117,15 @@ async def _collect_episode(
 
         intention = label_intention(action, obs)
 
-        annotations.append({
-            "observation": obs.vision_features.copy(),
-            "action": action.copy(),
-            "intention_label": intention,
-            "distance_m": obs.distance_m,
-            "motor_state": obs.motor_state.copy(),
-        })
+        annotations.append(
+            {
+                "observation": obs.vision_features.copy(),
+                "action": action.copy(),
+                "intention_label": intention,
+                "distance_m": obs.distance_m,
+                "motor_state": obs.motor_state.copy(),
+            }
+        )
 
     await orchestrator.stop()
     return annotations
@@ -133,7 +152,10 @@ def collect_annotations(
         msg = "Annotation collection requires mock_hardware=True"
         raise ValueError(msg)
 
-    output_path = Path(output_path) if output_path else Path(cfg.training.data_dir) / "bdi_annotations.npz"
+    if output_path:
+        output_path = Path(output_path)
+    else:
+        output_path = Path(cfg.training.data_dir) / "bdi_annotations.npz"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     all_observations: list[np.ndarray] = []
@@ -163,8 +185,7 @@ def collect_annotations(
         path=str(output_path),
         n_samples=len(intentions),
         class_distribution={
-            INTENTION_LABELS[i]: int(np.sum(intentions == i))
-            for i in range(len(INTENTION_LABELS))
+            INTENTION_LABELS[i]: int(np.sum(intentions == i)) for i in range(len(INTENTION_LABELS))
         },
     )
     return output_path

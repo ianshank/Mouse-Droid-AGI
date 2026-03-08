@@ -44,7 +44,8 @@ class RSSM(nn.Module):
 
         # Observation decoder: h + z -> reconstructed obs embedding
         self.observation_decoder = nn.Linear(
-            cfg.hidden_dim + cfg.latent_dim, cfg.obs_dim,
+            cfg.hidden_dim + cfg.latent_dim,
+            cfg.obs_dim,
         )
 
         _log.info(
@@ -137,16 +138,24 @@ class RSSM(nn.Module):
 
         # Convert observation arrays to tensors.
         vision = torch.as_tensor(
-            observation.vision_features, dtype=torch.float32, device=device,
+            observation.vision_features,
+            dtype=torch.float32,
+            device=device,
         ).unsqueeze(0)
         ultrasonic = torch.as_tensor(
-            [observation.distance_m], dtype=torch.float32, device=device,
+            [observation.distance_m],
+            dtype=torch.float32,
+            device=device,
         ).unsqueeze(0)
         motor = torch.as_tensor(
-            observation.motor_state, dtype=torch.float32, device=device,
+            observation.motor_state,
+            dtype=torch.float32,
+            device=device,
         ).unsqueeze(0)
         mask = torch.as_tensor(
-            observation.valid_mask, dtype=torch.float32, device=device,
+            observation.valid_mask,
+            dtype=torch.float32,
+            device=device,
         ).unsqueeze(0)
 
         # Encode

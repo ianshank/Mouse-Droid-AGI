@@ -192,6 +192,10 @@ class ModelConfig(BaseModel):
     vision_proj_dim: int = Field(128, gt=0, description="Vision projection dim")
     ultrasonic_proj_dim: int = Field(32, gt=0, description="Ultrasonic projection dim")
     motor_proj_dim: int = Field(32, gt=0, description="Motor state projection dim")
+    belief_dim: int = Field(128, gt=0, description="BDI belief latent dim")
+    desire_dim: int = Field(64, gt=0, description="BDI desire latent dim")
+    intention_classes: int = Field(10, gt=0, description="BDI intention classes")
+    affect_dim: int = Field(2, gt=0, description="BDI affect dim (valence, arousal)")
 
 
 class RetryConfig(BaseModel):
@@ -244,6 +248,81 @@ class SurpriseConfig(BaseModel):
     ema_alpha: float = Field(0.1, gt=0, le=1, description="EMA smoothing factor")
     high_threshold: float = Field(2.0, gt=0, description="High surprise threshold")
     critical_threshold: float = Field(5.0, gt=0, description="Critical surprise threshold")
+
+
+class ThreeLawsConfig(BaseModel):
+    """Three Laws of Robotics configuration.
+
+    Enforces Asimov's Three Laws with hierarchical priority:
+    Law 1 (No Harm) > Law 2 (Obedience) > Law 3 (Self-Preservation).
+    """
+
+    enabled: bool = Field(True, description="Enable Three Laws enforcement")
+    human_safety_radius_m: float = Field(
+        0.5,
+        gt=0,
+        description="Law 1: min distance to humans (m)",
+    )
+    emergency_stop_dist_m: float = Field(
+        0.15,
+        gt=0,
+        description="Law 1: emergency stop distance (m)",
+    )
+    max_safe_acceleration_mps2: float = Field(
+        1.0,
+        gt=0,
+        description="Law 1: max safe acceleration (m/s²)",
+    )
+    idle_speed_threshold: float = Field(
+        0.05,
+        gt=0,
+        description="Speed below which robot is considered idle (m/s)",
+    )
+    alert_signal_speed: float = Field(
+        0.1,
+        gt=0,
+        description="Alert nudge speed for inaction harm (m/s)",
+    )
+    command_blend_weight: float = Field(
+        0.8,
+        gt=0,
+        le=1,
+        description="Law 2: human command blend weight",
+    )
+    battery_preservation_v: float = Field(
+        10.5,
+        gt=0,
+        description="Law 3: battery preservation threshold (V)",
+    )
+    thermal_critical_c: float = Field(
+        85.0,
+        gt=0,
+        description="Law 3: thermal preservation threshold (°C)",
+    )
+    smoothing_factor: float = Field(
+        0.5,
+        gt=0,
+        le=1,
+        description="Law 3: direction reversal smoothing factor",
+    )
+    law1_reward_weight: float = Field(
+        0.5,
+        gt=0,
+        le=1,
+        description="Law 1 reward penalty weight",
+    )
+    law2_reward_weight: float = Field(
+        0.3,
+        gt=0,
+        le=1,
+        description="Law 2 compliance reward weight",
+    )
+    law3_reward_weight: float = Field(
+        0.2,
+        gt=0,
+        le=1,
+        description="Law 3 preservation reward weight",
+    )
 
 
 class PPOConfig(BaseModel):
@@ -339,6 +418,7 @@ class Settings(BaseSettings):
     reward: RewardConfig = Field(default_factory=RewardConfig)
     curiosity: CuriosityConfig = Field(default_factory=CuriosityConfig)
     ppo: PPOConfig = Field(default_factory=PPOConfig)
+    three_laws: ThreeLawsConfig = Field(default_factory=ThreeLawsConfig)
 
     @model_validator(mode="after")  # type: ignore[untyped-decorator]
     def hardware_requires_pins(self) -> Self:

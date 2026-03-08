@@ -81,9 +81,12 @@ def test_generate_candidate_actions(planner: MCTSPlanner) -> None:
 
 def test_ucb1_unvisited_returns_inf(planner: MCTSPlanner) -> None:
     from mousedroid.world_model.mcts import _Node
+
     node = _Node(
-        action=torch.zeros(1, 3), h=torch.zeros(1, 256),
-        z=torch.zeros(1, 64), visit_count=0,
+        action=torch.zeros(1, 3),
+        h=torch.zeros(1, 256),
+        z=torch.zeros(1, 64),
+        visit_count=0,
     )
     score = planner._ucb1(node, parent_visits=10)
     assert score == float("inf")

@@ -63,9 +63,7 @@ class WiFiESP32Driver:
         max_vel = self._cfg.max_velocity_mps
         pwm_vx = int(_clamp(vx / max_vel, -1.0, 1.0) * _MAX_PWM)
         pwm_vy = int(_clamp(vy / max_vel, -1.0, 1.0) * _MAX_PWM)
-        pwm_omega = int(
-            _clamp(omega / self._cfg.max_omega_rads, -1.0, 1.0) * _MAX_PWM
-        )
+        pwm_omega = int(_clamp(omega / self._cfg.max_omega_rads, -1.0, 1.0) * _MAX_PWM)
         cmd: dict[str, int] = {
             "T": _ESP32_CMD_TYPE_VELOCITY,
             "vx": pwm_vx,
@@ -175,5 +173,3 @@ class WiFiESP32Driver:
         if not body.strip():
             return {}
         return json.loads(body)  # type: ignore[no-any-return]
-
-
