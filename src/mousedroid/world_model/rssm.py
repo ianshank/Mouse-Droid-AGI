@@ -42,6 +42,11 @@ class RSSM(nn.Module):
         # Reward head: h + z -> scalar
         self.reward_head = nn.Linear(cfg.hidden_dim + cfg.latent_dim, 1)
 
+        # Observation decoder: h + z -> reconstructed obs embedding
+        self.observation_decoder = nn.Linear(
+            cfg.hidden_dim + cfg.latent_dim, cfg.obs_dim,
+        )
+
         _log.info(
             "rssm_init",
             hidden_dim=cfg.hidden_dim,
@@ -93,6 +98,18 @@ class RSSM(nn.Module):
             - 1.0
         )
         return kl.sum(dim=-1).mean()
+
+    def decode(self, h: Tensor, z: Tensor) -> Tensor:
+        """Decode hidden + latent state into reconstructed observation embedding.
+
+        Args:
+            h: Hidden state, shape ``(batch, hidden_dim)``.
+            z: Latent sample, shape ``(batch, latent_dim)``.
+
+        Returns:
+            Reconstructed observation embedding, shape ``(batch, obs_dim)``.
+        """
+        return self.observation_decoder(torch.cat([h, z], dim=-1))
 
     # ------------------------------------------------------------------
     # Public API

@@ -246,6 +246,17 @@ class SurpriseConfig(BaseModel):
     critical_threshold: float = Field(5.0, gt=0, description="Critical surprise threshold")
 
 
+class PPOConfig(BaseModel):
+    """Proximal Policy Optimization configuration for constitutional RL."""
+
+    clip_epsilon: float = Field(0.2, gt=0, le=1, description="PPO clipping epsilon")
+    gae_lambda: float = Field(0.95, gt=0, le=1, description="GAE lambda")
+    ppo_epochs: int = Field(4, gt=0, description="PPO update epochs per rollout")
+    n_rollout_steps: int = Field(128, gt=0, description="Steps per rollout segment")
+    n_training_episodes: int = Field(5000, gt=0, description="Total training episodes")
+    n_validation_episodes: int = Field(1000, gt=0, description="Held-out validation episodes")
+
+
 class TrainingConfig(BaseModel):
     """Offline training configuration."""
 
@@ -253,6 +264,11 @@ class TrainingConfig(BaseModel):
     learning_rate: float = Field(3e-4, gt=0, description="Learning rate")
     epochs: int = Field(100, gt=0, description="Training epochs")
     checkpoint_every_n: int = Field(10, gt=0, description="Checkpoint frequency")
+    kl_beta: float = Field(1.0, gt=0, description="KL loss weight for RSSM training")
+    sequence_length: int = Field(50, gt=0, description="Training sequence length")
+    n_episodes: int = Field(1000, gt=0, description="Synthetic episodes to generate")
+    data_dir: str = Field("training/data", description="Generated data directory")
+    weights_dir: str = Field("weights", description="Checkpoint output directory")
 
 
 class UltrasonicConfig(BaseModel):
@@ -322,6 +338,7 @@ class Settings(BaseSettings):
     learning: LearningConfig = Field(default_factory=LearningConfig)
     reward: RewardConfig = Field(default_factory=RewardConfig)
     curiosity: CuriosityConfig = Field(default_factory=CuriosityConfig)
+    ppo: PPOConfig = Field(default_factory=PPOConfig)
 
     @model_validator(mode="after")  # type: ignore[untyped-decorator]
     def hardware_requires_pins(self) -> Self:

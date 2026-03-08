@@ -7,6 +7,7 @@ violate hard safety principles before they reach actuators.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -275,6 +276,28 @@ class PolicyMLP:
         h = _relu(_layer_norm(state @ self._w1 + self._b1))
         return np.tanh(h @ self._w2 + self._b2)
 
+    def save(self, path: Path | str) -> None:
+        """Save weights to ``.npz`` file.
+
+        Args:
+            path: Destination file path.
+        """
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(path, w1=self._w1, b1=self._b1, w2=self._w2, b2=self._b2)
+
+    def load(self, path: Path | str) -> None:
+        """Load weights from ``.npz`` file.
+
+        Args:
+            path: Source file path.
+        """
+        data = np.load(path)
+        self._w1 = data["w1"]
+        self._b1 = data["b1"]
+        self._w2 = data["w2"]
+        self._b2 = data["b2"]
+
 
 class ValueMLP:
     """Lightweight numpy value network.
@@ -304,3 +327,25 @@ class ValueMLP:
         """
         h = _relu(_layer_norm(state @ self._w1 + self._b1))
         return float((h @ self._w2 + self._b2)[0])
+
+    def save(self, path: Path | str) -> None:
+        """Save weights to ``.npz`` file.
+
+        Args:
+            path: Destination file path.
+        """
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(path, w1=self._w1, b1=self._b1, w2=self._w2, b2=self._b2)
+
+    def load(self, path: Path | str) -> None:
+        """Load weights from ``.npz`` file.
+
+        Args:
+            path: Source file path.
+        """
+        data = np.load(path)
+        self._w1 = data["w1"]
+        self._b1 = data["b1"]
+        self._w2 = data["w2"]
+        self._b2 = data["b2"]
