@@ -1,4 +1,4 @@
-# MouseDroidAGI 🤖
+# MouseDroidAGI 
 
 **A Star Wars MSE-6 "Mouse Droid" autonomous navigation system powered by an Agentic World Model on NVIDIA Jetson Orin Nano.**
 
@@ -272,6 +272,10 @@ systemctl start mousedroid
 
 ---
 
+## Developed By
+Ian Cruickshank
+
+---
 ## Contributing
 
 1. Fork the repository
