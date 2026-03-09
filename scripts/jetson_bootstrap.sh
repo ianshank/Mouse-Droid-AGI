@@ -69,8 +69,9 @@ echo "    Target: ${INITIAL_USER}@${JETSON_HOST}:${SSH_PORT}"
 
 # Run a command on the Jetson via SSH.
 remote() {
-    ssh -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null \
+    mkdir -p "${HOME}/.mousedroid"
+    ssh -o StrictHostKeyChecking=accept-new \
+        -o UserKnownHostsFile="${HOME}/.mousedroid/known_hosts" \
         -o ConnectTimeout="${SSH_TIMEOUT}" \
         -o LogLevel=ERROR \
         -p "${SSH_PORT}" \
@@ -111,8 +112,8 @@ if [[ -f "${SSH_PUBKEY}" ]]; then
     # ssh-copy-id won't add duplicates if key is already present.
     if command -v ssh-copy-id &>/dev/null; then
         ssh-copy-id -i "${SSH_PUBKEY}" \
-            -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null \
+            -o StrictHostKeyChecking=accept-new \
+            -o UserKnownHostsFile="${HOME}/.mousedroid/known_hosts" \
             -o LogLevel=ERROR \
             -p "${SSH_PORT}" \
             "${INITIAL_USER}@${JETSON_HOST}" 2>/dev/null || {

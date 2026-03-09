@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import TYPE_CHECKING, Any
 
 from mousedroid.llm_gateway.protocol import GoalVector
@@ -58,6 +59,20 @@ class LLMGateway:
             n_gpu_layers=self._cfg.n_gpu_layers,
         )
 
+    _INJECTION_RE = re.compile(
+        r"(ignore (previous|above|all) instructions?|system prompt|you are now)",
+        re.IGNORECASE,
+    )
+    _MAX_COMMAND_LEN = 512
+
+    def _sanitize_command(self, text: str) -> str:
+        """Sanitize NL command to mitigate prompt injection."""
+        text = text.strip()[: self._MAX_COMMAND_LEN]
+        if self._INJECTION_RE.search(text):
+            msg = "Mission command contains disallowed content"
+            raise ValueError(msg)
+        return text
+
     async def translate_mission(self, nl_command: str) -> GoalVector:
         """Translate NL mission to GoalVector.
 
@@ -68,11 +83,13 @@ class LLMGateway:
             GoalVector with normalised velocity targets.
 
         Raises:
-            ValueError: If nl_command is empty.
+            ValueError: If nl_command is empty or contains disallowed content.
         """
         if not nl_command.strip():
             msg = "nl_command must be non-empty"
             raise ValueError(msg)
+
+        nl_command = self._sanitize_command(nl_command)
 
         if self._model is None:
             _log.warning("llm_gateway_not_started")

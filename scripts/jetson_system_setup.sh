@@ -1,5 +1,5 @@
 #!/bin/bash
-# Idempotent Jetson Orin Nano system setup script.
+# Idempotent Jetson system setup script (JetPack 6 / Orin Nano).
 # Validates JetPack stack, configures swap/power, creates directories.
 # Usage: sudo bash scripts/jetson_system_setup.sh
 set -euo pipefail

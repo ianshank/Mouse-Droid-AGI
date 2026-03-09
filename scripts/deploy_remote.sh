@@ -47,7 +47,7 @@ remote_cmd() {
 
 remote_sudo() {
     ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
-        "${REMOTE_USER}@${HOST}" "sudo bash -c '$*'"
+        "${REMOTE_USER}@${HOST}" sudo -- "$@"
 }
 
 # ---------------------------------------------------------------------------
@@ -145,7 +145,7 @@ check_connectivity() {
 rsync_code() {
     log_section "Syncing project code"
     log_step "Ensuring remote directory exists"
-    remote_sudo "mkdir -p ${REMOTE_SRC} && chown -R ${REMOTE_USER}:${REMOTE_USER} ${REMOTE_SRC}"
+    remote_sudo bash -c "mkdir -p ${REMOTE_SRC} && chown -R ${REMOTE_USER}:${REMOTE_USER} ${REMOTE_SRC}"
 
     log_step "Rsyncing ${PROJECT_DIR} -> ${REMOTE_USER}@${HOST}:${REMOTE_SRC}/"
     rsync -avz --delete \
@@ -168,7 +168,7 @@ rsync_code() {
 
 deploy_config() {
     log_section "Deploying configuration"
-    remote_sudo "mkdir -p ${REMOTE_CONFIG}"
+    remote_sudo mkdir -p "${REMOTE_CONFIG}"
 
     log_step "Copying config files to ${REMOTE_CONFIG}/"
     local config_dir="${PROJECT_DIR}/config"
@@ -179,8 +179,8 @@ deploy_config() {
             basename="$(basename "${cfg_file}")"
             log_step "  -> ${basename}"
             scp -o ConnectTimeout=10 "${cfg_file}" "${REMOTE_USER}@${HOST}:/tmp/${basename}"
-            remote_sudo "cp /tmp/${basename} ${REMOTE_CONFIG}/${basename}"
-            remote_cmd "rm -f /tmp/${basename}"
+            remote_sudo cp -n "/tmp/${basename}" "${REMOTE_CONFIG}/${basename}"
+            remote_cmd rm -f "/tmp/${basename}"
         done
     fi
     log_step "Config deployment complete"
@@ -193,7 +193,7 @@ deploy_config() {
 run_system_setup() {
     log_section "Running Jetson system setup"
     if remote_cmd "test -x ${REMOTE_SRC}/scripts/jetson_system_setup.sh"; then
-        remote_sudo "bash ${REMOTE_SRC}/scripts/jetson_system_setup.sh"
+        remote_sudo bash "${REMOTE_SRC}/scripts/jetson_system_setup.sh"
     else
         log_step "SKIP: jetson_system_setup.sh not found on remote"
     fi
@@ -203,7 +203,7 @@ run_hardware_setup() {
     log_section "Running Jetson hardware setup"
     if remote_cmd "test -x ${REMOTE_SRC}/scripts/jetson_hardware_setup.sh" 2>/dev/null || \
        remote_cmd "test -f ${REMOTE_SRC}/scripts/jetson_hardware_setup.sh" 2>/dev/null; then
-        remote_sudo "bash ${REMOTE_SRC}/scripts/jetson_hardware_setup.sh"
+        remote_sudo bash "${REMOTE_SRC}/scripts/jetson_hardware_setup.sh"
     else
         log_step "SKIP: jetson_hardware_setup.sh not found on remote"
     fi
@@ -215,7 +215,7 @@ run_hardware_setup() {
 
 run_deploy() {
     log_section "Running deploy_jetson.sh on remote"
-    remote_sudo "bash ${REMOTE_SRC}/scripts/deploy_jetson.sh"
+    remote_sudo bash "${REMOTE_SRC}/scripts/deploy_jetson.sh"
 }
 
 # ---------------------------------------------------------------------------
@@ -226,7 +226,7 @@ pip_reinstall() {
     log_section "Reinstalling mousedroid package"
     local venv="/opt/mousedroid/venv"
     if remote_cmd "test -d ${venv}"; then
-        remote_sudo "${venv}/bin/pip install --quiet -e '${REMOTE_SRC}[hardware]'"
+        remote_sudo "${venv}/bin/pip" install --quiet -e "${REMOTE_SRC}[hardware,jetson]"
     else
         log_step "Venv not found — running full deploy_jetson.sh"
         run_deploy
@@ -239,14 +239,14 @@ pip_reinstall() {
 
 restart_service() {
     log_section "Restarting mousedroid service"
-    remote_sudo "systemctl daemon-reload"
+    remote_sudo systemctl daemon-reload
 
-    if remote_sudo "systemctl is-enabled mousedroid" &>/dev/null; then
-        remote_sudo "systemctl restart mousedroid"
+    if remote_sudo systemctl is-enabled mousedroid &>/dev/null; then
+        remote_sudo systemctl restart mousedroid
         log_step "Service restarted"
         sleep 2
         local status
-        status="$(remote_sudo "systemctl is-active mousedroid" 2>/dev/null || true)"
+        status="$(remote_sudo systemctl is-active mousedroid 2>/dev/null || true)"
         log_step "Service status: ${status}"
     else
         log_step "Service not enabled — skipping restart"

@@ -273,7 +273,8 @@ except Exception as exc:
 try:
     import jetson_utils
     cam = jetson_utils.videoSource("csi://0", argv=["--input-width=640", "--input-height=480"])
-    frame = cam.Capture()
+    cuda_img = cam.Capture()
+    frame = jetson_utils.cudaToNumpy(cuda_img) if cuda_img is not None else None
     if frame is not None:
         h, w = frame.shape[0], frame.shape[1]
         if h == 480 and w == 640:

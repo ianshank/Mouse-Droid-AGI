@@ -183,7 +183,7 @@ wait_for_boot() {
     local ssh_elapsed=0
     local ssh_timeout=60
     while [[ ${ssh_elapsed} -lt ${ssh_timeout} ]]; do
-        if ssh -o StrictHostKeyChecking=no \
+        if ssh -o StrictHostKeyChecking=accept-new \
                -o ConnectTimeout="${SSH_TIMEOUT}" \
                -o BatchMode=yes \
                "${SSH_USER}@${target_ip}" "echo ok" &>/dev/null; then
@@ -258,7 +258,7 @@ do_verify() {
     fi
 
     echo "--- Verifying SSH ---"
-    if ssh -o StrictHostKeyChecking=no \
+    if ssh -o StrictHostKeyChecking=accept-new \
            -o ConnectTimeout="${SSH_TIMEOUT}" \
            "${SSH_USER}@${JETSON_IP}" "cat /etc/nv_tegra_release" 2>/dev/null; then
         echo "    SSH verified. Jetson is ready."

@@ -50,9 +50,10 @@ log_section() {
 # Validate that an IP/hostname is reachable via SSH.
 # Returns 0 if SSH works, 1 otherwise.
 validate_ssh() {
+    mkdir -p "${HOME}/.mousedroid"
     local host="$1"
-    ssh -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null \
+    ssh -o StrictHostKeyChecking=accept-new \
+        -o UserKnownHostsFile="${HOME}/.mousedroid/known_hosts" \
         -o ConnectTimeout="${SSH_TIMEOUT}" \
         -o BatchMode=yes \
         -o LogLevel=ERROR \
@@ -188,8 +189,8 @@ try_subnet_scan() {
             log "Trying SSH on ${host}..."
             if validate_ssh "${host}"; then
                 # Verify it's actually a Jetson by checking /etc/nv_tegra_release
-                if ssh -o StrictHostKeyChecking=no \
-                       -o UserKnownHostsFile=/dev/null \
+                if ssh -o StrictHostKeyChecking=accept-new \
+                       -o UserKnownHostsFile="${HOME}/.mousedroid/known_hosts" \
                        -o ConnectTimeout="${SSH_TIMEOUT}" \
                        -o BatchMode=yes \
                        -o LogLevel=ERROR \

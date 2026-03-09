@@ -70,12 +70,14 @@ def test_build_camera_real_hardware_jetson_csi():
     assert isinstance(camera, JetsonCSICamera)
 
 
-def test_build_camera_real_hardware_auto_fallback():
+def test_build_camera_real_hardware_auto_fallback(monkeypatch):
     """Auto backend falls back to JetsonCSI when picamera2 is unavailable."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "picamera2", None)
     cfg = _real_settings()
     from mousedroid.factory import build_camera
-
-    camera = build_camera(cfg)
     from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
 
+    camera = build_camera(cfg)
     assert isinstance(camera, JetsonCSICamera)

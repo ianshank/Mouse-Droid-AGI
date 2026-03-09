@@ -199,7 +199,7 @@ def test_episodic_memory_non_finite_priorities():
 # ---------------------------------------------------------------------------
 
 
-def test_ewc_consolidate_with_gradients():
+def test_ewc_consolidate_with_gradients(monkeypatch):
     from mousedroid.config.schema import LearningConfig
     from mousedroid.learning.ewc import EWCAgent
 
@@ -212,9 +212,14 @@ def test_ewc_consolidate_with_gradients():
     loss = model(x).sum()
     loss.backward()
 
+    # Prevent consolidate()'s zero_grad() from clearing grads to None,
+    # so the param.grad is not None branch is actually exercised.
+    monkeypatch.setattr(model, "zero_grad", lambda **kw: None)
+
     ewc.consolidate()
     assert ewc._fisher is not None
     assert len(ewc._fisher) > 0
+    assert any(v.abs().sum() > 0 for v in ewc._fisher.values())
 
 
 # ---------------------------------------------------------------------------
