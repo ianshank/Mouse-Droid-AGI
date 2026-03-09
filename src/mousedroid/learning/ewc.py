@@ -53,14 +53,12 @@ class EWCAgent:
         """
         # Snapshot parameters.
         self._star_params = {
-            name: param.detach().clone()
-            for name, param in self._named_parameters()
+            name: param.detach().clone() for name, param in self._named_parameters()
         }
 
         # Estimate diagonal Fisher via squared gradients.
         fisher_acc: dict[str, Tensor] = {
-            name: torch.zeros_like(param)
-            for name, param in self._named_parameters()
+            name: torch.zeros_like(param) for name, param in self._named_parameters()
         }
 
         self._model.eval()

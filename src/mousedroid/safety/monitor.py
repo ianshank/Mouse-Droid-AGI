@@ -113,6 +113,13 @@ class MouseDroidSafetyMonitor:
             )
             is_emergency = True
 
+        # -- Human detection (from observation if available) ---------------
+        human_detected = bool(getattr(observation, "human_detected", False))
+        human_dist_m = float(getattr(observation, "human_dist_m", float("inf")))
+
+        if human_detected and human_dist_m < self._cfg.min_forward_clearance_m:
+            is_emergency = True
+
         return SafetyContext(
             ultrasonic_dist_m=observation.distance_m,
             forward_clearance_ok=forward_clearance_ok,
@@ -120,4 +127,6 @@ class MouseDroidSafetyMonitor:
             valid_sensor_count=valid_sensor_count,
             loop_time_ms=loop_time_ms,
             is_emergency=is_emergency,
+            human_detected=human_detected,
+            human_dist_m=human_dist_m,
         )

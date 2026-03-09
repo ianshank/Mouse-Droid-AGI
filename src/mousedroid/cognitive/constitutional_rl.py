@@ -7,21 +7,24 @@ violate hard safety principles before they reach actuators.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy.typing import NDArray
 
 from mousedroid.logging.setup import get_logger
+from mousedroid.utils.numpy_ops import layer_norm as _layer_norm
+from mousedroid.utils.numpy_ops import relu as _relu
+
+if TYPE_CHECKING:
+    from mousedroid.safety.three_laws import RoboticsLawChecker
 
 _log = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Module-level constants
 # ---------------------------------------------------------------------------
-
-_LAYER_NORM_EPS: float = 1e-6
-"""Epsilon for layer normalisation denominator."""
 
 _SPEED_CEILING_DEFAULT: float = 0.5
 """Default maximum speed in m/s."""
@@ -45,37 +48,6 @@ _CURIOSITY_CHANNELS: tuple[str, ...] = (
 
 _POLICY_HIDDEN_DIM: int = 64
 """Hidden layer dimensionality for PolicyMLP and ValueMLP networks."""
-
-
-# ---------------------------------------------------------------------------
-# Utility helpers
-# ---------------------------------------------------------------------------
-
-
-def _layer_norm(x: NDArray[np.floating[Any]]) -> NDArray[np.floating[Any]]:
-    """Apply layer normalisation to a 1-D vector.
-
-    Args:
-        x: Input array.
-
-    Returns:
-        Normalised array with zero mean and unit variance.
-    """
-    mean = np.mean(x)
-    var = np.var(x)
-    return (x - mean) / np.sqrt(var + _LAYER_NORM_EPS)
-
-
-def _relu(x: NDArray[np.floating[Any]]) -> NDArray[np.floating[Any]]:
-    """Element-wise ReLU.
-
-    Args:
-        x: Input array.
-
-    Returns:
-        Array with negative values zeroed.
-    """
-    return np.maximum(x, 0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -108,12 +80,21 @@ class ConstitutionalRLConfig:
 class ConstitutionalChecker:
     """Check and clip actions against constitutional safety principles.
 
+    Optionally integrates :class:`~mousedroid.safety.three_laws.RoboticsLawChecker`
+    to enforce the Three Laws of Robotics *before* constitutional checks.
+
     Args:
         config: Safety thresholds.
+        law_checker: Optional Three Laws checker (runs first).
     """
 
-    def __init__(self, config: ConstitutionalRLConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: ConstitutionalRLConfig | None = None,
+        law_checker: RoboticsLawChecker | None = None,
+    ) -> None:
         self._cfg = config or ConstitutionalRLConfig()
+        self._law_checker = law_checker
 
     def check(
         self,
@@ -122,23 +103,33 @@ class ConstitutionalChecker:
     ) -> tuple[NDArray[np.floating[Any]], list[str]]:
         """Validate *action* against constitutional principles.
 
+        If a :class:`~mousedroid.safety.three_laws.RoboticsLawChecker` is
+        configured, it runs **first** and its violations are prepended.
+
         Args:
             action: Raw action vector (at minimum ``[speed, steering]``).
             context: Environment context with optional keys
-                ``battery_v``, ``obstacle_dist_m``, ``mcts_sims``.
+                ``battery_v``, ``obstacle_dist_m``, ``mcts_sims``,
+                ``human_detected``, ``human_dist_m``, etc.
 
         Returns:
             Tuple of ``(safe_action, violations)`` where *violations* is
             an empty list when no principles are breached.
         """
-        safe = action.copy().astype(np.float64)
-        violations: list[str] = []
+        # --- Three Laws (highest priority) ---
+        law_violation_strs: list[str] = []
+        if self._law_checker is not None:
+            safe, law_violations = self._law_checker.check(action, context)
+            law_violation_strs = [f"[Law {v.law.value}] {v.description}" for v in law_violations]
+        else:
+            safe = action.copy().astype(np.float64)
+
+        violations: list[str] = list(law_violation_strs)
 
         # --- Speed ceiling ---
         if safe.size > 0 and float(np.abs(safe[0])) > self._cfg.speed_ceiling_mps:
             violations.append(
-                f"speed {float(safe[0]):.2f} exceeds ceiling "
-                f"{self._cfg.speed_ceiling_mps:.2f} m/s"
+                f"speed {float(safe[0]):.2f} exceeds ceiling {self._cfg.speed_ceiling_mps:.2f} m/s"
             )
             safe[0] = np.clip(safe[0], -self._cfg.speed_ceiling_mps, self._cfg.speed_ceiling_mps)
 
@@ -163,9 +154,7 @@ class ConstitutionalChecker:
         # --- MCTS simulation count ---
         mcts_sims: int = int(context.get("mcts_sims", self._cfg.mcts_min_sims))
         if mcts_sims < self._cfg.mcts_min_sims:
-            violations.append(
-                f"mcts_sims {mcts_sims} < minimum {self._cfg.mcts_min_sims}"
-            )
+            violations.append(f"mcts_sims {mcts_sims} < minimum {self._cfg.mcts_min_sims}")
 
         if violations:
             _log.warning("constitutional_violations", violations=violations)
@@ -275,6 +264,28 @@ class PolicyMLP:
         h = _relu(_layer_norm(state @ self._w1 + self._b1))
         return np.tanh(h @ self._w2 + self._b2)
 
+    def save(self, path: Path | str) -> None:
+        """Save weights to ``.npz`` file.
+
+        Args:
+            path: Destination file path.
+        """
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(path, w1=self._w1, b1=self._b1, w2=self._w2, b2=self._b2)
+
+    def load(self, path: Path | str) -> None:
+        """Load weights from ``.npz`` file.
+
+        Args:
+            path: Source file path.
+        """
+        data = np.load(path)
+        self._w1 = data["w1"]
+        self._b1 = data["b1"]
+        self._w2 = data["w2"]
+        self._b2 = data["b2"]
+
 
 class ValueMLP:
     """Lightweight numpy value network.
@@ -304,3 +315,25 @@ class ValueMLP:
         """
         h = _relu(_layer_norm(state @ self._w1 + self._b1))
         return float((h @ self._w2 + self._b2)[0])
+
+    def save(self, path: Path | str) -> None:
+        """Save weights to ``.npz`` file.
+
+        Args:
+            path: Destination file path.
+        """
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(path, w1=self._w1, b1=self._b1, w2=self._w2, b2=self._b2)
+
+    def load(self, path: Path | str) -> None:
+        """Load weights from ``.npz`` file.
+
+        Args:
+            path: Source file path.
+        """
+        data = np.load(path)
+        self._w1 = data["w1"]
+        self._b1 = data["b1"]
+        self._w2 = data["w2"]
+        self._b2 = data["b2"]

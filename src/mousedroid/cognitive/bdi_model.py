@@ -15,11 +15,14 @@ import numpy as np
 from numpy.typing import NDArray
 
 from mousedroid.logging.setup import get_logger
+from mousedroid.utils.numpy_ops import relu as _relu
+from mousedroid.utils.numpy_ops import softmax as _safe_softmax_impl
 
 _log = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
-# Module-level constants
+# Module-level constants — defaults that match ModelConfig defaults.
+# Kept here as fallbacks; prefer ModelConfig values when available.
 # ---------------------------------------------------------------------------
 
 _BAYESIAN_SUM_EPS: float = 1e-8
@@ -32,16 +35,16 @@ _APPROACH_RATE_EPS: float = 1e-6
 """Minimum approach rate to avoid divide-by-zero."""
 
 _BELIEF_DIM: int = 128
-"""Dimensionality of the belief latent vector."""
+"""Default dimensionality of the belief latent vector."""
 
 _DESIRE_DIM: int = 64
-"""Dimensionality of the desire latent vector."""
+"""Default dimensionality of the desire latent vector."""
 
-_INTENTION_CLASSES: int = 8
-"""Number of discrete intention categories."""
+_INTENTION_CLASSES: int = 10
+"""Default number of discrete intention categories."""
 
 _AFFECT_DIM: int = 2
-"""Affect output dimensionality (valence, arousal)."""
+"""Default affect output dimensionality (valence, arousal)."""
 
 
 # ---------------------------------------------------------------------------
@@ -50,18 +53,8 @@ _AFFECT_DIM: int = 2
 
 
 def _safe_softmax(logits: NDArray[np.floating[Any]]) -> NDArray[np.floating[Any]]:
-    """Numerically stable softmax over a 1-D logit vector.
-
-    Args:
-        logits: 1-D array of raw logits.
-
-    Returns:
-        Probability vector summing to 1.
-    """
-    shifted = logits - np.max(logits)
-    exp_vals = np.exp(shifted)
-    total = np.sum(exp_vals) + _SOFTMAX_EPS
-    return exp_vals / total
+    """Numerically stable softmax — delegates to shared ``numpy_ops.softmax``."""
+    return _safe_softmax_impl(logits)
 
 
 def _bayesian_normalise(
@@ -76,19 +69,7 @@ def _bayesian_normalise(
         Normalised array.
     """
     total = np.sum(values) + _BAYESIAN_SUM_EPS
-    return values / total
-
-
-def _relu(x: NDArray[np.floating[Any]]) -> NDArray[np.floating[Any]]:
-    """Element-wise ReLU activation.
-
-    Args:
-        x: Input array.
-
-    Returns:
-        Array with negative values zeroed.
-    """
-    return np.maximum(x, 0.0)
+    return values / total  # type: ignore[no-any-return]
 
 
 # ---------------------------------------------------------------------------
@@ -200,32 +181,46 @@ class DesireEncoder:
 
 
 class IntentionPredictor:
-    """8-class softmax intention classifier.
+    """Softmax intention classifier.
+
+    Dynamically adapts to the number of intention classes from loaded weights
+    or from the ``n_classes`` constructor argument.
 
     Args:
         weights_path: Optional ``.npz`` with ``w1``, ``b1``.
+        n_classes: Number of intention classes (default from ``_INTENTION_CLASSES``).
+        desire_dim: Input desire dimension (default from ``_DESIRE_DIM``).
     """
 
-    def __init__(self, weights_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        weights_path: Path | None = None,
+        *,
+        n_classes: int = _INTENTION_CLASSES,
+        desire_dim: int = _DESIRE_DIM,
+    ) -> None:
         if weights_path is not None:
             data = np.load(weights_path)
             self._w1: NDArray[np.floating[Any]] = data["w1"]
             self._b1: NDArray[np.floating[Any]] = data["b1"]
         else:
             rng = np.random.default_rng(44)
-            self._w1 = (
-                rng.standard_normal((_DESIRE_DIM, _INTENTION_CLASSES)).astype(np.float32) * 0.01
-            )
-            self._b1 = np.zeros(_INTENTION_CLASSES, dtype=np.float32)
+            self._w1 = rng.standard_normal((desire_dim, n_classes)).astype(np.float32) * 0.01
+            self._b1 = np.zeros(n_classes, dtype=np.float32)
+
+    @property
+    def n_classes(self) -> int:
+        """Number of intention classes (inferred from weight shape)."""
+        return int(self._w1.shape[1])
 
     def forward(self, desire: NDArray[np.floating[Any]]) -> NDArray[np.floating[Any]]:
         """Predict intention probabilities from a desire vector.
 
         Args:
-            desire: 64-d desire vector.
+            desire: Desire vector.
 
         Returns:
-            8-class probability distribution.
+            Probability distribution over intention classes.
         """
         logits = desire @ self._w1 + self._b1
         return _safe_softmax(logits)
@@ -234,23 +229,32 @@ class IntentionPredictor:
 class AffectEstimator:
     """Estimate valence/arousal from desire + intention signals.
 
+    Dynamically adapts input dimension from loaded weights or constructor args.
+
     Args:
         weights_path: Optional ``.npz`` with ``w1``, ``b1``.
+        desire_dim: Desire vector dimension.
+        n_classes: Number of intention classes.
+        affect_dim: Output affect dimension.
     """
 
-    _INPUT_DIM: int = _DESIRE_DIM + _INTENTION_CLASSES
-
-    def __init__(self, weights_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        weights_path: Path | None = None,
+        *,
+        desire_dim: int = _DESIRE_DIM,
+        n_classes: int = _INTENTION_CLASSES,
+        affect_dim: int = _AFFECT_DIM,
+    ) -> None:
         if weights_path is not None:
             data = np.load(weights_path)
             self._w1: NDArray[np.floating[Any]] = data["w1"]
             self._b1: NDArray[np.floating[Any]] = data["b1"]
         else:
+            input_dim = desire_dim + n_classes
             rng = np.random.default_rng(45)
-            self._w1 = (
-                rng.standard_normal((self._INPUT_DIM, _AFFECT_DIM)).astype(np.float32) * 0.01
-            )
-            self._b1 = np.zeros(_AFFECT_DIM, dtype=np.float32)
+            self._w1 = rng.standard_normal((input_dim, affect_dim)).astype(np.float32) * 0.01
+            self._b1 = np.zeros(affect_dim, dtype=np.float32)
 
     def forward(
         self,
@@ -260,15 +264,15 @@ class AffectEstimator:
         """Estimate affect (valence, arousal).
 
         Args:
-            desire: 64-d desire vector.
-            intentions: 8-class intention probabilities.
+            desire: Desire vector.
+            intentions: Intention probability distribution.
 
         Returns:
-            2-d array ``[valence, arousal]`` in ``[-1, 1]``.
+            Array ``[valence, arousal]`` in ``[-1, 1]``.
         """
         combined = np.concatenate([desire, intentions])
         raw = combined @ self._w1 + self._b1
-        return np.tanh(raw)
+        return np.tanh(raw)  # type: ignore[no-any-return]
 
 
 # ---------------------------------------------------------------------------

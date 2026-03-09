@@ -56,7 +56,8 @@ class EpisodicReplay:
 
         n = min(batch_size, len(self._buffer))
         priorities: NDArray[np.float64] = np.array(
-            [p for _, p in self._buffer], dtype=np.float64,
+            [p for _, p in self._buffer],
+            dtype=np.float64,
         )
 
         # Safe normalization: replace non-finite with uniform weight.

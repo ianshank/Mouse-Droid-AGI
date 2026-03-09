@@ -109,14 +109,14 @@ class IMX500Camera:
         dim = self._cfg.feature_dim
         if len(flat) >= dim:
             stride = len(flat) // dim
-            features = flat[:stride * dim].reshape(dim, stride).mean(axis=1)
+            features = flat[: stride * dim].reshape(dim, stride).mean(axis=1)
         else:
             features = np.zeros(dim, dtype=np.float32)
-            features[:len(flat)] = flat
+            features[: len(flat)] = flat
         norm = np.linalg.norm(features)
         if norm > 0:
             features = features / norm
-        return features
+        return features  # type: ignore[no-any-return]
 
     @property
     def feature_dim(self) -> int:

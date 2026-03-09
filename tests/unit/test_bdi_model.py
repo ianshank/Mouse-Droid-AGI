@@ -114,7 +114,7 @@ def test_safe_softmax_all_zeros() -> None:
 def test_dimension_constants() -> None:
     assert _BELIEF_DIM == 128
     assert _DESIRE_DIM == 64
-    assert _INTENTION_CLASSES == 8
+    assert _INTENTION_CLASSES == 10
     assert _AFFECT_DIM == 2
 
 
@@ -180,8 +180,8 @@ def test_intention_predictor_from_weights(tmp_path: Path) -> None:
     npz_path = tmp_path / "intention.npz"
     np.savez(
         npz_path,
-        w1=rng.standard_normal((64, 8)).astype(np.float32) * 0.01,
-        b1=np.zeros(8, dtype=np.float32),
+        w1=rng.standard_normal((64, _INTENTION_CLASSES)).astype(np.float32) * 0.01,
+        b1=np.zeros(_INTENTION_CLASSES, dtype=np.float32),
     )
     pred = IntentionPredictor(weights_path=npz_path)
     out = pred.forward(np.zeros(64, dtype=np.float32))
@@ -199,7 +199,10 @@ def test_affect_estimator_from_weights(tmp_path: Path) -> None:
         b1=np.zeros(2, dtype=np.float32),
     )
     est = AffectEstimator(weights_path=npz_path)
-    out = est.forward(np.zeros(64, dtype=np.float32), np.zeros(8, dtype=np.float32))
+    out = est.forward(
+        np.zeros(_DESIRE_DIM, dtype=np.float32),
+        np.zeros(_INTENTION_CLASSES, dtype=np.float32),
+    )
     assert out.shape == (_AFFECT_DIM,)
 
 
@@ -219,8 +222,8 @@ def test_neural_bdi_with_weights_dir(tmp_path: Path) -> None:
     )
     np.savez(
         tmp_path / "intention.npz",
-        w1=rng.standard_normal((64, 8)).astype(np.float32) * 0.01,
-        b1=np.zeros(8, dtype=np.float32),
+        w1=rng.standard_normal((64, _INTENTION_CLASSES)).astype(np.float32) * 0.01,
+        b1=np.zeros(_INTENTION_CLASSES, dtype=np.float32),
     )
     input_dim = _DESIRE_DIM + _INTENTION_CLASSES
     np.savez(

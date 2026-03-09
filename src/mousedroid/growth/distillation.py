@@ -40,7 +40,8 @@ class KnowledgeDistiller:
         self._alpha = alpha
         self._optimizer = nn.utils.clip_grad.clip_grad_norm_  # placeholder reference
         self._student_optimizer = __import__("torch").optim.Adam(
-            student.parameters(), lr=lr,
+            student.parameters(),
+            lr=lr,
         )
 
         # Freeze teacher.
@@ -86,7 +87,7 @@ class KnowledgeDistiller:
         loss: Tensor = self._alpha * kl_loss + (1.0 - self._alpha) * ce_loss
 
         self._student_optimizer.zero_grad()
-        loss.backward()
+        loss.backward()  # type: ignore[no-untyped-call]
         self._student_optimizer.step()
 
         return loss

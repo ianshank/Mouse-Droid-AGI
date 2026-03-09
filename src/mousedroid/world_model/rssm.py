@@ -42,6 +42,12 @@ class RSSM(nn.Module):
         # Reward head: h + z -> scalar
         self.reward_head = nn.Linear(cfg.hidden_dim + cfg.latent_dim, 1)
 
+        # Observation decoder: h + z -> reconstructed obs embedding
+        self.observation_decoder = nn.Linear(
+            cfg.hidden_dim + cfg.latent_dim,
+            cfg.obs_dim,
+        )
+
         _log.info(
             "rssm_init",
             hidden_dim=cfg.hidden_dim,
@@ -94,6 +100,18 @@ class RSSM(nn.Module):
         )
         return kl.sum(dim=-1).mean()
 
+    def decode(self, h: Tensor, z: Tensor) -> Tensor:
+        """Decode hidden + latent state into reconstructed observation embedding.
+
+        Args:
+            h: Hidden state, shape ``(batch, hidden_dim)``.
+            z: Latent sample, shape ``(batch, latent_dim)``.
+
+        Returns:
+            Reconstructed observation embedding, shape ``(batch, obs_dim)``.
+        """
+        return self.observation_decoder(torch.cat([h, z], dim=-1))  # type: ignore[no-any-return]
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -120,16 +138,24 @@ class RSSM(nn.Module):
 
         # Convert observation arrays to tensors.
         vision = torch.as_tensor(
-            observation.vision_features, dtype=torch.float32, device=device,
+            observation.vision_features,
+            dtype=torch.float32,
+            device=device,
         ).unsqueeze(0)
         ultrasonic = torch.as_tensor(
-            [observation.distance_m], dtype=torch.float32, device=device,
+            [observation.distance_m],
+            dtype=torch.float32,
+            device=device,
         ).unsqueeze(0)
         motor = torch.as_tensor(
-            observation.motor_state, dtype=torch.float32, device=device,
+            observation.motor_state,
+            dtype=torch.float32,
+            device=device,
         ).unsqueeze(0)
         mask = torch.as_tensor(
-            observation.valid_mask, dtype=torch.float32, device=device,
+            observation.valid_mask,
+            dtype=torch.float32,
+            device=device,
         ).unsqueeze(0)
 
         # Encode
@@ -151,7 +177,7 @@ class RSSM(nn.Module):
 
         return new_h, new_z, obs_embed, float(surprise.item())
 
-    @torch.no_grad()  # type: ignore[untyped-decorator]
+    @torch.no_grad()
     def imagine_step(
         self,
         action: Tensor,

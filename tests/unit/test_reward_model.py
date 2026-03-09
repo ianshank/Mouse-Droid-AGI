@@ -32,7 +32,8 @@ def test_constructor_head_names(reward_model: MultiObjectiveRewardModel) -> None
 
 
 def test_compute_reward_returns_dict_with_4_keys(
-    reward_model: MultiObjectiveRewardModel, model_cfg: ModelConfig,
+    reward_model: MultiObjectiveRewardModel,
+    model_cfg: ModelConfig,
 ) -> None:
     state = torch.randn(2, model_cfg.obs_dim)
     scores = reward_model.compute_reward(state)
@@ -42,7 +43,8 @@ def test_compute_reward_returns_dict_with_4_keys(
 
 
 def test_compute_reward_output_shapes(
-    reward_model: MultiObjectiveRewardModel, model_cfg: ModelConfig,
+    reward_model: MultiObjectiveRewardModel,
+    model_cfg: ModelConfig,
 ) -> None:
     state = torch.randn(3, model_cfg.obs_dim)
     scores = reward_model.compute_reward(state)
@@ -77,7 +79,8 @@ def test_aggregate_with_all_zero_inputs(reward_model: MultiObjectiveRewardModel)
 
 
 def test_forward_returns_scalar(
-    reward_model: MultiObjectiveRewardModel, model_cfg: ModelConfig,
+    reward_model: MultiObjectiveRewardModel,
+    model_cfg: ModelConfig,
 ) -> None:
     state = torch.randn(2, model_cfg.obs_dim)
     result = reward_model(state)
@@ -85,7 +88,8 @@ def test_forward_returns_scalar(
 
 
 def test_forward_is_differentiable(
-    reward_model: MultiObjectiveRewardModel, model_cfg: ModelConfig,
+    reward_model: MultiObjectiveRewardModel,
+    model_cfg: ModelConfig,
 ) -> None:
     state = torch.randn(1, model_cfg.obs_dim, requires_grad=True)
     result = reward_model(state)
