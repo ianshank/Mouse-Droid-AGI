@@ -15,6 +15,15 @@ from numpy.typing import NDArray
 _N_MODALITIES: int = 3
 """Number of sensor modalities tracked: vision, ultrasonic, motor."""
 
+_DEFAULT_VISION_DIM: int = 256
+"""Default vision feature dimension (mirrors ModelConfig.vision_dim)."""
+
+_DEFAULT_MOTOR_STATE_DIM: int = 4
+"""Motor state dimension [vx, vy, omega, battery_v]."""
+
+_DEFAULT_MAX_DISTANCE_M: float = 4.0
+"""Default max ultrasonic range in metres (mirrors UltrasonicConfig.max_range_m)."""
+
 
 @dataclass
 class MouseDroidObservationBundle:
@@ -36,15 +45,15 @@ class MouseDroidObservationBundle:
     """Monotonic timestamp captured when the bundle is created."""
 
     _vision_features: NDArray[np.float32] = field(
-        default_factory=lambda: np.zeros(256, dtype=np.float32),
+        default_factory=lambda: np.zeros(_DEFAULT_VISION_DIM, dtype=np.float32),
     )
     """Vision feature vector, shape ``(feature_dim,)``."""
 
-    _distance_m: float = 4.0
+    _distance_m: float = _DEFAULT_MAX_DISTANCE_M
     """Forward ultrasonic distance in metres (defaults to max range)."""
 
     _motor_state: NDArray[np.float32] = field(
-        default_factory=lambda: np.zeros(4, dtype=np.float32),
+        default_factory=lambda: np.zeros(_DEFAULT_MOTOR_STATE_DIM, dtype=np.float32),
     )
     """Motor state ``[vx, vy, omega, battery_v]``, shape ``(4,)``."""
 

@@ -154,7 +154,7 @@ class JetsonCSICamera:
                 (self._cfg.resolution_height, self._cfg.resolution_width, 3),
                 dtype=np.uint8,
             )
-        return frame_cv  # type: ignore[return-value]
+        return np.asarray(frame_cv, dtype=np.uint8)
 
     def _extract_features(self, frame: NDArray[np.uint8]) -> NDArray[np.float32]:
         """Extract feature vector from a captured frame.

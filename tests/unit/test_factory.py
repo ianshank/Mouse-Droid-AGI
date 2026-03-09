@@ -60,11 +60,22 @@ def test_build_distance_sensor_real_hardware():
     assert isinstance(sensor, HcSr04)
 
 
-def test_build_camera_real_hardware():
+def test_build_camera_real_hardware_jetson_csi():
+    cfg = _real_settings(camera={"backend": "jetson_csi"})
+    from mousedroid.factory import build_camera
+
+    camera = build_camera(cfg)
+    from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
+
+    assert isinstance(camera, JetsonCSICamera)
+
+
+def test_build_camera_real_hardware_auto_fallback():
+    """Auto backend falls back to JetsonCSI when picamera2 is unavailable."""
     cfg = _real_settings()
     from mousedroid.factory import build_camera
 
     camera = build_camera(cfg)
-    from mousedroid.hardware.camera.imx500 import IMX500Camera
+    from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
 
-    assert isinstance(camera, IMX500Camera)
+    assert isinstance(camera, JetsonCSICamera)

@@ -72,6 +72,7 @@ def build_camera(cfg: Settings) -> VisionProtocol:
     # auto: try picamera2 first, fall back to jetson_csi
     try:
         from picamera2 import Picamera2  # noqa: F401
+
         from mousedroid.hardware.camera.imx500 import IMX500Camera
 
         return IMX500Camera(cfg.camera)
