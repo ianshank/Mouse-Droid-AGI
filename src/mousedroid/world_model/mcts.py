@@ -149,7 +149,7 @@ class MCTSPlanner:
     # Public API
     # ------------------------------------------------------------------
 
-    @torch.no_grad()  # type: ignore[untyped-decorator]
+    @torch.no_grad()
     def plan(self, h: Tensor, z: Tensor) -> Tensor:
         """Run MCTS simulations and return the best action.
 

@@ -110,7 +110,7 @@ class RSSM(nn.Module):
         Returns:
             Reconstructed observation embedding, shape ``(batch, obs_dim)``.
         """
-        return self.observation_decoder(torch.cat([h, z], dim=-1))
+        return self.observation_decoder(torch.cat([h, z], dim=-1))  # type: ignore[no-any-return]
 
     # ------------------------------------------------------------------
     # Public API
@@ -177,7 +177,7 @@ class RSSM(nn.Module):
 
         return new_h, new_z, obs_embed, float(surprise.item())
 
-    @torch.no_grad()  # type: ignore[untyped-decorator]
+    @torch.no_grad()
     def imagine_step(
         self,
         action: Tensor,

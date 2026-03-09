@@ -360,7 +360,7 @@ class UltrasonicConfig(BaseModel):
     timeout_s: float = Field(0.1, gt=0, description="Echo timeout (s)")
     speed_of_sound_mps: float = Field(343.0, gt=0, description="Speed of sound (m/s, ~20C)")
 
-    @model_validator(mode="after")  # type: ignore[untyped-decorator]
+    @model_validator(mode="after")
     def range_ordering(self) -> Self:
         """Validate max_range_m > min_range_m."""
         if self.max_range_m <= self.min_range_m:
@@ -393,34 +393,34 @@ class Settings(BaseSettings):
     mock_hardware: bool = Field(False, description="Use mock drivers")
     debug: bool = Field(False, description="Enable debug logging + assertions")
 
-    loop: LoopConfig = Field(default_factory=LoopConfig)
-    model: ModelConfig = Field(default_factory=ModelConfig)
-    mcts: MCTSConfig = Field(default_factory=MCTSConfig)
-    surprise: SurpriseConfig = Field(default_factory=SurpriseConfig)
-    safety: SafetyConfig = Field(default_factory=SafetyConfig)
-    esp32: ESP32Config = Field(default_factory=ESP32Config)
+    loop: LoopConfig = Field(default_factory=LoopConfig)  # type: ignore[arg-type]
+    model: ModelConfig = Field(default_factory=ModelConfig)  # type: ignore[arg-type]
+    mcts: MCTSConfig = Field(default_factory=MCTSConfig)  # type: ignore[arg-type]
+    surprise: SurpriseConfig = Field(default_factory=SurpriseConfig)  # type: ignore[arg-type]
+    safety: SafetyConfig = Field(default_factory=SafetyConfig)  # type: ignore[arg-type]
+    esp32: ESP32Config = Field(default_factory=ESP32Config)  # type: ignore[arg-type]
     ultrasonic: UltrasonicConfig | None = Field(
         None,
         description="Required if mock_hardware=false",
     )
-    camera: CameraConfig = Field(default_factory=CameraConfig)
-    jetson: JetsonConfig = Field(default_factory=JetsonConfig)
-    robot: RobotConfig = Field(default_factory=RobotConfig)
-    experience: ExperienceConfig = Field(default_factory=ExperienceConfig)
-    logging: LoggingConfig = Field(default_factory=LoggingConfig)
-    training: TrainingConfig = Field(default_factory=TrainingConfig)
-    health: HealthConfig = Field(default_factory=HealthConfig)
-    retry: RetryConfig = Field(default_factory=RetryConfig)
-    circuit_breaker: CircuitBreakerConfig = Field(default_factory=CircuitBreakerConfig)
-    metrics: MetricsConfig = Field(default_factory=MetricsConfig)
-    memory: MemoryConfig = Field(default_factory=MemoryConfig)
-    learning: LearningConfig = Field(default_factory=LearningConfig)
-    reward: RewardConfig = Field(default_factory=RewardConfig)
-    curiosity: CuriosityConfig = Field(default_factory=CuriosityConfig)
-    ppo: PPOConfig = Field(default_factory=PPOConfig)
-    three_laws: ThreeLawsConfig = Field(default_factory=ThreeLawsConfig)
+    camera: CameraConfig = Field(default_factory=CameraConfig)  # type: ignore[arg-type]
+    jetson: JetsonConfig = Field(default_factory=JetsonConfig)  # type: ignore[arg-type]
+    robot: RobotConfig = Field(default_factory=RobotConfig)  # type: ignore[arg-type]
+    experience: ExperienceConfig = Field(default_factory=ExperienceConfig)  # type: ignore[arg-type]
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)  # type: ignore[arg-type]
+    training: TrainingConfig = Field(default_factory=TrainingConfig)  # type: ignore[arg-type]
+    health: HealthConfig = Field(default_factory=HealthConfig)  # type: ignore[arg-type]
+    retry: RetryConfig = Field(default_factory=RetryConfig)  # type: ignore[arg-type]
+    circuit_breaker: CircuitBreakerConfig = Field(default_factory=CircuitBreakerConfig)  # type: ignore[arg-type]
+    metrics: MetricsConfig = Field(default_factory=MetricsConfig)  # type: ignore[arg-type]
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)  # type: ignore[arg-type]
+    learning: LearningConfig = Field(default_factory=LearningConfig)  # type: ignore[arg-type]
+    reward: RewardConfig = Field(default_factory=RewardConfig)  # type: ignore[arg-type]
+    curiosity: CuriosityConfig = Field(default_factory=CuriosityConfig)  # type: ignore[arg-type]
+    ppo: PPOConfig = Field(default_factory=PPOConfig)  # type: ignore[arg-type]
+    three_laws: ThreeLawsConfig = Field(default_factory=ThreeLawsConfig)  # type: ignore[arg-type]
 
-    @model_validator(mode="after")  # type: ignore[untyped-decorator]
+    @model_validator(mode="after")
     def hardware_requires_pins(self) -> Self:
         """Validate that real hardware mode has required sensor configs."""
         if not self.mock_hardware and self.ultrasonic is None:

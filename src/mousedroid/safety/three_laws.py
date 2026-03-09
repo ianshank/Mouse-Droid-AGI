@@ -145,7 +145,7 @@ class RoboticsLawChecker:
             _log.debug("three_laws_disabled")
             return action.copy().astype(np.float64), []
 
-        safe = action.copy().astype(np.float64)
+        safe: NDArray[np.floating[Any]] = action.copy().astype(np.float64)
         violations: list[LawViolation] = []
 
         _log.debug("three_laws_check_start", action_norm=float(np.linalg.norm(action)))
