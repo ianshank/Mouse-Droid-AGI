@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -16,6 +16,9 @@ from numpy.typing import NDArray
 from mousedroid.logging.setup import get_logger
 from mousedroid.utils.numpy_ops import layer_norm as _layer_norm
 from mousedroid.utils.numpy_ops import relu as _relu
+
+if TYPE_CHECKING:
+    from mousedroid.safety.three_laws import RoboticsLawChecker
 
 _log = get_logger(__name__)
 
@@ -88,7 +91,7 @@ class ConstitutionalChecker:
     def __init__(
         self,
         config: ConstitutionalRLConfig | None = None,
-        law_checker: Any | None = None,
+        law_checker: RoboticsLawChecker | None = None,
     ) -> None:
         self._cfg = config or ConstitutionalRLConfig()
         self._law_checker = law_checker

@@ -1,6 +1,6 @@
 """Phase 2.3a — Collect labelled intention annotations from navigation episodes.
 
-Runs 500 episodes in mock mode and auto-labels each step with one of 8
+Runs 500 episodes in mock mode and auto-labels each step with one of 10
 intention classes using heuristic rules derived from action and sensor context.
 """
 
