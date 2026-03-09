@@ -183,7 +183,10 @@ async def test_get_battery_voltage_sends_battery_cmd(monkeypatch: pytest.MonkeyP
 
     stub = _make_stub()
 
-    async def capturing_query(resource: str, cmd: dict[str, int] | None = None) -> dict[str, Any]:
+    async def capturing_query(
+        resource: str,
+        cmd: dict[str, int] | None = None,
+    ) -> dict[str, Any]:
         received.append(cmd)
         return {"v": 9.9}
 
