@@ -165,7 +165,12 @@ def test_parse_encoder_reading_returns_floats():
 
 
 def test_constants_are_distinct():
-    assert len({ESP32_CMD_TYPE_STOP, ESP32_CMD_TYPE_VELOCITY, ESP32_CMD_TYPE_BATTERY}) == 3
+    constants = {
+        ESP32_CMD_TYPE_STOP,
+        ESP32_CMD_TYPE_VELOCITY,
+        ESP32_CMD_TYPE_BATTERY,
+    }
+    assert len(constants) == 3
 
 
 def test_max_pwm_is_positive():
