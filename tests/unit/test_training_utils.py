@@ -83,7 +83,10 @@ class TestSgdStep:
         weights = {"w": np.ones((2, 2), dtype=np.float32)}
         grads = {"w": np.ones((2, 2), dtype=np.float32)}
         sgd_step(weights, grads, lr=0.1)
-        np.testing.assert_allclose(weights["w"], np.full((2, 2), 0.9, dtype=np.float32))
+        np.testing.assert_allclose(
+            weights["w"],
+            np.full((2, 2), 0.9, dtype=np.float32),
+        )
 
     def test_zero_lr_leaves_weights_unchanged(self) -> None:
         weights = {"w": np.array([1.0, 2.0])}
