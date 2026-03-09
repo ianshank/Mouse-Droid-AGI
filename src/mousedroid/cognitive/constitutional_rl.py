@@ -23,9 +23,6 @@ _log = get_logger(__name__)
 # Module-level constants
 # ---------------------------------------------------------------------------
 
-_LAYER_NORM_EPS: float = 1e-6
-"""Epsilon for layer normalisation denominator."""
-
 _SPEED_CEILING_DEFAULT: float = 0.5
 """Default maximum speed in m/s."""
 
@@ -48,11 +45,6 @@ _CURIOSITY_CHANNELS: tuple[str, ...] = (
 
 _POLICY_HIDDEN_DIM: int = 64
 """Hidden layer dimensionality for PolicyMLP and ValueMLP networks."""
-
-
-# ---------------------------------------------------------------------------
-# Utility helpers — relu and layer_norm imported from mousedroid.utils.numpy_ops
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------

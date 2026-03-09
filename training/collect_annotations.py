@@ -41,6 +41,9 @@ def label_intention(
     human_detected: bool = False,
     human_dist_m: float = float("inf"),
     commanded_action: np.ndarray | None = None,
+    human_safety_radius_m: float = 0.5,
+    battery_warn_v: float = 10.8,
+    obstacle_clearance_m: float = 0.25,
 ) -> int:
     """Assign an intention label based on heuristic rules.
 
@@ -50,6 +53,9 @@ def label_intention(
         human_detected: Whether a human is detected nearby.
         human_dist_m: Distance to nearest human in metres.
         commanded_action: Externally commanded action, if any.
+        human_safety_radius_m: Law 1 human safety distance threshold.
+        battery_warn_v: Battery voltage threshold for charge intention.
+        obstacle_clearance_m: Obstacle distance threshold for avoidance.
 
     Returns:
         Integer intention class index (0-9).
@@ -60,7 +66,7 @@ def label_intention(
     battery = obs.motor_state[3] if len(obs.motor_state) > 3 else 12.0
 
     # Law 1: Human proximity → protect_human
-    if human_detected and human_dist_m < 0.5:
+    if human_detected and human_dist_m < human_safety_radius_m:
         return 8  # protect_human
 
     # Law 2: Commanded action → obey_command
@@ -68,11 +74,11 @@ def label_intention(
         return 9  # obey_command
 
     # Low battery → charge intention
-    if battery < 10.8:
+    if battery < battery_warn_v:
         return 6  # charge
 
     # Very close obstacle → avoid
-    if distance < 0.25:
+    if distance < obstacle_clearance_m:
         return 2  # avoid_obstacle
 
     # Mostly stationary
@@ -162,9 +168,7 @@ def collect_annotations(
     all_intentions: list[int] = []
 
     for ep in range(n_episodes):
-        annotations = asyncio.get_event_loop().run_until_complete(
-            _collect_episode(cfg, max_steps),
-        )
+        annotations = asyncio.run(_collect_episode(cfg, max_steps))
         for ann in annotations:
             all_observations.append(ann["observation"])
             all_intentions.append(ann["intention_label"])

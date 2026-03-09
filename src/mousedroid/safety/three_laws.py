@@ -16,12 +16,15 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy.typing import NDArray
 
 from mousedroid.logging.setup import get_logger
+
+if TYPE_CHECKING:
+    from mousedroid.config.schema import ThreeLawsConfig
 
 _log = get_logger(__name__)
 
@@ -93,7 +96,7 @@ class RoboticsLawChecker:
         self._enabled = enabled
 
     @classmethod
-    def from_config(cls, cfg: Any) -> RoboticsLawChecker:
+    def from_config(cls, cfg: ThreeLawsConfig) -> RoboticsLawChecker:
         """Build from a ``ThreeLawsConfig`` pydantic model.
 
         Args:
@@ -377,9 +380,11 @@ class RoboticsLawChecker:
         # Thermal preservation
         gpu_temp = float(context.get("gpu_temp_c", 0.0))
         if gpu_temp > self._thermal_critical_c and not has_higher_violation:
+            # Severity scales linearly: 0.0 at critical, 1.0 at critical+range
+            thermal_severity_range_c = 15.0
             severity = float(
                 np.clip(
-                    (gpu_temp - self._thermal_critical_c) / 15.0,
+                    (gpu_temp - self._thermal_critical_c) / thermal_severity_range_c,
                     0.0,
                     1.0,
                 )

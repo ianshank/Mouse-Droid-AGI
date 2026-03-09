@@ -61,9 +61,6 @@ class SyntheticSequenceGenerator:
         await orchestrator.start()
 
         transitions: list[dict[str, Any]] = []
-        torch.zeros(1, self._cfg.model.hidden_dim)
-        torch.zeros(1, self._cfg.model.latent_dim)
-        torch.zeros(1, self._cfg.model.action_dim)
 
         for _ in range(max_steps):
             obs = await orchestrator._sense()
@@ -106,9 +103,7 @@ class SyntheticSequenceGenerator:
 
         all_episodes: list[list[dict[str, Any]]] = []
         for ep in range(n_episodes):
-            transitions = asyncio.get_event_loop().run_until_complete(
-                self._run_episode(max_steps),
-            )
+            transitions = asyncio.run(self._run_episode(max_steps))
             all_episodes.append(transitions)
             if (ep + 1) % 100 == 0:
                 _log.info("episodes_generated", count=ep + 1, total=n_episodes)
