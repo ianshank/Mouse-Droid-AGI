@@ -92,6 +92,10 @@ def log_epoch_loss(
         n_batches: Number of batches processed (used for mean computation).
         log_every: Frequency at which to emit the log line.
     """
+    if log_every <= 0:
+        raise ValueError(f"log_every must be a positive integer, got {log_every!r}")
+    if epoch <= 0:
+        raise ValueError(f"epoch must be a positive integer (1-indexed), got {epoch!r}")
     if epoch % log_every == 0:
         mean_loss = round(total_loss / max(n_batches, 1), 6)
         log_fn.info(event, epoch=epoch, loss=mean_loss)
