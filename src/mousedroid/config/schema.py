@@ -40,6 +40,10 @@ class CameraConfig(BaseModel):
         True,
         description="Use IMX500 onboard AI vs Jetson GPU",
     )
+    backend: Literal["auto", "picamera2", "jetson_csi"] = Field(
+        "auto",
+        description="Camera backend: auto-detect, picamera2, or Jetson CSI",
+    )
 
 
 class CircuitBreakerConfig(BaseModel):

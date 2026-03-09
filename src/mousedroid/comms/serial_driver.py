@@ -9,7 +9,15 @@ import asyncio
 import json
 from typing import TYPE_CHECKING, Any
 
-from mousedroid.comms._utils import clamp as _clamp
+from mousedroid.comms._utils import (
+    ESP32_CMD_TYPE_BATTERY,
+    ESP32_CMD_TYPE_STOP,
+    ESP32_CMD_TYPE_VELOCITY,
+    MAX_PWM,
+)
+from mousedroid.comms._utils import (
+    clamp as _clamp,
+)
 from mousedroid.comms.protocol import EncoderReading
 from mousedroid.logging.setup import get_logger
 
@@ -22,10 +30,6 @@ except ImportError:  # pragma: no cover
     _serial_mod = None
 
 _log = get_logger(__name__)
-
-_ESP32_CMD_TYPE_VELOCITY: int = 1
-_ESP32_CMD_TYPE_STOP: int = 0
-_MAX_PWM: int = 255
 
 
 class SerialESP32Driver:
@@ -86,11 +90,11 @@ class SerialESP32Driver:
             omega: Angular velocity in rad/s.
         """
         max_vel = self._cfg.max_velocity_mps
-        pwm_vx = int(_clamp(vx / max_vel, -1.0, 1.0) * _MAX_PWM)
-        pwm_vy = int(_clamp(vy / max_vel, -1.0, 1.0) * _MAX_PWM)
-        pwm_omega = int(_clamp(omega / self._cfg.max_omega_rads, -1.0, 1.0) * _MAX_PWM)
+        pwm_vx = int(_clamp(vx / max_vel, -1.0, 1.0) * MAX_PWM)
+        pwm_vy = int(_clamp(vy / max_vel, -1.0, 1.0) * MAX_PWM)
+        pwm_omega = int(_clamp(omega / self._cfg.max_omega_rads, -1.0, 1.0) * MAX_PWM)
         cmd: dict[str, int] = {
-            "T": _ESP32_CMD_TYPE_VELOCITY,
+            "T": ESP32_CMD_TYPE_VELOCITY,
             "vx": pwm_vx,
             "vy": pwm_vy,
             "omega": pwm_omega,
@@ -121,14 +125,14 @@ class SerialESP32Driver:
         Returns:
             Battery voltage in volts.
         """
-        cmd: dict[str, int] = {"T": 2}
+        cmd: dict[str, int] = {"T": ESP32_CMD_TYPE_BATTERY}
         await self._send_json(cmd)
         data = await self._read_json()
         return float(data.get("v", 0.0))
 
     async def emergency_stop(self) -> None:
         """Send emergency stop command over serial."""
-        cmd: dict[str, int] = {"T": _ESP32_CMD_TYPE_STOP}
+        cmd: dict[str, int] = {"T": ESP32_CMD_TYPE_STOP}
         await self._send_json(cmd)
         self._last_velocity = (0.0, 0.0, 0.0)
         _log.warning("serial_emergency_stop")

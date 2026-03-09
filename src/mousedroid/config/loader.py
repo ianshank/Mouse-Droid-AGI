@@ -12,6 +12,9 @@ from typing import Any
 import yaml  # type: ignore[import-untyped]
 
 from mousedroid.config.schema import Settings
+from mousedroid.logging.setup import get_logger
+
+_log = get_logger(__name__)
 
 _DEFAULT_CONFIG_DIR = Path(__file__).resolve().parent.parent.parent.parent / "config"
 
@@ -75,9 +78,14 @@ def load_settings(
     merged: dict[str, Any] = {}
     if default_path.exists():
         merged = load_yaml(default_path)
+        _log.debug("config_base_loaded", path=str(default_path))
+    else:
+        _log.debug("config_no_default_yaml", path=str(default_path))
 
     for overlay_path in overlay_paths:
         overlay_data = load_yaml(overlay_path)
         _deep_merge(merged, overlay_data)
+        _log.debug("config_overlay_applied", path=str(overlay_path))
 
+    _log.info("config_settings_resolved", n_overlays=len(overlay_paths))
     return Settings(**merged)

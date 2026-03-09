@@ -19,3 +19,13 @@ class GatewayConfig(BaseModel):
         default_factory=lambda: ["<|end|>", "<|endoftext|>"],
         description="Stop sequences (model-specific)",
     )
+    max_vx_norm_mps: float = Field(0.5, gt=0, description="Max forward velocity norm (m/s)")
+    max_vy_norm_mps: float = Field(0.3, gt=0, description="Max lateral velocity norm (m/s)")
+    max_omega_norm_rads: float = Field(2.0, gt=0, description="Max angular velocity norm (rad/s)")
+    system_prompt: str = Field(
+        "You are a Star Wars MSE-6 Mouse Droid navigation controller. "
+        "Given a natural language mission, output a JSON object with keys "
+        '"vx" (forward, -1 to 1), "vy" (lateral, -1 to 1), "omega" (rotation, -1 to 1). '
+        "Respond with ONLY the JSON object.",
+        description="System prompt for LLM mission translation",
+    )

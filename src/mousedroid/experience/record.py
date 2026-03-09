@@ -16,6 +16,18 @@ _log = get_logger(__name__)
 
 SCHEMA_VERSION: int = 1
 
+_DEFAULT_VISION_DIM: int = 256
+"""Default vision feature dimension (mirrors ModelConfig.vision_dim)."""
+
+_DEFAULT_MOTOR_STATE_DIM: int = 4
+"""Motor state dimension [vx, vy, omega, battery_v]."""
+
+_DEFAULT_ACTION_DIM: int = 3
+"""Action dimension [vx, vy, omega]."""
+
+_DEFAULT_MAX_DISTANCE_M: float = 4.0
+"""Default max ultrasonic range in metres."""
+
 
 @dataclass
 class MouseDroidExperienceRecord:
@@ -27,14 +39,14 @@ class MouseDroidExperienceRecord:
     schema_version: int = SCHEMA_VERSION
     timestamp: float = field(default_factory=time.time)
     vision_features: NDArray[np.float32] = field(
-        default_factory=lambda: np.zeros(256, dtype=np.float32),
+        default_factory=lambda: np.zeros(_DEFAULT_VISION_DIM, dtype=np.float32),
     )
-    distance_m: float = 4.0
+    distance_m: float = _DEFAULT_MAX_DISTANCE_M
     motor_state: NDArray[np.float32] = field(
-        default_factory=lambda: np.zeros(4, dtype=np.float32),
+        default_factory=lambda: np.zeros(_DEFAULT_MOTOR_STATE_DIM, dtype=np.float32),
     )
     action: NDArray[np.float32] = field(
-        default_factory=lambda: np.zeros(3, dtype=np.float32),
+        default_factory=lambda: np.zeros(_DEFAULT_ACTION_DIM, dtype=np.float32),
     )
     reward: float = 0.0
     surprise: float = 0.0

@@ -10,7 +10,14 @@ import json
 import urllib.request
 from typing import TYPE_CHECKING, Any
 
-from mousedroid.comms._utils import clamp as _clamp
+from mousedroid.comms._utils import (
+    ESP32_CMD_TYPE_STOP,
+    ESP32_CMD_TYPE_VELOCITY,
+    MAX_PWM,
+)
+from mousedroid.comms._utils import (
+    clamp as _clamp,
+)
 from mousedroid.comms.protocol import EncoderReading
 from mousedroid.logging.setup import get_logger
 
@@ -18,10 +25,6 @@ if TYPE_CHECKING:
     from mousedroid.config.schema import ESP32Config
 
 _log = get_logger(__name__)
-
-_ESP32_CMD_TYPE_VELOCITY: int = 1
-_ESP32_CMD_TYPE_STOP: int = 0
-_MAX_PWM: int = 255
 
 
 class WiFiESP32Driver:
@@ -61,11 +64,11 @@ class WiFiESP32Driver:
             omega: Angular velocity in rad/s.
         """
         max_vel = self._cfg.max_velocity_mps
-        pwm_vx = int(_clamp(vx / max_vel, -1.0, 1.0) * _MAX_PWM)
-        pwm_vy = int(_clamp(vy / max_vel, -1.0, 1.0) * _MAX_PWM)
-        pwm_omega = int(_clamp(omega / self._cfg.max_omega_rads, -1.0, 1.0) * _MAX_PWM)
+        pwm_vx = int(_clamp(vx / max_vel, -1.0, 1.0) * MAX_PWM)
+        pwm_vy = int(_clamp(vy / max_vel, -1.0, 1.0) * MAX_PWM)
+        pwm_omega = int(_clamp(omega / self._cfg.max_omega_rads, -1.0, 1.0) * MAX_PWM)
         cmd: dict[str, int] = {
-            "T": _ESP32_CMD_TYPE_VELOCITY,
+            "T": ESP32_CMD_TYPE_VELOCITY,
             "vx": pwm_vx,
             "vy": pwm_vy,
             "omega": pwm_omega,
@@ -101,7 +104,7 @@ class WiFiESP32Driver:
 
     async def emergency_stop(self) -> None:
         """Send emergency stop command over HTTP POST."""
-        cmd: dict[str, int] = {"T": _ESP32_CMD_TYPE_STOP}
+        cmd: dict[str, int] = {"T": ESP32_CMD_TYPE_STOP}
         await self._post_json("/cmd", cmd)
         self._last_velocity = (0.0, 0.0, 0.0)
         _log.warning("wifi_emergency_stop")

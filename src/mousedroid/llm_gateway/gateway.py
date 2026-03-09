@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import TYPE_CHECKING, Any
 
 from mousedroid.llm_gateway.protocol import GoalVector
@@ -17,18 +18,6 @@ if TYPE_CHECKING:
     from mousedroid.llm_gateway.config import GatewayConfig
 
 _log = get_logger(__name__)
-
-# Normalisation constants for velocity targets (module-level, not inline).
-_MAX_VX_NORM_MPS: float = 0.5
-_MAX_VY_NORM_MPS: float = 0.3
-_MAX_OMEGA_NORM_RADS: float = 2.0
-
-_SYSTEM_PROMPT: str = (
-    "You are a Star Wars MSE-6 Mouse Droid navigation controller. "
-    "Given a natural language mission, output a JSON object with keys "
-    '"vx" (forward, -1 to 1), "vy" (lateral, -1 to 1), "omega" (rotation, -1 to 1). '
-    "Respond with ONLY the JSON object."
-)
 
 
 class LLMGateway:
@@ -70,6 +59,20 @@ class LLMGateway:
             n_gpu_layers=self._cfg.n_gpu_layers,
         )
 
+    _INJECTION_RE = re.compile(
+        r"(ignore (previous|above|all) instructions?|system prompt|you are now)",
+        re.IGNORECASE,
+    )
+    _MAX_COMMAND_LEN = 512
+
+    def _sanitize_command(self, text: str) -> str:
+        """Sanitize NL command to mitigate prompt injection."""
+        text = text.strip()[: self._MAX_COMMAND_LEN]
+        if self._INJECTION_RE.search(text):
+            msg = "Mission command contains disallowed content"
+            raise ValueError(msg)
+        return text
+
     async def translate_mission(self, nl_command: str) -> GoalVector:
         """Translate NL mission to GoalVector.
 
@@ -80,17 +83,19 @@ class LLMGateway:
             GoalVector with normalised velocity targets.
 
         Raises:
-            ValueError: If nl_command is empty.
+            ValueError: If nl_command is empty or contains disallowed content.
         """
         if not nl_command.strip():
             msg = "nl_command must be non-empty"
             raise ValueError(msg)
 
+        nl_command = self._sanitize_command(nl_command)
+
         if self._model is None:
             _log.warning("llm_gateway_not_started")
             return GoalVector()
 
-        prompt = f"{_SYSTEM_PROMPT}\n\nMission: {nl_command}\n\nJSON:"
+        prompt = f"{self._cfg.system_prompt}\n\nMission: {nl_command}\n\nJSON:"
         raw = await asyncio.to_thread(self._infer_sync, prompt)
         return self._parse_response(raw)
 
