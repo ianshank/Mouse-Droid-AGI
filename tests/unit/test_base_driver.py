@@ -93,10 +93,10 @@ async def test_send_velocity_dispatches_correct_command():
     assert len(stub.commands_sent) == 1
     cmd = stub.commands_sent[0]
     assert cmd["T"] == ESP32_CMD_TYPE_VELOCITY
-    # 0.5 / 1.0 = 0.5 → round(0.5 * 255) = 127
+    # 0.5 / 1.0 = 0.5 → int(0.5 * 255) = 127 (truncation in build_velocity_cmd)
     assert cmd["vx"] == 127
     assert cmd["vy"] == -127
-    assert cmd["omega"] == MAX_PWM  # 1.0 / 1.0 = 1.0 → 255
+    assert cmd["omega"] == MAX_PWM  # 1.0 / 1.0 = 1.0 → int(1.0 * 255) = 255
 
 
 async def test_send_velocity_tracks_last_velocity():
