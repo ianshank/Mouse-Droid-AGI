@@ -59,9 +59,26 @@ def build_camera(cfg: Settings) -> VisionProtocol:
 
         return MockCamera(cfg.camera)
 
-    from mousedroid.hardware.camera.imx500 import IMX500Camera
+    if cfg.camera.backend == "jetson_csi":
+        from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
 
-    return IMX500Camera(cfg.camera)
+        return JetsonCSICamera(cfg.camera)
+
+    if cfg.camera.backend == "picamera2":
+        from mousedroid.hardware.camera.imx500 import IMX500Camera
+
+        return IMX500Camera(cfg.camera)
+
+    # auto: try picamera2 first, fall back to jetson_csi
+    try:
+        from picamera2 import Picamera2  # noqa: F401
+        from mousedroid.hardware.camera.imx500 import IMX500Camera
+
+        return IMX500Camera(cfg.camera)
+    except ImportError:
+        from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
+
+        return JetsonCSICamera(cfg.camera)
 
 
 def build_distance_sensor(cfg: Settings) -> DistanceSensorProtocol:
