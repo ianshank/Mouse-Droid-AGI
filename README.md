@@ -1,11 +1,11 @@
-# MouseDroidAGI 
+# MouseDroidAGI
 
 **A Star Wars MSE-6 "Mouse Droid" autonomous navigation system powered by an Agentic World Model on NVIDIA Jetson Orin Nano.**
 
-[![Tests](https://img.shields.io/badge/tests-530%20passing-brightgreen)]()
-[![Coverage](https://img.shields.io/badge/coverage-98.6%25-brightgreen)]()
-[![Ruff](https://img.shields.io/badge/lint-ruff%20clean-brightgreen)]()
-[![Python](https://img.shields.io/badge/python-3.11%2B-blue)]()
+[![Tests](https://img.shields.io/badge/tests-752%20passing-brightgreen)](tests/)
+[![Coverage](https://img.shields.io/badge/coverage-54%25-yellow)](pyproject.toml)
+[![Ruff](https://img.shields.io/badge/lint-ruff%20clean-brightgreen)](pyproject.toml)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
 
 ---
 
@@ -34,37 +34,27 @@ The robot is built on a Wave Rover mecanum-wheel chassis, controlled by an ESP32
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────┐
-│                  Jetson Orin Nano                   │
-│                                                     │
-│  ┌───────────┐  ┌────────────┐  ┌────────────────┐  │
-│  │  IMX500   │  │  HC-SR04   │  │  Orchestrator  │  │
-│  │  Camera   │  │ Ultrasonic │  │  (30 Hz loop)  │  │
-│  └─────┬─────┘  └─────┬──────┘  └───────┬────────┘  │
-│        │              │                  │           │
-│        └──────────────┴──────────────────┘           │
-│                       │                              │
-│              ┌────────▼───────┐                      │
-│              │  World Model   │                      │
-│              │  (RSSM+MCTS)   │                      │
-│              └────────┬───────┘                      │
-│                       │                              │
-│         ┌─────────────┼────────────┐                 │
-│    ┌────▼────┐  ┌─────▼────┐  ┌───▼──────┐          │
-│    │ Safety  │  │Cognitive │  │  Memory  │          │
-│    │Monitor  │  │  Core    │  │ Systems  │          │
-│    └─────────┘  └──────────┘  └──────────┘          │
-└─────────────────────────┬───────────────────────────┘
-                          │ UART / WiFi
-                    ┌─────▼──────┐
-                    │   ESP32    │
-                    │ (Wave Rover│
-                    │  motors)   │
-                    └────────────┘
+```mermaid
+graph TD
+    subgraph Jetson["NVIDIA Jetson Orin Nano"]
+        Orchestrator["Orchestrator\n30 Hz sense-plan-act"]
+        CoreAI["Core AI Pipeline\nRSSM + MCTS + Navigation Agent\nBDI Cognitive Core\nMemory Systems\nSafety Monitor"]
+        SensorMgr["Sensor Manager\nIMX500 Camera - HC-SR04 - ESP32 encoders"]
+        ExperienceDB[("Experience Logger\nLMDB")]
+    end
+    ESP32["ESP32 Wave Rover\nMotor control\nEncoder / Battery ADC"]
+    Human["Human Operator\nNL commands"]
+    Monitoring["Remote Monitoring\nPrometheus / Grafana"]
+
+    Human -- "NL mission" --> Orchestrator
+    Orchestrator --> CoreAI
+    CoreAI --> SensorMgr
+    CoreAI --> ExperienceDB
+    Orchestrator -- "UART / HTTP" --> ESP32
+    Orchestrator -- "metrics" --> Monitoring
 ```
 
-See [docs/architecture.md](docs/architecture.md) for full C4 diagrams.
+See [docs/architecture.md](docs/architecture.md) for full C4 diagrams (Context → Container → Component → Code + data flow sequence diagrams).
 
 ---
 
@@ -73,7 +63,7 @@ See [docs/architecture.md](docs/architecture.md) for full C4 diagrams.
 ### Prerequisites
 
 - Python 3.11+
-- NVIDIA Jetson Orin Nano (or any Linux machine for mock mode)
+- NVIDIA Jetson Orin Nano (or any Linux/Windows machine for mock mode)
 - Wave Rover chassis with ESP32 controller
 - Raspberry Pi AI Camera IMX500 (optional — mock available)
 
@@ -83,22 +73,24 @@ See [docs/architecture.md](docs/architecture.md) for full C4 diagrams.
 # Base install
 pip install -e .
 
-# With hardware drivers
+# With hardware drivers (Jetson only)
 pip install -e ".[hardware]"
 
-# With TensorRT acceleration
+# With TensorRT acceleration (Jetson only)
 pip install -e ".[hardware,jetson]"
 
 # With local LLM
 pip install -e ".[llm]"
 
-# Development
+# Development (includes pytest, coverage, ruff, mypy)
 pip install -e ".[dev]"
 ```
 
 ### Run in Mock Mode (no hardware required)
 
 ```bash
+MOUSEDROID_MOCK_HARDWARE=true mousedroid
+# or
 mousedroid --mock-hardware
 ```
 
@@ -118,11 +110,11 @@ mousedroid --config config/default.yaml config/jetson_production.yaml
 
 ## Configuration
 
-All settings are defined in `config/default.yaml` and validated by Pydantic. Override with additional YAML files:
+All settings are defined in `config/default.yaml` and validated by Pydantic v2. Override with additional YAML files:
 
 | File | Purpose |
 |------|---------|
-| `config/default.yaml` | All defaults |
+| `config/default.yaml` | All defaults (mock hardware, safe thresholds) |
 | `config/jetson_production.yaml` | Jetson Orin Nano production overrides |
 | `config/mock_hardware.yaml` | Mock hardware for CI/development |
 
@@ -153,11 +145,26 @@ src/mousedroid/
 ├── meta/             # MAML + in-context meta-learning
 ├── orchestrator/     # Main sense-plan-act loop
 ├── reward/           # Multi-objective reward model
-├── safety/           # Safety context + constitutional monitor
+├── safety/           # Safety context + constitutional monitor + Three Laws
 ├── scaling/          # MoE routing + adaptive compute
 ├── sensing/          # Sensor manager + observation bundle
 ├── tools/            # Tool registry for agentic tool dispatch
 └── world_model/      # RSSM encoder, MCTS planner
+
+training/             # Offline training pipelines
+├── train_rssm.py             # Phase 2.1: RSSM pretraining on synthetic data
+├── train_constitutional_rl.py # Phase 2.4: PPO + Constitutional constraints
+├── train_bdi.py              # Phase 2.3b: BDI sub-network training
+├── warmstart_policy.py        # Phase 2.2: MCTS policy warm-start + UCB tuning
+├── collect_annotations.py    # Phase 2.3a: Intention annotation collection
+├── data_generator.py         # Synthetic observation sequence generator
+└── rssm_dataset.py           # PyTorch Dataset for RSSM sequences
+
+scripts/
+├── ci.sh             # CI pipeline: lint → type check → test → coverage gate
+├── deploy_jetson.sh  # Idempotent Jetson deployment (venv + systemd)
+├── flash_esp32.sh    # ESP32 firmware flashing via esptool
+└── mousedroid.service# systemd unit file for production deployment
 ```
 
 ---
@@ -199,6 +206,16 @@ _log.info("orchestrator_started", platform=cfg.platform)
 
 Every number — GPIO pins, network ports, model dimensions, safety thresholds — comes from the Pydantic config schema. Module-level constants document internal algorithm parameters.
 
+### Three Laws Safety
+
+The `safety/three_laws.py` module implements Asimov's Three Laws of Robotics as hard constraints:
+
+- **Law 1** — Human harm avoidance (highest priority, triggers emergency stop)
+- **Law 2** — Obey commands unless they conflict with Law 1
+- **Law 3** — Self-preservation unless conflicting with Laws 1 or 2
+
+Constitutional RL integrates these constraints directly into the PPO training loop via `ConstitutionalChecker`.
+
 ---
 
 ## Testing
@@ -207,29 +224,32 @@ Every number — GPIO pins, network ports, model dimensions, safety thresholds �
 # Run all tests
 pytest tests/
 
-# With coverage
+# With coverage report
 pytest tests/ --cov=src/mousedroid --cov-report=term-missing
 
 # Fast parallel run
 pytest tests/ -n auto
 
-# Unit tests only
+# By category
 pytest tests/unit/
-
-# Integration tests only
 pytest tests/integration/
+pytest tests/e2e/
+pytest tests/performance/
+pytest tests/property/
+pytest tests/regression/
 ```
 
 ### Test Statistics
 
 | Category | Count |
 |----------|-------|
-| Unit tests | ~500 |
-| Integration tests | 17 |
-| **Total** | **530** |
-| **Coverage** | **98.6%** |
+| Unit tests | 668 |
+| Scripts & training tests | 84 |
+| **Total** | **752** |
+| **Coverage** | **54%** (target: 85%) |
 
-Hardware tests (requiring real GPIO/camera) are marked `@pytest.mark.hardware` and skipped in CI.
+> Hardware tests requiring real GPIO/camera are marked `@pytest.mark.hardware` and skipped in CI.
+> The coverage gap is a known roadmap item — modules `three_laws`, `mcts`, `moe`, `memory`, and `learning` need additional test coverage.
 
 ---
 
@@ -253,13 +273,13 @@ mypy src/ --strict --ignore-missing-imports
 ### Flash ESP32
 
 ```bash
-scripts/flash_esp32.sh
+sudo bash scripts/flash_esp32.sh /dev/ttyUSB0 firmware/waverover_mousedroid.bin
 ```
 
 ### Deploy to Jetson
 
 ```bash
-scripts/deploy_jetson.sh <jetson-ip>
+sudo bash scripts/deploy_jetson.sh
 ```
 
 ### Systemd Service
@@ -272,10 +292,26 @@ systemctl start mousedroid
 
 ---
 
+## Training Pipelines
+
+Offline training follows a 4-phase pipeline:
+
+| Phase | Script | Description |
+|-------|--------|-------------|
+| 2.1 | `train_rssm.py` | Pretrain RSSM world model on synthetic sequences |
+| 2.2 | `warmstart_policy.py` | Warm-start MCTS policy from latent stats + UCB tuning |
+| 2.3a | `collect_annotations.py` | Collect labelled intention annotations (500 episodes) |
+| 2.3b | `train_bdi.py` | Train BDI sub-networks: Belief → Desire → Intention → Affect |
+| 2.4 | `train_constitutional_rl.py` | PPO fine-tuning with Constitutional + Three Laws constraints |
+
+---
+
 ## Developed By
+
 Ian Cruickshank
 
 ---
+
 ## Contributing
 
 1. Fork the repository

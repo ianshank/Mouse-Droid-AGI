@@ -6,38 +6,20 @@ This document uses the [C4 model](https://c4model.com/) (Context → Container �
 
 ## Level 1 — System Context
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                        System Context                                │
-└──────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    HumanOp["Human Operator\n(NL commands, monitoring)"]
+    System["MouseDroidAGI System\nAutonomous Star Wars MSE-6 robot\npowered by an Agentic World Model\nrunning on Jetson Orin Nano"]
+    PhysWorld["Physical World\n(corridors, obstacles, people)"]
+    RemoteMonitor["Remote Monitoring\nPrometheus / Grafana\nmetrics over WiFi"]
 
-        ┌─────────────────┐
-        │   Human Operator │
-        │  (natural lang   │
-        │   commands,      │
-        │   monitoring)    │
-        └────────┬────────┘
-                 │ NL commands / health dashboards
-                 │
-        ┌────────▼────────────────────────────┐
-        │                                     │
-        │         MouseDroidAGI System        │
-        │                                     │
-        │  An autonomous Star Wars MSE-6      │
-        │  robot powered by an Agentic World  │
-        │  Model running on Jetson Orin Nano  │
-        │                                     │
-        └──────┬──────────────────────┬───────┘
-               │                      │
-     ┌─────────▼──────┐    ┌──────────▼────────┐
-     │  Physical World │    │  Remote Monitoring │
-     │  (corridors,    │    │  (Prometheus /     │
-     │   obstacles,    │    │   Grafana metrics  │
-     │   people)       │    │   over WiFi)       │
-     └─────────────────┘    └────────────────────┘
+    HumanOp -- "NL commands / health dashboards" --> System
+    System -- "navigates" --> PhysWorld
+    System -- "publishes metrics" --> RemoteMonitor
 ```
 
 **Actors:**
+
 - **Human Operator** — Sends natural language mission commands via LLM gateway; monitors telemetry
 - **Physical World** — The environment the robot navigates through
 - **Remote Monitoring** — Optional Prometheus/Grafana dashboard for production deployments
@@ -46,56 +28,43 @@ This document uses the [C4 model](https://c4model.com/) (Context → Container �
 
 ## Level 2 — Container Diagram
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                      MouseDroidAGI Containers                        │
-└──────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph Jetson["NVIDIA Jetson Orin Nano"]
+        subgraph AppProcess["mousedroid Python process (asyncio event loop)"]
+            Orchestrator["Orchestrator\n30 Hz loop"]
+            LLMGateway["LLM Gateway\nLlama GGUF"]
+            HealthMonitor["Health Monitor\nsysfs polling"]
+            CoreAI["Core AI Pipeline\nRSSM + MCTS + Navigation Agent\nCognitive Core BDI + Metacognitive\nMemory: Working / Episodic / Semantic\nSafety Monitor + Constitutional Checker"]
+            SensorMgr["Sensor Manager\nconcurrent I/O"]
+            ExperienceDB[("Experience Logger\nLMDB\n/home/jetson/experience_db")]
+        end
+        subgraph HWLayer["Hardware Interface Layer"]
+            Camera["Camera\nIMX500"]
+            Ultrasonic["Ultrasonic\nHC-SR04"]
+            GPIO["GPIO\nJetson.GPIO"]
+        end
+    end
+    ESP32["ESP32 Wave Rover\nMotor control\nEncoder feedback\nBattery ADC"]
 
-┌─────────────────── NVIDIA Jetson Orin Nano ──────────────────────────┐
-│                                                                      │
-│  ┌─────────────────────────────────────────────────────────────┐    │
-│  │                  mousedroid Python process                  │    │
-│  │                   (asyncio event loop)                      │    │
-│  │                                                             │    │
-│  │  ┌───────────────┐  ┌──────────────┐  ┌──────────────────┐  │    │
-│  │  │  Orchestrator │  │  LLM Gateway │  │  Health Monitor  │  │    │
-│  │  │  (30 Hz loop) │  │  (Llama GGUF)│  │  (sysfs polling) │  │    │
-│  │  └───────┬───────┘  └──────────────┘  └──────────────────┘  │    │
-│  │          │                                                   │    │
-│  │  ┌───────▼────────────────────────────────────────────────┐  │    │
-│  │  │                  Core AI Pipeline                      │  │    │
-│  │  │  World Model (RSSM) ─► MCTS ─► Navigation Agent       │  │    │
-│  │  │  Cognitive Core (BDI + Metacognitive)                  │  │    │
-│  │  │  Memory Systems (Working / Episodic / Semantic)        │  │    │
-│  │  │  Safety Monitor ─► Constitutional Checker              │  │    │
-│  │  └───────────────────────────────────────────────────────-┘  │    │
-│  │                                                             │    │
-│  │  ┌───────────────────┐  ┌──────────────────────────────┐   │    │
-│  │  │  Sensor Manager   │  │  Experience Logger (LMDB)    │   │    │
-│  │  │  (concurrent I/O) │  │  /home/jetson/experience_db  │   │    │
-│  │  └───────────────────┘  └──────────────────────────────┘   │    │
-│  └─────────────────────────────────────────────────────────────┘    │
-│                                                                      │
-│  ┌───────────────────────────────────────────────────────────────┐   │
-│  │              Hardware Interface Layer                         │   │
-│  │  Camera (IMX500)   Ultrasonic (HC-SR04)   GPIO (Jetson.GPIO)  │   │
-│  └───────────────────────────────────────────────────────────────┘   │
-└──────────────────────────────────┬───────────────────────────────────┘
-                                   │ UART 1 Mbps / HTTP
-                    ┌──────────────▼──────────────┐
-                    │   ESP32 (Wave Rover)         │
-                    │   Motor control              │
-                    │   Encoder feedback           │
-                    │   Battery ADC                │
-                    └─────────────────────────────┘
+    Orchestrator --> CoreAI
+    Orchestrator --> LLMGateway
+    Orchestrator --> HealthMonitor
+    CoreAI --> SensorMgr
+    CoreAI --> ExperienceDB
+    SensorMgr --> Camera
+    SensorMgr --> Ultrasonic
+    SensorMgr --> GPIO
+    Orchestrator -- "UART 1 Mbps / HTTP" --> ESP32
 ```
 
 **Containers:**
+
 | Container | Technology | Responsibility |
 |-----------|-----------|----------------|
 | `mousedroid` process | Python 3.11 asyncio | All AI reasoning + I/O orchestration |
 | LMDB experience store | LMDB on-disk | Persistent experience replay buffer |
-| Llama GGUF model | llama-cpp-python | Local LLM for NL → velocity |
+| Llama GGUF model | llama-cpp-python | Local LLM for NL to velocity |
 | ESP32 firmware | C++ (Wave Rover SDK) | Motor PWM control, encoder polling |
 | IMX500 camera | picamera2 | Vision capture + onboard neural inference |
 
@@ -103,101 +72,46 @@ This document uses the [C4 model](https://c4model.com/) (Context → Container �
 
 ## Level 3 — Component Diagram (mousedroid process)
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                   mousedroid Python Process                          │
-│                   (asyncio event loop, 30 Hz)                        │
-└──────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    CLI["CLI Entry\nmain.py"]
+    Factory["Factory\nfactory.py\nOnly file that imports concrete types"]
+    Orchestrator["Orchestrator\norchestrator/\ntick at 30 Hz\nsense - plan - act"]
+    SensorMgr["Sensor Manager\nsensing/\nCamera - Ultrasonic - ESP32 encoders"]
+    SafetyMon["Safety Monitor\nsafety/\nClearance - Battery - Sensor staleness"]
+    Encoder["Encoder\nvision + motor + ultrasonic"]
+    RSSM["RSSM\nlatent h and z\nobserve step / imagine step"]
+    MCTS["MCTS\n50 to 200 sims"]
+    NavAgent["Navigation Agent\nagents/\nact with h, z, safety"]
+    ESP32Driver["ESP32 Driver\ncomms/\nsend velocity"]
+    FastTick["Cognitive Fast tick 30 Hz\nPolicyMLP - ConstitutionalChecker"]
+    SlowLoop["Cognitive Slow loop 1 Hz\nBDI inference - Metacog update"]
+    WorkingMem["Working Memory\nsliding 8192 token window"]
+    EpisodicMem["Episodic Memory\nFAISS 50k cap"]
+    SemanticMem["Semantic Memory\nconcept graph + FAISS"]
+    Consolidation["Consolidation\nasync episodic to semantic"]
+    EWC["EWC\nFisher-information regularisation"]
+    PNN["PNN\nprogressive nets + lateral connections"]
+    LLM["LLM Gateway optional\nNL to GoalVector\nLocal Llama GGUF"]
 
-                         ┌─────────────┐
-                         │  CLI Entry  │
-                         │  main.py    │
-                         └──────┬──────┘
-                                │ argparse + load_settings()
-                         ┌──────▼──────┐
-                         │   Factory   │
-                         │  factory.py │  ◄── Only file that imports
-                         └──────┬──────┘      concrete types
-                                │ injects all components
-                         ┌──────▼──────────────────────┐
-                         │       Orchestrator           │
-                         │   orchestrator/              │
-                         │   • tick() at 30 Hz          │
-                         │   • sense → plan → act       │
-                         └──────┬──────────────┬────────┘
-                                │              │
-                   ┌────────────▼──┐    ┌──────▼─────────────┐
-                   │ Sensor Manager │    │  Safety Monitor    │
-                   │ sensing/       │    │  safety/           │
-                   │ • Camera       │    │  • Clearance check │
-                   │ • Ultrasonic   │    │  • Battery check   │
-                   │ • ESP32 enc.   │    │  • Sensor staleness│
-                   └────────┬──────┘    └──────┬─────────────┘
-                            │                  │
-                   ┌────────▼──────────────────▼──────────────┐
-                   │           World Model                     │
-                   │           world_model/                    │
-                   │                                           │
-                   │  ┌────────────┐    ┌────────────────┐    │
-                   │  │  Encoder   │    │      RSSM      │    │
-                   │  │  (vision + │───►│  (latent h,z)  │    │
-                   │  │  motor +   │    │  observe_step  │    │
-                   │  │  ultrasonic│    │  imagine_step  │    │
-                   │  └────────────┘    └───────┬────────┘    │
-                   │                            │             │
-                   │                   ┌────────▼───────┐     │
-                   │                   │      MCTS      │     │
-                   │                   │  (50-200 sims) │     │
-                   │                   └────────────────┘     │
-                   └─────────────────────────────────────────-┘
-                                        │
-                              ┌─────────▼──────────┐
-                              │  Navigation Agent  │
-                              │  agents/           │
-                              │  act(h, z, safety) │
-                              └─────────┬──────────┘
-                                        │ action tensor
-                              ┌─────────▼──────────┐
-                              │   ESP32 Driver     │
-                              │   comms/           │
-                              │   send_velocity()  │
-                              └────────────────────┘
-
-   PARALLEL SUBSYSTEMS (run alongside main loop):
-
-   ┌──────────────────────────────────────────────────────────┐
-   │  Cognitive Core (background async task)                  │
-   │  cognitive/                                              │
-   │                                                          │
-   │  Fast tick (30 Hz):  PolicyMLP → ConstitutionalChecker   │
-   │  Slow loop (~1 Hz):  BDI inference → Metacog update      │
-   └──────────────────────────────────────────────────────────┘
-
-   ┌──────────────────────────────────────────────────────────┐
-   │  Memory Systems                                          │
-   │  memory/                                                 │
-   │                                                          │
-   │  Working Memory    — sliding context window (8192 tok)   │
-   │  Episodic Memory   — FAISS similarity index (50k cap)    │
-   │  Semantic Memory   — concept graph + FAISS search        │
-   │  Consolidation     — async episodic → semantic pipeline  │
-   └──────────────────────────────────────────────────────────┘
-
-   ┌──────────────────────────────────────────────────────────┐
-   │  Continual Learning                                      │
-   │  learning/                                               │
-   │                                                          │
-   │  EWC   — Fisher-information regularisation               │
-   │  PNN   — progressive nets with lateral connections       │
-   └──────────────────────────────────────────────────────────┘
-
-   ┌──────────────────────────────────────────────────────────┐
-   │  LLM Gateway (optional)                                  │
-   │  llm_gateway/                                            │
-   │                                                          │
-   │  NL command → GoalVector via local Llama GGUF            │
-   │  Runs in asyncio.to_thread to avoid blocking             │
-   └──────────────────────────────────────────────────────────┘
+    CLI --> Factory
+    Factory --> Orchestrator
+    Orchestrator --> SensorMgr
+    Orchestrator --> SafetyMon
+    SensorMgr --> Encoder
+    SafetyMon --> RSSM
+    Encoder --> RSSM
+    RSSM --> MCTS
+    MCTS --> NavAgent
+    NavAgent -- "action tensor" --> ESP32Driver
+    Orchestrator -.-> FastTick
+    Orchestrator -.-> SlowLoop
+    Orchestrator -.-> WorkingMem
+    Orchestrator -.-> LLM
+    EpisodicMem --> Consolidation
+    Consolidation --> SemanticMem
+    Orchestrator -.-> EWC
+    Orchestrator -.-> PNN
 ```
 
 ---
@@ -229,7 +143,42 @@ def build_esp32_driver(cfg: Settings) -> ESP32CommProtocol:
     return WiFiESP32Driver(cfg.esp32)
 ```
 
+```mermaid
+classDiagram
+    class ESP32CommProtocol {
+        <<Protocol>>
+        +connect() None
+        +send_velocity(vx, vy, omega) None
+        +read_encoders() EncoderReading
+        +get_battery_voltage() float
+        +emergency_stop() None
+        +disconnect() None
+    }
+    class MockESP32Driver {
+        +cfg: ESP32Config
+    }
+    class SerialESP32Driver {
+        +cfg: ESP32Config
+    }
+    class WiFiESP32Driver {
+        +cfg: ESP32Config
+    }
+    class Factory {
+        +build_esp32_driver(cfg) ESP32CommProtocol
+        +build_orchestrator(cfg) Orchestrator
+        +build_world_model(cfg) RSSM
+        +build_safety_monitor(cfg) SafetyMonitor
+        +build_agent(cfg) NavigationAgent
+    }
+
+    ESP32CommProtocol <|.. MockESP32Driver : implements
+    ESP32CommProtocol <|.. SerialESP32Driver : implements
+    ESP32CommProtocol <|.. WiFiESP32Driver : implements
+    Factory --> ESP32CommProtocol : creates
+```
+
 This means:
+
 - **Tests** inject `MockESP32Driver` via `Settings(mock_hardware=True)` — no GPIO needed
 - **CI** runs the full test suite with zero hardware
 - **Production** seamlessly switches to `SerialESP32Driver` via config
@@ -240,50 +189,56 @@ This means:
 
 ### Sense-Plan-Act (30 Hz)
 
-```
-Camera.capture_features()  ┐
-HC-SR04.read_distance_m()  ├──► SensorManager.read_all()
-ESP32.read_encoders()      │         │
-ESP32.get_battery_voltage()┘         │
-                                     ▼
-                             ObservationBundle
-                                     │
-                              ┌──────▼───────┐
-                              │  SafetyMonitor│
-                              │  .evaluate()  │
-                              └──────┬────────┘
-                                     │ SafetyContext
-                              ┌──────▼────────┐
-                              │  WorldModel   │
-                              │  .observe_step│
-                              └──────┬────────┘
-                                     │ (h, z, surprise)
-                              ┌──────▼────────┐
-                              │  Agent.act()  │
-                              └──────┬────────┘
-                                     │ action tensor
-                              ┌──────▼────────┐
-                              │ ESP32         │
-                              │ .send_velocity│
-                              └───────────────┘
+```mermaid
+sequenceDiagram
+    participant Camera as Camera IMX500
+    participant Sonic as HC-SR04
+    participant ESP32 as ESP32 Encoders
+    participant SM as SensorManager
+    participant Safety as SafetyMonitor
+    participant WM as WorldModel RSSM
+    participant Agent as NavigationAgent
+    participant Motor as ESP32 Motor
+
+    par Concurrent sensor reads
+        Camera->>SM: capture_features()
+        Sonic->>SM: read_distance_m()
+        ESP32->>SM: read_encoders() + get_battery_voltage()
+    end
+
+    SM->>Safety: ObservationBundle
+    Safety->>WM: SafetyContext + ObservationBundle
+    WM->>Agent: latent state h, z, surprise
+    Agent->>Motor: send_velocity(vx, vy, omega)
 ```
 
 ### Experience Pipeline (async)
 
-```
-ObservationBundle ──► ExperienceRecord ──► ExperienceLogger (LMDB)
-                                                  │
-                                    ┌─────────────▼──────────────┐
-                                    │   Memory Consolidation     │
-                                    │   Episodic ──► Semantic    │
-                                    └────────────────────────────┘
+```mermaid
+graph LR
+    OB["ObservationBundle"]
+    ER["ExperienceRecord"]
+    EL[("ExperienceLogger\nLMDB")]
+    MC["Memory Consolidation"]
+    Epi["Episodic Memory\nFAISS"]
+    Sem["Semantic Memory\nconcept graph"]
+
+    OB --> ER --> EL --> MC
+    MC --> Epi
+    Epi --> Sem
 ```
 
-### Learning Pipeline (offline/async)
+### Learning Pipeline (offline / async)
 
-```
-LMDB replay buffer ──► EWC regularisation ──► model parameter update
-                   └──► Progressive network lateral connection training
+```mermaid
+graph LR
+    LMDB[("LMDB\nReplay Buffer")]
+    EWC["EWC Regularisation\nFisher-information"]
+    PNN["Progressive Nets\nlateral connections"]
+    Params["Model Parameter Update"]
+
+    LMDB --> EWC --> Params
+    LMDB --> PNN --> Params
 ```
 
 ---
