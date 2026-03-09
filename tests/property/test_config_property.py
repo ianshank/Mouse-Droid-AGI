@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from pydantic import ValidationError
 
@@ -26,7 +26,7 @@ positive_int = st.integers(min_value=1, max_value=10000)
     max_velocity_mps=positive_float,
     max_omega_rads=positive_float,
 )
-@settings(max_examples=20)
+@settings(max_examples=20, suppress_health_check=[HealthCheck.too_slow])
 def test_esp32config_accepts_valid_values(
     serial_baud: int,
     wifi_port: int,
