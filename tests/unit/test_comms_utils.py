@@ -90,7 +90,12 @@ def test_build_velocity_cmd_clamps_below_neg_max():
 
 
 def test_build_velocity_cmd_omega_scaling():
-    cmd = build_velocity_cmd(0.0, 0.0, 0.5, _cfg(max_vel=1.0, max_omega=1.0))
+    cmd = build_velocity_cmd(
+        0.0,
+        0.0,
+        0.5,
+        _cfg(max_vel=1.0, max_omega=1.0),
+    )
     assert cmd["omega"] == 127
 
 
