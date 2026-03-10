@@ -1,6 +1,6 @@
 """Sensor manager — orchestrates all sensor reads into an observation bundle.
 
-Reads vision, ultrasonic, and ESP32 motor data concurrently, handles
+Reads vision, ultrasonic, ESP32 motor, and audio data concurrently, handles
 failures gracefully, and maintains per-sensor ring buffers.
 """
 
@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from mousedroid.constants import DEFAULT_AUDIO_CHUNK_SIZE, DEFAULT_MOTOR_STATE_DIM
 from mousedroid.logging.setup import get_logger
 from mousedroid.sensing.bundle import MouseDroidObservationBundle
 
@@ -21,7 +22,7 @@ if TYPE_CHECKING:
 
     from mousedroid.comms.protocol import ESP32CommProtocol
     from mousedroid.config.schema import Settings
-    from mousedroid.hardware.protocols import DistanceSensorProtocol, VisionProtocol
+    from mousedroid.hardware.protocols import AudioProtocol, DistanceSensorProtocol, VisionProtocol
 
 _log = get_logger(__name__)
 
@@ -38,6 +39,7 @@ class SensorManager:
         distance: Distance sensor implementing :class:`DistanceSensorProtocol`.
         esp32: ESP32 comms implementing :class:`ESP32CommProtocol`.
         cfg: Root application settings.
+        microphone: Optional audio driver implementing :class:`AudioProtocol`.
     """
 
     def __init__(
@@ -46,26 +48,39 @@ class SensorManager:
         distance: DistanceSensorProtocol,
         esp32: ESP32CommProtocol,
         cfg: Settings,
+        microphone: AudioProtocol | None = None,
     ) -> None:
         self._vision = vision
         self._distance = distance
         self._esp32 = esp32
         self._cfg = cfg
+        self._microphone = microphone
 
         # Ring buffer sizes derived from config loop rates.
         vision_buf_size = max(1, int(cfg.loop.perception_hz))
         ultrasonic_buf_size = max(1, int(cfg.loop.ultrasonic_hz))
         motor_buf_size = max(1, int(cfg.loop.control_hz))
+        audio_buf_size = max(1, int(cfg.loop.audio_hz))
 
         self._vision_buf: deque[NDArray[np.float32]] = deque(maxlen=vision_buf_size)
         self._distance_buf: deque[float] = deque(maxlen=ultrasonic_buf_size)
         self._motor_buf: deque[NDArray[np.float32]] = deque(maxlen=motor_buf_size)
+        self._audio_buf: deque[NDArray[np.float32]] = deque(maxlen=audio_buf_size)
+
+        # Determine audio chunk size for zero-fill on failure.
+        self._audio_chunk_size = (
+            microphone.chunk_size * microphone.channels
+            if microphone is not None
+            else DEFAULT_AUDIO_CHUNK_SIZE
+        )
 
         _log.info(
             "sensor_manager_init",
             vision_buf=vision_buf_size,
             ultrasonic_buf=ultrasonic_buf_size,
             motor_buf=motor_buf_size,
+            audio_buf=audio_buf_size,
+            microphone_enabled=microphone is not None,
         )
 
     # -- Public API --------------------------------------------------------
@@ -79,20 +94,23 @@ class SensorManager:
         Returns:
             A fully-populated :class:`MouseDroidObservationBundle`.
         """
-        timestamp = time.monotonic()
+        t0 = time.monotonic()
+        timestamp = t0
 
         # Kick off all reads concurrently.
         vision_task = asyncio.create_task(self._safe_vision_read())
         distance_task = asyncio.create_task(self._safe_distance_read())
         motor_task = asyncio.create_task(self._safe_motor_read())
+        audio_task = asyncio.create_task(self._safe_audio_read())
 
         vision_result, vision_ok = await vision_task
         distance_result, distance_ok = await distance_task
         motor_result, motor_ok = await motor_task
+        audio_result, audio_ok = await audio_task
 
-        # Build validity mask: vision=0, ultrasonic=1, motor=2.
+        # Build validity mask: vision=0, ultrasonic=1, motor=2, audio=3.
         valid_mask = np.array(
-            [float(vision_ok), float(distance_ok), float(motor_ok)],
+            [float(vision_ok), float(distance_ok), float(motor_ok), float(audio_ok)],
             dtype=np.float32,
         )
 
@@ -100,12 +118,20 @@ class SensorManager:
         self._vision_buf.append(vision_result)
         self._distance_buf.append(distance_result)
         self._motor_buf.append(motor_result)
+        self._audio_buf.append(audio_result)
+
+        _log.debug(
+            "read_all_complete",
+            elapsed_ms=(time.monotonic() - t0) * 1000.0,
+            valid_sensors=int(vision_ok) + int(distance_ok) + int(motor_ok) + int(audio_ok),
+        )
 
         return MouseDroidObservationBundle(
             _timestamp=timestamp,
             _vision_features=vision_result,
             _distance_m=distance_result,
             _motor_state=motor_result,
+            _audio_chunk=audio_result,
             _valid_mask=valid_mask,
         )
 
@@ -160,4 +186,20 @@ class SensorManager:
             return motor_state, True
         except Exception:
             _log.warning("motor_read_failed", exc_info=True)
-            return np.zeros(4, dtype=np.float32), False
+            return np.zeros(DEFAULT_MOTOR_STATE_DIM, dtype=np.float32), False
+
+    async def _safe_audio_read(self) -> tuple[NDArray[np.float32], bool]:
+        """Attempt an audio chunk read, returning zeros on failure.
+
+        Returns:
+            Tuple of (audio_chunk, success_flag).
+        """
+        if self._microphone is None:
+            return np.zeros(self._audio_chunk_size, dtype=np.float32), False
+
+        try:
+            chunk = await self._microphone.read_chunk()
+            return chunk, True
+        except Exception:
+            _log.warning("audio_read_failed", exc_info=True)
+            return np.zeros(self._audio_chunk_size, dtype=np.float32), False

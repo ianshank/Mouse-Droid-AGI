@@ -13,6 +13,11 @@ from typing import TYPE_CHECKING
 import numpy as np
 import torch
 
+from mousedroid.constants import (
+    DEFAULT_AUDIO_CHUNK_SIZE,
+    DEFAULT_MOTOR_STATE_DIM,
+    N_SENSOR_MODALITIES,
+)
 from mousedroid.logging.setup import get_logger
 from mousedroid.sensing.bundle import MouseDroidObservationBundle
 
@@ -20,7 +25,7 @@ if TYPE_CHECKING:
     from mousedroid.agents.base import AgentProtocol
     from mousedroid.comms.protocol import ESP32CommProtocol
     from mousedroid.config.schema import Settings
-    from mousedroid.hardware.protocols import DistanceSensorProtocol, VisionProtocol
+    from mousedroid.hardware.protocols import AudioProtocol, DistanceSensorProtocol, VisionProtocol
     from mousedroid.safety.protocol import SafetyMonitorProtocol
     from mousedroid.world_model.protocol import WorldModelProtocol
 
@@ -44,6 +49,7 @@ class MouseDroidOrchestrator:
         camera: VisionProtocol,
         distance_sensor: DistanceSensorProtocol,
         cfg: Settings,
+        microphone: AudioProtocol | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -55,6 +61,7 @@ class MouseDroidOrchestrator:
             camera: Vision driver.
             distance_sensor: Distance sensor driver.
             cfg: Root settings.
+            microphone: Optional USB microphone driver.
         """
         self._world_model = world_model
         self._agents = agents
@@ -62,6 +69,7 @@ class MouseDroidOrchestrator:
         self._esp32 = esp32
         self._camera = camera
         self._distance_sensor = distance_sensor
+        self._microphone = microphone
         self._cfg = cfg
         self._running = False
 
@@ -75,6 +83,8 @@ class MouseDroidOrchestrator:
         _log.info("orchestrator_starting")
         await self._esp32.connect()
         await self._camera.start()
+        if self._microphone is not None:
+            await self._microphone.start()
         self._running = True
         _log.info("orchestrator_started")
 
@@ -84,6 +94,8 @@ class MouseDroidOrchestrator:
         self._running = False
         await self._esp32.emergency_stop()
         await self._camera.stop()
+        if self._microphone is not None:
+            await self._microphone.stop()
         await self._esp32.disconnect()
         _log.info("orchestrator_stopped")
 
@@ -126,6 +138,12 @@ class MouseDroidOrchestrator:
 
         await self._esp32.send_velocity(vx, vy, omega)
 
+        _log.debug(
+            "tick_complete",
+            loop_time_ms=loop_time_ms,
+            emergency=safety_ctx.is_emergency,
+        )
+
     async def _sense(self) -> MouseDroidObservationBundle:
         """Read all sensors and build observation bundle.
 
@@ -134,8 +152,14 @@ class MouseDroidOrchestrator:
         """
         vision_features = np.zeros(self._cfg.camera.feature_dim, dtype=np.float32)
         distance_m = self._distance_sensor.max_range_m
-        motor_state = np.zeros(4, dtype=np.float32)
-        valid_mask = np.zeros(3, dtype=np.float32)
+        motor_state = np.zeros(DEFAULT_MOTOR_STATE_DIM, dtype=np.float32)
+        audio_chunk_size = (
+            self._microphone.chunk_size * self._microphone.channels
+            if self._microphone is not None
+            else DEFAULT_AUDIO_CHUNK_SIZE
+        )
+        audio_chunk = np.zeros(audio_chunk_size, dtype=np.float32)
+        valid_mask = np.zeros(N_SENSOR_MODALITIES, dtype=np.float32)
 
         try:
             vision_features = await self._camera.capture_features()
@@ -160,11 +184,19 @@ class MouseDroidOrchestrator:
         except Exception:
             _log.warning("motor_state_read_failed", exc_info=True)
 
+        if self._microphone is not None:
+            try:
+                audio_chunk = await self._microphone.read_chunk()
+                valid_mask[3] = 1.0
+            except Exception:
+                _log.warning("audio_capture_failed", exc_info=True)
+
         return MouseDroidObservationBundle(
             _timestamp=time.monotonic(),
             _vision_features=vision_features,
             _distance_m=distance_m,
             _motor_state=motor_state,
+            _audio_chunk=audio_chunk,
             _valid_mask=valid_mask,
         )
 

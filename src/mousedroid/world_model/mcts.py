@@ -9,6 +9,7 @@ import torch
 from torch import Tensor
 
 from mousedroid.config.schema import MCTSConfig
+from mousedroid.constants import DEFAULT_ACTION_DIM
 from mousedroid.logging.setup import get_logger
 from mousedroid.world_model.protocol import WorldModelProtocol
 
@@ -45,9 +46,15 @@ class MCTSPlanner:
         world_model: A world model implementing ``WorldModelProtocol``.
     """
 
-    def __init__(self, cfg: MCTSConfig, world_model: WorldModelProtocol) -> None:
+    def __init__(
+        self,
+        cfg: MCTSConfig,
+        world_model: WorldModelProtocol,
+        action_dim: int = DEFAULT_ACTION_DIM,
+    ) -> None:
         self._cfg = cfg
         self._world_model = world_model
+        self._action_dim = action_dim
 
         _log.info(
             "mcts_init",
@@ -68,9 +75,7 @@ class MCTSPlanner:
             Tensor of shape ``(n_action_candidates, action_dim)``.
         """
         n = self._cfg.n_action_candidates
-        # action_dim is inferred from the world model at plan time.
-        # Use 3 as default matching ModelConfig.action_dim.
-        action_dim = 3
+        action_dim = self._action_dim
         raw = torch.linspace(-1.0, 1.0, n, device=device)
         # Expand to full action space: repeat across action dims.
         actions = raw.unsqueeze(-1).expand(n, action_dim)
@@ -139,7 +144,7 @@ class MCTSPlanner:
         gamma_acc = 1.0
         cur_h, cur_z = h, z
         for _ in range(depth):
-            random_action = torch.tanh(torch.randn(1, 3, device=h.device))
+            random_action = torch.tanh(torch.randn(1, self._action_dim, device=h.device))
             cur_h, cur_z, reward = self._world_model.imagine_step(random_action, cur_h, cur_z)
             total_reward += gamma_acc * float(reward.item())
             gamma_acc *= self._cfg.gamma
@@ -161,7 +166,7 @@ class MCTSPlanner:
             Best action tensor, shape ``(1, action_dim)``, values in ``[-1, 1]``.
         """
         device = h.device
-        dummy_action = torch.zeros(1, 3, device=device)
+        dummy_action = torch.zeros(1, self._action_dim, device=device)
         root = _Node(action=dummy_action, h=h, z=z)
 
         # Initial expansion
@@ -193,4 +198,10 @@ class MCTSPlanner:
 
         # Select most-visited root child.
         best_child = max(root.children, key=lambda c: c.visit_count)
-        return torch.tanh(best_child.action)
+        action = torch.tanh(best_child.action)
+        _log.debug(
+            "mcts_plan_complete",
+            visits=best_child.visit_count,
+            mean_value=best_child.mean_value,
+        )
+        return action

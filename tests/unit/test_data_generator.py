@@ -27,7 +27,7 @@ class TestBundleToTensors:
         assert tensors["vision"].shape == (256,)
         assert tensors["ultrasonic"].shape == (1,)
         assert tensors["motor_state"].shape == (4,)
-        assert tensors["valid_mask"].shape == (3,)
+        assert tensors["valid_mask"].shape == (4,)
 
     def test_output_dtype(self) -> None:
         obs = MouseDroidObservationBundle()
@@ -52,7 +52,7 @@ class TestRSSMSequenceDataset:
                         "vision": torch.randn(16),
                         "ultrasonic": torch.randn(1),
                         "motor_state": torch.randn(4),
-                        "valid_mask": torch.ones(3),
+                        "valid_mask": torch.ones(4),
                         "action": torch.randn(3),
                     }
                 )
@@ -73,7 +73,7 @@ class TestRSSMSequenceDataset:
                     "vision": torch.randn(16),
                     "ultrasonic": torch.randn(1),
                     "motor_state": torch.randn(4),
-                    "valid_mask": torch.ones(3),
+                    "valid_mask": torch.ones(4),
                     "action": torch.randn(3),
                 }
                 for _ in range(10)
@@ -89,7 +89,7 @@ class TestRSSMSequenceDataset:
         assert vision.shape == (8, 16)
         assert ultrasonic.shape == (8, 1)
         assert motor_state.shape == (8, 4)
-        assert valid_mask.shape == (8, 3)
+        assert valid_mask.shape == (8, 4)
         assert actions.shape == (8, 3)
 
     def test_dataset_padding_short_episode(self, tmp_path: Path) -> None:
@@ -102,7 +102,7 @@ class TestRSSMSequenceDataset:
                     "vision": torch.ones(16),
                     "ultrasonic": torch.ones(1),
                     "motor_state": torch.ones(4),
-                    "valid_mask": torch.ones(3),
+                    "valid_mask": torch.ones(4),
                     "action": torch.ones(3),
                 }
                 for _ in range(3)

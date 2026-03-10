@@ -9,9 +9,6 @@ import asyncio
 import json
 from typing import TYPE_CHECKING, Any
 
-from mousedroid.comms._utils import (
-    ESP32_CMD_TYPE_BATTERY,
-)
 from mousedroid.comms.base_driver import BaseESP32Driver
 from mousedroid.logging.setup import get_logger
 

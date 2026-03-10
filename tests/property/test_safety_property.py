@@ -16,7 +16,7 @@ def _make_observation(
     valid_sensors: int = 3,
 ) -> MouseDroidObservationBundle:
     motor = np.array([0.0, 0.0, 0.0, battery_v], dtype=np.float32)
-    mask = np.zeros(3, dtype=np.float32)
+    mask = np.zeros(4, dtype=np.float32)
     mask[:valid_sensors] = 1.0
     return MouseDroidObservationBundle(
         _distance_m=distance_m,

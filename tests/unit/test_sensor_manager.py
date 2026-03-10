@@ -43,7 +43,7 @@ async def test_read_all_returns_bundle():
     bundle = await mgr.read_all()
     assert bundle.timestamp > 0
     assert bundle.distance_m == 1.5
-    np.testing.assert_array_equal(bundle.valid_mask, [1.0, 1.0, 1.0])
+    np.testing.assert_array_equal(bundle.valid_mask, [1.0, 1.0, 1.0, 0.0])
 
 
 async def test_read_all_handles_vision_failure():
@@ -65,3 +65,56 @@ async def test_read_all_handles_motor_failure():
     esp32.read_encoders.side_effect = RuntimeError("serial fail")
     bundle = await mgr.read_all()
     assert bundle.valid_mask[2] == 0.0
+
+
+async def test_read_all_microphone_none_backwards_compat():
+    """SensorManager with microphone=None still returns a 4-element valid_mask."""
+    mgr, _, _, _ = _make_manager()
+    # _make_manager does not pass a microphone, so it defaults to None
+    bundle = await mgr.read_all()
+    assert bundle.valid_mask.shape == (4,)
+    # Audio slot should be invalid when no microphone is configured
+    assert bundle.valid_mask[3] == 0.0
+
+
+def _make_manager_with_mic():
+    cfg = Settings(mock_hardware=True)
+
+    vision = AsyncMock()
+    vision.capture_features = AsyncMock(
+        return_value=np.ones(cfg.camera.feature_dim, dtype=np.float32),
+    )
+    vision.start = AsyncMock()
+    vision.stop = AsyncMock()
+
+    distance = AsyncMock()
+    distance.read_distance_m = AsyncMock(return_value=1.5)
+    distance.max_range_m = 4.0
+
+    esp32 = AsyncMock()
+    esp32.read_encoders = AsyncMock(return_value=EncoderReading())
+    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+
+    mic = AsyncMock()
+    mic.chunk_size = 1024
+    mic.channels = 1
+    mic.read_chunk = AsyncMock(
+        return_value=np.ones(1024, dtype=np.float32),
+    )
+
+    mgr = SensorManager(vision, distance, esp32, cfg, microphone=mic)
+    return mgr, mic
+
+
+async def test_read_all_with_microphone():
+    mgr, mic = _make_manager_with_mic()
+    bundle = await mgr.read_all()
+    assert bundle.valid_mask[3] == 1.0
+    mic.read_chunk.assert_awaited_once()
+
+
+async def test_read_all_microphone_failure():
+    mgr, mic = _make_manager_with_mic()
+    mic.read_chunk.side_effect = RuntimeError("mic fail")
+    bundle = await mgr.read_all()
+    assert bundle.valid_mask[3] == 0.0

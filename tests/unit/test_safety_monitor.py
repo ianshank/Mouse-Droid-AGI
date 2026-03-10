@@ -18,7 +18,7 @@ def _make_obs(
     valid_mask: list[float] | None = None,
 ) -> MouseDroidObservationBundle:
     motor = np.array([0.0, 0.0, 0.0, battery_v], dtype=np.float32)
-    mask = np.array(valid_mask or [1.0, 1.0, 1.0], dtype=np.float32)
+    mask = np.array(valid_mask or [1.0, 1.0, 1.0, 1.0], dtype=np.float32)
     return MouseDroidObservationBundle(
         _distance_m=distance_m,
         _motor_state=motor,
@@ -110,7 +110,7 @@ def test_evaluate_all_fields_populated():
     assert ctx.ultrasonic_dist_m == 1.5
     assert ctx.battery_voltage == 11.5
     assert ctx.loop_time_ms == 25.0
-    assert ctx.valid_sensor_count == 3
+    assert ctx.valid_sensor_count == 4
     assert ctx.forward_clearance_ok is True
 
 

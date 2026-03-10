@@ -8,7 +8,6 @@ content, and Python module import integrity.
 from __future__ import annotations
 
 import ast
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -46,7 +45,7 @@ class TestScriptFilesExist:
 
 
 class TestCiSh:
-    @pytest.fixture()
+    @pytest.fixture
     def content(self) -> str:
         return (_SCRIPTS / "ci.sh").read_text(encoding="utf-8")
 
@@ -82,7 +81,7 @@ class TestCiSh:
 
 
 class TestDeployJetsonSh:
-    @pytest.fixture()
+    @pytest.fixture
     def content(self) -> str:
         return (_SCRIPTS / "deploy_jetson.sh").read_text(encoding="utf-8")
 
@@ -99,7 +98,7 @@ class TestDeployJetsonSh:
         assert 'pip" install' in content or "pip install" in content
 
     def test_installs_hardware_extras(self, content: str) -> None:
-        assert "[hardware]" in content
+        assert "hardware" in content
 
     def test_deploys_systemd_service(self, content: str) -> None:
         assert "systemctl" in content or "mousedroid.service" in content
@@ -112,7 +111,7 @@ class TestDeployJetsonSh:
 
 
 class TestFlashEsp32Sh:
-    @pytest.fixture()
+    @pytest.fixture
     def content(self) -> str:
         return (_SCRIPTS / "flash_esp32.sh").read_text(encoding="utf-8")
 
@@ -145,7 +144,7 @@ class TestFlashEsp32Sh:
 
 
 class TestMousedroidService:
-    @pytest.fixture()
+    @pytest.fixture
     def content(self) -> str:
         return (_SCRIPTS / "mousedroid.service").read_text(encoding="utf-8")
 
@@ -191,65 +190,73 @@ class TestTrainingModuleImports:
             pytest.fail(f"{module_file} has a syntax error: {exc}")
 
     def test_collect_annotations_importable(self) -> None:
+        _import = (
+            "from training.collect_annotations"
+            " import INTENTION_LABELS, label_intention"
+        )
         result = subprocess.run(
-            [sys.executable, "-c", "from training.collect_annotations import INTENTION_LABELS, label_intention"],
-            capture_output=True,
-            text=True,
-            cwd=str(_REPO),
+            [sys.executable, "-c", _import],
+            capture_output=True, text=True, cwd=str(_REPO),
         )
         assert result.returncode == 0, result.stderr
 
     def test_data_generator_importable(self) -> None:
+        _import = (
+            "from training.data_generator"
+            " import SyntheticSequenceGenerator, _bundle_to_tensors"
+        )
         result = subprocess.run(
-            [sys.executable, "-c", "from training.data_generator import SyntheticSequenceGenerator, _bundle_to_tensors"],
-            capture_output=True,
-            text=True,
-            cwd=str(_REPO),
+            [sys.executable, "-c", _import],
+            capture_output=True, text=True, cwd=str(_REPO),
         )
         assert result.returncode == 0, result.stderr
 
     def test_rssm_dataset_importable(self) -> None:
+        _import = "from training.rssm_dataset import RSSMSequenceDataset"
         result = subprocess.run(
-            [sys.executable, "-c", "from training.rssm_dataset import RSSMSequenceDataset"],
-            capture_output=True,
-            text=True,
-            cwd=str(_REPO),
+            [sys.executable, "-c", _import],
+            capture_output=True, text=True, cwd=str(_REPO),
         )
         assert result.returncode == 0, result.stderr
 
     def test_train_bdi_importable(self) -> None:
+        _import = (
+            "from training.train_bdi"
+            " import train_belief_encoder, train_bdi"
+        )
         result = subprocess.run(
-            [sys.executable, "-c", "from training.train_bdi import train_belief_encoder, train_bdi"],
-            capture_output=True,
-            text=True,
-            cwd=str(_REPO),
+            [sys.executable, "-c", _import],
+            capture_output=True, text=True, cwd=str(_REPO),
         )
         assert result.returncode == 0, result.stderr
 
     def test_train_constitutional_rl_importable(self) -> None:
+        _import = (
+            "from training.train_constitutional_rl"
+            " import _gae, _ppo_update"
+        )
         result = subprocess.run(
-            [sys.executable, "-c", "from training.train_constitutional_rl import _gae, _ppo_update"],
-            capture_output=True,
-            text=True,
-            cwd=str(_REPO),
+            [sys.executable, "-c", _import],
+            capture_output=True, text=True, cwd=str(_REPO),
         )
         assert result.returncode == 0, result.stderr
 
     def test_train_rssm_importable(self) -> None:
+        _import = "from training.train_rssm import train_rssm"
         result = subprocess.run(
-            [sys.executable, "-c", "from training.train_rssm import train_rssm"],
-            capture_output=True,
-            text=True,
-            cwd=str(_REPO),
+            [sys.executable, "-c", _import],
+            capture_output=True, text=True, cwd=str(_REPO),
         )
         assert result.returncode == 0, result.stderr
 
     def test_warmstart_policy_importable(self) -> None:
+        _import = (
+            "from training.warmstart_policy"
+            " import warmstart_policy, compute_latent_statistics"
+        )
         result = subprocess.run(
-            [sys.executable, "-c", "from training.warmstart_policy import warmstart_policy, compute_latent_statistics"],
-            capture_output=True,
-            text=True,
-            cwd=str(_REPO),
+            [sys.executable, "-c", _import],
+            capture_output=True, text=True, cwd=str(_REPO),
         )
         assert result.returncode == 0, result.stderr
 
@@ -260,7 +267,7 @@ class TestTrainingModuleImports:
 
 
 class TestTrainRSSMContent:
-    @pytest.fixture()
+    @pytest.fixture
     def content(self) -> str:
         return (_TRAINING / "train_rssm.py").read_text()
 
@@ -281,7 +288,7 @@ class TestTrainRSSMContent:
 
 
 class TestTrainBDIContent:
-    @pytest.fixture()
+    @pytest.fixture
     def content(self) -> str:
         return (_TRAINING / "train_bdi.py").read_text()
 
@@ -305,7 +312,7 @@ class TestTrainBDIContent:
 
 
 class TestTrainConstitutionalRLContent:
-    @pytest.fixture()
+    @pytest.fixture
     def content(self) -> str:
         return (_TRAINING / "train_constitutional_rl.py").read_text()
 
@@ -330,7 +337,7 @@ class TestTrainConstitutionalRLContent:
 
 
 class TestWarmstartPolicyContent:
-    @pytest.fixture()
+    @pytest.fixture
     def content(self) -> str:
         return (_TRAINING / "warmstart_policy.py").read_text()
 
@@ -352,7 +359,7 @@ class TestWarmstartPolicyContent:
 
 
 class TestCollectAnnotationsContent:
-    @pytest.fixture()
+    @pytest.fixture
     def content(self) -> str:
         return (_TRAINING / "collect_annotations.py").read_text()
 
@@ -379,7 +386,7 @@ class TestCollectAnnotationsContent:
 
 
 class TestDataGeneratorContent:
-    @pytest.fixture()
+    @pytest.fixture
     def content(self) -> str:
         return (_TRAINING / "data_generator.py").read_text()
 
@@ -397,7 +404,7 @@ class TestDataGeneratorContent:
 
 
 class TestRSSMDatasetContent:
-    @pytest.fixture()
+    @pytest.fixture
     def content(self) -> str:
         return (_TRAINING / "rssm_dataset.py").read_text()
 

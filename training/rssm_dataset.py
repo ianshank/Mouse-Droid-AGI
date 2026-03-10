@@ -19,7 +19,7 @@ class RSSMSequenceDataset(Dataset[tuple[Tensor, ...]]):
         - vision: ``(seq_len, vision_dim)``
         - ultrasonic: ``(seq_len, 1)``
         - motor_state: ``(seq_len, motor_state_dim)``
-        - valid_mask: ``(seq_len, 3)``
+        - valid_mask: ``(seq_len, 4)``
         - actions: ``(seq_len, action_dim)``
 
     Sequences shorter than ``seq_len`` are zero-padded; longer ones are truncated.
@@ -58,7 +58,7 @@ class RSSMSequenceDataset(Dataset[tuple[Tensor, ...]]):
         vision = torch.zeros(self._seq_len, vision_dim)
         ultrasonic = torch.zeros(self._seq_len, 1)
         motor_state = torch.zeros(self._seq_len, motor_dim)
-        valid_mask = torch.zeros(self._seq_len, 3)
+        valid_mask = torch.zeros(self._seq_len, 4)
         actions = torch.zeros(self._seq_len, action_dim)
 
         for t in range(seq_t):

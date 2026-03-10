@@ -7,6 +7,7 @@ loop:
   ultrasonic_hz: 20.0
   control_hz: 30.0
   planning_hz: 10.0
+  audio_hz: 16.0
 
 model:
   vision_dim: 256
@@ -61,6 +62,13 @@ ultrasonic:
   min_range_m: 0.02
   timeout_s: 0.1
   speed_of_sound_mps: 343.0
+
+# microphone:          # Uncomment to enable SuziePi USB microphone
+#   sample_rate: 16000
+#   channels: 1
+#   chunk_size: 1024
+#   device_name: "SuziePi"
+#   format: "float32"
 
 camera:
   resolution_width: 640

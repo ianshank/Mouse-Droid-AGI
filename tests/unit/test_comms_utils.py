@@ -20,7 +20,6 @@ from mousedroid.comms._utils import (
 )
 from mousedroid.config.schema import ESP32Config
 
-
 # ---------------------------------------------------------------------------
 # clamp (existing, keep for regression)
 # ---------------------------------------------------------------------------
