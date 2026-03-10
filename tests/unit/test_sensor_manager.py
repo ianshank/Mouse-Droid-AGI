@@ -75,3 +75,46 @@ async def test_read_all_microphone_none_backwards_compat():
     assert bundle.valid_mask.shape == (4,)
     # Audio slot should be invalid when no microphone is configured
     assert bundle.valid_mask[3] == 0.0
+
+
+def _make_manager_with_mic():
+    cfg = Settings(mock_hardware=True)
+
+    vision = AsyncMock()
+    vision.capture_features = AsyncMock(
+        return_value=np.ones(cfg.camera.feature_dim, dtype=np.float32),
+    )
+    vision.start = AsyncMock()
+    vision.stop = AsyncMock()
+
+    distance = AsyncMock()
+    distance.read_distance_m = AsyncMock(return_value=1.5)
+    distance.max_range_m = 4.0
+
+    esp32 = AsyncMock()
+    esp32.read_encoders = AsyncMock(return_value=EncoderReading())
+    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+
+    mic = AsyncMock()
+    mic.chunk_size = 1024
+    mic.channels = 1
+    mic.read_chunk = AsyncMock(
+        return_value=np.ones(1024, dtype=np.float32),
+    )
+
+    mgr = SensorManager(vision, distance, esp32, cfg, microphone=mic)
+    return mgr, mic
+
+
+async def test_read_all_with_microphone():
+    mgr, mic = _make_manager_with_mic()
+    bundle = await mgr.read_all()
+    assert bundle.valid_mask[3] == 1.0
+    mic.read_chunk.assert_awaited_once()
+
+
+async def test_read_all_microphone_failure():
+    mgr, mic = _make_manager_with_mic()
+    mic.read_chunk.side_effect = RuntimeError("mic fail")
+    bundle = await mgr.read_all()
+    assert bundle.valid_mask[3] == 0.0

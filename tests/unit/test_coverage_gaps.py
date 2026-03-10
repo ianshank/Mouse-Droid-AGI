@@ -262,33 +262,33 @@ def test_comms_constants_importable():
 
 
 def test_bundle_default_dimensions():
-    from mousedroid.sensing.bundle import (
-        _DEFAULT_MAX_DISTANCE_M,
-        _DEFAULT_MOTOR_STATE_DIM,
-        _DEFAULT_VISION_DIM,
-        MouseDroidObservationBundle,
+    from mousedroid.constants import (
+        DEFAULT_MAX_DISTANCE_M,
+        DEFAULT_MOTOR_STATE_DIM,
+        DEFAULT_VISION_DIM,
     )
+    from mousedroid.sensing.bundle import MouseDroidObservationBundle
 
     bundle = MouseDroidObservationBundle()
-    assert bundle.vision_features.shape == (_DEFAULT_VISION_DIM,)
-    assert bundle.motor_state.shape == (_DEFAULT_MOTOR_STATE_DIM,)
-    assert bundle.distance_m == _DEFAULT_MAX_DISTANCE_M
+    assert bundle.vision_features.shape == (DEFAULT_VISION_DIM,)
+    assert bundle.motor_state.shape == (DEFAULT_MOTOR_STATE_DIM,)
+    assert bundle.distance_m == DEFAULT_MAX_DISTANCE_M
 
 
 def test_record_default_dimensions():
-    from mousedroid.experience.record import (
-        _DEFAULT_ACTION_DIM,
-        _DEFAULT_MAX_DISTANCE_M,
-        _DEFAULT_MOTOR_STATE_DIM,
-        _DEFAULT_VISION_DIM,
-        MouseDroidExperienceRecord,
+    from mousedroid.constants import (
+        DEFAULT_ACTION_DIM,
+        DEFAULT_MAX_DISTANCE_M,
+        DEFAULT_MOTOR_STATE_DIM,
+        DEFAULT_VISION_DIM,
     )
+    from mousedroid.experience.record import MouseDroidExperienceRecord
 
     record = MouseDroidExperienceRecord()
-    assert record.vision_features.shape == (_DEFAULT_VISION_DIM,)
-    assert record.motor_state.shape == (_DEFAULT_MOTOR_STATE_DIM,)
-    assert record.action.shape == (_DEFAULT_ACTION_DIM,)
-    assert record.distance_m == _DEFAULT_MAX_DISTANCE_M
+    assert record.vision_features.shape == (DEFAULT_VISION_DIM,)
+    assert record.motor_state.shape == (DEFAULT_MOTOR_STATE_DIM,)
+    assert record.action.shape == (DEFAULT_ACTION_DIM,)
+    assert record.distance_m == DEFAULT_MAX_DISTANCE_M
 
 
 # ---------------------------------------------------------------------------

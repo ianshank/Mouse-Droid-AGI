@@ -66,7 +66,7 @@ select = [
 ignore = ["D100", "D104", "D107", "D203", "D213", "S101", "ANN401", "TCH", "TC"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["D", "ANN", "S101", "S108"]
+"tests/**/*.py" = ["D", "ANN", "S101", "S108", "S603"]
 "tools/**/*.py" = ["D", "ANN", "T20"]
 
 [tool.ruff.lint.pydocstyle]

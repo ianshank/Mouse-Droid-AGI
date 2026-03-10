@@ -13,6 +13,11 @@ from typing import TYPE_CHECKING
 import numpy as np
 import torch
 
+from mousedroid.constants import (
+    DEFAULT_AUDIO_CHUNK_SIZE,
+    DEFAULT_MOTOR_STATE_DIM,
+    N_SENSOR_MODALITIES,
+)
 from mousedroid.logging.setup import get_logger
 from mousedroid.sensing.bundle import MouseDroidObservationBundle
 
@@ -133,6 +138,12 @@ class MouseDroidOrchestrator:
 
         await self._esp32.send_velocity(vx, vy, omega)
 
+        _log.debug(
+            "tick_complete",
+            loop_time_ms=loop_time_ms,
+            emergency=safety_ctx.is_emergency,
+        )
+
     async def _sense(self) -> MouseDroidObservationBundle:
         """Read all sensors and build observation bundle.
 
@@ -141,14 +152,14 @@ class MouseDroidOrchestrator:
         """
         vision_features = np.zeros(self._cfg.camera.feature_dim, dtype=np.float32)
         distance_m = self._distance_sensor.max_range_m
-        motor_state = np.zeros(4, dtype=np.float32)
+        motor_state = np.zeros(DEFAULT_MOTOR_STATE_DIM, dtype=np.float32)
         audio_chunk_size = (
             self._microphone.chunk_size * self._microphone.channels
             if self._microphone is not None
-            else 1024
+            else DEFAULT_AUDIO_CHUNK_SIZE
         )
         audio_chunk = np.zeros(audio_chunk_size, dtype=np.float32)
-        valid_mask = np.zeros(4, dtype=np.float32)
+        valid_mask = np.zeros(N_SENSOR_MODALITIES, dtype=np.float32)
 
         try:
             vision_features = await self._camera.capture_features()

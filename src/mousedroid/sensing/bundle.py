@@ -12,20 +12,13 @@ from dataclasses import dataclass, field
 import numpy as np
 from numpy.typing import NDArray
 
-_N_MODALITIES: int = 4
-"""Number of sensor modalities tracked: vision, ultrasonic, motor, audio."""
-
-_DEFAULT_VISION_DIM: int = 256
-"""Default vision feature dimension (mirrors ModelConfig.vision_dim)."""
-
-_DEFAULT_MOTOR_STATE_DIM: int = 4
-"""Motor state dimension [vx, vy, omega, battery_v]."""
-
-_DEFAULT_MAX_DISTANCE_M: float = 4.0
-"""Default max ultrasonic range in metres (mirrors UltrasonicConfig.max_range_m)."""
-
-_DEFAULT_AUDIO_CHUNK_SIZE: int = 1024
-"""Default audio chunk size in samples (mirrors MicrophoneConfig.chunk_size)."""
+from mousedroid.constants import (
+    DEFAULT_AUDIO_CHUNK_SIZE,
+    DEFAULT_MAX_DISTANCE_M,
+    DEFAULT_MOTOR_STATE_DIM,
+    DEFAULT_VISION_DIM,
+    N_SENSOR_MODALITIES,
+)
 
 
 @dataclass
@@ -49,25 +42,25 @@ class MouseDroidObservationBundle:
     """Monotonic timestamp captured when the bundle is created."""
 
     _vision_features: NDArray[np.float32] = field(
-        default_factory=lambda: np.zeros(_DEFAULT_VISION_DIM, dtype=np.float32),
+        default_factory=lambda: np.zeros(DEFAULT_VISION_DIM, dtype=np.float32),
     )
     """Vision feature vector, shape ``(feature_dim,)``."""
 
-    _distance_m: float = _DEFAULT_MAX_DISTANCE_M
+    _distance_m: float = DEFAULT_MAX_DISTANCE_M
     """Forward ultrasonic distance in metres (defaults to max range)."""
 
     _motor_state: NDArray[np.float32] = field(
-        default_factory=lambda: np.zeros(_DEFAULT_MOTOR_STATE_DIM, dtype=np.float32),
+        default_factory=lambda: np.zeros(DEFAULT_MOTOR_STATE_DIM, dtype=np.float32),
     )
     """Motor state ``[vx, vy, omega, battery_v]``, shape ``(4,)``."""
 
     _audio_chunk: NDArray[np.float32] = field(
-        default_factory=lambda: np.zeros(_DEFAULT_AUDIO_CHUNK_SIZE, dtype=np.float32),
+        default_factory=lambda: np.zeros(DEFAULT_AUDIO_CHUNK_SIZE, dtype=np.float32),
     )
     """Audio samples, shape ``(chunk_size * channels,)``."""
 
     _valid_mask: NDArray[np.float32] = field(
-        default_factory=lambda: np.ones(_N_MODALITIES, dtype=np.float32),
+        default_factory=lambda: np.ones(N_SENSOR_MODALITIES, dtype=np.float32),
     )
     """Per-modality validity flags, shape ``(n_modalities,)``."""
 
@@ -106,4 +99,4 @@ class MouseDroidObservationBundle:
     @property
     def n_modalities(self) -> int:
         """Number of sensor modalities tracked by valid_mask."""
-        return _N_MODALITIES
+        return N_SENSOR_MODALITIES

@@ -120,7 +120,7 @@ class MouseDroidSafetyMonitor:
         if human_detected and human_dist_m < self._cfg.min_forward_clearance_m:
             is_emergency = True
 
-        return SafetyContext(
+        ctx = SafetyContext(
             ultrasonic_dist_m=observation.distance_m,
             forward_clearance_ok=forward_clearance_ok,
             battery_voltage=battery_voltage,
@@ -130,3 +130,9 @@ class MouseDroidSafetyMonitor:
             human_detected=human_detected,
             human_dist_m=human_dist_m,
         )
+        _log.debug(
+            "safety_evaluate_result",
+            is_emergency=is_emergency,
+            valid_sensors=valid_sensor_count,
+        )
+        return ctx

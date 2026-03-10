@@ -73,7 +73,7 @@ class MouseDroidNavigationAgent:
         if not safety_ctx.forward_clearance_ok:
             _log.info("reverse_action", distance_m=safety_ctx.ultrasonic_dist_m)
             action = torch.zeros(self._action_dim)
-            action[0] = -0.5  # Reverse
+            action[0] = self._cfg.safety.reverse_velocity
             return action
 
         from mousedroid.agents._planning import compute_mcts_budget

@@ -245,6 +245,9 @@ class SafetyConfig(BaseModel):
     gpu_critical_temp_c: float = Field(90.0, gt=0, description="GPU critical temperature (C)")
     battery_warn_v: float = Field(10.5, gt=0, description="Battery warning voltage (V)")
     battery_critical_v: float = Field(9.5, gt=0, description="Battery critical voltage (V)")
+    reverse_velocity: float = Field(
+        -0.5, le=0, description="Reverse velocity for obstacle avoidance"
+    )
 
 
 class SurpriseConfig(BaseModel):

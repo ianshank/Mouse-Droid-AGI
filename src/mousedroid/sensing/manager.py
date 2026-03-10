@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from mousedroid.constants import DEFAULT_AUDIO_CHUNK_SIZE, DEFAULT_MOTOR_STATE_DIM
 from mousedroid.logging.setup import get_logger
 from mousedroid.sensing.bundle import MouseDroidObservationBundle
 
@@ -24,9 +25,6 @@ if TYPE_CHECKING:
     from mousedroid.hardware.protocols import AudioProtocol, DistanceSensorProtocol, VisionProtocol
 
 _log = get_logger(__name__)
-
-_DEFAULT_AUDIO_CHUNK_SIZE: int = 1024
-"""Default audio chunk size when no microphone is configured."""
 
 
 class SensorManager:
@@ -73,7 +71,7 @@ class SensorManager:
         self._audio_chunk_size = (
             microphone.chunk_size * microphone.channels
             if microphone is not None
-            else _DEFAULT_AUDIO_CHUNK_SIZE
+            else DEFAULT_AUDIO_CHUNK_SIZE
         )
 
         _log.info(
@@ -96,7 +94,8 @@ class SensorManager:
         Returns:
             A fully-populated :class:`MouseDroidObservationBundle`.
         """
-        timestamp = time.monotonic()
+        t0 = time.monotonic()
+        timestamp = t0
 
         # Kick off all reads concurrently.
         vision_task = asyncio.create_task(self._safe_vision_read())
@@ -120,6 +119,12 @@ class SensorManager:
         self._distance_buf.append(distance_result)
         self._motor_buf.append(motor_result)
         self._audio_buf.append(audio_result)
+
+        _log.debug(
+            "read_all_complete",
+            elapsed_ms=(time.monotonic() - t0) * 1000.0,
+            valid_sensors=int(vision_ok) + int(distance_ok) + int(motor_ok) + int(audio_ok),
+        )
 
         return MouseDroidObservationBundle(
             _timestamp=timestamp,
@@ -181,7 +186,7 @@ class SensorManager:
             return motor_state, True
         except Exception:
             _log.warning("motor_read_failed", exc_info=True)
-            return np.zeros(4, dtype=np.float32), False
+            return np.zeros(DEFAULT_MOTOR_STATE_DIM, dtype=np.float32), False
 
     async def _safe_audio_read(self) -> tuple[NDArray[np.float32], bool]:
         """Attempt an audio chunk read, returning zeros on failure.

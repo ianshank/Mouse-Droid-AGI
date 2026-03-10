@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from training.training_utils import iter_batches, log_epoch_loss, sgd_step
-
 
 # ---------------------------------------------------------------------------
 # iter_batches
@@ -44,7 +42,7 @@ class TestIterBatches:
         epoch2 = list(iter_batches(50, 5, rng))
         # At least one batch should differ between epochs
         changed = any(
-            not np.array_equal(a, b) for a, b in zip(epoch1, epoch2)
+            not np.array_equal(a, b) for a, b in zip(epoch1, epoch2, strict=True)
         )
         assert changed
 
@@ -69,7 +67,7 @@ class TestIterBatches:
     def test_seeded_rng_is_reproducible(self) -> None:
         batches_a = list(iter_batches(100, 10, np.random.default_rng(7)))
         batches_b = list(iter_batches(100, 10, np.random.default_rng(7)))
-        for a, b in zip(batches_a, batches_b):
+        for a, b in zip(batches_a, batches_b, strict=True):
             np.testing.assert_array_equal(a, b)
 
 

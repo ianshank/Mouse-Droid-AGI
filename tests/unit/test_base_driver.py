@@ -21,7 +21,6 @@ from mousedroid.comms.base_driver import BaseESP32Driver
 from mousedroid.comms.protocol import EncoderReading
 from mousedroid.config.schema import ESP32Config
 
-
 # ---------------------------------------------------------------------------
 # Minimal stub subclass — records calls, returns canned responses
 # ---------------------------------------------------------------------------
@@ -178,8 +177,6 @@ async def test_get_battery_voltage_defaults_to_zero_on_empty():
 async def test_get_battery_voltage_sends_battery_cmd(monkeypatch: pytest.MonkeyPatch):
     """Verify the ESP32_CMD_TYPE_BATTERY command is passed to _query_data."""
     received: list[dict[str, int] | None] = []
-
-    original_query = stub_ref = None
 
     stub = _make_stub()
 

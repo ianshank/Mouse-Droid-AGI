@@ -8,8 +8,8 @@ from mousedroid.comms.wifi_driver import WiFiESP32Driver
 
 __all__ = [
     "BaseESP32Driver",
-    "EncoderReading",
     "ESP32CommProtocol",
+    "EncoderReading",
     "MockESP32Driver",
     "SerialESP32Driver",
     "WiFiESP32Driver",

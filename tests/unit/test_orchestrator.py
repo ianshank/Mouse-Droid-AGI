@@ -172,3 +172,84 @@ async def test_tick_action_2d():
     orch._agents[0].act.return_value = torch.tensor([0.5, 0.3])
     await orch.tick()
     orch._esp32.send_velocity.assert_awaited_once()
+
+
+def _make_orchestrator_with_mic() -> MouseDroidOrchestrator:
+    cfg = Settings(mock_hardware=True)
+
+    world_model = MagicMock()
+    world_model.observe_step.return_value = (
+        torch.zeros(1, cfg.model.hidden_dim),
+        torch.zeros(1, cfg.model.latent_dim),
+        torch.zeros(1, cfg.model.hidden_dim),
+        0.1,
+    )
+
+    agent = MagicMock()
+    agent.name = "test_agent"
+    agent.act.return_value = torch.tensor([0.1, 0.0, 0.0])
+
+    safety_ctx = SafetyContext(is_emergency=False)
+    safety_monitor = MagicMock()
+    safety_monitor.evaluate.return_value = safety_ctx
+
+    esp32 = AsyncMock()
+    esp32.read_encoders.return_value = EncoderReading()
+    esp32.get_battery_voltage.return_value = 12.0
+
+    camera = AsyncMock()
+    camera.capture_features.return_value = np.zeros(
+        cfg.camera.feature_dim, dtype=np.float32,
+    )
+
+    distance_sensor = MagicMock()
+    distance_sensor.max_range_m = 4.0
+    distance_sensor.read_distance_m = AsyncMock(return_value=1.5)
+
+    mic = AsyncMock()
+    mic.chunk_size = 1024
+    mic.channels = 1
+    mic.read_chunk.return_value = np.zeros(1024, dtype=np.float32)
+
+    return MouseDroidOrchestrator(
+        world_model=world_model,
+        agents=[agent],
+        safety_monitor=safety_monitor,
+        esp32=esp32,
+        camera=camera,
+        distance_sensor=distance_sensor,
+        cfg=cfg,
+        microphone=mic,
+    )
+
+
+async def test_start_with_microphone():
+    orch = _make_orchestrator_with_mic()
+    await orch.start()
+    orch._microphone.start.assert_awaited_once()
+    assert orch._running is True
+
+
+async def test_stop_with_microphone():
+    orch = _make_orchestrator_with_mic()
+    await orch.start()
+    await orch.stop()
+    orch._microphone.stop.assert_awaited_once()
+    assert orch._running is False
+
+
+async def test_sense_with_microphone():
+    orch = _make_orchestrator_with_mic()
+    obs = await orch._sense()
+    assert obs.valid_mask[3] == 1.0
+    orch._microphone.read_chunk.assert_awaited_once()
+
+
+async def test_sense_microphone_failure():
+    orch = _make_orchestrator_with_mic()
+    orch._microphone.read_chunk.side_effect = RuntimeError("mic fail")
+    obs = await orch._sense()
+    assert obs.valid_mask[3] == 0.0
+    np.testing.assert_array_equal(
+        obs.audio_chunk, np.zeros(1024, dtype=np.float32),
+    )
