@@ -25,7 +25,7 @@ def test_encoder_output_finite_for_finite_input(scale: float) -> None:
     vision = torch.full((1, cfg.vision_dim), scale)
     ultrasonic = torch.full((1, cfg.ultrasonic_dim), scale)
     motor = torch.full((1, cfg.motor_state_dim), scale)
-    mask = torch.ones(1, 3)
+    mask = torch.ones(1, 4)
     out = enc(vision, ultrasonic, motor, mask)
     assert torch.isfinite(out).all()
 
@@ -42,7 +42,7 @@ def test_rssm_observe_step_returns_finite(dist: float) -> None:
         _vision_features=np.zeros(cfg.vision_dim, dtype=np.float32),
         _distance_m=dist,
         _motor_state=np.zeros(cfg.motor_state_dim, dtype=np.float32),
-        _valid_mask=np.ones(3, dtype=np.float32),
+        _valid_mask=np.ones(4, dtype=np.float32),
     )
     h = torch.zeros(1, cfg.hidden_dim)
     z = torch.zeros(1, cfg.latent_dim)
@@ -97,6 +97,6 @@ def test_encoder_output_shape() -> None:
     vision = torch.randn(1, cfg.vision_dim)
     ultrasonic = torch.randn(1, cfg.ultrasonic_dim)
     motor = torch.randn(1, cfg.motor_state_dim)
-    mask = torch.ones(1, 3)
+    mask = torch.ones(1, 4)
     out = enc(vision, ultrasonic, motor, mask)
     assert out.shape == (1, cfg.obs_dim)

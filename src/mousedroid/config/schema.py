@@ -153,6 +153,7 @@ class LoopConfig(BaseModel):
     ultrasonic_hz: float = Field(20.0, gt=0, description="Ultrasonic read rate (Hz)")
     control_hz: float = Field(30.0, gt=0, description="Motor command rate (Hz)")
     planning_hz: float = Field(10.0, gt=0, description="MCTS planning rate (Hz)")
+    audio_hz: float = Field(16.0, gt=0, description="Microphone capture rate (Hz)")
 
 
 class MCTSConfig(BaseModel):
@@ -354,6 +355,17 @@ class TrainingConfig(BaseModel):
     weights_dir: str = Field("weights", description="Checkpoint output directory")
 
 
+class MicrophoneConfig(BaseModel):
+    """SuziePi USB 2.0 Mini Microphone configuration."""
+
+    device_index: int | None = Field(None, description="ALSA device index (None=auto-detect)")
+    device_name: str = Field("SuziePi", description="USB device name substring for auto-detect")
+    sample_rate: int = Field(16000, gt=0, description="Audio sample rate (Hz)")
+    channels: int = Field(1, gt=0, le=2, description="Audio channels (1=mono, 2=stereo)")
+    chunk_size: int = Field(1024, gt=0, description="Samples per read chunk")
+    format: Literal["float32", "int16"] = Field("float32", description="Audio sample format")
+
+
 class UltrasonicConfig(BaseModel):
     """HC-SR04 ultrasonic distance sensor configuration."""
 
@@ -406,6 +418,10 @@ class Settings(BaseSettings):
     ultrasonic: UltrasonicConfig | None = Field(
         None,
         description="Required if mock_hardware=false",
+    )
+    microphone: MicrophoneConfig | None = Field(
+        None,
+        description="USB microphone config (None=disabled)",
     )
     camera: CameraConfig = Field(default_factory=CameraConfig)  # type: ignore[arg-type]
     jetson: JetsonConfig = Field(default_factory=JetsonConfig)  # type: ignore[arg-type]

@@ -12,8 +12,8 @@ from dataclasses import dataclass, field
 import numpy as np
 from numpy.typing import NDArray
 
-_N_MODALITIES: int = 3
-"""Number of sensor modalities tracked: vision, ultrasonic, motor."""
+_N_MODALITIES: int = 4
+"""Number of sensor modalities tracked: vision, ultrasonic, motor, audio."""
 
 _DEFAULT_VISION_DIM: int = 256
 """Default vision feature dimension (mirrors ModelConfig.vision_dim)."""
@@ -23,6 +23,9 @@ _DEFAULT_MOTOR_STATE_DIM: int = 4
 
 _DEFAULT_MAX_DISTANCE_M: float = 4.0
 """Default max ultrasonic range in metres (mirrors UltrasonicConfig.max_range_m)."""
+
+_DEFAULT_AUDIO_CHUNK_SIZE: int = 1024
+"""Default audio chunk size in samples (mirrors MicrophoneConfig.chunk_size)."""
 
 
 @dataclass
@@ -37,6 +40,7 @@ class MouseDroidObservationBundle:
         * ``[0]`` — vision
         * ``[1]`` — ultrasonic
         * ``[2]`` — motor / ESP32
+        * ``[3]`` — audio / microphone
 
     Implements :class:`~mousedroid.sensing.protocol.ObservationProtocol`.
     """
@@ -56,6 +60,11 @@ class MouseDroidObservationBundle:
         default_factory=lambda: np.zeros(_DEFAULT_MOTOR_STATE_DIM, dtype=np.float32),
     )
     """Motor state ``[vx, vy, omega, battery_v]``, shape ``(4,)``."""
+
+    _audio_chunk: NDArray[np.float32] = field(
+        default_factory=lambda: np.zeros(_DEFAULT_AUDIO_CHUNK_SIZE, dtype=np.float32),
+    )
+    """Audio samples, shape ``(chunk_size * channels,)``."""
 
     _valid_mask: NDArray[np.float32] = field(
         default_factory=lambda: np.ones(_N_MODALITIES, dtype=np.float32),
@@ -83,6 +92,11 @@ class MouseDroidObservationBundle:
     def motor_state(self) -> NDArray[np.float32]:
         """Motor state ``[vx, vy, omega, battery_v]``, shape ``(4,)``."""
         return self._motor_state
+
+    @property
+    def audio_chunk(self) -> NDArray[np.float32]:
+        """Audio samples, shape ``(chunk_size * channels,)``."""
+        return self._audio_chunk
 
     @property
     def valid_mask(self) -> NDArray[np.float32]:

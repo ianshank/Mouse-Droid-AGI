@@ -22,7 +22,7 @@ def test_encoder_forward_under_50ms() -> None:
     vision = torch.randn(1, cfg.vision_dim)
     ultrasonic = torch.randn(1, cfg.ultrasonic_dim)
     motor = torch.randn(1, cfg.motor_state_dim)
-    mask = torch.ones(1, 3)
+    mask = torch.ones(1, 4)
 
     # Warm up
     enc(vision, ultrasonic, motor, mask)
@@ -43,7 +43,7 @@ def test_rssm_observe_step_under_100ms() -> None:
         _vision_features=np.zeros(cfg.vision_dim, dtype=np.float32),
         _distance_m=2.0,
         _motor_state=np.zeros(cfg.motor_state_dim, dtype=np.float32),
-        _valid_mask=np.ones(3, dtype=np.float32),
+        _valid_mask=np.ones(4, dtype=np.float32),
     )
     h = torch.zeros(1, cfg.hidden_dim)
     z = torch.zeros(1, cfg.latent_dim)
@@ -78,7 +78,7 @@ def test_observation_bundle_creation_under_1ms() -> None:
             _vision_features=np.zeros(256, dtype=np.float32),
             _distance_m=2.0,
             _motor_state=np.zeros(4, dtype=np.float32),
-            _valid_mask=np.ones(3, dtype=np.float32),
+            _valid_mask=np.ones(4, dtype=np.float32),
         )
     elapsed_ms = (time.perf_counter() - start) / 1000 * 1000
 
@@ -93,7 +93,7 @@ def test_safety_evaluate_under_5ms() -> None:
     obs = MouseDroidObservationBundle(
         _distance_m=2.0,
         _motor_state=np.array([0.0, 0.0, 0.0, 12.0], dtype=np.float32),
-        _valid_mask=np.ones(3, dtype=np.float32),
+        _valid_mask=np.ones(4, dtype=np.float32),
     )
 
     # Warm up

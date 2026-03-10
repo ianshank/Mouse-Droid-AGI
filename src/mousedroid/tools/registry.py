@@ -153,11 +153,37 @@ async def _system_info() -> dict[str, str]:
     }
 
 
+async def _mic_diagnostics() -> dict[str, str]:
+    """Run USB microphone diagnostics.
+
+    Returns:
+        Microphone diagnostic status.
+    """
+    try:
+        import pyaudio
+
+        pa = pyaudio.PyAudio()
+        device_count = pa.get_device_count()
+        input_devices = []
+        for i in range(device_count):
+            info = pa.get_device_info_by_index(i)
+            if int(info.get("maxInputChannels", 0)) > 0:
+                input_devices.append(str(info.get("name", f"device_{i}")))
+        pa.terminate()
+        return {
+            "status": "ok",
+            "device_count": str(device_count),
+            "input_devices": ", ".join(input_devices) or "none",
+        }
+    except ImportError:
+        return {"status": "pyaudio_not_installed"}
+
+
 def create_default_registry() -> ToolRegistry:
     """Create a ToolRegistry pre-populated with built-in tools.
 
     Returns:
-        Registry with all 8 default tools registered.
+        Registry with all 9 default tools registered.
     """
     registry = ToolRegistry()
     tools = [
@@ -169,6 +195,7 @@ def create_default_registry() -> ToolRegistry:
         ToolSpec("export_experience", "Export experience data", _export_experience),
         ToolSpec("translate_nl_mission", "Translate NL mission", _translate_nl_mission),
         ToolSpec("system_info", "Get system information", _system_info),
+        ToolSpec("mic_diagnostics", "Run USB microphone diagnostics", _mic_diagnostics),
     ]
     for tool in tools:
         registry.register(tool)

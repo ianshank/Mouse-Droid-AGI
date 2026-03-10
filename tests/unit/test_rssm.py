@@ -17,7 +17,7 @@ class MockObservationBundle:
     distance_m: float = 2.0
     motor_state: np.ndarray = None  # type: ignore[assignment]
     valid_mask: np.ndarray = None  # type: ignore[assignment]
-    n_modalities: int = 3
+    n_modalities: int = 4
 
     def __post_init__(self) -> None:
         if self.vision_features is None:
@@ -25,7 +25,7 @@ class MockObservationBundle:
         if self.motor_state is None:
             self.motor_state = np.zeros(4, dtype=np.float32)
         if self.valid_mask is None:
-            self.valid_mask = np.ones(3, dtype=np.float32)
+            self.valid_mask = np.ones(4, dtype=np.float32)
 
 
 @pytest.fixture

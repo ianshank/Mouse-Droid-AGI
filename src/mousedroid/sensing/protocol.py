@@ -36,6 +36,11 @@ class ObservationProtocol(Protocol):
         ...
 
     @property
+    def audio_chunk(self) -> NDArray[np.float32]:
+        """Audio samples, shape ``(chunk_size * channels,)``."""
+        ...
+
+    @property
     def valid_mask(self) -> NDArray[np.float32]:
         """Per-sensor validity scores, shape ``(n_modalities,)``."""
         ...

@@ -43,7 +43,7 @@ async def test_read_all_returns_bundle():
     bundle = await mgr.read_all()
     assert bundle.timestamp > 0
     assert bundle.distance_m == 1.5
-    np.testing.assert_array_equal(bundle.valid_mask, [1.0, 1.0, 1.0])
+    np.testing.assert_array_equal(bundle.valid_mask, [1.0, 1.0, 1.0, 0.0])
 
 
 async def test_read_all_handles_vision_failure():
@@ -65,3 +65,13 @@ async def test_read_all_handles_motor_failure():
     esp32.read_encoders.side_effect = RuntimeError("serial fail")
     bundle = await mgr.read_all()
     assert bundle.valid_mask[2] == 0.0
+
+
+async def test_read_all_microphone_none_backwards_compat():
+    """SensorManager with microphone=None still returns a 4-element valid_mask."""
+    mgr, _, _, _ = _make_manager()
+    # _make_manager does not pass a microphone, so it defaults to None
+    bundle = await mgr.read_all()
+    assert bundle.valid_mask.shape == (4,)
+    # Audio slot should be invalid when no microphone is configured
+    assert bundle.valid_mask[3] == 0.0

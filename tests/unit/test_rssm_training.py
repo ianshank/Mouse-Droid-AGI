@@ -75,7 +75,7 @@ class TestRSSMTrainingLoop:
         vision = torch.randn(batch_size, seq_len, cfg.vision_dim)
         ultrasonic = torch.randn(batch_size, seq_len, 1)
         motor_state = torch.randn(batch_size, seq_len, cfg.motor_state_dim)
-        valid_mask = torch.ones(batch_size, seq_len, 3)
+        valid_mask = torch.ones(batch_size, seq_len, 4)
         actions = torch.randn(batch_size, seq_len, cfg.action_dim)
 
         losses = []

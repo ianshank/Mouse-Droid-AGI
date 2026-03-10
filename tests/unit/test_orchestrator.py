@@ -54,6 +54,7 @@ def _make_orchestrator(
         camera=camera,
         distance_sensor=distance_sensor,
         cfg=cfg,
+        microphone=None,
     )
 
 

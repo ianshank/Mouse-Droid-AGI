@@ -89,7 +89,7 @@ def test_safety_monitor_human_detection_emergency():
     obs = MagicMock()
     obs.distance_m = 1.0  # clearance ok
     obs.motor_state = np.array([0.0, 0.0, 0.0, 12.0], dtype=np.float32)
-    obs.valid_mask = np.ones(3, dtype=np.float32)
+    obs.valid_mask = np.ones(4, dtype=np.float32)
     obs.human_detected = True
     obs.human_dist_m = 0.1  # closer than min_forward_clearance_m
 
