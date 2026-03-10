@@ -284,6 +284,51 @@ REMOTE
 
 # ---------------------------------------------------------------------------
 # Main
+
+print_sdcard_instructions() {
+    cat <<'SDCARD'
+
+=== SD CARD IMAGE METHOD (Recommended for Orin Nano Dev Kit) ===
+
+This method flashes a pre-built JetPack image directly to a microSD card.
+No recovery mode or SDK Manager required.
+
+--- Prerequisites ---
+    1. 64GB+ microSD card (A2/V30 rated recommended for performance)
+    2. Balena Etcher: https://etcher.balena.io/  (Windows/macOS/Linux)
+    3. QSPI firmware must be JetPack 6 compatible (L4T 36.x).
+       If your board has factory firmware (L4T 35.x or older),
+       run: sudo bash scripts/jetson_qspi_update.sh  FIRST.
+
+--- Steps ---
+    1. Download the JetPack SD card image from:
+       https://developer.nvidia.com/embedded/jetpack
+       Select: Jetson Orin Nano Developer Kit -> SD Card Image Method
+       File: Jetson_Orin_Nano_Developer_Kit_SD_Card_Image.zip (~15GB)
+
+    2. Open Balena Etcher:
+       - Click "Flash from file" -> select the downloaded .zip
+       - Click "Select target" -> choose the microSD card (e.g. D:)
+       - Click "Flash!" and wait for completion + verification
+
+    3. IMPORTANT: When Windows prompts to format the card, click CANCEL.
+       Windows cannot read Linux ext4 partitions — this is normal.
+
+    4. Safely eject the SD card from your computer.
+
+    5. Insert into the Jetson Orin Nano and power on.
+
+    6. Complete the Ubuntu first-boot wizard (user, timezone, WiFi).
+       Create user: jetson  (matches all deployment scripts)
+
+--- After First Boot ---
+    Connect via USB device mode:  ssh jetson@192.168.55.1
+    Or run:  bash scripts/jetson_discover.sh
+    Then:    bash scripts/jetson_bootstrap.sh <IP>
+    Then:    bash scripts/deploy_remote.sh <IP> --full
+
+SDCARD
+}
 # ---------------------------------------------------------------------------
 
 case "${1:-}" in
@@ -305,6 +350,7 @@ case "${1:-}" in
     --verify)
         do_verify
         ;;
+    --sdcard)        print_sdcard_instructions        ;;
     --wait)
         wait_for_boot "${2:-${JETSON_IP}}"
         ;;
@@ -325,3 +371,4 @@ case "${1:-}" in
         echo "  JETSON_IP          Jetson IP (default: ${JETSON_IP})"
         ;;
 esac
+
