@@ -47,9 +47,9 @@ async def test_dispatch_unknown_tool_raises(registry: ToolRegistry) -> None:
         await registry.dispatch("nonexistent")
 
 
-def test_create_default_registry_has_8_tools() -> None:
+def test_create_default_registry_has_9_tools() -> None:
     reg = create_default_registry()
-    assert len(reg) == 8
+    assert len(reg) == 9
 
 
 def test_names_property(registry: ToolRegistry) -> None:
@@ -130,3 +130,10 @@ async def test_dispatch_system_info() -> None:
     assert "platform" in result
     assert "python" in result
     assert "machine" in result
+
+
+@pytest.mark.asyncio
+async def test_dispatch_mic_diagnostics() -> None:
+    reg = create_default_registry()
+    result = await reg.dispatch("mic_diagnostics")
+    assert "status" in result

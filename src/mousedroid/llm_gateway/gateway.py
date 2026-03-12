@@ -63,11 +63,10 @@ class LLMGateway:
         r"(ignore (previous|above|all) instructions?|system prompt|you are now)",
         re.IGNORECASE,
     )
-    _MAX_COMMAND_LEN = 512
 
     def _sanitize_command(self, text: str) -> str:
         """Sanitize NL command to mitigate prompt injection."""
-        text = text.strip()[: self._MAX_COMMAND_LEN]
+        text = text.strip()[: self._cfg.max_command_len]
         if self._INJECTION_RE.search(text):
             msg = "Mission command contains disallowed content"
             raise ValueError(msg)

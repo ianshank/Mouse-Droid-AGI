@@ -1,4 +1,4 @@
-"""Hardware abstraction protocols for vision and distance sensors.
+"""Hardware abstraction protocols for vision, distance, and audio sensors.
 
 All hardware interfaces use ``@runtime_checkable`` structural typing.
 """
@@ -57,4 +57,40 @@ class DistanceSensorProtocol(Protocol):
     @property
     def min_range_m(self) -> float:
         """Minimum detection range in metres."""
+        ...
+
+
+@runtime_checkable
+class AudioProtocol(Protocol):
+    """Interface for all audio input drivers (USB microphone, mock, etc)."""
+
+    async def read_chunk(self) -> NDArray[np.float32]:
+        """Read one chunk of audio samples.
+
+        Returns:
+            Audio samples, shape ``(chunk_size * channels,)``.
+        """
+        ...
+
+    @property
+    def sample_rate(self) -> int:
+        """Audio sample rate in Hz."""
+        ...
+
+    @property
+    def channels(self) -> int:
+        """Number of audio channels (1=mono, 2=stereo)."""
+        ...
+
+    @property
+    def chunk_size(self) -> int:
+        """Number of samples per chunk."""
+        ...
+
+    async def start(self) -> None:
+        """Start audio capture stream."""
+        ...
+
+    async def stop(self) -> None:
+        """Stop audio capture stream."""
         ...

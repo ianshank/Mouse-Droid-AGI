@@ -10,7 +10,7 @@ from mousedroid.sensing.bundle import MouseDroidObservationBundle
 def test_default_values():
     obs = MouseDroidObservationBundle()
     assert obs.distance_m == 4.0
-    assert obs.n_modalities == 3
+    assert obs.n_modalities == 4
 
 
 def test_timestamp_is_monotonic():
@@ -37,18 +37,18 @@ def test_motor_state_shape():
 
 def test_valid_mask_shape():
     obs = MouseDroidObservationBundle()
-    assert obs.valid_mask.shape == (3,)
+    assert obs.valid_mask.shape == (4,)
 
 
 def test_valid_mask_defaults_to_ones():
     obs = MouseDroidObservationBundle()
-    np.testing.assert_array_equal(obs.valid_mask, np.ones(3, dtype=np.float32))
+    np.testing.assert_array_equal(obs.valid_mask, np.ones(4, dtype=np.float32))
 
 
 def test_custom_values():
     vision = np.ones(128, dtype=np.float32)
     motor = np.array([0.1, 0.2, 0.3, 12.0], dtype=np.float32)
-    mask = np.array([1.0, 0.0, 1.0], dtype=np.float32)
+    mask = np.array([1.0, 0.0, 1.0, 0.0], dtype=np.float32)
     obs = MouseDroidObservationBundle(
         _vision_features=vision,
         _distance_m=1.5,
@@ -60,6 +60,22 @@ def test_custom_values():
     np.testing.assert_array_equal(obs.motor_state, motor)
 
 
-def test_n_modalities_equals_3():
+def test_n_modalities_equals_4():
     obs = MouseDroidObservationBundle()
-    assert obs.n_modalities == 3
+    assert obs.n_modalities == 4
+
+
+def test_audio_chunk_shape():
+    obs = MouseDroidObservationBundle()
+    assert obs.audio_chunk.shape == (1024,)
+
+
+def test_audio_chunk_dtype():
+    obs = MouseDroidObservationBundle()
+    assert obs.audio_chunk.dtype == np.float32
+
+
+def test_audio_chunk_custom():
+    audio = np.ones(512, dtype=np.float32) * 0.5
+    obs = MouseDroidObservationBundle(_audio_chunk=audio)
+    np.testing.assert_array_equal(obs.audio_chunk, audio)

@@ -26,6 +26,10 @@ hardware = [
     "Jetson.GPIO>=2.1",
     "pyserial>=3.5",
     "picamera2>=0.3",
+    "pyaudio>=0.2.13",
+]
+audio = [
+    "pyaudio>=0.2.13",
 ]
 jetson = [
     "tensorrt>=8.0",
@@ -64,7 +68,7 @@ select = [
 ignore = ["D100", "D104", "D107", "D203", "D213", "S101", "ANN401", "TCH", "TC"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["D", "ANN", "S101", "S108"]
+"tests/**/*.py" = ["D", "ANN", "S101", "S108", "S603"]
 "tools/**/*.py" = ["D", "ANN", "T20"]
 
 [tool.ruff.lint.pydocstyle]
@@ -107,6 +111,7 @@ omit = [
     "*/main.py",
     "*/hardware/sensors/ultrasonic.py",
     "*/hardware/camera/imx500.py",
+    "*/hardware/audio/usb_microphone.py",
 ]
 
 [tool.coverage.report]

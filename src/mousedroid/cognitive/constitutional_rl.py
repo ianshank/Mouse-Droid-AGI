@@ -13,8 +13,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from numpy.typing import NDArray
 
-from mousedroid.common.math.numpy_ops import layer_norm as _layer_norm
-from mousedroid.common.math.numpy_ops import relu as _relu
+from mousedroid.constants import POLICY_MLP_SEED, VALUE_MLP_SEED, WEIGHT_INIT_SCALE
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
@@ -245,11 +244,11 @@ class PolicyMLP:
     """
 
     def __init__(self, input_dim: int = 128, action_dim: int = 2) -> None:
-        rng = np.random.default_rng(100)
+        rng = np.random.default_rng(POLICY_MLP_SEED)
         hidden = _POLICY_HIDDEN_DIM
-        self._w1 = rng.standard_normal((input_dim, hidden)).astype(np.float32) * 0.01
+        self._w1 = rng.standard_normal((input_dim, hidden)).astype(np.float32) * WEIGHT_INIT_SCALE
         self._b1 = np.zeros(hidden, dtype=np.float32)
-        self._w2 = rng.standard_normal((hidden, action_dim)).astype(np.float32) * 0.01
+        self._w2 = rng.standard_normal((hidden, action_dim)).astype(np.float32) * WEIGHT_INIT_SCALE
         self._b2 = np.zeros(action_dim, dtype=np.float32)
 
     def forward(self, state: NDArray[np.floating[Any]]) -> NDArray[np.floating[Any]]:
@@ -297,11 +296,11 @@ class ValueMLP:
     """
 
     def __init__(self, input_dim: int = 128) -> None:
-        rng = np.random.default_rng(101)
+        rng = np.random.default_rng(VALUE_MLP_SEED)
         hidden = _POLICY_HIDDEN_DIM
-        self._w1 = rng.standard_normal((input_dim, hidden)).astype(np.float32) * 0.01
+        self._w1 = rng.standard_normal((input_dim, hidden)).astype(np.float32) * WEIGHT_INIT_SCALE
         self._b1 = np.zeros(hidden, dtype=np.float32)
-        self._w2 = rng.standard_normal((hidden, 1)).astype(np.float32) * 0.01
+        self._w2 = rng.standard_normal((hidden, 1)).astype(np.float32) * WEIGHT_INIT_SCALE
         self._b2 = np.zeros(1, dtype=np.float32)
 
     def forward(self, state: NDArray[np.floating[Any]]) -> float:

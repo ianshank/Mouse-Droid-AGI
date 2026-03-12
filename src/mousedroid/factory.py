@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 from mousedroid.agents.base import AgentProtocol
 from mousedroid.comms.protocol import ESP32CommProtocol
-from mousedroid.hardware.protocols import DistanceSensorProtocol, VisionProtocol
+from mousedroid.hardware.protocols import AudioProtocol, DistanceSensorProtocol, VisionProtocol
 from mousedroid.logging.setup import get_logger
 from mousedroid.safety.protocol import SafetyMonitorProtocol
 from mousedroid.world_model.protocol import WorldModelProtocol
@@ -24,25 +24,34 @@ _log = get_logger(__name__)
 def build_esp32_driver(cfg: Settings) -> ESP32CommProtocol:
     """Build ESP32 communication driver based on config.
 
+    Wraps the underlying driver with circuit breaker + retry for
+    fault tolerance.  The wrapper implements ``ESP32CommProtocol``
+    so the orchestrator doesn't need to know about it.
+
     Args:
         cfg: Root settings.
 
     Returns:
         ESP32 driver conforming to ``ESP32CommProtocol``.
     """
+    inner: ESP32CommProtocol
+
     if cfg.mock_hardware:
         from mousedroid.comms.mock_driver import MockESP32Driver
 
-        return MockESP32Driver(cfg.esp32)
-
-    if cfg.esp32.protocol == "serial":
+        inner = MockESP32Driver(cfg.esp32)
+    elif cfg.esp32.protocol == "serial":
         from mousedroid.comms.serial_driver import SerialESP32Driver
 
-        return SerialESP32Driver(cfg.esp32)
+        inner = SerialESP32Driver(cfg.esp32)
+    else:
+        from mousedroid.comms.wifi_driver import WiFiESP32Driver
 
-    from mousedroid.comms.wifi_driver import WiFiESP32Driver
+        inner = WiFiESP32Driver(cfg.esp32)
 
-    return WiFiESP32Driver(cfg.esp32)
+    from mousedroid.resilience.resilient_driver import ResilientESP32Driver
+
+    return ResilientESP32Driver(inner, cfg.retry, cfg.circuit_breaker)
 
 
 def build_camera(cfg: Settings) -> VisionProtocol:
@@ -114,6 +123,28 @@ def build_distance_sensor(cfg: Settings) -> DistanceSensorProtocol:
     return HcSr04(cfg.ultrasonic)
 
 
+def build_microphone(cfg: Settings) -> AudioProtocol | None:
+    """Build USB microphone driver based on config.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Microphone driver conforming to ``AudioProtocol``, or None if disabled.
+    """
+    if cfg.microphone is None:
+        return None
+
+    if cfg.mock_hardware:
+        from mousedroid.hardware.audio.mock_microphone import MockMicrophone
+
+        return MockMicrophone(cfg.microphone)
+
+    from mousedroid.hardware.audio.usb_microphone import UsbMicrophone
+
+    return UsbMicrophone(cfg.microphone)
+
+
 def build_world_model(cfg: Settings) -> WorldModelProtocol:
     """Build world model for configured platform.
 
@@ -174,6 +205,7 @@ def build_orchestrator(cfg: Settings) -> object:
     esp32 = build_esp32_driver(cfg)
     camera = build_camera(cfg)
     distance = build_distance_sensor(cfg)
+    microphone = build_microphone(cfg)
     return MouseDroidOrchestrator(
         world_model=wm,
         agents=[agent],
@@ -181,5 +213,6 @@ def build_orchestrator(cfg: Settings) -> object:
         esp32=esp32,
         camera=camera,
         distance_sensor=distance,
+        microphone=microphone,
         cfg=cfg,
     )

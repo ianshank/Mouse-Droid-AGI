@@ -18,7 +18,7 @@ def _make_obs(
     valid_mask: list[float] | None = None,
 ) -> MouseDroidObservationBundle:
     motor = np.array([0.0, 0.0, 0.0, battery_v], dtype=np.float32)
-    mask = np.array(valid_mask or [1.0, 1.0, 1.0], dtype=np.float32)
+    mask = np.array(valid_mask or [1.0, 1.0, 1.0, 1.0], dtype=np.float32)
     return MouseDroidObservationBundle(
         _distance_m=distance_m,
         _motor_state=motor,
@@ -110,7 +110,7 @@ def test_evaluate_all_fields_populated():
     assert ctx.ultrasonic_dist_m == 1.5
     assert ctx.battery_voltage == 11.5
     assert ctx.loop_time_ms == 25.0
-    assert ctx.valid_sensor_count == 3
+    assert ctx.valid_sensor_count == 4
     assert ctx.forward_clearance_ok is True
 
 
@@ -145,3 +145,109 @@ def test_evaluate_multiple_emergency_conditions():
     ctx = m.evaluate(obs, loop_time_ms=500.0)
     assert ctx.is_emergency is True
     assert ctx.forward_clearance_ok is False
+
+
+# -- Sensor staleness -------------------------------------------------------
+
+
+def _make_obs_at(
+    timestamp: float,
+    distance_m: float = 2.0,
+    battery_v: float = 12.0,
+    valid_mask: list[float] | None = None,
+) -> MouseDroidObservationBundle:
+    motor = np.array([0.0, 0.0, 0.0, battery_v], dtype=np.float32)
+    mask = np.array(valid_mask or [1.0, 1.0, 1.0, 1.0], dtype=np.float32)
+    return MouseDroidObservationBundle(
+        _timestamp=timestamp,
+        _distance_m=distance_m,
+        _motor_state=motor,
+        _valid_mask=mask,
+    )
+
+
+def test_stale_sensor_detected():
+    """Stale sensor (exceeds threshold) triggers is_emergency."""
+    m = _make_monitor(sensor_stale_s=0.5)
+
+    # First tick: sensor 0 is valid at t=100.0
+    obs1 = _make_obs_at(100.0, valid_mask=[1.0, 1.0, 1.0, 1.0])
+    m.evaluate(obs1, loop_time_ms=10.0)
+
+    # Second tick: sensor 0 goes invalid at t=101.0 (1.0s > 0.5s threshold)
+    obs2 = _make_obs_at(101.0, valid_mask=[0.0, 1.0, 1.0, 1.0])
+    ctx = m.evaluate(obs2, loop_time_ms=10.0)
+    assert ctx.is_emergency is True
+
+
+def test_fresh_sensor_not_flagged_stale():
+    """Sensor that just went invalid (below threshold) does not trigger emergency."""
+    m = _make_monitor(sensor_stale_s=1.0)
+
+    obs1 = _make_obs_at(100.0, valid_mask=[1.0, 1.0, 1.0, 1.0])
+    m.evaluate(obs1, loop_time_ms=10.0)
+
+    # Sensor 0 invalid but only 0.1s elapsed — not stale yet
+    obs2 = _make_obs_at(100.1, valid_mask=[0.0, 1.0, 1.0, 1.0])
+    ctx = m.evaluate(obs2, loop_time_ms=10.0)
+    assert ctx.is_emergency is False
+
+
+def test_staleness_threshold_from_config():
+    """Different sensor_stale_s configs produce different emergency outcomes."""
+    obs1 = _make_obs_at(100.0, valid_mask=[1.0, 1.0, 1.0, 1.0])
+    obs2 = _make_obs_at(100.2, valid_mask=[0.0, 1.0, 1.0, 1.0])
+
+    # Short threshold: 0.1s — 0.2s gap IS stale → emergency
+    m_short = _make_monitor(sensor_stale_s=0.1)
+    m_short.evaluate(obs1, loop_time_ms=10.0)
+    ctx = m_short.evaluate(obs2, loop_time_ms=10.0)
+    assert ctx.is_emergency is True
+
+    # Long threshold: 10.0s — same gap is NOT stale → no emergency
+    m_long = _make_monitor(sensor_stale_s=10.0)
+    m_long.evaluate(obs1, loop_time_ms=10.0)
+    ctx2 = m_long.evaluate(obs2, loop_time_ms=10.0)
+    assert ctx2.is_emergency is False
+
+
+def test_staleness_tracks_per_sensor():
+    """Each sensor has its own staleness timestamp; stale sensor triggers emergency."""
+    m = _make_monitor(sensor_stale_s=0.5)
+
+    obs1 = _make_obs_at(100.0, valid_mask=[1.0, 1.0, 1.0, 1.0])
+    m.evaluate(obs1, loop_time_ms=10.0)
+
+    # Sensor 0 goes stale (1s > 0.5s) → emergency
+    obs2 = _make_obs_at(101.0, valid_mask=[0.0, 1.0, 1.0, 1.0])
+    ctx2 = m.evaluate(obs2, loop_time_ms=10.0)
+    assert ctx2.is_emergency is True
+
+    # Sensor 0 comes back valid; sensor 1 now stale → still emergency
+    obs3 = _make_obs_at(102.0, valid_mask=[1.0, 0.0, 1.0, 1.0])
+    ctx3 = m.evaluate(obs3, loop_time_ms=10.0)
+    assert ctx3.is_emergency is True
+
+
+# -- max_loop_time_ms from config ------------------------------------------
+
+
+def test_max_loop_time_from_config():
+    """max_loop_time_ms should come from config, not hardcoded."""
+    m = _make_monitor(max_loop_time_ms=100.0)
+    obs = _make_obs()
+    # 150ms exceeds 100ms config threshold
+    ctx = m.evaluate(obs, loop_time_ms=150.0)
+    assert ctx.is_emergency is True
+
+
+def test_backwards_compatible_default_loop_time():
+    """Default max_loop_time_ms is 200.0 (matches old hardcoded value)."""
+    m = _make_monitor()  # no max_loop_time_ms override
+    obs = _make_obs()
+    # 199ms should be safe (below default 200ms)
+    ctx = m.evaluate(obs, loop_time_ms=199.0)
+    assert ctx.is_emergency is False
+    # 201ms should trigger emergency
+    ctx2 = m.evaluate(obs, loop_time_ms=201.0)
+    assert ctx2.is_emergency is True

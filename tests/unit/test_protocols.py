@@ -10,7 +10,7 @@ from torch import Tensor
 from mousedroid.agents.base import AgentProtocol
 from mousedroid.comms.protocol import EncoderReading, ESP32CommProtocol
 from mousedroid.experience.protocol import ExperienceProtocol
-from mousedroid.hardware.protocols import DistanceSensorProtocol, VisionProtocol
+from mousedroid.hardware.protocols import AudioProtocol, DistanceSensorProtocol, VisionProtocol
 from mousedroid.llm_gateway.protocol import GoalVector, LLMGatewayProtocol
 from mousedroid.safety.context import SafetyContext
 from mousedroid.safety.protocol import SafetyMonitorProtocol
@@ -85,6 +85,29 @@ class _MockESP32Comm:
         pass
 
 
+class _MockAudio:
+    async def read_chunk(self) -> NDArray[np.float32]:
+        return np.zeros(1024, dtype=np.float32)
+
+    @property
+    def sample_rate(self) -> int:
+        return 16000
+
+    @property
+    def channels(self) -> int:
+        return 1
+
+    @property
+    def chunk_size(self) -> int:
+        return 1024
+
+    async def start(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        pass
+
+
 class _MockObservation:
     @property
     def timestamp(self) -> float:
@@ -103,12 +126,16 @@ class _MockObservation:
         return np.zeros(4, dtype=np.float32)
 
     @property
+    def audio_chunk(self) -> NDArray[np.float32]:
+        return np.zeros(1024, dtype=np.float32)
+
+    @property
     def valid_mask(self) -> NDArray[np.float32]:
-        return np.ones(3, dtype=np.float32)
+        return np.ones(4, dtype=np.float32)
 
     @property
     def n_modalities(self) -> int:
-        return 3
+        return 4
 
 
 class _MockWorldModel:
@@ -190,6 +217,10 @@ def test_esp32_comm_protocol_isinstance():
     assert isinstance(_MockESP32Comm(), ESP32CommProtocol)
 
 
+def test_audio_protocol_isinstance():
+    assert isinstance(_MockAudio(), AudioProtocol)
+
+
 def test_observation_protocol_isinstance():
     assert isinstance(_MockObservation(), ObservationProtocol)
 
@@ -235,6 +266,10 @@ def test_non_conforming_not_esp32_comm():
 
 def test_non_conforming_not_observation():
     assert not isinstance(_Empty(), ObservationProtocol)
+
+
+def test_non_conforming_not_audio():
+    assert not isinstance(_Empty(), AudioProtocol)
 
 
 def test_non_conforming_not_agent():

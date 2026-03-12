@@ -9,16 +9,7 @@ import asyncio
 import json
 from typing import TYPE_CHECKING, Any
 
-from mousedroid.comms._utils import (
-    ESP32_CMD_TYPE_BATTERY,
-    ESP32_CMD_TYPE_STOP,
-    ESP32_CMD_TYPE_VELOCITY,
-    MAX_PWM,
-)
-from mousedroid.comms._utils import (
-    clamp as _clamp,
-)
-from mousedroid.comms.protocol import EncoderReading
+from mousedroid.comms.base_driver import BaseESP32Driver
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
@@ -32,10 +23,13 @@ except ImportError:  # pragma: no cover
 _log = get_logger(__name__)
 
 
-class SerialESP32Driver:
+class SerialESP32Driver(BaseESP32Driver):
     """ESP32 driver using serial UART, implementing ``ESP32CommProtocol``.
 
     All blocking serial I/O is delegated to ``asyncio.to_thread``.
+    High-level protocol methods (``send_velocity``, ``read_encoders``,
+    ``get_battery_voltage``, ``emergency_stop``) are inherited from
+    ``BaseESP32Driver``.
     """
 
     def __init__(self, cfg: ESP32Config) -> None:
@@ -44,13 +38,10 @@ class SerialESP32Driver:
         Args:
             cfg: ESP32 communication configuration.
         """
-        self._cfg = cfg
+        super().__init__(cfg)
         self._port: str = cfg.serial_port
         self._baud: int = cfg.serial_baud
-        self._timeout: float = cfg.command_timeout_s
         self._serial: Any = None
-        self._connected: bool = False
-        self._last_velocity: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     async def connect(self) -> None:
         """Open serial connection to ESP32."""
@@ -81,64 +72,42 @@ class SerialESP32Driver:
         self._serial.close()
         self._serial = None
 
-    async def send_velocity(self, vx: float, vy: float, omega: float) -> None:
-        """Send velocity command as PWM values over serial.
+    # ------------------------------------------------------------------
+    # Transport implementation
+    # ------------------------------------------------------------------
+
+    async def _send_command(self, cmd: dict[str, int]) -> None:
+        """Write a JSON command to the serial port.
 
         Args:
-            vx: Forward velocity in m/s.
-            vy: Lateral velocity in m/s.
-            omega: Angular velocity in rad/s.
+            cmd: Command dictionary to serialise and send.
         """
-        max_vel = self._cfg.max_velocity_mps
-        pwm_vx = int(_clamp(vx / max_vel, -1.0, 1.0) * MAX_PWM)
-        pwm_vy = int(_clamp(vy / max_vel, -1.0, 1.0) * MAX_PWM)
-        pwm_omega = int(_clamp(omega / self._cfg.max_omega_rads, -1.0, 1.0) * MAX_PWM)
-        cmd: dict[str, int] = {
-            "T": ESP32_CMD_TYPE_VELOCITY,
-            "vx": pwm_vx,
-            "vy": pwm_vy,
-            "omega": pwm_omega,
-        }
         await self._send_json(cmd)
-        self._last_velocity = (vx, vy, omega)
-        _log.debug("serial_velocity_sent", vx=vx, vy=vy, omega=omega)
 
-    async def read_encoders(self) -> EncoderReading:
-        """Read encoder data as JSON from serial.
+    async def _query_data(
+        self,
+        resource: str,
+        cmd: dict[str, int] | None = None,
+    ) -> dict[str, Any]:
+        """Send an optional command then read one JSON line from serial.
+
+        For serial, the ESP32 responds on the same channel so a preceding
+        command is required when the device needs to be polled (e.g. battery).
+
+        Args:
+            resource: Logical resource name (unused for serial, present for
+                interface compatibility).
+            cmd: Optional command to send before reading the response.
 
         Returns:
-            ``EncoderReading`` parsed from ESP32 response.
+            Parsed JSON response dictionary.
         """
-        data = await self._read_json()
-        return EncoderReading(
-            left_velocity_mps=float(data.get("lv", 0.0)),
-            right_velocity_mps=float(data.get("rv", 0.0)),
-            odometry_x_m=float(data.get("ox", 0.0)),
-            odometry_y_m=float(data.get("oy", 0.0)),
-            heading_rad=float(data.get("h", 0.0)),
-            timestamp=float(data.get("ts", 0.0)),
-        )
-
-    async def get_battery_voltage(self) -> float:
-        """Query battery voltage from ESP32 ADC.
-
-        Returns:
-            Battery voltage in volts.
-        """
-        cmd: dict[str, int] = {"T": ESP32_CMD_TYPE_BATTERY}
-        await self._send_json(cmd)
-        data = await self._read_json()
-        return float(data.get("v", 0.0))
-
-    async def emergency_stop(self) -> None:
-        """Send emergency stop command over serial."""
-        cmd: dict[str, int] = {"T": ESP32_CMD_TYPE_STOP}
-        await self._send_json(cmd)
-        self._last_velocity = (0.0, 0.0, 0.0)
-        _log.warning("serial_emergency_stop")
+        if cmd is not None:
+            await self._send_json(cmd)
+        return await self._read_json()
 
     # ------------------------------------------------------------------
-    # Internal helpers
+    # Low-level serial helpers
     # ------------------------------------------------------------------
 
     async def _send_json(self, data: dict[str, Any]) -> None:

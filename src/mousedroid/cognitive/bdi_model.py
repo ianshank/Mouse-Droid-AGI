@@ -14,8 +14,14 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from mousedroid.common.math.numpy_ops import relu as _relu
-from mousedroid.common.math.numpy_ops import softmax as _safe_softmax_impl
+from mousedroid.constants import (
+    AFFECT_ESTIMATOR_SEED,
+    BELIEF_ENCODER_SEED,
+    DEFAULT_VISION_DIM,
+    DESIRE_ENCODER_SEED,
+    INTENTION_PREDICTOR_SEED,
+    WEIGHT_INIT_SCALE,
+)
 from mousedroid.logging.setup import get_logger
 
 _log = get_logger(__name__)
@@ -132,10 +138,16 @@ class BeliefEncoder:
             self._w2: NDArray[np.floating[Any]] = data["w2"]
             self._b2: NDArray[np.floating[Any]] = data["b2"]
         else:
-            rng = np.random.default_rng(42)
-            self._w1 = rng.standard_normal((256, _BELIEF_DIM)).astype(np.float32) * 0.01
+            rng = np.random.default_rng(BELIEF_ENCODER_SEED)
+            self._w1 = (
+                rng.standard_normal((DEFAULT_VISION_DIM, _BELIEF_DIM)).astype(np.float32)
+                * WEIGHT_INIT_SCALE
+            )
             self._b1 = np.zeros(_BELIEF_DIM, dtype=np.float32)
-            self._w2 = rng.standard_normal((_BELIEF_DIM, _BELIEF_DIM)).astype(np.float32) * 0.01
+            self._w2 = (
+                rng.standard_normal((_BELIEF_DIM, _BELIEF_DIM)).astype(np.float32)
+                * WEIGHT_INIT_SCALE
+            )
             self._b2 = np.zeros(_BELIEF_DIM, dtype=np.float32)
 
     def forward(self, x: NDArray[np.floating[Any]]) -> NDArray[np.floating[Any]]:
@@ -164,8 +176,11 @@ class DesireEncoder:
             self._w1: NDArray[np.floating[Any]] = data["w1"]
             self._b1: NDArray[np.floating[Any]] = data["b1"]
         else:
-            rng = np.random.default_rng(43)
-            self._w1 = rng.standard_normal((_BELIEF_DIM, _DESIRE_DIM)).astype(np.float32) * 0.01
+            rng = np.random.default_rng(DESIRE_ENCODER_SEED)
+            self._w1 = (
+                rng.standard_normal((_BELIEF_DIM, _DESIRE_DIM)).astype(np.float32)
+                * WEIGHT_INIT_SCALE
+            )
             self._b1 = np.zeros(_DESIRE_DIM, dtype=np.float32)
 
     def forward(self, belief: NDArray[np.floating[Any]]) -> NDArray[np.floating[Any]]:
@@ -204,8 +219,10 @@ class IntentionPredictor:
             self._w1: NDArray[np.floating[Any]] = data["w1"]
             self._b1: NDArray[np.floating[Any]] = data["b1"]
         else:
-            rng = np.random.default_rng(44)
-            self._w1 = rng.standard_normal((desire_dim, n_classes)).astype(np.float32) * 0.01
+            rng = np.random.default_rng(INTENTION_PREDICTOR_SEED)
+            self._w1 = (
+                rng.standard_normal((desire_dim, n_classes)).astype(np.float32) * WEIGHT_INIT_SCALE
+            )
             self._b1 = np.zeros(n_classes, dtype=np.float32)
 
     @property
@@ -252,8 +269,10 @@ class AffectEstimator:
             self._b1: NDArray[np.floating[Any]] = data["b1"]
         else:
             input_dim = desire_dim + n_classes
-            rng = np.random.default_rng(45)
-            self._w1 = rng.standard_normal((input_dim, affect_dim)).astype(np.float32) * 0.01
+            rng = np.random.default_rng(AFFECT_ESTIMATOR_SEED)
+            self._w1 = (
+                rng.standard_normal((input_dim, affect_dim)).astype(np.float32) * WEIGHT_INIT_SCALE
+            )
             self._b1 = np.zeros(affect_dim, dtype=np.float32)
 
     def forward(

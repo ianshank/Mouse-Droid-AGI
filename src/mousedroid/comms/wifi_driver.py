@@ -10,15 +10,7 @@ import json
 import urllib.request
 from typing import TYPE_CHECKING, Any
 
-from mousedroid.comms._utils import (
-    ESP32_CMD_TYPE_STOP,
-    ESP32_CMD_TYPE_VELOCITY,
-    MAX_PWM,
-)
-from mousedroid.comms._utils import (
-    clamp as _clamp,
-)
-from mousedroid.comms.protocol import EncoderReading
+from mousedroid.comms.base_driver import BaseESP32Driver
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
@@ -27,10 +19,13 @@ if TYPE_CHECKING:
 _log = get_logger(__name__)
 
 
-class WiFiESP32Driver:
+class WiFiESP32Driver(BaseESP32Driver):
     """ESP32 driver using WiFi HTTP, implementing ``ESP32CommProtocol``.
 
     All blocking HTTP I/O is delegated to ``asyncio.to_thread``.
+    High-level protocol methods (``send_velocity``, ``read_encoders``,
+    ``get_battery_voltage``, ``emergency_stop``) are inherited from
+    ``BaseESP32Driver``.
     """
 
     def __init__(self, cfg: ESP32Config) -> None:
@@ -39,11 +34,8 @@ class WiFiESP32Driver:
         Args:
             cfg: ESP32 communication configuration.
         """
-        self._cfg = cfg
+        super().__init__(cfg)
         self._base_url: str = f"http://{cfg.wifi_host}:{cfg.wifi_port}"
-        self._timeout: float = cfg.command_timeout_s
-        self._connected: bool = False
-        self._last_velocity: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     async def connect(self) -> None:
         """Mark connection as established (HTTP is stateless)."""
@@ -55,62 +47,40 @@ class WiFiESP32Driver:
         self._connected = False
         _log.info("wifi_esp32_disconnected")
 
-    async def send_velocity(self, vx: float, vy: float, omega: float) -> None:
-        """Send velocity command as PWM values over HTTP POST.
+    # ------------------------------------------------------------------
+    # Transport implementation
+    # ------------------------------------------------------------------
+
+    async def _send_command(self, cmd: dict[str, int]) -> None:
+        """POST a JSON command to the ESP32 ``/cmd`` endpoint.
 
         Args:
-            vx: Forward velocity in m/s.
-            vy: Lateral velocity in m/s.
-            omega: Angular velocity in rad/s.
+            cmd: Command dictionary to serialise and POST.
         """
-        max_vel = self._cfg.max_velocity_mps
-        pwm_vx = int(_clamp(vx / max_vel, -1.0, 1.0) * MAX_PWM)
-        pwm_vy = int(_clamp(vy / max_vel, -1.0, 1.0) * MAX_PWM)
-        pwm_omega = int(_clamp(omega / self._cfg.max_omega_rads, -1.0, 1.0) * MAX_PWM)
-        cmd: dict[str, int] = {
-            "T": ESP32_CMD_TYPE_VELOCITY,
-            "vx": pwm_vx,
-            "vy": pwm_vy,
-            "omega": pwm_omega,
-        }
         await self._post_json("/cmd", cmd)
-        self._last_velocity = (vx, vy, omega)
-        _log.debug("wifi_velocity_sent", vx=vx, vy=vy, omega=omega)
 
-    async def read_encoders(self) -> EncoderReading:
-        """Read encoder data via HTTP GET.
+    async def _query_data(
+        self,
+        resource: str,
+        cmd: dict[str, int] | None = None,
+    ) -> dict[str, Any]:
+        """GET JSON data from an ESP32 endpoint.
+
+        The ``cmd`` argument is accepted for interface compatibility but is
+        unused — HTTP is stateless so each resource has its own endpoint.
+
+        Args:
+            resource: Endpoint path component (e.g. ``"encoders"``,
+                ``"battery"``).
+            cmd: Ignored for HTTP transport.
 
         Returns:
-            ``EncoderReading`` parsed from ESP32 response.
+            Parsed JSON response dictionary.
         """
-        data = await self._get_json("/encoders")
-        return EncoderReading(
-            left_velocity_mps=float(data.get("lv", 0.0)),
-            right_velocity_mps=float(data.get("rv", 0.0)),
-            odometry_x_m=float(data.get("ox", 0.0)),
-            odometry_y_m=float(data.get("oy", 0.0)),
-            heading_rad=float(data.get("h", 0.0)),
-            timestamp=float(data.get("ts", 0.0)),
-        )
-
-    async def get_battery_voltage(self) -> float:
-        """Query battery voltage via HTTP GET.
-
-        Returns:
-            Battery voltage in volts.
-        """
-        data = await self._get_json("/battery")
-        return float(data.get("v", 0.0))
-
-    async def emergency_stop(self) -> None:
-        """Send emergency stop command over HTTP POST."""
-        cmd: dict[str, int] = {"T": ESP32_CMD_TYPE_STOP}
-        await self._post_json("/cmd", cmd)
-        self._last_velocity = (0.0, 0.0, 0.0)
-        _log.warning("wifi_emergency_stop")
+        return await self._get_json(f"/{resource}")
 
     # ------------------------------------------------------------------
-    # Internal helpers
+    # Low-level HTTP helpers
     # ------------------------------------------------------------------
 
     async def _post_json(self, path: str, data: dict[str, Any]) -> dict[str, Any]:

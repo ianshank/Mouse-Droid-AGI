@@ -79,6 +79,49 @@ def test_knowledge_graph_has_edges() -> None:
     assert "obstacle_avoidance" in downstream
 
 
+def test_update_with_nav_score() -> None:
+    model = MetacognitiveModel(alpha=1.0)
+    model.update({"nav_score": 0.8})
+    assert abs(model.get_capability_summary()["navigation"] - 0.8) < 1e-5
+
+
+def test_update_with_obstacle_score() -> None:
+    model = MetacognitiveModel(alpha=1.0)
+    model.update({"obstacle_score": 0.7})
+    assert abs(model.get_capability_summary()["obstacle_avoidance"] - 0.7) < 1e-5
+
+
+def test_update_with_vision_score() -> None:
+    model = MetacognitiveModel(alpha=1.0)
+    model.update({"vision_score": 0.9})
+    assert abs(model.get_capability_summary()["vision"] - 0.9) < 1e-5
+
+
+def test_update_with_mcts_score() -> None:
+    model = MetacognitiveModel(alpha=1.0)
+    model.update({"mcts_score": 0.6})
+    assert abs(model.get_capability_summary()["mcts"] - 0.6) < 1e-5
+
+
+def test_update_with_bdi_score() -> None:
+    model = MetacognitiveModel(alpha=1.0)
+    model.update({"bdi_score": 0.5})
+    assert abs(model.get_capability_summary()["bdi"] - 0.5) < 1e-5
+
+
+def test_update_with_loop_time_ms() -> None:
+    model = MetacognitiveModel(alpha=1.0)
+    model.update({"loop_time_ms": 33.0})
+    summary = model.get_capability_summary()
+    assert 0.0 <= summary["loop_timing"] <= 1.0
+
+
+def test_update_with_comm_score() -> None:
+    model = MetacognitiveModel(alpha=1.0)
+    model.update({"comm_score": 0.95})
+    assert abs(model.get_capability_summary()["communication"] - 0.95) < 1e-5
+
+
 def test_geometric_mean_all_ones() -> None:
     model = MetacognitiveModel()
     gm = model.geometric_mean()
