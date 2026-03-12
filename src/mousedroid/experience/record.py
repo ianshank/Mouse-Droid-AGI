@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import sys
 import time
 from dataclasses import dataclass, field
-from typing import Any, Self
+from typing import Any
+
+if sys.version_info >= (3, 11):
+    from typing import Self
+else:
+    from typing_extensions import Self
 
 import msgpack
 import numpy as np

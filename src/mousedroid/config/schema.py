@@ -8,14 +8,25 @@ compatibility guarantee).
 from __future__ import annotations
 
 import enum
+import sys
 from pathlib import Path
-from typing import Literal, Self
+from typing import Literal
+
+if sys.version_info >= (3, 11):
+    from enum import StrEnum
+    from typing import Self
+else:
+    from typing_extensions import Self
+
+    class StrEnum(str, enum.Enum):
+        """Backport of enum.StrEnum for Python 3.10."""
+
 
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class PlatformType(enum.StrEnum):
+class PlatformType(StrEnum):
     """Supported hardware platform types."""
 
     MOUSE_DROID = "mouse_droid"

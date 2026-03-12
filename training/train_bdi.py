@@ -334,12 +334,12 @@ def train_bdi(
 
     # Stage 1: BeliefEncoder
     belief_weights = train_belief_encoder(observations, lr, epochs, batch_size)
-    np.savez(output_dir / "belief.npz", **belief_weights)
+    np.savez(output_dir / "belief.npz", **belief_weights)  # type: ignore[arg-type]
     _log.info("belief_encoder_saved")
 
     # Stage 2: DesireEncoder
     desire_weights = train_desire_encoder(observations, belief_weights, lr, epochs, batch_size)
-    np.savez(output_dir / "desire.npz", **desire_weights)
+    np.savez(output_dir / "desire.npz", **desire_weights)  # type: ignore[arg-type]
     _log.info("desire_encoder_saved")
 
     # Stage 3: IntentionPredictor
@@ -352,7 +352,7 @@ def train_bdi(
         epochs,
         batch_size,
     )
-    np.savez(output_dir / "intention.npz", **intention_weights)
+    np.savez(output_dir / "intention.npz", **intention_weights)  # type: ignore[arg-type]
     _log.info("intention_predictor_saved")
 
     # Stage 4: AffectEstimator
@@ -365,7 +365,7 @@ def train_bdi(
         epochs,
         batch_size,
     )
-    np.savez(output_dir / "affect.npz", **affect_weights)
+    np.savez(output_dir / "affect.npz", **affect_weights)  # type: ignore[arg-type]
     _log.info("affect_estimator_saved")
 
     _log.info("bdi_training_complete", output_dir=str(output_dir))

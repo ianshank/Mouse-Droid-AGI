@@ -27,8 +27,8 @@ fi
 # 3. Swap check
 echo "--- Checking swap ---"
 SWAP_TOTAL=$(free -m | awk '/^Swap:/ {print $2}')
-if [ "${SWAP_TOTAL}" -lt 8000 ]; then
-    echo "    WARNING: Swap is ${SWAP_TOTAL}MB, recommended >= 8GB"
+if [ "${SWAP_TOTAL}" -lt 4000 ]; then
+    echo "    WARNING: Swap is ${SWAP_TOTAL}MB, recommended >= 4GB"
     echo "    Run scripts/jetson_system_setup.sh to configure swap"
 fi
 
@@ -47,6 +47,7 @@ echo "--- Deploying config ---"
 mkdir -p "${CONFIG_DIR}"
 cp -n "${PROJECT_DIR}/config/default.yaml" "${CONFIG_DIR}/" 2>/dev/null || true
 cp -n "${PROJECT_DIR}/config/jetson_production.yaml" "${CONFIG_DIR}/" 2>/dev/null || true
+cp -n "${PROJECT_DIR}/config/jetson_sdcard_64gb.yaml" "${CONFIG_DIR}/" 2>/dev/null || true
 
 # 7. Systemd service
 echo "--- Installing systemd service ---"

@@ -1,0 +1,32 @@
+# Storage-constrained configuration for 64GB microSD on Jetson Orin Nano.
+# Layers on top of default.yaml; use instead of jetson_production.yaml
+# when running on SD card storage.
+#
+# Storage budget (64GB card = ~59 GiB usable):
+#   JetPack 6.x + CUDA:  ~13 GiB
+#   Swap:                   4 GiB
+#   PyTorch + deps:        ~3.5 GiB
+#   System overhead:       ~3 GiB
+#   LMDB experience:      10 GiB
+#   Reserve headroom:     ~5 GiB
+#   Free remaining:       ~20 GiB
+platform: mouse_droid
+mock_hardware: false
+debug: false
+
+jetson:
+  tensorrt_enabled: true
+  gpu_memory_fraction: 0.6      # Conservative for 8GB shared RAM on SD card I/O
+  power_mode: "15W"
+  dla_enabled: false
+  precision: "fp16"
+  workspace_gb: 1.0             # Reduced from 2.0 to save RAM
+
+logging:
+  level: "INFO"
+  format: "json"
+
+experience:
+  path: "/home/jetson/mousedroid_experience"
+  map_size_gb: 10               # Reduced from 40 (production) / 20 (default)
+  flush_every_n: 60             # Less frequent flushes to reduce SD card I/O wear

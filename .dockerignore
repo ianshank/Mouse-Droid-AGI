@@ -1,0 +1,49 @@
+# =============================================================================
+# MouseDroidAGI — Docker Build Ignore
+# =============================================================================
+# Excludes unnecessary files from the Docker build context for faster builds.
+
+# Version control
+.git/
+.gitignore
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Documentation (not needed at runtime)
+docs/
+*.md
+!README.md
+
+# Tests (installed separately in dev layer)
+# tests/
+
+# CI/CD
+.github/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+/tmp/
+*.log
+
+# 3D printing files
+docs/3D_printing_files/

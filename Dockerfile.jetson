@@ -1,0 +1,96 @@
+# =============================================================================
+# MouseDroidAGI — Jetson L4T PyTorch Container
+# =============================================================================
+# Base: dustynv/l4t-pytorch with CUDA 12.6, cuDNN, TensorRT pre-installed
+# Target: Jetson Orin Nano, JetPack 6.x (L4T R36.4)
+#
+# Build:  docker compose -f docker-compose.jetson.yml build
+# Run:    docker compose -f docker-compose.jetson.yml up -d
+# Shell:  docker exec -it mousedroid bash
+# =============================================================================
+
+FROM dustynv/l4t-pytorch:r36.4.0
+
+LABEL maintainer="Ian Cruickshank"
+LABEL description="MouseDroidAGI — GPU-accelerated runtime on Jetson Orin Nano"
+LABEL version="0.2.0"
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# ---------------------------------------------------------------------------
+# Fix pip index: L4T base uses jetson.webredirect.org which may not
+# resolve. Override to use standard PyPI with NVIDIA as extra index.
+# ---------------------------------------------------------------------------
+ENV PIP_INDEX_URL=https://pypi.org/simple/
+ENV PIP_EXTRA_INDEX_URL=https://pypi.ngc.nvidia.com
+ENV PIP_TRUSTED_HOST="pypi.org pypi.ngc.nvidia.com"
+
+# ---------------------------------------------------------------------------
+# System dependencies
+# ---------------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    libgpiod-dev \
+    v4l-utils \
+    i2c-tools \
+    libcap-dev \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---------------------------------------------------------------------------
+# Stage 1: Core mousedroid package
+# ---------------------------------------------------------------------------
+WORKDIR /opt/mousedroid
+
+COPY pyproject.toml ./
+COPY src/ ./src/
+
+RUN pip install --no-cache-dir typing_extensions>=4.0 && \
+    pip install --no-cache-dir -e "."
+
+# ---------------------------------------------------------------------------
+# Stage 2: Hardware extras (non-fatal — graceful fallback)
+# ---------------------------------------------------------------------------
+RUN pip install --no-cache-dir pyserial>=3.5 python-prctl || true
+RUN pip install --no-cache-dir Jetson.GPIO>=2.1 || true
+# picamera2 may fail without libcamera system libs — graceful skip
+RUN pip install --no-cache-dir picamera2 || true
+
+# ---------------------------------------------------------------------------
+# Stage 3: Dev tools (pytest, ruff, mypy, coverage)
+# ---------------------------------------------------------------------------
+RUN pip install --no-cache-dir \
+    "pytest>=7.0" \
+    "pytest-asyncio>=0.21" \
+    "pytest-cov>=4.0" \
+    "pytest-xdist>=3.0" \
+    "hypothesis>=6.80" \
+    "ruff>=0.4" \
+    "mypy>=1.5" \
+    "pip-audit"
+
+# ---------------------------------------------------------------------------
+# Stage 4: LLM gateway dependencies
+# NOTE: llama-cpp-python requires ~8GB RAM to compile with CUDA support.
+#       Install it AFTER build: docker exec mousedroid pip install llama-cpp-python
+# ---------------------------------------------------------------------------
+ENV CMAKE_ARGS="-DGGML_CUDA=on"
+ENV FORCE_CMAKE=1
+RUN pip install --no-cache-dir "huggingface-hub>=0.20" || true
+
+# ---------------------------------------------------------------------------
+# Runtime configuration
+# ---------------------------------------------------------------------------
+ENV MOUSEDROID_CONFIG=/etc/mousedroid/default.yaml
+ENV MOUSEDROID_MOCK_HARDWARE=false
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH="${CUDA_HOME}/bin:${PATH}"
+ENV LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}"
+
+# Health check: verify GPU + mousedroid import
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD python3 -c "import torch; assert torch.cuda.is_available(); import mousedroid" || exit 1
+
+ENTRYPOINT ["python3", "-m", "mousedroid.main"]
+CMD ["--config", "/etc/mousedroid/default.yaml"]

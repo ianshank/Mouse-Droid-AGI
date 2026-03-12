@@ -81,3 +81,14 @@ mlruns/
 # Docs build
 docs/_build/
 site/
+
+# Docker
+*.tar
+docker-build.log
+
+# Coverage reports
+coverage_report.txt
+
+# Temporary deploy/build scripts
+/tmp/jetson_*.py
+/tmp/install_*.py

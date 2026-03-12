@@ -1,8 +1,92 @@
-"""Tool registry — registration and dispatch for MouseDroid tools.
+"""Tool registry — registration and dispatch for MouseDroid tools."""
 
-DEPRECATED: This module is deprecated and will be removed in a future release.
-Please use `mousedroid.common.tools.registry` instead.
-"""
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Any
+
+from mousedroid.logging.setup import get_logger
+
+_log = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class ToolSpec:
+    """Specification for a registered tool.
+
+    Attributes:
+        name: Unique tool identifier.
+        description: Human-readable description.
+        handler: Async callable that executes the tool.
+    """
+
+    name: str
+    description: str
+    handler: Callable[..., Awaitable[Any]]
+
+
+class ToolRegistry:
+    """Registry for MouseDroid tools.
+
+    Provides registration and dispatch for platform tools.
+    """
+
+    def __init__(self) -> None:
+        """Initialise empty registry."""
+        self._tools: dict[str, ToolSpec] = {}
+
+    def register(self, spec: ToolSpec) -> None:
+        """Register a tool.
+
+        Args:
+            spec: Tool specification to register.
+        """
+        if spec.name in self._tools:
+            _log.warning("tool_already_registered", name=spec.name)
+        self._tools[spec.name] = spec
+        _log.debug("tool_registered", name=spec.name)
+
+    def get(self, name: str) -> ToolSpec | None:
+        """Get tool spec by name.
+
+        Args:
+            name: Tool identifier.
+
+        Returns:
+            Tool spec or None if not found.
+        """
+        return self._tools.get(name)
+
+    async def dispatch(self, name: str, **kwargs: Any) -> Any:
+        """Dispatch a tool by name.
+
+        Args:
+            name: Tool identifier.
+            **kwargs: Arguments to pass to the tool handler.
+
+        Returns:
+            Tool execution result.
+
+        Raises:
+            KeyError: If tool is not registered.
+        """
+        spec = self._tools.get(name)
+        if spec is None:
+            msg = f"Tool not registered: {name}"
+            raise KeyError(msg)
+        _log.info("tool_dispatch", name=name)
+        return await spec.handler(**kwargs)
+
+    @property
+    def names(self) -> list[str]:
+        """List of registered tool names."""
+        return list(self._tools.keys())
+
+    def __len__(self) -> int:
+        """Number of registered tools."""
+        return len(self._tools)
+
 
 # ---------------------------------------------------------------------------
 # Built-in tool handlers
@@ -69,37 +153,11 @@ async def _system_info() -> dict[str, str]:
     }
 
 
-async def _mic_diagnostics() -> dict[str, str]:
-    """Run USB microphone diagnostics.
-
-    Returns:
-        Microphone diagnostic status.
-    """
-    try:
-        import pyaudio  # pragma: no cover
-
-        pa = pyaudio.PyAudio()  # pragma: no cover
-        device_count = pa.get_device_count()  # pragma: no cover
-        input_devices = []  # pragma: no cover
-        for i in range(device_count):  # pragma: no cover
-            info = pa.get_device_info_by_index(i)  # pragma: no cover
-            if int(info.get("maxInputChannels", 0)) > 0:  # pragma: no cover
-                input_devices.append(str(info.get("name", f"device_{i}")))  # pragma: no cover
-        pa.terminate()  # pragma: no cover
-        return {  # pragma: no cover
-            "status": "ok",
-            "device_count": str(device_count),
-            "input_devices": ", ".join(input_devices) or "none",
-        }
-    except ImportError:
-        return {"status": "pyaudio_not_installed"}
-
-
 def create_default_registry() -> ToolRegistry:
     """Create a ToolRegistry pre-populated with built-in tools.
 
     Returns:
-        Registry with all 9 default tools registered.
+        Registry with all 8 default tools registered.
     """
     registry = ToolRegistry()
     tools = [
@@ -111,7 +169,6 @@ def create_default_registry() -> ToolRegistry:
         ToolSpec("export_experience", "Export experience data", _export_experience),
         ToolSpec("translate_nl_mission", "Translate NL mission", _translate_nl_mission),
         ToolSpec("system_info", "Get system information", _system_info),
-        ToolSpec("mic_diagnostics", "Run USB microphone diagnostics", _mic_diagnostics),
     ]
     for tool in tools:
         registry.register(tool)

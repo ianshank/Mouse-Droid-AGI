@@ -8,8 +8,9 @@ INSTALL_DIR="/opt/mousedroid"
 CONFIG_DIR="/etc/mousedroid"
 EXPERIENCE_DIR="/home/jetson/mousedroid_experience"
 SWAPFILE="/swapfile"
-SWAP_SIZE="8G"
-SWAP_SIZE_BYTES=$((8 * 1024 * 1024 * 1024))
+SWAP_SIZE="${SWAP_SIZE:-4G}"
+SWAP_SIZE_NUM="${SWAP_SIZE%G}"
+SWAP_SIZE_BYTES=$((SWAP_SIZE_NUM * 1024 * 1024 * 1024))
 JETSON_USER="jetson"
 
 echo "=== MouseDroid Jetson System Setup ==="
@@ -140,6 +141,15 @@ if [ ! -d "${EXPERIENCE_DIR}" ]; then
     mkdir -p "${EXPERIENCE_DIR}"
     chown "${JETSON_USER}:${JETSON_USER}" "${EXPERIENCE_DIR}"
     echo "    Created ${EXPERIENCE_DIR}"
+fi
+
+# ---- Disk Space Check ----
+
+echo "--- Checking available disk space ---"
+AVAIL_GB=$(df -BG / | tail -1 | awk '{print $4}' | tr -d 'G')
+echo "    Available disk space: ${AVAIL_GB} GiB"
+if [ "${AVAIL_GB}" -lt 10 ]; then
+    echo "    WARNING: Only ${AVAIL_GB} GiB free. Consider running scripts/jetson_disk_cleanup.sh"
 fi
 
 echo "=== System setup complete ==="

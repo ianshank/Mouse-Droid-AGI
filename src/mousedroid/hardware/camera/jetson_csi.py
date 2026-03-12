@@ -17,11 +17,13 @@ from mousedroid.logging.setup import get_logger
 if TYPE_CHECKING:
     from mousedroid.config.schema import CameraConfig
 
+_jetson_utils: Any
 try:
-    import jetson_utils as _jetson_utils
+    import jetson_utils as _jetson_utils  # type: ignore[no-redef]
 except ImportError:  # pragma: no cover
     _jetson_utils = None
 
+_cv2: Any
 try:
     import cv2 as _cv2
 except ImportError:  # pragma: no cover

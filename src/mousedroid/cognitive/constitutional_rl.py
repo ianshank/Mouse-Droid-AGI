@@ -15,8 +15,6 @@ from numpy.typing import NDArray
 
 from mousedroid.constants import POLICY_MLP_SEED, VALUE_MLP_SEED, WEIGHT_INIT_SCALE
 from mousedroid.logging.setup import get_logger
-from mousedroid.utils.numpy_ops import layer_norm as _layer_norm
-from mousedroid.utils.numpy_ops import relu as _relu
 
 if TYPE_CHECKING:
     from mousedroid.safety.three_laws import RoboticsLawChecker
