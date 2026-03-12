@@ -95,9 +95,13 @@ def build_distance_sensor(cfg: Settings) -> DistanceSensorProtocol:
         from mousedroid.config.schema import UltrasonicConfig as UltraCfg
         from mousedroid.hardware.sensors.mock_ultrasonic import MockUltrasonic
 
-        ultrasonic_cfg: UltrasonicConfig = cfg.ultrasonic or UltraCfg(  # type: ignore[call-arg]
+        ultrasonic_cfg: UltrasonicConfig = cfg.ultrasonic or UltraCfg(
             trigger_pin=0,
             echo_pin=0,
+            max_range_m=4.0,
+            min_range_m=0.02,
+            timeout_s=0.1,
+            speed_of_sound_mps=343.0,
         )
         return MockUltrasonic(ultrasonic_cfg)
 

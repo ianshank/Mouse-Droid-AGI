@@ -1,0 +1,17 @@
+[Unit]
+Description=MouseDroid AGI — Docker Container Runtime
+After=docker.service network.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/mousedroid
+ExecStartPre=/usr/bin/docker compose -f /opt/mousedroid/docker-compose.jetson.yml pull --quiet
+ExecStart=/usr/bin/docker compose -f /opt/mousedroid/docker-compose.jetson.yml up --abort-on-container-exit
+ExecStop=/usr/bin/docker compose -f /opt/mousedroid/docker-compose.jetson.yml down
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

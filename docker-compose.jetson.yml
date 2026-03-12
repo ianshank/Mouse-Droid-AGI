@@ -1,0 +1,77 @@
+# =============================================================================
+# MouseDroidAGI — Jetson Docker Compose (GPU + Hardware Passthrough)
+# =============================================================================
+# Usage:
+#   docker compose -f docker-compose.jetson.yml up -d
+#   docker compose -f docker-compose.jetson.yml logs -f
+#   docker compose -f docker-compose.jetson.yml down
+# =============================================================================
+
+services:
+  mousedroid:
+    container_name: mousedroid
+    build:
+      context: .
+      dockerfile: Dockerfile.jetson
+    image: mousedroid:jetson
+    runtime: nvidia
+
+    # --- Restart policy ---
+    restart: unless-stopped
+
+    # --- Environment ---
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - MOUSEDROID_CONFIG=/etc/mousedroid/jetson_production.yaml
+      - MOUSEDROID_MOCK_HARDWARE=${MOUSEDROID_MOCK_HARDWARE:-true}
+      - CUDA_HOME=/usr/local/cuda
+
+    # --- Volume mounts ---
+    volumes:
+      # Project source (editable install — code changes reflect immediately)
+      - /opt/mousedroid:/opt/mousedroid
+      # Configuration files
+      - /etc/mousedroid:/etc/mousedroid:ro
+      # Experience database (persistent)
+      - mousedroid_experience:/home/jetson/mousedroid_experience
+      # Thermal monitoring (read-only)
+      - /sys/devices/virtual/thermal:/sys/devices/virtual/thermal:ro
+      # GPU sysfs (read-only)
+      - /sys/devices/platform:/sys/devices/platform:ro
+
+    # --- Hardware device passthrough ---
+    # NOTE: Uncomment devices that are physically connected.
+    # The container will fail to start if a listed device doesn't exist.
+    # devices:
+    #   # ESP32 UART serial
+    #   - /dev/ttyUSB0:/dev/ttyUSB0
+    #   # Camera
+    #   - /dev/video0:/dev/video0
+    #   # GPIO
+    #   - /dev/gpiochip0:/dev/gpiochip0
+    #   - /dev/gpiochip1:/dev/gpiochip1
+
+    # --- Networking ---
+    network_mode: host
+
+    # --- Resource limits ---
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    # --- Override entrypoint for development ---
+    # Uncomment to get a shell instead of starting mousedroid:
+    # entrypoint: ["/bin/bash"]
+    # stdin_open: true
+    # tty: true
+
+volumes:
+  mousedroid_experience:
+    driver: local

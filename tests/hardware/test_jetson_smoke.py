@@ -46,7 +46,7 @@ def test_tensorrt_importable() -> None:
 
 def test_gpio_pins_accessible() -> None:
     """Verify GPIO pins 23/24 can be set up and cleaned up."""
-    import Jetson.GPIO as GPIO  # type: ignore[import-untyped]
+    import Jetson.GPIO as GPIO
 
     GPIO.setmode(GPIO.BCM)
     try:
@@ -77,7 +77,7 @@ def test_camera_capture() -> None:
 
     # Try picamera2 first
     try:
-        from picamera2 import Picamera2  # type: ignore[import-untyped]
+        from picamera2 import Picamera2
 
         cam = Picamera2()
         config = cam.create_still_configuration(
@@ -99,7 +99,7 @@ def test_camera_capture() -> None:
     # Fallback: jetson_utils
     if frame is None:
         try:
-            import jetson_utils  # type: ignore[import-untyped]
+            import jetson_utils
 
             cam = jetson_utils.videoSource(
                 "csi://0",

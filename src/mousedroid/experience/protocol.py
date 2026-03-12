@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Protocol, Self, runtime_checkable
+import sys
+from typing import Protocol, runtime_checkable
+
+if sys.version_info >= (3, 11):
+    from typing import Self
+else:
+    from typing_extensions import Self
 
 
 @runtime_checkable

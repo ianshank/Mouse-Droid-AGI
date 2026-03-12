@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from mousedroid.utils.numpy_ops import layer_norm, relu, softmax
+from mousedroid.common.math.numpy_ops import layer_norm, relu, softmax
 
 
 class TestRelu:

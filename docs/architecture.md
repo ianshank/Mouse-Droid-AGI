@@ -31,18 +31,25 @@ graph TD
 ```mermaid
 graph TD
     subgraph Jetson["NVIDIA Jetson Orin Nano"]
-        subgraph AppProcess["mousedroid Python process (asyncio event loop)"]
-            Orchestrator["Orchestrator\n30 Hz loop"]
-            LLMGateway["LLM Gateway\nLlama GGUF"]
-            HealthMonitor["Health Monitor\nsysfs polling"]
-            CoreAI["Core AI Pipeline\nRSSM + MCTS + Navigation Agent\nCognitive Core BDI + Metacognitive\nMemory: Working / Episodic / Semantic\nSafety Monitor + Constitutional Checker"]
-            SensorMgr["Sensor Manager\nconcurrent I/O"]
-            ExperienceDB[("Experience Logger\nLMDB\n/home/jetson/experience_db")]
+        subgraph DockerContainer["Docker: mousedroid:jetson\nL4T PyTorch r36.4.0\nCUDA 12.6 / TensorRT 10.4"]
+            subgraph AppProcess["mousedroid Python process (asyncio event loop)"]
+                Orchestrator["Orchestrator\n30 Hz loop"]
+                LLMGateway["LLM Gateway\nLlama GGUF"]
+                HealthMonitor["Health Monitor\nsysfs polling"]
+                CoreAI["Core AI Pipeline\nRSSM + MCTS + Navigation Agent\nCognitive Core BDI + Metacognitive\nMemory: Working / Episodic / Semantic\nSafety Monitor + Constitutional Checker"]
+                SensorMgr["Sensor Manager\nconcurrent I/O"]
+                ExperienceDB[("Experience Logger\nLMDB\n/home/jetson/experience_db")]
+            end
         end
         subgraph HWLayer["Hardware Interface Layer"]
-            Camera["Camera\nIMX500"]
+            Camera["Camera\nJetson CSI / IMX500"]
             Ultrasonic["Ultrasonic\nHC-SR04"]
             GPIO["GPIO\nJetson.GPIO"]
+        end
+        subgraph Storage["NVMe SSD (500 GB)"]
+            DockerData["Docker Data Root\n/mnt/ssd/docker"]
+            SwapFile["Swap File\n16 GB"]
+            Containerd["containerd\nsnapshotter"]
         end
     end
     ESP32["ESP32 Wave Rover\nMotor control\nEncoder feedback\nBattery ADC"]
@@ -56,17 +63,21 @@ graph TD
     SensorMgr --> Ultrasonic
     SensorMgr --> GPIO
     Orchestrator -- "UART 1 Mbps / HTTP" --> ESP32
+    DockerContainer -.-> DockerData
+    DockerContainer -.-> Containerd
 ```
 
 **Containers:**
 
 | Container | Technology | Responsibility |
 |-----------|-----------|----------------|
-| `mousedroid` process | Python 3.11 asyncio | All AI reasoning + I/O orchestration |
+| Docker `mousedroid:jetson` | L4T PyTorch r36.4.0 | GPU-accelerated container (CUDA 12.6 + TensorRT 10.4) |
+| `mousedroid` process | Python 3.10 asyncio | All AI reasoning + I/O orchestration |
 | LMDB experience store | LMDB on-disk | Persistent experience replay buffer |
 | Llama GGUF model | llama-cpp-python | Local LLM for NL to velocity |
 | ESP32 firmware | C++ (Wave Rover SDK) | Motor PWM control, encoder polling |
-| IMX500 camera | picamera2 | Vision capture + onboard neural inference |
+| Jetson CSI / IMX500 camera | jetson_utils / picamera2 | Vision capture + onboard neural inference |
+| NVMe SSD 500 GB | ext4 `/mnt/ssd` | Docker data-root, containerd, 16 GB swap |
 
 ---
 
@@ -257,3 +268,6 @@ graph LR
 | numpy-only cognitive inference | No CUDA dependency for BDI/metacog; runs on CPU |
 | `torch.no_grad()` for all RSSM/MCTS inference | Prevents accidental gradient accumulation |
 | Module-level constants for all magic numbers | Grep-able; documented; not scattered in logic |
+| L4T Docker container | GPU-accelerated deployment with consistent environment |
+| NVMe SSD for Docker + swap | 500 GB fast storage avoids SD card wear and OOM during builds |
+| `systemd-run` for long builds | Persistent processes survive SSH drops |

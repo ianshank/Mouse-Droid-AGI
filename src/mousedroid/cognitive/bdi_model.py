@@ -14,9 +14,9 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+from mousedroid.common.math.numpy_ops import relu as _relu
+from mousedroid.common.math.numpy_ops import softmax as _safe_softmax_impl
 from mousedroid.logging.setup import get_logger
-from mousedroid.utils.numpy_ops import relu as _relu
-from mousedroid.utils.numpy_ops import softmax as _safe_softmax_impl
 
 _log = get_logger(__name__)
 

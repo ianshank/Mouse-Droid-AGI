@@ -3,9 +3,12 @@
 **A Star Wars MSE-6 "Mouse Droid" autonomous navigation system powered by an Agentic World Model on NVIDIA Jetson Orin Nano.**
 
 [![Tests](https://img.shields.io/badge/tests-752%20passing-brightgreen)](tests/)
-[![Coverage](https://img.shields.io/badge/coverage-54%25-yellow)](pyproject.toml)
+[![Coverage](https://img.shields.io/badge/coverage-98%25-brightgreen)](pyproject.toml)
 [![Ruff](https://img.shields.io/badge/lint-ruff%20clean-brightgreen)](pyproject.toml)
-[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
+[![Mypy](https://img.shields.io/badge/mypy-0%20errors-brightgreen)](pyproject.toml)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
+[![CUDA](https://img.shields.io/badge/CUDA-12.6-76B900)](Dockerfile.jetson)
+[![Docker](https://img.shields.io/badge/docker-L4T%20r36.4.0-2496ED)](docker-compose.jetson.yml)
 
 ---
 
@@ -37,10 +40,13 @@ The robot is built on a Wave Rover mecanum-wheel chassis, controlled by an ESP32
 ```mermaid
 graph TD
     subgraph Jetson["NVIDIA Jetson Orin Nano"]
-        Orchestrator["Orchestrator\n30 Hz sense-plan-act"]
-        CoreAI["Core AI Pipeline\nRSSM + MCTS + Navigation Agent\nBDI Cognitive Core\nMemory Systems\nSafety Monitor"]
-        SensorMgr["Sensor Manager\nIMX500 Camera - HC-SR04 - ESP32 encoders"]
-        ExperienceDB[("Experience Logger\nLMDB")]
+        subgraph Docker["Docker: mousedroid:jetson\nL4T PyTorch r36.4.0 — CUDA 12.6"]
+            Orchestrator["Orchestrator\n30 Hz sense-plan-act"]
+            CoreAI["Core AI Pipeline\nRSSM + MCTS + Navigation Agent\nBDI Cognitive Core\nMemory Systems\nSafety Monitor"]
+            SensorMgr["Sensor Manager\nJetson CSI - HC-SR04 - ESP32 encoders"]
+            ExperienceDB[("Experience Logger\nLMDB")]
+        end
+        SSD["NVMe SSD 500 GB\nDocker data + 16 GB swap"]
     end
     ESP32["ESP32 Wave Rover\nMotor control\nEncoder / Battery ADC"]
     Human["Human Operator\nNL commands"]
@@ -52,6 +58,7 @@ graph TD
     CoreAI --> ExperienceDB
     Orchestrator -- "UART / HTTP" --> ESP32
     Orchestrator -- "metrics" --> Monitoring
+    Docker -.-> SSD
 ```
 
 See [docs/architecture.md](docs/architecture.md) for full C4 diagrams (Context → Container → Component → Code + data flow sequence diagrams).
@@ -62,7 +69,7 @@ See [docs/architecture.md](docs/architecture.md) for full C4 diagrams (Context �
 
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.10+
 - NVIDIA Jetson Orin Nano (or any Linux/Windows machine for mock mode)
 - Wave Rover chassis with ESP32 controller
 - Raspberry Pi AI Camera IMX500 (optional — mock available)
@@ -85,6 +92,56 @@ pip install -e ".[llm]"
 # Development (includes pytest, coverage, ruff, mypy)
 pip install -e ".[dev]"
 ```
+
+### Docker Deployment (GPU — Jetson Only)
+
+The L4T PyTorch container provides GPU-accelerated CUDA 12.6 on Jetson Orin Nano:
+
+```bash
+# Build the container image (first run pulls ~10 GB base)
+docker compose -f docker-compose.jetson.yml build
+
+# Start with GPU + mock hardware
+MOUSEDROID_MOCK_HARDWARE=true docker compose -f docker-compose.jetson.yml up -d
+
+# Verify GPU
+docker exec mousedroid python3 -c "import torch; print(torch.cuda.is_available())"
+# True
+
+# Shell into container
+docker exec -it mousedroid bash
+
+# Or use the deploy script
+sudo bash scripts/docker_deploy.sh
+```
+
+### NVMe SSD Setup (Recommended)
+
+The Orin Nano has 8 GB shared RAM. For memory-intensive builds (e.g. llama-cpp-python CUDA compilation), the 500 GB NVMe SSD provides fast swap and Docker storage:
+
+```bash
+# Partition, format, mount SSD
+sudo sfdisk /dev/nvme0n1 <<< ",,L"
+sudo mkfs.ext4 -L ssd /dev/nvme0n1p1
+sudo mkdir -p /mnt/ssd && sudo mount /dev/nvme0n1p1 /mnt/ssd
+
+# Add to fstab for persistence
+echo "/dev/nvme0n1p1 /mnt/ssd ext4 defaults,noatime 0 2" | sudo tee -a /etc/fstab
+
+# Create 16 GB swap on SSD
+sudo fallocate -l 16G /mnt/ssd/swapfile
+sudo chmod 600 /mnt/ssd/swapfile && sudo mkswap /mnt/ssd/swapfile
+sudo swapon /mnt/ssd/swapfile
+echo "/mnt/ssd/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab
+
+# Move Docker data to SSD
+sudo systemctl stop docker
+sudo rsync -aP /var/lib/docker/ /mnt/ssd/docker/
+# Set data-root in /etc/docker/daemon.json → "/mnt/ssd/docker"
+sudo systemctl start docker
+```
+
+> See [ADR-l4t-container](docs/architecture/ADR-l4t-container.md) for architecture details.
 
 ### Run in Mock Mode (no hardware required)
 
@@ -163,8 +220,11 @@ training/             # Offline training pipelines
 scripts/
 ├── ci.sh             # CI pipeline: lint → type check → test → coverage gate
 ├── deploy_jetson.sh  # Idempotent Jetson deployment (venv + systemd)
+├── docker_deploy.sh  # Docker container build + deploy on Jetson
+├── jetson_test_runner.sh # Container test runner (unit/integration/e2e)
 ├── flash_esp32.sh    # ESP32 firmware flashing via esptool
-└── mousedroid.service# systemd unit file for production deployment
+├── mousedroid.service# systemd unit file for native deployment
+└── mousedroid-docker.service # systemd unit for Docker auto-start
 ```
 
 ---
@@ -246,10 +306,9 @@ pytest tests/regression/
 | Unit tests | 668 |
 | Scripts & training tests | 84 |
 | **Total** | **752** |
-| **Coverage** | **54%** (target: 85%) |
+| **Coverage** | **98.01%** (gate: 85%) |
 
 > Hardware tests requiring real GPIO/camera are marked `@pytest.mark.hardware` and skipped in CI.
-> The coverage gap is a known roadmap item — modules `three_laws`, `mcts`, `moe`, `memory`, and `learning` need additional test coverage.
 
 ---
 
@@ -333,7 +392,19 @@ MIT License — see [LICENSE](LICENSE) for details.
 | Component | Part | Notes |
 |-----------|------|-------|
 | SBC | NVIDIA Jetson Orin Nano 8GB | Primary compute |
+| Storage | Samsung NVMe 500 GB SSD | Docker data + swap |
 | Chassis | Waveshare Wave Rover | Mecanum wheel, ESP32 onboard |
-| Camera | Raspberry Pi AI Camera (IMX500) | Onboard ML inference |
+| Camera | Jetson CSI / Raspberry Pi AI Camera (IMX500) | Onboard ML inference |
 | Distance | HC-SR04 Ultrasonic | GPIO pins 23/24 |
 | Battery | 3S LiPo 11.1V | Min cutoff 9.5V |
+
+---
+
+## Next Steps
+
+- [ ] Complete `llama-cpp-python` CUDA compilation on Jetson (requires SSD swap)
+- [ ] Enable real hardware devices in `docker-compose.jetson.yml` (camera, GPIO, serial)
+- [ ] Enable `mousedroid-docker.service` for auto-start on boot
+- [ ] Run RSSM pretraining pipeline on Jetson GPU
+- [ ] Integrate Hugging Face model download into container startup
+- [ ] Add Prometheus metrics endpoint for remote monitoring

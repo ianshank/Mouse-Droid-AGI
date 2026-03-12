@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from mousedroid.tools.registry import ToolRegistry, ToolSpec, create_default_registry
+from mousedroid.common.tools.registry import ToolRegistry, ToolSpec, create_default_registry
 
 
 async def _dummy_handler() -> str:

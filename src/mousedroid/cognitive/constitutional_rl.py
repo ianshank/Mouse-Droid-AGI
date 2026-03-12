@@ -13,9 +13,9 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from numpy.typing import NDArray
 
+from mousedroid.common.math.numpy_ops import layer_norm as _layer_norm
+from mousedroid.common.math.numpy_ops import relu as _relu
 from mousedroid.logging.setup import get_logger
-from mousedroid.utils.numpy_ops import layer_norm as _layer_norm
-from mousedroid.utils.numpy_ops import relu as _relu
 
 if TYPE_CHECKING:
     from mousedroid.safety.three_laws import RoboticsLawChecker
