@@ -31,7 +31,10 @@ def test_build_orchestrator_creates_all_components() -> None:
 def test_build_esp32_driver_mock() -> None:
     cfg = _mock_settings()
     driver = build_esp32_driver(cfg)
-    assert isinstance(driver, MockESP32Driver)
+    from mousedroid.resilience.resilient_driver import ResilientESP32Driver
+
+    assert isinstance(driver, ResilientESP32Driver)
+    assert isinstance(driver.inner, MockESP32Driver)
 
 
 def test_build_camera_mock() -> None:

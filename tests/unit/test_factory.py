@@ -24,8 +24,10 @@ def test_build_esp32_serial():
 
     driver = build_esp32_driver(cfg)
     from mousedroid.comms.serial_driver import SerialESP32Driver
+    from mousedroid.resilience.resilient_driver import ResilientESP32Driver
 
-    assert isinstance(driver, SerialESP32Driver)
+    assert isinstance(driver, ResilientESP32Driver)
+    assert isinstance(driver.inner, SerialESP32Driver)
 
 
 def test_build_esp32_wifi():
@@ -34,8 +36,10 @@ def test_build_esp32_wifi():
 
     driver = build_esp32_driver(cfg)
     from mousedroid.comms.wifi_driver import WiFiESP32Driver
+    from mousedroid.resilience.resilient_driver import ResilientESP32Driver
 
-    assert isinstance(driver, WiFiESP32Driver)
+    assert isinstance(driver, ResilientESP32Driver)
+    assert isinstance(driver.inner, WiFiESP32Driver)
 
 
 def test_build_distance_sensor_missing_config_raises():
