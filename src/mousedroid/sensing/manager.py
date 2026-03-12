@@ -13,7 +13,11 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from mousedroid.constants import DEFAULT_AUDIO_CHUNK_SIZE, DEFAULT_MOTOR_STATE_DIM
+from mousedroid.constants import (
+    DEFAULT_AUDIO_CHUNK_SIZE,
+    DEFAULT_MOTOR_STATE_DIM,
+    MILLISECONDS_PER_SECOND,
+)
 from mousedroid.logging.setup import get_logger
 from mousedroid.sensing.bundle import MouseDroidObservationBundle
 
@@ -122,7 +126,7 @@ class SensorManager:
 
         _log.debug(
             "read_all_complete",
-            elapsed_ms=(time.monotonic() - t0) * 1000.0,
+            elapsed_ms=(time.monotonic() - t0) * MILLISECONDS_PER_SECOND,
             valid_sensors=int(vision_ok) + int(distance_ok) + int(motor_ok) + int(audio_ok),
         )
 

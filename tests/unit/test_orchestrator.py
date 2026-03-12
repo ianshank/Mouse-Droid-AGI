@@ -199,7 +199,8 @@ def _make_orchestrator_with_mic() -> MouseDroidOrchestrator:
 
     camera = AsyncMock()
     camera.capture_features.return_value = np.zeros(
-        cfg.camera.feature_dim, dtype=np.float32,
+        cfg.camera.feature_dim,
+        dtype=np.float32,
     )
 
     distance_sensor = MagicMock()
@@ -251,5 +252,6 @@ async def test_sense_microphone_failure():
     obs = await orch._sense()
     assert obs.valid_mask[3] == 0.0
     np.testing.assert_array_equal(
-        obs.audio_chunk, np.zeros(1024, dtype=np.float32),
+        obs.audio_chunk,
+        np.zeros(1024, dtype=np.float32),
     )

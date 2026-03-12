@@ -5,6 +5,7 @@ mousedroid.service) and Python-importable training module CLIs on Windows withou
 requiring Bash/systemd/hardware to be present. They verify structure, required
 content, and Python module import integrity.
 """
+
 from __future__ import annotations
 
 import ast
@@ -190,24 +191,24 @@ class TestTrainingModuleImports:
             pytest.fail(f"{module_file} has a syntax error: {exc}")
 
     def test_collect_annotations_importable(self) -> None:
-        _import = (
-            "from training.collect_annotations"
-            " import INTENTION_LABELS, label_intention"
-        )
+        _import = "from training.collect_annotations import INTENTION_LABELS, label_intention"
         result = subprocess.run(
             [sys.executable, "-c", _import],
-            capture_output=True, text=True, cwd=str(_REPO),
+            capture_output=True,
+            text=True,
+            cwd=str(_REPO),
         )
         assert result.returncode == 0, result.stderr
 
     def test_data_generator_importable(self) -> None:
         _import = (
-            "from training.data_generator"
-            " import SyntheticSequenceGenerator, _bundle_to_tensors"
+            "from training.data_generator import SyntheticSequenceGenerator, _bundle_to_tensors"
         )
         result = subprocess.run(
             [sys.executable, "-c", _import],
-            capture_output=True, text=True, cwd=str(_REPO),
+            capture_output=True,
+            text=True,
+            cwd=str(_REPO),
         )
         assert result.returncode == 0, result.stderr
 
@@ -215,29 +216,29 @@ class TestTrainingModuleImports:
         _import = "from training.rssm_dataset import RSSMSequenceDataset"
         result = subprocess.run(
             [sys.executable, "-c", _import],
-            capture_output=True, text=True, cwd=str(_REPO),
+            capture_output=True,
+            text=True,
+            cwd=str(_REPO),
         )
         assert result.returncode == 0, result.stderr
 
     def test_train_bdi_importable(self) -> None:
-        _import = (
-            "from training.train_bdi"
-            " import train_belief_encoder, train_bdi"
-        )
+        _import = "from training.train_bdi import train_belief_encoder, train_bdi"
         result = subprocess.run(
             [sys.executable, "-c", _import],
-            capture_output=True, text=True, cwd=str(_REPO),
+            capture_output=True,
+            text=True,
+            cwd=str(_REPO),
         )
         assert result.returncode == 0, result.stderr
 
     def test_train_constitutional_rl_importable(self) -> None:
-        _import = (
-            "from training.train_constitutional_rl"
-            " import _gae, _ppo_update"
-        )
+        _import = "from training.train_constitutional_rl import _gae, _ppo_update"
         result = subprocess.run(
             [sys.executable, "-c", _import],
-            capture_output=True, text=True, cwd=str(_REPO),
+            capture_output=True,
+            text=True,
+            cwd=str(_REPO),
         )
         assert result.returncode == 0, result.stderr
 
@@ -245,18 +246,21 @@ class TestTrainingModuleImports:
         _import = "from training.train_rssm import train_rssm"
         result = subprocess.run(
             [sys.executable, "-c", _import],
-            capture_output=True, text=True, cwd=str(_REPO),
+            capture_output=True,
+            text=True,
+            cwd=str(_REPO),
         )
         assert result.returncode == 0, result.stderr
 
     def test_warmstart_policy_importable(self) -> None:
         _import = (
-            "from training.warmstart_policy"
-            " import warmstart_policy, compute_latent_statistics"
+            "from training.warmstart_policy import warmstart_policy, compute_latent_statistics"
         )
         result = subprocess.run(
             [sys.executable, "-c", _import],
-            capture_output=True, text=True, cwd=str(_REPO),
+            capture_output=True,
+            text=True,
+            cwd=str(_REPO),
         )
         assert result.returncode == 0, result.stderr
 

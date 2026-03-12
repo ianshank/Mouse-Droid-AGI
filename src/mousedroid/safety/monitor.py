@@ -26,16 +26,13 @@ _BATTERY_WARN_V: float = 10.5
 _BATTERY_CRITICAL_V: float = 9.5
 """Fallback battery critical voltage when config is unavailable."""
 
-_MAX_LOOP_TIME_MS: float = 200.0
-"""Loop iteration time above which an emergency is triggered."""
-
 
 class MouseDroidSafetyMonitor:
     """Evaluates each observation for hazardous conditions.
 
-    Checks forward clearance, battery voltage, sensor validity, and
-    loop timing.  Any critical condition sets ``is_emergency=True`` on
-    the returned :class:`SafetyContext`.
+    Checks forward clearance, battery voltage, sensor validity, sensor
+    staleness, and loop timing.  Any critical condition sets
+    ``is_emergency=True`` on the returned :class:`SafetyContext`.
 
     Implements :class:`~mousedroid.safety.protocol.SafetyMonitorProtocol`.
 
@@ -45,6 +42,7 @@ class MouseDroidSafetyMonitor:
 
     def __init__(self, cfg: SafetyConfig) -> None:
         self._cfg = cfg
+        self._last_valid_timestamps: dict[int, float] = {}
 
     # -- SafetyMonitorProtocol ---------------------------------------------
 
@@ -94,7 +92,24 @@ class MouseDroidSafetyMonitor:
                 threshold=battery_warn_v,
             )
 
-        # -- Valid sensor count --------------------------------------------
+        # -- Sensor staleness ----------------------------------------------
+        current_time = observation.timestamp
+
+        for i in range(len(observation.valid_mask)):
+            if observation.valid_mask[i] > 0.0:
+                self._last_valid_timestamps[i] = current_time
+            elif i in self._last_valid_timestamps:
+                elapsed = current_time - self._last_valid_timestamps[i]
+                if elapsed > self._cfg.sensor_stale_s:
+                    _log.warning(
+                        "sensor_stale",
+                        sensor_index=i,
+                        elapsed_s=round(elapsed, 3),
+                        threshold_s=self._cfg.sensor_stale_s,
+                    )
+                    is_emergency = True
+
+        # -- Valid sensor count (uses original mask; staleness is an additional emergency trigger)
         valid_sensor_count = int(np.sum(observation.valid_mask > 0.0))
         if valid_sensor_count < self._cfg.min_valid_sensors:
             _log.error(
@@ -105,11 +120,12 @@ class MouseDroidSafetyMonitor:
             is_emergency = True
 
         # -- Loop timing ---------------------------------------------------
-        if loop_time_ms > _MAX_LOOP_TIME_MS:
+        max_loop_time_ms = getattr(self._cfg, "max_loop_time_ms", 200.0)
+        if loop_time_ms > max_loop_time_ms:
             _log.error(
                 "loop_overrun",
                 loop_time_ms=loop_time_ms,
-                max_ms=_MAX_LOOP_TIME_MS,
+                max_ms=max_loop_time_ms,
             )
             is_emergency = True
 

@@ -240,6 +240,7 @@ class SafetyConfig(BaseModel):
     min_forward_clearance_m: float = Field(0.20, gt=0, description="Min obstacle clearance (m)")
     max_velocity_mps: float = Field(0.5, gt=0, description="Max allowed velocity (m/s)")
     sensor_stale_s: float = Field(0.5, gt=0, description="Sensor staleness threshold (s)")
+    max_loop_time_ms: float = Field(200.0, gt=0, description="Max loop time before emergency (ms)")
     min_valid_sensors: int = Field(2, ge=0, description="Min valid sensors for operation")
     gpu_warn_temp_c: float = Field(75.0, gt=0, description="GPU warning temperature (C)")
     gpu_critical_temp_c: float = Field(90.0, gt=0, description="GPU critical temperature (C)")
