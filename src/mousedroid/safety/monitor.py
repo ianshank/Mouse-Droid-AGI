@@ -94,10 +94,9 @@ class MouseDroidSafetyMonitor:
 
         # -- Sensor staleness ----------------------------------------------
         current_time = observation.timestamp
-        valid_mask = observation.valid_mask.copy()
 
-        for i in range(len(valid_mask)):
-            if valid_mask[i] > 0.0:
+        for i in range(len(observation.valid_mask)):
+            if observation.valid_mask[i] > 0.0:
                 self._last_valid_timestamps[i] = current_time
             elif i in self._last_valid_timestamps:
                 elapsed = current_time - self._last_valid_timestamps[i]
@@ -108,8 +107,9 @@ class MouseDroidSafetyMonitor:
                         elapsed_s=round(elapsed, 3),
                         threshold_s=self._cfg.sensor_stale_s,
                     )
+                    is_emergency = True
 
-        # -- Valid sensor count (uses original mask, not staleness-adjusted)
+        # -- Valid sensor count (uses original mask; staleness is an additional emergency trigger)
         valid_sensor_count = int(np.sum(observation.valid_mask > 0.0))
         if valid_sensor_count < self._cfg.min_valid_sensors:
             _log.error(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -178,6 +179,27 @@ async def test_config_values_not_hardcoded():
     with pytest.raises(RetryExhaustedError):
         await retry_async(mock2, cfg=_cfg(max_attempts=4, base_delay_s=0.001))
     assert mock2.await_count == 4
+
+
+# -- CancelledError passthrough --------------------------------------------
+
+
+async def test_cancelled_error_propagates_immediately():
+    """CancelledError must pass through without retry or wrapping."""
+    call_count = 0
+
+    async def cancellable() -> str:
+        nonlocal call_count
+        call_count += 1
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await retry_async(
+            cancellable,
+            cfg=_cfg(max_attempts=5, base_delay_s=0.001),
+        )
+    # Must not retry; exactly one call
+    assert call_count == 1
 
 
 # -- RetryExhaustedError ---------------------------------------------------

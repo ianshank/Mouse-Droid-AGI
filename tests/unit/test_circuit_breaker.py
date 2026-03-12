@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -155,17 +154,8 @@ async def test_half_open_limits_concurrent_calls():
 
     await asyncio.sleep(0.02)
 
-    # First call allowed (transitions to half-open)
-    AsyncMock(return_value="slow")
-
-    async def slow_call() -> str:
-        await asyncio.sleep(0.1)
-        return "slow"
-
-    # After one half-open call is in-flight, additional calls should be rejected
-    # until recovery timeout elapses again
+    # First call in half-open state succeeds and closes the circuit
     await cb.call(_ok)
-    # The circuit should now be closed since half_open_max_calls=1 and we succeeded
     assert cb.state == CircuitState.CLOSED
 
 
@@ -252,3 +242,18 @@ async def test_circuit_open_error_fields():
         await cb.call(_ok)
     assert "test" in str(exc_info.value)
     assert exc_info.value.recovery_remaining_s > 50.0
+
+
+async def test_cancelled_error_not_recorded_as_failure():
+    """asyncio.CancelledError must not increment failure counter or open the circuit."""
+    cb = _make_cb(failure_threshold=1)
+
+    async def cancellable() -> None:
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await cb.call(cancellable)
+
+    # Circuit stays closed; cancellation is not a subsystem failure
+    assert cb.state == CircuitState.CLOSED
+    assert cb.failure_count == 0

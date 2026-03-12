@@ -167,7 +167,7 @@ def _make_obs_at(
 
 
 def test_stale_sensor_detected():
-    """Sensor that was valid then goes invalid for longer than sensor_stale_s."""
+    """Stale sensor (exceeds threshold) triggers is_emergency."""
     m = _make_monitor(sensor_stale_s=0.5)
 
     # First tick: sensor 0 is valid at t=100.0
@@ -177,55 +177,56 @@ def test_stale_sensor_detected():
     # Second tick: sensor 0 goes invalid at t=101.0 (1.0s > 0.5s threshold)
     obs2 = _make_obs_at(101.0, valid_mask=[0.0, 1.0, 1.0, 1.0])
     ctx = m.evaluate(obs2, loop_time_ms=10.0)
-    # Monitor should have detected staleness (logged warning)
-    assert isinstance(ctx, SafetyContext)
+    assert ctx.is_emergency is True
 
 
 def test_fresh_sensor_not_flagged_stale():
-    """Sensor that just went invalid (below threshold) is not stale yet."""
+    """Sensor that just went invalid (below threshold) does not trigger emergency."""
     m = _make_monitor(sensor_stale_s=1.0)
 
     obs1 = _make_obs_at(100.0, valid_mask=[1.0, 1.0, 1.0, 1.0])
     m.evaluate(obs1, loop_time_ms=10.0)
 
-    # Sensor 0 invalid but only 0.1s elapsed — not stale
+    # Sensor 0 invalid but only 0.1s elapsed — not stale yet
     obs2 = _make_obs_at(100.1, valid_mask=[0.0, 1.0, 1.0, 1.0])
     ctx = m.evaluate(obs2, loop_time_ms=10.0)
-    assert isinstance(ctx, SafetyContext)
+    assert ctx.is_emergency is False
 
 
 def test_staleness_threshold_from_config():
-    """Different sensor_stale_s configs produce different behavior."""
-    # Short threshold: 0.1s — 0.2s gap IS stale
-    m_short = _make_monitor(sensor_stale_s=0.1)
+    """Different sensor_stale_s configs produce different emergency outcomes."""
     obs1 = _make_obs_at(100.0, valid_mask=[1.0, 1.0, 1.0, 1.0])
-    m_short.evaluate(obs1, loop_time_ms=10.0)
     obs2 = _make_obs_at(100.2, valid_mask=[0.0, 1.0, 1.0, 1.0])
-    ctx = m_short.evaluate(obs2, loop_time_ms=10.0)
-    assert isinstance(ctx, SafetyContext)
 
-    # Long threshold: 10.0s — same gap should NOT be stale
+    # Short threshold: 0.1s — 0.2s gap IS stale → emergency
+    m_short = _make_monitor(sensor_stale_s=0.1)
+    m_short.evaluate(obs1, loop_time_ms=10.0)
+    ctx = m_short.evaluate(obs2, loop_time_ms=10.0)
+    assert ctx.is_emergency is True
+
+    # Long threshold: 10.0s — same gap is NOT stale → no emergency
     m_long = _make_monitor(sensor_stale_s=10.0)
     m_long.evaluate(obs1, loop_time_ms=10.0)
     ctx2 = m_long.evaluate(obs2, loop_time_ms=10.0)
-    assert isinstance(ctx2, SafetyContext)
+    assert ctx2.is_emergency is False
 
 
 def test_staleness_tracks_per_sensor():
-    """Each sensor has its own staleness timestamp."""
+    """Each sensor has its own staleness timestamp; stale sensor triggers emergency."""
     m = _make_monitor(sensor_stale_s=0.5)
 
     obs1 = _make_obs_at(100.0, valid_mask=[1.0, 1.0, 1.0, 1.0])
     m.evaluate(obs1, loop_time_ms=10.0)
 
-    # Sensor 0 goes stale, sensor 1 stays valid
+    # Sensor 0 goes stale (1s > 0.5s) → emergency
     obs2 = _make_obs_at(101.0, valid_mask=[0.0, 1.0, 1.0, 1.0])
-    m.evaluate(obs2, loop_time_ms=10.0)
+    ctx2 = m.evaluate(obs2, loop_time_ms=10.0)
+    assert ctx2.is_emergency is True
 
-    # Sensor 0 comes back, sensor 1 goes stale
+    # Sensor 0 comes back valid; sensor 1 now stale → still emergency
     obs3 = _make_obs_at(102.0, valid_mask=[1.0, 0.0, 1.0, 1.0])
-    ctx = m.evaluate(obs3, loop_time_ms=10.0)
-    assert isinstance(ctx, SafetyContext)
+    ctx3 = m.evaluate(obs3, loop_time_ms=10.0)
+    assert ctx3.is_emergency is True
 
 
 # -- max_loop_time_ms from config ------------------------------------------

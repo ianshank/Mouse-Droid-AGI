@@ -67,6 +67,8 @@ async def retry_async(
     for attempt in range(cfg.max_attempts):
         try:
             return await func(*args, **kwargs)
+        except asyncio.CancelledError:
+            raise
         except retryable_exceptions as exc:
             last_exc = exc
             remaining = cfg.max_attempts - attempt - 1

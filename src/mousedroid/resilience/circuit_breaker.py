@@ -114,8 +114,12 @@ class CircuitBreaker:
                 self._half_open_calls += 1
 
         # Execute outside the lock so we don't block other callers.
+        # CancelledError is re-raised without recording as a failure —
+        # task cancellation is a control-plane event, not a subsystem fault.
         try:
             result = await func(*args, **kwargs)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             await self._record_failure(exc)
             raise

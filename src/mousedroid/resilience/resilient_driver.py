@@ -42,7 +42,6 @@ class ResilientESP32Driver:
         self._cb_command = CircuitBreaker("esp32_command", cb_cfg)
         self._cb_query = CircuitBreaker("esp32_query", cb_cfg)
         self._total_calls: int = 0
-        self._total_retries: int = 0
         self._total_failures: int = 0
 
     # -- ESP32CommProtocol -------------------------------------------------
@@ -83,6 +82,9 @@ class ResilientESP32Driver:
                 circuit_state=self._cb_command.state.value,
             )
             raise
+        except Exception:
+            self._total_failures += 1
+            raise
 
     async def read_encoders(self) -> EncoderReading:
         """Read encoders with circuit breaker + retry.
@@ -105,6 +107,9 @@ class ResilientESP32Driver:
                 circuit_state=self._cb_query.state.value,
             )
             raise
+        except Exception:
+            self._total_failures += 1
+            raise
 
     async def get_battery_voltage(self) -> float:
         """Read battery voltage with circuit breaker + retry.
@@ -126,6 +131,9 @@ class ResilientESP32Driver:
                 "resilient_driver_battery_rejected",
                 circuit_state=self._cb_query.state.value,
             )
+            raise
+        except Exception:
+            self._total_failures += 1
             raise
 
     async def emergency_stop(self) -> None:

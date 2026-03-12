@@ -39,10 +39,10 @@ def _build_orchestrator(
 
     resilient = ResilientESP32Driver(
         inner_esp32,
-        cfg.retry._replace_fields(max_attempts=max_attempts, base_delay_s=0.001)
-        if hasattr(cfg.retry, "_replace_fields")
-        else type(cfg.retry)(max_attempts=max_attempts, base_delay_s=0.001),
-        type(cfg.circuit_breaker)(failure_threshold=failure_threshold, recovery_timeout_s=30.0),
+        cfg.retry.model_copy(update={"max_attempts": max_attempts, "base_delay_s": 0.001}),
+        cfg.circuit_breaker.model_copy(
+            update={"failure_threshold": failure_threshold, "recovery_timeout_s": 30.0}
+        ),
     )
 
     world_model = MagicMock()
