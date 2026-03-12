@@ -41,9 +41,7 @@ class TestIterBatches:
         epoch1 = list(iter_batches(50, 5, rng))
         epoch2 = list(iter_batches(50, 5, rng))
         # At least one batch should differ between epochs
-        changed = any(
-            not np.array_equal(a, b) for a, b in zip(epoch1, epoch2, strict=True)
-        )
+        changed = any(not np.array_equal(a, b) for a, b in zip(epoch1, epoch2, strict=True))
         assert changed
 
     def test_single_batch(self) -> None:

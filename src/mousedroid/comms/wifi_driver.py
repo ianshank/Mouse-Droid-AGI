@@ -146,4 +146,3 @@ class WiFiESP32Driver(BaseESP32Driver):
         if not body.strip():
             return {}
         return json.loads(body)  # type: ignore[no-any-return]
-

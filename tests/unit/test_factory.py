@@ -85,3 +85,19 @@ def test_build_camera_real_hardware_auto_fallback(monkeypatch):
 
     camera = build_camera(cfg)
     assert isinstance(camera, JetsonCSICamera)
+
+
+def test_build_camera_real_hardware_auto_picamera2(monkeypatch):
+    """Auto backend selects IMX500 when picamera2 is importable."""
+    import types
+
+    fake_picamera2 = types.ModuleType("picamera2")
+    fake_picamera2.Picamera2 = MagicMock()
+    monkeypatch.setitem(__import__("sys").modules, "picamera2", fake_picamera2)
+
+    cfg = _real_settings()
+    from mousedroid.factory import build_camera
+    from mousedroid.hardware.camera.imx500 import IMX500Camera
+
+    camera = build_camera(cfg)
+    assert isinstance(camera, IMX500Camera)

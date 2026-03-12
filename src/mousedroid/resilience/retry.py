@@ -9,7 +9,8 @@ from __future__ import annotations
 import asyncio
 import functools
 import random
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, TypeVar
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from mousedroid.logging.setup import get_logger
 
@@ -35,9 +36,7 @@ class RetryExhaustedError(Exception):
     def __init__(self, attempts: int, last_exception: BaseException) -> None:
         self.attempts = attempts
         self.last_exception = last_exception
-        super().__init__(
-            f"Retry exhausted after {attempts} attempts: {last_exception}"
-        )
+        super().__init__(f"Retry exhausted after {attempts} attempts: {last_exception}")
 
 
 async def retry_async(
@@ -88,7 +87,7 @@ async def retry_async(
 
             await asyncio.sleep(delay)
 
-    assert last_exc is not None  # noqa: S101
+    assert last_exc is not None
     raise RetryExhaustedError(cfg.max_attempts, last_exc)
 
 
@@ -103,7 +102,7 @@ def _compute_delay(attempt: int, cfg: RetryConfig) -> float:
         Delay in seconds, capped at ``cfg.max_delay_s``.
     """
     delay = min(
-        cfg.base_delay_s * (cfg.exponential_base ** attempt),
+        cfg.base_delay_s * (cfg.exponential_base**attempt),
         cfg.max_delay_s,
     )
     jitter = random.uniform(0.0, delay * _JITTER_FRACTION)  # noqa: S311

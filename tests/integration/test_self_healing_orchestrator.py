@@ -6,19 +6,18 @@ with transient failures, circuit breaker activation, and sensor staleness.
 
 from __future__ import annotations
 
+import contextlib
 from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
-import pytest
 import torch
 
 from mousedroid.comms.protocol import EncoderReading
 from mousedroid.config.schema import Settings
 from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator
-from mousedroid.resilience.circuit_breaker import CircuitOpenError, CircuitState
+from mousedroid.resilience.circuit_breaker import CircuitState
 from mousedroid.resilience.resilient_driver import ResilientESP32Driver
 from mousedroid.safety.context import SafetyContext
-from mousedroid.sensing.bundle import MouseDroidObservationBundle
 
 
 def _build_orchestrator(
@@ -63,9 +62,7 @@ def _build_orchestrator(
     safety_monitor.evaluate.return_value = safety_ctx
 
     camera = AsyncMock()
-    camera.capture_features.return_value = np.zeros(
-        cfg.camera.feature_dim, dtype=np.float32
-    )
+    camera.capture_features.return_value = np.zeros(cfg.camera.feature_dim, dtype=np.float32)
 
     distance_sensor = MagicMock()
     distance_sensor.max_range_m = 4.0
@@ -86,7 +83,7 @@ def _build_orchestrator(
 
 async def test_orchestrator_survives_transient_esp32_failures():
     """Orchestrator completes tick despite transient ESP32 read failures."""
-    orch, inner, resilient = _build_orchestrator(max_attempts=3)
+    orch, inner, _resilient = _build_orchestrator(max_attempts=3)
 
     # Encoder read fails once then succeeds
     inner.read_encoders = AsyncMock(
@@ -101,7 +98,7 @@ async def test_orchestrator_survives_transient_esp32_failures():
 
 async def test_orchestrator_tick_continues_after_motor_read_failure():
     """Even if motor read fully fails (all retries exhausted), tick continues."""
-    orch, inner, resilient = _build_orchestrator(max_attempts=1, failure_threshold=10)
+    orch, inner, _resilient = _build_orchestrator(max_attempts=1, failure_threshold=10)
 
     # Both encoder and battery fail permanently
     inner.read_encoders = AsyncMock(side_effect=ConnectionError("dead"))
@@ -113,7 +110,7 @@ async def test_orchestrator_tick_continues_after_motor_read_failure():
 
 async def test_resilient_driver_stats_after_operations():
     """Stats reflect actual call counts and circuit states."""
-    orch, inner, resilient = _build_orchestrator()
+    orch, _inner, resilient = _build_orchestrator()
 
     await orch.tick()
 
@@ -125,16 +122,15 @@ async def test_resilient_driver_stats_after_operations():
 
 async def test_emergency_stop_works_even_with_open_circuit():
     """Emergency stop always reaches the ESP32 regardless of circuit state."""
-    orch, inner, resilient = _build_orchestrator(
-        max_attempts=1, failure_threshold=1,
+    _orch, inner, resilient = _build_orchestrator(
+        max_attempts=1,
+        failure_threshold=1,
     )
 
     # Force the command circuit open
     inner.send_velocity = AsyncMock(side_effect=ConnectionError("fail"))
-    try:
+    with contextlib.suppress(Exception):
         await resilient.send_velocity(0.1, 0.0, 0.0)
-    except Exception:
-        pass
     assert resilient.command_circuit_state == CircuitState.OPEN
 
     # Emergency stop should still work
@@ -175,9 +171,7 @@ async def test_full_tick_with_factory_built_driver():
     safety_monitor.evaluate.return_value = SafetyContext(is_emergency=False)
 
     camera = AsyncMock()
-    camera.capture_features.return_value = np.zeros(
-        cfg.camera.feature_dim, dtype=np.float32
-    )
+    camera.capture_features.return_value = np.zeros(cfg.camera.feature_dim, dtype=np.float32)
 
     distance_sensor = MagicMock()
     distance_sensor.max_range_m = 4.0

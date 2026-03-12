@@ -68,9 +68,7 @@ def sgd_step(
     """
     unknown_keys = grads.keys() - weights.keys()
     if unknown_keys:
-        raise KeyError(
-            f"Gradient provided for unknown parameter(s): {sorted(unknown_keys)}"
-        )
+        raise KeyError(f"Gradient provided for unknown parameter(s): {sorted(unknown_keys)}")
     for key, grad in grads.items():
         weights[key] -= lr * grad
 

@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from mousedroid.logging.setup import get_logger
+
 if TYPE_CHECKING:
     from mousedroid.comms.protocol import EncoderReading
     from mousedroid.config.schema import ESP32Config
+
+_log = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # ESP32 protocol constants (shared between serial and WiFi drivers)
@@ -64,6 +68,12 @@ def build_velocity_cmd(
     pwm_vx = int(clamp(vx / max_vel, -1.0, 1.0) * MAX_PWM)
     pwm_vy = int(clamp(vy / max_vel, -1.0, 1.0) * MAX_PWM)
     pwm_omega = int(clamp(omega / cfg.max_omega_rads, -1.0, 1.0) * MAX_PWM)
+    _log.debug(
+        "velocity_cmd_built",
+        vx_pwm=pwm_vx,
+        vy_pwm=pwm_vy,
+        omega_pwm=pwm_omega,
+    )
     return {
         "T": ESP32_CMD_TYPE_VELOCITY,
         "vx": pwm_vx,
@@ -84,6 +94,11 @@ def parse_encoder_reading(data: dict[str, Any]) -> EncoderReading:
         Populated ``EncoderReading`` dataclass.
     """
     from mousedroid.comms.protocol import EncoderReading  # avoid circular at import time
+
+    expected_keys = {"lv", "rv", "ox", "oy", "h", "ts"}
+    missing = expected_keys - data.keys()
+    if missing:
+        _log.debug("encoder_fields_missing", missing_keys=sorted(missing))
 
     return EncoderReading(
         left_velocity_mps=float(data.get("lv", 0.0)),

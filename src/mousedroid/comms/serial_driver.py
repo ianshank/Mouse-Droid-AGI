@@ -146,4 +146,3 @@ class SerialESP32Driver(BaseESP32Driver):
         """
         line: bytes = self._serial.readline()
         return line.decode().strip()
-

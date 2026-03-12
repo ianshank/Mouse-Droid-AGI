@@ -71,9 +71,7 @@ async def test_start_no_backend_raises():
 
     cam = jetson_csi.JetsonCSICamera(_cfg())
     p_ju, p_cv = _patch_backends(jetson_csi)
-    with p_ju, p_cv, pytest.raises(
-        RuntimeError, match="Neither jetson_utils nor OpenCV"
-    ):
+    with p_ju, p_cv, pytest.raises(RuntimeError, match="Neither jetson_utils nor OpenCV"):
         await cam.start()
 
 
@@ -143,9 +141,7 @@ async def test_start_gstreamer_open_fails():
     cam = jetson_csi.JetsonCSICamera(_cfg())
 
     p_ju, p_cv = _patch_backends(jetson_csi, cv2=mock_cv2)
-    with p_ju, p_cv, pytest.raises(
-        RuntimeError, match="Failed to open CSI camera"
-    ):
+    with p_ju, p_cv, pytest.raises(RuntimeError, match="Failed to open CSI camera"):
         await cam.start()
 
 

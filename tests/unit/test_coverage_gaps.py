@@ -228,8 +228,11 @@ def test_ewc_consolidate_with_gradients(monkeypatch):
 
 
 def test_factory_build_camera_picamera2_backend():
-    cfg = Settings(mock_hardware=False, ultrasonic={"trigger_pin": 17, "echo_pin": 27},
-                   camera={"backend": "picamera2"})
+    cfg = Settings(
+        mock_hardware=False,
+        ultrasonic={"trigger_pin": 17, "echo_pin": 27},
+        camera={"backend": "picamera2"},
+    )
     from mousedroid.factory import build_camera
     from mousedroid.hardware.camera.imx500 import IMX500Camera
 

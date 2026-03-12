@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import time
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -157,7 +156,7 @@ async def test_half_open_limits_concurrent_calls():
     await asyncio.sleep(0.02)
 
     # First call allowed (transitions to half-open)
-    slow_mock = AsyncMock(return_value="slow")
+    AsyncMock(return_value="slow")
 
     async def slow_call() -> str:
         await asyncio.sleep(0.1)

@@ -48,9 +48,13 @@ class MockMicrophone:
         """
         if self._chunk is not None:
             return self._chunk
-        return np.random.default_rng().standard_normal(
-            self._cfg.chunk_size * self._cfg.channels,
-        ).astype(np.float32)
+        return (
+            np.random.default_rng()
+            .standard_normal(
+                self._cfg.chunk_size * self._cfg.channels,
+            )
+            .astype(np.float32)
+        )
 
     @property
     def sample_rate(self) -> int:

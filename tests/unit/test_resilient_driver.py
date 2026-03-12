@@ -70,7 +70,7 @@ async def test_delegates_read_encoders():
 
 
 async def test_delegates_get_battery_voltage():
-    driver, inner = _make_driver()
+    driver, _inner = _make_driver()
     result = await driver.get_battery_voltage()
     assert result == 12.0
 
@@ -198,7 +198,7 @@ async def test_disconnect_handles_error_gracefully():
 
 
 async def test_stats_tracking():
-    driver, inner = _make_driver()
+    driver, _inner = _make_driver()
     await driver.send_velocity(0.1, 0.0, 0.0)
     await driver.read_encoders()
 
@@ -243,3 +243,39 @@ async def test_reset_clears_circuits():
 def test_inner_property():
     driver, inner = _make_driver()
     assert driver.inner is inner
+
+
+# -- Circuit open on query methods -----------------------------------------
+
+
+async def test_circuit_open_rejects_read_encoders():
+    """read_encoders raises CircuitOpenError once the query circuit is open."""
+    driver, inner = _make_driver(failure_threshold=1, max_attempts=1, recovery_timeout_s=999.0)
+    inner.read_encoders = AsyncMock(side_effect=ConnectionError("fail"))
+
+    with pytest.raises((RetryExhaustedError, CircuitOpenError)):
+        await driver.read_encoders()
+
+    # Query circuit should now be open
+    assert driver.query_circuit_state == CircuitState.OPEN
+
+    with pytest.raises(CircuitOpenError):
+        await driver.read_encoders()
+
+    assert driver.stats["total_failures"] >= 1
+
+
+async def test_circuit_open_rejects_get_battery_voltage():
+    """get_battery_voltage raises CircuitOpenError once the query circuit is open."""
+    driver, inner = _make_driver(failure_threshold=1, max_attempts=1, recovery_timeout_s=999.0)
+    inner.get_battery_voltage = AsyncMock(side_effect=ConnectionError("fail"))
+
+    with pytest.raises((RetryExhaustedError, CircuitOpenError)):
+        await driver.get_battery_voltage()
+
+    assert driver.query_circuit_state == CircuitState.OPEN
+
+    with pytest.raises(CircuitOpenError):
+        await driver.get_battery_voltage()
+
+    assert driver.stats["total_failures"] >= 1

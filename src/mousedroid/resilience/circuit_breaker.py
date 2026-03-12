@@ -9,7 +9,8 @@ from __future__ import annotations
 import asyncio
 import enum
 import time
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, TypeVar
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from mousedroid.logging.setup import get_logger
 
@@ -35,9 +36,7 @@ class CircuitOpenError(Exception):
     def __init__(self, name: str, recovery_remaining_s: float) -> None:
         self.name = name
         self.recovery_remaining_s = recovery_remaining_s
-        super().__init__(
-            f"Circuit '{name}' is open; recovery in {recovery_remaining_s:.1f}s"
-        )
+        super().__init__(f"Circuit '{name}' is open; recovery in {recovery_remaining_s:.1f}s")
 
 
 class CircuitBreaker:
