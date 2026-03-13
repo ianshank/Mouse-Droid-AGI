@@ -9,6 +9,8 @@
 # Shell:  docker exec -it mousedroid bash
 # =============================================================================
 
+FROM dustynv/llama_cpp:r36.4.0 AS llm_builder
+
 FROM dustynv/l4t-pytorch:r36.4.0
 
 LABEL maintainer="Ian Cruickshank"
@@ -71,13 +73,14 @@ RUN pip install --no-cache-dir \
     "pip-audit"
 
 # ---------------------------------------------------------------------------
-# Stage 4: LLM gateway dependencies
-# NOTE: llama-cpp-python requires ~8GB RAM to compile with CUDA support.
-#       Install it AFTER build: docker exec mousedroid pip install llama-cpp-python
+# Stage 4: LLM gateway dependencies (Multi-Stage Extraction)
+# NOTE: Bypasses 8GB OOM issues by pulling pre-compiled Jetson wheels/libs
+#       directly from the dustynv/llama_cpp substrate image.
 # ---------------------------------------------------------------------------
-ENV CMAKE_ARGS="-DGGML_CUDA=on"
-ENV FORCE_CMAKE=1
-RUN pip install --no-cache-dir "huggingface-hub>=0.20" || true
+COPY --from=llm_builder /usr/local/lib/python3.10/dist-packages/llama_cpp /usr/local/lib/python3.10/dist-packages/llama_cpp
+COPY --from=llm_builder /usr/local/lib/python3.10/dist-packages/llama_cpp_python-*.dist-info /usr/local/lib/python3.10/dist-packages/
+
+RUN pip install --no-cache-dir "huggingface-hub>=0.20" diskcache || true
 
 # ---------------------------------------------------------------------------
 # Runtime configuration
