@@ -6,6 +6,7 @@ logic and graceful degradation if hf_hub not installed.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -21,6 +22,7 @@ _log = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 _HF_HUB_AVAILABLE = False
+hf_hub_download = None  # Placeholder for environments without huggingface_hub
 try:
     from huggingface_hub import hf_hub_download
     _HF_HUB_AVAILABLE = True
@@ -108,8 +110,6 @@ def _download_file_with_retry(
     Returns:
         True if download succeeded, False otherwise.
     """
-    import time
-
     for attempt in range(max_retries):
         try:
             local_path = hf_hub_download(

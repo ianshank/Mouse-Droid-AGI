@@ -143,11 +143,17 @@ class MouseDroidOrchestrator:
                     if observation.motor_state.size > 3
                     else 12.6
                 )
+                belief_dim = int(self._cfg.model.belief_dim)
+                state_vec = self._h.numpy().flatten()
+                if state_vec.size < belief_dim:
+                    state_vec = np.pad(state_vec, (0, belief_dim - state_vec.size))
+                else:
+                    state_vec = state_vec[:belief_dim]
                 obs_dict = {
-                    "state": self._h.numpy().flatten()[:128],  # Policy input (128-d)
+                    "state": state_vec,
                     "battery_v": battery_v,
                     "obstacle_dist_m": float(observation.distance_m),
-                    "mcts_sims": 50,  # Default MCTS budget
+                    "mcts_sims": int(self._cfg.mcts.n_simulations_base),
                     "loop_time_ms": loop_time_ms,
                 }
                 # Cognitive core returns (safe_action, violations)
@@ -158,10 +164,8 @@ class MouseDroidOrchestrator:
                         violation_count=len(violations),
                         violations=violations,
                     )
-                # Convert numpy array to torch tensor
-                action = torch.from_numpy(action_np).float()
-                if action.dim() == 1:
-                    action = action.unsqueeze(0)
+                # Convert numpy array to 1D torch tensor for execution
+                action = torch.from_numpy(action_np).float().flatten()
             except Exception as e:  # pylint: disable=broad-except
                 _log.warning(
                     "cognitive_core_action_selection_failed",

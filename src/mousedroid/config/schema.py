@@ -84,6 +84,16 @@ class CognitiveConfig(BaseModel):
         True,
         description="Fall back to MCTS agent if cognitive core initialization fails",
     )
+    download_max_retries: int = Field(
+        3,
+        gt=0,
+        description="Max retry attempts for HuggingFace weight downloads",
+    )
+    download_backoff_base: float = Field(
+        2.0,
+        gt=0,
+        description="Exponential backoff base for download retries (wait = base ^ attempt)",
+    )
 
 
 class CuriosityConfig(BaseModel):

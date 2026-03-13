@@ -152,6 +152,8 @@ cognitive:
   huggingface_repo: "ianshank/mousedroid-weights"
   auto_download: true
   fallback_to_mcts: true
+  download_max_retries: 3
+  download_backoff_base: 2.0
 
 metrics:
   enabled: true

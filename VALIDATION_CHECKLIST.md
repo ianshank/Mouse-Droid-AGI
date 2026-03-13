@@ -37,7 +37,7 @@
 
 ### 1. **Quick Test Run** (5-10 seconds)
 ```bash
-cd /home/user/Mouse-Droid-Jetson-Nano
+# Run from the project root directory.
 python -m pytest tests/unit/test_orchestrator.py::test_orchestrator_with_cognitive_core_primary -xvs
 ```
 **Expected Output**:

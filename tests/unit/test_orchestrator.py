@@ -339,7 +339,7 @@ async def test_orchestrator_without_cognitive_core_uses_mcts():
 
 
 async def test_cognitive_action_bounds():
-    """Test cognitive core actions are bounded to [-1, 1]."""
+    """Test orchestrator handles out-of-bounds cognitive core actions without crashing."""
     orch = _make_orchestrator()
 
     # Mock cognitive core returning out-of-bounds action

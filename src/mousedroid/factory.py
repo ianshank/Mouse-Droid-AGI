@@ -16,6 +16,7 @@ from mousedroid.safety.protocol import SafetyMonitorProtocol
 from mousedroid.world_model.protocol import WorldModelProtocol
 
 if TYPE_CHECKING:
+    from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.config.schema import Settings, UltrasonicConfig
 
 _log = get_logger(__name__)
@@ -188,7 +189,7 @@ def build_agent(cfg: Settings, world_model: WorldModelProtocol) -> AgentProtocol
     return MouseDroidNavigationAgent(world_model, cfg)
 
 
-def build_cognitive_core(cfg: Settings) -> object:
+def build_cognitive_core(cfg: Settings) -> CognitiveCore:
     """Build cognitive core with optional weight loading from HuggingFace.
 
     Weight loading strategy:
@@ -237,8 +238,8 @@ def build_cognitive_core(cfg: Settings) -> object:
             repo_id=cfg.cognitive.huggingface_repo,
             filenames=bdi_filenames,
             cache_dir=weights_dir,
-            max_retries=3,
-            backoff_base=2.0,
+            max_retries=cfg.cognitive.download_max_retries,
+            backoff_base=cfg.cognitive.download_backoff_base,
         )
         if success:
             _log.info(
@@ -300,7 +301,17 @@ def build_orchestrator(cfg: Settings) -> object:
     camera = build_camera(cfg)
     distance = build_distance_sensor(cfg)
     microphone = build_microphone(cfg)
-    cognitive_core = build_cognitive_core(cfg)
+    cognitive_core: CognitiveCore | None = None
+    try:
+        cognitive_core = build_cognitive_core(cfg)
+    except Exception as e:  # pylint: disable=broad-except
+        if cfg.cognitive.fallback_to_mcts:
+            _log.warning(
+                "cognitive_core_init_failed_falling_back_to_mcts",
+                error=str(e),
+            )
+        else:
+            raise
     return MouseDroidOrchestrator(
         world_model=wm,
         agents=[agent],
