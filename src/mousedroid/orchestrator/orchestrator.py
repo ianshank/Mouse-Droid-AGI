@@ -162,8 +162,25 @@ class MouseDroidOrchestrator:
                         violation_count=len(violations),
                         violations=violations,
                     )
+                # Ensure cognitive action matches expected action_dim
+                action_np = np.asarray(action_np, dtype=np.float32).flatten()
+                expected_action_dim = int(self._cfg.model.action_dim)
+                if action_np.size < expected_action_dim:
+                    _log.warning(
+                        "cognitive_core_action_padded",
+                        received_dim=int(action_np.size),
+                        expected_dim=expected_action_dim,
+                    )
+                    action_np = np.pad(action_np, (0, expected_action_dim - action_np.size))
+                elif action_np.size > expected_action_dim:
+                    _log.warning(
+                        "cognitive_core_action_truncated",
+                        received_dim=int(action_np.size),
+                        expected_dim=expected_action_dim,
+                    )
+                    action_np = action_np[:expected_action_dim]
                 # Convert numpy array to 1D torch tensor for execution
-                action = torch.from_numpy(action_np).float().flatten()
+                action = torch.from_numpy(action_np).float()
             except Exception as e:  # pylint: disable=broad-except
                 _log.warning(
                     "cognitive_core_action_selection_failed",
