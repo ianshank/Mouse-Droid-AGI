@@ -6,6 +6,7 @@ logic and graceful degradation if hf_hub not installed.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -22,12 +23,15 @@ _log = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 _HF_HUB_AVAILABLE = False
-hf_hub_download = None  # Placeholder for environments without huggingface_hub
 try:
-    from huggingface_hub import hf_hub_download
+    from huggingface_hub import hf_hub_download as _hf_hub_download
+
     _HF_HUB_AVAILABLE = True
 except ImportError:
-    _HF_HUB_AVAILABLE = False
+
+    def _hf_hub_download(**kwargs: object) -> str:
+        """Stub — never called when _HF_HUB_AVAILABLE is False."""
+        raise ImportError("huggingface_hub is not installed")
 
 
 def download_weights_from_huggingface(
@@ -69,7 +73,11 @@ def download_weights_from_huggingface(
     all_success = True
     for filename in filenames:
         success = _download_file_with_retry(
-            repo_id, filename, cache_dir, max_retries=max_retries, backoff_base=backoff_base,
+            repo_id,
+            filename,
+            cache_dir,
+            max_retries=max_retries,
+            backoff_base=backoff_base,
         )
         if not success:
             all_success = False
@@ -112,7 +120,7 @@ def _download_file_with_retry(
     """
     for attempt in range(max_retries):
         try:
-            local_path = hf_hub_download(
+            local_path = _hf_hub_download(
                 repo_id=repo_id,
                 filename=filename,
                 cache_dir=str(cache_dir),
@@ -162,3 +170,36 @@ def weights_exist_locally(weights_dir: Path | str, filenames: list[str]) -> bool
     """
     weights_dir = Path(weights_dir)
     return all((weights_dir / filename).exists() for filename in filenames)
+
+
+async def download_weights_async(
+    repo_id: str,
+    filenames: list[str],
+    cache_dir: Path | str,
+    *,
+    max_retries: int = 3,
+    backoff_base: float = 2.0,
+) -> bool:
+    """Async wrapper for download_weights_from_huggingface.
+
+    Runs the blocking download in a worker thread to avoid blocking the
+    asyncio event loop during startup.
+
+    Args:
+        repo_id: HuggingFace repository ID.
+        filenames: List of filenames to download.
+        cache_dir: Local directory to cache downloaded files.
+        max_retries: Maximum retry attempts per file.
+        backoff_base: Exponential backoff base.
+
+    Returns:
+        True if all files downloaded successfully, False otherwise.
+    """
+    return await asyncio.to_thread(
+        download_weights_from_huggingface,
+        repo_id,
+        filenames,
+        cache_dir,
+        max_retries=max_retries,
+        backoff_base=backoff_base,
+    )

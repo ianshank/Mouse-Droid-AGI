@@ -108,7 +108,7 @@ def test_build_cognitive_core_with_random_init():
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.factory import build_cognitive_core
 
-    cfg = Settings(mock_hardware=True)
+    cfg = Settings(mock_hardware=True, cognitive={"auto_download": False, "enabled": True})
     core = build_cognitive_core(cfg)
     assert isinstance(core, CognitiveCore)
     assert core._bdi is not None
@@ -124,7 +124,7 @@ def test_build_cognitive_core_returns_fully_initialized():
     from mousedroid.cognitive.metacognitive import MetacognitiveModel
     from mousedroid.factory import build_cognitive_core
 
-    cfg = Settings(mock_hardware=True)
+    cfg = Settings(mock_hardware=True, cognitive={"auto_download": False, "enabled": True})
     core = build_cognitive_core(cfg)
 
     assert isinstance(core, CognitiveCore)
@@ -140,7 +140,7 @@ def test_build_cognitive_core_with_auto_download_false():
 
     cfg = Settings(
         mock_hardware=True,
-        cognitive={"auto_download": False, "weights_dir": "nonexistent/"}
+        cognitive={"auto_download": False, "weights_dir": "nonexistent/", "enabled": True},
     )
     core = build_cognitive_core(cfg)
     # Should still return initialized core with random weights
@@ -158,7 +158,7 @@ def test_build_cognitive_core_respects_weights_dir_config():
     custom_dir = Path("custom_weights/")
     cfg = Settings(
         mock_hardware=True,
-        cognitive={"weights_dir": custom_dir, "auto_download": False}
+        cognitive={"weights_dir": custom_dir, "auto_download": False, "enabled": True},
     )
     core = build_cognitive_core(cfg)
     # Should still initialize even if weights_dir doesn't exist

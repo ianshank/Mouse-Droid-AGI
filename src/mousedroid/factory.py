@@ -209,6 +209,7 @@ def build_cognitive_core(cfg: Settings) -> CognitiveCore:
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.cognitive.constitutional_rl import ConstitutionalChecker
     from mousedroid.cognitive.metacognitive import MetacognitiveModel
+    from mousedroid.cognitive.policy import PolicyMLP
     from mousedroid.utils import (
         download_weights_from_huggingface,
         weights_exist_locally,
@@ -271,8 +272,14 @@ def build_cognitive_core(cfg: Settings) -> CognitiveCore:
     metacog = MetacognitiveModel()
     checker = ConstitutionalChecker()
 
+    # Initialize policy with config-aligned dimensions
+    policy = PolicyMLP(
+        action_dim=cfg.model.action_dim,
+        input_dim=cfg.model.belief_dim,
+    )
+
     # Create cognitive core
-    core = CognitiveCore(bdi=bdi, metacog=metacog, checker=checker)
+    core = CognitiveCore(bdi=bdi, metacog=metacog, checker=checker, policy=policy)
     _log.info(
         "cognitive_core_initialized",
         weights_source=weights_source,
@@ -302,16 +309,17 @@ def build_orchestrator(cfg: Settings) -> object:
     distance = build_distance_sensor(cfg)
     microphone = build_microphone(cfg)
     cognitive_core: CognitiveCore | None = None
-    try:
-        cognitive_core = build_cognitive_core(cfg)
-    except Exception as e:  # pylint: disable=broad-except
-        if cfg.cognitive.fallback_to_mcts:
-            _log.warning(
-                "cognitive_core_init_failed_falling_back_to_mcts",
-                error=str(e),
-            )
-        else:
-            raise
+    if cfg.cognitive.enabled:
+        try:
+            cognitive_core = build_cognitive_core(cfg)
+        except Exception as e:  # pylint: disable=broad-except
+            if cfg.cognitive.fallback_to_mcts:
+                _log.warning(
+                    "cognitive_core_init_failed_falling_back_to_mcts",
+                    error=str(e),
+                )
+            else:
+                raise
     return MouseDroidOrchestrator(
         world_model=wm,
         agents=[agent],

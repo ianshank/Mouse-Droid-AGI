@@ -92,3 +92,14 @@ coverage_report.txt
 # Temporary deploy/build scripts
 /tmp/jetson_*.py
 /tmp/install_*.py
+
+# HuggingFace Hub cache
+.cache/huggingface/
+huggingface_cache/
+
+# Gemini / Antigravity agent artefacts
+.gemini/
+
+# Pip cache
+pip-wheel-metadata/
+

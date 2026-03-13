@@ -153,11 +153,47 @@ async def _system_info() -> dict[str, str]:
     }
 
 
+async def _mic_diagnostics() -> dict[str, str]:
+    """Run USB microphone diagnostics.
+
+    Returns:
+        Microphone diagnostic status.
+    """
+    try:
+        import pyaudio  # pragma: no cover
+    except ImportError:
+        return {"status": "pyaudio_not_installed"}
+
+    pa = None  # pragma: no cover
+    try:  # pragma: no cover
+        pa = pyaudio.PyAudio()  # pragma: no cover
+        device_count = pa.get_device_count()  # pragma: no cover
+        input_devices = []  # pragma: no cover
+        for i in range(device_count):  # pragma: no cover
+            info = pa.get_device_info_by_index(i)  # pragma: no cover
+            if int(info.get("maxInputChannels", 0)) > 0:  # pragma: no cover
+                input_devices.append(str(info.get("name", f"device_{i}")))  # pragma: no cover
+        return {  # pragma: no cover
+            "status": "ok",
+            "device_count": str(device_count),
+            "input_devices": ", ".join(input_devices) or "none",
+        }
+    except Exception:  # pragma: no cover
+        _log.warning("mic_diagnostics_error", exc_info=True)  # pragma: no cover
+        return {"status": "error"}  # pragma: no cover
+    finally:  # pragma: no cover
+        if pa is not None:  # pragma: no cover
+            try:  # pragma: no cover
+                pa.terminate()  # pragma: no cover
+            except Exception:  # pragma: no cover
+                _log.debug("mic_diagnostics_terminate_failed", exc_info=True)  # pragma: no cover
+
+
 def create_default_registry() -> ToolRegistry:
     """Create a ToolRegistry pre-populated with built-in tools.
 
     Returns:
-        Registry with all 8 default tools registered.
+        Registry with all 9 default tools registered.
     """
     registry = ToolRegistry()
     tools = [
@@ -169,6 +205,7 @@ def create_default_registry() -> ToolRegistry:
         ToolSpec("export_experience", "Export experience data", _export_experience),
         ToolSpec("translate_nl_mission", "Translate NL mission", _translate_nl_mission),
         ToolSpec("system_info", "Get system information", _system_info),
+        ToolSpec("mic_diagnostics", "Run USB microphone diagnostics", _mic_diagnostics),
     ]
     for tool in tools:
         registry.register(tool)

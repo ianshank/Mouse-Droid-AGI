@@ -265,9 +265,7 @@ async def test_orchestrator_with_cognitive_core_primary():
 
     # Create mock cognitive core that returns valid action
     cognitive_core = MagicMock()
-    cognitive_core.tick_fast = MagicMock(
-        return_value=(np.array([0.3, 0.2]), [])
-    )
+    cognitive_core.tick_fast = MagicMock(return_value=(np.array([0.3, 0.2]), []))
     orch._cognitive_core = cognitive_core
 
     await orch.tick()
@@ -284,9 +282,7 @@ async def test_orchestrator_cognitive_fallback_to_mcts_on_error():
 
     # Create mock cognitive core that raises exception
     cognitive_core = MagicMock()
-    cognitive_core.tick_fast = MagicMock(
-        side_effect=RuntimeError("cognitive fail")
-    )
+    cognitive_core.tick_fast = MagicMock(side_effect=RuntimeError("cognitive fail"))
     orch._cognitive_core = cognitive_core
 
     await orch.tick()
@@ -362,9 +358,7 @@ async def test_constitutional_violations_logged():
     # Mock cognitive core returning violations
     cognitive_core = MagicMock()
     violations = ["battery_too_low", "obstacle_too_close"]
-    cognitive_core.tick_fast = MagicMock(
-        return_value=(np.array([0.1, 0.0]), violations)
-    )
+    cognitive_core.tick_fast = MagicMock(return_value=(np.array([0.1, 0.0]), violations))
     orch._cognitive_core = cognitive_core
 
     await orch.tick()
