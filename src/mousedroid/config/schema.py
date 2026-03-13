@@ -68,6 +68,11 @@ class CircuitBreakerConfig(BaseModel):
 class CognitiveConfig(BaseModel):
     """Cognitive core configuration (Pillar 2 — dual-cadence BDI + constitutional RL)."""
 
+    enabled: bool = Field(
+        False,
+        description="Enable cognitive core injection into orchestrator (requires trained weights)",
+    )
+
     weights_dir: Path = Field(
         Path("weights/bdi/"),
         description="Directory containing BDI model weights (.npz files)",

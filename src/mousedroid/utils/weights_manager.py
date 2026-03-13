@@ -6,6 +6,7 @@ logic and graceful degradation if hf_hub not installed.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -169,3 +170,36 @@ def weights_exist_locally(weights_dir: Path | str, filenames: list[str]) -> bool
     """
     weights_dir = Path(weights_dir)
     return all((weights_dir / filename).exists() for filename in filenames)
+
+
+async def download_weights_async(
+    repo_id: str,
+    filenames: list[str],
+    cache_dir: Path | str,
+    *,
+    max_retries: int = 3,
+    backoff_base: float = 2.0,
+) -> bool:
+    """Async wrapper for download_weights_from_huggingface.
+
+    Runs the blocking download in a worker thread to avoid blocking the
+    asyncio event loop during startup.
+
+    Args:
+        repo_id: HuggingFace repository ID.
+        filenames: List of filenames to download.
+        cache_dir: Local directory to cache downloaded files.
+        max_retries: Maximum retry attempts per file.
+        backoff_base: Exponential backoff base.
+
+    Returns:
+        True if all files downloaded successfully, False otherwise.
+    """
+    return await asyncio.to_thread(
+        download_weights_from_huggingface,
+        repo_id,
+        filenames,
+        cache_dir,
+        max_retries=max_retries,
+        backoff_base=backoff_base,
+    )

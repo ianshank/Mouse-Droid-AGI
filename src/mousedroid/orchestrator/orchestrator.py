@@ -157,8 +157,8 @@ class MouseDroidOrchestrator:
                 # Cognitive core returns (safe_action, violations)
                 action_np, violations = self._cognitive_core.tick_fast(obs_dict)
                 if violations:
-                    _log.warning(
-                        "constitutional_violations",
+                    _log.info(
+                        "orchestrator_constitutional_violations_summary",
                         violation_count=len(violations),
                         violations=violations,
                     )

@@ -302,16 +302,17 @@ def build_orchestrator(cfg: Settings) -> object:
     distance = build_distance_sensor(cfg)
     microphone = build_microphone(cfg)
     cognitive_core: CognitiveCore | None = None
-    try:
-        cognitive_core = build_cognitive_core(cfg)
-    except Exception as e:  # pylint: disable=broad-except
-        if cfg.cognitive.fallback_to_mcts:
-            _log.warning(
-                "cognitive_core_init_failed_falling_back_to_mcts",
-                error=str(e),
-            )
-        else:
-            raise
+    if cfg.cognitive.enabled:
+        try:
+            cognitive_core = build_cognitive_core(cfg)
+        except Exception as e:  # pylint: disable=broad-except
+            if cfg.cognitive.fallback_to_mcts:
+                _log.warning(
+                    "cognitive_core_init_failed_falling_back_to_mcts",
+                    error=str(e),
+                )
+            else:
+                raise
     return MouseDroidOrchestrator(
         world_model=wm,
         agents=[agent],
