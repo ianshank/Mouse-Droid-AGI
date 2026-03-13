@@ -147,6 +147,12 @@ circuit_breaker:
   recovery_timeout_s: 30.0
   half_open_max_calls: 3
 
+cognitive:
+  weights_dir: "weights/bdi/"
+  huggingface_repo: "ianshank/mousedroid-weights"
+  auto_download: true
+  fallback_to_mcts: true
+
 metrics:
   enabled: true
   export_interval_s: 10.0

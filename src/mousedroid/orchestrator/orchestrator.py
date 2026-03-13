@@ -49,6 +49,7 @@ class MouseDroidOrchestrator:
         camera: VisionProtocol,
         distance_sensor: DistanceSensorProtocol,
         cfg: Settings,
+        cognitive_core: object | None = None,
         microphone: AudioProtocol | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
@@ -61,6 +62,7 @@ class MouseDroidOrchestrator:
             camera: Vision driver.
             distance_sensor: Distance sensor driver.
             cfg: Root settings.
+            cognitive_core: Optional CognitiveCore for BDI/metacognitive loop.
             microphone: Optional USB microphone driver.
         """
         self._world_model = world_model
@@ -69,6 +71,7 @@ class MouseDroidOrchestrator:
         self._esp32 = esp32
         self._camera = camera
         self._distance_sensor = distance_sensor
+        self._cognitive_core = cognitive_core
         self._microphone = microphone
         self._cfg = cfg
         self._running = False
@@ -85,6 +88,8 @@ class MouseDroidOrchestrator:
         await self._camera.start()
         if self._microphone is not None:
             await self._microphone.start()
+        if self._cognitive_core is not None:
+            await self._cognitive_core.start()
         self._running = True
         _log.info("orchestrator_started")
 
@@ -92,6 +97,8 @@ class MouseDroidOrchestrator:
         """Stop all subsystems gracefully."""
         _log.info("orchestrator_stopping")
         self._running = False
+        if self._cognitive_core is not None:
+            await self._cognitive_core.stop()
         await self._esp32.emergency_stop()
         await self._camera.stop()
         if self._microphone is not None:
@@ -125,8 +132,42 @@ class MouseDroidOrchestrator:
             _log.warning("emergency_stop_triggered", surprise=surprise)
             return
 
-        # Select action from primary agent
-        action = self._agents[0].act(self._h, self._z, safety_ctx)
+        # Select action — cognitive core primary, MCTS fallback
+        action = None
+        if self._cognitive_core is not None:
+            try:
+                # Build observation dict for cognitive core fast path
+                obs_dict = {
+                    "state": self._h.numpy().flatten()[:128],  # Policy input (128-d)
+                    "battery_v": float(observation.battery_v) if observation.battery_v else 12.6,
+                    "obstacle_dist_m": float(observation.distance_m),
+                    "mcts_sims": 50,  # Default MCTS budget
+                    "loop_time_ms": loop_time_ms,
+                }
+                # Cognitive core returns (safe_action, violations)
+                action_np, violations = self._cognitive_core.tick_fast(obs_dict)
+                if violations:
+                    _log.warning(
+                        "constitutional_violations",
+                        violation_count=len(violations),
+                        violations=violations,
+                    )
+                # Convert numpy array to torch tensor
+                action = torch.from_numpy(action_np).float()
+                if action.dim() == 1:
+                    action = action.unsqueeze(0)
+            except Exception as e:  # pylint: disable=broad-except
+                _log.warning(
+                    "cognitive_core_action_selection_failed",
+                    error=str(e),
+                    falling_back_to_mcts=True,
+                )
+                action = None  # Will fall back to MCTS below
+
+        # Fallback to MCTS if cognitive not available or failed
+        if action is None:
+            action = self._agents[0].act(self._h, self._z, safety_ctx)
+
         self._prev_action = action.unsqueeze(0) if action.dim() == 1 else action
 
         # Execute

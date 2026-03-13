@@ -14,6 +14,7 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+from mousedroid.common.math.numpy_ops import relu, softmax
 from mousedroid.constants import (
     AFFECT_ESTIMATOR_SEED,
     BELIEF_ENCODER_SEED,
@@ -60,7 +61,7 @@ _AFFECT_DIM: int = 2
 
 def _safe_softmax(logits: NDArray[np.floating[Any]]) -> NDArray[np.floating[Any]]:
     """Numerically stable softmax — delegates to shared ``numpy_ops.softmax``."""
-    return _safe_softmax_impl(logits)
+    return softmax(logits)
 
 
 def _bayesian_normalise(
@@ -159,8 +160,8 @@ class BeliefEncoder:
         Returns:
             128-d belief vector.
         """
-        h = _relu(x @ self._w1 + self._b1)
-        return _relu(h @ self._w2 + self._b2)
+        h = relu(x @ self._w1 + self._b1)
+        return relu(h @ self._w2 + self._b2)
 
 
 class DesireEncoder:
@@ -192,7 +193,7 @@ class DesireEncoder:
         Returns:
             64-d desire vector.
         """
-        return _relu(belief @ self._w1 + self._b1)
+        return relu(belief @ self._w1 + self._b1)
 
 
 class IntentionPredictor:

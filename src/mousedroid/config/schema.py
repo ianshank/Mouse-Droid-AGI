@@ -65,6 +65,27 @@ class CircuitBreakerConfig(BaseModel):
     half_open_max_calls: int = Field(3, gt=0, description="Max calls in half-open state")
 
 
+class CognitiveConfig(BaseModel):
+    """Cognitive core configuration (Pillar 2 — dual-cadence BDI + constitutional RL)."""
+
+    weights_dir: Path = Field(
+        Path("weights/bdi/"),
+        description="Directory containing BDI model weights (.npz files)",
+    )
+    huggingface_repo: str = Field(
+        "ianshank/mousedroid-weights",
+        description="HuggingFace repository ID for auto-downloading weights",
+    )
+    auto_download: bool = Field(
+        True,
+        description="Auto-download weights from HuggingFace if local weights missing",
+    )
+    fallback_to_mcts: bool = Field(
+        True,
+        description="Fall back to MCTS agent if cognitive core initialization fails",
+    )
+
+
 class CuriosityConfig(BaseModel):
     """Curiosity-driven exploration configuration (Pillar 8)."""
 
@@ -447,6 +468,7 @@ class Settings(BaseSettings):
     health: HealthConfig = Field(default_factory=HealthConfig)  # type: ignore[arg-type]
     retry: RetryConfig = Field(default_factory=RetryConfig)  # type: ignore[arg-type]
     circuit_breaker: CircuitBreakerConfig = Field(default_factory=CircuitBreakerConfig)  # type: ignore[arg-type]
+    cognitive: CognitiveConfig = Field(default_factory=CognitiveConfig)  # type: ignore[arg-type]
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)  # type: ignore[arg-type]
     memory: MemoryConfig = Field(default_factory=MemoryConfig)  # type: ignore[arg-type]
     learning: LearningConfig = Field(default_factory=LearningConfig)  # type: ignore[arg-type]
