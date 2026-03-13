@@ -23,6 +23,7 @@ from mousedroid.sensing.bundle import MouseDroidObservationBundle
 
 if TYPE_CHECKING:
     from mousedroid.agents.base import AgentProtocol
+    from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.comms.protocol import ESP32CommProtocol
     from mousedroid.config.schema import Settings
     from mousedroid.hardware.protocols import AudioProtocol, DistanceSensorProtocol, VisionProtocol
@@ -49,7 +50,7 @@ class MouseDroidOrchestrator:
         camera: VisionProtocol,
         distance_sensor: DistanceSensorProtocol,
         cfg: Settings,
-        cognitive_core: object | None = None,
+        cognitive_core: CognitiveCore | None = None,
         microphone: AudioProtocol | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
@@ -137,9 +138,14 @@ class MouseDroidOrchestrator:
         if self._cognitive_core is not None:
             try:
                 # Build observation dict for cognitive core fast path
+                battery_v = (
+                    float(observation.motor_state[3])
+                    if observation.motor_state.size > 3
+                    else 12.6
+                )
                 obs_dict = {
                     "state": self._h.numpy().flatten()[:128],  # Policy input (128-d)
-                    "battery_v": float(observation.battery_v) if observation.battery_v else 12.6,
+                    "battery_v": battery_v,
                     "obstacle_dist_m": float(observation.distance_m),
                     "mcts_sims": 50,  # Default MCTS budget
                     "loop_time_ms": loop_time_ms,

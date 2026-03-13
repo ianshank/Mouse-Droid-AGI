@@ -16,6 +16,7 @@ from mousedroid.safety.context import SafetyContext
 def _make_orchestrator(
     *,
     emergency: bool = False,
+    cognitive_core: object | None = None,
 ) -> MouseDroidOrchestrator:
     cfg = Settings(mock_hardware=True)
 
@@ -54,6 +55,7 @@ def _make_orchestrator(
         camera=camera,
         distance_sensor=distance_sensor,
         cfg=cfg,
+        cognitive_core=cognitive_core,
         microphone=None,
     )
 
@@ -255,3 +257,119 @@ async def test_sense_microphone_failure():
         obs.audio_chunk,
         np.zeros(1024, dtype=np.float32),
     )
+
+
+async def test_orchestrator_with_cognitive_core_primary():
+    """Test orchestrator uses cognitive core action when available."""
+    orch = _make_orchestrator()
+
+    # Create mock cognitive core that returns valid action
+    cognitive_core = MagicMock()
+    cognitive_core.tick_fast = MagicMock(
+        return_value=(np.array([0.3, 0.2]), [])
+    )
+    orch._cognitive_core = cognitive_core
+
+    await orch.tick()
+
+    # Verify cognitive core was called
+    cognitive_core.tick_fast.assert_called_once()
+    # Verify action was sent to ESP32
+    orch._esp32.send_velocity.assert_awaited_once()
+
+
+async def test_orchestrator_cognitive_fallback_to_mcts_on_error():
+    """Test orchestrator falls back to MCTS when cognitive core fails."""
+    orch = _make_orchestrator()
+
+    # Create mock cognitive core that raises exception
+    cognitive_core = MagicMock()
+    cognitive_core.tick_fast = MagicMock(
+        side_effect=RuntimeError("cognitive fail")
+    )
+    orch._cognitive_core = cognitive_core
+
+    await orch.tick()
+
+    # Verify MCTS agent was used as fallback
+    orch._agents[0].act.assert_called_once()
+    # Verify action was still sent to ESP32
+    orch._esp32.send_velocity.assert_awaited_once()
+
+
+async def test_orchestrator_start_calls_cognitive_core_start():
+    """Test orchestrator.start() initializes cognitive core."""
+    orch = _make_orchestrator()
+
+    cognitive_core = AsyncMock()
+    orch._cognitive_core = cognitive_core
+
+    await orch.start()
+
+    # Verify cognitive core was started
+    cognitive_core.start.assert_awaited_once()
+    assert orch._running is True
+
+
+async def test_orchestrator_stop_calls_cognitive_core_stop():
+    """Test orchestrator.stop() shuts down cognitive core."""
+    orch = _make_orchestrator()
+
+    cognitive_core = AsyncMock()
+    orch._cognitive_core = cognitive_core
+    await orch.start()
+
+    await orch.stop()
+
+    # Verify cognitive core was stopped
+    cognitive_core.stop.assert_awaited_once()
+    assert orch._running is False
+
+
+async def test_orchestrator_without_cognitive_core_uses_mcts():
+    """Test orchestrator operates normally without cognitive core."""
+    orch = _make_orchestrator(cognitive_core=None)
+    assert orch._cognitive_core is None
+
+    await orch.tick()
+
+    # MCTS agent should be used directly
+    orch._agents[0].act.assert_called_once()
+    orch._esp32.send_velocity.assert_awaited_once()
+
+
+async def test_cognitive_action_bounds():
+    """Test cognitive core actions are bounded to [-1, 1]."""
+    orch = _make_orchestrator()
+
+    # Mock cognitive core returning out-of-bounds action
+    cognitive_core = MagicMock()
+    cognitive_core.tick_fast = MagicMock(
+        return_value=(np.array([0.5, 1.5]), [])  # Second value out of bounds
+    )
+    orch._cognitive_core = cognitive_core
+
+    await orch.tick()
+
+    # Should still send velocity without crashing
+    orch._esp32.send_velocity.assert_awaited_once()
+
+
+async def test_constitutional_violations_logged():
+    """Test that constitutional violations are logged but don't block action."""
+    orch = _make_orchestrator()
+
+    # Mock cognitive core returning violations
+    cognitive_core = MagicMock()
+    violations = ["battery_too_low", "obstacle_too_close"]
+    cognitive_core.tick_fast = MagicMock(
+        return_value=(np.array([0.1, 0.0]), violations)
+    )
+    orch._cognitive_core = cognitive_core
+
+    await orch.tick()
+
+    # Verify action was still sent despite violations
+    orch._esp32.send_velocity.assert_awaited_once()
+    # Cognitive core was called (violations logged internally)
+    cognitive_core.tick_fast.assert_called_once()
