@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from numpy.typing import NDArray
 
+from mousedroid.common.math.numpy_ops import layer_norm, relu
 from mousedroid.constants import POLICY_MLP_SEED, VALUE_MLP_SEED, WEIGHT_INIT_SCALE
 from mousedroid.logging.setup import get_logger
 
@@ -260,7 +261,7 @@ class PolicyMLP:
         Returns:
             Action vector in ``[-1, 1]``.
         """
-        h = _relu(_layer_norm(state @ self._w1 + self._b1))
+        h = relu(layer_norm(state @ self._w1 + self._b1))
         return np.tanh(h @ self._w2 + self._b2)
 
     def save(self, path: Path | str) -> None:
@@ -312,7 +313,7 @@ class ValueMLP:
         Returns:
             Scalar value estimate.
         """
-        h = _relu(_layer_norm(state @ self._w1 + self._b1))
+        h = relu(layer_norm(state @ self._w1 + self._b1))
         return float((h @ self._w2 + self._b2)[0])
 
     def save(self, path: Path | str) -> None:

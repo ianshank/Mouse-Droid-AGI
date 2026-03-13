@@ -16,6 +16,7 @@ from mousedroid.safety.protocol import SafetyMonitorProtocol
 from mousedroid.world_model.protocol import WorldModelProtocol
 
 if TYPE_CHECKING:
+    from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.config.schema import Settings, UltrasonicConfig
 
 _log = get_logger(__name__)
@@ -188,6 +189,100 @@ def build_agent(cfg: Settings, world_model: WorldModelProtocol) -> AgentProtocol
     return MouseDroidNavigationAgent(world_model, cfg)
 
 
+def build_cognitive_core(cfg: Settings) -> CognitiveCore:
+    """Build cognitive core with optional weight loading from HuggingFace.
+
+    Weight loading strategy:
+    1. Try local weights_dir/*.npz
+    2. If missing and auto_download=True, download from HuggingFace
+    3. If still missing, initialize with random weights (log WARNING)
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Fully configured ``CognitiveCore``.
+    """
+    from pathlib import Path
+
+    from mousedroid.cognitive.bdi_model import NeuralBDI
+    from mousedroid.cognitive.cognitive_core import CognitiveCore
+    from mousedroid.cognitive.constitutional_rl import ConstitutionalChecker
+    from mousedroid.cognitive.metacognitive import MetacognitiveModel
+    from mousedroid.utils import (
+        download_weights_from_huggingface,
+        weights_exist_locally,
+    )
+
+    weights_dir = Path(cfg.cognitive.weights_dir)
+    bdi_filenames = ["belief.npz", "desire.npz", "intention.npz", "affect.npz"]
+
+    _log.info(
+        "cognitive_core_init_starting",
+        weights_dir=str(weights_dir),
+        auto_download=cfg.cognitive.auto_download,
+    )
+
+    # Try local weights first
+    weights_source = "random"
+    if weights_exist_locally(weights_dir, bdi_filenames):
+        _log.info(
+            "cognitive_core_loading_local_weights",
+            weights_dir=str(weights_dir),
+        )
+        bdi = NeuralBDI(weights_dir=weights_dir)
+        weights_source = "local"
+    elif cfg.cognitive.auto_download:
+        # Try HuggingFace download
+        success = download_weights_from_huggingface(
+            repo_id=cfg.cognitive.huggingface_repo,
+            filenames=bdi_filenames,
+            cache_dir=weights_dir,
+            max_retries=cfg.cognitive.download_max_retries,
+            backoff_base=cfg.cognitive.download_backoff_base,
+        )
+        if success:
+            _log.info(
+                "cognitive_core_loaded_from_huggingface",
+                repo_id=cfg.cognitive.huggingface_repo,
+                weights_dir=str(weights_dir),
+            )
+            bdi = NeuralBDI(weights_dir=weights_dir)
+            weights_source = "huggingface"
+        else:
+            _log.warning(
+                "weights_not_found_using_random_initialization",
+                weights_dir=str(weights_dir),
+                repo_id=cfg.cognitive.huggingface_repo,
+            )
+            bdi = NeuralBDI()  # Random init
+            weights_source = "random"
+    else:
+        # auto_download=False and no local weights
+        _log.warning(
+            "weights_not_found_using_random_initialization",
+            weights_dir=str(weights_dir),
+            auto_download=cfg.cognitive.auto_download,
+        )
+        bdi = NeuralBDI()  # Random init
+        weights_source = "random"
+
+    # Initialize other cognitive components
+    metacog = MetacognitiveModel()
+    checker = ConstitutionalChecker()
+
+    # Create cognitive core
+    core = CognitiveCore(bdi=bdi, metacog=metacog, checker=checker)
+    _log.info(
+        "cognitive_core_initialized",
+        weights_source=weights_source,
+        belief_dim=cfg.model.belief_dim,
+        desire_dim=cfg.model.desire_dim,
+        intention_classes=cfg.model.intention_classes,
+    )
+    return core
+
+
 def build_orchestrator(cfg: Settings) -> object:
     """Build fully-wired orchestrator.
 
@@ -206,6 +301,17 @@ def build_orchestrator(cfg: Settings) -> object:
     camera = build_camera(cfg)
     distance = build_distance_sensor(cfg)
     microphone = build_microphone(cfg)
+    cognitive_core: CognitiveCore | None = None
+    try:
+        cognitive_core = build_cognitive_core(cfg)
+    except Exception as e:  # pylint: disable=broad-except
+        if cfg.cognitive.fallback_to_mcts:
+            _log.warning(
+                "cognitive_core_init_failed_falling_back_to_mcts",
+                error=str(e),
+            )
+        else:
+            raise
     return MouseDroidOrchestrator(
         world_model=wm,
         agents=[agent],
@@ -214,5 +320,6 @@ def build_orchestrator(cfg: Settings) -> object:
         camera=camera,
         distance_sensor=distance,
         microphone=microphone,
+        cognitive_core=cognitive_core,
         cfg=cfg,
     )
