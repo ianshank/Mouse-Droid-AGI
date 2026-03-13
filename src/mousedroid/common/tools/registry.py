@@ -161,7 +161,11 @@ async def _mic_diagnostics() -> dict[str, str]:
     """
     try:
         import pyaudio  # pragma: no cover
+    except ImportError:
+        return {"status": "pyaudio_not_installed"}
 
+    pa = None  # pragma: no cover
+    try:  # pragma: no cover
         pa = pyaudio.PyAudio()  # pragma: no cover
         device_count = pa.get_device_count()  # pragma: no cover
         input_devices = []  # pragma: no cover
@@ -169,14 +173,20 @@ async def _mic_diagnostics() -> dict[str, str]:
             info = pa.get_device_info_by_index(i)  # pragma: no cover
             if int(info.get("maxInputChannels", 0)) > 0:  # pragma: no cover
                 input_devices.append(str(info.get("name", f"device_{i}")))  # pragma: no cover
-        pa.terminate()  # pragma: no cover
         return {  # pragma: no cover
             "status": "ok",
             "device_count": str(device_count),
             "input_devices": ", ".join(input_devices) or "none",
         }
-    except ImportError:
-        return {"status": "pyaudio_not_installed"}
+    except Exception:  # pragma: no cover
+        _log.warning("mic_diagnostics_error", exc_info=True)  # pragma: no cover
+        return {"status": "error"}  # pragma: no cover
+    finally:  # pragma: no cover
+        if pa is not None:  # pragma: no cover
+            try:  # pragma: no cover
+                pa.terminate()  # pragma: no cover
+            except Exception:  # pragma: no cover
+                _log.debug("mic_diagnostics_terminate_failed", exc_info=True)  # pragma: no cover
 
 
 def create_default_registry() -> ToolRegistry:

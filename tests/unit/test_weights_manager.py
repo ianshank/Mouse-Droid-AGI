@@ -68,7 +68,7 @@ def test_download_weights_hf_not_available():
 
 
 @patch("mousedroid.utils.weights_manager._HF_HUB_AVAILABLE", True)
-@patch("mousedroid.utils.weights_manager.hf_hub_download", create=True)
+@patch("mousedroid.utils.weights_manager._hf_hub_download", create=True)
 def test_download_weights_success(mock_download, tmp_path):
     """Test successful weight download."""
     mock_download.return_value = str(tmp_path / "belief.npz")
@@ -84,7 +84,7 @@ def test_download_weights_success(mock_download, tmp_path):
 
 @patch("mousedroid.utils.weights_manager._HF_HUB_AVAILABLE", True)
 @patch("mousedroid.utils.weights_manager.time.sleep", return_value=None)
-@patch("mousedroid.utils.weights_manager.hf_hub_download", create=True)
+@patch("mousedroid.utils.weights_manager._hf_hub_download", create=True)
 def test_download_weights_partial_failure(mock_download, mock_sleep, tmp_path):
     """Test partial failure when some files fail to download."""
     # First file succeeds, second always fails (across all retries)
@@ -108,7 +108,7 @@ def test_download_weights_partial_failure(mock_download, mock_sleep, tmp_path):
 
 @patch("mousedroid.utils.weights_manager._HF_HUB_AVAILABLE", True)
 @patch("mousedroid.utils.weights_manager.time.sleep", return_value=None)
-@patch("mousedroid.utils.weights_manager.hf_hub_download", create=True)
+@patch("mousedroid.utils.weights_manager._hf_hub_download", create=True)
 def test_download_weights_retry_logic(mock_download, mock_sleep, tmp_path):
     """Test retry logic with exponential backoff."""
     # Fail twice, succeed on third attempt
@@ -131,7 +131,7 @@ def test_download_weights_retry_logic(mock_download, mock_sleep, tmp_path):
 
 @patch("mousedroid.utils.weights_manager._HF_HUB_AVAILABLE", True)
 @patch("mousedroid.utils.weights_manager.time.sleep", return_value=None)
-@patch("mousedroid.utils.weights_manager.hf_hub_download", create=True)
+@patch("mousedroid.utils.weights_manager._hf_hub_download", create=True)
 def test_download_weights_max_retries_exceeded(mock_download, mock_sleep, tmp_path):
     """Test download fails after max retries exceeded."""
     mock_download.side_effect = RuntimeError("persistent network error")
@@ -147,7 +147,7 @@ def test_download_weights_max_retries_exceeded(mock_download, mock_sleep, tmp_pa
 
 
 @patch("mousedroid.utils.weights_manager._HF_HUB_AVAILABLE", True)
-@patch("mousedroid.utils.weights_manager.hf_hub_download", create=True)
+@patch("mousedroid.utils.weights_manager._hf_hub_download", create=True)
 def test_download_weights_multiple_files(mock_download, tmp_path):
     """Test downloading multiple weight files."""
     filenames = ["belief.npz", "desire.npz", "intention.npz"]
@@ -163,7 +163,7 @@ def test_download_weights_multiple_files(mock_download, tmp_path):
 
 
 @patch("mousedroid.utils.weights_manager._HF_HUB_AVAILABLE", True)
-@patch("mousedroid.utils.weights_manager.hf_hub_download", create=True)
+@patch("mousedroid.utils.weights_manager._hf_hub_download", create=True)
 def test_download_weights_creates_cache_dir(mock_download, tmp_path):
     """Test download creates cache directory if it doesn't exist."""
     cache_dir = tmp_path / "nonexistent" / "cache"
@@ -179,7 +179,7 @@ def test_download_weights_creates_cache_dir(mock_download, tmp_path):
 
 
 @patch("mousedroid.utils.weights_manager._HF_HUB_AVAILABLE", True)
-@patch("mousedroid.utils.weights_manager.hf_hub_download", create=True)
+@patch("mousedroid.utils.weights_manager._hf_hub_download", create=True)
 def test_download_weights_repo_id_passed(mock_download, tmp_path):
     """Test correct repo_id is passed to hf_hub_download."""
     mock_download.return_value = str(tmp_path / "belief.npz")
@@ -196,7 +196,7 @@ def test_download_weights_repo_id_passed(mock_download, tmp_path):
 
 
 @patch("mousedroid.utils.weights_manager._HF_HUB_AVAILABLE", True)
-@patch("mousedroid.utils.weights_manager.hf_hub_download", create=True)
+@patch("mousedroid.utils.weights_manager._hf_hub_download", create=True)
 def test_download_weights_cache_dir_string(mock_download, tmp_path):
     """Test cache_dir can be passed as string."""
     mock_download.return_value = str(tmp_path / "belief.npz")

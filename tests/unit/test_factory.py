@@ -108,7 +108,7 @@ def test_build_cognitive_core_with_random_init():
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.factory import build_cognitive_core
 
-    cfg = Settings(mock_hardware=True)
+    cfg = Settings(mock_hardware=True, cognitive={"auto_download": False})
     core = build_cognitive_core(cfg)
     assert isinstance(core, CognitiveCore)
     assert core._bdi is not None
@@ -124,7 +124,7 @@ def test_build_cognitive_core_returns_fully_initialized():
     from mousedroid.cognitive.metacognitive import MetacognitiveModel
     from mousedroid.factory import build_cognitive_core
 
-    cfg = Settings(mock_hardware=True)
+    cfg = Settings(mock_hardware=True, cognitive={"auto_download": False})
     core = build_cognitive_core(cfg)
 
     assert isinstance(core, CognitiveCore)
