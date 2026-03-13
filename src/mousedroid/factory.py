@@ -209,6 +209,7 @@ def build_cognitive_core(cfg: Settings) -> CognitiveCore:
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.cognitive.constitutional_rl import ConstitutionalChecker
     from mousedroid.cognitive.metacognitive import MetacognitiveModel
+    from mousedroid.cognitive.policy import PolicyMLP
     from mousedroid.utils import (
         download_weights_from_huggingface,
         weights_exist_locally,
@@ -271,8 +272,14 @@ def build_cognitive_core(cfg: Settings) -> CognitiveCore:
     metacog = MetacognitiveModel()
     checker = ConstitutionalChecker()
 
+    # Initialize policy with config-aligned dimensions
+    policy = PolicyMLP(
+        action_dim=cfg.model.action_dim,
+        input_dim=cfg.model.belief_dim,
+    )
+
     # Create cognitive core
-    core = CognitiveCore(bdi=bdi, metacog=metacog, checker=checker)
+    core = CognitiveCore(bdi=bdi, metacog=metacog, checker=checker, policy=policy)
     _log.info(
         "cognitive_core_initialized",
         weights_source=weights_source,
