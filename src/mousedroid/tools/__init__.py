@@ -1,6 +1,6 @@
 """Tool registry for agent capabilities."""
 
-from mousedroid.tools.registry import ToolRegistry, ToolSpec
+from mousedroid.common.tools.registry import ToolRegistry, ToolSpec
 
 __all__ = [
     "ToolRegistry",

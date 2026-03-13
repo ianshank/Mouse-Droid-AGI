@@ -4,6 +4,8 @@ DEPRECATED: This module is deprecated and will be removed in a future release.
 Please use `mousedroid.common.tools.registry` instead.
 """
 
+from mousedroid.common.tools.registry import ToolRegistry, ToolSpec
+
 # ---------------------------------------------------------------------------
 # Built-in tool handlers
 # ---------------------------------------------------------------------------

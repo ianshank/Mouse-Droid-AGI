@@ -22,12 +22,15 @@ _log = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 _HF_HUB_AVAILABLE = False
-hf_hub_download = None  # Placeholder for environments without huggingface_hub
 try:
-    from huggingface_hub import hf_hub_download
+    from huggingface_hub import hf_hub_download as _hf_hub_download
+
     _HF_HUB_AVAILABLE = True
 except ImportError:
-    _HF_HUB_AVAILABLE = False
+
+    def _hf_hub_download(**kwargs: object) -> str:
+        """Stub — never called when _HF_HUB_AVAILABLE is False."""
+        raise ImportError("huggingface_hub is not installed")
 
 
 def download_weights_from_huggingface(
@@ -69,7 +72,11 @@ def download_weights_from_huggingface(
     all_success = True
     for filename in filenames:
         success = _download_file_with_retry(
-            repo_id, filename, cache_dir, max_retries=max_retries, backoff_base=backoff_base,
+            repo_id,
+            filename,
+            cache_dir,
+            max_retries=max_retries,
+            backoff_base=backoff_base,
         )
         if not success:
             all_success = False
@@ -112,7 +119,7 @@ def _download_file_with_retry(
     """
     for attempt in range(max_retries):
         try:
-            local_path = hf_hub_download(
+            local_path = _hf_hub_download(
                 repo_id=repo_id,
                 filename=filename,
                 cache_dir=str(cache_dir),

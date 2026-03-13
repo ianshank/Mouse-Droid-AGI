@@ -139,9 +139,7 @@ class MouseDroidOrchestrator:
             try:
                 # Build observation dict for cognitive core fast path
                 battery_v = (
-                    float(observation.motor_state[3])
-                    if observation.motor_state.size > 3
-                    else 12.6
+                    float(observation.motor_state[3]) if observation.motor_state.size > 3 else 12.6
                 )
                 belief_dim = int(self._cfg.model.belief_dim)
                 state_vec = self._h.numpy().flatten()

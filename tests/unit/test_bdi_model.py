@@ -18,9 +18,9 @@ from mousedroid.cognitive.bdi_model import (
     IntentionPredictor,
     NeuralBDI,
     _bayesian_normalise,
-    _relu,
     _safe_softmax,
 )
+from mousedroid.common.math.numpy_ops import relu
 
 
 def test_neural_bdi_constructor_default() -> None:
@@ -142,7 +142,7 @@ def test_bayesian_normalise_all_zeros() -> None:
 
 def test_relu_basic() -> None:
     x = np.array([-1.0, 0.0, 1.0, -0.5, 0.5], dtype=np.float32)
-    result = _relu(x)
+    result = relu(x)
     expected = np.array([0.0, 0.0, 1.0, 0.0, 0.5], dtype=np.float32)
     np.testing.assert_array_equal(result, expected)
 

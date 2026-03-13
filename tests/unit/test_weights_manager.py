@@ -151,10 +151,7 @@ def test_download_weights_max_retries_exceeded(mock_download, mock_sleep, tmp_pa
 def test_download_weights_multiple_files(mock_download, tmp_path):
     """Test downloading multiple weight files."""
     filenames = ["belief.npz", "desire.npz", "intention.npz"]
-    mock_download.side_effect = [
-        str(tmp_path / f)
-        for f in filenames
-    ]
+    mock_download.side_effect = [str(tmp_path / f) for f in filenames]
 
     result = download_weights_from_huggingface(
         repo_id="ianshank/mousedroid-weights",
