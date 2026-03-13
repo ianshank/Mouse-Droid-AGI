@@ -10,6 +10,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **CognitiveCore integration** — dual-cadence BDI + metacognitive + constitutional loops wired into `MouseDroidOrchestrator`
+  - Fast path (30 Hz): `PolicyMLP` + `ConstitutionalChecker` via `tick_fast()`
+  - Slow path (~1 Hz): `NeuralBDI` inference + metacognitive updates via background `asyncio.Task`
+  - Graceful fallback to MCTS agent on cognitive failure
+- **`CognitiveConfig`** — Pydantic config in `schema.py` with HuggingFace auto-download, weights dir, fallback settings
+- **`build_cognitive_core()`** — factory function with weight loading strategy (local → HuggingFace → random init)
+- **`weights_manager.py`** — HuggingFace weight download with exponential backoff retry logic
+- **21 new tests** — orchestrator cognitive paths (7), factory cognitive (4), weights manager (10)
+- **`COVERAGE_ANALYSIS.md`** — coverage gap analysis and 85% enforcement plan
+- **`TEST_SUITE_SUMMARY.md`** — detailed breakdown of all 21 cognitive test cases
+- **`VALIDATION_CHECKLIST.md`** — step-by-step validation and CI/CD simulation guide
 - **Docker GPU deployment** — `Dockerfile.jetson` using NVIDIA L4T PyTorch base (`dustynv/l4t-pytorch:r36.4.0`) with CUDA 12.6, TensorRT 10.4, and pycuda pre-installed
 - **Docker Compose** — `docker-compose.jetson.yml` with NVIDIA runtime, optional hardware passthrough, and volume mounts
 - **CI/CD pipeline** — `.github/workflows/ci.yml` with 5-stage pipeline (lint → typecheck → test → security → Docker) across Python 3.10/3.11 matrix
@@ -19,14 +30,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Systemd Docker service** — `scripts/mousedroid-docker.service` for automatic container startup on boot
 - **`.dockerignore`** — optimised Docker build context (excludes `.git`, caches, docs)
 - **L4T container ADR** — `docs/architecture/ADR-l4t-container.md` documenting containerisation decision
-- **Product requirements** — `docs/prd/prd-l4t-container-deployment.md`
+- **Pre-built AI container ADR** — `docs/architecture/ADR-004-prebuilt-ai-containers.md` documenting multi-stage Docker build
+- **Product requirements** — `docs/prd/prd-l4t-container-deployment.md`, `docs/prd/prd-prebuilt-llm-container.md`
 - **Common utilities** — `src/mousedroid/common/math/numpy_ops.py` and `src/mousedroid/common/tools/registry.py` (reusable module extraction)
 - **NVMe SSD support** — 500 GB NVMe partition, mount, 16 GB swap, Docker data-root, containerd symlink to SSD
 - **4 GB → 16 GB swap** — SSD-backed swap file for memory-intensive builds (replaces zram-only swap)
 
 ### Changed
 
-- **Coverage** — 54% → 98.01% (752 tests, 85% gate enforced by `pyproject.toml`)
+- **Coverage** — 54% → 97.34% (959 tests, 85% gate enforced by `pyproject.toml`)
+- **Orchestrator** — cognitive core as primary action source with MCTS fallback; `start()`/`stop()` lifecycle for cognitive core
+- **Factory** — `build_orchestrator()` now builds and injects `CognitiveCore` with graceful error handling
+- **`bdi_model.py`** — replaced private `_relu`/`_safe_softmax_impl` with shared `numpy_ops` imports
+- **`constitutional_rl.py`** — replaced private `_relu`/`_layer_norm` with shared `numpy_ops` imports
+- **`tools/registry.py`** — added import from canonical `common.tools.registry` (backward compatible)
+- **`tools/__init__.py`** — import from canonical `common.tools.registry`
 - **Python compatibility** — ruff target `py311` → `py310`, mypy `python_version` 3.11 → 3.10 (Jetson JetPack 6.x ships Python 3.10)
 - **`pyproject.toml`** — added `huggingface-hub` to `[llm]` extras
 - **`factory.py`** — explicit `UltrasonicConfig` default values for all fields (mypy strict compliance)
@@ -35,6 +53,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`test_bdi_model.py`** — fixed stale `_relu` import (renamed to `relu` in `numpy_ops`)
+- **`common/tools/registry.py`** — added `_mic_diagnostics` handler (9th tool, matching tests)
+- **`weights_manager.py`** — fixed mypy `no-redef` via `_hf_hub_download` alias pattern
 - **`test_docker_gpu.py`** — `_has_cuda()` moved before `pytestmark` (was undefined F821)
 - **`numpy_ops.py`** — removed unused imports (F401), sorted `__all__`
 - **`record.py`** — fixed import sort order (I001)

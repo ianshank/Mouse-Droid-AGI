@@ -180,6 +180,7 @@ classDiagram
         +build_world_model(cfg) RSSM
         +build_safety_monitor(cfg) SafetyMonitor
         +build_agent(cfg) NavigationAgent
+        +build_cognitive_core(cfg) CognitiveCore
     }
 
     ESP32CommProtocol <|.. MockESP32Driver : implements
@@ -254,6 +255,40 @@ graph LR
 
 ---
 
+### Cognitive Core Data Flow (dual-cadence)
+
+```mermaid
+sequenceDiagram
+    participant Orch as Orchestrator (30 Hz)
+    participant Fast as CognitiveCore.tick_fast()
+    participant Policy as PolicyMLP
+    participant Const as ConstitutionalChecker
+    participant BDI as NeuralBDI (slow ~1 Hz)
+    participant Meta as MetacognitiveLoop
+    participant WM as WeightsManager
+    participant HF as HuggingFace Hub
+
+    Orch->>Fast: observation + safety_context
+    Fast->>Policy: forward(latent_state)
+    Fast->>Const: check(action)
+    Const-->>Fast: safe / override
+    Fast-->>Orch: action_tensor (or fallback to MCTS)
+
+    Note over BDI,Meta: Background asyncio.Task (~1 Hz)
+    BDI->>Meta: belief, desire, intentions, affect
+    Meta->>Meta: update approach_rate, surprise
+
+    Note over WM,HF: Startup weight loading
+    WM->>WM: check local weights
+    alt Weights missing
+        WM->>HF: hf_hub_download(retry=3, backoff=2^n)
+        HF-->>WM: .npz files
+    end
+    WM-->>BDI: loaded parameters
+```
+
+---
+
 ## Key Design Decisions
 
 | Decision | Rationale |
@@ -266,8 +301,11 @@ graph LR
 | LMDB for experience storage | Zero-copy reads; crash-safe; high write throughput |
 | FAISS for memory retrieval | Sub-millisecond similarity search at 50k scale |
 | numpy-only cognitive inference | No CUDA dependency for BDI/metacog; runs on CPU |
+| Dual-cadence cognitive loop | Fast 30 Hz reaction + slow 1 Hz deliberation minimises compute |
+| HuggingFace Hub weight loading | Automated model download with retry/fallback; no manual scp |
 | `torch.no_grad()` for all RSSM/MCTS inference | Prevents accidental gradient accumulation |
 | Module-level constants for all magic numbers | Grep-able; documented; not scattered in logic |
 | L4T Docker container | GPU-accelerated deployment with consistent environment |
+| Multi-stage Docker builds | Extract pre-compiled binaries from upstream images to bypass OOM |
 | NVMe SSD for Docker + swap | 500 GB fast storage avoids SD card wear and OOM during builds |
 | `systemd-run` for long builds | Persistent processes survive SSH drops |

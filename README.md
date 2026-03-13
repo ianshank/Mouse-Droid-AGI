@@ -2,8 +2,8 @@
 
 **A Star Wars MSE-6 "Mouse Droid" autonomous navigation system powered by an Agentic World Model on NVIDIA Jetson Orin Nano.**
 
-[![Tests](https://img.shields.io/badge/tests-752%20passing-brightgreen)](tests/)
-[![Coverage](https://img.shields.io/badge/coverage-98%25-brightgreen)](pyproject.toml)
+[![Tests](https://img.shields.io/badge/tests-959%20passing-brightgreen)](tests/)
+[![Coverage](https://img.shields.io/badge/coverage-97%25-brightgreen)](pyproject.toml)
 [![Ruff](https://img.shields.io/badge/lint-ruff%20clean-brightgreen)](pyproject.toml)
 [![Mypy](https://img.shields.io/badge/mypy-0%20errors-brightgreen)](pyproject.toml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
@@ -402,9 +402,13 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ## Next Steps
 
-- [ ] Complete `llama-cpp-python` CUDA compilation on Jetson (requires SSD swap)
+- [x] Integrate CognitiveCore with orchestrator (BDI + metacognition + constitutional loops)
+- [x] Add HuggingFace weight download with retry/fallback in factory
+- [x] Achieve 85%+ test coverage (current: 97.34%)
+- [ ] Complete `llama-cpp-python` CUDA compilation on Jetson via multi-stage Docker build
 - [ ] Enable real hardware devices in `docker-compose.jetson.yml` (camera, GPIO, serial)
 - [ ] Enable `mousedroid-docker.service` for auto-start on boot
 - [ ] Run RSSM pretraining pipeline on Jetson GPU
-- [ ] Integrate Hugging Face model download into container startup
+- [ ] Deploy trained BDI weights to HuggingFace Hub
 - [ ] Add Prometheus metrics endpoint for remote monitoring
+- [ ] Integrate USB microphone for voice command input
