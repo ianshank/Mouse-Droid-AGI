@@ -408,10 +408,6 @@ class GPUConfig(BaseModel):
         gt=0,
         description="Max GPU memory budget in GB (Jetson: 8 GB shared, leave 2 GB headroom)",
     )
-    auto_batch_reduce: bool = Field(
-        True,
-        description="Auto-reduce batch size on CUDA OOM and retry",
-    )
 
 
 class TrainingConfig(BaseModel):
@@ -435,7 +431,6 @@ class TrainingConfig(BaseModel):
             device=None,
             enable_amp=True,
             memory_limit_gb=6.0,
-            auto_batch_reduce=True,
         ),
     )
 
