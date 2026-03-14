@@ -33,9 +33,10 @@ class CheckpointState:
 
     epoch: int
     best_loss: float
-    model_state_dict: dict  # type: ignore[type-arg]
-    optimizer_state_dict: dict  # type: ignore[type-arg]
-    scaler_state_dict: dict | None  # type: ignore[type-arg]
+    model_state_dict: dict[str, torch.Tensor]
+    optimizer_state_dict: dict[str, torch.Tensor]
+    scaler_state_dict: dict[str, torch.Tensor] | None
+    rng_state: torch.Tensor
 
 
 def _save_checkpoint(
@@ -53,6 +54,7 @@ def _save_checkpoint(
         model_state_dict=model.state_dict(),
         optimizer_state_dict=optimizer.state_dict(),
         scaler_state_dict=scaler.state_dict() if scaler else None,
+        rng_state=torch.get_rng_state(),
     )
     torch.save(asdict(state), path)
     _log.info("checkpoint_saved", path=str(path), epoch=epoch)
@@ -71,6 +73,8 @@ def _load_checkpoint(
     optimizer.load_state_dict(data["optimizer_state_dict"])
     if scaler and data.get("scaler_state_dict"):
         scaler.load_state_dict(data["scaler_state_dict"])
+    if "rng_state" in data:
+        torch.set_rng_state(data["rng_state"])
     _log.info(
         "checkpoint_loaded",
         path=str(path),

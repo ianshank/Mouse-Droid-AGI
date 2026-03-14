@@ -209,7 +209,7 @@ def build_cognitive_core(cfg: Settings) -> CognitiveCore:
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.cognitive.constitutional_rl import ConstitutionalChecker
     from mousedroid.cognitive.metacognitive import MetacognitiveModel
-    from mousedroid.cognitive.policy import PolicyMLP
+    from mousedroid.cognitive.constitutional_rl import PolicyMLP
     from mousedroid.utils import (
         download_weights_from_huggingface,
         weights_exist_locally,
