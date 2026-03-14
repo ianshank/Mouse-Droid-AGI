@@ -2,6 +2,8 @@
 
 Initialises PolicyMLP weights from RSSM latent statistics and tunes
 the UCB exploration constant via simulated rollouts.
+
+Supports GPU acceleration for MCTS simulation rollouts.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from mousedroid.cognitive.constitutional_rl import PolicyMLP
 from mousedroid.config.schema import MCTSConfig, Settings
 from mousedroid.world_model.mcts import MCTSPlanner
 from mousedroid.world_model.rssm import RSSM
+from training.gpu_utils import resolve_device
 from training.rssm_dataset import RSSMSequenceDataset
 
 _log = structlog.get_logger(__name__)
@@ -203,7 +206,7 @@ def run_warmstart(
         data_path: Path to sequences.pt for computing latent stats.
         output_dir: Output directory for weights/config.
     """
-    device = torch.device("cpu")
+    device = resolve_device(cfg.training.gpu.device)
     output_dir = output_dir or Path(cfg.training.weights_dir) / "mcts"
     output_dir.mkdir(parents=True, exist_ok=True)
 

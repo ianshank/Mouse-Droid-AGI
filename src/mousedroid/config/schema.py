@@ -392,6 +392,24 @@ class PPOConfig(BaseModel):
     n_validation_episodes: int = Field(1000, gt=0, description="Held-out validation episodes")
 
 
+class GPUConfig(BaseModel):
+    """GPU training configuration for Jetson Orin Nano."""
+
+    device: str | None = Field(
+        None,
+        description="Force torch device (e.g. 'cuda:0', 'cpu'). None = auto-detect",
+    )
+    enable_amp: bool = Field(
+        True,
+        description="Enable Automatic Mixed Precision for PyTorch training phases",
+    )
+    memory_limit_gb: float = Field(
+        6.0,
+        gt=0,
+        description="Max GPU memory budget in GB (Jetson: 8 GB shared, leave 2 GB headroom)",
+    )
+
+
 class TrainingConfig(BaseModel):
     """Offline training configuration."""
 
@@ -404,6 +422,17 @@ class TrainingConfig(BaseModel):
     n_episodes: int = Field(1000, gt=0, description="Synthetic episodes to generate")
     data_dir: str = Field("training/data", description="Generated data directory")
     weights_dir: str = Field("weights", description="Checkpoint output directory")
+    resume_from: str | None = Field(
+        None,
+        description="Path to checkpoint for resuming interrupted training",
+    )
+    gpu: GPUConfig = Field(
+        default_factory=lambda: GPUConfig(
+            device=None,
+            enable_amp=True,
+            memory_limit_gb=6.0,
+        ),
+    )
 
 
 class MicrophoneConfig(BaseModel):

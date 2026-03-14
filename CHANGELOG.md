@@ -10,6 +10,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **GPU Pre-Training Pipeline** — end-to-end orchestration for running phases natively on Jetson Orin Nano
+  - `run_pipeline.py` orchestrator and native AMP support in `train_rssm.py`
+  - GPU-accelerated MCTS rollouts in `warmstart_policy.py`
+  - Native fallback logic and memory limit checks (6 GB default) via `GPUConfig`
+  - Automated HuggingFace Hub artifact uploading via `upload_weights.py`
+  - Full CI test-suite coverage (24 new unit tests added)
+
 - **CognitiveCore integration** — dual-cadence BDI + metacognitive + constitutional loops wired into `MouseDroidOrchestrator`
   - Fast path (30 Hz): `PolicyMLP` + `ConstitutionalChecker` via `tick_fast()`
   - Slow path (~1 Hz): `NeuralBDI` inference + metacognitive updates via background `asyncio.Task`
