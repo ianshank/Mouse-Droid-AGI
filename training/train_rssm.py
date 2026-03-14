@@ -11,7 +11,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 
 import structlog
@@ -56,7 +56,15 @@ def _save_checkpoint(
         scaler_state_dict=scaler.state_dict() if scaler else None,
         rng_state=torch.get_rng_state(),
     )
-    torch.save(asdict(state), path)
+    checkpoint = {
+        "epoch": state.epoch,
+        "best_loss": state.best_loss,
+        "model_state_dict": state.model_state_dict,
+        "optimizer_state_dict": state.optimizer_state_dict,
+        "scaler_state_dict": state.scaler_state_dict,
+        "rng_state": state.rng_state,
+    }
+    torch.save(checkpoint, path)
     _log.info("checkpoint_saved", path=str(path), epoch=epoch)
 
 
