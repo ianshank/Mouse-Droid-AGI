@@ -430,7 +430,14 @@ class TrainingConfig(BaseModel):
         None,
         description="Path to checkpoint for resuming interrupted training",
     )
-    gpu: GPUConfig = Field(default_factory=lambda: GPUConfig(device=None, enable_amp=True, memory_limit_gb=6.0, auto_batch_reduce=True))
+    gpu: GPUConfig = Field(
+        default_factory=lambda: GPUConfig(
+            device=None,
+            enable_amp=True,
+            memory_limit_gb=6.0,
+            auto_batch_reduce=True,
+        ),
+    )
 
 
 class MicrophoneConfig(BaseModel):

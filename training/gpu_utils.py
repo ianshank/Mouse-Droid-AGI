@@ -68,14 +68,11 @@ def log_gpu_info(device: torch.device) -> None:
 
 
 def check_memory_budget(limit_gb: float, device: torch.device | None = None) -> None:
-    """Warn if current GPU memory usage exceeds the budget.
+    """Log a warning if current GPU memory usage exceeds the budget.
 
     Args:
         limit_gb: Maximum allowed GPU memory in gigabytes.
         device: CUDA device to check. Defaults to current device.
-
-    Raises:
-        RuntimeWarning: If allocated memory exceeds the limit.
     """
     if device is not None and device.type != "cuda":
         return

@@ -66,8 +66,8 @@ def _load_checkpoint(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     scaler: torch.cuda.amp.GradScaler | None = None,
-) -> int:
-    """Load a training checkpoint and return the starting epoch."""
+) -> tuple[int, float]:
+    """Load a training checkpoint and return the starting epoch and best loss."""
     data = torch.load(path, map_location=device, weights_only=False)
     model.load_state_dict(data["model_state_dict"])
     optimizer.load_state_dict(data["optimizer_state_dict"])
@@ -75,13 +75,15 @@ def _load_checkpoint(
         scaler.load_state_dict(data["scaler_state_dict"])
     if "rng_state" in data:
         torch.set_rng_state(data["rng_state"])
+    start_epoch = int(data["epoch"]) + 1
+    best_loss = float(data.get("best_loss", float("inf")))
     _log.info(
         "checkpoint_loaded",
         path=str(path),
-        resume_epoch=data["epoch"] + 1,
-        best_loss=data.get("best_loss", float("inf")),
+        resume_epoch=start_epoch,
+        best_loss=best_loss,
     )
-    return int(data["epoch"]) + 1
+    return start_epoch, best_loss
 
 
 def train_rssm(
@@ -137,7 +139,7 @@ def train_rssm(
     best_loss = float("inf")
     resume_path = resume_from or (Path(tcfg.resume_from) if tcfg.resume_from else None)
     if resume_path and resume_path.exists():
-        start_epoch = _load_checkpoint(resume_path, rssm, optimizer, device, scaler)
+        start_epoch, best_loss = _load_checkpoint(resume_path, rssm, optimizer, device, scaler)
 
     mse_loss_fn = nn.MSELoss()
 

@@ -120,8 +120,12 @@ def run_upload(weights_dir: str, repo_id: str = "ianshank/mousedroid-weights") -
     _log.info("upload_start", repo_id=repo_id)
     from training.upload_weights import upload_weights
 
-    upload_weights(weights_dir, repo_id=repo_id)
-    _log.info("upload_complete", repo_id=repo_id)
+    success = upload_weights(weights_dir, repo_id=repo_id)
+    if success:
+        _log.info("upload_complete", repo_id=repo_id)
+    else:
+        _log.error("upload_failed", repo_id=repo_id, weights_dir=weights_dir)
+        raise RuntimeError(f"Failed to upload weights from '{weights_dir}' to '{repo_id}'")
 
 
 def run_pipeline(

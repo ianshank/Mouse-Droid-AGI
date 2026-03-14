@@ -57,9 +57,9 @@ MouseDroid has 4 sequential training phases, each producing weights consumed by 
 
 ### AC-5: Checkpoint Resume
 
-**Given** training was interrupted mid-epoch,
+**Given** training was interrupted during training (e.g., between epochs),
 **When** the same script is re-launched with `--resume`,
-**Then** training resumes from the last saved checkpoint without data loss.
+**Then** training resumes from the last saved checkpoint (typically the end of the last completed epoch) without restarting from scratch.
 
 ### AC-6: Weight Upload to HuggingFace
 

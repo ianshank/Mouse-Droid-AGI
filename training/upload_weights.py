@@ -1,13 +1,17 @@
-"""Upload trained MouseDroid weights to HuggingFace Hub.
+r"""Upload trained MouseDroid weights to HuggingFace Hub.
 
-Usage:
-    python -m training.upload_weights --weights-dir weights/ --repo ianshank/mousedroid-weights
+Usage::
+
+    python -m training.upload_weights \
+        --weights-dir weights/ --repo ianshank/mousedroid-weights
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
+from typing import Any
 
 import structlog
 
@@ -19,7 +23,7 @@ try:
 
     _HF_AVAILABLE = True
 except ImportError:
-    pass
+    HfApi = None  # type: ignore[assignment,misc]
 
 
 def upload_weights(
@@ -57,6 +61,7 @@ def upload_weights(
     # Collect files to upload
     exts = extensions or {".pt", ".npz", ".json"}
     files_to_upload = [f for f in weights_dir.rglob("*") if f.is_file() and f.suffix in exts]
+
     if not files_to_upload:
         _log.warning("no_weight_files_found", path=str(weights_dir))
         return False
@@ -76,11 +81,16 @@ def upload_weights(
         card_path = weights_dir / "README.md"
         card_path.write_text(model_card, encoding="utf-8")
 
+        # Restrict upload to selected extensions + model card
+        allow_patterns = [f"**/*{ext}" for ext in exts]
+        allow_patterns.append("README.md")
+
         api.upload_folder(
             folder_path=str(weights_dir),
             repo_id=repo_id,
             repo_type="model",
             commit_message=commit_message,
+            allow_patterns=allow_patterns,
         )
 
         _log.info("upload_complete", repo_id=repo_id, file_count=len(files_to_upload))
@@ -102,7 +112,7 @@ def _create_model_card(weights_dir: Path, repo_id: str) -> str:
         Model card content as string.
     """
     # Try to load training metadata if available
-    metadata: dict[str, object] = {}
+    metadata: dict[str, Any] = {}
     tuned_config = weights_dir / "mcts" / "tuned_config.json"
     if tuned_config.exists():
         with open(tuned_config) as f:
@@ -138,4 +148,47 @@ Trained weights for MouseDroid autonomous navigation system.
 
 Trained on Jetson Orin Nano (8 GB) using synthetic observation sequences.
 """
+    # Append training metadata as JSON, if available
+    if metadata:
+        metadata_json = json.dumps(metadata, indent=2, sort_keys=True)
+        card += "\n\n## Training Metadata\n\n```json\n" + metadata_json + "\n```"
+
     return card
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entrypoint for uploading weights to HuggingFace Hub."""
+    parser = argparse.ArgumentParser(
+        description="Upload trained MouseDroid weights to HuggingFace Hub.",
+    )
+    parser.add_argument(
+        "--weights-dir",
+        type=Path,
+        required=True,
+        help="Local directory containing weight files to upload.",
+    )
+    parser.add_argument(
+        "--repo",
+        dest="repo_id",
+        type=str,
+        default="ianshank/mousedroid-weights",
+        help="HuggingFace Hub repository ID.",
+    )
+    parser.add_argument(
+        "--commit-message",
+        type=str,
+        default="Update trained weights",
+        help="Commit message for the upload.",
+    )
+    args = parser.parse_args(argv)
+
+    success = upload_weights(
+        weights_dir=args.weights_dir,
+        repo_id=args.repo_id,
+        commit_message=args.commit_message,
+    )
+    return 0 if success else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
