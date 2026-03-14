@@ -1,8 +1,9 @@
 """Unified pre-training pipeline — runs all phases end-to-end.
 
 Usage:
-    python -m training.run_pipeline --config config/mock_hardware.yaml
-    python -m training.run_pipeline --config config/mock_hardware.yaml --upload
+    python -m training.run_pipeline --config config/training.yaml
+    python -m training.run_pipeline --config config/training.yaml --upload
+    python -m training.run_pipeline --config config/training.yaml --validate --report
     python -m training.run_pipeline --phases 0,1,2  # Run specific phases only
 """
 
@@ -133,6 +134,8 @@ def run_pipeline(
     *,
     phases: set[int] | None = None,
     upload: bool = False,
+    validate: bool = False,
+    report: bool = False,
 ) -> None:
     """Run the full pre-training pipeline.
 
@@ -141,9 +144,12 @@ def run_pipeline(
         phases: Optional set of phase numbers to run (0,1,2,3,4).
             None runs all phases.
         upload: Whether to upload weights to HuggingFace after training.
+        validate: Whether to run convergence validation after training.
+        report: Whether to generate a training report JSON.
     """
     all_phases = phases or {0, 1, 2, 3, 4}
     t0 = time.monotonic()
+    phase_timings: dict[str, float] = {}
 
     device = resolve_device(cfg.training.gpu.device)
     log_gpu_info(device)
@@ -162,28 +168,60 @@ def run_pipeline(
 
     # Phase 0: Data generation
     if 0 in all_phases:
+        t_phase = time.monotonic()
         data_dir = run_phase_0_data_gen(cfg)
         annotations_path = run_phase_0b_annotations(cfg)
+        phase_timings["data_gen"] = round(time.monotonic() - t_phase, 1)
 
     # Phase 1: RSSM
     if 1 in all_phases:
+        t_phase = time.monotonic()
         rssm_checkpoint = run_phase_1_rssm(cfg, data_dir)
+        phase_timings["rssm"] = round(time.monotonic() - t_phase, 1)
 
     # Phase 2: Warm-start
     if 2 in all_phases:
+        t_phase = time.monotonic()
         run_phase_2_warmstart(cfg, rssm_checkpoint, data_dir)
+        phase_timings["warmstart"] = round(time.monotonic() - t_phase, 1)
 
     # Phase 3: BDI
     if 3 in all_phases:
+        t_phase = time.monotonic()
         run_phase_3_bdi(cfg, annotations_path)
+        phase_timings["bdi"] = round(time.monotonic() - t_phase, 1)
 
     # Phase 4: Constitutional RL
     if 4 in all_phases:
+        t_phase = time.monotonic()
         pi_path = policy_init_path if policy_init_path.exists() else None
         run_phase_4_constitutional_rl(cfg, rssm_checkpoint, pi_path)
+        phase_timings["constitutional_rl"] = round(time.monotonic() - t_phase, 1)
 
     elapsed = time.monotonic() - t0
-    _log.info("pipeline_complete", total_time_s=round(elapsed, 1))
+    _log.info(
+        "pipeline_complete",
+        total_time_s=round(elapsed, 1),
+        phase_timings=phase_timings,
+    )
+
+    # Validation
+    if validate or report:
+        from training.validate_weights import generate_training_report
+
+        weights_dir = Path(cfg.training.weights_dir)
+        ann_path = annotations_path if annotations_path.exists() else None
+        training_report = generate_training_report(
+            weights_dir,
+            cfg,
+            annotations_path=ann_path,
+            phase_timings=phase_timings,
+        )
+        if validate and not training_report.all_checks_passed:
+            _log.warning(
+                "validation_failures_detected",
+                phases={k: v.errors for k, v in training_report.phases.items() if not v.passed},
+            )
 
     if upload:
         run_upload(cfg.training.weights_dir)
@@ -208,6 +246,16 @@ def main() -> None:
         "--upload",
         action="store_true",
         help="Upload weights to HuggingFace after training",
+    )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="Run convergence validation after training",
+    )
+    parser.add_argument(
+        "--report",
+        action="store_true",
+        help="Generate training_report.json after training",
     )
     args = parser.parse_args()
 
@@ -238,7 +286,13 @@ def main() -> None:
     else:
         phases = None
 
-    run_pipeline(cfg, phases=phases, upload=args.upload)
+    run_pipeline(
+        cfg,
+        phases=phases,
+        upload=args.upload,
+        validate=args.validate,
+        report=args.report,
+    )
 
 
 if __name__ == "__main__":
