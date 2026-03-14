@@ -77,19 +77,62 @@ def _load_checkpoint(
 ) -> tuple[int, float]:
     """Load a training checkpoint and return the starting epoch and best loss."""
     data = torch.load(path, map_location=device, weights_only=False)
-    model.load_state_dict(data["model_state_dict"])
-    optimizer.load_state_dict(data["optimizer_state_dict"])
-    if scaler and data.get("scaler_state_dict"):
-        scaler.load_state_dict(data["scaler_state_dict"])
-    if "rng_state" in data:
-        torch.set_rng_state(data["rng_state"])
-    start_epoch = int(data["epoch"]) + 1
-    best_loss = float(data.get("best_loss", float("inf")))
+
+    # Detect checkpoint format:
+    # 1) Full training checkpoint dict with "model_state_dict" and friends
+    # 2) Raw model state_dict (e.g. final weights only)
+    if not isinstance(data, dict):
+        raise TypeError(
+            f"Unsupported checkpoint format at {path!s}: expected a dict, "
+            f"got {type(data).__name__}"
+        )
+
+    if "model_state_dict" in data:
+        # Full training checkpoint
+        model.load_state_dict(data["model_state_dict"])
+
+        optimizer_state = data.get("optimizer_state_dict")
+        if optimizer_state is not None:
+            optimizer.load_state_dict(optimizer_state)
+
+        scaler_state = data.get("scaler_state_dict")
+        if scaler is not None and scaler_state is not None:
+            scaler.load_state_dict(scaler_state)
+
+        rng_state = data.get("rng_state")
+        if rng_state is not None:
+            torch.set_rng_state(rng_state)
+
+        start_epoch = int(data.get("epoch", -1)) + 1
+        best_loss = float(data.get("best_loss", float("inf")))
+        _log.info(
+            "checkpoint_loaded",
+            path=str(path),
+            resume_epoch=start_epoch,
+            best_loss=best_loss,
+            format="full",
+        )
+        return start_epoch, best_loss
+
+    # Fallback: treat `data` as a raw model state_dict (no optimizer/epoch info)
+    try:
+        model.load_state_dict(data)
+    except Exception as exc:  # pragma: no cover - defensive
+        raise ValueError(
+            f"Unrecognized checkpoint format at {path!s}: expected either a full "
+            f"training checkpoint dict with 'model_state_dict' or a raw model "
+            f"state_dict compatible with RSSM."
+        ) from exc
+
+    # When only model weights are available, start from epoch 0 with unknown best_loss
+    start_epoch = 0
+    best_loss = float("inf")
     _log.info(
         "checkpoint_loaded",
         path=str(path),
         resume_epoch=start_epoch,
         best_loss=best_loss,
+        format="state_dict_only",
     )
     return start_epoch, best_loss
 
