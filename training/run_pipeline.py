@@ -217,7 +217,26 @@ def main() -> None:
         overrides = yaml.safe_load(f) or {}
     cfg = Settings(**{**overrides, "mock_hardware": True})
 
-    phases = {int(p) for p in args.phases.split(",")} if args.phases else None
+    valid_phases = {0, 1, 2, 3, 4}
+    if args.phases:
+        phases: set[int] = set()
+        for raw_token in args.phases.split(","):
+            token = raw_token.strip()
+            if not token:
+                continue
+            try:
+                phase_num = int(token)
+            except ValueError:
+                parser.error(
+                    f"Invalid phase '{token}'. Phases must be integers in {sorted(valid_phases)}."
+                )
+            if phase_num not in valid_phases:
+                parser.error(
+                    f"Unknown phase '{phase_num}'. Supported phases are {sorted(valid_phases)}."
+                )
+            phases.add(phase_num)
+    else:
+        phases = None
 
     run_pipeline(cfg, phases=phases, upload=args.upload)
 
