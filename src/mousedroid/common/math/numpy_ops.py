@@ -26,6 +26,7 @@ def relu(x: NDArray[np.floating[Any]]) -> NDArray[np.floating[Any]]:
     """
     return np.maximum(x, 0.0)
 
+
 def softmax(x: NDArray[np.floating[Any]], *, axis: int = -1) -> NDArray[np.floating[Any]]:
     """Numerically stable softmax.
 
@@ -39,6 +40,7 @@ def softmax(x: NDArray[np.floating[Any]], *, axis: int = -1) -> NDArray[np.float
     shifted = x - np.max(x, axis=axis, keepdims=True)
     e = np.exp(shifted)
     return e / (e.sum(axis=axis, keepdims=True) + _SOFTMAX_EPS)
+
 
 def layer_norm(x: NDArray[np.floating[Any]], *, eps: float = 1e-6) -> NDArray[np.floating[Any]]:
     """Simple layer normalisation (zero mean, unit variance).
