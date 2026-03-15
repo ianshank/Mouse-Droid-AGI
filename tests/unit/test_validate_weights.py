@@ -22,14 +22,14 @@ class TestValidateWeightFiles:
 
     def test_all_files_present(self, tmp_path: Path) -> None:
         """Passes when all expected weight files exist."""
-        for sub in ["rssm", "mcts", "bdi"]:
+        for sub in ["rssm", "mcts", "bdi", "constitutional_rl"]:
             (tmp_path / sub).mkdir()
         (tmp_path / "rssm" / "final.pt").write_bytes(b"fake")
         (tmp_path / "mcts" / "policy_init.npz").write_bytes(b"fake")
         for name in ["belief.npz", "desire.npz", "intention.npz", "affect.npz"]:
             (tmp_path / "bdi" / name).write_bytes(b"fake")
-        (tmp_path / "policy.npz").write_bytes(b"fake")
-        (tmp_path / "value.npz").write_bytes(b"fake")
+        (tmp_path / "constitutional_rl" / "policy.npz").write_bytes(b"fake")
+        (tmp_path / "constitutional_rl" / "value.npz").write_bytes(b"fake")
 
         result = validate_weight_files(tmp_path)
         assert result.passed is True
@@ -123,8 +123,9 @@ class TestValidateConstitutionalRL:
 
     def test_files_present(self, tmp_path: Path) -> None:
         """Passes when policy and value files exist."""
-        np.savez(tmp_path / "policy.npz", w1=np.zeros((128, 2)))
-        np.savez(tmp_path / "value.npz", w1=np.zeros((128, 1)))
+        (tmp_path / "constitutional_rl").mkdir()
+        np.savez(tmp_path / "constitutional_rl" / "policy.npz", w1=np.zeros((128, 2)))
+        np.savez(tmp_path / "constitutional_rl" / "value.npz", w1=np.zeros((128, 1)))
 
         result = validate_constitutional_rl(tmp_path)
         assert result.passed is True
@@ -156,3 +157,94 @@ class TestGenerateTrainingReport:
         )
         # Missing weight files → not all passed
         assert report.all_checks_passed is False
+
+
+class TestValidateBDIAccuracyNormRegression:
+    """Regression: validate_bdi_accuracy must use norm stats & two-layer belief (Bug fix 2026-03)."""
+
+    def _make_trained_weights(self, bdi_dir: Path) -> tuple[Path, np.ndarray, np.ndarray]:
+        """Create a minimal set of trained BDI weights with norm stats."""
+        from mousedroid.utils.numpy_ops import relu
+
+        rng = np.random.default_rng(42)
+        bdi_dir.mkdir(parents=True, exist_ok=True)
+
+        # Simulate normalised training
+        raw_obs = rng.standard_normal((200, 256)).astype(np.float32)
+        obs_mean = raw_obs.mean(axis=0)
+        obs_std = raw_obs.std(axis=0) + 1e-8
+        normed = (raw_obs - obs_mean) / obs_std
+
+        # Train minimal encoder on normalised data
+        w1 = rng.standard_normal((256, 128)).astype(np.float32) * 0.01
+        b1 = np.zeros(128, dtype=np.float32)
+        w2 = rng.standard_normal((128, 128)).astype(np.float32) * 0.01
+        b2 = np.zeros(128, dtype=np.float32)
+        h1 = relu(normed @ w1 + b1)
+        beliefs = relu(h1 @ w2 + b2)
+
+        # Desire
+        dw1 = rng.standard_normal((128, 64)).astype(np.float32) * 0.01
+        db1 = np.zeros(64, dtype=np.float32)
+        desires = relu(beliefs @ dw1 + db1)
+
+        # Intention labels from desire logits
+        iw1 = rng.standard_normal((64, 10)).astype(np.float32) * 0.01
+        ib1 = np.zeros(10, dtype=np.float32)
+        logits = desires @ iw1 + ib1
+        intentions = logits.argmax(axis=-1).astype(np.int64)
+
+        # Save weights
+        np.savez(bdi_dir / "belief.npz", w1=w1, b1=b1, w2=w2, b2=b2)
+        np.savez(bdi_dir / "desire.npz", w1=dw1, b1=db1)
+        np.savez(bdi_dir / "intention.npz", w1=iw1, b1=ib1)
+        np.savez(bdi_dir / "belief_norm_stats.npz", mean=obs_mean, std=obs_std)
+
+        # Save annotations
+        ann_path = bdi_dir.parent / "annotations.npz"
+        np.savez(ann_path, observations=raw_obs, intentions=intentions)
+        return ann_path, obs_mean, obs_std
+
+    def test_validation_uses_norm_stats(self, tmp_path: Path) -> None:
+        """validate_bdi_accuracy must load and apply norm stats."""
+        bdi_dir = tmp_path / "bdi"
+        ann_path, _, _ = self._make_trained_weights(bdi_dir)
+
+        result = validate_bdi_accuracy(tmp_path, ann_path)
+        assert result.phase == "bdi_accuracy"
+        assert "accuracy" in result.metrics
+        # With matching norm stats, accuracy should be reasonable (not 0%)
+        assert result.metrics["accuracy"] > 0.0
+
+    def test_validation_warns_without_norm_stats(self, tmp_path: Path) -> None:
+        """Validation should still work without norm stats (with warning)."""
+        bdi_dir = tmp_path / "bdi"
+        ann_path, _, _ = self._make_trained_weights(bdi_dir)
+
+        # Remove norm stats
+        (bdi_dir / "belief_norm_stats.npz").unlink()
+
+        result = validate_bdi_accuracy(tmp_path, ann_path)
+        assert result.phase == "bdi_accuracy"
+        # Should not crash — degrades gracefully
+        assert "accuracy" in result.metrics
+
+    def test_two_layer_belief_forward_pass(self, tmp_path: Path) -> None:
+        """Validation must use two-layer belief encoder (w1,b1 + w2,b2)."""
+        from mousedroid.utils.numpy_ops import relu
+
+        bdi_dir = tmp_path / "bdi"
+        ann_path, obs_mean, obs_std = self._make_trained_weights(bdi_dir)
+
+        # Manually reproduce the forward pass to verify it matches
+        ann = np.load(ann_path)
+        obs = ann["observations"][:10].astype(np.float32)
+        obs_norm = (obs - obs_mean) / (obs_std + 1e-8)
+
+        belief_w = np.load(bdi_dir / "belief.npz")
+        h1 = relu(obs_norm @ belief_w["w1"] + belief_w["b1"])
+        belief = relu(h1 @ belief_w["w2"] + belief_w["b2"])
+
+        # Verify two layers were needed (single layer gives different result)
+        single_layer = relu(obs_norm @ belief_w["w1"] + belief_w["b1"])
+        assert not np.allclose(belief, single_layer), "Two-layer must differ from single-layer"

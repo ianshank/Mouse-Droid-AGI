@@ -1,0 +1,24 @@
+platform: "mouse_droid"
+mock_hardware: true
+debug: true
+logging:
+  level: "INFO"
+  format: "console"
+training:
+  n_episodes: 2
+  sequence_length: 5
+  batch_size: 2
+  epochs: 1
+bdi_training:
+  epochs: 2
+  batch_size: 2
+  learning_rate: 0.001
+  accuracy_threshold: 0.60
+  balance_classes: false
+  normalise_observations: false
+mcts:
+  n_simulations_base: 2
+  max_depth: 2
+  simulation_budget_ms: 5.0
+  early_exit_value_threshold: 0.1
+  action_sampling: "uniform"

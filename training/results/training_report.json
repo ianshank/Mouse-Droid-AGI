@@ -1,0 +1,71 @@
+{
+  "timestamp": "2026-03-15T13:04:59Z",
+  "device": "cuda:0",
+  "phases": {
+    "weight_files": {
+      "phase": "weight_files",
+      "passed": true,
+      "wall_time_s": 0.0,
+      "metrics": {
+        "files_found": 8,
+        "files_expected": 8
+      },
+      "errors": []
+    },
+    "rssm_shapes": {
+      "phase": "rssm_shapes",
+      "passed": true,
+      "wall_time_s": 0.0,
+      "metrics": {
+        "param_count": 513185
+      },
+      "errors": []
+    },
+    "bdi_accuracy": {
+      "phase": "bdi_accuracy",
+      "passed": true,
+      "wall_time_s": 0.0,
+      "metrics": {
+        "accuracy": 0.1977,
+        "n_holdout": 16103,
+        "n_classes": 8
+      },
+      "errors": []
+    },
+    "constitutional_rl": {
+      "phase": "constitutional_rl",
+      "passed": true,
+      "wall_time_s": 0.0,
+      "metrics": {
+        "policy_keys": [
+          "w1",
+          "b1",
+          "w2",
+          "b2"
+        ],
+        "value_keys": [
+          "w1",
+          "b1",
+          "w2",
+          "b2"
+        ]
+      },
+      "errors": []
+    },
+    "mcts_latency": {
+      "phase": "mcts_latency",
+      "passed": true,
+      "wall_time_s": 0.0,
+      "metrics": {
+        "best_ucb_c": 0.5,
+        "p50_ms": 16.0,
+        "p95_ms": 32.0,
+        "mean_reward": -1.1804,
+        "target_p50_ms": 50.0
+      },
+      "errors": []
+    }
+  },
+  "total_wall_time_s": 0.0,
+  "all_checks_passed": true
+}

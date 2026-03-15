@@ -118,6 +118,13 @@ reward:
 curiosity:
   intrinsic_reward_scale: 0.1
   forward_model_hidden: 256
+
+# llm_gateway:                         # Uncomment to enable NL mission translation
+#   model_path: "/home/jetson/models/Phi-3-mini-4k-instruct-q4.gguf"
+#   n_threads: 4
+#   n_gpu_layers: -1
+#   max_tokens: 256
+#   temperature: 0.1
   inverse_model_hidden: 256
 
 logging:

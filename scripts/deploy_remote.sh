@@ -15,6 +15,8 @@ PROJECT_DIR="$(dirname "${SCRIPT_DIR}")"
 REMOTE_USER="${MOUSEDROID_REMOTE_USER:-jetson}"
 REMOTE_SRC="/opt/mousedroid/src"
 REMOTE_CONFIG="/etc/mousedroid"
+REMOTE_WEIGHTS="/opt/mousedroid/weights"
+REMOTE_MODELS="${MOUSEDROID_LLM_MODELS_DIR:-/home/jetson/models}"
 DEPLOY_MODE="code-only"
 HOST=""
 
@@ -69,13 +71,23 @@ parse_args() {
                 DEPLOY_MODE="config-only"
                 shift
                 ;;
+            --weights)
+                DEPLOY_MODE="weights"
+                shift
+                ;;
+            --with-llm)
+                DEPLOY_MODE="full-llm"
+                shift
+                ;;
             --help|-h)
-                echo "Usage: bash scripts/deploy_remote.sh [jetson-host] [--full|--code-only|--config-only]"
+                echo "Usage: bash scripts/deploy_remote.sh [jetson-host] [--full|--code-only|--config-only|--weights|--with-llm]"
                 echo ""
                 echo "Modes:"
                 echo "  --full         Full setup: system + hardware + rsync + deploy + restart"
                 echo "  --code-only    (default) Rsync code + pip reinstall + restart service"
                 echo "  --config-only  Update config files + restart service"
+                echo "  --weights      Sync trained weights to Jetson"
+                echo "  --with-llm     Full deploy + weights + LLM model provisioning"
                 exit 0
                 ;;
             -*)
@@ -270,6 +282,58 @@ run_health_check() {
 }
 
 # ---------------------------------------------------------------------------
+# Sync trained weights
+# ---------------------------------------------------------------------------
+
+rsync_weights() {
+    log_section "Syncing trained weights"
+    local local_weights="${PROJECT_DIR}/weights"
+    if [[ ! -d "${local_weights}" ]]; then
+        die "Local weights directory not found: ${local_weights}"
+    fi
+    remote_sudo bash -c "mkdir -p ${REMOTE_WEIGHTS} && chown -R ${REMOTE_USER}:${REMOTE_USER} ${REMOTE_WEIGHTS}"
+
+    log_step "Rsyncing weights -> ${REMOTE_USER}@${HOST}:${REMOTE_WEIGHTS}/"
+    rsync -avz --delete \
+        --include '*.npz' \
+        --include '*.pt' \
+        --include '*.json' \
+        --include '*/' \
+        --exclude '*' \
+        "${local_weights}/" "${REMOTE_USER}@${HOST}:${REMOTE_WEIGHTS}/"
+    log_step "Weights sync complete"
+}
+
+# ---------------------------------------------------------------------------
+# LLM model provisioning
+# ---------------------------------------------------------------------------
+
+provision_llm() {
+    log_section "Provisioning LLM model on Jetson"
+    remote_cmd "mkdir -p ${REMOTE_MODELS}"
+
+    # Check if model already exists
+    local model_file="${REMOTE_MODELS}/Phi-3-mini-4k-instruct-q4.gguf"
+    if remote_cmd "test -f ${model_file}" 2>/dev/null; then
+        log_step "LLM model already present: ${model_file}"
+        return 0
+    fi
+
+    log_step "Downloading Phi-3 Mini 4K GGUF to ${REMOTE_MODELS}/"
+    remote_cmd "python3 -c \"\
+from huggingface_hub import hf_hub_download; \
+hf_hub_download( \
+    'microsoft/Phi-3-mini-4k-instruct-gguf', \
+    'Phi-3-mini-4k-instruct-q4.gguf', \
+    local_dir='${REMOTE_MODELS}' \
+)\"" || {
+        error "LLM download failed. Install huggingface-hub on Jetson: pip install huggingface-hub"
+        return 1
+    }
+    log_step "LLM model provisioned successfully"
+}
+
+# ---------------------------------------------------------------------------
 # Deployment summary
 # ---------------------------------------------------------------------------
 
@@ -280,6 +344,8 @@ print_summary() {
     echo "  Source:      ${PROJECT_DIR}"
     echo "  Remote src:  ${REMOTE_SRC}"
     echo "  Remote cfg:  ${REMOTE_CONFIG}"
+    echo "  Remote wts:  ${REMOTE_WEIGHTS}"
+    echo "  Remote LLM:  ${REMOTE_MODELS}"
     echo "  Started:     ${DEPLOY_START}"
     echo "  Finished:    $(ts)"
     echo ""
@@ -309,12 +375,26 @@ main() {
             restart_service
             run_health_check
             ;;
+        full-llm)
+            rsync_code
+            run_system_setup
+            run_hardware_setup
+            run_deploy
+            deploy_config
+            rsync_weights
+            provision_llm
+            restart_service
+            run_health_check
+            ;;
         code-only)
             rsync_code
             pip_reinstall
             deploy_config
             restart_service
             run_health_check
+            ;;
+        weights)
+            rsync_weights
             ;;
         config-only)
             deploy_config

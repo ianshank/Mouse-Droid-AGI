@@ -31,7 +31,7 @@ _EXPECTED_FILES: dict[str, list[str]] = {
         "bdi/intention.npz",
         "bdi/affect.npz",
     ],
-    "constitutional_rl": ["policy.npz", "value.npz"],
+    "constitutional_rl": ["constitutional_rl/policy.npz", "constitutional_rl/value.npz"],
 }
 
 
@@ -171,6 +171,7 @@ def validate_bdi_accuracy(
     intention_path = weights_dir / "bdi" / "intention.npz"
     belief_path = weights_dir / "bdi" / "belief.npz"
     desire_path = weights_dir / "bdi" / "desire.npz"
+    norm_stats_path = weights_dir / "bdi" / "belief_norm_stats.npz"
 
     for p in [intention_path, belief_path, desire_path, annotations_path]:
         if not p.exists():
@@ -192,21 +193,29 @@ def validate_bdi_accuracy(
         indices = rng.permutation(n)
         holdout_idx = indices[:n_holdout]
 
-        obs_holdout = observations[holdout_idx]
+        obs_holdout = observations[holdout_idx].astype(np.float32)
         int_holdout = intentions[holdout_idx]
+
+        # Apply z-score normalization (must match training)
+        if norm_stats_path.exists():
+            norm = np.load(norm_stats_path)
+            obs_holdout = (obs_holdout - norm["mean"]) / (norm["std"] + 1e-8)
+            _log.info("bdi_validation_normalised", norm_stats=str(norm_stats_path))
+        else:
+            _log.warning("bdi_norm_stats_missing", path=str(norm_stats_path))
 
         # Load weights and run forward pass
         belief_w = np.load(belief_path)
         desire_w = np.load(desire_path)
         intent_w = np.load(intention_path)
 
-        # Belief: obs → relu(obs @ w1 + b1)
-        belief = relu(obs_holdout @ belief_w["w1"] + belief_w["b1"])
+        # Belief: two-layer encoder (must match train_belief_encoder)
+        h1 = relu(obs_holdout @ belief_w["w1"] + belief_w["b1"])
+        belief = relu(h1 @ belief_w["w2"] + belief_w["b2"])
         # Desire: belief → relu(belief @ w1 + b1)
         desire = relu(belief @ desire_w["w1"] + desire_w["b1"])
-        # Intention: concat → logits
-        combined = np.concatenate([belief, desire], axis=-1)
-        logits = combined @ intent_w["w1"] + intent_w["b1"]
+        # Intention: desire → logits
+        logits = desire @ intent_w["w1"] + intent_w["b1"]
         predictions = logits.argmax(axis=-1)
 
         accuracy = float(np.mean(predictions == int_holdout))
@@ -250,8 +259,8 @@ def validate_constitutional_rl(
     errors: list[str] = []
     metrics: dict[str, Any] = {}
 
-    policy_path = weights_dir / "policy.npz"
-    value_path = weights_dir / "value.npz"
+    policy_path = weights_dir / "constitutional_rl" / "policy.npz"
+    value_path = weights_dir / "constitutional_rl" / "value.npz"
 
     for p in [policy_path, value_path]:
         if not p.exists():
@@ -292,6 +301,67 @@ def validate_constitutional_rl(
         errors=errors,
     )
 
+
+def validate_mcts_latency(
+    weights_dir: Path,
+    target_p50_ms: float = 50.0,
+) -> PhaseResult:
+    """Check MCTS tuning results for latency regression.
+
+    Reads ``mcts/tuned_config.json`` and flags if the best UCB candidate's
+    p50 search latency exceeds the ``target_p50_ms`` threshold.
+
+    Args:
+        weights_dir: Root weights directory.
+        target_p50_ms: Acceptable p50 search latency in milliseconds.
+
+    Returns:
+        PhaseResult with latency metrics.
+    """
+    errors: list[str] = []
+    metrics: dict[str, Any] = {}
+
+    config_path = weights_dir / "mcts" / "tuned_config.json"
+    if not config_path.exists():
+        return PhaseResult(
+            phase="mcts_latency",
+            passed=True,  # Not blocking if tuning hasn't run yet
+            metrics={"skipped": True, "reason": "tuned_config.json not found"},
+        )
+
+    try:
+        with open(config_path) as f:
+            data = json.load(f)
+
+        best_ucb = data.get("best_ucb_c")
+        if best_ucb is not None:
+            key = f"ucb_{best_ucb}"
+            if key in data:
+                p50 = data[key]["p50_ms"]
+                p95 = data[key]["p95_ms"]
+                mean_reward = data[key]["mean_reward"]
+                metrics["best_ucb_c"] = best_ucb
+                metrics["p50_ms"] = p50
+                metrics["p95_ms"] = p95
+                metrics["mean_reward"] = mean_reward
+                metrics["target_p50_ms"] = target_p50_ms
+
+                if p50 > target_p50_ms:
+                    errors.append(
+                        f"MCTS p50 latency {p50:.1f}ms exceeds target {target_p50_ms:.0f}ms "
+                        f"({p50/target_p50_ms:.1f}x over) — consider reducing n_simulations or rollout_depth"
+                    )
+
+        _log.info("mcts_latency_check", metrics=metrics, passed=len(errors) == 0)
+    except Exception as e:
+        errors.append(f"MCTS latency check failed: {e}")
+
+    return PhaseResult(
+        phase="mcts_latency",
+        passed=len(errors) == 0,
+        metrics=metrics,
+        errors=errors,
+    )
 
 def generate_training_report(
     weights_dir: Path,
@@ -336,6 +406,9 @@ def generate_training_report(
 
     # 4. Constitutional RL
     report.phases["constitutional_rl"] = validate_constitutional_rl(weights_dir)
+
+    # 5. MCTS latency
+    report.phases["mcts_latency"] = validate_mcts_latency(weights_dir)
 
     # Apply timings
     if phase_timings:

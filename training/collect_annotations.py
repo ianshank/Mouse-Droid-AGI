@@ -104,6 +104,39 @@ def label_intention(
     return 0  # explore
 
 
+def _build_state_observation(
+    vision_features: np.ndarray,
+    action: np.ndarray,
+    distance_m: float,
+    motor_state: np.ndarray,
+    human_detected: bool,
+    commanded: bool,
+) -> np.ndarray:
+    """Build a 256d observation embedding label-relevant state.
+
+    At runtime the BDI receives the RSSM latent which encodes the full
+    robot state.  In mock mode we simulate this by placing the
+    intention-determining signals (action, distance, motor, flags) into
+    the first dimensions so the encoder can learn from them.  The
+    remaining dimensions are filled from the (noisy) vision features.
+    """
+    # Structured prefix: action(3) + distance(1) + motor(4) + flags(2) = 10
+    prefix = np.array(
+        [
+            *action[:3],
+            distance_m,
+            *motor_state[:4],
+            float(human_detected),
+            float(commanded),
+        ],
+        dtype=np.float32,
+    )
+    n_prefix = len(prefix)
+    obs = vision_features.copy()
+    obs[:n_prefix] = prefix
+    return obs
+
+
 async def _collect_episode(
     cfg: Settings,
     max_steps: int,
@@ -121,11 +154,32 @@ async def _collect_episode(
         # Random policy for diverse data collection
         action = np.tanh(rng.standard_normal(cfg.model.action_dim).astype(np.float32))
 
-        intention = label_intention(action, obs)
+        # Inject edge conditions to ensure all 10 intention classes are represented
+        human_detected = rng.random() < 0.10
+        human_dist_m = float(rng.uniform(0.1, 0.4)) if human_detected else float("inf")
+        commanded_action = action.copy() if rng.random() < 0.10 else None
+
+        intention = label_intention(
+            action,
+            obs,
+            human_detected=human_detected,
+            human_dist_m=human_dist_m,
+            commanded_action=commanded_action,
+        )
+
+        # Build observation with label-relevant state in the first dims
+        state_obs = _build_state_observation(
+            obs.vision_features,
+            action,
+            obs.distance_m,
+            obs.motor_state,
+            human_detected,
+            commanded_action is not None,
+        )
 
         annotations.append(
             {
-                "observation": obs.vision_features.copy(),
+                "observation": state_obs,
                 "action": action.copy(),
                 "intention_label": intention,
                 "distance_m": obs.distance_m,
@@ -142,6 +196,7 @@ def collect_annotations(
     n_episodes: int = 500,
     max_steps: int = 50,
     output_path: Path | str | None = None,
+    balance_dataset: bool = False,
 ) -> Path:
     """Collect labelled intention annotations from navigation episodes.
 
@@ -150,6 +205,7 @@ def collect_annotations(
         n_episodes: Number of episodes to collect.
         max_steps: Steps per episode.
         output_path: Path to save annotations ``.npz``.
+        balance_dataset: Oversample minority classes to within 20% of majority.
 
     Returns:
         Path to saved annotations file.
@@ -179,6 +235,20 @@ def collect_annotations(
     observations = np.stack(all_observations)
     intentions = np.array(all_intentions, dtype=np.int64)
 
+    # Always audit and log class distribution
+    class_counts = audit_class_balance(intentions)
+
+    # Optionally balance classes via oversampling
+    if balance_dataset:
+        observations, intentions = balance_classes(observations, intentions)
+        _log.info(
+            "class_balance_applied",
+            post_balance_counts={
+                INTENTION_LABELS[i]: int(np.sum(intentions == i))
+                for i in range(len(INTENTION_LABELS))
+            },
+        )
+
     np.savez(
         output_path,
         observations=observations,
@@ -188,8 +258,93 @@ def collect_annotations(
         "annotations_saved",
         path=str(output_path),
         n_samples=len(intentions),
-        class_distribution={
-            INTENTION_LABELS[i]: int(np.sum(intentions == i)) for i in range(len(INTENTION_LABELS))
-        },
+        class_distribution=class_counts,
     )
     return output_path
+
+
+def audit_class_balance(
+    intentions: np.ndarray,
+) -> dict[str, int]:
+    """Log per-class sample counts and imbalance ratio.
+
+    Args:
+        intentions: 1-D array of intention class indices.
+
+    Returns:
+        Dictionary mapping class name → count.
+    """
+    counts: dict[str, int] = {}
+    for i, label in enumerate(INTENTION_LABELS):
+        counts[label] = int(np.sum(intentions == i))
+
+    values = [c for c in counts.values() if c > 0]
+    if values:
+        imbalance_ratio = max(values) / max(min(values), 1)
+    else:
+        imbalance_ratio = 0.0
+
+    _log.info(
+        "class_balance_audit",
+        counts=counts,
+        n_classes_present=len(values),
+        imbalance_ratio=round(imbalance_ratio, 2),
+    )
+    return counts
+
+
+def balance_classes(
+    observations: np.ndarray,
+    intentions: np.ndarray,
+    *,
+    max_ratio: float = 1.2,
+    seed: int = 42,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Oversample minority classes to within ``max_ratio`` of the majority.
+
+    Args:
+        observations: Array of shape ``(n, obs_dim)``.
+        intentions: 1-D array of intention labels.
+        max_ratio: Maximum allowed ratio between majority and each minority class.
+            Defaults to 1.2 (within 20% of majority).
+        seed: RNG seed for reproducible oversampling.
+
+    Returns:
+        Tuple of (balanced_observations, balanced_intentions).
+    """
+    rng = np.random.default_rng(seed)
+    n_classes = len(INTENTION_LABELS)
+    class_counts = np.array(
+        [int(np.sum(intentions == i)) for i in range(n_classes)]
+    )
+    majority_count = int(class_counts.max())
+    target_count = int(majority_count / max_ratio)
+
+    balanced_obs_parts: list[np.ndarray] = []
+    balanced_int_parts: list[np.ndarray] = []
+
+    for cls_idx in range(n_classes):
+        mask = intentions == cls_idx
+        cls_obs = observations[mask]
+        cls_count = len(cls_obs)
+
+        if cls_count == 0:
+            continue
+
+        balanced_obs_parts.append(cls_obs)
+        balanced_int_parts.append(intentions[mask])
+
+        # Oversample if below target
+        if cls_count < target_count:
+            n_extra = target_count - cls_count
+            extra_indices = rng.choice(cls_count, size=n_extra, replace=True)
+            balanced_obs_parts.append(cls_obs[extra_indices])
+            balanced_int_parts.append(np.full(n_extra, cls_idx, dtype=np.int64))
+
+    balanced_obs = np.concatenate(balanced_obs_parts, axis=0)
+    balanced_int = np.concatenate(balanced_int_parts, axis=0)
+
+    # Shuffle
+    perm = rng.permutation(len(balanced_obs))
+    return balanced_obs[perm], balanced_int[perm]
+

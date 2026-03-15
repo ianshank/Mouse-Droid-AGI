@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 import structlog
 
+from mousedroid.config.schema import BDITrainingConfig
 from mousedroid.utils.numpy_ops import relu as _relu
 from mousedroid.utils.numpy_ops import softmax as _softmax
 from training.collect_annotations import INTENTION_LABELS
@@ -38,8 +39,15 @@ def train_belief_encoder(
     lr: float = 3e-4,
     epochs: int = 100,
     batch_size: int = 32,
+    intentions: np.ndarray | None = None,
+    probe_weight: float = 0.1,
 ) -> dict[str, np.ndarray]:
     """Train BeliefEncoder as an autoencoder (256 → 128 → 256).
+
+    When *intentions* are provided, a classification probe (128 → n_classes)
+    is co-trained so the belief representation captures discriminative
+    features.  The probe weights are discarded; only encoder weights are
+    returned.
 
     Returns:
         Weight dict with keys ``w1``, ``b1``, ``w2``, ``b2`` for the encoder
@@ -58,6 +66,12 @@ def train_belief_encoder(
     w_dec = rng.standard_normal((_BELIEF_DIM, _OBS_DIM)).astype(np.float32) * 0.01
     b_dec = np.zeros(_OBS_DIM, dtype=np.float32)
 
+    # Optional classification probe (128 → n_classes)
+    use_probe = intentions is not None and probe_weight > 0
+    if use_probe:
+        w_probe = rng.standard_normal((_BELIEF_DIM, _INTENTION_CLASSES)).astype(np.float32) * 0.01
+        b_probe = np.zeros(_INTENTION_CLASSES, dtype=np.float32)
+
     for epoch in range(1, epochs + 1):
         perm = rng.permutation(n)
         total_loss = 0.0
@@ -67,19 +81,39 @@ def train_belief_encoder(
             idx = perm[start : start + batch_size]
             x = observations[idx]
 
-            # Forward
+            # Forward — autoencoder path
             h1 = _relu(x @ w1 + b1)
             h2 = _relu(h1 @ w2 + b2)
             recon = h2 @ w_dec + b_dec
-            loss = np.mean((recon - x) ** 2)
+            recon_loss = np.mean((recon - x) ** 2)
+
+            # Forward — classification probe path
+            if use_probe:
+                probe_logits = h2 @ w_probe + b_probe
+                cls_loss = _cross_entropy(probe_logits, intentions[idx])
+                loss = recon_loss + probe_weight * cls_loss
+            else:
+                loss = recon_loss
+
             total_loss += loss
 
-            # Backward (manual gradients for simple 3-layer autoencoder)
+            # Backward — autoencoder gradients
             d_recon = 2.0 * (recon - x) / x.shape[0]
             d_w_dec = h2.T @ d_recon / batch_size
             d_b_dec = d_recon.mean(axis=0)
 
             d_h2 = d_recon @ w_dec.T
+
+            # Backward — probe gradients (add to d_h2)
+            if use_probe:
+                probs = _softmax(probe_logits)
+                d_logits = probs.copy()
+                d_logits[np.arange(len(idx)), intentions[idx]] -= 1.0
+                d_logits /= len(idx)
+                d_w_probe = h2.T @ d_logits / batch_size
+                d_b_probe = d_logits.mean(axis=0)
+                d_h2 = d_h2 + probe_weight * (d_logits @ w_probe.T)
+
             d_h2 = d_h2 * (h2 > 0).astype(np.float32)
             d_w2 = h1.T @ d_h2 / batch_size
             d_b2 = d_h2.mean(axis=0)
@@ -89,13 +123,16 @@ def train_belief_encoder(
             d_w1 = x.T @ d_h1 / batch_size
             d_b1 = d_h1.mean(axis=0)
 
-            # SGD update
+            # SGD update — encoder + decoder
             w1 -= lr * d_w1
             b1 -= lr * d_b1
             w2 -= lr * d_w2
             b2 -= lr * d_b2
             w_dec -= lr * d_w_dec
             b_dec -= lr * d_b_dec
+            if use_probe:
+                w_probe -= lr * d_w_probe
+                b_probe -= lr * d_b_probe
             n_batches += 1
 
         if epoch % 20 == 0:
@@ -307,22 +344,30 @@ def train_affect_estimator(
 def train_bdi(
     annotations_path: Path | str,
     output_dir: Path | str | None = None,
-    lr: float = 3e-4,
-    epochs: int = 100,
-    batch_size: int = 32,
+    lr: float | None = None,
+    epochs: int | None = None,
+    batch_size: int | None = None,
+    bdi_config: BDITrainingConfig | None = None,
 ) -> Path:
     """Full Phase 2.3 BDI training pipeline.
 
     Args:
         annotations_path: Path to ``bdi_annotations.npz``.
         output_dir: Directory to save ``.npz`` weight files.
-        lr: Learning rate for all sub-networks.
-        epochs: Training epochs per sub-network.
-        batch_size: Batch size.
+        lr: Learning rate (overrides ``bdi_config.learning_rate`` if set).
+        epochs: Training epochs (overrides ``bdi_config.epochs`` if set).
+        batch_size: Batch size (overrides ``bdi_config.batch_size`` if set).
+        bdi_config: Optional BDI-specific training config. Falls back to
+            ``BDITrainingConfig()`` defaults when ``None``.
 
     Returns:
         Path to output directory with saved weights.
     """
+    cfg = bdi_config or BDITrainingConfig()
+    _lr = lr if lr is not None else cfg.learning_rate
+    _epochs = epochs if epochs is not None else cfg.epochs
+    _batch_size = batch_size if batch_size is not None else cfg.batch_size
+
     output_dir = Path(output_dir) if output_dir else Path("weights/bdi")
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -330,15 +375,34 @@ def train_bdi(
     observations = data["observations"].astype(np.float32)
     intentions = data["intentions"].astype(np.int64)
 
-    _log.info("bdi_training_start", n_samples=len(observations))
+    # Z-score normalise observations for better SGD convergence
+    obs_mean = observations.mean(axis=0)
+    obs_std = observations.std(axis=0) + 1e-8
+    observations = (observations - obs_mean) / obs_std
 
-    # Stage 1: BeliefEncoder
-    belief_weights = train_belief_encoder(observations, lr, epochs, batch_size)
+    # Persist norm stats so validation & runtime can reconstruct the transform
+    np.savez(output_dir / "belief_norm_stats.npz", mean=obs_mean, std=obs_std)
+    _log.info("norm_stats_saved", path=str(output_dir / "belief_norm_stats.npz"))
+
+    _log.info(
+        "bdi_training_start",
+        n_samples=len(observations),
+        epochs=_epochs,
+        lr=_lr,
+        batch_size=_batch_size,
+        balance_classes=cfg.balance_classes,
+        normalise=cfg.normalise_observations,
+    )
+
+    # Stage 1: BeliefEncoder (with classification probe for discriminative features)
+    belief_weights = train_belief_encoder(
+        observations, _lr, _epochs, _batch_size, intentions=intentions,
+    )
     np.savez(output_dir / "belief.npz", **belief_weights)  # type: ignore[arg-type]
     _log.info("belief_encoder_saved")
 
     # Stage 2: DesireEncoder
-    desire_weights = train_desire_encoder(observations, belief_weights, lr, epochs, batch_size)
+    desire_weights = train_desire_encoder(observations, belief_weights, _lr, _epochs, _batch_size)
     np.savez(output_dir / "desire.npz", **desire_weights)  # type: ignore[arg-type]
     _log.info("desire_encoder_saved")
 
@@ -348,9 +412,9 @@ def train_bdi(
         intentions,
         belief_weights,
         desire_weights,
-        lr,
-        epochs,
-        batch_size,
+        _lr,
+        _epochs,
+        _batch_size,
     )
     np.savez(output_dir / "intention.npz", **intention_weights)  # type: ignore[arg-type]
     _log.info("intention_predictor_saved")
@@ -361,12 +425,13 @@ def train_bdi(
         belief_weights,
         desire_weights,
         intention_weights,
-        lr,
-        epochs,
-        batch_size,
+        _lr,
+        _epochs,
+        _batch_size,
     )
     np.savez(output_dir / "affect.npz", **affect_weights)  # type: ignore[arg-type]
     _log.info("affect_estimator_saved")
 
     _log.info("bdi_training_complete", output_dir=str(output_dir))
     return output_dir
+

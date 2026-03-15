@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass, field
 
 import torch
@@ -69,17 +70,23 @@ class MCTSPlanner:
     # ------------------------------------------------------------------
 
     def _generate_candidate_actions(self, device: torch.device) -> Tensor:
-        """Uniformly sample candidate actions in [-1, 1].
+        """Sample candidate actions according to the configured strategy.
+
+        When ``action_sampling == "linspace"``, uses a 1-D grid broadcast
+        (legacy behaviour).  ``"uniform"`` produces truly independent
+        multi-dimensional samples for better action-space coverage.
 
         Returns:
             Tensor of shape ``(n_action_candidates, action_dim)``.
         """
         n = self._cfg.n_action_candidates
         action_dim = self._action_dim
-        raw = torch.linspace(-1.0, 1.0, n, device=device)
-        # Expand to full action space: repeat across action dims.
-        actions = raw.unsqueeze(-1).expand(n, action_dim)
-        return actions
+        if self._cfg.action_sampling == "linspace":
+            # Legacy: 1-D linspace broadcast.
+            raw = torch.linspace(-1.0, 1.0, n, device=device)
+            return raw.unsqueeze(-1).expand(n, action_dim)
+        # Multi-dim uniform: independent samples in [-1, 1] per dimension.
+        return torch.rand(n, action_dim, device=device) * 2.0 - 1.0
 
     def _ucb1(self, node: _Node, parent_visits: int) -> float:
         """Compute UCB1 score for child selection.
@@ -158,6 +165,15 @@ class MCTSPlanner:
     def plan(self, h: Tensor, z: Tensor) -> Tensor:
         """Run MCTS simulations and return the best action.
 
+        Supports three config-driven optimisations:
+
+        1. **Early exit** — when the best-child value changes by less than
+           ``early_exit_value_threshold`` for ``early_exit_patience``
+           consecutive simulations, search terminates early.
+        2. **Time budget** — when ``simulation_budget_ms > 0`` and elapsed
+           wall-clock time exceeds the budget, search terminates early.
+        3. **Action diversity** — controlled by ``action_sampling`` config.
+
         Args:
             h: Current hidden state, shape ``(1, hidden_dim)``.
             z: Current latent state, shape ``(1, latent_dim)``.
@@ -172,7 +188,27 @@ class MCTSPlanner:
         # Initial expansion
         self._expand(root, device)
 
-        for _ in range(self._cfg.n_simulations_base):
+        # Early-exit tracking
+        prev_best_value = 0.0
+        stable_count = 0
+        use_early_exit = self._cfg.early_exit_value_threshold > 0
+
+        # Time-budget tracking
+        use_budget = self._cfg.simulation_budget_ms > 0
+        t_start = time.monotonic() if use_budget else 0.0
+
+        for sim_idx in range(self._cfg.n_simulations_base):
+            # --- Time-budget check ---
+            if use_budget:
+                elapsed_ms = (time.monotonic() - t_start) * 1000.0
+                if elapsed_ms >= self._cfg.simulation_budget_ms:
+                    _log.debug(
+                        "mcts_time_budget_exit",
+                        sim=sim_idx,
+                        elapsed_ms=round(elapsed_ms, 1),
+                    )
+                    break
+
             node = root
             path: list[_Node] = [node]
 
@@ -195,6 +231,23 @@ class MCTSPlanner:
             for ancestor in path:
                 ancestor.visit_count += 1
                 ancestor.total_value += value
+
+            # --- Early-exit convergence check ---
+            if use_early_exit and root.children:
+                best_child = max(root.children, key=lambda c: c.visit_count)
+                current_best_value = best_child.mean_value
+                if abs(current_best_value - prev_best_value) < self._cfg.early_exit_value_threshold:
+                    stable_count += 1
+                    if stable_count >= self._cfg.early_exit_patience:
+                        _log.debug(
+                            "mcts_early_exit",
+                            sim=sim_idx,
+                            value=round(current_best_value, 4),
+                        )
+                        break
+                else:
+                    stable_count = 0
+                prev_best_value = current_best_value
 
         # Select most-visited root child.
         best_child = max(root.children, key=lambda c: c.visit_count)

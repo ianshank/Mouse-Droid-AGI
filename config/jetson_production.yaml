@@ -18,3 +18,10 @@ experience:
   path: "/home/jetson/mousedroid_experience"
   map_size_gb: 40
   flush_every_n: 60
+
+llm_gateway:
+  model_path: "/home/jetson/models/Phi-3-mini-4k-instruct-q4.gguf"
+  n_threads: 4
+  n_gpu_layers: -1
+  max_tokens: 256
+  temperature: 0.1

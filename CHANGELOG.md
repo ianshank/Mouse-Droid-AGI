@@ -10,6 +10,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **MCTS early-exit convergence** (2026-03-14): `early_exit_value_threshold` and `early_exit_patience`
+  in `MCTSConfig` — search terminates early when best-child value stabilises. Default `0.01` threshold,
+  `3` patience (backward-compatible: `0.0` disables).
+- **MCTS multi-dim action sampling** (2026-03-14): `action_sampling: "uniform"` in `MCTSConfig` replaces
+  1-D linspace broadcast with independent per-dimension uniform samples. Eliminates correlated
+  action candidates that were limiting search diversity. Legacy `"linspace"` still available.
+- **MCTS time-budget simulation** (2026-03-14): `simulation_budget_ms: float` in `MCTSConfig` — when
+  set > 0, `plan()` exits early if wall-clock time exceeds the budget (uses `time.monotonic()`).
+- **MCTS tree reuse config** (2026-03-14): `reuse_tree: bool = False` in `MCTSConfig` — plumbed for
+  future warm-start implementation (requires human sign-off, see ADR-007).
+- **8 new MCTS tests** — early-exit convergence (3), time-budget (2), action diversity (3)
+- **`BDITrainingConfig`** (2026-03-14): dedicated training config for BDI phase — `epochs=300` (vs
+  shared 100), `accuracy_threshold=0.60`, `balance_classes`, `normalise_observations`. Wired into
+  `Settings.bdi_training` and accepted by `train_bdi()` with full backward-compat fallback.
+- **BDI class balancing** (2026-03-14): `audit_class_balance()` logs distribution ratios. Opt-in
+  `balance_classes()` inside `collect_annotations.py` deterministically oversamples minority classes
+  to within 20% of the majority.
+- **BeliefEncoder z-score normalisation** (2026-03-14): Opt-in `normalise` flag loads stats from
+  `belief_norm_stats.npz`. Default stays `False` for backward compatibility. Emits deprecation
+  warning if disabled but stats file is present.
+- **CI Accuracy Gate** (2026-03-14): Added `scripts/check_report.py` to enforce `0.60` minimum
+  BDI intention accuracy during GitHub Actions pipeline. Added new `bdi-accuracy` job after testing.
+- **BDI test coverage** (2026-03-14): Added comprehensive `test_bdi_features.py` (31 total BDI
+  module tests), bringing combined branch coverage of `bdi_model.py`, `train_bdi.py`, and
+  `collect_annotations.py` to 93%.
+
 - **GPU Pre-Training Pipeline** — end-to-end orchestration for running phases natively on Jetson Orin Nano
   - `run_pipeline.py` orchestrator and native AMP support in `train_rssm.py`
   - GPU-accelerated MCTS rollouts in `warmstart_policy.py`
@@ -59,6 +85,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`jetson_csi.py`** — fixed optional import types (`Any` annotation for `_jetson_utils` / `_cv2`)
 
 ### Fixed
+
+- **`validate_weights.py` — BDI matmul dimension crash** (2026-03-14): `validate_bdi_accuracy` was
+  concatenating `belief` (128-dim) and `desire` (64-dim) to produce a 192-dim vector, then multiplying
+  by `intention.w1` which has input dimension 64. Fixed to use only `desire` output for the intention
+  layer, matching the trained weight shape. Root cause: wrong network topology assumption in the forward
+  pass. Regression test: `TestBdiBugRegression`.
+- **`validate_weights.py` — wrong path for constitutional_rl weights** (2026-03-14):
+  `validate_constitutional_rl` looked for `policy.npz` / `value.npz` in `weights/` root but the files
+  live in `weights/constitutional_rl/`. Fixed path to use `weights_dir / "constitutional_rl" / "policy.npz"`.
+  Regression test: `TestConstitutionalRlPathRegression`.
+- **`validate_weights.py` — MCTS latency regression not detected** (2026-03-14): Added
+  `validate_mcts_latency()` which reads `mcts/tuned_config.json` and raises an error when best-UCB p50
+  latency exceeds the 50 ms target. Last run showed 219 ms (4.4× over). Regression test:
+  `TestMctsLatencyRegression`.
+
 
 - **`test_bdi_model.py`** — fixed stale `_relu` import (renamed to `relu` in `numpy_ops`)
 - **`common/tools/registry.py`** — added `_mic_diagnostics` handler (9th tool, matching tests)

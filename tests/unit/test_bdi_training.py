@@ -8,6 +8,7 @@ import numpy as np
 from training.collect_annotations import INTENTION_LABELS, label_intention
 from training.train_bdi import (
     train_affect_estimator,
+    train_bdi,
     train_belief_encoder,
     train_desire_encoder,
     train_intention_predictor,
@@ -165,3 +166,47 @@ class TestLabelIntention:
         )
         action = np.array([0.3, 0.0, 0.0], dtype=np.float32)
         assert label_intention(action, obs) == 2  # avoid_obstacle
+
+
+class TestTrainBdiNormStatsRegression:
+    """Regression: train_bdi() must persist belief_norm_stats.npz (Bug fix 2026-03)."""
+
+    def test_norm_stats_file_created(self, tmp_path: Path) -> None:
+        """train_bdi() must save belief_norm_stats.npz alongside other weights."""
+        ann_path = tmp_path / "annotations.npz"
+        obs, intentions = _make_dummy_data(50)
+        np.savez(ann_path, observations=obs, intentions=intentions)
+
+        output_dir = tmp_path / "bdi_out"
+        train_bdi(ann_path, output_dir=output_dir, epochs=2, batch_size=16)
+
+        norm_path = output_dir / "belief_norm_stats.npz"
+        assert norm_path.exists(), "belief_norm_stats.npz must be saved by train_bdi"
+
+    def test_norm_stats_shapes_match_obs_dim(self, tmp_path: Path) -> None:
+        """mean and std arrays must match observation dimension (256)."""
+        ann_path = tmp_path / "annotations.npz"
+        obs, intentions = _make_dummy_data(50)
+        np.savez(ann_path, observations=obs, intentions=intentions)
+
+        output_dir = tmp_path / "bdi_out"
+        train_bdi(ann_path, output_dir=output_dir, epochs=2, batch_size=16)
+
+        data = np.load(output_dir / "belief_norm_stats.npz")
+        assert "mean" in data, "must contain 'mean' key"
+        assert "std" in data, "must contain 'std' key"
+        assert data["mean"].shape == (256,)
+        assert data["std"].shape == (256,)
+
+    def test_all_weight_files_produced(self, tmp_path: Path) -> None:
+        """train_bdi() must produce belief, desire, intention, affect, and norm stats."""
+        ann_path = tmp_path / "annotations.npz"
+        obs, intentions = _make_dummy_data(50)
+        np.savez(ann_path, observations=obs, intentions=intentions)
+
+        output_dir = tmp_path / "bdi_out"
+        train_bdi(ann_path, output_dir=output_dir, epochs=2, batch_size=16)
+
+        expected = ["belief.npz", "desire.npz", "intention.npz", "affect.npz", "belief_norm_stats.npz"]
+        for name in expected:
+            assert (output_dir / name).exists(), f"Missing: {name}"

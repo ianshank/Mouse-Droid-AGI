@@ -79,8 +79,8 @@ def compute_latent_statistics(
 def warmstart_policy(
     latent_mean: np.ndarray,
     latent_std: np.ndarray,
-    input_dim: int = 128,
-    action_dim: int = 2,
+    input_dim: int = 64,
+    action_dim: int = 3,
 ) -> PolicyMLP:
     """Initialise PolicyMLP weights from RSSM latent statistics.
 
@@ -220,7 +220,12 @@ def run_warmstart(
     latent_mean, latent_std = compute_latent_statistics(rssm, dataset, device)
 
     # Warm-start policy
-    policy = warmstart_policy(latent_mean, latent_std)
+    policy = warmstart_policy(
+        latent_mean,
+        latent_std,
+        input_dim=cfg.model.latent_dim,
+        action_dim=cfg.model.action_dim,
+    )
     policy.save(output_dir / "policy_init.npz")
     _log.info("policy_warmstarted", path=str(output_dir / "policy_init.npz"))
 

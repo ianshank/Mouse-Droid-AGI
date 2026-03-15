@@ -25,6 +25,8 @@ else:
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from mousedroid.llm_gateway.config import GatewayConfig
+
 
 class PlatformType(StrEnum):
     """Supported hardware platform types."""
@@ -212,6 +214,29 @@ class MCTSConfig(BaseModel):
     gamma: float = Field(0.97, gt=0, le=1, description="Discount factor")
     n_action_candidates: int = Field(9, gt=0, description="Action candidates per node")
     ucb_c: float = Field(1.41, gt=0, description="UCB exploration constant")
+    early_exit_value_threshold: float = Field(
+        0.01,
+        ge=0,
+        description="Stop search when best-child value change < threshold (0 = disabled)",
+    )
+    early_exit_patience: int = Field(
+        3,
+        gt=0,
+        description="Consecutive stable iterations before early exit triggers",
+    )
+    simulation_budget_ms: float = Field(
+        0.0,
+        ge=0,
+        description="Max wall-clock time for plan() in ms (0 = unlimited)",
+    )
+    action_sampling: Literal["linspace", "uniform"] = Field(
+        "uniform",
+        description="Action candidate sampling strategy: linspace (legacy) or uniform (diverse)",
+    )
+    reuse_tree: bool = Field(
+        False,
+        description="Warm-start from previous plan's best subtree (experimental)",
+    )
 
 
 class MemoryConfig(BaseModel):
@@ -434,6 +459,27 @@ class TrainingConfig(BaseModel):
         ),
     )
 
+class BDITrainingConfig(BaseModel):
+    """BDI-specific training configuration (overrides TrainingConfig for BDI phases)."""
+
+    epochs: int = Field(200, gt=0, description="BDI training epochs (higher than shared default)")
+    learning_rate: float = Field(3e-3, gt=0, description="BDI learning rate (higher for vanilla SGD)")
+    batch_size: int = Field(32, gt=0, description="BDI batch size")
+    accuracy_threshold: float = Field(
+        0.60,
+        gt=0,
+        le=1,
+        description="Minimum held-out intention accuracy to pass validation",
+    )
+    balance_classes: bool = Field(
+        False,
+        description="Oversample minority intention classes to within 20% of majority",
+    )
+    normalise_observations: bool = Field(
+        False,
+        description="Apply z-score normalisation to observations before belief encoding",
+    )
+
 
 class MicrophoneConfig(BaseModel):
     """SuziePi USB 2.0 Mini Microphone configuration."""
@@ -509,6 +555,7 @@ class Settings(BaseSettings):
     experience: ExperienceConfig = Field(default_factory=ExperienceConfig)  # type: ignore[arg-type]
     logging: LoggingConfig = Field(default_factory=LoggingConfig)  # type: ignore[arg-type]
     training: TrainingConfig = Field(default_factory=TrainingConfig)  # type: ignore[arg-type]
+    bdi_training: BDITrainingConfig = Field(default_factory=BDITrainingConfig)  # type: ignore[arg-type]
     health: HealthConfig = Field(default_factory=HealthConfig)  # type: ignore[arg-type]
     retry: RetryConfig = Field(default_factory=RetryConfig)  # type: ignore[arg-type]
     circuit_breaker: CircuitBreakerConfig = Field(default_factory=CircuitBreakerConfig)  # type: ignore[arg-type]
@@ -520,8 +567,12 @@ class Settings(BaseSettings):
     curiosity: CuriosityConfig = Field(default_factory=CuriosityConfig)  # type: ignore[arg-type]
     ppo: PPOConfig = Field(default_factory=PPOConfig)  # type: ignore[arg-type]
     three_laws: ThreeLawsConfig = Field(default_factory=ThreeLawsConfig)  # type: ignore[arg-type]
+    llm_gateway: GatewayConfig | None = Field(
+        None,
+        description="LLM gateway config for NL mission translation (None=disabled)",
+    )
 
-    @model_validator(mode="after")
+    @model_validator(mode="after")  # pyright: ignore[reportUntypedClassDecorator] # type: ignore[misc]
     def hardware_requires_pins(self) -> Self:
         """Validate that real hardware mode has required sensor configs."""
         if not self.mock_hardware and self.ultrasonic is None:

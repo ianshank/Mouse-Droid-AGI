@@ -129,15 +129,47 @@ class BeliefEncoder:
     Args:
         weights_path: Optional path to an ``.npz`` file with keys
             ``w1``, ``b1``, ``w2``, ``b2``.
+        normalise: Apply z-score normalisation before the first layer.
+            When ``True``, expects ``belief_norm_stats.npz`` sibling file
+            with ``mean`` and ``std`` arrays. Defaults to ``False``.
     """
 
-    def __init__(self, weights_path: Path | None = None) -> None:
+    _NORM_STATS_FILENAME: str = "belief_norm_stats.npz"
+    _NORM_EPS: float = 1e-8
+
+    def __init__(
+        self,
+        weights_path: Path | None = None,
+        *,
+        normalise: bool = False,
+    ) -> None:
+        self._normalise = normalise
+        self._norm_mean: NDArray[np.floating[Any]] | None = None
+        self._norm_std: NDArray[np.floating[Any]] | None = None
+
         if weights_path is not None:
             data = np.load(weights_path)
             self._w1: NDArray[np.floating[Any]] = data["w1"]
             self._b1: NDArray[np.floating[Any]] = data["b1"]
             self._w2: NDArray[np.floating[Any]] = data["w2"]
             self._b2: NDArray[np.floating[Any]] = data["b2"]
+
+            # Load normalisation stats if they exist
+            norm_path = weights_path.parent / self._NORM_STATS_FILENAME
+            if norm_path.exists():
+                norm_data = np.load(norm_path)
+                self._norm_mean = norm_data["mean"]
+                self._norm_std = norm_data["std"]
+                if not normalise:
+                    import warnings
+
+                    warnings.warn(
+                        f"Normalisation stats found at {norm_path} but "
+                        "normalise=False. Set normalise_observations=True "
+                        "in BDITrainingConfig to use them.",
+                        DeprecationWarning,
+                        stacklevel=2,
+                    )
         else:
             rng = np.random.default_rng(BELIEF_ENCODER_SEED)
             self._w1 = (
@@ -160,6 +192,8 @@ class BeliefEncoder:
         Returns:
             128-d belief vector.
         """
+        if self._normalise and self._norm_mean is not None and self._norm_std is not None:
+            x = (x - self._norm_mean) / (self._norm_std + self._NORM_EPS)
         h = relu(x @ self._w1 + self._b1)
         return relu(h @ self._w2 + self._b2)
 

@@ -49,7 +49,7 @@ def run_phase_0b_annotations(cfg: Settings) -> Path:
     _log.info("phase_0b_start", phase="collect_annotations")
     from training.collect_annotations import collect_annotations
 
-    annotations_path = collect_annotations(cfg, n_episodes=500, max_steps=50)
+    annotations_path = collect_annotations(cfg, n_episodes=500, max_steps=50, balance_dataset=True)
     _log.info("phase_0b_complete", path=str(annotations_path))
     return annotations_path
 
