@@ -149,7 +149,7 @@ class CognitiveCore:
                 continue
 
             state = np.asarray(
-                obs.get("state", np.zeros(_FAST_STATE_DIM)),
+                obs.get("bdi_state", obs.get("state", np.zeros(_FAST_STATE_DIM))),
                 dtype=np.float32,
             )
 

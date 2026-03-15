@@ -328,3 +328,26 @@ async def test_try_cognitive_action_state_vec_padding():
     # Verify cognitive core was called with padded state
     call_args = cognitive_core.tick_fast.call_args[0][0]
     assert call_args["state"].shape == (belief_dim,)
+
+
+async def test_try_cognitive_action_passes_full_bdi_state() -> None:
+    """Test _try_cognitive_action preserves the full latent state for BDI."""
+    orch = _make_orchestrator()
+    hidden_dim = orch._cfg.model.hidden_dim
+    orch._h = torch.arange(hidden_dim, dtype=torch.float32).reshape(1, hidden_dim)
+
+    cognitive_core = MagicMock()
+    cognitive_core.tick_fast = MagicMock(return_value=(np.array([0.1, 0.0, 0.0]), []))
+    orch._cognitive_core = cognitive_core
+
+    obs = _make_observation(orch._cfg)
+    result = orch._try_cognitive_action(obs, 10.0)
+
+    assert result is not None
+    call_args = cognitive_core.tick_fast.call_args[0][0]
+    assert call_args["state"].shape == (orch._cfg.model.belief_dim,)
+    assert call_args["bdi_state"].shape == (hidden_dim,)
+    np.testing.assert_array_equal(
+        call_args["bdi_state"],
+        np.arange(hidden_dim, dtype=np.float32),
+    )

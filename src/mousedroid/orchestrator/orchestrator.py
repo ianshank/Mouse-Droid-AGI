@@ -180,14 +180,17 @@ class MouseDroidOrchestrator:
                 else DEFAULT_BATTERY_VOLTAGE
             )
             belief_dim = int(self._cfg.model.belief_dim)
-            state_vec = self._h.numpy().flatten()
+            bdi_state_vec = self._h.numpy().flatten().astype(np.float32, copy=False)
+            state_vec = bdi_state_vec
             if state_vec.size < belief_dim:
                 state_vec = np.pad(state_vec, (0, belief_dim - state_vec.size))
             else:
                 state_vec = state_vec[:belief_dim]
+            state_vec = state_vec.astype(np.float32, copy=False)
 
             obs_dict = {
                 "state": state_vec,
+                "bdi_state": bdi_state_vec,
                 "battery_v": battery_v,
                 "obstacle_dist_m": float(observation.distance_m),
                 "mcts_sims": int(self._cfg.mcts.n_simulations_base),

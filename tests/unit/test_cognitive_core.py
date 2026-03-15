@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import MagicMock
 
 import numpy as np
 
@@ -93,6 +94,32 @@ async def test_slow_loop_processes_observation() -> None:
     assert core._latest_bdi != {}
     assert "belief" in core._latest_bdi
     assert "intentions" in core._latest_bdi
+
+    await core.stop()
+
+
+async def test_tick_fast_queues_full_bdi_state_for_slow_loop() -> None:
+    core = _make_core()
+    core._bdi = MagicMock()
+    core._bdi.infer.return_value = {
+        "belief": np.zeros(128, dtype=np.float32),
+        "intentions": np.zeros(10, dtype=np.float32),
+    }
+
+    await core.start()
+    obs = {
+        "state": np.zeros(128, dtype=np.float32),
+        "bdi_state": np.ones(256, dtype=np.float32),
+        "battery_v": 12.0,
+        "loop_time_ms": 25.0,
+    }
+    core.tick_fast(obs)
+
+    await asyncio.sleep(0.1)
+
+    infer_arg = core._bdi.infer.call_args[0][0]
+    assert infer_arg.shape == (256,)
+    np.testing.assert_array_equal(infer_arg, obs["bdi_state"])
 
     await core.stop()
 
