@@ -14,7 +14,12 @@ import numpy as np
 from numpy.typing import NDArray
 
 from mousedroid.common.math.numpy_ops import layer_norm, relu
-from mousedroid.constants import POLICY_MLP_SEED, VALUE_MLP_SEED, WEIGHT_INIT_SCALE
+from mousedroid.constants import (
+    DEFAULT_POLICY_HIDDEN_DIM,
+    POLICY_MLP_SEED,
+    VALUE_MLP_SEED,
+    WEIGHT_INIT_SCALE,
+)
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
@@ -46,7 +51,7 @@ _CURIOSITY_CHANNELS: tuple[str, ...] = (
 )
 """Named curiosity channels for aggregation."""
 
-_POLICY_HIDDEN_DIM: int = 64
+_POLICY_HIDDEN_DIM: int = DEFAULT_POLICY_HIDDEN_DIM
 """Hidden layer dimensionality for PolicyMLP and ValueMLP networks."""
 
 

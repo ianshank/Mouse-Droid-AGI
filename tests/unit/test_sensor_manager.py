@@ -118,3 +118,19 @@ async def test_read_all_microphone_failure():
     mic.read_chunk.side_effect = RuntimeError("mic fail")
     bundle = await mgr.read_all()
     assert bundle.valid_mask[3] == 0.0
+
+
+async def test_start_with_microphone():
+    """Test start() calls microphone.start() when microphone is configured."""
+    mgr, mic = _make_manager_with_mic()
+    mic.start = AsyncMock()
+    await mgr.start()
+    mic.start.assert_awaited_once()
+
+
+async def test_stop_with_microphone():
+    """Test stop() calls microphone.stop() when microphone is configured."""
+    mgr, mic = _make_manager_with_mic()
+    mic.stop = AsyncMock()
+    await mgr.stop()
+    mic.stop.assert_awaited_once()

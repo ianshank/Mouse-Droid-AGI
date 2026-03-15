@@ -18,6 +18,10 @@ from mousedroid.common.math.numpy_ops import relu, softmax
 from mousedroid.constants import (
     AFFECT_ESTIMATOR_SEED,
     BELIEF_ENCODER_SEED,
+    DEFAULT_AFFECT_DIM,
+    DEFAULT_BELIEF_DIM,
+    DEFAULT_DESIRE_DIM,
+    DEFAULT_INTENTION_CLASSES,
     DEFAULT_VISION_DIM,
     DESIRE_ENCODER_SEED,
     INTENTION_PREDICTOR_SEED,
@@ -41,16 +45,16 @@ _SOFTMAX_EPS: float = 1e-8
 _APPROACH_RATE_EPS: float = 1e-6
 """Minimum approach rate to avoid divide-by-zero."""
 
-_BELIEF_DIM: int = 128
+_BELIEF_DIM: int = DEFAULT_BELIEF_DIM
 """Default dimensionality of the belief latent vector."""
 
-_DESIRE_DIM: int = 64
+_DESIRE_DIM: int = DEFAULT_DESIRE_DIM
 """Default dimensionality of the desire latent vector."""
 
-_INTENTION_CLASSES: int = 10
+_INTENTION_CLASSES: int = DEFAULT_INTENTION_CLASSES
 """Default number of discrete intention categories."""
 
-_AFFECT_DIM: int = 2
+_AFFECT_DIM: int = DEFAULT_AFFECT_DIM
 """Default affect output dimensionality (valence, arousal)."""
 
 
@@ -76,7 +80,7 @@ def _bayesian_normalise(
         Normalised array.
     """
     total = np.sum(values) + _BAYESIAN_SUM_EPS
-    return values / total  # type: ignore[no-any-return]
+    return values / total
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +296,7 @@ class AffectEstimator:
         """
         combined = np.concatenate([desire, intentions])
         raw = combined @ self._w1 + self._b1
-        return np.tanh(raw)  # type: ignore[no-any-return]
+        return np.tanh(raw)
 
 
 # ---------------------------------------------------------------------------

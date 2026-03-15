@@ -77,4 +77,4 @@ class TensorRTOptimizer:
             _log.warning("torch_tensorrt_not_available_falling_back_to_traced")
             import torch
 
-            return torch.jit.trace(model, sample_input)  # type: ignore[no-untyped-call]
+            return torch.jit.trace(model, sample_input)

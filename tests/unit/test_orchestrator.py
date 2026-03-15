@@ -306,3 +306,25 @@ async def test_normalize_cognitive_action_truncation():
     action_np = np.array([0.1, 0.2, 0.3, 0.4, 0.5], dtype=np.float32)
     result = orch._normalize_cognitive_action(action_np)
     assert result.shape == (orch._cfg.model.action_dim,)
+
+
+async def test_try_cognitive_action_state_vec_padding():
+    """Test _try_cognitive_action pads state_vec when smaller than belief_dim."""
+    orch = _make_orchestrator()
+
+    # Set hidden state smaller than belief_dim to trigger padding branch
+    belief_dim = orch._cfg.model.belief_dim
+    small_dim = belief_dim // 2
+    orch._h = torch.zeros(1, small_dim)
+
+    cognitive_core = MagicMock()
+    cognitive_core.tick_fast = MagicMock(return_value=(np.array([0.1, 0.0, 0.0]), []))
+    orch._cognitive_core = cognitive_core
+
+    obs = _make_observation(orch._cfg)
+    result = orch._try_cognitive_action(obs, 10.0)
+
+    assert result is not None
+    # Verify cognitive core was called with padded state
+    call_args = cognitive_core.tick_fast.call_args[0][0]
+    assert call_args["state"].shape == (belief_dim,)

@@ -16,6 +16,7 @@ from mousedroid.safety.protocol import SafetyMonitorProtocol
 from mousedroid.world_model.protocol import WorldModelProtocol
 
 if TYPE_CHECKING:
+    from mousedroid.cognitive.bdi_model import NeuralBDI
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.config.schema import Settings, UltrasonicConfig
 
@@ -191,7 +192,7 @@ def build_agent(cfg: Settings, world_model: WorldModelProtocol) -> AgentProtocol
     return MouseDroidNavigationAgent(planner, cfg)
 
 
-def _resolve_bdi_weights(cfg: Settings) -> tuple[object, str]:
+def _resolve_bdi_weights(cfg: Settings) -> tuple[NeuralBDI, str]:
     """Resolve BDI model weights: local, HuggingFace, or random.
 
     Args:

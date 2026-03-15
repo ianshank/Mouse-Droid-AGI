@@ -116,7 +116,7 @@ class IMX500Camera:
         norm = np.linalg.norm(features)
         if norm > 0:
             features = features / norm
-        return features  # type: ignore[no-any-return]
+        return features
 
     @property
     def feature_dim(self) -> int:

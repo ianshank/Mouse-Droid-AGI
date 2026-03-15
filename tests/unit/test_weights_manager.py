@@ -207,3 +207,20 @@ def test_download_weights_cache_dir_string(mock_download, tmp_path):
         cache_dir=str(tmp_path),  # String instead of Path
     )
     assert result is True
+
+
+@patch("mousedroid.utils.weights_manager._HF_HUB_AVAILABLE", True)
+@patch("mousedroid.utils.weights_manager._hf_hub_download", create=True)
+async def test_download_weights_async(mock_download, tmp_path):
+    """Test async wrapper delegates to sync download in thread."""
+    from mousedroid.utils.weights_manager import download_weights_async
+
+    mock_download.return_value = str(tmp_path / "belief.npz")
+
+    result = await download_weights_async(
+        repo_id="ianshank/mousedroid-weights",
+        filenames=["belief.npz"],
+        cache_dir=tmp_path,
+    )
+    assert result is True
+    mock_download.assert_called_once()

@@ -34,6 +34,24 @@ MILLISECONDS_PER_SECOND: float = 1000.0
 WEIGHT_INIT_SCALE: float = 0.01
 """Default scale factor for random weight initialisation in numpy MLPs."""
 
+DEFAULT_BELIEF_DIM: int = 128
+"""Default belief latent dimension (mirrors ``ModelConfig.belief_dim``)."""
+
+DEFAULT_DESIRE_DIM: int = 64
+"""Default desire latent dimension (mirrors ``ModelConfig.desire_dim``)."""
+
+DEFAULT_INTENTION_CLASSES: int = 10
+"""Default number of intention categories (mirrors ``ModelConfig.intention_classes``)."""
+
+DEFAULT_AFFECT_DIM: int = 2
+"""Default affect output dim [valence, arousal] (mirrors ``ModelConfig.affect_dim``)."""
+
+DEFAULT_POLICY_HIDDEN_DIM: int = 64
+"""Hidden layer dimensionality for PolicyMLP and ValueMLP networks."""
+
+DEFAULT_TARGET_LOOP_MS: float = 33.0
+"""Target control loop duration in milliseconds (30 Hz)."""
+
 # ---------------------------------------------------------------------------
 # Reproducible RNG seeds for numpy MLP sub-networks
 # ---------------------------------------------------------------------------
