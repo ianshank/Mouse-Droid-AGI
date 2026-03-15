@@ -348,8 +348,9 @@ def validate_mcts_latency(
 
                 if p50 > target_p50_ms:
                     errors.append(
-                        f"MCTS p50 latency {p50:.1f}ms exceeds target {target_p50_ms:.0f}ms "
-                        f"({p50/target_p50_ms:.1f}x over) — consider reducing n_simulations or rollout_depth"
+                        f"MCTS p50 latency {p50:.1f}ms exceeds target "
+                        f"{target_p50_ms:.0f}ms ({p50/target_p50_ms:.1f}x over) "
+                        f"— consider reducing n_simulations or rollout_depth"
                     )
 
         _log.info("mcts_latency_check", metrics=metrics, passed=len(errors) == 0)

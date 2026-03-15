@@ -279,10 +279,7 @@ def audit_class_balance(
         counts[label] = int(np.sum(intentions == i))
 
     values = [c for c in counts.values() if c > 0]
-    if values:
-        imbalance_ratio = max(values) / max(min(values), 1)
-    else:
-        imbalance_ratio = 0.0
+    imbalance_ratio = max(values) / max(min(values), 1) if values else 0.0
 
     _log.info(
         "class_balance_audit",

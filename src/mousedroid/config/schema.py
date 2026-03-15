@@ -463,7 +463,9 @@ class BDITrainingConfig(BaseModel):
     """BDI-specific training configuration (overrides TrainingConfig for BDI phases)."""
 
     epochs: int = Field(200, gt=0, description="BDI training epochs (higher than shared default)")
-    learning_rate: float = Field(3e-3, gt=0, description="BDI learning rate (higher for vanilla SGD)")
+    learning_rate: float = Field(
+        3e-3, gt=0, description="BDI learning rate (higher for vanilla SGD)"
+    )
     batch_size: int = Field(32, gt=0, description="BDI batch size")
     accuracy_threshold: float = Field(
         0.60,
