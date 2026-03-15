@@ -87,6 +87,20 @@ class SensorManager:
             microphone_enabled=microphone is not None,
         )
 
+    # -- Lifecycle ---------------------------------------------------------
+
+    async def start(self) -> None:
+        """Start all sensor hardware."""
+        await self._vision.start()
+        if self._microphone is not None:
+            await self._microphone.start()
+
+    async def stop(self) -> None:
+        """Stop all sensor hardware."""
+        await self._vision.stop()
+        if self._microphone is not None:
+            await self._microphone.stop()
+
     # -- Public API --------------------------------------------------------
 
     async def read_all(self) -> MouseDroidObservationBundle:

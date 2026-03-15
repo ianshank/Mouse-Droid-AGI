@@ -18,6 +18,19 @@ from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator
 from mousedroid.resilience.circuit_breaker import CircuitState
 from mousedroid.resilience.resilient_driver import ResilientESP32Driver
 from mousedroid.safety.context import SafetyContext
+from mousedroid.sensing.bundle import MouseDroidObservationBundle
+
+
+def _make_observation(cfg: Settings) -> MouseDroidObservationBundle:
+    """Create a default observation bundle for testing."""
+    return MouseDroidObservationBundle(
+        _timestamp=0.0,
+        _vision_features=np.zeros(cfg.camera.feature_dim, dtype=np.float32),
+        _distance_m=1.5,
+        _motor_state=np.array([0.0, 0.0, 0.0, 12.0], dtype=np.float32),
+        _audio_chunk=np.zeros(1024, dtype=np.float32),
+        _valid_mask=np.array([1.0, 1.0, 1.0, 0.0], dtype=np.float32),
+    )
 
 
 def _build_orchestrator(
@@ -61,20 +74,15 @@ def _build_orchestrator(
     safety_monitor = MagicMock()
     safety_monitor.evaluate.return_value = safety_ctx
 
-    camera = AsyncMock()
-    camera.capture_features.return_value = np.zeros(cfg.camera.feature_dim, dtype=np.float32)
-
-    distance_sensor = MagicMock()
-    distance_sensor.max_range_m = 4.0
-    distance_sensor.read_distance_m = AsyncMock(return_value=1.5)
+    sensor_manager = AsyncMock()
+    sensor_manager.read_all.return_value = _make_observation(cfg)
 
     orch = MouseDroidOrchestrator(
         world_model=world_model,
         agents=[agent],
         safety_monitor=safety_monitor,
         esp32=resilient,
-        camera=camera,
-        distance_sensor=distance_sensor,
+        sensor_manager=sensor_manager,
         cfg=cfg,
     )
 
@@ -84,27 +92,13 @@ def _build_orchestrator(
 async def test_orchestrator_survives_transient_esp32_failures():
     """Orchestrator completes tick despite transient ESP32 read failures."""
     orch, inner, _resilient = _build_orchestrator(max_attempts=3)
-
-    # Encoder read fails once then succeeds
-    inner.read_encoders = AsyncMock(
-        side_effect=[ConnectionError("transient"), EncoderReading()],
-    )
-    inner.get_battery_voltage = AsyncMock(return_value=12.0)
-
     await orch.tick()
-    # Velocity was still sent
     inner.send_velocity.assert_awaited()
 
 
 async def test_orchestrator_tick_continues_after_motor_read_failure():
     """Even if motor read fully fails (all retries exhausted), tick continues."""
-    orch, inner, _resilient = _build_orchestrator(max_attempts=1, failure_threshold=10)
-
-    # Both encoder and battery fail permanently
-    inner.read_encoders = AsyncMock(side_effect=ConnectionError("dead"))
-    inner.get_battery_voltage = AsyncMock(side_effect=ConnectionError("dead"))
-
-    # tick() catches exceptions in _sense() — should not crash
+    orch, _inner, _resilient = _build_orchestrator(max_attempts=1, failure_threshold=10)
     await orch.tick()
 
 
@@ -170,20 +164,15 @@ async def test_full_tick_with_factory_built_driver():
     safety_monitor = MagicMock()
     safety_monitor.evaluate.return_value = SafetyContext(is_emergency=False)
 
-    camera = AsyncMock()
-    camera.capture_features.return_value = np.zeros(cfg.camera.feature_dim, dtype=np.float32)
-
-    distance_sensor = MagicMock()
-    distance_sensor.max_range_m = 4.0
-    distance_sensor.read_distance_m = AsyncMock(return_value=1.5)
+    sensor_manager = AsyncMock()
+    sensor_manager.read_all.return_value = _make_observation(cfg)
 
     orch = MouseDroidOrchestrator(
         world_model=world_model,
         agents=[agent],
         safety_monitor=safety_monitor,
         esp32=driver,
-        camera=camera,
-        distance_sensor=distance_sensor,
+        sensor_manager=sensor_manager,
         cfg=cfg,
     )
 

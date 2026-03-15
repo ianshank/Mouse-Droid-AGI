@@ -185,30 +185,24 @@ def build_agent(cfg: Settings, world_model: WorldModelProtocol) -> AgentProtocol
         Agent conforming to ``AgentProtocol``.
     """
     from mousedroid.agents.navigation import MouseDroidNavigationAgent
+    from mousedroid.world_model.mcts import MCTSPlanner
 
-    return MouseDroidNavigationAgent(world_model, cfg)
+    planner = MCTSPlanner(cfg.mcts, world_model, action_dim=cfg.model.action_dim)
+    return MouseDroidNavigationAgent(planner, cfg)
 
 
-def build_cognitive_core(cfg: Settings) -> CognitiveCore:
-    """Build cognitive core with optional weight loading from HuggingFace.
-
-    Weight loading strategy:
-    1. Try local weights_dir/*.npz
-    2. If missing and auto_download=True, download from HuggingFace
-    3. If still missing, initialize with random weights (log WARNING)
+def _resolve_bdi_weights(cfg: Settings) -> tuple[object, str]:
+    """Resolve BDI model weights: local, HuggingFace, or random.
 
     Args:
         cfg: Root settings.
 
     Returns:
-        Fully configured ``CognitiveCore``.
+        Tuple of ``(NeuralBDI instance, weights_source_label)``.
     """
     from pathlib import Path
 
     from mousedroid.cognitive.bdi_model import NeuralBDI
-    from mousedroid.cognitive.cognitive_core import CognitiveCore
-    from mousedroid.cognitive.constitutional_rl import ConstitutionalChecker, PolicyMLP
-    from mousedroid.cognitive.metacognitive import MetacognitiveModel
     from mousedroid.utils import (
         download_weights_from_huggingface,
         weights_exist_locally,
@@ -217,23 +211,11 @@ def build_cognitive_core(cfg: Settings) -> CognitiveCore:
     weights_dir = Path(cfg.cognitive.weights_dir)
     bdi_filenames = ["belief.npz", "desire.npz", "intention.npz", "affect.npz"]
 
-    _log.info(
-        "cognitive_core_init_starting",
-        weights_dir=str(weights_dir),
-        auto_download=cfg.cognitive.auto_download,
-    )
-
-    # Try local weights first
-    weights_source = "random"
     if weights_exist_locally(weights_dir, bdi_filenames):
-        _log.info(
-            "cognitive_core_loading_local_weights",
-            weights_dir=str(weights_dir),
-        )
-        bdi = NeuralBDI(weights_dir=weights_dir)
-        weights_source = "local"
-    elif cfg.cognitive.auto_download:
-        # Try HuggingFace download
+        _log.info("cognitive_core_loading_local_weights", weights_dir=str(weights_dir))
+        return NeuralBDI(weights_dir=weights_dir), "local"
+
+    if cfg.cognitive.auto_download:
         success = download_weights_from_huggingface(
             repo_id=cfg.cognitive.huggingface_repo,
             filenames=bdi_filenames,
@@ -247,38 +229,47 @@ def build_cognitive_core(cfg: Settings) -> CognitiveCore:
                 repo_id=cfg.cognitive.huggingface_repo,
                 weights_dir=str(weights_dir),
             )
-            bdi = NeuralBDI(weights_dir=weights_dir)
-            weights_source = "huggingface"
-        else:
-            _log.warning(
-                "weights_not_found_using_random_initialization",
-                weights_dir=str(weights_dir),
-                repo_id=cfg.cognitive.huggingface_repo,
-            )
-            bdi = NeuralBDI()  # Random init
-            weights_source = "random"
-    else:
-        # auto_download=False and no local weights
-        _log.warning(
-            "weights_not_found_using_random_initialization",
-            weights_dir=str(weights_dir),
-            auto_download=cfg.cognitive.auto_download,
-        )
-        bdi = NeuralBDI()  # Random init
-        weights_source = "random"
+            return NeuralBDI(weights_dir=weights_dir), "huggingface"
 
-    # Initialize other cognitive components
-    metacog = MetacognitiveModel()
-    checker = ConstitutionalChecker()
+    _log.warning(
+        "weights_not_found_using_random_initialization",
+        weights_dir=str(weights_dir),
+        auto_download=cfg.cognitive.auto_download,
+    )
+    return NeuralBDI(), "random"
 
-    # Initialize policy with config-aligned dimensions
+
+def build_cognitive_core(cfg: Settings) -> CognitiveCore:
+    """Build cognitive core with optional weight loading from HuggingFace.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Fully configured ``CognitiveCore``.
+    """
+    from mousedroid.cognitive.cognitive_core import CognitiveCore
+    from mousedroid.cognitive.constitutional_rl import ConstitutionalChecker, PolicyMLP
+    from mousedroid.cognitive.metacognitive import MetacognitiveModel
+
+    _log.info(
+        "cognitive_core_init_starting",
+        weights_dir=str(cfg.cognitive.weights_dir),
+        auto_download=cfg.cognitive.auto_download,
+    )
+
+    bdi, weights_source = _resolve_bdi_weights(cfg)
+
     policy = PolicyMLP(
         action_dim=cfg.model.action_dim,
         input_dim=cfg.model.belief_dim,
     )
-
-    # Create cognitive core
-    core = CognitiveCore(bdi=bdi, metacog=metacog, checker=checker, policy=policy)
+    core = CognitiveCore(
+        bdi=bdi,
+        metacog=MetacognitiveModel(),
+        checker=ConstitutionalChecker(),
+        policy=policy,
+    )
     _log.info(
         "cognitive_core_initialized",
         weights_source=weights_source,
@@ -299,6 +290,7 @@ def build_orchestrator(cfg: Settings) -> object:
         Fully configured ``MouseDroidOrchestrator``.
     """
     from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator
+    from mousedroid.sensing.manager import SensorManager
 
     wm = build_world_model(cfg)
     agent = build_agent(cfg, wm)
@@ -307,6 +299,15 @@ def build_orchestrator(cfg: Settings) -> object:
     camera = build_camera(cfg)
     distance = build_distance_sensor(cfg)
     microphone = build_microphone(cfg)
+
+    sensor_manager = SensorManager(
+        vision=camera,
+        distance=distance,
+        esp32=esp32,
+        cfg=cfg,
+        microphone=microphone,
+    )
+
     cognitive_core: CognitiveCore | None = None
     if cfg.cognitive.enabled:
         try:
@@ -324,9 +325,7 @@ def build_orchestrator(cfg: Settings) -> object:
         agents=[agent],
         safety_monitor=monitor,
         esp32=esp32,
-        camera=camera,
-        distance_sensor=distance,
-        microphone=microphone,
+        sensor_manager=sensor_manager,
         cognitive_core=cognitive_core,
         cfg=cfg,
     )

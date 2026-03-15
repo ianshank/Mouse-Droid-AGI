@@ -12,16 +12,12 @@ from mousedroid.safety.context import SafetyContext
 
 
 def _make_agent() -> tuple[MouseDroidNavigationAgent, MagicMock, Settings]:
-    """Create agent with mock world model."""
+    """Create agent with mock MCTSPlanner."""
     cfg = Settings(mock_hardware=True)
-    mock_wm = MagicMock()
-    mock_wm.imagine_step.return_value = (
-        torch.zeros(1, cfg.model.hidden_dim),
-        torch.zeros(1, cfg.model.latent_dim),
-        torch.tensor([[0.1]]),
-    )
-    agent = MouseDroidNavigationAgent(mock_wm, cfg)
-    return agent, mock_wm, cfg
+    mock_planner = MagicMock()
+    mock_planner.plan.return_value = torch.tensor([[0.1, 0.0, 0.0]])
+    agent = MouseDroidNavigationAgent(mock_planner, cfg)
+    return agent, mock_planner, cfg
 
 
 def _h_z(cfg: Settings) -> tuple[torch.Tensor, torch.Tensor]:

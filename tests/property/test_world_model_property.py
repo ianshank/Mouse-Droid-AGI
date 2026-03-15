@@ -76,13 +76,9 @@ def test_agent_actions_bounded() -> None:
 
     s = Settings(mock_hardware=True)
     cfg = s.model
-    mock_wm = MagicMock()
-    mock_wm.imagine_step.return_value = (
-        torch.zeros(1, cfg.hidden_dim),
-        torch.zeros(1, cfg.latent_dim),
-        torch.tensor([[0.1]]),
-    )
-    agent = MouseDroidNavigationAgent(mock_wm, s)
+    mock_planner = MagicMock()
+    mock_planner.plan.return_value = torch.tensor([[0.1, 0.0, 0.0]])
+    agent = MouseDroidNavigationAgent(mock_planner, s)
     h = torch.zeros(1, cfg.hidden_dim)
     z = torch.zeros(1, cfg.latent_dim)
     ctx = SafetyContext()

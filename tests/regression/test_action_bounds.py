@@ -11,13 +11,9 @@ from mousedroid.safety.context import SafetyContext
 
 def _make_agent() -> tuple[MouseDroidNavigationAgent, torch.Tensor, torch.Tensor]:
     cfg = Settings(mock_hardware=True)
-    mock_wm = MagicMock()
-    mock_wm.imagine_step.return_value = (
-        torch.zeros(1, cfg.model.hidden_dim),
-        torch.zeros(1, cfg.model.latent_dim),
-        torch.tensor([[0.1]]),
-    )
-    agent = MouseDroidNavigationAgent(mock_wm, cfg)
+    mock_planner = MagicMock()
+    mock_planner.plan.return_value = torch.tensor([[0.1, 0.0, 0.0]])
+    agent = MouseDroidNavigationAgent(mock_planner, cfg)
     h = torch.zeros(1, cfg.model.hidden_dim)
     z = torch.zeros(1, cfg.model.latent_dim)
     return agent, h, z

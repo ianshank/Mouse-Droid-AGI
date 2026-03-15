@@ -22,6 +22,9 @@ DEFAULT_MAX_DISTANCE_M: float = 4.0
 DEFAULT_AUDIO_CHUNK_SIZE: int = 1024
 """Default audio chunk size in samples (mirrors ``MicrophoneConfig.chunk_size``)."""
 
+DEFAULT_BATTERY_VOLTAGE: float = 12.6
+"""Default battery voltage fallback when sensor data is unavailable."""
+
 N_SENSOR_MODALITIES: int = 4
 """Number of sensor modalities tracked: vision, ultrasonic, motor, audio."""
 
