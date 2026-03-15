@@ -34,26 +34,29 @@ This document tracks planned enhancements, organised by priority and category.
 
 ## Priority 2 — Model Training Pipeline
 
-### 2.1 RSSM Pretraining on Simulated Data
-- Generate synthetic observation sequences via `MouseDroidOrchestrator` in mock mode
-- Train RSSM encoder + dynamics using the `training/` config (batch 32, lr 3e-4)
-- Evaluate latent quality: reconstruction loss, surprise calibration
-- Save checkpoints every 10 epochs as per `cfg.training.checkpoint_every_n`
-- **Effort**: 1 week | **Owner**: ML team
+> **Status**: Full pipeline executing on `feat/post-refactor-retrain` branch.
+> RSSM Phase 1 training in progress (epoch ~73/200). See `training/run_pipeline.py`.
 
-### 2.2 MCTS Policy Warm-Start
+### 2.1 RSSM Pretraining on Simulated Data — ✅ IN PROGRESS
+- ✅ Generate synthetic observation sequences (3000 episodes, `sequences.pt` 342 MB)
+- ✅ Train RSSM encoder + dynamics (batch 16, lr 3e-4, AMP, RTX 5060 Ti)
+- ✅ Losses converged: kl~1.5e-05, recon~1e-06 by epoch 65
+- ✅ Checkpoints saving every 25 epochs (`epoch_25.pt`, `epoch_50.pt` confirmed)
+- ⏳ In progress: epochs 73/200, estimated completion ~20:40
+
+### 2.2 MCTS Policy Warm-Start — ⏳ QUEUED
 - Initialise `PolicyMLP` weights from RSSM latent statistics
 - Run 1000-episode simulated rollout to tune `cfg.mcts.ucb_c`
 - Target: <50 ms per MCTS search at 200 simulations
 - **Effort**: 3 days | **Owner**: ML team
 
-### 2.3 BDI Weight Training
-- Collect labelled intention annotations from 500 navigation episodes
-- Train `BeliefEncoder`, `DesireEncoder`, `IntentionPredictor`, `AffectEstimator`
+### 2.3 BDI Weight Training — ⏳ QUEUED
+- ✅ Labelled intention annotations collected (500 episodes, `bdi_annotations.npz` 80.6 MB)
+- ✅ `belief_norm_stats.npz` save + validation normalization bugs fixed (PR #12)
+- ⏳ Train `BeliefEncoder`, `DesireEncoder`, `IntentionPredictor`, `AffectEstimator`
 - Save as `.npz` files in `weights/bdi/`; load via `NeuralBDI(weights_dir=...)`
-- **Effort**: 1 week | **Owner**: ML team
 
-### 2.4 Constitutional RL Fine-tuning
+### 2.4 Constitutional RL Fine-tuning — ⏳ QUEUED
 - Define reward signal: `cfg.reward.weight_*` as per `RewardConfig`
 - Run PPO with `ConstitutionalChecker` as safety constraint layer
 - Validate: no constitutional violations in 1000 held-out episodes
@@ -63,11 +66,15 @@ This document tracks planned enhancements, organised by priority and category.
 
 ## Priority 3 — LLM Gateway Deployment
 
-### 3.1 Llama-3 GGUF Model Download
-- Select a 7B-parameter quantised model (Q4_K_M) for Jetson Orin Nano
-- Upload to Hugging Face Hub under project namespace
-- Add download script to `scripts/download_model.sh`
-- **Effort**: 1 day | **Owner**: ML team
+> **Status**: Schema integration and Docker config complete on `feat/post-refactor-retrain`.
+> Phi-3 Mini 4K q4_K_M selected (best quality/RAM fit for 8 GB Jetson unified memory).
+
+### 3.1 LLM Model Selection & Provisioning — ✅ DONE
+- ✅ Selected Phi-3 Mini 4K Instruct q4_K_M GGUF (~2.2 GB) for Jetson Orin Nano
+- ✅ `GatewayConfig` added to `schema.py` with model_path, n_threads, n_gpu_layers
+- ✅ Docker Compose updated with models volume + env var
+- ✅ `deploy_remote.sh --with-llm` auto-downloads via huggingface_hub on Jetson
+- ⏳ Pending: Jetson deployment (Phase F)
 
 ### 3.2 LLM Gateway Integration Test
 - Test 10 diverse natural language commands → `GoalVector` responses
