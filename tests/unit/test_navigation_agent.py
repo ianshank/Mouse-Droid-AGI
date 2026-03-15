@@ -82,6 +82,33 @@ class TestActionBounds:
         assert (action <= 1.0).all()
 
 
+class TestSurpriseAdaptiveBudget:
+    def test_zero_surprise_passes_base_budget(self) -> None:
+        agent, planner, cfg = _make_agent()
+        h, z = _h_z(cfg)
+        ctx = SafetyContext(surprise=0.0)
+        agent.act(h, z, ctx)
+        planner.plan.assert_called_once()
+        _, kwargs = planner.plan.call_args
+        assert kwargs["n_simulations"] == cfg.mcts.n_simulations_base
+
+    def test_high_surprise_increases_budget(self) -> None:
+        agent, planner, cfg = _make_agent()
+        h, z = _h_z(cfg)
+        ctx = SafetyContext(surprise=5.0)
+        agent.act(h, z, ctx)
+        _, kwargs = planner.plan.call_args
+        assert kwargs["n_simulations"] > cfg.mcts.n_simulations_base
+
+    def test_budget_never_exceeds_maximum(self) -> None:
+        agent, planner, cfg = _make_agent()
+        h, z = _h_z(cfg)
+        ctx = SafetyContext(surprise=1000.0)
+        agent.act(h, z, ctx)
+        _, kwargs = planner.plan.call_args
+        assert kwargs["n_simulations"] <= cfg.mcts.n_simulations_max
+
+
 class TestAgentMeta:
     def test_name(self) -> None:
         agent, _, _ = _make_agent()

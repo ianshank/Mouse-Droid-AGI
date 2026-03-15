@@ -155,16 +155,20 @@ class MCTSPlanner:
     # ------------------------------------------------------------------
 
     @torch.no_grad()  # type: ignore[untyped-decorator]
-    def plan(self, h: Tensor, z: Tensor) -> Tensor:
+    def plan(self, h: Tensor, z: Tensor, *, n_simulations: int | None = None) -> Tensor:
         """Run MCTS simulations and return the best action.
 
         Args:
             h: Current hidden state, shape ``(1, hidden_dim)``.
             z: Current latent state, shape ``(1, latent_dim)``.
+            n_simulations: Number of simulations to run. If ``None``,
+                uses ``cfg.n_simulations_base``. Pass a surprise-adaptive
+                budget via :func:`~mousedroid.agents._planning.compute_mcts_budget`.
 
         Returns:
             Best action tensor, shape ``(1, action_dim)``, values in ``[-1, 1]``.
         """
+        budget = n_simulations if n_simulations is not None else self._cfg.n_simulations_base
         device = h.device
         dummy_action = torch.zeros(1, self._action_dim, device=device)
         root = _Node(action=dummy_action, h=h, z=z)
@@ -172,7 +176,7 @@ class MCTSPlanner:
         # Initial expansion
         self._expand(root, device)
 
-        for _ in range(self._cfg.n_simulations_base):
+        for _ in range(budget):
             node = root
             path: list[_Node] = [node]
 
@@ -201,6 +205,7 @@ class MCTSPlanner:
         action = torch.tanh(best_child.action)
         _log.debug(
             "mcts_plan_complete",
+            n_simulations=budget,
             visits=best_child.visit_count,
             mean_value=best_child.mean_value,
         )

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import torch
 from torch import Tensor
 
+from mousedroid.agents._planning import compute_mcts_budget
 from mousedroid.logging.setup import get_logger
 from mousedroid.safety.context import SafetyContext
 
@@ -76,8 +77,13 @@ class MouseDroidNavigationAgent:
             action[0] = self._cfg.safety.reverse_velocity
             return action
 
-        _log.debug("mcts_planning", surprise=safety_ctx.surprise)
-        action = self._planner.plan(h, z)
+        budget = compute_mcts_budget(
+            safety_ctx.surprise,
+            base=self._cfg.mcts.n_simulations_base,
+            maximum=self._cfg.mcts.n_simulations_max,
+        )
+        _log.debug("mcts_planning", surprise=safety_ctx.surprise, budget=budget)
+        action = self._planner.plan(h, z, n_simulations=budget)
 
         # MCTSPlanner returns (1, action_dim); squeeze to (action_dim,)
         if action.dim() == 2:
