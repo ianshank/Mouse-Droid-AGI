@@ -8,6 +8,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Post-Refactor Retrain (feat/post-refactor-retrain)
+
+- **LLM Gateway schema integration** — `GatewayConfig` model added to `src/mousedroid/config/schema.py`
+  with `llm_gateway: GatewayConfig | None` field on `Settings`. Fully optional with `None` default for
+  backward compatibility. Config sections added to `config/jetson_production.yaml` (active) and
+  `config/default.yaml` (commented template).
+- **6 regression tests** — `TestTrainBdiNormStatsRegression` (3 tests in `test_bdi_training.py`) and
+  `TestValidateBDIAccuracyNormRegression` (3 tests in `test_validate_weights.py`) exercising the
+  BDI norm_stats and validation normalization fixes from PR #12.
+- **Deploy script enhancements** — `scripts/deploy_remote.sh` gains `--weights` and `--with-llm`
+  modes with `rsync_weights()` and `provision_llm()` helpers for selective Jetson deployment.
+- **Git LFS setup** — `.gitattributes` tracking `*.npz`, `*.npy`, `*.pt`, `*.stl`, `*.FCStd` via
+  Git LFS. 22 binary objects migrated (82 MB total).
+
+### Changed — Post-Refactor Retrain
+
+- **Docker v0.3.0** — `Dockerfile.jetson` version bumped from v0.2.0 to v0.3.0.
+- **Docker Compose LLM support** — `docker-compose.jetson.yml` adds `MOUSEDROID_LLM_GATEWAY__MODEL_PATH`
+  environment variable and `models` volume mount for Phi-3 Mini GGUF serving.
+- **`torch.amp` migration** — `training/train_rssm.py` migrated from deprecated `torch.cuda.amp`
+  to `torch.amp` API (`GradScaler("cuda")`, `autocast("cuda", ...)`). Forward-compatible with
+  PyTorch 2.x deprecation timeline.
+
 ### Added
 
 - **MCTS early-exit convergence** (2026-03-14): `early_exit_value_threshold` and `early_exit_patience`
