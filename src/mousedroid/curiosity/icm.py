@@ -83,7 +83,7 @@ class IntrinsicCuriosityModule(nn.Module):
 
         return forward_loss, inverse_loss, pred_s_next
 
-    @torch.no_grad()
+    @torch.no_grad()  # type: ignore[untyped-decorator]
     def intrinsic_reward(self, s: Tensor, a: Tensor, s_next: Tensor) -> Tensor:
         """Compute intrinsic curiosity reward.
 

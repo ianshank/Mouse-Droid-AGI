@@ -163,3 +163,101 @@ def test_build_cognitive_core_respects_weights_dir_config():
     core = build_cognitive_core(cfg)
     # Should still initialize even if weights_dir doesn't exist
     assert isinstance(core, CognitiveCore)
+
+
+def test_resolve_bdi_weights_local_path(tmp_path):
+    """Test _resolve_bdi_weights returns local weights when present."""
+    from unittest.mock import patch
+
+    from mousedroid.cognitive.bdi_model import NeuralBDI
+    from mousedroid.factory import _resolve_bdi_weights
+
+    # Create weight files on disk
+    for name in ["belief.npz", "desire.npz", "intention.npz", "affect.npz"]:
+        (tmp_path / name).touch()
+
+    cfg = Settings(
+        mock_hardware=True,
+        cognitive={"weights_dir": str(tmp_path), "auto_download": False, "enabled": True},
+    )
+
+    # Mock NeuralBDI construction to avoid loading empty npz files
+    mock_bdi = MagicMock(spec=NeuralBDI)
+    with patch("mousedroid.cognitive.bdi_model.NeuralBDI", return_value=mock_bdi):
+        bdi, source = _resolve_bdi_weights(cfg)
+
+    assert source == "local"
+    assert bdi is mock_bdi
+
+
+def test_resolve_bdi_weights_huggingface_download(tmp_path):
+    """Test _resolve_bdi_weights downloads from HF when local missing."""
+    from unittest.mock import patch
+
+    from mousedroid.factory import _resolve_bdi_weights
+
+    cfg = Settings(
+        mock_hardware=True,
+        cognitive={
+            "weights_dir": str(tmp_path / "nonexistent"),
+            "auto_download": True,
+            "enabled": True,
+        },
+    )
+
+    # Patch at the modules where the function imports from
+    with (
+        patch(
+            "mousedroid.utils.download_weights_from_huggingface",
+            return_value=True,
+        ),
+        patch("mousedroid.cognitive.bdi_model.NeuralBDI") as mock_bdi_cls,
+    ):
+        mock_bdi_cls.return_value = MagicMock()
+        bdi, source = _resolve_bdi_weights(cfg)
+
+    assert source == "huggingface"
+    assert bdi is not None
+
+
+def test_build_orchestrator_cognitive_fallback_on_failure():
+    """Test build_orchestrator falls back to MCTS when cognitive init fails."""
+    from unittest.mock import patch
+
+    from mousedroid.factory import build_orchestrator
+    from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator
+
+    cfg = Settings(
+        mock_hardware=True,
+        cognitive={"enabled": True, "auto_download": False, "fallback_to_mcts": True},
+    )
+
+    with patch(
+        "mousedroid.factory.build_cognitive_core",
+        side_effect=RuntimeError("cognitive init failed"),
+    ):
+        orch = build_orchestrator(cfg)
+
+    assert isinstance(orch, MouseDroidOrchestrator)
+    assert orch._cognitive_core is None
+
+
+def test_build_orchestrator_cognitive_no_fallback_raises():
+    """Test build_orchestrator raises when cognitive fails and fallback disabled."""
+    from unittest.mock import patch
+
+    from mousedroid.factory import build_orchestrator
+
+    cfg = Settings(
+        mock_hardware=True,
+        cognitive={"enabled": True, "auto_download": False, "fallback_to_mcts": False},
+    )
+
+    with (
+        patch(
+            "mousedroid.factory.build_cognitive_core",
+            side_effect=RuntimeError("cognitive init failed"),
+        ),
+        pytest.raises(RuntimeError, match="cognitive init failed"),
+    ):
+        build_orchestrator(cfg)

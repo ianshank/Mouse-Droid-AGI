@@ -20,12 +20,6 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
-_BATTERY_WARN_V: float = 10.5
-"""Fallback battery warning voltage when config is unavailable."""
-
-_BATTERY_CRITICAL_V: float = 9.5
-"""Fallback battery critical voltage when config is unavailable."""
-
 
 class MouseDroidSafetyMonitor:
     """Evaluates each observation for hazardous conditions.
@@ -75,8 +69,8 @@ class MouseDroidSafetyMonitor:
 
         # -- Battery voltage -----------------------------------------------
         battery_voltage: float = float(observation.motor_state[3])
-        battery_warn_v = getattr(self._cfg, "battery_warn_v", _BATTERY_WARN_V)
-        battery_critical_v = getattr(self._cfg, "battery_critical_v", _BATTERY_CRITICAL_V)
+        battery_warn_v = self._cfg.battery_warn_v
+        battery_critical_v = self._cfg.battery_critical_v
 
         if battery_voltage < battery_critical_v:
             _log.error(
@@ -120,7 +114,7 @@ class MouseDroidSafetyMonitor:
             is_emergency = True
 
         # -- Loop timing ---------------------------------------------------
-        max_loop_time_ms = getattr(self._cfg, "max_loop_time_ms", 200.0)
+        max_loop_time_ms = self._cfg.max_loop_time_ms
         if loop_time_ms > max_loop_time_ms:
             _log.error(
                 "loop_overrun",

@@ -12,6 +12,7 @@ import networkx as nx
 import numpy as np
 from numpy.typing import NDArray
 
+from mousedroid.constants import DEFAULT_TARGET_LOOP_MS
 from mousedroid.logging.setup import get_logger
 
 _log = get_logger(__name__)
@@ -32,7 +33,7 @@ _N_CAPABILITIES: int = 8
 _EMA_DEFAULT_ALPHA: float = 0.1
 """Default EMA blending factor (higher = faster tracking)."""
 
-_TARGET_LOOP_MS: float = 33.0
+_TARGET_LOOP_MS: float = DEFAULT_TARGET_LOOP_MS
 """Target control loop duration in milliseconds (30 Hz)."""
 
 _LOOP_SCORE_SCALE: float = 100.0

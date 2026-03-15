@@ -79,6 +79,25 @@ def test_generate_candidate_actions(planner: MCTSPlanner) -> None:
     assert actions.shape == (planner._cfg.n_action_candidates, 3)
 
 
+def test_plan_with_explicit_n_simulations(planner: MCTSPlanner) -> None:
+    """plan() uses the n_simulations kwarg when provided."""
+    h = torch.zeros(1, 256)
+    z = torch.zeros(1, 64)
+    action = planner.plan(h, z, n_simulations=8)
+    assert isinstance(action, torch.Tensor)
+    assert (action >= -1.0).all()
+    assert (action <= 1.0).all()
+
+
+def test_plan_n_simulations_none_uses_config(planner: MCTSPlanner) -> None:
+    """plan() falls back to cfg.n_simulations_base when n_simulations is None."""
+    h = torch.zeros(1, 256)
+    z = torch.zeros(1, 64)
+    # Default fixture has n_simulations_base=4; should not raise
+    action = planner.plan(h, z, n_simulations=None)
+    assert isinstance(action, torch.Tensor)
+
+
 def test_ucb1_unvisited_returns_inf(planner: MCTSPlanner) -> None:
     from mousedroid.world_model.mcts import _Node
 

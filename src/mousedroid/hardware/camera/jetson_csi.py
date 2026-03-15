@@ -25,7 +25,7 @@ except ImportError:  # pragma: no cover
 
 _cv2: Any
 try:
-    import cv2 as _cv2
+    import cv2 as _cv2  # type: ignore[no-redef]
 except ImportError:  # pragma: no cover
     _cv2 = None
 
@@ -181,7 +181,7 @@ class JetsonCSICamera:
         norm = np.linalg.norm(features)
         if norm > 0:
             features = features / norm
-        return features  # type: ignore[no-any-return]
+        return features
 
     @property
     def feature_dim(self) -> int:

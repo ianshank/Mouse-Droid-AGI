@@ -24,7 +24,7 @@ def relu(x: NDArray[np.floating[Any]]) -> NDArray[np.floating[Any]]:
     Returns:
         Array with negative values zeroed.
     """
-    return np.maximum(x, 0.0)  # type: ignore[no-any-return]
+    return np.maximum(x, 0.0)
 
 
 def softmax(x: NDArray[np.floating[Any]], *, axis: int = -1) -> NDArray[np.floating[Any]]:
@@ -39,7 +39,7 @@ def softmax(x: NDArray[np.floating[Any]], *, axis: int = -1) -> NDArray[np.float
     """
     shifted = x - np.max(x, axis=axis, keepdims=True)
     e = np.exp(shifted)
-    return e / (e.sum(axis=axis, keepdims=True) + _SOFTMAX_EPS)  # type: ignore[no-any-return]
+    return e / (e.sum(axis=axis, keepdims=True) + _SOFTMAX_EPS)
 
 
 def layer_norm(x: NDArray[np.floating[Any]], *, eps: float = 1e-6) -> NDArray[np.floating[Any]]:
@@ -54,4 +54,4 @@ def layer_norm(x: NDArray[np.floating[Any]], *, eps: float = 1e-6) -> NDArray[np
     """
     mean = np.mean(x)
     var = np.var(x)
-    return (x - mean) / np.sqrt(var + eps)  # type: ignore[no-any-return]
+    return (x - mean) / np.sqrt(var + eps)

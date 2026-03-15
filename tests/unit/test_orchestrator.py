@@ -7,10 +7,22 @@ from unittest.mock import AsyncMock, MagicMock
 import numpy as np
 import torch
 
-from mousedroid.comms.protocol import EncoderReading
 from mousedroid.config.schema import Settings
 from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator
 from mousedroid.safety.context import SafetyContext
+from mousedroid.sensing.bundle import MouseDroidObservationBundle
+
+
+def _make_observation(cfg: Settings) -> MouseDroidObservationBundle:
+    """Create a default observation bundle for testing."""
+    return MouseDroidObservationBundle(
+        _timestamp=0.0,
+        _vision_features=np.zeros(cfg.camera.feature_dim, dtype=np.float32),
+        _distance_m=1.5,
+        _motor_state=np.array([0.0, 0.0, 0.0, 12.0], dtype=np.float32),
+        _audio_chunk=np.zeros(1024, dtype=np.float32),
+        _valid_mask=np.array([1.0, 1.0, 1.0, 0.0], dtype=np.float32),
+    )
 
 
 def _make_orchestrator(
@@ -37,26 +49,18 @@ def _make_orchestrator(
     safety_monitor.evaluate.return_value = safety_ctx
 
     esp32 = AsyncMock()
-    esp32.read_encoders.return_value = EncoderReading()
-    esp32.get_battery_voltage.return_value = 12.0
 
-    camera = AsyncMock()
-    camera.capture_features.return_value = np.zeros(cfg.camera.feature_dim, dtype=np.float32)
-
-    distance_sensor = MagicMock()
-    distance_sensor.max_range_m = 4.0
-    distance_sensor.read_distance_m = AsyncMock(return_value=1.5)
+    sensor_manager = AsyncMock()
+    sensor_manager.read_all.return_value = _make_observation(cfg)
 
     return MouseDroidOrchestrator(
         world_model=world_model,
         agents=[agent],
         safety_monitor=safety_monitor,
         esp32=esp32,
-        camera=camera,
-        distance_sensor=distance_sensor,
+        sensor_manager=sensor_manager,
         cfg=cfg,
         cognitive_core=cognitive_core,
-        microphone=None,
     )
 
 
@@ -99,33 +103,10 @@ async def test_tick_emergency_stop():
     orch._esp32.send_velocity.assert_not_awaited()
 
 
-async def test_sense_vision_failure():
+async def test_tick_delegates_to_sensor_manager():
     orch = _make_orchestrator()
-    orch._camera.capture_features.side_effect = RuntimeError("camera fail")
-    obs = await orch._sense()
-    np.testing.assert_array_equal(
-        obs.vision_features,
-        np.zeros(orch._cfg.camera.feature_dim, dtype=np.float32),
-    )
-    assert obs.valid_mask[0] == 0.0
-
-
-async def test_sense_distance_failure():
-    orch = _make_orchestrator()
-    orch._distance_sensor.read_distance_m = AsyncMock(
-        side_effect=RuntimeError("sensor fail"),
-    )
-    obs = await orch._sense()
-    assert obs.distance_m == orch._distance_sensor.max_range_m
-    assert obs.valid_mask[1] == 0.0
-
-
-async def test_sense_motor_failure():
-    orch = _make_orchestrator()
-    orch._esp32.read_encoders.side_effect = RuntimeError("motor fail")
-    obs = await orch._sense()
-    np.testing.assert_array_equal(obs.motor_state, np.zeros(4, dtype=np.float32))
-    assert obs.valid_mask[2] == 0.0
+    await orch.tick()
+    orch._sensor_manager.read_all.assert_awaited_once()
 
 
 async def test_run_loop_single_iteration():
@@ -174,89 +155,6 @@ async def test_tick_action_2d():
     orch._agents[0].act.return_value = torch.tensor([0.5, 0.3])
     await orch.tick()
     orch._esp32.send_velocity.assert_awaited_once()
-
-
-def _make_orchestrator_with_mic() -> MouseDroidOrchestrator:
-    cfg = Settings(mock_hardware=True)
-
-    world_model = MagicMock()
-    world_model.observe_step.return_value = (
-        torch.zeros(1, cfg.model.hidden_dim),
-        torch.zeros(1, cfg.model.latent_dim),
-        torch.zeros(1, cfg.model.hidden_dim),
-        0.1,
-    )
-
-    agent = MagicMock()
-    agent.name = "test_agent"
-    agent.act.return_value = torch.tensor([0.1, 0.0, 0.0])
-
-    safety_ctx = SafetyContext(is_emergency=False)
-    safety_monitor = MagicMock()
-    safety_monitor.evaluate.return_value = safety_ctx
-
-    esp32 = AsyncMock()
-    esp32.read_encoders.return_value = EncoderReading()
-    esp32.get_battery_voltage.return_value = 12.0
-
-    camera = AsyncMock()
-    camera.capture_features.return_value = np.zeros(
-        cfg.camera.feature_dim,
-        dtype=np.float32,
-    )
-
-    distance_sensor = MagicMock()
-    distance_sensor.max_range_m = 4.0
-    distance_sensor.read_distance_m = AsyncMock(return_value=1.5)
-
-    mic = AsyncMock()
-    mic.chunk_size = 1024
-    mic.channels = 1
-    mic.read_chunk.return_value = np.zeros(1024, dtype=np.float32)
-
-    return MouseDroidOrchestrator(
-        world_model=world_model,
-        agents=[agent],
-        safety_monitor=safety_monitor,
-        esp32=esp32,
-        camera=camera,
-        distance_sensor=distance_sensor,
-        cfg=cfg,
-        microphone=mic,
-    )
-
-
-async def test_start_with_microphone():
-    orch = _make_orchestrator_with_mic()
-    await orch.start()
-    orch._microphone.start.assert_awaited_once()
-    assert orch._running is True
-
-
-async def test_stop_with_microphone():
-    orch = _make_orchestrator_with_mic()
-    await orch.start()
-    await orch.stop()
-    orch._microphone.stop.assert_awaited_once()
-    assert orch._running is False
-
-
-async def test_sense_with_microphone():
-    orch = _make_orchestrator_with_mic()
-    obs = await orch._sense()
-    assert obs.valid_mask[3] == 1.0
-    orch._microphone.read_chunk.assert_awaited_once()
-
-
-async def test_sense_microphone_failure():
-    orch = _make_orchestrator_with_mic()
-    orch._microphone.read_chunk.side_effect = RuntimeError("mic fail")
-    obs = await orch._sense()
-    assert obs.valid_mask[3] == 0.0
-    np.testing.assert_array_equal(
-        obs.audio_chunk,
-        np.zeros(1024, dtype=np.float32),
-    )
 
 
 async def test_orchestrator_with_cognitive_core_primary():
@@ -367,3 +265,89 @@ async def test_constitutional_violations_logged():
     orch._esp32.send_velocity.assert_awaited_once()
     # Cognitive core was called (violations logged internally)
     cognitive_core.tick_fast.assert_called_once()
+
+
+async def test_update_world_model():
+    """Test _update_world_model updates latent state."""
+    orch = _make_orchestrator()
+    cfg = orch._cfg
+    obs = _make_observation(cfg)
+    orch._update_world_model(obs)
+    orch._world_model.observe_step.assert_called_once()
+
+
+async def test_execute_action():
+    """Test _execute_action sends scaled velocity to ESP32."""
+    orch = _make_orchestrator()
+    action = torch.tensor([0.5, 0.3, 0.2])
+    await orch._execute_action(action)
+    orch._esp32.send_velocity.assert_awaited_once()
+    args = orch._esp32.send_velocity.call_args[0]
+    max_v = orch._cfg.esp32.max_velocity_mps
+    max_omega = orch._cfg.esp32.max_omega_rads
+    assert abs(args[0] - 0.5 * max_v) < 1e-6
+    assert abs(args[1] - 0.3 * max_v) < 1e-6
+    assert abs(args[2] - 0.2 * max_omega) < 1e-6
+
+
+async def test_normalize_cognitive_action_padding():
+    """Test _normalize_cognitive_action pads short actions."""
+    orch = _make_orchestrator()
+    action_np = np.array([0.5], dtype=np.float32)
+    result = orch._normalize_cognitive_action(action_np)
+    assert result.shape == (orch._cfg.model.action_dim,)
+    assert float(result[0]) == 0.5
+    assert float(result[1]) == 0.0
+
+
+async def test_normalize_cognitive_action_truncation():
+    """Test _normalize_cognitive_action truncates long actions."""
+    orch = _make_orchestrator()
+    action_np = np.array([0.1, 0.2, 0.3, 0.4, 0.5], dtype=np.float32)
+    result = orch._normalize_cognitive_action(action_np)
+    assert result.shape == (orch._cfg.model.action_dim,)
+
+
+async def test_try_cognitive_action_state_vec_padding():
+    """Test _try_cognitive_action pads state_vec when smaller than belief_dim."""
+    orch = _make_orchestrator()
+
+    # Set hidden state smaller than belief_dim to trigger padding branch
+    belief_dim = orch._cfg.model.belief_dim
+    small_dim = belief_dim // 2
+    orch._h = torch.zeros(1, small_dim)
+
+    cognitive_core = MagicMock()
+    cognitive_core.tick_fast = MagicMock(return_value=(np.array([0.1, 0.0, 0.0]), []))
+    orch._cognitive_core = cognitive_core
+
+    obs = _make_observation(orch._cfg)
+    result = orch._try_cognitive_action(obs, 10.0)
+
+    assert result is not None
+    # Verify cognitive core was called with padded state
+    call_args = cognitive_core.tick_fast.call_args[0][0]
+    assert call_args["state"].shape == (belief_dim,)
+
+
+async def test_try_cognitive_action_passes_full_bdi_state() -> None:
+    """Test _try_cognitive_action preserves the full latent state for BDI."""
+    orch = _make_orchestrator()
+    hidden_dim = orch._cfg.model.hidden_dim
+    orch._h = torch.arange(hidden_dim, dtype=torch.float32).reshape(1, hidden_dim)
+
+    cognitive_core = MagicMock()
+    cognitive_core.tick_fast = MagicMock(return_value=(np.array([0.1, 0.0, 0.0]), []))
+    orch._cognitive_core = cognitive_core
+
+    obs = _make_observation(orch._cfg)
+    result = orch._try_cognitive_action(obs, 10.0)
+
+    assert result is not None
+    call_args = cognitive_core.tick_fast.call_args[0][0]
+    assert call_args["state"].shape == (orch._cfg.model.belief_dim,)
+    assert call_args["bdi_state"].shape == (hidden_dim,)
+    np.testing.assert_array_equal(
+        call_args["bdi_state"],
+        np.arange(hidden_dim, dtype=np.float32),
+    )
