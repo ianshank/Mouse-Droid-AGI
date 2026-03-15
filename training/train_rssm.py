@@ -45,7 +45,7 @@ def _save_checkpoint(
     model: RSSM,
     optimizer: torch.optim.Optimizer,
     best_loss: float,
-    scaler: torch.cuda.amp.GradScaler | None = None,
+    scaler: torch.amp.GradScaler | None = None,
 ) -> None:
     """Save a training checkpoint with full state."""
     state = CheckpointState(
@@ -73,7 +73,7 @@ def _load_checkpoint(
     model: RSSM,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
-    scaler: torch.cuda.amp.GradScaler | None = None,
+    scaler: torch.amp.GradScaler | None = None,
 ) -> tuple[int, float]:
     """Load a training checkpoint and return the starting epoch and best loss."""
     data = torch.load(path, map_location=device, weights_only=False)
@@ -169,7 +169,7 @@ def train_rssm(
 
     # AMP setup (CUDA only)
     use_amp = tcfg.gpu.enable_amp and device.type == "cuda"
-    scaler = torch.cuda.amp.GradScaler() if use_amp else None
+    scaler = torch.amp.GradScaler("cuda") if use_amp else None
     _log.info("amp_status", enabled=use_amp, device=str(device))
 
     # Build dataset
@@ -216,7 +216,7 @@ def train_rssm(
             optimizer.zero_grad()
 
             # AMP context
-            with torch.cuda.amp.autocast(enabled=use_amp):
+            with torch.amp.autocast("cuda", enabled=use_amp):
                 total_recon = torch.tensor(0.0, device=device)
                 total_kl = torch.tensor(0.0, device=device)
 
