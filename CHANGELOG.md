@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Post-Refactor Retrain (feat/post-refactor-retrain, 2026-03-15)
+
+- **Full pipeline retraining complete** — all phases 0–4 executed end-to-end on RTX 5060 Ti
+  in 3.77 h (`total_wall_time_s=13588.6`). Report: `training/results/training_report.json`.
+  All validation checks passed (`all_checks_passed=true`):
+  - RSSM: `weights/rssm/final.pt` (513,185 params, converged kl~1e-05, recon~0)
+  - MCTS warm-start: `weights/mcts/policy_init.npz`, UCB tuned to c=1.41 (p50=**16 ms**, target ≤50 ms)
+  - BDI: `weights/bdi/{belief,desire,intention,affect}.npz` + `belief_norm_stats.npz` (**75.87% accuracy**, threshold 60%)
+  - Constitutional RL: `weights/constitutional_rl/{policy,value}.npz`
+- **Weights uploaded to HuggingFace** — 26 files pushed to `ianshank/mousedroid-weights`
+  with commit message "post-refactor-retrain full pipeline v0.3.0".
+
 ### Added — Post-Refactor Retrain (feat/post-refactor-retrain)
 
 - **LLM Gateway schema integration** — `GatewayConfig` model added to `src/mousedroid/config/schema.py`
