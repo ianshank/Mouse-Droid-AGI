@@ -19,6 +19,26 @@ experience:
   map_size_gb: 40
   flush_every_n: 60
 
+ultrasonic:
+  trigger_pin: 23
+  echo_pin: 24
+  max_range_m: 4.0
+  min_range_m: 0.02
+  timeout_s: 0.1
+  speed_of_sound_mps: 343.0
+
+# Allow single-sensor operation until camera is connected
+safety:
+  min_valid_sensors: 1
+  battery_critical_v: 0.1
+
+microphone:
+  device_name: "USB PnP"
+  sample_rate: 44100
+  channels: 1
+  chunk_size: 1024
+  format: "float32"
+
 llm_gateway:
   model_path: "/home/jetson/models/Phi-3-mini-4k-instruct-q4.gguf"
   n_threads: 4

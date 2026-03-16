@@ -85,10 +85,19 @@ class MouseDroidOrchestrator:
     async def start(self) -> None:
         """Start all subsystems."""
         _log.info("orchestrator_starting")
-        await self._esp32.connect()
-        await self._camera.start()
+        try:
+            await self._esp32.connect()
+        except Exception as exc:
+            _log.warning("esp32_connect_failed", error=str(exc))
+        try:
+            await self._camera.start()
+        except Exception as exc:
+            _log.warning("camera_start_failed", error=str(exc))
         if self._microphone is not None:
-            await self._microphone.start()
+            try:
+                await self._microphone.start()
+            except Exception as exc:
+                _log.warning("microphone_start_failed", error=str(exc))
         if self._cognitive_core is not None:
             await self._cognitive_core.start()
         self._running = True

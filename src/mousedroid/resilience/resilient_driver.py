@@ -140,12 +140,13 @@ class ResilientESP32Driver:
         """Emergency stop — bypasses circuit breaker entirely.
 
         Safety-critical: always attempts to reach the ESP32 directly.
+        Swallows errors when the ESP32 is unreachable so the main loop
+        can continue operating its remaining sensors.
         """
         try:
             await self._inner.emergency_stop()
         except Exception:
             _log.error("resilient_driver_emergency_stop_failed", exc_info=True)
-            raise
 
     # -- Introspection -----------------------------------------------------
 

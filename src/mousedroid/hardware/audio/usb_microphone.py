@@ -43,25 +43,22 @@ class UsbMicrophone:
             device_name=cfg.device_name,
         )
 
-    def _find_device_index(self) -> int | None:
+    def _find_device_index(self, pa: Any) -> int | None:
         """Find the device index matching the configured device name.
+
+        Args:
+            pa: Active PyAudio instance to query devices from.
 
         Returns:
             Device index or None if not found.
         """
-        import pyaudio
-
-        pa = pyaudio.PyAudio()
-        try:
-            for i in range(pa.get_device_count()):
-                info = pa.get_device_info_by_index(i)
-                name = str(info.get("name", ""))
-                max_input = int(info.get("maxInputChannels", 0))
-                if self._cfg.device_name.lower() in name.lower() and max_input > 0:
-                    _log.info("usb_microphone_found", index=i, name=name)
-                    return i
-        finally:
-            pa.terminate()
+        for i in range(pa.get_device_count()):
+            info = pa.get_device_info_by_index(i)
+            name = str(info.get("name", ""))
+            max_input = int(info.get("maxInputChannels", 0))
+            if self._cfg.device_name.lower() in name.lower() and max_input > 0:
+                _log.info("usb_microphone_found", index=i, name=name)
+                return i
         return None
 
     async def start(self) -> None:
@@ -72,7 +69,7 @@ class UsbMicrophone:
 
         device_index = self._cfg.device_index
         if device_index is None:
-            device_index = self._find_device_index()
+            device_index = self._find_device_index(self._pa)
             if device_index is None:
                 _log.warning(
                     "usb_microphone_not_found",
@@ -117,6 +114,7 @@ class UsbMicrophone:
             None,
             self._stream.read,
             self._cfg.chunk_size,
+            False,  # exception_on_overflow
         )
 
         if self._cfg.format == "int16":

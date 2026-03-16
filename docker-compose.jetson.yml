@@ -15,11 +15,12 @@ services:
       dockerfile: Dockerfile.jetson
     image: mousedroid:jetson
     runtime: nvidia
+    # Privileged mode required for Jetson.GPIO /proc/device-tree access
+    privileged: true
 
     # --- Command override ---
-    # Use jetson production config; add --mock-hardware while devices
-    # section is still commented out (no physical peripherals attached).
-    command: ["--config", "/etc/mousedroid/jetson_production.yaml", "--mock-hardware"]
+    # Use jetson production config with real hardware (GPIO devices passed through below).
+    command: ["--config", "/etc/mousedroid/jetson_production.yaml"]
 
     # --- Restart policy ---
     restart: unless-stopped
@@ -50,16 +51,8 @@ services:
       - /sys/devices/platform:/sys/devices/platform:ro
 
     # --- Hardware device passthrough ---
-    # NOTE: Uncomment devices that are physically connected.
-    # The container will fail to start if a listed device doesn't exist.
-    # devices:
-    #   # ESP32 UART serial
-    #   - /dev/ttyUSB0:/dev/ttyUSB0
-    #   # Camera
-    #   - /dev/video0:/dev/video0
-    #   # GPIO
-    #   - /dev/gpiochip0:/dev/gpiochip0
-    #   - /dev/gpiochip1:/dev/gpiochip1
+    # Privileged mode grants access to all host devices (/dev/gpiochip*,
+    # /dev/ttyUSB*, /dev/video*, etc.) and /proc/device-tree for Jetson.GPIO.
 
     # --- Networking ---
     network_mode: host

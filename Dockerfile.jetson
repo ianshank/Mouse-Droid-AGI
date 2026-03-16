@@ -38,6 +38,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     i2c-tools \
     libcap-dev \
     python3-dev \
+    portaudio19-dev \
+    libasound2-dev \
+    alsa-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
@@ -55,9 +58,11 @@ RUN pip install --no-cache-dir typing_extensions>=4.0 && \
 # Stage 2: Hardware extras (non-fatal — graceful fallback)
 # ---------------------------------------------------------------------------
 RUN pip install --no-cache-dir pyserial>=3.5 python-prctl || true
-RUN pip install --no-cache-dir Jetson.GPIO>=2.1 || true
+RUN pip install --no-cache-dir "Jetson.GPIO>=2.1.12" || true
 # picamera2 may fail without libcamera system libs — graceful skip
 RUN pip install --no-cache-dir picamera2 || true
+# PyAudio for USB microphone capture (requires portaudio19-dev)
+RUN pip install --no-cache-dir "pyaudio>=0.2.13" || true
 
 # ---------------------------------------------------------------------------
 # Stage 3: Dev tools (pytest, ruff, mypy, coverage)
