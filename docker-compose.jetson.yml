@@ -16,6 +16,11 @@ services:
     image: mousedroid:jetson
     runtime: nvidia
 
+    # --- Command override ---
+    # Use jetson production config; add --mock-hardware while devices
+    # section is still commented out (no physical peripherals attached).
+    command: ["--config", "/etc/mousedroid/jetson_production.yaml", "--mock-hardware"]
+
     # --- Restart policy ---
     restart: unless-stopped
 
@@ -38,7 +43,7 @@ services:
       # Experience database (persistent)
       - mousedroid_experience:/home/jetson/mousedroid_experience
       # LLM model weights (read-only host volume)
-      - ${MOUSEDROID_LLM_MODELS_DIR:-/home/jetson/models}:/home/jetson/models:ro
+      - ${MOUSEDROID_LLM_MODELS_DIR:-/home/ian/models}:/home/jetson/models:ro
       # Thermal monitoring (read-only)
       - /sys/devices/virtual/thermal:/sys/devices/virtual/thermal:ro
       # GPU sysfs (read-only)

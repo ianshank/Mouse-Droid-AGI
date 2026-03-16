@@ -1,3 +1,13 @@
+# Force LF line endings for scripts and text files deployed to Linux
+*.sh text eol=lf
+*.py text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.toml text eol=lf
+*.service text eol=lf
+Dockerfile* text eol=lf
+.dockerignore text eol=lf
+
 training/data/*.npy filter=lfs diff=lfs merge=lfs -text
 weights/**/*.npz filter=lfs diff=lfs merge=lfs -text
 weights/**/*.pt filter=lfs diff=lfs merge=lfs -text

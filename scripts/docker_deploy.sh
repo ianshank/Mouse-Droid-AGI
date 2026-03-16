@@ -71,13 +71,14 @@ cd "$PROJECT_DIR"
 docker compose -f "$COMPOSE_FILE" build --no-cache 2>&1 | tail -5
 
 # ---------------------------------------------------------------------------
-# Step 4: Stop existing container if running
+# Step 4: Remove existing container (running or stopped)
 # ---------------------------------------------------------------------------
-if docker ps -q --filter "name=$CONTAINER_NAME" | grep -q .; then
-    info "Step 4: Stopping existing container"
-    docker compose -f "$COMPOSE_FILE" down
+if docker ps -aq --filter "name=$CONTAINER_NAME" | grep -q .; then
+    info "Step 4: Removing existing container"
+    docker compose -f "$COMPOSE_FILE" down 2>/dev/null || true
+    docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
 else
-    info "Step 4: No existing container running"
+    info "Step 4: No existing container found"
 fi
 
 # ---------------------------------------------------------------------------

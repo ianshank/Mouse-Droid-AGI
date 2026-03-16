@@ -12,7 +12,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "${SCRIPT_DIR}")"
-REMOTE_USER="${MOUSEDROID_REMOTE_USER:-jetson}"
+REMOTE_USER="${MOUSEDROID_REMOTE_USER:-ian}"
 REMOTE_SRC="/opt/mousedroid/src"
 REMOTE_CONFIG="/etc/mousedroid"
 REMOTE_WEIGHTS="/opt/mousedroid/weights"
