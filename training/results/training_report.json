@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-03-15T13:04:59Z",
+  "timestamp": "2026-03-16T00:52:59Z",
   "device": "cuda:0",
   "phases": {
     "weight_files": {
@@ -26,8 +26,8 @@
       "passed": true,
       "wall_time_s": 0.0,
       "metrics": {
-        "accuracy": 0.1977,
-        "n_holdout": 16103,
+        "accuracy": 0.7587,
+        "n_holdout": 16373,
         "n_classes": 8
       },
       "errors": []
@@ -35,7 +35,7 @@
     "constitutional_rl": {
       "phase": "constitutional_rl",
       "passed": true,
-      "wall_time_s": 0.0,
+      "wall_time_s": 946.5,
       "metrics": {
         "policy_keys": [
           "w1",
@@ -57,15 +57,15 @@
       "passed": true,
       "wall_time_s": 0.0,
       "metrics": {
-        "best_ucb_c": 0.5,
+        "best_ucb_c": 1.41,
         "p50_ms": 16.0,
-        "p95_ms": 32.0,
-        "mean_reward": -1.1804,
+        "p95_ms": 16.0,
+        "mean_reward": 0.4844,
         "target_p50_ms": 50.0
       },
       "errors": []
     }
   },
-  "total_wall_time_s": 0.0,
+  "total_wall_time_s": 13588.6,
   "all_checks_passed": true
 }
