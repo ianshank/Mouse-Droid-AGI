@@ -12,7 +12,6 @@ from mousedroid.comms.ground_adapter import GroundMotorAdapter
 from mousedroid.comms.motor_protocol import MotorControlProtocol
 from mousedroid.comms.protocol import EncoderReading
 
-
 # -- Protocol conformance --------------------------------------------------
 
 

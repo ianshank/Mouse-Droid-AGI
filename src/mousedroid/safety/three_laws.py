@@ -21,6 +21,12 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from numpy.typing import NDArray
 
+from mousedroid.constants import (
+    ACCELERATION_CLAMP_EPS,
+    BATTERY_LOW_REDUCTION_FACTOR,
+    THERMAL_REDUCTION_FACTOR,
+    THERMAL_SEVERITY_RANGE_C,
+)
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
@@ -251,7 +257,7 @@ class RoboticsLawChecker:
                 )
                 # Clamp acceleration
                 direction = safe - prev
-                scale = self._max_safe_acceleration_mps2 / (max_accel + 1e-8)
+                scale = self._max_safe_acceleration_mps2 / (max_accel + ACCELERATION_CLAMP_EPS)
                 safe = prev + direction * scale
 
         # Inaction harm check: human needs help but robot is idle
@@ -375,16 +381,15 @@ class RoboticsLawChecker:
                 )
             )
             # Reduce motion to conserve battery
-            safe *= 0.5
+            safe *= BATTERY_LOW_REDUCTION_FACTOR
 
         # Thermal preservation
         gpu_temp = float(context.get("gpu_temp_c", 0.0))
         if gpu_temp > self._thermal_critical_c and not has_higher_violation:
             # Severity scales linearly: 0.0 at critical, 1.0 at critical+range
-            thermal_severity_range_c = 15.0
             severity = float(
                 np.clip(
-                    (gpu_temp - self._thermal_critical_c) / thermal_severity_range_c,
+                    (gpu_temp - self._thermal_critical_c) / THERMAL_SEVERITY_RANGE_C,
                     0.0,
                     1.0,
                 )
@@ -398,7 +403,7 @@ class RoboticsLawChecker:
                     severity=severity,
                 )
             )
-            safe *= 0.5
+            safe *= THERMAL_REDUCTION_FACTOR
 
         # Mechanical stress: smooth rapid direction reversals
         prev_action = context.get("prev_action")

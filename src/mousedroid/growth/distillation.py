@@ -87,7 +87,7 @@ class KnowledgeDistiller:
         loss: Tensor = self._alpha * kl_loss + (1.0 - self._alpha) * ce_loss
 
         self._student_optimizer.zero_grad()
-        loss.backward()
+        loss.backward()  # type: ignore[no-untyped-call]
         self._student_optimizer.step()
 
         return loss

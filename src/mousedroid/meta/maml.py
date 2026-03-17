@@ -69,7 +69,7 @@ class MAMLAdapter:
                 pred: Tensor = adapted(x)
                 total_loss = total_loss + loss_fn(pred, y)
             opt.zero_grad()
-            total_loss.backward()
+            total_loss.backward()  # type: ignore[no-untyped-call]
             opt.step()
 
         return adapted
@@ -103,7 +103,7 @@ class MAMLAdapter:
         if n_tasks > 0:
             meta_loss = meta_loss / float(n_tasks)
 
-        meta_loss.backward()
+        meta_loss.backward()  # type: ignore[no-untyped-call]
         self._meta_optimizer.step()
 
         return float(meta_loss.item())

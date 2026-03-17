@@ -82,3 +82,25 @@ POLICY_MLP_SEED: int = 100
 
 VALUE_MLP_SEED: int = 101
 """RNG seed for ValueMLP weight initialisation."""
+
+# ---------------------------------------------------------------------------
+# Safety / physics constants
+# ---------------------------------------------------------------------------
+
+ACCELERATION_CLAMP_EPS: float = 1e-8
+"""Epsilon for acceleration clamping in Three Laws checker."""
+
+THERMAL_SEVERITY_RANGE_C: float = 15.0
+"""Temperature range (°C above critical) for linear severity scaling."""
+
+BATTERY_LOW_REDUCTION_FACTOR: float = 0.5
+"""Factor to reduce motor output when battery is low."""
+
+THERMAL_REDUCTION_FACTOR: float = 0.5
+"""Factor to reduce motor output when GPU temperature is critical."""
+
+ACTION_CLAMP_MIN: float = -1.0
+"""Minimum action value for LLM gateway goal vector clamping."""
+
+ACTION_CLAMP_MAX: float = 1.0
+"""Maximum action value for LLM gateway goal vector clamping."""

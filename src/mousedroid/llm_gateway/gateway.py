@@ -11,6 +11,7 @@ import json
 import re
 from typing import TYPE_CHECKING, Any
 
+from mousedroid.constants import ACTION_CLAMP_MAX, ACTION_CLAMP_MIN
 from mousedroid.llm_gateway.protocol import GoalVector
 from mousedroid.logging.setup import get_logger
 
@@ -127,9 +128,11 @@ class LLMGateway:
         try:
             data = json.loads(raw.strip())
             return GoalVector(
-                vx_target=max(-1.0, min(1.0, float(data.get("vx", 0.0)))),
-                vy_target=max(-1.0, min(1.0, float(data.get("vy", 0.0)))),
-                omega_target=max(-1.0, min(1.0, float(data.get("omega", 0.0)))),
+                vx_target=max(ACTION_CLAMP_MIN, min(ACTION_CLAMP_MAX, float(data.get("vx", 0.0)))),
+                vy_target=max(ACTION_CLAMP_MIN, min(ACTION_CLAMP_MAX, float(data.get("vy", 0.0)))),
+                omega_target=max(
+                    ACTION_CLAMP_MIN, min(ACTION_CLAMP_MAX, float(data.get("omega", 0.0)))
+                ),
             )
         except (json.JSONDecodeError, KeyError, TypeError):
             _log.warning("llm_parse_failed", raw=raw)

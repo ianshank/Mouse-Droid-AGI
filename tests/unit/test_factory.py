@@ -292,6 +292,16 @@ def test_build_motor_controller_drone():
     assert motor.platform_type == "drone"
 
 
+def test_build_flight_controller_real_hardware_fallback():
+    """_build_flight_controller falls back to mock when real driver not implemented."""
+    from mousedroid.comms.mock_flight_controller import MockFlightController
+    from mousedroid.factory import _build_flight_controller
+
+    cfg = _real_settings(platform="drone")
+    fc = _build_flight_controller(cfg)
+    assert isinstance(fc, MockFlightController)
+
+
 def test_build_safety_monitor_ground():
     """build_safety_monitor with ground config returns MouseDroidSafetyMonitor."""
     from mousedroid.factory import build_safety_monitor

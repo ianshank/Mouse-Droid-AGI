@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import numpy as np
 import torch
 
-from mousedroid.config.schema import Settings
+from mousedroid.config.schema import FlightEnvelopeConfig, PlatformType, Settings
 from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator
 from mousedroid.safety.context import SafetyContext
 from mousedroid.sensing.bundle import MouseDroidObservationBundle
@@ -329,6 +329,83 @@ async def test_try_cognitive_action_state_vec_padding():
     # Verify cognitive core was called with padded state
     call_args = cognitive_core.tick_fast.call_args[0][0]
     assert call_args["state"].shape == (belief_dim,)
+
+
+async def test_drone_action_scales_with_flight_envelope():
+    """Test _get_action_scales returns drone-specific scales from flight envelope."""
+    envelope = FlightEnvelopeConfig(
+        max_speed_mps=5.0,
+        max_vertical_speed_mps=2.0,
+        max_yaw_rate_rads=3.14,
+    )
+    cfg = Settings(
+        mock_hardware=True,
+        platform=PlatformType.DRONE,
+        flight_envelope=envelope,
+    )
+    world_model = MagicMock()
+    world_model.observe_step.return_value = (
+        torch.zeros(1, cfg.model.hidden_dim),
+        torch.zeros(1, cfg.model.latent_dim),
+        torch.zeros(1, cfg.model.hidden_dim),
+        0.1,
+    )
+    agent = MagicMock()
+    agent.name = "drone_agent"
+    agent.act.return_value = torch.tensor([0.5, 0.3, 0.2, 0.1])
+    safety_monitor = MagicMock()
+    safety_monitor.evaluate.return_value = SafetyContext(is_emergency=False)
+    motor_controller = AsyncMock()
+    sensor_manager = AsyncMock()
+    orch = MouseDroidOrchestrator(
+        world_model=world_model,
+        agents=[agent],
+        safety_monitor=safety_monitor,
+        motor_controller=motor_controller,
+        sensor_manager=sensor_manager,
+        cfg=cfg,
+    )
+    scales = orch._get_action_scales()
+    assert scales == [
+        envelope.max_speed_mps,
+        envelope.max_speed_mps,
+        envelope.max_vertical_speed_mps,
+        envelope.max_yaw_rate_rads,
+    ]
+
+
+async def test_drone_action_scales_without_flight_envelope():
+    """Test _get_action_scales falls back to safety max_velocity for drone."""
+    cfg = Settings(
+        mock_hardware=True,
+        platform=PlatformType.DRONE,
+        flight_envelope=None,
+    )
+    world_model = MagicMock()
+    world_model.observe_step.return_value = (
+        torch.zeros(1, cfg.model.hidden_dim),
+        torch.zeros(1, cfg.model.latent_dim),
+        torch.zeros(1, cfg.model.hidden_dim),
+        0.1,
+    )
+    agent = MagicMock()
+    agent.name = "drone_agent"
+    agent.act.return_value = torch.tensor([0.5, 0.3, 0.2, 0.1])
+    safety_monitor = MagicMock()
+    safety_monitor.evaluate.return_value = SafetyContext(is_emergency=False)
+    motor_controller = AsyncMock()
+    sensor_manager = AsyncMock()
+    orch = MouseDroidOrchestrator(
+        world_model=world_model,
+        agents=[agent],
+        safety_monitor=safety_monitor,
+        motor_controller=motor_controller,
+        sensor_manager=sensor_manager,
+        cfg=cfg,
+    )
+    scales = orch._get_action_scales()
+    max_v = cfg.safety.max_velocity_mps
+    assert scales == [max_v, max_v, max_v, max_v]
 
 
 async def test_try_cognitive_action_passes_full_bdi_state() -> None:

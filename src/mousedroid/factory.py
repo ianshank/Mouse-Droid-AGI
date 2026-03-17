@@ -70,7 +70,7 @@ def _build_flight_controller(cfg: Settings) -> FlightControllerProtocol:
     """
     from mousedroid.config.schema import FlightControllerConfig
 
-    fc_cfg = cfg.flight_controller or FlightControllerConfig()
+    fc_cfg = cfg.flight_controller or FlightControllerConfig()  # type: ignore[call-arg]
 
     if cfg.mock_hardware:
         from mousedroid.comms.mock_flight_controller import MockFlightController
@@ -382,7 +382,7 @@ def build_orchestrator(cfg: Settings) -> object:
 
         # Extract the flight controller from the drone adapter.
         fc = motor._fc if isinstance(motor, DroneMotorAdapter) else _build_flight_controller(cfg)
-        sensor_manager = DroneSensorManager(
+        sm: SensorManager = DroneSensorManager(  # type: ignore[assignment]
             vision=camera,
             distance=distance,
             motor_controller=motor,
@@ -391,7 +391,7 @@ def build_orchestrator(cfg: Settings) -> object:
             microphone=microphone,
         )
     else:
-        sensor_manager = SensorManager(
+        sm = SensorManager(
             vision=camera,
             distance=distance,
             motor_controller=motor,
@@ -422,7 +422,7 @@ def build_orchestrator(cfg: Settings) -> object:
         agents=[agent],
         safety_monitor=monitor,
         motor_controller=motor,
-        sensor_manager=sensor_manager,
+        sensor_manager=sm,
         cognitive_core=cognitive_core,
         cfg=cfg,
     )

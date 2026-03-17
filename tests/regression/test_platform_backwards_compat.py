@@ -6,7 +6,6 @@ output, and safety behaviour are unaffected by drone support additions.
 
 from __future__ import annotations
 
-
 import numpy as np
 
 from mousedroid.comms.ground_adapter import GroundMotorAdapter

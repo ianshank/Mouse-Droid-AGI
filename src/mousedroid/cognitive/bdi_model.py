@@ -80,7 +80,8 @@ def _bayesian_normalise(
         Normalised array.
     """
     total = np.sum(values) + _BAYESIAN_SUM_EPS
-    return values / total
+    result: NDArray[np.floating[Any]] = values / total
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +297,8 @@ class AffectEstimator:
         """
         combined = np.concatenate([desire, intentions])
         raw = combined @ self._w1 + self._b1
-        return np.tanh(raw)
+        result: NDArray[np.floating[Any]] = np.tanh(raw)
+        return result
 
 
 # ---------------------------------------------------------------------------

@@ -44,7 +44,7 @@ class AdaptiveCompute(nn.Module):
             halt_threshold=halt_threshold,
         )
 
-    @torch.no_grad()  # type: ignore[untyped-decorator]
+    @torch.no_grad()
     def forward(self, x: Tensor) -> tuple[Tensor, int]:
         """Run adaptive computation.
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 import numpy as np
 
 from mousedroid.config.schema import FlightEnvelopeConfig, GeofenceConfig, SafetyConfig
@@ -105,6 +104,14 @@ class TestGeofenceChecks:
         assert ctx.is_emergency is True
 
 
+    def test_geofence_disabled_returns_ok(self):
+        """Geofence with enabled=False should always return OK."""
+        monitor = _make_monitor(geofence=GeofenceConfig(enabled=False, radius_m=1.0))
+        obs = _make_obs(gps_position=(90.0, 180.0, 999.0), altitude_m=999.0)
+        ctx = monitor.evaluate(obs, loop_time_ms=10.0)
+        assert ctx.geofence_ok is True
+
+
 class TestGPSFixCheck:
     def test_gps_fix_ok(self):
         monitor = _make_monitor()
@@ -142,6 +149,15 @@ class TestGroundChecksComposition:
         obs = _make_obs(battery_v=10.0)  # Below critical
         ctx = monitor.evaluate(obs, loop_time_ms=10.0)
         assert ctx.is_emergency is True
+
+    def test_battery_warning_not_critical(self):
+        """Battery between warn and critical should log warning but not emergency."""
+        monitor = _make_monitor()
+        # battery_warn_v=14.4, battery_critical_v=13.2
+        obs = _make_obs(battery_v=13.8)  # Between warn and critical
+        ctx = monitor.evaluate(obs, loop_time_ms=10.0)
+        # Battery warning doesn't trigger emergency by itself
+        assert ctx.is_emergency is False
 
     def test_forward_clearance_still_fires(self):
         """Ground safety checks (forward clearance) still trigger through composition."""

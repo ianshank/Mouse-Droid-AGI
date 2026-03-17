@@ -59,7 +59,8 @@ def get_logger(name: str) -> structlog.stdlib.BoundLogger:
     Returns:
         Bound structlog logger instance.
     """
-    return structlog.get_logger(name)
+    logger: structlog.stdlib.BoundLogger = structlog.get_logger(name)
+    return logger
 
 
 _LEVEL_MAP: dict[str, int] = {
