@@ -112,7 +112,7 @@ class TestSurpriseAdaptiveBudget:
 class TestAgentMeta:
     def test_name(self) -> None:
         agent, _, _ = _make_agent()
-        assert agent.name == "mouse_droid_navigator"
+        assert agent.name == "mouse_droid_navigator"  # default platform
 
     def test_reset(self) -> None:
         agent, _, _ = _make_agent()

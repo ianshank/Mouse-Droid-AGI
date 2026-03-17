@@ -48,7 +48,8 @@ def _make_orchestrator(
     safety_monitor = MagicMock()
     safety_monitor.evaluate.return_value = safety_ctx
 
-    esp32 = AsyncMock()
+    motor_controller = AsyncMock()
+    motor_controller.platform_type = "mouse_droid"
 
     sensor_manager = AsyncMock()
     sensor_manager.read_all.return_value = _make_observation(cfg)
@@ -57,7 +58,7 @@ def _make_orchestrator(
         world_model=world_model,
         agents=[agent],
         safety_monitor=safety_monitor,
-        esp32=esp32,
+        motor_controller=motor_controller,
         sensor_manager=sensor_manager,
         cfg=cfg,
         cognitive_core=cognitive_core,
@@ -93,14 +94,14 @@ async def test_stop_clears_running():
 async def test_tick_full_cycle():
     orch = _make_orchestrator()
     await orch.tick()
-    orch._esp32.send_velocity.assert_awaited_once()
+    orch._motor.send_command.assert_awaited_once()
 
 
 async def test_tick_emergency_stop():
     orch = _make_orchestrator(emergency=True)
     await orch.tick()
-    orch._esp32.emergency_stop.assert_awaited_once()
-    orch._esp32.send_velocity.assert_not_awaited()
+    orch._motor.emergency_stop.assert_awaited_once()
+    orch._motor.send_command.assert_not_awaited()
 
 
 async def test_tick_delegates_to_sensor_manager():
@@ -147,14 +148,14 @@ async def test_tick_action_1d():
     orch = _make_orchestrator()
     orch._agents[0].act.return_value = torch.tensor([0.5])
     await orch.tick()
-    orch._esp32.send_velocity.assert_awaited_once()
+    orch._motor.send_command.assert_awaited_once()
 
 
 async def test_tick_action_2d():
     orch = _make_orchestrator()
     orch._agents[0].act.return_value = torch.tensor([0.5, 0.3])
     await orch.tick()
-    orch._esp32.send_velocity.assert_awaited_once()
+    orch._motor.send_command.assert_awaited_once()
 
 
 async def test_orchestrator_with_cognitive_core_primary():
@@ -170,8 +171,8 @@ async def test_orchestrator_with_cognitive_core_primary():
 
     # Verify cognitive core was called
     cognitive_core.tick_fast.assert_called_once()
-    # Verify action was sent to ESP32
-    orch._esp32.send_velocity.assert_awaited_once()
+    # Verify action was sent to motor controller
+    orch._motor.send_command.assert_awaited_once()
 
 
 async def test_orchestrator_cognitive_fallback_to_mcts_on_error():
@@ -187,8 +188,8 @@ async def test_orchestrator_cognitive_fallback_to_mcts_on_error():
 
     # Verify MCTS agent was used as fallback
     orch._agents[0].act.assert_called_once()
-    # Verify action was still sent to ESP32
-    orch._esp32.send_velocity.assert_awaited_once()
+    # Verify action was still sent to motor controller
+    orch._motor.send_command.assert_awaited_once()
 
 
 async def test_orchestrator_start_calls_cognitive_core_start():
@@ -229,7 +230,7 @@ async def test_orchestrator_without_cognitive_core_uses_mcts():
 
     # MCTS agent should be used directly
     orch._agents[0].act.assert_called_once()
-    orch._esp32.send_velocity.assert_awaited_once()
+    orch._motor.send_command.assert_awaited_once()
 
 
 async def test_cognitive_action_bounds():
@@ -245,8 +246,8 @@ async def test_cognitive_action_bounds():
 
     await orch.tick()
 
-    # Should still send velocity without crashing
-    orch._esp32.send_velocity.assert_awaited_once()
+    # Should still send command without crashing
+    orch._motor.send_command.assert_awaited_once()
 
 
 async def test_constitutional_violations_logged():
@@ -262,7 +263,7 @@ async def test_constitutional_violations_logged():
     await orch.tick()
 
     # Verify action was still sent despite violations
-    orch._esp32.send_velocity.assert_awaited_once()
+    orch._motor.send_command.assert_awaited_once()
     # Cognitive core was called (violations logged internally)
     cognitive_core.tick_fast.assert_called_once()
 
@@ -277,17 +278,17 @@ async def test_update_world_model():
 
 
 async def test_execute_action():
-    """Test _execute_action sends scaled velocity to ESP32."""
+    """Test _execute_action sends scaled command via motor controller."""
     orch = _make_orchestrator()
     action = torch.tensor([0.5, 0.3, 0.2])
     await orch._execute_action(action)
-    orch._esp32.send_velocity.assert_awaited_once()
-    args = orch._esp32.send_velocity.call_args[0]
+    orch._motor.send_command.assert_awaited_once()
+    command = orch._motor.send_command.call_args[0][0]
     max_v = orch._cfg.esp32.max_velocity_mps
     max_omega = orch._cfg.esp32.max_omega_rads
-    assert abs(args[0] - 0.5 * max_v) < 1e-6
-    assert abs(args[1] - 0.3 * max_v) < 1e-6
-    assert abs(args[2] - 0.2 * max_omega) < 1e-6
+    assert abs(command[0] - 0.5 * max_v) < 1e-6
+    assert abs(command[1] - 0.3 * max_v) < 1e-6
+    assert abs(command[2] - 0.2 * max_omega) < 1e-6
 
 
 async def test_normalize_cognitive_action_padding():

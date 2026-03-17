@@ -72,7 +72,7 @@ def test_build_agent_has_name() -> None:
     cfg = _mock_settings()
     wm = build_world_model(cfg)
     agent = build_agent(cfg, wm)
-    assert agent.name == "mouse_droid_navigator"
+    assert agent.name == "mouse_droid_navigator"  # default platform
 
 
 def test_build_distance_sensor_mock_has_range() -> None:

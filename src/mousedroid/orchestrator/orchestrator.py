@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import torch
 
+from mousedroid.config.schema import PlatformType
 from mousedroid.constants import (
     DEFAULT_BATTERY_VOLTAGE,
     MILLISECONDS_PER_SECOND,
@@ -22,7 +23,7 @@ from mousedroid.logging.setup import get_logger
 if TYPE_CHECKING:
     from mousedroid.agents.base import AgentProtocol
     from mousedroid.cognitive.cognitive_core import CognitiveCore
-    from mousedroid.comms.protocol import ESP32CommProtocol
+    from mousedroid.comms.motor_protocol import MotorControlProtocol
     from mousedroid.config.schema import Settings
     from mousedroid.safety.context import SafetyContext
     from mousedroid.safety.protocol import SafetyMonitorProtocol
@@ -44,7 +45,7 @@ class MouseDroidOrchestrator:
         world_model: WorldModelProtocol,
         agents: list[AgentProtocol],
         safety_monitor: SafetyMonitorProtocol,
-        esp32: ESP32CommProtocol,
+        motor_controller: MotorControlProtocol,
         sensor_manager: SensorManager,
         cfg: Settings,
         cognitive_core: CognitiveCore | None = None,
@@ -55,7 +56,7 @@ class MouseDroidOrchestrator:
             world_model: World model for latent dynamics.
             agents: List of navigation agents.
             safety_monitor: Safety monitor.
-            esp32: ESP32 communication driver.
+            motor_controller: Platform-agnostic motor controller.
             sensor_manager: Sensor manager for concurrent sensor reads.
             cfg: Root settings.
             cognitive_core: Optional CognitiveCore for BDI/metacognitive loop.
@@ -63,7 +64,7 @@ class MouseDroidOrchestrator:
         self._world_model = world_model
         self._agents = agents
         self._safety_monitor = safety_monitor
-        self._esp32 = esp32
+        self._motor = motor_controller
         self._sensor_manager = sensor_manager
         self._cognitive_core = cognitive_core
         self._cfg = cfg
@@ -76,13 +77,16 @@ class MouseDroidOrchestrator:
 
     async def start(self) -> None:
         """Start all subsystems."""
-        _log.info("orchestrator_starting")
-        await self._esp32.connect()
+        _log.info(
+            "orchestrator_starting",
+            platform=self._cfg.platform.value,
+        )
+        await self._motor.connect()
         await self._sensor_manager.start()
         if self._cognitive_core is not None:
             await self._cognitive_core.start()
         self._running = True
-        _log.info("orchestrator_started")
+        _log.info("orchestrator_started", platform=self._cfg.platform.value)
 
     async def stop(self) -> None:
         """Stop all subsystems gracefully."""
@@ -90,9 +94,9 @@ class MouseDroidOrchestrator:
         self._running = False
         if self._cognitive_core is not None:
             await self._cognitive_core.stop()
-        await self._esp32.emergency_stop()
+        await self._motor.emergency_stop()
         await self._sensor_manager.stop()
-        await self._esp32.disconnect()
+        await self._motor.disconnect()
         _log.info("orchestrator_stopped")
 
     async def tick(self) -> None:
@@ -107,7 +111,7 @@ class MouseDroidOrchestrator:
         self._update_world_model(observation)
 
         if safety_ctx.is_emergency:
-            await self._esp32.emergency_stop()
+            await self._motor.emergency_stop()
             _log.warning("emergency_stop_triggered")
             return
 
@@ -246,17 +250,44 @@ class MouseDroidOrchestrator:
         return torch.from_numpy(action_np).float()
 
     async def _execute_action(self, action: torch.Tensor) -> None:
-        """Scale and send action to ESP32 motors.
+        """Scale action by platform-specific limits and send to motor controller.
 
         Args:
             action: Action tensor with values in [-1, 1].
         """
+        scales = self._get_action_scales()
+        action_dim = min(action.shape[0], len(scales))
+        command = np.array(
+            [float(action[i]) * scales[i] for i in range(action_dim)],
+            dtype=np.float32,
+        )
+        await self._motor.send_command(command)
+
+    def _get_action_scales(self) -> list[float]:
+        """Return per-dimension scaling factors based on platform config.
+
+        Returns:
+            List of scale factors, one per action dimension.
+            Ground: ``[max_v, max_v, max_omega]``.
+            Drone: ``[max_speed, max_speed, max_vert_speed, max_yaw_rate]``.
+        """
+        if self._cfg.platform == PlatformType.DRONE:
+            envelope = self._cfg.flight_envelope
+            if envelope is not None:
+                return [
+                    envelope.max_speed_mps,
+                    envelope.max_speed_mps,
+                    envelope.max_vertical_speed_mps,
+                    envelope.max_yaw_rate_rads,
+                ]
+            # Fallback to safety config max_velocity
+            max_v = self._cfg.safety.max_velocity_mps
+            return [max_v, max_v, max_v, max_v]
+
+        # Ground platform (mouse_droid)
         max_v = self._cfg.esp32.max_velocity_mps
         max_omega = self._cfg.esp32.max_omega_rads
-        vx = float(action[0]) * max_v
-        vy = float(action[1]) * max_v if action.shape[0] > 1 else 0.0
-        omega = float(action[2]) * max_omega if action.shape[0] > 2 else 0.0
-        await self._esp32.send_velocity(vx, vy, omega)
+        return [max_v, max_v, max_omega]
 
     async def run(self) -> None:
         """Run the main loop at configured control rate."""

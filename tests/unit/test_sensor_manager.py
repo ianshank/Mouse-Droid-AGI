@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock
 
 import numpy as np
 
-from mousedroid.comms.protocol import EncoderReading
 from mousedroid.config.schema import Settings
 from mousedroid.sensing.manager import SensorManager
 
@@ -25,12 +24,14 @@ def _make_manager() -> tuple[SensorManager, AsyncMock, AsyncMock, AsyncMock]:
     distance.read_distance_m = AsyncMock(return_value=1.5)
     distance.max_range_m = 4.0
 
-    esp32 = AsyncMock()
-    esp32.read_encoders = AsyncMock(return_value=EncoderReading())
-    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+    motor_controller = AsyncMock()
+    motor_controller.read_state = AsyncMock(
+        return_value=np.array([0.0, 0.0, 0.0, 12.0], dtype=np.float32)
+    )
+    motor_controller.platform_type = "mouse_droid"
 
-    mgr = SensorManager(vision, distance, esp32, cfg)
-    return mgr, vision, distance, esp32
+    mgr = SensorManager(vision, distance, motor_controller, cfg)
+    return mgr, vision, distance, motor_controller
 
 
 def test_constructor():
@@ -61,8 +62,8 @@ async def test_read_all_handles_distance_failure():
 
 
 async def test_read_all_handles_motor_failure():
-    mgr, _, _, esp32 = _make_manager()
-    esp32.read_encoders.side_effect = RuntimeError("serial fail")
+    mgr, _, _, motor_controller = _make_manager()
+    motor_controller.read_state.side_effect = RuntimeError("motor fail")
     bundle = await mgr.read_all()
     assert bundle.valid_mask[2] == 0.0
 
@@ -91,9 +92,11 @@ def _make_manager_with_mic():
     distance.read_distance_m = AsyncMock(return_value=1.5)
     distance.max_range_m = 4.0
 
-    esp32 = AsyncMock()
-    esp32.read_encoders = AsyncMock(return_value=EncoderReading())
-    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+    motor_controller = AsyncMock()
+    motor_controller.read_state = AsyncMock(
+        return_value=np.array([0.0, 0.0, 0.0, 12.0], dtype=np.float32)
+    )
+    motor_controller.platform_type = "mouse_droid"
 
     mic = AsyncMock()
     mic.chunk_size = 1024
@@ -102,7 +105,7 @@ def _make_manager_with_mic():
         return_value=np.ones(1024, dtype=np.float32),
     )
 
-    mgr = SensorManager(vision, distance, esp32, cfg, microphone=mic)
+    mgr = SensorManager(vision, distance, motor_controller, cfg, microphone=mic)
     return mgr, mic
 
 

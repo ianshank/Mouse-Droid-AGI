@@ -61,7 +61,7 @@ async def test_orchestrator_agents_present() -> None:
     cfg = _mock_settings()
     orch = build_orchestrator(cfg)
     health = await orch.health_check()
-    assert "mouse_droid_navigator" in health["agents"]
+    assert "mouse_droid_navigator" in health["agents"]  # default platform
 
 
 async def test_start_tick_stop_no_errors() -> None:

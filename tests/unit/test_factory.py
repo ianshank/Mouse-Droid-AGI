@@ -261,3 +261,52 @@ def test_build_orchestrator_cognitive_no_fallback_raises():
         pytest.raises(RuntimeError, match="cognitive init failed"),
     ):
         build_orchestrator(cfg)
+
+
+# -- build_motor_controller ---------------------------------------------------
+
+
+def test_build_motor_controller_ground():
+    """build_motor_controller with ground config returns GroundMotorAdapter."""
+    from mousedroid.comms.ground_adapter import GroundMotorAdapter
+    from mousedroid.comms.motor_protocol import MotorControlProtocol
+    from mousedroid.factory import build_motor_controller
+
+    cfg = Settings(mock_hardware=True)
+    motor = build_motor_controller(cfg)
+    assert isinstance(motor, GroundMotorAdapter)
+    assert isinstance(motor, MotorControlProtocol)
+    assert motor.platform_type == "mouse_droid"
+
+
+def test_build_motor_controller_drone():
+    """build_motor_controller with drone config returns DroneMotorAdapter."""
+    from mousedroid.comms.drone_adapter import DroneMotorAdapter
+    from mousedroid.comms.motor_protocol import MotorControlProtocol
+    from mousedroid.factory import build_motor_controller
+
+    cfg = Settings(mock_hardware=True, platform="drone")
+    motor = build_motor_controller(cfg)
+    assert isinstance(motor, DroneMotorAdapter)
+    assert isinstance(motor, MotorControlProtocol)
+    assert motor.platform_type == "drone"
+
+
+def test_build_safety_monitor_ground():
+    """build_safety_monitor with ground config returns MouseDroidSafetyMonitor."""
+    from mousedroid.factory import build_safety_monitor
+    from mousedroid.safety.monitor import MouseDroidSafetyMonitor
+
+    cfg = Settings(mock_hardware=True)
+    monitor = build_safety_monitor(cfg)
+    assert isinstance(monitor, MouseDroidSafetyMonitor)
+
+
+def test_build_safety_monitor_drone():
+    """build_safety_monitor with drone config returns DroneSafetyMonitor."""
+    from mousedroid.factory import build_safety_monitor
+    from mousedroid.safety.drone_monitor import DroneSafetyMonitor
+
+    cfg = Settings(mock_hardware=True, platform="drone")
+    monitor = build_safety_monitor(cfg)
+    assert isinstance(monitor, DroneSafetyMonitor)

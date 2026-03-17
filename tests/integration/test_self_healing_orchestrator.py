@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 import numpy as np
 import torch
 
+from mousedroid.comms.ground_adapter import GroundMotorAdapter
 from mousedroid.comms.protocol import EncoderReading
 from mousedroid.config.schema import Settings
 from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator
@@ -58,6 +59,9 @@ def _build_orchestrator(
         ),
     )
 
+    # Wrap in GroundMotorAdapter for MotorControlProtocol
+    motor = GroundMotorAdapter(resilient)
+
     world_model = MagicMock()
     world_model.observe_step.return_value = (
         torch.zeros(1, cfg.model.hidden_dim),
@@ -81,7 +85,7 @@ def _build_orchestrator(
         world_model=world_model,
         agents=[agent],
         safety_monitor=safety_monitor,
-        esp32=resilient,
+        motor_controller=motor,
         sensor_manager=sensor_manager,
         cfg=cfg,
     )
@@ -143,11 +147,11 @@ async def test_factory_builds_resilient_driver():
 
 
 async def test_full_tick_with_factory_built_driver():
-    """End-to-end: factory-built resilient driver works through orchestrator."""
-    from mousedroid.factory import build_esp32_driver
+    """End-to-end: factory-built motor controller works through orchestrator."""
+    from mousedroid.factory import build_motor_controller
 
     cfg = Settings(mock_hardware=True)
-    driver = build_esp32_driver(cfg)
+    motor = build_motor_controller(cfg)
 
     world_model = MagicMock()
     world_model.observe_step.return_value = (
@@ -171,7 +175,7 @@ async def test_full_tick_with_factory_built_driver():
         world_model=world_model,
         agents=[agent],
         safety_monitor=safety_monitor,
-        esp32=driver,
+        motor_controller=motor,
         sensor_manager=sensor_manager,
         cfg=cfg,
     )

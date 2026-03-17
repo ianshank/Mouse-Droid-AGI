@@ -36,7 +36,7 @@ class MouseDroidNavigationAgent:
         self._cfg = cfg
         self._action_dim = cfg.model.action_dim
         self._human_safety_radius_m = cfg.three_laws.human_safety_radius_m
-        self._name = "mouse_droid_navigator"
+        self._name = f"{cfg.platform.value}_navigator"
 
     @property
     def name(self) -> str:

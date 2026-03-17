@@ -1,0 +1,132 @@
+platform: drone
+mock_hardware: false
+debug: false
+
+loop:
+  perception_hz: 30.0
+  ultrasonic_hz: 20.0
+  control_hz: 50.0
+  planning_hz: 10.0
+  audio_hz: 16.0
+
+model:
+  vision_dim: 256
+  ultrasonic_dim: 1
+  motor_state_dim: 7
+  hidden_dim: 256
+  latent_dim: 64
+  action_dim: 4
+  obs_dim: 256
+  vision_proj_dim: 128
+  ultrasonic_proj_dim: 32
+  motor_proj_dim: 32
+
+mcts:
+  n_simulations_base: 50
+  n_simulations_max: 200
+  rollout_depth: 5
+  gamma: 0.97
+  n_action_candidates: 9
+  ucb_c: 1.41
+
+surprise:
+  ema_alpha: 0.1
+  high_threshold: 2.0
+  critical_threshold: 5.0
+
+safety:
+  min_forward_clearance_m: 0.50
+  max_velocity_mps: 5.0
+  sensor_stale_s: 0.5
+  min_valid_sensors: 3
+  gpu_warn_temp_c: 75.0
+  gpu_critical_temp_c: 90.0
+  battery_warn_v: 14.4
+  battery_critical_v: 13.2
+  reverse_velocity: 0.0
+
+camera:
+  resolution_width: 640
+  resolution_height: 480
+  fps: 30
+  feature_dim: 256
+  use_onboard_inference: true
+
+drone:
+  frame_type: quad_x
+  mass_kg: 1.5
+  max_thrust_n: 30.0
+  arm_length_m: 0.25
+  prop_diameter_m: 0.254
+
+flight_controller:
+  protocol: mavlink
+  connection: serial
+  serial_port: "/dev/ttyACM0"
+  baud_rate: 57600
+  udp_port: 14540
+  heartbeat_hz: 1.0
+  telemetry_hz: 10.0
+  command_timeout_s: 1.0
+  system_id: 1
+  component_id: 1
+
+flight_envelope:
+  max_speed_mps: 5.0
+  max_vertical_speed_mps: 2.0
+  max_altitude_m: 120.0
+  min_altitude_m: 1.0
+  max_tilt_deg: 35.0
+  max_yaw_rate_rads: 3.14
+
+geofence:
+  enabled: true
+  radius_m: 100.0
+  center_lat: 0.0
+  center_lon: 0.0
+  max_altitude_m: 120.0
+
+jetson:
+  tensorrt_enabled: true
+  gpu_memory_fraction: 0.5
+  power_mode: "15W"
+  dla_enabled: false
+  precision: "fp16"
+  workspace_gb: 1.0
+
+robot:
+  wheel_base_m: 0.20
+  track_width_m: 0.20
+  max_speed_mps: 0.50
+  wheel_radius_m: 0.042
+  wheel_type: mecanum
+
+experience:
+  path: "/home/jetson/mousedroid_experience"
+  map_size_gb: 20
+  flush_every_n: 30
+
+logging:
+  level: "INFO"
+  format: "json"
+
+retry:
+  max_attempts: 3
+  base_delay_s: 1.0
+  max_delay_s: 30.0
+  exponential_base: 2.0
+
+circuit_breaker:
+  failure_threshold: 5
+  recovery_timeout_s: 30.0
+  half_open_max_calls: 3
+
+cognitive:
+  weights_dir: "weights/bdi/"
+  huggingface_repo: "ianshank/mousedroid-weights"
+  auto_download: true
+  fallback_to_mcts: true
+
+metrics:
+  enabled: true
+  export_interval_s: 10.0

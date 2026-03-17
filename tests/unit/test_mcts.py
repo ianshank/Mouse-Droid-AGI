@@ -109,3 +109,28 @@ def test_ucb1_unvisited_returns_inf(planner: MCTSPlanner) -> None:
     )
     score = planner._ucb1(node, parent_visits=10)
     assert score == float("inf")
+
+
+def test_candidate_actions_independent_per_dimension() -> None:
+    """Candidate actions should have independent values per dimension, not identical."""
+    cfg = MCTSConfig(n_simulations_base=4, rollout_depth=2, n_action_candidates=8)
+    planner = MCTSPlanner(cfg, MockWorldModel())
+    actions = planner._generate_candidate_actions(torch.device("cpu"))
+    assert actions.shape == (8, 3)
+    # With independent permutations, columns should NOT all be identical.
+    # If they were identical (the old bug), every row would have the same value
+    # across all dims, i.e., actions[:, 0] == actions[:, 1] for all rows.
+    all_same = torch.all(actions[:, 0] == actions[:, 1]).item()
+    assert not all_same, "Candidate actions have identical values across dimensions (old bug)"
+
+
+def test_candidate_actions_cover_range() -> None:
+    """Candidate actions should cover [-1, 1] range in each dimension."""
+    cfg = MCTSConfig(n_simulations_base=4, rollout_depth=2, n_action_candidates=16)
+    planner = MCTSPlanner(cfg, MockWorldModel())
+    actions = planner._generate_candidate_actions(torch.device("cpu"))
+    # Each column should contain values from linspace(-1, 1, 16), just permuted
+    for dim in range(3):
+        col = actions[:, dim].sort().values
+        expected = torch.linspace(-1.0, 1.0, 16)
+        assert torch.allclose(col, expected), f"Dimension {dim} doesn't cover full range"

@@ -36,5 +36,14 @@ class SafetyContext:
     commanded_action: tuple[float, ...] | None = None
     law_violations: tuple[str, ...] = ()
 
+    # Drone-specific (safe defaults for ground robot backwards compatibility)
+    altitude_m: float = 0.0
+    altitude_ok: bool = True
+    geofence_ok: bool = True
+    gps_fix: bool = True
+    imu_healthy: bool = True
+    armed: bool = False
+    wind_speed_mps: float = 0.0
+
     # Computed
     is_emergency: bool = False

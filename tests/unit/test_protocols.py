@@ -8,6 +8,8 @@ from numpy.typing import NDArray
 from torch import Tensor
 
 from mousedroid.agents.base import AgentProtocol
+from mousedroid.comms.flight_protocol import FlightControllerProtocol
+from mousedroid.comms.motor_protocol import MotorControlProtocol
 from mousedroid.comms.protocol import EncoderReading, ESP32CommProtocol
 from mousedroid.experience.protocol import ExperienceProtocol
 from mousedroid.hardware.protocols import AudioProtocol, DistanceSensorProtocol, VisionProtocol
@@ -83,6 +85,84 @@ class _MockESP32Comm:
 
     async def disconnect(self) -> None:
         pass
+
+
+class _MockMotorControl:
+    async def connect(self) -> None:
+        pass
+
+    async def send_command(self, command: NDArray[np.float32]) -> None:
+        pass
+
+    async def read_state(self) -> NDArray[np.float32]:
+        return np.zeros(4, dtype=np.float32)
+
+    async def get_battery_voltage(self) -> float:
+        return 12.0
+
+    async def emergency_stop(self) -> None:
+        pass
+
+    async def disconnect(self) -> None:
+        pass
+
+    @property
+    def platform_type(self) -> str:
+        return "mock"
+
+
+class _MockFlightController:
+    async def connect(self) -> None:
+        pass
+
+    async def disconnect(self) -> None:
+        pass
+
+    async def arm(self) -> None:
+        pass
+
+    async def disarm(self) -> None:
+        pass
+
+    async def takeoff(self, altitude_m: float) -> None:
+        pass
+
+    async def land(self) -> None:
+        pass
+
+    async def send_velocity_ned(
+        self, vn: float, ve: float, vd: float, yaw_rate: float
+    ) -> None:
+        pass
+
+    async def get_altitude_m(self) -> float:
+        return 0.0
+
+    async def get_gps_position(self) -> tuple[float, float, float]:
+        return (0.0, 0.0, 0.0)
+
+    async def get_imu_data(self) -> NDArray[np.float32]:
+        return np.zeros(6, dtype=np.float32)
+
+    async def get_battery_voltage(self) -> float:
+        return 16.0
+
+    async def set_flight_mode(self, mode: str) -> None:
+        pass
+
+    async def return_to_launch(self) -> None:
+        pass
+
+    async def emergency_stop(self) -> None:
+        pass
+
+    @property
+    def armed(self) -> bool:
+        return False
+
+    @property
+    def flight_mode(self) -> str:
+        return "STABILIZE"
 
 
 class _MockAudio:
@@ -221,6 +301,14 @@ def test_audio_protocol_isinstance():
     assert isinstance(_MockAudio(), AudioProtocol)
 
 
+def test_motor_control_protocol_isinstance():
+    assert isinstance(_MockMotorControl(), MotorControlProtocol)
+
+
+def test_flight_controller_protocol_isinstance():
+    assert isinstance(_MockFlightController(), FlightControllerProtocol)
+
+
 def test_observation_protocol_isinstance():
     assert isinstance(_MockObservation(), ObservationProtocol)
 
@@ -270,6 +358,14 @@ def test_non_conforming_not_observation():
 
 def test_non_conforming_not_audio():
     assert not isinstance(_Empty(), AudioProtocol)
+
+
+def test_non_conforming_not_motor_control():
+    assert not isinstance(_Empty(), MotorControlProtocol)
+
+
+def test_non_conforming_not_flight_controller():
+    assert not isinstance(_Empty(), FlightControllerProtocol)
 
 
 def test_non_conforming_not_agent():

@@ -28,6 +28,15 @@ DEFAULT_BATTERY_VOLTAGE: float = 12.6
 N_SENSOR_MODALITIES: int = 4
 """Number of sensor modalities tracked: vision, ultrasonic, motor, audio."""
 
+DEFAULT_DRONE_ACTION_DIM: int = 4
+"""Drone action dimension ``[vx, vy, vz, yaw_rate]``."""
+
+DEFAULT_DRONE_MOTOR_STATE_DIM: int = 7
+"""Drone motor state dimension ``[vx, vy, vz, yaw_rate, altitude, battery, armed]``."""
+
+N_DRONE_SENSOR_MODALITIES: int = 7
+"""Drone sensor modalities: vision, distance, motor, audio, imu, gps, altitude."""
+
 MILLISECONDS_PER_SECOND: float = 1000.0
 """Conversion factor from seconds to milliseconds."""
 

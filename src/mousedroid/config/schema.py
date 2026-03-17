@@ -30,6 +30,7 @@ class PlatformType(StrEnum):
     """Supported hardware platform types."""
 
     MOUSE_DROID = "mouse_droid"
+    DRONE = "drone"
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +133,65 @@ class ESP32Config(BaseModel):
     keepalive_hz: float = Field(10.0, gt=0, description="Motor command keepalive rate (Hz)")
     max_velocity_mps: float = Field(0.5, gt=0, description="Max velocity magnitude (m/s)")
     max_omega_rads: float = Field(2.0, gt=0, description="Max angular velocity (rad/s)")
+
+
+class FlightControllerConfig(BaseModel):
+    """Flight controller (MAVLink/PX4/ArduPilot) communication configuration."""
+
+    protocol: Literal["mavlink"] = Field(
+        "mavlink",
+        description="Flight controller protocol",
+    )
+    connection: Literal["serial", "udp"] = Field(
+        "serial",
+        description="Transport: serial (UART) or udp",
+    )
+    serial_port: str = Field("/dev/ttyACM0", description="Serial port path for FC")
+    baud_rate: int = Field(
+        57600,
+        gt=0,
+        description="Serial baud rate for MAVLink",
+    )
+    udp_port: int = Field(14540, gt=0, le=65535, description="MAVLink UDP port")
+    heartbeat_hz: float = Field(1.0, gt=0, description="MAVLink heartbeat rate (Hz)")
+    telemetry_hz: float = Field(10.0, gt=0, description="Telemetry request rate (Hz)")
+    command_timeout_s: float = Field(1.0, gt=0, description="Command ACK timeout (s)")
+    system_id: int = Field(1, gt=0, le=255, description="MAVLink system ID")
+    component_id: int = Field(1, gt=0, le=255, description="MAVLink component ID")
+
+
+class DroneConfig(BaseModel):
+    """Drone airframe physical parameters."""
+
+    frame_type: Literal["quad_x", "quad_plus", "hex", "octo"] = Field(
+        "quad_x",
+        description="Multirotor frame geometry",
+    )
+    mass_kg: float = Field(1.5, gt=0, description="All-up weight (kg)")
+    max_thrust_n: float = Field(30.0, gt=0, description="Max total thrust (N)")
+    arm_length_m: float = Field(0.25, gt=0, description="Motor arm length (m)")
+    prop_diameter_m: float = Field(0.254, gt=0, description="Propeller diameter (m)")
+
+
+class FlightEnvelopeConfig(BaseModel):
+    """Flight envelope constraints for safe drone operation."""
+
+    max_speed_mps: float = Field(5.0, gt=0, description="Max horizontal speed (m/s)")
+    max_vertical_speed_mps: float = Field(2.0, gt=0, description="Max vertical speed (m/s)")
+    max_altitude_m: float = Field(120.0, gt=0, description="Max AGL altitude (m)")
+    min_altitude_m: float = Field(1.0, gt=0, description="Min safe altitude (m)")
+    max_tilt_deg: float = Field(35.0, gt=0, le=90, description="Max tilt angle (deg)")
+    max_yaw_rate_rads: float = Field(3.14, gt=0, description="Max yaw rate (rad/s)")
+
+
+class GeofenceConfig(BaseModel):
+    """Geofence boundary configuration for drone operations."""
+
+    enabled: bool = Field(True, description="Enable geofence enforcement")
+    radius_m: float = Field(100.0, gt=0, description="Geofence radius (m)")
+    center_lat: float = Field(0.0, description="Geofence center latitude (deg)")
+    center_lon: float = Field(0.0, description="Geofence center longitude (deg)")
+    max_altitude_m: float = Field(120.0, gt=0, description="Geofence altitude ceiling (m)")
 
 
 class ExperienceConfig(BaseModel):
@@ -521,10 +581,32 @@ class Settings(BaseSettings):
     ppo: PPOConfig = Field(default_factory=PPOConfig)
     three_laws: ThreeLawsConfig = Field(default_factory=ThreeLawsConfig)
 
+    # Drone-specific (all optional with defaults for backwards compatibility)
+    drone: DroneConfig | None = Field(
+        None,
+        description="Drone airframe config (None=not a drone platform)",
+    )
+    flight_controller: FlightControllerConfig | None = Field(
+        None,
+        description="Flight controller config (None=not a drone platform)",
+    )
+    flight_envelope: FlightEnvelopeConfig | None = Field(
+        None,
+        description="Flight envelope constraints (None=use defaults for drone)",
+    )
+    geofence: GeofenceConfig | None = Field(
+        None,
+        description="Geofence boundary config (None=no geofence)",
+    )
+
     @model_validator(mode="after")  # type: ignore[untyped-decorator]
     def hardware_requires_pins(self) -> Self:
         """Validate that real hardware mode has required sensor configs."""
-        if not self.mock_hardware and self.ultrasonic is None:
-            msg = "ultrasonic config required when mock_hardware=false"
+        if (
+            not self.mock_hardware
+            and self.platform == PlatformType.MOUSE_DROID
+            and self.ultrasonic is None
+        ):
+            msg = "ultrasonic config required when mock_hardware=false and platform=mouse_droid"
             raise ValueError(msg)
         return self

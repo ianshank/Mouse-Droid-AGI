@@ -69,17 +69,20 @@ class MCTSPlanner:
     # ------------------------------------------------------------------
 
     def _generate_candidate_actions(self, device: torch.device) -> Tensor:
-        """Uniformly sample candidate actions in [-1, 1].
+        """Generate diverse candidate actions in [-1, 1] via stratified shuffle.
+
+        Each action dimension is independently permuted so that candidates
+        cover the full action hypercube rather than lying on the diagonal.
 
         Returns:
             Tensor of shape ``(n_action_candidates, action_dim)``.
         """
         n = self._cfg.n_action_candidates
         action_dim = self._action_dim
-        raw = torch.linspace(-1.0, 1.0, n, device=device)
-        # Expand to full action space: repeat across action dims.
-        actions = raw.unsqueeze(-1).expand(n, action_dim)
-        return actions
+        base = torch.linspace(-1.0, 1.0, n, device=device)
+        # Independent permutation per dimension for diverse coverage.
+        cols = [base[torch.randperm(n, device=device)] for _ in range(action_dim)]
+        return torch.stack(cols, dim=-1)
 
     def _ucb1(self, node: _Node, parent_visits: int) -> float:
         """Compute UCB1 score for child selection.

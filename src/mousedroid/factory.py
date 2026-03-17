@@ -9,7 +9,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from mousedroid.agents.base import AgentProtocol
+from mousedroid.comms.motor_protocol import MotorControlProtocol
 from mousedroid.comms.protocol import ESP32CommProtocol
+from mousedroid.config.schema import PlatformType
 from mousedroid.hardware.protocols import AudioProtocol, DistanceSensorProtocol, VisionProtocol
 from mousedroid.logging.setup import get_logger
 from mousedroid.safety.protocol import SafetyMonitorProtocol
@@ -18,6 +20,7 @@ from mousedroid.world_model.protocol import WorldModelProtocol
 if TYPE_CHECKING:
     from mousedroid.cognitive.bdi_model import NeuralBDI
     from mousedroid.cognitive.cognitive_core import CognitiveCore
+    from mousedroid.comms.flight_protocol import FlightControllerProtocol
     from mousedroid.config.schema import Settings, UltrasonicConfig
 
 _log = get_logger(__name__)
@@ -54,6 +57,67 @@ def build_esp32_driver(cfg: Settings) -> ESP32CommProtocol:
     from mousedroid.resilience.resilient_driver import ResilientESP32Driver
 
     return ResilientESP32Driver(inner, cfg.retry, cfg.circuit_breaker)
+
+
+def _build_flight_controller(cfg: Settings) -> FlightControllerProtocol:
+    """Build flight controller driver based on config.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Flight controller conforming to ``FlightControllerProtocol``.
+    """
+    from mousedroid.config.schema import FlightControllerConfig
+
+    fc_cfg = cfg.flight_controller or FlightControllerConfig()
+
+    if cfg.mock_hardware:
+        from mousedroid.comms.mock_flight_controller import MockFlightController
+
+        return MockFlightController(fc_cfg)
+
+    # Real hardware: currently only mock is implemented.
+    # MAVLink driver would go here:
+    # from mousedroid.comms.mavlink_driver import MAVLinkFlightController
+    # inner = MAVLinkFlightController(fc_cfg)
+    # Wrap with resilience:
+    # from mousedroid.resilience.resilient_flight_controller import ResilientFlightController
+    # return ResilientFlightController(inner, cfg.retry, cfg.circuit_breaker)
+
+    from mousedroid.comms.mock_flight_controller import MockFlightController
+
+    _log.warning(
+        "real_flight_controller_not_yet_implemented_using_mock",
+        protocol=fc_cfg.protocol,
+    )
+    return MockFlightController(fc_cfg)
+
+
+def build_motor_controller(cfg: Settings) -> MotorControlProtocol:
+    """Build platform-agnostic motor controller.
+
+    For ground platform: wraps ESP32 driver in ``GroundMotorAdapter``.
+    For drone platform: wraps flight controller in ``DroneMotorAdapter``.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Motor controller conforming to ``MotorControlProtocol``.
+    """
+    if cfg.platform == PlatformType.DRONE:
+        from mousedroid.comms.drone_adapter import DroneMotorAdapter
+
+        fc = _build_flight_controller(cfg)
+        _log.info("motor_controller_built", platform="drone")
+        return DroneMotorAdapter(fc)
+
+    from mousedroid.comms.ground_adapter import GroundMotorAdapter
+
+    esp32 = build_esp32_driver(cfg)
+    _log.info("motor_controller_built", platform="mouse_droid")
+    return GroundMotorAdapter(esp32)
 
 
 def build_camera(cfg: Settings) -> VisionProtocol:
@@ -170,6 +234,16 @@ def build_safety_monitor(cfg: Settings) -> SafetyMonitorProtocol:
     Returns:
         Safety monitor conforming to ``SafetyMonitorProtocol``.
     """
+    if cfg.platform == PlatformType.DRONE:
+        from mousedroid.safety.drone_monitor import DroneSafetyMonitor
+
+        _log.info("safety_monitor_built", platform="drone")
+        return DroneSafetyMonitor(
+            safety_cfg=cfg.safety,
+            envelope_cfg=cfg.flight_envelope,
+            geofence_cfg=cfg.geofence,
+        )
+
     from mousedroid.safety.monitor import MouseDroidSafetyMonitor
 
     return MouseDroidSafetyMonitor(cfg.safety)
@@ -296,18 +370,34 @@ def build_orchestrator(cfg: Settings) -> object:
     wm = build_world_model(cfg)
     agent = build_agent(cfg, wm)
     monitor = build_safety_monitor(cfg)
-    esp32 = build_esp32_driver(cfg)
+    motor = build_motor_controller(cfg)
     camera = build_camera(cfg)
     distance = build_distance_sensor(cfg)
     microphone = build_microphone(cfg)
 
-    sensor_manager = SensorManager(
-        vision=camera,
-        distance=distance,
-        esp32=esp32,
-        cfg=cfg,
-        microphone=microphone,
-    )
+    # Build platform-appropriate sensor manager.
+    if cfg.platform == PlatformType.DRONE:
+        from mousedroid.comms.drone_adapter import DroneMotorAdapter
+        from mousedroid.sensing.drone_manager import DroneSensorManager
+
+        # Extract the flight controller from the drone adapter.
+        fc = motor._fc if isinstance(motor, DroneMotorAdapter) else _build_flight_controller(cfg)
+        sensor_manager = DroneSensorManager(
+            vision=camera,
+            distance=distance,
+            motor_controller=motor,
+            flight_controller=fc,
+            cfg=cfg,
+            microphone=microphone,
+        )
+    else:
+        sensor_manager = SensorManager(
+            vision=camera,
+            distance=distance,
+            motor_controller=motor,
+            cfg=cfg,
+            microphone=microphone,
+        )
 
     cognitive_core: CognitiveCore | None = None
     if cfg.cognitive.enabled:
@@ -321,11 +411,17 @@ def build_orchestrator(cfg: Settings) -> object:
                 )
             else:
                 raise
+
+    _log.info(
+        "orchestrator_built",
+        platform=cfg.platform.value,
+        mock_hardware=cfg.mock_hardware,
+    )
     return MouseDroidOrchestrator(
         world_model=wm,
         agents=[agent],
         safety_monitor=monitor,
-        esp32=esp32,
+        motor_controller=motor,
         sensor_manager=sensor_manager,
         cognitive_core=cognitive_core,
         cfg=cfg,
