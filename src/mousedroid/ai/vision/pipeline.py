@@ -136,32 +136,44 @@ class VisionAIPipeline:
 
     async def _safe_detect(self, frame: NDArray[np.uint8]) -> list[Detection]:
         """Run detection with graceful error handling."""
+        detector = self._detector
+        if detector is None:
+            return []
         try:
-            return await self._detector.detect(frame)
+            return await detector.detect(frame)
         except Exception:
             _log.warning("vision_detection_failed", exc_info=True)
             return []
 
     async def _safe_embed(self, frame: NDArray[np.uint8]) -> NDArray[np.float32]:
         """Run embedding with graceful error handling."""
+        embedder = self._embedder
+        if embedder is None:
+            return np.zeros(0, dtype=np.float32)
         try:
-            return await self._embedder.embed(frame)
+            return await embedder.embed(frame)
         except Exception:
             _log.warning("vision_embedding_failed", exc_info=True)
-            return np.zeros(0, dtype=np.float32)
+            return np.zeros(embedder.embed_dim, dtype=np.float32)
 
     async def _safe_detect_faces(self, frame: NDArray[np.uint8]) -> list[FaceDetection]:
         """Run face detection with graceful error handling."""
+        face_detector = self._face_detector
+        if face_detector is None:
+            return []
         try:
-            return await self._face_detector.detect_faces(frame)
+            return await face_detector.detect_faces(frame)
         except Exception:
             _log.warning("vision_face_detection_failed", exc_info=True)
             return []
 
     async def _safe_recognize(self, frame: NDArray[np.uint8]) -> list[Gesture]:
         """Run gesture recognition with graceful error handling."""
+        gesture_recognizer = self._gesture_recognizer
+        if gesture_recognizer is None:
+            return []
         try:
-            return await self._gesture_recognizer.recognize(frame)
+            return await gesture_recognizer.recognize(frame)
         except Exception:
             _log.warning("vision_gesture_recognition_failed", exc_info=True)
             return []

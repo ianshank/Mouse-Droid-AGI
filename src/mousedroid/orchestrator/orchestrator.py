@@ -11,6 +11,7 @@ import time
 from typing import TYPE_CHECKING
 
 import numpy as np
+from numpy.typing import NDArray
 import torch
 
 from mousedroid.constants import (
@@ -192,9 +193,12 @@ class MouseDroidOrchestrator:
                     float(observation.motor_state[3]) if observation.motor_state.size > 3 else 12.6
                 )
                 belief_dim = int(self._cfg.model.belief_dim)
-                state_vec = self._h.numpy().flatten()
+                state_vec = np.asarray(self._h.numpy().flatten(), dtype=np.float32)
                 if state_vec.size < belief_dim:
-                    state_vec = np.pad(state_vec, (0, belief_dim - state_vec.size))
+                    state_vec = np.pad(state_vec, (0, belief_dim - state_vec.size)).astype(
+                        np.float32,
+                        copy=False,
+                    )
                 else:
                     state_vec = state_vec[:belief_dim]
                 obs_dict = {
@@ -278,30 +282,42 @@ class MouseDroidOrchestrator:
         Returns:
             Fused observation bundle.
         """
-        vision_features = np.zeros(self._cfg.camera.feature_dim, dtype=np.float32)
+        vision_features: NDArray[np.float32] = np.zeros(
+            self._cfg.camera.feature_dim,
+            dtype=np.float32,
+        )
         distance_m = self._distance_sensor.max_range_m
-        motor_state = np.zeros(DEFAULT_MOTOR_STATE_DIM, dtype=np.float32)
+        motor_state: NDArray[np.float32] = np.zeros(DEFAULT_MOTOR_STATE_DIM, dtype=np.float32)
         audio_chunk_size = (
             self._microphone.chunk_size * self._microphone.channels
             if self._microphone is not None
             else DEFAULT_AUDIO_CHUNK_SIZE
         )
-        audio_chunk = np.zeros(audio_chunk_size, dtype=np.float32)
-        valid_mask = np.zeros(N_SENSOR_MODALITIES, dtype=np.float32)
-        raw_frame = None
+        audio_chunk: NDArray[np.float32] = np.zeros(audio_chunk_size, dtype=np.float32)
+        valid_mask: NDArray[np.float32] = np.zeros(N_SENSOR_MODALITIES, dtype=np.float32)
+        raw_frame: NDArray[np.uint8] | None = None
 
-        try:
-            vision_features = await self._camera.capture_features()
-            valid_mask[0] = 1.0
-        except Exception:
-            _log.warning("vision_capture_failed", exc_info=True)
+        needs_raw_frame = self._vision_ai is not None or self._depth_estimator is not None
 
-        # Capture raw frame for AI pipelines
-        if self._vision_ai is not None or self._depth_estimator is not None:
+        # Capture one shared frame when AI pipelines need raw image input.
+        if needs_raw_frame:
             try:
                 raw_frame = await self._camera.capture_frame()
+                vision_features = await self._camera.extract_features(raw_frame)
+                valid_mask[0] = 1.0
             except Exception:
                 _log.warning("frame_capture_for_ai_failed", exc_info=True)
+                try:
+                    vision_features = await self._camera.capture_features()
+                    valid_mask[0] = 1.0
+                except Exception:
+                    _log.warning("vision_capture_failed", exc_info=True)
+        else:
+            try:
+                vision_features = await self._camera.capture_features()
+                valid_mask[0] = 1.0
+            except Exception:
+                _log.warning("vision_capture_failed", exc_info=True)
 
         try:
             distance_m = await self._distance_sensor.read_distance_m()

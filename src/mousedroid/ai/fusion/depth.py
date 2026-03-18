@@ -26,6 +26,9 @@ try:
 except ImportError:  # pragma: no cover
     _torch = None
 
+_MIDAS_TRUSTED_REPO = "intel-isl/MiDaS"
+_MIDAS_TRUSTED_REVISION = "master"
+
 
 class MiDaSDepthEstimator:
     """MiDaS small monocular depth model.
@@ -64,21 +67,45 @@ class MiDaSDepthEstimator:
         else:
             self._device = "cpu"
 
+        if self._cfg.midas_hub_repo != _MIDAS_TRUSTED_REPO:
+            _log.warning(
+                "midas_hub_repo_override_ignored",
+                configured_repo=self._cfg.midas_hub_repo,
+                trusted_repo=_MIDAS_TRUSTED_REPO,
+            )
+
         model_type = self._cfg.depth_model  # "MiDaS_small"
-        self._model = _torch.hub.load(
-            self._cfg.midas_hub_repo,
-            model_type,
-            trust_repo=True,
-        )
+        try:
+            self._model = _torch.hub.load(
+                _MIDAS_TRUSTED_REPO,
+                model_type,
+                trust_repo=True,
+                revision=_MIDAS_TRUSTED_REVISION,
+            )
+        except TypeError:
+            # Backward compatibility with older torch.hub versions.
+            self._model = _torch.hub.load(
+                _MIDAS_TRUSTED_REPO,
+                model_type,
+                trust_repo=True,
+            )
         self._model.to(self._device)
         self._model.eval()
 
         # Load appropriate transform
-        midas_transforms = _torch.hub.load(
-            self._cfg.midas_hub_repo,
-            "transforms",
-            trust_repo=True,
-        )
+        try:
+            midas_transforms = _torch.hub.load(
+                _MIDAS_TRUSTED_REPO,
+                "transforms",
+                trust_repo=True,
+                revision=_MIDAS_TRUSTED_REVISION,
+            )
+        except TypeError:
+            midas_transforms = _torch.hub.load(
+                _MIDAS_TRUSTED_REPO,
+                "transforms",
+                trust_repo=True,
+            )
         if "small" in model_type.lower() or "256" in model_type.lower():
             self._transform = midas_transforms.small_transform
         else:

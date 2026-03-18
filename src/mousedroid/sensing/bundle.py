@@ -6,6 +6,7 @@ concrete dataclass that carries one timestep of fused sensor readings.
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -190,4 +191,9 @@ class MouseDroidObservationBundle:
         if self._audio_ai_result is None or self._audio_ai_result.transcription is None:
             return False
         text = self._audio_ai_result.transcription.text.lower()
-        return any(kw in text for kw in self._stop_keywords)
+        normalized = re.sub(r"[^a-z0-9\s]+", " ", text)
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        return any(
+            re.search(rf"\b{re.escape(keyword.lower())}\b", normalized) is not None
+            for keyword in self._stop_keywords
+        )

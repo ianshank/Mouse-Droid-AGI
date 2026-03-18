@@ -285,6 +285,14 @@ class TestBundleVoiceStop:
         )
         assert bundle.voice_stop_commanded is True
 
+    def test_substring_false_positive_avoided(self):
+        bundle = MouseDroidObservationBundle(
+            _audio_ai_result=_make_audio_result(
+                transcription=_make_transcription("that motor is unstoppable")
+            )
+        )
+        assert bundle.voice_stop_commanded is False
+
     def test_no_transcription_returns_false(self):
         bundle = MouseDroidObservationBundle(
             _audio_ai_result=_make_audio_result(transcription=None)

@@ -111,9 +111,15 @@ class AudioAIPipeline:
 
         # --- Wake word detection (always-on, lightweight) ---
         if self._wake_word is not None:
-            # Convert float32 [-1, 1] to int16 PCM for OpenWakeWord.
-            # OpenWakeWord expects raw int16 PCM samples (device-native format).
-            int16_chunk = (audio_chunk * 32767).astype(np.int16)
+            # OpenWakeWord expects mono int16 PCM at the configured model rate.
+            wake_audio = audio_chunk
+            if sample_rate != self._sample_rate:
+                wake_audio = _resample_mono_linear(
+                    audio_chunk,
+                    src_rate=sample_rate,
+                    dst_rate=self._sample_rate,
+                )
+            int16_chunk = (np.clip(wake_audio, -1.0, 1.0) * 32767.0).astype(np.int16)
             wake_detected = await self._wake_word.detect(int16_chunk)
 
         if wake_detected and not self._wake_detected:
@@ -154,3 +160,29 @@ class AudioAIPipeline:
             voice_command=voice_command,
             timestamp=now,
         )
+
+
+def _resample_mono_linear(
+    audio: NDArray[np.float32],
+    src_rate: int,
+    dst_rate: int,
+) -> NDArray[np.float32]:
+    """Resample mono audio with linear interpolation.
+
+    This avoids adding a heavy DSP dependency for simple rate conversion
+    in the always-on wake-word path.
+    """
+    if src_rate <= 0 or dst_rate <= 0 or audio.size == 0:
+        return audio
+    if src_rate == dst_rate:
+        return audio
+
+    in_len = audio.shape[0]
+    out_len = max(1, int(round(in_len * dst_rate / src_rate)))
+    if in_len == 1:
+        return np.full(out_len, float(audio[0]), dtype=np.float32)
+
+    src_x = np.arange(in_len, dtype=np.float32)
+    dst_x = np.linspace(0.0, float(in_len - 1), out_len, dtype=np.float32)
+    out = np.interp(dst_x, src_x, audio.astype(np.float32, copy=False))
+    return out.astype(np.float32, copy=False)

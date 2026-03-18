@@ -145,6 +145,10 @@ class JetsonCSICamera:
         """
         return await asyncio.to_thread(self._capture_frame)
 
+    async def extract_features(self, frame: NDArray[np.uint8]) -> NDArray[np.float32]:
+        """Extract feature vector from a previously captured frame."""
+        return self._extract_features(frame)
+
     def _capture_frame(self) -> NDArray[np.uint8]:  # pragma: no cover
         """Capture a single frame from the camera (blocking).
 

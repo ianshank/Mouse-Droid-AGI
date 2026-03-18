@@ -34,7 +34,7 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
       - MOUSEDROID_CONFIG=/etc/mousedroid/jetson_production.yaml
-      - MOUSEDROID_MOCK_HARDWARE=${MOUSEDROID_MOCK_HARDWARE:-true}
+      - MOUSEDROID_MOCK_HARDWARE=${MOUSEDROID_MOCK_HARDWARE:-false}
       - CUDA_HOME=/usr/local/cuda
       # LLM gateway — model path resolved via YAML config or env override
       - MOUSEDROID_LLM_GATEWAY__MODEL_PATH=${MOUSEDROID_LLM_MODEL_PATH:-}

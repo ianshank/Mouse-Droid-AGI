@@ -422,16 +422,12 @@ def build_audio_ai_pipeline(cfg: Settings) -> AudioAIPipeline | None:
 
         classifier = YAMNetClassifier(cfg.audio_ai)
 
-    sample_rate = cfg.audio_ai.asr_sample_rate_hz
-    if cfg.microphone is not None:
-        sample_rate = cfg.microphone.sample_rate
-
     return AudioAIPipeline(
         asr=asr,
         wake_word=wake_word,
         classifier=classifier,
         command_buffer_seconds=cfg.audio_ai.asr_accumulate_s,
-        sample_rate=sample_rate,
+        sample_rate=cfg.audio_ai.asr_sample_rate_hz,
     )
 
 

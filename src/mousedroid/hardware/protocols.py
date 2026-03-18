@@ -31,6 +31,17 @@ class VisionProtocol(Protocol):
         """
         ...
 
+    async def extract_features(self, frame: NDArray[np.uint8]) -> NDArray[np.float32]:
+        """Extract features from a previously captured frame.
+
+        Args:
+            frame: BGR image, shape ``(H, W, 3)``.
+
+        Returns:
+            Feature vector, shape ``(feature_dim,)``.
+        """
+        ...
+
     @property
     def feature_dim(self) -> int:
         """Output feature vector dimension."""
