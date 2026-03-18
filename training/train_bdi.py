@@ -15,15 +15,11 @@ from mousedroid.config.schema import BDITrainingConfig
 from mousedroid.utils.numpy_ops import relu as _relu
 from mousedroid.utils.numpy_ops import softmax as _softmax
 from training.collect_annotations import INTENTION_LABELS
+from training.training_utils import iter_batches, log_epoch_loss
 
 _log = structlog.get_logger(__name__)
 
-# Dimensions matching bdi_model.py / ModelConfig defaults
-_OBS_DIM = 256
-_BELIEF_DIM = 128
-_DESIRE_DIM = 64
 _INTENTION_CLASSES = len(INTENTION_LABELS)
-_AFFECT_DIM = 2
 
 
 def _cross_entropy(logits: np.ndarray, labels: np.ndarray) -> float:
@@ -41,6 +37,8 @@ def train_belief_encoder(
     batch_size: int = 32,
     intentions: np.ndarray | None = None,
     probe_weight: float = 0.1,
+    obs_dim: int = 256,
+    belief_dim: int = 128,
 ) -> dict[str, np.ndarray]:
     """Train BeliefEncoder as an autoencoder (256 → 128 → 256).
 
@@ -57,28 +55,26 @@ def train_belief_encoder(
     n = len(observations)
 
     # Encoder weights (256 → 128)
-    w1 = rng.standard_normal((_OBS_DIM, _BELIEF_DIM)).astype(np.float32) * 0.01
-    b1 = np.zeros(_BELIEF_DIM, dtype=np.float32)
+    w1 = rng.standard_normal((obs_dim, belief_dim)).astype(np.float32) * 0.01
+    b1 = np.zeros(belief_dim, dtype=np.float32)
     # Second encoder layer (128 → 128)
-    w2 = rng.standard_normal((_BELIEF_DIM, _BELIEF_DIM)).astype(np.float32) * 0.01
-    b2 = np.zeros(_BELIEF_DIM, dtype=np.float32)
+    w2 = rng.standard_normal((belief_dim, belief_dim)).astype(np.float32) * 0.01
+    b2 = np.zeros(belief_dim, dtype=np.float32)
     # Decoder weights (128 → 256)
-    w_dec = rng.standard_normal((_BELIEF_DIM, _OBS_DIM)).astype(np.float32) * 0.01
-    b_dec = np.zeros(_OBS_DIM, dtype=np.float32)
+    w_dec = rng.standard_normal((belief_dim, obs_dim)).astype(np.float32) * 0.01
+    b_dec = np.zeros(obs_dim, dtype=np.float32)
 
     # Optional classification probe (128 → n_classes)
     use_probe = intentions is not None and probe_weight > 0
     if use_probe:
-        w_probe = rng.standard_normal((_BELIEF_DIM, _INTENTION_CLASSES)).astype(np.float32) * 0.01
+        w_probe = rng.standard_normal((belief_dim, _INTENTION_CLASSES)).astype(np.float32) * 0.01
         b_probe = np.zeros(_INTENTION_CLASSES, dtype=np.float32)
 
     for epoch in range(1, epochs + 1):
-        perm = rng.permutation(n)
         total_loss = 0.0
         n_batches = 0
 
-        for start in range(0, n - batch_size + 1, batch_size):
-            idx = perm[start : start + batch_size]
+        for idx in iter_batches(n, batch_size, rng):
             x = observations[idx]
 
             # Forward — autoencoder path
@@ -135,8 +131,7 @@ def train_belief_encoder(
                 b_probe -= lr * d_b_probe
             n_batches += 1
 
-        if epoch % 20 == 0:
-            _log.info("belief_epoch", epoch=epoch, loss=round(total_loss / max(n_batches, 1), 6))
+        log_epoch_loss(_log, "belief_epoch", epoch, total_loss, n_batches)
 
     return {"w1": w1, "b1": b1, "w2": w2, "b2": b2}
 
@@ -147,6 +142,8 @@ def train_desire_encoder(
     lr: float = 3e-4,
     epochs: int = 100,
     batch_size: int = 32,
+    belief_dim: int = 128,
+    desire_dim: int = 64,
 ) -> dict[str, np.ndarray]:
     """Train DesireEncoder to map belief → desire (reward-relevant features).
 
@@ -161,19 +158,17 @@ def train_desire_encoder(
     beliefs = _relu(h1 @ belief_weights["w2"] + belief_weights["b2"])
 
     # Desire encoder weights (128 → 64)
-    w1 = rng.standard_normal((_BELIEF_DIM, _DESIRE_DIM)).astype(np.float32) * 0.01
-    b1 = np.zeros(_DESIRE_DIM, dtype=np.float32)
+    w1 = rng.standard_normal((belief_dim, desire_dim)).astype(np.float32) * 0.01
+    b1 = np.zeros(desire_dim, dtype=np.float32)
     # Decoder for training (64 → 128)
-    w_dec = rng.standard_normal((_DESIRE_DIM, _BELIEF_DIM)).astype(np.float32) * 0.01
-    b_dec = np.zeros(_BELIEF_DIM, dtype=np.float32)
+    w_dec = rng.standard_normal((desire_dim, belief_dim)).astype(np.float32) * 0.01
+    b_dec = np.zeros(belief_dim, dtype=np.float32)
 
     for epoch in range(1, epochs + 1):
-        perm = rng.permutation(n)
         total_loss = 0.0
         n_batches = 0
 
-        for start in range(0, n - batch_size + 1, batch_size):
-            idx = perm[start : start + batch_size]
+        for idx in iter_batches(n, batch_size, rng):
             x = beliefs[idx]
 
             # Forward
@@ -198,8 +193,7 @@ def train_desire_encoder(
             b_dec -= lr * d_b_dec
             n_batches += 1
 
-        if epoch % 20 == 0:
-            _log.info("desire_epoch", epoch=epoch, loss=round(total_loss / max(n_batches, 1), 6))
+        log_epoch_loss(_log, "desire_epoch", epoch, total_loss, n_batches)
 
     return {"w1": w1, "b1": b1}
 
@@ -212,6 +206,7 @@ def train_intention_predictor(
     lr: float = 3e-4,
     epochs: int = 100,
     batch_size: int = 32,
+    desire_dim: int = 64,
 ) -> dict[str, np.ndarray]:
     """Train IntentionPredictor with cross-entropy on labelled intentions.
 
@@ -227,16 +222,14 @@ def train_intention_predictor(
     desires = _relu(beliefs @ desire_weights["w1"] + desire_weights["b1"])
 
     # Intention weights (64 → 8)
-    w1 = rng.standard_normal((_DESIRE_DIM, _INTENTION_CLASSES)).astype(np.float32) * 0.01
+    w1 = rng.standard_normal((desire_dim, _INTENTION_CLASSES)).astype(np.float32) * 0.01
     b1 = np.zeros(_INTENTION_CLASSES, dtype=np.float32)
 
     for epoch in range(1, epochs + 1):
-        perm = rng.permutation(n)
         total_loss = 0.0
         n_batches = 0
 
-        for start in range(0, n - batch_size + 1, batch_size):
-            idx = perm[start : start + batch_size]
+        for idx in iter_batches(n, batch_size, rng):  # type: ignore[assignment]
             x = desires[idx]
             y = intentions[idx]
 
@@ -258,8 +251,7 @@ def train_intention_predictor(
             b1 -= lr * d_b1
             n_batches += 1
 
-        if epoch % 20 == 0:
-            _log.info("intention_epoch", epoch=epoch, loss=round(total_loss / max(n_batches, 1), 6))
+        log_epoch_loss(_log, "intention_epoch", epoch, total_loss, n_batches)
 
     return {"w1": w1, "b1": b1}
 
@@ -272,6 +264,8 @@ def train_affect_estimator(
     lr: float = 3e-4,
     epochs: int = 100,
     batch_size: int = 32,
+    desire_dim: int = 64,
+    affect_dim: int = 2,
 ) -> dict[str, np.ndarray]:
     """Train AffectEstimator on synthetic valence/arousal targets.
 
@@ -298,23 +292,26 @@ def train_affect_estimator(
     entropy = -np.sum(intention_probs * np.log(intention_probs + 1e-8), axis=1)
     max_entropy = np.log(_INTENTION_CLASSES)
     arousal = 2.0 * (entropy / max_entropy) - 1.0
-    targets = np.stack([valence, arousal], axis=1).astype(np.float32)
+    base = np.stack([valence, arousal], axis=1).astype(np.float32)
+    if affect_dim > 2:
+        padding = np.zeros((len(observations), affect_dim - 2), dtype=np.float32)
+        targets = np.concatenate([base, padding], axis=1)
+    else:
+        targets = base[:, :affect_dim]
 
     # Combined input: desire (64) + intentions (8) = 72
     inputs = np.concatenate([desires, intention_probs], axis=1)
-    input_dim = _DESIRE_DIM + _INTENTION_CLASSES
+    input_dim = desire_dim + _INTENTION_CLASSES
 
     # Affect weights (72 → 2)
-    w1 = rng.standard_normal((input_dim, _AFFECT_DIM)).astype(np.float32) * 0.01
-    b1 = np.zeros(_AFFECT_DIM, dtype=np.float32)
+    w1 = rng.standard_normal((input_dim, affect_dim)).astype(np.float32) * 0.01
+    b1 = np.zeros(affect_dim, dtype=np.float32)
 
     for epoch in range(1, epochs + 1):
-        perm = rng.permutation(n)
         total_loss = 0.0
         n_batches = 0
 
-        for start in range(0, n - batch_size + 1, batch_size):
-            idx = perm[start : start + batch_size]
+        for idx in iter_batches(n, batch_size, rng):
             x = inputs[idx]
             y = targets[idx]
 
@@ -335,8 +332,7 @@ def train_affect_estimator(
             b1 -= lr * d_b1
             n_batches += 1
 
-        if epoch % 20 == 0:
-            _log.info("affect_epoch", epoch=epoch, loss=round(total_loss / max(n_batches, 1), 6))
+        log_epoch_loss(_log, "affect_epoch", epoch, total_loss, n_batches)
 
     return {"w1": w1, "b1": b1}
 
@@ -397,12 +393,16 @@ def train_bdi(
     # Stage 1: BeliefEncoder (with classification probe for discriminative features)
     belief_weights = train_belief_encoder(
         observations, _lr, _epochs, _batch_size, intentions=intentions,
+        obs_dim=cfg.obs_dim, belief_dim=cfg.belief_dim,
     )
     np.savez(output_dir / "belief.npz", **belief_weights)  # type: ignore[arg-type]
     _log.info("belief_encoder_saved")
 
     # Stage 2: DesireEncoder
-    desire_weights = train_desire_encoder(observations, belief_weights, _lr, _epochs, _batch_size)
+    desire_weights = train_desire_encoder(
+        observations, belief_weights, _lr, _epochs, _batch_size,
+        belief_dim=cfg.belief_dim, desire_dim=cfg.desire_dim,
+    )
     np.savez(output_dir / "desire.npz", **desire_weights)  # type: ignore[arg-type]
     _log.info("desire_encoder_saved")
 
@@ -415,6 +415,7 @@ def train_bdi(
         _lr,
         _epochs,
         _batch_size,
+        desire_dim=cfg.desire_dim,
     )
     np.savez(output_dir / "intention.npz", **intention_weights)  # type: ignore[arg-type]
     _log.info("intention_predictor_saved")
@@ -428,6 +429,8 @@ def train_bdi(
         _lr,
         _epochs,
         _batch_size,
+        desire_dim=cfg.desire_dim,
+        affect_dim=cfg.affect_dim,
     )
     np.savez(output_dir / "affect.npz", **affect_weights)  # type: ignore[arg-type]
     _log.info("affect_estimator_saved")

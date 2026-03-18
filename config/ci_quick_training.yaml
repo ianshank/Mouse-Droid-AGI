@@ -13,6 +13,10 @@ bdi_training:
   epochs: 2
   batch_size: 2
   learning_rate: 0.001
+  obs_dim: 256
+  belief_dim: 128
+  desire_dim: 64
+  affect_dim: 2
   accuracy_threshold: 0.60
   balance_classes: false
   normalise_observations: false
@@ -22,3 +26,5 @@ mcts:
   simulation_budget_ms: 5.0
   early_exit_value_threshold: 0.1
   action_sampling: "uniform"
+  ucb_candidates: [0.5, 1.0, 1.41]
+  warmstart_n_episodes: 5

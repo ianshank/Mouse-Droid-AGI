@@ -110,3 +110,57 @@ class TestLabelIntentionPaths:
             human_dist_m=0.2,
         )
         assert result == 8  # protect_human, not charge
+
+
+# ---------------------------------------------------------------------------
+# label_intention — configurable threshold params (Phase 3 refactor)
+# ---------------------------------------------------------------------------
+
+
+class TestLabelIntentionConfigThresholds:
+    def test_custom_human_safety_radius(self) -> None:
+        """A larger safety radius means human at 0.8m still triggers protect_human."""
+        action = np.array([0.3, 0.0, 0.0], dtype=np.float32)
+        obs = _obs()
+        result = label_intention(
+            action, obs,
+            human_detected=True, human_dist_m=0.8,
+            human_safety_radius_m=1.0,
+        )
+        assert result == 8  # protect_human
+
+    def test_custom_human_safety_radius_miss(self) -> None:
+        """A smaller safety radius means human at 0.8m does NOT trigger protect_human."""
+        action = np.array([0.3, 0.0, 0.0], dtype=np.float32)
+        obs = _obs()
+        result = label_intention(
+            action, obs,
+            human_detected=True, human_dist_m=0.8,
+            human_safety_radius_m=0.5,
+        )
+        assert result != 8  # not protect_human
+
+    def test_custom_battery_warn_v_lower(self) -> None:
+        """With a lower battery threshold, 9.5V triggers charge only if < new threshold."""
+        action = np.array([0.1, 0.0, 0.0], dtype=np.float32)
+        obs = _obs(battery_v=9.5)
+        # Default threshold is 10.8 → 9.5V triggers charge
+        result_default = label_intention(action, obs, battery_warn_v=10.8)
+        assert result_default == 6  # charge
+        # With threshold = 9.0 → 9.5V does NOT trigger charge
+        result_low = label_intention(action, obs, battery_warn_v=9.0)
+        assert result_low != 6
+
+    def test_custom_obstacle_clearance_m(self) -> None:
+        """With a larger clearance, an obstacle at 0.4m triggers avoid_obstacle."""
+        action = np.array([0.3, 0.0, 0.0], dtype=np.float32)
+        obs = _obs(distance_m=0.4)
+        result = label_intention(action, obs, obstacle_clearance_m=0.5)
+        assert result == 2  # avoid_obstacle
+
+    def test_custom_obstacle_clearance_m_miss(self) -> None:
+        """With a smaller clearance, same 0.4m obstacle does NOT avoid."""
+        action = np.array([0.3, 0.0, 0.0], dtype=np.float32)
+        obs = _obs(distance_m=0.4)
+        result = label_intention(action, obs, obstacle_clearance_m=0.2)
+        assert result != 2

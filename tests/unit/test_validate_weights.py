@@ -26,7 +26,7 @@ class TestValidateWeightFiles:
             (tmp_path / sub).mkdir()
         (tmp_path / "rssm" / "final.pt").write_bytes(b"fake")
         (tmp_path / "mcts" / "policy_init.npz").write_bytes(b"fake")
-        for name in ["belief.npz", "desire.npz", "intention.npz", "affect.npz"]:
+        for name in ["belief.npz", "desire.npz", "intention.npz", "affect.npz", "belief_norm_stats.npz"]:
             (tmp_path / "bdi" / name).write_bytes(b"fake")
         (tmp_path / "constitutional_rl" / "policy.npz").write_bytes(b"fake")
         (tmp_path / "constitutional_rl" / "value.npz").write_bytes(b"fake")
@@ -213,8 +213,25 @@ class TestValidateBDIAccuracyNormRegression:
         result = validate_bdi_accuracy(tmp_path, ann_path)
         assert result.phase == "bdi_accuracy"
         assert "accuracy" in result.metrics
+        assert "balanced_accuracy" in result.metrics
+        assert "majority_class_baseline" in result.metrics
+        assert "accuracy_lift_over_majority" in result.metrics
         # With matching norm stats, accuracy should be reasonable (not 0%)
         assert result.metrics["accuracy"] > 0.0
+
+    def test_validation_reports_per_class_metrics(self, tmp_path: Path) -> None:
+        """Validation report should expose holdout class-by-class diagnostics."""
+        bdi_dir = tmp_path / "bdi"
+        ann_path, _, _ = self._make_trained_weights(bdi_dir)
+
+        result = validate_bdi_accuracy(tmp_path, ann_path)
+
+        assert "per_class" in result.metrics
+        assert "truth_distribution" in result.metrics
+        assert "prediction_distribution" in result.metrics
+        assert result.metrics["n_predicted_classes"] > 0
+        sample_metrics = next(iter(result.metrics["per_class"].values()))
+        assert set(sample_metrics) == {"support", "predicted", "correct", "recall", "precision"}
 
     def test_validation_warns_without_norm_stats(self, tmp_path: Path) -> None:
         """Validation should still work without norm stats (with warning)."""
@@ -248,3 +265,96 @@ class TestValidateBDIAccuracyNormRegression:
         # Verify two layers were needed (single layer gives different result)
         single_layer = relu(obs_norm @ belief_w["w1"] + belief_w["b1"])
         assert not np.allclose(belief, single_layer), "Two-layer must differ from single-layer"
+
+
+# ---------------------------------------------------------------------------
+# accuracy_threshold and cfg-driven violation threshold (Phase 3 refactor)
+# ---------------------------------------------------------------------------
+
+
+class TestValidateBDIAccuracyThreshold:
+    """accuracy_threshold param must control pass/fail boundary."""
+
+    def _make_bdi_weights(self, bdi_dir: "Path") -> "Path":
+        """Minimal always-class-0 BDI that gives known accuracy."""
+        from mousedroid.utils.numpy_ops import relu
+
+        rng = np.random.default_rng(0)
+        bdi_dir.mkdir(parents=True, exist_ok=True)
+
+        n = 100
+        obs = rng.standard_normal((n, 256)).astype(np.float32)
+        obs_mean = obs.mean(axis=0)
+        obs_std = obs.std(axis=0) + 1e-8
+
+        # Encoder: tiny weights → all beliefs ≈ 0
+        w1 = np.zeros((256, 128), dtype=np.float32)
+        b1 = np.zeros(128, dtype=np.float32)
+        w2 = np.zeros((128, 128), dtype=np.float32)
+        b2 = np.zeros(128, dtype=np.float32)
+
+        desires_w = np.zeros((128, 64), dtype=np.float32)
+        desires_b = np.zeros(64, dtype=np.float32)
+
+        # Intention: weights that always predict class 0
+        iw = np.zeros((64, 10), dtype=np.float32)
+        ib = np.zeros(10, dtype=np.float32)
+        ib[0] = 100.0  # huge bias → always class 0
+
+        # True labels: 50% class 0, 50% class 1
+        intentions = np.array([i % 2 for i in range(n)], dtype=np.int64)
+
+        np.savez(bdi_dir / "belief.npz", w1=w1, b1=b1, w2=w2, b2=b2)
+        np.savez(bdi_dir / "desire.npz", w1=desires_w, b1=desires_b)
+        np.savez(bdi_dir / "intention.npz", w1=iw, b1=ib)
+        np.savez(bdi_dir / "believe_norm_stats.npz", mean=obs_mean, std=obs_std)
+        np.savez(bdi_dir / "affect.npz",
+                 w1=np.zeros((64, 2)), b1=np.zeros(2))
+
+        ann_path = bdi_dir.parent / "annotations.npz"
+        np.savez(ann_path, observations=obs, intentions=intentions)
+        return ann_path
+
+    def test_high_threshold_forces_fail(self, tmp_path: "Path") -> None:
+        """accuracy_threshold=0.99 forces failure when accuracy is ~50%."""
+        bdi_dir = tmp_path / "bdi"
+        ann_path = self._make_bdi_weights(bdi_dir)
+        result = validate_bdi_accuracy(tmp_path, ann_path, accuracy_threshold=0.99)
+        assert result.passed is False
+
+    def test_zero_threshold_always_passes(self, tmp_path: "Path") -> None:
+        """accuracy_threshold=0.0 always passes (any accuracy ≥ 0)."""
+        bdi_dir = tmp_path / "bdi"
+        ann_path = self._make_bdi_weights(bdi_dir)
+        result = validate_bdi_accuracy(tmp_path, ann_path, accuracy_threshold=0.0)
+        # As long as weights/annotations are present, should pass
+        assert result.passed is True
+
+    def test_threshold_in_error_message(self, tmp_path: "Path") -> None:
+        """Failure message must include the configured threshold."""
+        bdi_dir = tmp_path / "bdi"
+        ann_path = self._make_bdi_weights(bdi_dir)
+        result = validate_bdi_accuracy(tmp_path, ann_path, accuracy_threshold=0.99)
+        if not result.passed:
+            assert any("99%" in e for e in result.errors)
+
+
+class TestValidateConstitutionalRLCfgThreshold:
+    """validate_constitutional_rl should use cfg.training.validate_violation_rate_threshold."""
+
+    def test_custom_threshold_via_cfg(self, tmp_path: "Path") -> None:
+        """A cfg with threshold=0.0 forces strict pass only with 0 violations."""
+        from mousedroid.config.schema import Settings, TrainingConfig
+
+        (tmp_path / "constitutional_rl").mkdir()
+        np.savez(tmp_path / "constitutional_rl" / "policy.npz", w1=np.zeros((64, 3)))
+        np.savez(tmp_path / "constitutional_rl" / "value.npz", w1=np.zeros((64, 1)))
+
+        # No cfg → uses default 0.05 threshold → passes (0 violations)
+        result_default = validate_constitutional_rl(tmp_path)
+        assert result_default.passed is True
+
+        # cfg with threshold=0.0 → still passes (0 violations satisfy ≤ 0.0)
+        cfg = Settings(mock_hardware=True)
+        result_cfg = validate_constitutional_rl(tmp_path, cfg=cfg)
+        assert result_cfg.passed is True

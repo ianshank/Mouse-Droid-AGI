@@ -2,7 +2,7 @@
 
 **A Star Wars MSE-6 "Mouse Droid" autonomous navigation system powered by an Agentic World Model on NVIDIA Jetson Orin Nano.**
 
-[![Tests](https://img.shields.io/badge/tests-959%20passing-brightgreen)](tests/)
+[![Tests](https://img.shields.io/badge/tests-1077%20passing-brightgreen)](tests/)
 [![Coverage](https://img.shields.io/badge/coverage-97%25-brightgreen)](pyproject.toml)
 [![Ruff](https://img.shields.io/badge/lint-ruff%20clean-brightgreen)](pyproject.toml)
 [![Mypy](https://img.shields.io/badge/mypy-0%20errors-brightgreen)](pyproject.toml)
@@ -43,6 +43,7 @@ graph TD
         subgraph Docker["Docker: mousedroid:jetson\nL4T PyTorch r36.4.0 â€” CUDA 12.6"]
             Orchestrator["Orchestrator\n30 Hz sense-plan-act"]
             CoreAI["Core AI Pipeline\nRSSM + MCTS + Navigation Agent\nBDI Cognitive Core\nMemory Systems\nSafety Monitor"]
+            AIPipelines["AI Perception Pipelines\nVisionAI: YOLOv8n + CLIP + MediaPipe\nAudioAI: Whisper + OpenWakeWord + YAMNet\nSensorFusion: MiDaS + Kalman"]
             SensorMgr["Sensor Manager\nJetson CSI - HC-SR04 - ESP32 encoders"]
             ExperienceDB[("Experience Logger\nLMDB")]
         end
@@ -54,6 +55,7 @@ graph TD
 
     Human -- "NL mission" --> Orchestrator
     Orchestrator --> CoreAI
+    CoreAI --> AIPipelines
     CoreAI --> SensorMgr
     CoreAI --> ExperienceDB
     Orchestrator -- "UART / HTTP" --> ESP32
@@ -79,6 +81,9 @@ See [docs/architecture.md](docs/architecture.md) for full C4 diagrams (Context â
 ```bash
 # Base install
 pip install -e .
+
+# With AI perception pipelines (YOLOv8, Whisper, MediaPipe, MiDaS)
+pip install -e ".[ai]"
 
 # With hardware drivers (Jetson only)
 pip install -e ".[hardware]"
@@ -113,6 +118,9 @@ docker exec -it mousedroid bash
 
 # Or use the deploy script
 sudo bash scripts/docker_deploy.sh
+
+# Post-deploy validation
+sudo bash scripts/jetson_smoke_test_deploy.sh
 ```
 
 ### NVMe SSD Setup (Recommended)
@@ -142,6 +150,8 @@ sudo systemctl start docker
 ```
 
 > See [ADR-l4t-container](docs/architecture/ADR-l4t-container.md) for architecture details.
+
+After each Jetson Docker deploy, run `scripts/jetson_smoke_test_deploy.sh` to verify the container, CUDA visibility, weights, LLM, ultrasonic probe, microphone probe, and recent log health in one pass. Disable a probe only when that device is intentionally disconnected.
 
 ### Run in Mock Mode (no hardware required)
 

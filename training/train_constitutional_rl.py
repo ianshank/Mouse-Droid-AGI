@@ -22,6 +22,7 @@ from mousedroid.config.schema import Settings
 from mousedroid.reward.model import MultiObjectiveRewardModel
 from mousedroid.safety.three_laws import RoboticsLawChecker
 from mousedroid.world_model.rssm import RSSM
+from training.gpu_utils import resolve_device
 
 _log = structlog.get_logger(__name__)
 
@@ -158,7 +159,7 @@ def train_constitutional_rl(
     Returns:
         Tuple of ``(output_dir, validation_results)``.
     """
-    device = torch.device("cpu")
+    device = resolve_device(cfg)
     output_dir = output_dir or Path(cfg.training.weights_dir) / "constitutional_rl"
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -218,7 +219,12 @@ def train_constitutional_rl(
             log_probs.append(log_prob)
 
             # Constitutional check
-            context = {"battery_v": 12.0, "obstacle_dist_m": 2.0, "mcts_sims": 50}
+            ann_cfg = cfg.training.annotation
+            context = {
+                "battery_v": ann_cfg.nominal_battery_v,
+                "obstacle_dist_m": ann_cfg.nominal_obstacle_dist_m,
+                "mcts_sims": cfg.mcts.n_simulations_base,
+            }
             safe_action, violations = checker.check(action_np, context)
 
             actions_taken.append(safe_action)
@@ -288,7 +294,12 @@ def train_constitutional_rl(
             state_np = z.detach().cpu().numpy().flatten()
             action_np = policy.forward(state_np)
 
-            context = {"battery_v": 12.0, "obstacle_dist_m": 2.0, "mcts_sims": 50}
+            ann_cfg = cfg.training.annotation
+            context = {
+                "battery_v": ann_cfg.nominal_battery_v,
+                "obstacle_dist_m": ann_cfg.nominal_obstacle_dist_m,
+                "mcts_sims": cfg.mcts.n_simulations_base,
+            }
             safe_action, violations = checker.check(action_np, context)
             total_violations += len(violations)
             total_law1_violations += sum(1 for v in violations if v.startswith("[Law 1]"))

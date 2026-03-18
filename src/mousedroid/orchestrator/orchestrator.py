@@ -23,6 +23,10 @@ from mousedroid.sensing.bundle import MouseDroidObservationBundle
 
 if TYPE_CHECKING:
     from mousedroid.agents.base import AgentProtocol
+    from mousedroid.ai.audio.pipeline import AudioAIPipeline
+    from mousedroid.ai.fusion.depth import MiDaSDepthEstimator
+    from mousedroid.ai.fusion.sensor_fusion import KalmanDepthFusion
+    from mousedroid.ai.vision.pipeline import VisionAIPipeline
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.comms.protocol import ESP32CommProtocol
     from mousedroid.config.schema import Settings
@@ -52,6 +56,10 @@ class MouseDroidOrchestrator:
         cfg: Settings,
         cognitive_core: CognitiveCore | None = None,
         microphone: AudioProtocol | None = None,
+        vision_ai: VisionAIPipeline | None = None,
+        audio_ai: AudioAIPipeline | None = None,
+        depth_estimator: MiDaSDepthEstimator | None = None,
+        depth_fusion: KalmanDepthFusion | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -65,6 +73,10 @@ class MouseDroidOrchestrator:
             cfg: Root settings.
             cognitive_core: Optional CognitiveCore for BDI/metacognitive loop.
             microphone: Optional USB microphone driver.
+            vision_ai: Optional vision AI pipeline (YOLO/CLIP/face/gesture).
+            audio_ai: Optional audio AI pipeline (Whisper/wake word/YAMNet).
+            depth_estimator: Optional MiDaS depth estimator.
+            depth_fusion: Optional Kalman depth fusion.
         """
         self._world_model = world_model
         self._agents = agents
@@ -74,6 +86,10 @@ class MouseDroidOrchestrator:
         self._distance_sensor = distance_sensor
         self._cognitive_core = cognitive_core
         self._microphone = microphone
+        self._vision_ai = vision_ai
+        self._audio_ai = audio_ai
+        self._depth_estimator = depth_estimator
+        self._depth_fusion = depth_fusion
         self._cfg = cfg
         self._running = False
 
@@ -98,6 +114,25 @@ class MouseDroidOrchestrator:
                 await self._microphone.start()
             except Exception as exc:
                 _log.warning("microphone_start_failed", error=str(exc))
+        if self._vision_ai is not None:
+            try:
+                await self._vision_ai.start()
+            except Exception as exc:
+                _log.warning("vision_ai_start_failed", error=str(exc))
+                self._vision_ai = None
+        if self._audio_ai is not None:
+            try:
+                await self._audio_ai.start()
+            except Exception as exc:
+                _log.warning("audio_ai_start_failed", error=str(exc))
+                self._audio_ai = None
+        if self._depth_estimator is not None:
+            try:
+                await self._depth_estimator.start()
+            except Exception as exc:
+                _log.warning("depth_estimator_start_failed", error=str(exc))
+                self._depth_estimator = None
+                self._depth_fusion = None
         if self._cognitive_core is not None:
             await self._cognitive_core.start()
         self._running = True
@@ -109,6 +144,12 @@ class MouseDroidOrchestrator:
         self._running = False
         if self._cognitive_core is not None:
             await self._cognitive_core.stop()
+        if self._vision_ai is not None:
+            await self._vision_ai.stop()
+        if self._audio_ai is not None:
+            await self._audio_ai.stop()
+        if self._depth_estimator is not None:
+            await self._depth_estimator.stop()
         await self._esp32.emergency_stop()
         await self._camera.stop()
         if self._microphone is not None:
@@ -162,6 +203,18 @@ class MouseDroidOrchestrator:
                     "obstacle_dist_m": float(observation.distance_m),
                     "mcts_sims": int(self._cfg.mcts.n_simulations_base),
                     "loop_time_ms": loop_time_ms,
+                    # Three Laws — Law 1: human proximity
+                    "human_detected": observation.human_detected,
+                    "human_dist_m": observation.human_dist_m,
+                    # Three Laws — Law 2: gesture / voice stop commands
+                    "commanded_action": (
+                        np.zeros(int(self._cfg.model.action_dim), dtype=np.float32).tolist()
+                        if (
+                            observation.gesture_stop_commanded
+                            or observation.voice_stop_commanded
+                        )
+                        else None
+                    ),
                 }
                 # Cognitive core returns (safe_action, violations)
                 action_np, violations = self._cognitive_core.tick_fast(obs_dict)
@@ -235,12 +288,20 @@ class MouseDroidOrchestrator:
         )
         audio_chunk = np.zeros(audio_chunk_size, dtype=np.float32)
         valid_mask = np.zeros(N_SENSOR_MODALITIES, dtype=np.float32)
+        raw_frame = None
 
         try:
             vision_features = await self._camera.capture_features()
             valid_mask[0] = 1.0
         except Exception:
             _log.warning("vision_capture_failed", exc_info=True)
+
+        # Capture raw frame for AI pipelines
+        if self._vision_ai is not None or self._depth_estimator is not None:
+            try:
+                raw_frame = await self._camera.capture_frame()
+            except Exception:
+                _log.warning("frame_capture_for_ai_failed", exc_info=True)
 
         try:
             distance_m = await self._distance_sensor.read_distance_m()
@@ -266,6 +327,41 @@ class MouseDroidOrchestrator:
             except Exception:
                 _log.warning("audio_capture_failed", exc_info=True)
 
+        # --- AI Pipeline Processing ---
+        vision_ai_result = None
+        audio_ai_result = None
+        fused_depth_result = None
+
+        if self._vision_ai is not None and raw_frame is not None:
+            try:
+                vision_ai_result = await self._vision_ai.process(raw_frame)
+            except Exception:
+                _log.warning("vision_ai_failed", exc_info=True)
+
+        if self._audio_ai is not None and valid_mask[3] > 0:
+            try:
+                sample_rate = (
+                    self._microphone.sample_rate
+                    if self._microphone is not None
+                    else self._cfg.audio_ai.asr_sample_rate_hz
+                )
+                audio_ai_result = await self._audio_ai.process(audio_chunk, sample_rate)
+            except Exception:
+                _log.warning("audio_ai_failed", exc_info=True)
+
+        if (
+            self._depth_estimator is not None
+            and self._depth_fusion is not None
+            and raw_frame is not None
+        ):
+            try:
+                depth_map = await self._depth_estimator.estimate(raw_frame)
+                fused_depth_result = self._depth_fusion.fuse(
+                    depth_map, distance_m, time.time(),
+                )
+            except Exception:
+                _log.warning("depth_fusion_failed", exc_info=True)
+
         return MouseDroidObservationBundle(
             _timestamp=time.monotonic(),
             _vision_features=vision_features,
@@ -273,6 +369,12 @@ class MouseDroidOrchestrator:
             _motor_state=motor_state,
             _audio_chunk=audio_chunk,
             _valid_mask=valid_mask,
+            _vision_ai_result=vision_ai_result,
+            _audio_ai_result=audio_ai_result,
+            _fused_depth=fused_depth_result,
+            _person_class_names=frozenset(self._cfg.vision_ai.person_class_names),
+            _stop_keywords=frozenset(self._cfg.audio_ai.stop_keywords),
+            _law2_gesture_labels=frozenset(self._cfg.vision_ai.law2_gesture_labels),
         )
 
     async def run(self) -> None:

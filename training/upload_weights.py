@@ -17,6 +17,9 @@ import structlog
 
 _log = structlog.get_logger(__name__)
 
+HF_DEFAULT_REPO_ID: str = "ianshank/mousedroid-weights"
+"""Single source of truth for the HuggingFace repository ID."""
+
 _HF_AVAILABLE = False
 try:
     from huggingface_hub import HfApi
@@ -29,7 +32,7 @@ except ImportError:
 def upload_weights(
     weights_dir: str | Path,
     *,
-    repo_id: str = "ianshank/mousedroid-weights",
+    repo_id: str = HF_DEFAULT_REPO_ID,
     commit_message: str = "Update trained weights",
     extensions: set[str] | None = None,
 ) -> bool:
@@ -171,7 +174,7 @@ def main(argv: list[str] | None = None) -> int:
         "--repo",
         dest="repo_id",
         type=str,
-        default="ianshank/mousedroid-weights",
+        default=HF_DEFAULT_REPO_ID,
         help="HuggingFace Hub repository ID.",
     )
     parser.add_argument(

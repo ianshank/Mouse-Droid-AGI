@@ -1,19 +1,25 @@
 # ADR-007: MCTS Latency Optimisation & BDI Accuracy Remediation
 
-**Status:** Proposed  
+**Status:** Accepted  
 **Date:** 2026-03-14  
 **Deciders:** Engineering, SQE  
 **PRDs:** [prd-mcts-latency.md](prd-mcts-latency.md), [prd-bdi-accuracy.md](prd-bdi-accuracy.md)
+
+> **Implementation status:** Implemented on the post-refactor retrain branch and validated on 2026-03-15/16.
 
 ---
 
 ## Context
 
-Training validation (2026-03-14) revealed:
+Training validation (2026-03-14) initially revealed:
 1. MCTS p50 latency = **219 ms** (target ≤ 50 ms for 10 Hz planning)
 2. BDI intention accuracy = **55%** (threshold: 60%)
 
 Both issues stem from under-parameterised configs and a deterministic-but-shallow action sampling strategy. No architectural rewrites are required — targeted config additions and algorithm improvements suffice.
+
+The accepted remediation has since been implemented. The current validated retrain state is:
+1. MCTS p50 latency = **16 ms** with `best_ucb_c=1.41`
+2. BDI holdout accuracy = **75.87%** with normalization + validation-path fixes in place
 
 ---
 
@@ -151,10 +157,10 @@ Both use environment variables (no hardcoded values). Thresholds flow through `M
 
 ---
 
-## Requires Human Sign-Off
+## Residual Human Sign-Off
 
 > [!IMPORTANT]
 > **Tree warm-start (E1-S3)** changes the MCTS root state across planning timesteps. This must be tested on-hardware before enabling by default. Sign-off required from robotics lead before enabling `reuse_tree = true` in production config.
 
 > [!IMPORTANT]
-> **Intention class count** (currently 10): reducing to 5 may make the 60% threshold achievable faster but requires regenerating `bdi_annotations.npz`. Decision requires PM + ML sign-off.
+> **Intention class count** remains a product/ML decision rather than an immediate blocker. The current 8-class retrain already clears the default 60% threshold.

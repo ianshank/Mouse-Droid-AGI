@@ -28,6 +28,8 @@ mcts:
   gamma: 0.97
   n_action_candidates: 9
   ucb_c: 1.41
+  ucb_candidates: [0.5, 1.0, 1.41, 2.0, 3.0]
+  warmstart_n_episodes: 100
 
 surprise:
   ema_alpha: 0.1
@@ -76,6 +78,46 @@ camera:
   fps: 30
   feature_dim: 256
   use_onboard_inference: true
+
+# --- AI Vision Pipeline (disabled by default — enable on Jetson) ---
+# vision_ai:
+#   enabled: false
+#   detector_model: "yolov8n"
+#   detector_confidence: 0.5
+#   detector_max_hz: 15.0
+#   detector_imgsz: 640
+#   detector_half_precision: true
+#   person_class_names: ["person"]
+#   law2_gesture_labels: ["stop"]
+#   embedder_model: "ViT-B-32"
+#   embedder_pretrained: "openai"
+#   embedder_dim: 512
+#   embedder_max_hz: 10.0
+#   face_detection_enabled: true
+#   gesture_recognition_enabled: true
+#   gesture_min_detection_confidence: 0.5
+#   gesture_min_tracking_confidence: 0.5
+
+# --- AI Audio Pipeline (disabled by default — enable on Jetson) ---
+# audio_ai:
+#   enabled: false
+#   asr_model: "tiny.en"
+#   asr_compute_type: "int8"
+#   asr_sample_rate_hz: 16000
+#   asr_beam_size: 1
+#   wake_word: "hey computer"
+#   wake_word_model: "hey_jarvis"
+#   sound_classifier_enabled: true
+#   classifier_sample_rate_hz: 16000
+#   classifier_window_ms: 975.0
+#   stop_keywords: ["stop", "halt", "freeze", "no", "danger"]
+
+# --- Sensor Fusion (disabled by default — enable on Jetson) ---
+# fusion:
+#   enabled: false
+#   depth_model: "MiDaS_small"
+#   midas_hub_repo: "intel-isl/MiDaS"
+#   depth_max_hz: 10.0
 
 jetson:
   tensorrt_enabled: true
@@ -142,6 +184,16 @@ training:
   learning_rate: 0.0003
   epochs: 100
   checkpoint_every_n: 10
+  annotation:
+    human_safety_radius_m: 0.5
+    battery_warn_v: 10.8
+    obstacle_clearance_m: 0.25
+    episode_human_prob: 0.10
+    episode_command_prob: 0.10
+    n_episodes: 500
+    max_steps: 50
+    nominal_battery_v: 12.0
+    nominal_obstacle_dist_m: 2.0
 
 retry:
   max_attempts: 3

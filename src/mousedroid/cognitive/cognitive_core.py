@@ -107,7 +107,14 @@ class CognitiveCore:
         # Constitutional safety check.
         context: dict[str, Any] = {
             k: observation_dict[k]
-            for k in ("battery_v", "obstacle_dist_m", "mcts_sims")
+            for k in (
+                "battery_v",
+                "obstacle_dist_m",
+                "mcts_sims",
+                "human_detected",
+                "human_dist_m",
+                "commanded_action",
+            )
             if k in observation_dict
         }
         safe_action, violations = self._checker.check(raw_action, context)

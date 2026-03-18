@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import NDArray
@@ -19,6 +20,11 @@ from mousedroid.constants import (
     DEFAULT_VISION_DIM,
     N_SENSOR_MODALITIES,
 )
+
+if TYPE_CHECKING:
+    from mousedroid.ai.audio.protocols import AudioAIResult
+    from mousedroid.ai.fusion.sensor_fusion import FusedDepthResult
+    from mousedroid.ai.vision.protocols import VisionAIResult
 
 
 @dataclass
@@ -64,6 +70,34 @@ class MouseDroidObservationBundle:
     )
     """Per-modality validity flags, shape ``(n_modalities,)``."""
 
+    # --- AI pipeline results (optional) ---
+
+    _vision_ai_result: VisionAIResult | None = None
+    """Vision AI pipeline result (detections, embeddings, faces, gestures)."""
+
+    _audio_ai_result: AudioAIResult | None = None
+    """Audio AI pipeline result (transcription, wake word, sound events)."""
+
+    _fused_depth: FusedDepthResult | None = None
+    """Fused depth map from MiDaS + ultrasonic Kalman filter."""
+
+    # --- Configurable label/keyword sets ---
+
+    _person_class_names: frozenset[str] = field(
+        default_factory=lambda: frozenset({"person"}),
+    )
+    """Class names treated as 'human' for Law 1 safety."""
+
+    _stop_keywords: frozenset[str] = field(
+        default_factory=lambda: frozenset({"stop", "halt", "freeze", "no", "danger"}),
+    )
+    """Voice-command keywords that trigger a stop (Law 2)."""
+
+    _law2_gesture_labels: frozenset[str] = field(
+        default_factory=lambda: frozenset({"stop"}),
+    )
+    """Gesture labels that trigger a stop (Law 2)."""
+
     # -- ObservationProtocol properties ------------------------------------
 
     @property
@@ -100,3 +134,60 @@ class MouseDroidObservationBundle:
     def n_modalities(self) -> int:
         """Number of sensor modalities tracked by valid_mask."""
         return N_SENSOR_MODALITIES
+
+    @property
+    def vision_ai_result(self) -> VisionAIResult | None:
+        """Vision AI pipeline result (detections, embeddings, faces, gestures)."""
+        return self._vision_ai_result
+
+    @property
+    def audio_ai_result(self) -> AudioAIResult | None:
+        """Audio AI pipeline result (transcription, wake word, sound events)."""
+        return self._audio_ai_result
+
+    @property
+    def fused_depth(self) -> FusedDepthResult | None:
+        """Fused depth map from MiDaS + ultrasonic Kalman filter."""
+        return self._fused_depth
+
+    # --- Three Laws safety properties (derived from AI results) -----------
+
+    @property
+    def human_detected(self) -> bool:
+        """True if YOLO detected at least one person in the current frame."""
+        if self._vision_ai_result is None:
+            return False
+        return any(
+            d.class_name in self._person_class_names
+            for d in self._vision_ai_result.detections
+        )
+
+    @property
+    def human_dist_m(self) -> float:
+        """Closest detected person distance in metres.
+
+        Uses Kalman-fused depth if available, otherwise falls back to the
+        raw ultrasonic reading.  Returns ``inf`` when no person is detected.
+        """
+        if not self.human_detected:
+            return float("inf")
+        # Prefer fused depth centre estimate
+        if self._fused_depth is not None:
+            return float(self._fused_depth.center_distance_m)
+        # Fall back to raw ultrasonic
+        return self._distance_m
+
+    @property
+    def gesture_stop_commanded(self) -> bool:
+        """True if a stop gesture was recognised this frame (Law 2)."""
+        if self._vision_ai_result is None or self._vision_ai_result.gestures is None:
+            return False
+        return any(g.label in self._law2_gesture_labels for g in self._vision_ai_result.gestures)
+
+    @property
+    def voice_stop_commanded(self) -> bool:
+        """True if the ASR transcription contains a stop/halt command (Law 2)."""
+        if self._audio_ai_result is None or self._audio_ai_result.transcription is None:
+            return False
+        text = self._audio_ai_result.transcription.text.lower()
+        return any(kw in text for kw in self._stop_keywords)

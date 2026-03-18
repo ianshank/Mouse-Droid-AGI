@@ -42,6 +42,18 @@ class MockCamera:
         """
         return self._rng.standard_normal(self._cfg.feature_dim).astype(np.float32)
 
+    async def capture_frame(self) -> NDArray[np.uint8]:
+        """Return random BGR frame.
+
+        Returns:
+            Random uint8 frame of shape ``(H, W, 3)``.
+        """
+        return self._rng.integers(
+            0, 256,
+            size=(self._cfg.resolution_height, self._cfg.resolution_width, 3),
+            dtype=np.uint8,
+        )
+
     @property
     def feature_dim(self) -> int:
         """Output feature vector dimension."""
