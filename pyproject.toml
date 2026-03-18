@@ -35,6 +35,10 @@ jetson = [
     "tensorrt>=8.0",
     "pycuda>=2022.1",
 ]
+telemetry = [
+    "aiohttp>=3.9",
+    "zeroconf>=0.80",
+]
 llm = [
     "llama-cpp-python>=0.2",
     "huggingface-hub>=0.20",
@@ -112,6 +116,7 @@ omit = [
     "*/hardware/sensors/ultrasonic.py",
     "*/hardware/camera/imx500.py",
     "*/hardware/audio/usb_microphone.py",
+    "*/telemetry/server.py",
 ]
 
 [tool.coverage.report]

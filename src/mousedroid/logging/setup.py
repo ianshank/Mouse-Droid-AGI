@@ -16,11 +16,17 @@ if TYPE_CHECKING:
 _configured: bool = False
 
 
-def configure_logging(cfg: LoggingConfig) -> None:
+def configure_logging(
+    cfg: LoggingConfig,
+    log_buffer: Any | None = None,
+) -> None:
     """Configure structlog for the given logging config.
 
     Args:
         cfg: Logging configuration with level and format.
+        log_buffer: Optional ``LogRingBuffer`` processor to insert into
+            the chain for telemetry log streaming. Inserted before the
+            renderer so it captures structured event dicts.
     """
     global _configured
 
@@ -32,6 +38,9 @@ def configure_logging(cfg: LoggingConfig) -> None:
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,
     ]
+
+    if log_buffer is not None:
+        processors.append(log_buffer)
 
     if cfg.format == "console":
         processors.append(structlog.dev.ConsoleRenderer())

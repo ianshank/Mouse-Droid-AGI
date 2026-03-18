@@ -306,6 +306,51 @@ class SurpriseConfig(BaseModel):
     critical_threshold: float = Field(5.0, gt=0, description="Critical surprise threshold")
 
 
+class TelemetryConfig(BaseModel):
+    """WiFi/Ethernet telemetry server configuration for remote monitoring.
+
+    When enabled, exposes REST and WebSocket endpoints for real-time
+    sensor data, log streaming, and health metrics. Binds to all
+    network interfaces by default (WiFi + Ethernet + localhost).
+    """
+
+    enabled: bool = Field(False, description="Enable telemetry server")
+    host: str = Field(
+        "0.0.0.0",  # noqa: S104
+        description="Server bind address (0.0.0.0 = all interfaces)",
+    )
+    port: int = Field(8080, gt=0, le=65535, description="Server port")
+    preferred_interface: str | None = Field(
+        None,
+        description="Preferred network interface for mDNS (e.g. wlan0, eth0). None = all",
+    )
+    ws_path: str = Field("/ws", description="WebSocket endpoint path")
+    api_prefix: str = Field("/api/v1", description="REST API prefix")
+    publish_hz: float = Field(
+        10.0,
+        gt=0,
+        le=60,
+        description="Telemetry publish rate (Hz)",
+    )
+    max_clients: int = Field(10, gt=0, description="Maximum concurrent WebSocket clients")
+    queue_size: int = Field(64, gt=0, description="Internal publish queue depth")
+    serialization: Literal["json", "msgpack"] = Field(
+        "json",
+        description="WebSocket serialization format",
+    )
+    api_key: str | None = Field(None, description="Optional API key (None=disabled)")
+    mdns_enabled: bool = Field(True, description="Enable mDNS/Zeroconf discovery")
+    mdns_service_name: str = Field(
+        "MouseDroid Telemetry",
+        description="mDNS service display name",
+    )
+    cors_origins: list[str] = Field(
+        default_factory=lambda: ["*"],
+        description="CORS allowed origins",
+    )
+    log_stream_buffer: int = Field(200, gt=0, description="Ring buffer size for log entries")
+
+
 class ThreeLawsConfig(BaseModel):
     """Three Laws of Robotics configuration.
 
@@ -519,6 +564,7 @@ class Settings(BaseSettings):
     reward: RewardConfig = Field(default_factory=RewardConfig)
     curiosity: CuriosityConfig = Field(default_factory=CuriosityConfig)
     ppo: PPOConfig = Field(default_factory=PPOConfig)
+    telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     three_laws: ThreeLawsConfig = Field(default_factory=ThreeLawsConfig)
 
     @model_validator(mode="after")  # type: ignore[untyped-decorator]
