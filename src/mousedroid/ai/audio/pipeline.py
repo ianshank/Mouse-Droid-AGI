@@ -111,7 +111,8 @@ class AudioAIPipeline:
 
         # --- Wake word detection (always-on, lightweight) ---
         if self._wake_word is not None:
-            # Convert to int16 for OpenWakeWord
+            # Convert float32 [-1, 1] to int16 PCM for OpenWakeWord.
+            # OpenWakeWord expects raw int16 PCM samples (device-native format).
             int16_chunk = (audio_chunk * 32767).astype(np.int16)
             wake_detected = await self._wake_word.detect(int16_chunk)
 

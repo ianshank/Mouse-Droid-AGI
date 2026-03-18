@@ -15,11 +15,15 @@ services:
       dockerfile: Dockerfile.jetson
     image: mousedroid:jetson
     runtime: nvidia
-    # Privileged mode required for Jetson.GPIO /proc/device-tree access
-    privileged: true
+    # Hardware access: prefer explicit device passthrough over privileged=true.
+    # Jetson.GPIO requires access to /dev/gpiochip* and /proc/device-tree (read-only).
+    devices:
+      - /dev/gpiochip0:/dev/gpiochip0
+      - /dev/gpiochip1:/dev/gpiochip1
+      - /sys/devices/platform:/sys/devices/platform:ro
 
     # --- Command override ---
-    # Use jetson production config with real hardware (GPIO devices passed through below).
+    # Use jetson production config with real hardware (GPIO devices passed through above).
     command: ["--config", "/etc/mousedroid/jetson_production.yaml"]
 
     # --- Restart policy ---

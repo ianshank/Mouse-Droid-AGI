@@ -277,8 +277,6 @@ class TestValidateBDIAccuracyThreshold:
 
     def _make_bdi_weights(self, bdi_dir: "Path") -> "Path":
         """Minimal always-class-0 BDI that gives known accuracy."""
-        from mousedroid.utils.numpy_ops import relu
-
         rng = np.random.default_rng(0)
         bdi_dir.mkdir(parents=True, exist_ok=True)
 
@@ -307,7 +305,7 @@ class TestValidateBDIAccuracyThreshold:
         np.savez(bdi_dir / "belief.npz", w1=w1, b1=b1, w2=w2, b2=b2)
         np.savez(bdi_dir / "desire.npz", w1=desires_w, b1=desires_b)
         np.savez(bdi_dir / "intention.npz", w1=iw, b1=ib)
-        np.savez(bdi_dir / "believe_norm_stats.npz", mean=obs_mean, std=obs_std)
+        np.savez(bdi_dir / "belief_norm_stats.npz", mean=obs_mean, std=obs_std)
         np.savez(bdi_dir / "affect.npz",
                  w1=np.zeros((64, 2)), b1=np.zeros(2))
 
@@ -344,7 +342,7 @@ class TestValidateConstitutionalRLCfgThreshold:
 
     def test_custom_threshold_via_cfg(self, tmp_path: "Path") -> None:
         """A cfg with threshold=0.0 forces strict pass only with 0 violations."""
-        from mousedroid.config.schema import Settings, TrainingConfig
+        from mousedroid.config.schema import Settings
 
         (tmp_path / "constitutional_rl").mkdir()
         np.savez(tmp_path / "constitutional_rl" / "policy.npz", w1=np.zeros((64, 3)))

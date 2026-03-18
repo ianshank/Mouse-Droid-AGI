@@ -5,6 +5,8 @@ import time
 import numpy as np
 
 from mousedroid.sensing.bundle import MouseDroidObservationBundle
+from mousedroid.ai.vision.protocols import Detection, Gesture, VisionAIResult
+from mousedroid.ai.audio.protocols import Transcription, AudioAIResult
 
 
 def test_default_values():
@@ -84,9 +86,6 @@ def test_audio_chunk_custom():
 # ---------------------------------------------------------------------------
 # Configurable frozenset fields (Phase 2 refactor)
 # ---------------------------------------------------------------------------
-
-from mousedroid.ai.vision.protocols import Detection, Gesture, VisionAIResult
-from mousedroid.ai.audio.protocols import Transcription, AudioAIResult
 
 
 def _make_detection(class_name: str) -> Detection:

@@ -108,7 +108,7 @@ class MouseDroidOrchestrator:
         try:
             await self._camera.start()
         except Exception as exc:
-            _log.warning("camera_start_failed", error=str(exc))
+            _log.warning("camera_start_failed", error=str(exc), exc_info=True)
         if self._microphone is not None:
             try:
                 await self._microphone.start()

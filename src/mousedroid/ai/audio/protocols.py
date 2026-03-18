@@ -72,7 +72,7 @@ class ASRProtocol(Protocol):
         self,
         audio: NDArray[np.float32],
         sample_rate: int,
-    ) -> Transcription:
+    ) -> Transcription | None:
         """Transcribe audio to text.
 
         Args:
@@ -80,7 +80,8 @@ class ASRProtocol(Protocol):
             sample_rate: Audio sample rate in Hz.
 
         Returns:
-            Transcription result.
+            Transcription result, or ``None`` if no speech was detected
+            or the audio segment is too short to transcribe.
         """
         ...
 
@@ -97,11 +98,11 @@ class ASRProtocol(Protocol):
 class WakeWordProtocol(Protocol):
     """Interface for wake word detection models."""
 
-    async def detect(self, audio: NDArray[np.float32]) -> bool:
+    async def detect(self, audio: NDArray[np.int16]) -> bool:
         """Check whether the wake word is present in an audio chunk.
 
         Args:
-            audio: Audio samples, shape ``(chunk_size,)``.
+            audio: Int16 PCM audio samples, shape ``(chunk_size,)``.
 
         Returns:
             True if wake word detected.
@@ -121,11 +122,16 @@ class WakeWordProtocol(Protocol):
 class SoundClassifierProtocol(Protocol):
     """Interface for environmental sound classification models."""
 
-    async def classify(self, audio: NDArray[np.float32]) -> list[SoundEvent]:
+    async def classify(
+        self,
+        audio: NDArray[np.float32],
+        sample_rate: int,
+    ) -> list[SoundEvent]:
         """Classify environmental sounds in an audio segment.
 
         Args:
             audio: Audio samples, shape ``(n_samples,)``.
+            sample_rate: Audio sample rate in Hz.
 
         Returns:
             List of sound events above confidence threshold.

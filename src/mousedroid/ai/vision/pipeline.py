@@ -94,7 +94,8 @@ class VisionAIPipeline:
     async def process(self, frame: NDArray[np.uint8]) -> VisionAIResult:
         """Run all vision AI models on a single frame.
 
-        Models are run concurrently for maximum throughput.
+        Models are run concurrently for maximum throughput. Failures in
+        individual models are logged but do not crash the pipeline.
 
         Args:
             frame: BGR image, shape ``(H, W, 3)``.
@@ -102,20 +103,20 @@ class VisionAIPipeline:
         Returns:
             Unified vision AI result.
         """
-        # Build concurrent tasks
+        # Build concurrent tasks with error handling wrappers
         det_task = (
-            self._detector.detect(frame) if self._detector else _empty_detections()
+            self._safe_detect(frame) if self._detector else _empty_detections()
         )
         emb_task = (
-            self._embedder.embed(frame) if self._embedder else _zero_embedding()
+            self._safe_embed(frame) if self._embedder else _zero_embedding()
         )
         face_task = (
-            self._face_detector.detect_faces(frame)
+            self._safe_detect_faces(frame)
             if self._face_detector
             else _empty_faces()
         )
         gesture_task = (
-            self._gesture_recognizer.recognize(frame)
+            self._safe_recognize(frame)
             if self._gesture_recognizer
             else _empty_gestures()
         )
@@ -132,6 +133,38 @@ class VisionAIPipeline:
             frame_shape=frame.shape,
             timestamp=time.time(),
         )
+
+    async def _safe_detect(self, frame: NDArray[np.uint8]) -> list[Detection]:
+        """Run detection with graceful error handling."""
+        try:
+            return await self._detector.detect(frame)
+        except Exception:
+            _log.warning("vision_detection_failed", exc_info=True)
+            return []
+
+    async def _safe_embed(self, frame: NDArray[np.uint8]) -> NDArray[np.float32]:
+        """Run embedding with graceful error handling."""
+        try:
+            return await self._embedder.embed(frame)
+        except Exception:
+            _log.warning("vision_embedding_failed", exc_info=True)
+            return np.zeros(0, dtype=np.float32)
+
+    async def _safe_detect_faces(self, frame: NDArray[np.uint8]) -> list[FaceDetection]:
+        """Run face detection with graceful error handling."""
+        try:
+            return await self._face_detector.detect_faces(frame)
+        except Exception:
+            _log.warning("vision_face_detection_failed", exc_info=True)
+            return []
+
+    async def _safe_recognize(self, frame: NDArray[np.uint8]) -> list[Gesture]:
+        """Run gesture recognition with graceful error handling."""
+        try:
+            return await self._gesture_recognizer.recognize(frame)
+        except Exception:
+            _log.warning("vision_gesture_recognition_failed", exc_info=True)
+            return []
 
 
 # Fallback coroutines for disabled models
