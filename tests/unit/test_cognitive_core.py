@@ -8,7 +8,8 @@ from unittest.mock import MagicMock
 import numpy as np
 
 from mousedroid.cognitive.bdi_model import NeuralBDI
-from mousedroid.cognitive.cognitive_core import _SLOW_QUEUE_MAXSIZE, CognitiveCore
+from mousedroid.cognitive.cognitive_core import CognitiveCore
+from mousedroid.constants import SLOW_QUEUE_MAXSIZE
 from mousedroid.cognitive.constitutional_rl import ConstitutionalChecker
 from mousedroid.cognitive.metacognitive import MetacognitiveModel
 
@@ -62,7 +63,7 @@ async def test_stop_without_start() -> None:
 
 
 def test_slow_queue_maxsize() -> None:
-    assert _SLOW_QUEUE_MAXSIZE == 2
+    assert SLOW_QUEUE_MAXSIZE == 2
 
 
 def test_tick_fast_with_curiosity_scores() -> None:

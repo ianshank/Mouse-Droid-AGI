@@ -13,6 +13,7 @@ import copy
 from collections import deque
 from typing import Any
 
+from mousedroid.constants import LOG_SUBSCRIBER_QUEUE_SIZE
 from mousedroid.logging.setup import get_logger
 
 _log = get_logger(__name__)
@@ -81,7 +82,7 @@ class LogRingBuffer:
         Returns:
             An ``asyncio.Queue`` that receives new log entries.
         """
-        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=100)
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=LOG_SUBSCRIBER_QUEUE_SIZE)
         self._subscribers.append(queue)
         return queue
 

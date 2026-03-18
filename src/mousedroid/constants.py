@@ -73,3 +73,46 @@ POLICY_MLP_SEED: int = 100
 
 VALUE_MLP_SEED: int = 101
 """RNG seed for ValueMLP weight initialisation."""
+
+# ---------------------------------------------------------------------------
+# Network constants
+# ---------------------------------------------------------------------------
+
+CONNECTIVITY_CHECK_HOST: str = "8.8.8.8"
+"""Remote host used for outbound connectivity checks (Google Public DNS)."""
+
+CONNECTIVITY_CHECK_PORT: int = 80
+"""Port used for outbound UDP connectivity probes."""
+
+LOOPBACK_IP: str = "127.0.0.1"
+"""Loopback address returned when no network is available."""
+
+# ---------------------------------------------------------------------------
+# Cognitive core timing defaults
+# ---------------------------------------------------------------------------
+
+SLOW_LOOP_INTERVAL_S: float = 1.0
+"""Default interval for the slow BDI + metacognitive loop (seconds)."""
+
+SLOW_QUEUE_MAXSIZE: int = 2
+"""Maximum backlog for the cognitive slow-loop work queue."""
+
+FAST_STATE_DIM: int = 128
+"""Expected dimensionality of fast-tick state vectors."""
+
+# ---------------------------------------------------------------------------
+# Telemetry defaults
+# ---------------------------------------------------------------------------
+
+LOG_SUBSCRIBER_QUEUE_SIZE: int = 100
+"""Default maxsize for log-stream subscriber queues."""
+
+MDNS_SERVICE_TYPE: str = "_http._tcp.local."
+"""mDNS/Zeroconf service type for telemetry advertisement."""
+
+# ---------------------------------------------------------------------------
+# Motor state indices
+# ---------------------------------------------------------------------------
+
+MOTOR_STATE_BATTERY_INDEX: int = 3
+"""Index of battery voltage within the motor_state array."""

@@ -15,6 +15,11 @@ import socket
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from mousedroid.constants import (
+    CONNECTIVITY_CHECK_HOST,
+    CONNECTIVITY_CHECK_PORT,
+    LOOPBACK_IP,
+)
 from mousedroid.logging.setup import get_logger
 
 _log = get_logger(__name__)
@@ -106,7 +111,7 @@ def _get_interfaces_sync() -> list[NetworkInterface]:
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 try:
-                    s.connect(("8.8.8.8", 80))
+                    s.connect((CONNECTIVITY_CHECK_HOST, CONNECTIVITY_CHECK_PORT))
                     candidate_ip = s.getsockname()[0]
                     # This gives the default route IP, not per-interface
                     # Only use if this is likely the right interface
@@ -183,9 +188,9 @@ def get_default_ip() -> str:
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            s.connect(("8.8.8.8", 80))
+            s.connect((CONNECTIVITY_CHECK_HOST, CONNECTIVITY_CHECK_PORT))
             return s.getsockname()[0]
         finally:
             s.close()
     except OSError:
-        return "127.0.0.1"
+        return LOOPBACK_IP

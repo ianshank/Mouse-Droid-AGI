@@ -13,11 +13,14 @@ from typing import TYPE_CHECKING
 import numpy as np
 import torch
 
+from mousedroid.common.actions import normalize_action_numpy
 from mousedroid.constants import (
     DEFAULT_BATTERY_VOLTAGE,
     MILLISECONDS_PER_SECOND,
+    MOTOR_STATE_BATTERY_INDEX,
 )
 from mousedroid.logging.setup import get_logger
+from mousedroid.telemetry.frame_builder import build_telemetry_frame
 
 if TYPE_CHECKING:
     from mousedroid.agents.base import AgentProtocol
@@ -192,8 +195,8 @@ class MouseDroidOrchestrator:
         """
         try:
             battery_v = (
-                float(observation.motor_state[3])
-                if observation.motor_state.size > 3
+                float(observation.motor_state[MOTOR_STATE_BATTERY_INDEX])
+                if observation.motor_state.size > MOTOR_STATE_BATTERY_INDEX
                 else DEFAULT_BATTERY_VOLTAGE
             )
             belief_dim = int(self._cfg.model.belief_dim)
@@ -242,25 +245,7 @@ class MouseDroidOrchestrator:
         Returns:
             Normalized 1-D torch tensor with correct dimensions.
         """
-        action_np = np.asarray(action_np, dtype=np.float32).flatten()
-        expected_dim = int(self._cfg.model.action_dim)
-
-        if action_np.size < expected_dim:
-            _log.warning(
-                "cognitive_core_action_padded",
-                received_dim=int(action_np.size),
-                expected_dim=expected_dim,
-            )
-            action_np = np.pad(action_np, (0, expected_dim - action_np.size))
-        elif action_np.size > expected_dim:
-            _log.warning(
-                "cognitive_core_action_truncated",
-                received_dim=int(action_np.size),
-                expected_dim=expected_dim,
-            )
-            action_np = action_np[:expected_dim]
-
-        return torch.from_numpy(action_np).float()
+        return normalize_action_numpy(action_np, int(self._cfg.model.action_dim))
 
     async def _execute_action(self, action: torch.Tensor) -> None:
         """Scale and send action to ESP32 motors.
@@ -294,32 +279,8 @@ class MouseDroidOrchestrator:
             return
 
         try:
-            from mousedroid.telemetry.protocol import TelemetryFrame
-
-            vision_arr = observation.vision_features
-            vision_norm = float(np.sqrt(np.sum(vision_arr * vision_arr)))
-
-            audio_arr = observation.audio_chunk
-            audio_rms = float(np.sqrt(np.mean(audio_arr * audio_arr)))
-
-            motor = observation.motor_state
-            battery_v = float(motor[3]) if motor.size > 3 else 0.0
-
-            frame = TelemetryFrame(
-                timestamp=observation.timestamp,
-                distance_m=observation.distance_m,
-                motor_state=motor.tolist(),
-                vision_norm=vision_norm,
-                audio_rms=audio_rms,
-                valid_mask=observation.valid_mask.tolist(),
-                battery_voltage=battery_v,
-                safety={
-                    "is_emergency": safety_ctx.is_emergency,
-                    "violations": list(safety_ctx.law_violations),
-                    "forward_clearance_ok": safety_ctx.forward_clearance_ok,
-                },
-                loop_time_ms=loop_time_ms,
-                tick_count=self._tick_count,
+            frame = build_telemetry_frame(
+                observation, safety_ctx, loop_time_ms, self._tick_count,
             )
             await self._telemetry_publisher.publish(frame)
         except Exception:

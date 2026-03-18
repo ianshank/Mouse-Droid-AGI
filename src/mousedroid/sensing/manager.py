@@ -155,38 +155,47 @@ class SensorManager:
 
     # -- Private helpers ---------------------------------------------------
 
-    async def _safe_vision_read(self) -> tuple[NDArray[np.float32], bool]:
-        """Attempt a vision capture, returning zeros on failure.
+    @staticmethod
+    async def _safe_read(
+        coro: asyncio.coroutines,
+        sensor_name: str,
+        default: NDArray[np.float32] | float,
+    ) -> tuple[NDArray[np.float32] | float, bool]:
+        """Generic safe sensor read with fallback.
+
+        Args:
+            coro: Awaitable that performs the sensor read.
+            sensor_name: Human-readable sensor name for logging.
+            default: Fallback value returned on failure.
 
         Returns:
-            Tuple of (feature_vector, success_flag).
+            Tuple of (result, success_flag).
         """
         try:
-            features = await self._vision.capture_features()
-            return features, True
+            result = await coro
+            return result, True
         except Exception:
-            _log.warning("vision_read_failed", exc_info=True)
-            return np.zeros(self._cfg.camera.feature_dim, dtype=np.float32), False
+            _log.warning(f"{sensor_name}_read_failed", exc_info=True)
+            return default, False
+
+    async def _safe_vision_read(self) -> tuple[NDArray[np.float32], bool]:
+        """Attempt a vision capture, returning zeros on failure."""
+        default = np.zeros(self._cfg.camera.feature_dim, dtype=np.float32)
+        result, ok = await self._safe_read(
+            self._vision.capture_features(), "vision", default,
+        )
+        return result, ok  # type: ignore[return-value]
 
     async def _safe_distance_read(self) -> tuple[float, bool]:
-        """Attempt a distance read, returning max range on failure.
-
-        Returns:
-            Tuple of (distance_m, success_flag).
-        """
-        try:
-            distance = await self._distance.read_distance_m()
-            return distance, True
-        except Exception:
-            _log.warning("distance_read_failed", exc_info=True)
-            return self._distance.max_range_m, False
+        """Attempt a distance read, returning max range on failure."""
+        result, ok = await self._safe_read(
+            self._distance.read_distance_m(), "distance", self._distance.max_range_m,
+        )
+        return result, ok  # type: ignore[return-value]
 
     async def _safe_motor_read(self) -> tuple[NDArray[np.float32], bool]:
-        """Attempt an ESP32 motor/battery read, returning zeros on failure.
-
-        Returns:
-            Tuple of (motor_state_array, success_flag).
-        """
+        """Attempt an ESP32 motor/battery read, returning zeros on failure."""
+        default = np.zeros(DEFAULT_MOTOR_STATE_DIM, dtype=np.float32)
         try:
             encoders, battery_v = await asyncio.gather(
                 self._esp32.read_encoders(),
@@ -204,20 +213,15 @@ class SensorManager:
             return motor_state, True
         except Exception:
             _log.warning("motor_read_failed", exc_info=True)
-            return np.zeros(DEFAULT_MOTOR_STATE_DIM, dtype=np.float32), False
+            return default, False
 
     async def _safe_audio_read(self) -> tuple[NDArray[np.float32], bool]:
-        """Attempt an audio chunk read, returning zeros on failure.
-
-        Returns:
-            Tuple of (audio_chunk, success_flag).
-        """
+        """Attempt an audio chunk read, returning zeros on failure."""
+        default = np.zeros(self._audio_chunk_size, dtype=np.float32)
         if self._microphone is None:
-            return np.zeros(self._audio_chunk_size, dtype=np.float32), False
+            return default, False
 
-        try:
-            chunk = await self._microphone.read_chunk()
-            return chunk, True
-        except Exception:
-            _log.warning("audio_read_failed", exc_info=True)
-            return np.zeros(self._audio_chunk_size, dtype=np.float32), False
+        result, ok = await self._safe_read(
+            self._microphone.read_chunk(), "audio", default,
+        )
+        return result, ok  # type: ignore[return-value]
