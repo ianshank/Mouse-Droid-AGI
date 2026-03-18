@@ -115,7 +115,7 @@ def tune_ucb(
     base_cfg: MCTSConfig,
     n_episodes: int = 1000,
     target_ms: float = 50.0,
-    n_simulations: int = 200,
+    n_simulations: int | None = None,
     device: torch.device | None = None,
 ) -> tuple[float, dict[str, object]]:
     """Grid search UCB exploration constant via simulated rollouts.
@@ -125,22 +125,24 @@ def tune_ucb(
         base_cfg: Base MCTS config to modify.
         n_episodes: Episodes per UCB candidate.
         target_ms: Target search latency in milliseconds.
-        n_simulations: Number of MCTS simulations to benchmark.
+        n_simulations: Number of MCTS simulations to benchmark; defaults to
+            ``base_cfg.n_simulations_max``.
         device: Torch device.
 
     Returns:
         Tuple of ``(best_ucb_c, results_dict)``.
     """
     device = device or torch.device("cpu")
-    candidates = [0.5, 1.0, 1.41, 2.0, 3.0]
+    _n_simulations = n_simulations if n_simulations is not None else base_cfg.n_simulations_max
+    candidates = list(base_cfg.ucb_candidates)
     results: dict[str, object] = {}
     best_ucb = base_cfg.ucb_c
     best_reward = -float("inf")
 
     for ucb_c in candidates:
         cfg = MCTSConfig(
-            n_simulations_base=min(n_simulations, 50),
-            n_simulations_max=n_simulations,
+            n_simulations_base=min(_n_simulations, 50),
+            n_simulations_max=_n_simulations,
             rollout_depth=base_cfg.rollout_depth,
             gamma=base_cfg.gamma,
             n_action_candidates=base_cfg.n_action_candidates,
@@ -151,7 +153,7 @@ def tune_ucb(
         episode_rewards: list[float] = []
         search_times: list[float] = []
 
-        for _ in range(min(n_episodes, 100)):  # Use subset for speed
+        for _ in range(min(n_episodes, base_cfg.warmstart_n_episodes)):  # Use subset for speed
             h = torch.zeros(1, rssm._cfg.hidden_dim, device=device)
             z = torch.zeros(1, rssm._cfg.latent_dim, device=device)
             ep_reward = 0.0

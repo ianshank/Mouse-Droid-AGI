@@ -49,7 +49,12 @@ def run_phase_0b_annotations(cfg: Settings) -> Path:
     _log.info("phase_0b_start", phase="collect_annotations")
     from training.collect_annotations import collect_annotations
 
-    annotations_path = collect_annotations(cfg, n_episodes=500, max_steps=50, balance_dataset=True)
+    annotations_path = collect_annotations(
+        cfg,
+        n_episodes=cfg.training.annotation.n_episodes,
+        max_steps=cfg.training.annotation.max_steps,
+        balance_dataset=True,
+    )
     _log.info("phase_0b_complete", path=str(annotations_path))
     return annotations_path
 
@@ -116,10 +121,12 @@ def run_phase_4_constitutional_rl(
     return output_dir
 
 
-def run_upload(weights_dir: str, repo_id: str = "ianshank/mousedroid-weights") -> None:
+def run_upload(weights_dir: str, repo_id: str | None = None) -> None:
     """Upload trained weights to HuggingFace Hub."""
+    from training.upload_weights import HF_DEFAULT_REPO_ID, upload_weights
+
+    repo_id = repo_id or HF_DEFAULT_REPO_ID
     _log.info("upload_start", repo_id=repo_id)
-    from training.upload_weights import upload_weights
 
     success = upload_weights(weights_dir, repo_id=repo_id)
     if success:

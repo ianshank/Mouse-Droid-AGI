@@ -30,9 +30,67 @@ _EXPECTED_FILES: dict[str, list[str]] = {
         "bdi/desire.npz",
         "bdi/intention.npz",
         "bdi/affect.npz",
+        "bdi/belief_norm_stats.npz",
     ],
     "constitutional_rl": ["constitutional_rl/policy.npz", "constitutional_rl/value.npz"],
 }
+
+
+def _intention_label(class_idx: int) -> str:
+    """Return a stable human-readable intention label for a class id."""
+    try:
+        from training.collect_annotations import INTENTION_LABELS
+
+        if 0 <= class_idx < len(INTENTION_LABELS):
+            return INTENTION_LABELS[class_idx]
+    except Exception:
+        pass
+    return f"class_{class_idx}"
+
+
+def _classification_metrics(
+    truth: np.ndarray,
+    predictions: np.ndarray,
+) -> dict[str, Any]:
+    """Build aggregate and per-class metrics for a multiclass prediction task."""
+    class_ids = sorted({int(v) for v in np.concatenate([truth, predictions])})
+    per_class: dict[str, Any] = {}
+    recalls: list[float] = []
+    truth_distribution: dict[str, int] = {}
+    prediction_distribution: dict[str, int] = {}
+
+    for class_id in class_ids:
+        label = _intention_label(class_id)
+        support = int(np.sum(truth == class_id))
+        predicted = int(np.sum(predictions == class_id))
+        correct = int(np.sum((truth == class_id) & (predictions == class_id)))
+        recall = float(correct / support) if support else None
+        precision = float(correct / predicted) if predicted else None
+
+        if recall is not None:
+            recalls.append(recall)
+
+        truth_distribution[label] = support
+        prediction_distribution[label] = predicted
+        per_class[label] = {
+            "support": support,
+            "predicted": predicted,
+            "correct": correct,
+            "recall": None if recall is None else round(recall, 4),
+            "precision": None if precision is None else round(precision, 4),
+        }
+
+    majority_class_baseline = float(max(truth_distribution.values()) / len(truth)) if len(truth) else 0.0
+    balanced_accuracy = float(np.mean(recalls)) if recalls else 0.0
+
+    return {
+        "majority_class_baseline": round(majority_class_baseline, 4),
+        "balanced_accuracy": round(balanced_accuracy, 4),
+        "n_predicted_classes": int(len([count for count in prediction_distribution.values() if count > 0])),
+        "truth_distribution": truth_distribution,
+        "prediction_distribution": prediction_distribution,
+        "per_class": per_class,
+    }
 
 
 @dataclass
@@ -152,6 +210,7 @@ def validate_bdi_accuracy(
     weights_dir: Path,
     annotations_path: Path,
     holdout_fraction: float = 0.2,
+    accuracy_threshold: float = 0.60,
 ) -> PhaseResult:
     """Evaluate BDI intention predictor accuracy on held-out data.
 
@@ -222,14 +281,21 @@ def validate_bdi_accuracy(
         metrics["accuracy"] = round(accuracy, 4)
         metrics["n_holdout"] = n_holdout
         metrics["n_classes"] = len(np.unique(intentions))
+        metrics.update(_classification_metrics(int_holdout, predictions))
+        metrics["accuracy_lift_over_majority"] = round(
+            accuracy - float(metrics["majority_class_baseline"]),
+            4,
+        )
 
-        passed = accuracy > 0.60
+        passed = accuracy > accuracy_threshold
         if not passed:
-            errors.append(f"Intention accuracy {accuracy:.2%} below 60% threshold")
+            errors.append(f"Intention accuracy {accuracy:.2%} below {accuracy_threshold:.0%} threshold")
 
         _log.info(
             "bdi_accuracy_check",
             accuracy=round(accuracy, 4),
+            balanced_accuracy=metrics["balanced_accuracy"],
+            majority_class_baseline=metrics["majority_class_baseline"],
             n_holdout=n_holdout,
             passed=passed,
         )
@@ -247,11 +313,13 @@ def validate_bdi_accuracy(
 
 def validate_constitutional_rl(
     weights_dir: Path,
+    cfg: Settings | None = None,
 ) -> PhaseResult:
     """Check Constitutional RL training results.
 
     Args:
         weights_dir: Root weights directory.
+        cfg: Optional root settings (used for configurable violation rate threshold).
 
     Returns:
         PhaseResult with violation rate and reward metrics.
@@ -285,8 +353,9 @@ def validate_constitutional_rl(
             metrics["violation_rate"] = results.get("violation_rate", -1)
             metrics["mean_reward"] = results.get("mean_reward", 0)
 
-            if metrics["violation_rate"] > 0.05:
-                errors.append(f"Violation rate {metrics['violation_rate']:.2%} exceeds 5%")
+            violation_threshold = cfg.training.validate_violation_rate_threshold if cfg is not None else 0.05
+            if metrics["violation_rate"] > violation_threshold:
+                errors.append(f"Violation rate {metrics['violation_rate']:.2%} exceeds {violation_threshold:.0%}")
             if metrics["mean_reward"] <= 0:
                 errors.append(f"Mean reward {metrics['mean_reward']:.4f} is not positive")
 
@@ -396,8 +465,11 @@ def generate_training_report(
     report.phases["rssm_shapes"] = validate_rssm_shapes(weights_dir, cfg)
 
     # 3. BDI accuracy (if annotations available)
+    accuracy_threshold = cfg.bdi_training.accuracy_threshold if cfg is not None else 0.60
     if annotations_path and annotations_path.exists():
-        report.phases["bdi_accuracy"] = validate_bdi_accuracy(weights_dir, annotations_path)
+        report.phases["bdi_accuracy"] = validate_bdi_accuracy(
+            weights_dir, annotations_path, accuracy_threshold=accuracy_threshold
+        )
     else:
         report.phases["bdi_accuracy"] = PhaseResult(
             phase="bdi_accuracy",
@@ -406,7 +478,7 @@ def generate_training_report(
         )
 
     # 4. Constitutional RL
-    report.phases["constitutional_rl"] = validate_constitutional_rl(weights_dir)
+    report.phases["constitutional_rl"] = validate_constitutional_rl(weights_dir, cfg)
 
     # 5. MCTS latency
     report.phases["mcts_latency"] = validate_mcts_latency(weights_dir)
@@ -428,7 +500,11 @@ def generate_training_report(
     )
 
     # Write JSON
-    output_path = output_path or Path("training/results/training_report.json")
+    output_path = output_path or (
+        Path(cfg.training.report_output_path)
+        if cfg is not None
+        else Path("training/results/training_report.json")
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Convert dataclasses to dicts for JSON

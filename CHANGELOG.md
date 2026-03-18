@@ -6,7 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [0.3.0] - 2026-03-18
+
+### Added — AI Perception Pipeline (feat/v0.3.0-ai-pipeline)
+
+- **`src/mousedroid/ai/` package** — three model-serving sub-packages, each protocol-driven and config-injected:
+  - **`ai/vision/`** — `JetsonYOLODetector` (YOLOv8n TensorRT), `CLIPEmbedder` (ViT-B/32), `MediaPipeFaceDetector`, `MediaPipeGestureRecognizer`; composed by `VisionAIPipeline` via `asyncio.gather`
+  - **`ai/audio/`** — `WhisperASR` (faster-whisper CTranslate2 INT8), `OpenWakeWordDetector` (hey_jarvis), `YAMNetClassifier` (ONNX Runtime); buffered wake-word→transcription flow in `AudioAIPipeline`
+  - **`ai/fusion/`** — `MiDaSDepthEstimator` (torch.hub small), `KalmanDepthFusion` (MiDaS inverse-depth + HC-SR04 Kalman filter) → `FusedDepthResult`
+- **`MouseDroidObservationBundle` Three Laws integration** — `human_detected`, `human_dist_m`, `gesture_stop_commanded`, `voice_stop_commanded` derived properties; fused depth preferred over raw ultrasonic for `human_dist_m`; configurable `person_class_names`, `stop_keywords`, `law2_gesture_labels` frozensets
+- **Expanded config schema** — `VisionAIConfig`, `AudioAIConfig`, `FusionConfig`, `AnnotationConfig` added; `MCTSConfig` gains `ucb_candidates` + `warmstart_n_episodes`; `BDITrainingConfig` gains `obs_dim`, `belief_dim`, `desire_dim`, `affect_dim`, `accuracy_threshold`; `TrainingConfig` gains `validate_violation_rate_threshold`, `report_output_path`
+- **Config-driven training** — all dimension constants removed from `train_bdi.py`; `train_constitutional_rl.py` uses `resolve_device()` and annotation config context values; `warmstart_policy.py` UCB candidates + episode cap from config; `collect_annotations.py` episode params from config; `run_pipeline.py` episode counts from config
+- **`validate_weights.py` enhancements** — `belief_norm_stats.npz` required in expected files; configurable `accuracy_threshold`; `_classification_metrics()` helper records balanced accuracy, majority-class baseline, per-class precision/recall; `cfg`-driven report path
+- **`HF_DEFAULT_REPO_ID`** constant in `upload_weights.py` (was inline string literal)
+- **`build_vision_ai_pipeline()`, `build_audio_ai_pipeline()`, `build_depth_fusion()`** factory functions in `factory.py`
+- **35 new AI pipeline tests** in `tests/unit/test_ai_pipelines.py` — dataclass construction, protocol compliance, Three Laws integration, Law 1 / Law 2 property logic
+- **120+ additional tests** across `test_config_schema.py` (45 new), `test_observation_bundle.py` (12 new), `test_bdi_training.py` (8 new), `test_validate_weights.py` (10 new), and others
+- **1077 unit tests passing** (up from 959)
+
+### Added
+
+- **BDI holdout diagnostics** — `training/validate_weights.py` now records balanced accuracy,
+  majority-class baseline, prediction distributions, and per-class precision/recall in the
+  JSON training report so post-retrain sign-off can catch class-collapse regressions.
+- **Expanded Jetson post-deploy smoke test** — `scripts/jetson_smoke_test_deploy.sh` now
+  verifies the running container, CUDA visibility, weights + LLM load, direct ultrasonic probe,
+  USB microphone capture, and recent log health in one command.
 
 ### Added — Post-Refactor Retrain (feat/post-refactor-retrain, 2026-03-15)
 

@@ -13,7 +13,12 @@ bdi_training:
   epochs: 2
   batch_size: 2
   learning_rate: 0.001
-  accuracy_threshold: 0.60
+  # BDI neural network layer dimensions (must match weight shapes from training)
+  obs_dim: 256        # Input observation embedding dimension (e.g., from vision features)
+  belief_dim: 128     # Belief state latent size (world model internal state)
+  desire_dim: 64      # Desire/goal representation size
+  affect_dim: 2       # Affective valence dimensions (e.g., arousal, dominance)
+  accuracy_threshold: 0.60  # Minimum intention prediction accuracy to pass validation
   balance_classes: false
   normalise_observations: false
 mcts:
@@ -22,3 +27,5 @@ mcts:
   simulation_budget_ms: 5.0
   early_exit_value_threshold: 0.1
   action_sampling: "uniform"
+  ucb_candidates: [0.5, 1.0, 1.41]
+  warmstart_n_episodes: 5

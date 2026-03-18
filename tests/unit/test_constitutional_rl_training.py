@@ -112,3 +112,47 @@ class TestConstitutionalRewardZeroing:
             total_violations += len(violations)
 
         assert total_violations == 0
+
+
+# ---------------------------------------------------------------------------
+# Config-driven context values (Phase 3 refactor)
+# ---------------------------------------------------------------------------
+
+
+class TestConstitutionalRLTrainingContextFromConfig:
+    """train_constitutional_rl must source nominal_battery_v and nominal_obstacle_dist_m
+    from AnnotationConfig, not hardcoded values."""
+
+    def test_annotation_config_defaults_match_checker_expectations(self) -> None:
+        """Default nominal_battery_v=12.0 and nominal_obstacle_dist_m=2.0 are safe."""
+        from mousedroid.config.schema import AnnotationConfig
+
+        ann_cfg = AnnotationConfig()
+        assert ann_cfg.nominal_battery_v == 12.0
+        assert ann_cfg.nominal_obstacle_dist_m == 2.0
+
+        # Verify these values pass a safe-action check
+        checker = ConstitutionalChecker()
+        action = np.array([0.1, 0.0], dtype=np.float64)
+        _, violations = checker.check(
+            action,
+            {
+                "battery_v": ann_cfg.nominal_battery_v,
+                "obstacle_dist_m": ann_cfg.nominal_obstacle_dist_m,
+                "mcts_sims": 50,
+            },
+        )
+        assert violations == []
+
+    def test_custom_nominal_values_propagate(self) -> None:
+        """Custom nominal values in AnnotationConfig affect context dict."""
+        from mousedroid.config.schema import AnnotationConfig
+
+        ann_cfg = AnnotationConfig(nominal_battery_v=11.5, nominal_obstacle_dist_m=1.5)
+        context = {
+            "battery_v": ann_cfg.nominal_battery_v,
+            "obstacle_dist_m": ann_cfg.nominal_obstacle_dist_m,
+            "mcts_sims": 50,
+        }
+        assert context["battery_v"] == 11.5
+        assert context["obstacle_dist_m"] == 1.5

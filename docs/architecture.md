@@ -37,6 +37,7 @@ graph TD
                 LLMGateway["LLM Gateway\nLlama GGUF"]
                 HealthMonitor["Health Monitor\nsysfs polling"]
                 CoreAI["Core AI Pipeline\nRSSM + MCTS + Navigation Agent\nCognitive Core BDI + Metacognitive\nMemory: Working / Episodic / Semantic\nSafety Monitor + Constitutional Checker"]
+                AIPipelines["AI Perception Pipelines\nVisionAI: YOLOv8n TensorRT + CLIP + MediaPipe\nAudioAI: Whisper INT8 + OpenWakeWord + YAMNet\nSensorFusion: MiDaS + Kalman depth filter"]
                 SensorMgr["Sensor Manager\nconcurrent I/O"]
                 ExperienceDB[("Experience Logger\nLMDB\n/home/jetson/experience_db")]
             end
@@ -57,8 +58,10 @@ graph TD
     Orchestrator --> CoreAI
     Orchestrator --> LLMGateway
     Orchestrator --> HealthMonitor
+    CoreAI --> AIPipelines
     CoreAI --> SensorMgr
     CoreAI --> ExperienceDB
+    AIPipelines --> SensorMgr
     SensorMgr --> Camera
     SensorMgr --> Ultrasonic
     SensorMgr --> GPIO
@@ -74,6 +77,7 @@ graph TD
 | Docker `mousedroid:jetson` | L4T PyTorch r36.4.0 | GPU-accelerated container (CUDA 12.6 + TensorRT 10.4) |
 | `mousedroid` process | Python 3.10 asyncio | All AI reasoning + I/O orchestration |
 | LMDB experience store | LMDB on-disk | Persistent experience replay buffer |
+| AI Perception Pipelines | YOLOv8n TRT / faster-whisper / MiDaS | Vision, audio, and depth perception |
 | Llama GGUF model | llama-cpp-python | Local LLM for NL to velocity |
 | ESP32 firmware | C++ (Wave Rover SDK) | Motor PWM control, encoder polling |
 | Jetson CSI / IMX500 camera | jetson_utils / picamera2 | Vision capture + onboard neural inference |
@@ -104,12 +108,18 @@ graph TD
     EWC["EWC\nFisher-information regularisation"]
     PNN["PNN\nprogressive nets + lateral connections"]
     LLM["LLM Gateway optional\nNL to GoalVector\nLocal Llama GGUF"]
+    VisionPipeline["VisionAIPipeline\nai/vision/\nYOLOv8n + CLIP + MediaPipe"]
+    AudioPipeline["AudioAIPipeline\nai/audio/\nWhisper + OpenWakeWord + YAMNet"]
+    FusionPipeline["KalmanDepthFusion\nai/fusion/\nMiDaS + HC-SR04 Kalman"]
 
     CLI --> Factory
     Factory --> Orchestrator
     Orchestrator --> SensorMgr
     Orchestrator --> SafetyMon
     SensorMgr --> Encoder
+    SensorMgr --> VisionPipeline
+    SensorMgr --> AudioPipeline
+    SensorMgr --> FusionPipeline
     SafetyMon --> RSSM
     Encoder --> RSSM
     RSSM --> MCTS
@@ -181,6 +191,9 @@ classDiagram
         +build_safety_monitor(cfg) SafetyMonitor
         +build_agent(cfg) NavigationAgent
         +build_cognitive_core(cfg) CognitiveCore
+        +build_vision_ai_pipeline(cfg) VisionAIPipeline
+        +build_audio_ai_pipeline(cfg) AudioAIPipeline
+        +build_depth_fusion(cfg) KalmanDepthFusion
     }
 
     ESP32CommProtocol <|.. MockESP32Driver : implements

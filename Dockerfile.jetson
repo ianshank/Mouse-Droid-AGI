@@ -38,6 +38,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     i2c-tools \
     libcap-dev \
     python3-dev \
+    portaudio19-dev \
+    libasound2-dev \
+    alsa-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
@@ -55,9 +58,11 @@ RUN pip install --no-cache-dir typing_extensions>=4.0 && \
 # Stage 2: Hardware extras (non-fatal — graceful fallback)
 # ---------------------------------------------------------------------------
 RUN pip install --no-cache-dir pyserial>=3.5 python-prctl || true
-RUN pip install --no-cache-dir Jetson.GPIO>=2.1 || true
+RUN pip install --no-cache-dir "Jetson.GPIO>=2.1.12" || true
 # picamera2 may fail without libcamera system libs — graceful skip
 RUN pip install --no-cache-dir picamera2 || true
+# PyAudio for USB microphone capture (requires portaudio19-dev)
+RUN pip install --no-cache-dir "pyaudio>=0.2.13" || true
 
 # ---------------------------------------------------------------------------
 # Stage 3: Dev tools (pytest, ruff, mypy, coverage)
@@ -81,6 +86,45 @@ COPY --from=llm_builder /usr/local/lib/python3.10/dist-packages/llama_cpp /usr/l
 COPY --from=llm_builder /usr/local/lib/python3.10/dist-packages/llama_cpp_python-*.dist-info /usr/local/lib/python3.10/dist-packages/
 
 RUN pip install --no-cache-dir "huggingface-hub>=0.20" diskcache || true
+
+# ---------------------------------------------------------------------------
+# Stage 5: AI Vision — YOLOv8, CLIP, MediaPipe
+# ---------------------------------------------------------------------------
+# ultralytics: YOLOv8-nano inference + TensorRT auto-export
+# open-clip-torch: CLIP ViT-B/32 semantic embeddings
+# mediapipe: face detection + gesture recognition (CPU)
+# Note: timm is already in the l4t-pytorch base image
+RUN pip install --no-cache-dir "ultralytics>=8.2" || true
+RUN pip install --no-cache-dir "open-clip-torch>=2.24" || true
+RUN pip install --no-cache-dir "mediapipe>=0.10" || true
+
+# ---------------------------------------------------------------------------
+# Stage 6: AI Audio — faster-whisper, OpenWakeWord, YAMNet (ONNX)
+# ---------------------------------------------------------------------------
+# faster-whisper: CTranslate2 INT8 Whisper tiny.en ASR (CPU+CUDA)
+# openwakeword: lightweight wake word detection (CPU)
+# onnxruntime: ONNX runtime for YAMNet sound classification (CPU)
+RUN pip install --no-cache-dir "faster-whisper>=1.0" || true
+RUN pip install --no-cache-dir "openwakeword>=0.6" || true
+RUN pip install --no-cache-dir "onnxruntime>=1.17" || true
+
+# ---------------------------------------------------------------------------
+# Stage 7: AI Fusion — MiDaS depth (uses torch.hub via timm)
+# ---------------------------------------------------------------------------
+# Pre-cache MiDaS model weights at build time to avoid download on first run.
+# Falls back silently if network unavailable during build.
+RUN python3 -c "\
+import os; os.environ.setdefault('TORCH_HOME', '/opt/mousedroid/model_cache'); \
+import torch; \
+torch.hub.load('intel-isl/MiDaS', 'MiDaS_small', trust_repo=True)" || true
+
+# Pre-cache OpenWakeWord models
+RUN python3 -c "\
+import openwakeword; \
+openwakeword.utils.download_models(['hey_jarvis'])" || true
+
+# Ensure AI model directory exists
+RUN mkdir -p /home/jetson/models/ai
 
 # ---------------------------------------------------------------------------
 # Runtime configuration

@@ -19,9 +19,84 @@ experience:
   map_size_gb: 40
   flush_every_n: 60
 
+ultrasonic:
+  trigger_pin: 23
+  echo_pin: 24
+  max_range_m: 4.0
+  min_range_m: 0.02
+  timeout_s: 0.1
+  speed_of_sound_mps: 343.0
+
+# Allow single-sensor operation until camera is connected
+safety:
+  min_valid_sensors: 1
+  battery_critical_v: 0.1
+
+microphone:
+  device_name: "USB PnP"
+  sample_rate: 44100
+  channels: 1
+  chunk_size: 1024
+  format: "float32"
+
 llm_gateway:
   model_path: "/home/jetson/models/Phi-3-mini-4k-instruct-q4.gguf"
   n_threads: 4
   n_gpu_layers: -1
   max_tokens: 256
   temperature: 0.1
+
+# --- AI Vision Pipeline ---
+vision_ai:
+  enabled: true
+  detector_model: "yolov8n"
+  detector_confidence: 0.5
+  detector_max_hz: 15.0
+  detector_imgsz: 640
+  detector_half_precision: true
+  person_detection_enabled: true
+  person_class_names: ["person"]
+  law2_gesture_labels: ["stop"]
+  embedder_model: "ViT-B-32"
+  embedder_pretrained: "openai"
+  embedder_dim: 512
+  embedder_max_hz: 5.0
+  face_detection_enabled: true
+  face_max_hz: 10.0
+  gesture_recognition_enabled: true
+  gesture_max_hz: 10.0
+  gesture_min_detection_confidence: 0.5
+  gesture_min_tracking_confidence: 0.5
+  model_cache_dir: "/home/jetson/models/ai"
+  tensorrt_enabled: true
+
+# --- AI Audio Pipeline ---
+audio_ai:
+  enabled: true
+  asr_model: "tiny.en"
+  asr_compute_type: "int8"
+  asr_sample_rate_hz: 16000
+  asr_beam_size: 1
+  wake_word: "hey computer"
+  wake_word_model: "hey_jarvis"
+  wake_word_threshold: 0.5
+  sound_classifier_enabled: true
+  sound_classifier_model: "yamnet.onnx"
+  sound_classifier_cache_dir: "/home/jetson/models/ai"
+  classifier_max_hz: 2.0
+  classifier_top_k: 5
+  classifier_sample_rate_hz: 16000
+  classifier_window_ms: 975.0
+  stop_keywords: ["stop", "halt", "freeze", "no", "danger"]
+
+# --- Sensor Fusion ---
+fusion:
+  enabled: true
+  depth_model: "MiDaS_small"
+  midas_hub_repo: "intel-isl/MiDaS"
+  depth_max_hz: 10.0
+  depth_resolution: 256
+  kalman_process_noise: 0.01
+  kalman_ultrasonic_noise: 0.05
+  kalman_midas_noise: 0.1
+  ultrasonic_fov_fraction: 0.15

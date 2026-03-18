@@ -155,9 +155,10 @@ async def _collect_episode(
         action = np.tanh(rng.standard_normal(cfg.model.action_dim).astype(np.float32))
 
         # Inject edge conditions to ensure all 10 intention classes are represented
-        human_detected = rng.random() < 0.10
-        human_dist_m = float(rng.uniform(0.1, 0.4)) if human_detected else float("inf")
-        commanded_action = action.copy() if rng.random() < 0.10 else None
+        ann_cfg = cfg.training.annotation
+        human_detected = rng.random() < ann_cfg.episode_human_prob
+        human_dist_m = float(rng.uniform(0.1, ann_cfg.human_safety_radius_m)) if human_detected else float("inf")
+        commanded_action = action.copy() if rng.random() < ann_cfg.episode_command_prob else None
 
         intention = label_intention(
             action,
@@ -165,6 +166,9 @@ async def _collect_episode(
             human_detected=human_detected,
             human_dist_m=human_dist_m,
             commanded_action=commanded_action,
+            human_safety_radius_m=ann_cfg.human_safety_radius_m,
+            battery_warn_v=ann_cfg.battery_warn_v,
+            obstacle_clearance_m=ann_cfg.obstacle_clearance_m,
         )
 
         # Build observation with label-relevant state in the first dims
@@ -193,8 +197,8 @@ async def _collect_episode(
 
 def collect_annotations(
     cfg: Settings,
-    n_episodes: int = 500,
-    max_steps: int = 50,
+    n_episodes: int | None = None,
+    max_steps: int | None = None,
     output_path: Path | str | None = None,
     balance_dataset: bool = False,
 ) -> Path:
@@ -214,6 +218,9 @@ def collect_annotations(
         msg = "Annotation collection requires mock_hardware=True"
         raise ValueError(msg)
 
+    _n_episodes = n_episodes if n_episodes is not None else cfg.training.annotation.n_episodes
+    _max_steps = max_steps if max_steps is not None else cfg.training.annotation.max_steps
+
     if output_path:
         output_path = Path(output_path)
     else:
@@ -223,14 +230,14 @@ def collect_annotations(
     all_observations: list[np.ndarray] = []
     all_intentions: list[int] = []
 
-    for ep in range(n_episodes):
-        annotations = asyncio.run(_collect_episode(cfg, max_steps))
+    for ep in range(_n_episodes):
+        annotations = asyncio.run(_collect_episode(cfg, _max_steps))
         for ann in annotations:
             all_observations.append(ann["observation"])
             all_intentions.append(ann["intention_label"])
 
         if (ep + 1) % 100 == 0:
-            _log.info("annotation_episodes", count=ep + 1, total=n_episodes)
+            _log.info("annotation_episodes", count=ep + 1, total=_n_episodes)
 
     observations = np.stack(all_observations)
     intentions = np.array(all_intentions, dtype=np.int64)

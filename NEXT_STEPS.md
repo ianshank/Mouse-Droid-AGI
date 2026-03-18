@@ -69,7 +69,9 @@ This document tracks planned enhancements, organised by priority and category.
 - ✅ `GatewayConfig` added to `schema.py` with model_path, n_threads, n_gpu_layers
 - ✅ Docker Compose updated with models volume + env var
 - ✅ `deploy_remote.sh --with-llm` auto-downloads via huggingface_hub on Jetson
-- ⏳ Pending: Jetson deployment (Phase F)
+- ✅ Jetson Docker deployment completed with baked audio dependencies and container smoke tests
+- ✅ `src/mousedroid/ai/` package complete: VisionAI (YOLOv8n/CLIP/MediaPipe), AudioAI (Whisper/OpenWakeWord/YAMNet), SensorFusion (MiDaS + Kalman)
+- ⏳ Remaining: camera + ESP32 validation on the real hardware path
 
 ### 3.2 LLM Gateway Integration Test
 - Test 10 diverse natural language commands → `GoalVector` responses
@@ -166,15 +168,52 @@ This document tracks planned enhancements, organised by priority and category.
 - Include all optional dependencies: hardware, jetson, llm
 - **Effort**: 2 days | **Owner**: DevOps
 
-### 7.2 Hugging Face Hub Integration
+### 7.2 Jetson Post-Deploy Verification
+- Use `scripts/jetson_smoke_test_deploy.sh` after each Docker deploy to verify container health, CUDA, weights, LLM, ultrasonic, microphone, and recent logs
+- Run `MOUSEDROID_CHECK_MIC=false` or `MOUSEDROID_CHECK_ULTRASONIC=false` only when a sensor is intentionally disconnected
+- **Effort**: 0.5 day | **Owner**: robotics team
+
+### 7.3 Hugging Face Hub Integration
 - Upload trained model weights (RSSM, BDI, policy) to `ianshank/mousedroid-weights`
 - Add `scripts/download_weights.sh` to fetch from Hub on first run
 - **Effort**: 1 day | **Owner**: ML team
 
-### 7.3 PyPI Release Workflow
+### 7.4 PyPI Release Workflow
 - Automated release on version tag push via GitHub Actions
-- Publish `mousedroid==0.2.0` to PyPI
+- Publish `mousedroid==0.3.0` to PyPI
 - **Effort**: 1 day | **Owner**: DevOps
+
+---
+
+## Priority 8 — AI Perception Pipeline Hardware Validation
+
+> **Status**: `src/mousedroid/ai/` package merged (`feat/v0.3.0-ai-pipeline`). All 1077 unit tests pass with mocks. Hardware validation on Jetson pending.
+
+### 8.1 VisionAI Jetson Validation
+- Run `JetsonYOLODetector` with a compiled `yolov8n.engine` TensorRT file on the Jetson
+- Verify `ObjectDetection` bounding boxes + confidence scores against IMX500 live frames
+- Confirm `half_precision=True` path achieves target FPS (>10 fps at 640×640)
+- Run `CLIPEmbedder` end-to-end: capture frame → 512-dim embedding → cosine similarity
+- **Effort**: 2 days | **Owner**: robotics team
+
+### 8.2 AudioAI Jetson Validation
+- Verify `OpenWakeWordDetector` triggers reliably within 1 s of saying “hey Jarvis” in corridor
+- Record 10-second clips; confirm `WhisperASR` transcription WER < 20% on simple commands
+- Test `YAMNetClassifier` smoke detection on pre-recorded WAV samples
+- **Effort**: 1 day | **Owner**: ML team
+
+### 8.3 SensorFusion Validation
+- Compare `KalmanDepthFusion.center_distance_m` to tape-measure ground truth for 0.5 m, 1 m, 2 m targets
+- Verify `FusedDepthResult.depth_map` shape matches frame resolution
+- Test with ultrasonic only (MiDaS disabled) — confirm fallback to raw HC-SR04 reading
+- **Effort**: 1 day | **Owner**: robotics team
+
+### 8.4 Three Laws Integration Smoke Test
+- Walk in front of the robot at 1 m distance — confirm `human_detected=True`, `human_dist_m` ≈ 1.0
+- Hold up open palm facing camera — confirm `gesture_stop_commanded=True`
+- Say “stop” into microphone — confirm `voice_stop_commanded=True`
+- Verify orchestrator halts motion within 100 ms of any Three Laws override
+- **Effort**: 1 day | **Owner**: robotics + hardware teams
 
 ---
 

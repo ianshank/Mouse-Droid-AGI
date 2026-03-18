@@ -27,6 +27,18 @@ training:
   data_dir: "training/data"
   weights_dir: "weights"
 
+  # ── Annotation Config ────────────────────────────
+  annotation:
+    human_safety_radius_m: 0.5
+    battery_warn_v: 10.8
+    obstacle_clearance_m: 0.25
+    episode_human_prob: 0.10
+    episode_command_prob: 0.10
+    n_episodes: 500
+    max_steps: 50
+    nominal_battery_v: 12.0
+    nominal_obstacle_dist_m: 2.0
+
   # ── GPU Config ────────────────────────────────────
   gpu:
     device: null            # null = auto-detect (cuda:0 if available)

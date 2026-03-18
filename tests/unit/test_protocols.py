@@ -41,6 +41,12 @@ class _MockVision:
     async def capture_features(self) -> NDArray[np.float32]:
         return np.zeros(256, dtype=np.float32)
 
+    async def capture_frame(self) -> NDArray[np.uint8]:
+        return np.zeros((480, 640, 3), dtype=np.uint8)
+
+    async def extract_features(self, frame: NDArray[np.uint8]) -> NDArray[np.float32]:
+        return np.zeros(256, dtype=np.float32)
+
     @property
     def feature_dim(self) -> int:
         return 256

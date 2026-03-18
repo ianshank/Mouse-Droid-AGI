@@ -210,3 +210,81 @@ class TestTrainBdiNormStatsRegression:
         expected = ["belief.npz", "desire.npz", "intention.npz", "affect.npz", "belief_norm_stats.npz"]
         for name in expected:
             assert (output_dir / name).exists(), f"Missing: {name}"
+
+
+# ---------------------------------------------------------------------------
+# Config-driven dim params (Phase 3 refactor)
+# ---------------------------------------------------------------------------
+
+
+class TestBeliefEncoderDimParams:
+    """train_belief_encoder() must respect explicit obs_dim and belief_dim params."""
+
+    def test_custom_obs_dim(self) -> None:
+        rng = np.random.default_rng(0)
+        obs = rng.standard_normal((60, 128)).astype(np.float32)
+        weights = train_belief_encoder(obs, lr=1e-3, epochs=2, batch_size=16, obs_dim=128, belief_dim=64)
+        assert weights["w1"].shape == (128, 64)
+        assert weights["w2"].shape == (64, 64)
+
+    def test_custom_belief_dim(self) -> None:
+        rng = np.random.default_rng(0)
+        obs = rng.standard_normal((60, 256)).astype(np.float32)
+        weights = train_belief_encoder(obs, lr=1e-3, epochs=2, batch_size=16, obs_dim=256, belief_dim=32)
+        # w2 is belief_dim × belief_dim (square self-encoding layer)
+        assert weights["w1"].shape == (256, 32)
+        assert weights["w2"].shape == (32, 32)
+
+
+class TestDesireEncoderDimParams:
+    def test_custom_dims(self) -> None:
+        rng = np.random.default_rng(0)
+        obs = rng.standard_normal((60, 128)).astype(np.float32)
+        belief_w = train_belief_encoder(obs, lr=1e-3, epochs=2, batch_size=16, obs_dim=128, belief_dim=32)
+        desire_w = train_desire_encoder(obs, belief_w, lr=1e-3, epochs=2, batch_size=16, belief_dim=32, desire_dim=16)
+        assert desire_w["w1"].shape == (32, 16)
+
+
+class TestAffectEstimatorDimParams:
+    def test_custom_affect_dim(self) -> None:
+        obs, intentions = _make_dummy_data(60)
+        belief_w = train_belief_encoder(obs, lr=1e-3, epochs=2, batch_size=16)
+        desire_w = train_desire_encoder(obs, belief_w, lr=1e-3, epochs=2, batch_size=16)
+        intent_w = train_intention_predictor(obs, intentions, belief_w, desire_w, lr=1e-3, epochs=2, batch_size=16)
+        affect_w = train_affect_estimator(
+            obs, belief_w, desire_w, intent_w,
+            lr=1e-3, epochs=2, batch_size=16,
+            desire_dim=64, affect_dim=4,
+        )
+        # Output column count should match affect_dim=4
+        assert affect_w["w1"].shape[1] == 4
+
+
+class TestTrainBdiWithBDIConfig:
+    """train_bdi() must forward BDITrainingConfig dims to sub-functions."""
+
+    def test_custom_dims_reflected_in_output_shapes(self, tmp_path: Path) -> None:
+        from mousedroid.config.schema import BDITrainingConfig
+
+        ann_path = tmp_path / "annotations.npz"
+        obs, intentions = _make_dummy_data(60)
+        np.savez(ann_path, observations=obs, intentions=intentions)
+
+        cfg = BDITrainingConfig(
+            obs_dim=256,
+            belief_dim=32,
+            desire_dim=16,
+            affect_dim=4,
+            epochs=2,
+            batch_size=16,
+        )
+        output_dir = tmp_path / "bdi_out_custom"
+        train_bdi(ann_path, output_dir=output_dir, bdi_config=cfg)
+
+        belief_w = np.load(output_dir / "belief.npz")
+        desire_w = np.load(output_dir / "desire.npz")
+        affect_w = np.load(output_dir / "affect.npz")
+
+        assert belief_w["w1"].shape == (256, 32)   # obs_dim × belief_dim
+        assert desire_w["w1"].shape == (32, 16)    # belief_dim × desire_dim
+        assert affect_w["w1"].shape[1] == 4        # affect_dim

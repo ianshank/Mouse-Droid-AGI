@@ -1,14 +1,28 @@
 #!/bin/bash
 set -euo pipefail
 
+CONTAINER_NAME="${MOUSEDROID_CONTAINER:-mousedroid}"
+CHECK_MIC="${MOUSEDROID_CHECK_MIC:-true}"
+CHECK_ULTRASONIC="${MOUSEDROID_CHECK_ULTRASONIC:-true}"
+LOG_LINES="${MOUSEDROID_LOG_LINES:-200}"
+
+run_in_container() {
+    sudo docker exec "${CONTAINER_NAME}" "$@"
+}
+
 echo '=== CONTAINER STATUS ==='
 sudo docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
 
+if ! sudo docker ps --format '{{.Names}}' | grep -qx "${CONTAINER_NAME}"; then
+    echo "ERROR: container '${CONTAINER_NAME}' is not running"
+    exit 1
+fi
+
 echo '=== IMPORT TEST ==='
-sudo docker exec mousedroid python3 -c 'import mousedroid; print("mousedroid OK")'
+run_in_container python3 -c 'import mousedroid; print("mousedroid OK")'
 
 echo '=== TORCH/CUDA TEST ==='
-sudo docker exec mousedroid python3 -c '
+run_in_container python3 -c '
 import torch
 v = torch.__version__
 cuda = torch.cuda.is_available()
@@ -16,30 +30,48 @@ gpu = torch.cuda.get_device_name(0) if cuda else None
 print(f"torch={v}, cuda={cuda}, gpu={gpu}")
 '
 
-echo '=== WEIGHTS TEST ==='
-sudo docker exec mousedroid python3 -c '
-import os
-wdir = "/opt/mousedroid/weights"
-files = [os.path.join(r, f) for r, d, fs in os.walk(wdir) for f in fs if f.endswith(".pt")]
-print(f"{len(files)} .pt weight files found")
-for f in sorted(files)[:8]:
-    relpath = os.path.relpath(f, wdir)
-    size_kb = os.path.getsize(f) / 1024
-    print(f"  {relpath}: {size_kb:.0f} KB")
-'
+echo '=== WEIGHTS + LLM TEST ==='
+run_in_container python3 /opt/mousedroid/scripts/_test_weights_llm.py
 
-echo '=== LLM FILE TEST ==='
-sudo docker exec mousedroid python3 -c '
-import os
-p = "/home/jetson/models/Phi-3-mini-4k-instruct-q4.gguf"
-if os.path.exists(p):
-    size_mb = os.path.getsize(p) / 1024 / 1024
-    print(f"LLM exists, size={size_mb:.0f} MB")
-else:
-    print("LLM NOT FOUND at " + p)
-'
+if [[ "${CHECK_ULTRASONIC}" == "true" ]]; then
+    echo '=== ULTRASONIC TEST ==='
+    sudo docker exec -i "${CONTAINER_NAME}" python3 - <<'PY'
+import asyncio
+from pathlib import Path
 
-echo '=== LLAMA_CPP TEST ==='
-sudo docker exec mousedroid python3 -c 'from llama_cpp import Llama; print("llama_cpp OK")'
+from mousedroid.config.loader import load_settings
+from mousedroid.hardware.sensors.ultrasonic import HcSr04
+
+cfg = load_settings(Path("/etc/mousedroid/jetson_production.yaml"))
+if cfg.ultrasonic is None:
+    raise SystemExit("ultrasonic config missing")
+
+sensor = HcSr04(cfg.ultrasonic)
+distance = asyncio.run(sensor.read_distance_m())
+print(f"ULTRASONIC_TEST_PASSED distance_m={distance:.3f}")
+PY
+fi
+
+if [[ "${CHECK_MIC}" == "true" ]]; then
+    echo '=== MICROPHONE TEST ==='
+    run_in_container python3 /opt/mousedroid/scripts/_test_mic.py
+fi
+
+echo '=== LOG HEALTH ==='
+LOG_OUTPUT="$(sudo docker logs --tail "${LOG_LINES}" "${CONTAINER_NAME}" 2>&1 || true)"
+printf '%s
+' "${LOG_OUTPUT}" | tail -20
+
+if printf '%s
+' "${LOG_OUTPUT}" | grep -Eq 'audio_capture_failed|microphone_start_failed|Traceback'; then
+    echo 'ERROR: unhealthy log patterns detected in recent container logs'
+    exit 1
+fi
+
+if [[ "${CHECK_MIC}" == "true" ]] && ! printf '%s
+' "${LOG_OUTPUT}" | grep -q 'usb_microphone_started'; then
+    echo 'ERROR: microphone test passed but usb_microphone_started was not observed in recent logs'
+    exit 1
+fi
 
 echo '=== ALL SMOKE TESTS PASSED ==='

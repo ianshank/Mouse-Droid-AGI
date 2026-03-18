@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mousedroid"
-version = "0.1.0"
+version = "0.3.0"
 description = "MouseDroidAGI — Star Wars MSE-6 Agentic World Model on Jetson Orin Nano"
 requires-python = ">=3.10"
 dependencies = [
@@ -38,6 +38,31 @@ jetson = [
 llm = [
     "llama-cpp-python>=0.2",
     "huggingface-hub>=0.20",
+]
+ai-vision = [
+    "ultralytics>=8.2",
+    "open-clip-torch>=2.24",
+    "mediapipe>=0.10",
+    "opencv-python>=4.8",
+]
+ai-audio = [
+    "faster-whisper>=1.0",
+    "openwakeword>=0.6",
+    "onnxruntime>=1.17",
+]
+ai-fusion = [
+    "opencv-python>=4.8",
+    "timm>=0.9",
+]
+ai = [
+    "ultralytics>=8.2",
+    "open-clip-torch>=2.24",
+    "mediapipe>=0.10",
+    "opencv-python>=4.8",
+    "faster-whisper>=1.0",
+    "openwakeword>=0.6",
+    "onnxruntime>=1.17",
+    "timm>=0.9",
 ]
 dev = [
     "pytest>=7.0",

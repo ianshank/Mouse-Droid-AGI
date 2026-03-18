@@ -40,7 +40,35 @@ class MockCamera:
         Returns:
             Random feature vector of shape ``(feature_dim,)``.
         """
-        return self._rng.standard_normal(self._cfg.feature_dim).astype(np.float32)
+        frame = await self.capture_frame()
+        return await self.extract_features(frame)
+
+    async def capture_frame(self) -> NDArray[np.uint8]:
+        """Return random BGR frame.
+
+        Returns:
+            Random uint8 frame of shape ``(H, W, 3)``.
+        """
+        return self._rng.integers(
+            0, 256,
+            size=(self._cfg.resolution_height, self._cfg.resolution_width, 3),
+            dtype=np.uint8,
+        )
+
+    async def extract_features(self, frame: NDArray[np.uint8]) -> NDArray[np.float32]:
+        """Extract feature vector from an existing frame."""
+        flat = frame.astype(np.float32).flatten()
+        dim = self._cfg.feature_dim
+        if len(flat) >= dim:
+            stride = len(flat) // dim
+            features = flat[: stride * dim].reshape(dim, stride).mean(axis=1)
+        else:
+            features = np.zeros(dim, dtype=np.float32)
+            features[: len(flat)] = flat
+        norm = np.linalg.norm(features)
+        if norm > 0:
+            features = features / norm
+        return np.asarray(features, dtype=np.float32)
 
     @property
     def feature_dim(self) -> int:

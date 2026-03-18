@@ -214,6 +214,13 @@ class MCTSConfig(BaseModel):
     gamma: float = Field(0.97, gt=0, le=1, description="Discount factor")
     n_action_candidates: int = Field(9, gt=0, description="Action candidates per node")
     ucb_c: float = Field(1.41, gt=0, description="UCB exploration constant")
+    ucb_candidates: list[float] = Field(
+        default_factory=lambda: [0.5, 1.0, 1.41, 2.0, 3.0],
+        description="UCB exploration constant candidates for tuning grid search",
+    )
+    warmstart_n_episodes: int = Field(
+        100, gt=0, description="Max episodes per UCB candidate during warm-start tuning"
+    )
     early_exit_value_threshold: float = Field(
         0.01,
         ge=0,
@@ -435,6 +442,34 @@ class GPUConfig(BaseModel):
     )
 
 
+class AnnotationConfig(BaseModel):
+    """Thresholds for heuristic intention annotation (collect_annotations.py)."""
+
+    human_safety_radius_m: float = Field(
+        0.5, gt=0, description="Law 1 human proximity threshold for protect_human label"
+    )
+    battery_warn_v: float = Field(
+        10.8, gt=0, description="Battery voltage below which charge intention is labelled"
+    )
+    obstacle_clearance_m: float = Field(
+        0.25, gt=0, description="Distance below which avoid_obstacle is labelled"
+    )
+    episode_human_prob: float = Field(
+        0.10, ge=0, le=1, description="Probability of injecting a human detection per step"
+    )
+    episode_command_prob: float = Field(
+        0.10, ge=0, le=1, description="Probability of injecting a commanded action per step"
+    )
+    n_episodes: int = Field(500, gt=0, description="Number of annotation episodes")
+    max_steps: int = Field(50, gt=0, description="Steps per annotation episode")
+    nominal_battery_v: float = Field(
+        12.0, gt=0, description="Nominal battery voltage for rollout context (Law 3 check)"
+    )
+    nominal_obstacle_dist_m: float = Field(
+        2.0, gt=0, description="Nominal obstacle distance for rollout context (Law 1/2 check)"
+    )
+
+
 class TrainingConfig(BaseModel):
     """Offline training configuration."""
 
@@ -447,6 +482,17 @@ class TrainingConfig(BaseModel):
     n_episodes: int = Field(1000, gt=0, description="Synthetic episodes to generate")
     data_dir: str = Field("training/data", description="Generated data directory")
     weights_dir: str = Field("weights", description="Checkpoint output directory")
+    validate_violation_rate_threshold: float = Field(
+        0.05, ge=0, le=1, description="Max violation rate to pass validation"
+    )
+    report_output_path: str = Field(
+        "training/results/training_report.json",
+        description="Path for JSON training report output",
+    )
+    annotation: AnnotationConfig = Field(
+        default_factory=AnnotationConfig,
+        description="Thresholds for heuristic intention annotation",
+    )
     resume_from: str | None = Field(
         None,
         description="Path to checkpoint for resuming interrupted training",
@@ -467,6 +513,10 @@ class BDITrainingConfig(BaseModel):
         3e-3, gt=0, description="BDI learning rate (higher for vanilla SGD)"
     )
     batch_size: int = Field(32, gt=0, description="BDI batch size")
+    obs_dim: int = Field(256, gt=0, description="Observation embedding dim for BDI encoder")
+    belief_dim: int = Field(128, gt=0, description="Belief latent dim")
+    desire_dim: int = Field(64, gt=0, description="Desire latent dim")
+    affect_dim: int = Field(2, gt=0, description="Affect output dim (valence, arousal)")
     accuracy_threshold: float = Field(
         0.60,
         gt=0,
@@ -492,6 +542,156 @@ class MicrophoneConfig(BaseModel):
     channels: int = Field(1, gt=0, le=2, description="Audio channels (1=mono, 2=stereo)")
     chunk_size: int = Field(1024, gt=0, description="Samples per read chunk")
     format: Literal["float32", "int16"] = Field("float32", description="Audio sample format")
+
+
+class VisionAIConfig(BaseModel):
+    """AI vision pipeline configuration — object detection, embeddings, face/gesture."""
+
+    enabled: bool = Field(False, description="Enable AI vision pipeline")
+    detector_model: str = Field("yolov8n", description="Object detector model (ultralytics)")
+    detector_confidence: float = Field(
+        0.5, gt=0, le=1, description="Minimum detection confidence"
+    )
+    detector_max_hz: float = Field(15.0, gt=0, description="Max detection inference rate (Hz)")
+    detector_imgsz: int = Field(640, gt=0, description="YOLO input image size (px)")
+    detector_half_precision: bool = Field(
+        True, description="Use FP16 half precision for TensorRT export"
+    )
+    person_detection_enabled: bool = Field(
+        True, description="Enable person detection for Three Laws safety"
+    )
+    person_class_names: list[str] = Field(
+        default_factory=lambda: ["person"],
+        description="YOLO class names treated as 'person' for Law 1 safety",
+    )
+    law2_gesture_labels: list[str] = Field(
+        default_factory=lambda: ["stop"],
+        description="Gesture labels that trigger Law 2 stop command",
+    )
+    embedder_model: str = Field(
+        "ViT-B-32", description="CLIP vision encoder model name"
+    )
+    embedder_pretrained: str = Field(
+        "openai", description="CLIP pretrained weights source"
+    )
+    embedder_dim: int = Field(512, gt=0, description="Semantic embedding dimension")
+    embedder_max_hz: float = Field(10.0, gt=0, description="Max embedding inference rate (Hz)")
+    face_detection_enabled: bool = Field(
+        True, description="Enable MediaPipe face detection"
+    )
+    face_max_hz: float = Field(10.0, gt=0, description="Max face detection rate (Hz)")
+    gesture_recognition_enabled: bool = Field(
+        True, description="Enable MediaPipe gesture recognition"
+    )
+    gesture_max_hz: float = Field(10.0, gt=0, description="Max gesture recognition rate (Hz)")
+    gesture_min_detection_confidence: float = Field(
+        0.5, gt=0, le=1, description="MediaPipe min hand detection confidence"
+    )
+    gesture_min_tracking_confidence: float = Field(
+        0.5, gt=0, le=1, description="MediaPipe min hand tracking confidence"
+    )
+    model_cache_dir: Path = Field(
+        Path("/home/jetson/models/ai"),
+        description="Directory for cached TensorRT engines and model weights",
+    )
+    tensorrt_enabled: bool = Field(
+        True, description="Export and use TensorRT engines when available"
+    )
+
+
+class AudioAIConfig(BaseModel):
+    """AI audio pipeline configuration — ASR, wake word, sound classification."""
+
+    enabled: bool = Field(False, description="Enable AI audio pipeline")
+    asr_model: str = Field(
+        "tiny.en", description="Whisper model size (tiny.en, base.en, small.en)"
+    )
+    asr_compute_type: str = Field(
+        "int8", description="CTranslate2 compute type (int8, float16, float32)"
+    )
+    asr_beam_size: int = Field(1, gt=0, description="Beam search width for ASR")
+    asr_accumulate_s: float = Field(
+        3.0, gt=0, description="Seconds of audio to accumulate before transcription"
+    )
+    wake_word: str = Field("hey computer", description="Wake word phrase")
+    wake_word_model: str = Field(
+        "hey_jarvis", description="OpenWakeWord model name"
+    )
+    wake_word_threshold: float = Field(
+        0.5, gt=0, le=1, description="Wake word detection confidence threshold"
+    )
+    sound_classifier_enabled: bool = Field(
+        True, description="Enable YAMNet environmental sound classification"
+    )
+    sound_classifier_model: str = Field(
+        "yamnet.onnx", description="YAMNet ONNX model filename"
+    )
+    sound_classifier_cache_dir: Path = Field(
+        Path("/home/jetson/models/ai"),
+        description="Directory for cached sound classifier model",
+    )
+    sound_classifier_confidence: float = Field(
+        0.3, gt=0, le=1, description="Minimum sound classification confidence"
+    )
+    classifier_max_hz: float = Field(
+        2.0, gt=0, description="Max sound classification rate (Hz)"
+    )
+    classifier_top_k: int = Field(
+        5, gt=0, description="Top-K sound events to return"
+    )
+    asr_sample_rate_hz: int = Field(
+        16000, gt=0, description="Expected ASR input sample rate (Hz)"
+    )
+    classifier_sample_rate_hz: int = Field(
+        16000, gt=0, description="Expected classifier input sample rate (Hz)"
+    )
+    classifier_window_ms: float = Field(
+        975.0, gt=0, description="YAMNet classification window duration (ms)"
+    )
+    stop_keywords: list[str] = Field(
+        default_factory=lambda: ["stop", "halt", "freeze", "no", "danger"],
+        description="Voice keywords that trigger Law 2 stop command",
+    )
+    model_cache_dir: Path = Field(
+        Path("/home/jetson/models/ai"),
+        description="Directory for cached model weights",
+    )
+
+
+class FusionConfig(BaseModel):
+    """Sensor fusion configuration — monocular depth + ultrasonic Kalman fusion."""
+
+    enabled: bool = Field(False, description="Enable depth fusion pipeline")
+    depth_model: str = Field(
+        "MiDaS_small", description="MiDaS model variant (MiDaS_small, DPT_Hybrid)"
+    )
+    midas_hub_repo: str = Field(
+        "intel-isl/MiDaS",
+        description="PyTorch Hub repo for MiDaS depth model downloads",
+    )
+    depth_max_hz: float = Field(10.0, gt=0, description="Max depth inference rate (Hz)")
+    depth_resolution: int = Field(
+        256, gt=0, description="MiDaS input resolution (square)"
+    )
+    ultrasonic_fov_deg: float = Field(
+        15.0, gt=0, description="HC-SR04 beam cone half-angle (degrees)"
+    )
+    ultrasonic_fov_fraction: float = Field(
+        0.15, gt=0, le=1, description="Fraction of image matching ultrasonic FOV"
+    )
+    kalman_process_noise: float = Field(
+        0.01, gt=0, description="Kalman filter process noise variance"
+    )
+    kalman_ultrasonic_noise: float = Field(
+        0.05, gt=0, description="Kalman ultrasonic measurement noise variance"
+    )
+    kalman_midas_noise: float = Field(
+        0.1, gt=0, description="Kalman MiDaS depth measurement noise variance"
+    )
+    model_cache_dir: Path = Field(
+        Path("/home/jetson/models/ai"),
+        description="Directory for cached model weights",
+    )
 
 
 class UltrasonicConfig(BaseModel):
@@ -569,6 +769,9 @@ class Settings(BaseSettings):
     curiosity: CuriosityConfig = Field(default_factory=CuriosityConfig)  # type: ignore[arg-type]
     ppo: PPOConfig = Field(default_factory=PPOConfig)  # type: ignore[arg-type]
     three_laws: ThreeLawsConfig = Field(default_factory=ThreeLawsConfig)  # type: ignore[arg-type]
+    vision_ai: VisionAIConfig = Field(default_factory=VisionAIConfig)  # type: ignore[arg-type]
+    audio_ai: AudioAIConfig = Field(default_factory=AudioAIConfig)  # type: ignore[arg-type]
+    fusion: FusionConfig = Field(default_factory=FusionConfig)  # type: ignore[arg-type]
     llm_gateway: GatewayConfig | None = Field(
         None,
         description="LLM gateway config for NL mission translation (None=disabled)",

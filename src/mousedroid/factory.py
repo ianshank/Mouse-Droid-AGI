@@ -16,6 +16,10 @@ from mousedroid.safety.protocol import SafetyMonitorProtocol
 from mousedroid.world_model.protocol import WorldModelProtocol
 
 if TYPE_CHECKING:
+    from mousedroid.ai.audio.pipeline import AudioAIPipeline
+    from mousedroid.ai.fusion.depth import MiDaSDepthEstimator
+    from mousedroid.ai.fusion.sensor_fusion import KalmanDepthFusion
+    from mousedroid.ai.vision.pipeline import VisionAIPipeline
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.config.schema import Settings, UltrasonicConfig
 
@@ -319,6 +323,12 @@ def build_orchestrator(cfg: Settings) -> object:
                 )
             else:
                 raise
+
+    # Build AI pipelines
+    vision_ai = build_vision_ai_pipeline(cfg)
+    audio_ai = build_audio_ai_pipeline(cfg)
+    depth_estimator, depth_fusion = build_depth_fusion(cfg)
+
     return MouseDroidOrchestrator(
         world_model=wm,
         agents=[agent],
@@ -328,5 +338,116 @@ def build_orchestrator(cfg: Settings) -> object:
         distance_sensor=distance,
         microphone=microphone,
         cognitive_core=cognitive_core,
+        vision_ai=vision_ai,
+        audio_ai=audio_ai,
+        depth_estimator=depth_estimator,
+        depth_fusion=depth_fusion,
         cfg=cfg,
     )
+
+
+def build_vision_ai_pipeline(cfg: Settings) -> VisionAIPipeline | None:
+    """Build vision AI pipeline with configured models.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        VisionAIPipeline or None if disabled.
+    """
+    if not cfg.vision_ai.enabled:
+        return None
+
+    from mousedroid.ai.vision.pipeline import VisionAIPipeline
+
+    detector = None
+    embedder = None
+    face_detector = None
+    gesture_recognizer = None
+
+    from mousedroid.ai.vision.detector import JetsonYOLODetector
+
+    detector = JetsonYOLODetector(cfg.vision_ai)
+
+    from mousedroid.ai.vision.embedder import CLIPEmbedder
+
+    embedder = CLIPEmbedder(cfg.vision_ai)
+
+    if cfg.vision_ai.face_detection_enabled:
+        from mousedroid.ai.vision.face import MediaPipeFaceDetector
+
+        face_detector = MediaPipeFaceDetector(cfg.vision_ai)
+
+    if cfg.vision_ai.gesture_recognition_enabled:
+        from mousedroid.ai.vision.gesture import MediaPipeGestureRecognizer
+
+        gesture_recognizer = MediaPipeGestureRecognizer(cfg.vision_ai)
+
+    return VisionAIPipeline(
+        detector=detector,
+        embedder=embedder,
+        face_detector=face_detector,
+        gesture_recognizer=gesture_recognizer,
+    )
+
+
+def build_audio_ai_pipeline(cfg: Settings) -> AudioAIPipeline | None:
+    """Build audio AI pipeline with configured models.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        AudioAIPipeline or None if disabled.
+    """
+    if not cfg.audio_ai.enabled:
+        return None
+
+    from mousedroid.ai.audio.pipeline import AudioAIPipeline
+
+    asr = None
+    wake_word = None
+    classifier = None
+
+    from mousedroid.ai.audio.asr import WhisperASR
+
+    asr = WhisperASR(cfg.audio_ai)
+
+    from mousedroid.ai.audio.wake_word import OpenWakeWordDetector
+
+    wake_word = OpenWakeWordDetector(cfg.audio_ai)
+
+    if cfg.audio_ai.sound_classifier_enabled:
+        from mousedroid.ai.audio.classifier import YAMNetClassifier
+
+        classifier = YAMNetClassifier(cfg.audio_ai)
+
+    return AudioAIPipeline(
+        asr=asr,
+        wake_word=wake_word,
+        classifier=classifier,
+        command_buffer_seconds=cfg.audio_ai.asr_accumulate_s,
+        sample_rate=cfg.audio_ai.asr_sample_rate_hz,
+    )
+
+
+def build_depth_fusion(
+    cfg: Settings,
+) -> tuple[MiDaSDepthEstimator | None, KalmanDepthFusion | None]:
+    """Build depth fusion pipeline.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Tuple of (MiDaS estimator, Kalman fusion) or (None, None) if disabled.
+    """
+    if not cfg.fusion.enabled:
+        return None, None
+
+    from mousedroid.ai.fusion.depth import MiDaSDepthEstimator
+    from mousedroid.ai.fusion.sensor_fusion import KalmanDepthFusion
+
+    estimator = MiDaSDepthEstimator(cfg.fusion)
+    fusion = KalmanDepthFusion(cfg.fusion)
+    return estimator, fusion
