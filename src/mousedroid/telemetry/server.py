@@ -29,6 +29,10 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
+# Upper bound for the number of log entries that can be requested in a single call.
+# This avoids surprising behavior with very large or negative values.
+MAX_LOG_ENTRIES: int = 1000
+
 _STARTUP_TIME: float = time.monotonic()
 
 
@@ -289,7 +293,21 @@ class TelemetryServer:
         if self._log_buffer is None:
             return web.json_response({"error": "log_buffer_disabled"}, status=503)
 
-        n = int(request.query.get("n", "50"))
+        raw_n = request.query.get("n", "50")
+        try:
+            n = int(raw_n)
+        except (TypeError, ValueError):
+            return web.json_response(
+                {"error": "invalid_n", "message": "Query parameter 'n' must be an integer."},
+                status=400,
+            )
+
+        # Clamp to a non-negative, sensible range.
+        if n < 0:
+            n = 0
+        if n > MAX_LOG_ENTRIES:
+            n = MAX_LOG_ENTRIES
+
         entries = self._log_buffer.get_recent(n)
 
         serialisable = []
