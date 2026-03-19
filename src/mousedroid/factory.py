@@ -13,6 +13,7 @@ from mousedroid.comms.protocol import ESP32CommProtocol
 from mousedroid.hardware.protocols import AudioProtocol, DistanceSensorProtocol, VisionProtocol
 from mousedroid.logging.setup import get_logger
 from mousedroid.safety.protocol import SafetyMonitorProtocol
+from mousedroid.telemetry.log_buffer import LogRingBuffer
 from mousedroid.world_model.protocol import WorldModelProtocol
 
 if TYPE_CHECKING:
@@ -20,7 +21,6 @@ if TYPE_CHECKING:
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.config.schema import Settings, UltrasonicConfig
     from mousedroid.health.monitor import HealthMonitor
-    from mousedroid.telemetry.log_buffer import LogRingBuffer
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
 
 _log = get_logger(__name__)
@@ -387,10 +387,20 @@ def build_orchestrator(cfg: Settings) -> object:
     # Telemetry (optional — disabled by default)
     telemetry_publisher = build_telemetry_publisher(cfg)
     health_monitor = HealthMonitor(cfg.health, cfg.jetson)
+
+    # Optional log ring buffer for telemetry log streaming
+    log_buffer: LogRingBuffer | None = None
+    telemetry_cfg = getattr(cfg, "telemetry", None)
+    if telemetry_cfg is not None:
+        buffer_size = getattr(telemetry_cfg, "log_stream_buffer", 0)
+        if buffer_size:
+            log_buffer = LogRingBuffer(buffer_size)
+
     telemetry_server = build_telemetry_server(
         cfg,
         telemetry_publisher,
         health_monitor,
+        log_buffer=log_buffer,
     )
 
     return MouseDroidOrchestrator(
