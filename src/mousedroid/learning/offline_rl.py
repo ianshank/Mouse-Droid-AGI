@@ -8,7 +8,6 @@ conservative (CQL) or implicit (IQL) value estimation.
 from __future__ import annotations
 
 import abc
-from typing import Any
 
 import torch
 import torch.nn as nn
@@ -112,7 +111,7 @@ class DeterministicPolicy(nn.Module):
         Returns:
             Action tensor in ``[-1, 1]``, shape ``(batch, action_dim)``.
         """
-        return self.net(state)
+        return self.net(state)  # type: ignore[no-any-return]
 
 
 # ---------------------------------------------------------------------------
@@ -332,7 +331,7 @@ class CQLTrainer(OfflineRLTrainer):
             q1_logsumexp - q1_data.mean() + q2_logsumexp - q2_data.mean()
         )
 
-        return cql_loss
+        return cql_loss  # type: ignore[no-any-return]
 
     def update_step(
         self,
@@ -362,7 +361,7 @@ class CQLTrainer(OfflineRLTrainer):
         q_loss = bellman_loss + self._cql_alpha * cql_loss
 
         self.q_optimizer.zero_grad()
-        q_loss.backward()
+        q_loss.backward()  # type: ignore[no-untyped-call]
         self.q_optimizer.step()
 
         # --- Policy update ---
@@ -417,7 +416,7 @@ class ValueNetwork(nn.Module):
         Returns:
             Value tensor, shape ``(batch, 1)``.
         """
-        return self.net(state)
+        return self.net(state)  # type: ignore[no-any-return]
 
 
 class IQLTrainer(OfflineRLTrainer):
@@ -504,7 +503,7 @@ class IQLTrainer(OfflineRLTrainer):
         value_loss = self._expectile_loss(target_q - v)
 
         self.value_optimizer.zero_grad()
-        value_loss.backward()
+        value_loss.backward()  # type: ignore[no-untyped-call]
         self.value_optimizer.step()
 
         # --- Q-function update (Bellman with V-targets) ---
@@ -518,7 +517,7 @@ class IQLTrainer(OfflineRLTrainer):
         q_loss = F.mse_loss(q1, target) + F.mse_loss(q2, target)
 
         self.q_optimizer.zero_grad()
-        q_loss.backward()
+        q_loss.backward()  # type: ignore[no-untyped-call]
         self.q_optimizer.step()
 
         # --- Policy update (advantage-weighted regression) ---
@@ -532,12 +531,13 @@ class IQLTrainer(OfflineRLTrainer):
             exp_advantage = torch.exp(self._beta * advantage).clamp(max=100.0)
 
         policy_actions = self.policy(states)
-        policy_loss = (
-            exp_advantage * F.mse_loss(policy_actions, actions, reduction="none").sum(dim=-1, keepdim=True)
-        ).mean()
+        mse = F.mse_loss(
+            policy_actions, actions, reduction="none"
+        ).sum(dim=-1, keepdim=True)
+        policy_loss = (exp_advantage * mse).mean()
 
         self.policy_optimizer.zero_grad()
-        policy_loss.backward()
+        policy_loss.backward()  # type: ignore[no-untyped-call]
         self.policy_optimizer.step()
 
         # --- Target update ---

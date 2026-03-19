@@ -181,7 +181,7 @@ class JetsonCSICamera:
         norm = np.linalg.norm(features)
         if norm > 0:
             features = features / norm
-        return features
+        return features  # type: ignore[no-any-return]
 
     @property
     def feature_dim(self) -> int:

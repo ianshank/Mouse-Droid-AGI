@@ -99,6 +99,12 @@ module = [
 ]
 disallow_subclassing_any = false
 
+[[tool.mypy.overrides]]
+# pydantic-settings BaseSettings + Field(default_factory=...) produces
+# false-positive arg-type errors with mypy strict mode.
+module = ["mousedroid.config.schema"]
+disable_error_code = ["arg-type"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

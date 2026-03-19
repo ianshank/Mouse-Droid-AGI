@@ -13,7 +13,6 @@ from mousedroid.learning.offline_rl import (
     ValueNetwork,
 )
 
-
 # ---------------------------------------------------------------------------
 # Network unit tests
 # ---------------------------------------------------------------------------
@@ -142,7 +141,7 @@ class TestCQLTrainer:
             "dones": torch.zeros(32),
         }
 
-        first_losses = trainer.update_step(**batch)
+        trainer.update_step(**batch)
         for _ in range(20):
             last_losses = trainer.update_step(**batch)
 

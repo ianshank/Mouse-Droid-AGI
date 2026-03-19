@@ -6,9 +6,9 @@ batch iteration over stored transitions ``(s, a, r, s', done)``.
 
 from __future__ import annotations
 
-import struct
+from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterator
+from typing import TYPE_CHECKING
 
 import lmdb
 import numpy as np
@@ -90,6 +90,7 @@ class OfflineRLDataset:
             self._keys = []
 
     def __len__(self) -> int:
+        """Return the number of transition pairs in the dataset."""
         return max(len(self._keys) - 1, 0)
 
     def _record_to_state(self, record: MouseDroidExperienceRecord) -> np.ndarray:

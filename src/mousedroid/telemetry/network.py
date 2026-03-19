@@ -103,7 +103,7 @@ def _get_interfaces_sync() -> list[NetworkInterface]:
             for info in infos:
                 addr = info[4][0]
                 if addr:
-                    ip = addr
+                    ip = str(addr)
                     up = True
                     break
         except (socket.gaierror, OSError):
@@ -158,7 +158,7 @@ def _get_interface_ip_sync(name: str) -> str:
         for info in infos:
             addr = info[4][0]
             if addr:
-                return addr
+                return str(addr)
     except (socket.gaierror, OSError):
         pass
     return ""
@@ -189,7 +189,7 @@ def get_default_ip() -> str:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             s.connect((CONNECTIVITY_CHECK_HOST, CONNECTIVITY_CHECK_PORT))
-            return s.getsockname()[0]
+            return s.getsockname()[0]  # type: ignore[no-any-return]
         finally:
             s.close()
     except OSError:

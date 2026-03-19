@@ -140,7 +140,7 @@ class TestOfflineRLDatasetTransitions:
 
         dataset = OfflineRLDataset(experience_cfg, model_cfg)
         dataset.open()
-        states, actions, rewards, next_states, dones = dataset.get_transitions()
+        states, actions, rewards, _next_states, _dones = dataset.get_transitions()
         assert states.shape == (0, dataset.state_dim)
         assert actions.shape == (0, model_cfg.action_dim)
         assert rewards.shape == (0,)
@@ -182,10 +182,11 @@ class TestOfflineRLDatasetTransitions:
         with env.begin(write=True) as txn:
             for i in range(5):
                 # Records 0-2 are close together, then big gap, then 3-4
-                if i < 3:
-                    ts = base_time + i * 0.1
-                else:
-                    ts = base_time + 100.0 + i * 0.1
+                ts = (
+                    base_time + i * 0.1
+                    if i < 3
+                    else base_time + 100.0 + i * 0.1
+                )
                 record = _make_record(timestamp=ts)
                 key = struct.pack(">Q", int(ts * 1_000_000) + i)
                 txn.put(key, record.serialize())

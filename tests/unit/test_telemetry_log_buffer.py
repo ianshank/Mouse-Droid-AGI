@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
+
+import pytest
 
 from mousedroid.telemetry.log_buffer import LogRingBuffer
 
@@ -57,46 +60,55 @@ def test_get_recent_more_than_available():
     assert len(recent) == 3
 
 
-def test_subscribe_receives_events():
+@pytest.mark.asyncio
+async def test_subscribe_receives_events():
     buf = LogRingBuffer(maxlen=10)
     sub = buf.subscribe()
     buf(None, "info", {"event": "test1"})
+    # Allow event loop to process call_soon_threadsafe delivery
+    await asyncio.sleep(0)
     assert not sub.empty()
     entry = sub.get_nowait()
     assert entry["event"] == "test1"
 
 
-def test_unsubscribe_stops_receiving():
+@pytest.mark.asyncio
+async def test_unsubscribe_stops_receiving():
     buf = LogRingBuffer(maxlen=10)
     sub = buf.subscribe()
     buf.unsubscribe(sub)
     buf(None, "info", {"event": "test2"})
+    await asyncio.sleep(0)
     assert sub.empty()
 
 
 def test_unsubscribe_nonexistent_is_safe():
     buf = LogRingBuffer(maxlen=10)
-    fake_queue: asyncio.Queue = asyncio.Queue()
+    fake_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
     buf.unsubscribe(fake_queue)  # should not raise
 
 
-def test_multiple_subscribers():
+@pytest.mark.asyncio
+async def test_multiple_subscribers():
     buf = LogRingBuffer(maxlen=10)
     sub1 = buf.subscribe()
     sub2 = buf.subscribe()
     buf(None, "info", {"event": "shared"})
+    await asyncio.sleep(0)
     assert not sub1.empty()
     assert not sub2.empty()
     assert sub1.get_nowait()["event"] == "shared"
     assert sub2.get_nowait()["event"] == "shared"
 
 
-def test_subscriber_queue_overflow_drops():
+@pytest.mark.asyncio
+async def test_subscriber_queue_overflow_drops():
     buf = LogRingBuffer(maxlen=200)
     sub = buf.subscribe()
     # Fill subscriber queue (maxsize=100)
     for i in range(150):
         buf(None, "info", {"n": i})
+        await asyncio.sleep(0)
     # Should not raise, drops silently
     assert sub.qsize() == 100
 

@@ -10,9 +10,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
+import threading
 from collections import deque
 from typing import Any
-import threading
 
 from mousedroid.constants import LOG_SUBSCRIBER_QUEUE_SIZE
 from mousedroid.logging.setup import get_logger
@@ -39,8 +39,9 @@ class LogRingBuffer:
         """
         self._lock = threading.Lock()
         self._buffer: deque[dict[str, Any]] = deque(maxlen=maxlen)
-        # List of (event_loop, queue) subscriber pairs
-        self._subscribers: list[tuple[asyncio.AbstractEventLoop, asyncio.Queue[dict[str, Any]]]] = []
+        self._subscribers: list[
+            tuple[asyncio.AbstractEventLoop, asyncio.Queue[dict[str, Any]]]
+        ] = []
 
     def __call__(
         self,

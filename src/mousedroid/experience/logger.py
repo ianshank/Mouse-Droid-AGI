@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 import lmdb
 
+from mousedroid.constants import GB_TO_BYTES
 from mousedroid.experience.record import MouseDroidExperienceRecord
 from mousedroid.logging.setup import get_logger
 
@@ -16,9 +17,6 @@ if TYPE_CHECKING:
     from mousedroid.config.schema import ExperienceConfig
 
 _log = get_logger(__name__)
-
-_GRAVITY_MS2: float = 9.81
-_GB_TO_BYTES: int = 1_073_741_824
 
 
 class ExperienceLogger:
@@ -36,7 +34,7 @@ class ExperienceLogger:
         self._cfg = cfg
         self._path = Path(cfg.path)
         self._flush_every_n = cfg.flush_every_n
-        self._map_size = cfg.map_size_gb * _GB_TO_BYTES
+        self._map_size = cfg.map_size_gb * GB_TO_BYTES
         self._env: lmdb.Environment | None = None
         self._write_count = 0
         self._sequence = 0

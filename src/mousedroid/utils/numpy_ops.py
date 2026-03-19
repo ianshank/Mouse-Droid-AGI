@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import warnings
 
-from mousedroid.common.math.numpy_ops import _SOFTMAX_EPS, layer_norm, relu, softmax
+from mousedroid.common.math.numpy_ops import layer_norm, relu, softmax
+from mousedroid.constants import SOFTMAX_EPSILON
 
 warnings.warn(
     "mousedroid.utils.numpy_ops is deprecated. Use mousedroid.common.math.numpy_ops instead.",
@@ -16,4 +17,4 @@ warnings.warn(
     stacklevel=2,
 )
 
-__all__ = ["_SOFTMAX_EPS", "layer_norm", "relu", "softmax"]
+__all__ = ["SOFTMAX_EPSILON", "layer_norm", "relu", "softmax"]

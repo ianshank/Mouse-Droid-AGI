@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from mousedroid.config.schema import ExperienceConfig, ModelConfig, OfflineRLConfig, Settings
+from mousedroid.config.schema import ExperienceConfig, OfflineRLConfig, Settings
 from mousedroid.experience.record import MouseDroidExperienceRecord
 
 
@@ -154,9 +154,8 @@ class TestTrainOfflineRL:
         assert stats["algorithm"] == "iql"
 
     def test_empty_database_returns_no_data(self, tmp_path: Path) -> None:
-        from training.train_offline_rl import train_offline_rl
-
         import lmdb
+        from training.train_offline_rl import train_offline_rl
 
         db_path = tmp_path / "experience"
         db_path.mkdir()

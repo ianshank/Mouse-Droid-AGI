@@ -16,10 +16,10 @@ import json
 import time
 from typing import TYPE_CHECKING, Any
 
+from mousedroid.constants import MAX_LOG_ENTRIES, MDNS_SERVICE_TYPE, TELEMETRY_QUEUE_TIMEOUT_S
 from mousedroid.logging.setup import get_logger
 from mousedroid.telemetry.network import get_default_ip, get_network_interfaces
 from mousedroid.telemetry.protocol import TelemetryFrame
-from mousedroid.constants import MDNS_SERVICE_TYPE
 
 if TYPE_CHECKING:
     from aiohttp import web
@@ -29,10 +29,6 @@ if TYPE_CHECKING:
     from mousedroid.telemetry.log_buffer import LogRingBuffer
 
 _log = get_logger(__name__)
-
-# Upper bound for the number of log entries that can be requested in a single call.
-# This avoids surprising behavior with very large or negative values.
-MAX_LOG_ENTRIES: int = 1000
 
 _STARTUP_TIME: float = time.monotonic()
 
@@ -207,13 +203,20 @@ class TelemetryServer:
             """Validate API key from X-API-Key header."""
             # Allow WebSocket upgrade requests to handle auth in the WS handler
             if request.headers.get("Upgrade", "").lower() == "websocket":
-                return await handler(request)
+                resp: web.Response = await handler(request)
+                return resp
 
             key = request.headers.get("X-API-Key", "")
             if key != api_key:
+                _log.debug(
+                    "telemetry_auth_rejected",
+                    path=request.path,
+                    peer=request.remote,
+                )
                 raise web.HTTPUnauthorized(text="Invalid or missing API key")
 
-            return await handler(request)
+            result: web.Response = await handler(request)
+            return result
 
         middlewares: list[Any] = [cors_middleware]
         if api_key is not None:
@@ -365,6 +368,11 @@ class TelemetryServer:
         from aiohttp import WSMsgType, web
 
         if len(self._ws_clients) >= self._cfg.max_clients:
+            _log.warning(
+                "telemetry_ws_max_clients",
+                max_clients=self._cfg.max_clients,
+                peer=request.remote,
+            )
             resp = web.WebSocketResponse()
             await resp.prepare(request)
             await resp.close(code=4029, message=b"max_clients_reached")
@@ -374,6 +382,7 @@ class TelemetryServer:
         if self._cfg.api_key is not None:
             api_key = request.query.get("api_key", request.headers.get("X-API-Key", ""))
             if api_key != self._cfg.api_key:
+                _log.debug("telemetry_ws_auth_rejected", peer=request.remote)
                 resp = web.WebSocketResponse()
                 await resp.prepare(request)
                 await resp.close(code=4001, message=b"unauthorized")
@@ -433,7 +442,9 @@ class TelemetryServer:
         try:
             while not ws.closed and self._running:
                 try:
-                    entry = await asyncio.wait_for(sub_queue.get(), timeout=1.0)
+                    entry = await asyncio.wait_for(
+                        sub_queue.get(), timeout=TELEMETRY_QUEUE_TIMEOUT_S
+                    )
                     serialisable: dict[str, Any] = {}
                     for k, v in entry.items():
                         try:
@@ -459,7 +470,7 @@ class TelemetryServer:
         """Consume from telemetry queue and fan-out to all WS clients."""
         while self._running:
             try:
-                frame = await asyncio.wait_for(self._queue.get(), timeout=1.0)
+                frame = await asyncio.wait_for(self._queue.get(), timeout=TELEMETRY_QUEUE_TIMEOUT_S)
             except asyncio.TimeoutError:
                 continue
 

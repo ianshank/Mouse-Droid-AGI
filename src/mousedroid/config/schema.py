@@ -360,6 +360,15 @@ class TelemetryConfig(BaseModel):
         default_factory=lambda: ["*"],
         description="CORS allowed origins",
     )
+    log_stream_buffer: int = Field(
+        200,
+        gt=0,
+        description="Log ring buffer size for live streaming",
+    )
+    preferred_interface: str | None = Field(
+        None,
+        description="Preferred network interface (e.g. 'eth0', None=auto)",
+    )
 
 
 class ThreeLawsConfig(BaseModel):
@@ -442,25 +451,50 @@ class OfflineRLConfig(BaseModel):
 
     algorithm: Literal["cql", "iql"] = Field(
         "cql",
-        description="Offline RL algorithm: 'cql' (Conservative Q-Learning) or 'iql' (Implicit Q-Learning)",
+        description=(
+            "Offline RL algorithm: 'cql' (Conservative Q-Learning)"
+            " or 'iql' (Implicit Q-Learning)"
+        ),
     )
-    hidden_dim: int = Field(256, gt=0, description="Hidden layer dimension for Q/V/policy networks")
+    hidden_dim: int = Field(
+        256, gt=0, description="Hidden layer dim for Q/V/policy networks"
+    )
     gamma: float = Field(0.99, gt=0, le=1, description="Discount factor")
-    tau: float = Field(0.005, gt=0, le=1, description="Soft target update coefficient")
-    learning_rate: float = Field(3e-4, gt=0, description="Learning rate for all networks")
+    tau: float = Field(
+        0.005, gt=0, le=1, description="Soft target update coefficient"
+    )
+    learning_rate: float = Field(
+        3e-4, gt=0, description="Learning rate for all networks"
+    )
     batch_size: int = Field(256, gt=0, description="Training batch size")
-    epochs: int = Field(100, gt=0, description="Number of training epochs over the dataset")
-    checkpoint_every_n_epochs: int = Field(10, gt=0, description="Checkpoint frequency (epochs)")
-    log_every_n_epochs: int = Field(5, gt=0, description="Logging frequency (epochs)")
-    terminal_gap_s: float = Field(5.0, gt=0, description="Timestamp gap to infer episode boundaries (s)")
+    epochs: int = Field(
+        100, gt=0, description="Training epochs over the dataset"
+    )
+    checkpoint_every_n_epochs: int = Field(
+        10, gt=0, description="Checkpoint frequency (epochs)"
+    )
+    log_every_n_epochs: int = Field(
+        5, gt=0, description="Logging frequency (epochs)"
+    )
+    terminal_gap_s: float = Field(
+        5.0, gt=0, description="Timestamp gap to infer episode boundaries (s)"
+    )
 
     # CQL-specific
-    cql_alpha: float = Field(1.0, gt=0, description="CQL conservative regularization weight")
-    cql_n_random_actions: int = Field(10, gt=0, description="Random actions for CQL logsumexp estimate")
+    cql_alpha: float = Field(
+        1.0, gt=0, description="CQL conservative regularization weight"
+    )
+    cql_n_random_actions: int = Field(
+        10, gt=0, description="Random actions for CQL logsumexp"
+    )
 
     # IQL-specific
-    iql_expectile: float = Field(0.7, gt=0, lt=1, description="IQL expectile for value function (higher = more optimistic)")
-    iql_beta: float = Field(3.0, gt=0, description="IQL inverse temperature for advantage-weighted extraction")
+    iql_expectile: float = Field(
+        0.7, gt=0, lt=1, description="IQL expectile for value function"
+    )
+    iql_beta: float = Field(
+        3.0, gt=0, description="IQL inverse temperature for extraction"
+    )
 
 
 class PPOConfig(BaseModel):
@@ -538,7 +572,7 @@ class UltrasonicConfig(BaseModel):
     timeout_s: float = Field(0.1, gt=0, description="Echo timeout (s)")
     speed_of_sound_mps: float = Field(343.0, gt=0, description="Speed of sound (m/s, ~20C)")
 
-    @model_validator(mode="after")  # type: ignore[untyped-decorator]
+    @model_validator(mode="after")
     def range_ordering(self) -> Self:
         """Validate max_range_m > min_range_m."""
         if self.max_range_m <= self.min_range_m:
@@ -605,7 +639,7 @@ class Settings(BaseSettings):
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     three_laws: ThreeLawsConfig = Field(default_factory=ThreeLawsConfig)
 
-    @model_validator(mode="after")  # type: ignore[untyped-decorator]
+    @model_validator(mode="after")
     def hardware_requires_pins(self) -> Self:
         """Validate that real hardware mode has required sensor configs."""
         if not self.mock_hardware and self.ultrasonic is None:

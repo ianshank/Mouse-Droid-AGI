@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from mousedroid.utils.weights_manager import (
+    _HF_HUB_AVAILABLE,
+    _hf_hub_download,
     download_weights_from_huggingface,
     weights_exist_locally,
 )
@@ -224,3 +228,11 @@ async def test_download_weights_async(mock_download, tmp_path):
     )
     assert result is True
     mock_download.assert_called_once()
+
+
+def test_hf_hub_download_stub_raises_when_not_available():
+    """Cover line 34: the fallback stub raises ImportError when called."""
+    if _HF_HUB_AVAILABLE:
+        pytest.skip("huggingface_hub is installed; stub not defined")
+    with pytest.raises(ImportError, match="huggingface_hub is not installed"):
+        _hf_hub_download(repo_id="test", filename="test.npz")
