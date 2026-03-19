@@ -144,6 +144,15 @@ def _path_to_module(file_path: str) -> str:
 
 
 def _build_pytest_command(tests: list[str], changed_files: list[str], json_out: Path) -> list[str]:
+    # CI safeguard: shallow checkouts may have no base-ref, leading to zero files detected.
+    # If running in CI and no files were found, fail explicitly rather than silently passing.
+    if not changed_files and os.getenv("CI"):
+        msg = (
+            "No changed files detected in CI environment (possible shallow checkout). "
+            "Cannot validate branch coverage."
+        )
+        raise RuntimeError(msg)
+
     cmd = [
         sys.executable,
         "-m",

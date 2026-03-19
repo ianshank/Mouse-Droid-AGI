@@ -248,7 +248,9 @@ class MetricsConfig(BaseModel):
         "mousedroid",
         description="Prefix applied to all metric names (e.g. mousedroid_loop_time_ms)",
     )
-    export_interval_s: float = Field(10.0, gt=0, description="Background export interval (s)")
+    export_interval_s: float = Field(
+        10.0, gt=0, description="[Reserved] Background export interval (s) — not wired to runtime"
+    )
     # Individual metric enable/disable toggles (all default-on)
     track_loop_time: bool = Field(True, description="Expose loop_time_ms gauge")
     track_battery: bool = Field(True, description="Expose battery_voltage_v gauge")
@@ -351,7 +353,10 @@ class TelemetryConfig(BaseModel):
     port: int = Field(8080, gt=0, le=65535, description="Server port")
     preferred_interface: str | None = Field(
         None,
-        description="Preferred network interface for mDNS (e.g. wlan0, eth0). None = all",
+        description=(
+            "[Reserved] Preferred network interface for mDNS (e.g. wlan0, eth0) — "
+            "not wired to runtime"
+        ),
     )
     ws_path: str = Field("/ws", description="WebSocket endpoint path")
     api_prefix: str = Field("/api/v1", description="REST API prefix")

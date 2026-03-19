@@ -331,7 +331,10 @@ def build_telemetry_server(
     metrics_path = cfg.metrics.path
     telemetry_metrics_path_default = type(cfg.telemetry).model_fields["metrics_path"].default
     metrics_path_default = type(cfg.metrics).model_fields["path"].default
-    if metrics_path == metrics_path_default and cfg.telemetry.metrics_path != telemetry_metrics_path_default:
+    if (
+        metrics_path == metrics_path_default
+        and cfg.telemetry.metrics_path != telemetry_metrics_path_default
+    ):
         metrics_path = cfg.telemetry.metrics_path
 
     if cfg.metrics.enabled:

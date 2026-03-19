@@ -251,7 +251,7 @@ class MetricsRegistry:
         """
         self._cfg = cfg
         ns = cfg.namespace
-        self._start_time = time.time()
+        self._start_time = time.monotonic()
 
         # Counters
         self._frame_drops = _Counter()
@@ -353,7 +353,7 @@ class MetricsRegistry:
         sections: list[list[str]] = []
 
         # Uptime (always emitted — useful for detecting restarts)
-        uptime = time.time() - self._start_time
+        uptime = time.monotonic() - self._start_time
         sections.append(
             _render_gauge(self._name_uptime, "Seconds since metrics registry start", uptime)
         )
