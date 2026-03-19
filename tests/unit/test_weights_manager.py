@@ -236,3 +236,34 @@ def test_hf_hub_download_stub_raises_when_not_available():
         pytest.skip("huggingface_hub is installed; stub not defined")
     with pytest.raises(ImportError, match="huggingface_hub is not installed"):
         _hf_hub_download(repo_id="test", filename="test.npz")
+
+
+def test_hf_hub_available_flag_set_when_hub_importable():
+    """Cover line 29: _HF_HUB_AVAILABLE = True when huggingface_hub is importable.
+
+    We simulate the import-time branch by reloading the module with a
+    fake ``huggingface_hub`` on ``sys.path``.
+    """
+    import importlib
+    import sys
+    import types
+
+    # Create a fake huggingface_hub module with a stub hf_hub_download
+    fake_hf = types.ModuleType("huggingface_hub")
+    fake_hf.hf_hub_download = lambda **kwargs: "/fake/path"  # type: ignore[attr-defined]
+
+    saved = sys.modules.get("huggingface_hub")
+    sys.modules["huggingface_hub"] = fake_hf
+    try:
+        # Force reimport of weights_manager to hit the try-branch
+        import mousedroid.utils.weights_manager as wm
+
+        importlib.reload(wm)
+        assert wm._HF_HUB_AVAILABLE is True
+    finally:
+        # Restore original state and reload to reset module globals
+        if saved is None:
+            sys.modules.pop("huggingface_hub", None)
+        else:
+            sys.modules["huggingface_hub"] = saved
+        importlib.reload(wm)
