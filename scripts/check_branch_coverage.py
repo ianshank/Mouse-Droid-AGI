@@ -293,6 +293,13 @@ def main() -> int:
 
     changed_files = _changed_source_files(args.base_ref)
     if not changed_files:
+        if os.getenv("CI"):
+            print(
+                "CI is set but no changed src/mousedroid Python files were detected; "
+                "failing branch coverage check.",
+                file=sys.stderr,
+            )
+            return 1
         print("No changed src/mousedroid Python files detected; skipping branch coverage check.")
         return 0
 
