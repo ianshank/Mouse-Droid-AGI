@@ -12,6 +12,7 @@ import contextlib
 import copy
 from collections import deque
 from typing import Any
+import threading
 
 from mousedroid.constants import LOG_SUBSCRIBER_QUEUE_SIZE
 from mousedroid.logging.setup import get_logger
@@ -36,8 +37,10 @@ class LogRingBuffer:
         Args:
             maxlen: Maximum entries to retain.
         """
+        self._lock = threading.Lock()
         self._buffer: deque[dict[str, Any]] = deque(maxlen=maxlen)
-        self._subscribers: list[asyncio.Queue[dict[str, Any]]] = []
+        # List of (event_loop, queue) subscriber pairs
+        self._subscribers: list[tuple[asyncio.AbstractEventLoop, asyncio.Queue[dict[str, Any]]]] = []
 
     def __call__(
         self,
@@ -55,14 +58,29 @@ class LogRingBuffer:
         Returns:
             The event_dict unchanged (passthrough).
         """
-        entry = copy.copy(event_dict)
-        self._buffer.append(entry)
+        # Copy the event and update the buffer and subscriber snapshot
+        with self._lock:
+            entry = copy.copy(event_dict)
+            self._buffer.append(entry)
+            subscribers_snapshot = list(self._subscribers)
 
-        for sub_queue in self._subscribers:
-            with contextlib.suppress(asyncio.QueueFull):
-                sub_queue.put_nowait(entry)
+        # Schedule delivery to each subscriber's queue in its owning loop
+        for loop, sub_queue in subscribers_snapshot:
+            loop.call_soon_threadsafe(self._deliver_to_queue, sub_queue, entry)
 
         return event_dict
+
+    def _deliver_to_queue(
+        self,
+        queue: asyncio.Queue[dict[str, Any]],
+        entry: dict[str, Any],
+    ) -> None:
+        """Safely enqueue an entry, suppressing QueueFull errors.
+
+        This runs in the context of the subscriber's event loop.
+        """
+        with contextlib.suppress(asyncio.QueueFull):
+            queue.put_nowait(entry)
 
     def get_recent(self, n: int = 50) -> list[dict[str, Any]]:
         """Return the N most recent log entries.
@@ -73,7 +91,8 @@ class LogRingBuffer:
         Returns:
             List of log event dictionaries, most recent last.
         """
-        entries = list(self._buffer)
+        with self._lock:
+            entries = list(self._buffer)
         return entries[-n:] if n < len(entries) else entries
 
     def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
@@ -83,7 +102,9 @@ class LogRingBuffer:
             An ``asyncio.Queue`` that receives new log entries.
         """
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=LOG_SUBSCRIBER_QUEUE_SIZE)
-        self._subscribers.append(queue)
+        loop = asyncio.get_running_loop()
+        with self._lock:
+            self._subscribers.append((loop, queue))
         return queue
 
     def unsubscribe(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
@@ -92,8 +113,11 @@ class LogRingBuffer:
         Args:
             queue: The subscriber queue to remove.
         """
-        with contextlib.suppress(ValueError):
-            self._subscribers.remove(queue)
+        with self._lock:
+            for idx, (_, q) in enumerate(self._subscribers):
+                if q is queue:
+                    del self._subscribers[idx]
+                    break
 
     @property
     def size(self) -> int:
@@ -102,4 +126,5 @@ class LogRingBuffer:
         Returns:
             Number of stored entries.
         """
-        return len(self._buffer)
+        with self._lock:
+            return len(self._buffer)
