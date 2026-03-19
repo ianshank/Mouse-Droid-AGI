@@ -107,6 +107,9 @@ FAST_STATE_DIM: int = 128
 LOG_SUBSCRIBER_QUEUE_SIZE: int = 100
 """Default maxsize for log-stream subscriber queues."""
 
+MAX_LOG_ENTRIES: int = 1000
+"""Upper bound for log entries returned in a single REST request."""
+
 MDNS_SERVICE_TYPE: str = "_http._tcp.local."
 """mDNS/Zeroconf service type for telemetry advertisement."""
 
@@ -116,3 +119,13 @@ MDNS_SERVICE_TYPE: str = "_http._tcp.local."
 
 MOTOR_STATE_BATTERY_INDEX: int = 3
 """Index of battery voltage within the motor_state array."""
+
+# ---------------------------------------------------------------------------
+# Hardware sensor conversion factors
+# ---------------------------------------------------------------------------
+
+MILLIDEGREE_DIVISOR: float = 1000.0
+"""Divisor for converting thermal zone millidegree readings to Celsius."""
+
+GPU_LOAD_PERCENTAGE_DIVISOR: float = 10.0
+"""Divisor for converting raw GPU load readings to percentage."""

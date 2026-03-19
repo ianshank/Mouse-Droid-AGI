@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from mousedroid.agents.base import AgentProtocol
 from mousedroid.comms.protocol import ESP32CommProtocol
+from mousedroid.constants import DEFAULT_MAX_DISTANCE_M
 from mousedroid.hardware.protocols import AudioProtocol, DistanceSensorProtocol, VisionProtocol
 from mousedroid.logging.setup import get_logger
 from mousedroid.safety.protocol import SafetyMonitorProtocol
@@ -112,7 +113,7 @@ def build_distance_sensor(cfg: Settings) -> DistanceSensorProtocol:
         ultrasonic_cfg: UltrasonicConfig = cfg.ultrasonic or UltraCfg(
             trigger_pin=0,
             echo_pin=0,
-            max_range_m=4.0,
+            max_range_m=DEFAULT_MAX_DISTANCE_M,
             min_range_m=0.02,
             timeout_s=0.1,
             speed_of_sound_mps=343.0,

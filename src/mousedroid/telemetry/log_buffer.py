@@ -15,9 +15,6 @@ from collections import deque
 from typing import Any
 
 from mousedroid.constants import LOG_SUBSCRIBER_QUEUE_SIZE
-from mousedroid.logging.setup import get_logger
-
-_log = get_logger(__name__)
 
 
 class LogRingBuffer:
@@ -93,6 +90,8 @@ class LogRingBuffer:
         Returns:
             List of log event dictionaries, most recent last.
         """
+        if n <= 0:
+            return []
         with self._lock:
             entries = list(self._buffer)
         return entries[-n:] if n < len(entries) else entries
