@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 from mousedroid.logging.setup import get_logger
 from mousedroid.telemetry.network import get_default_ip, get_network_interfaces
 from mousedroid.telemetry.protocol import TelemetryFrame
+from mousedroid.constants import MDNS_SERVICE_TYPE
 
 if TYPE_CHECKING:
     from aiohttp import web
@@ -29,6 +30,10 @@ if TYPE_CHECKING:
     from mousedroid.telemetry.metrics import MetricsRegistry
 
 _log = get_logger(__name__)
+
+# Upper bound for the number of log entries that can be requested in a single call.
+# This avoids surprising behavior with very large or negative values.
+MAX_LOG_ENTRIES: int = 1000
 
 _STARTUP_TIME: float = time.monotonic()
 
@@ -182,12 +187,22 @@ class TelemetryServer:
             else:
                 resp = await handler(request)
 
-            origin = "*"
-            if cors_origins and cors_origins != ["*"]:
-                req_origin = request.headers.get("Origin", "")
-                origin = req_origin if req_origin in cors_origins else cors_origins[0]
+            # Determine which, if any, Access-Control-Allow-Origin header to send.
+            # - If CORS is unrestricted (no origins configured or ["*"]), always use "*".
+            # - If specific origins are configured, only echo back an allowed Origin
+            #   from the request and add Vary: Origin. For disallowed/missing origins,
+            #   omit Access-Control-Allow-Origin entirely.
+            origin_header_value: str | None = None
+            if not cors_origins or cors_origins == ["*"]:
+                origin_header_value = "*"
+            else:
+                req_origin = request.headers.get("Origin")
+                if req_origin and req_origin in cors_origins:
+                    origin_header_value = req_origin
+                    resp.headers.add("Vary", "Origin")
 
-            resp.headers["Access-Control-Allow-Origin"] = origin
+            if origin_header_value is not None:
+                resp.headers["Access-Control-Allow-Origin"] = origin_header_value
             resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
             resp.headers["Access-Control-Allow-Headers"] = "X-API-Key, Content-Type"
             return resp
@@ -298,7 +313,21 @@ class TelemetryServer:
         if self._log_buffer is None:
             return web.json_response({"error": "log_buffer_disabled"}, status=503)
 
-        n = int(request.query.get("n", "50"))
+        raw_n = request.query.get("n", "50")
+        try:
+            n = int(raw_n)
+        except (TypeError, ValueError):
+            return web.json_response(
+                {"error": "invalid_n", "message": "Query parameter 'n' must be an integer."},
+                status=400,
+            )
+
+        # Clamp to a non-negative, sensible range.
+        if n < 0:
+            n = 0
+        if n > MAX_LOG_ENTRIES:
+            n = MAX_LOG_ENTRIES
+
         entries = self._log_buffer.get_recent(n)
 
         serialisable = []
@@ -420,6 +449,18 @@ class TelemetryServer:
             await resp.close(code=4030, message=b"log_buffer_disabled")
             return resp
 
+        # Enforce API key for WebSocket log streaming if configured.
+        config = getattr(self, "_config", None)
+        api_key = getattr(config, "api_key", None) if config is not None else None
+        if api_key:
+            supplied_key = request.headers.get("X-Telemetry-Api-Key") or request.query.get(
+                "api_key"
+            )
+            if supplied_key != api_key:
+                raise web.HTTPUnauthorized(
+                    text="Invalid or missing API key for log stream WebSocket"
+                )
+
         ws = web.WebSocketResponse()
         await ws.prepare(request)
 
@@ -536,8 +577,8 @@ class TelemetryServer:
             packed_ip = sock.inet_aton(ip)
 
             self._service_info = ServiceInfo(
-                type_="_http._tcp.local.",
-                name=f"{self._cfg.mdns_service_name}._http._tcp.local.",
+                type_=MDNS_SERVICE_TYPE,
+                name=f"{self._cfg.mdns_service_name}.{MDNS_SERVICE_TYPE}",
                 addresses=[packed_ip],
                 port=self._cfg.port,
                 properties={
