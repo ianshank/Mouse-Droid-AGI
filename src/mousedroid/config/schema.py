@@ -111,6 +111,22 @@ class CuriosityConfig(BaseModel):
     )
     forward_model_hidden: int = Field(256, gt=0, description="Forward model hidden dim")
     inverse_model_hidden: int = Field(256, gt=0, description="Inverse model hidden dim")
+    novelty_decay_enabled: bool = Field(
+        False,
+        description="Enable novelty decay to reduce curiosity for revisited states",
+    )
+    novelty_decay_rate: float = Field(
+        0.01,
+        gt=0,
+        le=1,
+        description="Exponential decay rate per visit (higher = faster decay)",
+    )
+    novelty_min_scale: float = Field(
+        0.01,
+        ge=0,
+        le=1,
+        description="Minimum curiosity scale after decay (prevents total suppression)",
+    )
 
 
 class ESP32Config(BaseModel):
@@ -421,6 +437,32 @@ class ThreeLawsConfig(BaseModel):
     )
 
 
+class OfflineRLConfig(BaseModel):
+    """Offline RL training configuration (CQL / IQL)."""
+
+    algorithm: Literal["cql", "iql"] = Field(
+        "cql",
+        description="Offline RL algorithm: 'cql' (Conservative Q-Learning) or 'iql' (Implicit Q-Learning)",
+    )
+    hidden_dim: int = Field(256, gt=0, description="Hidden layer dimension for Q/V/policy networks")
+    gamma: float = Field(0.99, gt=0, le=1, description="Discount factor")
+    tau: float = Field(0.005, gt=0, le=1, description="Soft target update coefficient")
+    learning_rate: float = Field(3e-4, gt=0, description="Learning rate for all networks")
+    batch_size: int = Field(256, gt=0, description="Training batch size")
+    epochs: int = Field(100, gt=0, description="Number of training epochs over the dataset")
+    checkpoint_every_n_epochs: int = Field(10, gt=0, description="Checkpoint frequency (epochs)")
+    log_every_n_epochs: int = Field(5, gt=0, description="Logging frequency (epochs)")
+    terminal_gap_s: float = Field(5.0, gt=0, description="Timestamp gap to infer episode boundaries (s)")
+
+    # CQL-specific
+    cql_alpha: float = Field(1.0, gt=0, description="CQL conservative regularization weight")
+    cql_n_random_actions: int = Field(10, gt=0, description="Random actions for CQL logsumexp estimate")
+
+    # IQL-specific
+    iql_expectile: float = Field(0.7, gt=0, lt=1, description="IQL expectile for value function (higher = more optimistic)")
+    iql_beta: float = Field(3.0, gt=0, description="IQL inverse temperature for advantage-weighted extraction")
+
+
 class PPOConfig(BaseModel):
     """Proximal Policy Optimization configuration for constitutional RL."""
 
@@ -559,6 +601,7 @@ class Settings(BaseSettings):
     reward: RewardConfig = Field(default_factory=RewardConfig)
     curiosity: CuriosityConfig = Field(default_factory=CuriosityConfig)
     ppo: PPOConfig = Field(default_factory=PPOConfig)
+    offline_rl: OfflineRLConfig = Field(default_factory=OfflineRLConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     three_laws: ThreeLawsConfig = Field(default_factory=ThreeLawsConfig)
 
