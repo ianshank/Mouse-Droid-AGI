@@ -336,8 +336,10 @@ def main() -> int:
             pct = (len(executed & coverable_changed) / len(coverable_changed)) * 100.0
             scope = f"{len(coverable_changed)} changed executable lines"
         else:
-            pct = float(info.get("percent", 0.0)) if info else 0.0
-            scope = "file-level fallback"
+            # No changed executable lines in this file: treat as not applicable
+            # for the changed-line coverage gate by considering it fully covered.
+            pct = 100.0
+            scope = "no changed executable lines"
 
         print(f"  {rel_path}: {pct:.2f}% ({scope})")
         if pct < args.min_cov:
