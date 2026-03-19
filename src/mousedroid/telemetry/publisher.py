@@ -24,7 +24,7 @@ _log = get_logger(__name__)
 class TelemetryPublisher:
     """Publish telemetry frames to an internal async queue.
 
-    Non-blocking: if the queue is full, the oldest frame is dropped.
+    Non-blocking: if the queue is full, the new frame is dropped.
     The server consumer reads from the same queue.
 
     Implements ``TelemetryPublisherProtocol``.
