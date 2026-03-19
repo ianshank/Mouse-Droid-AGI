@@ -10,7 +10,7 @@ from __future__ import annotations
 import enum
 import sys
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 if sys.version_info >= (3, 11):
     from enum import StrEnum
@@ -24,6 +24,16 @@ else:
 
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _settings_default_factory(factory: Any) -> Any:
+    """Return nested settings factories unchanged.
+
+    Pydantic accepts model classes directly as ``default_factory`` callables,
+    while the current mypy stubs are stricter about the callable signature.
+    This helper preserves runtime behaviour and keeps the workaround local.
+    """
+    return factory
 
 
 class PlatformType(StrEnum):
@@ -225,10 +235,31 @@ class MemoryConfig(BaseModel):
 
 
 class MetricsConfig(BaseModel):
-    """Metrics export configuration."""
+    """Prometheus-compatible metrics export configuration.
 
-    enabled: bool = Field(True, description="Enable metrics collection")
-    export_interval_s: float = Field(10.0, gt=0, description="Export interval (s)")
+    Controls metrics endpoint enablement, naming, and scrape path.  All
+    metric names are derived from ``namespace`` so nothing is hardcoded
+    outside this class.
+    """
+
+    enabled: bool = Field(True, description="Enable /metrics endpoint")
+    path: str = Field("/metrics", description="HTTP path for Prometheus scrape endpoint")
+    namespace: str = Field(
+        "mousedroid",
+        description="Prefix applied to all metric names (e.g. mousedroid_loop_time_ms)",
+    )
+    export_interval_s: float = Field(
+        10.0, gt=0, description="[Reserved] Background export interval (s) — not wired to runtime"
+    )
+    # Individual metric enable/disable toggles (all default-on)
+    track_loop_time: bool = Field(True, description="Expose loop_time_ms gauge")
+    track_battery: bool = Field(True, description="Expose battery_voltage_v gauge")
+    track_ws_clients: bool = Field(True, description="Expose ws_client_count gauge")
+    track_frame_drops: bool = Field(True, description="Expose frame_drop_total counter")
+    track_safety_violations: bool = Field(
+        True, description="Expose safety_violations_total counter"
+    )
+    track_gpu_temp: bool = Field(True, description="Expose gpu_temp_celsius gauge")
 
 
 class ModelConfig(BaseModel):
@@ -320,6 +351,13 @@ class TelemetryConfig(BaseModel):
         description="Server bind address (0.0.0.0 = all interfaces)",
     )
     port: int = Field(8080, gt=0, le=65535, description="Server port")
+    preferred_interface: str | None = Field(
+        None,
+        description=(
+            "[Reserved] Preferred network interface for mDNS (e.g. wlan0, eth0) — "
+            "not wired to runtime"
+        ),
+    )
     ws_path: str = Field("/ws", description="WebSocket endpoint path")
     api_prefix: str = Field("/api/v1", description="REST API prefix")
     publish_hz: float = Field(
@@ -343,6 +381,14 @@ class TelemetryConfig(BaseModel):
     cors_origins: list[str] = Field(
         default_factory=lambda: ["*"],
         description="CORS allowed origins",
+    )
+    log_stream_buffer: int = Field(200, gt=0, description="Ring buffer size for log entries")
+    metrics_path: str = Field(
+        "/metrics",
+        description=(
+            "Legacy scrape endpoint path for direct TelemetryServer construction. "
+            "Settings.metrics.path is the canonical configuration source."
+        ),
     )
 
 
@@ -496,7 +542,7 @@ class UltrasonicConfig(BaseModel):
     timeout_s: float = Field(0.1, gt=0, description="Echo timeout (s)")
     speed_of_sound_mps: float = Field(343.0, gt=0, description="Speed of sound (m/s, ~20C)")
 
-    @model_validator(mode="after")  # type: ignore[untyped-decorator]
+    @model_validator(mode="after")
     def range_ordering(self) -> Self:
         """Validate max_range_m > min_range_m."""
         if self.max_range_m <= self.min_range_m:
@@ -529,12 +575,12 @@ class Settings(BaseSettings):
     mock_hardware: bool = Field(False, description="Use mock drivers")
     debug: bool = Field(False, description="Enable debug logging + assertions")
 
-    loop: LoopConfig = Field(default_factory=LoopConfig)
-    model: ModelConfig = Field(default_factory=ModelConfig)
-    mcts: MCTSConfig = Field(default_factory=MCTSConfig)
-    surprise: SurpriseConfig = Field(default_factory=SurpriseConfig)
-    safety: SafetyConfig = Field(default_factory=SafetyConfig)
-    esp32: ESP32Config = Field(default_factory=ESP32Config)
+    loop: LoopConfig = Field(default_factory=_settings_default_factory(LoopConfig))
+    model: ModelConfig = Field(default_factory=_settings_default_factory(ModelConfig))
+    mcts: MCTSConfig = Field(default_factory=_settings_default_factory(MCTSConfig))
+    surprise: SurpriseConfig = Field(default_factory=_settings_default_factory(SurpriseConfig))
+    safety: SafetyConfig = Field(default_factory=_settings_default_factory(SafetyConfig))
+    esp32: ESP32Config = Field(default_factory=_settings_default_factory(ESP32Config))
     ultrasonic: UltrasonicConfig | None = Field(
         None,
         description="Required if mock_hardware=false",
@@ -543,26 +589,50 @@ class Settings(BaseSettings):
         None,
         description="USB microphone config (None=disabled)",
     )
-    camera: CameraConfig = Field(default_factory=CameraConfig)
-    jetson: JetsonConfig = Field(default_factory=JetsonConfig)
-    robot: RobotConfig = Field(default_factory=RobotConfig)
-    experience: ExperienceConfig = Field(default_factory=ExperienceConfig)
-    logging: LoggingConfig = Field(default_factory=LoggingConfig)
-    training: TrainingConfig = Field(default_factory=TrainingConfig)
-    health: HealthConfig = Field(default_factory=HealthConfig)
-    retry: RetryConfig = Field(default_factory=RetryConfig)
-    circuit_breaker: CircuitBreakerConfig = Field(default_factory=CircuitBreakerConfig)
-    cognitive: CognitiveConfig = Field(default_factory=CognitiveConfig)
-    metrics: MetricsConfig = Field(default_factory=MetricsConfig)
-    memory: MemoryConfig = Field(default_factory=MemoryConfig)
-    learning: LearningConfig = Field(default_factory=LearningConfig)
-    reward: RewardConfig = Field(default_factory=RewardConfig)
-    curiosity: CuriosityConfig = Field(default_factory=CuriosityConfig)
-    ppo: PPOConfig = Field(default_factory=PPOConfig)
-    telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
-    three_laws: ThreeLawsConfig = Field(default_factory=ThreeLawsConfig)
+    camera: CameraConfig = Field(default_factory=_settings_default_factory(CameraConfig))
+    jetson: JetsonConfig = Field(default_factory=_settings_default_factory(JetsonConfig))
+    robot: RobotConfig = Field(default_factory=_settings_default_factory(RobotConfig))
+    experience: ExperienceConfig = Field(
+        default_factory=_settings_default_factory(ExperienceConfig)
+    )
+    logging: LoggingConfig = Field(
+        default_factory=_settings_default_factory(LoggingConfig)
+    )
+    training: TrainingConfig = Field(
+        default_factory=_settings_default_factory(TrainingConfig)
+    )
+    health: HealthConfig = Field(
+        default_factory=_settings_default_factory(HealthConfig)
+    )
+    retry: RetryConfig = Field(
+        default_factory=_settings_default_factory(RetryConfig)
+    )
+    circuit_breaker: CircuitBreakerConfig = Field(
+        default_factory=_settings_default_factory(CircuitBreakerConfig)
+    )
+    cognitive: CognitiveConfig = Field(
+        default_factory=_settings_default_factory(CognitiveConfig)
+    )
+    metrics: MetricsConfig = Field(
+        default_factory=_settings_default_factory(MetricsConfig)
+    )
+    memory: MemoryConfig = Field(
+        default_factory=_settings_default_factory(MemoryConfig)
+    )
+    learning: LearningConfig = Field(
+        default_factory=_settings_default_factory(LearningConfig)
+    )
+    reward: RewardConfig = Field(
+        default_factory=_settings_default_factory(RewardConfig)
+    )
+    curiosity: CuriosityConfig = Field(
+        default_factory=_settings_default_factory(CuriosityConfig)
+    )
+    ppo: PPOConfig = Field(default_factory=_settings_default_factory(PPOConfig))
+    telemetry: TelemetryConfig = Field(default_factory=_settings_default_factory(TelemetryConfig))
+    three_laws: ThreeLawsConfig = Field(default_factory=_settings_default_factory(ThreeLawsConfig))
 
-    @model_validator(mode="after")  # type: ignore[untyped-decorator]
+    @model_validator(mode="after")
     def hardware_requires_pins(self) -> Self:
         """Validate that real hardware mode has required sensor configs."""
         if not self.mock_hardware and self.ultrasonic is None:

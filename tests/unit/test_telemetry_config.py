@@ -10,7 +10,7 @@ from mousedroid.config.schema import Settings, TelemetryConfig
 def test_telemetry_config_defaults():
     cfg = TelemetryConfig()
     assert cfg.enabled is False
-    assert cfg.host == "0.0.0.0"
+    assert cfg.host == "0.0.0.0"  # noqa: S104
     assert cfg.port == 8080
     assert cfg.ws_path == "/ws"
     assert cfg.api_prefix == "/api/v1"
@@ -50,18 +50,18 @@ def test_telemetry_config_custom_values():
 def test_telemetry_config_port_validation():
     import pytest
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"validation error"):
         TelemetryConfig(port=0)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"validation error"):
         TelemetryConfig(port=70000)
 
 
 def test_telemetry_config_publish_hz_validation():
     import pytest
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"validation error"):
         TelemetryConfig(publish_hz=0)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"validation error"):
         TelemetryConfig(publish_hz=100)
 
 
@@ -97,12 +97,12 @@ def test_telemetry_config_cors_origins():
 def test_telemetry_config_queue_size_validation():
     import pytest
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"validation error"):
         TelemetryConfig(queue_size=0)
 
 
 def test_telemetry_config_log_stream_buffer_validation():
     import pytest
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"validation error"):
         TelemetryConfig(log_stream_buffer=0)

@@ -43,7 +43,7 @@ class WorkingMemory:
         if len(self._buffer) > self._context_size:
             self._buffer.pop(0)
 
-    @torch.no_grad()  # type: ignore[untyped-decorator]
+    @torch.no_grad()
     def attend(self, query: Tensor) -> Tensor:
         """Retrieve a weighted sum of buffer entries via dot-product attention.
 

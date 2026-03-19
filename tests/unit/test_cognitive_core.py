@@ -9,9 +9,9 @@ import numpy as np
 
 from mousedroid.cognitive.bdi_model import NeuralBDI
 from mousedroid.cognitive.cognitive_core import CognitiveCore
-from mousedroid.constants import SLOW_QUEUE_MAXSIZE
 from mousedroid.cognitive.constitutional_rl import ConstitutionalChecker
 from mousedroid.cognitive.metacognitive import MetacognitiveModel
+from mousedroid.constants import SLOW_QUEUE_MAXSIZE
 
 
 def _make_core() -> CognitiveCore:

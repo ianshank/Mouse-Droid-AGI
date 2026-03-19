@@ -6,7 +6,7 @@ training scripts.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -24,7 +24,7 @@ def relu(x: NDArray[np.floating[Any]]) -> NDArray[np.floating[Any]]:
     Returns:
         Array with negative values zeroed.
     """
-    return np.maximum(x, 0.0)
+    return cast(NDArray[np.floating[Any]], np.maximum(x, 0.0))
 
 
 def softmax(x: NDArray[np.floating[Any]], *, axis: int = -1) -> NDArray[np.floating[Any]]:
@@ -39,7 +39,8 @@ def softmax(x: NDArray[np.floating[Any]], *, axis: int = -1) -> NDArray[np.float
     """
     shifted = x - np.max(x, axis=axis, keepdims=True)
     e = np.exp(shifted)
-    return e / (e.sum(axis=axis, keepdims=True) + _SOFTMAX_EPS)
+    probs = e / (e.sum(axis=axis, keepdims=True) + _SOFTMAX_EPS)
+    return cast(NDArray[np.floating[Any]], probs)
 
 
 def layer_norm(x: NDArray[np.floating[Any]], *, eps: float = 1e-6) -> NDArray[np.floating[Any]]:
@@ -54,4 +55,5 @@ def layer_norm(x: NDArray[np.floating[Any]], *, eps: float = 1e-6) -> NDArray[np
     """
     mean = np.mean(x)
     var = np.var(x)
-    return (x - mean) / np.sqrt(var + eps)
+    normalised = (x - mean) / np.sqrt(var + eps)
+    return cast(NDArray[np.floating[Any]], normalised)

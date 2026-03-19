@@ -8,8 +8,19 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 import pytest
+
+
+def _is_jetson_host() -> bool:
+    """Return True when running directly on Jetson hardware."""
+    return Path("/etc/nv_tegra_release").exists()
+
+
+def _is_l4t_container() -> bool:
+    """Return True when running inside an L4T Docker container."""
+    return Path("/.dockerenv").exists() and Path("/usr/local/cuda").exists()
 
 
 def _has_cuda() -> bool:
@@ -46,6 +57,10 @@ class TestGPUAvailability:
         major = int(torch.version.cuda.split(".")[0])
         assert major >= 12, f"Expected CUDA 12+, got {torch.version.cuda}"
 
+    @pytest.mark.skipif(
+        not _is_jetson_host(),
+        reason="Orin GPU name check only valid on Jetson hardware",
+    )
     def test_gpu_device_name(self) -> None:
         """Verify the GPU is an Orin-class device."""
         import torch
@@ -109,6 +124,10 @@ class TestMouseDroidImport:
 class TestContainerEnvironment:
     """Verify the container environment is correctly configured."""
 
+    @pytest.mark.skipif(
+        not _is_l4t_container(),
+        reason="CUDA_HOME is only guaranteed inside the L4T Docker container",
+    )
     def test_cuda_home_set(self) -> None:
         """Verify CUDA_HOME environment variable."""
         cuda_home = os.environ.get("CUDA_HOME", "")
@@ -132,6 +151,6 @@ class TestContainerEnvironment:
             config_path = os.path.dirname(config_dir)
             # Config dir may not be mounted in all test environments
             if os.path.isdir(config_path):
-                assert any(
-                    f.endswith(".yaml") for f in os.listdir(config_path)
-                ), "No YAML files in config directory"
+                assert any(f.endswith(".yaml") for f in os.listdir(config_path)), (
+                    "No YAML files in config directory"
+                )

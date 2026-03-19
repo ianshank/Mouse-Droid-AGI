@@ -7,22 +7,46 @@ from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from mousedroid.config.schema import TelemetryConfig
+from mousedroid.config.schema import MetricsConfig, TelemetryConfig
+from mousedroid.telemetry.metrics import MetricsRegistry
 from mousedroid.telemetry.protocol import TelemetryFrame
 
 # Guard: skip all tests if aiohttp is not installed
 aiohttp = pytest.importorskip("aiohttp")
-import contextlib
+import contextlib  # noqa: E402
 
-from aiohttp import web
-from aiohttp.test_utils import TestClient, TestServer
+from aiohttp import web  # noqa: E402
+from aiohttp.test_utils import TestClient, TestServer  # noqa: E402
 
-from mousedroid.telemetry.log_buffer import LogRingBuffer
-from mousedroid.telemetry.server import TelemetryServer
+from mousedroid.telemetry.log_buffer import LogRingBuffer  # noqa: E402
+from mousedroid.telemetry.network import NetworkInterface  # noqa: E402
+from mousedroid.telemetry.server import TelemetryServer  # noqa: E402
+
+
+class _StubPublisher:
+    def __init__(self, queue: asyncio.Queue[TelemetryFrame], frames_dropped: int = 0) -> None:
+        self._queue = queue
+        self._frames_dropped = frames_dropped
+
+    async def publish(self, frame: TelemetryFrame) -> None:
+        self._queue.put_nowait(frame)
+
+    def get_queue(self) -> asyncio.Queue[TelemetryFrame]:
+        return self._queue
+
+    @property
+    def stats(self) -> dict[str, int]:
+        return {
+            "frames_published": 0,
+            "frames_dropped": self._frames_dropped,
+        }
+
+_STUB_IFACES = [NetworkInterface(name="eth0", ip="10.0.0.1", interface_type="ethernet", up=True)]
+_STUB_IP = "10.0.0.1"
 
 
 def _make_health_monitor():
@@ -86,9 +110,7 @@ async def test_sensors_endpoint_no_data():
 async def test_sensors_endpoint_with_data():
     server, _queue = _make_server()
     app = _build_app(server)
-    server._latest_frame = TelemetryFrame(
-        timestamp=1.0, distance_m=2.5, tick_count=42
-    )
+    server._latest_frame = TelemetryFrame(timestamp=1.0, distance_m=2.5, tick_count=42)
 
     async with TestClient(TestServer(app)) as client:
         resp = await client.get("/api/v1/sensors")
@@ -152,13 +174,20 @@ async def test_network_endpoint():
     server, _queue = _make_server()
     app = _build_app(server)
 
-    async with TestClient(TestServer(app)) as client:
-        resp = await client.get("/api/v1/network")
-        assert resp.status == 200
-        data = await resp.json()
-        assert "interfaces" in data
-        assert "server_url" in data
-        assert "server_port" in data
+    with (
+        patch(
+            "mousedroid.telemetry.server.get_network_interfaces",
+            new=AsyncMock(return_value=_STUB_IFACES),
+        ),
+        patch("mousedroid.telemetry.server.get_default_ip", return_value=_STUB_IP),
+    ):
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/api/v1/network")
+            assert resp.status == 200
+            data = await resp.json()
+            assert "interfaces" in data
+            assert "server_url" in data
+            assert "server_port" in data
 
 
 async def test_network_endpoint_mdns_name():
@@ -166,10 +195,17 @@ async def test_network_endpoint_mdns_name():
     server, _queue = _make_server(cfg=cfg)
     app = _build_app(server)
 
-    async with TestClient(TestServer(app)) as client:
-        resp = await client.get("/api/v1/network")
-        data = await resp.json()
-        assert "mdns_name" in data
+    with (
+        patch(
+            "mousedroid.telemetry.server.get_network_interfaces",
+            new=AsyncMock(return_value=_STUB_IFACES),
+        ),
+        patch("mousedroid.telemetry.server.get_default_ip", return_value=_STUB_IP),
+    ):
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/api/v1/network")
+            data = await resp.json()
+            assert "mdns_name" in data
 
 
 # --- CORS tests ---
@@ -245,11 +281,14 @@ async def test_websocket_max_clients():
     app = _build_app(server)
     server._running = True
 
-    async with TestClient(TestServer(app)) as client, client.ws_connect("/ws"):
+    async with (
+        TestClient(TestServer(app)) as client,
+        client.ws_connect("/ws"),
+        client.ws_connect("/ws") as ws2,
+    ):
         # Second connection should be rejected
-        async with client.ws_connect("/ws") as ws2:
-            msg = await ws2.receive()
-            assert msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED)
+        msg = await ws2.receive()
+        assert msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED)
 
 
 async def test_websocket_receives_broadcast():
@@ -277,6 +316,69 @@ async def test_websocket_receives_broadcast():
         broadcast_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await broadcast_task
+
+
+async def test_metrics_endpoint_exposed_when_registry_present():
+    cfg = TelemetryConfig(enabled=True, metrics_path="/metrics")
+    queue: asyncio.Queue[TelemetryFrame] = asyncio.Queue(maxsize=64)
+    health = _make_health_monitor()
+    registry = MetricsRegistry(MetricsConfig(enabled=True))
+    server = TelemetryServer(
+        cfg=cfg,
+        telemetry_queue=queue,
+        health_monitor=health,
+        metrics_registry=registry,
+    )
+    app = _build_app(server)
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/metrics")
+        assert resp.status == 200
+        text = await resp.text()
+        assert "# HELP" in text
+
+
+async def test_broadcast_loop_updates_metrics_registry():
+    cfg = TelemetryConfig(enabled=True, metrics_path="/metrics")
+    queue: asyncio.Queue[TelemetryFrame] = asyncio.Queue(maxsize=64)
+    health = _make_health_monitor()
+    registry = MetricsRegistry(MetricsConfig(enabled=True))
+    publisher = _StubPublisher(queue, frames_dropped=3)
+    server = TelemetryServer(
+        cfg=cfg,
+        telemetry_queue=queue,
+        health_monitor=health,
+        metrics_registry=registry,
+        publisher=publisher,
+    )
+    server._running = True
+
+    broadcast_task = asyncio.create_task(server._broadcast_loop())
+    try:
+        await queue.put(
+            TelemetryFrame(
+                loop_time_ms=17.5,
+                battery_voltage=12.3,
+                health={"gpu_temp_c": 57.0},
+                safety={"violations": ["law1", "law2"]},
+            )
+        )
+        await asyncio.sleep(0.05)
+    finally:
+        server._running = False
+        broadcast_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await broadcast_task
+
+    text = registry.render_prometheus()
+    assert "loop_time" in text
+    assert "battery_voltage" in text
+    assert "gpu_temp" in text
+    assert 'law="law1"' in text
+    assert 'law="law2"' in text
+    assert "publish_hz" in text
+    assert " 10" in text or " 10.0" in text
+    assert "frame_drops_total 3" in text
 
 
 # --- Server lifecycle tests ---

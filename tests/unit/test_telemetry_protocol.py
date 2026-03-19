@@ -94,7 +94,5 @@ def test_server_protocol_is_runtime_checkable():
 
 
 def test_telemetry_frame_encoder_field():
-    frame = TelemetryFrame(
-        encoder={"left_velocity_mps": 0.5, "right_velocity_mps": 0.3}
-    )
+    frame = TelemetryFrame(encoder={"left_velocity_mps": 0.5, "right_velocity_mps": 0.3})
     assert frame.encoder["left_velocity_mps"] == 0.5

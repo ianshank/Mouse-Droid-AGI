@@ -11,6 +11,11 @@ from mousedroid.logging.setup import get_logger
 _log = get_logger(__name__)
 
 
+def _backward(loss: Tensor) -> None:
+    """Isolate torch stub gaps around ``Tensor.backward``."""
+    loss.backward()  # type: ignore[no-untyped-call]
+
+
 class KnowledgeDistiller:
     """Teacher-student knowledge distillation with configurable temperature.
 
@@ -87,7 +92,7 @@ class KnowledgeDistiller:
         loss: Tensor = self._alpha * kl_loss + (1.0 - self._alpha) * ce_loss
 
         self._student_optimizer.zero_grad()
-        loss.backward()
+        _backward(loss)
         self._student_optimizer.step()
 
         return loss
