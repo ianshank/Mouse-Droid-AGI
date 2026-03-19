@@ -320,10 +320,6 @@ class TelemetryConfig(BaseModel):
         description="Server bind address (0.0.0.0 = all interfaces)",
     )
     port: int = Field(8080, gt=0, le=65535, description="Server port")
-    preferred_interface: str | None = Field(
-        None,
-        description="Preferred network interface for mDNS (e.g. wlan0, eth0). None = all",
-    )
     ws_path: str = Field("/ws", description="WebSocket endpoint path")
     api_prefix: str = Field("/api/v1", description="REST API prefix")
     publish_hz: float = Field(
@@ -348,7 +344,6 @@ class TelemetryConfig(BaseModel):
         default_factory=lambda: ["*"],
         description="CORS allowed origins",
     )
-    log_stream_buffer: int = Field(200, gt=0, description="Ring buffer size for log entries")
 
 
 class ThreeLawsConfig(BaseModel):
