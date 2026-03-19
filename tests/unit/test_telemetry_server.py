@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -16,13 +16,17 @@ from mousedroid.telemetry.protocol import TelemetryFrame
 
 # Guard: skip all tests if aiohttp is not installed
 aiohttp = pytest.importorskip("aiohttp")
-import contextlib
+import contextlib  # noqa: E402
 
-from aiohttp import web
-from aiohttp.test_utils import TestClient, TestServer
+from aiohttp import web  # noqa: E402
+from aiohttp.test_utils import TestClient, TestServer  # noqa: E402
 
-from mousedroid.telemetry.log_buffer import LogRingBuffer
-from mousedroid.telemetry.server import TelemetryServer
+from mousedroid.telemetry.log_buffer import LogRingBuffer  # noqa: E402
+from mousedroid.telemetry.network import NetworkInterface  # noqa: E402
+from mousedroid.telemetry.server import TelemetryServer  # noqa: E402
+
+_STUB_IFACES = [NetworkInterface(name="eth0", ip="10.0.0.1", interface_type="ethernet", up=True)]
+_STUB_IP = "10.0.0.1"
 
 
 def _make_health_monitor():
@@ -152,13 +156,20 @@ async def test_network_endpoint():
     server, _queue = _make_server()
     app = _build_app(server)
 
-    async with TestClient(TestServer(app)) as client:
-        resp = await client.get("/api/v1/network")
-        assert resp.status == 200
-        data = await resp.json()
-        assert "interfaces" in data
-        assert "server_url" in data
-        assert "server_port" in data
+    with (
+        patch(
+            "mousedroid.telemetry.server.get_network_interfaces",
+            new=AsyncMock(return_value=_STUB_IFACES),
+        ),
+        patch("mousedroid.telemetry.server.get_default_ip", return_value=_STUB_IP),
+    ):
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/api/v1/network")
+            assert resp.status == 200
+            data = await resp.json()
+            assert "interfaces" in data
+            assert "server_url" in data
+            assert "server_port" in data
 
 
 async def test_network_endpoint_mdns_name():
@@ -166,10 +177,17 @@ async def test_network_endpoint_mdns_name():
     server, _queue = _make_server(cfg=cfg)
     app = _build_app(server)
 
-    async with TestClient(TestServer(app)) as client:
-        resp = await client.get("/api/v1/network")
-        data = await resp.json()
-        assert "mdns_name" in data
+    with (
+        patch(
+            "mousedroid.telemetry.server.get_network_interfaces",
+            new=AsyncMock(return_value=_STUB_IFACES),
+        ),
+        patch("mousedroid.telemetry.server.get_default_ip", return_value=_STUB_IP),
+    ):
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/api/v1/network")
+            data = await resp.json()
+            assert "mdns_name" in data
 
 
 # --- CORS tests ---
@@ -245,11 +263,14 @@ async def test_websocket_max_clients():
     app = _build_app(server)
     server._running = True
 
-    async with TestClient(TestServer(app)) as client, client.ws_connect("/ws"):
+    async with (
+        TestClient(TestServer(app)) as client,
+        client.ws_connect("/ws"),
+        client.ws_connect("/ws") as ws2,
+    ):
         # Second connection should be rejected
-        async with client.ws_connect("/ws") as ws2:
-            msg = await ws2.receive()
-            assert msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED)
+        msg = await ws2.receive()
+        assert msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED)
 
 
 async def test_websocket_receives_broadcast():

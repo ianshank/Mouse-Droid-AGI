@@ -105,6 +105,7 @@ asyncio_mode = "auto"
 markers = [
     "slow: marks tests as slow",
     "hardware: marks tests requiring real hardware",
+    "smoke: marks smoke tests for end-to-end telemetry stack validation",
 ]
 addopts = "-v --tb=short"
 

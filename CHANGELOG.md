@@ -10,6 +10,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **WiFi/Ethernet Telemetry Server** — `src/mousedroid/telemetry/` — real-time remote monitoring over the local network
+  - `TelemetryServer` — aiohttp-based REST + WebSocket server (`/api/v1/status`, `/api/v1/sensors`, `/api/v1/health`, `/api/v1/logs`, `/api/v1/network`, `/ws`)
+  - `TelemetryPublisher` — non-blocking async queue bridge; rate-limiting (≤60 Hz); drop-on-full semantics
+  - `TelemetryFrame` — immutable frozen dataclass snapshot (all plain Python types; JSON/msgpack serialisable)
+  - `LogRingBuffer` — structlog processor that captures the last *N* log entries for `/api/v1/logs`
+  - `FrameBuilder` — converts `ObservationBundle` → `TelemetryFrame` each control-loop cycle
+  - `NetworkInterface` discovery — uses stdlib `socket` only; no external dependencies
+  - Optional API-key authentication (`X-API-Key` header), CORS middleware, mDNS/Zeroconf registration
+  - Optional msgpack serialisation for binary-efficient WebSocket streaming
+  - `MockTelemetryServer` — zero-dependency stub that satisfies `TelemetryServerProtocol` for CI/unit tests
+- **Telemetry configuration** — `TelemetryConfig` Pydantic model added to `config/schema.py`
+  - Fields: `enabled`, `host`, `port`, `publish_hz` (≤60), `queue_size`, `api_key`, `cors_origins`, `max_clients`, `mdns_enabled`, `mdns_service_name`, `serialization`, `log_stream_buffer`
+- **`common/actions.py`** — `ActionNormalizer` utility extracted from orchestrator for reuse
+- **Telemetry smoke tests** — `tests/smoke/test_telemetry_smoke.py` (43 tests)
+  - Covers full stack: `TelemetryFrame` → `LogRingBuffer` → `TelemetryPublisher` → `TelemetryServer` REST + WebSocket → E2E integration
+  - All network I/O mocked to avoid DNS hangs on Windows; Windows-only `socket.getaddrinfo` test skipped with `@pytest.mark.skipif`
+- **Telemetry unit tests** — 10 config, 14 network, 20+ server unit tests in `tests/unit/`
+- **Telemetry integration test** — `tests/integration/test_telemetry_e2e.py`
+- **Modular refactor** — `ab6b01c` — hard-coded values eliminated; `constants.py` expanded; dependency injection improved across `orchestrator`, `factory`, `cognitive_core`, `sensing/manager`
+
+### Changed
+
+- **`pyproject.toml`** — added `smoke` pytest marker; `aiohttp` added to `[server]` extras
+- **`config/default.yaml`** — `telemetry` section with sensible defaults
+- **`factory.py`** — `build_telemetry_server()` wires `TelemetryPublisher` → `TelemetryServer` → `Orchestrator`
+- **`orchestrator.py`** — publishes `TelemetryFrame` each tick when telemetry enabled; lifecycle `start()`/`stop()` for server
+- **`sensing/manager.py`** — `SensorManager` injects `TelemetryPublisher` for frame forwarding
+
+### Fixed
+
+- **`tests/unit/test_cognitive_core.py`** — fixed I001 import sort
+- **`tests/unit/test_telemetry_config.py`** — added `# noqa: S104` for `0.0.0.0`; `PT011` match patterns on all `pytest.raises`
+- **`tests/unit/test_telemetry_network.py`** — SIM117 nested `with` blocks combined; Windows DNS-hang test skipped
+- **`tests/unit/test_telemetry_server.py`** — E402 noqa after `importorskip`; network endpoints mocked to avoid real socket I/O
+- **17 ruff violations** resolved across 4 PR test files
+
+---
+
+## [0.12.0] — Previous unreleased work
+
+### Added
+
 - **GPU Pre-Training Pipeline** — end-to-end orchestration for running phases natively on Jetson Orin Nano
   - `run_pipeline.py` orchestrator and native AMP support in `train_rssm.py`
   - GPU-accelerated MCTS rollouts in `warmstart_policy.py`

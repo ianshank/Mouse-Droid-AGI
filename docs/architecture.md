@@ -38,6 +38,8 @@ graph TD
                 HealthMonitor["Health Monitor\nsysfs polling"]
                 CoreAI["Core AI Pipeline\nRSSM + MCTS + Navigation Agent\nCognitive Core BDI + Metacognitive\nMemory: Working / Episodic / Semantic\nSafety Monitor + Constitutional Checker"]
                 SensorMgr["Sensor Manager\nconcurrent I/O"]
+                TelemetryPub["Telemetry Publisher\nasync queue\n≤60 Hz non-blocking"]
+                TelemetryServer["Telemetry Server\naiohttp REST + WebSocket\nport 8765"]
                 ExperienceDB[("Experience Logger\nLMDB\n/home/jetson/experience_db")]
             end
         end
@@ -57,6 +59,9 @@ graph TD
     Orchestrator --> CoreAI
     Orchestrator --> LLMGateway
     Orchestrator --> HealthMonitor
+    Orchestrator --> TelemetryPub
+    TelemetryPub --> TelemetryServer
+    HealthMonitor --> TelemetryPub
     CoreAI --> SensorMgr
     CoreAI --> ExperienceDB
     SensorMgr --> Camera
@@ -77,8 +82,8 @@ graph TD
 | Llama GGUF model | llama-cpp-python | Local LLM for NL to velocity |
 | ESP32 firmware | C++ (Wave Rover SDK) | Motor PWM control, encoder polling |
 | Jetson CSI / IMX500 camera | jetson_utils / picamera2 | Vision capture + onboard neural inference |
-| NVMe SSD 500 GB | ext4 `/mnt/ssd` | Docker data-root, containerd, 16 GB swap |
-
+| NVMe SSD 500 GB | ext4 `/mnt/ssd` | Docker data-root, containerd, 16 GB swap || Telemetry Publisher | Python asyncio queue | Non-blocking sensor-frame fan-out at ≤60 Hz |
+| Telemetry Server | aiohttp 3.x REST + WebSocket | Remote WiFi/Ethernet monitoring on port 8765 |
 ---
 
 ## Level 3 — Component Diagram (mousedroid process)
@@ -105,6 +110,9 @@ graph TD
     PNN["PNN\nprogressive nets + lateral connections"]
     LLM["LLM Gateway optional\nNL to GoalVector\nLocal Llama GGUF"]
 
+    TelemetryPub2["Telemetry Publisher\ntelemetry/publisher.py\nasync queue bridge"]
+    TelemetryServer2["Telemetry Server\ntelemetry/server.py\nREST /api/v1/* + WebSocket /ws"]
+
     CLI --> Factory
     Factory --> Orchestrator
     Orchestrator --> SensorMgr
@@ -123,6 +131,8 @@ graph TD
     Consolidation --> SemanticMem
     Orchestrator -.-> EWC
     Orchestrator -.-> PNN
+    Orchestrator --> TelemetryPub2
+    TelemetryPub2 --> TelemetryServer2
 ```
 
 ---
@@ -240,6 +250,37 @@ graph LR
     Epi --> Sem
 ```
 
+### Telemetry Broadcast (WiFi / Ethernet)
+
+```mermaid
+sequenceDiagram
+    participant Orch as Orchestrator (30 Hz)
+    participant TelePub as TelemetryPublisher
+    participant TeleServ as TelemetryServer (aiohttp)
+    participant WSClient as WebSocket Client
+    participant RESTClient as REST Client
+
+    Note over Orch,TelePub: Each control tick
+    Orch->>TelePub: publish(TelemetryFrame)
+    TelePub->>TelePub: put_nowait — drops if queue full
+    TelePub->>TeleServ: _latest_frame updated
+
+    Note over TeleServ,WSClient: Background broadcast loop
+    TeleServ->>WSClient: JSON frame over WebSocket
+
+    Note over RESTClient,TeleServ: On-demand REST endpoints
+    RESTClient->>TeleServ: GET /api/v1/sensors
+    TeleServ-->>RESTClient: latest TelemetryFrame JSON
+    RESTClient->>TeleServ: GET /api/v1/health
+    TeleServ-->>RESTClient: GPU temp, load, battery
+    RESTClient->>TeleServ: GET /api/v1/logs
+    TeleServ-->>RESTClient: last-N structured log entries
+    RESTClient->>TeleServ: GET /api/v1/network
+    TeleServ-->>RESTClient: interfaces + server URL
+```
+
+---
+
 ### Learning Pipeline (offline / async)
 
 ```mermaid
@@ -309,3 +350,7 @@ sequenceDiagram
 | Multi-stage Docker builds | Extract pre-compiled binaries from upstream images to bypass OOM |
 | NVMe SSD for Docker + swap | 500 GB fast storage avoids SD card wear and OOM during builds |
 | `systemd-run` for long builds | Persistent processes survive SSH drops |
+| aiohttp over FastAPI for telemetry | Lightweight asyncio-native HTTP; no ASGI wrapper; fits inside the existing event loop |
+| Non-blocking drop-on-full queue | Telemetry must never stall the 30 Hz control loop; frame drops are preferable to back-pressure |
+| Stdlib-only network discovery | `socket` + `netifaces` avoids extra system calls; works inside Docker without root |
+| Immutable `TelemetryFrame` dataclass | Thread-safe snapshot; safe to pass across asyncio tasks without copying |

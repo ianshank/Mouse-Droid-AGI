@@ -2,7 +2,7 @@
 
 **A Star Wars MSE-6 "Mouse Droid" autonomous navigation system powered by an Agentic World Model on NVIDIA Jetson Orin Nano.**
 
-[![Tests](https://img.shields.io/badge/tests-959%20passing-brightgreen)](tests/)
+[![Tests](https://img.shields.io/badge/tests-1206%20passing-brightgreen)](tests/)
 [![Coverage](https://img.shields.io/badge/coverage-97%25-brightgreen)](pyproject.toml)
 [![Ruff](https://img.shields.io/badge/lint-ruff%20clean-brightgreen)](pyproject.toml)
 [![Mypy](https://img.shields.io/badge/mypy-0%20errors-brightgreen)](pyproject.toml)
@@ -44,6 +44,7 @@ graph TD
             Orchestrator["Orchestrator\n30 Hz sense-plan-act"]
             CoreAI["Core AI Pipeline\nRSSM + MCTS + Navigation Agent\nBDI Cognitive Core\nMemory Systems\nSafety Monitor"]
             SensorMgr["Sensor Manager\nJetson CSI - HC-SR04 - ESP32 encoders"]
+            Telemetry["Telemetry Server\naiohttp REST + WebSocket\n/api/v1/* + /ws"]
             ExperienceDB[("Experience Logger\nLMDB")]
         end
         SSD["NVMe SSD 500 GB\nDocker data + 16 GB swap"]
@@ -57,7 +58,8 @@ graph TD
     CoreAI --> SensorMgr
     CoreAI --> ExperienceDB
     Orchestrator -- "UART / HTTP" --> ESP32
-    Orchestrator -- "metrics" --> Monitoring
+    Orchestrator --> Telemetry
+    Telemetry -- "REST / WebSocket" --> Monitoring
     Docker -.-> SSD
 ```
 

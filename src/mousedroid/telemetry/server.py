@@ -192,13 +192,13 @@ class TelemetryServer:
             """Validate API key from X-API-Key header."""
             # Allow WebSocket upgrade requests to handle auth in the WS handler
             if request.headers.get("Upgrade", "").lower() == "websocket":
-                return await handler(request)
+                return await handler(request)  # type: ignore[no-any-return]
 
             key = request.headers.get("X-API-Key", "")
             if key != api_key:
                 raise web.HTTPUnauthorized(text="Invalid or missing API key")
 
-            return await handler(request)
+            return await handler(request)  # type: ignore[no-any-return]
 
         middlewares: list[Any] = [cors_middleware]
         if api_key is not None:

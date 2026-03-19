@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import socket
+import sys
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from mousedroid.constants import LOOPBACK_IP
 from mousedroid.telemetry.network import (
@@ -72,6 +75,13 @@ def test_get_default_ip_fallback_on_error():
     assert ip == LOOPBACK_IP
 
 
+_SKIP_WIN32_NETWORK = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="socket.getaddrinfo on Windows interface GUIDs triggers slow DNS lookups",
+)
+
+
+@_SKIP_WIN32_NETWORK
 async def test_get_network_interfaces_returns_list():
     from mousedroid.telemetry.network import get_network_interfaces
 
@@ -103,15 +113,14 @@ def test_get_interfaces_sync_if_nameindex_oserror():
 
 def test_get_interfaces_sync_getaddrinfo_gaierror_with_socket_fallback():
     """Cover lines 98-103, 118: getaddrinfo fails, socket.connect fallback is used."""
-    with patch("socket.if_nameindex", return_value=[(1, "eth0")]):
-        with patch(
-            "socket.getaddrinfo",
-            side_effect=socket.gaierror("lookup failed"),
-        ):
-            mock_sock_instance = MagicMock()
-            mock_sock_instance.getsockname.return_value = ("10.0.0.1", 0)
-            with patch("socket.socket", return_value=mock_sock_instance):
-                result = _get_interfaces_sync()
+    mock_sock_instance = MagicMock()
+    mock_sock_instance.getsockname.return_value = ("10.0.0.1", 0)
+    with (
+        patch("socket.if_nameindex", return_value=[(1, "eth0")]),
+        patch("socket.getaddrinfo", side_effect=socket.gaierror("lookup failed")),
+        patch("socket.socket", return_value=mock_sock_instance),
+    ):
+        result = _get_interfaces_sync()
 
     assert len(result) == 1
     assert result[0].ip == "10.0.0.1"
@@ -120,15 +129,14 @@ def test_get_interfaces_sync_getaddrinfo_gaierror_with_socket_fallback():
 
 def test_get_interfaces_sync_getaddrinfo_and_socket_both_fail():
     """Cover line 118: both getaddrinfo and socket.connect fail."""
-    with patch("socket.if_nameindex", return_value=[(1, "eth0")]):
-        with patch(
-            "socket.getaddrinfo",
-            side_effect=socket.gaierror("lookup failed"),
-        ):
-            mock_sock_instance = MagicMock()
-            mock_sock_instance.connect.side_effect = OSError("no route")
-            with patch("socket.socket", return_value=mock_sock_instance):
-                result = _get_interfaces_sync()
+    mock_sock_instance = MagicMock()
+    mock_sock_instance.connect.side_effect = OSError("no route")
+    with (
+        patch("socket.if_nameindex", return_value=[(1, "eth0")]),
+        patch("socket.getaddrinfo", side_effect=socket.gaierror("lookup failed")),
+        patch("socket.socket", return_value=mock_sock_instance),
+    ):
+        result = _get_interfaces_sync()
 
     assert len(result) == 1
     assert result[0].ip == ""
@@ -163,9 +171,11 @@ def test_get_interface_ip_sync_empty_addr():
 def test_get_interfaces_sync_getaddrinfo_returns_empty_addr():
     """Cover line where addr is empty in the loop."""
     fake_info = [(socket.AF_INET, socket.SOCK_DGRAM, 0, "", ("", 0))]
-    with patch("socket.if_nameindex", return_value=[(1, "eth0")]):
-        with patch("socket.getaddrinfo", return_value=fake_info):
-            result = _get_interfaces_sync()
+    with (
+        patch("socket.if_nameindex", return_value=[(1, "eth0")]),
+        patch("socket.getaddrinfo", return_value=fake_info),
+    ):
+        result = _get_interfaces_sync()
 
     assert len(result) == 1
     assert result[0].ip == ""

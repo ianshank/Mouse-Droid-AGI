@@ -90,6 +90,14 @@ docker-build.log
 coverage_report.txt
 coverage.json
 
+# Test artefacts and scratch output
+fail_details.txt
+mypy_output.txt
+pytest_results.txt
+smoke_results.txt
+telem_unit.txt
+unit_test_results.txt
+
 # Temporary deploy/build scripts
 /tmp/jetson_*.py
 /tmp/install_*.py

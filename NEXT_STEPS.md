@@ -86,10 +86,11 @@ This document tracks planned enhancements, organised by priority and category.
 ## Priority 4 — CI/CD Pipeline
 
 ### 4.1 GitHub Actions Workflow
-- Lint (`ruff check`), type-check (`mypy --strict`), test (`pytest --cov`) on every push
-- Fail if coverage drops below 85% (`--cov-fail-under=85`)
-- Matrix: Python 3.11, 3.12
-- **Effort**: 1 day | **Owner**: DevOps
+- ✅ Lint (`ruff check`), type-check (`mypy`), test (`pytest --cov`) run on every push
+- ✅ Coverage enforced at ≥85% via `--cov-fail-under=85`
+- ✅ Smoke tests (`pytest -m smoke`) run as a fast pre-flight gate
+- Next: expand matrix to Python 3.11 + 3.12 in parallel
+- **Effort**: 0.5 days | **Owner**: DevOps
 
 ### 4.2 TensorRT Compilation CI
 - Add Jetson-hosted CI runner for TensorRT engine compilation tests
@@ -115,6 +116,7 @@ This document tracks planned enhancements, organised by priority and category.
 
 ### 5.2 Grafana Dashboard
 - Pre-built dashboard JSON for: loop latency, GPU temp, curiosity drive, memory utilisation
+- Wire `loop_time_ms` from `/api/v1/sensors` WebSocket into Grafana Live
 - Ship as `docs/grafana_dashboard.json`
 - **Effort**: 1 day | **Owner**: backend team
 
@@ -122,6 +124,18 @@ This document tracks planned enhancements, organised by priority and category.
 - Ship logs to Loki via Grafana Agent on Jetson
 - Define log queries for: emergency stops, constitutional violations, sensor failures
 - **Effort**: 2 days | **Owner**: backend team
+
+### 5.4 Telemetry Server — Connect to Prometheus Scraping
+- Add a `/metrics` route to `TelemetryServer` that emits Prometheus text format
+- Expose `telemetry_frame_drop_total`, `ws_client_count`, `publish_hz` gauges
+- Validate with `promtool check metrics` in CI
+- **Effort**: 1 day | **Owner**: backend team
+
+### 5.5 Telemetry Server — Production Security
+- Add optional bearer-token authentication (`cfg.telemetry.auth_token`)
+- Document mTLS setup for production deployments on private networks
+- Add CI test: unauthenticated request returns 401 when token is configured
+- **Effort**: 1 day | **Owner**: security + backend team
 
 ---
 
