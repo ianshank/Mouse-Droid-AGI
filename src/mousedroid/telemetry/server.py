@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 from mousedroid.logging.setup import get_logger
 from mousedroid.telemetry.network import get_default_ip, get_network_interfaces
 from mousedroid.telemetry.protocol import TelemetryFrame
+from mousedroid.constants import MDNS_SERVICE_TYPE
 
 if TYPE_CHECKING:
     from aiohttp import web
@@ -526,8 +527,8 @@ class TelemetryServer:
             packed_ip = sock.inet_aton(ip)
 
             self._service_info = ServiceInfo(
-                type_="_http._tcp.local.",
-                name=f"{self._cfg.mdns_service_name}._http._tcp.local.",
+                type_=MDNS_SERVICE_TYPE,
+                name=f"{self._cfg.mdns_service_name}.{MDNS_SERVICE_TYPE}",
                 addresses=[packed_ip],
                 port=self._cfg.port,
                 properties={
