@@ -21,22 +21,14 @@ from mousedroid.cognitive.constitutional_rl import (
     PolicyMLP,
 )
 from mousedroid.cognitive.metacognitive import MetacognitiveModel
+from mousedroid.constants import (
+    FAST_STATE_DIM,
+    SLOW_LOOP_INTERVAL_S,
+    SLOW_QUEUE_MAXSIZE,
+)
 from mousedroid.logging.setup import get_logger
 
 _log = get_logger(__name__)
-
-# ---------------------------------------------------------------------------
-# Module-level constants
-# ---------------------------------------------------------------------------
-
-_SLOW_LOOP_INTERVAL_S: float = 1.0
-"""Target interval for the slow (BDI + metacognitive) loop."""
-
-_SLOW_QUEUE_MAXSIZE: int = 2
-"""Maximum backlog for the slow-loop work queue."""
-
-_FAST_STATE_DIM: int = 128
-"""Expected dimensionality of fast-tick state vectors."""
 
 
 class CognitiveCore:
@@ -69,7 +61,7 @@ class CognitiveCore:
         self._curiosity = CuriosityAggregator()
 
         self._slow_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(
-            maxsize=_SLOW_QUEUE_MAXSIZE,
+            maxsize=SLOW_QUEUE_MAXSIZE,
         )
         self._slow_task: asyncio.Task[None] | None = None
         self._latest_bdi: dict[str, Any] = {}
@@ -92,7 +84,7 @@ class CognitiveCore:
         Returns:
             Tuple of ``(safe_action, violations)``.
         """
-        default_state = np.zeros(_FAST_STATE_DIM)
+        default_state = np.zeros(FAST_STATE_DIM)
         state = np.asarray(observation_dict.get("state", default_state), dtype=np.float32)
 
         # Policy forward pass.
@@ -143,13 +135,13 @@ class CognitiveCore:
             try:
                 obs = await asyncio.wait_for(
                     self._slow_queue.get(),
-                    timeout=_SLOW_LOOP_INTERVAL_S,
+                    timeout=SLOW_LOOP_INTERVAL_S,
                 )
             except TimeoutError:
                 continue
 
             state = np.asarray(
-                obs.get("bdi_state", obs.get("state", np.zeros(_FAST_STATE_DIM))),
+                obs.get("bdi_state", obs.get("state", np.zeros(FAST_STATE_DIM))),
                 dtype=np.float32,
             )
 

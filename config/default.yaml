@@ -158,3 +158,19 @@ cognitive:
 metrics:
   enabled: true
   export_interval_s: 10.0
+
+telemetry:
+  enabled: false
+  host: "0.0.0.0"
+  port: 8080
+  ws_path: "/ws"
+  api_prefix: "/api/v1"
+  publish_hz: 10.0
+  max_clients: 10
+  queue_size: 64
+  serialization: "json"
+  # api_key: null       # Uncomment and set for authentication
+  mdns_enabled: true
+  mdns_service_name: "MouseDroid Telemetry"
+  cors_origins: ["*"]
+  log_stream_buffer: 200

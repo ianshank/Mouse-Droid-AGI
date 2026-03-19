@@ -13,11 +13,14 @@ from typing import TYPE_CHECKING
 import numpy as np
 import torch
 
+from mousedroid.common.actions import normalize_action_numpy
 from mousedroid.constants import (
     DEFAULT_BATTERY_VOLTAGE,
     MILLISECONDS_PER_SECOND,
+    MOTOR_STATE_BATTERY_INDEX,
 )
 from mousedroid.logging.setup import get_logger
+from mousedroid.telemetry.frame_builder import build_telemetry_frame
 
 if TYPE_CHECKING:
     from mousedroid.agents.base import AgentProtocol
@@ -28,6 +31,7 @@ if TYPE_CHECKING:
     from mousedroid.safety.protocol import SafetyMonitorProtocol
     from mousedroid.sensing.manager import SensorManager
     from mousedroid.sensing.protocol import ObservationProtocol
+    from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
     from mousedroid.world_model.protocol import WorldModelProtocol
 
 _log = get_logger(__name__)
@@ -48,6 +52,8 @@ class MouseDroidOrchestrator:
         sensor_manager: SensorManager,
         cfg: Settings,
         cognitive_core: CognitiveCore | None = None,
+        telemetry_publisher: TelemetryPublisherProtocol | None = None,
+        telemetry_server: TelemetryServerProtocol | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -59,6 +65,8 @@ class MouseDroidOrchestrator:
             sensor_manager: Sensor manager for concurrent sensor reads.
             cfg: Root settings.
             cognitive_core: Optional CognitiveCore for BDI/metacognitive loop.
+            telemetry_publisher: Optional telemetry publisher for remote monitoring.
+            telemetry_server: Optional telemetry server for remote connections.
         """
         self._world_model = world_model
         self._agents = agents
@@ -66,8 +74,11 @@ class MouseDroidOrchestrator:
         self._esp32 = esp32
         self._sensor_manager = sensor_manager
         self._cognitive_core = cognitive_core
+        self._telemetry_publisher = telemetry_publisher
+        self._telemetry_server = telemetry_server
         self._cfg = cfg
         self._running = False
+        self._tick_count: int = 0
 
         # Latent state
         self._h = torch.zeros(1, cfg.model.hidden_dim)
@@ -81,6 +92,8 @@ class MouseDroidOrchestrator:
         await self._sensor_manager.start()
         if self._cognitive_core is not None:
             await self._cognitive_core.start()
+        if self._telemetry_server is not None:
+            await self._telemetry_server.start()
         self._running = True
         _log.info("orchestrator_started")
 
@@ -88,6 +101,8 @@ class MouseDroidOrchestrator:
         """Stop all subsystems gracefully."""
         _log.info("orchestrator_stopping")
         self._running = False
+        if self._telemetry_server is not None:
+            await self._telemetry_server.stop()
         if self._cognitive_core is not None:
             await self._cognitive_core.stop()
         await self._esp32.emergency_stop()
@@ -109,12 +124,17 @@ class MouseDroidOrchestrator:
         if safety_ctx.is_emergency:
             await self._esp32.emergency_stop()
             _log.warning("emergency_stop_triggered")
+            self._tick_count += 1
+            await self._publish_telemetry(observation, safety_ctx, loop_time_ms)
             return
 
         action = self._select_action(safety_ctx, observation, loop_time_ms)
         self._prev_action = action.unsqueeze(0) if action.dim() == 1 else action
 
         await self._execute_action(action)
+
+        self._tick_count += 1
+        await self._publish_telemetry(observation, safety_ctx, loop_time_ms)
 
         _log.debug(
             "tick_complete",
@@ -175,8 +195,8 @@ class MouseDroidOrchestrator:
         """
         try:
             battery_v = (
-                float(observation.motor_state[3])
-                if observation.motor_state.size > 3
+                float(observation.motor_state[MOTOR_STATE_BATTERY_INDEX])
+                if observation.motor_state.size > MOTOR_STATE_BATTERY_INDEX
                 else DEFAULT_BATTERY_VOLTAGE
             )
             belief_dim = int(self._cfg.model.belief_dim)
@@ -225,25 +245,7 @@ class MouseDroidOrchestrator:
         Returns:
             Normalized 1-D torch tensor with correct dimensions.
         """
-        action_np = np.asarray(action_np, dtype=np.float32).flatten()
-        expected_dim = int(self._cfg.model.action_dim)
-
-        if action_np.size < expected_dim:
-            _log.warning(
-                "cognitive_core_action_padded",
-                received_dim=int(action_np.size),
-                expected_dim=expected_dim,
-            )
-            action_np = np.pad(action_np, (0, expected_dim - action_np.size))
-        elif action_np.size > expected_dim:
-            _log.warning(
-                "cognitive_core_action_truncated",
-                received_dim=int(action_np.size),
-                expected_dim=expected_dim,
-            )
-            action_np = action_np[:expected_dim]
-
-        return torch.from_numpy(action_np).float()
+        return normalize_action_numpy(action_np, int(self._cfg.model.action_dim))
 
     async def _execute_action(self, action: torch.Tensor) -> None:
         """Scale and send action to ESP32 motors.
@@ -257,6 +259,32 @@ class MouseDroidOrchestrator:
         vy = float(action[1]) * max_v if action.shape[0] > 1 else 0.0
         omega = float(action[2]) * max_omega if action.shape[0] > 2 else 0.0
         await self._esp32.send_velocity(vx, vy, omega)
+
+    async def _publish_telemetry(
+        self,
+        observation: ObservationProtocol,
+        safety_ctx: SafetyContext,
+        loop_time_ms: float,
+    ) -> None:
+        """Build and publish a telemetry frame from current state.
+
+        Non-blocking: silently drops if queue is full.
+
+        Args:
+            observation: Current sensor observation bundle.
+            safety_ctx: Current safety context.
+            loop_time_ms: Control loop iteration time (ms).
+        """
+        if self._telemetry_publisher is None:
+            return
+
+        try:
+            frame = build_telemetry_frame(
+                observation, safety_ctx, loop_time_ms, self._tick_count,
+            )
+            await self._telemetry_publisher.publish(frame)
+        except Exception:
+            _log.debug("telemetry_publish_failed", exc_info=True)
 
     async def run(self) -> None:
         """Run the main loop at configured control rate."""

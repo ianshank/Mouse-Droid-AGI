@@ -13,12 +13,15 @@ from mousedroid.comms.protocol import ESP32CommProtocol
 from mousedroid.hardware.protocols import AudioProtocol, DistanceSensorProtocol, VisionProtocol
 from mousedroid.logging.setup import get_logger
 from mousedroid.safety.protocol import SafetyMonitorProtocol
+from mousedroid.telemetry.log_buffer import LogRingBuffer
 from mousedroid.world_model.protocol import WorldModelProtocol
 
 if TYPE_CHECKING:
     from mousedroid.cognitive.bdi_model import NeuralBDI
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.config.schema import Settings, UltrasonicConfig
+    from mousedroid.health.monitor import HealthMonitor
+    from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
 
 _log = get_logger(__name__)
 
@@ -281,6 +284,64 @@ def build_cognitive_core(cfg: Settings) -> CognitiveCore:
     return core
 
 
+def build_telemetry_publisher(cfg: Settings) -> TelemetryPublisherProtocol | None:
+    """Build telemetry publisher if telemetry is enabled.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        ``TelemetryPublisher`` or ``None`` if telemetry disabled.
+    """
+    if not cfg.telemetry.enabled:
+        return None
+    from mousedroid.telemetry.publisher import TelemetryPublisher
+
+    _log.info("telemetry_publisher_built", publish_hz=cfg.telemetry.publish_hz)
+    return TelemetryPublisher(cfg.telemetry)
+
+
+def build_telemetry_server(
+    cfg: Settings,
+    publisher: TelemetryPublisherProtocol | None,
+    health_monitor: HealthMonitor,
+    log_buffer: LogRingBuffer | None = None,
+) -> TelemetryServerProtocol | None:
+    """Build telemetry server if telemetry is enabled.
+
+    Args:
+        cfg: Root settings.
+        publisher: Telemetry publisher to consume frames from.
+        health_monitor: Health monitor for health endpoint.
+        log_buffer: Optional log ring buffer for log streaming.
+
+    Returns:
+        ``TelemetryServer`` or ``None`` if telemetry disabled.
+    """
+    if not cfg.telemetry.enabled or publisher is None:
+        return None
+
+    if cfg.mock_hardware:
+        from mousedroid.telemetry.mock_server import MockTelemetryServer
+
+        _log.info("telemetry_mock_server_built")
+        return MockTelemetryServer()
+
+    from mousedroid.telemetry.server import TelemetryServer
+
+    _log.info(
+        "telemetry_server_built",
+        host=cfg.telemetry.host,
+        port=cfg.telemetry.port,
+    )
+    return TelemetryServer(
+        cfg=cfg.telemetry,
+        telemetry_queue=publisher.get_queue(),
+        health_monitor=health_monitor,
+        log_buffer=log_buffer,
+    )
+
+
 def build_orchestrator(cfg: Settings) -> object:
     """Build fully-wired orchestrator.
 
@@ -290,6 +351,7 @@ def build_orchestrator(cfg: Settings) -> object:
     Returns:
         Fully configured ``MouseDroidOrchestrator``.
     """
+    from mousedroid.health.monitor import HealthMonitor
     from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator
     from mousedroid.sensing.manager import SensorManager
 
@@ -321,6 +383,26 @@ def build_orchestrator(cfg: Settings) -> object:
                 )
             else:
                 raise
+
+    # Telemetry (optional — disabled by default)
+    telemetry_publisher = build_telemetry_publisher(cfg)
+    health_monitor = HealthMonitor(cfg.health, cfg.jetson)
+
+    # Optional log ring buffer for telemetry log streaming
+    log_buffer: LogRingBuffer | None = None
+    telemetry_cfg = getattr(cfg, "telemetry", None)
+    if telemetry_cfg is not None:
+        buffer_size = getattr(telemetry_cfg, "log_stream_buffer", 0)
+        if buffer_size:
+            log_buffer = LogRingBuffer(buffer_size)
+
+    telemetry_server = build_telemetry_server(
+        cfg,
+        telemetry_publisher,
+        health_monitor,
+        log_buffer=log_buffer,
+    )
+
     return MouseDroidOrchestrator(
         world_model=wm,
         agents=[agent],
@@ -329,4 +411,6 @@ def build_orchestrator(cfg: Settings) -> object:
         sensor_manager=sensor_manager,
         cognitive_core=cognitive_core,
         cfg=cfg,
+        telemetry_publisher=telemetry_publisher,
+        telemetry_server=telemetry_server,
     )
