@@ -116,7 +116,6 @@ omit = [
     "*/hardware/sensors/ultrasonic.py",
     "*/hardware/camera/imx500.py",
     "*/hardware/audio/usb_microphone.py",
-    "*/telemetry/server.py",
 ]
 
 [tool.coverage.report]
