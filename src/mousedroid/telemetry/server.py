@@ -413,6 +413,18 @@ class TelemetryServer:
             await resp.close(code=4030, message=b"log_buffer_disabled")
             return resp
 
+        # Enforce API key for WebSocket log streaming if configured.
+        config = getattr(self, "_config", None)
+        api_key = getattr(config, "api_key", None) if config is not None else None
+        if api_key:
+            supplied_key = request.headers.get("X-Telemetry-Api-Key") or request.query.get(
+                "api_key"
+            )
+            if supplied_key != api_key:
+                raise web.HTTPUnauthorized(
+                    text="Invalid or missing API key for log stream WebSocket"
+                )
+
         ws = web.WebSocketResponse()
         await ws.prepare(request)
 
