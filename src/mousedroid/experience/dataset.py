@@ -16,6 +16,7 @@ import torch
 from numpy.typing import NDArray
 from torch import Tensor
 
+from mousedroid.constants import GB_TO_BYTES
 from mousedroid.experience.record import MouseDroidExperienceRecord
 from mousedroid.logging.setup import get_logger
 
@@ -23,8 +24,6 @@ if TYPE_CHECKING:
     from mousedroid.config.schema import ExperienceConfig, ModelConfig
 
 _log = get_logger(__name__)
-
-_GB_TO_BYTES: int = 1_073_741_824
 
 
 class OfflineRLDataset:
@@ -47,7 +46,7 @@ class OfflineRLDataset:
         device: torch.device | None = None,
     ) -> None:
         self._path = Path(experience_cfg.path)
-        self._map_size = experience_cfg.map_size_gb * _GB_TO_BYTES
+        self._map_size = experience_cfg.map_size_gb * GB_TO_BYTES
         self._vision_dim = model_cfg.vision_dim
         self._motor_dim = model_cfg.motor_state_dim
         self._action_dim = model_cfg.action_dim

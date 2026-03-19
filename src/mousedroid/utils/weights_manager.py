@@ -22,14 +22,17 @@ _log = get_logger(__name__)
 # HuggingFace Integration
 # ---------------------------------------------------------------------------
 
-_hf_hub_download: Any = None
 _HF_HUB_AVAILABLE = False
 try:
     from huggingface_hub import hf_hub_download as _hf_hub_download
 
     _HF_HUB_AVAILABLE = True
 except ImportError:
-    pass
+    def _hf_hub_download(*args: Any, **kwargs: Any) -> Any:
+        raise ImportError(
+            "huggingface_hub is not installed. "
+            "Install with: pip install huggingface_hub"
+        )
 
 
 def download_weights_from_huggingface(

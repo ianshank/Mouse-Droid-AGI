@@ -331,7 +331,7 @@ class CQLTrainer(OfflineRLTrainer):
             q1_logsumexp - q1_data.mean() + q2_logsumexp - q2_data.mean()
         )
 
-        return cql_loss  # type: ignore[no-any-return]
+        return cql_loss
 
     def update_step(
         self,
@@ -370,7 +370,7 @@ class CQLTrainer(OfflineRLTrainer):
         policy_loss = -q1_pi.mean()
 
         self.policy_optimizer.zero_grad()
-        policy_loss.backward()
+        policy_loss.backward()  # type: ignore[no-untyped-call]
         self.policy_optimizer.step()
 
         # --- Target update ---

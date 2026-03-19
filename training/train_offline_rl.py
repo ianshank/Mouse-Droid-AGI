@@ -165,6 +165,7 @@ def train_offline_rl(
             for batch in dataset.iterate_batches(
                 batch_size=offline_cfg.batch_size,
                 seed=epoch,
+                terminal_gap_s=offline_cfg.terminal_gap_s,
             ):
                 losses = trainer.update_step(
                     states=batch["states"],

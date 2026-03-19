@@ -165,7 +165,7 @@ def test_get_interfaces_sync_getaddrinfo_returns_empty_addr():
         patch("socket.if_nameindex", return_value=[(1, "eth0")]),
         patch("socket.getaddrinfo", return_value=fake_info),
     ):
-            result = _get_interfaces_sync()
+        result = _get_interfaces_sync()
 
     assert len(result) == 1
     assert result[0].ip == ""
