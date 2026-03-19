@@ -267,7 +267,8 @@ class PolicyMLP:
             Action vector in ``[-1, 1]``.
         """
         h = relu(layer_norm(state @ self._w1 + self._b1))
-        return np.tanh(h @ self._w2 + self._b2)
+        result: NDArray[np.floating[Any]] = np.tanh(h @ self._w2 + self._b2)
+        return result
 
     def save(self, path: Path | str) -> None:
         """Save weights to ``.npz`` file.

@@ -8,11 +8,12 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import lmdb
 import numpy as np
 import torch
+from numpy.typing import NDArray
 from torch import Tensor
 
 from mousedroid.experience.record import MouseDroidExperienceRecord
@@ -93,7 +94,7 @@ class OfflineRLDataset:
         """Return the number of transition pairs in the dataset."""
         return max(len(self._keys) - 1, 0)
 
-    def _record_to_state(self, record: MouseDroidExperienceRecord) -> np.ndarray:
+    def _record_to_state(self, record: MouseDroidExperienceRecord) -> NDArray[np.floating[Any]]:
         """Concatenate record fields into a flat state vector.
 
         Args:
@@ -102,11 +103,12 @@ class OfflineRLDataset:
         Returns:
             1-D float32 array of shape ``(state_dim,)``.
         """
-        return np.concatenate([
+        result: NDArray[np.floating[Any]] = np.concatenate([
             record.vision_features.flatten()[:self._vision_dim],
             np.array([record.distance_m], dtype=np.float32),
             record.motor_state.flatten()[:self._motor_dim],
         ]).astype(np.float32)
+        return result
 
     def _load_record(self, key: bytes) -> MouseDroidExperienceRecord | None:
         """Load a single record from LMDB by key."""
@@ -121,7 +123,7 @@ class OfflineRLDataset:
     def get_transitions(
         self,
         terminal_gap_s: float = 5.0,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[NDArray[Any], NDArray[Any], NDArray[Any], NDArray[Any], NDArray[Any]]:
         """Load all transitions as numpy arrays.
 
         Consecutive records form ``(s, a, r, s')`` pairs. The ``done`` flag

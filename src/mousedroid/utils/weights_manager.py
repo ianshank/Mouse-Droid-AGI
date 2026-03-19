@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from mousedroid.logging.setup import get_logger
 
@@ -22,16 +22,14 @@ _log = get_logger(__name__)
 # HuggingFace Integration
 # ---------------------------------------------------------------------------
 
+_hf_hub_download: Any = None
 _HF_HUB_AVAILABLE = False
 try:
     from huggingface_hub import hf_hub_download as _hf_hub_download
 
     _HF_HUB_AVAILABLE = True
 except ImportError:
-
-    def _hf_hub_download(**kwargs: object) -> str:
-        """Stub — never called when _HF_HUB_AVAILABLE is False."""
-        raise ImportError("huggingface_hub is not installed")
+    pass
 
 
 def download_weights_from_huggingface(
