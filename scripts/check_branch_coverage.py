@@ -286,12 +286,29 @@ def main() -> int:
         default=None,
         help=(
             "Optional git base ref for commit-based change detection "
-            "(defaults to GITHUB_BASE_REF when set)"
+            "(defaults to GITHUB_BASE_REF in CI when set)"
         ),
     )
     args = parser.parse_args()
 
-    changed_files = _changed_source_files(args.base_ref)
+    # Resolve an effective base ref in the following order:
+    #   1. --base-ref argument
+    #   2. GITHUB_BASE_REF (e.g., for PRs on GitHub Actions)
+    #   3. In CI, fall back to the previous commit (HEAD^) so push builds work
+    base_ref = args.base_ref
+    if base_ref is None:
+        env_base = os.getenv("GITHUB_BASE_REF")
+        if env_base:
+            base_ref = env_base
+    if base_ref is None and os.getenv("CI"):
+        # CI-safe fallback: diff against the previous commit when no base ref is provided.
+        rev_parse = _run(["git", "rev-parse", "--verify", "HEAD^"])
+        if rev_parse.returncode == 0:
+            candidate = rev_parse.stdout.strip()
+            if candidate:
+                base_ref = candidate
+
+    changed_files = _changed_source_files(base_ref)
     if not changed_files:
         if os.getenv("CI"):
             print(
@@ -313,7 +330,7 @@ def main() -> int:
         return run_result.returncode
 
     coverage_by_path = _load_coverage(json_out)
-    line_map = _changed_line_map(changed_files, args.base_ref)
+    line_map = _changed_line_map(changed_files, base_ref)
 
     failures: list[tuple[str, float]] = []
     print("\nChanged-line coverage:")
