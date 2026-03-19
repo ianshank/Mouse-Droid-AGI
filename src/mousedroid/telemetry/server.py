@@ -174,12 +174,22 @@ class TelemetryServer:
             else:
                 resp = await handler(request)
 
-            origin = "*"
-            if cors_origins and cors_origins != ["*"]:
-                req_origin = request.headers.get("Origin", "")
-                origin = req_origin if req_origin in cors_origins else cors_origins[0]
+            # Determine which, if any, Access-Control-Allow-Origin header to send.
+            # - If CORS is unrestricted (no origins configured or ["*"]), always use "*".
+            # - If specific origins are configured, only echo back an allowed Origin
+            #   from the request and add Vary: Origin. For disallowed/missing origins,
+            #   omit Access-Control-Allow-Origin entirely.
+            origin_header_value: str | None = None
+            if not cors_origins or cors_origins == ["*"]:
+                origin_header_value = "*"
+            else:
+                req_origin = request.headers.get("Origin")
+                if req_origin and req_origin in cors_origins:
+                    origin_header_value = req_origin
+                    resp.headers.add("Vary", "Origin")
 
-            resp.headers["Access-Control-Allow-Origin"] = origin
+            if origin_header_value is not None:
+                resp.headers["Access-Control-Allow-Origin"] = origin_header_value
             resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
             resp.headers["Access-Control-Allow-Headers"] = "X-API-Key, Content-Type"
             return resp
