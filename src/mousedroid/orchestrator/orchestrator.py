@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
+from numpy.typing import NDArray
 
 from mousedroid.common.actions import normalize_action_numpy
 from mousedroid.constants import (
@@ -235,7 +236,7 @@ class MouseDroidOrchestrator:
 
     def _normalize_cognitive_action(
         self,
-        action_np: np.ndarray,
+        action_np: NDArray[np.float32] | NDArray[np.float64],
     ) -> torch.Tensor:
         """Normalize cognitive core action to match expected action_dim.
 

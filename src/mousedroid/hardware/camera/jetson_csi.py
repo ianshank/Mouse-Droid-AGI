@@ -134,8 +134,7 @@ class JetsonCSICamera:
             Feature vector of shape ``(feature_dim,)``.
         """
         frame = await asyncio.to_thread(self._capture_frame)
-        features = self._extract_features(frame)
-        return cast(NDArray[np.float32], features)
+        return self._extract_features(frame)
 
     def _capture_frame(self) -> NDArray[np.uint8]:  # pragma: no cover
         """Capture a single frame from the camera (blocking).
@@ -181,7 +180,7 @@ class JetsonCSICamera:
         norm = np.linalg.norm(features)
         if norm > 0:
             features = features / norm
-        return features
+        return cast(NDArray[np.float32], features)
 
     @property
     def feature_dim(self) -> int:

@@ -14,6 +14,11 @@ from mousedroid.logging.setup import get_logger
 _log = get_logger(__name__)
 
 
+def _backward(loss: Tensor) -> None:
+    """Isolate torch stub gaps around ``Tensor.backward``."""
+    loss.backward()  # type: ignore[no-untyped-call]
+
+
 class MAMLAdapter:
     """MAML inner-outer loop meta-learner.
 
@@ -69,7 +74,7 @@ class MAMLAdapter:
                 pred: Tensor = adapted(x)
                 total_loss = total_loss + loss_fn(pred, y)
             opt.zero_grad()
-            total_loss.backward()
+            _backward(total_loss)
             opt.step()
 
         return adapted
@@ -103,7 +108,7 @@ class MAMLAdapter:
         if n_tasks > 0:
             meta_loss = meta_loss / float(n_tasks)
 
-        meta_loss.backward()
+        _backward(meta_loss)
         self._meta_optimizer.step()
 
         return float(meta_loss.item())

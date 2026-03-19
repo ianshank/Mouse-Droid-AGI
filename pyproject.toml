@@ -51,6 +51,7 @@ dev = [
     "hypothesis>=6.80",
     "ruff>=0.4",
     "mypy>=1.5",
+    "types-PyYAML>=6.0",
 ]
 
 [project.scripts]

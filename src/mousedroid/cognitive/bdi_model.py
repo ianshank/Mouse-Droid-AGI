@@ -65,7 +65,7 @@ _AFFECT_DIM: int = DEFAULT_AFFECT_DIM
 
 def _safe_softmax(logits: NDArray[np.floating[Any]]) -> NDArray[np.floating[Any]]:
     """Numerically stable softmax — delegates to shared ``numpy_ops.softmax``."""
-    return cast(NDArray[np.floating[Any]], softmax(logits))
+    return softmax(logits)
 
 
 def _bayesian_normalise(

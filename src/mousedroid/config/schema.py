@@ -10,7 +10,7 @@ from __future__ import annotations
 import enum
 import sys
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 if sys.version_info >= (3, 11):
     from enum import StrEnum
@@ -24,6 +24,16 @@ else:
 
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _settings_default_factory(factory: Any) -> Any:
+    """Return nested settings factories unchanged.
+
+    Pydantic accepts model classes directly as ``default_factory`` callables,
+    while the current mypy stubs are stricter about the callable signature.
+    This helper preserves runtime behaviour and keeps the workaround local.
+    """
+    return factory
 
 
 class PlatformType(StrEnum):
@@ -554,12 +564,12 @@ class Settings(BaseSettings):
     mock_hardware: bool = Field(False, description="Use mock drivers")
     debug: bool = Field(False, description="Enable debug logging + assertions")
 
-    loop: LoopConfig = Field(default_factory=LoopConfig)
-    model: ModelConfig = Field(default_factory=ModelConfig)
-    mcts: MCTSConfig = Field(default_factory=MCTSConfig)
-    surprise: SurpriseConfig = Field(default_factory=SurpriseConfig)
-    safety: SafetyConfig = Field(default_factory=SafetyConfig)
-    esp32: ESP32Config = Field(default_factory=ESP32Config)
+    loop: LoopConfig = Field(default_factory=_settings_default_factory(LoopConfig))
+    model: ModelConfig = Field(default_factory=_settings_default_factory(ModelConfig))
+    mcts: MCTSConfig = Field(default_factory=_settings_default_factory(MCTSConfig))
+    surprise: SurpriseConfig = Field(default_factory=_settings_default_factory(SurpriseConfig))
+    safety: SafetyConfig = Field(default_factory=_settings_default_factory(SafetyConfig))
+    esp32: ESP32Config = Field(default_factory=_settings_default_factory(ESP32Config))
     ultrasonic: UltrasonicConfig | None = Field(
         None,
         description="Required if mock_hardware=false",
@@ -568,24 +578,48 @@ class Settings(BaseSettings):
         None,
         description="USB microphone config (None=disabled)",
     )
-    camera: CameraConfig = Field(default_factory=CameraConfig)
-    jetson: JetsonConfig = Field(default_factory=JetsonConfig)
-    robot: RobotConfig = Field(default_factory=RobotConfig)
-    experience: ExperienceConfig = Field(default_factory=ExperienceConfig)
-    logging: LoggingConfig = Field(default_factory=LoggingConfig)
-    training: TrainingConfig = Field(default_factory=TrainingConfig)
-    health: HealthConfig = Field(default_factory=HealthConfig)
-    retry: RetryConfig = Field(default_factory=RetryConfig)
-    circuit_breaker: CircuitBreakerConfig = Field(default_factory=CircuitBreakerConfig)
-    cognitive: CognitiveConfig = Field(default_factory=CognitiveConfig)
-    metrics: MetricsConfig = Field(default_factory=MetricsConfig)
-    memory: MemoryConfig = Field(default_factory=MemoryConfig)
-    learning: LearningConfig = Field(default_factory=LearningConfig)
-    reward: RewardConfig = Field(default_factory=RewardConfig)
-    curiosity: CuriosityConfig = Field(default_factory=CuriosityConfig)
-    ppo: PPOConfig = Field(default_factory=PPOConfig)
-    telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
-    three_laws: ThreeLawsConfig = Field(default_factory=ThreeLawsConfig)
+    camera: CameraConfig = Field(default_factory=_settings_default_factory(CameraConfig))
+    jetson: JetsonConfig = Field(default_factory=_settings_default_factory(JetsonConfig))
+    robot: RobotConfig = Field(default_factory=_settings_default_factory(RobotConfig))
+    experience: ExperienceConfig = Field(
+        default_factory=_settings_default_factory(ExperienceConfig)
+    )
+    logging: LoggingConfig = Field(
+        default_factory=_settings_default_factory(LoggingConfig)
+    )
+    training: TrainingConfig = Field(
+        default_factory=_settings_default_factory(TrainingConfig)
+    )
+    health: HealthConfig = Field(
+        default_factory=_settings_default_factory(HealthConfig)
+    )
+    retry: RetryConfig = Field(
+        default_factory=_settings_default_factory(RetryConfig)
+    )
+    circuit_breaker: CircuitBreakerConfig = Field(
+        default_factory=_settings_default_factory(CircuitBreakerConfig)
+    )
+    cognitive: CognitiveConfig = Field(
+        default_factory=_settings_default_factory(CognitiveConfig)
+    )
+    metrics: MetricsConfig = Field(
+        default_factory=_settings_default_factory(MetricsConfig)
+    )
+    memory: MemoryConfig = Field(
+        default_factory=_settings_default_factory(MemoryConfig)
+    )
+    learning: LearningConfig = Field(
+        default_factory=_settings_default_factory(LearningConfig)
+    )
+    reward: RewardConfig = Field(
+        default_factory=_settings_default_factory(RewardConfig)
+    )
+    curiosity: CuriosityConfig = Field(
+        default_factory=_settings_default_factory(CuriosityConfig)
+    )
+    ppo: PPOConfig = Field(default_factory=_settings_default_factory(PPOConfig))
+    telemetry: TelemetryConfig = Field(default_factory=_settings_default_factory(TelemetryConfig))
+    three_laws: ThreeLawsConfig = Field(default_factory=_settings_default_factory(ThreeLawsConfig))
 
     @model_validator(mode="after")
     def hardware_requires_pins(self) -> Self:
