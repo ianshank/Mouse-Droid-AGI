@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Awaitable, TypeVar
 
 import numpy as np
 
@@ -27,6 +27,8 @@ if TYPE_CHECKING:
     from mousedroid.comms.protocol import ESP32CommProtocol
     from mousedroid.config.schema import Settings
     from mousedroid.hardware.protocols import AudioProtocol, DistanceSensorProtocol, VisionProtocol
+
+T = TypeVar("T")
 
 _log = get_logger(__name__)
 
@@ -157,10 +159,10 @@ class SensorManager:
 
     @staticmethod
     async def _safe_read(
-        coro: asyncio.coroutines,
+        coro: Awaitable[T],
         sensor_name: str,
-        default: NDArray[np.float32] | float,
-    ) -> tuple[NDArray[np.float32] | float, bool]:
+        default: T,
+    ) -> tuple[T, bool]:
         """Generic safe sensor read with fallback.
 
         Args:
@@ -184,14 +186,14 @@ class SensorManager:
         result, ok = await self._safe_read(
             self._vision.capture_features(), "vision", default,
         )
-        return result, ok  # type: ignore[return-value]
+        return result, ok
 
     async def _safe_distance_read(self) -> tuple[float, bool]:
         """Attempt a distance read, returning max range on failure."""
         result, ok = await self._safe_read(
             self._distance.read_distance_m(), "distance", self._distance.max_range_m,
         )
-        return result, ok  # type: ignore[return-value]
+        return result, ok
 
     async def _safe_motor_read(self) -> tuple[NDArray[np.float32], bool]:
         """Attempt an ESP32 motor/battery read, returning zeros on failure."""
@@ -224,4 +226,4 @@ class SensorManager:
         result, ok = await self._safe_read(
             self._microphone.read_chunk(), "audio", default,
         )
-        return result, ok  # type: ignore[return-value]
+        return result, ok
