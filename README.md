@@ -165,10 +165,10 @@ The telemetry stack exposes both interactive APIs and Prometheus-compatible metr
 
 ```bash
 # REST + websocket telemetry (default)
-curl http://127.0.0.1:8765/api/v1/status
+curl http://127.0.0.1:8080/api/v1/status
 
 # Prometheus text exposition
-curl http://127.0.0.1:8765/metrics
+curl http://127.0.0.1:8080/metrics
 ```
 
 `/metrics` names are derived from `cfg.metrics.namespace`, so metric naming is fully config-driven.

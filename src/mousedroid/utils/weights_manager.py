@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
-    pass
+    from collections.abc import Callable
 
 _log = get_logger(__name__)
 
@@ -23,6 +23,7 @@ _log = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 _HF_HUB_AVAILABLE = False
+_hf_hub_download: Callable[..., str]
 try:
     from huggingface_hub import hf_hub_download as _hf_hub_download
 

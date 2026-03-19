@@ -225,9 +225,7 @@ async def test_tick_count_advances(orchestrator) -> None:
     before = orchestrator._tick_count
     await orchestrator.tick()
     after = orchestrator._tick_count
-    assert after == before + 1, (
-        f"Tick count did not advance: before={before}, after={after}"
-    )
+    assert after == before + 1, f"Tick count did not advance: before={before}, after={after}"
 
 
 # ---------------------------------------------------------------------------

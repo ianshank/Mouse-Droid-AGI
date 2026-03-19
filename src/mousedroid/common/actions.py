@@ -6,6 +6,8 @@ agents, the orchestrator, and planning modules.
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import torch
 from numpy.typing import NDArray
@@ -45,7 +47,7 @@ def normalize_action_tensor(action: torch.Tensor, expected_dim: int) -> torch.Te
     return torch.clamp(flat, -1.0, 1.0)
 
 
-def normalize_action_numpy(action: NDArray[np.floating], expected_dim: int) -> torch.Tensor:
+def normalize_action_numpy(action: NDArray[np.floating[Any]], expected_dim: int) -> torch.Tensor:
     """Normalise a numpy action array to a clamped torch tensor.
 
     Convenience wrapper that converts numpy -> torch then delegates to

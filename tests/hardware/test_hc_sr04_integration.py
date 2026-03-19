@@ -128,9 +128,9 @@ async def test_timeout_returns_max_range(ultrasonic_cfg: UltrasonicConfig) -> No
 @pytest.mark.parametrize(
     ("expected_m", "tolerance_m"),
     [
-        (0.2, 0.05),   # 20 cm wall target, ±5 cm
-        (0.5, 0.08),   # 50 cm wall target, ±8 cm
-        (1.0, 0.12),   # 100 cm wall target, ±12 cm
+        (0.2, 0.05),  # 20 cm wall target, ±5 cm
+        (0.5, 0.08),  # 50 cm wall target, ±8 cm
+        (1.0, 0.12),  # 100 cm wall target, ±12 cm
     ],
 )
 @pytest.mark.skipif(
@@ -162,9 +162,7 @@ async def test_known_distance(
 
 
 @pytest.mark.timeout(5)
-async def test_rapid_reads_no_gpio_error(
-    sensor, ultrasonic_cfg: UltrasonicConfig
-) -> None:
+async def test_rapid_reads_no_gpio_error(sensor, ultrasonic_cfg: UltrasonicConfig) -> None:
     """20 Hz reads over 1 s must complete without GPIO errors."""
     interval = 1.0 / 20.0  # 20 Hz
     deadline = time.monotonic() + 1.0

@@ -177,7 +177,7 @@ class RSSM(nn.Module):
 
         return new_h, new_z, obs_embed, float(surprise.item())
 
-    @torch.no_grad()  # type: ignore[untyped-decorator]
+    @torch.no_grad()
     def imagine_step(
         self,
         action: Tensor,

@@ -40,7 +40,7 @@ graph TD
                 SensorMgr["Sensor Manager\nconcurrent I/O"]
                 TelemetryPub["Telemetry Publisher\nasync queue\n≤60 Hz non-blocking"]
                 MetricsRegistry["Metrics Registry\nPrometheus text format\nconfig-driven namespace"]
-                TelemetryServer["Telemetry Server\naiohttp REST + WebSocket\nport 8765"]
+                TelemetryServer["Telemetry Server\naiohttp REST + WebSocket\nport 8080"]
                 ExperienceDB[("Experience Logger\nLMDB\n/home/jetson/experience_db")]
             end
         end

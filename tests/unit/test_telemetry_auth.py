@@ -160,9 +160,7 @@ class TestAuthDisabled:
         server, app = _make_server(api_key=None)
         server._running = True
         async with TestClient(TestServer(app)) as client:
-            resp = await client.get(
-                "/api/v1/status", headers={"X-API-Key": "whatever"}
-            )
+            resp = await client.get("/api/v1/status", headers={"X-API-Key": "whatever"})
             assert resp.status == 200
 
 

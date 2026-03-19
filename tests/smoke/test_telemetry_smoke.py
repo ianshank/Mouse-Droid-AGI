@@ -484,9 +484,7 @@ async def test_cors_blocks_unlisted_origin() -> None:
     server, _ = _make_server(cfg=_cfg(cors_origins=["http://allowed.local"]))
     server._running = True
     async with TestClient(TestServer(_build_app(server))) as client:
-        resp = await client.get(
-            "/api/v1/status", headers={"Origin": "http://evil.example"}
-        )
+        resp = await client.get("/api/v1/status", headers={"Origin": "http://evil.example"})
         origin = resp.headers.get("Access-Control-Allow-Origin", "")
         assert "evil.example" not in origin
 
@@ -589,12 +587,12 @@ async def test_multiple_ws_clients_all_receive_same_frame() -> None:
             client.ws_connect("/ws") as ws1,
             client.ws_connect("/ws") as ws2,
         ):
-                frame = _frame(timestamp=10.0, tick_count=5)
-                await queue.put(frame)
-                msg1 = await asyncio.wait_for(ws1.receive(), timeout=2.0)
-                msg2 = await asyncio.wait_for(ws2.receive(), timeout=2.0)
-                assert json.loads(msg1.data)["tick_count"] == 5
-                assert json.loads(msg2.data)["tick_count"] == 5
+            frame = _frame(timestamp=10.0, tick_count=5)
+            await queue.put(frame)
+            msg1 = await asyncio.wait_for(ws1.receive(), timeout=2.0)
+            msg2 = await asyncio.wait_for(ws2.receive(), timeout=2.0)
+            assert json.loads(msg1.data)["tick_count"] == 5
+            assert json.loads(msg2.data)["tick_count"] == 5
     finally:
         server._running = False
         broadcast.cancel()

@@ -14,14 +14,82 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, check=False, text=True, capture_output=True)
+
+
+def _normalize_repo_path(path_part: str) -> str:
+    """Normalize a git path to repo-relative POSIX form."""
+    normalized = path_part.strip().replace("\\", "/")
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    return str(PurePosixPath(normalized))
+
+
+def _is_target_source(path_part: str) -> bool:
+    """Return True for Python files under src/mousedroid."""
+    posix_path = PurePosixPath(path_part)
+    return (
+        len(posix_path.parts) >= 3
+        and posix_path.parts[:2] == ("src", "mousedroid")
+        and posix_path.suffix == ".py"
+    )
+
+
+def _dedupe_keep_order(items: list[str]) -> list[str]:
+    """De-duplicate while preserving input order."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        if item not in seen:
+            out.append(item)
+            seen.add(item)
+    return out
+
+
+def _git_base_candidates(base_ref: str | None) -> list[str]:
+    """Return candidate git base refs from CLI/env in priority order."""
+    raw = (base_ref or os.environ.get("GITHUB_BASE_REF") or "").strip()
+    if not raw:
+        return []
+
+    candidates = [raw]
+    # In GitHub Actions GITHUB_BASE_REF is often a plain branch name.
+    if "/" not in raw:
+        candidates.insert(0, f"origin/{raw}")
+    return _dedupe_keep_order(candidates)
+
+
+def _first_valid_base_ref(base_ref: str | None) -> str | None:
+    """Resolve the first valid base ref available in the local clone."""
+    for candidate in _git_base_candidates(base_ref):
+        result = _run(["git", "rev-parse", "--verify", f"{candidate}^{{commit}}"])
+        if result.returncode == 0:
+            return candidate
+    return None
+
+
+def _changed_files_from_base(base_ref: str) -> list[str]:
+    """Return changed source files from commit diff base_ref...HEAD."""
+    result = _run(["git", "diff", "--name-only", f"{base_ref}...HEAD"])
+    if result.returncode != 0:
+        err = result.stderr.strip() or f"Failed running: git diff --name-only {base_ref}...HEAD"
+        print(err, file=sys.stderr)
+        return []
+
+    files: list[str] = []
+    for raw_path in result.stdout.splitlines():
+        normalized = _normalize_repo_path(raw_path)
+        if _is_target_source(normalized):
+            files.append(normalized)
+    return _dedupe_keep_order(files)
 
 
 def _status_rows() -> list[tuple[str, str]]:
@@ -39,37 +107,40 @@ def _status_rows() -> list[tuple[str, str]]:
         path_part = raw_line[3:] if len(raw_line) > 3 else ""
         if " -> " in path_part:
             path_part = path_part.split(" -> ", maxsplit=1)[1]
-        path_part = path_part.strip().replace("\\", "/")
+        path_part = _normalize_repo_path(path_part)
         rows.append((status, path_part))
     return rows
 
 
-def _changed_source_files() -> list[str]:
-    """Return changed Python files under src/mousedroid from git porcelain output."""
+def _changed_source_files(base_ref: str | None) -> list[str]:
+    """Return changed Python files under src/mousedroid.
+
+    In CI, prefer commit-based detection from ``git diff <base>...HEAD``.
+    Fallback to local working-tree detection via ``git status --porcelain``.
+    """
+    resolved_base = _first_valid_base_ref(base_ref)
+    if resolved_base is not None:
+        from_diff = _changed_files_from_base(resolved_base)
+        if from_diff:
+            return from_diff
+
     rows = _status_rows()
 
     files: list[str] = []
     for _, path_part in rows:
-        if path_part.startswith("src/mousedroid/") and path_part.endswith(".py"):
+        if _is_target_source(path_part):
             files.append(path_part)
-
-    # de-duplicate while preserving order
-    seen: set[str] = set()
-    unique_files: list[str] = []
-    for f in files:
-        if f not in seen:
-            unique_files.append(f)
-            seen.add(f)
-    return unique_files
+    return _dedupe_keep_order(files)
 
 
 def _path_to_module(file_path: str) -> str:
     """Convert src/mousedroid/foo/bar.py to mousedroid.foo.bar."""
-    relative = file_path.replace("\\", "/")
-    if not relative.startswith("src/mousedroid/"):
+    relative = _normalize_repo_path(file_path)
+    rel_path = PurePosixPath(relative)
+    if not _is_target_source(relative):
         msg = f"Unsupported source path: {file_path}"
         raise ValueError(msg)
-    return relative.removeprefix("src/").removesuffix(".py").replace("/", ".")
+    return ".".join(rel_path.with_suffix("").parts[1:])
 
 
 def _build_pytest_command(tests: list[str], changed_files: list[str], json_out: Path) -> list[str]:
@@ -115,9 +186,29 @@ def _parse_unified_zero(diff_text: str, line_map: dict[str, set[int]]) -> None:
         line_map[current_path].update(range(start, start + count))
 
 
-def _changed_line_map(changed_files: list[str]) -> dict[str, set[int]]:
+def _changed_line_map(changed_files: list[str], base_ref: str | None) -> dict[str, set[int]]:
     """Return changed line numbers for each changed source file."""
     line_map: dict[str, set[int]] = {p: set() for p in changed_files}
+
+    resolved_base = _first_valid_base_ref(base_ref)
+    if resolved_base is not None:
+        result = _run(
+            [
+                "git",
+                "diff",
+                "--unified=0",
+                f"{resolved_base}...HEAD",
+                "--",
+                "src/mousedroid",
+            ]
+        )
+        if result.returncode != 0:
+            err = result.stderr.strip() or (
+                f"Failed running: git diff --unified=0 {resolved_base}...HEAD -- src/mousedroid"
+            )
+            print(err, file=sys.stderr)
+            sys.exit(2)
+        _parse_unified_zero(result.stdout, line_map)
 
     # Unstaged and staged modifications.
     for cmd in (
@@ -178,9 +269,17 @@ def main() -> int:
         default="coverage-branch.json",
         help="Coverage JSON output file",
     )
+    parser.add_argument(
+        "--base-ref",
+        default=None,
+        help=(
+            "Optional git base ref for commit-based change detection "
+            "(defaults to GITHUB_BASE_REF when set)"
+        ),
+    )
     args = parser.parse_args()
 
-    changed_files = _changed_source_files()
+    changed_files = _changed_source_files(args.base_ref)
     if not changed_files:
         print("No changed src/mousedroid Python files detected; skipping branch coverage check.")
         return 0
@@ -195,7 +294,7 @@ def main() -> int:
         return run_result.returncode
 
     coverage_by_path = _load_coverage(json_out)
-    line_map = _changed_line_map(changed_files)
+    line_map = _changed_line_map(changed_files, args.base_ref)
 
     failures: list[tuple[str, float]] = []
     print("\nChanged-line coverage:")

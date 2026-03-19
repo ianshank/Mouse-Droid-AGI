@@ -515,7 +515,7 @@ class UltrasonicConfig(BaseModel):
     timeout_s: float = Field(0.1, gt=0, description="Echo timeout (s)")
     speed_of_sound_mps: float = Field(343.0, gt=0, description="Speed of sound (m/s, ~20C)")
 
-    @model_validator(mode="after")  # type: ignore[untyped-decorator]
+    @model_validator(mode="after")
     def range_ordering(self) -> Self:
         """Validate max_range_m > min_range_m."""
         if self.max_range_m <= self.min_range_m:
@@ -581,7 +581,7 @@ class Settings(BaseSettings):
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     three_laws: ThreeLawsConfig = Field(default_factory=ThreeLawsConfig)
 
-    @model_validator(mode="after")  # type: ignore[untyped-decorator]
+    @model_validator(mode="after")
     def hardware_requires_pins(self) -> Self:
         """Validate that real hardware mode has required sensor configs."""
         if not self.mock_hardware and self.ultrasonic is None:

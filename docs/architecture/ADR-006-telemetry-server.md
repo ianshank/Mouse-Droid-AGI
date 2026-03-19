@@ -96,7 +96,7 @@ This avoids adding a C-extension to the dependency graph and ensures the discove
 
 **Negative:**
 
-- No authentication by default — the server binds to `0.0.0.0:8765`. In a production environment, access should be restricted via firewall rules or mutual TLS.
+- No authentication by default — the server binds to `0.0.0.0` on a configurable port (default `8080`). In a production environment, access should be restricted via firewall rules or mutual TLS.
 - Manual routing in aiohttp means no auto-generated OpenAPI documentation.
 
 ## Alternatives Considered

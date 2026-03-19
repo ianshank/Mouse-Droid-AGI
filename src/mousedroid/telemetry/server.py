@@ -212,12 +212,11 @@ class TelemetryServer:
             request: web.Request,
             handler: Any,
         ) -> web.Response:
-            """Validate API key from X-API-Key header (REST and WebSocket).
+            """Validate API key for both REST and WebSocket requests.
 
-            WebSocket upgrade requests are validated here via query-param
-            fallback (``?api_key=…``) so the middleware provides a uniform
-            rejection path.  The WS handler performs a second check for
-            defence-in-depth.
+            For WebSocket upgrade requests, accept the API key from either
+            ``X-API-Key`` or ``?api_key=…`` so auth decisions stay centralized
+            in middleware and share a uniform rejection path.
             """
             is_ws_upgrade = request.headers.get("Upgrade", "").lower() == "websocket"
             if is_ws_upgrade:
@@ -227,9 +226,6 @@ class TelemetryServer:
                 key = request.headers.get("X-API-Key", "")
 
             if key != api_key:
-                if is_ws_upgrade:
-                    # Reject WS upgrade with a plain 401 before the handshake
-                    raise web.HTTPUnauthorized(text="Invalid or missing API key")
                 raise web.HTTPUnauthorized(text="Invalid or missing API key")
 
             return await handler(request)  # type: ignore[no-any-return]
@@ -386,9 +382,10 @@ class TelemetryServer:
         text = self._metrics.render_prometheus()
         return web.Response(
             text=text,
-            content_type="text/plain",
-            headers={"X-Content-Type-Options": "nosniff"},
-            charset="utf-8",
+            headers={
+                "Content-Type": "text/plain; version=0.0.4; charset=utf-8",
+                "X-Content-Type-Options": "nosniff",
+            },
         )
 
     # ------------------------------------------------------------------

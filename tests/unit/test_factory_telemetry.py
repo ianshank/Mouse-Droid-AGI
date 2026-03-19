@@ -27,9 +27,7 @@ def test_build_publisher_disabled():
 
 def test_build_publisher_enabled():
     cfg = _make_settings()
-    cfg = cfg.model_copy(
-        update={"telemetry": cfg.telemetry.model_copy(update={"enabled": True})}
-    )
+    cfg = cfg.model_copy(update={"telemetry": cfg.telemetry.model_copy(update={"enabled": True})})
     pub = build_telemetry_publisher(cfg)
     assert pub is not None
     assert isinstance(pub, TelemetryPublisherProtocol)
@@ -44,9 +42,7 @@ def test_build_server_disabled():
 
 def test_build_server_enabled_mock_hardware():
     cfg = _make_settings()
-    cfg = cfg.model_copy(
-        update={"telemetry": cfg.telemetry.model_copy(update={"enabled": True})}
-    )
+    cfg = cfg.model_copy(update={"telemetry": cfg.telemetry.model_copy(update={"enabled": True})})
     pub = build_telemetry_publisher(cfg)
     health = HealthMonitor(cfg.health, cfg.jetson)
     server = build_telemetry_server(cfg, pub, health)
@@ -57,9 +53,7 @@ def test_build_server_enabled_mock_hardware():
 
 def test_build_server_returns_none_without_publisher():
     cfg = _make_settings()
-    cfg = cfg.model_copy(
-        update={"telemetry": cfg.telemetry.model_copy(update={"enabled": True})}
-    )
+    cfg = cfg.model_copy(update={"telemetry": cfg.telemetry.model_copy(update={"enabled": True})})
     health = HealthMonitor(cfg.health, cfg.jetson)
     server = build_telemetry_server(cfg, None, health)
     assert server is None
@@ -67,9 +61,7 @@ def test_build_server_returns_none_without_publisher():
 
 def test_build_publisher_stats():
     cfg = _make_settings()
-    cfg = cfg.model_copy(
-        update={"telemetry": cfg.telemetry.model_copy(update={"enabled": True})}
-    )
+    cfg = cfg.model_copy(update={"telemetry": cfg.telemetry.model_copy(update={"enabled": True})})
     pub = build_telemetry_publisher(cfg)
     assert pub is not None
     stats = pub.stats
@@ -79,9 +71,7 @@ def test_build_publisher_stats():
 
 def test_build_publisher_queue():
     cfg = _make_settings()
-    cfg = cfg.model_copy(
-        update={"telemetry": cfg.telemetry.model_copy(update={"enabled": True})}
-    )
+    cfg = cfg.model_copy(update={"telemetry": cfg.telemetry.model_copy(update={"enabled": True})})
     pub = build_telemetry_publisher(cfg)
     assert pub is not None
     q = pub.get_queue()

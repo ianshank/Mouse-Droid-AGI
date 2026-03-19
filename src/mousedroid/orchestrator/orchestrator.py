@@ -280,7 +280,10 @@ class MouseDroidOrchestrator:
 
         try:
             frame = build_telemetry_frame(
-                observation, safety_ctx, loop_time_ms, self._tick_count,
+                observation,
+                safety_ctx,
+                loop_time_ms,
+                self._tick_count,
             )
             await self._telemetry_publisher.publish(frame)
         except Exception:

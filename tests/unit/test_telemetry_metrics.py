@@ -309,9 +309,7 @@ class TestRenderPrometheus:
         reg = _make_registry()
         time.sleep(0.01)
         text = reg.render_prometheus()
-        uptime_lines = [
-            ln for ln in text.splitlines() if "uptime" in ln and not ln.startswith("#")
-        ]
+        uptime_lines = [ln for ln in text.splitlines() if "uptime" in ln and not ln.startswith("#")]
         value = float(uptime_lines[0].split()[-1])
         assert value >= 0.0
 
@@ -326,9 +324,7 @@ class TestRenderPrometheus:
         reg = _make_registry(namespace="mybot")
         text = reg.render_prometheus()
         # Every non-comment, non-empty data line should start with namespace
-        data_lines = [
-            ln for ln in text.splitlines() if ln and not ln.startswith("#")
-        ]
+        data_lines = [ln for ln in text.splitlines() if ln and not ln.startswith("#")]
         for line in data_lines:
             name = line.split("{")[0].split()[0]
             assert name.startswith("mybot_"), f"Line does not use namespace: {line!r}"
@@ -394,8 +390,7 @@ class TestRenderPrometheus:
         reg.inc_frame_drops(1)
         text = reg.render_prometheus()
         counter_value_lines = [
-            ln for ln in text.splitlines()
-            if "frame_drops" in ln and not ln.startswith("#")
+            ln for ln in text.splitlines() if "frame_drops" in ln and not ln.startswith("#")
         ]
         assert any("_total" in ln for ln in counter_value_lines)
 

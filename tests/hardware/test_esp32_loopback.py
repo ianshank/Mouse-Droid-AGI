@@ -148,8 +148,8 @@ async def test_emergency_stop_latency(driver, settings: Settings) -> None:
     elapsed_s = time.monotonic() - t0
 
     assert elapsed_s <= settings.esp32.command_timeout_s, (
-        f"emergency_stop() took {elapsed_s*1000:.1f} ms; "
-        f"timeout={settings.esp32.command_timeout_s*1000:.0f} ms"
+        f"emergency_stop() took {elapsed_s * 1000:.1f} ms; "
+        f"timeout={settings.esp32.command_timeout_s * 1000:.0f} ms"
     )
 
 

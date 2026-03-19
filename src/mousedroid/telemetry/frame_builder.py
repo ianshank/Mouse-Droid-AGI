@@ -43,9 +43,7 @@ def build_telemetry_frame(
 
     motor = observation.motor_state
     battery_v = (
-        float(motor[MOTOR_STATE_BATTERY_INDEX])
-        if motor.size > MOTOR_STATE_BATTERY_INDEX
-        else 0.0
+        float(motor[MOTOR_STATE_BATTERY_INDEX]) if motor.size > MOTOR_STATE_BATTERY_INDEX else 0.0
     )
 
     return TelemetryFrame(

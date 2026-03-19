@@ -169,10 +169,11 @@ def _fmt_float(value: float) -> str:
 
 
 def _render_counter(name: str, help_text: str, value: int) -> list[str]:
+    metric_name = f"{name}_total"
     lines = [
-        f"# HELP {name} {help_text}",
-        f"# TYPE {name} counter",
-        f"{name}_total {value}",
+        f"# HELP {metric_name} {help_text}",
+        f"# TYPE {metric_name} counter",
+        f"{metric_name} {value}",
     ]
     return lines
 

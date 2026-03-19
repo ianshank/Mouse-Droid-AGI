@@ -91,9 +91,7 @@ async def test_sensors_endpoint_no_data():
 async def test_sensors_endpoint_with_data():
     server, _queue = _make_server()
     app = _build_app(server)
-    server._latest_frame = TelemetryFrame(
-        timestamp=1.0, distance_m=2.5, tick_count=42
-    )
+    server._latest_frame = TelemetryFrame(timestamp=1.0, distance_m=2.5, tick_count=42)
 
     async with TestClient(TestServer(app)) as client:
         resp = await client.get("/api/v1/sensors")
