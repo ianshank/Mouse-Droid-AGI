@@ -2,10 +2,10 @@
 
 **A Star Wars MSE-6 "Mouse Droid" autonomous navigation system powered by an Agentic World Model on NVIDIA Jetson Orin Nano.**
 
-[![Tests](https://img.shields.io/badge/tests-959%20passing-brightgreen)](tests/)
-[![Coverage](https://img.shields.io/badge/coverage-97%25-brightgreen)](pyproject.toml)
+[![Tests](https://img.shields.io/badge/tests-pytest-brightgreen)](tests/)
+[![Coverage](https://img.shields.io/badge/coverage-branch%20gate%2085%25-brightgreen)](scripts/check_branch_coverage.py)
 [![Ruff](https://img.shields.io/badge/lint-ruff%20clean-brightgreen)](pyproject.toml)
-[![Mypy](https://img.shields.io/badge/mypy-0%20errors-brightgreen)](pyproject.toml)
+[![Mypy](https://img.shields.io/badge/mypy-strict-orange)](pyproject.toml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 [![CUDA](https://img.shields.io/badge/CUDA-12.6-76B900)](Dockerfile.jetson)
 [![Docker](https://img.shields.io/badge/docker-L4T%20r36.4.0-2496ED)](docker-compose.jetson.yml)
@@ -44,20 +44,22 @@ graph TD
             Orchestrator["Orchestrator\n30 Hz sense-plan-act"]
             CoreAI["Core AI Pipeline\nRSSM + MCTS + Navigation Agent\nBDI Cognitive Core\nMemory Systems\nSafety Monitor"]
             SensorMgr["Sensor Manager\nJetson CSI - HC-SR04 - ESP32 encoders"]
+            Telemetry["Telemetry Server\naiohttp REST + WebSocket + /metrics\n/api/v1/* + /ws + /metrics"]
             ExperienceDB[("Experience Logger\nLMDB")]
         end
         SSD["NVMe SSD 500 GB\nDocker data + 16 GB swap"]
     end
     ESP32["ESP32 Wave Rover\nMotor control\nEncoder / Battery ADC"]
     Human["Human Operator\nNL commands"]
-    Monitoring["Remote Monitoring\nPrometheus / Grafana"]
+    Monitoring["Remote Monitoring\nPrometheus / Grafana\nHTTP scrape + dashboards"]
 
     Human -- "NL mission" --> Orchestrator
     Orchestrator --> CoreAI
     CoreAI --> SensorMgr
     CoreAI --> ExperienceDB
     Orchestrator -- "UART / HTTP" --> ESP32
-    Orchestrator -- "metrics" --> Monitoring
+    Orchestrator --> Telemetry
+    Telemetry -- "REST / WebSocket" --> Monitoring
     Docker -.-> SSD
 ```
 
@@ -157,6 +159,20 @@ mousedroid --mock-hardware
 mousedroid --health-check --config config/default.yaml
 ```
 
+### Telemetry and Prometheus Metrics
+
+The telemetry stack exposes both interactive APIs and Prometheus-compatible metrics:
+
+```bash
+# REST + websocket telemetry (default)
+curl http://127.0.0.1:8080/api/v1/status
+
+# Prometheus text exposition
+curl http://127.0.0.1:8080/metrics
+```
+
+`/metrics` names are derived from `cfg.metrics.namespace`, so metric naming is fully config-driven.
+
 ### Run with Custom Config
 
 ```bash
@@ -219,6 +235,7 @@ training/             # Offline training pipelines
 
 scripts/
 ├── ci.sh             # CI pipeline: lint → type check → test → coverage gate
+├── check_branch_coverage.py # Changed-line coverage gate for branch-modified files
 ├── deploy_jetson.sh  # Idempotent Jetson deployment (venv + systemd)
 ├── docker_deploy.sh  # Docker container build + deploy on Jetson
 ├── jetson_test_runner.sh # Container test runner (unit/integration/e2e)

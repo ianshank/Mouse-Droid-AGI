@@ -39,6 +39,7 @@ class LogRingBuffer:
         """
         self._lock = threading.Lock()
         self._buffer: deque[dict[str, Any]] = deque(maxlen=maxlen)
+        # List of (event_loop, queue) subscriber pairs
         self._subscribers: list[
             tuple[asyncio.AbstractEventLoop, asyncio.Queue[dict[str, Any]]]
         ] = []

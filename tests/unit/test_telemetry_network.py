@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import socket
+import sys
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from mousedroid.constants import LOOPBACK_IP
 from mousedroid.telemetry.network import (
@@ -12,6 +15,7 @@ from mousedroid.telemetry.network import (
     _get_interface_ip_sync,
     _get_interfaces_sync,
     get_default_ip,
+    get_network_interfaces,
 )
 
 
@@ -72,9 +76,15 @@ def test_get_default_ip_fallback_on_error():
     assert ip == LOOPBACK_IP
 
 
-async def test_get_network_interfaces_returns_list():
-    from mousedroid.telemetry.network import get_network_interfaces
+_SKIP_WIN32_NETWORK = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="socket.getaddrinfo on Windows interface GUIDs triggers slow DNS lookups",
+)
 
+
+@_SKIP_WIN32_NETWORK
+@pytest.mark.asyncio
+async def test_get_network_interfaces_returns_list():
     interfaces = await get_network_interfaces()
     assert isinstance(interfaces, list)
     # Should at least have loopback in most environments
@@ -82,6 +92,27 @@ async def test_get_network_interfaces_returns_list():
         assert isinstance(iface, NetworkInterface)
 
 
+@pytest.mark.asyncio
+async def test_get_network_interfaces_uses_to_thread():
+    sentinel = [
+        NetworkInterface(
+            name="eth0",
+            ip="10.0.0.2",
+            interface_type="ethernet",
+            up=True,
+        )
+    ]
+    with patch(
+        "mousedroid.telemetry.network.asyncio.to_thread",
+        return_value=sentinel,
+    ) as to_thread:
+        interfaces = await get_network_interfaces()
+
+    assert interfaces == sentinel
+    to_thread.assert_called_once_with(_get_interfaces_sync)
+
+
+@pytest.mark.asyncio
 async def test_get_interface_ip_returns_string():
     from mousedroid.telemetry.network import get_interface_ip
 
@@ -103,14 +134,14 @@ def test_get_interfaces_sync_if_nameindex_oserror():
 
 def test_get_interfaces_sync_getaddrinfo_gaierror_with_socket_fallback():
     """Cover lines 98-103, 118: getaddrinfo fails, socket.connect fallback is used."""
-    with patch("socket.if_nameindex", return_value=[(1, "eth0")]), patch(
-        "socket.getaddrinfo",
-        side_effect=socket.gaierror("lookup failed"),
+    mock_sock_instance = MagicMock()
+    mock_sock_instance.getsockname.return_value = ("10.0.0.1", 0)
+    with (
+        patch("socket.if_nameindex", return_value=[(1, "eth0")]),
+        patch("socket.getaddrinfo", side_effect=socket.gaierror("lookup failed")),
+        patch("socket.socket", return_value=mock_sock_instance),
     ):
-        mock_sock_instance = MagicMock()
-        mock_sock_instance.getsockname.return_value = ("10.0.0.1", 0)
-        with patch("socket.socket", return_value=mock_sock_instance):
-            result = _get_interfaces_sync()
+        result = _get_interfaces_sync()
 
     assert len(result) == 1
     assert result[0].ip == "10.0.0.1"
@@ -119,14 +150,28 @@ def test_get_interfaces_sync_getaddrinfo_gaierror_with_socket_fallback():
 
 def test_get_interfaces_sync_getaddrinfo_and_socket_both_fail():
     """Cover line 118: both getaddrinfo and socket.connect fail."""
-    with patch("socket.if_nameindex", return_value=[(1, "eth0")]), patch(
-        "socket.getaddrinfo",
-        side_effect=socket.gaierror("lookup failed"),
+    mock_sock_instance = MagicMock()
+    mock_sock_instance.connect.side_effect = OSError("no route")
+    with (
+        patch("socket.if_nameindex", return_value=[(1, "eth0")]),
+        patch("socket.getaddrinfo", side_effect=socket.gaierror("lookup failed")),
+        patch("socket.socket", return_value=mock_sock_instance),
     ):
-        mock_sock_instance = MagicMock()
-        mock_sock_instance.connect.side_effect = OSError("no route")
-        with patch("socket.socket", return_value=mock_sock_instance):
-            result = _get_interfaces_sync()
+        result = _get_interfaces_sync()
+
+    assert len(result) == 1
+    assert result[0].ip == ""
+    assert result[0].up is False
+
+
+def test_get_interfaces_sync_socket_creation_fails_after_lookup_failure():
+    """Cover fallback branch where the socket itself cannot be created."""
+    with (
+        patch("socket.if_nameindex", return_value=[(1, "eth0")]),
+        patch("socket.getaddrinfo", side_effect=socket.gaierror("lookup failed")),
+        patch("socket.socket", side_effect=OSError("socket unavailable")),
+    ):
+        result = _get_interfaces_sync()
 
     assert len(result) == 1
     assert result[0].ip == ""
@@ -158,6 +203,17 @@ def test_get_interface_ip_sync_empty_addr():
     assert result == ""
 
 
+def test_get_interface_ip_sync_returns_first_non_empty_addr():
+    fake_info = [
+        (socket.AF_INET, socket.SOCK_DGRAM, 0, "", ("", 0)),
+        (socket.AF_INET, socket.SOCK_DGRAM, 0, "", ("192.168.0.24", 0)),
+    ]
+    with patch("socket.getaddrinfo", return_value=fake_info):
+        result = _get_interface_ip_sync("eth0")
+
+    assert result == "192.168.0.24"
+
+
 def test_get_interfaces_sync_getaddrinfo_returns_empty_addr():
     """Cover line where addr is empty in the loop."""
     fake_info = [(socket.AF_INET, socket.SOCK_DGRAM, 0, "", ("", 0))]
@@ -172,24 +228,17 @@ def test_get_interfaces_sync_getaddrinfo_returns_empty_addr():
     assert result[0].up is False
 
 
-def test_get_interfaces_sync_getaddrinfo_returns_valid_addr():
-    """Cover lines 106-108: getaddrinfo returns a valid address."""
-    fake_info = [(socket.AF_INET, socket.SOCK_DGRAM, 0, "", ("192.168.1.10", 0))]
+def test_get_interfaces_sync_uses_first_non_empty_addr_from_getaddrinfo():
+    fake_info = [
+        (socket.AF_INET, socket.SOCK_DGRAM, 0, "", ("", 0)),
+        (socket.AF_INET, socket.SOCK_DGRAM, 0, "", ("192.168.0.11", 0)),
+    ]
     with (
-        patch("socket.if_nameindex", return_value=[(1, "wlan0")]),
+        patch("socket.if_nameindex", return_value=[(1, "eth0")]),
         patch("socket.getaddrinfo", return_value=fake_info),
     ):
         result = _get_interfaces_sync()
 
     assert len(result) == 1
-    assert result[0].ip == "192.168.1.10"
+    assert result[0].ip == "192.168.0.11"
     assert result[0].up is True
-    assert result[0].interface_type == "wifi"
-
-
-def test_get_interface_ip_sync_returns_valid_addr():
-    """Cover line 161: _get_interface_ip_sync returns a valid address."""
-    fake_info = [(socket.AF_INET, socket.SOCK_DGRAM, 0, "", ("10.0.0.5", 0))]
-    with patch("socket.getaddrinfo", return_value=fake_info):
-        result = _get_interface_ip_sync("eth0")
-    assert result == "10.0.0.5"

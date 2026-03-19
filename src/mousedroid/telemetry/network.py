@@ -189,7 +189,7 @@ def get_default_ip() -> str:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             s.connect((CONNECTIVITY_CHECK_HOST, CONNECTIVITY_CHECK_PORT))
-            return s.getsockname()[0]  # type: ignore[no-any-return]
+            return str(s.getsockname()[0])
         finally:
             s.close()
     except OSError:

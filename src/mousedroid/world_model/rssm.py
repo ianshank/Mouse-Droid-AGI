@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -110,7 +112,8 @@ class RSSM(nn.Module):
         Returns:
             Reconstructed observation embedding, shape ``(batch, obs_dim)``.
         """
-        return self.observation_decoder(torch.cat([h, z], dim=-1))  # type: ignore[no-any-return]
+        decoded = self.observation_decoder(torch.cat([h, z], dim=-1))
+        return cast(Tensor, decoded)
 
     # ------------------------------------------------------------------
     # Public API

@@ -16,7 +16,7 @@ import json
 import time
 from typing import TYPE_CHECKING, Any
 
-from mousedroid.constants import MAX_LOG_ENTRIES, MDNS_SERVICE_TYPE, TELEMETRY_QUEUE_TIMEOUT_S
+from mousedroid.constants import MDNS_SERVICE_TYPE
 from mousedroid.logging.setup import get_logger
 from mousedroid.telemetry.network import get_default_ip, get_network_interfaces
 from mousedroid.telemetry.protocol import TelemetryFrame
@@ -27,8 +27,14 @@ if TYPE_CHECKING:
     from mousedroid.config.schema import TelemetryConfig
     from mousedroid.health.monitor import HealthMonitor
     from mousedroid.telemetry.log_buffer import LogRingBuffer
+    from mousedroid.telemetry.metrics import MetricsRegistry
+    from mousedroid.telemetry.protocol import TelemetryPublisherProtocol
 
 _log = get_logger(__name__)
+
+# Upper bound for the number of log entries that can be requested in a single call.
+# This avoids surprising behavior with very large or negative values.
+MAX_LOG_ENTRIES: int = 1000
 
 _STARTUP_TIME: float = time.monotonic()
 
@@ -50,6 +56,9 @@ class TelemetryServer:
         telemetry_queue: asyncio.Queue[TelemetryFrame],
         health_monitor: HealthMonitor,
         log_buffer: LogRingBuffer | None = None,
+        metrics_registry: MetricsRegistry | None = None,
+        metrics_path: str | None = None,
+        publisher: TelemetryPublisherProtocol | None = None,
     ) -> None:
         """Initialise the telemetry server.
 
@@ -58,11 +67,23 @@ class TelemetryServer:
             telemetry_queue: Queue to consume ``TelemetryFrame`` objects from.
             health_monitor: Health monitor for ``/health`` endpoint.
             log_buffer: Optional log ring buffer for ``/logs`` endpoint.
+            metrics_registry: Optional Prometheus metrics registry.  When
+                provided, exposes a ``/metrics`` scrape endpoint and updates
+                counters/gauges from every broadcast frame.
+            metrics_path: HTTP path for the metrics endpoint.  When omitted,
+                falls back to ``TelemetryConfig.metrics_path`` for backwards
+                compatibility with direct ``TelemetryServer`` construction.
+            publisher: Optional telemetry publisher used to synchronise
+                publisher-level stats such as dropped-frame counters.
         """
         self._cfg = cfg
         self._queue = telemetry_queue
         self._health_monitor = health_monitor
         self._log_buffer = log_buffer
+        self._metrics: MetricsRegistry | None = metrics_registry
+        self._metrics_path = metrics_path or self._cfg.metrics_path
+        self._publisher = publisher
+        self._reported_frame_drops = 0
 
         self._ws_clients: list[web.WebSocketResponse] = []
         self._latest_frame: TelemetryFrame | None = None
@@ -71,6 +92,9 @@ class TelemetryServer:
         self._runner: web.AppRunner | None = None
         self._zeroconf: Any = None
         self._service_info: Any = None
+
+        if self._metrics is not None:
+            self._metrics.set_publish_hz(self._cfg.publish_hz)
 
     async def start(self) -> None:
         """Start the aiohttp server and background broadcast loop."""
@@ -148,6 +172,8 @@ class TelemetryServer:
         app.router.add_get(f"{prefix}/network", self._handle_network)
         app.router.add_get(self._cfg.ws_path, self._handle_ws)
         app.router.add_get(f"{prefix}/logs/stream", self._handle_log_stream)
+        if self._metrics is not None:
+            app.router.add_get(self._metrics_path, self._handle_metrics)
 
     # ------------------------------------------------------------------
     # Middleware
@@ -200,23 +226,23 @@ class TelemetryServer:
             request: web.Request,
             handler: Any,
         ) -> web.Response:
-            """Validate API key from X-API-Key header."""
-            # Allow WebSocket upgrade requests to handle auth in the WS handler
-            if request.headers.get("Upgrade", "").lower() == "websocket":
-                resp: web.Response = await handler(request)
-                return resp
+            """Validate API key for both REST and WebSocket requests.
 
-            key = request.headers.get("X-API-Key", "")
+            For WebSocket upgrade requests, accept the API key from either
+            ``X-API-Key`` or ``?api_key=…`` so auth decisions stay centralized
+            in middleware and share a uniform rejection path.
+            """
+            is_ws_upgrade = request.headers.get("Upgrade", "").lower() == "websocket"
+            if is_ws_upgrade:
+                # For WebSocket, accept key from query param OR header
+                key = request.query.get("api_key", request.headers.get("X-API-Key", ""))
+            else:
+                key = request.headers.get("X-API-Key", "")
+
             if key != api_key:
-                _log.debug(
-                    "telemetry_auth_rejected",
-                    path=request.path,
-                    peer=request.remote,
-                )
                 raise web.HTTPUnauthorized(text="Invalid or missing API key")
 
-            result: web.Response = await handler(request)
-            return result
+            return await handler(request)  # type: ignore[no-any-return]
 
         middlewares: list[Any] = [cors_middleware]
         if api_key is not None:
@@ -352,6 +378,30 @@ class TelemetryServer:
 
         return web.json_response(data)
 
+    async def _handle_metrics(self, request: web.Request) -> web.Response:
+        """GET /metrics — Prometheus text-format metrics scrape endpoint.
+
+        Args:
+            request: The incoming request.
+
+        Returns:
+            Plain-text Prometheus exposition with ``Content-Type:
+            text/plain; version=0.0.4; charset=utf-8``.
+        """
+        from aiohttp import web
+
+        if self._metrics is None:
+            return web.Response(status=404, text="metrics_disabled")
+
+        text = self._metrics.render_prometheus()
+        return web.Response(
+            text=text,
+            headers={
+                "Content-Type": "text/plain; version=0.0.4; charset=utf-8",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
     # ------------------------------------------------------------------
     # WebSocket handlers
     # ------------------------------------------------------------------
@@ -368,25 +418,12 @@ class TelemetryServer:
         from aiohttp import WSMsgType, web
 
         if len(self._ws_clients) >= self._cfg.max_clients:
-            _log.warning(
-                "telemetry_ws_max_clients",
-                max_clients=self._cfg.max_clients,
-                peer=request.remote,
-            )
             resp = web.WebSocketResponse()
             await resp.prepare(request)
             await resp.close(code=4029, message=b"max_clients_reached")
             return resp
-
-        # Check API key for WebSocket if configured
-        if self._cfg.api_key is not None:
-            api_key = request.query.get("api_key", request.headers.get("X-API-Key", ""))
-            if api_key != self._cfg.api_key:
-                _log.debug("telemetry_ws_auth_rejected", peer=request.remote)
-                resp = web.WebSocketResponse()
-                await resp.prepare(request)
-                await resp.close(code=4001, message=b"unauthorized")
-                return resp
+        # Note: API key auth is already enforced by auth_middleware when
+        # cfg.api_key is set.  No secondary check needed here.
 
         ws = web.WebSocketResponse()
         await ws.prepare(request)
@@ -424,11 +461,13 @@ class TelemetryServer:
             return resp
 
         # Enforce API key for WebSocket log streaming if configured.
-        if self._cfg.api_key is not None:
-            supplied_key = request.headers.get("X-API-Key") or request.query.get(
+        config = getattr(self, "_config", None)
+        api_key = getattr(config, "api_key", None) if config is not None else None
+        if api_key:
+            supplied_key = request.headers.get("X-Telemetry-Api-Key") or request.query.get(
                 "api_key"
             )
-            if supplied_key != self._cfg.api_key:
+            if supplied_key != api_key:
                 raise web.HTTPUnauthorized(
                     text="Invalid or missing API key for log stream WebSocket"
                 )
@@ -440,9 +479,7 @@ class TelemetryServer:
         try:
             while not ws.closed and self._running:
                 try:
-                    entry = await asyncio.wait_for(
-                        sub_queue.get(), timeout=TELEMETRY_QUEUE_TIMEOUT_S
-                    )
+                    entry = await asyncio.wait_for(sub_queue.get(), timeout=1.0)
                     serialisable: dict[str, Any] = {}
                     for k, v in entry.items():
                         try:
@@ -468,12 +505,28 @@ class TelemetryServer:
         """Consume from telemetry queue and fan-out to all WS clients."""
         while self._running:
             try:
-                frame = await asyncio.wait_for(self._queue.get(), timeout=TELEMETRY_QUEUE_TIMEOUT_S)
+                frame = await asyncio.wait_for(self._queue.get(), timeout=1.0)
             except asyncio.TimeoutError:
                 continue
 
             self._latest_frame = frame
             data = frame.to_dict()
+
+            # Push live telemetry into metrics registry (non-blocking)
+            if self._metrics is not None:
+                self._metrics.set_loop_time_ms(frame.loop_time_ms)
+                self._metrics.set_battery_voltage(frame.battery_voltage)
+                self._metrics.set_ws_client_count(len(self._ws_clients))
+                self._sync_publisher_metrics()
+                health = frame.health
+                if isinstance(health, dict):
+                    gpu_temp = health.get("gpu_temp_c")
+                    if isinstance(gpu_temp, int | float):
+                        self._metrics.set_gpu_temp_celsius(float(gpu_temp))
+                safety = frame.safety
+                if isinstance(safety, dict):
+                    for law in safety.get("violations", []):
+                        self._metrics.inc_safety_violation(str(law))
 
             dead_clients: list[web.WebSocketResponse] = []
             send_tasks = []
@@ -493,6 +546,16 @@ class TelemetryServer:
             for ws in dead_clients:
                 if ws in self._ws_clients:
                     self._ws_clients.remove(ws)
+
+    def _sync_publisher_metrics(self) -> None:
+        """Synchronise publisher-owned stats into the metrics registry."""
+        if self._metrics is None or self._publisher is None:
+            return
+
+        dropped_total = self._publisher.stats.get("frames_dropped", 0)
+        if dropped_total > self._reported_frame_drops:
+            self._metrics.inc_frame_drops(dropped_total - self._reported_frame_drops)
+        self._reported_frame_drops = dropped_total
 
     @staticmethod
     async def _send_json(ws: web.WebSocketResponse, data: dict[str, Any]) -> None:

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -80,7 +80,7 @@ def _bayesian_normalise(
         Normalised array.
     """
     total = np.sum(values) + _BAYESIAN_SUM_EPS
-    return values / total  # type: ignore[no-any-return]
+    return cast(NDArray[np.floating[Any]], values / total)
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +296,7 @@ class AffectEstimator:
         """
         combined = np.concatenate([desire, intentions])
         raw = combined @ self._w1 + self._b1
-        return np.tanh(raw)  # type: ignore[no-any-return]
+        return cast(NDArray[np.floating[Any]], np.tanh(raw))
 
 
 # ---------------------------------------------------------------------------

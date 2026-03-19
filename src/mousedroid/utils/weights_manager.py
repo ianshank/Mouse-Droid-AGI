@@ -8,13 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
 
 from mousedroid.logging.setup import get_logger
-
-if TYPE_CHECKING:
-    pass
 
 _log = get_logger(__name__)
 
@@ -23,16 +20,21 @@ _log = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 _HF_HUB_AVAILABLE = False
-try:
-    from huggingface_hub import hf_hub_download as _hf_hub_download
 
+
+def _missing_hf_hub_download(**kwargs: object) -> str:
+    """Stub used when ``huggingface_hub`` is unavailable."""
+    raise ImportError("huggingface_hub is not installed")
+
+
+_hf_hub_download: Callable[..., str] = _missing_hf_hub_download
+try:
+    from huggingface_hub import hf_hub_download as _hf_hub_download_impl
+
+    _hf_hub_download = _hf_hub_download_impl
     _HF_HUB_AVAILABLE = True
 except ImportError:
-    def _hf_hub_download(*args: Any, **kwargs: Any) -> Any:
-        raise ImportError(
-            "huggingface_hub is not installed. "
-            "Install with: pip install huggingface_hub"
-        )
+    pass
 
 
 def download_weights_from_huggingface(

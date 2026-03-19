@@ -15,6 +15,13 @@ if TYPE_CHECKING:
 _log = get_logger(__name__)
 
 
+def _trace_model(model: nn.Module, sample_input: Tensor) -> Any:
+    """Fallback tracing helper isolated from torch's incomplete stubs."""
+    import torch
+
+    return torch.jit.trace(model, sample_input)  # type: ignore[no-untyped-call]
+
+
 class TensorRTOptimizer:
     """Convert PyTorch models to TensorRT for efficient Jetson inference.
 
@@ -75,6 +82,4 @@ class TensorRTOptimizer:
             )
         except ImportError:
             _log.warning("torch_tensorrt_not_available_falling_back_to_traced")
-            import torch
-
-            return torch.jit.trace(model, sample_input)  # type: ignore[no-untyped-call]
+            return _trace_model(model, sample_input)

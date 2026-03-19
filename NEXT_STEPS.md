@@ -2,6 +2,14 @@
 
 This document tracks planned enhancements, organised by priority and category.
 
+## Recently Completed (PR-14)
+
+- Added Prometheus-compatible `/metrics` endpoint to telemetry server with config-driven metric namespace/toggles
+- Added `scripts/check_branch_coverage.py` changed-line coverage gate (min 85%) and wired it into `scripts/ci.sh`
+- Added local pre-commit hook to run branch coverage gate automatically before commits
+- Added targeted telemetry tests for `/metrics` endpoint and broadcast-loop metric updates
+- Hardened hardware/integration tests by replacing hardcoded serial/config values with environment-driven settings
+
 ---
 
 ## Priority 1 — Hardware Integration (Immediate)
@@ -86,10 +94,11 @@ This document tracks planned enhancements, organised by priority and category.
 ## Priority 4 — CI/CD Pipeline
 
 ### 4.1 GitHub Actions Workflow
-- Lint (`ruff check`), type-check (`mypy --strict`), test (`pytest --cov`) on every push
-- Fail if coverage drops below 85% (`--cov-fail-under=85`)
-- Matrix: Python 3.11, 3.12
-- **Effort**: 1 day | **Owner**: DevOps
+- ✅ Lint (`ruff check`), type-check (`mypy`), test (`pytest --cov`) run on every push
+- ✅ Coverage enforced at ≥85% via `--cov-fail-under=85`
+- ✅ Smoke tests (`pytest -m smoke`) run as a fast pre-flight gate
+- Next: expand matrix to Python 3.11 + 3.12 in parallel
+- **Effort**: 0.5 days | **Owner**: DevOps
 
 ### 4.2 TensorRT Compilation CI
 - Add Jetson-hosted CI runner for TensorRT engine compilation tests
@@ -108,13 +117,13 @@ This document tracks planned enhancements, organised by priority and category.
 ## Priority 5 — Observability & Monitoring
 
 ### 5.1 Prometheus Metrics Export
-- Instrument key metrics: loop_hz, surprise_ema, battery_v, safety_violations_total
-- Expose via HTTP `/metrics` endpoint on port 9090
-- `cfg.metrics.enabled` / `cfg.metrics.export_interval_s` already configured
-- **Effort**: 2 days | **Owner**: backend team
+- ✅ Implemented in telemetry server (`/metrics`, Prometheus text format 0.0.4)
+- Next: add per-deployment scrape config examples for localhost, Docker, and Jetson systemd
+- **Effort**: 0.5 days | **Owner**: backend team
 
 ### 5.2 Grafana Dashboard
 - Pre-built dashboard JSON for: loop latency, GPU temp, curiosity drive, memory utilisation
+- Wire `loop_time_ms` from `/api/v1/sensors` WebSocket into Grafana Live
 - Ship as `docs/grafana_dashboard.json`
 - **Effort**: 1 day | **Owner**: backend team
 
@@ -123,12 +132,23 @@ This document tracks planned enhancements, organised by priority and category.
 - Define log queries for: emergency stops, constitutional violations, sensor failures
 - **Effort**: 2 days | **Owner**: backend team
 
+### 5.4 Telemetry Server — Connect to Prometheus Scraping
+- ✅ `/metrics` route is live and includes frame drops, ws clients, loop time, battery, safety violations, GPU temp
+- Next: add `promtool check metrics` validation in CI and publish sample alert rules
+- **Effort**: 1 day | **Owner**: backend + DevOps
+
+### 5.5 Telemetry Server — Production Security
+- Add optional bearer-token authentication (`cfg.telemetry.auth_token`)
+- Document mTLS setup for production deployments on private networks
+- Add CI test: unauthenticated request returns 401 when token is configured
+- **Effort**: 1 day | **Owner**: security + backend team
+
 ---
 
 ## Priority 6 — Code Quality & Architecture
 
 ### 6.1 Mypy Strict — Resolve Pre-existing Errors
-- 44 pre-existing strict errors in torch-dependent modules
+- 50 strict errors currently fail full `scripts/ci.sh` mypy gate
 - Caused by untyped `backward()`, `trace()`, unused `type: ignore` comments
 - Fix by adding `[[tool.mypy.overrides]]` stubs or proper type annotations
 - **Effort**: 3 days | **Owner**: any engineer

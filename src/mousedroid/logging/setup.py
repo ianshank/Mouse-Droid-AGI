@@ -6,7 +6,7 @@ All modules should use ``get_logger(__name__)`` — never ``print()``.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import structlog
 
@@ -68,7 +68,7 @@ def get_logger(name: str) -> structlog.stdlib.BoundLogger:
     Returns:
         Bound structlog logger instance.
     """
-    return structlog.get_logger(name)  # type: ignore[no-any-return]
+    return cast(structlog.stdlib.BoundLogger, structlog.get_logger(name))
 
 
 _LEVEL_MAP: dict[str, int] = {

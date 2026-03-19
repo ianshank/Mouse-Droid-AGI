@@ -185,14 +185,18 @@ class SensorManager:
         """Attempt a vision capture, returning zeros on failure."""
         default = np.zeros(self._cfg.camera.feature_dim, dtype=np.float32)
         result, ok = await self._safe_read(
-            self._vision.capture_features(), "vision", default,
+            self._vision.capture_features(),
+            "vision",
+            default,
         )
         return result, ok
 
     async def _safe_distance_read(self) -> tuple[float, bool]:
         """Attempt a distance read, returning max range on failure."""
         result, ok = await self._safe_read(
-            self._distance.read_distance_m(), "distance", self._distance.max_range_m,
+            self._distance.read_distance_m(),
+            "distance",
+            self._distance.max_range_m,
         )
         return result, ok
 
@@ -225,6 +229,8 @@ class SensorManager:
             return default, False
 
         result, ok = await self._safe_read(
-            self._microphone.read_chunk(), "audio", default,
+            self._microphone.read_chunk(),
+            "audio",
+            default,
         )
         return result, ok

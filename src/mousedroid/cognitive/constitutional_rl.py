@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -267,8 +267,7 @@ class PolicyMLP:
             Action vector in ``[-1, 1]``.
         """
         h = relu(layer_norm(state @ self._w1 + self._b1))
-        result: NDArray[np.floating[Any]] = np.tanh(h @ self._w2 + self._b2)
-        return result
+        return cast(NDArray[np.floating[Any]], np.tanh(h @ self._w2 + self._b2))
 
     def save(self, path: Path | str) -> None:
         """Save weights to ``.npz`` file.

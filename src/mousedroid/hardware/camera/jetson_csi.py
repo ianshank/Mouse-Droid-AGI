@@ -7,7 +7,7 @@ with a GStreamer ``nvarguscamerasrc`` fallback via OpenCV.
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -134,8 +134,7 @@ class JetsonCSICamera:
             Feature vector of shape ``(feature_dim,)``.
         """
         frame = await asyncio.to_thread(self._capture_frame)
-        features = self._extract_features(frame)
-        return features
+        return self._extract_features(frame)
 
     def _capture_frame(self) -> NDArray[np.uint8]:  # pragma: no cover
         """Capture a single frame from the camera (blocking).
@@ -181,7 +180,7 @@ class JetsonCSICamera:
         norm = np.linalg.norm(features)
         if norm > 0:
             features = features / norm
-        return features  # type: ignore[no-any-return]
+        return cast(NDArray[np.float32], features)
 
     @property
     def feature_dim(self) -> int:

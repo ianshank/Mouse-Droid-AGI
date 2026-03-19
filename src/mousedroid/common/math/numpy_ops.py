@@ -6,12 +6,13 @@ training scripts.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from numpy.typing import NDArray
 
-from mousedroid.constants import SOFTMAX_EPSILON
+_SOFTMAX_EPS: float = 1e-8
+"""Epsilon for softmax numerical stability."""
 
 
 def relu(x: NDArray[np.floating[Any]]) -> NDArray[np.floating[Any]]:
@@ -23,8 +24,7 @@ def relu(x: NDArray[np.floating[Any]]) -> NDArray[np.floating[Any]]:
     Returns:
         Array with negative values zeroed.
     """
-    result: NDArray[np.floating[Any]] = np.maximum(x, 0.0)
-    return result
+    return cast(NDArray[np.floating[Any]], np.maximum(x, 0.0))
 
 
 def softmax(x: NDArray[np.floating[Any]], *, axis: int = -1) -> NDArray[np.floating[Any]]:
@@ -39,8 +39,8 @@ def softmax(x: NDArray[np.floating[Any]], *, axis: int = -1) -> NDArray[np.float
     """
     shifted = x - np.max(x, axis=axis, keepdims=True)
     e = np.exp(shifted)
-    result: NDArray[np.floating[Any]] = e / (e.sum(axis=axis, keepdims=True) + SOFTMAX_EPSILON)
-    return result
+    probs = e / (e.sum(axis=axis, keepdims=True) + _SOFTMAX_EPS)
+    return cast(NDArray[np.floating[Any]], probs)
 
 
 def layer_norm(x: NDArray[np.floating[Any]], *, eps: float = 1e-6) -> NDArray[np.floating[Any]]:
@@ -55,5 +55,5 @@ def layer_norm(x: NDArray[np.floating[Any]], *, eps: float = 1e-6) -> NDArray[np
     """
     mean = np.mean(x)
     var = np.var(x)
-    result: NDArray[np.floating[Any]] = (x - mean) / np.sqrt(var + eps)
-    return result
+    normalised = (x - mean) / np.sqrt(var + eps)
+    return cast(NDArray[np.floating[Any]], normalised)
