@@ -26,6 +26,25 @@ from mousedroid.telemetry.log_buffer import LogRingBuffer  # noqa: E402
 from mousedroid.telemetry.network import NetworkInterface  # noqa: E402
 from mousedroid.telemetry.server import TelemetryServer  # noqa: E402
 
+
+class _StubPublisher:
+    def __init__(self, queue: asyncio.Queue[TelemetryFrame], frames_dropped: int = 0) -> None:
+        self._queue = queue
+        self._frames_dropped = frames_dropped
+
+    async def publish(self, frame: TelemetryFrame) -> None:
+        self._queue.put_nowait(frame)
+
+    def get_queue(self) -> asyncio.Queue[TelemetryFrame]:
+        return self._queue
+
+    @property
+    def stats(self) -> dict[str, int]:
+        return {
+            "frames_published": 0,
+            "frames_dropped": self._frames_dropped,
+        }
+
 _STUB_IFACES = [NetworkInterface(name="eth0", ip="10.0.0.1", interface_type="ethernet", up=True)]
 _STUB_IP = "10.0.0.1"
 
@@ -324,11 +343,13 @@ async def test_broadcast_loop_updates_metrics_registry():
     queue: asyncio.Queue[TelemetryFrame] = asyncio.Queue(maxsize=64)
     health = _make_health_monitor()
     registry = MetricsRegistry(MetricsConfig(enabled=True))
+    publisher = _StubPublisher(queue, frames_dropped=3)
     server = TelemetryServer(
         cfg=cfg,
         telemetry_queue=queue,
         health_monitor=health,
         metrics_registry=registry,
+        publisher=publisher,
     )
     server._running = True
 
@@ -355,6 +376,9 @@ async def test_broadcast_loop_updates_metrics_registry():
     assert "gpu_temp" in text
     assert 'law="law1"' in text
     assert 'law="law2"' in text
+    assert "publish_hz" in text
+    assert " 10" in text or " 10.0" in text
+    assert "frame_drops_total 3" in text
 
 
 # --- Server lifecycle tests ---

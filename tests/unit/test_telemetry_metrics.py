@@ -23,6 +23,8 @@ from mousedroid.telemetry.metrics import (
     _Gauge,
     _Histogram,
     _LabeledCounter,
+    _render_counter,
+    _render_labeled_counter,
 )
 
 # ---------------------------------------------------------------------------
@@ -298,6 +300,26 @@ class TestRenderPrometheus:
         text = reg.render_prometheus()
         assert 'law="law1"' in text
         assert 'law="law2"' in text
+
+    def test_metric_families_are_separated_by_blank_lines(self) -> None:
+        reg = _make_registry()
+        reg.inc_frame_drops(1)
+        reg.set_loop_time_ms(10.0)
+        text = reg.render_prometheus()
+        assert "\n\n# HELP" in text
+
+    def test_labeled_counter_escapes_label_values(self) -> None:
+        lines = _render_labeled_counter(
+            "mousedroid_safety_violations",
+            "Safety law violations",
+            "law",
+            {'law\\"\n1': 2},
+        )
+        assert lines[-1] == 'mousedroid_safety_violations_total{law="law\\\\\\"\\n1"} 2'
+
+    def test_help_text_escapes_newlines_and_backslashes(self) -> None:
+        lines = _render_counter("mousedroid_frame_drops", "line1\\line2\nline3", 1)
+        assert lines[0] == "# HELP mousedroid_frame_drops_total line1\\\\line2\\nline3"
 
     def test_uptime_always_present(self) -> None:
         reg = _make_registry()

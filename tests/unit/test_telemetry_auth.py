@@ -53,13 +53,17 @@ def _make_server(
     queue: asyncio.Queue[TelemetryFrame] = asyncio.Queue(maxsize=64)
     health = _make_health_monitor()
     metrics: MetricsRegistry | None = None
+    metrics_path = cfg.metrics_path
     if with_metrics:
-        metrics = MetricsRegistry(MetricsConfig(enabled=True))
+        metrics_cfg = MetricsConfig(enabled=True, path="/metrics")
+        metrics = MetricsRegistry(metrics_cfg)
+        metrics_path = metrics_cfg.path
     server = TelemetryServer(
         cfg=cfg,
         telemetry_queue=queue,
         health_monitor=health,
         metrics_registry=metrics,
+        metrics_path=metrics_path,
     )
     app = web.Application(middlewares=server._build_middlewares())
     server._register_routes(app)

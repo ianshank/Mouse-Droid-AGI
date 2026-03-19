@@ -37,6 +37,7 @@ We introduce a **`src/mousedroid/telemetry/`** package that provides:
 | `/api/v1/health` | GET | GPU temp, CPU load, battery voltage |
 | `/api/v1/logs` | GET | Last N structured log entries |
 | `/api/v1/network` | GET | Network interfaces + server URL |
+| `/metrics` | GET | Prometheus metrics in exposition format (requires `api_key` if configured, same as other REST endpoints) |
 | `/ws` | WebSocket | Streaming `TelemetryFrame` JSON at ≤60 Hz |
 
 ## Architecture Diagram

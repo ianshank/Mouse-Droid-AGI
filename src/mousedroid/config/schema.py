@@ -237,9 +237,9 @@ class MemoryConfig(BaseModel):
 class MetricsConfig(BaseModel):
     """Prometheus-compatible metrics export configuration.
 
-    Controls the ``/metrics`` endpoint on the telemetry server.  All metric
-    names are derived from ``namespace`` so nothing is hardcoded outside
-    this class.
+    Controls metrics endpoint enablement, naming, and scrape path.  All
+    metric names are derived from ``namespace`` so nothing is hardcoded
+    outside this class.
     """
 
     enabled: bool = Field(True, description="Enable /metrics endpoint")
@@ -378,7 +378,13 @@ class TelemetryConfig(BaseModel):
         description="CORS allowed origins",
     )
     log_stream_buffer: int = Field(200, gt=0, description="Ring buffer size for log entries")
-    metrics_path: str = Field("/metrics", description="Prometheus scrape endpoint path")
+    metrics_path: str = Field(
+        "/metrics",
+        description=(
+            "Legacy scrape endpoint path for direct TelemetryServer construction. "
+            "Settings.metrics.path is the canonical configuration source."
+        ),
+    )
 
 
 class ThreeLawsConfig(BaseModel):

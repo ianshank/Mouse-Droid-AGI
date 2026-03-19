@@ -168,10 +168,20 @@ def _fmt_float(value: float) -> str:
     return f"{value:.6g}"
 
 
+def _escape_label_value(value: str) -> str:
+    """Escape a label value for Prometheus text exposition format."""
+    return value.replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+
+
+def _escape_help_text(help_text: str) -> str:
+    """Escape HELP text for Prometheus text exposition format."""
+    return help_text.replace("\\", "\\\\").replace("\n", "\\n")
+
+
 def _render_counter(name: str, help_text: str, value: int) -> list[str]:
     metric_name = f"{name}_total"
     lines = [
-        f"# HELP {metric_name} {help_text}",
+        f"# HELP {metric_name} {_escape_help_text(help_text)}",
         f"# TYPE {metric_name} counter",
         f"{metric_name} {value}",
     ]
@@ -185,17 +195,18 @@ def _render_labeled_counter(
     values: dict[str, int],
 ) -> list[str]:
     lines = [
-        f"# HELP {name}_total {help_text}",
+        f"# HELP {name}_total {_escape_help_text(help_text)}",
         f"# TYPE {name}_total counter",
     ]
     for label_val, count in sorted(values.items()):
-        lines.append(f'{name}_total{{{label_name}="{label_val}"}} {count}')
+        escaped_label_val = _escape_label_value(label_val)
+        lines.append(f'{name}_total{{{label_name}="{escaped_label_val}"}} {count}')
     return lines
 
 
 def _render_gauge(name: str, help_text: str, value: float) -> list[str]:
     lines = [
-        f"# HELP {name} {help_text}",
+        f"# HELP {name} {_escape_help_text(help_text)}",
         f"# TYPE {name} gauge",
         f"{name} {_fmt_float(value)}",
     ]
@@ -210,7 +221,7 @@ def _render_histogram(
     total_count: int,
 ) -> list[str]:
     lines = [
-        f"# HELP {name} {help_text}",
+        f"# HELP {name} {_escape_help_text(help_text)}",
         f"# TYPE {name} histogram",
     ]
     for le, count in buckets:
@@ -422,4 +433,4 @@ class MetricsRegistry:
             )
         )
 
-        return "\n".join(line for section in sections for line in section) + "\n"
+        return "\n\n".join("\n".join(section) for section in sections) + "\n"

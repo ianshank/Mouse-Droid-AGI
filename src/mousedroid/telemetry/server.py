@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from mousedroid.health.monitor import HealthMonitor
     from mousedroid.telemetry.log_buffer import LogRingBuffer
     from mousedroid.telemetry.metrics import MetricsRegistry
+    from mousedroid.telemetry.protocol import TelemetryPublisherProtocol
 
 _log = get_logger(__name__)
 
@@ -56,6 +57,8 @@ class TelemetryServer:
         health_monitor: HealthMonitor,
         log_buffer: LogRingBuffer | None = None,
         metrics_registry: MetricsRegistry | None = None,
+        metrics_path: str | None = None,
+        publisher: TelemetryPublisherProtocol | None = None,
     ) -> None:
         """Initialise the telemetry server.
 
@@ -67,12 +70,20 @@ class TelemetryServer:
             metrics_registry: Optional Prometheus metrics registry.  When
                 provided, exposes a ``/metrics`` scrape endpoint and updates
                 counters/gauges from every broadcast frame.
+            metrics_path: HTTP path for the metrics endpoint.  When omitted,
+                falls back to ``TelemetryConfig.metrics_path`` for backwards
+                compatibility with direct ``TelemetryServer`` construction.
+            publisher: Optional telemetry publisher used to synchronise
+                publisher-level stats such as dropped-frame counters.
         """
         self._cfg = cfg
         self._queue = telemetry_queue
         self._health_monitor = health_monitor
         self._log_buffer = log_buffer
         self._metrics: MetricsRegistry | None = metrics_registry
+        self._metrics_path = metrics_path or self._cfg.metrics_path
+        self._publisher = publisher
+        self._reported_frame_drops = 0
 
         self._ws_clients: list[web.WebSocketResponse] = []
         self._latest_frame: TelemetryFrame | None = None
@@ -81,6 +92,9 @@ class TelemetryServer:
         self._runner: web.AppRunner | None = None
         self._zeroconf: Any = None
         self._service_info: Any = None
+
+        if self._metrics is not None:
+            self._metrics.set_publish_hz(self._cfg.publish_hz)
 
     async def start(self) -> None:
         """Start the aiohttp server and background broadcast loop."""
@@ -159,7 +173,7 @@ class TelemetryServer:
         app.router.add_get(self._cfg.ws_path, self._handle_ws)
         app.router.add_get(f"{prefix}/logs/stream", self._handle_log_stream)
         if self._metrics is not None:
-            app.router.add_get(self._cfg.metrics_path, self._handle_metrics)
+            app.router.add_get(self._metrics_path, self._handle_metrics)
 
     # ------------------------------------------------------------------
     # Middleware
@@ -503,6 +517,7 @@ class TelemetryServer:
                 self._metrics.set_loop_time_ms(frame.loop_time_ms)
                 self._metrics.set_battery_voltage(frame.battery_voltage)
                 self._metrics.set_ws_client_count(len(self._ws_clients))
+                self._sync_publisher_metrics()
                 health = frame.health
                 if isinstance(health, dict):
                     gpu_temp = health.get("gpu_temp_c")
@@ -531,6 +546,16 @@ class TelemetryServer:
             for ws in dead_clients:
                 if ws in self._ws_clients:
                     self._ws_clients.remove(ws)
+
+    def _sync_publisher_metrics(self) -> None:
+        """Synchronise publisher-owned stats into the metrics registry."""
+        if self._metrics is None or self._publisher is None:
+            return
+
+        dropped_total = self._publisher.stats.get("frames_dropped", 0)
+        if dropped_total > self._reported_frame_drops:
+            self._metrics.inc_frame_drops(dropped_total - self._reported_frame_drops)
+        self._reported_frame_drops = dropped_total
 
     @staticmethod
     async def _send_json(ws: web.WebSocketResponse, data: dict[str, Any]) -> None:

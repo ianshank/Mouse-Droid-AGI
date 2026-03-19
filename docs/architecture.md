@@ -89,7 +89,7 @@ graph TD
 | NVMe SSD 500 GB | ext4 `/mnt/ssd` | Docker data-root, containerd, 16 GB swap |
 | Telemetry Publisher | Python asyncio queue | Non-blocking sensor-frame fan-out at ≤60 Hz |
 | Metrics Registry | Python stdlib exporter | Prometheus metric families and text rendering |
-| Telemetry Server | aiohttp 3.x REST + WebSocket | Remote WiFi/Ethernet monitoring on port 8765 |
+| Telemetry Server | aiohttp 3.x REST + WebSocket | Remote WiFi/Ethernet monitoring (configurable port, default 8080) |
 ---
 
 ## Level 3 — Component Diagram (mousedroid process)
