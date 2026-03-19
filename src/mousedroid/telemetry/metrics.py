@@ -13,9 +13,10 @@ Supported metric types:
 
 Thread / async safety
 ---------------------
-All mutating operations are protected by a ``threading.Lock`` so that
-the scrape endpoint can read a consistent snapshot from the aiohttp event
-loop while background write-threads (e.g. broadcast loop) update counters.
+Mutating operations are protected by per-metric ``threading.Lock`` instances
+(``_Counter``, ``_Gauge``, ``_Histogram``, etc.) so updates from background
+threads are safe. Scrapes read each metric independently; snapshots are
+best-effort and may reflect in-flight changes across different metric families.
 
 Usage::
 

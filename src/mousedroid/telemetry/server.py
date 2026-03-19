@@ -521,7 +521,7 @@ class TelemetryServer:
                 health = frame.health
                 if isinstance(health, dict):
                     gpu_temp = health.get("gpu_temp_c")
-                    if isinstance(gpu_temp, int | float):
+                    if isinstance(gpu_temp, (int, float)):
                         self._metrics.set_gpu_temp_celsius(float(gpu_temp))
                 safety = frame.safety
                 if isinstance(safety, dict):
