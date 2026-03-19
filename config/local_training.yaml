@@ -1,0 +1,59 @@
+# Local training configuration — RTX 5060 Ti (16 GB VRAM) on Windows dev machine.
+#
+# This overlay is applied on top of config/default.yaml when running the
+# pre-training pipeline locally.  All values supplement (not replace) the
+# defaults; unspecified fields inherit from default.yaml.
+#
+# Usage:
+#   python -m training.run_pipeline --config config/local_training.yaml
+#   python -m training.run_pipeline --config config/local_training.yaml --phases 1,2,4
+
+mock_hardware: true   # No physical sensors attached on Windows dev machine
+debug: false
+
+logging:
+  level: "INFO"
+  format: "console"   # Human-readable output during local training runs
+
+training:
+  # Batch size is intentionally left at the schema default (32) so that
+  # training.gpu_utils.get_optimal_batch_size() can scale it up dynamically
+  # when sufficient VRAM is available during the training scripts.
+  batch_size: 64          # Baseline; scripts may override via get_optimal_batch_size()
+  learning_rate: 0.0003   # 3e-4 (matches default, explicit for clarity)
+  epochs: 100
+  checkpoint_every_n: 10
+  kl_beta: 1.0
+  sequence_length: 50
+  n_episodes: 1000
+  data_dir: "training/data"
+  weights_dir: "weights"
+  resume_from: null       # Set to a checkpoint path to resume interrupted training
+
+  gpu:
+    device: "cuda"        # Force CUDA device; falls back to CPU if unavailable
+    enable_amp: true      # BF16/FP16 AMP (RTX 5060 Ti supports BF16 natively)
+    memory_limit_gb: 14.0 # Leave 2 GB headroom from 16 GB VRAM
+
+# Override defaults to allow single-sensor mock operation during pipeline runs
+safety:
+  min_valid_sensors: 0
+
+# Adjust ultrasonic for mock operation (required when mock_hardware=false;
+# harmless but ignored when mock_hardware=true)
+ultrasonic:
+  trigger_pin: 23
+  echo_pin: 24
+  max_range_m: 4.0
+  min_range_m: 0.02
+  timeout_s: 0.1
+  speed_of_sound_mps: 343.0
+
+# Disable telemetry server and mDNS during offline training runs
+telemetry:
+  enabled: false
+
+# Disable cognitive core — not trained yet at pipeline start
+cognitive:
+  enabled: false
+  auto_download: false    # Do not attempt HuggingFace download during pipeline

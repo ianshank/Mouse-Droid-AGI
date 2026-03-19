@@ -39,6 +39,7 @@ graph TD
                 CoreAI["Core AI Pipeline\nRSSM + MCTS + Navigation Agent\nCognitive Core BDI + Metacognitive\nMemory: Working / Episodic / Semantic\nSafety Monitor + Constitutional Checker"]
                 SensorMgr["Sensor Manager\nconcurrent I/O"]
                 TelemetryPub["Telemetry Publisher\nasync queue\n≤60 Hz non-blocking"]
+                MetricsRegistry["Metrics Registry\nPrometheus text format\nconfig-driven namespace"]
                 TelemetryServer["Telemetry Server\naiohttp REST + WebSocket\nport 8765"]
                 ExperienceDB[("Experience Logger\nLMDB\n/home/jetson/experience_db")]
             end
@@ -60,7 +61,10 @@ graph TD
     Orchestrator --> LLMGateway
     Orchestrator --> HealthMonitor
     Orchestrator --> TelemetryPub
+    TelemetryPub --> MetricsRegistry
+    HealthMonitor --> MetricsRegistry
     TelemetryPub --> TelemetryServer
+    MetricsRegistry --> TelemetryServer
     HealthMonitor --> TelemetryPub
     CoreAI --> SensorMgr
     CoreAI --> ExperienceDB
@@ -82,7 +86,9 @@ graph TD
 | Llama GGUF model | llama-cpp-python | Local LLM for NL to velocity |
 | ESP32 firmware | C++ (Wave Rover SDK) | Motor PWM control, encoder polling |
 | Jetson CSI / IMX500 camera | jetson_utils / picamera2 | Vision capture + onboard neural inference |
-| NVMe SSD 500 GB | ext4 `/mnt/ssd` | Docker data-root, containerd, 16 GB swap || Telemetry Publisher | Python asyncio queue | Non-blocking sensor-frame fan-out at ≤60 Hz |
+| NVMe SSD 500 GB | ext4 `/mnt/ssd` | Docker data-root, containerd, 16 GB swap |
+| Telemetry Publisher | Python asyncio queue | Non-blocking sensor-frame fan-out at ≤60 Hz |
+| Metrics Registry | Python stdlib exporter | Prometheus metric families and text rendering |
 | Telemetry Server | aiohttp 3.x REST + WebSocket | Remote WiFi/Ethernet monitoring on port 8765 |
 ---
 
@@ -111,6 +117,7 @@ graph TD
     LLM["LLM Gateway optional\nNL to GoalVector\nLocal Llama GGUF"]
 
     TelemetryPub2["Telemetry Publisher\ntelemetry/publisher.py\nasync queue bridge"]
+    MetricsReg2["Metrics Registry\ntelemetry/metrics.py\nPrometheus text rendering"]
     TelemetryServer2["Telemetry Server\ntelemetry/server.py\nREST /api/v1/* + WebSocket /ws"]
 
     CLI --> Factory
@@ -132,7 +139,9 @@ graph TD
     Orchestrator -.-> EWC
     Orchestrator -.-> PNN
     Orchestrator --> TelemetryPub2
+    Orchestrator --> MetricsReg2
     TelemetryPub2 --> TelemetryServer2
+    MetricsReg2 --> TelemetryServer2
 ```
 
 ---
@@ -259,6 +268,7 @@ sequenceDiagram
     participant TeleServ as TelemetryServer (aiohttp)
     participant WSClient as WebSocket Client
     participant RESTClient as REST Client
+    participant PromClient as Prometheus Scraper
 
     Note over Orch,TelePub: Each control tick
     Orch->>TelePub: publish(TelemetryFrame)
@@ -277,6 +287,9 @@ sequenceDiagram
     TeleServ-->>RESTClient: last-N structured log entries
     RESTClient->>TeleServ: GET /api/v1/network
     TeleServ-->>RESTClient: interfaces + server URL
+    Note over PromClient,TeleServ: Prometheus scrape path
+    PromClient->>TeleServ: GET /metrics
+    TeleServ-->>PromClient: text/plain; version=0.0.4
 ```
 
 ---

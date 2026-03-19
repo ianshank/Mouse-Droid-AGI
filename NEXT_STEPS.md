@@ -2,6 +2,14 @@
 
 This document tracks planned enhancements, organised by priority and category.
 
+## Recently Completed (PR-14)
+
+- Added Prometheus-compatible `/metrics` endpoint to telemetry server with config-driven metric namespace/toggles
+- Added `scripts/check_branch_coverage.py` changed-line coverage gate (min 85%) and wired it into `scripts/ci.sh`
+- Added local pre-commit hook to run branch coverage gate automatically before commits
+- Added targeted telemetry tests for `/metrics` endpoint and broadcast-loop metric updates
+- Hardened hardware/integration tests by replacing hardcoded serial/config values with environment-driven settings
+
 ---
 
 ## Priority 1 — Hardware Integration (Immediate)
@@ -109,10 +117,9 @@ This document tracks planned enhancements, organised by priority and category.
 ## Priority 5 — Observability & Monitoring
 
 ### 5.1 Prometheus Metrics Export
-- Instrument key metrics: loop_hz, surprise_ema, battery_v, safety_violations_total
-- Expose via HTTP `/metrics` endpoint on port 9090
-- `cfg.metrics.enabled` / `cfg.metrics.export_interval_s` already configured
-- **Effort**: 2 days | **Owner**: backend team
+- ✅ Implemented in telemetry server (`/metrics`, Prometheus text format 0.0.4)
+- Next: add per-deployment scrape config examples for localhost, Docker, and Jetson systemd
+- **Effort**: 0.5 days | **Owner**: backend team
 
 ### 5.2 Grafana Dashboard
 - Pre-built dashboard JSON for: loop latency, GPU temp, curiosity drive, memory utilisation
@@ -126,10 +133,9 @@ This document tracks planned enhancements, organised by priority and category.
 - **Effort**: 2 days | **Owner**: backend team
 
 ### 5.4 Telemetry Server — Connect to Prometheus Scraping
-- Add a `/metrics` route to `TelemetryServer` that emits Prometheus text format
-- Expose `telemetry_frame_drop_total`, `ws_client_count`, `publish_hz` gauges
-- Validate with `promtool check metrics` in CI
-- **Effort**: 1 day | **Owner**: backend team
+- ✅ `/metrics` route is live and includes frame drops, ws clients, loop time, battery, safety violations, GPU temp
+- Next: add `promtool check metrics` validation in CI and publish sample alert rules
+- **Effort**: 1 day | **Owner**: backend + DevOps
 
 ### 5.5 Telemetry Server — Production Security
 - Add optional bearer-token authentication (`cfg.telemetry.auth_token`)
@@ -142,7 +148,7 @@ This document tracks planned enhancements, organised by priority and category.
 ## Priority 6 — Code Quality & Architecture
 
 ### 6.1 Mypy Strict — Resolve Pre-existing Errors
-- 44 pre-existing strict errors in torch-dependent modules
+- 50 strict errors currently fail full `scripts/ci.sh` mypy gate
 - Caused by untyped `backward()`, `trace()`, unused `type: ignore` comments
 - Fix by adding `[[tool.mypy.overrides]]` stubs or proper type annotations
 - **Effort**: 3 days | **Owner**: any engineer

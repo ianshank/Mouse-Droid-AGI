@@ -225,10 +225,29 @@ class MemoryConfig(BaseModel):
 
 
 class MetricsConfig(BaseModel):
-    """Metrics export configuration."""
+    """Prometheus-compatible metrics export configuration.
 
-    enabled: bool = Field(True, description="Enable metrics collection")
-    export_interval_s: float = Field(10.0, gt=0, description="Export interval (s)")
+    Controls the ``/metrics`` endpoint on the telemetry server.  All metric
+    names are derived from ``namespace`` so nothing is hardcoded outside
+    this class.
+    """
+
+    enabled: bool = Field(True, description="Enable /metrics endpoint")
+    path: str = Field("/metrics", description="HTTP path for Prometheus scrape endpoint")
+    namespace: str = Field(
+        "mousedroid",
+        description="Prefix applied to all metric names (e.g. mousedroid_loop_time_ms)",
+    )
+    export_interval_s: float = Field(10.0, gt=0, description="Background export interval (s)")
+    # Individual metric enable/disable toggles (all default-on)
+    track_loop_time: bool = Field(True, description="Expose loop_time_ms gauge")
+    track_battery: bool = Field(True, description="Expose battery_voltage_v gauge")
+    track_ws_clients: bool = Field(True, description="Expose ws_client_count gauge")
+    track_frame_drops: bool = Field(True, description="Expose frame_drop_total counter")
+    track_safety_violations: bool = Field(
+        True, description="Expose safety_violations_total counter"
+    )
+    track_gpu_temp: bool = Field(True, description="Expose gpu_temp_celsius gauge")
 
 
 class ModelConfig(BaseModel):
@@ -349,6 +368,7 @@ class TelemetryConfig(BaseModel):
         description="CORS allowed origins",
     )
     log_stream_buffer: int = Field(200, gt=0, description="Ring buffer size for log entries")
+    metrics_path: str = Field("/metrics", description="Prometheus scrape endpoint path")
 
 
 class ThreeLawsConfig(BaseModel):

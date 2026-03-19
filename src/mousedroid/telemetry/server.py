@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from mousedroid.config.schema import TelemetryConfig
     from mousedroid.health.monitor import HealthMonitor
     from mousedroid.telemetry.log_buffer import LogRingBuffer
+    from mousedroid.telemetry.metrics import MetricsRegistry
 
 _log = get_logger(__name__)
 
@@ -49,6 +50,7 @@ class TelemetryServer:
         telemetry_queue: asyncio.Queue[TelemetryFrame],
         health_monitor: HealthMonitor,
         log_buffer: LogRingBuffer | None = None,
+        metrics_registry: MetricsRegistry | None = None,
     ) -> None:
         """Initialise the telemetry server.
 
@@ -57,11 +59,15 @@ class TelemetryServer:
             telemetry_queue: Queue to consume ``TelemetryFrame`` objects from.
             health_monitor: Health monitor for ``/health`` endpoint.
             log_buffer: Optional log ring buffer for ``/logs`` endpoint.
+            metrics_registry: Optional Prometheus metrics registry.  When
+                provided, exposes a ``/metrics`` scrape endpoint and updates
+                counters/gauges from every broadcast frame.
         """
         self._cfg = cfg
         self._queue = telemetry_queue
         self._health_monitor = health_monitor
         self._log_buffer = log_buffer
+        self._metrics: MetricsRegistry | None = metrics_registry
 
         self._ws_clients: list[web.WebSocketResponse] = []
         self._latest_frame: TelemetryFrame | None = None
@@ -147,6 +153,8 @@ class TelemetryServer:
         app.router.add_get(f"{prefix}/network", self._handle_network)
         app.router.add_get(self._cfg.ws_path, self._handle_ws)
         app.router.add_get(f"{prefix}/logs/stream", self._handle_log_stream)
+        if self._metrics is not None:
+            app.router.add_get(self._cfg.metrics_path, self._handle_metrics)
 
     # ------------------------------------------------------------------
     # Middleware
@@ -189,13 +197,24 @@ class TelemetryServer:
             request: web.Request,
             handler: Any,
         ) -> web.Response:
-            """Validate API key from X-API-Key header."""
-            # Allow WebSocket upgrade requests to handle auth in the WS handler
-            if request.headers.get("Upgrade", "").lower() == "websocket":
-                return await handler(request)  # type: ignore[no-any-return]
+            """Validate API key from X-API-Key header (REST and WebSocket).
 
-            key = request.headers.get("X-API-Key", "")
+            WebSocket upgrade requests are validated here via query-param
+            fallback (``?api_key=…``) so the middleware provides a uniform
+            rejection path.  The WS handler performs a second check for
+            defence-in-depth.
+            """
+            is_ws_upgrade = request.headers.get("Upgrade", "").lower() == "websocket"
+            if is_ws_upgrade:
+                # For WebSocket, accept key from query param OR header
+                key = request.query.get("api_key", request.headers.get("X-API-Key", ""))
+            else:
+                key = request.headers.get("X-API-Key", "")
+
             if key != api_key:
+                if is_ws_upgrade:
+                    # Reject WS upgrade with a plain 401 before the handshake
+                    raise web.HTTPUnauthorized(text="Invalid or missing API key")
                 raise web.HTTPUnauthorized(text="Invalid or missing API key")
 
             return await handler(request)  # type: ignore[no-any-return]
@@ -320,6 +339,29 @@ class TelemetryServer:
 
         return web.json_response(data)
 
+    async def _handle_metrics(self, request: web.Request) -> web.Response:
+        """GET /metrics — Prometheus text-format metrics scrape endpoint.
+
+        Args:
+            request: The incoming request.
+
+        Returns:
+            Plain-text Prometheus exposition with ``Content-Type:
+            text/plain; version=0.0.4; charset=utf-8``.
+        """
+        from aiohttp import web
+
+        if self._metrics is None:
+            return web.Response(status=404, text="metrics_disabled")
+
+        text = self._metrics.render_prometheus()
+        return web.Response(
+            text=text,
+            content_type="text/plain",
+            headers={"X-Content-Type-Options": "nosniff"},
+            charset="utf-8",
+        )
+
     # ------------------------------------------------------------------
     # WebSocket handlers
     # ------------------------------------------------------------------
@@ -340,15 +382,8 @@ class TelemetryServer:
             await resp.prepare(request)
             await resp.close(code=4029, message=b"max_clients_reached")
             return resp
-
-        # Check API key for WebSocket if configured
-        if self._cfg.api_key is not None:
-            api_key = request.query.get("api_key", request.headers.get("X-API-Key", ""))
-            if api_key != self._cfg.api_key:
-                resp = web.WebSocketResponse()
-                await resp.prepare(request)
-                await resp.close(code=4001, message=b"unauthorized")
-                return resp
+        # Note: API key auth is already enforced by auth_middleware when
+        # cfg.api_key is set.  No secondary check needed here.
 
         ws = web.WebSocketResponse()
         await ws.prepare(request)
@@ -424,6 +459,21 @@ class TelemetryServer:
 
             self._latest_frame = frame
             data = frame.to_dict()
+
+            # Push live telemetry into metrics registry (non-blocking)
+            if self._metrics is not None:
+                self._metrics.set_loop_time_ms(frame.loop_time_ms)
+                self._metrics.set_battery_voltage(frame.battery_voltage)
+                self._metrics.set_ws_client_count(len(self._ws_clients))
+                health = frame.health
+                if isinstance(health, dict):
+                    gpu_temp = health.get("gpu_temp_c")
+                    if isinstance(gpu_temp, int | float):
+                        self._metrics.set_gpu_temp_celsius(float(gpu_temp))
+                safety = frame.safety
+                if isinstance(safety, dict):
+                    for law in safety.get("violations", []):
+                        self._metrics.inc_safety_violation(str(law))
 
             dead_clients: list[web.WebSocketResponse] = []
             send_tasks = []

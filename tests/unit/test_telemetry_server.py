@@ -11,7 +11,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from mousedroid.config.schema import TelemetryConfig
+from mousedroid.config.schema import MetricsConfig, TelemetryConfig
+from mousedroid.telemetry.metrics import MetricsRegistry
 from mousedroid.telemetry.protocol import TelemetryFrame
 
 # Guard: skip all tests if aiohttp is not installed
@@ -298,6 +299,64 @@ async def test_websocket_receives_broadcast():
         broadcast_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await broadcast_task
+
+
+async def test_metrics_endpoint_exposed_when_registry_present():
+    cfg = TelemetryConfig(enabled=True, metrics_path="/metrics")
+    queue: asyncio.Queue[TelemetryFrame] = asyncio.Queue(maxsize=64)
+    health = _make_health_monitor()
+    registry = MetricsRegistry(MetricsConfig(enabled=True))
+    server = TelemetryServer(
+        cfg=cfg,
+        telemetry_queue=queue,
+        health_monitor=health,
+        metrics_registry=registry,
+    )
+    app = _build_app(server)
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/metrics")
+        assert resp.status == 200
+        text = await resp.text()
+        assert "# HELP" in text
+
+
+async def test_broadcast_loop_updates_metrics_registry():
+    cfg = TelemetryConfig(enabled=True, metrics_path="/metrics")
+    queue: asyncio.Queue[TelemetryFrame] = asyncio.Queue(maxsize=64)
+    health = _make_health_monitor()
+    registry = MetricsRegistry(MetricsConfig(enabled=True))
+    server = TelemetryServer(
+        cfg=cfg,
+        telemetry_queue=queue,
+        health_monitor=health,
+        metrics_registry=registry,
+    )
+    server._running = True
+
+    broadcast_task = asyncio.create_task(server._broadcast_loop())
+    try:
+        await queue.put(
+            TelemetryFrame(
+                loop_time_ms=17.5,
+                battery_voltage=12.3,
+                health={"gpu_temp_c": 57.0},
+                safety={"violations": ["law1", "law2"]},
+            )
+        )
+        await asyncio.sleep(0.05)
+    finally:
+        server._running = False
+        broadcast_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await broadcast_task
+
+    text = registry.render_prometheus()
+    assert "loop_time" in text
+    assert "battery_voltage" in text
+    assert "gpu_temp" in text
+    assert 'law="law1"' in text
+    assert 'law="law2"' in text
 
 
 # --- Server lifecycle tests ---

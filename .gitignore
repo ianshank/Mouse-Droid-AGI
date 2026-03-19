@@ -29,6 +29,7 @@ env/
 .coverage
 .coverage.*
 coverage.xml
+coverage-branch.json
 htmlcov/
 .pytest_cache/
 .mypy_cache/
@@ -97,6 +98,7 @@ pytest_results.txt
 smoke_results.txt
 telem_unit.txt
 unit_test_results.txt
+precommit_results.txt
 
 # Temporary deploy/build scripts
 /tmp/jetson_*.py
