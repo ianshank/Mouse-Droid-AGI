@@ -53,6 +53,14 @@ class OfflineRLDataset:
         self._device = device or torch.device("cpu")
         self._env: lmdb.Environment | None = None
         self._keys: list[bytes] = []
+        self._cached_transitions: tuple[
+            NDArray[Any],
+            NDArray[Any],
+            NDArray[Any],
+            NDArray[Any],
+            NDArray[Any],
+        ] | None = None
+        self._cached_terminal_gap_s: float | None = None
 
     @property
     def state_dim(self) -> int:
@@ -75,6 +83,8 @@ class OfflineRLDataset:
         with self._env.begin() as txn:
             cursor = txn.cursor()
             self._keys = [key for key, _ in cursor]
+        self._cached_transitions = None
+        self._cached_terminal_gap_s = None
 
         _log.info(
             "offline_dataset_opened",
@@ -88,6 +98,8 @@ class OfflineRLDataset:
             self._env.close()
             self._env = None
             self._keys = []
+            self._cached_transitions = None
+            self._cached_terminal_gap_s = None
 
     def __len__(self) -> int:
         """Return the number of transition pairs in the dataset."""
@@ -140,7 +152,8 @@ class OfflineRLDataset:
             empty_s = np.zeros((0, self.state_dim), dtype=np.float32)
             empty_a = np.zeros((0, self._action_dim), dtype=np.float32)
             empty_r = np.zeros(0, dtype=np.float32)
-            return empty_s, empty_a, empty_r, empty_s.copy(), empty_r.copy()
+            empty_d = np.zeros(0, dtype=np.float32)
+            return empty_s, empty_a, empty_r, empty_s.copy(), empty_d
 
         records: list[MouseDroidExperienceRecord] = []
         for key in self._keys:
@@ -152,7 +165,8 @@ class OfflineRLDataset:
             empty_s = np.zeros((0, self.state_dim), dtype=np.float32)
             empty_a = np.zeros((0, self._action_dim), dtype=np.float32)
             empty_r = np.zeros(0, dtype=np.float32)
-            return empty_s, empty_a, empty_r, empty_s.copy(), empty_r.copy()
+            empty_d = np.zeros(0, dtype=np.float32)
+            return empty_s, empty_a, empty_r, empty_s.copy(), empty_d
 
         n_transitions = len(records) - 1
         states = np.zeros((n_transitions, self.state_dim), dtype=np.float32)
@@ -198,9 +212,20 @@ class OfflineRLDataset:
             Dict with keys ``states``, ``actions``, ``rewards``,
             ``next_states``, ``dones`` — each a tensor on ``self._device``.
         """
-        states, actions, rewards, next_states, dones = self.get_transitions(
-            terminal_gap_s=terminal_gap_s,
+        cache_miss = (
+            self._cached_transitions is None
+            or self._cached_terminal_gap_s != terminal_gap_s
         )
+        if cache_miss:
+            self._cached_transitions = self.get_transitions(
+                terminal_gap_s=terminal_gap_s,
+            )
+            self._cached_terminal_gap_s = terminal_gap_s
+
+        if self._cached_transitions is None:
+            return
+
+        states, actions, rewards, next_states, dones = self._cached_transitions
 
         n = len(states)
         if n == 0:

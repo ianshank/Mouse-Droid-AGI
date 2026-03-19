@@ -11,10 +11,12 @@ import warnings
 from mousedroid.common.math.numpy_ops import layer_norm, relu, softmax
 from mousedroid.constants import SOFTMAX_EPSILON
 
+_SOFTMAX_EPS = SOFTMAX_EPSILON
+
 warnings.warn(
     "mousedroid.utils.numpy_ops is deprecated. Use mousedroid.common.math.numpy_ops instead.",
     DeprecationWarning,
     stacklevel=2,
 )
 
-__all__ = ["SOFTMAX_EPSILON", "layer_norm", "relu", "softmax"]
+__all__ = ["SOFTMAX_EPSILON", "_SOFTMAX_EPS", "layer_norm", "relu", "softmax"]

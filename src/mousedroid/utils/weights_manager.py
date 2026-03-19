@@ -24,7 +24,10 @@ _HF_HUB_AVAILABLE = False
 
 def _missing_hf_hub_download(**kwargs: object) -> str:
     """Stub used when ``huggingface_hub`` is unavailable."""
-    raise ImportError("huggingface_hub is not installed")
+    raise ImportError(
+        "huggingface_hub is not installed. "
+        "Install with: pip install 'mousedroid[llm]' or pip install huggingface-hub"
+    )
 
 
 _hf_hub_download: Callable[..., str] = _missing_hf_hub_download
@@ -66,7 +69,7 @@ def download_weights_from_huggingface(
             "huggingface_hub_not_installed",
             repo_id=repo_id,
             filenames=filenames,
-            hint="Install via: pip install huggingface-hub",
+            hint="Install via: pip install 'mousedroid[llm]' or pip install huggingface-hub",
         )
         return False
 
