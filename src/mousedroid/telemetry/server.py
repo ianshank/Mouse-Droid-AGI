@@ -16,10 +16,10 @@ import json
 import time
 from typing import TYPE_CHECKING, Any
 
+from mousedroid.constants import MDNS_SERVICE_TYPE
 from mousedroid.logging.setup import get_logger
 from mousedroid.telemetry.network import get_default_ip, get_network_interfaces
 from mousedroid.telemetry.protocol import TelemetryFrame
-from mousedroid.constants import MDNS_SERVICE_TYPE
 
 if TYPE_CHECKING:
     from aiohttp import web

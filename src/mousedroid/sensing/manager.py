@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Awaitable
 from collections import deque
+from collections.abc import Awaitable
 from typing import TYPE_CHECKING, TypeVar
 
 import numpy as np
