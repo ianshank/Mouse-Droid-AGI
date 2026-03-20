@@ -343,6 +343,52 @@ sequenceDiagram
 
 ---
 
+## Training Pipeline (Offline GPU)
+
+```mermaid
+graph TD
+    subgraph Pipeline["GPU Pretraining Pipeline (training/)"]
+        DG["data_generator.py\nSynthetic ObservationBundle sequences"]
+        RSSM_T["train_rssm.py\nPhase 2.1: RSSM encoder + dynamics\ncheckpoints every N epochs"]
+        WS["warmstart_policy.py\nPhase 2.2: MCTS warm-start weights\nUCB calibration (tune_ucb)"]
+        CA["collect_annotations.py\nPhase 2.3a: BDI intention labels"]
+        BDI_T["train_bdi.py\nPhase 2.3b: NeuralBDI on annotations"]
+        CRL["train_constitutional_rl.py\nPhase 2.4: PPO + Constitutional RL"]
+        RP["run_pipeline.py\nOrchestrator: phase1→2→3→4\n--resume / resume_from for checkpoints"]
+        UP["upload_weights.py\nHuggingFace Hub push (28 files)\nianshank/mousedroid-weights"]
+    end
+    subgraph HF["HuggingFace Hub"]
+        HFRepo["ianshank/mousedroid-weights\nbdi/ mcts/ rssm/ constitutional_rl/"]
+    end
+    subgraph Deploy["Jetson Runtime"]
+        WM["WeightsManager\nhf_hub_download(subfolder, local_dir)\nretry=3 backoff=2^n"]
+        NeuralBDI["NeuralBDI\nbeliefs / desires / intentions"]
+    end
+
+    DG --> RSSM_T
+    RSSM_T --> WS
+    WS --> CA
+    CA --> BDI_T
+    BDI_T --> CRL
+    RSSM_T & WS & BDI_T & CRL --> UP
+    UP --> HFRepo
+    RP -.-> RSSM_T & WS & BDI_T & CRL
+    HFRepo --> WM
+    WM --> NeuralBDI
+```
+
+**Key training facts:**
+
+| Property | Value |
+|----------|-------|
+| Pipeline entry | `python training/run_pipeline.py [--resume path/to/checkpoint.pt]` |
+| Resume support | `--resume` / `resume_from` in config; skips completed phases |
+| Weight storage | `ianshank/mousedroid-weights` HuggingFace repo; `bdi/`, `mcts/`, `rssm/`, `constitutional_rl/` subfolders |
+| Runtime download | `WeightsManager.download_weights_from_huggingface(subfolder='bdi', local_dir=weights_dir.parent)` |
+| Type safety | All `training/` modules pass `mypy --strict` (NDArray[Any] annotations) |
+
+---
+
 ## Key Design Decisions
 
 | Decision | Rationale |
@@ -356,7 +402,7 @@ sequenceDiagram
 | FAISS for memory retrieval | Sub-millisecond similarity search at 50k scale |
 | numpy-only cognitive inference | No CUDA dependency for BDI/metacog; runs on CPU |
 | Dual-cadence cognitive loop | Fast 30 Hz reaction + slow 1 Hz deliberation minimises compute |
-| HuggingFace Hub weight loading | Automated model download with retry/fallback; no manual scp |
+| HuggingFace Hub weight loading | `hf_hub_download(subfolder, local_dir)` routes files to exact path; retry=3, backoff=2^n |
 | `torch.no_grad()` for all RSSM/MCTS inference | Prevents accidental gradient accumulation |
 | Module-level constants for all magic numbers | Grep-able; documented; not scattered in logic |
 | L4T Docker container | GPU-accelerated deployment with consistent environment |

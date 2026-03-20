@@ -84,7 +84,14 @@ def download_weights_from_huggingface(
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
     if local_dir is not None:
-        Path(local_dir).mkdir(parents=True, exist_ok=True)
+        local_dir_path = Path(local_dir).resolve()
+        # Guard against path traversal: resolved path must not escape to system roots.
+        # (local_dir is always factory-provided from Pydantic config; this is belt-and-suspenders.)
+        protected_roots = {"/etc", "/bin", "/sbin", "/usr/bin", "/proc", "/sys"}
+        if any(str(local_dir_path).startswith(p) for p in protected_roots):
+            raise ValueError(f"local_dir {local_dir_path} resolves to a protected system path")
+        local_dir_path.mkdir(parents=True, exist_ok=True)
+        local_dir = local_dir_path  # use resolved path from here on
 
     all_success = True
     for filename in filenames:

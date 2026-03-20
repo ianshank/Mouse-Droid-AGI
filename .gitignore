@@ -100,6 +100,13 @@ telem_unit.txt
 unit_test_results.txt
 precommit_results.txt
 
+# CI / validation output logs
+ci_output.txt
+ci_full_output.txt
+ci_complete_output.txt
+smoke_test_output.txt
+validation_output.txt
+
 # Temporary deploy/build scripts
 /tmp/jetson_*.py
 /tmp/install_*.py

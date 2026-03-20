@@ -91,11 +91,13 @@ class CognitiveConfig(BaseModel):
     )
     huggingface_repo: str = Field(
         "ianshank/mousedroid-weights",
-        description="HuggingFace repository ID for auto-downloading weights",
+        pattern=r"^[A-Za-z0-9_-]+/[A-Za-z0-9_./-]+$",
+        description="HuggingFace repository ID (format: owner/repo-name)",
     )
     huggingface_subfolder: str = Field(
         "bdi",
-        description="Subfolder within the HuggingFace repo containing the BDI weight .npz files",
+        pattern=r"^[A-Za-z0-9_/-]*$",
+        description="Subfolder within the HF repo containing BDI .npz files (no '..' allowed)",
     )
     auto_download: bool = Field(
         True,
