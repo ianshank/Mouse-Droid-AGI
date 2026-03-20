@@ -165,14 +165,13 @@ class OfflineRLTrainer(abc.ABC):
 
     def _soft_update_targets(self) -> None:
         """Polyak-average target Q-network toward current Q-network."""
-        for target_param, param in zip(
-            self.target_q_network.parameters(),
-            self.q_network.parameters(),
-            strict=True,
-        ):
-            target_param.data.copy_(
-                self._tau * param.data + (1.0 - self._tau) * target_param.data,
-            )
+        with torch.no_grad():
+            for target_param, param in zip(
+                self.target_q_network.parameters(),
+                self.q_network.parameters(),
+                strict=True,
+            ):
+                target_param.mul_(1.0 - self._tau).add_(param, alpha=self._tau)
 
     @abc.abstractmethod
     def update_step(
@@ -327,7 +326,7 @@ class CQLTrainer(OfflineRLTrainer):
         q1_data, q2_data = self.q_network(states, actions)
 
         # CQL penalty: push down random, push up dataset
-        cql_loss = (
+        cql_loss: Tensor = (
             q1_logsumexp - q1_data.mean() + q2_logsumexp - q2_data.mean()
         )
 
@@ -370,7 +369,7 @@ class CQLTrainer(OfflineRLTrainer):
         policy_loss = -q1_pi.mean()
 
         self.policy_optimizer.zero_grad()
-        policy_loss.backward()  # type: ignore[no-untyped-call]
+        policy_loss.backward()
         self.policy_optimizer.step()
 
         # --- Target update ---

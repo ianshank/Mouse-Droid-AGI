@@ -156,10 +156,20 @@ class OfflineRLDataset:
             return empty_s, empty_a, empty_r, empty_s.copy(), empty_d
 
         records: list[MouseDroidExperienceRecord] = []
-        for key in self._keys:
-            rec = self._load_record(key)
-            if rec is not None:
-                records.append(rec)
+        if self._env is None:
+            empty_s = np.zeros((0, self.state_dim), dtype=np.float32)
+            empty_a = np.zeros((0, self._action_dim), dtype=np.float32)
+            empty_r = np.zeros(0, dtype=np.float32)
+            empty_d = np.zeros(0, dtype=np.float32)
+            return empty_s, empty_a, empty_r, empty_s.copy(), empty_d
+        with self._env.begin() as txn:
+            for key in self._keys:
+                data = txn.get(key)
+                if data is None:
+                    continue
+                rec = MouseDroidExperienceRecord.deserialize(data)
+                if rec is not None:
+                    records.append(rec)
 
         if len(records) < 2:
             empty_s = np.zeros((0, self.state_dim), dtype=np.float32)
