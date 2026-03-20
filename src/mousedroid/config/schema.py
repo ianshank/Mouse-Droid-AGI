@@ -25,6 +25,8 @@ else:
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from mousedroid.constants import DEFAULT_UCB_CANDIDATES, DEFAULT_UCB_TARGET_MS
+
 
 def _settings_default_factory(factory: Any) -> Any:
     """Return nested settings factories unchanged.
@@ -90,6 +92,10 @@ class CognitiveConfig(BaseModel):
     huggingface_repo: str = Field(
         "ianshank/mousedroid-weights",
         description="HuggingFace repository ID for auto-downloading weights",
+    )
+    huggingface_subfolder: str = Field(
+        "bdi",
+        description="Subfolder within the HuggingFace repo containing the BDI weight .npz files",
     )
     auto_download: bool = Field(
         True,
@@ -222,6 +228,15 @@ class MCTSConfig(BaseModel):
     gamma: float = Field(0.97, gt=0, le=1, description="Discount factor")
     n_action_candidates: int = Field(9, gt=0, description="Action candidates per node")
     ucb_c: float = Field(1.41, gt=0, description="UCB exploration constant")
+    ucb_candidates: list[float] = Field(
+        default_factory=lambda: list(DEFAULT_UCB_CANDIDATES),
+        description="Candidate UCB exploration constants evaluated during warm-start tuning",
+    )
+    ucb_target_ms: float = Field(
+        DEFAULT_UCB_TARGET_MS,
+        gt=0,
+        description="Target median planning latency used when selecting a tuned UCB value",
+    )
 
 
 class MemoryConfig(BaseModel):
@@ -503,6 +518,7 @@ class TrainingConfig(BaseModel):
     learning_rate: float = Field(3e-4, gt=0, description="Learning rate")
     epochs: int = Field(100, gt=0, description="Training epochs")
     checkpoint_every_n: int = Field(10, gt=0, description="Checkpoint frequency")
+    gradient_scale: float = Field(2.0, gt=0, description="Gradient scale for numpy MSE losses")
     kl_beta: float = Field(1.0, gt=0, description="KL loss weight for RSSM training")
     sequence_length: int = Field(50, gt=0, description="Training sequence length")
     n_episodes: int = Field(1000, gt=0, description="Synthetic episodes to generate")

@@ -11,13 +11,16 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import structlog
 import torch
+from numpy.typing import NDArray
 
 from mousedroid.cognitive.constitutional_rl import PolicyMLP
 from mousedroid.config.schema import MCTSConfig, Settings
+from mousedroid.constants import DEFAULT_ACTION_DIM, DEFAULT_BELIEF_DIM
 from mousedroid.world_model.mcts import MCTSPlanner
 from mousedroid.world_model.rssm import RSSM
 from training.gpu_utils import resolve_device
@@ -31,7 +34,7 @@ def compute_latent_statistics(
     dataset: RSSMSequenceDataset,
     device: torch.device,
     max_episodes: int = 100,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[NDArray[Any], NDArray[Any]]:
     """Compute mean and std of RSSM latent states over dataset.
 
     Args:
@@ -43,7 +46,7 @@ def compute_latent_statistics(
     Returns:
         Tuple of ``(latent_mean, latent_std)`` as numpy arrays.
     """
-    all_z: list[np.ndarray] = []
+    all_z: list[NDArray[Any]] = []
     n = min(len(dataset), max_episodes)
 
     for i in range(n):
@@ -77,10 +80,10 @@ def compute_latent_statistics(
 
 
 def warmstart_policy(
-    latent_mean: np.ndarray,
-    latent_std: np.ndarray,
-    input_dim: int = 128,
-    action_dim: int = 2,
+    latent_mean: NDArray[Any],
+    latent_std: NDArray[Any],
+    input_dim: int = DEFAULT_BELIEF_DIM,
+    action_dim: int = DEFAULT_ACTION_DIM,
 ) -> PolicyMLP:
     """Initialise PolicyMLP weights from RSSM latent statistics.
 
@@ -99,7 +102,9 @@ def warmstart_policy(
     policy = PolicyMLP(input_dim=input_dim, action_dim=action_dim)
 
     # Scale first-layer weights by inverse latent std for normalisation
-    scale = 1.0 / latent_std[:input_dim] if len(latent_std) >= input_dim else np.ones(input_dim)
+    scale: NDArray[Any] = (
+        1.0 / latent_std[:input_dim] if len(latent_std) >= input_dim else np.ones(input_dim)
+    )
     if scale.shape[0] == policy._w1.shape[0]:
         policy._w1 = policy._w1 * scale[:, np.newaxis]
 
@@ -132,7 +137,7 @@ def tune_ucb(
         Tuple of ``(best_ucb_c, results_dict)``.
     """
     device = device or torch.device("cpu")
-    candidates = [0.5, 1.0, 1.41, 2.0, 3.0]
+    candidates = base_cfg.ucb_candidates
     results: dict[str, object] = {}
     best_ucb = base_cfg.ucb_c
     best_reward = -float("inf")
@@ -145,6 +150,7 @@ def tune_ucb(
             gamma=base_cfg.gamma,
             n_action_candidates=base_cfg.n_action_candidates,
             ucb_c=ucb_c,
+            ucb_target_ms=base_cfg.ucb_target_ms,
         )
         planner = MCTSPlanner(cfg, rssm)
 
@@ -220,12 +226,17 @@ def run_warmstart(
     latent_mean, latent_std = compute_latent_statistics(rssm, dataset, device)
 
     # Warm-start policy
-    policy = warmstart_policy(latent_mean, latent_std)
+    policy = warmstart_policy(
+        latent_mean,
+        latent_std,
+        input_dim=cfg.model.latent_dim,
+        action_dim=cfg.model.action_dim,
+    )
     policy.save(output_dir / "policy_init.npz")
     _log.info("policy_warmstarted", path=str(output_dir / "policy_init.npz"))
 
     # Tune UCB
-    best_ucb, results = tune_ucb(rssm, cfg.mcts, device=device)
+    best_ucb, results = tune_ucb(rssm, cfg.mcts, target_ms=cfg.mcts.ucb_target_ms, device=device)
     with open(output_dir / "tuned_config.json", "w") as f:
         json.dump(results, f, indent=2)
     _log.info("ucb_tuned", best_ucb_c=best_ucb, output=str(output_dir / "tuned_config.json"))

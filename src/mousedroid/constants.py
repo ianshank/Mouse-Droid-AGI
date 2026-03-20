@@ -49,6 +49,24 @@ DEFAULT_AFFECT_DIM: int = 2
 DEFAULT_POLICY_HIDDEN_DIM: int = 64
 """Hidden layer dimensionality for PolicyMLP and ValueMLP networks."""
 
+DEFAULT_UCB_CANDIDATES: tuple[float, ...] = (0.5, 1.0, 1.41, 2.0, 3.0)
+"""Default UCB exploration constants evaluated during warm-start tuning."""
+
+DEFAULT_UCB_TARGET_MS: float = 50.0
+"""Default target median planning latency used during UCB tuning."""
+
+DEFAULT_GRADIENT_SCALE: float = 2.0
+"""Default gradient scale for simple mean-squared-error reconstruction losses."""
+
+BACKTRACK_SPEED_THRESHOLD: float = -0.2
+"""Forward velocity below this threshold is classified as backtracking."""
+
+APPROACH_CLEAR_DISTANCE_M: float = 1.0
+"""Obstacle distance above this threshold is treated as a clear path forward."""
+
+APPROACH_SPEED_THRESHOLD: float = 0.2
+"""Planar speed above this threshold is treated as a deliberate forward approach."""
+
 DEFAULT_TARGET_LOOP_MS: float = 33.0
 """Target control loop duration in milliseconds (30 Hz)."""
 

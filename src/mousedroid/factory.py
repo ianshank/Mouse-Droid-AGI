@@ -225,6 +225,8 @@ def _resolve_bdi_weights(cfg: Settings) -> tuple[NeuralBDI, str]:
             repo_id=cfg.cognitive.huggingface_repo,
             filenames=bdi_filenames,
             cache_dir=weights_dir,
+            subfolder=cfg.cognitive.huggingface_subfolder,
+            local_dir=weights_dir.parent,
             max_retries=cfg.cognitive.download_max_retries,
             backoff_base=cfg.cognitive.download_backoff_base,
         )

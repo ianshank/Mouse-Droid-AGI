@@ -7,10 +7,12 @@ ConstitutionalChecker as a safety constraint layer.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import structlog
 import torch
+from numpy.typing import NDArray
 
 from mousedroid.cognitive.constitutional_rl import (
     ConstitutionalChecker,
@@ -31,7 +33,7 @@ def _gae(
     values: list[float],
     gamma: float,
     gae_lambda: float,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[NDArray[Any], NDArray[Any]]:
     """Compute Generalised Advantage Estimation.
 
     Args:
@@ -60,11 +62,11 @@ def _gae(
 def _ppo_update(
     policy: PolicyMLP,
     value_fn: ValueMLP,
-    states: np.ndarray,
-    actions: np.ndarray,
-    old_log_probs: np.ndarray,
-    advantages: np.ndarray,
-    returns: np.ndarray,
+    states: NDArray[Any],
+    actions: NDArray[Any],
+    old_log_probs: NDArray[Any],
+    advantages: NDArray[Any],
+    returns: NDArray[Any],
     clip_epsilon: float,
     lr: float,
     n_epochs: int,
@@ -200,8 +202,8 @@ def train_constitutional_rl(
         h = torch.zeros(1, cfg.model.hidden_dim, device=device)
         z = torch.zeros(1, cfg.model.latent_dim, device=device)
 
-        states: list[np.ndarray] = []
-        actions_taken: list[np.ndarray] = []
+        states: list[NDArray[Any]] = []
+        actions_taken: list[NDArray[Any]] = []
         log_probs: list[float] = []
         rewards: list[float] = []
         values: list[float] = []

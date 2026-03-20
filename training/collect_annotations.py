@@ -12,8 +12,14 @@ from typing import Any
 
 import numpy as np
 import structlog
+from numpy.typing import NDArray
 
 from mousedroid.config.schema import Settings
+from mousedroid.constants import (
+    APPROACH_CLEAR_DISTANCE_M,
+    APPROACH_SPEED_THRESHOLD,
+    BACKTRACK_SPEED_THRESHOLD,
+)
 from mousedroid.factory import build_orchestrator
 from mousedroid.sensing.bundle import MouseDroidObservationBundle
 
@@ -35,12 +41,12 @@ INTENTION_LABELS = [
 
 
 def label_intention(
-    action: np.ndarray,
+    action: NDArray[Any],
     obs: MouseDroidObservationBundle,
     *,
     human_detected: bool = False,
     human_dist_m: float = float("inf"),
-    commanded_action: np.ndarray | None = None,
+    commanded_action: NDArray[Any] | None = None,
     human_safety_radius_m: float = 0.5,
     battery_warn_v: float = 10.8,
     obstacle_clearance_m: float = 0.25,
@@ -94,11 +100,11 @@ def label_intention(
         return 5  # turn
 
     # Moving backward → backtrack
-    if len(action) >= 1 and float(action[0]) < -0.2:
+    if len(action) >= 1 and float(action[0]) < BACKTRACK_SPEED_THRESHOLD:
         return 3  # backtrack
 
     # Moving forward with clear path → approach or explore
-    if distance > 1.0 and speed > 0.2:
+    if distance > APPROACH_CLEAR_DISTANCE_M and speed > APPROACH_SPEED_THRESHOLD:
         return 1  # approach_target
 
     return 0  # explore
@@ -110,13 +116,14 @@ async def _collect_episode(
 ) -> list[dict[str, Any]]:
     """Run one episode and collect annotated transitions."""
     orchestrator = build_orchestrator(cfg)
-    await orchestrator.start()
+    await orchestrator.start()  # type: ignore[attr-defined]
 
     annotations: list[dict[str, Any]] = []
     rng = np.random.default_rng()
 
     for _ in range(max_steps):
-        obs = await orchestrator._sense()
+        # Use the sensor manager to read observations
+        obs = await orchestrator._sensor_manager.read_all()  # type: ignore[attr-defined]
 
         # Random policy for diverse data collection
         action = np.tanh(rng.standard_normal(cfg.model.action_dim).astype(np.float32))
@@ -133,7 +140,7 @@ async def _collect_episode(
             }
         )
 
-    await orchestrator.stop()
+    await orchestrator.stop()  # type: ignore[attr-defined]
     return annotations
 
 
@@ -164,7 +171,7 @@ def collect_annotations(
         output_path = Path(cfg.training.data_dir) / "bdi_annotations.npz"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    all_observations: list[np.ndarray] = []
+    all_observations: list[NDArray[Any]] = []
     all_intentions: list[int] = []
 
     for ep in range(n_episodes):

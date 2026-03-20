@@ -23,7 +23,7 @@ try:
 
     _HF_AVAILABLE = True
 except ImportError:
-    HfApi = None  # type: ignore[assignment,misc]
+    HfApi = None
 
 
 def upload_weights(
