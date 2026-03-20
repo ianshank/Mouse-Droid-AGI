@@ -221,6 +221,29 @@ class LoopConfig(BaseModel):
     audio_hz: float = Field(16.0, gt=0, description="Microphone capture rate (Hz)")
 
 
+class OfflineRLConfig(BaseModel):
+    """Offline RL training configuration (CQL / IQL)."""
+
+    algorithm: Literal["cql", "iql"] = Field("cql", description="Offline RL algorithm")
+    hidden_dim: int = Field(256, gt=0, description="Hidden layer dimension")
+    gamma: float = Field(0.99, gt=0, le=1, description="Discount factor")
+    tau: float = Field(0.005, gt=0, le=1, description="Soft target update coefficient")
+    learning_rate: float = Field(3e-4, gt=0, description="Learning rate")
+    epochs: int = Field(100, gt=0, description="Training epochs")
+    batch_size: int = Field(64, gt=0, description="Training batch size")
+    terminal_gap_s: float = Field(
+        5.0, gt=0, description="Timestamp gap to mark episode boundaries (s)",
+    )
+    log_every_n_epochs: int = Field(10, gt=0, description="Log summary every N epochs")
+    checkpoint_every_n_epochs: int = Field(20, gt=0, description="Save checkpoint every N epochs")
+    cql_alpha: float = Field(1.0, gt=0, description="CQL regularization weight")
+    cql_n_random_actions: int = Field(10, gt=0, description="Random actions for CQL logsumexp")
+    iql_expectile: float = Field(0.7, gt=0, lt=1, description="IQL expectile for asymmetric loss")
+    iql_beta: float = Field(
+        3.0, gt=0, description="IQL inverse temperature for advantage weighting",
+    )
+
+
 class MCTSConfig(BaseModel):
     """Monte Carlo Tree Search configuration."""
 
@@ -645,6 +668,9 @@ class Settings(BaseSettings):
     )
     curiosity: CuriosityConfig = Field(
         default_factory=_settings_default_factory(CuriosityConfig)
+    )
+    offline_rl: OfflineRLConfig = Field(
+        default_factory=_settings_default_factory(OfflineRLConfig)
     )
     ppo: PPOConfig = Field(default_factory=_settings_default_factory(PPOConfig))
     telemetry: TelemetryConfig = Field(default_factory=_settings_default_factory(TelemetryConfig))

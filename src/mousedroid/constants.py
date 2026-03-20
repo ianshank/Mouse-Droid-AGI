@@ -139,11 +139,31 @@ MOTOR_STATE_BATTERY_INDEX: int = 3
 """Index of battery voltage within the motor_state array."""
 
 # ---------------------------------------------------------------------------
-# Hardware sensor conversion factors
+# Telemetry server constants
 # ---------------------------------------------------------------------------
 
-MILLIDEGREE_DIVISOR: float = 1000.0
-"""Divisor for converting thermal zone millidegree readings to Celsius."""
+MAX_LOG_ENTRIES: int = 1000
+"""Maximum log entries retrievable from REST endpoint."""
 
-GPU_LOAD_PERCENTAGE_DIVISOR: float = 10.0
-"""Divisor for converting raw GPU load readings to percentage."""
+TELEMETRY_QUEUE_TIMEOUT_S: float = 1.0
+"""Timeout for telemetry queue polling in broadcast/log loops."""
+
+# ---------------------------------------------------------------------------
+# Sensor constants
+# ---------------------------------------------------------------------------
+
+HC_SR04_TRIGGER_PULSE_S: float = 0.00001
+"""HC-SR04 ultrasonic trigger pulse duration (10 microseconds)."""
+
+GB_TO_BYTES: int = 1_073_741_824
+"""Conversion factor from gigabytes to bytes."""
+
+# ---------------------------------------------------------------------------
+# Numeric stability
+# ---------------------------------------------------------------------------
+
+SOFTMAX_EPSILON: float = 1e-8
+"""Epsilon for softmax numerical stability."""
+
+EMA_DEFAULT_ALPHA: float = 0.1
+"""Default exponential moving average smoothing factor."""

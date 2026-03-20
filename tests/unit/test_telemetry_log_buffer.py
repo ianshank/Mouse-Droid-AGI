@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
+
+import pytest
 
 import pytest
 
@@ -60,43 +63,40 @@ def test_get_recent_more_than_available() -> None:
 
 
 @pytest.mark.asyncio
-async def test_subscribe_receives_events() -> None:
-    """Subscribe creates an async queue that receives new log entries."""
+async def test_subscribe_receives_events():
     buf = LogRingBuffer(maxlen=10)
     sub = buf.subscribe()
     buf(None, "info", {"event": "test1"})
-    # Allow the call_soon_threadsafe callback to execute
-    await asyncio.sleep(0.01)
+    # Allow event loop to process call_soon_threadsafe delivery
+    await asyncio.sleep(0)
     assert not sub.empty()
     entry = sub.get_nowait()
     assert entry["event"] == "test1"
 
 
 @pytest.mark.asyncio
-async def test_unsubscribe_stops_receiving() -> None:
-    """After unsubscribe, the queue no longer receives events."""
+async def test_unsubscribe_stops_receiving():
     buf = LogRingBuffer(maxlen=10)
     sub = buf.subscribe()
     buf.unsubscribe(sub)
     buf(None, "info", {"event": "test2"})
-    await asyncio.sleep(0.01)
+    await asyncio.sleep(0)
     assert sub.empty()
 
 
 def test_unsubscribe_nonexistent_is_safe() -> None:
     buf = LogRingBuffer(maxlen=10)
-    fake_queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    fake_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
     buf.unsubscribe(fake_queue)  # should not raise
 
 
 @pytest.mark.asyncio
-async def test_multiple_subscribers() -> None:
-    """Multiple subscribers each receive all events."""
+async def test_multiple_subscribers():
     buf = LogRingBuffer(maxlen=10)
     sub1 = buf.subscribe()
     sub2 = buf.subscribe()
     buf(None, "info", {"event": "shared"})
-    await asyncio.sleep(0.01)
+    await asyncio.sleep(0)
     assert not sub1.empty()
     assert not sub2.empty()
     assert sub1.get_nowait()["event"] == "shared"
@@ -104,16 +104,15 @@ async def test_multiple_subscribers() -> None:
 
 
 @pytest.mark.asyncio
-async def test_subscriber_queue_overflow_drops() -> None:
-    """When subscriber queue is full, events are dropped silently."""
+async def test_subscriber_queue_overflow_drops():
     buf = LogRingBuffer(maxlen=200)
     sub = buf.subscribe()
     # Fill subscriber queue (maxsize from LOG_SUBSCRIBER_QUEUE_SIZE constant)
     for i in range(150):
         buf(None, "info", {"n": i})
-    await asyncio.sleep(0.05)
-    # Should not raise; drops silently when full
-    assert sub.qsize() <= 150  # bounded by queue maxsize
+        await asyncio.sleep(0)
+    # Should not raise, drops silently
+    assert sub.qsize() == 100
 
 
 def test_buffer_copies_events() -> None:

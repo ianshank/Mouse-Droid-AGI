@@ -48,3 +48,11 @@ def test_level_to_int_unknown_returns_20():
 def test_level_to_int_case_insensitive():
     assert _level_to_int("debug") == 10
     assert _level_to_int("Info") == 20
+
+
+def test_configure_logging_with_log_buffer():
+    """Cover line 43: processors.append(log_buffer) when log_buffer is not None."""
+    cfg = LoggingConfig(level="INFO", format="json")
+    # Use a callable as a dummy processor (structlog processors are callables)
+    dummy_buffer = lambda logger, method, event_dict: event_dict  # noqa: E731
+    configure_logging(cfg, log_buffer=dummy_buffer)

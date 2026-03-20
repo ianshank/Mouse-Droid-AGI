@@ -20,21 +20,31 @@ _log = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 _HF_HUB_AVAILABLE = False
+_hf_hub_download_impl: Callable[..., str] | None = None
 
 
 def _missing_hf_hub_download(**kwargs: object) -> str:
     """Stub used when ``huggingface_hub`` is unavailable."""
-    raise ImportError("huggingface_hub is not installed")
+    raise ImportError(
+        "huggingface_hub is not installed. "
+        "Install with: pip install 'mousedroid[llm]' or pip install huggingface-hub"
+    )
 
 
-_hf_hub_download: Callable[..., str] = _missing_hf_hub_download
 try:
-    from huggingface_hub import hf_hub_download as _hf_hub_download_impl
+    from huggingface_hub import hf_hub_download as _imported_hf_hub_download
 
-    _hf_hub_download = _hf_hub_download_impl
+    _hf_hub_download_impl = _imported_hf_hub_download
     _HF_HUB_AVAILABLE = True
 except ImportError:
     pass
+
+
+def _hf_hub_download(**kwargs: object) -> str:
+    """Typed wrapper that dispatches to HF Hub when available."""
+    if _hf_hub_download_impl is None:
+        return _missing_hf_hub_download(**kwargs)
+    return _hf_hub_download_impl(**kwargs)
 
 
 def download_weights_from_huggingface(
@@ -77,7 +87,7 @@ def download_weights_from_huggingface(
             "huggingface_hub_not_installed",
             repo_id=repo_id,
             filenames=filenames,
-            hint="Install via: pip install huggingface-hub",
+            hint="Install via: pip install 'mousedroid[llm]' or pip install huggingface-hub",
         )
         return False
 
