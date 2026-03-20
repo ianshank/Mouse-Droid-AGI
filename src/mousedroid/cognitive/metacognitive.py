@@ -12,7 +12,7 @@ import networkx as nx
 import numpy as np
 from numpy.typing import NDArray
 
-from mousedroid.constants import DEFAULT_TARGET_LOOP_MS
+from mousedroid.constants import DEFAULT_TARGET_LOOP_MS, EMA_DEFAULT_ALPHA
 from mousedroid.logging.setup import get_logger
 
 _log = get_logger(__name__)
@@ -30,7 +30,7 @@ _BATTERY_NORM_EPS: float = 1e-6
 _N_CAPABILITIES: int = 8
 """Number of tracked capability dimensions."""
 
-_EMA_DEFAULT_ALPHA: float = 0.1
+_EMA_DEFAULT_ALPHA: float = EMA_DEFAULT_ALPHA
 """Default EMA blending factor (higher = faster tracking)."""
 
 _TARGET_LOOP_MS: float = DEFAULT_TARGET_LOOP_MS

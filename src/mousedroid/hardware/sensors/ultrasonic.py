@@ -9,6 +9,7 @@ import asyncio
 import time
 from typing import TYPE_CHECKING, Any
 
+from mousedroid.constants import HC_SR04_TRIGGER_PULSE_S
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
@@ -76,7 +77,7 @@ class HcSr04:
             Distance in metres.
         """
         _GPIO.output(self._trigger_pin, _GPIO.HIGH)
-        time.sleep(0.00001)
+        time.sleep(HC_SR04_TRIGGER_PULSE_S)
         _GPIO.output(self._trigger_pin, _GPIO.LOW)
 
         start = time.monotonic()

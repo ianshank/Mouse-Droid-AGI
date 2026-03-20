@@ -16,9 +16,13 @@ import json
 import time
 from typing import TYPE_CHECKING, Any
 
-from mousedroid.constants import MDNS_SERVICE_TYPE
+from mousedroid.constants import MDNS_SERVICE_TYPE, TELEMETRY_QUEUE_TIMEOUT_S
 from mousedroid.logging.setup import get_logger
-from mousedroid.telemetry.network import get_default_ip, get_network_interfaces
+from mousedroid.telemetry.network import (
+    get_default_ip,
+    get_interface_ip,
+    get_network_interfaces,
+)
 from mousedroid.telemetry.protocol import TelemetryFrame
 
 if TYPE_CHECKING:
@@ -194,7 +198,7 @@ class TelemetryServer:
         async def cors_middleware(
             request: web.Request,
             handler: Any,
-        ) -> web.Response:
+        ) -> web.StreamResponse:
             """Add CORS headers to responses."""
             if request.method == "OPTIONS":
                 resp = web.Response()
@@ -225,7 +229,7 @@ class TelemetryServer:
         async def auth_middleware(
             request: web.Request,
             handler: Any,
-        ) -> web.Response:
+        ) -> web.StreamResponse:
             """Validate API key for both REST and WebSocket requests.
 
             For WebSocket upgrade requests, accept the API key from either
@@ -366,6 +370,11 @@ class TelemetryServer:
 
         interfaces = await get_network_interfaces()
         default_ip = get_default_ip()
+        preferred_iface = self._cfg.preferred_interface
+        if preferred_iface:
+            preferred_ip = await get_interface_ip(preferred_iface)
+            if preferred_ip:
+                default_ip = preferred_ip
 
         data = {
             "interfaces": [iface.to_dict() for iface in interfaces],
@@ -479,7 +488,9 @@ class TelemetryServer:
         try:
             while not ws.closed and self._running:
                 try:
-                    entry = await asyncio.wait_for(sub_queue.get(), timeout=1.0)
+                    entry = await asyncio.wait_for(
+                        sub_queue.get(), timeout=TELEMETRY_QUEUE_TIMEOUT_S,
+                    )
                     serialisable: dict[str, Any] = {}
                     for k, v in entry.items():
                         try:
@@ -505,7 +516,9 @@ class TelemetryServer:
         """Consume from telemetry queue and fan-out to all WS clients."""
         while self._running:
             try:
-                frame = await asyncio.wait_for(self._queue.get(), timeout=1.0)
+                frame = await asyncio.wait_for(
+                    self._queue.get(), timeout=TELEMETRY_QUEUE_TIMEOUT_S,
+                )
             except asyncio.TimeoutError:
                 continue
 
@@ -594,6 +607,11 @@ class TelemetryServer:
             from zeroconf import ServiceInfo, Zeroconf
 
             ip = get_default_ip()
+            preferred_iface = self._cfg.preferred_interface
+            if preferred_iface:
+                preferred_ip = await get_interface_ip(preferred_iface)
+                if preferred_ip:
+                    ip = preferred_ip
             import socket as sock
 
             packed_ip = sock.inet_aton(ip)
