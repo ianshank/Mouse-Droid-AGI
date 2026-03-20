@@ -4,7 +4,7 @@ debug: false
 
 safety:
   min_valid_sensors: 1
-  battery_critical_v: 0.1
+  battery_critical_v: 9.5
 
 jetson:
   tensorrt_enabled: true

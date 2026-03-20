@@ -242,7 +242,7 @@ class TelemetryServer:
             if key != api_key:
                 raise web.HTTPUnauthorized(text="Invalid or missing API key")
 
-            resp: web.Response = await handler(request)
+            resp: web.StreamResponse = await handler(request)
             return resp
 
         middlewares: list[Any] = [cors_middleware]

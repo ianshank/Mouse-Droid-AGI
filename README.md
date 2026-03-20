@@ -307,7 +307,7 @@ Offline GPU training runs in four sequential phases:
 # Run the full pipeline (phases 1 → 2.1 RSSM → 2.2 warmstart → 2.3 BDI → 2.4 constitutional-RL)
 python training/run_pipeline.py
 
-# Resume from a checkpoint (skips completed phases)
+# Resume RSSM training (Phase 1) from a checkpoint
 python training/run_pipeline.py --resume training/results/rssm_epoch_10.pt
 
 # Upload trained weights to HuggingFace Hub
@@ -322,7 +322,7 @@ cognitive:
   enabled: true
   huggingface_repo: ianshank/mousedroid-weights
   huggingface_subfolder: bdi   # downloads bdi/belief.npz → weights/bdi/belief.npz
-  weights_path: /opt/mousedroid/weights/bdi
+    weights_dir: /opt/mousedroid/weights/bdi
 ```
 
 ---

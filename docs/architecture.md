@@ -382,7 +382,7 @@ graph TD
 | Property | Value |
 |----------|-------|
 | Pipeline entry | `python training/run_pipeline.py [--resume path/to/checkpoint.pt]` |
-| Resume support | `--resume` / `resume_from` in config; skips completed phases |
+| Resume support | `--resume` / `resume_from` in config; forwards checkpoint to RSSM training only |
 | Weight storage | `ianshank/mousedroid-weights` HuggingFace repo; `bdi/`, `mcts/`, `rssm/`, `constitutional_rl/` subfolders |
 | Runtime download | `WeightsManager.download_weights_from_huggingface(subfolder='bdi', local_dir=weights_dir.parent)` |
 | Type safety | All `training/` modules pass `mypy --strict` (NDArray[Any] annotations) |
