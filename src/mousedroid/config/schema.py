@@ -129,6 +129,21 @@ class CuriosityConfig(BaseModel):
     )
     forward_model_hidden: int = Field(256, gt=0, description="Forward model hidden dim")
     inverse_model_hidden: int = Field(256, gt=0, description="Inverse model hidden dim")
+    novelty_decay_enabled: bool = Field(
+        False,
+        description="Enable novelty decay for familiar state regions",
+    )
+    novelty_decay_rate: float = Field(
+        0.01,
+        gt=0,
+        description="Exponential decay rate per state visitation",
+    )
+    novelty_min_scale: float = Field(
+        0.01,
+        gt=0,
+        lt=1.0,
+        description="Minimum novelty scale floor (prevents total suppression)",
+    )
 
 
 class ESP32Config(BaseModel):
