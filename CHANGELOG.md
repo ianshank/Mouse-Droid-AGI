@@ -10,6 +10,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Hardware integration validation** (`feature/hardware-integration-validation`)
+  - `tests/hardware/conftest.py` — hardware-test conftest with `autouse=True` `_real_hardware_env`
+    fixture that overrides the root `_mock_hardware_env` autouse, setting `MOUSEDROID_MOCK_HARDWARE=false`
+    for all hardware tests; also provides a session-scoped `jetson_settings` fixture loading from
+    `config/jetson_production.yaml` with fallback to `config/default.yaml`
+  - `tests/hardware/test_hc_sr04_edge_cases.py` — 7 HC-SR04 GPIO edge-case tests: cleanup on
+    exception, re-init after cleanup, stale-read detection, max-range clamping, read latency within
+    2x timeout, config-driven pins, speed-of-sound from config
+  - `tests/hardware/test_imx500_edge_cases.py` — 8 IMX500 lifecycle/resilience tests: double-start
+    idempotency, capture-after-stop raises, stop-without-start no-op, feature extraction
+    determinism, fallback feature dim, `feature_dim` property, repeated start/stop no-leak,
+    concurrent captures all return valid `float32` arrays
+  - `tests/hardware/test_esp32_edge_cases.py` — 7 ESP32 serial/resilience tests: reconnect after
+    disconnect, emergency stop bypasses open circuit breaker, concurrent velocity no corruption,
+    battery voltage stability, encoder field types, resilient driver stats tracking, velocity
+    within config limits
+  - `tests/hardware/test_e2e_edge_cases.py` — 7 E2E timing regression tests: P95 tick latency
+    <= 2x budget, jitter <= 50% budget, monotonic tick count, health after burst, start/stop/restart
+    cycle, e-stop latency during burst, sustained >= 50% of `control_hz` throughput
+
+### Fixed
+
+- `src/mousedroid/constants.py` — added `MILLIDEGREE_DIVISOR: float = 1000.0` and
+  `GPU_LOAD_PERCENTAGE_DIVISOR: float = 10.0`; these were imported by `health/monitor.py`
+  and `efficiency/profiler.py` but were not defined in the module, causing `ImportError`
+  at runtime and `assert 750.0 == 75.0` failures in `test_health_monitor.py`,
+  `test_coverage_gaps.py`, and `test_profiler.py`
+
 - **Phase A — Training pipeline resume + type cleanup** (`training/`)
   - `run_pipeline()` and `run_phase_1_rssm()` now accept `resume_from: Path | None`; CLI gains `--resume` flag to resume RSSM training from an existing checkpoint
   - `training/training_utils.py`, `train_bdi.py`, `collect_annotations.py`, `data_generator.py`, `warmstart_policy.py`, `train_constitutional_rl.py` — replaced bare `np.ndarray` annotations with `numpy.typing.NDArray[Any]`; added local `# type: ignore[attr-defined]` on factory-returned `object` access; `mypy training/ --ignore-missing-imports` now reports `Success: no issues found in 12 source files`
