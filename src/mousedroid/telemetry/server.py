@@ -16,7 +16,7 @@ import json
 import time
 from typing import TYPE_CHECKING, Any
 
-from mousedroid.constants import MDNS_SERVICE_TYPE, TELEMETRY_QUEUE_TIMEOUT_S
+from mousedroid.constants import MAX_LOG_ENTRIES, MDNS_SERVICE_TYPE, TELEMETRY_QUEUE_TIMEOUT_S
 from mousedroid.logging.setup import get_logger
 from mousedroid.telemetry.network import (
     get_default_ip,
@@ -35,10 +35,6 @@ if TYPE_CHECKING:
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol
 
 _log = get_logger(__name__)
-
-# Upper bound for the number of log entries that can be requested in a single call.
-# This avoids surprising behavior with very large or negative values.
-MAX_LOG_ENTRIES: int = 1000
 
 _STARTUP_TIME: float = time.monotonic()
 
@@ -246,7 +242,8 @@ class TelemetryServer:
             if key != api_key:
                 raise web.HTTPUnauthorized(text="Invalid or missing API key")
 
-            return await handler(request)  # type: ignore[no-any-return]
+            resp: web.StreamResponse = await handler(request)
+            return resp
 
         middlewares: list[Any] = [cors_middleware]
         if api_key is not None:

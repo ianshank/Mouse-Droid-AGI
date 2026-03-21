@@ -150,6 +150,7 @@ circuit_breaker:
 cognitive:
   weights_dir: "weights/bdi/"
   huggingface_repo: "ianshank/mousedroid-weights"
+  huggingface_subfolder: "bdi"
   auto_download: true
   fallback_to_mcts: true
   download_max_retries: 3

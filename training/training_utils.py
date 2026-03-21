@@ -10,13 +10,14 @@ from collections.abc import Iterator
 from typing import Any
 
 import numpy as np
+from numpy.typing import NDArray
 
 
 def iter_batches(
     n: int,
     batch_size: int,
     rng: np.random.Generator,
-) -> Iterator[np.ndarray]:
+) -> Iterator[NDArray[np.intp]]:
     """Yield shuffled index arrays for one epoch of mini-batch training.
 
     Generates a random permutation of ``range(n)`` and slices it into
@@ -43,8 +44,8 @@ def iter_batches(
 
 
 def sgd_step(
-    weights: dict[str, np.ndarray],
-    grads: dict[str, np.ndarray],
+    weights: dict[str, NDArray[Any]],
+    grads: dict[str, NDArray[Any]],
     lr: float,
 ) -> None:
     """Apply one vanilla SGD update to a weight dictionary in-place.

@@ -10,13 +10,13 @@ import pytest
 from mousedroid.telemetry.log_buffer import LogRingBuffer
 
 
-def test_log_buffer_initial_state():
+def test_log_buffer_initial_state() -> None:
     buf = LogRingBuffer(maxlen=100)
     assert buf.size == 0
     assert buf.get_recent() == []
 
 
-def test_log_buffer_captures_events():
+def test_log_buffer_captures_events() -> None:
     buf = LogRingBuffer(maxlen=10)
     event = {"event": "test", "level": "info"}
     result = buf(None, "info", event)
@@ -24,7 +24,7 @@ def test_log_buffer_captures_events():
     assert result is event  # passthrough
 
 
-def test_log_buffer_passthrough_semantics():
+def test_log_buffer_passthrough_semantics() -> None:
     """Processor must return event_dict unchanged."""
     buf = LogRingBuffer(maxlen=10)
     event = {"event": "hello", "x": 42}
@@ -34,7 +34,7 @@ def test_log_buffer_passthrough_semantics():
     assert result["x"] == 42
 
 
-def test_log_buffer_ring_behavior():
+def test_log_buffer_ring_behavior() -> None:
     buf = LogRingBuffer(maxlen=3)
     for i in range(5):
         buf(None, "info", {"n": i})
@@ -43,7 +43,7 @@ def test_log_buffer_ring_behavior():
     assert [e["n"] for e in recent] == [2, 3, 4]
 
 
-def test_get_recent_with_n():
+def test_get_recent_with_n() -> None:
     buf = LogRingBuffer(maxlen=10)
     for i in range(10):
         buf(None, "info", {"n": i})
@@ -52,7 +52,7 @@ def test_get_recent_with_n():
     assert [e["n"] for e in recent] == [7, 8, 9]
 
 
-def test_get_recent_more_than_available():
+def test_get_recent_more_than_available() -> None:
     buf = LogRingBuffer(maxlen=10)
     for i in range(3):
         buf(None, "info", {"n": i})
@@ -82,7 +82,7 @@ async def test_unsubscribe_stops_receiving():
     assert sub.empty()
 
 
-def test_unsubscribe_nonexistent_is_safe():
+def test_unsubscribe_nonexistent_is_safe() -> None:
     buf = LogRingBuffer(maxlen=10)
     fake_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
     buf.unsubscribe(fake_queue)  # should not raise
@@ -105,7 +105,7 @@ async def test_multiple_subscribers():
 async def test_subscriber_queue_overflow_drops():
     buf = LogRingBuffer(maxlen=200)
     sub = buf.subscribe()
-    # Fill subscriber queue (maxsize=100)
+    # Fill subscriber queue (maxsize from LOG_SUBSCRIBER_QUEUE_SIZE constant)
     for i in range(150):
         buf(None, "info", {"n": i})
         await asyncio.sleep(0)
@@ -113,7 +113,7 @@ async def test_subscriber_queue_overflow_drops():
     assert sub.qsize() == 100
 
 
-def test_buffer_copies_events():
+def test_buffer_copies_events() -> None:
     """Ensure buffered events are copies, not references."""
     buf = LogRingBuffer(maxlen=10)
     event = {"event": "original", "mutable": [1, 2]}
@@ -121,3 +121,21 @@ def test_buffer_copies_events():
     recent = buf.get_recent()
     # The buffered copy should be a different object
     assert recent[0] is not event
+
+
+@pytest.mark.asyncio
+async def test_deliver_to_queue_suppresses_queue_full() -> None:
+    """_deliver_to_queue silently drops when queue is full."""
+    buf = LogRingBuffer(maxlen=10)
+    small_queue: asyncio.Queue[dict[str, object]] = asyncio.Queue(maxsize=1)
+    await small_queue.put({"filler": True})
+    # Queue is full — delivery should not raise
+    buf._deliver_to_queue(small_queue, {"event": "dropped"})
+    assert small_queue.qsize() == 1
+
+
+def test_get_recent_zero() -> None:
+    """Requesting zero entries returns empty list."""
+    buf = LogRingBuffer(maxlen=10)
+    buf(None, "info", {"n": 1})
+    assert buf.get_recent(0) == []

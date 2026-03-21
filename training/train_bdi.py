@@ -7,25 +7,35 @@ using numpy-only SGD, matching the existing numpy MLP design in bdi_model.py.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import structlog
+from numpy.typing import NDArray
 
+from mousedroid.constants import (
+    DEFAULT_AFFECT_DIM,
+    DEFAULT_BELIEF_DIM,
+    DEFAULT_DESIRE_DIM,
+    DEFAULT_GRADIENT_SCALE,
+    DEFAULT_INTENTION_CLASSES,
+    DEFAULT_VISION_DIM,
+    WEIGHT_INIT_SCALE,
+)
 from mousedroid.utils.numpy_ops import relu as _relu
 from mousedroid.utils.numpy_ops import softmax as _softmax
-from training.collect_annotations import INTENTION_LABELS
 
 _log = structlog.get_logger(__name__)
 
 # Dimensions matching bdi_model.py / ModelConfig defaults
-_OBS_DIM = 256
-_BELIEF_DIM = 128
-_DESIRE_DIM = 64
-_INTENTION_CLASSES = len(INTENTION_LABELS)
-_AFFECT_DIM = 2
+_OBS_DIM = DEFAULT_VISION_DIM
+_BELIEF_DIM = DEFAULT_BELIEF_DIM
+_DESIRE_DIM = DEFAULT_DESIRE_DIM
+_INTENTION_CLASSES = DEFAULT_INTENTION_CLASSES
+_AFFECT_DIM = DEFAULT_AFFECT_DIM
 
 
-def _cross_entropy(logits: np.ndarray, labels: np.ndarray) -> float:
+def _cross_entropy(logits: NDArray[Any], labels: NDArray[Any]) -> float:
     """Batch cross-entropy loss."""
     probs = _softmax(logits)
     n = len(labels)
@@ -34,11 +44,12 @@ def _cross_entropy(logits: np.ndarray, labels: np.ndarray) -> float:
 
 
 def train_belief_encoder(
-    observations: np.ndarray,
+    observations: NDArray[Any],
     lr: float = 3e-4,
     epochs: int = 100,
     batch_size: int = 32,
-) -> dict[str, np.ndarray]:
+    gradient_scale: float = DEFAULT_GRADIENT_SCALE,
+) -> dict[str, NDArray[Any]]:
     """Train BeliefEncoder as an autoencoder (256 → 128 → 256).
 
     Returns:
@@ -49,13 +60,13 @@ def train_belief_encoder(
     n = len(observations)
 
     # Encoder weights (256 → 128)
-    w1 = rng.standard_normal((_OBS_DIM, _BELIEF_DIM)).astype(np.float32) * 0.01
+    w1 = rng.standard_normal((_OBS_DIM, _BELIEF_DIM)).astype(np.float32) * WEIGHT_INIT_SCALE
     b1 = np.zeros(_BELIEF_DIM, dtype=np.float32)
     # Second encoder layer (128 → 128)
-    w2 = rng.standard_normal((_BELIEF_DIM, _BELIEF_DIM)).astype(np.float32) * 0.01
+    w2 = rng.standard_normal((_BELIEF_DIM, _BELIEF_DIM)).astype(np.float32) * WEIGHT_INIT_SCALE
     b2 = np.zeros(_BELIEF_DIM, dtype=np.float32)
     # Decoder weights (128 → 256)
-    w_dec = rng.standard_normal((_BELIEF_DIM, _OBS_DIM)).astype(np.float32) * 0.01
+    w_dec = rng.standard_normal((_BELIEF_DIM, _OBS_DIM)).astype(np.float32) * WEIGHT_INIT_SCALE
     b_dec = np.zeros(_OBS_DIM, dtype=np.float32)
 
     for epoch in range(1, epochs + 1):
@@ -75,7 +86,7 @@ def train_belief_encoder(
             total_loss += loss
 
             # Backward (manual gradients for simple 3-layer autoencoder)
-            d_recon = 2.0 * (recon - x) / x.shape[0]
+            d_recon = gradient_scale * (recon - x) / x.shape[0]
             d_w_dec = h2.T @ d_recon / batch_size
             d_b_dec = d_recon.mean(axis=0)
 
@@ -105,12 +116,13 @@ def train_belief_encoder(
 
 
 def train_desire_encoder(
-    observations: np.ndarray,
-    belief_weights: dict[str, np.ndarray],
+    observations: NDArray[Any],
+    belief_weights: dict[str, NDArray[Any]],
     lr: float = 3e-4,
     epochs: int = 100,
     batch_size: int = 32,
-) -> dict[str, np.ndarray]:
+    gradient_scale: float = DEFAULT_GRADIENT_SCALE,
+) -> dict[str, NDArray[Any]]:
     """Train DesireEncoder to map belief → desire (reward-relevant features).
 
     Returns:
@@ -124,10 +136,10 @@ def train_desire_encoder(
     beliefs = _relu(h1 @ belief_weights["w2"] + belief_weights["b2"])
 
     # Desire encoder weights (128 → 64)
-    w1 = rng.standard_normal((_BELIEF_DIM, _DESIRE_DIM)).astype(np.float32) * 0.01
+    w1 = rng.standard_normal((_BELIEF_DIM, _DESIRE_DIM)).astype(np.float32) * WEIGHT_INIT_SCALE
     b1 = np.zeros(_DESIRE_DIM, dtype=np.float32)
     # Decoder for training (64 → 128)
-    w_dec = rng.standard_normal((_DESIRE_DIM, _BELIEF_DIM)).astype(np.float32) * 0.01
+    w_dec = rng.standard_normal((_DESIRE_DIM, _BELIEF_DIM)).astype(np.float32) * WEIGHT_INIT_SCALE
     b_dec = np.zeros(_BELIEF_DIM, dtype=np.float32)
 
     for epoch in range(1, epochs + 1):
@@ -146,7 +158,7 @@ def train_desire_encoder(
             total_loss += loss
 
             # Backward
-            d_recon = 2.0 * (recon - x) / x.shape[0]
+            d_recon = gradient_scale * (recon - x) / x.shape[0]
             d_w_dec = desire.T @ d_recon / batch_size
             d_b_dec = d_recon.mean(axis=0)
 
@@ -168,14 +180,14 @@ def train_desire_encoder(
 
 
 def train_intention_predictor(
-    observations: np.ndarray,
-    intentions: np.ndarray,
-    belief_weights: dict[str, np.ndarray],
-    desire_weights: dict[str, np.ndarray],
+    observations: NDArray[Any],
+    intentions: NDArray[Any],
+    belief_weights: dict[str, NDArray[Any]],
+    desire_weights: dict[str, NDArray[Any]],
     lr: float = 3e-4,
     epochs: int = 100,
     batch_size: int = 32,
-) -> dict[str, np.ndarray]:
+) -> dict[str, NDArray[Any]]:
     """Train IntentionPredictor with cross-entropy on labelled intentions.
 
     Returns:
@@ -189,8 +201,11 @@ def train_intention_predictor(
     beliefs = _relu(h1 @ belief_weights["w2"] + belief_weights["b2"])
     desires = _relu(beliefs @ desire_weights["w1"] + desire_weights["b1"])
 
-    # Intention weights (64 → 8)
-    w1 = rng.standard_normal((_DESIRE_DIM, _INTENTION_CLASSES)).astype(np.float32) * 0.01
+    # Intention weights (64 → 10)
+    w1 = (
+        rng.standard_normal((_DESIRE_DIM, _INTENTION_CLASSES)).astype(np.float32)
+        * WEIGHT_INIT_SCALE
+    )
     b1 = np.zeros(_INTENTION_CLASSES, dtype=np.float32)
 
     for epoch in range(1, epochs + 1):
@@ -228,14 +243,15 @@ def train_intention_predictor(
 
 
 def train_affect_estimator(
-    observations: np.ndarray,
-    belief_weights: dict[str, np.ndarray],
-    desire_weights: dict[str, np.ndarray],
-    intention_weights: dict[str, np.ndarray],
+    observations: NDArray[Any],
+    belief_weights: dict[str, NDArray[Any]],
+    desire_weights: dict[str, NDArray[Any]],
+    intention_weights: dict[str, NDArray[Any]],
     lr: float = 3e-4,
     epochs: int = 100,
     batch_size: int = 32,
-) -> dict[str, np.ndarray]:
+    gradient_scale: float = DEFAULT_GRADIENT_SCALE,
+) -> dict[str, NDArray[Any]]:
     """Train AffectEstimator on synthetic valence/arousal targets.
 
     Target valence derived from desire norm; arousal from intention entropy.
@@ -268,7 +284,7 @@ def train_affect_estimator(
     input_dim = _DESIRE_DIM + _INTENTION_CLASSES
 
     # Affect weights (72 → 2)
-    w1 = rng.standard_normal((input_dim, _AFFECT_DIM)).astype(np.float32) * 0.01
+    w1 = rng.standard_normal((input_dim, _AFFECT_DIM)).astype(np.float32) * WEIGHT_INIT_SCALE
     b1 = np.zeros(_AFFECT_DIM, dtype=np.float32)
 
     for epoch in range(1, epochs + 1):
@@ -288,7 +304,7 @@ def train_affect_estimator(
             total_loss += loss
 
             # Backward through tanh
-            d_pred = 2.0 * (pred - y) / y.shape[0]
+            d_pred = gradient_scale * (pred - y) / y.shape[0]
             d_raw = d_pred * (1.0 - pred**2)
 
             d_w1 = x.T @ d_raw / batch_size
@@ -310,6 +326,7 @@ def train_bdi(
     lr: float = 3e-4,
     epochs: int = 100,
     batch_size: int = 32,
+    gradient_scale: float = DEFAULT_GRADIENT_SCALE,
 ) -> Path:
     """Full Phase 2.3 BDI training pipeline.
 
@@ -319,6 +336,7 @@ def train_bdi(
         lr: Learning rate for all sub-networks.
         epochs: Training epochs per sub-network.
         batch_size: Batch size.
+        gradient_scale: Multiplier for manual numpy MSE gradients.
 
     Returns:
         Path to output directory with saved weights.
@@ -333,12 +351,19 @@ def train_bdi(
     _log.info("bdi_training_start", n_samples=len(observations))
 
     # Stage 1: BeliefEncoder
-    belief_weights = train_belief_encoder(observations, lr, epochs, batch_size)
+    belief_weights = train_belief_encoder(observations, lr, epochs, batch_size, gradient_scale)
     np.savez(output_dir / "belief.npz", **belief_weights)  # type: ignore[arg-type]
     _log.info("belief_encoder_saved")
 
     # Stage 2: DesireEncoder
-    desire_weights = train_desire_encoder(observations, belief_weights, lr, epochs, batch_size)
+    desire_weights = train_desire_encoder(
+        observations,
+        belief_weights,
+        lr,
+        epochs,
+        batch_size,
+        gradient_scale,
+    )
     np.savez(output_dir / "desire.npz", **desire_weights)  # type: ignore[arg-type]
     _log.info("desire_encoder_saved")
 
@@ -364,6 +389,7 @@ def train_bdi(
         lr,
         epochs,
         batch_size,
+        gradient_scale,
     )
     np.savez(output_dir / "affect.npz", **affect_weights)  # type: ignore[arg-type]
     _log.info("affect_estimator_saved")

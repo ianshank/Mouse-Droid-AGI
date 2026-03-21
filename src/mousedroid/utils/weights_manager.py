@@ -15,11 +15,37 @@ from mousedroid.logging.setup import get_logger
 
 _log = get_logger(__name__)
 
+_PROTECTED_DOWNLOAD_ROOTS: tuple[Path, ...] = (
+    Path("/etc"),
+    Path("/proc"),
+    Path("/sys"),
+    Path("/dev"),
+    Path("/bin"),
+    Path("/sbin"),
+    Path("/boot"),
+    Path("/root"),
+    Path("C:/Windows"),
+    Path("C:/Program Files"),
+    Path("C:/Program Files (x86)"),
+)
+
 # ---------------------------------------------------------------------------
 # HuggingFace Integration
 # ---------------------------------------------------------------------------
 
 _HF_HUB_AVAILABLE = False
+
+
+def _validate_download_directory(path: Path) -> None:
+    """Reject directories that resolve inside protected system locations."""
+    for protected_root in _PROTECTED_DOWNLOAD_ROOTS:
+        if path.is_relative_to(protected_root):
+            raise ValueError(
+                "refusing to write HuggingFace downloads under protected path "
+                f"'{path}'"
+            )
+
+
 _hf_hub_download_impl: Callable[..., str] | None = None
 
 
@@ -52,6 +78,8 @@ def download_weights_from_huggingface(
     filenames: list[str],
     cache_dir: Path | str,
     *,
+    subfolder: str = "",
+    local_dir: Path | str | None = None,
     max_retries: int = 3,
     backoff_base: float = 2.0,
 ) -> bool:
@@ -61,10 +89,19 @@ def download_weights_from_huggingface(
     from a HuggingFace repository. Uses exponential backoff for retries.
     Gracefully degrades if hf_hub not installed.
 
+    When *subfolder* and *local_dir* are provided the files are fetched from
+    ``<subfolder>/<filename>`` inside the repo and written directly into
+    ``<local_dir>/<subfolder>/`` so that callers find them at
+    ``<local_dir>/<subfolder>/<filename>`` (i.e. if local_dir is the parent of
+    the intended weights_dir the files land exactly where NeuralBDI expects).
+
     Args:
         repo_id: HuggingFace repository ID (e.g., "ianshank/mousedroid-weights").
         filenames: List of filenames to download from the repo.
-        cache_dir: Local directory to cache downloaded files.
+        cache_dir: Local directory to cache downloaded files (used when local_dir is None).
+        subfolder: Subfolder within the repo where files live (e.g. ``"bdi"``).
+        local_dir: If given, files are written here in flat repo structure instead
+            of the HF cache layout.
         max_retries: Maximum retry attempts per file.
         backoff_base: Exponential backoff base (wait = backoff_base ^ attempt).
 
@@ -80,8 +117,26 @@ def download_weights_from_huggingface(
         )
         return False
 
-    cache_dir = Path(cache_dir)
+    cache_dir = Path(cache_dir).resolve()
+    _validate_download_directory(cache_dir)
+    if local_dir is not None:
+        local_dir_path = Path(local_dir).resolve()
+        expected_target_dir = (
+            (local_dir_path / subfolder).resolve()
+            if subfolder
+            else local_dir_path
+        )
+        if expected_target_dir != cache_dir:
+            raise ValueError(
+                "local_dir and subfolder must resolve to cache_dir; "
+                f"got {expected_target_dir} != {cache_dir}"
+            )
+        _validate_download_directory(local_dir_path)
+        local_dir = local_dir_path  # use resolved path from here on
+
     cache_dir.mkdir(parents=True, exist_ok=True)
+    if local_dir is not None:
+        Path(local_dir).mkdir(parents=True, exist_ok=True)
 
     all_success = True
     for filename in filenames:
@@ -89,6 +144,8 @@ def download_weights_from_huggingface(
             repo_id,
             filename,
             cache_dir,
+            subfolder=subfolder,
+            local_dir=local_dir,
             max_retries=max_retries,
             backoff_base=backoff_base,
         )
@@ -116,6 +173,8 @@ def _download_file_with_retry(
     filename: str,
     cache_dir: Path,
     *,
+    subfolder: str = "",
+    local_dir: Path | str | None = None,
     max_retries: int = 3,
     backoff_base: float = 2.0,
 ) -> bool:
@@ -124,21 +183,31 @@ def _download_file_with_retry(
     Args:
         repo_id: HuggingFace repository ID.
         filename: Single filename to download.
-        cache_dir: Local directory to cache the file.
+        cache_dir: Local directory to cache the file (used when local_dir is None).
+        subfolder: Subfolder within the repo where the file lives.
+        local_dir: If given, replicate the repo file structure here instead of
+            the HF cache layout.
         max_retries: Maximum retry attempts.
         backoff_base: Exponential backoff base.
 
     Returns:
         True if download succeeded, False otherwise.
     """
+    hf_kwargs: dict[str, object] = {
+        "repo_id": repo_id,
+        "filename": filename,
+        "repo_type": "model",
+    }
+    if subfolder:
+        hf_kwargs["subfolder"] = subfolder
+    if local_dir is not None:
+        hf_kwargs["local_dir"] = str(local_dir)
+    else:
+        hf_kwargs["cache_dir"] = str(cache_dir)
+
     for attempt in range(max_retries):
         try:
-            local_path = _hf_hub_download(
-                repo_id=repo_id,
-                filename=filename,
-                cache_dir=str(cache_dir),
-                repo_type="model",
-            )
+            local_path = _hf_hub_download(**hf_kwargs)
             _log.debug(
                 "downloaded_weight_file",
                 repo_id=repo_id,

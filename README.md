@@ -188,8 +188,10 @@ All settings are defined in `config/default.yaml` and validated by Pydantic v2. 
 | File | Purpose |
 |------|---------|
 | `config/default.yaml` | All defaults (mock hardware, safe thresholds) |
-| `config/jetson_production.yaml` | Jetson Orin Nano production overrides |
+| `config/jetson_production.yaml` | Jetson Orin Nano production overrides (cognitive core, HF weights, telemetry, Prometheus metrics, safety) |
 | `config/mock_hardware.yaml` | Mock hardware for CI/development |
+| `config/local_training.yaml` | Local GPU training with GPU-available check |
+| `config/jetson_sdcard_64gb.yaml` | Jetson on SD card (64 GB) resource limits |
 
 No values are hardcoded — every threshold, dimension, pin, and rate is configurable.
 
@@ -224,12 +226,14 @@ src/mousedroid/
 ├── tools/            # Tool registry for agentic tool dispatch
 └── world_model/      # RSSM encoder, MCTS planner
 
-training/             # Offline training pipelines
+training/             # Offline GPU training pipelines
+├── run_pipeline.py           # Phase 1→2→3→4 orchestrator; --resume for checkpoint continuation
 ├── train_rssm.py             # Phase 2.1: RSSM pretraining on synthetic data
+├── warmstart_policy.py       # Phase 2.2: MCTS policy warm-start + UCB tuning
+├── collect_annotations.py    # Phase 2.3a: BDI intention annotation collection
+├── train_bdi.py              # Phase 2.3b: BDI sub-network training on annotations
 ├── train_constitutional_rl.py # Phase 2.4: PPO + Constitutional constraints
-├── train_bdi.py              # Phase 2.3b: BDI sub-network training
-├── warmstart_policy.py        # Phase 2.2: MCTS policy warm-start + UCB tuning
-├── collect_annotations.py    # Phase 2.3a: Intention annotation collection
+├── upload_weights.py         # Push all weights to HuggingFace Hub (ianshank/mousedroid-weights)
 ├── data_generator.py         # Synthetic observation sequence generator
 └── rssm_dataset.py           # PyTorch Dataset for RSSM sequences
 
@@ -292,6 +296,34 @@ The `safety/three_laws.py` module implements Asimov's Three Laws of Robotics as 
 - **Law 3** — Self-preservation unless conflicting with Laws 1 or 2
 
 Constitutional RL integrates these constraints directly into the PPO training loop via `ConstitutionalChecker`.
+
+---
+
+## Training Pipeline
+
+Offline GPU training runs in four sequential phases:
+
+```bash
+# Run the full pipeline (phases 1 → 2.1 RSSM → 2.2 warmstart → 2.3 BDI → 2.4 constitutional-RL)
+python training/run_pipeline.py
+
+# Resume RSSM training (Phase 1) from a checkpoint
+python training/run_pipeline.py --resume training/results/rssm_epoch_10.pt
+
+# Upload trained weights to HuggingFace Hub
+python training/upload_weights.py --repo ianshank/mousedroid-weights
+```
+
+Weights are automatically pulled at startup on the Jetson when `cognitive.enabled = true`:
+
+```yaml
+# config/jetson_production.yaml
+cognitive:
+  enabled: true
+  huggingface_repo: ianshank/mousedroid-weights
+  huggingface_subfolder: bdi   # downloads bdi/belief.npz → weights/bdi/belief.npz
+    weights_dir: /opt/mousedroid/weights/bdi
+```
 
 ---
 

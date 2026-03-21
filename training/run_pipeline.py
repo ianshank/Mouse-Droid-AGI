@@ -20,6 +20,17 @@ from training.gpu_utils import log_gpu_info, resolve_device
 _log = structlog.get_logger(__name__)
 
 
+def _require_existing_path(path: Path, *, description: str, phase: int) -> Path:
+    """Validate prerequisite artifacts for partial pipeline runs."""
+    if path.exists():
+        return path
+    msg = (
+        f"Phase {phase} requires {description} at '{path}'. "
+        "Run the prerequisite phase first or provide the artifact in the configured location."
+    )
+    raise FileNotFoundError(msg)
+
+
 def run_phase_0_data_gen(cfg: Settings) -> Path:
     """Phase 0: Generate synthetic training data.
 
@@ -53,8 +64,13 @@ def run_phase_0b_annotations(cfg: Settings) -> Path:
     return annotations_path
 
 
-def run_phase_1_rssm(cfg: Settings, data_dir: Path) -> Path:
+def run_phase_1_rssm(cfg: Settings, data_dir: Path, *, resume_from: Path | None = None) -> Path:
     """Phase 1 (2.1): RSSM pretraining with GPU + AMP.
+
+    Args:
+        cfg: Root settings.
+        data_dir: Data directory containing sequences.pt.
+        resume_from: Optional checkpoint path to resume from.
 
     Returns:
         Path to final RSSM checkpoint.
@@ -62,8 +78,12 @@ def run_phase_1_rssm(cfg: Settings, data_dir: Path) -> Path:
     _log.info("phase_1_start", phase="rssm_pretraining")
     from training.train_rssm import train_rssm
 
-    data_path = data_dir / "sequences.pt"
-    checkpoint = train_rssm(cfg, data_path)
+    data_path = _require_existing_path(
+        data_dir / "sequences.pt",
+        description="RSSM training data file 'sequences.pt'",
+        phase=1,
+    )
+    checkpoint = train_rssm(cfg, data_path, resume_from=resume_from)
     _log.info("phase_1_complete", checkpoint=str(checkpoint))
     return checkpoint
 
@@ -90,7 +110,14 @@ def run_phase_3_bdi(cfg: Settings, annotations_path: Path) -> Path:
     _log.info("phase_3_start", phase="bdi_training")
     from training.train_bdi import train_bdi
 
-    output_dir = train_bdi(annotations_path)
+    output_dir = train_bdi(
+        annotations_path,
+        output_dir=Path(cfg.training.weights_dir) / "bdi",
+        lr=cfg.training.learning_rate,
+        epochs=cfg.training.epochs,
+        batch_size=cfg.training.batch_size,
+        gradient_scale=cfg.training.gradient_scale,
+    )
     _log.info("phase_3_complete", output_dir=str(output_dir))
     return output_dir
 
@@ -133,6 +160,7 @@ def run_pipeline(
     *,
     phases: set[int] | None = None,
     upload: bool = False,
+    resume_from: str | None = None,
 ) -> None:
     """Run the full pre-training pipeline.
 
@@ -141,6 +169,7 @@ def run_pipeline(
         phases: Optional set of phase numbers to run (0,1,2,3,4).
             None runs all phases.
         upload: Whether to upload weights to HuggingFace after training.
+        resume_from: Optional checkpoint path to resume RSSM training from.
     """
     all_phases = phases or {0, 1, 2, 3, 4}
     t0 = time.monotonic()
@@ -167,18 +196,50 @@ def run_pipeline(
 
     # Phase 1: RSSM
     if 1 in all_phases:
-        rssm_checkpoint = run_phase_1_rssm(cfg, data_dir)
+        if 0 not in all_phases:
+            data_dir = _require_existing_path(
+                data_dir,
+                description="training data directory",
+                phase=1,
+            )
+        effective_resume_from = resume_from or cfg.training.resume_from
+        resume_path = Path(effective_resume_from) if effective_resume_from else None
+        rssm_checkpoint = run_phase_1_rssm(cfg, data_dir, resume_from=resume_path)
 
     # Phase 2: Warm-start
     if 2 in all_phases:
+        if 0 not in all_phases:
+            data_dir = _require_existing_path(
+                data_dir,
+                description="training data directory",
+                phase=2,
+            )
+        if 1 not in all_phases:
+            rssm_checkpoint = _require_existing_path(
+                rssm_checkpoint,
+                description="RSSM checkpoint",
+                phase=2,
+            )
         run_phase_2_warmstart(cfg, rssm_checkpoint, data_dir)
 
     # Phase 3: BDI
     if 3 in all_phases:
+        if 0 not in all_phases:
+            annotations_path = _require_existing_path(
+                annotations_path,
+                description="annotation dataset",
+                phase=3,
+            )
         run_phase_3_bdi(cfg, annotations_path)
 
     # Phase 4: Constitutional RL
     if 4 in all_phases:
+        if 1 not in all_phases:
+            rssm_checkpoint = _require_existing_path(
+                rssm_checkpoint,
+                description="RSSM checkpoint",
+                phase=4,
+            )
         pi_path = policy_init_path if policy_init_path.exists() else None
         run_phase_4_constitutional_rl(cfg, rssm_checkpoint, pi_path)
 
@@ -209,6 +270,12 @@ def main() -> None:
         action="store_true",
         help="Upload weights to HuggingFace after training",
     )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Path to RSSM checkpoint to resume Phase 1 training from",
+    )
     args = parser.parse_args()
 
     import yaml
@@ -218,8 +285,9 @@ def main() -> None:
     cfg = Settings(**{**overrides, "mock_hardware": True})
 
     valid_phases = {0, 1, 2, 3, 4}
+    phases: set[int] | None = None
     if args.phases:
-        phases: set[int] = set()
+        _parsed: set[int] = set()
         for raw_token in args.phases.split(","):
             token = raw_token.strip()
             if not token:
@@ -234,11 +302,10 @@ def main() -> None:
                 parser.error(
                     f"Unknown phase '{phase_num}'. Supported phases are {sorted(valid_phases)}."
                 )
-            phases.add(phase_num)
-    else:
-        phases = None
+            _parsed.add(phase_num)
+        phases = _parsed
 
-    run_pipeline(cfg, phases=phases, upload=args.upload)
+    run_pipeline(cfg, phases=phases, upload=args.upload, resume_from=args.resume)
 
 
 if __name__ == "__main__":

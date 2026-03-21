@@ -58,12 +58,13 @@ class SyntheticSequenceGenerator:
             List of transition dicts with keys: obs, action, reward.
         """
         orchestrator = build_orchestrator(self._cfg)
-        await orchestrator.start()
+        await orchestrator.start()  # type: ignore[attr-defined]
 
         transitions: list[dict[str, Any]] = []
 
         for _ in range(max_steps):
-            obs = await orchestrator._sense()
+            # Use the sensor manager to read observations
+            obs = await orchestrator._sensor_manager.read_all()  # type: ignore[attr-defined]
             obs_tensors = _bundle_to_tensors(obs)
 
             # Random action for data collection
@@ -79,7 +80,7 @@ class SyntheticSequenceGenerator:
                 }
             )
 
-        await orchestrator.stop()
+        await orchestrator.stop()  # type: ignore[attr-defined]
         return transitions
 
     def generate_sequences(

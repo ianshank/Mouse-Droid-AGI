@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
+from mousedroid.constants import GPU_LOAD_PERCENTAGE_DIVISOR, MILLIDEGREE_DIVISOR
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
@@ -12,8 +13,8 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
-_MILLIDEGREE_DIVISOR: float = 1000.0
-_LOAD_DIVISOR: float = 10.0
+_MILLIDEGREE_DIVISOR: float = MILLIDEGREE_DIVISOR
+_LOAD_DIVISOR: float = GPU_LOAD_PERCENTAGE_DIVISOR
 
 
 class PowerProfiler:

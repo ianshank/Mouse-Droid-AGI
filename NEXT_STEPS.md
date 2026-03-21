@@ -2,6 +2,17 @@
 
 This document tracks planned enhancements, organised by priority and category.
 
+## Recently Completed (Phase A checkpoint — pr-18)
+
+- **Wired `resume_from`** through `training/run_pipeline.py` and CLI (`--resume`) to allow RSSM checkpoint continuation
+- **Training-surface mypy clean**: replaced `np.ndarray` with `NDArray[Any]` across all `training/` modules; `mypy training/` passes clean
+- **Extended test coverage**: new tests for `run_warmstart()` latent stats, artifact creation, UCB config propagation, and partial-pipeline combinations (resume forwarding, phase-2/3/4 with missing upstream)
+- **Jetson production config activated**: `config/jetson_production.yaml` now enables cognitive core, HF auto-download, telemetry, Prometheus metrics, and Jetson safety overrides
+- **Weights published**: BDI, MCTS warmstart, constitutional-RL, and RSSM weights uploaded to `ianshank/mousedroid-weights` (28 files)
+- **HF subfolder download fixed**: `CognitiveConfig.huggingface_subfolder` field added; download path now resolves `bdi/belief.npz` correctly; local production smoke passes end-to-end (`health_check: ok`)
+
+---
+
 ## Recently Completed (PR-14)
 
 - Added Prometheus-compatible `/metrics` endpoint to telemetry server with config-driven metric namespace/toggles

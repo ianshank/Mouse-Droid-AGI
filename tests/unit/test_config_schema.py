@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from mousedroid.config.schema import (
     CameraConfig,
     CircuitBreakerConfig,
+    CognitiveConfig,
     CuriosityConfig,
     ESP32Config,
     ExperienceConfig,
@@ -146,6 +147,29 @@ def test_surprise_config_defaults():
 def test_training_config_defaults():
     c = TrainingConfig()
     assert c.batch_size == 32
+
+
+def test_cognitive_config_huggingface_defaults():
+    c = CognitiveConfig()
+    assert c.huggingface_repo == "ianshank/mousedroid-weights"
+    assert c.huggingface_subfolder == "bdi"
+
+
+def test_cognitive_config_rejects_repo_with_extra_path_segments():
+    with pytest.raises(ValidationError):
+        CognitiveConfig(huggingface_repo="owner/nested/repo")
+
+
+@pytest.mark.parametrize("subfolder", ["/bdi", "bdi//nested", "../bdi", "bdi/../nested"])
+def test_cognitive_config_rejects_invalid_huggingface_subfolder(subfolder: str):
+    with pytest.raises(ValidationError):
+        CognitiveConfig(huggingface_subfolder=subfolder)
+
+
+@pytest.mark.parametrize("subfolder", ["", "bdi", "bdi/nested"])
+def test_cognitive_config_accepts_relative_huggingface_subfolder(subfolder: str):
+    c = CognitiveConfig(huggingface_subfolder=subfolder)
+    assert c.huggingface_subfolder == subfolder
 
 
 # -- UltrasonicConfig range_ordering -----------------------------------------

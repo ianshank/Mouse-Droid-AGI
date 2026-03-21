@@ -2,6 +2,10 @@ platform: mouse_droid
 mock_hardware: false
 debug: false
 
+safety:
+  min_valid_sensors: 1
+  battery_critical_v: 9.5
+
 jetson:
   tensorrt_enabled: true
   gpu_memory_fraction: 0.7
@@ -13,6 +17,30 @@ jetson:
 logging:
   level: "INFO"
   format: "json"
+
+cognitive:
+  enabled: true
+  weights_dir: "/opt/mousedroid/weights/bdi"
+  huggingface_repo: "ianshank/mousedroid-weights"
+  auto_download: true
+  fallback_to_mcts: true
+  download_max_retries: 5
+  download_backoff_base: 2.0
+
+metrics:
+  enabled: true
+  path: "/metrics"
+  namespace: "mousedroid"
+
+telemetry:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8080
+  publish_hz: 10.0
+  max_clients: 10
+  serialization: "json"
+  mdns_enabled: true
+  mdns_service_name: "MouseDroid Telemetry"
 
 experience:
   path: "/home/jetson/mousedroid_experience"

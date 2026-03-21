@@ -15,6 +15,8 @@ from numpy.typing import NDArray
 
 from mousedroid.common.math.numpy_ops import layer_norm, relu
 from mousedroid.constants import (
+    DEFAULT_ACTION_DIM,
+    DEFAULT_BELIEF_DIM,
     DEFAULT_POLICY_HIDDEN_DIM,
     POLICY_MLP_SEED,
     VALUE_MLP_SEED,
@@ -249,7 +251,11 @@ class PolicyMLP:
         action_dim: Dimension of the action output.
     """
 
-    def __init__(self, input_dim: int = 128, action_dim: int = 2) -> None:
+    def __init__(
+        self,
+        input_dim: int = DEFAULT_BELIEF_DIM,
+        action_dim: int = DEFAULT_ACTION_DIM,
+    ) -> None:
         rng = np.random.default_rng(POLICY_MLP_SEED)
         hidden = _POLICY_HIDDEN_DIM
         self._w1 = rng.standard_normal((input_dim, hidden)).astype(np.float32) * WEIGHT_INIT_SCALE
@@ -301,7 +307,7 @@ class ValueMLP:
         input_dim: Dimension of the state input.
     """
 
-    def __init__(self, input_dim: int = 128) -> None:
+    def __init__(self, input_dim: int = DEFAULT_BELIEF_DIM) -> None:
         rng = np.random.default_rng(VALUE_MLP_SEED)
         hidden = _POLICY_HIDDEN_DIM
         self._w1 = rng.standard_normal((input_dim, hidden)).astype(np.float32) * WEIGHT_INIT_SCALE
