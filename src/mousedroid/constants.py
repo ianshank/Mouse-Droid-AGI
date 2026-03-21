@@ -155,6 +155,16 @@ TELEMETRY_QUEUE_TIMEOUT_S: float = 1.0
 HC_SR04_TRIGGER_PULSE_S: float = 0.00001
 """HC-SR04 ultrasonic trigger pulse duration (10 microseconds)."""
 
+MILLIDEGREE_DIVISOR: float = 1000.0
+"""Divisor to convert Jetson sysfs millidegree Celsius readings to degrees Celsius."""
+
+GPU_LOAD_PERCENTAGE_DIVISOR: float = 10.0
+"""Divisor to convert Jetson sysfs GPU load reading to percentage (0-100).
+
+The Jetson sysfs ``load`` file reports values in the range 0-1000; dividing
+by 10 converts to the conventional 0-100 percentage range.
+"""
+
 GB_TO_BYTES: int = 1_073_741_824
 """Conversion factor from gigabytes to bytes."""
 
