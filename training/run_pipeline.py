@@ -106,7 +106,14 @@ def run_phase_3_bdi(cfg: Settings, annotations_path: Path) -> Path:
     _log.info("phase_3_start", phase="bdi_training")
     from training.train_bdi import train_bdi
 
-    output_dir = train_bdi(annotations_path)
+    output_dir = train_bdi(
+        annotations_path,
+        output_dir=Path(cfg.training.weights_dir) / "bdi",
+        lr=cfg.training.learning_rate,
+        epochs=cfg.training.epochs,
+        batch_size=cfg.training.batch_size,
+        gradient_scale=cfg.training.gradient_scale,
+    )
     _log.info("phase_3_complete", output_dir=str(output_dir))
     return output_dir
 
@@ -191,7 +198,8 @@ def run_pipeline(
                 description="training data directory",
                 phase=1,
             )
-        resume_path = Path(resume_from) if resume_from else None
+        effective_resume_from = resume_from or cfg.training.resume_from
+        resume_path = Path(effective_resume_from) if effective_resume_from else None
         rssm_checkpoint = run_phase_1_rssm(cfg, data_dir, resume_from=resume_path)
 
     # Phase 2: Warm-start

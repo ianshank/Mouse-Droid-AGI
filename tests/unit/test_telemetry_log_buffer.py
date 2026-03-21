@@ -7,8 +7,6 @@ from typing import Any
 
 import pytest
 
-import pytest
-
 from mousedroid.telemetry.log_buffer import LogRingBuffer
 
 

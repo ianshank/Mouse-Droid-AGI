@@ -48,6 +48,7 @@ def train_belief_encoder(
     lr: float = 3e-4,
     epochs: int = 100,
     batch_size: int = 32,
+    gradient_scale: float = DEFAULT_GRADIENT_SCALE,
 ) -> dict[str, NDArray[Any]]:
     """Train BeliefEncoder as an autoencoder (256 → 128 → 256).
 
@@ -85,7 +86,7 @@ def train_belief_encoder(
             total_loss += loss
 
             # Backward (manual gradients for simple 3-layer autoencoder)
-            d_recon = DEFAULT_GRADIENT_SCALE * (recon - x) / x.shape[0]
+            d_recon = gradient_scale * (recon - x) / x.shape[0]
             d_w_dec = h2.T @ d_recon / batch_size
             d_b_dec = d_recon.mean(axis=0)
 
@@ -120,6 +121,7 @@ def train_desire_encoder(
     lr: float = 3e-4,
     epochs: int = 100,
     batch_size: int = 32,
+    gradient_scale: float = DEFAULT_GRADIENT_SCALE,
 ) -> dict[str, NDArray[Any]]:
     """Train DesireEncoder to map belief → desire (reward-relevant features).
 
@@ -156,7 +158,7 @@ def train_desire_encoder(
             total_loss += loss
 
             # Backward
-            d_recon = DEFAULT_GRADIENT_SCALE * (recon - x) / x.shape[0]
+            d_recon = gradient_scale * (recon - x) / x.shape[0]
             d_w_dec = desire.T @ d_recon / batch_size
             d_b_dec = d_recon.mean(axis=0)
 
@@ -248,6 +250,7 @@ def train_affect_estimator(
     lr: float = 3e-4,
     epochs: int = 100,
     batch_size: int = 32,
+    gradient_scale: float = DEFAULT_GRADIENT_SCALE,
 ) -> dict[str, NDArray[Any]]:
     """Train AffectEstimator on synthetic valence/arousal targets.
 
@@ -301,7 +304,7 @@ def train_affect_estimator(
             total_loss += loss
 
             # Backward through tanh
-            d_pred = DEFAULT_GRADIENT_SCALE * (pred - y) / y.shape[0]
+            d_pred = gradient_scale * (pred - y) / y.shape[0]
             d_raw = d_pred * (1.0 - pred**2)
 
             d_w1 = x.T @ d_raw / batch_size
@@ -323,6 +326,7 @@ def train_bdi(
     lr: float = 3e-4,
     epochs: int = 100,
     batch_size: int = 32,
+    gradient_scale: float = DEFAULT_GRADIENT_SCALE,
 ) -> Path:
     """Full Phase 2.3 BDI training pipeline.
 
@@ -332,6 +336,7 @@ def train_bdi(
         lr: Learning rate for all sub-networks.
         epochs: Training epochs per sub-network.
         batch_size: Batch size.
+        gradient_scale: Multiplier for manual numpy MSE gradients.
 
     Returns:
         Path to output directory with saved weights.
@@ -346,12 +351,19 @@ def train_bdi(
     _log.info("bdi_training_start", n_samples=len(observations))
 
     # Stage 1: BeliefEncoder
-    belief_weights = train_belief_encoder(observations, lr, epochs, batch_size)
+    belief_weights = train_belief_encoder(observations, lr, epochs, batch_size, gradient_scale)
     np.savez(output_dir / "belief.npz", **belief_weights)  # type: ignore[arg-type]
     _log.info("belief_encoder_saved")
 
     # Stage 2: DesireEncoder
-    desire_weights = train_desire_encoder(observations, belief_weights, lr, epochs, batch_size)
+    desire_weights = train_desire_encoder(
+        observations,
+        belief_weights,
+        lr,
+        epochs,
+        batch_size,
+        gradient_scale,
+    )
     np.savez(output_dir / "desire.npz", **desire_weights)  # type: ignore[arg-type]
     _log.info("desire_encoder_saved")
 
@@ -377,6 +389,7 @@ def train_bdi(
         lr,
         epochs,
         batch_size,
+        gradient_scale,
     )
     np.savez(output_dir / "affect.npz", **affect_weights)  # type: ignore[arg-type]
     _log.info("affect_estimator_saved")

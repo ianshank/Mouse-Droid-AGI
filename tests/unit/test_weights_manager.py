@@ -250,6 +250,22 @@ def test_download_weights_subfolder_local_dir_valid(mock_download, tmp_path):
 
 
 @patch("mousedroid.utils.weights_manager._HF_HUB_AVAILABLE", True)
+def test_download_weights_rejects_protected_cache_dir(tmp_path, monkeypatch):
+    """Reject cache directories that resolve under protected roots before mkdir/download."""
+    import mousedroid.utils.weights_manager as weights_manager
+
+    protected_root = (tmp_path / "protected-root").resolve()
+    monkeypatch.setattr(weights_manager, "_PROTECTED_DOWNLOAD_ROOTS", (protected_root,))
+
+    with pytest.raises(ValueError, match="protected path"):
+        download_weights_from_huggingface(
+            repo_id="ianshank/mousedroid-weights",
+            filenames=["belief.npz"],
+            cache_dir=protected_root / "weights",
+        )
+
+
+@patch("mousedroid.utils.weights_manager._HF_HUB_AVAILABLE", True)
 @patch("mousedroid.utils.weights_manager._hf_hub_download", create=True)
 async def test_download_weights_async(mock_download, tmp_path):
     """Test async wrapper delegates to sync download in thread."""

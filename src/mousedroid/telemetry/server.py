@@ -16,7 +16,7 @@ import json
 import time
 from typing import TYPE_CHECKING, Any
 
-from mousedroid.constants import MDNS_SERVICE_TYPE, TELEMETRY_QUEUE_TIMEOUT_S
+from mousedroid.constants import MAX_LOG_ENTRIES, MDNS_SERVICE_TYPE, TELEMETRY_QUEUE_TIMEOUT_S
 from mousedroid.logging.setup import get_logger
 from mousedroid.telemetry.network import (
     get_default_ip,

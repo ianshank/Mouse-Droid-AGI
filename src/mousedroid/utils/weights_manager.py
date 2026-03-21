@@ -15,11 +15,35 @@ from mousedroid.logging.setup import get_logger
 
 _log = get_logger(__name__)
 
+_PROTECTED_DOWNLOAD_ROOTS: tuple[Path, ...] = (
+    Path("/etc"),
+    Path("/proc"),
+    Path("/sys"),
+    Path("/dev"),
+    Path("/bin"),
+    Path("/sbin"),
+    Path("/boot"),
+    Path("/root"),
+    Path("C:/Windows"),
+    Path("C:/Program Files"),
+    Path("C:/Program Files (x86)"),
+)
+
 # ---------------------------------------------------------------------------
 # HuggingFace Integration
 # ---------------------------------------------------------------------------
 
 _HF_HUB_AVAILABLE = False
+
+
+def _validate_download_directory(path: Path) -> None:
+    """Reject directories that resolve inside protected system locations."""
+    for protected_root in _PROTECTED_DOWNLOAD_ROOTS:
+        if path.is_relative_to(protected_root):
+            raise ValueError(
+                "refusing to write HuggingFace downloads under protected path "
+                f"'{path}'"
+            )
 _hf_hub_download_impl: Callable[..., str] | None = None
 
 
@@ -92,7 +116,7 @@ def download_weights_from_huggingface(
         return False
 
     cache_dir = Path(cache_dir).resolve()
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    _validate_download_directory(cache_dir)
     if local_dir is not None:
         local_dir_path = Path(local_dir).resolve()
         expected_target_dir = (
@@ -105,8 +129,12 @@ def download_weights_from_huggingface(
                 "local_dir and subfolder must resolve to cache_dir; "
                 f"got {expected_target_dir} != {cache_dir}"
             )
-        local_dir_path.mkdir(parents=True, exist_ok=True)
+        _validate_download_directory(local_dir_path)
         local_dir = local_dir_path  # use resolved path from here on
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    if local_dir is not None:
+        Path(local_dir).mkdir(parents=True, exist_ok=True)
 
     all_success = True
     for filename in filenames:

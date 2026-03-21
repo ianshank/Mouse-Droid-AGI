@@ -21,7 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Cognitive core enabled: `cognitive.enabled: true`, `weights_dir: /opt/mousedroid/weights/bdi`, HF auto-download with up to 5 retries
   - Telemetry enabled: host `0.0.0.0:8080`, 10 Hz, mDNS broadcast, JSON serialisation
   - Prometheus metrics enabled at `/metrics` under `mousedroid` namespace
-  - Jetson safety overrides: `min_valid_sensors: 1`, `battery_critical_v: 0.1`
+  - Jetson safety overrides: `min_valid_sensors: 1`, `battery_critical_v: 9.5`
 - **HuggingFace weight publishing** — BDI, constitutional-RL, MCTS warmstart, and RSSM checkpoint weights uploaded to `ianshank/mousedroid-weights` (28 files, ~30 MB)
 - **HuggingFace download subfolder fix** (`src/mousedroid/`)
   - `CognitiveConfig.huggingface_subfolder` field added (default `"bdi"`) — determines which subfolder of the HF repo contains the BDI `.npz` files
