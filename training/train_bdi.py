@@ -201,7 +201,7 @@ def train_intention_predictor(
     beliefs = _relu(h1 @ belief_weights["w2"] + belief_weights["b2"])
     desires = _relu(beliefs @ desire_weights["w1"] + desire_weights["b1"])
 
-    # Intention weights (64 → 8)
+    # Intention weights (64 → 10)
     w1 = (
         rng.standard_normal((_DESIRE_DIM, _INTENTION_CLASSES)).astype(np.float32)
         * WEIGHT_INIT_SCALE

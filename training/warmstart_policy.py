@@ -150,7 +150,7 @@ def tune_ucb(
             gamma=base_cfg.gamma,
             n_action_candidates=base_cfg.n_action_candidates,
             ucb_c=ucb_c,
-            ucb_target_ms=base_cfg.ucb_target_ms,
+            ucb_target_ms=target_ms,
         )
         planner = MCTSPlanner(cfg, rssm)
 
