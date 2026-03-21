@@ -44,6 +44,8 @@ def _validate_download_directory(path: Path) -> None:
                 "refusing to write HuggingFace downloads under protected path "
                 f"'{path}'"
             )
+
+
 _hf_hub_download_impl: Callable[..., str] | None = None
 
 
