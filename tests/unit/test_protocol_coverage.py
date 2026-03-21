@@ -51,6 +51,12 @@ def test_reward_protocol_importable():
     assert issubclass(RewardModelProtocol, Protocol)
 
 
+def test_openclaw_protocol_importable():
+    from mousedroid.openclaw.protocol import OpenClawProtocol
+
+    assert issubclass(OpenClawProtocol, Protocol)
+
+
 def test_scaling_protocol_importable():
     from mousedroid.scaling.protocol import ScalingProtocol
 

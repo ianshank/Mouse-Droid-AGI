@@ -45,6 +45,7 @@ class TelemetryFrame:
     health: dict[str, Any] = field(default_factory=dict)
     loop_time_ms: float = 0.0
     tick_count: int = 0
+    openclaw: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise to a plain dict for JSON/msgpack encoding.

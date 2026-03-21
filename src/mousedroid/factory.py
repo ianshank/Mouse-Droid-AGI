@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.config.schema import Settings, UltrasonicConfig
     from mousedroid.health.monitor import HealthMonitor
+    from mousedroid.openclaw.protocol import OpenClawProtocol
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
 
 _log = get_logger(__name__)
@@ -287,6 +288,34 @@ def build_cognitive_core(cfg: Settings) -> CognitiveCore:
     return core
 
 
+def build_openclaw_gateway(cfg: Settings) -> OpenClawProtocol | None:
+    """Build OpenClaw gateway if enabled.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Gateway conforming to ``OpenClawProtocol``, or ``None`` if disabled.
+    """
+    if not cfg.openclaw.enabled:
+        return None
+
+    if cfg.mock_hardware:
+        from mousedroid.openclaw.mock_gateway import MockOpenClawGateway
+
+        _log.info("openclaw_mock_gateway_built")
+        return MockOpenClawGateway(cfg.openclaw)
+
+    from mousedroid.openclaw.gateway import OpenClawGateway
+
+    _log.info(
+        "openclaw_gateway_built",
+        endpoint=cfg.openclaw.api_endpoint,
+        goal_mode=cfg.openclaw.goal_mode,
+    )
+    return OpenClawGateway(cfg.openclaw)
+
+
 def build_telemetry_publisher(cfg: Settings) -> TelemetryPublisherProtocol | None:
     """Build telemetry publisher if telemetry is enabled.
 
@@ -405,6 +434,20 @@ def build_orchestrator(cfg: Settings) -> object:
             else:
                 raise
 
+    # OpenClaw (optional — disabled by default)
+    openclaw_gateway: OpenClawProtocol | None = None
+    if cfg.openclaw.enabled:
+        try:
+            openclaw_gateway = build_openclaw_gateway(cfg)
+        except Exception as e:  # pylint: disable=broad-except
+            if cfg.openclaw.fallback_to_cognitive:
+                _log.warning(
+                    "openclaw_gateway_init_failed_falling_back",
+                    error=str(e),
+                )
+            else:
+                raise
+
     # Telemetry (optional — disabled by default)
     telemetry_publisher = build_telemetry_publisher(cfg)
     health_monitor = HealthMonitor(cfg.health, cfg.jetson)
@@ -434,4 +477,5 @@ def build_orchestrator(cfg: Settings) -> object:
         cfg=cfg,
         telemetry_publisher=telemetry_publisher,
         telemetry_server=telemetry_server,
+        openclaw_gateway=openclaw_gateway,
     )

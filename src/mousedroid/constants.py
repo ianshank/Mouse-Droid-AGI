@@ -167,3 +167,13 @@ SOFTMAX_EPSILON: float = 1e-8
 
 EMA_DEFAULT_ALPHA: float = 0.1
 """Default exponential moving average smoothing factor."""
+
+# ---------------------------------------------------------------------------
+# Jetson hardware constants
+# ---------------------------------------------------------------------------
+
+GPU_LOAD_PERCENTAGE_DIVISOR: float = 10.0
+"""Jetson GPU load sysfs value divisor (raw value / 10 = percentage)."""
+
+MILLIDEGREE_DIVISOR: float = 1000.0
+"""Jetson thermal zone sysfs value divisor (millidegrees → degrees C)."""

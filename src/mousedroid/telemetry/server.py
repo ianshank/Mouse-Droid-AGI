@@ -172,6 +172,7 @@ class TelemetryServer:
         app.router.add_get(f"{prefix}/network", self._handle_network)
         app.router.add_get(self._cfg.ws_path, self._handle_ws)
         app.router.add_get(f"{prefix}/logs/stream", self._handle_log_stream)
+        app.router.add_get(f"{prefix}/openclaw", self._handle_openclaw_status)
         if self._metrics is not None:
             app.router.add_get(self._metrics_path, self._handle_metrics)
 
@@ -407,6 +408,21 @@ class TelemetryServer:
                 "X-Content-Type-Options": "nosniff",
             },
         )
+
+    async def _handle_openclaw_status(self, request: web.Request) -> web.Response:
+        """Return current OpenClaw gateway state from latest telemetry frame.
+
+        Args:
+            request: The incoming HTTP request.
+
+        Returns:
+            JSON response with OpenClaw state.
+        """
+        frame = self._latest_frame
+        openclaw_data: dict[str, object] = {}
+        if frame is not None:
+            openclaw_data = frame.openclaw
+        return web.json_response({"openclaw": openclaw_data})
 
     # ------------------------------------------------------------------
     # WebSocket handlers

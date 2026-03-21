@@ -7,6 +7,7 @@ through constructor, wired by factory functions.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from typing import TYPE_CHECKING
 
@@ -28,6 +29,7 @@ if TYPE_CHECKING:
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.comms.protocol import ESP32CommProtocol
     from mousedroid.config.schema import Settings
+    from mousedroid.openclaw.protocol import OpenClawActionResult, OpenClawProtocol
     from mousedroid.safety.context import SafetyContext
     from mousedroid.safety.protocol import SafetyMonitorProtocol
     from mousedroid.sensing.manager import SensorManager
@@ -55,6 +57,7 @@ class MouseDroidOrchestrator:
         cognitive_core: CognitiveCore | None = None,
         telemetry_publisher: TelemetryPublisherProtocol | None = None,
         telemetry_server: TelemetryServerProtocol | None = None,
+        openclaw_gateway: OpenClawProtocol | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -68,6 +71,7 @@ class MouseDroidOrchestrator:
             cognitive_core: Optional CognitiveCore for BDI/metacognitive loop.
             telemetry_publisher: Optional telemetry publisher for remote monitoring.
             telemetry_server: Optional telemetry server for remote connections.
+            openclaw_gateway: Optional OpenClaw high-level reasoning gateway.
         """
         self._world_model = world_model
         self._agents = agents
@@ -77,6 +81,7 @@ class MouseDroidOrchestrator:
         self._cognitive_core = cognitive_core
         self._telemetry_publisher = telemetry_publisher
         self._telemetry_server = telemetry_server
+        self._openclaw_gateway = openclaw_gateway
         self._cfg = cfg
         self._running = False
         self._tick_count: int = 0
@@ -86,6 +91,10 @@ class MouseDroidOrchestrator:
         self._z = torch.zeros(1, cfg.model.latent_dim)
         self._prev_action = torch.zeros(1, cfg.model.action_dim)
 
+        # OpenClaw cached action (populated by background poll loop)
+        self._openclaw_cached_action: OpenClawActionResult | None = None
+        self._openclaw_poll_task: asyncio.Task[None] | None = None
+
     async def start(self) -> None:
         """Start all subsystems."""
         _log.info("orchestrator_starting")
@@ -93,6 +102,11 @@ class MouseDroidOrchestrator:
         await self._sensor_manager.start()
         if self._cognitive_core is not None:
             await self._cognitive_core.start()
+        if self._openclaw_gateway is not None:
+            await self._openclaw_gateway.start()
+            self._openclaw_poll_task = asyncio.create_task(
+                self._openclaw_poll_loop()
+            )
         if self._telemetry_server is not None:
             await self._telemetry_server.start()
         self._running = True
@@ -102,6 +116,13 @@ class MouseDroidOrchestrator:
         """Stop all subsystems gracefully."""
         _log.info("orchestrator_stopping")
         self._running = False
+        if self._openclaw_poll_task is not None:
+            self._openclaw_poll_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._openclaw_poll_task
+            self._openclaw_poll_task = None
+        if self._openclaw_gateway is not None:
+            await self._openclaw_gateway.stop()
         if self._telemetry_server is not None:
             await self._telemetry_server.stop()
         if self._cognitive_core is not None:
@@ -163,7 +184,7 @@ class MouseDroidOrchestrator:
         observation: ObservationProtocol,
         loop_time_ms: float,
     ) -> torch.Tensor:
-        """Select action using cognitive core (primary) or MCTS agent (fallback).
+        """Select action: OpenClaw → CognitiveCore → MCTS agent.
 
         Args:
             safety_ctx: Current safety context.
@@ -173,11 +194,19 @@ class MouseDroidOrchestrator:
         Returns:
             Action tensor.
         """
+        # 1. OpenClaw (highest priority — cached from background poll)
+        if self._openclaw_gateway is not None:
+            action = self._try_openclaw_action()
+            if action is not None:
+                return action
+
+        # 2. CognitiveCore (existing)
         if self._cognitive_core is not None:
             action = self._try_cognitive_action(observation, loop_time_ms)
             if action is not None:
                 return action
 
+        # 3. MCTS Agent (fallback)
         return self._agents[0].act(self._h, self._z, safety_ctx)
 
     def _try_cognitive_action(
@@ -248,6 +277,65 @@ class MouseDroidOrchestrator:
         """
         return normalize_action_numpy(action_np, int(self._cfg.model.action_dim))
 
+    def _try_openclaw_action(self) -> torch.Tensor | None:
+        """Read cached OpenClaw action if fresh enough.
+
+        Returns:
+            Normalised action tensor, or ``None`` if stale/unavailable.
+        """
+        cached = self._openclaw_cached_action
+        if cached is None:
+            return None
+
+        if cached.is_stale(self._cfg.openclaw.max_action_age_ms):
+            _log.debug("openclaw_action_stale")
+            return None
+
+        try:
+            return self._normalize_cognitive_action(cached.action)
+        except Exception as e:  # pylint: disable=broad-except
+            _log.warning("openclaw_action_normalize_failed", error=str(e))
+            return None
+
+    async def _openclaw_poll_loop(self) -> None:
+        """Background loop: poll OpenClaw for actions at configured interval.
+
+        Runs until cancelled. Populates ``_openclaw_cached_action`` each
+        iteration so the synchronous ``_try_openclaw_action`` can read it.
+        """
+        interval = self._cfg.openclaw.poll_interval_s
+        _log.info("openclaw_poll_loop_starting", interval_s=interval)
+
+        while self._running:
+            try:
+                obs_dict = self._build_openclaw_observation()
+                result = await self._openclaw_gateway.get_action(obs_dict)  # type: ignore[union-attr]
+                if result is not None:
+                    self._openclaw_cached_action = result
+                    _log.debug(
+                        "openclaw_action_cached",
+                        goal_id=result.goal_id,
+                        confidence=result.confidence,
+                    )
+            except Exception:  # pylint: disable=broad-except
+                _log.debug("openclaw_poll_error", exc_info=True)
+
+            await asyncio.sleep(interval)
+
+    def _build_openclaw_observation(self) -> dict[str, object]:
+        """Build observation dict for OpenClaw from current latent state.
+
+        Returns:
+            Dictionary with state, latent vectors, and metadata.
+        """
+        h_np = self._h.detach().numpy().flatten().astype(np.float32, copy=False)
+        z_np = self._z.detach().numpy().flatten().astype(np.float32, copy=False)
+        return {
+            "state": h_np,
+            "latent": z_np,
+            "tick_count": self._tick_count,
+        }
+
     async def _execute_action(self, action: torch.Tensor) -> None:
         """Scale and send action to ESP32 motors.
 
@@ -280,11 +368,25 @@ class MouseDroidOrchestrator:
             return
 
         try:
+            openclaw_info: dict[str, object] | None = None
+            cached = self._openclaw_cached_action
+            if cached is not None:
+                openclaw_info = {
+                    "goal_id": cached.goal_id,
+                    "confidence": cached.confidence,
+                    "reasoning": cached.reasoning,
+                    "connected": (
+                        self._openclaw_gateway.is_connected
+                        if self._openclaw_gateway is not None
+                        else False
+                    ),
+                }
             frame = build_telemetry_frame(
                 observation,
                 safety_ctx,
                 loop_time_ms,
                 self._tick_count,
+                openclaw_info=openclaw_info,
             )
             await self._telemetry_publisher.publish(frame)
         except Exception:

@@ -507,6 +507,66 @@ class ThreeLawsConfig(BaseModel):
     )
 
 
+class OpenClawConfig(BaseModel):
+    """OpenClaw high-level reasoning gateway configuration.
+
+    When enabled, OpenClaw becomes the highest-priority action source in the
+    orchestrator's action-selection chain (OpenClaw → CognitiveCore → MCTS).
+    Disabled by default for full backwards compatibility.
+    """
+
+    enabled: bool = Field(False, description="Enable OpenClaw gateway")
+    api_endpoint: str = Field(
+        "http://localhost:8000",
+        description="OpenClaw API base URL",
+    )
+    api_timeout_s: float = Field(5.0, gt=0, description="Request timeout (s)")
+    api_key: str | None = Field(None, description="Optional API auth token")
+    goal_mode: Literal["action", "velocity", "waypoint"] = Field(
+        "velocity",
+        description="Goal type returned by OpenClaw",
+    )
+    max_action_age_ms: float = Field(
+        100.0,
+        gt=0,
+        description="Max cached action age before stale (ms)",
+    )
+    poll_interval_s: float = Field(
+        1.0,
+        gt=0,
+        description="Background poll interval for goals (s)",
+    )
+    fallback_to_cognitive: bool = Field(
+        True,
+        description="Fall back to CognitiveCore/MCTS if OpenClaw unreachable",
+    )
+    connect_retries: int = Field(3, gt=0, description="Connection retry attempts")
+    connect_backoff_base: float = Field(
+        2.0,
+        gt=0,
+        description="Exponential backoff base for connection retries",
+    )
+    observation_keys: list[str] = Field(
+        default_factory=lambda: [
+            "distance_m",
+            "battery_v",
+            "motor_state",
+            "vision_norm",
+            "safety",
+        ],
+        description="Observation keys to send to OpenClaw",
+    )
+    ws_enabled: bool = Field(
+        False,
+        description="Use WebSocket streaming (vs REST polling)",
+    )
+    ws_reconnect_interval_s: float = Field(
+        5.0,
+        gt=0,
+        description="WebSocket reconnect interval (s)",
+    )
+
+
 class PPOConfig(BaseModel):
     """Proximal Policy Optimization configuration for constitutional RL."""
 
@@ -671,6 +731,9 @@ class Settings(BaseSettings):
     )
     offline_rl: OfflineRLConfig = Field(
         default_factory=_settings_default_factory(OfflineRLConfig)
+    )
+    openclaw: OpenClawConfig = Field(
+        default_factory=_settings_default_factory(OpenClawConfig)
     )
     ppo: PPOConfig = Field(default_factory=_settings_default_factory(PPOConfig))
     telemetry: TelemetryConfig = Field(default_factory=_settings_default_factory(TelemetryConfig))

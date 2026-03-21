@@ -120,6 +120,19 @@ curiosity:
   forward_model_hidden: 256
   inverse_model_hidden: 256
 
+openclaw:
+  enabled: false
+  api_endpoint: "http://localhost:8000"
+  api_timeout_s: 5.0
+  goal_mode: "velocity"
+  max_action_age_ms: 100.0
+  poll_interval_s: 1.0
+  fallback_to_cognitive: true
+  connect_retries: 3
+  connect_backoff_base: 2.0
+  ws_enabled: false
+  ws_reconnect_interval_s: 5.0
+
 logging:
   level: "INFO"
   format: "json"

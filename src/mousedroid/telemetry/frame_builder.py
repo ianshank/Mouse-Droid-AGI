@@ -23,6 +23,7 @@ def build_telemetry_frame(
     safety_ctx: SafetyContext,
     loop_time_ms: float,
     tick_count: int,
+    openclaw_info: dict[str, object] | None = None,
 ) -> TelemetryFrame:
     """Build a ``TelemetryFrame`` from an observation and safety context.
 
@@ -31,6 +32,7 @@ def build_telemetry_frame(
         safety_ctx: Current safety evaluation result.
         loop_time_ms: Control loop iteration time (milliseconds).
         tick_count: Monotonically increasing tick counter.
+        openclaw_info: Optional OpenClaw state for telemetry (goal, action, etc.).
 
     Returns:
         Fully-populated ``TelemetryFrame`` ready for publishing.
@@ -61,4 +63,5 @@ def build_telemetry_frame(
         },
         loop_time_ms=loop_time_ms,
         tick_count=tick_count,
+        openclaw=dict(openclaw_info) if openclaw_info else {},
     )
