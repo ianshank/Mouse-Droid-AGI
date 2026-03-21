@@ -186,7 +186,10 @@ async def _async_capture_check() -> None:
         chunk = await mic.read_chunk()
         await mic.stop()
     except Exception as exc:
-        _fail("UsbMicrophone capture", str(exc))
+        # Device not found or unavailable — fall back to raw pyaudio so dev
+        # environments without the target USB mic still exercise the path.
+        _skip("UsbMicrophone driver", f"driver unavailable: {exc} — trying raw capture")
+        _raw_pyaudio_capture()
         return
 
     elapsed = time.monotonic() - t0
@@ -210,24 +213,63 @@ def _raw_pyaudio_capture() -> None:
     sample_rate = 16000
 
     pa = pyaudio.PyAudio()
-    t0 = time.monotonic()
-    try:
-        stream = pa.open(
-            format=pyaudio.paFloat32,
-            channels=1,
-            rate=sample_rate,
-            input=True,
-            frames_per_buffer=chunk_size,
-        )
-        raw = stream.read(chunk_size, exception_on_overflow=False)
-        stream.stop_stream()
-        stream.close()
-    except Exception as exc:
+
+    # Collect all usable input device indices.
+    input_indices = [
+        i
+        for i in range(pa.get_device_count())
+        if pa.get_device_info_by_index(i).get("maxInputChannels", 0) > 0
+    ]
+
+    if not input_indices:
         pa.terminate()
-        _fail("raw pyaudio capture", str(exc))
+        _fail("raw pyaudio capture", "no input device found")
         return
-    finally:
-        pa.terminate()
+
+    last_exc: Exception | None = None
+    raw: bytes | None = None
+    used_index: int | None = None
+    used_fmt: str = "float32"
+    t0 = time.monotonic()
+
+    # Try each device with paFloat32, then paInt16 fallback.
+    for idx in input_indices:
+        for fmt, fmt_name in (
+            (pyaudio.paFloat32, "float32"),
+            (pyaudio.paInt16, "int16"),
+        ):
+            try:
+                t0 = time.monotonic()
+                stream = pa.open(
+                    format=fmt,
+                    channels=1,
+                    rate=sample_rate,
+                    input=True,
+                    input_device_index=idx,
+                    frames_per_buffer=chunk_size,
+                )
+                raw = stream.read(chunk_size, exception_on_overflow=False)
+                stream.stop_stream()
+                stream.close()
+                used_index = idx
+                used_fmt = fmt_name
+                break
+            except Exception as exc:
+                last_exc = exc
+        if raw is not None:
+            break
+
+    # Save the device name before terminating PyAudio.
+    device_name = (
+        pa.get_device_info_by_index(used_index)["name"]
+        if used_index is not None
+        else "?"
+    )
+    pa.terminate()
+
+    if raw is None:
+        _fail("raw pyaudio capture", f"all input devices failed; last error: {last_exc}")
+        return
 
     elapsed = time.monotonic() - t0
     arr = np.frombuffer(raw, dtype=np.float32)
@@ -235,7 +277,11 @@ def _raw_pyaudio_capture() -> None:
         _fail("raw capture shape", f"expected ({chunk_size},), got {arr.shape}")
         return
 
-    _ok("raw pyaudio capture", f"shape={arr.shape}, dtype={arr.dtype}, {elapsed:.2f}s")
+    detail = (
+        f"device=[{used_index}]{device_name}, "
+        f"fmt={used_fmt}, shape={arr.shape}, {elapsed:.2f}s"
+    )
+    _ok("raw pyaudio capture", detail)
 
 
 # ---------------------------------------------------------------------------
