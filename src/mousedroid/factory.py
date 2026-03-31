@@ -18,6 +18,12 @@ from mousedroid.telemetry.log_buffer import LogRingBuffer
 from mousedroid.world_model.protocol import WorldModelProtocol
 
 if TYPE_CHECKING:
+    from mousedroid.arm.protocols import (
+        ArmControllerProtocol,
+        ArmDriverProtocol,
+        ArmEnvironmentProtocol,
+        ArmPlannerProtocol,
+    )
     from mousedroid.cognitive.bdi_model import NeuralBDI
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.config.schema import Settings, UltrasonicConfig
@@ -435,3 +441,110 @@ def build_orchestrator(cfg: Settings) -> object:
         telemetry_publisher=telemetry_publisher,
         telemetry_server=telemetry_server,
     )
+
+
+# ---------------------------------------------------------------------------
+# Robot Arm platform factory functions
+# ---------------------------------------------------------------------------
+
+
+def build_arm_driver(cfg: Settings) -> ArmDriverProtocol:
+    """Build robot arm hardware driver based on config.
+
+    Args:
+        cfg: Root settings (must have arm config populated).
+
+    Returns:
+        Arm driver conforming to ``ArmDriverProtocol``.
+
+    Raises:
+        ValueError: If arm config is not populated.
+    """
+    if cfg.arm is None:
+        msg = "arm config required for robot arm platform"
+        raise ValueError(msg)
+
+    if cfg.mock_hardware:
+        from mousedroid.arm.hardware.mock_arm_driver import MockArmDriver
+
+        _log.info("arm_driver_mock_built")
+        return MockArmDriver(cfg.arm)
+
+    from mousedroid.arm.hardware.so_arm100_driver import SoArm100Driver
+
+    _log.info("arm_driver_real_built", port=cfg.arm.serial_port)
+    return SoArm100Driver(cfg.arm)
+
+
+def build_arm_planner(cfg: Settings) -> ArmPlannerProtocol:
+    """Build symbolic planner for arm manipulation tasks.
+
+    Args:
+        cfg: Root settings (must have arm_planning and arm_task populated).
+
+    Returns:
+        Planner conforming to ``ArmPlannerProtocol``.
+
+    Raises:
+        ValueError: If arm planning or task config is not populated.
+    """
+    if cfg.arm_planning is None or cfg.arm_task is None:
+        msg = "arm_planning and arm_task configs required for arm planner"
+        raise ValueError(msg)
+
+    from mousedroid.arm.planning.symbolic_planner import SymbolicPlanner
+
+    _log.info("arm_planner_built", backend=cfg.arm_planning.planner_backend)
+    return SymbolicPlanner(cfg.arm_planning, cfg.arm_task)
+
+
+def build_arm_environment(cfg: Settings) -> ArmEnvironmentProtocol:
+    """Build Gymnasium environment for arm training.
+
+    Args:
+        cfg: Root settings (must have arm_task and arm_training populated).
+
+    Returns:
+        Environment conforming to ``ArmEnvironmentProtocol``.
+
+    Raises:
+        ValueError: If arm task or training config is not populated.
+    """
+    if cfg.arm_task is None or cfg.arm_training is None:
+        msg = "arm_task and arm_training configs required for arm environment"
+        raise ValueError(msg)
+
+    dof = cfg.arm.dof if cfg.arm is not None else 6
+
+    if cfg.arm_task.task_type == "laundry_sorting":
+        from mousedroid.arm.environments.laundry_sorting import LaundrySortingEnv
+
+        _log.info("arm_env_laundry_built")
+        return LaundrySortingEnv(cfg.arm_task, cfg.arm_training, dof=dof)
+
+    from mousedroid.arm.environments.tower_of_hanoi import TowerOfHanoiEnv
+
+    _log.info("arm_env_hanoi_built", num_disks=cfg.arm_task.num_disks)
+    return TowerOfHanoiEnv(cfg.arm_task, cfg.arm_training, dof=dof)
+
+
+def build_arm_controller(cfg: Settings) -> ArmControllerProtocol:
+    """Build RL controller for arm manipulation.
+
+    Args:
+        cfg: Root settings (must have arm_training populated).
+
+    Returns:
+        Controller conforming to ``ArmControllerProtocol``.
+
+    Raises:
+        ValueError: If arm training config is not populated.
+    """
+    if cfg.arm_training is None:
+        msg = "arm_training config required for arm controller"
+        raise ValueError(msg)
+
+    from mousedroid.arm.control.sac_agent import SACAgent
+
+    _log.info("arm_controller_built", algorithm=cfg.arm_training.algorithm)
+    return SACAgent(cfg.arm_training)  # type: ignore[return-value]

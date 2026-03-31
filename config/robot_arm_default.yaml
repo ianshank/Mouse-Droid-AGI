@@ -1,0 +1,128 @@
+platform: robot_arm
+mock_hardware: true
+debug: false
+
+# Reuse existing subsystem configs with arm-appropriate defaults
+loop:
+  perception_hz: 30.0
+  control_hz: 20.0
+  planning_hz: 10.0
+
+model:
+  vision_dim: 256
+  hidden_dim: 256
+  latent_dim: 64
+  action_dim: 6
+  obs_dim: 256
+
+mcts:
+  n_simulations_base: 50
+  n_simulations_max: 200
+  rollout_depth: 5
+  gamma: 0.97
+
+safety:
+  min_forward_clearance_m: 0.05
+  max_velocity_mps: 2.0
+  sensor_stale_s: 0.5
+  max_loop_time_ms: 200.0
+
+logging:
+  level: "INFO"
+  format: "console"
+
+training:
+  batch_size: 256
+  learning_rate: 0.0003
+  epochs: 100
+  checkpoint_every_n: 10
+
+# Robot arm hardware
+arm:
+  urdf_path: "urdf/so_arm100.urdf"
+  dof: 6
+  gripper_type: "parallel"
+  max_joint_velocity_rads: 2.0
+  max_joint_torque_nm: 5.0
+  home_position: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  serial_port: "/dev/ttyUSB1"
+  serial_baud: 115200
+  command_timeout_s: 1.0
+
+# MuJoCo simulation
+arm_sim:
+  scene_path: "sim/tower_of_hanoi.xml"
+  timestep_s: 0.002
+  n_substeps: 5
+  render_width: 640
+  render_height: 480
+  domain_randomization: true
+  mass_range_pct: 20.0
+  friction_range: 0.3
+  position_noise_m: 0.005
+  lighting_variation: 0.2
+  camera_pose_noise_deg: 10.0
+
+# Perception stack
+arm_perception:
+  depth_camera_type: "mock"
+  yolo_model_path: "models/yolo11_disk_detector.pt"
+  yolo_confidence_threshold: 0.5
+  pose_estimator: "pnp"
+  pose_tolerance_m: 0.005
+  detection_fps: 30.0
+
+# Symbolic planning
+arm_planning:
+  pddl_domain_path: "planning/pddl/hanoi_domain.pddl"
+  planner_backend: "pyperplan"
+  llm_replanner_enabled: false
+  max_replan_attempts: 3
+  planning_timeout_s: 5.0
+
+# RL training
+arm_training:
+  algorithm: "sac_her"
+  learning_rate: 0.0003
+  batch_size: 256
+  buffer_size: 1000000
+  gamma: 0.99
+  tau: 0.005
+  total_timesteps: 1000000
+  eval_frequency: 10000
+  checkpoint_frequency: 50000
+  n_eval_episodes: 20
+  video_frequency: 50000
+  her_n_sampled_goal: 4
+  her_goal_selection: "future"
+  reward_grasp: 0.1
+  reward_place: 0.2
+  reward_complete: 1.0
+  penalty_collision: -0.5
+  penalty_wrong_disk: -0.1
+  seed: 42
+  weights_dir: "weights/arm"
+
+# Curriculum learning
+arm_curriculum:
+  enabled: true
+  stages: [1, 2, 3, 5]
+  promotion_threshold: 0.8
+  promotion_eval_episodes: 50
+  warm_start: true
+
+# Task: Tower of Hanoi (3 disks, 3 pegs)
+arm_task:
+  task_type: "tower_of_hanoi"
+  num_disks: 3
+  num_pegs: 3
+  peg_positions:
+    - [0.20, 0.00, 0.00]
+    - [0.30, 0.00, 0.00]
+    - [0.40, 0.00, 0.00]
+  num_baskets: 3
+  basket_positions:
+    - [0.20, -0.20, 0.00]
+    - [0.30, -0.20, 0.00]
+    - [0.40, -0.20, 0.00]
+  max_episode_steps: 500

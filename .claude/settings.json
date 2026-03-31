@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Bash(ruff check *)",
+      "Bash(ruff format *)",
+      "Bash(mypy *)",
+      "Bash(pytest *)",
+      "Bash(pip install *)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git branch*)",
+      "Bash(git checkout*)",
+      "Bash(ls *)"
+    ],
+    "deny": []
+  }
+}
