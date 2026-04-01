@@ -61,6 +61,8 @@ class TowerOfHanoiEnv:
         self._num_disks = task_cfg.num_disks
         self._num_pegs = task_cfg.num_pegs
         self._max_steps = task_cfg.max_episode_steps
+        self._action_delta_min = training_cfg.action_delta_min
+        self._action_delta_max = training_cfg.action_delta_max
         self._reward_shaper = RewardShaper(training_cfg)
 
         # State: which peg each disk is on (0-indexed)
@@ -118,7 +120,7 @@ class TowerOfHanoiEnv:
         self._step_count += 1
 
         # Apply action (clipped joint deltas)
-        action = np.clip(action, -0.1, 0.1)
+        action = np.clip(action, self._action_delta_min, self._action_delta_max)
         self._joint_angles = self._joint_angles + action
         self._joint_angles = np.clip(self._joint_angles, -np.pi, np.pi)
 

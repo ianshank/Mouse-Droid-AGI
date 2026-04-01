@@ -233,7 +233,9 @@ class OfflineRLConfig(BaseModel):
     epochs: int = Field(100, gt=0, description="Training epochs")
     batch_size: int = Field(64, gt=0, description="Training batch size")
     terminal_gap_s: float = Field(
-        5.0, gt=0, description="Timestamp gap to mark episode boundaries (s)",
+        5.0,
+        gt=0,
+        description="Timestamp gap to mark episode boundaries (s)",
     )
     log_every_n_epochs: int = Field(10, gt=0, description="Log summary every N epochs")
     checkpoint_every_n_epochs: int = Field(20, gt=0, description="Save checkpoint every N epochs")
@@ -241,7 +243,9 @@ class OfflineRLConfig(BaseModel):
     cql_n_random_actions: int = Field(10, gt=0, description="Random actions for CQL logsumexp")
     iql_expectile: float = Field(0.7, gt=0, lt=1, description="IQL expectile for asymmetric loss")
     iql_beta: float = Field(
-        3.0, gt=0, description="IQL inverse temperature for advantage weighting",
+        3.0,
+        gt=0,
+        description="IQL inverse temperature for advantage weighting",
     )
 
 
@@ -525,12 +529,8 @@ class ArmConfig(BaseModel):
         "parallel",
         description="End-effector gripper type",
     )
-    max_joint_velocity_rads: float = Field(
-        2.0, gt=0, description="Max joint velocity (rad/s)"
-    )
-    max_joint_torque_nm: float = Field(
-        5.0, gt=0, description="Max joint torque (Nm)"
-    )
+    max_joint_velocity_rads: float = Field(2.0, gt=0, description="Max joint velocity (rad/s)")
+    max_joint_torque_nm: float = Field(5.0, gt=0, description="Max joint torque (Nm)")
     home_position: list[float] = Field(
         default_factory=lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         description="Home joint angles (rad) — length must match dof",
@@ -564,9 +564,7 @@ class ArmSimConfig(BaseModel):
     friction_range: float = Field(0.3, ge=0, description="Friction coefficient variation")
     position_noise_m: float = Field(0.005, ge=0, description="Object position noise (m)")
     lighting_variation: float = Field(0.2, ge=0, le=1, description="Lighting intensity variation")
-    camera_pose_noise_deg: float = Field(
-        10.0, ge=0, description="Camera pose noise (degrees)"
-    )
+    camera_pose_noise_deg: float = Field(10.0, ge=0, description="Camera pose noise (degrees)")
 
 
 class ArmPerceptionConfig(BaseModel):
@@ -587,10 +585,31 @@ class ArmPerceptionConfig(BaseModel):
         "pnp",
         description="Pose estimation method",
     )
-    pose_tolerance_m: float = Field(
-        0.005, gt=0, description="Pose estimation tolerance (m)"
-    )
+    pose_tolerance_m: float = Field(0.005, gt=0, description="Pose estimation tolerance (m)")
     detection_fps: float = Field(30.0, gt=0, description="Detection rate (Hz)")
+    depth_min_m: float = Field(0.01, gt=0, description="Minimum valid depth (m)")
+    depth_max_m: float = Field(10.0, gt=0, description="Maximum valid depth (m)")
+    depth_hole_threshold_m: float = Field(
+        0.02, gt=0, description="Depth below which pixels are treated as holes (m)"
+    )
+    depth_filter_kernel_size: int = Field(
+        3, gt=0, description="Median filter kernel size for depth noise reduction"
+    )
+    fallback_depth_m: float = Field(
+        0.3, gt=0, description="Fallback depth when centre pixel is invalid (m)"
+    )
+    invalid_depth_threshold_m: float = Field(
+        0.01, ge=0, description="Depth values below this are considered invalid (m)"
+    )
+    white_brightness_threshold: float = Field(
+        200.0, ge=0, le=255, description="Brightness above which garment is classified white"
+    )
+    white_saturation_threshold: float = Field(
+        0.15, ge=0, le=1, description="Saturation below which bright garment is white"
+    )
+    dark_brightness_threshold: float = Field(
+        80.0, ge=0, le=255, description="Brightness below which garment is classified dark"
+    )
 
 
 class ArmPlanningConfig(BaseModel):
@@ -608,12 +627,8 @@ class ArmPlanningConfig(BaseModel):
         False,
         description="Enable LLM-based adaptive replanning on execution failure",
     )
-    max_replan_attempts: int = Field(
-        3, gt=0, description="Max replanning attempts before abort"
-    )
-    planning_timeout_s: float = Field(
-        5.0, gt=0, description="Maximum planning time (s)"
-    )
+    max_replan_attempts: int = Field(3, gt=0, description="Max replanning attempts before abort")
+    planning_timeout_s: float = Field(5.0, gt=0, description="Maximum planning time (s)")
 
 
 class ArmTrainingConfig(BaseModel):
@@ -645,6 +660,11 @@ class ArmTrainingConfig(BaseModel):
     penalty_wrong_disk: float = Field(-0.1, description="Penalty for grasping wrong disk")
     seed: int = Field(42, ge=0, description="Random seed for reproducibility")
     weights_dir: str = Field("weights/arm", description="Checkpoint output directory")
+    action_delta_min: float = Field(-0.1, description="Minimum action delta per step (rad)")
+    action_delta_max: float = Field(0.1, gt=0, description="Maximum action delta per step (rad)")
+    distance_penalty_coeff: float = Field(
+        0.01, ge=0, description="Dense distance-based reward penalty coefficient"
+    )
 
 
 class ArmCurriculumConfig(BaseModel):
@@ -661,9 +681,7 @@ class ArmCurriculumConfig(BaseModel):
     promotion_eval_episodes: int = Field(
         50, gt=0, description="Episodes to evaluate before stage promotion"
     )
-    warm_start: bool = Field(
-        True, description="Warm-start from previous stage weights"
-    )
+    warm_start: bool = Field(True, description="Warm-start from previous stage weights")
 
 
 class ArmTaskConfig(BaseModel):
@@ -685,15 +703,22 @@ class ArmTaskConfig(BaseModel):
         description="Basket XYZ positions (m) — length must match num_baskets",
     )
     max_episode_steps: int = Field(500, gt=0, description="Max steps per episode")
+    num_garments: int = Field(5, gt=0, description="Number of garments per episode (laundry)")
 
     @model_validator(mode="after")
     def positions_match_count(self) -> Self:
         """Validate position list lengths match counts."""
         if len(self.peg_positions) != self.num_pegs:
-            msg = f"peg_positions length ({len(self.peg_positions)}) must match num_pegs ({self.num_pegs})"
+            msg = (
+                f"peg_positions length ({len(self.peg_positions)})"
+                f" must match num_pegs ({self.num_pegs})"
+            )
             raise ValueError(msg)
         if len(self.basket_positions) != self.num_baskets:
-            msg = f"basket_positions length ({len(self.basket_positions)}) must match num_baskets ({self.num_baskets})"
+            msg = (
+                f"basket_positions length ({len(self.basket_positions)})"
+                f" must match num_baskets ({self.num_baskets})"
+            )
             raise ValueError(msg)
         return self
 
@@ -827,42 +852,20 @@ class Settings(BaseSettings):
     experience: ExperienceConfig = Field(
         default_factory=_settings_default_factory(ExperienceConfig)
     )
-    logging: LoggingConfig = Field(
-        default_factory=_settings_default_factory(LoggingConfig)
-    )
-    training: TrainingConfig = Field(
-        default_factory=_settings_default_factory(TrainingConfig)
-    )
-    health: HealthConfig = Field(
-        default_factory=_settings_default_factory(HealthConfig)
-    )
-    retry: RetryConfig = Field(
-        default_factory=_settings_default_factory(RetryConfig)
-    )
+    logging: LoggingConfig = Field(default_factory=_settings_default_factory(LoggingConfig))
+    training: TrainingConfig = Field(default_factory=_settings_default_factory(TrainingConfig))
+    health: HealthConfig = Field(default_factory=_settings_default_factory(HealthConfig))
+    retry: RetryConfig = Field(default_factory=_settings_default_factory(RetryConfig))
     circuit_breaker: CircuitBreakerConfig = Field(
         default_factory=_settings_default_factory(CircuitBreakerConfig)
     )
-    cognitive: CognitiveConfig = Field(
-        default_factory=_settings_default_factory(CognitiveConfig)
-    )
-    metrics: MetricsConfig = Field(
-        default_factory=_settings_default_factory(MetricsConfig)
-    )
-    memory: MemoryConfig = Field(
-        default_factory=_settings_default_factory(MemoryConfig)
-    )
-    learning: LearningConfig = Field(
-        default_factory=_settings_default_factory(LearningConfig)
-    )
-    reward: RewardConfig = Field(
-        default_factory=_settings_default_factory(RewardConfig)
-    )
-    curiosity: CuriosityConfig = Field(
-        default_factory=_settings_default_factory(CuriosityConfig)
-    )
-    offline_rl: OfflineRLConfig = Field(
-        default_factory=_settings_default_factory(OfflineRLConfig)
-    )
+    cognitive: CognitiveConfig = Field(default_factory=_settings_default_factory(CognitiveConfig))
+    metrics: MetricsConfig = Field(default_factory=_settings_default_factory(MetricsConfig))
+    memory: MemoryConfig = Field(default_factory=_settings_default_factory(MemoryConfig))
+    learning: LearningConfig = Field(default_factory=_settings_default_factory(LearningConfig))
+    reward: RewardConfig = Field(default_factory=_settings_default_factory(RewardConfig))
+    curiosity: CuriosityConfig = Field(default_factory=_settings_default_factory(CuriosityConfig))
+    offline_rl: OfflineRLConfig = Field(default_factory=_settings_default_factory(OfflineRLConfig))
     ppo: PPOConfig = Field(default_factory=_settings_default_factory(PPOConfig))
     telemetry: TelemetryConfig = Field(default_factory=_settings_default_factory(TelemetryConfig))
     three_laws: ThreeLawsConfig = Field(default_factory=_settings_default_factory(ThreeLawsConfig))

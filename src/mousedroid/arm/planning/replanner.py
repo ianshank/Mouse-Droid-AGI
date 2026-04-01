@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from mousedroid.arm.protocols import PlanStep, SymbolicState
+from mousedroid.arm.protocols import ArmPlannerProtocol, PlanStep, SymbolicState
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
-    from mousedroid.config.schema import ArmPlanningConfig, ArmTaskConfig
+    from mousedroid.config.schema import ArmPlanningConfig
 
 _log = get_logger(__name__)
 
@@ -27,18 +27,22 @@ class Replanner:
 
     Args:
         planning_cfg: Planning configuration.
-        task_cfg: Task configuration.
+        planner: Symbolic planner (injected via protocol).
     """
 
-    def __init__(self, planning_cfg: ArmPlanningConfig, task_cfg: ArmTaskConfig) -> None:
+    def __init__(
+        self,
+        planning_cfg: ArmPlanningConfig,
+        planner: ArmPlannerProtocol,
+    ) -> None:
         """Initialise replanner.
 
         Args:
             planning_cfg: Planning config with replanner settings.
-            task_cfg: Task config for problem generation.
+            planner: Injected planner implementing ArmPlannerProtocol.
         """
         self._planning_cfg = planning_cfg
-        self._task_cfg = task_cfg
+        self._planner = planner
         self._attempt_count = 0
         _log.info(
             "replanner_init",
@@ -82,10 +86,7 @@ class Replanner:
             return self._llm_replan(current_state, goal_state, error)
 
         # Fall back to symbolic replanning from current state
-        from mousedroid.arm.planning.symbolic_planner import SymbolicPlanner
-
-        planner = SymbolicPlanner(self._planning_cfg, self._task_cfg)
-        return planner.plan(current_state, goal_state)
+        return self._planner.plan(current_state, goal_state)
 
     def _llm_replan(
         self,
@@ -108,10 +109,7 @@ class Replanner:
         # LLM integration placeholder — will use Claude API
         # For now, fall back to symbolic replanning
         _log.warning("llm_replan_not_implemented", fallback="symbolic")
-        from mousedroid.arm.planning.symbolic_planner import SymbolicPlanner
-
-        planner = SymbolicPlanner(self._planning_cfg, self._task_cfg)
-        return planner.plan(current_state, goal_state)
+        return self._planner.plan(current_state, goal_state)
 
     def reset(self) -> None:
         """Reset attempt counter for a new execution cycle."""

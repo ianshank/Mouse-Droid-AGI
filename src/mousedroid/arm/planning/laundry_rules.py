@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
-    from mousedroid.config.schema import ArmTaskConfig
+    from mousedroid.config.schema import ArmPerceptionConfig, ArmTaskConfig
 
 _log = get_logger(__name__)
 
@@ -54,16 +54,25 @@ class LaundryRuleEngine:
     def __init__(
         self,
         task_cfg: ArmTaskConfig,
+        perception_cfg: ArmPerceptionConfig | None = None,
         rules: list[SortingRule] | None = None,
     ) -> None:
         """Initialise laundry rule engine.
 
         Args:
             task_cfg: Task config with num_baskets.
+            perception_cfg: Perception config with color thresholds (None = defaults).
             rules: Custom rules or None for defaults.
         """
         self._task_cfg = task_cfg
         self._rules = rules if rules is not None else DEFAULT_RULES
+        self._white_brightness = (
+            perception_cfg.white_brightness_threshold if perception_cfg else 200.0
+        )
+        self._white_saturation = (
+            perception_cfg.white_saturation_threshold if perception_cfg else 0.15
+        )
+        self._dark_brightness = perception_cfg.dark_brightness_threshold if perception_cfg else 80.0
         _log.info(
             "laundry_rules_init",
             num_rules=len(self._rules),
@@ -88,9 +97,9 @@ class LaundryRuleEngine:
         min_channel = min(r, g, b)
         saturation = (max_channel - min_channel) / max(max_channel, 1.0)
 
-        if brightness > 200.0 and saturation < 0.15:
+        if brightness > self._white_brightness and saturation < self._white_saturation:
             return "white"
-        if brightness < 80.0:
+        if brightness < self._dark_brightness:
             return "dark"
         return "color"
 

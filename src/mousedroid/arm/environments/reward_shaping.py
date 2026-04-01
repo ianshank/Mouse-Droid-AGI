@@ -36,6 +36,7 @@ class RewardShaper:
             training_cfg: Config containing reward weights.
         """
         self._cfg = training_cfg
+        self._distance_penalty_coeff = training_cfg.distance_penalty_coeff
         _log.info(
             "reward_shaper_init",
             grasp=training_cfg.reward_grasp,
@@ -85,7 +86,7 @@ class RewardShaper:
         # Distance-based shaping (dense component)
         if achieved_goal.shape == desired_goal.shape:
             distance = float(np.linalg.norm(achieved_goal - desired_goal))
-            reward -= 0.01 * distance  # Small distance penalty for guidance
+            reward -= self._distance_penalty_coeff * distance
 
         return reward
 

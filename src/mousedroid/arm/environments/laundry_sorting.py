@@ -50,11 +50,13 @@ class LaundrySortingEnv:
         self._dof = dof
         self._num_baskets = task_cfg.num_baskets
         self._max_steps = task_cfg.max_episode_steps
+        self._action_delta_min = training_cfg.action_delta_min
+        self._action_delta_max = training_cfg.action_delta_max
         self._reward_shaper = RewardShaper(training_cfg)
 
         self._joint_angles: NDArray[np.float64] = np.zeros(dof, dtype=np.float64)
         self._garments_sorted = 0
-        self._total_garments = 5  # per episode
+        self._total_garments = task_cfg.num_garments
         self._step_count = 0
         self._rng = np.random.default_rng(training_cfg.seed)
 
@@ -99,7 +101,7 @@ class LaundrySortingEnv:
         """
         self._step_count += 1
 
-        action = np.clip(action, -0.1, 0.1)
+        action = np.clip(action, self._action_delta_min, self._action_delta_max)
         self._joint_angles = self._joint_angles + action
         self._joint_angles = np.clip(self._joint_angles, -np.pi, np.pi)
 

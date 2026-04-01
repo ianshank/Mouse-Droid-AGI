@@ -82,3 +82,13 @@ class TestDomainRandomizer:
         dr1 = _make_randomizer(seed=123)
         dr2 = _make_randomizer(seed=123)
         assert dr1.randomize_mass(1.0) == dr2.randomize_mass(1.0)
+
+    def test_lighting_disabled_returns_nominal(self) -> None:
+        dr = _make_randomizer(enabled=False)
+        assert dr.randomize_lighting(0.7) == 0.7
+
+    def test_camera_pose_disabled_returns_nominal(self) -> None:
+        dr = _make_randomizer(enabled=False)
+        angles = np.array([10.0, 20.0, 30.0])
+        result = dr.randomize_camera_pose(angles)
+        np.testing.assert_array_equal(angles, result)

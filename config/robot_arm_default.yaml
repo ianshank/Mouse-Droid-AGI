@@ -71,6 +71,15 @@ arm_perception:
   pose_estimator: "pnp"
   pose_tolerance_m: 0.005
   detection_fps: 30.0
+  depth_min_m: 0.01
+  depth_max_m: 10.0
+  depth_hole_threshold_m: 0.02
+  depth_filter_kernel_size: 3
+  fallback_depth_m: 0.3
+  invalid_depth_threshold_m: 0.01
+  white_brightness_threshold: 200.0
+  white_saturation_threshold: 0.15
+  dark_brightness_threshold: 80.0
 
 # Symbolic planning
 arm_planning:
@@ -102,6 +111,9 @@ arm_training:
   penalty_wrong_disk: -0.1
   seed: 42
   weights_dir: "weights/arm"
+  action_delta_min: -0.1
+  action_delta_max: 0.1
+  distance_penalty_coeff: 0.01
 
 # Curriculum learning
 arm_curriculum:
@@ -126,3 +138,4 @@ arm_task:
     - [0.30, -0.20, 0.00]
     - [0.40, -0.20, 0.00]
   max_episode_steps: 500
+  num_garments: 5

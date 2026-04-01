@@ -39,6 +39,11 @@ class DepthProcessor:
         """
         self._cfg = cfg
         self._intrinsics = intrinsics
+        self._depth_min = cfg.depth_min_m
+        self._depth_max = cfg.depth_max_m
+        self._hole_threshold = cfg.depth_hole_threshold_m
+        self._filter_kernel = cfg.depth_filter_kernel_size
+        self._invalid_threshold = cfg.invalid_depth_threshold_m
         _log.info("depth_processor_init", camera_type=cfg.depth_camera_type)
 
     def filter_depth(self, depth_image: NDArray[np.float32]) -> NDArray[np.float32]:
@@ -51,17 +56,15 @@ class DepthProcessor:
             Filtered depth image with same shape.
         """
         # Clip invalid depths
-        filtered = np.clip(depth_image, 0.01, 10.0)
+        filtered = np.clip(depth_image, self._depth_min, self._depth_max)
 
-        # Simple median filter for noise reduction (3x3 kernel)
         # Replace zeros (holes) with local median
-        mask = filtered < 0.02
+        mask = filtered < self._hole_threshold
         if np.any(mask):
             _log.debug("depth_holes_detected", count=int(np.sum(mask)))
-            # Fill holes with nearest valid neighbour (simplified)
             from scipy.ndimage import median_filter
 
-            filled = median_filter(filtered, size=3)
+            filled = median_filter(filtered, size=self._filter_kernel)
             filtered[mask] = filled[mask]
 
         return filtered
@@ -91,5 +94,5 @@ class DepthProcessor:
         points = np.stack([x, y, z], axis=-1).reshape(-1, 3)
 
         # Remove invalid points
-        valid = points[:, 2] > 0.01
+        valid = points[:, 2] > self._invalid_threshold
         return points[valid]

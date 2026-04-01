@@ -41,6 +41,8 @@ class PoseEstimator:
         self._cfg = cfg
         self._intrinsics = intrinsics
         self._tolerance_m = cfg.pose_tolerance_m
+        self._invalid_depth_threshold = cfg.invalid_depth_threshold_m
+        self._fallback_depth = cfg.fallback_depth_m
         _log.info("pose_estimator_init", method=cfg.pose_estimator)
 
     def estimate_pose(
@@ -69,9 +71,9 @@ class PoseEstimator:
         py = int(np.clip(cy, 0, depth_image.shape[0] - 1))
         z = float(depth_image[py, px])
 
-        if z < 0.01:
+        if z < self._invalid_depth_threshold:
             _log.warning("invalid_depth_at_centre", object_id=detection.object_id)
-            z = 0.3  # fallback depth
+            z = self._fallback_depth
 
         # Back-project to 3D using camera intrinsics
         fx = self._intrinsics[0, 0]
