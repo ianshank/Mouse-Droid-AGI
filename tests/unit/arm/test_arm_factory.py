@@ -14,9 +14,12 @@ from mousedroid.config.schema import (
     PlatformType,
     Settings,
 )
+from mousedroid.arm.protocols import ArmControllerProtocol, ArmPerceptionProtocol
 from mousedroid.factory import (
+    build_arm_controller,
     build_arm_driver,
     build_arm_environment,
+    build_arm_perception,
     build_arm_planner,
 )
 
@@ -83,3 +86,33 @@ class TestBuildArmEnvironment:
         cfg = Settings(mock_hardware=True, arm_training=ArmTrainingConfig())
         with pytest.raises(ValueError, match="arm_task and arm_training"):
             build_arm_environment(cfg)
+
+
+class TestBuildArmController:
+    """Test build_arm_controller factory."""
+
+    def test_builds_controller(self) -> None:
+        cfg = _arm_settings()
+        controller = build_arm_controller(cfg)
+        assert isinstance(controller, ArmControllerProtocol)
+
+    def test_missing_config_raises(self) -> None:
+        cfg = Settings(mock_hardware=True)
+        with pytest.raises(ValueError, match="arm and arm_training"):
+            build_arm_controller(cfg)
+
+
+class TestBuildArmPerception:
+    """Test build_arm_perception factory."""
+
+    def test_builds_perception(self) -> None:
+        from mousedroid.config.schema import ArmPerceptionConfig
+
+        cfg = _arm_settings(arm_perception=ArmPerceptionConfig())
+        perception = build_arm_perception(cfg)
+        assert isinstance(perception, ArmPerceptionProtocol)
+
+    def test_missing_config_raises(self) -> None:
+        cfg = Settings(mock_hardware=True)
+        with pytest.raises(ValueError, match="arm_perception and arm_task"):
+            build_arm_perception(cfg)

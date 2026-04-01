@@ -22,6 +22,7 @@ if TYPE_CHECKING:
         ArmControllerProtocol,
         ArmDriverProtocol,
         ArmEnvironmentProtocol,
+        ArmPerceptionProtocol,
         ArmPlannerProtocol,
     )
     from mousedroid.cognitive.bdi_model import NeuralBDI
@@ -531,20 +532,59 @@ def build_arm_environment(cfg: Settings) -> ArmEnvironmentProtocol:
 def build_arm_controller(cfg: Settings) -> ArmControllerProtocol:
     """Build RL controller for arm manipulation.
 
+    Composes a ``SACAgent`` with ``ActionPrimitives`` inside an
+    ``ArmController`` that implements ``ArmControllerProtocol``.
+
     Args:
-        cfg: Root settings (must have arm_training populated).
+        cfg: Root settings (must have arm and arm_training populated).
 
     Returns:
         Controller conforming to ``ArmControllerProtocol``.
 
     Raises:
-        ValueError: If arm training config is not populated.
+        ValueError: If arm or arm_training config is not populated.
     """
-    if cfg.arm_training is None:
-        msg = "arm_training config required for arm controller"
+    if cfg.arm_training is None or cfg.arm is None:
+        msg = "arm and arm_training configs required for arm controller"
         raise ValueError(msg)
 
+    from mousedroid.arm.control.controller import ArmController
+    from mousedroid.arm.control.primitives import ActionPrimitives
     from mousedroid.arm.control.sac_agent import SACAgent
 
+    driver = build_arm_driver(cfg)
+    agent = SACAgent(cfg.arm_training)
+    primitives = ActionPrimitives(cfg.arm, driver)
     _log.info("arm_controller_built", algorithm=cfg.arm_training.algorithm)
-    return SACAgent(cfg.arm_training)  # type: ignore[return-value]
+    return ArmController(agent, primitives)
+
+
+def build_arm_perception(cfg: Settings) -> ArmPerceptionProtocol:
+    """Build perception pipeline for arm manipulation.
+
+    Args:
+        cfg: Root settings (must have arm_perception and arm_task populated).
+
+    Returns:
+        Perception facade conforming to ``ArmPerceptionProtocol``.
+
+    Raises:
+        ValueError: If arm_perception or arm_task config is not populated.
+    """
+    if cfg.arm_perception is None or cfg.arm_task is None:
+        msg = "arm_perception and arm_task configs required for perception"
+        raise ValueError(msg)
+
+    import numpy as np
+
+    from mousedroid.arm.perception.facade import ArmPerception
+
+    # Default identity intrinsics — overridden by camera driver at runtime
+    intrinsics = np.eye(3, dtype=np.float64)
+    intrinsics[0, 0] = 500.0  # fx
+    intrinsics[1, 1] = 500.0  # fy
+    intrinsics[0, 2] = 320.0  # cx
+    intrinsics[1, 2] = 240.0  # cy
+
+    _log.info("arm_perception_built", camera=cfg.arm_perception.depth_camera_type)
+    return ArmPerception(cfg.arm_perception, cfg.arm_task, intrinsics)
