@@ -1,0 +1,88 @@
+platform: robot_arm
+mock_hardware: true
+debug: false
+
+logging:
+  level: "INFO"
+  format: "console"
+
+# Override training config for longer runs on RTX 5070
+training:
+  batch_size: 512
+  learning_rate: 0.0003
+  epochs: 500
+  checkpoint_every_n: 25
+  gpu:
+    device: null
+    enable_amp: true
+    memory_limit_gb: 12.0
+
+arm:
+  urdf_path: "urdf/so_arm100.urdf"
+  dof: 6
+  gripper_type: "parallel"
+  max_joint_velocity_rads: 2.0
+  max_joint_torque_nm: 5.0
+  home_position: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  serial_port: "/dev/ttyUSB1"
+  serial_baud: 115200
+  command_timeout_s: 1.0
+
+arm_sim:
+  scene_path: "sim/tower_of_hanoi.xml"
+  timestep_s: 0.002
+  n_substeps: 5
+  domain_randomization: true
+  mass_range_pct: 30.0
+  friction_range: 0.3
+  position_noise_m: 0.005
+  lighting_variation: 0.3
+  camera_pose_noise_deg: 10.0
+
+arm_training:
+  algorithm: "sac_her"
+  learning_rate: 0.0003
+  batch_size: 512
+  buffer_size: 2000000
+  gamma: 0.99
+  tau: 0.005
+  total_timesteps: 5000000
+  eval_frequency: 25000
+  checkpoint_frequency: 100000
+  n_eval_episodes: 50
+  video_frequency: 100000
+  her_n_sampled_goal: 4
+  her_goal_selection: "future"
+  reward_grasp: 0.1
+  reward_place: 0.2
+  reward_complete: 1.0
+  penalty_collision: -0.5
+  penalty_wrong_disk: -0.1
+  seed: 42
+  weights_dir: "weights/arm"
+  action_delta_min: -0.1
+  action_delta_max: 0.1
+  distance_penalty_coeff: 0.01
+
+arm_curriculum:
+  enabled: true
+  stages: [1, 2, 3, 5, 7]
+  promotion_threshold: 0.85
+  promotion_eval_episodes: 100
+  warm_start: true
+
+arm_task:
+  task_type: "tower_of_hanoi"
+  num_disks: 3
+  num_pegs: 3
+  peg_positions:
+    - [0.20, 0.00, 0.00]
+    - [0.30, 0.00, 0.00]
+    - [0.40, 0.00, 0.00]
+  num_baskets: 3
+  basket_positions:
+    - [0.20, -0.20, 0.00]
+    - [0.30, -0.20, 0.00]
+    - [0.40, -0.20, 0.00]
+  max_episode_steps: 1000
+  num_garments: 5

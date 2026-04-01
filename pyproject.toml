@@ -43,6 +43,14 @@ llm = [
     "llama-cpp-python>=0.2",
     "huggingface-hub>=0.20",
 ]
+arm = [
+    "gymnasium>=0.29",
+    "mujoco>=3.0",
+    "stable-baselines3>=2.0",
+    "pyperplan>=2.0",
+    "ultralytics>=8.0",
+    "scipy>=1.10",
+]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
@@ -98,6 +106,9 @@ module = [
     "mousedroid.learning.progressive",
     "mousedroid.curiosity.icm",
     "mousedroid.growth.distillation",
+    "mousedroid.arm.control.sac_agent",
+    "mousedroid.arm.perception.object_detector",
+    "mousedroid.arm.perception.depth_processor",
 ]
 disallow_subclassing_any = false
 
@@ -125,6 +136,7 @@ omit = [
     "*/hardware/sensors/ultrasonic.py",
     "*/hardware/camera/imx500.py",
     "*/hardware/audio/usb_microphone.py",
+    "*/arm/hardware/so_arm100_driver.py",
 ]
 
 [tool.coverage.report]

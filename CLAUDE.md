@@ -1,0 +1,141 @@
+# MouseDroidAGI — Claude Code Project Instructions
+
+## Overview
+
+MouseDroidAGI is a Star Wars MSE-6 autonomous navigation system and hierarchical robot arm training platform running on NVIDIA Jetson Orin Nano. It implements the 10 Pillars of the Ideal Neural Network as a cohesive agentic system.
+
+## Architecture Invariants
+
+These invariants are **non-negotiable** across all modules:
+
+1. **Protocol-based DI**: All interfaces are `@runtime_checkable Protocol`. Concrete types are only imported inside factory functions.
+2. **Factory pattern**: `src/mousedroid/factory.py` is the single wiring point. All `build_*()` functions return protocol types.
+3. **No hardcoded values**: Every threshold, dimension, pin number, path, and tunable parameter comes from Pydantic config (`src/mousedroid/config/schema.py`) loaded from YAML (`config/*.yaml`).
+4. **Structured logging**: Use `structlog` everywhere via `from mousedroid.logging.setup import get_logger`. Never use `print()`.
+5. **Asyncio everywhere**: No threading. All I/O-bound operations are `async`.
+6. **Type safety**: `mypy --strict` must pass. All public functions have type annotations.
+7. **`torch.no_grad()`**: Required for all inference paths.
+8. **`deque(maxlen=N)`**: Required for all sensor ring buffers. `N` comes from config.
+9. **Backwards compatibility**: New config fields MUST have defaults. Existing YAML files must load unchanged.
+
+## Project Structure
+
+```
+src/mousedroid/
+  config/schema.py    # Pydantic v2 root Settings — single source of truth
+  factory.py          # DI wiring — only place that imports concrete types
+  orchestrator/       # 30 Hz sense-plan-act loop
+  world_model/        # RSSM latent dynamics + MCTS planning
+  cognitive/          # Dual-cadence BDI + metacognitive loop
+  memory/             # Working, episodic, semantic, consolidation
+  learning/           # EWC + progressive neural networks
+  meta/               # MAML + in-context adaptation
+  curiosity/          # ICM intrinsic curiosity
+  growth/             # Knowledge distillation
+  reward/             # Constitutional multi-objective reward
+  scaling/            # Mixture-of-Experts + adaptive compute
+  safety/             # Constitutional RL + runtime safety monitor
+  arm/                # Robot arm training platform (Tower of Hanoi -> laundry sorting)
+    perception/       # Depth camera, YOLO detection, 6-DoF pose, symbolic state
+    planning/         # PDDL symbolic planner, LLM replanner, laundry rules
+    control/          # SAC+HER policy, grasp/place primitives, trajectory
+    environments/     # MuJoCo Gymnasium envs, domain randomization, curriculum
+    hardware/         # SO-ARM100 driver, mock driver
+  hardware/           # Sensor drivers (camera, ultrasonic, audio)
+  comms/              # ESP32 serial/WiFi communication
+  sensing/            # Sensor fusion
+  telemetry/          # REST + WebSocket monitoring server
+  resilience/         # Circuit breaker + retry wrappers
+  logging/            # structlog setup
+  common/tools/       # Tool registry for runtime operations
+```
+
+## Configuration System
+
+- **Schema**: `src/mousedroid/config/schema.py` — Pydantic v2 `BaseSettings` with nested models
+- **YAML configs**: `config/` directory — `default.yaml` (mouse droid), `robot_arm_default.yaml` (arm platform)
+- **Environment variables**: Prefix `MOUSEDROID_`, nested delimiter `__` (e.g., `MOUSEDROID_ARM__DOF=6`)
+- **Platform selection**: `platform: mouse_droid` or `platform: robot_arm` in YAML
+- **Adding new config**: Create a Pydantic `BaseModel` subclass, add as `Optional` field with `None` default to `Settings`
+
+## Testing
+
+- **Framework**: pytest with `pytest-asyncio`, `pytest-cov`, `hypothesis`
+- **Coverage gate**: 85% minimum (`--cov-fail-under=85`)
+- **Markers**: `@pytest.mark.slow`, `@pytest.mark.hardware`, `@pytest.mark.smoke`
+- **Test structure**: `tests/unit/`, `tests/integration/`, `tests/property/`, `tests/regression/`, `tests/e2e/`, `tests/hardware/`
+- **Fixtures**: Global `conftest.py` auto-mocks hardware env. Unit `conftest.py` resets structlog.
+- **Optional deps**: Use `pytest.importorskip("mujoco")` for modules requiring arm dependencies
+- **Run**: `pytest tests/` or `pytest tests/unit/arm/ -v` for arm-specific tests
+
+## Code Style
+
+- **Linter**: `ruff` — line length 100, Google docstrings, comprehensive rule set
+- **Type checker**: `mypy --strict` with `ignore_missing_imports`
+- **Format**: `ruff format`
+- **Docstrings**: Google convention, required on all public functions/classes
+- **Imports**: `from __future__ import annotations` in every module
+
+## CI Pipeline (5 stages)
+
+1. **Lint**: `ruff check` + `ruff format --check` (Python 3.10 + 3.11)
+2. **Type check**: `mypy --strict` (depends on lint)
+3. **Test + Coverage**: `pytest --cov --cov-fail-under=85` (depends on lint)
+4. **Security**: `pip-audit --strict` (advisory)
+5. **Docker**: Validate `Dockerfile.jetson` + `docker-compose.jetson.yml` (depends on test + typecheck)
+
+## Robot Arm Platform (Hierarchical Reasoning Architecture)
+
+### Four-Layer Architecture
+
+| Layer | Module | Responsibility |
+|-------|--------|----------------|
+| Layer 0: Perception | `arm/perception/` | RealSense D435i -> YOLO -> 6-DoF pose -> symbolic PDDL state |
+| Layer 1: Symbolic Planning | `arm/planning/` | PDDL planner (Pyperplan) + MCTS + LLM replanner |
+| Layer 2: World Modeling | `world_model/` (reused) | RSSM latent dynamics, Dreamer-V3 imagination |
+| Layer 3: Motor Control | `arm/control/` | SAC+HER goal-conditioned policy, grasp/place primitives |
+
+### Key Design Patterns for Arm Modules
+
+- **Sim-first**: Train in MuJoCo, transfer to real hardware via domain randomization
+- **Curriculum learning**: Progressive difficulty (1 disk -> 3 -> 5 -> 7 disks)
+- **HER (Hindsight Experience Replay)**: Relabel failed episodes as successful toward achieved goals
+- **Reward shaping**: Configurable weights for grasp, place, collision, completion rewards
+- **PDDL optimality**: Tower of Hanoi must produce 2^n - 1 optimal moves
+
+### Reusable Modules (Platform-Agnostic)
+
+These existing modules work for both mouse_droid and robot_arm platforms:
+- `world_model/` — RSSM + MCTS (latent dynamics, planning)
+- `safety/` — Runtime safety monitor (joint limits, E-stop for arm)
+- `reward/` — Multi-objective reward framework
+- `memory/` — Episodic replay (HER buffer), semantic memory
+- `curiosity/` — ICM intrinsic reward for exploration
+- `learning/` — EWC continual learning (Hanoi -> laundry transfer)
+- `resilience/` — Circuit breaker + retry for hardware drivers
+- `common/tools/` — Tool registry for arm calibration, diagnostics
+
+## Common Commands
+
+```bash
+# Development setup
+pip install -e ".[dev]"
+
+# With robot arm dependencies
+pip install -e ".[dev,arm]"
+
+# Run all tests
+pytest tests/ -v
+
+# Run arm-specific tests
+pytest tests/unit/arm/ -v
+
+# Lint + format check
+ruff check src/ tests/ && ruff format --check src/ tests/
+
+# Type check
+mypy --strict src/mousedroid/
+
+# Full local CI
+bash scripts/ci.sh
+```
