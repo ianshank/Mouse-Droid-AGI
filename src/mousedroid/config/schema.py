@@ -510,6 +510,57 @@ class ThreeLawsConfig(BaseModel):
         le=1,
         description="Law 3 preservation reward weight",
     )
+    command_diff_threshold: float = Field(
+        0.01,
+        gt=0,
+        description="Min action diff to log a violation",
+    )
+    thermal_severity_range_c: float = Field(
+        15.0,
+        gt=0,
+        description="Temp range over critical for severity scaling (°C)",
+    )
+    rapid_reversal_threshold: float = Field(
+        1.0,
+        gt=0,
+        description="Magnitude change triggering reversal smoothing",
+    )
+    inaction_harm_severity: float = Field(
+        0.5,
+        ge=0,
+        le=1,
+        description="Law 1 inaction violation severity",
+    )
+    law1_override_severity: float = Field(
+        0.3,
+        ge=0,
+        le=1,
+        description="Law 2 command-override-by-Law-1 severity",
+    )
+    zone_boundary_severity: float = Field(
+        0.4,
+        ge=0,
+        le=1,
+        description="Law 2 zone boundary clip severity",
+    )
+    mechanical_stress_severity: float = Field(
+        0.3,
+        ge=0,
+        le=1,
+        description="Law 3 reversal smoothing severity",
+    )
+    battery_damping_factor: float = Field(
+        0.5,
+        gt=0,
+        le=1,
+        description="Action scale factor when battery low",
+    )
+    thermal_damping_factor: float = Field(
+        0.5,
+        gt=0,
+        le=1,
+        description="Action scale factor when GPU overheating",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -610,6 +661,9 @@ class ArmPerceptionConfig(BaseModel):
     dark_brightness_threshold: float = Field(
         80.0, ge=0, le=255, description="Brightness below which garment is classified dark"
     )
+    default_focal_length: float = Field(500.0, gt=0, description="Default camera focal length (px)")
+    default_principal_x: float = Field(320.0, gt=0, description="Default principal point X (px)")
+    default_principal_y: float = Field(240.0, gt=0, description="Default principal point Y (px)")
 
 
 class ArmPlanningConfig(BaseModel):

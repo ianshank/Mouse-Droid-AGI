@@ -43,7 +43,6 @@ class KnowledgeDistiller:
         self._student = student
         self._temperature = temperature
         self._alpha = alpha
-        self._optimizer = nn.utils.clip_grad.clip_grad_norm_  # placeholder reference
         self._student_optimizer = __import__("torch").optim.Adam(
             student.parameters(),
             lr=lr,

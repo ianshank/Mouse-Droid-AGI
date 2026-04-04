@@ -13,6 +13,8 @@ import numpy as np
 import structlog
 from numpy.typing import NDArray
 
+from mousedroid.common.math.numpy_ops import relu as _relu
+from mousedroid.common.math.numpy_ops import softmax as _softmax
 from mousedroid.constants import (
     DEFAULT_AFFECT_DIM,
     DEFAULT_BELIEF_DIM,
@@ -22,8 +24,6 @@ from mousedroid.constants import (
     DEFAULT_VISION_DIM,
     WEIGHT_INIT_SCALE,
 )
-from mousedroid.utils.numpy_ops import relu as _relu
-from mousedroid.utils.numpy_ops import softmax as _softmax
 
 _log = structlog.get_logger(__name__)
 

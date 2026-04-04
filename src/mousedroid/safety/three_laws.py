@@ -83,6 +83,15 @@ class RoboticsLawChecker:
         thermal_critical_c: float = 85.0,
         smoothing_factor: float = 0.5,
         enabled: bool = True,
+        command_diff_threshold: float = 0.01,
+        thermal_severity_range_c: float = 15.0,
+        rapid_reversal_threshold: float = 1.0,
+        inaction_harm_severity: float = 0.5,
+        law1_override_severity: float = 0.3,
+        zone_boundary_severity: float = 0.4,
+        mechanical_stress_severity: float = 0.3,
+        battery_damping_factor: float = 0.5,
+        thermal_damping_factor: float = 0.5,
     ) -> None:
         self._human_safety_radius_m = human_safety_radius_m
         self._emergency_stop_dist_m = emergency_stop_dist_m
@@ -94,6 +103,15 @@ class RoboticsLawChecker:
         self._thermal_critical_c = thermal_critical_c
         self._smoothing_factor = smoothing_factor
         self._enabled = enabled
+        self._command_diff_threshold = command_diff_threshold
+        self._thermal_severity_range_c = thermal_severity_range_c
+        self._rapid_reversal_threshold = rapid_reversal_threshold
+        self._inaction_harm_severity = inaction_harm_severity
+        self._law1_override_severity = law1_override_severity
+        self._zone_boundary_severity = zone_boundary_severity
+        self._mechanical_stress_severity = mechanical_stress_severity
+        self._battery_damping_factor = battery_damping_factor
+        self._thermal_damping_factor = thermal_damping_factor
 
     @classmethod
     def from_config(cls, cfg: ThreeLawsConfig) -> RoboticsLawChecker:
@@ -116,6 +134,15 @@ class RoboticsLawChecker:
             thermal_critical_c=cfg.thermal_critical_c,
             smoothing_factor=cfg.smoothing_factor,
             enabled=cfg.enabled,
+            command_diff_threshold=cfg.command_diff_threshold,
+            thermal_severity_range_c=cfg.thermal_severity_range_c,
+            rapid_reversal_threshold=cfg.rapid_reversal_threshold,
+            inaction_harm_severity=cfg.inaction_harm_severity,
+            law1_override_severity=cfg.law1_override_severity,
+            zone_boundary_severity=cfg.zone_boundary_severity,
+            mechanical_stress_severity=cfg.mechanical_stress_severity,
+            battery_damping_factor=cfg.battery_damping_factor,
+            thermal_damping_factor=cfg.thermal_damping_factor,
         )
 
     # ------------------------------------------------------------------
@@ -263,7 +290,7 @@ class RoboticsLawChecker:
                     LawViolation(
                         law=RoboticsLaw.FIRST,
                         description="inaction while human needs help",
-                        severity=0.5,
+                        severity=self._inaction_harm_severity,
                         action_override=np.array(
                             [self._alert_signal_speed] + [0.0] * (safe.size - 1),
                             dtype=np.float64,
@@ -298,12 +325,12 @@ class RoboticsLawChecker:
             if has_law1_violation:
                 # Law 1 override: do NOT follow command
                 diff = float(np.linalg.norm(safe - cmd))
-                if diff > 0.01:
+                if diff > self._command_diff_threshold:
                     violations.append(
                         LawViolation(
                             law=RoboticsLaw.SECOND,
                             description="command overridden by Law 1 (no harm)",
-                            severity=0.3,
+                            severity=self._law1_override_severity,
                         )
                     )
             else:
@@ -311,7 +338,7 @@ class RoboticsLawChecker:
                 w = self._command_blend_weight
                 blended = w * cmd + (1.0 - w) * safe
                 diff = float(np.linalg.norm(safe - cmd))
-                if diff > 0.01:
+                if diff > self._command_diff_threshold:
                     violations.append(
                         LawViolation(
                             law=RoboticsLaw.SECOND,
@@ -333,7 +360,7 @@ class RoboticsLawChecker:
                     LawViolation(
                         law=RoboticsLaw.SECOND,
                         description="action clipped to allowed zone boundary",
-                        severity=0.4,
+                        severity=self._zone_boundary_severity,
                     )
                 )
                 safe = clipped
@@ -375,16 +402,15 @@ class RoboticsLawChecker:
                 )
             )
             # Reduce motion to conserve battery
-            safe *= 0.5
+            safe *= self._battery_damping_factor
 
         # Thermal preservation
         gpu_temp = float(context.get("gpu_temp_c", 0.0))
         if gpu_temp > self._thermal_critical_c and not has_higher_violation:
             # Severity scales linearly: 0.0 at critical, 1.0 at critical+range
-            thermal_severity_range_c = 15.0
             severity = float(
                 np.clip(
-                    (gpu_temp - self._thermal_critical_c) / thermal_severity_range_c,
+                    (gpu_temp - self._thermal_critical_c) / self._thermal_severity_range_c,
                     0.0,
                     1.0,
                 )
@@ -398,7 +424,7 @@ class RoboticsLawChecker:
                     severity=severity,
                 )
             )
-            safe *= 0.5
+            safe *= self._thermal_damping_factor
 
         # Mechanical stress: smooth rapid direction reversals
         prev_action = context.get("prev_action")
@@ -407,13 +433,13 @@ class RoboticsLawChecker:
             # Check if sign reversal on any axis
             sign_change = np.sign(safe) != np.sign(prev)
             magnitude_change = np.abs(safe - prev)
-            rapid_reversal = sign_change & (magnitude_change > 1.0)
+            rapid_reversal = sign_change & (magnitude_change > self._rapid_reversal_threshold)
             if np.any(rapid_reversal):
                 violations.append(
                     LawViolation(
                         law=RoboticsLaw.THIRD,
                         description="rapid direction reversal smoothed",
-                        severity=0.3,
+                        severity=self._mechanical_stress_severity,
                     )
                 )
                 # Smooth the transition

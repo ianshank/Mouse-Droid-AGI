@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING
 
 from mousedroid.agents.base import AgentProtocol
 from mousedroid.comms.protocol import ESP32CommProtocol
-from mousedroid.constants import DEFAULT_MAX_DISTANCE_M
 from mousedroid.hardware.protocols import AudioProtocol, DistanceSensorProtocol, VisionProtocol
 from mousedroid.logging.setup import get_logger
 from mousedroid.safety.protocol import SafetyMonitorProtocol
@@ -120,10 +119,6 @@ def build_distance_sensor(cfg: Settings) -> DistanceSensorProtocol:
         ultrasonic_cfg: UltrasonicConfig = cfg.ultrasonic or UltraCfg(
             trigger_pin=0,
             echo_pin=0,
-            max_range_m=DEFAULT_MAX_DISTANCE_M,
-            min_range_m=0.02,
-            timeout_s=0.1,
-            speed_of_sound_mps=343.0,
         )
         return MockUltrasonic(ultrasonic_cfg)
 
@@ -581,10 +576,10 @@ def build_arm_perception(cfg: Settings) -> ArmPerceptionProtocol:
 
     # Default identity intrinsics — overridden by camera driver at runtime
     intrinsics = np.eye(3, dtype=np.float64)
-    intrinsics[0, 0] = 500.0  # fx
-    intrinsics[1, 1] = 500.0  # fy
-    intrinsics[0, 2] = 320.0  # cx
-    intrinsics[1, 2] = 240.0  # cy
+    intrinsics[0, 0] = cfg.arm_perception.default_focal_length  # fx
+    intrinsics[1, 1] = cfg.arm_perception.default_focal_length  # fy
+    intrinsics[0, 2] = cfg.arm_perception.default_principal_x  # cx
+    intrinsics[1, 2] = cfg.arm_perception.default_principal_y  # cy
 
     _log.info("arm_perception_built", camera=cfg.arm_perception.depth_camera_type)
     return ArmPerception(cfg.arm_perception, cfg.arm_task, intrinsics)
