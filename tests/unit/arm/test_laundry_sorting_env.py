@@ -44,7 +44,7 @@ class TestLaundrySortingEnv:
         action = np.zeros(6, dtype=np.float64)
         result = env.step(action)
         assert len(result) == 5
-        obs, reward, terminated, truncated, info = result
+        _obs, reward, terminated, truncated, _info = result
         assert isinstance(reward, float)
         assert isinstance(terminated, bool)
         assert isinstance(truncated, bool)
@@ -69,9 +69,9 @@ class TestLaundrySortingEnv:
         large_action = np.full(6, 1.0, dtype=np.float64)
         env.step(large_action)
         # Joints should only move by 0.05, not 1.0
-        obs, _ = env.reset(seed=0)
+        _obs, _ = env.reset(seed=0)
         env.step(large_action)
-        obs_after, _ = env.reset(seed=0)
+        _obs_after, _ = env.reset(seed=0)
         # Just verify no crash — the clipping is internal
 
     def test_reset_with_seed_deterministic(self) -> None:

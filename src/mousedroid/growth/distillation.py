@@ -13,7 +13,7 @@ _log = get_logger(__name__)
 
 def _backward(loss: Tensor) -> None:
     """Isolate torch stub gaps around ``Tensor.backward``."""
-    loss.backward()  # type: ignore[no-untyped-call]
+    loss.backward()
 
 
 class KnowledgeDistiller:

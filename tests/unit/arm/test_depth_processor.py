@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from mousedroid.arm.perception.depth_processor import DepthProcessor
 from mousedroid.config.schema import ArmPerceptionConfig
@@ -21,6 +22,7 @@ class TestFilterDepth:
     """Tests for depth filtering."""
 
     def test_clips_to_valid_range(self) -> None:
+        pytest.importorskip("scipy")
         proc = _make_processor()
         depth = np.array([[0.005, 15.0], [0.5, 1.0]], dtype=np.float32)
         filtered = proc.filter_depth(depth)
@@ -28,6 +30,7 @@ class TestFilterDepth:
         assert filtered.max() <= 10.0
 
     def test_fills_holes(self) -> None:
+        pytest.importorskip("scipy")
         proc = _make_processor()
         depth = np.array(
             [[1.0, 1.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 1.0]],

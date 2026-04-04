@@ -207,16 +207,16 @@ class TestComputeLatentStatistics:
             def __len__(self) -> int:
                 return 1
 
-            def __getitem__(self, idx: int) -> tuple[
-                torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
-            ]:
+            def __getitem__(
+                self, idx: int
+            ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
                 seq_len = 3
                 return (
-                    torch.randn(seq_len, 256),   # vision
-                    torch.randn(seq_len, 1),     # ultrasonic
-                    torch.randn(seq_len, 4),     # motor_state
-                    torch.ones(seq_len, 1),      # valid_mask
-                    torch.randn(seq_len, 3),     # actions
+                    torch.randn(seq_len, 256),  # vision
+                    torch.randn(seq_len, 1),  # ultrasonic
+                    torch.randn(seq_len, 4),  # motor_state
+                    torch.ones(seq_len, 1),  # valid_mask
+                    torch.randn(seq_len, 3),  # actions
                 )
 
         rssm = _FakeRSSM()

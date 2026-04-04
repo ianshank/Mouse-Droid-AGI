@@ -53,13 +53,16 @@ class OfflineRLDataset:
         self._device = device or torch.device("cpu")
         self._env: lmdb.Environment | None = None
         self._keys: list[bytes] = []
-        self._cached_transitions: tuple[
-            NDArray[Any],
-            NDArray[Any],
-            NDArray[Any],
-            NDArray[Any],
-            NDArray[Any],
-        ] | None = None
+        self._cached_transitions: (
+            tuple[
+                NDArray[Any],
+                NDArray[Any],
+                NDArray[Any],
+                NDArray[Any],
+                NDArray[Any],
+            ]
+            | None
+        ) = None
         self._cached_terminal_gap_s: float | None = None
 
     @property
@@ -114,11 +117,13 @@ class OfflineRLDataset:
         Returns:
             1-D float32 array of shape ``(state_dim,)``.
         """
-        result: NDArray[np.floating[Any]] = np.concatenate([
-            record.vision_features.flatten()[:self._vision_dim],
-            np.array([record.distance_m], dtype=np.float32),
-            record.motor_state.flatten()[:self._motor_dim],
-        ]).astype(np.float32)
+        result: NDArray[np.floating[Any]] = np.concatenate(
+            [
+                record.vision_features.flatten()[: self._vision_dim],
+                np.array([record.distance_m], dtype=np.float32),
+                record.motor_state.flatten()[: self._motor_dim],
+            ]
+        ).astype(np.float32)
         return result
 
     def _load_record(self, key: bytes) -> MouseDroidExperienceRecord | None:
@@ -187,7 +192,7 @@ class OfflineRLDataset:
 
         for i in range(n_transitions):
             states[i] = self._record_to_state(records[i])
-            actions[i] = records[i].action.flatten()[:self._action_dim]
+            actions[i] = records[i].action.flatten()[: self._action_dim]
             rewards[i] = records[i].reward
             next_states[i] = self._record_to_state(records[i + 1])
 
@@ -223,8 +228,7 @@ class OfflineRLDataset:
             ``next_states``, ``dones`` — each a tensor on ``self._device``.
         """
         cache_miss = (
-            self._cached_transitions is None
-            or self._cached_terminal_gap_s != terminal_gap_s
+            self._cached_transitions is None or self._cached_terminal_gap_s != terminal_gap_s
         )
         if cache_miss:
             self._cached_transitions = self.get_transitions(
@@ -253,7 +257,8 @@ class OfflineRLDataset:
                 "actions": torch.as_tensor(actions[batch_idx], device=self._device),
                 "rewards": torch.as_tensor(rewards[batch_idx], device=self._device),
                 "next_states": torch.as_tensor(
-                    next_states[batch_idx], device=self._device,
+                    next_states[batch_idx],
+                    device=self._device,
                 ),
                 "dones": torch.as_tensor(dones[batch_idx], device=self._device),
             }

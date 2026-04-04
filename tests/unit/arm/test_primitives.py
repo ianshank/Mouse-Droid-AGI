@@ -40,7 +40,7 @@ class TestTransit:
 
     @pytest.mark.asyncio
     async def test_transit_failure_returns_false(self) -> None:
-        prims, driver = _make_primitives()
+        prims, _driver = _make_primitives()
         # Wrong DOF to trigger ValueError
         target = np.array([0.1, 0.2], dtype=np.float64)
         result = await prims.transit(target)

@@ -83,8 +83,7 @@ def _load_checkpoint(
     # 2) Raw model state_dict (e.g. final weights only)
     if not isinstance(data, dict):
         raise TypeError(
-            f"Unsupported checkpoint format at {path!s}: expected a dict, "
-            f"got {type(data).__name__}"
+            f"Unsupported checkpoint format at {path!s}: expected a dict, got {type(data).__name__}"
         )
 
     if "model_state_dict" in data:

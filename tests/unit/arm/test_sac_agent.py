@@ -64,8 +64,9 @@ class TestSACAgentBuild:
 
     def test_build_raises_without_sb3(self, agent: SACAgent) -> None:
         env = MagicMock()
-        with patch.dict("sys.modules", {"stable_baselines3": None}), pytest.raises(
-            ImportError, match="stable-baselines3"
+        with (
+            patch.dict("sys.modules", {"stable_baselines3": None}),
+            pytest.raises(ImportError, match="stable-baselines3"),
         ):
             agent.build(env)
 
@@ -74,7 +75,8 @@ class TestSACAgentLoad:
     """Tests for SACAgent.load."""
 
     def test_load_raises_without_sb3(self, agent: SACAgent) -> None:
-        with patch.dict("sys.modules", {"stable_baselines3": None}), pytest.raises(
-            ImportError, match="stable-baselines3"
+        with (
+            patch.dict("sys.modules", {"stable_baselines3": None}),
+            pytest.raises(ImportError, match="stable-baselines3"),
         ):
             agent.load("/fake/path")

@@ -5,7 +5,11 @@ from __future__ import annotations
 import pytest
 
 from mousedroid.arm.hardware.mock_arm_driver import MockArmDriver
-from mousedroid.arm.protocols import ArmDriverProtocol
+from mousedroid.arm.protocols import (
+    ArmControllerProtocol,
+    ArmDriverProtocol,
+    ArmPerceptionProtocol,
+)
 from mousedroid.config.schema import (
     ArmConfig,
     ArmPlanningConfig,
@@ -14,7 +18,6 @@ from mousedroid.config.schema import (
     PlatformType,
     Settings,
 )
-from mousedroid.arm.protocols import ArmControllerProtocol, ArmPerceptionProtocol
 from mousedroid.factory import (
     build_arm_controller,
     build_arm_driver,

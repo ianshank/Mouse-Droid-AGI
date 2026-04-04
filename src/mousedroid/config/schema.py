@@ -130,6 +130,21 @@ class CuriosityConfig(BaseModel):
     )
     forward_model_hidden: int = Field(256, gt=0, description="Forward model hidden dim")
     inverse_model_hidden: int = Field(256, gt=0, description="Inverse model hidden dim")
+    novelty_decay_enabled: bool = Field(
+        False,
+        description="Enable novelty decay to reduce curiosity for familiar states",
+    )
+    novelty_decay_rate: float = Field(
+        0.01,
+        gt=0,
+        description="Exponential decay rate per state visit",
+    )
+    novelty_min_scale: float = Field(
+        0.01,
+        gt=0,
+        le=1,
+        description="Minimum curiosity scale after decay",
+    )
 
 
 class ESP32Config(BaseModel):
@@ -590,7 +605,7 @@ class ArmConfig(BaseModel):
     serial_baud: int = Field(115200, gt=0, description="Serial baud rate")
     command_timeout_s: float = Field(1.0, gt=0, description="Command response timeout (s)")
 
-    @model_validator(mode="after")
+    @model_validator(mode="after")  # type: ignore[untyped-decorator]
     def home_matches_dof(self) -> Self:
         """Validate home position length matches DOF."""
         if len(self.home_position) != self.dof:
@@ -759,7 +774,7 @@ class ArmTaskConfig(BaseModel):
     max_episode_steps: int = Field(500, gt=0, description="Max steps per episode")
     num_garments: int = Field(5, gt=0, description="Number of garments per episode (laundry)")
 
-    @model_validator(mode="after")
+    @model_validator(mode="after")  # type: ignore[untyped-decorator]
     def positions_match_count(self) -> Self:
         """Validate position list lengths match counts."""
         if len(self.peg_positions) != self.num_pegs:
@@ -853,7 +868,7 @@ class UltrasonicConfig(BaseModel):
     timeout_s: float = Field(0.1, gt=0, description="Echo timeout (s)")
     speed_of_sound_mps: float = Field(343.0, gt=0, description="Speed of sound (m/s, ~20C)")
 
-    @model_validator(mode="after")
+    @model_validator(mode="after")  # type: ignore[untyped-decorator]
     def range_ordering(self) -> Self:
         """Validate max_range_m > min_range_m."""
         if self.max_range_m <= self.min_range_m:
@@ -954,7 +969,7 @@ class Settings(BaseSettings):
         description="Arm task config (Tower of Hanoi / laundry sorting params)",
     )
 
-    @model_validator(mode="after")
+    @model_validator(mode="after")  # type: ignore[untyped-decorator]
     def hardware_requires_pins(self) -> Self:
         """Validate that real hardware mode has required sensor configs."""
         if not self.mock_hardware and self.ultrasonic is None:
