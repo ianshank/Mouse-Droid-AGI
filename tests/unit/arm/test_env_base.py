@@ -65,7 +65,7 @@ class TestBaseClassSharedBehaviour:
         large_action = np.ones(6, dtype=np.float64)
         env.step(large_action)
         # Joint angles should be at most 0.01 after one step from zero
-        obs, _ = env.reset()
+        _obs, _ = env.reset()
         env.step(large_action)
         # Joints should have moved by exactly action_delta_max
         np.testing.assert_allclose(env._joint_angles, np.full(6, 0.01), atol=1e-10)

@@ -60,7 +60,7 @@ class DomainRandomizer:
             return nominal_mass
         pct = self._cfg.mass_range_pct / 100.0
         scale = self._rng.uniform(1.0 - pct, 1.0 + pct)
-        return nominal_mass * scale
+        return float(nominal_mass * scale)
 
     def randomize_friction(self, nominal_friction: float) -> float:
         """Randomize surface friction coefficient.
@@ -74,7 +74,7 @@ class DomainRandomizer:
         if not self._enabled:
             return nominal_friction
         delta = self._rng.uniform(-self._cfg.friction_range, self._cfg.friction_range)
-        return max(0.0, nominal_friction + delta)
+        return float(max(0.0, nominal_friction + delta))
 
     def randomize_position(self, nominal_position: NDArray[np.float64]) -> NDArray[np.float64]:
         """Randomize object position with Gaussian noise.

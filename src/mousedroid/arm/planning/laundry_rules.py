@@ -66,13 +66,13 @@ class LaundryRuleEngine:
         """
         self._task_cfg = task_cfg
         self._rules = rules if rules is not None else DEFAULT_RULES
-        self._white_brightness = (
-            perception_cfg.white_brightness_threshold if perception_cfg else 200.0
-        )
-        self._white_saturation = (
-            perception_cfg.white_saturation_threshold if perception_cfg else 0.15
-        )
-        self._dark_brightness = perception_cfg.dark_brightness_threshold if perception_cfg else 80.0
+        if perception_cfg is None:
+            from mousedroid.config.schema import ArmPerceptionConfig
+
+            perception_cfg = ArmPerceptionConfig()
+        self._white_brightness = perception_cfg.white_brightness_threshold
+        self._white_saturation = perception_cfg.white_saturation_threshold
+        self._dark_brightness = perception_cfg.dark_brightness_threshold
         _log.info(
             "laundry_rules_init",
             num_rules=len(self._rules),

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from mousedroid.constants import MOTOR_STATE_BATTERY_INDEX
 from mousedroid.logging.setup import get_logger
 from mousedroid.safety.context import SafetyContext
 
@@ -68,7 +69,7 @@ class MouseDroidSafetyMonitor:
             is_emergency = True
 
         # -- Battery voltage -----------------------------------------------
-        battery_voltage: float = float(observation.motor_state[3])
+        battery_voltage: float = float(observation.motor_state[MOTOR_STATE_BATTERY_INDEX])
         battery_warn_v = self._cfg.battery_warn_v
         battery_critical_v = self._cfg.battery_critical_v
 

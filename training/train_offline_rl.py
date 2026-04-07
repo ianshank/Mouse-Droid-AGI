@@ -212,7 +212,8 @@ def train_offline_rl(
         }
         for key, vals in epoch_losses.items():
             final_stats[f"final_{key}"] = round(
-                sum(vals[-batch_count:]) / max(batch_count, 1), 6,
+                sum(vals[-batch_count:]) / max(batch_count, 1),
+                6,
             )
 
         _log.info("offline_rl_complete", **final_stats)

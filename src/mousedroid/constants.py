@@ -138,13 +138,6 @@ MDNS_SERVICE_TYPE: str = "_http._tcp.local."
 MOTOR_STATE_BATTERY_INDEX: int = 3
 """Index of battery voltage within the motor_state array."""
 
-# ---------------------------------------------------------------------------
-# Telemetry server constants
-# ---------------------------------------------------------------------------
-
-MAX_LOG_ENTRIES: int = 1000
-"""Maximum log entries retrievable from REST endpoint."""
-
 TELEMETRY_QUEUE_TIMEOUT_S: float = 1.0
 """Timeout for telemetry queue polling in broadcast/log loops."""
 
@@ -157,6 +150,16 @@ HC_SR04_TRIGGER_PULSE_S: float = 0.00001
 
 GB_TO_BYTES: int = 1_073_741_824
 """Conversion factor from gigabytes to bytes."""
+
+# ---------------------------------------------------------------------------
+# Jetson profiler constants
+# ---------------------------------------------------------------------------
+
+MILLIDEGREE_DIVISOR: float = 1000.0
+"""Divisor to convert millidegree readings to degrees Celsius."""
+
+GPU_LOAD_PERCENTAGE_DIVISOR: float = 10.0
+"""Divisor to convert raw GPU load sysfs values to percentage (e.g. 750 / 10 = 75%)."""
 
 # ---------------------------------------------------------------------------
 # Numeric stability

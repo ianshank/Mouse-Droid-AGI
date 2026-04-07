@@ -1,6 +1,6 @@
 """Shared utility modules."""
 
-from mousedroid.utils.numpy_ops import layer_norm, relu, softmax
+from mousedroid.common.math.numpy_ops import layer_norm, relu, softmax
 from mousedroid.utils.weights_manager import (
     download_weights_from_huggingface,
     weights_exist_locally,

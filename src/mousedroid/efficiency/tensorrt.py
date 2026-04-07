@@ -19,7 +19,7 @@ def _trace_model(model: nn.Module, sample_input: Tensor) -> Any:
     """Fallback tracing helper isolated from torch's incomplete stubs."""
     import torch
 
-    return torch.jit.trace(model, sample_input)  # type: ignore[no-untyped-call]
+    return torch.jit.trace(model, sample_input)
 
 
 class TensorRTOptimizer:

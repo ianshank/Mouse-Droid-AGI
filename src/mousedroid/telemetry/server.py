@@ -190,7 +190,7 @@ class TelemetryServer:
         cors_origins = self._cfg.cors_origins
         api_key = self._cfg.api_key
 
-        @web.middleware
+        @web.middleware  # type: ignore[untyped-decorator]
         async def cors_middleware(
             request: web.Request,
             handler: Any,
@@ -221,7 +221,7 @@ class TelemetryServer:
             resp.headers["Access-Control-Allow-Headers"] = "X-API-Key, Content-Type"
             return resp
 
-        @web.middleware
+        @web.middleware  # type: ignore[untyped-decorator]
         async def auth_middleware(
             request: web.Request,
             handler: Any,
@@ -486,7 +486,8 @@ class TelemetryServer:
             while not ws.closed and self._running:
                 try:
                     entry = await asyncio.wait_for(
-                        sub_queue.get(), timeout=TELEMETRY_QUEUE_TIMEOUT_S,
+                        sub_queue.get(),
+                        timeout=TELEMETRY_QUEUE_TIMEOUT_S,
                     )
                     serialisable: dict[str, Any] = {}
                     for k, v in entry.items():
@@ -514,7 +515,8 @@ class TelemetryServer:
         while self._running:
             try:
                 frame = await asyncio.wait_for(
-                    self._queue.get(), timeout=TELEMETRY_QUEUE_TIMEOUT_S,
+                    self._queue.get(),
+                    timeout=TELEMETRY_QUEUE_TIMEOUT_S,
                 )
             except asyncio.TimeoutError:
                 continue

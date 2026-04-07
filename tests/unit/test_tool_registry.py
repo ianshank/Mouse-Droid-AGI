@@ -150,23 +150,8 @@ def test_deprecated_tools_init_imports() -> None:
     assert tools_mod.ToolSpec is ToolSpec
 
 
-def test_deprecated_tools_registry_getattr_warns() -> None:
-    """Test that accessing mousedroid.tools.registry attributes emits deprecation warning."""
-    import warnings
+def test_canonical_tools_registry_importable() -> None:
+    """Test that canonical mousedroid.common.tools.registry is importable."""
+    from mousedroid.common.tools.registry import ToolRegistry as CanonicalRegistry
 
-    import mousedroid.tools.registry as deprecated_mod
-
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        _ = deprecated_mod.__getattr__("ToolRegistry")
-        assert len(w) == 1
-        assert issubclass(w[0].category, DeprecationWarning)
-        assert "deprecated" in str(w[0].message).lower()
-
-
-def test_deprecated_tools_registry_getattr_returns_canonical() -> None:
-    """Test that deprecated module getattr returns canonical objects."""
-    import mousedroid.tools.registry as deprecated_mod
-
-    result = deprecated_mod.__getattr__("create_default_registry")
-    assert result is create_default_registry
+    assert CanonicalRegistry is ToolRegistry
