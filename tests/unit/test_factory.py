@@ -261,3 +261,48 @@ def test_build_orchestrator_cognitive_no_fallback_raises():
         pytest.raises(RuntimeError, match="cognitive init failed"),
     ):
         build_orchestrator(cfg)
+
+
+def test_build_health_monitor():
+    """Test build_health_monitor returns a HealthMonitor instance."""
+    from mousedroid.factory import build_health_monitor
+    from mousedroid.health.monitor import HealthMonitor
+
+    cfg = Settings(mock_hardware=True)
+    monitor = build_health_monitor(cfg)
+    assert isinstance(monitor, HealthMonitor)
+
+
+def test_build_sensor_manager():
+    """Test build_sensor_manager returns a SensorManager instance."""
+    from mousedroid.factory import build_sensor_manager
+    from mousedroid.sensing.manager import SensorManager
+
+    cfg = Settings(mock_hardware=True)
+    vision = MagicMock()
+    distance = MagicMock()
+    esp32 = MagicMock()
+
+    manager = build_sensor_manager(cfg, vision=vision, distance=distance, esp32=esp32)
+    assert isinstance(manager, SensorManager)
+
+
+def test_build_sensor_manager_with_microphone():
+    """Test build_sensor_manager accepts optional microphone."""
+    from mousedroid.factory import build_sensor_manager
+    from mousedroid.sensing.manager import SensorManager
+
+    cfg = Settings(mock_hardware=True)
+    vision = MagicMock()
+    distance = MagicMock()
+    esp32 = MagicMock()
+    microphone = MagicMock()
+
+    manager = build_sensor_manager(
+        cfg,
+        vision=vision,
+        distance=distance,
+        esp32=esp32,
+        microphone=microphone,
+    )
+    assert isinstance(manager, SensorManager)

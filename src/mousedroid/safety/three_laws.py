@@ -29,6 +29,20 @@ if TYPE_CHECKING:
 _log = get_logger(__name__)
 
 
+def _default_three_laws_config() -> ThreeLawsConfig:
+    """Lazily create a default ThreeLawsConfig for constructor defaults.
+
+    Returns:
+        A ``ThreeLawsConfig`` instance with all Pydantic defaults applied.
+    """
+    from mousedroid.config.schema import ThreeLawsConfig as _Cfg
+
+    return _Cfg()
+
+
+_DEFAULT_CFG = _default_three_laws_config()
+
+
 class RoboticsLaw(enum.IntEnum):
     """Asimov's Three Laws, ordered by priority."""
 
@@ -73,25 +87,25 @@ class RoboticsLawChecker:
     def __init__(
         self,
         *,
-        human_safety_radius_m: float = 0.5,
-        emergency_stop_dist_m: float = 0.15,
-        max_safe_acceleration_mps2: float = 1.0,
-        idle_speed_threshold: float = 0.05,
-        alert_signal_speed: float = 0.1,
-        command_blend_weight: float = 0.8,
-        battery_preservation_v: float = 10.5,
-        thermal_critical_c: float = 85.0,
-        smoothing_factor: float = 0.5,
-        enabled: bool = True,
-        command_diff_threshold: float = 0.01,
-        thermal_severity_range_c: float = 15.0,
-        rapid_reversal_threshold: float = 1.0,
-        inaction_harm_severity: float = 0.5,
-        law1_override_severity: float = 0.3,
-        zone_boundary_severity: float = 0.4,
-        mechanical_stress_severity: float = 0.3,
-        battery_damping_factor: float = 0.5,
-        thermal_damping_factor: float = 0.5,
+        human_safety_radius_m: float = _DEFAULT_CFG.human_safety_radius_m,
+        emergency_stop_dist_m: float = _DEFAULT_CFG.emergency_stop_dist_m,
+        max_safe_acceleration_mps2: float = _DEFAULT_CFG.max_safe_acceleration_mps2,
+        idle_speed_threshold: float = _DEFAULT_CFG.idle_speed_threshold,
+        alert_signal_speed: float = _DEFAULT_CFG.alert_signal_speed,
+        command_blend_weight: float = _DEFAULT_CFG.command_blend_weight,
+        battery_preservation_v: float = _DEFAULT_CFG.battery_preservation_v,
+        thermal_critical_c: float = _DEFAULT_CFG.thermal_critical_c,
+        smoothing_factor: float = _DEFAULT_CFG.smoothing_factor,
+        enabled: bool = _DEFAULT_CFG.enabled,
+        command_diff_threshold: float = _DEFAULT_CFG.command_diff_threshold,
+        thermal_severity_range_c: float = _DEFAULT_CFG.thermal_severity_range_c,
+        rapid_reversal_threshold: float = _DEFAULT_CFG.rapid_reversal_threshold,
+        inaction_harm_severity: float = _DEFAULT_CFG.inaction_harm_severity,
+        law1_override_severity: float = _DEFAULT_CFG.law1_override_severity,
+        zone_boundary_severity: float = _DEFAULT_CFG.zone_boundary_severity,
+        mechanical_stress_severity: float = _DEFAULT_CFG.mechanical_stress_severity,
+        battery_damping_factor: float = _DEFAULT_CFG.battery_damping_factor,
+        thermal_damping_factor: float = _DEFAULT_CFG.thermal_damping_factor,
     ) -> None:
         self._human_safety_radius_m = human_safety_radius_m
         self._emergency_stop_dist_m = emergency_stop_dist_m

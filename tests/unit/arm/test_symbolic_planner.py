@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
+import pytest
+
 from mousedroid.arm.planning.pddl_domain import optimal_move_count
-from mousedroid.arm.planning.symbolic_planner import SymbolicPlanner
+from mousedroid.arm.planning.symbolic_planner import PlanningError, SymbolicPlanner
 from mousedroid.arm.protocols import SymbolicState
 from mousedroid.config.schema import ArmPlanningConfig, ArmTaskConfig
 
@@ -71,3 +75,95 @@ class TestSymbolicPlannerPlan:
         planner = _make_planner(num_disks=3)
         steps = planner.replan(_make_initial_state(), _make_goal_state(), "test error")
         assert len(steps) > 0
+
+
+class TestPyperplanIntegration:
+    """Test _solve_pddl and _parse_solution with mocked pyperplan."""
+
+    def test_solve_pddl_with_mocked_pyperplan(self) -> None:
+        planner = _make_planner(num_disks=2)
+
+        mock_pyperplan = MagicMock()
+        mock_pyperplan.solve.return_value = [
+            "(move disk_1 peg_A peg_C)",
+            "(move disk_2 peg_A peg_B)",
+        ]
+
+        with patch.dict("sys.modules", {"pyperplan": mock_pyperplan}):
+            steps = planner._solve_pddl("(domain)", "(problem)")
+
+        assert len(steps) == 2
+        assert steps[0].action == "move"
+        assert steps[0].args == ["disk_1", "peg_A", "peg_C"]
+        assert steps[1].args == ["disk_2", "peg_A", "peg_B"]
+
+    def test_solve_pddl_pyperplan_returns_none(self) -> None:
+        from unittest.mock import MagicMock, patch
+
+        planner = _make_planner(num_disks=2)
+
+        mock_pyperplan = MagicMock()
+        mock_pyperplan.solve.return_value = None
+
+        with (
+            patch.dict("sys.modules", {"pyperplan": mock_pyperplan}),
+            pytest.raises(PlanningError, match="no solution"),
+        ):
+            planner._solve_pddl("(domain)", "(problem)")
+
+    def test_plan_uses_pyperplan_when_available(self) -> None:
+        planner = _make_planner(num_disks=2)
+
+        mock_pyperplan = MagicMock()
+        mock_pyperplan.solve.return_value = [
+            "(move disk_1 peg_A peg_B)",
+        ]
+
+        with patch.dict("sys.modules", {"pyperplan": mock_pyperplan}):
+            steps = planner.plan(_make_initial_state(), _make_goal_state())
+
+        assert len(steps) == 1
+        mock_pyperplan.solve.assert_called_once()
+
+    def test_plan_wraps_pyperplan_exception(self) -> None:
+        from unittest.mock import MagicMock, patch
+
+        planner = _make_planner(num_disks=2)
+
+        mock_pyperplan = MagicMock()
+        mock_pyperplan.solve.side_effect = RuntimeError("solver crash")
+
+        with (
+            patch.dict("sys.modules", {"pyperplan": mock_pyperplan}),
+            pytest.raises(PlanningError, match="Planning failed"),
+        ):
+            planner.plan(_make_initial_state(), _make_goal_state())
+
+
+class TestParseSolution:
+    """Test _parse_solution directly."""
+
+    def test_parses_pddl_actions(self) -> None:
+        planner = _make_planner(num_disks=2)
+        solution = [
+            "(move disk_1 peg_A peg_C)",
+            "(move disk_2 peg_A peg_B)",
+            "(move disk_1 peg_C peg_B)",
+        ]
+        steps = planner._parse_solution(solution)
+        assert len(steps) == 3
+        assert steps[0].action == "move"
+        assert steps[2].args == ["disk_1", "peg_C", "peg_B"]
+
+    def test_handles_empty_lines(self) -> None:
+        planner = _make_planner(num_disks=2)
+        solution = ["(move disk_1 peg_A peg_C)", "", "  "]
+        steps = planner._parse_solution(solution)
+        assert len(steps) == 1
+
+    def test_handles_single_action(self) -> None:
+        planner = _make_planner(num_disks=1)
+        solution = ["(move disk_1 peg_A peg_C)"]
+        steps = planner._parse_solution(solution)
+        assert len(steps) == 1
+        assert steps[0].action == "move"
