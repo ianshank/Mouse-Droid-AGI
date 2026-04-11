@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.config.schema import Settings, UltrasonicConfig
     from mousedroid.health.monitor import HealthMonitor
+    from mousedroid.sensing.manager import SensorManager
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
 
 _log = get_logger(__name__)
@@ -365,6 +366,52 @@ def build_telemetry_server(
     )
 
 
+def build_health_monitor(cfg: Settings) -> HealthMonitor:
+    """Build health monitor for GPU/thermal monitoring.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Configured ``HealthMonitor``.
+    """
+    from mousedroid.health.monitor import HealthMonitor
+
+    _log.info("health_monitor_built")
+    return HealthMonitor(cfg.health, cfg.jetson)
+
+
+def build_sensor_manager(
+    cfg: Settings,
+    vision: VisionProtocol,
+    distance: DistanceSensorProtocol,
+    esp32: ESP32CommProtocol,
+    microphone: AudioProtocol | None = None,
+) -> SensorManager:
+    """Build sensor manager for aggregated sensor reads.
+
+    Args:
+        cfg: Root settings.
+        vision: Camera/vision protocol.
+        distance: Distance sensor protocol.
+        esp32: ESP32 communication protocol.
+        microphone: Optional audio protocol.
+
+    Returns:
+        Configured ``SensorManager``.
+    """
+    from mousedroid.sensing.manager import SensorManager
+
+    _log.info("sensor_manager_built")
+    return SensorManager(
+        vision=vision,
+        distance=distance,
+        esp32=esp32,
+        cfg=cfg,
+        microphone=microphone,
+    )
+
+
 def build_orchestrator(cfg: Settings) -> object:
     """Build fully-wired orchestrator.
 
@@ -374,9 +421,7 @@ def build_orchestrator(cfg: Settings) -> object:
     Returns:
         Fully configured ``MouseDroidOrchestrator``.
     """
-    from mousedroid.health.monitor import HealthMonitor
     from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator
-    from mousedroid.sensing.manager import SensorManager
 
     wm = build_world_model(cfg)
     agent = build_agent(cfg, wm)
@@ -386,11 +431,11 @@ def build_orchestrator(cfg: Settings) -> object:
     distance = build_distance_sensor(cfg)
     microphone = build_microphone(cfg)
 
-    sensor_manager = SensorManager(
+    sensor_manager = build_sensor_manager(
+        cfg,
         vision=camera,
         distance=distance,
         esp32=esp32,
-        cfg=cfg,
         microphone=microphone,
     )
 
@@ -409,7 +454,7 @@ def build_orchestrator(cfg: Settings) -> object:
 
     # Telemetry (optional — disabled by default)
     telemetry_publisher = build_telemetry_publisher(cfg)
-    health_monitor = HealthMonitor(cfg.health, cfg.jetson)
+    health_monitor = build_health_monitor(cfg)
 
     # Optional log ring buffer for telemetry log streaming
     log_buffer: LogRingBuffer | None = None

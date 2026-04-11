@@ -263,3 +263,91 @@ class TestOfflineRLDatasetBatchIterator:
         )
         assert total_samples == n - 1
         dataset.close()
+
+
+class TestOfflineRLDatasetEdgeCases:
+    """Test edge cases for coverage: _load_record, get_transitions with env=None."""
+
+    def test_load_record_returns_none_when_env_none(
+        self,
+        experience_cfg: ExperienceConfig,
+        model_cfg: ModelConfig,
+    ) -> None:
+        dataset = OfflineRLDataset(experience_cfg, model_cfg)
+        # _env is None by default (not opened)
+        result = dataset._load_record(b"some_key")
+        assert result is None
+
+    def test_get_transitions_returns_empty_when_env_none_but_keys_exist(
+        self,
+        experience_cfg: ExperienceConfig,
+        model_cfg: ModelConfig,
+    ) -> None:
+        dataset = OfflineRLDataset(experience_cfg, model_cfg)
+        # Simulate keys loaded but env closed
+        dataset._keys = [b"key1", b"key2"]
+        dataset._env = None
+
+        states, actions, rewards, _next_states, _dones = dataset.get_transitions()
+        assert states.shape == (0, dataset.state_dim)
+        assert actions.shape == (0, model_cfg.action_dim)
+        assert rewards.shape == (0,)
+
+    def test_get_transitions_returns_empty_with_single_record(
+        self,
+        experience_cfg: ExperienceConfig,
+        model_cfg: ModelConfig,
+        tmp_path: object,
+    ) -> None:
+        _populate_lmdb(str(tmp_path), n_records=1)
+
+        dataset = OfflineRLDataset(experience_cfg, model_cfg)
+        dataset.open()
+        states, _actions, _rewards, _next_states, _dones = dataset.get_transitions()
+        assert states.shape == (0, dataset.state_dim)
+        dataset.close()
+
+    def test_load_record_returns_record_for_valid_key(
+        self,
+        experience_cfg: ExperienceConfig,
+        model_cfg: ModelConfig,
+        tmp_path: object,
+    ) -> None:
+        _populate_lmdb(str(tmp_path), n_records=3)
+
+        dataset = OfflineRLDataset(experience_cfg, model_cfg)
+        dataset.open()
+        # Load first key
+        record = dataset._load_record(dataset._keys[0])
+        assert record is not None
+        assert hasattr(record, "timestamp")
+        dataset.close()
+
+    def test_load_record_returns_none_for_missing_key(
+        self,
+        experience_cfg: ExperienceConfig,
+        model_cfg: ModelConfig,
+        tmp_path: object,
+    ) -> None:
+        import lmdb
+
+        lmdb.open(str(tmp_path), map_size=10 * 1024 * 1024).close()
+
+        dataset = OfflineRLDataset(experience_cfg, model_cfg)
+        dataset.open()
+        result = dataset._load_record(b"nonexistent_key")
+        assert result is None
+        dataset.close()
+
+    def test_iterate_batches_cached_transitions_none_guard(
+        self,
+        experience_cfg: ExperienceConfig,
+        model_cfg: ModelConfig,
+    ) -> None:
+        dataset = OfflineRLDataset(experience_cfg, model_cfg)
+        # Force _cached_transitions to None after "cache miss" path
+        dataset._cached_transitions = None
+        dataset._cached_terminal_gap_s = 5.0
+        # iterate_batches should return without yielding
+        batches = list(dataset.iterate_batches(batch_size=8))
+        assert batches == []
