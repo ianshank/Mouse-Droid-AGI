@@ -215,6 +215,10 @@ class JetsonConfig(BaseModel):
         description="TensorRT inference precision",
     )
     workspace_gb: float = Field(1.0, gt=0, description="TensorRT builder workspace (GB)")
+    tensorrt_cache_dir: Path = Field(
+        Path("/opt/mousedroid/tensorrt_cache"),
+        description="Directory for cached TensorRT compiled engines",
+    )
 
 
 class LearningConfig(BaseModel):
@@ -965,12 +969,16 @@ class TrainingConfig(BaseModel):
 class MicrophoneConfig(BaseModel):
     """USB microphone configuration."""
 
+    enabled: bool = Field(True, description="Enable audio capture from this microphone")
     device_index: int | None = Field(None, description="ALSA device index (None=auto-detect)")
     device_name: str = Field("USB", description="USB device name substring for auto-detect")
     sample_rate: int = Field(16000, gt=0, description="Audio sample rate (Hz)")
     channels: int = Field(1, gt=0, le=2, description="Audio channels (1=mono, 2=stereo)")
     chunk_size: int = Field(1024, gt=0, description="Samples per read chunk")
     format: Literal["float32", "int16"] = Field("float32", description="Audio sample format")
+    n_mels: int = Field(64, gt=0, description="Number of mel filter bank bins")
+    n_fft: int = Field(512, gt=0, description="FFT window size for mel spectrogram")
+    hop_length: int = Field(256, gt=0, description="Hop length for mel spectrogram")
 
 
 class UltrasonicConfig(BaseModel):

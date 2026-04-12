@@ -66,11 +66,15 @@ ultrasonic:
   speed_of_sound_mps: 343.0
 
 microphone:
+  enabled: true
   sample_rate: 16000
   channels: 1
   chunk_size: 1024
   device_name: "USB"
   format: "float32"
+  n_mels: 64
+  n_fft: 512
+  hop_length: 256
 
 camera:
   resolution_width: 640

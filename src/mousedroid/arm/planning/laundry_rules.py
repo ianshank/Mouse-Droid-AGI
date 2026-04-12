@@ -69,7 +69,7 @@ class LaundryRuleEngine:
         if perception_cfg is None:
             from mousedroid.config.schema import ArmPerceptionConfig
 
-            perception_cfg = ArmPerceptionConfig()
+            perception_cfg = ArmPerceptionConfig()  # type: ignore[call-arg]
         self._white_brightness = perception_cfg.white_brightness_threshold
         self._white_saturation = perception_cfg.white_saturation_threshold
         self._dark_brightness = perception_cfg.dark_brightness_threshold

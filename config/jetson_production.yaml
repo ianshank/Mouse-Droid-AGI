@@ -24,6 +24,17 @@ llm:
   temperature: 0.1
   latency_target_ms: 500.0
 
+microphone:
+  enabled: true
+  sample_rate: 16000
+  channels: 1
+  chunk_size: 1024
+  device_name: "USB"
+  format: "float32"
+  n_mels: 64
+  n_fft: 512
+  hop_length: 256
+
 logging:
   level: "INFO"
   format: "json"

@@ -24,7 +24,7 @@ _log = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 
-class QNetwork(nn.Module):  # type: ignore[misc]
+class QNetwork(nn.Module):
     """Twin Q-network for offline RL algorithms.
 
     Two-layer MLP mapping ``(state, action)`` to a scalar Q-value.
@@ -75,7 +75,7 @@ class QNetwork(nn.Module):  # type: ignore[misc]
         return self.q1(sa), self.q2(sa)
 
 
-class DeterministicPolicy(nn.Module):  # type: ignore[misc]
+class DeterministicPolicy(nn.Module):
     """Deterministic policy network for offline RL.
 
     Two-layer MLP with tanh output, mapping state to action.
@@ -111,7 +111,7 @@ class DeterministicPolicy(nn.Module):  # type: ignore[misc]
         Returns:
             Action tensor in ``[-1, 1]``, shape ``(batch, action_dim)``.
         """
-        return self.net(state)
+        return self.net(state)  # type: ignore[no-any-return]
 
 
 # ---------------------------------------------------------------------------
@@ -358,7 +358,7 @@ class CQLTrainer(OfflineRLTrainer):
         q_loss = bellman_loss + self._cql_alpha * cql_loss
 
         self.q_optimizer.zero_grad()
-        q_loss.backward()
+        q_loss.backward()  # type: ignore[no-untyped-call]
         self.q_optimizer.step()
 
         # --- Policy update ---
@@ -386,7 +386,7 @@ class CQLTrainer(OfflineRLTrainer):
 # ---------------------------------------------------------------------------
 
 
-class ValueNetwork(nn.Module):  # type: ignore[misc]
+class ValueNetwork(nn.Module):
     """State value network for IQL.
 
     Args:
@@ -413,7 +413,7 @@ class ValueNetwork(nn.Module):  # type: ignore[misc]
         Returns:
             Value tensor, shape ``(batch, 1)``.
         """
-        return self.net(state)
+        return self.net(state)  # type: ignore[no-any-return]
 
 
 class IQLTrainer(OfflineRLTrainer):
@@ -501,7 +501,7 @@ class IQLTrainer(OfflineRLTrainer):
         value_loss = self._expectile_loss(target_q - v)
 
         self.value_optimizer.zero_grad()
-        value_loss.backward()
+        value_loss.backward()  # type: ignore[no-untyped-call]
         self.value_optimizer.step()
 
         # --- Q-function update (Bellman with V-targets) ---
@@ -513,7 +513,7 @@ class IQLTrainer(OfflineRLTrainer):
         q_loss = F.mse_loss(q1, target) + F.mse_loss(q2, target)
 
         self.q_optimizer.zero_grad()
-        q_loss.backward()
+        q_loss.backward()  # type: ignore[no-untyped-call]
         self.q_optimizer.step()
 
         # --- Policy update (advantage-weighted regression) ---
@@ -531,7 +531,7 @@ class IQLTrainer(OfflineRLTrainer):
         policy_loss = (exp_advantage * mse).mean()
 
         self.policy_optimizer.zero_grad()
-        policy_loss.backward()
+        policy_loss.backward()  # type: ignore[no-untyped-call]
         self.policy_optimizer.step()
 
         # --- Target update ---
