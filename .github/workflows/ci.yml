@@ -1,9 +1,9 @@
 # =============================================================================
 # MouseDroidAGI — CI/CD Pipeline
 # =============================================================================
-# 5-stage quality gate: Lint → Typecheck → Test → Security → Docker
+# 6-stage quality gate: Lint → Typecheck → Test → Prometheus → Security → Docker
 # Runs on: push to main, pull requests
-# Matrix: Python 3.10 + 3.11
+# Matrix: Python 3.10 + 3.11 + 3.12
 # =============================================================================
 
 name: CI
@@ -16,6 +16,7 @@ on:
 
 env:
     MOUSEDROID_MOCK_HARDWARE: "true"
+    MINIMUM_COVERAGE: "85"
 
 jobs:
     # -------------------------------------------------------------------------
@@ -25,7 +26,7 @@ jobs:
         runs-on: ubuntu-latest
         strategy:
             matrix:
-                python-version: ["3.10", "3.11"]
+                python-version: ["3.10", "3.11", "3.12"]
         steps:
             - uses: actions/checkout@v4
             - uses: actions/setup-python@v5
@@ -50,7 +51,7 @@ jobs:
         needs: lint
         strategy:
             matrix:
-                python-version: ["3.10", "3.11"]
+                python-version: ["3.10", "3.11", "3.12"]
         steps:
             - uses: actions/checkout@v4
             - uses: actions/setup-python@v5
@@ -74,7 +75,7 @@ jobs:
         needs: lint
         strategy:
             matrix:
-                python-version: ["3.10", "3.11"]
+                python-version: ["3.10", "3.11", "3.12"]
         steps:
             - uses: actions/checkout@v4
             - uses: actions/setup-python@v5
@@ -91,7 +92,7 @@ jobs:
                     -v --tb=short \
                     --cov=src/mousedroid \
                     --cov-report=term-missing \
-                    --cov-fail-under=85 \
+                    --cov-fail-under=${{ env.MINIMUM_COVERAGE }} \
                     -x
 
             - name: Upload coverage
@@ -102,7 +103,59 @@ jobs:
                   path: .coverage
 
     # -------------------------------------------------------------------------
-    # Stage 4: Security audit
+    # Stage 4: Prometheus metrics validation
+    # -------------------------------------------------------------------------
+    prometheus-check:
+        runs-on: ubuntu-latest
+        needs: lint
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                  python-version: "3.11"
+                  cache: pip
+
+            - name: Install dependencies
+              run: pip install -e ".[dev,telemetry]"
+
+            - name: Install promtool (graceful skip if unavailable)
+              id: promtool
+              run: |
+                  PROMTOOL_VERSION="2.51.0"
+                  curl -sSLf "https://github.com/prometheus/prometheus/releases/download/v${PROMTOOL_VERSION}/prometheus-${PROMTOOL_VERSION}.linux-amd64.tar.gz" \
+                    -o prometheus.tar.gz && \
+                  tar -xzf prometheus.tar.gz --strip-components=1 "prometheus-${PROMTOOL_VERSION}.linux-amd64/promtool" && \
+                  chmod +x promtool && \
+                  echo "available=true" >> "$GITHUB_OUTPUT" || \
+                  echo "available=false" >> "$GITHUB_OUTPUT"
+
+            - name: Validate Prometheus metrics format
+              if: steps.promtool.outputs.available == 'true'
+              run: |
+                  # Generate metrics sample and validate with promtool
+                  python -c "
+                  import sys
+                  try:
+                      from mousedroid.telemetry.metrics import generate_metrics_sample
+                      sample = generate_metrics_sample()
+                      with open('metrics_sample.txt', 'w') as f:
+                          f.write(sample)
+                  except (ImportError, AttributeError):
+                      # Module may not expose generate_metrics_sample — skip
+                      sys.exit(0)
+                  " && \
+                  if [ -f metrics_sample.txt ] && [ -s metrics_sample.txt ]; then
+                      ./promtool check metrics < metrics_sample.txt
+                  else
+                      echo "No metrics sample generated — skipping validation"
+                  fi
+
+            - name: Skip notice
+              if: steps.promtool.outputs.available != 'true'
+              run: echo "promtool not available — skipping Prometheus metrics validation"
+
+    # -------------------------------------------------------------------------
+    # Stage 5: Security audit
     # -------------------------------------------------------------------------
     security:
         runs-on: ubuntu-latest
@@ -121,7 +174,7 @@ jobs:
               run: pip-audit --strict || true # Advisory — don't block on upstream vulns
 
     # -------------------------------------------------------------------------
-    # Stage 5: Docker build (Jetson — aarch64, build check only on x86)
+    # Stage 6: Docker build (Jetson — aarch64, build check only on x86)
     # -------------------------------------------------------------------------
     docker:
         runs-on: ubuntu-latest

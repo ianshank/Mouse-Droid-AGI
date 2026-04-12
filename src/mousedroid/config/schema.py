@@ -225,6 +225,38 @@ class LearningConfig(BaseModel):
     progressive_enabled: bool = Field(False, description="Enable progressive column growth")
 
 
+class LLMConfig(BaseModel):
+    """LLM Gateway configuration for NL command interface."""
+
+    enabled: bool = Field(True, description="Enable LLM gateway")
+    model_path: Path = Field(
+        Path("/opt/mousedroid/models/llama-3-8b-instruct.Q4_K_M.gguf"),
+        description="Path to GGUF model file",
+    )
+    model_url: str = Field(
+        "https://huggingface.co/QuantFactory/Meta-Llama-3-8B-Instruct-GGUF"
+        "/resolve/main/Meta-Llama-3-8B-Instruct.Q4_K_M.gguf",
+        description="URL to download model from",
+    )
+    model_checksum: str = Field(
+        "",
+        description="SHA-256 checksum for model file verification (empty=skip)",
+    )
+    context_length: int = Field(2048, gt=0, description="Model context window in tokens")
+    n_threads: int = Field(4, gt=0, description="CPU threads for inference")
+    n_gpu_layers: int = Field(-1, description="GPU layers to offload (-1 = all)")
+    max_tokens: int = Field(256, gt=0, description="Max generation tokens")
+    temperature: float = Field(0.1, ge=0, le=2, description="Sampling temperature")
+    latency_target_ms: float = Field(
+        500.0, gt=0, description="Target inference latency in milliseconds"
+    )
+    stop_tokens: list[str] = Field(
+        default_factory=lambda: ["<|end|>", "<|endoftext|>"],
+        description="Stop sequences",
+    )
+    max_command_len: int = Field(512, gt=0, description="Max NL command length in chars")
+
+
 class LoggingConfig(BaseModel):
     """Structured logging configuration."""
 
@@ -404,6 +436,29 @@ class SurpriseConfig(BaseModel):
     critical_threshold: float = Field(5.0, gt=0, description="Critical surprise threshold")
 
 
+class TelemetryAuthConfig(BaseModel):
+    """Bearer token authentication configuration for the telemetry server.
+
+    When enabled, requires a valid ``Authorization: Bearer <token>`` header
+    on all requests except those matching ``exempt_paths``. The token value
+    is read from the environment variable named by ``token_env_var``.
+    """
+
+    auth_enabled: bool = Field(False, description="Enable bearer token authentication")
+    token_env_var: str = Field(
+        "MOUSEDROID_TELEMETRY_TOKEN",
+        description="Environment variable name containing the bearer token",
+    )
+    allowed_origins: list[str] = Field(
+        default_factory=list,
+        description="CORS allowed origins for auth middleware (empty=unrestricted)",
+    )
+    exempt_paths: list[str] = Field(
+        default_factory=lambda: ["/health", "/metrics"],
+        description="Paths that bypass authentication",
+    )
+
+
 class TelemetryConfig(BaseModel):
     """WiFi/Ethernet telemetry server configuration for remote monitoring.
 
@@ -456,6 +511,10 @@ class TelemetryConfig(BaseModel):
             "Legacy scrape endpoint path for direct TelemetryServer construction. "
             "Settings.metrics.path is the canonical configuration source."
         ),
+    )
+    auth: TelemetryAuthConfig | None = Field(
+        None,
+        description="Bearer token authentication config (None=disabled)",
     )
 
 
@@ -828,6 +887,55 @@ class GPUConfig(BaseModel):
     )
 
 
+class TrainingPipelineConfig(BaseModel):
+    """GPU pre-training pipeline orchestrator configuration (ADR-005)."""
+
+    phases: list[str] = Field(
+        default_factory=lambda: ["rssm", "warmstart", "bdi", "constitutional_rl"],
+        description="Ordered training phases to execute",
+    )
+    batch_sizes: dict[str, int] = Field(
+        default_factory=lambda: {
+            "rssm": 16,
+            "warmstart": 32,
+            "bdi": 32,
+            "constitutional_rl": 64,
+        },
+        description="Per-phase base batch sizes",
+    )
+    thermal_limit_celsius: float = Field(
+        85.0,
+        gt=0,
+        description="GPU temperature threshold to pause training (Celsius)",
+    )
+    thermal_pause_seconds: float = Field(
+        30.0,
+        gt=0,
+        description="Seconds to wait when thermal limit exceeded",
+    )
+    thermal_sysfs_path: str = Field(
+        "/sys/devices/virtual/thermal/thermal_zone0/temp",
+        description="Sysfs path to read GPU temperature (millidegrees Celsius)",
+    )
+    vram_headroom_mb: int = Field(
+        512,
+        gt=0,
+        description="VRAM headroom to reserve (MB) — batch tuner avoids using this",
+    )
+    checkpoint_dir: str = Field(
+        "checkpoints",
+        description="Directory for phase checkpoint files",
+    )
+    amp_enabled: bool = Field(
+        True,
+        description="Enable AMP (Automatic Mixed Precision) for GPU phases",
+    )
+    resume_from_phase: str | None = Field(
+        None,
+        description="Phase name to resume from (skips prior phases)",
+    )
+
+
 class TrainingConfig(BaseModel):
     """Offline training configuration."""
 
@@ -939,12 +1047,18 @@ class Settings(BaseSettings):
     metrics: MetricsConfig = Field(default_factory=_settings_default_factory(MetricsConfig))
     memory: MemoryConfig = Field(default_factory=_settings_default_factory(MemoryConfig))
     learning: LearningConfig = Field(default_factory=_settings_default_factory(LearningConfig))
+    llm: LLMConfig = Field(default_factory=_settings_default_factory(LLMConfig))
     reward: RewardConfig = Field(default_factory=_settings_default_factory(RewardConfig))
     curiosity: CuriosityConfig = Field(default_factory=_settings_default_factory(CuriosityConfig))
     offline_rl: OfflineRLConfig = Field(default_factory=_settings_default_factory(OfflineRLConfig))
     ppo: PPOConfig = Field(default_factory=_settings_default_factory(PPOConfig))
     telemetry: TelemetryConfig = Field(default_factory=_settings_default_factory(TelemetryConfig))
     three_laws: ThreeLawsConfig = Field(default_factory=_settings_default_factory(ThreeLawsConfig))
+
+    training_pipeline: TrainingPipelineConfig | None = Field(
+        None,
+        description="GPU pre-training pipeline orchestrator config (ADR-005)",
+    )
 
     # Robot arm platform configs (optional — only used when platform=robot_arm)
     arm: ArmConfig | None = Field(

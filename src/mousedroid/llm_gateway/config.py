@@ -10,11 +10,28 @@ from pydantic import BaseModel, Field
 class GatewayConfig(BaseModel):
     """LLM Gateway configuration for NL mission translation."""
 
-    model_path: Path = Field(..., description="Path to GGUF model file")
+    enabled: bool = Field(True, description="Enable LLM gateway (disable for headless operation)")
+    model_path: Path = Field(
+        Path("/opt/mousedroid/models/llama-3-8b-instruct.Q4_K_M.gguf"),
+        description="Path to GGUF model file",
+    )
+    model_url: str = Field(
+        "https://huggingface.co/QuantFactory/Meta-Llama-3-8B-Instruct-GGUF"
+        "/resolve/main/Meta-Llama-3-8B-Instruct.Q4_K_M.gguf",
+        description="URL to download model from",
+    )
+    model_checksum: str = Field(
+        "",
+        description="SHA-256 checksum for model file verification (empty=skip)",
+    )
+    context_length: int = Field(2048, gt=0, description="Model context window size in tokens")
     n_threads: int = Field(4, gt=0, description="CPU threads for inference")
     n_gpu_layers: int = Field(-1, description="GPU layers to offload (-1 = all)")
     max_tokens: int = Field(256, gt=0, description="Max generation tokens")
     temperature: float = Field(0.1, ge=0, le=2, description="Sampling temperature")
+    latency_target_ms: float = Field(
+        500.0, gt=0, description="Target inference latency in milliseconds"
+    )
     stop_tokens: list[str] = Field(
         default_factory=lambda: ["<|end|>", "<|endoftext|>"],
         description="Stop sequences (model-specific)",

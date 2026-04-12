@@ -1,0 +1,53 @@
+# =============================================================================
+# MouseDroidAGI — Docker Build Validation
+# =============================================================================
+# Validates Dockerfile.jetson and docker-compose.jetson.yml on changes.
+# Build-check only — no push to any registry.
+# Runs independently of the main CI pipeline for faster feedback on
+# Docker-related changes.
+# =============================================================================
+
+name: Docker Build Validation
+
+on:
+    push:
+        branches: [main]
+        paths:
+            - "Dockerfile.jetson"
+            - "docker-compose.jetson.yml"
+            - "pyproject.toml"
+    pull_request:
+        branches: [main]
+        paths:
+            - "Dockerfile.jetson"
+            - "docker-compose.jetson.yml"
+            - "pyproject.toml"
+
+jobs:
+    validate-docker:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v3
+
+            - name: Validate Dockerfile syntax
+              run: docker build --check -f Dockerfile.jetson .
+
+            - name: Validate docker-compose syntax
+              run: docker compose -f docker-compose.jetson.yml config --quiet
+
+            - name: Check Dockerfile best practices
+              run: |
+                  # Verify no latest tags in FROM statements
+                  if grep -E '^FROM\s+\S+:latest' Dockerfile.jetson; then
+                      echo "ERROR: Dockerfile uses :latest tag — pin to a specific version"
+                      exit 1
+                  fi
+                  # Verify HEALTHCHECK is present
+                  if ! grep -q '^HEALTHCHECK' Dockerfile.jetson; then
+                      echo "ERROR: Dockerfile missing HEALTHCHECK instruction"
+                      exit 1
+                  fi
+                  echo "Dockerfile best practices check passed"

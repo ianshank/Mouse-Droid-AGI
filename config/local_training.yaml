@@ -53,6 +53,22 @@ ultrasonic:
 telemetry:
   enabled: false
 
+# GPU pre-training pipeline orchestrator (ADR-005)
+training_pipeline:
+  phases: ["rssm", "warmstart", "bdi", "constitutional_rl"]
+  batch_sizes:
+    rssm: 32              # Higher on desktop with 16 GB VRAM
+    warmstart: 64
+    bdi: 64
+    constitutional_rl: 128
+  thermal_limit_celsius: 85.0
+  thermal_pause_seconds: 30.0
+  thermal_sysfs_path: "/sys/devices/virtual/thermal/thermal_zone0/temp"
+  vram_headroom_mb: 1024  # More headroom on 16 GB card
+  checkpoint_dir: "checkpoints"
+  amp_enabled: true
+  resume_from_phase: null
+
 # Disable cognitive core — not trained yet at pipeline start
 cognitive:
   enabled: false
