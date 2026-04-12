@@ -1002,7 +1002,7 @@ class VoiceConfig(BaseModel):
         "rocky", description="Voice personality (only 'rocky' supported)"
     )
     tts_model_path: str | None = Field(
-        None, description="Path to piper voice model (None=use default)"
+        None, description="Path to piper voice model (None=disable TTS model loading)"
     )
     tts_sample_rate: int = Field(22050, gt=0, description="TTS output sample rate (Hz)")
     queue_size: int = Field(16, gt=0, description="Max queued speech requests")

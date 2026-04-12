@@ -16,11 +16,10 @@ _ARTICLES = {"the", "a", "an"}
 
 @given(text=st.text(min_size=0, max_size=200))
 @settings(max_examples=50)
-def test_rocky_transform_never_longer_than_input_plus_one(text: str) -> None:
-    """Output length is at most input length + 1 (for added '!')."""
+def test_rocky_transform_zero_intensity_never_grows(text: str) -> None:
+    """At zero intensity, output has fewer or equal words (articles stripped)."""
     result = rocky_transform(text, intensity=0.0)
-    # After stripping articles, output words <= input words
-    assert len(result) <= len(text) + 1
+    assert len(result.split()) <= len(text.split())
 
 
 @given(text=st.text(alphabet=st.characters(whitelist_categories=("L", "Zs")), min_size=1))

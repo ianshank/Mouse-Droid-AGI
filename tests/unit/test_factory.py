@@ -392,3 +392,18 @@ def test_build_voice_engine_with_provided_speaker():
     mock_speaker.chunk_size = 1024
     engine = build_voice_engine(cfg, speaker=mock_speaker)
     assert isinstance(engine, RockyVoiceEngine)
+
+
+def test_build_voice_engine_sample_rate_mismatch():
+    """build_voice_engine returns None when sample rates differ."""
+    from mousedroid.factory import build_voice_engine
+
+    cfg = Settings(
+        mock_hardware=True,
+        voice={"enabled": True, "tts_sample_rate": 22050},
+    )
+    mock_speaker = MagicMock()
+    mock_speaker.sample_rate = 44100  # Mismatched
+    mock_speaker.channels = 1
+    mock_speaker.chunk_size = 1024
+    assert build_voice_engine(cfg, speaker=mock_speaker) is None

@@ -54,13 +54,26 @@ class SpeechRequest:
 _ARTICLES = {"the", "a", "an"}
 
 
+_ADJECTIVES = {
+    "good", "bad", "big", "small", "happy", "safe", "clear", "new",
+    "fast", "slow", "hot", "cold", "hard", "easy", "old", "young",
+    "critical", "dangerous", "important", "strange", "interesting",
+}
+"""Common adjectives eligible for Rocky-style repetition."""
+
+_INTENSITY_THRESHOLD: float = 0.7
+"""Minimum intensity for exclamation and repetition effects."""
+
+
 def rocky_transform(text: str, intensity: float = 1.0) -> str:
     """Transform plain English into Rocky's speech style.
 
     Applies Rocky's characteristic grammar patterns:
+
     - Strips articles (the, a, an)
-    - Repeats adjectives based on emotional intensity
-    - Keeps sentences short and declarative
+    - Repeats recognised adjectives based on emotional intensity
+    - Preserves capitalisation of the first word after article stripping
+    - Adds exclamation mark at high intensity
 
     Args:
         text: Plain English text.
@@ -69,18 +82,31 @@ def rocky_transform(text: str, intensity: float = 1.0) -> str:
     Returns:
         Rocky-style text.
     """
+    was_capitalised = bool(text) and text[0].isupper()
     words = text.split()
     result: list[str] = []
 
     for word in words:
         if word.lower() in _ARTICLES:
             continue
-        result.append(word)
+        # Repeat adjectives at high intensity
+        if intensity > _INTENSITY_THRESHOLD and word.lower() in _ADJECTIVES:
+            reps = 2 if intensity < 0.9 else 3
+            result.extend([word] * reps)
+        else:
+            result.append(word)
+
+    if not result:
+        return ""
+
+    # Preserve capitalisation when a leading article was stripped
+    if was_capitalised:
+        result[0] = result[0].capitalize()
 
     transformed = " ".join(result)
 
-    # Add repetition for emphasis at high intensity
-    if intensity > 0.7 and transformed and not transformed.endswith("!"):
+    # Add exclamation for emphasis at high intensity
+    if intensity > _INTENSITY_THRESHOLD and not transformed.endswith("!"):
         transformed = transformed.rstrip(".") + "!"
 
     return transformed
@@ -140,11 +166,15 @@ class RockyVoiceEngine:
             context: Optional context (e.g. ``{"valence": 0.8}``).
         """
         phrases = self._phrases.get(event)
-        if phrases is None:
-            _log.debug("rocky_voice_unknown_event", voice_event=event)
+        if not phrases:
+            _log.debug("rocky_voice_no_phrases_for_event", voice_event=event)
             return
 
         text = random.choice(phrases)  # noqa: S311
+
+        # Apply Rocky personality transform using context intensity
+        intensity = context.get("valence", 1.0) if context else 1.0
+        text = rocky_transform(text, intensity=intensity)
 
         # Determine priority from event semantics
         if event == "emergency_stop":
@@ -235,19 +265,26 @@ class RockyVoiceEngine:
     async def _write_samples(self, samples: NDArray[np.float32]) -> None:
         """Write audio samples to the speaker in chunks.
 
-        Incomplete final chunks are zero-padded to ``chunk_size``.
+        For stereo speakers, mono TTS output is duplicated across channels.
+        Incomplete final chunks are zero-padded to ``frame_size``.
 
         Args:
-            samples: Full audio waveform as float32.
+            samples: Full audio waveform as float32 (mono from TTS).
         """
         if len(samples) == 0:
             _log.debug("rocky_voice_write_empty_samples")
             return
-        chunk_size = self._speaker.chunk_size
-        for i in range(0, len(samples), chunk_size):
-            chunk = samples[i : i + chunk_size]
-            if len(chunk) < chunk_size:
-                chunk = np.pad(chunk, (0, chunk_size - len(chunk)))
+
+        channels = self._speaker.channels
+        if channels > 1:
+            # Duplicate mono TTS output across all channels
+            samples = np.repeat(samples, channels)
+
+        frame_size = self._speaker.chunk_size * channels
+        for i in range(0, len(samples), frame_size):
+            chunk = samples[i : i + frame_size]
+            if len(chunk) < frame_size:
+                chunk = np.pad(chunk, (0, frame_size - len(chunk)))
             await self._speaker.write_chunk(chunk)
 
     async def _drain_queue(self) -> None:

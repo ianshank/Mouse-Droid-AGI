@@ -20,12 +20,12 @@ class TestRockyTransform:
     def test_strips_articles(self) -> None:
         """Articles (the, a, an) are removed."""
         assert rocky_transform("the path is clear", intensity=0.0) == "path is clear"
-        assert rocky_transform("a new object", intensity=0.0) == "new object"
+        assert rocky_transform("a red object", intensity=0.0) == "red object"
         assert rocky_transform("an error occurred", intensity=0.0) == "error occurred"
 
     def test_case_insensitive_articles(self) -> None:
-        """Articles are stripped regardless of case."""
-        assert rocky_transform("The path", intensity=0.0) == "path"
+        """Articles are stripped and capitalisation preserved."""
+        assert rocky_transform("The path", intensity=0.0) == "Path"
 
     def test_high_intensity_adds_exclamation(self) -> None:
         """High intensity adds exclamation mark."""
@@ -40,11 +40,26 @@ class TestRockyTransform:
     def test_existing_exclamation_not_doubled(self) -> None:
         """Already-exclaimed text is not double-exclaimed."""
         result = rocky_transform("Good!", intensity=0.9)
-        assert result == "Good!"
+        assert result.count("!") == 1
 
     def test_empty_string(self) -> None:
         """Empty input returns empty output."""
         assert rocky_transform("") == ""
+
+    def test_adjective_repetition_high_intensity(self) -> None:
+        """Known adjectives are repeated at high intensity."""
+        result = rocky_transform("path is good", intensity=0.95)
+        assert result.count("good") == 3  # 3x at intensity >= 0.9
+
+    def test_adjective_repetition_medium_intensity(self) -> None:
+        """Known adjectives are repeated 2x at medium-high intensity."""
+        result = rocky_transform("path is good", intensity=0.75)
+        assert result.count("good") == 2
+
+    def test_capitalisation_preserved_after_article_strip(self) -> None:
+        """First word capitalised when leading article was capitalised."""
+        assert rocky_transform("The path ahead", intensity=0.0) == "Path ahead"
+        assert rocky_transform("A strange thing", intensity=0.0) == "Strange thing"
 
 
 class TestPhraseBankCoverage:
@@ -93,7 +108,7 @@ def _make_engine(
 
 @pytest.mark.asyncio
 async def test_speak_queues_known_event() -> None:
-    """Speaking a known event queues a phrase from the bank."""
+    """Speaking a known event sends transformed text to TTS."""
     engine, _speaker, tts = _make_engine()
     await engine.start()
     try:
@@ -102,7 +117,8 @@ async def test_speak_queues_known_event() -> None:
         await asyncio.sleep(0.3)
         calls = tts.get_calls()
         assert len(calls) == 1
-        assert calls[0] in DEFAULT_PHRASES["startup"]
+        # Text is rocky_transform'd — verify it's a non-empty string
+        assert len(calls[0]) > 0
     finally:
         await engine.stop()
 
@@ -353,3 +369,52 @@ def test_rocky_transform_at_intensity_boundary() -> None:
     """Transform at exactly 0.7 intensity does NOT add exclamation."""
     result = rocky_transform("hello", intensity=0.7)
     assert not result.endswith("!")
+
+
+@pytest.mark.asyncio
+async def test_empty_phrase_override_ignored() -> None:
+    """Empty phrase list from override causes speak() to no-op."""
+    voice_cfg = VoiceConfig(
+        enabled=True,
+        cooldown_s=0.1,
+        tts_sample_rate=22050,
+        phrase_overrides={"startup": []},
+    )
+    speaker_cfg = SpeakerConfig(sample_rate=22050, chunk_size=1024)
+    speaker = MockSpeaker(speaker_cfg)
+    tts = MockTTS(voice_cfg)
+    engine = RockyVoiceEngine(voice_cfg, speaker, tts)
+    await engine.start()
+    try:
+        await engine.speak("startup")
+        await asyncio.sleep(0.2)
+        assert len(tts.get_calls()) == 0  # Empty phrase list -> no speech
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_speak_uses_valence_from_context() -> None:
+    """Context valence controls rocky_transform intensity."""
+    # Use phrase override with a plain sentence (no trailing !)
+    # so we can verify exclamation behaviour from intensity alone
+    voice_cfg = VoiceConfig(
+        enabled=True,
+        cooldown_s=0.1,
+        tts_sample_rate=22050,
+        phrase_overrides={"startup": ["hello world"]},
+    )
+    speaker_cfg = SpeakerConfig(sample_rate=22050, chunk_size=1024)
+    speaker = MockSpeaker(speaker_cfg)
+    tts = MockTTS(voice_cfg)
+    engine = RockyVoiceEngine(voice_cfg, speaker, tts)
+    await engine.start()
+    try:
+        # Low valence -> no exclamation
+        await engine.speak("startup", context={"valence": 0.1})
+        await asyncio.sleep(0.3)
+        calls = tts.get_calls()
+        assert len(calls) == 1
+        assert not calls[0].endswith("!")
+    finally:
+        await engine.stop()

@@ -66,31 +66,55 @@ class UsbSpeaker:
         return None
 
     async def start(self) -> None:
-        """Open the PyAudio stream for playback."""
-        import pyaudio
+        """Open the PyAudio stream for playback.
 
-        self._pa = pyaudio.PyAudio()
+        Handles missing PyAudio or ALSA errors gracefully, leaving
+        the speaker in a disabled (no-op write) state with a warning.
+        """
+        try:
+            import pyaudio
+        except ImportError:
+            _log.warning(
+                "usb_speaker_unavailable",
+                reason="pyaudio_import_failed",
+                device_name=self._cfg.device_name,
+            )
+            return
 
-        device_index = self._cfg.device_index
-        if device_index is None:
-            device_index = self._find_device_index()
+        try:
+            self._pa = pyaudio.PyAudio()
+
+            device_index = self._cfg.device_index
             if device_index is None:
-                _log.warning(
-                    "usb_speaker_not_found",
-                    device_name=self._cfg.device_name,
-                )
+                device_index = self._find_device_index()
+                if device_index is None:
+                    _log.warning(
+                        "usb_speaker_not_found",
+                        device_name=self._cfg.device_name,
+                    )
 
-        fmt = pyaudio.paFloat32 if self._cfg.format == "float32" else pyaudio.paInt16
+            fmt = pyaudio.paFloat32 if self._cfg.format == "float32" else pyaudio.paInt16
 
-        self._stream = self._pa.open(
-            format=fmt,
-            channels=self._cfg.channels,
-            rate=self._cfg.sample_rate,
-            output=True,
-            output_device_index=device_index,
-            frames_per_buffer=self._cfg.chunk_size,
-        )
-        _log.info("usb_speaker_started", device_index=device_index)
+            self._stream = self._pa.open(
+                format=fmt,
+                channels=self._cfg.channels,
+                rate=self._cfg.sample_rate,
+                output=True,
+                output_device_index=device_index,
+                frames_per_buffer=self._cfg.chunk_size,
+            )
+            _log.info("usb_speaker_started", device_index=device_index)
+        except OSError as exc:
+            if self._pa is not None:
+                self._pa.terminate()
+            self._pa = None
+            self._stream = None
+            _log.warning(
+                "usb_speaker_unavailable",
+                reason="pyaudio_open_failed",
+                error=str(exc),
+                device_name=self._cfg.device_name,
+            )
 
     async def stop(self) -> None:
         """Close the PyAudio stream and terminate."""
@@ -106,16 +130,19 @@ class UsbSpeaker:
     async def write_chunk(self, samples: NDArray[np.float32]) -> None:
         """Write one chunk of audio to the USB speaker.
 
+        No-op if the speaker failed to start (graceful degradation).
+        Clamps samples to [-1.0, 1.0) before int16 conversion to
+        prevent overflow distortion.
+
         Args:
             samples: Audio samples as float32, shape ``(chunk_size * channels,)``.
         """
         if self._stream is None:
-            _log.warning("usb_speaker_write_not_started")
-            msg = "Speaker stream not started"
-            raise RuntimeError(msg)
+            return
 
         if self._cfg.format == "int16":
-            raw_data = (samples * INT16_MAX_F).astype(np.int16).tobytes()
+            clamped = np.clip(samples, -1.0, np.nextafter(np.float32(1.0), np.float32(0.0)))
+            raw_data = (clamped * INT16_MAX_F).astype(np.int16).tobytes()
         else:
             raw_data = samples.astype(np.float32).tobytes()
 

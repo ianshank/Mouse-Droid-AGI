@@ -227,6 +227,15 @@ def build_voice_engine(
         _log.warning("voice_engine_tts_init_failed", exc_info=True)
         return None
 
+    # Validate sample rate compatibility
+    if speaker.sample_rate != cfg.voice.tts_sample_rate:
+        _log.warning(
+            "voice_engine_sample_rate_mismatch",
+            speaker_rate=speaker.sample_rate,
+            tts_rate=cfg.voice.tts_sample_rate,
+        )
+        return None
+
     from mousedroid.voice.rocky import RockyVoiceEngine
 
     engine = RockyVoiceEngine(cfg.voice, speaker, tts)
@@ -234,6 +243,7 @@ def build_voice_engine(
         "voice_engine_built",
         personality=cfg.voice.personality,
         cooldown_s=cfg.voice.cooldown_s,
+        sample_rate=speaker.sample_rate,
     )
     return engine
 
