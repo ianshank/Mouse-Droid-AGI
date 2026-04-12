@@ -306,3 +306,38 @@ def test_build_sensor_manager_with_microphone():
         microphone=microphone,
     )
     assert isinstance(manager, SensorManager)
+
+
+# -- Hailo-8 factory functions -----------------------------------------------
+
+
+def test_build_hailo_runtime_disabled_returns_none():
+    from mousedroid.factory import build_hailo_runtime
+
+    cfg = Settings(mock_hardware=True)
+    assert build_hailo_runtime(cfg) is None
+
+
+def test_build_hailo_runtime_none_config_returns_none():
+    from mousedroid.factory import build_hailo_runtime
+
+    cfg = Settings(mock_hardware=True, hailo=None)
+    assert build_hailo_runtime(cfg) is None
+
+
+def test_build_hailo_runtime_disabled_explicitly_returns_none():
+    from mousedroid.config.schema import HailoConfig
+    from mousedroid.factory import build_hailo_runtime
+
+    cfg = Settings(mock_hardware=True, hailo=HailoConfig(enabled=False))
+    assert build_hailo_runtime(cfg) is None
+
+
+def test_build_hailo_runtime_mock_returns_mock():
+    from mousedroid.config.schema import HailoConfig
+    from mousedroid.factory import build_hailo_runtime
+    from mousedroid.hardware.accelerator.hailo_runtime import MockHailoRuntime
+
+    cfg = Settings(mock_hardware=True, hailo=HailoConfig(enabled=True))
+    rt = build_hailo_runtime(cfg)
+    assert isinstance(rt, MockHailoRuntime)

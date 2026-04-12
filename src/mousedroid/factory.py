@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from mousedroid.cognitive.bdi_model import NeuralBDI
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.config.schema import Settings, UltrasonicConfig
+    from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
     from mousedroid.health.monitor import HealthMonitor
     from mousedroid.sensing.manager import SensorManager
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
@@ -69,29 +70,53 @@ def build_esp32_driver(cfg: Settings) -> ESP32CommProtocol:
     return ResilientESP32Driver(inner, cfg.retry, cfg.circuit_breaker)
 
 
-def build_camera(cfg: Settings) -> VisionProtocol:
+def build_camera(
+    cfg: Settings,
+    hailo_runtime: HailoRuntimeProtocol | None = None,
+) -> VisionProtocol:
     """Build camera driver based on config.
+
+    When a Hailo-8 runtime is provided and the camera feature extractor
+    is set to ``"hailo"`` or ``"auto"``, the camera's internal feature
+    extractor is replaced with a :class:`HailoFeatureExtractor` that
+    offloads inference to the accelerator.
 
     Args:
         cfg: Root settings.
+        hailo_runtime: Optional Hailo-8 runtime for accelerated feature extraction.
 
     Returns:
         Camera driver conforming to ``VisionProtocol``.
     """
+    from mousedroid.hardware.camera.feature_extractor import build_feature_extractor
+
+    hailo_extractor = None
+    if hailo_runtime is not None and cfg.camera.feature_extractor in ("hailo", "auto"):
+        hailo_extractor = build_feature_extractor(cfg.camera, hailo_runtime=hailo_runtime)
+
     if cfg.mock_hardware:
         from mousedroid.hardware.camera.mock_camera import MockCamera
 
-        return MockCamera(cfg.camera)
+        camera: VisionProtocol = MockCamera(cfg.camera)
+        if hailo_extractor is not None:
+            camera._extractor = hailo_extractor  # type: ignore[attr-defined]
+        return camera
 
     if cfg.camera.backend == "jetson_csi":
         from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
 
-        return JetsonCSICamera(cfg.camera)
+        camera = JetsonCSICamera(cfg.camera)
+        if hailo_extractor is not None:
+            camera._extractor = hailo_extractor  # type: ignore[attr-defined]
+        return camera
 
     if cfg.camera.backend == "picamera2":
         from mousedroid.hardware.camera.imx500 import IMX500Camera
 
-        return IMX500Camera(cfg.camera)
+        camera = IMX500Camera(cfg.camera)
+        if hailo_extractor is not None:
+            camera._extractor = hailo_extractor  # type: ignore[attr-defined]
+        return camera
 
     # auto: try picamera2 first, fall back to jetson_csi
     try:
@@ -99,11 +124,15 @@ def build_camera(cfg: Settings) -> VisionProtocol:
 
         from mousedroid.hardware.camera.imx500 import IMX500Camera
 
-        return IMX500Camera(cfg.camera)
+        camera = IMX500Camera(cfg.camera)
     except ImportError:
         from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
 
-        return JetsonCSICamera(cfg.camera)
+        camera = JetsonCSICamera(cfg.camera)
+
+    if hailo_extractor is not None:
+        camera._extractor = hailo_extractor  # type: ignore[attr-defined]
+    return camera
 
 
 def build_distance_sensor(cfg: Settings) -> DistanceSensorProtocol:
@@ -505,6 +534,40 @@ def build_tensorrt_compiler(cfg: Settings) -> TensorRTCompilerProtocol:
     return MockTensorRTCompiler()
 
 
+def build_hailo_runtime(cfg: Settings) -> HailoRuntimeProtocol | None:
+    """Build Hailo-8 accelerator runtime if configured and available.
+
+    Returns ``None`` when Hailo is disabled, the ``hailo_platform``
+    package is missing, or the device cannot be found.  This ensures
+    graceful degradation — the rest of the pipeline falls back to
+    GPU-based inference automatically.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Hailo runtime or ``None`` if unavailable.
+    """
+    if cfg.hailo is None or not cfg.hailo.enabled:
+        return None
+
+    if cfg.mock_hardware:
+        from mousedroid.hardware.accelerator.hailo_runtime import MockHailoRuntime
+
+        _log.info("hailo_runtime_mock_built")
+        return MockHailoRuntime(cfg.hailo)
+
+    try:
+        from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntime
+
+        runtime = HailoRuntime(cfg.hailo)
+        _log.info("hailo_runtime_built", device_path=cfg.hailo.device_path)
+        return runtime
+    except Exception:
+        _log.warning("hailo_runtime_build_failed_falling_back_to_gpu", exc_info=True)
+        return None
+
+
 def build_orchestrator(cfg: Settings) -> object:
     """Build fully-wired orchestrator.
 
@@ -516,11 +579,14 @@ def build_orchestrator(cfg: Settings) -> object:
     """
     from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator
 
+    # Build Hailo-8 runtime early — shared by camera and arm perception
+    hailo_runtime = build_hailo_runtime(cfg)
+
     wm = build_world_model(cfg)
     agent = build_agent(cfg, wm)
     monitor = build_safety_monitor(cfg)
     esp32 = build_esp32_driver(cfg)
-    camera = build_camera(cfg)
+    camera = build_camera(cfg, hailo_runtime=hailo_runtime)
     distance = build_distance_sensor(cfg)
     microphone = build_microphone(cfg)
 
@@ -692,11 +758,19 @@ def build_arm_controller(cfg: Settings) -> ArmControllerProtocol:
     return ArmController(agent, primitives)
 
 
-def build_arm_perception(cfg: Settings) -> ArmPerceptionProtocol:
+def build_arm_perception(
+    cfg: Settings,
+    hailo_runtime: HailoRuntimeProtocol | None = None,
+) -> ArmPerceptionProtocol:
     """Build perception pipeline for arm manipulation.
+
+    When a Hailo-8 runtime is provided and ``yolo_backend`` is
+    ``"hailo"`` or ``"auto"``, YOLO detection is offloaded to the
+    accelerator via :class:`HailoYOLODetector`.
 
     Args:
         cfg: Root settings (must have arm_perception and arm_task populated).
+        hailo_runtime: Optional Hailo-8 runtime for accelerated YOLO detection.
 
     Returns:
         Perception facade conforming to ``ArmPerceptionProtocol``.
@@ -719,5 +793,18 @@ def build_arm_perception(cfg: Settings) -> ArmPerceptionProtocol:
     intrinsics[0, 2] = cfg.arm_perception.default_principal_x  # cx
     intrinsics[1, 2] = cfg.arm_perception.default_principal_y  # cy
 
+    # Build Hailo YOLO detector if available
+    detector = None
+    if hailo_runtime is not None and cfg.arm_perception.yolo_backend in ("hailo", "auto"):
+        from mousedroid.arm.perception.hailo_detector import HailoYOLODetector
+
+        detector = HailoYOLODetector(cfg.arm_perception, hailo_runtime)
+        _log.info("arm_perception_hailo_yolo_built")
+
     _log.info("arm_perception_built", camera=cfg.arm_perception.depth_camera_type)
-    return ArmPerception(cfg.arm_perception, cfg.arm_task, intrinsics)
+    return ArmPerception(
+        cfg.arm_perception,
+        cfg.arm_task,
+        intrinsics,
+        object_detector=detector,
+    )

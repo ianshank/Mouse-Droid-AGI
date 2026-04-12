@@ -36,6 +36,8 @@ class ArmPerception:
         perception_cfg: Perception configuration.
         task_cfg: Task configuration for state extraction.
         intrinsics: Camera intrinsic matrix (3x3).
+        object_detector: Optional pre-built detector (e.g. Hailo-accelerated).
+            When ``None``, builds the default ``ObjectDetector``.
     """
 
     def __init__(
@@ -43,6 +45,7 @@ class ArmPerception:
         perception_cfg: ArmPerceptionConfig,
         task_cfg: ArmTaskConfig,
         intrinsics: NDArray[np.float64],
+        object_detector: ObjectDetector | None = None,
     ) -> None:
         """Initialise perception pipeline.
 
@@ -50,9 +53,12 @@ class ArmPerception:
             perception_cfg: Config for depth, YOLO, and pose settings.
             task_cfg: Config for peg/basket positions.
             intrinsics: Camera intrinsic matrix, shape ``(3, 3)``.
+            object_detector: Optional pre-built detector override.
         """
         self._depth_processor = DepthProcessor(perception_cfg, intrinsics)
-        self._detector = ObjectDetector(perception_cfg)
+        self._detector = (
+            object_detector if object_detector is not None else ObjectDetector(perception_cfg)
+        )
         self._pose_estimator = PoseEstimator(perception_cfg, intrinsics)
         self._state_extractor = StateExtractor(task_cfg)
         self._last_depth: NDArray[np.float32] | None = None
