@@ -215,6 +215,10 @@ class JetsonConfig(BaseModel):
         description="TensorRT inference precision",
     )
     workspace_gb: float = Field(1.0, gt=0, description="TensorRT builder workspace (GB)")
+    tensorrt_cache_dir: Path = Field(
+        Path("/opt/mousedroid/tensorrt_cache"),
+        description="Directory for cached TensorRT compiled engines",
+    )
 
 
 class LearningConfig(BaseModel):
@@ -671,7 +675,7 @@ class ArmConfig(BaseModel):
     serial_baud: int = Field(115200, gt=0, description="Serial baud rate")
     command_timeout_s: float = Field(1.0, gt=0, description="Command response timeout (s)")
 
-    @model_validator(mode="after")  # type: ignore[untyped-decorator]
+    @model_validator(mode="after")
     def home_matches_dof(self) -> Self:
         """Validate home position length matches DOF."""
         if len(self.home_position) != self.dof:
@@ -840,7 +844,7 @@ class ArmTaskConfig(BaseModel):
     max_episode_steps: int = Field(500, gt=0, description="Max steps per episode")
     num_garments: int = Field(5, gt=0, description="Number of garments per episode (laundry)")
 
-    @model_validator(mode="after")  # type: ignore[untyped-decorator]
+    @model_validator(mode="after")
     def positions_match_count(self) -> Self:
         """Validate position list lengths match counts."""
         if len(self.peg_positions) != self.num_pegs:
@@ -965,12 +969,16 @@ class TrainingConfig(BaseModel):
 class MicrophoneConfig(BaseModel):
     """USB microphone configuration."""
 
+    enabled: bool = Field(True, description="Enable audio capture from this microphone")
     device_index: int | None = Field(None, description="ALSA device index (None=auto-detect)")
     device_name: str = Field("USB", description="USB device name substring for auto-detect")
     sample_rate: int = Field(16000, gt=0, description="Audio sample rate (Hz)")
     channels: int = Field(1, gt=0, le=2, description="Audio channels (1=mono, 2=stereo)")
     chunk_size: int = Field(1024, gt=0, description="Samples per read chunk")
     format: Literal["float32", "int16"] = Field("float32", description="Audio sample format")
+    n_mels: int = Field(64, gt=0, description="Number of mel filter bank bins")
+    n_fft: int = Field(512, gt=0, description="FFT window size for mel spectrogram")
+    hop_length: int = Field(256, gt=0, description="Hop length for mel spectrogram")
 
 
 class UltrasonicConfig(BaseModel):
@@ -983,7 +991,7 @@ class UltrasonicConfig(BaseModel):
     timeout_s: float = Field(0.1, gt=0, description="Echo timeout (s)")
     speed_of_sound_mps: float = Field(343.0, gt=0, description="Speed of sound (m/s, ~20C)")
 
-    @model_validator(mode="after")  # type: ignore[untyped-decorator]
+    @model_validator(mode="after")
     def range_ordering(self) -> Self:
         """Validate max_range_m > min_range_m."""
         if self.max_range_m <= self.min_range_m:
@@ -1090,7 +1098,7 @@ class Settings(BaseSettings):
         description="Arm task config (Tower of Hanoi / laundry sorting params)",
     )
 
-    @model_validator(mode="after")  # type: ignore[untyped-decorator]
+    @model_validator(mode="after")
     def hardware_requires_pins(self) -> Self:
         """Validate that real hardware mode has required sensor configs."""
         if not self.mock_hardware and self.ultrasonic is None:

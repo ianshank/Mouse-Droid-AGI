@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from mousedroid.agents.base import AgentProtocol
 from mousedroid.comms.protocol import ESP32CommProtocol
+from mousedroid.efficiency.tensorrt import TensorRTCompilerProtocol
 from mousedroid.hardware.protocols import AudioProtocol, DistanceSensorProtocol, VisionProtocol
 from mousedroid.llm_gateway.protocol import LLMGatewayProtocol
 from mousedroid.logging.setup import get_logger
@@ -118,7 +119,7 @@ def build_distance_sensor(cfg: Settings) -> DistanceSensorProtocol:
         from mousedroid.config.schema import UltrasonicConfig as UltraCfg
         from mousedroid.hardware.sensors.mock_ultrasonic import MockUltrasonic
 
-        ultrasonic_cfg: UltrasonicConfig = cfg.ultrasonic or UltraCfg(
+        ultrasonic_cfg: UltrasonicConfig = cfg.ultrasonic or UltraCfg(  # type: ignore[call-arg]
             trigger_pin=0,
             echo_pin=0,
         )
@@ -142,7 +143,7 @@ def build_microphone(cfg: Settings) -> AudioProtocol | None:
     Returns:
         Microphone driver conforming to ``AudioProtocol``, or None if disabled.
     """
-    if cfg.microphone is None:
+    if cfg.microphone is None or not cfg.microphone.enabled:
         return None
 
     if cfg.mock_hardware:
@@ -184,7 +185,7 @@ def build_llm_gateway(cfg: Settings) -> LLMGatewayProtocol:
     from mousedroid.llm_gateway.config import GatewayConfig
     from mousedroid.llm_gateway.gateway import LLMGateway
 
-    gateway_cfg = GatewayConfig(
+    gateway_cfg = GatewayConfig(  # type: ignore[call-arg]
         enabled=cfg.llm.enabled,
         model_path=cfg.llm.model_path,
         model_url=cfg.llm.model_url,
@@ -434,16 +435,74 @@ def build_sensor_manager(
     Returns:
         Configured ``SensorManager``.
     """
+    from mousedroid.hardware.audio.feature_extractor import AudioFeatureExtractor
     from mousedroid.sensing.manager import SensorManager
 
-    _log.info("sensor_manager_built")
+    audio_extractor = build_audio_feature_extractor(cfg)
+    typed_extractor: AudioFeatureExtractor | None = (
+        audio_extractor if isinstance(audio_extractor, AudioFeatureExtractor) else None
+    )
+
+    _log.info(
+        "sensor_manager_built",
+        audio_features_enabled=typed_extractor is not None,
+    )
     return SensorManager(
         vision=vision,
         distance=distance,
         esp32=esp32,
         cfg=cfg,
         microphone=microphone,
+        audio_feature_extractor=typed_extractor,
     )
+
+
+def build_audio_feature_extractor(cfg: Settings) -> object | None:
+    """Build audio feature extractor if microphone is configured.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        ``AudioFeatureExtractor`` or ``None`` if microphone is disabled.
+    """
+    if cfg.microphone is None or not cfg.microphone.enabled:
+        return None
+
+    from mousedroid.hardware.audio.feature_extractor import AudioFeatureExtractor
+
+    extractor = AudioFeatureExtractor(cfg.microphone)
+    _log.info("audio_feature_extractor_built", feature_dim=extractor.feature_dim)
+    return extractor
+
+
+def build_tensorrt_compiler(cfg: Settings) -> TensorRTCompilerProtocol:
+    """Build TensorRT compiler based on config and hardware availability.
+
+    Returns a real ``JetsonTensorRTCompiler`` when TensorRT is enabled and
+    the ``torch2trt`` package is available. Falls back to
+    ``MockTensorRTCompiler`` otherwise.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Compiler conforming to ``TensorRTCompilerProtocol``.
+    """
+    if cfg.jetson.tensorrt_enabled:
+        from mousedroid.efficiency.tensorrt import JetsonTensorRTCompiler
+
+        _log.info(
+            "tensorrt_compiler_built",
+            precision=cfg.jetson.precision,
+            cache_dir=str(cfg.jetson.tensorrt_cache_dir),
+        )
+        return JetsonTensorRTCompiler(cfg.jetson)
+
+    from mousedroid.efficiency.tensorrt import MockTensorRTCompiler
+
+    _log.info("tensorrt_compiler_mock_built")
+    return MockTensorRTCompiler()
 
 
 def build_orchestrator(cfg: Settings) -> object:

@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
     from mousedroid.comms.protocol import ESP32CommProtocol
     from mousedroid.config.schema import Settings
+    from mousedroid.hardware.audio.feature_extractor import AudioFeatureExtractor
     from mousedroid.hardware.protocols import AudioProtocol, DistanceSensorProtocol, VisionProtocol
 
 T = TypeVar("T")
@@ -47,6 +48,7 @@ class SensorManager:
         esp32: ESP32 comms implementing :class:`ESP32CommProtocol`.
         cfg: Root application settings.
         microphone: Optional audio driver implementing :class:`AudioProtocol`.
+        audio_feature_extractor: Optional audio feature extractor for mel features.
     """
 
     def __init__(
@@ -56,12 +58,14 @@ class SensorManager:
         esp32: ESP32CommProtocol,
         cfg: Settings,
         microphone: AudioProtocol | None = None,
+        audio_feature_extractor: AudioFeatureExtractor | None = None,
     ) -> None:
         self._vision = vision
         self._distance = distance
         self._esp32 = esp32
         self._cfg = cfg
         self._microphone = microphone
+        self._audio_feature_extractor = audio_feature_extractor
 
         # Ring buffer sizes derived from config loop rates.
         vision_buf_size = max(1, int(cfg.loop.perception_hz))
@@ -74,12 +78,14 @@ class SensorManager:
         self._motor_buf: deque[NDArray[np.float32]] = deque(maxlen=motor_buf_size)
         self._audio_buf: deque[NDArray[np.float32]] = deque(maxlen=audio_buf_size)
 
-        # Determine audio chunk size for zero-fill on failure.
-        self._audio_chunk_size = (
-            microphone.chunk_size * microphone.channels
-            if microphone is not None
-            else DEFAULT_AUDIO_CHUNK_SIZE
-        )
+        # Determine audio output size for zero-fill on failure.
+        # When a feature extractor is present the output dimension changes.
+        if audio_feature_extractor is not None:
+            self._audio_chunk_size = audio_feature_extractor.feature_dim
+        elif microphone is not None:
+            self._audio_chunk_size = microphone.chunk_size * microphone.channels
+        else:
+            self._audio_chunk_size = DEFAULT_AUDIO_CHUNK_SIZE
 
         _log.info(
             "sensor_manager_init",
@@ -223,7 +229,12 @@ class SensorManager:
             return default, False
 
     async def _safe_audio_read(self) -> tuple[NDArray[np.float32], bool]:
-        """Attempt an audio chunk read, returning zeros on failure."""
+        """Attempt an audio chunk read with optional feature extraction.
+
+        When an :class:`AudioFeatureExtractor` is configured, raw audio is
+        transformed into mel-spectrogram features before being returned.
+        Otherwise the raw audio chunk is returned directly.
+        """
         default = np.zeros(self._audio_chunk_size, dtype=np.float32)
         if self._microphone is None:
             return default, False
@@ -233,4 +244,10 @@ class SensorManager:
             "audio",
             default,
         )
+        if ok and self._audio_feature_extractor is not None:
+            try:
+                result = self._audio_feature_extractor.extract(result)
+            except Exception:
+                _log.warning("audio_feature_extraction_failed", exc_info=True)
+                return np.zeros(self._audio_chunk_size, dtype=np.float32), False
         return result, ok

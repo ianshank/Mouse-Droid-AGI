@@ -219,7 +219,7 @@ def _load_settings(config_path: str) -> Settings:
     Returns:
         Populated Settings instance.
     """
-    import yaml  # type: ignore[import-untyped]
+    import yaml
 
     path = Path(config_path)
     if not path.exists():
@@ -239,7 +239,7 @@ async def async_main(config_path: str, resume: bool) -> None:
     """
     settings = _load_settings(config_path)
 
-    pipeline_config = settings.training_pipeline or TrainingPipelineConfig()
+    pipeline_config = settings.training_pipeline or TrainingPipelineConfig()  # type: ignore[call-arg]
 
     if resume and pipeline_config.resume_from_phase is None:
         # Auto-detect resume point from existing checkpoints.
@@ -288,4 +288,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    sys.exit(main() or 0)
+    main()
+    sys.exit(0)

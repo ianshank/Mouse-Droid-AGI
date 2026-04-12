@@ -37,7 +37,7 @@ def _default_three_laws_config() -> ThreeLawsConfig:
     """
     from mousedroid.config.schema import ThreeLawsConfig as _Cfg
 
-    return _Cfg()
+    return _Cfg()  # type: ignore[call-arg]
 
 
 _DEFAULT_CFG = _default_three_laws_config()
