@@ -45,8 +45,9 @@ graph TD
             end
         end
         subgraph HWLayer["Hardware Interface Layer"]
-            Camera["Camera\nJetson CSI / IMX500"]
+            Camera["Camera\nJetson CSI / IMX708\nFeatureExtractorProtocol"]
             Ultrasonic["Ultrasonic\nHC-SR04"]
+            Microphone["USB Microphone\nTI PCM2902\nAudioProtocol"]
             GPIO["GPIO\nJetson.GPIO"]
         end
         subgraph Storage["NVMe SSD (500 GB)"]
@@ -70,6 +71,7 @@ graph TD
     CoreAI --> ExperienceDB
     SensorMgr --> Camera
     SensorMgr --> Ultrasonic
+    SensorMgr --> Microphone
     SensorMgr --> GPIO
     Orchestrator -- "UART 1 Mbps / HTTP" --> ESP32
     DockerContainer -.-> DockerData
@@ -85,7 +87,8 @@ graph TD
 | LMDB experience store | LMDB on-disk | Persistent experience replay buffer |
 | Llama GGUF model | llama-cpp-python | Local LLM for NL to velocity |
 | ESP32 firmware | C++ (Wave Rover SDK) | Motor PWM control, encoder polling |
-| Jetson CSI / IMX500 camera | jetson_utils / picamera2 | Vision capture + onboard neural inference |
+| Jetson CSI / IMX708 camera | jetson_utils / picamera2 | Vision capture + pluggable feature extraction (MeanPool / TensorRT) |
+| USB Microphone (TI PCM2902) | PyAudio | Audio capture for multimodal world model fusion |
 | NVMe SSD 500 GB | ext4 `/mnt/ssd` | Docker data-root, containerd, 16 GB swap |
 | Telemetry Publisher | Python asyncio queue | Non-blocking sensor-frame fan-out at ≤60 Hz |
 | Metrics Registry | Python stdlib exporter | Prometheus metric families and text rendering |
@@ -101,7 +104,7 @@ graph TD
     Orchestrator["Orchestrator\norchestrator/\ntick at 30 Hz\nsense - plan - act"]
     SensorMgr["Sensor Manager\nsensing/\nCamera - Ultrasonic - ESP32 encoders"]
     SafetyMon["Safety Monitor\nsafety/\nClearance - Battery - Sensor staleness"]
-    Encoder["Encoder\nvision + motor + ultrasonic"]
+    Encoder["Encoder\nvision + motor + ultrasonic + audio"]
     RSSM["RSSM\nlatent h and z\nobserve step / imagine step"]
     MCTS["MCTS\n50 to 200 sims"]
     NavAgent["Navigation Agent\nagents/\nact with h, z, safety"]
@@ -222,8 +225,9 @@ This means:
 
 ```mermaid
 sequenceDiagram
-    participant Camera as Camera IMX500
+    participant Camera as Camera IMX708
     participant Sonic as HC-SR04
+    participant Mic as USB Microphone
     participant ESP32 as ESP32 Encoders
     participant SM as SensorManager
     participant Safety as SafetyMonitor
@@ -235,6 +239,7 @@ sequenceDiagram
         Camera->>SM: capture_features()
         Sonic->>SM: read_distance_m()
         ESP32->>SM: read_encoders() + get_battery_voltage()
+        Mic->>SM: read_chunk()
     end
 
     SM->>Safety: ObservationBundle
@@ -404,6 +409,8 @@ graph TD
 | Dual-cadence cognitive loop | Fast 30 Hz reaction + slow 1 Hz deliberation minimises compute |
 | HuggingFace Hub weight loading | `hf_hub_download(subfolder, local_dir)` routes files to exact path; retry=3, backoff=2^n |
 | `torch.no_grad()` for all RSSM/MCTS inference | Prevents accidental gradient accumulation |
+| Optional audio projection in encoder | `audio_dim=0` disables audio entirely; existing 3-modality checkpoints load unchanged |
+| `FeatureExtractorProtocol` for camera | Pluggable backends (MeanPool, TensorRT, ONNX); eliminates duplicate code across camera drivers |
 | Module-level constants for all magic numbers | Grep-able; documented; not scattered in logic |
 | L4T Docker container | GPU-accelerated deployment with consistent environment |
 | Multi-stage Docker builds | Extract pre-compiled binaries from upstream images to bypass OOM |

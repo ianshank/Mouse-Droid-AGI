@@ -20,6 +20,8 @@ model:
   vision_proj_dim: 128
   ultrasonic_proj_dim: 32
   motor_proj_dim: 32
+  audio_dim: 1024
+  audio_proj_dim: 32
 
 mcts:
   n_simulations_base: 50
@@ -63,12 +65,12 @@ ultrasonic:
   timeout_s: 0.1
   speed_of_sound_mps: 343.0
 
-# microphone:          # Uncomment to enable SuziePi USB microphone
-#   sample_rate: 16000
-#   channels: 1
-#   chunk_size: 1024
-#   device_name: "SuziePi"
-#   format: "float32"
+microphone:
+  sample_rate: 16000
+  channels: 1
+  chunk_size: 1024
+  device_name: "USB"
+  format: "float32"
 
 camera:
   resolution_width: 640
@@ -76,6 +78,8 @@ camera:
   fps: 30
   feature_dim: 256
   use_onboard_inference: true
+  feature_extractor: "auto"
+  l2_normalize: true
 
 jetson:
   tensorrt_enabled: true

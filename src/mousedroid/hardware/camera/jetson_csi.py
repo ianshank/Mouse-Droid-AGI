@@ -7,7 +7,7 @@ with a GStreamer ``nvarguscamerasrc`` fallback via OpenCV.
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -25,7 +25,7 @@ except ImportError:  # pragma: no cover
 
 _cv2: Any
 try:
-    import cv2 as _cv2  # type: ignore[no-redef]
+    import cv2 as _cv2
 except ImportError:  # pragma: no cover
     _cv2 = None
 
@@ -51,6 +51,10 @@ class JetsonCSICamera:
         self._cfg = cfg
         self._camera: Any = None
         self._backend: str | None = None
+
+        from mousedroid.hardware.camera.feature_extractor import build_feature_extractor
+
+        self._extractor = build_feature_extractor(cfg)
 
     async def start(self) -> None:
         """Start the camera capture pipeline."""
@@ -160,7 +164,7 @@ class JetsonCSICamera:
     def _extract_features(self, frame: NDArray[np.uint8]) -> NDArray[np.float32]:
         """Extract feature vector from a captured frame.
 
-        Falls back to mean-pooling if no on-chip model is available.
+        Delegates to the configured feature extractor (mean-pool or TensorRT).
 
         Args:
             frame: Raw camera frame.
@@ -168,19 +172,7 @@ class JetsonCSICamera:
         Returns:
             Feature vector of shape ``(feature_dim,)``.
         """
-        # Simple mean-pool fallback; real deployment uses TensorRT model
-        flat = frame.astype(np.float32).flatten()
-        dim = self._cfg.feature_dim
-        if len(flat) >= dim:
-            stride = len(flat) // dim
-            features = flat[: stride * dim].reshape(dim, stride).mean(axis=1)
-        else:
-            features = np.zeros(dim, dtype=np.float32)
-            features[: len(flat)] = flat
-        norm = np.linalg.norm(features)
-        if norm > 0:
-            features = features / norm
-        return cast(NDArray[np.float32], features)
+        return self._extractor.extract(frame)
 
     @property
     def feature_dim(self) -> int:

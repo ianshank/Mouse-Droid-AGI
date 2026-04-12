@@ -11,7 +11,7 @@ def test_default_values():
     assert cfg.sample_rate == 16000
     assert cfg.channels == 1
     assert cfg.chunk_size == 1024
-    assert cfg.device_name == "SuziePi"
+    assert cfg.device_name == "USB"
     assert cfg.device_index is None
     assert cfg.format == "float32"
 

@@ -10,6 +10,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Audio integration into world model** — microphone data now flows end-to-end through the cognitive stack
+  - `MultimodalEncoder` gains optional `audio_proj` layer (enabled when `ModelConfig.audio_dim > 0`)
+  - `RSSM.observe_step()` extracts `audio_chunk` from observations and passes it to the encoder
+  - `ModelConfig` gains `audio_dim` (default 0, backwards-compatible) and `audio_proj_dim` (default 32) fields
+  - `config/default.yaml` enables microphone and sets `audio_dim: 1024`
+- **Reusable camera feature extraction** — `FeatureExtractorProtocol` with pluggable backends
+  - `src/mousedroid/hardware/camera/feature_extractor.py` — new module with `MeanPoolExtractor`, `TensorRTExtractor`, and `build_feature_extractor()` factory
+  - `CameraConfig` gains `feature_extractor` (Literal `"mean_pool"` / `"tensorrt"` / `"auto"`) and `l2_normalize` (bool) fields
+  - `TensorRTExtractor` loads ONNX models via `onnxruntime` with graceful fallback to mean-pool
+- **Audio pipeline tests** — `tests/integration/test_audio_pipeline.py` (3 tests), 10 new encoder tests, 3 new RSSM tests
+- **Feature extractor tests** — `tests/unit/test_feature_extractor.py` (13 tests) covering protocol compliance, L2-norm, TRT fallback
+- **Config tests** — 9 new tests for `audio_dim`, `audio_proj_dim`, `feature_extractor`, `l2_normalize` fields
+
+### Changed
+
+- **`MicrophoneConfig.device_name`** — default changed from `"SuziePi"` to `"USB"` (matches common USB mics like TI PCM2902)
+- **`JetsonCSICamera` / `IMX500Camera`** — feature extraction delegated to `FeatureExtractorProtocol`; 15 lines of duplicate mean-pool code removed from each driver
+- **`MultimodalEncoder`** — docstring updated to reflect up-to-4-modality valid mask; `_AUDIO_IDX = 3` constant added
+- **`telemetry/server.py`** — `isinstance(gpu_temp, (int, float))` → `isinstance(gpu_temp, int | float)` (UP038 lint fix)
+
+### Fixed
+
+- **Stale `type: ignore` comments** — removed `[no-redef]` on `jetson_csi.py` optional imports and `[untyped-decorator]` on `rssm.py` `@torch.no_grad()`
+- **Duplicate feature extraction** — identical 15-line `_extract_features()` in both camera drivers replaced with shared `MeanPoolExtractor`
+- **Ruff UP038 violation** — `isinstance(gpu_temp, (int, float))` in `telemetry/server.py` now uses union syntax
+
+### Removed
+
+- Duplicate `_extract_features()` implementations from `jetson_csi.py` and `imx500.py` (replaced by shared `feature_extractor.py`)
+
+---
+
 - **Phase A — Training pipeline resume + type cleanup** (`training/`)
   - `run_pipeline()` and `run_phase_1_rssm()` now accept `resume_from: Path | None`; CLI gains `--resume` flag to resume RSSM training from an existing checkpoint
   - `training/training_utils.py`, `train_bdi.py`, `collect_annotations.py`, `data_generator.py`, `warmstart_policy.py`, `train_constitutional_rl.py` — replaced bare `np.ndarray` annotations with `numpy.typing.NDArray[Any]`; added local `# type: ignore[attr-defined]` on factory-returned `object` access; `mypy training/ --ignore-missing-imports` now reports `Success: no issues found in 12 source files`

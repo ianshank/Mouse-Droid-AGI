@@ -16,6 +16,7 @@ class MockObservationBundle:
     vision_features: np.ndarray = None  # type: ignore[assignment]
     distance_m: float = 2.0
     motor_state: np.ndarray = None  # type: ignore[assignment]
+    audio_chunk: np.ndarray = None  # type: ignore[assignment]
     valid_mask: np.ndarray = None  # type: ignore[assignment]
     n_modalities: int = 4
 
@@ -24,6 +25,8 @@ class MockObservationBundle:
             self.vision_features = np.zeros(256, dtype=np.float32)
         if self.motor_state is None:
             self.motor_state = np.zeros(4, dtype=np.float32)
+        if self.audio_chunk is None:
+            self.audio_chunk = np.zeros(1024, dtype=np.float32)
         if self.valid_mask is None:
             self.valid_mask = np.ones(4, dtype=np.float32)
 
@@ -126,3 +129,61 @@ def test_sample_gaussian(rssm: RSSM) -> None:
     assert sample.shape == (2, 64)
     assert mean.shape == (2, 64)
     assert logvar.shape == (2, 64)
+
+
+# ---------------------------------------------------------------------------
+# Audio-enabled RSSM tests
+# ---------------------------------------------------------------------------
+
+
+def test_observe_step_audio_enabled() -> None:
+    cfg = ModelConfig(audio_dim=1024, audio_proj_dim=32)
+    model = RSSM(cfg)
+    obs = MockObservationBundle(
+        audio_chunk=np.random.randn(1024).astype(np.float32),
+    )
+    prev_action = torch.zeros(1, cfg.action_dim)
+    h = torch.zeros(1, cfg.hidden_dim)
+    z = torch.zeros(1, cfg.latent_dim)
+    new_h, new_z, obs_embed, surprise = model.observe_step(obs, prev_action, h, z)
+    assert new_h.shape == (1, cfg.hidden_dim)
+    assert new_z.shape == (1, cfg.latent_dim)
+    assert obs_embed.shape == (1, cfg.obs_dim)
+    assert np.isfinite(surprise)
+
+
+def test_observe_step_audio_disabled_ignores_chunk(rssm: RSSM, cfg: ModelConfig) -> None:
+    """Default config (audio_dim=0) ignores audio_chunk without error."""
+    obs = MockObservationBundle(
+        audio_chunk=np.random.randn(1024).astype(np.float32),
+    )
+    prev_action = torch.zeros(1, cfg.action_dim)
+    h = torch.zeros(1, cfg.hidden_dim)
+    z = torch.zeros(1, cfg.latent_dim)
+    new_h, new_z, obs_embed, surprise = rssm.observe_step(obs, prev_action, h, z)
+    assert new_h.shape == (1, cfg.hidden_dim)
+    assert torch.isfinite(new_h).all()
+
+
+def test_observe_step_audio_with_nonzero_data() -> None:
+    """Audio data actually influences the encoding when enabled."""
+    cfg = ModelConfig(audio_dim=1024, audio_proj_dim=32)
+    model = RSSM(cfg)
+    model.eval()
+
+    prev_action = torch.zeros(1, cfg.action_dim)
+    h = torch.zeros(1, cfg.hidden_dim)
+    z = torch.zeros(1, cfg.latent_dim)
+
+    obs_silent = MockObservationBundle(
+        audio_chunk=np.zeros(1024, dtype=np.float32),
+    )
+    obs_loud = MockObservationBundle(
+        audio_chunk=np.ones(1024, dtype=np.float32),
+    )
+
+    torch.manual_seed(0)
+    _, _, embed_silent, _ = model.observe_step(obs_silent, prev_action, h, z)
+    torch.manual_seed(0)
+    _, _, embed_loud, _ = model.observe_step(obs_loud, prev_action, h, z)
+    assert not torch.allclose(embed_silent, embed_loud)
