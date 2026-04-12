@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -34,8 +36,6 @@ def _make_hailo_cfg() -> HailoConfig:
 
 def _make_started_mock_runtime() -> MockHailoRuntime:
     """Create a mock runtime in the started state (sync helper)."""
-    import asyncio
-
     cfg = _make_hailo_cfg()
     rt = MockHailoRuntime(cfg)
     asyncio.run(rt.start())
@@ -64,8 +64,7 @@ class TestHailoFeatureExtractor:
         rt = _make_started_mock_runtime()
         ext = HailoFeatureExtractor(rt, feature_dim=256, l2_normalize=True)
         result = ext.extract(_make_frame())
-        # Mock returns zeros — L2 norm of zeros is 0, so no normalization
-        # Just verify it doesn't crash and returns correct shape
+        # Mock returns zeros — zeros remain zeros after normalization
         assert result.shape == (256,)
 
     def test_fallback_when_runtime_unavailable(self) -> None:
@@ -78,6 +77,54 @@ class TestHailoFeatureExtractor:
         assert result.dtype == np.float32
         # Should have used MeanPool fallback — L2 normalized non-zero result
         assert np.linalg.norm(result) == pytest.approx(1.0, abs=1e-5)
+
+    def test_2d_frame_expands_dim(self) -> None:
+        """Grayscale (H, W) frame gets expanded to (H, W, 1)."""
+        rt = _make_started_mock_runtime()
+        ext = HailoFeatureExtractor(rt, feature_dim=256)
+        gray_frame = np.zeros((480, 640), dtype=np.uint8)
+        result = ext.extract(gray_frame)
+        assert result.shape == (256,)
+
+    def test_extract_pads_short_output(self) -> None:
+        """When runtime returns fewer features than feature_dim, output is padded."""
+        cfg = _make_hailo_cfg()
+        rt = MockHailoRuntime(cfg, output_shapes={"feature_extractor": (64,)})
+        asyncio.run(rt.start())
+        ext = HailoFeatureExtractor(rt, feature_dim=256, l2_normalize=False)
+        result = ext.extract(_make_frame())
+        assert result.shape == (256,)
+        # Last elements should be zero-padded
+        assert np.all(result[64:] == 0.0)
+
+    def test_extract_truncates_long_output(self) -> None:
+        """When runtime returns more features than feature_dim, output is truncated."""
+        cfg = _make_hailo_cfg()
+        rt = MockHailoRuntime(cfg, output_shapes={"feature_extractor": (512,)})
+        asyncio.run(rt.start())
+        ext = HailoFeatureExtractor(rt, feature_dim=128, l2_normalize=False)
+        result = ext.extract(_make_frame())
+        assert result.shape == (128,)
+
+    def test_extract_fallback_on_exception(self) -> None:
+        """Inference exception triggers MeanPool fallback."""
+        mock_runtime = MagicMock()
+        mock_runtime.is_available.return_value = True
+        # run_inference raises — but it's an async method so we need a coroutine
+        async def _raise(*a: Any, **kw: Any) -> Any:
+            raise RuntimeError("inference failed")
+        mock_runtime.run_inference = _raise
+        ext = HailoFeatureExtractor(mock_runtime, feature_dim=256)
+        result = ext.extract(_make_frame())
+        assert result.shape == (256,)
+        # Should have used MeanPool fallback
+        assert np.linalg.norm(result) == pytest.approx(1.0, abs=1e-5)
+
+    def test_no_l2_normalize(self) -> None:
+        rt = _make_started_mock_runtime()
+        ext = HailoFeatureExtractor(rt, feature_dim=256, l2_normalize=False)
+        result = ext.extract(_make_frame())
+        assert result.shape == (256,)
 
 
 # ---------------------------------------------------------------------------

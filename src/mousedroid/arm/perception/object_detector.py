@@ -7,7 +7,7 @@ garments from RGB images, returning bounding boxes with class labels.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import numpy as np
 from numpy.typing import NDArray
@@ -19,6 +19,36 @@ if TYPE_CHECKING:
     from mousedroid.config.schema import ArmPerceptionConfig
 
 _log = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Protocol — implemented by ObjectDetector and HailoYOLODetector
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class ObjectDetectorProtocol(Protocol):
+    """Interface for object detectors used by the perception facade."""
+
+    def load_model(self) -> None:
+        """Load detection model weights."""
+        ...  # pragma: no cover
+
+    def detect(self, rgb_image: NDArray[np.uint8]) -> list[DetectedObject]:
+        """Run detection on an RGB image.
+
+        Args:
+            rgb_image: RGB image, shape ``(H, W, 3)``.
+
+        Returns:
+            List of detected objects.
+        """
+        ...  # pragma: no cover
+
+
+# ---------------------------------------------------------------------------
+# Concrete implementation — ultralytics YOLO on GPU
+# ---------------------------------------------------------------------------
 
 
 class ObjectDetector:

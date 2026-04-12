@@ -75,7 +75,7 @@ def test_audio_disabled_pipeline_unchanged() -> None:
     h = torch.zeros(1, cfg.hidden_dim)
     z = torch.zeros(1, cfg.latent_dim)
 
-    new_h, new_z, obs_embed, surprise = rssm.observe_step(obs, prev_action, h, z)
+    new_h, new_z, _obs_embed, surprise = rssm.observe_step(obs, prev_action, h, z)
 
     assert new_h.shape == (1, cfg.hidden_dim)
     assert new_z.shape == (1, cfg.latent_dim)

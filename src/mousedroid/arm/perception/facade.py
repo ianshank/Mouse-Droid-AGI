@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from mousedroid.arm.perception.depth_processor import DepthProcessor
-from mousedroid.arm.perception.object_detector import ObjectDetector
+from mousedroid.arm.perception.object_detector import ObjectDetector, ObjectDetectorProtocol
 from mousedroid.arm.perception.pose_estimator import PoseEstimator
 from mousedroid.arm.perception.state_extractor import StateExtractor
 from mousedroid.arm.protocols import DetectedObject, SymbolicState
@@ -45,7 +45,7 @@ class ArmPerception:
         perception_cfg: ArmPerceptionConfig,
         task_cfg: ArmTaskConfig,
         intrinsics: NDArray[np.float64],
-        object_detector: ObjectDetector | None = None,
+        object_detector: ObjectDetectorProtocol | None = None,
     ) -> None:
         """Initialise perception pipeline.
 
@@ -56,7 +56,7 @@ class ArmPerception:
             object_detector: Optional pre-built detector override.
         """
         self._depth_processor = DepthProcessor(perception_cfg, intrinsics)
-        self._detector = (
+        self._detector: ObjectDetectorProtocol = (
             object_detector if object_detector is not None else ObjectDetector(perception_cfg)
         )
         self._pose_estimator = PoseEstimator(perception_cfg, intrinsics)

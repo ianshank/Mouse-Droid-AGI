@@ -8,8 +8,9 @@ instance for both YOLO detection and feature extraction pipelines.
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, runtime_checkable
 
 import numpy as np
 from numpy.typing import NDArray
@@ -175,11 +176,26 @@ class HailoRuntime:
             msg = f"Model '{model_name}' not loaded on Hailo device"
             raise RuntimeError(msg)
 
+        t0 = time.monotonic()
         async with self._lock:
             result = await asyncio.to_thread(
                 self._infer_sync,
                 model_name,
                 input_data,
+            )
+        elapsed_ms = (time.monotonic() - t0) * 1000.0
+        _log.debug(
+            "hailo_inference_complete",
+            model=model_name,
+            elapsed_ms=round(elapsed_ms, 2),
+            output_shape=result.shape,
+        )
+        if elapsed_ms > self._cfg.timeout_ms:
+            _log.warning(
+                "hailo_inference_exceeded_timeout",
+                model=model_name,
+                elapsed_ms=round(elapsed_ms, 2),
+                timeout_ms=self._cfg.timeout_ms,
             )
         return result
 
@@ -279,21 +295,36 @@ class MockHailoRuntime:
 
     Args:
         cfg: Hailo-8 configuration.
+        output_shapes: Optional override for per-model output shapes.
     """
 
-    def __init__(self, cfg: HailoConfig) -> None:
+    # Default output shapes per model — overridable via constructor
+    DEFAULT_OUTPUT_SHAPES: ClassVar[dict[str, tuple[int, ...]]] = {
+        "yolo": (25200, 85),
+        "feature_extractor": (256,),
+    }
+
+    def __init__(
+        self,
+        cfg: HailoConfig,
+        output_shapes: dict[str, tuple[int, ...]] | None = None,
+    ) -> None:
         """Initialise mock runtime.
 
         Args:
             cfg: Hailo-8 configuration (used for consistency).
+            output_shapes: Optional mapping of model name to output shape.
+                Defaults to :attr:`DEFAULT_OUTPUT_SHAPES`.
         """
         self._cfg = cfg
         self._available = False
-        self._output_shapes: dict[str, tuple[int, ...]] = {
-            "yolo": (25200, 85),  # Typical YOLOv8n output shape
-            "feature_extractor": (256,),  # Feature vector dimension
-        }
-        _log.info("mock_hailo_runtime_init")
+        self._output_shapes: dict[str, tuple[int, ...]] = (
+            output_shapes if output_shapes is not None else dict(self.DEFAULT_OUTPUT_SHAPES)
+        )
+        _log.info(
+            "mock_hailo_runtime_init",
+            output_shapes=dict(self._output_shapes),
+        )
 
     async def start(self) -> None:
         """Simulate device discovery and model loading."""
