@@ -1,17 +1,55 @@
+# =============================================================================
+# MouseDroidAGI — Docker Compose systemd service
+# =============================================================================
+# Manages the mousedroid container lifecycle via docker compose.
+#
+# Configuration:
+#   Environment variables can be set in /etc/mousedroid/docker.env
+#   or overridden via systemd drop-ins.
+#
+# Install:
+#   sudo cp scripts/mousedroid-docker.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now mousedroid-docker
+# =============================================================================
+
 [Unit]
 Description=MouseDroid AGI — Docker Container Runtime
-After=docker.service network.target
+Documentation=https://github.com/ianshank/Mouse-Droid-Jetson-Nano
+After=docker.service network-online.target
 Requires=docker.service
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=root
+
+# Working directory — override via MOUSEDROID_INSTALL_DIR in env file
 WorkingDirectory=/opt/mousedroid
-ExecStartPre=/usr/bin/docker compose -f /opt/mousedroid/docker-compose.jetson.yml pull --quiet
-ExecStart=/usr/bin/docker compose -f /opt/mousedroid/docker-compose.jetson.yml up --abort-on-container-exit
-ExecStop=/usr/bin/docker compose -f /opt/mousedroid/docker-compose.jetson.yml down
+
+# Optional environment file (dash prefix = no error if missing)
+EnvironmentFile=-/etc/mousedroid/docker.env
+
+# Compose file path — defaults to project compose, overridable via COMPOSE_FILE env
+ExecStartPre=/usr/bin/docker compose -f ${COMPOSE_FILE:-/opt/mousedroid/docker-compose.jetson.yml} pull --quiet
+ExecStart=/usr/bin/docker compose -f ${COMPOSE_FILE:-/opt/mousedroid/docker-compose.jetson.yml} up --abort-on-container-exit
+ExecStop=/usr/bin/docker compose -f ${COMPOSE_FILE:-/opt/mousedroid/docker-compose.jetson.yml} down --timeout 30
+
+# Restart policy
 Restart=on-failure
 RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mousedroid-docker
+
+# Security hardening (compatible with docker socket access)
+ProtectSystem=full
+ProtectHome=read-only
+NoNewPrivileges=no
 
 [Install]
 WantedBy=multi-user.target

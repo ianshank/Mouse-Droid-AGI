@@ -124,6 +124,19 @@ curiosity:
   forward_model_hidden: 256
   inverse_model_hidden: 256
 
+llm:
+  enabled: false
+  model_path: "/opt/mousedroid/models/llama-3-8b-instruct.Q4_K_M.gguf"
+  model_url: "https://huggingface.co/QuantFactory/Meta-Llama-3-8B-Instruct-GGUF/resolve/main/Meta-Llama-3-8B-Instruct.Q4_K_M.gguf"
+  model_checksum: ""
+  context_length: 2048
+  n_threads: 4
+  n_gpu_layers: -1
+  max_tokens: 256
+  temperature: 0.1
+  latency_target_ms: 500.0
+  max_command_len: 512
+
 logging:
   level: "INFO"
   format: "json"
@@ -179,3 +192,8 @@ telemetry:
   mdns_service_name: "MouseDroid Telemetry"
   cors_origins: ["*"]
   log_stream_buffer: 200
+  auth:
+    auth_enabled: false
+    token_env_var: "MOUSEDROID_TELEMETRY_TOKEN"
+    allowed_origins: []
+    exempt_paths: ["/health", "/metrics"]

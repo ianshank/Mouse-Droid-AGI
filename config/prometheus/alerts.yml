@@ -1,0 +1,106 @@
+# MouseDroid Prometheus Alert Rules
+# These alerts monitor the health and performance of the MouseDroid system.
+# All thresholds are documented and tunable via Prometheus recording rules
+# or dashboard variables.
+
+groups:
+  - name: mousedroid_thermal
+    rules:
+      # CPU/GPU thermal warning: temperature exceeding 80C may indicate
+      # inadequate cooling or sustained heavy workload.
+      - alert: GpuTemperatureWarning
+        expr: mousedroid_gpu_temp_celsius > 80
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GPU temperature above 80C"
+          description: >-
+            GPU temperature is {{ $value }}C on {{ $labels.instance }}.
+            Consider reducing workload or improving cooling.
+
+      # CPU/GPU thermal critical: temperature exceeding 90C risks
+      # thermal throttling or hardware damage.
+      - alert: GpuTemperatureCritical
+        expr: mousedroid_gpu_temp_celsius > 90
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "GPU temperature above 90C - thermal shutdown risk"
+          description: >-
+            GPU temperature is {{ $value }}C on {{ $labels.instance }}.
+            Immediate action required to prevent thermal damage.
+
+  - name: mousedroid_gpu
+    rules:
+      # GPU utilization sustained above 95% for more than 5 minutes
+      # indicates the system is compute-bound and may miss deadlines.
+      - alert: GpuUtilizationSustainedHigh
+        expr: mousedroid_gpu_load_pct > 95
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GPU utilization above 95% for 5+ minutes"
+          description: >-
+            GPU utilization is {{ $value }}% on {{ $labels.instance }}.
+            The system may be compute-bound and dropping frames.
+
+  - name: mousedroid_latency
+    rules:
+      # Orchestrator loop latency above 33ms means the 30Hz control
+      # deadline is being missed, risking navigation instability.
+      - alert: OrchestratorLoopLatencyHigh
+        expr: mousedroid_loop_time_ms > 33
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Orchestrator loop exceeding 30Hz deadline (>33ms)"
+          description: >-
+            Control loop latency is {{ $value }}ms on {{ $labels.instance }}.
+            The 30Hz real-time deadline is being missed.
+
+  - name: mousedroid_battery
+    rules:
+      # Battery voltage below threshold indicates low charge.
+      # Default warning at 10.5V for a 3S LiPo (3.5V/cell).
+      - alert: BatteryVoltageLow
+        expr: mousedroid_battery_voltage_v < 10.5
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Battery voltage below 10.5V"
+          description: >-
+            Battery voltage is {{ $value }}V on {{ $labels.instance }}.
+            Consider returning to charging station.
+
+      # Critical battery level - risk of brownout or cell damage.
+      # Default critical at 9.5V for a 3S LiPo (3.17V/cell).
+      - alert: BatteryVoltageCritical
+        expr: mousedroid_battery_voltage_v < 9.5
+        for: 10s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Battery voltage critically low (<9.5V)"
+          description: >-
+            Battery voltage is {{ $value }}V on {{ $labels.instance }}.
+            Immediate shutdown recommended to prevent cell damage.
+
+  - name: mousedroid_memory
+    rules:
+      # Memory usage above 90% may cause OOM kills on the Jetson,
+      # especially with GPU shared memory.
+      - alert: MemoryUsageHigh
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory usage above 90%"
+          description: >-
+            Memory usage is {{ $value }}% on {{ $labels.instance }}.
+            Risk of OOM kills on Jetson shared memory architecture.

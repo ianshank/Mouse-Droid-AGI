@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from mousedroid.agents.base import AgentProtocol
 from mousedroid.comms.protocol import ESP32CommProtocol
 from mousedroid.hardware.protocols import AudioProtocol, DistanceSensorProtocol, VisionProtocol
+from mousedroid.llm_gateway.protocol import LLMGatewayProtocol
 from mousedroid.logging.setup import get_logger
 from mousedroid.safety.protocol import SafetyMonitorProtocol
 from mousedroid.telemetry.log_buffer import LogRingBuffer
@@ -166,6 +167,39 @@ def build_world_model(cfg: Settings) -> WorldModelProtocol:
     from mousedroid.world_model.rssm import RSSM
 
     return RSSM(cfg.model)
+
+
+def build_llm_gateway(cfg: Settings) -> LLMGatewayProtocol:
+    """Build LLM gateway for NL command translation.
+
+    Constructs a ``GatewayConfig`` from the root settings' ``llm`` section
+    and returns an ``LLMGateway`` conforming to ``LLMGatewayProtocol``.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        LLM gateway conforming to ``LLMGatewayProtocol``.
+    """
+    from mousedroid.llm_gateway.config import GatewayConfig
+    from mousedroid.llm_gateway.gateway import LLMGateway
+
+    gateway_cfg = GatewayConfig(
+        enabled=cfg.llm.enabled,
+        model_path=cfg.llm.model_path,
+        model_url=cfg.llm.model_url,
+        model_checksum=cfg.llm.model_checksum,
+        context_length=cfg.llm.context_length,
+        n_threads=cfg.llm.n_threads,
+        n_gpu_layers=cfg.llm.n_gpu_layers,
+        max_tokens=cfg.llm.max_tokens,
+        temperature=cfg.llm.temperature,
+        latency_target_ms=cfg.llm.latency_target_ms,
+        stop_tokens=cfg.llm.stop_tokens,
+        max_command_len=cfg.llm.max_command_len,
+    )
+    _log.info("llm_gateway_built", enabled=cfg.llm.enabled)
+    return LLMGateway(gateway_cfg)
 
 
 def build_safety_monitor(cfg: Settings) -> SafetyMonitorProtocol:

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from typing import TYPE_CHECKING, Any
 
 from mousedroid.llm_gateway.protocol import GoalVector
@@ -40,12 +41,19 @@ class LLMGateway:
         """Load model and warm up.
 
         Raises:
-            RuntimeError: If llama-cpp-python is not installed.
+            RuntimeError: If llama-cpp-python is not installed or model not found.
         """
+        if not self._cfg.enabled:
+            _log.info("llm_gateway_disabled")
+            return
+
         try:
             await asyncio.to_thread(self._load_model)
         except ImportError as exc:
             msg = "llama-cpp-python is required: pip install mousedroid[llm]"
+            raise RuntimeError(msg) from exc
+        except OSError as exc:
+            msg = f"Model file not found: {self._cfg.model_path}"
             raise RuntimeError(msg) from exc
         _log.info("llm_gateway_started", model=str(self._cfg.model_path))
 
@@ -55,6 +63,7 @@ class LLMGateway:
 
         self._model = Llama(
             model_path=str(self._cfg.model_path),
+            n_ctx=self._cfg.context_length,
             n_threads=self._cfg.n_threads,
             n_gpu_layers=self._cfg.n_gpu_layers,
         )
@@ -83,6 +92,7 @@ class LLMGateway:
 
         Raises:
             ValueError: If nl_command is empty or contains disallowed content.
+            TimeoutError: If inference exceeds latency target.
         """
         if not nl_command.strip():
             msg = "nl_command must be non-empty"
@@ -95,7 +105,18 @@ class LLMGateway:
             return GoalVector()
 
         prompt = f"{self._cfg.system_prompt}\n\nMission: {nl_command}\n\nJSON:"
+
+        start_time = time.monotonic()
         raw = await asyncio.to_thread(self._infer_sync, prompt)
+        elapsed_ms = (time.monotonic() - start_time) * 1000.0
+
+        if elapsed_ms > self._cfg.latency_target_ms:
+            _log.warning(
+                "llm_inference_slow",
+                elapsed_ms=elapsed_ms,
+                target_ms=self._cfg.latency_target_ms,
+            )
+
         return self._parse_response(raw)
 
     def _infer_sync(self, prompt: str) -> str:  # pragma: no cover

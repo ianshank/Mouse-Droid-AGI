@@ -187,67 +187,46 @@ class TelemetryServer:
         """
         from aiohttp import web
 
+        from mousedroid.telemetry.auth import build_bearer_auth_middleware, build_cors_middleware
+
         cors_origins = self._cfg.cors_origins
         api_key = self._cfg.api_key
+        auth_cfg = self._cfg.auth
 
-        @web.middleware
-        async def cors_middleware(
-            request: web.Request,
-            handler: Any,
-        ) -> web.StreamResponse:
-            """Add CORS headers to responses."""
-            if request.method == "OPTIONS":
-                resp = web.Response()
-            else:
-                resp = await handler(request)
+        # Use the new CORS middleware from auth module
+        middlewares: list[Any] = [build_cors_middleware(cors_origins)]
 
-            # Determine which, if any, Access-Control-Allow-Origin header to send.
-            # - If CORS is unrestricted (no origins configured or ["*"]), always use "*".
-            # - If specific origins are configured, only echo back an allowed Origin
-            #   from the request and add Vary: Origin. For disallowed/missing origins,
-            #   omit Access-Control-Allow-Origin entirely.
-            origin_header_value: str | None = None
-            if not cors_origins or cors_origins == ["*"]:
-                origin_header_value = "*"
-            else:
-                req_origin = request.headers.get("Origin")
-                if req_origin and req_origin in cors_origins:
-                    origin_header_value = req_origin
-                    resp.headers.add("Vary", "Origin")
+        # Bearer token auth takes priority if configured
+        if auth_cfg is not None and auth_cfg.auth_enabled:
+            middlewares.append(build_bearer_auth_middleware(auth_cfg))
+        elif api_key is not None:
+            # Legacy X-API-Key auth for backwards compatibility
+            @web.middleware
+            async def auth_middleware(
+                request: web.Request,
+                handler: Any,
+            ) -> web.StreamResponse:
+                """Validate API key for both REST and WebSocket requests.
 
-            if origin_header_value is not None:
-                resp.headers["Access-Control-Allow-Origin"] = origin_header_value
-            resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
-            resp.headers["Access-Control-Allow-Headers"] = "X-API-Key, Content-Type"
-            return resp
+                For WebSocket upgrade requests, accept the API key from either
+                ``X-API-Key`` or ``?api_key=…`` so auth decisions stay centralized
+                in middleware and share a uniform rejection path.
+                """
+                is_ws_upgrade = request.headers.get("Upgrade", "").lower() == "websocket"
+                if is_ws_upgrade:
+                    # For WebSocket, accept key from query param OR header
+                    key = request.query.get("api_key", request.headers.get("X-API-Key", ""))
+                else:
+                    key = request.headers.get("X-API-Key", "")
 
-        @web.middleware
-        async def auth_middleware(
-            request: web.Request,
-            handler: Any,
-        ) -> web.StreamResponse:
-            """Validate API key for both REST and WebSocket requests.
+                if key != api_key:
+                    raise web.HTTPUnauthorized(text="Invalid or missing API key")
 
-            For WebSocket upgrade requests, accept the API key from either
-            ``X-API-Key`` or ``?api_key=…`` so auth decisions stay centralized
-            in middleware and share a uniform rejection path.
-            """
-            is_ws_upgrade = request.headers.get("Upgrade", "").lower() == "websocket"
-            if is_ws_upgrade:
-                # For WebSocket, accept key from query param OR header
-                key = request.query.get("api_key", request.headers.get("X-API-Key", ""))
-            else:
-                key = request.headers.get("X-API-Key", "")
+                resp: web.StreamResponse = await handler(request)
+                return resp
 
-            if key != api_key:
-                raise web.HTTPUnauthorized(text="Invalid or missing API key")
-
-            resp: web.StreamResponse = await handler(request)
-            return resp
-
-        middlewares: list[Any] = [cors_middleware]
-        if api_key is not None:
             middlewares.append(auth_middleware)
+
         return middlewares
 
     # ------------------------------------------------------------------
