@@ -111,7 +111,7 @@ def _trace_model(model: nn.Module, sample_input: Tensor) -> Any:
     Returns:
         Traced model via ``torch.jit.trace``.
     """
-    return torch.jit.trace(model, sample_input)
+    return torch.jit.trace(model, sample_input)  # type: ignore[no-untyped-call]
 
 
 class JetsonTensorRTCompiler:
@@ -259,7 +259,7 @@ class JetsonTensorRTCompiler:
         def _save_sync() -> None:
             path.parent.mkdir(parents=True, exist_ok=True)
             if isinstance(compiled, torch.jit.ScriptModule):
-                torch.jit.save(compiled, str(path))
+                torch.jit.save(compiled, str(path))  # type: ignore[no-untyped-call]
             else:
                 torch.save(compiled, str(path))
 
@@ -287,7 +287,7 @@ class JetsonTensorRTCompiler:
 
         def _load_sync() -> Any:
             try:
-                return torch.jit.load(str(path))
+                return torch.jit.load(str(path))  # type: ignore[no-untyped-call]
             except Exception:
                 return torch.load(str(path), weights_only=False)
 

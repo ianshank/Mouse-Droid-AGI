@@ -29,7 +29,7 @@ def _mel_frequency(mel: float) -> float:
     Returns:
         Frequency in Hz.
     """
-    return 700.0 * (10.0 ** (mel / 2595.0) - 1.0)
+    return float(700.0 * (10.0 ** (mel / 2595.0) - 1.0))
 
 
 def _hz_to_mel(hz: float) -> float:
@@ -41,7 +41,7 @@ def _hz_to_mel(hz: float) -> float:
     Returns:
         Mel-scale value.
     """
-    return 2595.0 * np.log10(1.0 + hz / 700.0)
+    return float(2595.0 * np.log10(1.0 + hz / 700.0))
 
 
 def _build_mel_filterbank(
