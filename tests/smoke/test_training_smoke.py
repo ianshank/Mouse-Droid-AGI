@@ -391,3 +391,42 @@ async def test_async_main_resume_auto_detect(tmp_path: Path) -> None:
 
     await async_main(str(yaml_path), resume=True)
     assert (checkpoint_dir / "warmstart.done").exists()
+
+
+# ---------------------------------------------------------------------------
+# Validate-only mode
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_async_main_validate_only(tmp_path: Path) -> None:
+    """async_main with validate_only=True skips training and validates."""
+    config_data = {
+        "mock_hardware": True,
+        "training_pipeline": {
+            "phases": ["rssm"],
+            "checkpoint_dir": str(tmp_path / "checkpoints"),
+            "thermal_sysfs_path": str(tmp_path / "nonexistent_thermal"),
+        },
+    }
+    yaml_path = tmp_path / "smoke_validate.yaml"
+    yaml_path.write_text(yaml.dump(config_data))
+
+    # Create fake checkpoint artifacts that the validators expect.
+    cp_dir = tmp_path / "checkpoints"
+    cp_dir.mkdir()
+    (cp_dir / "rssm.pt").write_text("checkpoint")
+    val_dir = Path("training/validation_data/rssm")
+    val_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        await async_main(str(yaml_path), resume=False, validate_only=True)
+    finally:
+        # Clean up the validation data directory created in cwd.
+        import shutil
+
+        if Path("training/validation_data").exists():
+            shutil.rmtree("training/validation_data")
+
+    # Training was skipped — no .done checkpoint should exist.
+    assert not (cp_dir / "rssm.done").exists()

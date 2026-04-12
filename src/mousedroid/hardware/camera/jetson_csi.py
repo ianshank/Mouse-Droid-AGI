@@ -26,7 +26,7 @@ except ImportError:  # pragma: no cover
 _cv2: Any
 try:
     import cv2 as _cv2
-except ImportError:  # pragma: no cover
+except (ImportError, AttributeError):  # pragma: no cover
     _cv2 = None
 
 _log = get_logger(__name__)

@@ -69,6 +69,17 @@ training_pipeline:
   amp_enabled: true
   resume_from_phase: null
 
+# Validation gates between training phases (loose thresholds for local dev)
+training_validation:
+  enabled: false                           # Enable to validate between phases
+  rssm_max_loss: 1.0                       # Loose — allow higher loss locally
+  warmstart_min_reward: -20.0              # Loose — accept poor early reward
+  bdi_min_accuracy: 0.2                    # Loose — 20% floor for dev iteration
+  constitutional_max_violation_rate: 0.2   # Loose — 20% violation ceiling
+  constitutional_min_reward: -10.0         # Loose floor for local dev
+  validation_data_dir: "training/validation_data"
+  validate_only: false
+
 # Disable cognitive core — not trained yet at pipeline start
 cognitive:
   enabled: false

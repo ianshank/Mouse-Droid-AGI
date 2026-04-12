@@ -22,9 +22,19 @@ from typing import Any
 
 import structlog
 
-from mousedroid.config.schema import Settings, TrainingPipelineConfig
+from mousedroid.config.schema import (
+    Settings,
+    TrainingPipelineConfig,
+    TrainingValidationConfig,
+)
 from mousedroid.training.batch_tuner import VRAMBatchTuner
 from mousedroid.training.gpu_monitor import JetsonGPUMonitor
+from mousedroid.training.validation import (
+    validate_bdi_accuracy,
+    validate_constitutional_rl,
+    validate_rssm_convergence,
+    validate_warmstart_policy,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -41,6 +51,7 @@ class PipelineOrchestrator:
         pipeline_config: Pipeline-specific configuration.
         gpu_monitor: GPU thermal/VRAM monitor instance.
         batch_tuner: Dynamic batch size tuner instance.
+        validation_config: Optional validation gate configuration.
     """
 
     def __init__(
@@ -49,23 +60,37 @@ class PipelineOrchestrator:
         pipeline_config: TrainingPipelineConfig,
         gpu_monitor: JetsonGPUMonitor | Any,
         batch_tuner: VRAMBatchTuner | Any,
+        validation_config: TrainingValidationConfig | None = None,
     ) -> None:
         self._settings = settings
         self._config = pipeline_config
         self._gpu_monitor = gpu_monitor
         self._batch_tuner = batch_tuner
         self._checkpoint_dir = Path(pipeline_config.checkpoint_dir)
+        self._validation = validation_config
 
     async def run(self) -> None:
         """Execute all configured training phases in order.
 
         Supports resume: if ``resume_from_phase`` is set, phases before
-        that phase are skipped.
+        that phase are skipped.  If ``validate_only`` is set in the
+        validation config, training is skipped and only existing
+        checkpoints are validated.
 
         Raises:
-            RuntimeError: If a phase fails or a checkpoint is missing
-                between phases.
+            RuntimeError: If a phase fails, a checkpoint is missing
+                between phases, or a validation gate fails.
         """
+        validate_only = (
+            self._validation is not None
+            and self._validation.enabled
+            and self._validation.validate_only
+        )
+
+        if validate_only:
+            await self._run_validate_only()
+            return
+
         phases = self._config.phases
         resume_phase = self._config.resume_from_phase
 
@@ -121,9 +146,81 @@ class PipelineOrchestrator:
                 phase_log.exception("phase_failed")
                 raise
 
+            # Run validation gate if enabled.
+            if self._validation is not None and self._validation.enabled:
+                passed = await self._validate_phase(phase)
+                if not passed:
+                    msg = f"Validation gate failed for phase '{phase}'"
+                    phase_log.error("validation_gate_failed", phase=phase)
+                    raise RuntimeError(msg)
+
             phase_log.info("phase_completed")
 
         logger.info("pipeline_completed", phases_run=phases[start_idx:])
+
+    async def _run_validate_only(self) -> None:
+        """Validate existing checkpoints without running training.
+
+        Iterates through all configured phases and validates each one.
+
+        Raises:
+            RuntimeError: If any validation gate fails.
+        """
+        assert self._validation is not None
+        logger.info("validate_only_started", phases=self._config.phases)
+
+        for phase in self._config.phases:
+            passed = await self._validate_phase(phase)
+            if not passed:
+                msg = f"Validation gate failed for phase '{phase}'"
+                logger.error("validate_only_failed", phase=phase)
+                raise RuntimeError(msg)
+            logger.info("validate_only_phase_passed", phase=phase)
+
+        logger.info("validate_only_completed", phases=self._config.phases)
+
+    async def _validate_phase(self, phase: str) -> bool:
+        """Run the validation gate for a given phase.
+
+        Args:
+            phase: Phase name to validate.
+
+        Returns:
+            True if validation passes, False otherwise.
+        """
+        if self._validation is None or not self._validation.enabled:
+            return True
+
+        validation_data = Path(self._validation.validation_data_dir)
+
+        validators: dict[str, Any] = {
+            "rssm": lambda: validate_rssm_convergence(
+                checkpoint_path=self._checkpoint_dir / "rssm.pt",
+                data_path=validation_data / "rssm",
+                max_loss=self._validation.rssm_max_loss,
+            ),
+            "warmstart": lambda: validate_warmstart_policy(
+                checkpoint_path=self._checkpoint_dir / "warmstart.pt",
+                min_reward=self._validation.warmstart_min_reward,
+            ),
+            "bdi": lambda: validate_bdi_accuracy(
+                weights_dir=self._checkpoint_dir / "bdi",
+                data_path=validation_data / "bdi",
+                min_accuracy=self._validation.bdi_min_accuracy,
+            ),
+            "constitutional_rl": lambda: validate_constitutional_rl(
+                output_dir=self._checkpoint_dir / "constitutional_rl",
+                max_violation_rate=self._validation.constitutional_max_violation_rate,
+                min_reward=self._validation.constitutional_min_reward,
+            ),
+        }
+
+        validator = validators.get(phase)
+        if validator is None:
+            logger.warning("no_validator_for_phase", phase=phase)
+            return True
+
+        return await validator()  # type: ignore[no-any-return]
 
     async def _run_phase(self, phase: str, batch_size: int) -> None:
         """Execute a single training phase.
@@ -230,12 +327,17 @@ def _load_settings(config_path: str) -> Settings:
     return Settings(**raw)
 
 
-async def async_main(config_path: str, resume: bool) -> None:
+async def async_main(
+    config_path: str,
+    resume: bool,
+    validate_only: bool = False,
+) -> None:
     """Async entry point for the pipeline orchestrator.
 
     Args:
         config_path: Path to YAML configuration file.
         resume: If True, resume from last incomplete phase.
+        validate_only: If True, skip training and only validate checkpoints.
     """
     settings = _load_settings(config_path)
 
@@ -253,6 +355,16 @@ async def async_main(config_path: str, resume: bool) -> None:
                     )
                     break
 
+    # Build validation config, honouring CLI --validate-only override.
+    validation_config = settings.training_validation
+    if validate_only:
+        if validation_config is None:
+            validation_config = TrainingValidationConfig(enabled=True, validate_only=True)  # type: ignore[call-arg]
+        else:
+            validation_config = validation_config.model_copy(
+                update={"enabled": True, "validate_only": True},
+            )
+
     gpu_monitor = JetsonGPUMonitor(pipeline_config)
     batch_tuner = VRAMBatchTuner(pipeline_config)
 
@@ -261,6 +373,7 @@ async def async_main(config_path: str, resume: bool) -> None:
         pipeline_config=pipeline_config,
         gpu_monitor=gpu_monitor,
         batch_tuner=batch_tuner,
+        validation_config=validation_config,
     )
     await orchestrator.run()
 
@@ -282,9 +395,14 @@ def main() -> None:
         action="store_true",
         help="Resume from last completed phase",
     )
+    parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="Skip training, only validate existing checkpoints",
+    )
     args = parser.parse_args()
 
-    asyncio.run(async_main(args.config, args.resume))
+    asyncio.run(async_main(args.config, args.resume, args.validate_only))
 
 
 if __name__ == "__main__":

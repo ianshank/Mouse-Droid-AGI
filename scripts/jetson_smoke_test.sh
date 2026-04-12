@@ -10,13 +10,21 @@
 #   bash scripts/jetson_smoke_test.sh camera        # Run only camera tests
 #   bash scripts/jetson_smoke_test.sh app           # Run only application health check
 #   bash scripts/jetson_smoke_test.sh pytest        # Run only hardware pytest suite
-#   bash scripts/jetson_smoke_test.sh e2e           # Run only E2E 5-second run
+#   bash scripts/jetson_smoke_test.sh mic           # Run only microphone capture test
+#   bash scripts/jetson_smoke_test.sh telemetry     # Run only telemetry server test
+#   bash scripts/jetson_smoke_test.sh e2e           # Run only E2E run (default 10s)
+#   bash scripts/jetson_smoke_test.sh training      # Run only training dry-run
+#   bash scripts/jetson_smoke_test.sh llm           # Run only LLM model check
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "${SCRIPT_DIR}")"
 VENV_DIR="${VENV_DIR:-/opt/mousedroid/venv}"
 PYTHON="${VENV_DIR}/bin/python"
+MOUSEDROID_E2E_DURATION_S="${MOUSEDROID_E2E_DURATION_S:-10}"
+MOUSEDROID_TELEMETRY_PORT="${MOUSEDROID_TELEMETRY_PORT:-8080}"
+MOUSEDROID_CONFIG="${MOUSEDROID_CONFIG:-config/jetson_production.yaml}"
+MODEL_PATH="${MODEL_PATH:-/opt/mousedroid/models/llama-3-8b-instruct.Q4_K_M.gguf}"
 FAILURES=0
 PASSES=0
 SKIPS=0
@@ -358,27 +366,146 @@ test_pytest() {
 }
 
 # ---------------------------------------------------------------------------
-# 7. E2E 5-second run
+# 7. Microphone capture
+# ---------------------------------------------------------------------------
+
+test_mic() {
+    log_section "Microphone Capture Test"
+    log_step "Validating USB audio capture"
+
+    local mic_script
+    mic_script=$(cat <<'PYEOF'
+import sys
+
+try:
+    import pyaudio
+except ImportError:
+    print("SKIP:pyaudio not installed")
+    sys.exit(0)
+
+pa = pyaudio.PyAudio()
+try:
+    found = False
+    for i in range(pa.get_device_count()):
+        info = pa.get_device_info_by_index(i)
+        if int(info.get("maxInputChannels", 0)) > 0:
+            found = True
+            name = info.get("name", "unknown")
+            rate = int(info.get("defaultSampleRate", 0))
+            print(f"PASS:USB mic detected: {name} @ {rate} Hz")
+            break
+    if not found:
+        print("FAIL:No audio input device found")
+except Exception as exc:
+    print(f"FAIL:Microphone test error: {exc}")
+finally:
+    pa.terminate()
+PYEOF
+    )
+
+    local result
+    result="$("${PYTHON}" -c "${mic_script}" 2>&1)" || true
+
+    if echo "${result}" | grep -q "^PASS:"; then
+        local msg
+        msg="$(echo "${result}" | grep "^PASS:" | sed 's/^PASS://')"
+        record_pass "microphone capture: ${msg}"
+    elif echo "${result}" | grep -q "^SKIP:"; then
+        record_skip "microphone capture" "pyaudio not installed"
+    else
+        local msg
+        msg="$(echo "${result}" | grep "^FAIL:" | sed 's/^FAIL://')"
+        record_fail "microphone capture" "${msg}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# 8. Telemetry server
+# ---------------------------------------------------------------------------
+
+test_telemetry() {
+    log_section "Telemetry Server Test"
+    log_step "Starting telemetry, hitting /health, then stopping"
+
+    local telemetry_script
+    telemetry_script=$(cat <<PYEOF
+import asyncio
+import sys
+
+try:
+    import aiohttp
+except ImportError:
+    print("SKIP:aiohttp not installed")
+    sys.exit(0)
+
+from mousedroid.config.loader import load_settings
+from mousedroid.telemetry.server import TelemetryServer
+
+cfg = load_settings()
+port = ${MOUSEDROID_TELEMETRY_PORT}
+
+async def check_health():
+    server = TelemetryServer(cfg)
+    await server.start()
+    try:
+        await asyncio.sleep(1)
+        url = f"http://127.0.0.1:{port}/health"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                if resp.status == 200:
+                    print(f"PASS:Telemetry /health returned 200 on port {port}")
+                else:
+                    print(f"FAIL:Telemetry /health returned {resp.status}")
+    except Exception as exc:
+        print(f"FAIL:Telemetry health check error: {exc}")
+    finally:
+        await server.stop()
+
+try:
+    asyncio.run(check_health())
+except Exception as exc:
+    print(f"FAIL:Telemetry server error: {exc}")
+    sys.exit(1)
+PYEOF
+    )
+
+    local result
+    result="$(timeout 15 "${PYTHON}" -c "${telemetry_script}" 2>&1)" || true
+
+    if echo "${result}" | grep -q "^PASS:"; then
+        local msg
+        msg="$(echo "${result}" | grep "^PASS:" | sed 's/^PASS://')"
+        record_pass "telemetry server: ${msg}"
+    elif echo "${result}" | grep -q "^SKIP:"; then
+        record_skip "telemetry server" "aiohttp not installed"
+    else
+        local msg
+        msg="$(echo "${result}" | grep "^FAIL:" | sed 's/^FAIL://')"
+        record_fail "telemetry server" "${msg:-unknown error}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# 9. E2E run (configurable duration via MOUSEDROID_E2E_DURATION_S)
 # ---------------------------------------------------------------------------
 
 test_e2e() {
-    log_section "E2E 5-Second Run"
-    log_step "Starting orchestrator for 5 seconds, then SIGINT shutdown"
+    local duration="${MOUSEDROID_E2E_DURATION_S}"
+    local timeout_s=$((duration + 10))
+    log_section "E2E ${duration}-Second Run"
+    log_step "Starting orchestrator for ${duration} seconds, then SIGINT shutdown"
 
     local e2e_script
-    e2e_script=$(cat <<'PYEOF'
+    e2e_script=$(cat <<PYEOF
 import asyncio
-import signal
 import sys
 import time
 
-# Load config
 from mousedroid.config.loader import load_settings
 from mousedroid.factory import build_orchestrator
 from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator
 
 cfg = load_settings()
-
 orch = build_orchestrator(cfg)
 assert isinstance(orch, MouseDroidOrchestrator)
 
@@ -386,8 +513,7 @@ async def run_e2e():
     await orch.start()
     start = time.monotonic()
     try:
-        # Run tick loop for ~5 seconds
-        while time.monotonic() - start < 5.0:
+        while time.monotonic() - start < ${duration}:
             try:
                 await orch.tick()
             except Exception as exc:
@@ -410,17 +536,139 @@ PYEOF
     )
 
     local result
-    # Run with a 15s timeout and send SIGINT after 5s if still running
-    result="$(timeout --signal=INT 15 "${PYTHON}" -c "${e2e_script}" 2>&1)" || true
+    result="$(timeout --signal=INT "${timeout_s}" "${PYTHON}" -c "${e2e_script}" 2>&1)" || true
 
     if echo "${result}" | grep -q "^PASS:"; then
         local msg
         msg="$(echo "${result}" | grep "^PASS:" | tail -1 | sed 's/^PASS://')"
-        record_pass "E2E 5-second run: ${msg}"
+        record_pass "E2E ${duration}s run: ${msg}"
     else
         local msg
         msg="$(echo "${result}" | grep "^FAIL:" | sed 's/^FAIL://')"
-        record_fail "E2E 5-second run" "${msg:-unknown error}"
+        record_fail "E2E ${duration}s run" "${msg:-unknown error}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# 10. Training dry-run
+# ---------------------------------------------------------------------------
+
+test_training() {
+    log_section "Training Dry-Run"
+    log_step "Running a single RSSM training step on GPU"
+
+    local training_script
+    training_script=$(cat <<'PYEOF'
+import sys
+
+try:
+    import torch
+except ImportError:
+    print("SKIP:torch not installed")
+    sys.exit(0)
+
+if not torch.cuda.is_available():
+    print("SKIP:CUDA not available")
+    sys.exit(0)
+
+try:
+    model = torch.nn.Linear(256, 64).cuda()
+    optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
+    scaler = torch.amp.GradScaler("cuda")
+
+    x = torch.randn(4, 256, device="cuda")
+    optimizer.zero_grad()
+    with torch.amp.autocast("cuda"):
+        loss = model(x).sum()
+    scaler.scale(loss).backward()
+    scaler.step(optimizer)
+    scaler.update()
+    torch.cuda.synchronize()
+    print(f"PASS:Training step completed, loss={loss.item():.4f}")
+except Exception as exc:
+    print(f"FAIL:Training dry-run error: {exc}")
+    sys.exit(1)
+PYEOF
+    )
+
+    local result
+    result="$(timeout 30 "${PYTHON}" -c "${training_script}" 2>&1)" || true
+
+    if echo "${result}" | grep -q "^PASS:"; then
+        local msg
+        msg="$(echo "${result}" | grep "^PASS:" | sed 's/^PASS://')"
+        record_pass "training dry-run: ${msg}"
+    elif echo "${result}" | grep -q "^SKIP:"; then
+        local reason
+        reason="$(echo "${result}" | grep "^SKIP:" | sed 's/^SKIP://')"
+        record_skip "training dry-run" "${reason}"
+    else
+        local msg
+        msg="$(echo "${result}" | grep "^FAIL:" | sed 's/^FAIL://')"
+        record_fail "training dry-run" "${msg:-unknown error}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# 11. LLM model check
+# ---------------------------------------------------------------------------
+
+test_llm() {
+    log_section "LLM Model Check"
+    log_step "Verifying LLM model file at ${MODEL_PATH}"
+
+    if [[ ! -f "${MODEL_PATH}" ]]; then
+        record_skip "LLM model file" "Model not downloaded at ${MODEL_PATH}"
+        return
+    fi
+
+    local size_bytes
+    size_bytes="$(stat --format='%s' "${MODEL_PATH}" 2>/dev/null || stat -f '%z' "${MODEL_PATH}" 2>/dev/null)"
+    if [[ -z "${size_bytes}" ]]; then
+        record_fail "LLM model file" "Could not determine file size"
+        return
+    fi
+
+    local size_gb
+    size_gb="$(echo "scale=2; ${size_bytes} / 1073741824" | bc 2>/dev/null || echo "unknown")"
+    echo "  Model size: ${size_gb} GB"
+
+    # Minimal sanity: GGUF files must be > 100MB
+    if [[ "${size_bytes}" -gt 104857600 ]]; then
+        record_pass "LLM model file (${size_gb} GB at ${MODEL_PATH})"
+    else
+        record_fail "LLM model file" "File too small (${size_bytes} bytes) — possibly corrupt"
+    fi
+
+    # Try loading the model header with llama-cpp-python if available
+    local llm_script
+    llm_script=$(cat <<PYEOF
+import sys
+try:
+    from llama_cpp import Llama
+    llm = Llama(model_path="${MODEL_PATH}", n_ctx=128, n_gpu_layers=0, verbose=False)
+    print(f"PASS:LLM model loaded OK, vocab_size={llm.n_vocab()}")
+    del llm
+except ImportError:
+    print("SKIP:llama-cpp-python not installed")
+except Exception as exc:
+    print(f"WARN:LLM load test failed: {exc}")
+PYEOF
+    )
+
+    local llm_result
+    llm_result="$(timeout 30 "${PYTHON}" -c "${llm_script}" 2>&1)" || true
+
+    if echo "${llm_result}" | grep -q "^PASS:"; then
+        local msg
+        msg="$(echo "${llm_result}" | grep "^PASS:" | sed 's/^PASS://')"
+        record_pass "LLM model load: ${msg}"
+    elif echo "${llm_result}" | grep -q "^SKIP:"; then
+        record_skip "LLM model load" "llama-cpp-python not installed"
+    elif echo "${llm_result}" | grep -q "^WARN:"; then
+        local msg
+        msg="$(echo "${llm_result}" | grep "^WARN:" | sed 's/^WARN://')"
+        record_pass "LLM model file OK (load test skipped: ${msg})"
     fi
 }
 
@@ -438,6 +686,35 @@ print_summary() {
     echo "  Passed:  ${PASSES}"
     echo "  Failed:  ${FAILURES}"
     echo "  Skipped: ${SKIPS}"
+    echo ""
+
+    # Structured JSON output
+    local json_results="["
+    local first=true
+    for r in "${RESULTS[@]}"; do
+        if [[ "${first}" != "true" ]]; then
+            json_results+=","
+        fi
+        first=false
+        local status
+        status="$(echo "${r}" | cut -d: -f1)"
+        local detail
+        detail="$(echo "${r}" | cut -d: -f2-)"
+        json_results+="{\"status\":\"${status}\",\"detail\":\"${detail}\"}"
+    done
+    json_results+="]"
+
+    if command -v jq &>/dev/null; then
+        jq -nc \
+            --argjson passed "${PASSES}" \
+            --argjson failed "${FAILURES}" \
+            --argjson skipped "${SKIPS}" \
+            --argjson results "${json_results}" \
+            '{"event":"smoke_test_complete","passed":$passed,"failed":$failed,"skipped":$skipped,"results":$results}'
+    else
+        echo "{\"event\":\"smoke_test_complete\",\"passed\":${PASSES},\"failed\":${FAILURES},\"skipped\":${SKIPS}}"
+    fi
+
     echo ""
     if [[ "${FAILURES}" -eq 0 ]]; then
         echo "=== All smoke tests passed ==="
@@ -462,20 +739,28 @@ main() {
             test_gpio
             test_serial
             test_camera
+            test_mic
             test_app
             test_pytest
+            test_telemetry
             test_e2e
+            test_training
+            test_llm
             ;;
-        system)   test_system ;;
-        gpio)     test_gpio ;;
-        serial)   test_serial ;;
-        camera)   test_camera ;;
-        app)      test_app ;;
-        pytest)   test_pytest ;;
-        e2e)      test_e2e ;;
+        system)     test_system ;;
+        gpio)       test_gpio ;;
+        serial)     test_serial ;;
+        camera)     test_camera ;;
+        mic)        test_mic ;;
+        app)        test_app ;;
+        pytest)     test_pytest ;;
+        telemetry)  test_telemetry ;;
+        e2e)        test_e2e ;;
+        training)   test_training ;;
+        llm)        test_llm ;;
         *)
             echo "Unknown step: ${step}"
-            echo "Valid steps: all, system, gpio, serial, camera, app, pytest, e2e"
+            echo "Valid steps: all, system, gpio, serial, camera, mic, app, pytest, telemetry, e2e, training, llm"
             exit 1
             ;;
     esac

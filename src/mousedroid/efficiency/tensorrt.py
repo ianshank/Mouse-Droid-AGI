@@ -222,12 +222,10 @@ class JetsonTensorRTCompiler:
         Returns:
             Compiled model.
         """
+
         # Build sample inputs for all declared input shapes.
         def _build_samples(device: str) -> list[Tensor]:
-            return [
-                torch.randn(*shape, device=device)
-                for shape in input_shapes.values()
-            ]
+            return [torch.randn(*shape, device=device) for shape in input_shapes.values()]
 
         if not _TORCH2TRT_AVAILABLE:
             _log.warning("torch2trt_not_available_falling_back_to_jit_trace")

@@ -891,6 +891,27 @@ class GPUConfig(BaseModel):
     )
 
 
+class TrainingValidationConfig(BaseModel):
+    """Validation gates between training pipeline phases."""
+
+    enabled: bool = Field(False, description="Enable validation between phases")
+    rssm_max_loss: float = Field(0.5, gt=0, description="Max RSSM reconstruction loss")
+    warmstart_min_reward: float = Field(
+        -10.0, description="Min MCTS policy reward after warm-start"
+    )
+    bdi_min_accuracy: float = Field(0.3, ge=0, le=1, description="Min BDI classification accuracy")
+    constitutional_max_violation_rate: float = Field(
+        0.1, ge=0, le=1, description="Max safety violation rate"
+    )
+    constitutional_min_reward: float = Field(-5.0, description="Min reward after constitutional RL")
+    validation_data_dir: str = Field(
+        "training/validation_data", description="Held-out validation data directory"
+    )
+    validate_only: bool = Field(
+        False, description="Skip training, only validate existing checkpoints"
+    )
+
+
 class TrainingPipelineConfig(BaseModel):
     """GPU pre-training pipeline orchestrator configuration (ADR-005)."""
 
@@ -1066,6 +1087,10 @@ class Settings(BaseSettings):
     training_pipeline: TrainingPipelineConfig | None = Field(
         None,
         description="GPU pre-training pipeline orchestrator config (ADR-005)",
+    )
+    training_validation: TrainingValidationConfig | None = Field(
+        None,
+        description="Validation gates between training pipeline phases",
     )
 
     # Robot arm platform configs (optional — only used when platform=robot_arm)

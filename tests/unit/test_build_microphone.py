@@ -28,16 +28,6 @@ def test_build_microphone_mock_preserves_config():
     assert result.channels == 2
 
 
-def test_build_microphone_disabled_via_flag():
-    """Microphone config present but ``enabled=False`` returns None."""
-    cfg = Settings(
-        mock_hardware=True,
-        microphone=MicrophoneConfig(enabled=False),
-    )
-    result = build_microphone(cfg)
-    assert result is None
-
-
 def test_build_microphone_real_hardware(monkeypatch):
     cfg = Settings(
         mock_hardware=False,

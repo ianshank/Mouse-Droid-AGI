@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 import os
+
+# Prevent OpenMP duplicate-library abort when both faiss and PyTorch link
+# their own libomp (common on macOS with conda).  Must be set before either
+# library is imported.
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
 import sys
 from collections.abc import Generator
 from typing import TYPE_CHECKING, Any

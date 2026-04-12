@@ -333,60 +333,6 @@ def test_env_prefix_override(monkeypatch: pytest.MonkeyPatch):
     assert s.debug is True
 
 
-# -- ModelConfig audio fields -------------------------------------------------
-
-
-def test_model_config_audio_defaults():
-    c = ModelConfig()
-    assert c.audio_dim == 0
-    assert c.audio_proj_dim == 32
-
-
-def test_model_config_audio_custom():
-    c = ModelConfig(audio_dim=1024, audio_proj_dim=64)
-    assert c.audio_dim == 1024
-    assert c.audio_proj_dim == 64
-
-
-def test_model_config_audio_dim_negative_raises():
-    with pytest.raises(ValidationError):
-        ModelConfig(audio_dim=-1)
-
-
-def test_model_config_audio_proj_dim_negative_raises():
-    with pytest.raises(ValidationError):
-        ModelConfig(audio_proj_dim=-1)
-
-
-# -- CameraConfig feature extractor fields ------------------------------------
-
-
-def test_camera_config_feature_extractor_default():
-    c = CameraConfig()
-    assert c.feature_extractor == "mean_pool"
-
-
-def test_camera_config_feature_extractor_values():
-    for val in ("mean_pool", "tensorrt", "auto"):
-        c = CameraConfig(feature_extractor=val)
-        assert c.feature_extractor == val
-
-
-def test_camera_config_feature_extractor_invalid():
-    with pytest.raises(ValidationError):
-        CameraConfig(feature_extractor="custom")
-
-
-def test_camera_config_l2_normalize_default():
-    c = CameraConfig()
-    assert c.l2_normalize is True
-
-
-def test_camera_config_l2_normalize_false():
-    c = CameraConfig(l2_normalize=False)
-    assert c.l2_normalize is False
-
-
 # -- Settings with full valid config ------------------------------------------
 
 

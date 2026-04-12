@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -271,21 +271,15 @@ class TestCameraDisconnectHandling:
             dtype=np.uint8,
         )
 
-        with patch.dict("sys.modules", {"jetson_utils": mock_jutils}):
-            # Need to reimport after patching
-            import importlib
+        from mousedroid.hardware.camera import jetson_csi as jcsi_mod
 
-            import mousedroid.hardware.camera.jetson_csi as jcsi_mod
+        cam = jcsi_mod.JetsonCSICamera(camera_cfg)
+        # Manually set up to simulate started state
+        cam._camera = mock_source
+        cam._backend = "jetson_utils"
 
-            importlib.reload(jcsi_mod)
-
-            cam = jcsi_mod.JetsonCSICamera(camera_cfg)
-            # Manually set up to simulate started state
-            cam._camera = mock_source
-            cam._backend = "jetson_utils"
-
-            await cam.stop()
-            assert cam._camera is None
+        await cam.stop()
+        assert cam._camera is None
 
 
 # ---------------------------------------------------------------------------
