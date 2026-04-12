@@ -1,11 +1,14 @@
 """Optimized inference wrapper -- compiles models via TensorRT on first call.
 
-Wraps an RSSM world model and transparently applies TensorRT compilation
-when available, falling back to standard PyTorch inference otherwise.
+Wraps a PyTorch model (e.g. RSSM encoder, policy head) and transparently
+applies TensorRT compilation when available, falling back to standard
+PyTorch inference otherwise.  Supports both single-input and multi-input
+models via ``*args`` / ``**kwargs`` forwarding.
 """
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any, Protocol, runtime_checkable
 
@@ -23,11 +26,12 @@ _log = get_logger(__name__)
 class OptimizedInferenceProtocol(Protocol):
     """Interface for optimized model inference."""
 
-    async def infer(self, obs: Tensor) -> Tensor:
-        """Run inference on an observation tensor.
+    async def infer(self, *args: Tensor, **kwargs: Tensor) -> Tensor:
+        """Run inference on one or more input tensors.
 
         Args:
-            obs: Observation tensor.
+            *args: Positional input tensors (e.g. observation, state, action).
+            **kwargs: Named input tensors.
 
         Returns:
             Model output tensor.
@@ -36,17 +40,20 @@ class OptimizedInferenceProtocol(Protocol):
 
 
 class OptimizedInference:
-    """TensorRT-accelerated inference wrapper for RSSM-based world models.
+    """TensorRT-accelerated inference wrapper for PyTorch models.
 
     On the first call to :meth:`infer`, the underlying model is compiled via
     the provided :class:`TensorRTCompilerProtocol` (if available).  Subsequent
     calls use the compiled version.  Falls back to standard PyTorch when
     TensorRT compilation is unavailable or fails.
 
+    Inference is offloaded to a thread pool via ``asyncio.to_thread`` to avoid
+    blocking the event loop in real-time control loops.
+
     All inference runs under ``torch.no_grad()`` for safety.
 
     Args:
-        model: PyTorch model (typically RSSM or its sub-module).
+        model: PyTorch model (e.g. RSSM encoder, policy head).
         compiler: TensorRT compiler implementing the protocol.
         input_shapes: Expected input shapes for compilation.
         precision: Target precision (``"fp16"`` or ``"fp32"``).
@@ -114,15 +121,17 @@ class OptimizedInference:
             return self._compiled_model
         return self._original_model
 
-    async def infer(self, obs: Tensor) -> Tensor:
+    async def infer(self, *args: Tensor, **kwargs: Tensor) -> Tensor:
         """Run inference with automatic TensorRT compilation on first call.
 
         Compilation is triggered lazily on the first invocation.  Latency
-        is logged for every call.  All forward passes run under
-        ``torch.no_grad()`` to avoid unnecessary gradient tracking.
+        is logged for every call.  The forward pass is offloaded to a thread
+        pool so it does not block the asyncio event loop.  All forward passes
+        run under ``torch.no_grad()``.
 
         Args:
-            obs: Observation tensor, shape matching ``input_shapes``.
+            *args: Positional input tensors (e.g. observation, hidden state).
+            **kwargs: Named input tensors (e.g. action=...).
 
         Returns:
             Model output tensor.
@@ -130,12 +139,16 @@ class OptimizedInference:
         await self._ensure_compiled()
 
         model = self._get_active_model()
+
+        def _forward_sync() -> Tensor:
+            with torch.no_grad():
+                result: Tensor = model(*args, **kwargs)
+            return result
+
         start = time.monotonic()
-
-        with torch.no_grad():
-            result: Tensor = model(obs)
-
+        result = await asyncio.to_thread(_forward_sync)
         elapsed_ms = (time.monotonic() - start) * 1000.0
+
         _log.debug(
             "optimized_inference_step",
             latency_ms=round(elapsed_ms, 2),

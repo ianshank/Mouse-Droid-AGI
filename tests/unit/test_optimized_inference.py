@@ -212,6 +212,51 @@ class TestNoGrad:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Multi-input model support
+# ---------------------------------------------------------------------------
+
+
+class _MultiInputModel(nn.Module):
+    """Model that accepts multiple input tensors (e.g. RSSM state + action)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fc = nn.Linear(6, 2)
+
+    def forward(self, obs: Tensor, action: Tensor) -> Tensor:  # type: ignore[override]
+        return self.fc(torch.cat([obs, action], dim=-1))  # type: ignore[no-any-return]
+
+
+class TestMultiInput:
+    """Tests for multi-input model inference."""
+
+    @pytest.mark.asyncio
+    async def test_multi_input_infer(self) -> None:
+        """Verify inference works with multiple positional inputs."""
+        model = _MultiInputModel()
+        compiler = MockTensorRTCompiler()
+        shapes = {"obs": [1, 4], "action": [1, 2]}
+        wrapper = OptimizedInference(model, compiler, shapes)
+
+        obs = torch.randn(1, 4)
+        action = torch.randn(1, 2)
+        result = await wrapper.infer(obs, action)
+        assert isinstance(result, Tensor)
+        assert result.shape == (1, 2)
+
+    @pytest.mark.asyncio
+    async def test_multi_input_kwargs(self) -> None:
+        """Verify inference works with keyword arguments."""
+        model = _MultiInputModel()
+        compiler = MockTensorRTCompiler()
+        shapes = {"obs": [1, 4], "action": [1, 2]}
+        wrapper = OptimizedInference(model, compiler, shapes)
+
+        result = await wrapper.infer(torch.randn(1, 4), action=torch.randn(1, 2))
+        assert isinstance(result, Tensor)
+
+
 class TestPrecisionConfig:
     """Test precision parameter passes through correctly."""
 

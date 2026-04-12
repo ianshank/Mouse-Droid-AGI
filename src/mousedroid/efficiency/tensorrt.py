@@ -92,10 +92,12 @@ def _model_fingerprint(
     """
     h = hashlib.sha256()
     h.update(model.__class__.__name__.encode())
+    # Include full architecture string for structural uniqueness.
+    h.update(str(model).encode())
     for name, shape in sorted(input_shapes.items()):
         h.update(f"{name}:{shape}".encode())
     h.update(precision.encode())
-    # Include parameter count as a lightweight structural fingerprint.
+    # Include parameter count as an additional structural fingerprint.
     param_count = sum(p.numel() for p in model.parameters())
     h.update(str(param_count).encode())
     return h.hexdigest()[:16]
@@ -220,27 +222,33 @@ class JetsonTensorRTCompiler:
         Returns:
             Compiled model.
         """
+        # Build sample inputs for all declared input shapes.
+        def _build_samples(device: str) -> list[Tensor]:
+            return [
+                torch.randn(*shape, device=device)
+                for shape in input_shapes.values()
+            ]
+
         if not _TORCH2TRT_AVAILABLE:
             _log.warning("torch2trt_not_available_falling_back_to_jit_trace")
-            # Build a sample input from first shape for tracing.
-            first_shape = next(iter(input_shapes.values()))
-            sample = torch.randn(*first_shape, device="cpu")
+            samples = _build_samples("cpu")
             model.eval()
-            return await asyncio.to_thread(_trace_model, model, sample)
+            # JIT trace accepts a tuple of inputs for multi-input models.
+            trace_input = samples[0] if len(samples) == 1 else tuple(samples)
+            return await asyncio.to_thread(_trace_model, model, trace_input)
 
         # torch2trt compilation is CPU-bound; offload to thread.
         def _compile_sync() -> Any:
             import torch2trt
 
-            first_shape = next(iter(input_shapes.values()))
             device = "cuda" if torch.cuda.is_available() else "cpu"
-            sample = torch.randn(*first_shape, device=device)
+            samples = _build_samples(device)
             model.eval()
 
             fp16_mode = precision == "fp16"
             return torch2trt.torch2trt(
                 model,
-                [sample],
+                samples,
                 fp16_mode=fp16_mode,
                 max_workspace_size=int(self._workspace_gb * (1 << 30)),
                 use_onnx=False,
@@ -289,6 +297,11 @@ class JetsonTensorRTCompiler:
             try:
                 return torch.jit.load(str(path))  # type: ignore[no-untyped-call]
             except Exception:
+                # weights_only=False is required to load torch2trt modules.
+                # SECURITY: only load from the local tensorrt_cache_dir which
+                # should have restricted permissions (0700).
+                # SECURITY: weights_only=False is required to load
+                # torch2trt modules.  Restrict tensorrt_cache_dir to 0700.
                 return torch.load(str(path), weights_only=False)
 
         result = await asyncio.to_thread(_load_sync)

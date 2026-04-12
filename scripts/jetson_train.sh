@@ -39,14 +39,30 @@ _ts() { date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date +"%Y-%m-%dT%H:%M:%SZ";
 log_json() {
     local level="$1"; shift
     local event="$1"; shift
-    # Remaining args are key=value pairs.
-    local extra=""
-    for kv in "$@"; do
-        local key="${kv%%=*}"
-        local val="${kv#*=}"
-        extra="${extra}, \"${key}\": \"${val}\""
-    done
-    echo "{\"ts\": \"$(_ts)\", \"level\": \"${level}\", \"event\": \"${event}\"${extra}}" >&2
+    # Build JSON safely.  Use jq if available to ensure proper escaping;
+    # fall back to a printf-based approach that escapes double-quotes.
+    if command -v jq &>/dev/null; then
+        local obj
+        obj=$(jq -nc --arg ts "$(_ts)" --arg level "$level" --arg event "$event" \
+            '{ts: $ts, level: $level, event: $event}')
+        for kv in "$@"; do
+            local key="${kv%%=*}"
+            local val="${kv#*=}"
+            obj=$(echo "$obj" | jq -c --arg k "$key" --arg v "$val" '. + {($k): $v}')
+        done
+        echo "$obj" >&2
+    else
+        # Fallback: escape double-quotes in values to prevent broken JSON.
+        local extra=""
+        for kv in "$@"; do
+            local key="${kv%%=*}"
+            local val="${kv#*=}"
+            val="${val//\"/\\\"}"
+            extra="${extra}, \"${key}\": \"${val}\""
+        done
+        local escaped_event="${event//\"/\\\"}"
+        echo "{\"ts\": \"$(_ts)\", \"level\": \"${level}\", \"event\": \"${escaped_event}\"${extra}}" >&2
+    fi
 }
 
 log_info()  { log_json "info"  "$@"; }
