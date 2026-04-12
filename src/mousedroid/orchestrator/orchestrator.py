@@ -304,6 +304,7 @@ class MouseDroidOrchestrator:
         self,
         event: str,
         observation: ObservationProtocol,
+        **extra_context: float,
     ) -> None:
         """Fire a voice event if the voice engine is active.
 
@@ -312,14 +313,16 @@ class MouseDroidOrchestrator:
         Args:
             event: Semantic event name.
             observation: Current sensor observation for context.
+            **extra_context: Additional key-value context for the voice engine.
         """
         if self._voice_engine is None:
             return
         context = {"distance_m": float(observation.distance_m)}
+        context.update(extra_context)
         try:
             await self._voice_engine.speak(event, context)
         except Exception:
-            _log.debug("voice_event_failed", event=event, exc_info=True)
+            _log.warning("voice_event_failed", voice_event=event, exc_info=True)
 
     async def _voice_observe(
         self,
@@ -327,6 +330,8 @@ class MouseDroidOrchestrator:
         safety_ctx: SafetyContext,
     ) -> None:
         """Derive voice events from the current observation and safety state.
+
+        Checks safety thresholds from config to avoid hardcoded values.
 
         Args:
             observation: Current sensor observation.
@@ -337,8 +342,18 @@ class MouseDroidOrchestrator:
 
         if not safety_ctx.forward_clearance_ok:
             await self._voice_event("obstacle_detected", observation)
-        elif safety_ctx.battery_voltage < 10.5:
-            await self._voice_event("low_battery", observation)
+        elif safety_ctx.battery_voltage < self._cfg.safety.battery_warn_v:
+            await self._voice_event(
+                "low_battery",
+                observation,
+                battery_v=safety_ctx.battery_voltage,
+            )
+        elif safety_ctx.gpu_temp_c >= self._cfg.safety.gpu_warn_temp_c:
+            await self._voice_event(
+                "error",
+                observation,
+                gpu_temp_c=safety_ctx.gpu_temp_c,
+            )
 
     async def run(self) -> None:
         """Run the main loop at configured control rate."""

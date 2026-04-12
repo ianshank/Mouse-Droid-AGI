@@ -196,7 +196,9 @@ class RockyVoiceEngine:
         """Background task: drain the queue and play speech."""
         while self._running:
             try:
-                request = await asyncio.wait_for(self._queue.get(), timeout=1.0)
+                request = await asyncio.wait_for(
+                    self._queue.get(), timeout=self._cfg.queue_poll_timeout_s,
+                )
             except TimeoutError:
                 continue
             except asyncio.CancelledError:
@@ -233,9 +235,14 @@ class RockyVoiceEngine:
     async def _write_samples(self, samples: NDArray[np.float32]) -> None:
         """Write audio samples to the speaker in chunks.
 
+        Incomplete final chunks are zero-padded to ``chunk_size``.
+
         Args:
             samples: Full audio waveform as float32.
         """
+        if len(samples) == 0:
+            _log.debug("rocky_voice_write_empty_samples")
+            return
         chunk_size = self._speaker.chunk_size
         for i in range(0, len(samples), chunk_size):
             chunk = samples[i : i + chunk_size]

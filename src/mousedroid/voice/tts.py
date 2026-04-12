@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from numpy.typing import NDArray
 
+from mousedroid.hardware.audio.constants import INT16_MAX_F
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
@@ -52,6 +53,8 @@ class PiperTTS:
                 _log.warning("piper_tts_no_model_path")
         except ImportError:
             _log.warning("piper_tts_not_installed")
+        except Exception:
+            _log.warning("piper_tts_load_failed", exc_info=True)
 
     def stop(self) -> None:
         """Release the piper voice model."""
@@ -85,7 +88,7 @@ class PiperTTS:
             width = wav_file.getsampwidth()
 
         if width == 2:
-            samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+            samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / INT16_MAX_F
         else:
             samples = np.frombuffer(raw, dtype=np.float32)
 

@@ -998,12 +998,17 @@ class VoiceConfig(BaseModel):
 
     enabled: bool = Field(False, description="Enable Rocky voice output")
     cooldown_s: float = Field(5.0, gt=0, description="Min seconds between utterances")
-    personality: str = Field("rocky", description="Voice personality (only 'rocky' supported)")
+    personality: Literal["rocky"] = Field(
+        "rocky", description="Voice personality (only 'rocky' supported)"
+    )
     tts_model_path: str | None = Field(
         None, description="Path to piper voice model (None=use default)"
     )
     tts_sample_rate: int = Field(22050, gt=0, description="TTS output sample rate (Hz)")
     queue_size: int = Field(16, gt=0, description="Max queued speech requests")
+    queue_poll_timeout_s: float = Field(
+        1.0, gt=0, description="Worker queue poll timeout (s)"
+    )
     phrase_overrides: dict[str, list[str]] = Field(
         default_factory=dict, description="Custom phrase overrides by event name"
     )

@@ -172,15 +172,22 @@ def build_speaker(cfg: Settings) -> SpeakerProtocol | None:
         Speaker driver conforming to ``SpeakerProtocol``, or None if disabled.
     """
     if cfg.speaker is None or not cfg.speaker.enabled:
+        _log.info("speaker_disabled")
         return None
 
     if cfg.mock_hardware:
         from mousedroid.hardware.audio.mock_speaker import MockSpeaker
 
+        _log.info("speaker_mock_built", sample_rate=cfg.speaker.sample_rate)
         return MockSpeaker(cfg.speaker)
 
     from mousedroid.hardware.audio.usb_speaker import UsbSpeaker
 
+    _log.info(
+        "speaker_built",
+        sample_rate=cfg.speaker.sample_rate,
+        device_name=cfg.speaker.device_name,
+    )
     return UsbSpeaker(cfg.speaker)
 
 
@@ -198,6 +205,7 @@ def build_voice_engine(
         Voice engine conforming to ``VoiceEngineProtocol``, or None if disabled.
     """
     if not cfg.voice.enabled:
+        _log.info("voice_engine_disabled")
         return None
 
     if speaker is None:
@@ -206,18 +214,28 @@ def build_voice_engine(
         _log.warning("voice_engine_disabled_no_speaker")
         return None
 
-    if cfg.mock_hardware:
-        from mousedroid.voice.mock_tts import MockTTS
+    try:
+        if cfg.mock_hardware:
+            from mousedroid.voice.mock_tts import MockTTS
 
-        tts = MockTTS(cfg.voice)
-    else:
-        from mousedroid.voice.tts import PiperTTS
+            tts: MockTTS | PiperTTS = MockTTS(cfg.voice)
+        else:
+            from mousedroid.voice.tts import PiperTTS
 
-        tts = PiperTTS(cfg.voice)
+            tts = PiperTTS(cfg.voice)
+    except Exception:
+        _log.warning("voice_engine_tts_init_failed", exc_info=True)
+        return None
 
     from mousedroid.voice.rocky import RockyVoiceEngine
 
-    return RockyVoiceEngine(cfg.voice, speaker, tts)
+    engine = RockyVoiceEngine(cfg.voice, speaker, tts)
+    _log.info(
+        "voice_engine_built",
+        personality=cfg.voice.personality,
+        cooldown_s=cfg.voice.cooldown_s,
+    )
+    return engine
 
 
 def build_world_model(cfg: Settings) -> WorldModelProtocol:

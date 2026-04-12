@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from numpy.typing import NDArray
 
+from mousedroid.hardware.audio.constants import INT16_MAX_F
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
@@ -109,11 +110,12 @@ class UsbSpeaker:
             samples: Audio samples as float32, shape ``(chunk_size * channels,)``.
         """
         if self._stream is None:
+            _log.warning("usb_speaker_write_not_started")
             msg = "Speaker stream not started"
             raise RuntimeError(msg)
 
         if self._cfg.format == "int16":
-            raw_data = (samples * 32768.0).astype(np.int16).tobytes()
+            raw_data = (samples * INT16_MAX_F).astype(np.int16).tobytes()
         else:
             raw_data = samples.astype(np.float32).tobytes()
 

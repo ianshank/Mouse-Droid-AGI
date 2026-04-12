@@ -215,3 +215,141 @@ class TestPriority:
         assert Priority.NORMAL == 0
         assert Priority.HIGH == 1
         assert Priority.EMERGENCY == 2
+
+
+# ---------------------------------------------------------------------------
+# Edge case tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_write_samples_empty_array() -> None:
+    """Engine handles empty audio samples gracefully."""
+    engine, speaker, _tts = _make_engine()
+    await engine.start()
+    try:
+        await engine._write_samples(np.array([], dtype=np.float32))
+        assert len(speaker.get_written_chunks()) == 0
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_write_samples_smaller_than_chunk() -> None:
+    """Samples smaller than chunk_size are zero-padded."""
+    engine, speaker, _tts = _make_engine()
+    await engine.start()
+    try:
+        small = np.ones(100, dtype=np.float32)
+        await engine._write_samples(small)
+        chunks = speaker.get_written_chunks()
+        assert len(chunks) == 1
+        assert chunks[0].shape == (1024,)
+        # First 100 samples are 1.0, rest are 0.0
+        assert chunks[0][99] == 1.0
+        assert chunks[0][100] == 0.0
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_queue_full_normal_priority_dropped() -> None:
+    """Normal-priority events are dropped when queue is full."""
+    engine, _speaker, _tts = _make_engine(cooldown_s=100.0, queue_size=1)
+    await engine.start()
+    try:
+        await engine.speak("startup")
+        await engine.speak("task_complete")  # Should be dropped (queue full)
+        # Only 1 item should be in queue
+        assert engine._queue.qsize() == 1
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_drain_queue_empty() -> None:
+    """Draining an empty queue does not raise."""
+    engine, _speaker, _tts = _make_engine()
+    await engine._drain_queue()  # Should not raise
+
+
+@pytest.mark.asyncio
+async def test_drain_queue_clears_all() -> None:
+    """Draining removes all queued items."""
+    engine, _speaker, _tts = _make_engine(cooldown_s=100.0)
+    # Fill the queue without starting the worker
+    await engine.speak("startup")
+    await engine.speak("task_complete")
+    assert engine._queue.qsize() > 0
+    await engine._drain_queue()
+    assert engine._queue.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_stop_then_restart() -> None:
+    """Engine can be stopped and restarted cleanly."""
+    engine, speaker, tts = _make_engine()
+    await engine.start()
+    await engine.stop()
+    assert not speaker.started
+
+    tts.clear()
+    speaker.clear()
+    await engine.start()
+    assert speaker.started
+    await engine.speak("startup")
+    await asyncio.sleep(0.3)
+    assert len(tts.get_calls()) == 1
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_speak_with_context_parameter() -> None:
+    """Context parameter is accepted without error."""
+    engine, _speaker, tts = _make_engine()
+    await engine.start()
+    try:
+        await engine.speak("startup", context={"distance_m": 1.5})
+        await asyncio.sleep(0.3)
+        assert len(tts.get_calls()) == 1
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_worker_handles_tts_exception() -> None:
+    """Worker continues after TTS synthesis failure."""
+    engine, _speaker, tts = _make_engine()
+    original_synthesize = tts.synthesize
+
+    call_count = 0
+
+    async def failing_then_ok(text: str) -> np.ndarray:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("TTS failed")
+        return await original_synthesize(text)
+
+    tts.synthesize = failing_then_ok  # type: ignore[assignment]
+    await engine.start()
+    try:
+        await engine.speak("startup")  # Will fail
+        await asyncio.sleep(0.3)
+        await engine.speak("task_complete")  # Should succeed
+        await asyncio.sleep(0.3)
+        assert call_count == 2
+    finally:
+        await engine.stop()
+
+
+def test_rocky_transform_whitespace_only() -> None:
+    """Transform handles whitespace-only input."""
+    result = rocky_transform("   ", intensity=0.0)
+    assert result == ""
+
+
+def test_rocky_transform_at_intensity_boundary() -> None:
+    """Transform at exactly 0.7 intensity does NOT add exclamation."""
+    result = rocky_transform("hello", intensity=0.7)
+    assert not result.endswith("!")
