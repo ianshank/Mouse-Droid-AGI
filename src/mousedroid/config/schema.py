@@ -68,6 +68,11 @@ class CameraConfig(BaseModel):
         "auto",
         description="Camera backend: auto-detect, picamera2, or Jetson CSI",
     )
+    feature_extractor: Literal["mean_pool", "tensorrt", "auto"] = Field(
+        "mean_pool",
+        description="Feature extraction backend: mean_pool (fallback), tensorrt, or auto",
+    )
+    l2_normalize: bool = Field(True, description="Apply L2 normalization to feature vectors")
 
 
 class CircuitBreakerConfig(BaseModel):
@@ -335,6 +340,8 @@ class ModelConfig(BaseModel):
     vision_proj_dim: int = Field(128, gt=0, description="Vision projection dim")
     ultrasonic_proj_dim: int = Field(32, gt=0, description="Ultrasonic projection dim")
     motor_proj_dim: int = Field(32, gt=0, description="Motor state projection dim")
+    audio_dim: int = Field(0, ge=0, description="Audio feature input dim (0=disabled)")
+    audio_proj_dim: int = Field(32, ge=0, description="Audio projection dim (0=disabled)")
     belief_dim: int = Field(128, gt=0, description="BDI belief latent dim")
     desire_dim: int = Field(64, gt=0, description="BDI desire latent dim")
     intention_classes: int = Field(10, gt=0, description="BDI intention classes")
@@ -848,10 +855,10 @@ class TrainingConfig(BaseModel):
 
 
 class MicrophoneConfig(BaseModel):
-    """SuziePi USB 2.0 Mini Microphone configuration."""
+    """USB microphone configuration."""
 
     device_index: int | None = Field(None, description="ALSA device index (None=auto-detect)")
-    device_name: str = Field("SuziePi", description="USB device name substring for auto-detect")
+    device_name: str = Field("USB", description="USB device name substring for auto-detect")
     sample_rate: int = Field(16000, gt=0, description="Audio sample rate (Hz)")
     channels: int = Field(1, gt=0, le=2, description="Audio channels (1=mono, 2=stereo)")
     chunk_size: int = Field(1024, gt=0, description="Samples per read chunk")

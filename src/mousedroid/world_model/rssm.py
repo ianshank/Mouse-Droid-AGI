@@ -161,8 +161,19 @@ class RSSM(nn.Module):
             device=device,
         ).unsqueeze(0)
 
+        # Extract audio if the encoder supports it.
+        audio: Tensor | None = None
+        if self.encoder._audio_enabled:
+            audio_data = observation.audio_chunk
+            if len(audio_data) > 0:
+                audio = torch.as_tensor(
+                    audio_data,
+                    dtype=torch.float32,
+                    device=device,
+                ).unsqueeze(0)
+
         # Encode
-        obs_embed = self.encoder(vision, ultrasonic, motor, mask)
+        obs_embed = self.encoder(vision, ultrasonic, motor, mask, audio=audio)
 
         # GRU step
         gru_input = torch.cat([z, prev_action], dim=-1)
@@ -180,7 +191,7 @@ class RSSM(nn.Module):
 
         return new_h, new_z, obs_embed, float(surprise.item())
 
-    @torch.no_grad()  # type: ignore[untyped-decorator]
+    @torch.no_grad()
     def imagine_step(
         self,
         action: Tensor,
