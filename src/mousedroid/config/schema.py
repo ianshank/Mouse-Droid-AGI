@@ -981,6 +981,34 @@ class MicrophoneConfig(BaseModel):
     hop_length: int = Field(256, gt=0, description="Hop length for mel spectrogram")
 
 
+class SpeakerConfig(BaseModel):
+    """USB speaker output configuration."""
+
+    enabled: bool = Field(True, description="Enable audio playback through this speaker")
+    device_index: int | None = Field(None, description="ALSA device index (None=auto-detect)")
+    device_name: str = Field("USB", description="USB device name substring for auto-detect")
+    sample_rate: int = Field(22050, gt=0, description="Audio output sample rate (Hz)")
+    channels: int = Field(1, gt=0, le=2, description="Audio output channels (1=mono, 2=stereo)")
+    chunk_size: int = Field(1024, gt=0, description="Samples per write chunk")
+    format: Literal["float32", "int16"] = Field("float32", description="Audio sample format")
+
+
+class VoiceConfig(BaseModel):
+    """Rocky voice engine configuration."""
+
+    enabled: bool = Field(False, description="Enable Rocky voice output")
+    cooldown_s: float = Field(5.0, gt=0, description="Min seconds between utterances")
+    personality: str = Field("rocky", description="Voice personality (only 'rocky' supported)")
+    tts_model_path: str | None = Field(
+        None, description="Path to piper voice model (None=use default)"
+    )
+    tts_sample_rate: int = Field(22050, gt=0, description="TTS output sample rate (Hz)")
+    queue_size: int = Field(16, gt=0, description="Max queued speech requests")
+    phrase_overrides: dict[str, list[str]] = Field(
+        default_factory=dict, description="Custom phrase overrides by event name"
+    )
+
+
 class UltrasonicConfig(BaseModel):
     """HC-SR04 ultrasonic distance sensor configuration."""
 
@@ -1038,6 +1066,11 @@ class Settings(BaseSettings):
         None,
         description="USB microphone config (None=disabled)",
     )
+    speaker: SpeakerConfig | None = Field(
+        None,
+        description="USB speaker config (None=disabled)",
+    )
+    voice: VoiceConfig = Field(default_factory=_settings_default_factory(VoiceConfig))
     camera: CameraConfig = Field(default_factory=_settings_default_factory(CameraConfig))
     jetson: JetsonConfig = Field(default_factory=_settings_default_factory(JetsonConfig))
     robot: RobotConfig = Field(default_factory=_settings_default_factory(RobotConfig))

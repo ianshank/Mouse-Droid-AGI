@@ -11,11 +11,17 @@ from typing import TYPE_CHECKING
 from mousedroid.agents.base import AgentProtocol
 from mousedroid.comms.protocol import ESP32CommProtocol
 from mousedroid.efficiency.tensorrt import TensorRTCompilerProtocol
-from mousedroid.hardware.protocols import AudioProtocol, DistanceSensorProtocol, VisionProtocol
+from mousedroid.hardware.protocols import (
+    AudioProtocol,
+    DistanceSensorProtocol,
+    SpeakerProtocol,
+    VisionProtocol,
+)
 from mousedroid.llm_gateway.protocol import LLMGatewayProtocol
 from mousedroid.logging.setup import get_logger
 from mousedroid.safety.protocol import SafetyMonitorProtocol
 from mousedroid.telemetry.log_buffer import LogRingBuffer
+from mousedroid.voice.protocol import VoiceEngineProtocol
 from mousedroid.world_model.protocol import WorldModelProtocol
 
 if TYPE_CHECKING:
@@ -154,6 +160,64 @@ def build_microphone(cfg: Settings) -> AudioProtocol | None:
     from mousedroid.hardware.audio.usb_microphone import UsbMicrophone
 
     return UsbMicrophone(cfg.microphone)
+
+
+def build_speaker(cfg: Settings) -> SpeakerProtocol | None:
+    """Build USB speaker driver based on config.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Speaker driver conforming to ``SpeakerProtocol``, or None if disabled.
+    """
+    if cfg.speaker is None or not cfg.speaker.enabled:
+        return None
+
+    if cfg.mock_hardware:
+        from mousedroid.hardware.audio.mock_speaker import MockSpeaker
+
+        return MockSpeaker(cfg.speaker)
+
+    from mousedroid.hardware.audio.usb_speaker import UsbSpeaker
+
+    return UsbSpeaker(cfg.speaker)
+
+
+def build_voice_engine(
+    cfg: Settings,
+    speaker: SpeakerProtocol | None = None,
+) -> VoiceEngineProtocol | None:
+    """Build Rocky voice engine based on config.
+
+    Args:
+        cfg: Root settings.
+        speaker: Pre-built speaker driver (built if not provided).
+
+    Returns:
+        Voice engine conforming to ``VoiceEngineProtocol``, or None if disabled.
+    """
+    if not cfg.voice.enabled:
+        return None
+
+    if speaker is None:
+        speaker = build_speaker(cfg)
+    if speaker is None:
+        _log.warning("voice_engine_disabled_no_speaker")
+        return None
+
+    if cfg.mock_hardware:
+        from mousedroid.voice.mock_tts import MockTTS
+
+        tts = MockTTS(cfg.voice)
+    else:
+        from mousedroid.voice.tts import PiperTTS
+
+        tts = PiperTTS(cfg.voice)
+
+    from mousedroid.voice.rocky import RockyVoiceEngine
+
+    return RockyVoiceEngine(cfg.voice, speaker, tts)
 
 
 def build_world_model(cfg: Settings) -> WorldModelProtocol:
@@ -564,6 +628,10 @@ def build_orchestrator(cfg: Settings) -> object:
         log_buffer=log_buffer,
     )
 
+    # Voice engine (optional — disabled by default)
+    speaker = build_speaker(cfg)
+    voice_engine = build_voice_engine(cfg, speaker=speaker)
+
     return MouseDroidOrchestrator(
         world_model=wm,
         agents=[agent],
@@ -574,6 +642,7 @@ def build_orchestrator(cfg: Settings) -> object:
         cfg=cfg,
         telemetry_publisher=telemetry_publisher,
         telemetry_server=telemetry_server,
+        voice_engine=voice_engine,
     )
 
 

@@ -1,0 +1,217 @@
+"""Unit tests for the Rocky voice engine."""
+
+from __future__ import annotations
+
+import asyncio
+
+import numpy as np
+import pytest
+
+from mousedroid.config.schema import SpeakerConfig, VoiceConfig
+from mousedroid.hardware.audio.mock_speaker import MockSpeaker
+from mousedroid.voice.mock_tts import MockTTS
+from mousedroid.voice.phrase_bank import DEFAULT_PHRASES
+from mousedroid.voice.rocky import Priority, RockyVoiceEngine, rocky_transform
+
+
+class TestRockyTransform:
+    """Tests for the rocky_transform grammar function."""
+
+    def test_strips_articles(self) -> None:
+        """Articles (the, a, an) are removed."""
+        assert rocky_transform("the path is clear", intensity=0.0) == "path is clear"
+        assert rocky_transform("a new object", intensity=0.0) == "new object"
+        assert rocky_transform("an error occurred", intensity=0.0) == "error occurred"
+
+    def test_case_insensitive_articles(self) -> None:
+        """Articles are stripped regardless of case."""
+        assert rocky_transform("The path", intensity=0.0) == "path"
+
+    def test_high_intensity_adds_exclamation(self) -> None:
+        """High intensity adds exclamation mark."""
+        result = rocky_transform("path is clear", intensity=0.9)
+        assert result.endswith("!")
+
+    def test_low_intensity_no_exclamation(self) -> None:
+        """Low intensity does not add exclamation."""
+        result = rocky_transform("path is clear", intensity=0.3)
+        assert not result.endswith("!")
+
+    def test_existing_exclamation_not_doubled(self) -> None:
+        """Already-exclaimed text is not double-exclaimed."""
+        result = rocky_transform("Good!", intensity=0.9)
+        assert result == "Good!"
+
+    def test_empty_string(self) -> None:
+        """Empty input returns empty output."""
+        assert rocky_transform("") == ""
+
+
+class TestPhraseBankCoverage:
+    """Verify the phrase bank has expected events."""
+
+    def test_required_events_present(self) -> None:
+        """All critical robot events have phrases."""
+        required = {
+            "task_complete",
+            "obstacle_detected",
+            "emergency_stop",
+            "path_clear",
+            "low_battery",
+            "new_object",
+            "navigation_success",
+            "error",
+            "idle",
+            "startup",
+            "shutdown",
+        }
+        assert required.issubset(set(DEFAULT_PHRASES.keys()))
+
+    def test_all_events_have_phrases(self) -> None:
+        """Every event has at least one phrase."""
+        for event, phrases in DEFAULT_PHRASES.items():
+            assert len(phrases) > 0, f"Event {event!r} has no phrases"
+
+
+def _make_engine(
+    cooldown_s: float = 0.1,
+    queue_size: int = 16,
+) -> tuple[RockyVoiceEngine, MockSpeaker, MockTTS]:
+    """Create a test engine with mock speaker and TTS."""
+    voice_cfg = VoiceConfig(
+        enabled=True,
+        cooldown_s=cooldown_s,
+        queue_size=queue_size,
+        tts_sample_rate=22050,
+    )
+    speaker_cfg = SpeakerConfig(sample_rate=22050, chunk_size=1024)
+    speaker = MockSpeaker(speaker_cfg)
+    tts = MockTTS(voice_cfg)
+    engine = RockyVoiceEngine(voice_cfg, speaker, tts)
+    return engine, speaker, tts
+
+
+@pytest.mark.asyncio
+async def test_speak_queues_known_event() -> None:
+    """Speaking a known event queues a phrase from the bank."""
+    engine, _speaker, tts = _make_engine()
+    await engine.start()
+    try:
+        await engine.speak("startup")
+        # Give the worker time to process
+        await asyncio.sleep(0.3)
+        calls = tts.get_calls()
+        assert len(calls) == 1
+        assert calls[0] in DEFAULT_PHRASES["startup"]
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_speak_unknown_event_ignored() -> None:
+    """Unknown events are silently ignored."""
+    engine, _speaker, tts = _make_engine()
+    await engine.start()
+    try:
+        await engine.speak("totally_unknown_event")
+        await asyncio.sleep(0.2)
+        assert len(tts.get_calls()) == 0
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_cooldown_prevents_rapid_speech() -> None:
+    """Cooldown prevents speaking too frequently."""
+    engine, _speaker, tts = _make_engine(cooldown_s=10.0)
+    await engine.start()
+    try:
+        await engine.speak("startup")
+        await asyncio.sleep(0.2)
+        await engine.speak("task_complete")
+        await asyncio.sleep(0.2)
+        # Only the first should have been spoken (cooldown blocks second)
+        assert len(tts.get_calls()) == 1
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_emergency_bypasses_cooldown() -> None:
+    """Emergency events bypass the cooldown timer."""
+    engine, _speaker, tts = _make_engine(cooldown_s=10.0)
+    await engine.start()
+    try:
+        await engine.speak("startup")
+        await asyncio.sleep(0.2)
+        await engine.speak("emergency_stop")
+        await asyncio.sleep(0.2)
+        # Both should have been spoken: startup + emergency
+        assert len(tts.get_calls()) == 2
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_synthesised_audio_written_to_speaker() -> None:
+    """TTS output is written to the speaker in chunks."""
+    engine, speaker, _tts = _make_engine()
+    await engine.start()
+    try:
+        await engine.speak("startup")
+        await asyncio.sleep(0.3)
+        # MockTTS returns 22050 samples (1 second at 22050 Hz)
+        # With chunk_size=1024, that's ceil(22050/1024) = 22 chunks
+        chunks = speaker.get_written_chunks()
+        assert len(chunks) > 0
+        for chunk in chunks:
+            assert chunk.shape == (1024,)
+            assert chunk.dtype == np.float32
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_phrase_overrides() -> None:
+    """User-provided phrase overrides replace defaults."""
+    voice_cfg = VoiceConfig(
+        enabled=True,
+        cooldown_s=0.1,
+        tts_sample_rate=22050,
+        phrase_overrides={"startup": ["Custom hello!"]},
+    )
+    speaker_cfg = SpeakerConfig(sample_rate=22050, chunk_size=1024)
+    speaker = MockSpeaker(speaker_cfg)
+    tts = MockTTS(voice_cfg)
+    engine = RockyVoiceEngine(voice_cfg, speaker, tts)
+    await engine.start()
+    try:
+        await engine.speak("startup")
+        await asyncio.sleep(0.3)
+        assert tts.get_calls() == ["Custom hello!"]
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_start_stop_lifecycle() -> None:
+    """Engine starts and stops cleanly."""
+    engine, speaker, _ = _make_engine()
+    await engine.start()
+    assert speaker.started
+    await engine.stop()
+    assert not speaker.started
+
+
+class TestPriority:
+    """Priority enum tests."""
+
+    def test_ordering(self) -> None:
+        """Emergency > High > Normal."""
+        assert Priority.EMERGENCY > Priority.HIGH > Priority.NORMAL
+
+    def test_values(self) -> None:
+        """Priority values are as expected."""
+        assert Priority.NORMAL == 0
+        assert Priority.HIGH == 1
+        assert Priority.EMERGENCY == 2

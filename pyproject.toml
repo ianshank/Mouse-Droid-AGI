@@ -31,6 +31,9 @@ hardware = [
 audio = [
     "pyaudio>=0.2.13",
 ]
+voice = [
+    "piper-tts>=1.2",
+]
 jetson = [
     "tensorrt>=8.0",
     "pycuda>=2022.1",
