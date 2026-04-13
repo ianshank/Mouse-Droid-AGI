@@ -7,13 +7,16 @@ from mousedroid.constants import (
     BELIEF_ENCODER_SEED,
     DEFAULT_ACTION_DIM,
     DEFAULT_AUDIO_CHUNK_SIZE,
+    DEFAULT_LIDAR_FEATURE_DIM,
     DEFAULT_MAX_DISTANCE_M,
     DEFAULT_MOTOR_STATE_DIM,
     DEFAULT_VISION_DIM,
     DESIRE_ENCODER_SEED,
     INTENTION_PREDICTOR_SEED,
+    LIDAR_HEADER_BYTE,
     MILLISECONDS_PER_SECOND,
     N_SENSOR_MODALITIES,
+    N_SENSOR_MODALITIES_WITH_LIDAR,
     POLICY_MLP_SEED,
     VALUE_MLP_SEED,
     WEIGHT_INIT_SCALE,
@@ -62,3 +65,23 @@ def test_seeds_are_non_negative():
         VALUE_MLP_SEED,
     ]:
         assert seed >= 0
+
+
+# ---------------------------------------------------------------------------
+# LiDAR constants
+# ---------------------------------------------------------------------------
+
+
+def test_n_sensor_modalities_with_lidar():
+    """N_SENSOR_MODALITIES_WITH_LIDAR should be 5."""
+    assert N_SENSOR_MODALITIES_WITH_LIDAR == 5
+
+
+def test_lidar_header_byte():
+    """LIDAR_HEADER_BYTE should be 0x54."""
+    assert LIDAR_HEADER_BYTE == 0x54
+
+
+def test_lidar_default_feature_dim():
+    """DEFAULT_LIDAR_FEATURE_DIM should be 36."""
+    assert DEFAULT_LIDAR_FEATURE_DIM == 36
