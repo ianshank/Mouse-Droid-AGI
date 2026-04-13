@@ -259,21 +259,8 @@ class HailoFeatureExtractor:
             if input_data.ndim == 2:
                 input_data = np.expand_dims(input_data, axis=-1)
 
-            # Synchronous call — camera driver dispatches via asyncio.to_thread
-            import asyncio
-
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-
-            if loop is not None and loop.is_running():
-                # Running inside an event loop — use the mock/sync fallback
-                # The camera driver already calls extract() from asyncio.to_thread
-                # so this path handles nested-loop edge cases gracefully
-                return self._fallback.extract(frame)
-
-            result = asyncio.run(self._runtime.run_inference("feature_extractor", input_data))
+            # Direct synchronous call — thread-safe via threading.Lock in runtime
+            result = self._runtime.infer_sync("feature_extractor", input_data)
             features = result.flatten().astype(np.float32)
 
             # Truncate or pad to expected dimension

@@ -54,7 +54,7 @@ class TestMockHailoRuntime:
         rt = MockHailoRuntime(cfg)
         await rt.start()
         dummy_input = np.zeros((480, 640, 3), dtype=np.uint8)
-        result = await rt.run_inference("yolo", dummy_input)
+        result = rt.infer_sync("yolo", dummy_input)
         assert result.shape == (25200, 85)
         assert result.dtype == np.float32
 
@@ -64,24 +64,24 @@ class TestMockHailoRuntime:
         rt = MockHailoRuntime(cfg)
         await rt.start()
         dummy_input = np.zeros((480, 640, 3), dtype=np.uint8)
-        result = await rt.run_inference("feature_extractor", dummy_input)
+        result = rt.infer_sync("feature_extractor", dummy_input)
         assert result.shape == (256,)
         assert result.dtype == np.float32
 
-    @pytest.mark.asyncio
-    async def test_unknown_model_raises(self) -> None:
+    def test_unknown_model_raises(self) -> None:
+        import asyncio
+
         cfg = _make_hailo_cfg()
         rt = MockHailoRuntime(cfg)
-        await rt.start()
+        asyncio.run(rt.start())
         with pytest.raises(RuntimeError, match="Unknown model"):
-            await rt.run_inference("nonexistent", np.zeros(1, dtype=np.uint8))
+            rt.infer_sync("nonexistent", np.zeros(1, dtype=np.uint8))
 
-    @pytest.mark.asyncio
-    async def test_not_started_raises(self) -> None:
+    def test_not_started_raises(self) -> None:
         cfg = _make_hailo_cfg()
         rt = MockHailoRuntime(cfg)
         with pytest.raises(RuntimeError, match="not available"):
-            await rt.run_inference("yolo", np.zeros(1, dtype=np.uint8))
+            rt.infer_sync("yolo", np.zeros(1, dtype=np.uint8))
 
     def test_implements_protocol(self) -> None:
         cfg = _make_hailo_cfg()
@@ -94,9 +94,9 @@ class TestMockHailoRuntime:
         custom = {"yolo": (100, 7), "feature_extractor": (512,)}
         rt = MockHailoRuntime(cfg, output_shapes=custom)
         await rt.start()
-        result = await rt.run_inference("yolo", np.zeros(1, dtype=np.uint8))
+        result = rt.infer_sync("yolo", np.zeros(1, dtype=np.uint8))
         assert result.shape == (100, 7)
-        result = await rt.run_inference("feature_extractor", np.zeros(1, dtype=np.uint8))
+        result = rt.infer_sync("feature_extractor", np.zeros(1, dtype=np.uint8))
         assert result.shape == (512,)
 
     def test_default_output_shapes_class_attr(self) -> None:
@@ -122,7 +122,7 @@ def _build_mock_hailort() -> MagicMock:
     # Network group from configure
     mock_ng = MagicMock()
     input_info = MagicMock()
-    input_info.name = "input_0"  # .name as a plain attribute, not MagicMock's internal name
+    input_info.name = "input_0"
     output_info = MagicMock()
     output_info.name = "output_0"
     mock_ng.get_input_vstream_infos.return_value = [input_info]
@@ -148,6 +148,15 @@ class TestHailoRuntimeInit:
         assert rt._cfg is cfg
         assert rt._available is False
         assert rt._models == {}
+
+    def test_uses_threading_lock(self) -> None:
+        cfg = _make_hailo_cfg()
+        rt = HailoRuntime(cfg)
+        assert type(rt._lock).__name__ == "_RLock" or hasattr(rt._lock, "acquire")
+        # Verify it's NOT an asyncio.Lock
+        import asyncio
+
+        assert not isinstance(rt._lock, asyncio.Lock)
 
 
 class TestHailoRuntimeStart:
@@ -197,7 +206,6 @@ class TestHailoRuntimeStart:
         mock_hp = _build_mock_hailort()
         with patch("mousedroid.hardware.accelerator.hailo_runtime._hailort", mock_hp):
             await rt.start()
-        # No models loaded because HEF files don't exist
         assert not rt.is_available()
 
     @pytest.mark.asyncio
@@ -210,7 +218,6 @@ class TestHailoRuntimeStart:
         )
         rt = HailoRuntime(cfg)
         mock_hp = _build_mock_hailort()
-        # HEF constructor raises for yolo
         mock_hp.HEF.side_effect = RuntimeError("corrupt HEF")
         with patch("mousedroid.hardware.accelerator.hailo_runtime._hailort", mock_hp):
             await rt.start()
@@ -252,18 +259,16 @@ class TestHailoRuntimeStop:
         mock_device.release.side_effect = OSError("release failed")
         with patch("mousedroid.hardware.accelerator.hailo_runtime._hailort", mock_hp):
             await rt.start()
-            # Should not raise even if release fails
             await rt.stop()
         assert not rt.is_available()
 
 
 class TestHailoRuntimeInference:
-    @pytest.mark.asyncio
-    async def test_inference_not_available_raises(self) -> None:
+    def test_inference_not_available_raises(self) -> None:
         cfg = _make_hailo_cfg()
         rt = HailoRuntime(cfg)
         with pytest.raises(RuntimeError, match="not available"):
-            await rt.run_inference("yolo", np.zeros(1, dtype=np.uint8))
+            rt.infer_sync("yolo", np.zeros(1, dtype=np.uint8))
 
     @pytest.mark.asyncio
     async def test_inference_unknown_model_raises(self, tmp_path: Path) -> None:
@@ -278,7 +283,7 @@ class TestHailoRuntimeInference:
         with patch("mousedroid.hardware.accelerator.hailo_runtime._hailort", mock_hp):
             await rt.start()
             with pytest.raises(RuntimeError, match="not loaded"):
-                await rt.run_inference("nonexistent", np.zeros(1, dtype=np.uint8))
+                rt.infer_sync("nonexistent", np.zeros(1, dtype=np.uint8))
 
     @pytest.mark.asyncio
     async def test_inference_success(self, tmp_path: Path) -> None:
@@ -294,9 +299,7 @@ class TestHailoRuntimeInference:
         mock_hp = _build_mock_hailort()
         with patch("mousedroid.hardware.accelerator.hailo_runtime._hailort", mock_hp):
             await rt.start()
-            result = await rt.run_inference(
-                "yolo", np.zeros((480, 640, 3), dtype=np.uint8)
-            )
+            result = rt.infer_sync("yolo", np.zeros((480, 640, 3), dtype=np.uint8))
         assert result.dtype == np.float32
 
 

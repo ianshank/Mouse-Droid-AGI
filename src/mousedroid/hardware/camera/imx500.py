@@ -31,18 +31,19 @@ class IMX500Camera:
     All blocking camera operations are delegated to ``asyncio.to_thread``.
     """
 
-    def __init__(self, cfg: CameraConfig) -> None:
+    def __init__(self, cfg: CameraConfig, **kwargs: Any) -> None:
         """Initialise IMX500 camera from config.
 
         Args:
             cfg: Camera configuration with resolution, FPS, and model path.
+            **kwargs: Optional ``hailo_runtime`` for accelerated feature extraction.
         """
         self._cfg = cfg
         self._camera: Any = None
 
         from mousedroid.hardware.camera.feature_extractor import build_feature_extractor
 
-        self._extractor = build_feature_extractor(cfg)
+        self._extractor = build_feature_extractor(cfg, hailo_runtime=kwargs.get("hailo_runtime"))
 
     async def start(self) -> None:
         """Start the camera capture pipeline."""

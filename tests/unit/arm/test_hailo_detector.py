@@ -202,11 +202,7 @@ class TestHailoYOLODetector:
         cfg = _make_perception_cfg()
         mock_runtime = MagicMock()
         mock_runtime.is_available.return_value = True
-
-        async def _raise(*a: Any, **kw: Any) -> Any:
-            raise RuntimeError("inference failed")
-
-        mock_runtime.run_inference = _raise
+        mock_runtime.infer_sync.side_effect = RuntimeError("inference failed")
         det = HailoYOLODetector(cfg, mock_runtime)
         result = det.detect(np.zeros((480, 640, 3), dtype=np.uint8))
         assert isinstance(result, list)

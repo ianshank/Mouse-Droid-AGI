@@ -233,18 +233,8 @@ class HailoYOLODetector:
             return self._fallback.detect(rgb_image)
 
         try:
-            import asyncio
-
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-
-            if loop is not None and loop.is_running():
-                # Inside event loop — delegate to fallback to avoid nesting
-                return self._fallback.detect(rgb_image)
-
-            raw_output = asyncio.run(self._runtime.run_inference("yolo", rgb_image))
+            # Direct synchronous call — thread-safe via threading.Lock in runtime
+            raw_output = self._runtime.infer_sync("yolo", rgb_image)
 
             detections = _hailo_yolo_postprocess(
                 raw_output,

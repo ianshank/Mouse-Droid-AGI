@@ -76,10 +76,9 @@ def build_camera(
 ) -> VisionProtocol:
     """Build camera driver based on config.
 
-    When a Hailo-8 runtime is provided and the camera feature extractor
-    is set to ``"hailo"`` or ``"auto"``, the camera's internal feature
-    extractor is replaced with a :class:`HailoFeatureExtractor` that
-    offloads inference to the accelerator.
+    When a Hailo-8 runtime is provided, it is passed through to the
+    camera constructor so that ``build_feature_extractor`` can select
+    the :class:`HailoFeatureExtractor` backend at construction time.
 
     Args:
         cfg: Root settings.
@@ -88,35 +87,20 @@ def build_camera(
     Returns:
         Camera driver conforming to ``VisionProtocol``.
     """
-    from mousedroid.hardware.camera.feature_extractor import build_feature_extractor
-
-    hailo_extractor = None
-    if hailo_runtime is not None and cfg.camera.feature_extractor in ("hailo", "auto"):
-        hailo_extractor = build_feature_extractor(cfg.camera, hailo_runtime=hailo_runtime)
-
     if cfg.mock_hardware:
         from mousedroid.hardware.camera.mock_camera import MockCamera
 
-        camera: VisionProtocol = MockCamera(cfg.camera)
-        if hailo_extractor is not None:
-            camera._extractor = hailo_extractor  # type: ignore[attr-defined]
-        return camera
+        return MockCamera(cfg.camera)
 
     if cfg.camera.backend == "jetson_csi":
         from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
 
-        camera = JetsonCSICamera(cfg.camera)
-        if hailo_extractor is not None:
-            camera._extractor = hailo_extractor  # type: ignore[attr-defined]
-        return camera
+        return JetsonCSICamera(cfg.camera, hailo_runtime=hailo_runtime)
 
     if cfg.camera.backend == "picamera2":
         from mousedroid.hardware.camera.imx500 import IMX500Camera
 
-        camera = IMX500Camera(cfg.camera)
-        if hailo_extractor is not None:
-            camera._extractor = hailo_extractor  # type: ignore[attr-defined]
-        return camera
+        return IMX500Camera(cfg.camera, hailo_runtime=hailo_runtime)
 
     # auto: try picamera2 first, fall back to jetson_csi
     try:
@@ -124,15 +108,11 @@ def build_camera(
 
         from mousedroid.hardware.camera.imx500 import IMX500Camera
 
-        camera = IMX500Camera(cfg.camera)
+        return IMX500Camera(cfg.camera, hailo_runtime=hailo_runtime)
     except ImportError:
         from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
 
-        camera = JetsonCSICamera(cfg.camera)
-
-    if hailo_extractor is not None:
-        camera._extractor = hailo_extractor  # type: ignore[attr-defined]
-    return camera
+        return JetsonCSICamera(cfg.camera, hailo_runtime=hailo_runtime)
 
 
 def build_distance_sensor(cfg: Settings) -> DistanceSensorProtocol:
@@ -535,18 +515,20 @@ def build_tensorrt_compiler(cfg: Settings) -> TensorRTCompilerProtocol:
 
 
 def build_hailo_runtime(cfg: Settings) -> HailoRuntimeProtocol | None:
-    """Build Hailo-8 accelerator runtime if configured and available.
+    """Instantiate Hailo-8 accelerator runtime if configured.
 
-    Returns ``None`` when Hailo is disabled, the ``hailo_platform``
-    package is missing, or the device cannot be found.  This ensures
-    graceful degradation — the rest of the pipeline falls back to
-    GPU-based inference automatically.
+    Creates the runtime instance but does **not** start it — device
+    discovery and HEF loading happen in ``await runtime.start()``,
+    which is called by the orchestrator during its startup phase.
+
+    Returns ``None`` when Hailo is disabled or the ``hailo_platform``
+    package cannot be imported.
 
     Args:
         cfg: Root settings.
 
     Returns:
-        Hailo runtime or ``None`` if unavailable.
+        Hailo runtime instance (not yet started) or ``None``.
     """
     if cfg.hailo is None or not cfg.hailo.enabled:
         return None
@@ -640,6 +622,7 @@ def build_orchestrator(cfg: Settings) -> object:
         cfg=cfg,
         telemetry_publisher=telemetry_publisher,
         telemetry_server=telemetry_server,
+        hailo_runtime=hailo_runtime,
     )
 
 
