@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from numpy.typing import NDArray
 
+from mousedroid.hardware.audio.constants import INT16_MAX_F
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
@@ -120,7 +121,7 @@ class UsbMicrophone:
         )
 
         if self._cfg.format == "int16":
-            samples = np.frombuffer(raw_data, dtype=np.int16).astype(np.float32) / 32768.0
+            samples = np.frombuffer(raw_data, dtype=np.int16).astype(np.float32) / INT16_MAX_F
         else:
             samples = np.frombuffer(raw_data, dtype=np.float32)
 

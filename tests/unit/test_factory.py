@@ -308,6 +308,107 @@ def test_build_sensor_manager_with_microphone():
     assert isinstance(manager, SensorManager)
 
 
+# ---------------------------------------------------------------------------
+# Speaker / Voice factory tests
+# ---------------------------------------------------------------------------
+
+
+def test_build_speaker_disabled_no_config():
+    """build_speaker returns None when speaker config is None."""
+    from mousedroid.factory import build_speaker
+
+    cfg = Settings(mock_hardware=True)  # speaker=None by default
+    assert build_speaker(cfg) is None
+
+
+def test_build_speaker_disabled_explicitly():
+    """build_speaker returns None when speaker.enabled=False."""
+    from mousedroid.factory import build_speaker
+
+    cfg = Settings(mock_hardware=True, speaker={"enabled": False})
+    assert build_speaker(cfg) is None
+
+
+def test_build_speaker_mock_hardware():
+    """build_speaker returns MockSpeaker when mock_hardware=True."""
+    from mousedroid.factory import build_speaker
+    from mousedroid.hardware.audio.mock_speaker import MockSpeaker
+
+    cfg = Settings(mock_hardware=True, speaker={"enabled": True})
+    speaker = build_speaker(cfg)
+    assert isinstance(speaker, MockSpeaker)
+
+
+def test_build_speaker_real_hardware():
+    """build_speaker returns UsbSpeaker when mock_hardware=False."""
+    from mousedroid.factory import build_speaker
+    from mousedroid.hardware.audio.usb_speaker import UsbSpeaker
+
+    cfg = _real_settings(speaker={"enabled": True})
+    speaker = build_speaker(cfg)
+    assert isinstance(speaker, UsbSpeaker)
+
+
+def test_build_voice_engine_disabled():
+    """build_voice_engine returns None when voice.enabled=False."""
+    from mousedroid.factory import build_voice_engine
+
+    cfg = Settings(mock_hardware=True)  # voice.enabled=False by default
+    assert build_voice_engine(cfg) is None
+
+
+def test_build_voice_engine_no_speaker():
+    """build_voice_engine returns None when no speaker available."""
+    from mousedroid.factory import build_voice_engine
+
+    cfg = Settings(mock_hardware=True, voice={"enabled": True})
+    # No speaker config -> speaker=None -> voice disabled
+    assert build_voice_engine(cfg) is None
+
+
+def test_build_voice_engine_mock_hardware():
+    """build_voice_engine returns RockyVoiceEngine with MockTTS."""
+    from mousedroid.factory import build_voice_engine
+    from mousedroid.voice.rocky import RockyVoiceEngine
+
+    cfg = Settings(
+        mock_hardware=True,
+        voice={"enabled": True},
+        speaker={"enabled": True},
+    )
+    engine = build_voice_engine(cfg)
+    assert isinstance(engine, RockyVoiceEngine)
+
+
+def test_build_voice_engine_with_provided_speaker():
+    """build_voice_engine uses pre-built speaker when provided."""
+    from mousedroid.factory import build_voice_engine
+    from mousedroid.voice.rocky import RockyVoiceEngine
+
+    cfg = Settings(mock_hardware=True, voice={"enabled": True})
+    mock_speaker = MagicMock()
+    mock_speaker.sample_rate = 22050
+    mock_speaker.channels = 1
+    mock_speaker.chunk_size = 1024
+    engine = build_voice_engine(cfg, speaker=mock_speaker)
+    assert isinstance(engine, RockyVoiceEngine)
+
+
+def test_build_voice_engine_sample_rate_mismatch():
+    """build_voice_engine returns None when sample rates differ."""
+    from mousedroid.factory import build_voice_engine
+
+    cfg = Settings(
+        mock_hardware=True,
+        voice={"enabled": True, "tts_sample_rate": 22050},
+    )
+    mock_speaker = MagicMock()
+    mock_speaker.sample_rate = 44100  # Mismatched
+    mock_speaker.channels = 1
+    mock_speaker.chunk_size = 1024
+    assert build_voice_engine(cfg, speaker=mock_speaker) is None
+
+
 # -- Hailo-8 factory functions -----------------------------------------------
 
 

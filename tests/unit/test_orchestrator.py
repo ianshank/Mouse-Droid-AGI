@@ -351,3 +351,155 @@ async def test_try_cognitive_action_passes_full_bdi_state() -> None:
         call_args["bdi_state"],
         np.arange(hidden_dim, dtype=np.float32),
     )
+
+
+# ---------------------------------------------------------------------------
+# Voice engine integration tests
+# ---------------------------------------------------------------------------
+
+
+def _make_orchestrator_with_voice(
+    *,
+    emergency: bool = False,
+    forward_clearance_ok: bool = True,
+    battery_voltage: float = 12.0,
+    gpu_temp_c: float = 40.0,
+) -> MouseDroidOrchestrator:
+    """Create orchestrator with a mock voice engine."""
+    cfg = Settings(mock_hardware=True)
+
+    world_model = MagicMock()
+    world_model.observe_step.return_value = (
+        torch.zeros(1, cfg.model.hidden_dim),
+        torch.zeros(1, cfg.model.latent_dim),
+        torch.zeros(1, cfg.model.hidden_dim),
+        0.1,
+    )
+
+    agent = MagicMock()
+    agent.name = "test_agent"
+    agent.act.return_value = torch.tensor([0.1, 0.0, 0.0])
+
+    safety_ctx = SafetyContext(
+        is_emergency=emergency,
+        forward_clearance_ok=forward_clearance_ok,
+        battery_voltage=battery_voltage,
+        gpu_temp_c=gpu_temp_c,
+    )
+    safety_monitor = MagicMock()
+    safety_monitor.evaluate.return_value = safety_ctx
+
+    esp32 = AsyncMock()
+
+    sensor_manager = AsyncMock()
+    sensor_manager.read_all.return_value = _make_observation(cfg)
+
+    voice_engine = AsyncMock()
+
+    return MouseDroidOrchestrator(
+        world_model=world_model,
+        agents=[agent],
+        safety_monitor=safety_monitor,
+        esp32=esp32,
+        sensor_manager=sensor_manager,
+        cfg=cfg,
+        voice_engine=voice_engine,
+    )
+
+
+async def test_voice_engine_started_on_start():
+    """start() calls voice_engine.start()."""
+    orch = _make_orchestrator_with_voice()
+    await orch.start()
+    orch._voice_engine.start.assert_awaited_once()
+
+
+async def test_voice_engine_stopped_on_stop():
+    """stop() calls voice_engine.stop()."""
+    orch = _make_orchestrator_with_voice()
+    await orch.start()
+    await orch.stop()
+    orch._voice_engine.stop.assert_awaited_once()
+
+
+async def test_voice_event_none_engine_no_crash():
+    """_voice_event with voice_engine=None does not crash."""
+    orch = _make_orchestrator()  # No voice engine
+    obs = _make_observation(orch._cfg)
+    await orch._voice_event("emergency_stop", obs)  # Should not raise
+
+
+async def test_voice_observe_obstacle():
+    """_voice_observe fires obstacle_detected when clearance is bad."""
+    orch = _make_orchestrator_with_voice(forward_clearance_ok=False)
+    obs = _make_observation(orch._cfg)
+    ctx = SafetyContext(forward_clearance_ok=False)
+    await orch._voice_observe(obs, ctx)
+    orch._voice_engine.speak.assert_awaited()
+    event_arg = orch._voice_engine.speak.call_args[0][0]
+    assert event_arg == "obstacle_detected"
+
+
+async def test_voice_observe_low_battery():
+    """_voice_observe fires low_battery when voltage below threshold."""
+    orch = _make_orchestrator_with_voice(battery_voltage=9.0)
+    obs = _make_observation(orch._cfg)
+    ctx = SafetyContext(battery_voltage=9.0)
+    await orch._voice_observe(obs, ctx)
+    orch._voice_engine.speak.assert_awaited()
+    event_arg = orch._voice_engine.speak.call_args[0][0]
+    assert event_arg == "low_battery"
+
+
+async def test_voice_observe_gpu_overheat():
+    """_voice_observe fires error event when GPU temp exceeds warning."""
+    orch = _make_orchestrator_with_voice(gpu_temp_c=80.0)
+    obs = _make_observation(orch._cfg)
+    ctx = SafetyContext(gpu_temp_c=80.0)
+    await orch._voice_observe(obs, ctx)
+    orch._voice_engine.speak.assert_awaited()
+    event_arg = orch._voice_engine.speak.call_args[0][0]
+    assert event_arg == "error"
+
+
+async def test_voice_observe_all_clear_no_event():
+    """_voice_observe does not fire events when all is well."""
+    orch = _make_orchestrator_with_voice()
+    obs = _make_observation(orch._cfg)
+    ctx = SafetyContext()
+    await orch._voice_observe(obs, ctx)
+    orch._voice_engine.speak.assert_not_awaited()
+
+
+async def test_emergency_tick_fires_voice_event():
+    """Emergency stop tick fires voice emergency_stop event."""
+    orch = _make_orchestrator_with_voice(emergency=True)
+    await orch.tick()
+    orch._voice_engine.speak.assert_awaited()
+    event_arg = orch._voice_engine.speak.call_args[0][0]
+    assert event_arg == "emergency_stop"
+
+
+async def test_voice_event_exception_handled():
+    """Voice engine exception in tick does not crash orchestrator."""
+    orch = _make_orchestrator_with_voice(forward_clearance_ok=False)
+    orch._voice_engine.speak.side_effect = RuntimeError("voice failed")
+    obs = _make_observation(orch._cfg)
+    ctx = SafetyContext(forward_clearance_ok=False)
+    await orch._voice_observe(obs, ctx)  # Should not raise
+
+
+async def test_voice_observe_uses_config_battery_threshold():
+    """_voice_observe uses safety config battery_warn_v, not hardcoded value."""
+    orch = _make_orchestrator_with_voice()
+    threshold = orch._cfg.safety.battery_warn_v
+    # Voltage just below threshold should trigger
+    obs = _make_observation(orch._cfg)
+    ctx = SafetyContext(battery_voltage=threshold - 0.1)
+    await orch._voice_observe(obs, ctx)
+    orch._voice_engine.speak.assert_awaited()
+    # Voltage at threshold should NOT trigger
+    orch._voice_engine.reset_mock()
+    ctx_ok = SafetyContext(battery_voltage=threshold + 0.1)
+    await orch._voice_observe(obs, ctx_ok)
+    orch._voice_engine.speak.assert_not_awaited()

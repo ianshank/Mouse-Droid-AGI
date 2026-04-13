@@ -1,0 +1,108 @@
+"""Text-to-speech wrapper for piper-tts.
+
+Piper runs locally on ARM64 (Jetson) with no internet required.
+Synthesis is offloaded to a thread to avoid blocking the event loop.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from typing import TYPE_CHECKING
+
+import numpy as np
+from numpy.typing import NDArray
+
+from mousedroid.hardware.audio.constants import INT16_MAX_F
+from mousedroid.logging.setup import get_logger
+
+if TYPE_CHECKING:
+    from mousedroid.config.schema import VoiceConfig
+
+_log = get_logger(__name__)
+
+
+class PiperTTS:
+    """Piper text-to-speech synthesiser.
+
+    Wraps ``piper.PiperVoice`` for async-safe speech synthesis.
+    """
+
+    def __init__(self, cfg: VoiceConfig) -> None:
+        """Initialise TTS from voice config.
+
+        Args:
+            cfg: Voice engine configuration.
+        """
+        self._cfg = cfg
+        self._voice: object | None = None
+        _log.info(
+            "piper_tts_init",
+            model_path=cfg.tts_model_path,
+            sample_rate=cfg.tts_sample_rate,
+        )
+
+    def start(self) -> None:
+        """Load the piper voice model."""
+        try:
+            from piper import PiperVoice  # type: ignore[import-untyped]
+
+            if self._cfg.tts_model_path is not None:
+                self._voice = PiperVoice.load(self._cfg.tts_model_path)
+                _log.info("piper_tts_model_loaded", path=self._cfg.tts_model_path)
+            else:
+                _log.warning("piper_tts_no_model_path")
+        except ImportError:
+            _log.warning("piper_tts_not_installed")
+        except Exception:
+            _log.warning("piper_tts_load_failed", exc_info=True)
+
+    def stop(self) -> None:
+        """Release the piper voice model."""
+        self._voice = None
+        _log.info("piper_tts_stopped")
+
+    def _synthesize_sync(self, text: str) -> NDArray[np.float32]:
+        """Synthesise text to audio samples (blocking).
+
+        Args:
+            text: Text to speak.
+
+        Returns:
+            Audio samples as float32 array.
+        """
+        if self._voice is None:
+            _log.debug("piper_tts_no_voice_returning_silence")
+            return np.zeros(self._cfg.tts_sample_rate, dtype=np.float32)
+
+        import io
+        import wave
+
+        wav_buffer = io.BytesIO()
+        with wave.open(wav_buffer, "wb") as wav_file:
+            self._voice.synthesize(text, wav_file)  # type: ignore[union-attr]
+
+        wav_buffer.seek(0)
+        with wave.open(wav_buffer, "rb") as wav_file:
+            n_frames = wav_file.getnframes()
+            raw = wav_file.readframes(n_frames)
+            width = wav_file.getsampwidth()
+
+        if width == 2:
+            samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / INT16_MAX_F
+        else:
+            samples = np.frombuffer(raw, dtype=np.float32)
+
+        return samples
+
+    async def synthesize(self, text: str) -> NDArray[np.float32]:
+        """Synthesise text to audio samples (async).
+
+        Runs synthesis in a thread to avoid blocking the event loop.
+
+        Args:
+            text: Text to speak.
+
+        Returns:
+            Audio samples as float32 array.
+        """
+        return await asyncio.to_thread(self._synthesize_sync, text)

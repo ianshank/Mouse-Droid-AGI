@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from mousedroid.sensing.manager import SensorManager
     from mousedroid.sensing.protocol import ObservationProtocol
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
+    from mousedroid.voice.protocol import VoiceEngineProtocol
     from mousedroid.world_model.protocol import WorldModelProtocol
 
 _log = get_logger(__name__)
@@ -56,6 +57,7 @@ class MouseDroidOrchestrator:
         cognitive_core: CognitiveCore | None = None,
         telemetry_publisher: TelemetryPublisherProtocol | None = None,
         telemetry_server: TelemetryServerProtocol | None = None,
+        voice_engine: VoiceEngineProtocol | None = None,
         hailo_runtime: HailoRuntimeProtocol | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
@@ -70,6 +72,7 @@ class MouseDroidOrchestrator:
             cognitive_core: Optional CognitiveCore for BDI/metacognitive loop.
             telemetry_publisher: Optional telemetry publisher for remote monitoring.
             telemetry_server: Optional telemetry server for remote connections.
+            voice_engine: Optional Rocky voice engine for audio output.
             hailo_runtime: Optional Hailo-8 accelerator runtime for lifecycle management.
         """
         self._world_model = world_model
@@ -80,6 +83,7 @@ class MouseDroidOrchestrator:
         self._cognitive_core = cognitive_core
         self._telemetry_publisher = telemetry_publisher
         self._telemetry_server = telemetry_server
+        self._voice_engine = voice_engine
         self._hailo_runtime = hailo_runtime
         self._cfg = cfg
         self._running = False
@@ -101,6 +105,8 @@ class MouseDroidOrchestrator:
             await self._cognitive_core.start()
         if self._telemetry_server is not None:
             await self._telemetry_server.start()
+        if self._voice_engine is not None:
+            await self._voice_engine.start()
         self._running = True
         _log.info("orchestrator_started")
 
@@ -108,6 +114,8 @@ class MouseDroidOrchestrator:
         """Stop all subsystems gracefully."""
         _log.info("orchestrator_stopping")
         self._running = False
+        if self._voice_engine is not None:
+            await self._voice_engine.stop()
         if self._telemetry_server is not None:
             await self._telemetry_server.stop()
         if self._cognitive_core is not None:
@@ -132,6 +140,7 @@ class MouseDroidOrchestrator:
 
         if safety_ctx.is_emergency:
             await self._esp32.emergency_stop()
+            await self._voice_event("emergency_stop", observation)
             _log.warning("emergency_stop_triggered")
             self._tick_count += 1
             await self._publish_telemetry(observation, safety_ctx, loop_time_ms)
@@ -141,6 +150,7 @@ class MouseDroidOrchestrator:
         self._prev_action = action.unsqueeze(0) if action.dim() == 1 else action
 
         await self._execute_action(action)
+        await self._voice_observe(observation, safety_ctx)
 
         self._tick_count += 1
         await self._publish_telemetry(observation, safety_ctx, loop_time_ms)
@@ -297,6 +307,61 @@ class MouseDroidOrchestrator:
             await self._telemetry_publisher.publish(frame)
         except Exception:
             _log.debug("telemetry_publish_failed", exc_info=True)
+
+    async def _voice_event(
+        self,
+        event: str,
+        observation: ObservationProtocol,
+        **extra_context: float,
+    ) -> None:
+        """Fire a voice event if the voice engine is active.
+
+        Non-blocking: delegates to the engine's async queue.
+
+        Args:
+            event: Semantic event name.
+            observation: Current sensor observation for context.
+            **extra_context: Additional key-value context for the voice engine.
+        """
+        if self._voice_engine is None:
+            return
+        context = {"distance_m": float(observation.distance_m)}
+        context.update(extra_context)
+        try:
+            await self._voice_engine.speak(event, context)
+        except Exception:
+            _log.warning("voice_event_failed", voice_event=event, exc_info=True)
+
+    async def _voice_observe(
+        self,
+        observation: ObservationProtocol,
+        safety_ctx: SafetyContext,
+    ) -> None:
+        """Derive voice events from the current observation and safety state.
+
+        Checks safety thresholds from config to avoid hardcoded values.
+
+        Args:
+            observation: Current sensor observation.
+            safety_ctx: Current safety context.
+        """
+        if self._voice_engine is None:
+            return
+
+        if not safety_ctx.forward_clearance_ok:
+            await self._voice_event("obstacle_detected", observation)
+        elif safety_ctx.battery_voltage < self._cfg.safety.battery_warn_v:
+            await self._voice_event(
+                "low_battery",
+                observation,
+                battery_v=safety_ctx.battery_voltage,
+            )
+        elif safety_ctx.gpu_temp_c >= self._cfg.safety.gpu_warn_temp_c:
+            await self._voice_event(
+                "error",
+                observation,
+                gpu_temp_c=safety_ctx.gpu_temp_c,
+            )
 
     async def run(self) -> None:
         """Run the main loop at configured control rate."""

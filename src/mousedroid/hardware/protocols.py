@@ -94,3 +94,39 @@ class AudioProtocol(Protocol):
     async def stop(self) -> None:
         """Stop audio capture stream."""
         ...
+
+
+@runtime_checkable
+class SpeakerProtocol(Protocol):
+    """Interface for all audio output drivers (USB speaker, mock, etc)."""
+
+    async def write_chunk(self, samples: NDArray[np.float32]) -> None:
+        """Write one chunk of audio samples to the speaker.
+
+        Args:
+            samples: Audio samples, shape ``(chunk_size * channels,)``.
+        """
+        ...
+
+    @property
+    def sample_rate(self) -> int:
+        """Audio output sample rate in Hz."""
+        ...
+
+    @property
+    def channels(self) -> int:
+        """Number of audio output channels (1=mono, 2=stereo)."""
+        ...
+
+    @property
+    def chunk_size(self) -> int:
+        """Number of samples per output chunk."""
+        ...
+
+    async def start(self) -> None:
+        """Start audio playback stream."""
+        ...
+
+    async def stop(self) -> None:
+        """Stop audio playback stream."""
+        ...
