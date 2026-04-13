@@ -396,20 +396,16 @@ async def test_empty_phrase_override_ignored() -> None:
 @pytest.mark.asyncio
 async def test_emergency_clears_full_queue() -> None:
     """Emergency event clears full queue and inserts itself."""
+    # Do not start the worker: deterministic assertions about queue state.
     engine, _speaker, _tts = _make_engine(cooldown_s=100.0, queue_size=1)
-    await engine.start()
-    try:
-        # Fill the queue with a normal event (cooldown blocks worker)
-        await engine.speak("startup")
-        assert engine._queue.qsize() == 1
-        # Emergency should clear and insert
-        await engine.speak("emergency_stop")
-        assert engine._queue.qsize() == 1
-        # The queued item should be the emergency
-        item = engine._queue.get_nowait()
-        assert item.priority == -Priority.EMERGENCY
-    finally:
-        await engine.stop()
+    await engine.speak("startup")
+    assert engine._queue.qsize() == 1
+    # Emergency should clear the existing queued item and insert itself.
+    await engine.speak("emergency_stop")
+    assert engine._queue.qsize() == 1
+    # The queued item should be the emergency.
+    item = engine._queue.get_nowait()
+    assert item.priority == -Priority.EMERGENCY
 
 
 @pytest.mark.asyncio

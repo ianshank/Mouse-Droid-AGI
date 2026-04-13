@@ -140,8 +140,10 @@ class RuleBasedMissionParser:
         self._patrol_confidence = cfg.patrol_confidence
         self._avoid_confidence = cfg.avoid_confidence
 
-        # Build dynamic speed regex from configured keys
-        escaped_keys = [re.escape(k) for k in self._speed_map]
+        # Build dynamic speed regex from configured keys.
+        # Multi-word keys like "full speed" become r"full\s+speed" to tolerate
+        # flexible whitespace in user input.
+        escaped_keys = [re.sub(r"\\\s+", r"\\s+", re.escape(k.strip())) for k in self._speed_map]
         if escaped_keys:
             self._speed_re = re.compile(
                 r"(" + "|".join(escaped_keys) + r")",
@@ -282,7 +284,8 @@ class RuleBasedMissionParser:
         """
         match = self._speed_re.search(cmd)
         if match:
-            key = match.group(1).lower()
+            # Normalise whitespace so "full  speed" matches key "full speed"
+            key = re.sub(r"\s+", " ", match.group(1).lower()).strip()
             return self._speed_map.get(key, self._default_speed)
         return self._default_speed
 

@@ -232,8 +232,8 @@ class JetsonTensorRTCompiler:
             samples = _build_samples("cpu")
             model.eval()
             # JIT trace accepts a tuple of inputs for multi-input models.
-            trace_input = samples[0] if len(samples) == 1 else tuple(samples)
-            return await asyncio.to_thread(_trace_model, model, trace_input)  # type: ignore[arg-type]
+            trace_input: Any = samples[0] if len(samples) == 1 else tuple(samples)
+            return await asyncio.to_thread(_trace_model, model, trace_input)
 
         # torch2trt compilation is CPU-bound; offload to thread.
         def _compile_sync() -> Any:

@@ -116,19 +116,20 @@ class MetacognitiveModel:
         n_capabilities: int = _N_CAPABILITIES_DEFAULT,
         loop_score_scale: float = _LOOP_SCORE_SCALE_DEFAULT,
     ) -> None:
-        if n_capabilities != len(_CAPABILITY_NAMES):
-            _log.warning(
-                "metacognitive_capabilities_mismatch",
-                n_capabilities=n_capabilities,
-                n_names=len(_CAPABILITY_NAMES),
+        expected_n = len(_CAPABILITY_NAMES)
+        if n_capabilities != expected_n:
+            msg = (
+                f"n_capabilities must match the number of capability names: "
+                f"expected {expected_n}, got {n_capabilities}"
             )
+            raise ValueError(msg)
         self._alpha = alpha
         self._battery_nominal_v = battery_nominal_v
         self._loop_score_scale = loop_score_scale
 
         # Capability vector — length derived from names to guarantee consistency.
         self._capabilities: NDArray[np.float32] = np.ones(
-            len(_CAPABILITY_NAMES),
+            expected_n,
             dtype=np.float32,
         )
 
@@ -136,7 +137,7 @@ class MetacognitiveModel:
         self._graph: nx.DiGraph[str] = nx.DiGraph()
         self._build_causal_graph()
 
-        _log.info("metacognitive_init", alpha=alpha, n_caps=n_capabilities)
+        _log.info("metacognitive_init", alpha=alpha, n_caps=len(self._capabilities))
 
     # -- Public API ---------------------------------------------------------
 
