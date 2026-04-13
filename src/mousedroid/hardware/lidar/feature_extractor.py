@@ -77,10 +77,7 @@ class LidarFeatureExtractor:
         # Normalise distances to [0, 1].
         normalised = np.clip(distances_m / self._max_range_m, 0.0, 1.0)
 
-        # Compute minimum normalised distance per sector.
-        for i in range(self._n_sectors):
-            mask = sector_indices == i
-            if np.any(mask):
-                features[i] = float(np.min(normalised[mask]))
+        # Compute minimum normalised distance per sector (vectorized).
+        np.minimum.at(features, sector_indices, normalised)
 
         return features

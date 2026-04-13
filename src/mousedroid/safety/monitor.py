@@ -131,7 +131,7 @@ class MouseDroidSafetyMonitor:
         if lidar_features is not None and len(lidar_features) > 0:
             # Features are normalised distances (min_in_sector / max_range).
             # Convert to metres using the maximum observed feature range.
-            lidar_max_range = float(getattr(self._cfg, "lidar_max_range_m", 12.0))
+            lidar_max_range = self._cfg.lidar_max_range_m
             lidar_min_dist_m = float(np.min(lidar_features)) * lidar_max_range
             if lidar_min_dist_m < self._cfg.min_forward_clearance_m:
                 lidar_clearance_ok = False

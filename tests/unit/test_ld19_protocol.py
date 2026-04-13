@@ -176,10 +176,11 @@ def test_parse_frame_zero_speed_and_angles() -> None:
 
 
 def test_interpolate_uniform_distribution() -> None:
-    """Angles are uniformly distributed between start and end."""
+    """Angles are uniformly distributed between start and end (n-1 intervals)."""
     angles = LD19FrameParser.interpolate_angles(0.0, 120.0, 4)
     assert len(angles) == 4
-    expected = np.array([0.0, 30.0, 60.0, 90.0], dtype=np.float32)
+    # 4 points, 3 intervals over 120°: step = 40°
+    expected = np.array([0.0, 40.0, 80.0, 120.0], dtype=np.float32)
     np.testing.assert_allclose(angles, expected, atol=0.01)
 
 
@@ -187,9 +188,9 @@ def test_interpolate_wraparound() -> None:
     """Handles 360-degree wraparound (e.g. 350 -> 10 spans 20 degrees)."""
     angles = LD19FrameParser.interpolate_angles(350.0, 10.0, 4)
     assert len(angles) == 4
-    # Span = 20 degrees, step = 5 degrees.
-    # Expected: 350, 355, 0, 5
-    expected = np.array([350.0, 355.0, 0.0, 5.0], dtype=np.float32)
+    # Span = 20 degrees, 3 intervals: step ≈ 6.667 degrees.
+    # Expected: 350, 356.667, 3.333, 10
+    expected = np.array([350.0, 356.6667, 3.3333, 10.0], dtype=np.float32)
     np.testing.assert_allclose(angles, expected, atol=0.01)
 
 
