@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.comms.protocol import ESP32CommProtocol
     from mousedroid.config.schema import Settings
+    from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
     from mousedroid.safety.context import SafetyContext
     from mousedroid.safety.protocol import SafetyMonitorProtocol
     from mousedroid.sensing.manager import SensorManager
@@ -55,6 +56,7 @@ class MouseDroidOrchestrator:
         cognitive_core: CognitiveCore | None = None,
         telemetry_publisher: TelemetryPublisherProtocol | None = None,
         telemetry_server: TelemetryServerProtocol | None = None,
+        hailo_runtime: HailoRuntimeProtocol | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -68,6 +70,7 @@ class MouseDroidOrchestrator:
             cognitive_core: Optional CognitiveCore for BDI/metacognitive loop.
             telemetry_publisher: Optional telemetry publisher for remote monitoring.
             telemetry_server: Optional telemetry server for remote connections.
+            hailo_runtime: Optional Hailo-8 accelerator runtime for lifecycle management.
         """
         self._world_model = world_model
         self._agents = agents
@@ -77,6 +80,7 @@ class MouseDroidOrchestrator:
         self._cognitive_core = cognitive_core
         self._telemetry_publisher = telemetry_publisher
         self._telemetry_server = telemetry_server
+        self._hailo_runtime = hailo_runtime
         self._cfg = cfg
         self._running = False
         self._tick_count: int = 0
@@ -89,6 +93,8 @@ class MouseDroidOrchestrator:
     async def start(self) -> None:
         """Start all subsystems."""
         _log.info("orchestrator_starting")
+        if self._hailo_runtime is not None:
+            await self._hailo_runtime.start()
         await self._esp32.connect()
         await self._sensor_manager.start()
         if self._cognitive_core is not None:
@@ -109,6 +115,8 @@ class MouseDroidOrchestrator:
         await self._esp32.emergency_stop()
         await self._sensor_manager.stop()
         await self._esp32.disconnect()
+        if self._hailo_runtime is not None:
+            await self._hailo_runtime.stop()
         _log.info("orchestrator_stopped")
 
     async def tick(self) -> None:

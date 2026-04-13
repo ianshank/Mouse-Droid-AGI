@@ -10,6 +10,7 @@ from mousedroid.config.schema import (
     CuriosityConfig,
     ESP32Config,
     ExperienceConfig,
+    HailoConfig,
     HealthConfig,
     JetsonConfig,
     LearningConfig,
@@ -367,7 +368,7 @@ def test_camera_config_feature_extractor_default():
 
 
 def test_camera_config_feature_extractor_values():
-    for val in ("mean_pool", "tensorrt", "auto"):
+    for val in ("mean_pool", "tensorrt", "hailo", "auto"):
         c = CameraConfig(feature_extractor=val)
         assert c.feature_extractor == val
 
@@ -385,6 +386,56 @@ def test_camera_config_l2_normalize_default():
 def test_camera_config_l2_normalize_false():
     c = CameraConfig(l2_normalize=False)
     assert c.l2_normalize is False
+
+
+# -- HailoConfig ---------------------------------------------------------------
+
+
+def test_hailo_config_defaults():
+    c = HailoConfig()
+    assert c.enabled is False
+    assert c.device_path == "/dev/hailo0"
+    assert c.batch_size == 1
+    assert c.power_mode == "performance"
+    assert c.input_format == "uint8"
+    assert c.timeout_ms == 100.0
+    assert c.fallback_on_failure is True
+
+
+def test_hailo_config_enabled():
+    c = HailoConfig(enabled=True)
+    assert c.enabled is True
+
+
+def test_hailo_config_power_mode_values():
+    for val in ("performance", "balanced", "power_save"):
+        c = HailoConfig(power_mode=val)
+        assert c.power_mode == val
+
+
+def test_hailo_config_power_mode_invalid():
+    with pytest.raises(ValidationError):
+        HailoConfig(power_mode="turbo")
+
+
+def test_hailo_config_batch_size_bounds():
+    c = HailoConfig(batch_size=8)
+    assert c.batch_size == 8
+    with pytest.raises(ValidationError):
+        HailoConfig(batch_size=0)
+    with pytest.raises(ValidationError):
+        HailoConfig(batch_size=9)
+
+
+def test_hailo_config_none_on_settings():
+    s = Settings(mock_hardware=True)
+    assert s.hailo is None
+
+
+def test_hailo_config_on_settings():
+    s = Settings(mock_hardware=True, hailo=HailoConfig(enabled=True))
+    assert s.hailo is not None
+    assert s.hailo.enabled is True
 
 
 # -- Settings with full valid config ------------------------------------------

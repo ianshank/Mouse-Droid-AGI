@@ -1,0 +1,27 @@
+# Hailo-8 accelerator overlay for Jetson Orin Nano deployments.
+#
+# Apply on top of jetson_production.yaml to enable Hailo-8 perception offload.
+# The Hailo-8 (26 TOPS INT8, ~3W) runs YOLO detection and feature extraction
+# on dedicated silicon, freeing the Jetson GPU for reasoning workloads
+# (RSSM, MCTS, SAC, LLM).
+#
+# Usage:
+#   Load order: default.yaml -> jetson_production.yaml -> jetson_hailo.yaml
+
+hailo:
+  enabled: true
+  device_path: "/dev/hailo0"
+  yolo_hef_path: "/opt/mousedroid/models/hailo/yolo11_disk_detector.hef"
+  feature_extractor_hef_path: "/opt/mousedroid/models/hailo/feature_extractor.hef"
+  power_mode: "performance"
+  batch_size: 1
+  timeout_ms: 100.0
+  fallback_on_failure: true
+
+camera:
+  feature_extractor: "hailo"
+
+# With perception offloaded to Hailo, the Jetson GPU has headroom for higher
+# frequencies and the thermal budget is significantly relaxed.
+loop:
+  perception_hz: 60.0
