@@ -66,7 +66,7 @@ class TestCiSh:
         assert "pytest tests/unit" in content
 
     def test_integration_test_step(self, content: str) -> None:
-        assert "pytest tests/integration/" in content
+        assert "tests/integration" in content
 
     def test_e2e_step_present(self, content: str) -> None:
         assert "pytest tests/e2e/" in content

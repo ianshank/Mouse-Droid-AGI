@@ -27,8 +27,8 @@ _GEO_MEAN_FLOOR: float = 1e-10
 _BATTERY_NORM_EPS: float = 1e-6
 """Epsilon for battery voltage normalisation denominator."""
 
-_N_CAPABILITIES: int = 8
-"""Number of tracked capability dimensions."""
+_N_CAPABILITIES_DEFAULT: int = 8
+"""Default number of tracked capability dimensions (from MetacognitiveConfig)."""
 
 _EMA_DEFAULT_ALPHA: float = EMA_DEFAULT_ALPHA
 """Default EMA blending factor (higher = faster tracking)."""
@@ -36,8 +36,8 @@ _EMA_DEFAULT_ALPHA: float = EMA_DEFAULT_ALPHA
 _TARGET_LOOP_MS: float = DEFAULT_TARGET_LOOP_MS
 """Target control loop duration in milliseconds (30 Hz)."""
 
-_LOOP_SCORE_SCALE: float = 100.0
-"""Scaling factor for loop-timing capability degradation."""
+_LOOP_SCORE_SCALE_DEFAULT: float = 100.0
+"""Default scaling factor for loop-timing capability degradation (from MetacognitiveConfig)."""
 
 _CAPABILITY_NAMES: tuple[str, ...] = (
     "navigation",
@@ -113,13 +113,16 @@ class MetacognitiveModel:
         self,
         alpha: float = _EMA_DEFAULT_ALPHA,
         battery_nominal_v: float = 12.6,
+        n_capabilities: int = _N_CAPABILITIES_DEFAULT,
+        loop_score_scale: float = _LOOP_SCORE_SCALE_DEFAULT,
     ) -> None:
         self._alpha = alpha
         self._battery_nominal_v = battery_nominal_v
+        self._loop_score_scale = loop_score_scale
 
         # Capability vector — starts at 1.0 (fully capable).
         self._capabilities: NDArray[np.float32] = np.ones(
-            _N_CAPABILITIES,
+            n_capabilities,
             dtype=np.float32,
         )
 
@@ -127,7 +130,7 @@ class MetacognitiveModel:
         self._graph: nx.DiGraph[str] = nx.DiGraph()
         self._build_causal_graph()
 
-        _log.info("metacognitive_init", alpha=alpha, n_caps=_N_CAPABILITIES)
+        _log.info("metacognitive_init", alpha=alpha, n_caps=n_capabilities)
 
     # -- Public API ---------------------------------------------------------
 
@@ -169,7 +172,7 @@ class MetacognitiveModel:
             # Score drops linearly beyond _TARGET_LOOP_MS.
             score = float(
                 np.clip(
-                    1.0 - (metrics["loop_time_ms"] - _TARGET_LOOP_MS) / _LOOP_SCORE_SCALE,
+                    1.0 - (metrics["loop_time_ms"] - _TARGET_LOOP_MS) / self._loop_score_scale,
                     0.0,
                     1.0,
                 )

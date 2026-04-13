@@ -4,7 +4,7 @@ import numpy as np
 
 from mousedroid.cognitive.metacognitive import (
     _CAPABILITY_NAMES,
-    _N_CAPABILITIES,
+    _N_CAPABILITIES_DEFAULT,
     MetacognitiveModel,
     _apply_capped_penalty,
     _ema_blend,
@@ -19,8 +19,8 @@ def test_constructor_default() -> None:
 def test_capability_vector_has_8_dims() -> None:
     model = MetacognitiveModel()
     summary = model.get_capability_summary()
-    assert len(summary) == _N_CAPABILITIES
-    assert _N_CAPABILITIES == 8
+    assert len(summary) == _N_CAPABILITIES_DEFAULT
+    assert _N_CAPABILITIES_DEFAULT == 8
 
 
 def test_initial_capabilities_all_ones() -> None:

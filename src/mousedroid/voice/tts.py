@@ -44,7 +44,7 @@ class PiperTTS:
     def start(self) -> None:
         """Load the piper voice model."""
         try:
-            from piper import PiperVoice  # type: ignore[import-untyped]
+            from piper import PiperVoice
 
             if self._cfg.tts_model_path is not None:
                 self._voice = PiperVoice.load(self._cfg.tts_model_path)
@@ -79,7 +79,7 @@ class PiperTTS:
 
         wav_buffer = io.BytesIO()
         with wave.open(wav_buffer, "wb") as wav_file:
-            self._voice.synthesize(text, wav_file)  # type: ignore[union-attr]
+            self._voice.synthesize(text, wav_file)  # type: ignore[attr-defined]
 
         wav_buffer.seek(0)
         with wave.open(wav_buffer, "rb") as wav_file:

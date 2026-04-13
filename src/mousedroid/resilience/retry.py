@@ -21,8 +21,8 @@ _log = get_logger(__name__)
 
 T = TypeVar("T")
 
-_JITTER_FRACTION: float = 0.1
-"""Jitter as a fraction of the computed delay (10%)."""
+_JITTER_FRACTION_DEFAULT: float = 0.1
+"""Fallback jitter fraction when config is not available."""
 
 
 class RetryExhaustedError(Exception):
@@ -107,7 +107,8 @@ def _compute_delay(attempt: int, cfg: RetryConfig) -> float:
         cfg.base_delay_s * (cfg.exponential_base**attempt),
         cfg.max_delay_s,
     )
-    jitter = random.uniform(0.0, delay * _JITTER_FRACTION)  # noqa: S311
+    jitter_frac = getattr(cfg, "jitter_fraction", _JITTER_FRACTION_DEFAULT)
+    jitter = random.uniform(0.0, delay * jitter_frac)  # noqa: S311
     return delay + jitter
 
 

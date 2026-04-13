@@ -113,7 +113,7 @@ def _trace_model(model: nn.Module, sample_input: Tensor) -> Any:
     Returns:
         Traced model via ``torch.jit.trace``.
     """
-    return torch.jit.trace(model, sample_input)  # type: ignore[no-untyped-call]
+    return torch.jit.trace(model, sample_input)
 
 
 class JetsonTensorRTCompiler:
@@ -222,12 +222,10 @@ class JetsonTensorRTCompiler:
         Returns:
             Compiled model.
         """
+
         # Build sample inputs for all declared input shapes.
         def _build_samples(device: str) -> list[Tensor]:
-            return [
-                torch.randn(*shape, device=device)
-                for shape in input_shapes.values()
-            ]
+            return [torch.randn(*shape, device=device) for shape in input_shapes.values()]
 
         if not _TORCH2TRT_AVAILABLE:
             _log.warning("torch2trt_not_available_falling_back_to_jit_trace")
@@ -267,7 +265,7 @@ class JetsonTensorRTCompiler:
         def _save_sync() -> None:
             path.parent.mkdir(parents=True, exist_ok=True)
             if isinstance(compiled, torch.jit.ScriptModule):
-                torch.jit.save(compiled, str(path))  # type: ignore[no-untyped-call]
+                torch.jit.save(compiled, str(path))
             else:
                 torch.save(compiled, str(path))
 
@@ -295,7 +293,7 @@ class JetsonTensorRTCompiler:
 
         def _load_sync() -> Any:
             try:
-                return torch.jit.load(str(path))  # type: ignore[no-untyped-call]
+                return torch.jit.load(str(path))
             except Exception:
                 # weights_only=False is required to load torch2trt modules.
                 # SECURITY: only load from the local tensorrt_cache_dir which

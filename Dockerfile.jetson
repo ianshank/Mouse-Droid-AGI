@@ -53,24 +53,34 @@ RUN pip install --no-cache-dir typing_extensions>=4.0 && \
 
 # ---------------------------------------------------------------------------
 # Stage 2: Hardware extras (non-fatal — graceful fallback)
+# These require Jetson-specific system libraries; log warnings on failure.
 # ---------------------------------------------------------------------------
-RUN pip install --no-cache-dir pyserial>=3.5 python-prctl || true
-RUN pip install --no-cache-dir Jetson.GPIO>=2.1 || true
+RUN pip install --no-cache-dir pyserial>=3.5 python-prctl 2>&1 \
+    || echo "WARNING: pyserial/prctl install failed (non-fatal on non-Jetson)"
+RUN pip install --no-cache-dir Jetson.GPIO>=2.1 2>&1 \
+    || echo "WARNING: Jetson.GPIO install failed (expected on non-Jetson hosts)"
 # picamera2 may fail without libcamera system libs — graceful skip
-RUN pip install --no-cache-dir picamera2 || true
+RUN pip install --no-cache-dir picamera2 2>&1 \
+    || echo "WARNING: picamera2 install failed (requires libcamera system libs)"
 
 # ---------------------------------------------------------------------------
 # Stage 3: Dev tools (pytest, ruff, mypy, coverage)
+# Set INSTALL_DEV_TOOLS=true to include; skipped in production by default.
 # ---------------------------------------------------------------------------
-RUN pip install --no-cache-dir \
-    "pytest>=7.0" \
-    "pytest-asyncio>=0.21" \
-    "pytest-cov>=4.0" \
-    "pytest-xdist>=3.0" \
-    "hypothesis>=6.80" \
-    "ruff>=0.4" \
-    "mypy>=1.5" \
-    "pip-audit"
+ARG INSTALL_DEV_TOOLS=false
+RUN if [ "$INSTALL_DEV_TOOLS" = "true" ]; then \
+    pip install --no-cache-dir \
+        "pytest>=7.0" \
+        "pytest-asyncio>=0.21" \
+        "pytest-cov>=4.0" \
+        "pytest-xdist>=3.0" \
+        "hypothesis>=6.80" \
+        "ruff>=0.4" \
+        "mypy>=1.5" \
+        "pip-audit" ; \
+    else \
+        echo "Skipping dev tools (INSTALL_DEV_TOOLS=$INSTALL_DEV_TOOLS)" ; \
+    fi
 
 # ---------------------------------------------------------------------------
 # Stage 4: LLM gateway dependencies (Multi-Stage Extraction)

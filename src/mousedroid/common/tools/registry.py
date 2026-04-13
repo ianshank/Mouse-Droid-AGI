@@ -118,7 +118,7 @@ async def _benchmark_latency() -> dict[str, str]:
     return {"status": "benchmark_pending"}
 
 
-async def _export_experience(path: str = "/tmp/export") -> dict[str, str]:  # noqa: S108
+async def _export_experience(path: str = "/tmp/export") -> dict[str, str]:  # noqa: S108  # default from ExperienceConfig.export_path
     """Export experience data.
 
     Args:

@@ -136,7 +136,7 @@ def build_distance_sensor(cfg: Settings) -> DistanceSensorProtocol:
         from mousedroid.config.schema import UltrasonicConfig as UltraCfg
         from mousedroid.hardware.sensors.mock_ultrasonic import MockUltrasonic
 
-        ultrasonic_cfg: UltrasonicConfig = cfg.ultrasonic or UltraCfg(  # type: ignore[call-arg]
+        ultrasonic_cfg: UltrasonicConfig = cfg.ultrasonic or UltraCfg(
             trigger_pin=0,
             echo_pin=0,
         )
@@ -289,7 +289,7 @@ def build_llm_gateway(cfg: Settings) -> LLMGatewayProtocol:
     from mousedroid.llm_gateway.config import GatewayConfig
     from mousedroid.llm_gateway.gateway import LLMGateway
 
-    gateway_cfg = GatewayConfig(  # type: ignore[call-arg]
+    gateway_cfg = GatewayConfig(
         enabled=cfg.llm.enabled,
         model_path=cfg.llm.model_path,
         model_url=cfg.llm.model_url,

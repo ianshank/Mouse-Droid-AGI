@@ -15,9 +15,6 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
-_DEFAULT_MOCK_BATTERY_V: float = 12.0
-"""Default mock battery voltage (nominal 3S LiPo)."""
-
 
 class MockESP32Driver:
     """Mock driver implementing ``ESP32CommProtocol`` for offline testing.
@@ -34,7 +31,7 @@ class MockESP32Driver:
         self._cfg = cfg
         self._connected: bool = False
         self._last_velocity: tuple[float, float, float] = (0.0, 0.0, 0.0)
-        self._battery_voltage: float = _DEFAULT_MOCK_BATTERY_V
+        self._battery_voltage: float = cfg.mock_battery_v
 
     async def connect(self) -> None:
         """Simulate establishing connection to ESP32."""

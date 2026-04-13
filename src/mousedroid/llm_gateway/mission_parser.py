@@ -10,10 +10,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import ClassVar, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, ClassVar, Protocol, runtime_checkable
 
 from mousedroid.llm_gateway.protocol import GoalVector
 from mousedroid.logging.setup import get_logger
+
+if TYPE_CHECKING:
+    from mousedroid.config.schema import MissionParserConfig
 
 _log = get_logger(__name__)
 
@@ -69,6 +72,9 @@ class RuleBasedMissionParser:
     Handles common navigation commands without LLM inference.
     Falls back to ``IntentType.UNKNOWN`` for ambiguous commands
     that require full LLM processing.
+
+    Args:
+        cfg: Optional mission parser config for speed and confidence tuning.
     """
 
     # Compiled patterns for common commands
@@ -119,6 +125,31 @@ class RuleBasedMissionParser:
         "full speed": 1.0,
     }
 
+    def __init__(self, cfg: MissionParserConfig | None = None) -> None:
+        """Initialise parser with optional config overrides.
+
+        Args:
+            cfg: Mission parser config. When ``None``, class-level defaults apply.
+        """
+        if cfg is not None:
+            self._speed_map = cfg.speed_map
+            self._default_speed = cfg.default_speed
+            self._patrol_speed = cfg.patrol_speed
+            self._avoid_speed = cfg.avoid_speed
+            self._stop_confidence = cfg.stop_confidence
+            self._direction_confidence = cfg.direction_confidence
+            self._patrol_confidence = cfg.patrol_confidence
+            self._avoid_confidence = cfg.avoid_confidence
+        else:
+            self._speed_map = self._SPEED_MAP
+            self._default_speed = 0.5
+            self._patrol_speed = 0.5
+            self._avoid_speed = 0.3
+            self._stop_confidence = 1.0
+            self._direction_confidence = 0.9
+            self._patrol_confidence = 0.8
+            self._avoid_confidence = 0.7
+
     def parse(self, nl_command: str) -> MissionIntent:
         """Parse NL command into structured intent.
 
@@ -141,7 +172,7 @@ class RuleBasedMissionParser:
             return MissionIntent(
                 intent_type=IntentType.STOP,
                 goal_vector=GoalVector(vx_target=0.0, vy_target=0.0, omega_target=0.0),
-                confidence=1.0,
+                confidence=self._stop_confidence,
                 raw_command=cmd,
             )
 
@@ -153,7 +184,7 @@ class RuleBasedMissionParser:
             return MissionIntent(
                 intent_type=IntentType.VELOCITY,
                 goal_vector=GoalVector(vx_target=speed, vy_target=0.0, omega_target=0.0),
-                confidence=0.9,
+                confidence=self._direction_confidence,
                 raw_command=cmd,
             )
 
@@ -162,7 +193,7 @@ class RuleBasedMissionParser:
             return MissionIntent(
                 intent_type=IntentType.VELOCITY,
                 goal_vector=GoalVector(vx_target=-speed, vy_target=0.0, omega_target=0.0),
-                confidence=0.9,
+                confidence=self._direction_confidence,
                 raw_command=cmd,
             )
 
@@ -172,7 +203,7 @@ class RuleBasedMissionParser:
             return MissionIntent(
                 intent_type=IntentType.VELOCITY,
                 goal_vector=GoalVector(vx_target=0.0, vy_target=0.0, omega_target=omega),
-                confidence=0.9,
+                confidence=self._direction_confidence,
                 raw_command=cmd,
                 parameters=self._extract_angle_params(cmd),
             )
@@ -183,7 +214,7 @@ class RuleBasedMissionParser:
             return MissionIntent(
                 intent_type=IntentType.VELOCITY,
                 goal_vector=GoalVector(vx_target=0.0, vy_target=0.0, omega_target=-omega),
-                confidence=0.9,
+                confidence=self._direction_confidence,
                 raw_command=cmd,
                 parameters=self._extract_angle_params(cmd),
             )
@@ -193,7 +224,7 @@ class RuleBasedMissionParser:
             return MissionIntent(
                 intent_type=IntentType.VELOCITY,
                 goal_vector=GoalVector(vx_target=0.0, vy_target=-speed, omega_target=0.0),
-                confidence=0.9,
+                confidence=self._direction_confidence,
                 raw_command=cmd,
             )
 
@@ -202,7 +233,7 @@ class RuleBasedMissionParser:
             return MissionIntent(
                 intent_type=IntentType.VELOCITY,
                 goal_vector=GoalVector(vx_target=0.0, vy_target=speed, omega_target=0.0),
-                confidence=0.9,
+                confidence=self._direction_confidence,
                 raw_command=cmd,
             )
 
@@ -212,8 +243,10 @@ class RuleBasedMissionParser:
             location = patrol_match.group(1).strip()
             return MissionIntent(
                 intent_type=IntentType.PATROL,
-                goal_vector=GoalVector(vx_target=0.5, vy_target=0.0, omega_target=0.0),
-                confidence=0.8,
+                goal_vector=GoalVector(
+                    vx_target=self._patrol_speed, vy_target=0.0, omega_target=0.0
+                ),
+                confidence=self._patrol_confidence,
                 raw_command=cmd,
                 parameters={"location": location},
             )
@@ -222,8 +255,10 @@ class RuleBasedMissionParser:
         if re.search(r"avoid\s+obstacles?", cmd, re.IGNORECASE):
             return MissionIntent(
                 intent_type=IntentType.NAVIGATION,
-                goal_vector=GoalVector(vx_target=0.3, vy_target=0.0, omega_target=0.0),
-                confidence=0.7,
+                goal_vector=GoalVector(
+                    vx_target=self._avoid_speed, vy_target=0.0, omega_target=0.0
+                ),
+                confidence=self._avoid_confidence,
                 raw_command=cmd,
                 parameters={"mode": "obstacle_avoidance"},
             )
@@ -248,8 +283,8 @@ class RuleBasedMissionParser:
         match = self._SPEED_RE.search(cmd)
         if match:
             key = match.group(1).lower()
-            return self._SPEED_MAP.get(key, 0.5)
-        return 0.5
+            return self._speed_map.get(key, self._default_speed)
+        return self._default_speed
 
     def _extract_rotation_magnitude(self, cmd: str) -> float:
         """Extract rotation magnitude from command text.
