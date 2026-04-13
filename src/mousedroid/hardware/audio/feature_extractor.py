@@ -7,7 +7,7 @@ numpy (no librosa dependency required at runtime).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -193,4 +193,4 @@ class AudioFeatureExtractor:
         if norm > 0:
             features = features / norm
 
-        return features  # type: ignore[no-any-return]
+        return cast(NDArray[np.float32], features)

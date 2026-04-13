@@ -116,13 +116,19 @@ class MetacognitiveModel:
         n_capabilities: int = _N_CAPABILITIES_DEFAULT,
         loop_score_scale: float = _LOOP_SCORE_SCALE_DEFAULT,
     ) -> None:
+        if n_capabilities != len(_CAPABILITY_NAMES):
+            _log.warning(
+                "metacognitive_capabilities_mismatch",
+                n_capabilities=n_capabilities,
+                n_names=len(_CAPABILITY_NAMES),
+            )
         self._alpha = alpha
         self._battery_nominal_v = battery_nominal_v
         self._loop_score_scale = loop_score_scale
 
-        # Capability vector — starts at 1.0 (fully capable).
+        # Capability vector — length derived from names to guarantee consistency.
         self._capabilities: NDArray[np.float32] = np.ones(
-            n_capabilities,
+            len(_CAPABILITY_NAMES),
             dtype=np.float32,
         )
 

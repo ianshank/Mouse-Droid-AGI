@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import math
 import time
 from typing import TYPE_CHECKING
 
@@ -211,7 +212,8 @@ class TestDeadlineAdherence:
         await orch.stop()  # type: ignore[union-attr]
 
         tick_times.sort()
-        p90_ms = tick_times[int(len(tick_times) * 0.9)]
+        p90_index = max(0, math.ceil(len(tick_times) * 0.9) - 1)
+        p90_ms = tick_times[p90_index]
         # p90 should be within 100x hardware budget in CI
         ci_budget_ms = _deadline_budget_ms(mock_cfg) * 100
         assert p90_ms <= ci_budget_ms, (

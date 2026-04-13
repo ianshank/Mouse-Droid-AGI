@@ -126,18 +126,6 @@ disallow_subclassing_any = false
 module = ["mousedroid.config.schema"]
 disable_error_code = ["arg-type"]
 
-[[tool.mypy.overrides]]
-# Pydantic BaseModel() constructors have Field(default=...) for every parameter,
-# but without the pydantic mypy plugin active, mypy sees them as required kwargs.
-# Suppress call-arg false positives in modules that instantiate config models.
-module = [
-    "mousedroid.safety.three_laws",
-    "mousedroid.arm.planning.laundry_rules",
-    "mousedroid.training.pipeline_orchestrator",
-    "mousedroid.factory",
-]
-disable_error_code = ["call-arg"]
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

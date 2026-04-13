@@ -10,13 +10,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, ClassVar, Protocol, runtime_checkable
+from typing import ClassVar, Protocol, runtime_checkable
 
+from mousedroid.config.schema import MissionParserConfig
 from mousedroid.llm_gateway.protocol import GoalVector
 from mousedroid.logging.setup import get_logger
-
-if TYPE_CHECKING:
-    from mousedroid.config.schema import MissionParserConfig
 
 _log = get_logger(__name__)
 
@@ -129,26 +127,28 @@ class RuleBasedMissionParser:
         """Initialise parser with optional config overrides.
 
         Args:
-            cfg: Mission parser config. When ``None``, class-level defaults apply.
+            cfg: Mission parser config. When ``None``, schema defaults apply.
         """
-        if cfg is not None:
-            self._speed_map = cfg.speed_map
-            self._default_speed = cfg.default_speed
-            self._patrol_speed = cfg.patrol_speed
-            self._avoid_speed = cfg.avoid_speed
-            self._stop_confidence = cfg.stop_confidence
-            self._direction_confidence = cfg.direction_confidence
-            self._patrol_confidence = cfg.patrol_confidence
-            self._avoid_confidence = cfg.avoid_confidence
+        if cfg is None:
+            cfg = MissionParserConfig()  # type: ignore[call-arg]
+        self._speed_map = cfg.speed_map
+        self._default_speed = cfg.default_speed
+        self._patrol_speed = cfg.patrol_speed
+        self._avoid_speed = cfg.avoid_speed
+        self._stop_confidence = cfg.stop_confidence
+        self._direction_confidence = cfg.direction_confidence
+        self._patrol_confidence = cfg.patrol_confidence
+        self._avoid_confidence = cfg.avoid_confidence
+
+        # Build dynamic speed regex from configured keys
+        escaped_keys = [re.escape(k) for k in self._speed_map]
+        if escaped_keys:
+            self._speed_re = re.compile(
+                r"(" + "|".join(escaped_keys) + r")",
+                re.IGNORECASE,
+            )
         else:
-            self._speed_map = self._SPEED_MAP
-            self._default_speed = 0.5
-            self._patrol_speed = 0.5
-            self._avoid_speed = 0.3
-            self._stop_confidence = 1.0
-            self._direction_confidence = 0.9
-            self._patrol_confidence = 0.8
-            self._avoid_confidence = 0.7
+            self._speed_re = self._SPEED_RE
 
     def parse(self, nl_command: str) -> MissionIntent:
         """Parse NL command into structured intent.
@@ -280,7 +280,7 @@ class RuleBasedMissionParser:
         Returns:
             Speed multiplier in (0, 1].
         """
-        match = self._SPEED_RE.search(cmd)
+        match = self._speed_re.search(cmd)
         if match:
             key = match.group(1).lower()
             return self._speed_map.get(key, self._default_speed)

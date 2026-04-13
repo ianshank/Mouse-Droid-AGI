@@ -197,7 +197,11 @@ class RockyVoiceEngine:
 
         # Apply Rocky personality transform using context intensity
         intensity = context.get("valence", 1.0) if context else 1.0
-        text = rocky_transform(text, intensity=intensity)
+        text = rocky_transform(
+            text,
+            intensity=intensity,
+            intensity_threshold=self._cfg.intensity_threshold,
+        )
 
         # Determine priority from event semantics
         if event == "emergency_stop":
