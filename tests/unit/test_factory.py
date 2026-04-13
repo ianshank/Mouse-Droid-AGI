@@ -407,3 +407,38 @@ def test_build_voice_engine_sample_rate_mismatch():
     mock_speaker.channels = 1
     mock_speaker.chunk_size = 1024
     assert build_voice_engine(cfg, speaker=mock_speaker) is None
+
+
+# -- Hailo-8 factory functions -----------------------------------------------
+
+
+def test_build_hailo_runtime_disabled_returns_none():
+    from mousedroid.factory import build_hailo_runtime
+
+    cfg = Settings(mock_hardware=True)
+    assert build_hailo_runtime(cfg) is None
+
+
+def test_build_hailo_runtime_none_config_returns_none():
+    from mousedroid.factory import build_hailo_runtime
+
+    cfg = Settings(mock_hardware=True, hailo=None)
+    assert build_hailo_runtime(cfg) is None
+
+
+def test_build_hailo_runtime_disabled_explicitly_returns_none():
+    from mousedroid.config.schema import HailoConfig
+    from mousedroid.factory import build_hailo_runtime
+
+    cfg = Settings(mock_hardware=True, hailo=HailoConfig(enabled=False))
+    assert build_hailo_runtime(cfg) is None
+
+
+def test_build_hailo_runtime_mock_returns_mock():
+    from mousedroid.config.schema import HailoConfig
+    from mousedroid.factory import build_hailo_runtime
+    from mousedroid.hardware.accelerator.hailo_runtime import MockHailoRuntime
+
+    cfg = Settings(mock_hardware=True, hailo=HailoConfig(enabled=True))
+    rt = build_hailo_runtime(cfg)
+    assert isinstance(rt, MockHailoRuntime)

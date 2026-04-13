@@ -216,3 +216,16 @@ telemetry:
     token_env_var: "MOUSEDROID_TELEMETRY_TOKEN"
     allowed_origins: []
     exempt_paths: ["/health", "/metrics"]
+
+# Hailo-8 neural accelerator (M.2 PCIe, 26 TOPS INT8)
+# Offloads perception (YOLO, feature extraction) to dedicated silicon,
+# freeing the Jetson GPU for reasoning (RSSM, MCTS, SAC, LLM).
+# hailo:
+#   enabled: false
+#   device_path: "/dev/hailo0"
+#   yolo_hef_path: "models/hailo/yolo11_disk_detector.hef"
+#   feature_extractor_hef_path: "models/hailo/feature_extractor.hef"
+#   batch_size: 1
+#   power_mode: "performance"
+#   timeout_ms: 100.0
+#   fallback_on_failure: true

@@ -160,7 +160,7 @@ def test_observe_step_audio_disabled_ignores_chunk(rssm: RSSM, cfg: ModelConfig)
     prev_action = torch.zeros(1, cfg.action_dim)
     h = torch.zeros(1, cfg.hidden_dim)
     z = torch.zeros(1, cfg.latent_dim)
-    new_h, new_z, obs_embed, surprise = rssm.observe_step(obs, prev_action, h, z)
+    new_h, _new_z, _obs_embed, _surprise = rssm.observe_step(obs, prev_action, h, z)
     assert new_h.shape == (1, cfg.hidden_dim)
     assert torch.isfinite(new_h).all()
 

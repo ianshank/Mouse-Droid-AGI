@@ -17,6 +17,7 @@ from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import CameraConfig
+    from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
 
 _log = get_logger(__name__)
 
@@ -206,21 +207,131 @@ class TensorRTExtractor:
 
 
 # ---------------------------------------------------------------------------
+# Hailo-8 accelerator extractor
+# ---------------------------------------------------------------------------
+
+
+class HailoFeatureExtractor:
+    """Feature extractor using Hailo-8 neural accelerator.
+
+    Dispatches inference to the shared :class:`HailoRuntime` and falls
+    back to :class:`MeanPoolExtractor` when the runtime is unavailable
+    or inference fails.
+
+    Args:
+        runtime: Hailo-8 runtime instance for inference dispatch.
+        feature_dim: Expected output feature vector dimension.
+        l2_normalize: Whether to L2-normalize the output vector.
+    """
+
+    def __init__(
+        self,
+        runtime: HailoRuntimeProtocol,
+        feature_dim: int,
+        *,
+        l2_normalize: bool = True,
+    ) -> None:
+        self._runtime = runtime
+        self._feature_dim = feature_dim
+        self._l2_normalize = l2_normalize
+        self._fallback = MeanPoolExtractor(feature_dim, l2_normalize=l2_normalize)
+        _log.info(
+            "hailo_feature_extractor_init",
+            feature_dim=feature_dim,
+            l2_normalize=l2_normalize,
+        )
+
+    def extract(self, frame: NDArray[np.uint8]) -> NDArray[np.float32]:
+        """Extract features via Hailo-8 or fallback to mean-pool.
+
+        Args:
+            frame: Raw camera frame as uint8 numpy array.
+
+        Returns:
+            Feature vector of shape ``(feature_dim,)``.
+        """
+        if not self._runtime.is_available():
+            return self._fallback.extract(frame)
+
+        try:
+            # Hailo expects uint8 input; reshape to (H, W, C) if needed
+            input_data = frame
+            if input_data.ndim == 2:
+                input_data = np.expand_dims(input_data, axis=-1)
+
+            # Direct synchronous call — thread-safe via threading.Lock in runtime
+            result = self._runtime.infer_sync("feature_extractor", input_data)
+            features = result.flatten().astype(np.float32)
+
+            # Truncate or pad to expected dimension
+            if len(features) >= self._feature_dim:
+                features = features[: self._feature_dim]
+            else:
+                padded = np.zeros(self._feature_dim, dtype=np.float32)
+                padded[: len(features)] = features
+                features = padded
+
+            if self._l2_normalize:
+                norm = np.linalg.norm(features)
+                if norm > 0:
+                    features = features / norm
+
+            return cast(NDArray[np.float32], features)
+        except Exception:
+            _log.warning("hailo_feature_extraction_failed_using_fallback", exc_info=True)
+            return self._fallback.extract(frame)
+
+    @property
+    def feature_dim(self) -> int:
+        """Output feature vector dimension."""
+        return self._feature_dim
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
 
-def build_feature_extractor(cfg: CameraConfig) -> FeatureExtractorProtocol:
+def build_feature_extractor(
+    cfg: CameraConfig,
+    hailo_runtime: HailoRuntimeProtocol | None = None,
+) -> FeatureExtractorProtocol:
     """Build a feature extractor based on camera configuration.
 
     Args:
         cfg: Camera configuration with feature_extractor and model_path.
+        hailo_runtime: Optional Hailo-8 runtime for accelerated extraction.
 
     Returns:
         Feature extractor conforming to :class:`FeatureExtractorProtocol`.
     """
+    # Hailo-8 accelerator backend
+    if cfg.feature_extractor == "hailo" and hailo_runtime is not None:
+        extractor: FeatureExtractorProtocol = HailoFeatureExtractor(
+            runtime=hailo_runtime,
+            feature_dim=cfg.feature_dim,
+            l2_normalize=cfg.l2_normalize,
+        )
+        _log.info("feature_extractor_selected", backend="hailo")
+        return extractor
+
+    # Auto: try Hailo first, then TensorRT, then MeanPool
+    if (
+        cfg.feature_extractor == "auto"
+        and hailo_runtime is not None
+        and hailo_runtime.is_available()
+    ):
+        extractor = HailoFeatureExtractor(
+            runtime=hailo_runtime,
+            feature_dim=cfg.feature_dim,
+            l2_normalize=cfg.l2_normalize,
+        )
+        _log.info("feature_extractor_selected", backend="hailo")
+        return extractor
+
+    # TensorRT / ONNX backend
     if cfg.feature_extractor in ("tensorrt", "auto") and cfg.model_path is not None:
-        extractor: FeatureExtractorProtocol = TensorRTExtractor(
+        extractor = TensorRTExtractor(
             model_path=cfg.model_path,
             feature_dim=cfg.feature_dim,
             l2_normalize=cfg.l2_normalize,
@@ -232,6 +343,7 @@ def build_feature_extractor(cfg: CameraConfig) -> FeatureExtractorProtocol:
         )
         return extractor
 
+    # Fallback: MeanPool
     extractor = MeanPoolExtractor(
         feature_dim=cfg.feature_dim,
         l2_normalize=cfg.l2_normalize,

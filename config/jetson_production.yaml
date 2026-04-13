@@ -72,3 +72,12 @@ experience:
   path: "/home/jetson/mousedroid_experience"
   map_size_gb: 40
   flush_every_n: 60
+
+# Hailo-8 neural accelerator (uncomment to enable)
+# hailo:
+#   enabled: true
+#   device_path: "/dev/hailo0"
+#   yolo_hef_path: "/opt/mousedroid/models/hailo/yolo11_disk_detector.hef"
+#   feature_extractor_hef_path: "/opt/mousedroid/models/hailo/feature_extractor.hef"
+#   power_mode: "performance"
+#   fallback_on_failure: true

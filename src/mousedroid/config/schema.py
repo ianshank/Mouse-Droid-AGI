@@ -68,9 +68,9 @@ class CameraConfig(BaseModel):
         "auto",
         description="Camera backend: auto-detect, picamera2, or Jetson CSI",
     )
-    feature_extractor: Literal["mean_pool", "tensorrt", "auto"] = Field(
+    feature_extractor: Literal["mean_pool", "tensorrt", "hailo", "auto"] = Field(
         "mean_pool",
-        description="Feature extraction backend: mean_pool (fallback), tensorrt, or auto",
+        description="Feature extraction backend: mean_pool (fallback), tensorrt, hailo, or auto",
     )
     l2_normalize: bool = Field(True, description="Apply L2 normalization to feature vectors")
 
@@ -188,6 +188,47 @@ class HealthConfig(BaseModel):
     gpu_temp_warn_c: float = Field(75.0, gt=0, description="GPU temp warning threshold (C)")
     gpu_temp_critical_c: float = Field(90.0, gt=0, description="GPU temp critical threshold (C)")
     memory_warn_pct: float = Field(85.0, gt=0, le=100, description="Memory warning threshold (%)")
+
+
+class HailoConfig(BaseModel):
+    """Hailo-8 neural accelerator configuration.
+
+    The Hailo-8 is a 26 TOPS INT8 M.2 accelerator that offloads perception
+    workloads (YOLO detection, feature extraction) from the Jetson GPU to
+    dedicated silicon, freeing GPU for reasoning (RSSM, MCTS, SAC, LLM).
+    """
+
+    enabled: bool = Field(False, description="Enable Hailo-8 accelerator for perception offload")
+    device_path: str = Field(
+        "/dev/hailo0",
+        description="Hailo PCIe device path",
+    )
+    yolo_hef_path: Path = Field(
+        Path("models/hailo/yolo11_disk_detector.hef"),
+        description="Path to compiled YOLO HEF model",
+    )
+    feature_extractor_hef_path: Path = Field(
+        Path("models/hailo/feature_extractor.hef"),
+        description="Path to compiled feature extractor HEF model",
+    )
+    batch_size: int = Field(1, gt=0, le=8, description="Inference batch size")
+    power_mode: Literal["performance", "balanced", "power_save"] = Field(
+        "performance",
+        description="Hailo-8 power mode",
+    )
+    input_format: Literal["uint8", "float32"] = Field(
+        "uint8",
+        description="Model input data format (INT8 models expect uint8)",
+    )
+    timeout_ms: float = Field(
+        100.0,
+        gt=0,
+        description="Inference timeout in milliseconds",
+    )
+    fallback_on_failure: bool = Field(
+        True,
+        description="Fall back to GPU/CPU pipeline if Hailo inference fails",
+    )
 
 
 class JetsonConfig(BaseModel):
@@ -717,6 +758,10 @@ class ArmPerceptionConfig(BaseModel):
     yolo_confidence_threshold: float = Field(
         0.5, gt=0, le=1, description="YOLO detection confidence threshold"
     )
+    yolo_backend: Literal["ultralytics", "hailo", "auto"] = Field(
+        "ultralytics",
+        description="YOLO inference backend: ultralytics (GPU), hailo (accelerator), or auto",
+    )
     pose_estimator: Literal["pnp", "learned"] = Field(
         "pnp",
         description="Pose estimation method",
@@ -1104,6 +1149,12 @@ class Settings(BaseSettings):
     training_pipeline: TrainingPipelineConfig | None = Field(
         None,
         description="GPU pre-training pipeline orchestrator config (ADR-005)",
+    )
+
+    # Hardware accelerator configs (optional)
+    hailo: HailoConfig | None = Field(
+        None,
+        description="Hailo-8 neural accelerator config (None=disabled)",
     )
 
     # Robot arm platform configs (optional — only used when platform=robot_arm)

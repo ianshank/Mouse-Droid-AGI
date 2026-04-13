@@ -68,6 +68,7 @@ arm_perception:
   depth_camera_type: "mock"
   yolo_model_path: "models/yolo11_disk_detector.pt"
   yolo_confidence_threshold: 0.5
+  yolo_backend: "auto"
   pose_estimator: "pnp"
   pose_tolerance_m: 0.005
   detection_fps: 30.0
