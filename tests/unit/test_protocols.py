@@ -10,7 +10,12 @@ from torch import Tensor
 from mousedroid.agents.base import AgentProtocol
 from mousedroid.comms.protocol import EncoderReading, ESP32CommProtocol
 from mousedroid.experience.protocol import ExperienceProtocol
-from mousedroid.hardware.protocols import AudioProtocol, DistanceSensorProtocol, VisionProtocol
+from mousedroid.hardware.protocols import (
+    AudioProtocol,
+    DistanceSensorProtocol,
+    LidarProtocol,
+    VisionProtocol,
+)
 from mousedroid.llm_gateway.protocol import GoalVector, LLMGatewayProtocol
 from mousedroid.safety.context import SafetyContext
 from mousedroid.safety.protocol import SafetyMonitorProtocol
@@ -128,6 +133,10 @@ class _MockObservation:
     @property
     def audio_chunk(self) -> NDArray[np.float32]:
         return np.zeros(1024, dtype=np.float32)
+
+    @property
+    def lidar_features(self) -> NDArray[np.float32] | None:
+        return None
 
     @property
     def valid_mask(self) -> NDArray[np.float32]:
@@ -274,3 +283,39 @@ def test_non_conforming_not_audio():
 
 def test_non_conforming_not_agent():
     assert not isinstance(_Empty(), AgentProtocol)
+
+
+# -- LidarProtocol -----------------------------------------------------------
+
+
+class _MockLidar:
+    async def read_scan(self):
+        return None
+
+    @property
+    def max_range_m(self) -> float:
+        return 12.0
+
+    @property
+    def min_range_m(self) -> float:
+        return 0.15
+
+    @property
+    def scan_frequency_hz(self) -> float:
+        return 10.0
+
+    async def start(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        pass
+
+
+def test_lidar_protocol_isinstance():
+    """Conforming _MockLidar passes isinstance check against LidarProtocol."""
+    assert isinstance(_MockLidar(), LidarProtocol)
+
+
+def test_non_conforming_not_lidar():
+    """A plain object does not satisfy LidarProtocol."""
+    assert not isinstance(_Empty(), LidarProtocol)
