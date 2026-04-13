@@ -16,7 +16,7 @@ import asyncio
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast, runtime_checkable
 
 import numpy as np
 from numpy.typing import NDArray
@@ -309,7 +309,7 @@ class HailoRuntime:
             results = pipeline.infer(input_dict)
 
         output_name = output_vstreams[0].name
-        output = results[output_name].astype(np.float32)
+        output = cast(NDArray[np.float32], results[output_name].astype(np.float32))
         if output.ndim > 1 and output.shape[0] == 1:
             output = output.squeeze(axis=0)
 

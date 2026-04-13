@@ -55,17 +55,39 @@ _ARTICLES = {"the", "a", "an"}
 
 
 _ADJECTIVES = {
-    "good", "bad", "big", "small", "happy", "safe", "clear", "new",
-    "fast", "slow", "hot", "cold", "hard", "easy", "old", "young",
-    "critical", "dangerous", "important", "strange", "interesting",
+    "good",
+    "bad",
+    "big",
+    "small",
+    "happy",
+    "safe",
+    "clear",
+    "new",
+    "fast",
+    "slow",
+    "hot",
+    "cold",
+    "hard",
+    "easy",
+    "old",
+    "young",
+    "critical",
+    "dangerous",
+    "important",
+    "strange",
+    "interesting",
 }
 """Common adjectives eligible for Rocky-style repetition."""
 
-_INTENSITY_THRESHOLD: float = 0.7
-"""Minimum intensity for exclamation and repetition effects."""
+_INTENSITY_THRESHOLD_DEFAULT: float = 0.7
+"""Default minimum intensity (from VoiceConfig.intensity_threshold)."""
 
 
-def rocky_transform(text: str, intensity: float = 1.0) -> str:
+def rocky_transform(
+    text: str,
+    intensity: float = 1.0,
+    intensity_threshold: float = _INTENSITY_THRESHOLD_DEFAULT,
+) -> str:
     """Transform plain English into Rocky's speech style.
 
     Applies Rocky's characteristic grammar patterns:
@@ -78,6 +100,7 @@ def rocky_transform(text: str, intensity: float = 1.0) -> str:
     Args:
         text: Plain English text.
         intensity: Emotional intensity 0.0-1.0, controls repetition.
+        intensity_threshold: Minimum intensity for effects (from VoiceConfig).
 
     Returns:
         Rocky-style text.
@@ -90,7 +113,7 @@ def rocky_transform(text: str, intensity: float = 1.0) -> str:
         if word.lower() in _ARTICLES:
             continue
         # Repeat adjectives at high intensity
-        if intensity > _INTENSITY_THRESHOLD and word.lower() in _ADJECTIVES:
+        if intensity > intensity_threshold and word.lower() in _ADJECTIVES:
             reps = 2 if intensity < 0.9 else 3
             result.extend([word] * reps)
         else:
@@ -106,7 +129,7 @@ def rocky_transform(text: str, intensity: float = 1.0) -> str:
     transformed = " ".join(result)
 
     # Add exclamation for emphasis at high intensity
-    if intensity > _INTENSITY_THRESHOLD and not transformed.endswith("!"):
+    if intensity > intensity_threshold and not transformed.endswith("!"):
         transformed = transformed.rstrip(".") + "!"
 
     return transformed
@@ -174,7 +197,11 @@ class RockyVoiceEngine:
 
         # Apply Rocky personality transform using context intensity
         intensity = context.get("valence", 1.0) if context else 1.0
-        text = rocky_transform(text, intensity=intensity)
+        text = rocky_transform(
+            text,
+            intensity=intensity,
+            intensity_threshold=self._cfg.intensity_threshold,
+        )
 
         # Determine priority from event semantics
         if event == "emergency_stop":
@@ -228,7 +255,8 @@ class RockyVoiceEngine:
         while self._running:
             try:
                 request = await asyncio.wait_for(
-                    self._queue.get(), timeout=self._cfg.queue_poll_timeout_s,
+                    self._queue.get(),
+                    timeout=self._cfg.queue_poll_timeout_s,
                 )
             except TimeoutError:
                 continue

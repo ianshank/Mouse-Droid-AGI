@@ -9,6 +9,7 @@ content, and Python module import integrity.
 from __future__ import annotations
 
 import ast
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -66,7 +67,10 @@ class TestCiSh:
         assert "pytest tests/unit" in content
 
     def test_integration_test_step(self, content: str) -> None:
-        assert "pytest tests/integration/" in content
+        assert re.search(
+            r"(?:python\s+-m\s+)?pytest\b[^\n]*\btests/integration\b",
+            content,
+        )
 
     def test_e2e_step_present(self, content: str) -> None:
         assert "pytest tests/e2e/" in content

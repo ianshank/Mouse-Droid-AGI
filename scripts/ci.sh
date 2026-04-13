@@ -8,11 +8,9 @@ ruff check src/ tests/
 echo "=== Type Check ==="
 mypy src/ --strict --ignore-missing-imports
 
-echo "=== Unit Tests ==="
-python -m pytest tests/unit tests/property -v --cov=src/mousedroid --cov-report=term-missing
-
-echo "=== Integration Tests ==="
-python -m pytest tests/integration/ -v
+echo "=== Unit + Property + Integration Tests (with coverage) ==="
+python -m pytest tests/unit tests/property tests/integration \
+    -v --cov=src/mousedroid --cov-report=term-missing --cov-fail-under=85
 
 echo "=== Performance Tests ==="
 python -m pytest tests/performance/ -v
@@ -22,10 +20,6 @@ python -m pytest tests/regression/ -v
 
 echo "=== E2E Tests ==="
 python -m pytest tests/e2e/ -v
-
-echo "=== Coverage Gate ==="
-python -m pytest tests/unit tests/property tests/integration \
-    --cov=src/mousedroid --cov-report=term-missing --cov-fail-under=85
 
 echo "=== Branch Coverage Gate (changed files >= 85%) ==="
 python scripts/check_branch_coverage.py --min 85 \

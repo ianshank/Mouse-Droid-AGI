@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import ClassVar, Protocol, runtime_checkable
 
+from mousedroid.config.schema import MissionParserConfig
 from mousedroid.llm_gateway.protocol import GoalVector
 from mousedroid.logging.setup import get_logger
 
@@ -69,6 +70,9 @@ class RuleBasedMissionParser:
     Handles common navigation commands without LLM inference.
     Falls back to ``IntentType.UNKNOWN`` for ambiguous commands
     that require full LLM processing.
+
+    Args:
+        cfg: Optional mission parser config for speed and confidence tuning.
     """
 
     # Compiled patterns for common commands
@@ -119,6 +123,35 @@ class RuleBasedMissionParser:
         "full speed": 1.0,
     }
 
+    def __init__(self, cfg: MissionParserConfig | None = None) -> None:
+        """Initialise parser with optional config overrides.
+
+        Args:
+            cfg: Mission parser config. When ``None``, schema defaults apply.
+        """
+        if cfg is None:
+            cfg = MissionParserConfig()  # type: ignore[call-arg]
+        self._speed_map = cfg.speed_map
+        self._default_speed = cfg.default_speed
+        self._patrol_speed = cfg.patrol_speed
+        self._avoid_speed = cfg.avoid_speed
+        self._stop_confidence = cfg.stop_confidence
+        self._direction_confidence = cfg.direction_confidence
+        self._patrol_confidence = cfg.patrol_confidence
+        self._avoid_confidence = cfg.avoid_confidence
+
+        # Build dynamic speed regex from configured keys.
+        # Multi-word keys like "full speed" become r"full\s+speed" to tolerate
+        # flexible whitespace in user input.
+        escaped_keys = [re.sub(r"\\\s+", r"\\s+", re.escape(k.strip())) for k in self._speed_map]
+        if escaped_keys:
+            self._speed_re = re.compile(
+                r"(" + "|".join(escaped_keys) + r")",
+                re.IGNORECASE,
+            )
+        else:
+            self._speed_re = self._SPEED_RE
+
     def parse(self, nl_command: str) -> MissionIntent:
         """Parse NL command into structured intent.
 
@@ -141,7 +174,7 @@ class RuleBasedMissionParser:
             return MissionIntent(
                 intent_type=IntentType.STOP,
                 goal_vector=GoalVector(vx_target=0.0, vy_target=0.0, omega_target=0.0),
-                confidence=1.0,
+                confidence=self._stop_confidence,
                 raw_command=cmd,
             )
 
@@ -153,7 +186,7 @@ class RuleBasedMissionParser:
             return MissionIntent(
                 intent_type=IntentType.VELOCITY,
                 goal_vector=GoalVector(vx_target=speed, vy_target=0.0, omega_target=0.0),
-                confidence=0.9,
+                confidence=self._direction_confidence,
                 raw_command=cmd,
             )
 
@@ -162,7 +195,7 @@ class RuleBasedMissionParser:
             return MissionIntent(
                 intent_type=IntentType.VELOCITY,
                 goal_vector=GoalVector(vx_target=-speed, vy_target=0.0, omega_target=0.0),
-                confidence=0.9,
+                confidence=self._direction_confidence,
                 raw_command=cmd,
             )
 
@@ -172,7 +205,7 @@ class RuleBasedMissionParser:
             return MissionIntent(
                 intent_type=IntentType.VELOCITY,
                 goal_vector=GoalVector(vx_target=0.0, vy_target=0.0, omega_target=omega),
-                confidence=0.9,
+                confidence=self._direction_confidence,
                 raw_command=cmd,
                 parameters=self._extract_angle_params(cmd),
             )
@@ -183,7 +216,7 @@ class RuleBasedMissionParser:
             return MissionIntent(
                 intent_type=IntentType.VELOCITY,
                 goal_vector=GoalVector(vx_target=0.0, vy_target=0.0, omega_target=-omega),
-                confidence=0.9,
+                confidence=self._direction_confidence,
                 raw_command=cmd,
                 parameters=self._extract_angle_params(cmd),
             )
@@ -193,7 +226,7 @@ class RuleBasedMissionParser:
             return MissionIntent(
                 intent_type=IntentType.VELOCITY,
                 goal_vector=GoalVector(vx_target=0.0, vy_target=-speed, omega_target=0.0),
-                confidence=0.9,
+                confidence=self._direction_confidence,
                 raw_command=cmd,
             )
 
@@ -202,7 +235,7 @@ class RuleBasedMissionParser:
             return MissionIntent(
                 intent_type=IntentType.VELOCITY,
                 goal_vector=GoalVector(vx_target=0.0, vy_target=speed, omega_target=0.0),
-                confidence=0.9,
+                confidence=self._direction_confidence,
                 raw_command=cmd,
             )
 
@@ -212,8 +245,10 @@ class RuleBasedMissionParser:
             location = patrol_match.group(1).strip()
             return MissionIntent(
                 intent_type=IntentType.PATROL,
-                goal_vector=GoalVector(vx_target=0.5, vy_target=0.0, omega_target=0.0),
-                confidence=0.8,
+                goal_vector=GoalVector(
+                    vx_target=self._patrol_speed, vy_target=0.0, omega_target=0.0
+                ),
+                confidence=self._patrol_confidence,
                 raw_command=cmd,
                 parameters={"location": location},
             )
@@ -222,8 +257,10 @@ class RuleBasedMissionParser:
         if re.search(r"avoid\s+obstacles?", cmd, re.IGNORECASE):
             return MissionIntent(
                 intent_type=IntentType.NAVIGATION,
-                goal_vector=GoalVector(vx_target=0.3, vy_target=0.0, omega_target=0.0),
-                confidence=0.7,
+                goal_vector=GoalVector(
+                    vx_target=self._avoid_speed, vy_target=0.0, omega_target=0.0
+                ),
+                confidence=self._avoid_confidence,
                 raw_command=cmd,
                 parameters={"mode": "obstacle_avoidance"},
             )
@@ -245,11 +282,12 @@ class RuleBasedMissionParser:
         Returns:
             Speed multiplier in (0, 1].
         """
-        match = self._SPEED_RE.search(cmd)
+        match = self._speed_re.search(cmd)
         if match:
-            key = match.group(1).lower()
-            return self._SPEED_MAP.get(key, 0.5)
-        return 0.5
+            # Normalise whitespace so "full  speed" matches key "full speed"
+            key = re.sub(r"\s+", " ", match.group(1).lower()).strip()
+            return self._speed_map.get(key, self._default_speed)
+        return self._default_speed
 
     def _extract_rotation_magnitude(self, cmd: str) -> float:
         """Extract rotation magnitude from command text.

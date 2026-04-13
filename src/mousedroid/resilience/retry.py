@@ -21,9 +21,6 @@ _log = get_logger(__name__)
 
 T = TypeVar("T")
 
-_JITTER_FRACTION: float = 0.1
-"""Jitter as a fraction of the computed delay (10%)."""
-
 
 class RetryExhaustedError(Exception):
     """All retry attempts have been exhausted.
@@ -107,7 +104,8 @@ def _compute_delay(attempt: int, cfg: RetryConfig) -> float:
         cfg.base_delay_s * (cfg.exponential_base**attempt),
         cfg.max_delay_s,
     )
-    jitter = random.uniform(0.0, delay * _JITTER_FRACTION)  # noqa: S311
+    jitter_frac = cfg.jitter_fraction
+    jitter = random.uniform(0.0, delay * jitter_frac)  # noqa: S311
     return delay + jitter
 
 

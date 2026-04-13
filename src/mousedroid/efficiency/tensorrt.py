@@ -222,19 +222,17 @@ class JetsonTensorRTCompiler:
         Returns:
             Compiled model.
         """
+
         # Build sample inputs for all declared input shapes.
         def _build_samples(device: str) -> list[Tensor]:
-            return [
-                torch.randn(*shape, device=device)
-                for shape in input_shapes.values()
-            ]
+            return [torch.randn(*shape, device=device) for shape in input_shapes.values()]
 
         if not _TORCH2TRT_AVAILABLE:
             _log.warning("torch2trt_not_available_falling_back_to_jit_trace")
             samples = _build_samples("cpu")
             model.eval()
             # JIT trace accepts a tuple of inputs for multi-input models.
-            trace_input = samples[0] if len(samples) == 1 else tuple(samples)
+            trace_input: Any = samples[0] if len(samples) == 1 else tuple(samples)
             return await asyncio.to_thread(_trace_model, model, trace_input)
 
         # torch2trt compilation is CPU-bound; offload to thread.
@@ -267,7 +265,7 @@ class JetsonTensorRTCompiler:
         def _save_sync() -> None:
             path.parent.mkdir(parents=True, exist_ok=True)
             if isinstance(compiled, torch.jit.ScriptModule):
-                torch.jit.save(compiled, str(path))  # type: ignore[no-untyped-call]
+                torch.jit.save(compiled, str(path))
             else:
                 torch.save(compiled, str(path))
 

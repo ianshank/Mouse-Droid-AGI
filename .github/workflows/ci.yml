@@ -170,8 +170,8 @@ jobs:
             - name: Install dependencies
               run: pip install -e "." pip-audit
 
-            - name: Security audit
-              run: pip-audit --strict || true # Advisory — don't block on upstream vulns
+            - name: Security audit (advisory)
+              run: pip-audit --strict 2>&1 || echo "::warning::pip-audit found vulnerabilities (non-blocking)"
 
     # -------------------------------------------------------------------------
     # Stage 6: Docker build (Jetson — aarch64, build check only on x86)

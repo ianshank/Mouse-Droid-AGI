@@ -150,6 +150,11 @@ class CuriosityConfig(BaseModel):
         le=1,
         description="Minimum curiosity scale after decay",
     )
+    novelty_n_bins: int = Field(
+        32,
+        gt=0,
+        description="Discretisation bins per dimension for novelty decay",
+    )
 
 
 class ESP32Config(BaseModel):
@@ -171,6 +176,11 @@ class ESP32Config(BaseModel):
     keepalive_hz: float = Field(10.0, gt=0, description="Motor command keepalive rate (Hz)")
     max_velocity_mps: float = Field(0.5, gt=0, description="Max velocity magnitude (m/s)")
     max_omega_rads: float = Field(2.0, gt=0, description="Max angular velocity (rad/s)")
+    mock_battery_v: float = Field(
+        12.0,
+        gt=0,
+        description="Mock driver default battery voltage (V)",
+    )
 
 
 class ExperienceConfig(BaseModel):
@@ -179,6 +189,7 @@ class ExperienceConfig(BaseModel):
     path: str = Field("/home/jetson/mousedroid_experience", description="LMDB storage path")
     map_size_gb: int = Field(20, gt=0, description="LMDB map size (GB)")
     flush_every_n: int = Field(30, gt=0, description="Flush after N records")
+    export_path: str = Field("/tmp/export", description="Default experience export path")  # noqa: S108
 
 
 class HealthConfig(BaseModel):
@@ -214,11 +225,11 @@ class HailoConfig(BaseModel):
     batch_size: int = Field(1, gt=0, le=8, description="Inference batch size")
     power_mode: Literal["performance", "balanced", "power_save"] = Field(
         "performance",
-        description="Hailo-8 power mode",
+        description="Hailo-8 power mode (reserved: future hardware integration)",
     )
     input_format: Literal["uint8", "float32"] = Field(
         "uint8",
-        description="Model input data format (INT8 models expect uint8)",
+        description="Model input data format (reserved: future hardware integration)",
     )
     timeout_ms: float = Field(
         100.0,
@@ -239,7 +250,7 @@ class JetsonConfig(BaseModel):
         0.5,
         gt=0,
         le=1.0,
-        description="GPU memory fraction for PyTorch",
+        description="GPU memory fraction for PyTorch (reserved: future CUDA allocator)",
     )
     power_mode: Literal["15W", "7W"] = Field("15W", description="Jetson power mode")
     dla_enabled: bool = Field(False, description="Enable Deep Learning Accelerator")
@@ -317,6 +328,54 @@ class LoopConfig(BaseModel):
     control_hz: float = Field(30.0, gt=0, description="Motor command rate (Hz)")
     planning_hz: float = Field(10.0, gt=0, description="MCTS planning rate (Hz)")
     audio_hz: float = Field(16.0, gt=0, description="Microphone capture rate (Hz)")
+
+
+class MetacognitiveConfig(BaseModel):
+    """Metacognitive loop configuration (self-monitoring capabilities)."""
+
+    n_capabilities: int = Field(
+        8,
+        gt=0,
+        description="Number of self-assessed capability dimensions",
+    )
+    loop_score_scale: float = Field(
+        100.0,
+        gt=0,
+        description="Scaling factor for metacognitive loop scores",
+    )
+
+
+class MissionParserConfig(BaseModel):
+    """NL mission parser configuration for speed and confidence mappings."""
+
+    speed_map: dict[str, float] = Field(
+        default_factory=lambda: {
+            "slow": 0.3,
+            "slowly": 0.3,
+            "half speed": 0.5,
+            "fast": 0.8,
+            "quickly": 0.8,
+            "full speed": 1.0,
+        },
+        description="Mapping of speed modifier keywords to normalised speed values",
+    )
+    default_speed: float = Field(0.5, gt=0, le=1, description="Default speed when no modifier")
+    patrol_speed: float = Field(0.5, gt=0, le=1, description="Default patrol velocity (m/s)")
+    avoid_speed: float = Field(0.3, gt=0, le=1, description="Default obstacle avoidance velocity")
+    stop_confidence: float = Field(1.0, ge=0, le=1, description="Confidence for stop commands")
+    direction_confidence: float = Field(
+        0.9,
+        ge=0,
+        le=1,
+        description="Confidence for directional movement commands",
+    )
+    patrol_confidence: float = Field(0.8, ge=0, le=1, description="Confidence for patrol commands")
+    avoid_confidence: float = Field(
+        0.7,
+        ge=0,
+        le=1,
+        description="Confidence for obstacle avoidance commands",
+    )
 
 
 class OfflineRLConfig(BaseModel):
@@ -432,6 +491,12 @@ class RetryConfig(BaseModel):
     base_delay_s: float = Field(1.0, gt=0, description="Base delay between retries (s)")
     max_delay_s: float = Field(30.0, gt=0, description="Maximum delay between retries (s)")
     exponential_base: float = Field(2.0, gt=0, description="Exponential backoff base")
+    jitter_fraction: float = Field(
+        0.1,
+        ge=0,
+        le=1,
+        description="Jitter as fraction of delay for retry backoff",
+    )
 
 
 class RewardConfig(BaseModel):
@@ -1051,11 +1116,15 @@ class VoiceConfig(BaseModel):
     )
     tts_sample_rate: int = Field(22050, gt=0, description="TTS output sample rate (Hz)")
     queue_size: int = Field(16, gt=0, description="Max queued speech requests")
-    queue_poll_timeout_s: float = Field(
-        1.0, gt=0, description="Worker queue poll timeout (s)"
-    )
+    queue_poll_timeout_s: float = Field(1.0, gt=0, description="Worker queue poll timeout (s)")
     phrase_overrides: dict[str, list[str]] = Field(
         default_factory=dict, description="Custom phrase overrides by event name"
+    )
+    intensity_threshold: float = Field(
+        0.7,
+        ge=0,
+        le=1,
+        description="Minimum intensity for Rocky voice transform effects",
     )
 
 
@@ -1141,6 +1210,12 @@ class Settings(BaseSettings):
     llm: LLMConfig = Field(default_factory=_settings_default_factory(LLMConfig))
     reward: RewardConfig = Field(default_factory=_settings_default_factory(RewardConfig))
     curiosity: CuriosityConfig = Field(default_factory=_settings_default_factory(CuriosityConfig))
+    metacognitive: MetacognitiveConfig = Field(
+        default_factory=_settings_default_factory(MetacognitiveConfig)
+    )
+    mission_parser: MissionParserConfig = Field(
+        default_factory=_settings_default_factory(MissionParserConfig)
+    )
     offline_rl: OfflineRLConfig = Field(default_factory=_settings_default_factory(OfflineRLConfig))
     ppo: PPOConfig = Field(default_factory=_settings_default_factory(PPOConfig))
     telemetry: TelemetryConfig = Field(default_factory=_settings_default_factory(TelemetryConfig))

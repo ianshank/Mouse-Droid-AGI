@@ -7,7 +7,7 @@ Synthesis is offloaded to a thread to avoid blocking the event loop.
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
 from numpy.typing import NDArray
@@ -19,6 +19,12 @@ if TYPE_CHECKING:
     from mousedroid.config.schema import VoiceConfig
 
 _log = get_logger(__name__)
+
+
+class _PiperVoiceLike(Protocol):
+    """Minimal interface required from a loaded piper voice."""
+
+    def synthesize(self, text: str, wav_file: Any) -> None: ...
 
 
 class PiperTTS:
@@ -34,7 +40,7 @@ class PiperTTS:
             cfg: Voice engine configuration.
         """
         self._cfg = cfg
-        self._voice: object | None = None
+        self._voice: _PiperVoiceLike | None = None
         _log.info(
             "piper_tts_init",
             model_path=cfg.tts_model_path,
@@ -44,7 +50,7 @@ class PiperTTS:
     def start(self) -> None:
         """Load the piper voice model."""
         try:
-            from piper import PiperVoice  # type: ignore[import-untyped]
+            from piper import PiperVoice
 
             if self._cfg.tts_model_path is not None:
                 self._voice = PiperVoice.load(self._cfg.tts_model_path)
@@ -79,7 +85,7 @@ class PiperTTS:
 
         wav_buffer = io.BytesIO()
         with wave.open(wav_buffer, "wb") as wav_file:
-            self._voice.synthesize(text, wav_file)  # type: ignore[union-attr]
+            self._voice.synthesize(text, wav_file)
 
         wav_buffer.seek(0)
         with wave.open(wav_buffer, "rb") as wav_file:

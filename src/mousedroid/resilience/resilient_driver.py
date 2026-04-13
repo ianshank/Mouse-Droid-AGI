@@ -84,6 +84,7 @@ class ResilientESP32Driver:
             raise
         except Exception:
             self._total_failures += 1
+            _log.warning("resilient_driver_velocity_error", exc_info=True)
             raise
 
     async def read_encoders(self) -> EncoderReading:
@@ -109,6 +110,7 @@ class ResilientESP32Driver:
             raise
         except Exception:
             self._total_failures += 1
+            _log.warning("resilient_driver_encoder_error", exc_info=True)
             raise
 
     async def get_battery_voltage(self) -> float:
@@ -134,6 +136,7 @@ class ResilientESP32Driver:
             raise
         except Exception:
             self._total_failures += 1
+            _log.warning("resilient_driver_battery_error", exc_info=True)
             raise
 
     async def emergency_stop(self) -> None:

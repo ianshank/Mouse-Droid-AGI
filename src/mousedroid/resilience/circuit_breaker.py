@@ -56,6 +56,12 @@ class CircuitBreaker:
         self._half_open_calls: int = 0
         self._last_failure_time: float = 0.0
         self._lock = asyncio.Lock()
+        _log.info(
+            "circuit_breaker_init",
+            name=name,
+            failure_threshold=cfg.failure_threshold,
+            recovery_timeout_s=cfg.recovery_timeout_s,
+        )
 
     # -- Properties --------------------------------------------------------
 
