@@ -172,8 +172,19 @@ class RSSM(nn.Module):
                     device=device,
                 ).unsqueeze(0)
 
+        # Extract LiDAR features if the encoder supports it.
+        lidar: Tensor | None = None
+        if self.encoder._lidar_enabled:
+            lidar_data = observation.lidar_features
+            if lidar_data is not None and len(lidar_data) > 0:
+                lidar = torch.as_tensor(
+                    lidar_data,
+                    dtype=torch.float32,
+                    device=device,
+                ).unsqueeze(0)
+
         # Encode
-        obs_embed = self.encoder(vision, ultrasonic, motor, mask, audio=audio)
+        obs_embed = self.encoder(vision, ultrasonic, motor, mask, audio=audio, lidar=lidar)
 
         # GRU step
         gru_input = torch.cat([z, prev_action], dim=-1)
