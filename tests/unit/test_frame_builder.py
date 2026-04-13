@@ -16,6 +16,7 @@ class FakeSafetyContext:
     is_emergency: bool = False
     law_violations: list[str] = field(default_factory=list)
     forward_clearance_ok: bool = True
+    lidar_clearance_ok: bool = True
 
 
 @dataclass
@@ -27,6 +28,7 @@ class FakeObservation:
         default_factory=lambda: np.array([0.1, 0.2, 0.3, 12.0], dtype=np.float32)
     )
     audio_chunk: np.ndarray = field(default_factory=lambda: np.ones(10, dtype=np.float32) * 0.5)
+    lidar_features: np.ndarray | None = None
     valid_mask: np.ndarray = field(
         default_factory=lambda: np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32)
     )

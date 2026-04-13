@@ -47,9 +47,9 @@ async def test_dispatch_unknown_tool_raises(registry: ToolRegistry) -> None:
         await registry.dispatch("nonexistent")
 
 
-def test_create_default_registry_has_9_tools() -> None:
+def test_create_default_registry_has_10_tools() -> None:
     reg = create_default_registry()
-    assert len(reg) == 9
+    assert len(reg) == 10
 
 
 def test_names_property(registry: ToolRegistry) -> None:
@@ -155,3 +155,9 @@ def test_canonical_tools_registry_importable() -> None:
     from mousedroid.common.tools.registry import ToolRegistry as CanonicalRegistry
 
     assert CanonicalRegistry is ToolRegistry
+
+
+def test_default_registry_has_lidar_diagnostics() -> None:
+    """Verify 'lidar_diagnostics' is registered in the default registry."""
+    reg = create_default_registry()
+    assert "lidar_diagnostics" in reg.names
