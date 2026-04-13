@@ -42,7 +42,7 @@ def build_bearer_auth_middleware(
 
     token = os.environ.get(auth_cfg.token_env_var, "")
 
-    @web.middleware  # type: ignore[untyped-decorator]
+    @web.middleware
     async def bearer_auth_middleware(
         request: web.Request,
         handler: Any,
@@ -110,7 +110,7 @@ def build_cors_middleware(
     """
     from aiohttp import web
 
-    @web.middleware  # type: ignore[untyped-decorator]
+    @web.middleware
     async def cors_middleware(
         request: web.Request,
         handler: Any,

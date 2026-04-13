@@ -219,7 +219,7 @@ def _load_settings(config_path: str) -> Settings:
     Returns:
         Populated Settings instance.
     """
-    import yaml  # type: ignore[import-untyped]
+    import yaml
 
     path = Path(config_path)
     if not path.exists():

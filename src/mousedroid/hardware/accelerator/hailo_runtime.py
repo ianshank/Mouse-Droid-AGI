@@ -313,7 +313,7 @@ class HailoRuntime:
         if output.ndim > 1 and output.shape[0] == 1:
             output = output.squeeze(axis=0)
 
-        return output
+        return output  # type: ignore[no-any-return]
 
 
 # ---------------------------------------------------------------------------

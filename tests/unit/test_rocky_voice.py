@@ -394,6 +394,78 @@ async def test_empty_phrase_override_ignored() -> None:
 
 
 @pytest.mark.asyncio
+async def test_emergency_clears_full_queue() -> None:
+    """Emergency event clears full queue and inserts itself."""
+    engine, _speaker, _tts = _make_engine(cooldown_s=100.0, queue_size=1)
+    await engine.start()
+    try:
+        # Fill the queue with a normal event (cooldown blocks worker)
+        await engine.speak("startup")
+        assert engine._queue.qsize() == 1
+        # Emergency should clear and insert
+        await engine.speak("emergency_stop")
+        assert engine._queue.qsize() == 1
+        # The queued item should be the emergency
+        item = engine._queue.get_nowait()
+        assert item.priority == -Priority.EMERGENCY
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_write_samples_stereo_duplicates_channels() -> None:
+    """Stereo speaker receives duplicated mono samples."""
+    voice_cfg = VoiceConfig(
+        enabled=True,
+        cooldown_s=0.1,
+        tts_sample_rate=22050,
+    )
+    speaker_cfg = SpeakerConfig(sample_rate=22050, chunk_size=4, channels=2)
+    speaker = MockSpeaker(speaker_cfg)
+    tts = MockTTS(voice_cfg)
+    engine = RockyVoiceEngine(voice_cfg, speaker, tts)
+    await engine.start()
+    try:
+        # 4 mono samples -> 8 stereo samples -> 1 chunk of 8 (4*2)
+        mono = np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32)
+        await engine._write_samples(mono)
+        chunks = speaker.get_written_chunks()
+        assert len(chunks) == 1
+        # Each mono sample duplicated: [0.1, 0.1, 0.2, 0.2, 0.3, 0.3, 0.4, 0.4]
+        expected = np.array([0.1, 0.1, 0.2, 0.2, 0.3, 0.3, 0.4, 0.4], dtype=np.float32)
+        np.testing.assert_allclose(chunks[0], expected)
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_worker_timeout_continues_loop() -> None:
+    """Worker handles queue.get timeout without crashing."""
+    # Use very short poll timeout so it triggers quickly
+    voice_cfg = VoiceConfig(
+        enabled=True,
+        cooldown_s=0.1,
+        queue_size=16,
+        tts_sample_rate=22050,
+        queue_poll_timeout_s=0.05,
+    )
+    speaker_cfg = SpeakerConfig(sample_rate=22050, chunk_size=1024)
+    speaker = MockSpeaker(speaker_cfg)
+    tts = MockTTS(voice_cfg)
+    engine = RockyVoiceEngine(voice_cfg, speaker, tts)
+    await engine.start()
+    try:
+        # Let the worker spin through a few timeout cycles
+        await asyncio.sleep(0.2)
+        # Then queue something — it should still be processed
+        await engine.speak("startup")
+        await asyncio.sleep(0.3)
+        assert len(tts.get_calls()) == 1
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.asyncio
 async def test_speak_uses_valence_from_context() -> None:
     """Context valence controls rocky_transform intensity."""
     # Use phrase override with a plain sentence (no trailing !)

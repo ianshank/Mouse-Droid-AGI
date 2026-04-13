@@ -398,7 +398,11 @@ def build_cognitive_core(cfg: Settings) -> CognitiveCore:
         Fully configured ``CognitiveCore``.
     """
     from mousedroid.cognitive.cognitive_core import CognitiveCore
-    from mousedroid.cognitive.constitutional_rl import ConstitutionalChecker, PolicyMLP
+    from mousedroid.cognitive.constitutional_rl import (
+        ConstitutionalChecker,
+        ConstitutionalRLConfig,
+        PolicyMLP,
+    )
     from mousedroid.cognitive.metacognitive import MetacognitiveModel
 
     _log.info(
@@ -415,8 +419,16 @@ def build_cognitive_core(cfg: Settings) -> CognitiveCore:
     )
     core = CognitiveCore(
         bdi=bdi,
-        metacog=MetacognitiveModel(),
-        checker=ConstitutionalChecker(),
+        metacog=MetacognitiveModel(
+            n_capabilities=cfg.metacognitive.n_capabilities,
+            loop_score_scale=cfg.metacognitive.loop_score_scale,
+        ),
+        checker=ConstitutionalChecker(
+            config=ConstitutionalRLConfig(
+                speed_ceiling_mps=cfg.safety.max_velocity_mps,
+                battery_min_v=cfg.safety.battery_critical_v,
+            ),
+        ),
         policy=policy,
     )
     _log.info(

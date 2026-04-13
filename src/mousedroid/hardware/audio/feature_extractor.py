@@ -193,4 +193,4 @@ class AudioFeatureExtractor:
         if norm > 0:
             features = features / norm
 
-        return features
+        return features  # type: ignore[no-any-return]

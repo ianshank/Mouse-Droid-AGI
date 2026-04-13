@@ -113,7 +113,7 @@ def _trace_model(model: nn.Module, sample_input: Tensor) -> Any:
     Returns:
         Traced model via ``torch.jit.trace``.
     """
-    return torch.jit.trace(model, sample_input)
+    return torch.jit.trace(model, sample_input)  # type: ignore[no-untyped-call]
 
 
 class JetsonTensorRTCompiler:
@@ -233,7 +233,7 @@ class JetsonTensorRTCompiler:
             model.eval()
             # JIT trace accepts a tuple of inputs for multi-input models.
             trace_input = samples[0] if len(samples) == 1 else tuple(samples)
-            return await asyncio.to_thread(_trace_model, model, trace_input)
+            return await asyncio.to_thread(_trace_model, model, trace_input)  # type: ignore[arg-type]
 
         # torch2trt compilation is CPU-bound; offload to thread.
         def _compile_sync() -> Any:
@@ -293,7 +293,7 @@ class JetsonTensorRTCompiler:
 
         def _load_sync() -> Any:
             try:
-                return torch.jit.load(str(path))
+                return torch.jit.load(str(path))  # type: ignore[no-untyped-call]
             except Exception:
                 # weights_only=False is required to load torch2trt modules.
                 # SECURITY: only load from the local tensorrt_cache_dir which

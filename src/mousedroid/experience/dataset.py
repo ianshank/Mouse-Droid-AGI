@@ -85,7 +85,7 @@ class OfflineRLDataset:
 
         with self._env.begin() as txn:
             cursor = txn.cursor()
-            self._keys = [key for key, _ in cursor]
+            self._keys = [bytes(key) for key, _ in cursor]
         self._cached_transitions = None
         self._cached_terminal_gap_s = None
 
@@ -134,7 +134,7 @@ class OfflineRLDataset:
             data = txn.get(key)
             if data is None:
                 return None
-            return MouseDroidExperienceRecord.deserialize(data)
+            return MouseDroidExperienceRecord.deserialize(bytes(data))
 
     def get_transitions(
         self,
@@ -172,7 +172,7 @@ class OfflineRLDataset:
                 data = txn.get(key)
                 if data is None:
                     continue
-                rec = MouseDroidExperienceRecord.deserialize(data)
+                rec = MouseDroidExperienceRecord.deserialize(bytes(data))
                 if rec is not None:
                     records.append(rec)
 

@@ -94,7 +94,7 @@ class ExperienceLogger:
             data = txn.get(key)
             if data is None:
                 return None
-            return MouseDroidExperienceRecord.deserialize(data)
+            return MouseDroidExperienceRecord.deserialize(bytes(data))
 
     def count(self) -> int:
         """Return number of records in the database.
