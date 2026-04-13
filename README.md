@@ -446,18 +446,3 @@ MIT License — see [LICENSE](LICENSE) for details.
 | Camera | Jetson CSI / Raspberry Pi AI Camera (IMX500) | Onboard ML inference |
 | Distance | HC-SR04 Ultrasonic | GPIO pins 23/24 |
 | Battery | 3S LiPo 11.1V | Min cutoff 9.5V |
-
----
-
-## Next Steps
-
-- [x] Integrate CognitiveCore with orchestrator (BDI + metacognition + constitutional loops)
-- [x] Add HuggingFace weight download with retry/fallback in factory
-- [x] Achieve 85%+ test coverage (current: 97.34%)
-- [ ] Complete `llama-cpp-python` CUDA compilation on Jetson via multi-stage Docker build
-- [ ] Enable real hardware devices in `docker-compose.jetson.yml` (camera, GPIO, serial)
-- [ ] Enable `mousedroid-docker.service` for auto-start on boot
-- [ ] Run RSSM pretraining pipeline on Jetson GPU
-- [ ] Deploy trained BDI weights to HuggingFace Hub
-- [ ] Add Prometheus metrics endpoint for remote monitoring
-- [ ] Integrate USB microphone for voice command input
