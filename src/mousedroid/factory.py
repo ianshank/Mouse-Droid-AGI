@@ -39,6 +39,8 @@ if TYPE_CHECKING:
     from mousedroid.health.monitor import HealthMonitor
     from mousedroid.sensing.manager import SensorManager
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
+    from mousedroid.voice.mock_tts import MockTTS
+    from mousedroid.voice.tts import PiperTTS
 
 _log = get_logger(__name__)
 
@@ -223,11 +225,12 @@ def build_voice_engine(
         _log.warning("voice_engine_disabled_no_speaker")
         return None
 
+    tts: MockTTS | PiperTTS
     try:
         if cfg.mock_hardware:
             from mousedroid.voice.mock_tts import MockTTS
 
-            tts: MockTTS | PiperTTS = MockTTS(cfg.voice)
+            tts = MockTTS(cfg.voice)
         else:
             from mousedroid.voice.tts import PiperTTS
 

@@ -211,13 +211,14 @@ class RockyVoiceEngine:
         _log.info("rocky_voice_engine_started")
 
     async def stop(self) -> None:
-        """Stop the background worker, TTS, and speaker."""
+        """Stop the background worker, drain queued speech, TTS, and speaker."""
         self._running = False
         if self._worker_task is not None:
             self._worker_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._worker_task
             self._worker_task = None
+        await self._drain_queue()
         self._tts.stop()
         await self._speaker.stop()
         _log.info("rocky_voice_engine_stopped")
