@@ -442,3 +442,54 @@ def test_build_hailo_runtime_mock_returns_mock():
     cfg = Settings(mock_hardware=True, hailo=HailoConfig(enabled=True))
     rt = build_hailo_runtime(cfg)
     assert isinstance(rt, MockHailoRuntime)
+
+
+# ---------------------------------------------------------------------------
+# LiDAR factory tests
+# ---------------------------------------------------------------------------
+
+
+def test_build_lidar_none_config_returns_none():
+    """build_lidar returns None when settings.lidar is None."""
+    from mousedroid.factory import build_lidar
+
+    cfg = Settings(mock_hardware=True)  # lidar=None by default
+    assert build_lidar(cfg) is None
+
+
+def test_build_lidar_disabled_returns_none():
+    """build_lidar returns None when settings.lidar.enabled is False."""
+    from mousedroid.config.schema import LidarConfig
+    from mousedroid.factory import build_lidar
+
+    cfg = Settings(mock_hardware=True, lidar=LidarConfig(enabled=False))
+    assert build_lidar(cfg) is None
+
+
+def test_build_lidar_mock_hardware():
+    """build_lidar returns a non-None driver when mock_hardware and lidar configured."""
+    from mousedroid.config.schema import LidarConfig
+    from mousedroid.factory import build_lidar
+
+    cfg = Settings(mock_hardware=True, lidar=LidarConfig(enabled=True))
+    lidar = build_lidar(cfg)
+    assert lidar is not None
+
+
+def test_build_lidar_feature_extractor_enabled():
+    """build_lidar_feature_extractor returns LidarFeatureExtractor when lidar configured."""
+    from mousedroid.config.schema import LidarConfig
+    from mousedroid.factory import build_lidar_feature_extractor
+    from mousedroid.hardware.lidar.feature_extractor import LidarFeatureExtractor
+
+    cfg = Settings(mock_hardware=True, lidar=LidarConfig(enabled=True))
+    extractor = build_lidar_feature_extractor(cfg)
+    assert isinstance(extractor, LidarFeatureExtractor)
+
+
+def test_build_lidar_feature_extractor_disabled():
+    """build_lidar_feature_extractor returns None when lidar is None."""
+    from mousedroid.factory import build_lidar_feature_extractor
+
+    cfg = Settings(mock_hardware=True)  # lidar=None by default
+    assert build_lidar_feature_extractor(cfg) is None

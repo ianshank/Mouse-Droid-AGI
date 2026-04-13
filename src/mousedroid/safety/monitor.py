@@ -124,6 +124,24 @@ class MouseDroidSafetyMonitor:
             )
             is_emergency = True
 
+        # -- LiDAR 360-degree clearance ------------------------------------
+        lidar_min_dist_m = float("inf")
+        lidar_clearance_ok = True
+        lidar_features = observation.lidar_features
+        if lidar_features is not None and len(lidar_features) > 0:
+            # Features are normalised distances (min_in_sector / max_range).
+            # Convert to metres using the maximum observed feature range.
+            lidar_max_range = float(getattr(self._cfg, "lidar_max_range_m", 12.0))
+            lidar_min_dist_m = float(np.min(lidar_features)) * lidar_max_range
+            if lidar_min_dist_m < self._cfg.min_forward_clearance_m:
+                lidar_clearance_ok = False
+                _log.warning(
+                    "lidar_clearance_violation",
+                    lidar_min_dist_m=round(lidar_min_dist_m, 3),
+                    threshold_m=self._cfg.min_forward_clearance_m,
+                )
+                is_emergency = True
+
         # -- Human detection (from observation if available) ---------------
         human_detected = bool(getattr(observation, "human_detected", False))
         human_dist_m = float(getattr(observation, "human_dist_m", float("inf")))
@@ -140,6 +158,8 @@ class MouseDroidSafetyMonitor:
             is_emergency=is_emergency,
             human_detected=human_detected,
             human_dist_m=human_dist_m,
+            lidar_min_dist_m=lidar_min_dist_m,
+            lidar_clearance_ok=lidar_clearance_ok,
         )
         _log.debug(
             "safety_evaluate_result",

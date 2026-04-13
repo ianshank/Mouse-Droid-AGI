@@ -57,6 +57,9 @@ arm = [
 hailo = [
     "hailort>=4.18",
 ]
+lidar = [
+    "pyserial>=3.5",
+]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
@@ -144,6 +147,7 @@ omit = [
     "*/hardware/sensors/ultrasonic.py",
     "*/hardware/camera/imx500.py",
     "*/hardware/audio/usb_microphone.py",
+    "*/hardware/lidar/ld19_driver.py",
     "*/arm/hardware/so_arm100_driver.py",
 ]
 

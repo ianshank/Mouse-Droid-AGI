@@ -79,3 +79,35 @@ def test_audio_chunk_custom():
     audio = np.ones(512, dtype=np.float32) * 0.5
     obs = MouseDroidObservationBundle(_audio_chunk=audio)
     np.testing.assert_array_equal(obs.audio_chunk, audio)
+
+
+# ---------------------------------------------------------------------------
+# LiDAR fields
+# ---------------------------------------------------------------------------
+
+
+def test_lidar_features_default_none():
+    """Default bundle has lidar_features is None."""
+    obs = MouseDroidObservationBundle()
+    assert obs.lidar_features is None
+
+
+def test_lidar_features_custom():
+    """Construct with explicit lidar_features, verify property returns it."""
+    lidar = np.ones(36, dtype=np.float32)
+    obs = MouseDroidObservationBundle(_lidar_features=lidar)
+    assert obs.lidar_features is not None
+    np.testing.assert_array_equal(obs.lidar_features, lidar)
+
+
+def test_n_modalities_with_5_element_mask():
+    """Construct with 5-element valid_mask, verify n_modalities == 5."""
+    mask = np.ones(5, dtype=np.float32)
+    obs = MouseDroidObservationBundle(_valid_mask=mask)
+    assert obs.n_modalities == 5
+
+
+def test_backwards_compat_4_modalities():
+    """Default bundle still returns n_modalities == 4."""
+    obs = MouseDroidObservationBundle()
+    assert obs.n_modalities == 4

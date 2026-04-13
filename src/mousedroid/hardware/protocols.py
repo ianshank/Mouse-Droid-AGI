@@ -1,14 +1,17 @@
-"""Hardware abstraction protocols for vision, distance, and audio sensors.
+"""Hardware abstraction protocols for vision, distance, audio, and LiDAR sensors.
 
 All hardware interfaces use ``@runtime_checkable`` structural typing.
 """
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import numpy as np
 from numpy.typing import NDArray
+
+if TYPE_CHECKING:
+    from mousedroid.sensing.lidar_scan import LidarScan
 
 
 @runtime_checkable
@@ -39,7 +42,7 @@ class VisionProtocol(Protocol):
 
 @runtime_checkable
 class DistanceSensorProtocol(Protocol):
-    """Interface for all distance sensors (HC-SR04, future LiDAR, etc)."""
+    """Interface for single-point distance sensors (HC-SR04, etc)."""
 
     async def read_distance_m(self) -> float:
         """Read distance measurement.
@@ -129,4 +132,45 @@ class SpeakerProtocol(Protocol):
 
     async def stop(self) -> None:
         """Stop audio playback stream."""
+        ...
+
+
+@runtime_checkable
+class LidarProtocol(Protocol):
+    """Interface for 2D LiDAR scanners (FHL-LD19, etc).
+
+    Unlike :class:`DistanceSensorProtocol` (single-point), LiDAR returns
+    a full 360-degree scan per read.
+    """
+
+    async def read_scan(self) -> LidarScan:
+        """Read a full 360-degree scan.
+
+        Returns:
+            A :class:`LidarScan` containing angles, distances, and
+            confidences for every measured point in one rotation.
+        """
+        ...
+
+    @property
+    def max_range_m(self) -> float:
+        """Maximum detection range in metres."""
+        ...
+
+    @property
+    def min_range_m(self) -> float:
+        """Minimum detection range in metres."""
+        ...
+
+    @property
+    def scan_frequency_hz(self) -> float:
+        """Nominal scan rotation frequency in Hz."""
+        ...
+
+    async def start(self) -> None:
+        """Start LiDAR motor and data acquisition."""
+        ...
+
+    async def stop(self) -> None:
+        """Stop LiDAR motor and data acquisition."""
         ...

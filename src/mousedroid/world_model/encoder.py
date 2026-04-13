@@ -16,19 +16,21 @@ class MultimodalEncoder(nn.Module):
     """Project and fuse heterogeneous sensor streams into a single embedding.
 
     Each modality is linearly projected then gated by the corresponding slice
-    of *valid_mask* before concatenation and fusion.  Audio is optional and
-    controlled by ``cfg.audio_dim`` — when zero the encoder behaves identically
-    to the original 3-modality version for full backwards compatibility.
+    of *valid_mask* before concatenation and fusion.  Audio and LiDAR are
+    optional and controlled by ``cfg.audio_dim`` / ``cfg.lidar_dim`` — when
+    zero the encoder behaves identically to the original 3-modality version
+    for full backwards compatibility.
 
     Args:
         cfg: Model configuration with all dimension parameters.
     """
 
-    # Indices into the valid_mask: vision, ultrasonic, motor, audio.
+    # Indices into the valid_mask: vision, ultrasonic, motor, audio, lidar.
     _VISION_IDX = 0
     _ULTRASONIC_IDX = 1
     _MOTOR_IDX = 2
     _AUDIO_IDX = 3
+    _LIDAR_IDX = 4
 
     def __init__(self, cfg: ModelConfig) -> None:
         super().__init__()
@@ -37,10 +39,14 @@ class MultimodalEncoder(nn.Module):
         self.motor_proj = nn.Linear(cfg.motor_state_dim, cfg.motor_proj_dim)
 
         self._audio_enabled = cfg.audio_dim > 0 and cfg.audio_proj_dim > 0
+        self._lidar_enabled = cfg.lidar_dim > 0 and cfg.lidar_proj_dim > 0
         fused_dim = cfg.vision_proj_dim + cfg.ultrasonic_proj_dim + cfg.motor_proj_dim
         if self._audio_enabled:
             self.audio_proj = nn.Linear(cfg.audio_dim, cfg.audio_proj_dim)
             fused_dim += cfg.audio_proj_dim
+        if self._lidar_enabled:
+            self.lidar_proj = nn.Linear(cfg.lidar_dim, cfg.lidar_proj_dim)
+            fused_dim += cfg.lidar_proj_dim
 
         self.fusion = nn.Linear(fused_dim, cfg.obs_dim)
         self.act = nn.ReLU()
@@ -52,6 +58,8 @@ class MultimodalEncoder(nn.Module):
             motor_proj=cfg.motor_proj_dim,
             audio_proj=cfg.audio_proj_dim if self._audio_enabled else 0,
             audio_enabled=self._audio_enabled,
+            lidar_proj=cfg.lidar_proj_dim if self._lidar_enabled else 0,
+            lidar_enabled=self._lidar_enabled,
             fused_dim=fused_dim,
             obs_dim=cfg.obs_dim,
         )
@@ -63,6 +71,7 @@ class MultimodalEncoder(nn.Module):
         motor_state: Tensor,
         valid_mask: Tensor,
         audio: Tensor | None = None,
+        lidar: Tensor | None = None,
     ) -> Tensor:
         """Encode multimodal observation into a single embedding.
 
@@ -71,9 +80,11 @@ class MultimodalEncoder(nn.Module):
             ultrasonic: Ultrasonic reading, shape ``(batch, ultrasonic_dim)``.
             motor_state: Motor state, shape ``(batch, motor_state_dim)``.
             valid_mask: Per-modality validity, shape ``(batch, n_modalities)``.
-                Supports both 3-element (legacy) and 4-element masks.
+                Supports 3-element (legacy), 4-element, and 5-element masks.
             audio: Optional audio features, shape ``(batch, audio_dim)``.
                 Ignored when audio is disabled (``audio_dim=0``).
+            lidar: Optional LiDAR features, shape ``(batch, lidar_dim)``.
+                Ignored when LiDAR is disabled (``lidar_dim=0``).
 
         Returns:
             Fused observation embedding, shape ``(batch, obs_dim)``.
@@ -105,6 +116,23 @@ class MultimodalEncoder(nn.Module):
             if valid_mask.shape[-1] > self._AUDIO_IDX:
                 a = a * valid_mask[:, self._AUDIO_IDX : self._AUDIO_IDX + 1]
             parts.append(a)
+
+        if self._lidar_enabled:
+            if lidar is not None:
+                el = self.act(self.lidar_proj(lidar))
+            else:
+                # LiDAR enabled but no data provided — use zeros.
+                batch_size = vision.shape[0]
+                el = torch.zeros(
+                    batch_size,
+                    self.lidar_proj.out_features,
+                    device=vision.device,
+                    dtype=vision.dtype,
+                )
+            # Gate by LiDAR validity if mask has enough elements.
+            if valid_mask.shape[-1] > self._LIDAR_IDX:
+                el = el * valid_mask[:, self._LIDAR_IDX : self._LIDAR_IDX + 1]
+            parts.append(el)
 
         fused: Tensor = self.fusion(torch.cat(parts, dim=-1))
         return fused

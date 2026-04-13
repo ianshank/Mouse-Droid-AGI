@@ -251,3 +251,38 @@ def test_backwards_compatible_default_loop_time():
     # 201ms should trigger emergency
     ctx2 = m.evaluate(obs, loop_time_ms=201.0)
     assert ctx2.is_emergency is True
+
+
+# -- LiDAR clearance -------------------------------------------------------
+
+
+def test_lidar_clearance_violation_triggers_emergency():
+    """Observation with lidar_features where min < threshold triggers emergency."""
+    m = _make_monitor(min_forward_clearance_m=0.20)
+    # lidar_features are normalised distances (dist / max_range).
+    # With default lidar_max_range_m=12.0, a feature value of 0.01
+    # means 0.12 m which is below the 0.20 m threshold.
+    lidar_feats = np.ones(36, dtype=np.float32)
+    lidar_feats[10] = 0.01  # one sector very close
+    obs = MouseDroidObservationBundle(
+        _distance_m=2.0,
+        _motor_state=np.array([0.0, 0.0, 0.0, 12.0], dtype=np.float32),
+        _valid_mask=np.array([1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32),
+        _lidar_features=lidar_feats,
+    )
+    ctx = m.evaluate(obs, loop_time_ms=10.0)
+    assert ctx.is_emergency is True
+    assert ctx.lidar_clearance_ok is False
+
+
+def test_lidar_features_none_no_emergency():
+    """Observation without lidar_features does not crash or trigger emergency."""
+    m = _make_monitor()
+    obs = MouseDroidObservationBundle(
+        _distance_m=2.0,
+        _motor_state=np.array([0.0, 0.0, 0.0, 12.0], dtype=np.float32),
+        _valid_mask=np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32),
+    )
+    ctx = m.evaluate(obs, loop_time_ms=10.0)
+    assert ctx.is_emergency is False
+    assert ctx.lidar_clearance_ok is True

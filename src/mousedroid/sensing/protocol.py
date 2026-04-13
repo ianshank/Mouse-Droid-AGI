@@ -41,6 +41,11 @@ class ObservationProtocol(Protocol):
         ...
 
     @property
+    def lidar_features(self) -> NDArray[np.float32] | None:
+        """LiDAR sector-binned features, shape ``(lidar_dim,)``, or ``None``."""
+        ...
+
+    @property
     def valid_mask(self) -> NDArray[np.float32]:
         """Per-sensor validity scores, shape ``(n_modalities,)``."""
         ...

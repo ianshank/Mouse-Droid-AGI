@@ -241,3 +241,37 @@ def test_output_differentiable_with_audio() -> None:
     out = enc(vision, ultrasonic, motor, mask, audio=audio)
     out.sum().backward()
     assert audio.grad is not None
+
+
+# ---------------------------------------------------------------------------
+# LiDAR-enabled tests (5-modality)
+# ---------------------------------------------------------------------------
+
+
+def test_lidar_disabled_backwards_compat() -> None:
+    """ModelConfig with lidar_dim=0, verify forward still works with 4-element mask."""
+    cfg = ModelConfig(lidar_dim=0)
+    enc = MultimodalEncoder(cfg)
+    batch = 2
+    vision = torch.randn(batch, cfg.vision_dim)
+    ultrasonic = torch.randn(batch, cfg.ultrasonic_dim)
+    motor = torch.randn(batch, cfg.motor_state_dim)
+    mask = torch.ones(batch, 4)
+    out = enc(vision, ultrasonic, motor, mask)
+    assert out.shape == (batch, cfg.obs_dim)
+    assert torch.isfinite(out).all()
+
+
+def test_lidar_enabled_forward() -> None:
+    """ModelConfig with lidar_dim=36, lidar_proj_dim=16, verify forward with lidar tensor."""
+    cfg = ModelConfig(lidar_dim=36, lidar_proj_dim=16)
+    enc = MultimodalEncoder(cfg)
+    batch = 4
+    vision = torch.randn(batch, cfg.vision_dim)
+    ultrasonic = torch.randn(batch, cfg.ultrasonic_dim)
+    motor = torch.randn(batch, cfg.motor_state_dim)
+    lidar_tensor = torch.randn(batch, cfg.lidar_dim)
+    mask = torch.ones(batch, 5)
+    out = enc(vision, ultrasonic, motor, mask, lidar=lidar_tensor)
+    assert out.shape == (batch, cfg.obs_dim)
+    assert torch.isfinite(out).all()

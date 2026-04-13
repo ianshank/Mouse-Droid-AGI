@@ -14,6 +14,7 @@ from mousedroid.efficiency.tensorrt import TensorRTCompilerProtocol
 from mousedroid.hardware.protocols import (
     AudioProtocol,
     DistanceSensorProtocol,
+    LidarProtocol,
     SpeakerProtocol,
     VisionProtocol,
 )
@@ -538,6 +539,7 @@ def build_sensor_manager(
     distance: DistanceSensorProtocol,
     esp32: ESP32CommProtocol,
     microphone: AudioProtocol | None = None,
+    lidar: LidarProtocol | None = None,
 ) -> SensorManager:
     """Build sensor manager for aggregated sensor reads.
 
@@ -547,11 +549,13 @@ def build_sensor_manager(
         distance: Distance sensor protocol.
         esp32: ESP32 communication protocol.
         microphone: Optional audio protocol.
+        lidar: Optional LiDAR protocol.
 
     Returns:
         Configured ``SensorManager``.
     """
     from mousedroid.hardware.audio.feature_extractor import AudioFeatureExtractor
+    from mousedroid.hardware.lidar.feature_extractor import LidarFeatureExtractor
     from mousedroid.sensing.manager import SensorManager
 
     audio_extractor = build_audio_feature_extractor(cfg)
@@ -559,9 +563,15 @@ def build_sensor_manager(
         audio_extractor if isinstance(audio_extractor, AudioFeatureExtractor) else None
     )
 
+    lidar_extractor = build_lidar_feature_extractor(cfg)
+    typed_lidar_extractor: LidarFeatureExtractor | None = (
+        lidar_extractor if isinstance(lidar_extractor, LidarFeatureExtractor) else None
+    )
+
     _log.info(
         "sensor_manager_built",
         audio_features_enabled=typed_extractor is not None,
+        lidar_enabled=lidar is not None,
     )
     return SensorManager(
         vision=vision,
@@ -570,6 +580,8 @@ def build_sensor_manager(
         cfg=cfg,
         microphone=microphone,
         audio_feature_extractor=typed_extractor,
+        lidar=lidar,
+        lidar_feature_extractor=typed_lidar_extractor,
     )
 
 
@@ -589,6 +601,54 @@ def build_audio_feature_extractor(cfg: Settings) -> object | None:
 
     extractor = AudioFeatureExtractor(cfg.microphone)
     _log.info("audio_feature_extractor_built", feature_dim=extractor.feature_dim)
+    return extractor
+
+
+def build_lidar(cfg: Settings) -> LidarProtocol | None:
+    """Build LiDAR driver based on config.
+
+    Returns ``MockLidar`` when ``mock_hardware`` is set, otherwise wraps
+    a real ``LD19LidarDriver`` with circuit breaker + retry.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        LiDAR driver or ``None`` if LiDAR is disabled.
+    """
+    if cfg.lidar is None or not cfg.lidar.enabled:
+        return None
+
+    if cfg.mock_hardware:
+        from mousedroid.hardware.lidar.mock_lidar import MockLidar
+
+        _log.info("lidar_driver_mock_built")
+        return MockLidar(cfg.lidar)
+
+    from mousedroid.hardware.lidar.ld19_driver import LD19LidarDriver
+    from mousedroid.resilience.resilient_lidar import ResilientLidarDriver
+
+    inner = LD19LidarDriver(cfg.lidar)
+    _log.info("lidar_driver_built", port=cfg.lidar.serial_port)
+    return ResilientLidarDriver(inner, cfg.retry, cfg.circuit_breaker)
+
+
+def build_lidar_feature_extractor(cfg: Settings) -> object | None:
+    """Build LiDAR feature extractor if LiDAR is configured.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        ``LidarFeatureExtractor`` or ``None`` if LiDAR is disabled.
+    """
+    if cfg.lidar is None or not cfg.lidar.enabled:
+        return None
+
+    from mousedroid.hardware.lidar.feature_extractor import LidarFeatureExtractor
+
+    extractor = LidarFeatureExtractor(cfg.lidar)
+    _log.info("lidar_feature_extractor_built", feature_dim=extractor.feature_dim)
     return extractor
 
 
