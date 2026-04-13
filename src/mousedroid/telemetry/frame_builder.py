@@ -41,6 +41,11 @@ def build_telemetry_frame(
     audio_arr = observation.audio_chunk
     audio_rms = float(np.sqrt(np.mean(audio_arr * audio_arr)))
 
+    lidar_min_dist_m: float | None = None
+    lidar_features = observation.lidar_features
+    if lidar_features is not None and len(lidar_features) > 0:
+        lidar_min_dist_m = float(np.min(lidar_features))
+
     motor = observation.motor_state
     battery_v = (
         float(motor[MOTOR_STATE_BATTERY_INDEX]) if motor.size > MOTOR_STATE_BATTERY_INDEX else 0.0
@@ -58,7 +63,9 @@ def build_telemetry_frame(
             "is_emergency": safety_ctx.is_emergency,
             "violations": list(safety_ctx.law_violations),
             "forward_clearance_ok": safety_ctx.forward_clearance_ok,
+            "lidar_clearance_ok": safety_ctx.lidar_clearance_ok,
         },
+        lidar_min_dist_m=lidar_min_dist_m,
         loop_time_ms=loop_time_ms,
         tick_count=tick_count,
     )
