@@ -134,3 +134,62 @@ async def test_stop_with_microphone():
     mic.stop = AsyncMock()
     await mgr.stop()
     mic.stop.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# LiDAR integration tests
+# ---------------------------------------------------------------------------
+
+
+def _make_manager_with_lidar():
+    """Create a SensorManager with a MockLidar attached."""
+    from mousedroid.config.schema import LidarConfig
+    from mousedroid.hardware.lidar.mock_lidar import MockLidar
+
+    lidar_cfg = LidarConfig()
+    cfg = Settings(mock_hardware=True, lidar=lidar_cfg)
+
+    vision = AsyncMock()
+    vision.capture_features = AsyncMock(
+        return_value=np.ones(cfg.camera.feature_dim, dtype=np.float32),
+    )
+    vision.start = AsyncMock()
+    vision.stop = AsyncMock()
+
+    distance = AsyncMock()
+    distance.read_distance_m = AsyncMock(return_value=1.5)
+    distance.max_range_m = 4.0
+
+    esp32 = AsyncMock()
+    esp32.read_encoders = AsyncMock(return_value=EncoderReading())
+    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+
+    lidar = MockLidar(lidar_cfg)
+
+    mgr = SensorManager(vision, distance, esp32, cfg, lidar=lidar)
+    return mgr, lidar
+
+
+async def test_read_all_with_lidar_produces_5_element_mask():
+    """SensorManager with LiDAR produces a 5-element valid_mask."""
+    mgr, _ = _make_manager_with_lidar()
+    bundle = await mgr.read_all()
+    assert bundle.valid_mask.shape == (5,)
+    assert bundle.lidar_features is not None
+
+
+async def test_read_all_without_lidar_backwards_compat():
+    """SensorManager without LiDAR produces a 4-element mask and None lidar_features."""
+    mgr, _, _, _ = _make_manager()
+    bundle = await mgr.read_all()
+    assert bundle.valid_mask.shape == (4,)
+    assert bundle.lidar_features is None
+
+
+async def test_start_stop_with_lidar():
+    """Verify lidar.start() and lidar.stop() are called by SensorManager."""
+    mgr, lidar = _make_manager_with_lidar()
+    await mgr.start()
+    assert lidar.started is True
+    await mgr.stop()
+    assert lidar.started is False

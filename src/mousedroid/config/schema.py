@@ -273,6 +273,29 @@ class JetsonConfig(BaseModel):
     )
 
 
+class LidarConfig(BaseModel):
+    """FHL-LD19 2D LiDAR configuration."""
+
+    enabled: bool = Field(True, description="Enable LiDAR sensor")
+    serial_port: str = Field("/dev/ttyUSB1", description="Serial port for LD19")
+    baud_rate: int = Field(230400, gt=0, description="UART baud rate")
+    max_range_m: float = Field(12.0, gt=0, description="Maximum detection range (m)")
+    min_range_m: float = Field(0.15, gt=0, description="Minimum detection range (m)")
+    scan_frequency_hz: float = Field(10.0, gt=0, description="Scan frequency (Hz)")
+    min_confidence: int = Field(0, ge=0, le=255, description="Minimum point confidence [0-255]")
+    read_timeout_s: float = Field(0.2, gt=0, description="Serial read timeout (s)")
+    n_sectors: int = Field(36, gt=0, description="Number of angular sectors for binning")
+    feature_dim: int = Field(36, gt=0, description="Output feature vector dimension")
+
+    @model_validator(mode="after")
+    def _range_order(self) -> Self:
+        """Validate max_range_m > min_range_m."""
+        if self.max_range_m <= self.min_range_m:
+            msg = "max_range_m must be > min_range_m"
+            raise ValueError(msg)
+        return self
+
+
 class LearningConfig(BaseModel):
     """Continual learning configuration (Pillar 3)."""
 
@@ -328,6 +351,7 @@ class LoopConfig(BaseModel):
     control_hz: float = Field(30.0, gt=0, description="Motor command rate (Hz)")
     planning_hz: float = Field(10.0, gt=0, description="MCTS planning rate (Hz)")
     audio_hz: float = Field(16.0, gt=0, description="Microphone capture rate (Hz)")
+    lidar_hz: float = Field(10.0, gt=0, description="LiDAR scan rate (Hz)")
 
 
 class MetacognitiveConfig(BaseModel):
@@ -478,6 +502,8 @@ class ModelConfig(BaseModel):
     motor_proj_dim: int = Field(32, gt=0, description="Motor state projection dim")
     audio_dim: int = Field(0, ge=0, description="Audio feature input dim (0=disabled)")
     audio_proj_dim: int = Field(32, ge=0, description="Audio projection dim (0=disabled)")
+    lidar_dim: int = Field(0, ge=0, description="LiDAR feature input dim (0=disabled)")
+    lidar_proj_dim: int = Field(32, ge=0, description="LiDAR projection dim (0=disabled)")
     belief_dim: int = Field(128, gt=0, description="BDI belief latent dim")
     desire_dim: int = Field(64, gt=0, description="BDI desire latent dim")
     intention_classes: int = Field(10, gt=0, description="BDI intention classes")
@@ -1184,6 +1210,10 @@ class Settings(BaseSettings):
     microphone: MicrophoneConfig | None = Field(
         None,
         description="USB microphone config (None=disabled)",
+    )
+    lidar: LidarConfig | None = Field(
+        None,
+        description="FHL-LD19 2D LiDAR config (None=disabled)",
     )
     speaker: SpeakerConfig | None = Field(
         None,

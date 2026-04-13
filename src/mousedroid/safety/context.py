@@ -36,5 +36,9 @@ class SafetyContext:
     commanded_action: tuple[float, ...] | None = None
     law_violations: tuple[str, ...] = ()
 
+    # LiDAR 360-degree obstacle awareness
+    lidar_min_dist_m: float = math.inf
+    lidar_clearance_ok: bool = True
+
     # Computed
     is_emergency: bool = False

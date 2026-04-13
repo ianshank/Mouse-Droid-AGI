@@ -43,6 +43,7 @@ class TelemetryFrame:
     battery_voltage: float = 0.0
     safety: dict[str, Any] = field(default_factory=dict)
     health: dict[str, Any] = field(default_factory=dict)
+    lidar_min_dist_m: float | None = None
     loop_time_ms: float = 0.0
     tick_count: int = 0
 

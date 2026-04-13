@@ -28,7 +28,13 @@ if TYPE_CHECKING:
     from mousedroid.comms.protocol import ESP32CommProtocol
     from mousedroid.config.schema import Settings
     from mousedroid.hardware.audio.feature_extractor import AudioFeatureExtractor
-    from mousedroid.hardware.protocols import AudioProtocol, DistanceSensorProtocol, VisionProtocol
+    from mousedroid.hardware.lidar.feature_extractor import LidarFeatureExtractor
+    from mousedroid.hardware.protocols import (
+        AudioProtocol,
+        DistanceSensorProtocol,
+        LidarProtocol,
+        VisionProtocol,
+    )
 
 T = TypeVar("T")
 
@@ -49,6 +55,8 @@ class SensorManager:
         cfg: Root application settings.
         microphone: Optional audio driver implementing :class:`AudioProtocol`.
         audio_feature_extractor: Optional audio feature extractor for mel features.
+        lidar: Optional LiDAR driver implementing :class:`LidarProtocol`.
+        lidar_feature_extractor: Optional LiDAR feature extractor.
     """
 
     def __init__(
@@ -59,6 +67,8 @@ class SensorManager:
         cfg: Settings,
         microphone: AudioProtocol | None = None,
         audio_feature_extractor: AudioFeatureExtractor | None = None,
+        lidar: LidarProtocol | None = None,
+        lidar_feature_extractor: LidarFeatureExtractor | None = None,
     ) -> None:
         self._vision = vision
         self._distance = distance
@@ -66,6 +76,8 @@ class SensorManager:
         self._cfg = cfg
         self._microphone = microphone
         self._audio_feature_extractor = audio_feature_extractor
+        self._lidar = lidar
+        self._lidar_feature_extractor = lidar_feature_extractor
 
         # Ring buffer sizes derived from config loop rates.
         vision_buf_size = max(1, int(cfg.loop.perception_hz))
@@ -77,6 +89,21 @@ class SensorManager:
         self._distance_buf: deque[float] = deque(maxlen=ultrasonic_buf_size)
         self._motor_buf: deque[NDArray[np.float32]] = deque(maxlen=motor_buf_size)
         self._audio_buf: deque[NDArray[np.float32]] = deque(maxlen=audio_buf_size)
+
+        # LiDAR ring buffer (only allocated when lidar is present).
+        if lidar is not None:
+            lidar_buf_size = max(1, int(cfg.loop.lidar_hz))
+            self._lidar_buf: deque[NDArray[np.float32] | None] = deque(maxlen=lidar_buf_size)
+        else:
+            self._lidar_buf = deque(maxlen=1)
+
+        # Determine lidar feature size for zero-fill on failure.
+        if lidar_feature_extractor is not None:
+            self._lidar_feature_dim = lidar_feature_extractor.feature_dim
+        elif cfg.lidar is not None:
+            self._lidar_feature_dim = cfg.lidar.feature_dim
+        else:
+            self._lidar_feature_dim = 0
 
         # Determine audio output size for zero-fill on failure.
         # When a feature extractor is present the output dimension changes.
@@ -94,6 +121,7 @@ class SensorManager:
             motor_buf=motor_buf_size,
             audio_buf=audio_buf_size,
             microphone_enabled=microphone is not None,
+            lidar_enabled=lidar is not None,
         )
 
     # -- Lifecycle ---------------------------------------------------------
@@ -103,12 +131,16 @@ class SensorManager:
         await self._vision.start()
         if self._microphone is not None:
             await self._microphone.start()
+        if self._lidar is not None:
+            await self._lidar.start()
 
     async def stop(self) -> None:
         """Stop all sensor hardware."""
         await self._vision.stop()
         if self._microphone is not None:
             await self._microphone.stop()
+        if self._lidar is not None:
+            await self._lidar.stop()
 
     # -- Public API --------------------------------------------------------
 
@@ -129,28 +161,49 @@ class SensorManager:
         distance_task = asyncio.create_task(self._safe_distance_read())
         motor_task = asyncio.create_task(self._safe_motor_read())
         audio_task = asyncio.create_task(self._safe_audio_read())
+        lidar_task = asyncio.create_task(self._safe_lidar_read())
 
         vision_result, vision_ok = await vision_task
         distance_result, distance_ok = await distance_task
         motor_result, motor_ok = await motor_task
         audio_result, audio_ok = await audio_task
+        lidar_result, lidar_ok = await lidar_task
 
-        # Build validity mask: vision=0, ultrasonic=1, motor=2, audio=3.
-        valid_mask = np.array(
-            [float(vision_ok), float(distance_ok), float(motor_ok), float(audio_ok)],
-            dtype=np.float32,
-        )
+        # Build validity mask: vision=0, ultrasonic=1, motor=2, audio=3,
+        # lidar=4 (only when lidar is configured).
+        if self._lidar is not None:
+            valid_mask = np.array(
+                [
+                    float(vision_ok),
+                    float(distance_ok),
+                    float(motor_ok),
+                    float(audio_ok),
+                    float(lidar_ok),
+                ],
+                dtype=np.float32,
+            )
+        else:
+            valid_mask = np.array(
+                [float(vision_ok), float(distance_ok), float(motor_ok), float(audio_ok)],
+                dtype=np.float32,
+            )
 
         # Store in ring buffers.
         self._vision_buf.append(vision_result)
         self._distance_buf.append(distance_result)
         self._motor_buf.append(motor_result)
         self._audio_buf.append(audio_result)
+        if self._lidar is not None:
+            self._lidar_buf.append(lidar_result)
+
+        valid_count = int(vision_ok) + int(distance_ok) + int(motor_ok) + int(audio_ok)
+        if self._lidar is not None:
+            valid_count += int(lidar_ok)
 
         _log.debug(
             "read_all_complete",
             elapsed_ms=(time.monotonic() - t0) * MILLISECONDS_PER_SECOND,
-            valid_sensors=int(vision_ok) + int(distance_ok) + int(motor_ok) + int(audio_ok),
+            valid_sensors=valid_count,
         )
 
         return MouseDroidObservationBundle(
@@ -159,6 +212,7 @@ class SensorManager:
             _distance_m=distance_result,
             _motor_state=motor_result,
             _audio_chunk=audio_result,
+            _lidar_features=lidar_result if self._lidar is not None else None,
             _valid_mask=valid_mask,
         )
 
@@ -251,3 +305,29 @@ class SensorManager:
                 _log.warning("audio_feature_extraction_failed", exc_info=True)
                 return np.zeros(self._audio_chunk_size, dtype=np.float32), False
         return result, ok
+
+    async def _safe_lidar_read(
+        self,
+    ) -> tuple[NDArray[np.float32] | None, bool]:
+        """Attempt a LiDAR scan read with optional feature extraction.
+
+        When a :class:`LidarFeatureExtractor` is configured, raw scans are
+        transformed into sector-binned distance features.  Returns ``None``
+        when LiDAR is not configured.
+        """
+        if self._lidar is None:
+            return None, False
+
+        default: NDArray[np.float32] | None = None
+        if self._lidar_feature_dim > 0:
+            default = np.ones(self._lidar_feature_dim, dtype=np.float32)
+
+        try:
+            scan = await self._lidar.read_scan()
+            if self._lidar_feature_extractor is not None:
+                features = self._lidar_feature_extractor.extract(scan)
+                return features, True
+            return default, True
+        except Exception:
+            _log.warning("lidar_read_failed", exc_info=True)
+            return default, False

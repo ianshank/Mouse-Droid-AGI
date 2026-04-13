@@ -34,6 +34,7 @@ class MouseDroidObservationBundle:
         * ``[1]`` — ultrasonic
         * ``[2]`` — motor / ESP32
         * ``[3]`` — audio / microphone
+        * ``[4]`` — LiDAR (when present)
 
     Implements :class:`~mousedroid.sensing.protocol.ObservationProtocol`.
     """
@@ -58,6 +59,9 @@ class MouseDroidObservationBundle:
         default_factory=lambda: np.zeros(DEFAULT_AUDIO_CHUNK_SIZE, dtype=np.float32),
     )
     """Audio samples, shape ``(chunk_size * channels,)``."""
+
+    _lidar_features: NDArray[np.float32] | None = None
+    """LiDAR sector-binned features, shape ``(lidar_dim,)``, or ``None``."""
 
     _valid_mask: NDArray[np.float32] = field(
         default_factory=lambda: np.ones(N_SENSOR_MODALITIES, dtype=np.float32),
@@ -92,6 +96,11 @@ class MouseDroidObservationBundle:
         return self._audio_chunk
 
     @property
+    def lidar_features(self) -> NDArray[np.float32] | None:
+        """LiDAR sector-binned features, or ``None`` if LiDAR not configured."""
+        return self._lidar_features
+
+    @property
     def valid_mask(self) -> NDArray[np.float32]:
         """Per-sensor validity scores, shape ``(n_modalities,)``."""
         return self._valid_mask
@@ -99,4 +108,4 @@ class MouseDroidObservationBundle:
     @property
     def n_modalities(self) -> int:
         """Number of sensor modalities tracked by valid_mask."""
-        return N_SENSOR_MODALITIES
+        return len(self._valid_mask)

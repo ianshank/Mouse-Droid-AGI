@@ -26,7 +26,19 @@ DEFAULT_BATTERY_VOLTAGE: float = 12.6
 """Default battery voltage fallback when sensor data is unavailable."""
 
 N_SENSOR_MODALITIES: int = 4
-"""Number of sensor modalities tracked: vision, ultrasonic, motor, audio."""
+"""Number of base sensor modalities tracked: vision, ultrasonic, motor, audio."""
+
+N_SENSOR_MODALITIES_WITH_LIDAR: int = 5
+"""Number of sensor modalities when LiDAR is active (adds slot [4])."""
+
+DEFAULT_LIDAR_FEATURE_DIM: int = 36
+"""Default LiDAR feature vector dimension (36 sectors of 10 degrees)."""
+
+DEFAULT_LIDAR_MAX_RANGE_M: float = 12.0
+"""Default FHL-LD19 maximum detection range in metres."""
+
+DEFAULT_LIDAR_MIN_RANGE_M: float = 0.15
+"""Default FHL-LD19 minimum detection range in metres."""
 
 MILLISECONDS_PER_SECOND: float = 1000.0
 """Conversion factor from seconds to milliseconds."""
@@ -147,6 +159,27 @@ TELEMETRY_QUEUE_TIMEOUT_S: float = 1.0
 
 HC_SR04_TRIGGER_PULSE_S: float = 0.00001
 """HC-SR04 ultrasonic trigger pulse duration (10 microseconds)."""
+
+LIDAR_HEADER_BYTE: int = 0x54
+"""FHL-LD19 frame header byte."""
+
+LIDAR_POINTS_PER_FRAME: int = 12
+"""Number of measurement points per FHL-LD19 data frame."""
+
+LIDAR_DEFAULT_BAUD_RATE: int = 230400
+"""Default serial baud rate for the FHL-LD19 LiDAR."""
+
+LIDAR_FRAME_SIZE: int = 47
+"""Total byte length of one FHL-LD19 data frame."""
+
+LIDAR_VER_LEN_BYTE: int = 0x2C
+"""FHL-LD19 version/length byte expected after header."""
+
+LIDAR_ANGLE_SCALE: float = 0.01
+"""Scale factor to convert raw LD19 angle values to degrees."""
+
+LIDAR_FULL_ROTATION_DEG: float = 360.0
+"""Full rotation in degrees for scan assembly boundary detection."""
 
 GB_TO_BYTES: int = 1_073_741_824
 """Conversion factor from gigabytes to bytes."""

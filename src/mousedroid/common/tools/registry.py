@@ -189,11 +189,25 @@ async def _mic_diagnostics() -> dict[str, str]:
                 _log.debug("mic_diagnostics_terminate_failed", exc_info=True)  # pragma: no cover
 
 
+async def _lidar_diagnostics() -> dict[str, str]:
+    """Run FHL-LD19 LiDAR diagnostics.
+
+    Returns:
+        LiDAR diagnostic status including pyserial availability.
+    """
+    try:
+        import serial as _serial  # noqa: F401
+    except ImportError:
+        return {"status": "pyserial_not_installed"}
+
+    return {"status": "ok", "driver": "FHL-LD19"}
+
+
 def create_default_registry() -> ToolRegistry:
     """Create a ToolRegistry pre-populated with built-in tools.
 
     Returns:
-        Registry with all 9 default tools registered.
+        Registry with all 10 default tools registered.
     """
     registry = ToolRegistry()
     tools = [
@@ -206,6 +220,7 @@ def create_default_registry() -> ToolRegistry:
         ToolSpec("translate_nl_mission", "Translate NL mission", _translate_nl_mission),
         ToolSpec("system_info", "Get system information", _system_info),
         ToolSpec("mic_diagnostics", "Run USB microphone diagnostics", _mic_diagnostics),
+        ToolSpec("lidar_diagnostics", "Run FHL-LD19 LiDAR diagnostics", _lidar_diagnostics),
     ]
     for tool in tools:
         registry.register(tool)

@@ -51,6 +51,8 @@ services:
     #   # GPIO
     #   - /dev/gpiochip0:/dev/gpiochip0
     #   - /dev/gpiochip1:/dev/gpiochip1
+    #   # FHL-LD19 LiDAR UART
+    #   - /dev/ttyUSB1:/dev/ttyUSB1
 
     # --- Networking ---
     network_mode: host

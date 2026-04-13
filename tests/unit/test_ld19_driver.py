@@ -1,0 +1,175 @@
+"""Tests for LD19LidarDriver._assemble_scan — sorting, filtering, clamping."""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from mousedroid.config.schema import LidarConfig
+from mousedroid.hardware.lidar.ld19_driver import LD19LidarDriver
+from mousedroid.hardware.lidar.ld19_protocol import LD19Frame, LD19Point
+
+
+def _cfg(**overrides: object) -> LidarConfig:
+    """Create a LidarConfig with test defaults."""
+    defaults: dict[str, object] = {
+        "enabled": True,
+        "serial_port": "/dev/ttyUSB1",
+        "baud_rate": 230400,
+        "max_range_m": 12.0,
+        "min_range_m": 0.15,
+        "scan_frequency_hz": 10.0,
+        "min_confidence": 10,
+        "read_timeout_s": 0.2,
+        "n_sectors": 36,
+        "feature_dim": 36,
+    }
+    defaults.update(overrides)
+    return LidarConfig(**defaults)  # type: ignore[arg-type]
+
+
+def _make_frame(
+    start_deg: float,
+    end_deg: float,
+    points: list[tuple[int, int]],
+) -> LD19Frame:
+    """Build an LD19Frame with the given angles and points.
+
+    Args:
+        start_deg: Start angle in degrees.
+        end_deg: End angle in degrees.
+        points: List of (distance_mm, confidence) tuples.
+
+    Returns:
+        LD19Frame with the specified values.
+    """
+    return LD19Frame(
+        speed_deg_s=300.0,
+        start_angle_deg=start_deg,
+        end_angle_deg=end_deg,
+        points=tuple(LD19Point(distance_mm=d, confidence=c) for d, c in points),
+        timestamp_ms=1000,
+    )
+
+
+# -- Sorts by angle ---------------------------------------------------------
+
+
+def test_assemble_scan_sorts_by_angle() -> None:
+    """Output scan is sorted by angle regardless of input frame order."""
+    # Frame at 180-190 degrees, then frame at 10-20 degrees.
+    frame_a = _make_frame(180.0, 190.0, [(5000, 200)] * 3)
+    frame_b = _make_frame(10.0, 20.0, [(5000, 200)] * 3)
+
+    cfg = _cfg()
+    scan = LD19LidarDriver._assemble_scan([frame_a, frame_b], cfg)
+
+    # All angles should be in sorted order.
+    for i in range(1, scan.n_points):
+        assert scan.angles_deg[i] >= scan.angles_deg[i - 1]
+
+
+# -- Filters by confidence --------------------------------------------------
+
+
+def test_assemble_scan_filters_low_confidence() -> None:
+    """Points with confidence below min_confidence are excluded."""
+    cfg = _cfg(min_confidence=50)
+    # All points at confidence=10, below threshold of 50.
+    frame = _make_frame(0.0, 10.0, [(5000, 10)] * 12)
+    scan = LD19LidarDriver._assemble_scan([frame], cfg)
+    assert scan.n_points == 0
+
+
+def test_assemble_scan_keeps_high_confidence() -> None:
+    """Points with confidence >= min_confidence are kept."""
+    cfg = _cfg(min_confidence=50)
+    frame = _make_frame(0.0, 10.0, [(5000, 100)] * 12)
+    scan = LD19LidarDriver._assemble_scan([frame], cfg)
+    assert scan.n_points == 12
+
+
+def test_assemble_scan_mixed_confidence() -> None:
+    """Only points above min_confidence threshold are kept."""
+    cfg = _cfg(min_confidence=50)
+    points = [(5000, 10), (5000, 100), (5000, 49), (5000, 50)]
+    frame = _make_frame(0.0, 10.0, points)
+    scan = LD19LidarDriver._assemble_scan([frame], cfg)
+    # Confidence 100 and 50 pass; 10 and 49 are filtered.
+    assert scan.n_points == 2
+
+
+# -- Clamps distance to min/max range ---------------------------------------
+
+
+def test_assemble_scan_clamps_below_min_range() -> None:
+    """Points with distance below min_range_m are excluded."""
+    cfg = _cfg(min_range_m=0.15)  # 150 mm
+    # 100 mm < 150 mm min range -> excluded
+    frame = _make_frame(0.0, 10.0, [(100, 200)] * 12)
+    scan = LD19LidarDriver._assemble_scan([frame], cfg)
+    assert scan.n_points == 0
+
+
+def test_assemble_scan_clamps_above_max_range() -> None:
+    """Points with distance above max_range_m are excluded."""
+    cfg = _cfg(max_range_m=12.0)  # 12000 mm
+    # 15000 mm > 12000 mm max range -> excluded
+    frame = _make_frame(0.0, 10.0, [(15000, 200)] * 12)
+    scan = LD19LidarDriver._assemble_scan([frame], cfg)
+    assert scan.n_points == 0
+
+
+def test_assemble_scan_keeps_in_range() -> None:
+    """Points within [min_range, max_range] are kept."""
+    cfg = _cfg(min_range_m=0.15, max_range_m=12.0)
+    # 5000 mm = 5.0 m, within range
+    frame = _make_frame(0.0, 10.0, [(5000, 200)] * 12)
+    scan = LD19LidarDriver._assemble_scan([frame], cfg)
+    assert scan.n_points == 12
+
+
+def test_assemble_scan_at_boundary_distances() -> None:
+    """Points exactly at min and max range boundaries are kept."""
+    cfg = _cfg(min_range_m=0.15, max_range_m=12.0)
+    # 150 mm == 0.15 m (min), 12000 mm == 12.0 m (max)
+    points = [(150, 200), (12000, 200)]
+    frame = _make_frame(0.0, 10.0, points)
+    scan = LD19LidarDriver._assemble_scan([frame], cfg)
+    assert scan.n_points == 2
+
+
+# -- Empty input -------------------------------------------------------------
+
+
+def test_assemble_scan_empty_frames() -> None:
+    """Empty frame list returns an empty scan."""
+    cfg = _cfg()
+    scan = LD19LidarDriver._assemble_scan([], cfg)
+    assert scan.n_points == 0
+
+
+# -- Distances in mm --------------------------------------------------------
+
+
+def test_assemble_scan_distances_in_mm() -> None:
+    """Output distances are in millimetres."""
+    cfg = _cfg()
+    frame = _make_frame(0.0, 10.0, [(5000, 200)] * 3)
+    scan = LD19LidarDriver._assemble_scan([frame], cfg)
+    assert np.all(scan.distances_mm == pytest.approx(5000.0))
+
+
+# -- Multiple frames --------------------------------------------------------
+
+
+def test_assemble_scan_multiple_frames() -> None:
+    """Multiple frames are merged into a single scan."""
+    cfg = _cfg()
+    frames = [
+        _make_frame(0.0, 10.0, [(5000, 200)] * 4),
+        _make_frame(10.0, 20.0, [(6000, 200)] * 4),
+        _make_frame(20.0, 30.0, [(7000, 200)] * 4),
+    ]
+    scan = LD19LidarDriver._assemble_scan(frames, cfg)
+    assert scan.n_points == 12
