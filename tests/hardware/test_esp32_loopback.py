@@ -41,10 +41,22 @@ SERIAL_DEVICE_ENV = "MOUSEDROID_ESP32_SERIAL_PORT"
 @pytest.fixture(scope="module")
 def settings() -> Settings:
     """Load full Settings from jetson_production.yaml."""
+    import platform
+    from pathlib import Path
+
     import yaml
 
-    with open(JETSON_PROD_CONFIG) as fh:
-        raw = yaml.safe_load(fh)
+    config_path = Path(JETSON_PROD_CONFIG)
+    if not config_path.exists():
+        config_path = Path("config/default.yaml")
+
+    with open(config_path) as fh:
+        raw = yaml.safe_load(fh) or {}
+
+    # On non-Jetson hosts, force mock mode so cross-field validators pass.
+    if platform.system() != "Linux" or not Path("/etc/nv_tegra_release").exists():
+        raw["mock_hardware"] = True
+
     return Settings(**raw)
 
 
@@ -109,9 +121,9 @@ async def test_send_velocity_moves_encoders(driver, settings: Settings) -> None:
     # Stop immediately after reading
     await driver.emergency_stop()
 
-    assert (
-        enc.left_velocity_mps > 0.0
-    ), f"Expected positive left encoder after {test_vel:.2f} m/s, got {enc.left_velocity_mps:.4f}"
+    assert enc.left_velocity_mps > 0.0, (
+        f"Expected positive left encoder after {test_vel:.2f} m/s, got {enc.left_velocity_mps:.4f}"
+    )
 
 
 @pytest.mark.timeout(10)
@@ -123,12 +135,12 @@ async def test_send_zero_velocity_stops_encoders(driver, settings: Settings) -> 
     enc = await driver.read_encoders()
     tolerance = settings.esp32.max_velocity_mps * 0.05  # within 5% of max
 
-    assert (
-        abs(enc.left_velocity_mps) <= tolerance
-    ), f"Expected ~0 velocity after stop, got {enc.left_velocity_mps:.4f} m/s"
-    assert (
-        abs(enc.right_velocity_mps) <= tolerance
-    ), f"Expected ~0 velocity after stop, got {enc.right_velocity_mps:.4f} m/s"
+    assert abs(enc.left_velocity_mps) <= tolerance, (
+        f"Expected ~0 velocity after stop, got {enc.left_velocity_mps:.4f} m/s"
+    )
+    assert abs(enc.right_velocity_mps) <= tolerance, (
+        f"Expected ~0 velocity after stop, got {enc.right_velocity_mps:.4f} m/s"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -170,9 +182,9 @@ async def test_battery_voltage_in_plausible_range(driver, settings: Settings) ->
     v = await driver.get_battery_voltage()
     # When actually powered, voltage must be above critical threshold defined in config
     if v > 0.0:
-        assert (
-            v >= settings.safety.battery_critical_v
-        ), f"Battery below critical: {v:.2f}V < {settings.safety.battery_critical_v:.2f}V"
+        assert v >= settings.safety.battery_critical_v, (
+            f"Battery below critical: {v:.2f}V < {settings.safety.battery_critical_v:.2f}V"
+        )
 
 
 # ---------------------------------------------------------------------------
