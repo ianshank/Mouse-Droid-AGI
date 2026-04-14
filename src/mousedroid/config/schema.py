@@ -604,6 +604,16 @@ class SafetyConfig(BaseModel):
     lidar_max_range_m: float = Field(
         12.0, gt=0, description="LiDAR max range for clearance conversion (m)"
     )
+    sensor_recovery_attempts: int = Field(
+        1,
+        ge=0,
+        description="Max sensor recovery attempts before emergency stop",
+    )
+    sensor_recovery_delay_s: float = Field(
+        0.5,
+        gt=0,
+        description="Delay between sensor recovery attempts (s)",
+    )
 
 
 class SurpriseConfig(BaseModel):

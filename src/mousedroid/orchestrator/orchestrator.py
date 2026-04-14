@@ -171,12 +171,20 @@ class MouseDroidOrchestrator:
         self._update_world_model(observation)
 
         if safety_ctx.is_emergency:
-            await self._esp32.emergency_stop()
-            await self._voice_event("emergency_stop", observation)
-            _log.warning("emergency_stop_triggered")
-            self._tick_count += 1
-            await self._publish_telemetry(observation, safety_ctx, loop_time_ms)
-            return
+            # Attempt sensor recovery before emergency stop if sensors degraded
+            if await self._try_sensor_recovery(safety_ctx):
+                # Re-read after recovery — sensors may have come back
+                observation = await self._sensor_manager.read_all()
+                loop_time_ms = (time.monotonic() - loop_start) * MILLISECONDS_PER_SECOND
+                safety_ctx = self._safety_monitor.evaluate(observation, loop_time_ms)
+
+            if safety_ctx.is_emergency:
+                await self._esp32.emergency_stop()
+                await self._voice_event("emergency_stop", observation)
+                _log.warning("emergency_stop_triggered")
+                self._tick_count += 1
+                await self._publish_telemetry(observation, safety_ctx, loop_time_ms)
+                return
 
         action = self._select_action(safety_ctx, observation, loop_time_ms)
         self._prev_action = action.unsqueeze(0) if action.dim() == 1 else action
@@ -423,6 +431,46 @@ class MouseDroidOrchestrator:
                 observation,
                 gpu_temp_c=safety_ctx.gpu_temp_c,
             )
+
+    async def _try_sensor_recovery(self, safety_ctx: SafetyContext) -> bool:
+        """Attempt sensor recovery if the emergency is due to sensor degradation.
+
+        Only runs when valid_sensor_count is below threshold and the
+        configured recovery_attempts > 0.
+
+        Args:
+            safety_ctx: Current safety context.
+
+        Returns:
+            True if a recovery was attempted, False otherwise.
+        """
+        max_attempts = self._cfg.safety.sensor_recovery_attempts
+        if max_attempts <= 0:
+            return False
+        if safety_ctx.valid_sensor_count >= self._cfg.safety.min_valid_sensors:
+            return False
+
+        _log.warning(
+            "sensor_recovery_starting",
+            valid_sensors=safety_ctx.valid_sensor_count,
+            required=self._cfg.safety.min_valid_sensors,
+            max_attempts=max_attempts,
+        )
+
+        for attempt in range(max_attempts):
+            recovered = await self._sensor_manager.recovery_attempt()
+            if recovered > 0:
+                _log.info(
+                    "sensor_recovery_success",
+                    attempt=attempt + 1,
+                    recovered=recovered,
+                )
+                return True
+            if attempt < max_attempts - 1:
+                await asyncio.sleep(self._cfg.safety.sensor_recovery_delay_s)
+
+        _log.error("sensor_recovery_exhausted", attempts=max_attempts)
+        return True  # Recovery was attempted even though it failed
 
     def _log_experience(
         self,

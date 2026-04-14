@@ -56,6 +56,7 @@ async def test_orchestrator_to_publisher_pipeline():
     esp32 = AsyncMock()
     sensor_manager = AsyncMock()
     sensor_manager.read_all.return_value = MouseDroidObservationBundle()
+    sensor_manager.recovery_attempt.return_value = 0
 
     orch = MouseDroidOrchestrator(
         world_model=world_model,
@@ -105,6 +106,7 @@ async def test_multiple_ticks_produce_frames():
     esp32 = AsyncMock()
     sensor_manager = AsyncMock()
     sensor_manager.read_all.return_value = MouseDroidObservationBundle()
+    sensor_manager.recovery_attempt.return_value = 0
 
     orch = MouseDroidOrchestrator(
         world_model=world_model,

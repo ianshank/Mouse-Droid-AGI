@@ -74,6 +74,7 @@ def _make_voiced_orchestrator(
         lidar_features=lidar_features,
         audio_chunk=audio_chunk,
     )
+    sensor_manager.recovery_attempt.return_value = 0
 
     voice_engine = AsyncMock()
 

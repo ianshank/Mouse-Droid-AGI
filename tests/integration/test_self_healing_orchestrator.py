@@ -76,6 +76,7 @@ def _build_orchestrator(
 
     sensor_manager = AsyncMock()
     sensor_manager.read_all.return_value = _make_observation(cfg)
+    sensor_manager.recovery_attempt.return_value = 0
 
     orch = MouseDroidOrchestrator(
         world_model=world_model,
@@ -166,6 +167,7 @@ async def test_full_tick_with_factory_built_driver():
 
     sensor_manager = AsyncMock()
     sensor_manager.read_all.return_value = _make_observation(cfg)
+    sensor_manager.recovery_attempt.return_value = 0
 
     orch = MouseDroidOrchestrator(
         world_model=world_model,
