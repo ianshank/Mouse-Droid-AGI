@@ -42,16 +42,17 @@ def test_build_esp32_wifi():
     assert isinstance(driver.inner, WiFiESP32Driver)
 
 
-def test_build_distance_sensor_missing_config_raises():
-    # Must bypass the Settings validator to test the factory guard
+def test_build_distance_sensor_missing_config_returns_mock():
+    """Without ultrasonic config in real mode, factory returns MockUltrasonic stub."""
     cfg = MagicMock(spec=Settings)
     cfg.mock_hardware = False
     cfg.ultrasonic = None
 
     from mousedroid.factory import build_distance_sensor
+    from mousedroid.hardware.sensors.mock_ultrasonic import MockUltrasonic
 
-    with pytest.raises(ValueError, match="ultrasonic config required"):
-        build_distance_sensor(cfg)
+    sensor = build_distance_sensor(cfg)
+    assert isinstance(sensor, MockUltrasonic)
 
 
 def test_build_distance_sensor_real_hardware():

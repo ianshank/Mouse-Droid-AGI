@@ -182,6 +182,7 @@ async def test_stop_sets_model_to_none(gateway: LLMGateway):
 async def test_start_raises_without_llama_cpp(gateway: LLMGateway):
     """start() raises RuntimeError without llama-cpp-python."""
     with (
+        patch.object(gateway, "_ensure_model", return_value=None),
         patch.object(gateway, "_load_model", side_effect=ImportError("no llama")),
         pytest.raises(RuntimeError, match="llama-cpp-python"),
     ):
@@ -191,6 +192,7 @@ async def test_start_raises_without_llama_cpp(gateway: LLMGateway):
 async def test_start_raises_on_missing_model_file(gateway: LLMGateway):
     """start() raises RuntimeError when model file not found."""
     with (
+        patch.object(gateway, "_ensure_model", return_value=None),
         patch.object(gateway, "_load_model", side_effect=OSError("file not found")),
         pytest.raises(RuntimeError, match="Model file not found"),
     ):
@@ -377,3 +379,52 @@ def test_build_llm_gateway_returns_protocol():
 
     gw = build_llm_gateway(cfg)
     assert isinstance(gw, LLMGatewayProtocol)
+
+
+# -- _ensure_model tests --
+
+
+async def test_ensure_model_skips_when_exists():
+    """Should not attempt download when model file already exists."""
+    cfg = GatewayConfig(enabled=True)
+    gw = LLMGateway(cfg)
+    with patch("mousedroid.llm_gateway.gateway.Path") as mock_path:
+        mock_path.return_value.exists.return_value = True
+        await gw._ensure_model()
+    # No download attempted — just returned early
+
+
+async def test_ensure_model_warns_when_no_url():
+    """Should warn when model missing and no download URL configured."""
+    cfg = GatewayConfig(enabled=True, model_url="")
+    gw = LLMGateway(cfg)
+    with patch("mousedroid.llm_gateway.gateway.Path") as mock_path:
+        mock_path.return_value.exists.return_value = False
+        await gw._ensure_model()
+
+
+async def test_ensure_model_downloads_when_missing():
+    """Should attempt download when model file is missing."""
+    cfg = GatewayConfig(enabled=True)
+    gw = LLMGateway(cfg)
+    with (
+        patch("mousedroid.llm_gateway.gateway.Path") as mock_path,
+        patch.object(gw, "_download_model_sync") as mock_dl,
+    ):
+        mock_path.return_value.exists.return_value = False
+        mock_path.return_value.parent.mkdir = MagicMock()
+        await gw._ensure_model()
+    mock_dl.assert_called_once()
+
+
+async def test_ensure_model_handles_download_failure():
+    """Should log warning and continue if download fails."""
+    cfg = GatewayConfig(enabled=True)
+    gw = LLMGateway(cfg)
+    with (
+        patch("mousedroid.llm_gateway.gateway.Path") as mock_path,
+        patch.object(gw, "_download_model_sync", side_effect=OSError("network")),
+    ):
+        mock_path.return_value.exists.return_value = False
+        mock_path.return_value.parent.mkdir = MagicMock()
+        await gw._ensure_model()  # Should not raise

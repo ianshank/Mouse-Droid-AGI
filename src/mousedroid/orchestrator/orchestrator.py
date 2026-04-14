@@ -94,9 +94,36 @@ class MouseDroidOrchestrator:
         self._z = torch.zeros(1, cfg.model.latent_dim)
         self._prev_action = torch.zeros(1, cfg.model.action_dim)
 
+    async def _check_memory_budget(self) -> None:
+        """Log available system and GPU memory at startup."""
+        threshold = self._cfg.health.min_available_memory_gb
+        try:
+            import os
+
+            mem_info = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_AVPHYS_PAGES")
+            available_gb = mem_info / (1024**3)
+            _log.info("system_memory_at_startup", available_gb=round(available_gb, 2))
+            if available_gb < threshold:
+                _log.warning(
+                    "low_system_memory_at_startup",
+                    available_gb=round(available_gb, 2),
+                    threshold_gb=threshold,
+                )
+        except (ValueError, OSError):
+            _log.debug("system_memory_check_unavailable")
+
+        if torch.cuda.is_available():
+            free, total = torch.cuda.mem_get_info()
+            _log.info(
+                "gpu_memory_at_startup",
+                total_gb=round(total / 1e9, 2),
+                free_gb=round(free / 1e9, 2),
+            )
+
     async def start(self) -> None:
         """Start all subsystems."""
         _log.info("orchestrator_starting")
+        await self._check_memory_budget()
         if self._hailo_runtime is not None:
             await self._hailo_runtime.start()
         await self._esp32.connect()

@@ -503,3 +503,30 @@ async def test_voice_observe_uses_config_battery_threshold():
     ctx_ok = SafetyContext(battery_voltage=threshold + 0.1)
     await orch._voice_observe(obs, ctx_ok)
     orch._voice_engine.speak.assert_not_awaited()
+
+
+# -- Memory budget check ---------------------------------------------------
+
+
+async def test_check_memory_budget_logs_info():
+    """Memory check should log system memory at startup."""
+    orch = _make_orchestrator()
+    # Should complete without raising
+    await orch._check_memory_budget()
+
+
+async def test_start_calls_memory_check():
+    """start() should invoke _check_memory_budget before subsystems."""
+    orch = _make_orchestrator()
+    check_called = False
+    original = orch._check_memory_budget
+
+    async def tracking_check() -> None:
+        nonlocal check_called
+        check_called = True
+        await original()
+
+    orch._check_memory_budget = tracking_check  # type: ignore[assignment]
+    await orch.start()
+    assert check_called
+    assert orch._running is True

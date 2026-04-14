@@ -52,6 +52,7 @@ class ResilientESP32Driver:
             self._inner.connect,
             cfg=self._retry_cfg,
             retryable_exceptions=(Exception,),
+            non_retryable_exceptions=(FileNotFoundError, RuntimeError),
         )
         _log.info("resilient_driver_connected")
 

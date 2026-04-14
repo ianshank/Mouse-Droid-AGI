@@ -41,6 +41,7 @@ async def retry_async(
     *args: Any,
     cfg: RetryConfig,
     retryable_exceptions: tuple[type[BaseException], ...] = (Exception,),
+    non_retryable_exceptions: tuple[type[BaseException], ...] = (),
     **kwargs: Any,
 ) -> T:
     """Execute *func* with retry and exponential backoff.
@@ -51,6 +52,8 @@ async def retry_async(
         cfg: Retry configuration (timing from config).
         retryable_exceptions: Exception types that trigger a retry.
             Non-matching exceptions propagate immediately.
+        non_retryable_exceptions: Exception types that always propagate
+            immediately, even if they match *retryable_exceptions*.
         **kwargs: Keyword arguments forwarded to *func*.
 
     Returns:
@@ -67,6 +70,8 @@ async def retry_async(
         except asyncio.CancelledError:
             raise
         except retryable_exceptions as exc:
+            if isinstance(exc, non_retryable_exceptions):
+                raise
             last_exc = exc
             remaining = cfg.max_attempts - attempt - 1
 
@@ -112,12 +117,15 @@ def _compute_delay(attempt: int, cfg: RetryConfig) -> float:
 def with_retry(
     cfg: RetryConfig,
     retryable_exceptions: tuple[type[BaseException], ...] = (Exception,),
+    non_retryable_exceptions: tuple[type[BaseException], ...] = (),
 ) -> Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]:
     """Decorator that wraps an async function with retry logic.
 
     Args:
         cfg: Retry configuration.
         retryable_exceptions: Exception types that trigger a retry.
+        non_retryable_exceptions: Exception types that always propagate
+            immediately, even if they match *retryable_exceptions*.
 
     Returns:
         Decorator that adds retry behaviour to the wrapped function.
@@ -133,6 +141,7 @@ def with_retry(
                 *args,
                 cfg=cfg,
                 retryable_exceptions=retryable_exceptions,
+                non_retryable_exceptions=non_retryable_exceptions,
                 **kwargs,
             )
 

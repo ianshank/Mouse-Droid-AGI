@@ -68,6 +68,7 @@ class ResilientLidarDriver:
             self._inner.start,
             cfg=self._retry_cfg,
             retryable_exceptions=(Exception,),
+            non_retryable_exceptions=(FileNotFoundError,),
         )
 
     async def stop(self) -> None:
@@ -91,6 +92,7 @@ class ResilientLidarDriver:
                 self._inner.read_scan,
                 cfg=self._retry_cfg,
                 retryable_exceptions=(Exception,),
+                non_retryable_exceptions=(FileNotFoundError,),
             )
         except CircuitOpenError:
             _log.warning(

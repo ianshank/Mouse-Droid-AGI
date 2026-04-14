@@ -7,9 +7,11 @@ Optional dependency: ``pip install mousedroid[llm]``.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from mousedroid.llm_gateway.protocol import GoalVector
@@ -37,6 +39,75 @@ class LLMGateway:
         self._cfg = cfg
         self._model: Any = None
 
+    async def _ensure_model(self) -> None:
+        """Download model if not present on disk."""
+        model_path = Path(self._cfg.model_path)
+        if model_path.exists():
+            _log.debug("llm_model_already_present", path=str(model_path))
+            return
+
+        if not self._cfg.model_url:
+            _log.warning(
+                "llm_model_missing_no_url",
+                path=str(model_path),
+            )
+            return
+
+        _log.info(
+            "llm_model_downloading",
+            path=str(model_path),
+            url=self._cfg.model_url,
+        )
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            await asyncio.to_thread(self._download_model_sync, model_path)
+        except Exception:
+            _log.warning("llm_model_download_failed", exc_info=True)
+
+    def _download_model_sync(self, dest: Path) -> None:
+        """Download model file (blocking, run via to_thread)."""
+        try:
+            from huggingface_hub import hf_hub_download
+
+            # Extract repo_id and filename from the URL
+            url = self._cfg.model_url
+            if "huggingface.co" in url:
+                parts = url.split("/resolve/main/")
+                if len(parts) == 2:
+                    repo_path = parts[0].replace("https://huggingface.co/", "")
+                    filename = parts[1]
+                    hf_hub_download(
+                        repo_id=repo_path,
+                        filename=filename,
+                        local_dir=str(dest.parent),
+                        local_dir_use_symlinks=False,
+                    )
+                    if self._cfg.model_checksum:
+                        self._verify_checksum(dest, self._cfg.model_checksum)
+                    return
+        except ImportError:
+            _log.debug("huggingface_hub_not_available_using_urllib")
+
+        import urllib.request
+
+        urllib.request.urlretrieve(self._cfg.model_url, str(dest))  # noqa: S310
+        if self._cfg.model_checksum:
+            self._verify_checksum(dest, self._cfg.model_checksum)
+
+    @staticmethod
+    def _verify_checksum(path: Path, expected: str) -> None:
+        """Verify SHA-256 checksum of downloaded file."""
+        sha256 = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                sha256.update(chunk)
+        actual = sha256.hexdigest()
+        if actual != expected:
+            path.unlink(missing_ok=True)
+            msg = f"Model checksum mismatch: expected {expected[:16]}..., got {actual[:16]}..."
+            raise ValueError(msg)
+
     async def start(self) -> None:
         """Load model and warm up.
 
@@ -46,6 +117,8 @@ class LLMGateway:
         if not self._cfg.enabled:
             _log.info("llm_gateway_disabled")
             return
+
+        await self._ensure_model()
 
         try:
             await asyncio.to_thread(self._load_model)

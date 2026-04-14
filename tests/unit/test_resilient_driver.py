@@ -279,3 +279,26 @@ async def test_circuit_open_rejects_get_battery_voltage():
         await driver.get_battery_voltage()
 
     assert driver.stats["total_failures"] >= 1
+
+
+# -- Non-retryable exceptions in connect -----------------------------------
+
+
+async def test_connect_no_retry_on_file_not_found():
+    """FileNotFoundError should propagate immediately without retry."""
+    driver, inner = _make_driver(max_attempts=5)
+    inner.connect = AsyncMock(side_effect=FileNotFoundError("/dev/ttyUSB0"))
+
+    with pytest.raises(FileNotFoundError, match="/dev/ttyUSB0"):
+        await driver.connect()
+    assert inner.connect.await_count == 1
+
+
+async def test_connect_no_retry_on_runtime_error():
+    """RuntimeError (e.g. missing pyserial) should propagate immediately."""
+    driver, inner = _make_driver(max_attempts=5)
+    inner.connect = AsyncMock(side_effect=RuntimeError("pyserial is not installed"))
+
+    with pytest.raises(RuntimeError, match="pyserial"):
+        await driver.connect()
+    assert inner.connect.await_count == 1

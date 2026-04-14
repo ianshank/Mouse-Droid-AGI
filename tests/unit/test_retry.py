@@ -209,3 +209,62 @@ def test_retry_exhausted_error_str():
     exc = RetryExhaustedError(3, ConnectionError("inner"))
     assert "3 attempts" in str(exc)
     assert "inner" in str(exc)
+
+
+# -- Non-retryable exceptions -----------------------------------------------
+
+
+async def test_non_retryable_propagates_immediately():
+    """FileNotFoundError in non_retryable_exceptions raises on first attempt."""
+    mock = AsyncMock(side_effect=FileNotFoundError("/dev/ttyUSB0"))
+    with pytest.raises(FileNotFoundError, match="/dev/ttyUSB0"):
+        await retry_async(
+            mock,
+            cfg=_cfg(max_attempts=5, base_delay_s=0.001),
+            non_retryable_exceptions=(FileNotFoundError,),
+        )
+    assert mock.await_count == 1
+
+
+async def test_non_retryable_overrides_retryable():
+    """non_retryable takes precedence even when exception matches retryable."""
+    mock = AsyncMock(side_effect=FileNotFoundError("missing"))
+    with pytest.raises(FileNotFoundError):
+        await retry_async(
+            mock,
+            cfg=_cfg(max_attempts=5, base_delay_s=0.001),
+            retryable_exceptions=(Exception,),
+            non_retryable_exceptions=(FileNotFoundError,),
+        )
+    assert mock.await_count == 1
+
+
+async def test_non_retryable_empty_allows_retry():
+    """Default empty non_retryable_exceptions preserves existing behaviour."""
+    mock = AsyncMock(side_effect=[FileNotFoundError("x"), "ok"])
+    result = await retry_async(
+        mock,
+        cfg=_cfg(max_attempts=3, base_delay_s=0.001),
+        retryable_exceptions=(Exception,),
+        non_retryable_exceptions=(),
+    )
+    assert result == "ok"
+    assert mock.await_count == 2
+
+
+async def test_decorator_non_retryable():
+    """with_retry decorator forwards non_retryable_exceptions."""
+    call_count = 0
+
+    @with_retry(
+        _cfg(max_attempts=5, base_delay_s=0.001),
+        non_retryable_exceptions=(FileNotFoundError,),
+    )
+    async def check_port() -> str:
+        nonlocal call_count
+        call_count += 1
+        raise FileNotFoundError("/dev/ttyUSB0")
+
+    with pytest.raises(FileNotFoundError):
+        await check_port()
+    assert call_count == 1

@@ -199,10 +199,12 @@ def test_settings_mock_true_without_ultrasonic_ok():
     assert s.ultrasonic is None
 
 
-def test_settings_mock_false_without_ultrasonic_raises(monkeypatch: pytest.MonkeyPatch):
+def test_settings_mock_false_without_ultrasonic_warns(monkeypatch: pytest.MonkeyPatch):
+    """Real hardware without ultrasonic should succeed (graceful degradation)."""
     monkeypatch.setenv("MOUSEDROID_MOCK_HARDWARE", "false")
-    with pytest.raises(ValidationError, match="ultrasonic config required"):
-        Settings(mock_hardware=False, ultrasonic=None)
+    s = Settings(mock_hardware=False, ultrasonic=None)
+    assert s.ultrasonic is None
+    assert s.mock_hardware is False
 
 
 def test_settings_mock_false_with_ultrasonic_ok(monkeypatch: pytest.MonkeyPatch):

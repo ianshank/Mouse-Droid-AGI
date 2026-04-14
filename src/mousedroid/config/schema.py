@@ -199,6 +199,9 @@ class HealthConfig(BaseModel):
     gpu_temp_warn_c: float = Field(75.0, gt=0, description="GPU temp warning threshold (C)")
     gpu_temp_critical_c: float = Field(90.0, gt=0, description="GPU temp critical threshold (C)")
     memory_warn_pct: float = Field(85.0, gt=0, le=100, description="Memory warning threshold (%)")
+    min_available_memory_gb: float = Field(
+        1.0, gt=0, description="Minimum available system memory for startup warning (GB)"
+    )
 
 
 class HailoConfig(BaseModel):
@@ -1297,8 +1300,12 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def hardware_requires_pins(self) -> Self:
-        """Validate that real hardware mode has required sensor configs."""
+        """Warn when real hardware mode is missing optional sensor configs."""
         if not self.mock_hardware and self.ultrasonic is None:
-            msg = "ultrasonic config required when mock_hardware=false"
-            raise ValueError(msg)
+            import structlog
+
+            structlog.get_logger().warning(
+                "ultrasonic_config_absent",
+                msg="Running without ultrasonic sensor — distance stub will be used",
+            )
         return self

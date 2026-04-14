@@ -144,8 +144,14 @@ def build_distance_sensor(cfg: Settings) -> DistanceSensorProtocol:
         return MockUltrasonic(ultrasonic_cfg)
 
     if cfg.ultrasonic is None:
-        msg = "ultrasonic config required for real hardware"
-        raise ValueError(msg)
+        from mousedroid.config.schema import UltrasonicConfig as UltraCfg
+        from mousedroid.hardware.sensors.mock_ultrasonic import MockUltrasonic
+
+        _log.warning(
+            "ultrasonic_not_configured_using_stub",
+            msg="No ultrasonic config — using mock stub (returns max_range_m)",
+        )
+        return MockUltrasonic(UltraCfg(trigger_pin=0, echo_pin=0))  # type: ignore[call-arg]
 
     from mousedroid.hardware.sensors.ultrasonic import HcSr04
 
@@ -738,6 +744,7 @@ def build_orchestrator(cfg: Settings) -> object:
     camera = build_camera(cfg, hailo_runtime=hailo_runtime)
     distance = build_distance_sensor(cfg)
     microphone = build_microphone(cfg)
+    lidar = build_lidar(cfg)
 
     sensor_manager = build_sensor_manager(
         cfg,
@@ -745,6 +752,7 @@ def build_orchestrator(cfg: Settings) -> object:
         distance=distance,
         esp32=esp32,
         microphone=microphone,
+        lidar=lidar,
     )
 
     cognitive_core: CognitiveCore | None = None

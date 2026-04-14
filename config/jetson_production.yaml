@@ -6,6 +6,21 @@ safety:
   min_valid_sensors: 1
   battery_critical_v: 9.5
 
+camera:
+  backend: "jetson_csi"
+
+lidar:
+  enabled: true
+  serial_port: "/dev/ttyUSB1"
+  baud_rate: 230400
+
+model:
+  lidar_dim: 36
+  lidar_proj_dim: 32
+
+# Ultrasonic not installed — null overrides default.yaml values
+ultrasonic: null
+
 jetson:
   tensorrt_enabled: true
   gpu_memory_fraction: 0.7

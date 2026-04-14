@@ -41,22 +41,21 @@ services:
       - /sys/devices/platform:/sys/devices/platform:ro
 
     # --- Hardware device passthrough ---
-    # NOTE: Uncomment devices that are physically connected.
-    # The container will fail to start if a listed device doesn't exist.
-    # devices:
-    #   # ESP32 UART serial
-    #   - /dev/ttyUSB0:/dev/ttyUSB0
-    #   # Camera
-    #   - /dev/video0:/dev/video0
-    #   # GPIO
-    #   - /dev/gpiochip0:/dev/gpiochip0
-    #   - /dev/gpiochip1:/dev/gpiochip1
-    #   # FHL-LD19 LiDAR UART
-    #   - /dev/ttyUSB1:/dev/ttyUSB1
-    #   # Wonrabai USB Sound Card (ALSA audio in + out)
-    #   - /dev/snd:/dev/snd
-    # group_add:
-    #   - audio
+    # NOTE: Only list devices physically connected. The container will
+    # fail to start if a listed device doesn't exist on the host.
+    # For dynamic device mounting, run scripts/probe_devices.sh to
+    # generate a docker-compose.devices.yml override.
+    devices:
+      # ESP32 UART serial
+      - /dev/ttyUSB0:/dev/ttyUSB0
+      # CSI Camera
+      - /dev/video0:/dev/video0
+      # FHL-LD19 LiDAR UART
+      - /dev/ttyUSB1:/dev/ttyUSB1
+      # Wonrabai USB Sound Card (ALSA audio in + out)
+      - /dev/snd:/dev/snd
+    group_add:
+      - audio
 
     # --- Networking ---
     network_mode: host

@@ -53,7 +53,11 @@ def test_clamp_above():
 async def test_connect_sets_connected():
     driver = _make_driver()
     mock_serial = MagicMock()
-    with patch("mousedroid.comms.serial_driver._serial_mod", mock_serial):
+    with (
+        patch("mousedroid.comms.serial_driver._serial_mod", mock_serial),
+        patch("mousedroid.comms.serial_driver.Path") as mock_path,
+    ):
+        mock_path.return_value.exists.return_value = True
         await driver.connect()
     assert driver._connected is True
 
@@ -131,3 +135,31 @@ async def test_read_json_empty_line():
     with patch.object(driver, "_read_line", return_value=""):
         result = await driver._read_json()
     assert result == {}
+
+
+# -- Port existence check ---------------------------------------------------
+
+
+async def test_connect_raises_file_not_found_for_missing_port():
+    """connect() should fail fast when serial port does not exist."""
+    driver = _make_driver()
+    with (
+        patch("mousedroid.comms.serial_driver._serial_mod", MagicMock()),
+        patch("mousedroid.comms.serial_driver.Path") as mock_path,
+    ):
+        mock_path.return_value.exists.return_value = False
+        with pytest.raises(FileNotFoundError, match="/dev/ttyUSB0"):
+            await driver.connect()
+
+
+async def test_connect_succeeds_when_port_exists():
+    """connect() should proceed when serial port exists."""
+    driver = _make_driver()
+    mock_serial = MagicMock()
+    with (
+        patch("mousedroid.comms.serial_driver._serial_mod", mock_serial),
+        patch("mousedroid.comms.serial_driver.Path") as mock_path,
+    ):
+        mock_path.return_value.exists.return_value = True
+        await driver.connect()
+    assert driver._connected is True

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -60,6 +61,9 @@ class LD19LidarDriver:
 
     async def start(self) -> None:
         """Open the serial port and begin data acquisition."""
+        if not Path(self._cfg.serial_port).exists():
+            msg = f"LiDAR serial port {self._cfg.serial_port} does not exist — check USB connection"
+            raise FileNotFoundError(msg)
         self._serial = await asyncio.to_thread(self._open_serial)
         self._running = True
         _log.info(

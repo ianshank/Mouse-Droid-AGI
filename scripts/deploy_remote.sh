@@ -267,6 +267,15 @@ run_health_check() {
     else
         log_step "SKIP: venv not found, cannot run health check"
     fi
+
+    # Telemetry endpoint reachability from deploy host
+    local health_port="${MOUSEDROID_HEALTH_PORT:-8080}"
+    log_step "Checking telemetry endpoint at ${HOST}:${health_port}/health"
+    if curl -sf --max-time 5 "http://${HOST}:${health_port}/health" > /dev/null 2>&1; then
+        log_step "Telemetry health endpoint reachable"
+    else
+        echo "WARNING: Telemetry endpoint not reachable (may be disabled or still starting)"
+    fi
 }
 
 # ---------------------------------------------------------------------------

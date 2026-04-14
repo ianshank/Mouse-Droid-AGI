@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 User=jetson
 WorkingDirectory=/opt/mousedroid
-Environment=MOUSEDROID_CONFIG=/etc/mousedroid/jetson_sdcard_64gb.yaml
+Environment=MOUSEDROID_CONFIG=/etc/mousedroid/jetson_production.yaml
 Environment=MOUSEDROID_MOCK_HARDWARE=false
 ExecStart=/opt/mousedroid/venv/bin/python -m mousedroid.main --config ${MOUSEDROID_CONFIG}
 Restart=on-failure

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from mousedroid.comms.base_driver import BaseESP32Driver
@@ -48,6 +49,9 @@ class SerialESP32Driver(BaseESP32Driver):
         if _serial_mod is None:
             msg = "pyserial is not installed — install mousedroid[hardware]"
             raise RuntimeError(msg)
+        if not Path(self._port).exists():
+            msg = f"Serial port {self._port} does not exist — check USB connection"
+            raise FileNotFoundError(msg)
         self._serial = await asyncio.to_thread(self._open_serial)
         self._connected = True
         _log.info("serial_esp32_connected", port=self._port, baud=self._baud)
