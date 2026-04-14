@@ -400,6 +400,12 @@ class MissionParserConfig(BaseModel):
         le=1,
         description="Confidence for obstacle avoidance commands",
     )
+    llm_fallback_confidence: float = Field(
+        0.5,
+        ge=0,
+        le=1,
+        description="Minimum parser confidence to skip LLM fallback",
+    )
 
 
 class OfflineRLConfig(BaseModel):

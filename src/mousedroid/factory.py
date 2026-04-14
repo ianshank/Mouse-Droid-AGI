@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from mousedroid.experience.logger import ExperienceLogger
     from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
     from mousedroid.health.monitor import HealthMonitor
+    from mousedroid.llm_gateway.mission_parser import MissionParserProtocol
     from mousedroid.memory.tier import MemoryTier
     from mousedroid.sensing.manager import SensorManager
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
@@ -330,6 +331,22 @@ def build_llm_gateway(cfg: Settings) -> LLMGatewayProtocol:
     )
     _log.info("llm_gateway_built", enabled=cfg.llm.enabled)
     return LLMGateway(gateway_cfg)
+
+
+def build_mission_parser(cfg: Settings) -> MissionParserProtocol:
+    """Build NL mission parser with configurable speed/confidence mappings.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Rule-based mission parser conforming to ``MissionParserProtocol``.
+    """
+    from mousedroid.llm_gateway.mission_parser import RuleBasedMissionParser
+
+    parser = RuleBasedMissionParser(cfg.mission_parser)
+    _log.info("mission_parser_built")
+    return parser
 
 
 def build_safety_monitor(cfg: Settings) -> SafetyMonitorProtocol:
@@ -906,6 +923,13 @@ def build_orchestrator(cfg: Settings) -> object:
     # Curiosity module (optional — requires curiosity config)
     curiosity_module = build_curiosity_module(cfg)
 
+    # LLM gateway + mission parser (optional — gated by llm.enabled)
+    llm_gateway: LLMGatewayProtocol | None = None
+    mission_parser: MissionParserProtocol | None = None
+    if cfg.llm.enabled:
+        llm_gateway = build_llm_gateway(cfg)
+    mission_parser = build_mission_parser(cfg)
+
     return MouseDroidOrchestrator(
         world_model=wm,
         agents=[agent],
@@ -921,6 +945,8 @@ def build_orchestrator(cfg: Settings) -> object:
         memory_tier=memory_tier,
         experience_logger=experience_logger,
         curiosity_module=curiosity_module,
+        llm_gateway=llm_gateway,
+        mission_parser=mission_parser,
     )
 
 

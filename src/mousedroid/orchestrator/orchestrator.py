@@ -32,6 +32,8 @@ if TYPE_CHECKING:
     from mousedroid.curiosity.protocol import CuriosityProtocol
     from mousedroid.experience.logger import ExperienceLogger
     from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
+    from mousedroid.llm_gateway.mission_parser import MissionParserProtocol
+    from mousedroid.llm_gateway.protocol import GoalVector, LLMGatewayProtocol
     from mousedroid.memory.tier import MemoryTier
     from mousedroid.safety.context import SafetyContext
     from mousedroid.safety.protocol import SafetyMonitorProtocol
@@ -66,6 +68,8 @@ class MouseDroidOrchestrator:
         memory_tier: MemoryTier | None = None,
         experience_logger: ExperienceLogger | None = None,
         curiosity_module: CuriosityProtocol | None = None,
+        llm_gateway: LLMGatewayProtocol | None = None,
+        mission_parser: MissionParserProtocol | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -84,6 +88,8 @@ class MouseDroidOrchestrator:
             memory_tier: Optional layered memory tier for episodic/semantic/working memory.
             experience_logger: Optional LMDB-backed experience logger.
             curiosity_module: Optional intrinsic curiosity module (ICM).
+            llm_gateway: Optional LLM gateway for NL command translation.
+            mission_parser: Optional rule-based NL mission parser.
         """
         if not agents:
             msg = "At least one agent is required"
@@ -102,6 +108,8 @@ class MouseDroidOrchestrator:
         self._memory_tier = memory_tier
         self._experience_logger = experience_logger
         self._curiosity_module = curiosity_module
+        self._llm_gateway = llm_gateway
+        self._mission_parser = mission_parser
         self._cfg = cfg
         self._running = False
         self._tick_count: int = 0
@@ -124,6 +132,8 @@ class MouseDroidOrchestrator:
             await self._cognitive_core.start()
         if self._telemetry_server is not None:
             await self._telemetry_server.start()
+        if self._llm_gateway is not None:
+            await self._llm_gateway.start()
         if self._voice_engine is not None:
             await self._voice_engine.start()
             await self._voice_lifecycle("startup")
@@ -152,6 +162,8 @@ class MouseDroidOrchestrator:
             await self._telemetry_server.stop()
         if self._cognitive_core is not None:
             await self._cognitive_core.stop()
+        if self._llm_gateway is not None:
+            await self._llm_gateway.stop()
         await self._esp32.emergency_stop()
         await self._sensor_manager.stop()
         await self._esp32.disconnect()
@@ -201,6 +213,57 @@ class MouseDroidOrchestrator:
             loop_time_ms=loop_time_ms,
             emergency=safety_ctx.is_emergency,
         )
+
+    async def process_mission(self, nl_command: str) -> GoalVector:
+        """Process a natural language mission command.
+
+        Uses a fallback chain: rule-based parser first (< 1ms), then
+        LLM gateway for unknown/ambiguous commands when available.
+
+        Args:
+            nl_command: Natural language mission command.
+
+        Returns:
+            GoalVector with velocity targets in [-1, 1].
+        """
+        from mousedroid.llm_gateway.mission_parser import IntentType
+        from mousedroid.llm_gateway.protocol import GoalVector
+
+        if not nl_command or not nl_command.strip():
+            _log.debug("process_mission_empty_command")
+            return GoalVector()
+
+        # Stage 1: Rule-based parser (fast path, < 1ms)
+        if self._mission_parser is not None:
+            intent = self._mission_parser.parse(nl_command)
+            threshold = self._cfg.mission_parser.llm_fallback_confidence
+            if intent.confidence >= threshold and intent.intent_type != IntentType.UNKNOWN:
+                _log.info(
+                    "mission_parsed_rule_based",
+                    command=nl_command,
+                    intent=intent.intent_type.value,
+                    confidence=intent.confidence,
+                )
+                return intent.goal_vector
+
+        # Stage 2: LLM fallback (slow path, ~100-500ms)
+        if self._llm_gateway is not None:
+            try:
+                goal = await self._llm_gateway.translate_mission(nl_command)
+                _log.info(
+                    "mission_parsed_llm",
+                    command=nl_command,
+                    vx=goal.vx_target,
+                    vy=goal.vy_target,
+                    omega=goal.omega_target,
+                )
+                return goal
+            except Exception:
+                _log.warning("mission_llm_fallback_failed", exc_info=True)
+
+        # Stage 3: Fallback to zero (safe default)
+        _log.warning("mission_unresolved", command=nl_command)
+        return GoalVector()
 
     def _update_world_model(self, observation: ObservationProtocol) -> None:
         """Run world model observation step to update latent state.
