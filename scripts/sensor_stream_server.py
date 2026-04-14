@@ -97,19 +97,56 @@ async def _camera_frames() -> AsyncIterator[bytes]:
                 )
                 await asyncio.sleep(1 / 30)
         except ImportError:
-            log.error("No camera library available (picamera2 or jetson_utils)")
-            # Send a single "unavailable" placeholder frame
-            from PIL import Image, ImageDraw
+            # GStreamer + OpenCV fallback (works on bare-metal Jetson)
+            try:
+                import cv2
 
-            img = Image.new("RGB", (640, 80), color=(40, 40, 40))
-            draw = ImageDraw.Draw(img)
-            draw.text((10, 25), "Camera unavailable", fill=(200, 60, 60))
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG")
-            yield (
-                b"--frame\r\n"
-                b"Content-Type: image/jpeg\r\n\r\n" + buf.getvalue() + b"\r\n"
-            )
+                _gst_pipeline = (
+                    "nvarguscamerasrc num-buffers=-1 ! "
+                    "video/x-raw(memory:NVMM),width=640,height=480,"
+                    "framerate=30/1,format=NV12 ! "
+                    "nvvidconv ! video/x-raw,format=BGRx ! "
+                    "videoconvert ! video/x-raw,format=BGR ! "
+                    "appsink drop=1"
+                )
+                cap = cv2.VideoCapture(_gst_pipeline, cv2.CAP_GSTREAMER)
+                if not cap.isOpened():
+                    raise RuntimeError("GStreamer pipeline failed to open")
+                log.info("Camera: GStreamer/nvargus fallback active")
+                try:
+                    while True:
+                        ret, frame_bgr = cap.read()
+                        if not ret:
+                            await asyncio.sleep(0.033)
+                            continue
+                        ret2, jpg_buf = cv2.imencode(
+                            ".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 80]
+                        )
+                        if not ret2:
+                            await asyncio.sleep(0.033)
+                            continue
+                        jpg = jpg_buf.tobytes()
+                        yield (
+                            b"--frame\r\n"
+                            b"Content-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
+                        )
+                        await asyncio.sleep(1 / 30)
+                finally:
+                    cap.release()
+            except (ImportError, RuntimeError) as exc:
+                log.error("No camera library available: %s", exc)
+                # Send a single "unavailable" placeholder frame
+                from PIL import Image, ImageDraw
+
+                img = Image.new("RGB", (640, 80), color=(40, 40, 40))
+                draw = ImageDraw.Draw(img)
+                draw.text((10, 25), "Camera unavailable", fill=(200, 60, 60))
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG")
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" + buf.getvalue() + b"\r\n"
+                )
 
 
 @app.get("/stream/camera")
@@ -146,7 +183,7 @@ async def _ultrasonic_events() -> AsyncIterator[str]:
         finally:
             await sensor.stop()
 
-    except ImportError:
+    except Exception:  # ImportError (no driver) or GPIOError (pins busy)
         # Raw GPIO fallback
         try:
             import Jetson.GPIO as GPIO
@@ -163,8 +200,8 @@ async def _ultrasonic_events() -> AsyncIterator[str]:
                     await asyncio.sleep(0.1)
             finally:
                 GPIO.cleanup()
-        except ImportError:
-            log.error("Jetson.GPIO not available")
+        except Exception as exc:
+            log.warning("Jetson.GPIO unavailable (%s) — ultrasonic stream disabled", exc)
             while True:
                 yield "data: unavailable\n\n"
                 await asyncio.sleep(1.0)
@@ -224,7 +261,7 @@ async def _audio_events() -> AsyncIterator[str]:
         finally:
             await mic.stop()
 
-    except ImportError:
+    except Exception:  # ImportError (no driver) or runtime error (device busy)
         # Raw pyaudio fallback
         try:
             import pyaudio

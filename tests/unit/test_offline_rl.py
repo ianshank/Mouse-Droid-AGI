@@ -160,12 +160,18 @@ class TestCQLTrainer:
         }
 
         trainer_low = CQLTrainer(
-            state_dim=8, action_dim=3, hidden_dim=32,
-            cql_alpha=0.1, n_random_actions=5,
+            state_dim=8,
+            action_dim=3,
+            hidden_dim=32,
+            cql_alpha=0.1,
+            n_random_actions=5,
         )
         trainer_high = CQLTrainer(
-            state_dim=8, action_dim=3, hidden_dim=32,
-            cql_alpha=10.0, n_random_actions=5,
+            state_dim=8,
+            action_dim=3,
+            hidden_dim=32,
+            cql_alpha=10.0,
+            n_random_actions=5,
         )
 
         # Use same initial weights
@@ -186,8 +192,11 @@ class TestCQLTrainer:
         trainer.save(path)
 
         new_trainer = CQLTrainer(
-            state_dim=8, action_dim=3, hidden_dim=32,
-            cql_alpha=1.0, n_random_actions=5,
+            state_dim=8,
+            action_dim=3,
+            hidden_dim=32,
+            cql_alpha=1.0,
+            n_random_actions=5,
         )
         new_trainer.load(path)
 
@@ -271,8 +280,11 @@ class TestIQLTrainer:
         trainer.save(path)
 
         new_trainer = IQLTrainer(
-            state_dim=8, action_dim=3, hidden_dim=32,
-            iql_tau=0.7, beta=3.0,
+            state_dim=8,
+            action_dim=3,
+            hidden_dim=32,
+            iql_tau=0.7,
+            beta=3.0,
         )
         new_trainer.load(path)
 

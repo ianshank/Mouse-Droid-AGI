@@ -486,7 +486,8 @@ class TelemetryServer:
             while not ws.closed and self._running:
                 try:
                     entry = await asyncio.wait_for(
-                        sub_queue.get(), timeout=TELEMETRY_QUEUE_TIMEOUT_S,
+                        sub_queue.get(),
+                        timeout=TELEMETRY_QUEUE_TIMEOUT_S,
                     )
                     serialisable: dict[str, Any] = {}
                     for k, v in entry.items():
@@ -514,7 +515,8 @@ class TelemetryServer:
         while self._running:
             try:
                 frame = await asyncio.wait_for(
-                    self._queue.get(), timeout=TELEMETRY_QUEUE_TIMEOUT_S,
+                    self._queue.get(),
+                    timeout=TELEMETRY_QUEUE_TIMEOUT_S,
                 )
             except asyncio.TimeoutError:
                 continue
@@ -531,7 +533,7 @@ class TelemetryServer:
                 health = frame.health
                 if isinstance(health, dict):
                     gpu_temp = health.get("gpu_temp_c")
-                    if isinstance(gpu_temp, (int, float)):
+                    if isinstance(gpu_temp, int | float):
                         self._metrics.set_gpu_temp_celsius(float(gpu_temp))
                 safety = frame.safety
                 if isinstance(safety, dict):

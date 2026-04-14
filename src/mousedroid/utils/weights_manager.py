@@ -41,8 +41,7 @@ def _validate_download_directory(path: Path) -> None:
     for protected_root in _PROTECTED_DOWNLOAD_ROOTS:
         if path.is_relative_to(protected_root):
             raise ValueError(
-                "refusing to write HuggingFace downloads under protected path "
-                f"'{path}'"
+                "refusing to write HuggingFace downloads under protected path " f"'{path}'"
             )
 
 
@@ -122,9 +121,7 @@ def download_weights_from_huggingface(
     if local_dir is not None:
         local_dir_path = Path(local_dir).resolve()
         expected_target_dir = (
-            (local_dir_path / subfolder).resolve()
-            if subfolder
-            else local_dir_path
+            (local_dir_path / subfolder).resolve() if subfolder else local_dir_path
         )
         if expected_target_dir != cache_dir:
             raise ValueError(

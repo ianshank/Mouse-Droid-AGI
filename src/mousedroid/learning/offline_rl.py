@@ -302,7 +302,9 @@ class CQLTrainer(OfflineRLTrainer):
         # Sample random actions uniformly in [-1, 1]
         random_actions = (
             torch.rand(
-                batch_size, self._n_random_actions, self._action_dim,
+                batch_size,
+                self._n_random_actions,
+                self._action_dim,
                 device=self._device,
             )
             * 2.0
@@ -326,9 +328,7 @@ class CQLTrainer(OfflineRLTrainer):
         q1_data, q2_data = self.q_network(states, actions)
 
         # CQL penalty: push down random, push up dataset
-        cql_loss: Tensor = (
-            q1_logsumexp - q1_data.mean() + q2_logsumexp - q2_data.mean()
-        )
+        cql_loss: Tensor = q1_logsumexp - q1_data.mean() + q2_logsumexp - q2_data.mean()
 
         return cql_loss
 
@@ -349,9 +349,7 @@ class CQLTrainer(OfflineRLTrainer):
             next_actions = self.policy(next_states)
             target_q1, target_q2 = self.target_q_network(next_states, next_actions)
             target_q = torch.min(target_q1, target_q2)
-            target = rewards.unsqueeze(-1) + self._gamma * (
-                1.0 - dones.unsqueeze(-1)
-            ) * target_q
+            target = rewards.unsqueeze(-1) + self._gamma * (1.0 - dones.unsqueeze(-1)) * target_q
 
         q1, q2 = self.q_network(states, actions)
         bellman_loss = F.mse_loss(q1, target) + F.mse_loss(q2, target)
@@ -465,7 +463,8 @@ class IQLTrainer(OfflineRLTrainer):
 
         self.value_network = ValueNetwork(state_dim, hidden_dim).to(self._device)
         self.value_optimizer = torch.optim.Adam(
-            self.value_network.parameters(), lr=lr,
+            self.value_network.parameters(),
+            lr=lr,
         )
 
     def _expectile_loss(self, diff: Tensor) -> Tensor:
@@ -508,9 +507,7 @@ class IQLTrainer(OfflineRLTrainer):
         # --- Q-function update (Bellman with V-targets) ---
         with torch.no_grad():
             next_v = self.value_network(next_states)
-            target = rewards.unsqueeze(-1) + self._gamma * (
-                1.0 - dones.unsqueeze(-1)
-            ) * next_v
+            target = rewards.unsqueeze(-1) + self._gamma * (1.0 - dones.unsqueeze(-1)) * next_v
 
         q1, q2 = self.q_network(states, actions)
         q_loss = F.mse_loss(q1, target) + F.mse_loss(q2, target)
@@ -530,9 +527,7 @@ class IQLTrainer(OfflineRLTrainer):
             exp_advantage = torch.exp(self._beta * advantage).clamp(max=100.0)
 
         policy_actions = self.policy(states)
-        mse = F.mse_loss(
-            policy_actions, actions, reduction="none"
-        ).sum(dim=-1, keepdim=True)
+        mse = F.mse_loss(policy_actions, actions, reduction="none").sum(dim=-1, keepdim=True)
         policy_loss = (exp_advantage * mse).mean()
 
         self.policy_optimizer.zero_grad()

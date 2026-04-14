@@ -158,9 +158,7 @@ async def test_concurrent_velocity_no_corruption(
             return_exceptions=True,
         )
         for r in results:
-            assert r is None or isinstance(r, Exception), (
-                f"Unexpected return: {r!r}"
-            )
+            assert r is None or isinstance(r, Exception), f"Unexpected return: {r!r}"
             if isinstance(r, Exception):
                 pytest.fail(f"Concurrent velocity raised: {r!r}")
     finally:

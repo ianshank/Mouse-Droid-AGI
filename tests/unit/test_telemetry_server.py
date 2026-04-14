@@ -142,9 +142,7 @@ async def test_sensors_endpoint_no_data() -> None:
 async def test_sensors_endpoint_with_data() -> None:
     server, _queue = _make_server()
     app = _build_app(server)
-    server._latest_frame = TelemetryFrame(
-        timestamp=1.0, distance_m=2.5, tick_count=42
-    )
+    server._latest_frame = TelemetryFrame(timestamp=1.0, distance_m=2.5, tick_count=42)
 
     async with TestClient(TestServer(app)) as client:
         resp = await client.get("/api/v1/sensors")
@@ -454,9 +452,7 @@ async def test_auth_ws_accepts_query_param() -> None:
     app = _build_app(server)
     server._running = True
 
-    async with TestClient(TestServer(app)) as client, client.ws_connect(
-        "/ws?api_key=ws-secret"
-    ):
+    async with TestClient(TestServer(app)) as client, client.ws_connect("/ws?api_key=ws-secret"):
         assert server.client_count == 1
 
 
@@ -737,9 +733,12 @@ async def test_register_mdns_exception() -> None:
     mock_zeroconf_mod = MagicMock()
     mock_zeroconf_mod.Zeroconf.side_effect = RuntimeError("fail")
 
-    with patch.dict("sys.modules", {"zeroconf": mock_zeroconf_mod}), patch(
-        "mousedroid.telemetry.server.get_default_ip",
-        return_value="127.0.0.1",
+    with (
+        patch.dict("sys.modules", {"zeroconf": mock_zeroconf_mod}),
+        patch(
+            "mousedroid.telemetry.server.get_default_ip",
+            return_value="127.0.0.1",
+        ),
     ):
         await server._register_mdns()
 

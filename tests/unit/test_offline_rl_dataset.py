@@ -182,11 +182,7 @@ class TestOfflineRLDatasetTransitions:
         with env.begin(write=True) as txn:
             for i in range(5):
                 # Records 0-2 are close together, then big gap, then 3-4
-                ts = (
-                    base_time + i * 0.1
-                    if i < 3
-                    else base_time + 100.0 + i * 0.1
-                )
+                ts = base_time + i * 0.1 if i < 3 else base_time + 100.0 + i * 0.1
                 record = _make_record(timestamp=ts)
                 key = struct.pack(">Q", int(ts * 1_000_000) + i)
                 txn.put(key, record.serialize())

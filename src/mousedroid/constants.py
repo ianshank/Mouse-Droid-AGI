@@ -142,9 +142,6 @@ MOTOR_STATE_BATTERY_INDEX: int = 3
 # Telemetry server constants
 # ---------------------------------------------------------------------------
 
-MAX_LOG_ENTRIES: int = 1000
-"""Maximum log entries retrievable from REST endpoint."""
-
 TELEMETRY_QUEUE_TIMEOUT_S: float = 1.0
 """Timeout for telemetry queue polling in broadcast/log loops."""
 

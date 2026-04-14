@@ -149,9 +149,9 @@ async def test_tick_count_monotonic(orchestrator) -> None:
         counts.append(orchestrator._tick_count)
 
     for i in range(1, len(counts)):
-        assert counts[i] == counts[i - 1] + 1, (
-            f"Tick count not monotonic: {counts[i - 1]} → {counts[i]}"
-        )
+        assert (
+            counts[i] == counts[i - 1] + 1
+        ), f"Tick count not monotonic: {counts[i - 1]} → {counts[i]}"
 
 
 # ---------------------------------------------------------------------------
@@ -167,9 +167,10 @@ async def test_health_check_after_burst(orchestrator, settings) -> None:
 
     health = await orchestrator.health_check()
     assert isinstance(health, dict)
-    assert health.get("status") in ("ok", "warning"), (
-        f"Unexpected health status after burst: {health.get('status')!r}"
-    )
+    assert health.get("status") in (
+        "ok",
+        "warning",
+    ), f"Unexpected health status after burst: {health.get('status')!r}"
 
 
 # ---------------------------------------------------------------------------

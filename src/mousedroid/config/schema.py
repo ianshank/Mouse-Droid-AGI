@@ -247,7 +247,9 @@ class OfflineRLConfig(BaseModel):
     epochs: int = Field(100, gt=0, description="Training epochs")
     batch_size: int = Field(64, gt=0, description="Training batch size")
     terminal_gap_s: float = Field(
-        5.0, gt=0, description="Timestamp gap to mark episode boundaries (s)",
+        5.0,
+        gt=0,
+        description="Timestamp gap to mark episode boundaries (s)",
     )
     log_every_n_epochs: int = Field(10, gt=0, description="Log summary every N epochs")
     checkpoint_every_n_epochs: int = Field(20, gt=0, description="Save checkpoint every N epochs")
@@ -255,7 +257,9 @@ class OfflineRLConfig(BaseModel):
     cql_n_random_actions: int = Field(10, gt=0, description="Random actions for CQL logsumexp")
     iql_expectile: float = Field(0.7, gt=0, lt=1, description="IQL expectile for asymmetric loss")
     iql_beta: float = Field(
-        3.0, gt=0, description="IQL inverse temperature for advantage weighting",
+        3.0,
+        gt=0,
+        description="IQL inverse temperature for advantage weighting",
     )
 
 
@@ -651,42 +655,20 @@ class Settings(BaseSettings):
     experience: ExperienceConfig = Field(
         default_factory=_settings_default_factory(ExperienceConfig)
     )
-    logging: LoggingConfig = Field(
-        default_factory=_settings_default_factory(LoggingConfig)
-    )
-    training: TrainingConfig = Field(
-        default_factory=_settings_default_factory(TrainingConfig)
-    )
-    health: HealthConfig = Field(
-        default_factory=_settings_default_factory(HealthConfig)
-    )
-    retry: RetryConfig = Field(
-        default_factory=_settings_default_factory(RetryConfig)
-    )
+    logging: LoggingConfig = Field(default_factory=_settings_default_factory(LoggingConfig))
+    training: TrainingConfig = Field(default_factory=_settings_default_factory(TrainingConfig))
+    health: HealthConfig = Field(default_factory=_settings_default_factory(HealthConfig))
+    retry: RetryConfig = Field(default_factory=_settings_default_factory(RetryConfig))
     circuit_breaker: CircuitBreakerConfig = Field(
         default_factory=_settings_default_factory(CircuitBreakerConfig)
     )
-    cognitive: CognitiveConfig = Field(
-        default_factory=_settings_default_factory(CognitiveConfig)
-    )
-    metrics: MetricsConfig = Field(
-        default_factory=_settings_default_factory(MetricsConfig)
-    )
-    memory: MemoryConfig = Field(
-        default_factory=_settings_default_factory(MemoryConfig)
-    )
-    learning: LearningConfig = Field(
-        default_factory=_settings_default_factory(LearningConfig)
-    )
-    reward: RewardConfig = Field(
-        default_factory=_settings_default_factory(RewardConfig)
-    )
-    curiosity: CuriosityConfig = Field(
-        default_factory=_settings_default_factory(CuriosityConfig)
-    )
-    offline_rl: OfflineRLConfig = Field(
-        default_factory=_settings_default_factory(OfflineRLConfig)
-    )
+    cognitive: CognitiveConfig = Field(default_factory=_settings_default_factory(CognitiveConfig))
+    metrics: MetricsConfig = Field(default_factory=_settings_default_factory(MetricsConfig))
+    memory: MemoryConfig = Field(default_factory=_settings_default_factory(MemoryConfig))
+    learning: LearningConfig = Field(default_factory=_settings_default_factory(LearningConfig))
+    reward: RewardConfig = Field(default_factory=_settings_default_factory(RewardConfig))
+    curiosity: CuriosityConfig = Field(default_factory=_settings_default_factory(CuriosityConfig))
+    offline_rl: OfflineRLConfig = Field(default_factory=_settings_default_factory(OfflineRLConfig))
     ppo: PPOConfig = Field(default_factory=_settings_default_factory(PPOConfig))
     telemetry: TelemetryConfig = Field(default_factory=_settings_default_factory(TelemetryConfig))
     three_laws: ThreeLawsConfig = Field(default_factory=_settings_default_factory(ThreeLawsConfig))
