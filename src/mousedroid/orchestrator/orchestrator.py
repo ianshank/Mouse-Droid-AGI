@@ -89,8 +89,9 @@ class MouseDroidOrchestrator:
         self._running = False
         self._tick_count: int = 0
 
-        # Latent state
-        self._h = torch.zeros(1, cfg.model.hidden_dim)
+        # Latent state (combined_dim = hidden_dim + cfc_hidden_dim for dual-stream)
+        _combined_hidden_dim = cfg.model.hidden_dim + cfg.model.cfc_hidden_dim
+        self._h = torch.zeros(1, _combined_hidden_dim)
         self._z = torch.zeros(1, cfg.model.latent_dim)
         self._prev_action = torch.zeros(1, cfg.model.action_dim)
 

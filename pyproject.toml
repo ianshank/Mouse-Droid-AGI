@@ -60,6 +60,9 @@ hailo = [
 lidar = [
     "pyserial>=3.5",
 ]
+cfc = [
+    "ncps>=0.0.7",
+]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
@@ -69,6 +72,7 @@ dev = [
     "ruff>=0.4",
     "mypy>=1.5",
     "types-PyYAML>=6.0",
+    "ncps>=0.0.7",
 ]
 
 [project.scripts]
@@ -120,6 +124,9 @@ module = [
     "mousedroid.arm.perception.depth_processor",
     "mousedroid.hardware.accelerator.hailo_runtime",
     "mousedroid.arm.perception.hailo_detector",
+    "mousedroid.world_model.cfc_cell",
+    "mousedroid.world_model.dual_stream_rssm",
+    "mousedroid.world_model.stream_fusion",
 ]
 disallow_subclassing_any = false
 
