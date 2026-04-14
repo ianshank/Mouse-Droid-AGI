@@ -94,7 +94,8 @@ class CfCWrapper(nn.Module):
 
         # CfC returns (output, h_new) with return_sequences=False
         _output, h_new = self._cell(x_seq, h, timespans=timespans)
-        return h_new
+        result: Tensor = h_new
+        return result
 
     def initial_state(self, batch_size: int, device: torch.device | None = None) -> Tensor:
         """Create zero-initialized hidden state.

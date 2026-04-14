@@ -151,9 +151,9 @@ async def test_known_distance(
         await asyncio.sleep(0.05)  # 20 Hz read rate
 
     mean_d = sum(readings) / len(readings)
-    assert abs(mean_d - expected_m) <= tolerance_m, (
-        f"Expected {expected_m:.2f}m ± {tolerance_m:.2f}m, got mean {mean_d:.3f}m"
-    )
+    assert (
+        abs(mean_d - expected_m) <= tolerance_m
+    ), f"Expected {expected_m:.2f}m ± {tolerance_m:.2f}m, got mean {mean_d:.3f}m"
 
 
 # ---------------------------------------------------------------------------
