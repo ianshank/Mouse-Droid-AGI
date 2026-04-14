@@ -10,6 +10,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **FHL-LD19 2D LiDAR sensor** — 5th modality integrated end-to-end through the cognitive stack
+  - `LD19LidarDriver` — async UART driver with CRC8-validated binary protocol parsing
+  - `LD19FrameParser` — LD19 packet parser with angle interpolation (n-1 intervals)
+  - `LidarFeatureExtractor` — sector-binned distance features normalised to `[0, 1]`, vectorised via `np.minimum.at`
+  - `MockLidar` — configurable mock driver for CI/testing
+  - `ResilientLidarDriver` — circuit-breaker + retry wrapper for production reliability
+  - `LidarScan` dataclass for typed scan data (angles, distances, confidences)
+  - `LidarProtocol` — `@runtime_checkable Protocol` for DI
+  - `LidarConfig` — Pydantic config with range validation, sector count, feature dim
+  - `build_lidar()` / `build_lidar_feature_extractor()` factory functions
+  - `SensorManager` gains LiDAR ring buffer + concurrent `_safe_lidar_read()`
+  - `MultimodalEncoder` gains optional `lidar_proj` layer (enabled when `ModelConfig.lidar_dim > 0`)
+  - `RSSM.observe_step()` threads LiDAR features through observation pipeline
+  - `SafetyMonitor` evaluates LiDAR clearance via `SafetyConfig.lidar_max_range_m`
+  - `TelemetryFrame.lidar_min_dist_m` — LiDAR distance surfaced in telemetry
+  - `lidar_diagnostics` tool registered in tool registry
+  - 12 new test files with 200+ LiDAR-specific tests
+- **Wonrabai USB Sound Card** — combo mic + 8Ω 5W speaker on single USB interface
+  - Speaker and voice engine enabled in `config/default.yaml` and `config/jetson_production.yaml`
+  - Docker ALSA audio passthrough (`/dev/snd` + `group_add: [audio]`) in `docker-compose.jetson.yml`
+  - 6 combo audio device tests verifying both mic and speaker discover the same USB device
+- **Audio constants** — `POWER_CLIP_MAX` and `LOG_FLOOR` extracted to `hardware/audio/constants.py`
+
+### Changed
+
+- **`UsbMicrophone`** — renamed from "SuziePi" to generic USB; added graceful degradation
+  matching `UsbSpeaker` pattern (try/except ImportError + OSError, return silence on failure)
+- **`AudioFeatureExtractor`** — magic numbers `1e20` / `1e-10` replaced with named constants
+- **`SafetyMonitor`** — `lidar_max_range_m` accessed directly from `SafetyConfig` field
+  (was `getattr` with hardcoded `12.0` fallback)
+- **`build_telemetry_frame()`** — uses `safety_ctx.lidar_min_dist_m` (actual metres)
+  instead of raw normalised feature minimum
+- **`MultimodalEncoder`** — missing LiDAR mask slot now treated as invalid (zeroed out)
+  instead of silently passing unvalidated projection
+- **`SensorManager._safe_lidar_read()`** — returns `ok=False` when feature extractor
+  is missing (was `True`, feeding fake all-ones data marked valid)
+
+### Fixed
+
+- **LD19 angle interpolation** — fixed n-1 intervals formula (`step = diff / (n_points - 1)`)
+- **3 mypy strict errors** — `torch.jit.save` untyped call, `depth_processor` Any return, stale `cv2` type-ignore
+- **CRC test flakiness** — replaced probabilistic different-inputs-differ assertion with deterministic known test vectors (`0x74`, `0x4C`)
+- **`usb_microphone.py` coverage** — removed from `pyproject.toml` coverage omit list
+
+### Added (previous)
+
 - **Audio integration into world model** — microphone data now flows end-to-end through the cognitive stack
   - `MultimodalEncoder` gains optional `audio_proj` layer (enabled when `ModelConfig.audio_dim > 0`)
   - `RSSM.observe_step()` extracts `audio_chunk` from observations and passes it to the encoder
