@@ -18,6 +18,7 @@ from mousedroid.hardware.protocols import (
     SpeakerProtocol,
     VisionProtocol,
 )
+from mousedroid.health.watchdog import WatchdogProtocol
 from mousedroid.llm_gateway.protocol import LLMGatewayProtocol
 from mousedroid.logging.setup import get_logger
 from mousedroid.safety.protocol import SafetyMonitorProtocol
@@ -738,6 +739,46 @@ def build_hailo_runtime(cfg: Settings) -> HailoRuntimeProtocol | None:
         return None
 
 
+def build_watchdog(cfg: Settings) -> WatchdogProtocol:
+    """Build watchdog notifier based on config.
+
+    Returns :class:`SystemdNotifier` when the ``NOTIFY_SOCKET`` env var is
+    present (set automatically by systemd for ``Type=notify`` services),
+    :class:`FileHeartbeatNotifier` for Docker/custom monitoring, or
+    :class:`NullNotifier` when watchdog is disabled.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Watchdog notifier satisfying :class:`WatchdogProtocol`.
+    """
+    import os
+    from pathlib import Path
+
+    from mousedroid.health.watchdog import (
+        FileHeartbeatNotifier,
+        NullNotifier,
+        SystemdNotifier,
+    )
+
+    if not cfg.loop.watchdog_enabled:
+        return NullNotifier()
+
+    mode = cfg.loop.watchdog_mode
+    if mode == "systemd":
+        return SystemdNotifier()
+    if mode == "file":
+        return FileHeartbeatNotifier(Path(cfg.loop.heartbeat_path))
+    if mode == "auto":
+        if os.environ.get("NOTIFY_SOCKET"):
+            return SystemdNotifier()
+        return FileHeartbeatNotifier(Path(cfg.loop.heartbeat_path))
+
+    _log.warning("unknown_watchdog_mode_falling_back_to_null", mode=mode)
+    return NullNotifier()
+
+
 def build_orchestrator(cfg: Settings) -> object:
     """Build fully-wired orchestrator.
 
@@ -804,6 +845,9 @@ def build_orchestrator(cfg: Settings) -> object:
     speaker = build_speaker(cfg)
     voice_engine = build_voice_engine(cfg, speaker=speaker)
 
+    # Watchdog notifier (optional — disabled by default)
+    watchdog = build_watchdog(cfg)
+
     return MouseDroidOrchestrator(
         world_model=wm,
         agents=[agent],
@@ -816,6 +860,7 @@ def build_orchestrator(cfg: Settings) -> object:
         telemetry_server=telemetry_server,
         voice_engine=voice_engine,
         hailo_runtime=hailo_runtime,
+        watchdog=watchdog,
     )
 
 

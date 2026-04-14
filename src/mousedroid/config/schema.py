@@ -352,6 +352,26 @@ class LoopConfig(BaseModel):
     planning_hz: float = Field(10.0, gt=0, description="MCTS planning rate (Hz)")
     audio_hz: float = Field(16.0, gt=0, description="Microphone capture rate (Hz)")
     lidar_hz: float = Field(10.0, gt=0, description="LiDAR scan rate (Hz)")
+    tick_timeout_s: float = Field(
+        1.0,
+        gt=0,
+        description="Max seconds per tick before triggering emergency stop",
+    )
+    watchdog_enabled: bool = Field(
+        False,
+        description="Enable watchdog notifications (systemd or file heartbeat)",
+    )
+    watchdog_mode: str = Field(
+        "auto",
+        description=(
+            "Watchdog mode: 'auto' (systemd if NOTIFY_SOCKET set, else file), "
+            "'systemd', 'file', 'none'"
+        ),
+    )
+    heartbeat_path: str = Field(
+        "/tmp/mousedroid-heartbeat",  # noqa: S108
+        description="Path for file-based heartbeat (watchdog_mode 'file' or 'auto' fallback)",
+    )
 
 
 class MetacognitiveConfig(BaseModel):
