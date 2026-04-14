@@ -45,29 +45,42 @@ This document tracks planned enhancements, organised by priority and category.
 
 ## Priority 1 — Hardware Integration ✅ COMPLETE (software side)
 
-### 1.1 HC-SR04 GPIO Integration Tests
-- Add `@pytest.mark.hardware` tests for `HcSr04` on real Jetson GPIO pins
-- Verify `trigger_pin`/`echo_pin` pulse timing at configured `timeout_s`
-- Test `max_range_m` cutoff and invalid echo handling
-- **Effort**: 1 day | **Owner**: hardware team
+### 1.1 HC-SR04 GPIO Integration Tests ✅
+- `tests/hardware/test_hc_sr04_edge_cases.py` — 7 edge-case tests (GPIO cleanup-on-exception,
+  re-init after cleanup, stale-read detection, max-range clamping, read latency, config-driven
+  trigger/echo pins and speed-of-sound constant)
+- Existing: `tests/hardware/test_hc_sr04_integration.py` — 9 tests (config sanity, single read,
+  timeout, rapid polling, concurrent reads)
 
-### 1.2 IMX500 Camera Integration
-- Verify `IMX500Camera.capture_features()` returns correct `feature_dim` (256)
-- Test onboard inference pipeline with a pre-loaded `.rpk` model file
-- Validate frame rate matches `cfg.camera.fps`
-- **Effort**: 2 days | **Owner**: hardware team
+### 1.2 IMX500 Camera Integration ✅
+- `tests/hardware/test_imx500_edge_cases.py` — 8 edge-case tests (double-start idempotency,
+  capture-after-stop raises, stop-without-start no-op, determinism, fallback feature dim,
+  `feature_dim` property, repeated start/stop no-leak, concurrent captures all valid)
+- Existing: `tests/hardware/test_imx500_integration.py` — 9 tests (shape/dtype/norm, fallback,
+  framerate, concurrent)
 
-### 1.3 ESP32 Serial Driver Loopback Test
-- Add hardware test that sends `send_velocity(0.1, 0.0, 0.0)` and reads encoder feedback
-- Validate `EncoderReading` fields match physical wheel movement
-- Test emergency stop latency (<10 ms)
-- **Effort**: 1 day | **Owner**: robotics team
+### 1.3 ESP32 Serial Driver Loopback Test ✅
+- `tests/hardware/test_esp32_edge_cases.py` — 7 edge-case tests (reconnect after disconnect,
+  emergency stop bypasses open circuit breaker, concurrent velocity no corruption,
+  battery voltage stability, encoder fields all float, resilient driver stats, velocity
+  within config limits)
+- Existing: `tests/hardware/test_esp32_loopback.py` — 8 tests (loopback, e-stop latency,
+  battery, circuit breaker)
 
-### 1.4 End-to-End Sense-Plan-Act Smoke Test
-- Single 5-second run on real hardware with motion log
-- Verify orchestrator loop achieves 30 Hz with <5% deadline misses
-- Measure total sense → ESP32 send latency
-- **Effort**: 2 days | **Owner**: robotics team
+### 1.4 End-to-End Sense-Plan-Act Smoke Test ✅
+- `tests/hardware/test_e2e_edge_cases.py` — 7 timing regression tests (P95 tick latency ≤ 2x
+  budget, jitter ≤ 50% budget, tick count monotonic, health after burst, start/stop/restart
+  cycle, e-stop during burst, min 50% throughput)
+- Existing: `tests/hardware/test_e2e_sense_plan_act.py` — 8 tests (burst mean latency, miss
+  rate, outlier detection, tick count, run loop)
+
+**Supporting infrastructure added:**
+- `tests/hardware/conftest.py` — `autouse=True` real-hardware env override (overrides root
+  `_mock_hardware_env`; sets `MOUSEDROID_MOCK_HARDWARE=false`) + session-scoped `jetson_settings`
+  fixture loading from `config/jetson_production.yaml` with fallback to `config/default.yaml`
+- **Bug fix**: `src/mousedroid/constants.py` — added `MILLIDEGREE_DIVISOR = 1000.0` and
+  `GPU_LOAD_PERCENTAGE_DIVISOR = 10.0` (were imported by `health/monitor.py` and
+  `efficiency/profiler.py` but undefined, causing `ImportError` and 3 test failures)
 
 ---
 
