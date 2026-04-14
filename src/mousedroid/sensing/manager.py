@@ -142,6 +142,58 @@ class SensorManager:
         if self._lidar is not None:
             await self._lidar.stop()
 
+    async def recovery_attempt(self) -> int:
+        """Attempt to reinitialize failed sensors.
+
+        Stops and restarts each sensor subsystem. Returns the count of
+        sensors that were successfully recovered (i.e. respond to a
+        subsequent read without exception).
+
+        Returns:
+            Number of sensors that recovered successfully.
+        """
+        recovered = 0
+        for name, driver, starter, reader in [
+            ("vision", self._vision, self._vision.start, self._safe_vision_read),
+            ("distance", self._distance, None, self._safe_distance_read),
+            ("motor", self._esp32, None, self._safe_motor_read),
+        ]:
+            try:
+                if starter is not None:
+                    await driver.stop()
+                    await starter()
+                _, ok = await reader()
+                if ok:
+                    recovered += 1
+                    _log.info("sensor_recovered", sensor=name)
+            except Exception:
+                _log.warning("sensor_recovery_failed", sensor=name, exc_info=True)
+
+        if self._microphone is not None:
+            try:
+                await self._microphone.stop()
+                await self._microphone.start()
+                _, ok = await self._safe_audio_read()
+                if ok:
+                    recovered += 1
+                    _log.info("sensor_recovered", sensor="audio")
+            except Exception:
+                _log.warning("sensor_recovery_failed", sensor="audio", exc_info=True)
+
+        if self._lidar is not None:
+            try:
+                await self._lidar.stop()
+                await self._lidar.start()
+                _, ok = await self._safe_lidar_read()
+                if ok:
+                    recovered += 1
+                    _log.info("sensor_recovered", sensor="lidar")
+            except Exception:
+                _log.warning("sensor_recovery_failed", sensor="lidar", exc_info=True)
+
+        _log.info("sensor_recovery_complete", recovered=recovered)
+        return recovered
+
     # -- Public API --------------------------------------------------------
 
     async def read_all(self) -> MouseDroidObservationBundle:
@@ -238,7 +290,7 @@ class SensorManager:
             result = await coro
             return result, True
         except Exception:
-            _log.warning(f"{sensor_name}_read_failed", exc_info=True)
+            _log.warning("sensor_read_failed", sensor=sensor_name, exc_info=True)
             return default, False
 
     async def _safe_vision_read(self) -> tuple[NDArray[np.float32], bool]:

@@ -145,9 +145,9 @@ async def test_consecutive_reads_not_stale(
     if readings[0] == ultrasonic_cfg.max_range_m:
         pytest.skip("All readings at max_range — sensor may not be wired")
 
-    assert len(unique) >= 2, (
-        f"All 10 readings identical ({readings[0]:.4f}m) — possible stale cache"
-    )
+    assert (
+        len(unique) >= 2
+    ), f"All 10 readings identical ({readings[0]:.4f}m) — possible stale cache"
 
 
 # ---------------------------------------------------------------------------
@@ -162,9 +162,9 @@ async def test_distance_never_exceeds_max_range(
     """read_distance_m() must never return a value above max_range_m."""
     for _ in range(20):
         d = await sensor.read_distance_m()
-        assert d <= ultrasonic_cfg.max_range_m, (
-            f"Distance {d:.4f}m exceeds max_range {ultrasonic_cfg.max_range_m:.4f}m"
-        )
+        assert (
+            d <= ultrasonic_cfg.max_range_m
+        ), f"Distance {d:.4f}m exceeds max_range {ultrasonic_cfg.max_range_m:.4f}m"
         await asyncio.sleep(0.05)
 
 

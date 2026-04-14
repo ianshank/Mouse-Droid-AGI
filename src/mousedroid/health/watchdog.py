@@ -1,21 +1,22 @@
-"""Watchdog notifier — signals liveness to systemd or file-based health checks.
+"""Watchdog notifiers for liveness signalling.
 
-Provides protocol-based DI with three implementations:
+Three concrete implementations:
 
-- ``SystemdNotifier``: Sends ``WATCHDOG=1`` via the NOTIFY_SOCKET for systemd
-  integration (requires ``Type=notify`` + ``WatchdogSec`` in the unit file).
-- ``FileHeartbeatNotifier``: Touches a file on each call, suitable for Docker
-  ``HEALTHCHECK`` or custom monitoring scripts.
-- ``NullNotifier``: No-op for development / mock-hardware mode.
+* **SystemdNotifier** — sends ``WATCHDOG=1`` via the ``sdnotify`` library
+  (or a subprocess fallback) so systemd knows the service is alive.
+* **FileHeartbeatNotifier** — touches a file on disk, useful for Docker
+  ``HEALTHCHECK`` directives that check file recency.
+* **NullNotifier** — no-op, used in dev/mock mode.
+
+The orchestrator calls ``notify()`` after each successful tick.
 """
 
 from __future__ import annotations
 
 import os
-import sys
 import time
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from mousedroid.logging.setup import get_logger
 
@@ -24,77 +25,110 @@ _log = get_logger(__name__)
 
 @runtime_checkable
 class WatchdogProtocol(Protocol):
-    """Protocol for watchdog liveness notification."""
+    """Watchdog heartbeat protocol.
+
+    Implementations signal liveness to an external supervisor (systemd,
+    Docker health check, etc.).
+    """
 
     def notify(self) -> None:
-        """Signal liveness to the watchdog supervisor."""
+        """Send a heartbeat / keepalive signal."""
         ...
 
 
+# ---------------------------------------------------------------------------
+# Null (dev / mock mode)
+# ---------------------------------------------------------------------------
+
+
 class NullNotifier:
-    """No-op watchdog — used when watchdog is disabled or in dev mode."""
+    """No-op watchdog — used when watchdog is disabled."""
 
     def notify(self) -> None:
-        """No-op."""
+        """Do nothing."""
 
 
-class FileHeartbeatNotifier:
-    """Touches a heartbeat file on each ``notify()`` call.
-
-    Suitable for Docker ``HEALTHCHECK`` commands that stat a file's mtime,
-    or custom monitoring scripts that compare heartbeat age against a
-    configurable threshold.
-
-    Args:
-        heartbeat_path: Filesystem path to the heartbeat file.
-    """
-
-    def __init__(self, heartbeat_path: Path) -> None:
-        self._path = heartbeat_path
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        _log.info("file_heartbeat_watchdog_enabled", path=str(self._path))
-
-    def notify(self) -> None:
-        """Write monotonic timestamp to the heartbeat file."""
-        self._path.write_text(str(time.monotonic()))
+# ---------------------------------------------------------------------------
+# Systemd sd_notify
+# ---------------------------------------------------------------------------
 
 
 class SystemdNotifier:
-    """Sends ``WATCHDOG=1`` to systemd via the ``NOTIFY_SOCKET``.
+    """Send ``WATCHDOG=1`` to systemd via sd_notify.
 
-    The socket path is read from the ``NOTIFY_SOCKET`` environment variable,
-    which systemd sets automatically for ``Type=notify`` services.  If the
-    variable is absent, ``notify()`` is a silent no-op.
+    Tries the ``sdnotify`` Python package first; falls back to
+    ``systemd-notify --ready`` subprocess if unavailable.
+
+    Args:
+        ready_on_init: If ``True``, send ``READY=1`` immediately on
+            construction (useful for ``Type=notify`` services).
     """
 
-    def __init__(self) -> None:
-        self._notify_socket: str | None = os.environ.get("NOTIFY_SOCKET")
-        if self._notify_socket:
-            _log.info("systemd_watchdog_enabled", socket=self._notify_socket)
-        else:
-            _log.info("systemd_watchdog_disabled_no_notify_socket")
+    def __init__(self, *, ready_on_init: bool = True) -> None:
+        self._notifier = self._build_notifier()
+        if ready_on_init:
+            # Always attempt to send READY=1 so Type=notify services are not
+            # killed by systemd when sdnotify is unavailable.  _send() falls
+            # back to the systemd-notify subprocess if NOTIFY_SOCKET is set.
+            self._send("READY=1")
+            _log.info("systemd_notifier_ready")
+
+    # -- internal ----------------------------------------------------------
+
+    @staticmethod
+    def _build_notifier() -> Any:
+        """Try to import sdnotify; return notifier or None."""
+        try:
+            import sdnotify
+
+            return sdnotify.SystemdNotifier()
+        except ImportError:
+            _log.debug("sdnotify_not_available")
+            return None
+
+    def _send(self, state: str) -> None:
+        if self._notifier is not None:
+            self._notifier.notify(state)
+        elif os.environ.get("NOTIFY_SOCKET"):
+            # Subprocess fallback — only if systemd socket exists
+            import subprocess
+
+            subprocess.run(  # noqa: S603
+                ["systemd-notify", f"--pid={os.getpid()}", state],  # noqa: S607
+                check=False,
+                capture_output=True,
+            )
 
     def notify(self) -> None:
-        """Send ``WATCHDOG=1`` datagram to systemd."""
-        if not self._notify_socket:
-            return
-        try:
-            import socket as _socket
+        """Send WATCHDOG=1 heartbeat to systemd."""
+        self._send("WATCHDOG=1")
 
-            if sys.platform == "win32":
-                _log.debug("systemd_watchdog_skipped_windows")
-                return
 
-            af_unix: int = getattr(_socket, "AF_UNIX", 0)
-            sock = _socket.socket(af_unix, _socket.SOCK_DGRAM)
-            try:
-                addr: str
-                if self._notify_socket.startswith("@"):
-                    addr = "\0" + self._notify_socket[1:]
-                else:
-                    addr = self._notify_socket
-                sock.sendto(b"WATCHDOG=1", addr)
-            finally:
-                sock.close()
-        except Exception:
-            _log.warning("systemd_watchdog_notify_failed", exc_info=True)
+# ---------------------------------------------------------------------------
+# File heartbeat (Docker health checks)
+# ---------------------------------------------------------------------------
+
+
+class FileHeartbeatNotifier:
+    """Touch a file on each heartbeat for Docker health checks.
+
+    Docker ``HEALTHCHECK`` can test file recency with::
+
+        test $(( $(date +%s) - $(stat -c %Y /tmp/mousedroid_heartbeat) )) -lt 30
+
+    Args:
+        path: Filesystem path for the heartbeat file.
+    """
+
+    def __init__(self, path: str | Path = "/tmp/mousedroid_heartbeat") -> None:  # noqa: S108
+        self._path = Path(path)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def path(self) -> Path:
+        """Return the heartbeat file path."""
+        return self._path
+
+    def notify(self) -> None:
+        """Touch the heartbeat file with the current timestamp."""
+        self._path.write_text(str(time.monotonic()), encoding="utf-8")

@@ -150,6 +150,94 @@ graph TD
     Orchestrator --> MetricsReg2
     TelemetryPub2 --> TelemetryServer2
     MetricsReg2 --> TelemetryServer2
+    Orchestrator --> Watchdog
+    Orchestrator --> MemoryTier
+    Orchestrator --> VoiceEngine
+```
+
+---
+
+## Level 3b — Component Diagram: Production Hardening (v0.3.0)
+
+New production components added in the v0.3.0 release:
+
+```mermaid
+graph TD
+    Orchestrator["Orchestrator\nasyncio.wait_for(tick, timeout=tick_timeout_s)"]
+
+    subgraph Watchdog["Watchdog Layer\nhealth/watchdog.py"]
+        WatchdogProt["WatchdogProtocol\n@runtime_checkable"]
+        SystemdNotif["SystemdNotifier\nWATCHDOG=1 via sdnotify or subprocess"]
+        FileHB["FileHeartbeatNotifier\ntimestamp to /tmp/mousedroid_heartbeat"]
+        NullNotif["NullNotifier\nmock/dev mode"]
+        WatchdogProt <|.. SystemdNotif
+        WatchdogProt <|.. FileHB
+        WatchdogProt <|.. NullNotif
+    end
+
+    subgraph MemoryTierGroup["Memory Tier\nmemory/tier.py"]
+        MemTier["MemoryTier\nepisodic + semantic + working + consolidation"]
+        EpiRep["EpisodicReplay\nFAISS 50k"]
+        SemIdx["SemanticIndex\nconcept graph"]
+        WorkMem["WorkingMemory\n8192 token window"]
+        Consol["MemoryConsolidation\nasync background task"]
+        MemTier --> EpiRep
+        MemTier --> SemIdx
+        MemTier --> WorkMem
+        MemTier --> Consol
+    end
+
+    subgraph VoiceLayer["Voice Engine\nvoice/engine.py"]
+        Rocky["Rocky Personality\nphrase_bank.py"]
+        PiperTTS["Piper TTS\nlocal inference"]
+        Speaker["USB Speaker\nSpeakerProtocol"]
+        Rocky --> PiperTTS --> Speaker
+    end
+
+    subgraph PreFlight["Pre-flight Check\nscripts/preflight_check.sh"]
+        PF_ESP32["ESP32 device check"]
+        PF_Camera["Camera device check"]
+        PF_GPIO["GPIO device check"]
+        PF_Disk["Disk space check"]
+        PF_Config["Config YAML check"]
+        PF_Weights["Model weights check"]
+    end
+
+    Orchestrator -- "notify() after successful tick" --> Watchdog
+    Orchestrator -- "push ExperienceRecord each tick" --> MemoryTierGroup
+    Orchestrator -- "startup/shutdown/error/obstacle events" --> VoiceLayer
+    Orchestrator -- "asyncio.TimeoutError → emergency_stop()" --> ESP32Driver["ESP32 emergency_stop()"]
+    PreFlight -- "ExecStartPre (systemd)" --> Orchestrator
+```
+
+**Tick Safety Loop (v0.3.0):**
+
+```mermaid
+flowchart TD
+    Start(["run() loop iteration"])
+    WaitFor["asyncio.wait_for(tick(), tick_timeout_s)"]
+    Success["Tick completed OK"]
+    Timeout["TimeoutError"]
+    Exception["Unhandled Exception"]
+    EStop["esp32.emergency_stop()"]
+    VoiceErr["voice_event('error')"]
+    WDNotify["watchdog.notify()"]
+    MemPush["memory_tier.push(ExperienceRecord)"]
+    RateLimit["rate-limit sleep to next tick"]
+
+    Start --> WaitFor
+    WaitFor --> Success
+    WaitFor --> Timeout
+    WaitFor --> Exception
+    Timeout --> EStop
+    Timeout --> VoiceErr
+    Exception --> EStop
+    Exception --> VoiceErr
+    Success --> WDNotify
+    Success --> MemPush
+    WDNotify --> RateLimit
+    MemPush --> RateLimit
+    VoiceErr --> RateLimit
 ```
 
 ---

@@ -355,22 +355,20 @@ class LoopConfig(BaseModel):
     tick_timeout_s: float = Field(
         1.0,
         gt=0,
-        description="Max seconds per tick before triggering emergency stop",
+        description="Max seconds per tick before emergency stop is triggered",
     )
     watchdog_enabled: bool = Field(
         False,
-        description="Enable watchdog notifications (systemd or file heartbeat)",
+        description="Enable systemd/file heartbeat watchdog notifications",
     )
-    watchdog_mode: Literal["auto", "systemd", "file", "none"] = Field(
-        "auto",
-        description=(
-            "Watchdog mode: 'auto' (systemd if NOTIFY_SOCKET set, else file), "
-            "'systemd', 'file', 'none'"
-        ),
+    watchdog_interval_s: float = Field(
+        10.0,
+        gt=0,
+        description="Maximum interval between watchdog heartbeats (seconds)",
     )
-    heartbeat_path: str = Field(
-        "/tmp/mousedroid-heartbeat",  # noqa: S108
-        description="Path for file-based heartbeat (watchdog_mode 'file' or 'auto' fallback)",
+    watchdog_heartbeat_path: str = Field(
+        "/tmp/mousedroid_heartbeat",  # noqa: S108
+        description="Filesystem path for file-based watchdog heartbeat (Docker health checks)",
     )
 
 
@@ -419,6 +417,12 @@ class MissionParserConfig(BaseModel):
         ge=0,
         le=1,
         description="Confidence for obstacle avoidance commands",
+    )
+    llm_fallback_confidence: float = Field(
+        0.5,
+        ge=0,
+        le=1,
+        description="Minimum parser confidence to skip LLM fallback",
     )
 
 
@@ -472,11 +476,22 @@ class MCTSConfig(BaseModel):
 class MemoryConfig(BaseModel):
     """Layered memory system configuration (Pillar 4)."""
 
+    enabled: bool = Field(False, description="Enable memory tier (backwards compatible default)")
     working_context_size: int = Field(8192, gt=0, description="Working memory context tokens")
     episodic_capacity: int = Field(50_000, gt=0, description="Episodic replay buffer size")
     semantic_dim: int = Field(256, gt=0, description="Semantic embedding dimension")
     consolidation_batch_size: int = Field(32, gt=0, description="Offline consolidation batch")
     consolidation_interval_s: float = Field(60.0, gt=0, description="Consolidation period (s)")
+    semantic_retrieve_k: int = Field(
+        1,
+        gt=0,
+        description="Number of nearest neighbours to retrieve from semantic index per tick",
+    )
+    min_episodic_priority: float = Field(
+        1e-6,
+        gt=0,
+        description="Minimum episodic replay priority (floor above zero for FAISS)",
+    )
 
 
 class MetricsConfig(BaseModel):
@@ -505,6 +520,15 @@ class MetricsConfig(BaseModel):
         True, description="Expose safety_violations_total counter"
     )
     track_gpu_temp: bool = Field(True, description="Expose gpu_temp_celsius gauge")
+    track_memory_tier: bool = Field(True, description="Expose memory tier gauges")
+    track_voice_events: bool = Field(True, description="Expose voice event counter")
+    track_llm_latency: bool = Field(True, description="Expose LLM mission parse latency")
+    track_curiosity: bool = Field(True, description="Expose curiosity intrinsic reward gauge")
+    track_sensor_recovery: bool = Field(True, description="Expose sensor recovery counter")
+    loop_latency_buckets_ms: list[float] = Field(
+        default_factory=lambda: [1.0, 2.5, 5.0, 10.0, 20.0, 33.0, 50.0, 100.0, 200.0],
+        description="Histogram bucket boundaries (ms) for loop latency metric",
+    )
 
 
 class ModelConfig(BaseModel):
@@ -622,6 +646,16 @@ class SafetyConfig(BaseModel):
     )
     lidar_max_range_m: float = Field(
         12.0, gt=0, description="LiDAR max range for clearance conversion (m)"
+    )
+    sensor_recovery_attempts: int = Field(
+        1,
+        ge=0,
+        description="Max sensor recovery attempts before emergency stop",
+    )
+    sensor_recovery_delay_s: float = Field(
+        0.5,
+        gt=0,
+        description="Delay between sensor recovery attempts (s)",
     )
 
 
@@ -942,9 +976,6 @@ class ArmPerceptionConfig(BaseModel):
     )
     dark_brightness_threshold: float = Field(
         80.0, ge=0, le=255, description="Brightness below which garment is classified dark"
-    )
-    yolo_nms_iou_threshold: float = Field(
-        0.45, gt=0, le=1, description="IoU threshold for NMS post-processing"
     )
     default_focal_length: float = Field(500.0, gt=0, description="Default camera focal length (px)")
     default_principal_x: float = Field(320.0, gt=0, description="Default principal point X (px)")

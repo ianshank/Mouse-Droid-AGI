@@ -24,8 +24,10 @@ _log = get_logger(__name__)
 class LLMGateway:
     """NL mission -> GoalVector translation via local LLM.
 
-    Requires ``llama-cpp-python`` to be installed. ``start()`` raises
-    ``RuntimeError`` if the dependency is missing.
+    Requires ``llama-cpp-python`` to be installed.  If the dependency is
+    missing or the model file cannot be found, ``start()`` logs a warning
+    and enters degraded mode where ``translate_mission()`` returns a safe
+    zero ``GoalVector`` rather than crashing the orchestrator.
     """
 
     def __init__(self, cfg: GatewayConfig) -> None:
@@ -36,12 +38,14 @@ class LLMGateway:
         """
         self._cfg = cfg
         self._model: Any = None
+        self._degraded = False
 
     async def start(self) -> None:
         """Load model and warm up.
 
-        Raises:
-            RuntimeError: If llama-cpp-python is not installed or model not found.
+        If ``llama-cpp-python`` is not installed or the model file is
+        missing, the gateway enters degraded mode and logs a warning
+        instead of raising.
         """
         if not self._cfg.enabled:
             _log.info("llm_gateway_disabled")
@@ -49,12 +53,20 @@ class LLMGateway:
 
         try:
             await asyncio.to_thread(self._load_model)
-        except ImportError as exc:
-            msg = "llama-cpp-python is required: pip install mousedroid[llm]"
-            raise RuntimeError(msg) from exc
-        except OSError as exc:
-            msg = f"Model file not found: {self._cfg.model_path}"
-            raise RuntimeError(msg) from exc
+        except ImportError:
+            _log.warning(
+                "llm_gateway_degraded",
+                reason="llama-cpp-python is required: pip install mousedroid[llm]",
+            )
+            self._degraded = True
+            return
+        except OSError:
+            _log.warning(
+                "llm_gateway_degraded",
+                reason=f"Model file not found: {self._cfg.model_path}",
+            )
+            self._degraded = True
+            return
         _log.info("llm_gateway_started", model=str(self._cfg.model_path))
 
     def _load_model(self) -> None:  # pragma: no cover

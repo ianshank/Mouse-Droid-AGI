@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Standalone sensor verification script for MouseDroid Jetson hardware.
 
-Checks access to the three primary input sensors:
-  - Video   : IMX500 camera via picamera2 (jetson_utils fallback)
-  - Audio   : USB microphone via pyaudio / UsbMicrophone driver
+Checks access to all input/output sensors:
+  - Video      : IMX500 camera via picamera2 (jetson_utils fallback)
+  - Audio      : USB microphone via pyaudio / UsbMicrophone driver
   - Ultrasonic : HC-SR04 via Jetson.GPIO
+  - LiDAR      : LD19 via serial port
+  - Speaker    : Audio output via PiperTTS / ALSA
 
 Usage:
-    python scripts/verify_sensors.py [--sensor {camera,audio,ultrasonic,all}]
+    python scripts/verify_sensors.py [--sensor {camera,audio,ultrasonic,lidar,speaker,all}]
+    python scripts/verify_sensors.py --json
 
 Exit code is non-zero if any sensor reports FAIL.
 """
@@ -30,6 +33,7 @@ if str(_PROJECT_ROOT / "src") not in sys.path:
 # ---------------------------------------------------------------------------
 
 _FAILURES: list[str] = []
+_RESULTS: dict[str, dict[str, object]] = {}
 
 _GREEN = "\033[92m"
 _RED = "\033[91m"
@@ -37,20 +41,32 @@ _YELLOW = "\033[93m"
 _RESET = "\033[0m"
 
 
-def _ok(label: str, detail: str = "") -> None:
+def _ok(label: str, detail: str = "", *, sensor: str = "") -> None:
     suffix = f"  ({detail})" if detail else ""
     print(f"  {_GREEN}[PASS]{_RESET} {label}{suffix}")
+    if sensor:
+        _RESULTS.setdefault(sensor, {})["status"] = "pass"
+        if detail:
+            _RESULTS[sensor]["detail"] = detail
 
 
-def _fail(label: str, detail: str = "") -> None:
+def _fail(label: str, detail: str = "", *, sensor: str = "") -> None:
     suffix = f"  ({detail})" if detail else ""
     print(f"  {_RED}[FAIL]{_RESET} {label}{suffix}")
     _FAILURES.append(label)
+    if sensor:
+        _RESULTS.setdefault(sensor, {})["status"] = "fail"
+        if detail:
+            _RESULTS[sensor]["error"] = detail
 
 
-def _skip(label: str, reason: str = "") -> None:
+def _skip(label: str, reason: str = "", *, sensor: str = "") -> None:
     suffix = f"  ({reason})" if reason else ""
     print(f"  {_YELLOW}[SKIP]{_RESET} {label}{suffix}")
+    if sensor:
+        _RESULTS.setdefault(sensor, {})["status"] = "skip"
+        if reason:
+            _RESULTS[sensor]["reason"] = reason
 
 
 def _section(title: str) -> None:
@@ -61,6 +77,7 @@ def _section(title: str) -> None:
 # ---------------------------------------------------------------------------
 # 1. Video — IMX500 / picamera2
 # ---------------------------------------------------------------------------
+
 
 def check_camera() -> None:
     _section("Video (Camera)")
@@ -109,9 +126,7 @@ def _check_camera_jetson_utils() -> None:
     _ok("jetson_utils import")
     t0 = time.monotonic()
     try:
-        cam = jetson_utils.videoSource(
-            "csi://0", argv=["--input-width=640", "--input-height=480"]
-        )
+        cam = jetson_utils.videoSource("csi://0", argv=["--input-width=640", "--input-height=480"])
         cuda_img = cam.Capture()
         frame = jetson_utils.cudaToNumpy(cuda_img) if cuda_img is not None else None
     except Exception as exc:
@@ -134,6 +149,7 @@ def _check_camera_jetson_utils() -> None:
 # ---------------------------------------------------------------------------
 # 2. Audio — USB microphone / pyaudio
 # ---------------------------------------------------------------------------
+
 
 def check_audio() -> None:
     _section("Audio (USB Microphone)")
@@ -260,11 +276,7 @@ def _raw_pyaudio_capture() -> None:
             break
 
     # Save the device name before terminating PyAudio.
-    device_name = (
-        pa.get_device_info_by_index(used_index)["name"]
-        if used_index is not None
-        else "?"
-    )
+    device_name = pa.get_device_info_by_index(used_index)["name"] if used_index is not None else "?"
     pa.terminate()
 
     if raw is None:
@@ -278,8 +290,7 @@ def _raw_pyaudio_capture() -> None:
         return
 
     detail = (
-        f"device=[{used_index}]{device_name}, "
-        f"fmt={used_fmt}, shape={arr.shape}, {elapsed:.2f}s"
+        f"device=[{used_index}]{device_name}, " f"fmt={used_fmt}, shape={arr.shape}, {elapsed:.2f}s"
     )
     _ok("raw pyaudio capture", detail)
 
@@ -287,6 +298,7 @@ def _raw_pyaudio_capture() -> None:
 # ---------------------------------------------------------------------------
 # 3. Ultrasonic — HC-SR04 / Jetson.GPIO
 # ---------------------------------------------------------------------------
+
 
 def check_ultrasonic() -> None:
     _section("Ultrasonic (HC-SR04)")
@@ -389,54 +401,179 @@ def _raw_gpio_distance_check() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 4. LiDAR — LD19 / serial
+# ---------------------------------------------------------------------------
+
+
+def check_lidar() -> None:
+    _section("LiDAR (LD19)")
+
+    try:
+        from mousedroid.config.schema import Settings
+    except ImportError:
+        _fail("mousedroid import", "package not importable", sensor="lidar")
+        return
+
+    cfg = Settings(mock_hardware=False)
+    if cfg.lidar is None:
+        _skip("LiDAR config", "lidar section not present in config", sensor="lidar")
+        return
+
+    asyncio.run(_async_lidar_check(cfg))
+
+
+async def _async_lidar_check(cfg: object) -> None:
+    try:
+        from mousedroid.factory import build_lidar
+    except ImportError:
+        _fail("build_lidar import", "factory not importable", sensor="lidar")
+        return
+
+    lidar = build_lidar(cfg)
+    if lidar is None:
+        _skip("LiDAR driver", "build_lidar returned None", sensor="lidar")
+        return
+
+    t0 = time.monotonic()
+    try:
+        await lidar.start()
+        scan = await lidar.read_scan()
+        await lidar.stop()
+    except Exception as exc:
+        _fail("LiDAR scan read", str(exc), sensor="lidar")
+        return
+
+    elapsed = time.monotonic() - t0
+    n_points = len(scan)
+
+    if n_points < 10:
+        _fail("LiDAR scan points", f"only {n_points} points (expected 100+)", sensor="lidar")
+        return
+
+    _ok("LiDAR scan read", f"{n_points} points in {elapsed:.2f}s", sensor="lidar")
+
+
+# ---------------------------------------------------------------------------
+# 5. Speaker — audio output
+# ---------------------------------------------------------------------------
+
+
+def check_speaker() -> None:
+    _section("Speaker (Audio Output)")
+
+    try:
+        import numpy as np
+
+        from mousedroid.config.schema import Settings
+    except ImportError:
+        _fail("mousedroid import", "package not importable", sensor="speaker")
+        return
+
+    cfg = Settings(mock_hardware=False)
+    asyncio.run(_async_speaker_check(cfg, np))
+
+
+async def _async_speaker_check(cfg: object, np: object) -> None:
+    try:
+        from mousedroid.factory import build_speaker
+    except ImportError:
+        _fail("build_speaker import", "factory not importable", sensor="speaker")
+        return
+
+    speaker = build_speaker(cfg)
+    if speaker is None:
+        _skip("Speaker driver", "build_speaker returned None", sensor="speaker")
+        return
+
+    # Generate a short 440 Hz test tone (0.3s)
+    sample_rate = getattr(getattr(cfg, "voice", None), "sample_rate", 22050)
+    duration_s = 0.3
+    t = np.linspace(0, duration_s, int(sample_rate * duration_s), dtype=np.float32)
+    tone = (0.2 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+
+    t0 = time.monotonic()
+    try:
+        await speaker.play(tone)
+    except Exception as exc:
+        _fail("Speaker play", str(exc), sensor="speaker")
+        return
+
+    elapsed = time.monotonic() - t0
+    _ok("Speaker play", f"440 Hz tone, {duration_s}s in {elapsed:.2f}s", sensor="speaker")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
+_ALL_SENSORS = ("camera", "audio", "ultrasonic", "lidar", "speaker")
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(
+    ap = argparse.ArgumentParser(
         description="Verify access to MouseDroid hardware sensors.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Examples:\n"
         "  python scripts/verify_sensors.py\n"
         "  python scripts/verify_sensors.py --sensor camera\n"
-        "  python scripts/verify_sensors.py --sensor audio\n"
-        "  python scripts/verify_sensors.py --sensor ultrasonic\n",
+        "  python scripts/verify_sensors.py --sensor lidar\n"
+        "  python scripts/verify_sensors.py --json\n",
     )
-    parser.add_argument(
+    ap.add_argument(
         "--sensor",
-        choices=["all", "camera", "audio", "ultrasonic"],
+        choices=["all", *_ALL_SENSORS],
         default="all",
         help="Which sensor to verify (default: all)",
     )
-    args = parser.parse_args()
+    ap.add_argument(
+        "--json",
+        action="store_true",
+        help="Output results as JSON (machine-readable)",
+    )
+    args = ap.parse_args()
 
-    print("\nMouseDroid Sensor Verification")
-    print(f"Running on Python {sys.version.split()[0]}")
-    print(f"Project root: {_PROJECT_ROOT}")
+    if not args.json:
+        print("\nMouseDroid Sensor Verification")
+        print(f"Running on Python {sys.version.split()[0]}")
+        print(f"Project root: {_PROJECT_ROOT}")
 
-    if args.sensor in ("all", "camera"):
-        check_camera()
-    if args.sensor in ("all", "audio"):
-        check_audio()
-    if args.sensor in ("all", "ultrasonic"):
-        check_ultrasonic()
+    sensor_checks: dict[str, object] = {
+        "camera": check_camera,
+        "audio": check_audio,
+        "ultrasonic": check_ultrasonic,
+        "lidar": check_lidar,
+        "speaker": check_speaker,
+    }
+
+    for name, check_fn in sensor_checks.items():
+        if args.sensor in ("all", name):
+            check_fn()
 
     # Summary
-    _section("Summary")
-    total = sum(
-        1
-        for s in ("camera", "audio", "ultrasonic")
-        if args.sensor in ("all", s)
-    )
-    failed = len(_FAILURES)
-    passed = total - failed
+    if args.json:
+        import json
 
-    print(f"  {passed}/{total} sensors OK")
-    if _FAILURES:
-        print(f"  {_RED}Failed:{_RESET} {', '.join(_FAILURES)}")
-        sys.exit(1)
+        result = {
+            "sensors": _RESULTS,
+            "failures": _FAILURES,
+            "passed": len(_RESULTS) - len(_FAILURES),
+            "total": len(_RESULTS),
+        }
+        print(json.dumps(result, indent=2))
     else:
-        print(f"  {_GREEN}All sensors accessible.{_RESET}")
+        _section("Summary")
+        total = sum(1 for s in _ALL_SENSORS if args.sensor in ("all", s))
+        failed = len(_FAILURES)
+        passed = total - failed
+
+        print(f"  {passed}/{total} sensors OK")
+        if _FAILURES:
+            print(f"  {_RED}Failed:{_RESET} {', '.join(_FAILURES)}")
+        else:
+            print(f"  {_GREEN}All sensors accessible.{_RESET}")
+
+    if _FAILURES:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

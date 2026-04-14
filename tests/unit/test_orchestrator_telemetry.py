@@ -43,6 +43,7 @@ def _make_orchestrator(telemetry_publisher=None, telemetry_server=None):
     esp32 = AsyncMock()
     sensor_manager = AsyncMock()
     sensor_manager.read_all.return_value = MouseDroidObservationBundle()
+    sensor_manager.recovery_attempt.return_value = 0
 
     return MouseDroidOrchestrator(
         world_model=world_model,

@@ -28,6 +28,7 @@ GPIO_CHIPS=("/dev/gpiochip0" "/dev/gpiochip1")
 CONFIG_FILE="${MOUSEDROID_CONFIG:-/etc/mousedroid/jetson_production.yaml}"
 WEIGHTS_DIR="${MOUSEDROID_WEIGHTS_DIR:-/opt/mousedroid/weights}"
 MODEL_DIR="${MOUSEDROID_MODEL_DIR:-/opt/mousedroid/models}"
+INSTALL_DIR="${MOUSEDROID_INSTALL_DIR:-/opt/mousedroid}"
 
 MIN_DISK_GB="${MOUSEDROID_MIN_DISK_GB:-8}"
 
@@ -56,7 +57,7 @@ PASS=0
 FAIL=0
 WARN=0
 
-ok() { echo "  ✓ $1"; ((PASS++)); }
+ok()   { echo "  ✓ $1"; ((PASS++)); }
 fail() { echo "  ✗ $1" >&2; ((FAIL++)); }
 warn() { echo "  ⚠ $1"; ((WARN++)); }
 
@@ -100,12 +101,19 @@ echo ""
 echo "=== Configuration ==="
 
 if [ -f "$CONFIG_FILE" ]; then
-    # Basic YAML syntax check (python available in most Jetson environments)
-    if command -v python3 &>/dev/null; then
-        if python3 -c "import yaml, sys; yaml.safe_load(open(sys.argv[1]))" -- "$CONFIG_FILE" 2>/dev/null; then
-            ok "Config YAML valid ($CONFIG_FILE)"
+    # Prefer the venv python so PyYAML is available even if system python lacks it.
+    PY="${INSTALL_DIR}/venv/bin/python3"
+    command -v "$PY" >/dev/null 2>&1 || PY="python3"
+
+    if command -v "$PY" >/dev/null 2>&1; then
+        if "$PY" -c "import yaml" >/dev/null 2>&1; then
+            if "$PY" -c "import yaml, sys; yaml.safe_load(open(sys.argv[1]))" -- "$CONFIG_FILE" 2>/dev/null; then
+                ok "Config YAML valid ($CONFIG_FILE)"
+            else
+                fail "Config YAML parse error: $CONFIG_FILE"
+            fi
         else
-            fail "Config YAML parse error: $CONFIG_FILE"
+            warn "PyYAML not installed — skipping YAML syntax check for $CONFIG_FILE"
         fi
     else
         ok "Config file exists ($CONFIG_FILE) — YAML validation skipped (no python3)"
@@ -145,12 +153,12 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Disk space
+# 4. Disk space (check install dir partition, not just /)
 # ---------------------------------------------------------------------------
 echo ""
 echo "=== System Resources ==="
 
-AVAIL_KB=$(df --output=avail / 2>/dev/null | tail -1 | tr -d ' ' || echo "0")
+AVAIL_KB=$(df -P "$INSTALL_DIR" 2>/dev/null | awk 'NR==2 {print $4}' || echo "0")
 AVAIL_GB=$((AVAIL_KB / 1048576))
 
 if [ "$AVAIL_GB" -ge "$MIN_DISK_GB" ]; then

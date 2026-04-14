@@ -114,9 +114,9 @@ def test_help_lines_well_formed() -> None:
     registry = _build_registry()
     text = registry.render_prometheus()
     help_names = _HELP_RE.findall(text)
-    assert len(help_names) >= len(_ALL_FAMILIES), (
-        f"Expected at least {len(_ALL_FAMILIES)} HELP lines, got {len(help_names)}"
-    )
+    assert len(help_names) >= len(
+        _ALL_FAMILIES
+    ), f"Expected at least {len(_ALL_FAMILIES)} HELP lines, got {len(help_names)}"
 
 
 def test_type_lines_well_formed() -> None:
@@ -124,9 +124,9 @@ def test_type_lines_well_formed() -> None:
     registry = _build_registry()
     text = registry.render_prometheus()
     type_pairs = _TYPE_RE.findall(text)
-    assert len(type_pairs) >= len(_ALL_FAMILIES), (
-        f"Expected at least {len(_ALL_FAMILIES)} TYPE lines, got {len(type_pairs)}"
-    )
+    assert len(type_pairs) >= len(
+        _ALL_FAMILIES
+    ), f"Expected at least {len(_ALL_FAMILIES)} TYPE lines, got {len(type_pairs)}"
     for name, kind in type_pairs:
         assert kind in {
             "counter",
@@ -145,9 +145,9 @@ def test_counter_uses_total_suffix() -> None:
         if line.startswith("# TYPE") and "counter" in line:
             parts = line.split()
             metric_name = parts[2]
-            assert metric_name.endswith("_total"), (
-                f"Counter metric '{metric_name}' missing _total suffix"
-            )
+            assert metric_name.endswith(
+                "_total"
+            ), f"Counter metric '{metric_name}' missing _total suffix"
 
 
 def test_histogram_has_bucket_sum_count() -> None:
@@ -190,9 +190,9 @@ def test_safety_violations_labeled_counter() -> None:
     registry = _build_registry()
     text = registry.render_prometheus()
     ns = _NS
-    assert f'{ns}_safety_violations_total{{law="law1"}}' in text, (
-        "Safety violations counter missing law label"
-    )
+    assert (
+        f'{ns}_safety_violations_total{{law="law1"}}' in text
+    ), "Safety violations counter missing law label"
 
 
 def test_no_duplicate_type_declarations() -> None:
@@ -233,9 +233,9 @@ def test_namespace_is_configurable() -> None:
     assert f"{custom_ns}_publish_hz" in text
 
     # Default namespace should NOT appear
-    assert "mousedroid_" not in text, (
-        "Default namespace 'mousedroid_' should not appear when custom namespace is set"
-    )
+    assert (
+        "mousedroid_" not in text
+    ), "Default namespace 'mousedroid_' should not appear when custom namespace is set"
 
 
 def test_help_and_type_paired() -> None:

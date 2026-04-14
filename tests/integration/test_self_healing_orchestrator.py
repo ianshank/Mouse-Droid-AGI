@@ -14,6 +14,7 @@ import torch
 
 from mousedroid.comms.protocol import EncoderReading
 from mousedroid.config.schema import Settings
+from mousedroid.constants import DEFAULT_AUDIO_CHUNK_SIZE, DEFAULT_BATTERY_VOLTAGE
 from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator
 from mousedroid.resilience.circuit_breaker import CircuitState
 from mousedroid.resilience.resilient_driver import ResilientESP32Driver
@@ -27,8 +28,8 @@ def _make_observation(cfg: Settings) -> MouseDroidObservationBundle:
         _timestamp=0.0,
         _vision_features=np.zeros(cfg.camera.feature_dim, dtype=np.float32),
         _distance_m=1.5,
-        _motor_state=np.array([0.0, 0.0, 0.0, 12.0], dtype=np.float32),
-        _audio_chunk=np.zeros(1024, dtype=np.float32),
+        _motor_state=np.array([0.0, 0.0, 0.0, DEFAULT_BATTERY_VOLTAGE], dtype=np.float32),
+        _audio_chunk=np.zeros(DEFAULT_AUDIO_CHUNK_SIZE, dtype=np.float32),
         _valid_mask=np.array([1.0, 1.0, 1.0, 0.0], dtype=np.float32),
     )
 
@@ -47,15 +48,13 @@ def _build_orchestrator(
     inner_esp32.disconnect = AsyncMock()
     inner_esp32.send_velocity = AsyncMock()
     inner_esp32.read_encoders = AsyncMock(return_value=EncoderReading())
-    inner_esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+    inner_esp32.get_battery_voltage = AsyncMock(return_value=DEFAULT_BATTERY_VOLTAGE)
     inner_esp32.emergency_stop = AsyncMock()
 
     resilient = ResilientESP32Driver(
         inner_esp32,
         cfg.retry.model_copy(update={"max_attempts": max_attempts, "base_delay_s": 0.001}),
-        cfg.circuit_breaker.model_copy(
-            update={"failure_threshold": failure_threshold, "recovery_timeout_s": 30.0}
-        ),
+        cfg.circuit_breaker.model_copy(update={"failure_threshold": failure_threshold}),
     )
 
     world_model = MagicMock()
@@ -76,6 +75,7 @@ def _build_orchestrator(
 
     sensor_manager = AsyncMock()
     sensor_manager.read_all.return_value = _make_observation(cfg)
+    sensor_manager.recovery_attempt.return_value = 0
 
     orch = MouseDroidOrchestrator(
         world_model=world_model,
@@ -166,6 +166,7 @@ async def test_full_tick_with_factory_built_driver():
 
     sensor_manager = AsyncMock()
     sensor_manager.read_all.return_value = _make_observation(cfg)
+    sensor_manager.recovery_attempt.return_value = 0
 
     orch = MouseDroidOrchestrator(
         world_model=world_model,
