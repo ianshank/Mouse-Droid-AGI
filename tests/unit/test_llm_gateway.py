@@ -179,22 +179,23 @@ async def test_stop_sets_model_to_none(gateway: LLMGateway):
     assert gateway._model is None
 
 
-async def test_start_raises_without_llama_cpp(gateway: LLMGateway):
-    """start() raises RuntimeError without llama-cpp-python."""
-    with (
-        patch.object(gateway, "_load_model", side_effect=ImportError("no llama")),
-        pytest.raises(RuntimeError, match="llama-cpp-python"),
-    ):
-        await gateway.start()
+async def test_start_degrades_without_llama_cpp(gateway: LLMGateway):
+    """start() enters degraded mode without llama-cpp-python."""
+    with patch.object(gateway, "_load_model", side_effect=ImportError("no llama")):
+        await gateway.start()  # Should NOT raise
+    assert gateway._degraded is True
+    assert gateway._model is None
+    # translate_mission returns safe zero GoalVector in degraded mode
+    result = await gateway.translate_mission("go forward")
+    assert result == GoalVector()
 
 
-async def test_start_raises_on_missing_model_file(gateway: LLMGateway):
-    """start() raises RuntimeError when model file not found."""
-    with (
-        patch.object(gateway, "_load_model", side_effect=OSError("file not found")),
-        pytest.raises(RuntimeError, match="Model file not found"),
-    ):
-        await gateway.start()
+async def test_start_degrades_on_missing_model_file(gateway: LLMGateway):
+    """start() enters degraded mode when model file not found."""
+    with patch.object(gateway, "_load_model", side_effect=OSError("file not found")):
+        await gateway.start()  # Should NOT raise
+    assert gateway._degraded is True
+    assert gateway._model is None
 
 
 async def test_translate_mission_with_model(gateway: LLMGateway):
