@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "MouseDroid MSE-6 Telemetry Dashboard — real-time monitoring of navigation system health and performance.",
+  "description": "Real-time monitoring of MouseDroidAGI navigation system health and performance.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -10,27 +10,27 @@
   "panels": [
     {
       "id": 1,
-      "title": "Control Loop Frequency (Hz)",
+      "title": "Loop Latency (ms)",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [
         {
-          "expr": "1000 / mousedroid_loop_time_ms{job=\"$job\"}",
-          "legendFormat": "Loop Hz",
+          "expr": "mousedroid_loop_time_ms",
+          "legendFormat": "loop_time_ms",
           "refId": "A"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "hertz",
+          "unit": "ms",
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "red", "value": 0 },
-              { "color": "yellow", "value": 25 },
-              { "color": "green", "value": 29 }
+              { "color": "green", "value": null },
+              { "color": "green", "value": 0 },
+              { "color": "yellow", "value": 33 },
+              { "color": "red", "value": 200 }
             ]
           }
         }
@@ -44,11 +44,11 @@
       "title": "GPU Temperature (C)",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [
         {
-          "expr": "mousedroid_gpu_temp_celsius{job=\"$job\"}",
-          "legendFormat": "GPU Temp",
+          "expr": "mousedroid_gpu_temp_celsius",
+          "legendFormat": "gpu_temp_celsius",
           "refId": "A"
         }
       ],
@@ -75,11 +75,11 @@
       "title": "Battery Voltage (V)",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [
         {
-          "expr": "mousedroid_battery_voltage_v{job=\"$job\"}",
-          "legendFormat": "Battery V",
+          "expr": "mousedroid_battery_voltage_v",
+          "legendFormat": "battery_voltage_v",
           "refId": "A"
         }
       ],
@@ -105,63 +105,13 @@
     },
     {
       "id": 4,
-      "title": "Memory Usage (%)",
-      "type": "gauge",
-      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "targets": [
-        {
-          "expr": "(1 - (node_memory_MemAvailable_bytes{job=\"$job\"} / node_memory_MemTotal_bytes{job=\"$job\"})) * 100",
-          "legendFormat": "Memory %",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "min": 0,
-          "max": 100,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "green", "value": 0 },
-              { "color": "yellow", "value": 80 },
-              { "color": "red", "value": 90 }
-            ]
-          }
-        }
-      }
-    },
-    {
-      "id": 5,
-      "title": "Loop Latency Histogram (ms)",
-      "type": "histogram",
-      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "targets": [
-        {
-          "expr": "mousedroid_loop_time_ms_bucket{job=\"$job\"}",
-          "legendFormat": "{{le}}ms",
-          "refId": "A",
-          "format": "heatmap"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ms"
-        }
-      }
-    },
-    {
-      "id": 6,
-      "title": "Error Rate (safety violations/min)",
+      "title": "Safety Violations",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [
         {
-          "expr": "rate(mousedroid_safety_violations_total{job=\"$job\"}[1m]) * 60",
+          "expr": "rate(mousedroid_safety_violations_total[1m]) * 60",
           "legendFormat": "{{law}} violations/min",
           "refId": "A"
         }
@@ -185,34 +135,15 @@
       }
     },
     {
-      "id": 7,
-      "title": "WebSocket Clients Connected",
+      "id": 5,
+      "title": "Frame Drops (Total)",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 16 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [
         {
-          "expr": "mousedroid_ws_client_count{job=\"$job\"}",
-          "legendFormat": "Clients",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short"
-        }
-      }
-    },
-    {
-      "id": 8,
-      "title": "Frames Dropped (Total)",
-      "type": "stat",
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 16 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "targets": [
-        {
-          "expr": "mousedroid_frames_dropped_total{job=\"$job\"}",
-          "legendFormat": "Dropped",
+          "expr": "mousedroid_frame_drops_total",
+          "legendFormat": "frame_drops",
           "refId": "A"
         }
       ],
@@ -230,6 +161,25 @@
           }
         }
       }
+    },
+    {
+      "id": 6,
+      "title": "WebSocket Clients",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "mousedroid_ws_client_count",
+          "legendFormat": "ws_clients",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      }
     }
   ],
   "refresh": "5s",
@@ -238,19 +188,11 @@
   "templating": {
     "list": [
       {
-        "name": "datasource",
+        "name": "DS_PROMETHEUS",
         "type": "datasource",
         "query": "prometheus",
         "current": { "text": "Prometheus", "value": "Prometheus" },
-        "label": "Data Source"
-      },
-      {
-        "name": "job",
-        "type": "query",
-        "datasource": { "type": "prometheus", "uid": "${datasource}" },
-        "query": "label_values(mousedroid_loop_time_ms, job)",
-        "current": { "text": "mousedroid", "value": "mousedroid" },
-        "label": "Job"
+        "label": "Prometheus"
       }
     ]
   },
@@ -262,7 +204,7 @@
     "refresh_intervals": ["5s", "10s", "30s", "1m", "5m"]
   },
   "timezone": "browser",
-  "title": "MouseDroid MSE-6 Telemetry",
-  "uid": "mousedroid-telemetry-v1",
+  "title": "MouseDroidAGI \u2014 System Overview",
+  "uid": "mousedroid-overview",
   "version": 1
 }

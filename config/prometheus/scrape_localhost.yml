@@ -1,0 +1,27 @@
+# Prometheus scrape config — localhost development
+#
+# Use when running MouseDroid directly on the host (no Docker).
+# Default telemetry port: 8080 (from TelemetryConfig.port)
+
+scrape_configs:
+  - job_name: mousedroid
+    scrape_interval: 5s
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - "localhost:8080"
+        labels:
+          env: dev
+          platform: jetson
+
+  # Optional: node_exporter for host-level metrics
+  - job_name: node
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - "localhost:9100"
+        labels:
+          env: dev
+
+rule_files:
+  - alerts.yml

@@ -1,0 +1,27 @@
+# Prometheus scrape config — Jetson with systemd service
+#
+# Use when mousedroid runs as a systemd unit on the Jetson Orin Nano.
+# Default telemetry port: 8080 (from TelemetryConfig.port)
+# Jetson default IP over USB: 192.168.55.1
+
+scrape_configs:
+  - job_name: mousedroid
+    scrape_interval: 5s
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - "192.168.55.1:8080"
+        labels:
+          env: production
+          platform: jetson
+
+  - job_name: node
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - "192.168.55.1:9100"
+        labels:
+          env: production
+
+rule_files:
+  - alerts.yml
