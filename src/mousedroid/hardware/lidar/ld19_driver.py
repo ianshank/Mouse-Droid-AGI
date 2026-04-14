@@ -16,6 +16,8 @@ import numpy as np
 from mousedroid.constants import (
     LIDAR_FRAME_SIZE,
     LIDAR_HEADER_BYTE,
+    LIDAR_MM_TO_M,
+    LIDAR_SCAN_TIMEOUT_MULTIPLIER,
 )
 from mousedroid.hardware.lidar.ld19_protocol import LD19Frame, LD19FrameParser
 from mousedroid.logging.setup import get_logger
@@ -129,7 +131,9 @@ class LD19LidarDriver:
 
         frames: list[LD19Frame] = []
         buf = bytearray()
-        deadline = time.monotonic() + (2.0 / max(self._cfg.scan_frequency_hz, 0.1))
+        deadline = time.monotonic() + (
+            LIDAR_SCAN_TIMEOUT_MULTIPLIER / max(self._cfg.scan_frequency_hz, 0.1)
+        )
         prev_start_angle: float | None = None
 
         while time.monotonic() < deadline:
@@ -193,7 +197,7 @@ class LD19LidarDriver:
             for i, point in enumerate(frame.points):
                 if point.confidence < cfg.min_confidence:
                     continue
-                dist_m = point.distance_mm / 1000.0
+                dist_m = point.distance_mm / LIDAR_MM_TO_M
                 if dist_m < cfg.min_range_m or dist_m > cfg.max_range_m:
                     continue
                 all_angles.append(float(angles[i]))

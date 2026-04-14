@@ -13,7 +13,11 @@ from mousedroid.constants import (
     DEFAULT_VISION_DIM,
     DESIRE_ENCODER_SEED,
     INTENTION_PREDICTOR_SEED,
+    LIDAR_CRC8_POLYNOMIAL,
+    LIDAR_DEFAULT_MOCK_CONFIDENCE,
     LIDAR_HEADER_BYTE,
+    LIDAR_MM_TO_M,
+    LIDAR_SCAN_TIMEOUT_MULTIPLIER,
     MILLISECONDS_PER_SECOND,
     N_SENSOR_MODALITIES,
     N_SENSOR_MODALITIES_WITH_LIDAR,
@@ -85,3 +89,23 @@ def test_lidar_header_byte():
 def test_lidar_default_feature_dim():
     """DEFAULT_LIDAR_FEATURE_DIM should be 36."""
     assert DEFAULT_LIDAR_FEATURE_DIM == 36
+
+
+def test_lidar_crc8_polynomial():
+    """LIDAR_CRC8_POLYNOMIAL should be 0x4C."""
+    assert LIDAR_CRC8_POLYNOMIAL == 0x4C
+
+
+def test_lidar_mm_to_m():
+    """LIDAR_MM_TO_M should be 1000.0."""
+    assert LIDAR_MM_TO_M == 1000.0
+
+
+def test_lidar_scan_timeout_multiplier():
+    """LIDAR_SCAN_TIMEOUT_MULTIPLIER should be positive."""
+    assert LIDAR_SCAN_TIMEOUT_MULTIPLIER > 0.0
+
+
+def test_lidar_default_mock_confidence():
+    """LIDAR_DEFAULT_MOCK_CONFIDENCE should be in [0, 255]."""
+    assert 0 <= LIDAR_DEFAULT_MOCK_CONFIDENCE <= 255

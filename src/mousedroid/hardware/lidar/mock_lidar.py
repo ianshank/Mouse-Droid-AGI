@@ -12,6 +12,11 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from mousedroid.constants import (
+    LIDAR_DEFAULT_MOCK_CONFIDENCE,
+    LIDAR_FULL_ROTATION_DEG,
+    LIDAR_MM_TO_M,
+)
 from mousedroid.logging.setup import get_logger
 from mousedroid.sensing.lidar_scan import LidarScan
 
@@ -98,11 +103,11 @@ class MockLidar:
 
     def _default_scan(self) -> LidarScan:
         """Generate a default scan with 360 uniformly-spaced points."""
-        n_points = 360
-        mid_range_mm = (self._cfg.max_range_m + self._cfg.min_range_m) / 2.0 * 1000.0
-        angles = np.linspace(0.0, 359.0, num=n_points, dtype=np.float32)
+        n_points = int(LIDAR_FULL_ROTATION_DEG)
+        mid_range_mm = (self._cfg.max_range_m + self._cfg.min_range_m) / 2.0 * LIDAR_MM_TO_M
+        angles = np.linspace(0.0, LIDAR_FULL_ROTATION_DEG - 1.0, num=n_points, dtype=np.float32)
         distances = np.full(n_points, mid_range_mm, dtype=np.float32)
-        confidences = np.full(n_points, 200, dtype=np.uint8)
+        confidences = np.full(n_points, LIDAR_DEFAULT_MOCK_CONFIDENCE, dtype=np.uint8)
         return LidarScan(
             angles_deg=angles,
             distances_mm=distances,

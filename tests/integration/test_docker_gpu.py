@@ -151,6 +151,6 @@ class TestContainerEnvironment:
             config_path = os.path.dirname(config_dir)
             # Config dir may not be mounted in all test environments
             if os.path.isdir(config_path):
-                assert any(f.endswith(".yaml") for f in os.listdir(config_path)), (
-                    "No YAML files in config directory"
-                )
+                assert any(
+                    f.endswith(".yaml") for f in os.listdir(config_path)
+                ), "No YAML files in config directory"

@@ -276,7 +276,7 @@ class HailoFeatureExtractor:
                 if norm > 0:
                     features = features / norm
 
-            return cast(NDArray[np.float32], features)
+            return features
         except Exception:
             _log.warning("hailo_feature_extraction_failed_using_fallback", exc_info=True)
             return self._fallback.extract(frame)

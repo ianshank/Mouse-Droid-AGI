@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from numpy.typing import NDArray
 
-from mousedroid.constants import LIDAR_FULL_ROTATION_DEG
+from mousedroid.constants import LIDAR_FULL_ROTATION_DEG, LIDAR_MM_TO_M
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
@@ -65,7 +65,7 @@ class LidarFeatureExtractor:
             return features
 
         # Convert distances from mm to metres.
-        distances_m = scan.distances_mm / 1000.0
+        distances_m = scan.distances_mm / LIDAR_MM_TO_M
 
         # Assign each point to its angular sector.
         sector_indices = np.clip(

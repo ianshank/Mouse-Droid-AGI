@@ -216,9 +216,9 @@ class TestDeadlineAdherence:
         p90_ms = tick_times[p90_index]
         # p90 should be within 100x hardware budget in CI
         ci_budget_ms = _deadline_budget_ms(mock_cfg) * 100
-        assert p90_ms <= ci_budget_ms, (
-            f"p90 tick latency {p90_ms:.1f} ms exceeds CI budget {ci_budget_ms:.1f} ms"
-        )
+        assert (
+            p90_ms <= ci_budget_ms
+        ), f"p90 tick latency {p90_ms:.1f} ms exceeds CI budget {ci_budget_ms:.1f} ms"
 
 
 # ---------------------------------------------------------------------------
@@ -339,9 +339,9 @@ class TestSafetyMonitorActive:
 
         await orch.stop()  # type: ignore[union-attr]
 
-        assert call_count == n_ticks, (
-            f"Safety monitor was called {call_count} times, expected {n_ticks}"
-        )
+        assert (
+            call_count == n_ticks
+        ), f"Safety monitor was called {call_count} times, expected {n_ticks}"
 
     @pytest.mark.asyncio
     @pytest.mark.timeout(15)
