@@ -172,9 +172,9 @@ This document tracks planned enhancements, organised by priority and category.
 ## Priority 6 — Code Quality & Architecture
 
 ### 6.1 Mypy Strict — Resolve Pre-existing Errors
-- 50 strict errors currently fail full `scripts/ci.sh` mypy gate
-- Caused by untyped `backward()`, `trace()`, unused `type: ignore` comments
-- Fix by adding `[[tool.mypy.overrides]]` stubs or proper type annotations
+- ✅ **Resolved** — 0 mypy strict errors remaining (was 50 errors)
+- Fixed untyped `backward()`, `trace()`, unused `type: ignore` comments
+- Added `[[tool.mypy.overrides]]` stubs and proper type annotations
 - **Effort**: 3 days | **Owner**: any engineer
 
 ### 6.2 Hypothesis Property-Based Tests
@@ -189,9 +189,9 @@ This document tracks planned enhancements, organised by priority and category.
 - **Effort**: 1 day | **Owner**: ML team
 
 ### 6.4 Retry + Circuit Breaker Wiring
-- `cfg.retry` and `cfg.circuit_breaker` are configured but not yet wired into drivers
-- Wrap `ESP32CommProtocol` calls with exponential backoff retry
-- Add circuit breaker to fail-fast after `failure_threshold` consecutive errors
+- ✅ **COMPLETE** — Implemented in `src/mousedroid/resilience/` with full factory wiring. CircuitBreaker (CLOSED→OPEN→HALF_OPEN), retry with exponential backoff + jitter, ResilientESP32Driver wrapper.
+- `circuit_breaker.py` (200 LOC), `retry.py` (143 LOC), `resilient_driver.py` (187 LOC)
+- Factory-wired at `factory.py` lines 62-79; emergency_stop bypasses circuit breaker
 - **Effort**: 2 days | **Owner**: backend team
 
 ### 6.5 EWC + PNN Training Loop
@@ -217,6 +217,37 @@ This document tracks planned enhancements, organised by priority and category.
 - Automated release on version tag push via GitHub Actions
 - Publish `mousedroid==0.2.0` to PyPI
 - **Effort**: 1 day | **Owner**: DevOps
+
+---
+
+## Priority 8 — Dual-Stream CfC/GRU Maturation
+
+### 8.1 Extended Training Run
+- Run 50+ epoch training on RTX 5060 Ti with dual-stream CfC/GRU RSSM
+- Validate convergence, compare loss curves to classic RSSM baseline
+- Upload trained weights to `ianshank/mousedroid-dual-stream-rssm`
+- **Effort**: 2 days | **Owner**: ML team
+
+### 8.2 CfC Hyperparameter Sweep
+- Sweep `cfc_backbone_units` (32, 64, 128), `cfc_backbone_layers` (1, 2, 3)
+- Compare training speed and final loss across configurations
+- Select optimal config for Jetson inference budget
+- **Effort**: 3 days | **Owner**: ML team
+
+### 8.3 Fusion Strategy Comparison
+- Implement attention-based and gating-based fusion alternatives in `stream_fusion.py`
+- Benchmark concat vs attention vs gating on navigation task
+- **Effort**: 1 week | **Owner**: ML team
+
+### 8.4 Online CfC Adaptation on Jetson
+- Enable real-time CfC parameter updates from live sensor data
+- Validate latency stays within 30 Hz budget with adaptation enabled
+- **Effort**: 1 week | **Owner**: ML team
+
+### 8.5 Dual-Stream vs Classic RSSM Benchmarks
+- Compare prediction accuracy, planning quality, and inference latency
+- Document results in architecture decisions (docs/architecture.md)
+- **Effort**: 3 days | **Owner**: ML team
 
 ---
 

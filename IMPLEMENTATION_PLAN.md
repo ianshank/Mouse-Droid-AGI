@@ -48,6 +48,8 @@ MouseDroidAGI is a Star Wars MSE-6 droid replica running on NVIDIA Jetson Orin N
 
 ## Phase 1: Consolidate In-Flight Work (Sprint 1)
 
+**Status: COMPLETE** — All PRs merged (pr-16, pr-18, post-refactor-retrain). Empty branches closed.
+
 **Goal**: Merge or close all pending branches to establish a clean baseline.
 
 ### 1.1 Review & Merge PR-16 (Offline RL + ICM Novelty Decay)
@@ -78,6 +80,8 @@ MouseDroidAGI is a Star Wars MSE-6 droid replica running on NVIDIA Jetson Orin N
 ---
 
 ## Phase 2: Self-Healing Core Resilience (Sprint 2)
+
+**Status: COMPLETE** — `circuit_breaker.py` (200 LOC), `retry.py` (143 LOC), `resilient_driver.py` (187 LOC) fully implemented and factory-wired at `factory.py` lines 62-79. Sensor staleness live in `safety/monitor.py`.
 
 **Goal**: Implement the 6-phase resilience plan from `PLAN.md` — the largest identified gap.
 
@@ -167,6 +171,8 @@ MouseDroidAGI is a Star Wars MSE-6 droid replica running on NVIDIA Jetson Orin N
 
 ## Phase 3: Code Quality & Type Safety (Sprint 2-3)
 
+**Status: NEARLY COMPLETE** — mypy strict passes with 0 errors (was 50). Some hypothesis property-based tests remain.
+
 **Goal**: Resolve mypy strict errors and add property-based tests.
 
 ### 3.1 Mypy Strict Fixes (50 errors)
@@ -250,6 +256,8 @@ MouseDroidAGI is a Star Wars MSE-6 droid replica running on NVIDIA Jetson Orin N
 
 ## Phase 5: USB Microphone Integration (Sprint 3)
 
+**Status: COMPLETE** — Wonrabai USB sound card merged in PR #32. Audio modality fully integrated.
+
 **Goal**: Complete SuziePi USB microphone integration (empty `integrate-suzepi-microphone` branch).
 
 ### 5.1 Config
@@ -281,7 +289,7 @@ MouseDroidAGI is a Star Wars MSE-6 droid replica running on NVIDIA Jetson Orin N
 
 **Goal**: Strengthen the CI pipeline for broader coverage and hardware testing.
 
-### 6.1 Python 3.12 Matrix
+### 6.1 Python 3.12 Matrix ✅ Done
 - **Modify** `.github/workflows/ci.yml`: add `3.12` to matrix
 - Fix deprecation warnings (e.g., `datetime.utcnow()` → `datetime.now(UTC)`)
 
@@ -422,17 +430,17 @@ MouseDroidAGI is a Star Wars MSE-6 droid replica running on NVIDIA Jetson Orin N
 
 ## Summary
 
-| Phase | Sprint | Focus | New Tests | Key Deliverables |
-|-------|--------|-------|-----------|------------------|
-| **1** | 1 | Merge in-flight PRs | Existing | Clean baseline on master |
-| **2** | 2 | Self-healing resilience | ~40 | Circuit breaker, retry, resilient driver, staleness |
-| **3** | 2-3 | Code quality + types | ~25 | Mypy strict clean, Hypothesis tests, EWC training |
-| **4** | 3-4 | Training pipeline | ~15 | RSSM, MCTS, BDI, Constitutional RL trained models |
-| **5** | 3 | USB microphone | ~8 | SuziePi audio integration |
-| **6** | 4 | CI/CD expansion | ~5 | Python 3.12, TensorRT CI, hardware nightly |
-| **7** | 4-5 | Observability | ~5 | Grafana, Prometheus alerts, Loki, telemetry auth |
-| **8** | 5 | LLM gateway | ~10 | Llama-3 deployment, NL command interface |
-| **9** | 6 | Packaging | ~3 | PyPI release, Docker dev, HF Hub weights |
+| Phase | Sprint | Focus | Status | New Tests | Key Deliverables |
+|-------|--------|-------|--------|-----------|------------------|
+| **1** | 1 | Merge in-flight PRs | **COMPLETE** | Existing | Clean baseline on master |
+| **2** | 2 | Self-healing resilience | **COMPLETE** | ~40 | Circuit breaker, retry, resilient driver, staleness |
+| **3** | 2-3 | Code quality + types | **NEARLY COMPLETE** | ~25 | Mypy strict clean (0 errors), Hypothesis tests remain |
+| **4** | 3-4 | Training pipeline | Not started | ~15 | RSSM, MCTS, BDI, Constitutional RL trained models |
+| **5** | 3 | USB microphone | **COMPLETE** | ~8 | Wonrabai USB sound card (PR #32) |
+| **6** | 4 | CI/CD expansion | **6.1 Done**, rest pending | ~5 | Python 3.12 in CI, TensorRT CI, hardware nightly |
+| **7** | 4-5 | Observability | Not started | ~5 | Grafana, Prometheus alerts, Loki, telemetry auth |
+| **8** | 5 | LLM gateway | Not started | ~10 | Llama-3 deployment, NL command interface |
+| **9** | 6 | Packaging | Not started | ~3 | PyPI release, Docker dev, HF Hub weights |
 
 **Total estimated new tests**: ~111
 **Coverage target**: Maintain >= 85% at every phase gate
