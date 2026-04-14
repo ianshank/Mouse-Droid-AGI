@@ -110,9 +110,10 @@ class TestSystemdNotifier:
         monkeypatch.setenv("NOTIFY_SOCKET", "/run/systemd/notify")
         notifier = SystemdNotifier()
         # Mock sys.platform to "linux" so the Windows guard doesn't skip
-        with patch("mousedroid.health.watchdog.sys") as mock_sys, patch(
-            "socket.socket"
-        ) as mock_socket_cls:
+        with (
+            patch("mousedroid.health.watchdog.sys") as mock_sys,
+            patch("socket.socket") as mock_socket_cls,
+        ):
             mock_sys.platform = "linux"
             mock_sock = mock_socket_cls.return_value
             notifier.notify()
@@ -122,9 +123,10 @@ class TestSystemdNotifier:
     def test_abstract_socket_addr(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("NOTIFY_SOCKET", "@/run/systemd/notify")
         notifier = SystemdNotifier()
-        with patch("mousedroid.health.watchdog.sys") as mock_sys, patch(
-            "socket.socket"
-        ) as mock_socket_cls:
+        with (
+            patch("mousedroid.health.watchdog.sys") as mock_sys,
+            patch("socket.socket") as mock_socket_cls,
+        ):
             mock_sys.platform = "linux"
             mock_sock = mock_socket_cls.return_value
             notifier.notify()
@@ -134,8 +136,9 @@ class TestSystemdNotifier:
     def test_notify_suppresses_socket_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("NOTIFY_SOCKET", "/run/systemd/notify")
         notifier = SystemdNotifier()
-        with patch("mousedroid.health.watchdog.sys") as mock_sys, patch(
-            "socket.socket", side_effect=OSError("socket error")
+        with (
+            patch("mousedroid.health.watchdog.sys") as mock_sys,
+            patch("socket.socket", side_effect=OSError("socket error")),
         ):
             mock_sys.platform = "linux"
             # Must not propagate the error
@@ -201,12 +204,18 @@ class TestBuildWatchdog:
         result = build_watchdog(cfg)
         assert isinstance(result, FileHeartbeatNotifier)
 
-    def test_unknown_mode_returns_null(self) -> None:
+    def test_unknown_mode_rejected_by_pydantic(self) -> None:
+        from mousedroid.config.schema import LoopConfig
+
+        with pytest.raises(Exception, match=r"literal_error|Input should be"):
+            LoopConfig(watchdog_mode="bogus")
+
+    def test_none_mode_returns_null(self) -> None:
         from mousedroid.config.schema import LoopConfig, Settings
 
         cfg = Settings(
             mock_hardware=True,
-            loop=LoopConfig(watchdog_enabled=True, watchdog_mode="bogus"),
+            loop=LoopConfig(watchdog_enabled=True, watchdog_mode="none"),
         )
         from mousedroid.factory import build_watchdog
 

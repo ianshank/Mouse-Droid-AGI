@@ -78,6 +78,9 @@ class MouseDroidOrchestrator:
             hailo_runtime: Optional Hailo-8 accelerator runtime for lifecycle management.
             watchdog: Optional watchdog notifier for systemd/file liveness signals.
         """
+        if not agents:
+            msg = "At least one agent is required"
+            raise ValueError(msg)
         self._world_model = world_model
         self._agents = agents
         self._safety_monitor = safety_monitor

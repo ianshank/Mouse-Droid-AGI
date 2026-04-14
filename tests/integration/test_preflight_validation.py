@@ -98,6 +98,6 @@ class TestPreflightScript:
         """Device paths must come from env vars, not hardcoded."""
         text = _PREFLIGHT_SCRIPT.read_text()
         # All device paths should use ${VAR:-default} pattern
-        assert '${MOUSEDROID_ESP32_DEV:-/dev/ttyUSB0}' in text
-        assert '${MOUSEDROID_CAMERA_DEV:-/dev/video0}' in text
-        assert '${MOUSEDROID_LIDAR_DEV:-/dev/ttyUSB1}' in text
+        assert "${MOUSEDROID_ESP32_DEV:-/dev/ttyUSB0}" in text
+        assert "${MOUSEDROID_CAMERA_DEV:-/dev/video0}" in text
+        assert "${MOUSEDROID_LIDAR_DEV:-/dev/ttyUSB1}" in text

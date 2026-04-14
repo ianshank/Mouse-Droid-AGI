@@ -361,7 +361,7 @@ class LoopConfig(BaseModel):
         False,
         description="Enable watchdog notifications (systemd or file heartbeat)",
     )
-    watchdog_mode: str = Field(
+    watchdog_mode: Literal["auto", "systemd", "file", "none"] = Field(
         "auto",
         description=(
             "Watchdog mode: 'auto' (systemd if NOTIFY_SOCKET set, else file), "
@@ -942,6 +942,9 @@ class ArmPerceptionConfig(BaseModel):
     )
     dark_brightness_threshold: float = Field(
         80.0, ge=0, le=255, description="Brightness below which garment is classified dark"
+    )
+    yolo_nms_iou_threshold: float = Field(
+        0.45, gt=0, le=1, description="IoU threshold for NMS post-processing"
     )
     default_focal_length: float = Field(500.0, gt=0, description="Default camera focal length (px)")
     default_principal_x: float = Field(320.0, gt=0, description="Default principal point X (px)")

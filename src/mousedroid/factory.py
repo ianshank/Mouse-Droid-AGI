@@ -22,7 +22,6 @@ from mousedroid.health.watchdog import WatchdogProtocol
 from mousedroid.llm_gateway.protocol import LLMGatewayProtocol
 from mousedroid.logging.setup import get_logger
 from mousedroid.safety.protocol import SafetyMonitorProtocol
-from mousedroid.telemetry.log_buffer import LogRingBuffer
 from mousedroid.voice.protocol import VoiceEngineProtocol
 from mousedroid.world_model.protocol import WorldModelProtocol
 
@@ -40,6 +39,7 @@ if TYPE_CHECKING:
     from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
     from mousedroid.health.monitor import HealthMonitor
     from mousedroid.sensing.manager import SensorManager
+    from mousedroid.telemetry.log_buffer import LogRingBuffer
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
     from mousedroid.voice.mock_tts import MockTTS
     from mousedroid.voice.tts import PiperTTS
@@ -766,6 +766,8 @@ def build_watchdog(cfg: Settings) -> WatchdogProtocol:
         return NullNotifier()
 
     mode = cfg.loop.watchdog_mode
+    if mode == "none":
+        return NullNotifier()
     if mode == "systemd":
         return SystemdNotifier()
     if mode == "file":
@@ -827,12 +829,14 @@ def build_orchestrator(cfg: Settings) -> object:
     health_monitor = build_health_monitor(cfg)
 
     # Optional log ring buffer for telemetry log streaming
-    log_buffer: LogRingBuffer | None = None
+    from mousedroid.telemetry.log_buffer import LogRingBuffer as _LogRingBuffer
+
+    log_buffer: _LogRingBuffer | None = None
     telemetry_cfg = getattr(cfg, "telemetry", None)
     if telemetry_cfg is not None:
         buffer_size = getattr(telemetry_cfg, "log_stream_buffer", 0)
         if buffer_size:
-            log_buffer = LogRingBuffer(buffer_size)
+            log_buffer = _LogRingBuffer(buffer_size)
 
     telemetry_server = build_telemetry_server(
         cfg,

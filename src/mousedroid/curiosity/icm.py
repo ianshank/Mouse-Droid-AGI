@@ -151,6 +151,7 @@ class IntrinsicCuriosityModule(nn.Module):
             self._novelty_decay = NoveltyDecay(
                 decay_rate=curiosity_cfg.novelty_decay_rate,
                 min_scale=curiosity_cfg.novelty_min_scale,
+                n_bins=curiosity_cfg.novelty_n_bins,
             )
 
         _log.info(

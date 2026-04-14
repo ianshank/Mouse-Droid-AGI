@@ -74,6 +74,12 @@ def jetson_settings() -> Settings:
         config_path = Path("config/default.yaml")
 
     with open(config_path) as fh:
-        raw = yaml.safe_load(fh)
+        raw = yaml.safe_load(fh) or {}
+
+    # On non-Jetson hosts, force mock mode so cross-field validators
+    # (e.g. ultrasonic required when mock_hardware=false) do not block
+    # fixture creation.  Tests are skipped later by @pytest.mark.hardware.
+    if not is_jetson_host():
+        raw["mock_hardware"] = True
 
     return Settings(**raw)

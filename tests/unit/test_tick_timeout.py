@@ -33,12 +33,14 @@ def _make_orchestrator(
     cfg.loop.tick_timeout_s = tick_timeout_s
 
     wm = MagicMock()
-    wm.observe_step = MagicMock(return_value=(
-        torch.zeros(1, cfg.model.hidden_dim + cfg.model.cfc_hidden_dim),
-        torch.zeros(1, cfg.model.latent_dim),
-        torch.zeros(1, cfg.model.latent_dim),
-        0.0,
-    ))
+    wm.observe_step = MagicMock(
+        return_value=(
+            torch.zeros(1, cfg.model.hidden_dim + cfg.model.cfc_hidden_dim),
+            torch.zeros(1, cfg.model.latent_dim),
+            torch.zeros(1, cfg.model.latent_dim),
+            0.0,
+        )
+    )
 
     agent = MagicMock()
     agent.name = "mock_agent"
@@ -154,7 +156,7 @@ class TestWatchdogNotify:
         watchdog = MagicMock()
         watchdog.notify = MagicMock()
 
-        orch, esp32 = _make_orchestrator(tick_timeout_s=5.0, watchdog=watchdog)
+        orch, _esp32 = _make_orchestrator(tick_timeout_s=5.0, watchdog=watchdog)
         orch._running = True
 
         tick_count = 0
@@ -178,7 +180,7 @@ class TestWatchdogNotify:
         watchdog = MagicMock()
         watchdog.notify = MagicMock()
 
-        orch, esp32 = _make_orchestrator(tick_timeout_s=5.0, watchdog=watchdog)
+        orch, _esp32 = _make_orchestrator(tick_timeout_s=5.0, watchdog=watchdog)
         orch._running = True
 
         async def failing_tick() -> None:

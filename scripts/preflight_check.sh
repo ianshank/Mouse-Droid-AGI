@@ -102,7 +102,7 @@ echo "=== Configuration ==="
 if [ -f "$CONFIG_FILE" ]; then
     # Basic YAML syntax check (python available in most Jetson environments)
     if command -v python3 &>/dev/null; then
-        if python3 -c "import yaml; yaml.safe_load(open('$CONFIG_FILE'))" 2>/dev/null; then
+        if python3 -c "import yaml, sys; yaml.safe_load(open(sys.argv[1]))" -- "$CONFIG_FILE" 2>/dev/null; then
             ok "Config YAML valid ($CONFIG_FILE)"
         else
             fail "Config YAML parse error: $CONFIG_FILE"
