@@ -19,7 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - `ModelConfig` gains CfC fields: `cfc_hidden_dim`, `cfc_backbone_units`, `cfc_backbone_layers`, `cfc_mode`, `cfc_sparsity_level`
   - `build_world_model()` factory dispatch: `cfc_hidden_dim > 0` → `DualStreamRSSM`, else classic `RSSM`
   - `gru_parameters()` / `cfc_parameters()` — separate parameter groups for dual optimizer training
-  - `get_safety_trace()` — GRU-only safety evaluation (CfC stream excluded from safety-critical path)
+  - `get_safety_trace()` — extracts CfC hidden state from combined state for independent safety monitoring
 - **Dual-stream training script** — `training/train_dual_stream_rssm.py` (712 LOC)
   - Dual Adam optimizers: GRU params (lr=3e-4) + CfC params (lr=1e-4)
   - Separate gradient clipping: GRU (max_norm=10.0) + CfC (max_norm=1.0)

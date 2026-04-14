@@ -64,6 +64,16 @@ class MultimodalEncoder(nn.Module):
             obs_dim=cfg.obs_dim,
         )
 
+    @property
+    def audio_enabled(self) -> bool:
+        """Whether audio modality is active."""
+        return self._audio_enabled
+
+    @property
+    def lidar_enabled(self) -> bool:
+        """Whether LiDAR modality is active."""
+        return self._lidar_enabled
+
     def forward(
         self,
         vision: Tensor,

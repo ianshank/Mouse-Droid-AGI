@@ -365,8 +365,6 @@ def train_dual_stream_rssm(
     # ------------------------------------------------------------------
     # Training loop
     # ------------------------------------------------------------------
-    last_checkpoint: Path = weights_dir / f"epoch_{start_epoch}.pt"
-
     for epoch in range(start_epoch, max_epoch):
         epoch_recon = 0.0
         epoch_kl = 0.0
@@ -388,6 +386,11 @@ def train_dual_stream_rssm(
             h_gru = torch.zeros(batch_size, mcfg.hidden_dim, device=device)
             h_cfc = torch.zeros(batch_size, mcfg.cfc_hidden_dim, device=device)
             z = torch.zeros(batch_size, mcfg.latent_dim, device=device)
+
+            # Pre-allocate reusable zero buffers for stream-specific decoding
+            zero_cfc = torch.zeros(batch_size, mcfg.cfc_hidden_dim, device=device)
+            zero_gru = torch.zeros(batch_size, mcfg.hidden_dim, device=device)
+            zero_action = torch.zeros(batch_size, mcfg.action_dim, device=device)
 
             # Current CfC loss weight for this step
             cfc_w = _cfc_loss_weight(
@@ -415,7 +418,7 @@ def train_dual_stream_rssm(
                         valid_mask[:, t],
                     )
 
-                    prev_action = actions[:, max(0, t - 1)]
+                    prev_action = actions[:, t - 1] if t > 0 else zero_action
                     recurrent_input = torch.cat([z, prev_action], dim=-1)
 
                     # Dual-stream recurrent step
@@ -440,18 +443,12 @@ def train_dual_stream_rssm(
 
                     # Stream-specific reconstructions for fallback monitor
                     # GRU-only: decode using just the GRU portion of hidden state
-                    gru_h_padded = torch.cat(
-                        [h_gru, torch.zeros(batch_size, mcfg.cfc_hidden_dim, device=device)],
-                        dim=-1,
-                    )
+                    gru_h_padded = torch.cat([h_gru, zero_cfc], dim=-1)
                     gru_only_recon = model.decode(gru_h_padded, z)
                     total_gru_recon = total_gru_recon + mse_loss_fn(gru_only_recon, obs_embed)
 
                     # CfC-only: decode using just the CfC portion
-                    cfc_h_padded = torch.cat(
-                        [torch.zeros(batch_size, mcfg.hidden_dim, device=device), h_cfc],
-                        dim=-1,
-                    )
+                    cfc_h_padded = torch.cat([zero_gru, h_cfc], dim=-1)
                     cfc_only_recon = model.decode(cfc_h_padded, z)
                     total_cfc_recon = total_cfc_recon + mse_loss_fn(cfc_only_recon, obs_embed)
 
@@ -534,13 +531,13 @@ def train_dual_stream_rssm(
         avg_kl = epoch_kl / max(n_batches, 1)
         avg_gru_recon = epoch_gru_recon / max(n_batches, 1)
         avg_cfc_recon = epoch_cfc_recon / max(n_batches, 1)
-        avg_loss = avg_recon + tcfg.kl_beta * avg_kl
         current_cfc_w = _cfc_loss_weight(
             warmup_step,
             initial=dscfg.cfc_loss_weight_initial,
             final=dscfg.cfc_loss_weight_final,
             warmup_steps=dscfg.cfc_loss_warmup_steps,
         )
+        avg_loss = avg_recon + current_cfc_w * avg_cfc_recon + tcfg.kl_beta * avg_kl
 
         _log.info(
             "dual_stream_epoch",
@@ -572,7 +569,6 @@ def train_dual_stream_rssm(
                 combined_dim=combined_dim,
                 scaler=scaler,
             )
-            last_checkpoint = ckpt_path
 
         # ------------------------------------------------------------------
         # Memory budget check
@@ -584,12 +580,25 @@ def train_dual_stream_rssm(
     # Final checkpoint (skip in validate_only mode)
     # ------------------------------------------------------------------
     if validate_only:
+        # Always save a checkpoint so validate-only has a guaranteed artefact
+        validate_path = weights_dir / "validate_final.pt"
+        _save_checkpoint(
+            validate_path,
+            epoch=max_epoch - 1,
+            model=model,
+            gru_optimizer=gru_optimizer,
+            cfc_optimizer=cfc_optimizer,
+            best_loss=best_loss,
+            warmup_step=warmup_step,
+            combined_dim=combined_dim,
+            scaler=scaler,
+        )
         _log.info(
             "validate_only_complete",
-            last_checkpoint=str(last_checkpoint),
+            checkpoint=str(validate_path),
             epochs_run=max_epoch - start_epoch,
         )
-        return last_checkpoint
+        return validate_path
 
     final_path = weights_dir / "final.pt"
     torch.save(model.state_dict(), final_path)

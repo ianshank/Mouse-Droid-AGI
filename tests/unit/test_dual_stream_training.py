@@ -19,10 +19,10 @@ import torch.nn as nn
 # Optional ncps dependency — skip entire module if not installed
 # ---------------------------------------------------------------------------
 
-ncps = pytest.importorskip("ncps", reason="ncps library required for CfC cell")
+pytest.importorskip("ncps", reason="ncps library required for CfC cell")
 
-from mousedroid.config.schema import DualStreamTrainingConfig, ModelConfig  # noqa: E402
-from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM  # noqa: E402
+from mousedroid.config.schema import DualStreamTrainingConfig, ModelConfig
+from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
 
 # ---------------------------------------------------------------------------
 # Shared helpers

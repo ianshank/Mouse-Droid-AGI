@@ -420,7 +420,7 @@ graph TD
         Posterior["Posterior Net\n[h_combined | obs_embed] → z"]
         Prior["Prior Net\nh_combined → z_prior"]
         Decoder["Decoder\n[h_combined | z] → obs_recon"]
-        SafetyTrace["Safety Trace\nGRU-only (CfC excluded)\nget_safety_trace()"]
+        SafetyTrace["Safety Trace\nExtracts CfC state for inspection\nget_safety_trace()"]
     end
 
     Input --> GRU
@@ -430,7 +430,7 @@ graph TD
     Fusion --> Posterior
     Fusion --> Prior
     Fusion --> Decoder
-    GRU --> SafetyTrace
+    Fusion --> SafetyTrace
 ```
 
 **Training:** Dual optimizers with separate learning rates and gradient clipping per stream.
@@ -461,7 +461,7 @@ Activate via: `MOUSEDROID_MODEL__CFC_HIDDEN_DIM=64 docker compose up -d`
 | Optional audio projection in encoder | `audio_dim=0` disables audio entirely; existing 3-modality checkpoints load unchanged |
 | `FeatureExtractorProtocol` for camera | Pluggable backends (MeanPool, TensorRT, ONNX); eliminates duplicate code across camera drivers |
 | Module-level constants for all magic numbers | Grep-able; documented; not scattered in logic |
-| Dual-stream CfC/GRU RSSM | CfC provides sub-100ms adaptive time constants for reflexes; GRU handles slow planning; concat fusion preserves both information streams; safety trace excludes CfC for predictability |
+| Dual-stream CfC/GRU RSSM | CfC provides sub-100ms adaptive time constants for reflexes; GRU handles slow planning; concat fusion preserves both information streams; safety trace exposes CfC state for independent monitoring |
 | Human activation gate for CfC | `cfc_hidden_dim=0` default ensures classic RSSM in production; explicit env var override required — prevents accidental deployment of experimental architecture |
 | Separate dual optimizers | GRU (lr=3e-4, clip=10.0) and CfC (lr=1e-4, clip=1.0) trained independently; CfC loss warmup prevents destabilising GRU early in training |
 | L4T Docker container | GPU-accelerated deployment with consistent environment |

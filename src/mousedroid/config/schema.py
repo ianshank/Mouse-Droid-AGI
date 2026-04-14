@@ -513,8 +513,15 @@ class ModelConfig(BaseModel):
     cfc_hidden_dim: int = Field(0, ge=0, description="CfC stream hidden dim (0=disabled, pure GRU)")
     cfc_backbone_units: int = Field(64, gt=0, description="CfC backbone MLP hidden units")
     cfc_backbone_layers: int = Field(1, gt=0, description="CfC backbone MLP layer count")
-    cfc_mode: str = Field("default", description="CfC cell mode: default, pure, no_gate")
-    cfc_sparsity_level: float = Field(0.5, ge=0.0, le=1.0, description="AutoNCP wiring sparsity")
+    cfc_mode: Literal["default", "pure", "no_gate"] = Field(
+        "default", description="CfC cell mode: default, pure, no_gate"
+    )
+    cfc_sparsity_level: float = Field(
+        0.5,
+        ge=0.0,
+        le=1.0,
+        description="AutoNCP wiring sparsity (reserved — not yet wired into CfC construction)",
+    )
 
 
 class DualStreamTrainingConfig(BaseModel):
