@@ -327,7 +327,7 @@ class SensorManager:
             if self._lidar_feature_extractor is not None:
                 features = self._lidar_feature_extractor.extract(scan)
                 return features, True
-            return default, True
+            return default, False
         except Exception:
             _log.warning("lidar_read_failed", exc_info=True)
             return default, False

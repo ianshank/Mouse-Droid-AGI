@@ -87,12 +87,10 @@ def test_crc8_deterministic() -> None:
     assert LD19FrameParser.crc8(data) == LD19FrameParser.crc8(data)
 
 
-def test_crc8_different_inputs_differ() -> None:
-    """Different inputs produce different CRC values (in general)."""
-    a = LD19FrameParser.crc8(b"\x00\x01\x02")
-    b = LD19FrameParser.crc8(b"\x03\x04\x05")
-    # Not guaranteed, but extremely likely for these specific inputs.
-    assert a != b
+def test_crc8_known_vectors() -> None:
+    """CRC8 produces expected values for known test vectors."""
+    assert LD19FrameParser.crc8(b"\x00\x01\x02") == 0x74
+    assert LD19FrameParser.crc8(b"\x03\x04\x05") == 0x4C
 
 
 def test_crc8_range() -> None:
