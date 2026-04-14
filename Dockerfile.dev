@@ -1,0 +1,41 @@
+# =============================================================================
+# MouseDroidAGI — CPU-only Development Image
+# =============================================================================
+# For CI runners and contributors without Jetson hardware.
+# Includes the full dev toolchain (pytest, ruff, mypy, hypothesis).
+#
+# Build:
+#   docker build -f Dockerfile.dev -t mousedroid:dev .
+#
+# Run tests:
+#   docker run --rm mousedroid:dev
+#
+# Interactive shell:
+#   docker run --rm -it mousedroid:dev bash
+# =============================================================================
+
+FROM python:3.11-slim AS base
+
+# System dependencies for building native extensions
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python dependencies first (layer caching)
+COPY pyproject.toml .
+COPY src/ src/
+
+RUN pip install --no-cache-dir -e ".[dev,telemetry]"
+
+# Copy test suite and configs
+COPY tests/ tests/
+COPY config/ config/
+
+# Mock hardware for CI
+ENV MOUSEDROID_MOCK_HARDWARE=true
+
+# Default: run unit + property tests
+CMD ["pytest", "tests/unit", "tests/property", "-q", "--timeout=60"]
