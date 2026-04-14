@@ -41,22 +41,34 @@ services:
       - /sys/devices/platform:/sys/devices/platform:ro
 
     # --- Hardware device passthrough ---
-    # NOTE: Uncomment devices that are physically connected.
-    # The container will fail to start if a listed device doesn't exist.
-    # devices:
-    #   # ESP32 UART serial
-    #   - /dev/ttyUSB0:/dev/ttyUSB0
-    #   # Camera
-    #   - /dev/video0:/dev/video0
-    #   # GPIO
-    #   - /dev/gpiochip0:/dev/gpiochip0
-    #   - /dev/gpiochip1:/dev/gpiochip1
-    #   # FHL-LD19 LiDAR UART
-    #   - /dev/ttyUSB1:/dev/ttyUSB1
-    #   # Wonrabai USB Sound Card (ALSA audio in + out)
-    #   - /dev/snd:/dev/snd
-    # group_add:
-    #   - audio
+    # All devices required for production deployment.
+    # Device paths are configurable via env vars in docker.env.
+    # If a device is absent at startup, Docker will fail fast with a clear error.
+    devices:
+      # ESP32 UART serial (motor controller + encoders + battery)
+      - ${MOUSEDROID_ESP32_DEV:-/dev/ttyUSB0}:/dev/ttyUSB0
+      # CSI / USB camera
+      - ${MOUSEDROID_CAMERA_DEV:-/dev/video0}:/dev/video0
+      # Jetson GPIO chips
+      - /dev/gpiochip0:/dev/gpiochip0
+      - /dev/gpiochip1:/dev/gpiochip1
+      # FHL-LD19 LiDAR UART
+      - ${MOUSEDROID_LIDAR_DEV:-/dev/ttyUSB1}:/dev/ttyUSB1
+      # Wonrabai USB Sound Card (ALSA audio — mic + speaker)
+      - /dev/snd:/dev/snd
+    group_add:
+      - audio
+      - video
+      - dialout
+
+    # --- Health check ---
+    # Polls the telemetry health endpoint; marks container unhealthy after 3 failures.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:${MOUSEDROID_TELEMETRY_PORT:-8080}/api/v1/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
     # --- Networking ---
     network_mode: host

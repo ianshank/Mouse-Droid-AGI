@@ -239,6 +239,7 @@ class HailoYOLODetector:
             detections = _hailo_yolo_postprocess(
                 raw_output,
                 confidence_threshold=self._confidence_threshold,
+                iou_threshold=self._cfg.yolo_nms_iou_threshold,
                 class_names=self._class_names,
             )
 

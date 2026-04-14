@@ -3,14 +3,26 @@ Description=MouseDroid AGI — MSE-6 Autonomous Navigation
 After=network.target
 
 [Service]
-Type=simple
+Type=notify
 User=jetson
+NotifyAccess=all
+
+# Watchdog: systemd kills+restarts if no WATCHDOG=1 within this interval
+WatchdogSec=30
+
 WorkingDirectory=/opt/mousedroid
-Environment=MOUSEDROID_CONFIG=/etc/mousedroid/jetson_sdcard_64gb.yaml
+EnvironmentFile=-/etc/mousedroid/mousedroid.env
+Environment=MOUSEDROID_CONFIG=/etc/mousedroid/jetson_production.yaml
 Environment=MOUSEDROID_MOCK_HARDWARE=false
+
+# Pre-flight validation
+ExecStartPre=/opt/mousedroid/scripts/preflight_check.sh
 ExecStart=/opt/mousedroid/venv/bin/python -m mousedroid.main --config ${MOUSEDROID_CONFIG}
 Restart=on-failure
 RestartSec=5
+
+# Startup timeout (model loading can be slow on first boot)
+TimeoutStartSec=120
 
 [Install]
 WantedBy=multi-user.target

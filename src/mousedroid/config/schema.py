@@ -352,6 +352,26 @@ class LoopConfig(BaseModel):
     planning_hz: float = Field(10.0, gt=0, description="MCTS planning rate (Hz)")
     audio_hz: float = Field(16.0, gt=0, description="Microphone capture rate (Hz)")
     lidar_hz: float = Field(10.0, gt=0, description="LiDAR scan rate (Hz)")
+    tick_timeout_s: float = Field(
+        1.0,
+        gt=0,
+        description="Max seconds per tick before triggering emergency stop",
+    )
+    watchdog_enabled: bool = Field(
+        False,
+        description="Enable watchdog notifications (systemd or file heartbeat)",
+    )
+    watchdog_mode: Literal["auto", "systemd", "file", "none"] = Field(
+        "auto",
+        description=(
+            "Watchdog mode: 'auto' (systemd if NOTIFY_SOCKET set, else file), "
+            "'systemd', 'file', 'none'"
+        ),
+    )
+    heartbeat_path: str = Field(
+        "/tmp/mousedroid-heartbeat",  # noqa: S108
+        description="Path for file-based heartbeat (watchdog_mode 'file' or 'auto' fallback)",
+    )
 
 
 class MetacognitiveConfig(BaseModel):
@@ -922,6 +942,9 @@ class ArmPerceptionConfig(BaseModel):
     )
     dark_brightness_threshold: float = Field(
         80.0, ge=0, le=255, description="Brightness below which garment is classified dark"
+    )
+    yolo_nms_iou_threshold: float = Field(
+        0.45, gt=0, le=1, description="IoU threshold for NMS post-processing"
     )
     default_focal_length: float = Field(500.0, gt=0, description="Default camera focal length (px)")
     default_principal_x: float = Field(320.0, gt=0, description="Default principal point X (px)")

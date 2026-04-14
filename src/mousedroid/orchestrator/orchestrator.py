@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from mousedroid.comms.protocol import ESP32CommProtocol
     from mousedroid.config.schema import Settings
     from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
+    from mousedroid.health.watchdog import WatchdogProtocol
     from mousedroid.safety.context import SafetyContext
     from mousedroid.safety.protocol import SafetyMonitorProtocol
     from mousedroid.sensing.manager import SensorManager
@@ -59,6 +60,7 @@ class MouseDroidOrchestrator:
         telemetry_server: TelemetryServerProtocol | None = None,
         voice_engine: VoiceEngineProtocol | None = None,
         hailo_runtime: HailoRuntimeProtocol | None = None,
+        watchdog: WatchdogProtocol | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -74,7 +76,11 @@ class MouseDroidOrchestrator:
             telemetry_server: Optional telemetry server for remote connections.
             voice_engine: Optional Rocky voice engine for audio output.
             hailo_runtime: Optional Hailo-8 accelerator runtime for lifecycle management.
+            watchdog: Optional watchdog notifier for systemd/file liveness signals.
         """
+        if not agents:
+            msg = "At least one agent is required"
+            raise ValueError(msg)
         self._world_model = world_model
         self._agents = agents
         self._safety_monitor = safety_monitor
@@ -85,6 +91,7 @@ class MouseDroidOrchestrator:
         self._telemetry_server = telemetry_server
         self._voice_engine = voice_engine
         self._hailo_runtime = hailo_runtime
+        self._watchdog = watchdog
         self._cfg = cfg
         self._running = False
         self._tick_count: int = 0
@@ -364,17 +371,49 @@ class MouseDroidOrchestrator:
                 gpu_temp_c=safety_ctx.gpu_temp_c,
             )
 
+    async def _emergency_stop_safe(self) -> None:
+        """Attempt emergency stop, suppressing errors to prevent cascading failures.
+
+        Called from the run() exception handlers where we must not raise again.
+        """
+        try:
+            await self._esp32.emergency_stop()
+        except Exception:
+            _log.exception("emergency_stop_failed_in_error_handler")
+
     async def run(self) -> None:
-        """Run the main loop at configured control rate."""
+        """Run the main loop at configured control rate.
+
+        Each tick is wrapped in ``asyncio.wait_for`` with the configured
+        ``tick_timeout_s`` ceiling.  On timeout or unhandled exception the
+        ESP32 receives an immediate emergency stop command so the robot does
+        not continue executing a stale velocity command.
+        """
         control_period = 1.0 / self._cfg.loop.control_hz
-        _log.info("main_loop_starting", control_hz=self._cfg.loop.control_hz)
+        tick_timeout = self._cfg.loop.tick_timeout_s
+        _log.info(
+            "main_loop_starting",
+            control_hz=self._cfg.loop.control_hz,
+            tick_timeout_s=tick_timeout,
+        )
 
         while self._running:
             tick_start = time.monotonic()
             try:
-                await self.tick()
+                await asyncio.wait_for(self.tick(), timeout=tick_timeout)
+                # Signal liveness after each successful tick
+                if self._watchdog is not None:
+                    self._watchdog.notify()
+            except asyncio.TimeoutError:
+                _log.critical(
+                    "tick_timeout_emergency_stop",
+                    timeout_s=tick_timeout,
+                    tick_count=self._tick_count,
+                )
+                await self._emergency_stop_safe()
             except Exception:
-                _log.exception("tick_error")
+                _log.exception("tick_error_emergency_stop")
+                await self._emergency_stop_safe()
 
             elapsed = time.monotonic() - tick_start
             sleep_time = max(0.0, control_period - elapsed)
