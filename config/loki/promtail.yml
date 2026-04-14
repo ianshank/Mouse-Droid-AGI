@@ -1,31 +1,71 @@
-# Promtail configuration — Docker log collection for MouseDroidAGI
+# Promtail configuration -- MouseDroidAGI log collection
 #
-# Collects Docker container logs from the Jetson Orin Nano and
-# ships them to Loki.  MouseDroid emits structlog JSON, so the
-# pipeline extracts structured fields for label enrichment.
+# Collects logs from two sources on the Jetson Orin Nano:
+# 1. systemd journal (mousedroid.service unit)
+# 2. File-based logs (/var/log/mousedroid/*.log)
+#
+# MouseDroid emits structlog JSON, so the pipeline extracts structured
+# fields for label enrichment in Loki.
+#
+# ---------------------------------------------------------------
+# Useful LogQL queries for debugging (paste into Grafana Explore):
+#
+#   Emergency stops:
+#     {job="mousedroid"} |= "emergency_stop"
+#
+#   Constitutional / safety violations:
+#     {job="mousedroid"} |= "safety_violation" or {job="mousedroid"} |= "constitutional"
+#     {job="mousedroid"} | json | event=~"safety_violation.*|constitutional_violation.*"
+#
+#   Sensor failures / stale readings:
+#     {job="mousedroid"} |= "sensor_stale" or {job="mousedroid"} |= "sensor_error"
+#     {job="mousedroid"} | json | event=~"sensor_.*_error|sensor_stale.*"
+#
+#   CfC (Closed-form Continuous-time) fallback events:
+#     {job="mousedroid"} |= "cfc_fallback" or {job="mousedroid"} |= "cfc_error"
+#     {job="mousedroid"} | json | event=~"cfc_fallback.*|cfc_timeout.*"
+#
+#   Loop latency spikes:
+#     {job="mousedroid"} | json | loop_time_ms > 200
+#
+#   Battery warnings:
+#     {job="mousedroid"} |= "battery" | json | level="warning"
+#
+#   All errors and critical events:
+#     {job="mousedroid"} | json | level=~"error|critical"
+# ---------------------------------------------------------------
 
 server:
   http_listen_port: 9080
   grpc_listen_port: 0
 
 positions:
-  filename: /tmp/positions.yaml
+  filename: /tmp/promtail-positions.yaml
 
 clients:
   - url: http://loki:3100/loki/api/v1/push
 
 scrape_configs:
-  - job_name: docker
-    docker_sd_configs:
-      - host: unix:///var/run/docker.sock
-        refresh_interval: 10s
+  # ------------------------------------------------------------------
+  # Source 1: systemd journal (mousedroid.service)
+  # ------------------------------------------------------------------
+  - job_name: mousedroid-journal
+    journal:
+      json: false
+      max_age: 12h
+      labels:
+        job: mousedroid
+      path: /var/log/journal
     relabel_configs:
-      # Keep only containers with com.docker.compose.service label
-      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
-        target_label: service
-      - source_labels: ["__meta_docker_container_name"]
-        regex: /(.*)
-        target_label: container
+      # Only keep logs from the mousedroid systemd unit
+      - source_labels: ["__journal__systemd_unit"]
+        regex: "mousedroid\\.service"
+        action: keep
+      # Enrich with hostname for multi-node deployments
+      - source_labels: ["__journal__hostname"]
+        target_label: instance
+      - source_labels: ["__journal__systemd_unit"]
+        target_label: unit
     pipeline_stages:
       # MouseDroid uses structlog JSON output
       - json:
@@ -45,6 +85,82 @@ scrape_configs:
             - "2006-01-02T15:04:05.000Z"
             - UnixMs
       # Drop noisy debug lines in production
+      - match:
+          selector: '{level="debug"}'
+          action: drop
+          drop_counter_reason: debug_noise
+
+  # ------------------------------------------------------------------
+  # Source 2: file-based logs (/var/log/mousedroid/*.log)
+  # ------------------------------------------------------------------
+  - job_name: mousedroid-files
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: mousedroid
+          source: file
+          instance: "{{.Host}}"
+          __path__: /var/log/mousedroid/*.log
+    pipeline_stages:
+      # MouseDroid uses structlog JSON output
+      - json:
+          expressions:
+            level: level
+            event: event
+            module: logger
+            timestamp: timestamp
+      - labels:
+          level:
+          event:
+          module:
+      - timestamp:
+          source: timestamp
+          format: RFC3339Nano
+          fallback_formats:
+            - "2006-01-02T15:04:05.000Z"
+            - UnixMs
+      # Drop noisy debug lines in production
+      - match:
+          selector: '{level="debug"}'
+          action: drop
+          drop_counter_reason: debug_noise
+
+  # ------------------------------------------------------------------
+  # Source 3: Docker container logs (optional, for Docker deployments)
+  # ------------------------------------------------------------------
+  - job_name: mousedroid-docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 10s
+    relabel_configs:
+      # Keep only containers with com.docker.compose.service label
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+        target_label: service
+      - source_labels: ["__meta_docker_container_name"]
+        regex: /(.*)
+        target_label: container
+      # Enrich with hostname
+      - source_labels: []
+        target_label: instance
+        replacement: "{{.Host}}"
+    pipeline_stages:
+      - json:
+          expressions:
+            level: level
+            event: event
+            module: logger
+            timestamp: timestamp
+      - labels:
+          level:
+          event:
+          module:
+      - timestamp:
+          source: timestamp
+          format: RFC3339Nano
+          fallback_formats:
+            - "2006-01-02T15:04:05.000Z"
+            - UnixMs
       - match:
           selector: '{level="debug"}'
           action: drop

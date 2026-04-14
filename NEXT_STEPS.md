@@ -1,6 +1,19 @@
 # MouseDroidAGI — Next Steps
 
+> **Last updated**: 2026-04-14 | **Test count**: 1299+ passing | **Coverage**: 85%+ maintained
+
 This document tracks planned enhancements, organised by priority and category.
+
+## Recently Completed (2026-04-14 checkpoint)
+
+- ✅ **Green build restored**: 14 previously failing tests fixed; all 1299+ tests now pass
+- ✅ **ruff + mypy cleanup**: Zero linting violations; `mypy --strict` passes with 0 errors (was 50)
+- ✅ **Dual-Stream CfC/GRU RSSM merged** (PR #34): Liquid neural network hybrid world model; CfC backbone fused with classic GRU RSSM stream; full config and factory wiring
+- ✅ **FHL-LD19 LiDAR added as 5th sensor modality** (PR #31): `hardware/lidar/ld19_driver.py`, `ld19_protocol.py`, `feature_extractor.py`, `resilient_lidar.py`; factory-wired into sensor fusion pipeline
+- ✅ **Wonrabai USB Sound Card integrated** (PR #32): `hardware/audio/usb_microphone.py` implementing `AudioProtocol`; replaces placeholder USB mic branch
+- ✅ **Python 3.12 added to CI matrix**: All three lint, typecheck, and test stages run on 3.10, 3.11, and 3.12 in parallel
+
+---
 
 ## Recently Completed (Phase A checkpoint — pr-18)
 
@@ -23,7 +36,7 @@ This document tracks planned enhancements, organised by priority and category.
 
 ---
 
-## Priority 1 — Hardware Integration (Immediate)
+## Priority 1 — Hardware Integration ✅ COMPLETE (software side)
 
 ### 1.1 HC-SR04 GPIO Integration Tests
 - Add `@pytest.mark.hardware` tests for `HcSr04` on real Jetson GPIO pins
@@ -104,12 +117,12 @@ This document tracks planned enhancements, organised by priority and category.
 
 ## Priority 4 — CI/CD Pipeline
 
-### 4.1 GitHub Actions Workflow
+### 4.1 GitHub Actions Workflow ✅ COMPLETE
 - ✅ Lint (`ruff check`), type-check (`mypy`), test (`pytest --cov`) run on every push
 - ✅ Coverage enforced at ≥85% via `--cov-fail-under=85`
 - ✅ Smoke tests (`pytest -m smoke`) run as a fast pre-flight gate
-- Next: expand matrix to Python 3.11 + 3.12 in parallel
-- **Effort**: 0.5 days | **Owner**: DevOps
+- ✅ Matrix expanded to Python 3.10 + 3.11 + 3.12 in parallel (as of 2026-04-14)
+- **Effort**: Done | **Owner**: DevOps
 
 ### 4.2 TensorRT Compilation CI
 - Add Jetson-hosted CI runner for TensorRT engine compilation tests

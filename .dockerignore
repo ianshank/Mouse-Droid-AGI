@@ -47,3 +47,19 @@ Thumbs.db
 
 # 3D printing files
 docs/3D_printing_files/
+
+# Weights (large model files -- download at runtime)
+weights/
+*.pt
+*.onnx
+*.tflite
+
+# Coverage / test artifacts
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Claude worktrees
+.claude/

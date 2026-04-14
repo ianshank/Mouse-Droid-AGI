@@ -1,8 +1,28 @@
 {
-  "annotations": {
-    "list": []
+  "__comment_thresholds": {
+    "loop_time_target_ms": "30 Hz target = 33.3 ms (1000/30)",
+    "loop_time_safety_ms": "SafetyConfig.max_loop_time_ms = 200.0",
+    "gpu_warn_temp_c": "SafetyConfig.gpu_warn_temp_c = 75.0",
+    "gpu_critical_temp_c": "SafetyConfig.gpu_critical_temp_c = 90.0",
+    "battery_warn_v": "SafetyConfig.battery_warn_v = 10.5",
+    "battery_critical_v": "SafetyConfig.battery_critical_v = 9.5",
+    "telemetry_port": "TelemetryConfig.port = 8080",
+    "metrics_namespace": "MetricsConfig.namespace = mousedroid"
   },
-  "description": "Real-time monitoring of MouseDroidAGI navigation system health and performance.",
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Real-time monitoring of MouseDroidAGI navigation system health and performance on Jetson Orin Nano.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -10,38 +30,66 @@
   "panels": [
     {
       "id": 1,
-      "title": "Loop Latency (ms)",
+      "title": "Loop Time (Gauge + Histogram p50/p95/p99)",
+      "description": "Current loop iteration time (gauge) overlaid with histogram percentiles. Target: 33 ms (30 Hz). Safety limit: 200 ms (SafetyConfig.max_loop_time_ms).",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [
         {
           "expr": "mousedroid_loop_time_ms",
-          "legendFormat": "loop_time_ms",
+          "legendFormat": "loop_time_ms (gauge)",
           "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.50, rate(mousedroid_loop_latency_ms_bucket[5m]))",
+          "legendFormat": "p50",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(mousedroid_loop_latency_ms_bucket[5m]))",
+          "legendFormat": "p95",
+          "refId": "C"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(mousedroid_loop_latency_ms_bucket[5m]))",
+          "legendFormat": "p99",
+          "refId": "D"
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "ms",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10,
+            "spanNulls": false,
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               { "color": "green", "value": null },
-              { "color": "green", "value": 0 },
-              { "color": "yellow", "value": 33 },
+              { "color": "#EAB839", "value": 33 },
               { "color": "red", "value": 200 }
             ]
           }
-        }
+        },
+        "overrides": []
       },
       "options": {
-        "tooltip": { "mode": "single" }
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "lastNotNull"] }
       }
     },
     {
       "id": 2,
-      "title": "GPU Temperature (C)",
+      "title": "GPU Temperature",
+      "description": "GPU temperature in degrees Celsius. Warning: 75 C (SafetyConfig.gpu_warn_temp_c). Critical: 90 C (SafetyConfig.gpu_critical_temp_c).",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
@@ -55,24 +103,40 @@
       "fieldConfig": {
         "defaults": {
           "unit": "celsius",
+          "min": 20,
+          "max": 105,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10,
+            "gradientMode": "scheme",
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               { "color": "green", "value": null },
-              { "color": "green", "value": 0 },
-              { "color": "yellow", "value": 75 },
+              { "color": "#EAB839", "value": 75 },
               { "color": "red", "value": 90 }
             ]
+          },
+          "color": {
+            "mode": "continuous-GrYlRd"
           }
-        }
+        },
+        "overrides": []
       },
       "options": {
-        "tooltip": { "mode": "single" }
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "lastNotNull"] }
       }
     },
     {
       "id": 3,
-      "title": "Battery Voltage (V)",
+      "title": "Battery Voltage",
+      "description": "Battery voltage in volts. Warning: < 10.5 V (SafetyConfig.battery_warn_v). Critical: < 9.5 V (SafetyConfig.battery_critical_v).",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
@@ -86,26 +150,41 @@
       "fieldConfig": {
         "defaults": {
           "unit": "volt",
-          "min": 9,
-          "max": 12.6,
+          "min": 8.5,
+          "max": 12.8,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10,
+            "gradientMode": "scheme",
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               { "color": "red", "value": null },
-              { "color": "red", "value": 9 },
-              { "color": "yellow", "value": 10.5 },
-              { "color": "green", "value": 11 }
+              { "color": "red", "value": 8.5 },
+              { "color": "#EAB839", "value": 9.5 },
+              { "color": "green", "value": 10.5 }
             ]
+          },
+          "color": {
+            "mode": "continuous-RdYlGr"
           }
-        }
+        },
+        "overrides": []
       },
       "options": {
-        "tooltip": { "mode": "single" }
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "min", "lastNotNull"] }
       }
     },
     {
       "id": 4,
       "title": "Safety Violations",
+      "description": "Safety violation rate per law label (mousedroid_safety_violations_total counter). Any sustained rate above zero triggers investigation.",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
@@ -113,6 +192,107 @@
         {
           "expr": "rate(mousedroid_safety_violations_total[1m]) * 60",
           "legendFormat": "{{law}} violations/min",
+          "refId": "A"
+        },
+        {
+          "expr": "mousedroid_safety_violations_total",
+          "legendFormat": "{{law}} total",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "stacking": { "mode": "normal" }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "#EAB839", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum", "lastNotNull"] }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Memory Utilization",
+      "description": "Host memory usage via node_exporter. Relevant for Jetson Orin Nano shared CPU/GPU LPDDR5 memory.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100",
+          "legendFormat": "Memory Used %",
+          "refId": "A"
+        },
+        {
+          "expr": "node_memory_MemAvailable_bytes / 1024 / 1024",
+          "legendFormat": "Available (MiB)",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 15,
+            "gradientMode": "scheme",
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "#EAB839", "value": 75 },
+              { "color": "red", "value": 90 }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Available (MiB)" },
+            "properties": [
+              { "id": "unit", "value": "decmbytes" },
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "min", "value": 0 }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "lastNotNull"] }
+      }
+    },
+    {
+      "id": 6,
+      "title": "WebSocket Client Count",
+      "description": "Number of currently connected WebSocket clients (mousedroid_ws_client_count gauge). Max clients: TelemetryConfig.max_clients = 10.",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "mousedroid_ws_client_count",
+          "legendFormat": "ws_clients",
           "refId": "A"
         }
       ],
@@ -123,22 +303,101 @@
             "mode": "absolute",
             "steps": [
               { "color": "green", "value": null },
-              { "color": "green", "value": 0 },
-              { "color": "yellow", "value": 1 },
-              { "color": "red", "value": 5 }
+              { "color": "#EAB839", "value": 8 },
+              { "color": "red", "value": 10 }
             ]
           }
-        }
+        },
+        "overrides": []
       },
       "options": {
-        "tooltip": { "mode": "multi" }
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        },
+        "colorMode": "background",
+        "graphMode": "area"
       }
     },
     {
-      "id": 5,
-      "title": "Frame Drops (Total)",
+      "id": 7,
+      "title": "Uptime",
+      "description": "Seconds since metrics registry start (mousedroid_uptime_seconds gauge). Resets to 0 on process restart.",
       "type": "stat",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "mousedroid_uptime_seconds",
+          "legendFormat": "uptime",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "#EAB839", "value": 60 },
+              { "color": "green", "value": 300 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        },
+        "colorMode": "background",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 8,
+      "title": "Publish Hz",
+      "description": "Telemetry publisher rate in Hz (mousedroid_publish_hz gauge). Default: TelemetryConfig.publish_hz = 10.0.",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "mousedroid_publish_hz",
+          "legendFormat": "publish_hz",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "hertz",
+          "min": 0,
+          "max": 60,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "#EAB839", "value": 5 },
+              { "color": "green", "value": 9 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      }
+    },
+    {
+      "id": 9,
+      "title": "Frame Drops",
+      "description": "Total telemetry frames dropped due to backpressure (mousedroid_frame_drops_total counter).",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 24 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [
         {
@@ -154,37 +413,54 @@
             "mode": "absolute",
             "steps": [
               { "color": "green", "value": null },
-              { "color": "green", "value": 0 },
-              { "color": "yellow", "value": 10 },
+              { "color": "#EAB839", "value": 10 },
               { "color": "red", "value": 100 }
             ]
           }
-        }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        },
+        "colorMode": "background",
+        "graphMode": "area"
       }
     },
     {
-      "id": 6,
-      "title": "WebSocket Clients",
-      "type": "stat",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "id": 10,
+      "title": "Loop Latency Heatmap",
+      "description": "Histogram heatmap of control-loop latency distribution (mousedroid_loop_latency_ms histogram). Buckets: 1, 2.5, 5, 10, 20, 33, 50, 100, 200, +Inf ms.",
+      "type": "heatmap",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [
         {
-          "expr": "mousedroid_ws_client_count",
-          "legendFormat": "ws_clients",
-          "refId": "A"
+          "expr": "rate(mousedroid_loop_latency_ms_bucket[5m])",
+          "legendFormat": "{{le}}",
+          "refId": "A",
+          "format": "heatmap"
         }
       ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short"
+      "options": {
+        "calculate": false,
+        "yAxis": {
+          "unit": "ms"
+        },
+        "color": {
+          "mode": "scheme",
+          "scheme": "Oranges"
+        },
+        "tooltip": {
+          "show": true
         }
       }
     }
   ],
   "refresh": "5s",
   "schemaVersion": 39,
-  "tags": ["mousedroid", "jetson", "telemetry"],
+  "tags": ["mousedroid", "jetson", "telemetry", "orin-nano"],
   "templating": {
     "list": [
       {
@@ -192,7 +468,7 @@
         "type": "datasource",
         "query": "prometheus",
         "current": { "text": "Prometheus", "value": "Prometheus" },
-        "label": "Prometheus"
+        "label": "Prometheus Datasource"
       }
     ]
   },
@@ -204,7 +480,7 @@
     "refresh_intervals": ["5s", "10s", "30s", "1m", "5m"]
   },
   "timezone": "browser",
-  "title": "MouseDroidAGI \u2014 System Overview",
+  "title": "MouseDroidAGI -- System Overview",
   "uid": "mousedroid-overview",
-  "version": 1
+  "version": 2
 }

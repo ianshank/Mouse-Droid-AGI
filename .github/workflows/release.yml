@@ -1,8 +1,14 @@
 # =============================================================================
-# MouseDroidAGI — PyPI Release Pipeline
+# MouseDroidAGI -- PyPI Release Pipeline
 # =============================================================================
-# Trigger: push of version tags (v*.*.*).
-# Jobs: quality-gate -> build -> publish (trusted publishing)
+# Triggers on version tag push (v*.*.*).
+# Runs quality gates (lint, typecheck, test) matching CI patterns, then builds
+# wheel + sdist and publishes to PyPI via trusted publishing (OIDC).
+#
+# Prerequisites:
+#   1. Configure trusted publisher on PyPI for this GitHub repository.
+#   2. Repository Settings -> Environments -> create "pypi" environment
+#      with optional required-reviewers deployment protection rule.
 # =============================================================================
 
 name: Release to PyPI
@@ -12,16 +18,41 @@ on:
         tags:
             - "v*.*.*"
 
+permissions:
+    contents: read
+
 env:
     MOUSEDROID_MOCK_HARDWARE: "true"
     MINIMUM_COVERAGE: "85"
 
 jobs:
     # -------------------------------------------------------------------------
-    # Stage 1: Quality gate (lint + typecheck + test)
+    # Stage 1: Lint (ruff check + format)
     # -------------------------------------------------------------------------
-    quality-gate:
+    lint:
         runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                  python-version: "3.11"
+                  cache: pip
+
+            - name: Install ruff
+              run: pip install "ruff>=0.4"
+
+            - name: Lint check
+              run: ruff check src/ tests/
+
+            - name: Format check
+              run: ruff format --check src/ tests/
+
+    # -------------------------------------------------------------------------
+    # Stage 2: Type check (mypy --strict)
+    # -------------------------------------------------------------------------
+    typecheck:
+        runs-on: ubuntu-latest
+        needs: lint
         steps:
             - uses: actions/checkout@v4
             - uses: actions/setup-python@v5
@@ -31,17 +62,27 @@ jobs:
 
             - name: Install dependencies
               run: |
-                  pip install -e ".[dev,telemetry]"
+                  pip install -e ".[dev]"
                   pip install typing_extensions>=4.0
-
-            - name: Lint check
-              run: ruff check src/ tests/
-
-            - name: Format check
-              run: ruff format --check src/ tests/
 
             - name: Type check
               run: mypy src/ --strict --ignore-missing-imports
+
+    # -------------------------------------------------------------------------
+    # Stage 3: Test + Coverage (85% gate)
+    # -------------------------------------------------------------------------
+    test:
+        runs-on: ubuntu-latest
+        needs: lint
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                  python-version: "3.11"
+                  cache: pip
+
+            - name: Install dependencies
+              run: pip install -e ".[dev,telemetry]"
 
             - name: Run tests with coverage
               run: |
@@ -53,11 +94,11 @@ jobs:
                     -x
 
     # -------------------------------------------------------------------------
-    # Stage 2: Build sdist + wheel
+    # Stage 4: Build sdist + wheel
     # -------------------------------------------------------------------------
     build:
         runs-on: ubuntu-latest
-        needs: quality-gate
+        needs: [typecheck, test]
         steps:
             - uses: actions/checkout@v4
             - uses: actions/setup-python@v5
@@ -68,8 +109,28 @@ jobs:
             - name: Install build tools
               run: pip install build
 
+            - name: Verify tag matches package version
+              run: |
+                  TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+                  PKG_VERSION=$(python -c "
+                  import tomllib
+                  with open('pyproject.toml', 'rb') as f:
+                      data = tomllib.load(f)
+                  print(data['project']['version'])
+                  ")
+                  if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+                    echo "::error::Tag version ($TAG_VERSION) does not match pyproject.toml ($PKG_VERSION)"
+                    exit 1
+                  fi
+                  echo "Version verified: $TAG_VERSION"
+
             - name: Build package
               run: python -m build
+
+            - name: Verify build artifacts
+              run: |
+                  ls -lh dist/
+                  python -m zipfile -l dist/*.whl | head -30
 
             - name: Upload build artifacts
               uses: actions/upload-artifact@v4
@@ -78,7 +139,7 @@ jobs:
                   path: dist/
 
     # -------------------------------------------------------------------------
-    # Stage 3: Publish to PyPI (trusted publishing)
+    # Stage 5: Publish to PyPI (trusted publishing / OIDC)
     # -------------------------------------------------------------------------
     publish:
         runs-on: ubuntu-latest
