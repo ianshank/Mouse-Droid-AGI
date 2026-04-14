@@ -153,3 +153,31 @@ def test_systemd_notifier_ready_on_init_false() -> None:
 
     # Should NOT have sent READY=1
     mock_notifier_instance.notify.assert_not_called()
+
+
+def test_build_notifier_returns_none_when_sdnotify_missing() -> None:
+    """_build_notifier() returns None when sdnotify is not installed."""
+    # Force sdnotify out of sys.modules so ImportError path executes
+    import sys
+
+    _missing = object()  # sentinel to detect "not in sys.modules"
+    orig = sys.modules.pop("sdnotify", _missing)  # type: ignore[arg-type]
+
+    try:
+        result = SystemdNotifier._build_notifier()
+        assert result is None
+    finally:
+        # Restore previous state
+        if orig is not _missing:
+            sys.modules["sdnotify"] = orig  # type: ignore[assignment]
+        elif "sdnotify" in sys.modules:
+            del sys.modules["sdnotify"]
+
+
+def test_file_heartbeat_path_configurable(tmp_path: Path) -> None:
+    """FileHeartbeatNotifier accepts a configurable path (not hardcoded)."""
+    custom_path = tmp_path / "custom" / "heartbeat.txt"
+    notifier = FileHeartbeatNotifier(path=custom_path)
+    notifier.notify()
+    assert custom_path.exists()
+    assert notifier.path == custom_path

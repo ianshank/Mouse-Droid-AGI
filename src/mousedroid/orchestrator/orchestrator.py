@@ -579,7 +579,8 @@ class MouseDroidOrchestrator:
         record.surprise = surprise
 
         if self._memory_tier is not None:
-            self._memory_tier.episodic.push(record, priority=max(surprise, 1e-6))
+            min_priority = self._cfg.memory.min_episodic_priority
+            self._memory_tier.episodic.push(record, priority=max(surprise, min_priority))
             latent = self._h.detach().clone()
             self._memory_tier.working.push(latent)
 
@@ -605,7 +606,8 @@ class MouseDroidOrchestrator:
 
         if self._memory_tier is not None and self._memory_tier.semantic.size > 0:
             query = self._h.detach().cpu().numpy().flatten().astype(np.float32)
-            results = self._memory_tier.semantic.retrieve(query, k=1)
+            k = self._cfg.memory.semantic_retrieve_k
+            results = self._memory_tier.semantic.retrieve(query, k=k)
             if results:
                 _, distance = results[0]
                 scores["epistemic"] = float(distance)

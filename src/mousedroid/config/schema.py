@@ -366,6 +366,10 @@ class LoopConfig(BaseModel):
         gt=0,
         description="Maximum interval between watchdog heartbeats (seconds)",
     )
+    watchdog_heartbeat_path: str = Field(
+        "/tmp/mousedroid_heartbeat",  # noqa: S108
+        description="Filesystem path for file-based watchdog heartbeat (Docker health checks)",
+    )
 
 
 class MetacognitiveConfig(BaseModel):
@@ -478,6 +482,16 @@ class MemoryConfig(BaseModel):
     semantic_dim: int = Field(256, gt=0, description="Semantic embedding dimension")
     consolidation_batch_size: int = Field(32, gt=0, description="Offline consolidation batch")
     consolidation_interval_s: float = Field(60.0, gt=0, description="Consolidation period (s)")
+    semantic_retrieve_k: int = Field(
+        1,
+        gt=0,
+        description="Number of nearest neighbours to retrieve from semantic index per tick",
+    )
+    min_episodic_priority: float = Field(
+        1e-6,
+        gt=0,
+        description="Minimum episodic replay priority (floor above zero for FAISS)",
+    )
 
 
 class MetricsConfig(BaseModel):

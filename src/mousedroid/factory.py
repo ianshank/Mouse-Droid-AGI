@@ -606,8 +606,8 @@ def build_watchdog(cfg: Settings) -> WatchdogProtocol:
         return SystemdNotifier()
 
     # Fall back to file heartbeat (Docker health checks)
-    _log.info("watchdog_file_heartbeat")
-    return FileHeartbeatNotifier()
+    _log.info("watchdog_file_heartbeat", path=cfg.loop.watchdog_heartbeat_path)
+    return FileHeartbeatNotifier(path=cfg.loop.watchdog_heartbeat_path)
 
 
 def build_sensor_manager(

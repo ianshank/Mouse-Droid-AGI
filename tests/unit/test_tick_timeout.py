@@ -151,3 +151,39 @@ def test_tick_timeout_config_rejects_negative() -> None:
     """tick_timeout_s rejects negative values."""
     with pytest.raises(ValueError, match="greater than 0"):
         Settings(mock_hardware=True, loop={"tick_timeout_s": -1})  # type: ignore[arg-type]
+
+
+def test_watchdog_heartbeat_path_default() -> None:
+    """watchdog_heartbeat_path has a sensible default."""
+    cfg = Settings(mock_hardware=True)
+    assert "/mousedroid_heartbeat" in cfg.loop.watchdog_heartbeat_path
+
+
+def test_watchdog_heartbeat_path_configurable() -> None:
+    """watchdog_heartbeat_path is configurable via LoopConfig."""
+    cfg = Settings(mock_hardware=True, loop={"watchdog_heartbeat_path": "/run/mousedroid/hb"})  # type: ignore[arg-type]
+    assert cfg.loop.watchdog_heartbeat_path == "/run/mousedroid/hb"
+
+
+def test_memory_semantic_retrieve_k_default() -> None:
+    """semantic_retrieve_k defaults to 1."""
+    cfg = Settings(mock_hardware=True)
+    assert cfg.memory.semantic_retrieve_k == 1
+
+
+def test_memory_semantic_retrieve_k_configurable() -> None:
+    """semantic_retrieve_k is configurable."""
+    cfg = Settings(mock_hardware=True, memory={"semantic_retrieve_k": 5})  # type: ignore[arg-type]
+    assert cfg.memory.semantic_retrieve_k == 5
+
+
+def test_memory_min_episodic_priority_default() -> None:
+    """min_episodic_priority defaults to 1e-6."""
+    cfg = Settings(mock_hardware=True)
+    assert cfg.memory.min_episodic_priority == 1e-6
+
+
+def test_memory_min_episodic_priority_rejects_zero() -> None:
+    """min_episodic_priority rejects zero (FAISS requires positive priority)."""
+    with pytest.raises(ValueError, match="greater than 0"):
+        Settings(mock_hardware=True, memory={"min_episodic_priority": 0})  # type: ignore[arg-type]
