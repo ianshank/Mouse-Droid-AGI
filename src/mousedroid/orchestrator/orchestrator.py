@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from mousedroid.curiosity.protocol import CuriosityProtocol
     from mousedroid.experience.logger import ExperienceLogger
     from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
+    from mousedroid.health.watchdog import WatchdogProtocol
     from mousedroid.llm_gateway.mission_parser import MissionParserProtocol
     from mousedroid.llm_gateway.protocol import GoalVector, LLMGatewayProtocol
     from mousedroid.memory.tier import MemoryTier
@@ -70,6 +71,7 @@ class MouseDroidOrchestrator:
         curiosity_module: CuriosityProtocol | None = None,
         llm_gateway: LLMGatewayProtocol | None = None,
         mission_parser: MissionParserProtocol | None = None,
+        watchdog: WatchdogProtocol | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -90,6 +92,7 @@ class MouseDroidOrchestrator:
             curiosity_module: Optional intrinsic curiosity module (ICM).
             llm_gateway: Optional LLM gateway for NL command translation.
             mission_parser: Optional rule-based NL mission parser.
+            watchdog: Optional watchdog notifier for liveness signalling.
         """
         if not agents:
             msg = "At least one agent is required"
@@ -110,6 +113,7 @@ class MouseDroidOrchestrator:
         self._curiosity_module = curiosity_module
         self._llm_gateway = llm_gateway
         self._mission_parser = mission_parser
+        self._watchdog = watchdog
         self._cfg = cfg
         self._running = False
         self._tick_count: int = 0
@@ -632,17 +636,41 @@ class MouseDroidOrchestrator:
                 _log.warning("consolidation_cycle_failed", exc_info=True)
 
     async def run(self) -> None:
-        """Run the main loop at configured control rate."""
+        """Run the main loop at configured control rate.
+
+        Each tick is wrapped in ``asyncio.wait_for`` with
+        ``cfg.loop.tick_timeout_s`` as the deadline.  A timeout or
+        uncaught exception triggers ``emergency_stop`` on the ESP32 to
+        halt the motors immediately.
+        """
         control_period = 1.0 / self._cfg.loop.control_hz
-        _log.info("main_loop_starting", control_hz=self._cfg.loop.control_hz)
+        tick_timeout = self._cfg.loop.tick_timeout_s
+        _log.info(
+            "main_loop_starting",
+            control_hz=self._cfg.loop.control_hz,
+            tick_timeout_s=tick_timeout,
+        )
 
         while self._running:
             tick_start = time.monotonic()
             try:
-                await self.tick()
+                await asyncio.wait_for(self.tick(), timeout=tick_timeout)
+            except asyncio.TimeoutError:
+                _log.critical(
+                    "tick_timeout",
+                    timeout_s=tick_timeout,
+                    elapsed_s=time.monotonic() - tick_start,
+                )
+                await self._esp32.emergency_stop()
+                await self._voice_lifecycle("error")
             except Exception:
                 _log.exception("tick_error")
+                await self._esp32.emergency_stop()
                 await self._voice_lifecycle("error")
+            else:
+                # Successful tick — notify watchdog
+                if self._watchdog is not None:
+                    self._watchdog.notify()
 
             elapsed = time.monotonic() - tick_start
             sleep_time = max(0.0, control_period - elapsed)

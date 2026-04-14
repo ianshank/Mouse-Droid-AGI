@@ -3,11 +3,16 @@ Description=MouseDroid AGI — MSE-6 Autonomous Navigation
 After=network.target
 
 [Service]
-Type=simple
+Type=notify
 User=jetson
+WatchdogSec=30
 WorkingDirectory=/opt/mousedroid
 Environment=MOUSEDROID_CONFIG=/etc/mousedroid/jetson_sdcard_64gb.yaml
 Environment=MOUSEDROID_MOCK_HARDWARE=false
+Environment=MOUSEDROID_LOOP__WATCHDOG_ENABLED=true
+
+# Pre-flight validation — abort if required hardware/config is missing
+ExecStartPre=/opt/mousedroid/scripts/preflight_check.sh
 ExecStart=/opt/mousedroid/venv/bin/python -m mousedroid.main --config ${MOUSEDROID_CONFIG}
 Restart=on-failure
 RestartSec=5

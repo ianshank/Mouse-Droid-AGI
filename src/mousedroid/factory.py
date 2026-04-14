@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from mousedroid.experience.logger import ExperienceLogger
     from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
     from mousedroid.health.monitor import HealthMonitor
+    from mousedroid.health.watchdog import WatchdogProtocol
     from mousedroid.llm_gateway.mission_parser import MissionParserProtocol
     from mousedroid.memory.tier import MemoryTier
     from mousedroid.sensing.manager import SensorManager
@@ -574,6 +575,41 @@ def build_health_monitor(cfg: Settings) -> HealthMonitor:
     return HealthMonitor(cfg.health, cfg.jetson)
 
 
+def build_watchdog(cfg: Settings) -> WatchdogProtocol:
+    """Build watchdog notifier based on configuration.
+
+    Returns a ``SystemdNotifier`` when running under systemd
+    (``NOTIFY_SOCKET`` set), a ``FileHeartbeatNotifier`` for Docker
+    deployments, or a ``NullNotifier`` when disabled.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Watchdog notifier conforming to ``WatchdogProtocol``.
+    """
+    import os
+
+    from mousedroid.health.watchdog import (
+        FileHeartbeatNotifier,
+        NullNotifier,
+        SystemdNotifier,
+    )
+
+    if not cfg.loop.watchdog_enabled:
+        _log.info("watchdog_disabled")
+        return NullNotifier()
+
+    # Prefer systemd if NOTIFY_SOCKET is set (running as Type=notify service)
+    if os.environ.get("NOTIFY_SOCKET"):
+        _log.info("watchdog_systemd")
+        return SystemdNotifier()
+
+    # Fall back to file heartbeat (Docker health checks)
+    _log.info("watchdog_file_heartbeat")
+    return FileHeartbeatNotifier()
+
+
 def build_sensor_manager(
     cfg: Settings,
     vision: VisionProtocol,
@@ -930,6 +966,9 @@ def build_orchestrator(cfg: Settings) -> object:
         llm_gateway = build_llm_gateway(cfg)
     mission_parser = build_mission_parser(cfg)
 
+    # Watchdog notifier (optional — disabled by default)
+    watchdog = build_watchdog(cfg)
+
     return MouseDroidOrchestrator(
         world_model=wm,
         agents=[agent],
@@ -947,6 +986,7 @@ def build_orchestrator(cfg: Settings) -> object:
         curiosity_module=curiosity_module,
         llm_gateway=llm_gateway,
         mission_parser=mission_parser,
+        watchdog=watchdog,
     )
 
 

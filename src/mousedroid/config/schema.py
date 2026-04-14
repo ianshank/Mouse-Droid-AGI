@@ -352,6 +352,20 @@ class LoopConfig(BaseModel):
     planning_hz: float = Field(10.0, gt=0, description="MCTS planning rate (Hz)")
     audio_hz: float = Field(16.0, gt=0, description="Microphone capture rate (Hz)")
     lidar_hz: float = Field(10.0, gt=0, description="LiDAR scan rate (Hz)")
+    tick_timeout_s: float = Field(
+        1.0,
+        gt=0,
+        description="Max seconds per tick before emergency stop is triggered",
+    )
+    watchdog_enabled: bool = Field(
+        False,
+        description="Enable systemd/file heartbeat watchdog notifications",
+    )
+    watchdog_interval_s: float = Field(
+        10.0,
+        gt=0,
+        description="Maximum interval between watchdog heartbeats (seconds)",
+    )
 
 
 class MetacognitiveConfig(BaseModel):
