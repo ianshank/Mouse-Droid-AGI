@@ -315,6 +315,28 @@ def test_render_prometheus_config_buckets() -> None:
     assert 'le="25"' in output
 
 
+def test_histogram_always_has_inf_bucket() -> None:
+    """Config buckets without +Inf still get a trailing +Inf appended."""
+    reg = _make_registry(loop_latency_buckets_ms=[10.0, 50.0])
+    reg.set_loop_time_ms(999.0)  # way above 50ms
+    output = reg.render_prometheus()
+    assert 'le="+Inf"' in output
+    # The 999ms observation must be counted in the +Inf bucket
+    assert "loop_latency_ms_count 1" in output
+
+
+def test_histogram_unsorted_buckets_are_sorted() -> None:
+    """Config buckets provided in wrong order are sorted."""
+    reg = _make_registry(loop_latency_buckets_ms=[50.0, 10.0, 25.0])
+    reg.set_loop_time_ms(15.0)  # should land in the 25ms bucket
+    output = reg.render_prometheus()
+    # Buckets must appear in ascending order
+    idx_10 = output.index('le="10"')
+    idx_25 = output.index('le="25"')
+    idx_50 = output.index('le="50"')
+    assert idx_10 < idx_25 < idx_50
+
+
 def test_render_prometheus_ends_with_newline() -> None:
     reg = _make_registry()
     output = reg.render_prometheus()

@@ -266,8 +266,13 @@ class MetricsRegistry:
         self._publish_hz = _Gauge()
 
         # Histogram (loop latency) — bucket boundaries come from config so they
-        # can be tuned per-deployment without code changes.
-        self._loop_histogram = _Histogram(tuple(cfg.loop_latency_buckets_ms))
+        # can be tuned per-deployment without code changes.  We sort and
+        # guarantee a trailing +Inf so every observation lands in a bucket
+        # (Prometheus spec requires a final +Inf bucket).
+        raw_buckets = sorted(cfg.loop_latency_buckets_ms)
+        if not raw_buckets or raw_buckets[-1] != float("inf"):
+            raw_buckets.append(float("inf"))
+        self._loop_histogram = _Histogram(tuple(raw_buckets))
 
         # Phase 7 metrics — memory, voice, LLM, curiosity, recovery
         self._episodic_size = _Gauge()
