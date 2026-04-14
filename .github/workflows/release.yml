@@ -63,7 +63,7 @@ jobs:
             - name: Install dependencies
               run: |
                   pip install -e ".[dev]"
-                  pip install typing_extensions>=4.0
+                  pip install "typing_extensions>=4.0"
 
             - name: Type check
               run: mypy src/ --strict --ignore-missing-imports

@@ -40,7 +40,10 @@ server:
   grpc_listen_port: 0
 
 positions:
-  filename: /tmp/promtail-positions.yaml
+  # Persistent path — survives reboots so promtail doesn't re-ingest old logs.
+  # Ensure directory exists with correct permissions in deployment:
+  #   mkdir -p /var/lib/promtail && chown promtail:promtail /var/lib/promtail
+  filename: /var/lib/promtail/positions.yaml
 
 clients:
   - url: http://loki:3100/loki/api/v1/push

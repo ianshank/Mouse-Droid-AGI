@@ -4,8 +4,11 @@ Extends ``test_hc_sr04_integration.py`` with GPIO cleanup, staleness
 detection, and re-initialisation scenarios that exercise the driver under
 adverse conditions.
 
-These tests can run **on the Jetson** with real GPIO *or* with the
-``Jetson.GPIO`` module patched via monkeypatch for pre-deploy CI.
+These tests can run **on the Jetson** with real GPIO *or* with a
+``Jetson.GPIO`` stub injected via ``sys.modules`` in conftest for CI.
+
+The Jetson.GPIO import guard lives in a fixture (not module-level) so
+a conftest can insert ``sys.modules["Jetson.GPIO"]`` before collection.
 
 Run on Jetson::
 
@@ -24,9 +27,6 @@ from mousedroid.config.schema import UltrasonicConfig
 
 pytestmark = pytest.mark.hardware
 
-# Skip module on non-Jetson hosts
-Jetson = pytest.importorskip("Jetson.GPIO", reason="Jetson.GPIO not available")
-
 JETSON_PROD_CONFIG = "config/jetson_production.yaml"
 
 
@@ -36,7 +36,13 @@ JETSON_PROD_CONFIG = "config/jetson_production.yaml"
 
 
 @pytest.fixture(scope="module")
-def ultrasonic_cfg(jetson_settings) -> UltrasonicConfig:
+def _require_gpio():
+    """Skip module if Jetson.GPIO is not available (real or stubbed via conftest)."""
+    pytest.importorskip("Jetson.GPIO", reason="Jetson.GPIO not available")
+
+
+@pytest.fixture(scope="module")
+def ultrasonic_cfg(_require_gpio, jetson_settings) -> UltrasonicConfig:
     """UltrasonicConfig from the shared session settings."""
     assert jetson_settings.ultrasonic is not None
     return jetson_settings.ultrasonic

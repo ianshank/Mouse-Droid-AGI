@@ -24,9 +24,8 @@ import pytest
 
 from mousedroid.config.schema import Settings
 
-pytestmark = pytest.mark.hardware
-
-pytest.importorskip("serial", reason="pyserial not available")
+# NOTE: No module-level pytestmark or importorskip — this module contains both
+# hardware tests (need real serial) and mock-only resilience tests (any host).
 
 JETSON_PROD_CONFIG = "config/jetson_production.yaml"
 SERIAL_DEVICE_ENV = "MOUSEDROID_ESP32_SERIAL_PORT"
@@ -45,7 +44,8 @@ def settings(jetson_settings) -> Settings:
 
 @pytest.fixture(scope="module")
 def require_serial_device(settings: Settings) -> str:
-    """Skip all tests if the ESP32 serial device is absent."""
+    """Skip tests if pyserial is missing or the ESP32 serial device is absent."""
+    pytest.importorskip("serial", reason="pyserial not available")
     serial_device = os.getenv(SERIAL_DEVICE_ENV, settings.esp32.serial_port)
     if not Path(serial_device).exists():
         pytest.skip(
@@ -60,6 +60,7 @@ def require_serial_device(settings: Settings) -> str:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.hardware
 @pytest.mark.timeout(15)
 async def test_reconnect_after_disconnect(
     settings: Settings,
@@ -134,6 +135,7 @@ async def test_emergency_stop_bypasses_open_circuit(settings: Settings) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.hardware
 @pytest.mark.timeout(15)
 async def test_concurrent_velocity_no_corruption(
     settings: Settings,
@@ -172,6 +174,7 @@ async def test_concurrent_velocity_no_corruption(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.hardware
 @pytest.mark.timeout(10)
 async def test_battery_voltage_stability(
     settings: Settings,
@@ -213,6 +216,7 @@ async def test_battery_voltage_stability(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.hardware
 @pytest.mark.timeout(10)
 async def test_encoder_reading_fields(
     settings: Settings,
@@ -276,6 +280,7 @@ async def test_resilient_driver_stats_tracking(settings: Settings) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.hardware
 @pytest.mark.timeout(10)
 async def test_velocity_within_config_limits(
     settings: Settings,

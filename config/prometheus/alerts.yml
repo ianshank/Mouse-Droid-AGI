@@ -93,12 +93,13 @@ groups:
   # ------------------------------------------------------------------
   - name: mousedroid_safety
     rules:
-      # Any increase in safety_violations_total over a 1-minute window
+      # Any increase in safety_violations_total — alert immediately (for: 0s)
+      # Safety violations are critical; no debounce delay.
       - alert: SafetyViolation
         expr: increase(mousedroid_safety_violations_total[1m]) > 0
-        for: 1m
+        for: 0s
         labels:
-          severity: warning
+          severity: critical
         annotations:
           summary: "Safety violations detected (law={{ $labels.law }})"
           description: >-

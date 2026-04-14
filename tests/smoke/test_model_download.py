@@ -7,6 +7,7 @@ retry handling).
 
 from __future__ import annotations
 
+import shutil
 import stat
 import subprocess
 import sys
@@ -41,16 +42,18 @@ def test_download_script_is_executable() -> None:
 
     if sys.platform == "win32":
         # Windows doesn't support Unix file permissions; check git index mode
+        if shutil.which("git") is None:
+            pytest.skip("git not available on this Windows host")
         result = subprocess.run(
             ["git", "ls-files", "-s", str(_SCRIPT_PATH.relative_to(_REPO_ROOT))],
             capture_output=True,
             text=True,
+            check=True,
             cwd=_REPO_ROOT,
         )
-        assert result.returncode == 0, "git ls-files failed"
-        assert result.stdout.startswith("100755"), (
-            f"download_model.sh git mode is not executable: {result.stdout.strip()}"
-        )
+        assert result.stdout.startswith(
+            "100755"
+        ), f"download_model.sh git mode is not executable: {result.stdout.strip()}"
     else:
         mode = _SCRIPT_PATH.stat().st_mode
         assert mode & (

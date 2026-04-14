@@ -7,11 +7,10 @@ modules are importable without hardware dependencies (GPIO, serial, etc.).
 from __future__ import annotations
 
 import importlib
+import importlib.metadata
 import re
 
 import pytest
-
-EXPECTED_VERSION = "0.2.0"
 
 # Semver pattern: MAJOR.MINOR.PATCH with optional pre-release / build metadata
 _SEMVER_RE = re.compile(
@@ -43,13 +42,14 @@ _PUBLIC_MODULES = [
 
 
 @pytest.mark.smoke
-def test_version_matches_expected() -> None:
-    """Verify __version__ equals the expected release version."""
+def test_version_matches_metadata() -> None:
+    """Verify __version__ matches importlib.metadata (single-sourced from pyproject.toml)."""
     import mousedroid
 
+    metadata_version = importlib.metadata.version("mousedroid")
     assert (
-        mousedroid.__version__ == EXPECTED_VERSION
-    ), f"Expected version {EXPECTED_VERSION}, got {mousedroid.__version__}"
+        mousedroid.__version__ == metadata_version
+    ), f"__version__ ({mousedroid.__version__}) != metadata ({metadata_version})"
 
 
 @pytest.mark.smoke
