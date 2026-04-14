@@ -15,6 +15,8 @@ from mousedroid.factory import (
 from mousedroid.hardware.camera.mock_camera import MockCamera
 from mousedroid.hardware.sensors.mock_ultrasonic import MockUltrasonic
 from mousedroid.safety.monitor import MouseDroidSafetyMonitor
+from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
+from mousedroid.world_model.protocol import SafetyTraceProtocol, WorldModelProtocol
 from mousedroid.world_model.rssm import RSSM
 
 
@@ -86,3 +88,59 @@ def test_build_camera_mock_has_feature_dim() -> None:
     cfg = _mock_settings()
     cam = build_camera(cfg)
     assert cam.feature_dim > 0
+
+
+# ---------------------------------------------------------------------------
+# Dual-Stream RSSM factory integration tests
+# ---------------------------------------------------------------------------
+
+
+def test_build_world_model_returns_dual_stream_when_cfc_enabled() -> None:
+    """Factory builds DualStreamRSSM when cfc_hidden_dim > 0."""
+    cfg = Settings(mock_hardware=True)
+    cfg.model.cfc_hidden_dim = 16
+    wm = build_world_model(cfg)
+    assert isinstance(wm, DualStreamRSSM)
+
+
+def test_build_world_model_returns_classic_rssm_when_cfc_zero() -> None:
+    """Factory builds classic RSSM when cfc_hidden_dim == 0 (default)."""
+    cfg = _mock_settings()
+    assert cfg.model.cfc_hidden_dim == 0
+    wm = build_world_model(cfg)
+    assert isinstance(wm, RSSM)
+
+
+def test_dual_stream_world_model_conforms_to_protocol() -> None:
+    """DualStreamRSSM satisfies WorldModelProtocol."""
+    cfg = Settings(mock_hardware=True)
+    cfg.model.cfc_hidden_dim = 16
+    wm = build_world_model(cfg)
+    assert isinstance(wm, WorldModelProtocol)
+
+
+def test_dual_stream_world_model_has_safety_trace() -> None:
+    """DualStreamRSSM satisfies SafetyTraceProtocol."""
+    cfg = Settings(mock_hardware=True)
+    cfg.model.cfc_hidden_dim = 16
+    wm = build_world_model(cfg)
+    assert isinstance(wm, SafetyTraceProtocol)
+
+
+def test_cfc_config_defaults_backward_compatible() -> None:
+    """Existing config (no CfC fields) still works."""
+    cfg = Settings(mock_hardware=True)
+    assert cfg.model.cfc_hidden_dim == 0
+    assert cfg.model.cfc_backbone_units == 64
+    assert cfg.model.cfc_backbone_layers == 1
+    assert cfg.model.cfc_mode == "default"
+    assert cfg.model.cfc_sparsity_level == 0.5
+
+
+def test_dual_stream_training_config_defaults() -> None:
+    """DualStreamTrainingConfig has expected defaults."""
+    cfg = Settings(mock_hardware=True)
+    assert cfg.dual_stream_training.gru_lr == 3e-4
+    assert cfg.dual_stream_training.cfc_lr == 1e-4
+    assert cfg.dual_stream_training.gru_grad_clip == 10.0
+    assert cfg.dual_stream_training.cfc_grad_clip == 1.0

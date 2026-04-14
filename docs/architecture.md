@@ -110,7 +110,7 @@ graph TD
     SensorMgr["Sensor Manager\nsensing/\nCamera - Ultrasonic - LiDAR - Audio - ESP32 encoders"]
     SafetyMon["Safety Monitor\nsafety/\nClearance - Battery - Sensor staleness"]
     Encoder["Encoder\nvision + motor + ultrasonic + audio + lidar"]
-    RSSM["RSSM\nlatent h and z\nobserve step / imagine step"]
+    RSSM["World Model\nRSSM or DualStreamRSSM\nGRU 256 + CfC 64 = 320 combined\nobserve step / imagine step"]
     MCTS["MCTS\n50 to 200 sims"]
     NavAgent["Navigation Agent\nagents/\nact with h, z, safety"]
     ESP32Driver["ESP32 Driver\ncomms/\nsend velocity"]
@@ -204,7 +204,7 @@ classDiagram
     class Factory {
         +build_esp32_driver(cfg) ESP32CommProtocol
         +build_orchestrator(cfg) Orchestrator
-        +build_world_model(cfg) RSSM
+        +build_world_model(cfg) RSSM | DualStreamRSSM
         +build_safety_monitor(cfg) SafetyMonitor
         +build_agent(cfg) NavigationAgent
         +build_cognitive_core(cfg) CognitiveCore
@@ -403,6 +403,46 @@ graph TD
 
 ---
 
+## Dual-Stream CfC/GRU World Model
+
+The world model supports two modes selected via `model.cfc_hidden_dim`:
+
+- **Classic RSSM** (`cfc_hidden_dim=0`): Single GRU stream, 256-dim hidden state
+- **Dual-Stream RSSM** (`cfc_hidden_dim>0`): GRU + CfC parallel streams with concat fusion
+
+```mermaid
+graph TD
+    subgraph DualStream["Dual-Stream CfC/GRU RSSM"]
+        Input["Recurrent Input\n[z_prev | action_prev]"]
+        GRU["GRU Stream\n256-dim hidden\nSlow planning"]
+        CfC["CfC Stream\n64-dim hidden\nFast adaptive reflexes\n(ncps liquid neural network)"]
+        Fusion["StreamFusion\nconcat: [h_gru | h_cfc] = 320-dim"]
+        Posterior["Posterior Net\n[h_combined | obs_embed] → z"]
+        Prior["Prior Net\nh_combined → z_prior"]
+        Decoder["Decoder\n[h_combined | z] → obs_recon"]
+        SafetyTrace["Safety Trace\nExtracts CfC state for inspection\nget_safety_trace()"]
+    end
+
+    Input --> GRU
+    Input --> CfC
+    GRU --> Fusion
+    CfC --> Fusion
+    Fusion --> Posterior
+    Fusion --> Prior
+    Fusion --> Decoder
+    Fusion --> SafetyTrace
+```
+
+**Training:** Dual optimizers with separate learning rates and gradient clipping per stream.
+CfC loss weight ramps linearly from 0.1→1.0 over 10k steps.
+
+**Human activation gate:** CfC disabled by default in production (`cfc_hidden_dim=0`).
+Activate via: `MOUSEDROID_MODEL__CFC_HIDDEN_DIM=64 docker compose up -d`
+
+**HuggingFace:** Trained weights at `ianshank/mousedroid-dual-stream-rssm` (experimental).
+
+---
+
 ## Key Design Decisions
 
 | Decision | Rationale |
@@ -421,6 +461,9 @@ graph TD
 | Optional audio projection in encoder | `audio_dim=0` disables audio entirely; existing 3-modality checkpoints load unchanged |
 | `FeatureExtractorProtocol` for camera | Pluggable backends (MeanPool, TensorRT, ONNX); eliminates duplicate code across camera drivers |
 | Module-level constants for all magic numbers | Grep-able; documented; not scattered in logic |
+| Dual-stream CfC/GRU RSSM | CfC provides sub-100ms adaptive time constants for reflexes; GRU handles slow planning; concat fusion preserves both information streams; safety trace exposes CfC state for independent monitoring |
+| Human activation gate for CfC | `cfc_hidden_dim=0` default ensures classic RSSM in production; explicit env var override required — prevents accidental deployment of experimental architecture |
+| Separate dual optimizers | GRU (lr=3e-4, clip=10.0) and CfC (lr=1e-4, clip=1.0) trained independently; CfC loss warmup prevents destabilising GRU early in training |
 | L4T Docker container | GPU-accelerated deployment with consistent environment |
 | Multi-stage Docker builds | Extract pre-compiled binaries from upstream images to bypass OOM |
 | NVMe SSD for Docker + swap | 500 GB fast storage avoids SD card wear and OOM during builds |

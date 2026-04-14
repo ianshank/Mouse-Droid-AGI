@@ -1,0 +1,44 @@
+# Jetson Orin Nano — Dual-Stream CfC/GRU RSSM configuration.
+#
+# Extends jetson_production.yaml with liquid neural network hybrid
+# world model.  CfC stream provides sub-100ms adaptive reflexes
+# while GRU handles long-horizon planning.
+#
+# ACTIVATION GATE: Set model.cfc_hidden_dim to 0 for classic RSSM.
+# Only enable (64+) after human review of training metrics.
+
+platform: mouse_droid
+mock_hardware: false
+debug: false
+
+safety:
+  min_valid_sensors: 1
+  battery_critical_v: 9.5
+  lidar_max_range_m: 12.0
+
+jetson:
+  tensorrt_enabled: true
+  gpu_memory_fraction: 0.7
+  power_mode: "15W"
+  dla_enabled: false
+  precision: "fp16"
+  workspace_gb: 2.0
+
+model:
+  # Dual-stream CfC/GRU configuration
+  cfc_hidden_dim: 64
+  cfc_backbone_units: 64
+  cfc_backbone_layers: 1
+  cfc_mode: "default"
+  cfc_sparsity_level: 0.5
+
+dual_stream_training:
+  gru_lr: 0.0003
+  cfc_lr: 0.0001
+  gru_grad_clip: 10.0
+  cfc_grad_clip: 1.0
+  cfc_loss_weight_initial: 0.1
+  cfc_loss_weight_final: 1.0
+  cfc_loss_warmup_steps: 10000
+  fallback_check_interval: 1000
+  fallback_degradation_threshold: 0.05

@@ -264,12 +264,33 @@ def build_voice_engine(
 def build_world_model(cfg: Settings) -> WorldModelProtocol:
     """Build world model for configured platform.
 
+    Selects :class:`~mousedroid.world_model.dual_stream_rssm.DualStreamRSSM`
+    when ``cfc_hidden_dim > 0``, otherwise falls back to the classic
+    :class:`~mousedroid.world_model.rssm.RSSM`.
+
     Args:
         cfg: Root settings.
 
     Returns:
         World model conforming to ``WorldModelProtocol``.
     """
+    if cfg.model.cfc_hidden_dim > 0:
+        try:
+            from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
+        except ImportError:
+            _log.warning(
+                "dual_stream_unavailable_falling_back_to_rssm",
+                reason="ncps package not installed (pip install ncps)",
+                requested_cfc_dim=cfg.model.cfc_hidden_dim,
+            )
+        else:
+            _log.info(
+                "world_model_dual_stream",
+                gru_dim=cfg.model.hidden_dim,
+                cfc_dim=cfg.model.cfc_hidden_dim,
+            )
+            return DualStreamRSSM(cfg.model)
+
     from mousedroid.world_model.rssm import RSSM
 
     return RSSM(cfg.model)
