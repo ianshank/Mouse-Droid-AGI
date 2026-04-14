@@ -452,6 +452,7 @@ class MCTSConfig(BaseModel):
 class MemoryConfig(BaseModel):
     """Layered memory system configuration (Pillar 4)."""
 
+    enabled: bool = Field(False, description="Enable memory tier (backwards compatible default)")
     working_context_size: int = Field(8192, gt=0, description="Working memory context tokens")
     episodic_capacity: int = Field(50_000, gt=0, description="Episodic replay buffer size")
     semantic_dim: int = Field(256, gt=0, description="Semantic embedding dimension")

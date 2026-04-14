@@ -36,8 +36,11 @@ if TYPE_CHECKING:
     from mousedroid.cognitive.bdi_model import NeuralBDI
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.config.schema import Settings, UltrasonicConfig
+    from mousedroid.curiosity.protocol import CuriosityProtocol
+    from mousedroid.experience.logger import ExperienceLogger
     from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
     from mousedroid.health.monitor import HealthMonitor
+    from mousedroid.memory.tier import MemoryTier
     from mousedroid.sensing.manager import SensorManager
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
     from mousedroid.voice.mock_tts import MockTTS
@@ -738,6 +741,96 @@ def build_hailo_runtime(cfg: Settings) -> HailoRuntimeProtocol | None:
         return None
 
 
+def build_memory_tier(cfg: Settings) -> MemoryTier | None:
+    """Build layered memory tier if enabled.
+
+    Constructs all four memory subsystems (episodic, semantic, working,
+    consolidation) and bundles them in a ``MemoryTier`` dataclass.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        ``MemoryTier`` or ``None`` if memory is disabled.
+    """
+    if not cfg.memory.enabled:
+        _log.info("memory_tier_disabled")
+        return None
+
+    from mousedroid.memory.consolidation import MemoryConsolidation
+    from mousedroid.memory.episodic import EpisodicReplay
+    from mousedroid.memory.semantic import SemanticIndex
+    from mousedroid.memory.tier import MemoryTier
+    from mousedroid.memory.working import WorkingMemory
+
+    episodic = EpisodicReplay(cfg.memory)
+    semantic = SemanticIndex(cfg.memory)
+    working = WorkingMemory(cfg.memory, embed_dim=cfg.memory.semantic_dim)
+    consolidation = MemoryConsolidation(cfg.memory, episodic, semantic)
+
+    _log.info(
+        "memory_tier_built",
+        episodic_capacity=cfg.memory.episodic_capacity,
+        semantic_dim=cfg.memory.semantic_dim,
+        working_context=cfg.memory.working_context_size,
+    )
+    return MemoryTier(
+        episodic=episodic,
+        semantic=semantic,
+        working=working,
+        consolidation=consolidation,
+    )
+
+
+def build_experience_logger(cfg: Settings) -> ExperienceLogger | None:
+    """Build LMDB experience logger if memory tier is enabled.
+
+    Gated by ``cfg.memory.enabled`` — experience logging only runs when
+    the full memory pipeline is active.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        ``ExperienceLogger`` or ``None`` if memory is disabled.
+    """
+    if not cfg.memory.enabled:
+        _log.info("experience_logger_disabled")
+        return None
+
+    from mousedroid.experience.logger import ExperienceLogger
+
+    _log.info("experience_logger_built", path=cfg.experience.path)
+    return ExperienceLogger(cfg.experience)
+
+
+def build_curiosity_module(cfg: Settings) -> CuriosityProtocol | None:
+    """Build ICM intrinsic curiosity module if memory tier is enabled.
+
+    Gated by ``cfg.memory.enabled`` — curiosity needs memory for novelty
+    tracking and epistemic scoring.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        ``IntrinsicCuriosityModule`` conforming to ``CuriosityProtocol``,
+        or ``None`` if memory is disabled.
+    """
+    if not cfg.memory.enabled:
+        _log.info("curiosity_module_disabled")
+        return None
+
+    from mousedroid.curiosity.icm import IntrinsicCuriosityModule
+
+    _log.info(
+        "curiosity_module_built",
+        intrinsic_reward_scale=cfg.curiosity.intrinsic_reward_scale,
+        novelty_decay=cfg.curiosity.novelty_decay_enabled,
+    )
+    return IntrinsicCuriosityModule(cfg.model, cfg.curiosity)
+
+
 def build_orchestrator(cfg: Settings) -> object:
     """Build fully-wired orchestrator.
 
@@ -804,6 +897,15 @@ def build_orchestrator(cfg: Settings) -> object:
     speaker = build_speaker(cfg)
     voice_engine = build_voice_engine(cfg, speaker=speaker)
 
+    # Memory tier (optional — disabled by default)
+    memory_tier = build_memory_tier(cfg)
+
+    # Experience logger (optional — requires experience config)
+    experience_logger = build_experience_logger(cfg)
+
+    # Curiosity module (optional — requires curiosity config)
+    curiosity_module = build_curiosity_module(cfg)
+
     return MouseDroidOrchestrator(
         world_model=wm,
         agents=[agent],
@@ -816,6 +918,9 @@ def build_orchestrator(cfg: Settings) -> object:
         telemetry_server=telemetry_server,
         voice_engine=voice_engine,
         hailo_runtime=hailo_runtime,
+        memory_tier=memory_tier,
+        experience_logger=experience_logger,
+        curiosity_module=curiosity_module,
     )
 
 

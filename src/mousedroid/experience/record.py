@@ -51,6 +51,11 @@ class MouseDroidExperienceRecord:
     reward: float = 0.0
     surprise: float = 0.0
 
+    @property
+    def embedding(self) -> NDArray[np.float32]:
+        """Return vision features as the embedding for memory consolidation."""
+        return self.vision_features
+
     def serialize(self) -> bytes:
         """Serialize record to msgpack bytes.
 
