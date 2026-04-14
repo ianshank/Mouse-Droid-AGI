@@ -97,9 +97,9 @@ class TestClassicRssmWhenCfcDisabled:
         cfg = _settings_with_cfc_dim(0)
         world_model = build_world_model(cfg)
 
-        assert isinstance(world_model, RSSM), (
-            f"Expected RSSM but got {type(world_model).__name__} when cfc_hidden_dim=0"
-        )
+        assert isinstance(
+            world_model, RSSM
+        ), f"Expected RSSM but got {type(world_model).__name__} when cfc_hidden_dim=0"
 
     def test_classic_rssm_not_dual_stream_type(self) -> None:
         """A classic RSSM must not be an instance of DualStreamRSSM.
@@ -113,9 +113,9 @@ class TestClassicRssmWhenCfcDisabled:
         cfg = _settings_with_cfc_dim(0)
         world_model = build_world_model(cfg)
 
-        assert not isinstance(world_model, DualStreamRSSM), (
-            "build_world_model with cfc_hidden_dim=0 must not produce DualStreamRSSM"
-        )
+        assert not isinstance(
+            world_model, DualStreamRSSM
+        ), "build_world_model with cfc_hidden_dim=0 must not produce DualStreamRSSM"
 
     def test_classic_rssm_conforms_to_protocol(self) -> None:
         """The returned RSSM must still satisfy WorldModelProtocol.
@@ -126,9 +126,9 @@ class TestClassicRssmWhenCfcDisabled:
         cfg = _settings_with_cfc_dim(0)
         world_model = build_world_model(cfg)
 
-        assert isinstance(world_model, WorldModelProtocol), (
-            "Classic RSSM must conform to WorldModelProtocol"
-        )
+        assert isinstance(
+            world_model, WorldModelProtocol
+        ), "Classic RSSM must conform to WorldModelProtocol"
 
 
 # ---------------------------------------------------------------------------
@@ -151,9 +151,9 @@ class TestDualStreamWhenCfcEnabled:
         cfg = _settings_with_cfc_dim(64)
         world_model = build_world_model(cfg)
 
-        assert isinstance(world_model, DualStreamRSSM), (
-            f"Expected DualStreamRSSM but got {type(world_model).__name__} when cfc_hidden_dim=64"
-        )
+        assert isinstance(
+            world_model, DualStreamRSSM
+        ), f"Expected DualStreamRSSM but got {type(world_model).__name__} when cfc_hidden_dim=64"
 
     @pytest.mark.parametrize("cfc_dim", [8, 16, 32, 64, 128])
     def test_dual_stream_for_various_cfc_dims(self, cfc_dim: int) -> None:
@@ -171,9 +171,9 @@ class TestDualStreamWhenCfcEnabled:
         cfg = _settings_with_cfc_dim(cfc_dim)
         world_model = build_world_model(cfg)
 
-        assert isinstance(world_model, DualStreamRSSM), (
-            f"Expected DualStreamRSSM for cfc_dim={cfc_dim}, got {type(world_model).__name__}"
-        )
+        assert isinstance(
+            world_model, DualStreamRSSM
+        ), f"Expected DualStreamRSSM for cfc_dim={cfc_dim}, got {type(world_model).__name__}"
 
     def test_dual_stream_conforms_to_protocol(self) -> None:
         """DualStreamRSSM must conform to WorldModelProtocol.
@@ -186,9 +186,9 @@ class TestDualStreamWhenCfcEnabled:
         cfg = _settings_with_cfc_dim(64)
         world_model = build_world_model(cfg)
 
-        assert isinstance(world_model, WorldModelProtocol), (
-            "DualStreamRSSM must conform to WorldModelProtocol"
-        )
+        assert isinstance(
+            world_model, WorldModelProtocol
+        ), "DualStreamRSSM must conform to WorldModelProtocol"
 
 
 # ---------------------------------------------------------------------------
@@ -215,9 +215,9 @@ class TestConfigDefaultsBackwardCompatible:
         cfc_hidden_dim continue to use the classic GRU-only RSSM.
         """
         cfg = Settings(mock_hardware=True)
-        assert cfg.model.cfc_hidden_dim == 0, (
-            f"Default cfc_hidden_dim should be 0, got {cfg.model.cfc_hidden_dim}"
-        )
+        assert (
+            cfg.model.cfc_hidden_dim == 0
+        ), f"Default cfc_hidden_dim should be 0, got {cfg.model.cfc_hidden_dim}"
 
     def test_dual_stream_training_config_present_in_settings(self) -> None:
         """Settings must expose a dual_stream_training attribute after the feature branch.
@@ -226,9 +226,9 @@ class TestConfigDefaultsBackwardCompatible:
         can unconditionally access it without version-checking.
         """
         cfg = Settings(mock_hardware=True)
-        assert hasattr(cfg, "dual_stream_training"), (
-            "Settings must have a dual_stream_training attribute"
-        )
+        assert hasattr(
+            cfg, "dual_stream_training"
+        ), "Settings must have a dual_stream_training attribute"
         assert isinstance(cfg.dual_stream_training, DualStreamTrainingConfig)
 
     def test_minimal_yaml_style_settings_still_works(self) -> None:
@@ -348,9 +348,9 @@ class TestDualStreamTrainingConfigDefaults:
         a misconfiguration.
         """
         train_cfg = DualStreamTrainingConfig()
-        assert train_cfg.cfc_loss_weight_initial < train_cfg.cfc_loss_weight_final, (
-            "cfc_loss_weight_initial must be < cfc_loss_weight_final for a valid warmup schedule"
-        )
+        assert (
+            train_cfg.cfc_loss_weight_initial < train_cfg.cfc_loss_weight_final
+        ), "cfc_loss_weight_initial must be < cfc_loss_weight_final for a valid warmup schedule"
 
 
 # ---------------------------------------------------------------------------
@@ -409,9 +409,9 @@ class TestExistingRssmTestsUnaffected:
             1,
             cfg.obs_dim,
         ), f"observe_step obs_embed shape: expected (1, {cfg.obs_dim}), got {obs_embed.shape}"
-        assert isinstance(surprise, float), (
-            f"observe_step surprise must be float, got {type(surprise)}"
-        )
+        assert isinstance(
+            surprise, float
+        ), f"observe_step surprise must be float, got {type(surprise)}"
 
     def test_existing_rssm_observe_step_finite(self) -> None:
         """Classic RSSM observe_step outputs must be finite after dual-stream changes.
@@ -436,9 +436,9 @@ class TestExistingRssmTestsUnaffected:
         assert torch.isfinite(new_h).all(), "Classic RSSM observe_step new_h is not finite"
         assert torch.isfinite(new_z).all(), "Classic RSSM observe_step new_z is not finite"
         assert torch.isfinite(obs_embed).all(), "Classic RSSM observe_step obs_embed is not finite"
-        assert np.isfinite(surprise), (
-            f"Classic RSSM observe_step surprise is not finite: {surprise}"
-        )
+        assert np.isfinite(
+            surprise
+        ), f"Classic RSSM observe_step surprise is not finite: {surprise}"
 
     def test_existing_rssm_imagine_step_shape(self) -> None:
         """Classic RSSM imagine_step still returns correctly shaped tensors.

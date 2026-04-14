@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mousedroid"
-version = "0.1.0"
+version = "0.2.0"
 description = "MouseDroidAGI — Star Wars MSE-6 Agentic World Model on Jetson Orin Nano"
 requires-python = ">=3.10"
 dependencies = [
@@ -94,9 +94,9 @@ select = [
 ignore = ["D100", "D104", "D107", "D203", "D213", "S101", "ANN401", "TCH", "TC"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["D", "ANN", "S101", "S108", "S603"]
+"tests/**/*.py" = ["D", "ANN", "S101", "S108", "S603", "S607", "E402"]
 "tools/**/*.py" = ["D", "ANN", "T20"]
-"scripts/**/*.py" = ["D", "T20", "S603"]
+"scripts/**/*.py" = ["D", "T20", "S603", "S104", "E501"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

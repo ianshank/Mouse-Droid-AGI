@@ -1,0 +1,53 @@
+# =============================================================================
+# MouseDroidAGI -- CPU-only Development Image
+# =============================================================================
+# For CI runners and contributors without Jetson hardware.
+# Includes full dev toolchain (pytest, ruff, mypy, hypothesis).
+#
+# Build:  docker build -f Dockerfile.dev -t mousedroid-dev .
+# Run:    docker run --rm mousedroid-dev
+# Shell:  docker run --rm -it mousedroid-dev bash
+# Tests:  docker run --rm mousedroid-dev pytest tests/unit -v
+# =============================================================================
+
+FROM python:3.11-slim
+
+LABEL maintainer="Ian Cruickshank"
+LABEL description="MouseDroidAGI -- CPU-only dev/CI image (no Jetson hardware)"
+LABEL version="0.2.0"
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV MOUSEDROID_MOCK_HARDWARE=true
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# ---------------------------------------------------------------------------
+# System dependencies
+# ---------------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---------------------------------------------------------------------------
+# Python dependencies
+# ---------------------------------------------------------------------------
+WORKDIR /app
+
+# Copy project metadata first for better layer caching
+COPY pyproject.toml ./
+COPY src/ ./src/
+
+# Install package with dev extras (CPU-only, no hardware/jetson/arm extras)
+RUN pip install --no-cache-dir -e ".[dev,telemetry]"
+
+# Copy remaining project files (tests, configs, scripts)
+COPY tests/ ./tests/
+COPY config/ ./config/
+
+# ---------------------------------------------------------------------------
+# Default: run unit + property tests with a timeout guard
+# ---------------------------------------------------------------------------
+CMD ["pytest", "tests/unit", "tests/property", "-q", "--timeout=60"]

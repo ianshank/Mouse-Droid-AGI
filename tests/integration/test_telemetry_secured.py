@@ -21,10 +21,10 @@ from mousedroid.telemetry.protocol import TelemetryFrame
 
 aiohttp = pytest.importorskip("aiohttp")
 
-from aiohttp import web  # noqa: E402
-from aiohttp.test_utils import TestClient, TestServer  # noqa: E402
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
 
-from mousedroid.telemetry.server import TelemetryServer  # noqa: E402
+from mousedroid.telemetry.server import TelemetryServer
 
 _BEARER_TOKEN = "integration-test-token-secure"  # noqa: S105
 _ENV_VAR = "MOUSEDROID_TELEMETRY_TOKEN"

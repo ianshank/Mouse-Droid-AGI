@@ -1,8 +1,8 @@
 # MouseDroidAGI — Implementation Plan: Next Steps
 
-> **Date**: 2026-03-19
+> **Date**: 2026-04-14 (last updated; originally 2026-03-19)
 > **Author**: System Architect Agent
-> **Status**: Draft — Awaiting Review
+> **Status**: Updated — reflects state as of 2026-04-14
 > **Branch**: `claude/create-implementation-plan-aQp9z`
 
 ---
@@ -10,11 +10,12 @@
 ## Context
 
 MouseDroidAGI is a Star Wars MSE-6 droid replica running on NVIDIA Jetson Orin Nano with:
-- **121 Python source files** across **28 modules**
-- **752+ tests** at **98% branch coverage** (85% gate enforced)
-- **5-stage CI pipeline**: lint → typecheck → test → security → Docker
+- **173 Python source files** across **30+ modules** (up from 121 at plan creation)
+- **1299+ tests** at **85%+ branch coverage** (85% gate enforced)
+- **5-stage CI pipeline**: lint → typecheck → test → security → Docker (Python 3.10 + 3.11 + 3.12)
 - **Architecture**: Protocol-based DI, asyncio everywhere, Pydantic v2 config, factory pattern
 - **Zero hardcoded values**: all config in YAML, constants centralized in `constants.py`
+- **5 sensor modalities**: camera, ultrasonic, audio (Wonrabai USB), LiDAR (FHL-LD19), encoders
 
 ### Sources Analyzed
 - `NEXT_STEPS.md` — 7 priority areas with 25+ action items
@@ -26,27 +27,30 @@ MouseDroidAGI is a Star Wars MSE-6 droid replica running on NVIDIA Jetson Orin N
 - **11 remote branches** — 5 with in-flight commits
 - `config/default.yaml`, `pyproject.toml`, `config/schema.py` — current config state
 
-### In-Flight Branches
+### In-Flight Branches (as of 2026-04-14 — all resolved)
 | Branch | Status | Content |
 |--------|--------|---------|
-| `pr-16` | Active (5 commits) | Offline RL (CQL/IQL) + ICM novelty decay + quality fixes |
-| `plan-drone-migration` | Active (3 commits) | Multi-platform MAVLink drone support |
-| `feat/post-refactor-retrain` | Active (5 commits) | AI perception pipeline v0.3.0 |
-| `integrate-suzepi-microphone` | Empty | USB mic integration (not started) |
-| `plan-rssm-pretraining` | Empty | RSSM pretraining (not started) |
+| `pr-16` | ✅ Merged | Offline RL (CQL/IQL) + ICM novelty decay + quality fixes |
+| `plan-drone-migration` | ✅ Merged | Multi-platform MAVLink drone support |
+| `feat/post-refactor-retrain` | ✅ Merged | AI perception pipeline v0.3.0 |
+| `integrate-suzepi-microphone` | ✅ Closed (superseded by PR #32) | USB mic integration done via Wonrabai USB sound card |
+| `plan-rssm-pretraining` | ✅ Closed (superseded by PR #34) | RSSM pretraining done via dual-stream CfC/GRU hybrid |
 
-### Key Gaps Identified
-1. **Self-healing resilience**: `CircuitBreakerConfig` and `RetryConfig` exist in schema but implementations are stubs
-2. **Sensor staleness**: `SafetyConfig.sensor_stale_s` defined but never checked in `safety/monitor.py`
-3. **Hardcoded value**: `_MAX_LOOP_TIME_MS = 200.0` in `safety/monitor.py` should come from config
-4. **Mypy strict**: 50 unresolved errors in CI
-5. **Training pipeline**: Scripts exist but haven't been executed end-to-end
-6. **Observability**: No Grafana dashboard, no Loki aggregation, no Prometheus alert rules
-7. **Packaging**: No PyPI release workflow
+### Key Gaps Identified (original list — see status below)
+1. ✅ **Self-healing resilience**: RESOLVED — `circuit_breaker.py`, `retry.py`, `resilient_driver.py` fully implemented and factory-wired (PR history)
+2. ✅ **Sensor staleness**: RESOLVED — `SafetyConfig.sensor_stale_s` now actively checked in `safety/monitor.py`; `max_loop_time_ms` replaces hardcoded value
+3. ✅ **Hardcoded value**: RESOLVED — `_MAX_LOOP_TIME_MS = 200.0` replaced with `cfg.max_loop_time_ms` from `SafetyConfig`
+4. ✅ **Mypy strict**: RESOLVED — 0 errors remaining (was 50); CI passes clean
+5. **Training pipeline**: Scripts exist; end-to-end execution still pending (Phase 4)
+6. **Observability**: No Grafana dashboard, no Loki aggregation; Prometheus `/metrics` endpoint is live (priority 5)
+7. **Packaging**: No PyPI release workflow (Phase 9)
+8. ✅ **USB microphone**: RESOLVED — Wonrabai USB sound card integrated (PR #32), 5th sensor modality FHL-LD19 LiDAR added (PR #31)
 
 ---
 
 ## Phase 1: Consolidate In-Flight Work (Sprint 1)
+
+**Status: COMPLETE** — All PRs merged (pr-16, pr-18, post-refactor-retrain). Empty branches closed.
 
 **Goal**: Merge or close all pending branches to establish a clean baseline.
 
@@ -78,6 +82,8 @@ MouseDroidAGI is a Star Wars MSE-6 droid replica running on NVIDIA Jetson Orin N
 ---
 
 ## Phase 2: Self-Healing Core Resilience (Sprint 2)
+
+**Status: COMPLETE** — `circuit_breaker.py` (200 LOC), `retry.py` (143 LOC), `resilient_driver.py` (187 LOC) fully implemented and factory-wired at `factory.py` lines 62-79. Sensor staleness live in `safety/monitor.py`.
 
 **Goal**: Implement the 6-phase resilience plan from `PLAN.md` — the largest identified gap.
 
@@ -167,6 +173,8 @@ MouseDroidAGI is a Star Wars MSE-6 droid replica running on NVIDIA Jetson Orin N
 
 ## Phase 3: Code Quality & Type Safety (Sprint 2-3)
 
+**Status: NEARLY COMPLETE** — mypy strict passes with 0 errors (was 50). Some hypothesis property-based tests remain.
+
 **Goal**: Resolve mypy strict errors and add property-based tests.
 
 ### 3.1 Mypy Strict Fixes (50 errors)
@@ -250,6 +258,8 @@ MouseDroidAGI is a Star Wars MSE-6 droid replica running on NVIDIA Jetson Orin N
 
 ## Phase 5: USB Microphone Integration (Sprint 3)
 
+**Status: COMPLETE** — Wonrabai USB sound card merged in PR #32. Audio modality fully integrated.
+
 **Goal**: Complete SuziePi USB microphone integration (empty `integrate-suzepi-microphone` branch).
 
 ### 5.1 Config
@@ -281,9 +291,9 @@ MouseDroidAGI is a Star Wars MSE-6 droid replica running on NVIDIA Jetson Orin N
 
 **Goal**: Strengthen the CI pipeline for broader coverage and hardware testing.
 
-### 6.1 Python 3.12 Matrix
-- **Modify** `.github/workflows/ci.yml`: add `3.12` to matrix
-- Fix deprecation warnings (e.g., `datetime.utcnow()` → `datetime.now(UTC)`)
+### 6.1 Python 3.12 Matrix ✅ COMPLETE
+- `.github/workflows/ci.yml` runs matrix `["3.10", "3.11", "3.12"]` for lint, typecheck, and test stages
+- Deprecation warnings (`datetime.utcnow()` → `datetime.now(UTC)`) resolved
 
 ### 6.2 Prometheus Metrics Validation
 - **Modify** `.github/workflows/ci.yml`: add `promtool check metrics` step
@@ -388,6 +398,44 @@ MouseDroidAGI is a Star Wars MSE-6 droid replica running on NVIDIA Jetson Orin N
 
 ---
 
+## Phase 10: Dual-Stream CfC/GRU RSSM Maturation (Sprint 3-4)
+
+**Status: MERGED** — PR #34 merged the liquid neural network hybrid world model. Core implementation landed; training, benchmarking, and Jetson deployment remain.
+
+**Goal**: Mature the dual-stream CfC/GRU RSSM from proof-of-concept to production-ready world model.
+
+### 10.1 Extended Training Run
+- Run 50+ epoch training on RTX 5060 Ti with dual-stream CfC/GRU RSSM
+- Validate convergence; compare loss curves to classic RSSM baseline
+- Upload trained weights to `ianshank/mousedroid-dual-stream-rssm` on HuggingFace Hub
+- **Estimated effort**: 2 days
+
+### 10.2 CfC Hyperparameter Sweep
+- Sweep `cfc_backbone_units` (32, 64, 128) and `cfc_backbone_layers` (1, 2, 3)
+- Compare training speed and final loss across configurations
+- Select optimal config for Jetson inference budget (8 GB RAM, 30 Hz target)
+- **Estimated effort**: 3 days
+
+### 10.3 Fusion Strategy Comparison
+- Implement attention-based and gating-based alternatives to concat fusion in `stream_fusion.py`
+- Benchmark concat vs attention vs gating on navigation task rollouts
+- **Estimated effort**: 1 week
+
+### 10.4 Online CfC Adaptation on Jetson
+- Enable real-time CfC parameter updates from live sensor data
+- Validate inference latency stays within 30 Hz budget with adaptation enabled
+- **Estimated effort**: 1 week
+
+### 10.5 Dual-Stream vs Classic RSSM Benchmarks
+- Compare prediction accuracy, planning quality (MCTS search depth), and inference latency
+- Document findings in `docs/architecture.md` as an ADR
+- **Estimated effort**: 3 days
+
+**Estimated new tests**: ~10
+**Dependencies**: Phase 4 (training pipeline), Phase 6 (CI infrastructure for benchmarks)
+
+---
+
 ## Verification Plan
 
 ### Per-Phase Gate (must pass before advancing)
@@ -422,37 +470,41 @@ MouseDroidAGI is a Star Wars MSE-6 droid replica running on NVIDIA Jetson Orin N
 
 ## Summary
 
-| Phase | Sprint | Focus | New Tests | Key Deliverables |
-|-------|--------|-------|-----------|------------------|
-| **1** | 1 | Merge in-flight PRs | Existing | Clean baseline on master |
-| **2** | 2 | Self-healing resilience | ~40 | Circuit breaker, retry, resilient driver, staleness |
-| **3** | 2-3 | Code quality + types | ~25 | Mypy strict clean, Hypothesis tests, EWC training |
-| **4** | 3-4 | Training pipeline | ~15 | RSSM, MCTS, BDI, Constitutional RL trained models |
-| **5** | 3 | USB microphone | ~8 | SuziePi audio integration |
-| **6** | 4 | CI/CD expansion | ~5 | Python 3.12, TensorRT CI, hardware nightly |
-| **7** | 4-5 | Observability | ~5 | Grafana, Prometheus alerts, Loki, telemetry auth |
-| **8** | 5 | LLM gateway | ~10 | Llama-3 deployment, NL command interface |
-| **9** | 6 | Packaging | ~3 | PyPI release, Docker dev, HF Hub weights |
+| Phase | Sprint | Focus | Status | New Tests | Key Deliverables |
+|-------|--------|-------|--------|-----------|------------------|
+| **1** | 1 | Merge in-flight PRs | ✅ **COMPLETE** | Existing | Clean baseline on master — all 5 branches resolved |
+| **2** | 2 | Self-healing resilience | ✅ **COMPLETE** | ~40 | `circuit_breaker.py`, `retry.py`, `resilient_driver.py`, sensor staleness |
+| **3** | 2-3 | Code quality + types | ✅ **NEARLY COMPLETE** | ~25 | Mypy strict at 0 errors (was 50); Hypothesis tests remain |
+| **4** | 3-4 | Training pipeline | Not started | ~15 | RSSM, MCTS, BDI, Constitutional RL trained models |
+| **5** | 3 | USB microphone | ✅ **COMPLETE** | ~8 | Wonrabai USB sound card integrated (PR #32) |
+| **6** | 4 | CI/CD expansion | **6.1 ✅ COMPLETE**, rest pending | ~5 | Python 3.10/3.11/3.12 matrix in CI; TensorRT CI + hardware nightly pending |
+| **7** | 4-5 | Observability | Partial | ~5 | `/metrics` endpoint live; Grafana, Loki, alert rules pending |
+| **8** | 5 | LLM gateway | Not started | ~10 | Llama-3 deployment, NL command interface |
+| **9** | 6 | Packaging | Not started | ~3 | PyPI release, Docker dev, HF Hub weights |
+| **10** | 3-4 | Dual-Stream CfC/GRU RSSM | **MERGED** (PR #34), maturation in progress | ~10 | Extended training, hyperparameter sweep, Jetson benchmarks |
 
-**Total estimated new tests**: ~111
+**Total estimated new tests**: ~121 (was 111 before Phase 10)
+**Current test count**: 1299+ passing (was 752+ at plan creation)
 **Coverage target**: Maintain >= 85% at every phase gate
 **Total sprints**: 6 (parallel tracks where noted)
 
 ### Dependency Graph
 
 ```
-Phase 1 (merge PRs)
-  ├─→ Phase 2 (resilience)
+Phase 1 (merge PRs) ✅ COMPLETE
+  ├─→ Phase 2 (resilience) ✅ COMPLETE
   │     └─→ Phase 4 (training)
-  │           └─→ Phase 8 (LLM gateway)
-  │                 └─→ Phase 9 (packaging)
-  ├─→ Phase 3 (code quality)
+  │           ├─→ Phase 8 (LLM gateway)
+  │           │     └─→ Phase 9 (packaging)
+  │           └─→ Phase 10 (CfC maturation) ← PR #34 merged
+  ├─→ Phase 3 (code quality) ✅ NEARLY COMPLETE
   │     └─→ Phase 4 (training)
-  ├─→ Phase 5 (microphone) ← independent
-  ├─→ Phase 6 (CI/CD)
-  │     └─→ Phase 7 (observability)
+  ├─→ Phase 5 (microphone) ✅ COMPLETE ← independent
+  ├─→ Phase 6 (CI/CD) ← 6.1 done, rest pending
+  │     └─→ Phase 7 (observability) ← /metrics live, rest pending
   │           └─→ Phase 9 (packaging)
-  └─→ Phase 7 (observability)
+  ├─→ Phase 7 (observability)
+  └─→ Phase 10 (CfC/GRU RSSM maturation) ← parallel track
 ```
 
 ### Backlog (Future — post Phase 9)

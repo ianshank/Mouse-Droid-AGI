@@ -213,5 +213,8 @@ GPU_LOAD_PERCENTAGE_DIVISOR: float = 10.0
 SOFTMAX_EPSILON: float = 1e-8
 """Epsilon for softmax numerical stability."""
 
+IQL_EXP_ADVANTAGE_CLAMP_MAX: float = 100.0
+"""Clamp ceiling for exp(beta * advantage) in IQL policy extraction."""
+
 EMA_DEFAULT_ALPHA: float = 0.1
 """Default exponential moving average smoothing factor."""
