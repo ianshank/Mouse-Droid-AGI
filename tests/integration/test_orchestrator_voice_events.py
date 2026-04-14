@@ -13,6 +13,7 @@ import pytest
 import torch
 
 from mousedroid.config.schema import Settings
+from mousedroid.constants import DEFAULT_AUDIO_CHUNK_SIZE, DEFAULT_BATTERY_VOLTAGE
 from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator
 from mousedroid.safety.context import SafetyContext
 from mousedroid.sensing.bundle import MouseDroidObservationBundle
@@ -30,8 +31,12 @@ def _make_observation(
         _timestamp=0.0,
         _vision_features=np.zeros(cfg.camera.feature_dim, dtype=np.float32),
         _distance_m=distance_m,
-        _motor_state=np.array([0.0, 0.0, 0.0, 12.0], dtype=np.float32),
-        _audio_chunk=audio_chunk if audio_chunk is not None else np.zeros(1024, dtype=np.float32),
+        _motor_state=np.array([0.0, 0.0, 0.0, DEFAULT_BATTERY_VOLTAGE], dtype=np.float32),
+        _audio_chunk=(
+            audio_chunk
+            if audio_chunk is not None
+            else np.zeros(DEFAULT_AUDIO_CHUNK_SIZE, dtype=np.float32)
+        ),
         _valid_mask=np.array([1.0, 1.0, 1.0, 0.0], dtype=np.float32),
         _lidar_features=lidar_features,
     )
@@ -207,7 +212,7 @@ async def test_voice_event_includes_lidar_min_dist() -> None:
 async def test_voice_event_includes_audio_rms() -> None:
     """Voice event context includes audio_level_rms when audio chunk present."""
     # Create a known audio signal: constant 0.5 => RMS = 0.5
-    audio_chunk = np.full(1024, 0.5, dtype=np.float32)
+    audio_chunk = np.full(DEFAULT_AUDIO_CHUNK_SIZE, 0.5, dtype=np.float32)
     orch = _make_voiced_orchestrator(
         forward_clearance_ok=False,
         audio_chunk=audio_chunk,
@@ -235,7 +240,7 @@ async def test_voice_event_no_lidar_no_crash() -> None:
 
 async def test_voice_event_zero_audio_rms() -> None:
     """Voice event with silent audio chunk has audio_level_rms ≈ 0."""
-    audio_chunk = np.zeros(1024, dtype=np.float32)
+    audio_chunk = np.zeros(DEFAULT_AUDIO_CHUNK_SIZE, dtype=np.float32)
     orch = _make_voiced_orchestrator(
         forward_clearance_ok=False,
         audio_chunk=audio_chunk,

@@ -216,16 +216,14 @@ def _raw_gpio_pulse() -> float:
     time.sleep(0.00001)
     GPIO.output(23, False)
 
-    deadline = time.monotonic() + 0.1
-    pulse_start = pulse_end = time.monotonic()
-    while GPIO.input(24) == 0:
-        pulse_start = time.monotonic()
-        if pulse_start > deadline:
-            return -1.0
-    while GPIO.input(24) == 1:
-        pulse_end = time.monotonic()
-        if pulse_end > deadline:
-            return -1.0
+    # Use edge-detection instead of busy-wait to yield the thread and avoid
+    # CPU-pinning / GIL jitter. Timeout is 100 ms (same as previous deadline).
+    if not GPIO.wait_for_edge(24, GPIO.RISING, timeout=100):
+        return -1.0
+    pulse_start = time.monotonic()
+    if not GPIO.wait_for_edge(24, GPIO.FALLING, timeout=100):
+        return -1.0
+    pulse_end = time.monotonic()
     return ((pulse_end - pulse_start) * speed) / 2.0
 
 

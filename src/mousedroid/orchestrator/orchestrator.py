@@ -627,7 +627,7 @@ class MouseDroidOrchestrator:
             if self._memory_tier is None:
                 break
             try:
-                count = self._memory_tier.consolidation.consolidate()
+                count = await asyncio.to_thread(self._memory_tier.consolidation.consolidate)
                 if count > 0:
                     _log.debug(
                         "consolidation_cycle_complete",

@@ -11,6 +11,7 @@ import numpy as np
 import torch
 
 from mousedroid.config.schema import MemoryConfig, Settings
+from mousedroid.constants import DEFAULT_AUDIO_CHUNK_SIZE, DEFAULT_BATTERY_VOLTAGE
 from mousedroid.experience.record import MouseDroidExperienceRecord
 from mousedroid.memory.consolidation import MemoryConsolidation
 from mousedroid.memory.episodic import EpisodicReplay
@@ -57,8 +58,8 @@ def _make_observation(cfg: Settings) -> MouseDroidObservationBundle:
         .standard_normal(cfg.camera.feature_dim)
         .astype(np.float32),
         _distance_m=1.5,
-        _motor_state=np.array([0.0, 0.0, 0.0, 12.0], dtype=np.float32),
-        _audio_chunk=np.zeros(1024, dtype=np.float32),
+        _motor_state=np.array([0.0, 0.0, 0.0, DEFAULT_BATTERY_VOLTAGE], dtype=np.float32),
+        _audio_chunk=np.zeros(DEFAULT_AUDIO_CHUNK_SIZE, dtype=np.float32),
         _valid_mask=np.array([1.0, 1.0, 1.0, 0.0], dtype=np.float32),
     )
 

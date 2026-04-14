@@ -153,14 +153,14 @@ class SensorManager:
             Number of sensors that recovered successfully.
         """
         recovered = 0
-        for name, _driver, starter, reader in [
+        for name, driver, starter, reader in [
             ("vision", self._vision, self._vision.start, self._safe_vision_read),
             ("distance", self._distance, None, self._safe_distance_read),
             ("motor", self._esp32, None, self._safe_motor_read),
         ]:
             try:
                 if starter is not None:
-                    await self._vision.stop()
+                    await driver.stop()
                     await starter()
                 _, ok = await reader()
                 if ok:

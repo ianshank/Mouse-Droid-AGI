@@ -13,6 +13,7 @@ import pytest
 import torch
 
 from mousedroid.config.schema import MissionParserConfig, Settings
+from mousedroid.constants import DEFAULT_AUDIO_CHUNK_SIZE, DEFAULT_BATTERY_VOLTAGE
 from mousedroid.llm_gateway.mission_parser import (
     IntentType,
     MissionIntent,
@@ -30,8 +31,8 @@ def _make_observation(cfg: Settings) -> MouseDroidObservationBundle:
         _timestamp=0.0,
         _vision_features=np.zeros(cfg.camera.feature_dim, dtype=np.float32),
         _distance_m=1.5,
-        _motor_state=np.array([0.0, 0.0, 0.0, 12.0], dtype=np.float32),
-        _audio_chunk=np.zeros(1024, dtype=np.float32),
+        _motor_state=np.array([0.0, 0.0, 0.0, DEFAULT_BATTERY_VOLTAGE], dtype=np.float32),
+        _audio_chunk=np.zeros(DEFAULT_AUDIO_CHUNK_SIZE, dtype=np.float32),
         _valid_mask=np.array([1.0, 1.0, 1.0, 0.0], dtype=np.float32),
     )
 

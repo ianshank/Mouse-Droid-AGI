@@ -112,8 +112,8 @@ fi
 echo ""
 echo "--- Disk Space ---"
 
-# Check available disk space on the experience DB partition
-avail_kb=$(df -P /home 2>/dev/null | awk 'NR==2 {print $4}' || echo 0)
+# Check available disk space on the partition where INSTALL_DIR resides
+avail_kb=$(df -P "$INSTALL_DIR" 2>/dev/null | awk 'NR==2 {print $4}' || echo 0)
 avail_gb=$((avail_kb / 1048576))
 if [ "$avail_gb" -ge "$MIN_DISK_GB" ]; then
     pass "Disk space: ${avail_gb}GB available (min ${MIN_DISK_GB}GB)"
