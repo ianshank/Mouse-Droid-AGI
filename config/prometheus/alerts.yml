@@ -1,0 +1,118 @@
+# MouseDroid Prometheus Alert Rules
+#
+# Thresholds sourced from SafetyConfig defaults in
+# src/mousedroid/config/schema.py.  Keep in sync.
+#
+#   gpu_warn_temp_c:    75.0
+#   gpu_critical_temp_c: 90.0
+#   battery_warn_v:     10.5
+#   battery_critical_v:  9.5
+#   max_loop_time_ms:   200.0
+#   sensor_stale_s:      0.5
+
+groups:
+  - name: mousedroid_thermal
+    rules:
+      - alert: GpuTemperatureWarning
+        expr: mousedroid_gpu_temp_celsius > 75
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GPU temperature above 75 C (gpu_warn_temp_c)"
+          description: >-
+            GPU temperature is {{ $value }} C on {{ $labels.instance }}.
+            Consider reducing workload or improving cooling.
+
+      - alert: GpuTemperatureCritical
+        expr: mousedroid_gpu_temp_celsius > 90
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "GPU temperature above 90 C (gpu_critical_temp_c)"
+          description: >-
+            GPU temperature is {{ $value }} C on {{ $labels.instance }}.
+            Immediate action required to prevent thermal damage.
+
+  - name: mousedroid_battery
+    rules:
+      - alert: BatteryVoltageLow
+        expr: mousedroid_battery_voltage_v < 10.5
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Battery voltage below 10.5 V (battery_warn_v)"
+          description: >-
+            Battery voltage is {{ $value }} V on {{ $labels.instance }}.
+            Consider returning to charging station.
+
+      - alert: BatteryVoltageCritical
+        expr: mousedroid_battery_voltage_v < 9.5
+        for: 10s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Battery voltage below 9.5 V (battery_critical_v)"
+          description: >-
+            Battery voltage is {{ $value }} V on {{ $labels.instance }}.
+            Immediate shutdown recommended to prevent cell damage.
+
+  - name: mousedroid_latency
+    rules:
+      - alert: LoopLatencyWarning
+        expr: mousedroid_loop_time_ms > 33
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Control loop exceeding 30 Hz deadline (> 33 ms)"
+          description: >-
+            Loop latency is {{ $value }} ms on {{ $labels.instance }}.
+            The 30 Hz real-time deadline is being missed.
+
+      - alert: LoopLatencyEmergency
+        expr: mousedroid_loop_time_ms > 200
+        for: 10s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Control loop exceeding max_loop_time_ms (200 ms)"
+          description: >-
+            Loop latency is {{ $value }} ms on {{ $labels.instance }}.
+            Emergency stop threshold reached.
+
+  - name: mousedroid_safety
+    rules:
+      - alert: SafetyViolationRate
+        expr: sum(rate(mousedroid_safety_violations_total[5m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Safety violations detected"
+          description: >-
+            Safety violation rate is {{ $value }}/s on {{ $labels.instance }}.
+
+  - name: mousedroid_availability
+    rules:
+      - alert: SensorStale
+        expr: time() - mousedroid_uptime_seconds > 0.5
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sensor data stale (> sensor_stale_s = 0.5 s)"
+          description: >-
+            Metrics have not been updated for over 0.5 s on {{ $labels.instance }}.
+
+      - alert: FrameDropRateHigh
+        expr: rate(mousedroid_frame_drops_total[5m]) > 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Telemetry frame drops exceeding 1/s"
+          description: >-
+            Frame drop rate is {{ $value }}/s on {{ $labels.instance }}.

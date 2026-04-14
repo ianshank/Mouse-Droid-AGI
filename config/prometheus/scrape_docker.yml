@@ -1,0 +1,26 @@
+# Prometheus scrape config — Docker Compose
+#
+# Use with docker-compose.jetson.yml.  Service names resolve via
+# Docker DNS.  Default telemetry port: 8080 (from TelemetryConfig.port)
+
+scrape_configs:
+  - job_name: mousedroid
+    scrape_interval: 5s
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - "mousedroid:8080"
+        labels:
+          env: docker
+          platform: jetson
+
+  - job_name: node
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - "node-exporter:9100"
+        labels:
+          env: docker
+
+rule_files:
+  - /etc/prometheus/alerts.yml
