@@ -2,13 +2,14 @@
 
 **A Star Wars MSE-6 "Mouse Droid" autonomous navigation system powered by an Agentic World Model on NVIDIA Jetson Orin Nano.**
 
-[![Tests](https://img.shields.io/badge/tests-pytest-brightgreen)](tests/)
+[![Tests](https://img.shields.io/badge/tests-2505%20passing-brightgreen)](tests/)
 [![Coverage](https://img.shields.io/badge/coverage-branch%20gate%2085%25-brightgreen)](scripts/check_branch_coverage.py)
 [![Ruff](https://img.shields.io/badge/lint-ruff%20clean-brightgreen)](pyproject.toml)
 [![Mypy](https://img.shields.io/badge/mypy-strict-orange)](pyproject.toml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 [![CUDA](https://img.shields.io/badge/CUDA-12.6-76B900)](Dockerfile.jetson)
 [![Docker](https://img.shields.io/badge/docker-L4T%20r36.4.0-2496ED)](docker-compose.jetson.yml)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue)](CHANGELOG.md)
 
 ---
 
@@ -41,10 +42,13 @@ The robot is built on a Wave Rover mecanum-wheel chassis, controlled by an ESP32
 graph TD
     subgraph Jetson["NVIDIA Jetson Orin Nano"]
         subgraph Docker["Docker: mousedroid:jetson\nL4T PyTorch r36.4.0 — CUDA 12.6"]
-            Orchestrator["Orchestrator\n30 Hz sense-plan-act"]
-            CoreAI["Core AI Pipeline\nRSSM + MCTS + Navigation Agent\nBDI Cognitive Core\nMemory Systems\nSafety Monitor"]
-            SensorMgr["Sensor Manager\nJetson CSI - HC-SR04 - ESP32 encoders"]
-            Telemetry["Telemetry Server\naiohttp REST + WebSocket + /metrics\n/api/v1/* + /ws + /metrics"]
+            Orchestrator["Orchestrator\n30 Hz sense-plan-act\nasyncio.wait_for tick timeout\nWatchdog + Memory + Voice"]
+            CoreAI["Core AI Pipeline\nDual-Stream CfC/GRU RSSM + MCTS\nBDI Cognitive Core\nMemory Tier (Episodic/Semantic/Working)\nCuriosity ICM • Safety Monitor"]
+            SensorMgr["Sensor Manager\nCamera • HC-SR04 • LiDAR • Mic • ESP32\nrecovery_attempt() resilience"]
+            VoiceEng["Voice Engine\nRocky TTS (Piper)\nphrase_bank — startup/shutdown/error events"]
+            LLMGw["LLM Gateway (degraded-safe)\nRule parser → Llama GGUF fallback\nPrompt injection detection"]
+            Telemetry["Telemetry Server\naiohttp REST + WebSocket + /metrics\n/api/v1/* + /ws + /metrics\nMemory / Curiosity / LLM metrics"]
+            Watchdog["Watchdog\nSystemdNotifier / FileHeartbeat\nWATCHDOG=1 per tick"]
             ExperienceDB[("Experience Logger\nLMDB")]
         end
         SSD["NVMe SSD 500 GB\nDocker data + 16 GB swap"]
@@ -53,12 +57,15 @@ graph TD
     Human["Human Operator\nNL commands"]
     Monitoring["Remote Monitoring\nPrometheus / Grafana\nHTTP scrape + dashboards"]
 
-    Human -- "NL mission" --> Orchestrator
+    Human -- "NL mission" --> LLMGw
+    LLMGw --> Orchestrator
     Orchestrator --> CoreAI
     CoreAI --> SensorMgr
     CoreAI --> ExperienceDB
     Orchestrator -- "UART / HTTP" --> ESP32
     Orchestrator --> Telemetry
+    Orchestrator --> VoiceEng
+    Orchestrator --> Watchdog
     Telemetry -- "REST / WebSocket" --> Monitoring
     Docker -.-> SSD
 ```
@@ -159,6 +166,23 @@ mousedroid --mock-hardware
 mousedroid --health-check --config config/default.yaml
 ```
 
+### Pre-Flight Validation
+
+Before starting the service, validate all hardware is present:
+
+```bash
+# Run pre-flight checks (device paths configurable via env vars)
+bash scripts/preflight_check.sh
+
+# Override device paths if non-standard
+MOUSEDROID_ESP32_DEV=/dev/ttyUSB1 \
+MOUSEDROID_CAMERA_DEV=/dev/video1 \
+bash scripts/preflight_check.sh
+```
+
+Exits 0 if all required hardware is present; exits 1 with coloured diagnostics on failure.
+The systemd service units run this automatically as `ExecStartPre`.
+
 ### Telemetry and Prometheus Metrics
 
 The telemetry stack exposes both interactive APIs and Prometheus-compatible metrics:
@@ -167,11 +191,26 @@ The telemetry stack exposes both interactive APIs and Prometheus-compatible metr
 # REST + websocket telemetry (default)
 curl http://127.0.0.1:8080/api/v1/status
 
-# Prometheus text exposition
+# Prometheus text exposition (includes memory, curiosity, LLM, voice metrics)
 curl http://127.0.0.1:8080/metrics
 ```
 
 `/metrics` names are derived from `cfg.metrics.namespace`, so metric naming is fully config-driven.
+
+### Watchdog Integration
+
+When deployed via systemd, the watchdog is enabled automatically:
+
+```bash
+# Native service — watchdog fires WATCHDOG=1 after each successful tick
+sudo systemctl start mousedroid
+
+# Docker service — file heartbeat for Docker HEALTHCHECK
+sudo systemctl start mousedroid-docker
+docker inspect mousedroid | grep -A5 Health
+```
+
+In mock/dev mode, `NullNotifier` is used — no external dependency required.
 
 ### Run with Custom Config
 
@@ -241,14 +280,17 @@ training/             # Offline GPU training pipelines
 └── rssm_dataset.py           # PyTorch Dataset for RSSM sequences
 
 scripts/
-├── ci.sh             # CI pipeline: lint → type check → test → coverage gate
-├── check_branch_coverage.py # Changed-line coverage gate for branch-modified files
-├── deploy_jetson.sh  # Idempotent Jetson deployment (venv + systemd)
-├── docker_deploy.sh  # Docker container build + deploy on Jetson
-├── jetson_test_runner.sh # Container test runner (unit/integration/e2e)
-├── flash_esp32.sh    # ESP32 firmware flashing via esptool
-├── mousedroid.service# systemd unit file for native deployment
-└── mousedroid-docker.service # systemd unit for Docker auto-start
+├── ci.sh                    # CI pipeline: lint → type check → test → coverage gate
+├── check_branch_coverage.py # Changed-line coverage gate (≥85%) with Pydantic/torch resilience
+├── preflight_check.sh       # Pre-flight hardware validation (devices, disk, config, weights)
+├── verify_sensors.py        # Sensor verification script (camera/ultrasonic/lidar/speaker) --json
+├── deploy_jetson.sh         # Idempotent Jetson deployment (venv + systemd)
+├── docker_deploy.sh         # Docker container build + deploy on Jetson
+├── jetson_test_runner.sh    # Container test runner (unit/integration/e2e)
+├── download_model.sh        # Download LLM weights from HuggingFace Hub
+├── flash_esp32.sh           # ESP32 firmware flashing via esptool
+├── mousedroid.service       # systemd unit (native; Type=notify, WatchdogSec=30)
+└── mousedroid-docker.service # systemd unit (Docker; Type=notify, WatchdogSec=30, ExecStartPre=preflight)
 ```
 
 ---

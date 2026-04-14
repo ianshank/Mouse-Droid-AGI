@@ -137,3 +137,24 @@ audio_captures/
 # Worktree branches (auto-managed by Claude Code)
 .claude/worktrees/
 
+# Serena agent workspace
+.serena/
+
+# Heartbeat / watchdog files (runtime artefacts)
+/tmp/mousedroid_heartbeat
+
+# Pre-flight validation output
+preflight_results.txt
+preflight_output.txt
+
+# Jetson validation / endurance test output
+jetson_validation*.txt
+endurance_results.txt
+
+# LLM model downloads (managed via scripts/download_model.sh)
+*.gguf
+models/
+
+# systemd notify socket artefacts
+notify.sock
+

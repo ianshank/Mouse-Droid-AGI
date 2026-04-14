@@ -1,8 +1,28 @@
 # MouseDroidAGI — Next Steps
 
-> **Last updated**: 2026-04-14 | **Test count**: 1299+ passing | **Coverage**: 85%+ maintained
+> **Last updated**: 2026-04-14 | **Version**: 0.3.0 | **Test count**: 2505 passing | **Coverage**: 85%+ maintained
 
 This document tracks planned enhancements, organised by priority and category.
+
+## Recently Completed — v0.3.0 Production Readiness (2026-04-14)
+
+All 7 phases of the Production Readiness milestone are complete:
+
+- ✅ **Phase 1 — Deployment Hardening**: Docker device passthrough, tick timeout + emergency stop,
+  systemd watchdog, pre-flight validation script, service hardening
+- ✅ **Phase 2 — Memory & Curiosity Wiring**: `MemoryTier` factory, experience logging in orchestrator,
+  consolidation background loop, curiosity key in obs_dict
+- ✅ **Phase 3 — Voice & Rocky E2E**: startup/shutdown voice events, enriched obstacle context,
+  audio-level enrichment, full mock-hardware voice pipeline validated
+- ✅ **Phase 4 — Sensor Fusion Resilience**: `recovery_attempt()` on sensor manager, self-healing
+  orchestrator, cascading failure tests (11 scenarios)
+- ✅ **Phase 5 — LLM Gateway Integration**: rule-based parser + LLM fallback chain, degraded mode,
+  prompt injection detection
+- ✅ **Phase 6 — Jetson On-Device Validation**: hardware E2E test suite, 5-minute endurance tests,
+  updated sensor verification script
+- ✅ **Phase 7 — Production Telemetry**: new Prometheus metrics for memory, curiosity, voice, LLM, recovery
+
+---
 
 ## Recently Completed (2026-04-14 checkpoint)
 
