@@ -22,7 +22,7 @@ The robot is built on a Wave Rover mecanum-wheel chassis, controlled by an ESP32
 
 | Pillar | Module | Description |
 |--------|--------|-------------|
-| 1. World Model | `world_model/` | RSSM latent dynamics + MCTS planning |
+| 1. World Model | `world_model/` | Dual-Stream CfC/GRU RSSM latent dynamics + MCTS planning |
 | 2. Cognitive Architecture | `cognitive/` | Dual-cadence BDI + metacognitive loop |
 | 3. Memory Systems | `memory/` | Working, episodic, semantic, consolidation |
 | 4. Continual Learning | `learning/` | EWC + progressive neural networks |
@@ -191,6 +191,7 @@ All settings are defined in `config/default.yaml` and validated by Pydantic v2. 
 | `config/jetson_production.yaml` | Jetson Orin Nano production overrides (cognitive core, HF weights, telemetry, Prometheus metrics, safety) |
 | `config/mock_hardware.yaml` | Mock hardware for CI/development |
 | `config/local_training.yaml` | Local GPU training with GPU-available check |
+| `config/jetson_dual_stream.yaml` | Jetson + dual-stream CfC/GRU world model (requires human activation) |
 | `config/jetson_sdcard_64gb.yaml` | Jetson on SD card (64 GB) resource limits |
 
 No values are hardcoded — every threshold, dimension, pin, and rate is configurable.
@@ -224,7 +225,8 @@ src/mousedroid/
 ├── scaling/          # MoE routing + adaptive compute
 ├── sensing/          # Sensor manager + observation bundle
 ├── tools/            # Tool registry for agentic tool dispatch
-└── world_model/      # RSSM encoder, MCTS planner
+├── voice/            # Rocky voice engine (TTS + speaker)
+└── world_model/      # RSSM + Dual-Stream CfC/GRU RSSM, MCTS planner
 
 training/             # Offline GPU training pipelines
 ├── run_pipeline.py           # Phase 1→2→3→4 orchestrator; --resume for checkpoint continuation
@@ -233,6 +235,7 @@ training/             # Offline GPU training pipelines
 ├── collect_annotations.py    # Phase 2.3a: BDI intention annotation collection
 ├── train_bdi.py              # Phase 2.3b: BDI sub-network training on annotations
 ├── train_constitutional_rl.py # Phase 2.4: PPO + Constitutional constraints
+├── train_dual_stream_rssm.py  # Phase 2.2: Dual-stream CfC/GRU RSSM pretraining
 ├── upload_weights.py         # Push all weights to HuggingFace Hub (ianshank/mousedroid-weights)
 ├── data_generator.py         # Synthetic observation sequence generator
 └── rssm_dataset.py           # PyTorch Dataset for RSSM sequences
@@ -314,6 +317,36 @@ python training/run_pipeline.py --resume training/results/rssm_epoch_10.pt
 python training/upload_weights.py --repo ianshank/mousedroid-weights
 ```
 
+### Dual-Stream CfC/GRU RSSM (Experimental)
+
+The world model supports an optional **liquid neural network** hybrid architecture — a dual-stream CfC (Closed-form Continuous-time) / GRU RSSM:
+
+- **GRU stream** (256-dim): Slow planning horizon
+- **CfC stream** (64-dim): Fast sub-100ms adaptive reflexes via `ncps` liquid neural networks
+- **Concat fusion**: Combined 320-dim hidden state feeds posterior, prior, and decoder
+
+```bash
+# Install CfC dependency
+pip install -e ".[cfc]"
+
+# Train dual-stream model (5-epoch validation)
+python -m training.train_dual_stream_rssm \
+    --config config/local_dual_stream_training.yaml \
+    --data training/data/sequences.pt \
+    --device cuda --validate-only
+
+# Upload to HuggingFace
+python -m training.upload_weights \
+    --weights-dir weights/dual_stream_rssm \
+    --repo ianshank/mousedroid-dual-stream-rssm
+```
+
+**Human activation gate:** CfC is disabled by default (`cfc_hidden_dim=0`). To activate on Jetson:
+
+```bash
+MOUSEDROID_MODEL__CFC_HIDDEN_DIM=64 docker compose -f docker-compose.jetson.yml up -d
+```
+
 Weights are automatically pulled at startup on the Jetson when `cognitive.enabled = true`:
 
 ```yaml
@@ -352,10 +385,11 @@ pytest tests/regression/
 
 | Category | Count |
 |----------|-------|
-| Unit tests | 668 |
+| Unit tests | 725+ |
+| Integration & regression | 100+ |
 | Scripts & training tests | 84 |
-| **Total** | **752** |
-| **Coverage** | **98.01%** (gate: 85%) |
+| **Total** | **2381+** |
+| **Coverage** | **97.55%** (gate: 85%) |
 
 > Hardware tests requiring real GPIO/camera are marked `@pytest.mark.hardware` and skipped in CI.
 
@@ -407,6 +441,7 @@ Offline training follows a 4-phase pipeline:
 | Phase | Script | Description |
 |-------|--------|-------------|
 | 2.1 | `train_rssm.py` | Pretrain RSSM world model on synthetic sequences |
+| 2.1b | `train_dual_stream_rssm.py` | Dual-stream CfC/GRU RSSM pretraining (experimental) |
 | 2.2 | `warmstart_policy.py` | Warm-start MCTS policy from latent stats + UCB tuning |
 | 2.3a | `collect_annotations.py` | Collect labelled intention annotations (500 episodes) |
 | 2.3b | `train_bdi.py` | Train BDI sub-networks: Belief → Desire → Intention → Affect |
@@ -445,4 +480,6 @@ MIT License — see [LICENSE](LICENSE) for details.
 | Chassis | Waveshare Wave Rover | Mecanum wheel, ESP32 onboard |
 | Camera | Jetson CSI / Raspberry Pi AI Camera (IMX500) | Onboard ML inference |
 | Distance | HC-SR04 Ultrasonic | GPIO pins 23/24 |
+| LiDAR | FHL-LD19 360 2D | UART /dev/ttyUSB1, 230400 baud |
+| Audio | Wonrabai USB Sound Card | Combo mic + 8 5W speaker |
 | Battery | 3S LiPo 11.1V | Min cutoff 9.5V |

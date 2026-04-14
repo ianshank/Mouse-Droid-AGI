@@ -33,9 +33,9 @@ def test_download_script_is_executable() -> None:
     if not _SCRIPT_PATH.exists():
         pytest.skip("download_model.sh not available in worktree")
     mode = _SCRIPT_PATH.stat().st_mode
-    assert mode & (
-        stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
-    ), "download_model.sh is not executable"
+    assert mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH), (
+        "download_model.sh is not executable"
+    )
 
 
 def test_download_script_has_shebang() -> None:

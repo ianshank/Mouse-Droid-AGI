@@ -10,6 +10,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Dual-Stream CfC/GRU RSSM world model** — liquid neural network hybrid for adaptive reflexes
+  - `DualStreamRSSM` — dual-stream architecture: GRU (slow planning, 256-dim) + CfC (fast reflexes, 64-dim) with concat fusion producing 320-dim combined hidden state
+  - `CfCWrapper` — Closed-form Continuous-time cell wrapping `ncps.torch.CfC` with configurable backbone (units, layers, sparsity)
+  - `StreamFusion` — concatenation-based fusion layer with `fuse()`, `extract_gru_state()`, `extract_cfc_state()` operations
+  - `WorldModelProtocol` + `SafetyTraceProtocol` — `@runtime_checkable` protocol interfaces for world model DI
+  - `DualStreamTrainingConfig` — Pydantic config for dual optimizers, gradient clipping, CfC loss warmup schedule
+  - `ModelConfig` gains CfC fields: `cfc_hidden_dim`, `cfc_backbone_units`, `cfc_backbone_layers`, `cfc_mode`, `cfc_sparsity_level`
+  - `build_world_model()` factory dispatch: `cfc_hidden_dim > 0` → `DualStreamRSSM`, else classic `RSSM`
+  - `gru_parameters()` / `cfc_parameters()` — separate parameter groups for dual optimizer training
+  - `get_safety_trace()` — GRU-only safety evaluation (CfC stream excluded from safety-critical path)
+- **Dual-stream training script** — `training/train_dual_stream_rssm.py` (712 LOC)
+  - Dual Adam optimizers: GRU params (lr=3e-4) + CfC params (lr=1e-4)
+  - Separate gradient clipping: GRU (max_norm=10.0) + CfC (max_norm=1.0)
+  - Linear CfC loss weight warmup from 0.1→1.0 over 10k steps
+  - Periodic fallback monitoring: logs CfC contribution quality, warns on >5% degradation
+  - Full AMP support, checkpoint resume with dual optimizer states
+  - CLI: `--config`, `--data`, `--device`, `--resume`, `--validate-only`
+- **Jetson dual-stream config** — `config/jetson_dual_stream.yaml` with CfC activation gate
+- **Human activation gate** — CfC disabled by default (`cfc_hidden_dim=0`); requires explicit `MOUSEDROID_MODEL__CFC_HIDDEN_DIM=64` to enable
+- **HuggingFace model repo** — `ianshank/mousedroid-dual-stream-rssm` with 5-epoch validation weights + training metadata
+- **57 new dual-stream tests**:
+  - `test_cfc_cell.py` — CfC wrapper unit tests (initialization, forward, hidden dims)
+  - `test_dual_stream_rssm.py` — DualStreamRSSM observe/imagine, protocol conformance, safety trace
+  - `test_stream_fusion.py` — fusion layer, extract/fuse roundtrip
+  - `test_dual_stream_training.py` — dual optimizer construction, warmup schedule, gradient clipping, checkpoint roundtrip
+  - `test_dual_stream_compat.py` — factory dispatch, config backward compatibility, regression suite
+  - `test_world_model_property.py` — Hypothesis property tests for rollout stability
+  - `test_factory_integration.py` — integration tests for factory dispatch paths
+- **ncps dependency** — `ncps>=0.0.7` added to `pyproject.toml` `[cfc]` extra and `Dockerfile.jetson`
+
+### Changed
+
+- **`Dockerfile.jetson`** — added `ncps>=0.0.7` install step (non-fatal graceful fallback)
+- **`world_model/__init__.py`** — exports `DualStreamRSSM`, `CfCWrapper`, `StreamFusion`, protocol types
+- **`factory.py`** — `build_world_model()` gains dual-stream dispatch branch
+
 - **FHL-LD19 2D LiDAR sensor** — 5th modality integrated end-to-end through the cognitive stack
   - `LD19LidarDriver` — async UART driver with CRC8-validated binary protocol parsing
   - `LD19FrameParser` — LD19 packet parser with angle interpolation (n-1 intervals)

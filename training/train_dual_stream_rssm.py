@@ -154,8 +154,7 @@ def _load_checkpoint(
 
     if not isinstance(data, dict):
         raise TypeError(
-            f"Unsupported checkpoint format at {path!s}: expected a dict, "
-            f"got {type(data).__name__}"
+            f"Unsupported checkpoint format at {path!s}: expected a dict, got {type(data).__name__}"
         )
 
     if "model_state_dict" not in data:

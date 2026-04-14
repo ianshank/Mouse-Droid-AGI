@@ -200,9 +200,9 @@ class TestDualOptimizerSeparateParamGroups:
         ):
             submodule = getattr(model, submodule_name)
             for p in submodule.parameters():
-                assert (
-                    id(p) in gru_ids
-                ), f"Parameter from {submodule_name} not found in gru_parameters()"
+                assert id(p) in gru_ids, (
+                    f"Parameter from {submodule_name} not found in gru_parameters()"
+                )
 
     def test_cfc_parameters_are_cfc_module_only(self) -> None:
         """cfc_parameters() must yield exactly the CfC module's own parameters.
@@ -213,9 +213,9 @@ class TestDualOptimizerSeparateParamGroups:
         model = _make_dual_stream_model()
         cfc_ids = {id(p) for p in model.cfc_parameters()}
         cfc_module_ids = {id(p) for p in model.cfc.parameters()}
-        assert (
-            cfc_ids == cfc_module_ids
-        ), "cfc_parameters() must yield exactly model.cfc.parameters()"
+        assert cfc_ids == cfc_module_ids, (
+            "cfc_parameters() must yield exactly model.cfc.parameters()"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -239,9 +239,9 @@ class TestCfcWarmupSchedule:
 
         weight = compute_cfc_loss_weight(0, cfg)
 
-        assert weight == pytest.approx(
-            cfg.cfc_loss_weight_initial, rel=1e-6
-        ), f"At step 0 weight should be {cfg.cfc_loss_weight_initial}, got {weight}"
+        assert weight == pytest.approx(cfg.cfc_loss_weight_initial, rel=1e-6), (
+            f"At step 0 weight should be {cfg.cfc_loss_weight_initial}, got {weight}"
+        )
 
     def test_cfc_warmup_schedule_midpoint(self) -> None:
         """At step warmup/2 the weight is linearly interpolated between initial and final.
@@ -263,12 +263,12 @@ class TestCfcWarmupSchedule:
         weight = compute_cfc_loss_weight(mid_step, cfg)
         expected = initial + (final - initial) * (mid_step / warmup_steps)
 
-        assert weight == pytest.approx(
-            expected, rel=1e-5
-        ), f"At midpoint step {mid_step} expected {expected:.4f}, got {weight:.4f}"
-        assert (
-            initial < weight < final
-        ), "Midpoint weight must be strictly between initial and final"
+        assert weight == pytest.approx(expected, rel=1e-5), (
+            f"At midpoint step {mid_step} expected {expected:.4f}, got {weight:.4f}"
+        )
+        assert initial < weight < final, (
+            "Midpoint weight must be strictly between initial and final"
+        )
 
     @pytest.mark.parametrize("step_multiplier", [1, 2, 10])
     def test_cfc_warmup_schedule_final(self, step_multiplier: int) -> None:
@@ -350,9 +350,9 @@ class TestGradientClipping:
         total_norm_before = (
             sum(p.grad.norm().item() ** 2 for p in gru_params if p.grad is not None) ** 0.5
         )
-        assert (
-            total_norm_before > cfg.gru_grad_clip
-        ), "Pre-clipping norm must exceed the clip threshold for this test to be meaningful"
+        assert total_norm_before > cfg.gru_grad_clip, (
+            "Pre-clipping norm must exceed the clip threshold for this test to be meaningful"
+        )
 
         nn.utils.clip_grad_norm_(gru_params, cfg.gru_grad_clip)
 
@@ -360,8 +360,7 @@ class TestGradientClipping:
             sum(p.grad.norm().item() ** 2 for p in gru_params if p.grad is not None) ** 0.5
         )
         assert total_norm_after <= cfg.gru_grad_clip + 1e-4, (
-            f"GRU gradient norm {total_norm_after:.4f} exceeds clip threshold "
-            f"{cfg.gru_grad_clip}"
+            f"GRU gradient norm {total_norm_after:.4f} exceeds clip threshold {cfg.gru_grad_clip}"
         )
 
     def test_gradient_clipping_cfc(self) -> None:
@@ -380,9 +379,9 @@ class TestGradientClipping:
         total_norm_before = (
             sum(p.grad.norm().item() ** 2 for p in cfc_params if p.grad is not None) ** 0.5
         )
-        assert (
-            total_norm_before > cfg.cfc_grad_clip
-        ), "Pre-clipping norm must exceed the clip threshold for this test to be meaningful"
+        assert total_norm_before > cfg.cfc_grad_clip, (
+            "Pre-clipping norm must exceed the clip threshold for this test to be meaningful"
+        )
 
         nn.utils.clip_grad_norm_(cfc_params, cfg.cfc_grad_clip)
 
@@ -390,8 +389,7 @@ class TestGradientClipping:
             sum(p.grad.norm().item() ** 2 for p in cfc_params if p.grad is not None) ** 0.5
         )
         assert total_norm_after <= cfg.cfc_grad_clip + 1e-4, (
-            f"CfC gradient norm {total_norm_after:.4f} exceeds clip threshold "
-            f"{cfg.cfc_grad_clip}"
+            f"CfC gradient norm {total_norm_after:.4f} exceeds clip threshold {cfg.cfc_grad_clip}"
         )
 
     def test_gru_clip_does_not_affect_cfc_params(self) -> None:
@@ -417,9 +415,9 @@ class TestGradientClipping:
 
         cfc_norms_after = [p.grad.norm().item() for p in cfc_params if p.grad is not None]
         for before, after in zip(cfc_norms_before, cfc_norms_after, strict=True):
-            assert before == pytest.approx(
-                after, rel=1e-6
-            ), "GRU grad clip must not modify CfC parameter gradients"
+            assert before == pytest.approx(after, rel=1e-6), (
+                "GRU grad clip must not modify CfC parameter gradients"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -500,9 +498,9 @@ class TestSingleTrainingStepFinite:
         assert torch.isfinite(total_loss), f"Training loss is not finite: {total_loss.item()}"
         for name, param in model.named_parameters():
             if param.grad is not None:
-                assert torch.isfinite(
-                    param.grad
-                ).all(), f"Non-finite gradient in parameter '{name}'"
+                assert torch.isfinite(param.grad).all(), (
+                    f"Non-finite gradient in parameter '{name}'"
+                )
 
     def test_single_training_step_updates_parameters(self) -> None:
         """A single optimiser step must change at least one parameter value.
@@ -617,14 +615,14 @@ class TestCheckpointRoundtrip:
         cfc_opt2.load_state_dict(loaded["cfc_optimizer_state_dict"])
 
         # Verify warmup_step preserved exactly
-        assert (
-            loaded["warmup_step"] == warmup_step
-        ), f"warmup_step mismatch: saved {warmup_step}, loaded {loaded['warmup_step']}"
+        assert loaded["warmup_step"] == warmup_step, (
+            f"warmup_step mismatch: saved {warmup_step}, loaded {loaded['warmup_step']}"
+        )
 
         # Verify combined_dim preserved
-        assert (
-            loaded["combined_dim"] == combined_dim
-        ), f"combined_dim mismatch: saved {combined_dim}, loaded {loaded['combined_dim']}"
+        assert loaded["combined_dim"] == combined_dim, (
+            f"combined_dim mismatch: saved {combined_dim}, loaded {loaded['combined_dim']}"
+        )
 
         # Verify model weights preserved
         for (k1, v1), (k2, v2) in zip(
@@ -691,10 +689,10 @@ class TestCheckpointRoundtrip:
         cfc_opt2.load_state_dict(loaded["cfc_optimizer_state_dict"])
 
         for pg in gru_opt2.param_groups:
-            assert pg["lr"] == pytest.approx(
-                gru_lr, rel=1e-6
-            ), f"GRU LR after reload: {pg['lr']} != {gru_lr}"
+            assert pg["lr"] == pytest.approx(gru_lr, rel=1e-6), (
+                f"GRU LR after reload: {pg['lr']} != {gru_lr}"
+            )
         for pg in cfc_opt2.param_groups:
-            assert pg["lr"] == pytest.approx(
-                cfc_lr, rel=1e-6
-            ), f"CfC LR after reload: {pg['lr']} != {cfc_lr}"
+            assert pg["lr"] == pytest.approx(cfc_lr, rel=1e-6), (
+                f"CfC LR after reload: {pg['lr']} != {cfc_lr}"
+            )

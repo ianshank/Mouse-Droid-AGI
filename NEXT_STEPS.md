@@ -2,6 +2,25 @@
 
 This document tracks planned enhancements, organised by priority and category.
 
+## Recently Completed (Dual-Stream CfC/GRU RSSM — PR #34)
+
+- **Dual-stream hybrid world model** — CfC (liquid neural network) + GRU parallel streams with concat fusion
+  - `DualStreamRSSM` (331 LOC), `CfCWrapper` (110 LOC), `StreamFusion` (102 LOC)
+  - Protocol-based DI: `WorldModelProtocol` + `SafetyTraceProtocol`
+  - Factory dispatch: `cfc_hidden_dim > 0` → DualStreamRSSM, else classic RSSM
+  - Human activation gate: disabled by default, requires `MOUSEDROID_MODEL__CFC_HIDDEN_DIM=64`
+- **Dual-stream training script** — `training/train_dual_stream_rssm.py` (712 LOC)
+  - Dual optimizers (GRU lr=3e-4, CfC lr=1e-4), separate gradient clipping
+  - CfC loss warmup (0.1→1.0 over 10k steps), fallback monitoring
+  - AMP support, checkpoint resume, validate-only mode
+- **5-epoch validation training** on RTX 5060 Ti — loss converging, no NaN/Inf
+- **HuggingFace upload** — `ianshank/mousedroid-dual-stream-rssm` (experimental)
+- **Jetson Docker deployment** — image rebuilt with ncps, smoke tests passing
+- **57 new tests** — unit, integration, regression, property tests for dual-stream architecture
+- **SSH key deployment** to Jetson via serial console
+
+---
+
 ## Recently Completed (Phase A checkpoint — pr-18)
 
 - **Wired `resume_from`** through `training/run_pipeline.py` and CLI (`--resume`) to allow RSSM checkpoint continuation
@@ -204,6 +223,38 @@ This document tracks planned enhancements, organised by priority and category.
 - Automated release on version tag push via GitHub Actions
 - Publish `mousedroid==0.2.0` to PyPI
 - **Effort**: 1 day | **Owner**: DevOps
+
+---
+
+## Priority 8 — Dual-Stream CfC Maturation
+
+### 8.1 Extended Training on Real Data
+- Train dual-stream RSSM on real sensor data from Jetson (not synthetic)
+- Target: 100+ episodes from physical navigation runs
+- Compare CfC vs GRU-only quality metrics on held-out episodes
+- **Effort**: 1 week | **Owner**: ML team
+
+### 8.2 CfC Time-Delta Integration
+- Pass real `dt` from observation timestamps to CfC cell (currently uses unit time)
+- Measure latency improvement of CfC adaptive time constants vs fixed-step GRU
+- **Effort**: 2 days | **Owner**: ML team
+
+### 8.3 Attention-Based Stream Fusion
+- Replace concat fusion with learned attention gate: `alpha * h_gru + (1-alpha) * h_cfc`
+- Allow model to adaptively weight GRU (planning) vs CfC (reflexes) per timestep
+- **Effort**: 3 days | **Owner**: ML team
+
+### 8.4 TensorRT Export for Dual-Stream
+- Export DualStreamRSSM to TensorRT for Jetson inference acceleration
+- Handle CfC cell's variable-time dynamics in TRT compilation
+- Target: <10ms per observe_step on Orin Nano
+- **Effort**: 1 week | **Owner**: ML + DevOps
+
+### 8.5 Full Activation Decision
+- After 8.1-8.2 complete, review CfC contribution metrics
+- If CfC improves >5% over GRU-only: permanently enable in production config
+- If CfC degrades: archive as experimental, keep GRU-only
+- **Effort**: 1 day (decision meeting) | **Owner**: Ian
 
 ---
 
