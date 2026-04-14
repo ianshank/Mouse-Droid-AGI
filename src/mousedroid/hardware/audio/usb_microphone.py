@@ -137,18 +137,29 @@ class UsbMicrophone:
         Returns:
             Audio samples as float32, shape ``(chunk_size * channels,)``.
         """
-        if self._stream is None:
-            return np.zeros(
-                self._cfg.chunk_size * self._cfg.channels,
-                dtype=np.float32,
-            )
-
-        loop = asyncio.get_running_loop()
-        raw_data: bytes = await loop.run_in_executor(
-            None,
-            self._stream.read,
-            self._cfg.chunk_size,
+        silence = np.zeros(
+            self._cfg.chunk_size * self._cfg.channels,
+            dtype=np.float32,
         )
+
+        if self._stream is None:
+            return silence
+
+        try:
+            loop = asyncio.get_running_loop()
+            raw_data: bytes = await loop.run_in_executor(
+                None,
+                self._stream.read,
+                self._cfg.chunk_size,
+            )
+        except OSError as exc:
+            _log.warning(
+                "usb_microphone_read_failed",
+                error=str(exc),
+                device_name=self._cfg.device_name,
+            )
+            self._stream = None
+            return silence
 
         if self._cfg.format == "int16":
             samples = np.frombuffer(raw_data, dtype=np.int16).astype(np.float32) / INT16_MAX_F
