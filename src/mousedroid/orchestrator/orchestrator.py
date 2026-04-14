@@ -126,6 +126,7 @@ class MouseDroidOrchestrator:
             await self._telemetry_server.start()
         if self._voice_engine is not None:
             await self._voice_engine.start()
+            await self._voice_lifecycle("startup")
         if self._experience_logger is not None:
             self._experience_logger.open()
         if self._memory_tier is not None:
@@ -145,6 +146,7 @@ class MouseDroidOrchestrator:
         if self._experience_logger is not None:
             self._experience_logger.close()
         if self._voice_engine is not None:
+            await self._voice_lifecycle("shutdown")
             await self._voice_engine.stop()
         if self._telemetry_server is not None:
             await self._telemetry_server.stop()
@@ -340,6 +342,19 @@ class MouseDroidOrchestrator:
         except Exception:
             _log.debug("telemetry_publish_failed", exc_info=True)
 
+    async def _voice_lifecycle(self, event: str) -> None:
+        """Fire a lifecycle voice event (startup/shutdown) without an observation.
+
+        Args:
+            event: Lifecycle event name (e.g. ``"startup"``, ``"shutdown"``).
+        """
+        if self._voice_engine is None:
+            return
+        try:
+            await self._voice_engine.speak(event, {"valence": 1.0})
+        except Exception:
+            _log.warning("voice_lifecycle_failed", voice_event=event, exc_info=True)
+
     async def _voice_event(
         self,
         event: str,
@@ -347,6 +362,9 @@ class MouseDroidOrchestrator:
         **extra_context: float,
     ) -> None:
         """Fire a voice event if the voice engine is active.
+
+        Enriches context with sensor data (distance, LiDAR min, audio RMS)
+        so the voice engine can modulate speech accordingly.
 
         Non-blocking: delegates to the engine's async queue.
 
@@ -358,6 +376,17 @@ class MouseDroidOrchestrator:
         if self._voice_engine is None:
             return
         context = {"distance_m": float(observation.distance_m)}
+
+        # Enrich with LiDAR minimum distance if features are available
+        lidar_features = observation.lidar_features
+        if lidar_features is not None and lidar_features.size > 0:
+            context["lidar_min_dist_m"] = float(np.min(lidar_features))
+
+        # Enrich with audio level RMS if audio chunk is available
+        audio_chunk = observation.audio_chunk
+        if audio_chunk is not None and audio_chunk.size > 0:
+            context["audio_level_rms"] = float(np.sqrt(np.mean(audio_chunk**2)))
+
         context.update(extra_context)
         try:
             await self._voice_engine.speak(event, context)
@@ -502,6 +531,7 @@ class MouseDroidOrchestrator:
                 await self.tick()
             except Exception:
                 _log.exception("tick_error")
+                await self._voice_lifecycle("error")
 
             elapsed = time.monotonic() - tick_start
             sleep_time = max(0.0, control_period - elapsed)
