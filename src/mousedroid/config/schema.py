@@ -492,6 +492,11 @@ class MetricsConfig(BaseModel):
         True, description="Expose safety_violations_total counter"
     )
     track_gpu_temp: bool = Field(True, description="Expose gpu_temp_celsius gauge")
+    track_memory_tier: bool = Field(True, description="Expose memory tier gauges")
+    track_voice_events: bool = Field(True, description="Expose voice event counter")
+    track_llm_latency: bool = Field(True, description="Expose LLM mission parse latency")
+    track_curiosity: bool = Field(True, description="Expose curiosity intrinsic reward gauge")
+    track_sensor_recovery: bool = Field(True, description="Expose sensor recovery counter")
 
 
 class ModelConfig(BaseModel):
