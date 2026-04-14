@@ -94,3 +94,19 @@ async def test_read_gpu_temp_value_error() -> None:
     with patch.object(HealthMonitor, "_read_sysfs", return_value="not_a_number"):
         temp = await monitor.read_gpu_temp_c()
     assert temp == 0.0
+
+
+def test_read_sysfs_returns_content(tmp_path: pytest.TempPathFactory) -> None:
+    """_read_sysfs reads file contents as a string."""
+    from pathlib import Path
+
+    sysfs_file = Path(tmp_path) / "test_sysfs"  # type: ignore[arg-type]
+    sysfs_file.write_text("42000\n")
+    result = HealthMonitor._read_sysfs(str(sysfs_file))
+    assert result == "42000\n"
+
+
+def test_read_sysfs_raises_on_missing() -> None:
+    """_read_sysfs raises FileNotFoundError for missing files."""
+    with pytest.raises(FileNotFoundError):
+        HealthMonitor._read_sysfs("/nonexistent/path")
