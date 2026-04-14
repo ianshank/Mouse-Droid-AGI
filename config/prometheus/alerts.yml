@@ -86,10 +86,11 @@ groups:
   - name: mousedroid_safety
     rules:
       - alert: SafetyViolationRate
+        # Safety violations are critical — alert immediately, do not wait.
         expr: sum(rate(mousedroid_safety_violations_total[5m])) > 0
-        for: 1m
+        for: 0s
         labels:
-          severity: warning
+          severity: critical
         annotations:
           summary: "Safety violations detected"
           description: >-

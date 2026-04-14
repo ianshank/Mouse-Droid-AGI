@@ -9,7 +9,9 @@ server:
   grpc_listen_port: 0
 
 positions:
-  filename: /tmp/positions.yaml
+  # Persistent path to survive reboots — avoids duplicate log re-ingestion.
+  # Create /var/lib/promtail/ as part of Jetson bootstrap.
+  filename: /var/lib/promtail/positions.yaml
 
 clients:
   - url: http://loki:3100/loki/api/v1/push

@@ -41,7 +41,7 @@ jobs:
               run: ruff format --check src/ tests/
 
             - name: Type check
-              run: mypy src/ --strict --ignore-missing-imports
+              run: mypy --strict src/mousedroid/ --ignore-missing-imports
 
             - name: Run tests with coverage
               run: |

@@ -14,6 +14,7 @@ import torch.nn as nn
 import torch.nn.functional as F  # noqa: N812
 from torch import Tensor
 
+from mousedroid.constants import IQL_EXP_ADVANTAGE_CLAMP_MAX
 from mousedroid.logging.setup import get_logger
 
 _log = get_logger(__name__)
@@ -524,7 +525,9 @@ class IQLTrainer(OfflineRLTrainer):
             advantage = q_for_adv - v_for_adv
 
             # Clip advantage weights for stability
-            exp_advantage = torch.exp(self._beta * advantage).clamp(max=100.0)
+            exp_advantage = torch.exp(self._beta * advantage).clamp(
+                max=IQL_EXP_ADVANTAGE_CLAMP_MAX,
+            )
 
         policy_actions = self.policy(states)
         mse = F.mse_loss(policy_actions, actions, reduction="none").sum(dim=-1, keepdim=True)

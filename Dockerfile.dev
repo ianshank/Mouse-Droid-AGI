@@ -24,18 +24,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install Python dependencies first (layer caching)
+# Copy project metadata + source for dependency resolution
 COPY pyproject.toml .
 COPY src/ src/
 
-RUN pip install --no-cache-dir -e ".[dev,telemetry]"
+# Non-editable install for better layer caching on source changes
+RUN pip install --no-cache-dir ".[dev,telemetry]"
 
-# Copy test suite and configs
+# Copy test suite and configs (changes here don't trigger pip re-install)
 COPY tests/ tests/
 COPY config/ config/
 
 # Mock hardware for CI
 ENV MOUSEDROID_MOCK_HARDWARE=true
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
 # Default: run unit + property tests
 CMD ["pytest", "tests/unit", "tests/property", "-q", "--timeout=60"]
