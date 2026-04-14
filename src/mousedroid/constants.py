@@ -181,6 +181,18 @@ LIDAR_ANGLE_SCALE: float = 0.01
 LIDAR_FULL_ROTATION_DEG: float = 360.0
 """Full rotation in degrees for scan assembly boundary detection."""
 
+LIDAR_CRC8_POLYNOMIAL: int = 0x4C
+"""CRC-8 polynomial used by LD19 frame checksum."""
+
+LIDAR_SCAN_TIMEOUT_MULTIPLIER: float = 2.0
+"""Multiplier on scan period to compute read deadline."""
+
+LIDAR_MM_PER_M: float = 1000.0
+"""Number of millimetres per metre — use as divisor (mm→m) or multiplier (m→mm)."""
+
+LIDAR_DEFAULT_MOCK_CONFIDENCE: int = 200
+"""Default confidence value for mock LiDAR points."""
+
 GB_TO_BYTES: int = 1_073_741_824
 """Conversion factor from gigabytes to bytes."""
 

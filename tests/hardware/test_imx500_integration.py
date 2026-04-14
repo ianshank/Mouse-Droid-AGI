@@ -74,9 +74,9 @@ async def test_feature_shape_matches_config(camera, camera_cfg) -> None:
     """Feature vector must be 1-D with length == cfg.feature_dim."""
     feats = await camera.capture_features()
     assert feats.ndim == 1, f"Expected 1-D features, got shape {feats.shape}"
-    assert feats.shape[0] == camera_cfg.feature_dim, (
-        f"Expected feature_dim={camera_cfg.feature_dim}, got {feats.shape[0]}"
-    )
+    assert (
+        feats.shape[0] == camera_cfg.feature_dim
+    ), f"Expected feature_dim={camera_cfg.feature_dim}, got {feats.shape[0]}"
 
 
 async def test_feature_dtype_is_float32(camera, camera_cfg) -> None:
@@ -140,9 +140,9 @@ async def test_capture_frame_rate(camera, camera_cfg) -> None:
     # Allow ±20% jitter from the configured FPS
     lower_bound = target_fps * 0.80
 
-    assert achieved_fps >= lower_bound, (
-        f"Frame rate {achieved_fps:.1f} fps is below 80% of target {target_fps:.1f} fps"
-    )
+    assert (
+        achieved_fps >= lower_bound
+    ), f"Frame rate {achieved_fps:.1f} fps is below 80% of target {target_fps:.1f} fps"
 
 
 # ---------------------------------------------------------------------------
