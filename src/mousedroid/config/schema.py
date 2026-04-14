@@ -509,6 +509,44 @@ class ModelConfig(BaseModel):
     intention_classes: int = Field(10, gt=0, description="BDI intention classes")
     affect_dim: int = Field(2, gt=0, description="BDI affect dim (valence, arousal)")
 
+    # CfC liquid neural network stream (Dual-Stream RSSM)
+    cfc_hidden_dim: int = Field(0, ge=0, description="CfC stream hidden dim (0=disabled, pure GRU)")
+    cfc_backbone_units: int = Field(64, gt=0, description="CfC backbone MLP hidden units")
+    cfc_backbone_layers: int = Field(1, gt=0, description="CfC backbone MLP layer count")
+    cfc_mode: Literal["default", "pure", "no_gate"] = Field(
+        "default", description="CfC cell mode: default, pure, no_gate"
+    )
+    cfc_sparsity_level: float = Field(
+        0.5,
+        ge=0.0,
+        le=1.0,
+        description="AutoNCP wiring sparsity (reserved — not yet wired into CfC construction)",
+    )
+
+
+class DualStreamTrainingConfig(BaseModel):
+    """Dual-stream RSSM training configuration."""
+
+    gru_lr: float = Field(3e-4, gt=0, description="GRU stream learning rate")
+    cfc_lr: float = Field(1e-4, gt=0, description="CfC stream learning rate")
+    gru_grad_clip: float = Field(10.0, gt=0, description="GRU gradient clip norm")
+    cfc_grad_clip: float = Field(1.0, gt=0, description="CfC gradient clip norm")
+    cfc_loss_weight_initial: float = Field(
+        0.1, ge=0, le=1, description="CfC loss weight at start of training"
+    )
+    cfc_loss_weight_final: float = Field(
+        1.0, ge=0, le=1, description="CfC loss weight at end of warmup"
+    )
+    cfc_loss_warmup_steps: int = Field(
+        10000, ge=0, description="Steps to ramp CfC loss weight from initial to final"
+    )
+    fallback_check_interval: int = Field(
+        1000, gt=0, description="Steps between CfC fallback quality checks"
+    )
+    fallback_degradation_threshold: float = Field(
+        0.05, gt=0, description="Max allowed planning quality drop before CfC fallback"
+    )
+
 
 class RetryConfig(BaseModel):
     """Retry policy configuration."""
@@ -1253,6 +1291,9 @@ class Settings(BaseSettings):
     ppo: PPOConfig = Field(default_factory=_settings_default_factory(PPOConfig))
     telemetry: TelemetryConfig = Field(default_factory=_settings_default_factory(TelemetryConfig))
     three_laws: ThreeLawsConfig = Field(default_factory=_settings_default_factory(ThreeLawsConfig))
+    dual_stream_training: DualStreamTrainingConfig = Field(
+        default_factory=_settings_default_factory(DualStreamTrainingConfig)
+    )
 
     training_pipeline: TrainingPipelineConfig | None = Field(
         None,

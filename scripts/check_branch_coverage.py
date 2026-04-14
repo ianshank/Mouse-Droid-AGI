@@ -325,8 +325,33 @@ def main() -> int:
     print("Running branch coverage command:")
     print(" ".join(cmd))
 
-    run_result = subprocess.run(cmd, check=False)
+    run_result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    # Always display the captured pytest output so developers can see what happened.
+    sys.stdout.write(run_result.stdout)
+    sys.stdout.flush()
+    sys.stderr.write(run_result.stderr)
+    sys.stderr.flush()
     if run_result.returncode != 0:
+        # Narrow check: only skip for known torch nightly + coverage.py docstring
+        # collision.  Require ALLOW_PYTEST_COLLECTION_SKIP=1 so CI blocks by default.
+        combined = run_result.stdout + run_result.stderr
+        is_torch_coverage_bug = (
+            "errors during collection" in combined.lower() and "_has_torch_function" in combined
+        )
+        if is_torch_coverage_bug and os.environ.get("ALLOW_PYTEST_COLLECTION_SKIP") == "1":
+            print(
+                "\nWARNING: torch/coverage.py collection conflict detected "
+                "(_has_torch_function docstring collision).",
+                file=sys.stderr,
+            )
+            print("Skipping branch coverage gate. Run tests manually to verify.", file=sys.stderr)
+            return 0
+        if is_torch_coverage_bug:
+            print(
+                "\nERROR: torch/coverage.py collection conflict detected. "
+                "Set ALLOW_PYTEST_COLLECTION_SKIP=1 to skip, or fix the environment.",
+                file=sys.stderr,
+            )
         return run_result.returncode
 
     coverage_by_path = _load_coverage(json_out)

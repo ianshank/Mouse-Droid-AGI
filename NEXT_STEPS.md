@@ -9,9 +9,16 @@ This document tracks planned enhancements, organised by priority and category.
 - ✅ **Green build restored**: 14 previously failing tests fixed; all 1299+ tests now pass
 - ✅ **ruff + mypy cleanup**: Zero linting violations; `mypy --strict` passes with 0 errors (was 50)
 - ✅ **Dual-Stream CfC/GRU RSSM merged** (PR #34): Liquid neural network hybrid world model; CfC backbone fused with classic GRU RSSM stream; full config and factory wiring
+  - `DualStreamRSSM` (331 LOC), `CfCWrapper` (110 LOC), `StreamFusion` (102 LOC)
+  - Factory dispatch: `cfc_hidden_dim > 0` → DualStreamRSSM, else classic RSSM
+  - Dual-stream training script (712 LOC) with dual optimizers and CfC loss warmup
+  - 57 new tests; 5-epoch validation training converging on RTX 5060 Ti
+  - HuggingFace upload: `ianshank/mousedroid-dual-stream-rssm` (experimental)
 - ✅ **FHL-LD19 LiDAR added as 5th sensor modality** (PR #31): `hardware/lidar/ld19_driver.py`, `ld19_protocol.py`, `feature_extractor.py`, `resilient_lidar.py`; factory-wired into sensor fusion pipeline
 - ✅ **Wonrabai USB Sound Card integrated** (PR #32): `hardware/audio/usb_microphone.py` implementing `AudioProtocol`; replaces placeholder USB mic branch
 - ✅ **Python 3.12 added to CI matrix**: All three lint, typecheck, and test stages run on 3.10, 3.11, and 3.12 in parallel
+- ✅ **Jetson Docker deployment** — image rebuilt with ncps, smoke tests passing
+- ✅ **SSH key deployment** to Jetson via serial console
 
 ---
 
@@ -222,32 +229,39 @@ This document tracks planned enhancements, organised by priority and category.
 
 ## Priority 8 — Dual-Stream CfC/GRU Maturation
 
-### 8.1 Extended Training Run
-- Run 50+ epoch training on RTX 5060 Ti with dual-stream CfC/GRU RSSM
-- Validate convergence, compare loss curves to classic RSSM baseline
+### 8.1 Extended Training on Real Data
+- Train dual-stream RSSM on real sensor data from Jetson (not synthetic)
+- Target: 100+ episodes from physical navigation runs
+- Compare CfC vs GRU-only quality metrics on held-out episodes
 - Upload trained weights to `ianshank/mousedroid-dual-stream-rssm`
-- **Effort**: 2 days | **Owner**: ML team
+- **Effort**: 1 week | **Owner**: ML team
 
-### 8.2 CfC Hyperparameter Sweep
+### 8.2 CfC Time-Delta Integration & Hyperparameter Sweep
+- Pass real `dt` from observation timestamps to CfC cell (currently uses unit time)
 - Sweep `cfc_backbone_units` (32, 64, 128), `cfc_backbone_layers` (1, 2, 3)
-- Compare training speed and final loss across configurations
 - Select optimal config for Jetson inference budget
 - **Effort**: 3 days | **Owner**: ML team
 
-### 8.3 Fusion Strategy Comparison
-- Implement attention-based and gating-based fusion alternatives in `stream_fusion.py`
+### 8.3 Attention-Based Stream Fusion
+- Replace concat fusion with learned attention gate: `alpha * h_gru + (1-alpha) * h_cfc`
+- Allow model to adaptively weight GRU (planning) vs CfC (reflexes) per timestep
 - Benchmark concat vs attention vs gating on navigation task
 - **Effort**: 1 week | **Owner**: ML team
 
-### 8.4 Online CfC Adaptation on Jetson
+### 8.4 TensorRT Export & Online CfC Adaptation
+- Export DualStreamRSSM to TensorRT for Jetson inference acceleration
+- Handle CfC cell's variable-time dynamics in TRT compilation
 - Enable real-time CfC parameter updates from live sensor data
-- Validate latency stays within 30 Hz budget with adaptation enabled
-- **Effort**: 1 week | **Owner**: ML team
+- Target: <10ms per observe_step on Orin Nano within 30 Hz budget
+- **Effort**: 1 week | **Owner**: ML + DevOps
 
-### 8.5 Dual-Stream vs Classic RSSM Benchmarks
-- Compare prediction accuracy, planning quality, and inference latency
+### 8.5 Full Activation Decision
+- After 8.1-8.2 complete, review CfC contribution metrics
+- Compare prediction accuracy, planning quality, and inference latency vs classic RSSM
+- If CfC improves >5% over GRU-only: permanently enable in production config
+- If CfC degrades: archive as experimental, keep GRU-only
 - Document results in architecture decisions (docs/architecture.md)
-- **Effort**: 3 days | **Owner**: ML team
+- **Effort**: 3 days | **Owner**: Ian
 
 ---
 
