@@ -17,15 +17,15 @@ from mousedroid.telemetry.protocol import TelemetryFrame
 
 # Guard: skip all tests if aiohttp is not installed
 aiohttp = pytest.importorskip("aiohttp")
-import contextlib  # noqa: E402
+import contextlib
 
-from aiohttp import web  # noqa: E402
-from aiohttp.test_utils import TestClient, TestServer  # noqa: E402
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
 
-from mousedroid.constants import MAX_LOG_ENTRIES  # noqa: E402
-from mousedroid.telemetry.log_buffer import LogRingBuffer  # noqa: E402
-from mousedroid.telemetry.network import NetworkInterface  # noqa: E402
-from mousedroid.telemetry.server import TelemetryServer  # noqa: E402
+from mousedroid.constants import MAX_LOG_ENTRIES
+from mousedroid.telemetry.log_buffer import LogRingBuffer
+from mousedroid.telemetry.network import NetworkInterface
+from mousedroid.telemetry.server import TelemetryServer
 
 
 class _StubPublisher:

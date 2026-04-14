@@ -47,9 +47,9 @@ def test_version_matches_expected() -> None:
     """Verify __version__ equals the expected release version."""
     import mousedroid
 
-    assert mousedroid.__version__ == EXPECTED_VERSION, (
-        f"Expected version {EXPECTED_VERSION}, got {mousedroid.__version__}"
-    )
+    assert (
+        mousedroid.__version__ == EXPECTED_VERSION
+    ), f"Expected version {EXPECTED_VERSION}, got {mousedroid.__version__}"
 
 
 @pytest.mark.smoke
@@ -60,9 +60,7 @@ def test_version_is_valid_semver() -> None:
     version = mousedroid.__version__
     assert isinstance(version, str)
     assert len(version) > 0
-    assert _SEMVER_RE.match(version), (
-        f"Version '{version}' does not match semver pattern"
-    )
+    assert _SEMVER_RE.match(version), f"Version '{version}' does not match semver pattern"
 
 
 @pytest.mark.smoke

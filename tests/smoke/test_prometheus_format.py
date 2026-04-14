@@ -43,9 +43,7 @@ _COUNTER_FAMILIES: tuple[str, ...] = (
 )
 
 # Histogram families (rendered with _bucket, _sum, _count suffixes)
-_HISTOGRAM_FAMILIES: tuple[str, ...] = (
-    f"{_NS}_loop_latency_ms",
-)
+_HISTOGRAM_FAMILIES: tuple[str, ...] = (f"{_NS}_loop_latency_ms",)
 
 # Union of all families that must be present in output
 _ALL_FAMILIES: tuple[str, ...] = _GAUGE_FAMILIES + _COUNTER_FAMILIES + _HISTOGRAM_FAMILIES
@@ -192,9 +190,9 @@ def test_safety_violations_labeled_counter() -> None:
     registry = _build_registry()
     text = registry.render_prometheus()
     ns = _NS
-    assert f'{ns}_safety_violations_total{{law="law1"}}' in text, (
-        "Safety violations counter missing law label"
-    )
+    assert (
+        f'{ns}_safety_violations_total{{law="law1"}}' in text
+    ), "Safety violations counter missing law label"
 
 
 def test_no_duplicate_type_declarations() -> None:
@@ -235,9 +233,9 @@ def test_namespace_is_configurable() -> None:
     assert f"{custom_ns}_publish_hz" in text
 
     # Default namespace should NOT appear
-    assert "mousedroid_" not in text, (
-        "Default namespace 'mousedroid_' should not appear when custom namespace is set"
-    )
+    assert (
+        "mousedroid_" not in text
+    ), "Default namespace 'mousedroid_' should not appear when custom namespace is set"
 
 
 def test_help_and_type_paired() -> None:
