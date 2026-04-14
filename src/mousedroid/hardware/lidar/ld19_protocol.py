@@ -157,7 +157,7 @@ class LD19FrameParser:
         if diff < 0:
             diff += LIDAR_FULL_ROTATION_DEG
 
-        step = diff / max(n_points, 1)
+        step = diff / (n_points - 1) if n_points > 1 else 0.0
         angles = np.array(
             [(start_deg + step * i) % LIDAR_FULL_ROTATION_DEG for i in range(n_points)],
             dtype=np.float32,

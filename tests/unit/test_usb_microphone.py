@@ -5,7 +5,6 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
 
 from mousedroid.config.schema import MicrophoneConfig
 from mousedroid.hardware.audio.usb_microphone import UsbMicrophone
@@ -38,11 +37,13 @@ def test_custom_config():
     assert mic.chunk_size == 2048
 
 
-async def test_read_chunk_not_started():
-    """Reading before start raises RuntimeError."""
+async def test_read_chunk_returns_silence_when_not_started():
+    """Reading before start returns silence (graceful degradation)."""
     mic = UsbMicrophone(_default_cfg())
-    with pytest.raises(RuntimeError, match="stream not started"):
-        await mic.read_chunk()
+    chunk = await mic.read_chunk()
+    assert chunk.dtype == np.float32
+    assert chunk.shape == (1024,)
+    assert np.all(chunk == 0.0)
 
 
 async def test_start_device_not_found():
@@ -137,3 +138,79 @@ async def test_read_chunk_int16():
         chunk = await mic.read_chunk()
         assert chunk.dtype == np.float32
         np.testing.assert_allclose(chunk, [0.5, -0.5], atol=1e-4)
+
+
+async def test_start_handles_missing_pyaudio():
+    """Start gracefully handles missing pyaudio (import failure)."""
+    with patch.dict("sys.modules", {"pyaudio": None}):
+        mic = UsbMicrophone(_default_cfg())
+        await mic.start()
+        # Stream should be None — no crash
+        assert mic._stream is None
+        # read_chunk returns silence
+        chunk = await mic.read_chunk()
+        assert np.all(chunk == 0.0)
+
+
+async def test_start_handles_oserror():
+    """Start gracefully handles ALSA/PyAudio OSError."""
+    mock_pa_instance = MagicMock()
+    mock_pa_instance.get_device_count.return_value = 0
+    mock_pa_instance.open.side_effect = OSError("ALSA device busy")
+
+    mock_pa_class = MagicMock(return_value=mock_pa_instance)
+    mock_pyaudio = MagicMock()
+    mock_pyaudio.PyAudio = mock_pa_class
+    mock_pyaudio.paFloat32 = 1
+
+    with patch.dict("sys.modules", {"pyaudio": mock_pyaudio}):
+        mic = UsbMicrophone(_default_cfg())
+        await mic.start()
+        # Stream should be None — graceful degradation
+        assert mic._stream is None
+        assert mic._pa is None
+        # read_chunk returns silence, not an exception
+        chunk = await mic.read_chunk()
+        assert chunk.dtype == np.float32
+        assert np.all(chunk == 0.0)
+
+
+async def test_read_chunk_handles_device_disconnect():
+    """Read chunk catches OSError from unplugged device, returns silence, disables stream."""
+    mock_pa_instance = MagicMock()
+    mock_stream = MagicMock()
+    mock_stream.read.side_effect = OSError("Device disconnected")
+    mock_pa_instance.open.return_value = mock_stream
+    mock_pa_instance.get_device_count.return_value = 0
+
+    mock_pa_class = MagicMock(return_value=mock_pa_instance)
+    mock_pyaudio = MagicMock()
+    mock_pyaudio.PyAudio = mock_pa_class
+    mock_pyaudio.paFloat32 = 1
+
+    with patch.dict("sys.modules", {"pyaudio": mock_pyaudio}):
+        mic = UsbMicrophone(_default_cfg())
+        await mic.start()
+        assert mic._stream is not None
+
+        # First read hits OSError — returns silence, disables stream
+        chunk = await mic.read_chunk()
+        assert chunk.dtype == np.float32
+        assert chunk.shape == (1024,)
+        assert np.all(chunk == 0.0)
+        assert mic._stream is None
+
+        # Subsequent reads return silence without attempting I/O
+        chunk2 = await mic.read_chunk()
+        assert np.all(chunk2 == 0.0)
+        # stream.read was only called once (the failed attempt)
+        assert mock_stream.read.call_count == 1
+
+
+async def test_read_chunk_stereo_silence_shape():
+    """Silence for stereo mic has correct shape."""
+    cfg = MicrophoneConfig(channels=2, chunk_size=512)
+    mic = UsbMicrophone(cfg)
+    chunk = await mic.read_chunk()
+    assert chunk.shape == (1024,)  # 512 * 2 channels
+    assert np.all(chunk == 0.0)

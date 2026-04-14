@@ -42,9 +42,8 @@ def build_telemetry_frame(
     audio_rms = float(np.sqrt(np.mean(audio_arr * audio_arr)))
 
     lidar_min_dist_m: float | None = None
-    lidar_features = observation.lidar_features
-    if lidar_features is not None and len(lidar_features) > 0:
-        lidar_min_dist_m = float(np.min(lidar_features))
+    if safety_ctx.lidar_min_dist_m != float("inf"):
+        lidar_min_dist_m = safety_ctx.lidar_min_dist_m
 
     motor = observation.motor_state
     battery_v = (

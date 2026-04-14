@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, cast
 import numpy as np
 from numpy.typing import NDArray
 
+from mousedroid.hardware.audio.constants import LOG_FLOOR, POWER_CLIP_MAX
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
@@ -160,7 +161,7 @@ class AudioFeatureExtractor:
             start = i * hop
             frame = mono[start : start + n_fft] * window
             spectrum = np.fft.rfft(frame.astype(np.float64))
-            power = np.minimum(np.abs(spectrum) ** 2, 1e20)
+            power = np.minimum(np.abs(spectrum) ** 2, POWER_CLIP_MAX)
             power_spec_frames.append(power)
 
         # Stack: (n_frames, n_fft//2+1)
@@ -170,10 +171,10 @@ class AudioFeatureExtractor:
         # Suppress expected numerical warnings from sparse filterbank * near-zero values.
         with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
             mel_spec = self._filterbank @ power_spectrogram.T
-        mel_spec = np.nan_to_num(mel_spec, nan=0.0, posinf=1e20, neginf=0.0)
+        mel_spec = np.nan_to_num(mel_spec, nan=0.0, posinf=POWER_CLIP_MAX, neginf=0.0)
 
         # Log scale with floor to avoid log(0).
-        mel_spec = np.log(np.maximum(mel_spec, 1e-10))
+        mel_spec = np.log(np.maximum(mel_spec, LOG_FLOOR))
 
         # Flatten to feature vector.
         features = mel_spec.T.flatten().astype(np.float32)

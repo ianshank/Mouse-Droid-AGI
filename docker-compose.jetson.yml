@@ -53,6 +53,10 @@ services:
     #   - /dev/gpiochip1:/dev/gpiochip1
     #   # FHL-LD19 LiDAR UART
     #   - /dev/ttyUSB1:/dev/ttyUSB1
+    #   # Wonrabai USB Sound Card (ALSA audio in + out)
+    #   - /dev/snd:/dev/snd
+    # group_add:
+    #   - audio
 
     # --- Networking ---
     network_mode: host

@@ -121,3 +121,15 @@ huggingface_cache/
 # Pip cache
 pip-wheel-metadata/
 
+# LiDAR raw scan captures (debug / calibration artefacts)
+*.lidar_scan
+lidar_captures/
+
+# Audio recordings (debug / calibration artefacts)
+*.wav
+*.raw
+audio_captures/
+
+# Worktree branches (auto-managed by Claude Code)
+.claude/worktrees/
+

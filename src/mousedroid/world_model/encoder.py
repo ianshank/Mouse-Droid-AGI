@@ -129,9 +129,11 @@ class MultimodalEncoder(nn.Module):
                     device=vision.device,
                     dtype=vision.dtype,
                 )
-            # Gate by LiDAR validity if mask has enough elements.
+            # Gate by LiDAR validity — treat missing slot as invalid (zero out).
             if valid_mask.shape[-1] > self._LIDAR_IDX:
                 el = el * valid_mask[:, self._LIDAR_IDX : self._LIDAR_IDX + 1]
+            else:
+                el = torch.zeros_like(el)
             parts.append(el)
 
         fused: Tensor = self.fusion(torch.cat(parts, dim=-1))

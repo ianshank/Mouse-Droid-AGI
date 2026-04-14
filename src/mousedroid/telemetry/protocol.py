@@ -29,6 +29,8 @@ class TelemetryFrame:
         battery_voltage: Battery voltage (volts).
         safety: Safety context (is_emergency, violations).
         health: Health metrics (gpu_temp, gpu_load, etc.).
+        lidar_min_dist_m: Minimum LiDAR distance reading (metres), or
+            ``None`` if LiDAR is unavailable.
         loop_time_ms: Control loop iteration time (milliseconds).
         tick_count: Monotonically increasing tick counter.
     """

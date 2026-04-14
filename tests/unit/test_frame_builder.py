@@ -17,6 +17,7 @@ class FakeSafetyContext:
     law_violations: list[str] = field(default_factory=list)
     forward_clearance_ok: bool = True
     lidar_clearance_ok: bool = True
+    lidar_min_dist_m: float = float("inf")
 
 
 @dataclass

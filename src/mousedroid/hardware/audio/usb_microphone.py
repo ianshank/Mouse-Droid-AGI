@@ -1,4 +1,4 @@
-"""SuziePi USB 2.0 Mini Microphone driver.
+"""USB audio input driver (Wonrabai USB Sound Card or compatible).
 
 Implements ``AudioProtocol`` using PyAudio for real USB audio capture.
 """
@@ -21,10 +21,12 @@ _log = get_logger(__name__)
 
 
 class UsbMicrophone:
-    """SuziePi USB 2.0 Mini Microphone implementing ``AudioProtocol``.
+    """USB audio input driver implementing ``AudioProtocol``.
 
     Uses PyAudio to capture audio from a USB microphone device.
     Auto-detects the device by name if ``device_index`` is not specified.
+    Handles missing PyAudio or ALSA errors gracefully, leaving
+    the microphone in a disabled (silence) state with a warning.
     """
 
     def __init__(self, cfg: MicrophoneConfig) -> None:
@@ -66,31 +68,55 @@ class UsbMicrophone:
         return None
 
     async def start(self) -> None:
-        """Open the PyAudio stream for capture."""
-        import pyaudio
+        """Open the PyAudio stream for capture.
 
-        self._pa = pyaudio.PyAudio()
+        Handles missing PyAudio or ALSA errors gracefully, leaving
+        the microphone in a disabled (silence) state with a warning.
+        """
+        try:
+            import pyaudio
+        except ImportError:
+            _log.warning(
+                "usb_microphone_unavailable",
+                reason="pyaudio_import_failed",
+                device_name=self._cfg.device_name,
+            )
+            return
 
-        device_index = self._cfg.device_index
-        if device_index is None:
-            device_index = self._find_device_index()
+        try:
+            self._pa = pyaudio.PyAudio()
+
+            device_index = self._cfg.device_index
             if device_index is None:
-                _log.warning(
-                    "usb_microphone_not_found",
-                    device_name=self._cfg.device_name,
-                )
+                device_index = self._find_device_index()
+                if device_index is None:
+                    _log.warning(
+                        "usb_microphone_not_found",
+                        device_name=self._cfg.device_name,
+                    )
 
-        fmt = pyaudio.paFloat32 if self._cfg.format == "float32" else pyaudio.paInt16
+            fmt = pyaudio.paFloat32 if self._cfg.format == "float32" else pyaudio.paInt16
 
-        self._stream = self._pa.open(
-            format=fmt,
-            channels=self._cfg.channels,
-            rate=self._cfg.sample_rate,
-            input=True,
-            input_device_index=device_index,
-            frames_per_buffer=self._cfg.chunk_size,
-        )
-        _log.info("usb_microphone_started", device_index=device_index)
+            self._stream = self._pa.open(
+                format=fmt,
+                channels=self._cfg.channels,
+                rate=self._cfg.sample_rate,
+                input=True,
+                input_device_index=device_index,
+                frames_per_buffer=self._cfg.chunk_size,
+            )
+            _log.info("usb_microphone_started", device_index=device_index)
+        except OSError as exc:
+            if self._pa is not None:
+                self._pa.terminate()
+            self._pa = None
+            self._stream = None
+            _log.warning(
+                "usb_microphone_unavailable",
+                reason="pyaudio_open_failed",
+                error=str(exc),
+                device_name=self._cfg.device_name,
+            )
 
     async def stop(self) -> None:
         """Close the PyAudio stream and terminate."""
@@ -106,19 +132,34 @@ class UsbMicrophone:
     async def read_chunk(self) -> NDArray[np.float32]:
         """Read one chunk of audio from the USB microphone.
 
+        Returns silence if the stream failed to start (graceful degradation).
+
         Returns:
             Audio samples as float32, shape ``(chunk_size * channels,)``.
         """
-        if self._stream is None:
-            msg = "Microphone stream not started"
-            raise RuntimeError(msg)
-
-        loop = asyncio.get_running_loop()
-        raw_data: bytes = await loop.run_in_executor(
-            None,
-            self._stream.read,
-            self._cfg.chunk_size,
+        silence = np.zeros(
+            self._cfg.chunk_size * self._cfg.channels,
+            dtype=np.float32,
         )
+
+        if self._stream is None:
+            return silence
+
+        try:
+            loop = asyncio.get_running_loop()
+            raw_data: bytes = await loop.run_in_executor(
+                None,
+                self._stream.read,
+                self._cfg.chunk_size,
+            )
+        except OSError as exc:
+            _log.warning(
+                "usb_microphone_read_failed",
+                error=str(exc),
+                device_name=self._cfg.device_name,
+            )
+            self._stream = None
+            return silence
 
         if self._cfg.format == "int16":
             samples = np.frombuffer(raw_data, dtype=np.int16).astype(np.float32) / INT16_MAX_F

@@ -47,7 +47,9 @@ graph TD
         subgraph HWLayer["Hardware Interface Layer"]
             Camera["Camera\nJetson CSI / IMX708\nFeatureExtractorProtocol"]
             Ultrasonic["Ultrasonic\nHC-SR04"]
-            Microphone["USB Microphone\nTI PCM2902\nAudioProtocol"]
+            Microphone["USB Microphone\nWonrabai USB Sound Card\nAudioProtocol"]
+            Speaker["USB Speaker\nWonrabai USB Sound Card\nSpeakerProtocol"]
+            LiDAR["LiDAR\nFHL-LD19\nLidarProtocol"]
             GPIO["GPIO\nJetson.GPIO"]
         end
         subgraph Storage["NVMe SSD (500 GB)"]
@@ -72,6 +74,8 @@ graph TD
     SensorMgr --> Camera
     SensorMgr --> Ultrasonic
     SensorMgr --> Microphone
+    SensorMgr --> Speaker
+    SensorMgr --> LiDAR
     SensorMgr --> GPIO
     Orchestrator -- "UART 1 Mbps / HTTP" --> ESP32
     DockerContainer -.-> DockerData
@@ -88,7 +92,8 @@ graph TD
 | Llama GGUF model | llama-cpp-python | Local LLM for NL to velocity |
 | ESP32 firmware | C++ (Wave Rover SDK) | Motor PWM control, encoder polling |
 | Jetson CSI / IMX708 camera | jetson_utils / picamera2 | Vision capture + pluggable feature extraction (MeanPool / TensorRT) |
-| USB Microphone (TI PCM2902) | PyAudio | Audio capture for multimodal world model fusion |
+| Wonrabai USB Sound Card | PyAudio | Combo mic + speaker: audio capture for world model + TTS output |
+| FHL-LD19 LiDAR | pyserial UART | 360° 2D distance scanning for obstacle detection + clearance |
 | NVMe SSD 500 GB | ext4 `/mnt/ssd` | Docker data-root, containerd, 16 GB swap |
 | Telemetry Publisher | Python asyncio queue | Non-blocking sensor-frame fan-out at ≤60 Hz |
 | Metrics Registry | Python stdlib exporter | Prometheus metric families and text rendering |
@@ -102,9 +107,9 @@ graph TD
     CLI["CLI Entry\nmain.py"]
     Factory["Factory\nfactory.py\nOnly file that imports concrete types"]
     Orchestrator["Orchestrator\norchestrator/\ntick at 30 Hz\nsense - plan - act"]
-    SensorMgr["Sensor Manager\nsensing/\nCamera - Ultrasonic - ESP32 encoders"]
+    SensorMgr["Sensor Manager\nsensing/\nCamera - Ultrasonic - LiDAR - Audio - ESP32 encoders"]
     SafetyMon["Safety Monitor\nsafety/\nClearance - Battery - Sensor staleness"]
-    Encoder["Encoder\nvision + motor + ultrasonic + audio"]
+    Encoder["Encoder\nvision + motor + ultrasonic + audio + lidar"]
     RSSM["RSSM\nlatent h and z\nobserve step / imagine step"]
     MCTS["MCTS\n50 to 200 sims"]
     NavAgent["Navigation Agent\nagents/\nact with h, z, safety"]
@@ -203,6 +208,8 @@ classDiagram
         +build_safety_monitor(cfg) SafetyMonitor
         +build_agent(cfg) NavigationAgent
         +build_cognitive_core(cfg) CognitiveCore
+        +build_lidar(cfg) LidarProtocol
+        +build_lidar_feature_extractor(cfg) LidarFeatureExtractor
     }
 
     ESP32CommProtocol <|.. MockESP32Driver : implements
@@ -227,7 +234,8 @@ This means:
 sequenceDiagram
     participant Camera as Camera IMX708
     participant Sonic as HC-SR04
-    participant Mic as USB Microphone
+    participant Mic as Wonrabai USB Mic
+    participant LiDAR as FHL-LD19 LiDAR
     participant ESP32 as ESP32 Encoders
     participant SM as SensorManager
     participant Safety as SafetyMonitor
@@ -240,6 +248,7 @@ sequenceDiagram
         Sonic->>SM: read_distance_m()
         ESP32->>SM: read_encoders() + get_battery_voltage()
         Mic->>SM: read_chunk()
+        LiDAR->>SM: read_scan()
     end
 
     SM->>Safety: ObservationBundle

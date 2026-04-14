@@ -562,6 +562,9 @@ class SafetyConfig(BaseModel):
     reverse_velocity: float = Field(
         -0.5, le=0, description="Reverse velocity for obstacle avoidance"
     )
+    lidar_max_range_m: float = Field(
+        12.0, gt=0, description="LiDAR max range for clearance conversion (m)"
+    )
 
 
 class SurpriseConfig(BaseModel):
