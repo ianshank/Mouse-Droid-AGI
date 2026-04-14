@@ -16,7 +16,7 @@ import numpy as np
 from mousedroid.constants import (
     LIDAR_FRAME_SIZE,
     LIDAR_HEADER_BYTE,
-    LIDAR_MM_TO_M,
+    LIDAR_MM_PER_M,
     LIDAR_SCAN_TIMEOUT_MULTIPLIER,
 )
 from mousedroid.hardware.lidar.ld19_protocol import LD19Frame, LD19FrameParser
@@ -197,7 +197,7 @@ class LD19LidarDriver:
             for i, point in enumerate(frame.points):
                 if point.confidence < cfg.min_confidence:
                     continue
-                dist_m = point.distance_mm / LIDAR_MM_TO_M
+                dist_m = point.distance_mm / LIDAR_MM_PER_M
                 if dist_m < cfg.min_range_m or dist_m > cfg.max_range_m:
                     continue
                 all_angles.append(float(angles[i]))

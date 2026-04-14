@@ -187,8 +187,8 @@ LIDAR_CRC8_POLYNOMIAL: int = 0x4C
 LIDAR_SCAN_TIMEOUT_MULTIPLIER: float = 2.0
 """Multiplier on scan period to compute read deadline."""
 
-LIDAR_MM_TO_M: float = 1000.0
-"""Millimetres-to-metres divisor for LD19 distance conversion."""
+LIDAR_MM_PER_M: float = 1000.0
+"""Number of millimetres per metre — use as divisor (mm→m) or multiplier (m→mm)."""
 
 LIDAR_DEFAULT_MOCK_CONFIDENCE: int = 200
 """Default confidence value for mock LiDAR points."""

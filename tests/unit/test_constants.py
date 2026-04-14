@@ -16,7 +16,7 @@ from mousedroid.constants import (
     LIDAR_CRC8_POLYNOMIAL,
     LIDAR_DEFAULT_MOCK_CONFIDENCE,
     LIDAR_HEADER_BYTE,
-    LIDAR_MM_TO_M,
+    LIDAR_MM_PER_M,
     LIDAR_SCAN_TIMEOUT_MULTIPLIER,
     MILLISECONDS_PER_SECOND,
     N_SENSOR_MODALITIES,
@@ -96,16 +96,16 @@ def test_lidar_crc8_polynomial():
     assert LIDAR_CRC8_POLYNOMIAL == 0x4C
 
 
-def test_lidar_mm_to_m():
-    """LIDAR_MM_TO_M should be 1000.0."""
-    assert LIDAR_MM_TO_M == 1000.0
+def test_lidar_mm_per_m():
+    """LIDAR_MM_PER_M should be 1000.0."""
+    assert LIDAR_MM_PER_M == 1000.0
 
 
 def test_lidar_scan_timeout_multiplier():
-    """LIDAR_SCAN_TIMEOUT_MULTIPLIER should be positive."""
-    assert LIDAR_SCAN_TIMEOUT_MULTIPLIER > 0.0
+    """LIDAR_SCAN_TIMEOUT_MULTIPLIER should be 2.0."""
+    assert LIDAR_SCAN_TIMEOUT_MULTIPLIER == 2.0
 
 
 def test_lidar_default_mock_confidence():
-    """LIDAR_DEFAULT_MOCK_CONFIDENCE should be in [0, 255]."""
-    assert 0 <= LIDAR_DEFAULT_MOCK_CONFIDENCE <= 255
+    """LIDAR_DEFAULT_MOCK_CONFIDENCE should be 200."""
+    assert LIDAR_DEFAULT_MOCK_CONFIDENCE == 200
