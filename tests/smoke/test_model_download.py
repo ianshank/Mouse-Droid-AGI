@@ -8,6 +8,8 @@ retry handling).
 from __future__ import annotations
 
 import stat
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -29,13 +31,31 @@ def test_download_script_exists() -> None:
 
 
 def test_download_script_is_executable() -> None:
-    """scripts/download_model.sh must have executable permission."""
+    """scripts/download_model.sh must have executable permission.
+
+    On Windows, filesystem permissions are not meaningful for shell scripts.
+    Fall back to checking git's stored file mode (100755) instead.
+    """
     if not _SCRIPT_PATH.exists():
         pytest.skip("download_model.sh not available in worktree")
-    mode = _SCRIPT_PATH.stat().st_mode
-    assert mode & (
-        stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
-    ), "download_model.sh is not executable"
+
+    if sys.platform == "win32":
+        # Windows doesn't support Unix file permissions; check git index mode
+        result = subprocess.run(
+            ["git", "ls-files", "-s", str(_SCRIPT_PATH.relative_to(_REPO_ROOT))],
+            capture_output=True,
+            text=True,
+            cwd=_REPO_ROOT,
+        )
+        assert result.returncode == 0, "git ls-files failed"
+        assert result.stdout.startswith("100755"), (
+            f"download_model.sh git mode is not executable: {result.stdout.strip()}"
+        )
+    else:
+        mode = _SCRIPT_PATH.stat().st_mode
+        assert mode & (
+            stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+        ), "download_model.sh is not executable"
 
 
 def test_download_script_has_shebang() -> None:
