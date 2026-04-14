@@ -180,12 +180,23 @@ def _load_checkpoint(
     # Full training checkpoint
     model.load_state_dict(data["model_state_dict"])
 
-    gru_opt_state = data.get("gru_optimizer_state_dict")
-    if gru_opt_state is not None:
-        gru_optimizer.load_state_dict(gru_opt_state)
+    # Legacy single-optimizer checkpoints (from train_rssm.py) store
+    # "optimizer_state_dict" covering GRU + shared-head params.  Load it
+    # into gru_optimizer since that's the matching parameter group.
+    legacy_opt_state = data.get("optimizer_state_dict")
 
-    # Legacy single-optimizer checkpoint has "optimizer_state_dict"
-    cfc_opt_state = data.get("cfc_optimizer_state_dict") or data.get("optimizer_state_dict")
+    gru_opt_state = data.get("gru_optimizer_state_dict") or legacy_opt_state
+    if gru_opt_state is not None:
+        try:
+            gru_optimizer.load_state_dict(gru_opt_state)
+        except Exception:
+            _log.warning(
+                "gru_optimizer_state_load_failed_using_fresh",
+                path=str(path),
+                legacy=legacy_opt_state is not None and gru_opt_state is legacy_opt_state,
+            )
+
+    cfc_opt_state = data.get("cfc_optimizer_state_dict")
     if cfc_opt_state is not None:
         try:
             cfc_optimizer.load_state_dict(cfc_opt_state)

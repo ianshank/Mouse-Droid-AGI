@@ -332,17 +332,26 @@ def main() -> int:
     sys.stderr.write(run_result.stderr)
     sys.stderr.flush()
     if run_result.returncode != 0:
-        # Collection errors (e.g. torch nightly + coverage.py incompatibility) are
-        # environment issues, not code defects.  Warn but allow the commit; actual
-        # test assertion failures still block.
+        # Narrow check: only skip for known torch nightly + coverage.py docstring
+        # collision.  Require ALLOW_PYTEST_COLLECTION_SKIP=1 so CI blocks by default.
         combined = run_result.stdout + run_result.stderr
-        if "errors during collection" in combined.lower():
+        is_torch_coverage_bug = (
+            "errors during collection" in combined.lower() and "_has_torch_function" in combined
+        )
+        if is_torch_coverage_bug and os.environ.get("ALLOW_PYTEST_COLLECTION_SKIP") == "1":
             print(
-                "\nWARNING: pytest collection errors detected (likely environment issue).",
+                "\nWARNING: torch/coverage.py collection conflict detected "
+                "(_has_torch_function docstring collision).",
                 file=sys.stderr,
             )
             print("Skipping branch coverage gate. Run tests manually to verify.", file=sys.stderr)
             return 0
+        if is_torch_coverage_bug:
+            print(
+                "\nERROR: torch/coverage.py collection conflict detected. "
+                "Set ALLOW_PYTEST_COLLECTION_SKIP=1 to skip, or fix the environment.",
+                file=sys.stderr,
+            )
         return run_result.returncode
 
     coverage_by_path = _load_coverage(json_out)
