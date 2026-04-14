@@ -80,15 +80,15 @@ microphone:
   hop_length: 256
 
 speaker:
-  enabled: false
+  enabled: true
   sample_rate: 22050
   channels: 1
   chunk_size: 1024
-  device_name: "USB"
+  device_name: "USB"  # Wonrabai USB Sound Card (shared with microphone)
   format: "float32"
 
 voice:
-  enabled: false
+  enabled: true
   cooldown_s: 5.0
   personality: "rocky"
   tts_sample_rate: 22050

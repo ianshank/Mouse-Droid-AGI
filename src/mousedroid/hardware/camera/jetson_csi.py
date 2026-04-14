@@ -25,7 +25,7 @@ except ImportError:  # pragma: no cover
 
 _cv2: Any
 try:
-    import cv2 as _cv2  # type: ignore[no-redef]
+    import cv2 as _cv2
 except ImportError:  # pragma: no cover
     _cv2 = None
 
