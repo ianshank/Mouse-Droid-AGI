@@ -65,8 +65,8 @@ services:
       - gpio
 
     # --- Health check ---
-    # Polls the telemetry health endpoint; relies on a heartbeat file
-    # written by the watchdog notifier after each successful tick.
+    # Polls the telemetry HTTP health endpoint exposed by the service
+    # at /api/v1/health on the configured telemetry port.
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:${MOUSEDROID_TELEMETRY_PORT:-8080}/api/v1/health"]
       interval: 15s

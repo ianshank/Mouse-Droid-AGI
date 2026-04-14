@@ -525,6 +525,10 @@ class MetricsConfig(BaseModel):
     track_llm_latency: bool = Field(True, description="Expose LLM mission parse latency")
     track_curiosity: bool = Field(True, description="Expose curiosity intrinsic reward gauge")
     track_sensor_recovery: bool = Field(True, description="Expose sensor recovery counter")
+    loop_latency_buckets_ms: list[float] = Field(
+        default_factory=lambda: [1.0, 2.5, 5.0, 10.0, 20.0, 33.0, 50.0, 100.0, 200.0],
+        description="Histogram bucket boundaries (ms) for loop latency metric",
+    )
 
 
 class ModelConfig(BaseModel):

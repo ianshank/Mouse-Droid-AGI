@@ -136,11 +136,13 @@ state on the NVIDIA Jetson Orin Nano. 2505 tests pass; branch-coverage gate ≥ 
 ### Added — Phase 7: Production Telemetry & Metrics
 
 - **New Prometheus metrics** (`src/mousedroid/telemetry/metrics.py`)
-  - `memory_tier_episodic_size`, `memory_tier_semantic_size` — episodic and semantic index sizes
-  - `curiosity_mean_reward` — mean intrinsic curiosity reward per tick
-  - `voice_events_total` — voice event counter labelled by event type
-  - `llm_requests_total`, `llm_latency_seconds` — LLM gateway request counter + latency histogram
-  - `sensor_recovery_attempts_total` — sensor recovery attempt counter
+  - `{ns}_memory_episodic_size`, `{ns}_memory_semantic_size` — episodic and semantic index size gauges
+  - `{ns}_memory_working_size` — working memory context window size gauge
+  - `{ns}_curiosity_intrinsic_reward` — intrinsic curiosity reward gauge per tick
+  - `{ns}_voice_events` — voice event counter labelled by event type
+  - `{ns}_llm_requests`, `{ns}_llm_latency_ms` — LLM gateway request counter + latency gauge (ms)
+  - `{ns}_sensor_recoveries`, `{ns}_sensor_recovery_failures` — sensor recovery counters
+  - All metric names use `{ns}` = `MetricsConfig.namespace` (default: `mousedroid`)
 
 ### Fixed
 

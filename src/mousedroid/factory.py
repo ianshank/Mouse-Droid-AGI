@@ -21,7 +21,6 @@ from mousedroid.hardware.protocols import (
 from mousedroid.llm_gateway.protocol import LLMGatewayProtocol
 from mousedroid.logging.setup import get_logger
 from mousedroid.safety.protocol import SafetyMonitorProtocol
-from mousedroid.telemetry.log_buffer import LogRingBuffer
 from mousedroid.voice.protocol import VoiceEngineProtocol
 from mousedroid.world_model.protocol import WorldModelProtocol
 
@@ -44,6 +43,7 @@ if TYPE_CHECKING:
     from mousedroid.llm_gateway.mission_parser import MissionParserProtocol
     from mousedroid.memory.tier import MemoryTier
     from mousedroid.sensing.manager import SensorManager
+    from mousedroid.telemetry.log_buffer import LogRingBuffer
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
     from mousedroid.voice.mock_tts import MockTTS
     from mousedroid.voice.tts import PiperTTS

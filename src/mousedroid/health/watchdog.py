@@ -66,7 +66,10 @@ class SystemdNotifier:
 
     def __init__(self, *, ready_on_init: bool = True) -> None:
         self._notifier = self._build_notifier()
-        if ready_on_init and self._notifier is not None:
+        if ready_on_init:
+            # Always attempt to send READY=1 so Type=notify services are not
+            # killed by systemd when sdnotify is unavailable.  _send() falls
+            # back to the systemd-notify subprocess if NOTIFY_SOCKET is set.
             self._send("READY=1")
             _log.info("systemd_notifier_ready")
 

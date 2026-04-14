@@ -290,7 +290,7 @@ class SensorManager:
             result = await coro
             return result, True
         except Exception:
-            _log.warning(f"{sensor_name}_read_failed", exc_info=True)
+            _log.warning("sensor_read_failed", sensor=sensor_name, exc_info=True)
             return default, False
 
     async def _safe_vision_read(self) -> tuple[NDArray[np.float32], bool]:

@@ -78,8 +78,8 @@ async def test_esp32_velocity_roundtrip() -> None:
 
     await esp32.connect()
     try:
-        # Send zero velocity (safe)
-        await esp32.send_velocity(0.0, 0.0)
+        # Send zero velocity (safe) — vx, vy, omega
+        await esp32.send_velocity(0.0, 0.0, 0.0)
 
         # Read encoders — should not raise
         encoders = await esp32.read_encoders()

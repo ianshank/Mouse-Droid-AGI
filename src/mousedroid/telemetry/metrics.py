@@ -265,8 +265,9 @@ class MetricsRegistry:
         self._gpu_temp_c = _Gauge()
         self._publish_hz = _Gauge()
 
-        # Histogram (loop latency)
-        self._loop_histogram = _Histogram(_DEFAULT_LATENCY_BUCKETS_MS)
+        # Histogram (loop latency) — bucket boundaries come from config so they
+        # can be tuned per-deployment without code changes.
+        self._loop_histogram = _Histogram(tuple(cfg.loop_latency_buckets_ms))
 
         # Phase 7 metrics — memory, voice, LLM, curiosity, recovery
         self._episodic_size = _Gauge()

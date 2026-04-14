@@ -129,12 +129,19 @@ echo "--- Configuration ---"
 
 if [ -f "$CONFIG_PATH" ]; then
     pass "Config file: $CONFIG_PATH"
-    # Attempt to validate YAML syntax if python is available
-    if command -v python3 >/dev/null 2>&1; then
-        if python3 -c "import yaml; yaml.safe_load(open('$CONFIG_PATH'))" 2>/dev/null; then
-            pass "Config YAML syntax valid"
+    # Attempt to validate YAML syntax if python and PyYAML are available.
+    # Use the venv python if INSTALL_DIR is set, otherwise fall back to system python3.
+    PY="${INSTALL_DIR}/venv/bin/python3"
+    command -v "$PY" >/dev/null 2>&1 || PY="python3"
+    if command -v "$PY" >/dev/null 2>&1; then
+        if "$PY" -c "import yaml" >/dev/null 2>&1; then
+            if "$PY" -c "import yaml; yaml.safe_load(open('$CONFIG_PATH'))" 2>/dev/null; then
+                pass "Config YAML syntax valid"
+            else
+                fail "Config YAML syntax error: $CONFIG_PATH"
+            fi
         else
-            fail "Config YAML syntax error: $CONFIG_PATH"
+            warn "PyYAML not installed; skipping YAML syntax validation"
         fi
     fi
 else

@@ -176,7 +176,7 @@ graph TD
     end
 
     subgraph MemoryTierGroup["Memory Tier\nmemory/tier.py"]
-        MemTier["MemoryTier\nepidosic + semantic + working + consolidation"]
+        MemTier["MemoryTier\nepisodic + semantic + working + consolidation"]
         EpiRep["EpisodicReplay\nFAISS 50k"]
         SemIdx["SemanticIndex\nconcept graph"]
         WorkMem["WorkingMemory\n8192 token window"]
