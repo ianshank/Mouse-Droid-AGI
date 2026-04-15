@@ -80,6 +80,10 @@ mousedroid = "mousedroid.main:cli_entry"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mousedroid", "training"]
+exclude = [
+    "training/data/**",   # Generated training data — never ship in wheel
+    "training/data",
+]
 
 [tool.ruff]
 target-version = "py310"

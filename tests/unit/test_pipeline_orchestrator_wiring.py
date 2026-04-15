@@ -220,6 +220,87 @@ def test_training_config_fields_are_overridable() -> None:
 
 
 # ---------------------------------------------------------------------------
+# End-to-end path consistency — policy init legacy fallback
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_constitutional_rl_uses_configured_policy_init_path(tmp_path: Path) -> None:
+    """_train_constitutional_rl uses the configured mcts_subdir/policy_init_filename path."""
+    from mousedroid.config.schema import TrainingConfig
+
+    training_cfg = TrainingConfig(mcts_subdir="my_mcts", policy_init_filename="my_policy.npz")
+    cfg = Settings(mock_hardware=True, training=training_cfg)
+    orch = _make_orchestrator(settings=cfg)
+
+    # Create the configured path so the resolver picks it up
+    pi_path = tmp_path / cfg.training.weights_dir / "my_mcts" / "my_policy.npz"
+    pi_path.parent.mkdir(parents=True, exist_ok=True)
+    pi_path.write_bytes(b"")
+
+    # Patch training.weights_dir to point at tmp_path
+    from mousedroid.config.schema import TrainingConfig as TC
+
+    cfg2 = Settings(
+        mock_hardware=True,
+        training=TC(
+            weights_dir=str(tmp_path),
+            mcts_subdir="my_mcts",
+            policy_init_filename="my_policy.npz",
+        ),
+    )
+    orch2 = _make_orchestrator(settings=cfg2)
+    pi_file = tmp_path / "my_mcts" / "my_policy.npz"
+    pi_file.parent.mkdir(parents=True, exist_ok=True)
+    pi_file.write_bytes(b"")
+
+    with patch(
+        "mousedroid.training.pipeline_orchestrator.asyncio.to_thread",
+        new_callable=AsyncMock,
+        return_value=tmp_path,
+    ) as mock_to_thread:
+        await orch2._train_constitutional_rl(orch2._settings, 8, orch2._checkpoint_dir)
+
+    # The pi_path passed to run_phase_4_constitutional_rl must match the configured path
+    call_args = mock_to_thread.call_args[0]
+    passed_pi_path = call_args[3]  # positional arg: (fn, updated_cfg, rssm_ckpt, pi_path)
+    assert passed_pi_path == pi_file
+
+
+@pytest.mark.asyncio
+async def test_constitutional_rl_legacy_fallback_warns(tmp_path: Path) -> None:
+    """_train_constitutional_rl falls back to legacy mcts/policy_init.npz with a warning."""
+    import structlog.testing
+
+    from mousedroid.config.schema import TrainingConfig as TC
+
+    # Configure non-default mcts_subdir so configured path != legacy path
+    cfg = Settings(
+        mock_hardware=True,
+        training=TC(weights_dir=str(tmp_path), mcts_subdir="new_mcts"),
+    )
+    orch = _make_orchestrator(settings=cfg)
+
+    # Only the legacy path exists (simulates pre-existing weights dir)
+    legacy = tmp_path / "mcts" / "policy_init.npz"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_bytes(b"")
+
+    with (
+        patch(
+            "mousedroid.training.pipeline_orchestrator.asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=tmp_path,
+        ),
+        structlog.testing.capture_logs() as cap_logs,
+    ):
+        await orch._train_constitutional_rl(orch._settings, 8, orch._checkpoint_dir)
+
+    warning_events = [e for e in cap_logs if e.get("log_level") == "warning"]
+    assert any("policy_init_legacy_path_used" in str(e) for e in warning_events)
+
+
+# ---------------------------------------------------------------------------
 # Protocol conformance
 # ---------------------------------------------------------------------------
 
@@ -305,11 +386,10 @@ async def test_run_resume_skips_completed_phases(tmp_path: Path) -> None:
         resume_from_phase="bdi",
     )
 
-    # Create warmstart checkpoint marker (prev phase before bdi, so validation passes)
-    ckpt_dir = tmp_path / "checkpoints"
-    ckpt_dir.mkdir(parents=True)
-    (ckpt_dir / "warmstart.done").write_text("phase=warmstart\n")
-
+    # No prior checkpoint marker created: the orchestrator skips the prior-phase
+    # validation check for the FIRST phase that runs (idx == start_idx), so bdi
+    # can proceed without warmstart.done. This is intentional — resume picks up
+    # exactly at the specified phase without requiring proof of prior completion.
     gpu_monitor = MagicMock()
     gpu_monitor.should_pause = AsyncMock(return_value=False)
 

@@ -303,7 +303,25 @@ class PipelineOrchestrator:
         tcfg = cfg.training
         rssm_checkpoint = self._get_rssm_checkpoint_path(cfg)
         policy_init_path = Path(tcfg.weights_dir) / tcfg.mcts_subdir / tcfg.policy_init_filename
-        pi_path = policy_init_path if policy_init_path.exists() else None
+
+        # Resolve policy init path with legacy fallback for pre-existing weight dirs.
+        # The configured path (mcts_subdir/policy_init_filename) is checked first.
+        # If missing, fall back to the legacy hardcoded location and emit a warning
+        # so operators know to migrate their weights directory layout.
+        if policy_init_path.exists():
+            pi_path: Path | None = policy_init_path
+        else:
+            legacy_pi_path = Path(tcfg.weights_dir) / "mcts" / "policy_init.npz"
+            if legacy_pi_path.exists() and legacy_pi_path != policy_init_path:
+                logger.warning(
+                    "policy_init_legacy_path_used",
+                    configured_path=str(policy_init_path),
+                    legacy_path=str(legacy_pi_path),
+                    hint="Override mcts_subdir/policy_init_filename or migrate weights",
+                )
+                pi_path = legacy_pi_path
+            else:
+                pi_path = None
 
         updated_cfg = self._get_settings_with_batch(cfg, batch_size)
 

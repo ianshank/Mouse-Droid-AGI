@@ -97,8 +97,15 @@ def run_phase_2_warmstart(cfg: Settings, rssm_checkpoint: Path, data_dir: Path) 
     _log.info("phase_2_start", phase="warmstart_policy")
     from training.warmstart_policy import run_warmstart
 
-    run_warmstart(cfg, rssm_checkpoint, data_dir / cfg.training.sequences_filename)
-    _log.info("phase_2_complete")
+    # Pass explicit output_dir so Phase 4 can find the weights at the configured path.
+    mcts_output_dir = Path(cfg.training.weights_dir) / cfg.training.mcts_subdir
+    run_warmstart(
+        cfg,
+        rssm_checkpoint,
+        data_dir / cfg.training.sequences_filename,
+        output_dir=mcts_output_dir,
+    )
+    _log.info("phase_2_complete", output_dir=str(mcts_output_dir))
 
 
 def run_phase_3_bdi(cfg: Settings, annotations_path: Path) -> Path:
