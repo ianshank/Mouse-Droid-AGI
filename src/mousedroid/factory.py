@@ -275,6 +275,14 @@ def build_world_model(cfg: Settings) -> WorldModelProtocol:
         World model conforming to ``WorldModelProtocol``.
     """
     if cfg.model.cfc_hidden_dim > 0:
+        import importlib.util
+
+        if importlib.util.find_spec("ncps") is None:
+            raise ImportError(
+                "cfc_hidden_dim > 0 requires the 'ncps' package. "
+                "Install it with: pip install 'mousedroid[cfc]' or pip install ncps>=0.0.7"
+            )
+
         from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
 
         _log.info(

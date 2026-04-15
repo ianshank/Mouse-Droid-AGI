@@ -39,7 +39,13 @@ class CfCWrapper(nn.Module):
         super().__init__()
         self._hidden_dim = cfg.cfc_hidden_dim
 
-        from ncps.torch import CfC
+        try:
+            from ncps.torch import CfC
+        except ImportError as exc:
+            raise ImportError(
+                "The 'ncps' package is required to use CfCWrapper. "
+                "Install it with: pip install 'mousedroid[cfc]' or pip install ncps>=0.0.7"
+            ) from exc
 
         self._cell = CfC(
             input_size=input_dim,
