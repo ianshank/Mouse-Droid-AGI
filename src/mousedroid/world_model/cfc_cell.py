@@ -37,6 +37,8 @@ class CfCWrapper(nn.Module):
 
     def __init__(self, input_dim: int, cfg: ModelConfig) -> None:
         super().__init__()
+        if cfg.cfc_hidden_dim <= 0:
+            raise ValueError(f"CfCWrapper requires cfc_hidden_dim > 0, got {cfg.cfc_hidden_dim}")
         self._hidden_dim = cfg.cfc_hidden_dim
 
         try:

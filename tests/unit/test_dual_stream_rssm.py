@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+import pytest
 import torch
+
+pytest.importorskip("ncps")
 
 from mousedroid.config.schema import ModelConfig
 from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM

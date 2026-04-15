@@ -50,6 +50,11 @@ class DualStreamRSSM(nn.Module):
 
     def __init__(self, cfg: ModelConfig) -> None:
         super().__init__()
+        if cfg.cfc_hidden_dim <= 0:
+            raise ValueError(
+                f"DualStreamRSSM requires cfc_hidden_dim > 0, got {cfg.cfc_hidden_dim}. "
+                "Use RSSM instead for pure-GRU mode."
+            )
         self._cfg = cfg
         recurrent_input_dim = cfg.latent_dim + cfg.action_dim
         combined_dim = cfg.hidden_dim + cfg.cfc_hidden_dim
