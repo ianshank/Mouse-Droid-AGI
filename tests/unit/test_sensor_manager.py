@@ -8,6 +8,7 @@ import numpy as np
 
 from mousedroid.comms.protocol import EncoderReading
 from mousedroid.config.schema import Settings
+from mousedroid.constants import DEFAULT_MOTOR_STATE_DIM
 from mousedroid.sensing.manager import SensorManager
 
 
@@ -527,3 +528,34 @@ async def test_recovery_attempt_handles_motor_failure():
     recovered = await mgr.recovery_attempt()
     # Vision + distance recovered, motor failed => 2
     assert recovered == 2
+
+
+async def test_recovery_attempt_motor_read_returns_false():
+    """recovery_attempt logs sensor_recovery_failed when motor read returns ok=False."""
+    from unittest.mock import patch
+
+    cfg = Settings(mock_hardware=True)
+
+    vision = AsyncMock()
+    vision.capture_features = AsyncMock(
+        return_value=np.ones(cfg.camera.feature_dim, dtype=np.float32),
+    )
+    vision.start = AsyncMock()
+    vision.stop = AsyncMock()
+
+    distance = AsyncMock()
+    distance.read_distance_m = AsyncMock(return_value=1.5)
+    distance.max_range_m = 4.0
+
+    esp32 = AsyncMock()
+    esp32.read_encoders = AsyncMock(return_value=EncoderReading())
+    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+
+    mgr = SensorManager(vision, distance, esp32, cfg)
+    # Patch _safe_motor_read to return failure directly (avoids asyncio.gather mock issues)
+    with patch.object(
+        mgr, "_safe_motor_read", new_callable=AsyncMock,
+        return_value=(np.zeros(DEFAULT_MOTOR_STATE_DIM, dtype=np.float32), False),
+    ):
+        recovered = await mgr.recovery_attempt()
+    assert recovered == 2  # vision + distance ok, motor failed

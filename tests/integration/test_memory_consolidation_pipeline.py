@@ -255,7 +255,7 @@ def test_multiple_consolidation_cycles_accumulate() -> None:
         tier.consolidation.consolidate()
         sizes.append(tier.semantic.size)
 
-    # Each cycle should add vectors (since the episodic buffer is sampled with replacement)
+    # Each cycle should add vectors (FAISS index only appends, so size is non-decreasing)
     assert sizes[-1] > 0, "After 5 consolidation cycles, semantic index should be non-empty"
     # Size must be monotonically non-decreasing
     for i in range(1, len(sizes)):

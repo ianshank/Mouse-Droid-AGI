@@ -159,11 +159,8 @@ def test_embedding_matches_vision_features(
 def test_schema_version_mismatch_raises() -> None:
     """Deserializing a record with a wrong schema version must raise ValueError."""
     import msgpack
+    import pytest
 
     bad_data = msgpack.packb({"schema_version": 999, "foo": "bar"})
-    try:
+    with pytest.raises(ValueError, match="[Ss]chema"):
         MouseDroidExperienceRecord.deserialize(bad_data)
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("Expected ValueError for unknown schema version")
