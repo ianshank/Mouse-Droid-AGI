@@ -248,7 +248,7 @@ class DualStreamRSSM(nn.Module):
 
         # Extract audio if the encoder supports it.
         audio: Tensor | None = None
-        if self.encoder._audio_enabled:
+        if self.encoder.audio_enabled:
             audio_data = observation.audio_chunk
             if len(audio_data) > 0:
                 audio = torch.as_tensor(
@@ -259,7 +259,7 @@ class DualStreamRSSM(nn.Module):
 
         # Extract LiDAR features if the encoder supports it.
         lidar: Tensor | None = None
-        if self.encoder._lidar_enabled:
+        if self.encoder.lidar_enabled:
             lidar_data = observation.lidar_features
             if lidar_data is not None and len(lidar_data) > 0:
                 lidar = torch.as_tensor(

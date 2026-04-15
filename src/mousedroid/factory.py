@@ -270,8 +270,12 @@ def build_world_model(cfg: Settings) -> WorldModelProtocol:
     """Build world model for configured platform.
 
     Selects :class:`~mousedroid.world_model.dual_stream_rssm.DualStreamRSSM`
-    when ``cfc_hidden_dim > 0``, otherwise falls back to the classic
-    :class:`~mousedroid.world_model.rssm.RSSM`.
+    when ``cfc_hidden_dim > 0`` (requires ``ncps`` package), otherwise
+    returns the classic :class:`~mousedroid.world_model.rssm.RSSM`.
+
+    Raises:
+        ImportError: If ``cfc_hidden_dim > 0`` but the ``ncps`` package
+            is not installed.
 
     Args:
         cfg: Root settings.
