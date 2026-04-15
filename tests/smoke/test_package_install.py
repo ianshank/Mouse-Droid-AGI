@@ -47,9 +47,9 @@ def test_version_matches_metadata() -> None:
     import mousedroid
 
     metadata_version = importlib.metadata.version("mousedroid")
-    assert (
-        mousedroid.__version__ == metadata_version
-    ), f"__version__ ({mousedroid.__version__}) != metadata ({metadata_version})"
+    assert mousedroid.__version__ == metadata_version, (
+        f"__version__ ({mousedroid.__version__}) != metadata ({metadata_version})"
+    )
 
 
 @pytest.mark.smoke

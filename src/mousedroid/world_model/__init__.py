@@ -1,5 +1,7 @@
 """World model — RSSM, dual-stream RSSM, encoder, and MCTS planner."""
 
+import importlib.util
+
 from mousedroid.world_model.encoder import MultimodalEncoder
 from mousedroid.world_model.mcts import MCTSPlanner
 from mousedroid.world_model.protocol import SafetyTraceProtocol, WorldModelProtocol
@@ -15,10 +17,11 @@ __all__ = [
     "WorldModelProtocol",
 ]
 
-try:
+# CfC classes are only exported when the ncps package is available.
+# The lazy import inside CfCWrapper means a bare `from ... import CfCWrapper`
+# would succeed even without ncps; checking here ensures the guard is reliable.
+if importlib.util.find_spec("ncps") is not None:
     from mousedroid.world_model.cfc_cell import CfCWrapper
     from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
 
     __all__ += ["CfCWrapper", "DualStreamRSSM"]
-except ImportError:  # pragma: no cover
-    pass  # ncps not installed; CfC features unavailable

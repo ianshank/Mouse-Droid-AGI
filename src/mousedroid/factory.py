@@ -270,8 +270,12 @@ def build_world_model(cfg: Settings) -> WorldModelProtocol:
     """Build world model for configured platform.
 
     Selects :class:`~mousedroid.world_model.dual_stream_rssm.DualStreamRSSM`
-    when ``cfc_hidden_dim > 0``, otherwise falls back to the classic
-    :class:`~mousedroid.world_model.rssm.RSSM`.
+    when ``cfc_hidden_dim > 0`` (requires ``ncps`` package), otherwise
+    returns the classic :class:`~mousedroid.world_model.rssm.RSSM`.
+
+    Raises:
+        ImportError: If ``cfc_hidden_dim > 0`` but the ``ncps`` package
+            is not installed.
 
     Args:
         cfg: Root settings.
@@ -280,21 +284,22 @@ def build_world_model(cfg: Settings) -> WorldModelProtocol:
         World model conforming to ``WorldModelProtocol``.
     """
     if cfg.model.cfc_hidden_dim > 0:
-        try:
-            from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
-        except ImportError:
-            _log.warning(
-                "dual_stream_unavailable_falling_back_to_rssm",
-                reason="ncps package not installed (pip install ncps)",
-                requested_cfc_dim=cfg.model.cfc_hidden_dim,
+        import importlib.util
+
+        if importlib.util.find_spec("ncps") is None:
+            raise ImportError(
+                "cfc_hidden_dim > 0 requires the 'ncps' package. "
+                "Install it with: pip install 'mousedroid[cfc]' or pip install ncps>=0.0.7"
             )
-        else:
-            _log.info(
-                "world_model_dual_stream",
-                gru_dim=cfg.model.hidden_dim,
-                cfc_dim=cfg.model.cfc_hidden_dim,
-            )
-            return DualStreamRSSM(cfg.model)
+
+        from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
+
+        _log.info(
+            "world_model_dual_stream",
+            gru_dim=cfg.model.hidden_dim,
+            cfc_dim=cfg.model.cfc_hidden_dim,
+        )
+        return DualStreamRSSM(cfg.model)
 
     from mousedroid.world_model.rssm import RSSM
 
@@ -937,6 +942,8 @@ def build_orchestrator(cfg: Settings) -> object:
     if telemetry_cfg is not None:
         buffer_size = getattr(telemetry_cfg, "log_stream_buffer", 0)
         if buffer_size:
+            from mousedroid.telemetry.log_buffer import LogRingBuffer
+
             log_buffer = LogRingBuffer(buffer_size)
 
     telemetry_server = build_telemetry_server(

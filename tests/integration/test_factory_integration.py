@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import importlib.util
+
+import pytest
+
 from mousedroid.agents.navigation import MouseDroidNavigationAgent
 from mousedroid.comms.mock_driver import MockESP32Driver
 from mousedroid.config.schema import Settings
@@ -15,9 +19,11 @@ from mousedroid.factory import (
 from mousedroid.hardware.camera.mock_camera import MockCamera
 from mousedroid.hardware.sensors.mock_ultrasonic import MockUltrasonic
 from mousedroid.safety.monitor import MouseDroidSafetyMonitor
-from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
 from mousedroid.world_model.protocol import SafetyTraceProtocol, WorldModelProtocol
 from mousedroid.world_model.rssm import RSSM
+
+_ncps_available = importlib.util.find_spec("ncps") is not None
+_skip_no_ncps = pytest.mark.skipif(not _ncps_available, reason="ncps not installed")
 
 
 def _mock_settings() -> Settings:
@@ -95,8 +101,11 @@ def test_build_camera_mock_has_feature_dim() -> None:
 # ---------------------------------------------------------------------------
 
 
+@_skip_no_ncps
 def test_build_world_model_returns_dual_stream_when_cfc_enabled() -> None:
     """Factory builds DualStreamRSSM when cfc_hidden_dim > 0."""
+    from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
+
     cfg = Settings(mock_hardware=True)
     cfg.model.cfc_hidden_dim = 16
     wm = build_world_model(cfg)
@@ -111,6 +120,7 @@ def test_build_world_model_returns_classic_rssm_when_cfc_zero() -> None:
     assert isinstance(wm, RSSM)
 
 
+@_skip_no_ncps
 def test_dual_stream_world_model_conforms_to_protocol() -> None:
     """DualStreamRSSM satisfies WorldModelProtocol."""
     cfg = Settings(mock_hardware=True)
@@ -119,6 +129,7 @@ def test_dual_stream_world_model_conforms_to_protocol() -> None:
     assert isinstance(wm, WorldModelProtocol)
 
 
+@_skip_no_ncps
 def test_dual_stream_world_model_has_safety_trace() -> None:
     """DualStreamRSSM satisfies SafetyTraceProtocol."""
     cfg = Settings(mock_hardware=True)

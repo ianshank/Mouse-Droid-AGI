@@ -231,7 +231,10 @@ def _make_manager_with_audio_extractor():
     extractor.extract = lambda audio: np.ones(64, dtype=np.float32)
 
     mgr = SensorManager(
-        vision, distance, esp32, cfg,
+        vision,
+        distance,
+        esp32,
+        cfg,
         microphone=mic,
         audio_feature_extractor=extractor,
     )
@@ -294,7 +297,10 @@ def _make_manager_with_lidar_extractor():
     extractor.extract = lambda scan: np.ones(lidar_cfg.feature_dim, dtype=np.float32)
 
     mgr = SensorManager(
-        vision, distance, esp32, cfg,
+        vision,
+        distance,
+        esp32,
+        cfg,
         lidar=lidar,
         lidar_feature_extractor=extractor,
     )
@@ -363,7 +369,10 @@ async def test_recovery_attempt_with_all_sensors():
     extractor.feature_dim = lidar_cfg.feature_dim
 
     mgr = SensorManager(
-        vision, distance, esp32, cfg,
+        vision,
+        distance,
+        esp32,
+        cfg,
         microphone=mic,
         lidar=lidar,
         lidar_feature_extractor=extractor,
@@ -434,7 +443,10 @@ async def test_recovery_attempt_handles_lidar_failure():
     lidar.stop = AsyncMock()
 
     mgr = SensorManager(
-        vision, distance, esp32, cfg,
+        vision,
+        distance,
+        esp32,
+        cfg,
         lidar=lidar,
     )
     recovered = await mgr.recovery_attempt()

@@ -90,13 +90,5 @@ class StreamFusion(nn.Module):
         return h_combined[..., self._gru_dim :]
 
     def forward(self, h_slow: Tensor, h_fast: Tensor) -> Tensor:
-        """Forward pass — alias for :meth:`fuse`.
-
-        Args:
-            h_slow: GRU hidden state, shape ``(batch, gru_dim)``.
-            h_fast: CfC hidden state, shape ``(batch, cfc_dim)``.
-
-        Returns:
-            Combined hidden state, shape ``(batch, combined_dim)``.
-        """
+        """Forward pass — delegates to :meth:`fuse`."""
         return self.fuse(h_slow, h_fast)

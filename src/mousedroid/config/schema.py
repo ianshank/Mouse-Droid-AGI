@@ -564,7 +564,7 @@ class ModelConfig(BaseModel):
         0.5,
         ge=0.0,
         le=1.0,
-        description="AutoNCP wiring sparsity (reserved — not yet wired into CfC construction)",
+        description="Reserved for future AutoNCP/CfC wiring sparsity support; currently unused",
     )
 
 
@@ -1346,7 +1346,11 @@ class Settings(BaseSettings):
     telemetry: TelemetryConfig = Field(default_factory=_settings_default_factory(TelemetryConfig))
     three_laws: ThreeLawsConfig = Field(default_factory=_settings_default_factory(ThreeLawsConfig))
     dual_stream_training: DualStreamTrainingConfig = Field(
-        default_factory=_settings_default_factory(DualStreamTrainingConfig)
+        default_factory=_settings_default_factory(DualStreamTrainingConfig),
+        description=(
+            "Dual-stream RSSM training hyper-parameters (reserved; consumed by the "
+            "training pipeline when cfc_hidden_dim > 0)"
+        ),
     )
 
     training_pipeline: TrainingPipelineConfig | None = Field(
