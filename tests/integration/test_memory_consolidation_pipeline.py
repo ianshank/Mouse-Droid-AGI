@@ -12,13 +12,13 @@ import pytest
 
 faiss = pytest.importorskip("faiss")  # skip entire module if FAISS unavailable
 
-from mousedroid.config.schema import MemoryConfig  # noqa: E402
-from mousedroid.experience.record import MouseDroidExperienceRecord  # noqa: E402
-from mousedroid.memory.consolidation import MemoryConsolidation  # noqa: E402
-from mousedroid.memory.episodic import EpisodicReplay  # noqa: E402
-from mousedroid.memory.semantic import SemanticIndex  # noqa: E402
-from mousedroid.memory.tier import MemoryTier  # noqa: E402
-from mousedroid.memory.working import WorkingMemory  # noqa: E402
+from mousedroid.config.schema import MemoryConfig
+from mousedroid.experience.record import MouseDroidExperienceRecord
+from mousedroid.memory.consolidation import MemoryConsolidation
+from mousedroid.memory.episodic import EpisodicReplay
+from mousedroid.memory.semantic import SemanticIndex
+from mousedroid.memory.tier import MemoryTier
+from mousedroid.memory.working import WorkingMemory
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -78,7 +78,7 @@ def _generate_cluster_data(
     # Generate orthogonal-ish centroid directions by sampling and normalising.
     # Use large separation so inner-products between different centroids are tiny.
     centroids: list[np.ndarray] = []
-    for c in range(N_CLUSTERS):
+    for _c in range(N_CLUSTERS):
         # Each centroid lives in its own quadrant of the space by seeding
         # a dedicated RNG stream per cluster.
         centroid_raw = rng.standard_normal(FEATURE_DIM).astype(np.float64)
@@ -87,7 +87,7 @@ def _generate_cluster_data(
         centroids.append(centroid_raw.astype(np.float32))
 
     episodes: list[np.ndarray] = []
-    for c_idx, centroid in enumerate(centroids):
+    for _c_idx, centroid in enumerate(centroids):
         for _ in range(EPISODES_PER_CLUSTER):
             noise = rng.standard_normal(FEATURE_DIM).astype(np.float32) * NOISE_SCALE
             vec = (centroid + noise).astype(np.float32)
