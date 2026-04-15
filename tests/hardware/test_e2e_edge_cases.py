@@ -149,9 +149,9 @@ async def test_tick_count_monotonic(orchestrator) -> None:
         counts.append(orchestrator._tick_count)
 
     for i in range(1, len(counts)):
-        assert (
-            counts[i] == counts[i - 1] + 1
-        ), f"Tick count not monotonic: {counts[i - 1]} → {counts[i]}"
+        assert counts[i] == counts[i - 1] + 1, (
+            f"Tick count not monotonic: {counts[i - 1]} → {counts[i]}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +248,5 @@ async def test_minimum_tick_throughput(orchestrator, settings) -> None:
     achieved_hz = n_ticks / elapsed_s if elapsed_s > 0 else 0.0
 
     assert achieved_hz >= min_hz, (
-        f"Throughput {achieved_hz:.1f}Hz below minimum {min_hz:.1f}Hz "
-        f"(target={target_hz:.1f}Hz)"
+        f"Throughput {achieved_hz:.1f}Hz below minimum {min_hz:.1f}Hz (target={target_hz:.1f}Hz)"
     )

@@ -944,6 +944,8 @@ def build_orchestrator(cfg: Settings) -> object:
     if telemetry_cfg is not None:
         buffer_size = getattr(telemetry_cfg, "log_stream_buffer", 0)
         if buffer_size:
+            from mousedroid.telemetry.log_buffer import LogRingBuffer
+
             log_buffer = LogRingBuffer(buffer_size)
 
     telemetry_server = build_telemetry_server(

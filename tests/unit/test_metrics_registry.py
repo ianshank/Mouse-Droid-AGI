@@ -68,7 +68,7 @@ def test_labeled_counter_reset() -> None:
 
 def test_histogram_observe_and_snapshot() -> None:
     h = _Histogram((10.0, 50.0, 100.0, float("inf")))
-    h.observe(5.0)   # bucket 10
+    h.observe(5.0)  # bucket 10
     h.observe(15.0)  # bucket 50
     h.observe(75.0)  # bucket 100
     h.observe(200.0)  # bucket inf
