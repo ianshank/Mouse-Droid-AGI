@@ -19,6 +19,7 @@ _configured: bool = False
 def configure_logging(
     cfg: LoggingConfig,
     log_buffer: Any | None = None,
+    cloud_logging_sink: Any | None = None,
 ) -> None:
     """Configure structlog for the given logging config.
 
@@ -27,6 +28,9 @@ def configure_logging(
         log_buffer: Optional ``LogRingBuffer`` processor to insert into
             the chain for telemetry log streaming. Inserted before the
             renderer so it captures structured event dicts.
+        cloud_logging_sink: Optional ``CloudLoggingSink`` processor to
+            forward log events to Google Cloud Logging. Inserted after
+            the log buffer and before the renderer.
     """
     global _configured
 
@@ -41,6 +45,9 @@ def configure_logging(
 
     if log_buffer is not None:
         processors.append(log_buffer)
+
+    if cloud_logging_sink is not None:
+        processors.append(cloud_logging_sink)
 
     if cfg.format == "console":
         processors.append(structlog.dev.ConsoleRenderer())

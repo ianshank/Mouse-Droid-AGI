@@ -876,6 +876,234 @@ class ThreeLawsConfig(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# GCP Digital Twin config models
+# ---------------------------------------------------------------------------
+
+
+class GCPPubSubConfig(BaseModel):
+    """Google Cloud Pub/Sub configuration for telemetry and experience export."""
+
+    telemetry_topic: str = Field(
+        "mousedroid-telemetry",
+        description="Pub/Sub topic for telemetry frames",
+    )
+    experience_topic: str = Field(
+        "mousedroid-experience",
+        description="Pub/Sub topic for experience records",
+    )
+    batch_max_messages: int = Field(
+        100,
+        gt=0,
+        description="Max messages per Pub/Sub publish batch",
+    )
+    batch_max_bytes: int = Field(
+        1_048_576,
+        gt=0,
+        description="Max bytes per publish batch (default 1 MB)",
+    )
+    batch_max_latency_s: float = Field(
+        1.0,
+        gt=0,
+        description="Max batch latency before flush (s)",
+    )
+    ordering_key: str = Field(
+        "mousedroid-0",
+        description="Message ordering key for ordered delivery",
+    )
+
+
+class GCPStorageConfig(BaseModel):
+    """Google Cloud Storage configuration for experience archival."""
+
+    bucket: str = Field(
+        "mousedroid-experience",
+        description="GCS bucket name for experience shards",
+    )
+    prefix: str = Field(
+        "experience/v1",
+        description="Object key prefix for experience data",
+    )
+    upload_batch_size: int = Field(
+        1000,
+        gt=0,
+        description="Number of experience records per GCS shard file",
+    )
+    upload_interval_s: float = Field(
+        300.0,
+        gt=0,
+        description="Seconds between GCS shard uploads",
+    )
+    compression: Literal["none", "gzip", "zstd"] = Field(
+        "gzip",
+        description="Shard file compression algorithm",
+    )
+
+
+class GCPLoggingConfig(BaseModel):
+    """Google Cloud Logging sink configuration."""
+
+    enabled: bool = Field(True, description="Forward structlog events to Cloud Logging")
+    log_name: str = Field("mousedroid", description="Cloud Logging log name")
+    min_level: str = Field("INFO", description="Minimum log level to forward to cloud")
+
+
+class GCPMonitoringConfig(BaseModel):
+    """Google Cloud Monitoring configuration for metrics export."""
+
+    enabled: bool = Field(True, description="Export metrics to Cloud Monitoring")
+    export_interval_s: float = Field(
+        60.0,
+        gt=0,
+        description="Seconds between metric export batches",
+    )
+    metric_prefix: str = Field(
+        "custom.googleapis.com/mousedroid",
+        description="Cloud Monitoring custom metric type prefix",
+    )
+
+
+class GCPFirestoreConfig(BaseModel):
+    """Firestore configuration for episodic memory synchronisation."""
+
+    enabled: bool = Field(False, description="Sync episodic memory to Firestore")
+    collection: str = Field(
+        "mousedroid_episodes",
+        description="Firestore collection for episode documents",
+    )
+    sync_interval_s: float = Field(
+        120.0,
+        gt=0,
+        description="Seconds between episodic memory sync batches",
+    )
+
+
+class GCPTrainingConfig(BaseModel):
+    """Vertex AI cloud training pipeline configuration."""
+
+    training_bucket: str = Field(
+        "mousedroid-training",
+        description="GCS bucket for training datasets and checkpoints",
+    )
+    pipeline_region: str = Field(
+        "us-central1",
+        description="Vertex AI pipeline region",
+    )
+    machine_type: str = Field(
+        "a2-highgpu-1g",
+        description="Training VM machine type (A100 GPU)",
+    )
+    accelerator_type: str = Field(
+        "NVIDIA_TESLA_A100",
+        description="GPU accelerator type for training",
+    )
+    accelerator_count: int = Field(1, gt=0, description="Number of GPUs per training job")
+    max_run_hours: float = Field(
+        4.0,
+        gt=0,
+        description="Maximum pipeline runtime in hours",
+    )
+    schedule_cron: str = Field(
+        "0 2 * * *",
+        description="Cloud Scheduler cron expression (UTC) for nightly retraining",
+    )
+    huggingface_repo: str = Field(
+        "ianshank/mousedroid-weights",
+        pattern=r"^[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$",
+        description="HuggingFace Hub repo for weight push after training",
+    )
+    ewc_enabled: bool = Field(
+        True,
+        description="Enable EWC Fisher matrix update step in pipeline",
+    )
+
+
+class GCPSimulationConfig(BaseModel):
+    """GKE parallel simulation configuration for safety validation."""
+
+    gke_cluster: str = Field(
+        "mousedroid-sim",
+        description="GKE Autopilot cluster name for sim pods",
+    )
+    region: str = Field("us-central1", description="GKE cluster region")
+    max_parallel_pods: int = Field(
+        50,
+        gt=0,
+        description="Maximum concurrent simulation pods",
+    )
+    sim_ticks_per_scenario: int = Field(
+        300,
+        gt=0,
+        description="Orchestrator ticks per scenario (300 = 10 s at 30 Hz)",
+    )
+    results_bucket: str = Field(
+        "mousedroid-sim-results",
+        description="GCS bucket for simulation campaign results",
+    )
+    image: str = Field(
+        "gcr.io/mousedroid-twin/mousedroid:sim",
+        description="Container image for simulation pods",
+    )
+
+
+class GCPConfig(BaseModel):
+    """GCP Digital Twin umbrella configuration.
+
+    When ``None`` in ``Settings``, all GCP features are disabled and the droid
+    operates in fully autonomous offline mode with zero cloud dependency.
+    """
+
+    project_id: str = Field(..., description="GCP project ID (required)")
+    credentials_path: Path | None = Field(
+        None,
+        description="Service account key path (None = use ADC / metadata server)",
+    )
+    robot_id: str = Field(
+        "droid-001",
+        description="Unique identifier for this robot instance",
+    )
+    pubsub: GCPPubSubConfig = Field(
+        default_factory=_settings_default_factory(GCPPubSubConfig),
+    )
+    storage: GCPStorageConfig = Field(
+        default_factory=_settings_default_factory(GCPStorageConfig),
+    )
+    logging: GCPLoggingConfig = Field(
+        default_factory=_settings_default_factory(GCPLoggingConfig),
+    )
+    monitoring: GCPMonitoringConfig = Field(
+        default_factory=_settings_default_factory(GCPMonitoringConfig),
+    )
+    firestore: GCPFirestoreConfig = Field(
+        default_factory=_settings_default_factory(GCPFirestoreConfig),
+    )
+    training: GCPTrainingConfig | None = Field(
+        None,
+        description="Cloud training pipeline config (None = no cloud training)",
+    )
+    simulation: GCPSimulationConfig | None = Field(
+        None,
+        description="GKE simulation config (None = no cloud simulation)",
+    )
+    circuit_breaker: CircuitBreakerConfig = Field(
+        default_factory=lambda: CircuitBreakerConfig(
+            failure_threshold=3,
+            recovery_timeout_s=60.0,
+            half_open_max_calls=1,
+        ),
+        description="Circuit breaker for cloud API calls (tuned for higher latency)",
+    )
+    retry: RetryConfig = Field(
+        default_factory=lambda: RetryConfig(
+            max_attempts=3,
+            base_delay_s=2.0,
+            max_delay_s=60.0,
+            exponential_base=2.0,
+        ),
+        description="Retry config for cloud API calls",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Robot Arm platform config models
 # ---------------------------------------------------------------------------
 
@@ -1358,6 +1586,12 @@ class Settings(BaseSettings):
     hailo: HailoConfig | None = Field(
         None,
         description="Hailo-8 neural accelerator config (None=disabled)",
+    )
+
+    # GCP Digital Twin config (optional — all cloud features disabled when None)
+    gcp: GCPConfig | None = Field(
+        None,
+        description="GCP Digital Twin config (None=fully offline autonomous mode)",
     )
 
     # Robot arm platform configs (optional — only used when platform=robot_arm)
