@@ -196,6 +196,8 @@ class SensorManager:
                 if ok:
                     recovered += 1
                     _log.info("sensor_recovered", sensor="audio")
+                else:
+                    _log.warning("sensor_recovery_failed", sensor="audio")
             except Exception:
                 _log.warning("sensor_recovery_failed", sensor="audio", exc_info=True)
 
@@ -207,6 +209,8 @@ class SensorManager:
                 if ok:
                     recovered += 1
                     _log.info("sensor_recovered", sensor="lidar")
+                else:
+                    _log.warning("sensor_recovery_failed", sensor="lidar")
             except Exception:
                 _log.warning("sensor_recovery_failed", sensor="lidar", exc_info=True)
 

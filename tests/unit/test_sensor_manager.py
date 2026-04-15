@@ -656,3 +656,64 @@ async def test_recovery_attempt_motor_except_branch() -> None:
         recovered = await mgr.recovery_attempt()
     # Motor raised → not counted; vision + distance succeed → 2
     assert recovered == 2
+
+
+async def test_recovery_attempt_audio_read_returns_false() -> None:
+    """recovery_attempt logs sensor_recovery_failed when audio read returns ok=False."""
+    from unittest.mock import patch
+
+    mgr, mic = _make_manager_with_mic()
+    mic.start = AsyncMock()
+    mic.stop = AsyncMock()
+    # Patch _safe_audio_read to return ok=False (stop/start succeed, but probe fails)
+    with patch.object(
+        mgr,
+        "_safe_audio_read",
+        new_callable=AsyncMock,
+        return_value=(np.zeros(mgr._audio_chunk_size, dtype=np.float32), False),
+    ):
+        recovered = await mgr.recovery_attempt()
+    # Vision + distance + motor succeed; audio read failed → not counted → 3
+    assert recovered == 3
+
+
+async def test_recovery_attempt_lidar_read_returns_false() -> None:
+    """recovery_attempt logs sensor_recovery_failed when lidar read returns ok=False."""
+    from unittest.mock import patch
+
+    from mousedroid.config.schema import LidarConfig
+
+    lidar_cfg = LidarConfig()
+    cfg = Settings(mock_hardware=True, lidar=lidar_cfg)
+
+    vision = AsyncMock()
+    vision.capture_features = AsyncMock(
+        return_value=np.ones(cfg.camera.feature_dim, dtype=np.float32),
+    )
+    vision.start = AsyncMock()
+    vision.stop = AsyncMock()
+
+    distance = AsyncMock()
+    distance.read_distance_m = AsyncMock(return_value=1.5)
+    distance.max_range_m = 4.0
+
+    esp32 = AsyncMock()
+    esp32.read_encoders = AsyncMock(return_value=EncoderReading())
+    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+
+    lidar = AsyncMock()
+    lidar.start = AsyncMock()
+    lidar.stop = AsyncMock()
+    lidar.read_scan = AsyncMock(return_value=[])
+
+    mgr = SensorManager(vision, distance, esp32, cfg, lidar=lidar)
+    # Patch _safe_lidar_read to return ok=False (stop/start succeed, but probe fails)
+    with patch.object(
+        mgr,
+        "_safe_lidar_read",
+        new_callable=AsyncMock,
+        return_value=(None, False),
+    ):
+        recovered = await mgr.recovery_attempt()
+    # Vision + distance + motor succeed; lidar read failed → not counted → 3
+    assert recovered == 3
