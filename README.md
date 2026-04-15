@@ -173,6 +173,31 @@ curl http://127.0.0.1:8080/metrics
 
 `/metrics` names are derived from `cfg.metrics.namespace`, so metric naming is fully config-driven.
 
+### Monitoring Stack
+
+Bring up the bundled Prometheus, Grafana, Loki, Promtail, and node-exporter stack:
+
+```bash
+docker compose -f docker-compose.monitoring.yml up -d
+```
+
+The monitoring compose file assumes MouseDroid is already running on the host via
+`docker-compose.jetson.yml`, and Prometheus scrapes the host-published telemetry
+endpoint through Docker's `host.docker.internal` gateway alias.
+
+Default endpoints:
+
+```bash
+# Prometheus
+http://127.0.0.1:9090
+
+# Grafana (default login: admin / mousedroid)
+http://127.0.0.1:3000
+
+# Loki API
+http://127.0.0.1:3100
+```
+
 ### Run with Custom Config
 
 ```bash
