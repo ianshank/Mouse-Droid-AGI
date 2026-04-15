@@ -1175,7 +1175,7 @@ class TrainingPipelineConfig(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _validate_checkpoint_marker_suffix(self) -> TrainingPipelineConfig:
+    def _validate_checkpoint_marker_suffix(self) -> Self:
         """Reject suffixes that could cause path traversal in checkpoint filenames."""
         suffix = self.checkpoint_marker_suffix
         if not suffix:
@@ -1220,6 +1220,11 @@ class TrainingConfig(BaseModel):
     policy_init_filename: str = Field(
         "policy_init.npz",
         description="Policy initialisation filename within mcts_subdir",
+    )
+    bdi_subdir: str = Field("bdi", description="Subdirectory for BDI training output weights")
+    sequences_filename: str = Field(
+        "sequences.pt",
+        description="Generated sequences data filename within data_dir",
     )
     gpu: GPUConfig = Field(
         default_factory=lambda: GPUConfig(

@@ -16,7 +16,7 @@ CLI usage::
 from __future__ import annotations
 
 import asyncio
-import sys
+from collections.abc import Callable, Coroutine
 from pathlib import Path
 from typing import Any
 
@@ -175,7 +175,9 @@ class PipelineOrchestrator:
         tcfg = cfg.training
         return Path(tcfg.weights_dir) / tcfg.rssm_subdir / tcfg.rssm_checkpoint_filename
 
-    def _get_phase_runner(self, phase: str) -> Any:
+    def _get_phase_runner(
+        self, phase: str
+    ) -> Callable[[Settings, int, Path], Coroutine[Any, Any, None]]:
         """Resolve phase name to its async runner function.
 
         Args:
@@ -184,7 +186,7 @@ class PipelineOrchestrator:
         Returns:
             Async callable accepting (cfg, batch_size, checkpoint_dir).
         """
-        runners: dict[str, Any] = {
+        runners: dict[str, Callable[[Settings, int, Path], Coroutine[Any, Any, None]]] = {
             "rssm": self._train_rssm,
             "warmstart": self._train_warmstart,
             "bdi": self._train_bdi,
@@ -226,9 +228,7 @@ class PipelineOrchestrator:
         )
         logger.info("rssm_training_complete", checkpoint=str(checkpoint))
 
-    async def _train_warmstart(
-        self, cfg: Settings, batch_size: int, checkpoint_dir: Path
-    ) -> None:
+    async def _train_warmstart(self, cfg: Settings, batch_size: int, checkpoint_dir: Path) -> None:
         """Run warm-start policy tuning phase.
 
         Delegates to ``training.run_pipeline.run_phase_2_warmstart`` via
@@ -302,9 +302,7 @@ class PipelineOrchestrator:
 
         tcfg = cfg.training
         rssm_checkpoint = self._get_rssm_checkpoint_path(cfg)
-        policy_init_path = (
-            Path(tcfg.weights_dir) / tcfg.mcts_subdir / tcfg.policy_init_filename
-        )
+        policy_init_path = Path(tcfg.weights_dir) / tcfg.mcts_subdir / tcfg.policy_init_filename
         pi_path = policy_init_path if policy_init_path.exists() else None
 
         updated_cfg = self._get_settings_with_batch(cfg, batch_size)
@@ -424,4 +422,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-    sys.exit(0)

@@ -400,6 +400,9 @@ async def test_async_main_runs_pipeline(tmp_path: Path) -> None:
     mock_monitor = AsyncMock()
     mock_monitor.should_pause = AsyncMock(return_value=False)
 
+    mock_batch_tuner = MagicMock()
+    mock_batch_tuner.tune_batch_size = MagicMock(side_effect=lambda p, b: b)
+
     with (
         patch(
             "mousedroid.training.pipeline_orchestrator.asyncio.to_thread",
@@ -409,6 +412,10 @@ async def test_async_main_runs_pipeline(tmp_path: Path) -> None:
         patch(
             "mousedroid.training.pipeline_orchestrator.JetsonGPUMonitor",
             return_value=mock_monitor,
+        ),
+        patch(
+            "mousedroid.training.pipeline_orchestrator.VRAMBatchTuner",
+            return_value=mock_batch_tuner,
         ),
     ):
         await async_main(str(yaml_path), resume=False)
@@ -437,6 +444,9 @@ async def test_async_main_resume_auto_detects(tmp_path: Path) -> None:
     mock_monitor = AsyncMock()
     mock_monitor.should_pause = AsyncMock(return_value=False)
 
+    mock_batch_tuner = MagicMock()
+    mock_batch_tuner.tune_batch_size = MagicMock(side_effect=lambda p, b: b)
+
     with (
         patch(
             "mousedroid.training.pipeline_orchestrator.asyncio.to_thread",
@@ -446,6 +456,10 @@ async def test_async_main_resume_auto_detects(tmp_path: Path) -> None:
         patch(
             "mousedroid.training.pipeline_orchestrator.JetsonGPUMonitor",
             return_value=mock_monitor,
+        ),
+        patch(
+            "mousedroid.training.pipeline_orchestrator.VRAMBatchTuner",
+            return_value=mock_batch_tuner,
         ),
     ):
         await async_main(str(yaml_path), resume=True)

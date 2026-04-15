@@ -196,6 +196,30 @@ def test_build_training_pipeline_default_config() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Config field defaults — no hardcoded values
+# ---------------------------------------------------------------------------
+
+
+def test_training_config_new_fields_have_defaults() -> None:
+    """sequences_filename and bdi_subdir have backwards-compatible defaults."""
+    from mousedroid.config.schema import Settings
+
+    cfg = Settings(mock_hardware=True)
+    assert cfg.training.sequences_filename == "sequences.pt"
+    assert cfg.training.bdi_subdir == "bdi"
+
+
+def test_training_config_fields_are_overridable() -> None:
+    """sequences_filename and bdi_subdir can be overridden via config."""
+    from mousedroid.config.schema import Settings, TrainingConfig
+
+    training_cfg = TrainingConfig(sequences_filename="custom.pt", bdi_subdir="custom_bdi")
+    cfg = Settings(mock_hardware=True, training=training_cfg)
+    assert cfg.training.sequences_filename == "custom.pt"
+    assert cfg.training.bdi_subdir == "custom_bdi"
+
+
+# ---------------------------------------------------------------------------
 # Protocol conformance
 # ---------------------------------------------------------------------------
 
