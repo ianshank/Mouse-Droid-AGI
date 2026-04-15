@@ -28,6 +28,7 @@ from mousedroid.logging.setup import get_logger
 from mousedroid.sensing.protocol import ObservationProtocol
 from mousedroid.world_model.cfc_cell import CfCWrapper
 from mousedroid.world_model.encoder import MultimodalEncoder
+from mousedroid.world_model.latent_utils import kl_divergence, sample_gaussian
 from mousedroid.world_model.stream_fusion import StreamFusion
 
 _log = get_logger(__name__)
@@ -98,19 +99,8 @@ class DualStreamRSSM(nn.Module):
     # ------------------------------------------------------------------
 
     def _sample_gaussian(self, params: Tensor) -> tuple[Tensor, Tensor, Tensor]:
-        """Split params into mean/logvar and sample via reparameterization.
-
-        Args:
-            params: Concatenated ``[mean, logvar]``, shape ``(batch, latent*2)``.
-
-        Returns:
-            Tuple of ``(sample, mean, logvar)``.
-        """
-        mean, logvar = params.chunk(2, dim=-1)
-        std = torch.exp(logvar * 0.5)
-        eps = torch.randn_like(std)
-        sample = mean + std * eps
-        return sample, mean, logvar
+        """Split params into mean/logvar and sample via reparameterization."""
+        return sample_gaussian(params)
 
     @staticmethod
     def _kl_divergence(
@@ -119,24 +109,8 @@ class DualStreamRSSM(nn.Module):
         prior_mean: Tensor,
         prior_logvar: Tensor,
     ) -> Tensor:
-        """Analytic KL(posterior || prior) for diagonal Gaussians.
-
-        Args:
-            post_mean: Posterior mean.
-            post_logvar: Posterior log-variance.
-            prior_mean: Prior mean.
-            prior_logvar: Prior log-variance.
-
-        Returns:
-            Scalar KL divergence averaged over the batch.
-        """
-        kl = 0.5 * (
-            prior_logvar
-            - post_logvar
-            + (post_logvar.exp() + (post_mean - prior_mean).pow(2)) / prior_logvar.exp()
-            - 1.0
-        )
-        return kl.sum(dim=-1).mean()
+        """Analytic KL(posterior || prior) for diagonal Gaussians."""
+        return kl_divergence(post_mean, post_logvar, prior_mean, prior_logvar)
 
     def decode(self, h: Tensor, z: Tensor) -> Tensor:
         """Decode combined hidden + latent state into reconstructed obs embedding.
