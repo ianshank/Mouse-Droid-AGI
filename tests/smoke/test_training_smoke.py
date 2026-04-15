@@ -104,10 +104,15 @@ async def test_each_phase_can_be_invoked(
         gpu_monitor=gpu_monitor_mock,
         batch_tuner=batch_tuner_mock,
     )
-    for phase in ["rssm", "warmstart", "bdi", "constitutional_rl"]:
-        await orch._run_phase(phase, batch_size=8)
-        checkpoint = Path(pipeline_config.checkpoint_dir) / f"{phase}.done"
-        assert checkpoint.exists(), f"Checkpoint missing for phase {phase}"
+    with patch(
+        "mousedroid.training.pipeline_orchestrator.asyncio.to_thread",
+        new_callable=AsyncMock,
+        return_value=Path("fake.pt"),
+    ):
+        for phase in ["rssm", "warmstart", "bdi", "constitutional_rl"]:
+            await orch._run_phase(phase, batch_size=8)
+            checkpoint = Path(pipeline_config.checkpoint_dir) / f"{phase}.done"
+            assert checkpoint.exists(), f"Checkpoint missing for phase {phase}"
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +187,12 @@ async def test_thermal_pause_triggers_correctly(
         gpu_monitor=gpu_mock,
         batch_tuner=batch_tuner_mock,
     )
-    await orch.run()
+    with patch(
+        "mousedroid.training.pipeline_orchestrator.asyncio.to_thread",
+        new_callable=AsyncMock,
+        return_value=Path("fake.pt"),
+    ):
+        await orch.run()
 
     assert gpu_mock.should_pause.call_count == 3
 
@@ -252,7 +262,12 @@ async def test_checkpoint_directory_created(
         gpu_monitor=gpu_monitor_mock,
         batch_tuner=batch_tuner_mock,
     )
-    await orch._run_phase("rssm", 4)
+    with patch(
+        "mousedroid.training.pipeline_orchestrator.asyncio.to_thread",
+        new_callable=AsyncMock,
+        return_value=Path("fake.pt"),
+    ):
+        await orch._run_phase("rssm", 4)
     assert deep_path.exists()
     assert (deep_path / "rssm.done").exists()
 
@@ -367,7 +382,27 @@ async def test_async_main_single_phase(tmp_path: Path) -> None:
     yaml_path = tmp_path / "smoke_config.yaml"
     yaml_path.write_text(yaml.dump(config_data))
 
-    await async_main(str(yaml_path), resume=False)
+    mock_monitor = AsyncMock()
+    mock_monitor.should_pause = AsyncMock(return_value=False)
+    mock_batch_tuner = MagicMock()
+    mock_batch_tuner.tune_batch_size = MagicMock(side_effect=lambda p, b: b)
+
+    with (
+        patch(
+            "mousedroid.training.pipeline_orchestrator.asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=Path("fake.pt"),
+        ),
+        patch(
+            "mousedroid.training.pipeline_orchestrator.JetsonGPUMonitor",
+            return_value=mock_monitor,
+        ),
+        patch(
+            "mousedroid.training.pipeline_orchestrator.VRAMBatchTuner",
+            return_value=mock_batch_tuner,
+        ),
+    ):
+        await async_main(str(yaml_path), resume=False)
     assert (tmp_path / "checkpoints" / "rssm.done").exists()
 
 
@@ -389,5 +424,25 @@ async def test_async_main_resume_auto_detect(tmp_path: Path) -> None:
     yaml_path = tmp_path / "smoke_resume.yaml"
     yaml_path.write_text(yaml.dump(config_data))
 
-    await async_main(str(yaml_path), resume=True)
+    mock_monitor = AsyncMock()
+    mock_monitor.should_pause = AsyncMock(return_value=False)
+    mock_batch_tuner = MagicMock()
+    mock_batch_tuner.tune_batch_size = MagicMock(side_effect=lambda p, b: b)
+
+    with (
+        patch(
+            "mousedroid.training.pipeline_orchestrator.asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "mousedroid.training.pipeline_orchestrator.JetsonGPUMonitor",
+            return_value=mock_monitor,
+        ),
+        patch(
+            "mousedroid.training.pipeline_orchestrator.VRAMBatchTuner",
+            return_value=mock_batch_tuner,
+        ),
+    ):
+        await async_main(str(yaml_path), resume=True)
     assert (checkpoint_dir / "warmstart.done").exists()

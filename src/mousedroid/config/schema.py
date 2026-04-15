@@ -1169,6 +1169,28 @@ class TrainingPipelineConfig(BaseModel):
         None,
         description="Phase name to resume from (skips prior phases)",
     )
+    checkpoint_marker_suffix: str = Field(
+        ".done",
+        description="Suffix for phase checkpoint marker files",
+    )
+
+    @model_validator(mode="after")
+    def _validate_checkpoint_marker_suffix(self) -> Self:
+        """Reject suffixes that could cause path traversal in checkpoint filenames."""
+        suffix = self.checkpoint_marker_suffix
+        if not suffix:
+            msg = "checkpoint_marker_suffix must not be empty"
+            raise ValueError(msg)
+        if not suffix.startswith("."):
+            msg = "checkpoint_marker_suffix must start with '.' (e.g. '.done')"
+            raise ValueError(msg)
+        if "/" in suffix or "\\" in suffix:
+            msg = "checkpoint_marker_suffix must not contain path separators"
+            raise ValueError(msg)
+        if ".." in suffix:
+            msg = "checkpoint_marker_suffix must not contain path traversal segments"
+            raise ValueError(msg)
+        return self
 
 
 class TrainingConfig(BaseModel):
@@ -1187,6 +1209,22 @@ class TrainingConfig(BaseModel):
     resume_from: str | None = Field(
         None,
         description="Path to checkpoint for resuming interrupted training",
+    )
+    rssm_subdir: str = Field("rssm", description="Subdirectory for RSSM checkpoints")
+    rssm_checkpoint_filename: str = Field("final.pt", description="RSSM checkpoint filename")
+    bdi_annotations_filename: str = Field(
+        "bdi_annotations.npz",
+        description="BDI annotations filename within data_dir",
+    )
+    mcts_subdir: str = Field("mcts", description="Subdirectory for MCTS warm-start weights")
+    policy_init_filename: str = Field(
+        "policy_init.npz",
+        description="Policy initialisation filename within mcts_subdir",
+    )
+    bdi_subdir: str = Field("bdi", description="Subdirectory for BDI training output weights")
+    sequences_filename: str = Field(
+        "sequences.pt",
+        description="Generated sequences data filename within data_dir",
     )
     gpu: GPUConfig = Field(
         default_factory=lambda: GPUConfig(

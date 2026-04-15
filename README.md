@@ -2,14 +2,14 @@
 
 **A Star Wars MSE-6 "Mouse Droid" autonomous navigation system powered by an Agentic World Model on NVIDIA Jetson Orin Nano.**
 
-[![Tests](https://img.shields.io/badge/tests-2505%20passing-brightgreen)](tests/)
+[![Tests](https://img.shields.io/badge/tests-2586%20passing-brightgreen)](tests/)
 [![Coverage](https://img.shields.io/badge/coverage-branch%20gate%2085%25-brightgreen)](scripts/check_branch_coverage.py)
 [![Ruff](https://img.shields.io/badge/lint-ruff%20clean-brightgreen)](pyproject.toml)
 [![Mypy](https://img.shields.io/badge/mypy-strict-orange)](pyproject.toml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 [![CUDA](https://img.shields.io/badge/CUDA-12.6-76B900)](Dockerfile.jetson)
 [![Docker](https://img.shields.io/badge/docker-L4T%20r36.4.0-2496ED)](docker-compose.jetson.yml)
-[![Version](https://img.shields.io/badge/version-0.3.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue)](CHANGELOG.md)
 
 ---
 

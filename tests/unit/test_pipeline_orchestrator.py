@@ -254,7 +254,12 @@ async def test_run_phase_creates_checkpoint(
         gpu_monitor=gpu_monitor,
         batch_tuner=batch_tuner,
     )
-    await orchestrator._run_phase("rssm", 16)
+    with patch(
+        "mousedroid.training.pipeline_orchestrator.asyncio.to_thread",
+        new_callable=AsyncMock,
+        return_value=Path("fake.pt"),
+    ):
+        await orchestrator._run_phase("rssm", 16)
     assert (tmp_path / "checkpoints" / "rssm.done").exists()
 
 
@@ -323,7 +328,12 @@ async def test_thermal_wait_pauses_then_continues(
         gpu_monitor=gpu_monitor,
         batch_tuner=batch_tuner,
     )
-    await orchestrator.run()
+    with patch(
+        "mousedroid.training.pipeline_orchestrator.asyncio.to_thread",
+        new_callable=AsyncMock,
+        return_value=Path("fake.pt"),
+    ):
+        await orchestrator.run()
     assert gpu_monitor.should_pause.call_count == 2
 
 
@@ -387,7 +397,28 @@ async def test_async_main_runs_pipeline(tmp_path: Path) -> None:
     yaml_path = tmp_path / "test_config.yaml"
     yaml_path.write_text(yaml.dump(config_data))
 
-    await async_main(str(yaml_path), resume=False)
+    mock_monitor = AsyncMock()
+    mock_monitor.should_pause = AsyncMock(return_value=False)
+
+    mock_batch_tuner = MagicMock()
+    mock_batch_tuner.tune_batch_size = MagicMock(side_effect=lambda p, b: b)
+
+    with (
+        patch(
+            "mousedroid.training.pipeline_orchestrator.asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=Path("fake.pt"),
+        ),
+        patch(
+            "mousedroid.training.pipeline_orchestrator.JetsonGPUMonitor",
+            return_value=mock_monitor,
+        ),
+        patch(
+            "mousedroid.training.pipeline_orchestrator.VRAMBatchTuner",
+            return_value=mock_batch_tuner,
+        ),
+    ):
+        await async_main(str(yaml_path), resume=False)
     # Verify checkpoint was written
     assert (tmp_path / "checkpoints" / "rssm.done").exists()
 
@@ -410,6 +441,27 @@ async def test_async_main_resume_auto_detects(tmp_path: Path) -> None:
     yaml_path = tmp_path / "test_config.yaml"
     yaml_path.write_text(yaml.dump(config_data))
 
-    await async_main(str(yaml_path), resume=True)
+    mock_monitor = AsyncMock()
+    mock_monitor.should_pause = AsyncMock(return_value=False)
+
+    mock_batch_tuner = MagicMock()
+    mock_batch_tuner.tune_batch_size = MagicMock(side_effect=lambda p, b: b)
+
+    with (
+        patch(
+            "mousedroid.training.pipeline_orchestrator.asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "mousedroid.training.pipeline_orchestrator.JetsonGPUMonitor",
+            return_value=mock_monitor,
+        ),
+        patch(
+            "mousedroid.training.pipeline_orchestrator.VRAMBatchTuner",
+            return_value=mock_batch_tuner,
+        ),
+    ):
+        await async_main(str(yaml_path), resume=True)
     # Only warmstart should have been run (rssm skipped)
     assert (checkpoint_dir / "warmstart.done").exists()

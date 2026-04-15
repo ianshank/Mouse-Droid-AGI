@@ -75,13 +75,15 @@ logs/
 
 # Training artefacts
 checkpoints/
+*.done
 runs/
 wandb/
 mlruns/
-training/data/sequences.pt
+training/data/
 
 # Local-only training configs (machine-specific GPU settings)
 config/local_dual_stream_training.yaml
+config/local_training.yaml
 
 # Docs build
 docs/_build/

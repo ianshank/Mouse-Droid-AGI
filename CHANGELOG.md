@@ -10,6 +10,78 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.4.0] — 2026-04-15 — Training Pipeline Wiring (Phase 1)
+
+This release wires the `PipelineOrchestrator` stubs to real training functions, eliminates all
+hardcoded paths, and adds the `TrainingPhaseProtocol` contract. **2586 tests pass** (↑81 from v0.3.0);
+all changed modules ≥ 96% coverage; `ruff` and `mypy --strict` clean.
+
+### Added
+
+- **`src/mousedroid/training/protocol.py`** — `TrainingPhaseProtocol`
+  - `@runtime_checkable Protocol` with `name: str` property and `async run()` method
+  - Uniform async interface for all training phases, enabling future pluggable phase injection
+  - 100% test coverage
+
+- **`factory.build_training_pipeline(cfg: Settings) → PipelineOrchestrator`**
+  - New factory function in `src/mousedroid/factory.py` (lazy imports, DI pattern)
+  - Constructs `JetsonGPUMonitor` + `VRAMBatchTuner` + `PipelineOrchestrator` from root `Settings`
+  - Falls back to default `TrainingPipelineConfig()` when `cfg.training_pipeline` is `None`
+  - Logged with `structlog`; consistent with all other `build_*()` factory functions
+
+- **6 new config fields in `TrainingConfig`** (all backwards-compatible, existing YAMLs unchanged)
+  - `rssm_subdir` (default `"rssm"`) — subdirectory for RSSM checkpoints under `weights_dir`
+  - `rssm_checkpoint_filename` (default `"final.pt"`) — RSSM checkpoint filename
+  - `bdi_annotations_filename` (default `"bdi_annotations.npz"`) — BDI annotations file
+  - `mcts_subdir` (default `"mcts"`) — subdirectory for MCTS warm-start weights
+  - `policy_init_filename` (default `"policy_init.npz"`) — policy initialisation filename
+  - All path segments used by `pipeline_orchestrator.py` are now config-driven — no hardcoded strings
+
+- **1 new config field in `TrainingPipelineConfig`** (backwards-compatible)
+  - `checkpoint_marker_suffix` (default `".done"`) — suffix for phase checkpoint marker files
+  - All three `.done` occurrences in `pipeline_orchestrator.py` now read from config
+
+- **`tests/unit/test_pipeline_orchestrator_wiring.py`** — 13 new tests
+  - Delegation tests: each `_train_*` method verified to call correct `run_pipeline.*` function via
+    `asyncio.to_thread`
+  - Batch size propagation: tuned `batch_size` reaches training function via immutable settings copy
+  - Factory tests: `build_training_pipeline` returns `PipelineOrchestrator`, honours config, uses defaults
+  - Protocol conformance: `TrainingPhaseProtocol` is `runtime_checkable`
+  - Integration: sequential phase ordering, resume-phase skipping
+
+### Changed
+
+- **`PipelineOrchestrator._train_rssm/warmstart/bdi/constitutional_rl`** — stub bodies replaced with
+  real delegations to `training.run_pipeline` via `asyncio.to_thread()`:
+  - Each phase creates an immutable `Settings` copy with the tuned `batch_size` (no shared-state mutation)
+  - All artifact paths (`rssm/final.pt`, `bdi_annotations.npz`, `mcts/policy_init.npz`) resolve from config
+  - All lazy imports inside method bodies (factory pattern invariant maintained)
+
+- **`PipelineOrchestrator._run_phase`** — checkpoint marker uses `config.checkpoint_marker_suffix`
+  instead of hardcoded `".done"`
+
+- **`PipelineOrchestrator.async_main`** — auto-detect resume uses config-driven marker suffix
+
+- **`factory.py` `build_orchestrator`** — fixed pre-existing `LogRingBuffer` `NameError` (was
+  `TYPE_CHECKING`-only import used at runtime); lazy import now resolves correctly
+
+### Tests Updated
+
+- `tests/unit/test_pipeline_orchestrator.py` — 4 tests updated to mock `asyncio.to_thread` (phases
+  now delegate to real training functions; mocking prevents file-system access during unit tests)
+- `tests/smoke/test_training_smoke.py` — 5 tests updated with same pattern; 2 `async_main` tests
+  also mock `JetsonGPUMonitor` to avoid sysfs reads on non-Jetson hosts
+
+### Coverage Evidence
+
+| Module | Coverage | Missing |
+|--------|----------|---------|
+| `training/pipeline_orchestrator.py` | 96% | Lines 380-397 (`main()` CLI entry, standard exclusion) |
+| `training/protocol.py` | 100% | — |
+| `factory.build_training_pipeline` | 100% | — |
+
+---
+
 ## [0.3.0] — 2026-04-14 — Production Readiness
 
 This release completes the **MouseDroidAGI Production Readiness** milestone across 7 phases,

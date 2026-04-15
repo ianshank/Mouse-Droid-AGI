@@ -180,8 +180,8 @@ def train_rssm(
         drop_last=True,
     )
 
-    # Checkpoint directory
-    weights_dir = Path(tcfg.weights_dir) / "rssm"
+    # Checkpoint directory — config-driven, no hardcoded "rssm" subdir
+    weights_dir = Path(tcfg.weights_dir) / tcfg.rssm_subdir
     weights_dir.mkdir(parents=True, exist_ok=True)
 
     # Resume
@@ -289,8 +289,8 @@ def train_rssm(
         if device.type == "cuda":
             check_memory_budget(tcfg.gpu.memory_limit_gb, device)
 
-    # Save final
-    final_path = weights_dir / "final.pt"
+    # Save final — config-driven filename, no hardcoded "final.pt"
+    final_path = weights_dir / tcfg.rssm_checkpoint_filename
     torch.save(rssm.state_dict(), final_path)
     _log.info("training_complete", final_checkpoint=str(final_path))
     return final_path

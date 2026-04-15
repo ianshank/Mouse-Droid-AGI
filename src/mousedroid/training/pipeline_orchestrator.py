@@ -16,7 +16,7 @@ CLI usage::
 from __future__ import annotations
 
 import asyncio
-import sys
+from collections.abc import Callable, Coroutine
 from pathlib import Path
 from typing import Any
 
@@ -138,26 +138,55 @@ class PipelineOrchestrator:
         self._checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         # Dispatch to phase-specific training logic.
-        # In a full implementation these would import and call the actual
-        # training modules (train_rssm, warmstart_policy, etc.).
         phase_fn = self._get_phase_runner(phase)
-        await phase_fn(batch_size)
+        await phase_fn(self._settings, batch_size, self._checkpoint_dir)
 
         # Write checkpoint marker.
-        checkpoint_path = self._checkpoint_dir / f"{phase}.done"
+        marker_suffix = self._config.checkpoint_marker_suffix
+        checkpoint_path = self._checkpoint_dir / f"{phase}{marker_suffix}"
         checkpoint_path.write_text(f"phase={phase}\n")
         logger.info("checkpoint_written", path=str(checkpoint_path))
 
-    def _get_phase_runner(self, phase: str) -> Any:
+    @staticmethod
+    def _get_settings_with_batch(cfg: Settings, batch_size: int) -> Settings:
+        """Return an immutable copy of settings with training.batch_size overridden.
+
+        Args:
+            cfg: Root application settings.
+            batch_size: New batch size to inject.
+
+        Returns:
+            Deep copy of settings with updated batch_size.
+        """
+        return cfg.model_copy(
+            update={"training": cfg.training.model_copy(update={"batch_size": batch_size})}
+        )
+
+    @staticmethod
+    def _get_rssm_checkpoint_path(cfg: Settings) -> Path:
+        """Resolve the RSSM final checkpoint path from config.
+
+        Args:
+            cfg: Root application settings.
+
+        Returns:
+            Path to the expected RSSM checkpoint file.
+        """
+        tcfg = cfg.training
+        return Path(tcfg.weights_dir) / tcfg.rssm_subdir / tcfg.rssm_checkpoint_filename
+
+    def _get_phase_runner(
+        self, phase: str
+    ) -> Callable[[Settings, int, Path], Coroutine[Any, Any, None]]:
         """Resolve phase name to its async runner function.
 
         Args:
             phase: Phase name.
 
         Returns:
-            Async callable accepting batch_size.
+            Async callable accepting (cfg, batch_size, checkpoint_dir).
         """
-        runners: dict[str, Any] = {
+        runners: dict[str, Callable[[Settings, int, Path], Coroutine[Any, Any, None]]] = {
             "rssm": self._train_rssm,
             "warmstart": self._train_warmstart,
             "bdi": self._train_bdi,
@@ -168,21 +197,141 @@ class PipelineOrchestrator:
             raise ValueError(msg)
         return runners[phase]
 
-    async def _train_rssm(self, batch_size: int) -> None:
-        """Run RSSM pre-training phase."""
-        logger.info("rssm_training", batch_size=batch_size)
+    async def _train_rssm(self, cfg: Settings, batch_size: int, checkpoint_dir: Path) -> None:
+        """Run RSSM pre-training phase.
 
-    async def _train_warmstart(self, batch_size: int) -> None:
-        """Run warm-start policy tuning phase."""
-        logger.info("warmstart_training", batch_size=batch_size)
+        Delegates to ``training.run_pipeline.run_phase_1_rssm`` via
+        ``asyncio.to_thread`` (training is GPU-bound / synchronous).
 
-    async def _train_bdi(self, batch_size: int) -> None:
-        """Run BDI training phase."""
-        logger.info("bdi_training", batch_size=batch_size)
+        Args:
+            cfg: Root application settings.
+            batch_size: Tuned batch size for this phase.
+            checkpoint_dir: Directory for writing checkpoints / artifacts.
+        """
+        logger.info("rssm_training_start", batch_size=batch_size)
 
-    async def _train_constitutional_rl(self, batch_size: int) -> None:
-        """Run constitutional RL training phase."""
-        logger.info("constitutional_rl_training", batch_size=batch_size)
+        from training.run_pipeline import run_phase_1_rssm
+
+        tcfg = cfg.training
+        data_dir = Path(tcfg.data_dir)
+        resume_raw = tcfg.resume_from
+        resume_path = Path(resume_raw) if resume_raw else None
+
+        # Override batch_size in a copy of settings (avoids mutating shared state).
+        updated_cfg = self._get_settings_with_batch(cfg, batch_size)
+
+        checkpoint = await asyncio.to_thread(
+            run_phase_1_rssm,
+            updated_cfg,
+            data_dir,
+            resume_from=resume_path,
+        )
+        logger.info("rssm_training_complete", checkpoint=str(checkpoint))
+
+    async def _train_warmstart(self, cfg: Settings, batch_size: int, checkpoint_dir: Path) -> None:
+        """Run warm-start policy tuning phase.
+
+        Delegates to ``training.run_pipeline.run_phase_2_warmstart`` via
+        ``asyncio.to_thread``.
+
+        Args:
+            cfg: Root application settings.
+            batch_size: Tuned batch size for this phase.
+            checkpoint_dir: Directory for writing checkpoints / artifacts.
+        """
+        logger.info("warmstart_training_start", batch_size=batch_size)
+
+        from training.run_pipeline import run_phase_2_warmstart
+
+        data_dir = Path(cfg.training.data_dir)
+        rssm_checkpoint = self._get_rssm_checkpoint_path(cfg)
+
+        updated_cfg = self._get_settings_with_batch(cfg, batch_size)
+
+        await asyncio.to_thread(
+            run_phase_2_warmstart,
+            updated_cfg,
+            rssm_checkpoint,
+            data_dir,
+        )
+        logger.info("warmstart_training_complete")
+
+    async def _train_bdi(self, cfg: Settings, batch_size: int, checkpoint_dir: Path) -> None:
+        """Run BDI training phase.
+
+        Delegates to ``training.run_pipeline.run_phase_3_bdi`` via
+        ``asyncio.to_thread``.
+
+        Args:
+            cfg: Root application settings.
+            batch_size: Tuned batch size for this phase.
+            checkpoint_dir: Directory for writing checkpoints / artifacts.
+        """
+        logger.info("bdi_training_start", batch_size=batch_size)
+
+        from training.run_pipeline import run_phase_3_bdi
+
+        tcfg = cfg.training
+        annotations_path = Path(tcfg.data_dir) / tcfg.bdi_annotations_filename
+
+        updated_cfg = self._get_settings_with_batch(cfg, batch_size)
+
+        await asyncio.to_thread(
+            run_phase_3_bdi,
+            updated_cfg,
+            annotations_path,
+        )
+        logger.info("bdi_training_complete")
+
+    async def _train_constitutional_rl(
+        self, cfg: Settings, batch_size: int, checkpoint_dir: Path
+    ) -> None:
+        """Run constitutional RL training phase.
+
+        Delegates to ``training.run_pipeline.run_phase_4_constitutional_rl``
+        via ``asyncio.to_thread``.
+
+        Args:
+            cfg: Root application settings.
+            batch_size: Tuned batch size for this phase.
+            checkpoint_dir: Directory for writing checkpoints / artifacts.
+        """
+        logger.info("constitutional_rl_training_start", batch_size=batch_size)
+
+        from training.run_pipeline import run_phase_4_constitutional_rl
+
+        tcfg = cfg.training
+        rssm_checkpoint = self._get_rssm_checkpoint_path(cfg)
+        policy_init_path = Path(tcfg.weights_dir) / tcfg.mcts_subdir / tcfg.policy_init_filename
+
+        # Resolve policy init path with legacy fallback for pre-existing weight dirs.
+        # The configured path (mcts_subdir/policy_init_filename) is checked first.
+        # If missing, fall back to the legacy hardcoded location and emit a warning
+        # so operators know to migrate their weights directory layout.
+        if policy_init_path.exists():
+            pi_path: Path | None = policy_init_path
+        else:
+            legacy_pi_path = Path(tcfg.weights_dir) / "mcts" / "policy_init.npz"
+            if legacy_pi_path.exists() and legacy_pi_path != policy_init_path:
+                logger.warning(
+                    "policy_init_legacy_path_used",
+                    configured_path=str(policy_init_path),
+                    legacy_path=str(legacy_pi_path),
+                    hint="Override mcts_subdir/policy_init_filename or migrate weights",
+                )
+                pi_path = legacy_pi_path
+            else:
+                pi_path = None
+
+        updated_cfg = self._get_settings_with_batch(cfg, batch_size)
+
+        await asyncio.to_thread(
+            run_phase_4_constitutional_rl,
+            updated_cfg,
+            rssm_checkpoint,
+            pi_path,
+        )
+        logger.info("constitutional_rl_training_complete")
 
     async def _wait_for_thermal_clearance(self, phase_log: Any) -> None:
         """Block until GPU temperature is below thermal limit.
@@ -207,7 +356,8 @@ class PipelineOrchestrator:
         Returns:
             True if the checkpoint marker exists.
         """
-        return (self._checkpoint_dir / f"{phase}.done").exists()
+        marker_suffix = self._config.checkpoint_marker_suffix
+        return (self._checkpoint_dir / f"{phase}{marker_suffix}").exists()
 
 
 def _load_settings(config_path: str) -> Settings:
@@ -245,7 +395,8 @@ async def async_main(config_path: str, resume: bool) -> None:
         # Auto-detect resume point from existing checkpoints.
         checkpoint_dir = Path(pipeline_config.checkpoint_dir)
         for phase in reversed(pipeline_config.phases):
-            if (checkpoint_dir / f"{phase}.done").exists():
+            marker = f"{phase}{pipeline_config.checkpoint_marker_suffix}"
+            if (checkpoint_dir / marker).exists():
                 idx = pipeline_config.phases.index(phase)
                 if idx + 1 < len(pipeline_config.phases):
                     pipeline_config = pipeline_config.model_copy(
@@ -289,4 +440,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-    sys.exit(0)

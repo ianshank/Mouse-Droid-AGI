@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from mousedroid.sensing.manager import SensorManager
     from mousedroid.telemetry.log_buffer import LogRingBuffer
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
+    from mousedroid.training.pipeline_orchestrator import PipelineOrchestrator
     from mousedroid.voice.mock_tts import MockTTS
     from mousedroid.voice.tts import PiperTTS
 
@@ -937,7 +938,9 @@ def build_orchestrator(cfg: Settings) -> object:
     if telemetry_cfg is not None:
         buffer_size = getattr(telemetry_cfg, "log_stream_buffer", 0)
         if buffer_size:
-            log_buffer = LogRingBuffer(buffer_size)
+            from mousedroid.telemetry.log_buffer import LogRingBuffer as _LogRingBuffer
+
+            log_buffer = _LogRingBuffer(buffer_size)
 
     telemetry_server = build_telemetry_server(
         cfg,
@@ -1154,4 +1157,46 @@ def build_arm_perception(
         cfg.arm_task,
         intrinsics,
         object_detector=detector,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Training pipeline
+# ---------------------------------------------------------------------------
+
+
+def build_training_pipeline(cfg: Settings) -> PipelineOrchestrator:
+    """Build the GPU pre-training pipeline orchestrator.
+
+    Constructs a :class:`PipelineOrchestrator` from the root settings,
+    wiring in the GPU monitor and VRAM batch tuner.  The pipeline config
+    is taken from ``cfg.training_pipeline`` when present, otherwise falls
+    back to default ``TrainingPipelineConfig`` values.
+
+    Args:
+        cfg: Root application settings.
+
+    Returns:
+        Configured ``PipelineOrchestrator`` ready for ``await .run()``.
+    """
+    from mousedroid.config.schema import TrainingPipelineConfig
+    from mousedroid.training.batch_tuner import VRAMBatchTuner
+    from mousedroid.training.gpu_monitor import JetsonGPUMonitor
+    from mousedroid.training.pipeline_orchestrator import PipelineOrchestrator
+
+    pipeline_config = cfg.training_pipeline or TrainingPipelineConfig()  # type: ignore[call-arg]
+
+    gpu_monitor = JetsonGPUMonitor(pipeline_config)
+    batch_tuner = VRAMBatchTuner(pipeline_config)
+
+    _log.info(
+        "training_pipeline_built",
+        phases=pipeline_config.phases,
+        amp_enabled=pipeline_config.amp_enabled,
+    )
+    return PipelineOrchestrator(
+        settings=cfg,
+        pipeline_config=pipeline_config,
+        gpu_monitor=gpu_monitor,
+        batch_tuner=batch_tuner,
     )

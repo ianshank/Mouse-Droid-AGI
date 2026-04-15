@@ -79,8 +79,8 @@ def run_phase_1_rssm(cfg: Settings, data_dir: Path, *, resume_from: Path | None 
     from training.train_rssm import train_rssm
 
     data_path = _require_existing_path(
-        data_dir / "sequences.pt",
-        description="RSSM training data file 'sequences.pt'",
+        data_dir / cfg.training.sequences_filename,
+        description=f"RSSM training data file '{cfg.training.sequences_filename}'",
         phase=1,
     )
     checkpoint = train_rssm(cfg, data_path, resume_from=resume_from)
@@ -97,8 +97,15 @@ def run_phase_2_warmstart(cfg: Settings, rssm_checkpoint: Path, data_dir: Path) 
     _log.info("phase_2_start", phase="warmstart_policy")
     from training.warmstart_policy import run_warmstart
 
-    run_warmstart(cfg, rssm_checkpoint, data_dir / "sequences.pt")
-    _log.info("phase_2_complete")
+    # Pass explicit output_dir so Phase 4 can find the weights at the configured path.
+    mcts_output_dir = Path(cfg.training.weights_dir) / cfg.training.mcts_subdir
+    run_warmstart(
+        cfg,
+        rssm_checkpoint,
+        data_dir / cfg.training.sequences_filename,
+        output_dir=mcts_output_dir,
+    )
+    _log.info("phase_2_complete", output_dir=str(mcts_output_dir))
 
 
 def run_phase_3_bdi(cfg: Settings, annotations_path: Path) -> Path:
@@ -112,7 +119,7 @@ def run_phase_3_bdi(cfg: Settings, annotations_path: Path) -> Path:
 
     output_dir = train_bdi(
         annotations_path,
-        output_dir=Path(cfg.training.weights_dir) / "bdi",
+        output_dir=Path(cfg.training.weights_dir) / cfg.training.bdi_subdir,
         lr=cfg.training.learning_rate,
         epochs=cfg.training.epochs,
         batch_size=cfg.training.batch_size,
@@ -178,9 +185,10 @@ def run_pipeline(
     log_gpu_info(device)
 
     data_dir = Path(cfg.training.data_dir)
-    annotations_path = data_dir / "bdi_annotations.npz"
-    rssm_checkpoint = Path(cfg.training.weights_dir) / "rssm" / "final.pt"
-    policy_init_path = Path(cfg.training.weights_dir) / "mcts" / "policy_init.npz"
+    annotations_path = data_dir / cfg.training.bdi_annotations_filename
+    tcfg = cfg.training
+    rssm_checkpoint = Path(tcfg.weights_dir) / tcfg.rssm_subdir / tcfg.rssm_checkpoint_filename
+    policy_init_path = Path(tcfg.weights_dir) / tcfg.mcts_subdir / tcfg.policy_init_filename
 
     _log.info(
         "pipeline_start",

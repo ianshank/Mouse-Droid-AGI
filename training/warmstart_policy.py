@@ -213,7 +213,8 @@ def run_warmstart(
         output_dir: Output directory for weights/config.
     """
     device = resolve_device(cfg.training.gpu.device)
-    output_dir = output_dir or Path(cfg.training.weights_dir) / "mcts"
+    # Config-driven output dir � no hardcoded mcts subdir
+    output_dir = output_dir or Path(cfg.training.weights_dir) / cfg.training.mcts_subdir
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Load RSSM
@@ -225,15 +226,16 @@ def run_warmstart(
     dataset = RSSMSequenceDataset(data_path, seq_len=cfg.training.sequence_length)
     latent_mean, latent_std = compute_latent_statistics(rssm, dataset, device)
 
-    # Warm-start policy
+    # Warm-start policy � config-driven filename, no hardcoded policy_init.npz
+    policy_filename = cfg.training.policy_init_filename
     policy = warmstart_policy(
         latent_mean,
         latent_std,
         input_dim=cfg.model.latent_dim,
         action_dim=cfg.model.action_dim,
     )
-    policy.save(output_dir / "policy_init.npz")
-    _log.info("policy_warmstarted", path=str(output_dir / "policy_init.npz"))
+    policy.save(output_dir / policy_filename)
+    _log.info("policy_warmstarted", path=str(output_dir / policy_filename))
 
     # Tune UCB
     best_ucb, results = tune_ucb(rssm, cfg.mcts, target_ms=cfg.mcts.ucb_target_ms, device=device)
