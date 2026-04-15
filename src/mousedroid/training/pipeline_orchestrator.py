@@ -144,7 +144,8 @@ class PipelineOrchestrator:
         await phase_fn(batch_size)
 
         # Write checkpoint marker.
-        checkpoint_path = self._checkpoint_dir / f"{phase}.done"
+        marker_suffix = self._config.checkpoint_marker_suffix
+        checkpoint_path = self._checkpoint_dir / f"{phase}{marker_suffix}"
         checkpoint_path.write_text(f"phase={phase}\n")
         logger.info("checkpoint_written", path=str(checkpoint_path))
 
@@ -169,20 +170,127 @@ class PipelineOrchestrator:
         return runners[phase]
 
     async def _train_rssm(self, batch_size: int) -> None:
-        """Run RSSM pre-training phase."""
-        logger.info("rssm_training", batch_size=batch_size)
+        """Run RSSM pre-training phase.
+
+        Delegates to ``training.run_pipeline.run_phase_1_rssm`` via
+        ``asyncio.to_thread`` (training is GPU-bound / synchronous).
+
+        Args:
+            batch_size: Tuned batch size for this phase.
+        """
+        logger.info("rssm_training_start", batch_size=batch_size)
+
+        from training.run_pipeline import run_phase_1_rssm
+
+        tcfg = self._settings.training
+        data_dir = Path(tcfg.data_dir)
+        resume_raw = tcfg.resume_from
+        resume_path = Path(resume_raw) if resume_raw else None
+
+        # Override batch_size in a copy of settings (avoids mutating shared state).
+        updated_settings = self._settings.model_copy(
+            update={"training": tcfg.model_copy(update={"batch_size": batch_size})},
+        )
+
+        checkpoint = await asyncio.to_thread(
+            run_phase_1_rssm,
+            updated_settings,
+            data_dir,
+            resume_from=resume_path,
+        )
+        logger.info("rssm_training_complete", checkpoint=str(checkpoint))
 
     async def _train_warmstart(self, batch_size: int) -> None:
-        """Run warm-start policy tuning phase."""
-        logger.info("warmstart_training", batch_size=batch_size)
+        """Run warm-start policy tuning phase.
+
+        Delegates to ``training.run_pipeline.run_phase_2_warmstart`` via
+        ``asyncio.to_thread``.
+
+        Args:
+            batch_size: Tuned batch size for this phase.
+        """
+        logger.info("warmstart_training_start", batch_size=batch_size)
+
+        from training.run_pipeline import run_phase_2_warmstart
+
+        data_dir = Path(self._settings.training.data_dir)
+        tcfg = self._settings.training
+        rssm_checkpoint = (
+            Path(tcfg.weights_dir) / tcfg.rssm_subdir / tcfg.rssm_checkpoint_filename
+        )
+
+        updated_settings = self._settings.model_copy(
+            update={"training": tcfg.model_copy(update={"batch_size": batch_size})},
+        )
+
+        await asyncio.to_thread(
+            run_phase_2_warmstart,
+            updated_settings,
+            rssm_checkpoint,
+            data_dir,
+        )
+        logger.info("warmstart_training_complete")
 
     async def _train_bdi(self, batch_size: int) -> None:
-        """Run BDI training phase."""
-        logger.info("bdi_training", batch_size=batch_size)
+        """Run BDI training phase.
+
+        Delegates to ``training.run_pipeline.run_phase_3_bdi`` via
+        ``asyncio.to_thread``.
+
+        Args:
+            batch_size: Tuned batch size for this phase.
+        """
+        logger.info("bdi_training_start", batch_size=batch_size)
+
+        from training.run_pipeline import run_phase_3_bdi
+
+        tcfg = self._settings.training
+        annotations_path = Path(tcfg.data_dir) / tcfg.bdi_annotations_filename
+
+        updated_settings = self._settings.model_copy(
+            update={"training": tcfg.model_copy(update={"batch_size": batch_size})},
+        )
+
+        await asyncio.to_thread(
+            run_phase_3_bdi,
+            updated_settings,
+            annotations_path,
+        )
+        logger.info("bdi_training_complete")
 
     async def _train_constitutional_rl(self, batch_size: int) -> None:
-        """Run constitutional RL training phase."""
-        logger.info("constitutional_rl_training", batch_size=batch_size)
+        """Run constitutional RL training phase.
+
+        Delegates to ``training.run_pipeline.run_phase_4_constitutional_rl``
+        via ``asyncio.to_thread``.
+
+        Args:
+            batch_size: Tuned batch size for this phase.
+        """
+        logger.info("constitutional_rl_training_start", batch_size=batch_size)
+
+        from training.run_pipeline import run_phase_4_constitutional_rl
+
+        tcfg = self._settings.training
+        rssm_checkpoint = (
+            Path(tcfg.weights_dir) / tcfg.rssm_subdir / tcfg.rssm_checkpoint_filename
+        )
+        policy_init_path = (
+            Path(tcfg.weights_dir) / tcfg.mcts_subdir / tcfg.policy_init_filename
+        )
+        pi_path = policy_init_path if policy_init_path.exists() else None
+
+        updated_settings = self._settings.model_copy(
+            update={"training": tcfg.model_copy(update={"batch_size": batch_size})},
+        )
+
+        await asyncio.to_thread(
+            run_phase_4_constitutional_rl,
+            updated_settings,
+            rssm_checkpoint,
+            pi_path,
+        )
+        logger.info("constitutional_rl_training_complete")
 
     async def _wait_for_thermal_clearance(self, phase_log: Any) -> None:
         """Block until GPU temperature is below thermal limit.
@@ -207,7 +315,8 @@ class PipelineOrchestrator:
         Returns:
             True if the checkpoint marker exists.
         """
-        return (self._checkpoint_dir / f"{phase}.done").exists()
+        marker_suffix = self._config.checkpoint_marker_suffix
+        return (self._checkpoint_dir / f"{phase}{marker_suffix}").exists()
 
 
 def _load_settings(config_path: str) -> Settings:
@@ -245,7 +354,8 @@ async def async_main(config_path: str, resume: bool) -> None:
         # Auto-detect resume point from existing checkpoints.
         checkpoint_dir = Path(pipeline_config.checkpoint_dir)
         for phase in reversed(pipeline_config.phases):
-            if (checkpoint_dir / f"{phase}.done").exists():
+            marker = f"{phase}{pipeline_config.checkpoint_marker_suffix}"
+            if (checkpoint_dir / marker).exists():
                 idx = pipeline_config.phases.index(phase)
                 if idx + 1 < len(pipeline_config.phases):
                     pipeline_config = pipeline_config.model_copy(

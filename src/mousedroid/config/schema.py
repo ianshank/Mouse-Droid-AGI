@@ -1169,6 +1169,10 @@ class TrainingPipelineConfig(BaseModel):
         None,
         description="Phase name to resume from (skips prior phases)",
     )
+    checkpoint_marker_suffix: str = Field(
+        ".done",
+        description="Suffix for phase checkpoint marker files",
+    )
 
 
 class TrainingConfig(BaseModel):
@@ -1187,6 +1191,17 @@ class TrainingConfig(BaseModel):
     resume_from: str | None = Field(
         None,
         description="Path to checkpoint for resuming interrupted training",
+    )
+    rssm_subdir: str = Field("rssm", description="Subdirectory for RSSM checkpoints")
+    rssm_checkpoint_filename: str = Field("final.pt", description="RSSM checkpoint filename")
+    bdi_annotations_filename: str = Field(
+        "bdi_annotations.npz",
+        description="BDI annotations filename within data_dir",
+    )
+    mcts_subdir: str = Field("mcts", description="Subdirectory for MCTS warm-start weights")
+    policy_init_filename: str = Field(
+        "policy_init.npz",
+        description="Policy initialisation filename within mcts_subdir",
     )
     gpu: GPUConfig = Field(
         default_factory=lambda: GPUConfig(

@@ -1,6 +1,6 @@
 # MouseDroidAGI — Next Steps
 
-> **Last updated**: 2026-04-14 | **Version**: 0.3.0 | **Test count**: 2505 passing | **Coverage**: 85%+ maintained
+> **Last updated**: 2026-04-15 | **Version**: 0.4.0 | **Test count**: 2586 passing | **Coverage**: 85%+ maintained
 
 This document tracks planned enhancements, organised by priority and category.
 
@@ -21,6 +21,20 @@ All 7 phases of the Production Readiness milestone are complete:
 - ✅ **Phase 6 — Jetson On-Device Validation**: hardware E2E test suite, 5-minute endurance tests,
   updated sensor verification script
 - ✅ **Phase 7 — Production Telemetry**: new Prometheus metrics for memory, curiosity, voice, LLM, recovery
+
+---
+
+## Recently Completed — v0.4.0 Training Pipeline Wiring Phase 1 (2026-04-15)
+
+- ✅ **`TrainingPhaseProtocol`** — `@runtime_checkable Protocol` for uniform async phase interface
+- ✅ **`build_training_pipeline(cfg)`** — factory function wires `PipelineOrchestrator` from `Settings`
+- ✅ **Stub-to-real delegation** — all 4 `_train_*` methods delegate to `training.run_pipeline` via
+  `asyncio.to_thread()`; immutable `Settings` copies pass tuned batch size
+- ✅ **Zero hardcoded values** — 6 new `TrainingConfig` path fields + 1 `TrainingPipelineConfig.marker_suffix`
+  replace all embedded string literals; existing YAMLs load unchanged
+- ✅ **13 new wiring tests** — delegation, batch propagation, factory, protocol conformance, integration
+- ✅ **LogRingBuffer runtime NameError** fixed in `factory.py` (was TYPE_CHECKING-only import)
+- ✅ **2586 tests passing** (↑81); `pipeline_orchestrator.py` 96% coverage; `protocol.py` 100%
 
 ---
 
@@ -101,6 +115,47 @@ All 7 phases of the Production Readiness milestone are complete:
 - **Bug fix**: `src/mousedroid/constants.py` — added `MILLIDEGREE_DIVISOR = 1000.0` and
   `GPU_LOAD_PERCENTAGE_DIVISOR = 10.0` (were imported by `health/monitor.py` and
   `efficiency/profiler.py` but undefined, causing `ImportError` and 3 test failures)
+
+---
+
+## Priority 0 — v0.4.0 Remaining Phases (IN PROGRESS)
+
+### Phase 2 — Wire Continual Learning (EWC + Progressive + Offline RL)
+- Add `build_continual_learner(cfg)` factory wrapping `EWCLearner` and `ProgressiveNN`
+- Add `build_offline_rl_trainer(cfg)` factory wrapping `OfflineRLTrainer`
+- Extend `TrainingPipelineConfig` with `continual_learning_enabled: bool = False`
+- Add `OnlineLearnerProtocol` extension to `src/mousedroid/learning/protocol.py`
+- Wire `ContinualLearnerProtocol` into orchestrator background tick (non-blocking)
+- Tests: `tests/unit/test_continual_learner_wiring.py` (≥10 tests)
+- **Effort**: 2 days
+
+### Phase 3 — Wire Meta-Learning & Knowledge Distillation
+- Add `build_meta_learner(cfg)` factory wrapping `MAMLAgent`
+- Add `build_knowledge_distiller(cfg)` factory wrapping `KnowledgeDistiller`
+- Extend `MetaLearningConfig` + `GrowthConfig` in `config/schema.py` with `enabled: bool = False`
+- Wire meta-learner `adapt()` into cognitive core's fast-adaptation path
+- Tests: `tests/unit/test_meta_growth_wiring.py` (≥8 tests)
+- **Effort**: 2 days
+
+### Phase 4 — Wire Scaling (MoE + Adaptive Compute)
+- Add `build_moe_layer(cfg)` factory for `MixtureOfExperts`
+- Add `ScalingConfig` to `config/schema.py` with `num_experts`, `top_k`, `enabled`
+- Wire MoE layer into RSSM encoder; gating statistics logged via Prometheus
+- Tests: `tests/unit/test_scaling_wiring.py` (≥6 tests)
+- **Effort**: 2 days
+
+### Phase 5 — Online Learning Hooks in Orchestrator
+- Background `asyncio.Task` drains LMDB experience buffer into continual learner
+- Configurable drain rate: `cfg.learning.online_drain_interval_s` (default: `30.0`)
+- EWC penalty consolidated after each drain cycle
+- Tests: `tests/integration/test_online_learning_loop.py` (≥6 tests)
+- **Effort**: 3 days
+
+### Phase 6 — `training/train_continual.py` Script
+- End-to-end script for offline → continual transfer (EWC Hanoi → laundry task)
+- Accepts `--source checkpoint_path` and `--target task_name` CLI flags
+- Integrates with `run_pipeline.py` orchestration
+- **Effort**: 2 days
 
 ---
 

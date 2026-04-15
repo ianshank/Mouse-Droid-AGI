@@ -491,6 +491,75 @@ graph TD
 
 ---
 
+## Training Pipeline (ADR-005)
+
+The GPU pre-training pipeline orchestrates 4 sequential phases before any runtime inference.
+All phases run synchronously (GPU-bound) and are dispatched from an `asyncio` event loop via
+`asyncio.to_thread()`, keeping the async runtime unblocked.
+
+```mermaid
+graph TD
+    subgraph TrainingPipeline["GPU Pre-Training Pipeline (PipelineOrchestrator)"]
+        Config["TrainingPipelineConfig\nphases • batch_sizes • thermal_limit\ncheckpoint_dir • amp_enabled\nresume_from_phase • marker_suffix"]
+        GPUMon["JetsonGPUMonitor\nreads sysfs thermal zone\nshould_pause() → bool"]
+        BatchTuner["VRAMBatchTuner\nprobes torch.cuda.mem_get_info\ntune_batch_size(phase, base)"]
+        Orch["PipelineOrchestrator\nsequential phase loop\nthermal check → batch tune\n→ checkpoint validation\n→ asyncio.to_thread(phase_fn)"]
+
+        subgraph Phases["Training Phases (run_pipeline.py)"]
+            P0["Phase 0: Data Generation\nSyntheticSequenceGenerator\n→ training/data/sequences.pt"]
+            P1["Phase 1: RSSM Pre-training\ntrain_rssm() — GPU + AMP\n→ weights/rssm/final.pt"]
+            P2["Phase 2: MCTS Warm-start\nrun_warmstart() — UCB tuning\n→ weights/mcts/policy_init.npz"]
+            P3["Phase 3: BDI Training\ntrain_bdi() — numpy SGD\n→ weights/bdi/"]
+            P4["Phase 4: Constitutional RL\ntrain_constitutional_rl() — PPO\n→ weights/constitutional_rl/"]
+        end
+
+        CheckpointDir["Checkpoint Markers\ncheckpoints/{phase}{suffix}\ndefault: .done\nresume auto-detection"]
+        WeightsDir["Weights Artefacts\nweights/{rssm_subdir}/{filename}\nweights/{mcts_subdir}/{filename}\nall paths config-driven"]
+    end
+
+    Config --> Orch
+    GPUMon --> Orch
+    BatchTuner --> Orch
+    Orch --> P1
+    Orch --> P2
+    Orch --> P3
+    Orch --> P4
+    P0 --> P1
+    P1 --> P2
+    P1 --> P4
+    P3 --> P4
+    P1 --> CheckpointDir
+    P2 --> CheckpointDir
+    P3 --> CheckpointDir
+    P4 --> CheckpointDir
+    P1 --> WeightsDir
+    P2 --> WeightsDir
+    P3 --> WeightsDir
+    P4 --> WeightsDir
+```
+
+**Protocol contract:** `TrainingPhaseProtocol` (`src/mousedroid/training/protocol.py`) defines the
+`@runtime_checkable` async interface for each phase: `name: str` + `async run(cfg, batch_size, checkpoint_dir) → Path`.
+
+**Config-driven paths:** All artifact filenames and subdirectory names come from `TrainingConfig` fields
+(`rssm_subdir`, `rssm_checkpoint_filename`, `bdi_annotations_filename`, `mcts_subdir`,
+`policy_init_filename`) and `TrainingPipelineConfig.checkpoint_marker_suffix`. Zero hardcoded strings.
+
+**Factory:** `build_training_pipeline(cfg: Settings) → PipelineOrchestrator` in `factory.py`.
+
+**Key training facts:**
+
+| Property | Value |
+|----------|-------|
+| Entry point | `python -m mousedroid.training.pipeline_orchestrator --config config/local_training.yaml` |
+| Resume support | `--resume` flag + `resume_from_phase` config; auto-detects last completed checkpoint marker |
+| Thermal guard | Pauses between phases when sysfs temperature > `thermal_limit_celsius` (default 85 °C) |
+| Batch auto-tuning | `VRAMBatchTuner` scales `batch_size` proportionally to available VRAM headroom |
+| Immutable settings | Each phase receives a `model_copy()` of `Settings` with tuned `batch_size` — no mutation |
+| Coverage | `pipeline_orchestrator.py` 96%, `protocol.py` 100% |
+
+---
+
 ## Dual-Stream CfC/GRU World Model
 
 The world model supports two modes selected via `model.cfc_hidden_dim`:
