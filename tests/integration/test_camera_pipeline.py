@@ -340,6 +340,8 @@ class TestFrameRateMeasurement:
         await cam.stop()
 
         mean_t = sum(times) / len(times)
-        # All captures should complete within 10x the mean (no outliers)
+        # All captures should complete within 10x the mean (no outliers).
+        # Floor at 1ms to handle mock cameras that return near-instantly.
+        threshold = max(mean_t * 10, 0.001)
         for t in times:
-            assert t < mean_t * 10, f"Capture time {t:.4f}s is >10x mean {mean_t:.4f}s"
+            assert t < threshold, f"Capture time {t:.4f}s exceeds threshold {threshold:.4f}s"

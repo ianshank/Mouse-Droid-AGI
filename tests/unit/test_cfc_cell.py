@@ -7,6 +7,7 @@ import torch
 
 pytest.importorskip("ncps")
 
+
 from mousedroid.config.schema import ModelConfig
 from mousedroid.world_model.cfc_cell import CfCWrapper
 

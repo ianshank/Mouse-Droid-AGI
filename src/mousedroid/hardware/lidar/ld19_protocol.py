@@ -18,6 +18,7 @@ from numpy.typing import NDArray
 
 from mousedroid.constants import (
     LIDAR_ANGLE_SCALE,
+    LIDAR_CRC8_POLYNOMIAL,
     LIDAR_FRAME_SIZE,
     LIDAR_FULL_ROTATION_DEG,
     LIDAR_HEADER_BYTE,
@@ -27,18 +28,18 @@ from mousedroid.constants import (
 
 
 def _build_crc_table() -> tuple[int, ...]:
-    """Build the CRC8 lookup table for polynomial 0x4C."""
+    """Build the CRC8 lookup table for the LD19 polynomial."""
     table: list[int] = []
     for i in range(256):
         crc = i
         for _ in range(8):
-            crc = ((crc << 1) ^ 0x4C) & 0xFF if crc & 0x80 else (crc << 1) & 0xFF
+            crc = ((crc << 1) ^ LIDAR_CRC8_POLYNOMIAL) & 0xFF if crc & 0x80 else (crc << 1) & 0xFF
         table.append(crc)
     return tuple(table)
 
 
 CRC_TABLE: tuple[int, ...] = _build_crc_table()
-"""Pre-computed CRC8 lookup table (polynomial 0x4C)."""
+"""Pre-computed CRC8 lookup table."""
 
 
 @dataclass(frozen=True)

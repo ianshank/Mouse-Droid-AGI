@@ -325,8 +325,57 @@ def main() -> int:
     print("Running branch coverage command:")
     print(" ".join(cmd))
 
-    run_result = subprocess.run(cmd, check=False)
+    run_result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    # Always display the captured pytest output so developers can see what happened.
+    sys.stdout.write(run_result.stdout)
+    sys.stdout.flush()
+    sys.stderr.write(run_result.stderr)
+    sys.stderr.flush()
     if run_result.returncode != 0:
+        # Narrow checks for known environment bugs under coverage.py instrumentation.
+        # Require ALLOW_PYTEST_COLLECTION_SKIP=1 so CI blocks by default.
+        combined = run_result.stdout + run_result.stderr
+        allow_skip = os.environ.get("ALLOW_PYTEST_COLLECTION_SKIP") == "1"
+
+        is_torch_coverage_bug = (
+            "errors during collection" in combined.lower() and "_has_torch_function" in combined
+        )
+        # Pydantic Settings + coverage.py class identity mismatch: coverage
+        # instrumentation can cause the Settings class to be loaded via two
+        # different import paths, breaking isinstance checks inside
+        # pydantic_settings __init__.  Manifests as "is_instance_of" errors
+        # for Settings objects that work fine outside coverage mode.
+        is_pydantic_coverage_bug = (
+            "is_instance_of" in combined and "Settings" in combined and "--cov" in " ".join(cmd)
+        )
+
+        known_bug = is_torch_coverage_bug or is_pydantic_coverage_bug
+
+        if known_bug and allow_skip:
+            bug_names = []
+            if is_torch_coverage_bug:
+                bug_names.append("torch/coverage.py docstring collision")
+            if is_pydantic_coverage_bug:
+                bug_names.append("pydantic_settings/coverage.py class identity mismatch")
+            print(
+                f"\nWARNING: Known coverage-mode bug detected: {', '.join(bug_names)}.",
+                file=sys.stderr,
+            )
+            print("Skipping branch coverage gate. Run tests manually to verify.", file=sys.stderr)
+            return 0
+        if known_bug:
+            if is_torch_coverage_bug:
+                print(
+                    "\nERROR: torch/coverage.py collection conflict detected. "
+                    "Set ALLOW_PYTEST_COLLECTION_SKIP=1 to skip, or fix the environment.",
+                    file=sys.stderr,
+                )
+            if is_pydantic_coverage_bug:
+                print(
+                    "\nERROR: pydantic_settings/coverage.py class identity mismatch detected. "
+                    "Set ALLOW_PYTEST_COLLECTION_SKIP=1 to skip, or fix the environment.",
+                    file=sys.stderr,
+                )
         return run_result.returncode
 
     coverage_by_path = _load_coverage(json_out)

@@ -311,9 +311,9 @@ def test_frame_builder_vision_norm_is_scalar() -> None:
 
 aiohttp = pytest.importorskip("aiohttp")
 
-from aiohttp.test_utils import TestClient, TestServer  # noqa: E402
+from aiohttp.test_utils import TestClient, TestServer
 
-from mousedroid.telemetry.server import TelemetryServer  # noqa: E402
+from mousedroid.telemetry.server import TelemetryServer
 
 
 def _make_server(

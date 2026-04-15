@@ -21,7 +21,6 @@ from mousedroid.hardware.protocols import (
 from mousedroid.llm_gateway.protocol import LLMGatewayProtocol
 from mousedroid.logging.setup import get_logger
 from mousedroid.safety.protocol import SafetyMonitorProtocol
-from mousedroid.telemetry.log_buffer import LogRingBuffer
 from mousedroid.voice.protocol import VoiceEngineProtocol
 from mousedroid.world_model.protocol import WorldModelProtocol
 
@@ -36,9 +35,15 @@ if TYPE_CHECKING:
     from mousedroid.cognitive.bdi_model import NeuralBDI
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.config.schema import Settings, UltrasonicConfig
+    from mousedroid.curiosity.protocol import CuriosityProtocol
+    from mousedroid.experience.logger import ExperienceLogger
     from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
     from mousedroid.health.monitor import HealthMonitor
+    from mousedroid.health.watchdog import WatchdogProtocol
+    from mousedroid.llm_gateway.mission_parser import MissionParserProtocol
+    from mousedroid.memory.tier import MemoryTier
     from mousedroid.sensing.manager import SensorManager
+    from mousedroid.telemetry.log_buffer import LogRingBuffer
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
     from mousedroid.voice.mock_tts import MockTTS
     from mousedroid.voice.tts import PiperTTS
@@ -330,6 +335,22 @@ def build_llm_gateway(cfg: Settings) -> LLMGatewayProtocol:
     return LLMGateway(gateway_cfg)
 
 
+def build_mission_parser(cfg: Settings) -> MissionParserProtocol:
+    """Build NL mission parser with configurable speed/confidence mappings.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Rule-based mission parser conforming to ``MissionParserProtocol``.
+    """
+    from mousedroid.llm_gateway.mission_parser import RuleBasedMissionParser
+
+    parser = RuleBasedMissionParser(cfg.mission_parser)
+    _log.info("mission_parser_built")
+    return parser
+
+
 def build_safety_monitor(cfg: Settings) -> SafetyMonitorProtocol:
     """Build safety monitor for configured platform.
 
@@ -555,6 +576,41 @@ def build_health_monitor(cfg: Settings) -> HealthMonitor:
     return HealthMonitor(cfg.health, cfg.jetson)
 
 
+def build_watchdog(cfg: Settings) -> WatchdogProtocol:
+    """Build watchdog notifier based on configuration.
+
+    Returns a ``SystemdNotifier`` when running under systemd
+    (``NOTIFY_SOCKET`` set), a ``FileHeartbeatNotifier`` for Docker
+    deployments, or a ``NullNotifier`` when disabled.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Watchdog notifier conforming to ``WatchdogProtocol``.
+    """
+    import os
+
+    from mousedroid.health.watchdog import (
+        FileHeartbeatNotifier,
+        NullNotifier,
+        SystemdNotifier,
+    )
+
+    if not cfg.loop.watchdog_enabled:
+        _log.info("watchdog_disabled")
+        return NullNotifier()
+
+    # Prefer systemd if NOTIFY_SOCKET is set (running as Type=notify service)
+    if os.environ.get("NOTIFY_SOCKET"):
+        _log.info("watchdog_systemd")
+        return SystemdNotifier()
+
+    # Fall back to file heartbeat (Docker health checks)
+    _log.info("watchdog_file_heartbeat", path=cfg.loop.watchdog_heartbeat_path)
+    return FileHeartbeatNotifier(path=cfg.loop.watchdog_heartbeat_path)
+
+
 def build_sensor_manager(
     cfg: Settings,
     vision: VisionProtocol,
@@ -739,6 +795,96 @@ def build_hailo_runtime(cfg: Settings) -> HailoRuntimeProtocol | None:
         return None
 
 
+def build_memory_tier(cfg: Settings) -> MemoryTier | None:
+    """Build layered memory tier if enabled.
+
+    Constructs all four memory subsystems (episodic, semantic, working,
+    consolidation) and bundles them in a ``MemoryTier`` dataclass.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        ``MemoryTier`` or ``None`` if memory is disabled.
+    """
+    if not cfg.memory.enabled:
+        _log.info("memory_tier_disabled")
+        return None
+
+    from mousedroid.memory.consolidation import MemoryConsolidation
+    from mousedroid.memory.episodic import EpisodicReplay
+    from mousedroid.memory.semantic import SemanticIndex
+    from mousedroid.memory.tier import MemoryTier
+    from mousedroid.memory.working import WorkingMemory
+
+    episodic = EpisodicReplay(cfg.memory)
+    semantic = SemanticIndex(cfg.memory)
+    working = WorkingMemory(cfg.memory, embed_dim=cfg.memory.semantic_dim)
+    consolidation = MemoryConsolidation(cfg.memory, episodic, semantic)
+
+    _log.info(
+        "memory_tier_built",
+        episodic_capacity=cfg.memory.episodic_capacity,
+        semantic_dim=cfg.memory.semantic_dim,
+        working_context=cfg.memory.working_context_size,
+    )
+    return MemoryTier(
+        episodic=episodic,
+        semantic=semantic,
+        working=working,
+        consolidation=consolidation,
+    )
+
+
+def build_experience_logger(cfg: Settings) -> ExperienceLogger | None:
+    """Build LMDB experience logger if memory tier is enabled.
+
+    Gated by ``cfg.memory.enabled`` — experience logging only runs when
+    the full memory pipeline is active.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        ``ExperienceLogger`` or ``None`` if memory is disabled.
+    """
+    if not cfg.memory.enabled:
+        _log.info("experience_logger_disabled")
+        return None
+
+    from mousedroid.experience.logger import ExperienceLogger
+
+    _log.info("experience_logger_built", path=cfg.experience.path)
+    return ExperienceLogger(cfg.experience)
+
+
+def build_curiosity_module(cfg: Settings) -> CuriosityProtocol | None:
+    """Build ICM intrinsic curiosity module if memory tier is enabled.
+
+    Gated by ``cfg.memory.enabled`` — curiosity needs memory for novelty
+    tracking and epistemic scoring.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        ``IntrinsicCuriosityModule`` conforming to ``CuriosityProtocol``,
+        or ``None`` if memory is disabled.
+    """
+    if not cfg.memory.enabled:
+        _log.info("curiosity_module_disabled")
+        return None
+
+    from mousedroid.curiosity.icm import IntrinsicCuriosityModule
+
+    _log.info(
+        "curiosity_module_built",
+        intrinsic_reward_scale=cfg.curiosity.intrinsic_reward_scale,
+        novelty_decay=cfg.curiosity.novelty_decay_enabled,
+    )
+    return IntrinsicCuriosityModule(cfg.model, cfg.curiosity)
+
+
 def build_orchestrator(cfg: Settings) -> object:
     """Build fully-wired orchestrator.
 
@@ -792,6 +938,8 @@ def build_orchestrator(cfg: Settings) -> object:
     if telemetry_cfg is not None:
         buffer_size = getattr(telemetry_cfg, "log_stream_buffer", 0)
         if buffer_size:
+            from mousedroid.telemetry.log_buffer import LogRingBuffer
+
             log_buffer = LogRingBuffer(buffer_size)
 
     telemetry_server = build_telemetry_server(
@@ -805,6 +953,25 @@ def build_orchestrator(cfg: Settings) -> object:
     speaker = build_speaker(cfg)
     voice_engine = build_voice_engine(cfg, speaker=speaker)
 
+    # Memory tier (optional — disabled by default)
+    memory_tier = build_memory_tier(cfg)
+
+    # Experience logger (optional — requires experience config)
+    experience_logger = build_experience_logger(cfg)
+
+    # Curiosity module (optional — requires curiosity config)
+    curiosity_module = build_curiosity_module(cfg)
+
+    # LLM gateway + mission parser (optional — gated by llm.enabled)
+    llm_gateway: LLMGatewayProtocol | None = None
+    mission_parser: MissionParserProtocol | None = None
+    if cfg.llm.enabled:
+        llm_gateway = build_llm_gateway(cfg)
+    mission_parser = build_mission_parser(cfg)
+
+    # Watchdog notifier (optional — disabled by default)
+    watchdog = build_watchdog(cfg)
+
     return MouseDroidOrchestrator(
         world_model=wm,
         agents=[agent],
@@ -817,6 +984,12 @@ def build_orchestrator(cfg: Settings) -> object:
         telemetry_server=telemetry_server,
         voice_engine=voice_engine,
         hailo_runtime=hailo_runtime,
+        memory_tier=memory_tier,
+        experience_logger=experience_logger,
+        curiosity_module=curiosity_module,
+        llm_gateway=llm_gateway,
+        mission_parser=mission_parser,
+        watchdog=watchdog,
     )
 
 

@@ -57,6 +57,9 @@ RUN pip install --no-cache-dir typing_extensions>=4.0 && \
 # ---------------------------------------------------------------------------
 RUN pip install --no-cache-dir pyserial>=3.5 python-prctl 2>&1 \
     || echo "WARNING: pyserial/prctl install failed (non-fatal on non-Jetson)"
+# CfC liquid neural network (dual-stream world model — non-fatal)
+RUN pip install --no-cache-dir "ncps>=0.0.7" 2>&1 \
+    || echo "WARNING: ncps install failed (dual-stream CfC disabled)"
 RUN pip install --no-cache-dir Jetson.GPIO>=2.1 2>&1 \
     || echo "WARNING: Jetson.GPIO install failed (expected on non-Jetson hosts)"
 # picamera2 may fail without libcamera system libs — graceful skip

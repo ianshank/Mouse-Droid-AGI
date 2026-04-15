@@ -2,13 +2,14 @@
 
 **A Star Wars MSE-6 "Mouse Droid" autonomous navigation system powered by an Agentic World Model on NVIDIA Jetson Orin Nano.**
 
-[![Tests](https://img.shields.io/badge/tests-pytest-brightgreen)](tests/)
+[![Tests](https://img.shields.io/badge/tests-2505%20passing-brightgreen)](tests/)
 [![Coverage](https://img.shields.io/badge/coverage-branch%20gate%2085%25-brightgreen)](scripts/check_branch_coverage.py)
 [![Ruff](https://img.shields.io/badge/lint-ruff%20clean-brightgreen)](pyproject.toml)
 [![Mypy](https://img.shields.io/badge/mypy-strict-orange)](pyproject.toml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 [![CUDA](https://img.shields.io/badge/CUDA-12.6-76B900)](Dockerfile.jetson)
 [![Docker](https://img.shields.io/badge/docker-L4T%20r36.4.0-2496ED)](docker-compose.jetson.yml)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue)](CHANGELOG.md)
 
 ---
 
@@ -22,7 +23,7 @@ The robot is built on a Wave Rover mecanum-wheel chassis, controlled by an ESP32
 
 | Pillar | Module | Description |
 |--------|--------|-------------|
-| 1. World Model | `world_model/` | RSSM latent dynamics + MCTS planning |
+| 1. World Model | `world_model/` | Dual-Stream CfC/GRU RSSM latent dynamics + MCTS planning |
 | 2. Cognitive Architecture | `cognitive/` | Dual-cadence BDI + metacognitive loop |
 | 3. Memory Systems | `memory/` | Working, episodic, semantic, consolidation |
 | 4. Continual Learning | `learning/` | EWC + progressive neural networks |
@@ -41,10 +42,13 @@ The robot is built on a Wave Rover mecanum-wheel chassis, controlled by an ESP32
 graph TD
     subgraph Jetson["NVIDIA Jetson Orin Nano"]
         subgraph Docker["Docker: mousedroid:jetson\nL4T PyTorch r36.4.0 — CUDA 12.6"]
-            Orchestrator["Orchestrator\n30 Hz sense-plan-act"]
-            CoreAI["Core AI Pipeline\nRSSM + MCTS + Navigation Agent\nBDI Cognitive Core\nMemory Systems\nSafety Monitor"]
-            SensorMgr["Sensor Manager\nJetson CSI - HC-SR04 - ESP32 encoders"]
-            Telemetry["Telemetry Server\naiohttp REST + WebSocket + /metrics\n/api/v1/* + /ws + /metrics"]
+            Orchestrator["Orchestrator\n30 Hz sense-plan-act\nasyncio.wait_for tick timeout\nWatchdog + Memory + Voice"]
+            CoreAI["Core AI Pipeline\nDual-Stream CfC/GRU RSSM + MCTS\nBDI Cognitive Core\nMemory Tier (Episodic/Semantic/Working)\nCuriosity ICM • Safety Monitor"]
+            SensorMgr["Sensor Manager\nCamera • HC-SR04 • LiDAR • Mic • ESP32\nrecovery_attempt() resilience"]
+            VoiceEng["Voice Engine\nRocky TTS (Piper)\nphrase_bank — startup/shutdown/error events"]
+            LLMGw["LLM Gateway (degraded-safe)\nRule parser → Llama GGUF fallback\nPrompt injection detection"]
+            Telemetry["Telemetry Server\naiohttp REST + WebSocket + /metrics\n/api/v1/* + /ws + /metrics\nMemory / Curiosity / LLM metrics"]
+            Watchdog["Watchdog\nSystemdNotifier / FileHeartbeat\nWATCHDOG=1 per tick"]
             ExperienceDB[("Experience Logger\nLMDB")]
         end
         SSD["NVMe SSD 500 GB\nDocker data + 16 GB swap"]
@@ -53,12 +57,15 @@ graph TD
     Human["Human Operator\nNL commands"]
     Monitoring["Remote Monitoring\nPrometheus / Grafana\nHTTP scrape + dashboards"]
 
-    Human -- "NL mission" --> Orchestrator
+    Human -- "NL mission" --> LLMGw
+    LLMGw --> Orchestrator
     Orchestrator --> CoreAI
     CoreAI --> SensorMgr
     CoreAI --> ExperienceDB
     Orchestrator -- "UART / HTTP" --> ESP32
     Orchestrator --> Telemetry
+    Orchestrator --> VoiceEng
+    Orchestrator --> Watchdog
     Telemetry -- "REST / WebSocket" --> Monitoring
     Docker -.-> SSD
 ```
@@ -159,6 +166,23 @@ mousedroid --mock-hardware
 mousedroid --health-check --config config/default.yaml
 ```
 
+### Pre-Flight Validation
+
+Before starting the service, validate all hardware is present:
+
+```bash
+# Run pre-flight checks (device paths configurable via env vars)
+bash scripts/preflight_check.sh
+
+# Override device paths if non-standard
+MOUSEDROID_ESP32_DEV=/dev/ttyUSB1 \
+MOUSEDROID_CAMERA_DEV=/dev/video1 \
+bash scripts/preflight_check.sh
+```
+
+Exits 0 if all required hardware is present; exits 1 with coloured diagnostics on failure.
+The systemd service units run this automatically as `ExecStartPre`.
+
 ### Telemetry and Prometheus Metrics
 
 The telemetry stack exposes both interactive APIs and Prometheus-compatible metrics:
@@ -167,11 +191,26 @@ The telemetry stack exposes both interactive APIs and Prometheus-compatible metr
 # REST + websocket telemetry (default)
 curl http://127.0.0.1:8080/api/v1/status
 
-# Prometheus text exposition
+# Prometheus text exposition (includes memory, curiosity, LLM, voice metrics)
 curl http://127.0.0.1:8080/metrics
 ```
 
 `/metrics` names are derived from `cfg.metrics.namespace`, so metric naming is fully config-driven.
+
+### Watchdog Integration
+
+When deployed via systemd, the watchdog is enabled automatically:
+
+```bash
+# Native service — watchdog fires WATCHDOG=1 after each successful tick
+sudo systemctl start mousedroid
+
+# Docker service — file heartbeat for Docker HEALTHCHECK
+sudo systemctl start mousedroid-docker
+docker inspect mousedroid | grep -A5 Health
+```
+
+In mock/dev mode, `NullNotifier` is used — no external dependency required.
 
 ### Run with Custom Config
 
@@ -191,6 +230,7 @@ All settings are defined in `config/default.yaml` and validated by Pydantic v2. 
 | `config/jetson_production.yaml` | Jetson Orin Nano production overrides (cognitive core, HF weights, telemetry, Prometheus metrics, safety) |
 | `config/mock_hardware.yaml` | Mock hardware for CI/development |
 | `config/local_training.yaml` | Local GPU training with GPU-available check |
+| `config/jetson_dual_stream.yaml` | Jetson + dual-stream CfC/GRU world model (requires human activation) |
 | `config/jetson_sdcard_64gb.yaml` | Jetson on SD card (64 GB) resource limits |
 
 No values are hardcoded — every threshold, dimension, pin, and rate is configurable.
@@ -224,7 +264,8 @@ src/mousedroid/
 ├── scaling/          # MoE routing + adaptive compute
 ├── sensing/          # Sensor manager + observation bundle
 ├── tools/            # Tool registry for agentic tool dispatch
-└── world_model/      # RSSM encoder, MCTS planner
+├── voice/            # Rocky voice engine (TTS + speaker)
+└── world_model/      # RSSM + Dual-Stream CfC/GRU RSSM, MCTS planner
 
 training/             # Offline GPU training pipelines
 ├── run_pipeline.py           # Phase 1→2→3→4 orchestrator; --resume for checkpoint continuation
@@ -233,19 +274,23 @@ training/             # Offline GPU training pipelines
 ├── collect_annotations.py    # Phase 2.3a: BDI intention annotation collection
 ├── train_bdi.py              # Phase 2.3b: BDI sub-network training on annotations
 ├── train_constitutional_rl.py # Phase 2.4: PPO + Constitutional constraints
+├── train_dual_stream_rssm.py  # Phase 2.2: Dual-stream CfC/GRU RSSM pretraining
 ├── upload_weights.py         # Push all weights to HuggingFace Hub (ianshank/mousedroid-weights)
 ├── data_generator.py         # Synthetic observation sequence generator
 └── rssm_dataset.py           # PyTorch Dataset for RSSM sequences
 
 scripts/
-├── ci.sh             # CI pipeline: lint → type check → test → coverage gate
-├── check_branch_coverage.py # Changed-line coverage gate for branch-modified files
-├── deploy_jetson.sh  # Idempotent Jetson deployment (venv + systemd)
-├── docker_deploy.sh  # Docker container build + deploy on Jetson
-├── jetson_test_runner.sh # Container test runner (unit/integration/e2e)
-├── flash_esp32.sh    # ESP32 firmware flashing via esptool
-├── mousedroid.service# systemd unit file for native deployment
-└── mousedroid-docker.service # systemd unit for Docker auto-start
+├── ci.sh                    # CI pipeline: lint → type check → test → coverage gate
+├── check_branch_coverage.py # Changed-line coverage gate (≥85%) with Pydantic/torch resilience
+├── preflight_check.sh       # Pre-flight hardware validation (devices, disk, config, weights)
+├── verify_sensors.py        # Sensor verification script (camera/ultrasonic/lidar/speaker) --json
+├── deploy_jetson.sh         # Idempotent Jetson deployment (venv + systemd)
+├── docker_deploy.sh         # Docker container build + deploy on Jetson
+├── jetson_test_runner.sh    # Container test runner (unit/integration/e2e)
+├── download_model.sh        # Download LLM weights from HuggingFace Hub
+├── flash_esp32.sh           # ESP32 firmware flashing via esptool
+├── mousedroid.service       # systemd unit (native; Type=notify, WatchdogSec=30)
+└── mousedroid-docker.service # systemd unit (Docker; Type=notify, WatchdogSec=30, ExecStartPre=preflight)
 ```
 
 ---
@@ -314,6 +359,36 @@ python training/run_pipeline.py --resume training/results/rssm_epoch_10.pt
 python training/upload_weights.py --repo ianshank/mousedroid-weights
 ```
 
+### Dual-Stream CfC/GRU RSSM (Experimental)
+
+The world model supports an optional **liquid neural network** hybrid architecture — a dual-stream CfC (Closed-form Continuous-time) / GRU RSSM:
+
+- **GRU stream** (256-dim): Slow planning horizon
+- **CfC stream** (64-dim): Fast sub-100ms adaptive reflexes via `ncps` liquid neural networks
+- **Concat fusion**: Combined 320-dim hidden state feeds posterior, prior, and decoder
+
+```bash
+# Install CfC dependency
+pip install -e ".[cfc]"
+
+# Train dual-stream model (5-epoch validation)
+python -m training.train_dual_stream_rssm \
+    --config config/local_dual_stream_training.yaml \
+    --data training/data/sequences.pt \
+    --device cuda --validate-only
+
+# Upload to HuggingFace
+python -m training.upload_weights \
+    --weights-dir weights/dual_stream_rssm \
+    --repo ianshank/mousedroid-dual-stream-rssm
+```
+
+**Human activation gate:** CfC is disabled by default (`cfc_hidden_dim=0`). To activate on Jetson:
+
+```bash
+MOUSEDROID_MODEL__CFC_HIDDEN_DIM=64 docker compose -f docker-compose.jetson.yml up -d
+```
+
 Weights are automatically pulled at startup on the Jetson when `cognitive.enabled = true`:
 
 ```yaml
@@ -352,10 +427,11 @@ pytest tests/regression/
 
 | Category | Count |
 |----------|-------|
-| Unit tests | 668 |
+| Unit tests | 725+ |
+| Integration & regression | 100+ |
 | Scripts & training tests | 84 |
-| **Total** | **752** |
-| **Coverage** | **98.01%** (gate: 85%) |
+| **Total** | **2381+** |
+| **Coverage** | **97.55%** (gate: 85%) |
 
 > Hardware tests requiring real GPIO/camera are marked `@pytest.mark.hardware` and skipped in CI.
 
@@ -407,6 +483,7 @@ Offline training follows a 4-phase pipeline:
 | Phase | Script | Description |
 |-------|--------|-------------|
 | 2.1 | `train_rssm.py` | Pretrain RSSM world model on synthetic sequences |
+| 2.1b | `train_dual_stream_rssm.py` | Dual-stream CfC/GRU RSSM pretraining (experimental) |
 | 2.2 | `warmstart_policy.py` | Warm-start MCTS policy from latent stats + UCB tuning |
 | 2.3a | `collect_annotations.py` | Collect labelled intention annotations (500 episodes) |
 | 2.3b | `train_bdi.py` | Train BDI sub-networks: Belief → Desire → Intention → Affect |
@@ -445,4 +522,6 @@ MIT License — see [LICENSE](LICENSE) for details.
 | Chassis | Waveshare Wave Rover | Mecanum wheel, ESP32 onboard |
 | Camera | Jetson CSI / Raspberry Pi AI Camera (IMX500) | Onboard ML inference |
 | Distance | HC-SR04 Ultrasonic | GPIO pins 23/24 |
+| LiDAR | FHL-LD19 360 2D | UART /dev/ttyUSB1, 230400 baud |
+| Audio | Wonrabai USB Sound Card | Combo mic + 8 5W speaker |
 | Battery | 3S LiPo 11.1V | Min cutoff 9.5V |

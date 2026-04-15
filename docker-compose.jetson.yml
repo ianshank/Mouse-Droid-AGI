@@ -39,24 +39,40 @@ services:
       - /sys/devices/virtual/thermal:/sys/devices/virtual/thermal:ro
       # GPU sysfs (read-only)
       - /sys/devices/platform:/sys/devices/platform:ro
+      # Promtail positions (persistent across restarts)
+      - promtail_positions:/var/lib/promtail
 
     # --- Hardware device passthrough ---
-    # NOTE: Uncomment devices that are physically connected.
-    # The container will fail to start if a listed device doesn't exist.
-    # devices:
-    #   # ESP32 UART serial
-    #   - /dev/ttyUSB0:/dev/ttyUSB0
-    #   # Camera
-    #   - /dev/video0:/dev/video0
-    #   # GPIO
-    #   - /dev/gpiochip0:/dev/gpiochip0
-    #   - /dev/gpiochip1:/dev/gpiochip1
-    #   # FHL-LD19 LiDAR UART
-    #   - /dev/ttyUSB1:/dev/ttyUSB1
-    #   # Wonrabai USB Sound Card (ALSA audio in + out)
-    #   - /dev/snd:/dev/snd
-    # group_add:
-    #   - audio
+    # Device paths are configurable via env vars (see config/docker.env.example).
+    # The container will fail to start if a listed device doesn't exist on the
+    # host; ensure the preflight script passes before starting.
+    devices:
+      # ESP32 UART serial (required for motor control)
+      - ${MOUSEDROID_ESP32_DEV:-/dev/ttyUSB0}:${MOUSEDROID_ESP32_DEV:-/dev/ttyUSB0}
+      # Camera (required for vision)
+      - ${MOUSEDROID_CAMERA_DEV:-/dev/video0}:${MOUSEDROID_CAMERA_DEV:-/dev/video0}
+      # GPIO (required for ultrasonic trigger/echo)
+      - /dev/gpiochip0:/dev/gpiochip0
+      - /dev/gpiochip1:/dev/gpiochip1
+      # FHL-LD19 LiDAR UART (optional — omit line if no LiDAR)
+      - ${MOUSEDROID_LIDAR_DEV:-/dev/ttyUSB1}:${MOUSEDROID_LIDAR_DEV:-/dev/ttyUSB1}
+      # Wonrabai USB Sound Card — ALSA audio in + out (optional)
+      - /dev/snd:/dev/snd
+    group_add:
+      - audio
+      - video
+      - dialout
+      - gpio
+
+    # --- Health check ---
+    # Polls the telemetry HTTP health endpoint exposed by the service
+    # at /api/v1/health on the configured telemetry port.
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:${MOUSEDROID_TELEMETRY_PORT:-8080}/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
     # --- Networking ---
     network_mode: host
@@ -80,4 +96,6 @@ services:
 
 volumes:
   mousedroid_experience:
+    driver: local
+  promtail_positions:
     driver: local

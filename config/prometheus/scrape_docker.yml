@@ -1,0 +1,37 @@
+# Prometheus scrape config -- Docker Compose
+#
+# Use with docker-compose.jetson.yml.  Service names resolve via
+# Docker DNS (service name: "mousedroid").
+# Default telemetry port: TelemetryConfig.port = 8080
+# Metrics path: MetricsConfig.path = /metrics
+#
+# Authentication: If TelemetryConfig.auth is configured with bearer token
+# auth, uncomment the bearer_token_file line and mount the token file
+# into the Prometheus container.
+
+scrape_configs:
+  - job_name: mousedroid
+    scrape_interval: 10s
+    scrape_timeout: 5s
+    metrics_path: /metrics
+    honor_labels: true
+    # Uncomment to enable bearer token auth (matches TelemetryAuthConfig):
+    # bearer_token_file: /etc/prometheus/mousedroid_token
+    static_configs:
+      - targets:
+          - "mousedroid:8080"
+        labels:
+          env: docker
+          platform: jetson
+
+  - job_name: node
+    scrape_interval: 15s
+    honor_labels: true
+    static_configs:
+      - targets:
+          - "node-exporter:9100"
+        labels:
+          env: docker
+
+rule_files:
+  - /etc/prometheus/alerts.yml

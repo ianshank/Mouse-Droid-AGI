@@ -311,7 +311,88 @@ PYEOF
 }
 
 # ---------------------------------------------------------------------------
-# 5. Application health check
+# 5. Audio (USB microphone)
+# ---------------------------------------------------------------------------
+
+test_audio() {
+    log_section "Audio Test"
+    log_step "Detecting USB microphone and capturing one audio chunk"
+
+    local audio_script
+    audio_script=$(cat <<'PYEOF'
+import sys
+
+try:
+    import pyaudio
+except ImportError:
+    print("SKIP:pyaudio not installed")
+    sys.exit(0)
+
+pa = pyaudio.PyAudio()
+input_devices = [
+    pa.get_device_info_by_index(i)
+    for i in range(pa.get_device_count())
+    if pa.get_device_info_by_index(i).get("maxInputChannels", 0) > 0
+]
+pa.terminate()
+
+if not input_devices:
+    print("FAIL:No USB microphone detected — check connection")
+    sys.exit(0)
+
+names = ", ".join(d["name"] for d in input_devices)
+
+# Attempt one-chunk capture
+CHUNK = 512
+RATE = 16000
+import numpy as np
+
+pa = pyaudio.PyAudio()
+try:
+    stream = pa.open(
+        format=pyaudio.paFloat32,
+        channels=1,
+        rate=RATE,
+        input=True,
+        frames_per_buffer=CHUNK,
+    )
+    raw = stream.read(CHUNK, exception_on_overflow=False)
+    stream.stop_stream()
+    stream.close()
+except Exception as exc:
+    pa.terminate()
+    print(f"FAIL:Capture error: {exc}")
+    sys.exit(0)
+finally:
+    pa.terminate()
+
+arr = np.frombuffer(raw, dtype=np.float32)
+if arr.shape != (CHUNK,):
+    print(f"FAIL:Unexpected chunk shape {arr.shape}, expected ({CHUNK},)")
+    sys.exit(0)
+
+print(f"PASS:USB mic '{names}' — chunk shape={arr.shape}, dtype={arr.dtype}")
+PYEOF
+    )
+
+    local result
+    result="$("${PYTHON}" -c "${audio_script}" 2>&1)" || true
+
+    if echo "${result}" | grep -q "^PASS:"; then
+        local msg
+        msg="$(echo "${result}" | grep "^PASS:" | sed 's/^PASS://')"
+        record_pass "audio capture: ${msg}"
+    elif echo "${result}" | grep -q "^SKIP:"; then
+        record_skip "audio capture" "pyaudio not installed"
+    else
+        local msg
+        msg="$(echo "${result}" | grep "^FAIL:" | sed 's/^FAIL://')"
+        record_fail "audio capture" "${msg}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# 6. Application health check
 # ---------------------------------------------------------------------------
 
 test_app() {
@@ -326,7 +407,7 @@ test_app() {
 }
 
 # ---------------------------------------------------------------------------
-# 6. Hardware pytest
+# 7. Hardware pytest
 # ---------------------------------------------------------------------------
 
 test_pytest() {
@@ -358,7 +439,7 @@ test_pytest() {
 }
 
 # ---------------------------------------------------------------------------
-# 7. E2E 5-second run
+# 8. E2E 5-second run
 # ---------------------------------------------------------------------------
 
 test_e2e() {
@@ -462,6 +543,7 @@ main() {
             test_gpio
             test_serial
             test_camera
+            test_audio
             test_app
             test_pytest
             test_e2e
@@ -470,12 +552,13 @@ main() {
         gpio)     test_gpio ;;
         serial)   test_serial ;;
         camera)   test_camera ;;
+        audio)    test_audio ;;
         app)      test_app ;;
         pytest)   test_pytest ;;
         e2e)      test_e2e ;;
         *)
             echo "Unknown step: ${step}"
-            echo "Valid steps: all, system, gpio, serial, camera, app, pytest, e2e"
+            echo "Valid steps: all, system, gpio, serial, camera, audio, app, pytest, e2e"
             exit 1
             ;;
     esac

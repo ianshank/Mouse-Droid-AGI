@@ -52,6 +52,7 @@ def _make_orchestrator(
 
     sensor_manager = AsyncMock()
     sensor_manager.read_all.return_value = _make_observation(cfg)
+    sensor_manager.recovery_attempt.return_value = 0
 
     return MouseDroidOrchestrator(
         world_model=world_model,
@@ -393,6 +394,7 @@ def _make_orchestrator_with_voice(
 
     sensor_manager = AsyncMock()
     sensor_manager.read_all.return_value = _make_observation(cfg)
+    sensor_manager.recovery_attempt.return_value = 0
 
     voice_engine = AsyncMock()
 

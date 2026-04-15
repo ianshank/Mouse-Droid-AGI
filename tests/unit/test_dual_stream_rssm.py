@@ -10,6 +10,7 @@ import torch
 
 pytest.importorskip("ncps")
 
+
 from mousedroid.config.schema import ModelConfig
 from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
 from mousedroid.world_model.protocol import SafetyTraceProtocol, WorldModelProtocol
