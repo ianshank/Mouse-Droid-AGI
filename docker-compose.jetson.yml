@@ -17,19 +17,23 @@ services:
     runtime: nvidia
 
     # --- Override entrypoint/CMD for production config ---
-    entrypoint: ["python3", "-m", "mousedroid.main"]
-    command: ["--config", "/etc/mousedroid/default.yaml", "/etc/mousedroid/jetson_production.yaml"]
+    entrypoint: ["/bin/sh", "-lc"]
+    command:
+      - >-
+        exec python3 -m mousedroid.main --config
+        ${MOUSEDROID_CONFIG_FILES:-/etc/mousedroid/default.yaml /etc/mousedroid/jetson_production.yaml}
 
     # --- Restart policy ---
     restart: unless-stopped
 
     # --- Environment ---
     environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=all
-      - MOUSEDROID_CONFIG=/etc/mousedroid/jetson_production.yaml
-      - MOUSEDROID_MOCK_HARDWARE=${MOUSEDROID_MOCK_HARDWARE:-true}
-      - CUDA_HOME=/usr/local/cuda
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: all
+      MOUSEDROID_CONFIG: /etc/mousedroid/jetson_production.yaml
+      MOUSEDROID_CONFIG_FILES: ${MOUSEDROID_CONFIG_FILES:-/etc/mousedroid/default.yaml /etc/mousedroid/jetson_production.yaml}
+      MOUSEDROID_MOCK_HARDWARE: ${MOUSEDROID_MOCK_HARDWARE:-true}
+      CUDA_HOME: /usr/local/cuda
 
     # --- Volume mounts ---
     volumes:
@@ -68,11 +72,11 @@ services:
     # --- Health check ---
     # Polls the telemetry health endpoint; marks container unhealthy after 3 failures.
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:${MOUSEDROID_TELEMETRY_PORT:-8080}/api/v1/health || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
+      test: ["CMD-SHELL", "curl -sf http://localhost:${MOUSEDROID_TELEMETRY_PORT:-8080}${MOUSEDROID_HEALTH_PATH:-/api/v1/health} || exit 1"]
+      interval: ${MOUSEDROID_HEALTH_INTERVAL:-15s}
+      timeout: ${MOUSEDROID_HEALTH_TIMEOUT:-5s}
+      retries: ${MOUSEDROID_HEALTH_RETRIES:-3}
+      start_period: ${MOUSEDROID_HEALTH_START_PERIOD:-30s}
 
     # --- Networking ---
     network_mode: host

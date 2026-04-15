@@ -1,7 +1,7 @@
 services:
   prometheus:
     container_name: mousedroid-prometheus
-    image: prom/prometheus:v2.54.1
+    image: prom/prometheus:${PROMETHEUS_VERSION:-v2.54.1}
     restart: unless-stopped
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -12,8 +12,9 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./config/prometheus/scrape_host_gateway.yml:/etc/prometheus/prometheus.yml:ro
+      - ${MOUSEDROID_PROMETHEUS_CONFIG:-./config/prometheus/scrape_host_gateway.yml}:/etc/prometheus/prometheus.yml:ro
       - ./config/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ./config/prometheus/runtime:/etc/prometheus/runtime:ro
       - prometheus_data:/prometheus
     depends_on:
       - node-exporter
@@ -22,7 +23,7 @@ services:
 
   loki:
     container_name: mousedroid-loki
-    image: grafana/loki:3.2.1
+    image: grafana/loki:${LOKI_VERSION:-3.2.1}
     restart: unless-stopped
     command:
       - -config.file=/etc/loki/config.yml
@@ -36,7 +37,7 @@ services:
 
   promtail:
     container_name: mousedroid-promtail
-    image: grafana/promtail:3.2.1
+    image: grafana/promtail:${PROMTAIL_VERSION:-3.2.1}
     restart: unless-stopped
     command:
       - -config.file=/etc/promtail/config.yml
@@ -55,7 +56,7 @@ services:
 
   grafana:
     container_name: mousedroid-grafana
-    image: grafana/grafana:11.2.0
+    image: grafana/grafana:${GRAFANA_VERSION:-11.2.0}
     restart: unless-stopped
     ports:
       - "3000:3000"
@@ -75,7 +76,7 @@ services:
 
   node-exporter:
     container_name: mousedroid-node-exporter
-    image: prom/node-exporter:v1.8.2
+    image: prom/node-exporter:${NODE_EXPORTER_VERSION:-v1.8.2}
     restart: unless-stopped
     command:
       - --path.rootfs=/host

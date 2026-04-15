@@ -138,3 +138,25 @@ def test_build_server_disables_metrics_registry_when_metrics_disabled():
 
     assert isinstance(server, TelemetryServer)
     assert server._metrics is None
+
+
+def test_build_server_reuses_provided_metrics_registry():
+    from mousedroid.telemetry.metrics import MetricsRegistry
+
+    cfg = _make_settings()
+    cfg = cfg.model_copy(
+        update={
+            "mock_hardware": False,
+            "telemetry": cfg.telemetry.model_copy(update={"enabled": True}),
+            "metrics": cfg.metrics.model_copy(update={"enabled": True}),
+        }
+    )
+    pub = build_telemetry_publisher(cfg)
+    assert pub is not None
+    health = HealthMonitor(cfg.health, cfg.jetson)
+    metrics_registry = MetricsRegistry(cfg.metrics)
+
+    server = build_telemetry_server(cfg, pub, health, metrics_registry=metrics_registry)
+
+    assert isinstance(server, TelemetryServer)
+    assert server._metrics is metrics_registry

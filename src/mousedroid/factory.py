@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from mousedroid.memory.tier import MemoryTier
     from mousedroid.sensing.manager import SensorManager
     from mousedroid.telemetry.log_buffer import LogRingBuffer
+    from mousedroid.telemetry.metrics import MetricsRegistry
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
     from mousedroid.voice.mock_tts import MockTTS
     from mousedroid.voice.tts import PiperTTS
@@ -141,9 +142,8 @@ def build_distance_sensor(cfg: Settings) -> DistanceSensorProtocol:
         from mousedroid.config.schema import UltrasonicConfig as UltraCfg
         from mousedroid.hardware.sensors.mock_ultrasonic import MockUltrasonic
 
-        ultrasonic_cfg: UltrasonicConfig = cfg.ultrasonic or UltraCfg(  # type: ignore[call-arg]
-            trigger_pin=0,
-            echo_pin=0,
+        ultrasonic_cfg: UltrasonicConfig = cfg.ultrasonic or UltraCfg.model_validate(
+            {"trigger_pin": 0, "echo_pin": 0}
         )
         return MockUltrasonic(ultrasonic_cfg)
 
@@ -315,7 +315,7 @@ def build_llm_gateway(cfg: Settings) -> LLMGatewayProtocol:
     from mousedroid.llm_gateway.config import GatewayConfig
     from mousedroid.llm_gateway.gateway import LLMGateway
 
-    gateway_cfg = GatewayConfig(  # type: ignore[call-arg]
+    gateway_cfg = GatewayConfig(
         enabled=cfg.llm.enabled,
         model_path=cfg.llm.model_path,
         model_url=cfg.llm.model_url,
@@ -327,10 +327,32 @@ def build_llm_gateway(cfg: Settings) -> LLMGatewayProtocol:
         temperature=cfg.llm.temperature,
         latency_target_ms=cfg.llm.latency_target_ms,
         stop_tokens=cfg.llm.stop_tokens,
+        max_vx_norm_mps=cfg.llm.max_vx_norm_mps,
+        max_vy_norm_mps=cfg.llm.max_vy_norm_mps,
+        max_omega_norm_rads=cfg.llm.max_omega_norm_rads,
         max_command_len=cfg.llm.max_command_len,
+        system_prompt=cfg.llm.system_prompt,
+        injection_patterns=cfg.llm.injection_patterns,
     )
     _log.info("llm_gateway_built", enabled=cfg.llm.enabled)
     return LLMGateway(gateway_cfg)
+
+
+def build_metrics_registry(cfg: Settings) -> MetricsRegistry | None:
+    """Build the shared Prometheus metrics registry when metrics are enabled.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Shared ``MetricsRegistry`` or ``None`` when metrics are disabled.
+    """
+    if not cfg.metrics.enabled:
+        return None
+
+    from mousedroid.telemetry.metrics import MetricsRegistry
+
+    return MetricsRegistry(cfg.metrics)
 
 
 def build_safety_monitor(cfg: Settings) -> SafetyMonitorProtocol:
@@ -489,6 +511,7 @@ def build_telemetry_server(
     publisher: TelemetryPublisherProtocol | None,
     health_monitor: HealthMonitor,
     log_buffer: LogRingBuffer | None = None,
+    metrics_registry: MetricsRegistry | None = None,
 ) -> TelemetryServerProtocol | None:
     """Build telemetry server if telemetry is enabled.
 
@@ -497,6 +520,7 @@ def build_telemetry_server(
         publisher: Telemetry publisher to consume frames from.
         health_monitor: Health monitor for health endpoint.
         log_buffer: Optional log ring buffer for log streaming.
+        metrics_registry: Optional shared metrics registry reused by other runtime components.
 
     Returns:
         ``TelemetryServer`` or ``None`` if telemetry disabled.
@@ -510,7 +534,7 @@ def build_telemetry_server(
         _log.info("telemetry_mock_server_built")
         return MockTelemetryServer()
 
-    metrics_registry = None
+    shared_metrics_registry = metrics_registry
     metrics_path = cfg.metrics.path
     telemetry_metrics_path_default = type(cfg.telemetry).model_fields["metrics_path"].default
     metrics_path_default = type(cfg.metrics).model_fields["path"].default
@@ -520,10 +544,8 @@ def build_telemetry_server(
     ):
         metrics_path = cfg.telemetry.metrics_path
 
-    if cfg.metrics.enabled:
-        from mousedroid.telemetry.metrics import MetricsRegistry
-
-        metrics_registry = MetricsRegistry(cfg.metrics)
+    if shared_metrics_registry is None and cfg.metrics.enabled:
+        shared_metrics_registry = build_metrics_registry(cfg)
 
     from mousedroid.telemetry.server import TelemetryServer
 
@@ -537,7 +559,7 @@ def build_telemetry_server(
         telemetry_queue=publisher.get_queue(),
         health_monitor=health_monitor,
         log_buffer=log_buffer,
-        metrics_registry=metrics_registry,
+        metrics_registry=shared_metrics_registry,
         metrics_path=metrics_path,
         publisher=publisher,
     )
@@ -929,11 +951,23 @@ def build_orchestrator(cfg: Settings) -> object:
         if buffer_size:
             log_buffer = _LogRingBuffer(buffer_size)
 
+    metrics_registry = build_metrics_registry(cfg)
+
     telemetry_server = build_telemetry_server(
         cfg,
         telemetry_publisher,
         health_monitor,
         log_buffer=log_buffer,
+        metrics_registry=metrics_registry,
+    )
+
+    llm_gateway = build_llm_gateway(cfg) if cfg.llm.enabled else None
+
+    from mousedroid.common.tools.registry import create_default_registry
+
+    tool_registry = create_default_registry(
+        llm_gateway=llm_gateway,
+        metrics_registry=metrics_registry,
     )
 
     # Voice engine (optional — disabled by default)
@@ -964,6 +998,8 @@ def build_orchestrator(cfg: Settings) -> object:
         memory_tier=memory_tier,
         experience_logger=experience_logger,
         curiosity_module=curiosity_module,
+        llm_gateway=llm_gateway,
+        tool_registry=tool_registry,
     )
 
 

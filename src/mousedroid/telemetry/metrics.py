@@ -44,20 +44,6 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
-# Default histogram buckets for latency in milliseconds (control-loop context)
-_DEFAULT_LATENCY_BUCKETS_MS: tuple[float, ...] = (
-    1.0,
-    2.5,
-    5.0,
-    10.0,
-    20.0,
-    33.0,
-    50.0,
-    100.0,
-    200.0,
-    float("inf"),
-)
-
 
 class _Counter:
     """Thread-safe Prometheus Counter (only increments)."""
@@ -257,6 +243,7 @@ class MetricsRegistry:
         # Counters
         self._frame_drops = _Counter()
         self._safety_violations = _LabeledCounter()
+        self._llm_translation_results = _LabeledCounter()
 
         # Gauges
         self._loop_time_ms = _Gauge()
@@ -266,7 +253,8 @@ class MetricsRegistry:
         self._publish_hz = _Gauge()
 
         # Histogram (loop latency)
-        self._loop_histogram = _Histogram(_DEFAULT_LATENCY_BUCKETS_MS)
+        self._loop_histogram = _Histogram(cfg.loop_latency_buckets_ms)
+        self._llm_translation_latency_ms = _Histogram(cfg.llm_latency_buckets_ms)
 
         # Pre-format metric names from namespace
         self._name_frame_drops = f"{ns}_frame_drops"
@@ -278,6 +266,8 @@ class MetricsRegistry:
         self._name_gpu_temp_c = f"{ns}_gpu_temp_celsius"
         self._name_publish_hz = f"{ns}_publish_hz"
         self._name_uptime = f"{ns}_uptime_seconds"
+        self._name_llm_translation = f"{ns}_llm_translation"
+        self._name_llm_translation_latency = f"{ns}_llm_translation_latency_ms"
 
         _log.debug("metrics_registry_initialised", namespace=ns)
 
@@ -323,6 +313,16 @@ class MetricsRegistry:
     def set_publish_hz(self, value: float) -> None:
         """Set the current telemetry publish rate in Hz."""
         self._publish_hz.set(value)
+
+    def inc_llm_translation(self, result: str) -> None:
+        """Increment the LLM translation counter for the given result label."""
+        if self._cfg.track_llm_translations:
+            self._llm_translation_results.inc(result)
+
+    def observe_llm_translation_latency_ms(self, value: float) -> None:
+        """Record LLM translation latency in milliseconds."""
+        if self._cfg.track_llm_translations:
+            self._llm_translation_latency_ms.observe(value)
 
     # ------------------------------------------------------------------
     # Read helpers (for testing / internal queries)
@@ -423,6 +423,28 @@ class MetricsRegistry:
                     self._name_gpu_temp_c,
                     "GPU temperature (degrees Celsius)",
                     self._gpu_temp_c.value,
+                )
+            )
+
+        if cfg.track_llm_translations:
+            llm_results = self._llm_translation_results.snapshot()
+            if llm_results:
+                sections.append(
+                    _render_labeled_counter(
+                        self._name_llm_translation,
+                        "LLM translation results (label: result)",
+                        "result",
+                        llm_results,
+                    )
+                )
+            llm_buckets, llm_sum, llm_count = self._llm_translation_latency_ms.snapshot()
+            sections.append(
+                _render_histogram(
+                    self._name_llm_translation_latency,
+                    "LLM translation latency histogram (milliseconds)",
+                    llm_buckets,
+                    llm_sum,
+                    llm_count,
                 )
             )
 

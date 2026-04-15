@@ -349,6 +349,28 @@ class LLMConfig(BaseModel):
         description="Stop sequences",
     )
     max_command_len: int = Field(512, gt=0, description="Max NL command length in chars")
+    max_vx_norm_mps: float = Field(0.5, gt=0, description="Max forward velocity norm (m/s)")
+    max_vy_norm_mps: float = Field(0.3, gt=0, description="Max lateral velocity norm (m/s)")
+    max_omega_norm_rads: float = Field(
+        2.0,
+        gt=0,
+        description="Max angular velocity norm (rad/s)",
+    )
+    system_prompt: str = Field(
+        "You are a Star Wars MSE-6 Mouse Droid navigation controller. "
+        "Given a natural language mission, output a JSON object with keys "
+        '"vx" (forward, -1 to 1), "vy" (lateral, -1 to 1), "omega" (rotation, -1 to 1). '
+        "Respond with ONLY the JSON object.",
+        description="System prompt for LLM mission translation",
+    )
+    injection_patterns: list[str] = Field(
+        default_factory=lambda: [
+            r"ignore (previous|above|all) instructions?",
+            r"system prompt",
+            r"you are now",
+        ],
+        description="Regex patterns to detect prompt injection attempts",
+    )
 
 
 class LoggingConfig(BaseModel):
@@ -521,6 +543,18 @@ class MetricsConfig(BaseModel):
         True, description="Expose safety_violations_total counter"
     )
     track_gpu_temp: bool = Field(True, description="Expose gpu_temp_celsius gauge")
+    track_llm_translations: bool = Field(
+        True,
+        description="Expose llm_translation counters and latency histogram",
+    )
+    loop_latency_buckets_ms: tuple[float, ...] = Field(
+        (1.0, 2.5, 5.0, 10.0, 20.0, 33.0, 50.0, 100.0, 200.0, float("inf")),
+        description="Histogram bucket boundaries for control-loop latency (ms)",
+    )
+    llm_latency_buckets_ms: tuple[float, ...] = Field(
+        (25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, float("inf")),
+        description="Histogram bucket boundaries for LLM translation latency (ms)",
+    )
 
 
 class ModelConfig(BaseModel):
@@ -645,6 +679,11 @@ class SafetyConfig(BaseModel):
         9.5,
         ge=0,
         description="Battery critical voltage (V); 0 disables",
+    )
+    default_battery_v: float = Field(
+        12.6,
+        gt=0,
+        description="Default battery voltage when sensor data is unavailable (V)",
     )
     reverse_velocity: float = Field(
         -0.5, le=0, description="Reverse velocity for obstacle avoidance"

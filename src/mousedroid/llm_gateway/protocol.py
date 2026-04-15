@@ -22,6 +22,11 @@ class GoalVector:
 class LLMGatewayProtocol(Protocol):
     """Interface for NL -> velocity command translation."""
 
+    @property
+    def is_ready(self) -> bool:
+        """Whether the gateway has a loaded model ready to serve translations."""
+        ...
+
     async def start(self) -> None:
         """Load model and warm up. Raises RuntimeError if deps missing."""
         ...

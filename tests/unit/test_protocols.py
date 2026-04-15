@@ -206,6 +206,10 @@ class _MockExperience:
 
 
 class _MockLLMGateway:
+    @property
+    def is_ready(self) -> bool:
+        return False
+
     async def start(self) -> None:
         pass
 

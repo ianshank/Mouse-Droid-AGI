@@ -30,9 +30,21 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 # Configurable paths via environment variables
 INSTALL_DIR="${MOUSEDROID_INSTALL_DIR:-/opt/mousedroid}"
 CONFIG_DIR="${MOUSEDROID_CONFIG_DIR:-/etc/mousedroid}"
-COMPOSE_FILE="${MOUSEDROID_COMPOSE_FILE:-${INSTALL_DIR}/docker-compose.jetson.yml}"
+DOCKER_ENV_FILE="${MOUSEDROID_DOCKER_ENV_FILE:-${CONFIG_DIR}/docker.env}"
+
+if [ -f "${DOCKER_ENV_FILE}" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "${DOCKER_ENV_FILE}"
+    set +a
+fi
+
+INSTALL_DIR="${MOUSEDROID_INSTALL_DIR:-/opt/mousedroid}"
+CONFIG_DIR="${MOUSEDROID_CONFIG_DIR:-/etc/mousedroid}"
+COMPOSE_FILE="${MOUSEDROID_COMPOSE_FILE:-${COMPOSE_FILE:-${INSTALL_DIR}/docker-compose.jetson.yml}}"
 CONTAINER_NAME="${MOUSEDROID_CONTAINER:-mousedroid}"
-HEALTH_PORT="${MOUSEDROID_HEALTH_PORT:-8080}"
+HEALTH_PORT="${MOUSEDROID_HEALTH_PORT:-${MOUSEDROID_TELEMETRY_PORT:-8080}}"
+HEALTH_PATH="${MOUSEDROID_HEALTH_PATH:-/api/v1/health}"
 HEALTH_TIMEOUT="${MOUSEDROID_HEALTH_TIMEOUT:-30}"
 
 # Parse arguments
@@ -102,7 +114,7 @@ health_check() {
     fi
 
     # Check telemetry health endpoint (if available)
-    local health_url="http://127.0.0.1:${HEALTH_PORT}/health"
+    local health_url="http://127.0.0.1:${HEALTH_PORT}${HEALTH_PATH}"
     if curl -sf --max-time 5 "$health_url" >/dev/null 2>&1; then
         info "  Telemetry health endpoint: OK (${health_url})"
     else

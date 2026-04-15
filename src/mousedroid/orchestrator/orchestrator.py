@@ -17,7 +17,6 @@ from numpy.typing import NDArray
 
 from mousedroid.common.actions import normalize_action_numpy
 from mousedroid.constants import (
-    DEFAULT_BATTERY_VOLTAGE,
     MILLISECONDS_PER_SECOND,
     MOTOR_STATE_BATTERY_INDEX,
 )
@@ -27,12 +26,14 @@ from mousedroid.telemetry.frame_builder import build_telemetry_frame
 if TYPE_CHECKING:
     from mousedroid.agents.base import AgentProtocol
     from mousedroid.cognitive.cognitive_core import CognitiveCore
+    from mousedroid.common.tools.registry import ToolRegistry
     from mousedroid.comms.protocol import ESP32CommProtocol
     from mousedroid.config.schema import Settings
     from mousedroid.curiosity.protocol import CuriosityProtocol
     from mousedroid.experience.logger import ExperienceLogger
     from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
     from mousedroid.health.watchdog import WatchdogProtocol
+    from mousedroid.llm_gateway.protocol import LLMGatewayProtocol
     from mousedroid.memory.tier import MemoryTier
     from mousedroid.safety.context import SafetyContext
     from mousedroid.safety.protocol import SafetyMonitorProtocol
@@ -68,6 +69,8 @@ class MouseDroidOrchestrator:
         memory_tier: MemoryTier | None = None,
         experience_logger: ExperienceLogger | None = None,
         curiosity_module: CuriosityProtocol | None = None,
+        llm_gateway: LLMGatewayProtocol | None = None,
+        tool_registry: ToolRegistry | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -87,6 +90,8 @@ class MouseDroidOrchestrator:
             memory_tier: Optional memory tier (episodic, semantic, working, consolidation).
             experience_logger: Optional LMDB experience logger.
             curiosity_module: Optional ICM curiosity module for intrinsic reward.
+            llm_gateway: Optional runtime LLM gateway for NL tool execution.
+            tool_registry: Optional tool registry with runtime-bound tool handlers.
         """
         if not agents:
             msg = "At least one agent is required"
@@ -105,6 +110,8 @@ class MouseDroidOrchestrator:
         self._memory_tier = memory_tier
         self._experience_logger = experience_logger
         self._curiosity_module = curiosity_module
+        self._llm_gateway = llm_gateway
+        self._tool_registry = tool_registry
         self._consolidation_task: asyncio.Task[None] | None = None
         self._cfg = cfg
         self._running = False
@@ -127,6 +134,11 @@ class MouseDroidOrchestrator:
             await self._cognitive_core.start()
         if self._telemetry_server is not None:
             await self._telemetry_server.start()
+        if self._llm_gateway is not None:
+            try:
+                await self._llm_gateway.start()
+            except Exception as exc:  # pylint: disable=broad-except
+                _log.warning("llm_gateway_start_failed_degrading", error=str(exc))
         if self._voice_engine is not None:
             await self._voice_engine.start()
         if self._experience_logger is not None:
@@ -149,6 +161,11 @@ class MouseDroidOrchestrator:
             self._experience_logger.close()
         if self._voice_engine is not None:
             await self._voice_engine.stop()
+        if self._llm_gateway is not None:
+            try:
+                await self._llm_gateway.stop()
+            except Exception:
+                _log.warning("llm_gateway_stop_failed", exc_info=True)
         if self._telemetry_server is not None:
             await self._telemetry_server.stop()
         if self._cognitive_core is not None:
@@ -250,7 +267,7 @@ class MouseDroidOrchestrator:
             battery_v = (
                 float(observation.motor_state[MOTOR_STATE_BATTERY_INDEX])
                 if observation.motor_state.size > MOTOR_STATE_BATTERY_INDEX
-                else DEFAULT_BATTERY_VOLTAGE
+                else self._cfg.safety.default_battery_v
             )
             belief_dim = int(self._cfg.model.belief_dim)
             bdi_state_vec: NDArray[np.float32] = (
@@ -583,3 +600,26 @@ class MouseDroidOrchestrator:
             "mock_hardware": self._cfg.mock_hardware,
             "agents": [a.name for a in self._agents],
         }
+
+    @property
+    def tool_registry(self) -> ToolRegistry | None:
+        """Return the runtime tool registry, when configured."""
+        return self._tool_registry
+
+    async def dispatch_tool(self, name: str, **kwargs: object) -> object:
+        """Dispatch a named tool through the configured runtime registry.
+
+        Args:
+            name: Registered tool name.
+            **kwargs: Tool arguments.
+
+        Returns:
+            Tool result payload.
+
+        Raises:
+            KeyError: If no registry is configured.
+        """
+        if self._tool_registry is None:
+            msg = "Tool registry not configured"
+            raise KeyError(msg)
+        return await self._tool_registry.dispatch(name, **kwargs)

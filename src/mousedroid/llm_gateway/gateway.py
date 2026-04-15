@@ -36,6 +36,15 @@ class LLMGateway:
         """
         self._cfg = cfg
         self._model: Any = None
+        self._injection_re = re.compile(
+            "(" + "|".join(cfg.injection_patterns) + ")",
+            re.IGNORECASE,
+        )
+
+    @property
+    def is_ready(self) -> bool:
+        """Whether the gateway has a model loaded and ready."""
+        return self._model is not None
 
     async def start(self) -> None:
         """Load model and warm up.
@@ -68,15 +77,10 @@ class LLMGateway:
             n_gpu_layers=self._cfg.n_gpu_layers,
         )
 
-    _INJECTION_RE = re.compile(
-        r"(ignore (previous|above|all) instructions?|system prompt|you are now)",
-        re.IGNORECASE,
-    )
-
     def _sanitize_command(self, text: str) -> str:
         """Sanitize NL command to mitigate prompt injection."""
         text = text.strip()[: self._cfg.max_command_len]
-        if self._INJECTION_RE.search(text):
+        if self._injection_re.search(text):
             msg = "Mission command contains disallowed content"
             raise ValueError(msg)
         return text
@@ -117,7 +121,15 @@ class LLMGateway:
                 target_ms=self._cfg.latency_target_ms,
             )
 
-        return self._parse_response(raw)
+        goal = self._parse_response(raw)
+        _log.info(
+            "llm_translation_completed",
+            elapsed_ms=elapsed_ms,
+            vx=goal.vx_target,
+            vy=goal.vy_target,
+            omega=goal.omega_target,
+        )
+        return goal
 
     def _infer_sync(self, prompt: str) -> str:  # pragma: no cover
         """Run blocking LLM inference (via to_thread).

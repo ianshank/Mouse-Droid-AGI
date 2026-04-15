@@ -181,9 +181,21 @@ Bring up the bundled Prometheus, Grafana, Loki, Promtail, and node-exporter stac
 docker compose -f docker-compose.monitoring.yml up -d
 ```
 
+For Jetson production, use the deployment helper so Prometheus can scrape a
+token-protected `/metrics` endpoint without reopening the telemetry API:
+
+```bash
+sudo bash scripts/deploy_monitoring.sh --secure-scrape
+```
+
 The monitoring compose file assumes MouseDroid is already running on the host via
 `docker-compose.jetson.yml`, and Prometheus scrapes the host-published telemetry
 endpoint through Docker's `host.docker.internal` gateway alias.
+
+Secure scrape mode writes the telemetry bearer token into
+`config/prometheus/runtime/mousedroid_token`, switches Prometheus to
+`config/prometheus/scrape_host_gateway_secure.yml`, and restarts MouseDroid with
+`config/jetson_secure_metrics.yaml` so `/metrics` is no longer exempt from auth.
 
 Default endpoints:
 
@@ -196,6 +208,12 @@ http://127.0.0.1:3000
 
 # Loki API
 http://127.0.0.1:3100
+```
+
+Quick verification on the Jetson:
+
+```bash
+sudo bash scripts/deploy_monitoring.sh --verify-only --secure-scrape
 ```
 
 ### Run with Custom Config

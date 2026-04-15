@@ -68,6 +68,8 @@ Thumbs.db
 .env.local
 *.env
 secrets.yaml
+config/prometheus/runtime/*
+!config/prometheus/runtime/.gitkeep
 
 # Logs
 *.log

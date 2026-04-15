@@ -47,3 +47,11 @@ class GatewayConfig(BaseModel):
         "Respond with ONLY the JSON object.",
         description="System prompt for LLM mission translation",
     )
+    injection_patterns: list[str] = Field(
+        default_factory=lambda: [
+            r"ignore (previous|above|all) instructions?",
+            r"system prompt",
+            r"you are now",
+        ],
+        description="Regex patterns to detect prompt injection attempts",
+    )

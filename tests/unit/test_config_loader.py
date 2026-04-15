@@ -73,6 +73,39 @@ def test_load_settings_with_overlay(tmp_path: Path):
     assert settings.debug is True
 
 
+def test_load_settings_secure_metrics_overlay(tmp_path: Path):
+    cfg_dir = tmp_path / "config"
+    cfg_dir.mkdir()
+    default = {
+        "mock_hardware": True,
+        "platform": "mouse_droid",
+        "telemetry": {
+            "enabled": True,
+            "auth": {
+                "auth_enabled": True,
+                "token_env_var": "MOUSEDROID_TELEMETRY_TOKEN",
+                "allowed_origins": [],
+                "exempt_paths": ["/health", "/metrics", "/api/v1/health"],
+            },
+        },
+    }
+    overlay = {
+        "telemetry": {
+            "auth": {
+                "exempt_paths": ["/health", "/api/v1/health"],
+            }
+        }
+    }
+
+    (cfg_dir / "default.yaml").write_text(yaml.dump(default))
+    overlay_path = tmp_path / "jetson_secure_metrics.yaml"
+    overlay_path.write_text(yaml.dump(overlay))
+
+    settings = load_settings(overlay_path, config_dir=cfg_dir)
+
+    assert settings.telemetry.auth.exempt_paths == ["/health", "/api/v1/health"]
+
+
 def test_load_settings_nonexistent_overlay_raises(tmp_path: Path):
     cfg_dir = tmp_path / "config"
     cfg_dir.mkdir()
