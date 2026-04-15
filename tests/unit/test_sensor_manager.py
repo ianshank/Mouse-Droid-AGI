@@ -452,3 +452,78 @@ async def test_recovery_attempt_handles_lidar_failure():
     recovered = await mgr.recovery_attempt()
     # Vision + distance + motor recovered, lidar failed
     assert recovered == 3
+
+
+async def test_recovery_attempt_handles_vision_failure():
+    """recovery_attempt handles vision stop/start exceptions gracefully."""
+    cfg = Settings(mock_hardware=True)
+
+    vision = AsyncMock()
+    vision.stop = AsyncMock(side_effect=RuntimeError("vision stop fail"))
+    vision.start = AsyncMock()
+    vision.capture_features = AsyncMock(
+        return_value=np.ones(cfg.camera.feature_dim, dtype=np.float32),
+    )
+
+    distance = AsyncMock()
+    distance.read_distance_m = AsyncMock(return_value=1.5)
+    distance.max_range_m = 4.0
+
+    esp32 = AsyncMock()
+    esp32.read_encoders = AsyncMock(return_value=EncoderReading())
+    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+
+    mgr = SensorManager(vision, distance, esp32, cfg)
+    recovered = await mgr.recovery_attempt()
+    # Vision failed, distance + motor recovered => 2
+    assert recovered == 2
+
+
+async def test_recovery_attempt_handles_distance_failure():
+    """recovery_attempt handles distance read exceptions gracefully."""
+    cfg = Settings(mock_hardware=True)
+
+    vision = AsyncMock()
+    vision.capture_features = AsyncMock(
+        return_value=np.ones(cfg.camera.feature_dim, dtype=np.float32),
+    )
+    vision.start = AsyncMock()
+    vision.stop = AsyncMock()
+
+    distance = AsyncMock()
+    distance.read_distance_m = AsyncMock(side_effect=RuntimeError("distance fail"))
+    distance.max_range_m = 4.0
+
+    esp32 = AsyncMock()
+    esp32.read_encoders = AsyncMock(return_value=EncoderReading())
+    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+
+    mgr = SensorManager(vision, distance, esp32, cfg)
+    recovered = await mgr.recovery_attempt()
+    # Vision + motor recovered, distance failed => 2
+    assert recovered == 2
+
+
+async def test_recovery_attempt_handles_motor_failure():
+    """recovery_attempt handles motor read exceptions gracefully."""
+    cfg = Settings(mock_hardware=True)
+
+    vision = AsyncMock()
+    vision.capture_features = AsyncMock(
+        return_value=np.ones(cfg.camera.feature_dim, dtype=np.float32),
+    )
+    vision.start = AsyncMock()
+    vision.stop = AsyncMock()
+
+    distance = AsyncMock()
+    distance.read_distance_m = AsyncMock(return_value=1.5)
+    distance.max_range_m = 4.0
+
+    esp32 = AsyncMock()
+    esp32.read_encoders = AsyncMock(side_effect=RuntimeError("motor fail"))
+    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+
+    mgr = SensorManager(vision, distance, esp32, cfg)
+    recovered = await mgr.recovery_attempt()
+    # Vision + distance recovered, motor failed => 2
+    assert recovered == 2

@@ -153,21 +153,28 @@ class SensorManager:
             Number of sensors that recovered successfully.
         """
         recovered = 0
-        for name, driver, starter, reader in [
-            ("vision", self._vision, self._vision.start, self._safe_vision_read),
-            ("distance", self._distance, None, self._safe_distance_read),
-            ("motor", self._esp32, None, self._safe_motor_read),
-        ]:
-            try:
-                if starter is not None:
-                    await driver.stop()
-                    await starter()
-                _, ok = await reader()
-                if ok:
-                    recovered += 1
-                    _log.info("sensor_recovered", sensor=name)
-            except Exception:
-                _log.warning("sensor_recovery_failed", sensor=name, exc_info=True)
+        # Vision: stop + restart (only sensor with start/stop lifecycle)
+        try:
+            await self._vision.stop()
+            await self._vision.start()
+            _, ok = await self._safe_vision_read()
+            if ok:
+                recovered += 1
+                _log.info("sensor_recovered", sensor="vision")
+        except Exception:
+            _log.warning("sensor_recovery_failed", sensor="vision", exc_info=True)
+
+        # Distance: read-only recovery probe (_safe_distance_read handles its own exceptions)
+        _, ok = await self._safe_distance_read()
+        if ok:
+            recovered += 1
+            _log.info("sensor_recovered", sensor="distance")
+
+        # Motor: read-only recovery probe (_safe_motor_read handles its own exceptions)
+        _, ok = await self._safe_motor_read()
+        if ok:
+            recovered += 1
+            _log.info("sensor_recovered", sensor="motor")
 
         if self._microphone is not None:
             try:
