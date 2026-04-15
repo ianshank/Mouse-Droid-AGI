@@ -127,8 +127,10 @@ class CloudTelemetrySink:
     async def close(self) -> None:
         """Shut down the Pub/Sub publisher client."""
         if self._publisher is not None:
-            self._publisher.stop()
+            loop = asyncio.get_running_loop()
+            publisher = self._publisher
             self._publisher = None
+            await loop.run_in_executor(None, publisher.stop)
             _log.info("cloud_pubsub_sink_closed")
 
     async def _publish(
@@ -152,8 +154,9 @@ class CloudTelemetrySink:
             async def _do_publish() -> None:
                 assert self._publisher is not None
                 loop = asyncio.get_running_loop()
+                timeout = self._pubsub_cfg.publish_timeout_s
                 future = self._publisher.publish(topic, data=data, **attrs)
-                await loop.run_in_executor(None, future.result, 10)
+                await loop.run_in_executor(None, future.result, timeout)
 
             await self._cb.call(_do_publish)
         except CircuitOpenError:

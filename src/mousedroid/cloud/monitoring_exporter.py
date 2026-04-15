@@ -136,7 +136,7 @@ class CloudMetricsExporter:
             series.points.append(point)
             series_list.append(series)
 
-        if series_list:
+        if series_list and self._client is not None:
             self._client.create_time_series(self._project_path, series_list)
 
     async def stop(self) -> None:

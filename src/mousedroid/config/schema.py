@@ -906,6 +906,11 @@ class GCPPubSubConfig(BaseModel):
         gt=0,
         description="Max batch latency before flush (s)",
     )
+    publish_timeout_s: float = Field(
+        10.0,
+        gt=0,
+        description="Timeout in seconds for individual publish futures",
+    )
     ordering_key: str = Field(
         "mousedroid-0",
         description="Message ordering key for ordered delivery",
@@ -974,6 +979,11 @@ class GCPFirestoreConfig(BaseModel):
         120.0,
         gt=0,
         description="Seconds between episodic memory sync batches",
+    )
+    sync_batch_size: int = Field(
+        10,
+        gt=0,
+        description="Max episodes to sync per batch",
     )
 
 

@@ -177,7 +177,8 @@ class CloudExperienceExporter:
                 import zstandard as zstd
 
                 cctx = zstd.ZstdCompressor()
-                return cctx.compress(payload)
+                result: bytes = cctx.compress(payload)
+                return result
             except ImportError:
                 _log.warning("zstd_not_available_falling_back_to_gzip")
                 buf = io.BytesIO()

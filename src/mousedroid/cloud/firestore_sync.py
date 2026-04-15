@@ -69,7 +69,8 @@ class CloudFirestoreSync:
         if self._collection_ref is None:
             return 0
 
-        episodes = self._episodic.sample(min(10, len(self._episodic)))
+        batch_size = self._fs_cfg.sync_batch_size
+        episodes = self._episodic.sample(min(batch_size, len(self._episodic)))
         if not episodes:
             return 0
 
@@ -109,7 +110,10 @@ class CloudFirestoreSync:
                 await self._task
             self._task = None
         if self._db is not None:
-            self._db.close()
+            try:
+                self._db.close()
+            except Exception:
+                _log.debug("cloud_firestore_close_error", exc_info=True)
             self._db = None
         _log.info("cloud_firestore_sync_closed")
 

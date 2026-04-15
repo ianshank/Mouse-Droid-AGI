@@ -8,7 +8,6 @@ blocking the 30 Hz control loop.
 from __future__ import annotations
 
 import logging
-from collections import deque
 from typing import TYPE_CHECKING, Any
 
 from mousedroid.logging.setup import get_logger
@@ -39,7 +38,6 @@ class CloudLoggingSink:
         self._log_cfg = cfg.logging
         self._min_level = _LEVEL_MAP.get(self._log_cfg.min_level.lower(), logging.INFO)
         self._cloud_logger: Any | None = None
-        self._buffer: deque[dict[str, Any]] = deque(maxlen=500)
         self._started = False
 
     async def start(self) -> None:
