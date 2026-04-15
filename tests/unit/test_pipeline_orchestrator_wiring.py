@@ -78,7 +78,7 @@ async def test_train_rssm_delegates_to_run_pipeline(tmp_path: Path) -> None:
         new_callable=AsyncMock,
         return_value=fake_checkpoint,
     ) as mock_to_thread:
-        await orch._train_rssm(batch_size=16)
+        await orch._train_rssm(orch._settings, 16, orch._checkpoint_dir)
 
     mock_to_thread.assert_awaited_once()
     call_args = mock_to_thread.call_args
@@ -97,7 +97,7 @@ async def test_train_warmstart_delegates_to_run_pipeline() -> None:
         new_callable=AsyncMock,
         return_value=None,
     ) as mock_to_thread:
-        await orch._train_warmstart(batch_size=32)
+        await orch._train_warmstart(orch._settings, 32, orch._checkpoint_dir)
 
     mock_to_thread.assert_awaited_once()
     fn = mock_to_thread.call_args[0][0]
@@ -114,7 +114,7 @@ async def test_train_bdi_delegates_to_run_pipeline() -> None:
         new_callable=AsyncMock,
         return_value=Path("weights/bdi"),
     ) as mock_to_thread:
-        await orch._train_bdi(batch_size=32)
+        await orch._train_bdi(orch._settings, 32, orch._checkpoint_dir)
 
     mock_to_thread.assert_awaited_once()
     fn = mock_to_thread.call_args[0][0]
@@ -131,7 +131,7 @@ async def test_train_constitutional_rl_delegates_to_run_pipeline() -> None:
         new_callable=AsyncMock,
         return_value=Path("weights/constitutional_rl"),
     ) as mock_to_thread:
-        await orch._train_constitutional_rl(batch_size=64)
+        await orch._train_constitutional_rl(orch._settings, 64, orch._checkpoint_dir)
 
     mock_to_thread.assert_awaited_once()
     fn = mock_to_thread.call_args[0][0]
@@ -154,7 +154,7 @@ async def test_batch_size_propagated_to_settings_copy() -> None:
         new_callable=AsyncMock,
         return_value=Path("fake.pt"),
     ) as mock_to_thread:
-        await orch._train_rssm(batch_size=tuned_batch)
+        await orch._train_rssm(orch._settings, tuned_batch, orch._checkpoint_dir)
 
     # Second positional arg is the updated_settings
     updated_settings = mock_to_thread.call_args[0][1]
@@ -201,12 +201,26 @@ def test_build_training_pipeline_default_config() -> None:
 
 
 def test_training_phase_protocol_is_runtime_checkable() -> None:
-    """TrainingPhaseProtocol is a runtime_checkable Protocol."""
+    """TrainingPhaseProtocol supports runtime structural isinstance checks."""
     from mousedroid.training.protocol import TrainingPhaseProtocol
 
-    assert hasattr(TrainingPhaseProtocol, "__protocol_attrs__") or hasattr(
-        TrainingPhaseProtocol, "__abstractmethods__"
-    )
+    class _ConformingPhase:
+        """Minimal concrete implementation satisfying the Protocol."""
+
+        @property
+        def name(self) -> str:
+            return "test_phase"
+
+        async def run(
+            self,
+            cfg: object,
+            batch_size: int,
+            checkpoint_dir: object,
+        ) -> object:
+            return object()
+
+    phase = _ConformingPhase()
+    assert isinstance(phase, TrainingPhaseProtocol)
 
 
 # ---------------------------------------------------------------------------
@@ -238,10 +252,10 @@ async def test_run_orchestrates_phases_in_order(tmp_path: Path) -> None:
         batch_tuner=batch_tuner,
     )
 
-    async def _fake_rssm(batch_size: int) -> None:
+    async def _fake_rssm(cfg: object, batch_size: int, checkpoint_dir: object) -> None:
         phases_called.append("rssm")
 
-    async def _fake_bdi(batch_size: int) -> None:
+    async def _fake_bdi(cfg: object, batch_size: int, checkpoint_dir: object) -> None:
         phases_called.append("bdi")
 
     orch._train_rssm = _fake_rssm  # type: ignore[assignment]
@@ -267,7 +281,7 @@ async def test_run_resume_skips_completed_phases(tmp_path: Path) -> None:
         resume_from_phase="bdi",
     )
 
-    # Create rssm + warmstart checkpoint markers (so validation passes)
+    # Create warmstart checkpoint marker (prev phase before bdi, so validation passes)
     ckpt_dir = tmp_path / "checkpoints"
     ckpt_dir.mkdir(parents=True)
     (ckpt_dir / "warmstart.done").write_text("phase=warmstart\n")
@@ -288,9 +302,9 @@ async def test_run_resume_skips_completed_phases(tmp_path: Path) -> None:
     async def _track_phase(name: str) -> None:
         phases_called.append(name)
 
-    orch._train_rssm = lambda bs: _track_phase("rssm")  # type: ignore[assignment]
-    orch._train_warmstart = lambda bs: _track_phase("warmstart")  # type: ignore[assignment]
-    orch._train_bdi = lambda bs: _track_phase("bdi")  # type: ignore[assignment]
+    orch._train_rssm = lambda cfg, bs, cd: _track_phase("rssm")  # type: ignore[assignment]
+    orch._train_warmstart = lambda cfg, bs, cd: _track_phase("warmstart")  # type: ignore[assignment]
+    orch._train_bdi = lambda cfg, bs, cd: _track_phase("bdi")  # type: ignore[assignment]
 
     await orch.run()
 

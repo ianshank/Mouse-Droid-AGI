@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mousedroid"
-version = "0.3.0"
+version = "0.4.0"
 description = "MouseDroidAGI — Star Wars MSE-6 Agentic World Model on Jetson Orin Nano"
 requires-python = ">=3.10"
 dependencies = [
@@ -79,7 +79,7 @@ dev = [
 mousedroid = "mousedroid.main:cli_entry"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/mousedroid"]
+packages = ["src/mousedroid", "training"]
 
 [tool.ruff]
 target-version = "py310"

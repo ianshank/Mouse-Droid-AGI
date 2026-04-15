@@ -1174,6 +1174,24 @@ class TrainingPipelineConfig(BaseModel):
         description="Suffix for phase checkpoint marker files",
     )
 
+    @model_validator(mode="after")
+    def _validate_checkpoint_marker_suffix(self) -> TrainingPipelineConfig:
+        """Reject suffixes that could cause path traversal in checkpoint filenames."""
+        suffix = self.checkpoint_marker_suffix
+        if not suffix:
+            msg = "checkpoint_marker_suffix must not be empty"
+            raise ValueError(msg)
+        if not suffix.startswith("."):
+            msg = "checkpoint_marker_suffix must start with '.' (e.g. '.done')"
+            raise ValueError(msg)
+        if "/" in suffix or "\\" in suffix:
+            msg = "checkpoint_marker_suffix must not contain path separators"
+            raise ValueError(msg)
+        if ".." in suffix:
+            msg = "checkpoint_marker_suffix must not contain path traversal segments"
+            raise ValueError(msg)
+        return self
+
 
 class TrainingConfig(BaseModel):
     """Offline training configuration."""

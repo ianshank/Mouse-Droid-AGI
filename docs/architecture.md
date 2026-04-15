@@ -541,9 +541,11 @@ graph TD
 **Protocol contract:** `TrainingPhaseProtocol` (`src/mousedroid/training/protocol.py`) defines the
 `@runtime_checkable` async interface for each phase: `name: str` + `async run(cfg, batch_size, checkpoint_dir) → Path`.
 
-**Config-driven paths:** All artifact filenames and subdirectory names come from `TrainingConfig` fields
-(`rssm_subdir`, `rssm_checkpoint_filename`, `bdi_annotations_filename`, `mcts_subdir`,
-`policy_init_filename`) and `TrainingPipelineConfig.checkpoint_marker_suffix`. Zero hardcoded strings.
+**Config-driven paths:** Key artifact filenames and subdirectory names used by `PipelineOrchestrator`
+come from `TrainingConfig` fields (`rssm_subdir`, `rssm_checkpoint_filename`, `bdi_annotations_filename`,
+`mcts_subdir`, `policy_init_filename`) and `TrainingPipelineConfig.checkpoint_marker_suffix`.
+Phase-internal path segments within `training/run_pipeline.py` will be migrated to config in a
+follow-up iteration.
 
 **Factory:** `build_training_pipeline(cfg: Settings) → PipelineOrchestrator` in `factory.py`.
 
