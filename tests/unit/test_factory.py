@@ -54,13 +54,16 @@ def test_build_distance_sensor_missing_config_raises():
         build_distance_sensor(cfg)
 
 
+@pytest.mark.hardware
 def test_build_distance_sensor_real_hardware():
+    try:
+        from mousedroid.hardware.sensors.ultrasonic import HcSr04
+    except Exception:
+        pytest.skip("Jetson.GPIO unavailable (container or non-Jetson host)")
     cfg = _real_settings()
     from mousedroid.factory import build_distance_sensor
 
     sensor = build_distance_sensor(cfg)
-    from mousedroid.hardware.sensors.ultrasonic import HcSr04
-
     assert isinstance(sensor, HcSr04)
 
 

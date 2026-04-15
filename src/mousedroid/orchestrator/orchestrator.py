@@ -7,6 +7,7 @@ through constructor, wired by factory functions.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from typing import TYPE_CHECKING
 
@@ -28,8 +29,11 @@ if TYPE_CHECKING:
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.comms.protocol import ESP32CommProtocol
     from mousedroid.config.schema import Settings
+    from mousedroid.curiosity.protocol import CuriosityProtocol
+    from mousedroid.experience.logger import ExperienceLogger
     from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
     from mousedroid.health.watchdog import WatchdogProtocol
+    from mousedroid.memory.tier import MemoryTier
     from mousedroid.safety.context import SafetyContext
     from mousedroid.safety.protocol import SafetyMonitorProtocol
     from mousedroid.sensing.manager import SensorManager
@@ -61,6 +65,9 @@ class MouseDroidOrchestrator:
         voice_engine: VoiceEngineProtocol | None = None,
         hailo_runtime: HailoRuntimeProtocol | None = None,
         watchdog: WatchdogProtocol | None = None,
+        memory_tier: MemoryTier | None = None,
+        experience_logger: ExperienceLogger | None = None,
+        curiosity_module: CuriosityProtocol | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -77,6 +84,9 @@ class MouseDroidOrchestrator:
             voice_engine: Optional Rocky voice engine for audio output.
             hailo_runtime: Optional Hailo-8 accelerator runtime for lifecycle management.
             watchdog: Optional watchdog notifier for systemd/file liveness signals.
+            memory_tier: Optional memory tier (episodic, semantic, working, consolidation).
+            experience_logger: Optional LMDB experience logger.
+            curiosity_module: Optional ICM curiosity module for intrinsic reward.
         """
         if not agents:
             msg = "At least one agent is required"
@@ -92,6 +102,10 @@ class MouseDroidOrchestrator:
         self._voice_engine = voice_engine
         self._hailo_runtime = hailo_runtime
         self._watchdog = watchdog
+        self._memory_tier = memory_tier
+        self._experience_logger = experience_logger
+        self._curiosity_module = curiosity_module
+        self._consolidation_task: asyncio.Task[None] | None = None
         self._cfg = cfg
         self._running = False
         self._tick_count: int = 0
@@ -115,6 +129,10 @@ class MouseDroidOrchestrator:
             await self._telemetry_server.start()
         if self._voice_engine is not None:
             await self._voice_engine.start()
+        if self._experience_logger is not None:
+            self._experience_logger.open()
+        if self._memory_tier is not None:
+            self._consolidation_task = asyncio.create_task(self._consolidation_loop())
         self._running = True
         _log.info("orchestrator_started")
 
@@ -122,6 +140,13 @@ class MouseDroidOrchestrator:
         """Stop all subsystems gracefully."""
         _log.info("orchestrator_stopping")
         self._running = False
+        if self._consolidation_task is not None:
+            self._consolidation_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._consolidation_task
+            self._consolidation_task = None
+        if self._experience_logger is not None:
+            self._experience_logger.close()
         if self._voice_engine is not None:
             await self._voice_engine.stop()
         if self._telemetry_server is not None:
@@ -158,6 +183,7 @@ class MouseDroidOrchestrator:
         self._prev_action = action.unsqueeze(0) if action.dim() == 1 else action
 
         await self._execute_action(action)
+        self._log_experience(observation, action)
         await self._voice_observe(observation, safety_ctx)
 
         self._tick_count += 1
@@ -227,21 +253,33 @@ class MouseDroidOrchestrator:
                 else DEFAULT_BATTERY_VOLTAGE
             )
             belief_dim = int(self._cfg.model.belief_dim)
-            bdi_state_vec = self._h.numpy().flatten().astype(np.float32, copy=False)
-            state_vec = bdi_state_vec
-            if state_vec.size < belief_dim:
-                state_vec = np.pad(state_vec, (0, belief_dim - state_vec.size))
+            bdi_state_vec: NDArray[np.float32] = (
+                self._h.detach()
+                .cpu()
+                .numpy()
+                .reshape(-1)
+                .astype(
+                    np.float32,
+                    copy=False,
+                )
+            )
+            state_vec: NDArray[np.float32]
+            if bdi_state_vec.size < belief_dim:
+                state_vec = np.pad(bdi_state_vec, (0, belief_dim - bdi_state_vec.size)).astype(
+                    np.float32,
+                    copy=False,
+                )
             else:
-                state_vec = state_vec[:belief_dim]
-            state_vec = state_vec.astype(np.float32, copy=False)
+                state_vec = bdi_state_vec[:belief_dim].astype(np.float32, copy=False)
 
-            obs_dict = {
+            obs_dict: dict[str, object] = {
                 "state": state_vec,
                 "bdi_state": bdi_state_vec,
                 "battery_v": battery_v,
                 "obstacle_dist_m": float(observation.distance_m),
                 "mcts_sims": int(self._cfg.mcts.n_simulations_base),
                 "loop_time_ms": loop_time_ms,
+                "curiosity": self._compute_curiosity_scores(),
             }
             action_np, violations = self._cognitive_core.tick_fast(obs_dict)  # type: ignore[union-attr]
             if violations:
@@ -380,6 +418,119 @@ class MouseDroidOrchestrator:
             await self._esp32.emergency_stop()
         except Exception:
             _log.exception("emergency_stop_failed_in_error_handler")
+
+    def _log_experience(
+        self,
+        observation: ObservationProtocol,
+        action: torch.Tensor,
+    ) -> None:
+        """Log experience to episodic replay and LMDB after each successful tick.
+
+        Creates a :class:`MouseDroidExperienceRecord` from the current
+        observation and action, computes intrinsic curiosity reward (if
+        available), and pushes to both the episodic replay buffer and the
+        persistent LMDB logger.
+
+        Args:
+            observation: Current sensor observation bundle.
+            action: Action tensor just executed.
+        """
+        if self._memory_tier is None and self._experience_logger is None:
+            return
+
+        from mousedroid.experience.record import MouseDroidExperienceRecord
+
+        # Compute intrinsic reward from curiosity module
+        surprise = 0.0
+        if self._curiosity_module is not None:
+            try:
+                with torch.no_grad():
+                    ir = self._curiosity_module.intrinsic_reward(
+                        self._z, self._prev_action, self._z
+                    )
+                    surprise = float(ir.mean())
+            except Exception:
+                _log.debug("curiosity_intrinsic_reward_failed", exc_info=True)
+
+        action_np = action.detach().cpu().numpy().flatten().astype(np.float32)
+        record = MouseDroidExperienceRecord(
+            vision_features=observation.vision_features,
+            distance_m=float(observation.distance_m),
+            motor_state=observation.motor_state,
+            action=action_np,
+            surprise=surprise,
+        )
+
+        # Push to episodic replay with surprise as priority
+        if self._memory_tier is not None:
+            try:
+                priority = max(abs(surprise), 0.01)
+                self._memory_tier.episodic.push(record, priority=priority)
+                # Push latent state to working memory
+                self._memory_tier.working.push(self._z.squeeze(0))
+            except Exception:
+                _log.debug("memory_push_failed", exc_info=True)
+
+        # Persist to LMDB
+        if self._experience_logger is not None:
+            try:
+                self._experience_logger.log(record)
+            except Exception:
+                _log.debug("experience_log_failed", exc_info=True)
+
+    def _compute_curiosity_scores(self) -> dict[str, float]:
+        """Compute curiosity channel scores for the cognitive core obs_dict.
+
+        Returns:
+            Dictionary mapping channel names to scores.  Returns empty dict
+            if curiosity module is not available.
+        """
+        if self._curiosity_module is None:
+            return {}
+
+        try:
+            with torch.no_grad():
+                ir = self._curiosity_module.intrinsic_reward(self._z, self._prev_action, self._z)
+                intrinsic = float(ir.mean())
+
+            # Compute epistemic novelty from semantic memory
+            epistemic = 0.0
+            if self._memory_tier is not None:
+                z_np = self._z.detach().cpu().numpy().flatten().astype(np.float32)
+                neighbours = self._memory_tier.semantic.retrieve(z_np, k=1)
+                if neighbours:
+                    # Higher distance = more novel
+                    epistemic = float(neighbours[0][1])
+
+            return {
+                "intrinsic": intrinsic,
+                "epistemic": epistemic,
+            }
+        except Exception:
+            _log.debug("curiosity_scores_failed", exc_info=True)
+            return {}
+
+    async def _consolidation_loop(self) -> None:
+        """Background loop that periodically consolidates episodic -> semantic.
+
+        Runs until the orchestrator stops or the task is cancelled.
+        ``MemoryConsolidation.consolidate()`` is synchronous, so we call
+        it directly and ``await asyncio.sleep()`` between cycles.
+        """
+        interval = self._cfg.memory.consolidation_interval_s
+        _log.info("consolidation_loop_started", interval_s=interval)
+        try:
+            while self._running:
+                await asyncio.sleep(interval)
+                if self._memory_tier is not None:
+                    try:
+                        count = self._memory_tier.consolidation.consolidate()
+                        _log.debug("consolidation_completed", count=count)
+                    except Exception:
+                        _log.warning("consolidation_failed", exc_info=True)
+        except asyncio.CancelledError:
+            _log.info("consolidation_loop_cancelled")
+            raise
 
     async def run(self) -> None:
         """Run the main loop at configured control rate.

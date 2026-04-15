@@ -1,12 +1,17 @@
 """Serial (UART) ESP32 communication driver for Wave Rover motor control.
 
 Implements ``ESP32CommProtocol`` over a serial connection to the ESP32.
+
+Includes adaptive timeout: after ``max_consecutive_timeouts`` empty reads
+the serial timeout degrades to ``degraded_timeout_s`` to avoid blocking
+the orchestrator loop.  Any successful read restores the original timeout.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import TYPE_CHECKING, Any
 
 from mousedroid.comms.base_driver import BaseESP32Driver
@@ -30,6 +35,14 @@ class SerialESP32Driver(BaseESP32Driver):
     High-level protocol methods (``send_velocity``, ``read_encoders``,
     ``get_battery_voltage``, ``emergency_stop``) are inherited from
     ``BaseESP32Driver``.
+
+    Adaptive timeout:
+        Tracks consecutive empty reads.  After exceeding
+        ``cfg.max_consecutive_timeouts`` the serial read timeout is
+        reduced to ``cfg.degraded_timeout_s`` to prevent the 500 ms
+        blocking window from dominating the orchestrator loop.  A
+        successful read resets the counter and restores the original
+        timeout.
     """
 
     def __init__(self, cfg: ESP32Config) -> None:
@@ -43,6 +56,15 @@ class SerialESP32Driver(BaseESP32Driver):
         self._baud: int = cfg.serial_baud
         self._serial: Any = None
 
+        # Adaptive timeout state
+        self._normal_timeout: float = cfg.command_timeout_s
+        self._degraded_timeout: float = cfg.degraded_timeout_s
+        self._max_consecutive_timeouts: int = cfg.max_consecutive_timeouts
+        self._consecutive_timeouts: int = 0
+        self._is_degraded: bool = False
+        self._last_probe_time: float = 0.0
+        self._degraded_poll_interval: float = cfg.degraded_poll_interval_s
+
     async def connect(self) -> None:
         """Open serial connection to ESP32."""
         if _serial_mod is None:
@@ -50,6 +72,8 @@ class SerialESP32Driver(BaseESP32Driver):
             raise RuntimeError(msg)
         self._serial = await asyncio.to_thread(self._open_serial)
         self._connected = True
+        self._consecutive_timeouts = 0
+        self._is_degraded = False
         _log.info("serial_esp32_connected", port=self._port, baud=self._baud)
 
     def _open_serial(self) -> Any:  # pragma: no cover
@@ -107,6 +131,62 @@ class SerialESP32Driver(BaseESP32Driver):
         return await self._read_json()
 
     # ------------------------------------------------------------------
+    # Adaptive timeout
+    # ------------------------------------------------------------------
+
+    @property
+    def is_degraded(self) -> bool:
+        """Whether the driver is in degraded (fast-timeout) mode."""
+        return self._is_degraded
+
+    @property
+    def consecutive_timeouts(self) -> int:
+        """Number of consecutive empty reads."""
+        return self._consecutive_timeouts
+
+    def should_skip_read(self) -> bool:
+        """Return True if we are degraded and the poll interval hasn't elapsed."""
+        if not self._is_degraded:
+            return False
+        return (time.monotonic() - self._last_probe_time) < self._degraded_poll_interval
+
+    def _enter_degraded(self) -> None:
+        """Switch serial timeout to degraded value."""
+        if self._is_degraded:
+            return
+        self._is_degraded = True
+        if self._serial is not None:
+            self._serial.timeout = self._degraded_timeout
+        _log.warning(
+            "esp32_entering_degraded_mode",
+            consecutive_timeouts=self._consecutive_timeouts,
+            degraded_timeout_s=self._degraded_timeout,
+        )
+
+    def _exit_degraded(self) -> None:
+        """Restore serial timeout to normal value."""
+        if not self._is_degraded:
+            return
+        self._is_degraded = False
+        self._consecutive_timeouts = 0
+        if self._serial is not None:
+            self._serial.timeout = self._normal_timeout
+        _log.info("esp32_recovered_from_degraded")
+
+    def _record_timeout(self) -> None:
+        """Record an empty/timeout read and enter degraded mode if threshold exceeded."""
+        self._consecutive_timeouts += 1
+        if self._consecutive_timeouts >= self._max_consecutive_timeouts:
+            self._enter_degraded()
+
+    def _record_success(self) -> None:
+        """Record a successful read, exiting degraded mode if active."""
+        if self._is_degraded:
+            self._exit_degraded()
+        else:
+            self._consecutive_timeouts = 0
+
+    # ------------------------------------------------------------------
     # Low-level serial helpers
     # ------------------------------------------------------------------
 
@@ -130,12 +210,18 @@ class SerialESP32Driver(BaseESP32Driver):
     async def _read_json(self) -> dict[str, Any]:
         """Read one JSON line from serial.
 
+        Tracks adaptive timeout state: empty reads increment the timeout
+        counter; successful reads reset it and restore normal timeout.
+
         Returns:
             Parsed JSON dictionary.
         """
+        self._last_probe_time = time.monotonic()
         raw = await asyncio.to_thread(self._read_line)
         if not raw:
+            self._record_timeout()
             return {}
+        self._record_success()
         return json.loads(raw)  # type: ignore[no-any-return]
 
     def _read_line(self) -> str:  # pragma: no cover

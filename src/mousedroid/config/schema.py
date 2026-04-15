@@ -181,6 +181,21 @@ class ESP32Config(BaseModel):
         gt=0,
         description="Mock driver default battery voltage (V)",
     )
+    degraded_timeout_s: float = Field(
+        0.05,
+        gt=0,
+        description="Serial timeout when ESP32 is unresponsive (s)",
+    )
+    max_consecutive_timeouts: int = Field(
+        5,
+        gt=0,
+        description="Consecutive timeout failures before entering degraded mode",
+    )
+    degraded_poll_interval_s: float = Field(
+        1.0,
+        gt=0,
+        description="Probe interval while degraded — poll once per N seconds instead of every tick",
+    )
 
 
 class ExperienceConfig(BaseModel):
@@ -472,6 +487,7 @@ class MCTSConfig(BaseModel):
 class MemoryConfig(BaseModel):
     """Layered memory system configuration (Pillar 4)."""
 
+    enabled: bool = Field(False, description="Enable memory tier (episodic, semantic, working)")
     working_context_size: int = Field(8192, gt=0, description="Working memory context tokens")
     episodic_capacity: int = Field(50_000, gt=0, description="Episodic replay buffer size")
     semantic_dim: int = Field(256, gt=0, description="Semantic embedding dimension")
@@ -615,8 +631,21 @@ class SafetyConfig(BaseModel):
     min_valid_sensors: int = Field(2, ge=0, description="Min valid sensors for operation")
     gpu_warn_temp_c: float = Field(75.0, gt=0, description="GPU warning temperature (C)")
     gpu_critical_temp_c: float = Field(90.0, gt=0, description="GPU critical temperature (C)")
-    battery_warn_v: float = Field(10.5, gt=0, description="Battery warning voltage (V)")
-    battery_critical_v: float = Field(9.5, gt=0, description="Battery critical voltage (V)")
+    distance_fallback_m: float = Field(
+        999.0,
+        gt=0,
+        description="Distance value used when the ultrasonic sensor is unavailable",
+    )
+    battery_warn_v: float = Field(
+        10.5,
+        ge=0,
+        description="Battery warning voltage (V); 0 disables",
+    )
+    battery_critical_v: float = Field(
+        9.5,
+        ge=0,
+        description="Battery critical voltage (V); 0 disables",
+    )
     reverse_velocity: float = Field(
         -0.5, le=0, description="Reverse velocity for obstacle avoidance"
     )

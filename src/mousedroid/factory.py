@@ -36,8 +36,11 @@ if TYPE_CHECKING:
     from mousedroid.cognitive.bdi_model import NeuralBDI
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.config.schema import Settings, UltrasonicConfig
+    from mousedroid.curiosity.protocol import CuriosityProtocol
+    from mousedroid.experience.logger import ExperienceLogger
     from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
     from mousedroid.health.monitor import HealthMonitor
+    from mousedroid.memory.tier import MemoryTier
     from mousedroid.sensing.manager import SensorManager
     from mousedroid.telemetry.log_buffer import LogRingBuffer
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
@@ -557,8 +560,8 @@ def build_health_monitor(cfg: Settings) -> HealthMonitor:
 
 def build_sensor_manager(
     cfg: Settings,
-    vision: VisionProtocol,
-    distance: DistanceSensorProtocol,
+    vision: VisionProtocol | None,
+    distance: DistanceSensorProtocol | None,
     esp32: ESP32CommProtocol,
     microphone: AudioProtocol | None = None,
     lidar: LidarProtocol | None = None,
@@ -739,6 +742,83 @@ def build_hailo_runtime(cfg: Settings) -> HailoRuntimeProtocol | None:
         return None
 
 
+def build_memory_tier(cfg: Settings) -> MemoryTier | None:
+    """Build all four memory subsystems if memory is enabled.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        ``MemoryTier`` dataclass or ``None`` if ``cfg.memory.enabled`` is False.
+    """
+    if not cfg.memory.enabled:
+        return None
+
+    from mousedroid.memory.consolidation import MemoryConsolidation
+    from mousedroid.memory.episodic import EpisodicReplay
+    from mousedroid.memory.semantic import SemanticIndex
+    from mousedroid.memory.tier import MemoryTier
+    from mousedroid.memory.working import WorkingMemory
+
+    episodic = EpisodicReplay(cfg.memory)
+    semantic = SemanticIndex(cfg.memory)
+    working = WorkingMemory(cfg.memory, embed_dim=cfg.model.obs_dim)
+    consolidation = MemoryConsolidation(cfg.memory, episodic, semantic)
+
+    _log.info(
+        "memory_tier_built",
+        episodic_capacity=cfg.memory.episodic_capacity,
+        semantic_dim=cfg.memory.semantic_dim,
+        working_context=cfg.memory.working_context_size,
+    )
+    return MemoryTier(
+        episodic=episodic,
+        semantic=semantic,
+        working=working,
+        consolidation=consolidation,
+    )
+
+
+def build_experience_logger(cfg: Settings) -> ExperienceLogger | None:
+    """Build LMDB experience logger if experience config is present.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        ``ExperienceLogger`` or ``None`` if experience config is absent.
+    """
+    experience_cfg = getattr(cfg, "experience", None)
+    if experience_cfg is None:
+        return None
+
+    from mousedroid.experience.logger import ExperienceLogger
+
+    logger = ExperienceLogger(experience_cfg)
+    _log.info("experience_logger_built", path=experience_cfg.path)
+    return logger
+
+
+def build_curiosity_module(cfg: Settings) -> CuriosityProtocol | None:
+    """Build intrinsic curiosity module if curiosity config is enabled.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        ``IntrinsicCuriosityModule`` or ``None``.
+    """
+    from mousedroid.curiosity.icm import IntrinsicCuriosityModule
+
+    try:
+        module = IntrinsicCuriosityModule(cfg.model, cfg.curiosity)
+        _log.info("curiosity_module_built", scale=cfg.curiosity.intrinsic_reward_scale)
+        return module
+    except Exception:
+        _log.warning("curiosity_module_build_failed", exc_info=True)
+        return None
+
+
 def build_watchdog(cfg: Settings) -> WatchdogProtocol:
     """Build watchdog notifier based on config.
 
@@ -799,8 +879,19 @@ def build_orchestrator(cfg: Settings) -> object:
     agent = build_agent(cfg, wm)
     monitor = build_safety_monitor(cfg)
     esp32 = build_esp32_driver(cfg)
-    camera = build_camera(cfg, hailo_runtime=hailo_runtime)
-    distance = build_distance_sensor(cfg)
+
+    camera: VisionProtocol | None = None
+    try:
+        camera = build_camera(cfg, hailo_runtime=hailo_runtime)
+    except Exception as exc:  # pylint: disable=broad-except
+        _log.warning("camera_init_failed_degrading", error=str(exc))
+
+    distance: DistanceSensorProtocol | None = None
+    try:
+        distance = build_distance_sensor(cfg)
+    except Exception as exc:  # pylint: disable=broad-except
+        _log.warning("distance_sensor_init_failed_degrading", error=str(exc))
+
     microphone = build_microphone(cfg)
 
     sensor_manager = build_sensor_manager(
@@ -852,6 +943,11 @@ def build_orchestrator(cfg: Settings) -> object:
     # Watchdog notifier (optional — disabled by default)
     watchdog = build_watchdog(cfg)
 
+    # Memory tier + experience logger + curiosity module (optional)
+    memory_tier = build_memory_tier(cfg)
+    experience_logger = build_experience_logger(cfg)
+    curiosity_module = build_curiosity_module(cfg)
+
     return MouseDroidOrchestrator(
         world_model=wm,
         agents=[agent],
@@ -865,6 +961,9 @@ def build_orchestrator(cfg: Settings) -> object:
         voice_engine=voice_engine,
         hailo_runtime=hailo_runtime,
         watchdog=watchdog,
+        memory_tier=memory_tier,
+        experience_logger=experience_logger,
+        curiosity_module=curiosity_module,
     )
 
 

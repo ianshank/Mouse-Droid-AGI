@@ -30,10 +30,22 @@ def configure_logging(
     """
     global _configured
 
+    def _add_logger_name(logger: Any, method: str, event_dict: dict[str, Any]) -> dict[str, Any]:
+        # PrintLogger has no .name; fall back to the positional name bound at
+        # get_logger() call-time which structlog stores as the first positional arg.
+        name = getattr(logger, "name", None)
+        if name is None:
+            # structlog passes the underlying logger; for PrintLoggerFactory the
+            # name is not stored on the logger itself, so skip gracefully.
+            pass
+        else:
+            event_dict["logger"] = name
+        return event_dict
+
     processors: list[Any] = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_log_level,
-        structlog.stdlib.add_logger_name,
+        _add_logger_name,
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,

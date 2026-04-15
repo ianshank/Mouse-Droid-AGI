@@ -258,7 +258,7 @@ class RockyVoiceEngine:
                     self._queue.get(),
                     timeout=self._cfg.queue_poll_timeout_s,
                 )
-            except TimeoutError:
+            except (TimeoutError, asyncio.TimeoutError):
                 continue
             except asyncio.CancelledError:
                 break

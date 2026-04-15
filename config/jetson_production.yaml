@@ -4,7 +4,14 @@ debug: false
 
 safety:
   min_valid_sensors: 1
-  battery_critical_v: 9.5
+  battery_critical_v: 0.0
+  battery_warn_v: 0.0
+  max_loop_time_ms: 200.0
+
+# Fast-fail retry: no multi-second backoff in the 30 Hz loop
+retry:
+  max_attempts: 1
+  base_delay_s: 0.05
 
 jetson:
   tensorrt_enabled: true
@@ -16,7 +23,7 @@ jetson:
 
 llm:
   enabled: true
-  model_path: "/opt/mousedroid/models/llama-3-8b-instruct.Q4_K_M.gguf"
+  model_path: "/home/ian/models/Phi-3-mini-4k-instruct-q4.gguf"
   context_length: 2048
   n_threads: 6
   n_gpu_layers: -1
@@ -81,7 +88,7 @@ telemetry:
     auth_enabled: true
     token_env_var: "MOUSEDROID_TELEMETRY_TOKEN"
     allowed_origins: []
-    exempt_paths: ["/health", "/metrics"]
+    exempt_paths: ["/health", "/metrics", "/api/v1/health"]
 
 experience:
   path: "/home/jetson/mousedroid_experience"

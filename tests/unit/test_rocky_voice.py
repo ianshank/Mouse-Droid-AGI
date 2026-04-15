@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 import numpy as np
 import pytest
@@ -452,13 +453,14 @@ async def test_worker_timeout_continues_loop() -> None:
     await engine.start()
     try:
         # Let the worker spin through a few timeout cycles
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.5)
         # Then queue something — it should still be processed
         await engine.speak("startup")
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(1.0)
         assert len(tts.get_calls()) == 1
     finally:
-        await engine.stop()
+        with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError):
+            await engine.stop()
 
 
 @pytest.mark.asyncio

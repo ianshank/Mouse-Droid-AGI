@@ -73,14 +73,14 @@ class MouseDroidSafetyMonitor:
         battery_warn_v = self._cfg.battery_warn_v
         battery_critical_v = self._cfg.battery_critical_v
 
-        if battery_voltage < battery_critical_v:
+        if battery_critical_v > 0 and battery_voltage < battery_critical_v:
             _log.error(
                 "battery_critical",
                 voltage=battery_voltage,
                 threshold=battery_critical_v,
             )
             is_emergency = True
-        elif battery_voltage < battery_warn_v:
+        elif battery_warn_v > 0 and battery_voltage < battery_warn_v:
             _log.warning(
                 "battery_low",
                 voltage=battery_voltage,

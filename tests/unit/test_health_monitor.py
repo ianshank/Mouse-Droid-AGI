@@ -28,7 +28,8 @@ async def test_check_health_returns_dict_with_status(monitor: HealthMonitor) -> 
 
 @pytest.mark.asyncio
 async def test_read_gpu_temp_c_missing_file(monitor: HealthMonitor) -> None:
-    temp = await monitor.read_gpu_temp_c()
+    with patch.object(HealthMonitor, "_read_sysfs", side_effect=FileNotFoundError):
+        temp = await monitor.read_gpu_temp_c()
     assert temp == 0.0
 
 
@@ -47,7 +48,8 @@ async def test_check_health_has_gpu_keys(monitor: HealthMonitor) -> None:
 
 @pytest.mark.asyncio
 async def test_check_health_ok_status_with_zero_temp(monitor: HealthMonitor) -> None:
-    result = await monitor.check_health()
+    with patch.object(HealthMonitor, "_read_sysfs", side_effect=FileNotFoundError):
+        result = await monitor.check_health()
     assert result["status"] == "ok"
     assert result["gpu_temp_c"] == 0.0
 

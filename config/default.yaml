@@ -21,7 +21,7 @@ model:
   vision_proj_dim: 128
   ultrasonic_proj_dim: 32
   motor_proj_dim: 32
-  audio_dim: 1024
+  audio_dim: 192
   audio_proj_dim: 32
   lidar_dim: 0
   lidar_proj_dim: 32

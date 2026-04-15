@@ -6,6 +6,7 @@ overlays. Environment variables with MOUSEDROID_ prefix override all.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -88,4 +89,15 @@ def load_settings(
         _log.debug("config_overlay_applied", path=str(overlay_path))
 
     _log.info("config_settings_resolved", n_overlays=len(overlay_paths))
+    # pydantic-settings v2 gives init kwargs HIGHER priority than env vars.
+    # Remove top-level keys from merged that are already overridden by a
+    # MOUSEDROID_<KEY> env var so the env var source wins for those fields.
+    env_prefix = "MOUSEDROID_"
+    env_overridden = {
+        k[len(env_prefix) :].lower()
+        for k in os.environ
+        if k.upper().startswith(env_prefix) and "__" not in k[len(env_prefix) :]
+    }
+    for key in env_overridden:
+        merged.pop(key, None)
     return Settings(**merged)

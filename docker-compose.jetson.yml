@@ -16,6 +16,10 @@ services:
     image: mousedroid:jetson
     runtime: nvidia
 
+    # --- Override entrypoint/CMD for production config ---
+    entrypoint: ["python3", "-m", "mousedroid.main"]
+    command: ["--config", "/etc/mousedroid/default.yaml", "/etc/mousedroid/jetson_production.yaml"]
+
     # --- Restart policy ---
     restart: unless-stopped
 
