@@ -1,6 +1,6 @@
 # MouseDroidAGI — Next Steps
 
-> **Last updated**: 2026-04-14 | **Version**: 0.3.0 | **Test count**: 2505 passing | **Coverage**: 85%+ maintained
+> **Last updated**: 2026-04-15 | **Version**: 0.3.1-dev | **Test count**: 2650 passing | **Coverage**: 85%+ maintained
 
 This document tracks planned enhancements, organised by priority and category.
 
@@ -295,6 +295,36 @@ All 7 phases of the Production Readiness milestone are complete:
 - If CfC degrades: archive as experimental, keep GRU-only
 - Document results in architecture decisions (docs/architecture.md)
 - **Effort**: 3 days | **Owner**: Ian
+
+---
+
+## Priority 9 — GCP Digital Twin
+
+### 9.0 Phase 1: Telemetry Bridge + Cloud Storage ✅ COMPLETE (2026-04-15)
+- ✅ `src/mousedroid/cloud/` module — Pub/Sub sink, GCS experience exporter, Cloud Logging,
+  Cloud Monitoring, Firestore sync, credential resolver
+- ✅ 8 GCP Pydantic config models (`Settings.gcp: GCPConfig | None = None`)
+- ✅ 4 `build_cloud_*()` factory functions with graceful ImportError fallback
+- ✅ Orchestrator integration (cloud sink + experience exporter in start/stop/tick)
+- ✅ `config/gcp_digital_twin.yaml` overlay, Docker GCP SDK stage, credentials volume mount
+- ✅ 88 cloud unit tests at 88.77% coverage
+
+### 9.1 Phase 2: Cloud Training Pipeline
+- Implement `CloudOfflineRLDataset` — GCS shards → PyTorch tensors (same interface as `OfflineRLDataset`)
+- Build Vertex AI Pipeline (KFP v2) mirroring the local 5-phase `run_pipeline.py`
+- Add `--data-source gcs://` flag to `training/train_rssm.py`
+- Add `--cloud` flag to `training/run_pipeline.py` for Vertex AI execution
+- Cloud Scheduler for nightly retraining (cron: `0 2 * * *` UTC)
+- Vertex AI Model Monitoring for RSSM prediction drift
+- EWC Fisher matrix update step in cloud pipeline
+- **Effort**: 4 weeks | **Owner**: ML + cloud team
+
+### 9.2 Phase 3: Parallel Simulation + Safety Validation
+- GKE Autopilot cluster running mock-hardware containers
+- Scenario generation pipeline (battery/distance/thermal sweeps, grammar-based fuzzing)
+- Safety validation campaigns (500+ parallel scenarios)
+- Red-team LLM prompt injection testing
+- **Effort**: 6 weeks | **Owner**: ML + DevOps + security team
 
 ---
 
