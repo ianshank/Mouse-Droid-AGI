@@ -559,3 +559,100 @@ async def test_recovery_attempt_motor_read_returns_false():
     ):
         recovered = await mgr.recovery_attempt()
     assert recovered == 2  # vision + distance ok, motor failed
+
+
+async def test_recovery_attempt_vision_read_fails() -> None:
+    """When vision read returns ok=False after restart, sensor_recovery_failed is logged."""
+    from unittest.mock import patch
+
+    cfg = Settings(mock_hardware=True)
+
+    vision = AsyncMock()
+    vision.capture_features = AsyncMock(
+        return_value=np.ones(cfg.camera.feature_dim, dtype=np.float32),
+    )
+    vision.start = AsyncMock()
+    vision.stop = AsyncMock()
+
+    distance = AsyncMock()
+    distance.read_distance_m = AsyncMock(return_value=1.5)
+    distance.max_range_m = 4.0
+
+    esp32 = AsyncMock()
+    esp32.read_encoders = AsyncMock(return_value=EncoderReading())
+    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+
+    mgr = SensorManager(vision, distance, esp32, cfg)
+    zeros = np.zeros(cfg.camera.feature_dim, dtype=np.float32)
+    # Patch _safe_vision_read to return ok=False (stop/start succeed, but read probe fails)
+    with patch.object(
+        mgr, "_safe_vision_read", new_callable=AsyncMock,
+        return_value=(zeros, False),
+    ):
+        recovered = await mgr.recovery_attempt()
+    # Vision read failed → not counted; distance + motor succeed → 2
+    assert recovered == 2
+
+
+async def test_recovery_attempt_distance_except_branch() -> None:
+    """Exercises the except branch in the distance recovery try block."""
+    from unittest.mock import patch
+
+    cfg = Settings(mock_hardware=True)
+
+    vision = AsyncMock()
+    vision.capture_features = AsyncMock(
+        return_value=np.ones(cfg.camera.feature_dim, dtype=np.float32),
+    )
+    vision.start = AsyncMock()
+    vision.stop = AsyncMock()
+
+    distance = AsyncMock()
+    distance.read_distance_m = AsyncMock(return_value=1.5)
+    distance.max_range_m = 4.0
+
+    esp32 = AsyncMock()
+    esp32.read_encoders = AsyncMock(return_value=EncoderReading())
+    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+
+    mgr = SensorManager(vision, distance, esp32, cfg)
+    # Force _safe_distance_read to raise so the except block is exercised
+    with patch.object(
+        mgr, "_safe_distance_read", new_callable=AsyncMock,
+        side_effect=RuntimeError("unexpected distance error"),
+    ):
+        recovered = await mgr.recovery_attempt()
+    # Distance raised → not counted; vision + motor succeed → 2
+    assert recovered == 2
+
+
+async def test_recovery_attempt_motor_except_branch() -> None:
+    """Exercises the except branch in the motor recovery try block."""
+    from unittest.mock import patch
+
+    cfg = Settings(mock_hardware=True)
+
+    vision = AsyncMock()
+    vision.capture_features = AsyncMock(
+        return_value=np.ones(cfg.camera.feature_dim, dtype=np.float32),
+    )
+    vision.start = AsyncMock()
+    vision.stop = AsyncMock()
+
+    distance = AsyncMock()
+    distance.read_distance_m = AsyncMock(return_value=1.5)
+    distance.max_range_m = 4.0
+
+    esp32 = AsyncMock()
+    esp32.read_encoders = AsyncMock(return_value=EncoderReading())
+    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+
+    mgr = SensorManager(vision, distance, esp32, cfg)
+    # Force _safe_motor_read to raise so the except block is exercised
+    with patch.object(
+        mgr, "_safe_motor_read", new_callable=AsyncMock,
+        side_effect=RuntimeError("unexpected motor error"),
+    ):
+        recovered = await mgr.recovery_attempt()
+    # Motor raised → not counted; vision + distance succeed → 2
+    assert recovered == 2

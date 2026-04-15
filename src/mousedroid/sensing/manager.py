@@ -161,24 +161,32 @@ class SensorManager:
             if ok:
                 recovered += 1
                 _log.info("sensor_recovered", sensor="vision")
+            else:
+                _log.warning("sensor_recovery_failed", sensor="vision")
         except Exception:
             _log.warning("sensor_recovery_failed", sensor="vision", exc_info=True)
 
         # Distance: read-only recovery probe
-        _, ok = await self._safe_distance_read()
-        if ok:
-            recovered += 1
-            _log.info("sensor_recovered", sensor="distance")
-        else:
-            _log.warning("sensor_recovery_failed", sensor="distance")
+        try:
+            _, ok = await self._safe_distance_read()
+            if ok:
+                recovered += 1
+                _log.info("sensor_recovered", sensor="distance")
+            else:
+                _log.warning("sensor_recovery_failed", sensor="distance")
+        except Exception:
+            _log.warning("sensor_recovery_failed", sensor="distance", exc_info=True)
 
         # Motor: read-only recovery probe
-        _, ok = await self._safe_motor_read()
-        if ok:
-            recovered += 1
-            _log.info("sensor_recovered", sensor="motor")
-        else:
-            _log.warning("sensor_recovery_failed", sensor="motor")
+        try:
+            _, ok = await self._safe_motor_read()
+            if ok:
+                recovered += 1
+                _log.info("sensor_recovered", sensor="motor")
+            else:
+                _log.warning("sensor_recovery_failed", sensor="motor")
+        except Exception:
+            _log.warning("sensor_recovery_failed", sensor="motor", exc_info=True)
 
         if self._microphone is not None:
             try:

@@ -71,12 +71,12 @@ def _generate_cluster_data(
     """Generate 5 well-separated cluster centroids and noisy episode vectors.
 
     Returns:
-        centroids: List of 5 unit-normalised centroid vectors, shape (FEATURE_DIM,).
+        centroids: List of 5 float32 centroid vectors scaled by CLUSTER_SEPARATION,
+                   shape (FEATURE_DIM,).
         episodes: List of TOTAL_EPISODES noisy float32 vectors, shape (FEATURE_DIM,),
                   in cluster order (0..19, 20..39, ..., 80..99).
     """
-    # Generate orthogonal-ish centroid directions by sampling and normalising.
-    # Use large separation so inner-products between different centroids are tiny.
+    # Generate random centroid directions scaled by CLUSTER_SEPARATION for well-separated clusters.
     centroids: list[np.ndarray] = []
     for _c in range(N_CLUSTERS):
         # Each centroid lives in its own quadrant of the space by seeding
@@ -117,6 +117,21 @@ def _reconstruct_all_vectors(semantic: SemanticIndex) -> list[np.ndarray]:
     for i in range(n):
         v = np.empty(FEATURE_DIM, dtype=np.float32)
         semantic._index.reconstruct(i, v)
+        vecs.append(v)
+    return vecs
+
+
+def _reconstruct_retrieved_vectors(
+    semantic: SemanticIndex,
+    results: list[tuple[str, float]],
+    dim: int,
+) -> list[np.ndarray]:
+    """Reconstruct the actual vectors for a list of (key, dist) retrieve() results."""
+    vecs = []
+    for key, _dist in results:
+        faiss_idx = semantic._metadata.index(key)
+        v = np.empty(dim, dtype=np.float32)
+        semantic._index.reconstruct(faiss_idx, v)
         vecs.append(v)
     return vecs
 
@@ -162,8 +177,6 @@ def test_100_episode_consolidation_pipeline_cosine_similarity() -> None:
 
     # --- Step 4 & 5: Query each centroid, verify cosine similarity > threshold ---
     k_retrieve = min(10, tier.semantic.size)
-    all_stored = _reconstruct_all_vectors(tier.semantic)
-    assert len(all_stored) == tier.semantic.size
 
     for cluster_idx, centroid in enumerate(centroids):
         # Retrieve k nearest neighbours by L2 distance
@@ -172,11 +185,11 @@ def test_100_episode_consolidation_pipeline_cosine_similarity() -> None:
             f"Cluster {cluster_idx}: semantic.retrieve() returned no results"
         )
 
-        # Compute cosine similarity of each returned vector against the centroid
-        best_sim = max(
-            _cosine_similarity(centroid, all_stored[i])
-            for i in range(len(all_stored))
-        )
+        # Reconstruct the actually-retrieved vectors and compute cosine similarity
+        retrieved_vecs = _reconstruct_retrieved_vectors(tier.semantic, results, FEATURE_DIM)
+        assert len(retrieved_vecs) > 0
+
+        best_sim = max(_cosine_similarity(centroid, v) for v in retrieved_vecs)
 
         assert best_sim > COSINE_SIMILARITY_THRESHOLD, (
             f"Cluster {cluster_idx}: best cosine similarity {best_sim:.4f} "
@@ -186,14 +199,12 @@ def test_100_episode_consolidation_pipeline_cosine_similarity() -> None:
 
 
 def test_consolidation_preserves_cluster_structure() -> None:
-    """After consolidation, the top-5 neighbours of each centroid are from the same cluster.
+    """After consolidation, the nearest neighbours of each centroid have high cosine similarity.
 
-    This is a stronger structural test: because cluster centroids are well-separated
-    (CLUSTER_SEPARATION=10.0, NOISE_SCALE=0.05), the 20 intra-cluster vectors should
-    be much closer to their own centroid than to any other centroid.
+    Uses retrieve() to find top-k neighbours for each centroid and verifies
+    cosine similarity > COSINE_SIMILARITY_THRESHOLD against the retrieved vectors.
     """
     rng = np.random.default_rng(seed=42)
-    # Use a smaller batch size so we need multiple consolidation cycles
     tier = _make_memory_tier(consolidation_batch=TOTAL_EPISODES)
 
     centroids, episodes = _generate_cluster_data(rng)
@@ -205,13 +216,18 @@ def test_consolidation_preserves_cluster_structure() -> None:
     # Consolidate all experiences
     tier.consolidation.consolidate()
 
-    all_stored = _reconstruct_all_vectors(tier.semantic)
-    assert len(all_stored) > 0, "No vectors in semantic index after consolidation"
+    assert tier.semantic.size > 0, "No vectors in semantic index after consolidation"
 
     for cluster_idx, centroid in enumerate(centroids):
-        # Compute cosine similarity of every stored vector to this centroid
-        sims = [_cosine_similarity(centroid, v) for v in all_stored]
-        max_sim = max(sims)
+        results = tier.semantic.retrieve(centroid, k=10)
+        assert len(results) > 0, (
+            f"Cluster {cluster_idx}: semantic.retrieve() returned no results"
+        )
+
+        retrieved_vecs = _reconstruct_retrieved_vectors(tier.semantic, results, FEATURE_DIM)
+        assert len(retrieved_vecs) > 0
+
+        max_sim = max(_cosine_similarity(centroid, v) for v in retrieved_vecs)
 
         assert max_sim > COSINE_SIMILARITY_THRESHOLD, (
             f"Cluster {cluster_idx}: max cosine similarity {max_sim:.4f} "
