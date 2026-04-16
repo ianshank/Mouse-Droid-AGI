@@ -944,6 +944,12 @@ class ArmPerceptionConfig(BaseModel):
     yolo_confidence_threshold: float = Field(
         0.5, gt=0, le=1, description="YOLO detection confidence threshold"
     )
+    yolo_nms_iou_threshold: float = Field(
+        0.45,
+        gt=0,
+        le=1,
+        description="YOLO NMS IoU threshold for non-maximum suppression",
+    )
     yolo_backend: Literal["ultralytics", "hailo", "auto"] = Field(
         "ultralytics",
         description="YOLO inference backend: ultralytics (GPU), hailo (accelerator), or auto",
