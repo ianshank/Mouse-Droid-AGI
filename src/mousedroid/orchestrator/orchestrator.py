@@ -26,6 +26,10 @@ from mousedroid.telemetry.frame_builder import build_telemetry_frame
 
 if TYPE_CHECKING:
     from mousedroid.agents.base import AgentProtocol
+    from mousedroid.cloud.protocol import (
+        CloudExperienceExporterProtocol,
+        CloudTelemetrySinkProtocol,
+    )
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.comms.protocol import ESP32CommProtocol
     from mousedroid.config.schema import Settings
@@ -72,6 +76,8 @@ class MouseDroidOrchestrator:
         llm_gateway: LLMGatewayProtocol | None = None,
         mission_parser: MissionParserProtocol | None = None,
         watchdog: WatchdogProtocol | None = None,
+        cloud_sink: CloudTelemetrySinkProtocol | None = None,
+        cloud_experience_exporter: CloudExperienceExporterProtocol | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -93,6 +99,8 @@ class MouseDroidOrchestrator:
             llm_gateway: Optional LLM gateway for NL command translation.
             mission_parser: Optional rule-based NL mission parser.
             watchdog: Optional watchdog notifier for liveness signalling.
+            cloud_sink: Optional GCP Pub/Sub telemetry sink for cloud streaming.
+            cloud_experience_exporter: Optional GCS experience batch exporter.
         """
         if not agents:
             msg = "At least one agent is required"
@@ -114,6 +122,8 @@ class MouseDroidOrchestrator:
         self._llm_gateway = llm_gateway
         self._mission_parser = mission_parser
         self._watchdog = watchdog
+        self._cloud_sink = cloud_sink
+        self._cloud_experience_exporter = cloud_experience_exporter
         self._cfg = cfg
         self._running = False
         self._tick_count: int = 0
@@ -143,6 +153,10 @@ class MouseDroidOrchestrator:
             await self._voice_lifecycle("startup")
         if self._experience_logger is not None:
             self._experience_logger.open()
+        if self._cloud_sink is not None:
+            await self._cloud_sink.start()
+        if self._cloud_experience_exporter is not None:
+            await self._cloud_experience_exporter.start()
         if self._memory_tier is not None:
             self._consolidation_task = asyncio.create_task(self._consolidation_loop())
         self._running = True
@@ -157,6 +171,11 @@ class MouseDroidOrchestrator:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._consolidation_task
             self._consolidation_task = None
+        if self._cloud_experience_exporter is not None:
+            await self._cloud_experience_exporter.close()
+        if self._cloud_sink is not None:
+            await self._cloud_sink.flush()
+            await self._cloud_sink.close()
         if self._experience_logger is not None:
             self._experience_logger.close()
         if self._voice_engine is not None:
@@ -403,7 +422,7 @@ class MouseDroidOrchestrator:
             safety_ctx: Current safety context.
             loop_time_ms: Control loop iteration time (ms).
         """
-        if self._telemetry_publisher is None:
+        if self._telemetry_publisher is None and self._cloud_sink is None:
             return
 
         try:
@@ -413,7 +432,10 @@ class MouseDroidOrchestrator:
                 loop_time_ms,
                 self._tick_count,
             )
-            await self._telemetry_publisher.publish(frame)
+            if self._telemetry_publisher is not None:
+                await self._telemetry_publisher.publish(frame)
+            if self._cloud_sink is not None:
+                await self._cloud_sink.publish_telemetry(frame.to_dict())
         except Exception:
             _log.debug("telemetry_publish_failed", exc_info=True)
 
@@ -587,6 +609,10 @@ class MouseDroidOrchestrator:
         if self._experience_logger is not None:
             record.reward = surprise
             self._experience_logger.log(record)
+
+        if self._cloud_sink is not None:
+            _task = asyncio.ensure_future(self._cloud_sink.publish_experience(record))
+            _task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
 
     def _compute_curiosity_scores(self) -> dict[str, float]:
         """Compute curiosity channel scores for cognitive core obs_dict.

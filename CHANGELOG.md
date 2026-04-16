@@ -8,6 +8,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — GCP Digital Twin (Phase 1: Telemetry Bridge + Cloud Storage)
+
+- **`src/mousedroid/cloud/` module** — complete GCP cloud integration layer
+  - `CloudTelemetrySinkProtocol`, `CloudExperienceExporterProtocol`,
+    `CloudLoggingSinkProtocol`, `CloudMetricsExporterProtocol` — 4 `@runtime_checkable` protocols
+  - `CloudTelemetrySink` — Pub/Sub publisher with `CircuitBreaker` + msgpack serialization;
+    non-blocking fire-and-forget; circuit-open messages silently dropped
+  - `CloudExperienceExporter` — LMDB-to-GCS batch exporter with high-water-mark cursor,
+    date-hour partitioned shards (`gs://{bucket}/{prefix}/{robot_id}/{date}/{hour}/shard_{uuid}.msgpack.gz`),
+    configurable gzip/zstd compression
+  - `CloudLoggingSink` — structlog processor forwarding to Cloud Logging (fire-and-forget)
+  - `CloudMetricsExporter` — parses Prometheus text exposition output from `MetricsRegistry`,
+    writes gauge metrics to Cloud Monitoring custom metrics
+  - `CloudFirestoreSync` — episodic memory sync to Firestore collection
+  - `_auth.py` — credential resolver (ADC or explicit service account key)
+
+- **8 GCP Pydantic config models** (`src/mousedroid/config/schema.py`)
+  - `GCPConfig` umbrella with `GCPPubSubConfig`, `GCPStorageConfig`, `GCPLoggingConfig`,
+    `GCPMonitoringConfig`, `GCPFirestoreConfig`, `GCPTrainingConfig`, `GCPSimulationConfig`
+  - `Settings.gcp: GCPConfig | None = None` — all GCP features disabled by default;
+    existing YAML files load unchanged (full backwards compatibility)
+
+- **4 `build_cloud_*()` factory functions** (`src/mousedroid/factory.py`)
+  - All return `None` when `cfg.gcp is None` (offline mode)
+  - Graceful ImportError fallback when `google-cloud-*` packages not installed
+
+- **Orchestrator cloud integration** (`src/mousedroid/orchestrator/orchestrator.py`)
+  - Optional `cloud_sink` + `cloud_experience_exporter` constructor params
+  - Telemetry + experience published to cloud at each tick; lifecycle managed in start/stop
+
+- **`config/gcp_digital_twin.yaml`** — YAML overlay for GCP-enabled deployments
+
+- **`pyproject.toml`** — `gcp`, `gcp-training`, `gcp-simulation` optional dependency groups
+
+- **`Dockerfile.jetson`** — GCP SDK install stage (non-fatal graceful fallback)
+
+- **`docker-compose.jetson.yml`** — GCP credentials volume mount + env vars
+
+- **88 cloud unit tests** (85 passing, 3 skipped when google-auth absent)
+  - Config backwards compatibility (10), Pub/Sub sink (14), experience exporter (18),
+    logging sink (11), monitoring exporter (18), firestore sync (13), auth (4)
+  - Cloud module coverage: **88.77%** (above 85% gate)
+
+### Fixed
+
+- **`LogRingBuffer` NameError in `build_orchestrator()`** — `LogRingBuffer` was imported under
+  `TYPE_CHECKING` but used at runtime when `telemetry.log_stream_buffer > 0`; moved to local
+  import inside `build_orchestrator()` (fixes ~39 pre-existing test failures across e2e,
+  integration, and performance suites)
+
 ---
 
 ## [0.3.0] — 2026-04-14 — Production Readiness

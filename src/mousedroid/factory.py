@@ -32,6 +32,12 @@ if TYPE_CHECKING:
         ArmPerceptionProtocol,
         ArmPlannerProtocol,
     )
+    from mousedroid.cloud.protocol import (
+        CloudExperienceExporterProtocol,
+        CloudLoggingSinkProtocol,
+        CloudMetricsExporterProtocol,
+        CloudTelemetrySinkProtocol,
+    )
     from mousedroid.cognitive.bdi_model import NeuralBDI
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.config.schema import Settings, UltrasonicConfig
@@ -44,6 +50,7 @@ if TYPE_CHECKING:
     from mousedroid.memory.tier import MemoryTier
     from mousedroid.sensing.manager import SensorManager
     from mousedroid.telemetry.log_buffer import LogRingBuffer
+    from mousedroid.telemetry.metrics import MetricsRegistry
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
     from mousedroid.voice.mock_tts import MockTTS
     from mousedroid.voice.tts import PiperTTS
@@ -976,6 +983,10 @@ def build_orchestrator(cfg: Settings) -> object:
     # Watchdog notifier (optional — disabled by default)
     watchdog = build_watchdog(cfg)
 
+    # GCP Digital Twin (optional — disabled when gcp=None)
+    cloud_sink = build_cloud_telemetry_sink(cfg)
+    cloud_experience_exporter = build_cloud_experience_exporter(cfg)
+
     return MouseDroidOrchestrator(
         world_model=wm,
         agents=[agent],
@@ -994,6 +1005,8 @@ def build_orchestrator(cfg: Settings) -> object:
         llm_gateway=llm_gateway,
         mission_parser=mission_parser,
         watchdog=watchdog,
+        cloud_sink=cloud_sink,
+        cloud_experience_exporter=cloud_experience_exporter,
     )
 
 
@@ -1162,3 +1175,134 @@ def build_arm_perception(
         intrinsics,
         object_detector=detector,
     )
+
+
+# ---------------------------------------------------------------------------
+# GCP Digital Twin factory functions
+# ---------------------------------------------------------------------------
+
+
+def build_cloud_telemetry_sink(
+    cfg: Settings,
+) -> CloudTelemetrySinkProtocol | None:
+    """Build GCP Pub/Sub telemetry sink if GCP is configured.
+
+    Returns ``None`` when ``cfg.gcp`` is ``None`` (offline mode) or when
+    the ``google-cloud-pubsub`` package is not installed.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Cloud telemetry sink or None.
+    """
+    if cfg.gcp is None:
+        return None
+    try:
+        from mousedroid.cloud.pubsub_sink import CloudTelemetrySink
+    except ImportError:
+        _log.warning(
+            "cloud_pubsub_not_available",
+            hint="Install via: pip install 'mousedroid[gcp]'",
+        )
+        return None
+
+    sink = CloudTelemetrySink(cfg.gcp)
+    _log.info("cloud_telemetry_sink_built")
+    return sink
+
+
+def build_cloud_experience_exporter(
+    cfg: Settings,
+) -> CloudExperienceExporterProtocol | None:
+    """Build GCS experience exporter if GCP is configured.
+
+    Returns ``None`` when ``cfg.gcp`` is ``None`` or when the
+    ``google-cloud-storage`` package is not installed.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Cloud experience exporter or None.
+    """
+    if cfg.gcp is None:
+        return None
+    try:
+        from mousedroid.cloud.experience_exporter import CloudExperienceExporter
+    except ImportError:
+        _log.warning(
+            "cloud_storage_not_available",
+            hint="Install via: pip install 'mousedroid[gcp]'",
+        )
+        return None
+
+    exporter = CloudExperienceExporter(cfg.gcp, cfg.experience)
+    _log.info("cloud_experience_exporter_built")
+    return exporter
+
+
+def build_cloud_metrics_exporter(
+    cfg: Settings,
+    metrics_registry: MetricsRegistry | None = None,
+) -> CloudMetricsExporterProtocol | None:
+    """Build Cloud Monitoring exporter if GCP is configured.
+
+    Returns ``None`` when ``cfg.gcp`` is ``None``, monitoring is disabled,
+    or the ``google-cloud-monitoring`` package is not installed.
+
+    Args:
+        cfg: Root settings.
+        metrics_registry: The local metrics registry to export from.
+
+    Returns:
+        Cloud metrics exporter or None.
+    """
+    if cfg.gcp is None or metrics_registry is None:
+        return None
+    if not cfg.gcp.monitoring.enabled:
+        return None
+    try:
+        from mousedroid.cloud.monitoring_exporter import CloudMetricsExporter
+    except ImportError:
+        _log.warning(
+            "cloud_monitoring_not_available",
+            hint="Install via: pip install 'mousedroid[gcp]'",
+        )
+        return None
+
+    exporter = CloudMetricsExporter(cfg.gcp, metrics_registry)
+    _log.info("cloud_metrics_exporter_built")
+    return exporter
+
+
+def build_cloud_logging_sink(
+    cfg: Settings,
+) -> CloudLoggingSinkProtocol | None:
+    """Build Cloud Logging structlog processor if GCP is configured.
+
+    Returns ``None`` when ``cfg.gcp`` is ``None``, logging is disabled,
+    or the ``google-cloud-logging`` package is not installed.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Cloud logging sink processor or None.
+    """
+    if cfg.gcp is None:
+        return None
+    if not cfg.gcp.logging.enabled:
+        return None
+    try:
+        from mousedroid.cloud.logging_sink import CloudLoggingSink
+    except ImportError:
+        _log.warning(
+            "cloud_logging_not_available",
+            hint="Install via: pip install 'mousedroid[gcp]'",
+        )
+        return None
+
+    sink = CloudLoggingSink(cfg.gcp)
+    _log.info("cloud_logging_sink_built")
+    return sink

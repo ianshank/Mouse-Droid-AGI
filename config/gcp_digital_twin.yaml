@@ -1,0 +1,60 @@
+# GCP Digital Twin overlay — merge on top of default.yaml
+#
+# Usage:
+#   python -m mousedroid.main --config config/default.yaml --overlay config/gcp_digital_twin.yaml
+#
+# Or via environment variables:
+#   MOUSEDROID_GCP__PROJECT_ID=my-project python -m mousedroid.main
+
+gcp:
+  project_id: "mousedroid-twin"
+  robot_id: "droid-001"
+
+  pubsub:
+    telemetry_topic: "mousedroid-telemetry"
+    experience_topic: "mousedroid-experience"
+    batch_max_messages: 100
+    batch_max_latency_s: 1.0
+
+  storage:
+    bucket: "mousedroid-experience"
+    prefix: "experience/v1"
+    upload_batch_size: 1000
+    upload_interval_s: 300
+    compression: "gzip"
+
+  logging:
+    enabled: true
+    log_name: "mousedroid"
+    min_level: "INFO"
+
+  monitoring:
+    enabled: true
+    export_interval_s: 60
+
+  firestore:
+    enabled: false
+
+  # Cloud training — uncomment to enable nightly retraining
+  # training:
+  #   training_bucket: "mousedroid-training"
+  #   pipeline_region: "us-central1"
+  #   machine_type: "a2-highgpu-1g"
+  #   accelerator_type: "NVIDIA_TESLA_A100"
+  #   schedule_cron: "0 2 * * *"
+
+  # GKE simulation — uncomment to enable parallel sim campaigns
+  # simulation:
+  #   gke_cluster: "mousedroid-sim"
+  #   max_parallel_pods: 50
+  #   results_bucket: "mousedroid-sim-results"
+
+  circuit_breaker:
+    failure_threshold: 3
+    recovery_timeout_s: 60.0
+    half_open_max_calls: 1
+
+  retry:
+    max_attempts: 3
+    base_delay_s: 2.0
+    max_delay_s: 60.0
