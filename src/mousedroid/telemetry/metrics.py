@@ -457,3 +457,33 @@ class MetricsRegistry:
         )
 
         return "\n\n".join("\n".join(section) for section in sections) + "\n"
+
+
+def generate_metrics_sample() -> str:
+    """Generate a representative Prometheus metrics sample for CI validation.
+
+    Creates a :class:`MetricsRegistry` with default config, populates every
+    metric family with representative data, and returns the rendered
+    Prometheus text exposition output.  Used by the CI ``promtool check
+    metrics`` step to validate format compliance.
+
+    Returns:
+        Prometheus text exposition format string with all metric families.
+    """
+    from mousedroid.config.schema import MetricsConfig
+
+    cfg: MetricsConfig = MetricsConfig()  # type: ignore[call-arg]
+    registry = MetricsRegistry(cfg)
+
+    # Populate every metric family so all appear in the output.
+    registry.set_loop_time_ms(15.0)
+    registry.set_battery_voltage(11.8)
+    registry.set_ws_client_count(2)
+    registry.set_gpu_temp_celsius(52.0)
+    registry.set_publish_hz(10.0)
+    registry.inc_frame_drops(3)
+    registry.inc_safety_violation("law1")
+    registry.inc_llm_translation("translated")
+    registry.observe_llm_translation_latency_ms(42.0)
+
+    return registry.render_prometheus()

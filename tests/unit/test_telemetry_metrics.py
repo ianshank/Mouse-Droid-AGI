@@ -25,6 +25,7 @@ from mousedroid.telemetry.metrics import (
     _LabeledCounter,
     _render_counter,
     _render_labeled_counter,
+    generate_metrics_sample,
 )
 
 # ---------------------------------------------------------------------------
@@ -477,3 +478,44 @@ class TestMetricsConfig:
     def test_export_interval_negative_rejected(self) -> None:
         with pytest.raises(ValueError, match="greater than 0"):
             MetricsConfig(export_interval_s=-1.0)
+
+
+# ---------------------------------------------------------------------------
+# generate_metrics_sample() — CI promtool integration
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateMetricsSample:
+    def test_returns_nonempty_string(self) -> None:
+        sample = generate_metrics_sample()
+        assert isinstance(sample, str)
+        assert len(sample) > 0
+
+    def test_ends_with_newline(self) -> None:
+        sample = generate_metrics_sample()
+        assert sample.endswith("\n")
+
+    def test_contains_all_expected_families(self) -> None:
+        sample = generate_metrics_sample()
+        ns = MetricsConfig().namespace
+        for name in (
+            f"{ns}_uptime_seconds",
+            f"{ns}_loop_time_ms",
+            f"{ns}_battery_voltage_v",
+            f"{ns}_ws_client_count",
+            f"{ns}_gpu_temp_celsius",
+            f"{ns}_publish_hz",
+            f"{ns}_frame_drops_total",
+            f"{ns}_safety_violations_total",
+            f"{ns}_loop_latency_ms",
+            f"{ns}_llm_translation_total",
+            f"{ns}_llm_translation_latency_ms",
+        ):
+            assert name in sample, f"Missing metric family: {name}"
+
+    def test_has_help_and_type_lines(self) -> None:
+        import re
+
+        sample = generate_metrics_sample()
+        assert re.search(r"^# HELP \S+ .+$", sample, re.MULTILINE)
+        assert re.search(r"^# TYPE \S+ (counter|gauge|histogram)$", sample, re.MULTILINE)
