@@ -35,6 +35,12 @@ _INTENTION_CLASSES = DEFAULT_INTENTION_CLASSES
 _AFFECT_DIM = DEFAULT_AFFECT_DIM
 
 
+def _save_weight_file(path: Path, weights: dict[str, NDArray[Any]]) -> None:
+    """Persist numpy weights without mypy ignore shims."""
+    arrays: dict[str, Any] = {name: np.asarray(value) for name, value in weights.items()}
+    np.savez(path, **arrays)
+
+
 def _cross_entropy(logits: NDArray[Any], labels: NDArray[Any]) -> float:
     """Batch cross-entropy loss."""
     probs = _softmax(logits)
@@ -352,7 +358,7 @@ def train_bdi(
 
     # Stage 1: BeliefEncoder
     belief_weights = train_belief_encoder(observations, lr, epochs, batch_size, gradient_scale)
-    np.savez(output_dir / "belief.npz", **belief_weights)  # type: ignore[arg-type]
+    _save_weight_file(output_dir / "belief.npz", belief_weights)
     _log.info("belief_encoder_saved")
 
     # Stage 2: DesireEncoder
@@ -364,7 +370,7 @@ def train_bdi(
         batch_size,
         gradient_scale,
     )
-    np.savez(output_dir / "desire.npz", **desire_weights)  # type: ignore[arg-type]
+    _save_weight_file(output_dir / "desire.npz", desire_weights)
     _log.info("desire_encoder_saved")
 
     # Stage 3: IntentionPredictor
@@ -377,7 +383,7 @@ def train_bdi(
         epochs,
         batch_size,
     )
-    np.savez(output_dir / "intention.npz", **intention_weights)  # type: ignore[arg-type]
+    _save_weight_file(output_dir / "intention.npz", intention_weights)
     _log.info("intention_predictor_saved")
 
     # Stage 4: AffectEstimator
@@ -391,7 +397,7 @@ def train_bdi(
         batch_size,
         gradient_scale,
     )
-    np.savez(output_dir / "affect.npz", **affect_weights)  # type: ignore[arg-type]
+    _save_weight_file(output_dir / "affect.npz", affect_weights)
     _log.info("affect_estimator_saved")
 
     _log.info("bdi_training_complete", output_dir=str(output_dir))

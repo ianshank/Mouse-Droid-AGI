@@ -38,6 +38,29 @@ from training.rssm_dataset import RSSMSequenceDataset
 _log = structlog.get_logger(__name__)
 
 
+def _backward(loss: torch.Tensor) -> None:
+    """Run backward on a typed tensor loss.
+
+    Torch's current stubs still treat ``Tensor.backward`` as untyped in some
+    environments. Keep the mypy workaround local to the single call site.
+    """
+    loss.backward()  # type: ignore[no-untyped-call]
+
+
+def _restore_rng_state(rng_state: object) -> None:
+    """Restore RNG state from checkpoint data.
+
+    Checkpoints may deserialize the saved RNG state with a non-Byte dtype on
+    some platforms. Normalize it to the CPU ByteTensor format required by
+    ``torch.set_rng_state``.
+    """
+    if not isinstance(rng_state, torch.Tensor):
+        rng_tensor = torch.as_tensor(rng_state, dtype=torch.uint8, device="cpu")
+    else:
+        rng_tensor = rng_state.detach().to(device="cpu", dtype=torch.uint8)
+    torch.set_rng_state(rng_tensor)
+
+
 # ---------------------------------------------------------------------------
 # Checkpoint data structure
 # ---------------------------------------------------------------------------
@@ -212,7 +235,7 @@ def _load_checkpoint(
 
     rng_state = data.get("rng_state")
     if rng_state is not None:
-        torch.set_rng_state(rng_state)
+        _restore_rng_state(rng_state)
 
     start_epoch = int(data.get("epoch", -1)) + 1
     best_loss = float(data.get("best_loss", float("inf")))
@@ -294,7 +317,10 @@ def train_dual_stream_rssm(
         Path to the final checkpoint (``final.pt``) — or the last periodic
         checkpoint when ``validate_only=True``.
     """
-    device = device or resolve_device(cfg.training.gpu.device)
+    device = resolve_device(
+        device or cfg.training.gpu.device,
+        require_cuda=cfg.training.gpu.require_cuda,
+    )
     log_gpu_info(device)
 
     tcfg = cfg.training
@@ -502,7 +528,7 @@ def train_dual_stream_rssm(
                 scaler.step(cfc_optimizer)
                 scaler.update()
             else:
-                loss.backward()
+                _backward(loss)
 
                 torch.nn.utils.clip_grad_norm_(
                     list(model.gru_parameters()),

@@ -1148,6 +1148,13 @@ class GPUConfig(BaseModel):
         None,
         description="Force torch device (e.g. 'cuda:0', 'cpu'). None = auto-detect",
     )
+    require_cuda: bool = Field(
+        False,
+        description=(
+            "Fail training when a CUDA device is unavailable or a non-CUDA "
+            "device is selected"
+        ),
+    )
     enable_amp: bool = Field(
         True,
         description="Enable Automatic Mixed Precision for PyTorch training phases",
@@ -1208,6 +1215,128 @@ class TrainingPipelineConfig(BaseModel):
     )
 
 
+class TrainingGenerationConfig(BaseModel):
+    """Synthetic data generation settings for Phase 0."""
+
+    log_every_n_episodes: int = Field(
+        100,
+        gt=0,
+        description="Episode logging cadence during synthetic data generation",
+    )
+
+
+class TrainingAnnotationConfig(BaseModel):
+    """Annotation collection and heuristic labeling settings for Phase 0b."""
+
+    n_episodes: int = Field(500, gt=0, description="Annotation collection episode count")
+    max_steps: int = Field(50, gt=0, description="Max steps per annotation episode")
+    log_every_n_episodes: int = Field(
+        100,
+        gt=0,
+        description="Episode logging cadence during annotation collection",
+    )
+    human_safety_radius_m: float = Field(
+        0.5,
+        gt=0,
+        description="Human proximity threshold for the protect_human label (m)",
+    )
+    battery_warn_v: float = Field(
+        10.8,
+        ge=0,
+        description="Battery threshold for the charge label (V); 0 disables",
+    )
+    obstacle_clearance_m: float = Field(
+        0.25,
+        gt=0,
+        description="Obstacle distance threshold for the avoid_obstacle label (m)",
+    )
+    idle_speed_threshold: float = Field(
+        0.05,
+        ge=0,
+        description="Planar speed threshold below which the label may become idle",
+    )
+    idle_omega_threshold: float = Field(
+        0.1,
+        ge=0,
+        description="Angular speed threshold below which the label may become idle",
+    )
+    wait_speed_threshold: float = Field(
+        0.1,
+        ge=0,
+        description="Planar speed threshold below which the label may become wait",
+    )
+    wait_omega_threshold: float = Field(
+        0.05,
+        ge=0,
+        description="Angular speed threshold below which the label may become wait",
+    )
+    turn_omega_threshold: float = Field(
+        0.5,
+        ge=0,
+        description="Angular speed threshold above which the label becomes turn",
+    )
+    approach_clear_distance_m: float = Field(
+        1.0,
+        gt=0,
+        description="Obstacle distance threshold above which the path is clear for approach",
+    )
+    approach_speed_threshold: float = Field(
+        0.2,
+        ge=0,
+        description="Planar speed threshold above which the label may become approach_target",
+    )
+    backtrack_speed_threshold: float = Field(
+        -0.2,
+        le=0,
+        description="Forward velocity threshold below which the label becomes backtrack",
+    )
+
+
+class TrainingWarmstartConfig(BaseModel):
+    """Warm-start statistics and UCB tuning settings for Phase 2."""
+
+    latent_stats_max_episodes: int = Field(
+        100,
+        gt=0,
+        description="Maximum episodes sampled when computing latent statistics",
+    )
+    tuning_episodes: int = Field(
+        100,
+        gt=0,
+        description="Episodes evaluated per UCB candidate during warm-start tuning",
+    )
+    rollout_steps: int = Field(
+        20,
+        gt=0,
+        description="Imagined rollout steps per warm-start tuning episode",
+    )
+
+
+class TrainingConstitutionalConfig(BaseModel):
+    """Constitutional RL rollout logging and validation context settings."""
+
+    log_every_n_episodes: int = Field(
+        100,
+        gt=0,
+        description="Training episode logging cadence for constitutional RL",
+    )
+    validation_battery_v: float = Field(
+        12.0,
+        gt=0,
+        description="Battery voltage used for constitutional rollout validation context (V)",
+    )
+    validation_obstacle_dist_m: float = Field(
+        2.0,
+        gt=0,
+        description="Obstacle distance used for constitutional rollout validation context (m)",
+    )
+    validation_mcts_sims: int = Field(
+        50,
+        gt=0,
+        description="MCTS simulation count used for constitutional rollout validation context",
+    )
+
+
 class TrainingConfig(BaseModel):
     """Offline training configuration."""
 
@@ -1225,9 +1354,22 @@ class TrainingConfig(BaseModel):
         None,
         description="Path to checkpoint for resuming interrupted training",
     )
+    generation: TrainingGenerationConfig = Field(
+        default_factory=_settings_default_factory(TrainingGenerationConfig)
+    )
+    annotation: TrainingAnnotationConfig = Field(
+        default_factory=_settings_default_factory(TrainingAnnotationConfig)
+    )
+    warmstart: TrainingWarmstartConfig = Field(
+        default_factory=_settings_default_factory(TrainingWarmstartConfig)
+    )
+    constitutional: TrainingConstitutionalConfig = Field(
+        default_factory=_settings_default_factory(TrainingConstitutionalConfig)
+    )
     gpu: GPUConfig = Field(
         default_factory=lambda: GPUConfig(
             device=None,
+            require_cuda=False,
             enable_amp=True,
             memory_limit_gb=6.0,
         ),
@@ -1427,10 +1569,21 @@ class Settings(BaseSettings):
         description="Arm task config (Tower of Hanoi / laundry sorting params)",
     )
 
-    @model_validator(mode="after")
-    def hardware_requires_pins(self) -> Self:
+    @model_validator(mode="before")
+    @classmethod
+    def hardware_requires_pins(cls, data: Any) -> Any:
         """Validate that real hardware mode has required sensor configs."""
-        if not self.mock_hardware and self.ultrasonic is None:
+        if not isinstance(data, dict):
+            return data
+
+        raw_mock_hardware = data.get("mock_hardware", False)
+        if isinstance(raw_mock_hardware, str):
+            mock_hardware = raw_mock_hardware.strip().lower() in {"1", "true", "yes", "on"}
+        else:
+            mock_hardware = bool(raw_mock_hardware)
+
+        if not mock_hardware and data.get("ultrasonic") is None:
             msg = "ultrasonic config required when mock_hardware=false"
             raise ValueError(msg)
-        return self
+
+        return data

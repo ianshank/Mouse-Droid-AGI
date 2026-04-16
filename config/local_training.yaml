@@ -16,10 +16,10 @@ logging:
   format: "console"   # Human-readable output during local training runs
 
 training:
-  # Batch size is intentionally left at the schema default (32) so that
-  # training.gpu_utils.get_optimal_batch_size() can scale it up dynamically
-  # when sufficient VRAM is available during the training scripts.
-  batch_size: 64          # Baseline; scripts may override via get_optimal_batch_size()
+  # Keep the first Phase 2.1 baseline aligned with the schema and roadmap.
+  # Any larger desktop batch size should be a deliberate override after the
+  # baseline RSSM run is green and measured.
+  batch_size: 32
   learning_rate: 0.0003   # 3e-4 (matches default, explicit for clarity)
   epochs: 100
   checkpoint_every_n: 10
@@ -31,7 +31,8 @@ training:
   resume_from: null       # Set to a checkpoint path to resume interrupted training
 
   gpu:
-    device: "cuda"        # Force CUDA device; falls back to CPU if unavailable
+    device: "cuda"        # Force CUDA device for desktop training
+    require_cuda: true     # Fail fast instead of silently falling back to CPU
     enable_amp: true      # BF16/FP16 AMP (RTX 5060 Ti supports BF16 natively)
     memory_limit_gb: 14.0 # Leave 2 GB headroom from 16 GB VRAM
 

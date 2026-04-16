@@ -297,6 +297,8 @@ def test_local_training_yaml_is_loadable() -> None:
     settings = _load_settings(str(config_path))
     assert settings.training_pipeline is not None
     assert len(settings.training_pipeline.phases) >= 1
+    assert settings.training.batch_size == 32
+
 
 
 # ---------------------------------------------------------------------------

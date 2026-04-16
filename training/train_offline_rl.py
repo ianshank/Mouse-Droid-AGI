@@ -20,6 +20,7 @@ from mousedroid.config.loader import load_settings
 from mousedroid.config.schema import OfflineRLConfig, Settings
 from mousedroid.experience.dataset import OfflineRLDataset
 from mousedroid.learning.offline_rl import CQLTrainer, IQLTrainer, OfflineRLTrainer
+from training.gpu_utils import resolve_device
 
 _log = structlog.get_logger(__name__)
 
@@ -33,12 +34,12 @@ def _resolve_device(cfg: Settings) -> str:
     Returns:
         Device string (e.g. 'cuda:0', 'cpu').
     """
-    import torch
-
-    explicit = cfg.training.gpu.device
-    if explicit is not None:
-        return explicit
-    return "cuda:0" if torch.cuda.is_available() else "cpu"
+    return str(
+        resolve_device(
+            cfg.training.gpu.device,
+            require_cuda=cfg.training.gpu.require_cuda,
+        )
+    )
 
 
 def _build_trainer(

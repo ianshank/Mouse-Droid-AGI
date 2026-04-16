@@ -83,6 +83,23 @@ class SyntheticSequenceGenerator:
         await orchestrator.stop()  # type: ignore[attr-defined]
         return transitions
 
+    async def _generate_sequences_async(
+        self,
+        n_episodes: int,
+        max_steps: int,
+    ) -> list[list[dict[str, Any]]]:
+        """Generate all episodes within a single event loop."""
+        all_episodes: list[list[dict[str, Any]]] = []
+        log_every = self._cfg.training.generation.log_every_n_episodes
+
+        for ep in range(n_episodes):
+            transitions = await self._run_episode(max_steps)
+            all_episodes.append(transitions)
+            if (ep + 1) % log_every == 0 or ep + 1 == n_episodes:
+                _log.info("episodes_generated", count=ep + 1, total=n_episodes)
+
+        return all_episodes
+
     def generate_sequences(
         self,
         n_episodes: int,
@@ -102,12 +119,7 @@ class SyntheticSequenceGenerator:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        all_episodes: list[list[dict[str, Any]]] = []
-        for ep in range(n_episodes):
-            transitions = asyncio.run(self._run_episode(max_steps))
-            all_episodes.append(transitions)
-            if (ep + 1) % 100 == 0:
-                _log.info("episodes_generated", count=ep + 1, total=n_episodes)
+        all_episodes = asyncio.run(self._generate_sequences_async(n_episodes, max_steps))
 
         torch.save(all_episodes, output_dir / "sequences.pt")
         _log.info(

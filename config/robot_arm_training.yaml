@@ -14,6 +14,7 @@ training:
   checkpoint_every_n: 25
   gpu:
     device: null
+    require_cuda: true
     enable_amp: true
     memory_limit_gb: 12.0
 

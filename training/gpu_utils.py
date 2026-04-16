@@ -12,22 +12,48 @@ import torch
 _log = structlog.get_logger(__name__)
 
 
-def resolve_device(device: str | None = None) -> torch.device:
+def resolve_device(
+    device: str | torch.device | None = None,
+    *,
+    require_cuda: bool = False,
+) -> torch.device:
     """Resolve the best available torch device.
 
     Auto-detects CUDA GPU when ``device`` is None.  Falls back to CPU
-    when CUDA is not available.
+    when CUDA is not available, including when CUDA is explicitly requested
+    in a config overlay on a host without CUDA support, unless strict CUDA
+    enforcement is requested.
 
     Args:
-        device: Explicit device string (e.g. ``"cuda:0"``, ``"cpu"``).
-            ``None`` triggers auto-detection.
+        device: Explicit device string or ``torch.device`` (e.g. ``"cuda:0"``,
+            ``"cpu"``). ``None`` triggers auto-detection.
+        require_cuda: When ``True``, fail instead of falling back to CPU.
 
     Returns:
         Resolved ``torch.device``.
+
+    Raises:
+        RuntimeError: If ``require_cuda`` is set and CUDA is unavailable, or a
+            non-CUDA device is selected.
     """
     if device:
-        resolved = torch.device(device)
-        _log.info("device_forced", device=str(resolved))
+        resolved = device if isinstance(device, torch.device) else torch.device(device)
+        if require_cuda and resolved.type != "cuda":
+            msg = f"GPU-only execution requires a CUDA device, but got '{resolved}'."
+            raise RuntimeError(msg)
+        if resolved.type == "cuda" and not torch.cuda.is_available():
+            if require_cuda:
+                msg = (
+                    "GPU-only execution requires CUDA, but the requested "
+                    f"device '{resolved}' is unavailable."
+                )
+                raise RuntimeError(msg)
+            _log.warning(
+                "cuda_device_unavailable_falling_back_to_cpu",
+                requested_device=str(resolved),
+            )
+            return torch.device("cpu")
+        _log.info("device_forced", device=str(resolved), require_cuda=require_cuda)
         return resolved
 
     if torch.cuda.is_available():
@@ -39,6 +65,10 @@ def resolve_device(device: str | None = None) -> torch.device:
             memory_gb=round(torch.cuda.get_device_properties(0).total_memory / 1e9, 2),
         )
         return resolved
+
+    if require_cuda:
+        msg = "GPU-only execution requires CUDA, but no CUDA device is available."
+        raise RuntimeError(msg)
 
     _log.info("cuda_not_available_using_cpu")
     return torch.device("cpu")
@@ -54,8 +84,16 @@ def log_gpu_info(device: torch.device) -> None:
     """
     if device.type != "cuda":
         return
+    if not torch.cuda.is_available():
+        _log.warning("cuda_logging_skipped_unavailable", device=str(device))
+        return
 
-    props = torch.cuda.get_device_properties(device)
+    try:
+        props = torch.cuda.get_device_properties(device)
+    except Exception:
+        _log.warning("gpu_info_unavailable", device=str(device), exc_info=True)
+        return
+
     _log.info(
         "gpu_info",
         name=props.name,
