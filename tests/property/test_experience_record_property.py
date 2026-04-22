@@ -19,9 +19,7 @@ _safe_floats = st.floats(min_value=-1e6, max_value=1e6, allow_nan=False, allow_i
 _safe_floats32 = st.floats(
     min_value=-1e6, max_value=1e6, allow_nan=False, allow_infinity=False, width=32
 )
-_timestamp_floats = st.floats(
-    min_value=0.0, max_value=1e12, allow_nan=False, allow_infinity=False
-)
+_timestamp_floats = st.floats(min_value=0.0, max_value=1e12, allow_nan=False, allow_infinity=False)
 
 
 def _float32_array(size: int) -> st.SearchStrategy[np.ndarray]:

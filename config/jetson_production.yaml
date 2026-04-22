@@ -23,7 +23,7 @@ jetson:
 
 llm:
   enabled: true
-  model_path: "/home/ian/models/Phi-3-mini-4k-instruct-q4.gguf"
+  model_path: "/opt/mousedroid/models/Phi-3-mini-4k-instruct-q4.gguf"
   context_length: 2048
   n_threads: 6
   n_gpu_layers: -1

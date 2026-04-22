@@ -1323,7 +1323,9 @@ class ArmPerceptionConfig(BaseModel):
         0.5, gt=0, le=1, description="YOLO detection confidence threshold"
     )
     yolo_nms_iou_threshold: float = Field(
-        0.45, gt=0, le=1,
+        0.45,
+        gt=0,
+        le=1,
         description="YOLO NMS IoU threshold for non-maximum suppression",
     )
     yolo_backend: Literal["ultralytics", "hailo", "auto"] = Field(

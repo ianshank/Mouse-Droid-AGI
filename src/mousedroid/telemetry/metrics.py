@@ -320,7 +320,12 @@ class MetricsRegistry:
         if not raw_buckets or raw_buckets[-1] != float("inf"):
             raw_buckets.append(float("inf"))
         self._loop_histogram = _Histogram(tuple(raw_buckets))
-        self._llm_translation_latency_ms = _Histogram(cfg.llm_latency_buckets_ms)
+
+        # LLM latency histogram — sort and guarantee +Inf sentinel
+        llm_buckets = sorted(cfg.llm_latency_buckets_ms)
+        if not llm_buckets or llm_buckets[-1] != float("inf"):
+            llm_buckets.append(float("inf"))
+        self._llm_translation_latency_ms = _Histogram(tuple(llm_buckets))
 
         # Pre-format metric names from namespace
         self._name_frame_drops = f"{ns}_frame_drops"

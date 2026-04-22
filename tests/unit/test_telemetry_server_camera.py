@@ -118,9 +118,12 @@ async def test_camera_stream_returns_mjpeg_headers() -> None:
     server._running = True  # ensure stream loop can start
     app = _build_app(server)
 
-    async with TestClient(TestServer(app)) as client, client.session.get(
-        client.make_url("/camera/stream"), timeout=aiohttp.ClientTimeout(total=1.0)
-    ) as resp:
+    async with (
+        TestClient(TestServer(app)) as client,
+        client.session.get(
+            client.make_url("/camera/stream"), timeout=aiohttp.ClientTimeout(total=1.0)
+        ) as resp,
+    ):
         assert resp.status == 200
         ct = resp.headers["Content-Type"]
         assert "multipart/x-mixed-replace" in ct

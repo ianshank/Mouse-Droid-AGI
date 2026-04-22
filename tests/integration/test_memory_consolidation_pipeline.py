@@ -181,9 +181,7 @@ def test_100_episode_consolidation_pipeline_cosine_similarity() -> None:
     for cluster_idx, centroid in enumerate(centroids):
         # Retrieve k nearest neighbours by L2 distance
         results = tier.semantic.retrieve(centroid, k=k_retrieve)
-        assert len(results) > 0, (
-            f"Cluster {cluster_idx}: semantic.retrieve() returned no results"
-        )
+        assert len(results) > 0, f"Cluster {cluster_idx}: semantic.retrieve() returned no results"
 
         # Reconstruct the actually-retrieved vectors and compute cosine similarity
         retrieved_vecs = _reconstruct_retrieved_vectors(tier.semantic, results, FEATURE_DIM)
@@ -220,9 +218,7 @@ def test_consolidation_preserves_cluster_structure() -> None:
 
     for cluster_idx, centroid in enumerate(centroids):
         results = tier.semantic.retrieve(centroid, k=10)
-        assert len(results) > 0, (
-            f"Cluster {cluster_idx}: semantic.retrieve() returned no results"
-        )
+        assert len(results) > 0, f"Cluster {cluster_idx}: semantic.retrieve() returned no results"
 
         retrieved_vecs = _reconstruct_retrieved_vectors(tier.semantic, results, FEATURE_DIM)
         assert len(retrieved_vecs) > 0
@@ -250,8 +246,7 @@ def test_consolidation_count_matches_semantic_size() -> None:
     size_after = tier.semantic.size
 
     assert size_after - size_before == count, (
-        f"consolidate() returned {count} but semantic index grew by "
-        f"{size_after - size_before}"
+        f"consolidate() returned {count} but semantic index grew by {size_after - size_before}"
     )
 
 
@@ -276,7 +271,7 @@ def test_multiple_consolidation_cycles_accumulate() -> None:
     # Size must be monotonically non-decreasing
     for i in range(1, len(sizes)):
         assert sizes[i] >= sizes[i - 1], (
-            f"Semantic index shrank from {sizes[i-1]} to {sizes[i]} at cycle {i}"
+            f"Semantic index shrank from {sizes[i - 1]} to {sizes[i]} at cycle {i}"
         )
 
 

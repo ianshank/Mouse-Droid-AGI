@@ -116,9 +116,7 @@ def test_relu_all_nonnegative(x: np.ndarray) -> None:
 def test_relu_identity_for_positive(x: np.ndarray) -> None:
     """relu(x) == x when all elements of x are strictly positive."""
     result = relu(x)
-    assert np.allclose(result, x), (
-        f"relu did not act as identity on strictly positive input {x}"
-    )
+    assert np.allclose(result, x), f"relu did not act as identity on strictly positive input {x}"
 
 
 @given(
@@ -132,9 +130,7 @@ def test_relu_identity_for_positive(x: np.ndarray) -> None:
 def test_relu_zeros_for_negative(x: np.ndarray) -> None:
     """relu(x) == 0 when all elements of x are strictly negative."""
     result = relu(x)
-    assert np.all(result == 0.0), (
-        f"relu did not zero out strictly negative input {x}"
-    )
+    assert np.all(result == 0.0), f"relu did not zero out strictly negative input {x}"
 
 
 # ---------------------------------------------------------------------------
@@ -170,9 +166,7 @@ def test_layer_norm_near_zero_mean(x: np.ndarray) -> None:
 def test_layer_norm_output_shape_preserved(x: np.ndarray) -> None:
     """layer_norm must return an array with the same shape as the input."""
     result = layer_norm(x)
-    assert result.shape == x.shape, (
-        f"layer_norm changed shape from {x.shape} to {result.shape}"
-    )
+    assert result.shape == x.shape, f"layer_norm changed shape from {x.shape} to {result.shape}"
 
 
 @given(

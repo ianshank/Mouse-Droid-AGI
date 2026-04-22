@@ -37,6 +37,9 @@ class TelemetryFrame:
             ``None`` when LiDAR is disabled or feature extraction failed.
         lidar_n_points: Number of raw points in the last LiDAR scan. ``0``
             when LiDAR is stale/absent; used as a liveness signal.
+        vision_features: Optional list of vision feature values for the latest
+            observation. ``None`` when vision features are not published (e.g.
+            summary-only telemetry mode).
         loop_time_ms: Control loop iteration time (milliseconds).
         tick_count: Monotonically increasing tick counter.
     """
