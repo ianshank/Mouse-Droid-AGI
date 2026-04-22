@@ -17,6 +17,7 @@ class MockObservationBundle:
     distance_m: float = 2.0
     motor_state: np.ndarray = None  # type: ignore[assignment]
     audio_chunk: np.ndarray = None  # type: ignore[assignment]
+    lidar_features: np.ndarray | None = None
     valid_mask: np.ndarray = None  # type: ignore[assignment]
     n_modalities: int = 4
 
@@ -187,3 +188,47 @@ def test_observe_step_audio_with_nonzero_data() -> None:
     torch.manual_seed(0)
     _, _, embed_loud, _ = model.observe_step(obs_loud, prev_action, h, z)
     assert not torch.allclose(embed_silent, embed_loud)
+
+
+def test_observe_step_lidar_only_without_ultrasonic() -> None:
+    cfg = ModelConfig(ultrasonic_dim=0, ultrasonic_proj_dim=0, lidar_dim=36, lidar_proj_dim=16)
+    model = RSSM(cfg)
+    obs = MockObservationBundle(
+        lidar_features=np.random.randn(36).astype(np.float32),
+        valid_mask=np.ones(5, dtype=np.float32),
+        n_modalities=5,
+    )
+    prev_action = torch.zeros(1, cfg.action_dim)
+    h = torch.zeros(1, cfg.hidden_dim)
+    z = torch.zeros(1, cfg.latent_dim)
+    new_h, new_z, obs_embed, surprise = model.observe_step(obs, prev_action, h, z)
+    assert not model.encoder.ultrasonic_enabled
+    assert new_h.shape == (1, cfg.hidden_dim)
+    assert new_z.shape == (1, cfg.latent_dim)
+    assert obs_embed.shape == (1, cfg.obs_dim)
+    assert np.isfinite(surprise)
+
+
+# ---------------------------------------------------------------------------
+# Coverage gap tests
+# ---------------------------------------------------------------------------
+
+
+def test_decode_method(rssm: RSSM, cfg: ModelConfig) -> None:
+    """decode() must return a tensor of shape (batch, obs_dim) with finite values."""
+    batch = 2
+    h = torch.zeros(batch, cfg.hidden_dim)
+    z = torch.zeros(batch, cfg.latent_dim)
+    decoded = rssm.decode(h, z)
+    assert decoded.shape == (batch, cfg.obs_dim)
+    assert torch.isfinite(decoded).all()
+
+
+def test_imagine_step_1d_action(rssm: RSSM, cfg: ModelConfig) -> None:
+    """imagine_step must auto-unsqueeze a 1-D action tensor to (1, action_dim)."""
+    action_1d = torch.zeros(cfg.action_dim)  # shape: (action_dim,)
+    h = torch.zeros(1, cfg.hidden_dim)
+    z = torch.zeros(1, cfg.latent_dim)
+    new_h, new_z, reward = rssm.imagine_step(action_1d, h, z)
+    assert new_h.shape == (1, cfg.hidden_dim)
+    assert new_z.shape == (1, cfg.latent_dim)

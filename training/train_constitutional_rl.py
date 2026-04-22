@@ -23,6 +23,7 @@ from mousedroid.cognitive.constitutional_rl import (
 from mousedroid.config.schema import Settings
 from mousedroid.reward.model import MultiObjectiveRewardModel
 from mousedroid.safety.three_laws import RoboticsLawChecker
+from mousedroid.world_model.checkpoint_migration import load_rssm_with_migration
 from mousedroid.world_model.rssm import RSSM
 
 _log = structlog.get_logger(__name__)
@@ -179,9 +180,9 @@ def train_constitutional_rl(
     constitutional_cfg = cfg.training.constitutional
     validation_context = _build_constitutional_context(cfg)
 
-    # Load RSSM
-    rssm = RSSM(cfg.model).to(device)
-    rssm.load_state_dict(torch.load(rssm_checkpoint, map_location=device, weights_only=True))
+    # Load RSSM — migrate encoder layout if the checkpoint was saved with a
+    # different modality config (e.g. ultrasonic → LiDAR).
+    rssm = load_rssm_with_migration(rssm_checkpoint, cfg.model, device)
     rssm.eval()
 
     # Build reward model with Three Laws integration

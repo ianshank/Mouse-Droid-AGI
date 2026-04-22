@@ -409,12 +409,13 @@ def train_dual_stream_rssm(
         epoch_cfc_recon = 0.0
         n_batches = 0
 
-        for vision, ultrasonic, motor_state, valid_mask, actions in loader:
-            vision = vision.to(device)
-            ultrasonic = ultrasonic.to(device)
-            motor_state = motor_state.to(device)
-            valid_mask = valid_mask.to(device)
-            actions = actions.to(device)
+        for batch in loader:
+            vision = batch["vision"].to(device)
+            ultrasonic = batch["ultrasonic"].to(device)
+            motor_state = batch["motor_state"].to(device)
+            valid_mask = batch["valid_mask"].to(device)
+            lidar = batch["lidar"].to(device)
+            actions = batch["actions"].to(device)
 
             batch_size: int = vision.shape[0]
             seq_len: int = vision.shape[1]
@@ -448,11 +449,14 @@ def train_dual_stream_rssm(
                 total_cfc_recon = torch.tensor(0.0, device=device)
 
                 for t in range(seq_len):
+                    lidar_step = lidar[:, t] if lidar.shape[-1] > 0 else None
+                    ultrasonic_step = ultrasonic[:, t] if ultrasonic.shape[-1] > 0 else None
                     obs_embed = model.encoder(
                         vision[:, t],
-                        ultrasonic[:, t],
+                        ultrasonic_step,
                         motor_state[:, t],
                         valid_mask[:, t],
+                        lidar=lidar_step,
                     )
 
                     prev_action = actions[:, t - 1] if t > 0 else zero_action

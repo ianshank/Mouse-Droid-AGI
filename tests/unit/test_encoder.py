@@ -230,6 +230,14 @@ def test_audio_enabled_has_audio_proj() -> None:
     assert enc.audio_proj.out_features == 32
 
 
+def test_ultrasonic_disabled_no_ultrasonic_proj() -> None:
+    enc = MultimodalEncoder(
+        ModelConfig(ultrasonic_dim=0, ultrasonic_proj_dim=0, lidar_dim=36, lidar_proj_dim=16)
+    )
+    assert not hasattr(enc, "ultrasonic_proj")
+    assert not enc.ultrasonic_enabled
+
+
 def test_output_differentiable_with_audio() -> None:
     cfg = _make_audio_cfg()
     enc = _make_audio_encoder()
@@ -273,5 +281,63 @@ def test_lidar_enabled_forward() -> None:
     lidar_tensor = torch.randn(batch, cfg.lidar_dim)
     mask = torch.ones(batch, 5)
     out = enc(vision, ultrasonic, motor, mask, lidar=lidar_tensor)
+    assert out.shape == (batch, cfg.obs_dim)
+    assert torch.isfinite(out).all()
+
+
+def test_lidar_only_forward_without_ultrasonic() -> None:
+    cfg = ModelConfig(ultrasonic_dim=0, ultrasonic_proj_dim=0, lidar_dim=36, lidar_proj_dim=16)
+    enc = MultimodalEncoder(cfg)
+    batch = 3
+    vision = torch.randn(batch, cfg.vision_dim)
+    motor = torch.randn(batch, cfg.motor_state_dim)
+    lidar_tensor = torch.randn(batch, cfg.lidar_dim)
+    mask = torch.ones(batch, 5)
+    out = enc(vision, None, motor, mask, lidar=lidar_tensor)
+    assert out.shape == (batch, cfg.obs_dim)
+    assert torch.isfinite(out).all()
+
+
+# ---------------------------------------------------------------------------
+# Coverage gap tests
+# ---------------------------------------------------------------------------
+
+
+def test_gate_projection_short_mask() -> None:
+    """_gate_projection returns zeros_like when valid_mask is narrower than slot index."""
+    cfg = ModelConfig()
+    enc = MultimodalEncoder(cfg)
+    projected = torch.ones(2, 16)
+    # "motor" has slot_index=2; a 1-column mask satisfies shape[-1] <= slot_index
+    narrow_mask = torch.ones(2, 1)
+    result = enc._gate_projection(projected, narrow_mask, "motor")
+    assert result.shape == projected.shape
+    assert torch.all(result == 0)
+
+
+def test_ultrasonic_enabled_none_input_uses_zeros() -> None:
+    """Encoder fills zero projection when ultrasonic=None but ultrasonic_enabled=True."""
+    cfg = ModelConfig()  # default has ultrasonic_dim=1
+    assert cfg.ultrasonic_dim > 0, "fixture assumption"
+    enc = MultimodalEncoder(cfg)
+    batch = 3
+    vision = torch.randn(batch, cfg.vision_dim)
+    motor = torch.randn(batch, cfg.motor_state_dim)
+    mask = torch.ones(batch, 4)
+    out = enc(vision, None, motor, mask)
+    assert out.shape == (batch, cfg.obs_dim)
+    assert torch.isfinite(out).all()
+
+
+def test_lidar_enabled_none_input_uses_zeros() -> None:
+    """Encoder fills zero projection when lidar=None but lidar_enabled=True."""
+    cfg = ModelConfig(lidar_dim=36, lidar_proj_dim=16)
+    enc = MultimodalEncoder(cfg)
+    batch = 3
+    vision = torch.randn(batch, cfg.vision_dim)
+    ultrasonic = torch.randn(batch, cfg.ultrasonic_dim)
+    motor = torch.randn(batch, cfg.motor_state_dim)
+    mask = torch.ones(batch, 5)
+    out = enc(vision, ultrasonic, motor, mask, lidar=None)
     assert out.shape == (batch, cfg.obs_dim)
     assert torch.isfinite(out).all()

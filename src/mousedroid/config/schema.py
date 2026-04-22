@@ -616,14 +616,14 @@ class ModelConfig(BaseModel):
     """Neural network model dimensions."""
 
     vision_dim: int = Field(256, gt=0, description="Vision feature input dim")
-    ultrasonic_dim: int = Field(1, gt=0, description="Ultrasonic input dim")
+    ultrasonic_dim: int = Field(1, ge=0, description="Ultrasonic input dim (0=disabled)")
     motor_state_dim: int = Field(4, gt=0, description="Motor state dim [vx, vy, omega, battery]")
     hidden_dim: int = Field(256, gt=0, description="RNN hidden dim")
     latent_dim: int = Field(64, gt=0, description="Latent state dim")
     action_dim: int = Field(3, gt=0, description="Action dim [vx, vy, omega]")
     obs_dim: int = Field(256, gt=0, description="Fused observation embedding dim")
     vision_proj_dim: int = Field(128, gt=0, description="Vision projection dim")
-    ultrasonic_proj_dim: int = Field(32, gt=0, description="Ultrasonic projection dim")
+    ultrasonic_proj_dim: int = Field(32, ge=0, description="Ultrasonic projection dim (0=disabled)")
     motor_proj_dim: int = Field(32, gt=0, description="Motor state projection dim")
     audio_dim: int = Field(0, ge=0, description="Audio feature input dim (0=disabled)")
     audio_proj_dim: int = Field(32, ge=0, description="Audio projection dim (0=disabled)")
@@ -647,6 +647,35 @@ class ModelConfig(BaseModel):
         le=1.0,
         description="Reserved for future AutoNCP/CfC wiring sparsity support; currently unused",
     )
+
+    @model_validator(mode="after")
+    def _validate_optional_modalities(self) -> Self:
+        """Validate optional modality dimension pairs."""
+
+        if (self.ultrasonic_dim == 0) != (self.ultrasonic_proj_dim == 0):
+            msg = (
+                "ultrasonic_dim and ultrasonic_proj_dim must both be zero "
+                "when disabling ultrasonic"
+            )
+            raise ValueError(msg)
+
+        modality_dims = {
+            "ultrasonic": (self.ultrasonic_dim, self.ultrasonic_proj_dim),
+            "audio": (self.audio_dim, self.audio_proj_dim),
+            "lidar": (self.lidar_dim, self.lidar_proj_dim),
+        }
+        for modality_name, (input_dim, proj_dim) in modality_dims.items():
+            if input_dim > 0 and proj_dim == 0:
+                msg = (
+                    f"{modality_name}_proj_dim must be > 0 when {modality_name}_dim is enabled"
+                )
+                raise ValueError(msg)
+
+        if self.ultrasonic_dim == 0 and self.lidar_dim == 0:
+            msg = "at least one distance modality must be enabled: ultrasonic_dim or lidar_dim"
+            raise ValueError(msg)
+
+        return self
 
 
 class DualStreamTrainingConfig(BaseModel):

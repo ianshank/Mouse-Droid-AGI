@@ -2,6 +2,11 @@
 
 import importlib.util
 
+from mousedroid.world_model.checkpoint_migration import (
+    StateDict,
+    load_rssm_with_migration,
+    migrate_state_dict,
+)
 from mousedroid.world_model.encoder import MultimodalEncoder
 from mousedroid.world_model.mcts import MCTSPlanner
 from mousedroid.world_model.protocol import SafetyTraceProtocol, WorldModelProtocol
@@ -13,8 +18,11 @@ __all__ = [
     "MCTSPlanner",
     "MultimodalEncoder",
     "SafetyTraceProtocol",
+    "StateDict",
     "StreamFusion",
     "WorldModelProtocol",
+    "load_rssm_with_migration",
+    "migrate_state_dict",
 ]
 
 # CfC classes are only exported when the ncps package is available.

@@ -119,11 +119,13 @@ class RSSM(nn.Module):
             dtype=torch.float32,
             device=device,
         ).unsqueeze(0)
-        ultrasonic = torch.as_tensor(
-            [observation.distance_m],
-            dtype=torch.float32,
-            device=device,
-        ).unsqueeze(0)
+        ultrasonic: Tensor | None = None
+        if self.encoder.ultrasonic_enabled:
+            ultrasonic = torch.as_tensor(
+                [observation.distance_m],
+                dtype=torch.float32,
+                device=device,
+            ).unsqueeze(0)
         motor = torch.as_tensor(
             observation.motor_state,
             dtype=torch.float32,

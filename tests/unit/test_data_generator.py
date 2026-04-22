@@ -20,6 +20,7 @@ class TestBundleToTensors:
         assert "ultrasonic" in tensors
         assert "motor_state" in tensors
         assert "valid_mask" in tensors
+        assert "lidar" in tensors
 
     def test_output_shapes(self) -> None:
         obs = MouseDroidObservationBundle()
@@ -28,12 +29,24 @@ class TestBundleToTensors:
         assert tensors["ultrasonic"].shape == (1,)
         assert tensors["motor_state"].shape == (4,)
         assert tensors["valid_mask"].shape == (4,)
+        assert tensors["lidar"].shape == (0,)
 
     def test_output_dtype(self) -> None:
         obs = MouseDroidObservationBundle()
         tensors = _bundle_to_tensors(obs)
         for v in tensors.values():
             assert v.dtype == torch.float32
+
+    def test_lidar_only_config_disables_ultrasonic_tensor(self) -> None:
+        from mousedroid.config.schema import ModelConfig
+
+        obs = MouseDroidObservationBundle(_lidar_features=torch.ones(36, dtype=torch.float32).numpy())
+        tensors = _bundle_to_tensors(
+            obs,
+            ModelConfig(ultrasonic_dim=0, ultrasonic_proj_dim=0, lidar_dim=36, lidar_proj_dim=16),
+        )
+        assert tensors["ultrasonic"].shape == (0,)
+        assert tensors["lidar"].shape == (36,)
 
 
 class TestRSSMSequenceDataset:
@@ -84,13 +97,14 @@ class TestRSSMSequenceDataset:
         torch.save(episodes, data_path)
 
         ds = RSSMSequenceDataset(data_path, seq_len=8)
-        vision, ultrasonic, motor_state, valid_mask, actions = ds[0]
+        batch = ds[0]
 
-        assert vision.shape == (8, 16)
-        assert ultrasonic.shape == (8, 1)
-        assert motor_state.shape == (8, 4)
-        assert valid_mask.shape == (8, 4)
-        assert actions.shape == (8, 3)
+        assert batch["vision"].shape == (8, 16)
+        assert batch["ultrasonic"].shape == (8, 1)
+        assert batch["motor_state"].shape == (8, 4)
+        assert batch["valid_mask"].shape == (8, 4)
+        assert batch["lidar"].shape == (8, 0)
+        assert batch["actions"].shape == (8, 3)
 
     def test_dataset_padding_short_episode(self, tmp_path: Path) -> None:
         from training.rssm_dataset import RSSMSequenceDataset
@@ -113,8 +127,8 @@ class TestRSSMSequenceDataset:
         torch.save(episodes, data_path)
 
         ds = RSSMSequenceDataset(data_path, seq_len=10)
-        vision, _, _, _, _ = ds[0]
+        batch = ds[0]
 
         # First 3 timesteps should be ones, rest zeros (padding)
-        assert torch.all(vision[:3] == 1.0)
-        assert torch.all(vision[3:] == 0.0)
+        assert torch.all(batch["vision"][:3] == 1.0)
+        assert torch.all(batch["vision"][3:] == 0.0)

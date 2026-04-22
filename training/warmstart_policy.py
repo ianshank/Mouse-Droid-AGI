@@ -50,23 +50,27 @@ def compute_latent_statistics(
     n = min(len(dataset), max_episodes)
 
     for i in range(n):
-        vision, ultrasonic, motor_state, valid_mask, actions = dataset[i]
-        vision = vision.unsqueeze(0).to(device)
-        ultrasonic = ultrasonic.unsqueeze(0).to(device)
-        motor_state = motor_state.unsqueeze(0).to(device)
-        valid_mask = valid_mask.unsqueeze(0).to(device)
-        actions = actions.unsqueeze(0).to(device)
+        batch = dataset[i]
+        vision = batch["vision"].unsqueeze(0).to(device)
+        ultrasonic = batch["ultrasonic"].unsqueeze(0).to(device)
+        motor_state = batch["motor_state"].unsqueeze(0).to(device)
+        valid_mask = batch["valid_mask"].unsqueeze(0).to(device)
+        lidar = batch["lidar"].unsqueeze(0).to(device)
+        actions = batch["actions"].unsqueeze(0).to(device)
 
         h = torch.zeros(1, rssm._cfg.hidden_dim, device=device)
         z = torch.zeros(1, rssm._cfg.latent_dim, device=device)
 
         with torch.no_grad():
             for t in range(vision.shape[1]):
+                lidar_step = lidar[:, t] if lidar.shape[-1] > 0 else None
+                ultrasonic_step = ultrasonic[:, t] if ultrasonic.shape[-1] > 0 else None
                 obs_embed = rssm.encoder(
                     vision[:, t],
-                    ultrasonic[:, t],
+                    ultrasonic_step,
                     motor_state[:, t],
                     valid_mask[:, t],
+                    lidar=lidar_step,
                 )
                 prev_action = actions[:, max(0, t - 1)]
                 gru_input = torch.cat([z, prev_action], dim=-1)
