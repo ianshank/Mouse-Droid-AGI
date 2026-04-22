@@ -150,6 +150,10 @@ jobs:
                       echo "No metrics sample generated — skipping validation"
                   fi
 
+            - name: Validate Prometheus alert rules
+              if: steps.promtool.outputs.available == 'true'
+              run: ./promtool check rules config/prometheus/alerts.yml
+
             - name: Skip notice
               if: steps.promtool.outputs.available != 'true'
               run: echo "promtool not available — skipping Prometheus metrics validation"

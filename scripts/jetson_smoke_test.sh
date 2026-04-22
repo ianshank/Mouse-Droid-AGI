@@ -8,6 +8,8 @@
 #   bash scripts/jetson_smoke_test.sh gpio          # Run only GPIO tests
 #   bash scripts/jetson_smoke_test.sh serial        # Run only serial tests
 #   bash scripts/jetson_smoke_test.sh camera        # Run only camera tests
+#   bash scripts/jetson_smoke_test.sh lidar         # Run only LiDAR tests
+#   bash scripts/jetson_smoke_test.sh speaker       # Run only speaker tests
 #   bash scripts/jetson_smoke_test.sh app           # Run only application health check
 #   bash scripts/jetson_smoke_test.sh pytest        # Run only hardware pytest suite
 #   bash scripts/jetson_smoke_test.sh e2e           # Run only E2E 5-second run
@@ -392,6 +394,46 @@ PYEOF
 }
 
 # ---------------------------------------------------------------------------
+# 5a. LiDAR / 5b. Speaker — delegate to scripts/verify_sensors.py
+# ---------------------------------------------------------------------------
+
+_run_verify_sensor() {
+    # $1 = sensor name (lidar|speaker), $2 = record label
+    local sensor="$1"
+    local label="$2"
+    log_section "${label} Test"
+    log_step "Running verify_sensors.py --sensor ${sensor}"
+
+    local output rc
+    set +e
+    output="$("${PYTHON}" "${PROJECT_DIR}/scripts/verify_sensors.py" --sensor "${sensor}" 2>&1)"
+    rc=$?
+    set -e
+
+    echo "${output}"
+
+    if [[ ${rc} -eq 0 ]]; then
+        if echo "${output}" | grep -q "\[SKIP\]"; then
+            record_skip "${label}" "device not detected (see verify_sensors output)"
+        else
+            record_pass "${label}"
+        fi
+    else
+        local first_fail
+        first_fail="$(echo "${output}" | grep -m1 "\[FAIL\]" || true)"
+        record_fail "${label}" "${first_fail:-non-zero exit (${rc})}"
+    fi
+}
+
+test_lidar() {
+    _run_verify_sensor "lidar" "LiDAR"
+}
+
+test_speaker() {
+    _run_verify_sensor "speaker" "Speaker"
+}
+
+# ---------------------------------------------------------------------------
 # 6. Application health check
 # ---------------------------------------------------------------------------
 
@@ -544,6 +586,8 @@ main() {
             test_serial
             test_camera
             test_audio
+            test_lidar
+            test_speaker
             test_app
             test_pytest
             test_e2e
@@ -553,12 +597,14 @@ main() {
         serial)   test_serial ;;
         camera)   test_camera ;;
         audio)    test_audio ;;
+        lidar)    test_lidar ;;
+        speaker)  test_speaker ;;
         app)      test_app ;;
         pytest)   test_pytest ;;
         e2e)      test_e2e ;;
         *)
             echo "Unknown step: ${step}"
-            echo "Valid steps: all, system, gpio, serial, camera, audio, app, pytest, e2e"
+            echo "Valid steps: all, system, gpio, serial, camera, audio, lidar, speaker, app, pytest, e2e"
             exit 1
             ;;
     esac

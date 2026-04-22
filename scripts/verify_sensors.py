@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Standalone sensor verification script for MouseDroid Jetson hardware.
 
-Checks access to the three primary input sensors:
-  - Video   : IMX500 camera via picamera2 (jetson_utils fallback)
-  - Audio   : USB microphone via pyaudio / UsbMicrophone driver
+Checks access to the primary input and output devices:
+  - Video      : IMX500 camera via picamera2 (jetson_utils fallback)
+  - Audio      : USB microphone via pyaudio / UsbMicrophone driver
   - Ultrasonic : HC-SR04 via Jetson.GPIO
+  - LiDAR      : FHL-LD19 via pyserial / LD19LidarDriver
+  - Speaker    : USB speaker via pyaudio / UsbSpeaker driver
 
 Usage:
-    python scripts/verify_sensors.py [--sensor {camera,audio,ultrasonic,all}]
+    python scripts/verify_sensors.py \\
+        [--sensor {camera,audio,ultrasonic,lidar,speaker,all}]
 
 Exit code is non-zero if any sensor reports FAIL.
 """
@@ -291,11 +294,15 @@ def _raw_pyaudio_capture() -> None:
 def check_ultrasonic() -> None:
     _section("Ultrasonic (HC-SR04)")
 
-    # -- GPIO import
+    # -- GPIO import (Jetson.GPIO raises non-ImportError at load time when
+    #    it cannot determine the Jetson model, e.g. inside some containers).
     try:
         import Jetson.GPIO  # noqa: F401
     except ImportError:
         _fail("Jetson.GPIO import", "library not installed — not running on Jetson?")
+        return
+    except Exception as exc:
+        _fail("Jetson.GPIO import", f"library failed to initialize: {exc}")
         return
 
     _ok("Jetson.GPIO import")
@@ -389,6 +396,176 @@ def _raw_gpio_distance_check() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 4. LiDAR — FHL-LD19 / pyserial
+# ---------------------------------------------------------------------------
+
+def check_lidar() -> None:
+    _section("LiDAR (FHL-LD19)")
+
+    try:
+        import serial  # noqa: F401
+    except ImportError:
+        _fail("pyserial import", "library not installed")
+        return
+
+    _ok("pyserial import")
+
+    try:
+        from mousedroid.config.schema import LidarConfig
+        from mousedroid.hardware.lidar.ld19_driver import LD19LidarDriver
+    except ImportError as exc:
+        _fail("LD19LidarDriver import", f"mousedroid package not importable: {exc}")
+        return
+
+    cfg = LidarConfig()
+    asyncio.run(_async_lidar_check(cfg, LD19LidarDriver))
+
+
+async def _async_lidar_check(cfg: object, driver_cls: object) -> None:
+    driver = driver_cls(cfg)  # type: ignore[operator]
+    t0 = time.monotonic()
+    try:
+        try:
+            await driver.start()
+        except Exception as exc:
+            _skip(
+                "LD19 serial open",
+                f"port {cfg.serial_port} unavailable: {exc}",  # type: ignore[attr-defined]
+            )
+            return
+
+        try:
+            _ok("LD19 serial open", f"port={cfg.serial_port}")  # type: ignore[attr-defined]
+            scan = await driver.read_scan()
+        finally:
+            await driver.stop()
+    except Exception as exc:
+        _fail("LD19 read_scan", str(exc))
+        return
+
+    elapsed = time.monotonic() - t0
+    if scan.n_points <= 0:
+        _fail("LD19 scan content", "no points returned — is the LiDAR spinning?")
+        return
+
+    import numpy as np
+
+    angles = scan.angles_deg
+    distances_m = scan.distances_mm / 1000.0
+    angle_span = float(np.asarray(angles).max() - np.asarray(angles).min())
+
+    if angle_span < 270.0:
+        _fail("LD19 angle coverage", f"{angle_span:.1f}° below 270° threshold")
+        return
+
+    dmin = float(np.asarray(distances_m).min())
+    dmax = float(np.asarray(distances_m).max())
+    if dmin < cfg.min_range_m or dmax > cfg.max_range_m:  # type: ignore[attr-defined]
+        _fail(
+            "LD19 distance range",
+            f"[{dmin:.3f}, {dmax:.3f}] m outside "
+            f"[{cfg.min_range_m}, {cfg.max_range_m}] m",  # type: ignore[attr-defined]
+        )
+        return
+
+    _ok(
+        "LD19 scan",
+        f"n={scan.n_points}, span={angle_span:.1f}°, "
+        f"dist=[{dmin:.2f}, {dmax:.2f}] m in {elapsed:.2f}s",
+    )
+
+
+# ---------------------------------------------------------------------------
+# 5. Speaker — USB speaker / pyaudio
+# ---------------------------------------------------------------------------
+
+def check_speaker() -> None:
+    _section("Audio Output (USB Speaker)")
+
+    try:
+        import pyaudio
+    except ImportError:
+        _fail("pyaudio import", "library not installed")
+        return
+
+    _ok("pyaudio import")
+
+    try:
+        from mousedroid.config.schema import SpeakerConfig
+        from mousedroid.hardware.audio.usb_speaker import UsbSpeaker
+    except ImportError as exc:
+        _fail("UsbSpeaker import", f"mousedroid package not importable: {exc}")
+        return
+
+    cfg = SpeakerConfig()
+    needle = cfg.device_name.lower()
+
+    pa = pyaudio.PyAudio()
+    matches: list[str] = []
+    try:
+        for i in range(pa.get_device_count()):
+            info = pa.get_device_info_by_index(i)
+            name = str(info.get("name", ""))
+            if int(info.get("maxOutputChannels", 0)) > 0 and needle in name.lower():
+                matches.append(f"[{i}] {name}")
+    finally:
+        pa.terminate()
+
+    if not matches:
+        _skip(
+            "USB speaker detected",
+            f"no output device matching '{cfg.device_name}'",
+        )
+        return
+
+    _ok("USB speaker detected", "; ".join(matches))
+
+    asyncio.run(_async_speaker_check(cfg, UsbSpeaker))
+
+
+async def _async_speaker_check(cfg: object, speaker_cls: object) -> None:
+    import numpy as np
+
+    speaker = speaker_cls(cfg)  # type: ignore[operator]
+    t0 = time.monotonic()
+    try:
+        try:
+            await speaker.start()
+        except Exception as exc:
+            _skip("UsbSpeaker start", f"{exc}")
+            return
+
+        if getattr(speaker, "_stream", None) is None:
+            _skip(
+                "UsbSpeaker stream",
+                f"device '{cfg.device_name}' not opened (graceful no-op)",  # type: ignore[attr-defined]
+            )
+            await speaker.stop()
+            return
+
+        try:
+            freq_hz = 440.0
+            duration_chunks = 4
+            chunk_size = cfg.chunk_size  # type: ignore[attr-defined]
+            sample_rate = cfg.sample_rate  # type: ignore[attr-defined]
+            total = chunk_size * duration_chunks
+            t = np.arange(total, dtype=np.float32) / float(sample_rate)
+            tone = (0.1 * np.sin(2.0 * np.pi * freq_hz * t)).astype(np.float32)
+
+            for start in range(0, total, chunk_size):
+                chunk = tone[start : start + chunk_size]
+                await speaker.write_chunk(chunk)
+        finally:
+            await speaker.stop()
+    except Exception as exc:
+        _fail("UsbSpeaker write_chunk", str(exc))
+        return
+
+    elapsed = time.monotonic() - t0
+    _ok("UsbSpeaker sine tone", f"440 Hz, 4 chunks in {elapsed:.2f}s")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -400,11 +577,13 @@ def main() -> None:
         "  python scripts/verify_sensors.py\n"
         "  python scripts/verify_sensors.py --sensor camera\n"
         "  python scripts/verify_sensors.py --sensor audio\n"
-        "  python scripts/verify_sensors.py --sensor ultrasonic\n",
+        "  python scripts/verify_sensors.py --sensor ultrasonic\n"
+        "  python scripts/verify_sensors.py --sensor lidar\n"
+        "  python scripts/verify_sensors.py --sensor speaker\n",
     )
     parser.add_argument(
         "--sensor",
-        choices=["all", "camera", "audio", "ultrasonic"],
+        choices=["all", "camera", "audio", "ultrasonic", "lidar", "speaker"],
         default="all",
         help="Which sensor to verify (default: all)",
     )
@@ -420,12 +599,16 @@ def main() -> None:
         check_audio()
     if args.sensor in ("all", "ultrasonic"):
         check_ultrasonic()
+    if args.sensor in ("all", "lidar"):
+        check_lidar()
+    if args.sensor in ("all", "speaker"):
+        check_speaker()
 
     # Summary
     _section("Summary")
     total = sum(
         1
-        for s in ("camera", "audio", "ultrasonic")
+        for s in ("camera", "audio", "ultrasonic", "lidar", "speaker")
         if args.sensor in ("all", s)
     )
     failed = len(_FAILURES)
