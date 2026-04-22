@@ -315,8 +315,11 @@ class MetricsRegistry:
         # Labeled counters (Phase 7)
         self._voice_events = _LabeledCounter()
 
-        # Histogram (loop latency)
-        self._loop_histogram = _Histogram(cfg.loop_latency_buckets_ms)
+        # Histogram (loop latency) — sort and guarantee +Inf sentinel
+        raw_buckets = sorted(cfg.loop_latency_buckets_ms)
+        if not raw_buckets or raw_buckets[-1] != float("inf"):
+            raw_buckets.append(float("inf"))
+        self._loop_histogram = _Histogram(tuple(raw_buckets))
         self._llm_translation_latency_ms = _Histogram(cfg.llm_latency_buckets_ms)
 
         # Pre-format metric names from namespace

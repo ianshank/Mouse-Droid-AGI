@@ -207,7 +207,7 @@ def test_settings_mock_true_without_ultrasonic_ok():
 
 def test_settings_mock_false_without_ultrasonic_raises(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("MOUSEDROID_MOCK_HARDWARE", "false")
-    with pytest.raises(ValidationError, match="ultrasonic config required"):
+    with pytest.raises(ValidationError, match="at least one distance sensor"):
         Settings(mock_hardware=False, ultrasonic=None)
 
 
