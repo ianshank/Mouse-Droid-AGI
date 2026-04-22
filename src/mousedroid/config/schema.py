@@ -1650,8 +1650,11 @@ class Settings(BaseSettings):
         else:
             mock_hardware = bool(raw_mock_hardware)
 
-        if not mock_hardware and data.get("ultrasonic") is None:
-            msg = "ultrasonic config required when mock_hardware=false"
+        if not mock_hardware and data.get("ultrasonic") is None and data.get("lidar") is None:
+            msg = (
+                "at least one distance sensor (ultrasonic or lidar) required"
+                " when mock_hardware=false"
+            )
             raise ValueError(msg)
 
         return data
