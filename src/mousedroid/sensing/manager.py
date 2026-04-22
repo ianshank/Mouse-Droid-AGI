@@ -200,7 +200,7 @@ class SensorManager:
         distance_result, distance_ok = await distance_task
         motor_result, motor_ok = await motor_task
         audio_result, audio_ok = await audio_task
-        lidar_result, lidar_ok = await lidar_task
+        lidar_result, lidar_ok, lidar_n_points = await lidar_task
 
         # Build validity mask: vision=0, ultrasonic=1, motor=2, audio=3,
         # lidar=4 (only when lidar is configured).
@@ -246,6 +246,7 @@ class SensorManager:
             _motor_state=motor_result,
             _audio_chunk=audio_result,
             _lidar_features=lidar_result if self._lidar is not None else None,
+            _lidar_n_points=lidar_n_points if self._lidar is not None else 0,
             _valid_mask=valid_mask,
         )
 
@@ -381,15 +382,17 @@ class SensorManager:
 
     async def _safe_lidar_read(
         self,
-    ) -> tuple[NDArray[np.float32] | None, bool]:
+    ) -> tuple[NDArray[np.float32] | None, bool, int]:
         """Attempt a LiDAR scan read with optional feature extraction.
 
         When a :class:`LidarFeatureExtractor` is configured, raw scans are
-        transformed into sector-binned distance features.  Returns ``None``
-        when LiDAR is not configured.
+        transformed into sector-binned distance features.  Returns
+        ``(features, ok, n_points)`` where ``n_points`` is the number of
+        raw points in the scan (``0`` when no scan).  Features are
+        ``None`` when LiDAR is not configured.
         """
         if self._lidar is None:
-            return None, False
+            return None, False, 0
 
         default: NDArray[np.float32] | None = None
         if self._lidar_feature_dim > 0:
@@ -397,10 +400,11 @@ class SensorManager:
 
         try:
             scan = await self._lidar.read_scan()
+            n_points = int(getattr(scan, "n_points", 0))
             if self._lidar_feature_extractor is not None:
                 features = self._lidar_feature_extractor.extract(scan)
-                return features, True
-            return default, False
+                return features, True, n_points
+            return default, False, n_points
         except Exception:
             _log.warning("lidar_read_failed", exc_info=True)
-            return default, False
+            return default, False, 0

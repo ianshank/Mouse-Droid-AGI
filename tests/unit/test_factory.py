@@ -266,6 +266,22 @@ def test_build_orchestrator_cognitive_no_fallback_raises():
         build_orchestrator(cfg)
 
 
+def test_build_orchestrator_wires_log_buffer_from_telemetry_config():
+    """build_orchestrator passes the configured log buffer size into TelemetryServer."""
+    from mousedroid.factory import build_orchestrator
+
+    cfg = Settings(
+        mock_hardware=True,
+        telemetry={"enabled": True, "force_real_server": True, "log_stream_buffer": 7},
+    )
+
+    orch = build_orchestrator(cfg)
+
+    assert orch._telemetry_server is not None
+    assert orch._telemetry_server._log_buffer is not None
+    assert orch._telemetry_server._log_buffer._buffer.maxlen == 7
+
+
 def test_build_health_monitor():
     """Test build_health_monitor returns a HealthMonitor instance."""
     from mousedroid.factory import build_health_monitor

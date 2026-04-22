@@ -117,6 +117,15 @@ validation_output.txt
 /tmp/jetson_*.py
 /tmp/install_*.py
 
+# Host-specific Docker Compose overrides (generated when device nodes
+# are transiently missing; do not commit — regenerate per host).
+docker-compose.override.yml
+docker-compose.override.yaml
+
+# Ad-hoc remote-deploy helper scripts (kept in /scripts when promoted)
+/fix_env.sh
+/step*.sh
+
 # HuggingFace Hub cache
 .cache/huggingface/
 huggingface_cache/

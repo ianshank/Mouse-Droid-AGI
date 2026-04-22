@@ -36,10 +36,7 @@ def test_usb_speaker_detected() -> None:
         pa.terminate()
 
     if not matches:
-        pytest.skip(
-            f"no output device matching '{cfg.device_name}' — "
-            "USB speaker not connected?"
-        )
+        pytest.skip(f"no output device matching '{cfg.device_name}' — USB speaker not connected?")
 
     assert matches, "matches list unexpectedly empty after skip guard"
 
@@ -65,10 +62,7 @@ async def test_usb_speaker_write_chunk() -> None:
     # start() degrades silently when no device is found.
     if getattr(speaker, "_stream", None) is None:
         await speaker.stop()
-        pytest.skip(
-            f"USB speaker '{cfg.device_name}' not found — "
-            "graceful no-op mode engaged"
-        )
+        pytest.skip(f"USB speaker '{cfg.device_name}' not found — graceful no-op mode engaged")
 
     try:
         freq_hz = 440.0

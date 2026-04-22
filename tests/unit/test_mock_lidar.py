@@ -112,3 +112,29 @@ async def test_start_stop_idempotent(mock_lidar: MockLidar) -> None:
     await mock_lidar.stop()
     await mock_lidar.stop()
     assert mock_lidar.started is False
+
+
+async def test_rotating_wedge_scan_uses_configured_pattern(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rotating-wedge scans honor the schema-driven pattern and rotation settings."""
+    cfg = LidarConfig(
+        enabled=True,
+        serial_port="/dev/ttyUSB1",
+        baud_rate=230400,
+        max_range_m=12.0,
+        min_range_m=0.15,
+        scan_frequency_hz=10.0,
+        min_confidence=0,
+        read_timeout_s=0.2,
+        n_sectors=36,
+        feature_dim=36,
+        mock_pattern="rotating_wedge",
+        mock_rotation_hz=1.0,
+    )
+    lidar = MockLidar(cfg)
+    monkeypatch.setattr("mousedroid.hardware.lidar.mock_lidar.time.monotonic", lambda: 0.0)
+
+    scan = await lidar.read_scan()
+
+    assert scan.n_points == 360
+    assert scan.distances_mm[0] < scan.distances_mm[180]
+    assert np.min(scan.distances_mm) < np.max(scan.distances_mm)

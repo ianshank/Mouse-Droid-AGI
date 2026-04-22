@@ -8,6 +8,74 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Production Readiness (feature/production-readiness)
+
+- **LiDAR telemetry dashboard** — polar scan viewer at `/lidar` backed by
+  per-sector Prometheus gauges (`mousedroid_lidar_sector_distance_m`,
+  `mousedroid_lidar_min_distance_m`, `mousedroid_lidar_scan_points`);
+  `TelemetryFrame` gains `lidar_sectors`, `lidar_n_points`.
+- **Camera MJPEG stream** — `RawFrameSourceProtocol` with `/camera/stream`
+  (multipart/x-mixed-replace), `/camera/frame.jpg`, and `/camera` dashboard;
+  `build_telemetry_server` duck-types any `VisionProtocol` exposing
+  `capture_raw_jpeg()` as a raw-frame source.
+- **Mock camera modes** — procedural animated color-bar renderer and
+  `ImageGrab` screen-capture mode selected by `CameraConfig.mock_source`.
+- **Rotating-wedge mock LiDAR** — deterministic triangular-wedge scan driven
+  by `LidarConfig.mock_pattern` and `LidarConfig.mock_rotation_hz` for
+  dashboard and telemetry regression testing without hardware.
+- **Per-dimension action bounds** — `SafetyConfig.action_min` /
+  `SafetyConfig.action_max` (list-of-floats, per-dim) with a root validator
+  (`action_bounds_match_action_dim`) that expands `None` to
+  `[-1]*action_dim` / `[1]*action_dim`, validates length/ordering, and
+  rejects values outside `[-1, 1]`; `normalize_action_tensor` /
+  `normalize_action_numpy` + `NavigationAgent` honour the per-dim bounds.
+- **Bounded vision-feature telemetry payload** —
+  `TelemetryConfig.vision_feature_max_samples` (default 256, bounded
+  `(0, 4096]`) replaces the previously hardcoded cap in
+  `build_telemetry_frame`; orchestrator threads the value end-to-end.
+- **Telemetry real-server override** — `TelemetryConfig.force_real_server`
+  forces the full FastAPI telemetry server even when
+  `cfg.mock_hardware=True`; `TelemetryConfig.raw_frame_hz` configures the
+  MJPEG stream frame rate.
+- **Jetson camera wiring (Arducam IMX708 CSI)** — compose maps
+  `/dev/media0` and bind-mounts `/tmp/argus_socket`;
+  `config/jetson_production.yaml` selects the `jetson_csi` backend at
+  1280×720@30 with `use_onboard_inference=false` and `mean_pool` feature
+  extraction; removed unused `/proc/device-tree` bind mount.
+- **Ultrasonic graceful degradation** — distance-sensor driver now logs
+  `distance_sensor_init_failed_degrading` and returns a no-op driver when
+  no HC-SR04 is wired; keeps real-hardware startup healthy on the
+  LiDAR-only inventory.
+- **Monitoring stack** — `docker-compose.monitoring.yml` (Prometheus, Loki,
+  Promtail, Grafana) + `scripts/deploy_monitoring.sh` and pre-built
+  scrape/alert configs under `config/prometheus/` and `config/loki/`.
+- **Jetson operator tooling** — `scripts/benchmark_latency.py`,
+  `scripts/endurance_test.py`, `scripts/jetson_validate.sh`,
+  `scripts/launch_lidar_dashboard.sh`, and `config/local_lidar_validation.yaml`.
+- **New static dashboards** — `src/mousedroid/telemetry/static/lidar.html`
+  and `camera.html` shipped with the package.
+
+### Changed
+
+- `TelemetryServer.__init__` now accepts `lidar_max_range_m`,
+  `raw_frame_source`, and `raw_frame_hz`; mock telemetry server is only
+  selected when `cfg.mock_hardware and not cfg.telemetry.force_real_server`.
+- `sensing.manager._safe_lidar_read` returns `(features, ok, n_points)`;
+  `ObservationBundle` exposes `lidar_n_points`.
+- `.gitignore` excludes host-specific `docker-compose.override.y*ml` and
+  ad-hoc `step*.sh` / `fix_env.sh` scratch deploy scripts.
+
+### Tests
+
+- New regression tests for `build_telemetry_frame` vision-feature cap
+  (default + custom + passthrough paths).
+- New unit tests for telemetry server lidar/camera routes and integration
+  test for the lidar telemetry end-to-end flow.
+
+---
+
+## [Prior Unreleased]
+
 ### Added
 
 - **Dual-Stream CfC/GRU RSSM world model** — liquid neural network hybrid for adaptive reflexes

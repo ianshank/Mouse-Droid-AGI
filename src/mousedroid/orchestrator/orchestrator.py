@@ -327,7 +327,12 @@ class MouseDroidOrchestrator:
         Returns:
             Normalized 1-D torch tensor with correct dimensions.
         """
-        return normalize_action_numpy(action_np, int(self._cfg.model.action_dim))
+        return normalize_action_numpy(
+            action_np,
+            int(self._cfg.model.action_dim),
+            action_min=self._cfg.safety.action_min,
+            action_max=self._cfg.safety.action_max,
+        )
 
     async def _execute_action(self, action: torch.Tensor) -> None:
         """Scale and send action to ESP32 motors.
@@ -366,6 +371,7 @@ class MouseDroidOrchestrator:
                 safety_ctx,
                 loop_time_ms,
                 self._tick_count,
+                vision_feature_max_samples=self._cfg.telemetry.vision_feature_max_samples,
             )
             await self._telemetry_publisher.publish(frame)
         except Exception:

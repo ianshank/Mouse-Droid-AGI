@@ -265,7 +265,7 @@ class HailoFeatureExtractor:
 
             # Truncate or pad to expected dimension
             if len(features) >= self._feature_dim:
-                features = features[: self._feature_dim]  # type: ignore[assignment]
+                features = features[: self._feature_dim]
             else:
                 padded = np.zeros(self._feature_dim, dtype=np.float32)
                 padded[: len(features)] = features

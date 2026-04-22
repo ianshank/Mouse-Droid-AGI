@@ -4,6 +4,30 @@
 
 This document tracks planned enhancements, organised by priority and category.
 
+## Production Readiness Branch — Follow-ups
+
+Field tasks blocked on hardware access or physical servicing:
+
+- [ ] **Reseat Arducam IMX708 ribbon cable** — container is `healthy` with
+      `jetson_csi` backend wired, but both dual sensors fail I²C probe
+      (`imx708_board_setup: error during i2c read probe (-121)` on buses 9
+      and 10). `i2cdetect -y 9/10` show address 0x1a empty → physical
+      ribbon is unseated.
+- [ ] **Plug LD19 LiDAR** — driver built and starts, but `/dev/ttyUSB1`
+      absent on host; only ESP32 at `/dev/ttyUSB0`.
+- [ ] **Remove on-Jetson compose override** once both camera and LiDAR
+      are live: `sudo rm -f /opt/mousedroid/docker-compose.override.yml`
+      then `docker compose --env-file /etc/mousedroid/docker.env -f docker-compose.jetson.yml up -d --no-deps --force-recreate mousedroid`.
+- [ ] **Update `scripts/mousedroid-docker.service` and
+      `scripts/docker_deploy.sh`** to wire the override file via
+      `-f docker-compose.override.yml` when present on the host.
+- [ ] **Run real-hardware e2e smoke** (`scripts/jetson_smoke_test.sh` +
+      `scripts/endurance_test.py`) once sensors are physically wired.
+- [ ] **Optional**: bake `picamera2` into `Dockerfile.jetson` only if we
+      decide to switch back to the picamera2 backend.
+
+---
+
 ## Recently Completed (2026-04-14 checkpoint)
 
 - ✅ **Green build restored**: 14 previously failing tests fixed; all 1299+ tests now pass

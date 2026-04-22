@@ -110,6 +110,33 @@ class _Gauge:
             return self._value
 
 
+class _LabeledGauge:
+    """Gauge with a single string label dimension."""
+
+    __slots__ = ("_lock", "_values")
+
+    def __init__(self) -> None:
+        self._values: dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    def set(self, label: str, value: float) -> None:
+        with self._lock:
+            self._values[label] = value
+
+    def set_many(self, values: dict[str, float]) -> None:
+        """Replace all label → value entries atomically."""
+        with self._lock:
+            self._values = dict(values)
+
+    def snapshot(self) -> dict[str, float]:
+        with self._lock:
+            return dict(self._values)
+
+    def reset(self) -> None:
+        with self._lock:
+            self._values.clear()
+
+
 class _Histogram:
     """Thread-safe Prometheus Histogram.
 
@@ -200,6 +227,28 @@ def _render_gauge(name: str, help_text: str, value: float) -> list[str]:
     return lines
 
 
+def _render_labeled_gauge(
+    name: str,
+    help_text: str,
+    label_name: str,
+    values: dict[str, float],
+) -> list[str]:
+    lines = [
+        f"# HELP {name} {_escape_help_text(help_text)}",
+        f"# TYPE {name} gauge",
+    ]
+    # Sort numerically when labels are numeric strings so scrape output is
+    # stable for sector="0", "1", ..., "10" ordering.
+    try:
+        ordered = sorted(values.items(), key=lambda kv: (int(kv[0]), kv[0]))
+    except ValueError:
+        ordered = sorted(values.items())
+    for label_val, gauge_value in ordered:
+        escaped = _escape_label_value(label_val)
+        lines.append(f'{name}{{{label_name}="{escaped}"}} {_fmt_float(gauge_value)}')
+    return lines
+
+
 def _render_histogram(
     name: str,
     help_text: str,
@@ -251,6 +300,9 @@ class MetricsRegistry:
         self._ws_clients = _Gauge()
         self._gpu_temp_c = _Gauge()
         self._publish_hz = _Gauge()
+        self._lidar_sector_distance_m = _LabeledGauge()
+        self._lidar_min_distance_m = _Gauge()
+        self._lidar_scan_points = _Gauge()
 
         # Histogram (loop latency)
         self._loop_histogram = _Histogram(cfg.loop_latency_buckets_ms)
@@ -268,6 +320,9 @@ class MetricsRegistry:
         self._name_uptime = f"{ns}_uptime_seconds"
         self._name_llm_translation = f"{ns}_llm_translation"
         self._name_llm_translation_latency = f"{ns}_llm_translation_latency_ms"
+        self._name_lidar_sector_distance = f"{ns}_lidar_sector_distance_m"
+        self._name_lidar_min_distance = f"{ns}_lidar_min_distance_m"
+        self._name_lidar_scan_points = f"{ns}_lidar_scan_points"
 
         _log.debug("metrics_registry_initialised", namespace=ns)
 
@@ -323,6 +378,30 @@ class MetricsRegistry:
         """Record LLM translation latency in milliseconds."""
         if self._cfg.track_llm_translations:
             self._llm_translation_latency_ms.observe(value)
+
+    def set_lidar_sectors(self, sectors: list[float], max_range_m: float) -> None:
+        """Publish per-sector LiDAR distances as a labeled gauge.
+
+        Args:
+            sectors: Normalised sector distances in ``[0.0, 1.0]``, where
+                ``1.0`` equals ``max_range_m`` (no obstacle detected).
+            max_range_m: LiDAR maximum detection range in metres; used to
+                convert the normalised sector value into metres for scrape.
+        """
+        if not self._cfg.track_lidar:
+            return
+        payload = {str(i): float(v) * max_range_m for i, v in enumerate(sectors)}
+        self._lidar_sector_distance_m.set_many(payload)
+
+    def set_lidar_min_distance_m(self, value: float) -> None:
+        """Set the minimum LiDAR distance reading in metres."""
+        if self._cfg.track_lidar:
+            self._lidar_min_distance_m.set(value)
+
+    def set_lidar_scan_points(self, count: int) -> None:
+        """Set the raw LiDAR scan point count (liveness signal)."""
+        if self._cfg.track_lidar:
+            self._lidar_scan_points.set(float(count))
 
     # ------------------------------------------------------------------
     # Read helpers (for testing / internal queries)
@@ -448,6 +527,32 @@ class MetricsRegistry:
                 )
             )
 
+        if cfg.track_lidar:
+            sector_snapshot = self._lidar_sector_distance_m.snapshot()
+            if sector_snapshot:
+                sections.append(
+                    _render_labeled_gauge(
+                        self._name_lidar_sector_distance,
+                        "Per-sector LiDAR distance in metres (label: sector)",
+                        "sector",
+                        sector_snapshot,
+                    )
+                )
+            sections.append(
+                _render_gauge(
+                    self._name_lidar_min_distance,
+                    "Minimum LiDAR distance across all sectors (metres)",
+                    self._lidar_min_distance_m.value,
+                )
+            )
+            sections.append(
+                _render_gauge(
+                    self._name_lidar_scan_points,
+                    "Number of raw points in the last LiDAR scan",
+                    self._lidar_scan_points.value,
+                )
+            )
+
         sections.append(
             _render_gauge(
                 self._name_publish_hz,
@@ -485,5 +590,8 @@ def generate_metrics_sample() -> str:
     registry.inc_safety_violation("law1")
     registry.inc_llm_translation("translated")
     registry.observe_llm_translation_latency_ms(42.0)
+    registry.set_lidar_sectors([0.9, 0.4, 1.0, 1.0, 0.7, 1.0, 1.0, 0.2], max_range_m=12.0)
+    registry.set_lidar_min_distance_m(2.4)
+    registry.set_lidar_scan_points(456)
 
     return registry.render_prometheus()

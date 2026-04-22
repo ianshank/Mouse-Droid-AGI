@@ -50,6 +50,22 @@ speaker:
   device_name: "USB"  # Wonrabai USB Sound Card (shared with microphone)
   format: "float32"
 
+lidar:
+  enabled: true
+  serial_port: "/dev/ttyUSB1"
+  baud_rate: 230400
+  n_sectors: 36
+
+camera:
+  # Arducam IMX708 dual via Jetson CSI (nvarguscamerasrc / libargus).
+  # DT overlay: tegra234-p3767-camera-p3768-imx708-dual.dtbo.
+  backend: "jetson_csi"
+  resolution_width: 1280
+  resolution_height: 720
+  fps: 30
+  use_onboard_inference: false  # IMX708 has no onboard NPU
+  feature_extractor: "mean_pool"  # switch to "tensorrt"/"hailo" once weights are staged
+
 voice:
   enabled: true
   cooldown_s: 5.0

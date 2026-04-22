@@ -65,6 +65,27 @@ graph TD
 
 See [docs/architecture.md](docs/architecture.md) for full C4 diagrams (Context → Container → Component → Code + data flow sequence diagrams).
 
+### Dashboards & Endpoints
+
+The telemetry server (default port **8080**) exposes:
+
+| Endpoint | Purpose |
+|---|---|
+| `http://<host>:8080/api/v1/health` | Readiness + liveness JSON |
+| `http://<host>:8080/api/v1/state` | Current observation + safety context |
+| `http://<host>:8080/metrics` | Prometheus scrape (including per-sector LiDAR metrics) |
+| `http://<host>:8080/lidar` | Polar LiDAR scan dashboard |
+| `http://<host>:8080/camera` | MJPEG camera dashboard |
+| `http://<host>:8080/camera/stream` | `multipart/x-mixed-replace` MJPEG stream |
+| `http://<host>:8080/camera/frame.jpg` | Single-shot JPEG frame |
+| `http://<host>:8080/ws` | WebSocket telemetry frames |
+
+Run the LiDAR dashboard locally (with mocked rotating-wedge scan) via:
+
+```bash
+./scripts/launch_lidar_dashboard.sh
+```
+
 ---
 
 ## Quick Start

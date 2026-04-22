@@ -125,8 +125,9 @@ graph TD
     LLM["LLM Gateway optional\nNL to GoalVector\nLocal Llama GGUF"]
 
     TelemetryPub2["Telemetry Publisher\ntelemetry/publisher.py\nasync queue bridge"]
-    MetricsReg2["Metrics Registry\ntelemetry/metrics.py\nPrometheus text rendering"]
-    TelemetryServer2["Telemetry Server\ntelemetry/server.py\nREST /api/v1/* + WebSocket /ws"]
+    MetricsReg2["Metrics Registry\ntelemetry/metrics.py\nPrometheus text rendering\n+ per-sector LiDAR gauges"]
+    TelemetryServer2["Telemetry Server\ntelemetry/server.py\nREST /api/v1/* + /ws + /metrics\n/lidar + /camera + /camera/stream"]
+    RawFrameSrc["Camera RawFrameSource\nRawFrameSourceProtocol\ncapture_raw_jpeg()"]
 
     CLI --> Factory
     Factory --> Orchestrator
@@ -150,6 +151,7 @@ graph TD
     Orchestrator --> MetricsReg2
     TelemetryPub2 --> TelemetryServer2
     MetricsReg2 --> TelemetryServer2
+    RawFrameSrc --> TelemetryServer2
 ```
 
 ---

@@ -47,6 +47,10 @@ services:
       - /sys/devices/virtual/thermal:/sys/devices/virtual/thermal:ro
       # GPU sysfs (read-only)
       - /sys/devices/platform:/sys/devices/platform:ro
+      # Argus daemon socket — required for nvarguscamerasrc / libargus
+      # CSI camera capture from inside the container.
+      - /tmp/argus_socket:/tmp/argus_socket
+
 
     # --- Hardware device passthrough ---
     # All devices required for production deployment.
@@ -55,8 +59,10 @@ services:
     devices:
       # ESP32 UART serial (motor controller + encoders + battery)
       - ${MOUSEDROID_ESP32_DEV:-/dev/ttyUSB0}:/dev/ttyUSB0
-      # CSI / USB camera
-      - ${MOUSEDROID_CAMERA_DEV:-/dev/video0}:/dev/video0
+      # Arducam IMX708 CSI camera — v4l2 media controller
+      # (libargus + nvarguscamerasrc is the capture path; no /dev/video* node
+      # is exposed by the IMX708 driver, so we pass /dev/media0 + argus socket.)
+      - ${MOUSEDROID_CAMERA_DEV:-/dev/media0}:/dev/media0
       # Jetson GPIO chips
       - /dev/gpiochip0:/dev/gpiochip0
       - /dev/gpiochip1:/dev/gpiochip1

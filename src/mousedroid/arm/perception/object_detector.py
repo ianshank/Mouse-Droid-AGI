@@ -85,7 +85,7 @@ class ObjectDetector:
         """
         if self._model_path.exists():
             try:
-                from ultralytics import YOLO  # type: ignore[attr-defined]
+                from ultralytics import YOLO
 
                 self._model = YOLO(str(self._model_path))
                 _log.info("yolo_model_loaded", path=str(self._model_path))

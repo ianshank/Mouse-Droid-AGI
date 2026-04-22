@@ -74,3 +74,33 @@ class TestBuildTelemetryFrame:
         assert isinstance(d, dict)
         assert "timestamp" in d
         assert "battery_voltage" in d
+
+    def test_vision_feature_downsampling_default(self):
+        """Default cap of 256 samples must be applied when vision vector is larger."""
+        obs = FakeObservation()
+        obs.vision_features = np.ones(1024, dtype=np.float32)
+        ctx = FakeSafetyContext()
+        frame = build_telemetry_frame(obs, ctx, loop_time_ms=1.0, tick_count=1)
+        assert frame.vision_features is not None
+        assert len(frame.vision_features) <= 256
+
+    def test_vision_feature_downsampling_custom_cap(self):
+        """Caller-provided cap must override the default and bound payload size."""
+        obs = FakeObservation()
+        obs.vision_features = np.arange(1024, dtype=np.float32)
+        ctx = FakeSafetyContext()
+        frame = build_telemetry_frame(
+            obs, ctx, loop_time_ms=1.0, tick_count=1, vision_feature_max_samples=8
+        )
+        assert frame.vision_features is not None
+        assert len(frame.vision_features) <= 8
+
+    def test_vision_feature_smaller_than_cap_preserved(self):
+        """Vectors smaller than the cap must pass through without downsampling."""
+        obs = FakeObservation()
+        obs.vision_features = np.arange(4, dtype=np.float32)
+        ctx = FakeSafetyContext()
+        frame = build_telemetry_frame(
+            obs, ctx, loop_time_ms=1.0, tick_count=1, vision_feature_max_samples=256
+        )
+        assert frame.vision_features == [0.0, 1.0, 2.0, 3.0]

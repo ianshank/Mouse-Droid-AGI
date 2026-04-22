@@ -68,6 +68,14 @@ class CameraConfig(BaseModel):
         "auto",
         description="Camera backend: auto-detect, picamera2, or Jetson CSI",
     )
+    mock_source: Literal["procedural", "screen_capture"] = Field(
+        "procedural",
+        description=(
+            "Source used by the mock driver: 'procedural' synthesises an "
+            "animated test pattern; 'screen_capture' streams the host "
+            "desktop via PIL.ImageGrab (real photographic content)."
+        ),
+    )
     feature_extractor: Literal["mean_pool", "tensorrt", "hailo", "auto"] = Field(
         "mean_pool",
         description="Feature extraction backend: mean_pool (fallback), tensorrt, hailo, or auto",
@@ -301,6 +309,19 @@ class LidarConfig(BaseModel):
     read_timeout_s: float = Field(0.2, gt=0, description="Serial read timeout (s)")
     n_sectors: int = Field(36, gt=0, description="Number of angular sectors for binning")
     feature_dim: int = Field(36, gt=0, description="Output feature vector dimension")
+    mock_pattern: str = Field(
+        "uniform",
+        description=(
+            "Mock LiDAR scan pattern. 'uniform' (default) fills scan at midrange; "
+            "'rotating_wedge' rotates a narrow near-obstacle wedge for dashboard "
+            "visual validation."
+        ),
+    )
+    mock_rotation_hz: float = Field(
+        0.5,
+        gt=0,
+        description="Rotation frequency (Hz) of the mock rotating-wedge pattern.",
+    )
 
     @model_validator(mode="after")
     def _range_order(self) -> Self:
@@ -547,6 +568,13 @@ class MetricsConfig(BaseModel):
         True,
         description="Expose llm_translation counters and latency histogram",
     )
+    track_lidar: bool = Field(
+        True,
+        description=(
+            "Expose lidar_sector_distance_m (labeled), lidar_min_distance_m, "
+            "and lidar_scan_points gauges"
+        ),
+    )
     loop_latency_buckets_ms: tuple[float, ...] = Field(
         (1.0, 2.5, 5.0, 10.0, 20.0, 33.0, 50.0, 100.0, 200.0, float("inf")),
         description="Histogram bucket boundaries for control-loop latency (ms)",
@@ -688,6 +716,20 @@ class SafetyConfig(BaseModel):
     reverse_velocity: float = Field(
         -0.5, le=0, description="Reverse velocity for obstacle avoidance"
     )
+    action_min: list[float] | None = Field(
+        None,
+        description=(
+            "Per-dimension lower bounds for normalized actions. "
+            "None expands to -1.0 for each action dimension."
+        ),
+    )
+    action_max: list[float] | None = Field(
+        None,
+        description=(
+            "Per-dimension upper bounds for normalized actions. "
+            "None expands to 1.0 for each action dimension."
+        ),
+    )
     lidar_max_range_m: float = Field(
         12.0, gt=0, description="LiDAR max range for clearance conversion (m)"
     )
@@ -733,6 +775,33 @@ class TelemetryConfig(BaseModel):
     """
 
     enabled: bool = Field(False, description="Enable telemetry server")
+    force_real_server: bool = Field(
+        False,
+        description=(
+            "When True, use the real aiohttp TelemetryServer even with "
+            "mock_hardware=True. Useful for local dashboard validation."
+        ),
+    )
+    raw_frame_hz: float = Field(
+        10.0,
+        gt=0,
+        le=60,
+        description=(
+            "Target frame rate (Hz) for the /camera/stream MJPEG endpoint "
+            "when the camera driver supports raw-frame capture."
+        ),
+    )
+    vision_feature_max_samples: int = Field(
+        256,
+        gt=0,
+        le=4096,
+        description=(
+            "Maximum number of vision-feature samples encoded into each "
+            "TelemetryFrame.vision_features payload. Larger feature "
+            "vectors are uniformly strided down to this size before "
+            "serialisation, keeping dashboard bandwidth bounded."
+        ),
+    )
     host: str = Field(
         "0.0.0.0",  # noqa: S104
         description="Server bind address (0.0.0.0 = all interfaces)",
@@ -1151,8 +1220,7 @@ class GPUConfig(BaseModel):
     require_cuda: bool = Field(
         False,
         description=(
-            "Fail training when a CUDA device is unavailable or a non-CUDA "
-            "device is selected"
+            "Fail training when a CUDA device is unavailable or a non-CUDA device is selected"
         ),
     )
     enable_amp: bool = Field(
@@ -1587,3 +1655,31 @@ class Settings(BaseSettings):
             raise ValueError(msg)
 
         return data
+
+    @model_validator(mode="after")
+    def action_bounds_match_action_dim(self) -> Self:
+        """Populate and validate normalized action bounds against ``model.action_dim``."""
+        action_dim = self.model.action_dim
+        if self.safety.action_min is None:
+            self.safety.action_min = [-1.0] * action_dim
+        if self.safety.action_max is None:
+            self.safety.action_max = [1.0] * action_dim
+
+        action_min = self.safety.action_min
+        action_max = self.safety.action_max
+        if len(action_min) != action_dim:
+            msg = f"safety.action_min length must equal model.action_dim ({action_dim})"
+            raise ValueError(msg)
+        if len(action_max) != action_dim:
+            msg = f"safety.action_max length must equal model.action_dim ({action_dim})"
+            raise ValueError(msg)
+
+        for idx, (lower, upper) in enumerate(zip(action_min, action_max, strict=False)):
+            if lower < -1.0 or upper > 1.0:
+                msg = f"normalized action bounds must stay within [-1, 1] (index {idx})"
+                raise ValueError(msg)
+            if lower >= upper:
+                msg = f"safety.action_min[{idx}] must be < safety.action_max[{idx}]"
+                raise ValueError(msg)
+
+        return self

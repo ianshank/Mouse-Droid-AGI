@@ -512,6 +512,7 @@ def build_telemetry_server(
     health_monitor: HealthMonitor,
     log_buffer: LogRingBuffer | None = None,
     metrics_registry: MetricsRegistry | None = None,
+    camera: VisionProtocol | None = None,
 ) -> TelemetryServerProtocol | None:
     """Build telemetry server if telemetry is enabled.
 
@@ -521,6 +522,9 @@ def build_telemetry_server(
         health_monitor: Health monitor for health endpoint.
         log_buffer: Optional log ring buffer for log streaming.
         metrics_registry: Optional shared metrics registry reused by other runtime components.
+        camera: Optional vision driver; used as a raw-frame source for
+            the MJPEG ``/camera/stream`` endpoint when it also implements
+            :class:`RawFrameSourceProtocol`.
 
     Returns:
         ``TelemetryServer`` or ``None`` if telemetry disabled.
@@ -528,7 +532,7 @@ def build_telemetry_server(
     if not cfg.telemetry.enabled or publisher is None:
         return None
 
-    if cfg.mock_hardware:
+    if cfg.mock_hardware and not cfg.telemetry.force_real_server:
         from mousedroid.telemetry.mock_server import MockTelemetryServer
 
         _log.info("telemetry_mock_server_built")
@@ -547,12 +551,18 @@ def build_telemetry_server(
     if shared_metrics_registry is None and cfg.metrics.enabled:
         shared_metrics_registry = build_metrics_registry(cfg)
 
+    from mousedroid.hardware.protocols import RawFrameSourceProtocol
     from mousedroid.telemetry.server import TelemetryServer
+
+    raw_frame_source: RawFrameSourceProtocol | None = None
+    if camera is not None and isinstance(camera, RawFrameSourceProtocol):
+        raw_frame_source = camera
 
     _log.info(
         "telemetry_server_built",
         host=cfg.telemetry.host,
         port=cfg.telemetry.port,
+        raw_frame_source=raw_frame_source is not None,
     )
     return TelemetryServer(
         cfg=cfg.telemetry,
@@ -562,6 +572,9 @@ def build_telemetry_server(
         metrics_registry=shared_metrics_registry,
         metrics_path=metrics_path,
         publisher=publisher,
+        lidar_max_range_m=cfg.lidar.max_range_m if cfg.lidar is not None else None,
+        raw_frame_source=raw_frame_source,
+        raw_frame_hz=cfg.telemetry.raw_frame_hz,
     )
 
 
@@ -916,12 +929,19 @@ def build_orchestrator(cfg: Settings) -> object:
 
     microphone = build_microphone(cfg)
 
+    lidar_driver: LidarProtocol | None = None
+    try:
+        lidar_driver = build_lidar(cfg)
+    except Exception as exc:  # pylint: disable=broad-except
+        _log.warning("lidar_init_failed_degrading", error=str(exc))
+
     sensor_manager = build_sensor_manager(
         cfg,
         vision=camera,
         distance=distance,
         esp32=esp32,
         microphone=microphone,
+        lidar=lidar_driver,
     )
 
     cognitive_core: CognitiveCore | None = None
@@ -945,11 +965,9 @@ def build_orchestrator(cfg: Settings) -> object:
     from mousedroid.telemetry.log_buffer import LogRingBuffer as _LogRingBuffer
 
     log_buffer: _LogRingBuffer | None = None
-    telemetry_cfg = getattr(cfg, "telemetry", None)
-    if telemetry_cfg is not None:
-        buffer_size = getattr(telemetry_cfg, "log_stream_buffer", 0)
-        if buffer_size:
-            log_buffer = _LogRingBuffer(buffer_size)
+    buffer_size = cfg.telemetry.log_stream_buffer
+    if buffer_size:
+        log_buffer = _LogRingBuffer(buffer_size)
 
     metrics_registry = build_metrics_registry(cfg)
 
@@ -959,6 +977,7 @@ def build_orchestrator(cfg: Settings) -> object:
         health_monitor,
         log_buffer=log_buffer,
         metrics_registry=metrics_registry,
+        camera=camera,
     )
 
     llm_gateway = build_llm_gateway(cfg) if cfg.llm.enabled else None

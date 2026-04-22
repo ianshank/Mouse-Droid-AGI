@@ -300,7 +300,6 @@ def test_local_training_yaml_is_loadable() -> None:
     assert settings.training.batch_size == 32
 
 
-
 # ---------------------------------------------------------------------------
 # GPU monitor with mocked sysfs
 # ---------------------------------------------------------------------------

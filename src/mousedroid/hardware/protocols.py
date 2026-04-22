@@ -41,6 +41,26 @@ class VisionProtocol(Protocol):
 
 
 @runtime_checkable
+class RawFrameSourceProtocol(Protocol):
+    """Optional capability for vision drivers that can emit raw JPEG frames.
+
+    Implemented by :class:`MockCamera` for offline dashboard validation and
+    by on-NPU drivers that can tee the pre-inference frame. Consumers
+    should duck-type via ``isinstance(camera, RawFrameSourceProtocol)``
+    so drivers without raw-frame support remain usable.
+    """
+
+    async def capture_raw_jpeg(self) -> bytes | None:
+        """Return a JPEG-encoded snapshot of the current scene.
+
+        Returns:
+            JPEG bytes, or ``None`` when no frame is available (e.g. the
+            first call before the pipeline has warmed up).
+        """
+        ...
+
+
+@runtime_checkable
 class DistanceSensorProtocol(Protocol):
     """Interface for single-point distance sensors (HC-SR04, etc)."""
 
