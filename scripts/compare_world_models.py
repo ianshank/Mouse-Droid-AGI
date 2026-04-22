@@ -34,11 +34,11 @@ _src = Path(__file__).parent.parent / "src"
 if str(_src) not in sys.path:
     sys.path.insert(0, str(_src))
 
-from mousedroid.config.loader import load_settings
-from mousedroid.config.schema import ModelConfig
-from mousedroid.logging.setup import get_logger
-from mousedroid.world_model.checkpoint_migration import load_rssm_with_migration
-from mousedroid.world_model.rssm import RSSM
+from mousedroid.config.loader import load_settings  # noqa: E402
+from mousedroid.config.schema import ModelConfig  # noqa: E402
+from mousedroid.logging.setup import get_logger  # noqa: E402
+from mousedroid.world_model.checkpoint_migration import load_rssm_with_migration  # noqa: E402
+from mousedroid.world_model.rssm import RSSM  # noqa: E402
 
 _log = get_logger(__name__)
 
@@ -189,7 +189,7 @@ def compute_parity(
     for ep in range(n_episodes):
         old_latents = _rollout(old_rssm, old_cfg, n_steps, device, seed=ep)
         new_latents = _rollout(new_rssm, new_cfg, n_steps, device, seed=ep)
-        for old_z, new_z in zip(old_latents, new_latents):
+        for old_z, new_z in zip(old_latents, new_latents, strict=True):
             old_a = _latent_to_action(old_z, old_cfg.action_dim)
             new_a = _latent_to_action(new_z, new_cfg.action_dim)
             agreements.append(_cosine_agreement(old_a, new_a))
@@ -222,7 +222,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--min-agreement",
         type=float,
         default=0.80,
-        help="Minimum mean agreement to pass (0–1, default 0.80)",
+        help="Minimum mean agreement to pass (0-1, default 0.80)",
     )
     p.add_argument("--device", type=str, default="cpu", help="Torch device string")
     return p.parse_args(argv)
@@ -262,7 +262,7 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"Mean agreement: {result['mean_agreement']:.3f}  "
         f"(min={result['min_agreement']:.3f}, max={result['max_agreement']:.3f})"
-        f"  over {args.episodes} episodes × {args.steps} steps"
+        f"  over {args.episodes} episodes x {args.steps} steps"
     )
 
     if result["mean_agreement"] >= args.min_agreement:

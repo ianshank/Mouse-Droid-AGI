@@ -25,7 +25,6 @@ def _bundle_to_tensors(
     model_cfg: ModelConfig | None = None,
 ) -> dict[str, torch.Tensor]:
     """Convert an observation bundle to a dict of tensors."""
-
     lidar_dim = model_cfg.lidar_dim if model_cfg is not None else 0
     if lidar_dim > 0:
         lidar_source = obs.lidar_features

@@ -80,7 +80,6 @@ class MultimodalEncoder(nn.Module):
     @staticmethod
     def _gate_projection(projected: Tensor, valid_mask: Tensor, modality_name: str) -> Tensor:
         """Gate a projected modality by its valid-mask slot."""
-
         slot_index = SENSOR_SLOT_MAP[modality_name]
         if valid_mask.shape[-1] <= slot_index:
             return torch.zeros_like(projected)

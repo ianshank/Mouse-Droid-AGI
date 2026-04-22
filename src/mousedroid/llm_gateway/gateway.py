@@ -24,8 +24,9 @@ _log = get_logger(__name__)
 class LLMGateway:
     """NL mission -> GoalVector translation via local LLM.
 
-    Requires ``llama-cpp-python`` to be installed. ``start()`` raises
-    ``RuntimeError`` if the dependency is missing.
+    When ``llama-cpp-python`` is not installed or the model file is missing,
+    :meth:`start` logs a warning, enters degraded mode, and returns normally;
+    :attr:`is_ready` will remain ``False`` until a model is loaded.
     """
 
     def __init__(self, cfg: GatewayConfig) -> None:
@@ -50,8 +51,9 @@ class LLMGateway:
     async def start(self) -> None:
         """Load model and warm up.
 
-        Raises:
-            RuntimeError: If llama-cpp-python is not installed or model not found.
+        If ``llama-cpp-python`` is not installed or the configured model file
+        cannot be opened, a warning is logged, :attr:`_degraded` is set to
+        ``True``, and the method returns without raising.
         """
         if not self._cfg.enabled:
             _log.info("llm_gateway_disabled")

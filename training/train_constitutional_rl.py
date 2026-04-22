@@ -24,7 +24,6 @@ from mousedroid.config.schema import Settings
 from mousedroid.reward.model import MultiObjectiveRewardModel
 from mousedroid.safety.three_laws import RoboticsLawChecker
 from mousedroid.world_model.checkpoint_migration import load_rssm_with_migration
-from mousedroid.world_model.rssm import RSSM
 
 _log = structlog.get_logger(__name__)
 

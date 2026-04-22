@@ -229,6 +229,6 @@ def test_imagine_step_1d_action(rssm: RSSM, cfg: ModelConfig) -> None:
     action_1d = torch.zeros(cfg.action_dim)  # shape: (action_dim,)
     h = torch.zeros(1, cfg.hidden_dim)
     z = torch.zeros(1, cfg.latent_dim)
-    new_h, new_z, reward = rssm.imagine_step(action_1d, h, z)
+    new_h, new_z, _reward = rssm.imagine_step(action_1d, h, z)
     assert new_h.shape == (1, cfg.hidden_dim)
     assert new_z.shape == (1, cfg.latent_dim)

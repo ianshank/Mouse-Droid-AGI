@@ -255,7 +255,7 @@ def load_rssm_with_migration(
     device: torch.device | None = None,
     *,
     strict: bool = True,
-) -> "RSSM":
+) -> RSSM:
     """Load an RSSM checkpoint, migrating encoder modality changes automatically.
 
     Handles both *full* training checkpoints (containing a
@@ -277,7 +277,7 @@ def load_rssm_with_migration(
         ValueError: If the state dict is incompatible with *cfg*.
     """
     # Lazy import avoids a circular-import cycle (rssm → encoder → this module).
-    from mousedroid.world_model.rssm import RSSM  # noqa: PLC0415
+    from mousedroid.world_model.rssm import RSSM
 
     _d = device if device is not None else torch.device("cpu")
     raw = torch.load(path, map_location=_d, weights_only=False)

@@ -651,7 +651,6 @@ class ModelConfig(BaseModel):
     @model_validator(mode="after")
     def _validate_optional_modalities(self) -> Self:
         """Validate optional modality dimension pairs."""
-
         if (self.ultrasonic_dim == 0) != (self.ultrasonic_proj_dim == 0):
             msg = (
                 "ultrasonic_dim and ultrasonic_proj_dim must both be zero "

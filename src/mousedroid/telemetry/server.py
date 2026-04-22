@@ -669,14 +669,18 @@ class TelemetryServer:
                 if isinstance(safety, dict):
                     for law in safety.get("violations", []):
                         self._metrics.inc_safety_violation(str(law))
-                if frame.lidar_sectors is not None and self._lidar_max_range_m is not None:
-                    self._metrics.set_lidar_sectors(
-                        frame.lidar_sectors,
-                        self._lidar_max_range_m,
-                    )
-                if frame.lidar_min_dist_m is not None:
-                    self._metrics.set_lidar_min_distance_m(frame.lidar_min_dist_m)
-                self._metrics.set_lidar_scan_points(frame.lidar_n_points)
+                lidar_enabled = (
+                    self._lidar_max_range_m is not None or frame.lidar_sectors is not None
+                )
+                if lidar_enabled:
+                    if frame.lidar_sectors is not None and self._lidar_max_range_m is not None:
+                        self._metrics.set_lidar_sectors(
+                            frame.lidar_sectors,
+                            self._lidar_max_range_m,
+                        )
+                    if frame.lidar_min_dist_m is not None:
+                        self._metrics.set_lidar_min_distance_m(frame.lidar_min_dist_m)
+                    self._metrics.set_lidar_scan_points(frame.lidar_n_points)
 
             dead_clients: list[web.WebSocketResponse] = []
             send_tasks = []

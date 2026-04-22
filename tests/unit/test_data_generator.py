@@ -40,7 +40,8 @@ class TestBundleToTensors:
     def test_lidar_only_config_disables_ultrasonic_tensor(self) -> None:
         from mousedroid.config.schema import ModelConfig
 
-        obs = MouseDroidObservationBundle(_lidar_features=torch.ones(36, dtype=torch.float32).numpy())
+        lidar = torch.ones(36, dtype=torch.float32).numpy()
+        obs = MouseDroidObservationBundle(_lidar_features=lidar)
         tensors = _bundle_to_tensors(
             obs,
             ModelConfig(ultrasonic_dim=0, ultrasonic_proj_dim=0, lidar_dim=36, lidar_proj_dim=16),

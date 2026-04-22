@@ -32,11 +32,11 @@ N_SENSOR_MODALITIES_WITH_LIDAR: int = 5
 """Number of sensor modalities when LiDAR is active (adds slot [4])."""
 
 SENSOR_SLOT_MAP: dict[str, int] = {
-	"vision": 0,
-	"ultrasonic": 1,
-	"motor": 2,
-	"audio": 3,
-	"lidar": 4,
+    "vision": 0,
+    "ultrasonic": 1,
+    "motor": 2,
+    "audio": 3,
+    "lidar": 4,
 }
 """Stable valid-mask slot assignment for encoder and sensing components."""
 

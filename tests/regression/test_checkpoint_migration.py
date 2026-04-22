@@ -21,7 +21,6 @@ from mousedroid.world_model.checkpoint_migration import (
 )
 from mousedroid.world_model.rssm import RSSM
 
-
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
@@ -331,7 +330,7 @@ def test_build_new_parts_includes_ultrasonic() -> None:
 
 def test_new_proj_tensors_unknown_modality_raises() -> None:
     """_new_proj_tensors must raise ValueError for unrecognised modality names."""
-    from mousedroid.world_model.checkpoint_migration import _new_proj_tensors  # noqa: PLC0415
+    from mousedroid.world_model.checkpoint_migration import _new_proj_tensors
 
     cfg = _small_cfg(
         ultrasonic_dim=0, ultrasonic_proj_dim=0,
