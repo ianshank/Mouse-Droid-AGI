@@ -162,5 +162,5 @@ def test_schema_version_mismatch_raises() -> None:
     import pytest
 
     bad_data = msgpack.packb({"schema_version": 999, "foo": "bar"})
-    with pytest.raises(ValueError, match="[Ss]chema"):
+    with pytest.raises(ValueError, match=r"[Ss]chema"):
         MouseDroidExperienceRecord.deserialize(bad_data)

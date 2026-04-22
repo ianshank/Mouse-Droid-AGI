@@ -433,7 +433,8 @@ class LoopConfig(BaseModel):
     )
     watchdog_heartbeat_path: str = Field(
         "/tmp/mousedroid_heartbeat",  # noqa: S108
-        description="Path for file-based watchdog heartbeat (watchdog_mode 'file' or 'auto' fallback)",
+        # watchdog_mode 'file' or 'auto' fallback
+        description="Path for file-based watchdog heartbeat",
     )
 
 

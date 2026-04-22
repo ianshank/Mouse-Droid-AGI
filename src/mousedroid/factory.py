@@ -35,8 +35,6 @@ if TYPE_CHECKING:
     )
     from mousedroid.cloud.protocol import (
         CloudExperienceExporterProtocol,
-        CloudLoggingSinkProtocol,
-        CloudMetricsExporterProtocol,
         CloudTelemetrySinkProtocol,
     )
     from mousedroid.cognitive.bdi_model import NeuralBDI
@@ -1017,7 +1015,7 @@ def build_orchestrator(cfg: Settings) -> object:
 
     from mousedroid.common.tools.registry import create_default_registry
 
-    tool_registry = create_default_registry(
+    _tool_registry = create_default_registry(
         llm_gateway=llm_gateway,
         metrics_registry=metrics_registry,
     )
@@ -1058,6 +1056,7 @@ def build_orchestrator(cfg: Settings) -> object:
         watchdog=watchdog,
         cloud_sink=cloud_sink,
         cloud_experience_exporter=cloud_experience_exporter,
+        tool_registry=_tool_registry,
     )
 
 
