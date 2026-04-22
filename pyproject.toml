@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mousedroid"
-version = "0.2.0"
+version = "0.3.0"
 description = "MouseDroidAGI — Star Wars MSE-6 Agentic World Model on Jetson Orin Nano"
 requires-python = ">=3.10"
 dependencies = [
@@ -63,6 +63,22 @@ lidar = [
 ]
 cfc = [
     "ncps>=0.0.7",
+]
+gcp = [
+    "google-cloud-pubsub>=2.18",
+    "google-cloud-storage>=2.10",
+    "google-cloud-logging>=3.5",
+    "google-cloud-monitoring>=2.16",
+    "google-cloud-firestore>=2.11",
+    "google-auth>=2.20",
+]
+gcp-training = [
+    "google-cloud-aiplatform>=1.38",
+    "kfp>=2.4",
+]
+gcp-simulation = [
+    "google-cloud-container>=2.30",
+    "kubernetes>=27.0",
 ]
 dev = [
     "pytest>=7.0",
@@ -132,6 +148,12 @@ module = [
     "mousedroid.world_model.cfc_cell",
     "mousedroid.world_model.dual_stream_rssm",
     "mousedroid.world_model.stream_fusion",
+    "mousedroid.cloud.pubsub_sink",
+    "mousedroid.cloud.experience_exporter",
+    "mousedroid.cloud.logging_sink",
+    "mousedroid.cloud.monitoring_exporter",
+    "mousedroid.cloud.firestore_sync",
+    "mousedroid.cloud._auth",
 ]
 disallow_subclassing_any = false
 
@@ -143,6 +165,7 @@ disable_error_code = ["arg-type"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 asyncio_mode = "auto"
 markers = [
     "slow: marks tests as slow",

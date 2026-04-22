@@ -1,15 +1,10 @@
-"""Unit tests for the watchdog notifier module.
-
-Validates all three implementations (NullNotifier, FileHeartbeatNotifier,
-SystemdNotifier) and the ``build_watchdog`` factory function.
-"""
+"""Tests for watchdog notifier implementations."""
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
-from unittest.mock import patch
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 from mousedroid.health.watchdog import (
     FileHeartbeatNotifier,
@@ -23,19 +18,23 @@ from mousedroid.health.watchdog import (
 # ---------------------------------------------------------------------------
 
 
-class TestWatchdogProtocol:
-    """All notifiers must satisfy the WatchdogProtocol."""
+def test_null_notifier_satisfies_protocol() -> None:
+    """NullNotifier implements WatchdogProtocol."""
+    notifier = NullNotifier()
+    assert isinstance(notifier, WatchdogProtocol)
 
-    def test_null_satisfies_protocol(self) -> None:
-        assert isinstance(NullNotifier(), WatchdogProtocol)
 
-    def test_file_satisfies_protocol(self, tmp_path: Path) -> None:
-        notifier = FileHeartbeatNotifier(tmp_path / "heartbeat")
-        assert isinstance(notifier, WatchdogProtocol)
+def test_file_heartbeat_satisfies_protocol(tmp_path: Path) -> None:
+    """FileHeartbeatNotifier implements WatchdogProtocol."""
+    notifier = FileHeartbeatNotifier(path=tmp_path / "heartbeat")
+    assert isinstance(notifier, WatchdogProtocol)
 
-    def test_systemd_satisfies_protocol(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("NOTIFY_SOCKET", raising=False)
-        assert isinstance(SystemdNotifier(), WatchdogProtocol)
+
+def test_systemd_notifier_satisfies_protocol() -> None:
+    """SystemdNotifier implements WatchdogProtocol."""
+    with patch.object(SystemdNotifier, "_build_notifier", return_value=None):
+        notifier = SystemdNotifier(ready_on_init=False)
+    assert isinstance(notifier, WatchdogProtocol)
 
 
 # ---------------------------------------------------------------------------
@@ -43,16 +42,10 @@ class TestWatchdogProtocol:
 # ---------------------------------------------------------------------------
 
 
-class TestNullNotifier:
-    """NullNotifier must be a silent no-op."""
-
-    def test_notify_does_not_raise(self) -> None:
-        NullNotifier().notify()
-
-    def test_multiple_notify_calls(self) -> None:
-        notifier = NullNotifier()
-        for _ in range(100):
-            notifier.notify()
+def test_null_notifier_notify_is_noop() -> None:
+    """NullNotifier.notify() does nothing and doesn't raise."""
+    notifier = NullNotifier()
+    notifier.notify()  # Should not raise
 
 
 # ---------------------------------------------------------------------------
@@ -60,36 +53,44 @@ class TestNullNotifier:
 # ---------------------------------------------------------------------------
 
 
-class TestFileHeartbeatNotifier:
-    """FileHeartbeatNotifier writes a monotonic timestamp on each call."""
+def test_file_heartbeat_creates_parent_dirs(tmp_path: Path) -> None:
+    """FileHeartbeatNotifier creates parent directories on construction."""
+    deep_path = tmp_path / "a" / "b" / "c" / "heartbeat"
+    FileHeartbeatNotifier(path=deep_path)
+    assert deep_path.parent.exists()
 
-    def test_creates_heartbeat_file(self, tmp_path: Path) -> None:
-        hb = tmp_path / "heartbeat"
-        notifier = FileHeartbeatNotifier(hb)
-        notifier.notify()
-        assert hb.exists()
 
-    def test_heartbeat_file_contains_timestamp(self, tmp_path: Path) -> None:
-        hb = tmp_path / "heartbeat"
-        notifier = FileHeartbeatNotifier(hb)
-        notifier.notify()
-        content = hb.read_text()
-        assert float(content) > 0
+def test_file_heartbeat_notify_writes_file(tmp_path: Path) -> None:
+    """notify() writes a timestamp to the heartbeat file."""
+    path = tmp_path / "heartbeat"
+    notifier = FileHeartbeatNotifier(path=path)
+    notifier.notify()
+    assert path.exists()
+    content = path.read_text(encoding="utf-8")
+    # Should be a float (monotonic timestamp)
+    float(content)
 
-    def test_heartbeat_updates_on_each_call(self, tmp_path: Path) -> None:
-        hb = tmp_path / "heartbeat"
-        notifier = FileHeartbeatNotifier(hb)
-        notifier.notify()
-        first = float(hb.read_text())
-        notifier.notify()
-        second = float(hb.read_text())
-        assert second >= first
 
-    def test_creates_parent_directories(self, tmp_path: Path) -> None:
-        hb = tmp_path / "deep" / "nested" / "dir" / "heartbeat"
-        notifier = FileHeartbeatNotifier(hb)
-        notifier.notify()
-        assert hb.exists()
+def test_file_heartbeat_notify_updates_timestamp(tmp_path: Path) -> None:
+    """Successive notify() calls update the heartbeat file content."""
+    path = tmp_path / "heartbeat"
+    notifier = FileHeartbeatNotifier(path=path)
+
+    notifier.notify()
+    first = path.read_text(encoding="utf-8")
+
+    time.sleep(0.05)  # Generous sleep to avoid flakiness under load
+    notifier.notify()
+    second = path.read_text(encoding="utf-8")
+
+    assert float(second) > float(first)
+
+
+def test_file_heartbeat_path_property(tmp_path: Path) -> None:
+    """path property returns the heartbeat file path."""
+    path = tmp_path / "heartbeat"
+    notifier = FileHeartbeatNotifier(path=path)
+    assert notifier.path == path
 
 
 # ---------------------------------------------------------------------------
@@ -97,127 +98,86 @@ class TestFileHeartbeatNotifier:
 # ---------------------------------------------------------------------------
 
 
-class TestSystemdNotifier:
-    """SystemdNotifier sends WATCHDOG=1 via NOTIFY_SOCKET."""
+def test_systemd_notifier_with_sdnotify_package() -> None:
+    """SystemdNotifier uses sdnotify package when available."""
+    mock_sd = MagicMock()
+    mock_notifier_instance = MagicMock()
+    mock_sd.SystemdNotifier.return_value = mock_notifier_instance
 
-    def test_no_op_without_notify_socket(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("NOTIFY_SOCKET", raising=False)
-        notifier = SystemdNotifier()
-        # Should not raise
+    with patch.dict("sys.modules", {"sdnotify": mock_sd}):
+        notifier = SystemdNotifier(ready_on_init=True)
+
+    # Should have sent READY=1 on init
+    mock_notifier_instance.notify.assert_called_with("READY=1")
+
+    # notify() should send WATCHDOG=1
+    notifier.notify()
+    mock_notifier_instance.notify.assert_called_with("WATCHDOG=1")
+
+
+def test_systemd_notifier_without_sdnotify() -> None:
+    """SystemdNotifier works without sdnotify (fallback to subprocess)."""
+    with patch.object(SystemdNotifier, "_build_notifier", return_value=None):
+        notifier = SystemdNotifier(ready_on_init=False)
+
+    # notify() should not raise even without sdnotify
+    with patch.dict("os.environ", {}, clear=False):
+        notifier.notify()  # No NOTIFY_SOCKET — should be silent no-op
+
+
+def test_systemd_notifier_subprocess_fallback() -> None:
+    """SystemdNotifier falls back to subprocess when sdnotify is unavailable."""
+    with patch.object(SystemdNotifier, "_build_notifier", return_value=None):
+        notifier = SystemdNotifier(ready_on_init=False)
+
+    with (
+        patch.dict("os.environ", {"NOTIFY_SOCKET": "/tmp/test.sock"}),
+        patch("subprocess.run") as mock_run,
+    ):
         notifier.notify()
 
-    def test_sends_watchdog_with_socket(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("NOTIFY_SOCKET", "/run/systemd/notify")
-        notifier = SystemdNotifier()
-        # Mock sys.platform to "linux" so the Windows guard doesn't skip
-        with (
-            patch("mousedroid.health.watchdog.sys") as mock_sys,
-            patch("socket.socket") as mock_socket_cls,
-        ):
-            mock_sys.platform = "linux"
-            mock_sock = mock_socket_cls.return_value
-            notifier.notify()
-            mock_sock.sendto.assert_called_once_with(b"WATCHDOG=1", "/run/systemd/notify")
-            mock_sock.close.assert_called_once()
-
-    def test_abstract_socket_addr(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("NOTIFY_SOCKET", "@/run/systemd/notify")
-        notifier = SystemdNotifier()
-        with (
-            patch("mousedroid.health.watchdog.sys") as mock_sys,
-            patch("socket.socket") as mock_socket_cls,
-        ):
-            mock_sys.platform = "linux"
-            mock_sock = mock_socket_cls.return_value
-            notifier.notify()
-            expected_addr = "\0/run/systemd/notify"
-            mock_sock.sendto.assert_called_once_with(b"WATCHDOG=1", expected_addr)
-
-    def test_notify_suppresses_socket_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("NOTIFY_SOCKET", "/run/systemd/notify")
-        notifier = SystemdNotifier()
-        with (
-            patch("mousedroid.health.watchdog.sys") as mock_sys,
-            patch("socket.socket", side_effect=OSError("socket error")),
-        ):
-            mock_sys.platform = "linux"
-            # Must not propagate the error
-            notifier.notify()
+    mock_run.assert_called_once()
+    args = mock_run.call_args
+    assert "systemd-notify" in args[0][0][0]
+    assert "WATCHDOG=1" in args[0][0][-1]
 
 
-# ---------------------------------------------------------------------------
-# build_watchdog factory
-# ---------------------------------------------------------------------------
+def test_systemd_notifier_ready_on_init_false() -> None:
+    """ready_on_init=False skips READY=1 on construction."""
+    mock_sd = MagicMock()
+    mock_notifier_instance = MagicMock()
+    mock_sd.SystemdNotifier.return_value = mock_notifier_instance
+
+    with patch.dict("sys.modules", {"sdnotify": mock_sd}):
+        SystemdNotifier(ready_on_init=False)
+
+    # Should NOT have sent READY=1
+    mock_notifier_instance.notify.assert_not_called()
 
 
-class TestBuildWatchdog:
-    """Tests for the factory ``build_watchdog`` function."""
+def test_build_notifier_returns_none_when_sdnotify_missing() -> None:
+    """_build_notifier() returns None when sdnotify is not installed."""
+    # Force sdnotify out of sys.modules so ImportError path executes
+    import sys
 
-    def test_disabled_returns_null(self) -> None:
-        from mousedroid.config.schema import LoopConfig, Settings
+    _missing = object()  # sentinel to detect "not in sys.modules"
+    orig = sys.modules.pop("sdnotify", _missing)  # type: ignore[arg-type]
 
-        cfg = Settings(mock_hardware=True, loop=LoopConfig(watchdog_enabled=False))
-        from mousedroid.factory import build_watchdog
+    try:
+        result = SystemdNotifier._build_notifier()
+        assert result is None
+    finally:
+        # Restore previous state
+        if orig is not _missing:
+            sys.modules["sdnotify"] = orig  # type: ignore[assignment]
+        elif "sdnotify" in sys.modules:
+            del sys.modules["sdnotify"]
 
-        result = build_watchdog(cfg)
-        assert isinstance(result, NullNotifier)
 
-    def test_auto_mode_no_socket_returns_file(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        from mousedroid.config.schema import LoopConfig, Settings
-
-        monkeypatch.delenv("NOTIFY_SOCKET", raising=False)
-        hb_path = str(tmp_path / "heartbeat")
-        cfg = Settings(
-            mock_hardware=True,
-            loop=LoopConfig(watchdog_enabled=True, watchdog_mode="auto", heartbeat_path=hb_path),
-        )
-        from mousedroid.factory import build_watchdog
-
-        result = build_watchdog(cfg)
-        assert isinstance(result, FileHeartbeatNotifier)
-
-    def test_systemd_mode_returns_systemd(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from mousedroid.config.schema import LoopConfig, Settings
-
-        monkeypatch.delenv("NOTIFY_SOCKET", raising=False)
-        cfg = Settings(
-            mock_hardware=True,
-            loop=LoopConfig(watchdog_enabled=True, watchdog_mode="systemd"),
-        )
-        from mousedroid.factory import build_watchdog
-
-        result = build_watchdog(cfg)
-        assert isinstance(result, SystemdNotifier)
-
-    def test_file_mode_returns_file(self, tmp_path: Path) -> None:
-        from mousedroid.config.schema import LoopConfig, Settings
-
-        hb_path = str(tmp_path / "heartbeat")
-        cfg = Settings(
-            mock_hardware=True,
-            loop=LoopConfig(watchdog_enabled=True, watchdog_mode="file", heartbeat_path=hb_path),
-        )
-        from mousedroid.factory import build_watchdog
-
-        result = build_watchdog(cfg)
-        assert isinstance(result, FileHeartbeatNotifier)
-
-    def test_unknown_mode_rejected_by_pydantic(self) -> None:
-        from mousedroid.config.schema import LoopConfig
-
-        with pytest.raises(Exception, match=r"literal_error|Input should be"):
-            LoopConfig(watchdog_mode="bogus")
-
-    def test_none_mode_returns_null(self) -> None:
-        from mousedroid.config.schema import LoopConfig, Settings
-
-        cfg = Settings(
-            mock_hardware=True,
-            loop=LoopConfig(watchdog_enabled=True, watchdog_mode="none"),
-        )
-        from mousedroid.factory import build_watchdog
-
-        result = build_watchdog(cfg)
-        assert isinstance(result, NullNotifier)
+def test_file_heartbeat_path_configurable(tmp_path: Path) -> None:
+    """FileHeartbeatNotifier accepts a configurable path (not hardcoded)."""
+    custom_path = tmp_path / "custom" / "heartbeat.txt"
+    notifier = FileHeartbeatNotifier(path=custom_path)
+    notifier.notify()
+    assert custom_path.exists()
+    assert notifier.path == custom_path

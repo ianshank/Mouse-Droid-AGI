@@ -23,11 +23,6 @@ Wants=network-online.target
 [Service]
 Type=notify
 User=root
-NotifyAccess=all
-
-# Watchdog: systemd kills+restarts if no WATCHDOG=1 within this interval.
-# The orchestrator sends WATCHDOG=1 after each successful tick (~33ms at 30Hz).
-# 30s allows for brief stalls without false positives.
 WatchdogSec=30
 
 # Working directory — override via MOUSEDROID_INSTALL_DIR in env file
@@ -36,9 +31,10 @@ WorkingDirectory=/opt/mousedroid
 # Optional environment file (dash prefix = no error if missing)
 EnvironmentFile=-/etc/mousedroid/docker.env
 
-# Pre-flight validation: abort if devices, config, or models are missing
+# Pre-flight validation — abort if required hardware/config is missing
 ExecStartPre=/opt/mousedroid/scripts/preflight_check.sh
-# Pull latest image (quiet to avoid log noise)
+
+# Compose file path — defaults to project compose, overridable via COMPOSE_FILE env
 ExecStartPre=/usr/bin/docker compose -f ${COMPOSE_FILE:-/opt/mousedroid/docker-compose.jetson.yml} pull --quiet
 ExecStart=/usr/bin/docker compose -f ${COMPOSE_FILE:-/opt/mousedroid/docker-compose.jetson.yml} up --abort-on-container-exit
 ExecStop=/usr/bin/docker compose -f ${COMPOSE_FILE:-/opt/mousedroid/docker-compose.jetson.yml} down --timeout 30
@@ -48,9 +44,6 @@ Restart=on-failure
 RestartSec=10
 StartLimitIntervalSec=300
 StartLimitBurst=5
-
-# Startup timeout (model loading can be slow on first boot)
-TimeoutStartSec=120
 
 # Logging
 StandardOutput=journal

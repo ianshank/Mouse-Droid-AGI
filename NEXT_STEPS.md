@@ -1,30 +1,26 @@
 # MouseDroidAGI — Next Steps
 
-> **Last updated**: 2026-04-14 | **Test count**: 1299+ passing | **Coverage**: 85%+ maintained
+> **Last updated**: 2026-04-15 | **Version**: 0.3.1-dev | **Test count**: 2650 passing | **Coverage**: 85%+ maintained
 
 This document tracks planned enhancements, organised by priority and category.
 
-## Production Readiness Branch — Follow-ups
+## Recently Completed — v0.3.0 Production Readiness (2026-04-14)
 
-Field tasks blocked on hardware access or physical servicing:
+All 7 phases of the Production Readiness milestone are complete:
 
-- [ ] **Reseat Arducam IMX708 ribbon cable** — container is `healthy` with
-      `jetson_csi` backend wired, but both dual sensors fail I²C probe
-      (`imx708_board_setup: error during i2c read probe (-121)` on buses 9
-      and 10). `i2cdetect -y 9/10` show address 0x1a empty → physical
-      ribbon is unseated.
-- [ ] **Plug LD19 LiDAR** — driver built and starts, but `/dev/ttyUSB1`
-      absent on host; only ESP32 at `/dev/ttyUSB0`.
-- [ ] **Remove on-Jetson compose override** once both camera and LiDAR
-      are live: `sudo rm -f /opt/mousedroid/docker-compose.override.yml`
-      then `docker compose --env-file /etc/mousedroid/docker.env -f docker-compose.jetson.yml up -d --no-deps --force-recreate mousedroid`.
-- [ ] **Update `scripts/mousedroid-docker.service` and
-      `scripts/docker_deploy.sh`** to wire the override file via
-      `-f docker-compose.override.yml` when present on the host.
-- [ ] **Run real-hardware e2e smoke** (`scripts/jetson_smoke_test.sh` +
-      `scripts/endurance_test.py`) once sensors are physically wired.
-- [ ] **Optional**: bake `picamera2` into `Dockerfile.jetson` only if we
-      decide to switch back to the picamera2 backend.
+- ✅ **Phase 1 — Deployment Hardening**: Docker device passthrough, tick timeout + emergency stop,
+  systemd watchdog, pre-flight validation script, service hardening
+- ✅ **Phase 2 — Memory & Curiosity Wiring**: `MemoryTier` factory, experience logging in orchestrator,
+  consolidation background loop, curiosity key in obs_dict
+- ✅ **Phase 3 — Voice & Rocky E2E**: startup/shutdown voice events, enriched obstacle context,
+  audio-level enrichment, full mock-hardware voice pipeline validated
+- ✅ **Phase 4 — Sensor Fusion Resilience**: `recovery_attempt()` on sensor manager, self-healing
+  orchestrator, cascading failure tests (11 scenarios)
+- ✅ **Phase 5 — LLM Gateway Integration**: rule-based parser + LLM fallback chain, degraded mode,
+  prompt injection detection
+- ✅ **Phase 6 — Jetson On-Device Validation**: hardware E2E test suite, 5-minute endurance tests,
+  updated sensor verification script
+- ✅ **Phase 7 — Production Telemetry**: new Prometheus metrics for memory, curiosity, voice, LLM, recovery
 
 ---
 
@@ -299,6 +295,36 @@ Field tasks blocked on hardware access or physical servicing:
 - If CfC degrades: archive as experimental, keep GRU-only
 - Document results in architecture decisions (docs/architecture.md)
 - **Effort**: 3 days | **Owner**: Ian
+
+---
+
+## Priority 9 — GCP Digital Twin
+
+### 9.0 Phase 1: Telemetry Bridge + Cloud Storage ✅ COMPLETE (2026-04-15)
+- ✅ `src/mousedroid/cloud/` module — Pub/Sub sink, GCS experience exporter, Cloud Logging,
+  Cloud Monitoring, Firestore sync, credential resolver
+- ✅ 8 GCP Pydantic config models (`Settings.gcp: GCPConfig | None = None`)
+- ✅ 4 `build_cloud_*()` factory functions with graceful ImportError fallback
+- ✅ Orchestrator integration (cloud sink + experience exporter in start/stop/tick)
+- ✅ `config/gcp_digital_twin.yaml` overlay, Docker GCP SDK stage, credentials volume mount
+- ✅ 88 cloud unit tests at 88.77% coverage
+
+### 9.1 Phase 2: Cloud Training Pipeline
+- Implement `CloudOfflineRLDataset` — GCS shards → PyTorch tensors (same interface as `OfflineRLDataset`)
+- Build Vertex AI Pipeline (KFP v2) mirroring the local 5-phase `run_pipeline.py`
+- Add `--data-source gcs://` flag to `training/train_rssm.py`
+- Add `--cloud` flag to `training/run_pipeline.py` for Vertex AI execution
+- Cloud Scheduler for nightly retraining (cron: `0 2 * * *` UTC)
+- Vertex AI Model Monitoring for RSSM prediction drift
+- EWC Fisher matrix update step in cloud pipeline
+- **Effort**: 4 weeks | **Owner**: ML + cloud team
+
+### 9.2 Phase 3: Parallel Simulation + Safety Validation
+- GKE Autopilot cluster running mock-hardware containers
+- Scenario generation pipeline (battery/distance/thermal sweeps, grammar-based fuzzing)
+- Safety validation campaigns (500+ parallel scenarios)
+- Red-team LLM prompt injection testing
+- **Effort**: 6 weeks | **Owner**: ML + DevOps + security team
 
 ---
 

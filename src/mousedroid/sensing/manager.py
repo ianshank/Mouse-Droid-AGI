@@ -2,12 +2,6 @@
 
 Reads vision, ultrasonic, ESP32 motor, and audio data concurrently, handles
 failures gracefully, and maintains per-sensor ring buffers.
-
-Degraded motor reads:
-    When the ESP32 is unresponsive (consecutive failures exceed
-    ``esp32.max_consecutive_timeouts``), motor reads switch to a cached
-    last-known value at reduced poll frequency (``esp32.degraded_poll_interval_s``)
-    to avoid blocking the orchestrator loop.
 """
 
 from __future__ import annotations
@@ -67,8 +61,8 @@ class SensorManager:
 
     def __init__(
         self,
-        vision: VisionProtocol | None,
-        distance: DistanceSensorProtocol | None,
+        vision: VisionProtocol,
+        distance: DistanceSensorProtocol,
         esp32: ESP32CommProtocol,
         cfg: Settings,
         microphone: AudioProtocol | None = None,
@@ -120,19 +114,6 @@ class SensorManager:
         else:
             self._audio_chunk_size = DEFAULT_AUDIO_CHUNK_SIZE
 
-        # Motor degraded-polling state: cache last-known motor reading and
-        # skip real reads when ESP32 is unresponsive.
-        self._motor_consecutive_failures: int = 0
-        self._motor_max_failures: int = cfg.esp32.max_consecutive_timeouts
-        self._motor_degraded_interval: float = cfg.esp32.degraded_poll_interval_s
-        self._motor_last_probe: float = 0.0
-        self._motor_degraded: bool = False
-        self._distance_fallback_m: float = cfg.safety.distance_fallback_m
-        self._cached_motor_state: NDArray[np.float32] = np.zeros(
-            DEFAULT_MOTOR_STATE_DIM,
-            dtype=np.float32,
-        )
-
         _log.info(
             "sensor_manager_init",
             vision_buf=vision_buf_size,
@@ -147,33 +128,94 @@ class SensorManager:
 
     async def start(self) -> None:
         """Start all sensor hardware."""
-        if self._vision is not None:
-            try:
-                await self._vision.start()
-            except Exception as exc:
-                _log.warning("vision_start_failed_degrading", error=str(exc))
-                self._vision = None
+        await self._vision.start()
         if self._microphone is not None:
-            try:
-                await self._microphone.start()
-            except Exception as exc:
-                _log.warning("microphone_start_failed_degrading", error=str(exc))
-                self._microphone = None
+            await self._microphone.start()
         if self._lidar is not None:
-            try:
-                await self._lidar.start()
-            except Exception as exc:
-                _log.warning("lidar_start_failed_degrading", error=str(exc))
-                self._lidar = None
+            await self._lidar.start()
 
     async def stop(self) -> None:
         """Stop all sensor hardware."""
-        if self._vision is not None:
-            await self._vision.stop()
+        await self._vision.stop()
         if self._microphone is not None:
             await self._microphone.stop()
         if self._lidar is not None:
             await self._lidar.stop()
+
+    async def recovery_attempt(self) -> int:
+        """Attempt to reinitialize failed sensors.
+
+        Stops and restarts each sensor subsystem. Returns the count of
+        sensors that were successfully recovered (i.e. respond to a
+        subsequent read without exception).
+
+        Returns:
+            Number of sensors that recovered successfully.
+        """
+        recovered = 0
+        # Vision: stop + restart (only sensor with start/stop lifecycle)
+        try:
+            await self._vision.stop()
+            await self._vision.start()
+            _, ok = await self._safe_vision_read()
+            if ok:
+                recovered += 1
+                _log.info("sensor_recovered", sensor="vision")
+            else:
+                _log.warning("sensor_recovery_failed", sensor="vision")
+        except Exception:
+            _log.warning("sensor_recovery_failed", sensor="vision", exc_info=True)
+
+        # Distance: read-only recovery probe
+        try:
+            _, ok = await self._safe_distance_read()
+            if ok:
+                recovered += 1
+                _log.info("sensor_recovered", sensor="distance")
+            else:
+                _log.warning("sensor_recovery_failed", sensor="distance")
+        except Exception:
+            _log.warning("sensor_recovery_failed", sensor="distance", exc_info=True)
+
+        # Motor: read-only recovery probe
+        try:
+            _, ok = await self._safe_motor_read()
+            if ok:
+                recovered += 1
+                _log.info("sensor_recovered", sensor="motor")
+            else:
+                _log.warning("sensor_recovery_failed", sensor="motor")
+        except Exception:
+            _log.warning("sensor_recovery_failed", sensor="motor", exc_info=True)
+
+        if self._microphone is not None:
+            try:
+                await self._microphone.stop()
+                await self._microphone.start()
+                _, ok = await self._safe_audio_read()
+                if ok:
+                    recovered += 1
+                    _log.info("sensor_recovered", sensor="audio")
+                else:
+                    _log.warning("sensor_recovery_failed", sensor="audio")
+            except Exception:
+                _log.warning("sensor_recovery_failed", sensor="audio", exc_info=True)
+
+        if self._lidar is not None:
+            try:
+                await self._lidar.stop()
+                await self._lidar.start()
+                _, ok = await self._safe_lidar_read()
+                if ok:
+                    recovered += 1
+                    _log.info("sensor_recovered", sensor="lidar")
+                else:
+                    _log.warning("sensor_recovery_failed", sensor="lidar")
+            except Exception:
+                _log.warning("sensor_recovery_failed", sensor="lidar", exc_info=True)
+
+        _log.info("sensor_recovery_complete", recovered=recovered)
+        return recovered
 
     # -- Public API --------------------------------------------------------
 
@@ -200,7 +242,7 @@ class SensorManager:
         distance_result, distance_ok = await distance_task
         motor_result, motor_ok = await motor_task
         audio_result, audio_ok = await audio_task
-        lidar_result, lidar_ok, lidar_n_points = await lidar_task
+        lidar_result, lidar_ok = await lidar_task
 
         # Build validity mask: vision=0, ultrasonic=1, motor=2, audio=3,
         # lidar=4 (only when lidar is configured).
@@ -246,7 +288,6 @@ class SensorManager:
             _motor_state=motor_result,
             _audio_chunk=audio_result,
             _lidar_features=lidar_result if self._lidar is not None else None,
-            _lidar_n_points=lidar_n_points if self._lidar is not None else 0,
             _valid_mask=valid_mask,
         )
 
@@ -272,14 +313,12 @@ class SensorManager:
             result = await coro
             return result, True
         except Exception:
-            _log.warning("sensor_read_failed", sensor=sensor_name)
+            _log.warning("sensor_read_failed", sensor=sensor_name, exc_info=True)
             return default, False
 
     async def _safe_vision_read(self) -> tuple[NDArray[np.float32], bool]:
         """Attempt a vision capture, returning zeros on failure."""
         default = np.zeros(self._cfg.camera.feature_dim, dtype=np.float32)
-        if self._vision is None:
-            return default, False
         result, ok = await self._safe_read(
             self._vision.capture_features(),
             "vision",
@@ -289,8 +328,6 @@ class SensorManager:
 
     async def _safe_distance_read(self) -> tuple[float, bool]:
         """Attempt a distance read, returning max range on failure."""
-        if self._distance is None:
-            return self._distance_fallback_m, False
         result, ok = await self._safe_read(
             self._distance.read_distance_m(),
             "distance",
@@ -299,24 +336,8 @@ class SensorManager:
         return result, ok
 
     async def _safe_motor_read(self) -> tuple[NDArray[np.float32], bool]:
-        """Attempt an ESP32 motor/battery read, returning zeros on failure.
-
-        When the ESP32 is unresponsive (>= ``_motor_max_failures`` consecutive
-        failures), switches to degraded mode: returns the cached last-known
-        motor state and only probes the real device every
-        ``_motor_degraded_interval`` seconds.
-        """
+        """Attempt an ESP32 motor/battery read, returning zeros on failure."""
         default = np.zeros(DEFAULT_MOTOR_STATE_DIM, dtype=np.float32)
-
-        # In degraded mode, return cached value unless probe interval has elapsed.
-        if self._motor_degraded:
-            now = time.monotonic()
-            if (now - self._motor_last_probe) < self._motor_degraded_interval:
-                _log.debug("motor_read_skipped_degraded")
-                return self._cached_motor_state.copy(), False
-            # Probe interval elapsed — attempt a real read below.
-            self._motor_last_probe = now
-
         try:
             encoders, battery_v = await asyncio.gather(
                 self._esp32.read_encoders(),
@@ -331,29 +352,9 @@ class SensorManager:
                 ],
                 dtype=np.float32,
             )
-            # Successful read — cache and exit degraded mode.
-            self._cached_motor_state = motor_state.copy()
-            if self._motor_degraded:
-                self._motor_degraded = False
-                self._motor_consecutive_failures = 0
-                _log.info("motor_recovered_from_degraded")
-            else:
-                self._motor_consecutive_failures = 0
             return motor_state, True
         except Exception:
             _log.warning("motor_read_failed", exc_info=True)
-            self._motor_consecutive_failures += 1
-            if (
-                not self._motor_degraded
-                and self._motor_consecutive_failures >= self._motor_max_failures
-            ):
-                self._motor_degraded = True
-                self._motor_last_probe = time.monotonic()
-                _log.warning(
-                    "motor_entering_degraded_mode",
-                    consecutive_failures=self._motor_consecutive_failures,
-                    poll_interval_s=self._motor_degraded_interval,
-                )
             return default, False
 
     async def _safe_audio_read(self) -> tuple[NDArray[np.float32], bool]:
@@ -382,17 +383,15 @@ class SensorManager:
 
     async def _safe_lidar_read(
         self,
-    ) -> tuple[NDArray[np.float32] | None, bool, int]:
+    ) -> tuple[NDArray[np.float32] | None, bool]:
         """Attempt a LiDAR scan read with optional feature extraction.
 
         When a :class:`LidarFeatureExtractor` is configured, raw scans are
-        transformed into sector-binned distance features.  Returns
-        ``(features, ok, n_points)`` where ``n_points`` is the number of
-        raw points in the scan (``0`` when no scan).  Features are
-        ``None`` when LiDAR is not configured.
+        transformed into sector-binned distance features.  Returns ``None``
+        when LiDAR is not configured.
         """
         if self._lidar is None:
-            return None, False, 0
+            return None, False
 
         default: NDArray[np.float32] | None = None
         if self._lidar_feature_dim > 0:
@@ -400,11 +399,10 @@ class SensorManager:
 
         try:
             scan = await self._lidar.read_scan()
-            n_points = int(getattr(scan, "n_points", 0))
             if self._lidar_feature_extractor is not None:
                 features = self._lidar_feature_extractor.extract(scan)
-                return features, True, n_points
-            return default, False, n_points
+                return features, True
+            return default, False
         except Exception:
             _log.warning("lidar_read_failed", exc_info=True)
-            return default, False, 0
+            return default, False

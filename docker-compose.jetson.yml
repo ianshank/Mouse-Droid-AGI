@@ -16,24 +16,19 @@ services:
     image: mousedroid:jetson
     runtime: nvidia
 
-    # --- Override entrypoint/CMD for production config ---
-    entrypoint: ["/bin/sh", "-lc"]
-    command:
-      - >-
-        exec python3 -m mousedroid.main --config
-        ${MOUSEDROID_CONFIG_FILES:-/etc/mousedroid/default.yaml /etc/mousedroid/jetson_production.yaml}
-
     # --- Restart policy ---
     restart: unless-stopped
 
     # --- Environment ---
     environment:
-      NVIDIA_VISIBLE_DEVICES: all
-      NVIDIA_DRIVER_CAPABILITIES: all
-      MOUSEDROID_CONFIG: /etc/mousedroid/jetson_production.yaml
-      MOUSEDROID_CONFIG_FILES: ${MOUSEDROID_CONFIG_FILES:-/etc/mousedroid/default.yaml /etc/mousedroid/jetson_production.yaml}
-      MOUSEDROID_MOCK_HARDWARE: ${MOUSEDROID_MOCK_HARDWARE:-true}
-      CUDA_HOME: /usr/local/cuda
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - MOUSEDROID_CONFIG=/etc/mousedroid/jetson_production.yaml
+      - MOUSEDROID_MOCK_HARDWARE=${MOUSEDROID_MOCK_HARDWARE:-true}
+      - CUDA_HOME=/usr/local/cuda
+      # GCP Digital Twin (optional — leave empty to disable cloud features)
+      - MOUSEDROID_GCP__PROJECT_ID=${GCP_PROJECT_ID:-}
+      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-}
 
     # --- Volume mounts ---
     volumes:
@@ -47,42 +42,42 @@ services:
       - /sys/devices/virtual/thermal:/sys/devices/virtual/thermal:ro
       # GPU sysfs (read-only)
       - /sys/devices/platform:/sys/devices/platform:ro
-      # Argus daemon socket — required for nvarguscamerasrc / libargus
-      # CSI camera capture from inside the container.
-      - /tmp/argus_socket:/tmp/argus_socket
-
+      # Promtail positions (persistent across restarts)
+      - promtail_positions:/var/lib/promtail
+      # GCP service account credentials (optional — mount if using file-based auth)
+      - ${GCP_CREDENTIALS_FILE:-/dev/null}:/etc/gcp/credentials.json:ro
 
     # --- Hardware device passthrough ---
-    # All devices required for production deployment.
-    # Device paths are configurable via env vars in docker.env.
-    # If a device is absent at startup, Docker will fail fast with a clear error.
+    # Device paths are configurable via env vars (see config/docker.env.example).
+    # The container will fail to start if a listed device doesn't exist on the
+    # host; ensure the preflight script passes before starting.
     devices:
-      # ESP32 UART serial (motor controller + encoders + battery)
-      - ${MOUSEDROID_ESP32_DEV:-/dev/ttyUSB0}:/dev/ttyUSB0
-      # Arducam IMX708 CSI camera — v4l2 media controller
-      # (libargus + nvarguscamerasrc is the capture path; no /dev/video* node
-      # is exposed by the IMX708 driver, so we pass /dev/media0 + argus socket.)
-      - ${MOUSEDROID_CAMERA_DEV:-/dev/media0}:/dev/media0
-      # Jetson GPIO chips
+      # ESP32 UART serial (required for motor control)
+      - ${MOUSEDROID_ESP32_DEV:-/dev/ttyUSB0}:${MOUSEDROID_ESP32_DEV:-/dev/ttyUSB0}
+      # Camera (required for vision)
+      - ${MOUSEDROID_CAMERA_DEV:-/dev/video0}:${MOUSEDROID_CAMERA_DEV:-/dev/video0}
+      # GPIO (required for ultrasonic trigger/echo)
       - /dev/gpiochip0:/dev/gpiochip0
       - /dev/gpiochip1:/dev/gpiochip1
-      # FHL-LD19 LiDAR UART
-      - ${MOUSEDROID_LIDAR_DEV:-/dev/ttyUSB1}:/dev/ttyUSB1
-      # Wonrabai USB Sound Card (ALSA audio — mic + speaker)
+      # FHL-LD19 LiDAR UART (optional — omit line if no LiDAR)
+      - ${MOUSEDROID_LIDAR_DEV:-/dev/ttyUSB1}:${MOUSEDROID_LIDAR_DEV:-/dev/ttyUSB1}
+      # Wonrabai USB Sound Card — ALSA audio in + out (optional)
       - /dev/snd:/dev/snd
     group_add:
       - audio
       - video
       - dialout
+      - gpio
 
     # --- Health check ---
-    # Polls the telemetry health endpoint; marks container unhealthy after 3 failures.
+    # Polls the telemetry HTTP health endpoint exposed by the service
+    # at /api/v1/health on the configured telemetry port.
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:${MOUSEDROID_TELEMETRY_PORT:-8080}${MOUSEDROID_HEALTH_PATH:-/api/v1/health} || exit 1"]
-      interval: ${MOUSEDROID_HEALTH_INTERVAL:-15s}
-      timeout: ${MOUSEDROID_HEALTH_TIMEOUT:-5s}
-      retries: ${MOUSEDROID_HEALTH_RETRIES:-3}
-      start_period: ${MOUSEDROID_HEALTH_START_PERIOD:-30s}
+      test: ["CMD", "curl", "-sf", "http://localhost:${MOUSEDROID_TELEMETRY_PORT:-8080}/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
     # --- Networking ---
     network_mode: host
@@ -106,4 +101,6 @@ services:
 
 volumes:
   mousedroid_experience:
+    driver: local
+  promtail_positions:
     driver: local

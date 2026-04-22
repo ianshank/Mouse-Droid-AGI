@@ -110,6 +110,18 @@ RUN pip install --no-cache-dir "huggingface-hub>=0.20" diskcache || true
 RUN pip install --no-cache-dir "hailort>=4.18" || true
 
 # ---------------------------------------------------------------------------
+# Stage 6: GCP Digital Twin (non-fatal — graceful fallback)
+# Cloud telemetry, experience export, and training pipeline integration.
+# ---------------------------------------------------------------------------
+RUN pip install --no-cache-dir \
+    "google-cloud-pubsub>=2.18" \
+    "google-cloud-storage>=2.10" \
+    "google-cloud-logging>=3.5" \
+    "google-cloud-monitoring>=2.16" \
+    "google-auth>=2.20" \
+    || echo "WARNING: GCP SDK install failed (cloud features disabled)"
+
+# ---------------------------------------------------------------------------
 # Runtime configuration
 # ---------------------------------------------------------------------------
 ENV MOUSEDROID_CONFIG=/etc/mousedroid/default.yaml

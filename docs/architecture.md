@@ -12,10 +12,15 @@ graph TD
     System["MouseDroidAGI System\nAutonomous Star Wars MSE-6 robot\npowered by an Agentic World Model\nrunning on Jetson Orin Nano"]
     PhysWorld["Physical World\n(corridors, obstacles, people)"]
     RemoteMonitor["Remote Monitoring\nPrometheus / Grafana\nmetrics over WiFi"]
+    GCPCloud["GCP Digital Twin (optional)\nPub/Sub, Cloud Storage,\nVertex AI, Cloud Monitoring"]
+    HFHub["HuggingFace Hub\nModel weight registry"]
 
     HumanOp -- "NL commands / health dashboards" --> System
     System -- "navigates" --> PhysWorld
     System -- "publishes metrics" --> RemoteMonitor
+    System -. "telemetry + experience\n(optional, CircuitBreaker)" .-> GCPCloud
+    GCPCloud -. "trained weights" .-> HFHub
+    HFHub -. "weight pull at startup" .-> System
 ```
 
 **Actors:**
@@ -125,9 +130,8 @@ graph TD
     LLM["LLM Gateway optional\nNL to GoalVector\nLocal Llama GGUF"]
 
     TelemetryPub2["Telemetry Publisher\ntelemetry/publisher.py\nasync queue bridge"]
-    MetricsReg2["Metrics Registry\ntelemetry/metrics.py\nPrometheus text rendering\n+ per-sector LiDAR gauges"]
-    TelemetryServer2["Telemetry Server\ntelemetry/server.py\nREST /api/v1/* + /ws + /metrics\n/lidar + /camera + /camera/stream"]
-    RawFrameSrc["Camera RawFrameSource\nRawFrameSourceProtocol\ncapture_raw_jpeg()"]
+    MetricsReg2["Metrics Registry\ntelemetry/metrics.py\nPrometheus text rendering"]
+    TelemetryServer2["Telemetry Server\ntelemetry/server.py\nREST /api/v1/* + WebSocket /ws"]
 
     CLI --> Factory
     Factory --> Orchestrator
@@ -151,8 +155,164 @@ graph TD
     Orchestrator --> MetricsReg2
     TelemetryPub2 --> TelemetryServer2
     MetricsReg2 --> TelemetryServer2
-    RawFrameSrc --> TelemetryServer2
+    Orchestrator --> Watchdog
+    Orchestrator --> MemoryTier
+    Orchestrator --> VoiceEngine
 ```
+
+---
+
+## Level 3b — Component Diagram: Production Hardening (v0.3.0)
+
+New production components added in the v0.3.0 release:
+
+```mermaid
+graph TD
+    Orchestrator["Orchestrator\nasyncio.wait_for(tick, timeout=tick_timeout_s)"]
+
+    subgraph Watchdog["Watchdog Layer\nhealth/watchdog.py"]
+        WatchdogProt["WatchdogProtocol\n@runtime_checkable"]
+        SystemdNotif["SystemdNotifier\nWATCHDOG=1 via sdnotify or subprocess"]
+        FileHB["FileHeartbeatNotifier\ntimestamp to /tmp/mousedroid_heartbeat"]
+        NullNotif["NullNotifier\nmock/dev mode"]
+        WatchdogProt <|.. SystemdNotif
+        WatchdogProt <|.. FileHB
+        WatchdogProt <|.. NullNotif
+    end
+
+    subgraph MemoryTierGroup["Memory Tier\nmemory/tier.py"]
+        MemTier["MemoryTier\nepisodic + semantic + working + consolidation"]
+        EpiRep["EpisodicReplay\nFAISS 50k"]
+        SemIdx["SemanticIndex\nconcept graph"]
+        WorkMem["WorkingMemory\n8192 token window"]
+        Consol["MemoryConsolidation\nasync background task"]
+        MemTier --> EpiRep
+        MemTier --> SemIdx
+        MemTier --> WorkMem
+        MemTier --> Consol
+    end
+
+    subgraph VoiceLayer["Voice Engine\nvoice/engine.py"]
+        Rocky["Rocky Personality\nphrase_bank.py"]
+        PiperTTS["Piper TTS\nlocal inference"]
+        Speaker["USB Speaker\nSpeakerProtocol"]
+        Rocky --> PiperTTS --> Speaker
+    end
+
+    subgraph PreFlight["Pre-flight Check\nscripts/preflight_check.sh"]
+        PF_ESP32["ESP32 device check"]
+        PF_Camera["Camera device check"]
+        PF_GPIO["GPIO device check"]
+        PF_Disk["Disk space check"]
+        PF_Config["Config YAML check"]
+        PF_Weights["Model weights check"]
+    end
+
+    Orchestrator -- "notify() after successful tick" --> Watchdog
+    Orchestrator -- "push ExperienceRecord each tick" --> MemoryTierGroup
+    Orchestrator -- "startup/shutdown/error/obstacle events" --> VoiceLayer
+    Orchestrator -- "asyncio.TimeoutError → emergency_stop()" --> ESP32Driver["ESP32 emergency_stop()"]
+    PreFlight -- "ExecStartPre (systemd)" --> Orchestrator
+```
+
+**Tick Safety Loop (v0.3.0):**
+
+```mermaid
+flowchart TD
+    Start(["run() loop iteration"])
+    WaitFor["asyncio.wait_for(tick(), tick_timeout_s)"]
+    Success["Tick completed OK"]
+    Timeout["TimeoutError"]
+    Exception["Unhandled Exception"]
+    EStop["esp32.emergency_stop()"]
+    VoiceErr["voice_event('error')"]
+    WDNotify["watchdog.notify()"]
+    MemPush["memory_tier.push(ExperienceRecord)"]
+    RateLimit["rate-limit sleep to next tick"]
+
+    Start --> WaitFor
+    WaitFor --> Success
+    WaitFor --> Timeout
+    WaitFor --> Exception
+    Timeout --> EStop
+    Timeout --> VoiceErr
+    Exception --> EStop
+    Exception --> VoiceErr
+    Success --> WDNotify
+    Success --> MemPush
+    WDNotify --> RateLimit
+    MemPush --> RateLimit
+    VoiceErr --> RateLimit
+```
+
+---
+
+## Level 3c — Component Diagram: GCP Digital Twin (Optional)
+
+Cloud features are **fully optional** — the droid operates identically with `gcp: null` in config.
+All cloud calls are protected by `CircuitBreaker` + `retry_async` patterns so cloud failures
+never block the 30 Hz control loop.
+
+```mermaid
+graph TD
+    subgraph Jetson["Jetson Orin Nano"]
+        Orchestrator["Orchestrator\n30 Hz loop"]
+        ExperienceDB[("LMDB\nExperience Logger")]
+        TelemetryPub["TelemetryPublisher\nasync queue"]
+        MetricsReg["MetricsRegistry\nPrometheus"]
+    end
+
+    subgraph CloudModule["cloud/ module (optional)"]
+        PubSubSink["CloudTelemetrySink\npubsub_sink.py\nmsgpack + CircuitBreaker"]
+        GCSExporter["CloudExperienceExporter\nexperience_exporter.py\nLMDB → GCS shards\nhigh-water mark cursor"]
+        LogSink["CloudLoggingSink\nlogging_sink.py\nstructlog processor"]
+        MonExporter["CloudMetricsExporter\nmonitoring_exporter.py\ngauge → TimeSeries"]
+        FireSync["CloudFirestoreSync\nfirestore_sync.py\nepisodic → Firestore"]
+        Auth["_auth.py\nADC / service account"]
+    end
+
+    subgraph GCP["Google Cloud Platform"]
+        PubSub["Cloud Pub/Sub\ntelemetry + experience topics"]
+        GCS["Cloud Storage\nexperience/v1/{robot_id}/{date}/{hour}/"]
+        CloudLog["Cloud Logging"]
+        CloudMon["Cloud Monitoring\ncustom metrics"]
+        Firestore["Firestore\nepisodic memory collection"]
+        VertexAI["Vertex AI Pipelines\n(Phase 2 — future)"]
+        HFHub["HuggingFace Hub\nianshank/mousedroid-weights"]
+    end
+
+    Orchestrator --> PubSubSink
+    Orchestrator --> GCSExporter
+    ExperienceDB --> GCSExporter
+    TelemetryPub --> PubSubSink
+    MetricsReg --> MonExporter
+
+    PubSubSink --> PubSub
+    GCSExporter --> GCS
+    LogSink --> CloudLog
+    MonExporter --> CloudMon
+    FireSync --> Firestore
+    GCS --> VertexAI
+    VertexAI --> HFHub
+
+    PubSubSink --> Auth
+    GCSExporter --> Auth
+    LogSink --> Auth
+    MonExporter --> Auth
+    FireSync --> Auth
+```
+
+**GCP config hierarchy:** `Settings.gcp: GCPConfig | None = None`. When `None`, all
+`build_cloud_*()` factory functions return `None` and the orchestrator skips cloud calls.
+
+| Component | File | GCP Service | Resilience |
+|-----------|------|-------------|------------|
+| Telemetry sink | `cloud/pubsub_sink.py` | Pub/Sub | CircuitBreaker (60s recovery) |
+| Experience exporter | `cloud/experience_exporter.py` | Cloud Storage | CircuitBreaker + HWM cursor |
+| Logging sink | `cloud/logging_sink.py` | Cloud Logging | Fire-and-forget (silent drop) |
+| Metrics exporter | `cloud/monitoring_exporter.py` | Cloud Monitoring | Async executor |
+| Firestore sync | `cloud/firestore_sync.py` | Firestore | Per-entry exception handling |
+| Auth | `cloud/_auth.py` | ADC / SA key | Fail-fast at startup |
 
 ---
 
@@ -212,6 +372,10 @@ classDiagram
         +build_cognitive_core(cfg) CognitiveCore
         +build_lidar(cfg) LidarProtocol
         +build_lidar_feature_extractor(cfg) LidarFeatureExtractor
+        +build_cloud_telemetry_sink(cfg) CloudTelemetrySinkProtocol
+        +build_cloud_experience_exporter(cfg) CloudExperienceExporterProtocol
+        +build_cloud_metrics_exporter(cfg) CloudMetricsExporterProtocol
+        +build_cloud_logging_sink(cfg) CloudLoggingSinkProtocol
     }
 
     ESP32CommProtocol <|.. MockESP32Driver : implements
@@ -474,3 +638,7 @@ Activate via: `MOUSEDROID_MODEL__CFC_HIDDEN_DIM=64 docker compose up -d`
 | Non-blocking drop-on-full queue | Telemetry must never stall the 30 Hz control loop; frame drops are preferable to back-pressure |
 | Stdlib-only network discovery | `socket` + `netifaces` avoids extra system calls; works inside Docker without root |
 | Immutable `TelemetryFrame` dataclass | Thread-safe snapshot; safe to pass across asyncio tasks without copying |
+| GCP Digital Twin as optional sidecar | `gcp: null` = fully offline; CircuitBreaker on all cloud calls; droid never depends on cloud for safety |
+| msgpack for Pub/Sub payloads | Reuses existing serialisation (ExperienceRecord + TelemetryFrame); 30-60% smaller than JSON for numpy arrays |
+| LMDB-to-GCS high-water mark cursor | Exactly-once export without needing Pub/Sub ordering; survives power cycles |
+| Cloud config as `GCPConfig \| None` | Single Optional field on Settings; all existing YAML loads unchanged; no migration needed |

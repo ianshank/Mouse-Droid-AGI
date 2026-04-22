@@ -8,6 +8,7 @@ import numpy as np
 
 from mousedroid.comms.protocol import EncoderReading
 from mousedroid.config.schema import Settings
+from mousedroid.constants import DEFAULT_MOTOR_STATE_DIM
 from mousedroid.sensing.manager import SensorManager
 
 
@@ -193,3 +194,526 @@ async def test_start_stop_with_lidar():
     assert lidar.started is True
     await mgr.stop()
     assert lidar.started is False
+
+
+# ---------------------------------------------------------------------------
+# Audio feature extraction tests
+# ---------------------------------------------------------------------------
+
+
+def _make_manager_with_audio_extractor():
+    """Create a SensorManager with a mock audio feature extractor."""
+    cfg = Settings(mock_hardware=True)
+
+    vision = AsyncMock()
+    vision.capture_features = AsyncMock(
+        return_value=np.ones(cfg.camera.feature_dim, dtype=np.float32),
+    )
+    vision.start = AsyncMock()
+    vision.stop = AsyncMock()
+
+    distance = AsyncMock()
+    distance.read_distance_m = AsyncMock(return_value=1.5)
+    distance.max_range_m = 4.0
+
+    esp32 = AsyncMock()
+    esp32.read_encoders = AsyncMock(return_value=EncoderReading())
+    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+
+    mic = AsyncMock()
+    mic.chunk_size = 1024
+    mic.channels = 1
+    mic.read_chunk = AsyncMock(
+        return_value=np.ones(1024, dtype=np.float32),
+    )
+
+    extractor = AsyncMock()
+    extractor.feature_dim = 64
+    extractor.extract = lambda audio: np.ones(64, dtype=np.float32)
+
+    mgr = SensorManager(
+        vision,
+        distance,
+        esp32,
+        cfg,
+        microphone=mic,
+        audio_feature_extractor=extractor,
+    )
+    return mgr, mic, extractor
+
+
+async def test_audio_feature_extraction_on_read():
+    """Audio feature extractor transforms raw audio when configured."""
+    mgr, _mic, _extractor = _make_manager_with_audio_extractor()
+    bundle = await mgr.read_all()
+    assert bundle.valid_mask[3] == 1.0
+    # Feature dim should be 64 from the extractor, not 1024 raw
+    assert bundle.audio_chunk.shape == (64,)
+
+
+async def test_audio_feature_extraction_failure():
+    """When feature extraction raises, audio slot is marked invalid."""
+    mgr, _mic, extractor = _make_manager_with_audio_extractor()
+    extractor.extract = lambda _: (_ for _ in ()).throw(RuntimeError("extract fail"))
+    bundle = await mgr.read_all()
+    assert bundle.valid_mask[3] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# LiDAR feature extraction tests
+# ---------------------------------------------------------------------------
+
+
+def _make_manager_with_lidar_extractor():
+    """Create a SensorManager with a mock LiDAR and feature extractor."""
+    from mousedroid.config.schema import LidarConfig
+
+    lidar_cfg = LidarConfig()
+    cfg = Settings(mock_hardware=True, lidar=lidar_cfg)
+
+    vision = AsyncMock()
+    vision.capture_features = AsyncMock(
+        return_value=np.ones(cfg.camera.feature_dim, dtype=np.float32),
+    )
+    vision.start = AsyncMock()
+    vision.stop = AsyncMock()
+
+    distance = AsyncMock()
+    distance.read_distance_m = AsyncMock(return_value=1.5)
+    distance.max_range_m = 4.0
+
+    esp32 = AsyncMock()
+    esp32.read_encoders = AsyncMock(return_value=EncoderReading())
+    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+
+    lidar = AsyncMock()
+    lidar.start = AsyncMock()
+    lidar.stop = AsyncMock()
+    lidar.read_scan = AsyncMock(
+        return_value=[{"angle": 0.0, "distance": 1.0}],
+    )
+
+    extractor = AsyncMock()
+    extractor.feature_dim = lidar_cfg.feature_dim
+    extractor.extract = lambda scan: np.ones(lidar_cfg.feature_dim, dtype=np.float32)
+
+    mgr = SensorManager(
+        vision,
+        distance,
+        esp32,
+        cfg,
+        lidar=lidar,
+        lidar_feature_extractor=extractor,
+    )
+    return mgr, lidar, extractor
+
+
+async def test_lidar_feature_extraction_on_read():
+    """LiDAR feature extractor transforms raw scan when configured."""
+    mgr, _lidar, _extractor = _make_manager_with_lidar_extractor()
+    bundle = await mgr.read_all()
+    assert bundle.valid_mask.shape == (5,)
+    assert bundle.valid_mask[4] == 1.0
+    assert bundle.lidar_features is not None
+
+
+async def test_lidar_read_failure():
+    """When lidar.read_scan raises, lidar slot is marked invalid."""
+    mgr, lidar, _extractor = _make_manager_with_lidar_extractor()
+    lidar.read_scan.side_effect = RuntimeError("lidar fail")
+    bundle = await mgr.read_all()
+    assert bundle.valid_mask[4] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Recovery attempt tests
+# ---------------------------------------------------------------------------
+
+
+async def test_recovery_attempt_with_all_sensors():
+    """recovery_attempt tries to restart vision, distance, motor, mic, lidar."""
+    from mousedroid.config.schema import LidarConfig
+
+    lidar_cfg = LidarConfig()
+    cfg = Settings(mock_hardware=True, lidar=lidar_cfg)
+
+    vision = AsyncMock()
+    vision.capture_features = AsyncMock(
+        return_value=np.ones(cfg.camera.feature_dim, dtype=np.float32),
+    )
+    vision.start = AsyncMock()
+    vision.stop = AsyncMock()
+
+    distance = AsyncMock()
+    distance.read_distance_m = AsyncMock(return_value=1.5)
+    distance.max_range_m = 4.0
+
+    esp32 = AsyncMock()
+    esp32.read_encoders = AsyncMock(return_value=EncoderReading())
+    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+
+    mic = AsyncMock()
+    mic.chunk_size = 1024
+    mic.channels = 1
+    mic.start = AsyncMock()
+    mic.stop = AsyncMock()
+    mic.read_chunk = AsyncMock(
+        return_value=np.ones(1024, dtype=np.float32),
+    )
+
+    lidar = AsyncMock()
+    lidar.start = AsyncMock()
+    lidar.stop = AsyncMock()
+    lidar.read_scan = AsyncMock(return_value=[])
+
+    extractor = AsyncMock()
+    extractor.feature_dim = lidar_cfg.feature_dim
+
+    mgr = SensorManager(
+        vision,
+        distance,
+        esp32,
+        cfg,
+        microphone=mic,
+        lidar=lidar,
+        lidar_feature_extractor=extractor,
+    )
+
+    recovered = await mgr.recovery_attempt()
+    # Vision, distance, motor should all succeed (3).
+    # Microphone recovery: stop + start + read_chunk succeeds => +1
+    # Lidar recovery: but read_scan returns [] and no feature extractor extract, so depends
+    assert recovered >= 3
+
+
+async def test_recovery_attempt_handles_mic_failure():
+    """recovery_attempt handles microphone stop/start exceptions."""
+    cfg = Settings(mock_hardware=True)
+
+    vision = AsyncMock()
+    vision.capture_features = AsyncMock(
+        return_value=np.ones(cfg.camera.feature_dim, dtype=np.float32),
+    )
+    vision.start = AsyncMock()
+    vision.stop = AsyncMock()
+
+    distance = AsyncMock()
+    distance.read_distance_m = AsyncMock(return_value=1.5)
+    distance.max_range_m = 4.0
+
+    esp32 = AsyncMock()
+    esp32.read_encoders = AsyncMock(return_value=EncoderReading())
+    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+
+    mic = AsyncMock()
+    mic.chunk_size = 1024
+    mic.channels = 1
+    mic.start = AsyncMock(side_effect=RuntimeError("mic start fail"))
+    mic.stop = AsyncMock()
+
+    mgr = SensorManager(vision, distance, esp32, cfg, microphone=mic)
+    recovered = await mgr.recovery_attempt()
+    # Vision + distance + motor recovered, mic failed
+    assert recovered == 3
+
+
+async def test_recovery_attempt_handles_lidar_failure():
+    """recovery_attempt handles lidar stop/start exceptions."""
+    from mousedroid.config.schema import LidarConfig
+
+    lidar_cfg = LidarConfig()
+    cfg = Settings(mock_hardware=True, lidar=lidar_cfg)
+
+    vision = AsyncMock()
+    vision.capture_features = AsyncMock(
+        return_value=np.ones(cfg.camera.feature_dim, dtype=np.float32),
+    )
+    vision.start = AsyncMock()
+    vision.stop = AsyncMock()
+
+    distance = AsyncMock()
+    distance.read_distance_m = AsyncMock(return_value=1.5)
+    distance.max_range_m = 4.0
+
+    esp32 = AsyncMock()
+    esp32.read_encoders = AsyncMock(return_value=EncoderReading())
+    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+
+    lidar = AsyncMock()
+    lidar.start = AsyncMock(side_effect=RuntimeError("lidar start fail"))
+    lidar.stop = AsyncMock()
+
+    mgr = SensorManager(
+        vision,
+        distance,
+        esp32,
+        cfg,
+        lidar=lidar,
+    )
+    recovered = await mgr.recovery_attempt()
+    # Vision + distance + motor recovered, lidar failed
+    assert recovered == 3
+
+
+async def test_recovery_attempt_handles_vision_failure():
+    """recovery_attempt handles vision stop/start exceptions gracefully."""
+    cfg = Settings(mock_hardware=True)
+
+    vision = AsyncMock()
+    vision.stop = AsyncMock(side_effect=RuntimeError("vision stop fail"))
+    vision.start = AsyncMock()
+    vision.capture_features = AsyncMock(
+        return_value=np.ones(cfg.camera.feature_dim, dtype=np.float32),
+    )
+
+    distance = AsyncMock()
+    distance.read_distance_m = AsyncMock(return_value=1.5)
+    distance.max_range_m = 4.0
+
+    esp32 = AsyncMock()
+    esp32.read_encoders = AsyncMock(return_value=EncoderReading())
+    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+
+    mgr = SensorManager(vision, distance, esp32, cfg)
+    recovered = await mgr.recovery_attempt()
+    # Vision failed, distance + motor recovered => 2
+    assert recovered == 2
+
+
+async def test_recovery_attempt_handles_distance_failure():
+    """recovery_attempt handles distance read exceptions gracefully."""
+    cfg = Settings(mock_hardware=True)
+
+    vision = AsyncMock()
+    vision.capture_features = AsyncMock(
+        return_value=np.ones(cfg.camera.feature_dim, dtype=np.float32),
+    )
+    vision.start = AsyncMock()
+    vision.stop = AsyncMock()
+
+    distance = AsyncMock()
+    distance.read_distance_m = AsyncMock(side_effect=RuntimeError("distance fail"))
+    distance.max_range_m = 4.0
+
+    esp32 = AsyncMock()
+    esp32.read_encoders = AsyncMock(return_value=EncoderReading())
+    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+
+    mgr = SensorManager(vision, distance, esp32, cfg)
+    recovered = await mgr.recovery_attempt()
+    # Vision + motor recovered, distance failed => 2
+    assert recovered == 2
+
+
+async def test_recovery_attempt_handles_motor_failure():
+    """recovery_attempt handles motor read exceptions gracefully."""
+    cfg = Settings(mock_hardware=True)
+
+    vision = AsyncMock()
+    vision.capture_features = AsyncMock(
+        return_value=np.ones(cfg.camera.feature_dim, dtype=np.float32),
+    )
+    vision.start = AsyncMock()
+    vision.stop = AsyncMock()
+
+    distance = AsyncMock()
+    distance.read_distance_m = AsyncMock(return_value=1.5)
+    distance.max_range_m = 4.0
+
+    esp32 = AsyncMock()
+    esp32.read_encoders = AsyncMock(side_effect=RuntimeError("motor fail"))
+    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+
+    mgr = SensorManager(vision, distance, esp32, cfg)
+    recovered = await mgr.recovery_attempt()
+    # Vision + distance recovered, motor failed => 2
+    assert recovered == 2
+
+
+async def test_recovery_attempt_motor_read_returns_false():
+    """recovery_attempt logs sensor_recovery_failed when motor read returns ok=False."""
+    from unittest.mock import patch
+
+    cfg = Settings(mock_hardware=True)
+
+    vision = AsyncMock()
+    vision.capture_features = AsyncMock(
+        return_value=np.ones(cfg.camera.feature_dim, dtype=np.float32),
+    )
+    vision.start = AsyncMock()
+    vision.stop = AsyncMock()
+
+    distance = AsyncMock()
+    distance.read_distance_m = AsyncMock(return_value=1.5)
+    distance.max_range_m = 4.0
+
+    esp32 = AsyncMock()
+    esp32.read_encoders = AsyncMock(return_value=EncoderReading())
+    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+
+    mgr = SensorManager(vision, distance, esp32, cfg)
+    # Patch _safe_motor_read to return failure directly (avoids asyncio.gather mock issues)
+    with patch.object(
+        mgr, "_safe_motor_read", new_callable=AsyncMock,
+        return_value=(np.zeros(DEFAULT_MOTOR_STATE_DIM, dtype=np.float32), False),
+    ):
+        recovered = await mgr.recovery_attempt()
+    assert recovered == 2  # vision + distance ok, motor failed
+
+
+async def test_recovery_attempt_vision_read_fails() -> None:
+    """When vision read returns ok=False after restart, sensor_recovery_failed is logged."""
+    from unittest.mock import patch
+
+    cfg = Settings(mock_hardware=True)
+
+    vision = AsyncMock()
+    vision.capture_features = AsyncMock(
+        return_value=np.ones(cfg.camera.feature_dim, dtype=np.float32),
+    )
+    vision.start = AsyncMock()
+    vision.stop = AsyncMock()
+
+    distance = AsyncMock()
+    distance.read_distance_m = AsyncMock(return_value=1.5)
+    distance.max_range_m = 4.0
+
+    esp32 = AsyncMock()
+    esp32.read_encoders = AsyncMock(return_value=EncoderReading())
+    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+
+    mgr = SensorManager(vision, distance, esp32, cfg)
+    zeros = np.zeros(cfg.camera.feature_dim, dtype=np.float32)
+    # Patch _safe_vision_read to return ok=False (stop/start succeed, but read probe fails)
+    with patch.object(
+        mgr, "_safe_vision_read", new_callable=AsyncMock,
+        return_value=(zeros, False),
+    ):
+        recovered = await mgr.recovery_attempt()
+    # Vision read failed → not counted; distance + motor succeed → 2
+    assert recovered == 2
+
+
+async def test_recovery_attempt_distance_except_branch() -> None:
+    """Exercises the except branch in the distance recovery try block."""
+    from unittest.mock import patch
+
+    cfg = Settings(mock_hardware=True)
+
+    vision = AsyncMock()
+    vision.capture_features = AsyncMock(
+        return_value=np.ones(cfg.camera.feature_dim, dtype=np.float32),
+    )
+    vision.start = AsyncMock()
+    vision.stop = AsyncMock()
+
+    distance = AsyncMock()
+    distance.read_distance_m = AsyncMock(return_value=1.5)
+    distance.max_range_m = 4.0
+
+    esp32 = AsyncMock()
+    esp32.read_encoders = AsyncMock(return_value=EncoderReading())
+    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+
+    mgr = SensorManager(vision, distance, esp32, cfg)
+    # Force _safe_distance_read to raise so the except block is exercised
+    with patch.object(
+        mgr, "_safe_distance_read", new_callable=AsyncMock,
+        side_effect=RuntimeError("unexpected distance error"),
+    ):
+        recovered = await mgr.recovery_attempt()
+    # Distance raised → not counted; vision + motor succeed → 2
+    assert recovered == 2
+
+
+async def test_recovery_attempt_motor_except_branch() -> None:
+    """Exercises the except branch in the motor recovery try block."""
+    from unittest.mock import patch
+
+    cfg = Settings(mock_hardware=True)
+
+    vision = AsyncMock()
+    vision.capture_features = AsyncMock(
+        return_value=np.ones(cfg.camera.feature_dim, dtype=np.float32),
+    )
+    vision.start = AsyncMock()
+    vision.stop = AsyncMock()
+
+    distance = AsyncMock()
+    distance.read_distance_m = AsyncMock(return_value=1.5)
+    distance.max_range_m = 4.0
+
+    esp32 = AsyncMock()
+    esp32.read_encoders = AsyncMock(return_value=EncoderReading())
+    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+
+    mgr = SensorManager(vision, distance, esp32, cfg)
+    # Force _safe_motor_read to raise so the except block is exercised
+    with patch.object(
+        mgr, "_safe_motor_read", new_callable=AsyncMock,
+        side_effect=RuntimeError("unexpected motor error"),
+    ):
+        recovered = await mgr.recovery_attempt()
+    # Motor raised → not counted; vision + distance succeed → 2
+    assert recovered == 2
+
+
+async def test_recovery_attempt_audio_read_returns_false() -> None:
+    """recovery_attempt logs sensor_recovery_failed when audio read returns ok=False."""
+    from unittest.mock import patch
+
+    mgr, mic = _make_manager_with_mic()
+    mic.start = AsyncMock()
+    mic.stop = AsyncMock()
+    # Patch _safe_audio_read to return ok=False (stop/start succeed, but probe fails)
+    with patch.object(
+        mgr,
+        "_safe_audio_read",
+        new_callable=AsyncMock,
+        return_value=(np.zeros(mgr._audio_chunk_size, dtype=np.float32), False),
+    ):
+        recovered = await mgr.recovery_attempt()
+    # Vision + distance + motor succeed; audio read failed → not counted → 3
+    assert recovered == 3
+
+
+async def test_recovery_attempt_lidar_read_returns_false() -> None:
+    """recovery_attempt logs sensor_recovery_failed when lidar read returns ok=False."""
+    from unittest.mock import patch
+
+    from mousedroid.config.schema import LidarConfig
+
+    lidar_cfg = LidarConfig()
+    cfg = Settings(mock_hardware=True, lidar=lidar_cfg)
+
+    vision = AsyncMock()
+    vision.capture_features = AsyncMock(
+        return_value=np.ones(cfg.camera.feature_dim, dtype=np.float32),
+    )
+    vision.start = AsyncMock()
+    vision.stop = AsyncMock()
+
+    distance = AsyncMock()
+    distance.read_distance_m = AsyncMock(return_value=1.5)
+    distance.max_range_m = 4.0
+
+    esp32 = AsyncMock()
+    esp32.read_encoders = AsyncMock(return_value=EncoderReading())
+    esp32.get_battery_voltage = AsyncMock(return_value=12.0)
+
+    lidar = AsyncMock()
+    lidar.start = AsyncMock()
+    lidar.stop = AsyncMock()
+    lidar.read_scan = AsyncMock(return_value=[])
+
+    mgr = SensorManager(vision, distance, esp32, cfg, lidar=lidar)
+    # Patch _safe_lidar_read to return ok=False (stop/start succeed, but probe fails)
+    with patch.object(
+        mgr,
+        "_safe_lidar_read",
+        new_callable=AsyncMock,
+        return_value=(None, False),
+    ):
+        recovered = await mgr.recovery_attempt()
+    # Vision + distance + motor succeed; lidar read failed → not counted → 3
+    assert recovered == 3

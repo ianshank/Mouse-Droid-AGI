@@ -5,7 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+import pytest
 import torch
+
+pytest.importorskip("ncps")
+
 
 from mousedroid.config.schema import ModelConfig
 from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
@@ -107,6 +111,11 @@ class TestDualStreamRSSMConstructor:
             model = DualStreamRSSM(cfg)
             assert model.cfc.hidden_size == cfc_dim
 
+    def test_rejects_zero_cfc_hidden_dim(self) -> None:
+        cfg = _make_cfg(cfc_dim=0)
+        with pytest.raises(ValueError, match="cfc_hidden_dim > 0"):
+            DualStreamRSSM(cfg)
+
 
 # ---------------------------------------------------------------------------
 # observe_step tests
@@ -178,6 +187,25 @@ class TestDualStreamRSSMObserveStep:
         h = torch.zeros(1, combined_dim)
         z = torch.zeros(1, cfg_with_audio.latent_dim)
         action = torch.zeros(1, cfg_with_audio.action_dim)
+
+        new_h, new_z, _, surprise = model.observe_step(obs, action, h, z)
+        assert torch.isfinite(new_h).all()
+        assert torch.isfinite(new_z).all()
+        assert np.isfinite(surprise)
+
+    def test_observe_step_with_lidar(self) -> None:
+        cfg = _make_cfg()
+        cfg_with_lidar = ModelConfig(**{**cfg.model_dump(), "lidar_dim": 32, "lidar_proj_dim": 8})
+        model = DualStreamRSSM(cfg_with_lidar)
+        combined_dim = cfg_with_lidar.hidden_dim + cfg_with_lidar.cfc_hidden_dim
+
+        obs = MockObservation(
+            vision_features=np.zeros(cfg_with_lidar.vision_dim, dtype=np.float32),
+            lidar_features=np.random.randn(32).astype(np.float32),
+        )
+        h = torch.zeros(1, combined_dim)
+        z = torch.zeros(1, cfg_with_lidar.latent_dim)
+        action = torch.zeros(1, cfg_with_lidar.action_dim)
 
         new_h, new_z, _, surprise = model.observe_step(obs, action, h, z)
         assert torch.isfinite(new_h).all()

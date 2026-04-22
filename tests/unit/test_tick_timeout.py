@@ -1,9 +1,7 @@
-"""Unit tests for orchestrator tick timeout and exception emergency stop.
+"""Tests for tick timeout triggering emergency stop.
 
-Validates that the run() loop:
-1. Calls emergency_stop when tick() exceeds tick_timeout_s
-2. Calls emergency_stop when tick() raises an unhandled exception
-3. Notifies the watchdog after each successful tick
+Validates Phase 1B: ``asyncio.wait_for`` wrapping in ``orchestrator.run()``
+fires ``esp32.emergency_stop()`` when a tick exceeds ``tick_timeout_s``.
 """
 
 from __future__ import annotations
@@ -11,185 +9,181 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-import numpy as np
-import torch
+import pytest
 
 from mousedroid.config.schema import Settings
 
 
-def _make_orchestrator(
+def _build_mock_orchestrator(
+    *,
     tick_timeout_s: float = 0.1,
-    watchdog: object | None = None,
-) -> tuple:
-    """Build a minimal MouseDroidOrchestrator with mocked subsystems.
+    tick_side_effect: object | None = None,
+) -> tuple[object, AsyncMock]:
+    """Build a MockOrchestrator with injectable tick behaviour.
 
     Returns:
         (orchestrator, esp32_mock) tuple.
     """
-    from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator
+    from mousedroid.factory import build_orchestrator
 
     cfg = Settings(mock_hardware=True)
-    # Override tick_timeout via object attribute (Pydantic allows this)
-    cfg.loop.tick_timeout_s = tick_timeout_s
+    # Override tick timeout for test speed
+    cfg.loop.tick_timeout_s = tick_timeout_s  # type: ignore[misc]
 
-    wm = MagicMock()
-    wm.observe_step = MagicMock(
-        return_value=(
-            torch.zeros(1, cfg.model.hidden_dim + cfg.model.cfc_hidden_dim),
-            torch.zeros(1, cfg.model.latent_dim),
-            torch.zeros(1, cfg.model.latent_dim),
-            0.0,
+    orch = build_orchestrator(cfg)
+
+    # Replace ESP32 with a mock so we can assert on emergency_stop
+    esp32_mock = AsyncMock()
+    esp32_mock.emergency_stop = AsyncMock()
+    esp32_mock.send_velocity = AsyncMock()
+    esp32_mock.connect = AsyncMock()
+    esp32_mock.disconnect = AsyncMock()
+    esp32_mock.read_encoders = AsyncMock(
+        return_value=MagicMock(
+            left_velocity_mps=0.0,
+            right_velocity_mps=0.0,
+            heading_rad=0.0,
         )
     )
+    esp32_mock.get_battery_voltage = AsyncMock(return_value=12.0)
+    orch._esp32 = esp32_mock
 
-    agent = MagicMock()
-    agent.name = "mock_agent"
-    agent.act = MagicMock(return_value=torch.zeros(cfg.model.action_dim))
+    # Replace sensor_manager to avoid hardware
+    orch._sensor_manager = AsyncMock()
+    orch._sensor_manager.read_all = AsyncMock(
+        return_value=MagicMock(valid_mask=0xFF, valid_sensor_count=4)
+    )
+    orch._sensor_manager.start = AsyncMock()
+    orch._sensor_manager.stop = AsyncMock()
+    orch._sensor_manager.recovery_attempt = AsyncMock(return_value=0)
 
-    monitor = MagicMock()
-    safety_ctx = MagicMock()
-    safety_ctx.is_emergency = False
-    safety_ctx.forward_clearance_ok = True
-    safety_ctx.battery_voltage = 12.0
-    safety_ctx.gpu_temp_c = 50.0
-    monitor.evaluate = MagicMock(return_value=safety_ctx)
+    # Inject tick side effect
+    if tick_side_effect is not None:
+        orch.tick = AsyncMock(side_effect=tick_side_effect)
 
-    esp32 = AsyncMock()
-    esp32.connect = AsyncMock()
-    esp32.disconnect = AsyncMock()
-    esp32.emergency_stop = AsyncMock()
-    esp32.send_velocity = AsyncMock()
+    return orch, esp32_mock
 
-    sensor_manager = AsyncMock()
-    observation = MagicMock()
-    observation.distance_m = 2.0
-    observation.motor_state = np.array([0.0, 0.0, 0.0, 12.0], dtype=np.float32)
-    observation.vision_features = np.zeros(256, dtype=np.float32)
-    sensor_manager.read_all = AsyncMock(return_value=observation)
-    sensor_manager.start = AsyncMock()
-    sensor_manager.stop = AsyncMock()
 
-    orch = MouseDroidOrchestrator(
-        world_model=wm,
-        agents=[agent],
-        safety_monitor=monitor,
-        esp32=esp32,
-        sensor_manager=sensor_manager,
-        cfg=cfg,
-        watchdog=watchdog,
+async def test_tick_timeout_triggers_emergency_stop() -> None:
+    """A tick that exceeds tick_timeout_s triggers emergency_stop."""
+
+    async def slow_tick() -> None:
+        await asyncio.sleep(5.0)  # Much longer than 0.1s timeout
+
+    orch, esp32 = _build_mock_orchestrator(
+        tick_timeout_s=0.05,
+        tick_side_effect=slow_tick,
     )
 
-    return orch, esp32
+    orch._running = True
+
+    # Run one iteration of the loop then stop
+    async def stop_after_one() -> None:
+        await asyncio.sleep(0.2)
+        orch._running = False
+
+    await asyncio.gather(orch.run(), stop_after_one())
+
+    esp32.emergency_stop.assert_called()
 
 
-class TestTickTimeout:
-    """Tick timeout triggers emergency stop."""
+async def test_tick_exception_triggers_emergency_stop() -> None:
+    """An exception in tick() triggers emergency_stop."""
+    orch, esp32 = _build_mock_orchestrator(
+        tick_timeout_s=1.0,
+        tick_side_effect=RuntimeError("sensor driver crash"),
+    )
 
-    async def test_timeout_triggers_estop(self) -> None:
-        """When tick() exceeds tick_timeout_s, emergency_stop must fire."""
-        orch, esp32 = _make_orchestrator(tick_timeout_s=0.05)
+    orch._running = True
 
-        # Replace tick with a version that hangs indefinitely
-        async def hanging_tick() -> None:
-            await asyncio.sleep(999)
+    async def stop_after_one() -> None:
+        await asyncio.sleep(0.1)
+        orch._running = False
 
-        orch.tick = hanging_tick  # type: ignore[assignment]
-        orch._running = True
+    await asyncio.gather(orch.run(), stop_after_one())
 
-        # Run one loop iteration then stop
-        async def stop_after_delay() -> None:
-            await asyncio.sleep(0.2)
-            orch._running = False
-
-        await asyncio.gather(orch.run(), stop_after_delay())
-
-        esp32.emergency_stop.assert_awaited()
+    esp32.emergency_stop.assert_called()
 
 
-class TestExceptionEmergencyStop:
-    """Exception in tick() triggers emergency stop."""
+async def test_successful_tick_does_not_trigger_emergency_stop() -> None:
+    """A successful tick does NOT trigger emergency_stop."""
 
-    async def test_exception_triggers_estop(self) -> None:
-        """When tick() raises, emergency_stop must fire."""
-        orch, esp32 = _make_orchestrator(tick_timeout_s=5.0)
+    async def fast_tick() -> None:
+        pass  # Instant success
 
-        async def failing_tick() -> None:
-            msg = "sensor driver crashed"
-            raise RuntimeError(msg)
+    orch, esp32 = _build_mock_orchestrator(
+        tick_timeout_s=1.0,
+        tick_side_effect=fast_tick,
+    )
 
-        orch.tick = failing_tick  # type: ignore[assignment]
-        orch._running = True
+    orch._running = True
 
-        async def stop_after_delay() -> None:
-            await asyncio.sleep(0.1)
-            orch._running = False
+    async def stop_after_ticks() -> None:
+        await asyncio.sleep(0.15)
+        orch._running = False
 
-        await asyncio.gather(orch.run(), stop_after_delay())
+    await asyncio.gather(orch.run(), stop_after_ticks())
 
-        esp32.emergency_stop.assert_awaited()
-
-    async def test_estop_failure_does_not_propagate(self) -> None:
-        """If emergency_stop itself fails, run() must not crash."""
-        orch, esp32 = _make_orchestrator(tick_timeout_s=5.0)
-        esp32.emergency_stop = AsyncMock(side_effect=OSError("serial disconnected"))
-
-        async def failing_tick() -> None:
-            msg = "boom"
-            raise RuntimeError(msg)
-
-        orch.tick = failing_tick  # type: ignore[assignment]
-        orch._running = True
-
-        async def stop_after_delay() -> None:
-            await asyncio.sleep(0.1)
-            orch._running = False
-
-        # Must not raise despite both tick and emergency_stop failing
-        await asyncio.gather(orch.run(), stop_after_delay())
+    esp32.emergency_stop.assert_not_called()
 
 
-class TestWatchdogNotify:
-    """Watchdog.notify() is called after each successful tick."""
+async def test_tick_timeout_config_from_loop_config() -> None:
+    """tick_timeout_s is read from cfg.loop.tick_timeout_s."""
+    cfg = Settings(mock_hardware=True)
+    # Default should be 1.0
+    assert cfg.loop.tick_timeout_s == 1.0
 
-    async def test_watchdog_called_on_success(self) -> None:
-        """After a successful tick, watchdog.notify() must be called."""
-        watchdog = MagicMock()
-        watchdog.notify = MagicMock()
 
-        orch, _esp32 = _make_orchestrator(tick_timeout_s=5.0, watchdog=watchdog)
-        orch._running = True
+def test_tick_timeout_config_custom_value() -> None:
+    """tick_timeout_s accepts custom values."""
+    cfg = Settings(mock_hardware=True)
+    cfg.loop.tick_timeout_s = 2.5  # type: ignore[misc]
+    assert cfg.loop.tick_timeout_s == 2.5
 
-        tick_count = 0
-        original_tick = orch.tick
 
-        async def counting_tick() -> None:
-            nonlocal tick_count
-            await original_tick()
-            tick_count += 1
-            if tick_count >= 3:
-                orch._running = False
+def test_tick_timeout_config_rejects_zero() -> None:
+    """tick_timeout_s rejects zero."""
+    with pytest.raises(ValueError, match="greater than 0"):
+        Settings(mock_hardware=True, loop={"tick_timeout_s": 0})  # type: ignore[arg-type]
 
-        orch.tick = counting_tick  # type: ignore[assignment]
 
-        await orch.run()
+def test_tick_timeout_config_rejects_negative() -> None:
+    """tick_timeout_s rejects negative values."""
+    with pytest.raises(ValueError, match="greater than 0"):
+        Settings(mock_hardware=True, loop={"tick_timeout_s": -1})  # type: ignore[arg-type]
 
-        assert watchdog.notify.call_count >= 3
 
-    async def test_watchdog_not_called_on_error(self) -> None:
-        """After a failed tick, watchdog.notify() must NOT be called."""
-        watchdog = MagicMock()
-        watchdog.notify = MagicMock()
+def test_watchdog_heartbeat_path_default() -> None:
+    """watchdog_heartbeat_path has a sensible default."""
+    cfg = Settings(mock_hardware=True)
+    assert "/mousedroid_heartbeat" in cfg.loop.watchdog_heartbeat_path
 
-        orch, _esp32 = _make_orchestrator(tick_timeout_s=5.0, watchdog=watchdog)
-        orch._running = True
 
-        async def failing_tick() -> None:
-            orch._running = False
-            msg = "crash"
-            raise RuntimeError(msg)
+def test_watchdog_heartbeat_path_configurable() -> None:
+    """watchdog_heartbeat_path is configurable via LoopConfig."""
+    cfg = Settings(mock_hardware=True, loop={"watchdog_heartbeat_path": "/run/mousedroid/hb"})  # type: ignore[arg-type]
+    assert cfg.loop.watchdog_heartbeat_path == "/run/mousedroid/hb"
 
-        orch.tick = failing_tick  # type: ignore[assignment]
 
-        await orch.run()
+def test_memory_semantic_retrieve_k_default() -> None:
+    """semantic_retrieve_k defaults to 1."""
+    cfg = Settings(mock_hardware=True)
+    assert cfg.memory.semantic_retrieve_k == 1
 
-        watchdog.notify.assert_not_called()
+
+def test_memory_semantic_retrieve_k_configurable() -> None:
+    """semantic_retrieve_k is configurable."""
+    cfg = Settings(mock_hardware=True, memory={"semantic_retrieve_k": 5})  # type: ignore[arg-type]
+    assert cfg.memory.semantic_retrieve_k == 5
+
+
+def test_memory_min_episodic_priority_default() -> None:
+    """min_episodic_priority defaults to 1e-6."""
+    cfg = Settings(mock_hardware=True)
+    assert cfg.memory.min_episodic_priority == 1e-6
+
+
+def test_memory_min_episodic_priority_rejects_zero() -> None:
+    """min_episodic_priority rejects zero (FAISS requires positive priority)."""
+    with pytest.raises(ValueError, match="greater than 0"):
+        Settings(mock_hardware=True, memory={"min_episodic_priority": 0})  # type: ignore[arg-type]

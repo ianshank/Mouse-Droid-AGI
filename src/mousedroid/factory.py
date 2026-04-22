@@ -33,6 +33,12 @@ if TYPE_CHECKING:
         ArmPerceptionProtocol,
         ArmPlannerProtocol,
     )
+    from mousedroid.cloud.protocol import (
+        CloudExperienceExporterProtocol,
+        CloudLoggingSinkProtocol,
+        CloudMetricsExporterProtocol,
+        CloudTelemetrySinkProtocol,
+    )
     from mousedroid.cognitive.bdi_model import NeuralBDI
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.config.schema import Settings, UltrasonicConfig
@@ -40,6 +46,7 @@ if TYPE_CHECKING:
     from mousedroid.experience.logger import ExperienceLogger
     from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
     from mousedroid.health.monitor import HealthMonitor
+    from mousedroid.llm_gateway.mission_parser import MissionParserProtocol
     from mousedroid.memory.tier import MemoryTier
     from mousedroid.sensing.manager import SensorManager
     from mousedroid.telemetry.log_buffer import LogRingBuffer
@@ -336,6 +343,22 @@ def build_llm_gateway(cfg: Settings) -> LLMGatewayProtocol:
     )
     _log.info("llm_gateway_built", enabled=cfg.llm.enabled)
     return LLMGateway(gateway_cfg)
+
+
+def build_mission_parser(cfg: Settings) -> MissionParserProtocol:
+    """Build NL mission parser with configurable speed/confidence mappings.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Rule-based mission parser conforming to ``MissionParserProtocol``.
+    """
+    from mousedroid.llm_gateway.mission_parser import RuleBasedMissionParser
+
+    parser = RuleBasedMissionParser(cfg.mission_parser)
+    _log.info("mission_parser_built")
+    return parser
 
 
 def build_metrics_registry(cfg: Settings) -> MetricsRegistry | None:
@@ -797,7 +820,7 @@ def build_memory_tier(cfg: Settings) -> MemoryTier | None:
 
     episodic = EpisodicReplay(cfg.memory)
     semantic = SemanticIndex(cfg.memory)
-    working = WorkingMemory(cfg.memory, embed_dim=cfg.model.obs_dim)
+    working = WorkingMemory(cfg.memory, embed_dim=cfg.memory.semantic_dim)
     consolidation = MemoryConsolidation(cfg.memory, episodic, semantic)
 
     _log.info(
@@ -886,11 +909,11 @@ def build_watchdog(cfg: Settings) -> WatchdogProtocol:
     if mode == "systemd":
         return SystemdNotifier()
     if mode == "file":
-        return FileHeartbeatNotifier(Path(cfg.loop.heartbeat_path))
+        return FileHeartbeatNotifier(Path(cfg.loop.watchdog_heartbeat_path))
     if mode == "auto":
         if os.environ.get("NOTIFY_SOCKET"):
             return SystemdNotifier()
-        return FileHeartbeatNotifier(Path(cfg.loop.heartbeat_path))
+        return FileHeartbeatNotifier(Path(cfg.loop.watchdog_heartbeat_path))
 
     _log.warning("unknown_watchdog_mode_falling_back_to_null", mode=mode)
     return NullNotifier()
@@ -980,7 +1003,11 @@ def build_orchestrator(cfg: Settings) -> object:
         camera=camera,
     )
 
-    llm_gateway = build_llm_gateway(cfg) if cfg.llm.enabled else None
+    # LLM gateway + mission parser (optional — gated by llm.enabled)
+    llm_gateway: LLMGatewayProtocol | None = None
+    if cfg.llm.enabled:
+        llm_gateway = build_llm_gateway(cfg)
+    mission_parser: MissionParserProtocol | None = build_mission_parser(cfg)
 
     from mousedroid.common.tools.registry import create_default_registry
 
@@ -993,13 +1020,17 @@ def build_orchestrator(cfg: Settings) -> object:
     speaker = build_speaker(cfg)
     voice_engine = build_voice_engine(cfg, speaker=speaker)
 
-    # Watchdog notifier (optional — disabled by default)
-    watchdog = build_watchdog(cfg)
-
     # Memory tier + experience logger + curiosity module (optional)
     memory_tier = build_memory_tier(cfg)
     experience_logger = build_experience_logger(cfg)
     curiosity_module = build_curiosity_module(cfg)
+
+    # Watchdog notifier (optional — disabled by default)
+    watchdog = build_watchdog(cfg)
+
+    # GCP Digital Twin (optional — disabled when gcp=None)
+    cloud_sink = build_cloud_telemetry_sink(cfg)
+    cloud_experience_exporter = build_cloud_experience_exporter(cfg)
 
     return MouseDroidOrchestrator(
         world_model=wm,
@@ -1013,12 +1044,14 @@ def build_orchestrator(cfg: Settings) -> object:
         telemetry_server=telemetry_server,
         voice_engine=voice_engine,
         hailo_runtime=hailo_runtime,
-        watchdog=watchdog,
         memory_tier=memory_tier,
         experience_logger=experience_logger,
         curiosity_module=curiosity_module,
         llm_gateway=llm_gateway,
-        tool_registry=tool_registry,
+        mission_parser=mission_parser,
+        watchdog=watchdog,
+        cloud_sink=cloud_sink,
+        cloud_experience_exporter=cloud_experience_exporter,
     )
 
 
@@ -1187,3 +1220,63 @@ def build_arm_perception(
         intrinsics,
         object_detector=detector,
     )
+
+
+def build_cloud_telemetry_sink(
+    cfg: Settings,
+) -> CloudTelemetrySinkProtocol | None:
+    """Build GCP Pub/Sub telemetry sink if GCP is configured.
+
+    Returns ``None`` when ``cfg.gcp`` is ``None`` (offline mode) or when
+    the ``google-cloud-pubsub`` package is not installed.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Cloud telemetry sink or None.
+    """
+    if cfg.gcp is None:
+        return None
+    try:
+        from mousedroid.cloud.pubsub_sink import CloudTelemetrySink
+    except ImportError:
+        _log.warning(
+            "cloud_pubsub_not_available",
+            hint="Install via: pip install 'mousedroid[gcp]'",
+        )
+        return None
+
+    sink = CloudTelemetrySink(cfg.gcp)
+    _log.info("cloud_telemetry_sink_built")
+    return sink
+
+
+def build_cloud_experience_exporter(
+    cfg: Settings,
+) -> CloudExperienceExporterProtocol | None:
+    """Build GCS experience exporter if GCP is configured.
+
+    Returns ``None`` when ``cfg.gcp`` is ``None`` or when the
+    ``google-cloud-storage`` package is not installed.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Cloud experience exporter or None.
+    """
+    if cfg.gcp is None:
+        return None
+    try:
+        from mousedroid.cloud.experience_exporter import CloudExperienceExporter
+    except ImportError:
+        _log.warning(
+            "cloud_storage_not_available",
+            hint="Install via: pip install 'mousedroid[gcp]'",
+        )
+        return None
+
+    exporter = CloudExperienceExporter(cfg.gcp, cfg.experience)
+    _log.info("cloud_experience_exporter_built")
+    return exporter

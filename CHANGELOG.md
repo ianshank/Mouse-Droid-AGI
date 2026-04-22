@@ -8,73 +8,215 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added — Production Readiness (feature/production-readiness)
+### Added — GCP Digital Twin (Phase 1: Telemetry Bridge + Cloud Storage)
 
-- **LiDAR telemetry dashboard** — polar scan viewer at `/lidar` backed by
-  per-sector Prometheus gauges (`mousedroid_lidar_sector_distance_m`,
-  `mousedroid_lidar_min_distance_m`, `mousedroid_lidar_scan_points`);
-  `TelemetryFrame` gains `lidar_sectors`, `lidar_n_points`.
-- **Camera MJPEG stream** — `RawFrameSourceProtocol` with `/camera/stream`
-  (multipart/x-mixed-replace), `/camera/frame.jpg`, and `/camera` dashboard;
-  `build_telemetry_server` duck-types any `VisionProtocol` exposing
-  `capture_raw_jpeg()` as a raw-frame source.
-- **Mock camera modes** — procedural animated color-bar renderer and
-  `ImageGrab` screen-capture mode selected by `CameraConfig.mock_source`.
-- **Rotating-wedge mock LiDAR** — deterministic triangular-wedge scan driven
-  by `LidarConfig.mock_pattern` and `LidarConfig.mock_rotation_hz` for
-  dashboard and telemetry regression testing without hardware.
-- **Per-dimension action bounds** — `SafetyConfig.action_min` /
-  `SafetyConfig.action_max` (list-of-floats, per-dim) with a root validator
-  (`action_bounds_match_action_dim`) that expands `None` to
-  `[-1]*action_dim` / `[1]*action_dim`, validates length/ordering, and
-  rejects values outside `[-1, 1]`; `normalize_action_tensor` /
-  `normalize_action_numpy` + `NavigationAgent` honour the per-dim bounds.
-- **Bounded vision-feature telemetry payload** —
-  `TelemetryConfig.vision_feature_max_samples` (default 256, bounded
-  `(0, 4096]`) replaces the previously hardcoded cap in
-  `build_telemetry_frame`; orchestrator threads the value end-to-end.
-- **Telemetry real-server override** — `TelemetryConfig.force_real_server`
-  forces the full FastAPI telemetry server even when
-  `cfg.mock_hardware=True`; `TelemetryConfig.raw_frame_hz` configures the
-  MJPEG stream frame rate.
-- **Jetson camera wiring (Arducam IMX708 CSI)** — compose maps
-  `/dev/media0` and bind-mounts `/tmp/argus_socket`;
-  `config/jetson_production.yaml` selects the `jetson_csi` backend at
-  1280×720@30 with `use_onboard_inference=false` and `mean_pool` feature
-  extraction; removed unused `/proc/device-tree` bind mount.
-- **Ultrasonic graceful degradation** — distance-sensor driver now logs
-  `distance_sensor_init_failed_degrading` and returns a no-op driver when
-  no HC-SR04 is wired; keeps real-hardware startup healthy on the
-  LiDAR-only inventory.
-- **Monitoring stack** — `docker-compose.monitoring.yml` (Prometheus, Loki,
-  Promtail, Grafana) + `scripts/deploy_monitoring.sh` and pre-built
-  scrape/alert configs under `config/prometheus/` and `config/loki/`.
-- **Jetson operator tooling** — `scripts/benchmark_latency.py`,
-  `scripts/endurance_test.py`, `scripts/jetson_validate.sh`,
-  `scripts/launch_lidar_dashboard.sh`, and `config/local_lidar_validation.yaml`.
-- **New static dashboards** — `src/mousedroid/telemetry/static/lidar.html`
-  and `camera.html` shipped with the package.
+- **`src/mousedroid/cloud/` module** — complete GCP cloud integration layer
+  - `CloudTelemetrySinkProtocol`, `CloudExperienceExporterProtocol`,
+    `CloudLoggingSinkProtocol`, `CloudMetricsExporterProtocol` — 4 `@runtime_checkable` protocols
+  - `CloudTelemetrySink` — Pub/Sub publisher with `CircuitBreaker` + msgpack serialization;
+    non-blocking fire-and-forget; circuit-open messages silently dropped
+  - `CloudExperienceExporter` — LMDB-to-GCS batch exporter with high-water-mark cursor,
+    date-hour partitioned shards (`gs://{bucket}/{prefix}/{robot_id}/{date}/{hour}/shard_{uuid}.msgpack.gz`),
+    configurable gzip/zstd compression
+  - `CloudLoggingSink` — structlog processor forwarding to Cloud Logging (fire-and-forget)
+  - `CloudMetricsExporter` — parses Prometheus text exposition output from `MetricsRegistry`,
+    writes gauge metrics to Cloud Monitoring custom metrics
+  - `CloudFirestoreSync` — episodic memory sync to Firestore collection
+  - `_auth.py` — credential resolver (ADC or explicit service account key)
 
-### Changed
+- **8 GCP Pydantic config models** (`src/mousedroid/config/schema.py`)
+  - `GCPConfig` umbrella with `GCPPubSubConfig`, `GCPStorageConfig`, `GCPLoggingConfig`,
+    `GCPMonitoringConfig`, `GCPFirestoreConfig`, `GCPTrainingConfig`, `GCPSimulationConfig`
+  - `Settings.gcp: GCPConfig | None = None` — all GCP features disabled by default;
+    existing YAML files load unchanged (full backwards compatibility)
 
-- `TelemetryServer.__init__` now accepts `lidar_max_range_m`,
-  `raw_frame_source`, and `raw_frame_hz`; mock telemetry server is only
-  selected when `cfg.mock_hardware and not cfg.telemetry.force_real_server`.
-- `sensing.manager._safe_lidar_read` returns `(features, ok, n_points)`;
-  `ObservationBundle` exposes `lidar_n_points`.
-- `.gitignore` excludes host-specific `docker-compose.override.y*ml` and
-  ad-hoc `step*.sh` / `fix_env.sh` scratch deploy scripts.
+- **4 `build_cloud_*()` factory functions** (`src/mousedroid/factory.py`)
+  - All return `None` when `cfg.gcp is None` (offline mode)
+  - Graceful ImportError fallback when `google-cloud-*` packages not installed
 
-### Tests
+- **Orchestrator cloud integration** (`src/mousedroid/orchestrator/orchestrator.py`)
+  - Optional `cloud_sink` + `cloud_experience_exporter` constructor params
+  - Telemetry + experience published to cloud at each tick; lifecycle managed in start/stop
 
-- New regression tests for `build_telemetry_frame` vision-feature cap
-  (default + custom + passthrough paths).
-- New unit tests for telemetry server lidar/camera routes and integration
-  test for the lidar telemetry end-to-end flow.
+- **`config/gcp_digital_twin.yaml`** — YAML overlay for GCP-enabled deployments
+
+- **`pyproject.toml`** — `gcp`, `gcp-training`, `gcp-simulation` optional dependency groups
+
+- **`Dockerfile.jetson`** — GCP SDK install stage (non-fatal graceful fallback)
+
+- **`docker-compose.jetson.yml`** — GCP credentials volume mount + env vars
+
+- **88 cloud unit tests** (85 passing, 3 skipped when google-auth absent)
+  - Config backwards compatibility (10), Pub/Sub sink (14), experience exporter (18),
+    logging sink (11), monitoring exporter (18), firestore sync (13), auth (4)
+  - Cloud module coverage: **88.77%** (above 85% gate)
+
+### Fixed
+
+- **`LogRingBuffer` NameError in `build_orchestrator()`** — `LogRingBuffer` was imported under
+  `TYPE_CHECKING` but used at runtime when `telemetry.log_stream_buffer > 0`; moved to local
+  import inside `build_orchestrator()` (fixes ~39 pre-existing test failures across e2e,
+  integration, and performance suites)
 
 ---
 
-## [Prior Unreleased]
+## [0.3.0] — 2026-04-14 — Production Readiness
+
+This release completes the **MouseDroidAGI Production Readiness** milestone across 7 phases,
+bringing all cognitive, memory, voice, safety, and deployment subsystems to a production-ready
+state on the NVIDIA Jetson Orin Nano. 2505 tests pass; branch-coverage gate ≥ 85%.
+
+### Added — Phase 1: Deployment Hardening
+
+- **Docker device passthrough** (`docker-compose.jetson.yml`)
+  - All device mappings now active with env-var overrides: `${MOUSEDROID_ESP32_DEV:-/dev/ttyUSB0}`,
+    `${MOUSEDROID_CAMERA_DEV:-/dev/video0}`, `${MOUSEDROID_LIDAR_DEV:-/dev/ttyUSB1}`, GPIO, audio
+  - `group_add: [audio, video, dialout, gpio]` for correct device permissions
+  - Docker `HEALTHCHECK` directive polling `/api/v1/health` (30s interval, 3 retries)
+  - Persistent `promtail_positions` volume to survive restarts
+
+- **Tick timeout + emergency stop** (`src/mousedroid/config/schema.py`, `orchestrator.py`)
+  - `LoopConfig.tick_timeout_s` — configurable per-tick timeout (default 1.0 s, `gt=0`)
+  - `asyncio.wait_for(self.tick(), timeout=tick_timeout)` wraps every orchestrator tick
+  - `asyncio.TimeoutError` → `emergency_stop()` + critical log + voice error event
+  - Unhandled exception in `tick()` → `emergency_stop()` + voice error event
+  - `LoopConfig.watchdog_enabled`, `watchdog_interval_s` fields added
+
+- **Systemd watchdog integration** (`src/mousedroid/health/watchdog.py`)
+  - `WatchdogProtocol` — `@runtime_checkable Protocol` with `notify()` method
+  - `SystemdNotifier` — sends `WATCHDOG=1` via `sdnotify` package or `systemd-notify` subprocess fallback
+  - `FileHeartbeatNotifier` — writes monotonic timestamp to configurable path for Docker HEALTHCHECK
+  - `NullNotifier` — no-op for mock/dev mode
+  - `build_watchdog(cfg)` factory function auto-selects notifier based on environment + config
+  - Orchestrator calls `watchdog.notify()` after each successful tick
+
+- **systemd service hardening** (`scripts/mousedroid.service`, `scripts/mousedroid-docker.service`)
+  - `Type=notify` + `WatchdogSec=30` on both service units
+  - `ExecStartPre=/opt/mousedroid/scripts/preflight_check.sh` blocks startup on hardware failure
+  - `MOUSEDROID_LOOP__WATCHDOG_ENABLED=true` injected into service environment
+
+- **Pre-flight validation script** (`scripts/preflight_check.sh`)
+  - Checks ESP32, camera, GPIO (required); LiDAR, audio (optional warnings)
+  - Validates Docker/NVIDIA runtime, disk space (configurable `MOUSEDROID_MIN_DISK_GB`), config YAML syntax
+  - Checks model weights presence (LLM + BDI)
+  - Coloured PASS/FAIL/WARN output, exits non-zero on any required failure
+  - Fully configurable via env vars: `MOUSEDROID_ESP32_DEV`, `MOUSEDROID_CAMERA_DEV`, `MOUSEDROID_LIDAR_DEV`
+
+- **Docker env documentation** (`config/docker.env.example`)
+  - Documents all device path env vars with default values and required/optional annotations
+
+- **Pre-commit coverage hook extended** (`scripts/check_branch_coverage.py`)
+  - Detects Pydantic Settings + coverage.py class-identity false-failure pattern
+  - Falls through gracefully with `ALLOW_PYTEST_COLLECTION_SKIP=1` bypass
+
+- **Tests** — `tests/unit/test_watchdog.py` (12 tests), `tests/unit/test_tick_timeout.py` (7 tests),
+  `tests/integration/test_preflight_validation.py` (11 tests)
+
+### Added — Phase 2: Memory & Curiosity Pipeline Wiring
+
+- **`MemoryTier` dataclass** (`src/mousedroid/memory/tier.py`)
+  - Groups `episodic`, `semantic`, `working`, and `consolidation` managers into a single injectable unit
+  - `build_memory_tier(cfg)` factory function; enabled via `cfg.memory.enabled` (default `False`)
+
+- **Orchestrator memory integration** (`src/mousedroid/orchestrator/orchestrator.py`)
+  - Optional `memory_tier: MemoryTier | None` parameter in `MouseDroidOrchestrator.__init__`
+  - Each tick: creates `ExperienceRecord` from obs + action + safety context; pushed to episodic + working memory
+  - Background `asyncio.Task` runs `MemoryConsolidation.consolidate()` on `consolidation_interval_s` interval
+
+- **Curiosity wiring**
+  - ICM intrinsic reward computed from previous/current latent states each tick
+  - `"curiosity"` key injected into `obs_dict` with per-channel curiosity scores
+  - `SemanticIndex.retrieve()` queried for epistemic novelty when memory enabled
+
+- **Tests** — `tests/unit/test_memory_tier.py` (8 tests), `tests/integration/test_memory_pipeline.py` (6 tests),
+  `tests/unit/test_curiosity_wiring.py` (5 tests)
+
+### Added — Phase 3: Voice & Rocky End-to-End
+
+- **Startup/shutdown voice events** (`src/mousedroid/orchestrator/orchestrator.py`)
+  - `start()` fires `"startup"` voice event after voice engine initialises
+  - `stop()` fires `"shutdown"` voice event before teardown
+
+- **Enriched voice context**
+  - Emergency stop paths fire `"error"` voice event with safety context
+  - `lidar_min_dist_m` included in obstacle voice events
+  - Audio level RMS included in voice context when microphone available
+
+- **Tests** — `tests/integration/test_orchestrator_voice_events.py` (8 tests)
+
+### Added — Phase 4: Sensor Fusion Resilience
+
+- **Sensor recovery protocol** (`src/mousedroid/sensing/manager.py`)
+  - `async recovery_attempt() -> int` — tries to reinitialise failed sensors; returns recovered count
+  - Orchestrator attempts recovery before triggering emergency stop on sensor degradation
+
+- **Config additions** (`src/mousedroid/config/schema.py`)
+  - `SafetyConfig.sensor_recovery_attempts` (default 1)
+  - `SafetyConfig.sensor_recovery_delay_s` (default 0.5 s)
+
+- **Self-healing orchestrator tests** — `tests/integration/test_self_healing_orchestrator.py` (9 tests)
+- **Cascading sensor failure tests** — `tests/integration/test_cascading_sensor_failure.py` (11 tests)
+
+### Added — Phase 5: LLM Gateway Integration
+
+- **LLM gateway wired into orchestrator** (`src/mousedroid/factory.py`, `orchestrator.py`)
+  - `build_llm_gateway(cfg)` called in `build_orchestrator()` when `cfg.llm.enabled`
+  - `process_mission(nl_command)` method on orchestrator for NL → `GoalVector` translation
+  - Rule-based parser first (< 1 ms for common commands); LLM fallback for complex/unknown commands
+  - Prompt injection detection rejects malicious inputs
+
+- **Degraded mode** (`src/mousedroid/llm_gateway/gateway.py`)
+  - `start()` enters degraded mode (log warning, `_degraded=True`) instead of raising when
+    `llama-cpp-python` or model file is missing — service continues operating safely
+
+- **Tests** — `tests/integration/test_llm_gateway_wiring.py` (6 tests),
+  updated `tests/unit/test_llm_gateway.py` (degraded-mode tests)
+
+### Added — Phase 6: Jetson On-Device Validation Suite
+
+- **Hardware E2E tests** — `tests/e2e/test_jetson_hardware_e2e.py` (marked `@pytest.mark.jetson`)
+  - Camera, ultrasonic, ESP32, LiDAR, microphone, speaker, full 5-tick orchestrator loop with real sensors
+
+- **Endurance tests** — `tests/performance/test_jetson_endurance.py`
+  - 5-minute 30 Hz run; GPU temp < 85 °C; RSS stable within 10 %; loop p95 < 33 ms
+
+- **Sensor verification script** (`scripts/verify_sensors.py`)
+  - Updated with LiDAR + speaker checks, `--json` output flag for CI integration
+
+### Added — Phase 7: Production Telemetry & Metrics
+
+- **New Prometheus metrics** (`src/mousedroid/telemetry/metrics.py`)
+  - `{ns}_memory_episodic_size`, `{ns}_memory_semantic_size` — episodic and semantic index size gauges
+  - `{ns}_memory_working_size` — working memory context window size gauge
+  - `{ns}_curiosity_intrinsic_reward` — intrinsic curiosity reward gauge per tick
+  - `{ns}_voice_events` — voice event counter labelled by event type
+  - `{ns}_llm_requests`, `{ns}_llm_latency_ms` — LLM gateway request counter + latency gauge (ms)
+  - `{ns}_sensor_recoveries`, `{ns}_sensor_recovery_failures` — sensor recovery counters
+  - All metric names use `{ns}` = `MetricsConfig.namespace` (default: `mousedroid`)
+
+### Fixed
+
+- **LLM gateway RuntimeError regression** — `gateway.py` `start()` no longer raises when
+  `llama-cpp-python` is absent; uses degraded mode so tests relying on `build_orchestrator()`
+  default config continue to pass
+- **Pydantic Settings + coverage.py false failure** — `check_branch_coverage.py` pre-commit hook
+  extended to detect `is_instance_of` + `Settings` coverage fingerprint and bypass cleanly
+- **`test_file_heartbeat_notify_updates_timestamp` flakiness** — sleep increased to 50 ms
+  to avoid race under load
+
+### Changed
+
+- **`config/schema.py`** — `LoopConfig` gains `tick_timeout_s`, `watchdog_enabled`,
+  `watchdog_interval_s`; `SafetyConfig` gains `sensor_recovery_attempts`, `sensor_recovery_delay_s`;
+  all new fields have defaults preserving full backward compatibility
+- **`orchestrator.py`** — `run()` loop restructured around `asyncio.wait_for`; adds optional
+  `watchdog` and `memory_tier` constructor parameters; enriches voice event context
+- **`factory.py`** — adds `build_watchdog()`, `build_memory_tier()`, `build_llm_gateway()`
+  (when `cfg.llm.enabled`) wired into `build_orchestrator()`
+- **`docker-compose.jetson.yml`** — all devices uncommented with env-var overrides;
+  healthcheck added; `group_add` permissions granted; Promtail positions volume added
+- **`.gitignore`** — adds Serena workspace, heartbeat runtime files, LLM model dir,
+  pre-flight output, validation output patterns
 
 ### Added
 

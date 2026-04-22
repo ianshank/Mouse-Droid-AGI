@@ -36,6 +36,7 @@ class LLMGateway:
         """
         self._cfg = cfg
         self._model: Any = None
+        self._degraded = False
         self._injection_re = re.compile(
             "(" + "|".join(cfg.injection_patterns) + ")",
             re.IGNORECASE,

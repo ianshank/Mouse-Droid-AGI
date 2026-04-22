@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import pytest
 import torch
+
+pytest.importorskip("ncps")
+
 
 from mousedroid.config.schema import ModelConfig
 from mousedroid.world_model.cfc_cell import CfCWrapper
@@ -145,3 +149,12 @@ class TestCfCWrapperInitialState:
         wrapper = CfCWrapper(input_dim=10, cfg=cfg)
         h = wrapper.initial_state(2, device=torch.device("cpu"))
         assert h.device == torch.device("cpu")
+
+
+class TestCfCWrapperValidation:
+    """Test input validation."""
+
+    def test_rejects_zero_cfc_hidden_dim(self) -> None:
+        cfg = _make_cfg(cfc_dim=0)
+        with pytest.raises(ValueError, match="cfc_hidden_dim > 0"):
+            CfCWrapper(input_dim=10, cfg=cfg)

@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import importlib.util
+
 import numpy as np
+import pytest
 import torch
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from mousedroid.config.schema import ModelConfig
 from mousedroid.sensing.bundle import MouseDroidObservationBundle
-from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
 from mousedroid.world_model.encoder import MultimodalEncoder
 from mousedroid.world_model.rssm import RSSM
+
+_ncps_available = importlib.util.find_spec("ncps") is not None
+_skip_no_ncps = pytest.mark.skipif(not _ncps_available, reason="ncps not installed")
 
 
 def _default_cfg() -> ModelConfig:
@@ -123,11 +128,14 @@ def _dual_stream_cfg() -> ModelConfig:
     )
 
 
+@_skip_no_ncps
 @given(
     dist=st.floats(min_value=0.01, max_value=10.0, allow_nan=False, allow_infinity=False),
 )
 @settings(max_examples=10, deadline=2000)
 def test_dual_stream_observe_step_returns_finite(dist: float) -> None:
+    from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
+
     cfg = _dual_stream_cfg()
     model = DualStreamRSSM(cfg)
     model.eval()
@@ -150,6 +158,7 @@ def test_dual_stream_observe_step_returns_finite(dist: float) -> None:
     assert np.isfinite(surprise)
 
 
+@_skip_no_ncps
 @given(
     gru_dim=st.integers(min_value=16, max_value=128),
     cfc_dim=st.integers(min_value=8, max_value=64),
@@ -157,6 +166,8 @@ def test_dual_stream_observe_step_returns_finite(dist: float) -> None:
 @settings(max_examples=10, deadline=2000)
 def test_dual_stream_output_dim_equals_sum(gru_dim: int, cfc_dim: int) -> None:
     """Combined hidden dim always equals gru_dim + cfc_dim."""
+    from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
+
     cfg = ModelConfig(
         vision_dim=16,
         ultrasonic_dim=1,

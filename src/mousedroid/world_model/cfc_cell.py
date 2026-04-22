@@ -8,7 +8,7 @@ matching ``nn.GRUCell`` ergonomics.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import torch
 import torch.nn as nn
@@ -37,9 +37,17 @@ class CfCWrapper(nn.Module):
 
     def __init__(self, input_dim: int, cfg: ModelConfig) -> None:
         super().__init__()
+        if cfg.cfc_hidden_dim <= 0:
+            raise ValueError(f"CfCWrapper requires cfc_hidden_dim > 0, got {cfg.cfc_hidden_dim}")
         self._hidden_dim = cfg.cfc_hidden_dim
 
-        from ncps.torch import CfC
+        try:
+            from ncps.torch import CfC
+        except ImportError as exc:
+            raise ImportError(
+                "The 'ncps' package is required to use CfCWrapper. "
+                "Install it with: pip install 'mousedroid[cfc]' or pip install ncps>=0.0.7"
+            ) from exc
 
         self._cell = CfC(
             input_size=input_dim,
@@ -94,8 +102,7 @@ class CfCWrapper(nn.Module):
 
         # CfC returns (output, h_new) with return_sequences=False
         _output, h_new = self._cell(x_seq, h, timespans=timespans)
-        result: Tensor = h_new
-        return result
+        return cast(Tensor, h_new)
 
     def initial_state(self, batch_size: int, device: torch.device | None = None) -> Tensor:
         """Create zero-initialized hidden state.

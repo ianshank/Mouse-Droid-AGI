@@ -14,7 +14,7 @@ FROM python:3.11-slim
 
 LABEL maintainer="Ian Cruickshank"
 LABEL description="MouseDroidAGI -- CPU-only dev/CI image (no Jetson hardware)"
-LABEL version="0.2.0"
+LABEL version="0.3.0"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV MOUSEDROID_MOCK_HARDWARE=true
