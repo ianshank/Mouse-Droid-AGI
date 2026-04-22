@@ -59,12 +59,14 @@ class LLMGateway:
 
         try:
             await asyncio.to_thread(self._load_model)
-        except ImportError as exc:
-            msg = "llama-cpp-python is required: pip install mousedroid[llm]"
-            raise RuntimeError(msg) from exc
-        except OSError as exc:
-            msg = f"Model file not found: {self._cfg.model_path}"
-            raise RuntimeError(msg) from exc
+        except ImportError:
+            _log.warning("llm_gateway_degraded_no_llama_cpp")
+            self._degraded = True
+            return
+        except OSError:
+            _log.warning("llm_gateway_degraded_model_not_found", path=str(self._cfg.model_path))
+            self._degraded = True
+            return
         _log.info("llm_gateway_started", model=str(self._cfg.model_path))
 
     def _load_model(self) -> None:  # pragma: no cover

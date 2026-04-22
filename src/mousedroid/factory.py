@@ -838,14 +838,17 @@ def build_memory_tier(cfg: Settings) -> MemoryTier | None:
 
 
 def build_experience_logger(cfg: Settings) -> ExperienceLogger | None:
-    """Build LMDB experience logger if experience config is present.
+    """Build LMDB experience logger if memory is enabled and experience config is present.
 
     Args:
         cfg: Root settings.
 
     Returns:
-        ``ExperienceLogger`` or ``None`` if experience config is absent.
+        ``ExperienceLogger`` or ``None`` if memory is disabled or experience config is absent.
     """
+    if not cfg.memory.enabled:
+        return None
+
     experience_cfg = getattr(cfg, "experience", None)
     if experience_cfg is None:
         return None
@@ -858,14 +861,17 @@ def build_experience_logger(cfg: Settings) -> ExperienceLogger | None:
 
 
 def build_curiosity_module(cfg: Settings) -> CuriosityProtocol | None:
-    """Build intrinsic curiosity module if curiosity config is enabled.
+    """Build intrinsic curiosity module if memory is enabled.
 
     Args:
         cfg: Root settings.
 
     Returns:
-        ``IntrinsicCuriosityModule`` or ``None``.
+        ``IntrinsicCuriosityModule`` or ``None`` if memory is disabled.
     """
+    if not cfg.memory.enabled:
+        return None
+
     from mousedroid.curiosity.icm import IntrinsicCuriosityModule
 
     try:

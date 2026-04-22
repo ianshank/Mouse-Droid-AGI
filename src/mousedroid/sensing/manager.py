@@ -62,7 +62,7 @@ class SensorManager:
     def __init__(
         self,
         vision: VisionProtocol,
-        distance: DistanceSensorProtocol,
+        distance: DistanceSensorProtocol | None,
         esp32: ESP32CommProtocol,
         cfg: Settings,
         microphone: AudioProtocol | None = None,
@@ -96,6 +96,16 @@ class SensorManager:
             self._lidar_buf: deque[NDArray[np.float32] | None] = deque(maxlen=lidar_buf_size)
         else:
             self._lidar_buf = deque(maxlen=1)
+
+        # Motor degraded-mode state.
+        self._motor_degraded: bool = False
+        self._motor_consecutive_failures: int = 0
+        self._motor_max_failures: int = cfg.esp32.max_consecutive_timeouts
+        self._motor_degraded_interval: float = cfg.esp32.degraded_poll_interval_s
+        self._motor_last_probe: float = 0.0
+        self._cached_motor_state: NDArray[np.float32] = np.zeros(
+            DEFAULT_MOTOR_STATE_DIM, dtype=np.float32
+        )
 
         # Determine lidar feature size for zero-fill on failure.
         if lidar_feature_extractor is not None:
@@ -327,7 +337,9 @@ class SensorManager:
         return result, ok
 
     async def _safe_distance_read(self) -> tuple[float, bool]:
-        """Attempt a distance read, returning max range on failure."""
+        """Attempt a distance read, returning fallback value when sensor is unavailable."""
+        if self._distance is None:
+            return self._cfg.safety.distance_fallback_m, False
         result, ok = await self._safe_read(
             self._distance.read_distance_m(),
             "distance",
@@ -336,8 +348,15 @@ class SensorManager:
         return result, ok
 
     async def _safe_motor_read(self) -> tuple[NDArray[np.float32], bool]:
-        """Attempt an ESP32 motor/battery read, returning zeros on failure."""
-        default = np.zeros(DEFAULT_MOTOR_STATE_DIM, dtype=np.float32)
+        """Attempt an ESP32 motor/battery read with degraded-mode adaptive polling."""
+        now = time.monotonic()
+        if self._motor_degraded:
+            if now - self._motor_last_probe < self._motor_degraded_interval:
+                # Probe interval not elapsed: return stale cached data, mark invalid.
+                return self._cached_motor_state, False
+            # Probe interval elapsed: attempt a real read.
+            self._motor_last_probe = now
+
         try:
             encoders, battery_v = await asyncio.gather(
                 self._esp32.read_encoders(),
@@ -352,10 +371,24 @@ class SensorManager:
                 ],
                 dtype=np.float32,
             )
+            # Success: reset failure tracking and cache state.
+            self._motor_consecutive_failures = 0
+            if self._motor_degraded:
+                self._motor_degraded = False
+                _log.info("motor_degraded_recovery")
+            self._cached_motor_state = motor_state
             return motor_state, True
         except Exception:
             _log.warning("motor_read_failed", exc_info=True)
-            return default, False
+            self._motor_consecutive_failures += 1
+            if (
+                not self._motor_degraded
+                and self._motor_consecutive_failures >= self._motor_max_failures
+            ):
+                self._motor_degraded = True
+                self._motor_last_probe = time.monotonic()
+                _log.warning("motor_entered_degraded", failures=self._motor_consecutive_failures)
+            return self._cached_motor_state, False
 
     async def _safe_audio_read(self) -> tuple[NDArray[np.float32], bool]:
         """Attempt an audio chunk read with optional feature extraction.
