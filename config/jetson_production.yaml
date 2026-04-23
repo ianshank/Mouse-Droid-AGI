@@ -4,6 +4,12 @@ debug: false
 
 safety:
   min_valid_sensors: 1
+  # Battery monitoring is DISABLED on this rig because the Orin Nano
+  # developer kit has no onboard battery voltage sensor and the ESP32 does
+  # not report a reliable voltage over the existing serial protocol. Leaving
+  # these at 0.0 honours the schema's documented "0 disables" semantic.
+  # When a battery ADC is wired up, override these to the hardware
+  # thresholds (schema defaults are 10.5V warn / 9.5V critical).
   battery_critical_v: 0.0
   battery_warn_v: 0.0
   max_loop_time_ms: 200.0

@@ -639,6 +639,14 @@ def build_sensor_manager(
     from mousedroid.hardware.lidar.feature_extractor import LidarFeatureExtractor
     from mousedroid.sensing.manager import SensorManager
 
+    if vision is None:
+        # SensorManager requires a concrete VisionProtocol — raising here
+        # keeps the protocol contract explicit for callers that forgot to
+        # wire vision (rather than deferring to a late AttributeError on
+        # first capture_features call).
+        msg = "build_sensor_manager requires a non-None VisionProtocol (got None)"
+        raise ValueError(msg)
+
     audio_extractor = build_audio_feature_extractor(cfg)
     typed_extractor: AudioFeatureExtractor | None = (
         audio_extractor if isinstance(audio_extractor, AudioFeatureExtractor) else None

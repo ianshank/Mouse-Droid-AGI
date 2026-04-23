@@ -427,6 +427,9 @@ class TestRSSMDatasetContent:
         assert "__len__" in content
         assert "__getitem__" in content
 
-    def test_returns_five_tensors(self, content: str) -> None:
-        # Docstring and type annotation indicate 5-tuple
-        assert "Tensor, Tensor, Tensor, Tensor, Tensor" in content
+    def test_returns_sequence_batch(self, content: str) -> None:
+        # Dataset now returns a SequenceBatch dict keyed by modality name
+        # (vision, ultrasonic, motor_state, valid_mask, lidar, actions) so the
+        # sequence-of-Tensor tuple shape is replaced by a typed dict alias.
+        assert "SequenceBatch" in content
+        assert "dict[str, Tensor]" in content

@@ -287,7 +287,7 @@ def load_rssm_with_migration(
         )
 
     # Accept both full training checkpoints and bare state dicts.
-    old_sd: StateDict = raw.get("model_state_dict", raw)  # type: ignore[arg-type]
+    old_sd: StateDict = raw.get("model_state_dict", raw)
 
     new_sd, report = migrate_state_dict(old_sd, cfg)
     _log.info(

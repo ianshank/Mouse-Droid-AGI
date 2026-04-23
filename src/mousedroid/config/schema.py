@@ -1273,6 +1273,7 @@ class GCPConfig(BaseModel):
             base_delay_s=2.0,
             max_delay_s=60.0,
             exponential_base=2.0,
+            jitter_fraction=0.1,
         ),
         description="Retry config for cloud API calls",
     )
@@ -1386,9 +1387,9 @@ class ArmPerceptionConfig(BaseModel):
     dark_brightness_threshold: float = Field(
         80.0, ge=0, le=255, description="Brightness below which garment is classified dark"
     )
-    yolo_nms_iou_threshold: float = Field(
-        0.45, gt=0, le=1, description="IoU threshold for NMS post-processing"
-    )
+    # NOTE: yolo_nms_iou_threshold is defined once above (near the YOLO
+    # confidence threshold); a second duplicate definition here has been
+    # removed to keep a single authoritative field + default.
     default_focal_length: float = Field(500.0, gt=0, description="Default camera focal length (px)")
     default_principal_x: float = Field(320.0, gt=0, description="Default principal point X (px)")
     default_principal_y: float = Field(240.0, gt=0, description="Default principal point Y (px)")

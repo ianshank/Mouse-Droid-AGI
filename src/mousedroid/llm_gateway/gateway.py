@@ -53,6 +53,18 @@ class LLMGateway:
         """Whether the gateway has a model loaded and ready."""
         return self._model is not None
 
+    @property
+    def is_degraded(self) -> bool:
+        """Whether the gateway entered degraded mode during :meth:`start`.
+
+        Degraded mode is set when llama-cpp-python is not importable or when
+        the configured model file cannot be opened. In that state
+        :meth:`translate_mission` will still run but returns a neutral
+        :class:`GoalVector` rather than raising, allowing callers to check
+        this flag and surface a user-visible warning.
+        """
+        return self._degraded
+
     async def start(self) -> None:
         """Load model and warm up.
 
