@@ -23,6 +23,22 @@ FAILURES=0
 PASSES=0
 SKIPS=0
 RESULTS=()
+CONFIGS_CSV="${MOUSEDROID_JETSON_CONFIGS:-}"
+declare -a CONFIG_ARGS=()
+
+if [[ -n "${CONFIGS_CSV}" ]]; then
+    IFS=',' read -r -a RAW_CONFIG_PATHS <<< "${CONFIGS_CSV}"
+    for cfg in "${RAW_CONFIG_PATHS[@]}"; do
+        cfg="${cfg#"${cfg%%[![:space:]]*}"}"
+        cfg="${cfg%"${cfg##*[![:space:]]}"}"
+        if [[ -n "${cfg}" ]]; then
+            if [[ ${#CONFIG_ARGS[@]} -eq 0 ]]; then
+                CONFIG_ARGS=(--config)
+            fi
+            CONFIG_ARGS+=("${cfg}")
+        fi
+    done
+fi
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -139,22 +155,33 @@ test_system() {
 
 test_gpio() {
     log_section "GPIO Test"
-    log_step "Testing GPIO pins 23 (trigger) and 24 (echo)"
+    log_step "Testing configured ultrasonic GPIO pins"
 
     local gpio_script
     gpio_script=$(cat <<'PYEOF'
 import sys
+
+from mousedroid.validation.runtime import load_runtime_settings
+
 try:
     import Jetson.GPIO as GPIO
 except ImportError:
     print("SKIP:Jetson.GPIO not available")
     sys.exit(0)
 
+cfg = load_runtime_settings()
+if cfg.ultrasonic is None:
+    print("SKIP:Ultrasonic disabled in config")
+    sys.exit(0)
+
+trigger_pin = cfg.ultrasonic.trigger_pin
+echo_pin = cfg.ultrasonic.echo_pin
+
 try:
     GPIO.setmode(GPIO.BCM)
-    GPIO.setup(23, GPIO.OUT)
-    GPIO.setup(24, GPIO.IN)
-    print("PASS:GPIO pins 23/24 setup and teardown OK")
+    GPIO.setup(trigger_pin, GPIO.OUT)
+    GPIO.setup(echo_pin, GPIO.IN)
+    print(f"PASS:GPIO pins {trigger_pin}/{echo_pin} setup and teardown OK")
 finally:
     GPIO.cleanup()
 PYEOF
@@ -178,19 +205,16 @@ PYEOF
 
 test_serial() {
     log_section "Serial Port Test"
-    log_step "Testing /dev/ttyUSB0 at 1000000 baud"
-
-    if [[ ! -e "/dev/ttyUSB0" ]]; then
-        record_fail "serial port exists" "/dev/ttyUSB0 not found — ESP32 not connected?"
-        return
-    fi
-    record_pass "serial port exists"
+    log_step "Testing configured ESP32 serial port"
 
     local serial_script
     serial_script=$(cat <<'PYEOF'
 import json
 import sys
 import time
+from pathlib import Path
+
+from mousedroid.validation.runtime import load_runtime_settings
 
 try:
     import serial
@@ -198,8 +222,16 @@ except ImportError:
     print("SKIP:pyserial not installed")
     sys.exit(0)
 
+cfg = load_runtime_settings()
+serial_port = Path(cfg.esp32.serial_port)
+baud_rate = cfg.esp32.serial_baud
+
+if not serial_port.exists():
+    print(f"FAIL:Serial port {serial_port} not found")
+    sys.exit(0)
+
 try:
-    ser = serial.Serial("/dev/ttyUSB0", 1000000, timeout=2)
+    ser = serial.Serial(str(serial_port), baud_rate, timeout=2)
     time.sleep(0.1)  # Allow port to stabilise
     cmd = json.dumps({"T": 0}) + "\n"
     ser.write(cmd.encode())
@@ -209,7 +241,7 @@ try:
     if response:
         print(f"PASS:Got response: {response}")
     else:
-        print("WARN:No response from ESP32 (timeout) — device may not be running")
+        print("WARN:No response from ESP32 (timeout) â€” device may not be running")
 except serial.SerialException as exc:
     print(f"FAIL:Serial error: {exc}")
 except Exception as exc:
@@ -236,165 +268,19 @@ PYEOF
 }
 
 # ---------------------------------------------------------------------------
-# 4. Camera
+# 4. Camera / 5. Audio â€” delegate to scripts/verify_sensors.py
 # ---------------------------------------------------------------------------
 
 test_camera() {
-    log_section "Camera Test"
-    log_step "Capturing one frame and verifying shape"
-
-    local camera_script
-    camera_script=$(cat <<'PYEOF'
-import sys
-
-# Try picamera2 first
-try:
-    from picamera2 import Picamera2
-    cam = Picamera2()
-    config = cam.create_still_configuration(main={"size": (640, 480)})
-    cam.configure(config)
-    cam.start()
-    import time
-    time.sleep(0.5)  # Allow auto-exposure to settle
-    frame = cam.capture_array()
-    cam.stop()
-    cam.close()
-    h, w = frame.shape[0], frame.shape[1]
-    if h == 480 and w == 640:
-        print(f"PASS:picamera2 frame shape ({h}, {w}) OK")
-    else:
-        print(f"FAIL:Unexpected frame shape ({h}, {w}), expected (480, 640)")
-    sys.exit(0)
-except ImportError:
-    pass
-except Exception as exc:
-    print(f"FAIL:picamera2 error: {exc}")
-    sys.exit(0)
-
-# Try jetson_utils as fallback
-try:
-    import jetson_utils
-    cam = jetson_utils.videoSource("csi://0", argv=["--input-width=640", "--input-height=480"])
-    cuda_img = cam.Capture()
-    frame = jetson_utils.cudaToNumpy(cuda_img) if cuda_img is not None else None
-    if frame is not None:
-        h, w = frame.shape[0], frame.shape[1]
-        if h == 480 and w == 640:
-            print(f"PASS:jetson_utils frame shape ({h}, {w}) OK")
-        else:
-            print(f"FAIL:Unexpected frame shape ({h}, {w}), expected (480, 640)")
-    else:
-        print("FAIL:jetson_utils returned None frame")
-    sys.exit(0)
-except ImportError:
-    pass
-except Exception as exc:
-    print(f"FAIL:jetson_utils error: {exc}")
-    sys.exit(0)
-
-print("SKIP:No camera library available (picamera2 or jetson_utils)")
-PYEOF
-    )
-
-    local result
-    result="$("${PYTHON}" -c "${camera_script}" 2>&1)" || true
-
-    if echo "${result}" | grep -q "^PASS:"; then
-        local msg
-        msg="$(echo "${result}" | grep "^PASS:" | sed 's/^PASS://')"
-        record_pass "camera capture: ${msg}"
-    elif echo "${result}" | grep -q "^SKIP:"; then
-        record_skip "camera capture" "No camera library available"
-    else
-        local msg
-        msg="$(echo "${result}" | grep "^FAIL:" | sed 's/^FAIL://')"
-        record_fail "camera capture" "${msg}"
-    fi
+    _run_verify_sensor "camera" "Camera"
 }
-
-# ---------------------------------------------------------------------------
-# 5. Audio (USB microphone)
-# ---------------------------------------------------------------------------
 
 test_audio() {
-    log_section "Audio Test"
-    log_step "Detecting USB microphone and capturing one audio chunk"
-
-    local audio_script
-    audio_script=$(cat <<'PYEOF'
-import sys
-
-try:
-    import pyaudio
-except ImportError:
-    print("SKIP:pyaudio not installed")
-    sys.exit(0)
-
-pa = pyaudio.PyAudio()
-input_devices = [
-    pa.get_device_info_by_index(i)
-    for i in range(pa.get_device_count())
-    if pa.get_device_info_by_index(i).get("maxInputChannels", 0) > 0
-]
-pa.terminate()
-
-if not input_devices:
-    print("FAIL:No USB microphone detected — check connection")
-    sys.exit(0)
-
-names = ", ".join(d["name"] for d in input_devices)
-
-# Attempt one-chunk capture
-CHUNK = 512
-RATE = 16000
-import numpy as np
-
-pa = pyaudio.PyAudio()
-try:
-    stream = pa.open(
-        format=pyaudio.paFloat32,
-        channels=1,
-        rate=RATE,
-        input=True,
-        frames_per_buffer=CHUNK,
-    )
-    raw = stream.read(CHUNK, exception_on_overflow=False)
-    stream.stop_stream()
-    stream.close()
-except Exception as exc:
-    pa.terminate()
-    print(f"FAIL:Capture error: {exc}")
-    sys.exit(0)
-finally:
-    pa.terminate()
-
-arr = np.frombuffer(raw, dtype=np.float32)
-if arr.shape != (CHUNK,):
-    print(f"FAIL:Unexpected chunk shape {arr.shape}, expected ({CHUNK},)")
-    sys.exit(0)
-
-print(f"PASS:USB mic '{names}' — chunk shape={arr.shape}, dtype={arr.dtype}")
-PYEOF
-    )
-
-    local result
-    result="$("${PYTHON}" -c "${audio_script}" 2>&1)" || true
-
-    if echo "${result}" | grep -q "^PASS:"; then
-        local msg
-        msg="$(echo "${result}" | grep "^PASS:" | sed 's/^PASS://')"
-        record_pass "audio capture: ${msg}"
-    elif echo "${result}" | grep -q "^SKIP:"; then
-        record_skip "audio capture" "pyaudio not installed"
-    else
-        local msg
-        msg="$(echo "${result}" | grep "^FAIL:" | sed 's/^FAIL://')"
-        record_fail "audio capture" "${msg}"
-    fi
+    _run_verify_sensor "audio" "Audio"
 }
 
 # ---------------------------------------------------------------------------
-# 5a. LiDAR / 5b. Speaker — delegate to scripts/verify_sensors.py
+# 5a. LiDAR / 5b. Speaker â€” delegate to scripts/verify_sensors.py
 # ---------------------------------------------------------------------------
 
 _run_verify_sensor() {
@@ -406,7 +292,7 @@ _run_verify_sensor() {
 
     local output rc
     set +e
-    output="$("${PYTHON}" "${PROJECT_DIR}/scripts/verify_sensors.py" --sensor "${sensor}" 2>&1)"
+    output="$(MOUSEDROID_MOCK_HARDWARE=false MOUSEDROID_JETSON_CONFIGS="${CONFIGS_CSV}" "${PYTHON}" "${PROJECT_DIR}/scripts/verify_sensors.py" "${CONFIG_ARGS[@]}" --sensor "${sensor}" 2>&1)"
     rc=$?
     set -e
 
@@ -441,7 +327,7 @@ test_app() {
     log_section "Application Health Check"
     log_step "Running mousedroid.main --health-check"
 
-    if "${PYTHON}" -m mousedroid.main --health-check 2>&1; then
+    if "${PYTHON}" -m mousedroid.main "${CONFIG_ARGS[@]}" --health-check 2>&1; then
         record_pass "mousedroid --health-check"
     else
         record_fail "mousedroid --health-check" "Non-zero exit code"
@@ -469,7 +355,7 @@ test_pytest() {
     fi
 
     local pytest_output
-    if pytest_output="$("${pytest_bin}" -m hardware -v --timeout=30 "${test_dir}" 2>&1)"; then
+    if pytest_output="$(MOUSEDROID_JETSON_CONFIGS="${CONFIGS_CSV}" "${pytest_bin}" -m hardware -v "${test_dir}" 2>&1)"; then
         echo "${pytest_output}"
         record_pass "hardware pytest suite"
     else
@@ -499,8 +385,9 @@ import time
 from mousedroid.config.loader import load_settings
 from mousedroid.factory import build_orchestrator
 from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator
+from mousedroid.validation.runtime import resolve_runtime_config_paths
 
-cfg = load_settings()
+cfg = load_settings(*resolve_runtime_config_paths())
 
 orch = build_orchestrator(cfg)
 assert isinstance(orch, MouseDroidOrchestrator)

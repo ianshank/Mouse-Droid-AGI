@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import struct
+
 import numpy as np
 import pytest
 
+from mousedroid.constants import LIDAR_POINTS_PER_FRAME, LIDAR_VER_LEN_BYTE
 from mousedroid.config.schema import LidarConfig
 from mousedroid.hardware.lidar.ld19_driver import LD19LidarDriver
-from mousedroid.hardware.lidar.ld19_protocol import LD19Frame, LD19Point
+from mousedroid.hardware.lidar.ld19_protocol import LD19Frame, LD19FrameParser, LD19Point
 
 
 def _cfg(**overrides: object) -> LidarConfig:
@@ -50,6 +53,26 @@ def _make_frame(
         points=tuple(LD19Point(distance_mm=d, confidence=c) for d, c in points),
         timestamp_ms=1000,
     )
+
+
+def _build_frame_bytes(start_deg: float, end_deg: float) -> bytes:
+    """Build a valid LD19 frame byte payload for resync tests."""
+    start_raw = int(round(start_deg * 100.0))
+    end_raw = int(round(end_deg * 100.0))
+    buf = bytearray()
+    buf.append(0x54)
+    buf.append(LIDAR_VER_LEN_BYTE)
+    buf += struct.pack("<H", 500)
+    buf += struct.pack("<H", start_raw)
+
+    for _ in range(LIDAR_POINTS_PER_FRAME):
+        buf += struct.pack("<H", 5000)
+        buf.append(200)
+
+    buf += struct.pack("<H", end_raw)
+    buf += struct.pack("<H", 1234)
+    buf.append(LD19FrameParser.crc8(bytes(buf)))
+    return bytes(buf)
 
 
 # -- Sorts by angle ---------------------------------------------------------
@@ -173,3 +196,66 @@ def test_assemble_scan_multiple_frames() -> None:
     ]
     scan = LD19LidarDriver._assemble_scan(frames, cfg)
     assert scan.n_points == 12
+
+
+def test_read_frames_blocking_waits_for_coverage_after_wrap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A scan starting near 360° should not stop after the first small wrap."""
+    from mousedroid.hardware.lidar import ld19_driver
+
+    class FakeSerial:
+        def __init__(self, chunks: list[bytes]) -> None:
+            self._chunks = chunks
+
+        def read(self, _size: int) -> bytes:
+            if self._chunks:
+                return self._chunks.pop(0)
+            return b""
+
+    frame_angles = [(350.0 + 10.0 * i) % 360.0 for i in range(31)]
+    frames = [
+        _make_frame(angle, (angle + 4.0) % 360.0, [(5000, 200)] * 12)
+        for angle in frame_angles
+    ]
+    serialized_chunks = [(b"\x54\x2c" * (47 * 2)) for _ in range(8)]
+
+    driver = LD19LidarDriver(_cfg(min_scan_coverage_deg=270.0))
+    driver._serial = FakeSerial(serialized_chunks)
+
+    def _next_frame(_frame_bytes: bytes) -> LD19Frame | None:
+        if frames:
+            return frames.pop(0)
+        return None
+
+    monkeypatch.setattr(ld19_driver.LD19FrameParser, "parse_frame", staticmethod(_next_frame))
+
+    scan_frames = driver._read_frames_blocking()
+    scan = LD19LidarDriver._assemble_scan(scan_frames, driver._cfg)
+
+    assert len(scan_frames) >= 28
+    assert scan.n_points > 0
+    assert float(scan.angles_deg.max() - scan.angles_deg.min()) >= 270.0
+
+
+def test_read_frames_blocking_resyncs_after_false_header() -> None:
+    """A stray 0x54 byte should not cause the reader to discard a valid frame."""
+    class FakeSerial:
+        def __init__(self, chunks: list[bytes]) -> None:
+            self._chunks = chunks
+
+        def read(self, _size: int) -> bytes:
+            if self._chunks:
+                return self._chunks.pop(0)
+            return b""
+
+    valid_frame_a = _build_frame_bytes(0.0, 8.0)
+    valid_frame_b = _build_frame_bytes(10.0, 18.0)
+    noise = b"\x54\x00garbage-prefix"
+
+    driver = LD19LidarDriver(_cfg(min_scan_coverage_deg=5.0, scan_acquisition_timeout_s=0.5))
+    driver._serial = FakeSerial([noise + valid_frame_a + valid_frame_b])
+
+    scan_frames = driver._read_frames_blocking()
+
+    assert len(scan_frames) == 2
+    assert scan_frames[0].start_angle_deg == pytest.approx(0.0)
+    assert scan_frames[1].start_angle_deg == pytest.approx(10.0)

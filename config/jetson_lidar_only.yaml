@@ -21,11 +21,12 @@ model:
 # Disable the ultrasonic hardware driver entirely.
 ultrasonic: null
 
-# Activate LiDAR hardware (FHL-LD19 via /dev/ttyUSB1 at 230400 baud).
+# Activate LiDAR hardware via the stable host by-id symlink.
 lidar:
   enabled: true
-  serial_port: "/dev/ttyUSB1"
+  serial_port: "/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0"
   baud_rate: 230400
+  scan_acquisition_timeout_s: 1.0
   n_sectors: 36
   feature_dim: 36
 

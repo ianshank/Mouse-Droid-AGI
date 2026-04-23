@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
 """Standalone sensor verification script for MouseDroid Jetson hardware.
 
-Checks access to all input/output sensors:
-  - Video      : IMX500 camera via picamera2 (jetson_utils fallback)
-  - Audio      : USB microphone via pyaudio / UsbMicrophone driver
-  - Ultrasonic : HC-SR04 via Jetson.GPIO
-  - LiDAR      : LD19 via serial port
-  - Speaker    : Audio output via PiperTTS / ALSA
+This script validates the deployed runtime configuration by loading the same
+YAML overlays and factory-backed drivers used by the application.
 
 Usage:
-    python scripts/verify_sensors.py [--sensor {camera,audio,ultrasonic,lidar,speaker,all}]
-    python scripts/verify_sensors.py --json
+        python scripts/verify_sensors.py [--config config/jetson_production.yaml ...]
+        python scripts/verify_sensors.py --sensor camera --config config/jetson_production.yaml
+        python scripts/verify_sensors.py --json
 
-Exit code is non-zero if any sensor reports FAIL.
+Exit code is non-zero if any requested sensor reports FAIL.
 """
 
 from __future__ import annotations
@@ -22,6 +19,8 @@ import asyncio
 import sys
 import time
 from pathlib import Path
+
+import numpy as np
 
 # Make the src tree importable when run from the project root.
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -74,432 +73,220 @@ def _section(title: str) -> None:
     print(f"\n{bar}\n  {title}\n{bar}")
 
 
-# ---------------------------------------------------------------------------
-# 1. Video — IMX500 / picamera2
-# ---------------------------------------------------------------------------
+from mousedroid.config.schema import Settings
+from mousedroid.factory import build_distance_sensor
+from mousedroid.validation.runtime import (
+    capture_camera_frame,
+    capture_microphone_chunk,
+    lidar_scan_coverage_deg,
+    load_runtime_settings,
+    play_speaker_tone,
+    read_lidar_scan,
+    resolve_runtime_config_paths,
+)
 
 
-def check_camera() -> None:
+def check_camera(cfg: Settings) -> None:
+    """Verify the configured camera can capture one frame."""
     _section("Video (Camera)")
 
-    # -- picamera2 import
-    try:
-        from picamera2 import Picamera2
-    except ImportError:
-        _skip("picamera2 import", "library not installed — trying jetson_utils fallback")
-        _check_camera_jetson_utils()
-        return
-
-    _ok("picamera2 import")
-
-    # -- open and capture
     t0 = time.monotonic()
     try:
-        cam = Picamera2()
-        cfg = cam.create_still_configuration(main={"size": (640, 480)})
-        cam.configure(cfg)
-        cam.start()
-        time.sleep(0.5)  # let AE/AWB settle
-        frame = cam.capture_array()
-        cam.stop()
-        cam.close()
+        frame, backend_name = asyncio.run(capture_camera_frame(cfg))
     except Exception as exc:
-        _fail("camera open/capture", str(exc))
+        _fail("camera capture", str(exc), sensor="camera")
         return
 
     elapsed = time.monotonic() - t0
-    h, w = frame.shape[0], frame.shape[1]
-    if h != 480 or w != 640:
-        _fail("frame shape", f"expected (480, 640), got ({h}, {w})")
+    height, width = int(frame.shape[0]), int(frame.shape[1])
+    expected_height = cfg.camera.resolution_height
+    expected_width = cfg.camera.resolution_width
+
+    if height != expected_height or width != expected_width:
+        _fail(
+            "frame shape",
+            f"expected ({expected_height}, {expected_width}), got ({height}, {width})",
+            sensor="camera",
+        )
         return
 
-    _ok("frame capture", f"{w}x{h} in {elapsed:.2f}s, dtype={frame.dtype}")
+    _ok(
+        "frame capture",
+        f"{width}x{height} via {backend_name} in {elapsed:.2f}s, dtype={frame.dtype}",
+        sensor="camera",
+    )
 
 
-def _check_camera_jetson_utils() -> None:
-    try:
-        import jetson_utils
-    except ImportError:
-        _fail("camera access", "neither picamera2 nor jetson_utils is installed")
-        return
-
-    _ok("jetson_utils import")
-    t0 = time.monotonic()
-    try:
-        cam = jetson_utils.videoSource("csi://0", argv=["--input-width=640", "--input-height=480"])
-        cuda_img = cam.Capture()
-        frame = jetson_utils.cudaToNumpy(cuda_img) if cuda_img is not None else None
-    except Exception as exc:
-        _fail("jetson_utils camera capture", str(exc))
-        return
-
-    if frame is None:
-        _fail("jetson_utils frame", "Capture() returned None")
-        return
-
-    elapsed = time.monotonic() - t0
-    h, w = frame.shape[0], frame.shape[1]
-    if h != 480 or w != 640:
-        _fail("frame shape", f"expected (480, 640), got ({h}, {w})")
-        return
-
-    _ok("frame capture (jetson_utils)", f"{w}x{h} in {elapsed:.2f}s")
-
-
-# ---------------------------------------------------------------------------
-# 2. Audio — USB microphone / pyaudio
-# ---------------------------------------------------------------------------
-
-
-def check_audio() -> None:
+def check_audio(cfg: Settings) -> None:
+    """Verify the configured microphone can capture one chunk."""
     _section("Audio (USB Microphone)")
 
-    # -- pyaudio import
+    if cfg.microphone is None or not cfg.microphone.enabled:
+        _skip("USB microphone", "disabled in config", sensor="audio")
+        return
+
     try:
         import pyaudio
     except ImportError:
-        _fail("pyaudio import", "library not installed")
+        _fail("pyaudio import", "library not installed", sensor="audio")
         return
 
-    _ok("pyaudio import")
-
-    # -- enumerate input devices
     pa = pyaudio.PyAudio()
     input_devices: list[str] = []
-    for i in range(pa.get_device_count()):
-        info = pa.get_device_info_by_index(i)
-        if info.get("maxInputChannels", 0) > 0:
-            input_devices.append(f"[{i}] {info['name']}")
-    pa.terminate()
+    try:
+        for index in range(pa.get_device_count()):
+            info = pa.get_device_info_by_index(index)
+            if int(info.get("maxInputChannels", 0)) > 0:
+                input_devices.append(f"[{index}] {info['name']}")
+    finally:
+        pa.terminate()
 
     if not input_devices:
-        _fail("USB mic detected", "no input devices found — microphone not connected?")
+        _fail("USB mic detected", "no input devices found", sensor="audio")
         return
 
-    _ok("input device(s) found", "; ".join(input_devices))
-
-    # -- driver-level capture (uses UsbMicrophone if available, else raw pyaudio)
-    asyncio.run(_async_capture_check())
-
-
-async def _async_capture_check() -> None:
-    try:
-        from mousedroid.config.schema import MicrophoneConfig
-        from mousedroid.hardware.audio.usb_microphone import UsbMicrophone
-    except ImportError:
-        _skip(
-            "UsbMicrophone driver",
-            "mousedroid package not importable — falling back to raw capture",
-        )
-        _raw_pyaudio_capture()
-        return
-
-    cfg = MicrophoneConfig(chunk_size=512, sample_rate=16000, channels=1)
-    mic = UsbMicrophone(cfg)
     t0 = time.monotonic()
     try:
-        await mic.start()
-        chunk = await mic.read_chunk()
-        await mic.stop()
+        chunk = asyncio.run(capture_microphone_chunk(cfg))
     except Exception as exc:
-        # Device not found or unavailable — fall back to raw pyaudio so dev
-        # environments without the target USB mic still exercise the path.
-        _skip("UsbMicrophone driver", f"driver unavailable: {exc} — trying raw capture")
-        _raw_pyaudio_capture()
+        _fail("UsbMicrophone chunk capture", str(exc), sensor="audio")
+        return
+
+    if chunk is None:
+        _skip("UsbMicrophone chunk capture", "disabled in config", sensor="audio")
         return
 
     elapsed = time.monotonic() - t0
-    import numpy as np
-
+    expected_shape = (cfg.microphone.chunk_size * cfg.microphone.channels,)
     if chunk.dtype != np.float32:
-        _fail("chunk dtype", f"expected float32, got {chunk.dtype}")
+        _fail("chunk dtype", f"expected float32, got {chunk.dtype}", sensor="audio")
         return
-    if chunk.shape != (512,):
-        _fail("chunk shape", f"expected (512,), got {chunk.shape}")
-        return
-
-    _ok("UsbMicrophone chunk capture", f"shape={chunk.shape}, dtype={chunk.dtype}, {elapsed:.2f}s")
-
-
-def _raw_pyaudio_capture() -> None:
-    import numpy as np
-    import pyaudio
-
-    chunk_size = 512
-    sample_rate = 16000
-
-    pa = pyaudio.PyAudio()
-
-    # Collect all usable input device indices.
-    input_indices = [
-        i
-        for i in range(pa.get_device_count())
-        if pa.get_device_info_by_index(i).get("maxInputChannels", 0) > 0
-    ]
-
-    if not input_indices:
-        pa.terminate()
-        _fail("raw pyaudio capture", "no input device found")
+    if chunk.shape != expected_shape:
+        _fail(
+            "chunk shape",
+            f"expected {expected_shape}, got {chunk.shape}",
+            sensor="audio",
+        )
         return
 
-    last_exc: Exception | None = None
-    raw: bytes | None = None
-    used_index: int | None = None
-    used_fmt: str = "float32"
-    t0 = time.monotonic()
-
-    # Try each device with paFloat32, then paInt16 fallback.
-    for idx in input_indices:
-        for fmt, fmt_name in (
-            (pyaudio.paFloat32, "float32"),
-            (pyaudio.paInt16, "int16"),
-        ):
-            try:
-                t0 = time.monotonic()
-                stream = pa.open(
-                    format=fmt,
-                    channels=1,
-                    rate=sample_rate,
-                    input=True,
-                    input_device_index=idx,
-                    frames_per_buffer=chunk_size,
-                )
-                raw = stream.read(chunk_size, exception_on_overflow=False)
-                stream.stop_stream()
-                stream.close()
-                used_index = idx
-                used_fmt = fmt_name
-                break
-            except Exception as exc:
-                last_exc = exc
-        if raw is not None:
-            break
-
-    # Save the device name before terminating PyAudio.
-    device_name = pa.get_device_info_by_index(used_index)["name"] if used_index is not None else "?"
-    pa.terminate()
-
-    if raw is None:
-        _fail("raw pyaudio capture", f"all input devices failed; last error: {last_exc}")
-        return
-
-    elapsed = time.monotonic() - t0
-    arr = np.frombuffer(raw, dtype=np.float32)
-    if arr.shape != (chunk_size,):
-        _fail("raw capture shape", f"expected ({chunk_size},), got {arr.shape}")
-        return
-
-    detail = (
-        f"device=[{used_index}]{device_name}, " f"fmt={used_fmt}, shape={arr.shape}, {elapsed:.2f}s"
+    _ok(
+        "UsbMicrophone chunk capture",
+        f"devices={'; '.join(input_devices)}, shape={chunk.shape}, {elapsed:.2f}s",
+        sensor="audio",
     )
-    _ok("raw pyaudio capture", detail)
 
 
-# ---------------------------------------------------------------------------
-# 3. Ultrasonic — HC-SR04 / Jetson.GPIO
-# ---------------------------------------------------------------------------
-
-
-def check_ultrasonic() -> None:
+def check_ultrasonic(cfg: Settings) -> None:
+    """Verify the configured ultrasonic sensor can read a distance."""
     _section("Ultrasonic (HC-SR04)")
 
-    # -- GPIO import
+    if cfg.ultrasonic is None:
+        _skip("Ultrasonic sensor", "disabled in config", sensor="ultrasonic")
+        return
+
     try:
         import Jetson.GPIO  # noqa: F401
     except ImportError:
-        _fail("Jetson.GPIO import", "library not installed — not running on Jetson?")
+        _fail("Jetson.GPIO import", "library not installed", sensor="ultrasonic")
         return
 
-    _ok("Jetson.GPIO import")
-
-    # -- driver-level distance read
-    asyncio.run(_async_ultrasonic_check())
-
-
-async def _async_ultrasonic_check() -> None:
-    try:
-        from mousedroid.config.schema import UltrasonicConfig
-        from mousedroid.hardware.sensors.ultrasonic import HcSr04
-    except ImportError:
-        _skip("HcSr04 driver", "mousedroid package not importable — falling back to raw GPIO")
-        _raw_gpio_distance_check()
-        return
-
-    cfg = UltrasonicConfig(trigger_pin=23, echo_pin=24)
-    sensor = HcSr04(cfg)
+    sensor = build_distance_sensor(cfg)
     t0 = time.monotonic()
     try:
-        await sensor.start()
-        distance_m = await sensor.read_distance_m()
-        await sensor.stop()
+        distance_m = asyncio.run(sensor.read_distance_m())
     except Exception as exc:
-        _fail("HcSr04 distance read", str(exc))
+        _fail("HcSr04 distance read", str(exc), sensor="ultrasonic")
         return
 
     elapsed = time.monotonic() - t0
-
-    if not isinstance(distance_m, float):
-        _fail("distance type", f"expected float, got {type(distance_m).__name__}")
+    if not (sensor.min_range_m <= distance_m <= sensor.max_range_m):
+        _fail(
+            "distance range",
+            f"{distance_m:.3f} m outside [{sensor.min_range_m}, {sensor.max_range_m}] m",
+            sensor="ultrasonic",
+        )
         return
-    if not (0.0 <= distance_m <= cfg.max_range_m):
-        _fail("distance range", f"{distance_m:.3f} m outside [0, {cfg.max_range_m}] m")
-        return
 
-    _ok("HcSr04 distance read", f"{distance_m:.3f} m in {elapsed:.2f}s")
-
-
-def _raw_gpio_distance_check() -> None:
-    """Low-level GPIO pulse measurement without the driver layer."""
-    import Jetson.GPIO as GPIO
-
-    trigger_pin = 23
-    echo_pin = 24
-    max_range_m = 4.0
-    speed_of_sound = 343.0  # m/s at 20 °C
-
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setup(trigger_pin, GPIO.OUT)
-    GPIO.setup(echo_pin, GPIO.IN)
-    GPIO.output(trigger_pin, False)
-    time.sleep(0.05)
-
-    try:
-        # Send 10 µs trigger pulse
-        GPIO.output(trigger_pin, True)
-        time.sleep(0.00001)
-        GPIO.output(trigger_pin, False)
-
-        t0 = time.monotonic()
-        deadline = t0 + 0.1
-        pulse_start = pulse_end = t0
-
-        # Wait for echo to go HIGH
-        while GPIO.input(echo_pin) == 0:
-            pulse_start = time.monotonic()
-            if pulse_start > deadline:
-                _fail("raw GPIO echo start", "timeout waiting for echo HIGH")
-                return
-
-        # Wait for echo to go LOW
-        while GPIO.input(echo_pin) == 1:
-            pulse_end = time.monotonic()
-            if pulse_end > deadline:
-                _fail("raw GPIO echo end", "timeout waiting for echo LOW")
-                return
-
-        pulse_duration = pulse_end - pulse_start
-        distance_m = (pulse_duration * speed_of_sound) / 2.0
-
-        if not (0.0 <= distance_m <= max_range_m):
-            _fail("raw GPIO distance", f"{distance_m:.3f} m outside [0, {max_range_m}] m")
-            return
-
-        _ok("raw GPIO distance pulse", f"{distance_m:.3f} m")
-
-    finally:
-        GPIO.cleanup()
+    _ok(
+        "HcSr04 distance read",
+        f"{distance_m:.3f} m in {elapsed:.2f}s",
+        sensor="ultrasonic",
+    )
 
 
-# ---------------------------------------------------------------------------
-# 4. LiDAR — LD19 / serial
-# ---------------------------------------------------------------------------
-
-
-def check_lidar() -> None:
+def check_lidar(cfg: Settings) -> None:
+    """Verify the configured LiDAR can produce one scan."""
     _section("LiDAR (LD19)")
 
-    try:
-        from mousedroid.config.schema import Settings
-    except ImportError:
-        _fail("mousedroid import", "package not importable", sensor="lidar")
-        return
-
-    cfg = Settings(mock_hardware=False)
-    if cfg.lidar is None:
-        _skip("LiDAR config", "lidar section not present in config", sensor="lidar")
-        return
-
-    asyncio.run(_async_lidar_check(cfg))
-
-
-async def _async_lidar_check(cfg: object) -> None:
-    try:
-        from mousedroid.factory import build_lidar
-    except ImportError:
-        _fail("build_lidar import", "factory not importable", sensor="lidar")
-        return
-
-    lidar = build_lidar(cfg)
-    if lidar is None:
-        _skip("LiDAR driver", "build_lidar returned None", sensor="lidar")
+    if cfg.lidar is None or not cfg.lidar.enabled:
+        _skip("LiDAR sensor", "disabled in config", sensor="lidar")
         return
 
     t0 = time.monotonic()
     try:
-        await lidar.start()
-        scan = await lidar.read_scan()
-        await lidar.stop()
+        scan = asyncio.run(read_lidar_scan(cfg))
     except Exception as exc:
         _fail("LiDAR scan read", str(exc), sensor="lidar")
         return
 
-    elapsed = time.monotonic() - t0
-    n_points = len(scan)
-
-    if n_points < 10:
-        _fail("LiDAR scan points", f"only {n_points} points (expected 100+)", sensor="lidar")
+    if scan is None:
+        _skip("LiDAR driver", "build_lidar returned None", sensor="lidar")
         return
 
-    _ok("LiDAR scan read", f"{n_points} points in {elapsed:.2f}s", sensor="lidar")
+    elapsed = time.monotonic() - t0
+    if scan.n_points < 10:
+        _fail(
+            "LiDAR scan points",
+            f"only {scan.n_points} points (expected 10+)",
+            sensor="lidar",
+        )
+        return
+
+    coverage_deg = lidar_scan_coverage_deg(scan)
+    min_coverage_deg = cfg.lidar.min_scan_coverage_deg
+    if coverage_deg < min_coverage_deg:
+        _fail(
+            "LiDAR scan coverage",
+            f"{coverage_deg:.1f}\N{DEGREE SIGN} below {min_coverage_deg:.1f}\N{DEGREE SIGN} threshold",
+            sensor="lidar",
+        )
+        return
+
+    _ok(
+        "LiDAR scan read",
+        (
+            f"{scan.n_points} points on {cfg.lidar.serial_port} in {elapsed:.2f}s, "
+            f"coverage={coverage_deg:.1f}\N{DEGREE SIGN}"
+        ),
+        sensor="lidar",
+    )
 
 
-# ---------------------------------------------------------------------------
-# 5. Speaker — audio output
-# ---------------------------------------------------------------------------
-
-
-def check_speaker() -> None:
+def check_speaker(cfg: Settings) -> None:
+    """Verify the configured speaker can play a short tone."""
     _section("Speaker (Audio Output)")
 
-    try:
-        import numpy as np
-
-        from mousedroid.config.schema import Settings
-    except ImportError:
-        _fail("mousedroid import", "package not importable", sensor="speaker")
+    if cfg.speaker is None or not cfg.speaker.enabled:
+        _skip("Speaker", "disabled in config", sensor="speaker")
         return
-
-    cfg = Settings(mock_hardware=False)
-    asyncio.run(_async_speaker_check(cfg, np))
-
-
-async def _async_speaker_check(cfg: object, np: object) -> None:
-    try:
-        from mousedroid.factory import build_speaker
-    except ImportError:
-        _fail("build_speaker import", "factory not importable", sensor="speaker")
-        return
-
-    speaker = build_speaker(cfg)
-    if speaker is None:
-        _skip("Speaker driver", "build_speaker returned None", sensor="speaker")
-        return
-
-    # Generate a short 440 Hz test tone (0.3s)
-    sample_rate = getattr(getattr(cfg, "voice", None), "sample_rate", 22050)
-    duration_s = 0.3
-    t = np.linspace(0, duration_s, int(sample_rate * duration_s), dtype=np.float32)
-    tone = (0.2 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
 
     t0 = time.monotonic()
     try:
-        await speaker.play(tone)
+        written_samples = asyncio.run(play_speaker_tone(cfg))
     except Exception as exc:
         _fail("Speaker play", str(exc), sensor="speaker")
         return
 
+    if written_samples is None:
+        _skip("Speaker driver", "disabled in config", sensor="speaker")
+        return
+
     elapsed = time.monotonic() - t0
-    _ok("Speaker play", f"440 Hz tone, {duration_s}s in {elapsed:.2f}s", sensor="speaker")
+    _ok(
+        "Speaker play",
+        f"{written_samples} samples at {cfg.speaker.sample_rate} Hz in {elapsed:.2f}s",
+        sensor="speaker",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -520,6 +307,13 @@ def main() -> None:
         "  python scripts/verify_sensors.py --json\n",
     )
     ap.add_argument(
+        "--config",
+        type=Path,
+        nargs="*",
+        default=[],
+        help="YAML config overlay files (defaults to MOUSEDROID_CONFIG* env vars)",
+    )
+    ap.add_argument(
         "--sensor",
         choices=["all", *_ALL_SENSORS],
         default="all",
@@ -532,10 +326,19 @@ def main() -> None:
     )
     args = ap.parse_args()
 
+    cfg_paths = resolve_runtime_config_paths(args.config)
+    cfg = load_runtime_settings(args.config)
+
     if not args.json:
         print("\nMouseDroid Sensor Verification")
         print(f"Running on Python {sys.version.split()[0]}")
         print(f"Project root: {_PROJECT_ROOT}")
+        if cfg_paths:
+            print("Config overlays:")
+            for cfg_path in cfg_paths:
+                print(f"  - {cfg_path}")
+        else:
+            print("Config overlays: default.yaml only")
 
     sensor_checks: dict[str, object] = {
         "camera": check_camera,
@@ -547,22 +350,25 @@ def main() -> None:
 
     for name, check_fn in sensor_checks.items():
         if args.sensor in ("all", name):
-            check_fn()
+            check_fn(cfg)
 
     # Summary
+    selected_sensors = [sensor for sensor in _ALL_SENSORS if args.sensor in ("all", sensor)]
     if args.json:
         import json
 
         result = {
             "sensors": _RESULTS,
             "failures": _FAILURES,
-            "passed": len(_RESULTS) - len(_FAILURES),
-            "total": len(_RESULTS),
+            "passed": sum(
+                1 for sensor in selected_sensors if _RESULTS.get(sensor, {}).get("status") == "pass"
+            ),
+            "total": len(selected_sensors),
         }
         print(json.dumps(result, indent=2))
     else:
         _section("Summary")
-        total = sum(1 for s in _ALL_SENSORS if args.sensor in ("all", s))
+        total = len(selected_sensors)
         failed = len(_FAILURES)
         passed = total - failed
 

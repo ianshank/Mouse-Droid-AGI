@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from mousedroid.validation.runtime import capture_camera_frame
+
 pytestmark = pytest.mark.hardware
 
 
@@ -44,14 +46,20 @@ def test_tensorrt_importable() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_gpio_pins_accessible() -> None:
-    """Verify GPIO pins 23/24 can be set up and cleaned up."""
+def test_gpio_pins_accessible(jetson_settings) -> None:
+    """Verify configured GPIO pins can be set up and cleaned up."""
     import Jetson.GPIO as GPIO
+
+    if jetson_settings.ultrasonic is None:
+        pytest.skip("ultrasonic disabled in config")
+
+    trigger_pin = jetson_settings.ultrasonic.trigger_pin
+    echo_pin = jetson_settings.ultrasonic.echo_pin
 
     GPIO.setmode(GPIO.BCM)
     try:
-        GPIO.setup(23, GPIO.OUT)
-        GPIO.setup(24, GPIO.IN)
+        GPIO.setup(trigger_pin, GPIO.OUT)
+        GPIO.setup(echo_pin, GPIO.IN)
     finally:
         GPIO.cleanup()
 
@@ -61,9 +69,10 @@ def test_gpio_pins_accessible() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_serial_port_exists() -> None:
+def test_serial_port_exists(jetson_settings) -> None:
     """Verify the ESP32 serial device node exists."""
-    assert Path("/dev/ttyUSB0").exists(), "ESP32 serial port /dev/ttyUSB0 not found"
+    serial_port = Path(jetson_settings.esp32.serial_port)
+    assert serial_port.exists(), f"ESP32 serial port {serial_port} not found"
 
 
 # ---------------------------------------------------------------------------
@@ -71,49 +80,20 @@ def test_serial_port_exists() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_camera_capture() -> None:
-    """Capture one frame and verify expected resolution (480x640)."""
-    frame = None
-
-    # Try picamera2 first
-    try:
-        from picamera2 import Picamera2
-
-        cam = Picamera2()
-        config = cam.create_still_configuration(
-            main={"size": (640, 480)},
-        )
-        cam.configure(config)
-        cam.start()
-        try:
-            import time
-
-            time.sleep(0.5)  # allow auto-exposure
-            frame = cam.capture_array()
-        finally:
-            cam.stop()
-            cam.close()
-    except ImportError:
-        pass
-
-    # Fallback: jetson_utils
-    if frame is None:
-        try:
-            import jetson_utils
-
-            cam = jetson_utils.videoSource(
-                "csi://0",
-                argv=["--input-width=640", "--input-height=480"],
-            )
-            cuda_img = cam.Capture()
-            frame = jetson_utils.cudaToNumpy(cuda_img)
-        except ImportError:
-            pytest.skip("No camera library available (picamera2 or jetson_utils)")
+def test_camera_capture(jetson_settings) -> None:
+    """Capture one frame and verify the configured resolution."""
+    frame, backend_name = asyncio.run(capture_camera_frame(jetson_settings))
 
     assert frame is not None, "Camera returned None frame"
     height, width = frame.shape[0], frame.shape[1]
-    assert height == 480, f"Expected height 480, got {height}"
-    assert width == 640, f"Expected width 640, got {width}"
+    assert height == jetson_settings.camera.resolution_height, (
+        f"Expected height {jetson_settings.camera.resolution_height}, got {height} "
+        f"via {backend_name}"
+    )
+    assert width == jetson_settings.camera.resolution_width, (
+        f"Expected width {jetson_settings.camera.resolution_width}, got {width} "
+        f"via {backend_name}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -121,14 +101,14 @@ def test_camera_capture() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_health_monitor() -> None:
+def test_health_monitor(jetson_settings) -> None:
     """Instantiate HealthMonitor and run check_health()."""
-    from mousedroid.config.schema import HealthConfig, JetsonConfig
     from mousedroid.health.monitor import HealthMonitor
 
-    health_cfg = HealthConfig()
-    jetson_cfg = JetsonConfig()
-    monitor = HealthMonitor(health_cfg=health_cfg, jetson_cfg=jetson_cfg)
+    monitor = HealthMonitor(
+        health_cfg=jetson_settings.health,
+        jetson_cfg=jetson_settings.jetson,
+    )
 
     result = asyncio.run(monitor.check_health())
     assert isinstance(result, dict)
@@ -142,17 +122,19 @@ def test_health_monitor() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_ultrasonic_read() -> None:
+def test_ultrasonic_read(jetson_settings) -> None:
     """Instantiate HcSr04 and attempt a distance read.
 
     On a bench without the physical sensor wired, the read may time out
     and return ``max_range_m``. We verify the driver initialises and
     returns a float within the configured range.
     """
-    from mousedroid.config.schema import UltrasonicConfig
     from mousedroid.hardware.sensors.ultrasonic import HcSr04
 
-    cfg = UltrasonicConfig(trigger_pin=23, echo_pin=24)
+    cfg = jetson_settings.ultrasonic
+    if cfg is None:
+        pytest.skip("ultrasonic disabled in config")
+
     sensor = HcSr04(cfg)
 
     try:
@@ -169,13 +151,11 @@ def test_ultrasonic_read() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_esp32_connect() -> None:
+def test_esp32_connect(jetson_settings) -> None:
     """Connect to ESP32 over serial, send emergency stop, and disconnect."""
     from mousedroid.comms.serial_driver import SerialESP32Driver
-    from mousedroid.config.schema import ESP32Config
 
-    cfg = ESP32Config()
-    driver = SerialESP32Driver(cfg)
+    driver = SerialESP32Driver(jetson_settings.esp32)
 
     async def _run() -> None:
         await driver.connect()

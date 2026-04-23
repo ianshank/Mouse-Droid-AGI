@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-# MouseDroidAGI — Pre-Flight Validation
+# MouseDroidAGI - Pre-Flight Validation
 # =============================================================================
 # Checks that all required hardware, configs, and models are present before
 # starting the MouseDroid container or service.
 #
 # Exit codes:
-#   0 — all checks passed
-#   1 — one or more critical checks failed
+#   0 - all checks passed
+#   1 - one or more critical checks failed
 #
 # Usage:
 #   bash scripts/preflight_check.sh
@@ -57,9 +57,9 @@ PASS=0
 FAIL=0
 WARN=0
 
-ok()   { echo "  ✓ $1"; ((PASS++)); }
-fail() { echo "  ✗ $1" >&2; ((FAIL++)); }
-warn() { echo "  ⚠ $1"; ((WARN++)); }
+ok()   { echo "  [OK] $1"; PASS=$((PASS + 1)); }
+fail() { echo "  [FAIL] $1" >&2; FAIL=$((FAIL + 1)); }
+warn() { echo "  [WARN] $1"; WARN=$((WARN + 1)); }
 
 check_device() {
     local dev="$1"
@@ -107,16 +107,16 @@ if [ -f "$CONFIG_FILE" ]; then
 
     if command -v "$PY" >/dev/null 2>&1; then
         if "$PY" -c "import yaml" >/dev/null 2>&1; then
-            if "$PY" -c "import yaml, sys; yaml.safe_load(open(sys.argv[1]))" -- "$CONFIG_FILE" 2>/dev/null; then
+            if "$PY" -c "import sys, yaml; yaml.safe_load(open(sys.argv[1], encoding='utf-8'))" "$CONFIG_FILE" 2>/dev/null; then
                 ok "Config YAML valid ($CONFIG_FILE)"
             else
                 fail "Config YAML parse error: $CONFIG_FILE"
             fi
         else
-            warn "PyYAML not installed — skipping YAML syntax check for $CONFIG_FILE"
+            warn "PyYAML not installed - skipping YAML syntax check for $CONFIG_FILE"
         fi
     else
-        ok "Config file exists ($CONFIG_FILE) — YAML validation skipped (no python3)"
+        ok "Config file exists ($CONFIG_FILE) - YAML validation skipped (no python3)"
     fi
 else
     fail "Config file missing: $CONFIG_FILE"
@@ -148,7 +148,7 @@ else
     if compgen -G $LLM_PATTERN >/dev/null 2>&1; then
         ok "LLM model found in $MODEL_DIR"
     else
-        warn "LLM model not found ($LLM_PATTERN) — run scripts/download_model.sh"
+        warn "LLM model not found ($LLM_PATTERN) - run scripts/download_model.sh"
     fi
 fi
 
@@ -173,7 +173,7 @@ SWAP_TOTAL_MB=$((SWAP_TOTAL_KB / 1024))
 if [ "$SWAP_TOTAL_MB" -ge 4000 ]; then
     ok "Swap: ${SWAP_TOTAL_MB}MB"
 else
-    warn "Swap only ${SWAP_TOTAL_MB}MB — recommend 4GB+ for Jetson"
+    warn "Swap only ${SWAP_TOTAL_MB}MB - recommend 4GB+ for Jetson"
 fi
 
 # ---------------------------------------------------------------------------
@@ -187,7 +187,7 @@ if command -v docker &>/dev/null; then
     if docker info 2>/dev/null | grep -q "nvidia"; then
         ok "NVIDIA runtime detected"
     else
-        warn "NVIDIA runtime not detected in 'docker info' — GPU passthrough may fail"
+        warn "NVIDIA runtime not detected in 'docker info' - GPU passthrough may fail"
     fi
 else
     warn "Docker not found (not required for bare-metal install)"
@@ -211,14 +211,14 @@ echo "  Passed: $PASS | Failed: $FAIL | Warnings: $WARN"
 
 if [ "$FAIL" -gt 0 ]; then
     echo ""
-    echo "❌ Pre-flight FAILED — $FAIL critical check(s) did not pass."
+    echo "[FAIL] Pre-flight FAILED - $FAIL critical check(s) did not pass."
     echo "   Fix the issues above before starting MouseDroid."
     exit 1
 else
     echo ""
-    echo "✅ Pre-flight PASSED — all critical checks OK."
+    echo "[PASS] Pre-flight PASSED - all critical checks OK."
     if [ "$WARN" -gt 0 ]; then
-        echo "   ($WARN warning(s) — review above for optional improvements)"
+        echo "   ($WARN warning(s) - review above for optional improvements)"
     fi
     exit 0
 fi

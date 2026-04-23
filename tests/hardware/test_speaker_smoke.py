@@ -13,15 +13,16 @@ def test_pyaudio_available() -> None:
 
 
 @pytest.mark.hardware
-def test_usb_speaker_detected() -> None:
+def test_usb_speaker_detected(jetson_settings) -> None:
     try:
         import pyaudio
     except ImportError:
         pytest.skip("pyaudio not installed")
 
-    from mousedroid.config.schema import SpeakerConfig
+    cfg = jetson_settings.speaker
+    if cfg is None or not cfg.enabled:
+        pytest.skip("speaker disabled in config")
 
-    cfg = SpeakerConfig()
     needle = cfg.device_name.lower()
 
     pa = pyaudio.PyAudio()
@@ -42,16 +43,18 @@ def test_usb_speaker_detected() -> None:
 
 
 @pytest.mark.hardware
-async def test_usb_speaker_write_chunk() -> None:
+async def test_usb_speaker_write_chunk(jetson_settings) -> None:
     try:
         import pyaudio  # noqa: F401
     except ImportError:
         pytest.skip("pyaudio not installed")
 
-    from mousedroid.config.schema import SpeakerConfig
     from mousedroid.hardware.audio.usb_speaker import UsbSpeaker
 
-    cfg = SpeakerConfig()
+    cfg = jetson_settings.speaker
+    if cfg is None or not cfg.enabled:
+        pytest.skip("speaker disabled in config")
+
     speaker = UsbSpeaker(cfg)
 
     try:

@@ -19,6 +19,10 @@ retry:
   max_attempts: 1
   base_delay_s: 0.05
 
+esp32:
+  serial_port: "/dev/serial/by-id/usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_cc0ff02aab6cef119a38a4adc169b110-if00-port0"
+  serial_baud: 1000000
+
 jetson:
   tensorrt_enabled: true
   gpu_memory_fraction: 0.7
@@ -58,8 +62,9 @@ speaker:
 
 lidar:
   enabled: true
-  serial_port: "/dev/ttyUSB1"
+  serial_port: "/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0"
   baud_rate: 230400
+  scan_acquisition_timeout_s: 1.0
   n_sectors: 36
 
 camera:

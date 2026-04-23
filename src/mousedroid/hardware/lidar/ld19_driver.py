@@ -18,6 +18,7 @@ from mousedroid.constants import (
     LIDAR_HEADER_BYTE,
     LIDAR_MM_PER_M,
     LIDAR_SCAN_TIMEOUT_MULTIPLIER,
+    LIDAR_VER_LEN_BYTE,
 )
 from mousedroid.hardware.lidar.ld19_protocol import LD19Frame, LD19FrameParser
 from mousedroid.logging.setup import get_logger
@@ -131,10 +132,13 @@ class LD19LidarDriver:
 
         frames: list[LD19Frame] = []
         buf = bytearray()
-        deadline = time.monotonic() + (
-            LIDAR_SCAN_TIMEOUT_MULTIPLIER / max(self._cfg.scan_frequency_hz, 0.1)
+        frame_prefix = bytes((LIDAR_HEADER_BYTE, LIDAR_VER_LEN_BYTE))
+        deadline = time.monotonic() + max(
+            self._cfg.scan_acquisition_timeout_s,
+            LIDAR_SCAN_TIMEOUT_MULTIPLIER / max(self._cfg.scan_frequency_hz, 0.1),
         )
         prev_start_angle: float | None = None
+        covered_angle_deg = 0.0
 
         while time.monotonic() < deadline:
             chunk = ser.read(LIDAR_FRAME_SIZE * 4)
@@ -143,10 +147,12 @@ class LD19LidarDriver:
             buf.extend(chunk)
 
             while len(buf) >= LIDAR_FRAME_SIZE:
-                # Scan for header byte.
-                idx = buf.find(LIDAR_HEADER_BYTE)
+                idx = buf.find(frame_prefix)
                 if idx < 0:
-                    buf.clear()
+                    if buf and buf[-1] == LIDAR_HEADER_BYTE:
+                        del buf[:-1]
+                    else:
+                        buf.clear()
                     break
                 if idx > 0:
                     del buf[:idx]
@@ -154,22 +160,24 @@ class LD19LidarDriver:
                     break
 
                 frame_bytes = bytes(buf[:LIDAR_FRAME_SIZE])
-                del buf[:LIDAR_FRAME_SIZE]
-
                 frame = LD19FrameParser.parse_frame(frame_bytes)
                 if frame is None:
+                    del buf[0]
                     continue
 
-                # Detect full rotation: angle wrapped back past 0.
-                if (
-                    prev_start_angle is not None
-                    and frame.start_angle_deg < prev_start_angle
-                    and frames
-                ):
-                    return frames
+                del buf[:LIDAR_FRAME_SIZE]
+
+                if prev_start_angle is not None:
+                    delta_deg = frame.start_angle_deg - prev_start_angle
+                    if delta_deg < 0:
+                        delta_deg += 360.0
+                    covered_angle_deg += delta_deg
 
                 prev_start_angle = frame.start_angle_deg
                 frames.append(frame)
+
+                if covered_angle_deg >= self._cfg.min_scan_coverage_deg and len(frames) > 1:
+                    return frames
 
         return frames
 

@@ -25,10 +25,7 @@ if TYPE_CHECKING:
 # Auto-use: ensure mock hardware is DISABLED for hardware tests
 # ---------------------------------------------------------------------------
 
-JETSON_PROD_CONFIG = os.getenv(
-    "MOUSEDROID_JETSON_CONFIG",
-    "config/jetson_production.yaml",
-)
+JETSON_PROD_CONFIG = os.getenv("MOUSEDROID_JETSON_CONFIG", "config/jetson_production.yaml")
 
 
 @pytest.fixture(autouse=True)
@@ -65,21 +62,18 @@ def jetson_settings() -> Settings:
     so that tests can at least instantiate on non-Jetson hosts (they'll be
     skipped later by ``@pytest.mark.hardware`` / importorskip guards).
     """
-    import yaml
-
     from mousedroid.config.schema import Settings
+    from mousedroid.validation.runtime import load_runtime_settings
 
-    config_path = Path(JETSON_PROD_CONFIG)
-    if not config_path.exists():
-        config_path = Path("config/default.yaml")
+    raw_configs = os.getenv("MOUSEDROID_JETSON_CONFIGS", "").strip()
+    if raw_configs:
+        config_paths = [Path(part.strip()) for part in raw_configs.split(",") if part.strip()]
+    else:
+        config_path = Path(JETSON_PROD_CONFIG)
+        config_paths = [config_path] if config_path.exists() else [Path("config/default.yaml")]
 
-    with open(config_path) as fh:
-        raw = yaml.safe_load(fh) or {}
-
-    # On non-Jetson hosts, force mock mode so cross-field validators
-    # (e.g. ultrasonic required when mock_hardware=false) do not block
-    # fixture creation.  Tests are skipped later by @pytest.mark.hardware.
+    settings = load_runtime_settings(config_paths)
     if not is_jetson_host():
-        raw["mock_hardware"] = True
+        settings = settings.model_copy(update={"mock_hardware": True})
 
-    return Settings(**raw)
+    return settings

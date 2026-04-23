@@ -56,6 +56,10 @@ class CameraConfig(BaseModel):
     resolution_width: int = Field(640, gt=0, description="Capture width (px)")
     resolution_height: int = Field(480, gt=0, description="Capture height (px)")
     fps: int = Field(30, gt=0, le=120, description="Capture frame rate")
+    device_path: str = Field(
+        "/dev/video0",
+        description="Video device path for OpenCV V4L2 fallback capture",
+    )
     model_path: Path | None = Field(
         None, description="IMX500 onboard model path (None = use default)"
     )
@@ -307,6 +311,17 @@ class LidarConfig(BaseModel):
     scan_frequency_hz: float = Field(10.0, gt=0, description="Scan frequency (Hz)")
     min_confidence: int = Field(0, ge=0, le=255, description="Minimum point confidence [0-255]")
     read_timeout_s: float = Field(0.2, gt=0, description="Serial read timeout (s)")
+    scan_acquisition_timeout_s: float = Field(
+        1.0,
+        gt=0,
+        description="Maximum time to accumulate one LiDAR scan before returning partial data",
+    )
+    min_scan_coverage_deg: float = Field(
+        270.0,
+        gt=0,
+        le=360.0,
+        description="Minimum angular coverage to treat one LiDAR scan as complete",
+    )
     n_sectors: int = Field(36, gt=0, description="Number of angular sectors for binning")
     feature_dim: int = Field(36, gt=0, description="Output feature vector dimension")
     mock_pattern: str = Field(
