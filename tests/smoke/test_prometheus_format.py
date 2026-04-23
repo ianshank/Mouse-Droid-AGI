@@ -15,7 +15,7 @@ import re
 import pytest
 
 from mousedroid.config.schema import MetricsConfig
-from mousedroid.telemetry.metrics import MetricsRegistry
+from mousedroid.telemetry.metrics import MetricsRegistry, generate_metrics_sample
 
 pytestmark = pytest.mark.smoke
 
@@ -248,3 +248,25 @@ def test_help_and_type_paired() -> None:
         f"HELP/TYPE mismatch: help_only={help_names - type_names}, "
         f"type_only={type_names - help_names}"
     )
+
+
+# ---------------------------------------------------------------------------
+# generate_metrics_sample() — CI integration point
+# ---------------------------------------------------------------------------
+
+
+def test_generate_metrics_sample_valid_format() -> None:
+    """generate_metrics_sample() produces valid Prometheus text exposition."""
+    sample = generate_metrics_sample()
+    assert isinstance(sample, str)
+    assert len(sample) > 0
+    assert sample.endswith("\n")
+
+    # Must contain all metric families
+    for family in _ALL_FAMILIES:
+        assert family in sample, f"generate_metrics_sample() missing family: {family}"
+
+    # Must have valid HELP/TYPE lines
+    help_names = set(_HELP_RE.findall(sample))
+    type_names = {name for name, _ in _TYPE_RE.findall(sample)}
+    assert help_names == type_names, "HELP/TYPE mismatch in generate_metrics_sample()"

@@ -23,6 +23,8 @@ def build_telemetry_frame(
     safety_ctx: SafetyContext,
     loop_time_ms: float,
     tick_count: int,
+    *,
+    vision_feature_max_samples: int = 256,
 ) -> TelemetryFrame:
     """Build a ``TelemetryFrame`` from an observation and safety context.
 
@@ -31,6 +33,9 @@ def build_telemetry_frame(
         safety_ctx: Current safety evaluation result.
         loop_time_ms: Control loop iteration time (milliseconds).
         tick_count: Monotonically increasing tick counter.
+        vision_feature_max_samples: Upper bound on the number of vision
+            samples encoded into ``TelemetryFrame.vision_features``.
+            Sourced from ``TelemetryConfig.vision_feature_max_samples``.
 
     Returns:
         Fully-populated ``TelemetryFrame`` ready for publishing.
@@ -44,6 +49,31 @@ def build_telemetry_frame(
     lidar_min_dist_m: float | None = None
     if safety_ctx.lidar_min_dist_m != float("inf"):
         lidar_min_dist_m = safety_ctx.lidar_min_dist_m
+
+    lidar_sectors: list[float] | None = None
+    lidar_features = observation.lidar_features
+    if lidar_features is not None:
+        lidar_sectors = lidar_features.astype(float).tolist()
+
+    # ``lidar_n_points`` is an optional liveness attribute on concrete
+    # observation bundles; fall back to ``0`` when the bundle doesn't
+    # expose it (keeps the ObservationProtocol contract unchanged).
+    lidar_n_points = int(getattr(observation, "lidar_n_points", 0))
+
+    # Vision features are downsampled to a bounded payload for
+    # bandwidth-friendly dashboard rendering as a heatmap. The cap is
+    # supplied by the caller (see ``TelemetryConfig.vision_feature_max_samples``).
+    # ``None`` when the vision modality is inactive.
+    vision_features: list[float] | None = None
+    if vision_arr is not None and vision_arr.size > 0:
+        max_samples = max(1, vision_feature_max_samples)
+        if vision_arr.size > max_samples:
+            # Uniformly-spaced indices across the full vector so we don't
+            # systematically drop the tail when size is only slightly > max.
+            idx = np.linspace(0, vision_arr.size - 1, max_samples).astype(np.int64)
+            vision_features = vision_arr[idx].astype(float).tolist()
+        else:
+            vision_features = vision_arr.astype(float).tolist()
 
     motor = observation.motor_state
     battery_v = (
@@ -65,6 +95,9 @@ def build_telemetry_frame(
             "lidar_clearance_ok": safety_ctx.lidar_clearance_ok,
         },
         lidar_min_dist_m=lidar_min_dist_m,
+        lidar_sectors=lidar_sectors,
+        lidar_n_points=lidar_n_points,
+        vision_features=vision_features,
         loop_time_ms=loop_time_ms,
         tick_count=tick_count,
     )

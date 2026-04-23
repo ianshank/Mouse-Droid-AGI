@@ -554,7 +554,9 @@ async def test_recovery_attempt_motor_read_returns_false():
     mgr = SensorManager(vision, distance, esp32, cfg)
     # Patch _safe_motor_read to return failure directly (avoids asyncio.gather mock issues)
     with patch.object(
-        mgr, "_safe_motor_read", new_callable=AsyncMock,
+        mgr,
+        "_safe_motor_read",
+        new_callable=AsyncMock,
         return_value=(np.zeros(DEFAULT_MOTOR_STATE_DIM, dtype=np.float32), False),
     ):
         recovered = await mgr.recovery_attempt()
@@ -586,7 +588,9 @@ async def test_recovery_attempt_vision_read_fails() -> None:
     zeros = np.zeros(cfg.camera.feature_dim, dtype=np.float32)
     # Patch _safe_vision_read to return ok=False (stop/start succeed, but read probe fails)
     with patch.object(
-        mgr, "_safe_vision_read", new_callable=AsyncMock,
+        mgr,
+        "_safe_vision_read",
+        new_callable=AsyncMock,
         return_value=(zeros, False),
     ):
         recovered = await mgr.recovery_attempt()
@@ -618,7 +622,9 @@ async def test_recovery_attempt_distance_except_branch() -> None:
     mgr = SensorManager(vision, distance, esp32, cfg)
     # Force _safe_distance_read to raise so the except block is exercised
     with patch.object(
-        mgr, "_safe_distance_read", new_callable=AsyncMock,
+        mgr,
+        "_safe_distance_read",
+        new_callable=AsyncMock,
         side_effect=RuntimeError("unexpected distance error"),
     ):
         recovered = await mgr.recovery_attempt()
@@ -650,7 +656,9 @@ async def test_recovery_attempt_motor_except_branch() -> None:
     mgr = SensorManager(vision, distance, esp32, cfg)
     # Force _safe_motor_read to raise so the except block is exercised
     with patch.object(
-        mgr, "_safe_motor_read", new_callable=AsyncMock,
+        mgr,
+        "_safe_motor_read",
+        new_callable=AsyncMock,
         side_effect=RuntimeError("unexpected motor error"),
     ):
         recovered = await mgr.recovery_attempt()

@@ -129,6 +129,14 @@ class TestSecuredEndpoints:
                 )
                 assert resp.status == 200
 
+    async def test_camera_page_accessible_with_query_token(self) -> None:
+        with patch.dict(os.environ, {_ENV_VAR: _BEARER_TOKEN}):
+            server, app = _make_secured_server()
+            server._running = True
+            async with TestClient(TestServer(app)) as client:
+                resp = await client.get(f"/camera?token={_BEARER_TOKEN}")
+                assert resp.status == 200
+
     async def test_health_exempt_no_token_needed(self) -> None:
         with patch.dict(os.environ, {_ENV_VAR: _BEARER_TOKEN}):
             _, app = _make_secured_server()

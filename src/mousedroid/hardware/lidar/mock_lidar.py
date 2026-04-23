@@ -77,11 +77,15 @@ class MockLidar:
         """Return the current mock scan data.
 
         Returns:
-            A custom scan if set via :meth:`set_scan`, otherwise a
-            default scan of 360 uniformly-spaced points at midrange.
+            A custom scan if set via :meth:`set_scan`, otherwise a scan
+            generated from ``cfg.mock_pattern`` (``uniform`` or
+            ``rotating_wedge``).
         """
         if self._custom_scan is not None:
             return self._custom_scan
+        pattern = self._cfg.mock_pattern
+        if pattern == "rotating_wedge":
+            return self._rotating_wedge_scan()
         return self._default_scan()
 
     # -- Test control -----------------------------------------------------
@@ -113,5 +117,43 @@ class MockLidar:
             distances_mm=distances,
             confidences=confidences,
             timestamp=time.monotonic(),
+            n_points=n_points,
+        )
+
+    def _rotating_wedge_scan(self) -> LidarScan:
+        """Generate a scan with a near-obstacle wedge rotating around the droid.
+
+        Produces a deterministic-but-time-varying scan useful for visual
+        validation of the ``/lidar`` dashboard page: all rays are at
+        ``max_range`` except a roughly 45 deg wedge whose centre angle
+        advances at ``cfg.mock_rotation_hz`` revolutions per second.
+        """
+        n_points = int(LIDAR_FULL_ROTATION_DEG)
+        angles = np.linspace(0.0, LIDAR_FULL_ROTATION_DEG - 1.0, num=n_points, dtype=np.float32)
+
+        max_mm = self._cfg.max_range_m * LIDAR_MM_PER_M
+        near_mm = max(
+            self._cfg.min_range_m * LIDAR_MM_PER_M * 2.0,
+            self._cfg.max_range_m * LIDAR_MM_PER_M * 0.15,
+        )
+
+        rotation_hz = self._cfg.mock_rotation_hz
+        now = time.monotonic()
+        centre_deg = (now * rotation_hz * LIDAR_FULL_ROTATION_DEG) % LIDAR_FULL_ROTATION_DEG
+        half_width = 22.5
+        delta = np.abs((angles - centre_deg + 180.0) % LIDAR_FULL_ROTATION_DEG - 180.0)
+        wedge = delta <= half_width
+
+        distances = np.full(n_points, max_mm, dtype=np.float32)
+        # Smooth triangular profile inside the wedge: deepest in the centre.
+        wedge_profile = near_mm + (max_mm - near_mm) * (delta[wedge] / half_width)
+        distances[wedge] = wedge_profile.astype(np.float32)
+
+        confidences = np.full(n_points, LIDAR_DEFAULT_MOCK_CONFIDENCE, dtype=np.uint8)
+        return LidarScan(
+            angles_deg=angles,
+            distances_mm=distances,
+            confidences=confidences,
+            timestamp=now,
             n_points=n_points,
         )

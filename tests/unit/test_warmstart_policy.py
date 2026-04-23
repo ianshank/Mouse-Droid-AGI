@@ -184,7 +184,12 @@ class TestComputeLatentStatistics:
             _cfg = _Cfg()
 
             def encoder(
-                self, v: torch.Tensor, u: torch.Tensor, m: torch.Tensor, mask: torch.Tensor
+                self,
+                v: torch.Tensor,
+                u: torch.Tensor | None,
+                m: torch.Tensor,
+                mask: torch.Tensor,
+                lidar: torch.Tensor | None = None,
             ) -> torch.Tensor:
                 return torch.randn(v.shape[0], latent_dim)
 
@@ -207,17 +212,16 @@ class TestComputeLatentStatistics:
             def __len__(self) -> int:
                 return 1
 
-            def __getitem__(
-                self, idx: int
-            ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+            def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
                 seq_len = 3
-                return (
-                    torch.randn(seq_len, 256),  # vision
-                    torch.randn(seq_len, 1),  # ultrasonic
-                    torch.randn(seq_len, 4),  # motor_state
-                    torch.ones(seq_len, 1),  # valid_mask
-                    torch.randn(seq_len, 3),  # actions
-                )
+                return {
+                    "vision": torch.randn(seq_len, 256),
+                    "ultrasonic": torch.randn(seq_len, 1),
+                    "motor_state": torch.randn(seq_len, 4),
+                    "valid_mask": torch.ones(seq_len, 4),
+                    "lidar": torch.zeros(seq_len, 0),
+                    "actions": torch.randn(seq_len, 3),
+                }
 
         rssm = _FakeRSSM()
         dataset = _FakeDataset()

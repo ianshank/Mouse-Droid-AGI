@@ -68,6 +68,8 @@ Thumbs.db
 .env.local
 *.env
 secrets.yaml
+config/prometheus/runtime/*
+!config/prometheus/runtime/.gitkeep
 
 # Logs
 *.log
@@ -114,6 +116,15 @@ validation_output.txt
 # Temporary deploy/build scripts
 /tmp/jetson_*.py
 /tmp/install_*.py
+
+# Host-specific Docker Compose overrides (generated when device nodes
+# are transiently missing; do not commit — regenerate per host).
+docker-compose.override.yml
+docker-compose.override.yaml
+
+# Ad-hoc remote-deploy helper scripts (kept in /scripts when promoted)
+/fix_env.sh
+/step*.sh
 
 # HuggingFace Hub cache
 .cache/huggingface/

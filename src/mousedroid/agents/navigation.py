@@ -36,6 +36,8 @@ class MouseDroidNavigationAgent:
         self._cfg = cfg
         self._action_dim = cfg.model.action_dim
         self._human_safety_radius_m = cfg.three_laws.human_safety_radius_m
+        self._action_min = torch.tensor(cfg.safety.action_min, dtype=torch.float32)
+        self._action_max = torch.tensor(cfg.safety.action_max, dtype=torch.float32)
         self._name = "mouse_droid_navigator"
 
     @property
@@ -89,7 +91,9 @@ class MouseDroidNavigationAgent:
         if action.dim() == 2:
             action = action.squeeze(0)
 
-        return torch.clamp(action, -1.0, 1.0)
+        action_min = self._action_min.to(device=action.device, dtype=action.dtype)
+        action_max = self._action_max.to(device=action.device, dtype=action.dtype)
+        return torch.max(torch.min(action, action_max), action_min)
 
     def reset(self) -> None:
         """Reset agent state for a new episode."""

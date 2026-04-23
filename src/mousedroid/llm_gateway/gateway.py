@@ -24,10 +24,9 @@ _log = get_logger(__name__)
 class LLMGateway:
     """NL mission -> GoalVector translation via local LLM.
 
-    Requires ``llama-cpp-python`` to be installed.  If the dependency is
-    missing or the model file cannot be found, ``start()`` logs a warning
-    and enters degraded mode where ``translate_mission()`` returns a safe
-    zero ``GoalVector`` rather than crashing the orchestrator.
+    When ``llama-cpp-python`` is not installed or the model file is missing,
+    :meth:`start` logs a warning, enters degraded mode, and returns normally;
+    :attr:`is_ready` will remain ``False`` until a model is loaded.
     """
 
     def __init__(self, cfg: GatewayConfig) -> None:
@@ -39,13 +38,50 @@ class LLMGateway:
         self._cfg = cfg
         self._model: Any = None
         self._degraded = False
+        # Empty injection_patterns disables the filter; otherwise "()" would
+        # compile to a pattern that matches every string and reject everything.
+        # An invalid user-supplied regex must not crash startup: fall back to
+        # the disabled-filter state and log a warning so the operator can fix
+        # the config without losing the rest of the process.
+        if cfg.injection_patterns:
+            try:
+                self._injection_re: re.Pattern[str] | None = re.compile(
+                    "(" + "|".join(cfg.injection_patterns) + ")",
+                    re.IGNORECASE,
+                )
+            except re.error as exc:
+                _log.warning(
+                    "llm_gateway_invalid_injection_pattern",
+                    error=str(exc),
+                    patterns=list(cfg.injection_patterns),
+                )
+                self._injection_re = None
+        else:
+            self._injection_re = None
+
+    @property
+    def is_ready(self) -> bool:
+        """Whether the gateway has a model loaded and ready."""
+        return self._model is not None
+
+    @property
+    def is_degraded(self) -> bool:
+        """Whether the gateway entered degraded mode during :meth:`start`.
+
+        Degraded mode is set when llama-cpp-python is not importable or when
+        the configured model file cannot be opened. In that state
+        :meth:`translate_mission` will still run but returns a neutral
+        :class:`GoalVector` rather than raising, allowing callers to check
+        this flag and surface a user-visible warning.
+        """
+        return self._degraded
 
     async def start(self) -> None:
         """Load model and warm up.
 
-        If ``llama-cpp-python`` is not installed or the model file is
-        missing, the gateway enters degraded mode and logs a warning
-        instead of raising.
+        If ``llama-cpp-python`` is not installed or the configured model file
+        cannot be opened, a warning is logged, :attr:`_degraded` is set to
+        ``True``, and the method returns without raising.
         """
         if not self._cfg.enabled:
             _log.info("llm_gateway_disabled")
@@ -54,17 +90,11 @@ class LLMGateway:
         try:
             await asyncio.to_thread(self._load_model)
         except ImportError:
-            _log.warning(
-                "llm_gateway_degraded",
-                reason="llama-cpp-python is required: pip install mousedroid[llm]",
-            )
+            _log.warning("llm_gateway_degraded_no_llama_cpp")
             self._degraded = True
             return
         except OSError:
-            _log.warning(
-                "llm_gateway_degraded",
-                reason=f"Model file not found: {self._cfg.model_path}",
-            )
+            _log.warning("llm_gateway_degraded_model_not_found", path=str(self._cfg.model_path))
             self._degraded = True
             return
         _log.info("llm_gateway_started", model=str(self._cfg.model_path))
@@ -80,15 +110,10 @@ class LLMGateway:
             n_gpu_layers=self._cfg.n_gpu_layers,
         )
 
-    _INJECTION_RE = re.compile(
-        r"(ignore (previous|above|all) instructions?|system prompt|you are now)",
-        re.IGNORECASE,
-    )
-
     def _sanitize_command(self, text: str) -> str:
         """Sanitize NL command to mitigate prompt injection."""
         text = text.strip()[: self._cfg.max_command_len]
-        if self._INJECTION_RE.search(text):
+        if self._injection_re is not None and self._injection_re.search(text):
             msg = "Mission command contains disallowed content"
             raise ValueError(msg)
         return text
@@ -129,7 +154,15 @@ class LLMGateway:
                 target_ms=self._cfg.latency_target_ms,
             )
 
-        return self._parse_response(raw)
+        goal = self._parse_response(raw)
+        _log.info(
+            "llm_translation_completed",
+            elapsed_ms=elapsed_ms,
+            vx=goal.vx_target,
+            vy=goal.vy_target,
+            omega=goal.omega_target,
+        )
+        return goal
 
     def _infer_sync(self, prompt: str) -> str:  # pragma: no cover
         """Run blocking LLM inference (via to_thread).

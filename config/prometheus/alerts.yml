@@ -160,3 +160,36 @@ groups:
             on {{ $labels.instance }}. The MouseDroid process may have crashed or
             the Prometheus scrape target is unreachable.
           config_ref: "MetricsConfig.namespace = mousedroid, uptime_seconds is always emitted"
+
+  # ------------------------------------------------------------------
+  # Lidar — scan liveness and obstacle proximity
+  # ------------------------------------------------------------------
+  - name: mousedroid_lidar
+    rules:
+      # Liveness: scan_points == 0 means the LiDAR driver is returning empty
+      # scans (stall, disconnect, or permissions error).
+      - alert: LidarScanStale
+        expr: mousedroid_lidar_scan_points == 0
+        for: 10s
+        labels:
+          severity: warning
+        annotations:
+          summary: "LiDAR scans are empty (0 points) for more than 10 s"
+          description: >-
+            mousedroid_lidar_scan_points has been 0 on {{ $labels.instance }} for
+            over 10 seconds. The LiDAR driver is likely stalled or disconnected.
+          config_ref: "LidarConfig — check hardware/lidar connection"
+
+      # Proximity: minimum distance below 0.2 m for 2 s => imminent collision.
+      - alert: LidarObstacleCritical
+        expr: mousedroid_lidar_min_distance_m < 0.2
+        for: 2s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Obstacle closer than 20 cm detected by LiDAR"
+          description: >-
+            mousedroid_lidar_min_distance_m = {{ $value | printf "%.2f" }} m on
+            {{ $labels.instance }}. Safety monitor should have already engaged
+            the emergency brake; investigate if the droid is still moving.
+          config_ref: "SafetyConfig — obstacle proximity"

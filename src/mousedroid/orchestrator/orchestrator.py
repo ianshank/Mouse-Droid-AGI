@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
@@ -78,6 +78,7 @@ class MouseDroidOrchestrator:
         watchdog: WatchdogProtocol | None = None,
         cloud_sink: CloudTelemetrySinkProtocol | None = None,
         cloud_experience_exporter: CloudExperienceExporterProtocol | None = None,
+        tool_registry: Any | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -101,6 +102,7 @@ class MouseDroidOrchestrator:
             watchdog: Optional watchdog notifier for liveness signalling.
             cloud_sink: Optional GCP Pub/Sub telemetry sink for cloud streaming.
             cloud_experience_exporter: Optional GCS experience batch exporter.
+            tool_registry: Optional tool registry for runtime tool dispatch.
         """
         if not agents:
             msg = "At least one agent is required"
@@ -124,6 +126,7 @@ class MouseDroidOrchestrator:
         self._watchdog = watchdog
         self._cloud_sink = cloud_sink
         self._cloud_experience_exporter = cloud_experience_exporter
+        self._tool_registry = tool_registry
         self._cfg = cfg
         self._running = False
         self._tick_count: int = 0
@@ -147,7 +150,10 @@ class MouseDroidOrchestrator:
         if self._telemetry_server is not None:
             await self._telemetry_server.start()
         if self._llm_gateway is not None:
-            await self._llm_gateway.start()
+            try:
+                await self._llm_gateway.start()
+            except RuntimeError:
+                _log.warning("llm_gateway_start_failed", exc_info=True)
         if self._voice_engine is not None:
             await self._voice_engine.start()
             await self._voice_lifecycle("startup")
@@ -347,7 +353,7 @@ class MouseDroidOrchestrator:
             )
             belief_dim = int(self._cfg.model.belief_dim)
             bdi_state_vec = self._h.numpy().flatten().astype(np.float32, copy=False)
-            state_vec = bdi_state_vec
+            state_vec: NDArray[np.float32] = bdi_state_vec
             if state_vec.size < belief_dim:
                 state_vec = np.pad(state_vec, (0, belief_dim - state_vec.size))
             else:
@@ -717,3 +723,20 @@ class MouseDroidOrchestrator:
             "mock_hardware": self._cfg.mock_hardware,
             "agents": [a.name for a in self._agents],
         }
+
+    async def dispatch_tool(self, name: str, **kwargs: Any) -> Any:
+        """Dispatch a named tool via the tool registry.
+
+        Args:
+            name: Tool name to dispatch.
+            **kwargs: Keyword arguments forwarded to the tool handler.
+
+        Returns:
+            Tool result.
+
+        Raises:
+            KeyError: If no tool registry is configured.
+        """
+        if self._tool_registry is None:
+            raise KeyError("Tool registry not configured")
+        return await self._tool_registry.dispatch(name, **kwargs)

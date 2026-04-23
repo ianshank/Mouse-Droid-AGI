@@ -142,6 +142,10 @@ class TestTrainingConfig:
         assert cfg.n_episodes == 1000
         assert cfg.data_dir == "training/data"
         assert cfg.weights_dir == "weights"
+        assert cfg.gpu.require_cuda is False
+        assert cfg.annotation.n_episodes == 500
+        assert cfg.warmstart.tuning_episodes == 100
+        assert cfg.constitutional.log_every_n_episodes == 100
 
     def test_settings_includes_ppo(self) -> None:
         cfg = Settings(mock_hardware=True)

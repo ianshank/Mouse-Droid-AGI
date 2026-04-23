@@ -66,6 +66,15 @@ RUN pip install --no-cache-dir Jetson.GPIO>=2.1 2>&1 \
 RUN pip install --no-cache-dir picamera2 2>&1 \
     || echo "WARNING: picamera2 install failed (requires libcamera system libs)"
 
+# Telemetry + service discovery + audio processing (non-fatal)
+RUN apt-get update && apt-get install -y --no-install-recommends portaudio19-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    || echo "WARNING: portaudio19-dev install failed (pyaudio will be unavailable)"
+RUN pip install --no-cache-dir "aiohttp>=3.9" "zeroconf>=0.80" 2>&1 \
+    || echo "WARNING: aiohttp/zeroconf install failed (telemetry server degraded)"
+RUN pip install --no-cache-dir pyaudio 2>&1 \
+    || echo "WARNING: pyaudio install failed (audio capture disabled)"
+
 # ---------------------------------------------------------------------------
 # Stage 3: Dev tools (pytest, ruff, mypy, coverage)
 # Set INSTALL_DEV_TOOLS=true to include; skipped in production by default.

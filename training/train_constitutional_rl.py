@@ -23,9 +23,19 @@ from mousedroid.cognitive.constitutional_rl import (
 from mousedroid.config.schema import Settings
 from mousedroid.reward.model import MultiObjectiveRewardModel
 from mousedroid.safety.three_laws import RoboticsLawChecker
-from mousedroid.world_model.rssm import RSSM
+from mousedroid.world_model.checkpoint_migration import load_rssm_with_migration
 
 _log = structlog.get_logger(__name__)
+
+
+def _build_constitutional_context(cfg: Settings) -> dict[str, float | int]:
+    """Build the config-backed validation context for constitutional rollouts."""
+    constitutional_cfg = cfg.training.constitutional
+    return {
+        "battery_v": constitutional_cfg.validation_battery_v,
+        "obstacle_dist_m": constitutional_cfg.validation_obstacle_dist_m,
+        "mcts_sims": constitutional_cfg.validation_mcts_sims,
+    }
 
 
 def _gae(
@@ -166,10 +176,12 @@ def train_constitutional_rl(
 
     ppo_cfg = cfg.ppo
     gamma = cfg.mcts.gamma
+    constitutional_cfg = cfg.training.constitutional
+    validation_context = _build_constitutional_context(cfg)
 
-    # Load RSSM
-    rssm = RSSM(cfg.model).to(device)
-    rssm.load_state_dict(torch.load(rssm_checkpoint, map_location=device, weights_only=True))
+    # Load RSSM — migrate encoder layout if the checkpoint was saved with a
+    # different modality config (e.g. ultrasonic → LiDAR).
+    rssm = load_rssm_with_migration(rssm_checkpoint, cfg.model, device)
     rssm.eval()
 
     # Build reward model with Three Laws integration
@@ -192,6 +204,13 @@ def train_constitutional_rl(
 
     # Constitutional checker (delegates to law checker)
     checker = ConstitutionalChecker(ConstitutionalRLConfig(), law_checker=law_checker)
+
+    _log.info(
+        "constitutional_rl_start",
+        n_episodes=ppo_cfg.n_training_episodes,
+        rollout_steps=ppo_cfg.n_rollout_steps,
+        validation_context=validation_context,
+    )
 
     # Training loop
     n_episodes = ppo_cfg.n_training_episodes
@@ -220,8 +239,7 @@ def train_constitutional_rl(
             log_probs.append(log_prob)
 
             # Constitutional check
-            context = {"battery_v": 12.0, "obstacle_dist_m": 2.0, "mcts_sims": 50}
-            safe_action, violations = checker.check(action_np, context)
+            safe_action, violations = checker.check(action_np, validation_context)
 
             actions_taken.append(safe_action)
 
@@ -231,10 +249,8 @@ def train_constitutional_rl(
                 dtype=torch.float32,
                 device=device,
             ).unsqueeze(0)
-            h, z, pred_reward = rssm.imagine_step(action_tensor, h, z)
-
-            # Multi-objective reward
             with torch.no_grad():
+                h, z, pred_reward = rssm.imagine_step(action_tensor, h, z)
                 obs_recon = rssm.decode(h, z)
                 reward_scalar = reward_model(obs_recon).item()
 
@@ -265,7 +281,7 @@ def train_constitutional_rl(
             ppo_cfg.ppo_epochs,
         )
 
-        if episode % 100 == 0:
+        if episode % constitutional_cfg.log_every_n_episodes == 0:
             _log.info(
                 "ppo_episode",
                 episode=episode,
@@ -290,8 +306,7 @@ def train_constitutional_rl(
             state_np = z.detach().cpu().numpy().flatten()
             action_np = policy.forward(state_np)
 
-            context = {"battery_v": 12.0, "obstacle_dist_m": 2.0, "mcts_sims": 50}
-            safe_action, violations = checker.check(action_np, context)
+            safe_action, violations = checker.check(action_np, validation_context)
             total_violations += len(violations)
             total_law1_violations += sum(1 for v in violations if v.startswith("[Law 1]"))
             total_law2_violations += sum(1 for v in violations if v.startswith("[Law 2]"))
@@ -302,7 +317,8 @@ def train_constitutional_rl(
                 dtype=torch.float32,
                 device=device,
             ).unsqueeze(0)
-            h, z, pred_reward = rssm.imagine_step(action_tensor, h, z)
+            with torch.no_grad():
+                h, z, pred_reward = rssm.imagine_step(action_tensor, h, z)
             ep_reward += pred_reward.item()
 
         val_rewards.append(ep_reward)

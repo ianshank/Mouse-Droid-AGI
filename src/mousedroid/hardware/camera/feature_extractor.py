@@ -261,7 +261,7 @@ class HailoFeatureExtractor:
 
             # Direct synchronous call — thread-safe via threading.Lock in runtime
             result = self._runtime.infer_sync("feature_extractor", input_data)
-            features = result.flatten().astype(np.float32)
+            features: NDArray[np.float32] = result.flatten().astype(np.float32)
 
             # Truncate or pad to expected dimension
             if len(features) >= self._feature_dim:

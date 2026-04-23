@@ -50,23 +50,27 @@ def compute_latent_statistics(
     n = min(len(dataset), max_episodes)
 
     for i in range(n):
-        vision, ultrasonic, motor_state, valid_mask, actions = dataset[i]
-        vision = vision.unsqueeze(0).to(device)
-        ultrasonic = ultrasonic.unsqueeze(0).to(device)
-        motor_state = motor_state.unsqueeze(0).to(device)
-        valid_mask = valid_mask.unsqueeze(0).to(device)
-        actions = actions.unsqueeze(0).to(device)
+        batch = dataset[i]
+        vision = batch["vision"].unsqueeze(0).to(device)
+        ultrasonic = batch["ultrasonic"].unsqueeze(0).to(device)
+        motor_state = batch["motor_state"].unsqueeze(0).to(device)
+        valid_mask = batch["valid_mask"].unsqueeze(0).to(device)
+        lidar = batch["lidar"].unsqueeze(0).to(device)
+        actions = batch["actions"].unsqueeze(0).to(device)
 
         h = torch.zeros(1, rssm._cfg.hidden_dim, device=device)
         z = torch.zeros(1, rssm._cfg.latent_dim, device=device)
 
         with torch.no_grad():
             for t in range(vision.shape[1]):
+                lidar_step = lidar[:, t] if lidar.shape[-1] > 0 else None
+                ultrasonic_step = ultrasonic[:, t] if ultrasonic.shape[-1] > 0 else None
                 obs_embed = rssm.encoder(
                     vision[:, t],
-                    ultrasonic[:, t],
+                    ultrasonic_step,
                     motor_state[:, t],
                     valid_mask[:, t],
+                    lidar=lidar_step,
                 )
                 prev_action = actions[:, max(0, t - 1)]
                 gru_input = torch.cat([z, prev_action], dim=-1)
@@ -118,9 +122,10 @@ def warmstart_policy(
 def tune_ucb(
     rssm: RSSM,
     base_cfg: MCTSConfig,
-    n_episodes: int = 1000,
+    n_episodes: int = 100,
     target_ms: float = 50.0,
     n_simulations: int = 200,
+    rollout_steps: int = 20,
     device: torch.device | None = None,
 ) -> tuple[float, dict[str, object]]:
     """Grid search UCB exploration constant via simulated rollouts.
@@ -131,6 +136,7 @@ def tune_ucb(
         n_episodes: Episodes per UCB candidate.
         target_ms: Target search latency in milliseconds.
         n_simulations: Number of MCTS simulations to benchmark.
+        rollout_steps: Imagined rollout steps per evaluation episode.
         device: Torch device.
 
     Returns:
@@ -157,17 +163,17 @@ def tune_ucb(
         episode_rewards: list[float] = []
         search_times: list[float] = []
 
-        for _ in range(min(n_episodes, 100)):  # Use subset for speed
+        for _ in range(n_episodes):
             h = torch.zeros(1, rssm._cfg.hidden_dim, device=device)
             z = torch.zeros(1, rssm._cfg.latent_dim, device=device)
             ep_reward = 0.0
 
-            for _step in range(20):
-                t0 = time.monotonic()
-                action = planner.plan(h, z)
-                search_times.append((time.monotonic() - t0) * 1000.0)
-
-                h, z, reward = rssm.imagine_step(action, h, z)
+            for _step in range(rollout_steps):
+                with torch.no_grad():
+                    t0 = time.monotonic()
+                    action = planner.plan(h, z)
+                    search_times.append((time.monotonic() - t0) * 1000.0)
+                    h, z, reward = rssm.imagine_step(action, h, z)
                 ep_reward += reward.item()
 
             episode_rewards.append(ep_reward)
@@ -212,9 +218,22 @@ def run_warmstart(
         data_path: Path to sequences.pt for computing latent stats.
         output_dir: Output directory for weights/config.
     """
-    device = resolve_device(cfg.training.gpu.device)
+    device = resolve_device(
+        cfg.training.gpu.device,
+        require_cuda=cfg.training.gpu.require_cuda,
+    )
+    warmstart_cfg = cfg.training.warmstart
     output_dir = output_dir or Path(cfg.training.weights_dir) / "mcts"
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    _log.info(
+        "warmstart_start",
+        rssm_checkpoint=str(rssm_checkpoint),
+        data_path=str(data_path),
+        latent_stats_max_episodes=warmstart_cfg.latent_stats_max_episodes,
+        tuning_episodes=warmstart_cfg.tuning_episodes,
+        rollout_steps=warmstart_cfg.rollout_steps,
+    )
 
     # Load RSSM
     rssm = RSSM(cfg.model).to(device)
@@ -223,7 +242,12 @@ def run_warmstart(
 
     # Compute latent statistics
     dataset = RSSMSequenceDataset(data_path, seq_len=cfg.training.sequence_length)
-    latent_mean, latent_std = compute_latent_statistics(rssm, dataset, device)
+    latent_mean, latent_std = compute_latent_statistics(
+        rssm,
+        dataset,
+        device,
+        max_episodes=warmstart_cfg.latent_stats_max_episodes,
+    )
 
     # Warm-start policy
     policy = warmstart_policy(
@@ -236,7 +260,15 @@ def run_warmstart(
     _log.info("policy_warmstarted", path=str(output_dir / "policy_init.npz"))
 
     # Tune UCB
-    best_ucb, results = tune_ucb(rssm, cfg.mcts, target_ms=cfg.mcts.ucb_target_ms, device=device)
+    best_ucb, results = tune_ucb(
+        rssm,
+        cfg.mcts,
+        n_episodes=warmstart_cfg.tuning_episodes,
+        target_ms=cfg.mcts.ucb_target_ms,
+        n_simulations=cfg.mcts.n_simulations_max,
+        rollout_steps=warmstart_cfg.rollout_steps,
+        device=device,
+    )
     with open(output_dir / "tuned_config.json", "w") as f:
         json.dump(results, f, indent=2)
     _log.info("ucb_tuned", best_ucb_c=best_ucb, output=str(output_dir / "tuned_config.json"))

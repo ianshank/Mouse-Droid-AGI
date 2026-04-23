@@ -10,9 +10,9 @@ name: CI
 
 on:
     push:
-        branches: [main]
+        branches: [main, "feature/**", "claude/**"]
     pull_request:
-        branches: [main]
+        branches: [main, "feature/**", "claude/**"]
 
 env:
     MOUSEDROID_MOCK_HARDWARE: "true"
@@ -145,10 +145,29 @@ jobs:
                       sys.exit(0)
                   " && \
                   if [ -f metrics_sample.txt ] && [ -s metrics_sample.txt ]; then
+                      # promtool exits 3 on lint warnings (naming conventions,
+                      # e.g. abbreviated units in existing metric names). We
+                      # keep the existing names for Grafana / alert-rule
+                      # backwards compatibility, so warnings (rc=3) are
+                      # non-fatal here; any other non-zero rc is still fatal.
+                      set +e
                       ./promtool check metrics < metrics_sample.txt
+                      rc=$?
+                      set -e
+                      if [ "$rc" -ne 0 ] && [ "$rc" -ne 3 ]; then
+                          echo "promtool check metrics failed with rc=$rc"
+                          exit "$rc"
+                      fi
+                      if [ "$rc" -eq 3 ]; then
+                          echo "::notice::promtool check metrics returned lint warnings (rc=3) — treated as non-fatal for backwards compatibility"
+                      fi
                   else
                       echo "No metrics sample generated — skipping validation"
                   fi
+
+            - name: Validate Prometheus alert rules
+              if: steps.promtool.outputs.available == 'true'
+              run: ./promtool check rules config/prometheus/alerts.yml
 
             - name: Skip notice
               if: steps.promtool.outputs.available != 'true'
@@ -186,7 +205,31 @@ jobs:
               uses: docker/setup-buildx-action@v3
 
             - name: Validate Dockerfile
-              run: docker build --check -f Dockerfile.jetson .
+              # L4T base images (dustynv/l4t-pytorch, dustynv/llama_cpp) are
+              # arm64-only. Docker's check mode reports InvalidBaseImagePlatform
+              # warnings when validating that Jetson Dockerfile on the amd64 CI
+              # runner and currently exits non-zero even though the Dockerfile
+              # syntax and instructions are otherwise valid. Treat that specific
+              # warning set as informational, but still fail on any other check
+              # error or warning.
+              run: |
+                set +e
+                docker build --check -f Dockerfile.jetson . > docker-check.log 2>&1
+                rc=$?
+                set -e
+                cat docker-check.log
+                if [ "$rc" -eq 0 ]; then
+                  exit 0
+                fi
+
+                invalid_count=$(grep -c "WARNING: InvalidBaseImagePlatform" docker-check.log || true)
+                warning_count=$(grep -c "^WARNING:" docker-check.log || true)
+                if [ "$invalid_count" -gt 0 ] && [ "$warning_count" -eq "$invalid_count" ]; then
+                  echo "::notice::Ignoring InvalidBaseImagePlatform warnings for arm64-only Jetson base images on the amd64 CI runner"
+                  exit 0
+                fi
+
+                exit "$rc"
 
             - name: Syntax check docker-compose
               run: docker compose -f docker-compose.jetson.yml config --quiet

@@ -31,6 +31,15 @@ class TelemetryFrame:
         health: Health metrics (gpu_temp, gpu_load, etc.).
         lidar_min_dist_m: Minimum LiDAR distance reading (metres), or
             ``None`` if LiDAR is unavailable.
+        lidar_sectors: Per-sector normalised distances in ``[0.0, 1.0]``,
+            where ``1.0`` = ``max_range_m`` (no obstacle) and ``0.0`` =
+            at-sensor obstacle. Length equals ``cfg.lidar.n_sectors``.
+            ``None`` when LiDAR is disabled or feature extraction failed.
+        lidar_n_points: Number of raw points in the last LiDAR scan. ``0``
+            when LiDAR is stale/absent; used as a liveness signal.
+        vision_features: Optional list of vision feature values for the latest
+            observation. ``None`` when vision features are not published (e.g.
+            summary-only telemetry mode).
         loop_time_ms: Control loop iteration time (milliseconds).
         tick_count: Monotonically increasing tick counter.
     """
@@ -46,6 +55,9 @@ class TelemetryFrame:
     safety: dict[str, Any] = field(default_factory=dict)
     health: dict[str, Any] = field(default_factory=dict)
     lidar_min_dist_m: float | None = None
+    lidar_sectors: list[float] | None = None
+    lidar_n_points: int = 0
+    vision_features: list[float] | None = None
     loop_time_ms: float = 0.0
     tick_count: int = 0
 

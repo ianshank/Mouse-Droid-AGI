@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from aiohttp import web
 
     from mousedroid.config.schema import TelemetryConfig
+    from mousedroid.hardware.protocols import RawFrameSourceProtocol
     from mousedroid.health.monitor import HealthMonitor
     from mousedroid.telemetry.log_buffer import LogRingBuffer
     from mousedroid.telemetry.metrics import MetricsRegistry
@@ -59,6 +60,9 @@ class TelemetryServer:
         metrics_registry: MetricsRegistry | None = None,
         metrics_path: str | None = None,
         publisher: TelemetryPublisherProtocol | None = None,
+        lidar_max_range_m: float | None = None,
+        raw_frame_source: RawFrameSourceProtocol | None = None,
+        raw_frame_hz: float = 10.0,
     ) -> None:
         """Initialise the telemetry server.
 
@@ -75,6 +79,15 @@ class TelemetryServer:
                 compatibility with direct ``TelemetryServer`` construction.
             publisher: Optional telemetry publisher used to synchronise
                 publisher-level stats such as dropped-frame counters.
+            lidar_max_range_m: LiDAR maximum detection range in metres,
+                used to convert normalised sector values into metres for
+                Prometheus scrape. ``None`` disables per-sector metrics
+                (keeps backwards compatibility when no LiDAR configured).
+            raw_frame_source: Optional camera driver exposing
+                :meth:`RawFrameSourceProtocol.capture_raw_jpeg`. When
+                provided, the ``/camera/stream`` MJPEG endpoint is
+                registered.
+            raw_frame_hz: Target frame rate for ``/camera/stream``.
         """
         self._cfg = cfg
         self._queue = telemetry_queue
@@ -83,6 +96,9 @@ class TelemetryServer:
         self._metrics: MetricsRegistry | None = metrics_registry
         self._metrics_path = metrics_path or self._cfg.metrics_path
         self._publisher = publisher
+        self._lidar_max_range_m = lidar_max_range_m
+        self._raw_frame_source = raw_frame_source
+        self._raw_frame_interval_s = 1.0 / max(0.1, raw_frame_hz)
         self._reported_frame_drops = 0
 
         self._ws_clients: list[web.WebSocketResponse] = []
@@ -172,6 +188,11 @@ class TelemetryServer:
         app.router.add_get(f"{prefix}/network", self._handle_network)
         app.router.add_get(self._cfg.ws_path, self._handle_ws)
         app.router.add_get(f"{prefix}/logs/stream", self._handle_log_stream)
+        app.router.add_get("/lidar", self._handle_lidar_page)
+        app.router.add_get("/camera", self._handle_camera_page)
+        if self._raw_frame_source is not None:
+            app.router.add_get("/camera/stream", self._handle_camera_stream)
+            app.router.add_get("/camera/frame.jpg", self._handle_camera_frame)
         if self._metrics is not None:
             app.router.add_get(self._metrics_path, self._handle_metrics)
 
@@ -201,7 +222,7 @@ class TelemetryServer:
             middlewares.append(build_bearer_auth_middleware(auth_cfg))
         elif api_key is not None:
             # Legacy X-API-Key auth for backwards compatibility
-            @web.middleware
+            @web.middleware  # type: ignore[misc,untyped-decorator,unused-ignore]
             async def auth_middleware(
                 request: web.Request,
                 handler: Any,
@@ -209,12 +230,16 @@ class TelemetryServer:
                 """Validate API key for both REST and WebSocket requests.
 
                 For WebSocket upgrade requests, accept the API key from either
-                ``X-API-Key`` or ``?api_key=…`` so auth decisions stay centralized
-                in middleware and share a uniform rejection path.
+                ``X-API-Key`` or ``?api_key=…``. Normal safe GET/HEAD browser
+                navigations use the same query-param fallback because browsers
+                cannot set custom headers on page navigations, MJPEG image
+                requests, or WebSocket handshakes. Auth decisions stay
+                centralized in middleware and share a uniform rejection path.
                 """
                 is_ws_upgrade = request.headers.get("Upgrade", "").lower() == "websocket"
-                if is_ws_upgrade:
-                    # For WebSocket, accept key from query param OR header
+                if is_ws_upgrade or request.method in {"GET", "HEAD"}:
+                    # For WebSocket and safe browser navigations, accept key
+                    # from query param OR header.
                     key = request.query.get("api_key", request.headers.get("X-API-Key", ""))
                 else:
                     key = request.headers.get("X-API-Key", "")
@@ -387,6 +412,136 @@ class TelemetryServer:
             },
         )
 
+    async def _handle_lidar_page(self, request: web.Request) -> web.Response:
+        """GET /lidar — serve the static HTML polar-plot visualisation.
+
+        The page subscribes to ``/ws`` for ``TelemetryFrame`` JSON and renders
+        ``lidar_sectors`` as a polar heatmap on an HTML canvas.
+        """
+        from importlib import resources
+
+        from aiohttp import web
+
+        try:
+            html = (
+                resources.files("mousedroid.telemetry.static")
+                .joinpath("lidar.html")
+                .read_text(encoding="utf-8")
+            )
+        except (FileNotFoundError, ModuleNotFoundError):
+            return web.Response(status=404, text="lidar_page_missing")
+
+        return web.Response(
+            body=html.encode("utf-8"),
+            headers={
+                "Content-Type": "text/html; charset=utf-8",
+                "X-Content-Type-Options": "nosniff",
+                "Cache-Control": "no-cache",
+            },
+        )
+
+    async def _handle_camera_page(self, request: web.Request) -> web.Response:
+        """GET /camera — serve the vision-feature heatmap visualisation.
+
+        MSE-6 streams feature vectors (not raw frames); the page reshapes
+        ``vision_features`` from ``/ws`` into a square heatmap.
+        """
+        from importlib import resources
+
+        from aiohttp import web
+
+        try:
+            html = (
+                resources.files("mousedroid.telemetry.static")
+                .joinpath("camera.html")
+                .read_text(encoding="utf-8")
+            )
+        except (FileNotFoundError, ModuleNotFoundError):
+            return web.Response(status=404, text="camera_page_missing")
+
+        return web.Response(
+            body=html.encode("utf-8"),
+            headers={
+                "Content-Type": "text/html; charset=utf-8",
+                "X-Content-Type-Options": "nosniff",
+                "Cache-Control": "no-cache",
+            },
+        )
+
+    async def _handle_camera_frame(self, request: web.Request) -> web.Response:
+        """GET /camera/frame.jpg — single JPEG snapshot from the raw-frame source."""
+        from aiohttp import web
+
+        if self._raw_frame_source is None:
+            return web.Response(status=404, text="raw_frame_source_unavailable")
+        try:
+            jpeg = await self._raw_frame_source.capture_raw_jpeg()
+        except Exception as exc:  # pylint: disable=broad-except
+            _log.warning("raw_frame_capture_failed", error=str(exc))
+            return web.Response(status=503, text="capture_failed")
+        if jpeg is None:
+            return web.Response(status=503, text="no_frame")
+        return web.Response(
+            body=jpeg,
+            headers={
+                "Content-Type": "image/jpeg",
+                "Cache-Control": "no-store",
+            },
+        )
+
+    async def _handle_camera_stream(self, request: web.Request) -> web.StreamResponse:
+        """GET /camera/stream — multipart/x-mixed-replace MJPEG stream.
+
+        Standard browser-compatible MJPEG: repeated JPEG frames separated
+        by a boundary. Runs until the client disconnects.
+        """
+        from aiohttp import web
+
+        if self._raw_frame_source is None:
+            return web.Response(status=404, text="raw_frame_source_unavailable")
+
+        boundary = "mousedroidframe"
+        resp = web.StreamResponse(
+            status=200,
+            reason="OK",
+            headers={
+                "Content-Type": f"multipart/x-mixed-replace; boundary={boundary}",
+                "Cache-Control": "no-store",
+                "Connection": "close",
+                "Pragma": "no-cache",
+            },
+        )
+        await resp.prepare(request)
+        _log.info("camera_stream_client_connected", peer=str(request.remote))
+        try:
+            while self._running:
+                try:
+                    jpeg = await self._raw_frame_source.capture_raw_jpeg()
+                except Exception as exc:  # pylint: disable=broad-except
+                    _log.warning("raw_frame_capture_failed", error=str(exc))
+                    await asyncio.sleep(self._raw_frame_interval_s)
+                    continue
+                if jpeg is None:
+                    await asyncio.sleep(self._raw_frame_interval_s)
+                    continue
+                header = (
+                    f"--{boundary}\r\n"
+                    f"Content-Type: image/jpeg\r\n"
+                    f"Content-Length: {len(jpeg)}\r\n\r\n"
+                ).encode("ascii")
+                try:
+                    await resp.write(header)
+                    await resp.write(jpeg)
+                    await resp.write(b"\r\n")
+                except (ConnectionResetError, asyncio.CancelledError):
+                    break
+                await asyncio.sleep(self._raw_frame_interval_s)
+        finally:
+            _log.info("camera_stream_client_disconnected", peer=str(request.remote))
+            with contextlib.suppress(Exception):
+                await resp.write_eof()
+        return resp
+
     # ------------------------------------------------------------------
     # WebSocket handlers
     # ------------------------------------------------------------------
@@ -518,6 +673,18 @@ class TelemetryServer:
                 if isinstance(safety, dict):
                     for law in safety.get("violations", []):
                         self._metrics.inc_safety_violation(str(law))
+                lidar_enabled = (
+                    self._lidar_max_range_m is not None or frame.lidar_sectors is not None
+                )
+                if lidar_enabled:
+                    if frame.lidar_sectors is not None and self._lidar_max_range_m is not None:
+                        self._metrics.set_lidar_sectors(
+                            frame.lidar_sectors,
+                            self._lidar_max_range_m,
+                        )
+                    if frame.lidar_min_dist_m is not None:
+                        self._metrics.set_lidar_min_distance_m(frame.lidar_min_dist_m)
+                    self._metrics.set_lidar_scan_points(frame.lidar_n_points)
 
             dead_clients: list[web.WebSocketResponse] = []
             send_tasks = []

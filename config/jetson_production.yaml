@@ -4,7 +4,20 @@ debug: false
 
 safety:
   min_valid_sensors: 1
-  battery_critical_v: 9.5
+  # Battery monitoring is DISABLED on this rig because the Orin Nano
+  # developer kit has no onboard battery voltage sensor and the ESP32 does
+  # not report a reliable voltage over the existing serial protocol. Leaving
+  # these at 0.0 honours the schema's documented "0 disables" semantic.
+  # When a battery ADC is wired up, override these to the hardware
+  # thresholds (schema defaults are 10.5V warn / 9.5V critical).
+  battery_critical_v: 0.0
+  battery_warn_v: 0.0
+  max_loop_time_ms: 200.0
+
+# Fast-fail retry: no multi-second backoff in the 30 Hz loop
+retry:
+  max_attempts: 1
+  base_delay_s: 0.05
 
 jetson:
   tensorrt_enabled: true
@@ -16,7 +29,7 @@ jetson:
 
 llm:
   enabled: true
-  model_path: "/opt/mousedroid/models/llama-3-8b-instruct.Q4_K_M.gguf"
+  model_path: "/opt/mousedroid/models/Phi-3-mini-4k-instruct-q4.gguf"
   context_length: 2048
   n_threads: 6
   n_gpu_layers: -1
@@ -42,6 +55,22 @@ speaker:
   chunk_size: 1024
   device_name: "USB"  # Wonrabai USB Sound Card (shared with microphone)
   format: "float32"
+
+lidar:
+  enabled: true
+  serial_port: "/dev/ttyUSB1"
+  baud_rate: 230400
+  n_sectors: 36
+
+camera:
+  # Arducam IMX708 dual via Jetson CSI (nvarguscamerasrc / libargus).
+  # DT overlay: tegra234-p3767-camera-p3768-imx708-dual.dtbo.
+  backend: "jetson_csi"
+  resolution_width: 1280
+  resolution_height: 720
+  fps: 30
+  use_onboard_inference: false  # IMX708 has no onboard NPU
+  feature_extractor: "mean_pool"  # switch to "tensorrt"/"hailo" once weights are staged
 
 voice:
   enabled: true
@@ -81,7 +110,7 @@ telemetry:
     auth_enabled: true
     token_env_var: "MOUSEDROID_TELEMETRY_TOKEN"
     allowed_origins: []
-    exempt_paths: ["/health", "/metrics"]
+    exempt_paths: ["/health", "/metrics", "/api/v1/health"]
 
 experience:
   path: "/home/jetson/mousedroid_experience"

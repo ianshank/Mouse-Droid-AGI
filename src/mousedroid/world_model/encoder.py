@@ -7,6 +7,7 @@ import torch.nn as nn
 from torch import Tensor
 
 from mousedroid.config.schema import ModelConfig
+from mousedroid.constants import SENSOR_SLOT_MAP
 from mousedroid.logging.setup import get_logger
 
 _log = get_logger(__name__)
@@ -25,22 +26,18 @@ class MultimodalEncoder(nn.Module):
         cfg: Model configuration with all dimension parameters.
     """
 
-    # Indices into the valid_mask: vision, ultrasonic, motor, audio, lidar.
-    _VISION_IDX = 0
-    _ULTRASONIC_IDX = 1
-    _MOTOR_IDX = 2
-    _AUDIO_IDX = 3
-    _LIDAR_IDX = 4
-
     def __init__(self, cfg: ModelConfig) -> None:
         super().__init__()
         self.vision_proj = nn.Linear(cfg.vision_dim, cfg.vision_proj_dim)
-        self.ultrasonic_proj = nn.Linear(cfg.ultrasonic_dim, cfg.ultrasonic_proj_dim)
         self.motor_proj = nn.Linear(cfg.motor_state_dim, cfg.motor_proj_dim)
 
+        self._ultrasonic_enabled = cfg.ultrasonic_dim > 0 and cfg.ultrasonic_proj_dim > 0
         self._audio_enabled = cfg.audio_dim > 0 and cfg.audio_proj_dim > 0
         self._lidar_enabled = cfg.lidar_dim > 0 and cfg.lidar_proj_dim > 0
-        fused_dim = cfg.vision_proj_dim + cfg.ultrasonic_proj_dim + cfg.motor_proj_dim
+        fused_dim = cfg.vision_proj_dim + cfg.motor_proj_dim
+        if self._ultrasonic_enabled:
+            self.ultrasonic_proj = nn.Linear(cfg.ultrasonic_dim, cfg.ultrasonic_proj_dim)
+            fused_dim += cfg.ultrasonic_proj_dim
         if self._audio_enabled:
             self.audio_proj = nn.Linear(cfg.audio_dim, cfg.audio_proj_dim)
             fused_dim += cfg.audio_proj_dim
@@ -54,7 +51,8 @@ class MultimodalEncoder(nn.Module):
         _log.info(
             "encoder_init",
             vision_proj=cfg.vision_proj_dim,
-            ultrasonic_proj=cfg.ultrasonic_proj_dim,
+            ultrasonic_proj=cfg.ultrasonic_proj_dim if self._ultrasonic_enabled else 0,
+            ultrasonic_enabled=self._ultrasonic_enabled,
             motor_proj=cfg.motor_proj_dim,
             audio_proj=cfg.audio_proj_dim if self._audio_enabled else 0,
             audio_enabled=self._audio_enabled,
@@ -70,14 +68,27 @@ class MultimodalEncoder(nn.Module):
         return self._audio_enabled
 
     @property
+    def ultrasonic_enabled(self) -> bool:
+        """Whether ultrasonic modality is active."""
+        return self._ultrasonic_enabled
+
+    @property
     def lidar_enabled(self) -> bool:
         """Whether LiDAR modality is active."""
         return self._lidar_enabled
 
+    @staticmethod
+    def _gate_projection(projected: Tensor, valid_mask: Tensor, modality_name: str) -> Tensor:
+        """Gate a projected modality by its valid-mask slot."""
+        slot_index = SENSOR_SLOT_MAP[modality_name]
+        if valid_mask.shape[-1] <= slot_index:
+            return torch.zeros_like(projected)
+        return projected * valid_mask[:, slot_index : slot_index + 1]
+
     def forward(
         self,
         vision: Tensor,
-        ultrasonic: Tensor,
+        ultrasonic: Tensor | None,
         motor_state: Tensor,
         valid_mask: Tensor,
         audio: Tensor | None = None,
@@ -100,15 +111,26 @@ class MultimodalEncoder(nn.Module):
             Fused observation embedding, shape ``(batch, obs_dim)``.
         """
         v = self.act(self.vision_proj(vision))
-        u = self.act(self.ultrasonic_proj(ultrasonic))
         m = self.act(self.motor_proj(motor_state))
 
         # Gate each projection by its validity score.
-        v = v * valid_mask[:, self._VISION_IDX : self._VISION_IDX + 1]
-        u = u * valid_mask[:, self._ULTRASONIC_IDX : self._ULTRASONIC_IDX + 1]
-        m = m * valid_mask[:, self._MOTOR_IDX : self._MOTOR_IDX + 1]
+        v = self._gate_projection(v, valid_mask, "vision")
+        m = self._gate_projection(m, valid_mask, "motor")
 
-        parts: list[Tensor] = [v, u, m]
+        parts: list[Tensor] = [v, m]
+
+        if self._ultrasonic_enabled:
+            if ultrasonic is not None:
+                u = self.act(self.ultrasonic_proj(ultrasonic))
+            else:
+                batch_size = vision.shape[0]
+                u = torch.zeros(
+                    batch_size,
+                    self.ultrasonic_proj.out_features,
+                    device=vision.device,
+                    dtype=vision.dtype,
+                )
+            parts.insert(1, self._gate_projection(u, valid_mask, "ultrasonic"))
 
         if self._audio_enabled:
             if audio is not None:
@@ -122,10 +144,7 @@ class MultimodalEncoder(nn.Module):
                     device=vision.device,
                     dtype=vision.dtype,
                 )
-            # Gate by audio validity if mask has enough elements.
-            if valid_mask.shape[-1] > self._AUDIO_IDX:
-                a = a * valid_mask[:, self._AUDIO_IDX : self._AUDIO_IDX + 1]
-            parts.append(a)
+            parts.append(self._gate_projection(a, valid_mask, "audio"))
 
         if self._lidar_enabled:
             if lidar is not None:
@@ -139,12 +158,7 @@ class MultimodalEncoder(nn.Module):
                     device=vision.device,
                     dtype=vision.dtype,
                 )
-            # Gate by LiDAR validity — treat missing slot as invalid (zero out).
-            if valid_mask.shape[-1] > self._LIDAR_IDX:
-                el = el * valid_mask[:, self._LIDAR_IDX : self._LIDAR_IDX + 1]
-            else:
-                el = torch.zeros_like(el)
-            parts.append(el)
+            parts.append(self._gate_projection(el, valid_mask, "lidar"))
 
         fused: Tensor = self.fusion(torch.cat(parts, dim=-1))
         return fused

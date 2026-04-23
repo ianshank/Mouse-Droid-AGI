@@ -44,3 +44,17 @@ async def test_capture_features_not_all_zero():
     features = await cam.capture_features()
     # Random features should not be all zero (extremely unlikely)
     assert not np.allclose(features, 0.0)
+
+
+async def test_screen_capture_mode_uses_latest_rgb_features():
+    cam = MockCamera(CameraConfig(feature_dim=12, mock_source="screen_capture"))
+    latest_rgb = np.zeros((24, 24, 3), dtype=np.uint8)
+    latest_rgb[:12, :12, 0] = 255
+    cam._latest_rgb = latest_rgb
+
+    features = await cam.capture_features()
+
+    assert cam._mode == "screen_capture"
+    assert features.shape == (12,)
+    assert np.all(np.isfinite(features))
+    assert not np.allclose(features, 0.0)

@@ -78,8 +78,27 @@ class TestActionBounds:
         h, z = _h_z(cfg)
         ctx = SafetyContext()
         action = agent.act(h, z, ctx)
-        assert (action >= -1.0).all()
-        assert (action <= 1.0).all()
+        action_min = torch.tensor(cfg.safety.action_min)
+        action_max = torch.tensor(cfg.safety.action_max)
+        assert torch.all(action >= action_min)
+        assert torch.all(action <= action_max)
+
+    def test_custom_action_bounds_are_applied(self) -> None:
+        cfg = Settings(
+            mock_hardware=True,
+            safety={
+                "action_min": [-0.2, -0.3, -0.4],
+                "action_max": [0.2, 0.3, 0.4],
+            },
+        )
+        planner = MagicMock()
+        planner.plan.return_value = torch.tensor([[0.9, -0.9, 0.8]])
+        agent = MouseDroidNavigationAgent(planner, cfg)
+        h, z = _h_z(cfg)
+
+        action = agent.act(h, z, SafetyContext())
+
+        assert torch.allclose(action, torch.tensor([0.2, -0.3, 0.4]))
 
 
 class TestSurpriseAdaptiveBudget:

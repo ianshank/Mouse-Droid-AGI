@@ -148,6 +148,12 @@ def test_surprise_config_defaults():
 def test_training_config_defaults():
     c = TrainingConfig()
     assert c.batch_size == 32
+    assert c.gpu.require_cuda is False
+    assert c.generation.log_every_n_episodes == 100
+    assert c.annotation.n_episodes == 500
+    assert c.annotation.obstacle_clearance_m == 0.25
+    assert c.warmstart.latent_stats_max_episodes == 100
+    assert c.constitutional.validation_battery_v == 12.0
 
 
 def test_cognitive_config_huggingface_defaults():
@@ -201,7 +207,7 @@ def test_settings_mock_true_without_ultrasonic_ok():
 
 def test_settings_mock_false_without_ultrasonic_raises(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("MOUSEDROID_MOCK_HARDWARE", "false")
-    with pytest.raises(ValidationError, match="ultrasonic config required"):
+    with pytest.raises(ValidationError, match="at least one distance sensor"):
         Settings(mock_hardware=False, ultrasonic=None)
 
 

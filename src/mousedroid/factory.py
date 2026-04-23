@@ -18,6 +18,7 @@ from mousedroid.hardware.protocols import (
     SpeakerProtocol,
     VisionProtocol,
 )
+from mousedroid.health.watchdog import WatchdogProtocol
 from mousedroid.llm_gateway.protocol import LLMGatewayProtocol
 from mousedroid.logging.setup import get_logger
 from mousedroid.safety.protocol import SafetyMonitorProtocol
@@ -34,8 +35,6 @@ if TYPE_CHECKING:
     )
     from mousedroid.cloud.protocol import (
         CloudExperienceExporterProtocol,
-        CloudLoggingSinkProtocol,
-        CloudMetricsExporterProtocol,
         CloudTelemetrySinkProtocol,
     )
     from mousedroid.cognitive.bdi_model import NeuralBDI
@@ -45,7 +44,6 @@ if TYPE_CHECKING:
     from mousedroid.experience.logger import ExperienceLogger
     from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
     from mousedroid.health.monitor import HealthMonitor
-    from mousedroid.health.watchdog import WatchdogProtocol
     from mousedroid.llm_gateway.mission_parser import MissionParserProtocol
     from mousedroid.memory.tier import MemoryTier
     from mousedroid.sensing.manager import SensorManager
@@ -149,9 +147,8 @@ def build_distance_sensor(cfg: Settings) -> DistanceSensorProtocol:
         from mousedroid.config.schema import UltrasonicConfig as UltraCfg
         from mousedroid.hardware.sensors.mock_ultrasonic import MockUltrasonic
 
-        ultrasonic_cfg: UltrasonicConfig = cfg.ultrasonic or UltraCfg(  # type: ignore[call-arg]
-            trigger_pin=0,
-            echo_pin=0,
+        ultrasonic_cfg: UltrasonicConfig = cfg.ultrasonic or UltraCfg.model_validate(
+            {"trigger_pin": 0, "echo_pin": 0}
         )
         return MockUltrasonic(ultrasonic_cfg)
 
@@ -277,12 +274,8 @@ def build_world_model(cfg: Settings) -> WorldModelProtocol:
     """Build world model for configured platform.
 
     Selects :class:`~mousedroid.world_model.dual_stream_rssm.DualStreamRSSM`
-    when ``cfc_hidden_dim > 0`` (requires ``ncps`` package), otherwise
-    returns the classic :class:`~mousedroid.world_model.rssm.RSSM`.
-
-    Raises:
-        ImportError: If ``cfc_hidden_dim > 0`` but the ``ncps`` package
-            is not installed.
+    when ``cfc_hidden_dim > 0``, otherwise falls back to the classic
+    :class:`~mousedroid.world_model.rssm.RSSM`.
 
     Args:
         cfg: Root settings.
@@ -291,22 +284,21 @@ def build_world_model(cfg: Settings) -> WorldModelProtocol:
         World model conforming to ``WorldModelProtocol``.
     """
     if cfg.model.cfc_hidden_dim > 0:
-        import importlib.util
-
-        if importlib.util.find_spec("ncps") is None:
-            raise ImportError(
-                "cfc_hidden_dim > 0 requires the 'ncps' package. "
-                "Install it with: pip install 'mousedroid[cfc]' or pip install ncps>=0.0.7"
+        try:
+            from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
+        except ImportError:
+            _log.warning(
+                "dual_stream_unavailable_falling_back_to_rssm",
+                reason="ncps package not installed (pip install ncps)",
+                requested_cfc_dim=cfg.model.cfc_hidden_dim,
             )
-
-        from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
-
-        _log.info(
-            "world_model_dual_stream",
-            gru_dim=cfg.model.hidden_dim,
-            cfc_dim=cfg.model.cfc_hidden_dim,
-        )
-        return DualStreamRSSM(cfg.model)
+        else:
+            _log.info(
+                "world_model_dual_stream",
+                gru_dim=cfg.model.hidden_dim,
+                cfc_dim=cfg.model.cfc_hidden_dim,
+            )
+            return DualStreamRSSM(cfg.model)
 
     from mousedroid.world_model.rssm import RSSM
 
@@ -328,7 +320,7 @@ def build_llm_gateway(cfg: Settings) -> LLMGatewayProtocol:
     from mousedroid.llm_gateway.config import GatewayConfig
     from mousedroid.llm_gateway.gateway import LLMGateway
 
-    gateway_cfg = GatewayConfig(  # type: ignore[call-arg]
+    gateway_cfg = GatewayConfig(
         enabled=cfg.llm.enabled,
         model_path=cfg.llm.model_path,
         model_url=cfg.llm.model_url,
@@ -340,7 +332,12 @@ def build_llm_gateway(cfg: Settings) -> LLMGatewayProtocol:
         temperature=cfg.llm.temperature,
         latency_target_ms=cfg.llm.latency_target_ms,
         stop_tokens=cfg.llm.stop_tokens,
+        max_vx_norm_mps=cfg.llm.max_vx_norm_mps,
+        max_vy_norm_mps=cfg.llm.max_vy_norm_mps,
+        max_omega_norm_rads=cfg.llm.max_omega_norm_rads,
         max_command_len=cfg.llm.max_command_len,
+        system_prompt=cfg.llm.system_prompt,
+        injection_patterns=cfg.llm.injection_patterns,
     )
     _log.info("llm_gateway_built", enabled=cfg.llm.enabled)
     return LLMGateway(gateway_cfg)
@@ -360,6 +357,23 @@ def build_mission_parser(cfg: Settings) -> MissionParserProtocol:
     parser = RuleBasedMissionParser(cfg.mission_parser)
     _log.info("mission_parser_built")
     return parser
+
+
+def build_metrics_registry(cfg: Settings) -> MetricsRegistry | None:
+    """Build the shared Prometheus metrics registry when metrics are enabled.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Shared ``MetricsRegistry`` or ``None`` when metrics are disabled.
+    """
+    if not cfg.metrics.enabled:
+        return None
+
+    from mousedroid.telemetry.metrics import MetricsRegistry
+
+    return MetricsRegistry(cfg.metrics)
 
 
 def build_safety_monitor(cfg: Settings) -> SafetyMonitorProtocol:
@@ -518,6 +532,8 @@ def build_telemetry_server(
     publisher: TelemetryPublisherProtocol | None,
     health_monitor: HealthMonitor,
     log_buffer: LogRingBuffer | None = None,
+    metrics_registry: MetricsRegistry | None = None,
+    camera: VisionProtocol | None = None,
 ) -> TelemetryServerProtocol | None:
     """Build telemetry server if telemetry is enabled.
 
@@ -526,6 +542,10 @@ def build_telemetry_server(
         publisher: Telemetry publisher to consume frames from.
         health_monitor: Health monitor for health endpoint.
         log_buffer: Optional log ring buffer for log streaming.
+        metrics_registry: Optional shared metrics registry reused by other runtime components.
+        camera: Optional vision driver; used as a raw-frame source for
+            the MJPEG ``/camera/stream`` endpoint when it also implements
+            :class:`RawFrameSourceProtocol`.
 
     Returns:
         ``TelemetryServer`` or ``None`` if telemetry disabled.
@@ -533,13 +553,13 @@ def build_telemetry_server(
     if not cfg.telemetry.enabled or publisher is None:
         return None
 
-    if cfg.mock_hardware:
+    if cfg.mock_hardware and not cfg.telemetry.force_real_server:
         from mousedroid.telemetry.mock_server import MockTelemetryServer
 
         _log.info("telemetry_mock_server_built")
         return MockTelemetryServer()
 
-    metrics_registry = None
+    shared_metrics_registry = metrics_registry
     metrics_path = cfg.metrics.path
     telemetry_metrics_path_default = type(cfg.telemetry).model_fields["metrics_path"].default
     metrics_path_default = type(cfg.metrics).model_fields["path"].default
@@ -549,26 +569,33 @@ def build_telemetry_server(
     ):
         metrics_path = cfg.telemetry.metrics_path
 
-    if cfg.metrics.enabled:
-        from mousedroid.telemetry.metrics import MetricsRegistry
+    if shared_metrics_registry is None and cfg.metrics.enabled:
+        shared_metrics_registry = build_metrics_registry(cfg)
 
-        metrics_registry = MetricsRegistry(cfg.metrics)
-
+    from mousedroid.hardware.protocols import RawFrameSourceProtocol
     from mousedroid.telemetry.server import TelemetryServer
+
+    raw_frame_source: RawFrameSourceProtocol | None = None
+    if camera is not None and isinstance(camera, RawFrameSourceProtocol):
+        raw_frame_source = camera
 
     _log.info(
         "telemetry_server_built",
         host=cfg.telemetry.host,
         port=cfg.telemetry.port,
+        raw_frame_source=raw_frame_source is not None,
     )
     return TelemetryServer(
         cfg=cfg.telemetry,
         telemetry_queue=publisher.get_queue(),
         health_monitor=health_monitor,
         log_buffer=log_buffer,
-        metrics_registry=metrics_registry,
+        metrics_registry=shared_metrics_registry,
         metrics_path=metrics_path,
         publisher=publisher,
+        lidar_max_range_m=cfg.lidar.max_range_m if cfg.lidar is not None else None,
+        raw_frame_source=raw_frame_source,
+        raw_frame_hz=cfg.telemetry.raw_frame_hz,
     )
 
 
@@ -587,45 +614,10 @@ def build_health_monitor(cfg: Settings) -> HealthMonitor:
     return HealthMonitor(cfg.health, cfg.jetson)
 
 
-def build_watchdog(cfg: Settings) -> WatchdogProtocol:
-    """Build watchdog notifier based on configuration.
-
-    Returns a ``SystemdNotifier`` when running under systemd
-    (``NOTIFY_SOCKET`` set), a ``FileHeartbeatNotifier`` for Docker
-    deployments, or a ``NullNotifier`` when disabled.
-
-    Args:
-        cfg: Root settings.
-
-    Returns:
-        Watchdog notifier conforming to ``WatchdogProtocol``.
-    """
-    import os
-
-    from mousedroid.health.watchdog import (
-        FileHeartbeatNotifier,
-        NullNotifier,
-        SystemdNotifier,
-    )
-
-    if not cfg.loop.watchdog_enabled:
-        _log.info("watchdog_disabled")
-        return NullNotifier()
-
-    # Prefer systemd if NOTIFY_SOCKET is set (running as Type=notify service)
-    if os.environ.get("NOTIFY_SOCKET"):
-        _log.info("watchdog_systemd")
-        return SystemdNotifier()
-
-    # Fall back to file heartbeat (Docker health checks)
-    _log.info("watchdog_file_heartbeat", path=cfg.loop.watchdog_heartbeat_path)
-    return FileHeartbeatNotifier(path=cfg.loop.watchdog_heartbeat_path)
-
-
 def build_sensor_manager(
     cfg: Settings,
-    vision: VisionProtocol,
-    distance: DistanceSensorProtocol,
+    vision: VisionProtocol | None,
+    distance: DistanceSensorProtocol | None,
     esp32: ESP32CommProtocol,
     microphone: AudioProtocol | None = None,
     lidar: LidarProtocol | None = None,
@@ -646,6 +638,14 @@ def build_sensor_manager(
     from mousedroid.hardware.audio.feature_extractor import AudioFeatureExtractor
     from mousedroid.hardware.lidar.feature_extractor import LidarFeatureExtractor
     from mousedroid.sensing.manager import SensorManager
+
+    if vision is None:
+        # SensorManager requires a concrete VisionProtocol — raising here
+        # keeps the protocol contract explicit for callers that forgot to
+        # wire vision (rather than deferring to a late AttributeError on
+        # first capture_features call).
+        msg = "build_sensor_manager requires a non-None VisionProtocol (got None)"
+        raise ValueError(msg)
 
     audio_extractor = build_audio_feature_extractor(cfg)
     typed_extractor: AudioFeatureExtractor | None = (
@@ -807,19 +807,15 @@ def build_hailo_runtime(cfg: Settings) -> HailoRuntimeProtocol | None:
 
 
 def build_memory_tier(cfg: Settings) -> MemoryTier | None:
-    """Build layered memory tier if enabled.
-
-    Constructs all four memory subsystems (episodic, semantic, working,
-    consolidation) and bundles them in a ``MemoryTier`` dataclass.
+    """Build all four memory subsystems if memory is enabled.
 
     Args:
         cfg: Root settings.
 
     Returns:
-        ``MemoryTier`` or ``None`` if memory is disabled.
+        ``MemoryTier`` dataclass or ``None`` if ``cfg.memory.enabled`` is False.
     """
     if not cfg.memory.enabled:
-        _log.info("memory_tier_disabled")
         return None
 
     from mousedroid.memory.consolidation import MemoryConsolidation
@@ -848,52 +844,91 @@ def build_memory_tier(cfg: Settings) -> MemoryTier | None:
 
 
 def build_experience_logger(cfg: Settings) -> ExperienceLogger | None:
-    """Build LMDB experience logger if memory tier is enabled.
-
-    Gated by ``cfg.memory.enabled`` — experience logging only runs when
-    the full memory pipeline is active.
+    """Build LMDB experience logger if memory is enabled and experience config is present.
 
     Args:
         cfg: Root settings.
 
     Returns:
-        ``ExperienceLogger`` or ``None`` if memory is disabled.
+        ``ExperienceLogger`` or ``None`` if memory is disabled or experience config is absent.
     """
     if not cfg.memory.enabled:
-        _log.info("experience_logger_disabled")
+        return None
+
+    experience_cfg = getattr(cfg, "experience", None)
+    if experience_cfg is None:
         return None
 
     from mousedroid.experience.logger import ExperienceLogger
 
-    _log.info("experience_logger_built", path=cfg.experience.path)
-    return ExperienceLogger(cfg.experience)
+    logger = ExperienceLogger(experience_cfg)
+    _log.info("experience_logger_built", path=experience_cfg.path)
+    return logger
 
 
 def build_curiosity_module(cfg: Settings) -> CuriosityProtocol | None:
-    """Build ICM intrinsic curiosity module if memory tier is enabled.
-
-    Gated by ``cfg.memory.enabled`` — curiosity needs memory for novelty
-    tracking and epistemic scoring.
+    """Build intrinsic curiosity module if memory is enabled.
 
     Args:
         cfg: Root settings.
 
     Returns:
-        ``IntrinsicCuriosityModule`` conforming to ``CuriosityProtocol``,
-        or ``None`` if memory is disabled.
+        ``IntrinsicCuriosityModule`` or ``None`` if memory is disabled.
     """
     if not cfg.memory.enabled:
-        _log.info("curiosity_module_disabled")
         return None
 
     from mousedroid.curiosity.icm import IntrinsicCuriosityModule
 
-    _log.info(
-        "curiosity_module_built",
-        intrinsic_reward_scale=cfg.curiosity.intrinsic_reward_scale,
-        novelty_decay=cfg.curiosity.novelty_decay_enabled,
+    try:
+        module = IntrinsicCuriosityModule(cfg.model, cfg.curiosity)
+        _log.info("curiosity_module_built", scale=cfg.curiosity.intrinsic_reward_scale)
+        return module
+    except Exception:
+        _log.warning("curiosity_module_build_failed", exc_info=True)
+        return None
+
+
+def build_watchdog(cfg: Settings) -> WatchdogProtocol:
+    """Build watchdog notifier based on config.
+
+    Returns :class:`SystemdNotifier` when the ``NOTIFY_SOCKET`` env var is
+    present (set automatically by systemd for ``Type=notify`` services),
+    :class:`FileHeartbeatNotifier` for Docker/custom monitoring, or
+    :class:`NullNotifier` when watchdog is disabled.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Watchdog notifier satisfying :class:`WatchdogProtocol`.
+    """
+    import os
+    from pathlib import Path
+
+    from mousedroid.health.watchdog import (
+        FileHeartbeatNotifier,
+        NullNotifier,
+        SystemdNotifier,
     )
-    return IntrinsicCuriosityModule(cfg.model, cfg.curiosity)
+
+    if not cfg.loop.watchdog_enabled:
+        return NullNotifier()
+
+    mode = cfg.loop.watchdog_mode
+    if mode == "none":
+        return NullNotifier()
+    if mode == "systemd":
+        return SystemdNotifier()
+    if mode == "file":
+        return FileHeartbeatNotifier(Path(cfg.loop.watchdog_heartbeat_path))
+    if mode == "auto":
+        if os.environ.get("NOTIFY_SOCKET"):
+            return SystemdNotifier()
+        return FileHeartbeatNotifier(Path(cfg.loop.watchdog_heartbeat_path))
+
+    _log.warning("unknown_watchdog_mode_falling_back_to_null", mode=mode)
+    return NullNotifier()
 
 
 def build_orchestrator(cfg: Settings) -> object:
@@ -914,9 +949,26 @@ def build_orchestrator(cfg: Settings) -> object:
     agent = build_agent(cfg, wm)
     monitor = build_safety_monitor(cfg)
     esp32 = build_esp32_driver(cfg)
-    camera = build_camera(cfg, hailo_runtime=hailo_runtime)
-    distance = build_distance_sensor(cfg)
+
+    camera: VisionProtocol | None = None
+    try:
+        camera = build_camera(cfg, hailo_runtime=hailo_runtime)
+    except Exception as exc:  # pylint: disable=broad-except
+        _log.warning("camera_init_failed_degrading", error=str(exc))
+
+    distance: DistanceSensorProtocol | None = None
+    try:
+        distance = build_distance_sensor(cfg)
+    except Exception as exc:  # pylint: disable=broad-except
+        _log.warning("distance_sensor_init_failed_degrading", error=str(exc))
+
     microphone = build_microphone(cfg)
+
+    lidar_driver: LidarProtocol | None = None
+    try:
+        lidar_driver = build_lidar(cfg)
+    except Exception as exc:  # pylint: disable=broad-except
+        _log.warning("lidar_init_failed_degrading", error=str(exc))
 
     sensor_manager = build_sensor_manager(
         cfg,
@@ -924,6 +976,7 @@ def build_orchestrator(cfg: Settings) -> object:
         distance=distance,
         esp32=esp32,
         microphone=microphone,
+        lidar=lidar_driver,
     )
 
     cognitive_core: CognitiveCore | None = None
@@ -944,41 +997,45 @@ def build_orchestrator(cfg: Settings) -> object:
     health_monitor = build_health_monitor(cfg)
 
     # Optional log ring buffer for telemetry log streaming
-    log_buffer: LogRingBuffer | None = None
-    telemetry_cfg = getattr(cfg, "telemetry", None)
-    if telemetry_cfg is not None:
-        buffer_size = getattr(telemetry_cfg, "log_stream_buffer", 0)
-        if buffer_size:
-            from mousedroid.telemetry.log_buffer import LogRingBuffer
+    from mousedroid.telemetry.log_buffer import LogRingBuffer as _LogRingBuffer
 
-            log_buffer = LogRingBuffer(buffer_size)
+    log_buffer: _LogRingBuffer | None = None
+    buffer_size = cfg.telemetry.log_stream_buffer
+    if buffer_size:
+        log_buffer = _LogRingBuffer(buffer_size)
+
+    metrics_registry = build_metrics_registry(cfg)
 
     telemetry_server = build_telemetry_server(
         cfg,
         telemetry_publisher,
         health_monitor,
         log_buffer=log_buffer,
+        metrics_registry=metrics_registry,
+        camera=camera,
+    )
+
+    # LLM gateway + mission parser (optional — gated by llm.enabled)
+    llm_gateway: LLMGatewayProtocol | None = None
+    if cfg.llm.enabled:
+        llm_gateway = build_llm_gateway(cfg)
+    mission_parser: MissionParserProtocol | None = build_mission_parser(cfg)
+
+    from mousedroid.common.tools.registry import create_default_registry
+
+    _tool_registry = create_default_registry(
+        llm_gateway=llm_gateway,
+        metrics_registry=metrics_registry,
     )
 
     # Voice engine (optional — disabled by default)
     speaker = build_speaker(cfg)
     voice_engine = build_voice_engine(cfg, speaker=speaker)
 
-    # Memory tier (optional — disabled by default)
+    # Memory tier + experience logger + curiosity module (optional)
     memory_tier = build_memory_tier(cfg)
-
-    # Experience logger (optional — requires experience config)
     experience_logger = build_experience_logger(cfg)
-
-    # Curiosity module (optional — requires curiosity config)
     curiosity_module = build_curiosity_module(cfg)
-
-    # LLM gateway + mission parser (optional — gated by llm.enabled)
-    llm_gateway: LLMGatewayProtocol | None = None
-    mission_parser: MissionParserProtocol | None = None
-    if cfg.llm.enabled:
-        llm_gateway = build_llm_gateway(cfg)
-    mission_parser = build_mission_parser(cfg)
 
     # Watchdog notifier (optional — disabled by default)
     watchdog = build_watchdog(cfg)
@@ -1007,6 +1064,7 @@ def build_orchestrator(cfg: Settings) -> object:
         watchdog=watchdog,
         cloud_sink=cloud_sink,
         cloud_experience_exporter=cloud_experience_exporter,
+        tool_registry=_tool_registry,
     )
 
 
@@ -1177,11 +1235,6 @@ def build_arm_perception(
     )
 
 
-# ---------------------------------------------------------------------------
-# GCP Digital Twin factory functions
-# ---------------------------------------------------------------------------
-
-
 def build_cloud_telemetry_sink(
     cfg: Settings,
 ) -> CloudTelemetrySinkProtocol | None:
@@ -1240,69 +1293,3 @@ def build_cloud_experience_exporter(
     exporter = CloudExperienceExporter(cfg.gcp, cfg.experience)
     _log.info("cloud_experience_exporter_built")
     return exporter
-
-
-def build_cloud_metrics_exporter(
-    cfg: Settings,
-    metrics_registry: MetricsRegistry | None = None,
-) -> CloudMetricsExporterProtocol | None:
-    """Build Cloud Monitoring exporter if GCP is configured.
-
-    Returns ``None`` when ``cfg.gcp`` is ``None``, monitoring is disabled,
-    or the ``google-cloud-monitoring`` package is not installed.
-
-    Args:
-        cfg: Root settings.
-        metrics_registry: The local metrics registry to export from.
-
-    Returns:
-        Cloud metrics exporter or None.
-    """
-    if cfg.gcp is None or metrics_registry is None:
-        return None
-    if not cfg.gcp.monitoring.enabled:
-        return None
-    try:
-        from mousedroid.cloud.monitoring_exporter import CloudMetricsExporter
-    except ImportError:
-        _log.warning(
-            "cloud_monitoring_not_available",
-            hint="Install via: pip install 'mousedroid[gcp]'",
-        )
-        return None
-
-    exporter = CloudMetricsExporter(cfg.gcp, metrics_registry)
-    _log.info("cloud_metrics_exporter_built")
-    return exporter
-
-
-def build_cloud_logging_sink(
-    cfg: Settings,
-) -> CloudLoggingSinkProtocol | None:
-    """Build Cloud Logging structlog processor if GCP is configured.
-
-    Returns ``None`` when ``cfg.gcp`` is ``None``, logging is disabled,
-    or the ``google-cloud-logging`` package is not installed.
-
-    Args:
-        cfg: Root settings.
-
-    Returns:
-        Cloud logging sink processor or None.
-    """
-    if cfg.gcp is None:
-        return None
-    if not cfg.gcp.logging.enabled:
-        return None
-    try:
-        from mousedroid.cloud.logging_sink import CloudLoggingSink
-    except ImportError:
-        _log.warning(
-            "cloud_logging_not_available",
-            hint="Install via: pip install 'mousedroid[gcp]'",
-        )
-        return None
-
-    sink = CloudLoggingSink(cfg.gcp)
-    _log.info("cloud_logging_sink_built")
-    return sink

@@ -1,0 +1,97 @@
+services:
+  prometheus:
+    container_name: mousedroid-prometheus
+    image: prom/prometheus:${PROMETHEUS_VERSION:-v2.54.1}
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${MOUSEDROID_PROMETHEUS_CONFIG:-./config/prometheus/scrape_host_gateway.yml}:/etc/prometheus/prometheus.yml:ro
+      - ./config/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ./config/prometheus/runtime:/etc/prometheus/runtime:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      - node-exporter
+    networks:
+      - monitoring
+
+  loki:
+    container_name: mousedroid-loki
+    image: grafana/loki:${LOKI_VERSION:-3.2.1}
+    restart: unless-stopped
+    command:
+      - -config.file=/etc/loki/config.yml
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./config/loki/loki.yml:/etc/loki/config.yml:ro
+      - loki_data:/loki
+    networks:
+      - monitoring
+
+  promtail:
+    container_name: mousedroid-promtail
+    image: grafana/promtail:${PROMTAIL_VERSION:-3.2.1}
+    restart: unless-stopped
+    command:
+      - -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./config/loki/promtail.yml:/etc/promtail/config.yml:ro
+      - /var/log:/var/log:ro
+      - /var/log/journal:/var/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - promtail_positions:/var/lib/promtail
+    depends_on:
+      - loki
+    networks:
+      - monitoring
+
+  grafana:
+    container_name: mousedroid-grafana
+    image: grafana/grafana:${GRAFANA_VERSION:-11.2.0}
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-mousedroid}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docs/grafana_dashboard.json:/var/lib/grafana/dashboards/mousedroid.json:ro
+    depends_on:
+      - prometheus
+      - loki
+    networks:
+      - monitoring
+
+  node-exporter:
+    container_name: mousedroid-node-exporter
+    image: prom/node-exporter:${NODE_EXPORTER_VERSION:-v1.8.2}
+    restart: unless-stopped
+    command:
+      - --path.rootfs=/host
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    networks:
+      - monitoring
+
+networks:
+  monitoring:
+    driver: bridge
+
+volumes:
+  grafana_data:
+  loki_data:
+  prometheus_data:
+  promtail_positions:

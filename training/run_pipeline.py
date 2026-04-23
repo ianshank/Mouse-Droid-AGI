@@ -14,10 +14,37 @@ from pathlib import Path
 
 import structlog
 
+from mousedroid.config.loader import load_settings
 from mousedroid.config.schema import Settings
 from training.gpu_utils import log_gpu_info, resolve_device
 
 _log = structlog.get_logger(__name__)
+
+
+def _load_training_settings(config_path: str) -> Settings:
+    """Load training settings while preserving legacy mock-hardware behavior.
+
+    The historical training CLI always forced ``mock_hardware=True``. Keep that
+    behavior for backwards compatibility, but load configuration via the shared
+    overlay loader so default.yaml, overlays, and top-level env overrides all
+    compose correctly.
+    """
+    settings = load_settings(Path(config_path))
+    if not settings.mock_hardware:
+        _log.warning(
+            "training_forcing_mock_hardware",
+            config_path=config_path,
+        )
+        settings = settings.model_copy(update={"mock_hardware": True})
+
+    _log.info(
+        "training_settings_loaded",
+        config_path=config_path,
+        batch_size=settings.training.batch_size,
+        checkpoint_every_n=settings.training.checkpoint_every_n,
+        mock_hardware=settings.mock_hardware,
+    )
+    return settings
 
 
 def _require_existing_path(path: Path, *, description: str, phase: int) -> Path:
@@ -37,7 +64,13 @@ def run_phase_0_data_gen(cfg: Settings) -> Path:
     Returns:
         Path to the data directory containing sequences.pt.
     """
-    _log.info("phase_0_start", phase="data_generation")
+    _log.info(
+        "phase_0_start",
+        phase="data_generation",
+        n_episodes=cfg.training.n_episodes,
+        max_steps=cfg.training.sequence_length,
+        output_dir=cfg.training.data_dir,
+    )
     from training.data_generator import SyntheticSequenceGenerator
 
     gen = SyntheticSequenceGenerator(cfg)
@@ -56,10 +89,19 @@ def run_phase_0b_annotations(cfg: Settings) -> Path:
     Returns:
         Path to annotations file.
     """
-    _log.info("phase_0b_start", phase="collect_annotations")
+    _log.info(
+        "phase_0b_start",
+        phase="collect_annotations",
+        n_episodes=cfg.training.annotation.n_episodes,
+        max_steps=cfg.training.annotation.max_steps,
+    )
     from training.collect_annotations import collect_annotations
 
-    annotations_path = collect_annotations(cfg, n_episodes=500, max_steps=50)
+    annotations_path = collect_annotations(
+        cfg,
+        n_episodes=cfg.training.annotation.n_episodes,
+        max_steps=cfg.training.annotation.max_steps,
+    )
     _log.info("phase_0b_complete", path=str(annotations_path))
     return annotations_path
 
@@ -174,7 +216,10 @@ def run_pipeline(
     all_phases = phases or {0, 1, 2, 3, 4}
     t0 = time.monotonic()
 
-    device = resolve_device(cfg.training.gpu.device)
+    device = resolve_device(
+        cfg.training.gpu.device,
+        require_cuda=cfg.training.gpu.require_cuda,
+    )
     log_gpu_info(device)
 
     data_dir = Path(cfg.training.data_dir)
@@ -187,6 +232,9 @@ def run_pipeline(
         phases=sorted(all_phases),
         device=str(device),
         data_dir=str(data_dir),
+        batch_size=cfg.training.batch_size,
+        checkpoint_every_n=cfg.training.checkpoint_every_n,
+        weights_dir=str(cfg.training.weights_dir),
     )
 
     # Phase 0: Data generation
@@ -278,11 +326,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    import yaml
-
-    with open(args.config) as f:
-        overrides = yaml.safe_load(f) or {}
-    cfg = Settings(**{**overrides, "mock_hardware": True})
+    cfg = _load_training_settings(args.config)
 
     valid_phases = {0, 1, 2, 3, 4}
     phases: set[int] | None = None

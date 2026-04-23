@@ -14,6 +14,7 @@ The orchestrator calls ``notify()`` after each successful tick.
 from __future__ import annotations
 
 import os
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -90,9 +91,10 @@ class SystemdNotifier:
         if self._notifier is not None:
             self._notifier.notify(state)
         elif os.environ.get("NOTIFY_SOCKET"):
-            # Subprocess fallback — only if systemd socket exists
-            import subprocess
-
+            # Subprocess fallback — only if systemd socket exists. Subprocess
+            # spawn here is intentional; sdnotify is the preferred path and is
+            # cached in ``self._notifier``. This fallback runs only when the
+            # package is unavailable, so the per-call cost is bounded.
             subprocess.run(  # noqa: S603
                 ["systemd-notify", f"--pid={os.getpid()}", state],  # noqa: S607
                 check=False,

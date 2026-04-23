@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from mousedroid.common.tools.registry import ToolRegistry, ToolSpec, create_default_registry
+from mousedroid.llm_gateway.protocol import GoalVector
 
 
 async def _dummy_handler() -> str:
@@ -119,8 +122,35 @@ async def test_dispatch_export_experience() -> None:
 async def test_dispatch_translate_nl_mission() -> None:
     reg = create_default_registry()
     result = await reg.dispatch("translate_nl_mission", mission="go left")
-    assert result["status"] == "translated"
+    assert result["status"] == "llm_unavailable"
     assert result["mission"] == "go left"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_translate_nl_mission_with_gateway() -> None:
+    gateway = AsyncMock()
+    gateway.is_ready = True
+    gateway.translate_mission.return_value = GoalVector(0.4, -0.2, 0.1)
+    metrics = MagicMock()
+
+    reg = create_default_registry(llm_gateway=gateway, metrics_registry=metrics)
+    result = await reg.dispatch("translate_nl_mission", mission="go left")
+
+    assert result["status"] == "translated"
+    assert result["goal_vector"] == {
+        "vx_target": 0.4,
+        "vy_target": -0.2,
+        "omega_target": 0.1,
+    }
+    metrics.inc_llm_translation.assert_called_once_with("translated")
+    metrics.observe_llm_translation_latency_ms.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_translate_nl_mission_empty_request() -> None:
+    reg = create_default_registry()
+    result = await reg.dispatch("translate_nl_mission", mission="   ")
+    assert result["status"] == "invalid_request"
 
 
 @pytest.mark.asyncio

@@ -63,6 +63,9 @@ class MouseDroidObservationBundle:
     _lidar_features: NDArray[np.float32] | None = None
     """LiDAR sector-binned features, shape ``(lidar_dim,)``, or ``None``."""
 
+    _lidar_n_points: int = 0
+    """Number of raw points in the last LiDAR scan (``0`` when no scan)."""
+
     _valid_mask: NDArray[np.float32] = field(
         default_factory=lambda: np.ones(N_SENSOR_MODALITIES, dtype=np.float32),
     )
@@ -99,6 +102,11 @@ class MouseDroidObservationBundle:
     def lidar_features(self) -> NDArray[np.float32] | None:
         """LiDAR sector-binned features, or ``None`` if LiDAR not configured."""
         return self._lidar_features
+
+    @property
+    def lidar_n_points(self) -> int:
+        """Number of raw points in the last LiDAR scan (``0`` when stale)."""
+        return self._lidar_n_points
 
     @property
     def valid_mask(self) -> NDArray[np.float32]:

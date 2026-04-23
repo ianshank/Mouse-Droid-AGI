@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>MouseDroid — Camera Feed</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0b0f14; color: #e6edf3; font: 14px/1.4 system-ui, -apple-system, sans-serif; }
+  header { padding: 10px 14px; border-bottom: 1px solid #1f2730; display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  .stat { color: #8b949e; } .stat b { color: #e6edf3; font-variant-numeric: tabular-nums; }
+  main { padding: 14px; display: grid; grid-template-columns: auto auto; gap: 18px; align-items: start; }
+  canvas, img.stream { border: 1px solid #1f2730; background: #000; image-rendering: pixelated; display: block; }
+  img.stream { width: 480px; height: 360px; object-fit: contain; }
+  .col { display: flex; flex-direction: column; gap: 8px; }
+  .label { font-size: 12px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; }
+  .legend { font-size: 12px; color: #8b949e; max-width: 320px; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+  .nav a { color: #58a6ff; text-decoration: none; margin-right: 10px; }
+  .nav a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<header>
+  <h1>MouseDroid — Camera Feed (feature heatmap)</h1>
+  <span class="nav"><a id="navLidar" href="/lidar">LiDAR</a><a id="navMetrics" href="/metrics">metrics</a><a id="navHealth" href="/api/v1/health">health</a></span>
+  <span class="stat">WS <b id="ws">-</b></span>
+  <span class="stat">FPS <b id="fps">-</b></span>
+  <span class="stat">dim <b id="dim">-</b></span>
+  <span class="stat">‖v‖ <b id="vnorm">-</b></span>
+  <span class="stat">tick <b id="tick">-</b></span>
+</header>
+<main>
+  <div class="col">
+    <span class="label">Raw frame (MJPEG) — /camera/stream</span>
+    <img id="stream" class="stream"
+         src=""
+         alt="raw camera stream"
+         onerror="this.onerror=null; document.getElementById('streamWarn').textContent='raw stream unavailable (driver has no capture_raw_jpeg)';" />
+    <span id="streamWarn" style="color:#f85149; font-size:12px;"></span>
+  </div>
+  <div class="col">
+    <span class="label">Feature heatmap (256→16×16) — /ws vision_features</span>
+    <canvas id="cam" width="256" height="256"></canvas>
+    <div class="legend">
+      <p>Raw frame (left) is the pre-inference RGB image when the driver
+         supports it. Heatmap (above) reshapes the 256-dim feature vector
+         — warm = positive, cool = negative.</p>
+      <p><span class="dot" style="background:#3d1a1a"></span>negative
+         <span class="dot" style="background:#1a1a1a"></span>zero
+         <span class="dot" style="background:#d9822b"></span>positive</p>
+      <p id="warn" style="color:#f85149"></p>
+    </div>
+  </div>
+</main>
+<script>
+(() => {
+  "use strict";
+  const cvs = document.getElementById("cam");
+  const ctx = cvs.getContext("2d");
+  const W = cvs.width, H = cvs.height;
+  const wsEl = document.getElementById("ws");
+  const fpsEl = document.getElementById("fps");
+  const dimEl = document.getElementById("dim");
+  const vnormEl = document.getElementById("vnorm");
+  const tickEl = document.getElementById("tick");
+  const warnEl = document.getElementById("warn");
+  const streamEl = document.getElementById("stream");
+
+  const pageParams = new URLSearchParams(location.search);
+  function authQueryString() {
+    const qs = new URLSearchParams();
+    const token = pageParams.get("token");
+    const apiKey = pageParams.get("api_key");
+    if (token) qs.set("token", token);
+    if (apiKey) qs.set("api_key", apiKey);
+    return qs.toString();
+  }
+  function withAuth(path) {
+    const qs = authQueryString();
+    return path + (qs ? "?" + qs : "");
+  }
+
+  streamEl.src = withAuth("/camera/stream");
+  document.getElementById("navLidar").href = withAuth("/lidar");
+  document.getElementById("navMetrics").href = withAuth("/metrics");
+  document.getElementById("navHealth").href = withAuth("/api/v1/health");
+
+  let frames = 0, lastFpsT = performance.now();
+  setInterval(() => {
+    const now = performance.now();
+    const fps = (frames / ((now - lastFpsT) / 1000)) || 0;
+    fpsEl.textContent = fps.toFixed(1);
+    frames = 0; lastFpsT = now;
+  }, 1000);
+
+  function colorFor(v) {
+    // v normalised to roughly [-1, 1] via tanh-ish scaling handled upstream
+    const a = Math.max(-1, Math.min(1, v));
+    if (a >= 0) {
+      const t = a;
+      const r = Math.round(20 + 217 * t);
+      const g = Math.round(20 + 110 * t);
+      const b = Math.round(20 + 43 * t);
+      return [r, g, b];
+    } else {
+      const t = -a;
+      const r = Math.round(20 + 80 * t);
+      const g = Math.round(20 + 30 * t);
+      const b = Math.round(20 + 30 * t);
+      return [r, g, b];
+    }
+  }
+
+  function render(features) {
+    const n = features.length;
+    const side = Math.max(1, Math.round(Math.sqrt(n)));
+    const cell = Math.floor(Math.min(W, H) / side);
+    // scale: divide by max-abs so pattern is visible regardless of magnitude
+    let maxAbs = 1e-6;
+    for (let i = 0; i < n; i++) {
+      const a = Math.abs(features[i]);
+      if (a > maxAbs) maxAbs = a;
+    }
+    const img = ctx.createImageData(side * cell, side * cell);
+    for (let r = 0; r < side; r++) {
+      for (let c = 0; c < side; c++) {
+        const idx = r * side + c;
+        const v = idx < n ? features[idx] / maxAbs : 0;
+        const [R, G, B] = colorFor(v);
+        for (let dy = 0; dy < cell; dy++) {
+          for (let dx = 0; dx < cell; dx++) {
+            const px = ((r * cell + dy) * side * cell + (c * cell + dx)) * 4;
+            img.data[px] = R; img.data[px + 1] = G; img.data[px + 2] = B; img.data[px + 3] = 255;
+          }
+        }
+      }
+    }
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+    ctx.putImageData(img, 0, 0);
+  }
+
+  function handleFrame(obj) {
+    if (!obj) return;
+    if (typeof obj.tick_count === "number") tickEl.textContent = obj.tick_count;
+    if (typeof obj.vision_norm === "number") vnormEl.textContent = obj.vision_norm.toFixed(2);
+    const feats = obj.vision_features;
+    if (Array.isArray(feats) && feats.length > 0) {
+      dimEl.textContent = feats.length;
+      warnEl.textContent = "";
+      render(feats);
+      frames++;
+    } else {
+      warnEl.textContent = "frame has no vision_features (camera disabled?)";
+    }
+  }
+
+  let ws = null, backoff = 500;
+  function connect() {
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const url = proto + "://" + location.host + withAuth("/ws");
+    wsEl.textContent = "connecting";
+    ws = new WebSocket(url);
+    ws.onopen = () => { wsEl.textContent = "open"; backoff = 500; };
+    ws.onclose = () => {
+      wsEl.textContent = "closed";
+      setTimeout(connect, backoff);
+      backoff = Math.min(5000, backoff * 2);
+    };
+    ws.onerror = () => { wsEl.textContent = "error"; };
+    ws.onmessage = (ev) => {
+      // Telemetry server may use JSON or msgpack (binary). This dashboard
+      // only supports JSON; surface the unsupported mode instead of silently
+      // appearing stuck so operators can switch the server to JSON.
+      if (typeof ev.data !== "string") {
+        wsEl.textContent = "binary (msgpack) — set telemetry.serialization=json";
+        return;
+      }
+      try { handleFrame(JSON.parse(ev.data)); } catch (_) { /* ignore */ }
+    };
+  }
+  connect();
+})();
+</script>
+</body>
+</html>

@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from typing import Self
+import sys
+
+if sys.version_info >= (3, 11):
+    from typing import Self
+else:
+    from typing_extensions import Self
 
 import numpy as np
 import torch
@@ -201,6 +206,10 @@ class _MockExperience:
 
 
 class _MockLLMGateway:
+    @property
+    def is_ready(self) -> bool:
+        return False
+
     async def start(self) -> None:
         pass
 

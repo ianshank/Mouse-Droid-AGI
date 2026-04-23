@@ -147,6 +147,15 @@ class TestLabelIntention:
     def test_all_labels_valid(self) -> None:
         assert len(INTENTION_LABELS) == 10
 
+    def test_battery_threshold_is_overridable(self) -> None:
+        from mousedroid.sensing.bundle import MouseDroidObservationBundle
+
+        obs = MouseDroidObservationBundle(
+            _motor_state=np.array([0, 0, 0, 9.5], dtype=np.float32),
+        )
+        action = np.array([0.1, 0.1, 0.0], dtype=np.float32)
+        assert label_intention(action, obs, battery_warn_v=9.0) != 6
+
     def test_low_battery_returns_charge(self) -> None:
         from mousedroid.sensing.bundle import MouseDroidObservationBundle
 

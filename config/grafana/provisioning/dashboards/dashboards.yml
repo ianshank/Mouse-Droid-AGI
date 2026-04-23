@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: MouseDroid
+    orgId: 1
+    folder: MouseDroid
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards

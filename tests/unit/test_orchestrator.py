@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
+import pytest
 import torch
 
 from mousedroid.config.schema import Settings
@@ -29,6 +30,8 @@ def _make_orchestrator(
     *,
     emergency: bool = False,
     cognitive_core: object | None = None,
+    llm_gateway: object | None = None,
+    tool_registry: object | None = None,
 ) -> MouseDroidOrchestrator:
     cfg = Settings(mock_hardware=True)
 
@@ -62,6 +65,8 @@ def _make_orchestrator(
         sensor_manager=sensor_manager,
         cfg=cfg,
         cognitive_core=cognitive_core,
+        llm_gateway=llm_gateway,
+        tool_registry=tool_registry,
     )
 
 
@@ -89,6 +94,41 @@ async def test_stop_clears_running():
     await orch.start()
     await orch.stop()
     assert orch._running is False
+
+
+async def test_start_starts_llm_gateway():
+    llm_gateway = AsyncMock()
+    orch = _make_orchestrator(llm_gateway=llm_gateway)
+    await orch.start()
+    llm_gateway.start.assert_awaited_once()
+    await orch.stop()
+    llm_gateway.stop.assert_awaited_once()
+
+
+async def test_llm_gateway_start_failure_does_not_fail_orchestrator():
+    llm_gateway = AsyncMock()
+    llm_gateway.start.side_effect = RuntimeError("missing model")
+    orch = _make_orchestrator(llm_gateway=llm_gateway)
+    await orch.start()
+    assert orch._running is True
+    await orch.stop()
+
+
+async def test_dispatch_tool_uses_registry():
+    tool_registry = AsyncMock()
+    tool_registry.dispatch = AsyncMock(return_value={"status": "ok"})
+    orch = _make_orchestrator(tool_registry=tool_registry)
+
+    result = await orch.dispatch_tool("health_check")
+
+    assert result == {"status": "ok"}
+    tool_registry.dispatch.assert_awaited_once_with("health_check")
+
+
+async def test_dispatch_tool_without_registry_raises():
+    orch = _make_orchestrator()
+    with pytest.raises(KeyError, match="Tool registry not configured"):
+        await orch.dispatch_tool("health_check")
 
 
 async def test_tick_full_cycle():

@@ -54,13 +54,16 @@ def test_build_distance_sensor_missing_config_raises():
         build_distance_sensor(cfg)
 
 
+@pytest.mark.hardware
 def test_build_distance_sensor_real_hardware():
+    try:
+        from mousedroid.hardware.sensors.ultrasonic import HcSr04
+    except Exception:
+        pytest.skip("Jetson.GPIO unavailable (container or non-Jetson host)")
     cfg = _real_settings()
     from mousedroid.factory import build_distance_sensor
 
     sensor = build_distance_sensor(cfg)
-    from mousedroid.hardware.sensors.ultrasonic import HcSr04
-
     assert isinstance(sensor, HcSr04)
 
 
@@ -261,6 +264,22 @@ def test_build_orchestrator_cognitive_no_fallback_raises():
         pytest.raises(RuntimeError, match="cognitive init failed"),
     ):
         build_orchestrator(cfg)
+
+
+def test_build_orchestrator_wires_log_buffer_from_telemetry_config():
+    """build_orchestrator passes the configured log buffer size into TelemetryServer."""
+    from mousedroid.factory import build_orchestrator
+
+    cfg = Settings(
+        mock_hardware=True,
+        telemetry={"enabled": True, "force_real_server": True, "log_stream_buffer": 7},
+    )
+
+    orch = build_orchestrator(cfg)
+
+    assert orch._telemetry_server is not None
+    assert orch._telemetry_server._log_buffer is not None
+    assert orch._telemetry_server._log_buffer._buffer.maxlen == 7
 
 
 def test_build_health_monitor():

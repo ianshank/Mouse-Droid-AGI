@@ -1,0 +1,38 @@
+# Jetson Orin Nano — LiDAR-only (Cut 2) deployment configuration.
+#
+# Overlay applied on top of jetson_production.yaml.  Switches the learned
+# world model from ultrasonic + motor → LiDAR + motor, matching the
+# lidar_only_training.yaml checkpoint layout.
+#
+# Usage (load_settings stacking):
+#   load_settings(
+#       Path("config/jetson_production.yaml"),
+#       Path("config/jetson_lidar_only.yaml"),
+#   )
+
+model:
+  # Disable ultrasonic modality in the encoder.
+  ultrasonic_dim: 0
+  ultrasonic_proj_dim: 0
+  # Enable LiDAR modality (36-sector FHL-LD19 feature vector).
+  lidar_dim: 36
+  lidar_proj_dim: 32
+
+# Disable the ultrasonic hardware driver entirely.
+ultrasonic: null
+
+# Activate LiDAR hardware (FHL-LD19 via /dev/ttyUSB1 at 230400 baud).
+lidar:
+  enabled: true
+  serial_port: "/dev/ttyUSB1"
+  baud_rate: 230400
+  n_sectors: 36
+  feature_dim: 36
+
+# Weights produced by lidar_only_training.yaml retraining run.
+training:
+  weights_dir: "/opt/mousedroid/weights/lidar_only"
+
+# At least one distance sensor must remain valid for safety checks.
+safety:
+  min_valid_sensors: 1

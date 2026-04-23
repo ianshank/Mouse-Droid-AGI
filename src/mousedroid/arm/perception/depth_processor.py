@@ -95,4 +95,4 @@ class DepthProcessor:
 
         # Remove invalid points
         valid = points[:, 2] > self._invalid_threshold
-        return points[valid]  # type: ignore[no-any-return]
+        return points[valid]

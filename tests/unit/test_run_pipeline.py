@@ -1,4 +1,4 @@
-"""Tests for training.run_pipeline — pipeline orchestration."""
+"""Tests for training.run_pipeline — configuration and orchestration."""
 
 from __future__ import annotations
 
@@ -6,10 +6,44 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
+from training.run_pipeline import _load_training_settings
 
 from mousedroid.config.schema import Settings
 
-# ── Phase runners ────────────────────────────────────────────
+
+def test_load_training_settings_forces_mock_hardware(tmp_path: Path) -> None:
+    """Training CLI preserves legacy mock-hardware forcing for synthetic runs."""
+    config_path = tmp_path / "training.yaml"
+    config_path.write_text(
+        yaml.dump(
+            {
+                "mock_hardware": False,
+                "debug": True,
+                "training": {"batch_size": 16},
+            }
+        )
+    )
+
+    settings = _load_training_settings(str(config_path))
+
+    assert settings.mock_hardware is True
+    assert settings.debug is True
+    assert settings.training.batch_size == 16
+
+
+def test_load_training_settings_honours_env_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Shared loader semantics remain active for top-level env overrides."""
+    config_path = tmp_path / "training.yaml"
+    config_path.write_text(yaml.dump({"debug": False}))
+    monkeypatch.setenv("MOUSEDROID_DEBUG", "true")
+
+    settings = _load_training_settings(str(config_path))
+
+    assert settings.debug is True
 
 
 class TestRunPipeline:
@@ -18,14 +52,16 @@ class TestRunPipeline:
     @pytest.fixture
     def cfg(self) -> Settings:
         """Create test settings with mock hardware."""
-        return Settings(
-            mock_hardware=True,
-            training={
-                "epochs": 2,
-                "n_episodes": 5,
-                "sequence_length": 10,
-                "batch_size": 4,
-            },
+        return Settings.model_validate(
+            {
+                "mock_hardware": True,
+                "training": {
+                    "epochs": 2,
+                    "n_episodes": 5,
+                    "sequence_length": 10,
+                    "batch_size": 4,
+                },
+            }
         )
 
     @patch("training.run_pipeline.run_upload")

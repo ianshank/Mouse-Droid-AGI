@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MouseDroid — LiDAR Polar View</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b0f14;
+    --fg: #e6edf3;
+    --muted: #8b949e;
+    --grid: #30363d;
+    --accent: #58a6ff;
+    --ok: #3fb950;
+    --warn: #d29922;
+    --crit: #f85149;
+  }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  header { padding: 12px 20px; border-bottom: 1px solid var(--grid); display: flex; align-items: baseline; gap: 20px; flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+  header .status { color: var(--muted); font-size: 13px; }
+  header .status strong { color: var(--fg); font-weight: 600; }
+  #conn { color: var(--warn); }
+  #conn.ok { color: var(--ok); }
+  #conn.err { color: var(--crit); }
+  main { display: flex; gap: 20px; padding: 20px; flex-wrap: wrap; }
+  #canvas-wrap { background: #10171f; border: 1px solid var(--grid); border-radius: 8px; padding: 12px; }
+  canvas { display: block; }
+  #legend { color: var(--muted); font-size: 12px; line-height: 1.6; max-width: 340px; }
+  #legend h2 { color: var(--fg); font-size: 14px; margin: 0 0 8px 0; }
+  .swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: middle; border-radius: 2px; }
+  .s-ok   { background: var(--ok); }
+  .s-warn { background: var(--warn); }
+  .s-crit { background: var(--crit); }
+  .s-none { background: var(--grid); }
+  code { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>MouseDroid LiDAR</h1>
+  <div class="status">WS: <strong id="conn">connecting…</strong></div>
+  <div class="status">FPS: <strong id="fps">0</strong></div>
+  <div class="status">Sectors: <strong id="nsect">0</strong></div>
+  <div class="status">Min: <strong id="mindist">—</strong> m</div>
+  <div class="status">Points: <strong id="npoints">0</strong></div>
+</header>
+<main>
+  <div id="canvas-wrap">
+    <canvas id="polar" width="520" height="520"></canvas>
+  </div>
+  <aside id="legend">
+    <h2>Legend</h2>
+    <p><span class="swatch s-ok"></span>free (&gt; 0.6 &times; max_range)</p>
+    <p><span class="swatch s-warn"></span>near (0.3 – 0.6 &times; max_range)</p>
+    <p><span class="swatch s-crit"></span>collision risk (&lt; 0.3 &times; max_range)</p>
+    <p><span class="swatch s-none"></span>no data</p>
+    <p style="margin-top:16px">Each wedge spans one sector around the droid.
+    Radius maps 0 → center (blocked) to outer ring (clear).
+    Source: WebSocket <code>TelemetryFrame.lidar_sectors</code>.</p>
+    <p>Endpoints:
+      <br><code>GET /lidar</code> (this page)
+      <br><code>WS /ws</code> (frames)
+      <br><code>GET /metrics</code> (Prometheus)
+      <br><code>GET /api/v1/sensors</code> (snapshot)
+    </p>
+  </aside>
+</main>
+<script>
+(() => {
+  "use strict";
+  const canvas = document.getElementById("polar");
+  const ctx = canvas.getContext("2d");
+  const connEl = document.getElementById("conn");
+  const fpsEl = document.getElementById("fps");
+  const nsectEl = document.getElementById("nsect");
+  const mindistEl = document.getElementById("mindist");
+  const npointsEl = document.getElementById("npoints");
+
+  // State
+  let latest = { sectors: null, min: null, n: 0 };
+  let frameCount = 0;
+  let lastFpsT = performance.now();
+
+  function colorFor(norm) {
+    // norm in [0, 1]; 1.0 = clear, 0 = blocked.
+    if (norm == null) return "#30363d";
+    if (norm >= 0.6) return "#3fb950";
+    if (norm >= 0.3) return "#d29922";
+    return "#f85149";
+  }
+
+  function draw() {
+    const w = canvas.width, h = canvas.height;
+    const cx = w / 2, cy = h / 2;
+    const R = Math.min(cx, cy) - 20;
+
+    ctx.clearRect(0, 0, w, h);
+
+    // Background grid (rings + 4 cardinal spokes)
+    ctx.strokeStyle = "#30363d";
+    ctx.lineWidth = 1;
+    for (let i = 1; i <= 4; i++) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, (R * i) / 4, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    for (let i = 0; i < 4; i++) {
+      const a = (i * Math.PI) / 2;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + Math.cos(a) * R, cy + Math.sin(a) * R);
+      ctx.stroke();
+    }
+
+    // Forward indicator (up = 0° / "front")
+    ctx.fillStyle = "#58a6ff";
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - R - 10);
+    ctx.lineTo(cx - 6, cy - R + 2);
+    ctx.lineTo(cx + 6, cy - R + 2);
+    ctx.closePath();
+    ctx.fill();
+
+    const sectors = latest.sectors;
+    if (!sectors || sectors.length === 0) {
+      ctx.fillStyle = "#8b949e";
+      ctx.font = "13px ui-monospace, monospace";
+      ctx.textAlign = "center";
+      ctx.fillText("waiting for lidar_sectors…", cx, cy);
+      return;
+    }
+
+    const n = sectors.length;
+    const step = (Math.PI * 2) / n;
+    // Rotate so sector 0 starts at forward (up) and wedges go clockwise.
+    const a0 = -Math.PI / 2 - step / 2;
+
+    for (let i = 0; i < n; i++) {
+      const norm = Math.max(0, Math.min(1, sectors[i]));
+      const radius = norm * R;
+      const start = a0 + i * step;
+      const end = start + step;
+      ctx.fillStyle = colorFor(norm);
+      ctx.globalAlpha = 0.85;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, radius, start, end);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // Center dot
+    ctx.fillStyle = "#e6edf3";
+    ctx.beginPath();
+    ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function handleFrame(obj) {
+    const sectors = Array.isArray(obj.lidar_sectors) ? obj.lidar_sectors : null;
+    const minDist = (typeof obj.lidar_min_dist_m === "number") ? obj.lidar_min_dist_m : null;
+    const n = (typeof obj.lidar_n_points === "number") ? obj.lidar_n_points : 0;
+    latest = { sectors, min: minDist, n };
+
+    nsectEl.textContent = sectors ? String(sectors.length) : "0";
+    mindistEl.textContent = minDist == null ? "—" : minDist.toFixed(2);
+    npointsEl.textContent = String(n);
+
+    frameCount++;
+    draw();
+  }
+
+  function updateFps() {
+    const now = performance.now();
+    const dt = now - lastFpsT;
+    if (dt >= 1000) {
+      fpsEl.textContent = ((frameCount * 1000) / dt).toFixed(1);
+      frameCount = 0;
+      lastFpsT = now;
+    }
+    requestAnimationFrame(updateFps);
+  }
+  requestAnimationFrame(updateFps);
+
+  let ws = null;
+  let backoff = 500;
+  function connect() {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    // Propagate auth material from the page URL onto the /ws upgrade so the
+    // dashboard works when telemetry bearer auth or legacy X-API-Key is on.
+    // Browsers cannot set custom headers on new WebSocket(), so the server
+    // accepts ?token=... (bearer) and ?api_key=... (legacy) as a fallback.
+    const pageParams = new URLSearchParams(location.search);
+    const wsParams = new URLSearchParams();
+    const token = pageParams.get("token");
+    const apiKey = pageParams.get("api_key");
+    if (token) wsParams.set("token", token);
+    if (apiKey) wsParams.set("api_key", apiKey);
+    const qs = wsParams.toString();
+    const url = `${proto}//${location.host}/ws` + (qs ? `?${qs}` : "");
+    connEl.textContent = "connecting…";
+    connEl.className = "";
+    try {
+      ws = new WebSocket(url);
+    } catch (e) {
+      scheduleReconnect();
+      return;
+    }
+    ws.binaryType = "arraybuffer";
+    ws.onopen = () => {
+      connEl.textContent = "open";
+      connEl.className = "ok";
+      backoff = 500;
+    };
+    ws.onmessage = (ev) => {
+      // Dashboard only supports JSON frames. When the server is configured
+      // for msgpack serialization, surface the mode explicitly so operators
+      // know to switch telemetry.serialization to "json" rather than see a
+      // silently-stuck dashboard.
+      if (typeof ev.data !== "string") {
+        connEl.textContent = "binary (msgpack) — set telemetry.serialization=json";
+        connEl.className = "err";
+        return;
+      }
+      try {
+        const obj = JSON.parse(ev.data);
+        handleFrame(obj);
+      } catch (err) {
+        // ignore malformed JSON
+      }
+    };
+    ws.onclose = () => {
+      connEl.textContent = "closed";
+      connEl.className = "err";
+      scheduleReconnect();
+    };
+    ws.onerror = () => {
+      connEl.textContent = "error";
+      connEl.className = "err";
+    };
+  }
+  function scheduleReconnect() {
+    setTimeout(connect, backoff);
+    backoff = Math.min(backoff * 2, 5000);
+  }
+  connect();
+  draw();
+})();
+</script>
+</body>
+</html>

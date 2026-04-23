@@ -44,20 +44,6 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
-# Default histogram buckets for latency in milliseconds (control-loop context)
-_DEFAULT_LATENCY_BUCKETS_MS: tuple[float, ...] = (
-    1.0,
-    2.5,
-    5.0,
-    10.0,
-    20.0,
-    33.0,
-    50.0,
-    100.0,
-    200.0,
-    float("inf"),
-)
-
 
 class _Counter:
     """Thread-safe Prometheus Counter (only increments)."""
@@ -122,6 +108,33 @@ class _Gauge:
     def value(self) -> float:
         with self._lock:
             return self._value
+
+
+class _LabeledGauge:
+    """Gauge with a single string label dimension."""
+
+    __slots__ = ("_lock", "_values")
+
+    def __init__(self) -> None:
+        self._values: dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    def set(self, label: str, value: float) -> None:
+        with self._lock:
+            self._values[label] = value
+
+    def set_many(self, values: dict[str, float]) -> None:
+        """Replace all label → value entries atomically."""
+        with self._lock:
+            self._values = dict(values)
+
+    def snapshot(self) -> dict[str, float]:
+        with self._lock:
+            return dict(self._values)
+
+    def reset(self) -> None:
+        with self._lock:
+            self._values.clear()
 
 
 class _Histogram:
@@ -214,6 +227,28 @@ def _render_gauge(name: str, help_text: str, value: float) -> list[str]:
     return lines
 
 
+def _render_labeled_gauge(
+    name: str,
+    help_text: str,
+    label_name: str,
+    values: dict[str, float],
+) -> list[str]:
+    lines = [
+        f"# HELP {name} {_escape_help_text(help_text)}",
+        f"# TYPE {name} gauge",
+    ]
+    # Sort numerically when labels are numeric strings so scrape output is
+    # stable for sector="0", "1", ..., "10" ordering.
+    try:
+        ordered = sorted(values.items(), key=lambda kv: (int(kv[0]), kv[0]))
+    except ValueError:
+        ordered = sorted(values.items())
+    for label_val, gauge_value in ordered:
+        escaped = _escape_label_value(label_val)
+        lines.append(f'{name}{{{label_name}="{escaped}"}} {_fmt_float(gauge_value)}')
+    return lines
+
+
 def _render_histogram(
     name: str,
     help_text: str,
@@ -257,6 +292,10 @@ class MetricsRegistry:
         # Counters
         self._frame_drops = _Counter()
         self._safety_violations = _LabeledCounter()
+        self._llm_translation_results = _LabeledCounter()
+        self._llm_requests = _Counter()
+        self._sensor_recoveries = _Counter()
+        self._sensor_recovery_failures = _Counter()
 
         # Gauges
         self._loop_time_ms = _Gauge()
@@ -264,26 +303,29 @@ class MetricsRegistry:
         self._ws_clients = _Gauge()
         self._gpu_temp_c = _Gauge()
         self._publish_hz = _Gauge()
+        self._lidar_sector_distance_m = _LabeledGauge()
+        self._lidar_min_distance_m = _Gauge()
+        self._lidar_scan_points = _Gauge()
+        self._episodic_size = _Gauge()
+        self._semantic_size = _Gauge()
+        self._working_size = _Gauge()
+        self._llm_latency_ms = _Gauge()
+        self._curiosity_reward = _Gauge()
 
-        # Histogram (loop latency) — bucket boundaries come from config so they
-        # can be tuned per-deployment without code changes.  We sort and
-        # guarantee a trailing +Inf so every observation lands in a bucket
-        # (Prometheus spec requires a final +Inf bucket).
+        # Labeled counters (Phase 7)
+        self._voice_events = _LabeledCounter()
+
+        # Histogram (loop latency) — sort and guarantee +Inf sentinel
         raw_buckets = sorted(cfg.loop_latency_buckets_ms)
         if not raw_buckets or raw_buckets[-1] != float("inf"):
             raw_buckets.append(float("inf"))
         self._loop_histogram = _Histogram(tuple(raw_buckets))
 
-        # Phase 7 metrics — memory, voice, LLM, curiosity, recovery
-        self._episodic_size = _Gauge()
-        self._semantic_size = _Gauge()
-        self._working_size = _Gauge()
-        self._voice_events = _LabeledCounter()
-        self._llm_latency_ms = _Gauge()
-        self._llm_requests = _Counter()
-        self._curiosity_reward = _Gauge()
-        self._sensor_recoveries = _Counter()
-        self._sensor_recovery_failures = _Counter()
+        # LLM latency histogram — sort and guarantee +Inf sentinel
+        llm_buckets = sorted(cfg.llm_latency_buckets_ms)
+        if not llm_buckets or llm_buckets[-1] != float("inf"):
+            llm_buckets.append(float("inf"))
+        self._llm_translation_latency_ms = _Histogram(tuple(llm_buckets))
 
         # Pre-format metric names from namespace
         self._name_frame_drops = f"{ns}_frame_drops"
@@ -295,6 +337,11 @@ class MetricsRegistry:
         self._name_gpu_temp_c = f"{ns}_gpu_temp_celsius"
         self._name_publish_hz = f"{ns}_publish_hz"
         self._name_uptime = f"{ns}_uptime_seconds"
+        self._name_llm_translation = f"{ns}_llm_translation"
+        self._name_llm_translation_latency = f"{ns}_llm_translation_latency_ms"
+        self._name_lidar_sector_distance = f"{ns}_lidar_sector_distance_m"
+        self._name_lidar_min_distance = f"{ns}_lidar_min_distance_m"
+        self._name_lidar_scan_points = f"{ns}_lidar_scan_points"
         self._name_episodic_size = f"{ns}_memory_episodic_size"
         self._name_semantic_size = f"{ns}_memory_semantic_size"
         self._name_working_size = f"{ns}_memory_working_size"
@@ -349,6 +396,40 @@ class MetricsRegistry:
     def set_publish_hz(self, value: float) -> None:
         """Set the current telemetry publish rate in Hz."""
         self._publish_hz.set(value)
+
+    def inc_llm_translation(self, result: str) -> None:
+        """Increment the LLM translation counter for the given result label."""
+        if self._cfg.track_llm_translations:
+            self._llm_translation_results.inc(result)
+
+    def observe_llm_translation_latency_ms(self, value: float) -> None:
+        """Record LLM translation latency in milliseconds."""
+        if self._cfg.track_llm_translations:
+            self._llm_translation_latency_ms.observe(value)
+
+    def set_lidar_sectors(self, sectors: list[float], max_range_m: float) -> None:
+        """Publish per-sector LiDAR distances as a labeled gauge.
+
+        Args:
+            sectors: Normalised sector distances in ``[0.0, 1.0]``, where
+                ``1.0`` equals ``max_range_m`` (no obstacle detected).
+            max_range_m: LiDAR maximum detection range in metres; used to
+                convert the normalised sector value into metres for scrape.
+        """
+        if not self._cfg.track_lidar:
+            return
+        payload = {str(i): float(v) * max_range_m for i, v in enumerate(sectors)}
+        self._lidar_sector_distance_m.set_many(payload)
+
+    def set_lidar_min_distance_m(self, value: float) -> None:
+        """Set the minimum LiDAR distance reading in metres."""
+        if self._cfg.track_lidar:
+            self._lidar_min_distance_m.set(value)
+
+    def set_lidar_scan_points(self, count: int) -> None:
+        """Set the raw LiDAR scan point count (liveness signal)."""
+        if self._cfg.track_lidar:
+            self._lidar_scan_points.set(float(count))
 
     def set_episodic_size(self, size: int) -> None:
         """Set the current episodic replay buffer size."""
@@ -497,13 +578,53 @@ class MetricsRegistry:
                 )
             )
 
-        sections.append(
-            _render_gauge(
-                self._name_publish_hz,
-                "Telemetry publisher rate (Hz)",
-                self._publish_hz.value,
+        if cfg.track_llm_translations:
+            llm_results = self._llm_translation_results.snapshot()
+            if llm_results:
+                sections.append(
+                    _render_labeled_counter(
+                        self._name_llm_translation,
+                        "LLM translation results (label: result)",
+                        "result",
+                        llm_results,
+                    )
+                )
+            llm_buckets, llm_sum, llm_count = self._llm_translation_latency_ms.snapshot()
+            sections.append(
+                _render_histogram(
+                    self._name_llm_translation_latency,
+                    "LLM translation latency histogram (milliseconds)",
+                    llm_buckets,
+                    llm_sum,
+                    llm_count,
+                )
             )
-        )
+
+        if cfg.track_lidar:
+            sector_snapshot = self._lidar_sector_distance_m.snapshot()
+            if sector_snapshot:
+                sections.append(
+                    _render_labeled_gauge(
+                        self._name_lidar_sector_distance,
+                        "Per-sector LiDAR distance in metres (label: sector)",
+                        "sector",
+                        sector_snapshot,
+                    )
+                )
+            sections.append(
+                _render_gauge(
+                    self._name_lidar_min_distance,
+                    "Minimum LiDAR distance across all sectors (metres)",
+                    self._lidar_min_distance_m.value,
+                )
+            )
+            sections.append(
+                _render_gauge(
+                    self._name_lidar_scan_points,
+                    "Number of raw points in the last LiDAR scan",
+                    self._lidar_scan_points.value,
+                )
+            )
 
         # Phase 7 metrics — memory, voice, LLM, curiosity, recovery
         if cfg.track_memory_tier:
@@ -582,4 +703,45 @@ class MetricsRegistry:
                 )
             )
 
+        sections.append(
+            _render_gauge(
+                self._name_publish_hz,
+                "Telemetry publisher rate (Hz)",
+                self._publish_hz.value,
+            )
+        )
+
         return "\n\n".join("\n".join(section) for section in sections) + "\n"
+
+
+def generate_metrics_sample() -> str:
+    """Generate a representative Prometheus metrics sample for CI validation.
+
+    Creates a :class:`MetricsRegistry` with default config, populates every
+    metric family with representative data, and returns the rendered
+    Prometheus text exposition output.  Used by the CI ``promtool check
+    metrics`` step to validate format compliance.
+
+    Returns:
+        Prometheus text exposition format string with all metric families.
+    """
+    from mousedroid.config.schema import MetricsConfig
+
+    cfg: MetricsConfig = MetricsConfig()  # type: ignore[call-arg]
+    registry = MetricsRegistry(cfg)
+
+    # Populate every metric family so all appear in the output.
+    registry.set_loop_time_ms(15.0)
+    registry.set_battery_voltage(11.8)
+    registry.set_ws_client_count(2)
+    registry.set_gpu_temp_celsius(52.0)
+    registry.set_publish_hz(10.0)
+    registry.inc_frame_drops(3)
+    registry.inc_safety_violation("law1")
+    registry.inc_llm_translation("translated")
+    registry.observe_llm_translation_latency_ms(42.0)
+    registry.set_lidar_sectors([0.9, 0.4, 1.0, 1.0, 0.7, 1.0, 1.0, 0.2], max_range_m=12.0)
+    registry.set_lidar_min_distance_m(2.4)
+    registry.set_lidar_scan_points(456)
+
+    return registry.render_prometheus()

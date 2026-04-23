@@ -14,12 +14,7 @@ import numpy as np
 import structlog
 from numpy.typing import NDArray
 
-from mousedroid.config.schema import Settings
-from mousedroid.constants import (
-    APPROACH_CLEAR_DISTANCE_M,
-    APPROACH_SPEED_THRESHOLD,
-    BACKTRACK_SPEED_THRESHOLD,
-)
+from mousedroid.config.schema import Settings, TrainingAnnotationConfig
 from mousedroid.factory import build_orchestrator
 from mousedroid.sensing.bundle import MouseDroidObservationBundle
 
@@ -50,6 +45,14 @@ def label_intention(
     human_safety_radius_m: float = 0.5,
     battery_warn_v: float = 10.8,
     obstacle_clearance_m: float = 0.25,
+    idle_speed_threshold: float = 0.05,
+    idle_omega_threshold: float = 0.1,
+    wait_speed_threshold: float = 0.1,
+    wait_omega_threshold: float = 0.05,
+    turn_omega_threshold: float = 0.5,
+    backtrack_speed_threshold: float = -0.2,
+    approach_clear_distance_m: float = 1.0,
+    approach_speed_threshold: float = 0.2,
 ) -> int:
     """Assign an intention label based on heuristic rules.
 
@@ -62,6 +65,14 @@ def label_intention(
         human_safety_radius_m: Law 1 human safety distance threshold.
         battery_warn_v: Battery voltage threshold for charge intention.
         obstacle_clearance_m: Obstacle distance threshold for avoidance.
+        idle_speed_threshold: Planar speed threshold for the idle label.
+        idle_omega_threshold: Angular speed threshold for the idle label.
+        wait_speed_threshold: Planar speed threshold for the wait label.
+        wait_omega_threshold: Angular speed threshold for the wait label.
+        turn_omega_threshold: Angular speed threshold for the turn label.
+        backtrack_speed_threshold: Forward velocity threshold for the backtrack label.
+        approach_clear_distance_m: Distance threshold for the approach_target label.
+        approach_speed_threshold: Planar speed threshold for the approach_target label.
 
     Returns:
         Integer intention class index (0-9).
@@ -88,31 +99,55 @@ def label_intention(
         return 2  # avoid_obstacle
 
     # Mostly stationary
-    if speed < 0.05 and omega < 0.1:
+    if speed < idle_speed_threshold and omega < idle_omega_threshold:
         return 7  # idle
 
     # Waiting (low speed, no rotation)
-    if speed < 0.1 and omega < 0.05:
+    if speed < wait_speed_threshold and omega < wait_omega_threshold:
         return 4  # wait
 
     # High rotation → turn
-    if omega > 0.5:
+    if omega > turn_omega_threshold:
         return 5  # turn
 
     # Moving backward → backtrack
-    if len(action) >= 1 and float(action[0]) < BACKTRACK_SPEED_THRESHOLD:
+    if len(action) >= 1 and float(action[0]) < backtrack_speed_threshold:
         return 3  # backtrack
 
     # Moving forward with clear path → approach or explore
-    if distance > APPROACH_CLEAR_DISTANCE_M and speed > APPROACH_SPEED_THRESHOLD:
+    if distance > approach_clear_distance_m and speed > approach_speed_threshold:
         return 1  # approach_target
 
     return 0  # explore
 
 
+def _label_intention_from_config(
+    action: NDArray[Any],
+    obs: MouseDroidObservationBundle,
+    annotation_cfg: TrainingAnnotationConfig,
+) -> int:
+    """Apply annotation heuristics using config-backed thresholds."""
+    return label_intention(
+        action,
+        obs,
+        human_safety_radius_m=annotation_cfg.human_safety_radius_m,
+        battery_warn_v=annotation_cfg.battery_warn_v,
+        obstacle_clearance_m=annotation_cfg.obstacle_clearance_m,
+        idle_speed_threshold=annotation_cfg.idle_speed_threshold,
+        idle_omega_threshold=annotation_cfg.idle_omega_threshold,
+        wait_speed_threshold=annotation_cfg.wait_speed_threshold,
+        wait_omega_threshold=annotation_cfg.wait_omega_threshold,
+        turn_omega_threshold=annotation_cfg.turn_omega_threshold,
+        backtrack_speed_threshold=annotation_cfg.backtrack_speed_threshold,
+        approach_clear_distance_m=annotation_cfg.approach_clear_distance_m,
+        approach_speed_threshold=annotation_cfg.approach_speed_threshold,
+    )
+
+
 async def _collect_episode(
     cfg: Settings,
     max_steps: int,
+    annotation_cfg: TrainingAnnotationConfig,
 ) -> list[dict[str, Any]]:
     """Run one episode and collect annotated transitions."""
     orchestrator = build_orchestrator(cfg)
@@ -128,7 +163,7 @@ async def _collect_episode(
         # Random policy for diverse data collection
         action = np.tanh(rng.standard_normal(cfg.model.action_dim).astype(np.float32))
 
-        intention = label_intention(action, obs)
+        intention = _label_intention_from_config(action, obs, annotation_cfg)
 
         annotations.append(
             {
@@ -144,10 +179,32 @@ async def _collect_episode(
     return annotations
 
 
+async def _collect_annotations_async(
+    cfg: Settings,
+    n_episodes: int,
+    max_steps: int,
+    annotation_cfg: TrainingAnnotationConfig,
+) -> tuple[list[NDArray[Any]], list[int]]:
+    """Collect all annotations within a single event loop."""
+    all_observations: list[NDArray[Any]] = []
+    all_intentions: list[int] = []
+
+    for ep in range(n_episodes):
+        annotations = await _collect_episode(cfg, max_steps, annotation_cfg)
+        for ann in annotations:
+            all_observations.append(ann["observation"])
+            all_intentions.append(ann["intention_label"])
+
+        if (ep + 1) % annotation_cfg.log_every_n_episodes == 0 or ep + 1 == n_episodes:
+            _log.info("annotation_episodes", count=ep + 1, total=n_episodes)
+
+    return all_observations, all_intentions
+
+
 def collect_annotations(
     cfg: Settings,
-    n_episodes: int = 500,
-    max_steps: int = 50,
+    n_episodes: int | None = None,
+    max_steps: int | None = None,
     output_path: Path | str | None = None,
 ) -> Path:
     """Collect labelled intention annotations from navigation episodes.
@@ -165,23 +222,26 @@ def collect_annotations(
         msg = "Annotation collection requires mock_hardware=True"
         raise ValueError(msg)
 
+    annotation_cfg = cfg.training.annotation
+    n_episodes = n_episodes if n_episodes is not None else annotation_cfg.n_episodes
+    max_steps = max_steps if max_steps is not None else annotation_cfg.max_steps
+
     if output_path:
         output_path = Path(output_path)
     else:
         output_path = Path(cfg.training.data_dir) / "bdi_annotations.npz"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    all_observations: list[NDArray[Any]] = []
-    all_intentions: list[int] = []
+    _log.info(
+        "annotation_collection_start",
+        n_episodes=n_episodes,
+        max_steps=max_steps,
+        output_path=str(output_path),
+    )
 
-    for ep in range(n_episodes):
-        annotations = asyncio.run(_collect_episode(cfg, max_steps))
-        for ann in annotations:
-            all_observations.append(ann["observation"])
-            all_intentions.append(ann["intention_label"])
-
-        if (ep + 1) % 100 == 0:
-            _log.info("annotation_episodes", count=ep + 1, total=n_episodes)
+    all_observations, all_intentions = asyncio.run(
+        _collect_annotations_async(cfg, n_episodes, max_steps, annotation_cfg)
+    )
 
     observations = np.stack(all_observations)
     intentions = np.array(all_intentions, dtype=np.int64)

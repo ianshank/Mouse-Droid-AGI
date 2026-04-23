@@ -25,6 +25,13 @@ echo "=== Branch Coverage Gate (changed files >= 85%) ==="
 python scripts/check_branch_coverage.py --min 85 \
     --tests tests/unit tests/property tests/integration
 
+echo "=== Prometheus Rules Validation (promtool) ==="
+if command -v promtool >/dev/null 2>&1; then
+    promtool check rules config/prometheus/alerts.yml
+else
+    echo "promtool not on PATH - skipping Prometheus rule validation"
+fi
+
 echo "=== Health Check ==="
 MOUSEDROID_MOCK_HARDWARE=true python -m mousedroid.main --health-check
 

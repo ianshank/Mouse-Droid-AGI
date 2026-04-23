@@ -1,0 +1,36 @@
+# Local LiDAR dashboard validation profile
+# Layered on top of config/default.yaml (or config/mock_hardware.yaml) via
+# `python -m mousedroid.main --config config/default.yaml config/local_lidar_validation.yaml`.
+#
+# Enables mock hardware, disables auth, pushes telemetry faster so the polar
+# page feels responsive, and uses the rotating-wedge mock scan so visual
+# validation is obvious.
+platform: mouse_droid
+mock_hardware: true
+debug: true
+
+logging:
+  level: "INFO"
+  format: "console"
+
+telemetry:
+  enabled: true
+  host: "127.0.0.1"
+  port: 8080
+  api_key: null         # no auth for local validation
+  publish_hz: 10.0
+  ws_enabled: true
+  force_real_server: true  # use the real aiohttp server even in mock mode
+
+metrics:
+  enabled: true
+  track_lidar: true
+
+lidar:
+  enabled: true
+  n_sectors: 12
+  mock_pattern: "rotating_wedge"
+  mock_rotation_hz: 0.5
+
+camera:
+  mock_source: "screen_capture"   # real photographic content — stream host desktop

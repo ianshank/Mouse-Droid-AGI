@@ -68,6 +68,14 @@ class CameraConfig(BaseModel):
         "auto",
         description="Camera backend: auto-detect, picamera2, or Jetson CSI",
     )
+    mock_source: Literal["procedural", "screen_capture"] = Field(
+        "procedural",
+        description=(
+            "Source used by the mock driver: 'procedural' synthesises an "
+            "animated test pattern; 'screen_capture' streams the host "
+            "desktop via PIL.ImageGrab (real photographic content)."
+        ),
+    )
     feature_extractor: Literal["mean_pool", "tensorrt", "hailo", "auto"] = Field(
         "mean_pool",
         description="Feature extraction backend: mean_pool (fallback), tensorrt, hailo, or auto",
@@ -181,6 +189,21 @@ class ESP32Config(BaseModel):
         gt=0,
         description="Mock driver default battery voltage (V)",
     )
+    degraded_timeout_s: float = Field(
+        0.05,
+        gt=0,
+        description="Serial timeout when ESP32 is unresponsive (s)",
+    )
+    max_consecutive_timeouts: int = Field(
+        5,
+        gt=0,
+        description="Consecutive timeout failures before entering degraded mode",
+    )
+    degraded_poll_interval_s: float = Field(
+        1.0,
+        gt=0,
+        description="Probe interval while degraded — poll once per N seconds instead of every tick",
+    )
 
 
 class ExperienceConfig(BaseModel):
@@ -286,6 +309,19 @@ class LidarConfig(BaseModel):
     read_timeout_s: float = Field(0.2, gt=0, description="Serial read timeout (s)")
     n_sectors: int = Field(36, gt=0, description="Number of angular sectors for binning")
     feature_dim: int = Field(36, gt=0, description="Output feature vector dimension")
+    mock_pattern: str = Field(
+        "uniform",
+        description=(
+            "Mock LiDAR scan pattern. 'uniform' (default) fills scan at midrange; "
+            "'rotating_wedge' rotates a narrow near-obstacle wedge for dashboard "
+            "visual validation."
+        ),
+    )
+    mock_rotation_hz: float = Field(
+        0.5,
+        gt=0,
+        description="Rotation frequency (Hz) of the mock rotating-wedge pattern.",
+    )
 
     @model_validator(mode="after")
     def _range_order(self) -> Self:
@@ -334,6 +370,28 @@ class LLMConfig(BaseModel):
         description="Stop sequences",
     )
     max_command_len: int = Field(512, gt=0, description="Max NL command length in chars")
+    max_vx_norm_mps: float = Field(0.5, gt=0, description="Max forward velocity norm (m/s)")
+    max_vy_norm_mps: float = Field(0.3, gt=0, description="Max lateral velocity norm (m/s)")
+    max_omega_norm_rads: float = Field(
+        2.0,
+        gt=0,
+        description="Max angular velocity norm (rad/s)",
+    )
+    system_prompt: str = Field(
+        "You are a Star Wars MSE-6 Mouse Droid navigation controller. "
+        "Given a natural language mission, output a JSON object with keys "
+        '"vx" (forward, -1 to 1), "vy" (lateral, -1 to 1), "omega" (rotation, -1 to 1). '
+        "Respond with ONLY the JSON object.",
+        description="System prompt for LLM mission translation",
+    )
+    injection_patterns: list[str] = Field(
+        default_factory=lambda: [
+            r"ignore (previous|above|all) instructions?",
+            r"system prompt",
+            r"you are now",
+        ],
+        description="Regex patterns to detect prompt injection attempts",
+    )
 
 
 class LoggingConfig(BaseModel):
@@ -355,11 +413,18 @@ class LoopConfig(BaseModel):
     tick_timeout_s: float = Field(
         1.0,
         gt=0,
-        description="Max seconds per tick before emergency stop is triggered",
+        description="Max seconds per tick before triggering emergency stop",
     )
     watchdog_enabled: bool = Field(
         False,
-        description="Enable systemd/file heartbeat watchdog notifications",
+        description="Enable watchdog notifications (systemd or file heartbeat)",
+    )
+    watchdog_mode: Literal["auto", "systemd", "file", "none"] = Field(
+        "auto",
+        description=(
+            "Watchdog mode: 'auto' (systemd if NOTIFY_SOCKET set, else file), "
+            "'systemd', 'file', 'none'"
+        ),
     )
     watchdog_interval_s: float = Field(
         10.0,
@@ -368,7 +433,8 @@ class LoopConfig(BaseModel):
     )
     watchdog_heartbeat_path: str = Field(
         "/tmp/mousedroid_heartbeat",  # noqa: S108
-        description="Filesystem path for file-based watchdog heartbeat (Docker health checks)",
+        # watchdog_mode 'file' or 'auto' fallback
+        description="Path for file-based watchdog heartbeat",
     )
 
 
@@ -476,7 +542,7 @@ class MCTSConfig(BaseModel):
 class MemoryConfig(BaseModel):
     """Layered memory system configuration (Pillar 4)."""
 
-    enabled: bool = Field(False, description="Enable memory tier (backwards compatible default)")
+    enabled: bool = Field(False, description="Enable memory tier (episodic, semantic, working)")
     working_context_size: int = Field(8192, gt=0, description="Working memory context tokens")
     episodic_capacity: int = Field(50_000, gt=0, description="Episodic replay buffer size")
     semantic_dim: int = Field(256, gt=0, description="Semantic embedding dimension")
@@ -520,14 +586,29 @@ class MetricsConfig(BaseModel):
         True, description="Expose safety_violations_total counter"
     )
     track_gpu_temp: bool = Field(True, description="Expose gpu_temp_celsius gauge")
+    track_llm_translations: bool = Field(
+        True,
+        description="Expose llm_translation counters and latency histogram",
+    )
+    track_lidar: bool = Field(
+        True,
+        description=(
+            "Expose lidar_sector_distance_m (labeled), lidar_min_distance_m, "
+            "and lidar_scan_points gauges"
+        ),
+    )
     track_memory_tier: bool = Field(True, description="Expose memory tier gauges")
     track_voice_events: bool = Field(True, description="Expose voice event counter")
     track_llm_latency: bool = Field(True, description="Expose LLM mission parse latency")
     track_curiosity: bool = Field(True, description="Expose curiosity intrinsic reward gauge")
     track_sensor_recovery: bool = Field(True, description="Expose sensor recovery counter")
-    loop_latency_buckets_ms: list[float] = Field(
-        default_factory=lambda: [1.0, 2.5, 5.0, 10.0, 20.0, 33.0, 50.0, 100.0, 200.0],
-        description="Histogram bucket boundaries (ms) for loop latency metric",
+    loop_latency_buckets_ms: tuple[float, ...] = Field(
+        (1.0, 2.5, 5.0, 10.0, 20.0, 33.0, 50.0, 100.0, 200.0, float("inf")),
+        description="Histogram bucket boundaries for control-loop latency (ms)",
+    )
+    llm_latency_buckets_ms: tuple[float, ...] = Field(
+        (25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, float("inf")),
+        description="Histogram bucket boundaries for LLM translation latency (ms)",
     )
 
 
@@ -535,14 +616,14 @@ class ModelConfig(BaseModel):
     """Neural network model dimensions."""
 
     vision_dim: int = Field(256, gt=0, description="Vision feature input dim")
-    ultrasonic_dim: int = Field(1, gt=0, description="Ultrasonic input dim")
+    ultrasonic_dim: int = Field(1, ge=0, description="Ultrasonic input dim (0=disabled)")
     motor_state_dim: int = Field(4, gt=0, description="Motor state dim [vx, vy, omega, battery]")
     hidden_dim: int = Field(256, gt=0, description="RNN hidden dim")
     latent_dim: int = Field(64, gt=0, description="Latent state dim")
     action_dim: int = Field(3, gt=0, description="Action dim [vx, vy, omega]")
     obs_dim: int = Field(256, gt=0, description="Fused observation embedding dim")
     vision_proj_dim: int = Field(128, gt=0, description="Vision projection dim")
-    ultrasonic_proj_dim: int = Field(32, gt=0, description="Ultrasonic projection dim")
+    ultrasonic_proj_dim: int = Field(32, ge=0, description="Ultrasonic projection dim (0=disabled)")
     motor_proj_dim: int = Field(32, gt=0, description="Motor state projection dim")
     audio_dim: int = Field(0, ge=0, description="Audio feature input dim (0=disabled)")
     audio_proj_dim: int = Field(32, ge=0, description="Audio projection dim (0=disabled)")
@@ -566,6 +647,31 @@ class ModelConfig(BaseModel):
         le=1.0,
         description="Reserved for future AutoNCP/CfC wiring sparsity support; currently unused",
     )
+
+    @model_validator(mode="after")
+    def _validate_optional_modalities(self) -> Self:
+        """Validate optional modality dimension pairs."""
+        if (self.ultrasonic_dim == 0) != (self.ultrasonic_proj_dim == 0):
+            msg = (
+                "ultrasonic_dim and ultrasonic_proj_dim must both be zero when disabling ultrasonic"
+            )
+            raise ValueError(msg)
+
+        modality_dims = {
+            "ultrasonic": (self.ultrasonic_dim, self.ultrasonic_proj_dim),
+            "audio": (self.audio_dim, self.audio_proj_dim),
+            "lidar": (self.lidar_dim, self.lidar_proj_dim),
+        }
+        for modality_name, (input_dim, proj_dim) in modality_dims.items():
+            if input_dim > 0 and proj_dim == 0:
+                msg = f"{modality_name}_proj_dim must be > 0 when {modality_name}_dim is enabled"
+                raise ValueError(msg)
+
+        if self.ultrasonic_dim == 0 and self.lidar_dim == 0:
+            msg = "at least one distance modality must be enabled: ultrasonic_dim or lidar_dim"
+            raise ValueError(msg)
+
+        return self
 
 
 class DualStreamTrainingConfig(BaseModel):
@@ -639,10 +745,42 @@ class SafetyConfig(BaseModel):
     min_valid_sensors: int = Field(2, ge=0, description="Min valid sensors for operation")
     gpu_warn_temp_c: float = Field(75.0, gt=0, description="GPU warning temperature (C)")
     gpu_critical_temp_c: float = Field(90.0, gt=0, description="GPU critical temperature (C)")
-    battery_warn_v: float = Field(10.5, gt=0, description="Battery warning voltage (V)")
-    battery_critical_v: float = Field(9.5, gt=0, description="Battery critical voltage (V)")
+    distance_fallback_m: float = Field(
+        999.0,
+        gt=0,
+        description="Distance value used when the ultrasonic sensor is unavailable",
+    )
+    battery_warn_v: float = Field(
+        10.5,
+        ge=0,
+        description="Battery warning voltage (V); 0 disables",
+    )
+    battery_critical_v: float = Field(
+        9.5,
+        ge=0,
+        description="Battery critical voltage (V); 0 disables",
+    )
+    default_battery_v: float = Field(
+        12.6,
+        gt=0,
+        description="Default battery voltage when sensor data is unavailable (V)",
+    )
     reverse_velocity: float = Field(
         -0.5, le=0, description="Reverse velocity for obstacle avoidance"
+    )
+    action_min: list[float] | None = Field(
+        None,
+        description=(
+            "Per-dimension lower bounds for normalized actions. "
+            "None expands to -1.0 for each action dimension."
+        ),
+    )
+    action_max: list[float] | None = Field(
+        None,
+        description=(
+            "Per-dimension upper bounds for normalized actions. "
+            "None expands to 1.0 for each action dimension."
+        ),
     )
     lidar_max_range_m: float = Field(
         12.0, gt=0, description="LiDAR max range for clearance conversion (m)"
@@ -699,6 +837,33 @@ class TelemetryConfig(BaseModel):
     """
 
     enabled: bool = Field(False, description="Enable telemetry server")
+    force_real_server: bool = Field(
+        False,
+        description=(
+            "When True, use the real aiohttp TelemetryServer even with "
+            "mock_hardware=True. Useful for local dashboard validation."
+        ),
+    )
+    raw_frame_hz: float = Field(
+        10.0,
+        gt=0,
+        le=60,
+        description=(
+            "Target frame rate (Hz) for the /camera/stream MJPEG endpoint "
+            "when the camera driver supports raw-frame capture."
+        ),
+    )
+    vision_feature_max_samples: int = Field(
+        256,
+        gt=0,
+        le=4096,
+        description=(
+            "Maximum number of vision-feature samples encoded into each "
+            "TelemetryFrame.vision_features payload. Larger feature "
+            "vectors are uniformly strided down to this size before "
+            "serialisation, keeping dashboard bandwidth bounded."
+        ),
+    )
     host: str = Field(
         "0.0.0.0",  # noqa: S104
         description="Server bind address (0.0.0.0 = all interfaces)",
@@ -1108,6 +1273,7 @@ class GCPConfig(BaseModel):
             base_delay_s=2.0,
             max_delay_s=60.0,
             exponential_base=2.0,
+            jitter_fraction=0.1,
         ),
         description="Retry config for cloud API calls",
     )
@@ -1183,7 +1349,9 @@ class ArmPerceptionConfig(BaseModel):
         0.5, gt=0, le=1, description="YOLO detection confidence threshold"
     )
     yolo_nms_iou_threshold: float = Field(
-        0.45, gt=0, le=1,
+        0.45,
+        gt=0,
+        le=1,
         description="YOLO NMS IoU threshold for non-maximum suppression",
     )
     yolo_backend: Literal["ultralytics", "hailo", "auto"] = Field(
@@ -1219,6 +1387,9 @@ class ArmPerceptionConfig(BaseModel):
     dark_brightness_threshold: float = Field(
         80.0, ge=0, le=255, description="Brightness below which garment is classified dark"
     )
+    # NOTE: yolo_nms_iou_threshold is defined once above (near the YOLO
+    # confidence threshold); a second duplicate definition here has been
+    # removed to keep a single authoritative field + default.
     default_focal_length: float = Field(500.0, gt=0, description="Default camera focal length (px)")
     default_principal_x: float = Field(320.0, gt=0, description="Default principal point X (px)")
     default_principal_y: float = Field(240.0, gt=0, description="Default principal point Y (px)")
@@ -1353,6 +1524,12 @@ class GPUConfig(BaseModel):
         None,
         description="Force torch device (e.g. 'cuda:0', 'cpu'). None = auto-detect",
     )
+    require_cuda: bool = Field(
+        False,
+        description=(
+            "Fail training when a CUDA device is unavailable or a non-CUDA device is selected"
+        ),
+    )
     enable_amp: bool = Field(
         True,
         description="Enable Automatic Mixed Precision for PyTorch training phases",
@@ -1413,6 +1590,128 @@ class TrainingPipelineConfig(BaseModel):
     )
 
 
+class TrainingGenerationConfig(BaseModel):
+    """Synthetic data generation settings for Phase 0."""
+
+    log_every_n_episodes: int = Field(
+        100,
+        gt=0,
+        description="Episode logging cadence during synthetic data generation",
+    )
+
+
+class TrainingAnnotationConfig(BaseModel):
+    """Annotation collection and heuristic labeling settings for Phase 0b."""
+
+    n_episodes: int = Field(500, gt=0, description="Annotation collection episode count")
+    max_steps: int = Field(50, gt=0, description="Max steps per annotation episode")
+    log_every_n_episodes: int = Field(
+        100,
+        gt=0,
+        description="Episode logging cadence during annotation collection",
+    )
+    human_safety_radius_m: float = Field(
+        0.5,
+        gt=0,
+        description="Human proximity threshold for the protect_human label (m)",
+    )
+    battery_warn_v: float = Field(
+        10.8,
+        ge=0,
+        description="Battery threshold for the charge label (V); 0 disables",
+    )
+    obstacle_clearance_m: float = Field(
+        0.25,
+        gt=0,
+        description="Obstacle distance threshold for the avoid_obstacle label (m)",
+    )
+    idle_speed_threshold: float = Field(
+        0.05,
+        ge=0,
+        description="Planar speed threshold below which the label may become idle",
+    )
+    idle_omega_threshold: float = Field(
+        0.1,
+        ge=0,
+        description="Angular speed threshold below which the label may become idle",
+    )
+    wait_speed_threshold: float = Field(
+        0.1,
+        ge=0,
+        description="Planar speed threshold below which the label may become wait",
+    )
+    wait_omega_threshold: float = Field(
+        0.05,
+        ge=0,
+        description="Angular speed threshold below which the label may become wait",
+    )
+    turn_omega_threshold: float = Field(
+        0.5,
+        ge=0,
+        description="Angular speed threshold above which the label becomes turn",
+    )
+    approach_clear_distance_m: float = Field(
+        1.0,
+        gt=0,
+        description="Obstacle distance threshold above which the path is clear for approach",
+    )
+    approach_speed_threshold: float = Field(
+        0.2,
+        ge=0,
+        description="Planar speed threshold above which the label may become approach_target",
+    )
+    backtrack_speed_threshold: float = Field(
+        -0.2,
+        le=0,
+        description="Forward velocity threshold below which the label becomes backtrack",
+    )
+
+
+class TrainingWarmstartConfig(BaseModel):
+    """Warm-start statistics and UCB tuning settings for Phase 2."""
+
+    latent_stats_max_episodes: int = Field(
+        100,
+        gt=0,
+        description="Maximum episodes sampled when computing latent statistics",
+    )
+    tuning_episodes: int = Field(
+        100,
+        gt=0,
+        description="Episodes evaluated per UCB candidate during warm-start tuning",
+    )
+    rollout_steps: int = Field(
+        20,
+        gt=0,
+        description="Imagined rollout steps per warm-start tuning episode",
+    )
+
+
+class TrainingConstitutionalConfig(BaseModel):
+    """Constitutional RL rollout logging and validation context settings."""
+
+    log_every_n_episodes: int = Field(
+        100,
+        gt=0,
+        description="Training episode logging cadence for constitutional RL",
+    )
+    validation_battery_v: float = Field(
+        12.0,
+        gt=0,
+        description="Battery voltage used for constitutional rollout validation context (V)",
+    )
+    validation_obstacle_dist_m: float = Field(
+        2.0,
+        gt=0,
+        description="Obstacle distance used for constitutional rollout validation context (m)",
+    )
+    validation_mcts_sims: int = Field(
+        50,
+        gt=0,
+        description="MCTS simulation count used for constitutional rollout validation context",
+    )
+
+
 class TrainingConfig(BaseModel):
     """Offline training configuration."""
 
@@ -1430,9 +1729,22 @@ class TrainingConfig(BaseModel):
         None,
         description="Path to checkpoint for resuming interrupted training",
     )
+    generation: TrainingGenerationConfig = Field(
+        default_factory=_settings_default_factory(TrainingGenerationConfig)
+    )
+    annotation: TrainingAnnotationConfig = Field(
+        default_factory=_settings_default_factory(TrainingAnnotationConfig)
+    )
+    warmstart: TrainingWarmstartConfig = Field(
+        default_factory=_settings_default_factory(TrainingWarmstartConfig)
+    )
+    constitutional: TrainingConstitutionalConfig = Field(
+        default_factory=_settings_default_factory(TrainingConstitutionalConfig)
+    )
     gpu: GPUConfig = Field(
         default_factory=lambda: GPUConfig(
             device=None,
+            require_cuda=False,
             enable_amp=True,
             memory_limit_gb=6.0,
         ),
@@ -1642,10 +1954,52 @@ class Settings(BaseSettings):
         description="Arm task config (Tower of Hanoi / laundry sorting params)",
     )
 
-    @model_validator(mode="after")
-    def hardware_requires_pins(self) -> Self:
+    @model_validator(mode="before")
+    @classmethod
+    def hardware_requires_pins(cls, data: Any) -> Any:
         """Validate that real hardware mode has required sensor configs."""
-        if not self.mock_hardware and self.ultrasonic is None:
-            msg = "ultrasonic config required when mock_hardware=false"
+        if not isinstance(data, dict):
+            return data
+
+        raw_mock_hardware = data.get("mock_hardware", False)
+        if isinstance(raw_mock_hardware, str):
+            mock_hardware = raw_mock_hardware.strip().lower() in {"1", "true", "yes", "on"}
+        else:
+            mock_hardware = bool(raw_mock_hardware)
+
+        if not mock_hardware and data.get("ultrasonic") is None and data.get("lidar") is None:
+            msg = (
+                "at least one distance sensor (ultrasonic or lidar) required"
+                " when mock_hardware=false"
+            )
             raise ValueError(msg)
+
+        return data
+
+    @model_validator(mode="after")
+    def action_bounds_match_action_dim(self) -> Self:
+        """Populate and validate normalized action bounds against ``model.action_dim``."""
+        action_dim = self.model.action_dim
+        if self.safety.action_min is None:
+            self.safety.action_min = [-1.0] * action_dim
+        if self.safety.action_max is None:
+            self.safety.action_max = [1.0] * action_dim
+
+        action_min = self.safety.action_min
+        action_max = self.safety.action_max
+        if len(action_min) != action_dim:
+            msg = f"safety.action_min length must equal model.action_dim ({action_dim})"
+            raise ValueError(msg)
+        if len(action_max) != action_dim:
+            msg = f"safety.action_max length must equal model.action_dim ({action_dim})"
+            raise ValueError(msg)
+
+        for idx, (lower, upper) in enumerate(zip(action_min, action_max, strict=False)):
+            if lower < -1.0 or upper > 1.0:
+                msg = f"normalized action bounds must stay within [-1, 1] (index {idx})"
+                raise ValueError(msg)
+            if lower >= upper:
+                msg = f"safety.action_min[{idx}] must be < safety.action_max[{idx}]"
+                raise ValueError(msg)
+
         return self

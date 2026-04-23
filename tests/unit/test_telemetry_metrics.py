@@ -25,6 +25,7 @@ from mousedroid.telemetry.metrics import (
     _LabeledCounter,
     _render_counter,
     _render_labeled_counter,
+    generate_metrics_sample,
 )
 
 # ---------------------------------------------------------------------------
@@ -230,6 +231,18 @@ class TestMetricsRegistryState:
         text = reg.render_prometheus()
         assert "62.5" in text or "62.5000" in text
 
+    def test_inc_llm_translation_result(self) -> None:
+        reg = _make_registry()
+        reg.inc_llm_translation("translated")
+        text = reg.render_prometheus()
+        assert 'result="translated"' in text
+
+    def test_observe_llm_translation_latency_histogram(self) -> None:
+        reg = _make_registry()
+        reg.observe_llm_translation_latency_ms(120.0)
+        text = reg.render_prometheus()
+        assert "llm_translation_latency_ms_bucket" in text
+
 
 # ---------------------------------------------------------------------------
 # Prometheus text format contract tests
@@ -382,6 +395,13 @@ class TestRenderPrometheus:
         text = reg.render_prometheus()
         assert "gpu_temp" not in text
 
+    def test_toggles_disable_llm_metrics(self) -> None:
+        reg = _make_registry(track_llm_translations=False)
+        reg.inc_llm_translation("translated")
+        reg.observe_llm_translation_latency_ms(42.0)
+        text = reg.render_prometheus()
+        assert "llm_translation" not in text
+
     def test_only_safety_viol_with_data(self) -> None:
         """Safety violation labeled counter should only appear when non-empty."""
         reg = _make_registry()
@@ -441,6 +461,7 @@ class TestMetricsConfig:
         assert cfg.track_frame_drops is True
         assert cfg.track_safety_violations is True
         assert cfg.track_gpu_temp is True
+        assert cfg.track_llm_translations is True
 
     def test_custom_namespace(self) -> None:
         cfg = MetricsConfig(namespace="gronk")
@@ -457,3 +478,44 @@ class TestMetricsConfig:
     def test_export_interval_negative_rejected(self) -> None:
         with pytest.raises(ValueError, match="greater than 0"):
             MetricsConfig(export_interval_s=-1.0)
+
+
+# ---------------------------------------------------------------------------
+# generate_metrics_sample() — CI promtool integration
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateMetricsSample:
+    def test_returns_nonempty_string(self) -> None:
+        sample = generate_metrics_sample()
+        assert isinstance(sample, str)
+        assert len(sample) > 0
+
+    def test_ends_with_newline(self) -> None:
+        sample = generate_metrics_sample()
+        assert sample.endswith("\n")
+
+    def test_contains_all_expected_families(self) -> None:
+        sample = generate_metrics_sample()
+        ns = MetricsConfig().namespace
+        for name in (
+            f"{ns}_uptime_seconds",
+            f"{ns}_loop_time_ms",
+            f"{ns}_battery_voltage_v",
+            f"{ns}_ws_client_count",
+            f"{ns}_gpu_temp_celsius",
+            f"{ns}_publish_hz",
+            f"{ns}_frame_drops_total",
+            f"{ns}_safety_violations_total",
+            f"{ns}_loop_latency_ms",
+            f"{ns}_llm_translation_total",
+            f"{ns}_llm_translation_latency_ms",
+        ):
+            assert name in sample, f"Missing metric family: {name}"
+
+    def test_has_help_and_type_lines(self) -> None:
+        import re
+
+        sample = generate_metrics_sample()
+        assert re.search(r"^# HELP \S+ .+$", sample, re.MULTILINE)
+        assert re.search(r"^# TYPE \S+ (counter|gauge|histogram)$", sample, re.MULTILINE)

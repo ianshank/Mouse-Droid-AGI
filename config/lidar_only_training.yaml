@@ -1,0 +1,69 @@
+# Local LiDAR-only training configuration.
+#
+# This file is a standalone training config for Cut 2 work. It keeps the
+# Windows mock-hardware training defaults from local_training.yaml while
+# disabling ultrasonic in the learned model and enabling LiDAR features.
+
+mock_hardware: true
+debug: false
+
+logging:
+  level: "INFO"
+  format: "console"
+
+model:
+  ultrasonic_dim: 0
+  ultrasonic_proj_dim: 0
+  lidar_dim: 36
+  lidar_proj_dim: 32
+
+training:
+  batch_size: 32
+  learning_rate: 0.0003
+  epochs: 100
+  checkpoint_every_n: 10
+  kl_beta: 1.0
+  sequence_length: 50
+  n_episodes: 1000
+  data_dir: "training/data"
+  weights_dir: "weights/lidar_only"
+  resume_from: null
+
+  gpu:
+    device: "cuda"
+    require_cuda: true
+    enable_amp: true
+    memory_limit_gb: 14.0
+
+safety:
+  min_valid_sensors: 0
+
+ultrasonic: null
+
+lidar:
+  enabled: true
+  n_sectors: 36
+  feature_dim: 36
+  mock_pattern: "uniform"
+
+telemetry:
+  enabled: false
+
+training_pipeline:
+  phases: ["rssm", "warmstart", "bdi", "constitutional_rl"]
+  batch_sizes:
+    rssm: 32
+    warmstart: 64
+    bdi: 64
+    constitutional_rl: 128
+  thermal_limit_celsius: 85.0
+  thermal_pause_seconds: 30.0
+  thermal_sysfs_path: "/sys/devices/virtual/thermal/thermal_zone0/temp"
+  vram_headroom_mb: 1024
+  checkpoint_dir: "checkpoints"
+  amp_enabled: true
+  resume_from_phase: null
+
+cognitive:
+  enabled: false
+  auto_download: false
