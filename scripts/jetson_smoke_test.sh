@@ -275,7 +275,7 @@ try:
     if response:
         print(f"PASS:Got response: {response}")
     else:
-        print("WARN:No response from ESP32 (timeout) â€” device may not be running")
+        print("WARN:No response from ESP32 (timeout) -- device may not be running")
 except serial.SerialException as exc:
     print(f"FAIL:Serial error: {exc}")
 except Exception as exc:
@@ -302,7 +302,7 @@ PYEOF
 }
 
 # ---------------------------------------------------------------------------
-# 4. Camera / 5. Audio â€” delegate to scripts/verify_sensors.py
+# 4. Camera / 5. Audio -- delegate to scripts/verify_sensors.py
 # ---------------------------------------------------------------------------
 
 test_camera() {
@@ -314,7 +314,7 @@ test_audio() {
 }
 
 # ---------------------------------------------------------------------------
-# 5a. LiDAR / 5b. Speaker â€” delegate to scripts/verify_sensors.py
+# 5a. LiDAR / 5b. Speaker -- delegate to scripts/verify_sensors.py
 # ---------------------------------------------------------------------------
 
 _run_verify_sensor() {

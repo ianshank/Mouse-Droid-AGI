@@ -18,7 +18,6 @@ from mousedroid.constants import (
     LIDAR_FRAME_SIZE,
     LIDAR_HEADER_BYTE,
     LIDAR_MM_PER_M,
-    LIDAR_SCAN_TIMEOUT_MULTIPLIER,
     LIDAR_VER_LEN_BYTE,
 )
 from mousedroid.hardware.lidar.ld19_protocol import LD19Frame, LD19FrameParser
@@ -173,7 +172,7 @@ class LD19LidarDriver:
         start_time = time.monotonic()
         deadline = time.monotonic() + max(
             self._cfg.scan_acquisition_timeout_s,
-            LIDAR_SCAN_TIMEOUT_MULTIPLIER / max(self._cfg.scan_frequency_hz, 0.1),
+            self._cfg.scan_timeout_multiplier / max(self._cfg.scan_frequency_hz, 0.1),
         )
         prev_start_angle: float | None = None
         covered_angle_deg = 0.0

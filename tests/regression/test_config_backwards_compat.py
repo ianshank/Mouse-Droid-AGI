@@ -46,6 +46,7 @@ def test_legacy_runtime_validation_fields_get_defaults() -> None:
     assert s.lidar is not None
     assert s.lidar.scan_acquisition_timeout_s == 1.0
     assert s.lidar.min_scan_coverage_deg == 270.0
+    assert s.lidar.scan_timeout_multiplier == 2.0
 
 
 def test_new_fields_have_defaults() -> None:

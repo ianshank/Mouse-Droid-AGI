@@ -47,7 +47,7 @@ def test_resolve_runtime_config_paths_uses_env_csv(
 async def test_capture_camera_frame_uses_runtime_driver(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Camera helper should start, capture, and stop via the factory-built driver."""
+    """Camera helper should prefer public capture_raw_frame and lifecycle the driver."""
 
     class StubCamera:
         def __init__(self) -> None:
@@ -61,7 +61,7 @@ async def test_capture_camera_frame_uses_runtime_driver(
         async def stop(self) -> None:
             self.stopped = True
 
-        def _capture_frame(self) -> np.ndarray:
+        async def capture_raw_frame(self) -> np.ndarray:
             return np.ones((4, 5, 3), dtype=np.uint8)
 
     stub = StubCamera()
@@ -71,6 +71,38 @@ async def test_capture_camera_frame_uses_runtime_driver(
 
     assert frame.shape == (4, 5, 3)
     assert backend_name == "gstreamer"
+    assert stub.started is True
+    assert stub.stopped is True
+
+
+@pytest.mark.asyncio
+async def test_capture_camera_frame_falls_back_to_private_method(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Camera helper falls back to legacy _capture_frame when public method absent."""
+
+    class LegacyStubCamera:
+        def __init__(self) -> None:
+            self._backend = "v4l2"
+            self.started = False
+            self.stopped = False
+
+        async def start(self) -> None:
+            self.started = True
+
+        async def stop(self) -> None:
+            self.stopped = True
+
+        def _capture_frame(self) -> np.ndarray:
+            return np.zeros((3, 6, 3), dtype=np.uint8)
+
+    stub = LegacyStubCamera()
+    monkeypatch.setattr(runtime, "build_camera", lambda cfg: stub)
+
+    frame, backend_name = await runtime.capture_camera_frame(Settings(mock_hardware=True))
+
+    assert frame.shape == (3, 6, 3)
+    assert backend_name == "v4l2"
     assert stub.started is True
     assert stub.stopped is True
 

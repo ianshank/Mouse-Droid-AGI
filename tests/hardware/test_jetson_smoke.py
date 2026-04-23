@@ -91,8 +91,7 @@ def test_camera_capture(jetson_settings) -> None:
         f"via {backend_name}"
     )
     assert width == jetson_settings.camera.resolution_width, (
-        f"Expected width {jetson_settings.camera.resolution_width}, got {width} "
-        f"via {backend_name}"
+        f"Expected width {jetson_settings.camera.resolution_width}, got {width} via {backend_name}"
     )
 
 

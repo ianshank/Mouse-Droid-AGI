@@ -113,14 +113,19 @@ async def capture_camera_frame(cfg: Settings) -> tuple[NDArray[np.uint8], str]:
     camera = build_camera(cfg)
     await camera.start()
     try:
-        capture_frame = getattr(camera, "_capture_frame", None)
-        if not callable(capture_frame):
-            msg = "camera driver does not expose raw frame capture"
-            raise RuntimeError(msg)
-
-        frame = await asyncio.to_thread(capture_frame)
+        capture_raw = getattr(camera, "capture_raw_frame", None)
+        if callable(capture_raw):
+            frame = np.asarray(await capture_raw(), dtype=np.uint8)
+        else:
+            # Backward-compatible path for drivers that expose the legacy private
+            # blocking helper but not the public async method.
+            capture_frame = getattr(camera, "_capture_frame", None)
+            if not callable(capture_frame):
+                msg = "camera driver does not expose raw frame capture"
+                raise RuntimeError(msg)
+            frame = np.asarray(await asyncio.to_thread(capture_frame), dtype=np.uint8)
         backend_name = str(getattr(camera, "_backend", camera.__class__.__name__))
-        return np.asarray(frame, dtype=np.uint8), backend_name
+        return frame, backend_name
     finally:
         await camera.stop()
 

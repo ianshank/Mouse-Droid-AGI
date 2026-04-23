@@ -47,6 +47,7 @@ _log = get_logger(__name__)
 # Synthetic episode generation
 # ---------------------------------------------------------------------------
 
+
 def _random_obs(cfg: ModelConfig, batch: int, device: torch.device) -> dict[str, Tensor]:
     """Generate one step of random observations for a given ModelConfig."""
     obs: dict[str, Tensor] = {
@@ -134,6 +135,7 @@ def _rollout(
 # Greedy action derivation (linear policy approximation)
 # ---------------------------------------------------------------------------
 
+
 def _latent_to_action(z: Tensor, action_dim: int) -> Tensor:
     """Project latent state to action space via a fixed linear projection.
 
@@ -142,8 +144,10 @@ def _latent_to_action(z: Tensor, action_dim: int) -> Tensor:
     measurement — we only care whether the *rank* of actions is consistent
     across models.
     """
-    raw = z[:action_dim] if z.shape[0] >= action_dim else torch.cat(
-        [z, z.new_zeros(action_dim - z.shape[0])]
+    raw = (
+        z[:action_dim]
+        if z.shape[0] >= action_dim
+        else torch.cat([z, z.new_zeros(action_dim - z.shape[0])])
     )
     return torch.tanh(raw)
 
@@ -151,6 +155,7 @@ def _latent_to_action(z: Tensor, action_dim: int) -> Tensor:
 # ---------------------------------------------------------------------------
 # Agreement metric
 # ---------------------------------------------------------------------------
+
 
 def _cosine_agreement(a: Tensor, b: Tensor) -> float:
     """Cosine similarity between two action vectors, mapped to [0, 1]."""
@@ -207,6 +212,7 @@ def compute_parity(
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
+
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(

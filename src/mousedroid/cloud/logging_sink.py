@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from types import NoneType
 from typing import TYPE_CHECKING, Any, cast
 
 from mousedroid.logging.setup import get_logger
@@ -90,7 +89,7 @@ class CloudLoggingSink:
                 **{
                     k: v
                     for k, v in event_dict.items()
-                    if k != "event" and isinstance(v, str | int | float | bool | NoneType)
+                    if k != "event" and isinstance(v, (str, int, float, bool, type(None)))
                 },
             }
             self._cloud_logger.log_struct(entry, severity=method_name.upper())

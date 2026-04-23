@@ -326,6 +326,15 @@ class LidarConfig(BaseModel):
         le=360.0,
         description="Minimum angular coverage to treat one LiDAR scan as complete",
     )
+    scan_timeout_multiplier: float = Field(
+        2.0,
+        gt=0,
+        description=(
+            "Multiplier applied to the nominal scan period (1 / scan_frequency_hz) when "
+            "computing the acquisition deadline. Increase for slow-spinning or "
+            "high-interference environments."
+        ),
+    )
     n_sectors: int = Field(36, gt=0, description="Number of angular sectors for binning")
     feature_dim: int = Field(36, gt=0, description="Output feature vector dimension")
     mock_pattern: str = Field(

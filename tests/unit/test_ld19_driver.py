@@ -215,8 +215,7 @@ def test_read_frames_blocking_waits_for_coverage_after_wrap(
 
     frame_angles = [(350.0 + 10.0 * i) % 360.0 for i in range(31)]
     frames = [
-        _make_frame(angle, (angle + 4.0) % 360.0, [(5000, 200)] * 12)
-        for angle in frame_angles
+        _make_frame(angle, (angle + 4.0) % 360.0, [(5000, 200)] * 12) for angle in frame_angles
     ]
     serialized_chunks = [(b"\x54\x2c" * (47 * 2)) for _ in range(8)]
 
@@ -244,6 +243,7 @@ def test_read_frames_blocking_waits_for_coverage_after_wrap(
 
 def test_read_frames_blocking_resyncs_after_false_header() -> None:
     """A stray 0x54 byte should not cause the reader to discard a valid frame."""
+
     class FakeSerial:
         def __init__(self, chunks: list[bytes]) -> None:
             self._chunks = chunks

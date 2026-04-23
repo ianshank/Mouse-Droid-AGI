@@ -78,9 +78,7 @@ async def test_ld19_read_scan(jetson_settings) -> None:
     point_angle_span = lidar_scan_coverage_deg(scan)
     angle_span = lidar_scan_validation_coverage_deg(
         scan,
-        driver_covered_angle_deg=(
-            read_stats.covered_angle_deg if read_stats is not None else None
-        ),
+        driver_covered_angle_deg=(read_stats.covered_angle_deg if read_stats is not None else None),
     )
     assert angle_span >= cfg.min_scan_coverage_deg, (
         f"validation coverage {angle_span:.1f}° below {cfg.min_scan_coverage_deg:.1f}° threshold "

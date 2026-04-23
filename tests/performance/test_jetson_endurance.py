@@ -128,9 +128,7 @@ async def test_endurance_30hz_loop(runtime_settings) -> None:
     p95_idx = int(0.95 * len(sorted_times))
     p95_ms = sorted_times[min(p95_idx, len(sorted_times) - 1)]
 
-    assert p95_ms < target_loop_ms, (
-        f"Loop p95={p95_ms:.1f}ms exceeds target {target_loop_ms:.1f}ms"
-    )
+    assert p95_ms < target_loop_ms, f"Loop p95={p95_ms:.1f}ms exceeds target {target_loop_ms:.1f}ms"
 
     # GPU temperature
     if gpu_temps:
