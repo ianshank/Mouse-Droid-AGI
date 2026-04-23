@@ -149,6 +149,13 @@
     };
     ws.onerror = () => { wsEl.textContent = "error"; };
     ws.onmessage = (ev) => {
+      // Telemetry server may use JSON or msgpack (binary). This dashboard
+      // only supports JSON; surface the unsupported mode instead of silently
+      // appearing stuck so operators can switch the server to JSON.
+      if (typeof ev.data !== "string") {
+        wsEl.textContent = "binary (msgpack) — set telemetry.serialization=json";
+        return;
+      }
       try { handleFrame(JSON.parse(ev.data)); } catch (_) { /* ignore */ }
     };
   }

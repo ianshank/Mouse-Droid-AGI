@@ -5,6 +5,7 @@ Implements ``VisionProtocol`` with random feature vectors.
 
 from __future__ import annotations
 
+import asyncio
 from io import BytesIO
 from time import monotonic
 from typing import TYPE_CHECKING
@@ -95,10 +96,16 @@ class MockCamera:
         return result
 
     async def capture_raw_jpeg(self) -> bytes | None:
-        """Capture a JPEG frame from the configured mock source."""
+        """Capture a JPEG frame from the configured mock source.
+
+        Screen capture and Pillow-based JPEG encoding are synchronous and
+        can stall the aiohttp event loop when called from ``/camera/stream``
+        or ``/camera/frame.jpg``; offload the blocking work to the default
+        thread pool so other telemetry requests stay responsive.
+        """
         if self._mode == "screen_capture":
-            return self._capture_screen_jpeg()
-        return self._capture_procedural_jpeg()
+            return await asyncio.to_thread(self._capture_screen_jpeg)
+        return await asyncio.to_thread(self._capture_procedural_jpeg)
 
     def _capture_screen_jpeg(self) -> bytes | None:
         """Grab the host desktop and return a downscaled JPEG.

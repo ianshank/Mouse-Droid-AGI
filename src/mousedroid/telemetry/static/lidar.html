@@ -204,12 +204,20 @@
       backoff = 500;
     };
     ws.onmessage = (ev) => {
+      // Dashboard only supports JSON frames. When the server is configured
+      // for msgpack serialization, surface the mode explicitly so operators
+      // know to switch telemetry.serialization to "json" rather than see a
+      // silently-stuck dashboard.
+      if (typeof ev.data !== "string") {
+        connEl.textContent = "binary (msgpack) — set telemetry.serialization=json";
+        connEl.className = "err";
+        return;
+      }
       try {
-        const data = typeof ev.data === "string" ? ev.data : new TextDecoder().decode(ev.data);
-        const obj = JSON.parse(data);
+        const obj = JSON.parse(ev.data);
         handleFrame(obj);
       } catch (err) {
-        // ignore non-JSON (e.g., msgpack binary); polar page only speaks JSON
+        // ignore malformed JSON
       }
     };
     ws.onclose = () => {

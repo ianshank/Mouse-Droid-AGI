@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -196,7 +197,10 @@ async def _translate_nl_mission(
             "mission": mission_text,
             "error": str(exc),
         }
-    except TimeoutError as exc:
+    except (TimeoutError, asyncio.TimeoutError) as exc:
+        # asyncio.TimeoutError is an alias for TimeoutError on Python 3.11+,
+        # but some third-party async libraries still raise the asyncio variant
+        # (or subclass it), so listing both keeps the timeout path robust.
         latency_ms = (time.monotonic() - start_time) * 1000.0
         _record_llm_metrics(metrics_registry, "timeout", latency_ms)
         _log.warning("tool_translate_nl_mission_timeout", error=str(exc))

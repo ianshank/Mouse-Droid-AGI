@@ -222,7 +222,7 @@ class TelemetryServer:
             middlewares.append(build_bearer_auth_middleware(auth_cfg))
         elif api_key is not None:
             # Legacy X-API-Key auth for backwards compatibility
-            @web.middleware  # type: ignore[misc,unused-ignore]
+            @web.middleware  # type: ignore[misc,untyped-decorator,unused-ignore]
             async def auth_middleware(
                 request: web.Request,
                 handler: Any,
