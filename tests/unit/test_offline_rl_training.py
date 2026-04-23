@@ -87,6 +87,8 @@ class TestTrainOfflineRL:
     def test_cql_training_produces_checkpoint(self, tmp_path: Path) -> None:
         from training.train_offline_rl import train_offline_rl
 
+        from tests import TEST_EXPERIENCE_MAP_SIZE_GB
+
         db_path = tmp_path / "experience"
         db_path.mkdir()
         _populate_lmdb(str(db_path), n_records=30)
@@ -97,7 +99,7 @@ class TestTrainOfflineRL:
             mock_hardware=True,
             experience=ExperienceConfig(
                 path=str(db_path),
-                map_size_gb=1,
+                map_size_gb=TEST_EXPERIENCE_MAP_SIZE_GB,
                 flush_every_n=5,
             ),
             offline_rl=OfflineRLConfig(
@@ -122,6 +124,8 @@ class TestTrainOfflineRL:
     def test_iql_training_produces_checkpoint(self, tmp_path: Path) -> None:
         from training.train_offline_rl import train_offline_rl
 
+        from tests import TEST_EXPERIENCE_MAP_SIZE_GB
+
         db_path = tmp_path / "experience"
         db_path.mkdir()
         _populate_lmdb(str(db_path), n_records=30)
@@ -132,7 +136,7 @@ class TestTrainOfflineRL:
             mock_hardware=True,
             experience=ExperienceConfig(
                 path=str(db_path),
-                map_size_gb=1,
+                map_size_gb=TEST_EXPERIENCE_MAP_SIZE_GB,
                 flush_every_n=5,
             ),
             offline_rl=OfflineRLConfig(
@@ -157,6 +161,8 @@ class TestTrainOfflineRL:
         import lmdb
         from training.train_offline_rl import train_offline_rl
 
+        from tests import TEST_EXPERIENCE_MAP_SIZE_GB
+
         db_path = tmp_path / "experience"
         db_path.mkdir()
         lmdb.open(str(db_path), map_size=10 * 1024 * 1024).close()
@@ -165,7 +171,7 @@ class TestTrainOfflineRL:
             mock_hardware=True,
             experience=ExperienceConfig(
                 path=str(db_path),
-                map_size_gb=1,
+                map_size_gb=TEST_EXPERIENCE_MAP_SIZE_GB,
                 flush_every_n=5,
             ),
             offline_rl=OfflineRLConfig(epochs=1, batch_size=8),

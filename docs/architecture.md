@@ -38,19 +38,23 @@ graph TD
     subgraph Jetson["NVIDIA Jetson Orin Nano"]
         subgraph DockerContainer["Docker: mousedroid:jetson\nL4T PyTorch r36.4.0\nCUDA 12.6 / TensorRT 10.4"]
             subgraph AppProcess["mousedroid Python process (asyncio event loop)"]
-                Orchestrator["Orchestrator\n30 Hz loop"]
+                Orchestrator["Orchestrator\nconfig-driven loop cadence"]
                 LLMGateway["LLM Gateway\nLlama GGUF"]
                 HealthMonitor["Health Monitor\nsysfs polling"]
                 CoreAI["Core AI Pipeline\nRSSM + MCTS + Navigation Agent\nCognitive Core BDI + Metacognitive\nMemory: Working / Episodic / Semantic\nSafety Monitor + Constitutional Checker"]
                 SensorMgr["Sensor Manager\nconcurrent I/O"]
                 TelemetryPub["Telemetry Publisher\nasync queue\n≤60 Hz non-blocking"]
                 MetricsRegistry["Metrics Registry\nPrometheus text format\nconfig-driven namespace"]
-                TelemetryServer["Telemetry Server\naiohttp REST + WebSocket\nport 8080"]
+                TelemetryServer["Telemetry Server\naiohttp REST + WebSocket\nconfig-driven port"]
                 ExperienceDB[("Experience Logger\nLMDB\n/home/jetson/experience_db")]
             end
         end
+        subgraph OpsLayer["Validation / Operations Layer"]
+            RuntimeValidation["Runtime Validation\nvalidation/runtime.py\nshared overlay resolution + factory-backed checks"]
+            SmokeHarness["Smoke Harness\njetson_validate.sh + jetson_smoke_test.sh + verify_sensors.py"]
+        end
         subgraph HWLayer["Hardware Interface Layer"]
-            Camera["Camera\nJetson CSI / IMX708\nFeatureExtractorProtocol"]
+            Camera["Camera\nIMX500 ribbon camera\nJetson / GStreamer / V4L2 fallback"]
             Ultrasonic["Ultrasonic\nHC-SR04"]
             Microphone["USB Microphone\nWonrabai USB Sound Card\nAudioProtocol"]
             Speaker["USB Speaker\nWonrabai USB Sound Card\nSpeakerProtocol"]
@@ -82,6 +86,11 @@ graph TD
     SensorMgr --> Speaker
     SensorMgr --> LiDAR
     SensorMgr --> GPIO
+    SmokeHarness --> RuntimeValidation
+    RuntimeValidation --> Camera
+    RuntimeValidation --> Microphone
+    RuntimeValidation --> Speaker
+    RuntimeValidation --> LiDAR
     Orchestrator -- "UART 1 Mbps / HTTP" --> ESP32
     DockerContainer -.-> DockerData
     DockerContainer -.-> Containerd
@@ -90,19 +99,21 @@ graph TD
 **Containers:**
 
 | Container | Technology | Responsibility |
-|-----------|-----------|----------------|
+| --------- | ---------- | -------------- |
 | Docker `mousedroid:jetson` | L4T PyTorch r36.4.0 | GPU-accelerated container (CUDA 12.6 + TensorRT 10.4) |
 | `mousedroid` process | Python 3.10 asyncio | All AI reasoning + I/O orchestration |
+| Runtime validation layer | Python utilities + shell harnesses | Shared config-backed smoke, verification, and host-driven Jetson validation |
 | LMDB experience store | LMDB on-disk | Persistent experience replay buffer |
 | Llama GGUF model | llama-cpp-python | Local LLM for NL to velocity |
 | ESP32 firmware | C++ (Wave Rover SDK) | Motor PWM control, encoder polling |
-| Jetson CSI / IMX708 camera | jetson_utils / picamera2 | Vision capture + pluggable feature extraction (MeanPool / TensorRT) |
+| IMX500 ribbon camera | jetson_utils / GStreamer / V4L2 | Vision capture with config-driven fallback and pluggable feature extraction |
 | Wonrabai USB Sound Card | PyAudio | Combo mic + speaker: audio capture for world model + TTS output |
 | FHL-LD19 LiDAR | pyserial UART | 360° 2D distance scanning for obstacle detection + clearance |
 | NVMe SSD 500 GB | ext4 `/mnt/ssd` | Docker data-root, containerd, 16 GB swap |
 | Telemetry Publisher | Python asyncio queue | Non-blocking sensor-frame fan-out at ≤60 Hz |
 | Metrics Registry | Python stdlib exporter | Prometheus metric families and text rendering |
 | Telemetry Server | aiohttp 3.x REST + WebSocket | Remote WiFi/Ethernet monitoring (configurable port, default 8080) |
+
 ---
 
 ## Level 3 — Component Diagram (mousedroid process)
@@ -111,18 +122,18 @@ graph TD
 graph TD
     CLI["CLI Entry\nmain.py"]
     Factory["Factory\nfactory.py\nOnly file that imports concrete types"]
-    Orchestrator["Orchestrator\norchestrator/\ntick at 30 Hz\nsense - plan - act"]
+    Orchestrator["Orchestrator\norchestrator/\nconfig-driven tick cadence\nsense - plan - act"]
     SensorMgr["Sensor Manager\nsensing/\nCamera - Ultrasonic - LiDAR - Audio - ESP32 encoders"]
     SafetyMon["Safety Monitor\nsafety/\nClearance - Battery - Sensor staleness"]
     Encoder["Encoder\nvision + motor + ultrasonic + audio + lidar"]
-    RSSM["World Model\nRSSM or DualStreamRSSM\nGRU 256 + CfC 64 = 320 combined\nobserve step / imagine step"]
-    MCTS["MCTS\n50 to 200 sims"]
+    RSSM["World Model\nRSSM or DualStreamRSSM\nconfig-driven hidden dims\nobserve step / imagine step"]
+    MCTS["MCTS\nconfig-driven simulation budget"]
     NavAgent["Navigation Agent\nagents/\nact with h, z, safety"]
     ESP32Driver["ESP32 Driver\ncomms/\nsend velocity"]
     FastTick["Cognitive Fast tick 30 Hz\nPolicyMLP - ConstitutionalChecker"]
     SlowLoop["Cognitive Slow loop 1 Hz\nBDI inference - Metacog update"]
-    WorkingMem["Working Memory\nsliding 8192 token window"]
-    EpisodicMem["Episodic Memory\nFAISS 50k cap"]
+    WorkingMem["Working Memory\nconfig-driven context window"]
+    EpisodicMem["Episodic Memory\nconfig-driven replay capacity"]
     SemanticMem["Semantic Memory\nconcept graph + FAISS"]
     Consolidation["Consolidation\nasync episodic to semantic"]
     EWC["EWC\nFisher-information regularisation"]
@@ -247,7 +258,43 @@ flowchart TD
 
 ---
 
-## Level 3c — Component Diagram: GCP Digital Twin (Optional)
+## Level 3c — Runtime Validation and Smoke Alignment
+
+The Jetson validation surface is deliberately wired through the same config and factory layer as
+the application so host-side smoke checks do not drift from the deployed runtime.
+
+```mermaid
+graph TD
+    HostRunner["Host Runner\nmanual validation / CI smoke"]
+    JetsonValidate["scripts/jetson_validate.sh\nremote verify / pytest / smoke orchestration"]
+    JetsonSmoke["scripts/jetson_smoke_test.sh\nhost-side smoke harness"]
+    VerifySensors["scripts/verify_sensors.py\nJSON and human-readable sensor checks"]
+    RuntimeValidation["validation/runtime.py\nresolve_runtime_config_paths()\nload_runtime_settings()\ncapture_* helpers"]
+    SettingsLoader["config.loader.load_settings\nYAML + env overlay resolution"]
+    Factory["factory.py\nprotocol-based DI"]
+    Camera["JetsonCSICamera\nJetson / GStreamer / V4L2 fallback"]
+    Microphone["Microphone / Speaker"]
+    Lidar["LD19 driver\nconfig-driven coverage + timeout"]
+
+    HostRunner --> JetsonValidate
+    HostRunner --> JetsonSmoke
+    JetsonValidate --> VerifySensors
+    JetsonSmoke --> RuntimeValidation
+    VerifySensors --> RuntimeValidation
+    RuntimeValidation --> SettingsLoader
+    RuntimeValidation --> Factory
+    Factory --> Camera
+    Factory --> Microphone
+    Factory --> Lidar
+```
+
+All runtime validation paths load overlays through `resolve_runtime_config_paths()` and
+`load_runtime_settings()`, so values such as `camera.device_path`,
+`lidar.scan_acquisition_timeout_s`, and `lidar.min_scan_coverage_deg` remain config-driven.
+
+---
+
+## Level 3d — Component Diagram: GCP Digital Twin (Optional)
 
 Cloud features are **fully optional** — the droid operates identically with `gcp: null` in config.
 All cloud calls are protected by `CircuitBreaker` + `retry_async` patterns so cloud failures
@@ -306,7 +353,7 @@ graph TD
 `build_cloud_*()` factory functions return `None` and the orchestrator skips cloud calls.
 
 | Component | File | GCP Service | Resilience |
-|-----------|------|-------------|------------|
+| --------- | ---- | ----------- | ---------- |
 | Telemetry sink | `cloud/pubsub_sink.py` | Pub/Sub | CircuitBreaker (60s recovery) |
 | Experience exporter | `cloud/experience_exporter.py` | Cloud Storage | CircuitBreaker + HWM cursor |
 | Logging sink | `cloud/logging_sink.py` | Cloud Logging | Fire-and-forget (silent drop) |
@@ -560,7 +607,7 @@ graph TD
 **Key training facts:**
 
 | Property | Value |
-|----------|-------|
+| -------- | ----- |
 | Pipeline entry | `python training/run_pipeline.py [--resume path/to/checkpoint.pt]` |
 | Resume support | `--resume` / `resume_from` in config; forwards checkpoint to RSSM training only |
 | Weight storage | `ianshank/mousedroid-weights` HuggingFace repo; `bdi/`, `mcts/`, `rssm/`, `constitutional_rl/` subfolders |
@@ -612,7 +659,7 @@ Activate via: `MOUSEDROID_MODEL__CFC_HIDDEN_DIM=64 docker compose up -d`
 ## Key Design Decisions
 
 | Decision | Rationale |
-|----------|-----------|
+| -------- | --------- |
 | Protocol-based DI everywhere | Testable without hardware; clean separation of concerns |
 | `asyncio` throughout, `to_thread` for I/O | No GIL contention; predictable latency |
 | Pydantic v2 for all config | Validation at startup; no silent misconfiguration |

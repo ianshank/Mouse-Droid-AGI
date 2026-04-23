@@ -6,7 +6,7 @@ processed depth maps and optional point clouds for downstream detection.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -95,4 +95,4 @@ class DepthProcessor:
 
         # Remove invalid points
         valid = points[:, 2] > self._invalid_threshold
-        return points[valid]
+        return cast(NDArray[np.float64], points[valid])

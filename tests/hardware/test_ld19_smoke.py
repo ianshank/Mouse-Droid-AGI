@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import pytest
 
+from mousedroid.validation.runtime import (
+    lidar_scan_coverage_deg,
+    lidar_scan_validation_coverage_deg,
+)
+
 
 @pytest.mark.hardware
 def test_pyserial_available() -> None:
@@ -12,15 +17,16 @@ def test_pyserial_available() -> None:
 
 
 @pytest.mark.hardware
-def test_ld19_serial_open() -> None:
+def test_ld19_serial_open(jetson_settings) -> None:
     try:
         import serial as pyserial
     except ImportError:
         pytest.skip("pyserial not installed")
 
-    from mousedroid.config.schema import LidarConfig
+    cfg = jetson_settings.lidar
+    if cfg is None or not cfg.enabled:
+        pytest.skip("LiDAR disabled in config")
 
-    cfg = LidarConfig()
     try:
         ser = pyserial.Serial(
             port=cfg.serial_port,
@@ -37,35 +43,46 @@ def test_ld19_serial_open() -> None:
 
 
 @pytest.mark.hardware
-async def test_ld19_read_scan() -> None:
+async def test_ld19_read_scan(jetson_settings) -> None:
     try:
         import serial  # noqa: F401
     except ImportError:
         pytest.skip("pyserial not installed")
 
-    from mousedroid.config.schema import LidarConfig
     from mousedroid.hardware.lidar.ld19_driver import LD19LidarDriver
 
-    cfg = LidarConfig()
+    cfg = jetson_settings.lidar
+    if cfg is None or not cfg.enabled:
+        pytest.skip("LiDAR disabled in config")
+
     driver = LD19LidarDriver(cfg)
+    read_stats = None
     try:
         try:
             await driver.start()
         except Exception as exc:
             pytest.skip(f"LD19 not available on {cfg.serial_port}: {exc}")
 
-        scan = await driver.read_scan()
+        scan_reader = getattr(driver, "read_scan_with_diagnostics", None)
+        if callable(scan_reader):
+            scan, read_stats = await scan_reader()
+        else:
+            scan = await driver.read_scan()
     finally:
         await driver.stop()
 
     assert scan.n_points > 0, "no LiDAR points returned — device may be unpowered"
 
-    angles = scan.angles_deg
     distances_m = scan.distances_mm / 1000.0
 
-    angle_span = float(angles.max() - angles.min())
-    assert angle_span >= 270.0, (
-        f"angular coverage {angle_span:.1f}° below 270° threshold — "
+    point_angle_span = lidar_scan_coverage_deg(scan)
+    angle_span = lidar_scan_validation_coverage_deg(
+        scan,
+        driver_covered_angle_deg=(read_stats.covered_angle_deg if read_stats is not None else None),
+    )
+    assert angle_span >= cfg.min_scan_coverage_deg, (
+        f"validation coverage {angle_span:.1f}° below {cfg.min_scan_coverage_deg:.1f}° threshold "
+        f"(point coverage {point_angle_span:.1f}°) — "
         "LiDAR likely blocked or misaligned"
     )
 

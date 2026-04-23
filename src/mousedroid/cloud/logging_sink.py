@@ -8,7 +8,8 @@ blocking the 30 Hz control loop.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, cast
 
 from mousedroid.logging.setup import get_logger
 
@@ -47,11 +48,13 @@ class CloudLoggingSink:
         from mousedroid.cloud._auth import resolve_credentials
 
         creds, _project = resolve_credentials(self._cfg)
-        client = cloud_logging.Client(
+        client_factory = cast(Callable[..., Any], cloud_logging.Client)
+        client = client_factory(
             credentials=creds,
             project=self._cfg.project_id,
         )
-        self._cloud_logger = client.logger(self._log_cfg.log_name)
+        logger_factory = cast(Callable[[str], Any], client.logger)
+        self._cloud_logger = logger_factory(self._log_cfg.log_name)
         self._started = True
         _log.info("cloud_logging_sink_started", log_name=self._log_cfg.log_name)
 
@@ -86,7 +89,7 @@ class CloudLoggingSink:
                 **{
                     k: v
                     for k, v in event_dict.items()
-                    if k != "event" and isinstance(v, (str, int, float, bool, type(None)))
+                    if k != "event" and isinstance(v, str | int | float | bool | type(None))
                 },
             }
             self._cloud_logger.log_struct(entry, severity=method_name.upper())

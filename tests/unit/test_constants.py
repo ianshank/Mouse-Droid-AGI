@@ -92,8 +92,8 @@ def test_lidar_default_feature_dim():
 
 
 def test_lidar_crc8_polynomial():
-    """LIDAR_CRC8_POLYNOMIAL should be 0x4C."""
-    assert LIDAR_CRC8_POLYNOMIAL == 0x4C
+    """LIDAR_CRC8_POLYNOMIAL should match the LD19 vendor CRC table."""
+    assert LIDAR_CRC8_POLYNOMIAL == 0x4D
 
 
 def test_lidar_mm_per_m():

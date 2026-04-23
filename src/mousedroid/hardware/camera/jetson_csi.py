@@ -1,7 +1,7 @@
 """Jetson Nano CSI camera driver.
 
 Implements ``VisionProtocol`` using ``jetson_utils`` (from jetson-inference)
-with a GStreamer ``nvarguscamerasrc`` fallback via OpenCV.
+with OpenCV fallbacks via GStreamer ``nvarguscamerasrc`` and direct V4L2.
 """
 
 from __future__ import annotations
@@ -35,9 +35,9 @@ _log = get_logger(__name__)
 class JetsonCSICamera:
     """Jetson CSI camera implementing ``VisionProtocol``.
 
-    Prefers ``jetson_utils`` for zero-copy CUDA capture.  Falls back to
-    OpenCV with a GStreamer ``nvarguscamerasrc`` pipeline when
-    ``jetson_utils`` is unavailable.
+    Prefers ``jetson_utils`` for zero-copy CUDA capture. Falls back to
+    OpenCV with a GStreamer ``nvarguscamerasrc`` pipeline, then to direct
+    V4L2 capture on the configured ``device_path``.
 
     All blocking camera operations are delegated to ``asyncio.to_thread``.
     """
@@ -62,7 +62,7 @@ class JetsonCSICamera:
         if _jetson_utils is None and _cv2 is None:
             msg = (
                 "Neither jetson_utils nor OpenCV is installed — "
-                "install jetson-inference or opencv-python with GStreamer support"
+                "install jetson-inference or opencv-python with GStreamer/V4L2 support"
             )
             raise RuntimeError(msg)
         await asyncio.to_thread(self._start_camera)
@@ -78,7 +78,8 @@ class JetsonCSICamera:
         """Configure and start the CSI camera (blocking).
 
         Tries ``jetson_utils.videoSource`` first, then falls back to
-        OpenCV with a GStreamer ``nvarguscamerasrc`` pipeline.
+        OpenCV with a GStreamer ``nvarguscamerasrc`` pipeline and finally
+        direct V4L2 capture.
         """
         if _jetson_utils is not None:
             try:
@@ -110,11 +111,35 @@ class JetsonCSICamera:
             f"appsink drop=1"
         )
         cap = _cv2.VideoCapture(gst_pipeline, _cv2.CAP_GSTREAMER)
-        if not cap.isOpened():
-            msg = "Failed to open CSI camera via GStreamer pipeline"
+        if cap.isOpened():
+            self._camera = cap
+            self._backend = "gstreamer"
+            return
+
+        cap.release()
+        _log.warning(
+            "jetson_csi_gstreamer_failed_falling_back_to_v4l2",
+            device_path=self._cfg.device_path,
+        )
+
+        v4l2_cap = _cv2.VideoCapture(self._cfg.device_path)
+        if not v4l2_cap.isOpened():
+            msg = (
+                "Failed to open CSI camera via GStreamer pipeline or "
+                f"V4L2 device {self._cfg.device_path}"
+            )
             raise RuntimeError(msg)
-        self._camera = cap
-        self._backend = "gstreamer"
+
+        for prop, value in (
+            (getattr(_cv2, "CAP_PROP_FRAME_WIDTH", None), self._cfg.resolution_width),
+            (getattr(_cv2, "CAP_PROP_FRAME_HEIGHT", None), self._cfg.resolution_height),
+            (getattr(_cv2, "CAP_PROP_FPS", None), self._cfg.fps),
+        ):
+            if prop is not None:
+                v4l2_cap.set(prop, value)
+
+        self._camera = v4l2_cap
+        self._backend = "v4l2"
 
     async def stop(self) -> None:
         """Stop the camera capture pipeline."""
@@ -124,7 +149,7 @@ class JetsonCSICamera:
 
     def _stop_camera(self) -> None:  # pragma: no cover
         """Stop and release the camera (blocking)."""
-        if self._backend == "gstreamer":
+        if self._backend in {"gstreamer", "v4l2"}:
             self._camera.release()
         else:
             # jetson_utils sources are cleaned up on deletion
@@ -140,6 +165,14 @@ class JetsonCSICamera:
         """
         frame = await asyncio.to_thread(self._capture_frame)
         return self._extract_features(frame)
+
+    async def capture_raw_frame(self) -> NDArray[np.uint8]:
+        """Capture a single raw frame as a uint8 NumPy array.
+
+        Returns:
+            Raw frame array of shape ``(H, W, channels)``.
+        """
+        return np.asarray(await asyncio.to_thread(self._capture_frame), dtype=np.uint8)
 
     def _capture_frame(self) -> NDArray[np.uint8]:  # pragma: no cover
         """Capture a single frame from the camera (blocking).
@@ -160,7 +193,25 @@ class JetsonCSICamera:
                 (self._cfg.resolution_height, self._cfg.resolution_width, 3),
                 dtype=np.uint8,
             )
-        return np.asarray(frame_cv, dtype=np.uint8)
+        frame = np.asarray(frame_cv, dtype=np.uint8)
+
+        if self._backend == "v4l2" and (
+            frame.shape[0] != self._cfg.resolution_height
+            or frame.shape[1] != self._cfg.resolution_width
+        ):
+            _log.info(
+                "jetson_csi_v4l2_resizing_frame",
+                source_width=int(frame.shape[1]),
+                source_height=int(frame.shape[0]),
+                target_width=self._cfg.resolution_width,
+                target_height=self._cfg.resolution_height,
+            )
+            frame = np.asarray(
+                _cv2.resize(frame, (self._cfg.resolution_width, self._cfg.resolution_height)),
+                dtype=np.uint8,
+            )
+
+        return frame
 
     def _extract_features(self, frame: NDArray[np.uint8]) -> NDArray[np.float32]:
         """Extract feature vector from a captured frame.

@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import importlib
 import time
-from typing import TYPE_CHECKING, Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, cast
 
 from mousedroid.logging.setup import get_logger
 
@@ -42,12 +44,16 @@ class CloudFirestoreSync:
 
     async def start(self) -> None:
         """Initialise the Firestore client and start the sync loop."""
-        from google.cloud import firestore
-
         from mousedroid.cloud._auth import resolve_credentials
 
+        firestore_module = importlib.import_module("google.cloud.firestore")
+        firestore_api = cast(Any, firestore_module)
         creds, _project = resolve_credentials(self._cfg)
-        self._db = firestore.AsyncClient(
+        async_client_factory = cast(
+            Callable[..., Any],
+            firestore_api.AsyncClient,
+        )
+        self._db = async_client_factory(
             credentials=creds,
             project=self._cfg.project_id,
         )

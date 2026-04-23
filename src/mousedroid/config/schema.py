@@ -56,6 +56,10 @@ class CameraConfig(BaseModel):
     resolution_width: int = Field(640, gt=0, description="Capture width (px)")
     resolution_height: int = Field(480, gt=0, description="Capture height (px)")
     fps: int = Field(30, gt=0, le=120, description="Capture frame rate")
+    device_path: str = Field(
+        "/dev/video0",
+        description="Video device path for OpenCV V4L2 fallback capture",
+    )
     model_path: Path | None = Field(
         None, description="IMX500 onboard model path (None = use default)"
     )
@@ -210,7 +214,11 @@ class ExperienceConfig(BaseModel):
     """LMDB experience storage configuration."""
 
     path: str = Field("/home/jetson/mousedroid_experience", description="LMDB storage path")
-    map_size_gb: int = Field(20, gt=0, description="LMDB map size (GB)")
+    map_size_gb: float = Field(
+        20.0,
+        gt=0,
+        description="LMDB map size (GB; fractional values allowed)",
+    )
     flush_every_n: int = Field(30, gt=0, description="Flush after N records")
     export_path: str = Field("/tmp/export", description="Default experience export path")  # noqa: S108
 
@@ -307,6 +315,26 @@ class LidarConfig(BaseModel):
     scan_frequency_hz: float = Field(10.0, gt=0, description="Scan frequency (Hz)")
     min_confidence: int = Field(0, ge=0, le=255, description="Minimum point confidence [0-255]")
     read_timeout_s: float = Field(0.2, gt=0, description="Serial read timeout (s)")
+    scan_acquisition_timeout_s: float = Field(
+        1.0,
+        gt=0,
+        description="Maximum time to accumulate one LiDAR scan before returning partial data",
+    )
+    min_scan_coverage_deg: float = Field(
+        270.0,
+        gt=0,
+        le=360.0,
+        description="Minimum angular coverage to treat one LiDAR scan as complete",
+    )
+    scan_timeout_multiplier: float = Field(
+        2.0,
+        gt=0,
+        description=(
+            "Multiplier applied to the nominal scan period (1 / scan_frequency_hz) when "
+            "computing the acquisition deadline. Increase for slow-spinning or "
+            "high-interference environments."
+        ),
+    )
     n_sectors: int = Field(36, gt=0, description="Number of angular sectors for binning")
     feature_dim: int = Field(36, gt=0, description="Output feature vector dimension")
     mock_pattern: str = Field(

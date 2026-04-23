@@ -9,6 +9,7 @@ import numpy as np
 from mousedroid.config.schema import ExperienceConfig
 from mousedroid.experience.logger import ExperienceLogger
 from mousedroid.experience.record import MouseDroidExperienceRecord
+from tests import TEST_EXPERIENCE_MAP_SIZE_GB
 
 
 def _make_record(**kwargs) -> MouseDroidExperienceRecord:
@@ -25,7 +26,7 @@ def _make_record(**kwargs) -> MouseDroidExperienceRecord:
 
 
 def test_log_when_not_open(tmp_path: Path) -> None:
-    cfg = ExperienceConfig(path=str(tmp_path / "db"), map_size_gb=1)
+    cfg = ExperienceConfig(path=str(tmp_path / "db"), map_size_gb=TEST_EXPERIENCE_MAP_SIZE_GB)
     logger = ExperienceLogger(cfg)
     # Should not raise; just logs a warning
     logger.log(_make_record())
@@ -33,13 +34,13 @@ def test_log_when_not_open(tmp_path: Path) -> None:
 
 
 def test_read_when_not_open(tmp_path: Path) -> None:
-    cfg = ExperienceConfig(path=str(tmp_path / "db"), map_size_gb=1)
+    cfg = ExperienceConfig(path=str(tmp_path / "db"), map_size_gb=TEST_EXPERIENCE_MAP_SIZE_GB)
     logger = ExperienceLogger(cfg)
     assert logger.read(b"\x00" * 8) is None
 
 
 def test_read_missing_key(tmp_path: Path) -> None:
-    cfg = ExperienceConfig(path=str(tmp_path / "db"), map_size_gb=1)
+    cfg = ExperienceConfig(path=str(tmp_path / "db"), map_size_gb=TEST_EXPERIENCE_MAP_SIZE_GB)
     logger = ExperienceLogger(cfg)
     logger.open()
     assert logger.read(b"\xff" * 8) is None
@@ -47,7 +48,11 @@ def test_read_missing_key(tmp_path: Path) -> None:
 
 
 def test_log_triggers_flush(tmp_path: Path) -> None:
-    cfg = ExperienceConfig(path=str(tmp_path / "db"), map_size_gb=1, flush_every_n=1)
+    cfg = ExperienceConfig(
+        path=str(tmp_path / "db"),
+        map_size_gb=TEST_EXPERIENCE_MAP_SIZE_GB,
+        flush_every_n=1,
+    )
     logger = ExperienceLogger(cfg)
     logger.open()
     logger.log(_make_record())
@@ -58,7 +63,11 @@ def test_log_triggers_flush(tmp_path: Path) -> None:
 
 
 def test_log_no_flush_below_threshold(tmp_path: Path) -> None:
-    cfg = ExperienceConfig(path=str(tmp_path / "db"), map_size_gb=1, flush_every_n=5)
+    cfg = ExperienceConfig(
+        path=str(tmp_path / "db"),
+        map_size_gb=TEST_EXPERIENCE_MAP_SIZE_GB,
+        flush_every_n=5,
+    )
     logger = ExperienceLogger(cfg)
     logger.open()
     logger.log(_make_record())
@@ -67,7 +76,7 @@ def test_log_no_flush_below_threshold(tmp_path: Path) -> None:
 
 
 def test_close_idempotent(tmp_path: Path) -> None:
-    cfg = ExperienceConfig(path=str(tmp_path / "db"), map_size_gb=1)
+    cfg = ExperienceConfig(path=str(tmp_path / "db"), map_size_gb=TEST_EXPERIENCE_MAP_SIZE_GB)
     logger = ExperienceLogger(cfg)
     logger.open()
     logger.close()

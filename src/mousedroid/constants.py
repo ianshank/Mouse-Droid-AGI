@@ -190,7 +190,7 @@ LIDAR_ANGLE_SCALE: float = 0.01
 LIDAR_FULL_ROTATION_DEG: float = 360.0
 """Full rotation in degrees for scan assembly boundary detection."""
 
-LIDAR_CRC8_POLYNOMIAL: int = 0x4C
+LIDAR_CRC8_POLYNOMIAL: int = 0x4D
 """CRC-8 polynomial used by LD19 frame checksum."""
 
 LIDAR_SCAN_TIMEOUT_MULTIPLIER: float = 2.0

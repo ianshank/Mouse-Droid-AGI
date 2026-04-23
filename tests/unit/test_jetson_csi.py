@@ -11,7 +11,13 @@ from mousedroid.config.schema import CameraConfig
 
 
 def _cfg(**overrides):
-    defaults = {"resolution_width": 320, "resolution_height": 240, "fps": 30, "feature_dim": 64}
+    defaults = {
+        "resolution_width": 320,
+        "resolution_height": 240,
+        "fps": 30,
+        "feature_dim": 64,
+        "device_path": "/dev/video0",
+    }
     defaults.update(overrides)
     return CameraConfig(**defaults)
 
@@ -133,9 +139,11 @@ async def test_start_gstreamer_open_fails():
     from mousedroid.hardware.camera import jetson_csi
 
     mock_cv2 = MagicMock()
-    mock_cap = MagicMock()
-    mock_cap.isOpened.return_value = False
-    mock_cv2.VideoCapture.return_value = mock_cap
+    mock_gstreamer_cap = MagicMock()
+    mock_gstreamer_cap.isOpened.return_value = False
+    mock_v4l2_cap = MagicMock()
+    mock_v4l2_cap.isOpened.return_value = False
+    mock_cv2.VideoCapture.side_effect = [mock_gstreamer_cap, mock_v4l2_cap]
     mock_cv2.CAP_GSTREAMER = 1800
 
     cam = jetson_csi.JetsonCSICamera(_cfg())
@@ -143,6 +151,33 @@ async def test_start_gstreamer_open_fails():
     p_ju, p_cv = _patch_backends(jetson_csi, cv2=mock_cv2)
     with p_ju, p_cv, pytest.raises(RuntimeError, match="Failed to open CSI camera"):
         await cam.start()
+
+
+@pytest.mark.asyncio
+async def test_start_gstreamer_fallback_to_v4l2():
+    from mousedroid.hardware.camera import jetson_csi
+
+    mock_cv2 = MagicMock()
+    mock_gstreamer_cap = MagicMock()
+    mock_gstreamer_cap.isOpened.return_value = False
+    mock_v4l2_cap = MagicMock()
+    mock_v4l2_cap.isOpened.return_value = True
+    mock_cv2.VideoCapture.side_effect = [mock_gstreamer_cap, mock_v4l2_cap]
+    mock_cv2.CAP_GSTREAMER = 1800
+    mock_cv2.CAP_PROP_FRAME_WIDTH = 3
+    mock_cv2.CAP_PROP_FRAME_HEIGHT = 4
+    mock_cv2.CAP_PROP_FPS = 5
+
+    cam = jetson_csi.JetsonCSICamera(_cfg(device_path="/dev/video2"))
+
+    p_ju, p_cv = _patch_backends(jetson_csi, cv2=mock_cv2)
+    with p_ju, p_cv:
+        await cam.start()
+        assert cam._backend == "v4l2"
+        mock_cv2.VideoCapture.assert_any_call("/dev/video2")
+        mock_v4l2_cap.set.assert_any_call(mock_cv2.CAP_PROP_FRAME_WIDTH, 320)
+        mock_v4l2_cap.set.assert_any_call(mock_cv2.CAP_PROP_FRAME_HEIGHT, 240)
+        mock_v4l2_cap.set.assert_any_call(mock_cv2.CAP_PROP_FPS, 30)
 
 
 @pytest.mark.asyncio
@@ -234,6 +269,35 @@ async def test_capture_frame_gstreamer_failure():
         features = await cam.capture_features()
         assert features.shape == (64,)
         assert np.allclose(features, 0.0)
+
+
+@pytest.mark.asyncio
+async def test_capture_frame_v4l2_resizes_to_configured_resolution():
+    from mousedroid.hardware.camera import jetson_csi
+
+    mock_cv2 = MagicMock()
+    mock_gstreamer_cap = MagicMock()
+    mock_gstreamer_cap.isOpened.return_value = False
+    mock_v4l2_cap = MagicMock()
+    mock_v4l2_cap.isOpened.return_value = True
+    source_frame = np.random.randint(0, 255, (2592, 4608, 3), dtype=np.uint8)
+    resized_frame = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
+    mock_v4l2_cap.read.return_value = (True, source_frame)
+    mock_cv2.VideoCapture.side_effect = [mock_gstreamer_cap, mock_v4l2_cap]
+    mock_cv2.resize.return_value = resized_frame
+    mock_cv2.CAP_GSTREAMER = 1800
+    mock_cv2.CAP_PROP_FRAME_WIDTH = 3
+    mock_cv2.CAP_PROP_FRAME_HEIGHT = 4
+    mock_cv2.CAP_PROP_FPS = 5
+
+    cam = jetson_csi.JetsonCSICamera(_cfg(resolution_width=640, resolution_height=480))
+
+    p_ju, p_cv = _patch_backends(jetson_csi, cv2=mock_cv2)
+    with p_ju, p_cv:
+        await cam.start()
+        frame = cam._capture_frame()
+        assert frame.shape == (480, 640, 3)
+        mock_cv2.resize.assert_called_once_with(source_frame, (640, 480))
 
 
 # ---------------------------------------------------------------------------

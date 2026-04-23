@@ -12,6 +12,7 @@ import torch
 from mousedroid.config.schema import ExperienceConfig, ModelConfig
 from mousedroid.experience.dataset import OfflineRLDataset
 from mousedroid.experience.record import MouseDroidExperienceRecord
+from tests import TEST_EXPERIENCE_MAP_SIZE_GB
 
 
 def _make_record(
@@ -60,7 +61,7 @@ def _populate_lmdb(
 def experience_cfg(tmp_path: object) -> ExperienceConfig:
     return ExperienceConfig(
         path=str(tmp_path),
-        map_size_gb=1,
+        map_size_gb=TEST_EXPERIENCE_MAP_SIZE_GB,
         flush_every_n=5,
     )
 
@@ -76,7 +77,7 @@ class TestOfflineRLDatasetOpen:
     def test_open_missing_path_raises(self, model_cfg: ModelConfig) -> None:
         cfg = ExperienceConfig(
             path="/tmp/nonexistent_test_db_12345",
-            map_size_gb=1,
+            map_size_gb=TEST_EXPERIENCE_MAP_SIZE_GB,
             flush_every_n=5,
         )
         dataset = OfflineRLDataset(cfg, model_cfg)

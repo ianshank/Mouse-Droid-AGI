@@ -94,17 +94,32 @@ class LD19FrameParser:
             Parsed :class:`LD19Frame`, or ``None`` if the data is invalid
             (wrong header, wrong length, or CRC mismatch).
         """
+        frame, _ = LD19FrameParser.parse_frame_with_reason(data)
+        return frame
+
+    @staticmethod
+    def parse_frame_with_reason(data: bytes) -> tuple[LD19Frame | None, str | None]:
+        """Parse a single 47-byte LD19 frame with failure classification.
+
+        Args:
+            data: Exactly :data:`LIDAR_FRAME_SIZE` bytes starting at the
+                header byte.
+
+        Returns:
+            Tuple of ``(frame, failure_reason)`` where ``failure_reason`` is
+            ``None`` on success or one of ``length``, ``header``, or ``crc``.
+        """
         if len(data) != LIDAR_FRAME_SIZE:
-            return None
+            return None, "length"
 
         if data[0] != LIDAR_HEADER_BYTE or data[1] != LIDAR_VER_LEN_BYTE:
-            return None
+            return None, "header"
 
         # Validate CRC8 (over all bytes except the last one).
         expected_crc = data[-1]
         computed_crc = LD19FrameParser.crc8(data[:-1])
         if computed_crc != expected_crc:
-            return None
+            return None, "crc"
 
         # Parse header fields (little-endian).
         speed_raw = int.from_bytes(data[2:4], "little")
@@ -123,12 +138,15 @@ class LD19FrameParser:
         end_angle_raw = int.from_bytes(data[offset : offset + 2], "little")
         timestamp_ms = int.from_bytes(data[offset + 2 : offset + 4], "little")
 
-        return LD19Frame(
-            speed_deg_s=speed_raw * LIDAR_ANGLE_SCALE,
-            start_angle_deg=start_angle_raw * LIDAR_ANGLE_SCALE,
-            end_angle_deg=end_angle_raw * LIDAR_ANGLE_SCALE,
-            points=tuple(points),
-            timestamp_ms=timestamp_ms,
+        return (
+            LD19Frame(
+                speed_deg_s=speed_raw * LIDAR_ANGLE_SCALE,
+                start_angle_deg=start_angle_raw * LIDAR_ANGLE_SCALE,
+                end_angle_deg=end_angle_raw * LIDAR_ANGLE_SCALE,
+                points=tuple(points),
+                timestamp_ms=timestamp_ms,
+            ),
+            None,
         )
 
     @staticmethod

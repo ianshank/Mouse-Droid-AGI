@@ -42,6 +42,7 @@ app = FastAPI(title="MouseDroid Sensor Stream")
 # Camera — MJPEG multipart stream
 # ---------------------------------------------------------------------------
 
+
 async def _camera_frames() -> AsyncIterator[bytes]:
     """Yield MJPEG boundary frames as fast as the camera allows (~30 fps cap)."""
     try:
@@ -63,10 +64,7 @@ async def _camera_frames() -> AsyncIterator[bytes]:
                 buf = io.BytesIO()
                 img.save(buf, format="JPEG", quality=80)
                 jpg = buf.getvalue()
-                yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
-                )
+                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n")
                 await asyncio.sleep(1 / 30)  # cap at 30 fps
         finally:
             cam.stop()
@@ -91,10 +89,7 @@ async def _camera_frames() -> AsyncIterator[bytes]:
                 buf = io.BytesIO()
                 img.save(buf, format="JPEG", quality=80)
                 jpg = buf.getvalue()
-                yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
-                )
+                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n")
                 await asyncio.sleep(1 / 30)
         except ImportError:
             # GStreamer + OpenCV fallback (works on bare-metal Jetson)
@@ -126,10 +121,7 @@ async def _camera_frames() -> AsyncIterator[bytes]:
                             await asyncio.sleep(0.033)
                             continue
                         jpg = jpg_buf.tobytes()
-                        yield (
-                            b"--frame\r\n"
-                            b"Content-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
-                        )
+                        yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n")
                         await asyncio.sleep(1 / 30)
                 finally:
                     cap.release()
@@ -143,10 +135,7 @@ async def _camera_frames() -> AsyncIterator[bytes]:
                 draw.text((10, 25), "Camera unavailable", fill=(200, 60, 60))
                 buf = io.BytesIO()
                 img.save(buf, format="JPEG")
-                yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n" + buf.getvalue() + b"\r\n"
-                )
+                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.getvalue() + b"\r\n")
 
 
 @app.get("/stream/camera")
@@ -160,6 +149,7 @@ async def camera_stream() -> StreamingResponse:
 # ---------------------------------------------------------------------------
 # Ultrasonic — Server-Sent Events
 # ---------------------------------------------------------------------------
+
 
 async def _ultrasonic_events() -> AsyncIterator[str]:
     """Yield SSE distance readings at ~10 Hz."""
@@ -193,9 +183,7 @@ async def _ultrasonic_events() -> AsyncIterator[str]:
             GPIO.setup(24, GPIO.IN)
             try:
                 while True:
-                    dist = await asyncio.get_event_loop().run_in_executor(
-                        None, _raw_gpio_pulse
-                    )
+                    dist = await asyncio.get_event_loop().run_in_executor(None, _raw_gpio_pulse)
                     yield f"data: {dist:.4f}\n\n"
                     await asyncio.sleep(0.1)
             finally:
@@ -239,6 +227,7 @@ async def ultrasonic_stream() -> StreamingResponse:
 # ---------------------------------------------------------------------------
 # Audio level — Server-Sent Events (peak amplitude per chunk)
 # ---------------------------------------------------------------------------
+
 
 async def _audio_events() -> AsyncIterator[str]:
     """Yield SSE peak audio levels (0.0-1.0) at ~10 Hz."""
@@ -427,6 +416,7 @@ async def dashboard() -> HTMLResponse:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(

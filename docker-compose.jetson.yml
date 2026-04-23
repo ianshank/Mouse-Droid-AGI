@@ -15,6 +15,8 @@ services:
       dockerfile: Dockerfile.jetson
     image: mousedroid:jetson
     runtime: nvidia
+    # Required for Jetson.GPIO model detection via /proc/device-tree.
+    privileged: true
 
     # --- Restart policy ---
     restart: unless-stopped
@@ -36,6 +38,10 @@ services:
       - /opt/mousedroid:/opt/mousedroid
       # Configuration files
       - /etc/mousedroid:/etc/mousedroid:ro
+      # Libargus socket required for CSI camera access from inside the container
+      - /tmp/argus_socket:/tmp/argus_socket
+      # Stable serial-device symlinks for ESP32 and LiDAR config paths
+      - /dev/serial:/dev/serial:ro
       # Experience database (persistent)
       - mousedroid_experience:/home/jetson/mousedroid_experience
       # Thermal monitoring (read-only)
@@ -67,7 +73,8 @@ services:
       - audio
       - video
       - dialout
-      - gpio
+      # Some JetPack images do not define a gpio Unix group; privileged mode
+      # plus explicit /dev/gpiochip* passthrough is the actual access path.
 
     # --- Health check ---
     # Polls the telemetry HTTP health endpoint exposed by the service
