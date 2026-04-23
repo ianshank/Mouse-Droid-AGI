@@ -7,6 +7,7 @@ import numpy as np
 from mousedroid.config.schema import ExperienceConfig
 from mousedroid.experience.logger import ExperienceLogger
 from mousedroid.experience.record import MouseDroidExperienceRecord
+from tests import TEST_EXPERIENCE_MAP_SIZE_GB
 
 
 def test_record_serialize_deserialize_roundtrip() -> None:
@@ -29,7 +30,7 @@ def test_record_serialize_deserialize_roundtrip() -> None:
 
 
 def test_logger_open_log_count_close(tmp_path: Path) -> None:
-    cfg = ExperienceConfig(path=str(tmp_path / "exp_db"), map_size_gb=1)
+    cfg = ExperienceConfig(path=str(tmp_path / "exp_db"), map_size_gb=TEST_EXPERIENCE_MAP_SIZE_GB)
     logger = ExperienceLogger(cfg)
     logger.open()
     record = MouseDroidExperienceRecord()
@@ -39,7 +40,7 @@ def test_logger_open_log_count_close(tmp_path: Path) -> None:
 
 
 def test_logger_multiple_records(tmp_path: Path) -> None:
-    cfg = ExperienceConfig(path=str(tmp_path / "exp_db2"), map_size_gb=1)
+    cfg = ExperienceConfig(path=str(tmp_path / "exp_db2"), map_size_gb=TEST_EXPERIENCE_MAP_SIZE_GB)
     logger = ExperienceLogger(cfg)
     logger.open()
     for i in range(5):
@@ -50,13 +51,13 @@ def test_logger_multiple_records(tmp_path: Path) -> None:
 
 
 def test_logger_count_zero_before_open(tmp_path: Path) -> None:
-    cfg = ExperienceConfig(path=str(tmp_path / "exp_db3"), map_size_gb=1)
+    cfg = ExperienceConfig(path=str(tmp_path / "exp_db3"), map_size_gb=TEST_EXPERIENCE_MAP_SIZE_GB)
     logger = ExperienceLogger(cfg)
     assert logger.count() == 0
 
 
 def test_logger_close_then_count(tmp_path: Path) -> None:
-    cfg = ExperienceConfig(path=str(tmp_path / "exp_db4"), map_size_gb=1)
+    cfg = ExperienceConfig(path=str(tmp_path / "exp_db4"), map_size_gb=TEST_EXPERIENCE_MAP_SIZE_GB)
     logger = ExperienceLogger(cfg)
     logger.open()
     logger.close()

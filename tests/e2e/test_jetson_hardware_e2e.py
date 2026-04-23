@@ -25,12 +25,11 @@ pytestmark = pytest.mark.hardware
 # ---------------------------------------------------------------------------
 
 
-async def test_camera_captures_frame() -> None:
+async def test_camera_captures_frame(runtime_settings) -> None:
     """Camera driver captures features with correct dimension."""
-    from mousedroid.config.schema import Settings
     from mousedroid.factory import build_camera
 
-    cfg = Settings(mock_hardware=False)
+    cfg = runtime_settings
     camera = build_camera(cfg)
 
     await camera.start()
@@ -49,12 +48,11 @@ async def test_camera_captures_frame() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_ultrasonic_reads_distance() -> None:
+async def test_ultrasonic_reads_distance(runtime_settings) -> None:
     """Ultrasonic sensor returns distance within [0, max_range_m]."""
-    from mousedroid.config.schema import Settings
     from mousedroid.factory import build_distance_sensor
 
-    cfg = Settings(mock_hardware=False)
+    cfg = runtime_settings
     distance_sensor = build_distance_sensor(cfg)
 
     reading = await distance_sensor.read_distance_m()
@@ -68,12 +66,11 @@ async def test_ultrasonic_reads_distance() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_esp32_velocity_roundtrip() -> None:
+async def test_esp32_velocity_roundtrip(runtime_settings) -> None:
     """ESP32 accepts a velocity command and reads encoders back."""
-    from mousedroid.config.schema import Settings
     from mousedroid.factory import build_esp32_driver
 
-    cfg = Settings(mock_hardware=False)
+    cfg = runtime_settings
     esp32 = build_esp32_driver(cfg)
 
     await esp32.connect()
@@ -100,11 +97,10 @@ async def test_esp32_velocity_roundtrip() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_lidar_returns_scan() -> None:
+async def test_lidar_returns_scan(runtime_settings) -> None:
     """LiDAR driver returns a scan with expected number of points."""
-    from mousedroid.config.schema import Settings
 
-    cfg = Settings(mock_hardware=False)
+    cfg = runtime_settings
     if cfg.lidar is None:
         pytest.skip("LiDAR not configured")
 
@@ -117,9 +113,9 @@ async def test_lidar_returns_scan() -> None:
     await lidar.start()
     try:
         scan = await lidar.read_scan()
-        assert len(scan) > 0, "LiDAR returned empty scan"
+        assert scan.n_points > 0, "LiDAR returned empty scan"
         # LD19 typically returns ~400-500 points per scan
-        assert len(scan) >= 100, f"LiDAR scan too sparse: {len(scan)} points"
+        assert scan.n_points >= 100, f"LiDAR scan too sparse: {scan.n_points} points"
     finally:
         await lidar.stop()
 
@@ -129,12 +125,11 @@ async def test_lidar_returns_scan() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_microphone_captures_audio() -> None:
+async def test_microphone_captures_audio(runtime_settings) -> None:
     """Microphone driver captures a 1-second audio chunk."""
-    from mousedroid.config.schema import Settings
     from mousedroid.factory import build_microphone
 
-    cfg = Settings(mock_hardware=False)
+    cfg = runtime_settings
     mic = build_microphone(cfg)
     if mic is None:
         pytest.skip("Microphone not configured")
@@ -156,24 +151,14 @@ async def test_microphone_captures_audio() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_speaker_plays_audio() -> None:
+async def test_speaker_plays_audio(runtime_settings) -> None:
     """Speaker driver plays a short test tone without error."""
-    from mousedroid.config.schema import Settings
-    from mousedroid.factory import build_speaker
+    from mousedroid.validation.runtime import play_speaker_tone
 
-    cfg = Settings(mock_hardware=False)
-    speaker = build_speaker(cfg)
-    if speaker is None:
+    written_samples = await play_speaker_tone(runtime_settings, duration_s=0.5)
+    if written_samples is None:
         pytest.skip("Speaker not configured")
-
-    # Generate a 0.5-second sine tone at 440 Hz
-    sample_rate = cfg.voice.sample_rate
-    duration_s = 0.5
-    t = np.linspace(0, duration_s, int(sample_rate * duration_s), dtype=np.float32)
-    tone = (0.3 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
-
-    # Should not raise
-    await speaker.play(tone)
+    assert written_samples > 0
 
 
 # ---------------------------------------------------------------------------
@@ -181,12 +166,11 @@ async def test_speaker_plays_audio() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_orchestrator_5_tick_loop() -> None:
+async def test_orchestrator_5_tick_loop(runtime_settings) -> None:
     """Full orchestrator runs 5 ticks with real hardware without crash."""
-    from mousedroid.config.schema import Settings
     from mousedroid.factory import build_orchestrator
 
-    cfg = Settings(mock_hardware=False)
+    cfg = runtime_settings
     orch = build_orchestrator(cfg)
 
     await orch.start()
@@ -206,9 +190,8 @@ async def test_orchestrator_5_tick_loop() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_sensor_manager_read_latency() -> None:
+async def test_sensor_manager_read_latency(runtime_settings) -> None:
     """SensorManager.read_all() completes within 100ms on real hardware."""
-    from mousedroid.config.schema import Settings
     from mousedroid.factory import (
         build_camera,
         build_distance_sensor,
@@ -217,13 +200,19 @@ async def test_sensor_manager_read_latency() -> None:
         build_sensor_manager,
     )
 
-    cfg = Settings(mock_hardware=False)
+    cfg = runtime_settings
     camera = build_camera(cfg)
     distance = build_distance_sensor(cfg)
     esp32 = build_esp32_driver(cfg)
     mic = build_microphone(cfg)
 
-    mgr = build_sensor_manager(cfg, vision=camera, distance=distance, esp32=esp32, microphone=mic)
+    mgr = build_sensor_manager(
+        cfg,
+        vision=camera,
+        distance=distance,
+        esp32=esp32,
+        microphone=mic,
+    )
 
     await camera.start()
     await esp32.connect()

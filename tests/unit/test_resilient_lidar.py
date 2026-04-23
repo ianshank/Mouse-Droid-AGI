@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from mousedroid.config.schema import CircuitBreakerConfig, LidarConfig, RetryConfig
+from mousedroid.hardware.lidar.ld19_driver import LD19ReadStats
 from mousedroid.hardware.lidar.mock_lidar import MockLidar
 from mousedroid.resilience.circuit_breaker import CircuitOpenError
 from mousedroid.resilience.resilient_lidar import ResilientLidarDriver
@@ -95,6 +96,34 @@ async def test_read_scan_delegates(resilient: ResilientLidarDriver) -> None:
     """read_scan returns data from the inner driver."""
     scan = await resilient.read_scan()
     assert scan.n_points == 360
+
+
+async def test_read_scan_with_diagnostics_delegates(
+    retry_cfg: RetryConfig,
+    cb_cfg: CircuitBreakerConfig,
+    lidar_cfg: LidarConfig,
+) -> None:
+    """Diagnostic reads should pass through the resilience wrapper."""
+
+    class DiagnosticLidar(MockLidar):
+        async def read_scan_with_diagnostics(self) -> tuple[LidarScan, LD19ReadStats]:
+            return await self.read_scan(), LD19ReadStats(
+                bytes_read=188,
+                chunks_read=1,
+                frames_parsed=3,
+                covered_angle_deg=270.0,
+                elapsed_s=0.05,
+            )
+
+    inner = DiagnosticLidar(lidar_cfg)
+    driver = ResilientLidarDriver(inner, retry_cfg, cb_cfg)
+
+    scan, stats = await driver.read_scan_with_diagnostics()
+
+    assert scan.n_points == 360
+    assert stats.bytes_read == 188
+    assert stats.frames_parsed == 3
+    assert stats.covered_angle_deg == pytest.approx(270.0)
 
 
 async def test_start_delegates(

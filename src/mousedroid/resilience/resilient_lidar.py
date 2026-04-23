@@ -14,6 +14,7 @@ from mousedroid.resilience.retry import retry_async
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import CircuitBreakerConfig, RetryConfig
+    from mousedroid.hardware.lidar.ld19_driver import LD19ReadStats
     from mousedroid.hardware.protocols import LidarProtocol
     from mousedroid.sensing.lidar_scan import LidarScan
 
@@ -89,6 +90,28 @@ class ResilientLidarDriver:
             return await self._cb.call(
                 retry_async,
                 self._inner.read_scan,
+                cfg=self._retry_cfg,
+                retryable_exceptions=(Exception,),
+            )
+        except CircuitOpenError:
+            _log.warning(
+                "lidar_scan_rejected",
+                circuit_state=self._cb.state.name,
+            )
+            raise
+
+    async def read_scan_with_diagnostics(self) -> tuple[LidarScan, LD19ReadStats]:
+        """Read a scan with low-level diagnostics when the inner driver supports it."""
+        from mousedroid.hardware.lidar.ld19_driver import LD19ReadStats
+
+        read_with_diagnostics = getattr(self._inner, "read_scan_with_diagnostics", None)
+        if not callable(read_with_diagnostics):
+            return await self.read_scan(), LD19ReadStats()
+
+        try:
+            return await self._cb.call(
+                retry_async,
+                read_with_diagnostics,
                 cfg=self._retry_cfg,
                 retryable_exceptions=(Exception,),
             )

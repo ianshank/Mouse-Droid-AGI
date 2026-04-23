@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import struct
 import time
 from pathlib import Path
@@ -34,7 +35,7 @@ class ExperienceLogger:
         self._cfg = cfg
         self._path = Path(cfg.path)
         self._flush_every_n = cfg.flush_every_n
-        self._map_size = cfg.map_size_gb * GB_TO_BYTES
+        self._map_size = max(1, math.ceil(cfg.map_size_gb * GB_TO_BYTES))
         self._env: lmdb.Environment | None = None
         self._write_count = 0
         self._sequence = 0

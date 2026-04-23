@@ -25,8 +25,6 @@ pytestmark = [pytest.mark.hardware, pytest.mark.slow]
 
 # Duration is configurable via env var (default 60s for CI, 300s for full validation)
 ENDURANCE_DURATION_S = float(os.getenv("MOUSEDROID_ENDURANCE_DURATION_S", "60"))
-TARGET_HZ = 30.0
-TARGET_LOOP_MS = 1000.0 / TARGET_HZ
 
 
 def _get_rss_mb() -> float:
@@ -60,7 +58,7 @@ def _get_gpu_temp_c() -> float:
 # ---------------------------------------------------------------------------
 
 
-async def test_endurance_30hz_loop() -> None:
+async def test_endurance_30hz_loop(runtime_settings) -> None:
     """Run orchestrator at 30Hz for extended duration.
 
     Validates:
@@ -69,13 +67,17 @@ async def test_endurance_30hz_loop() -> None:
     - RSS growth < 10% from start to end
     - No uncaught exceptions
     """
-    from mousedroid.config.schema import Settings
     from mousedroid.factory import build_orchestrator
 
-    cfg = Settings(mock_hardware=False)
+    cfg = runtime_settings
+    if cfg.mock_hardware:
+        pytest.skip("30 Hz deadline endurance requires non-mock hardware")
+
     orch = build_orchestrator(cfg)
 
     gpu_critical_temp = cfg.safety.gpu_critical_temp_c
+    target_hz = cfg.loop.control_hz
+    target_loop_ms = 1000.0 / target_hz
     loop_times_ms: list[float] = []
     gpu_temps: list[float] = []
     error_count = 0
@@ -107,7 +109,7 @@ async def test_endurance_30hz_loop() -> None:
                     gpu_temps.append(temp)
 
             # Rate-limit to 30Hz
-            target_elapsed = 1.0 / TARGET_HZ
+            target_elapsed = 1.0 / target_hz
             actual_elapsed = time.monotonic() - tick_start
             if actual_elapsed < target_elapsed:
                 await asyncio.sleep(target_elapsed - actual_elapsed)
@@ -126,7 +128,9 @@ async def test_endurance_30hz_loop() -> None:
     p95_idx = int(0.95 * len(sorted_times))
     p95_ms = sorted_times[min(p95_idx, len(sorted_times) - 1)]
 
-    assert p95_ms < TARGET_LOOP_MS, f"Loop p95={p95_ms:.1f}ms exceeds target {TARGET_LOOP_MS:.1f}ms"
+    assert p95_ms < target_loop_ms, (
+        f"Loop p95={p95_ms:.1f}ms exceeds target {target_loop_ms:.1f}ms"
+    )
 
     # GPU temperature
     if gpu_temps:
@@ -154,12 +158,11 @@ async def test_endurance_30hz_loop() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_voice_endurance() -> None:
+async def test_voice_endurance(runtime_settings) -> None:
     """Voice engine handles repeated events without crash or memory leak."""
-    from mousedroid.config.schema import Settings
     from mousedroid.factory import build_speaker, build_voice_engine
 
-    cfg = Settings(mock_hardware=False)
+    cfg = runtime_settings
     speaker = build_speaker(cfg)
     voice = build_voice_engine(cfg, speaker=speaker)
     if voice is None:
@@ -186,9 +189,8 @@ async def test_voice_endurance() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_sensor_recovery_endurance() -> None:
+async def test_sensor_recovery_endurance(runtime_settings) -> None:
     """Sensor manager handles repeated recovery cycles without crash."""
-    from mousedroid.config.schema import Settings
     from mousedroid.factory import (
         build_camera,
         build_distance_sensor,
@@ -197,7 +199,7 @@ async def test_sensor_recovery_endurance() -> None:
         build_sensor_manager,
     )
 
-    cfg = Settings(mock_hardware=False)
+    cfg = runtime_settings
     camera = build_camera(cfg)
     distance = build_distance_sensor(cfg)
     esp32 = build_esp32_driver(cfg)

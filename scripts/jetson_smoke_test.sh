@@ -18,7 +18,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "${SCRIPT_DIR}")"
 VENV_DIR="${VENV_DIR:-/opt/mousedroid/venv}"
-PYTHON="${VENV_DIR}/bin/python"
+PYTHON=""
 FAILURES=0
 PASSES=0
 SKIPS=0
@@ -86,12 +86,46 @@ record_skip() {
     RESULTS+=("SKIP: ${name} ${reason}")
 }
 
-check_python() {
-    if [[ ! -x "${PYTHON}" ]]; then
-        echo "ERROR: Python not found at ${PYTHON}"
-        echo "Set VENV_DIR to the virtualenv path or run deploy_jetson.sh first."
-        exit 1
+resolve_python() {
+    local candidate=""
+
+    if [[ -n "${MOUSEDROID_SMOKE_PYTHON:-}" ]]; then
+        if [[ -x "${MOUSEDROID_SMOKE_PYTHON}" ]]; then
+            PYTHON="${MOUSEDROID_SMOKE_PYTHON}"
+            log_step "Using Python runtime from MOUSEDROID_SMOKE_PYTHON: ${PYTHON}"
+            return
+        fi
+
+        candidate="$(command -v "${MOUSEDROID_SMOKE_PYTHON}" 2>/dev/null || true)"
+        if [[ -n "${candidate}" ]]; then
+            PYTHON="${candidate}"
+            log_step "Using Python runtime from MOUSEDROID_SMOKE_PYTHON: ${PYTHON}"
+            return
+        fi
+
+        echo "WARN: MOUSEDROID_SMOKE_PYTHON='${MOUSEDROID_SMOKE_PYTHON}' is not executable; falling back"
     fi
+
+    if [[ -x "${VENV_DIR}/bin/python" ]]; then
+        PYTHON="${VENV_DIR}/bin/python"
+        log_step "Using Python runtime from VENV_DIR: ${PYTHON}"
+        return
+    fi
+
+    candidate="$(command -v python3 2>/dev/null || true)"
+    if [[ -n "${candidate}" ]]; then
+        PYTHON="${candidate}"
+        log_step "Using fallback Python runtime from PATH: ${PYTHON}"
+        return
+    fi
+
+    echo "ERROR: No Python runtime found for jetson_smoke_test.sh"
+    echo "Checked MOUSEDROID_SMOKE_PYTHON, ${VENV_DIR}/bin/python, and python3 on PATH."
+    exit 1
+}
+
+check_python() {
+    resolve_python
 }
 
 # ---------------------------------------------------------------------------

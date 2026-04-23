@@ -2,14 +2,14 @@
 
 **A Star Wars MSE-6 "Mouse Droid" autonomous navigation system powered by an Agentic World Model on NVIDIA Jetson Orin Nano.**
 
-[![Tests](https://img.shields.io/badge/tests-2505%20passing-brightgreen)](tests/)
+[![Tests](https://img.shields.io/badge/tests-pre--PR%20validated-brightgreen)](tests/)
 [![Coverage](https://img.shields.io/badge/coverage-branch%20gate%2085%25-brightgreen)](scripts/check_branch_coverage.py)
 [![Ruff](https://img.shields.io/badge/lint-ruff%20clean-brightgreen)](pyproject.toml)
-[![Mypy](https://img.shields.io/badge/mypy-strict-orange)](pyproject.toml)
+[![Mypy](https://img.shields.io/badge/mypy-strict%20clean-brightgreen)](pyproject.toml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 [![CUDA](https://img.shields.io/badge/CUDA-12.6-76B900)](Dockerfile.jetson)
 [![Docker](https://img.shields.io/badge/docker-L4T%20r36.4.0-2496ED)](docker-compose.jetson.yml)
-[![Version](https://img.shields.io/badge/version-0.3.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.1--dev-blue)](CHANGELOG.md)
 
 ---
 
@@ -17,12 +17,14 @@
 
 MouseDroidAGI implements the **10 Pillars of the Ideal Neural Network** as a cohesive agentic system that enables a physical MSE-6 droid replica to navigate autonomously, avoid obstacles, follow natural language commands, and continuously improve from experience.
 
-The robot is built on a Wave Rover mecanum-wheel chassis, controlled by an ESP32 microcontroller, and powered by a Raspberry Pi AI Camera (IMX500) with onboard neural inference. All high-level reasoning runs on a Jetson Orin Nano.
+The robot is built on a Wave Rover mecanum-wheel chassis, controlled by an ESP32 microcontroller, and powered by a ribbon-connected Raspberry Pi AI Camera (IMX500), USB LiDAR, and USB audio. All high-level reasoning runs on a Jetson Orin Nano.
+
+The Jetson validation path is aligned with the runtime path: smoke scripts, remote validation, and sensor verification all load the same config overlays and reuse the same factory-backed hardware checks as the application.
 
 ### The 10 Pillars
 
 | Pillar | Module | Description |
-|--------|--------|-------------|
+| ------ | ------ | ----------- |
 | 1. World Model | `world_model/` | Dual-Stream CfC/GRU RSSM latent dynamics + MCTS planning |
 | 2. Cognitive Architecture | `cognitive/` | Dual-cadence BDI + metacognitive loop |
 | 3. Memory Systems | `memory/` | Working, episodic, semantic, consolidation |
@@ -42,12 +44,13 @@ The robot is built on a Wave Rover mecanum-wheel chassis, controlled by an ESP32
 graph TD
     subgraph Jetson["NVIDIA Jetson Orin Nano"]
         subgraph Docker["Docker: mousedroid:jetson\nL4T PyTorch r36.4.0 — CUDA 12.6"]
-            Orchestrator["Orchestrator\n30 Hz sense-plan-act\nasyncio.wait_for tick timeout\nWatchdog + Memory + Voice"]
-            CoreAI["Core AI Pipeline\nDual-Stream CfC/GRU RSSM + MCTS\nBDI Cognitive Core\nMemory Tier (Episodic/Semantic/Working)\nCuriosity ICM • Safety Monitor"]
+            Orchestrator["Orchestrator\nconfig-driven sense-plan-act\nWatchdog + Memory + Voice"]
+            CoreAI["Core AI Pipeline\nRSSM/Dual-Stream RSSM + MCTS\nBDI Cognitive Core\nMemory Tier + Curiosity + Safety"]
             SensorMgr["Sensor Manager\nCamera • HC-SR04 • LiDAR • Mic • ESP32\nrecovery_attempt() resilience"]
             VoiceEng["Voice Engine\nRocky TTS (Piper)\nphrase_bank — startup/shutdown/error events"]
             LLMGw["LLM Gateway (degraded-safe)\nRule parser → Llama GGUF fallback\nPrompt injection detection"]
-            Telemetry["Telemetry Server\naiohttp REST + WebSocket + /metrics\n/api/v1/* + /ws + /metrics\nMemory / Curiosity / LLM metrics"]
+            Telemetry["Telemetry Server\naiohttp REST + WebSocket + /metrics\nconfig-driven host/port + namespace"]
+            Validation["Runtime Validation\nvalidation/runtime.py\nshared config + factory-backed checks"]
             Watchdog["Watchdog\nSystemdNotifier / FileHeartbeat\nWATCHDOG=1 per tick"]
             ExperienceDB[("Experience Logger\nLMDB")]
         end
@@ -66,11 +69,20 @@ graph TD
     Orchestrator --> Telemetry
     Orchestrator --> VoiceEng
     Orchestrator --> Watchdog
+    Validation --> SensorMgr
+    Validation --> VoiceEng
     Telemetry -- "REST / WebSocket" --> Monitoring
     Docker -.-> SSD
 ```
 
-See [docs/architecture.md](docs/architecture.md) for full C4 diagrams (Context → Container → Component → Code + data flow sequence diagrams).
+See [docs/architecture.md](docs/architecture.md) for full C4 diagrams (Context → Container → Component → Code), including the runtime validation and smoke-test alignment layer used by Jetson host-side validation.
+
+### Runtime Validation Alignment
+
+- `src/mousedroid/validation/runtime.py` centralises config overlay resolution and factory-backed runtime checks for camera, microphone, speaker, and LiDAR flows.
+- `scripts/jetson_smoke_test.sh`, `scripts/jetson_validate.sh`, and `scripts/verify_sensors.py` now reuse that layer instead of resolving hardware paths independently.
+- `JetsonCSICamera` falls back from the Jetson-native path to GStreamer and then V4L2 using config-driven `camera.device_path`.
+- LD19 scan completeness is driven by config (`scan_acquisition_timeout_s`, `min_scan_coverage_deg`) and validated with the same coverage semantics the driver uses.
 
 ---
 
@@ -183,6 +195,20 @@ bash scripts/preflight_check.sh
 Exits 0 if all required hardware is present; exits 1 with coloured diagnostics on failure.
 The systemd service units run this automatically as `ExecStartPre`.
 
+### Jetson Validation / Smoke
+
+Use the shared runtime validation layer when checking a target Jetson from the host:
+
+```bash
+# Host-driven remote validation (select step: verify, pytest, smoke)
+bash scripts/jetson_validate.sh ian@<jetson-ip> --step smoke
+
+# Local sensor verification using the same runtime overlay resolution as the app
+python scripts/verify_sensors.py --json
+```
+
+Runtime overlays may be supplied explicitly or through `MOUSEDROID_CONFIGS` / `MOUSEDROID_JETSON_CONFIGS`, keeping smoke and validation paths aligned with deployed configuration.
+
 ### Telemetry and Prometheus Metrics
 
 The telemetry stack exposes both interactive APIs and Prometheus-compatible metrics:
@@ -225,7 +251,7 @@ mousedroid --config config/default.yaml config/jetson_production.yaml
 All settings are defined in `config/default.yaml` and validated by Pydantic v2. Override with additional YAML files:
 
 | File | Purpose |
-|------|---------|
+| ---- | ------- |
 | `config/default.yaml` | All defaults (mock hardware, safe thresholds) |
 | `config/jetson_production.yaml` | Jetson Orin Nano production overrides (cognitive core, HF weights, telemetry, Prometheus metrics, safety) |
 | `config/mock_hardware.yaml` | Mock hardware for CI/development |
@@ -239,7 +265,7 @@ No values are hardcoded — every threshold, dimension, pin, and rate is configu
 
 ## Project Structure
 
-```
+```text
 src/mousedroid/
 ├── agents/           # Navigation agents (protocol + navigation impl)
 ├── cognitive/        # BDI model, metacognition, constitutional RL
@@ -423,17 +449,11 @@ pytest tests/property/
 pytest tests/regression/
 ```
 
-### Test Statistics
+### Validation Snapshot
 
-| Category | Count |
-|----------|-------|
-| Unit tests | 725+ |
-| Integration & regression | 100+ |
-| Scripts & training tests | 84 |
-| **Total** | **2381+** |
-| **Coverage** | **97.55%** (gate: 85%) |
-
-> Hardware tests requiring real GPIO/camera are marked `@pytest.mark.hardware` and skipped in CI.
+- Local pre-PR validation for this branch covers `ruff`, `mypy --strict`, unit/property/integration with coverage, performance, regression, E2E, and health-check paths.
+- The enforced repository gate remains **85% coverage**, with the latest local run holding above 94% total coverage.
+- Hardware-only timing assertions stay separated from mock-hardware CI paths; use the Jetson validation harness for real-device timing and smoke verification.
 
 ---
 
@@ -481,7 +501,7 @@ systemctl start mousedroid
 Offline training follows a 4-phase pipeline:
 
 | Phase | Script | Description |
-|-------|--------|-------------|
+| ----- | ------ | ----------- |
 | 2.1 | `train_rssm.py` | Pretrain RSSM world model on synthetic sequences |
 | 2.1b | `train_dual_stream_rssm.py` | Dual-stream CfC/GRU RSSM pretraining (experimental) |
 | 2.2 | `warmstart_policy.py` | Warm-start MCTS policy from latent stats + UCB tuning |
@@ -516,7 +536,7 @@ MIT License — see [LICENSE](LICENSE) for details.
 ## Hardware BOM
 
 | Component | Part | Notes |
-|-----------|------|-------|
+| --------- | ---- | ----- |
 | SBC | NVIDIA Jetson Orin Nano 8GB | Primary compute |
 | Storage | Samsung NVMe 500 GB SSD | Docker data + swap |
 | Chassis | Waveshare Wave Rover | Mecanum wheel, ESP32 onboard |

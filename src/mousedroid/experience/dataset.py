@@ -6,6 +6,7 @@ batch iteration over stored transitions ``(s, a, r, s', done)``.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -46,7 +47,7 @@ class OfflineRLDataset:
         device: torch.device | None = None,
     ) -> None:
         self._path = Path(experience_cfg.path)
-        self._map_size = experience_cfg.map_size_gb * GB_TO_BYTES
+        self._map_size = max(1, math.ceil(experience_cfg.map_size_gb * GB_TO_BYTES))
         self._vision_dim = model_cfg.vision_dim
         self._motor_dim = model_cfg.motor_state_dim
         self._action_dim = model_cfg.action_dim

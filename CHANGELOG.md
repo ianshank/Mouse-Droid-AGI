@@ -8,6 +8,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Jetson Runtime Validation Alignment
+
+- **`src/mousedroid/validation/runtime.py`** — shared runtime validation helpers used by smoke,
+  verification, and host-driven Jetson validation flows
+  - `resolve_runtime_config_paths()` + `load_runtime_settings()` keep CLI utilities aligned with
+    the same overlay precedence as the deployed application
+  - `capture_camera_frame()`, `capture_microphone_chunk()`, `read_lidar_scan()`, and
+    `collect_lidar_diagnostics()` provide factory-backed runtime checks without duplicating device logic
+  - `lidar_scan_validation_coverage_deg()` keeps smoke assertions aligned with the driver's own
+    coverage semantics
+
+### Changed — Jetson Camera, LiDAR, and Smoke Harnesses
+
+- **`JetsonCSICamera`** now falls back from the Jetson-native path to GStreamer and then the
+  configured V4L2 `camera.device_path`, keeping ribbon-camera deployments usable when
+  `jetson_utils` or the primary pipeline is unavailable
+- **`LidarConfig`** gains `scan_acquisition_timeout_s` and `min_scan_coverage_deg`, so LD19 scan
+  completeness is config-driven instead of hardcoded in the driver or validation scripts
+- **`scripts/jetson_smoke_test.sh`**, **`scripts/jetson_validate.sh`**, and
+  **`scripts/verify_sensors.py`** now reuse the shared runtime validation layer and runtime config
+  overlays instead of resolving hardware paths independently
+
+### Fixed — CI / Test Alignment
+
+- **Performance and E2E fixture mismatch** — test paths that previously constructed settings
+  directly now use runtime-loaded settings so mock-hardware CI and hardware-targeted validation stay aligned
+- **Strict type-check blockers** — NumPy feature-extractor typing and optional cloud SDK boundaries
+  are now mypy-clean without broad ignore directives
+- **Mock-hardware endurance expectation** — the 30 Hz deadline assertion in the endurance suite now
+  only applies to non-mock hardware, while mock runs still validate the rest of the endurance path
+
 ### Added — GCP Digital Twin (Phase 1: Telemetry Bridge + Cloud Storage)
 
 - **`src/mousedroid/cloud/` module** — complete GCP cloud integration layer

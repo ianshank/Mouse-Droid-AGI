@@ -7,8 +7,9 @@ locally when ``GOOGLE_APPLICATION_CREDENTIALS`` is set.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from mousedroid.logging.setup import get_logger
 
@@ -50,7 +51,11 @@ def resolve_credentials(
         if not creds_path.exists():
             msg = f"GCP credentials file not found: {creds_path}"
             raise FileNotFoundError(msg)
-        creds, project = google.auth.load_credentials_from_file(str(creds_path))
+        load_credentials_from_file = cast(
+            Callable[[str], tuple[Any, str | None]],
+            google.auth.load_credentials_from_file,
+        )
+        creds, project = load_credentials_from_file(str(creds_path))
         effective_project = cfg.project_id or project or ""
         _log.info(
             "gcp_credentials_loaded",
@@ -61,7 +66,11 @@ def resolve_credentials(
         return creds, effective_project
 
     # Application Default Credentials (GCE metadata, GOOGLE_APPLICATION_CREDENTIALS, etc.)
-    creds, project = google.auth.default()
+    default_credentials = cast(
+        Callable[[], tuple[Any, str | None]],
+        google.auth.default,
+    )
+    creds, project = default_credentials()
     effective_project = cfg.project_id or project or ""
     _log.info(
         "gcp_credentials_loaded",

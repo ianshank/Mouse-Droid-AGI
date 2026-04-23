@@ -18,6 +18,7 @@ import argparse
 import asyncio
 import sys
 import time
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -26,6 +27,17 @@ import numpy as np
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(_PROJECT_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT / "src"))
+
+from mousedroid.config.schema import Settings  # noqa: E402
+from mousedroid.factory import build_distance_sensor  # noqa: E402
+from mousedroid.validation.runtime import (  # noqa: E402
+    capture_camera_frame,
+    capture_microphone_chunk,
+    collect_lidar_diagnostics,
+    load_runtime_settings,
+    play_speaker_tone,
+    resolve_runtime_config_paths,
+)
 
 # ---------------------------------------------------------------------------
 # Output helpers
@@ -71,19 +83,6 @@ def _skip(label: str, reason: str = "", *, sensor: str = "") -> None:
 def _section(title: str) -> None:
     bar = "=" * (len(title) + 4)
     print(f"\n{bar}\n  {title}\n{bar}")
-
-
-from mousedroid.config.schema import Settings
-from mousedroid.factory import build_distance_sensor
-from mousedroid.validation.runtime import (
-    capture_camera_frame,
-    capture_microphone_chunk,
-    lidar_scan_coverage_deg,
-    load_runtime_settings,
-    play_speaker_tone,
-    read_lidar_scan,
-    resolve_runtime_config_paths,
-)
 
 
 def check_camera(cfg: Settings) -> None:
@@ -185,7 +184,7 @@ def check_ultrasonic(cfg: Settings) -> None:
         return
 
     try:
-        import Jetson.GPIO  # noqa: F401
+        import Jetson.GPIO  # noqa: F401  # pyright: ignore[reportMissingModuleSource]
     except ImportError:
         _fail("Jetson.GPIO import", "library not installed", sensor="ultrasonic")
         return
@@ -214,7 +213,7 @@ def check_ultrasonic(cfg: Settings) -> None:
     )
 
 
-def check_lidar(cfg: Settings) -> None:
+def check_lidar(cfg: Settings, *, repeat: int = 1) -> None:
     """Verify the configured LiDAR can produce one scan."""
     _section("LiDAR (LD19)")
 
@@ -222,32 +221,57 @@ def check_lidar(cfg: Settings) -> None:
         _skip("LiDAR sensor", "disabled in config", sensor="lidar")
         return
 
-    t0 = time.monotonic()
     try:
-        scan = asyncio.run(read_lidar_scan(cfg))
+        diagnostics = asyncio.run(collect_lidar_diagnostics(cfg, n_scans=max(1, repeat)))
     except Exception as exc:
         _fail("LiDAR scan read", str(exc), sensor="lidar")
         return
 
-    if scan is None:
+    if not diagnostics:
         _skip("LiDAR driver", "build_lidar returned None", sensor="lidar")
         return
 
-    elapsed = time.monotonic() - t0
-    if scan.n_points < 10:
+    min_coverage_deg = cfg.lidar.min_scan_coverage_deg
+    for diag in diagnostics:
+        print(
+            "  "
+            f"scan[{diag.scan_index}] points={diag.n_points} "
+            f"coverage={diag.coverage_deg:.1f}\N{DEGREE SIGN} "
+            f"validation={diag.validation_coverage_deg:.1f}\N{DEGREE SIGN} "
+            f"largest_gap={diag.largest_gap_deg:.1f}\N{DEGREE SIGN} "
+            f"gap_window={diag.largest_gap_start_deg}->{diag.largest_gap_end_deg} "
+            f"frames={diag.frames_parsed} parse_failures={diag.parse_failures} "
+            f"crc_failures={diag.crc_failures} bytes_read={diag.bytes_read}"
+        )
+
+    _RESULTS.setdefault("lidar", {})["samples"] = [asdict(diag) for diag in diagnostics]
+
+    min_points = min(diag.n_points for diag in diagnostics)
+    min_coverage = min(diag.coverage_deg for diag in diagnostics)
+    max_coverage = max(diag.coverage_deg for diag in diagnostics)
+    min_validation_coverage = min(diag.validation_coverage_deg for diag in diagnostics)
+    max_validation_coverage = max(diag.validation_coverage_deg for diag in diagnostics)
+    total_parse_failures = sum(diag.parse_failures for diag in diagnostics)
+    total_crc_failures = sum(diag.crc_failures for diag in diagnostics)
+
+    if min_points < 10:
         _fail(
             "LiDAR scan points",
-            f"only {scan.n_points} points (expected 10+)",
+            f"minimum {min_points} points across {len(diagnostics)} scan(s) (expected 10+)",
             sensor="lidar",
         )
         return
 
-    coverage_deg = lidar_scan_coverage_deg(scan)
-    min_coverage_deg = cfg.lidar.min_scan_coverage_deg
-    if coverage_deg < min_coverage_deg:
+    if min_validation_coverage < min_coverage_deg:
         _fail(
             "LiDAR scan coverage",
-            f"{coverage_deg:.1f}\N{DEGREE SIGN} below {min_coverage_deg:.1f}\N{DEGREE SIGN} threshold",
+            (
+                f"minimum validation coverage {min_validation_coverage:.1f}\N{DEGREE SIGN} "
+                f"below {min_coverage_deg:.1f}\N{DEGREE SIGN} "
+                f"threshold over {len(diagnostics)} scan(s); "
+                f"point_coverage={min_coverage:.1f}-{max_coverage:.1f}\N{DEGREE SIGN}; "
+                f"parse_failures={total_parse_failures}, crc_failures={total_crc_failures}"
+            ),
             sensor="lidar",
         )
         return
@@ -255,8 +279,10 @@ def check_lidar(cfg: Settings) -> None:
     _ok(
         "LiDAR scan read",
         (
-            f"{scan.n_points} points on {cfg.lidar.serial_port} in {elapsed:.2f}s, "
-            f"coverage={coverage_deg:.1f}\N{DEGREE SIGN}"
+            f"{len(diagnostics)} scan(s) on {cfg.lidar.serial_port}; "
+            f"coverage={min_coverage:.1f}-{max_coverage:.1f}\N{DEGREE SIGN}; "
+            f"validation={min_validation_coverage:.1f}-{max_validation_coverage:.1f}\N{DEGREE SIGN}; "
+            f"parse_failures={total_parse_failures}, crc_failures={total_crc_failures}"
         ),
         sensor="lidar",
     )
@@ -324,6 +350,12 @@ def main() -> None:
         action="store_true",
         help="Output results as JSON (machine-readable)",
     )
+    ap.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="Repeat LiDAR scans N times when --sensor lidar is selected (default: 1)",
+    )
     args = ap.parse_args()
 
     cfg_paths = resolve_runtime_config_paths(args.config)
@@ -350,7 +382,10 @@ def main() -> None:
 
     for name, check_fn in sensor_checks.items():
         if args.sensor in ("all", name):
-            check_fn(cfg)
+            if name == "lidar":
+                check_lidar(cfg, repeat=max(1, args.repeat))
+            else:
+                check_fn(cfg)
 
     # Summary
     selected_sensors = [sensor for sensor in _ALL_SENSORS if args.sensor in ("all", sensor)]

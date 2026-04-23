@@ -29,6 +29,14 @@ def mock_settings() -> Settings:
     return Settings(mock_hardware=True)
 
 
+@pytest.fixture
+def runtime_settings() -> Settings:
+    """Load runtime settings with the active test environment overrides applied."""
+    from mousedroid.validation.runtime import load_runtime_settings
+
+    return load_runtime_settings()
+
+
 # ---------------------------------------------------------------------------
 # Mock gpiod fixture
 # ---------------------------------------------------------------------------

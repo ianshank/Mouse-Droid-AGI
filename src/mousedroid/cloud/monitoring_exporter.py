@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import importlib
 import time
-from typing import TYPE_CHECKING, Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, cast
 
 from mousedroid.logging.setup import get_logger
 
@@ -115,9 +117,12 @@ class CloudMetricsExporter:
             metrics: Dictionary of ``{metric_name: value}`` to export.
         """
         from google.cloud.monitoring_v3 import types
-        from google.protobuf import timestamp_pb2
 
-        now_ts = timestamp_pb2.Timestamp()
+        timestamp_module = importlib.import_module("google.protobuf.timestamp_pb2")
+        timestamp_api = cast(Any, timestamp_module)
+        timestamp_ctor = cast(Callable[[], Any], timestamp_api.Timestamp)
+
+        now_ts = timestamp_ctor()
         now_ts.FromSeconds(int(time.time()))
 
         series_list: list[Any] = []

@@ -112,6 +112,11 @@ ci_full_output.txt
 ci_complete_output.txt
 smoke_test_output.txt
 validation_output.txt
+ci*.log
+.tmp_ci_log.txt
+
+# Jetson validation reports
+reports/jetson_validate/
 
 # Temporary deploy/build scripts
 /tmp/jetson_*.py
@@ -163,7 +168,6 @@ jetson_validation*.txt
 endurance_results.txt
 
 # LLM model downloads (managed via scripts/download_model.sh)
-*.gguf
 models/
 
 # systemd notify socket artefacts

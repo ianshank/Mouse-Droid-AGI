@@ -177,21 +177,27 @@ class AudioFeatureExtractor:
         mel_spec = np.log(np.maximum(mel_spec, LOG_FLOOR))
 
         # Flatten to feature vector.
-        features = mel_spec.T.flatten().astype(np.float32)
+        features: NDArray[np.float32] = cast(
+            NDArray[np.float32],
+            mel_spec.T.flatten().astype(np.float32),
+        )
 
         # Truncate or pad to match expected dimension.
         if len(features) > self._feature_dim:
             features = features[: self._feature_dim]
         elif len(features) < self._feature_dim:
-            features = np.pad(
-                features,
-                (0, self._feature_dim - len(features)),
-                mode="constant",
+            features = cast(
+                NDArray[np.float32],
+                np.pad(
+                    features,
+                    (0, self._feature_dim - len(features)),
+                    mode="constant",
+                ),
             )
 
         # L2-normalise for stable input to the encoder.
         norm = np.linalg.norm(features)
         if norm > 0:
-            features = features / norm
+            features = cast(NDArray[np.float32], features / norm)
 
-        return cast(NDArray[np.float32], features)
+        return features

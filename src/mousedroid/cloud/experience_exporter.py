@@ -15,11 +15,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import gzip
+import importlib
 import io
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import lmdb
 import msgpack
@@ -65,10 +67,14 @@ class CloudExperienceExporter:
 
     async def start(self) -> None:
         """Open GCS client and begin the periodic export loop."""
-        from google.cloud import storage as gcs
-
+        storage_module = importlib.import_module("google.cloud.storage")
+        storage_api = cast(Any, storage_module)
         creds, _project = resolve_credentials(self._gcp_cfg)
-        self._gcs_client = gcs.Client(credentials=creds, project=self._gcp_cfg.project_id)
+        client_factory = cast(Callable[..., Any], storage_api.Client)
+        self._gcs_client = client_factory(
+            credentials=creds,
+            project=self._gcp_cfg.project_id,
+        )
         self._gcs_bucket = self._gcs_client.bucket(self._storage_cfg.bucket)  # type: ignore[union-attr]
         self._running = True
         self._task = asyncio.create_task(self._export_loop())

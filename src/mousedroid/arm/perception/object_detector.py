@@ -6,8 +6,10 @@ garments from RGB images, returning bounding boxes with class labels.
 
 from __future__ import annotations
 
+import importlib
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 import numpy as np
 from numpy.typing import NDArray
@@ -85,11 +87,15 @@ class ObjectDetector:
         """
         if self._model_path.exists():
             try:
-                from ultralytics import YOLO
-
-                self._model = YOLO(str(self._model_path))
+                ultralytics_module = importlib.import_module("ultralytics")
+                ultralytics_api = cast(Any, ultralytics_module)
+                yolo_ctor = cast(
+                    Callable[[str], Any],
+                    ultralytics_api.YOLO,
+                )
+                self._model = yolo_ctor(str(self._model_path))
                 _log.info("yolo_model_loaded", path=str(self._model_path))
-            except ImportError:
+            except (ImportError, AttributeError):
                 _log.warning("ultralytics_not_installed", fallback="stub_detector")
                 self._model = None
         else:

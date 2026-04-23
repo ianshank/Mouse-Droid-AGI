@@ -144,8 +144,9 @@ def test_experience_logger_read_roundtrip(tmp_path):
     from mousedroid.config.schema import ExperienceConfig
     from mousedroid.experience.logger import ExperienceLogger
     from mousedroid.experience.record import MouseDroidExperienceRecord
+    from tests import TEST_EXPERIENCE_MAP_SIZE_GB
 
-    cfg = ExperienceConfig(path=str(tmp_path / "xp"), map_size_gb=1)
+    cfg = ExperienceConfig(path=str(tmp_path / "xp"), map_size_gb=TEST_EXPERIENCE_MAP_SIZE_GB)
     logger = ExperienceLogger(cfg)
     logger.open()
 

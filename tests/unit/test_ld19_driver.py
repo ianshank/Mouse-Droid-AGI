@@ -7,8 +7,8 @@ import struct
 import numpy as np
 import pytest
 
-from mousedroid.constants import LIDAR_POINTS_PER_FRAME, LIDAR_VER_LEN_BYTE
 from mousedroid.config.schema import LidarConfig
+from mousedroid.constants import LIDAR_POINTS_PER_FRAME, LIDAR_VER_LEN_BYTE
 from mousedroid.hardware.lidar.ld19_driver import LD19LidarDriver
 from mousedroid.hardware.lidar.ld19_protocol import LD19Frame, LD19FrameParser, LD19Point
 
@@ -57,8 +57,8 @@ def _make_frame(
 
 def _build_frame_bytes(start_deg: float, end_deg: float) -> bytes:
     """Build a valid LD19 frame byte payload for resync tests."""
-    start_raw = int(round(start_deg * 100.0))
-    end_raw = int(round(end_deg * 100.0))
+    start_raw = round(start_deg * 100.0)
+    end_raw = round(end_deg * 100.0)
     buf = bytearray()
     buf.append(0x54)
     buf.append(LIDAR_VER_LEN_BYTE)
@@ -198,7 +198,9 @@ def test_assemble_scan_multiple_frames() -> None:
     assert scan.n_points == 12
 
 
-def test_read_frames_blocking_waits_for_coverage_after_wrap(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_read_frames_blocking_waits_for_coverage_after_wrap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A scan starting near 360° should not stop after the first small wrap."""
     from mousedroid.hardware.lidar import ld19_driver
 
@@ -221,12 +223,16 @@ def test_read_frames_blocking_waits_for_coverage_after_wrap(monkeypatch: pytest.
     driver = LD19LidarDriver(_cfg(min_scan_coverage_deg=270.0))
     driver._serial = FakeSerial(serialized_chunks)
 
-    def _next_frame(_frame_bytes: bytes) -> LD19Frame | None:
+    def _next_frame(_frame_bytes: bytes) -> tuple[LD19Frame | None, str | None]:
         if frames:
-            return frames.pop(0)
-        return None
+            return frames.pop(0), None
+        return None, "crc"
 
-    monkeypatch.setattr(ld19_driver.LD19FrameParser, "parse_frame", staticmethod(_next_frame))
+    monkeypatch.setattr(
+        ld19_driver.LD19FrameParser,
+        "parse_frame_with_reason",
+        staticmethod(_next_frame),
+    )
 
     scan_frames = driver._read_frames_blocking()
     scan = LD19LidarDriver._assemble_scan(scan_frames, driver._cfg)
@@ -251,7 +257,9 @@ def test_read_frames_blocking_resyncs_after_false_header() -> None:
     valid_frame_b = _build_frame_bytes(10.0, 18.0)
     noise = b"\x54\x00garbage-prefix"
 
-    driver = LD19LidarDriver(_cfg(min_scan_coverage_deg=5.0, scan_acquisition_timeout_s=0.5))
+    driver = LD19LidarDriver(
+        _cfg(min_scan_coverage_deg=5.0, scan_acquisition_timeout_s=0.5),
+    )
     driver._serial = FakeSerial([noise + valid_frame_a + valid_frame_b])
 
     scan_frames = driver._read_frames_blocking()
@@ -259,3 +267,36 @@ def test_read_frames_blocking_resyncs_after_false_header() -> None:
     assert len(scan_frames) == 2
     assert scan_frames[0].start_angle_deg == pytest.approx(0.0)
     assert scan_frames[1].start_angle_deg == pytest.approx(10.0)
+
+
+def test_read_frames_blocking_reports_crc_and_resync_stats() -> None:
+    """Driver diagnostics should distinguish CRC failures from successful resync."""
+
+    class FakeSerial:
+        def __init__(self, chunks: list[bytes]) -> None:
+            self._chunks = chunks
+
+        def read(self, _size: int) -> bytes:
+            if self._chunks:
+                return self._chunks.pop(0)
+            return b""
+
+    valid_frame_a = _build_frame_bytes(0.0, 8.0)
+    valid_frame_b = _build_frame_bytes(10.0, 18.0)
+    corrupt_frame = valid_frame_a[:-1] + bytes(((valid_frame_a[-1] + 1) % 256,))
+    noise = b"noise-before-frame"
+
+    driver = LD19LidarDriver(
+        _cfg(min_scan_coverage_deg=5.0, scan_acquisition_timeout_s=0.5),
+    )
+    driver._serial = FakeSerial([noise + corrupt_frame + valid_frame_a + valid_frame_b])
+
+    scan_frames, stats = driver._read_frames_with_stats_blocking()
+
+    assert len(scan_frames) == 2
+    assert stats.frames_parsed == 2
+    assert stats.parse_failures >= 1
+    assert stats.crc_failures >= 1
+    assert stats.prefix_hits >= 3
+    assert stats.bytes_discarded >= len(noise) + 1
+    assert stats.bytes_read == len(noise + corrupt_frame + valid_frame_a + valid_frame_b)

@@ -214,7 +214,11 @@ class ExperienceConfig(BaseModel):
     """LMDB experience storage configuration."""
 
     path: str = Field("/home/jetson/mousedroid_experience", description="LMDB storage path")
-    map_size_gb: int = Field(20, gt=0, description="LMDB map size (GB)")
+    map_size_gb: float = Field(
+        20.0,
+        gt=0,
+        description="LMDB map size (GB; fractional values allowed)",
+    )
     flush_every_n: int = Field(30, gt=0, description="Flush after N records")
     export_path: str = Field("/tmp/export", description="Default experience export path")  # noqa: S108
 

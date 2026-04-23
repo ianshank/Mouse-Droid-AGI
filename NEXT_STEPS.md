@@ -1,8 +1,30 @@
 # MouseDroidAGI — Next Steps
 
-> **Last updated**: 2026-04-15 | **Version**: 0.3.1-dev | **Test count**: 2650 passing | **Coverage**: 85%+ maintained
+> **Last updated**: 2026-04-23 | **Version**: 0.3.1-dev | **Pre-PR validation**: Ruff clean, mypy strict clean, coverage gate maintained (>94% in latest local run)
 
 This document tracks planned enhancements, organised by priority and category.
+
+## Recently Completed — 2026-04-23 Jetson Runtime Validation Alignment
+
+- ✅ **Shared runtime validation layer**: `src/mousedroid/validation/runtime.py` now resolves the
+  same config overlays used by the application and exposes reusable camera, microphone, speaker,
+  and LiDAR checks for smoke and host-driven validation flows
+- ✅ **Camera fallback hardening**: `JetsonCSICamera` now degrades from the primary Jetson path to
+  GStreamer and then config-driven V4L2 `camera.device_path`, keeping ribbon-camera deployments usable
+- ✅ **LiDAR completeness alignment**: scan acquisition timeout and minimum coverage are now
+  config-driven (`scan_acquisition_timeout_s`, `min_scan_coverage_deg`), and validation uses the
+  same coverage semantics as the driver
+- ✅ **CI cleanup**: strict mypy is clean again, performance and E2E suites no longer bypass the
+  mock-hardware test environment, and the pre-PR test run holds the 85% coverage gate
+
+## Immediate Follow-up
+
+- Fix the Windows `torch/coverage.py` collection collision so the branch coverage gate can run
+  without `ALLOW_PYTEST_COLLECTION_SKIP=1`
+- Install `promtool` on the Windows validation host so the Prometheus rule stage becomes enforced
+  instead of skipped
+- Re-run `tests/performance/test_jetson_endurance.py::test_endurance_30hz_loop` on non-mock Jetson
+  hardware to validate the real 30 Hz deadline rather than the mock-runtime path
 
 ## Recently Completed — v0.3.0 Production Readiness (2026-04-14)
 

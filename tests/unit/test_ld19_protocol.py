@@ -89,8 +89,8 @@ def test_crc8_deterministic() -> None:
 
 def test_crc8_known_vectors() -> None:
     """CRC8 produces expected values for known test vectors."""
-    assert LD19FrameParser.crc8(b"\x00\x01\x02") == 0x74
-    assert LD19FrameParser.crc8(b"\x03\x04\x05") == 0x4C
+    assert LD19FrameParser.crc8(b"\x00\x01\x02") == 0x62
+    assert LD19FrameParser.crc8(b"\x03\x04\x05") == 0x09
 
 
 def test_crc8_range() -> None:

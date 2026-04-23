@@ -124,7 +124,10 @@ class JetsonCSICamera:
 
         v4l2_cap = _cv2.VideoCapture(self._cfg.device_path)
         if not v4l2_cap.isOpened():
-            msg = f"Failed to open CSI camera via GStreamer pipeline or V4L2 device {self._cfg.device_path}"
+            msg = (
+                "Failed to open CSI camera via GStreamer pipeline or "
+                f"V4L2 device {self._cfg.device_path}"
+            )
             raise RuntimeError(msg)
 
         for prop, value in (

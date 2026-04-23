@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from mousedroid.validation.runtime import lidar_scan_coverage_deg
+from mousedroid.validation.runtime import (
+    lidar_scan_coverage_deg,
+    lidar_scan_validation_coverage_deg,
+)
 
 
 @pytest.mark.hardware
@@ -53,24 +56,35 @@ async def test_ld19_read_scan(jetson_settings) -> None:
         pytest.skip("LiDAR disabled in config")
 
     driver = LD19LidarDriver(cfg)
+    read_stats = None
     try:
         try:
             await driver.start()
         except Exception as exc:
             pytest.skip(f"LD19 not available on {cfg.serial_port}: {exc}")
 
-        scan = await driver.read_scan()
+        scan_reader = getattr(driver, "read_scan_with_diagnostics", None)
+        if callable(scan_reader):
+            scan, read_stats = await scan_reader()
+        else:
+            scan = await driver.read_scan()
     finally:
         await driver.stop()
 
     assert scan.n_points > 0, "no LiDAR points returned — device may be unpowered"
 
-    angles = scan.angles_deg
     distances_m = scan.distances_mm / 1000.0
 
-    angle_span = lidar_scan_coverage_deg(scan)
+    point_angle_span = lidar_scan_coverage_deg(scan)
+    angle_span = lidar_scan_validation_coverage_deg(
+        scan,
+        driver_covered_angle_deg=(
+            read_stats.covered_angle_deg if read_stats is not None else None
+        ),
+    )
     assert angle_span >= cfg.min_scan_coverage_deg, (
-        f"angular coverage {angle_span:.1f}° below {cfg.min_scan_coverage_deg:.1f}° threshold — "
+        f"validation coverage {angle_span:.1f}° below {cfg.min_scan_coverage_deg:.1f}° threshold "
+        f"(point coverage {point_angle_span:.1f}°) — "
         "LiDAR likely blocked or misaligned"
     )
 

@@ -62,7 +62,6 @@ def jetson_settings() -> Settings:
     so that tests can at least instantiate on non-Jetson hosts (they'll be
     skipped later by ``@pytest.mark.hardware`` / importorskip guards).
     """
-    from mousedroid.config.schema import Settings
     from mousedroid.validation.runtime import load_runtime_settings
 
     raw_configs = os.getenv("MOUSEDROID_JETSON_CONFIGS", "").strip()
