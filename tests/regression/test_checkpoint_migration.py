@@ -25,6 +25,7 @@ from mousedroid.world_model.rssm import RSSM
 # Shared helpers
 # ---------------------------------------------------------------------------
 
+
 def _small_cfg(**overrides: int | float | str) -> ModelConfig:
     """Minimal ``ModelConfig`` with small dims for fast tests."""
     defaults: dict[str, int | float | str] = {
@@ -60,18 +61,23 @@ def _rssm_sd(cfg: ModelConfig) -> dict[str, torch.Tensor]:
 # Scenario 1: ultrasonic + motor  →  lidar + motor
 # ---------------------------------------------------------------------------
 
+
 class TestUltrasonicToLidar:
     """Drop ultrasonic, add LiDAR — the primary Cut 2 migration path."""
 
     def setup_method(self) -> None:
         torch.manual_seed(42)
         self.old_cfg = _small_cfg(
-            ultrasonic_dim=1, ultrasonic_proj_dim=8,
-            lidar_dim=0, lidar_proj_dim=8,
+            ultrasonic_dim=1,
+            ultrasonic_proj_dim=8,
+            lidar_dim=0,
+            lidar_proj_dim=8,
         )
         self.new_cfg = _small_cfg(
-            ultrasonic_dim=0, ultrasonic_proj_dim=0,
-            lidar_dim=6, lidar_proj_dim=8,
+            ultrasonic_dim=0,
+            ultrasonic_proj_dim=0,
+            lidar_dim=6,
+            lidar_proj_dim=8,
         )
         self.old_sd = _rssm_sd(self.old_cfg)
 
@@ -162,20 +168,27 @@ class TestUltrasonicToLidar:
 # Scenario 2: ultrasonic + audio + motor  →  lidar + audio + motor
 # ---------------------------------------------------------------------------
 
+
 class TestUltrasonicAudioToLidarAudio:
     """Drop ultrasonic, keep audio, add LiDAR.  Audio columns must be preserved."""
 
     def setup_method(self) -> None:
         torch.manual_seed(0)
         self.old_cfg = _small_cfg(
-            ultrasonic_dim=1, ultrasonic_proj_dim=8,
-            audio_dim=4, audio_proj_dim=8,
-            lidar_dim=0, lidar_proj_dim=8,
+            ultrasonic_dim=1,
+            ultrasonic_proj_dim=8,
+            audio_dim=4,
+            audio_proj_dim=8,
+            lidar_dim=0,
+            lidar_proj_dim=8,
         )
         self.new_cfg = _small_cfg(
-            ultrasonic_dim=0, ultrasonic_proj_dim=0,
-            audio_dim=4, audio_proj_dim=8,
-            lidar_dim=6, lidar_proj_dim=8,
+            ultrasonic_dim=0,
+            ultrasonic_proj_dim=0,
+            audio_dim=4,
+            audio_proj_dim=8,
+            lidar_dim=6,
+            lidar_proj_dim=8,
         )
         self.old_sd = _rssm_sd(self.old_cfg)
 
@@ -233,6 +246,7 @@ class TestUltrasonicAudioToLidarAudio:
 # Scenario 3: same config  →  identity / no-op migration
 # ---------------------------------------------------------------------------
 
+
 class TestNoOpMigration:
     """Migrating to the identical config must leave all weights untouched."""
 
@@ -240,8 +254,10 @@ class TestNoOpMigration:
         torch.manual_seed(7)
         # Use lidar-only to satisfy the at-least-one-distance-modality constraint.
         self.cfg = _small_cfg(
-            ultrasonic_dim=0, ultrasonic_proj_dim=0,
-            lidar_dim=6, lidar_proj_dim=8,
+            ultrasonic_dim=0,
+            ultrasonic_proj_dim=0,
+            lidar_dim=6,
+            lidar_proj_dim=8,
         )
         self.old_sd = _rssm_sd(self.cfg)
 
@@ -267,16 +283,21 @@ class TestNoOpMigration:
 # Edge-case: incompatible projection dim raises ValueError
 # ---------------------------------------------------------------------------
 
+
 def test_incompatible_proj_dim_raises() -> None:
     """Migration must raise if a retained modality has changed proj_dim."""
     old_cfg = _small_cfg(
-        ultrasonic_dim=0, ultrasonic_proj_dim=0,
-        lidar_dim=6, lidar_proj_dim=8,
+        ultrasonic_dim=0,
+        ultrasonic_proj_dim=0,
+        lidar_dim=6,
+        lidar_proj_dim=8,
     )
     # New config shrinks motor_proj_dim from 8 → 4, which is incompatible.
     new_cfg = _small_cfg(
-        ultrasonic_dim=0, ultrasonic_proj_dim=0,
-        lidar_dim=6, lidar_proj_dim=8,
+        ultrasonic_dim=0,
+        ultrasonic_proj_dim=0,
+        lidar_dim=6,
+        lidar_proj_dim=8,
         motor_proj_dim=4,
         # obs_dim must accommodate smaller fusion (adjust to keep RSSM valid)
         obs_dim=32,
@@ -290,12 +311,15 @@ def test_incompatible_proj_dim_raises() -> None:
 # Edge-case: bad checkpoint type raises TypeError
 # ---------------------------------------------------------------------------
 
+
 def test_load_rssm_bad_checkpoint_type(tmp_path: Path) -> None:
     ckpt = tmp_path / "bad.pt"
     torch.save([1, 2, 3], ckpt)  # list, not dict
     cfg = _small_cfg(
-        ultrasonic_dim=0, ultrasonic_proj_dim=0,
-        lidar_dim=6, lidar_proj_dim=8,
+        ultrasonic_dim=0,
+        ultrasonic_proj_dim=0,
+        lidar_dim=6,
+        lidar_proj_dim=8,
     )
     with pytest.raises(TypeError, match="expected dict"):
         load_rssm_with_migration(ckpt, cfg)
@@ -309,12 +333,16 @@ def test_load_rssm_bad_checkpoint_type(tmp_path: Path) -> None:
 def test_build_new_parts_includes_ultrasonic() -> None:
     """migrate_state_dict must handle new_cfg with ultrasonic enabled (adds ultrasonic columns)."""
     old_cfg = _small_cfg(
-        ultrasonic_dim=0, ultrasonic_proj_dim=0,
-        lidar_dim=6, lidar_proj_dim=8,
+        ultrasonic_dim=0,
+        ultrasonic_proj_dim=0,
+        lidar_dim=6,
+        lidar_proj_dim=8,
     )
     new_cfg = _small_cfg(
-        ultrasonic_dim=1, ultrasonic_proj_dim=8,
-        lidar_dim=0, lidar_proj_dim=8,
+        ultrasonic_dim=1,
+        ultrasonic_proj_dim=8,
+        lidar_dim=0,
+        lidar_proj_dim=8,
     )
     old_sd = _rssm_sd(old_cfg)
     migrated, report = migrate_state_dict(old_sd, new_cfg)
@@ -333,8 +361,10 @@ def test_new_proj_tensors_unknown_modality_raises() -> None:
     from mousedroid.world_model.checkpoint_migration import _new_proj_tensors
 
     cfg = _small_cfg(
-        ultrasonic_dim=0, ultrasonic_proj_dim=0,
-        lidar_dim=6, lidar_proj_dim=8,
+        ultrasonic_dim=0,
+        ultrasonic_proj_dim=0,
+        lidar_dim=6,
+        lidar_proj_dim=8,
     )
     with pytest.raises(ValueError, match="Unknown modality"):
         _new_proj_tensors(cfg, "depth_camera")

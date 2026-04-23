@@ -46,6 +46,7 @@ _KAIMING_LINEAR_A: float = math.sqrt(5)
 # Internal helpers — must stay in sync with MultimodalEncoder.forward()
 # ---------------------------------------------------------------------------
 
+
 def _infer_old_parts(sd: StateDict) -> list[tuple[str, int]]:
     """Infer ordered encoder projection parts from an existing state dict.
 
@@ -187,6 +188,7 @@ def _new_proj_tensors(cfg: ModelConfig, modality: str) -> dict[str, Tensor]:
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def migrate_state_dict(
     old_sd: StateDict,
     new_cfg: ModelConfig,
@@ -242,9 +244,7 @@ def migrate_state_dict(
         sd.update(_new_proj_tensors(new_cfg, modality))
 
     report["new_fusion_shape"] = list(sd["encoder.fusion.weight"].shape)
-    report["added_keys"] = sorted(
-        k for k in sd if any(f"encoder.{m}_proj" in k for m in added)
-    )
+    report["added_keys"] = sorted(k for k in sd if any(f"encoder.{m}_proj" in k for m in added))
 
     return sd, report
 
@@ -283,8 +283,7 @@ def load_rssm_with_migration(
     raw = torch.load(path, map_location=_d, weights_only=False)
     if not isinstance(raw, dict):
         raise TypeError(
-            f"Unsupported checkpoint format at {path!s}: "
-            f"expected dict, got {type(raw).__name__}"
+            f"Unsupported checkpoint format at {path!s}: expected dict, got {type(raw).__name__}"
         )
 
     # Accept both full training checkpoints and bare state dicts.

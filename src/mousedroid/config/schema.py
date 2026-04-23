@@ -653,8 +653,7 @@ class ModelConfig(BaseModel):
         """Validate optional modality dimension pairs."""
         if (self.ultrasonic_dim == 0) != (self.ultrasonic_proj_dim == 0):
             msg = (
-                "ultrasonic_dim and ultrasonic_proj_dim must both be zero "
-                "when disabling ultrasonic"
+                "ultrasonic_dim and ultrasonic_proj_dim must both be zero when disabling ultrasonic"
             )
             raise ValueError(msg)
 
@@ -665,9 +664,7 @@ class ModelConfig(BaseModel):
         }
         for modality_name, (input_dim, proj_dim) in modality_dims.items():
             if input_dim > 0 and proj_dim == 0:
-                msg = (
-                    f"{modality_name}_proj_dim must be > 0 when {modality_name}_dim is enabled"
-                )
+                msg = f"{modality_name}_proj_dim must be > 0 when {modality_name}_dim is enabled"
                 raise ValueError(msg)
 
         if self.ultrasonic_dim == 0 and self.lidar_dim == 0:

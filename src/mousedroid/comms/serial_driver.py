@@ -128,6 +128,11 @@ class SerialESP32Driver(BaseESP32Driver):
         """
         if cmd is not None:
             await self._send_json(cmd)
+        if self.should_skip_read():
+            # In degraded mode, throttle actual reads to the configured
+            # poll interval so we reduce serial traffic instead of busy-
+            # polling with a short timeout.
+            return {}
         return await self._read_json()
 
     # ------------------------------------------------------------------

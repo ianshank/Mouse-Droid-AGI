@@ -38,10 +38,15 @@ class LLMGateway:
         self._cfg = cfg
         self._model: Any = None
         self._degraded = False
-        self._injection_re = re.compile(
-            "(" + "|".join(cfg.injection_patterns) + ")",
-            re.IGNORECASE,
-        )
+        # Empty injection_patterns disables the filter; otherwise "()" would
+        # compile to a pattern that matches every string and reject everything.
+        if cfg.injection_patterns:
+            self._injection_re: re.Pattern[str] | None = re.compile(
+                "(" + "|".join(cfg.injection_patterns) + ")",
+                re.IGNORECASE,
+            )
+        else:
+            self._injection_re = None
 
     @property
     def is_ready(self) -> bool:
@@ -85,7 +90,7 @@ class LLMGateway:
     def _sanitize_command(self, text: str) -> str:
         """Sanitize NL command to mitigate prompt injection."""
         text = text.strip()[: self._cfg.max_command_len]
-        if self._injection_re.search(text):
+        if self._injection_re is not None and self._injection_re.search(text):
             msg = "Mission command contains disallowed content"
             raise ValueError(msg)
         return text

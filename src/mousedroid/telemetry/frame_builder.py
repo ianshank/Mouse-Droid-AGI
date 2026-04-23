@@ -68,8 +68,10 @@ def build_telemetry_frame(
     if vision_arr is not None and vision_arr.size > 0:
         max_samples = max(1, vision_feature_max_samples)
         if vision_arr.size > max_samples:
-            stride = vision_arr.size // max_samples
-            vision_features = vision_arr[::stride][:max_samples].astype(float).tolist()
+            # Uniformly-spaced indices across the full vector so we don't
+            # systematically drop the tail when size is only slightly > max.
+            idx = np.linspace(0, vision_arr.size - 1, max_samples).astype(np.int64)
+            vision_features = vision_arr[idx].astype(float).tolist()
         else:
             vision_features = vision_arr.astype(float).tolist()
 
