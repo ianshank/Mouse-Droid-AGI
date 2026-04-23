@@ -205,7 +205,13 @@ jobs:
               uses: docker/setup-buildx-action@v3
 
             - name: Validate Dockerfile
-              run: docker build --check -f Dockerfile.jetson .
+              # L4T base images (dustynv/l4t-pytorch, dustynv/llama_cpp) are
+              # arm64-only. docker build --check treats the resulting
+              # InvalidBaseImagePlatform warnings as fatal on the amd64 CI
+              # runner, so pin the target platform to linux/arm64 to match
+              # the images' native platform. Buildx performs a metadata-only
+              # check here (no actual build), so no emulator is needed.
+              run: docker build --check --platform linux/arm64 -f Dockerfile.jetson .
 
             - name: Syntax check docker-compose
               run: docker compose -f docker-compose.jetson.yml config --quiet
