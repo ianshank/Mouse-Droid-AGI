@@ -43,6 +43,19 @@ def test_resolve_runtime_config_paths_uses_env_csv(
     )
 
 
+def test_resolve_runtime_config_paths_legacy_jetson_single_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Legacy ``MOUSEDROID_JETSON_CONFIG`` single-path var is honored."""
+    for var in ("MOUSEDROID_CONFIGS", "MOUSEDROID_JETSON_CONFIGS", "MOUSEDROID_CONFIG"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("MOUSEDROID_JETSON_CONFIG", "config/jetson_production.yaml")
+
+    resolved = runtime.resolve_runtime_config_paths()
+
+    assert resolved == (runtime.Path("config/jetson_production.yaml"),)
+
+
 @pytest.mark.asyncio
 async def test_capture_camera_frame_uses_runtime_driver(
     monkeypatch: pytest.MonkeyPatch,
@@ -174,6 +187,52 @@ async def test_play_speaker_tone_writes_chunked_audio(
     assert written == 12
     assert len(stub.writes) == 3
     assert all(chunk.shape == (4,) for chunk in stub.writes)
+    assert stub.stopped is True
+
+
+@pytest.mark.asyncio
+async def test_play_speaker_tone_stereo_chunks_match_protocol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Multi-channel speakers must receive ``chunk_size * channels`` samples per write."""
+
+    class StubStereoSpeaker:
+        def __init__(self) -> None:
+            self._stream = object()
+            self.sample_rate = 1000
+            self.chunk_size = 4
+            self.channels = 2
+            self.writes: list[np.ndarray] = []
+            self.stopped = False
+
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            self.stopped = True
+
+        async def write_chunk(self, samples: np.ndarray) -> None:
+            self.writes.append(samples.copy())
+
+    stub = StubStereoSpeaker()
+    monkeypatch.setattr(runtime, "build_speaker", lambda cfg: stub)
+
+    written = await runtime.play_speaker_tone(
+        Settings(
+            mock_hardware=True,
+            speaker={"enabled": True, "sample_rate": 1000, "channels": 2},
+        ),
+        duration_s=0.01,
+        frequency_hz=110.0,
+    )
+
+    # 12 frames * 2 channels = 24 interleaved samples, 3 chunks of 8 samples each.
+    assert written == 24
+    assert len(stub.writes) == 3
+    assert all(chunk.shape == (8,) for chunk in stub.writes)
+    # Left and right channels should carry identical interleaved samples.
+    for chunk in stub.writes:
+        assert np.allclose(chunk[0::2], chunk[1::2])
     assert stub.stopped is True
 
 

@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 
 
 _CONFIG_LIST_ENV_VARS = ("MOUSEDROID_CONFIGS", "MOUSEDROID_JETSON_CONFIGS")
+_CONFIG_SINGLE_ENV_VARS = ("MOUSEDROID_CONFIG", "MOUSEDROID_JETSON_CONFIG")
 
 
 @dataclass(frozen=True)
@@ -65,7 +66,7 @@ def resolve_runtime_config_paths(
     Precedence:
         1. Explicit ``config_paths`` passed by the caller.
         2. CSV lists in ``MOUSEDROID_CONFIGS`` or ``MOUSEDROID_JETSON_CONFIGS``.
-        3. Single-path ``MOUSEDROID_CONFIG``.
+        3. Single-path ``MOUSEDROID_CONFIG`` or legacy ``MOUSEDROID_JETSON_CONFIG``.
 
     Args:
         config_paths: Explicit config overlay paths.
@@ -85,9 +86,10 @@ def resolve_runtime_config_paths(
         if csv_paths:
             return tuple(csv_paths)
 
-    single_path = os.getenv("MOUSEDROID_CONFIG", "").strip()
-    if single_path:
-        return (Path(single_path),)
+    for env_var in _CONFIG_SINGLE_ENV_VARS:
+        single_path = os.getenv(env_var, "").strip()
+        if single_path:
+            return (Path(single_path),)
 
     return ()
 
@@ -333,7 +335,8 @@ async def play_speaker_tone(
         frequency_hz: Tone frequency.
 
     Returns:
-        Number of samples written, or ``None`` when the speaker is disabled.
+        Total number of interleaved samples written (``frames * channels``),
+        or ``None`` when the speaker is disabled.
 
     Raises:
         RuntimeError: If the configured speaker cannot open its runtime stream.
@@ -348,18 +351,23 @@ async def play_speaker_tone(
             msg = "configured speaker device unavailable"
             raise RuntimeError(msg)
 
-        min_samples = max(1, round(float(speaker.sample_rate) * duration_s))
-        total_samples = max(
+        channels = max(1, int(getattr(speaker, "channels", 1)))
+        min_frames = max(1, round(float(speaker.sample_rate) * duration_s))
+        total_frames = max(
             speaker.chunk_size,
-            math.ceil(min_samples / speaker.chunk_size) * speaker.chunk_size,
+            math.ceil(min_frames / speaker.chunk_size) * speaker.chunk_size,
         )
-        time_axis = np.arange(total_samples, dtype=np.float32) / float(speaker.sample_rate)
-        tone = (0.2 * np.sin(2.0 * np.pi * frequency_hz * time_axis)).astype(np.float32)
+        time_axis = np.arange(total_frames, dtype=np.float32) / float(speaker.sample_rate)
+        mono_tone = (0.2 * np.sin(2.0 * np.pi * frequency_hz * time_axis)).astype(np.float32)
+        # Interleave identical tone across channels so each frame is `channels` samples.
+        interleaved = np.repeat(mono_tone, channels) if channels > 1 else mono_tone
 
-        for start in range(0, total_samples, speaker.chunk_size):
-            chunk = tone[start : start + speaker.chunk_size]
-            if chunk.shape[0] < speaker.chunk_size:
-                chunk = np.pad(chunk, (0, speaker.chunk_size - chunk.shape[0]))
+        samples_per_chunk = speaker.chunk_size * channels
+        total_samples = total_frames * channels
+        for start in range(0, total_samples, samples_per_chunk):
+            chunk = interleaved[start : start + samples_per_chunk]
+            if chunk.shape[0] < samples_per_chunk:
+                chunk = np.pad(chunk, (0, samples_per_chunk - chunk.shape[0]))
             await speaker.write_chunk(chunk)
 
         return total_samples
