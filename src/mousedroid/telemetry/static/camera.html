@@ -138,7 +138,18 @@
   let ws = null, backoff = 500;
   function connect() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    const url = proto + "://" + location.host + "/ws";
+    // Propagate auth material from the page URL onto the /ws upgrade so the
+    // dashboard works when telemetry bearer auth or legacy X-API-Key is on.
+    // Browsers cannot set custom headers on new WebSocket(), so the server
+    // accepts ?token=... (bearer) and ?api_key=... (legacy) as a fallback.
+    const pageParams = new URLSearchParams(location.search);
+    const wsParams = new URLSearchParams();
+    const token = pageParams.get("token");
+    const apiKey = pageParams.get("api_key");
+    if (token) wsParams.set("token", token);
+    if (apiKey) wsParams.set("api_key", apiKey);
+    const qs = wsParams.toString();
+    const url = proto + "://" + location.host + "/ws" + (qs ? "?" + qs : "");
     wsEl.textContent = "connecting";
     ws = new WebSocket(url);
     ws.onopen = () => { wsEl.textContent = "open"; backoff = 500; };

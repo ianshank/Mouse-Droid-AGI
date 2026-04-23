@@ -40,11 +40,22 @@ class LLMGateway:
         self._degraded = False
         # Empty injection_patterns disables the filter; otherwise "()" would
         # compile to a pattern that matches every string and reject everything.
+        # An invalid user-supplied regex must not crash startup: fall back to
+        # the disabled-filter state and log a warning so the operator can fix
+        # the config without losing the rest of the process.
         if cfg.injection_patterns:
-            self._injection_re: re.Pattern[str] | None = re.compile(
-                "(" + "|".join(cfg.injection_patterns) + ")",
-                re.IGNORECASE,
-            )
+            try:
+                self._injection_re: re.Pattern[str] | None = re.compile(
+                    "(" + "|".join(cfg.injection_patterns) + ")",
+                    re.IGNORECASE,
+                )
+            except re.error as exc:
+                _log.warning(
+                    "llm_gateway_invalid_injection_pattern",
+                    error=str(exc),
+                    patterns=list(cfg.injection_patterns),
+                )
+                self._injection_re = None
         else:
             self._injection_re = None
 

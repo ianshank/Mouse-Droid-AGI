@@ -353,7 +353,7 @@ class MouseDroidOrchestrator:
             )
             belief_dim = int(self._cfg.model.belief_dim)
             bdi_state_vec = self._h.numpy().flatten().astype(np.float32, copy=False)
-            state_vec = bdi_state_vec
+            state_vec: NDArray[np.float32] = bdi_state_vec
             if state_vec.size < belief_dim:
                 state_vec = np.pad(state_vec, (0, belief_dim - state_vec.size))
             else:

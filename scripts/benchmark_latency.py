@@ -219,7 +219,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.config.exists():
         import yaml
 
-        raw = yaml.safe_load(args.config.read_text())
+        raw = yaml.safe_load(args.config.read_text()) or {}
         cfg = Settings.model_validate(raw)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

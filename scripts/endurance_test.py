@@ -116,7 +116,7 @@ async def _run(args: argparse.Namespace) -> int:
     if args.config.exists():
         import yaml
 
-        raw = yaml.safe_load(args.config.read_text())
+        raw = yaml.safe_load(args.config.read_text()) or {}
         cfg = Settings.model_validate(raw)
 
     _log.info(
