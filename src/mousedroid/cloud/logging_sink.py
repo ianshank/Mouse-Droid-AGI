@@ -89,7 +89,7 @@ class CloudLoggingSink:
                 **{
                     k: v
                     for k, v in event_dict.items()
-                    if k != "event" and isinstance(v, (str, int, float, bool, type(None)))
+                    if k != "event" and isinstance(v, str | int | float | bool | type(None))
                 },
             }
             self._cloud_logger.log_struct(entry, severity=method_name.upper())
