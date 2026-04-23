@@ -206,12 +206,30 @@ jobs:
 
             - name: Validate Dockerfile
               # L4T base images (dustynv/l4t-pytorch, dustynv/llama_cpp) are
-              # arm64-only. docker build --check treats the resulting
-              # InvalidBaseImagePlatform warnings as fatal on the amd64 CI
-              # runner, so pin the target platform to linux/arm64 to match
-              # the images' native platform. Buildx performs a metadata-only
-              # check here (no actual build), so no emulator is needed.
-              run: docker build --check --platform linux/arm64 -f Dockerfile.jetson .
+              # arm64-only. Docker's check mode reports InvalidBaseImagePlatform
+              # warnings when validating that Jetson Dockerfile on the amd64 CI
+              # runner and currently exits non-zero even though the Dockerfile
+              # syntax and instructions are otherwise valid. Treat that specific
+              # warning set as informational, but still fail on any other check
+              # error or warning.
+              run: |
+                set +e
+                docker build --check -f Dockerfile.jetson . > docker-check.log 2>&1
+                rc=$?
+                set -e
+                cat docker-check.log
+                if [ "$rc" -eq 0 ]; then
+                  exit 0
+                fi
+
+                invalid_count=$(grep -c "WARNING: InvalidBaseImagePlatform" docker-check.log || true)
+                warning_count=$(grep -c "^WARNING:" docker-check.log || true)
+                if [ "$invalid_count" -gt 0 ] && [ "$warning_count" -eq "$invalid_count" ]; then
+                  echo "::notice::Ignoring InvalidBaseImagePlatform warnings for arm64-only Jetson base images on the amd64 CI runner"
+                  exit 0
+                fi
+
+                exit "$rc"
 
             - name: Syntax check docker-compose
               run: docker compose -f docker-compose.jetson.yml config --quiet

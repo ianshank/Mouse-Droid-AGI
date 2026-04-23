@@ -217,6 +217,20 @@ async def test_read_json_recovers_from_degraded():
     assert mock_serial.timeout == driver._normal_timeout
 
 
+async def test_query_data_skips_send_when_degraded_interval_not_elapsed() -> None:
+    driver = _make_driver(degraded_poll_interval_s=60.0)
+    driver._is_degraded = True
+    driver._last_probe_time = 1e18
+    driver._send_json = MagicMock()  # type: ignore[method-assign]
+    driver._read_json = MagicMock()  # type: ignore[method-assign]
+
+    result = await driver._query_data("battery", {"cmd": 1})
+
+    assert result == {}
+    driver._send_json.assert_not_called()
+    driver._read_json.assert_not_called()
+
+
 # -- connect resets adaptive state --
 
 

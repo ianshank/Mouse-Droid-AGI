@@ -50,8 +50,11 @@ def build_bearer_auth_middleware(
         """Validate Authorization: Bearer <token> header.
 
         Exempt paths and CORS preflight (OPTIONS) bypass auth.
-        WebSocket upgrades accept the token from either the
-        Authorization header or the ``?token=...`` query parameter.
+        WebSocket upgrades and normal safe navigations (GET/HEAD) accept
+        the token from either the Authorization header or the
+        ``?token=...`` query parameter because browsers cannot attach
+        custom Authorization headers to normal page navigations, MJPEG
+        image requests, or ``new WebSocket(...)`` handshakes.
         """
         if not auth_cfg.auth_enabled:
             resp: web.StreamResponse = await handler(request)
@@ -69,13 +72,17 @@ def build_bearer_auth_middleware(
                 resp = await handler(request)
                 return resp
 
-        # Extract token from Authorization header or query param (for WS)
+        # Extract token from Authorization header or query param (for WS and
+        # safe browser navigations that cannot attach Authorization headers).
         supplied_token = ""
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             supplied_token = auth_header[7:]
-        elif request.headers.get("Upgrade", "").lower() == "websocket":
-            # WebSocket clients may pass token as query param
+        elif request.headers.get("Upgrade", "").lower() == "websocket" or request.method in {
+            "GET",
+            "HEAD",
+        }:
+            # WebSocket clients and browser navigations may pass token as query param.
             supplied_token = request.query.get("token", "")
 
         if not token or supplied_token != token:

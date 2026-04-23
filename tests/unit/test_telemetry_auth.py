@@ -111,6 +111,14 @@ class TestRestAuthentication:
             resp = await client.get("/api/v1/status", headers={"X-API-Key": _API_KEY})
             assert resp.status == 200
 
+    async def test_camera_page_query_api_key_returns_200(self) -> None:
+        """Safe GET navigations may use api_key query auth for dashboards."""
+        server, app = _make_server()
+        server._running = True
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get(f"/camera?api_key={_API_KEY}")
+            assert resp.status == 200
+
     async def test_sensors_missing_key_returns_401(self) -> None:
         _, app = _make_server()
         async with TestClient(TestServer(app)) as client:
@@ -382,6 +390,16 @@ class TestBearerTokenAuth:
                     "/api/v1/status",
                     headers={"Authorization": f"Bearer {_BEARER_TOKEN}"},
                 )
+                assert resp.status == 200
+
+    async def test_camera_page_query_bearer_token_returns_200(self) -> None:
+        """Safe GET navigations may use token query auth for dashboards."""
+        auth_cfg = self._auth_cfg()
+        with patch.dict(os.environ, {"TEST_TELEMETRY_TOKEN": _BEARER_TOKEN}):
+            server, app = _make_server(api_key=None, auth_cfg=auth_cfg)
+            server._running = True
+            async with TestClient(TestServer(app)) as client:
+                resp = await client.get(f"/camera?token={_BEARER_TOKEN}")
                 assert resp.status == 200
 
     async def test_invalid_bearer_token_returns_401(self) -> None:

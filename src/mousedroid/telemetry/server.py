@@ -230,12 +230,16 @@ class TelemetryServer:
                 """Validate API key for both REST and WebSocket requests.
 
                 For WebSocket upgrade requests, accept the API key from either
-                ``X-API-Key`` or ``?api_key=…`` so auth decisions stay centralized
-                in middleware and share a uniform rejection path.
+                ``X-API-Key`` or ``?api_key=…``. Normal safe GET/HEAD browser
+                navigations use the same query-param fallback because browsers
+                cannot set custom headers on page navigations, MJPEG image
+                requests, or WebSocket handshakes. Auth decisions stay
+                centralized in middleware and share a uniform rejection path.
                 """
                 is_ws_upgrade = request.headers.get("Upgrade", "").lower() == "websocket"
-                if is_ws_upgrade:
-                    # For WebSocket, accept key from query param OR header
+                if is_ws_upgrade or request.method in {"GET", "HEAD"}:
+                    # For WebSocket and safe browser navigations, accept key
+                    # from query param OR header.
                     key = request.query.get("api_key", request.headers.get("X-API-Key", ""))
                 else:
                     key = request.headers.get("X-API-Key", "")
