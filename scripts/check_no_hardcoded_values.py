@@ -16,7 +16,9 @@ Suppressions:
 
 from __future__ import annotations
 
+import argparse
 import ast
+import os
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
@@ -82,6 +84,61 @@ def _changed_source_files() -> list[str]:
     return files
 
 
+def _dedupe_keep_order(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        if item not in seen:
+            out.append(item)
+            seen.add(item)
+    return out
+
+
+def _git_base_candidates(base_ref: str | None) -> list[str]:
+    raw = (base_ref or os.environ.get("GITHUB_BASE_REF") or "").strip()
+    if not raw:
+        return []
+    candidates = [raw]
+    if "/" not in raw:
+        candidates.insert(0, f"origin/{raw}")
+    return _dedupe_keep_order(candidates)
+
+
+def _first_valid_base_ref(base_ref: str | None) -> str | None:
+    for candidate in _git_base_candidates(base_ref):
+        result = _run(["git", "rev-parse", "--verify", f"{candidate}^{{commit}}"])
+        if result.returncode == 0:
+            return candidate
+    return None
+
+
+def _changed_files_from_base(base_ref: str) -> list[str]:
+    result = _run(["git", "diff", "--name-only", f"{base_ref}...HEAD"])
+    if result.returncode != 0:
+        err = result.stderr.strip() or (f"Failed running: git diff --name-only {base_ref}...HEAD")
+        print(err, file=sys.stderr)
+        sys.exit(2)
+
+    files: list[str] = []
+    for raw_path in result.stdout.splitlines():
+        normalized = _normalize(raw_path)
+        if _is_target_source(normalized):
+            files.append(normalized)
+    return _dedupe_keep_order(files)
+
+
+def _changed_source_files_from_range(base_ref: str | None) -> tuple[list[str], str | None]:
+    """Return (changed_files, resolved_base) using commit-range detection.
+
+    Resolved_base is ``None`` when no base ref could be resolved; callers may
+    then fall back to working-tree detection.
+    """
+    resolved = _first_valid_base_ref(base_ref)
+    if resolved is None:
+        return ([], None)
+    return (_changed_files_from_base(resolved), resolved)
+
+
 def _parse_hunk_header(raw_line: str) -> int | None:
     if not raw_line.startswith(HUNK_PREFIX):
         return None
@@ -136,25 +193,36 @@ def _is_tracked(path: str) -> bool:
     return result.returncode == 0
 
 
-def _added_lines_for_file(path: str) -> list[tuple[int, str]]:
+def _added_lines_for_file(path: str, base_ref: str | None = None) -> list[tuple[int, str]]:
     added_lines: list[tuple[int, str]] = []
 
-    for command in (
-        ["git", "diff", "--unified=0", "--", path],
-        ["git", "diff", "--cached", "--unified=0", "--", path],
-    ):
-        result = _run(command)
+    if base_ref is not None:
+        range_cmd = ["git", "diff", "--unified=0", f"{base_ref}...HEAD", "--", path]
+        result = _run(range_cmd)
         if result.returncode != 0:
-            err = result.stderr.strip() or f"Failed running: {' '.join(command)}"
+            err = result.stderr.strip() or f"Failed running: {' '.join(range_cmd)}"
             print(err, file=sys.stderr)
             sys.exit(2)
         added_lines.extend(_parse_added_lines(result.stdout))
+    else:
+        for command in (
+            ["git", "diff", "--unified=0", "--", path],
+            ["git", "diff", "--cached", "--unified=0", "--", path],
+        ):
+            result = _run(command)
+            if result.returncode != 0:
+                err = result.stderr.strip() or f"Failed running: {' '.join(command)}"
+                print(err, file=sys.stderr)
+                sys.exit(2)
+            added_lines.extend(_parse_added_lines(result.stdout))
 
-    if not _is_tracked(path):
-        source_path = Path(path)
-        if source_path.exists():
-            for index, line in enumerate(source_path.read_text(encoding="utf-8").splitlines(), 1):
-                added_lines.append((index, line))
+        if not _is_tracked(path):
+            source_path = Path(path)
+            if source_path.exists():
+                for index, line in enumerate(
+                    source_path.read_text(encoding="utf-8").splitlines(), 1
+                ):
+                    added_lines.append((index, line))
 
     deduped: dict[int, str] = {}
     for line_number, line_text in added_lines:
@@ -289,8 +357,11 @@ def _find_suspicious_literals(
     return findings
 
 
-def _find_suspicious_literals_for_file(path: str) -> list[tuple[int, str, str]]:
-    changed_lines = {line_number for line_number, _ in _added_lines_for_file(path)}
+def _find_suspicious_literals_for_file(
+    path: str,
+    base_ref: str | None = None,
+) -> list[tuple[int, str, str]]:
+    changed_lines = {line_number for line_number, _ in _added_lines_for_file(path, base_ref)}
     if not changed_lines:
         return []
 
@@ -304,13 +375,47 @@ def _find_suspicious_literals_for_file(path: str) -> list[tuple[int, str, str]]:
 
     findings: list[tuple[int, str, str]] = []
     for line_number, literal in literals:
-        line_text = source_lines[line_number - 1].rstrip() if line_number - 1 < len(source_lines) else ""
+        line_text = (
+            source_lines[line_number - 1].rstrip() if line_number - 1 < len(source_lines) else ""
+        )
         findings.append((line_number, line_text, literal))
     return findings
 
 
-def main() -> int:
-    changed_files = _changed_source_files()
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--base-ref",
+        default=None,
+        help=(
+            "Base ref for commit-range detection (defaults to $GITHUB_BASE_REF). "
+            "Falls back to working-tree diff when unresolvable outside CI."
+        ),
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
+    in_ci = os.getenv("CI", "").strip().lower() in {"1", "true", "yes"}
+
+    range_files, resolved_base = _changed_source_files_from_range(args.base_ref)
+    if resolved_base is not None:
+        changed_files = range_files
+        print(
+            f"Hardcoded-value gate using commit-range base: {resolved_base}",
+            file=sys.stderr,
+        )
+    else:
+        if in_ci:
+            print(
+                "Hardcoded-value gate: base ref unresolved in CI environment "
+                "(possible shallow checkout or missing GITHUB_BASE_REF).",
+                file=sys.stderr,
+            )
+            return 2
+        changed_files = _changed_source_files()
+
     if not changed_files:
         print("No changed src/mousedroid Python files detected; hardcoded-value gate skipped.")
         return 0
@@ -321,7 +426,7 @@ def main() -> int:
             continue
 
         try:
-            file_findings = _find_suspicious_literals_for_file(file_path)
+            file_findings = _find_suspicious_literals_for_file(file_path, resolved_base)
         except SyntaxError as exc:
             lineno = exc.lineno or 1
             detail = exc.msg or "invalid syntax"

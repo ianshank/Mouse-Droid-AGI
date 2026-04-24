@@ -7,6 +7,7 @@ compatibility guarantee).
 
 from __future__ import annotations
 
+import copy
 import enum
 import sys
 from pathlib import Path
@@ -2074,15 +2075,18 @@ class Settings(BaseSettings):
         if not isinstance(data, dict):
             return data
 
-        migrated = dict(data)
+        # Deep copy so the migration helpers (which mutate nested section dicts
+        # in place) never leak mutations back to the caller-provided input.
+        migrated = copy.deepcopy(data)
 
         apply_aliases(migrated, _TOP_LEVEL_SECTION_ALIASES)
         migrate_group_sections(migrated, "robot_arm", _ROBOT_ARM_GROUP_SECTION_ALIASES)
         migrate_section_aliases(migrated, _SECTION_FIELD_ALIASES)
         migrate_section_transforms(migrated, _SECTION_FIELD_TRANSFORMS)
 
-        for legacy_key in _TOP_LEVEL_SECTION_ALIASES:
-            migrated.pop(legacy_key, None)
+        # The ``robot_arm`` container is not a real Settings field; drop it once
+        # its nested sections have been lifted to top-level canonical keys.
+        # Legacy top-level and per-section aliases are popped by the helpers.
         if isinstance(migrated.get("robot_arm"), dict):
             migrated.pop("robot_arm", None)
 

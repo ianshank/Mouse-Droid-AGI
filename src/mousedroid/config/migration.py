@@ -29,13 +29,17 @@ def apply_aliases(
 ) -> None:
     """Apply simple aliases from legacy key -> canonical key.
 
-    Canonical keys always win. A legacy value is only copied when the
-    canonical key is absent.
+    The legacy key is always removed (popped) when present so the resulting
+    mapping contains only canonical keys. The legacy value is promoted to the
+    canonical key only when the canonical key is absent; otherwise the
+    canonical value wins and the legacy value is discarded.
     """
     for legacy_key, canonical_key in aliases.items():
-        if canonical_key in target or legacy_key not in target:
+        if legacy_key not in target:
             continue
-        target[canonical_key] = target[legacy_key]
+        legacy_value = target.pop(legacy_key)
+        if canonical_key not in target:
+            target[canonical_key] = legacy_value
 
 
 def apply_transforms(
@@ -44,14 +48,20 @@ def apply_transforms(
 ) -> None:
     """Apply transformed aliases from legacy key -> canonical key.
 
-    Canonical keys always win. Transformation failures are ignored so the
-    schema validator can emit a single canonical error later.
+    The legacy key is always removed (popped) when present so the resulting
+    mapping contains only canonical keys. The transformed value is assigned to
+    the canonical key only when the canonical key is absent and the transform
+    succeeds; otherwise the canonical value (or the lack of one) is preserved
+    and the legacy value is discarded.
     """
     for legacy_key, (canonical_key, transform) in transforms.items():
-        if canonical_key in target or legacy_key not in target:
+        if legacy_key not in target:
+            continue
+        legacy_value = target.pop(legacy_key)
+        if canonical_key in target:
             continue
         try:
-            target[canonical_key] = transform(target[legacy_key])
+            target[canonical_key] = transform(legacy_value)
         except (TypeError, ValueError, ZeroDivisionError):
             continue
 

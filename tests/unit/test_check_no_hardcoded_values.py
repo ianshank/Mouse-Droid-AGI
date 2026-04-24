@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 from types import ModuleType
+from typing import Any
+from unittest.mock import patch
 
 
 def _load_checker_module() -> ModuleType:
@@ -61,3 +64,61 @@ def test_ast_detector_formats_negative_literals() -> None:
     findings = checker._find_suspicious_literals(source, {1})
 
     assert findings == [(1, "-7")]
+
+
+def _fake_run_factory(results: dict[tuple[str, ...], tuple[int, str, str]]) -> Any:
+    def _fake_run(cmd: list[str]) -> Any:
+        class _R:
+            returncode: int
+            stdout: str
+            stderr: str
+
+        key = tuple(cmd)
+        code, out, err = results.get(key, (1, "", "unexpected"))
+        r = _R()
+        r.returncode = code
+        r.stdout = out
+        r.stderr = err
+        return r
+
+    return _fake_run
+
+
+def test_git_base_candidates_prefers_origin_prefix() -> None:
+    checker = _load_checker_module()
+    with patch.dict(os.environ, {"GITHUB_BASE_REF": "main"}, clear=False):
+        assert checker._git_base_candidates(None) == ["origin/main", "main"]
+
+
+def test_git_base_candidates_passes_explicit_ref_unchanged() -> None:
+    checker = _load_checker_module()
+    assert checker._git_base_candidates("origin/feature") == ["origin/feature"]
+
+
+def test_first_valid_base_ref_returns_first_resolvable() -> None:
+    checker = _load_checker_module()
+    fake_run = _fake_run_factory(
+        {
+            ("git", "rev-parse", "--verify", "origin/main^{commit}"): (1, "", "bad"),
+            ("git", "rev-parse", "--verify", "main^{commit}"): (0, "deadbeef", ""),
+        }
+    )
+    with (
+        patch.dict(os.environ, {"GITHUB_BASE_REF": "main"}, clear=False),
+        patch.object(checker, "_run", fake_run),
+    ):
+        assert checker._first_valid_base_ref(None) == "main"
+
+
+def test_first_valid_base_ref_none_when_unresolvable() -> None:
+    checker = _load_checker_module()
+    with patch.dict(os.environ, {"GITHUB_BASE_REF": ""}, clear=False):
+        assert checker._first_valid_base_ref(None) is None
+
+
+def test_main_fails_in_ci_when_base_ref_unresolved() -> None:
+    checker = _load_checker_module()
+    env = {k: v for k, v in os.environ.items() if k not in {"GITHUB_BASE_REF", "CI"}}
+    env["CI"] = "true"
+    with patch.dict(os.environ, env, clear=True):
+        assert checker.main([]) == 2
