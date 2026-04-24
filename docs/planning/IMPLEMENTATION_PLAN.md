@@ -22,7 +22,7 @@ MouseDroidAGI is a Star Wars MSE-6 droid replica running on NVIDIA Jetson Orin N
 - `PLAN.md` — Self-healing resilience plan (6 phases, not started)
 - `PLANNING.md` — L4T container deployment plan (partially done)
 - `CHANGELOG.md` — recent work history
-- `COVERAGE_ANALYSIS.md` — coverage gap analysis
+- `../analysis/COVERAGE_ANALYSIS.md` — coverage gap analysis
 - `agent.md` — architectural invariants
 - **11 remote branches** — 5 with in-flight commits
 - `config/default.yaml`, `pyproject.toml`, `config/schema.py` — current config state

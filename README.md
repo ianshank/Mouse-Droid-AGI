@@ -21,6 +21,8 @@ The robot is built on a Wave Rover mecanum-wheel chassis, controlled by an ESP32
 
 The Jetson validation path is aligned with the runtime path: smoke scripts, remote validation, and sensor verification all load the same config overlays and reuse the same factory-backed hardware checks as the application.
 
+Planning and architecture docs now live under `docs/planning/` and `docs/analysis/` to keep the repo root focused on runtime code and deployment assets.
+
 ### The 10 Pillars
 
 | Pillar | Module | Description |
@@ -75,7 +77,7 @@ graph TD
     Docker -.-> SSD
 ```
 
-See [docs/architecture.md](docs/architecture.md) for full C4 diagrams (Context → Container → Component → Code), including the runtime validation and smoke-test alignment layer used by Jetson host-side validation.
+See [docs/architecture.md](docs/architecture.md) for full C4 diagrams (Context → Container → Component → Code), including runtime validation/smoke alignment and CI quality-gate architecture.
 
 ### Runtime Validation Alignment
 
@@ -452,6 +454,7 @@ pytest tests/regression/
 ### Validation Snapshot
 
 - Local pre-PR validation for this branch covers `ruff`, `mypy --strict`, unit/property/integration with coverage, performance, regression, E2E, and health-check paths.
+- CI execution is deterministic across Windows/Git Bash and Linux by resolving Python from `MOUSEDROID_PYTHON` or workspace virtualenv first, with a pre-test `Settings` identity smoke check.
 - The enforced repository gate remains **85% coverage**, with the latest local run holding above 94% total coverage.
 - Hardware-only timing assertions stay separated from mock-hardware CI paths; use the Jetson validation harness for real-device timing and smoke verification.
 
@@ -508,6 +511,15 @@ Offline training follows a 4-phase pipeline:
 | 2.3a | `collect_annotations.py` | Collect labelled intention annotations (500 episodes) |
 | 2.3b | `train_bdi.py` | Train BDI sub-networks: Belief → Desire → Intention → Affect |
 | 2.4 | `train_constitutional_rl.py` | PPO fine-tuning with Constitutional + Three Laws constraints |
+
+---
+
+## Roadmap and Analysis
+
+- [docs/planning/NEXT_STEPS.md](docs/planning/NEXT_STEPS.md) — prioritized roadmap and immediate follow-ups
+- [docs/planning/IMPLEMENTATION_PLAN.md](docs/planning/IMPLEMENTATION_PLAN.md) — implementation sequencing and dependencies
+- [docs/planning/PLAN.md](docs/planning/PLAN.md) — self-healing resilience plan
+- [docs/analysis/COVERAGE_ANALYSIS.md](docs/analysis/COVERAGE_ANALYSIS.md) — coverage strategy and enforcement notes
 
 ---
 

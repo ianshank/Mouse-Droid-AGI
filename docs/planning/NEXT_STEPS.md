@@ -1,8 +1,20 @@
 # MouseDroidAGI — Next Steps
 
-> **Last updated**: 2026-04-23 | **Version**: 0.3.1-dev | **Pre-PR validation**: Ruff clean, mypy strict clean, coverage gate maintained (>94% in latest local run)
+> **Last updated**: 2026-04-24 | **Version**: 0.3.1-dev | **Pre-PR validation**: Ruff clean, mypy strict clean, coverage gate maintained (>94% in latest local run)
 
 This document tracks planned enhancements, organised by priority and category.
+
+## Recently Completed — 2026-04-24 CI Determinism + Config Compatibility Hardening
+
+- ✅ **Deterministic CI interpreter resolution**: `scripts/ci.sh` now resolves Python in a stable order
+  (`MOUSEDROID_PYTHON` → workspace virtualenv → PATH) and exports `PYTHONNOUSERSITE=1` to avoid
+  user-site package drift on Windows/Git Bash
+- ✅ **Pre-test class-identity guard**: `scripts/check_settings_identity.py` verifies canonical
+  `Settings` imports before running pytest, preventing intermittent `is_instance_of` failures
+- ✅ **Changed-line coverage stability**: `tests/unit/test_config_migration.py` now exercises
+  migration helper branches so `check_branch_coverage.py` remains green when schema alias logic evolves
+- ✅ **Documentation structure professionalization**: planning/analysis documents moved to
+  `docs/planning/` and `docs/analysis/` with updated references
 
 ## Recently Completed — 2026-04-23 Jetson Runtime Validation Alignment
 
@@ -19,8 +31,6 @@ This document tracks planned enhancements, organised by priority and category.
 
 ## Immediate Follow-up
 
-- Fix the Windows `torch/coverage.py` collection collision so the branch coverage gate can run
-  without `ALLOW_PYTEST_COLLECTION_SKIP=1`
 - Install `promtool` on the Windows validation host so the Prometheus rule stage becomes enforced
   instead of skipped
 - Re-run `tests/performance/test_jetson_endurance.py::test_endurance_30hz_loop` on non-mock Jetson

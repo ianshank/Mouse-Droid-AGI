@@ -118,6 +118,9 @@ ci*.log
 # Jetson validation reports
 reports/jetson_validate/
 
+# Local run artifacts moved out of repo root
+reports/local_runs/
+
 # Temporary deploy/build scripts
 /tmp/jetson_*.py
 /tmp/install_*.py

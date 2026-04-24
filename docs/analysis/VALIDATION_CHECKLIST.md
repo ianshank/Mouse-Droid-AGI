@@ -354,9 +354,9 @@ mypy src/mousedroid --ignore-missing-imports
 
 The following documents have been created for reference:
 
-1. **TEST_SUITE_SUMMARY.md** — Detailed breakdown of all 21 test cases
-2. **COVERAGE_ANALYSIS.md** — Gap analysis and 85% enforcement plan
-3. **VALIDATION_CHECKLIST.md** — This file; step-by-step validation
+1. **[TEST_SUITE_SUMMARY.md](TEST_SUITE_SUMMARY.md)** — Detailed breakdown of all 21 test cases
+2. **[COVERAGE_ANALYSIS.md](COVERAGE_ANALYSIS.md)** — Gap analysis and 85% enforcement plan
+3. **[VALIDATION_CHECKLIST.md](VALIDATION_CHECKLIST.md)** — This file; step-by-step validation
 
 ---
 

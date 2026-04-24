@@ -363,6 +363,35 @@ graph TD
 
 ---
 
+## Level 3e — Configuration Compatibility and CI Quality Gates
+
+Configuration and CI are intentionally layered so legacy YAML schemas remain loadable while
+quality gates fail early and deterministically.
+
+```mermaid
+graph TD
+    LegacyYaml["Legacy YAML / overlays"]
+    Loader["config.loader.load_settings()"]
+    SettingsBefore["Settings model_validator(before)\nmigrate_legacy_fields()"]
+    Migration["config/migration.py\napply_aliases()\nmigrate_section_*()\nmigrate_group_sections()"]
+    SettingsAfter["Pydantic validation\ncanonical Settings object"]
+    App["factory.py + orchestrator runtime"]
+
+    CI["scripts/ci.sh"]
+    Identity["check_settings_identity.py\ncanonical import identity guard"]
+    Hardcoded["check_no_hardcoded_values.py\nchanged-line hardcoded gate"]
+    Tests["pytest (importlib mode)\nunit/property/integration/perf/regression/e2e"]
+    BranchCov["check_branch_coverage.py\nchanged-file threshold"]
+
+    LegacyYaml --> Loader --> SettingsBefore --> Migration --> SettingsAfter --> App
+    CI --> Identity --> Hardcoded --> Tests --> BranchCov
+```
+
+This model prevents class-identity drift under coverage/import instrumentation and keeps config
+migration logic regression-tested as schema aliases evolve.
+
+---
+
 ## Level 4 — Code: Dependency Injection Pattern
 
 Every interface is a `@runtime_checkable Protocol`. Factory functions are the only place that branch on platform:
@@ -380,14 +409,19 @@ class ESP32CommProtocol(Protocol):
 
 # src/mousedroid/factory.py
 def build_esp32_driver(cfg: Settings) -> ESP32CommProtocol:
+    inner: ESP32CommProtocol
     if cfg.mock_hardware:
         from mousedroid.comms.mock_driver import MockESP32Driver
-        return MockESP32Driver(cfg.esp32)
-    if cfg.esp32.protocol == "serial":
+        inner = MockESP32Driver(cfg.esp32)
+    elif cfg.esp32.protocol == "serial":
         from mousedroid.comms.serial_driver import SerialESP32Driver
-        return SerialESP32Driver(cfg.esp32)
-    from mousedroid.comms.wifi_driver import WiFiESP32Driver
-    return WiFiESP32Driver(cfg.esp32)
+        inner = SerialESP32Driver(cfg.esp32)
+    else:
+        from mousedroid.comms.wifi_driver import WiFiESP32Driver
+        inner = WiFiESP32Driver(cfg.esp32)
+
+    from mousedroid.resilience.resilient_driver import ResilientESP32Driver
+    return ResilientESP32Driver(inner, cfg.retry, cfg.circuit_breaker)
 ```
 
 ```mermaid

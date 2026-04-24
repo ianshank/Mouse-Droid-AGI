@@ -189,7 +189,10 @@ if [[ "${INITIAL_USER}" != "${TARGET_USER}" && -f "${SSH_PUBKEY}" ]]; then
     echo "--- Copying SSH key to '${TARGET_USER}' ---"
     pubkey_data="$(cat "${SSH_PUBKEY}")"
     remote_sudo bash -c "
-        target_home=\"\$(eval echo ~${TARGET_USER})\"
+        target_home=\"\$(getent passwd '${TARGET_USER}' | cut -d: -f6)\"
+        if [[ -z \"\${target_home}\" ]]; then
+            target_home=\"/home/${TARGET_USER}\"
+        fi
         mkdir -p \"\${target_home}/.ssh\"
         chmod 700 \"\${target_home}/.ssh\"
         touch \"\${target_home}/.ssh/authorized_keys\"

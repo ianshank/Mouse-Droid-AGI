@@ -83,3 +83,93 @@ class TestBackwardsCompatibility:
         assert cfg.debug is True
         assert cfg.arm is None
         assert cfg.esp32.protocol == "serial"
+
+    def test_legacy_robot_arm_group_sections_are_migrated(self) -> None:
+        """Legacy robot_arm nested sections map to canonical top-level arm sections."""
+        cfg = Settings.model_validate(
+            {
+                "mock_hardware": True,
+                "platform": "robot_arm",
+                "robot_arm": {
+                    "hardware": {
+                        "dof": 7,
+                        "home_position": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    },
+                    "sim": {"timestep_s": 0.004},
+                    "perception": {"depth_camera_type": "mock"},
+                    "planning": {"planning_timeout_s": 7.5},
+                    "training": {"algorithm": "ppo"},
+                    "curriculum": {"enabled": False},
+                    "task": {"task_type": "pick_place"},
+                },
+            }
+        )
+        assert cfg.arm is not None
+        assert cfg.arm.dof == 7
+        assert cfg.arm_sim is not None
+        assert cfg.arm_sim.timestep_s == 0.004
+        assert cfg.arm_perception is not None
+        assert cfg.arm_perception.depth_camera_type == "mock"
+        assert cfg.arm_planning is not None
+        assert cfg.arm_planning.planning_timeout_s == 7.5
+        assert cfg.arm_training is not None
+        assert cfg.arm_training.algorithm == "ppo"
+        assert cfg.arm_curriculum is not None
+        assert cfg.arm_curriculum.enabled is False
+        assert cfg.arm_task is not None
+        assert cfg.arm_task.task_type == "pick_place"
+
+    def test_legacy_top_level_arm_aliases_are_migrated(self) -> None:
+        """Legacy arm_* top-level blocks map to canonical arm section names."""
+        cfg = Settings.model_validate(
+            {
+                "mock_hardware": True,
+                "platform": "robot_arm",
+                "arm_hardware": {
+                    "dof": 5,
+                    "home_position": [0.0, 0.0, 0.0, 0.0, 0.0],
+                },
+                "arm_simulation": {"timestep_s": 0.01},
+                "arm_vision": {"depth_camera_type": "mock"},
+                "arm_symbolic_planning": {"planner_backend": "pyperplan"},
+                "arm_rl_training": {"algorithm": "sac"},
+                "arm_curriculum_learning": {"enabled": False},
+                "arm_tasks": {"task_type": "tower_of_hanoi", "num_disks": 4},
+            }
+        )
+        assert cfg.arm is not None
+        assert cfg.arm.dof == 5
+        assert cfg.arm_sim is not None
+        assert cfg.arm_sim.timestep_s == 0.01
+        assert cfg.arm_perception is not None
+        assert cfg.arm_perception.depth_camera_type == "mock"
+        assert cfg.arm_planning is not None
+        assert cfg.arm_planning.planner_backend == "pyperplan"
+        assert cfg.arm_training is not None
+        assert cfg.arm_training.algorithm == "sac"
+        assert cfg.arm_curriculum is not None
+        assert cfg.arm_curriculum.enabled is False
+        assert cfg.arm_task is not None
+        assert cfg.arm_task.num_disks == 4
+
+    def test_canonical_arm_sections_win_over_legacy_aliases(self) -> None:
+        """Canonical arm sections take precedence when both key variants are present."""
+        cfg = Settings.model_validate(
+            {
+                "mock_hardware": True,
+                "platform": "robot_arm",
+                "arm": {"dof": 6},
+                "arm_hardware": {
+                    "dof": 7,
+                    "home_position": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                },
+                "arm_sim": {"timestep_s": 0.002},
+                "robot_arm": {
+                    "sim": {"timestep_s": 0.05},
+                },
+            }
+        )
+        assert cfg.arm is not None
+        assert cfg.arm.dof == 6
+        assert cfg.arm_sim is not None
+        assert cfg.arm_sim.timestep_s == 0.002
