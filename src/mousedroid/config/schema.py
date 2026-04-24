@@ -453,8 +453,7 @@ class LearningConfig(BaseModel):
         1,
         gt=0,
         description=(
-            "Fallback input dimension when model has no Linear layers"
-            " for Fisher estimation"
+            "Fallback input dimension when model has no Linear layers for Fisher estimation"
         ),
     )
     progressive_enabled: bool = Field(False, description="Enable progressive column growth")
