@@ -61,6 +61,10 @@ def _make_orchestrator(
 
     cognitive_core = MagicMock()
     cognitive_core._latest_bdi = {"affect": affect} if affect is not None else {}
+    if affect is not None and affect.shape == (2,):
+        cognitive_core.get_latest_affect.return_value = (float(affect[0]), float(affect[1]))
+    else:
+        cognitive_core.get_latest_affect.return_value = (0.0, 0.0)
 
     drv = MockFaceDriver(cfg.face_display)
     face_controller = FaceController(drv, cfg.face_display, clock=lambda: 1000.0)

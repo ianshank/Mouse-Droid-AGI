@@ -189,9 +189,17 @@ def build_face_display(cfg: Settings) -> FaceDisplayProtocol | None:
     """Build the SSD1306 face-display driver based on config.
 
     Returns ``None`` when the subsystem is omitted from config or explicitly
-    disabled, mirroring the other optional-hardware factories. Falls back to
-    :class:`MockFaceDriver` when ``mock_hardware=True`` or when the real
-    driver fails to import / probe and ``fallback_to_mock_on_error=True``.
+    disabled, mirroring the other optional-hardware factories. The factory
+    eagerly probes the I²C bus + address so that
+    ``fallback_to_mock_on_error`` covers both:
+
+    * import failures (``luma.oled`` / ``smbus2`` unavailable), and
+    * runtime probe failures (panel disconnected, wrong address, missing
+      I²C device node).
+
+    When the probe fails and ``fallback_to_mock_on_error=True``, returns a
+    :class:`MockFaceDriver` so the orchestrator can still come up. When the
+    flag is ``False``, the failure is re-raised.
 
     Args:
         cfg: Root settings.
@@ -211,6 +219,9 @@ def build_face_display(cfg: Settings) -> FaceDisplayProtocol | None:
     try:
         from mousedroid.hardware.display.ssd1306_face_driver import SSD1306FaceDriver
 
+        # Eager probe: catch missing libraries, missing /dev/i2c-N, wrong
+        # address, etc. before the orchestrator's start() is invoked.
+        SSD1306FaceDriver.probe(cfg.face_display)
         _log.info(
             "face_display_real_built",
             i2c_bus=cfg.face_display.i2c_bus,
@@ -219,7 +230,12 @@ def build_face_display(cfg: Settings) -> FaceDisplayProtocol | None:
         return SSD1306FaceDriver(cfg.face_display)
     except Exception:  # pylint: disable=broad-except
         if cfg.face_display.fallback_to_mock_on_error:
-            _log.warning("face_display_falling_back_to_mock", exc_info=True)
+            _log.warning(
+                "face_display_falling_back_to_mock",
+                i2c_bus=cfg.face_display.i2c_bus,
+                i2c_address=cfg.face_display.i2c_address,
+                exc_info=True,
+            )
             from mousedroid.hardware.display.mock_face_driver import MockFaceDriver
 
             return MockFaceDriver(cfg.face_display)

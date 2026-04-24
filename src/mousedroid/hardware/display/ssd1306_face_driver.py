@@ -62,6 +62,35 @@ class SSD1306FaceDriver:
         """Whether the device has been initialised."""
         return self._started
 
+    @classmethod
+    def probe(cls, cfg: FaceDisplayConfig) -> None:
+        """Eagerly probe the configured I²C bus + address.
+
+        Used by the factory to surface missing libraries, missing
+        ``/dev/i2c-N`` device nodes, and dead panels before the orchestrator
+        starts. Raises the original :class:`ImportError` / :class:`OSError`
+        when the probe cannot be completed; the factory then decides whether
+        to fall back to the mock based on
+        :attr:`FaceDisplayConfig.fallback_to_mock_on_error`.
+
+        Args:
+            cfg: Validated face-display config.
+        """
+        from smbus2 import SMBus
+
+        _log.debug(
+            "face_display_probe_start",
+            i2c_bus=cfg.i2c_bus,
+            i2c_address=cfg.i2c_address,
+        )
+        with SMBus(cfg.i2c_bus) as bus:
+            bus.read_byte(cfg.i2c_address)
+        _log.debug(
+            "face_display_probe_success",
+            i2c_bus=cfg.i2c_bus,
+            i2c_address=cfg.i2c_address,
+        )
+
     async def start(self) -> None:
         """Probe the I²C bus and initialise the SSD1306 device."""
         await asyncio.to_thread(self._probe_bus)
@@ -144,10 +173,7 @@ class SSD1306FaceDriver:
 
     def _probe_bus(self) -> None:
         """Probe the I²C address; raises ``OSError`` when nothing answers."""
-        from smbus2 import SMBus
-
-        with SMBus(self._cfg.i2c_bus) as bus:
-            bus.read_byte(self._cfg.i2c_address)
+        type(self).probe(self._cfg)
 
     def _init_device(self) -> Any:
         from luma.core.interface.serial import i2c

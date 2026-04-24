@@ -547,10 +547,10 @@ class MouseDroidOrchestrator:
     ) -> None:
         """Drive the face controller from BDI affect + safety state.
 
-        Reads ``CognitiveCore._latest_bdi["affect"]`` (a 2-vector of
-        ``[valence, arousal]``) when available; otherwise reports neutral
-        affect. Idle is inferred from ``action`` magnitude — emergency-stop
-        callers pass ``action=None``.
+        Pulls ``(valence, arousal)`` from
+        :meth:`CognitiveCore.get_latest_affect`, defaulting to neutral when
+        the slow loop has not produced a result yet. Idle is inferred from
+        ``action`` magnitude — emergency-stop callers pass ``action=None``.
 
         Args:
             safety_ctx: Current safety context (provides ``is_emergency``).
@@ -560,13 +560,10 @@ class MouseDroidOrchestrator:
         if self._face_controller is None:
             return
 
-        valence = 0.0
-        arousal = 0.0
         if self._cognitive_core is not None:
-            affect = self._cognitive_core._latest_bdi.get("affect")
-            if isinstance(affect, np.ndarray) and affect.shape == (2,):  # hardcoded-ok
-                valence = float(affect[0])
-                arousal = float(affect[1])
+            valence, arousal = self._cognitive_core.get_latest_affect()
+        else:
+            valence, arousal = 0.0, 0.0
 
         is_idle = action is None or bool(torch.allclose(action, torch.zeros_like(action)))
 
