@@ -38,7 +38,10 @@ def cli_entry() -> None:  # pragma: no cover
     if args.mock_hardware:
         cfg = cfg.model_copy(update={"mock_hardware": True})
 
-    configure_logging(cfg.logging)
+    configure_logging(
+        cfg.logging,
+        robot_id=cfg.gcp.robot_id if cfg.gcp is not None else None,
+    )
     log = get_logger(__name__)
     log.info("mousedroid_starting", platform=str(cfg.platform), mock=cfg.mock_hardware)
 

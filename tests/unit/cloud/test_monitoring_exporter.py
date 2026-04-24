@@ -324,8 +324,10 @@ async def test_start_initialises_client() -> None:
     assert exporter._client is not None
     assert exporter._running is True
     assert exporter._task is not None
+    assert exporter._task in exporter._background_tasks
     # Clean up
     await exporter.stop()
+    assert not exporter._background_tasks
 
 
 @pytest.mark.asyncio

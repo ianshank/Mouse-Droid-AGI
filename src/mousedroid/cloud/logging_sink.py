@@ -40,6 +40,12 @@ class CloudLoggingSink:
         self._min_level = _LEVEL_MAP.get(self._log_cfg.min_level.lower(), logging.INFO)
         self._cloud_logger: Any | None = None
         self._started = False
+        # Bounded counter for failed forwards. Exposed through the
+        # ``forward_failure_count`` property for diagnostic tooling; we
+        # deliberately avoid coupling to MetricsRegistry here because
+        # this module runs inside the structlog processor chain, which
+        # must stay dependency-light.
+        self._forward_failures: int = 0
 
     async def start(self) -> None:
         """Initialise the Cloud Logging client."""
@@ -93,10 +99,20 @@ class CloudLoggingSink:
                 },
             }
             self._cloud_logger.log_struct(entry, severity=method_name.upper())
-        except Exception:  # noqa: S110
-            pass  # Never let Cloud Logging errors propagate to the control loop
+        except Exception:
+            # Never let Cloud Logging errors propagate to the control loop.
+            # Track occurrences instead of silently swallowing so
+            # diagnose tooling can surface a persistent forwarding
+            # outage. The structlog stderr writer is intentionally NOT
+            # invoked here to avoid reentrancy into the processor chain.
+            self._forward_failures += 1
 
         return event_dict
+
+    @property
+    def forward_failure_count(self) -> int:
+        """Total Cloud Logging forward failures since process start."""
+        return self._forward_failures
 
     async def close(self) -> None:
         """Release Cloud Logging resources."""

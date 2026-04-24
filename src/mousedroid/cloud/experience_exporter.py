@@ -27,8 +27,32 @@ import lmdb
 import msgpack
 
 from mousedroid.cloud._auth import resolve_credentials
+from mousedroid.cloud.protocol import GCSBucketProtocol, GCSClientProtocol
+from mousedroid.common.async_utils import cancel_and_drain, spawn_tracked
 from mousedroid.logging.setup import get_logger
 from mousedroid.resilience.circuit_breaker import CircuitBreaker, CircuitOpenError
+
+_TRANSIENT_GCS_EXCEPTIONS: tuple[type[BaseException], ...]
+
+try:
+    from google.api_core.exceptions import (
+        DeadlineExceeded,
+        GoogleAPIError,
+        RetryError,
+        ServiceUnavailable,
+    )
+
+    _TRANSIENT_GCS_EXCEPTIONS = (
+        GoogleAPIError,
+        RetryError,
+        DeadlineExceeded,
+        ServiceUnavailable,
+        TimeoutError,
+        ConnectionError,
+        OSError,
+    )
+except ImportError:  # pragma: no cover - optional cloud dependency
+    _TRANSIENT_GCS_EXCEPTIONS = (TimeoutError, ConnectionError, OSError)
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import ExperienceConfig, GCPConfig
@@ -60,9 +84,10 @@ class CloudExperienceExporter:
         self._compression = self._storage_cfg.compression
 
         self._cb = CircuitBreaker("gcp_storage", gcp_cfg.circuit_breaker)
-        self._gcs_client: object | None = None
-        self._gcs_bucket: object | None = None
+        self._gcs_client: GCSClientProtocol | None = None
+        self._gcs_bucket: GCSBucketProtocol | None = None
         self._task: asyncio.Task[None] | None = None
+        self._background_tasks: set[asyncio.Task[Any]] = set()
         self._running = False
 
     async def start(self) -> None:
@@ -75,9 +100,13 @@ class CloudExperienceExporter:
             credentials=creds,
             project=self._gcp_cfg.project_id,
         )
-        self._gcs_bucket = self._gcs_client.bucket(self._storage_cfg.bucket)  # type: ignore[union-attr]
+        self._gcs_bucket = self._gcs_client.bucket(self._storage_cfg.bucket)
         self._running = True
-        self._task = asyncio.create_task(self._export_loop())
+        self._task = spawn_tracked(
+            self._background_tasks,
+            self._export_loop(),
+            name=self._export_loop.__name__,
+        )
         _log.info(
             "cloud_experience_exporter_started",
             bucket=self._storage_cfg.bucket,
@@ -139,9 +168,13 @@ class CloudExperienceExporter:
         """Stop the export loop and release resources."""
         self._running = False
         if self._task is not None:
-            self._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._task
+            if self._task in self._background_tasks:
+                await cancel_and_drain(self._background_tasks)
+            elif not self._task.done():
+                self._task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._task
+            self._background_tasks.discard(self._task)
             self._task = None
         self._gcs_client = None
         self._gcs_bucket = None
@@ -159,8 +192,10 @@ class CloudExperienceExporter:
                 await self.export_pending()
             except asyncio.CancelledError:
                 break
+            except _TRANSIENT_GCS_EXCEPTIONS:
+                _log.warning("cloud_export_loop_error", transient=True, exc_info=True)
             except Exception:
-                _log.warning("cloud_export_loop_error", exc_info=True)
+                _log.warning("cloud_export_loop_error", transient=False, exc_info=True)
 
     def _build_shard(self, records: list[bytes]) -> bytes:
         """Build a msgpack-encoded shard from raw record bytes.
@@ -222,7 +257,8 @@ class CloudExperienceExporter:
 
             async def _do_upload() -> None:
                 loop = asyncio.get_running_loop()
-                blob = self._gcs_bucket.blob(blob_path)  # type: ignore[union-attr]
+                assert self._gcs_bucket is not None
+                blob = self._gcs_bucket.blob(blob_path)
                 await loop.run_in_executor(None, blob.upload_from_string, data)
 
             await self._cb.call(_do_upload)
@@ -231,8 +267,21 @@ class CloudExperienceExporter:
         except CircuitOpenError:
             _log.debug("cloud_storage_circuit_open")
             return False
+        except _TRANSIENT_GCS_EXCEPTIONS:
+            _log.warning(
+                "cloud_shard_upload_failed",
+                path=blob_path,
+                transient=True,
+                exc_info=True,
+            )
+            return False
         except Exception:
-            _log.warning("cloud_shard_upload_failed", path=blob_path, exc_info=True)
+            _log.warning(
+                "cloud_shard_upload_failed",
+                path=blob_path,
+                transient=False,
+                exc_info=True,
+            )
             return False
 
     def _hwm_path(self) -> Path:

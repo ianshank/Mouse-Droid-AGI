@@ -13,7 +13,30 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
+from mousedroid.common.async_utils import cancel_and_drain, spawn_tracked
 from mousedroid.logging.setup import get_logger
+
+_TRANSIENT_MONITORING_EXCEPTIONS: tuple[type[BaseException], ...]
+
+try:
+    from google.api_core.exceptions import (
+        DeadlineExceeded,
+        GoogleAPIError,
+        RetryError,
+        ServiceUnavailable,
+    )
+
+    _TRANSIENT_MONITORING_EXCEPTIONS = (
+        GoogleAPIError,
+        RetryError,
+        DeadlineExceeded,
+        ServiceUnavailable,
+        TimeoutError,
+        ConnectionError,
+        OSError,
+    )
+except ImportError:  # pragma: no cover - optional cloud dependency
+    _TRANSIENT_MONITORING_EXCEPTIONS = (TimeoutError, ConnectionError, OSError)
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import GCPConfig
@@ -37,10 +60,21 @@ class CloudMetricsExporter:
         self._project_id = cfg.project_id
         self._prefix = self._mon_cfg.metric_prefix
         self._interval_s = self._mon_cfg.export_interval_s
+        # Derive the generic_node namespace label from the metric prefix
+        # tail segment so it stays in lock-step with whatever namespace
+        # the operator configured (e.g. "custom.googleapis.com/foo" ->
+        # "foo"). Fallback to robot_id when the prefix is empty so the
+        # Cloud Monitoring write never uses a hardcoded string.
+        self._resource_namespace = self._prefix.rstrip("/").rsplit("/", 1)[-1] or cfg.robot_id
+        # Operator-supplied labels (env, region, fleet, …) are applied
+        # on top of the required generic_node labels; only non-reserved
+        # keys are respected.
+        self._extra_labels: dict[str, str] = dict(cfg.metrics_labels)
 
         self._client: Any | None = None
         self._project_path: str = ""
         self._task: asyncio.Task[None] | None = None
+        self._background_tasks: set[asyncio.Task[Any]] = set()
         self._running = False
 
     async def start(self) -> None:
@@ -53,7 +87,11 @@ class CloudMetricsExporter:
         self._client = monitoring_v3.MetricServiceClient(credentials=creds)
         self._project_path = f"projects/{self._project_id}"
         self._running = True
-        self._task = asyncio.create_task(self._export_loop())
+        self._task = spawn_tracked(
+            self._background_tasks,
+            self._export_loop(),
+            name=self._export_loop.__name__,
+        )
         _log.info(
             "cloud_metrics_exporter_started",
             prefix=self._prefix,
@@ -82,8 +120,10 @@ class CloudMetricsExporter:
                 metrics,
             )
             _log.debug("cloud_metrics_exported", count=len(metrics))
+        except _TRANSIENT_MONITORING_EXCEPTIONS:
+            _log.warning("cloud_metrics_export_failed", transient=True, exc_info=True)
         except Exception:
-            _log.warning("cloud_metrics_export_failed", exc_info=True)
+            _log.warning("cloud_metrics_export_failed", transient=False, exc_info=True)
 
     def _parse_gauge_metrics(self) -> dict[str, float]:
         """Parse gauge values from the Prometheus text exposition output.
@@ -126,14 +166,24 @@ class CloudMetricsExporter:
         now_ts.FromSeconds(int(time.time()))
 
         series_list: list[Any] = []
+        # Reserved generic_node resource-label keys that operator labels
+        # must never override, to keep the Cloud Monitoring schema valid.
+        reserved_resource_keys = frozenset({"project_id", "location", "namespace", "node_id"})
         for name, value in metrics.items():
             series = types.TimeSeries()
             series.metric.type = f"{self._prefix}/{name}"
             series.resource.type = "generic_node"
             series.resource.labels["project_id"] = self._project_id
             series.resource.labels["location"] = "global"
-            series.resource.labels["namespace"] = "mousedroid"
+            series.resource.labels["namespace"] = self._resource_namespace
             series.resource.labels["node_id"] = self._cfg.robot_id
+            # Operator-supplied metric_labels land on the metric (not
+            # resource) to avoid colliding with generic_node required
+            # labels. Reserved keys are filtered out defensively.
+            for label_key, label_value in self._extra_labels.items():
+                if label_key in reserved_resource_keys:
+                    continue
+                series.metric.labels[label_key] = label_value
 
             point = types.Point()
             point.interval.end_time = now_ts
@@ -148,9 +198,13 @@ class CloudMetricsExporter:
         """Stop the export loop and release resources."""
         self._running = False
         if self._task is not None:
-            self._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._task
+            if self._task in self._background_tasks:
+                await cancel_and_drain(self._background_tasks)
+            elif not self._task.done():
+                self._task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._task
+            self._background_tasks.discard(self._task)
             self._task = None
         self._client = None
         _log.info("cloud_metrics_exporter_stopped")
@@ -163,5 +217,7 @@ class CloudMetricsExporter:
                 await self.export_once()
             except asyncio.CancelledError:
                 break
+            except _TRANSIENT_MONITORING_EXCEPTIONS:
+                _log.warning("cloud_metrics_loop_error", transient=True, exc_info=True)
             except Exception:
-                _log.warning("cloud_metrics_loop_error", exc_info=True)
+                _log.warning("cloud_metrics_loop_error", transient=False, exc_info=True)

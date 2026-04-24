@@ -205,8 +205,10 @@ async def test_start_initialises_firestore_client() -> None:
     assert sync._collection_ref is not None
     assert sync._running is True
     assert sync._task is not None
+    assert sync._task in sync._background_tasks
     # Clean up
     await sync.close()
+    assert not sync._background_tasks
 
 
 @pytest.mark.asyncio

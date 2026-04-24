@@ -711,6 +711,15 @@ class MetricsConfig(BaseModel):
     track_llm_latency: bool = Field(True, description="Expose LLM mission parse latency")
     track_curiosity: bool = Field(True, description="Expose curiosity intrinsic reward gauge")
     track_sensor_recovery: bool = Field(True, description="Expose sensor recovery counter")
+    track_cloud: bool = Field(
+        True,
+        description=(
+            "Expose cloud digital twin metrics: publish counters, publish "
+            "latency histogram, circuit breaker state, and experience "
+            "export backlog gauges. Emitted only when a cloud sink is "
+            "actually wired into the orchestrator — safe to leave on."
+        ),
+    )
     loop_latency_buckets_ms: tuple[float, ...] = Field(
         (1.0, 2.5, 5.0, 10.0, 20.0, 33.0, 50.0, 100.0, 200.0, float("inf")),
         description="Histogram bucket boundaries for control-loop latency (ms)",
@@ -1386,6 +1395,52 @@ class GCPConfig(BaseModel):
         ),
         description="Retry config for cloud API calls",
     )
+    metrics_labels: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Deployment labels (e.g. env, region, fleet) attached to cloud "
+            "exports. Keys/values must be non-empty strings. Backwards "
+            "compatible: empty dict by default."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _validate_required_cloud_fields(self) -> GCPConfig:
+        """Enforce non-empty identifiers when the digital twin is enabled.
+
+        ``GCPConfig`` itself is optional on :class:`Settings`; when present
+        it must identify the project, robot, and every destination that
+        downstream sinks will target so they never silently publish to
+        empty topic / bucket names.
+
+        Returns:
+            The validated instance (unchanged when valid).
+
+        Raises:
+            ValueError: If any required identifier is empty / whitespace.
+        """
+        required: dict[str, str] = {
+            "project_id": self.project_id,
+            "robot_id": self.robot_id,
+            "pubsub.telemetry_topic": self.pubsub.telemetry_topic,
+            "pubsub.experience_topic": self.pubsub.experience_topic,
+            "storage.bucket": self.storage.bucket,
+        }
+        empty = [key for key, value in required.items() if not value or not value.strip()]
+        if empty:
+            raise ValueError("GCPConfig requires non-empty values for: " + ", ".join(sorted(empty)))
+
+        for label_key, label_value in self.metrics_labels.items():
+            if not label_key or not label_key.strip():
+                raise ValueError("GCPConfig.metrics_labels keys must be non-empty")
+            if not isinstance(label_value, str) or not label_value.strip():
+                raise ValueError(
+                    f"GCPConfig.metrics_labels[{label_key!r}] must be a non-empty string"
+                )
+
+        if self.pubsub.telemetry_topic == self.pubsub.experience_topic:
+            raise ValueError("GCPConfig.pubsub.telemetry_topic and experience_topic must differ")
+        return self
 
 
 # ---------------------------------------------------------------------------

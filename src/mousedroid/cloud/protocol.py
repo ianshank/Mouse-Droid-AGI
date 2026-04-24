@@ -12,6 +12,33 @@ from mousedroid.experience.protocol import ExperienceProtocol
 
 
 @runtime_checkable
+class GCSBlobProtocol(Protocol):
+    """Structural protocol for the subset of GCS blob APIs we use."""
+
+    def upload_from_string(self, data: bytes) -> object:
+        """Upload raw bytes to the object store."""
+        ...
+
+
+@runtime_checkable
+class GCSBucketProtocol(Protocol):
+    """Structural protocol for the subset of GCS bucket APIs we use."""
+
+    def blob(self, blob_name: str) -> GCSBlobProtocol:
+        """Return a blob handle for ``blob_name``."""
+        ...
+
+
+@runtime_checkable
+class GCSClientProtocol(Protocol):
+    """Structural protocol for the subset of GCS client APIs we use."""
+
+    def bucket(self, bucket_name: str) -> GCSBucketProtocol:
+        """Return a bucket handle for ``bucket_name``."""
+        ...
+
+
+@runtime_checkable
 class CloudTelemetrySinkProtocol(Protocol):
     """Async sink that publishes telemetry frames and experience records to the cloud."""
 

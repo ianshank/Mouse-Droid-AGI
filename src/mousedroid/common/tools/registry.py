@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
+    from mousedroid.config.schema import GCPConfig
     from mousedroid.llm_gateway.protocol import GoalVector, LLMGatewayProtocol
     from mousedroid.telemetry.metrics import MetricsRegistry
 
@@ -134,6 +136,86 @@ async def _export_experience(path: str = "") -> dict[str, str]:
         Export status.
     """
     return {"status": "exported", "path": path}
+
+
+async def _diagnose_cloud(gcp_cfg: GCPConfig | None = None) -> dict[str, object]:
+    """Validate GCP configuration, auth, SDK imports, and Pub/Sub publish path.
+
+    Pub/Sub does not expose a dry-run publish API, so this tool performs a
+    minimal live publish against the configured telemetry topic when cloud is
+    enabled. The payload is intentionally tiny and carries a diagnostic marker.
+    """
+    if gcp_cfg is None:
+        return {"status": "cloud_disabled"}
+
+    from mousedroid.cloud._auth import resolve_credentials
+
+    try:
+        pubsub_module = importlib.import_module("google.cloud.pubsub_v1")
+        importlib.import_module("google.cloud.storage")
+    except ImportError as exc:
+        _log.warning("tool_diagnose_cloud_dependency_missing", error=str(exc))
+        return {
+            "status": "missing_dependency",
+            "error": str(exc),
+        }
+
+    try:
+        credentials, effective_project = resolve_credentials(gcp_cfg)
+    except (FileNotFoundError, ImportError, RuntimeError, ValueError) as exc:
+        _log.warning("tool_diagnose_cloud_credentials_failed", error=str(exc))
+        return {
+            "status": "credentials_error",
+            "error": str(exc),
+        }
+
+    publisher_api = cast(Any, pubsub_module)
+    publisher_factory = cast(Callable[..., Any], publisher_api.PublisherClient)
+    publisher = publisher_factory(credentials=credentials)
+    topic_path = publisher.topic_path(gcp_cfg.project_id, gcp_cfg.pubsub.telemetry_topic)
+    payload = f"diagnose_cloud:{gcp_cfg.robot_id}".encode()
+
+    try:
+        loop = asyncio.get_running_loop()
+        future = publisher.publish(
+            topic_path,
+            data=payload,
+            type="diagnostic",
+            source_id=gcp_cfg.robot_id,
+        )
+        await loop.run_in_executor(None, future.result, gcp_cfg.pubsub.publish_timeout_s)
+    except TimeoutError as exc:
+        _log.warning("tool_diagnose_cloud_publish_timeout", topic=topic_path, error=str(exc))
+        return {
+            "status": "publish_timeout",
+            "topic": topic_path,
+            "project_id": effective_project,
+            "error": str(exc),
+        }
+    except Exception as exc:  # pylint: disable=broad-except
+        _log.warning(
+            "tool_diagnose_cloud_publish_failed",
+            topic=topic_path,
+            error=str(exc),
+        )
+        return {
+            "status": "publish_error",
+            "topic": topic_path,
+            "project_id": effective_project,
+            "error": str(exc),
+        }
+
+    _log.info(
+        "tool_diagnose_cloud_ok",
+        topic=topic_path,
+        project_id=effective_project,
+    )
+    return {
+        "status": "ok",
+        "project_id": effective_project,
+        "topic": topic_path,
+        "payload_bytes": len(payload),
+    }
 
 
 def _goal_vector_to_dict(goal: GoalVector) -> dict[str, float]:
@@ -293,11 +375,12 @@ async def _lidar_diagnostics() -> dict[str, str]:
 def create_default_registry(
     llm_gateway: LLMGatewayProtocol | None = None,
     metrics_registry: MetricsRegistry | None = None,
+    gcp_cfg: GCPConfig | None = None,
 ) -> ToolRegistry:
     """Create a ToolRegistry pre-populated with built-in tools.
 
     Returns:
-        Registry with all 10 default tools registered.
+        Registry with all built-in tools registered.
     """
     registry = ToolRegistry()
 
@@ -308,6 +391,9 @@ def create_default_registry(
             metrics_registry=metrics_registry,
         )
 
+    async def diagnose_cloud() -> dict[str, object]:
+        return await _diagnose_cloud(gcp_cfg)
+
     tools = [
         ToolSpec("health_check", "Run system health check", _health_check),
         ToolSpec("calibrate_ultrasonic", "Calibrate ultrasonic sensor", _calibrate_ultrasonic),
@@ -315,6 +401,11 @@ def create_default_registry(
         ToolSpec("tensorrt_compile", "Compile TensorRT models", _tensorrt_compile),
         ToolSpec("benchmark_latency", "Run latency benchmark", _benchmark_latency),
         ToolSpec("export_experience", "Export experience data", _export_experience),
+        ToolSpec(
+            "diagnose_cloud",
+            "Validate GCP config and telemetry publish path",
+            diagnose_cloud,
+        ),
         ToolSpec("translate_nl_mission", "Translate NL mission", translate_nl_mission),
         ToolSpec("system_info", "Get system information", _system_info),
         ToolSpec("mic_diagnostics", "Run USB microphone diagnostics", _mic_diagnostics),
