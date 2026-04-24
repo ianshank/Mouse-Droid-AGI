@@ -28,6 +28,8 @@ class EWCAgent:
     def __init__(self, cfg: LearningConfig, model: nn.Module) -> None:
         self._lambda = cfg.ewc_lambda
         self._fisher_samples = cfg.ewc_fisher_samples
+        self._fisher_batch_size = cfg.ewc_fisher_batch_size
+        self._fallback_input_dim = cfg.ewc_fallback_input_dim
         self._model = model
 
         # Snapshots saved after consolidation.
@@ -38,6 +40,7 @@ class EWCAgent:
             "ewc_init",
             ewc_lambda=self._lambda,
             fisher_samples=self._fisher_samples,
+            fisher_batch_size=self._fisher_batch_size,
         )
 
     def _named_parameters(self) -> Iterator[tuple[str, nn.Parameter]]:
@@ -75,6 +78,12 @@ class EWCAgent:
         self._model.eval()
         sample_iter = iter(data_loader) if data_loader is not None else None
         input_dim = self._infer_input_dim()
+        _log.debug(
+            "ewc_consolidation_start",
+            fisher_samples=self._fisher_samples,
+            input_dim=input_dim,
+            using_data_loader=sample_iter is not None,
+        )
 
         for _ in range(self._fisher_samples):
             self._model.zero_grad()
@@ -85,7 +94,7 @@ class EWCAgent:
                 except StopIteration:
                     break
             else:
-                x = torch.randn(1, input_dim)
+                x = torch.randn(self._fisher_batch_size, input_dim)
 
             output = self._model(x)
             log_prob = torch.log_softmax(output, dim=-1)
@@ -112,8 +121,8 @@ class EWCAgent:
         for module in self._model.modules():
             if isinstance(module, nn.Linear):
                 return module.in_features
-        _log.warning("ewc_input_dim_fallback", fallback=1)
-        return 1
+        _log.warning("ewc_input_dim_fallback", fallback=self._fallback_input_dim)
+        return self._fallback_input_dim
 
     def compute_penalty(self) -> Tensor:
         """Compute the EWC regularization penalty.
