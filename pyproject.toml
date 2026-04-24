@@ -27,6 +27,12 @@ hardware = [
     "pyserial>=3.5",
     "picamera2>=0.3",
     "pyaudio>=0.2.13",
+    # SSD1306 OLED face display (I²C). Pillow is also listed in `telemetry`
+    # but is intentionally duplicated here so bare-Jetson hardware deploys
+    # don't need the telemetry stack just to drive the face panel.
+    "luma.oled>=3.12",
+    "Pillow>=10.0",
+    "smbus2>=0.4",
 ]
 audio = [
     "pyaudio>=0.2.13",
@@ -183,6 +189,7 @@ omit = [
     "*/hardware/camera/imx500.py",
     "*/hardware/lidar/ld19_driver.py",
     "*/arm/hardware/so_arm100_driver.py",
+    "*/hardware/display/ssd1306_face_driver.py",
 ]
 
 [tool.coverage.report]

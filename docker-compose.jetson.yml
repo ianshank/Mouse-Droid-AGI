@@ -69,10 +69,13 @@ services:
       - ${MOUSEDROID_LIDAR_DEV:-/dev/ttyUSB1}:${MOUSEDROID_LIDAR_DEV:-/dev/ttyUSB1}
       # Wonrabai USB Sound Card — ALSA audio in + out (optional)
       - /dev/snd:/dev/snd
+      # SSD1306 OLED face display on header I²C bus (optional — omit if no panel)
+      - ${MOUSEDROID_FACE_DISPLAY_DEV:-/dev/i2c-7}:${MOUSEDROID_FACE_DISPLAY_DEV:-/dev/i2c-7}
     group_add:
       - audio
       - video
       - dialout
+      - i2c
       # Some JetPack images do not define a gpio Unix group; privileged mode
       # plus explicit /dev/gpiochip* passthrough is the actual access path.
 

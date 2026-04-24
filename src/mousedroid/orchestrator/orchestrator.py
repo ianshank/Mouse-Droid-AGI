@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from mousedroid.llm_gateway.mission_parser import MissionParserProtocol
     from mousedroid.llm_gateway.protocol import GoalVector, LLMGatewayProtocol
     from mousedroid.memory.tier import MemoryTier
+    from mousedroid.orchestrator.face_controller import FaceController
     from mousedroid.safety.context import SafetyContext
     from mousedroid.safety.protocol import SafetyMonitorProtocol
     from mousedroid.sensing.manager import SensorManager
@@ -79,6 +80,7 @@ class MouseDroidOrchestrator:
         cloud_sink: CloudTelemetrySinkProtocol | None = None,
         cloud_experience_exporter: CloudExperienceExporterProtocol | None = None,
         tool_registry: Any | None = None,
+        face_controller: FaceController | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -103,6 +105,9 @@ class MouseDroidOrchestrator:
             cloud_sink: Optional GCP Pub/Sub telemetry sink for cloud streaming.
             cloud_experience_exporter: Optional GCS experience batch exporter.
             tool_registry: Optional tool registry for runtime tool dispatch.
+            face_controller: Optional MSE-6 face-display controller. When
+                supplied, the orchestrator drives it from the BDI affect
+                signal and ``SafetyContext.is_emergency`` once per tick.
         """
         if not agents:
             msg = "At least one agent is required"
@@ -127,6 +132,7 @@ class MouseDroidOrchestrator:
         self._cloud_sink = cloud_sink
         self._cloud_experience_exporter = cloud_experience_exporter
         self._tool_registry = tool_registry
+        self._face_controller = face_controller
         self._cfg = cfg
         self._running = False
         self._tick_count: int = 0
@@ -157,6 +163,8 @@ class MouseDroidOrchestrator:
         if self._voice_engine is not None:
             await self._voice_engine.start()
             await self._voice_lifecycle("startup")
+        if self._face_controller is not None:
+            await self._face_controller.start()
         if self._experience_logger is not None:
             self._experience_logger.open()
         if self._cloud_sink is not None:
@@ -184,6 +192,8 @@ class MouseDroidOrchestrator:
             await self._cloud_sink.close()
         if self._experience_logger is not None:
             self._experience_logger.close()
+        if self._face_controller is not None:
+            await self._face_controller.stop()
         if self._voice_engine is not None:
             await self._voice_lifecycle("shutdown")
             await self._voice_engine.stop()
@@ -222,6 +232,7 @@ class MouseDroidOrchestrator:
             if safety_ctx.is_emergency:
                 await self._esp32.emergency_stop()
                 await self._voice_event("emergency_stop", observation)
+                await self._update_face(safety_ctx=safety_ctx, action=None)
                 _log.warning("emergency_stop_triggered")
                 self._tick_count += 1
                 await self._publish_telemetry(observation, safety_ctx, loop_time_ms)
@@ -233,6 +244,7 @@ class MouseDroidOrchestrator:
         await self._execute_action(action)
         self._log_experience(observation, action)
         await self._voice_observe(observation, safety_ctx)
+        await self._update_face(safety_ctx=safety_ctx, action=action)
 
         self._tick_count += 1
         await self._publish_telemetry(observation, safety_ctx, loop_time_ms)
@@ -526,6 +538,47 @@ class MouseDroidOrchestrator:
                 observation,
                 gpu_temp_c=safety_ctx.gpu_temp_c,
             )
+
+    async def _update_face(
+        self,
+        *,
+        safety_ctx: SafetyContext,
+        action: torch.Tensor | None,
+    ) -> None:
+        """Drive the face controller from BDI affect + safety state.
+
+        Reads ``CognitiveCore._latest_bdi["affect"]`` (a 2-vector of
+        ``[valence, arousal]``) when available; otherwise reports neutral
+        affect. Idle is inferred from ``action`` magnitude — emergency-stop
+        callers pass ``action=None``.
+
+        Args:
+            safety_ctx: Current safety context (provides ``is_emergency``).
+            action: Most recent commanded action, or ``None`` in the
+                emergency path.
+        """
+        if self._face_controller is None:
+            return
+
+        valence = 0.0
+        arousal = 0.0
+        if self._cognitive_core is not None:
+            affect = self._cognitive_core._latest_bdi.get("affect")
+            if isinstance(affect, np.ndarray) and affect.shape == (2,):  # hardcoded-ok
+                valence = float(affect[0])
+                arousal = float(affect[1])
+
+        is_idle = action is None or bool(torch.allclose(action, torch.zeros_like(action)))
+
+        try:
+            await self._face_controller.update(
+                valence=valence,
+                arousal=arousal,
+                is_emergency=safety_ctx.is_emergency,
+                is_idle=is_idle,
+            )
+        except Exception:  # pylint: disable=broad-except
+            _log.warning("face_controller_update_failed", exc_info=True)
 
     async def _try_sensor_recovery(self, safety_ctx: SafetyContext) -> bool:
         """Attempt sensor recovery if the emergency is due to sensor degradation.

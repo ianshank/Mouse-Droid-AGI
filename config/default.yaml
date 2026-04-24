@@ -233,6 +233,31 @@ telemetry:
 #   n_sectors: 36
 #   feature_dim: 36
 
+# SSD1306 128x64 I²C OLED face display (Jetson Orin Nano header I²C bus 7).
+# Renders MSE-6 facial expressions from the BDI affect signal +
+# SafetyContext.is_emergency. Disabled by default to preserve back-compat
+# with existing deployments. To enable, uncomment and set ``enabled: true``.
+# face_display:
+#   enabled: false
+#   i2c_bus: 7
+#   i2c_address: 0x3C
+#   width: 128
+#   height: 64
+#   rotate: 0
+#   refresh_hz: 10.0
+#   boot_message: "MSE-6 online"
+#   idle_blink_interval_s: 4.0
+#   blink_close_duration_s: 0.15
+#   min_dwell_s: 0.6
+#   fallback_to_mock_on_error: true
+#   valence_happy_min: 0.35
+#   valence_sad_max: -0.35
+#   arousal_alert_min: 0.55
+#   arousal_sleepy_max: -0.45
+#   angry_valence_max: -0.25
+#   angry_arousal_min: 0.45
+#   idle_sleepy_after_s: 20.0
+
 # Hailo-8 neural accelerator (M.2 PCIe, 26 TOPS INT8)
 # Offloads perception (YOLO, feature extraction) to dedicated silicon,
 # freeing the Jetson GPU for reasoning (RSSM, MCTS, SAC, LLM).
