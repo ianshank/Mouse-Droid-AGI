@@ -46,10 +46,21 @@ class EWCAgent:
             if param.requires_grad:
                 yield name, param
 
-    def consolidate(self) -> None:
+    def consolidate(self, data_loader: Iterator[Tensor] | None = None) -> None:
         """Snapshot current parameters and estimate Fisher information.
 
+        Estimates the diagonal Fisher by computing squared gradients of
+        the log-likelihood over *data_loader* samples.  When no loader is
+        provided, random inputs matching the first layer's in-features are
+        generated for ``ewc_fisher_samples`` iterations — this keeps the
+        API backwards-compatible while producing meaningful (non-zero)
+        Fisher estimates.
+
         Must be called after training on a task, before moving to the next.
+
+        Args:
+            data_loader: Optional iterator yielding input tensors for Fisher
+                estimation.  When ``None``, random inputs are generated.
         """
         # Snapshot parameters.
         self._star_params = {
@@ -62,11 +73,26 @@ class EWCAgent:
         }
 
         self._model.eval()
+        sample_iter = iter(data_loader) if data_loader is not None else None
+        input_dim = self._infer_input_dim()
+
         for _ in range(self._fisher_samples):
             self._model.zero_grad()
-            # Approximate Fisher with random labels — the caller should
-            # override this by passing real data through the model first.
-            # Here we just accumulate squared gradients of parameters.
+
+            if sample_iter is not None:
+                try:
+                    x = next(sample_iter)
+                except StopIteration:
+                    break
+            else:
+                x = torch.randn(1, input_dim)
+
+            output = self._model(x)
+            log_prob = torch.log_softmax(output, dim=-1)
+            target_idx = log_prob.argmax(dim=-1)
+            loss = -log_prob.gather(1, target_idx.unsqueeze(-1)).mean()
+            loss.backward()  # type: ignore[no-untyped-call]
+
             for name, param in self._named_parameters():
                 if param.grad is not None:
                     fisher_acc[name] += param.grad.detach().pow(2)
@@ -76,6 +102,18 @@ class EWCAgent:
 
         self._fisher = fisher_acc
         _log.info("ewc_consolidated", n_params=len(self._fisher))
+
+    def _infer_input_dim(self) -> int:
+        """Infer input dimension from the first Linear layer of the model.
+
+        Returns:
+            Number of input features for the first layer.
+        """
+        for module in self._model.modules():
+            if isinstance(module, nn.Linear):
+                return module.in_features
+        _log.warning("ewc_input_dim_fallback", fallback=1)
+        return 1
 
     def compute_penalty(self) -> Tensor:
         """Compute the EWC regularization penalty.

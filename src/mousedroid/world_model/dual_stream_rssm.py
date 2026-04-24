@@ -178,6 +178,7 @@ class DualStreamRSSM(nn.Module):
     # Public API (WorldModelProtocol)
     # ------------------------------------------------------------------
 
+    @torch.no_grad()
     def observe_step(
         self,
         observation: ObservationProtocol,

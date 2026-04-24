@@ -3,10 +3,14 @@
 Communicates with the SO-ARM100 robot arm over serial UART.
 Joint commands are sent as position targets; joint states are
 read back from the controller.
+
+All blocking serial I/O is delegated to ``asyncio.to_thread`` to
+avoid blocking the event loop.
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -25,6 +29,9 @@ class SoArm100Driver:
 
     Communicates over UART to command joint positions and
     read joint states from the SO-ARM100 servo controller.
+
+    All blocking serial I/O is delegated to :func:`asyncio.to_thread`
+    to comply with the asyncio-everywhere invariant.
 
     Args:
         cfg: Arm hardware configuration.
@@ -49,16 +56,26 @@ class SoArm100Driver:
             dof=self._dof,
         )
 
+    def _open_serial(self) -> Any:  # pragma: no cover
+        """Open the serial port (blocking — called via ``to_thread``)."""
+        import serial
+
+        return serial.Serial(
+            self._serial_port,
+            self._baud,
+            timeout=self._timeout,
+        )
+
+    def _close_serial(self) -> None:  # pragma: no cover
+        """Close the serial port (blocking — called via ``to_thread``)."""
+        if self._serial is not None:
+            self._serial.close()
+            self._serial = None
+
     async def start(self) -> None:
         """Open serial connection to arm controller."""
         try:
-            import serial
-
-            self._serial = serial.Serial(
-                self._serial_port,
-                self._baud,
-                timeout=self._timeout,
-            )
+            self._serial = await asyncio.to_thread(self._open_serial)
             _log.info("so_arm100_connected", port=self._serial_port)
         except ImportError:
             _log.error("pyserial_not_installed")
@@ -70,8 +87,7 @@ class SoArm100Driver:
     async def stop(self) -> None:
         """Close serial connection."""
         if self._serial is not None:
-            self._serial.close()
-            self._serial = None
+            await asyncio.to_thread(self._close_serial)
             _log.info("so_arm100_disconnected")
 
     async def get_joint_states(self) -> NDArray[np.float64]:
@@ -87,8 +103,6 @@ class SoArm100Driver:
             msg = "Serial connection not open. Call start() first."
             raise RuntimeError(msg)
 
-        # Send read command and parse response
-        # Protocol: <0x55><0x55><servo_count><cmd_read>...
         _log.debug("reading_joint_states")
         # Placeholder — real protocol implementation depends on SO-ARM100 firmware
         return np.zeros(self._dof, dtype=np.float64)

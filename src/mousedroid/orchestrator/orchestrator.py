@@ -565,7 +565,7 @@ class MouseDroidOrchestrator:
                 await asyncio.sleep(self._cfg.safety.sensor_recovery_delay_s)
 
         _log.error("sensor_recovery_exhausted", attempts=max_attempts)
-        return True  # Recovery was attempted even though it failed
+        return False
 
     def _log_experience(
         self,
