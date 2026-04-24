@@ -31,6 +31,12 @@ class TestScriptFilesExist:
     def test_ci_sh_exists(self) -> None:
         assert (_SCRIPTS / "ci.sh").is_file()
 
+    def test_check_no_hardcoded_values_py_exists(self) -> None:
+        assert (_SCRIPTS / "check_no_hardcoded_values.py").is_file()
+
+    def test_check_settings_identity_py_exists(self) -> None:
+        assert (_SCRIPTS / "check_settings_identity.py").is_file()
+
     def test_deploy_jetson_sh_exists(self) -> None:
         assert (_SCRIPTS / "deploy_jetson.sh").is_file()
 
@@ -83,6 +89,12 @@ class TestCiSh:
 
     def test_health_check_step_present(self, content: str) -> None:
         assert "mousedroid.main --health-check" in content
+
+    def test_hardcoded_value_gate_present(self, content: str) -> None:
+        assert "check_no_hardcoded_values.py" in content
+
+    def test_settings_identity_gate_present(self, content: str) -> None:
+        assert "check_settings_identity.py" in content
 
 
 class TestDeployJetsonSh:

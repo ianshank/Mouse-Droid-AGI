@@ -25,7 +25,87 @@ else:
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from mousedroid.config.migration import (
+    apply_aliases,
+    migrate_group_sections,
+    migrate_section_aliases,
+    migrate_section_transforms,
+    milliseconds_to_seconds,
+    seconds_to_hz,
+    seconds_to_milliseconds,
+)
 from mousedroid.constants import DEFAULT_UCB_CANDIDATES, DEFAULT_UCB_TARGET_MS
+
+_TOP_LEVEL_SECTION_ALIASES: dict[str, str] = {
+    "arm_hardware": "arm",
+    "arm_simulation": "arm_sim",
+    "arm_vision": "arm_perception",
+    "arm_symbolic_planning": "arm_planning",
+    "arm_rl_training": "arm_training",
+    "arm_curriculum_learning": "arm_curriculum",
+    "arm_tasks": "arm_task",
+}
+
+_ROBOT_ARM_GROUP_SECTION_ALIASES: dict[str, str] = {
+    "arm": "arm",
+    "hardware": "arm",
+    "arm_sim": "arm_sim",
+    "sim": "arm_sim",
+    "arm_perception": "arm_perception",
+    "perception": "arm_perception",
+    "arm_planning": "arm_planning",
+    "planning": "arm_planning",
+    "arm_training": "arm_training",
+    "training": "arm_training",
+    "arm_curriculum": "arm_curriculum",
+    "curriculum": "arm_curriculum",
+    "arm_task": "arm_task",
+    "task": "arm_task",
+}
+
+_SECTION_FIELD_ALIASES: dict[str, dict[str, str]] = {
+    "safety": {
+        "max_loop_time": "max_loop_time_ms",
+        "min_clearance_m": "min_forward_clearance_m",
+    },
+    "health": {
+        "gpu_warn_temp_c": "gpu_temp_warn_c",
+        "gpu_critical_temp_c": "gpu_temp_critical_c",
+    },
+    "camera": {
+        "width": "resolution_width",
+        "height": "resolution_height",
+    },
+    "esp32": {
+        "baud_rate": "serial_baud",
+        "timeout_s": "command_timeout_s",
+    },
+    "telemetry": {
+        "ws_endpoint": "ws_path",
+        "websocket_path": "ws_path",
+        "api_base": "api_prefix",
+        "api_base_path": "api_prefix",
+        "publish_rate_hz": "publish_hz",
+        "telemetry_rate_hz": "publish_hz",
+        "max_ws_clients": "max_clients",
+        "websocket_queue_size": "queue_size",
+        "bind_host": "host",
+        "bind_port": "port",
+    },
+}
+
+_SECTION_FIELD_TRANSFORMS = {
+    "loop": {
+        "tick_timeout_ms": ("tick_timeout_s", milliseconds_to_seconds),
+        "watchdog_interval_ms": ("watchdog_interval_s", milliseconds_to_seconds),
+    },
+    "safety": {
+        "max_loop_time_s": ("max_loop_time_ms", seconds_to_milliseconds),
+    },
+    "telemetry": {
+        "publish_interval_s": ("publish_hz", seconds_to_hz),
+    },
+}
 
 
 def _settings_default_factory(factory: Any) -> Any:
@@ -1981,6 +2061,32 @@ class Settings(BaseSettings):
         None,
         description="Arm task config (Tower of Hanoi / laundry sorting params)",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_fields(cls, data: Any) -> Any:
+        """Migrate legacy config keys to current schema keys.
+
+        This keeps older YAML files loadable while allowing internal field
+        names to evolve. Canonical keys always take precedence when both are
+        provided.
+        """
+        if not isinstance(data, dict):
+            return data
+
+        migrated = dict(data)
+
+        apply_aliases(migrated, _TOP_LEVEL_SECTION_ALIASES)
+        migrate_group_sections(migrated, "robot_arm", _ROBOT_ARM_GROUP_SECTION_ALIASES)
+        migrate_section_aliases(migrated, _SECTION_FIELD_ALIASES)
+        migrate_section_transforms(migrated, _SECTION_FIELD_TRANSFORMS)
+
+        for legacy_key in _TOP_LEVEL_SECTION_ALIASES:
+            migrated.pop(legacy_key, None)
+        if isinstance(migrated.get("robot_arm"), dict):
+            migrated.pop("robot_arm", None)
+
+        return migrated
 
     @model_validator(mode="before")
     @classmethod

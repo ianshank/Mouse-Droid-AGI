@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — CI Determinism and Config Compatibility Hardening
+
+- **`scripts/check_settings_identity.py`** — pre-test guard that validates canonical
+  `mousedroid.config.schema.Settings` identity before executing pytest stages
+- **`tests/unit/test_config_migration.py`** — direct branch-coverage tests for
+  `config/migration.py` alias and transform helpers
+
+### Changed — CI Execution Path
+
+- **`scripts/ci.sh`** now resolves Python deterministically (`MOUSEDROID_PYTHON` → workspace virtualenv
+  → PATH), exports `PYTHONNOUSERSITE=1`, and runs pytest stages in `importlib` mode for stable import identity
+- CI now prints runtime Python/pydantic versions and runs a dedicated Settings identity smoke check before tests
+
+### Changed — Documentation Layout and References
+
+- Planning and analysis documents were moved from repo root to `docs/planning/` and `docs/analysis/`
+  to keep runtime code and deployment assets prominent at the top level
+- README, changelog references, and planning links were updated to the new structure
+
 ### Added — Jetson Runtime Validation Alignment
 
 - **`src/mousedroid/validation/runtime.py`** — shared runtime validation helpers used by smoke,
@@ -450,9 +469,9 @@ state on the NVIDIA Jetson Orin Nano. 2505 tests pass; branch-coverage gate ≥ 
 - **`build_cognitive_core()`** — factory function with weight loading strategy (local → HuggingFace → random init)
 - **`weights_manager.py`** — HuggingFace weight download with exponential backoff retry logic
 - **21 new tests** — orchestrator cognitive paths (7), factory cognitive (4), weights manager (10)
-- **`COVERAGE_ANALYSIS.md`** — coverage gap analysis and 85% enforcement plan
-- **`TEST_SUITE_SUMMARY.md`** — detailed breakdown of all 21 cognitive test cases
-- **`VALIDATION_CHECKLIST.md`** — step-by-step validation and CI/CD simulation guide
+- **`docs/analysis/COVERAGE_ANALYSIS.md`** — coverage gap analysis and 85% enforcement plan
+- **`docs/analysis/TEST_SUITE_SUMMARY.md`** — detailed breakdown of all 21 cognitive test cases
+- **`docs/analysis/VALIDATION_CHECKLIST.md`** — step-by-step validation and CI/CD simulation guide
 - **Docker GPU deployment** — `Dockerfile.jetson` using NVIDIA L4T PyTorch base (`dustynv/l4t-pytorch:r36.4.0`) with CUDA 12.6, TensorRT 10.4, and pycuda pre-installed
 - **Docker Compose** — `docker-compose.jetson.yml` with NVIDIA runtime, optional hardware passthrough, and volume mounts
 - **CI/CD pipeline** — `.github/workflows/ci.yml` with 5-stage pipeline (lint → typecheck → test → security → Docker) across Python 3.10/3.11 matrix
