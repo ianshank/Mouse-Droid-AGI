@@ -94,11 +94,12 @@ class CloudExperienceExporter:
         storage_api = cast(Any, storage_module)
         creds, _project = resolve_credentials(self._gcp_cfg)
         client_factory = cast(Callable[..., Any], storage_api.Client)
-        self._gcs_client = client_factory(
+        gcs_client: GCSClientProtocol = client_factory(
             credentials=creds,
             project=self._gcp_cfg.project_id,
         )
-        self._gcs_bucket = self._gcs_client.bucket(self._storage_cfg.bucket)
+        self._gcs_client = gcs_client
+        self._gcs_bucket = gcs_client.bucket(self._storage_cfg.bucket)
         self._running = True
         self._task = spawn_tracked(
             self._background_tasks,
