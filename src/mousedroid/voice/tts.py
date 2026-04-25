@@ -86,15 +86,15 @@ class PiperTTS:
         import wave
 
         wav_buffer = io.BytesIO()
-        with wave.open(wav_buffer, "wb") as wav_file:
-            # piper-tts >=1.3 exposes synthesize_wav (which sets WAV header).
-            # Older versions used synthesize(text, wav_file) writing into an
-            # already-configured wave; newest versions return an AudioChunk
-            # iterator from synthesize(text). Prefer synthesize_wav when present.
-            synth_wav = getattr(self._voice, "synthesize_wav", None)
-            if synth_wav is not None:
-                synth_wav(text, wav_file)
-            else:
+        # piper-tts >=1.3 writes a complete WAV into a binary buffer. Older
+        # versions wrote frames into a configured wave.Wave_write instead.
+        synth_wav = getattr(self._voice, "synthesize_wav", None)
+        if callable(synth_wav):
+            _log.debug("piper_tts_synthesize_api", api="synthesize_wav")
+            synth_wav(text, wav_buffer)
+        else:
+            _log.debug("piper_tts_synthesize_api", api="synthesize")
+            with wave.open(wav_buffer, "wb") as wav_file:
                 self._voice.synthesize(text, wav_file)
 
         wav_buffer.seek(0)

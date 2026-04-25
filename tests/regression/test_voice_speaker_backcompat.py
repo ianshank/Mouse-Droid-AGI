@@ -175,10 +175,12 @@ def test_jetson_production_tts_model_path_is_absolute() -> None:
 
 def test_voice_enabled_via_yaml() -> None:
     """voice.enabled can be set via YAML overlay."""
-    s = Settings.model_validate({
-        "mock_hardware": True,
-        "voice": {"enabled": True, "tts_model_path": "/opt/voice_models/test.onnx"},
-    })
+    s = Settings.model_validate(
+        {
+            "mock_hardware": True,
+            "voice": {"enabled": True, "tts_model_path": "/opt/voice_models/test.onnx"},
+        }
+    )
     assert s.voice.enabled is True
     assert s.voice.tts_model_path == "/opt/voice_models/test.onnx"
 
@@ -191,19 +193,23 @@ def test_voice_phrase_overrides_empty_by_default() -> None:
 
 def test_voice_intensity_threshold_range() -> None:
     """intensity_threshold accepts values in [0, 1]."""
-    s = Settings.model_validate({
-        "mock_hardware": True,
-        "voice": {"intensity_threshold": 0.5},
-    })
+    s = Settings.model_validate(
+        {
+            "mock_hardware": True,
+            "voice": {"intensity_threshold": 0.5},
+        }
+    )
     assert s.voice.intensity_threshold == 0.5
 
 
 def test_voice_config_backwards_compat_no_new_required_fields() -> None:
     """A minimal voice stanza with only 'enabled' must still parse cleanly."""
-    s = Settings.model_validate({
-        "mock_hardware": True,
-        "voice": {"enabled": False},
-    })
+    s = Settings.model_validate(
+        {
+            "mock_hardware": True,
+            "voice": {"enabled": False},
+        }
+    )
     assert s.voice.enabled is False
     assert s.voice.tts_model_path is None
     assert s.voice.tts_sample_rate == 22050
@@ -211,10 +217,12 @@ def test_voice_config_backwards_compat_no_new_required_fields() -> None:
 
 def test_speaker_config_backwards_compat_partial_stanza() -> None:
     """A partial speaker stanza must pick up all defaults for unspecified keys."""
-    s = Settings.model_validate({
-        "mock_hardware": True,
-        "speaker": {"sample_rate": 44100},
-    })
+    s = Settings.model_validate(
+        {
+            "mock_hardware": True,
+            "speaker": {"sample_rate": 44100},
+        }
+    )
     assert s.speaker is not None
     assert s.speaker.sample_rate == 44100
     assert s.speaker.channels == 1  # unchanged default

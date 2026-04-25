@@ -122,7 +122,7 @@ def _make_wav_bytes(n_samples: int, sample_rate: int = 22050) -> bytes:
 
 
 def test_synthesize_sync_with_loaded_voice_int16() -> None:
-    """_synthesize_sync decodes int16 WAV from a loaded piper voice."""
+    """_synthesize_sync decodes int16 WAV written by Piper's binary-buffer API."""
     from mousedroid.voice.tts import PiperTTS
 
     tts = PiperTTS(_cfg(tts_sample_rate=22050))
@@ -131,18 +131,13 @@ def test_synthesize_sync_with_loaded_voice_int16() -> None:
 
     mock_voice = MagicMock()
 
-    def write_wav(text: str, wav_file: wave.Wave_write) -> None:
-        # Read our pre-built WAV and copy its frames into the provided file
-        src = io.BytesIO(wav_bytes)
-        with wave.open(src, "rb") as rf:
-            wav_file.setnchannels(rf.getnchannels())
-            wav_file.setsampwidth(rf.getsampwidth())
-            wav_file.setframerate(rf.getframerate())
-            wav_file.writeframes(rf.readframes(rf.getnframes()))
+    def write_wav_buffer(text: str, buf: io.BytesIO) -> None:
+        assert text == "hello"
+        assert hasattr(buf, "write")
+        buf.write(wav_bytes)
 
-    # piper-tts >=1.3 uses synthesize_wav; older API used synthesize(text, wav_file).
-    mock_voice.synthesize_wav = write_wav
-    mock_voice.synthesize = write_wav
+    mock_voice.synthesize_wav = MagicMock(side_effect=write_wav_buffer)
+    mock_voice.synthesize = MagicMock()
     tts._voice = mock_voice
 
     samples = tts._synthesize_sync("hello")
@@ -150,6 +145,8 @@ def test_synthesize_sync_with_loaded_voice_int16() -> None:
     assert len(samples) == n_samples
     # int16 values should be normalised to [-1, 1]
     assert np.all(np.abs(samples) <= 1.0)
+    mock_voice.synthesize_wav.assert_called_once()
+    mock_voice.synthesize.assert_not_called()
 
 
 def test_synthesize_sync_legacy_synthesize_only() -> None:
