@@ -85,8 +85,9 @@ class TestCallbacks:
         adapter = build_transport_adapter(server)
         assert adapter is not None
         tools = await adapter._on_list_tools()
-        assert [t["name"] for t in tools] == ["health_check"]
-        assert all("description" in t for t in tools)
+        assert [t.name for t in tools] == ["health_check"]
+        assert all(t.description for t in tools)
+        assert all(t.inputSchema.get("type") == "object" for t in tools)
 
     async def test_call_tool_callback_dispatches_through_bridge(
         self,
@@ -108,13 +109,16 @@ class TestCallbacks:
         root_settings: Settings,
         safe_safety_monitor: object,
     ) -> None:
+        import json
+
         from mousedroid.mcp.transport import build_transport_adapter
 
         server = _make_server(mcp_cfg, root_settings, safe_safety_monitor)
         adapter = build_transport_adapter(server)
         assert adapter is not None
         payload = await adapter._on_read_resource("mousedroid://config/redacted")
-        assert isinstance(payload, dict)
+        assert isinstance(payload, str)
+        assert isinstance(json.loads(payload), dict)
 
     async def test_list_resources_callback_returns_uris(
         self,
@@ -128,8 +132,8 @@ class TestCallbacks:
         adapter = build_transport_adapter(server)
         assert adapter is not None
         items = await adapter._on_list_resources()
-        assert all("uri" in item for item in items)
-        assert any("mousedroid://" in item["uri"] for item in items)
+        assert all(str(item.uri).startswith("mousedroid://") for item in items)
+        assert all(item.name for item in items)
 
     async def test_list_prompts_callback_returns_names(
         self,
@@ -143,7 +147,7 @@ class TestCallbacks:
         adapter = build_transport_adapter(server)
         assert adapter is not None
         prompts = await adapter._on_list_prompts()
-        assert all("name" in p for p in prompts)
+        assert all(p.name for p in prompts)
 
 
 class TestServeDispatch:

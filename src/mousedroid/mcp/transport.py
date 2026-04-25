@@ -146,36 +146,71 @@ class MCPTransportAdapter:
     # ------------------------------------------------------------------
     # SDK callbacks — thin delegates onto :class:`MouseDroidMCPServer`.
     #
-    # Kept as plain ``async def`` methods so the unit tests exercise the
-    # mapping without spinning up the SDK transport. They are wired into
-    # the ``mcp.server.Server`` decorators in :meth:`_register_handlers`
-    # in a later task.
+    # Returns are typed against ``mcp.types`` so the SDK decorators
+    # accept them directly. ``inputSchema`` is a permissive
+    # ``object`` schema; per-tool schemas can be promoted to a
+    # ``MCPConfig.tool_schemas`` mapping in a later iteration without
+    # changing the wire contract.
     # ------------------------------------------------------------------
 
-    async def _on_list_tools(self) -> list[dict[str, Any]]:
-        """Return the visible tools as ``[{name, description}, ...]``."""
+    async def _on_list_tools(self) -> list[Any]:
+        """Return the visible tools as ``mcp.types.Tool`` objects."""
+        from mcp import types as _mt
+
         return [
-            {"name": name, "description": self.server.tool_description(name)}
+            _mt.Tool(
+                name=name,
+                description=self.server.tool_description(name),
+                inputSchema={"type": "object", "additionalProperties": True},
+            )
             for name in self.server.list_tool_names()
         ]
 
     async def _on_call_tool(
         self, name: str, arguments: dict[str, Any] | None
     ) -> dict[str, Any]:
-        """Dispatch a tool call through the bridge."""
+        """Dispatch a tool call through the bridge.
+
+        Returns a plain dict; the SDK wraps it as ``StructuredContent``
+        and serialises it into ``CallToolResult``.
+        """
         return await self.server.call_tool(name, arguments, peer="sdk")
 
-    async def _on_list_resources(self) -> list[dict[str, str]]:
-        """Return the resource URIs as ``[{uri}, ...]``."""
-        return [{"uri": uri} for uri in self.server.list_resource_uris()]
+    async def _on_list_resources(self) -> list[Any]:
+        """Return the resource URIs as ``mcp.types.Resource`` objects."""
+        from mcp import types as _mt
+        from pydantic import AnyUrl
 
-    async def _on_read_resource(self, uri: str) -> dict[str, Any]:
-        """Read a resource by URI through the server."""
-        return await self.server.read_resource(uri, peer="sdk")
+        return [
+            _mt.Resource(name=_resource_name(uri), uri=AnyUrl(uri))
+            for uri in self.server.list_resource_uris()
+        ]
 
-    async def _on_list_prompts(self) -> list[dict[str, str]]:
-        """Return the available prompt names as ``[{name}, ...]``."""
-        return [{"name": name} for name in self.server.list_prompt_names()]
+    async def _on_read_resource(self, uri: Any) -> str:
+        """Read a resource by URI and return JSON-serialised content.
+
+        The SDK's ``read_resource`` decorator passes an ``AnyUrl``; we
+        normalise to ``str`` for the existing
+        :meth:`MouseDroidMCPServer.read_resource` contract and serialise
+        the dict payload to JSON text so the client receives a well-typed
+        ``ReadResourceContents`` envelope.
+        """
+        import json
+
+        payload = await self.server.read_resource(str(uri), peer="sdk")
+        return json.dumps(payload, default=str)
+
+    async def _on_list_prompts(self) -> list[Any]:
+        """Return the available prompts as ``mcp.types.Prompt`` objects."""
+        from mcp import types as _mt
+
+        return [_mt.Prompt(name=name) for name in self.server.list_prompt_names()]
+
+
+def _resource_name(uri: str) -> str:
+    """Derive a human-readable name from a ``mousedroid://...`` URI."""
+    after_scheme = uri.split("://", 1)[-1]
+    return after_scheme.strip("/").replace("/", "_") or "resource"
 
 
 def build_transport_adapter(server: MouseDroidMCPServer) -> MCPTransportAdapter | None:
