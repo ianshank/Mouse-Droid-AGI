@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
+from typing import Any
 
 import pytest
 
@@ -142,3 +144,154 @@ class TestCallbacks:
         assert adapter is not None
         prompts = await adapter._on_list_prompts()
         assert all("name" in p for p in prompts)
+
+
+class TestServeDispatch:
+    """``serve()`` dispatches based on ``MCPConfig.transport``."""
+
+    async def test_serve_routes_to_stdio(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        mcp_cfg: MCPConfig,
+        root_settings: Settings,
+        safe_safety_monitor: object,
+    ) -> None:
+        from mousedroid.mcp.transport import MCPTransportAdapter, build_transport_adapter
+
+        server = _make_server(mcp_cfg, root_settings, safe_safety_monitor)
+        adapter = build_transport_adapter(server)
+        assert adapter is not None
+        called: list[str] = []
+
+        async def fake_stdio(self: MCPTransportAdapter) -> None:
+            called.append("stdio")
+
+        def fake_register(self: MCPTransportAdapter) -> None:
+            called.append("registered")
+
+        monkeypatch.setattr(MCPTransportAdapter, "_serve_stdio", fake_stdio)
+        monkeypatch.setattr(MCPTransportAdapter, "_register_handlers", fake_register)
+        await adapter.serve()
+        assert called == ["registered", "stdio"]
+
+    async def test_serve_routes_to_streamable_http_with_configured_port(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        root_settings: Settings,
+        safe_safety_monitor: object,
+    ) -> None:
+        monkeypatch.setenv("MOUSEDROID_MCP_TOKEN", "test-token")
+        cfg = MCPConfig.model_validate(
+            {
+                "enabled": True,
+                "transport": "streamable_http",
+                "host": "127.0.0.1",
+                "port": 18765,
+            }
+        )
+        from mousedroid.mcp.transport import MCPTransportAdapter, build_transport_adapter
+
+        server = _make_server(cfg, root_settings, safe_safety_monitor)
+        adapter = build_transport_adapter(server)
+        assert adapter is not None
+        bound: dict[str, Any] = {}
+
+        async def fake_run(
+            self: MCPTransportAdapter, handler: Any, *, host: str, port: int
+        ) -> None:
+            bound["host"] = host
+            bound["port"] = port
+
+        def fake_register(self: MCPTransportAdapter) -> None:
+            bound["registered"] = True
+
+        monkeypatch.setattr(MCPTransportAdapter, "_run_http_server", fake_run)
+        monkeypatch.setattr(MCPTransportAdapter, "_register_handlers", fake_register)
+        # Stub the SDK module the http branch imports.
+        import sys
+        import types
+
+        fake_http = types.SimpleNamespace(
+            StreamableHTTPServerTransport=lambda **kwargs: types.SimpleNamespace(
+                handle_request=lambda *a, **k: None
+            )
+        )
+        monkeypatch.setitem(sys.modules, "mcp.server.streamable_http", fake_http)
+        await adapter.serve()
+        assert bound == {"host": "127.0.0.1", "port": 18765, "registered": True}
+
+    async def test_serve_routes_to_sse(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        root_settings: Settings,
+        safe_safety_monitor: object,
+    ) -> None:
+        cfg = MCPConfig.model_validate(
+            {"enabled": True, "transport": "sse", "host": "127.0.0.1", "port": 18766}
+        )
+        from mousedroid.mcp.transport import MCPTransportAdapter, build_transport_adapter
+
+        server = _make_server(cfg, root_settings, safe_safety_monitor)
+        adapter = build_transport_adapter(server)
+        assert adapter is not None
+        bound: dict[str, Any] = {}
+
+        async def fake_run(
+            self: MCPTransportAdapter, handler: Any, *, host: str, port: int
+        ) -> None:
+            bound["host"] = host
+            bound["port"] = port
+
+        monkeypatch.setattr(MCPTransportAdapter, "_run_http_server", fake_run)
+        monkeypatch.setattr(MCPTransportAdapter, "_register_handlers", lambda self: None)
+        import sys
+        import types
+
+        fake_sse = types.SimpleNamespace(
+            SseServerTransport=lambda endpoint: types.SimpleNamespace(
+                connect_sse=lambda *a, **k: None
+            )
+        )
+        monkeypatch.setitem(sys.modules, "mcp.server.sse", fake_sse)
+        await adapter.serve()
+        assert bound == {"host": "127.0.0.1", "port": 18766}
+
+
+class TestServeLoopBindTransport:
+    """``MouseDroidMCPServer._serve_loop`` honours ``MCPConfig.bind_transport``."""
+
+    async def test_bind_transport_false_idles(
+        self,
+        mcp_cfg: MCPConfig,
+        root_settings: Settings,
+        safe_safety_monitor: object,
+    ) -> None:
+        """Default bind_transport=False: server starts/stops without binding."""
+        assert mcp_cfg.bind_transport is False  # default contract
+        server = _make_server(mcp_cfg, root_settings, safe_safety_monitor)
+        await server.start()
+        assert server.is_running is True
+        await server.stop()
+        assert server.is_running is False
+
+    async def test_bind_transport_true_invokes_adapter_serve(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        root_settings: Settings,
+        safe_safety_monitor: object,
+    ) -> None:
+        cfg = MCPConfig.model_validate(
+            {"enabled": True, "transport": "stdio", "bind_transport": True}
+        )
+        from mousedroid.mcp.transport import MCPTransportAdapter
+
+        called = asyncio.Event()
+
+        async def fake_serve(self: MCPTransportAdapter) -> None:
+            called.set()
+
+        monkeypatch.setattr(MCPTransportAdapter, "serve", fake_serve)
+        server = _make_server(cfg, root_settings, safe_safety_monitor)
+        await server.start()
+        await asyncio.wait_for(called.wait(), timeout=1.0)
+        await server.stop()

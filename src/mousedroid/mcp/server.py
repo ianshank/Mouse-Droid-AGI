@@ -300,41 +300,57 @@ class MouseDroidMCPServer:
     async def _serve_loop(self) -> None:
         """Run the optional MCP SDK serve loop (transport-specific).
 
-        When the optional ``mcp`` package is installed this method
-        delegates to its server entrypoint. When it is not, the loop
-        idles until cancelled — leaving the bridge fully functional for
-        in-process / test use.
+        Delegation rules (all driven by :class:`MCPConfig`, no hardcoded
+        thresholds):
+
+        * If the optional ``mcp`` SDK is missing, idle until cancelled.
+          The bridge stays usable for in-process callers.
+        * If the SDK is available but :attr:`MCPConfig.bind_transport`
+          is ``False`` (default), idle. This keeps unit tests and
+          embedded callers free of real socket binding.
+        * If the SDK is available and ``bind_transport`` is ``True``,
+          delegate to :meth:`MCPTransportAdapter.serve` which binds the
+          configured stdio / SSE / streamable_http transport.
 
         The idle poll interval is derived from
         :attr:`MCPConfig.sample_telemetry_hz` so a single config field
         controls both the telemetry sampler cadence and how quickly the
         serve loop notices ``self._running`` flipping during shutdown.
         """
+        from mousedroid.mcp.transport import build_transport_adapter
+
         idle_period_s = 1.0 / self._cfg.sample_telemetry_hz
-        try:
-            import mcp  # noqa: F401
-        except ImportError:
+        adapter = build_transport_adapter(self)
+        if adapter is None:
             _log.info(
                 "mcp_serve_loop_idle",
                 reason="mcp_package_not_installed",
                 hint="install mousedroid[mcp] for real transports",
             )
-            try:
-                while self._running:
-                    await asyncio.sleep(idle_period_s)
-            except asyncio.CancelledError:
-                raise
+            await self._idle_until_stopped(idle_period_s)
             return
-        # When the SDK is available the actual transport binding lives
-        # here. We intentionally keep this thin — implementing the full
-        # SDK adapter is out of scope for the initial integration; the
-        # bridge + providers above are SDK-agnostic and exercised by
-        # tests directly. The branch is gated behind the optional `mcp`
-        # extra so it cannot run in the standard CI environment.
-        _log.info("mcp_serve_loop_started", transport=self._cfg.transport)  # pragma: no cover
-        try:  # pragma: no cover
+        if not self._cfg.bind_transport:
+            _log.info(
+                "mcp_serve_loop_idle",
+                reason="bind_transport_disabled",
+                hint="set mcp.bind_transport=true (or MOUSEDROID_MCP__BIND_TRANSPORT=true) to bind",
+            )
+            await self._idle_until_stopped(idle_period_s)
+            return
+        _log.info("mcp_serve_loop_started", transport=self._cfg.transport)
+        try:
+            await adapter.serve()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning("mcp_serve_loop_error", exc_info=True)
+            raise
+
+    async def _idle_until_stopped(self, period_s: float) -> None:
+        """Sleep in ``period_s`` increments until the server stops."""
+        try:
             while self._running:
-                await asyncio.sleep(idle_period_s)
+                await asyncio.sleep(period_s)
         except asyncio.CancelledError:
             raise
 

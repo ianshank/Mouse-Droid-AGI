@@ -48,17 +48,100 @@ class MCPTransportAdapter:
     sdk_server: Any  # ``mcp.server.Server`` when the SDK is installed.
 
     async def serve(self) -> None:
-        """Run the SDK serve loop for the configured transport.
+        """Bind the configured transport and run the SDK loop.
 
-        Concrete transport implementations are added in subsequent
-        tasks; this skeleton exists so the lifecycle wiring can land
-        first.
+        Dispatches based on :attr:`MCPConfig.transport`. The
+        ``MCPConfig`` validator already constrains the value to one of
+        ``stdio``, ``sse``, ``streamable_http``, so the ``else`` branch
+        is defensive only.
 
         Raises:
-            NotImplementedError: Always, until per-transport methods
-                land in later tasks.
+            ValueError: If ``self.server._cfg.transport`` is not a
+                recognised value (defensive guard).
         """
-        raise NotImplementedError
+        transport = self.server._cfg.transport
+        self._register_handlers()
+        if transport == "stdio":
+            await self._serve_stdio()
+        elif transport == "sse":
+            await self._serve_sse()
+        elif transport == "streamable_http":
+            await self._serve_streamable_http()
+        else:  # pragma: no cover - defensive (constrained by Pydantic Literal)
+            msg = f"unsupported MCP transport: {transport!r}"
+            raise ValueError(msg)
+
+    def _register_handlers(self) -> None:
+        """Attach the ``_on_*`` callbacks to ``self.sdk_server``.
+
+        Uses the ``mcp.server.Server`` decorator pattern. The decorators
+        are *factories* — calling them returns a registrar that takes
+        the handler. This is why we invoke ``list_tools()`` first and
+        then call the result with our coroutine.
+        """
+        self.sdk_server.list_tools()(self._on_list_tools)
+        self.sdk_server.call_tool()(self._on_call_tool)
+        self.sdk_server.list_resources()(self._on_list_resources)
+        self.sdk_server.read_resource()(self._on_read_resource)
+        self.sdk_server.list_prompts()(self._on_list_prompts)
+
+    async def _serve_stdio(self) -> None:
+        """Run the SDK over stdio (parent process owns the connection)."""
+        import mcp.server.stdio as _stdio
+
+        async with _stdio.stdio_server() as (read, write):
+            await self.sdk_server.run(
+                read, write, self.sdk_server.create_initialization_options()
+            )
+
+    async def _serve_sse(self) -> None:
+        """Run the SDK over Server-Sent Events on the configured host/port."""
+        import mcp.server.sse as _sse
+
+        transport = _sse.SseServerTransport(endpoint="/messages")
+        await self._run_http_server(
+            transport.connect_sse,
+            host=self.server._cfg.host,
+            port=self.server._cfg.port,
+        )
+
+    async def _serve_streamable_http(self) -> None:
+        """Run the SDK over streamable HTTP on the configured host/port.
+
+        The SDK's ``StreamableHTTPServerTransport`` requires an
+        ``mcp_session_id``; we pass ``None`` to let it generate one per
+        connection (stateless deployment). Future revisions can promote
+        this to a config field if multi-tenant session pinning becomes
+        a requirement.
+        """
+        import mcp.server.streamable_http as _http
+
+        transport = _http.StreamableHTTPServerTransport(mcp_session_id=None)
+        await self._run_http_server(
+            transport.handle_request,
+            host=self.server._cfg.host,
+            port=self.server._cfg.port,
+        )
+
+    async def _run_http_server(self, handler: Any, *, host: str, port: int) -> None:
+        """Run an HTTP server using the SDK's transport handler.
+
+        Extracted so unit tests can monkeypatch the bind step without
+        actually binding a socket.
+
+        Args:
+            handler: The SDK transport's ASGI/Starlette-compatible
+                handler.
+            host: Bind address (sourced from :class:`MCPConfig`).
+            port: Bind port (sourced from :class:`MCPConfig`).
+        """
+        import uvicorn
+        from starlette.applications import Starlette
+        from starlette.routing import Mount
+
+        app = Starlette(routes=[Mount("/", app=handler)])
+        config = uvicorn.Config(app, host=host, port=port, log_level="info")
+        await uvicorn.Server(config).serve()
 
     # ------------------------------------------------------------------
     # SDK callbacks — thin delegates onto :class:`MouseDroidMCPServer`.

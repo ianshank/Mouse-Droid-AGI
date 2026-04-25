@@ -2269,6 +2269,16 @@ class MCPConfig(BaseModel):
         r"(?i)token|secret|api[_-]?key|password|credential",
         description="Regex (case-insensitive) for keys whose values must be redacted",
     )
+    bind_transport: bool = Field(
+        False,
+        description=(
+            "Bind the configured transport via the optional `mcp` SDK. "
+            "Defaults to False so unit tests and in-process callers keep "
+            "the bridge usable without spinning up a real server. Set "
+            "True in deployment YAML (or via MOUSEDROID_MCP__BIND_TRANSPORT=true) "
+            "to expose the server over stdio/SSE/streamable_http."
+        ),
+    )
 
     @field_validator("tools_denylist")
     @classmethod
