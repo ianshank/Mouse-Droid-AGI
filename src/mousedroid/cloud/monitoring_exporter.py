@@ -21,13 +21,11 @@ _TRANSIENT_MONITORING_EXCEPTIONS: tuple[type[BaseException], ...]
 try:
     from google.api_core.exceptions import (
         DeadlineExceeded,
-        GoogleAPIError,
         RetryError,
         ServiceUnavailable,
     )
 
     _TRANSIENT_MONITORING_EXCEPTIONS = (
-        GoogleAPIError,
         RetryError,
         DeadlineExceeded,
         ServiceUnavailable,

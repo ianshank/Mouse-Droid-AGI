@@ -37,13 +37,11 @@ _TRANSIENT_GCS_EXCEPTIONS: tuple[type[BaseException], ...]
 try:
     from google.api_core.exceptions import (
         DeadlineExceeded,
-        GoogleAPIError,
         RetryError,
         ServiceUnavailable,
     )
 
     _TRANSIENT_GCS_EXCEPTIONS = (
-        GoogleAPIError,
         RetryError,
         DeadlineExceeded,
         ServiceUnavailable,

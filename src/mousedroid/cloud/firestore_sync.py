@@ -22,13 +22,11 @@ _TRANSIENT_FIRESTORE_EXCEPTIONS: tuple[type[BaseException], ...]
 try:
     from google.api_core.exceptions import (
         DeadlineExceeded,
-        GoogleAPIError,
         RetryError,
         ServiceUnavailable,
     )
 
     _TRANSIENT_FIRESTORE_EXCEPTIONS = (
-        GoogleAPIError,
         RetryError,
         DeadlineExceeded,
         ServiceUnavailable,

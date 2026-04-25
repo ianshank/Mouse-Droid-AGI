@@ -191,6 +191,7 @@ class MouseDroidOrchestrator:
                     await self._consolidation_task
             self._consolidation_tasks.discard(self._consolidation_task)
             self._consolidation_task = None
+        await cancel_and_drain(self._cloud_publish_tasks)
         if self._cloud_experience_exporter is not None:
             await self._cloud_experience_exporter.close()
         if self._cloud_sink is not None:
