@@ -1968,6 +1968,16 @@ class SpeakerConfig(BaseModel):
     channels: int = Field(1, gt=0, le=2, description="Audio output channels (1=mono, 2=stereo)")
     chunk_size: int = Field(1024, gt=0, description="Samples per write chunk")
     format: Literal["float32", "int16"] = Field("float32", description="Audio sample format")
+    write_timeout_s: float = Field(
+        0.5,
+        gt=0,
+        description="Max seconds to wait for speaker buffer space before failing a write",
+    )
+    write_poll_interval_s: float = Field(
+        0.01,
+        gt=0,
+        description="Seconds between speaker buffer readiness polls",
+    )
 
 
 class VoiceConfig(BaseModel):

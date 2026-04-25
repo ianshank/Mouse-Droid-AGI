@@ -250,6 +250,33 @@ class RockyVoiceEngine:
         await self._speaker.stop()
         _log.info("rocky_voice_engine_stopped")
 
+    async def play_phrase(self, text: str) -> tuple[int, float]:
+        """Immediately synthesize and play one phrase.
+
+        This bypasses the event queue and is intended for smoke checks and
+        validation flows that need a deterministic one-shot playback.
+
+        Args:
+            text: Phrase to synthesize and play.
+
+        Returns:
+            Tuple of ``(samples_written, peak_abs_sample)``.
+
+        Raises:
+            RuntimeError: If synthesis returns no samples or the configured
+                speaker runtime is unavailable.
+        """
+        if getattr(self._speaker, "_stream", object()) is None:
+            raise RuntimeError("configured speaker device unavailable")
+
+        samples = np.asarray(await self._tts.synthesize(text), dtype=np.float32)
+        if samples.size == 0:
+            raise RuntimeError("Rocky voice TTS returned no samples")
+
+        peak_abs = float(np.max(np.abs(samples)))
+        await self._write_samples(samples)
+        return int(samples.size), peak_abs
+
     async def _worker(self) -> None:
         """Background task: drain the queue and play speech."""
         while self._running:
@@ -286,8 +313,7 @@ class RockyVoiceEngine:
         """
         _log.info("rocky_voice_speaking", text=text)
         try:
-            samples = await self._tts.synthesize(text)
-            await self._write_samples(samples)
+            await self.play_phrase(text)
         except Exception:
             _log.warning("rocky_voice_play_failed", text=text, exc_info=True)
 

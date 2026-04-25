@@ -82,6 +82,10 @@ voice:
   enabled: true
   cooldown_s: 5.0
   personality: "rocky"
+  # Piper voice model staged inside the container image at build time.
+  # Path lives outside /opt/mousedroid because that directory is bind-mounted
+  # from the host in docker-compose.jetson.yml and would mask image-baked files.
+  tts_model_path: "/opt/voice_models/en_US-lessac-medium.onnx"
   tts_sample_rate: 22050
   queue_size: 16
 

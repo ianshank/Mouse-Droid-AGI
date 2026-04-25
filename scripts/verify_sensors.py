@@ -35,6 +35,7 @@ from mousedroid.validation.runtime import (  # noqa: E402
     capture_microphone_chunk,
     collect_lidar_diagnostics,
     load_runtime_settings,
+    play_rocky_voice_phrase,
     play_speaker_tone,
     resolve_runtime_config_paths,
 )
@@ -315,11 +316,39 @@ def check_speaker(cfg: Settings) -> None:
     )
 
 
+def check_voice(cfg: Settings) -> None:
+    """Verify the Rocky voice pipeline can synthesize and play speech."""
+    _section("Rocky Voice (TTS + Speaker)")
+
+    if not cfg.voice.enabled:
+        _skip("Rocky voice", "disabled in config", sensor="voice")
+        return
+
+    t0 = time.monotonic()
+    try:
+        result = asyncio.run(play_rocky_voice_phrase(cfg))
+    except Exception as exc:
+        _fail("Rocky voice play", str(exc), sensor="voice")
+        return
+
+    if result is None:
+        _skip("Rocky voice", "disabled in config", sensor="voice")
+        return
+
+    written_samples, peak_abs = result
+    elapsed = time.monotonic() - t0
+    _ok(
+        "Rocky voice play",
+        f"{written_samples} samples peak={peak_abs:.3f} in {elapsed:.2f}s",
+        sensor="voice",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
-_ALL_SENSORS = ("camera", "audio", "ultrasonic", "lidar", "speaker")
+_ALL_SENSORS = ("camera", "audio", "ultrasonic", "lidar", "speaker", "voice")
 
 
 def main() -> None:
@@ -330,6 +359,7 @@ def main() -> None:
         "  python scripts/verify_sensors.py\n"
         "  python scripts/verify_sensors.py --sensor camera\n"
         "  python scripts/verify_sensors.py --sensor lidar\n"
+        "  python scripts/verify_sensors.py --sensor voice\n"
         "  python scripts/verify_sensors.py --json\n",
     )
     ap.add_argument(
@@ -378,6 +408,7 @@ def main() -> None:
         "ultrasonic": check_ultrasonic,
         "lidar": check_lidar,
         "speaker": check_speaker,
+        "voice": check_voice,
     }
 
     for name, check_fn in sensor_checks.items():

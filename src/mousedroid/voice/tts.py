@@ -24,7 +24,9 @@ _log = get_logger(__name__)
 class _PiperVoiceLike(Protocol):
     """Minimal interface required from a loaded piper voice."""
 
-    def synthesize(self, text: str, wav_file: Any) -> None: ...
+    def synthesize_wav(self, text: str, wav_file: Any) -> Any: ...
+
+    def synthesize(self, text: str, *args: Any, **kwargs: Any) -> Any: ...
 
 
 class PiperTTS:
@@ -84,8 +86,19 @@ class PiperTTS:
         import wave
 
         wav_buffer = io.BytesIO()
-        with wave.open(wav_buffer, "wb") as wav_file:
-            self._voice.synthesize(text, wav_file)
+        # piper-tts >=1.3 writes a complete WAV into a binary buffer. Older
+        # versions wrote frames into a configured wave.Wave_write instead.
+        synth_wav = getattr(self._voice, "synthesize_wav", None)
+        if callable(synth_wav):
+            _log.debug("piper_tts_synthesize_api", api="synthesize_wav")
+            synth_wav(text, wav_buffer)
+        else:
+            _log.debug("piper_tts_synthesize_api", api="synthesize")
+            with wave.open(wav_buffer, "wb") as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(np.dtype(np.int16).itemsize)
+                wav_file.setframerate(self._cfg.tts_sample_rate)
+                self._voice.synthesize(text, wav_file)
 
         wav_buffer.seek(0)
         with wave.open(wav_buffer, "rb") as wav_file:

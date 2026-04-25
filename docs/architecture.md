@@ -274,17 +274,21 @@ the application so host-side smoke checks do not drift from the deployed runtime
 graph TD
     HostRunner["Host Runner\nmanual validation / CI smoke"]
     JetsonValidate["scripts/jetson_validate.sh\nremote verify / pytest / smoke orchestration"]
+    JetsonFullSmoke["scripts/jetson_full_smoke_run.sh\nfull hardware smoke harness\n13 stages + SUMMARY.md enricher"]
     JetsonSmoke["scripts/jetson_smoke_test.sh\nhost-side smoke harness"]
     VerifySensors["scripts/verify_sensors.py\nJSON and human-readable sensor checks"]
-    RuntimeValidation["validation/runtime.py\nresolve_runtime_config_paths()\nload_runtime_settings()\ncapture_* helpers"]
+    RuntimeValidation["validation/runtime.py\nresolve_runtime_config_paths()\nload_runtime_settings()\ncapture_* helpers\nplay_rocky_voice_phrase()"]
     SettingsLoader["config.loader.load_settings\nYAML + env overlay resolution"]
     Factory["factory.py\nprotocol-based DI"]
     Camera["JetsonCSICamera\nJetson / GStreamer / V4L2 fallback"]
     Microphone["Microphone / Speaker"]
     Lidar["LD19 driver\nconfig-driven coverage + timeout"]
+    VoiceEngine["Voice Engine\nPiperTTS + Rocky phrase_bank\nUSB Speaker"]
 
     HostRunner --> JetsonValidate
-    HostRunner --> JetsonSmoke
+    HostRunner --> JetsonFullSmoke
+    JetsonFullSmoke --> RuntimeValidation
+    JetsonValidate --> JetsonSmoke
     JetsonValidate --> VerifySensors
     JetsonSmoke --> RuntimeValidation
     VerifySensors --> RuntimeValidation
@@ -293,11 +297,21 @@ graph TD
     Factory --> Camera
     Factory --> Microphone
     Factory --> Lidar
+    Factory --> VoiceEngine
 ```
 
 All runtime validation paths load overlays through `resolve_runtime_config_paths()` and
 `load_runtime_settings()`, so values such as `camera.device_path`,
-`lidar.scan_acquisition_timeout_s`, and `lidar.min_scan_coverage_deg` remain config-driven.
+`lidar.scan_acquisition_timeout_s`, `lidar.min_scan_coverage_deg`, and
+`voice.tts_model_path` remain config-driven.
+
+`play_rocky_voice_phrase()` provides a factory-backed end-to-end TTS + speaker smoke check
+used by `jetson_full_smoke_run.sh`. Voice smoke status: **PASS** (39,424 samples,
+`en_US-lessac-medium`, `20260425T192408Z`).
+
+> **Overlay sync note**: `/etc/mousedroid/jetson_production.yaml` is a read-only bind-mount
+> on the Jetson host, separate from the repo. After each `git pull`, sync it manually:
+> `sudo cp /opt/mousedroid/config/jetson_production.yaml /etc/mousedroid/jetson_production.yaml`
 
 ---
 

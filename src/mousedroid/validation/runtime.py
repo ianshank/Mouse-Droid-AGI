@@ -19,7 +19,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from mousedroid.config.loader import load_settings
-from mousedroid.factory import build_camera, build_microphone, build_speaker
+from mousedroid.factory import build_camera, build_microphone, build_speaker, build_voice_engine
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import Settings
@@ -98,6 +98,26 @@ def load_runtime_settings(config_paths: Sequence[Path | str] | None = None) -> S
     """Load runtime settings using the resolved config overlay list."""
     resolved_paths = resolve_runtime_config_paths(config_paths)
     return load_settings(*resolved_paths)
+
+
+def camera_unavailable_reason(cfg: Settings, exc: Exception | None = None) -> str | None:
+    """Return a skip-worthy reason when the Jetson camera runtime is unavailable."""
+    if cfg.camera.backend != "jetson_csi":
+        return None
+
+    reasons: list[str] = []
+    device_path = str(cfg.camera.device_path).strip()
+    if device_path and not Path(device_path).exists():
+        reasons.append(f"V4L2 device {device_path} is missing")
+    if not Path("/tmp/argus_socket").exists():  # noqa: S108
+        reasons.append("libargus socket /tmp/argus_socket is missing")
+
+    if not reasons:
+        return None
+
+    if exc is not None and str(exc).strip():
+        reasons.append(str(exc).strip())
+    return "; ".join(reasons)
 
 
 async def capture_camera_frame(cfg: Settings) -> tuple[NDArray[np.uint8], str]:
@@ -373,3 +393,43 @@ async def play_speaker_tone(
         return total_samples
     finally:
         await speaker.stop()
+
+
+async def play_rocky_voice_phrase(
+    cfg: Settings,
+    *,
+    phrase: str = "Hello hello! Rocky ready!",
+) -> tuple[int, float] | None:
+    """Play a short Rocky voice phrase through the configured voice pipeline.
+
+    Args:
+        cfg: Fully resolved settings.
+        phrase: Short phrase to synthesize and play.
+
+    Returns:
+        Tuple of ``(samples_written, peak_abs_sample)``, or ``None`` when the
+        voice engine is disabled.
+
+    Raises:
+        RuntimeError: If the voice pipeline cannot load TTS or write to the
+            configured speaker.
+    """
+    if not cfg.voice.enabled:
+        return None
+
+    speaker = build_speaker(cfg)
+    if speaker is None:
+        raise RuntimeError("configured speaker unavailable for Rocky voice")
+
+    engine = build_voice_engine(cfg, speaker=speaker)
+    if engine is None:
+        raise RuntimeError("Rocky voice engine unavailable")
+
+    await engine.start()
+    try:
+        samples_written, peak_abs = await engine.play_phrase(phrase)
+        if not cfg.mock_hardware and peak_abs <= 1e-6:
+            raise RuntimeError("Rocky voice TTS returned silent audio")
+        return samples_written, peak_abs
+    finally:
+        await engine.stop()

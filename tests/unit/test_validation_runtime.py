@@ -56,6 +56,25 @@ def test_resolve_runtime_config_paths_legacy_jetson_single_env(
     assert resolved == (runtime.Path("config/jetson_production.yaml"),)
 
 
+def test_camera_unavailable_reason_reports_missing_jetson_runtime(tmp_path) -> None:
+    cfg = Settings(
+        mock_hardware=True,
+        camera={
+            "backend": "jetson_csi",
+            "device_path": str(tmp_path / "video0"),
+        },
+    )
+
+    reason = runtime.camera_unavailable_reason(
+        cfg,
+        RuntimeError("Failed to open CSI camera via GStreamer pipeline or V4L2 device"),
+    )
+
+    assert reason is not None
+    assert "V4L2 device" in reason
+    assert "Failed to open CSI camera" in reason
+
+
 @pytest.mark.asyncio
 async def test_capture_camera_frame_uses_runtime_driver(
     monkeypatch: pytest.MonkeyPatch,
@@ -234,6 +253,51 @@ async def test_play_speaker_tone_stereo_chunks_match_protocol(
     for chunk in stub.writes:
         assert np.allclose(chunk[0::2], chunk[1::2])
     assert stub.stopped is True
+
+
+@pytest.mark.asyncio
+async def test_play_rocky_voice_phrase_uses_public_engine_method(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Runtime voice helper should use the engine's public playback API."""
+
+    class StubSpeaker:
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+    class StubVoiceEngine:
+        def __init__(self) -> None:
+            self.started = False
+            self.stopped = False
+            self.played: list[str] = []
+
+        async def start(self) -> None:
+            self.started = True
+
+        async def stop(self) -> None:
+            self.stopped = True
+
+        async def play_phrase(self, text: str) -> tuple[int, float]:
+            self.played.append(text)
+            return 123, 0.42
+
+    stub_speaker = StubSpeaker()
+    stub_engine = StubVoiceEngine()
+    monkeypatch.setattr(runtime, "build_speaker", lambda cfg: stub_speaker)
+    monkeypatch.setattr(runtime, "build_voice_engine", lambda cfg, speaker=None: stub_engine)
+
+    result = await runtime.play_rocky_voice_phrase(
+        Settings(mock_hardware=True, voice={"enabled": True, "tts_sample_rate": 22050}),
+        phrase="Rocky test phrase",
+    )
+
+    assert result == (123, 0.42)
+    assert stub_engine.started is True
+    assert stub_engine.stopped is True
+    assert stub_engine.played == ["Rocky test phrase"]
 
 
 def test_lidar_scan_coverage_deg_measures_partial_span() -> None:
