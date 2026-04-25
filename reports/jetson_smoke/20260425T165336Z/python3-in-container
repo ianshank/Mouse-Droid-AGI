@@ -1,0 +1,8 @@
+#!/bin/bash
+exec docker exec \
+    -e MOUSEDROID_MOCK_HARDWARE \
+    -e MOUSEDROID_JETSON_CONFIGS \
+    -e MOUSEDROID_FACE_DISPLAY_SMOKE \
+    -e MOUSEDROID_FACE_DISPLAY_BUS \
+    -e PYTHONPATH \
+    mousedroid python3 "$@"
