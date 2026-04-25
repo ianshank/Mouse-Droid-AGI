@@ -24,11 +24,12 @@ class EpisodicReplay:
         cfg: Memory configuration with ``episodic_capacity``.
     """
 
-    def __init__(self, cfg: MemoryConfig) -> None:
+    def __init__(self, cfg: MemoryConfig, seed: int | None = None) -> None:
         self._capacity = cfg.episodic_capacity
         self._buffer: deque[tuple[Any, float]] = deque(maxlen=cfg.episodic_capacity)
+        self._rng = np.random.default_rng(seed)
 
-        _log.info("episodic_replay_init", capacity=cfg.episodic_capacity)
+        _log.info("episodic_replay_init", capacity=cfg.episodic_capacity, seed=seed)
 
     def push(self, experience: Any, priority: float = 1.0) -> None:
         """Add an experience with an associated priority.
@@ -73,8 +74,7 @@ class EpisodicReplay:
         else:
             probabilities = priorities / total
 
-        rng = np.random.default_rng()
-        indices = rng.choice(len(self._buffer), size=n, replace=False, p=probabilities)
+        indices = self._rng.choice(len(self._buffer), size=n, replace=False, p=probabilities)
         return [self._buffer[int(i)][0] for i in indices]
 
     def __len__(self) -> int:

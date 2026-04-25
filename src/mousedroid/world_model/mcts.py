@@ -202,7 +202,7 @@ class MCTSPlanner:
 
         # Select most-visited root child.
         best_child = max(root.children, key=lambda c: c.visit_count)
-        action = torch.tanh(best_child.action)
+        action = best_child.action
         _log.debug(
             "mcts_plan_complete",
             n_simulations=budget,

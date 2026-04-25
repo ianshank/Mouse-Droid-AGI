@@ -824,7 +824,7 @@ def build_memory_tier(cfg: Settings) -> MemoryTier | None:
     from mousedroid.memory.tier import MemoryTier
     from mousedroid.memory.working import WorkingMemory
 
-    episodic = EpisodicReplay(cfg.memory)
+    episodic = EpisodicReplay(cfg.memory, seed=cfg.memory.replay_seed)
     semantic = SemanticIndex(cfg.memory)
     working = WorkingMemory(cfg.memory, embed_dim=cfg.memory.semantic_dim)
     consolidation = MemoryConsolidation(cfg.memory, episodic, semantic)

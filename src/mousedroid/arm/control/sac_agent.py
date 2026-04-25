@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import torch
 from numpy.typing import NDArray
 
 from mousedroid.logging.setup import get_logger
@@ -114,7 +115,8 @@ class SACAgent:
             msg = "Model not built. Call build(env) first."
             raise RuntimeError(msg)
 
-        action, _ = self._model.predict(observation, deterministic=True)
+        with torch.no_grad():
+            action, _ = self._model.predict(observation, deterministic=True)
         return np.asarray(action, dtype=np.float64)
 
     def save(self, path: str | None = None) -> Path:

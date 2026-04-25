@@ -93,6 +93,7 @@ class RSSM(nn.Module):
     # Public API
     # ------------------------------------------------------------------
 
+    @torch.no_grad()
     def observe_step(
         self,
         observation: ObservationProtocol,

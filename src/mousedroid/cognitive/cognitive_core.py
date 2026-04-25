@@ -58,7 +58,6 @@ class CognitiveCore:
         self._metacog = metacog
         self._checker = checker
         self._rl = _RLBundle(policy=policy or PolicyMLP())
-        self._curiosity = CuriosityAggregator()
 
         self._slow_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(
             maxsize=SLOW_QUEUE_MAXSIZE,
@@ -137,7 +136,7 @@ class CognitiveCore:
                     self._slow_queue.get(),
                     timeout=SLOW_LOOP_INTERVAL_S,
                 )
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 continue
 
             state = np.asarray(

@@ -446,6 +446,16 @@ class LearningConfig(BaseModel):
 
     ewc_lambda: float = Field(5000.0, gt=0, description="EWC regularization strength")
     ewc_fisher_samples: int = Field(200, gt=0, description="Samples for Fisher estimation")
+    ewc_fisher_batch_size: int = Field(
+        1, gt=0, description="Batch size for Fisher estimation random inputs"
+    )
+    ewc_fallback_input_dim: int = Field(
+        1,
+        gt=0,
+        description=(
+            "Fallback input dimension when model has no Linear layers for Fisher estimation"
+        ),
+    )
     progressive_enabled: bool = Field(False, description="Enable progressive column growth")
 
 
@@ -666,6 +676,10 @@ class MemoryConfig(BaseModel):
         1e-6,
         gt=0,
         description="Minimum episodic replay priority (floor above zero for FAISS)",
+    )
+    replay_seed: int | None = Field(
+        None,
+        description="Random seed for episodic replay sampling (None = non-deterministic)",
     )
 
 
