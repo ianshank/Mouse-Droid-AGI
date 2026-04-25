@@ -140,6 +140,27 @@ python -m mousedroid --config config/default.yaml --health-check
 This boots the orchestrator, runs a single tick, and exits non-zero on
 any subsystem failure.
 
+## Hardware smoke — motion safety
+
+`tests/hardware/test_motor_smoke.py` is gated by
+`ESP32Config.smoke_test_allow_motion` (default **False**). With the
+default the smoke test exercises the connect → send(0,0,0) → read →
+e-stop → disconnect flow without spinning the wheels — safe to run
+unattended with the rover on a table.
+
+To exercise actual motion (rover on rollers, tethered, or otherwise
+monitored), opt in explicitly:
+
+```bash
+MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION=true \
+  python -m pytest tests/hardware/test_motor_smoke.py -v -m hardware
+```
+
+`scripts/jetson_full_smoke_run.sh` does NOT set this variable; the
+`mcp_motor_smoke` stage therefore runs in motion-disabled mode by
+default. Override with the env var above (or a YAML overlay) only when
+the rover environment is safe.
+
 ## Telemetry the operator should watch
 
 | Metric                                           | Meaning                                             |

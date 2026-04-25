@@ -292,6 +292,17 @@ class ESP32Config(BaseModel):
             "setpoint that the smoke test asserts on real hardware."
         ),
     )
+    smoke_test_allow_motion: bool = Field(
+        False,
+        description=(
+            "Hard safety gate for tests/hardware/test_motor_smoke.py. "
+            "When False (default), the velocity round-trip stops short of "
+            "actually sending a non-zero command — useful when the rover is "
+            "on a table or otherwise unattended. Set True (YAML override or "
+            "MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION=true) only when the "
+            "rover is on rollers / tethered / monitored."
+        ),
+    )
     emergency_stop_budget_ms: float = Field(
         50.0,
         gt=0,

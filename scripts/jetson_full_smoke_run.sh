@@ -176,14 +176,22 @@ fi
 
 # --- Stage 13a: MCP + motor smoke ----------------------------------------
 # Runs the rover motor smoke (velocity round-trip, e-stop latency, MCP
-# resource polling under load) with the optional MCP server enabled. The
-# stage is non-blocking so an MCP/motor failure does not mask later stages
-# but still surfaces in SUMMARY.md.
+# resource polling under load) with the optional MCP server enabled.
+#
+# SAFETY: motion is disabled by default via the smoke_test_allow_motion=False
+# default in ESP32Config — the velocity round-trip sends a zero command so
+# the rover does not roll while running unattended (e.g. on a table).
+# Override with MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION=true ONLY when
+# the rover is on rollers / tethered / under direct supervision.
+#
+# Non-blocking so an MCP/motor failure does not mask later stages but
+# still surfaces in SUMMARY.md.
 if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
     run_stage "mcp_motor_smoke" "no" 300 \
         env \
             MOUSEDROID_MCP__ENABLED=true \
             MOUSEDROID_MCP__BIND_TRANSPORT=false \
+            MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION="${MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION:-false}" \
             "${PY_WRAPPER}" -m pytest tests/hardware/test_motor_smoke.py \
                 -v -m hardware --tb=short --no-cov
 fi

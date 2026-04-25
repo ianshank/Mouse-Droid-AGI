@@ -39,22 +39,37 @@ async def test_velocity_roundtrip_clamps_and_dispatches(
     jetson_settings: Settings,
 ) -> None:
     """``send_velocity`` accepts the smoke setpoint and ``read_encoders`` returns
-    a structurally valid reading. On real hardware additionally assert that
-    the encoder velocity reflects the setpoint within the configured fraction.
+    a structurally valid reading.
+
+    Safety: when ``ESP32Config.smoke_test_allow_motion`` is False (default),
+    the actual velocity sent to the driver is **zero** — the test only
+    exercises the connect → send → read → e-stop → disconnect flow without
+    physically moving the rover. This protects an untethered rover on a
+    table from rolling off when the smoke runs unattended.
+
+    When the operator explicitly opts in (e.g. rover on rollers),
+    ``smoke_test_allow_motion=True`` lets the test drive the motors at
+    ``smoke_test_velocity_mps`` and assert the encoder reflects the
+    setpoint within ``smoke_test_min_velocity_fraction``.
     """
     from mousedroid.factory import build_esp32_driver
 
     driver = build_esp32_driver(jetson_settings)
     await driver.connect()
     try:
-        target_vx = jetson_settings.esp32.smoke_test_velocity_mps
+        target_vx = (
+            jetson_settings.esp32.smoke_test_velocity_mps
+            if jetson_settings.esp32.smoke_test_allow_motion
+            else 0.0
+        )
         await driver.send_velocity(target_vx, 0.0, 0.0)
         await asyncio.sleep(jetson_settings.esp32.smoke_test_settle_s)
         reading = await driver.read_encoders()
         # Structural assertion: every encoder field is well-typed.
         assert reading.left_velocity_mps == pytest.approx(reading.left_velocity_mps, rel=1.0)
         assert isinstance(reading.timestamp, float)
-        if not jetson_settings.mock_hardware:
+        # Motion-quality assertion only when motion was actually requested.
+        if jetson_settings.esp32.smoke_test_allow_motion and not jetson_settings.mock_hardware:
             min_fraction = jetson_settings.esp32.smoke_test_min_velocity_fraction
             assert reading.left_velocity_mps >= target_vx * min_fraction
             assert reading.right_velocity_mps >= target_vx * min_fraction
@@ -64,13 +79,24 @@ async def test_velocity_roundtrip_clamps_and_dispatches(
 
 
 async def test_emergency_stop_latency_within_budget(jetson_settings: Settings) -> None:
-    """``emergency_stop`` returns within ``ESP32Config.emergency_stop_budget_ms``."""
+    """``emergency_stop`` returns within ``ESP32Config.emergency_stop_budget_ms``.
+
+    Safety: motion is gated by ``smoke_test_allow_motion`` (see the
+    velocity round-trip docstring). When the gate is closed, this test
+    measures e-stop latency after a zero-velocity command — still
+    representative of the round-trip cost.
+    """
     from mousedroid.factory import build_esp32_driver
 
     driver = build_esp32_driver(jetson_settings)
     await driver.connect()
     try:
-        await driver.send_velocity(jetson_settings.esp32.smoke_test_velocity_mps, 0.0, 0.0)
+        target_vx = (
+            jetson_settings.esp32.smoke_test_velocity_mps
+            if jetson_settings.esp32.smoke_test_allow_motion
+            else 0.0
+        )
+        await driver.send_velocity(target_vx, 0.0, 0.0)
         t0 = time.monotonic()
         await driver.emergency_stop()
         elapsed_ms = (time.monotonic() - t0) * 1000.0
