@@ -8,6 +8,61 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Phase 1: Domain Randomization for Sim-to-Real RSSM Pretraining
+
+First of four Physical AI gaps closed (per Martin Keen, IBM Technology — "What is
+Physical AI?"). Per-episode randomization of physical and sensor parameters so
+the RSSM world model and downstream policies generalize beyond a single nominal
+simulator configuration. **Training-only change; runtime control loop untouched.**
+
+- **`src/mousedroid/training/domain_randomization.py`** — new module
+  - `DomainRandomizer` — stateless sampler driven by an injected
+    `numpy.random.Generator` for deterministic seeding from the training pipeline
+  - `EpisodeParams` — frozen dataclass carrying per-episode visual / camera /
+    range-sensor / chassis / comms / disturbance / feature parameters
+  - `apply_visual_randomization()` — RGB-frame transform with brightness,
+    contrast, and additive Gaussian noise; preserves `uint8`/`float32` dtype
+  - `apply_range_sensor_randomization()` — additive Gaussian noise + stochastic
+    dropout (returns `nan`) for HC-SR04 readings
+  - `apply_feature_noise()` — post-CNN feature-vector noise applied during data
+    generation (the actual integration point — raw frames are not yet exposed)
+  - 100% line + branch coverage on the new module
+- **`src/mousedroid/config/schema.py`** — Pydantic v2 schema additions
+  - `RangeF` — inclusive `[low, high]` range with `model_validator` ordering check
+  - `DomainRandomizationConfig` — every threshold/probability is configurable;
+    `enabled=True` by default; `enabled=False` restores byte-identical legacy behaviour
+  - Wired into root `Settings.domain_randomization` via the existing
+    `_settings_default_factory` pattern; existing YAML files load unchanged
+- **`training/data_generator.py`** — `SyntheticSequenceGenerator` accepts an
+  optional `seed: int | None`. When `cfg.domain_randomization.enabled=True`,
+  per-episode `EpisodeParams` are sampled from a seeded master RNG and applied
+  via `_apply_episode_randomization`; when disabled, the legacy `torch.randn`
+  action path is preserved verbatim. The `2**63 - 1` literal for RNG re-seeding
+  was replaced with `np.iinfo(np.int64).max` to keep the hardcoded-values gate clean.
+- **`training/run_pipeline.py`** — `run_phase_0_data_gen(cfg, *, seed=None)`
+  forwards `seed` into the generator and emits a structured
+  `rssm_epoch_randomization` log event with the active envelope so audit trails
+  can reproduce a run from logs alone.
+- **YAMLs**:
+  - `config/default.yaml` — explicit `domain_randomization:` block with documented ranges
+  - `config/jetson_production.yaml` — tightened envelope for production fine-tuning
+  - `config/mock_hardware.yaml` — widened envelope for stress-testing
+- **Tests** (66 new tests, 100% changed-line coverage):
+  - `tests/unit/training/test_domain_randomization.py` — 26 unit tests
+  - `tests/unit/training/test_data_generator_dr.py` — 6 byte-identity regression tests
+  - `tests/integration/training/test_data_generator_integration.py` — 6 end-to-end
+    tests through the mock orchestrator (DR off / DR on / seed reproducibility)
+  - `tests/unit/test_run_pipeline.py::TestPhase0DomainRandomization` — 2 tests
+  - `tests/unit/test_config_loader.py` — 2 YAML-overlay round-trip tests
+  - `tests/regression/test_domain_randomization_backcompat.py` — 18 pinned-default
+    regression tests guarding YAML load hygiene, `RangeF` validation invariants,
+    disabled-DR identity, env-var override path, and `Settings` round-trips
+- **Docs**:
+  - `docs/architecture.md` — new "Phase 1 — Domain Randomization" subsection
+    under Training Pipeline, with an updated Mermaid diagram
+  - `README.md` — Pillar 1 updated to mention domain randomization
+  - `NEXT_STEPS.md` — Physical AI Phases 2 → 6 roadmap added
+
 ### Added — Rocky Voice Engine (Piper TTS) + Full Jetson Smoke Harness
 
 - **Rocky TTS pipeline** — end-to-end Piper voice synthesis, verified `PASS` on Jetson Orin Nano
