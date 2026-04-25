@@ -23,6 +23,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from mousedroid.config.schema import Settings
+from mousedroid.resilience.retry import RetryExhaustedError
 
 # NOTE: No module-level pytestmark or importorskip — this module contains both
 # hardware tests (need real serial) and mock-only resilience tests (any host).
@@ -118,7 +119,7 @@ async def test_emergency_stop_bypasses_open_circuit(settings: Settings) -> None:
 
     # Drive circuit breaker to open state
     for _ in range(settings.circuit_breaker.failure_threshold + 2):
-        with contextlib.suppress(RuntimeError, CircuitOpenError):
+        with contextlib.suppress(RuntimeError, CircuitOpenError, RetryExhaustedError):
             await resilient.send_velocity(0.1, 0.0, 0.0)
 
     # Verify circuit is open
