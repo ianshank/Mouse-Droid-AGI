@@ -5,3 +5,22 @@ debug: true
 logging:
   level: "DEBUG"
   format: "console"
+
+# Mock-hardware overlay widens DR ranges for stress testing — exercises
+# wider noise/drop envelopes than the production overlay so unit/integration
+# tests catch failure modes early.
+domain_randomization:
+  enabled: true
+  brightness: {low: 0.4, high: 1.6}
+  contrast: {low: 0.5, high: 1.5}
+  gaussian_noise_std: {low: 0.0, high: 0.08}
+  ultrasonic_noise_m: {low: 0.0, high: 0.08}
+  ultrasonic_dropout_prob: {low: 0.0, high: 0.15}
+  wheel_friction: {low: 0.5, high: 1.5}
+  wheel_slip: {low: 0.0, high: 0.30}
+  motor_gain: {low: 0.7, high: 1.3}
+  uart_latency_ms: {low: 1.0, high: 30.0}
+  encoder_dropout_prob: {low: 0.0, high: 0.10}
+  push_force_n: {low: 0.0, high: 3.0}
+  push_event_prob: 0.15
+  feature_noise_std: {low: 0.0, high: 0.05}

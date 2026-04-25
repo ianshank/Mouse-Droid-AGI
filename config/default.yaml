@@ -146,6 +146,31 @@ curiosity:
   forward_model_hidden: 256
   inverse_model_hidden: 256
 
+# Phase 1 — sim-to-real domain randomization (training-only).
+# Set ``enabled: false`` to restore pre-Phase-1 byte-identical data generation.
+domain_randomization:
+  enabled: true
+  brightness: {low: 0.6, high: 1.4}
+  contrast: {low: 0.7, high: 1.3}
+  hue_shift_deg: {low: -15.0, high: 15.0}
+  gaussian_noise_std: {low: 0.0, high: 0.04}
+  motion_blur_px: {low: 0.0, high: 2.5}
+  fov_deg: {low: 58.0, high: 72.0}
+  cam_pitch_deg: {low: -3.0, high: 3.0}
+  cam_yaw_deg: {low: -2.0, high: 2.0}
+  cam_height_m: {low: 0.085, high: 0.115}
+  ultrasonic_noise_m: {low: 0.0, high: 0.03}
+  ultrasonic_dropout_prob: {low: 0.0, high: 0.05}
+  wheel_friction: {low: 0.7, high: 1.3}
+  wheel_slip: {low: 0.0, high: 0.15}
+  chassis_mass_kg: {low: 2.4, high: 3.0}
+  motor_gain: {low: 0.85, high: 1.15}
+  uart_latency_ms: {low: 2.0, high: 18.0}
+  encoder_dropout_prob: {low: 0.0, high: 0.02}
+  push_force_n: {low: 0.0, high: 1.5}
+  push_event_prob: 0.05
+  feature_noise_std: {low: 0.0, high: 0.02}
+
 llm:
   enabled: false
   model_path: "/opt/mousedroid/models/llama-3-8b-instruct.Q4_K_M.gguf"

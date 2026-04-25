@@ -46,6 +46,59 @@ def test_load_training_settings_honours_env_override(
     assert settings.debug is True
 
 
+class TestPhase0DomainRandomization:
+    """Phase 1 — DR config logging branch coverage in ``run_phase_0_data_gen``."""
+
+    @patch("training.data_generator.SyntheticSequenceGenerator")
+    def test_phase_0_logs_dr_block_when_enabled(
+        self,
+        mock_gen_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        from training.run_pipeline import run_phase_0_data_gen
+
+        from mousedroid.config.schema import DomainRandomizationConfig
+
+        cfg = Settings(
+            mock_hardware=True,
+            domain_randomization=DomainRandomizationConfig(enabled=True),
+        )
+        cfg.training.data_dir = str(tmp_path)
+        gen_instance = MagicMock()
+        gen_instance.generate_sequences.return_value = tmp_path
+        mock_gen_cls.return_value = gen_instance
+
+        out = run_phase_0_data_gen(cfg, seed=11)
+
+        assert out == tmp_path
+        mock_gen_cls.assert_called_once_with(cfg, seed=11)
+        gen_instance.generate_sequences.assert_called_once()
+
+    @patch("training.data_generator.SyntheticSequenceGenerator")
+    def test_phase_0_skips_dr_logging_when_disabled(
+        self,
+        mock_gen_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        from training.run_pipeline import run_phase_0_data_gen
+
+        from mousedroid.config.schema import DomainRandomizationConfig
+
+        cfg = Settings(
+            mock_hardware=True,
+            domain_randomization=DomainRandomizationConfig(enabled=False),
+        )
+        cfg.training.data_dir = str(tmp_path)
+        gen_instance = MagicMock()
+        gen_instance.generate_sequences.return_value = tmp_path
+        mock_gen_cls.return_value = gen_instance
+
+        out = run_phase_0_data_gen(cfg)
+
+        assert out == tmp_path
+        mock_gen_cls.assert_called_once_with(cfg, seed=None)
+
+
 class TestRunPipeline:
     """Tests for run_pipeline()."""
 
