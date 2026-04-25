@@ -2010,6 +2010,23 @@ class VoiceConfig(BaseModel):
         ),
     )
 
+    @field_validator("personality_to_model_map", mode="after")
+    @classmethod
+    def _validate_personality_model_map(cls, v: dict[str, str]) -> dict[str, str]:
+        from pathlib import PurePosixPath
+
+        for key, value in v.items():
+            stripped = value.strip()
+            if not stripped:
+                raise ValueError(
+                    f"personality_to_model_map[{key!r}] must be a non-empty path, got {value!r}"
+                )
+            if not PurePosixPath(stripped).is_absolute():
+                raise ValueError(
+                    f"personality_to_model_map[{key!r}] must be an absolute path, got {value!r}"
+                )
+        return v
+
     @field_validator("event_intensity_thresholds", mode="after")
     @classmethod
     def _validate_event_thresholds(cls, v: dict[str, float]) -> dict[str, float]:
@@ -2025,11 +2042,12 @@ class VoiceConfig(BaseModel):
 
         Resolution order:
 
-        1. ``personality_to_model_map[personality]`` — per-personality override.
-        2. ``tts_model_path`` — global fallback.
+        1. ``personality_to_model_map[personality]`` — per-personality override
+           (values are validated as absolute paths at schema load time).
+        2. ``tts_model_path`` — global fallback (used as-is).
 
         Returns:
-            Absolute path string, or ``None`` when no model is configured.
+            Path string, or ``None`` when no model is configured.
         """
         mapped = self.personality_to_model_map.get(self.personality)
         return mapped if mapped is not None else self.tts_model_path

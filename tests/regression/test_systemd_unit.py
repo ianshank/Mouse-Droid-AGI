@@ -81,7 +81,7 @@ def test_env_file_line_present(service_text: str) -> None:
 
 
 def test_compose_file_uses_env_var_indirection(service_text: str) -> None:
-    """ExecStart* lines reference COMPOSE_FILE via ${...} variable expansion."""
+    """ExecStart* lines reference COMPOSE_FILE via ${COMPOSE_FILE} (no bare path)."""
     lines = service_text.splitlines()
     compose_lines = [
         ln
@@ -90,9 +90,38 @@ def test_compose_file_uses_env_var_indirection(service_text: str) -> None:
     ]
     assert compose_lines, "No docker-compose ExecStart* lines found"
     for line in compose_lines:
-        assert "${COMPOSE_FILE" in line, (
-            f"docker compose ExecStart line does not use ${{COMPOSE_FILE...}} indirection: {line!r}"
+        assert "${COMPOSE_FILE}" in line, (
+            f"docker compose ExecStart line must use bare ${{COMPOSE_FILE}} (no default): {line!r}"
         )
+
+
+def test_no_shell_default_expansion_in_exec_lines(service_text: str) -> None:
+    """ExecStart* lines must not use bash-style ${VAR:-default} syntax.
+
+    systemd performs its own env-var expansion and does not run commands
+    through a shell by default.  The :- defaulting syntax would be passed
+    literally to the process rather than expanded.
+    """
+    lines = service_text.splitlines()
+    exec_lines = [ln for ln in lines if re.search(r"^\s*(ExecStartPre|ExecStart|ExecStop)=", ln)]
+    for line in exec_lines:
+        assert ":-" not in line, (
+            f"ExecStart* line uses unsupported bash ':-' default syntax: {line!r}"
+        )
+
+
+def test_environment_defaults_are_set(service_text: str) -> None:
+    """Service file must declare Environment= defaults for MOUSEDROID_INSTALL_DIR and COMPOSE_FILE.
+
+    These allow ExecStart* lines to reference bare ${VAR} without shell defaulting.
+    The EnvironmentFile can override them at deployment time.
+    """
+    assert "Environment=MOUSEDROID_INSTALL_DIR=" in service_text, (
+        "Missing 'Environment=MOUSEDROID_INSTALL_DIR=' default in service file"
+    )
+    assert "Environment=COMPOSE_FILE=" in service_text, (
+        "Missing 'Environment=COMPOSE_FILE=' default in service file"
+    )
 
 
 # ---------------------------------------------------------------------------

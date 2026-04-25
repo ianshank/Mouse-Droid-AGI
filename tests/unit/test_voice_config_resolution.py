@@ -131,3 +131,23 @@ class TestPersonalityToModelMap:
             }
         )
         assert len(cfg.personality_to_model_map) == 2
+
+    def test_relative_path_raises_validation_error(self) -> None:
+        """A relative model path must be rejected."""
+        with pytest.raises(ValidationError, match="absolute path"):
+            _cfg(personality_to_model_map={"rocky": "models/rocky.onnx"})
+
+    def test_empty_string_path_raises_validation_error(self) -> None:
+        """An empty model path must be rejected."""
+        with pytest.raises(ValidationError, match="non-empty path"):
+            _cfg(personality_to_model_map={"rocky": ""})
+
+    def test_whitespace_only_path_raises_validation_error(self) -> None:
+        """A whitespace-only model path must be rejected."""
+        with pytest.raises(ValidationError, match="non-empty path"):
+            _cfg(personality_to_model_map={"rocky": "   "})
+
+    def test_absolute_path_accepted(self) -> None:
+        """Absolute model paths pass validation."""
+        cfg = _cfg(personality_to_model_map={"rocky": "/models/rocky.onnx"})
+        assert cfg.personality_to_model_map["rocky"] == "/models/rocky.onnx"

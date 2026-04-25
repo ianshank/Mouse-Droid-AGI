@@ -25,23 +25,29 @@ Type=notify
 User=root
 WatchdogSec=30
 
-# Working directory — override via MOUSEDROID_INSTALL_DIR in env file
+# Working directory — override MOUSEDROID_INSTALL_DIR in docker.env to relocate
 WorkingDirectory=/opt/mousedroid
+
+# Default environment values (systemd does not support shell ${VAR:-default} syntax;
+# use Environment= for defaults so ExecStart* lines can reference bare ${VAR}).
+# These are overridden by any matching keys in docker.env or a drop-in unit.
+Environment=MOUSEDROID_INSTALL_DIR=/opt/mousedroid
+Environment=COMPOSE_FILE=/opt/mousedroid/docker-compose.jetson.yml
 
 # Optional environment file (dash prefix = no error if missing)
 EnvironmentFile=-/etc/mousedroid/docker.env
 
 # Sync production config overlay from repo to /etc/mousedroid (non-fatal).
-# Path controlled via MOUSEDROID_INSTALL_DIR and MOUSEDROID_OVERLAY_DST in docker.env.
-ExecStartPre=-${MOUSEDROID_INSTALL_DIR:-/opt/mousedroid}/scripts/sync_jetson_overlay.sh
+# Path controlled via MOUSEDROID_INSTALL_DIR in docker.env.
+ExecStartPre=-${MOUSEDROID_INSTALL_DIR}/scripts/sync_jetson_overlay.sh
 
 # Pre-flight validation — abort if required hardware/config is missing
-ExecStartPre=/opt/mousedroid/scripts/preflight_check.sh
+ExecStartPre=${MOUSEDROID_INSTALL_DIR}/scripts/preflight_check.sh
 
-# Compose file path — defaults to project compose, overridable via COMPOSE_FILE env
-ExecStartPre=/usr/bin/docker compose -f ${COMPOSE_FILE:-/opt/mousedroid/docker-compose.jetson.yml} pull --quiet
-ExecStart=/usr/bin/docker compose -f ${COMPOSE_FILE:-/opt/mousedroid/docker-compose.jetson.yml} up --abort-on-container-exit
-ExecStop=/usr/bin/docker compose -f ${COMPOSE_FILE:-/opt/mousedroid/docker-compose.jetson.yml} down --timeout 30
+# Compose file path — default set above, overridable via COMPOSE_FILE in docker.env
+ExecStartPre=/usr/bin/docker compose -f ${COMPOSE_FILE} pull --quiet
+ExecStart=/usr/bin/docker compose -f ${COMPOSE_FILE} up --abort-on-container-exit
+ExecStop=/usr/bin/docker compose -f ${COMPOSE_FILE} down --timeout 30
 
 # Restart policy
 Restart=on-failure

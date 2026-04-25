@@ -41,12 +41,13 @@ if [[ ! -d "${DST_DIR}" ]]; then
 fi
 
 # Atomic copy using a temp file in the same directory so rename is on one FS.
-OVERLAY_TMP="${OVERLAY_DST}.tmp.$$"
+OVERLAY_TMP="$(mktemp "${DST_DIR}/.overlay_sync.XXXXXX")"
+trap 'rm -f "${OVERLAY_TMP}"' EXIT INT TERM
+
 if cp -f "${OVERLAY_SRC}" "${OVERLAY_TMP}"; then
     mv -f "${OVERLAY_TMP}" "${OVERLAY_DST}"
     log "SYNCED: ${OVERLAY_SRC} -> ${OVERLAY_DST}"
 else
-    rm -f "${OVERLAY_TMP}" 2>/dev/null || true
     log "ERROR: failed to copy ${OVERLAY_SRC} to ${OVERLAY_DST}"
     exit 1
 fi
