@@ -75,7 +75,10 @@ services:
       - audio
       - video
       - dialout
-      - i2c
+      # NOTE: 'i2c' group_add removed (PR #45 review): JetPack base images do
+      # not always define an 'i2c' Unix group, which would block container
+      # start. privileged: true + explicit /dev/i2c-7 passthrough already
+      # grants full I²C access for the SSD1306 OLED face panel.
       # Some JetPack images do not define a gpio Unix group; privileged mode
       # plus explicit /dev/gpiochip* passthrough is the actual access path.
 

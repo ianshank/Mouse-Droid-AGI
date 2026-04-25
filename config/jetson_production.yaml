@@ -122,6 +122,27 @@ experience:
   map_size_gb: 40
   flush_every_n: 60
 
+# MSE-6 SSD1306 OLED face display (PR #45).
+# Wiring on Jetson Orin Nano 40-pin header:
+#   VCC -> pin 1 (3.3V)   GND -> pin 6
+#   SDA -> pin 3 (I2C1_SDA -> /dev/i2c-7)
+#   SCL -> pin 5 (I2C1_SCL -> /dev/i2c-7)
+# Verify with: sudo i2cdetect -y -r 7  (expect 0x3C)
+# All thresholds intentionally left at schema defaults so we inherit
+# upstream tuning without duplicating magic numbers here.
+face_display:
+  enabled: true
+  i2c_bus: 7
+  i2c_address: 0x3C
+  width: 128
+  height: 64
+  refresh_hz: 10.0
+  boot_message: "MSE-6 online"
+  idle_blink_interval_s: 4.0
+  blink_close_duration_s: 0.15
+  min_dwell_s: 0.6
+  fallback_to_mock_on_error: true
+
 # Hailo-8 neural accelerator (uncomment to enable)
 # hailo:
 #   enabled: true
