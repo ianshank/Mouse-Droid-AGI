@@ -58,7 +58,7 @@ def test_angry_eyes_are_mirrored() -> None:
     inner vs. outer halves of each eye bounding box.
     """
     img = render_expression(Expression.ANGRY, 128, 64)
-    # Convert to a numpy array (H×W, dtype uint8/bool) for index-safe access.
+    # Convert to a numpy array (HxW, dtype uint8/bool) for index-safe access.
     arr = np.array(img)
 
     def pixel(x: int, y: int) -> int:
@@ -90,7 +90,9 @@ def test_angry_eyes_are_mirrored() -> None:
     # stays at the top → same relationship, mirrored.
     right_inner = count_in_cols(range(x0r, right_cx), top_rows)
     right_outer = count_in_cols(range(right_cx, x1r), top_rows)
-    assert right_outer > right_inner, "right eye outer half should have more top pixels (slant inward)"
+    assert right_outer > right_inner, (
+        "right eye outer half should have more top pixels (slant inward)"
+    )
 
 
 def test_render_text_centres_message() -> None:
