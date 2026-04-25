@@ -8,9 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from mousedroid.agents.base import AgentProtocol
 from mousedroid.comms.protocol import ESP32CommProtocol
-from mousedroid.efficiency.tensorrt import TensorRTCompilerProtocol
 from mousedroid.hardware.protocols import (
     AudioProtocol,
     DistanceSensorProtocol,
@@ -24,9 +22,9 @@ from mousedroid.llm_gateway.protocol import LLMGatewayProtocol
 from mousedroid.logging.setup import get_logger
 from mousedroid.safety.protocol import SafetyMonitorProtocol
 from mousedroid.voice.protocol import VoiceEngineProtocol
-from mousedroid.world_model.protocol import WorldModelProtocol
 
 if TYPE_CHECKING:
+    from mousedroid.agents.base import AgentProtocol
     from mousedroid.arm.protocols import (
         ArmControllerProtocol,
         ArmDriverProtocol,
@@ -42,6 +40,7 @@ if TYPE_CHECKING:
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.config.schema import Settings, UltrasonicConfig
     from mousedroid.curiosity.protocol import CuriosityProtocol
+    from mousedroid.efficiency.tensorrt import TensorRTCompilerProtocol
     from mousedroid.experience.logger import ExperienceLogger
     from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
     from mousedroid.health.monitor import HealthMonitor
@@ -54,6 +53,7 @@ if TYPE_CHECKING:
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
     from mousedroid.voice.mock_tts import MockTTS
     from mousedroid.voice.tts import PiperTTS
+    from mousedroid.world_model.protocol import WorldModelProtocol
 
 _log = get_logger(__name__)
 

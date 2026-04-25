@@ -30,6 +30,10 @@ if TYPE_CHECKING:
 _CONFIG_LIST_ENV_VARS = ("MOUSEDROID_CONFIGS", "MOUSEDROID_JETSON_CONFIGS")
 _CONFIG_SINGLE_ENV_VARS = ("MOUSEDROID_CONFIG", "MOUSEDROID_JETSON_CONFIG")
 
+# Named constants for paths and phrases used in validation helpers.
+_ARGUS_SOCKET_PATH: str = "/tmp/argus_socket"  # noqa: S108
+_DEFAULT_SMOKE_PHRASE: str = "Hello hello! Rocky ready!"
+
 
 @dataclass(frozen=True)
 class LidarScanDiagnostics:
@@ -109,8 +113,8 @@ def camera_unavailable_reason(cfg: Settings, exc: Exception | None = None) -> st
     device_path = str(cfg.camera.device_path).strip()
     if device_path and not Path(device_path).exists():
         reasons.append(f"V4L2 device {device_path} is missing")
-    if not Path("/tmp/argus_socket").exists():  # noqa: S108
-        reasons.append("libargus socket /tmp/argus_socket is missing")
+    if not Path(_ARGUS_SOCKET_PATH).exists():
+        reasons.append(f"libargus socket {_ARGUS_SOCKET_PATH} is missing")
 
     if not reasons:
         return None
@@ -398,7 +402,7 @@ async def play_speaker_tone(
 async def play_rocky_voice_phrase(
     cfg: Settings,
     *,
-    phrase: str = "Hello hello! Rocky ready!",
+    phrase: str = _DEFAULT_SMOKE_PHRASE,
 ) -> tuple[int, float] | None:
     """Play a short Rocky voice phrase through the configured voice pipeline.
 

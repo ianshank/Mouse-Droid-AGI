@@ -2014,7 +2014,7 @@ class VoiceConfig(BaseModel):
     @classmethod
     def _validate_event_thresholds(
         cls, v: dict[str, float]
-    ) -> dict[str, float]:  # pragma: no cover
+    ) -> dict[str, float]:
         for key, value in v.items():
             if not (0.0 <= value <= 1.0):
                 raise ValueError(

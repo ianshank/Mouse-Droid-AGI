@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from torch import Tensor
+if TYPE_CHECKING:
+    from torch import Tensor
 
 from mousedroid.safety.context import SafetyContext
 
