@@ -73,9 +73,7 @@ def register_motor_tools(registry: ToolRegistry, deps: MotorToolDeps) -> None:
     max_v = deps.cfg.esp32.max_velocity_mps
     max_omega = deps.cfg.esp32.max_omega_rads
 
-    async def _set_velocity(
-        vx: float = 0.0, vy: float = 0.0, omega: float = 0.0
-    ) -> dict[str, Any]:
+    async def _set_velocity(vx: float = 0.0, vy: float = 0.0, omega: float = 0.0) -> dict[str, Any]:
         clamped_vx = _clamp(vx, lower=-max_v, upper=max_v)
         clamped_vy = _clamp(vy, lower=-max_v, upper=max_v)
         clamped_omega = _clamp(omega, lower=-max_omega, upper=max_omega)

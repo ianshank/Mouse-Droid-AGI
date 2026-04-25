@@ -9,6 +9,5 @@ from __future__ import annotations
 
 from mousedroid.main import cli_entry
 
-
 if __name__ == "__main__":  # pragma: no cover - entry point
     cli_entry()

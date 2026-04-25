@@ -21,7 +21,7 @@ import pytest
 # coverage harness. Wrap the whole probe so any failure skips the file.
 try:
     import mcp  # noqa: F401
-    from mcp.shared.memory import (  # noqa: F401
+    from mcp.shared.memory import (
         create_connected_server_and_client_session,
     )
 except Exception as exc:  # pragma: no cover - environment-dependent

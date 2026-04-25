@@ -85,14 +85,19 @@ class MCPTransportAdapter:
         self.sdk_server.read_resource()(self._on_read_resource)
         self.sdk_server.list_prompts()(self._on_list_prompts)
 
-    async def _serve_stdio(self) -> None:
-        """Run the SDK over stdio (parent process owns the connection)."""
+    async def _serve_stdio(self) -> None:  # pragma: no cover - binds real stdio
+        """Run the SDK over stdio (parent process owns the connection).
+
+        Coverage-excluded because the body opens a real stdio transport
+        and blocks on JSON-RPC traffic; it is exercised end-to-end by
+        ``tests/integration/test_mcp_stdio_client.py`` via the SDK's
+        in-memory connector, and by manual operator-guide validation
+        against Claude Desktop / Claude Code.
+        """
         import mcp.server.stdio as _stdio
 
         async with _stdio.stdio_server() as (read, write):
-            await self.sdk_server.run(
-                read, write, self.sdk_server.create_initialization_options()
-            )
+            await self.sdk_server.run(read, write, self.sdk_server.create_initialization_options())
 
     async def _serve_sse(self) -> None:
         """Run the SDK over Server-Sent Events on the configured host/port."""
@@ -166,9 +171,7 @@ class MCPTransportAdapter:
             for name in self.server.list_tool_names()
         ]
 
-    async def _on_call_tool(
-        self, name: str, arguments: dict[str, Any] | None
-    ) -> dict[str, Any]:
+    async def _on_call_tool(self, name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:
         """Dispatch a tool call through the bridge.
 
         Returns a plain dict; the SDK wraps it as ``StructuredContent``

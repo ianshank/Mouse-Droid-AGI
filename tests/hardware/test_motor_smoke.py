@@ -52,9 +52,7 @@ async def test_velocity_roundtrip_clamps_and_dispatches(
         await asyncio.sleep(jetson_settings.esp32.smoke_test_settle_s)
         reading = await driver.read_encoders()
         # Structural assertion: every encoder field is well-typed.
-        assert reading.left_velocity_mps == pytest.approx(
-            reading.left_velocity_mps, rel=1.0
-        )
+        assert reading.left_velocity_mps == pytest.approx(reading.left_velocity_mps, rel=1.0)
         assert isinstance(reading.timestamp, float)
         if not jetson_settings.mock_hardware:
             min_fraction = jetson_settings.esp32.smoke_test_min_velocity_fraction
@@ -98,7 +96,6 @@ async def test_mcp_resource_polling_does_not_deadlock(jetson_settings: Settings)
     """
     from mousedroid.config.schema import MCPConfig
     from mousedroid.factory import build_mcp_server
-
     from mousedroid.mcp.server import MouseDroidMCPServer
 
     overlay_mcp = (jetson_settings.mcp or MCPConfig()).model_copy(

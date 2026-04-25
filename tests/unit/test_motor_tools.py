@@ -169,9 +169,7 @@ class TestActuationAllowlistDefault:
         """YAMLs that explicitly set actuation_tools keep their values."""
         from mousedroid.config.schema import MCPConfig
 
-        cfg = MCPConfig.model_validate(
-            {"actuation_tools": ["only_this_one"]}
-        )
+        cfg = MCPConfig.model_validate({"actuation_tools": ["only_this_one"]})
         assert cfg.actuation_tools == ["only_this_one"]
         assert "set_velocity" not in cfg.actuation_tools
 
@@ -179,9 +177,7 @@ class TestActuationAllowlistDefault:
 class TestFactoryWiring:
     """``build_orchestrator`` registers motor tools only for the rover platform."""
 
-    def test_motor_tools_registered_for_mouse_droid(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_motor_tools_registered_for_mouse_droid(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MOUSEDROID_MOCK_HARDWARE", "true")
         from mousedroid.config.schema import PlatformType, Settings
         from mousedroid.factory import build_orchestrator
@@ -191,9 +187,7 @@ class TestFactoryWiring:
         registry_names = set(orch._tool_registry.names)  # type: ignore[attr-defined]
         assert {"set_velocity", "read_encoders", "emergency_stop"} <= registry_names
 
-    def test_motor_tools_skipped_for_robot_arm(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_motor_tools_skipped_for_robot_arm(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MOUSEDROID_MOCK_HARDWARE", "true")
         from mousedroid.config.schema import PlatformType, Settings
         from mousedroid.factory import build_orchestrator
@@ -203,4 +197,3 @@ class TestFactoryWiring:
         registry_names = set(orch._tool_registry.names)  # type: ignore[attr-defined]
         assert "set_velocity" not in registry_names
         assert "emergency_stop" not in registry_names
-
