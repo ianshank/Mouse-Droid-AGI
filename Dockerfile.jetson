@@ -33,6 +33,7 @@ ENV PIP_TRUSTED_HOST="pypi.org pypi.ngc.nvidia.com"
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
+    curl \
     libgpiod-dev \
     v4l-utils \
     i2c-tools \
@@ -108,6 +109,25 @@ RUN pip install --no-cache-dir "huggingface-hub>=0.20" diskcache || true
 # Stage 5: Hailo-8 accelerator support (non-fatal — graceful fallback)
 # ---------------------------------------------------------------------------
 RUN pip install --no-cache-dir "hailort>=4.18" || true
+
+# ---------------------------------------------------------------------------
+# Stage 5b: Rocky voice (Piper TTS) — non-fatal
+#
+# /opt/mousedroid is bind-mounted from the host in docker-compose.jetson.yml,
+# so the voice model is staged at /opt/voice_models to avoid being masked at
+# runtime. The path here MUST match voice.tts_model_path in the runtime YAML
+# (config/jetson_production.yaml).
+# ---------------------------------------------------------------------------
+RUN pip install --no-cache-dir "piper-tts" 2>&1 \
+    || echo "WARNING: piper-tts install failed (Rocky voice disabled)"
+RUN mkdir -p /opt/voice_models && \
+    curl -fsSL --retry 3 --retry-delay 2 \
+        -o /opt/voice_models/en_US-lessac-medium.onnx \
+        https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx && \
+    curl -fsSL --retry 3 --retry-delay 2 \
+        -o /opt/voice_models/en_US-lessac-medium.onnx.json \
+        https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json \
+    || echo "WARNING: piper voice model download failed (Rocky voice disabled until model staged)"
 
 # ---------------------------------------------------------------------------
 # Stage 6: GCP Digital Twin (non-fatal — graceful fallback)

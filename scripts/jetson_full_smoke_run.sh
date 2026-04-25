@@ -204,6 +204,49 @@ asyncio.run(main())'
 fi
 
 # --- Summary -------------------------------------------------------------
+
+# Enrich notes for the voice stage so the precise reason for any failure is
+# visible directly in SUMMARY.md without having to open voice.log.
+voice_log="${RUN_DIR}/voice.log"
+voice_remediation=""
+if [[ -f "${voice_log}" ]]; then
+    for i in "${!RESULTS[@]}"; do
+        IFS='|' read -r status name note <<<"${RESULTS[$i]}"
+        if [[ "${name}" != "voice" || "${status}" == "PASS" ]]; then
+            continue
+        fi
+        hints=()
+        if grep -q "voice.tts_model_path is not configured" "${voice_log}"; then
+            hints+=("voice.tts_model_path missing in runtime config")
+        fi
+        if grep -q "piper_tts_not_installed" "${voice_log}"; then
+            hints+=("piper-tts python package not installed in container")
+        fi
+        if grep -q "piper_tts_no_model_path" "${voice_log}"; then
+            hints+=("piper TTS started without a model path")
+        fi
+        if grep -q "piper_tts_load_failed" "${voice_log}"; then
+            hints+=("piper voice model failed to load (see voice.log)")
+        fi
+        if grep -qE "Piper voice model failed to load from" "${voice_log}"; then
+            hints+=("Piper model file unreadable at configured tts_model_path")
+        fi
+        if grep -q "Rocky voice TTS returned silent audio" "${voice_log}"; then
+            hints+=("synthesised audio was silent (model loaded but produced no signal)")
+        fi
+        if grep -q "configured speaker unavailable for Rocky voice" "${voice_log}"; then
+            hints+=("speaker device unavailable for Rocky voice")
+        fi
+        if [[ ${#hints[@]} -eq 0 ]]; then
+            hints+=("see voice.log for details")
+        fi
+        joined=$(printf '; %s' "${hints[@]}")
+        joined="${joined:2}"
+        RESULTS[$i]="${status}|${name}|${note} -- ${joined}"
+        voice_remediation="${joined}"
+    done
+fi
+
 {
     echo "# Jetson Full Smoke Run ${STAMP}"
     echo
@@ -224,6 +267,23 @@ fi
         IFS='|' read -r status name note <<<"${entry}"
         echo "| ${name} | ${status} | ${note} |"
     done
+    if [[ -n "${voice_remediation}" ]]; then
+        echo
+        echo "## Rocky voice prerequisites"
+        echo
+        echo "Voice stage diagnostics: ${voice_remediation}"
+        echo
+        echo "To resolve, ensure ALL of the following are true on the Jetson:"
+        echo
+        echo "1. \`piper-tts\` is installed inside the \`${CONTAINER}\` container"
+        echo "   (rebuild image: \`docker compose -f docker-compose.jetson.yml build --no-cache mousedroid\`)."
+        echo "2. The Piper voice model exists at the path referenced by"
+        echo "   \`voice.tts_model_path\` in the active runtime config"
+        echo "   (default: \`/opt/voice_models/en_US-lessac-medium.onnx\` plus its \`.onnx.json\` sibling)."
+        echo "3. The configured USB speaker is enumerated and not held by another process."
+        echo
+        echo "Full per-stage logs are in \`${RUN_DIR}\` (\`voice.log\` for this stage)."
+    fi
 } > "${SUMMARY}"
 
 log "Summary written to ${SUMMARY}"
