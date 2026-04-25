@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 from unittest.mock import MagicMock, patch
 
@@ -24,6 +25,7 @@ def test_gateway_config_construction():
     cfg = GatewayConfig()
     assert cfg.n_threads == 4
     assert cfg.n_gpu_layers == -1
+    assert cfg.n_batch == 512
     assert cfg.max_tokens == 256
     assert cfg.temperature == 0.1
     assert len(cfg.stop_tokens) == 2
@@ -37,11 +39,13 @@ def test_gateway_config_custom_values():
     cfg = GatewayConfig(
         model_path="/tmp/model.gguf",
         n_threads=8,
+        n_batch=32,
         max_tokens=128,
         context_length=4096,
         latency_target_ms=300.0,
     )
     assert cfg.n_threads == 8
+    assert cfg.n_batch == 32
     assert cfg.max_tokens == 128
     assert cfg.context_length == 4096
     assert cfg.latency_target_ms == 300.0
@@ -196,6 +200,34 @@ async def test_start_degrades_on_missing_model_file(gateway: LLMGateway):
         await gateway.start()  # Should NOT raise
     assert gateway._degraded is True
     assert gateway._model is None
+
+
+def test_load_model_passes_n_batch() -> None:
+    """_load_model forwards n_batch to llama-cpp."""
+    cfg = GatewayConfig(
+        model_path="/tmp/fake.gguf",
+        context_length=1024,
+        n_threads=2,
+        n_gpu_layers=0,
+        n_batch=32,
+    )
+    gateway = LLMGateway(cfg)
+    fake_model = object()
+    fake_llama = MagicMock(return_value=fake_model)
+    fake_module = MagicMock()
+    fake_module.Llama = fake_llama
+
+    with patch.dict(sys.modules, {"llama_cpp": fake_module}):
+        gateway._load_model()
+
+    fake_llama.assert_called_once_with(
+        model_path=str(cfg.model_path),
+        n_ctx=1024,
+        n_threads=2,
+        n_gpu_layers=0,
+        n_batch=32,
+    )
+    assert gateway._model is fake_model
 
 
 async def test_translate_mission_with_model(gateway: LLMGateway):

@@ -27,6 +27,7 @@ class GatewayConfig(BaseModel):
     context_length: int = Field(2048, gt=0, description="Model context window size in tokens")
     n_threads: int = Field(4, gt=0, description="CPU threads for inference")
     n_gpu_layers: int = Field(-1, description="GPU layers to offload (-1 = all)")
+    n_batch: int = Field(512, gt=0, description="Prompt batch size for llama-cpp context")
     max_tokens: int = Field(256, gt=0, description="Max generation tokens")
     temperature: float = Field(0.1, ge=0, le=2, description="Sampling temperature")
     latency_target_ms: float = Field(
