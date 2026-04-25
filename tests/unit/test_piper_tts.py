@@ -140,6 +140,8 @@ def test_synthesize_sync_with_loaded_voice_int16() -> None:
             wav_file.setframerate(rf.getframerate())
             wav_file.writeframes(rf.readframes(rf.getnframes()))
 
+    # piper-tts >=1.3 uses synthesize_wav; older API used synthesize(text, wav_file).
+    mock_voice.synthesize_wav = write_wav
     mock_voice.synthesize = write_wav
     tts._voice = mock_voice
 
@@ -148,6 +150,33 @@ def test_synthesize_sync_with_loaded_voice_int16() -> None:
     assert len(samples) == n_samples
     # int16 values should be normalised to [-1, 1]
     assert np.all(np.abs(samples) <= 1.0)
+
+
+def test_synthesize_sync_legacy_synthesize_only() -> None:
+    """_synthesize_sync falls back to legacy synthesize(text, wav_file) when
+    synthesize_wav is absent (piper-tts <1.3)."""
+    from types import SimpleNamespace
+
+    from mousedroid.voice.tts import PiperTTS
+
+    tts = PiperTTS(_cfg(tts_sample_rate=22050))
+    n_samples = 50
+    wav_bytes = _make_wav_bytes(n_samples)
+
+    def write_wav(text: str, wav_file: wave.Wave_write) -> None:
+        src = io.BytesIO(wav_bytes)
+        with wave.open(src, "rb") as rf:
+            wav_file.setnchannels(rf.getnchannels())
+            wav_file.setsampwidth(rf.getsampwidth())
+            wav_file.setframerate(rf.getframerate())
+            wav_file.writeframes(rf.readframes(rf.getnframes()))
+
+    # SimpleNamespace lacks synthesize_wav, so getattr(..., None) returns None
+    tts._voice = SimpleNamespace(synthesize=write_wav)
+
+    samples = tts._synthesize_sync("hi")
+    assert samples.dtype == np.float32
+    assert len(samples) == n_samples
 
 
 def test_start_handles_generic_exception() -> None:
