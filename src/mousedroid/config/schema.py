@@ -2237,8 +2237,16 @@ class MCPConfig(BaseModel):
             "calibrate_ultrasonic",
             "tensorrt_compile",
             "export_experience",
+            "set_velocity",
         ],
-        description="Tools considered actuation/side-effecting (config-driven, not hardcoded)",
+        description=(
+            "Tools considered actuation/side-effecting (config-driven, not hardcoded). "
+            "`emergency_stop` is intentionally NOT in this default list — refusing "
+            "an e-stop call during a safety emergency would defeat its purpose. "
+            "`read_encoders` is read-only and stays out of the list as well. "
+            "Existing YAML overrides win; this default only changes for clients that "
+            "never set the field."
+        ),
     )
     expose_actuation_tools: bool = Field(
         False,
