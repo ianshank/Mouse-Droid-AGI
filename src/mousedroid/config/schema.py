@@ -269,6 +269,34 @@ class ESP32Config(BaseModel):
     keepalive_hz: float = Field(10.0, gt=0, description="Motor command keepalive rate (Hz)")
     max_velocity_mps: float = Field(0.5, gt=0, description="Max velocity magnitude (m/s)")
     max_omega_rads: float = Field(2.0, gt=0, description="Max angular velocity (rad/s)")
+    smoke_test_velocity_mps: float = Field(
+        0.05,
+        gt=0,
+        description=(
+            "Target forward velocity for the rover hardware smoke test "
+            "(see tests/hardware/test_motor_smoke.py). Kept low so an "
+            "untethered rover can stop within tabletop bounds."
+        ),
+    )
+    smoke_test_settle_s: float = Field(
+        0.5,
+        gt=0,
+        description="Settle time after sending velocity before reading encoders (s)",
+    )
+    smoke_test_min_velocity_fraction: float = Field(
+        0.5,
+        gt=0,
+        le=1.0,
+        description=(
+            "Minimum encoder velocity expressed as a fraction of the "
+            "setpoint that the smoke test asserts on real hardware."
+        ),
+    )
+    emergency_stop_budget_ms: float = Field(
+        50.0,
+        gt=0,
+        description="Maximum acceptable latency for emergency_stop ack (ms)",
+    )
     mock_battery_v: float = Field(
         12.0,
         gt=0,
@@ -2286,6 +2314,16 @@ class MCPConfig(BaseModel):
             "True in deployment YAML (or via MOUSEDROID_MCP__BIND_TRANSPORT=true) "
             "to expose the server over stdio/SSE/streamable_http."
         ),
+    )
+    smoke_test_poll_rps: float = Field(
+        5.0,
+        gt=0,
+        description="MCP resource polling rate during the rover hardware smoke (RPS)",
+    )
+    smoke_test_duration_s: float = Field(
+        2.0,
+        gt=0,
+        description="Duration of the MCP-polling-during-actuation smoke window (s)",
     )
 
     @field_validator("tools_denylist")
