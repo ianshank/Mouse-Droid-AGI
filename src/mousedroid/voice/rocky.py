@@ -197,10 +197,19 @@ class RockyVoiceEngine:
 
         # Apply Rocky personality transform using context intensity
         intensity = context.get("valence", 1.0) if context else 1.0
+        effective_threshold = self._cfg.event_intensity_thresholds.get(
+            event, self._cfg.intensity_threshold
+        )
         text = rocky_transform(
             text,
             intensity=intensity,
-            intensity_threshold=self._cfg.intensity_threshold,
+            intensity_threshold=effective_threshold,
+        )
+        _log.debug(
+            "rocky_voice_transform",
+            voice_event=event,
+            intensity=intensity,
+            effective_threshold=effective_threshold,
         )
 
         # Determine priority from event semantics

@@ -348,6 +348,7 @@ def build_voice_engine(
         personality=cfg.voice.personality,
         cooldown_s=cfg.voice.cooldown_s,
         sample_rate=speaker.sample_rate,
+        resolved_model_path=cfg.voice.resolved_tts_model_path(),
     )
     return engine
 

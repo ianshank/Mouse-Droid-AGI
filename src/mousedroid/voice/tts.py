@@ -54,9 +54,21 @@ class PiperTTS:
         try:
             from piper import PiperVoice
 
-            if self._cfg.tts_model_path is not None:
-                self._voice = PiperVoice.load(self._cfg.tts_model_path)
-                _log.info("piper_tts_model_loaded", path=self._cfg.tts_model_path)
+            resolved_path = self._cfg.resolved_tts_model_path()
+            if resolved_path is not None:
+                source = (
+                    "personality_map"
+                    if self._cfg.personality_to_model_map.get(self._cfg.personality) is not None
+                    else "tts_model_path"
+                )
+                _log.info(
+                    "piper_tts_model_resolved",
+                    personality=self._cfg.personality,
+                    path=resolved_path,
+                    source=source,
+                )
+                self._voice = PiperVoice.load(resolved_path)
+                _log.info("piper_tts_model_loaded", path=resolved_path)
             else:
                 _log.warning("piper_tts_no_model_path")
         except ImportError:

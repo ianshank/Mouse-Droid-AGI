@@ -62,4 +62,62 @@ DEFAULT_PHRASES: dict[str, list[str]] = {
         "Shutting down. Rest rest.",
         "Power off. See you soon!",
     ],
+    "turn_left": [
+        "Turning left! Watch out!",
+        "Go left! Swivel swivel!",
+        "Left turn. Adjust adjust.",
+    ],
+    "turn_right": [
+        "Turning right! Make way!",
+        "Go right! Pivot pivot!",
+        "Right turn. Correct course.",
+    ],
+    "arrived": [
+        "Is here! Destination reach!",
+        "Arrive! Journey complete!",
+        "We here! Very good!",
+    ],
+    "battery_low_warn": [
+        "Warning! Battery getting low.",
+        "Power drop. Find charge soon.",
+        "Energy low. Suggest recharge.",
+    ],
+    "battery_critical": [
+        "Critical! Battery almost dead!",
+        "Emergency charge! Very low!",
+        "Shutdown soon! Need power now!",
+    ],
+    "llm_translation_ack": [
+        "Understand! Command receive.",
+        "Got it! Process now.",
+        "Acknowledge! Working on.",
+    ],
+    "llm_translation_failed": [
+        "Not understand. Repeat please!",
+        "Confusion confusion. Try again.",
+        "Parse fail. Different words?",
+    ],
+    "greeting": [
+        "Hello! Is Rocky! Very nice meet!",
+        "Greetings greetings! How do?",
+        "Oh! Is you! Welcome welcome!",
+        "Hi hi hi! Rocky very happy see!",
+        "Good day! Rocky at service!",
+    ],
+    "greeting_formal": [
+        "Good greetings, esteemed person.",
+        "Rocky present and functional. Hello.",
+        "Salutations. Rocky report for duty.",
+    ],
+    "greeting_excited": [
+        "Oh oh oh! Is person! Hello hello!",
+        "Friend friend! Rocky so happy!",
+        "Yes yes! You arrive! Wonderful!",
+    ],
+    "farewell": [
+        "Goodbye! Come back soon yes?",
+        "Safe travels! Rocky miss you!",
+        "Until next time! Bye bye!",
+        "Go well! Rocky wave goodbye!",
+    ],
 }
