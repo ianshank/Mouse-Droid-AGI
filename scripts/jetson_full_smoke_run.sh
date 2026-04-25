@@ -109,9 +109,17 @@ fi
 record "container_health" "INFO" "see container_health.log"
 
 # --- Stages 1-7: delegated to jetson_smoke_test.sh via PY_WRAPPER --------
-for stage in system gpio serial camera audio lidar speaker; do
+# Bench-debug sensors (camera/audio/lidar/speaker) are non-blocking until the
+# physical wiring/overlays land; system/gpio/serial remain hard gates.
+for stage in system gpio serial; do
     run_stage "${stage}" "yes" bash scripts/jetson_smoke_test.sh "${stage}" || break
 done
+
+if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
+    for stage in camera audio lidar speaker; do
+        run_stage "${stage}" "no" bash scripts/jetson_smoke_test.sh "${stage}"
+    done
+fi
 
 # --- Stage 8: OLED (non-blocking, container stays up) --------------------
 if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
