@@ -427,32 +427,9 @@ async def play_rocky_voice_phrase(
 
     await engine.start()
     try:
-        if getattr(speaker, "_stream", object()) is None:
-            raise RuntimeError("configured speaker device unavailable")
-
-        tts = getattr(engine, "_tts", None)
-        if tts is None:
-            raise RuntimeError("voice engine missing TTS backend")
-
-        if not cfg.mock_hardware and getattr(tts, "_voice", None) is None:
-            model_path = str(cfg.voice.tts_model_path or "").strip()
-            if not model_path:
-                raise RuntimeError("voice.tts_model_path is not configured")
-            raise RuntimeError(f"Piper voice model failed to load from {model_path}")
-
-        samples = np.asarray(await tts.synthesize(phrase), dtype=np.float32)
-        if samples.size == 0:
-            raise RuntimeError("Rocky voice TTS returned no samples")
-
-        peak_abs = float(np.max(np.abs(samples)))
+        samples_written, peak_abs = await engine.play_phrase(phrase)
         if not cfg.mock_hardware and peak_abs <= 1e-6:
             raise RuntimeError("Rocky voice TTS returned silent audio")
-
-        write_samples = getattr(engine, "_write_samples", None)
-        if not callable(write_samples):
-            raise RuntimeError("voice engine missing sample writer")
-        await write_samples(samples)
-
-        return int(samples.size), peak_abs
+        return samples_written, peak_abs
     finally:
         await engine.stop()

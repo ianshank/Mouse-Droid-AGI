@@ -28,3 +28,14 @@ class VoiceEngineProtocol(Protocol):
     async def stop(self) -> None:
         """Stop the voice engine and drain the queue."""
         ...
+
+    async def play_phrase(self, text: str) -> tuple[int, float]:
+        """Immediately synthesize and play one phrase for validation flows.
+
+        Args:
+            text: Phrase to synthesize and play.
+
+        Returns:
+            Tuple of ``(samples_written, peak_abs_sample)``.
+        """
+        ...

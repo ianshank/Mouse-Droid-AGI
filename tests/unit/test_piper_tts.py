@@ -158,15 +158,11 @@ def test_synthesize_sync_legacy_synthesize_only() -> None:
 
     tts = PiperTTS(_cfg(tts_sample_rate=22050))
     n_samples = 50
-    wav_bytes = _make_wav_bytes(n_samples)
+    raw_pcm = np.arange(n_samples, dtype=np.int16).tobytes()
 
     def write_wav(text: str, wav_file: wave.Wave_write) -> None:
-        src = io.BytesIO(wav_bytes)
-        with wave.open(src, "rb") as rf:
-            wav_file.setnchannels(rf.getnchannels())
-            wav_file.setsampwidth(rf.getsampwidth())
-            wav_file.setframerate(rf.getframerate())
-            wav_file.writeframes(rf.readframes(rf.getnframes()))
+        assert text == "hi"
+        wav_file.writeframes(raw_pcm)
 
     # SimpleNamespace lacks synthesize_wav, so getattr(..., None) returns None
     tts._voice = SimpleNamespace(synthesize=write_wav)
@@ -174,6 +170,7 @@ def test_synthesize_sync_legacy_synthesize_only() -> None:
     samples = tts._synthesize_sync("hi")
     assert samples.dtype == np.float32
     assert len(samples) == n_samples
+    assert np.isclose(samples[1], 1.0 / 32768.0)
 
 
 def test_start_handles_generic_exception() -> None:

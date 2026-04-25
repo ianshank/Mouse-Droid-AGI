@@ -140,13 +140,26 @@ class UsbSpeaker:
         if self._stream is None:
             return
 
+        channel_count = max(1, self._cfg.channels)
+        if samples.shape[0] % channel_count != 0:
+            _log.warning(
+                "usb_speaker_channel_misalignment",
+                sample_count=int(samples.shape[0]),
+                channels=channel_count,
+            )
+            msg = (
+                "Audio sample count must be divisible by configured speaker channels: "
+                f"{samples.shape[0]} vs {channel_count}"
+            )
+            raise ValueError(msg)
+
         if self._cfg.format == "int16":
             clamped = np.clip(samples, -1.0, np.nextafter(np.float32(1.0), np.float32(0.0)))
             raw_data = (clamped * INT16_MAX_F).astype(np.int16).tobytes()
         else:
             raw_data = samples.astype(np.float32).tobytes()
 
-        frames_to_write = max(1, int(samples.shape[0]) // max(1, self._cfg.channels))
+        frames_to_write = max(1, int(samples.shape[0]) // channel_count)
         get_write_available = getattr(self._stream, "get_write_available", None)
 
         if callable(get_write_available):
@@ -174,13 +187,21 @@ class UsbSpeaker:
                 await asyncio.sleep(self._cfg.write_poll_interval_s)
 
         try:
-            self._stream.write(raw_data, exception_on_underflow=False)
-        except TypeError:
-            self._stream.write(raw_data)
+            await asyncio.to_thread(self._write_raw, raw_data)
         except Exception as exc:
             await self.stop()
             _log.warning("usb_speaker_write_failed", error=str(exc))
             raise RuntimeError(f"USB speaker write failed: {exc}") from exc
+
+    def _write_raw(self, raw_data: bytes) -> None:
+        """Synchronously write raw bytes to the underlying PyAudio stream."""
+        if self._stream is None:
+            msg = "USB speaker stream unavailable"
+            raise RuntimeError(msg)
+        try:
+            self._stream.write(raw_data, exception_on_underflow=False)
+        except TypeError:
+            self._stream.write(raw_data)
 
     @property
     def sample_rate(self) -> int:

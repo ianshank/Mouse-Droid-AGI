@@ -255,6 +255,51 @@ async def test_play_speaker_tone_stereo_chunks_match_protocol(
     assert stub.stopped is True
 
 
+@pytest.mark.asyncio
+async def test_play_rocky_voice_phrase_uses_public_engine_method(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Runtime voice helper should use the engine's public playback API."""
+
+    class StubSpeaker:
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+    class StubVoiceEngine:
+        def __init__(self) -> None:
+            self.started = False
+            self.stopped = False
+            self.played: list[str] = []
+
+        async def start(self) -> None:
+            self.started = True
+
+        async def stop(self) -> None:
+            self.stopped = True
+
+        async def play_phrase(self, text: str) -> tuple[int, float]:
+            self.played.append(text)
+            return 123, 0.42
+
+    stub_speaker = StubSpeaker()
+    stub_engine = StubVoiceEngine()
+    monkeypatch.setattr(runtime, "build_speaker", lambda cfg: stub_speaker)
+    monkeypatch.setattr(runtime, "build_voice_engine", lambda cfg, speaker=None: stub_engine)
+
+    result = await runtime.play_rocky_voice_phrase(
+        Settings(mock_hardware=True, voice={"enabled": True, "tts_sample_rate": 22050}),
+        phrase="Rocky test phrase",
+    )
+
+    assert result == (123, 0.42)
+    assert stub_engine.started is True
+    assert stub_engine.stopped is True
+    assert stub_engine.played == ["Rocky test phrase"]
+
+
 def test_lidar_scan_coverage_deg_measures_partial_span() -> None:
     scan = LidarScan(
         angles_deg=np.array([10.0, 20.0, 30.0], dtype=np.float32),

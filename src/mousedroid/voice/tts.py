@@ -95,6 +95,9 @@ class PiperTTS:
         else:
             _log.debug("piper_tts_synthesize_api", api="synthesize")
             with wave.open(wav_buffer, "wb") as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(np.dtype(np.int16).itemsize)
+                wav_file.setframerate(self._cfg.tts_sample_rate)
                 self._voice.synthesize(text, wav_file)
 
         wav_buffer.seek(0)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -146,6 +147,31 @@ async def test_write_chunk_float32_format() -> None:
 
 
 @pytest.mark.asyncio
+async def test_write_chunk_uses_to_thread_for_blocking_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """write_chunk() offloads the blocking PyAudio write off the event loop."""
+    from mousedroid.hardware.audio.usb_speaker import UsbSpeaker
+
+    speaker = UsbSpeaker(_cfg(format="float32"))
+    mock_stream = MagicMock()
+    speaker._stream = mock_stream
+    calls: list[tuple[object, tuple[object, ...]]] = []
+
+    async def fake_to_thread(func: object, *args: object) -> object:
+        calls.append((func, args))
+        return func(*args)  # type: ignore[misc]
+
+    monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
+
+    samples = np.ones(1024, dtype=np.float32)
+    await speaker.write_chunk(samples)
+
+    assert len(calls) == 1
+    mock_stream.write.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_write_chunk_int16_format() -> None:
     """write_chunk() converts float32 to int16 when format is int16."""
     from mousedroid.hardware.audio.usb_speaker import UsbSpeaker
@@ -203,6 +229,18 @@ async def test_write_chunk_times_out_when_buffer_never_available() -> None:
     mock_stream.stop_stream.assert_called_once()
     mock_stream.close.assert_called_once()
     assert speaker._stream is None
+
+
+@pytest.mark.asyncio
+async def test_write_chunk_rejects_channel_misalignment() -> None:
+    """write_chunk() rejects sample counts that do not align to full audio frames."""
+    from mousedroid.hardware.audio.usb_speaker import UsbSpeaker
+
+    speaker = UsbSpeaker(_cfg(channels=2, format="float32"))
+    speaker._stream = MagicMock()
+
+    with pytest.raises(ValueError, match="divisible by configured speaker channels"):
+        await speaker.write_chunk(np.ones(3, dtype=np.float32))
 
 
 @pytest.mark.asyncio
