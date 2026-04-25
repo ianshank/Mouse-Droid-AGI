@@ -185,6 +185,21 @@ class MouseDroidMCPServer:
         """Tool names visible to MCP clients."""
         return self._bridge.visible_tool_names()
 
+    def tool_description(self, name: str) -> str:
+        """Return the human-readable description for a registered tool.
+
+        Args:
+            name: Tool identifier; expected to be visible per
+                :meth:`list_tool_names`.
+
+        Returns:
+            The tool's description, or the name itself when no spec is
+            registered (defensive — keeps the SDK list_tools response
+            well-formed even if a tool is removed mid-session).
+        """
+        spec = self._bridge._registry.get(name)
+        return spec.description if spec is not None else name
+
     def list_prompt_names(self) -> list[str]:
         """Prompt identifiers exposed to MCP clients."""
         return [p.name for p in self._prompts]

@@ -60,6 +60,40 @@ class MCPTransportAdapter:
         """
         raise NotImplementedError
 
+    # ------------------------------------------------------------------
+    # SDK callbacks — thin delegates onto :class:`MouseDroidMCPServer`.
+    #
+    # Kept as plain ``async def`` methods so the unit tests exercise the
+    # mapping without spinning up the SDK transport. They are wired into
+    # the ``mcp.server.Server`` decorators in :meth:`_register_handlers`
+    # in a later task.
+    # ------------------------------------------------------------------
+
+    async def _on_list_tools(self) -> list[dict[str, Any]]:
+        """Return the visible tools as ``[{name, description}, ...]``."""
+        return [
+            {"name": name, "description": self.server.tool_description(name)}
+            for name in self.server.list_tool_names()
+        ]
+
+    async def _on_call_tool(
+        self, name: str, arguments: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Dispatch a tool call through the bridge."""
+        return await self.server.call_tool(name, arguments, peer="sdk")
+
+    async def _on_list_resources(self) -> list[dict[str, str]]:
+        """Return the resource URIs as ``[{uri}, ...]``."""
+        return [{"uri": uri} for uri in self.server.list_resource_uris()]
+
+    async def _on_read_resource(self, uri: str) -> dict[str, Any]:
+        """Read a resource by URI through the server."""
+        return await self.server.read_resource(uri, peer="sdk")
+
+    async def _on_list_prompts(self) -> list[dict[str, str]]:
+        """Return the available prompt names as ``[{name}, ...]``."""
+        return [{"name": name} for name in self.server.list_prompt_names()]
+
 
 def build_transport_adapter(server: MouseDroidMCPServer) -> MCPTransportAdapter | None:
     """Construct the adapter when the optional SDK is importable.
