@@ -40,12 +40,14 @@ if TYPE_CHECKING:
     )
     from mousedroid.cognitive.bdi_model import NeuralBDI
     from mousedroid.cognitive.cognitive_core import CognitiveCore
+    from mousedroid.common.tools.registry import ToolRegistry
     from mousedroid.config.schema import Settings, UltrasonicConfig
     from mousedroid.curiosity.protocol import CuriosityProtocol
     from mousedroid.experience.logger import ExperienceLogger
     from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
     from mousedroid.health.monitor import HealthMonitor
     from mousedroid.llm_gateway.mission_parser import MissionParserProtocol
+    from mousedroid.mcp.protocol import MCPServerProtocol
     from mousedroid.memory.tier import MemoryTier
     from mousedroid.orchestrator.face_controller import FaceController
     from mousedroid.sensing.manager import SensorManager
@@ -683,6 +685,69 @@ def build_telemetry_server(
     )
 
 
+def build_mcp_server(
+    cfg: Settings,
+    tool_registry: ToolRegistry,
+    safety_monitor: SafetyMonitorProtocol,
+    publisher: TelemetryPublisherProtocol | None = None,
+    log_buffer: LogRingBuffer | None = None,
+    metrics_registry: MetricsRegistry | None = None,
+    memory_tier: MemoryTier | None = None,
+) -> MCPServerProtocol | None:
+    """Build the MCP server when ``cfg.mcp`` is enabled.
+
+    Returns ``None`` (and logs a structured warning) when the optional
+    ``mcp`` package is not installed, so missing extras never break a
+    boot. The server itself runs without the SDK for in-process tests
+    but only binds a real transport when the package is present.
+
+    Args:
+        cfg: Root settings.
+        tool_registry: Shared tool registry instance.
+        safety_monitor: Live safety monitor for actuation gates.
+        publisher: Optional telemetry publisher (for the telemetry
+            resource).
+        log_buffer: Optional log ring buffer (for the logs resource).
+        metrics_registry: Optional metrics registry.
+        memory_tier: Optional memory tier (for the memory resource).
+
+    Returns:
+        Server implementing :class:`MCPServerProtocol`, or ``None`` when
+        disabled / unavailable.
+    """
+    if cfg.mcp is None or not cfg.mcp.enabled:
+        return None
+    if (
+        cfg.telemetry.enabled
+        and cfg.mcp.transport != "stdio"
+        and cfg.mcp.port == cfg.telemetry.port
+    ):
+        msg = (
+            f"mcp.port ({cfg.mcp.port}) collides with telemetry.port "
+            f"({cfg.telemetry.port}); pick distinct ports"
+        )
+        raise ValueError(msg)
+    from mousedroid.mcp.server import MouseDroidMCPServer
+
+    _log.info(
+        "mcp_server_built",
+        transport=cfg.mcp.transport,
+        host=cfg.mcp.host,
+        port=cfg.mcp.port,
+        memory_enabled=cfg.mcp.resources.memory_enabled and memory_tier is not None,
+    )
+    return MouseDroidMCPServer(
+        cfg=cfg.mcp,
+        root_cfg=cfg,
+        tool_registry=tool_registry,
+        safety_monitor=safety_monitor,
+        telemetry_publisher=publisher,
+        log_buffer=log_buffer,
+        metrics_registry=metrics_registry,
+        memory_tier=memory_tier,
+    )
+
+
 def build_health_monitor(cfg: Settings) -> HealthMonitor:
     """Build health monitor for GPU/thermal monitoring.
 
@@ -1113,7 +1178,11 @@ def build_orchestrator(cfg: Settings) -> object:
         gcp_cfg=cfg.gcp,
     )
 
-    # Voice engine (optional — disabled by default)
+    # MCP server (optional — disabled by default). Built after the tool
+    # registry so it can bridge real tools, and after telemetry/log
+    # buffers so it can expose them as resources. Memory tier is wired
+    # below; when present and enabled, the server gets a non-None
+    # ``memory_tier``.
     speaker = build_speaker(cfg)
     voice_engine = build_voice_engine(cfg, speaker=speaker)
 
@@ -1125,6 +1194,16 @@ def build_orchestrator(cfg: Settings) -> object:
     memory_tier = build_memory_tier(cfg)
     experience_logger = build_experience_logger(cfg)
     curiosity_module = build_curiosity_module(cfg)
+
+    mcp_server = build_mcp_server(
+        cfg,
+        tool_registry=_tool_registry,
+        safety_monitor=monitor,
+        publisher=telemetry_publisher,
+        log_buffer=log_buffer,
+        metrics_registry=metrics_registry,
+        memory_tier=memory_tier,
+    )
 
     # Watchdog notifier (optional — disabled by default)
     watchdog = build_watchdog(cfg)
@@ -1155,6 +1234,7 @@ def build_orchestrator(cfg: Settings) -> object:
         cloud_experience_exporter=cloud_experience_exporter,
         tool_registry=_tool_registry,
         face_controller=face_controller,
+        mcp_server=mcp_server,
     )
 
 

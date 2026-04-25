@@ -220,6 +220,32 @@ telemetry:
     allowed_origins: []
     exempt_paths: ["/health", "/metrics"]
 
+# Model Context Protocol (MCP) server (optional, disabled by default).
+# When enabled, exposes the existing tool registry, recent telemetry,
+# log tail, redacted config, and (optionally) episodic memory snapshots
+# to any MCP-compliant client (Claude Code, Claude Desktop, mcp.client).
+# All actuation tools are gated behind ``expose_actuation_tools`` and the
+# live runtime safety monitor. See ``MCPConfig`` for full field docs.
+mcp:
+  enabled: false
+  transport: stdio              # stdio | sse | streamable_http
+  host: "127.0.0.1"             # loopback default; non-loopback requires token
+  port: 8765
+  auth_token_env_var: "MOUSEDROID_MCP_TOKEN"
+  expose_actuation_tools: false
+  tools_denylist: []
+  resources:
+    telemetry_enabled: true
+    logs_enabled: true
+    config_enabled: true
+    memory_enabled: false
+    recent_frames_max: 64
+    log_tail_max: 200
+    config_cache_ttl_s: 1.0
+  request_timeout_s: 30.0
+  rate_limit_rps: 10.0
+  sample_telemetry_hz: 10.0
+
 # FHL-LD19 2D LiDAR (UART, 360-degree, 12m range)
 # lidar:
 #   enabled: true

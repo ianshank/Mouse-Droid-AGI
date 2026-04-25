@@ -23,7 +23,7 @@ else:
         """Backport of enum.StrEnum for Python 3.10."""
 
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from mousedroid.config.migration import (
@@ -735,6 +735,15 @@ class MetricsConfig(BaseModel):
             "actually wired into the orchestrator — safe to leave on."
         ),
     )
+    track_mcp: bool = Field(
+        True,
+        description=(
+            "Expose MCP server metrics: request counter, per-tool call "
+            "counter (label: tool, result), and request latency histogram. "
+            "Emitted only when the MCP server is actually built — safe to "
+            "leave on."
+        ),
+    )
     loop_latency_buckets_ms: tuple[float, ...] = Field(
         (1.0, 2.5, 5.0, 10.0, 20.0, 33.0, 50.0, 100.0, 200.0, float("inf")),
         description="Histogram bucket boundaries for control-loop latency (ms)",
@@ -742,6 +751,10 @@ class MetricsConfig(BaseModel):
     llm_latency_buckets_ms: tuple[float, ...] = Field(
         (25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, float("inf")),
         description="Histogram bucket boundaries for LLM translation latency (ms)",
+    )
+    mcp_latency_buckets_ms: tuple[float, ...] = Field(
+        (5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 5000.0, float("inf")),
+        description="Histogram bucket boundaries for MCP request latency (ms)",
     )
 
 
@@ -2070,6 +2083,169 @@ class UltrasonicConfig(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class MCPResourcesConfig(BaseModel):
+    """Read-only MCP resource exposure toggles and bounds.
+
+    All limits are config-driven so dashboards and clients can request
+    larger or smaller windows without code changes. Defaults mirror the
+    telemetry log buffer envelope.
+    """
+
+    telemetry_enabled: bool = Field(
+        True,
+        description="Expose `mousedroid://telemetry/*` resources",
+    )
+    logs_enabled: bool = Field(
+        True,
+        description="Expose `mousedroid://logs/tail` resource",
+    )
+    config_enabled: bool = Field(
+        True,
+        description="Expose `mousedroid://config/redacted` resource",
+    )
+    memory_enabled: bool = Field(
+        False,
+        description="Expose `mousedroid://memory/episodes/recent` resource",
+    )
+    recent_frames_max: int = Field(
+        64,
+        gt=0,
+        le=4096,
+        description="Maximum recent telemetry frames a client may request",
+    )
+    log_tail_max: int = Field(
+        200,
+        gt=0,
+        le=10_000,
+        description="Maximum log entries returnable in a single read",
+    )
+    config_cache_ttl_s: float = Field(
+        1.0,
+        gt=0,
+        le=60.0,
+        description="TTL (seconds) for the redacted-config snapshot cache",
+    )
+
+
+class MCPConfig(BaseModel):
+    """Model Context Protocol server configuration.
+
+    The MCP server is fully optional and disabled by default. When
+    enabled, it bridges the existing :class:`ToolRegistry`, telemetry
+    pipeline, log buffer, and (optionally) episodic memory to any
+    MCP-compliant client over stdio, SSE, or streamable HTTP.
+
+    All thresholds, timeouts, and toggles are config-driven; no values
+    are hardcoded in the server implementation.
+    """
+
+    enabled: bool = Field(False, description="Enable MCP server")
+    transport: Literal["stdio", "sse", "streamable_http"] = Field(
+        "stdio",
+        description="MCP transport protocol",
+    )
+    host: str = Field(
+        "127.0.0.1",
+        description="Bind address (loopback by default for safety)",
+    )
+    port: int = Field(8765, gt=0, le=65535, description="Server port (HTTP/SSE only)")
+    auth_token_env_var: str = Field(
+        "MOUSEDROID_MCP_TOKEN",
+        description="Environment variable holding bearer token (never in YAML)",
+    )
+    tools_allowlist: list[str] | None = Field(
+        None,
+        description="Explicit allowlist of tool names; None = all registry tools",
+    )
+    tools_denylist: list[str] = Field(
+        default_factory=list,
+        description="Tools that must never be exposed (always wins over allowlist)",
+    )
+    actuation_tools: list[str] = Field(
+        default_factory=lambda: [
+            "calibrate_ultrasonic",
+            "tensorrt_compile",
+            "export_experience",
+        ],
+        description="Tools considered actuation/side-effecting (config-driven, not hardcoded)",
+    )
+    expose_actuation_tools: bool = Field(
+        False,
+        description="If False, actuation_tools are hidden from list_tools and refused",
+    )
+    resources: MCPResourcesConfig = Field(default_factory=MCPResourcesConfig)
+    request_timeout_s: float = Field(
+        30.0,
+        gt=0,
+        description="Per-tool-call timeout (seconds)",
+    )
+    rate_limit_rps: float = Field(
+        10.0,
+        gt=0,
+        description="Per-session token-bucket rate limit (requests per second)",
+    )
+    sample_telemetry_hz: float = Field(
+        10.0,
+        gt=0,
+        le=60.0,
+        description="Background sampler rate that pulls TelemetryFrames into MCP buffer",
+    )
+    circuit_breaker: CircuitBreakerConfig | None = Field(
+        None,
+        description="Circuit breaker override; falls back to root cfg.circuit_breaker",
+    )
+    redact_key_pattern: str = Field(
+        r"(?i)token|secret|api[_-]?key|password|credential",
+        description="Regex (case-insensitive) for keys whose values must be redacted",
+    )
+
+    @field_validator("tools_denylist")
+    @classmethod
+    def _no_required_in_denylist(cls, v: list[str]) -> list[str]:
+        """Reject denylists that include required liveness tools.
+
+        Args:
+            v: Proposed denylist.
+
+        Returns:
+            The validated denylist.
+
+        Raises:
+            ValueError: If a required tool name is included.
+        """
+        if "health_check" in v:
+            msg = "health_check cannot be denied (required liveness signal)"
+            raise ValueError(msg)
+        return v
+
+    @model_validator(mode="after")
+    def _require_token_for_remote(self) -> Self:
+        """Refuse to enable a non-loopback transport without an auth token.
+
+        Returns:
+            The validated config instance.
+
+        Raises:
+            ValueError: If MCP is enabled on a non-loopback bind without
+                a token in the configured environment variable.
+        """
+        if not self.enabled:
+            return self
+        if self.transport == "stdio":
+            return self
+        if self.host == "127.0.0.1" or self.host == "localhost":
+            return self
+        import os
+
+        if not os.environ.get(self.auth_token_env_var):
+            msg = (
+                f"MCP enabled on non-loopback host '{self.host}' requires the "
+                f"{self.auth_token_env_var} environment variable to be set"
+            )
+            raise ValueError(msg)
+        return self
+
+
 class Settings(BaseSettings):
     """Root configuration — single source of truth for all settings.
 
@@ -2145,6 +2321,10 @@ class Settings(BaseSettings):
     offline_rl: OfflineRLConfig = Field(default_factory=_settings_default_factory(OfflineRLConfig))
     ppo: PPOConfig = Field(default_factory=_settings_default_factory(PPOConfig))
     telemetry: TelemetryConfig = Field(default_factory=_settings_default_factory(TelemetryConfig))
+    mcp: MCPConfig | None = Field(
+        None,
+        description="MCP server config (None=disabled, backwards compatible)",
+    )
     three_laws: ThreeLawsConfig = Field(default_factory=_settings_default_factory(ThreeLawsConfig))
     dual_stream_training: DualStreamTrainingConfig = Field(
         default_factory=_settings_default_factory(DualStreamTrainingConfig),
