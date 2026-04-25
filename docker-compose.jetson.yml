@@ -28,8 +28,10 @@ services:
       - MOUSEDROID_CONFIG=/etc/mousedroid/jetson_production.yaml
       - MOUSEDROID_MOCK_HARDWARE=${MOUSEDROID_MOCK_HARDWARE:-true}
       - CUDA_HOME=/usr/local/cuda
-      # GCP Digital Twin (optional — leave empty to disable cloud features)
-      - MOUSEDROID_GCP__PROJECT_ID=${GCP_PROJECT_ID:-}
+      # GCP Digital Twin (optional — set GCP_PROJECT_ID in host env or .env file to enable)
+      # NOTE: do NOT set MOUSEDROID_GCP__PROJECT_ID here with a default of ""; an
+      # empty string causes pydantic-settings to construct GCPConfig(project_id="")
+      # which fails validation. Omit the var entirely so gcp stays None (offline mode).
       - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-}
 
     # --- Volume mounts ---
@@ -75,7 +77,10 @@ services:
       - audio
       - video
       - dialout
-      - i2c
+      # NOTE: 'i2c' group_add removed (PR #45 review): JetPack base images do
+      # not always define an 'i2c' Unix group, which would block container
+      # start. privileged: true + explicit /dev/i2c-7 passthrough already
+      # grants full I²C access for the SSD1306 OLED face panel.
       # Some JetPack images do not define a gpio Unix group; privileged mode
       # plus explicit /dev/gpiochip* passthrough is the actual access path.
 
@@ -103,9 +108,13 @@ services:
               count: all
               capabilities: [gpu]
 
+    # Config overlay passed to entrypoint (overrides Dockerfile CMD default)
+    command: ["--config", "/etc/mousedroid/jetson_production.yaml"]
+
     # --- Override entrypoint for development ---
     # Uncomment to get a shell instead of starting mousedroid:
     # entrypoint: ["/bin/bash"]
+    # command: []
     # stdin_open: true
     # tty: true
 

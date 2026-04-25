@@ -108,6 +108,7 @@ class LLMGateway:
             n_ctx=self._cfg.context_length,
             n_threads=self._cfg.n_threads,
             n_gpu_layers=self._cfg.n_gpu_layers,
+            n_batch=self._cfg.n_batch,
         )
 
     def _sanitize_command(self, text: str) -> str:

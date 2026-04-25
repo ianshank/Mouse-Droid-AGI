@@ -410,6 +410,7 @@ def build_llm_gateway(cfg: Settings) -> LLMGatewayProtocol:
         context_length=cfg.llm.context_length,
         n_threads=cfg.llm.n_threads,
         n_gpu_layers=cfg.llm.n_gpu_layers,
+        n_batch=cfg.llm.n_batch,
         max_tokens=cfg.llm.max_tokens,
         temperature=cfg.llm.temperature,
         latency_target_ms=cfg.llm.latency_target_ms,
