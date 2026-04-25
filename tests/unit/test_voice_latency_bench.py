@@ -148,8 +148,8 @@ async def test_benchmark_personality_returns_latency_list() -> None:
 
     cfg = _make_settings(personality="rocky", model_path="/models/rocky.onnx")
 
-    with patch("scripts.benchmark_voice_latency.PiperTTS", mock_tts_cls, create=True):
-        # Import lazily after patching since module imports PiperTTS at runtime
+    with patch("mousedroid.voice.tts.PiperTTS", mock_tts_cls):
+        # Patch where _benchmark_personality imports PiperTTS at runtime.
         latencies = await bench._benchmark_personality(
             personality="rocky",
             cfg=cfg,

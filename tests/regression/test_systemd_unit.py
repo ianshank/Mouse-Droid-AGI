@@ -48,8 +48,7 @@ def test_sync_overlay_uses_nonfatal_dash_prefix(service_text: str) -> None:
     for line in lines:
         if "sync_jetson_overlay.sh" in line and "ExecStartPre" in line:
             assert "ExecStartPre=-" in line, (
-                f"overlay-sync ExecStartPre must use non-fatal form 'ExecStartPre=-', "
-                f"got: {line!r}"
+                f"overlay-sync ExecStartPre must use non-fatal form 'ExecStartPre=-', got: {line!r}"
             )
             return
     pytest.fail("sync_jetson_overlay.sh ExecStartPre line not found")
@@ -85,13 +84,15 @@ def test_compose_file_uses_env_var_indirection(service_text: str) -> None:
     """ExecStart* lines reference COMPOSE_FILE via ${...} variable expansion."""
     lines = service_text.splitlines()
     compose_lines = [
-        ln for ln in lines if re.search(r"ExecStart(Pre|Stop|=)", ln) and "docker compose" in ln
+        ln
+        for ln in lines
+        if re.search(r"^\s*(ExecStartPre|ExecStart|ExecStop)=", ln) and "docker compose" in ln
     ]
     assert compose_lines, "No docker-compose ExecStart* lines found"
     for line in compose_lines:
-        assert (
-            "${COMPOSE_FILE" in line
-        ), f"docker compose ExecStart line does not use ${{COMPOSE_FILE...}} indirection: {line!r}"
+        assert "${COMPOSE_FILE" in line, (
+            f"docker compose ExecStart line does not use ${{COMPOSE_FILE...}} indirection: {line!r}"
+        )
 
 
 # ---------------------------------------------------------------------------

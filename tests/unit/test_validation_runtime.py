@@ -437,9 +437,7 @@ async def test_play_rocky_voice_phrase_uses_default_phrase(
     monkeypatch.setattr(runtime, "build_speaker", lambda cfg: StubSpeaker())
     monkeypatch.setattr(runtime, "build_voice_engine", lambda cfg, speaker=None: stub_engine)
 
-    await runtime.play_rocky_voice_phrase(
-        Settings(mock_hardware=True, voice={"enabled": True})
-    )
+    await runtime.play_rocky_voice_phrase(Settings(mock_hardware=True, voice={"enabled": True}))
 
     assert stub_engine.played == [runtime._DEFAULT_SMOKE_PHRASE]
 

@@ -1975,8 +1975,8 @@ class VoiceConfig(BaseModel):
     personality: str = Field(
         "rocky",
         description=(
-            "Voice personality name; must match a key in personality_to_model_map "
-            "when the map is non-empty, otherwise falls back to tts_model_path."
+            "Voice personality name. If personality_to_model_map contains this key, "
+            "its model path overrides tts_model_path; otherwise tts_model_path is used."
         ),
     )
     tts_model_path: str | None = Field(
@@ -2012,9 +2012,7 @@ class VoiceConfig(BaseModel):
 
     @field_validator("event_intensity_thresholds", mode="after")
     @classmethod
-    def _validate_event_thresholds(
-        cls, v: dict[str, float]
-    ) -> dict[str, float]:
+    def _validate_event_thresholds(cls, v: dict[str, float]) -> dict[str, float]:
         for key, value in v.items():
             if not (0.0 <= value <= 1.0):
                 raise ValueError(

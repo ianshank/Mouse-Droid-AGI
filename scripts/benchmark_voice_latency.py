@@ -28,6 +28,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import yaml
 
 from mousedroid.config.schema import Settings
 from mousedroid.logging.setup import get_logger
@@ -61,7 +62,11 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         nargs="+",
         default=["rocky"],
         metavar="NAME",
-        help="Personality names to benchmark (must map to model paths in config).",
+        help=(
+            "Personality names to benchmark. Uses personality-specific model "
+            "paths from config when available; otherwise falls back to the "
+            "default TTS model path."
+        ),
     )
     parser.add_argument(
         "--n-warmup",
@@ -130,6 +135,11 @@ async def _benchmark_personality(
     tts = PiperTTS(voice_cfg)
     tts.start()
 
+    # Guard against a silent false-positive PASS when the model fails to load.
+    if getattr(tts, "_voice", None) is None:
+        _log.error("voice_bench_load_failed", personality=personality)
+        return []
+
     phrases_cycle = [_BENCH_PHRASES[i % len(_BENCH_PHRASES)] for i in range(n_warmup + n_iter)]
 
     # Warm-up
@@ -191,7 +201,7 @@ async def _run(args: argparse.Namespace) -> int:
     Returns:
         0 if all targets met, 1 otherwise.
     """
-    raw = __import__("yaml").safe_load(args.config.read_text())
+    raw = yaml.safe_load(args.config.read_text())
     cfg: Settings = Settings.model_validate(raw)
 
     all_passed = True

@@ -58,7 +58,7 @@ class PiperTTS:
             if resolved_path is not None:
                 source = (
                     "personality_map"
-                    if self._cfg.personality_to_model_map.get(self._cfg.personality) is not None
+                    if self._cfg.personality in self._cfg.personality_to_model_map
                     else "tts_model_path"
                 )
                 _log.info(

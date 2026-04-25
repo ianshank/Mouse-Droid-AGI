@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from mousedroid.config.schema import VoiceConfig
 
@@ -99,12 +100,12 @@ class TestEventIntensityThresholds:
 
     def test_invalid_threshold_above_one_raises(self) -> None:
         """Threshold above 1.0 raises ValidationError."""
-        with pytest.raises(Exception, match="event_intensity_thresholds"):
+        with pytest.raises(ValidationError, match="event_intensity_thresholds"):
             _cfg(event_intensity_thresholds={"error": 1.5})
 
     def test_invalid_threshold_below_zero_raises(self) -> None:
         """Threshold below 0.0 raises ValidationError."""
-        with pytest.raises(Exception, match="event_intensity_thresholds"):
+        with pytest.raises(ValidationError, match="event_intensity_thresholds"):
             _cfg(event_intensity_thresholds={"error": -0.1})
 
 

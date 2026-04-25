@@ -128,9 +128,9 @@ def test_jetson_production_voice_enabled() -> None:
         pytest.skip("jetson_production.yaml not present")
     data = yaml.safe_load(path.read_text())
     s = Settings.model_validate(data)
-    assert (
-        s.voice.enabled is True
-    ), "jetson_production.yaml: voice.enabled must be True; check config/jetson_production.yaml"
+    assert s.voice.enabled is True, (
+        "jetson_production.yaml: voice.enabled must be True; check config/jetson_production.yaml"
+    )
 
 
 def test_jetson_production_tts_model_path_set() -> None:
@@ -140,12 +140,12 @@ def test_jetson_production_tts_model_path_set() -> None:
         pytest.skip("jetson_production.yaml not present")
     data = yaml.safe_load(path.read_text())
     s = Settings.model_validate(data)
-    assert (
-        s.voice.tts_model_path is not None
-    ), "jetson_production.yaml: voice.tts_model_path must not be None"
-    assert s.voice.tts_model_path.endswith(
-        ".onnx"
-    ), "voice.tts_model_path must point to a .onnx file"
+    assert s.voice.tts_model_path is not None, (
+        "jetson_production.yaml: voice.tts_model_path must not be None"
+    )
+    assert s.voice.tts_model_path.endswith(".onnx"), (
+        "voice.tts_model_path must point to a .onnx file"
+    )
 
 
 def test_jetson_production_tts_model_path_is_absolute() -> None:

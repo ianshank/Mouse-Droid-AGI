@@ -171,7 +171,7 @@ disable_error_code = ["arg-type"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 asyncio_mode = "auto"
 markers = [
     "slow: marks tests as slow",

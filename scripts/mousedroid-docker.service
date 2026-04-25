@@ -33,7 +33,7 @@ EnvironmentFile=-/etc/mousedroid/docker.env
 
 # Sync production config overlay from repo to /etc/mousedroid (non-fatal).
 # Path controlled via MOUSEDROID_INSTALL_DIR and MOUSEDROID_OVERLAY_DST in docker.env.
-ExecStartPre=-/opt/mousedroid/scripts/sync_jetson_overlay.sh
+ExecStartPre=-${MOUSEDROID_INSTALL_DIR:-/opt/mousedroid}/scripts/sync_jetson_overlay.sh
 
 # Pre-flight validation — abort if required hardware/config is missing
 ExecStartPre=/opt/mousedroid/scripts/preflight_check.sh

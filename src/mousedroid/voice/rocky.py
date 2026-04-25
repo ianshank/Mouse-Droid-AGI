@@ -210,6 +210,7 @@ class RockyVoiceEngine:
             voice_event=event,
             intensity=intensity,
             effective_threshold=effective_threshold,
+            transformed_text=text,
         )
 
         # Determine priority from event semantics
