@@ -8,6 +8,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — MCP (Model Context Protocol) Server Module
+
+- **`src/mousedroid/mcp/`** — new optional MCP server that bridges the existing `ToolRegistry`,
+  `TelemetryPublisher`, `LogRingBuffer`, redacted `Settings`, and (optionally) episodic memory
+  to any MCP-compliant client (Claude Code, Claude Desktop, `mcp.client`, ...) over `stdio`,
+  `sse`, or `streamable_http` transports.
+  - `protocol.py` — `@runtime_checkable MCPServerProtocol` mirroring `TelemetryServerProtocol`;
+    frozen `MCPRequestContext` + `MCPToolResult` dataclasses
+  - `auth.py` — `BearerTokenValidator` (env-only secret, `hmac.compare_digest`)
+  - `tool_bridge.py` — deny → allow → actuation → `safety_monitor.evaluate()` →
+    token-bucket rate limit → `CircuitBreaker` → per-call `request_timeout_s` →
+    `ToolRegistry.dispatch`. Stable `BREAKER_NAME` for dashboard pinning.
+  - `resources.py` — telemetry / logs / config / memory providers with regex-driven
+    secret redaction (`MAX_REDACT_DEPTH` constant, configurable pattern), TTL cache for
+    redacted-config snapshots
+  - `prompts.py` — curated MCP prompts (`diagnose-last-failure`,
+    `summarise-recent-telemetry`, `arm-task-status`)
+  - `server.py` — `MouseDroidMCPServer` lifecycle supervised by `spawn_tracked` /
+    `cancel_and_drain`, lazy `mcp` SDK import (idle when SDK absent)
+  - `metrics.py` — thin helpers writing to `MetricsRegistry`
+- **`MCPConfig` + `MCPResourcesConfig` in `config/schema.py`** — `Settings.mcp` is
+  optional and defaults to `None`, so existing YAML files load unchanged. Validators reject
+  `health_check` from the deny-list and refuse remote (non-loopback) transports without an
+  auth token in the configured env var.
+- **`mcp:` blocks** appended (disabled) to `config/default.yaml` and
+  `config/robot_arm_default.yaml` documenting every knob.
+- **`MetricsRegistry`** gains `mcp_requests_total`, double-labeled
+  `mcp_tool_calls_total{tool,result}`, and `mcp_request_latency_ms` histogram with
+  config-driven buckets (`MetricsConfig.mcp_latency_buckets_ms`). `_DoubleLabeledCounter`
+  is a new reusable primitive.
+- **`factory.build_mcp_server(...)`** — wired into `build_orchestrator` after the tool
+  registry / telemetry / log buffer are built; raises on `mcp.port == telemetry.port`
+  collision for non-stdio transports.
+- **`MouseDroidOrchestrator`** gains an optional `mcp_server` kwarg; started after the
+  telemetry server, stopped just before it; never blocks the 30 Hz control loop.
+- **`pyproject.toml`** — `[project.optional-dependencies] mcp = ["mcp>=1.0", "anyio>=4.0"]`
+  + `[[tool.mypy.overrides]] module = ["mcp", "mcp.*"] ignore_missing_imports = true`.
+  SDK install is optional; module is lazy-imported.
+- **Tests** — 122 unit, 2 property (hypothesis), 2 integration; module coverage **99.40%**
+  (auth/metrics/prompts/protocol/resources/tool_bridge at 100%, server at 97% behind the
+  optional `mcp` SDK gate). Two new regression cases ensure existing YAML loads unchanged
+  and that an explicit `mcp:` block populates defaults.
+- **`docs/architecture.md`** — new Level 3f component diagram for the MCP server;
+  Level 1 / Level 2 updated to mention MCP-compliant clients.
+- **`docs/MCP_NEXT_STEPS.md`** — roadmap for the SDK adapter, transport bind-up, hardware
+  smoke, and operator UI.
+- **`README.md`** — new "MCP — Model Context Protocol" section with enable / connect
+  examples.
+
 ### Added — CI Determinism and Config Compatibility Hardening
 
 - **`scripts/check_settings_identity.py`** — pre-test guard that validates canonical

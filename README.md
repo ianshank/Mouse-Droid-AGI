@@ -265,6 +265,88 @@ No values are hardcoded — every threshold, dimension, pin, and rate is configu
 
 ---
 
+## MCP — Model Context Protocol
+
+The optional **MCP server** (`src/mousedroid/mcp/`) exposes the existing `ToolRegistry`,
+recent `TelemetryFrame`s, the structlog ring buffer, the redacted `Settings`, and (optionally)
+episodic memory snapshots to any MCP-compliant client (Claude Code, Claude Desktop, the
+`mcp.client` Python SDK, ...). It is **disabled by default** and ships behind an optional
+`mcp` extras group, so existing deployments are unaffected until you opt in.
+
+### Enable
+
+1. Install with the optional dep group:
+
+   ```bash
+   pip install -e ".[dev,telemetry,mcp]"
+   ```
+
+2. Set `mcp.enabled: true` in your YAML (or use the env var override):
+
+   ```yaml
+   # config/default.yaml — already shipped, just flip enabled
+   mcp:
+     enabled: true
+     transport: stdio          # stdio | sse | streamable_http
+     host: "127.0.0.1"         # loopback only by default
+     expose_actuation_tools: false
+   ```
+
+   Equivalent env-var override (no YAML edit required):
+
+   ```bash
+   MOUSEDROID_MCP__ENABLED=true \
+   MOUSEDROID_MOCK_HARDWARE=true \
+       python -m mousedroid --config config/default.yaml
+   ```
+
+3. For non-loopback transports (`host != 127.0.0.1` over `sse` / `streamable_http`),
+   set the bearer-token env var first — `MCPConfig` refuses to load otherwise:
+
+   ```bash
+   export MOUSEDROID_MCP_TOKEN="$(openssl rand -hex 32)"
+   ```
+
+### What's exposed
+
+| Surface | Default | Notes |
+|---------|---------|-------|
+| **Tools** | All `ToolRegistry` entries except `actuation_tools` | Toggle `expose_actuation_tools` to surface them; the safety monitor still gates dispatch |
+| **Resources** | `mousedroid://telemetry/{latest,recent}`, `mousedroid://logs/tail`, `mousedroid://config/redacted`, `mousedroid://memory/episodes/recent` | Per-provider toggles in `MCPConfig.resources`; secrets redacted by configurable regex |
+| **Prompts** | `diagnose-last-failure`, `summarise-recent-telemetry`, `arm-task-status` | Plain templates — no on-device LLM call |
+
+### Connect
+
+```python
+import asyncio
+from mcp.client.stdio import StdioServerParameters, stdio_client
+from mcp import ClientSession
+
+async def main() -> None:
+    params = StdioServerParameters(
+        command="python",
+        args=["-m", "mousedroid", "--config", "config/default.yaml"],
+        env={"MOUSEDROID_MCP__ENABLED": "true",
+             "MOUSEDROID_MOCK_HARDWARE": "true"},
+    )
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            tools = await session.list_tools()
+            print([t.name for t in tools.tools])
+            result = await session.call_tool("health_check", {})
+            print(result.content)
+
+asyncio.run(main())
+```
+
+For Claude Desktop, point its `mcp.servers` config at the same `command` /`args` block.
+
+See [`docs/MCP_NEXT_STEPS.md`](docs/MCP_NEXT_STEPS.md) for the planned SDK adapter, transport
+bind-up, and operator UI work — and `docs/architecture.md` Level 3f for the full component
+diagram.
+
+---
+
 ## Project Structure
 
 ```text
@@ -284,6 +366,7 @@ src/mousedroid/
 ├── llm_gateway/      # Natural language → velocity via local LLM
 ├── logging/          # structlog setup
 ├── main.py           # CLI entry point
+├── mcp/              # Optional Model Context Protocol server (stdio/SSE/HTTP)
 ├── memory/           # Working, episodic, semantic memory + consolidation
 ├── meta/             # MAML + in-context meta-learning
 ├── orchestrator/     # Main sense-plan-act loop

@@ -12,10 +12,13 @@ graph TD
     System["MouseDroidAGI System\nAutonomous Star Wars MSE-6 robot\npowered by an Agentic World Model\nrunning on Jetson Orin Nano"]
     PhysWorld["Physical World\n(corridors, obstacles, people)"]
     RemoteMonitor["Remote Monitoring\nPrometheus / Grafana\nmetrics over WiFi"]
+    MCPClient["MCP Clients (optional)\nClaude Code / Claude Desktop /\nmcp.client SDK\nauthenticated bearer token"]
     GCPCloud["GCP Digital Twin (optional)\nPub/Sub, Cloud Storage,\nVertex AI, Cloud Monitoring"]
     HFHub["HuggingFace Hub\nModel weight registry"]
 
     HumanOp -- "NL commands / health dashboards" --> System
+    HumanOp -. "tool calls / state reads (chat)" .-> MCPClient
+    MCPClient -. "stdio / SSE / streamable_http" .-> System
     System -- "navigates" --> PhysWorld
     System -- "publishes metrics" --> RemoteMonitor
     System -. "telemetry + experience\n(optional, CircuitBreaker)" .-> GCPCloud
@@ -46,6 +49,7 @@ graph TD
                 TelemetryPub["Telemetry Publisher\nasync queue\n≤60 Hz non-blocking"]
                 MetricsRegistry["Metrics Registry\nPrometheus text format\nconfig-driven namespace"]
                 TelemetryServer["Telemetry Server\naiohttp REST + WebSocket\nconfig-driven port"]
+                MCPServer["MCP Server (optional)\nstdio / SSE / streamable_http\nbridges ToolRegistry + telemetry +\nlogs + redacted config + memory"]
                 ExperienceDB[("Experience Logger\nLMDB\n/home/jetson/experience_db")]
             end
         end
@@ -78,6 +82,9 @@ graph TD
     TelemetryPub --> TelemetryServer
     MetricsRegistry --> TelemetryServer
     HealthMonitor --> TelemetryPub
+    Orchestrator -.-> MCPServer
+    MCPServer -.-> MetricsRegistry
+    MCPServer -.-> TelemetryPub
     CoreAI --> SensorMgr
     CoreAI --> ExperienceDB
     SensorMgr --> Camera
@@ -389,6 +396,99 @@ graph TD
 
 This model prevents class-identity drift under coverage/import instrumentation and keeps config
 migration logic regression-tested as schema aliases evolve.
+
+---
+
+## Level 3f — Component Diagram: MCP Server (Optional)
+
+The MCP (Model Context Protocol) server is an opt-in module that exposes the existing
+`ToolRegistry`, telemetry pipeline, log buffer, redacted `Settings`, and (optionally)
+episodic memory snapshots to any MCP-compliant client (Claude Code, Claude Desktop, the
+`mcp.client` SDK, or future tooling). It is fully config-driven via `MCPConfig`, lazy-imports
+the optional `mcp` SDK, and reuses every existing safety / resilience primitive — no
+parallel infrastructure is introduced.
+
+```mermaid
+graph TD
+    subgraph MCPModule["src/mousedroid/mcp/ — Optional MCP Server"]
+        ServerCls["MouseDroidMCPServer\nserver.py\n@runtime_checkable MCPServerProtocol\nspawn_tracked + cancel_and_drain lifecycle"]
+        Auth["BearerTokenValidator\nauth.py\nenv-only secret\nhmac.compare_digest"]
+        Bridge["MCPToolBridge\ntool_bridge.py\ndeny → allow → actuation gate →\nsafety_monitor.evaluate() →\ntoken-bucket rate limit →\nCircuitBreaker(BREAKER_NAME) →\nrequest_timeout_s"]
+        TelRes["TelemetryResourceProvider\nresources.py\nlocal deque sampler\n(get_nowait, never blocks loop)"]
+        LogRes["LogResourceProvider\nresources.py\nLogRingBuffer.get_recent\n+ regex-driven redaction"]
+        ConfRes["ConfigResourceProvider\nresources.py\nSettings.model_dump\nTTL cache + redaction"]
+        MemRes["MemoryResourceProvider\nresources.py\nepisodic.sample\n+ ndarray summarisation"]
+        Prompts["default_prompts()\nprompts.py\ndiagnose-last-failure /\nsummarise-recent-telemetry /\narm-task-status"]
+        MetricsHelpers["metrics.py\nrecord_request / record_tool_call →\nMetricsRegistry"]
+    end
+
+    subgraph Reused["Reused infrastructure (no parallel impl)"]
+        ToolReg["ToolRegistry\ncommon/tools/registry.py"]
+        SafetyMon["SafetyMonitorProtocol\nsafety/monitor.py"]
+        Pub["TelemetryPublisherProtocol\ntelemetry/publisher.py"]
+        LogBuf["LogRingBuffer\ntelemetry/log_buffer.py"]
+        Settings["Settings\nconfig/schema.py\nMCPConfig + MCPResourcesConfig"]
+        Mem["MemoryTier\nmemory/tier.py"]
+        Metrics["MetricsRegistry\ntelemetry/metrics.py\n+ mcp_requests_total /\n  mcp_tool_calls_total{tool,result} /\n  mcp_request_latency_ms"]
+        Resilience["CircuitBreaker / spawn_tracked /\ncancel_and_drain"]
+    end
+
+    subgraph Clients["MCP-compliant clients (off-device)"]
+        ClaudeCode["Claude Code CLI"]
+        ClaudeDesktop["Claude Desktop"]
+        MCPCli["mcp.client SDK"]
+    end
+
+    Clients -. "stdio / SSE / streamable_http" .-> ServerCls
+    ServerCls --> Auth
+    ServerCls --> Bridge
+    ServerCls --> TelRes
+    ServerCls --> LogRes
+    ServerCls --> ConfRes
+    ServerCls --> MemRes
+    ServerCls --> Prompts
+    Bridge --> ToolReg
+    Bridge --> SafetyMon
+    Bridge --> Resilience
+    Bridge --> MetricsHelpers
+    TelRes --> Pub
+    LogRes --> LogBuf
+    ConfRes --> Settings
+    MemRes --> Mem
+    MetricsHelpers --> Metrics
+```
+
+**Lifecycle:**
+
+- Built by `factory.build_mcp_server(...)` only when `cfg.mcp.enabled`. Returns `None`
+  otherwise; orchestrator boots normally without it.
+- `factory.build_mcp_server` raises `ValueError` if `cfg.mcp.port == cfg.telemetry.port`
+  for a non-stdio transport (configurable, no hardcoded port).
+- Started after `TelemetryServer` and stopped just before it inside
+  `MouseDroidOrchestrator.start()` / `stop()`. Background tasks (sampler + serve loop)
+  are tracked in a private `set[asyncio.Task]` and drained via
+  `cancel_and_drain` — same pattern as the telemetry server.
+- The 30 Hz control loop is **never** gated on MCP I/O: the bridge polls
+  `publisher.get_queue()` with `get_nowait()` from a low-cadence sampler and writes into
+  a `deque(maxlen=resources.recent_frames_max)`.
+
+**Security gates (all config-driven):**
+
+| Gate | Source of truth | Behaviour |
+|------|-----------------|-----------|
+| Deny-list | `MCPConfig.tools_denylist` | Highest precedence; `health_check` cannot be denied |
+| Allow-list | `MCPConfig.tools_allowlist` | When set, only listed tools are exposed |
+| Actuation toggle | `MCPConfig.expose_actuation_tools` + `actuation_tools` list | Side-effecting tools hidden / refused unless explicitly enabled |
+| Safety monitor | `SafetyMonitorProtocol.evaluate(...)` | Emergency state refuses every actuation tool |
+| Rate limit | `MCPConfig.rate_limit_rps` | Per-session token bucket |
+| Circuit breaker | `MCPConfig.circuit_breaker` ∨ root `cfg.circuit_breaker` | Opens on repeated failure |
+| Per-call timeout | `MCPConfig.request_timeout_s` | `asyncio.wait_for` around handler |
+| Auth | `MCPConfig.auth_token_env_var` | Required for non-loopback transports (rejected at config load) |
+| Redaction | `MCPConfig.redact_key_pattern` (regex) | Applied to logs, memory, and config snapshots |
+
+**Coverage:** 99.40% across the module; auth / metrics / prompts / protocol / resources /
+tool_bridge at 100%; `server.py` at 97% (the 3 uncovered lines are behind the optional
+`mcp` SDK import).
 
 ---
 
