@@ -197,6 +197,7 @@ async def main() -> None:
 asyncio.run(main())'
     run_stage "llm_probe" "yes" 120 \
         env \
+            MOUSEDROID_LLM__N_GPU_LAYERS=-1 \
             MOUSEDROID_LLM__MAX_TOKENS=24 \
             "${PY_WRAPPER}" -c "${LLM_PROBE}"
 fi

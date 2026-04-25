@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from mousedroid.validation.runtime import camera_unavailable_reason
 from tests._jetson_hardware import load_jetson_runtime_settings
 
 JETSON_PROD_CONFIG = os.getenv("MOUSEDROID_JETSON_CONFIG", "config/jetson_production.yaml")
@@ -50,6 +51,16 @@ def _deadline_budget_ms(cfg) -> float:
     return 1000.0 / cfg.loop.control_hz
 
 
+async def _start_or_skip(orch, settings) -> None:
+    try:
+        await orch.start()
+    except RuntimeError as exc:
+        reason = camera_unavailable_reason(settings, exc)
+        if reason is not None:
+            pytest.skip(reason)
+        raise
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -65,7 +76,7 @@ async def orchestrator(settings):
     from mousedroid.factory import build_orchestrator
 
     orch = build_orchestrator(settings)
-    await orch.start()
+    await _start_or_skip(orch, settings)
     yield orch
     await orch.stop()
 
@@ -182,7 +193,7 @@ async def test_start_stop_restart_cycle(settings) -> None:
     orch = build_orchestrator(settings)
 
     # Cycle 1
-    await orch.start()
+    await _start_or_skip(orch, settings)
     for _ in range(5):
         await orch.tick()
     count_after_c1 = orch._tick_count
@@ -191,7 +202,7 @@ async def test_start_stop_restart_cycle(settings) -> None:
 
     # Cycle 2 — new orchestrator (resources were released)
     orch2 = build_orchestrator(settings)
-    await orch2.start()
+    await _start_or_skip(orch2, settings)
     for _ in range(5):
         await orch2.tick()
     assert orch2._tick_count >= 5
