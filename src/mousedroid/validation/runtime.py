@@ -19,7 +19,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from mousedroid.config.loader import load_settings
-from mousedroid.factory import build_camera, build_microphone, build_speaker
+from mousedroid.factory import build_camera, build_microphone, build_speaker, build_voice_engine
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import Settings
@@ -393,3 +393,66 @@ async def play_speaker_tone(
         return total_samples
     finally:
         await speaker.stop()
+
+
+async def play_rocky_voice_phrase(
+    cfg: Settings,
+    *,
+    phrase: str = "Hello hello! Rocky ready!",
+) -> tuple[int, float] | None:
+    """Play a short Rocky voice phrase through the configured voice pipeline.
+
+    Args:
+        cfg: Fully resolved settings.
+        phrase: Short phrase to synthesize and play.
+
+    Returns:
+        Tuple of ``(samples_written, peak_abs_sample)``, or ``None`` when the
+        voice engine is disabled.
+
+    Raises:
+        RuntimeError: If the voice pipeline cannot load TTS or write to the
+            configured speaker.
+    """
+    if not cfg.voice.enabled:
+        return None
+
+    speaker = build_speaker(cfg)
+    if speaker is None:
+        raise RuntimeError("configured speaker unavailable for Rocky voice")
+
+    engine = build_voice_engine(cfg, speaker=speaker)
+    if engine is None:
+        raise RuntimeError("Rocky voice engine unavailable")
+
+    await engine.start()
+    try:
+        if getattr(speaker, "_stream", object()) is None:
+            raise RuntimeError("configured speaker device unavailable")
+
+        tts = getattr(engine, "_tts", None)
+        if tts is None:
+            raise RuntimeError("voice engine missing TTS backend")
+
+        if not cfg.mock_hardware and getattr(tts, "_voice", None) is None:
+            model_path = str(cfg.voice.tts_model_path or "").strip()
+            if not model_path:
+                raise RuntimeError("voice.tts_model_path is not configured")
+            raise RuntimeError(f"Piper voice model failed to load from {model_path}")
+
+        samples = np.asarray(await tts.synthesize(phrase), dtype=np.float32)
+        if samples.size == 0:
+            raise RuntimeError("Rocky voice TTS returned no samples")
+
+        peak_abs = float(np.max(np.abs(samples)))
+        if not cfg.mock_hardware and peak_abs <= 1e-6:
+            raise RuntimeError("Rocky voice TTS returned silent audio")
+
+        write_samples = getattr(engine, "_write_samples", None)
+        if not callable(write_samples):
+            raise RuntimeError("voice engine missing sample writer")
+        await write_samples(samples)
+
+        return int(samples.size), peak_abs
+    finally:
+        await engine.stop()

@@ -135,20 +135,20 @@ fi
 } > "${RUN_DIR}/container_health.log" 2>&1
 record "container_health" "INFO" "see container_health.log"
 
-# --- Stages 1-7: delegated to jetson_smoke_test.sh via PY_WRAPPER --------
-# Bench-debug sensors (camera/audio/lidar/speaker) are non-blocking until the
+# --- Stages 1-8: delegated to jetson_smoke_test.sh via PY_WRAPPER --------
+# Bench-debug sensors (camera/audio/lidar/speaker/voice) are non-blocking until the
 # physical wiring/overlays land; system/gpio/serial remain hard gates.
 for stage in system gpio serial; do
     run_stage "${stage}" "yes" 60 bash scripts/jetson_smoke_test.sh "${stage}" || break
 done
 
 if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
-    for stage in camera audio lidar speaker; do
+    for stage in camera audio lidar speaker voice; do
         run_stage "${stage}" "no" 45 bash scripts/jetson_smoke_test.sh "${stage}"
     done
 fi
 
-# --- Stage 8: OLED (non-blocking, container stays up) --------------------
+# --- Stage 9: OLED (non-blocking, container stays up) ---------------------
 if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
     run_stage "oled" "no" 60 \
         env \
@@ -158,23 +158,23 @@ if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
             tests/hardware/test_ssd1306_smoke.py
 fi
 
-# --- Stage 9: app health check -------------------------------------------
+# --- Stage 10: app health check -------------------------------------------
 if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
     run_stage "app_health" "yes" 60 bash scripts/jetson_smoke_test.sh app
 fi
 
-# --- Stage 10: hardware pytest suite (non-blocking until camera/USB speaker/HC-SR04 are fixed)
+# --- Stage 11: hardware pytest suite (non-blocking until camera/USB speaker/HC-SR04 are fixed)
 if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
     run_stage "hardware_pytest" "no" 300 \
         bash scripts/jetson_smoke_test.sh pytest
 fi
 
-# --- Stage 11: orchestrator E2E 5s (non-blocking until camera/dev/video0 fixed)
+# --- Stage 12: orchestrator E2E 5s (non-blocking until camera/dev/video0 fixed)
 if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
     run_stage "e2e" "no" 60 bash scripts/jetson_smoke_test.sh e2e
 fi
 
-# --- Stage 12: LLM live probe --------------------------------------------
+# --- Stage 13: LLM live probe ---------------------------------------------
 if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
     LLM_PROBE='import asyncio
 from mousedroid.config.loader import load_settings
@@ -187,12 +187,12 @@ gw = build_llm_gateway(cfg)
 async def main() -> None:
     await gw.start()
     try:
-        goal = await gw.translate_mission("move forward slowly")
-        print(
-            "LLM_PROBE_OK vx={:.3f} vy={:.3f} omega={:.3f}".format(
-                goal.vx_target, goal.vy_target, goal.omega_target
-            )
-        )
+        degraded = getattr(gw, "is_degraded", False)
+        if degraded:
+            raise RuntimeError("LLM gateway entered degraded mode during startup")
+        if not gw.is_ready:
+            raise RuntimeError("LLM gateway is not ready after startup")
+        print("LLM_PROBE_READY")
     finally:
         await gw.stop()
 
@@ -200,7 +200,6 @@ asyncio.run(main())'
     run_stage "llm_probe" "yes" 120 \
         env \
             MOUSEDROID_LLM__N_GPU_LAYERS=-1 \
-            MOUSEDROID_LLM__MAX_TOKENS=1 \
             "${PY_WRAPPER}" -c "${LLM_PROBE}"
 fi
 

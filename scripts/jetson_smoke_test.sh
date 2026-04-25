@@ -314,11 +314,11 @@ test_audio() {
 }
 
 # ---------------------------------------------------------------------------
-# 5a. LiDAR / 5b. Speaker -- delegate to scripts/verify_sensors.py
+# 5a. LiDAR / 5b. Speaker / 5c. Rocky voice -- delegate to verify_sensors.py
 # ---------------------------------------------------------------------------
 
 _run_verify_sensor() {
-    # $1 = sensor name (lidar|speaker), $2 = record label
+    # $1 = sensor name (lidar|speaker|voice), $2 = record label
     local sensor="$1"
     local label="$2"
     log_section "${label} Test"
@@ -351,6 +351,10 @@ test_lidar() {
 
 test_speaker() {
     _run_verify_sensor "speaker" "Speaker"
+}
+
+test_voice() {
+    _run_verify_sensor "voice" "Rocky Voice"
 }
 
 # ---------------------------------------------------------------------------
@@ -513,6 +517,7 @@ main() {
             test_audio
             test_lidar
             test_speaker
+            test_voice
             test_app
             test_pytest
             test_e2e
@@ -524,12 +529,13 @@ main() {
         audio)    test_audio ;;
         lidar)    test_lidar ;;
         speaker)  test_speaker ;;
+        voice)    test_voice ;;
         app)      test_app ;;
         pytest)   test_pytest ;;
         e2e)      test_e2e ;;
         *)
             echo "Unknown step: ${step}"
-            echo "Valid steps: all, system, gpio, serial, camera, audio, lidar, speaker, app, pytest, e2e"
+            echo "Valid steps: all, system, gpio, serial, camera, audio, lidar, speaker, voice, app, pytest, e2e"
             exit 1
             ;;
     esac
