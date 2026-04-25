@@ -53,7 +53,7 @@ run_stage() {
     set +e
     "$@" >"${logfile}" 2>&1
     local rc=$?
-    set -e
+    set +e
     if [[ ${rc} -eq 0 ]]; then
         record "${label}" "PASS"
         return 0
