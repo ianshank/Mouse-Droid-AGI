@@ -309,6 +309,44 @@ def test_config_loader_logs(tmp_path):
     assert settings is not None
 
 
+def test_config_loader_drops_empty_nested_env_vars(monkeypatch, tmp_path):
+    """Regression: empty MOUSEDROID_<SECTION>__<FIELD>= env vars must not
+    materialise a partially-populated nested config.
+
+    Before the fix, `MOUSEDROID_GCP__PROJECT_ID=""` (e.g. from a
+    docker-compose image that baked in `ENV MOUSEDROID_GCP__PROJECT_ID=`)
+    caused pydantic-settings v2 to instantiate
+    ``GCPConfig(project_id="")`` which fails validation with
+    ``GCPConfig requires non-empty values for: project_id``.
+
+    The loader should treat empty/whitespace nested env vars as "unset"
+    and leave optional nested configs ``None``.
+    """
+    import os
+
+    from mousedroid.config.loader import load_settings
+
+    # Simulate the docker image baking in an empty GCP project_id env var.
+    monkeypatch.setenv("MOUSEDROID_GCP__PROJECT_ID", "")
+    # Also test a whitespace-only value is dropped.
+    monkeypatch.setenv("MOUSEDROID_GCP__ROBOT_ID", "   ")
+    # And a legitimate non-empty nested env var should still pass through
+    # untouched (the optional nested config stays None because project_id
+    # would still be empty, but the env var itself must not be popped).
+    monkeypatch.setenv("MOUSEDROID_LOGGING__LEVEL", "INFO")
+
+    settings = load_settings(config_dir=tmp_path)
+
+    # Optional gcp config must remain None (offline mode) rather than
+    # erroring on empty project_id.
+    assert settings.gcp is None
+    # Empty nested vars are restored to os.environ after load_settings.
+    assert os.environ.get("MOUSEDROID_GCP__PROJECT_ID") == ""
+    assert os.environ.get("MOUSEDROID_GCP__ROBOT_ID") == "   "
+    # Non-empty nested env vars are never dropped.
+    assert os.environ.get("MOUSEDROID_LOGGING__LEVEL") == "INFO"
+
+
 # ---------------------------------------------------------------------------
 # Planning budget logging
 # ---------------------------------------------------------------------------

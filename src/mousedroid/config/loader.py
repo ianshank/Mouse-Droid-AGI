@@ -100,4 +100,35 @@ def load_settings(
     }
     for key in env_overridden:
         merged.pop(key, None)
-    return Settings(**merged)
+
+    # Sanitize nested env vars whose value is empty/whitespace. pydantic-settings
+    # v2 interprets MOUSEDROID_SECTION__FIELD="" as {"section": {"field": ""}},
+    # which then materializes an Optional nested config (e.g. GCPConfig) with
+    # an empty required field and fails validation. Empty env values always
+    # mean "unset" here, so drop them before Settings() construction.
+    empty_nested = [
+        k
+        for k, v in os.environ.items()
+        if k.upper().startswith(env_prefix) and "__" in k[len(env_prefix) :] and not v.strip()
+    ]
+    with _ScopedEnvUnset(empty_nested):
+        return Settings(**merged)
+
+
+class _ScopedEnvUnset:
+    """Context manager that temporarily removes the given env vars."""
+
+    def __init__(self, names: list[str]) -> None:
+        self._names = names
+        self._saved: dict[str, str] = {}
+
+    def __enter__(self) -> _ScopedEnvUnset:
+        for name in self._names:
+            if name in os.environ:
+                self._saved[name] = os.environ.pop(name)
+                _log.debug("config_env_empty_nested_dropped", name=name)
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        for name, value in self._saved.items():
+            os.environ[name] = value
