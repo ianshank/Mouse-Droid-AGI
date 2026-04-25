@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 import yaml
 
-from mousedroid.config.loader import _deep_merge, load_settings, load_yaml
+from mousedroid.config.loader import _deep_merge, _ScopedEnvUnset, load_settings, load_yaml
 
 
 def test_load_yaml_valid(tmp_path: Path):
@@ -119,3 +120,58 @@ def test_load_settings_no_default_yaml(tmp_path: Path):
     cfg_dir.mkdir()
     settings = load_settings(config_dir=cfg_dir)
     assert settings.mock_hardware is True  # env var from conftest
+
+
+# ---------------------------------------------------------------------------
+# _ScopedEnvUnset tests
+# ---------------------------------------------------------------------------
+
+
+def test_scoped_env_unset_removes_and_restores(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Context manager drops named vars on enter and restores them on exit."""
+    monkeypatch.setenv("MOUSEDROID_TEST_TMP_KEY", "some_value")
+    assert "MOUSEDROID_TEST_TMP_KEY" in os.environ
+
+    with _ScopedEnvUnset(["MOUSEDROID_TEST_TMP_KEY"]):
+        assert "MOUSEDROID_TEST_TMP_KEY" not in os.environ
+
+    assert os.environ.get("MOUSEDROID_TEST_TMP_KEY") == "some_value"
+
+
+def test_scoped_env_unset_restores_on_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Env var is restored even when the body raises."""
+    monkeypatch.setenv("MOUSEDROID_TMP_RESTORE_VAR", "original")
+
+    try:
+        with _ScopedEnvUnset(["MOUSEDROID_TMP_RESTORE_VAR"]):
+            raise RuntimeError("body error")
+    except RuntimeError:
+        pass
+
+    assert os.environ.get("MOUSEDROID_TMP_RESTORE_VAR") == "original"
+
+
+def test_scoped_env_unset_skips_absent_names() -> None:
+    """No error when a listed var is not present in the environment."""
+    with _ScopedEnvUnset(["MOUSEDROID_DOES_NOT_EXIST_ZZ9PLURALZ"]):
+        pass  # must not raise
+
+
+def test_scoped_env_unset_empty_list() -> None:
+    """Empty name list is a no-op."""
+    with _ScopedEnvUnset([]):
+        pass  # must not raise
+
+
+def test_load_settings_empty_nested_env_var_does_not_raise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Empty MOUSEDROID_SECTION__FIELD env vars are sanitized before Settings()."""
+    cfg_dir = tmp_path / "config"
+    cfg_dir.mkdir()
+    (cfg_dir / "default.yaml").write_text("mock_hardware: true\n")
+    monkeypatch.setenv("MOUSEDROID_GCP__PROJECT_ID", "")
+
+    settings = load_settings(config_dir=cfg_dir)
+
+    assert settings.mock_hardware is True

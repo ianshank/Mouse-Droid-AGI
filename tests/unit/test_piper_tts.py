@@ -185,3 +185,41 @@ def test_start_handles_generic_exception() -> None:
         tts.start()  # Should not raise
 
     assert tts._voice is None
+
+
+def test_start_uses_resolved_path_from_personality_map() -> None:
+    """start() calls PiperVoice.load with the personality-map path, not tts_model_path."""
+    mock_voice = MagicMock()
+    mock_piper_module = MagicMock()
+    mock_piper_module.PiperVoice.load.return_value = mock_voice
+
+    from mousedroid.voice.tts import PiperTTS
+
+    tts = PiperTTS(
+        _cfg(
+            personality="rocky",
+            tts_model_path="/models/default.onnx",
+            personality_to_model_map={"rocky": "/models/rocky_hd.onnx"},
+        )
+    )
+    with patch.dict("sys.modules", {"piper": mock_piper_module}):
+        tts.start()
+
+    # Must load the map-resolved path, NOT tts_model_path
+    mock_piper_module.PiperVoice.load.assert_called_once_with("/models/rocky_hd.onnx")
+    assert tts._voice is mock_voice
+
+
+def test_start_falls_back_to_tts_model_path_when_map_empty() -> None:
+    """start() uses tts_model_path when personality_to_model_map is empty."""
+    mock_voice = MagicMock()
+    mock_piper_module = MagicMock()
+    mock_piper_module.PiperVoice.load.return_value = mock_voice
+
+    from mousedroid.voice.tts import PiperTTS
+
+    tts = PiperTTS(_cfg(tts_model_path="/models/default.onnx"))
+    with patch.dict("sys.modules", {"piper": mock_piper_module}):
+        tts.start()
+
+    mock_piper_module.PiperVoice.load.assert_called_once_with("/models/default.onnx")

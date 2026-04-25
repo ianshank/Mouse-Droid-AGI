@@ -227,3 +227,72 @@ def test_speaker_config_backwards_compat_partial_stanza() -> None:
     assert s.speaker.sample_rate == 44100
     assert s.speaker.channels == 1  # unchanged default
     assert s.speaker.write_timeout_s == 0.5  # unchanged default
+
+
+# ---------------------------------------------------------------------------
+# New field backwards-compat tests (personality_to_model_map,
+# event_intensity_thresholds, widened personality field)
+# ---------------------------------------------------------------------------
+
+
+def test_personality_to_model_map_defaults_to_empty() -> None:
+    """personality_to_model_map defaults to {} — old YAMLs unaffected."""
+    s = Settings.model_validate({"mock_hardware": True})
+    assert s.voice.personality_to_model_map == {}
+
+
+def test_event_intensity_thresholds_defaults_to_empty() -> None:
+    """event_intensity_thresholds defaults to {} — old YAMLs unaffected."""
+    s = Settings.model_validate({"mock_hardware": True})
+    assert s.voice.event_intensity_thresholds == {}
+
+
+def test_personality_rocky_still_accepted() -> None:
+    """personality='rocky' (previously Literal) still loads cleanly."""
+    s = Settings.model_validate({"mock_hardware": True, "voice": {"personality": "rocky"}})
+    assert s.voice.personality == "rocky"
+
+
+def test_personality_to_model_map_round_trips_via_yaml() -> None:
+    """personality_to_model_map values survive Settings round-trip."""
+    s = Settings.model_validate(
+        {
+            "mock_hardware": True,
+            "voice": {
+                "personality": "rocky",
+                "personality_to_model_map": {
+                    "rocky": "/opt/voice_models/rocky.onnx",
+                },
+            },
+        }
+    )
+    assert s.voice.personality_to_model_map == {"rocky": "/opt/voice_models/rocky.onnx"}
+    assert s.voice.resolved_tts_model_path() == "/opt/voice_models/rocky.onnx"
+
+
+def test_event_intensity_thresholds_round_trips_via_yaml() -> None:
+    """event_intensity_thresholds values survive Settings round-trip."""
+    s = Settings.model_validate(
+        {
+            "mock_hardware": True,
+            "voice": {
+                "event_intensity_thresholds": {
+                    "obstacle_detected": 0.4,
+                    "emergency_stop": 0.2,
+                },
+            },
+        }
+    )
+    assert s.voice.event_intensity_thresholds["obstacle_detected"] == pytest.approx(0.4)
+    assert s.voice.event_intensity_thresholds["emergency_stop"] == pytest.approx(0.2)
+
+
+def test_old_yaml_without_new_fields_resolves_to_tts_model_path() -> None:
+    """Old YAML with only tts_model_path resolves correctly via new method."""
+    s = Settings.model_validate(
+        {
+            "mock_hardware": True,
+            "voice": {"tts_model_path": "/opt/voice_models/rocky.onnx"},
+        }
+    )
+    assert s.voice.resolved_tts_model_path() == "/opt/voice_models/rocky.onnx"

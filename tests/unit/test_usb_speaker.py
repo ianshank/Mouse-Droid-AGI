@@ -272,3 +272,55 @@ async def test_start_handles_oserror() -> None:
 
     assert speaker._stream is None
     mock_pa.terminate.assert_called_once()
+
+
+def test_write_raw_raises_when_stream_is_none() -> None:
+    """_write_raw() raises RuntimeError when the stream was never opened."""
+    from mousedroid.hardware.audio.usb_speaker import UsbSpeaker
+
+    speaker = UsbSpeaker(_cfg())
+    # _stream is None by default
+
+    with pytest.raises(RuntimeError, match="stream unavailable"):
+        speaker._write_raw(b"test_data")
+
+
+def test_write_raw_falls_back_on_type_error() -> None:
+    """_write_raw() retries without keyword arg when first call raises TypeError."""
+    from mousedroid.hardware.audio.usb_speaker import UsbSpeaker
+
+    speaker = UsbSpeaker(_cfg())
+    mock_stream = MagicMock()
+    # First call (with exception_on_underflow kwarg) raises TypeError; second is OK.
+    mock_stream.write.side_effect = [TypeError("unexpected keyword argument"), None]
+    speaker._stream = mock_stream
+
+    speaker._write_raw(b"raw_bytes")
+
+    assert mock_stream.write.call_count == 2
+    # Second call must NOT include the keyword argument
+    _, kwargs = mock_stream.write.call_args
+    assert "exception_on_underflow" not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_write_chunk_stream_error_wraps_as_runtime_error() -> None:
+    """write_chunk() wraps unexpected stream errors as RuntimeError and calls stop()."""
+    from mousedroid.hardware.audio.usb_speaker import UsbSpeaker
+
+    speaker = UsbSpeaker(_cfg(format="float32"))
+    mock_stream = MagicMock()
+    mock_pa = MagicMock()
+    speaker._stream = mock_stream
+    speaker._pa = mock_pa
+
+    # OSError is not caught by the TypeError fallback, so it propagates out of _write_raw.
+    mock_stream.write.side_effect = OSError("ALSA buffer overrun")
+    # Return a non-numeric value from get_write_available to skip the buffer-wait loop.
+    mock_stream.get_write_available.return_value = "not_a_number"
+
+    with pytest.raises(RuntimeError, match="USB speaker write failed"):
+        await speaker.write_chunk(np.ones(4, dtype=np.float32))
+
+    # stop() must have been called to release resources
+    assert speaker._stream is None

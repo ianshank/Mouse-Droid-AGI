@@ -249,6 +249,124 @@ class TestPriority:
 
 
 # ---------------------------------------------------------------------------
+# Per-event intensity thresholds
+# ---------------------------------------------------------------------------
+
+
+def _make_engine_with_thresholds(
+    event_intensity_thresholds: dict[str, float],
+) -> tuple[RockyVoiceEngine, MockSpeaker, MockTTS]:
+    """Create engine with per-event threshold overrides."""
+    voice_cfg = VoiceConfig(
+        enabled=True,
+        cooldown_s=0.1,
+        tts_sample_rate=22050,
+        intensity_threshold=0.7,
+        event_intensity_thresholds=event_intensity_thresholds,
+    )
+    speaker_cfg = SpeakerConfig(sample_rate=22050, chunk_size=1024)
+    speaker = MockSpeaker(speaker_cfg)
+    tts = MockTTS(voice_cfg)
+    return RockyVoiceEngine(voice_cfg, speaker, tts), speaker, tts
+
+
+@pytest.mark.asyncio
+async def test_per_event_threshold_used_when_set() -> None:
+    """event_intensity_thresholds override the global intensity_threshold per event."""
+    # Use phrase_overrides to ensure a known phrase without a trailing '!' so we
+    # can reliably detect whether rocky_transform added one.
+    voice_cfg = VoiceConfig(
+        enabled=True,
+        cooldown_s=0.1,
+        tts_sample_rate=22050,
+        intensity_threshold=0.3,  # global threshold low → would add '!' at valence 0.5
+        event_intensity_thresholds={"idle": 0.99},  # per-event threshold very high
+        phrase_overrides={"idle": ["Waiting for task"]},  # phrase without trailing '!'
+    )
+    speaker_cfg = SpeakerConfig(sample_rate=22050, chunk_size=1024)
+    speaker = MockSpeaker(speaker_cfg)
+    tts = MockTTS(voice_cfg)
+    engine = RockyVoiceEngine(voice_cfg, speaker, tts)
+    await engine.start()
+    try:
+        # valence=0.5: above global(0.3) but below per-event(0.99) → no '!' expected
+        await engine.speak("idle", context={"valence": 0.5})
+        await asyncio.sleep(0.3)
+        calls = tts.get_calls()
+        assert len(calls) == 1
+        assert not calls[0].endswith("!"), (
+            f"With per-event threshold=0.99 and valence=0.5, no '!' should be added; "
+            f"got: {calls[0]!r}"
+        )
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_global_threshold_used_when_no_event_override() -> None:
+    """Falls back to cfg.intensity_threshold when event has no override."""
+    # Global threshold 0.3 → valence 0.5 > 0.3 → exclamation added
+    voice_cfg = VoiceConfig(
+        enabled=True,
+        cooldown_s=0.1,
+        tts_sample_rate=22050,
+        intensity_threshold=0.3,
+        event_intensity_thresholds={},  # no per-event overrides
+    )
+    speaker_cfg = SpeakerConfig(sample_rate=22050, chunk_size=1024)
+    speaker = MockSpeaker(speaker_cfg)
+    tts = MockTTS(voice_cfg)
+    engine = RockyVoiceEngine(voice_cfg, speaker, tts)
+    await engine.start()
+    try:
+        await engine.speak("idle", context={"valence": 0.5})
+        await asyncio.sleep(0.3)
+        calls = tts.get_calls()
+        assert len(calls) == 1
+        assert calls[0].endswith("!"), (
+            "With global threshold=0.3 and valence=0.5, exclamation expected"
+        )
+    finally:
+        await engine.stop()
+
+
+# ---------------------------------------------------------------------------
+# New event keys from phrase bank expansion
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "new_event",
+    [
+        "turn_left",
+        "turn_right",
+        "arrived",
+        "battery_low_warn",
+        "battery_critical",
+        "llm_translation_ack",
+        "llm_translation_failed",
+        "greeting",
+        "greeting_formal",
+        "greeting_excited",
+        "farewell",
+    ],
+)
+async def test_new_events_produce_non_empty_phrases(new_event: str) -> None:
+    """New phrase-bank events are queued successfully and produce speech."""
+    engine, _speaker, tts = _make_engine()
+    await engine.start()
+    try:
+        await engine.speak(new_event)
+        await asyncio.sleep(0.3)
+        calls = tts.get_calls()
+        assert len(calls) == 1
+        assert len(calls[0]) > 0, f"Event {new_event!r} produced empty phrase"
+    finally:
+        await engine.stop()
+
+
+# ---------------------------------------------------------------------------
 # Edge case tests
 # ---------------------------------------------------------------------------
 

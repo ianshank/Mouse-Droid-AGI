@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -56,7 +58,7 @@ def test_resolve_runtime_config_paths_legacy_jetson_single_env(
     assert resolved == (runtime.Path("config/jetson_production.yaml"),)
 
 
-def test_camera_unavailable_reason_reports_missing_jetson_runtime(tmp_path) -> None:
+def test_camera_unavailable_reason_reports_missing_jetson_runtime(tmp_path: Path) -> None:
     cfg = Settings(
         mock_hardware=True,
         camera={
@@ -73,6 +75,67 @@ def test_camera_unavailable_reason_reports_missing_jetson_runtime(tmp_path) -> N
     assert reason is not None
     assert "V4L2 device" in reason
     assert "Failed to open CSI camera" in reason
+
+
+def test_camera_unavailable_reason_non_jetson_returns_none() -> None:
+    """Non-jetson_csi backend always returns None."""
+    cfg = Settings(mock_hardware=True, camera={"backend": "auto"})
+    assert runtime.camera_unavailable_reason(cfg) is None
+    assert runtime.camera_unavailable_reason(cfg, RuntimeError("err")) is None
+
+
+def test_camera_unavailable_reason_returns_none_when_all_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Returns None when both V4L2 device and argus socket exist."""
+    device = tmp_path / "video0"
+    device.touch()
+    argus = tmp_path / "argus_socket"
+    argus.touch()
+    monkeypatch.setattr(runtime, "_ARGUS_SOCKET_PATH", str(argus))
+
+    cfg = Settings(
+        mock_hardware=True,
+        camera={"backend": "jetson_csi", "device_path": str(device)},
+    )
+    assert runtime.camera_unavailable_reason(cfg) is None
+
+
+def test_camera_unavailable_reason_empty_device_path_skips_v4l2_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When device_path is empty, only the argus socket check runs."""
+    # Point argus socket constant to a path that does NOT exist
+    monkeypatch.setattr(runtime, "_ARGUS_SOCKET_PATH", str(tmp_path / "argus_socket"))
+
+    cfg = Settings(
+        mock_hardware=True,
+        camera={"backend": "jetson_csi", "device_path": ""},
+    )
+    reason = runtime.camera_unavailable_reason(cfg)
+
+    assert reason is not None
+    assert "V4L2" not in reason
+    assert "argus_socket" in reason
+
+
+def test_camera_unavailable_reason_only_v4l2_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When argus socket exists but V4L2 device is absent, only device reason returned."""
+    argus = tmp_path / "argus_socket"
+    argus.touch()
+    monkeypatch.setattr(runtime, "_ARGUS_SOCKET_PATH", str(argus))
+
+    cfg = Settings(
+        mock_hardware=True,
+        camera={"backend": "jetson_csi", "device_path": str(tmp_path / "video0")},
+    )
+    reason = runtime.camera_unavailable_reason(cfg, exc=None)
+
+    assert reason is not None
+    assert "V4L2" in reason
+    assert "argus_socket" not in reason
 
 
 @pytest.mark.asyncio
@@ -298,6 +361,85 @@ async def test_play_rocky_voice_phrase_uses_public_engine_method(
     assert stub_engine.started is True
     assert stub_engine.stopped is True
     assert stub_engine.played == ["Rocky test phrase"]
+
+
+@pytest.mark.asyncio
+async def test_play_rocky_voice_phrase_returns_none_when_voice_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Returns None immediately when voice is disabled in config."""
+    cfg = Settings(mock_hardware=True, voice={"enabled": False})
+    result = await runtime.play_rocky_voice_phrase(cfg)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_play_rocky_voice_phrase_raises_when_speaker_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Raises RuntimeError when build_speaker returns None."""
+    monkeypatch.setattr(runtime, "build_speaker", lambda cfg: None)
+    cfg = Settings(mock_hardware=True, voice={"enabled": True})
+
+    with pytest.raises(RuntimeError, match="speaker unavailable"):
+        await runtime.play_rocky_voice_phrase(cfg)
+
+
+@pytest.mark.asyncio
+async def test_play_rocky_voice_phrase_raises_when_engine_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Raises RuntimeError when build_voice_engine returns None."""
+
+    class StubSpeaker:
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "build_speaker", lambda cfg: StubSpeaker())
+    monkeypatch.setattr(runtime, "build_voice_engine", lambda cfg, speaker=None: None)
+    cfg = Settings(mock_hardware=True, voice={"enabled": True})
+
+    with pytest.raises(RuntimeError, match="voice engine unavailable"):
+        await runtime.play_rocky_voice_phrase(cfg)
+
+
+@pytest.mark.asyncio
+async def test_play_rocky_voice_phrase_uses_default_phrase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When no phrase is supplied the default smoke phrase is used."""
+
+    class StubSpeaker:
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+    class StubVoiceEngine:
+        def __init__(self) -> None:
+            self.played: list[str] = []
+
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+        async def play_phrase(self, text: str) -> tuple[int, float]:
+            self.played.append(text)
+            return 50, 0.1
+
+    stub_engine = StubVoiceEngine()
+    monkeypatch.setattr(runtime, "build_speaker", lambda cfg: StubSpeaker())
+    monkeypatch.setattr(runtime, "build_voice_engine", lambda cfg, speaker=None: stub_engine)
+
+    await runtime.play_rocky_voice_phrase(Settings(mock_hardware=True, voice={"enabled": True}))
+
+    assert stub_engine.played == [runtime._DEFAULT_SMOKE_PHRASE]
 
 
 def test_lidar_scan_coverage_deg_measures_partial_span() -> None:

@@ -23,7 +23,7 @@ else:
         """Backport of enum.StrEnum for Python 3.10."""
 
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from mousedroid.config.migration import (
@@ -1972,8 +1972,12 @@ class VoiceConfig(BaseModel):
 
     enabled: bool = Field(False, description="Enable Rocky voice output")
     cooldown_s: float = Field(5.0, gt=0, description="Min seconds between utterances")
-    personality: Literal["rocky"] = Field(
-        "rocky", description="Voice personality (only 'rocky' supported)"
+    personality: str = Field(
+        "rocky",
+        description=(
+            "Voice personality name. If personality_to_model_map contains this key, "
+            "its model path overrides tts_model_path; otherwise tts_model_path is used."
+        ),
     )
     tts_model_path: str | None = Field(
         None, description="Path to piper voice model (None=disable TTS model loading)"
@@ -1990,6 +1994,63 @@ class VoiceConfig(BaseModel):
         le=1,
         description="Minimum intensity for Rocky voice transform effects",
     )
+    personality_to_model_map: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Optional map of personality name → Piper model path. "
+            "When the active personality has an entry here it overrides tts_model_path. "
+            "Paths must be absolute (resolved inside the container)."
+        ),
+    )
+    event_intensity_thresholds: dict[str, float] = Field(
+        default_factory=dict,
+        description=(
+            "Per-event intensity threshold overrides (0.0-1.0). "
+            "Keyed by event name; falls back to intensity_threshold when absent."
+        ),
+    )
+
+    @field_validator("personality_to_model_map", mode="after")
+    @classmethod
+    def _validate_personality_model_map(cls, v: dict[str, str]) -> dict[str, str]:
+        from pathlib import PurePosixPath
+
+        for key, value in v.items():
+            stripped = value.strip()
+            if not stripped:
+                raise ValueError(
+                    f"personality_to_model_map[{key!r}] must be a non-empty path, got {value!r}"
+                )
+            if not PurePosixPath(stripped).is_absolute():
+                raise ValueError(
+                    f"personality_to_model_map[{key!r}] must be an absolute path, got {value!r}"
+                )
+        return v
+
+    @field_validator("event_intensity_thresholds", mode="after")
+    @classmethod
+    def _validate_event_thresholds(cls, v: dict[str, float]) -> dict[str, float]:
+        for key, value in v.items():
+            if not (0.0 <= value <= 1.0):
+                raise ValueError(
+                    f"event_intensity_thresholds[{key!r}] must be in [0.0, 1.0], got {value!r}"
+                )
+        return v
+
+    def resolved_tts_model_path(self) -> str | None:
+        """Return the effective TTS model path for the configured personality.
+
+        Resolution order:
+
+        1. ``personality_to_model_map[personality]`` — per-personality override
+           (values are validated as absolute paths at schema load time).
+        2. ``tts_model_path`` — global fallback (used as-is).
+
+        Returns:
+            Path string, or ``None`` when no model is configured.
+        """
+        mapped = self.personality_to_model_map.get(self.personality)
+        return mapped if mapped is not None else self.tts_model_path
 
 
 class FaceDisplayConfig(BaseModel):
