@@ -6,6 +6,7 @@ import asyncio
 from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 
 from mousedroid.cognitive.bdi_model import NeuralBDI
 from mousedroid.cognitive.cognitive_core import CognitiveCore
@@ -24,6 +25,56 @@ def _make_core() -> CognitiveCore:
 def test_constructor() -> None:
     core = _make_core()
     assert core is not None
+
+
+def test_get_latest_affect_returns_zero_before_first_inference() -> None:
+    """Before the slow loop runs, the accessor returns neutral affect."""
+    core = _make_core()
+    assert core.latest_bdi == {}
+    assert core.get_latest_affect() == (0.0, 0.0)
+
+
+def test_get_latest_affect_returns_valence_arousal() -> None:
+    core = _make_core()
+    core._latest_bdi = {"affect": np.array([0.42, -0.18], dtype=np.float32)}
+    valence, arousal = core.get_latest_affect()
+    assert valence == pytest.approx(0.42, abs=1e-5)
+    assert arousal == pytest.approx(-0.18, abs=1e-5)
+
+
+def test_get_latest_affect_rejects_wrong_shape() -> None:
+    """Malformed affect vectors fall back to neutral instead of crashing."""
+    core = _make_core()
+    core._latest_bdi = {"affect": np.array([0.5, 0.0, 0.0], dtype=np.float32)}
+    assert core.get_latest_affect() == (0.0, 0.0)
+
+
+def test_get_latest_affect_rejects_non_ndarray() -> None:
+    core = _make_core()
+    core._latest_bdi = {"affect": [0.5, 0.5]}
+    assert core.get_latest_affect() == (0.0, 0.0)
+
+
+def test_latest_bdi_property_exposes_dict() -> None:
+    core = _make_core()
+    sentinel = {"affect": np.zeros(2, dtype=np.float32), "intentions": np.zeros(4)}
+    core._latest_bdi = sentinel
+    # Returns a MappingProxyType — same keys, read-only, not the raw dict.
+    result = core.latest_bdi
+    assert set(result.keys()) == set(sentinel.keys())
+    assert "affect" in result
+    assert "intentions" in result
+
+
+def test_latest_bdi_property_is_read_only() -> None:
+    """latest_bdi must not be mutatable from outside CognitiveCore."""
+    from types import MappingProxyType
+
+    core = _make_core()
+    proxy = core.latest_bdi
+    assert isinstance(proxy, MappingProxyType)
+    with pytest.raises(TypeError):
+        proxy["injected"] = 1  # type: ignore[index]
 
 
 def test_tick_fast_returns_tuple() -> None:

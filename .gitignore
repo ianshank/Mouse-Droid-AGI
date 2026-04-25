@@ -153,6 +153,11 @@ lidar_captures/
 *.raw
 audio_captures/
 
+# OLED face-display debug captures (expression bitmaps rendered during dev/calibration)
+display_captures/
+*.face.png
+*.face.bmp
+
 # Worktree branches (auto-managed by Claude Code)
 .claude/worktrees/
 

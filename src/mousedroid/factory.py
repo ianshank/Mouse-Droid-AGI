@@ -14,6 +14,7 @@ from mousedroid.efficiency.tensorrt import TensorRTCompilerProtocol
 from mousedroid.hardware.protocols import (
     AudioProtocol,
     DistanceSensorProtocol,
+    FaceDisplayProtocol,
     LidarProtocol,
     SpeakerProtocol,
     VisionProtocol,
@@ -46,6 +47,7 @@ if TYPE_CHECKING:
     from mousedroid.health.monitor import HealthMonitor
     from mousedroid.llm_gateway.mission_parser import MissionParserProtocol
     from mousedroid.memory.tier import MemoryTier
+    from mousedroid.orchestrator.face_controller import FaceController
     from mousedroid.sensing.manager import SensorManager
     from mousedroid.telemetry.log_buffer import LogRingBuffer
     from mousedroid.telemetry.metrics import MetricsRegistry
@@ -181,6 +183,86 @@ def build_microphone(cfg: Settings) -> AudioProtocol | None:
     from mousedroid.hardware.audio.usb_microphone import UsbMicrophone
 
     return UsbMicrophone(cfg.microphone)
+
+
+def build_face_display(cfg: Settings) -> FaceDisplayProtocol | None:
+    """Build the SSD1306 face-display driver based on config.
+
+    Returns ``None`` when the subsystem is omitted from config or explicitly
+    disabled, mirroring the other optional-hardware factories. The factory
+    eagerly probes the I²C bus + address so that
+    ``fallback_to_mock_on_error`` covers both:
+
+    * import failures (``luma.oled`` / ``smbus2`` unavailable), and
+    * runtime probe failures (panel disconnected, wrong address, missing
+      I²C device node).
+
+    When the probe fails and ``fallback_to_mock_on_error=True``, returns a
+    :class:`MockFaceDriver` so the orchestrator can still come up. When the
+    flag is ``False``, the failure is re-raised.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Driver conforming to :class:`FaceDisplayProtocol`, or ``None``.
+    """
+    if cfg.face_display is None or not cfg.face_display.enabled:
+        return None
+
+    from mousedroid.hardware.display.mock_face_driver import MockFaceDriver
+
+    if cfg.mock_hardware:
+        _log.info("face_display_mock_built")
+        return MockFaceDriver(cfg.face_display)
+
+    try:
+        from mousedroid.hardware.display.ssd1306_face_driver import SSD1306FaceDriver
+
+        SSD1306FaceDriver.probe(cfg.face_display)
+        _log.info(
+            "face_display_real_built",
+            i2c_bus=cfg.face_display.i2c_bus,
+            i2c_address=cfg.face_display.i2c_address,
+        )
+        return SSD1306FaceDriver(cfg.face_display)
+    except (ImportError, OSError):
+        # ImportError → luma.oled/smbus2 missing; OSError → bus/addr/panel
+        # unreachable.  All other exceptions propagate so programming errors
+        # are never silently swallowed.
+        if cfg.face_display.fallback_to_mock_on_error:
+            _log.warning(
+                "face_display_falling_back_to_mock",
+                i2c_bus=cfg.face_display.i2c_bus,
+                i2c_address=cfg.face_display.i2c_address,
+                exc_info=True,
+            )
+            return MockFaceDriver(cfg.face_display)
+        raise
+
+
+def build_face_controller(
+    cfg: Settings, driver: FaceDisplayProtocol | None
+) -> FaceController | None:
+    """Wrap a face-display driver in a :class:`FaceController`.
+
+    Returns ``None`` when ``driver`` is ``None`` (subsystem disabled) so the
+    orchestrator can simply skip face-display calls.
+
+    Args:
+        cfg: Root settings (must have ``face_display`` populated when
+            ``driver`` is not ``None``).
+        driver: Optional face-display driver from :func:`build_face_display`.
+
+    Returns:
+        :class:`FaceController` instance or ``None``.
+    """
+    if driver is None or cfg.face_display is None:
+        return None
+
+    from mousedroid.orchestrator.face_controller import FaceController
+
+    return FaceController(driver, cfg.face_display)
 
 
 def build_speaker(cfg: Settings) -> SpeakerProtocol | None:
@@ -1034,6 +1116,10 @@ def build_orchestrator(cfg: Settings) -> object:
     speaker = build_speaker(cfg)
     voice_engine = build_voice_engine(cfg, speaker=speaker)
 
+    # Face display (optional — disabled by default)
+    face_display = build_face_display(cfg)
+    face_controller = build_face_controller(cfg, face_display)
+
     # Memory tier + experience logger + curiosity module (optional)
     memory_tier = build_memory_tier(cfg)
     experience_logger = build_experience_logger(cfg)
@@ -1067,6 +1153,7 @@ def build_orchestrator(cfg: Settings) -> object:
         cloud_sink=cloud_sink,
         cloud_experience_exporter=cloud_experience_exporter,
         tool_registry=_tool_registry,
+        face_controller=face_controller,
     )
 
 

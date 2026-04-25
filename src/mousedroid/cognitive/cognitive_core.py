@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any
 
 import numpy as np
@@ -22,6 +24,7 @@ from mousedroid.cognitive.constitutional_rl import (
 )
 from mousedroid.cognitive.metacognitive import MetacognitiveModel
 from mousedroid.constants import (
+    DEFAULT_AFFECT_DIM,
     FAST_STATE_DIM,
     SLOW_LOOP_INTERVAL_S,
     SLOW_QUEUE_MAXSIZE,
@@ -108,6 +111,34 @@ class CognitiveCore:
             self._slow_queue.put_nowait(observation_dict)
 
         return safe_action, violations
+
+    # -- Public BDI accessors -----------------------------------------------
+
+    @property
+    def latest_bdi(self) -> Mapping[str, Any]:
+        """Read-only proxy of the most recent BDI inference result.
+
+        Returns an empty mapping before the slow loop has produced its first
+        result. Subsystems that only need affect should prefer
+        :meth:`get_latest_affect`, which wraps the shape validation.
+
+        The returned :class:`types.MappingProxyType` prevents accidental
+        mutation; always write through ``self._latest_bdi`` internally.
+        """
+        return MappingProxyType(self._latest_bdi)
+
+    def get_latest_affect(self) -> tuple[float, float]:
+        """Return ``(valence, arousal)`` from the most recent BDI inference.
+
+        Falls back to ``(0.0, 0.0)`` when the slow loop has not yet produced
+        an affect vector or when the stored shape is unexpected. This keeps
+        downstream consumers (e.g. the face controller) free from defensive
+        boilerplate.
+        """
+        affect = self._latest_bdi.get("affect")
+        if isinstance(affect, np.ndarray) and affect.shape == (DEFAULT_AFFECT_DIM,):
+            return float(affect[0]), float(affect[1])
+        return 0.0, 0.0
 
     # -- Slow path (~1 Hz) --------------------------------------------------
 

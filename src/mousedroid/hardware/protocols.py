@@ -11,6 +11,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 if TYPE_CHECKING:
+    from mousedroid.hardware.display.expressions import Expression
     from mousedroid.sensing.lidar_scan import LidarScan
 
 
@@ -193,4 +194,34 @@ class LidarProtocol(Protocol):
 
     async def stop(self) -> None:
         """Stop LiDAR motor and data acquisition."""
+        ...
+
+
+@runtime_checkable
+class FaceDisplayProtocol(Protocol):
+    """Interface for the MSE-6 face display (SSD1306 OLED, mock, etc.).
+
+    Renders discrete facial expressions and short status text. All methods
+    are ``async`` so blocking I²C writes can be bridged with
+    ``asyncio.to_thread`` without stalling the orchestrator loop.
+    """
+
+    async def start(self) -> None:
+        """Initialise the display device and any background animation tasks."""
+        ...
+
+    async def stop(self) -> None:
+        """Shut down background tasks and release the display device."""
+        ...
+
+    async def show_expression(self, expression: Expression) -> None:
+        """Render a discrete facial expression.
+
+        Args:
+            expression: Target :class:`Expression` value to render.
+        """
+        ...
+
+    async def show_text(self, message: str) -> None:
+        """Render a short single-line status message (used for boot banner)."""
         ...

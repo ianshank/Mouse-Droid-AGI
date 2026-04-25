@@ -1981,6 +1981,70 @@ class VoiceConfig(BaseModel):
     )
 
 
+class FaceDisplayConfig(BaseModel):
+    """SSD1306 OLED face-display configuration.
+
+    All thresholds consumed by the affect→expression mapping and the blink
+    animation live here so there are no magic numbers in driver or
+    controller code. New deployments must opt in by setting ``enabled=True``;
+    existing YAML files (which omit the section entirely) remain unaffected
+    because :class:`Settings` defaults the field to ``None``.
+    """
+
+    enabled: bool = Field(False, description="Enable the face-display subsystem")
+    i2c_bus: int = Field(7, ge=0, description="I²C bus index (Jetson Orin Nano header = 7)")
+    i2c_address: int = Field(0x3C, ge=0, le=0x7F, description="SSD1306 I²C address")
+    width: int = Field(128, gt=0, description="Panel width in pixels")
+    height: int = Field(64, gt=0, description="Panel height in pixels")
+    rotate: int = Field(0, ge=0, le=3, description="Rotation in 90° steps (0..3)")
+    refresh_hz: float = Field(10.0, gt=0, description="Maximum face-controller update rate (Hz)")
+    boot_message: str = Field("MSE-6 online", description="Boot banner text")
+    idle_blink_interval_s: float = Field(
+        4.0,
+        ge=0,
+        description="Idle blink period (s); 0 disables the blink animation",
+    )
+    blink_close_duration_s: float = Field(
+        0.15, gt=0, description="How long the eyes stay closed during a blink"
+    )
+    min_dwell_s: float = Field(
+        0.6,
+        ge=0,
+        description="Hysteresis dwell — minimum time on an expression before switching",
+    )
+    fallback_to_mock_on_error: bool = Field(
+        True,
+        description="Fall back to the mock driver when the I²C probe fails",
+    )
+    valence_happy_min: float = Field(
+        0.35, ge=-1.0, le=1.0, description="Valence threshold for HAPPY"
+    )
+    valence_sad_max: float = Field(-0.35, ge=-1.0, le=1.0, description="Valence threshold for SAD")
+    arousal_alert_min: float = Field(
+        0.55, ge=-1.0, le=1.0, description="Arousal threshold for ALERT"
+    )
+    arousal_sleepy_max: float = Field(
+        -0.45, ge=-1.0, le=1.0, description="Arousal threshold for SLEEPY"
+    )
+    angry_valence_max: float = Field(
+        -0.25, ge=-1.0, le=1.0, description="Valence ceiling for ANGRY"
+    )
+    angry_arousal_min: float = Field(0.45, ge=-1.0, le=1.0, description="Arousal floor for ANGRY")
+    idle_sleepy_after_s: float = Field(
+        20.0,
+        gt=0,
+        description="Idle duration after which the face goes SLEEPY",
+    )
+    idle_action_epsilon: float = Field(
+        1e-3,
+        gt=0,
+        description=(
+            "Action magnitude below which the agent is considered idle. "
+            "Tolerates small NN-output noise so the SLEEPY path can trigger."
+        ),
+    )
+
+
 class UltrasonicConfig(BaseModel):
     """HC-SR04 ultrasonic distance sensor configuration."""
 
@@ -2045,6 +2109,10 @@ class Settings(BaseSettings):
     speaker: SpeakerConfig | None = Field(
         None,
         description="USB speaker config (None=disabled)",
+    )
+    face_display: FaceDisplayConfig | None = Field(
+        None,
+        description="Optional SSD1306 OLED face display (None=disabled)",
     )
     voice: VoiceConfig = Field(default_factory=_settings_default_factory(VoiceConfig))
     camera: CameraConfig = Field(default_factory=_settings_default_factory(CameraConfig))
