@@ -1966,6 +1966,14 @@ class FaceDisplayConfig(BaseModel):
         gt=0,
         description="Idle duration after which the face goes SLEEPY",
     )
+    idle_action_epsilon: float = Field(
+        1e-3,
+        gt=0,
+        description=(
+            "Action magnitude below which the agent is considered idle. "
+            "Tolerates small NN-output noise so the SLEEPY path can trigger."
+        ),
+    )
 
 
 class UltrasonicConfig(BaseModel):

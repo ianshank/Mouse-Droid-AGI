@@ -64,6 +64,23 @@ class Expression(str, Enum):
     BOOT = "boot"
 
 
+_DEFAULT_FONT: object | None = None
+
+
+def _get_default_font() -> object:
+    """Return a cached PIL default font, loading it lazily on first use.
+
+    Avoids re-parsing the bitmap font data on every text render. The cache
+    is module-global; PIL's default font is immutable.
+    """
+    global _DEFAULT_FONT
+    if _DEFAULT_FONT is None:
+        from PIL import ImageFont
+
+        _DEFAULT_FONT = ImageFont.load_default()
+    return _DEFAULT_FONT
+
+
 def _new_canvas(width: int, height: int) -> tuple[PILImage, object]:
     """Create a 1-bit PIL canvas + ImageDraw, lazy-importing PIL."""
     from PIL import Image, ImageDraw
@@ -226,10 +243,8 @@ def render_expression(expression: Expression, width: int, height: int) -> PILIma
     _draw_eye(draw, right_cx, cy, eye_w, eye_h, shape, side="right")
 
     if expression in {Expression.EMERGENCY, Expression.BOOT}:
-        from PIL import ImageFont
-
         label = "EMERGENCY" if expression is Expression.EMERGENCY else "BOOT"
-        font = ImageFont.load_default()
+        font = _get_default_font()
         bbox = draw.textbbox((0, 0), label, font=font)  # type: ignore[attr-defined]
         text_w = bbox[2] - bbox[0]
         draw.text(  # type: ignore[attr-defined]
@@ -256,10 +271,8 @@ def render_text(message: str, width: int, height: int) -> PILImage:
     Returns:
         A 1-bit-mode :class:`PIL.Image.Image`.
     """
-    from PIL import ImageFont
-
     img, draw = _new_canvas(width, height)
-    font = ImageFont.load_default()
+    font = _get_default_font()
     bbox = draw.textbbox((0, 0), message, font=font)  # type: ignore[attr-defined]
     text_w = bbox[2] - bbox[0]
     text_h = bbox[3] - bbox[1]

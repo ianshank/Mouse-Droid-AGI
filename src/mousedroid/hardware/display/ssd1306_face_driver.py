@@ -93,7 +93,7 @@ class SSD1306FaceDriver:
 
     async def start(self) -> None:
         """Probe the I²C bus and initialise the SSD1306 device."""
-        await asyncio.to_thread(self._probe_bus)
+        await asyncio.to_thread(type(self).probe, self._cfg)
         self._device = await asyncio.to_thread(self._init_device)
         self._started = True
         _log.info(
@@ -166,17 +166,12 @@ class SSD1306FaceDriver:
                     await self._render_expression(Expression.BLINK)
                 await asyncio.sleep(self._cfg.blink_close_duration_s)
                 async with self._lock:
-                    # Only restore if nothing else has changed _current while
-                    # the eyes were closed; a concurrent show_expression call
-                    # that arrived during the sleep must not be clobbered.
-                    if self._current is Expression.BLINK and previous is not None:
+                    # Skip restore if a concurrent show_expression replaced
+                    # _current while the eyes were closed.
+                    if self._current is Expression.BLINK:
                         await self._render_expression(previous)
         except asyncio.CancelledError:
             return
-
-    def _probe_bus(self) -> None:
-        """Probe the I²C address; raises ``OSError`` when nothing answers."""
-        type(self).probe(self._cfg)
 
     def _init_device(self) -> Any:
         from luma.core.interface.serial import i2c

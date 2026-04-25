@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import types as _types_mod
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any
 
 import numpy as np
@@ -24,6 +24,7 @@ from mousedroid.cognitive.constitutional_rl import (
 )
 from mousedroid.cognitive.metacognitive import MetacognitiveModel
 from mousedroid.constants import (
+    DEFAULT_AFFECT_DIM,
     FAST_STATE_DIM,
     SLOW_LOOP_INTERVAL_S,
     SLOW_QUEUE_MAXSIZE,
@@ -125,7 +126,7 @@ class CognitiveCore:
         The returned :class:`types.MappingProxyType` prevents accidental
         mutation; always write through ``self._latest_bdi`` internally.
         """
-        return _types_mod.MappingProxyType(self._latest_bdi)
+        return MappingProxyType(self._latest_bdi)
 
     def get_latest_affect(self) -> tuple[float, float]:
         """Return ``(valence, arousal)`` from the most recent BDI inference.
@@ -136,7 +137,7 @@ class CognitiveCore:
         boilerplate.
         """
         affect = self._latest_bdi.get("affect")
-        if isinstance(affect, np.ndarray) and affect.shape == (2,):  # hardcoded-ok
+        if isinstance(affect, np.ndarray) and affect.shape == (DEFAULT_AFFECT_DIM,):
             return float(affect[0]), float(affect[1])
         return 0.0, 0.0
 

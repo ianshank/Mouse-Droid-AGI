@@ -210,17 +210,15 @@ def build_face_display(cfg: Settings) -> FaceDisplayProtocol | None:
     if cfg.face_display is None or not cfg.face_display.enabled:
         return None
 
-    if cfg.mock_hardware:
-        from mousedroid.hardware.display.mock_face_driver import MockFaceDriver
+    from mousedroid.hardware.display.mock_face_driver import MockFaceDriver
 
+    if cfg.mock_hardware:
         _log.info("face_display_mock_built")
         return MockFaceDriver(cfg.face_display)
 
     try:
         from mousedroid.hardware.display.ssd1306_face_driver import SSD1306FaceDriver
 
-        # Eager probe: catch missing libraries, missing /dev/i2c-N, wrong
-        # address, etc. before the orchestrator's start() is invoked.
         SSD1306FaceDriver.probe(cfg.face_display)
         _log.info(
             "face_display_real_built",
@@ -229,10 +227,9 @@ def build_face_display(cfg: Settings) -> FaceDisplayProtocol | None:
         )
         return SSD1306FaceDriver(cfg.face_display)
     except (ImportError, OSError):
-        # ImportError  — luma.oled / smbus2 not installed
-        # OSError      — /dev/i2c-N missing, wrong address, panel disconnected
-        # All other exceptions (AttributeError, etc.) propagate so programming
-        # errors are never silently swallowed.
+        # ImportError → luma.oled/smbus2 missing; OSError → bus/addr/panel
+        # unreachable.  All other exceptions propagate so programming errors
+        # are never silently swallowed.
         if cfg.face_display.fallback_to_mock_on_error:
             _log.warning(
                 "face_display_falling_back_to_mock",
@@ -240,8 +237,6 @@ def build_face_display(cfg: Settings) -> FaceDisplayProtocol | None:
                 i2c_address=cfg.face_display.i2c_address,
                 exc_info=True,
             )
-            from mousedroid.hardware.display.mock_face_driver import MockFaceDriver
-
             return MockFaceDriver(cfg.face_display)
         raise
 

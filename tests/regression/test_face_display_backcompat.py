@@ -143,6 +143,7 @@ def test_face_display_config_defaults_match_documented_values() -> None:
     assert cfg.angry_arousal_min == pytest.approx(0.45)
     assert cfg.idle_sleepy_after_s == pytest.approx(20.0)
     assert cfg.min_dwell_s == pytest.approx(0.6)
+    assert cfg.idle_action_epsilon == pytest.approx(1e-3)
 
 
 # ---------------------------------------------------------------------------

@@ -565,10 +565,15 @@ class MouseDroidOrchestrator:
         else:
             valence, arousal = 0.0, 0.0
 
-        # Use a relaxed tolerance (1e-3) so small NN output noise does not
-        # prevent the idle-SLEEPY path from triggering.  Avoids allocating
-        # a zeros tensor each tick via torch.zeros_like.
-        is_idle = action is None or bool(action.abs().max().item() < 1e-3)
+        # When emergency wins, is_idle is irrelevant — skip the .item() call
+        # to avoid an unnecessary GPU↔CPU sync on the hot path.
+        if safety_ctx.is_emergency:
+            is_idle = False
+        elif action is None:
+            is_idle = True
+        else:
+            epsilon = self._cfg.face_display.idle_action_epsilon if self._cfg.face_display else 1e-3
+            is_idle = bool(action.abs().max().item() < epsilon)
 
         try:
             await self._face_controller.update(
@@ -577,8 +582,12 @@ class MouseDroidOrchestrator:
                 is_emergency=safety_ctx.is_emergency,
                 is_idle=is_idle,
             )
-        except Exception:  # pylint: disable=broad-except
-            _log.warning("face_controller_update_failed", exc_info=True)
+        except Exception as exc:  # pylint: disable=broad-except
+            _log.warning(
+                "face_controller_update_failed",
+                exc_type=type(exc).__name__,
+                exc_info=True,
+            )
 
     async def _try_sensor_recovery(self, safety_ctx: SafetyContext) -> bool:
         """Attempt sensor recovery if the emergency is due to sensor degradation.

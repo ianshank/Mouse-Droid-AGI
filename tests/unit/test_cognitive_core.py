@@ -68,11 +68,11 @@ def test_latest_bdi_property_exposes_dict() -> None:
 
 def test_latest_bdi_property_is_read_only() -> None:
     """latest_bdi must not be mutatable from outside CognitiveCore."""
-    import types
+    from types import MappingProxyType
 
     core = _make_core()
     proxy = core.latest_bdi
-    assert isinstance(proxy, types.MappingProxyType)
+    assert isinstance(proxy, MappingProxyType)
     with pytest.raises(TypeError):
         proxy["injected"] = 1  # type: ignore[index]
 
