@@ -36,13 +36,19 @@ _CONFIG_DIR = Path("config")
 # validator path; machine-specific configs are gitignored; and a handful of
 # Jetson configs have pre-existing validation gaps unrelated to face_display
 # (they are covered by tests/regression/test_config_backwards_compat.py).
+# Note: jetson_production.yaml opts IN to face_display (OLED on I2C bus 7),
+# so it is excluded from the "must be None" set below.
 _MOUSE_DROID_YAMLS = [
     "default.yaml",
     "mock_hardware.yaml",
-    "jetson_production.yaml",
     "jetson_hailo.yaml",
     "jetson_secure_metrics.yaml",
     "local_training.yaml",
+]
+
+# These configs explicitly enable face_display — assert it loads correctly.
+_FACE_DISPLAY_ENABLED_YAMLS = [
+    "jetson_production.yaml",
 ]
 
 
@@ -166,3 +172,24 @@ def test_partial_face_display_config_fills_defaults() -> None:
     # Unset fields keep their defaults.
     assert cfg.face_display.i2c_bus == 7
     assert cfg.face_display.width == 128
+
+
+# ---------------------------------------------------------------------------
+# Production configs that opt IN — must load cleanly with face_display set.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("filename", _FACE_DISPLAY_ENABLED_YAMLS)
+def test_yaml_loads_with_face_display_enabled(filename: str) -> None:
+    """YAMLs that explicitly enable face_display must load with face_display set."""
+    path = _CONFIG_DIR / filename
+    if not path.exists():
+        pytest.skip(f"{filename} not present in this checkout")
+    data = yaml.safe_load(path.read_text())
+    s = Settings.model_validate(data)
+    assert s.face_display is not None, (
+        f"{filename}: expected face_display to be set (enabled in config), got None"
+    )
+    assert s.face_display.enabled is True, (
+        f"{filename}: expected face_display.enabled=True, got {s.face_display.enabled!r}"
+    )

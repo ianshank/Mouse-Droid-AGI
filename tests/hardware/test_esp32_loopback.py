@@ -130,13 +130,16 @@ async def test_send_velocity_moves_encoders(driver, settings: Settings) -> None:
         abs(enc.left_velocity_mps) <= feedback_tolerance
         and abs(enc.right_velocity_mps) <= feedback_tolerance
     ):
-        pytest.skip("encoder loopback inactive; ensure rover power and motor/encoder wiring are present")
+        pytest.skip(
+            "encoder loopback inactive; ensure rover power and motor/encoder wiring are present"
+        )
 
     assert (
         enc.left_velocity_mps > feedback_tolerance or enc.right_velocity_mps > feedback_tolerance
     ), (
         "Expected encoder feedback after "
-        f"{test_vel:.2f} m/s, got left={enc.left_velocity_mps:.4f} right={enc.right_velocity_mps:.4f}"
+        f"{test_vel:.2f} m/s, got left={enc.left_velocity_mps:.4f}"
+        f" right={enc.right_velocity_mps:.4f}"
     )
 
 
@@ -213,8 +216,8 @@ async def test_circuit_breaker_opens_after_failures(settings: Settings) -> None:
 
     from mousedroid.comms.mock_driver import MockESP32Driver
     from mousedroid.resilience.circuit_breaker import CircuitOpenError
-    from mousedroid.resilience.retry import RetryExhaustedError
     from mousedroid.resilience.resilient_driver import ResilientESP32Driver
+    from mousedroid.resilience.retry import RetryExhaustedError
 
     failing_inner: AsyncMock = AsyncMock(spec=MockESP32Driver)  # type: ignore[type-abstract]
     failing_inner.send_velocity = AsyncMock(side_effect=RuntimeError("simulated_serial_error"))
@@ -242,8 +245,8 @@ async def test_emergency_stop_bypasses_circuit_breaker(settings: Settings) -> No
 
     from mousedroid.comms.mock_driver import MockESP32Driver
     from mousedroid.resilience.circuit_breaker import CircuitOpenError
-    from mousedroid.resilience.retry import RetryExhaustedError
     from mousedroid.resilience.resilient_driver import ResilientESP32Driver
+    from mousedroid.resilience.retry import RetryExhaustedError
 
     failing_inner: AsyncMock = AsyncMock(spec=MockESP32Driver)  # type: ignore[type-abstract]
     failing_inner.send_velocity = AsyncMock(side_effect=RuntimeError("fail"))

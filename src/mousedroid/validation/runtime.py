@@ -109,7 +109,7 @@ def camera_unavailable_reason(cfg: Settings, exc: Exception | None = None) -> st
     device_path = str(cfg.camera.device_path).strip()
     if device_path and not Path(device_path).exists():
         reasons.append(f"V4L2 device {device_path} is missing")
-    if not Path("/tmp/argus_socket").exists():
+    if not Path("/tmp/argus_socket").exists():  # noqa: S108
         reasons.append("libargus socket /tmp/argus_socket is missing")
 
     if not reasons:
