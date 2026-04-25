@@ -314,11 +314,11 @@ test_audio() {
 }
 
 # ---------------------------------------------------------------------------
-# 5a. LiDAR / 5b. Speaker -- delegate to scripts/verify_sensors.py
+# 5a. LiDAR / 5b. Speaker / 5c. Rocky voice -- delegate to verify_sensors.py
 # ---------------------------------------------------------------------------
 
 _run_verify_sensor() {
-    # $1 = sensor name (lidar|speaker), $2 = record label
+    # $1 = sensor name (lidar|speaker|voice), $2 = record label
     local sensor="$1"
     local label="$2"
     log_section "${label} Test"
@@ -353,6 +353,10 @@ test_speaker() {
     _run_verify_sensor "speaker" "Speaker"
 }
 
+test_voice() {
+    _run_verify_sensor "voice" "Rocky Voice"
+}
+
 # ---------------------------------------------------------------------------
 # 6. Application health check
 # ---------------------------------------------------------------------------
@@ -376,9 +380,8 @@ test_pytest() {
     log_section "Hardware Pytest Suite"
     log_step "Running pytest -m hardware"
 
-    local pytest_bin="${VENV_DIR}/bin/pytest"
-    if [[ ! -x "${pytest_bin}" ]]; then
-        record_skip "hardware pytest" "pytest not installed in venv"
+    if ! "${PYTHON}" -m pytest --version >/dev/null 2>&1; then
+        record_skip "hardware pytest" "pytest not available in selected Python runtime"
         return
     fi
 
@@ -389,7 +392,7 @@ test_pytest() {
     fi
 
     local pytest_output
-    if pytest_output="$(MOUSEDROID_JETSON_CONFIGS="${CONFIGS_CSV}" "${pytest_bin}" -m hardware -v "${test_dir}" 2>&1)"; then
+    if pytest_output="$(MOUSEDROID_JETSON_CONFIGS="${CONFIGS_CSV}" MOUSEDROID_MOCK_HARDWARE=false "${PYTHON}" -m pytest -m hardware -v "${test_dir}" 2>&1)"; then
         echo "${pytest_output}"
         record_pass "hardware pytest suite"
     else
@@ -419,7 +422,7 @@ import time
 from mousedroid.config.loader import load_settings
 from mousedroid.factory import build_orchestrator
 from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator
-from mousedroid.validation.runtime import resolve_runtime_config_paths
+from mousedroid.validation.runtime import camera_unavailable_reason, resolve_runtime_config_paths
 
 cfg = load_settings(*resolve_runtime_config_paths())
 
@@ -432,10 +435,7 @@ async def run_e2e():
     try:
         # Run tick loop for ~5 seconds
         while time.monotonic() - start < 5.0:
-            try:
-                await orch.tick()
-            except Exception as exc:
-                print(f"tick error (non-fatal): {exc}", file=sys.stderr)
+            await orch.tick()
             await asyncio.sleep(0.1)
     finally:
         await orch.stop()
@@ -448,6 +448,10 @@ try:
 except KeyboardInterrupt:
     print("PASS:E2E interrupted cleanly via SIGINT")
 except Exception as exc:
+    reason = camera_unavailable_reason(cfg, exc)
+    if reason is not None:
+        print(f"SKIP:E2E blocked by unavailable camera: {reason}")
+        sys.exit(0)
     print(f"FAIL:E2E error: {exc}")
     sys.exit(1)
 PYEOF
@@ -461,6 +465,10 @@ PYEOF
         local msg
         msg="$(echo "${result}" | grep "^PASS:" | tail -1 | sed 's/^PASS://')"
         record_pass "E2E 5-second run: ${msg}"
+    elif echo "${result}" | grep -q "^SKIP:"; then
+        local msg
+        msg="$(echo "${result}" | grep "^SKIP:" | tail -1 | sed 's/^SKIP://')"
+        record_skip "E2E 5-second run" "${msg}"
     else
         local msg
         msg="$(echo "${result}" | grep "^FAIL:" | sed 's/^FAIL://')"
@@ -509,6 +517,7 @@ main() {
             test_audio
             test_lidar
             test_speaker
+            test_voice
             test_app
             test_pytest
             test_e2e
@@ -520,12 +529,13 @@ main() {
         audio)    test_audio ;;
         lidar)    test_lidar ;;
         speaker)  test_speaker ;;
+        voice)    test_voice ;;
         app)      test_app ;;
         pytest)   test_pytest ;;
         e2e)      test_e2e ;;
         *)
             echo "Unknown step: ${step}"
-            echo "Valid steps: all, system, gpio, serial, camera, audio, lidar, speaker, app, pytest, e2e"
+            echo "Valid steps: all, system, gpio, serial, camera, audio, lidar, speaker, voice, app, pytest, e2e"
             exit 1
             ;;
     esac

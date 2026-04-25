@@ -189,6 +189,20 @@ async def test_synthesised_audio_written_to_speaker() -> None:
 
 
 @pytest.mark.asyncio
+async def test_play_phrase_returns_samples_and_peak() -> None:
+    """play_phrase() exposes a one-shot public API for validation flows."""
+    engine, speaker, _tts = _make_engine()
+    await engine.start()
+    try:
+        samples_written, peak_abs = await engine.play_phrase("Rocky ready")
+        assert samples_written == 22050
+        assert peak_abs == pytest.approx(0.0)
+        assert len(speaker.get_written_chunks()) > 0
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.asyncio
 async def test_phrase_overrides() -> None:
     """User-provided phrase overrides replace defaults."""
     voice_cfg = VoiceConfig(

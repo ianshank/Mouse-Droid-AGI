@@ -28,6 +28,9 @@ from pathlib import Path
 
 import pytest
 
+from mousedroid.validation.runtime import camera_unavailable_reason
+from tests._jetson_hardware import load_jetson_runtime_settings
+
 
 def _is_jetson_host() -> bool:
     return platform.system() == "Linux" and Path("/etc/nv_tegra_release").exists()
@@ -55,13 +58,7 @@ _HARD_DEADLINE_MULT = float(os.getenv("MOUSEDROID_E2E_HARD_DEADLINE_MULT", "5.0"
 
 def _load_settings():
     """Return Settings from jetson_production.yaml."""
-    import yaml
-
-    from mousedroid.config.schema import Settings
-
-    with open(JETSON_PROD_CONFIG) as fh:
-        raw = yaml.safe_load(fh)
-    return Settings(**raw)
+    return load_jetson_runtime_settings()
 
 
 def _deadline_budget_ms(cfg) -> float:
@@ -72,6 +69,16 @@ def _deadline_budget_ms(cfg) -> float:
 def _max_miss_pct(cfg) -> float:
     """Return acceptable deadline-miss percentage — from config or fallback."""
     return float(getattr(getattr(cfg, "loop", None), "max_miss_pct", _DEFAULT_MAX_MISS_PCT))
+
+
+async def _start_or_skip(orch, settings) -> None:
+    try:
+        await orch.start()
+    except RuntimeError as exc:
+        reason = camera_unavailable_reason(settings, exc)
+        if reason is not None:
+            pytest.skip(reason)
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +97,7 @@ async def orchestrator(settings):
     from mousedroid.factory import build_orchestrator
 
     orch = build_orchestrator(settings)
-    await orch.start()
+    await _start_or_skip(orch, settings)
     yield orch
     await orch.stop()
 
@@ -106,7 +113,7 @@ async def test_orchestrator_starts_and_stops(settings) -> None:
     from mousedroid.factory import build_orchestrator
 
     orch = build_orchestrator(settings)
-    await orch.start()
+    await _start_or_skip(orch, settings)
     await orch.stop()
 
 
@@ -239,7 +246,7 @@ async def test_run_n_seconds(settings) -> None:
     from mousedroid.factory import build_orchestrator
 
     orch = build_orchestrator(settings)
-    await orch.start()
+    await _start_or_skip(orch, settings)
 
     run_seconds = float(os.getenv("MOUSEDROID_E2E_RUN_SECONDS", "3.0"))
     import contextlib

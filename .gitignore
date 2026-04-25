@@ -118,6 +118,10 @@ ci*.log
 # Jetson validation reports
 reports/jetson_validate/
 
+# Jetson smoke run outputs (timestamped run dirs + python3-in-container shim)
+reports/jetson_smoke/*/
+reports/jetson_smoke/**
+
 # Local run artifacts moved out of repo root
 reports/local_runs/
 

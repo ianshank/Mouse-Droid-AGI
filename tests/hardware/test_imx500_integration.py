@@ -21,7 +21,7 @@ import time
 import numpy as np
 import pytest
 
-from mousedroid.config.schema import Settings
+from tests._jetson_hardware import load_jetson_runtime_settings
 
 pytestmark = pytest.mark.hardware
 
@@ -39,12 +39,7 @@ JETSON_PROD_CONFIG = "config/jetson_production.yaml"
 @pytest.fixture(scope="module")
 def camera_cfg():
     """Load CameraConfig from jetson_production.yaml."""
-    import yaml
-
-    with open(JETSON_PROD_CONFIG) as fh:
-        raw = yaml.safe_load(fh)
-
-    settings = Settings(**raw)
+    settings = load_jetson_runtime_settings()
     return settings.camera
 
 

@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from mousedroid.validation.runtime import capture_camera_frame
+from mousedroid.validation.runtime import camera_unavailable_reason, capture_camera_frame
 
 pytestmark = pytest.mark.hardware
 
@@ -82,7 +82,13 @@ def test_serial_port_exists(jetson_settings) -> None:
 
 def test_camera_capture(jetson_settings) -> None:
     """Capture one frame and verify the configured resolution."""
-    frame, backend_name = asyncio.run(capture_camera_frame(jetson_settings))
+    try:
+        frame, backend_name = asyncio.run(capture_camera_frame(jetson_settings))
+    except RuntimeError as exc:
+        reason = camera_unavailable_reason(jetson_settings, exc)
+        if reason is not None:
+            pytest.skip(reason)
+        raise
 
     assert frame is not None, "Camera returned None frame"
     height, width = frame.shape[0], frame.shape[1]

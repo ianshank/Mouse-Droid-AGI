@@ -9,7 +9,7 @@
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 [![CUDA](https://img.shields.io/badge/CUDA-12.6-76B900)](Dockerfile.jetson)
 [![Docker](https://img.shields.io/badge/docker-L4T%20r36.4.0-2496ED)](docker-compose.jetson.yml)
-[![Version](https://img.shields.io/badge/version-0.3.1--dev-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.2--dev-blue)](CHANGELOG.md)
 
 ---
 
@@ -207,9 +207,30 @@ bash scripts/jetson_validate.sh ian@<jetson-ip> --step smoke
 
 # Local sensor verification using the same runtime overlay resolution as the app
 python scripts/verify_sensors.py --json
+
+# Full hardware smoke (all stages inside the Docker container)
+bash scripts/jetson_full_smoke_run.sh
 ```
 
 Runtime overlays may be supplied explicitly or through `MOUSEDROID_CONFIGS` / `MOUSEDROID_JETSON_CONFIGS`, keeping smoke and validation paths aligned with deployed configuration.
+
+> **Jetson deployment note**: `/etc/mousedroid/jetson_production.yaml` is a read-only
+> bind-mount separate from the repo. After each `git pull` on the Jetson, sync it manually:
+>
+> ```bash
+> sudo cp /opt/mousedroid/config/jetson_production.yaml /etc/mousedroid/jetson_production.yaml
+> sudo systemctl restart mousedroid-docker
+> ```
+
+### Rocky Voice Engine (Piper TTS)
+
+The Rocky personality voice engine uses [Piper TTS](https://github.com/rhasspy/piper) for local neural synthesis. The Jetson Docker image bakes in the model at build time:
+
+- **Model**: `en_US-lessac-medium.onnx` + `.onnx.json` (baked into Docker layer at build; non-fatal if HuggingFace is unreachable at build time)
+- **Config**: `voice.enabled`, `voice.tts_model_path`, `voice.tts_sample_rate`, `voice.cooldown_s` — all in `config/jetson_production.yaml`
+- **Smoke status**: ✅ PASS — `voice | PASS` (39,424 audio samples generated, `20260425T192408Z`)
+
+Events that trigger Rocky: startup, shutdown, obstacle detected, critical error, sensor recovery.
 
 ### Telemetry and Prometheus Metrics
 

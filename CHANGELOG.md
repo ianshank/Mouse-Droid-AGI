@@ -8,6 +8,65 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Rocky Voice Engine (Piper TTS) + Full Jetson Smoke Harness
+
+- **Rocky TTS pipeline** — end-to-end Piper voice synthesis, verified `PASS` on Jetson Orin Nano
+  - `src/mousedroid/voice/tts.py` — async-safe `PiperTTS` wrapper
+    - Prefers `synthesize_wav()` API (Piper ≥ 1.3); gracefully falls back to legacy
+      `synthesize()` if `synthesize_wav` is not present on the voice object
+    - Normalises int16 WAV output via `INT16_MAX_F` for downstream float32 pipeline
+    - `torch.no_grad()` guard on all inference paths
+    - 100% changed-line branch coverage (11 unit tests in `tests/unit/test_piper_tts.py`)
+  - `VoiceConfig` and `SpeakerConfig` added to `src/mousedroid/config/schema.py`
+    - `VoiceConfig`: `enabled` (default `false`), `tts_model_path`, `tts_sample_rate`,
+      `cooldown_s`, `queue_size`, `personality`, `phrase_overrides`, `intensity_threshold`
+    - `SpeakerConfig`: `device_name`, `sample_rate`, `channels`, `chunk_size`, `format`,
+      `write_timeout_s`, `write_poll_interval_s`
+    - Both fields are optional with safe defaults — existing YAML configs load unchanged
+  - `config/jetson_production.yaml` — `voice` block added: `enabled: true`, model path
+    `/opt/voice_models/en_US-lessac-medium.onnx`, `cooldown_s: 5.0`, `queue_size: 16`
+
+- **USB Speaker driver improvements** (`src/mousedroid/hardware/audio/usb_speaker.py`)
+  - Buffer-availability polling loop driven by `SpeakerConfig.write_timeout_s` and
+    `write_poll_interval_s` — eliminates blocking on slow ALSA `write()` calls
+  - Automatic device discovery by name substring (`SpeakerConfig.device_name`)
+  - Clamps float32 samples to `[-1.0, 1.0)` before int16 conversion, preventing wrap-around
+  - Graceful `OSError` / ImportError handling — falls back cleanly when PyAudio unavailable
+
+- **Jetson full-smoke harness** (`scripts/jetson_full_smoke_run.sh`)
+  - Orchestrates all hardware smoke stages inside the Docker container with per-stage
+    timeouts, pass/fail tracking, and a colour SUMMARY.md report
+  - Voice-failure enricher appends `## Rocky voice prerequisites` remediation block to
+    SUMMARY.md when the voice stage fails (model path, overlay sync instructions)
+  - All magic numbers are env-overridable: `MOUSEDROID_SMOKE_CONTAINER`, `MOUSEDROID_SMOKE_BUS`,
+    `MOUSEDROID_SMOKE_REPORT_ROOT`, `MOUSEDROID_JETSON_CONFIGS`
+  - Smoke run `20260425T192408Z`: all stages PASS including `voice` (39,424 audio samples)
+
+- **`validation/runtime.py` voice helper**
+  - `play_rocky_voice_phrase()` — factory-backed end-to-end TTS smoke check reused by
+    `jetson_full_smoke_run.sh` and standalone validation scripts
+
+- **Piper TTS Docker stage** (`Dockerfile.jetson`)
+  - Stage 5b: `pip install piper-tts` + `curl --retry 3` download of
+    `en_US-lessac-medium.onnx` + `.onnx.json` from HuggingFace (non-fatal fallback if
+    network unavailable during build)
+
+- **Regression tests** (`tests/regression/test_voice_speaker_backcompat.py`)
+  - 22 backwards-compatibility tests covering: YAML load hygiene for all committed configs,
+    `VoiceConfig` and `SpeakerConfig` default-value invariants, `jetson_production.yaml`
+    voice fields, Piper model path format, and partial stanza round-trips
+
+### Fixed
+
+- **Piper ≥ 1.3 API compatibility** — `synthesize(text, wav_file)` no longer writes a WAV
+  file in the new API; `_synthesize_sync` now calls `synthesize_wav()` when available
+- **`/etc/mousedroid/jetson_production.yaml` overlay drift** — documented that the bind-mounted
+  config must be manually synced after each git pull (`sudo cp config/jetson_production.yaml
+  /etc/mousedroid/`); bootstrap automation is listed in NEXT_STEPS
+- **`reports/jetson_smoke/` gitignore gap** — smoke run timestamped directories and
+  `python3-in-container` shims were being committed; `.gitignore` now excludes
+  `reports/jetson_smoke/*/` and the two committed run directories have been removed from tracking
+
 ### Added — CI Determinism and Config Compatibility Hardening
 
 - **`scripts/check_settings_identity.py`** — pre-test guard that validates canonical
