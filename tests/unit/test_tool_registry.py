@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from mousedroid.common.tools.registry import ToolRegistry, ToolSpec, create_default_registry
+from mousedroid.config.schema import GCPConfig
 from mousedroid.llm_gateway.protocol import GoalVector
 
 
@@ -50,9 +51,9 @@ async def test_dispatch_unknown_tool_raises(registry: ToolRegistry) -> None:
         await registry.dispatch("nonexistent")
 
 
-def test_create_default_registry_has_10_tools() -> None:
+def test_create_default_registry_has_11_tools() -> None:
     reg = create_default_registry()
-    assert len(reg) == 10
+    assert len(reg) == 11
 
 
 def test_names_property(registry: ToolRegistry) -> None:
@@ -116,6 +117,62 @@ async def test_dispatch_export_experience() -> None:
     result = await reg.dispatch("export_experience", path="/tmp/test_export")
     assert result["status"] == "exported"
     assert result["path"] == "/tmp/test_export"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_diagnose_cloud_disabled_without_config() -> None:
+    reg = create_default_registry()
+    result = await reg.dispatch("diagnose_cloud")
+    assert result["status"] == "cloud_disabled"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_diagnose_cloud_missing_dependency() -> None:
+    reg = create_default_registry(
+        gcp_cfg=GCPConfig(project_id="proj", robot_id="bot"),
+    )
+    result = await reg.dispatch("diagnose_cloud")
+    assert result["status"] in {"missing_dependency", "credentials_error"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_diagnose_cloud_success() -> None:
+    import sys
+    from unittest.mock import patch
+
+    cfg = GCPConfig(project_id="proj", robot_id="bot")
+    reg = create_default_registry(gcp_cfg=cfg)
+
+    future = MagicMock()
+    future.result.return_value = "message-id"
+
+    publisher = MagicMock()
+    publisher.topic_path.return_value = "projects/proj/topics/telemetry"
+    publisher.publish.return_value = future
+
+    publisher_cls = MagicMock(return_value=publisher)
+    pubsub_module = MagicMock(PublisherClient=publisher_cls)
+    storage_module = MagicMock()
+
+    with (
+        patch.dict(
+            sys.modules,
+            {
+                "google": MagicMock(),
+                "google.cloud": MagicMock(),
+                "google.cloud.pubsub_v1": pubsub_module,
+                "google.cloud.storage": storage_module,
+            },
+        ),
+        patch("mousedroid.cloud._auth.resolve_credentials") as mock_creds,
+    ):
+        mock_creds.return_value = (MagicMock(), "proj")
+        result = await reg.dispatch("diagnose_cloud")
+
+    assert result["status"] == "ok"
+    assert result["project_id"] == "proj"
+    assert result["topic"] == "projects/proj/topics/telemetry"
+    publisher.publish.assert_called_once()
 
 
 @pytest.mark.asyncio

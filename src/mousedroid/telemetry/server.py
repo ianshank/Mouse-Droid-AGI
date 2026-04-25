@@ -16,6 +16,7 @@ import json
 import time
 from typing import TYPE_CHECKING, Any
 
+from mousedroid.common.async_utils import cancel_and_drain, spawn_tracked
 from mousedroid.constants import MAX_LOG_ENTRIES, MDNS_SERVICE_TYPE, TELEMETRY_QUEUE_TIMEOUT_S
 from mousedroid.logging.setup import get_logger
 from mousedroid.telemetry.network import (
@@ -63,6 +64,7 @@ class TelemetryServer:
         lidar_max_range_m: float | None = None,
         raw_frame_source: RawFrameSourceProtocol | None = None,
         raw_frame_hz: float = 10.0,
+        cloud_enabled: bool = False,
     ) -> None:
         """Initialise the telemetry server.
 
@@ -88,6 +90,8 @@ class TelemetryServer:
                 provided, the ``/camera/stream`` MJPEG endpoint is
                 registered.
             raw_frame_hz: Target frame rate for ``/camera/stream``.
+            cloud_enabled: When ``True``, register cloud-health routes when
+                a metrics registry is also present.
         """
         self._cfg = cfg
         self._queue = telemetry_queue
@@ -99,12 +103,14 @@ class TelemetryServer:
         self._lidar_max_range_m = lidar_max_range_m
         self._raw_frame_source = raw_frame_source
         self._raw_frame_interval_s = 1.0 / max(0.1, raw_frame_hz)
+        self._cloud_enabled = cloud_enabled
         self._reported_frame_drops = 0
 
         self._ws_clients: list[web.WebSocketResponse] = []
         self._latest_frame: TelemetryFrame | None = None
         self._running = False
         self._broadcast_task: asyncio.Task[None] | None = None
+        self._background_tasks: set[asyncio.Task[Any]] = set()
         self._runner: web.AppRunner | None = None
         self._zeroconf: Any = None
         self._service_info: Any = None
@@ -126,7 +132,11 @@ class TelemetryServer:
         await site.start()
 
         self._running = True
-        self._broadcast_task = asyncio.create_task(self._broadcast_loop())
+        self._broadcast_task = spawn_tracked(
+            self._background_tasks,
+            self._broadcast_loop(),
+            name=self._broadcast_loop.__name__,
+        )
 
         if self._cfg.mdns_enabled:
             await self._register_mdns()
@@ -143,9 +153,14 @@ class TelemetryServer:
         self._running = False
 
         if self._broadcast_task is not None:
-            self._broadcast_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._broadcast_task
+            if self._broadcast_task in self._background_tasks:
+                await cancel_and_drain(self._background_tasks)
+            elif not self._broadcast_task.done():
+                self._broadcast_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._broadcast_task
+            self._background_tasks.discard(self._broadcast_task)
+            self._broadcast_task = None
 
         for ws in list(self._ws_clients):
             await ws.close()
@@ -195,6 +210,8 @@ class TelemetryServer:
             app.router.add_get("/camera/frame.jpg", self._handle_camera_frame)
         if self._metrics is not None:
             app.router.add_get(self._metrics_path, self._handle_metrics)
+            if self._cloud_enabled:
+                app.router.add_get(f"{prefix}/health/cloud", self._handle_cloud_health)
 
     # ------------------------------------------------------------------
     # Middleware
@@ -313,6 +330,14 @@ class TelemetryServer:
             health["safety"] = self._latest_frame.safety
 
         return web.json_response(health)
+
+    async def _handle_cloud_health(self, request: web.Request) -> web.Response:
+        """GET /api/v1/health/cloud - cloud sink/export backlog health."""
+        from aiohttp import web
+
+        if not self._cloud_enabled or self._metrics is None:
+            return web.json_response({"error": "cloud_metrics_disabled"}, status=503)
+        return web.json_response(self._metrics.get_cloud_health_snapshot())
 
     async def _handle_logs(self, request: web.Request) -> web.Response:
         """GET /api/v1/logs?n=50 — recent log entries from ring buffer.

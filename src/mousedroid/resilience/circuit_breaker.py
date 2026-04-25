@@ -47,7 +47,13 @@ class CircuitBreaker:
         cfg: Circuit breaker configuration (thresholds from config).
     """
 
-    def __init__(self, name: str, cfg: CircuitBreakerConfig) -> None:
+    def __init__(
+        self,
+        name: str,
+        cfg: CircuitBreakerConfig,
+        *,
+        on_state_change: Callable[[str, CircuitState, CircuitState], None] | None = None,
+    ) -> None:
         self._name = name
         self._cfg = cfg
         self._state = CircuitState.CLOSED
@@ -56,12 +62,40 @@ class CircuitBreaker:
         self._half_open_calls: int = 0
         self._last_failure_time: float = 0.0
         self._lock = asyncio.Lock()
+        self._on_state_change = on_state_change
         _log.info(
             "circuit_breaker_init",
             name=name,
             failure_threshold=cfg.failure_threshold,
             recovery_timeout_s=cfg.recovery_timeout_s,
         )
+
+    def _set_state(self, new_state: CircuitState) -> None:
+        """Transition to *new_state*, firing the optional callback.
+
+        The callback is invoked synchronously while holding no locks
+        from the caller's perspective (callers invoke this from within
+        ``self._lock``; the callback must not re-enter breaker APIs).
+        Any exception raised by the callback is caught and logged so
+        observer failures cannot destabilise the breaker.
+        """
+        old = self._state
+        if old == new_state:
+            return
+        self._state = new_state
+        cb = self._on_state_change
+        if cb is None:
+            return
+        try:
+            cb(self._name, old, new_state)
+        except Exception:  # pragma: no cover - defensive observer guard
+            _log.warning(
+                "circuit_breaker_state_change_callback_failed",
+                name=self._name,
+                from_state=old.value,
+                to_state=new_state.value,
+                exc_info=True,
+            )
 
     # -- Properties --------------------------------------------------------
 
@@ -136,10 +170,10 @@ class CircuitBreaker:
     def reset(self) -> None:
         """Manually reset the circuit to CLOSED state."""
         old = self._state
-        self._state = CircuitState.CLOSED
         self._failure_count = 0
         self._success_count = 0
         self._half_open_calls = 0
+        self._set_state(CircuitState.CLOSED)
         if old != CircuitState.CLOSED:
             _log.info(
                 "circuit_breaker_reset",
@@ -154,9 +188,9 @@ class CircuitBreaker:
         if self._state != CircuitState.OPEN:
             return
         if self._recovery_remaining_s() <= 0.0:
-            self._state = CircuitState.HALF_OPEN
             self._half_open_calls = 0
             self._success_count = 0
+            self._set_state(CircuitState.HALF_OPEN)
             _log.info(
                 "circuit_breaker_half_open",
                 name=self._name,
@@ -171,10 +205,10 @@ class CircuitBreaker:
             if self._state == CircuitState.HALF_OPEN:
                 self._success_count += 1
                 if self._success_count >= self._cfg.half_open_max_calls:
-                    self._state = CircuitState.CLOSED
                     self._failure_count = 0
                     self._success_count = 0
                     self._half_open_calls = 0
+                    self._set_state(CircuitState.CLOSED)
                     _log.info(
                         "circuit_breaker_closed",
                         name=self._name,
@@ -187,7 +221,7 @@ class CircuitBreaker:
             self._last_failure_time = time.monotonic()
 
             if self._state == CircuitState.HALF_OPEN:
-                self._state = CircuitState.OPEN
+                self._set_state(CircuitState.OPEN)
                 _log.warning(
                     "circuit_breaker_reopened",
                     name=self._name,
@@ -196,7 +230,7 @@ class CircuitBreaker:
             elif self._state == CircuitState.CLOSED:
                 self._failure_count += 1
                 if self._failure_count >= self._cfg.failure_threshold:
-                    self._state = CircuitState.OPEN
+                    self._set_state(CircuitState.OPEN)
                     _log.warning(
                         "circuit_breaker_opened",
                         name=self._name,

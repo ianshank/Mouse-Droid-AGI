@@ -296,6 +296,10 @@ class MetricsRegistry:
         self._llm_requests = _Counter()
         self._sensor_recoveries = _Counter()
         self._sensor_recovery_failures = _Counter()
+        # Cloud Digital Twin — per-sink (telemetry/experience) result counters
+        self._cloud_telemetry_publish = _LabeledCounter()
+        self._cloud_experience_publish = _LabeledCounter()
+        self._cloud_experience_export_records = _LabeledCounter()
 
         # Gauges
         self._loop_time_ms = _Gauge()
@@ -312,6 +316,11 @@ class MetricsRegistry:
         self._llm_latency_ms = _Gauge()
         self._curiosity_reward = _Gauge()
 
+        # Cloud Digital Twin gauges — breaker state per breaker, export backlog
+        self._cloud_circuit_state = _LabeledGauge()
+        self._cloud_experience_hwm_lag = _Gauge()
+        self._cloud_experience_queue_depth = _Gauge()
+
         # Labeled counters (Phase 7)
         self._voice_events = _LabeledCounter()
 
@@ -326,6 +335,13 @@ class MetricsRegistry:
         if not llm_buckets or llm_buckets[-1] != float("inf"):
             llm_buckets.append(float("inf"))
         self._llm_translation_latency_ms = _Histogram(tuple(llm_buckets))
+
+        # Cloud publish latency histograms - reuse LLM bucket layout by
+        # default; both telemetry and experience publishes fall in the
+        # 25 ms - 2 s envelope.
+        cloud_buckets = list(llm_buckets)
+        self._cloud_telemetry_publish_latency_ms = _Histogram(tuple(cloud_buckets))
+        self._cloud_experience_publish_latency_ms = _Histogram(tuple(cloud_buckets))
 
         # Pre-format metric names from namespace
         self._name_frame_drops = f"{ns}_frame_drops"
@@ -351,6 +367,16 @@ class MetricsRegistry:
         self._name_curiosity_reward = f"{ns}_curiosity_intrinsic_reward"
         self._name_sensor_recoveries = f"{ns}_sensor_recoveries"
         self._name_sensor_recovery_failures = f"{ns}_sensor_recovery_failures"
+
+        # Cloud Digital Twin metric names — all derived from namespace
+        self._name_cloud_telemetry_publish = f"{ns}_cloud_telemetry_publish"
+        self._name_cloud_experience_publish = f"{ns}_cloud_experience_publish"
+        self._name_cloud_telemetry_publish_latency = f"{ns}_cloud_telemetry_publish_latency_ms"
+        self._name_cloud_experience_publish_latency = f"{ns}_cloud_experience_publish_latency_ms"
+        self._name_cloud_circuit_state = f"{ns}_cloud_circuit_state"
+        self._name_cloud_experience_export_records = f"{ns}_cloud_experience_export_records"
+        self._name_cloud_experience_hwm_lag = f"{ns}_cloud_experience_hwm_lag"
+        self._name_cloud_experience_queue_depth = f"{ns}_cloud_experience_queue_depth"
 
         _log.debug("metrics_registry_initialised", namespace=ns)
 
@@ -475,6 +501,120 @@ class MetricsRegistry:
         """Increment failed sensor recovery counter."""
         if self._cfg.track_sensor_recovery:
             self._sensor_recovery_failures.inc(amount)
+
+    # ------------------------------------------------------------------
+    # Cloud Digital Twin helpers
+    # ------------------------------------------------------------------
+
+    def inc_cloud_telemetry_publish(self, result: str, amount: int = 1) -> None:
+        """Increment cloud telemetry publish counter for a result label.
+
+        Args:
+            result: Outcome label (e.g. ``"success"``, ``"error"``,
+                ``"circuit_open"``, ``"retry_exhausted"``).
+            amount: Increment amount (default 1).
+        """
+        if self._cfg.track_cloud:
+            self._cloud_telemetry_publish.inc(result, amount)
+
+    def inc_cloud_experience_publish(self, result: str, amount: int = 1) -> None:
+        """Increment cloud experience publish counter for a result label."""
+        if self._cfg.track_cloud:
+            self._cloud_experience_publish.inc(result, amount)
+
+    def observe_cloud_telemetry_publish_latency_ms(self, value: float) -> None:
+        """Record cloud telemetry publish latency in milliseconds."""
+        if self._cfg.track_cloud:
+            self._cloud_telemetry_publish_latency_ms.observe(value)
+
+    def observe_cloud_experience_publish_latency_ms(self, value: float) -> None:
+        """Record cloud experience publish latency in milliseconds."""
+        if self._cfg.track_cloud:
+            self._cloud_experience_publish_latency_ms.observe(value)
+
+    def set_cloud_circuit_state(self, breaker: str, state: str) -> None:
+        """Record current circuit breaker state as a numeric gauge.
+
+        Gauge encoding: ``0`` = CLOSED, ``1`` = HALF_OPEN, ``2`` = OPEN.
+        Unknown states default to ``-1``. The mapping is intentionally
+        not config-driven because Grafana dashboards rely on these
+        numeric values.
+
+        Args:
+            breaker: Circuit breaker name (e.g. ``"cloud_telemetry"``).
+            state: Lowercased state string from :class:`CircuitState`.
+        """
+        if not self._cfg.track_cloud:
+            return
+        encoded: dict[str, float] = {
+            "closed": 0.0,
+            "half_open": 1.0,
+            "open": 2.0,
+        }
+        self._cloud_circuit_state.set(breaker, encoded.get(state, -1.0))
+
+    def inc_cloud_experience_export_records(self, result: str, amount: int) -> None:
+        """Increment experience-records-exported counter.
+
+        Args:
+            result: Outcome label (``"success"``, ``"error"``).
+            amount: Number of records successfully/failed in this batch.
+        """
+        if self._cfg.track_cloud and amount > 0:
+            self._cloud_experience_export_records.inc(result, amount)
+
+    def set_cloud_experience_hwm_lag(self, lag_records: int) -> None:
+        """Set how many records remain between current HWM and DB tip."""
+        if self._cfg.track_cloud:
+            self._cloud_experience_hwm_lag.set(float(lag_records))
+
+    def set_cloud_experience_queue_depth(self, depth: int) -> None:
+        """Set current in-memory experience queue depth."""
+        if self._cfg.track_cloud:
+            self._cloud_experience_queue_depth.set(float(depth))
+
+    @staticmethod
+    def _decode_cloud_circuit_state(value: float) -> str:
+        """Map numeric breaker gauge values back to symbolic states."""
+        if value == 0.0:
+            return "closed"
+        if value == 1.0:
+            return "half_open"
+        if value == 2.0:
+            return "open"
+        return "unknown"
+
+    def get_cloud_health_snapshot(self) -> dict[str, object]:
+        """Return a JSON-friendly snapshot of cloud health metrics.
+
+        The telemetry server uses this to expose ``/api/v1/health/cloud``
+        without coupling to concrete cloud sink/exporter implementations.
+        """
+        if not self._cfg.track_cloud:
+            return {"enabled": False, "status": "disabled"}
+
+        breaker_states = {
+            breaker: self._decode_cloud_circuit_state(encoded)
+            for breaker, encoded in self._cloud_circuit_state.snapshot().items()
+        }
+        queue_depth = int(self._cloud_experience_queue_depth.value)
+        hwm_lag = int(self._cloud_experience_hwm_lag.value)
+        status = "ok"
+        if any(state == "open" for state in breaker_states.values()):
+            status = "degraded"
+        elif queue_depth > 0 or hwm_lag > 0:
+            status = "backlogged"
+
+        return {
+            "enabled": True,
+            "status": status,
+            "breaker_states": breaker_states,
+            "queue_depth": queue_depth,
+            "hwm_lag": hwm_lag,
+            "telemetry_publish": self._cloud_telemetry_publish.snapshot(),
+            "experience_publish": self._cloud_experience_publish.snapshot(),
+            "experience_export_records": self._cloud_experience_export_records.snapshot(),
+        }
 
     # ------------------------------------------------------------------
     # Read helpers (for testing / internal queries)
@@ -703,6 +843,84 @@ class MetricsRegistry:
                 )
             )
 
+        if cfg.track_cloud:
+            telemetry_counts = self._cloud_telemetry_publish.snapshot()
+            if telemetry_counts:
+                sections.append(
+                    _render_labeled_counter(
+                        self._name_cloud_telemetry_publish,
+                        "Cloud telemetry publish outcomes (label: result)",
+                        "result",
+                        telemetry_counts,
+                    )
+                )
+            experience_counts = self._cloud_experience_publish.snapshot()
+            if experience_counts:
+                sections.append(
+                    _render_labeled_counter(
+                        self._name_cloud_experience_publish,
+                        "Cloud experience publish outcomes (label: result)",
+                        "result",
+                        experience_counts,
+                    )
+                )
+            tel_buckets, tel_sum, tel_count = self._cloud_telemetry_publish_latency_ms.snapshot()
+            if tel_count > 0:
+                sections.append(
+                    _render_histogram(
+                        self._name_cloud_telemetry_publish_latency,
+                        "Cloud telemetry publish latency (milliseconds)",
+                        tel_buckets,
+                        tel_sum,
+                        tel_count,
+                    )
+                )
+            exp_buckets, exp_sum, exp_count = self._cloud_experience_publish_latency_ms.snapshot()
+            if exp_count > 0:
+                sections.append(
+                    _render_histogram(
+                        self._name_cloud_experience_publish_latency,
+                        "Cloud experience publish latency (milliseconds)",
+                        exp_buckets,
+                        exp_sum,
+                        exp_count,
+                    )
+                )
+            circuit_snapshot = self._cloud_circuit_state.snapshot()
+            if circuit_snapshot:
+                sections.append(
+                    _render_labeled_gauge(
+                        self._name_cloud_circuit_state,
+                        ("Circuit breaker state (0=closed, 1=half_open, 2=open; label: breaker)"),
+                        "breaker",
+                        circuit_snapshot,
+                    )
+                )
+            export_counts = self._cloud_experience_export_records.snapshot()
+            if export_counts:
+                sections.append(
+                    _render_labeled_counter(
+                        self._name_cloud_experience_export_records,
+                        "Cloud experience records exported (label: result)",
+                        "result",
+                        export_counts,
+                    )
+                )
+            sections.append(
+                _render_gauge(
+                    self._name_cloud_experience_hwm_lag,
+                    "Experience records between LMDB HWM and tip",
+                    self._cloud_experience_hwm_lag.value,
+                )
+            )
+            sections.append(
+                _render_gauge(
+                    self._name_cloud_experience_queue_depth,
+                    "Pending experience records awaiting cloud publish",
+                    self._cloud_experience_queue_depth.value,
+                )
+            )
+
         sections.append(
             _render_gauge(
                 self._name_publish_hz,
@@ -727,7 +945,7 @@ def generate_metrics_sample() -> str:
     """
     from mousedroid.config.schema import MetricsConfig
 
-    cfg: MetricsConfig = MetricsConfig()  # type: ignore[call-arg]
+    cfg = MetricsConfig.model_validate({})
     registry = MetricsRegistry(cfg)
 
     # Populate every metric family so all appear in the output.

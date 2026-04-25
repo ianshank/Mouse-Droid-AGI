@@ -16,6 +16,7 @@ import torch
 from numpy.typing import NDArray
 
 from mousedroid.common.actions import normalize_action_numpy
+from mousedroid.common.async_utils import cancel_and_drain, spawn_tracked
 from mousedroid.constants import (
     DEFAULT_BATTERY_VOLTAGE,
     MILLISECONDS_PER_SECOND,
@@ -131,6 +132,11 @@ class MouseDroidOrchestrator:
         self._running = False
         self._tick_count: int = 0
         self._consolidation_task: asyncio.Task[None] | None = None
+        self._consolidation_tasks: set[asyncio.Task[Any]] = set()
+        # Strong-reference set for fire-and-forget cloud publishes. Keeping
+        # the reference prevents premature GC of the asyncio.Task; entries
+        # are evicted by spawn_tracked's done-callback as tasks resolve.
+        self._cloud_publish_tasks: set[asyncio.Task[Any]] = set()
 
         # Latent state (combined_dim = hidden_dim + cfc_hidden_dim for dual-stream)
         _combined_hidden_dim = cfg.model.hidden_dim + cfg.model.cfc_hidden_dim
@@ -164,7 +170,11 @@ class MouseDroidOrchestrator:
         if self._cloud_experience_exporter is not None:
             await self._cloud_experience_exporter.start()
         if self._memory_tier is not None:
-            self._consolidation_task = asyncio.create_task(self._consolidation_loop())
+            self._consolidation_task = spawn_tracked(
+                self._consolidation_tasks,
+                self._consolidation_loop(),
+                name=self._consolidation_loop.__name__,
+            )
         self._running = True
         _log.info("orchestrator_started")
 
@@ -173,10 +183,15 @@ class MouseDroidOrchestrator:
         _log.info("orchestrator_stopping")
         self._running = False
         if self._consolidation_task is not None:
-            self._consolidation_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._consolidation_task
+            if self._consolidation_task in self._consolidation_tasks:
+                await cancel_and_drain(self._consolidation_tasks)
+            elif not self._consolidation_task.done():
+                self._consolidation_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._consolidation_task
+            self._consolidation_tasks.discard(self._consolidation_task)
             self._consolidation_task = None
+        await cancel_and_drain(self._cloud_publish_tasks)
         if self._cloud_experience_exporter is not None:
             await self._cloud_experience_exporter.close()
         if self._cloud_sink is not None:
@@ -369,7 +384,9 @@ class MouseDroidOrchestrator:
                 "loop_time_ms": loop_time_ms,
                 "curiosity": self._compute_curiosity_scores(),
             }
-            action_np, violations = self._cognitive_core.tick_fast(obs_dict)  # type: ignore[union-attr]
+            cognitive_core = self._cognitive_core
+            assert cognitive_core is not None
+            action_np, violations = cognitive_core.tick_fast(obs_dict)
             if violations:
                 _log.info(
                     "orchestrator_constitutional_violations_summary",
@@ -617,8 +634,11 @@ class MouseDroidOrchestrator:
             self._experience_logger.log(record)
 
         if self._cloud_sink is not None:
-            _task = asyncio.ensure_future(self._cloud_sink.publish_experience(record))
-            _task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+            spawn_tracked(
+                self._cloud_publish_tasks,
+                self._cloud_sink.publish_experience(record),
+                name="cloud_publish_experience",
+            )
 
     def _compute_curiosity_scores(self) -> dict[str, float]:
         """Compute curiosity channel scores for cognitive core obs_dict.

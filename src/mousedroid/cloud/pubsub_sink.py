@@ -16,14 +16,30 @@ import msgpack
 from mousedroid.cloud._auth import resolve_credentials
 from mousedroid.experience.protocol import ExperienceProtocol
 from mousedroid.logging.setup import get_logger
-from mousedroid.resilience.circuit_breaker import CircuitBreaker, CircuitOpenError
+from mousedroid.resilience.circuit_breaker import (
+    CircuitBreaker,
+    CircuitOpenError,
+    CircuitState,
+)
 
 if TYPE_CHECKING:
     from google.cloud.pubsub_v1 import PublisherClient
 
     from mousedroid.config.schema import GCPConfig
+    from mousedroid.telemetry.metrics import MetricsRegistry
 
 _log = get_logger(__name__)
+
+# Publish category labels — used as Prometheus label values; centralised
+# here so call sites never hardcode strings inline.
+_CATEGORY_TELEMETRY = "telemetry"
+_CATEGORY_EXPERIENCE = "experience"
+
+# Publish result labels — keep in sync with Grafana dashboard panels.
+_RESULT_SUCCESS = "success"
+_RESULT_CIRCUIT_OPEN = "circuit_open"
+_RESULT_TIMEOUT = "timeout"
+_RESULT_ERROR = "error"
 
 
 class CloudTelemetrySink:
@@ -37,16 +53,41 @@ class CloudTelemetrySink:
         cfg: GCP configuration.
     """
 
-    def __init__(self, cfg: GCPConfig) -> None:
+    def __init__(
+        self,
+        cfg: GCPConfig,
+        *,
+        metrics: MetricsRegistry | None = None,
+    ) -> None:
         self._cfg = cfg
         self._project_id = cfg.project_id
         self._robot_id = cfg.robot_id
         self._pubsub_cfg = cfg.pubsub
+        self._metrics = metrics
+        self._breaker_name = "cloud_pubsub"
 
-        self._cb = CircuitBreaker("gcp_pubsub", cfg.circuit_breaker)
+        self._cb = CircuitBreaker(
+            self._breaker_name,
+            cfg.circuit_breaker,
+            on_state_change=self._on_breaker_state_change,
+        )
         self._publisher: PublisherClient | None = None
         self._telemetry_topic: str = ""
         self._experience_topic: str = ""
+
+        # Seed gauge so dashboards show "closed" before any traffic.
+        if self._metrics is not None:
+            self._metrics.set_cloud_circuit_state(self._breaker_name, "closed")
+
+    def _on_breaker_state_change(
+        self,
+        name: str,
+        _old_state: CircuitState,
+        new_state: CircuitState,
+    ) -> None:
+        """Forward breaker transitions to the metrics registry."""
+        if self._metrics is not None:
+            self._metrics.set_cloud_circuit_state(name, new_state.value)
 
     async def start(self) -> None:
         """Initialise the Pub/Sub publisher client.
@@ -95,12 +136,12 @@ class CloudTelemetrySink:
             return
         data = msgpack.packb(frame_dict)
         attrs = {
-            "type": "telemetry",
+            "type": _CATEGORY_TELEMETRY,
             "schema_version": "1",
             "source_id": self._robot_id,
             "timestamp": str(time.time()),
         }
-        await self._publish(self._telemetry_topic, data, attrs)
+        await self._publish(self._telemetry_topic, data, attrs, _CATEGORY_TELEMETRY)
 
     async def publish_experience(self, record: ExperienceProtocol) -> None:
         """Publish a single experience record to the experience Pub/Sub topic.
@@ -112,12 +153,12 @@ class CloudTelemetrySink:
             return
         data = record.serialize()
         attrs = {
-            "type": "experience",
+            "type": _CATEGORY_EXPERIENCE,
             "schema_version": str(record.schema_version),
             "source_id": self._robot_id,
             "timestamp": str(time.time()),
         }
-        await self._publish(self._experience_topic, data, attrs)
+        await self._publish(self._experience_topic, data, attrs, _CATEGORY_EXPERIENCE)
 
     async def flush(self) -> None:
         """Flush any buffered messages in the publisher."""
@@ -138,6 +179,7 @@ class CloudTelemetrySink:
         topic: str,
         data: bytes,
         attrs: dict[str, str],
+        category: str,
     ) -> None:
         """Publish a message with circuit-breaker protection.
 
@@ -148,18 +190,42 @@ class CloudTelemetrySink:
             topic: Full Pub/Sub topic path.
             data: Message payload bytes (msgpack-encoded).
             attrs: Message attributes dictionary.
+            category: ``"telemetry"`` or ``"experience"`` — selects which
+                metric family the publish outcome is recorded under.
         """
+
+        async def _do_publish() -> None:
+            assert self._publisher is not None
+            loop = asyncio.get_running_loop()
+            timeout = self._pubsub_cfg.publish_timeout_s
+            future = self._publisher.publish(topic, data=data, **attrs)
+            await loop.run_in_executor(None, future.result, timeout)
+
+        start = time.perf_counter()
+        result: str
         try:
-
-            async def _do_publish() -> None:
-                assert self._publisher is not None
-                loop = asyncio.get_running_loop()
-                timeout = self._pubsub_cfg.publish_timeout_s
-                future = self._publisher.publish(topic, data=data, **attrs)
-                await loop.run_in_executor(None, future.result, timeout)
-
             await self._cb.call(_do_publish)
+            result = _RESULT_SUCCESS
         except CircuitOpenError:
             _log.debug("cloud_pubsub_circuit_open", topic=topic)
+            result = _RESULT_CIRCUIT_OPEN
+        except TimeoutError:
+            _log.warning("cloud_pubsub_publish_timeout", topic=topic)
+            result = _RESULT_TIMEOUT
         except Exception:
-            _log.debug("cloud_pubsub_publish_failed", topic=topic, exc_info=True)
+            _log.warning(
+                "cloud_pubsub_publish_failed",
+                topic=topic,
+                category=category,
+                exc_info=True,
+            )
+            result = _RESULT_ERROR
+
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        if self._metrics is not None:
+            if category == _CATEGORY_TELEMETRY:
+                self._metrics.inc_cloud_telemetry_publish(result)
+                self._metrics.observe_cloud_telemetry_publish_latency_ms(elapsed_ms)
+            else:
+                self._metrics.inc_cloud_experience_publish(result)
+                self._metrics.observe_cloud_experience_publish_latency_ms(elapsed_ms)

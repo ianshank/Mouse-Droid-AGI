@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import structlog
+
 from mousedroid.logging.setup import _level_to_int, configure_logging, get_logger
 
 
@@ -40,6 +42,13 @@ class TestConfigureLogging:
         cfg.level = "WARNING"
         buffer = MagicMock()
         configure_logging(cfg, log_buffer=buffer)
+
+    def test_configure_binds_robot_id_contextvar(self) -> None:
+        cfg = MagicMock()
+        cfg.format = "json"
+        cfg.level = "INFO"
+        configure_logging(cfg, robot_id="droid-007")
+        assert structlog.contextvars.get_contextvars()["robot_id"] == "droid-007"
 
 
 class TestLevelToInt:

@@ -596,6 +596,7 @@ def build_telemetry_server(
         lidar_max_range_m=cfg.lidar.max_range_m if cfg.lidar is not None else None,
         raw_frame_source=raw_frame_source,
         raw_frame_hz=cfg.telemetry.raw_frame_hz,
+        cloud_enabled=cfg.gcp is not None,
     )
 
 
@@ -1026,6 +1027,7 @@ def build_orchestrator(cfg: Settings) -> object:
     _tool_registry = create_default_registry(
         llm_gateway=llm_gateway,
         metrics_registry=metrics_registry,
+        gcp_cfg=cfg.gcp,
     )
 
     # Voice engine (optional — disabled by default)
@@ -1041,7 +1043,7 @@ def build_orchestrator(cfg: Settings) -> object:
     watchdog = build_watchdog(cfg)
 
     # GCP Digital Twin (optional — disabled when gcp=None)
-    cloud_sink = build_cloud_telemetry_sink(cfg)
+    cloud_sink = build_cloud_telemetry_sink(cfg, metrics_registry=metrics_registry)
     cloud_experience_exporter = build_cloud_experience_exporter(cfg)
 
     return MouseDroidOrchestrator(
@@ -1237,6 +1239,8 @@ def build_arm_perception(
 
 def build_cloud_telemetry_sink(
     cfg: Settings,
+    *,
+    metrics_registry: MetricsRegistry | None = None,
 ) -> CloudTelemetrySinkProtocol | None:
     """Build GCP Pub/Sub telemetry sink if GCP is configured.
 
@@ -1245,6 +1249,9 @@ def build_cloud_telemetry_sink(
 
     Args:
         cfg: Root settings.
+        metrics_registry: Optional metrics registry. When provided the
+            sink forwards publish outcomes, publish latency, and circuit
+            breaker state transitions to the registry.
 
     Returns:
         Cloud telemetry sink or None.
@@ -1260,8 +1267,8 @@ def build_cloud_telemetry_sink(
         )
         return None
 
-    sink = CloudTelemetrySink(cfg.gcp)
-    _log.info("cloud_telemetry_sink_built")
+    sink = CloudTelemetrySink(cfg.gcp, metrics=metrics_registry)
+    _log.info("cloud_telemetry_sink_built", metrics_wired=metrics_registry is not None)
     return sink
 
 

@@ -116,13 +116,13 @@ class FileHeartbeatNotifier:
 
     Docker ``HEALTHCHECK`` can test file recency with::
 
-        test $(( $(date +%s) - $(stat -c %Y /tmp/mousedroid_heartbeat) )) -lt 30
+        test $(( $(date +%s) - $(stat -c %Y "$WATCHDOG_HEARTBEAT_PATH") )) -lt 30
 
     Args:
         path: Filesystem path for the heartbeat file.
     """
 
-    def __init__(self, path: str | Path = "/tmp/mousedroid_heartbeat") -> None:  # noqa: S108
+    def __init__(self, path: str | Path) -> None:
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
 

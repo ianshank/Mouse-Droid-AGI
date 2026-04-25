@@ -64,6 +64,7 @@ def _make_server(
     log_buffer: LogRingBuffer | None = None,
     metrics_registry: MetricsRegistry | None = None,
     publisher: _StubPublisher | None = None,
+    cloud_enabled: bool = False,
 ) -> tuple[TelemetryServer, asyncio.Queue[TelemetryFrame]]:
     if cfg is None:
         cfg = TelemetryConfig(enabled=True)
@@ -76,6 +77,7 @@ def _make_server(
         log_buffer=log_buffer,
         metrics_registry=metrics_registry,
         publisher=publisher,
+        cloud_enabled=cloud_enabled,
     )
     return server, queue
 
@@ -338,6 +340,34 @@ async def test_metrics_endpoint_not_registered_without_registry() -> None:
 
     async with TestClient(TestServer(app)) as client:
         resp = await client.get("/metrics")
+        assert resp.status == 404
+
+
+async def test_cloud_health_endpoint_exposed_when_cloud_enabled() -> None:
+    registry = MetricsRegistry(MetricsConfig(enabled=True))
+    registry.set_cloud_circuit_state("cloud_pubsub", "closed")
+    registry.set_cloud_experience_queue_depth(4)
+
+    server, _queue = _make_server(metrics_registry=registry, cloud_enabled=True)
+    app = _build_app(server)
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/api/v1/health/cloud")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["enabled"] is True
+        assert data["status"] == "backlogged"
+        assert data["breaker_states"] == {"cloud_pubsub": "closed"}
+        assert data["queue_depth"] == 4
+
+
+async def test_cloud_health_endpoint_not_registered_without_cloud_flag() -> None:
+    registry = MetricsRegistry(MetricsConfig(enabled=True))
+    server, _queue = _make_server(metrics_registry=registry, cloud_enabled=False)
+    app = _build_app(server)
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/api/v1/health/cloud")
         assert resp.status == 404
 
 

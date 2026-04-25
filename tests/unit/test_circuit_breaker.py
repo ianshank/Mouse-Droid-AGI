@@ -177,6 +177,73 @@ async def test_reset_clears_state():
     assert result == "ok"
 
 
+# -- State-change callback ------------------------------------------------
+
+
+async def test_on_state_change_fires_on_open_close():
+    """Callback must fire on every transition with (name, old, new)."""
+    events: list[tuple[str, CircuitState, CircuitState]] = []
+
+    def _observer(
+        name: str,
+        old: CircuitState,
+        new: CircuitState,
+    ) -> None:
+        events.append((name, old, new))
+
+    cfg = CircuitBreakerConfig(
+        failure_threshold=2,
+        recovery_timeout_s=0.01,
+        half_open_max_calls=1,
+    )
+    cb = CircuitBreaker("observed", cfg, on_state_change=_observer)
+
+    # Drive to OPEN
+    for _ in range(2):
+        with pytest.raises(ConnectionError):
+            await cb.call(_fail)
+    assert cb.state == CircuitState.OPEN
+
+    # Wait for recovery and drive back to CLOSED via HALF_OPEN
+    await asyncio.sleep(0.02)
+    await cb.call(_ok)
+    assert cb.state == CircuitState.CLOSED
+
+    # Must have observed CLOSED->OPEN, OPEN->HALF_OPEN, HALF_OPEN->CLOSED
+    transitions = [(old, new) for _, old, new in events]
+    assert (CircuitState.CLOSED, CircuitState.OPEN) in transitions
+    assert (CircuitState.OPEN, CircuitState.HALF_OPEN) in transitions
+    assert (CircuitState.HALF_OPEN, CircuitState.CLOSED) in transitions
+    # Every event carries the breaker name
+    assert all(name == "observed" for name, _, _ in events)
+
+
+async def test_on_state_change_observer_exception_is_swallowed():
+    """Observer failures must not break the breaker."""
+
+    def _bad_observer(*_args: object) -> None:
+        raise RuntimeError("observer crash")
+
+    cfg = CircuitBreakerConfig(failure_threshold=1)
+    cb = CircuitBreaker("x", cfg, on_state_change=_bad_observer)
+
+    with pytest.raises(ConnectionError):
+        await cb.call(_fail)
+    # Breaker still transitioned despite observer crash
+    assert cb.state == CircuitState.OPEN
+
+
+def test_reset_does_not_fire_callback_when_already_closed():
+    events: list[tuple[CircuitState, CircuitState]] = []
+
+    def _observer(_n: str, old: CircuitState, new: CircuitState) -> None:
+        events.append((old, new))
+
+    cb = CircuitBreaker("r", CircuitBreakerConfig(), on_state_change=_observer)
+    cb.reset()
+    assert events == []
+
+
 # -- Config-driven behaviour -----------------------------------------------
 
 

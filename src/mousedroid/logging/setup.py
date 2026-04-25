@@ -20,6 +20,7 @@ def configure_logging(
     cfg: LoggingConfig,
     log_buffer: Any | None = None,
     cloud_logging_sink: Any | None = None,
+    robot_id: str | None = None,
 ) -> None:
     """Configure structlog for the given logging config.
 
@@ -31,6 +32,8 @@ def configure_logging(
         cloud_logging_sink: Optional ``CloudLoggingSink`` processor to
             forward log events to Google Cloud Logging. Inserted after
             the log buffer and before the renderer.
+        robot_id: Optional robot identifier bound into structlog
+            contextvars for cross-system cloud correlation.
     """
     global _configured
 
@@ -75,6 +78,9 @@ def configure_logging(
         logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=True,
     )
+    structlog.contextvars.clear_contextvars()
+    if robot_id is not None:
+        structlog.contextvars.bind_contextvars(robot_id=robot_id)
     _configured = True
 
 

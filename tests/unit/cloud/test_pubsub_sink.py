@@ -284,3 +284,116 @@ def test_config_values_used() -> None:
     assert sink._pubsub_cfg.telemetry_topic == "custom-telemetry"
     assert sink._pubsub_cfg.experience_topic == "custom-experience"
     assert sink._pubsub_cfg.publish_timeout_s == 30.0
+
+
+# ---------------------------------------------------------------------------
+# Metrics + breaker callback wiring
+# ---------------------------------------------------------------------------
+
+
+def _make_registry() -> Any:
+    from mousedroid.config.schema import MetricsConfig
+    from mousedroid.telemetry.metrics import MetricsRegistry
+
+    return MetricsRegistry(MetricsConfig())
+
+
+def test_metrics_registered_seeds_circuit_state_closed() -> None:
+    """When a registry is passed, gauge must be seeded at CLOSED (=0)."""
+    from mousedroid.cloud.pubsub_sink import CloudTelemetrySink
+
+    registry = _make_registry()
+    cfg = _make_gcp_cfg()
+    CloudTelemetrySink(cfg, metrics=registry)
+    text = registry.render_prometheus()
+    assert 'mousedroid_cloud_circuit_state{breaker="cloud_pubsub"} 0' in text
+
+
+@pytest.mark.asyncio
+async def test_publish_telemetry_success_increments_success_counter() -> None:
+    from mousedroid.cloud.pubsub_sink import CloudTelemetrySink
+
+    registry = _make_registry()
+    cfg = _make_gcp_cfg()
+    sink = CloudTelemetrySink(cfg, metrics=registry)
+    sink._publisher = MagicMock()
+    sink._telemetry_topic = "projects/p/topics/t"
+
+    async def passthrough(func: Any) -> Any:
+        return await func()
+
+    sink._cb = MagicMock()
+    sink._cb.call = passthrough
+
+    future = MagicMock()
+    future.result.return_value = None
+    sink._publisher.publish.return_value = future
+
+    await sink.publish_telemetry({"k": 1})
+
+    text = registry.render_prometheus()
+    assert 'mousedroid_cloud_telemetry_publish_total{result="success"} 1' in text
+    assert "mousedroid_cloud_telemetry_publish_latency_ms_count 1" in text
+
+
+@pytest.mark.asyncio
+async def test_publish_experience_records_error_label_on_failure() -> None:
+    from mousedroid.cloud.pubsub_sink import CloudTelemetrySink
+
+    registry = _make_registry()
+    cfg = _make_gcp_cfg()
+    sink = CloudTelemetrySink(cfg, metrics=registry)
+    sink._publisher = MagicMock()
+    sink._experience_topic = "projects/p/topics/e"
+
+    async def raise_error(func: Any) -> Any:
+        raise ConnectionError("down")
+
+    sink._cb = MagicMock()
+    sink._cb.call = raise_error
+
+    record = MagicMock()
+    record.serialize.return_value = b"x"
+    record.schema_version = 1
+    await sink.publish_experience(record)
+
+    text = registry.render_prometheus()
+    assert 'mousedroid_cloud_experience_publish_total{result="error"} 1' in text
+
+
+@pytest.mark.asyncio
+async def test_publish_circuit_open_records_circuit_open_label() -> None:
+    from mousedroid.cloud.pubsub_sink import CloudTelemetrySink
+    from mousedroid.resilience.circuit_breaker import CircuitOpenError
+
+    registry = _make_registry()
+    cfg = _make_gcp_cfg()
+    sink = CloudTelemetrySink(cfg, metrics=registry)
+    sink._publisher = MagicMock()
+    sink._telemetry_topic = "projects/p/topics/t"
+
+    async def raise_open(func: Any) -> Any:
+        raise CircuitOpenError("cloud_pubsub", 30.0)
+
+    sink._cb = MagicMock()
+    sink._cb.call = raise_open
+
+    await sink.publish_telemetry({"k": 1})
+
+    text = registry.render_prometheus()
+    assert 'mousedroid_cloud_telemetry_publish_total{result="circuit_open"} 1' in text
+
+
+def test_breaker_state_change_updates_registry() -> None:
+    """Firing the breaker's on_state_change callback must update the gauge."""
+    from mousedroid.cloud.pubsub_sink import CloudTelemetrySink
+    from mousedroid.resilience.circuit_breaker import CircuitState
+
+    registry = _make_registry()
+    cfg = _make_gcp_cfg()
+    sink = CloudTelemetrySink(cfg, metrics=registry)
+
+    # Simulate the breaker observing a transition to OPEN
+    sink._on_breaker_state_change("cloud_pubsub", CircuitState.CLOSED, CircuitState.OPEN)
+    text = registry.render_prometheus()
+    assert 'mousedroid_cloud_circuit_state{breaker="cloud_pubsub"} 2' in text
