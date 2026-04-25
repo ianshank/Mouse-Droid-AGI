@@ -565,7 +565,10 @@ class MouseDroidOrchestrator:
         else:
             valence, arousal = 0.0, 0.0
 
-        is_idle = action is None or bool(torch.allclose(action, torch.zeros_like(action)))
+        # Use a relaxed tolerance (1e-3) so small NN output noise does not
+        # prevent the idle-SLEEPY path from triggering.  Avoids allocating
+        # a zeros tensor each tick via torch.zeros_like.
+        is_idle = action is None or bool(action.abs().max().item() < 1e-3)
 
         try:
             await self._face_controller.update(

@@ -59,7 +59,22 @@ def test_latest_bdi_property_exposes_dict() -> None:
     core = _make_core()
     sentinel = {"affect": np.zeros(2, dtype=np.float32), "intentions": np.zeros(4)}
     core._latest_bdi = sentinel
-    assert core.latest_bdi is sentinel
+    # Returns a MappingProxyType — same keys, read-only, not the raw dict.
+    result = core.latest_bdi
+    assert set(result.keys()) == set(sentinel.keys())
+    assert "affect" in result
+    assert "intentions" in result
+
+
+def test_latest_bdi_property_is_read_only() -> None:
+    """latest_bdi must not be mutatable from outside CognitiveCore."""
+    import types
+
+    core = _make_core()
+    proxy = core.latest_bdi
+    assert isinstance(proxy, types.MappingProxyType)
+    with pytest.raises(TypeError):
+        proxy["injected"] = 1  # type: ignore[index]
 
 
 def test_tick_fast_returns_tuple() -> None:

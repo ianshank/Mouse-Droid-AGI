@@ -148,6 +148,36 @@ async def test_start_renders_neutral_first(
     assert drv.history[:2] == ["start", "expr:neutral"]
 
 
+async def test_refresh_hz_throttles_rapid_updates(
+    controller: tuple[FaceController, MockFaceDriver],
+    clock: _FakeClock,
+    cfg: FaceDisplayConfig,
+) -> None:
+    """Updates faster than 1/refresh_hz must be skipped (except EMERGENCY)."""
+    fc, drv = controller
+    await fc.start()
+    clock.advance(cfg.min_dwell_s + 0.01)
+
+    # First update goes through.
+    await fc.update(valence=0.6, arousal=0.0, is_emergency=False, is_idle=False)
+    assert drv.current is Expression.HAPPY
+
+    # Advance by less than one refresh period — update must be throttled.
+    clock.advance(0.5 / cfg.refresh_hz)
+    await fc.update(valence=-0.6, arousal=0.0, is_emergency=False, is_idle=False)
+    assert drv.current is Expression.HAPPY  # still HAPPY — throttled
+
+    # Emergency bypasses the throttle even within the same window.
+    await fc.update(valence=0.0, arousal=0.0, is_emergency=True, is_idle=False)
+    assert drv.current is Expression.EMERGENCY
+
+    # After both the refresh period AND the dwell period elapse, non-emergency
+    # updates come through again.
+    clock.advance(cfg.min_dwell_s + 0.01)
+    await fc.update(valence=-0.6, arousal=0.0, is_emergency=False, is_idle=False)
+    assert drv.current is Expression.SAD
+
+
 async def test_no_redundant_writes_when_expression_unchanged(
     controller: tuple[FaceController, MockFaceDriver],
     clock: _FakeClock,

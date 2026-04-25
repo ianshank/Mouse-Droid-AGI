@@ -166,7 +166,10 @@ class SSD1306FaceDriver:
                     await self._render_expression(Expression.BLINK)
                 await asyncio.sleep(self._cfg.blink_close_duration_s)
                 async with self._lock:
-                    if previous is not None:
+                    # Only restore if nothing else has changed _current while
+                    # the eyes were closed; a concurrent show_expression call
+                    # that arrived during the sleep must not be clobbered.
+                    if self._current is Expression.BLINK and previous is not None:
                         await self._render_expression(previous)
         except asyncio.CancelledError:
             return

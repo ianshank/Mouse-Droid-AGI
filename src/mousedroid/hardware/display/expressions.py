@@ -83,8 +83,28 @@ def _eye_geometry(width: int, height: int) -> tuple[int, int, int, int, int]:
     return left_cx, right_cx, cy, eye_w, eye_h
 
 
-def _draw_eye(draw: object, cx: int, cy: int, eye_w: int, eye_h: int, shape: str) -> None:
-    """Render a single eye in the given shape inside its bounding box."""
+def _draw_eye(
+    draw: object,
+    cx: int,
+    cy: int,
+    eye_w: int,
+    eye_h: int,
+    shape: str,
+    *,
+    side: str = "left",
+) -> None:
+    """Render a single eye in the given shape inside its bounding box.
+
+    Args:
+        draw: PIL ImageDraw instance.
+        cx: Centre x of the eye bounding box.
+        cy: Centre y of the eye bounding box.
+        eye_w: Bounding-box width.
+        eye_h: Bounding-box height.
+        shape: Shape key from ``_SHAPE_BY_EXPR``.
+        side: ``"left"`` or ``"right"`` — used only by asymmetric shapes
+            (e.g. ``"angry"``) to mirror the slant toward the nose.
+    """
     half_w = eye_w // DEFAULT_HALF_DIVISOR
     half_h = eye_h // DEFAULT_HALF_DIVISOR
     x0, y0 = cx - half_w, cy - half_h
@@ -126,13 +146,16 @@ def _draw_eye(draw: object, cx: int, cy: int, eye_w: int, eye_h: int, shape: str
         )
         return
     if shape == "angry":
-        # Slanted-down outer corner (filled trapezoid).
+        # Filled trapezoid with the *inner* corner (nearest the nose)
+        # slanted down and the outer corner raised, mirrored per side.
         slant = max(eye_h // DEFAULT_ANGRY_SLANT_DIVISOR, DEFAULT_ANGRY_SLANT_MIN_PX)
-        draw.polygon(  # type: ignore[attr-defined]
-            [(x0, y0 + slant), (x1, y0), (x1, y1), (x0, y1)],
-            outline=1,
-            fill=1,
-        )
+        if side == "left":
+            # Left eye: inner corner is x1 (right side, toward centre).
+            pts = [(x0, y0), (x1, y0 + slant), (x1, y1), (x0, y1)]
+        else:
+            # Right eye: inner corner is x0 (left side, toward centre).
+            pts = [(x0, y0 + slant), (x1, y0), (x1, y1), (x0, y1)]
+        draw.polygon(pts, outline=1, fill=1)  # type: ignore[attr-defined]
         draw.ellipse(  # type: ignore[attr-defined]
             (
                 cx - pupil_r,
@@ -199,8 +222,8 @@ def render_expression(expression: Expression, width: int, height: int) -> PILIma
     img, draw = _new_canvas(width, height)
     left_cx, right_cx, cy, eye_w, eye_h = _eye_geometry(width, height)
     shape = _SHAPE_BY_EXPR[expression]
-    _draw_eye(draw, left_cx, cy, eye_w, eye_h, shape)
-    _draw_eye(draw, right_cx, cy, eye_w, eye_h, shape)
+    _draw_eye(draw, left_cx, cy, eye_w, eye_h, shape, side="left")
+    _draw_eye(draw, right_cx, cy, eye_w, eye_h, shape, side="right")
 
     if expression in {Expression.EMERGENCY, Expression.BOOT}:
         from PIL import ImageFont

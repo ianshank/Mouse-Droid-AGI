@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import types as _types_mod
+from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
@@ -113,14 +115,17 @@ class CognitiveCore:
     # -- Public BDI accessors -----------------------------------------------
 
     @property
-    def latest_bdi(self) -> dict[str, Any]:
-        """Read-only view of the most recent BDI inference result.
+    def latest_bdi(self) -> Mapping[str, Any]:
+        """Read-only proxy of the most recent BDI inference result.
 
-        Returns an empty dict before the slow loop has produced its first
+        Returns an empty mapping before the slow loop has produced its first
         result. Subsystems that only need affect should prefer
         :meth:`get_latest_affect`, which wraps the shape validation.
+
+        The returned :class:`types.MappingProxyType` prevents accidental
+        mutation; always write through ``self._latest_bdi`` internally.
         """
-        return self._latest_bdi
+        return _types_mod.MappingProxyType(self._latest_bdi)
 
     def get_latest_affect(self) -> tuple[float, float]:
         """Return ``(valence, arousal)`` from the most recent BDI inference.

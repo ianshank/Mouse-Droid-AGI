@@ -102,6 +102,40 @@ def test_build_face_display_propagates_probe_failure_when_fallback_disabled(
         build_face_display(cfg)
 
 
+def test_build_face_display_does_not_swallow_unexpected_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only ImportError / OSError are caught; other exceptions must propagate.
+
+    If an AttributeError or similar programming mistake happens inside the
+    driver code, it must never be silently swallowed and replaced by a mock.
+    """
+    smbus2 = types.ModuleType("smbus2")
+
+    class _AttrErrSMBus:
+        def __init__(self, _bus: int) -> None: ...
+
+        def __enter__(self) -> _AttrErrSMBus:
+            return self
+
+        def __exit__(self, *exc: Any) -> None:
+            return None
+
+        def read_byte(self, _addr: int) -> int:
+            raise AttributeError("unexpected programming error")
+
+    smbus2.SMBus = _AttrErrSMBus  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "smbus2", smbus2)
+
+    cfg = _settings(
+        FaceDisplayConfig(enabled=True, fallback_to_mock_on_error=True),
+        mock_hardware=False,
+    )
+    # fallback_to_mock_on_error=True must NOT catch AttributeError.
+    with pytest.raises(AttributeError, match="unexpected programming error"):
+        build_face_display(cfg)
+
+
 def test_build_face_controller_returns_none_for_none_driver() -> None:
     cfg = _settings(FaceDisplayConfig(enabled=True))
     assert build_face_controller(cfg, None) is None

@@ -47,6 +47,7 @@ class FaceController:
         self._clock = clock if clock is not None else time.monotonic
         self._last_expr: Expression | None = None
         self._last_change_ts: float = -float("inf")
+        self._last_update_ts: float = -float("inf")
         self._idle_started_ts: float | None = None
 
     @property
@@ -58,6 +59,7 @@ class FaceController:
         """Start the underlying driver and reset hysteresis state."""
         self._last_expr = None
         self._last_change_ts = -float("inf")
+        self._last_update_ts = -float("inf")
         self._idle_started_ts = None
         await self._driver.start()
         await self._driver.show_expression(Expression.NEUTRAL)
@@ -93,6 +95,19 @@ class FaceController:
             is_emergency=is_emergency,
             now=now,
         )
+        # Throttle non-emergency updates to cfg.refresh_hz so the I²C bus and
+        # log volume are bounded even when the orchestrator ticks faster than
+        # the configured refresh rate.  Emergency always bypasses the throttle.
+        if candidate is not Expression.EMERGENCY:
+            min_interval = 1.0 / self._cfg.refresh_hz
+            if now - self._last_update_ts < min_interval:
+                _log.debug(
+                    "face_update_throttled",
+                    refresh_hz=self._cfg.refresh_hz,
+                    candidate=candidate.value,
+                )
+                return
+        self._last_update_ts = now
         target = self._apply_dwell(candidate=candidate, now=now)
         if target == self._last_expr:
             _log.debug(

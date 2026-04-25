@@ -228,7 +228,11 @@ def build_face_display(cfg: Settings) -> FaceDisplayProtocol | None:
             i2c_address=cfg.face_display.i2c_address,
         )
         return SSD1306FaceDriver(cfg.face_display)
-    except Exception:  # pylint: disable=broad-except
+    except (ImportError, OSError):
+        # ImportError  — luma.oled / smbus2 not installed
+        # OSError      — /dev/i2c-N missing, wrong address, panel disconnected
+        # All other exceptions (AttributeError, etc.) propagate so programming
+        # errors are never silently swallowed.
         if cfg.face_display.fallback_to_mock_on_error:
             _log.warning(
                 "face_display_falling_back_to_mock",

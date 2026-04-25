@@ -182,6 +182,58 @@ async def test_stop_idempotent(cfg: FaceDisplayConfig) -> None:
     assert drv.started is False
 
 
+async def test_blink_does_not_overwrite_concurrent_show_expression(
+    patch_luma_smbus: dict[str, Any],
+) -> None:
+    """show_expression during blink must not be clobbered when eyes reopen.
+
+    Sequence:
+    1. start() — panel up, blink task spawned with very short interval.
+    2. Blink fires: eyes close (BLINK rendered).
+    3. Before eyes reopen, show_expression(HAPPY) is called explicitly.
+    4. Eyes reopen — the blink loop must NOT restore the pre-blink expression
+       because _current is now HAPPY (no longer BLINK).
+    5. Final expression must be HAPPY.
+    """
+    from mousedroid.hardware.display.expressions import Expression
+    from mousedroid.hardware.display.ssd1306_face_driver import SSD1306FaceDriver
+
+    # Interval must be long enough that a *second* blink cannot fire during
+    # the observation window (asyncio.sleep(0.05) below).
+    # Rule: blink_close_duration_s << idle_blink_interval_s > observation_sleep
+    cfg = FaceDisplayConfig(
+        enabled=True,
+        idle_blink_interval_s=0.03,
+        blink_close_duration_s=0.01,
+    )
+    drv = SSD1306FaceDriver(cfg)
+    await drv.start()
+    try:
+        # The blink loop only fires when _current is not None/EMERGENCY.
+        # Render an initial expression so the loop has a "previous" to work with.
+        await drv.show_expression(Expression.NEUTRAL)
+
+        # Wait until the blink loop renders BLINK (eyes closed).
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+            if drv._current is Expression.BLINK:
+                break
+
+        # While eyes are closed, push an explicit new expression.
+        await drv.show_expression(Expression.HAPPY)
+        assert drv._current is Expression.HAPPY
+
+        # Let the blink close-duration elapse so the restore branch runs,
+        # but stay well below the next blink interval so a second blink
+        # cannot fire and overwrite our assertion.
+        await asyncio.sleep(0.02)
+
+        # The fix: HAPPY must survive because _current is no longer BLINK.
+        assert drv._current is Expression.HAPPY
+    finally:
+        await drv.stop()
+
+
 async def test_probe_failure_propagates_when_fallback_disabled() -> None:
     from mousedroid.hardware.display.ssd1306_face_driver import SSD1306FaceDriver
 

@@ -138,6 +138,53 @@ async def test_update_face_emergency_passes_through() -> None:
     assert drv.current is Expression.EMERGENCY
 
 
+async def test_near_zero_action_counts_as_idle() -> None:
+    """NN float noise below 1e-3 on an otherwise-zero action must map to is_idle=True.
+
+    Tests the idle-flag computation directly by capturing the keyword arguments
+    forwarded to FaceController.update, avoiding the need to advance a fake
+    clock past idle_sleepy_after_s.
+    """
+    orch, _ = _make_orch(affect=None)
+    await orch._face_controller.start()
+
+    captured: list[dict[str, object]] = []
+    original_update = orch._face_controller.update
+
+    async def _spy(**kwargs: object) -> None:
+        captured.append(dict(kwargs))
+        await original_update(**kwargs)
+
+    orch._face_controller.update = _spy  # type: ignore[method-assign]
+
+    noisy_action = torch.tensor([5e-4, -2e-4, 8e-4])
+    await orch._update_face(safety_ctx=SafetyContext(is_emergency=False), action=noisy_action)
+
+    assert len(captured) == 1, "update must have been called exactly once"
+    assert captured[0]["is_idle"] is True
+
+
+async def test_above_threshold_action_is_not_idle() -> None:
+    """Action components ≥ 1e-3 must map to is_idle=False."""
+    orch, _ = _make_orch(affect=None)
+    await orch._face_controller.start()
+
+    captured: list[dict[str, object]] = []
+    original_update = orch._face_controller.update
+
+    async def _spy(**kwargs: object) -> None:
+        captured.append(dict(kwargs))
+        await original_update(**kwargs)
+
+    orch._face_controller.update = _spy  # type: ignore[method-assign]
+
+    real_action = torch.tensor([0.1, 0.0, 0.0])
+    await orch._update_face(safety_ctx=SafetyContext(is_emergency=False), action=real_action)
+
+    assert len(captured) == 1, "update must have been called exactly once"
+    assert captured[0]["is_idle"] is False
+
+
 async def test_update_face_no_face_controller_is_noop() -> None:
     cfg = Settings(mock_hardware=True)
     orch = MouseDroidOrchestrator(
