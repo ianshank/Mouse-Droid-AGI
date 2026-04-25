@@ -91,6 +91,29 @@ class _LabeledCounter:
             self._values.clear()
 
 
+class _DoubleLabeledCounter:
+    """Counter keyed by a pair of string label values (e.g. tool, result)."""
+
+    __slots__ = ("_lock", "_values")
+
+    def __init__(self) -> None:
+        self._values: dict[tuple[str, str], int] = {}
+        self._lock = threading.Lock()
+
+    def inc(self, label_a: str, label_b: str, amount: int = 1) -> None:
+        with self._lock:
+            key = (label_a, label_b)
+            self._values[key] = self._values.get(key, 0) + amount
+
+    def snapshot(self) -> dict[tuple[str, str], int]:
+        with self._lock:
+            return dict(self._values)
+
+    def reset(self) -> None:
+        with self._lock:
+            self._values.clear()
+
+
 class _Gauge:
     """Thread-safe Prometheus Gauge (set to any float)."""
 
@@ -215,6 +238,24 @@ def _render_labeled_counter(
     for label_val, count in sorted(values.items()):
         escaped_label_val = _escape_label_value(label_val)
         lines.append(f'{name}_total{{{label_name}="{escaped_label_val}"}} {count}')
+    return lines
+
+
+def _render_double_labeled_counter(
+    name: str,
+    help_text: str,
+    label_a: str,
+    label_b: str,
+    values: dict[tuple[str, str], int],
+) -> list[str]:
+    lines = [
+        f"# HELP {name}_total {_escape_help_text(help_text)}",
+        f"# TYPE {name}_total counter",
+    ]
+    for (val_a, val_b), count in sorted(values.items()):
+        ea = _escape_label_value(val_a)
+        eb = _escape_label_value(val_b)
+        lines.append(f'{name}_total{{{label_a}="{ea}",{label_b}="{eb}"}} {count}')
     return lines
 
 
@@ -343,6 +384,14 @@ class MetricsRegistry:
         self._cloud_telemetry_publish_latency_ms = _Histogram(tuple(cloud_buckets))
         self._cloud_experience_publish_latency_ms = _Histogram(tuple(cloud_buckets))
 
+        # MCP server metrics
+        self._mcp_requests = _Counter()
+        self._mcp_tool_calls = _DoubleLabeledCounter()
+        mcp_raw_buckets = sorted(cfg.mcp_latency_buckets_ms)
+        if not mcp_raw_buckets or mcp_raw_buckets[-1] != float("inf"):
+            mcp_raw_buckets.append(float("inf"))
+        self._mcp_request_latency_ms = _Histogram(tuple(mcp_raw_buckets))
+
         # Pre-format metric names from namespace
         self._name_frame_drops = f"{ns}_frame_drops"
         self._name_safety_violations = f"{ns}_safety_violations"
@@ -367,6 +416,11 @@ class MetricsRegistry:
         self._name_curiosity_reward = f"{ns}_curiosity_intrinsic_reward"
         self._name_sensor_recoveries = f"{ns}_sensor_recoveries"
         self._name_sensor_recovery_failures = f"{ns}_sensor_recovery_failures"
+
+        # MCP metric names — all derived from namespace
+        self._name_mcp_requests = f"{ns}_mcp_requests"
+        self._name_mcp_tool_calls = f"{ns}_mcp_tool_calls"
+        self._name_mcp_request_latency = f"{ns}_mcp_request_latency_ms"
 
         # Cloud Digital Twin metric names — all derived from namespace
         self._name_cloud_telemetry_publish = f"{ns}_cloud_telemetry_publish"
@@ -572,6 +626,33 @@ class MetricsRegistry:
         """Set current in-memory experience queue depth."""
         if self._cfg.track_cloud:
             self._cloud_experience_queue_depth.set(float(depth))
+
+    # ------------------------------------------------------------------
+    # MCP server helpers
+    # ------------------------------------------------------------------
+
+    def inc_mcp_request(self, amount: int = 1) -> None:
+        """Increment the total MCP request counter (any kind of request)."""
+        if self._cfg.track_mcp:
+            self._mcp_requests.inc(amount)
+
+    def inc_mcp_tool_call(self, tool: str, result: str, amount: int = 1) -> None:
+        """Increment the per-tool MCP call counter.
+
+        Args:
+            tool: Tool name (e.g. ``"health_check"``).
+            result: Outcome label (e.g. ``"ok"``, ``"refused_emergency"``,
+                ``"denied"``, ``"rate_limited"``, ``"timeout"``,
+                ``"error"``, ``"client_disconnected"``).
+            amount: Increment amount (default 1).
+        """
+        if self._cfg.track_mcp:
+            self._mcp_tool_calls.inc(tool, result, amount)
+
+    def observe_mcp_request_latency_ms(self, value: float) -> None:
+        """Record total MCP request latency in milliseconds."""
+        if self._cfg.track_mcp:
+            self._mcp_request_latency_ms.observe(value)
 
     @staticmethod
     def _decode_cloud_circuit_state(value: float) -> str:
@@ -920,6 +1001,37 @@ class MetricsRegistry:
                     self._cloud_experience_queue_depth.value,
                 )
             )
+
+        if cfg.track_mcp:
+            sections.append(
+                _render_counter(
+                    self._name_mcp_requests,
+                    "Total MCP requests received",
+                    self._mcp_requests.value,
+                )
+            )
+            tool_call_snapshot = self._mcp_tool_calls.snapshot()
+            if tool_call_snapshot:
+                sections.append(
+                    _render_double_labeled_counter(
+                        self._name_mcp_tool_calls,
+                        "MCP tool call outcomes (labels: tool, result)",
+                        "tool",
+                        "result",
+                        tool_call_snapshot,
+                    )
+                )
+            mcp_buckets, mcp_sum, mcp_count = self._mcp_request_latency_ms.snapshot()
+            if mcp_count > 0:
+                sections.append(
+                    _render_histogram(
+                        self._name_mcp_request_latency,
+                        "MCP request latency histogram (milliseconds)",
+                        mcp_buckets,
+                        mcp_sum,
+                        mcp_count,
+                    )
+                )
 
         sections.append(
             _render_gauge(

@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from mousedroid.health.watchdog import WatchdogProtocol
     from mousedroid.llm_gateway.mission_parser import MissionParserProtocol
     from mousedroid.llm_gateway.protocol import GoalVector, LLMGatewayProtocol
+    from mousedroid.mcp.protocol import MCPServerProtocol
     from mousedroid.memory.tier import MemoryTier
     from mousedroid.orchestrator.face_controller import FaceController
     from mousedroid.safety.context import SafetyContext
@@ -82,6 +83,7 @@ class MouseDroidOrchestrator:
         cloud_experience_exporter: CloudExperienceExporterProtocol | None = None,
         tool_registry: Any | None = None,
         face_controller: FaceController | None = None,
+        mcp_server: MCPServerProtocol | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -109,6 +111,10 @@ class MouseDroidOrchestrator:
             face_controller: Optional MSE-6 face-display controller. When
                 supplied, the orchestrator drives it from the BDI affect
                 signal and ``SafetyContext.is_emergency`` once per tick.
+            mcp_server: Optional MCP server. When supplied, started after
+                the telemetry server during ``start()`` and stopped just
+                before it during ``stop()``. Runs as its own supervised
+                background tasks; never blocks the control loop.
         """
         if not agents:
             msg = "At least one agent is required"
@@ -134,6 +140,7 @@ class MouseDroidOrchestrator:
         self._cloud_experience_exporter = cloud_experience_exporter
         self._tool_registry = tool_registry
         self._face_controller = face_controller
+        self._mcp_server = mcp_server
         self._cfg = cfg
         self._running = False
         self._tick_count: int = 0
@@ -161,6 +168,8 @@ class MouseDroidOrchestrator:
             await self._cognitive_core.start()
         if self._telemetry_server is not None:
             await self._telemetry_server.start()
+        if self._mcp_server is not None:
+            await self._mcp_server.start()
         if self._llm_gateway is not None:
             try:
                 await self._llm_gateway.start()
@@ -212,6 +221,8 @@ class MouseDroidOrchestrator:
         if self._voice_engine is not None:
             await self._voice_lifecycle("shutdown")
             await self._voice_engine.stop()
+        if self._mcp_server is not None:
+            await self._mcp_server.stop()
         if self._telemetry_server is not None:
             await self._telemetry_server.stop()
         if self._cognitive_core is not None:
