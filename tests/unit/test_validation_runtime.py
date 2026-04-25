@@ -56,6 +56,25 @@ def test_resolve_runtime_config_paths_legacy_jetson_single_env(
     assert resolved == (runtime.Path("config/jetson_production.yaml"),)
 
 
+def test_camera_unavailable_reason_reports_missing_jetson_runtime(tmp_path) -> None:
+    cfg = Settings(
+        mock_hardware=True,
+        camera={
+            "backend": "jetson_csi",
+            "device_path": str(tmp_path / "video0"),
+        },
+    )
+
+    reason = runtime.camera_unavailable_reason(
+        cfg,
+        RuntimeError("Failed to open CSI camera via GStreamer pipeline or V4L2 device"),
+    )
+
+    assert reason is not None
+    assert "V4L2 device" in reason
+    assert "Failed to open CSI camera" in reason
+
+
 @pytest.mark.asyncio
 async def test_capture_camera_frame_uses_runtime_driver(
     monkeypatch: pytest.MonkeyPatch,

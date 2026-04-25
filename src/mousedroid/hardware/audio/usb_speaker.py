@@ -146,8 +146,41 @@ class UsbSpeaker:
         else:
             raw_data = samples.astype(np.float32).tobytes()
 
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._stream.write, raw_data)
+        frames_to_write = max(1, int(samples.shape[0]) // max(1, self._cfg.channels))
+        get_write_available = getattr(self._stream, "get_write_available", None)
+
+        if callable(get_write_available):
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + self._cfg.write_timeout_s
+            while True:
+                available_raw = get_write_available()
+                if not isinstance(available_raw, (int, float)):
+                    break
+                if int(available_raw) >= frames_to_write:
+                    break
+                if loop.time() >= deadline:
+                    await self.stop()
+                    _log.warning(
+                        "usb_speaker_write_timeout",
+                        frames_requested=frames_to_write,
+                        frames_available=int(available_raw),
+                        timeout_s=self._cfg.write_timeout_s,
+                    )
+                    msg = (
+                        "USB speaker write timed out waiting for buffer availability "
+                        f"after {self._cfg.write_timeout_s:.2f}s"
+                    )
+                    raise RuntimeError(msg)
+                await asyncio.sleep(self._cfg.write_poll_interval_s)
+
+        try:
+            self._stream.write(raw_data, exception_on_underflow=False)
+        except TypeError:
+            self._stream.write(raw_data)
+        except Exception as exc:
+            await self.stop()
+            _log.warning("usb_speaker_write_failed", error=str(exc))
+            raise RuntimeError(f"USB speaker write failed: {exc}") from exc
 
     @property
     def sample_rate(self) -> int:

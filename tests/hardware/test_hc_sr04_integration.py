@@ -20,7 +20,8 @@ import time
 
 import pytest
 
-from mousedroid.config.schema import Settings, UltrasonicConfig
+from mousedroid.config.schema import UltrasonicConfig
+from tests._jetson_hardware import load_jetson_runtime_settings
 
 pytestmark = pytest.mark.hardware
 
@@ -28,23 +29,10 @@ pytestmark = pytest.mark.hardware
 Jetson = pytest.importorskip("Jetson.GPIO", reason="Jetson.GPIO not available")
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-JETSON_PROD_CONFIG = "config/jetson_production.yaml"
-
-
 @pytest.fixture(scope="module")
 def ultrasonic_cfg() -> UltrasonicConfig:
-    """Load UltrasonicConfig from jetson_production.yaml."""
-    import yaml
-
-    with open(JETSON_PROD_CONFIG) as fh:
-        raw = yaml.safe_load(fh)
-
-    # Merge into default Settings so all validators run
-    settings = Settings(**raw)
+    """Load UltrasonicConfig through the shared Jetson runtime loader."""
+    settings = load_jetson_runtime_settings()
     assert settings.ultrasonic is not None, "ultrasonic not configured in jetson_production.yaml"
     return settings.ultrasonic
 

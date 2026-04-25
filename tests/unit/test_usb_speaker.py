@@ -187,6 +187,25 @@ async def test_write_chunk_int16_clamps_overflow() -> None:
 
 
 @pytest.mark.asyncio
+async def test_write_chunk_times_out_when_buffer_never_available() -> None:
+    """write_chunk() fails fast when the output stream never becomes writable."""
+    from mousedroid.hardware.audio.usb_speaker import UsbSpeaker
+
+    speaker = UsbSpeaker(_cfg(write_timeout_s=0.01, write_poll_interval_s=0.001))
+    mock_stream = MagicMock()
+    mock_stream.get_write_available.return_value = 0
+    speaker._stream = mock_stream
+
+    with pytest.raises(RuntimeError, match="timed out waiting for buffer availability"):
+        await speaker.write_chunk(np.ones(1024, dtype=np.float32))
+
+    mock_stream.write.assert_not_called()
+    mock_stream.stop_stream.assert_called_once()
+    mock_stream.close.assert_called_once()
+    assert speaker._stream is None
+
+
+@pytest.mark.asyncio
 async def test_start_handles_missing_pyaudio() -> None:
     """start() is a no-op when pyaudio is not importable."""
     from mousedroid.hardware.audio.usb_speaker import UsbSpeaker

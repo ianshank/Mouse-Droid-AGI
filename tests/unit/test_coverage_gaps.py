@@ -347,6 +347,23 @@ def test_config_loader_drops_empty_nested_env_vars(monkeypatch, tmp_path):
     assert os.environ.get("MOUSEDROID_LOGGING__LEVEL") == "INFO"
 
 
+def test_load_jetson_runtime_settings_drops_empty_nested_gcp_env(monkeypatch, tmp_path):
+    from tests._jetson_hardware import load_jetson_runtime_settings
+
+    jetson_cfg = tmp_path / "jetson_production.yaml"
+    jetson_cfg.write_text("mock_hardware: false\nlogging:\n  level: INFO\n")
+
+    monkeypatch.delenv("MOUSEDROID_JETSON_CONFIG", raising=False)
+    monkeypatch.setenv("MOUSEDROID_JETSON_CONFIGS", str(jetson_cfg))
+    monkeypatch.setenv("MOUSEDROID_GCP__PROJECT_ID", "")
+    monkeypatch.setenv("MOUSEDROID_GCP__ROBOT_ID", "   ")
+
+    settings = load_jetson_runtime_settings()
+
+    assert settings.gcp is None
+    assert settings.mock_hardware is False
+
+
 # ---------------------------------------------------------------------------
 # Planning budget logging
 # ---------------------------------------------------------------------------

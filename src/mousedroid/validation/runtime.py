@@ -100,6 +100,26 @@ def load_runtime_settings(config_paths: Sequence[Path | str] | None = None) -> S
     return load_settings(*resolved_paths)
 
 
+def camera_unavailable_reason(cfg: Settings, exc: Exception | None = None) -> str | None:
+    """Return a skip-worthy reason when the Jetson camera runtime is unavailable."""
+    if cfg.camera.backend != "jetson_csi":
+        return None
+
+    reasons: list[str] = []
+    device_path = str(cfg.camera.device_path).strip()
+    if device_path and not Path(device_path).exists():
+        reasons.append(f"V4L2 device {device_path} is missing")
+    if not Path("/tmp/argus_socket").exists():
+        reasons.append("libargus socket /tmp/argus_socket is missing")
+
+    if not reasons:
+        return None
+
+    if exc is not None and str(exc).strip():
+        reasons.append(str(exc).strip())
+    return "; ".join(reasons)
+
+
 async def capture_camera_frame(cfg: Settings) -> tuple[NDArray[np.uint8], str]:
     """Capture one raw frame through the configured camera factory.
 

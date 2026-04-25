@@ -53,9 +53,10 @@ run_stage() {
     log "    log: ${logfile}"
     set +e
     if [[ "${tmo}" != "0" ]]; then
-        timeout --signal=INT --kill-after=10 "${tmo}" "$@" >"${logfile}" 2>&1
+        MOUSEDROID_SMOKE_STAGE_TIMEOUT="${tmo}" \
+            timeout --signal=INT --kill-after=10 "${tmo}" "$@" >"${logfile}" 2>&1
     else
-        "$@" >"${logfile}" 2>&1
+        MOUSEDROID_SMOKE_STAGE_TIMEOUT="0" "$@" >"${logfile}" 2>&1
     fi
     local rc=$?
     set +e
@@ -85,13 +86,30 @@ container_running() {
 PY_WRAPPER="${RUN_DIR}/python3-in-container"
 cat > "${PY_WRAPPER}" <<EOF
 #!/bin/bash
-exec docker exec \\
-    -e MOUSEDROID_MOCK_HARDWARE \\
-    -e MOUSEDROID_JETSON_CONFIGS \\
-    -e MOUSEDROID_FACE_DISPLAY_SMOKE \\
-    -e MOUSEDROID_FACE_DISPLAY_BUS \\
-    -e PYTHONPATH \\
-    ${CONTAINER} python3 "\$@"
+set -uo pipefail
+
+stage_timeout="\${MOUSEDROID_SMOKE_STAGE_TIMEOUT:-0}"
+inner_timeout="\${stage_timeout}"
+if [[ "\${stage_timeout}" =~ ^[0-9]+$ && "\${stage_timeout}" -gt 5 ]]; then
+    inner_timeout="\$((stage_timeout - 5))"
+fi
+
+docker_args=(
+    docker exec
+    -e MOUSEDROID_MOCK_HARDWARE=false
+    -e MOUSEDROID_JETSON_CONFIGS
+    -e MOUSEDROID_FACE_DISPLAY_SMOKE
+    -e MOUSEDROID_FACE_DISPLAY_BUS
+    -e PYTHONPATH
+    ${CONTAINER}
+)
+
+if [[ "\${inner_timeout}" != "0" ]]; then
+    docker_args+=(timeout --signal=INT --kill-after=5 "\${inner_timeout}")
+fi
+
+docker_args+=(python3 "\$@")
+exec "\${docker_args[@]}"
 EOF
 chmod +x "${PY_WRAPPER}"
 export MOUSEDROID_SMOKE_PYTHON="${PY_WRAPPER}"
@@ -131,10 +149,10 @@ fi
 # --- Stage 8: OLED (non-blocking, container stays up) --------------------
 if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
     run_stage "oled" "no" 60 \
-        docker exec \
-            -e MOUSEDROID_FACE_DISPLAY_SMOKE=1 \
-            -e MOUSEDROID_FACE_DISPLAY_BUS="${OLED_BUS}" \
-            "${CONTAINER}" python3 -m pytest -m hardware -v \
+        env \
+            MOUSEDROID_FACE_DISPLAY_SMOKE=1 \
+            MOUSEDROID_FACE_DISPLAY_BUS="${OLED_BUS}" \
+            "${PY_WRAPPER}" -m pytest -m hardware -v \
             tests/hardware/test_ssd1306_smoke.py
 fi
 
@@ -146,7 +164,7 @@ fi
 # --- Stage 10: hardware pytest suite (non-blocking until camera/USB speaker/HC-SR04 are fixed)
 if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
     run_stage "hardware_pytest" "no" 300 \
-        docker exec "${CONTAINER}" python3 -m pytest -m hardware -v tests/hardware/
+        bash scripts/jetson_smoke_test.sh pytest
 fi
 
 # --- Stage 11: orchestrator E2E 5s (non-blocking until camera/dev/video0 fixed)
@@ -178,7 +196,7 @@ async def main() -> None:
 
 asyncio.run(main())'
     run_stage "llm_probe" "yes" 120 \
-        docker exec "${CONTAINER}" python3 -c "${LLM_PROBE}"
+        "${PY_WRAPPER}" -c "${LLM_PROBE}"
 fi
 
 # --- Summary -------------------------------------------------------------
