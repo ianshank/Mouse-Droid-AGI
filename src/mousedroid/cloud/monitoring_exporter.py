@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import importlib
+import re
 import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
@@ -148,6 +149,26 @@ class CloudMetricsExporter:
                         continue
         return result
 
+    @staticmethod
+    def _parse_metric_name(name: str) -> tuple[str, dict[str, str]]:
+        r"""Split a Prometheus-format metric name into base name and labels.
+
+        Args:
+            name: Metric name, possibly with labels (e.g. ``"foo{a=\"x\"}"``).
+
+        Returns:
+            Tuple of ``(base_name, labels_dict)``.
+        """
+        brace = name.find("{")
+        if brace == -1:
+            return name, {}
+        base = name[:brace]
+        label_str = name[brace + 1 :].rstrip("}")
+        labels: dict[str, str] = {}
+        for match in re.finditer(r'(\w+)="([^"]*)"', label_str):
+            labels[match.group(1)] = match.group(2)
+        return base, labels
+
     def _write_metrics(self, metrics: dict[str, float]) -> None:
         """Write metrics to Cloud Monitoring (runs in executor thread).
 
@@ -168,16 +189,16 @@ class CloudMetricsExporter:
         # must never override, to keep the Cloud Monitoring schema valid.
         reserved_resource_keys = frozenset({"project_id", "location", "namespace", "node_id"})
         for name, value in metrics.items():
+            base_name, metric_labels = self._parse_metric_name(name)
             series = types.TimeSeries()
-            series.metric.type = f"{self._prefix}/{name}"
+            series.metric.type = f"{self._prefix}/{base_name}"
             series.resource.type = "generic_node"
             series.resource.labels["project_id"] = self._project_id
             series.resource.labels["location"] = "global"
             series.resource.labels["namespace"] = self._resource_namespace
             series.resource.labels["node_id"] = self._cfg.robot_id
-            # Operator-supplied metric_labels land on the metric (not
-            # resource) to avoid colliding with generic_node required
-            # labels. Reserved keys are filtered out defensively.
+            for label_key, label_value in metric_labels.items():
+                series.metric.labels[label_key] = label_value
             for label_key, label_value in self._extra_labels.items():
                 if label_key in reserved_resource_keys:
                     continue

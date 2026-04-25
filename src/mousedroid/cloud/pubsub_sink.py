@@ -8,6 +8,7 @@ publishes are silently skipped and the droid continues autonomously.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -209,7 +210,7 @@ class CloudTelemetrySink:
         except CircuitOpenError:
             _log.debug("cloud_pubsub_circuit_open", topic=topic)
             result = _RESULT_CIRCUIT_OPEN
-        except TimeoutError:
+        except (TimeoutError, concurrent.futures.TimeoutError):
             _log.warning("cloud_pubsub_publish_timeout", topic=topic)
             result = _RESULT_TIMEOUT
         except Exception:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import importlib
 import time
 from collections.abc import Awaitable, Callable
@@ -184,7 +185,7 @@ async def _diagnose_cloud(gcp_cfg: GCPConfig | None = None) -> dict[str, object]
             source_id=gcp_cfg.robot_id,
         )
         await loop.run_in_executor(None, future.result, gcp_cfg.pubsub.publish_timeout_s)
-    except TimeoutError as exc:
+    except (TimeoutError, concurrent.futures.TimeoutError) as exc:
         _log.warning("tool_diagnose_cloud_publish_timeout", topic=topic_path, error=str(exc))
         return {
             "status": "publish_timeout",

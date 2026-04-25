@@ -78,6 +78,7 @@ def spawn_tracked(
                 task_name=done.get_name(),
                 error=str(exc),
                 error_type=type(exc).__name__,
+                exc_info=True,
             )
 
     task.add_done_callback(_on_done)

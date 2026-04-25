@@ -458,7 +458,11 @@ class MouseDroidOrchestrator:
             if self._telemetry_publisher is not None:
                 await self._telemetry_publisher.publish(frame)
             if self._cloud_sink is not None:
-                await self._cloud_sink.publish_telemetry(frame.to_dict())
+                spawn_tracked(
+                    self._cloud_publish_tasks,
+                    self._cloud_sink.publish_telemetry(frame.to_dict()),
+                    name="cloud_publish_telemetry",
+                )
         except Exception:
             _log.debug("telemetry_publish_failed", exc_info=True)
 

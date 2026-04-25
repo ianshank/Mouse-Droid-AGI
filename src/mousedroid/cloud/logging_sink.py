@@ -40,7 +40,7 @@ class CloudLoggingSink:
         self._min_level = _LEVEL_MAP.get(self._log_cfg.min_level.lower(), logging.INFO)
         self._cloud_logger: Any | None = None
         self._started = False
-        # Bounded counter for failed forwards. Exposed through the
+        # Process-lifetime counter for failed forwards. Exposed through the
         # ``forward_failure_count`` property for diagnostic tooling; we
         # deliberately avoid coupling to MetricsRegistry here because
         # this module runs inside the structlog processor chain, which
