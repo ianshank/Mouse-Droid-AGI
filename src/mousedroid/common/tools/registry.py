@@ -176,8 +176,8 @@ async def _diagnose_cloud(gcp_cfg: GCPConfig | None = None) -> dict[str, object]
     topic_path = publisher.topic_path(gcp_cfg.project_id, gcp_cfg.pubsub.telemetry_topic)
     payload = f"diagnose_cloud:{gcp_cfg.robot_id}".encode()
 
+    loop = asyncio.get_running_loop()
     try:
-        loop = asyncio.get_running_loop()
         future = publisher.publish(
             topic_path,
             data=payload,
@@ -205,6 +205,8 @@ async def _diagnose_cloud(gcp_cfg: GCPConfig | None = None) -> dict[str, object]
             "project_id": effective_project,
             "error": str(exc),
         }
+    finally:
+        await loop.run_in_executor(None, publisher.stop)
 
     _log.info(
         "tool_diagnose_cloud_ok",
