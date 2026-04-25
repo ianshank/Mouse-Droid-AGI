@@ -364,6 +364,22 @@ def test_load_jetson_runtime_settings_drops_empty_nested_gcp_env(monkeypatch, tm
     assert settings.mock_hardware is False
 
 
+def test_hardware_e2e_helpers_drop_empty_nested_gcp_env(monkeypatch, tmp_path):
+    from tests.hardware.test_e2e_edge_cases import _load_settings as load_edge_settings
+    from tests.hardware.test_e2e_sense_plan_act import _load_settings as load_e2e_settings
+
+    jetson_cfg = tmp_path / "jetson_production.yaml"
+    jetson_cfg.write_text("mock_hardware: false\nlogging:\n  level: INFO\n")
+
+    monkeypatch.delenv("MOUSEDROID_JETSON_CONFIG", raising=False)
+    monkeypatch.setenv("MOUSEDROID_JETSON_CONFIGS", str(jetson_cfg))
+    monkeypatch.setenv("MOUSEDROID_GCP__PROJECT_ID", "")
+    monkeypatch.setenv("MOUSEDROID_GCP__ROBOT_ID", "   ")
+
+    assert load_e2e_settings().gcp is None
+    assert load_edge_settings().gcp is None
+
+
 # ---------------------------------------------------------------------------
 # Planning budget logging
 # ---------------------------------------------------------------------------

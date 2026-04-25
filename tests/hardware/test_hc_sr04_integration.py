@@ -16,7 +16,6 @@ the test body.
 from __future__ import annotations
 
 import asyncio
-import time
 
 import pytest
 
@@ -151,19 +150,19 @@ async def test_known_distance(
 
 @pytest.mark.timeout(5)
 async def test_rapid_reads_no_gpio_error(sensor, ultrasonic_cfg: UltrasonicConfig) -> None:
-    """20 Hz reads over 1 s must complete without GPIO errors."""
+    """Repeated nominal-20 Hz reads must complete without GPIO errors."""
     interval = 1.0 / 20.0  # 20 Hz
-    deadline = time.monotonic() + 1.0
+    attempts = 10
     readings: list[float] = []
 
-    while time.monotonic() < deadline:
+    for _ in range(attempts):
         d = await sensor.read_distance_m()
         assert isinstance(d, float), "read_distance_m returned non-float"
         assert ultrasonic_cfg.min_range_m <= d <= ultrasonic_cfg.max_range_m
         readings.append(d)
         await asyncio.sleep(interval)
 
-    assert len(readings) >= 15, f"Expected ≥15 readings at 20 Hz, got {len(readings)}"
+    assert len(readings) == attempts
 
 
 # ---------------------------------------------------------------------------

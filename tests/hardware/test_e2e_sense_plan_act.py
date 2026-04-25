@@ -28,6 +28,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._jetson_hardware import load_jetson_runtime_settings
+
 
 def _is_jetson_host() -> bool:
     return platform.system() == "Linux" and Path("/etc/nv_tegra_release").exists()
@@ -55,13 +57,7 @@ _HARD_DEADLINE_MULT = float(os.getenv("MOUSEDROID_E2E_HARD_DEADLINE_MULT", "5.0"
 
 def _load_settings():
     """Return Settings from jetson_production.yaml."""
-    import yaml
-
-    from mousedroid.config.schema import Settings
-
-    with open(JETSON_PROD_CONFIG) as fh:
-        raw = yaml.safe_load(fh)
-    return Settings(**raw)
+    return load_jetson_runtime_settings()
 
 
 def _deadline_budget_ms(cfg) -> float:

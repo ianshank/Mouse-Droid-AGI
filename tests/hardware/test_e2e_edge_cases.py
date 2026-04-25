@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._jetson_hardware import load_jetson_runtime_settings
+
 JETSON_PROD_CONFIG = os.getenv("MOUSEDROID_JETSON_CONFIG", "config/jetson_production.yaml")
 _BURST_TICKS = int(os.getenv("MOUSEDROID_E2E_BURST_TICKS", "50"))
 _HARD_DEADLINE_MULT = float(os.getenv("MOUSEDROID_E2E_HARD_DEADLINE_MULT", "5.0"))
@@ -41,13 +43,7 @@ pytestmark = [
 
 
 def _load_settings():
-    import yaml
-
-    from mousedroid.config.schema import Settings
-
-    with open(JETSON_PROD_CONFIG) as fh:
-        raw = yaml.safe_load(fh)
-    return Settings(**raw)
+    return load_jetson_runtime_settings()
 
 
 def _deadline_budget_ms(cfg) -> float:

@@ -19,10 +19,13 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from pathlib import Path
 
 import pytest
 
 from mousedroid.config.schema import Settings
+from mousedroid.validation.runtime import load_runtime_settings
+from tests._jetson_hardware import is_jetson_host, load_jetson_runtime_settings
 
 pytestmark = pytest.mark.hardware
 
@@ -38,26 +41,27 @@ SERIAL_DEVICE_ENV = "MOUSEDROID_ESP32_SERIAL_PORT"
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module")
-def settings() -> Settings:
-    """Load full Settings from jetson_production.yaml."""
-    import platform
-    from pathlib import Path
+def _load_settings() -> Settings:
+    """Load Settings through the shared runtime loader.
 
-    import yaml
-
+    Jetson hosts run with real hardware enabled. Non-Jetson hosts keep the
+    historical mock-friendly behavior for ad-hoc local execution.
+    """
     config_path = Path(JETSON_PROD_CONFIG)
     if not config_path.exists():
         config_path = Path("config/default.yaml")
 
-    with open(config_path) as fh:
-        raw = yaml.safe_load(fh) or {}
+    if is_jetson_host():
+        return load_jetson_runtime_settings()
 
-    # On non-Jetson hosts, force mock mode so cross-field validators pass.
-    if platform.system() != "Linux" or not Path("/etc/nv_tegra_release").exists():
-        raw["mock_hardware"] = True
+    settings = load_runtime_settings((config_path,))
+    return settings.model_copy(update={"mock_hardware": True})
 
-    return Settings(**raw)
+
+@pytest.fixture(scope="module")
+def settings() -> Settings:
+    """Load full Settings from jetson_production.yaml."""
+    return _load_settings()
 
 
 @pytest.fixture(scope="module")
