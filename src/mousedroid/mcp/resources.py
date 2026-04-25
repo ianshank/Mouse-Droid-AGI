@@ -38,6 +38,13 @@ _log = get_logger(__name__)
 
 REDACTED = "<redacted>"
 
+# Hard ceiling on recursion depth inside :func:`redact_value`. The
+# redactor only walks dict/list structures, but a malicious or
+# pathological input could nest beyond what's reasonable to serialise.
+# Defined as a module constant rather than hardcoded inline so callers
+# (and tests) can patch it without code changes elsewhere.
+MAX_REDACT_DEPTH = 32
+
 
 def redact_value(value: Any, *, key_pattern: re.Pattern[str], _depth: int = 0) -> Any:
     """Recursively replace values whose dict key matches *key_pattern*.
@@ -58,7 +65,7 @@ def redact_value(value: Any, *, key_pattern: re.Pattern[str], _depth: int = 0) -
     Returns:
         A structurally identical value with sensitive entries redacted.
     """
-    if _depth > 32:
+    if _depth > MAX_REDACT_DEPTH:
         return value
     if isinstance(value, dict):
         out: dict[str, Any] = {}

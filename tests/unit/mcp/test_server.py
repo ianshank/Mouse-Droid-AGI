@@ -188,6 +188,30 @@ class TestAuthRequired:
         assert _auth_required(cfg) is True
 
 
+class TestMemoryResource:
+    @pytest.mark.asyncio
+    async def test_read_memory_resource(self, root_settings: Settings, safe_safety_monitor) -> None:
+        cfg = MCPConfig.model_validate(
+            {
+                "enabled": True,
+                "transport": "stdio",
+                "resources": {"memory_enabled": True},
+            }
+        )
+        episodic = MagicMock()
+        episodic.sample.return_value = [{"step": 1}, {"step": 2}]
+        tier = MagicMock(episodic=episodic)
+        s = MouseDroidMCPServer(
+            cfg=cfg,
+            root_cfg=root_settings,
+            tool_registry=_registry(),
+            safety_monitor=safe_safety_monitor,
+            memory_tier=tier,
+        )
+        out = await s.read_resource("mousedroid://memory/episodes/recent?n=2")
+        assert out["count"] == 2
+
+
 class TestSamplerLoop:
     @pytest.mark.asyncio
     async def test_sampler_drains_publisher_queue(

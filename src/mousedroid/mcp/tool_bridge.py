@@ -43,6 +43,10 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
+# Stable identifier for the bridge's circuit breaker; surfaces in
+# Prometheus labels and log lines so dashboards can pin a panel to it.
+BREAKER_NAME = "mcp_tool_call"
+
 
 class _TokenBucket:
     """Per-session token bucket for cheap rate limiting."""
@@ -104,8 +108,9 @@ class MCPToolBridge:
 
         Args:
             cfg: MCP-specific configuration.
-            root_cfg: Root settings (used for retry/circuit-breaker
-                fallback configuration).
+            root_cfg: Root settings; only used to source the fallback
+                :class:`CircuitBreakerConfig` when
+                :attr:`MCPConfig.circuit_breaker` is ``None``.
             tool_registry: The shared registry returned by
                 :func:`~mousedroid.common.tools.registry.create_default_registry`.
             safety_monitor: Live monitor consulted before any actuation
@@ -118,16 +123,15 @@ class MCPToolBridge:
                 is conservative but still correct (gate is still called).
         """
         self._cfg = cfg
-        self._root_cfg = root_cfg
         self._registry = tool_registry
         self._safety_monitor = safety_monitor
         self._metrics = metrics
         self._observation_provider = observation_provider
         self._rate_limiter = _TokenBucket(cfg.rate_limit_rps)
-        self._circuit = CircuitBreaker(
-            "mcp_tool_call",
-            cfg.circuit_breaker if cfg.circuit_breaker is not None else root_cfg.circuit_breaker,
+        breaker_cfg = (
+            cfg.circuit_breaker if cfg.circuit_breaker is not None else root_cfg.circuit_breaker
         )
+        self._circuit = CircuitBreaker(BREAKER_NAME, breaker_cfg)
         # Pre-compute deny / actuation sets for O(1) lookups
         self._denylist: set[str] = set(cfg.tools_denylist)
         self._actuation: set[str] = set(cfg.actuation_tools)

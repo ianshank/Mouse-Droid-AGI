@@ -228,3 +228,162 @@ class TestResourcesConfigDefaults:
         assert c.logs_enabled is True
         assert c.config_enabled is True
         assert c.memory_enabled is False
+
+
+class TestEdgeCases:
+    """Cover the harder-to-reach branches identified by gap analysis."""
+
+    def test_redact_value_depth_cap_returns_input(self) -> None:
+        from mousedroid.mcp.resources import MAX_REDACT_DEPTH, redact_value
+
+        # Recurse beyond the cap; the value at that point is returned untouched.
+        deep_input = {"k": "v"}
+        out = redact_value(
+            deep_input,
+            key_pattern=re.compile(r"never-matches"),
+            _depth=MAX_REDACT_DEPTH + 1,
+        )
+        assert out is deep_input
+
+    def test_redact_pattern_constant_exposed(self) -> None:
+        from mousedroid.mcp.resources import MAX_REDACT_DEPTH
+
+        assert isinstance(MAX_REDACT_DEPTH, int)
+        assert MAX_REDACT_DEPTH > 0
+
+    @pytest.mark.asyncio
+    async def test_telemetry_recent_with_invalid_n(self, mcp_cfg: MCPConfig) -> None:
+        # Invalid integer query should silently fall back to the cap.
+        from mousedroid.telemetry.protocol import TelemetryFrame
+
+        queue: asyncio.Queue[TelemetryFrame] = asyncio.Queue()
+        for i in range(3):
+            queue.put_nowait(TelemetryFrame(timestamp=float(i)))
+        pub = MagicMock()
+        pub.get_queue.return_value = queue
+        from mousedroid.mcp.resources import TelemetryResourceProvider
+
+        p = TelemetryResourceProvider(mcp_cfg, publisher=pub)
+        await p.sample_once()
+        out = p.read("/telemetry/recent", {"n": "not-an-int"})
+        # Should return up to recent_frames_max frames (8 in the fixture cfg, 3 actual).
+        assert out["count"] == 3
+
+    def test_telemetry_unknown_path_raises(self, mcp_cfg: MCPConfig) -> None:
+        # Reach the unknown-path branch directly (telemetry enabled, bad path).
+        from mousedroid.mcp.resources import TelemetryResourceProvider
+
+        pub = MagicMock()
+        pub.get_queue.return_value = asyncio.Queue()
+        p = TelemetryResourceProvider(mcp_cfg, publisher=pub)
+        with pytest.raises(KeyError):
+            p.read("/telemetry/does_not_exist", {})
+
+    def test_log_unknown_path_raises(self, mcp_cfg: MCPConfig, redact_pattern) -> None:
+        from mousedroid.mcp.resources import LogResourceProvider
+
+        buf = LogRingBuffer(maxlen=4)
+        p = LogResourceProvider(mcp_cfg, log_buffer=buf, key_pattern=redact_pattern)
+        with pytest.raises(KeyError):
+            p.read("/logs/wrong", {})
+
+    def test_log_invalid_n_falls_back_to_cap(self, mcp_cfg: MCPConfig, redact_pattern) -> None:
+        from mousedroid.mcp.resources import LogResourceProvider
+
+        buf = LogRingBuffer(maxlen=10)
+        for i in range(4):
+            buf(None, "info", {"event": "x", "i": i})
+        p = LogResourceProvider(mcp_cfg, log_buffer=buf, key_pattern=redact_pattern)
+        out = p.read("/logs/tail", {"n": "garbage"})
+        assert out["count"] == 4
+
+    def test_config_provider_disabled_raises(self, redact_pattern) -> None:
+        cfg = MCPConfig.model_validate({"enabled": True, "resources": {"config_enabled": False}})
+        root = Settings.model_validate({"mock_hardware": True})
+        from mousedroid.mcp.resources import ConfigResourceProvider
+
+        p = ConfigResourceProvider(cfg, root, key_pattern=redact_pattern)
+        assert p.list_uris() == []
+        with pytest.raises(PermissionError):
+            p.read("/config/redacted", {})
+
+    def test_config_provider_unknown_path(self, mcp_cfg: MCPConfig, redact_pattern) -> None:
+        from mousedroid.mcp.resources import ConfigResourceProvider
+
+        root = Settings.model_validate({"mock_hardware": True})
+        p = ConfigResourceProvider(mcp_cfg, root, key_pattern=redact_pattern)
+        with pytest.raises(KeyError):
+            p.read("/config/something_else", {})
+
+    def test_memory_unknown_path(self, redact_pattern) -> None:
+        cfg = MCPConfig.model_validate({"enabled": True, "resources": {"memory_enabled": True}})
+        from mousedroid.mcp.resources import MemoryResourceProvider
+
+        tier = MagicMock(episodic=MagicMock())
+        p = MemoryResourceProvider(cfg, memory_tier=tier, key_pattern=redact_pattern)
+        with pytest.raises(KeyError):
+            p.read("/memory/unknown", {})
+
+    def test_memory_no_episodic_attr(self, redact_pattern) -> None:
+        cfg = MCPConfig.model_validate({"enabled": True, "resources": {"memory_enabled": True}})
+        from mousedroid.mcp.resources import MemoryResourceProvider
+
+        # tier without an `episodic` attribute -> empty result, no crash.
+        class _BareTier:
+            pass
+
+        p = MemoryResourceProvider(cfg, memory_tier=_BareTier(), key_pattern=redact_pattern)
+        out = p.read("/memory/episodes/recent", {"n": "5"})
+        assert out == {"count": 0, "episodes": []}
+
+    def test_memory_sample_exception_returns_empty(self, redact_pattern) -> None:
+        cfg = MCPConfig.model_validate({"enabled": True, "resources": {"memory_enabled": True}})
+        from mousedroid.mcp.resources import MemoryResourceProvider
+
+        episodic = MagicMock()
+        episodic.sample.side_effect = RuntimeError("buffer corrupt")
+        tier = MagicMock(episodic=episodic)
+        p = MemoryResourceProvider(cfg, memory_tier=tier, key_pattern=redact_pattern)
+        out = p.read("/memory/episodes/recent", {"n": "5"})
+        assert out == {"count": 0, "episodes": []}
+
+    def test_memory_invalid_n_falls_back(self, redact_pattern) -> None:
+        cfg = MCPConfig.model_validate({"enabled": True, "resources": {"memory_enabled": True}})
+        from mousedroid.mcp.resources import MemoryResourceProvider
+
+        episodic = MagicMock()
+        episodic.sample.return_value = [{"action": "up"}]
+        tier = MagicMock(episodic=episodic)
+        p = MemoryResourceProvider(cfg, memory_tier=tier, key_pattern=redact_pattern)
+        out = p.read("/memory/episodes/recent", {"n": "bad"})
+        assert out["count"] == 1
+
+    def test_telemetry_latest_with_empty_buffer(self, mcp_cfg: MCPConfig) -> None:
+        # Buffer empty -> latest returns frame=None (not raise).
+        from mousedroid.mcp.resources import TelemetryResourceProvider
+
+        pub = MagicMock()
+        pub.get_queue.return_value = asyncio.Queue()
+        p = TelemetryResourceProvider(mcp_cfg, publisher=pub)
+        out = p.read("/telemetry/latest", {})
+        assert out == {"frame": None}
+
+    def test_episode_to_dict_non_dict(self) -> None:
+        from mousedroid.mcp.resources import _episode_to_dict
+
+        out = _episode_to_dict("just-a-string")
+        assert out == {"episode": "just-a-string"}
+
+    def test_coerce_field_handles_list_tuple_and_repr(self) -> None:
+        from mousedroid.mcp.resources import _coerce_field
+
+        # list / tuple are recursively coerced, primitives pass through,
+        # complex objects fall back to repr().
+        class _Thing:
+            def __repr__(self) -> str:
+                return "<Thing>"
+
+        out = _coerce_field([1, "x", _Thing()])
+        assert out == [1, "x", "<Thing>"]
+        assert _coerce_field(("a", "b")) == ["a", "b"]
+        assert _coerce_field({"k": _Thing()}) == {"k": "<Thing>"}

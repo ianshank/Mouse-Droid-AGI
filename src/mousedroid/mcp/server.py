@@ -289,7 +289,13 @@ class MouseDroidMCPServer:
         delegates to its server entrypoint. When it is not, the loop
         idles until cancelled — leaving the bridge fully functional for
         in-process / test use.
+
+        The idle poll interval is derived from
+        :attr:`MCPConfig.sample_telemetry_hz` so a single config field
+        controls both the telemetry sampler cadence and how quickly the
+        serve loop notices ``self._running`` flipping during shutdown.
         """
+        idle_period_s = 1.0 / self._cfg.sample_telemetry_hz
         try:
             import mcp  # noqa: F401
         except ImportError:
@@ -300,7 +306,7 @@ class MouseDroidMCPServer:
             )
             try:
                 while self._running:
-                    await asyncio.sleep(self._cfg.request_timeout_s)
+                    await asyncio.sleep(idle_period_s)
             except asyncio.CancelledError:
                 raise
             return
@@ -308,11 +314,12 @@ class MouseDroidMCPServer:
         # here. We intentionally keep this thin — implementing the full
         # SDK adapter is out of scope for the initial integration; the
         # bridge + providers above are SDK-agnostic and exercised by
-        # tests directly.
-        _log.info("mcp_serve_loop_started", transport=self._cfg.transport)
-        try:
+        # tests directly. The branch is gated behind the optional `mcp`
+        # extra so it cannot run in the standard CI environment.
+        _log.info("mcp_serve_loop_started", transport=self._cfg.transport)  # pragma: no cover
+        try:  # pragma: no cover
             while self._running:
-                await asyncio.sleep(self._cfg.request_timeout_s)
+                await asyncio.sleep(idle_period_s)
         except asyncio.CancelledError:
             raise
 
