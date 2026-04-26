@@ -66,7 +66,11 @@ async def test_velocity_roundtrip_clamps_and_dispatches(
         await asyncio.sleep(jetson_settings.esp32.smoke_test_settle_s)
         reading = await driver.read_encoders()
         # Structural assertion: every encoder field is well-typed.
-        assert reading.left_velocity_mps == pytest.approx(reading.left_velocity_mps, rel=1.0)
+        assert isinstance(reading.left_velocity_mps, float)
+        assert isinstance(reading.right_velocity_mps, float)
+        assert isinstance(reading.odometry_x_m, float)
+        assert isinstance(reading.odometry_y_m, float)
+        assert isinstance(reading.heading_rad, float)
         assert isinstance(reading.timestamp, float)
         # Motion-quality assertion only when motion was actually requested.
         if jetson_settings.esp32.smoke_test_allow_motion and not jetson_settings.mock_hardware:

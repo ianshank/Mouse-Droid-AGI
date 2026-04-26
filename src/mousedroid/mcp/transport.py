@@ -100,53 +100,46 @@ class MCPTransportAdapter:
             await self.sdk_server.run(read, write, self.sdk_server.create_initialization_options())
 
     async def _serve_sse(self) -> None:
-        """Run the SDK over Server-Sent Events on the configured host/port."""
-        import mcp.server.sse as _sse
+        """SSE transport — currently disabled pending proper integration.
 
-        transport = _sse.SseServerTransport(endpoint="/messages")
-        await self._run_http_server(
-            transport.connect_sse,
-            host=self.server._cfg.host,
-            port=self.server._cfg.port,
+        The MCP SDK's :class:`mcp.server.sse.SseServerTransport.connect_sse`
+        is an :func:`~contextlib.asynccontextmanager`, not an ASGI app, so
+        the previous ``Mount("/", app=connect_sse)`` shim was incorrect.
+        Implementing SSE properly requires:
+
+        1. A Starlette ``Route("/sse", handle_sse)`` whose handler enters
+           the ``connect_sse`` context manager and calls
+           ``sdk_server.run(read, write, init_options)`` inside it.
+        2. A separate ``Mount("/messages/", transport.handle_post_message)``
+           for client POST traffic.
+        3. Bearer-token middleware on Starlette so the token validated by
+           :class:`MCPConfig` is enforced per-request — the current
+           callbacks do not propagate ``token`` into ``call_tool``.
+
+        Until those land, we refuse to bind. ``stdio`` remains fully
+        functional and is the recommended transport for local clients
+        (Claude Desktop, Claude Code).
+        """
+        msg = (
+            "SSE transport not yet implemented end-to-end "
+            "(see MCP_NEXT_STEPS.md P0 'transport bind-up' follow-ups). "
+            "Use mcp.transport='stdio' or set mcp.bind_transport=false."
         )
+        raise NotImplementedError(msg)
 
     async def _serve_streamable_http(self) -> None:
-        """Run the SDK over streamable HTTP on the configured host/port.
+        """Streamable HTTP transport — currently disabled.
 
-        The SDK's ``StreamableHTTPServerTransport`` requires an
-        ``mcp_session_id``; we pass ``None`` to let it generate one per
-        connection (stateless deployment). Future revisions can promote
-        this to a config field if multi-tenant session pinning becomes
-        a requirement.
+        Same status as :meth:`_serve_sse` — the bearer-token middleware
+        and Starlette wiring need additional work before this is safe to
+        expose. Tracked in MCP_NEXT_STEPS.md P0 follow-ups.
         """
-        import mcp.server.streamable_http as _http
-
-        transport = _http.StreamableHTTPServerTransport(mcp_session_id=None)
-        await self._run_http_server(
-            transport.handle_request,
-            host=self.server._cfg.host,
-            port=self.server._cfg.port,
+        msg = (
+            "streamable_http transport not yet implemented end-to-end "
+            "(see MCP_NEXT_STEPS.md P0 'transport bind-up' follow-ups). "
+            "Use mcp.transport='stdio' or set mcp.bind_transport=false."
         )
-
-    async def _run_http_server(self, handler: Any, *, host: str, port: int) -> None:
-        """Run an HTTP server using the SDK's transport handler.
-
-        Extracted so unit tests can monkeypatch the bind step without
-        actually binding a socket.
-
-        Args:
-            handler: The SDK transport's ASGI/Starlette-compatible
-                handler.
-            host: Bind address (sourced from :class:`MCPConfig`).
-            port: Bind port (sourced from :class:`MCPConfig`).
-        """
-        import uvicorn
-        from starlette.applications import Starlette
-        from starlette.routing import Mount
-
-        app = Starlette(routes=[Mount("/", app=handler)])
-        config = uvicorn.Config(app, host=host, port=port, log_level="info")
-        await uvicorn.Server(config).serve()
+        raise NotImplementedError(msg)
 
     # ------------------------------------------------------------------
     # SDK callbacks — thin delegates onto :class:`MouseDroidMCPServer`.

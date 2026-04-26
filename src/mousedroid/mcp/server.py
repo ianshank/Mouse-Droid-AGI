@@ -197,8 +197,7 @@ class MouseDroidMCPServer:
             registered (defensive — keeps the SDK list_tools response
             well-formed even if a tool is removed mid-session).
         """
-        spec = self._bridge._registry.get(name)
-        return spec.description if spec is not None else name
+        return self._bridge.get_tool_description(name)
 
     def list_prompt_names(self) -> list[str]:
         """Prompt identifiers exposed to MCP clients."""

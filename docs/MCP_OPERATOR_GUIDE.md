@@ -71,30 +71,27 @@ Add a `.mcp.json` at the project root (or the configured config dir):
 }
 ```
 
-## Networked transports (SSE / streamable HTTP)
+## Networked transports (SSE / streamable HTTP) — not yet supported
 
-For multi-machine setups bind on the loopback (or a private network
-behind firewall rules) and require a bearer token:
+The `sse` and `streamable_http` transports are **deferred to a follow-up
+PR**. Setting `mcp.transport=sse` (or `streamable_http`) with
+`mcp.bind_transport=true` will currently raise `NotImplementedError`
+at startup with a pointer to this section.
 
-```yaml
-# config/local_mcp.yaml — overlay this on top of default.yaml
-mcp:
-  enabled: true
-  bind_transport: true
-  transport: streamable_http   # or "sse"
-  host: 127.0.0.1              # MUST be loopback unless a token is set
-  port: 8765
-```
+Why deferred:
 
-Set the bearer token in the environment (`MCPConfig` validators reject
-non-loopback bindings without one):
+* `mcp.server.sse.SseServerTransport.connect_sse` is an
+  `@asynccontextmanager`, not an ASGI app — proper integration needs a
+  Starlette `Route` that enters the context inside its handler and
+  separately mounts `transport.handle_post_message` for client POSTs.
+* The bearer token validated by `MCPConfig` is not yet propagated into
+  per-request `call_tool(token=...)`, so any SSE/HTTP bind would
+  bypass the existing auth check on the bridge.
 
-```bash
-export MOUSEDROID_MCP_TOKEN="$(openssl rand -hex 32)"
-```
-
-Clients send the token via `Authorization: Bearer <token>`. See
-`src/mousedroid/mcp/auth.py` for the validator.
+Tracked in [docs/MCP_NEXT_STEPS.md](MCP_NEXT_STEPS.md) under the P0
+"transport bind-up" follow-ups. Until then, **stdio is the only
+production-supported transport** — it covers Claude Desktop, Claude Code,
+and any subprocess launcher (systemd, container ENTRYPOINT).
 
 ---
 
