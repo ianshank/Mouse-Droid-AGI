@@ -4,6 +4,106 @@ Prioritised development items after the `hardware/jetson-full-smoke` branch merg
 
 ---
 
+## P0 — Physical AI Roadmap (Phases 2 → 6)
+
+Phase 1 (per-episode domain randomization for RSSM pretraining) ships in this
+branch. Subsequent phases close the remaining three Physical AI gaps and each
+lands in an isolated PR off the default branch. Dependency direction is
+strictly **Phase 1 → 2 → 3 → 4**; Phases 5 and 6 are deferred until Phase 3b
+has been in production for ≥30 days.
+
+### Phase 2 — Real-Episode Replay Loop (sim-to-real feedback)
+
+Wire the existing LMDB experience logger back into the offline training
+pipeline so successes and failures from real-world rollouts continuously refine
+the RSSM and the Constitutional-RL policy. Closes the second of four gaps.
+
+**Scope:**
+- `src/mousedroid/training/replay/lmdb_reader.py` — async streaming iterator
+  over an LMDB env (chunks of 64 records via `asyncio.to_thread`; never load
+  the whole DB into RAM on the 8 GB Orin)
+- `src/mousedroid/training/replay/mixer.py` — ratio-controlled sampler over
+  `(sim_iter, real_iter)` with a deterministic `numpy.random.Generator`; ramped
+  `alpha` from 0.0 → target over a configurable number of steps (RL-Co two-stage)
+- `training/replay_real_episodes.py` — CLI with `--dry-run`, `--use-real-replay`
+- `experience/record.py` already carries `schema_version = 1`; add a versioned
+  reader contract that refuses incompatible records with a counter
+- Auxiliary BC-style supervised loss in PPO via `OfflineRLConfig.real_supervised_weight`
+
+**Acceptance:**
+- Empty LMDB produces a clean no-op (logged warning, training proceeds)
+- Mixer's realized ratio over 10 k draws is within 1% of target
+- Integration test runs the pipeline end-to-end on a 10-episode synthetic LMDB
+  and verifies a checkpoint is produced
+- Golden RSSM loss curve at fixed seed within ±1% of baseline
+
+### Phase 3a — VLA Protocol + `MockVLA`
+
+Add an end-to-end Vision-Language-Action policy alongside the existing
+`llm_gateway` + navigation-agent split, gated by a new `LoopConfig.policy_selector`
+flag (default `nav_agent` → backwards compatible).
+
+**Scope:**
+- `src/mousedroid/vla/policy.py` — `VLAObservation`, `VLAAction`, `VLAConfig`,
+  `@runtime_checkable VLAPolicyProtocol`, `MockVLA`
+- Factory hook `build_vla_policy` next to `build_llm_gateway` in `factory.py`
+- Orchestrator branch on `cfg.loop.policy_selector ∈ {nav_agent, vla, auto}`
+- Latency budget: `inference_timeout_s` defaults to `1.0 / cfg.loop.control_hz`;
+  on `TimeoutError` the safety monitor emits `vla_timeout_safe_stop`
+
+### Phase 3b — `DistilledVLAOnnx` + HF Weights Pull
+
+Plug a distilled VLA student (SmolVLA / Pi0-FAST / distilled OpenVLA) behind
+the `VLAPolicyProtocol`. Reuse `weights_manager.download_weights_from_huggingface`.
+
+**Scope:**
+- `src/mousedroid/vla/policy.py::DistilledVLAOnnx` — ORT InferenceSession with
+  `TensorrtExecutionProvider` → `CUDAExecutionProvider` → `CPUExecutionProvider`
+- New `[vla]` extra in `pyproject.toml`:
+  ```toml
+  vla = [
+      "onnxruntime-gpu>=1.18; platform_machine=='aarch64'",
+      "onnxruntime>=1.18;     platform_machine!='aarch64'",
+      "transformers>=4.40",
+  ]
+  ```
+- Import-graph isolation test: `import mousedroid.vla.policy` MUST NOT import
+  `onnxruntime`. Lazy import inside `DistilledVLAOnnx.warmup`.
+- Optional CI matrix entry that installs `[vla]` and runs the unit + smoke tests
+  (advisory for the first PR; promote to required after a green week)
+
+### Phase 4 — VLM-Derived Dense Rewards (VLAC)
+
+Replace handcrafted reward shaping in `train_constitutional_rl.py` with VLM-
+derived progress rewards. Plug into the existing `MultiObjectiveRewardModel`
+via a new head — do **not** fork the aggregator.
+
+**Scope:**
+- `src/mousedroid/reward/vlm_progress.py` — `VLMProgressHead` registers as a
+  weighted term alongside truthfulness/helpfulness/safety/engagement
+- `RewardConfig.weight_vlm_progress: float = 0.0` (off by default for safety)
+- LRU caching keyed by `(prev_hash, curr_hash, instruction_hash)` via
+  `cachetools.LRUCache(maxsize=cfg.reward.vlm_progress.cache_size)` — never
+  `functools.lru_cache` (no memory cap)
+- Constitutional override hypothesis test: a contrived high VLM reward that
+  violates Law 1 must still be Law-1-blocked (multiplicative sigmoid gate
+  preserved)
+
+### Phase 5 (stretch) — Real Physics Simulator
+
+Replace the synthetic-sequence data generator with a real physics simulator
+(MuJoCo MJX or Isaac Sim Lite). Decisions: mecanum wheel model fidelity, Orin
+Nano in-the-loop sim vs offline-only, texture/mesh randomization. Notes-only
+until Phase 3b has been in production ≥30 days.
+
+### Phase 6 (stretch) — Real-time Co-training
+
+Fine-tune the VLA policy on-device from continuously-logged real episodes
+using LoRA-style adapters so we don't blow the 8 GB Orin RAM budget. Builds on
+Phases 2 and 3.
+
+---
+
 ## P0 — Deployment Hardening (Immediate)
 
 ### Automate Jetson Config Overlay Sync

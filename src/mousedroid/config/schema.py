@@ -250,6 +250,74 @@ class CuriosityConfig(BaseModel):
     )
 
 
+class RangeF(BaseModel):
+    """Inclusive ``[low, high]`` range for a randomly sampled float parameter."""
+
+    low: float = Field(description="Inclusive lower bound")
+    high: float = Field(description="Inclusive upper bound")
+
+    @model_validator(mode="after")
+    def _check_ordered(self) -> Self:
+        if self.low > self.high:
+            msg = f"RangeF.low ({self.low}) must be <= high ({self.high})"
+            raise ValueError(msg)
+        return self
+
+
+class DomainRandomizationConfig(BaseModel):
+    """Per-episode randomization for sim-to-real RSSM pretraining (Phase 1).
+
+    All ranges are configurable so production / mock / mission-specific YAMLs
+    can widen or narrow the noise envelope without code changes. Setting
+    ``enabled=False`` produces empty :class:`EpisodeParams` and the data
+    generator path is byte-identical to the pre-feature output.
+    """
+
+    enabled: bool = Field(
+        True,
+        description="Master switch — when False every sample yields empty EpisodeParams",
+    )
+
+    # --- Visual / camera ---
+    brightness: RangeF = Field(default_factory=lambda: RangeF(low=0.6, high=1.4))
+    contrast: RangeF = Field(default_factory=lambda: RangeF(low=0.7, high=1.3))
+    hue_shift_deg: RangeF = Field(default_factory=lambda: RangeF(low=-15.0, high=15.0))
+    gaussian_noise_std: RangeF = Field(default_factory=lambda: RangeF(low=0.0, high=0.04))
+    motion_blur_px: RangeF = Field(default_factory=lambda: RangeF(low=0.0, high=2.5))
+
+    # --- Camera intrinsics / extrinsics jitter ---
+    fov_deg: RangeF = Field(default_factory=lambda: RangeF(low=58.0, high=72.0))
+    cam_pitch_deg: RangeF = Field(default_factory=lambda: RangeF(low=-3.0, high=3.0))
+    cam_yaw_deg: RangeF = Field(default_factory=lambda: RangeF(low=-2.0, high=2.0))
+    cam_height_m: RangeF = Field(default_factory=lambda: RangeF(low=0.085, high=0.115))
+
+    # --- Range sensor (HC-SR04) ---
+    ultrasonic_noise_m: RangeF = Field(default_factory=lambda: RangeF(low=0.0, high=0.03))
+    ultrasonic_dropout_prob: RangeF = Field(default_factory=lambda: RangeF(low=0.0, high=0.05))
+
+    # --- Mecanum chassis dynamics ---
+    wheel_friction: RangeF = Field(default_factory=lambda: RangeF(low=0.7, high=1.3))
+    wheel_slip: RangeF = Field(default_factory=lambda: RangeF(low=0.0, high=0.15))
+    chassis_mass_kg: RangeF = Field(default_factory=lambda: RangeF(low=2.4, high=3.0))
+    motor_gain: RangeF = Field(default_factory=lambda: RangeF(low=0.85, high=1.15))
+
+    # --- Comms latency (ESP32 <-> Jetson) ---
+    uart_latency_ms: RangeF = Field(default_factory=lambda: RangeF(low=2.0, high=18.0))
+    encoder_dropout_prob: RangeF = Field(default_factory=lambda: RangeF(low=0.0, high=0.02))
+
+    # --- External disturbance ---
+    push_force_n: RangeF = Field(default_factory=lambda: RangeF(low=0.0, high=1.5))
+    push_event_prob: float = Field(
+        0.05,
+        ge=0.0,
+        le=1.0,
+        description="Per-episode probability of an external push disturbance occurring",
+    )
+
+    # --- Feature-space (post-CNN) noise applied during data generation ---
+    feature_noise_std: RangeF = Field(default_factory=lambda: RangeF(low=0.0, high=0.02))
+
+
 class ESP32Config(BaseModel):
     """ESP32 communication configuration for Wave Rover motor control."""
 
@@ -2481,6 +2549,13 @@ class Settings(BaseSettings):
     llm: LLMConfig = Field(default_factory=_settings_default_factory(LLMConfig))
     reward: RewardConfig = Field(default_factory=_settings_default_factory(RewardConfig))
     curiosity: CuriosityConfig = Field(default_factory=_settings_default_factory(CuriosityConfig))
+    domain_randomization: DomainRandomizationConfig = Field(
+        default_factory=_settings_default_factory(DomainRandomizationConfig),
+        description=(
+            "Per-episode sim-to-real randomization for RSSM data generation; "
+            "set ``enabled: false`` for byte-identical legacy behaviour."
+        ),
+    )
     metacognitive: MetacognitiveConfig = Field(
         default_factory=_settings_default_factory(MetacognitiveConfig)
     )

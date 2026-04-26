@@ -81,6 +81,11 @@ runs/
 wandb/
 mlruns/
 training/data/sequences.pt
+training/data/*.pt
+training/data/*.npz
+# Phase 1 — Domain Randomization sample dumps (reproducibility audits)
+training/data/dr_samples/
+training/data/dr_dumps/
 
 # Local-only training configs (machine-specific GPU settings)
 config/local_dual_stream_training.yaml

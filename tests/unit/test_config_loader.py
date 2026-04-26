@@ -74,6 +74,52 @@ def test_load_settings_with_overlay(tmp_path: Path):
     assert settings.debug is True
 
 
+def test_load_settings_domain_randomization_block(tmp_path: Path) -> None:
+    """Phase 1 — DR YAML block round-trips into the Settings model."""
+    cfg_dir = tmp_path / "config"
+    cfg_dir.mkdir()
+    default = {
+        "mock_hardware": True,
+        "domain_randomization": {
+            "enabled": True,
+            "brightness": {"low": 0.7, "high": 1.3},
+            "ultrasonic_dropout_prob": {"low": 0.0, "high": 0.1},
+            "push_event_prob": 0.05,
+        },
+    }
+    (cfg_dir / "default.yaml").write_text(yaml.dump(default))
+    settings = load_settings(config_dir=cfg_dir)
+
+    dr = settings.domain_randomization
+    assert dr.enabled is True
+    assert dr.brightness.low == 0.7
+    assert dr.brightness.high == 1.3
+    assert dr.ultrasonic_dropout_prob.high == 0.1
+    assert dr.push_event_prob == 0.05
+
+
+def test_load_settings_domain_randomization_overlay(tmp_path: Path) -> None:
+    """Overlay can disable DR without restating every range."""
+    cfg_dir = tmp_path / "config"
+    cfg_dir.mkdir()
+    default = {
+        "mock_hardware": True,
+        "domain_randomization": {
+            "enabled": True,
+            "brightness": {"low": 0.6, "high": 1.4},
+        },
+    }
+    (cfg_dir / "default.yaml").write_text(yaml.dump(default))
+    overlay = tmp_path / "overlay.yaml"
+    overlay.write_text(yaml.dump({"domain_randomization": {"enabled": False}}))
+    settings = load_settings(overlay, config_dir=cfg_dir)
+
+    assert settings.domain_randomization.enabled is False
+    # Untouched ranges retain their defaults from the base file.
+    assert settings.domain_randomization.brightness.low == 0.6
+    assert settings.domain_randomization.brightness.high == 1.4
+
+
 def test_load_settings_secure_metrics_overlay(tmp_path: Path):
     cfg_dir = tmp_path / "config"
     cfg_dir.mkdir()

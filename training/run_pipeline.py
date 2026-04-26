@@ -58,22 +58,50 @@ def _require_existing_path(path: Path, *, description: str, phase: int) -> Path:
     raise FileNotFoundError(msg)
 
 
-def run_phase_0_data_gen(cfg: Settings) -> Path:
+def run_phase_0_data_gen(cfg: Settings, *, seed: int | None = None) -> Path:
     """Phase 0: Generate synthetic training data.
+
+    Args:
+        cfg: Root settings.
+        seed: Optional integer seed forwarded to the data generator. Only
+            consumed when ``cfg.domain_randomization.enabled`` is true.
 
     Returns:
         Path to the data directory containing sequences.pt.
     """
+    dr_cfg = cfg.domain_randomization
     _log.info(
         "phase_0_start",
         phase="data_generation",
         n_episodes=cfg.training.n_episodes,
         max_steps=cfg.training.sequence_length,
         output_dir=cfg.training.data_dir,
+        domain_randomization_enabled=dr_cfg.enabled,
+        seed=seed,
     )
+    if dr_cfg.enabled:
+        _log.info(
+            "rssm_epoch_randomization",
+            brightness=[dr_cfg.brightness.low, dr_cfg.brightness.high],
+            contrast=[dr_cfg.contrast.low, dr_cfg.contrast.high],
+            ultrasonic_noise_m=[
+                dr_cfg.ultrasonic_noise_m.low,
+                dr_cfg.ultrasonic_noise_m.high,
+            ],
+            ultrasonic_dropout_prob=[
+                dr_cfg.ultrasonic_dropout_prob.low,
+                dr_cfg.ultrasonic_dropout_prob.high,
+            ],
+            wheel_friction=[dr_cfg.wheel_friction.low, dr_cfg.wheel_friction.high],
+            motor_gain=[dr_cfg.motor_gain.low, dr_cfg.motor_gain.high],
+            feature_noise_std=[
+                dr_cfg.feature_noise_std.low,
+                dr_cfg.feature_noise_std.high,
+            ],
+        )
     from training.data_generator import SyntheticSequenceGenerator
 
-    gen = SyntheticSequenceGenerator(cfg)
+    gen = SyntheticSequenceGenerator(cfg, seed=seed)
     output_dir = gen.generate_sequences(
         n_episodes=cfg.training.n_episodes,
         max_steps=cfg.training.sequence_length,

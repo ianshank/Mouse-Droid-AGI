@@ -31,6 +31,24 @@ jetson:
   precision: "fp16"
   workspace_gb: 2.0
 
+# Production overlay tightens DR ranges — production deployments do not
+# train, but if a Jetson is used for occasional fine-tuning we keep the
+# noise envelope conservative.
+domain_randomization:
+  brightness: {low: 0.85, high: 1.15}
+  contrast: {low: 0.9, high: 1.1}
+  gaussian_noise_std: {low: 0.0, high: 0.015}
+  ultrasonic_noise_m: {low: 0.0, high: 0.015}
+  ultrasonic_dropout_prob: {low: 0.0, high: 0.02}
+  wheel_friction: {low: 0.9, high: 1.1}
+  wheel_slip: {low: 0.0, high: 0.05}
+  motor_gain: {low: 0.95, high: 1.05}
+  uart_latency_ms: {low: 2.0, high: 8.0}
+  encoder_dropout_prob: {low: 0.0, high: 0.005}
+  push_force_n: {low: 0.0, high: 0.5}
+  push_event_prob: 0.01
+  feature_noise_std: {low: 0.0, high: 0.005}
+
 llm:
   enabled: true
   model_path: "/opt/mousedroid/models/Phi-3-mini-4k-instruct-q4.gguf"
