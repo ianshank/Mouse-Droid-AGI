@@ -203,6 +203,35 @@ class MouseDroidMCPServer:
         """Prompt identifiers exposed to MCP clients."""
         return [p.name for p in self._prompts]
 
+    def list_prompts(self) -> list[Any]:
+        """Return the full prompt registry (name + description + template).
+
+        Returns:
+            A list of :class:`~mousedroid.mcp.prompts.MCPPrompt` records
+            so the transport adapter can build typed responses without
+            re-deriving descriptions.
+        """
+        return list(self._prompts)
+
+    def get_prompt(self, name: str) -> Any:
+        """Look up a single prompt by name.
+
+        Args:
+            name: Prompt identifier (must appear in
+                :meth:`list_prompt_names`).
+
+        Returns:
+            The :class:`~mousedroid.mcp.prompts.MCPPrompt` record.
+
+        Raises:
+            KeyError: When no prompt matches ``name``.
+        """
+        for prompt in self._prompts:
+            if prompt.name == name:
+                return prompt
+        msg = f"unknown MCP prompt: {name!r}"
+        raise KeyError(msg)
+
     def list_resource_uris(self) -> list[str]:
         """Resource URIs exposed to MCP clients."""
         uris: list[str] = []

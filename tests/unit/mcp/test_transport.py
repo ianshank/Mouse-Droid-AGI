@@ -167,6 +167,40 @@ class TestCallbacks:
         assert adapter is not None
         prompts = await adapter._on_list_prompts()
         assert all(p.name for p in prompts)
+        assert all(p.description for p in prompts)
+
+    async def test_get_prompt_callback_returns_template(
+        self,
+        mcp_cfg: MCPConfig,
+        root_settings: Settings,
+        safe_safety_monitor: object,
+    ) -> None:
+        from mousedroid.mcp.transport import build_transport_adapter
+
+        server = _make_server(mcp_cfg, root_settings, safe_safety_monitor)
+        adapter = build_transport_adapter(server)
+        assert adapter is not None
+        listed = await adapter._on_list_prompts()
+        first_name = listed[0].name
+        result = await adapter._on_get_prompt(first_name, None)
+        assert result.description
+        assert len(result.messages) == 1
+        assert result.messages[0].role == "user"
+        assert result.messages[0].content.text  # non-empty template
+
+    async def test_get_prompt_callback_unknown_name_raises(
+        self,
+        mcp_cfg: MCPConfig,
+        root_settings: Settings,
+        safe_safety_monitor: object,
+    ) -> None:
+        from mousedroid.mcp.transport import build_transport_adapter
+
+        server = _make_server(mcp_cfg, root_settings, safe_safety_monitor)
+        adapter = build_transport_adapter(server)
+        assert adapter is not None
+        with pytest.raises(KeyError, match="not-a-real-prompt"):
+            await adapter._on_get_prompt("not-a-real-prompt", None)
 
 
 @requires_mcp_sdk

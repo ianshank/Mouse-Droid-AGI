@@ -66,6 +66,45 @@ class TestMCPConfigValidators:
         cfg = MCPConfig.model_validate({"enabled": True, "transport": "stdio", "host": any_iface})
         assert cfg.host == any_iface
 
+    def test_bind_transport_with_stdio_allowed(self) -> None:
+        cfg = MCPConfig.model_validate(
+            {"enabled": True, "transport": "stdio", "bind_transport": True}
+        )
+        assert cfg.bind_transport is True
+
+    def test_bind_transport_with_sse_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MOUSEDROID_MCP_TOKEN", "abc123")
+        with pytest.raises(ValueError, match="bind_transport"):
+            MCPConfig.model_validate(
+                {
+                    "enabled": True,
+                    "transport": "sse",
+                    "host": "127.0.0.1",
+                    "bind_transport": True,
+                }
+            )
+
+    def test_bind_transport_with_streamable_http_rejected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MOUSEDROID_MCP_TOKEN", "abc123")
+        with pytest.raises(ValueError, match="bind_transport"):
+            MCPConfig.model_validate(
+                {
+                    "enabled": True,
+                    "transport": "streamable_http",
+                    "host": "127.0.0.1",
+                    "bind_transport": True,
+                }
+            )
+
+    def test_bind_transport_false_with_sse_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Without bind_transport, SSE config still loads (no socket bound)."""
+        monkeypatch.setenv("MOUSEDROID_MCP_TOKEN", "abc123")
+        cfg = MCPConfig.model_validate({"enabled": True, "transport": "sse", "host": "127.0.0.1"})
+        assert cfg.transport == "sse"
+        assert cfg.bind_transport is False
+
 
 class TestSettingsIntegration:
     def test_settings_mcp_default_none(self) -> None:

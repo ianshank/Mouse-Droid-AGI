@@ -84,6 +84,7 @@ class MCPTransportAdapter:
         self.sdk_server.list_resources()(self._on_list_resources)
         self.sdk_server.read_resource()(self._on_read_resource)
         self.sdk_server.list_prompts()(self._on_list_prompts)
+        self.sdk_server.get_prompt()(self._on_get_prompt)
 
     async def _serve_stdio(self) -> None:  # pragma: no cover - binds real stdio
         """Run the SDK over stdio (parent process owns the connection).
@@ -197,10 +198,40 @@ class MCPTransportAdapter:
         return json.dumps(payload, default=str)
 
     async def _on_list_prompts(self) -> list[Any]:
-        """Return the available prompts as ``mcp.types.Prompt`` objects."""
+        """Return the available prompts as ``mcp.types.Prompt`` objects.
+
+        Pulls description from each ``MCPPrompt`` so clients see something
+        meaningful next to the name.
+        """
         from mcp import types as _mt
 
-        return [_mt.Prompt(name=name) for name in self.server.list_prompt_names()]
+        return [
+            _mt.Prompt(name=p.name, description=p.description) for p in self.server.list_prompts()
+        ]
+
+    async def _on_get_prompt(self, name: str, arguments: dict[str, str] | None) -> Any:
+        """Return the rendered prompt for ``name`` as ``mcp.types.GetPromptResult``.
+
+        The MouseDroid prompts are static templates (no arg substitution
+        in this revision). ``arguments`` is accepted to match the SDK
+        signature; future revisions can interpolate.
+
+        Raises:
+            KeyError: When ``name`` is not in the prompt registry. The
+                SDK surfaces this as an MCP error to the client.
+        """
+        from mcp import types as _mt
+
+        prompt = self.server.get_prompt(name)
+        return _mt.GetPromptResult(
+            description=prompt.description,
+            messages=[
+                _mt.PromptMessage(
+                    role="user",
+                    content=_mt.TextContent(type="text", text=prompt.template),
+                )
+            ],
+        )
 
 
 def _resource_name(uri: str) -> str:

@@ -2383,6 +2383,37 @@ class MCPConfig(BaseModel):
             raise ValueError(msg)
         return self
 
+    @model_validator(mode="after")
+    def _bind_transport_only_for_supported(self) -> Self:
+        """Reject ``bind_transport=true`` with not-yet-supported transports.
+
+        SSE and streamable_http transports currently raise
+        :class:`NotImplementedError` from
+        :class:`~mousedroid.mcp.transport.MCPTransportAdapter`. Because
+        ``_serve_loop`` runs as a background task, that failure would
+        only surface in logs — easy to miss in production. Failing
+        validation at config load makes the gap obvious immediately.
+
+        Returns:
+            The validated config instance.
+
+        Raises:
+            ValueError: If ``bind_transport`` is True with a transport
+                that is not yet wired end-to-end.
+        """
+        if not self.bind_transport:
+            return self
+        supported = {"stdio"}
+        if self.transport not in supported:
+            msg = (
+                f"mcp.bind_transport=true is only supported with "
+                f"mcp.transport in {sorted(supported)} for now; "
+                f"got mcp.transport={self.transport!r}. "
+                "SSE and streamable_http are tracked in MCP_NEXT_STEPS.md."
+            )
+            raise ValueError(msg)
+        return self
+
 
 class Settings(BaseSettings):
     """Root configuration — single source of truth for all settings.
