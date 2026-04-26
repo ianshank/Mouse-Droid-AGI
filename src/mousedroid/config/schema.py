@@ -269,6 +269,45 @@ class ESP32Config(BaseModel):
     keepalive_hz: float = Field(10.0, gt=0, description="Motor command keepalive rate (Hz)")
     max_velocity_mps: float = Field(0.5, gt=0, description="Max velocity magnitude (m/s)")
     max_omega_rads: float = Field(2.0, gt=0, description="Max angular velocity (rad/s)")
+    smoke_test_velocity_mps: float = Field(
+        0.05,
+        gt=0,
+        description=(
+            "Target forward velocity for the rover hardware smoke test "
+            "(see tests/hardware/test_motor_smoke.py). Kept low so an "
+            "untethered rover can stop within tabletop bounds."
+        ),
+    )
+    smoke_test_settle_s: float = Field(
+        0.5,
+        gt=0,
+        description="Settle time after sending velocity before reading encoders (s)",
+    )
+    smoke_test_min_velocity_fraction: float = Field(
+        0.5,
+        gt=0,
+        le=1.0,
+        description=(
+            "Minimum encoder velocity expressed as a fraction of the "
+            "setpoint that the smoke test asserts on real hardware."
+        ),
+    )
+    smoke_test_allow_motion: bool = Field(
+        False,
+        description=(
+            "Hard safety gate for tests/hardware/test_motor_smoke.py. "
+            "When False (default), the velocity round-trip stops short of "
+            "actually sending a non-zero command — useful when the rover is "
+            "on a table or otherwise unattended. Set True (YAML override or "
+            "MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION=true) only when the "
+            "rover is on rollers / tethered / monitored."
+        ),
+    )
+    emergency_stop_budget_ms: float = Field(
+        50.0,
+        gt=0,
+        description="Maximum acceptable latency for emergency_stop ack (ms)",
+    )
     mock_battery_v: float = Field(
         12.0,
         gt=0,
@@ -2237,8 +2276,16 @@ class MCPConfig(BaseModel):
             "calibrate_ultrasonic",
             "tensorrt_compile",
             "export_experience",
+            "set_velocity",
         ],
-        description="Tools considered actuation/side-effecting (config-driven, not hardcoded)",
+        description=(
+            "Tools considered actuation/side-effecting (config-driven, not hardcoded). "
+            "`emergency_stop` is intentionally NOT in this default list — refusing "
+            "an e-stop call during a safety emergency would defeat its purpose. "
+            "`read_encoders` is read-only and stays out of the list as well. "
+            "Existing YAML overrides win; this default only changes for clients that "
+            "never set the field."
+        ),
     )
     expose_actuation_tools: bool = Field(
         False,
@@ -2268,6 +2315,26 @@ class MCPConfig(BaseModel):
     redact_key_pattern: str = Field(
         r"(?i)token|secret|api[_-]?key|password|credential",
         description="Regex (case-insensitive) for keys whose values must be redacted",
+    )
+    bind_transport: bool = Field(
+        False,
+        description=(
+            "Bind the configured transport via the optional `mcp` SDK. "
+            "Defaults to False so unit tests and in-process callers keep "
+            "the bridge usable without spinning up a real server. Set "
+            "True in deployment YAML (or via MOUSEDROID_MCP__BIND_TRANSPORT=true) "
+            "to expose the server over stdio/SSE/streamable_http."
+        ),
+    )
+    smoke_test_poll_rps: float = Field(
+        5.0,
+        gt=0,
+        description="MCP resource polling rate during the rover hardware smoke (RPS)",
+    )
+    smoke_test_duration_s: float = Field(
+        2.0,
+        gt=0,
+        description="Duration of the MCP-polling-during-actuation smoke window (s)",
     )
 
     @field_validator("tools_denylist")
@@ -2312,6 +2379,37 @@ class MCPConfig(BaseModel):
             msg = (
                 f"MCP enabled on non-loopback host '{self.host}' requires the "
                 f"{self.auth_token_env_var} environment variable to be set"
+            )
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _bind_transport_only_for_supported(self) -> Self:
+        """Reject ``bind_transport=true`` with not-yet-supported transports.
+
+        SSE and streamable_http transports currently raise
+        :class:`NotImplementedError` from
+        :class:`~mousedroid.mcp.transport.MCPTransportAdapter`. Because
+        ``_serve_loop`` runs as a background task, that failure would
+        only surface in logs — easy to miss in production. Failing
+        validation at config load makes the gap obvious immediately.
+
+        Returns:
+            The validated config instance.
+
+        Raises:
+            ValueError: If ``bind_transport`` is True with a transport
+                that is not yet wired end-to-end.
+        """
+        if not self.bind_transport:
+            return self
+        supported = {"stdio"}
+        if self.transport not in supported:
+            msg = (
+                f"mcp.bind_transport=true is only supported with "
+                f"mcp.transport in {sorted(supported)} for now; "
+                f"got mcp.transport={self.transport!r}. "
+                "SSE and streamable_http are tracked in MCP_NEXT_STEPS.md."
             )
             raise ValueError(msg)
         return self

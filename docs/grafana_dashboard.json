@@ -938,6 +938,140 @@
         },
         "textMode": "auto"
       }
+    },
+    {
+      "id": 15,
+      "title": "MCP Requests (rate per second)",
+      "description": "Per-second MCP request rate from mousedroid_mcp_requests counter. A flat line at 0 means no clients connected; a sustained rate matches the configured sample_telemetry_hz when streaming consumers are present.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 48
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "rate(mousedroid_mcp_requests[1m])",
+          "legendFormat": "requests/s",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "showLegend": true,
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 16,
+      "title": "MCP Tool Calls by Tool/Result",
+      "description": "Total tool-call invocations broken down by tool name and result label (ok / error / denied / actuation_disabled / refused_emergency / rate_limited / circuit_open / timeout). Useful for spotting tools that consistently fail or hit the safety/circuit gates.",
+      "type": "table",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 48
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "sum by (tool, result) (mousedroid_mcp_tool_calls)",
+          "legendFormat": "{{tool}} / {{result}}",
+          "refId": "A",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 17,
+      "title": "MCP Request Latency p50 / p95 / p99 (ms)",
+      "description": "Histogram percentiles of the mousedroid_mcp_request_latency_ms series. Watch for p95 > 500 ms (matches the MCPHighLatency alert).",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 56
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, rate(mousedroid_mcp_request_latency_ms_bucket[5m]))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(mousedroid_mcp_request_latency_ms_bucket[5m]))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(mousedroid_mcp_request_latency_ms_bucket[5m]))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "showLegend": true,
+          "placement": "bottom"
+        }
+      }
     }
   ],
   "refresh": "5s",

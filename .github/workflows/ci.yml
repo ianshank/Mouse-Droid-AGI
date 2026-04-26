@@ -84,7 +84,7 @@ jobs:
                   cache: pip
 
             - name: Install dependencies
-              run: pip install -e ".[dev,telemetry]"
+              run: pip install -e ".[dev,telemetry,mcp]"
 
             - name: Run tests with coverage
               run: |
@@ -116,7 +116,7 @@ jobs:
                   cache: pip
 
             - name: Install dependencies
-              run: pip install -e ".[dev,telemetry]"
+              run: pip install -e ".[dev,telemetry,mcp]"
 
             - name: Install promtool (graceful skip if unavailable)
               id: promtool

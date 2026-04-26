@@ -1179,6 +1179,21 @@ def build_orchestrator(cfg: Settings) -> object:
         gcp_cfg=cfg.gcp,
     )
 
+    # Motor tools — only registered for the rover platform; the arm
+    # platform has its own actuation surface and shouldn't expose
+    # rover-specific velocity controls. Import is local so static
+    # analysers don't drag the runtime symbol into the TYPE_CHECKING
+    # block above.
+    from mousedroid.config.schema import PlatformType as _Platform
+
+    if cfg.platform == _Platform.MOUSE_DROID:
+        from mousedroid.common.tools.motor_tools import MotorToolDeps, register_motor_tools
+
+        register_motor_tools(
+            _tool_registry,
+            MotorToolDeps(esp32=esp32, cfg=cfg),
+        )
+
     # MCP server (optional — disabled by default). Built after the tool
     # registry so it can bridge real tools, and after telemetry/log
     # buffers so it can expose them as resources. Memory tier is wired
