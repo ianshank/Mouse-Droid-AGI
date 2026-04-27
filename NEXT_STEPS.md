@@ -77,7 +77,7 @@ flag (default `nav_agent` → backwards compatible).
 - 43 new unit tests (`tests/unit/vla/test_policy.py`,
   `tests/unit/orchestrator/test_policy_selector.py`) ✅
 
-### Phase 3b — `DistilledVLAOnnx` + HF Weights Pull
+### Phase 3b — `DistilledVLAOnnx` + HF Weights Pull ✅ LANDED (`feat/phase3b-distilled-onnx-vla`)
 
 Plug a distilled VLA student (SmolVLA / Pi0-FAST / distilled OpenVLA) behind
 the `VLAPolicyProtocol`. Reuse `weights_manager.download_weights_from_huggingface`.
@@ -85,18 +85,21 @@ the `VLAPolicyProtocol`. Reuse `weights_manager.download_weights_from_huggingfac
 **Scope:**
 - `src/mousedroid/vla/policy.py::DistilledVLAOnnx` — ORT InferenceSession with
   `TensorrtExecutionProvider` → `CUDAExecutionProvider` → `CPUExecutionProvider`
-- New `[vla]` extra in `pyproject.toml`:
-  ```toml
-  vla = [
-      "onnxruntime-gpu>=1.18; platform_machine=='aarch64'",
-      "onnxruntime>=1.18;     platform_machine!='aarch64'",
-      "transformers>=4.40",
-  ]
-  ```
+  ✅ (provider intersection preserves requested order; CPU fallback)
+- New `[vla]` extra in `pyproject.toml` (`onnxruntime-gpu` aarch64 /
+  `onnxruntime` non-aarch64 / `transformers` / `huggingface-hub`) ✅
 - Import-graph isolation test: `import mousedroid.vla.policy` MUST NOT import
-  `onnxruntime`. Lazy import inside `DistilledVLAOnnx.warmup`.
+  `onnxruntime`. Lazy import inside `DistilledVLAOnnx.warmup` ✅
+  (subprocess-isolated test in `tests/unit/vla/test_distilled_onnx.py`)
+- `factory._build_distilled_onnx_vla` reuses
+  `weights_manager.download_weights_from_huggingface` with clear error
+  paths for missing-file-and-no-repo / download-failure ✅
+- VLAConfig extended (`model_repo_id`, `model_filename`, `cache_dir`,
+  `providers`, `warmup_iterations`, `h/z/action` IO names) ✅
+- ~30 new unit tests across construction, provider resolution, warmup,
+  predict (incl. shape-mismatch + `no_grad`), and factory wiring ✅
 - Optional CI matrix entry that installs `[vla]` and runs the unit + smoke tests
-  (advisory for the first PR; promote to required after a green week)
+  (advisory for the first PR; promote to required after a green week) — TBD
 
 ### Phase 4 — VLM-Derived Dense Rewards (VLAC)
 

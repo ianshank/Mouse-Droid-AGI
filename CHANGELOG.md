@@ -8,6 +8,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Phase 3b: DistilledVLAOnnx + HF weights pull (`feat/phase3b-distilled-onnx-vla`)
+
+- **`src/mousedroid/vla/policy.py`** — new `DistilledVLAOnnx` class
+  - Wraps an ONNX Runtime `InferenceSession` with provider fallback chain
+    `TensorrtExecutionProvider → CUDAExecutionProvider → CPUExecutionProvider`
+    (configurable via `VLAConfig.providers`); requested providers are
+    intersected with `ort.get_available_providers()` preserving order;
+    falls back to CPU when the intersection is empty
+  - **Lazy** import of `onnxruntime` and `numpy` inside `warmup()` /
+    `predict()` so module import keeps the cold-import budget intact and
+    no ORT runtime is required just to type-check or unit-test
+  - Idempotent `warmup()` (configurable `warmup_iterations`, zero skips
+    dummy runs); `predict(obs)` runs under `torch.no_grad()`, surfaces
+    shape mismatches as `ValueError`, and emits structlog events
+    (`distilled_vla_onnx_warmup_start/_complete`)
+  - Module-level `DEFAULT_ORT_PROVIDERS` constant exported from
+    `mousedroid.vla`
+- **`config/schema.py`** — `VLAConfig` extended with seven Phase 3b fields:
+  `model_repo_id`, `model_filename`, `cache_dir`, `providers`,
+  `warmup_iterations`, `h_input_name`, `z_input_name`,
+  `action_output_name`. `protected_namespaces=()` opts out of pydantic's
+  `model_*` warning so `model_filename` / `model_repo_id` are clean
+- **`factory.py`** — `build_vla_policy` now implements the
+  `"distilled_onnx"` backend via private `_build_distilled_onnx_vla`
+  helper. Reuses `mousedroid.utils.weights_manager.download_weights_from_huggingface`
+  to pull the model when absent and `model_repo_id` is configured;
+  raises a clear `ValueError` when neither a local file nor a repo is
+  available, and when the download fails
+- **`pyproject.toml`** — new `[vla]` extra:
+  `onnxruntime-gpu>=1.18; platform_machine=='aarch64'`,
+  `onnxruntime>=1.18; platform_machine!='aarch64'`,
+  `transformers>=4.40`, `huggingface-hub>=0.20`
+- **Tests (~30 new in `tests/unit/vla/test_distilled_onnx.py`)**
+  - Construction validation (`action_dim`, `confidence`,
+    `warmup_iterations`); `VLAPolicyProtocol` conformance
+  - Pure provider-resolution tests (no ORT required)
+  - **Subprocess import-graph isolation**: asserts
+    `import mousedroid.vla.policy` does NOT pull `onnxruntime` or
+    `transformers` into `sys.modules`
+  - Stubbed-ORT warmup / predict tests (provider intersection,
+    explicit ordering, configurable warmup count, idempotent warmup,
+    shape-mismatch error path, `no_grad` enforcement, h/z named-input
+    routing)
+  - Factory-level tests (missing-file-and-no-repo, existing local file,
+    HuggingFace download invocation, download-failure error path,
+    provider/IO-name/confidence propagation)
+- Updated `tests/unit/vla/test_policy.py::test_distilled_onnx_reserved`
+  → `test_distilled_onnx_requires_model_or_repo` (Phase 3a's
+  `NotImplementedError` is gone now that the backend is implemented)
+
 ### Added — Phase 3a: VLA Protocol + MockVLA (`feat/phase3a-vla-protocol`)
 
 - **`src/mousedroid/vla/`** — new package

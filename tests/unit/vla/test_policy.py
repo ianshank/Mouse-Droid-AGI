@@ -169,9 +169,12 @@ class TestBuildVLAPolicy:
         with pytest.raises(ValueError, match="canned_action length"):
             build_vla_policy(cfg)
 
-    def test_distilled_onnx_reserved(self) -> None:
-        cfg = _make_cfg(backend="distilled_onnx")
-        with pytest.raises(NotImplementedError, match="Phase 3b"):
+    def test_distilled_onnx_requires_model_or_repo(self) -> None:
+        # Phase 3b: backend is now implemented but still surfaces a clear
+        # ValueError when neither a local model nor a HuggingFace repo
+        # are configured.
+        cfg = _make_cfg(backend="distilled_onnx", model_repo_id=None)
+        with pytest.raises(ValueError, match="distilled_onnx model not found"):
             build_vla_policy(cfg)
 
     def test_confidence_propagated_through_factory(self) -> None:

@@ -431,12 +431,22 @@ def build_llm_gateway(cfg: Settings) -> LLMGatewayProtocol:
 
 
 def build_vla_policy(cfg: Settings) -> VLAPolicyProtocol | None:
-    """Build the VLA policy if configured (Phase 3a).
+    """Build the VLA policy if configured.
 
     Returns ``None`` when ``cfg.vla.backend == "none"`` so callers (the
     orchestrator) can skip the VLA branch without inspecting backend
-    strings. The Phase 3b ``"distilled_onnx"`` backend is intentionally
-    not implemented here yet — selecting it raises ``NotImplementedError``.
+    strings.
+
+    Backends:
+        - ``"none"`` (default): VLA path disabled; returns ``None``.
+        - ``"mock"`` (Phase 3a): in-tree zero-dependency :class:`MockVLA`.
+        - ``"distilled_onnx"`` (Phase 3b): :class:`DistilledVLAOnnx`
+          backed by ONNX Runtime. Optionally pulls weights from
+          HuggingFace via
+          :func:`mousedroid.utils.weights_manager.download_weights_from_huggingface`.
+          Requires the ``[vla]`` extra (``onnxruntime`` /
+          ``onnxruntime-gpu``); the import is deferred to
+          :meth:`DistilledVLAOnnx.warmup`.
 
     Args:
         cfg: Root settings.
@@ -446,9 +456,9 @@ def build_vla_policy(cfg: Settings) -> VLAPolicyProtocol | None:
 
     Raises:
         ValueError: When ``vla.canned_action`` length disagrees with
-            ``model.action_dim``.
-        NotImplementedError: When ``vla.backend == "distilled_onnx"``
-            (reserved for Phase 3b).
+            ``model.action_dim``, or the configured ``distilled_onnx``
+            cache directory cannot be located and no ``model_repo_id``
+            is configured for download.
     """
     backend = cfg.vla.backend
     if backend == "none":
@@ -478,8 +488,80 @@ def build_vla_policy(cfg: Settings) -> VLAPolicyProtocol | None:
             confidence=cfg.vla.confidence,
         )
 
-    msg = f"VLA backend {backend!r} is reserved for Phase 3b"
-    raise NotImplementedError(msg)
+    if backend == "distilled_onnx":
+        return _build_distilled_onnx_vla(cfg, action_dim)
+
+    msg = f"Unknown VLA backend {backend!r}"
+    raise ValueError(msg)
+
+
+def _build_distilled_onnx_vla(cfg: Settings, action_dim: int) -> VLAPolicyProtocol:
+    """Resolve the ONNX model and instantiate :class:`DistilledVLAOnnx`.
+
+    Args:
+        cfg: Root settings.
+        action_dim: Configured action dimensionality.
+
+    Returns:
+        An un-warmed :class:`DistilledVLAOnnx`. Warmup happens on first
+        :meth:`predict` call (or eagerly if ``warmup_iterations > 0``
+        and the file exists at construction time).
+
+    Raises:
+        ValueError: When neither a downloadable ``model_repo_id`` nor a
+            local ``cache_dir`` containing ``model_filename`` is
+            available.
+    """
+    from pathlib import Path as _Path
+
+    from mousedroid.vla.policy import DistilledVLAOnnx
+
+    cache_dir = _Path(cfg.vla.cache_dir) if cfg.vla.cache_dir else _Path("weights/vla")
+    model_path = cache_dir / cfg.vla.model_filename
+
+    if not model_path.is_file():
+        if cfg.vla.model_repo_id is None:
+            msg = (
+                f"distilled_onnx model not found at {model_path} and "
+                f"vla.model_repo_id is unset; either provide a local "
+                f"file or configure a HuggingFace repo for download"
+            )
+            raise ValueError(msg)
+        from mousedroid.utils.weights_manager import (
+            download_weights_from_huggingface,
+        )
+
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        success = download_weights_from_huggingface(
+            repo_id=cfg.vla.model_repo_id,
+            filenames=[cfg.vla.model_filename],
+            cache_dir=cache_dir,
+        )
+        if not success or not model_path.is_file():
+            msg = (
+                f"failed to download distilled_onnx weights "
+                f"({cfg.vla.model_repo_id}/{cfg.vla.model_filename}) "
+                f"into {cache_dir}"
+            )
+            raise ValueError(msg)
+
+    policy = DistilledVLAOnnx(
+        model_path=model_path,
+        action_dim=action_dim,
+        providers=list(cfg.vla.providers) if cfg.vla.providers is not None else None,
+        h_input_name=cfg.vla.h_input_name,
+        z_input_name=cfg.vla.z_input_name,
+        action_output_name=cfg.vla.action_output_name,
+        warmup_iterations=cfg.vla.warmup_iterations,
+        confidence=cfg.vla.confidence,
+    )
+    _log.info(
+        "vla_policy_built",
+        backend="distilled_onnx",
+        action_dim=action_dim,
+        model_path=str(model_path),
+    )
+    return policy
 
 
 def build_mission_parser(cfg: Settings) -> MissionParserProtocol:
