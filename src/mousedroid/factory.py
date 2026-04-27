@@ -56,9 +56,12 @@ if TYPE_CHECKING:
     from mousedroid.telemetry.log_buffer import LogRingBuffer
     from mousedroid.telemetry.metrics import MetricsRegistry
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
+    from mousedroid.training.replay import ReplayReaderProtocol
     from mousedroid.voice.mock_tts import MockTTS
     from mousedroid.voice.tts import PiperTTS
     from mousedroid.world_model.protocol import WorldModelProtocol
+
+
 _log = get_logger(__name__)
 
 
@@ -611,6 +614,32 @@ def build_reward_model(cfg: Settings) -> RewardModelProtocol:
         three_laws_enabled=cfg.three_laws.enabled,
     )
     return model
+
+
+def build_replay_reader(cfg: Settings) -> ReplayReaderProtocol:
+    """Build the Phase 2 LMDB replay reader.
+
+    Args:
+        cfg: Root settings. Reads ``cfg.experience`` (LMDB path + map size)
+            and respects ``cfg.training.replay.source_path`` as a path
+            override when set.
+
+    Returns:
+        Reader conforming to :class:`ReplayReaderProtocol`. The concrete
+        type is hidden behind the protocol so callers cannot couple to
+        LMDB internals (CLAUDE.md invariants 1+2).
+    """
+    from mousedroid.training.replay import LMDBReplayReader
+
+    reader = LMDBReplayReader(
+        cfg.experience,
+        path_override=cfg.training.replay.source_path,
+    )
+    _log.info(
+        "replay_reader_built",
+        path=str(reader.path),
+    )
+    return reader
 
 
 def build_mission_parser(cfg: Settings) -> MissionParserProtocol:

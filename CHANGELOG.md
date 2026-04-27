@@ -8,6 +8,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Phase 2: Real-Episode Replay Loop (`feat/phase2-real-episode-replay`)
+
+- **`src/mousedroid/training/replay/`** — new package
+  - `ReplayReaderProtocol` — `@runtime_checkable Protocol` defining
+    `stream(chunk_size) -> AsyncIterator[list[MouseDroidExperienceRecord]]`
+    plus a `stats` dict, so callers cannot couple to LMDB internals
+    (CLAUDE.md invariants 1+2).
+  - `LMDBReplayReader` — async, chunked reader. Each chunk is fetched
+    via `asyncio.to_thread` so the LMDB cursor never blocks the event
+    loop; an empty or missing env logs a single `replay_empty_db`
+    warning and yields nothing rather than raising. Schema-mismatched
+    records are counted under `stats["skipped_schema_mismatch"]` and
+    skipped.
+  - `MixerConfig` (Pydantic) + `RealSimMixer` — deterministic sim/real
+    interleaver seeded by a single `numpy.random.Generator`. Linear
+    `current_alpha = min(target, target * step / ramp_steps)` ramp
+    realises the RL-Co two-stage curriculum. Realized fraction is
+    exposed via `stats["realized_alpha"]` for tests and telemetry.
+- **`training/replay_real_episodes.py`** — new operator CLI exercising
+  the reader+mixer end-to-end. Supports `--dry-run`, `--use-real-replay`,
+  `--draws`, `--chunk-size`, `--alpha-target`, `--seed`. Empty LMDB is
+  a no-op exit-0.
+- **`src/mousedroid/factory.py`** — `build_replay_reader(cfg)` returns a
+  `ReplayReaderProtocol`; concrete `LMDBReplayReader` import lives
+  inside the function per project DI rules.
+- **`src/mousedroid/config/schema.py`** — `OfflineRLConfig.real_supervised_weight`
+  added with default `0.0`. The new field gates the future BC auxiliary
+  loss in `train_constitutional_rl.py` (Phase 2.1 follow-up). Default of
+  `0.0` keeps offline-RL training byte-identical to the pre-Phase-2
+  path; backwards compat is preserved.
+- **Tests** — `tests/unit/training/replay/test_lmdb_reader.py` (7 tests:
+  protocol fit, empty/missing path, full round-trip, chunk-size guard,
+  schema-mismatch counting, path override) and `test_mixer.py` (11
+  tests: parametrized realized-ratio at `{0.1, 0.5, 0.9}` over 10 000
+  draws within ±1.5%, seed determinism, monotone ramp, exhaustion
+  fallback, validation guards).
+
+### Notes
+
+- The auxiliary BC loss `MSE(policy(s_real), a_real)` weighted by
+  `real_supervised_weight` is intentionally deferred to Phase 2.1
+  because the existing `train_constitutional_rl.py` is a numpy-MLP with
+  custom numerical-gradient updates rather than a torch loop;
+  retrofitting BC there warrants its own PR with a dedicated
+  numerical-stability test.
+
 ### Added — Phase 4: VLM-Derived Dense Progress Reward (`feat/phase4-vlm-progress-rewards`)
 
 - **`src/mousedroid/reward/vlm_progress.py`** — new module

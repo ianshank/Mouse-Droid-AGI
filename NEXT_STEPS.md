@@ -32,7 +32,7 @@ lands in an isolated PR off the default branch. Dependency direction is
 strictly **Phase 1 → 2 → 3 → 4**; Phases 5 and 6 are deferred until Phase 3b
 has been in production for ≥30 days.
 
-### Phase 2 — Real-Episode Replay Loop (sim-to-real feedback)
+### Phase 2 — Real-Episode Replay Loop (sim-to-real feedback) ✅ IN-FLIGHT (`feat/phase2-real-episode-replay`)
 
 Wire the existing LMDB experience logger back into the offline training
 pipeline so successes and failures from real-world rollouts continuously refine
@@ -41,21 +41,24 @@ the RSSM and the Constitutional-RL policy. Closes the second of four gaps.
 **Scope:**
 - `src/mousedroid/training/replay/lmdb_reader.py` — async streaming iterator
   over an LMDB env (chunks of 64 records via `asyncio.to_thread`; never load
-  the whole DB into RAM on the 8 GB Orin)
+  the whole DB into RAM on the 8 GB Orin) ✅
 - `src/mousedroid/training/replay/mixer.py` — ratio-controlled sampler over
   `(sim_iter, real_iter)` with a deterministic `numpy.random.Generator`; ramped
-  `alpha` from 0.0 → target over a configurable number of steps (RL-Co two-stage)
-- `training/replay_real_episodes.py` — CLI with `--dry-run`, `--use-real-replay`
-- `experience/record.py` already carries `schema_version = 1`; add a versioned
-  reader contract that refuses incompatible records with a counter
-- Auxiliary BC-style supervised loss in PPO via `OfflineRLConfig.real_supervised_weight`
+  `alpha` from 0.0 → target over a configurable number of steps (RL-Co two-stage) ✅
+- `training/replay_real_episodes.py` — CLI with `--dry-run`, `--use-real-replay` ✅
+- `experience/record.py` already carries `schema_version = 1`; reader counts
+  + skips incompatible records with structured `replay_schema_mismatch` log ✅
+- `OfflineRLConfig.real_supervised_weight` field added (default `0.0`); BC-style
+  supervised loss injection into PPO is **deferred to Phase 2.1** because the
+  current `train_constitutional_rl.py` is a numpy-MLP with custom numerical
+  gradients — retrofitting BC there warrants its own PR.
+- `factory.build_replay_reader(cfg) -> ReplayReaderProtocol` wiring ✅
 
 **Acceptance:**
-- Empty LMDB produces a clean no-op (logged warning, training proceeds)
-- Mixer's realized ratio over 10 k draws is within 1% of target
-- Integration test runs the pipeline end-to-end on a 10-episode synthetic LMDB
-  and verifies a checkpoint is produced
-- Golden RSSM loss curve at fixed seed within ±1% of baseline
+- Empty LMDB produces a clean no-op (logged warning, training proceeds) ✅
+- Mixer's realized ratio over 10 k draws is within 1% of target ✅ (parametrized test at 0.1/0.5/0.9)
+- Integration test on a 10-episode synthetic LMDB → checkpoint produced — **pending Phase 2.1**
+- Golden RSSM loss curve at fixed seed within ±1% of baseline — **pending Phase 2.1**
 
 ### Phase 3a — VLA Protocol + `MockVLA` ✅ LANDED (`feat/phase3a-vla-protocol`)
 

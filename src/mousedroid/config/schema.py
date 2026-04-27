@@ -859,6 +859,15 @@ class OfflineRLConfig(BaseModel):
         gt=0,
         description="IQL inverse temperature for advantage weighting",
     )
+    real_supervised_weight: float = Field(
+        0.0,
+        ge=0.0,
+        description=(
+            "Phase 2: weight on the auxiliary BC-style supervised loss applied to real "
+            "replay batches drawn from the LMDB store. 0.0 disables the BC term — "
+            "training is then byte-identical to the pre-Phase-2 path."
+        ),
+    )
 
 
 class MCTSConfig(BaseModel):
