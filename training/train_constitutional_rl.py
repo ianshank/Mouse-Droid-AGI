@@ -21,7 +21,7 @@ from mousedroid.cognitive.constitutional_rl import (
     ValueMLP,
 )
 from mousedroid.config.schema import Settings
-from mousedroid.reward.model import MultiObjectiveRewardModel
+from mousedroid.factory import build_reward_model
 from mousedroid.safety.three_laws import RoboticsLawChecker
 from mousedroid.world_model.checkpoint_migration import load_rssm_with_migration
 
@@ -184,12 +184,9 @@ def train_constitutional_rl(
     rssm = load_rssm_with_migration(rssm_checkpoint, cfg.model, device)
     rssm.eval()
 
-    # Build reward model with Three Laws integration
-    reward_model = MultiObjectiveRewardModel(
-        cfg.model,
-        cfg.reward,
-        law_cfg=cfg.three_laws,
-    ).to(device)
+    # Build reward model with Three Laws integration and optional Phase 4
+    # VLM-derived progress head (gated by Law-1 sigmoid).
+    reward_model = build_reward_model(cfg).to(device)
 
     # Init policy and value networks
     policy = PolicyMLP(input_dim=cfg.model.latent_dim, action_dim=cfg.model.action_dim)
@@ -227,6 +224,11 @@ def train_constitutional_rl(
         rewards: list[float] = []
         values: list[float] = []
 
+        # Track previous decoded observation so the optional VLM progress head
+        # (Phase 4) sees a real (prev, curr) pair. The first step seeds prev=curr
+        # so the progress estimate is well-defined without leaking gradients.
+        prev_obs_recon: torch.Tensor | None = None
+
         for _step in range(rollout_steps):
             state_np = z.detach().cpu().numpy().flatten()
             states.append(state_np)
@@ -252,7 +254,15 @@ def train_constitutional_rl(
             with torch.no_grad():
                 h, z, pred_reward = rssm.imagine_step(action_tensor, h, z)
                 obs_recon = rssm.decode(h, z)
-                reward_scalar = reward_model(obs_recon).item()
+                # First step: seed prev with curr so VLM head has a valid pair.
+                if prev_obs_recon is None:
+                    prev_obs_recon = obs_recon
+                reward_scalar = reward_model(
+                    obs_recon,
+                    prev_obs=prev_obs_recon,
+                    curr_obs=obs_recon,
+                ).item()
+                prev_obs_recon = obs_recon
 
             # Stricter penalties for law violations
             law1_violations = [v for v in violations if v.startswith("[Law 1]")]
