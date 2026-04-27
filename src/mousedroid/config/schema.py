@@ -736,6 +736,17 @@ class OfflineRLConfig(BaseModel):
     )
     log_every_n_epochs: int = Field(10, gt=0, description="Log summary every N epochs")
     checkpoint_every_n_epochs: int = Field(20, gt=0, description="Save checkpoint every N epochs")
+    real_supervised_weight: float = Field(
+        0.0,
+        ge=0.0,
+        description=(
+            "Weight of the auxiliary behavioral-cloning loss on real replay episodes "
+            "alongside the offline-RL objective. ``0.0`` (default) disables BC, "
+            "preserving byte-identical training behavior with pre-Phase-2 runs. "
+            "Consumed by torch-based PPO trainers; the legacy numpy trainer ignores "
+            "this field."
+        ),
+    )
     cql_alpha: float = Field(1.0, gt=0, description="CQL regularization weight")
     cql_n_random_actions: int = Field(10, gt=0, description="Random actions for CQL logsumexp")
     iql_expectile: float = Field(0.7, gt=0, lt=1, description="IQL expectile for asymmetric loss")
@@ -848,6 +859,16 @@ class MetricsConfig(BaseModel):
             "Expose MCP server metrics: request counter, per-tool call "
             "counter (label: tool, result), and request latency histogram. "
             "Emitted only when the MCP server is actually built — safe to "
+            "leave on."
+        ),
+    )
+    track_replay: bool = Field(
+        True,
+        description=(
+            "Expose Phase 2 replay metrics: replay_records_consumed_total, "
+            "replay_chunks_yielded_total, replay_schema_mismatch_total, "
+            "replay_alpha_current. Emitted only when training replay is "
+            "actually enabled (``training.replay.enabled=True``) — safe to "
             "leave on."
         ),
     )
@@ -2044,6 +2065,50 @@ class TrainingReplayConfig(BaseModel):
     seed: int | None = Field(
         None,
         description="Optional seed used when selecting a subset of replay episodes",
+    )
+    chunk_size: int = Field(
+        64,
+        gt=0,
+        description=(
+            "Records per chunk for the streaming LMDB replay reader. "
+            "Only consumed when ``use_chunked_reader=True``; the default code path "
+            "remains the in-memory ``OfflineRLDataset`` loader for byte-identical "
+            "behavior with pre-Phase-2 training runs."
+        ),
+    )
+    use_chunked_reader: bool = Field(
+        False,
+        description=(
+            "Opt in to the chunked async LMDB reader (``mousedroid.training.replay``). "
+            "Default ``False`` preserves byte-identical RSSM dataset construction."
+        ),
+    )
+    strict_schema: bool = Field(
+        False,
+        description=(
+            "When True, raise on any LMDB record with mismatched schema_version. "
+            "When False (default), skip mismatched records and increment the "
+            "``replay_schema_mismatch_total`` counter."
+        ),
+    )
+    alpha_target: float = Field(
+        0.0,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Target probability of drawing from the real-replay pool during "
+            "step-level mixing (RL-Co two-stage). ``0.0`` (default) disables "
+            "step-level mixing — the dataset-level ``real_episode_ratio`` "
+            "remains in effect."
+        ),
+    )
+    alpha_ramp_steps: int = Field(
+        0,
+        ge=0,
+        description=(
+            "Number of training steps to linearly ramp ``alpha`` from 0.0 to "
+            "``alpha_target``. ``0`` => no ramp (instant target)."
+        ),
     )
 
 

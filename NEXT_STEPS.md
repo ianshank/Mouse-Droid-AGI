@@ -32,7 +32,14 @@ lands in an isolated PR off the default branch. Dependency direction is
 strictly **Phase 1 → 2 → 3 → 4**; Phases 5 and 6 are deferred until Phase 3b
 has been in production for ≥30 days.
 
-### Phase 2 — Real-Episode Replay Loop (sim-to-real feedback)
+### Phase 2 — Real-Episode Replay Loop (sim-to-real feedback) ✅ Implemented
+
+**Status:** landed on `feat/phase2-replay-and-quality-debt`. Default config
+remains byte-identical to pre-Phase-2 runs; the chunked-reader path,
+sim:real mixer, and BC auxiliary loss are all opt-in via
+`TrainingReplayConfig.use_chunked_reader`,
+`TrainingReplayConfig.alpha_target`, and `OfflineRLConfig.real_supervised_weight`
+respectively.
 
 Wire the existing LMDB experience logger back into the offline training
 pipeline so successes and failures from real-world rollouts continuously refine

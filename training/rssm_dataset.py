@@ -15,6 +15,7 @@ from mousedroid.config.schema import ExperienceConfig, ModelConfig, TrainingRepl
 from mousedroid.constants import SENSOR_SLOT_MAP
 from mousedroid.experience.dataset import OfflineRLDataset
 from mousedroid.experience.record import MouseDroidExperienceRecord
+from mousedroid.training.replay import LmdbReplayReader
 
 _log = structlog.get_logger(__name__)
 
@@ -90,19 +91,57 @@ def _load_replay_episodes(
     experience_cfg: ExperienceConfig,
     model_cfg: ModelConfig,
 ) -> list[list[dict[str, Tensor]]]:
-    """Load replay episodes from LMDB and convert them to RSSM sequence steps."""
-    dataset = OfflineRLDataset(experience_cfg, model_cfg)
-    dataset.open()
-    try:
-        episodes = dataset.get_episodes(terminal_gap_s=replay_cfg.terminal_gap_s)
-    finally:
-        dataset.close()
+    """Load replay episodes from LMDB and convert them to RSSM sequence steps.
 
-    return [
-        [_record_to_episode_step(record, model_cfg) for record in episode]
-        for episode in episodes
-        if episode
-    ]
+    Two ingestion paths are supported:
+
+    1. **Default (``use_chunked_reader=False``)** — uses the in-memory
+       :class:`OfflineRLDataset` loader. Byte-identical with pre-Phase-2 runs.
+    2. **Chunked streaming (``use_chunked_reader=True``)** — uses the new
+       :class:`LmdbReplayReader` with schema-version guarding and bounded RAM
+       usage. Episode boundaries are inferred from ``replay_cfg.terminal_gap_s``.
+    """
+    if not replay_cfg.use_chunked_reader:
+        dataset = OfflineRLDataset(experience_cfg, model_cfg)
+        dataset.open()
+        try:
+            episodes = dataset.get_episodes(terminal_gap_s=replay_cfg.terminal_gap_s)
+        finally:
+            dataset.close()
+
+        return [
+            [_record_to_episode_step(record, model_cfg) for record in episode]
+            for episode in episodes
+            if episode
+        ]
+
+    # Chunked streaming path — bounded RAM, schema-version guarded.
+    reader = LmdbReplayReader.from_config(
+        experience_cfg,
+        chunk_size=replay_cfg.chunk_size,
+        source_path=replay_cfg.source_path,
+        strict_schema=replay_cfg.strict_schema,
+    )
+    episodes: list[list[dict[str, Tensor]]] = []
+    current: list[dict[str, Tensor]] = []
+    last_ts: float | None = None
+    with reader:
+        for record in reader.stream_records():
+            if last_ts is not None and (record.timestamp - last_ts) > replay_cfg.terminal_gap_s:
+                if current:
+                    episodes.append(current)
+                current = []
+            current.append(_record_to_episode_step(record, model_cfg))
+            last_ts = record.timestamp
+    if current:
+        episodes.append(current)
+    _log.info(
+        "rssm_chunked_replay_loaded",
+        n_episodes=len(episodes),
+        records_consumed=reader.stats.records_consumed,
+        schema_mismatches=reader.stats.schema_mismatches,
+    )
+    return episodes
 
 
 def _select_replay_subset(

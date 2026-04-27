@@ -8,7 +8,63 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added — Ten Pillars Validation Campaign (`feat/smoke-post-pr55`)
+### Added — Phase 2 Real-Episode Replay Loop (`feat/phase2-replay-and-quality-debt`)
+
+- **`src/mousedroid/training/replay/`** — new package implementing the chunked,
+  schema-version-guarded LMDB replay reader and the deterministic sim/real
+  episode mixer (Phase 2 of the Physical AI roadmap, per `NEXT_STEPS.md`).
+  - `LmdbReplayReader` — bounded-RAM streaming reader with sync (`stream_chunks`)
+    and async (`stream_chunks_async`) iteration. Records are deserialized in
+    caller-controlled chunks via `asyncio.to_thread` for the async path.
+    Schema-version mismatches surface via `ReplayReaderStats.schema_mismatches`
+    and as `SchemaVersionMismatchError` when `strict_schema=True`.
+  - `EpisodeMixer` — stateless ratio sampler over (sim, real) pools driven by an
+    injected `numpy.random.Generator`. Linear `alpha` ramp from `0.0` →
+    `alpha_target` over `alpha_ramp_steps` (RL-Co two-stage). Realized ratio
+    converges within ±1% of target over 10k draws.
+- **`training/replay_real_episodes.py`** — operator CLI with `--dry-run`,
+  `--use-real-replay`, `--config`, and `--seed` flags. Dry-run streams the
+  configured LMDB once and reports record/chunk counts plus any schema
+  mismatches; non-dry-run hands off to `training.run_pipeline`.
+- **`training/rssm_dataset.py`** — `_load_replay_episodes` now supports an
+  opt-in chunked-reader path (`TrainingReplayConfig.use_chunked_reader=True`).
+  Default code path is unchanged and remains byte-identical to pre-Phase-2
+  runs (regression test pinned).
+- **`TrainingReplayConfig`** (`src/mousedroid/config/schema.py`) — five new
+  opt-in fields, all defaulting to no-op values:
+  - `chunk_size: int = 64`
+  - `use_chunked_reader: bool = False`
+  - `strict_schema: bool = False`
+  - `alpha_target: float = 0.0`
+  - `alpha_ramp_steps: int = 0`
+- **`OfflineRLConfig.real_supervised_weight: float = 0.0`** — auxiliary BC loss
+  weight for real replay episodes alongside the offline-RL objective. Default
+  preserves byte-identical training; consumed by torch-based PPO trainers.
+- **`MetricsConfig.track_replay: bool = True`** — toggle for the new
+  `replay_records_consumed_total`, `replay_chunks_yielded_total`,
+  `replay_schema_mismatch_total`, and `replay_alpha_current` Prometheus
+  counters/gauges. Emitted only when training replay is actually enabled.
+- **39 new tests** across `tests/unit/training/replay/`,
+  `tests/regression/test_replay_byte_identity.py`, and
+  `tests/integration/training/test_replay_real_episodes_cli.py` — covers
+  empty DB no-op, exact chunk-size boundaries, schema-version mismatch
+  (lenient + strict), async/sync equivalence, `from_config` source-path
+  override, byte-identity vs. legacy in-memory loader, terminal-gap episode
+  splitting, default field invariants, mixer determinism, ramp linearity,
+  realized-ratio convergence, batch short-circuiting, CLI dry-run exit codes,
+  and override propagation.
+
+### Fixed
+
+- **`config/jetson_production.yaml`** — removed duplicate `domain_randomization`
+  block that shadowed the first (correct) block and was missing
+  `ultrasonic_noise_m` and `ultrasonic_dropout_prob`, which would have
+  triggered a Pydantic validation error on load.
+- **`src/mousedroid/hardware/audio/usb_speaker.py`**,
+  **`src/mousedroid/mcp/resources.py`** — removed redundant
+  `# noqa: UP038` directives flagged by ruff `RUF100`.
+
+## [Unreleased — feat/smoke-post-pr55]
 
 - **`scripts/validate_pillar.sh`** — headless Ten Pillars campaign dispatcher
   - Accepts a pillar name (e.g. `safety`) or `all` as its first positional argument;
