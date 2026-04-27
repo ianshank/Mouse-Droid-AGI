@@ -57,6 +57,12 @@ llm = [
     "llama-cpp-python>=0.2",
     "huggingface-hub>=0.20",
 ]
+vla = [
+    "onnxruntime-gpu>=1.18; platform_machine=='aarch64'",
+    "onnxruntime>=1.18; platform_machine!='aarch64'",
+    "transformers>=4.40",
+    "huggingface-hub>=0.20",
+]
 arm = [
     "gymnasium>=0.29",
     "mujoco>=3.0",

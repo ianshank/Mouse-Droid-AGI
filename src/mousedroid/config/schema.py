@@ -631,6 +631,11 @@ class VLAConfig(BaseModel):
     block.
     """
 
+    # ``model_filename`` / ``model_repo_id`` etc. clash with pydantic's
+    # default protected ``model_`` namespace; opt out so the warnings do
+    # not fire under tests / CI.
+    model_config = {"protected_namespaces": ()}
+
     backend: Literal["none", "mock", "distilled_onnx"] = Field(
         "none",
         description=(
@@ -660,6 +665,58 @@ class VLAConfig(BaseModel):
             "'vla_timeout_safe_stop' event and returns a zero action so "
             "the safety monitor can escalate on the next tick."
         ),
+    )
+    # ----- Phase 3b: distilled ONNX backend -----
+    model_repo_id: str | None = Field(
+        None,
+        description=(
+            "HuggingFace repo id (e.g., 'lerobot/smolvla') used by "
+            "weights_manager.download_weights_from_huggingface to fetch "
+            "the ONNX file when ``backend='distilled_onnx'``. None => "
+            "expect ``model_path`` to already exist locally under "
+            "``cache_dir``."
+        ),
+    )
+    model_filename: str = Field(
+        "model.onnx",
+        description="Filename of the ONNX graph inside the HF repo / cache dir.",
+    )
+    cache_dir: str | None = Field(
+        "weights/vla",
+        description=(
+            "Local directory containing the ONNX model. Defaults to "
+            "'weights/vla'; override via YAML to relocate the cache."
+        ),
+    )
+    providers: list[str] | None = Field(
+        None,
+        description=(
+            "Optional explicit ORT execution-provider chain. None => the "
+            "default fallback chain "
+            "['TensorrtExecutionProvider', 'CUDAExecutionProvider', "
+            "'CPUExecutionProvider']. Unavailable providers are skipped "
+            "automatically by ``DistilledVLAOnnx.warmup``."
+        ),
+    )
+    warmup_iterations: int = Field(
+        1,
+        ge=0,
+        description=(
+            "Number of dummy inference passes after session creation to "
+            "prime CUDA/TensorRT kernels. 0 disables warmup."
+        ),
+    )
+    h_input_name: str = Field(
+        "h",
+        description="ONNX input name for the deterministic latent ``h``.",
+    )
+    z_input_name: str = Field(
+        "z",
+        description="ONNX input name for the stochastic latent ``z``.",
+    )
+    action_output_name: str = Field(
+        "action",
+        description="ONNX output name for the action tensor.",
     )
 
 

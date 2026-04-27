@@ -11,6 +11,8 @@ Defaults preserve the existing nav-agent behavior (``policy_selector =
 from __future__ import annotations
 
 from mousedroid.vla.policy import (
+    DEFAULT_ORT_PROVIDERS,
+    DistilledVLAOnnx,
     MockVLA,
     VLAAction,
     VLAObservation,
@@ -18,6 +20,8 @@ from mousedroid.vla.policy import (
 )
 
 __all__ = [
+    "DEFAULT_ORT_PROVIDERS",
+    "DistilledVLAOnnx",
     "MockVLA",
     "VLAAction",
     "VLAObservation",
