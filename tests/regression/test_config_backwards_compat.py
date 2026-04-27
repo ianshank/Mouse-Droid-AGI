@@ -173,3 +173,39 @@ def test_canonical_telemetry_values_win_over_legacy_aliases() -> None:
     )
     assert s.telemetry.ws_path == "/canonical/ws"
     assert s.telemetry.publish_hz == 9.0
+
+
+def test_settings_without_mcp_block_remains_valid() -> None:
+    """Existing YAML without an `mcp:` block must continue to load."""
+    legacy_yaml = """
+    mock_hardware: true
+    platform: mouse_droid
+    telemetry:
+      enabled: false
+    """
+    data = yaml.safe_load(legacy_yaml)
+    s = Settings.model_validate(data)
+    assert s.mcp is None
+
+
+def test_mcp_block_loads_when_present() -> None:
+    """A complete `mcp:` block must populate MCPConfig with defaults filled."""
+    config_yaml = """
+    mock_hardware: true
+    platform: mouse_droid
+    mcp:
+      enabled: false
+      transport: stdio
+      host: 127.0.0.1
+      port: 8765
+    """
+    data = yaml.safe_load(config_yaml)
+    s = Settings.model_validate(data)
+    assert s.mcp is not None
+    assert s.mcp.enabled is False
+    assert s.mcp.transport == "stdio"
+    assert s.mcp.host == "127.0.0.1"
+    assert s.mcp.port == 8765
+    # Defaults still populated
+    assert s.mcp.resources.recent_frames_max == 64
+    assert s.mcp.resources.log_tail_max == 200

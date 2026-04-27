@@ -224,3 +224,4 @@ def test_load_settings_domain_randomization_overlay(tmp_path: Path) -> None:
     assert settings.domain_randomization.enabled is False
     assert settings.domain_randomization.brightness.low == 0.6
     assert settings.domain_randomization.brightness.high == 1.4
+

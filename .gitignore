@@ -190,3 +190,9 @@ notify.sock
 gcp_credentials/
 *.credentials.json
 
+# MCP server runtime artefacts (auth tokens, transcripts, cached sessions)
+mcp_token
+*.mcp_token
+mcp_sessions/
+mcp_transcripts/
+

@@ -140,3 +140,28 @@ arm_task:
     - [0.40, -0.20, 0.00]
   max_episode_steps: 500
   num_garments: 5
+
+# MCP server (disabled by default; see config/default.yaml for full docs).
+# For the arm platform, ``memory_enabled: true`` exposes recent episodic
+# samples (useful for debugging task progress), and the deny-list seeds
+# any future raw motor-command tools.
+mcp:
+  enabled: false
+  transport: stdio
+  host: "127.0.0.1"
+  port: 8765
+  auth_token_env_var: "MOUSEDROID_MCP_TOKEN"
+  expose_actuation_tools: false
+  tools_denylist:
+    - motor_command
+  resources:
+    telemetry_enabled: true
+    logs_enabled: true
+    config_enabled: true
+    memory_enabled: true
+    recent_frames_max: 64
+    log_tail_max: 200
+    config_cache_ttl_s: 1.0
+  request_timeout_s: 30.0
+  rate_limit_rps: 10.0
+  sample_telemetry_hz: 10.0

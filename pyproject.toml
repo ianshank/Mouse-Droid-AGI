@@ -49,6 +49,10 @@ telemetry = [
     "zeroconf>=0.80",
     "Pillow>=10.0",
 ]
+mcp = [
+    "mcp>=1.0",
+    "anyio>=4.0",
+]
 llm = [
     "llama-cpp-python>=0.2",
     "huggingface-hub>=0.20",
@@ -169,6 +173,12 @@ disallow_subclassing_any = false
 # false-positive arg-type errors with mypy strict mode.
 module = ["mousedroid.config.schema"]
 disable_error_code = ["arg-type"]
+
+[[tool.mypy.overrides]]
+# The optional ``mcp`` SDK does not (yet) ship type stubs reliably;
+# allow strict-mode runs without forcing the extra to be installed.
+module = ["mcp", "mcp.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

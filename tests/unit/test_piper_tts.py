@@ -268,3 +268,4 @@ def test_synthesize_sync_clips_after_gain() -> None:
     samples = tts._synthesize_sync("clip")
 
     np.testing.assert_allclose(samples, np.array([1.0, -1.0, 0.4], dtype=np.float32), atol=5e-4)
+
