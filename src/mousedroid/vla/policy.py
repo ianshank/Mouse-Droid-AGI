@@ -324,7 +324,7 @@ class DistilledVLAOnnx:
         import numpy as _np
 
         for inp in self._session.get_inputs():
-            shape = tuple(d if isinstance(d, int) and d > 0 else 1 for d in inp.shape)
+            shape = tuple(d if isinstance(d, int) and d > 0 else 1 for d in (inp.shape or []))
             feeds[inp.name] = _np.zeros(shape, dtype=_np.float32)
         self._session.run([self._action_output_name], feeds)
 
@@ -361,7 +361,10 @@ class DistilledVLAOnnx:
                 {self._h_input_name: h_np, self._z_input_name: z_np},
             )
             action_np = outputs[0]
-            action_tensor = torch.from_numpy(action_np).to(torch.float32).reshape(-1)
+            # ``torch.from_numpy`` shares memory with the underlying numpy
+            # buffer, which is owned by the ORT session and may be mutated by
+            # the next ``run`` call. Clone so the returned action is stable.
+            action_tensor = torch.from_numpy(action_np).to(torch.float32).reshape(-1).clone()
             if action_tensor.shape != (self._action_dim,):
                 msg = (
                     f"DistilledVLAOnnx output shape {tuple(action_tensor.shape)} "

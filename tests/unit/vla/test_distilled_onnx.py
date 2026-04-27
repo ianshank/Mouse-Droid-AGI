@@ -423,10 +423,15 @@ class TestBuildVLAPolicyDistilledOnnx:
             repo_id: str,
             filenames: list[str],
             cache_dir: Path,
+            local_dir: Path | None = None,
         ) -> bool:
             assert repo_id == "acme/vla"
             assert filenames == ["model.onnx"]
-            (Path(cache_dir) / "model.onnx").write_bytes(b"\x08\x07")
+            # Factory must request flat layout via ``local_dir`` so the
+            # subsequent ``model_path.is_file()`` check sees the file.
+            assert local_dir is not None
+            assert Path(local_dir) == Path(cache_dir)
+            (Path(local_dir) / "model.onnx").write_bytes(b"\x08\x07")
             return True
 
         with patch(

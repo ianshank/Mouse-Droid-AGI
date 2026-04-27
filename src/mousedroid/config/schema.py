@@ -682,10 +682,10 @@ class VLAConfig(BaseModel):
         description="Filename of the ONNX graph inside the HF repo / cache dir.",
     )
     cache_dir: str | None = Field(
-        None,
+        "weights/vla",
         description=(
-            "Local directory containing the ONNX model. None => "
-            "'weights/vla'. Resolved at factory time."
+            "Local directory containing the ONNX model. Defaults to "
+            "'weights/vla'; override via YAML to relocate the cache."
         ),
     )
     providers: list[str] | None = Field(

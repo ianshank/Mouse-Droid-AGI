@@ -516,7 +516,13 @@ def _build_distilled_onnx_vla(cfg: Settings, action_dim: int) -> VLAPolicyProtoc
 
     from mousedroid.vla.policy import DistilledVLAOnnx
 
-    cache_dir = _Path(cfg.vla.cache_dir) if cfg.vla.cache_dir else _Path("weights/vla")
+    # ``VLAConfig.cache_dir`` is required (Pydantic-defaulted to
+    # ``"weights/vla"``); guard against an explicit ``None`` override that
+    # may slip in via legacy YAML.
+    if cfg.vla.cache_dir is None:
+        msg = "vla.cache_dir must be set (default is 'weights/vla')"
+        raise ValueError(msg)
+    cache_dir = _Path(cfg.vla.cache_dir)
     model_path = cache_dir / cfg.vla.model_filename
 
     if not model_path.is_file():
@@ -536,6 +542,11 @@ def _build_distilled_onnx_vla(cfg: Settings, action_dim: int) -> VLAPolicyProtoc
             repo_id=cfg.vla.model_repo_id,
             filenames=[cfg.vla.model_filename],
             cache_dir=cache_dir,
+            # Force flat layout (cache_dir/model_filename) so the
+            # ``model_path.is_file()`` check below sees the file. Without
+            # ``local_dir``, hf_hub_download uses its blob/snapshot cache
+            # layout and the file would not be at the expected path.
+            local_dir=cache_dir,
         )
         if not success or not model_path.is_file():
             msg = (
