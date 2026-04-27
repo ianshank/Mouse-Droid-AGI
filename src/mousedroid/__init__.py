@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _version
 
-__version__ = _version("mousedroid")
+try:
+    __version__ = _version("mousedroid")
+except PackageNotFoundError:
+    __version__ = "0+unknown"
 
 __all__ = ["__version__"]

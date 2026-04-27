@@ -1,151 +1,94 @@
 # MouseDroidAGI — Next Steps
 
-Prioritised development items after the `hardware/jetson-full-smoke` branch merge.
+Rebased on 2026-04-27 for `feat/smoke-post-pr55` after the Ten Pillars validation campaign
+(20/20 PASS on Jetson Orin Nano, 2026-04-26T23:55:42Z).
 
 ---
 
-## P0 — Deployment Hardening (Immediate)
+## Current Baseline
 
-### Automate Jetson Config Overlay Sync
-Currently `/etc/mousedroid/jetson_production.yaml` is a manually synced read-only bind-mount
-that drifts from the repo after each `git pull`. This must be automated.
-
-**Options:**
-1. Add a `post-receive` git hook on the Jetson that runs:
-   ```bash
-   sudo cp /opt/mousedroid/config/jetson_production.yaml /etc/mousedroid/jetson_production.yaml
-   sudo systemctl restart mousedroid-docker
-   ```
-2. Convert the bind-mount to a symlink so `/etc/mousedroid/jetson_production.yaml` always
-   resolves to the repo copy (requires changing the `docker-compose.jetson.yml` mount to `rw`).
-3. Add an `ExecStartPre` step to the systemd service that copies the config.
-
-**Recommended:** Option 3 — add to `scripts/mousedroid-docker.service`:
-```ini
-ExecStartPre=/bin/cp /opt/mousedroid/config/jetson_production.yaml /etc/mousedroid/jetson_production.yaml
-```
+- **Phase 1 training baseline is merged**: domain-randomized Phase 0 generation, top-level
+  `domain_randomization` schema/YAML support, seeded Phase 0 wiring, and the associated unit,
+  integration, and regression tests are now part of the active line.
+- **Jetson deployment hardening is already landed**: `scripts/mousedroid-docker.service` runs
+  `scripts/sync_jetson_overlay.sh` before preflight, so overlay sync is part of the service
+  contract rather than a manual post-`git pull` step.
+- **Voice rollout is already landed**: `voice.personality_to_model_map`,
+  `voice.event_intensity_thresholds`, `voice.output_volume`, Piper gain application, the new TTS
+  integration tests, speaker+TTS integration tests, and smoke-harness unit coverage are in-tree.
+- **Ten Pillars validation campaign is complete**: `scripts/validate_pillar.sh all` runs
+  20 checks (10 pytest stages + 10 factory probes) across all pillars — last result
+  **Overall: PASS (20/20)** on Jetson Orin Nano (`2026-04-26T23:55:42Z`).
+- **Active production scope**: camera + LiDAR + USB audio + ESP32 on Jetson. The HC-SR04
+  ultrasonic path is parked, and the robot-arm platform is deferred from the active delivery plan.
 
 ---
 
-## P0 — Voice Engine Quality
+## Immediate Follow-up
 
-### Piper Model Diversity
-- Download and evaluate additional Piper voices (`en_US-amy-medium`, `en_GB-alba-medium`)
-  for the Rocky personality; make model selection config-driven (`voice.personality_to_model_map`)
-- Add a voice latency benchmark to `scripts/benchmark_latency.py`
-
-### Phrase Bank Expansion
-- Current phrase bank covers: startup, shutdown, obstacle, error, sensor_recovery
-- Add: navigation events (`turn_left`, `turn_right`, `arrived`), battery warnings, LLM
-  translation acknowledgements
-- Support per-event `intensity_threshold` tuning in `VoiceConfig.phrase_overrides`
+1. Integrate `scripts/validate_pillar.sh all` into CI (or Jetson nightly job) so the Ten Pillars
+   campaign is run automatically on each deployment — currently only run manually on Jetson.
+2. Run `scripts/benchmark_voice_latency.py` on Jetson for the production personalities
+   (`rocky`, `scout`, `friendly`) and capture median / P95 latency before any further voice changes.
+3. Rebuild the Jetson image, restart `mousedroid-docker.service`, and rerun
+   `scripts/jetson_full_smoke_run.sh` against the updated production config.
+4. Use the recovery playbooks in `docs/playbooks/` for any camera, LiDAR, or voice failures
+   discovered during the next hardware validation pass.
 
 ---
 
-## P1 — Test Coverage
+## Next Engineering Phases
 
-### Integration Tests for TTS Pipeline
-`tests/unit/test_piper_tts.py` provides mock-only coverage. Add integration tests:
-- `tests/integration/test_tts_integration.py` — verify end-to-end WAV generation using an
-  actual (or mocked) Piper voice object; validate sample count and normalization range
-- `tests/integration/test_speaker_tts_integration.py` — UsbSpeaker + PiperTTS pipeline test
-  in mock hardware mode (PyAudio mock, no real device required)
+### P1 — Physical-AI Phase 2 Replay Loop
 
-### Smoke Harness Unit Tests
-`scripts/jetson_full_smoke_run.sh` logic is not currently unit-tested. Add:
-- `tests/unit/test_smoke_harness.py` — test SUMMARY.md generation, voice-failure enricher
-  output, and stage timeout enforcement using subprocess mocks or a bats-style shell test
+- Add the real-episode replay ingestion path (LMDB reader, sim:real mixer, replay CLI, and
+  supervised-loss integration) on top of the now-merged Phase 1 domain-randomization baseline.
+- Keep the replay loop anchored to the active Jetson sensor stack: camera, LiDAR, audio, ESP32.
 
----
+### P1 — Activation Work After Replay
 
-## P1 — Jetson Bootstrap Hardening
+- Operationalize the dual-stream RSSM path with explicit rollout telemetry and activation criteria.
+- Activate FAISS-backed semantic retrieval only after index population and retrieval verification.
+- Run the planned Jetson LLM benchmark pass before any production model swap.
 
-### Automated Bootstrap Script
-`scripts/jetson_bootstrap.sh` does not currently:
-- Create `/etc/mousedroid/` and install config overlay
-- Create the `mousedroid` system user
-- Set up the NVMe SSD mount and swap
+### P2 — Voice Features Beyond Current Rollout
 
-Add a complete `scripts/jetson_bootstrap.sh` that is idempotent and can be re-run safely,
-covering:
-1. SSD partitioning + mount + swap
-2. Docker data-root relocation to `/mnt/ssd/docker`
-3. `/etc/mousedroid/` setup + overlay install
-4. `git pull` + `docker compose build` + `systemctl enable`
+- Streaming TTS for longer utterances.
+- Wake-word detection on the USB microphone.
+- Phrase-bank expansion only when it is driven by observed runtime gaps, not as speculative churn.
 
-### Health-Check Recovery Playbook
-Document the full recovery procedure for each smoke stage failure in `docs/playbooks/`:
-- `voice-fail.md` — model not found / Piper not installed / overlay not synced
-- `lidar-fail.md` — LD19 not detected / wrong serial port / baud rate mismatch
-- `camera-fail.md` — ribbon camera not initialised / libargus socket absent
+### P2 — CI / Quality
+
+- Add production-config validation to the local pre-commit path.
+- Publish coverage badge automation if it provides signal beyond the existing branch gate.
+- Consider mutation testing for `voice/` and `hardware/audio/` once the current rollout is stable.
 
 ---
 
-## P2 — Voice Engine Features
+## Deferred / Out Of Scope
 
-### Streaming TTS
-Current architecture synthesises the full phrase before playback begins. For longer phrases,
-implement streaming synthesis: synthesise and enqueue audio in chunks of `chunk_size` frames
-while the earlier chunks are already playing.
-
-### Wake-Word Detection
-Add a lightweight wake-word detector (e.g., openWakeWord) on the USB microphone so the droid
-can acknowledge spoken commands before passing them to the LLM Gateway.
-
-### Volume Control via Config
-Expose a `voice.output_volume` (0.0–1.0) in `VoiceConfig`; apply gain in `_synthesize_sync`
-before writing to the speaker queue.
+- **HC-SR04 ultrasonic work**: not part of the active Jetson production baseline until the sensor
+  path is ready for real-device validation.
+- **Robot arm platform**: deferred from the current roadmap until the Jetson + replay-loop +
+  activation work is complete.
 
 ---
 
-## P2 — CI / Quality
-
-### Pre-commit Hook: Config YAML Validation
-Extend `.git/hooks/pre-commit` to run `python -c "from mousedroid.config.schema import Settings; import yaml; Settings.model_validate(yaml.safe_load(open('config/jetson_production.yaml')))"` so malformed production config is caught before push.
-
-### Coverage Dashboard
-Integrate `coverage-badge` generation into CI so the `coverage-branch.json` report is
-surfaced as a shield badge in README after each push.
-
-### Mutation Testing
-Run `mutmut` or `cosmic-ray` on `src/mousedroid/voice/` and `src/mousedroid/hardware/audio/`
-to identify under-tested branches before the next feature round.
-
----
-
-## P3 — Architecture
-
-### Dual-Stream RSSM + CfC Activation
-`jetson_dual_stream.yaml` exists but the CfC stream requires manual human activation (it is
-disabled by default pending real-robot experience data collection). Define the data threshold
-(e.g. 10 000 experience episodes) and automated switchover condition.
-
-### LLM Gateway: Phi-3 → Llama 3.1
-The current model URL points to Llama 3 8B. Evaluate Phi-3 mini (4 GB, faster on Jetson) vs
-Llama 3.1 8B Q4 for NL→velocity accuracy and update `config/jetson_production.yaml` after
-benchmarking.
-
-### FAISS Semantic Memory Activation
-`MemoryConfig.enabled` is currently `false` in production. Define the activation criteria
-(e.g. FAISS index populated with ≥ 1 000 semantic concepts) and write the enabling migration
-procedure.
-
----
-
-## Reference: Smoke Stage Status (`20260425T192408Z`)
+## Reference: Latest Jetson Smoke Snapshot (`20260426T231226Z`)
 
 | Stage | Status | Notes |
-|-------|--------|-------|
+| ----- | ------ | ----- |
 | container_health | ✅ PASS | |
 | app_health | ✅ PASS | |
-| camera | ✅ PASS | ribbon IMX500 via jetson_csi backend |
+| camera | ✅ PASS | ribbon IMX500 via `jetson_csi` backend |
 | lidar | ✅ PASS | LD19, 360° coverage |
-| audio | ✅ PASS | USB mic, 1 024-sample chunk |
+| audio | ✅ PASS | USB mic, 1,024-sample chunk |
 | speaker | ✅ PASS | USB speaker, write-timeout polling |
 | oled | ✅ PASS | I²C bus 7, SSD1306 128×64 |
 | gpio | ✅ PASS | Jetson.GPIO |
 | serial | ✅ PASS | ESP32 CP2102N at 1 Mbps |
 | hardware_pytest | ✅ PASS | |
-| **voice** | ✅ **PASS** | 39,424 audio samples, Piper en_US-lessac-medium |
+| voice | ✅ PASS | 39,424 audio samples, Piper `en_US-lessac-medium` |
 | e2e | ✅ PASS | |
 | system | ✅ PASS | |
+| **ten_pillars** | ✅ **PASS** | **20/20 — all 10 pillars, pytest + factory probe** |

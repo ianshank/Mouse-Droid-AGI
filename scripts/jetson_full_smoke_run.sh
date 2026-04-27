@@ -5,8 +5,9 @@
 # transient wrapper script exported as MOUSEDROID_SMOKE_PYTHON, so
 # scripts/jetson_smoke_test.sh runs unmodified but executes inside the
 # container which already has `mousedroid`, pytest, torch, tensorrt and the
-# device passthroughs. The OLED stage is non-blocking; everything else is
-# stop-on-first-failure.
+# device passthroughs. Stage blocking defaults follow the Phase 1 roadmap
+# (LiDAR -> Camera -> OLED -> Motors); per-stage overrides are exposed via
+# MOUSEDROID_SMOKE_BLOCKING_<STAGE> env vars (yes|no).
 #
 # Usage (run on the Jetson host, repo at /opt/mousedroid):
 #   bash scripts/jetson_full_smoke_run.sh
@@ -43,10 +44,33 @@ record() {
     log "${status}: ${name} ${note}"
 }
 
+resolve_blocking() {
+    # Resolve effective blocking flag for a stage. Operators can promote or
+    # demote any stage without code edits via:
+    #   MOUSEDROID_SMOKE_BLOCKING_<STAGE_UPPER>=yes|no
+    # Falls back to the default literal passed in by the caller. Values are
+    # validated; unknown values fall back to the default.
+    local label="$1" default_blocking="$2"
+    local upper
+    upper="$(printf '%s' "${label}" | tr '[:lower:]-' '[:upper:]_')"
+    local override_var="MOUSEDROID_SMOKE_BLOCKING_${upper}"
+    local override="${!override_var:-}"
+    case "${override}" in
+        yes|no) printf '%s' "${override}" ;;
+        "")     printf '%s' "${default_blocking}" ;;
+        *)
+            log "WARN: ${override_var}='${override}' is invalid; using default '${default_blocking}'"
+            printf '%s' "${default_blocking}"
+            ;;
+    esac
+}
+
 run_stage() {
     # $1 = stage label, $2 = blocking? (yes|no), $3 = timeout seconds (0 = none),
     # $4.. = command
-    local label="$1" blocking="$2" tmo="$3"; shift 3
+    local label="$1" default_blocking="$2" tmo="$3"; shift 3
+    local blocking
+    blocking="$(resolve_blocking "${label}" "${default_blocking}")"
     local logfile="${RUN_DIR}/${label}.log"
     log "=== STAGE ${label} (blocking=${blocking} timeout=${tmo}s) ==="
     log "    cmd: $*"
@@ -96,6 +120,7 @@ fi
 
 docker_args=(
     docker exec
+    -w ${REPO_DIR}
     -e MOUSEDROID_MOCK_HARDWARE=false
     -e MOUSEDROID_JETSON_CONFIGS
     -e MOUSEDROID_FACE_DISPLAY_SMOKE
@@ -137,13 +162,29 @@ record "container_health" "INFO" "see container_health.log"
 
 # --- Stages 1-8: delegated to jetson_smoke_test.sh via PY_WRAPPER --------
 # Bench-debug sensors (camera/audio/lidar/speaker/voice) are non-blocking until the
-# physical wiring/overlays land; system/gpio/serial remain hard gates.
+# physical wiring/overlays land; system/gpio/serial and the bounded motor smoke are hard gates.
 for stage in system gpio serial; do
     run_stage "${stage}" "yes" 60 bash scripts/jetson_smoke_test.sh "${stage}" || break
 done
 
 if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
-    for stage in camera audio lidar speaker voice; do
+    # Motor remains soft until M4 (rover power + encoder wiring + speaker
+    # write timeout). Promote with MOUSEDROID_SMOKE_BLOCKING_MOTOR=yes once
+    # encoder loopback consistently passes on the bench.
+    run_stage "motor" "no" 120 \
+        env \
+            MOUSEDROID_SMOKE_ALLOW_MOTION=1 \
+            bash scripts/jetson_smoke_test.sh motor || true
+fi
+
+if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
+    # M1: lidar is now a hard gate by default (re-blocked after LD19 hardening).
+    # Operators can demote at runtime with MOUSEDROID_SMOKE_BLOCKING_LIDAR=no.
+    run_stage "lidar" "yes" 60 bash scripts/jetson_smoke_test.sh lidar || true
+fi
+
+if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
+    for stage in camera audio speaker voice; do
         run_stage "${stage}" "no" 45 bash scripts/jetson_smoke_test.sh "${stage}"
     done
 fi
@@ -283,6 +324,15 @@ fi
         echo "3. The configured USB speaker is enumerated and not held by another process."
         echo
         echo "Full per-stage logs are in \`${RUN_DIR}\` (\`voice.log\` for this stage)."
+    fi
+    # Ten Pillars section — appended when validate_pillar.sh has run against
+    # this same RUN_DIR (MOUSEDROID_PILLAR_REPORT_DIR="${RUN_DIR}").
+    ten_pillars_log="${RUN_DIR}/ten_pillars.log"
+    if [[ -f "${ten_pillars_log}" ]]; then
+        echo
+        echo "## Ten Pillars Validation"
+        echo
+        cat "${ten_pillars_log}"
     fi
 } > "${SUMMARY}"
 

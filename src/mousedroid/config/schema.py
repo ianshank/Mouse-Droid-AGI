@@ -250,6 +250,103 @@ class CuriosityConfig(BaseModel):
     )
 
 
+class RangeF(BaseModel):
+    """Inclusive floating-point range used by domain randomization."""
+
+    low: float = Field(description="Inclusive lower bound")
+    high: float = Field(description="Inclusive upper bound")
+
+    @model_validator(mode="after")
+    def _validate_bounds(self) -> Self:
+        if self.low > self.high:
+            msg = "low must be <= high"
+            raise ValueError(msg)
+        return self
+
+
+class DomainRandomizationConfig(BaseModel):
+    """Phase-1 sim-to-real domain randomization ranges."""
+
+    enabled: bool = Field(
+        True,
+        description="Master switch — when False every sample yields empty EpisodeParams",
+    )
+    brightness: RangeF = Field(
+        default_factory=lambda: RangeF(low=0.6, high=1.4),
+        description="Multiplicative image brightness scale",
+    )
+    contrast: RangeF = Field(
+        default_factory=lambda: RangeF(low=0.7, high=1.3),
+        description="Multiplicative image contrast scale",
+    )
+    hue_shift_deg: RangeF = Field(
+        default_factory=lambda: RangeF(low=-15.0, high=15.0),
+        description="Camera hue perturbation in degrees",
+    )
+    gaussian_noise_std: RangeF = Field(
+        default_factory=lambda: RangeF(low=0.0, high=0.04),
+        description="Image-space Gaussian noise standard deviation",
+    )
+    motion_blur_px: RangeF = Field(
+        default_factory=lambda: RangeF(low=0.0, high=2.5),
+        description="Approximate horizontal motion blur radius in pixels",
+    )
+    fov_deg: RangeF = Field(
+        default_factory=lambda: RangeF(low=58.0, high=72.0),
+        description="Camera field of view in degrees",
+    )
+    cam_pitch_deg: RangeF = Field(
+        default_factory=lambda: RangeF(low=-3.0, high=3.0),
+        description="Camera pitch perturbation in degrees",
+    )
+    cam_yaw_deg: RangeF = Field(
+        default_factory=lambda: RangeF(low=-2.0, high=2.0),
+        description="Camera yaw perturbation in degrees",
+    )
+    cam_height_m: RangeF = Field(
+        default_factory=lambda: RangeF(low=0.085, high=0.115),
+        description="Camera mounting height in metres",
+    )
+    wheel_friction: RangeF = Field(
+        default_factory=lambda: RangeF(low=0.7, high=1.3),
+        description="Wheel friction multiplier",
+    )
+    wheel_slip: RangeF = Field(
+        default_factory=lambda: RangeF(low=0.0, high=0.15),
+        description="Wheel slip factor",
+    )
+    chassis_mass_kg: RangeF = Field(
+        default_factory=lambda: RangeF(low=2.4, high=3.0),
+        description="Robot chassis mass in kilograms",
+    )
+    motor_gain: RangeF = Field(
+        default_factory=lambda: RangeF(low=0.85, high=1.15),
+        description="Motor gain multiplier",
+    )
+    uart_latency_ms: RangeF = Field(
+        default_factory=lambda: RangeF(low=2.0, high=18.0),
+        description="UART command latency in milliseconds",
+    )
+    encoder_dropout_prob: RangeF = Field(
+        default_factory=lambda: RangeF(low=0.0, high=0.02),
+        description="Probability of dropping encoder feedback",
+    )
+    push_force_n: RangeF = Field(
+        default_factory=lambda: RangeF(low=0.0, high=1.5),
+        description="External push disturbance force in Newtons",
+    )
+    push_event_prob: float = Field(
+        0.05,
+        ge=0.0,
+        le=1.0,
+        description="Per-episode probability of an external push disturbance occurring",
+    )
+    feature_noise_std: RangeF = Field(
+        default_factory=lambda: RangeF(low=0.0, high=0.02),
+        description="Feature-space Gaussian noise standard deviation",
+    )
+
+
 class ESP32Config(BaseModel):
     """ESP32 communication configuration for Wave Rover motor control."""
 
@@ -1891,6 +1988,42 @@ class TrainingConstitutionalConfig(BaseModel):
     )
 
 
+class TrainingReplayConfig(BaseModel):
+    """Replay-ingestion settings for RSSM and activation training flows."""
+
+    enabled: bool = Field(
+        False,
+        description="Enable LMDB-backed replay ingestion alongside or instead of synthetic data",
+    )
+    source_path: str | None = Field(
+        None,
+        description="Optional LMDB replay source path (None uses experience.path)",
+    )
+    terminal_gap_s: float = Field(
+        5.0,
+        gt=0,
+        description="Timestamp gap used to infer episode boundaries in LMDB replay",
+    )
+    real_episode_ratio: float = Field(
+        0.0,
+        ge=0.0,
+        description=(
+            "Number of real replay episodes to include per synthetic episode. "
+            "Ignored when synthetic data is absent, in which case all available replay episodes "
+            "are used."
+        ),
+    )
+    max_real_episodes: int | None = Field(
+        None,
+        gt=0,
+        description="Optional cap on replay episodes mixed into one training dataset build",
+    )
+    seed: int | None = Field(
+        None,
+        description="Optional seed used when selecting a subset of replay episodes",
+    )
+
+
 class TrainingConfig(BaseModel):
     """Offline training configuration."""
 
@@ -1910,6 +2043,9 @@ class TrainingConfig(BaseModel):
     )
     generation: TrainingGenerationConfig = Field(
         default_factory=_settings_default_factory(TrainingGenerationConfig)
+    )
+    replay: TrainingReplayConfig = Field(
+        default_factory=_settings_default_factory(TrainingReplayConfig)
     )
     annotation: TrainingAnnotationConfig = Field(
         default_factory=_settings_default_factory(TrainingAnnotationConfig)
@@ -1983,6 +2119,11 @@ class VoiceConfig(BaseModel):
         None, description="Path to piper voice model (None=disable TTS model loading)"
     )
     tts_sample_rate: int = Field(22050, gt=0, description="TTS output sample rate (Hz)")
+    output_volume: float = Field(
+        1.0,
+        ge=0.0,
+        description="Output gain applied to synthesized samples before playback",
+    )
     queue_size: int = Field(16, gt=0, description="Max queued speech requests")
     queue_poll_timeout_s: float = Field(1.0, gt=0, description="Worker queue poll timeout (s)")
     phrase_overrides: dict[str, list[str]] = Field(
@@ -2195,6 +2336,9 @@ class Settings(BaseSettings):
     )
     logging: LoggingConfig = Field(default_factory=_settings_default_factory(LoggingConfig))
     training: TrainingConfig = Field(default_factory=_settings_default_factory(TrainingConfig))
+    domain_randomization: DomainRandomizationConfig = Field(
+        default_factory=_settings_default_factory(DomainRandomizationConfig)
+    )
     health: HealthConfig = Field(default_factory=_settings_default_factory(HealthConfig))
     retry: RetryConfig = Field(default_factory=_settings_default_factory(RetryConfig))
     circuit_breaker: CircuitBreakerConfig = Field(

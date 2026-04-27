@@ -137,6 +137,45 @@ class OfflineRLDataset:
                 return None
             return MouseDroidExperienceRecord.deserialize(bytes(data))
 
+    def _load_records(self) -> list[MouseDroidExperienceRecord]:
+        """Load all available records from LMDB in key order."""
+        if not self._keys or self._env is None:
+            return []
+
+        records: list[MouseDroidExperienceRecord] = []
+        with self._env.begin() as txn:
+            for key in self._keys:
+                data = txn.get(key)
+                if data is None:
+                    continue
+                records.append(MouseDroidExperienceRecord.deserialize(bytes(data)))
+        return records
+
+    def get_episodes(
+        self,
+        terminal_gap_s: float = 5.0,
+    ) -> list[list[MouseDroidExperienceRecord]]:
+        """Group LMDB records into episodes using timestamp gaps."""
+        records = self._load_records()
+        if not records:
+            return []
+
+        episodes: list[list[MouseDroidExperienceRecord]] = [[records[0]]]
+        for idx in range(1, len(records)):
+            prev = records[idx - 1]
+            current = records[idx]
+            if abs(current.timestamp - prev.timestamp) > terminal_gap_s:
+                episodes.append([])
+            episodes[-1].append(current)
+
+        _log.info(
+            "offline_episodes_loaded",
+            n_episodes=len(episodes),
+            n_records=len(records),
+            terminal_gap_s=terminal_gap_s,
+        )
+        return episodes
+
     def get_transitions(
         self,
         terminal_gap_s: float = 5.0,
@@ -161,21 +200,7 @@ class OfflineRLDataset:
             empty_d = np.zeros(0, dtype=np.float32)
             return empty_s, empty_a, empty_r, empty_s.copy(), empty_d
 
-        records: list[MouseDroidExperienceRecord] = []
-        if self._env is None:
-            empty_s = np.zeros((0, self.state_dim), dtype=np.float32)
-            empty_a = np.zeros((0, self._action_dim), dtype=np.float32)
-            empty_r = np.zeros(0, dtype=np.float32)
-            empty_d = np.zeros(0, dtype=np.float32)
-            return empty_s, empty_a, empty_r, empty_s.copy(), empty_d
-        with self._env.begin() as txn:
-            for key in self._keys:
-                data = txn.get(key)
-                if data is None:
-                    continue
-                rec = MouseDroidExperienceRecord.deserialize(bytes(data))
-                if rec is not None:
-                    records.append(rec)
+        records = self._load_records()
 
         if len(records) < 2:
             empty_s = np.zeros((0, self.state_dim), dtype=np.float32)

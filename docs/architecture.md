@@ -55,7 +55,6 @@ graph TD
         end
         subgraph HWLayer["Hardware Interface Layer"]
             Camera["Camera\nIMX500 ribbon camera\nJetson / GStreamer / V4L2 fallback"]
-            Ultrasonic["Ultrasonic\nHC-SR04"]
             Microphone["USB Microphone\nWonrabai USB Sound Card\nAudioProtocol"]
             Speaker["USB Speaker\nWonrabai USB Sound Card\nSpeakerProtocol"]
             LiDAR["LiDAR\nFHL-LD19\nLidarProtocol"]
@@ -81,7 +80,6 @@ graph TD
     CoreAI --> SensorMgr
     CoreAI --> ExperienceDB
     SensorMgr --> Camera
-    SensorMgr --> Ultrasonic
     SensorMgr --> Microphone
     SensorMgr --> Speaker
     SensorMgr --> LiDAR
@@ -91,6 +89,7 @@ graph TD
     RuntimeValidation --> Microphone
     RuntimeValidation --> Speaker
     RuntimeValidation --> LiDAR
+    TenPillars["Ten Pillars Campaign\nvalidate_pillar.sh\npytest + factory probe × 10"] --> SmokeHarness
     Orchestrator -- "UART 1 Mbps / HTTP" --> ESP32
     DockerContainer -.-> DockerData
     DockerContainer -.-> Containerd
@@ -103,6 +102,7 @@ graph TD
 | Docker `mousedroid:jetson` | L4T PyTorch r36.4.0 | GPU-accelerated container (CUDA 12.6 + TensorRT 10.4) |
 | `mousedroid` process | Python 3.10 asyncio | All AI reasoning + I/O orchestration |
 | Runtime validation layer | Python utilities + shell harnesses | Shared config-backed smoke, verification, and host-driven Jetson validation |
+| Ten Pillars campaign | `validate_pillar.sh` | Headless dispatcher — runs pytest + factory probe for each of the 10 AGI pillars |
 | LMDB experience store | LMDB on-disk | Persistent experience replay buffer |
 | Llama GGUF model | llama-cpp-python | Local LLM for NL to velocity |
 | ESP32 firmware | C++ (Wave Rover SDK) | Motor PWM control, encoder polling |
@@ -123,9 +123,9 @@ graph TD
     CLI["CLI Entry\nmain.py"]
     Factory["Factory\nfactory.py\nOnly file that imports concrete types"]
     Orchestrator["Orchestrator\norchestrator/\nconfig-driven tick cadence\nsense - plan - act"]
-    SensorMgr["Sensor Manager\nsensing/\nCamera - Ultrasonic - LiDAR - Audio - ESP32 encoders"]
+    SensorMgr["Sensor Manager\nsensing/\nCamera - LiDAR - Audio - ESP32 encoders"]
     SafetyMon["Safety Monitor\nsafety/\nClearance - Battery - Sensor staleness"]
-    Encoder["Encoder\nvision + motor + ultrasonic + audio + lidar"]
+    Encoder["Encoder\nvision + motor + audio + lidar"]
     RSSM["World Model\nRSSM or DualStreamRSSM\nconfig-driven hidden dims\nobserve step / imagine step"]
     MCTS["MCTS\nconfig-driven simulation budget"]
     NavAgent["Navigation Agent\nagents/\nact with h, z, safety"]
@@ -270,6 +270,7 @@ graph TD
     JetsonFullSmoke["scripts/jetson_full_smoke_run.sh\nfull hardware smoke harness\n13 stages + SUMMARY.md enricher"]
     JetsonSmoke["scripts/jetson_smoke_test.sh\nhost-side smoke harness"]
     VerifySensors["scripts/verify_sensors.py\nJSON and human-readable sensor checks"]
+    TenPillars["scripts/validate_pillar.sh\nTen Pillars campaign dispatcher\npytest + factory probe × 10\nwrites ten_pillars.log"]
     RuntimeValidation["validation/runtime.py\nresolve_runtime_config_paths()\nload_runtime_settings()\ncapture_* helpers\nplay_rocky_voice_phrase()"]
     SettingsLoader["config.loader.load_settings\nYAML + env overlay resolution"]
     Factory["factory.py\nprotocol-based DI"]
@@ -280,11 +281,15 @@ graph TD
 
     HostRunner --> JetsonValidate
     HostRunner --> JetsonFullSmoke
+    HostRunner --> TenPillars
     JetsonFullSmoke --> RuntimeValidation
+    JetsonFullSmoke --> TenPillars
     JetsonValidate --> JetsonSmoke
     JetsonValidate --> VerifySensors
     JetsonSmoke --> RuntimeValidation
     VerifySensors --> RuntimeValidation
+    TenPillars --> RuntimeValidation
+    TenPillars --> Factory
     RuntimeValidation --> SettingsLoader
     RuntimeValidation --> Factory
     Factory --> Camera
@@ -296,15 +301,33 @@ graph TD
 All runtime validation paths load overlays through `resolve_runtime_config_paths()` and
 `load_runtime_settings()`, so values such as `camera.device_path`,
 `lidar.scan_acquisition_timeout_s`, `lidar.min_scan_coverage_deg`, and
-`voice.tts_model_path` remain config-driven.
+`voice.tts_model_path`, `voice.personality_to_model_map`, `voice.event_intensity_thresholds`, and
+`voice.output_volume` remain config-driven.
 
 `play_rocky_voice_phrase()` provides a factory-backed end-to-end TTS + speaker smoke check
 used by `jetson_full_smoke_run.sh`. Voice smoke status: **PASS** (39,424 samples,
 `en_US-lessac-medium`, `20260425T192408Z`).
 
-> **Overlay sync note**: `/etc/mousedroid/jetson_production.yaml` is a read-only bind-mount
-> on the Jetson host, separate from the repo. After each `git pull`, sync it manually:
-> `sudo cp /opt/mousedroid/config/jetson_production.yaml /etc/mousedroid/jetson_production.yaml`
+**Ten Pillars campaign** (`scripts/validate_pillar.sh all`): runs 20 checks (10 pytest stages +
+10 factory probes) across all AGI pillars. Last result: **Overall: PASS — 20/20**
+(`2026-04-26T23:55:42Z`, Jetson Orin Nano, CUDA 12.6, TensorRT 10.4.0).
+
+| Pillar | pytest marker | Factory probe class |
+| ------ | ------------- | ------------------- |
+| world_model | `unit/world_model/` | `build_world_model(cfg)` |
+| cognitive | `unit/cognitive/` | `build_cognitive_core(cfg)` |
+| memory | `unit/memory/` | `build_memory_tier(cfg)` |
+| continual | `unit/learning/` | `EWCAgent(cfg.learning, nn.Linear(...))` |
+| meta | `unit/meta/` | `MAMLAdapter(nn.Linear(...), ...)` |
+| curiosity | `unit/curiosity/` | `build_curiosity_module(cfg)` |
+| growth | `unit/growth/` | `KnowledgeDistiller(teacher, student, ...)` |
+| reward | `unit/reward/` | `MultiObjectiveRewardModel(cfg.model, cfg.reward)` |
+| scaling | `unit/scaling/` | `AdaptiveCompute(input_dim=..., max_steps=8)` |
+| safety | `unit/safety/` | `build_safety_monitor(cfg)` |
+
+> **Overlay sync note**: when managed by `scripts/mousedroid-docker.service`, the production
+> overlay is synced automatically via `scripts/sync_jetson_overlay.sh` before
+> `preflight_check.sh` executes.
 
 ---
 
@@ -494,7 +517,6 @@ This means:
 ```mermaid
 sequenceDiagram
     participant Camera as Camera IMX708
-    participant Sonic as HC-SR04
     participant Mic as Wonrabai USB Mic
     participant LiDAR as FHL-LD19 LiDAR
     participant ESP32 as ESP32 Encoders
@@ -506,7 +528,6 @@ sequenceDiagram
 
     par Concurrent sensor reads
         Camera->>SM: capture_features()
-        Sonic->>SM: read_distance_m()
         ESP32->>SM: read_encoders() + get_battery_voltage()
         Mic->>SM: read_chunk()
         LiDAR->>SM: read_scan()

@@ -7,6 +7,7 @@
 #   bash scripts/jetson_smoke_test.sh system        # Run only system health tests
 #   bash scripts/jetson_smoke_test.sh gpio          # Run only GPIO tests
 #   bash scripts/jetson_smoke_test.sh serial        # Run only serial tests
+#   bash scripts/jetson_smoke_test.sh motor         # Run only motor loopback smoke
 #   bash scripts/jetson_smoke_test.sh camera        # Run only camera tests
 #   bash scripts/jetson_smoke_test.sh lidar         # Run only LiDAR tests
 #   bash scripts/jetson_smoke_test.sh speaker       # Run only speaker tests
@@ -23,6 +24,7 @@ FAILURES=0
 PASSES=0
 SKIPS=0
 RESULTS=()
+ALLOW_MOTION="${MOUSEDROID_SMOKE_ALLOW_MOTION:-0}"
 CONFIGS_CSV="${MOUSEDROID_JETSON_CONFIGS:-}"
 declare -a CONFIG_ARGS=()
 
@@ -302,6 +304,65 @@ PYEOF
 }
 
 # ---------------------------------------------------------------------------
+# 3b. Motor loopback smoke
+# ---------------------------------------------------------------------------
+
+test_motor() {
+    log_section "Motor Loopback Smoke"
+    log_step "Running ESP32 loopback motor smoke test"
+    local pytest_hint="rebuild the Jetson container with docker compose -f docker-compose.jetson.yml build mousedroid"
+
+    if [[ "${ALLOW_MOTION}" != "1" ]]; then
+        record_skip "motor loopback smoke" "motion disabled; set MOUSEDROID_SMOKE_ALLOW_MOTION=1"
+        return
+    fi
+
+    if ! "${PYTHON}" -m pytest --version >/dev/null 2>&1; then
+        if [[ "${ALLOW_MOTION}" == "1" ]]; then
+            record_fail "motor loopback smoke" "pytest not available in selected Python runtime; ${pytest_hint}"
+        else
+            record_skip "motor loopback smoke" "pytest not available in selected Python runtime"
+        fi
+        return
+    fi
+
+    local test_file="${PROJECT_DIR}/tests/hardware/test_esp32_loopback.py"
+    if [[ ! -f "${test_file}" ]]; then
+        if [[ "${ALLOW_MOTION}" == "1" ]]; then
+            record_fail "motor loopback smoke" "tests/hardware/test_esp32_loopback.py not found"
+        else
+            record_skip "motor loopback smoke" "tests/hardware/test_esp32_loopback.py not found"
+        fi
+        return
+    fi
+
+    local pytest_output
+    if pytest_output="$(MOUSEDROID_JETSON_CONFIGS="${CONFIGS_CSV}" MOUSEDROID_MOCK_HARDWARE=false "${PYTHON}" -m pytest -m hardware -ra -v "${test_file}" 2>&1)"; then
+        echo "${pytest_output}"
+        if ! echo "${pytest_output}" | grep -q "test_send_velocity_moves_encoders PASSED"; then
+            local motor_reason
+            motor_reason="$(echo "${pytest_output}" | grep -m1 "encoder loopback inactive" | sed 's/^.*encoder loopback inactive/encoder loopback inactive/' || true)"
+            if [[ -n "${motor_reason}" ]]; then
+                record_fail "motor loopback smoke" "${motor_reason}"
+            else
+                record_fail "motor loopback smoke" "encoder loopback test did not pass"
+            fi
+            return
+        fi
+        if ! echo "${pytest_output}" | grep -q "test_emergency_stop_latency PASSED"; then
+            record_fail "motor loopback smoke" "emergency stop latency test did not pass"
+            return
+        fi
+        record_pass "motor loopback smoke"
+    else
+        echo "${pytest_output}"
+        local failed_count
+        failed_count="$(echo "${pytest_output}" | grep -oP '\d+ failed' | grep -oP '\d+' || echo "?")"
+        record_fail "motor loopback smoke" "${failed_count} test(s) failed"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # 4. Camera / 5. Audio -- delegate to scripts/verify_sensors.py
 # ---------------------------------------------------------------------------
 
@@ -379,9 +440,14 @@ test_app() {
 test_pytest() {
     log_section "Hardware Pytest Suite"
     log_step "Running pytest -m hardware"
+    local pytest_hint="rebuild the Jetson container with docker compose -f docker-compose.jetson.yml build mousedroid"
 
     if ! "${PYTHON}" -m pytest --version >/dev/null 2>&1; then
-        record_skip "hardware pytest" "pytest not available in selected Python runtime"
+        if [[ -n "${MOUSEDROID_SMOKE_PYTHON:-}" ]]; then
+            record_fail "hardware pytest suite" "pytest not available in selected Python runtime; ${pytest_hint}"
+        else
+            record_skip "hardware pytest" "pytest not available in selected Python runtime"
+        fi
         return
     fi
 
@@ -513,6 +579,7 @@ main() {
             test_system
             test_gpio
             test_serial
+            test_motor
             test_camera
             test_audio
             test_lidar
@@ -525,6 +592,7 @@ main() {
         system)   test_system ;;
         gpio)     test_gpio ;;
         serial)   test_serial ;;
+        motor)    test_motor ;;
         camera)   test_camera ;;
         audio)    test_audio ;;
         lidar)    test_lidar ;;
@@ -535,7 +603,7 @@ main() {
         e2e)      test_e2e ;;
         *)
             echo "Unknown step: ${step}"
-            echo "Valid steps: all, system, gpio, serial, camera, audio, lidar, speaker, voice, app, pytest, e2e"
+            echo "Valid steps: all, system, gpio, serial, motor, camera, audio, lidar, speaker, voice, app, pytest, e2e"
             exit 1
             ;;
     esac

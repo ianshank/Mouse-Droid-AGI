@@ -151,3 +151,15 @@ class TestPersonalityToModelMap:
         """Absolute model paths pass validation."""
         cfg = _cfg(personality_to_model_map={"rocky": "/models/rocky.onnx"})
         assert cfg.personality_to_model_map["rocky"] == "/models/rocky.onnx"
+
+
+class TestOutputVolume:
+    """Tests for the output_volume field."""
+
+    def test_defaults_to_unity_gain(self) -> None:
+        cfg = _cfg()
+        assert cfg.output_volume == pytest.approx(1.0)
+
+    def test_negative_gain_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="output_volume"):
+            _cfg(output_volume=-0.1)

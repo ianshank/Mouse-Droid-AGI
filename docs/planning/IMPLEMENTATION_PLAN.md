@@ -2,7 +2,7 @@
 
 > **Date**: 2026-04-14 (last updated; originally 2026-03-19)
 > **Author**: System Architect Agent
-> **Status**: Updated — reflects state as of 2026-04-14
+> **Status**: Rebased — historical plan plus 2026-04-26 Jetson/voice/training baseline note
 > **Branch**: `claude/create-implementation-plan-aQp9z`
 
 ---
@@ -10,14 +10,20 @@
 ## Context
 
 MouseDroidAGI is a Star Wars MSE-6 droid replica running on NVIDIA Jetson Orin Nano with:
+
 - **173 Python source files** across **30+ modules** (up from 121 at plan creation)
 - **1299+ tests** at **85%+ branch coverage** (85% gate enforced)
 - **5-stage CI pipeline**: lint → typecheck → test → security → Docker (Python 3.10 + 3.11 + 3.12)
 - **Architecture**: Protocol-based DI, asyncio everywhere, Pydantic v2 config, factory pattern
 - **Zero hardcoded values**: all config in YAML, constants centralized in `constants.py`
-- **5 sensor modalities**: camera, ultrasonic, audio (Wonrabai USB), LiDAR (FHL-LD19), encoders
+- **4 active Jetson production modalities**: camera, audio (Wonrabai USB), LiDAR (FHL-LD19), encoders
+
+> **2026-04-26 rebaseline**: PR 54's Phase 1 domain-randomization baseline is now merged into the
+> active line. The current operational roadmap is Jetson + voice rollout on camera/LiDAR/USB audio
+> and ESP32. HC-SR04 ultrasonic work and the robot-arm platform are deferred from the active plan.
 
 ### Sources Analyzed
+
 - `NEXT_STEPS.md` — 7 priority areas with 25+ action items
 - `PLAN.md` — Self-healing resilience plan (6 phases, not started)
 - `PLANNING.md` — L4T container deployment plan (partially done)

@@ -13,6 +13,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.jetson
+      args:
+        INSTALL_DEV_TOOLS: ${MOUSEDROID_INSTALL_DEV_TOOLS:-true}
     image: mousedroid:jetson
     runtime: nvidia
     # Required for Jetson.GPIO model detection via /proc/device-tree.

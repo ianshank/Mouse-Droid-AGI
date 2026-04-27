@@ -223,3 +223,48 @@ def test_start_falls_back_to_tts_model_path_when_map_empty() -> None:
         tts.start()
 
     mock_piper_module.PiperVoice.load.assert_called_once_with("/models/default.onnx")
+
+
+def test_synthesize_sync_applies_output_volume_gain() -> None:
+    """_synthesize_sync scales float32 output by output_volume and preserves dtype."""
+    from types import SimpleNamespace
+
+    from mousedroid.voice.tts import PiperTTS
+
+    tts = PiperTTS(_cfg(tts_sample_rate=4, output_volume=0.5))
+    samples_in = np.array([0, 13107, -19661, 32767], dtype=np.int16)
+
+    def write_wav(text: str, wav_file: wave.Wave_write) -> None:
+        assert text == "gain"
+        wav_file.writeframes(samples_in.tobytes())
+
+    tts._voice = SimpleNamespace(synthesize=write_wav)
+
+    samples = tts._synthesize_sync("gain")
+
+    np.testing.assert_allclose(
+        samples,
+        np.array([0.0, 0.2, -0.3, 0.5], dtype=np.float32),
+        atol=5e-4,
+    )
+    assert samples.dtype == np.float32
+
+
+def test_synthesize_sync_clips_after_gain() -> None:
+    """Gain is clipped into the speaker-safe [-1, 1] interval."""
+    from types import SimpleNamespace
+
+    from mousedroid.voice.tts import PiperTTS
+
+    tts = PiperTTS(_cfg(tts_sample_rate=3, output_volume=2.0))
+    samples_in = np.array([26214, -29491, 6553], dtype=np.int16)
+
+    def write_wav(text: str, wav_file: wave.Wave_write) -> None:
+        assert text == "clip"
+        wav_file.writeframes(samples_in.tobytes())
+
+    tts._voice = SimpleNamespace(synthesize=write_wav)
+
+    samples = tts._synthesize_sync("clip")
+
+    np.testing.assert_allclose(samples, np.array([1.0, -1.0, 0.4], dtype=np.float32), atol=5e-4)

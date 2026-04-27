@@ -175,3 +175,52 @@ def test_load_settings_empty_nested_env_var_does_not_raise(
     settings = load_settings(config_dir=cfg_dir)
 
     assert settings.mock_hardware is True
+
+
+def test_load_settings_domain_randomization_block(tmp_path: Path) -> None:
+    cfg_dir = tmp_path / "config"
+    cfg_dir.mkdir()
+    default = {
+        "mock_hardware": True,
+        "domain_randomization": {
+            "enabled": True,
+            "brightness": {"low": 0.7, "high": 1.3},
+            "motor_gain": {"low": 0.9, "high": 1.1},
+            "push_event_prob": 0.05,
+        },
+    }
+    (cfg_dir / "default.yaml").write_text(yaml.dump(default))
+
+    settings = load_settings(config_dir=cfg_dir)
+
+    assert settings.domain_randomization.enabled is True
+    assert settings.domain_randomization.brightness.low == 0.7
+    assert settings.domain_randomization.brightness.high == 1.3
+    assert settings.domain_randomization.motor_gain.high == 1.1
+    assert settings.domain_randomization.push_event_prob == 0.05
+
+
+def test_load_settings_domain_randomization_overlay(tmp_path: Path) -> None:
+    cfg_dir = tmp_path / "config"
+    cfg_dir.mkdir()
+    default = {
+        "mock_hardware": True,
+        "domain_randomization": {
+            "enabled": True,
+            "brightness": {"low": 0.6, "high": 1.4},
+        },
+    }
+    overlay = {
+        "domain_randomization": {
+            "enabled": False,
+        }
+    }
+    (cfg_dir / "default.yaml").write_text(yaml.dump(default))
+    overlay_path = tmp_path / "overlay.yaml"
+    overlay_path.write_text(yaml.dump(overlay))
+
+    settings = load_settings(overlay_path, config_dir=cfg_dir)
+
+    assert settings.domain_randomization.enabled is False
+    assert settings.domain_randomization.brightness.low == 0.6
+    assert settings.domain_randomization.brightness.high == 1.4

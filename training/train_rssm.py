@@ -157,13 +157,13 @@ def train_rssm(
     *,
     resume_from: Path | None = None,
 ) -> Path:
-    """Train RSSM encoder + dynamics on synthetic data.
+    """Train RSSM encoder + dynamics on synthetic and optional replay data.
 
     Supports GPU acceleration with AMP and checkpoint resume.
 
     Args:
         cfg: Root settings with training and model configs.
-        data_path: Path to ``sequences.pt`` file.
+        data_path: Path to ``sequences.pt`` file. May be absent when replay is enabled.
         device: Torch device (None = auto-detect).
         resume_from: Optional checkpoint path to resume from.
 
@@ -189,7 +189,13 @@ def train_rssm(
     _log.info("amp_status", enabled=use_amp, device=str(device))
 
     # Build dataset
-    dataset = RSSMSequenceDataset(data_path, seq_len=tcfg.sequence_length)
+    dataset = RSSMSequenceDataset(
+        data_path,
+        seq_len=tcfg.sequence_length,
+        replay_cfg=tcfg.replay,
+        experience_cfg=cfg.experience,
+        model_cfg=cfg.model,
+    )
     loader = DataLoader(
         dataset,
         batch_size=tcfg.batch_size,

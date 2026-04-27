@@ -7,6 +7,7 @@ and collecting (observation, action, reward) tuples.
 from __future__ import annotations
 
 import asyncio
+import numpy as np
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,11 @@ from mousedroid.config.schema import ModelConfig, Settings
 from mousedroid.factory import build_orchestrator
 from mousedroid.logging.setup import get_logger
 from mousedroid.sensing.bundle import MouseDroidObservationBundle
+from mousedroid.training.domain_randomization import (
+    DomainRandomizer,
+    EpisodeParams,
+    apply_feature_noise,
+)
 
 _log = get_logger(__name__)
 
@@ -50,6 +56,35 @@ def _bundle_to_tensors(
     }
 
 
+def _apply_episode_randomization(
+    obs_tensors: dict[str, torch.Tensor],
+    ep_params: EpisodeParams,
+    rng: np.random.Generator,
+) -> dict[str, torch.Tensor]:
+    """Apply one episode's randomization parameters to tensorised observations."""
+    if ep_params.is_empty:
+        return obs_tensors
+
+    randomized = dict(obs_tensors)
+    if ep_params.feature:
+        noisy_vision = apply_feature_noise(
+            randomized["vision"].detach().cpu().numpy(),
+            ep_params.feature,
+            rng,
+        )
+        randomized["vision"] = torch.from_numpy(np.ascontiguousarray(noisy_vision)).to(torch.float32)
+
+        if randomized["lidar"].numel() > 0:
+            noisy_lidar = apply_feature_noise(
+                randomized["lidar"].detach().cpu().numpy(),
+                ep_params.feature,
+                rng,
+            )
+            randomized["lidar"] = torch.from_numpy(np.ascontiguousarray(noisy_lidar)).to(torch.float32)
+
+    return randomized
+
+
 class SyntheticSequenceGenerator:
     """Generate synthetic observation sequences via mock orchestrator.
 
@@ -57,15 +92,19 @@ class SyntheticSequenceGenerator:
         cfg: Root settings (must have ``mock_hardware=True``).
     """
 
-    def __init__(self, cfg: Settings) -> None:
+    def __init__(self, cfg: Settings, *, seed: int | None = None) -> None:
         if not cfg.mock_hardware:
             msg = "SyntheticSequenceGenerator requires mock_hardware=True"
             raise ValueError(msg)
         self._cfg = cfg
+        self._seed = seed
+        self._randomizer = DomainRandomizer(cfg.domain_randomization)
 
     async def _run_episode(
         self,
         max_steps: int,
+        ep_params: EpisodeParams,
+        rng: np.random.Generator | None,
     ) -> list[dict[str, Any]]:
         """Run a single episode and collect transitions.
 
@@ -84,9 +123,18 @@ class SyntheticSequenceGenerator:
             # Use the sensor manager to read observations
             obs = await orchestrator._sensor_manager.read_all()  # type: ignore[attr-defined]
             obs_tensors = _bundle_to_tensors(obs, self._cfg.model)
+            if rng is not None and not ep_params.is_empty:
+                obs_tensors = _apply_episode_randomization(obs_tensors, ep_params, rng)
 
             # Random action for data collection
-            action = torch.tanh(torch.randn(1, self._cfg.model.action_dim))
+            if rng is None:
+                action = torch.tanh(torch.randn(1, self._cfg.model.action_dim))
+            else:
+                action_np = np.tanh(rng.standard_normal(self._cfg.model.action_dim)).astype(
+                    np.float32,
+                    copy=False,
+                )
+                action = torch.from_numpy(action_np).unsqueeze(0)
 
             transitions.append(
                 {
@@ -111,8 +159,24 @@ class SyntheticSequenceGenerator:
         all_episodes: list[list[dict[str, Any]]] = []
         log_every = self._cfg.training.generation.log_every_n_episodes
 
+        if self._randomizer.enabled:
+            _log.info("dr_enabled_for_generation", seed=self._seed, n_episodes=n_episodes)
+            master_rng = np.random.default_rng(self._seed)
+        else:
+            master_rng = None
+            if self._seed is not None:
+                _log.info("dr_disabled_seed_ignored", seed=self._seed)
+
         for ep in range(n_episodes):
-            transitions = await self._run_episode(max_steps)
+            if master_rng is None:
+                episode_rng = None
+                ep_params = EpisodeParams()
+            else:
+                episode_seed = int(master_rng.integers(0, np.iinfo(np.int64).max))
+                episode_rng = np.random.default_rng(episode_seed)
+                ep_params = self._randomizer.sample(episode_rng)
+
+            transitions = await self._run_episode(max_steps, ep_params, episode_rng)
             all_episodes.append(transitions)
             if (ep + 1) % log_every == 0 or ep + 1 == n_episodes:
                 _log.info("episodes_generated", count=ep + 1, total=n_episodes)
@@ -146,5 +210,6 @@ class SyntheticSequenceGenerator:
             n_episodes=n_episodes,
             max_steps=max_steps,
             path=str(output_dir),
+            domain_randomization_enabled=self._randomizer.enabled,
         )
         return output_dir

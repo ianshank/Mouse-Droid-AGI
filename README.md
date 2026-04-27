@@ -19,6 +19,8 @@ MouseDroidAGI implements the **10 Pillars of the Ideal Neural Network** as a coh
 
 The robot is built on a Wave Rover mecanum-wheel chassis, controlled by an ESP32 microcontroller, and powered by a ribbon-connected Raspberry Pi AI Camera (IMX500), USB LiDAR, and USB audio. All high-level reasoning runs on a Jetson Orin Nano.
 
+The current production baseline is camera + LiDAR + USB audio + ESP32 on Jetson. The HC-SR04 ultrasonic path and the robot-arm platform remain parked outside the active delivery scope.
+
 The Jetson validation path is aligned with the runtime path: smoke scripts, remote validation, and sensor verification all load the same config overlays and reuse the same factory-backed hardware checks as the application.
 
 Planning and architecture docs now live under `docs/planning/` and `docs/analysis/` to keep the repo root focused on runtime code and deployment assets.
@@ -48,7 +50,7 @@ graph TD
         subgraph Docker["Docker: mousedroid:jetson\nL4T PyTorch r36.4.0 — CUDA 12.6"]
             Orchestrator["Orchestrator\nconfig-driven sense-plan-act\nWatchdog + Memory + Voice"]
             CoreAI["Core AI Pipeline\nRSSM/Dual-Stream RSSM + MCTS\nBDI Cognitive Core\nMemory Tier + Curiosity + Safety"]
-            SensorMgr["Sensor Manager\nCamera • HC-SR04 • LiDAR • Mic • ESP32\nrecovery_attempt() resilience"]
+            SensorMgr["Sensor Manager\nCamera • LiDAR • Mic • ESP32\nrecovery_attempt() resilience"]
             VoiceEng["Voice Engine\nRocky TTS (Piper)\nphrase_bank — startup/shutdown/error events"]
             LLMGw["LLM Gateway (degraded-safe)\nRule parser → Llama GGUF fallback\nPrompt injection detection"]
             Telemetry["Telemetry Server\naiohttp REST + WebSocket + /metrics\nconfig-driven host/port + namespace"]
@@ -214,20 +216,45 @@ bash scripts/jetson_full_smoke_run.sh
 
 Runtime overlays may be supplied explicitly or through `MOUSEDROID_CONFIGS` / `MOUSEDROID_JETSON_CONFIGS`, keeping smoke and validation paths aligned with deployed configuration.
 
-> **Jetson deployment note**: `/etc/mousedroid/jetson_production.yaml` is a read-only
-> bind-mount separate from the repo. After each `git pull` on the Jetson, sync it manually:
->
-> ```bash
-> sudo cp /opt/mousedroid/config/jetson_production.yaml /etc/mousedroid/jetson_production.yaml
-> sudo systemctl restart mousedroid-docker
-> ```
+> **Jetson deployment note**: when the system is managed via `scripts/mousedroid-docker.service`,
+> the production overlay is synced automatically by `scripts/sync_jetson_overlay.sh` before
+> `preflight_check.sh` runs. Manual copying is only needed for ad-hoc runs outside that service path.
+
+### Ten Pillars Validation
+
+The Ten Pillars campaign verifies every AGI pillar end-to-end on the Jetson — both the pytest test
+suite and a live factory-backed in-container probe for each pillar:
+
+```bash
+# Run the full campaign (all 10 pillars, ~10 min on Jetson)
+bash scripts/validate_pillar.sh all
+
+# Run a single pillar (e.g. memory)
+bash scripts/validate_pillar.sh memory
+
+# Available pillars:
+# world_model  cognitive  memory  continual  meta
+# curiosity    growth     reward  scaling    safety
+```
+
+Each pillar run writes a row to `ten_pillars.log` (Markdown table) in the smoke run directory,
+and the full SUMMARY.md produced by `scripts/jetson_full_smoke_run.sh` appends the table as a
+`## Ten Pillars Validation` section.
+
+**Latest campaign result** (`2026-04-26T23:55:42Z`): **Overall: PASS — 20/20 checks green**
+(10 pytest stages + 10 factory probes; Jetson Orin Nano, CUDA 12.6, TensorRT 10.4.0).
+
+See [docs/planning/TEN_PILLARS_VALIDATION.md](docs/planning/TEN_PILLARS_VALIDATION.md) for the
+full operator validation plan, per-pillar pass criteria, and telemetry requirements.
 
 ### Rocky Voice Engine (Piper TTS)
 
 The Rocky personality voice engine uses [Piper TTS](https://github.com/rhasspy/piper) for local neural synthesis. The Jetson Docker image bakes in the model at build time:
 
 - **Model**: `en_US-lessac-medium.onnx` + `.onnx.json` (baked into Docker layer at build; non-fatal if HuggingFace is unreachable at build time)
-- **Config**: `voice.enabled`, `voice.tts_model_path`, `voice.tts_sample_rate`, `voice.cooldown_s` — all in `config/jetson_production.yaml`
+- **Config**: `voice.enabled`, `voice.tts_model_path`, `voice.personality_to_model_map`,
+  `voice.event_intensity_thresholds`, `voice.output_volume`, `voice.tts_sample_rate`, and
+  `voice.cooldown_s` — all in `config/jetson_production.yaml`
 - **Smoke status**: ✅ PASS — `voice | PASS` (39,424 audio samples generated, `20260425T192408Z`)
 
 Events that trigger Rocky: startup, shutdown, obstacle detected, critical error, sensor recovery.
@@ -299,7 +326,7 @@ src/mousedroid/
 ├── experience/       # LMDB experience logger + record format
 ├── factory.py        # Dependency injection factory functions
 ├── growth/           # Knowledge distillation
-├── hardware/         # Camera, ultrasonic, motor drivers + protocols
+├── hardware/         # Camera, LiDAR, audio, motor drivers + protocols
 ├── health/           # Jetson health monitor (GPU temp/load)
 ├── learning/         # EWC + progressive neural networks
 ├── llm_gateway/      # Natural language → velocity via local LLM
@@ -317,7 +344,7 @@ src/mousedroid/
 └── world_model/      # RSSM + Dual-Stream CfC/GRU RSSM, MCTS planner
 
 training/             # Offline GPU training pipelines
-├── run_pipeline.py           # Phase 1→2→3→4 orchestrator; --resume for checkpoint continuation
+├── run_pipeline.py           # Phase 0→1→2→3→4 orchestrator; --resume for checkpoint continuation
 ├── train_rssm.py             # Phase 2.1: RSSM pretraining on synthetic data
 ├── warmstart_policy.py       # Phase 2.2: MCTS policy warm-start + UCB tuning
 ├── collect_annotations.py    # Phase 2.3a: BDI intention annotation collection
@@ -332,7 +359,7 @@ scripts/
 ├── ci.sh                    # CI pipeline: lint → type check → test → coverage gate
 ├── check_branch_coverage.py # Changed-line coverage gate (≥85%) with Pydantic/torch resilience
 ├── preflight_check.sh       # Pre-flight hardware validation (devices, disk, config, weights)
-├── verify_sensors.py        # Sensor verification script (camera/ultrasonic/lidar/speaker) --json
+├── verify_sensors.py        # Sensor verification script (runtime-aligned camera/lidar/audio checks) --json
 ├── deploy_jetson.sh         # Idempotent Jetson deployment (venv + systemd)
 ├── docker_deploy.sh         # Docker container build + deploy on Jetson
 ├── jetson_test_runner.sh    # Container test runner (unit/integration/e2e)
@@ -395,11 +422,16 @@ Constitutional RL integrates these constraints directly into the PPO training lo
 
 ## Training Pipeline
 
-Offline GPU training runs in four sequential phases:
+Offline training now starts with Phase 0 synthetic data generation using the merged
+domain-randomization baseline, then continues through RSSM pretraining, warm-start, BDI,
+and constitutional RL.
 
 ```bash
-# Run the full pipeline (phases 1 → 2.1 RSSM → 2.2 warmstart → 2.3 BDI → 2.4 constitutional-RL)
+# Run the full pipeline (phase 0 data generation → 1 RSSM → 2 warmstart → 3 BDI → 4 constitutional-RL)
 python training/run_pipeline.py
+
+# Run just the merged Phase 0+1 training baseline
+python training/run_pipeline.py --phases 0,1
 
 # Resume RSSM training (Phase 1) from a checkpoint
 python training/run_pipeline.py --resume training/results/rssm_epoch_10.pt
@@ -574,7 +606,8 @@ MIT License — see [LICENSE](LICENSE) for details.
 | Storage | Samsung NVMe 500 GB SSD | Docker data + swap |
 | Chassis | Waveshare Wave Rover | Mecanum wheel, ESP32 onboard |
 | Camera | Jetson CSI / Raspberry Pi AI Camera (IMX500) | Onboard ML inference |
-| Distance | HC-SR04 Ultrasonic | GPIO pins 23/24 |
 | LiDAR | FHL-LD19 360 2D | UART /dev/ttyUSB1, 230400 baud |
 | Audio | Wonrabai USB Sound Card | Combo mic + 8 5W speaker |
 | Battery | 3S LiPo 11.1V | Min cutoff 9.5V |
+
+HC-SR04 support remains in the codebase but is not part of the active Jetson production baseline.

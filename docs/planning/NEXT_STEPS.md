@@ -4,6 +4,11 @@
 
 This document tracks planned enhancements, organised by priority and category.
 
+> **2026-04-26 rebaseline**: the active production baseline is Jetson + camera + LiDAR + USB
+> audio + ESP32. Overlay-sync automation and the early voice-config rollout are complete. HC-SR04
+> ultrasonic items and robot-arm work in this document should be treated as deferred unless they
+> are explicitly reactivated.
+
 ## Recently Completed — 2026-04-24 CI Determinism + Config Compatibility Hardening
 
 - ✅ **Deterministic CI interpreter resolution**: `scripts/ci.sh` now resolves Python in a stable order

@@ -86,6 +86,55 @@ def _section(title: str) -> None:
     print(f"\n{bar}\n  {title}\n{bar}")
 
 
+def _diagnose_camera_host(cfg: Settings) -> str | None:
+    """Return an actionable diagnosis when no /dev/video* node is present.
+
+    Inspects the configured ``camera.device_path`` plus any sibling video
+    nodes, and (when running on a Jetson host) tails the ``nvargus-daemon``
+    journal for the most recent IMX/CSI probe error. Returns ``None`` when
+    the device path exists or diagnosis is not applicable; otherwise returns
+    a single-line, operator-actionable string suitable for ``_fail`` detail.
+
+    The function is best-effort: any subprocess or filesystem failure is
+    swallowed so the caller still surfaces the original capture exception.
+    """
+    import subprocess
+
+    device_path = Path(getattr(cfg.camera, "device_path", "/dev/video0"))
+    siblings = sorted(Path("/dev").glob("video*"))
+    if device_path.exists() or siblings:
+        return None
+
+    notes: list[str] = [f"{device_path} not present and no /dev/video* node enumerated"]
+
+    media_nodes = sorted(Path("/dev").glob("media*"))
+    if media_nodes:
+        notes.append(f"media nodes present: {[str(p) for p in media_nodes]}")
+
+    try:
+        journal = subprocess.run(
+            ["journalctl", "-u", "nvargus-daemon", "--no-pager", "-n", "60"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        for line in reversed(journal.stdout.splitlines()):
+            lower = line.lower()
+            if any(token in lower for token in ("imx", "probe of", "i2c read probe", "modulenotpresent")):
+                notes.append(f"nvargus: {line.strip()}")
+                break
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    notes.append(
+        "ACTION: confirm camera model matches device-tree overlay "
+        "(check /boot/extlinux/extlinux.conf), reseat ribbon, and "
+        "verify camera.device_path in jetson_production.yaml"
+    )
+    return " | ".join(notes)
+
+
 def check_camera(cfg: Settings) -> None:
     """Verify the configured camera can capture one frame."""
     _section("Video (Camera)")
@@ -94,7 +143,9 @@ def check_camera(cfg: Settings) -> None:
     try:
         frame, backend_name = asyncio.run(capture_camera_frame(cfg))
     except Exception as exc:
-        _fail("camera capture", str(exc), sensor="camera")
+        diagnosis = _diagnose_camera_host(cfg)
+        detail = f"{exc} :: {diagnosis}" if diagnosis else str(exc)
+        _fail("camera capture", detail, sensor="camera")
         return
 
     elapsed = time.monotonic() - t0

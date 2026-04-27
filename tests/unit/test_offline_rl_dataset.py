@@ -202,6 +202,43 @@ class TestOfflineRLDatasetTransitions:
         dataset.close()
 
 
+class TestOfflineRLDatasetEpisodes:
+    """Test replay episode grouping from LMDB experience records."""
+
+    def test_groups_records_into_episodes_from_time_gap(
+        self,
+        experience_cfg: ExperienceConfig,
+        model_cfg: ModelConfig,
+        tmp_path: object,
+    ) -> None:
+        import lmdb
+
+        env = lmdb.open(str(tmp_path), map_size=10 * 1024 * 1024)
+        base_time = time.time()
+
+        with env.begin(write=True) as txn:
+            timestamps = [
+                base_time,
+                base_time + 0.1,
+                base_time + 0.2,
+                base_time + 10.0,
+                base_time + 10.1,
+            ]
+            for i, ts in enumerate(timestamps):
+                record = _make_record(timestamp=ts)
+                key = struct.pack(">Q", int(ts * 1_000_000) + i)
+                txn.put(key, record.serialize())
+
+        env.close()
+
+        dataset = OfflineRLDataset(experience_cfg, model_cfg)
+        dataset.open()
+        episodes = dataset.get_episodes(terminal_gap_s=5.0)
+
+        assert [len(episode) for episode in episodes] == [3, 2]
+        dataset.close()
+
+
 class TestOfflineRLDatasetBatchIterator:
     """Test batch iteration."""
 
