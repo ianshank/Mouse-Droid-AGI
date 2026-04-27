@@ -50,7 +50,7 @@ if TYPE_CHECKING:
     from mousedroid.mcp.protocol import MCPServerProtocol
     from mousedroid.memory.tier import MemoryTier
     from mousedroid.orchestrator.face_controller import FaceController
-    from mousedroid.reward.model import MultiObjectiveRewardModel
+    from mousedroid.reward.protocol import RewardModelProtocol
     from mousedroid.sensing.manager import SensorManager
     from mousedroid.telemetry.log_buffer import LogRingBuffer
     from mousedroid.telemetry.metrics import MetricsRegistry
@@ -575,7 +575,7 @@ def _build_distilled_onnx_vla(cfg: Settings, action_dim: int) -> VLAPolicyProtoc
     return policy
 
 
-def build_reward_model(cfg: Settings) -> MultiObjectiveRewardModel:
+def build_reward_model(cfg: Settings) -> RewardModelProtocol:
     """Build the multi-objective reward model with optional VLM progress head.
 
     The Three Laws head is constructed inside

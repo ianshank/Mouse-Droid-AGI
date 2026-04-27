@@ -122,6 +122,17 @@ class VLMProgressHead(nn.Module):
         self._cfg = cfg
         self._backend: VLMProgressBackend = backend or MockVLMProgress(cfg.mock_progress_value)
         self._cache: LRUCache[tuple[str, str, str], float] = LRUCache(maxsize=cfg.cache_size)
+        # Identity-based pre-cache: avoids re-hashing tensor contents on
+        # repeat calls with the same physical tensor objects (common in RL
+        # rollouts that reuse a buffer). Keyed on
+        # ``(data_ptr, _version, data_ptr, _version, instr_hash)`` so any
+        # in-place mutation invalidates the entry via the version counter.
+        # Bounded to a small constant — purely a hot-path shortcut, the
+        # content cache below is the source of truth.
+        self._id_cache: LRUCache[tuple[int, int, int, int, str], float] = LRUCache(
+            maxsize=cfg.cache_size
+        )
+        self._instr_hashes: dict[str, str] = {}
         self._hits = 0
         self._misses = 0
         _log.info(
@@ -130,6 +141,15 @@ class VLMProgressHead(nn.Module):
             backend=type(self._backend).__name__,
             instruction=cfg.instruction,
         )
+
+    def _hash_instruction(self, instr: str) -> str:
+        """Memoize instruction hashes (typical training reuses one string)."""
+        cached = self._instr_hashes.get(instr)
+        if cached is not None:
+            return cached
+        h = hashlib.sha1(instr.encode("utf-8"), usedforsecurity=False).hexdigest()
+        self._instr_hashes[instr] = h
+        return h
 
     @property
     def cache_info(self) -> dict[str, int]:
@@ -148,16 +168,22 @@ class VLMProgressHead(nn.Module):
         *,
         instruction: str | None = None,
     ) -> Tensor:
-        """Return progress score as a ``(1, 1)`` tensor.
+        """Compute progress reward for a transition.
+
+        Supports both single (``(D,)`` or ``(1, D)``) and batched
+        (``(B, D)``) inputs. The returned tensor has shape ``(B, 1)`` so it
+        broadcasts safely against ``state`` rewards in
+        :class:`MultiObjectiveRewardModel`.
 
         Args:
             prev_obs: Previous observation tensor.
-            curr_obs: Current observation tensor.
+            curr_obs: Current observation tensor (same shape as
+                ``prev_obs``).
             instruction: Override for ``cfg.instruction``. ``None`` uses the
                 configured default.
 
         Returns:
-            Scalar tensor of shape ``(1, 1)`` with progress in ``[0, 1]``.
+            Progress tensor of shape ``(B, 1)`` with values in ``[0, 1]``.
         """
         if prev_obs.shape != curr_obs.shape:
             raise ValueError(
@@ -165,10 +191,36 @@ class VLMProgressHead(nn.Module):
             )
 
         instr = instruction if instruction is not None else self._cfg.instruction
+
+        # Batched dispatch: score each transition independently and stack.
+        # 2 = "shape is at least (B, D)"; 1 = "more than one row → batch path".
+        if prev_obs.dim() >= 2 and prev_obs.shape[0] > 1:  # hardcoded-ok
+            rows = [
+                self._score_single(prev_obs[i : i + 1], curr_obs[i : i + 1], instr)
+                for i in range(prev_obs.shape[0])
+            ]
+            return torch.cat(rows, dim=0)
+
+        return self._score_single(prev_obs, curr_obs, instr)
+
+    def _score_single(self, prev_obs: Tensor, curr_obs: Tensor, instr: str) -> Tensor:
+        instr_h = self._hash_instruction(instr)
+
+        # Identity fast-path: same tensor objects, no in-place mutation
+        # since last call → bypass content hashing entirely.
+        prev_v = int(getattr(prev_obs, "_version", 0))
+        curr_v = int(getattr(curr_obs, "_version", 0))
+        id_key = (prev_obs.data_ptr(), prev_v, curr_obs.data_ptr(), curr_v, instr_h)
+        cached_id = self._id_cache.get(id_key)
+        if cached_id is not None:
+            self._hits += 1
+            return torch.tensor([[cached_id]], dtype=torch.float32, device=curr_obs.device)
+
+        # Content cache (cross-tensor-instance reuse).
         key = (
             _hash_tensor(prev_obs, self._cfg.hash_decimals),
             _hash_tensor(curr_obs, self._cfg.hash_decimals),
-            hashlib.sha1(instr.encode("utf-8"), usedforsecurity=False).hexdigest(),
+            instr_h,
         )
 
         cached = self._cache.get(key)
@@ -191,6 +243,7 @@ class VLMProgressHead(nn.Module):
                 cache_max=self._cache.maxsize,
             )
 
+        self._id_cache[id_key] = value
         return torch.tensor([[value]], dtype=torch.float32, device=curr_obs.device)
 
     def forward(

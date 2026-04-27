@@ -172,6 +172,45 @@ class TestVLMProgressHead:
             # Positional instruction must be rejected for API safety.
             head.score(torch.zeros(1, 4), torch.zeros(1, 4), "go")  # type: ignore[misc]
 
+    def test_batched_score_returns_per_row_results(self) -> None:
+        """Batch input ``(B, D)`` must yield a ``(B, 1)`` tensor of per-row scores."""
+
+        class PerRowBackend:
+            """Returns a different score for each row based on curr_obs[0,0]."""
+
+            def score(
+                self, prev_obs: torch.Tensor, curr_obs: torch.Tensor, instruction: str
+            ) -> float:
+                del prev_obs, instruction
+                return float(curr_obs[0, 0].clamp(0.0, 1.0).item())
+
+        cfg = VLMProgressConfig(enabled=True, cache_size=8)
+        head = VLMProgressHead(cfg, backend=cast(VLMProgressBackend, PerRowBackend()))
+        prev = torch.zeros(3, 4)
+        curr = torch.zeros(3, 4)
+        curr[0, 0] = 0.1
+        curr[1, 0] = 0.4
+        curr[2, 0] = 0.9
+        out = head.score(prev, curr, instruction="t")
+        assert out.shape == (3, 1)
+        assert out[0, 0].item() == pytest.approx(0.1, abs=1e-5)
+        assert out[1, 0].item() == pytest.approx(0.4, abs=1e-5)
+        assert out[2, 0].item() == pytest.approx(0.9, abs=1e-5)
+
+    def test_identity_cache_skips_content_hash_on_repeat(self) -> None:
+        """Repeat calls with the same tensor objects hit the identity fast path."""
+        cfg = VLMProgressConfig(enabled=True, cache_size=8)
+        backend = _CountingBackend(value=0.6)
+        head = VLMProgressHead(cfg, backend=backend)
+        prev = torch.zeros(1, 4)
+        curr = torch.ones(1, 4)
+        head.score(prev, curr, instruction="task")  # miss → fills both caches
+        # Repeat with the same tensor objects → identity hit, no new backend call.
+        head.score(prev, curr, instruction="task")
+        head.score(prev, curr, instruction="task")
+        assert backend.calls == 1
+        assert head.cache_info["hits"] == 2
+
 
 class TestMultiObjectiveBackwardCompat:
     """Without a VLM head the aggregator must be byte-identical to before."""

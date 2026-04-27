@@ -10,10 +10,10 @@ from torch import Tensor
 
 from mousedroid.config.schema import ModelConfig, RewardConfig
 from mousedroid.logging.setup import get_logger
-from mousedroid.reward.vlm_progress import VLMProgressHead
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import ThreeLawsConfig
+    from mousedroid.reward.vlm_progress import VLMProgressHead
 
 _log = get_logger(__name__)
 
