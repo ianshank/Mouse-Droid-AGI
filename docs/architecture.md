@@ -744,7 +744,8 @@ sequenceDiagram
 ```mermaid
 graph TD
     subgraph Pipeline["GPU Pretraining Pipeline (training/)"]
-        DG["data_generator.py\nSynthetic ObservationBundle sequences"]
+        DR["domain_randomization.py\nPhase 1: per-episode RangeF sampler\nvisual / range / chassis / feature noise"]
+        DG["data_generator.py\nSynthetic ObservationBundle sequences\n+ EpisodeParams (when DR enabled)"]
         RSSM_T["train_rssm.py\nPhase 2.1: RSSM encoder + dynamics\ncheckpoints every N epochs"]
         WS["warmstart_policy.py\nPhase 2.2: MCTS warm-start weights\nUCB calibration (tune_ucb)"]
         CA["collect_annotations.py\nPhase 2.3a: BDI intention labels"]
@@ -753,6 +754,7 @@ graph TD
         RP["run_pipeline.py\nOrchestrator: phase1→2→3→4\n--resume / resume_from for checkpoints"]
         UP["upload_weights.py\nHuggingFace Hub push (28 files)\nianshank/mousedroid-weights"]
     end
+    DR -.-> DG
     subgraph HF["HuggingFace Hub"]
         HFRepo["ianshank/mousedroid-weights\nbdi/ mcts/ rssm/ constitutional_rl/"]
     end
@@ -782,6 +784,77 @@ graph TD
 | Weight storage | `ianshank/mousedroid-weights` HuggingFace repo; `bdi/`, `mcts/`, `rssm/`, `constitutional_rl/` subfolders |
 | Runtime download | `WeightsManager.download_weights_from_huggingface(subfolder='bdi', local_dir=weights_dir.parent)` |
 | Type safety | All `training/` modules pass `mypy --strict` (NDArray[Any] annotations) |
+
+---
+
+## Physical AI Roadmap (Phase 1 — Domain Randomization)
+
+Following the four-gap analysis from Martin Keen's "What is Physical AI?" (IBM
+Technology, 2026-04-13), the offline pretraining pipeline is being extended to
+shrink the sim-to-real gap. **Phase 1 is in this branch; Phases 2 → 6 are
+roadmap items tracked in [`NEXT_STEPS.md`](../NEXT_STEPS.md).**
+
+### Phase 1 — Domain Randomization (this branch)
+
+```mermaid
+graph LR
+    subgraph DR["mousedroid.training.domain_randomization"]
+        DRConfig["DomainRandomizationConfig\nRangeF[low, high] per parameter\n(visual / camera / range / chassis / comms / feature)"]
+        Sampler["DomainRandomizer\nstateless; numpy.random.Generator injected"]
+        EP["EpisodeParams\nfrozen dataclass\n(empty when DR disabled)"]
+        VT["apply_visual_randomization\nbrightness · contrast · noise\n(uint8/float32 dtype-preserving)"]
+        RT["apply_range_sensor_randomization\nadditive noise + dropout (NaN)"]
+        FT["apply_feature_noise\npost-CNN feature-vector noise"]
+    end
+    subgraph Pipeline["training/data_generator.py"]
+        SSG["SyntheticSequenceGenerator\nseed-driven master RNG\n→ per-episode rng → ep_params"]
+        AppEpRand["_apply_episode_randomization\nidentity when ep_params empty\n(byte-identical legacy contract)"]
+        Tensors["torch tensors:\nvision (256-d) + ultrasonic (1-d)\n+ motor_state + valid_mask + action"]
+    end
+
+    DRConfig --> Sampler
+    Sampler --> EP
+    EP --> AppEpRand
+    AppEpRand --> Tensors
+    SSG --> AppEpRand
+    AppEpRand -.-> FT
+    AppEpRand -.-> RT
+    VT -.-> AppEpRand
+
+    classDef rt fill:#dff,stroke:#36a;
+    class DR,Pipeline rt;
+```
+
+**Contract guarantees (regression-tested in
+`tests/regression/test_domain_randomization_backcompat.py`):**
+
+- `DomainRandomizationConfig.enabled=False` returns empty `EpisodeParams`;
+  `_apply_episode_randomization` returns the input dict by **identity**, not
+  just by equality. Existing artifacts and golden hashes remain byte-identical.
+- All randomization ranges are `RangeF` Pydantic models — zero hardcoded values
+  in module bodies; YAMLs override per-environment (production tightens; mock
+  widens for stress testing).
+- Reproducibility: every public function takes an explicit
+  `numpy.random.Generator`, so identical seeds produce identical outputs. The
+  generator's master RNG is re-seeded per episode via
+  `np.iinfo(np.int64).max` (no magic literals).
+- 100% line + branch coverage on the new module; 100% changed-line coverage
+  across all touched source files; global coverage holds at 91.68% (gate 85%).
+
+### Roadmap (Phases 2 → 6, tracked in `NEXT_STEPS.md`)
+
+| Phase | Goal | Module(s) |
+| ----- | ---- | --------- |
+| 2 | Real-episode replay loop — LMDB reader + sim:real mixer feeds back into RSSM and Constitutional-RL training | `training/replay/`, schema-versioned `experience/` records |
+| 3a | VLA Protocol + `MockVLA` + factory + orchestrator branch | `mousedroid.vla` |
+| 3b | `DistilledVLAOnnx` adapter — TensorRT/ONNX with HF Hub weights pull | `mousedroid.vla.policy`, `[vla]` extra in `pyproject.toml` |
+| 4 | VLM-derived dense rewards (VLAC pattern) — pluggable into `MultiObjectiveRewardModel` | `mousedroid.reward.vlm_progress` |
+| 5 (stretch) | Real physics simulator (MuJoCo MJX / Isaac Sim Lite) — replace synthetic-sequence generator with ground-truth dynamics | `training/sim/` (new) |
+| 6 (stretch) | On-device LoRA-adapter fine-tuning for the VLA from continuously-logged real episodes | `mousedroid.vla.adapters` (new) |
+
+Each phase ships in an isolated PR off the default branch; dependency direction
+is strictly Phase 1 → 2 → 3 → 4. Phases 5 and 6 are deferred until Phase 3b has
+been in production for ≥30 days.
 
 ---
 

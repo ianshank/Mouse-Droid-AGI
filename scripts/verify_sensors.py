@@ -100,7 +100,12 @@ def _diagnose_camera_host(cfg: Settings) -> str | None:
     """
     import subprocess
 
-    device_path = Path(getattr(cfg.camera, "device_path", "/dev/video0"))
+    raw_device_path = getattr(cfg.camera, "device_path", None)
+    if isinstance(raw_device_path, str):
+        raw_device_path = raw_device_path.strip()
+    # Empty / whitespace-only / None all collapse to the canonical default so
+    # `Path('').exists()` (which is True for cwd) cannot mask a missing device.
+    device_path = Path(raw_device_path or "/dev/video0")
     siblings = sorted(Path("/dev").glob("video*"))
     if device_path.exists() or siblings:
         return None
@@ -113,7 +118,7 @@ def _diagnose_camera_host(cfg: Settings) -> str | None:
 
     try:
         journal = subprocess.run(
-            ["journalctl", "-u", "nvargus-daemon", "--no-pager", "-n", "60"],
+            ["journalctl", "-u", "nvargus-daemon", "--no-pager", "-n", "60"],  # noqa: S607
             capture_output=True,
             text=True,
             timeout=5,
@@ -121,7 +126,10 @@ def _diagnose_camera_host(cfg: Settings) -> str | None:
         )
         for line in reversed(journal.stdout.splitlines()):
             lower = line.lower()
-            if any(token in lower for token in ("imx", "probe of", "i2c read probe", "modulenotpresent")):
+            if any(
+                token in lower
+                for token in ("imx", "probe of", "i2c read probe", "modulenotpresent")
+            ):
                 notes.append(f"nvargus: {line.strip()}")
                 break
     except (FileNotFoundError, subprocess.TimeoutExpired):

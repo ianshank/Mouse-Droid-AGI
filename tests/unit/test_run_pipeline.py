@@ -377,6 +377,8 @@ class TestPhase0DomainRandomization:
             "rssm_epoch_randomization",
             brightness=[0.6, 1.4],
             contrast=[0.7, 1.3],
+            ultrasonic_noise_m=[0.0, 0.03],
+            ultrasonic_dropout_prob=[0.0, 0.05],
             wheel_friction=[0.7, 1.3],
             motor_gain=[0.85, 1.15],
             feature_noise_std=[0.0, 0.02],

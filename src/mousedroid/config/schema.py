@@ -251,100 +251,71 @@ class CuriosityConfig(BaseModel):
 
 
 class RangeF(BaseModel):
-    """Inclusive floating-point range used by domain randomization."""
+    """Inclusive ``[low, high]`` range for a randomly sampled float parameter."""
 
     low: float = Field(description="Inclusive lower bound")
     high: float = Field(description="Inclusive upper bound")
 
     @model_validator(mode="after")
-    def _validate_bounds(self) -> Self:
+    def _check_ordered(self) -> Self:
         if self.low > self.high:
-            msg = "low must be <= high"
+            msg = f"RangeF.low ({self.low}) must be <= high ({self.high})"
             raise ValueError(msg)
         return self
 
 
 class DomainRandomizationConfig(BaseModel):
-    """Phase-1 sim-to-real domain randomization ranges."""
+    """Per-episode randomization for sim-to-real RSSM pretraining (Phase 1).
+
+    All ranges are configurable so production / mock / mission-specific YAMLs
+    can widen or narrow the noise envelope without code changes. Setting
+    ``enabled=False`` produces empty :class:`EpisodeParams` and the data
+    generator path is byte-identical to the pre-feature output.
+    """
 
     enabled: bool = Field(
         True,
         description="Master switch — when False every sample yields empty EpisodeParams",
     )
-    brightness: RangeF = Field(
-        default_factory=lambda: RangeF(low=0.6, high=1.4),
-        description="Multiplicative image brightness scale",
-    )
-    contrast: RangeF = Field(
-        default_factory=lambda: RangeF(low=0.7, high=1.3),
-        description="Multiplicative image contrast scale",
-    )
-    hue_shift_deg: RangeF = Field(
-        default_factory=lambda: RangeF(low=-15.0, high=15.0),
-        description="Camera hue perturbation in degrees",
-    )
-    gaussian_noise_std: RangeF = Field(
-        default_factory=lambda: RangeF(low=0.0, high=0.04),
-        description="Image-space Gaussian noise standard deviation",
-    )
-    motion_blur_px: RangeF = Field(
-        default_factory=lambda: RangeF(low=0.0, high=2.5),
-        description="Approximate horizontal motion blur radius in pixels",
-    )
-    fov_deg: RangeF = Field(
-        default_factory=lambda: RangeF(low=58.0, high=72.0),
-        description="Camera field of view in degrees",
-    )
-    cam_pitch_deg: RangeF = Field(
-        default_factory=lambda: RangeF(low=-3.0, high=3.0),
-        description="Camera pitch perturbation in degrees",
-    )
-    cam_yaw_deg: RangeF = Field(
-        default_factory=lambda: RangeF(low=-2.0, high=2.0),
-        description="Camera yaw perturbation in degrees",
-    )
-    cam_height_m: RangeF = Field(
-        default_factory=lambda: RangeF(low=0.085, high=0.115),
-        description="Camera mounting height in metres",
-    )
-    wheel_friction: RangeF = Field(
-        default_factory=lambda: RangeF(low=0.7, high=1.3),
-        description="Wheel friction multiplier",
-    )
-    wheel_slip: RangeF = Field(
-        default_factory=lambda: RangeF(low=0.0, high=0.15),
-        description="Wheel slip factor",
-    )
-    chassis_mass_kg: RangeF = Field(
-        default_factory=lambda: RangeF(low=2.4, high=3.0),
-        description="Robot chassis mass in kilograms",
-    )
-    motor_gain: RangeF = Field(
-        default_factory=lambda: RangeF(low=0.85, high=1.15),
-        description="Motor gain multiplier",
-    )
-    uart_latency_ms: RangeF = Field(
-        default_factory=lambda: RangeF(low=2.0, high=18.0),
-        description="UART command latency in milliseconds",
-    )
-    encoder_dropout_prob: RangeF = Field(
-        default_factory=lambda: RangeF(low=0.0, high=0.02),
-        description="Probability of dropping encoder feedback",
-    )
-    push_force_n: RangeF = Field(
-        default_factory=lambda: RangeF(low=0.0, high=1.5),
-        description="External push disturbance force in Newtons",
-    )
+
+    # --- Visual / camera ---
+    brightness: RangeF = Field(default_factory=lambda: RangeF(low=0.6, high=1.4))
+    contrast: RangeF = Field(default_factory=lambda: RangeF(low=0.7, high=1.3))
+    hue_shift_deg: RangeF = Field(default_factory=lambda: RangeF(low=-15.0, high=15.0))
+    gaussian_noise_std: RangeF = Field(default_factory=lambda: RangeF(low=0.0, high=0.04))
+    motion_blur_px: RangeF = Field(default_factory=lambda: RangeF(low=0.0, high=2.5))
+
+    # --- Camera intrinsics / extrinsics jitter ---
+    fov_deg: RangeF = Field(default_factory=lambda: RangeF(low=58.0, high=72.0))
+    cam_pitch_deg: RangeF = Field(default_factory=lambda: RangeF(low=-3.0, high=3.0))
+    cam_yaw_deg: RangeF = Field(default_factory=lambda: RangeF(low=-2.0, high=2.0))
+    cam_height_m: RangeF = Field(default_factory=lambda: RangeF(low=0.085, high=0.115))
+
+    # --- Range sensor (HC-SR04) ---
+    ultrasonic_noise_m: RangeF = Field(default_factory=lambda: RangeF(low=0.0, high=0.03))
+    ultrasonic_dropout_prob: RangeF = Field(default_factory=lambda: RangeF(low=0.0, high=0.05))
+
+    # --- Mecanum chassis dynamics ---
+    wheel_friction: RangeF = Field(default_factory=lambda: RangeF(low=0.7, high=1.3))
+    wheel_slip: RangeF = Field(default_factory=lambda: RangeF(low=0.0, high=0.15))
+    chassis_mass_kg: RangeF = Field(default_factory=lambda: RangeF(low=2.4, high=3.0))
+    motor_gain: RangeF = Field(default_factory=lambda: RangeF(low=0.85, high=1.15))
+
+    # --- Comms latency (ESP32 <-> Jetson) ---
+    uart_latency_ms: RangeF = Field(default_factory=lambda: RangeF(low=2.0, high=18.0))
+    encoder_dropout_prob: RangeF = Field(default_factory=lambda: RangeF(low=0.0, high=0.02))
+
+    # --- External disturbance ---
+    push_force_n: RangeF = Field(default_factory=lambda: RangeF(low=0.0, high=1.5))
     push_event_prob: float = Field(
         0.05,
         ge=0.0,
         le=1.0,
         description="Per-episode probability of an external push disturbance occurring",
     )
-    feature_noise_std: RangeF = Field(
-        default_factory=lambda: RangeF(low=0.0, high=0.02),
-        description="Feature-space Gaussian noise standard deviation",
-    )
+
+    # --- Feature-space (post-CNN) noise applied during data generation ---
+    feature_noise_std: RangeF = Field(default_factory=lambda: RangeF(low=0.0, high=0.02))
 
 
 class ESP32Config(BaseModel):
@@ -366,6 +337,45 @@ class ESP32Config(BaseModel):
     keepalive_hz: float = Field(10.0, gt=0, description="Motor command keepalive rate (Hz)")
     max_velocity_mps: float = Field(0.5, gt=0, description="Max velocity magnitude (m/s)")
     max_omega_rads: float = Field(2.0, gt=0, description="Max angular velocity (rad/s)")
+    smoke_test_velocity_mps: float = Field(
+        0.05,
+        gt=0,
+        description=(
+            "Target forward velocity for the rover hardware smoke test "
+            "(see tests/hardware/test_motor_smoke.py). Kept low so an "
+            "untethered rover can stop within tabletop bounds."
+        ),
+    )
+    smoke_test_settle_s: float = Field(
+        0.5,
+        gt=0,
+        description="Settle time after sending velocity before reading encoders (s)",
+    )
+    smoke_test_min_velocity_fraction: float = Field(
+        0.5,
+        gt=0,
+        le=1.0,
+        description=(
+            "Minimum encoder velocity expressed as a fraction of the "
+            "setpoint that the smoke test asserts on real hardware."
+        ),
+    )
+    smoke_test_allow_motion: bool = Field(
+        False,
+        description=(
+            "Hard safety gate for tests/hardware/test_motor_smoke.py. "
+            "When False (default), the velocity round-trip stops short of "
+            "actually sending a non-zero command — useful when the rover is "
+            "on a table or otherwise unattended. Set True (YAML override or "
+            "MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION=true) only when the "
+            "rover is on rollers / tethered / monitored."
+        ),
+    )
+    emergency_stop_budget_ms: float = Field(
+        50.0,
+        gt=0,
+        description="Maximum acceptable latency for emergency_stop ack (ms)",
+    )
     mock_battery_v: float = Field(
         12.0,
         gt=0,
@@ -2057,9 +2067,6 @@ class TrainingConfig(BaseModel):
     generation: TrainingGenerationConfig = Field(
         default_factory=_settings_default_factory(TrainingGenerationConfig)
     )
-    replay: TrainingReplayConfig = Field(
-        default_factory=_settings_default_factory(TrainingReplayConfig)
-    )
     annotation: TrainingAnnotationConfig = Field(
         default_factory=_settings_default_factory(TrainingAnnotationConfig)
     )
@@ -2068,6 +2075,9 @@ class TrainingConfig(BaseModel):
     )
     constitutional: TrainingConstitutionalConfig = Field(
         default_factory=_settings_default_factory(TrainingConstitutionalConfig)
+    )
+    replay: TrainingReplayConfig = Field(
+        default_factory=_settings_default_factory(TrainingReplayConfig)
     )
     gpu: GPUConfig = Field(
         default_factory=lambda: GPUConfig(
@@ -2132,11 +2142,6 @@ class VoiceConfig(BaseModel):
         None, description="Path to piper voice model (None=disable TTS model loading)"
     )
     tts_sample_rate: int = Field(22050, gt=0, description="TTS output sample rate (Hz)")
-    output_volume: float = Field(
-        1.0,
-        ge=0.0,
-        description="Output gain applied to synthesized samples before playback",
-    )
     queue_size: int = Field(16, gt=0, description="Max queued speech requests")
     queue_poll_timeout_s: float = Field(1.0, gt=0, description="Worker queue poll timeout (s)")
     phrase_overrides: dict[str, list[str]] = Field(
@@ -2163,12 +2168,28 @@ class VoiceConfig(BaseModel):
             "Keyed by event name; falls back to intensity_threshold when absent."
         ),
     )
+    output_volume: float = Field(
+        1.0,
+        ge=0.0,
+        description=(
+            "Linear gain applied to synthesized samples before they reach the "
+            "speaker. 1.0 = unity gain; values >1 amplify but are clipped to "
+            "[-1, 1] in float32 to keep DAC output in the safe range."
+        ),
+    )
 
     @field_validator("personality_to_model_map", mode="after")
     @classmethod
     def _validate_personality_model_map(cls, v: dict[str, str]) -> dict[str, str]:
+        """Validate and normalize personality→model path map.
+
+        Strips whitespace from each value so runtime consumers (Piper loader)
+        receive exactly the validated path. Empty/whitespace-only and relative
+        paths are rejected at schema-load time.
+        """
         from pathlib import PurePosixPath
 
+        normalized: dict[str, str] = {}
         for key, value in v.items():
             stripped = value.strip()
             if not stripped:
@@ -2179,7 +2200,8 @@ class VoiceConfig(BaseModel):
                 raise ValueError(
                     f"personality_to_model_map[{key!r}] must be an absolute path, got {value!r}"
                 )
-        return v
+            normalized[key] = stripped
+        return normalized
 
     @field_validator("event_intensity_thresholds", mode="after")
     @classmethod
@@ -2378,8 +2400,16 @@ class MCPConfig(BaseModel):
             "calibrate_ultrasonic",
             "tensorrt_compile",
             "export_experience",
+            "set_velocity",
         ],
-        description="Tools considered actuation/side-effecting (config-driven, not hardcoded)",
+        description=(
+            "Tools considered actuation/side-effecting (config-driven, not hardcoded). "
+            "`emergency_stop` is intentionally NOT in this default list — refusing "
+            "an e-stop call during a safety emergency would defeat its purpose. "
+            "`read_encoders` is read-only and stays out of the list as well. "
+            "Existing YAML overrides win; this default only changes for clients that "
+            "never set the field."
+        ),
     )
     expose_actuation_tools: bool = Field(
         False,
@@ -2409,6 +2439,26 @@ class MCPConfig(BaseModel):
     redact_key_pattern: str = Field(
         r"(?i)token|secret|api[_-]?key|password|credential",
         description="Regex (case-insensitive) for keys whose values must be redacted",
+    )
+    bind_transport: bool = Field(
+        False,
+        description=(
+            "Bind the configured transport via the optional `mcp` SDK. "
+            "Defaults to False so unit tests and in-process callers keep "
+            "the bridge usable without spinning up a real server. Set "
+            "True in deployment YAML (or via MOUSEDROID_MCP__BIND_TRANSPORT=true) "
+            "to expose the server over stdio/SSE/streamable_http."
+        ),
+    )
+    smoke_test_poll_rps: float = Field(
+        5.0,
+        gt=0,
+        description="MCP resource polling rate during the rover hardware smoke (RPS)",
+    )
+    smoke_test_duration_s: float = Field(
+        2.0,
+        gt=0,
+        description="Duration of the MCP-polling-during-actuation smoke window (s)",
     )
 
     @field_validator("tools_denylist")
@@ -2453,6 +2503,37 @@ class MCPConfig(BaseModel):
             msg = (
                 f"MCP enabled on non-loopback host '{self.host}' requires the "
                 f"{self.auth_token_env_var} environment variable to be set"
+            )
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _bind_transport_only_for_supported(self) -> Self:
+        """Reject ``bind_transport=true`` with not-yet-supported transports.
+
+        SSE and streamable_http transports currently raise
+        :class:`NotImplementedError` from
+        :class:`~mousedroid.mcp.transport.MCPTransportAdapter`. Because
+        ``_serve_loop`` runs as a background task, that failure would
+        only surface in logs — easy to miss in production. Failing
+        validation at config load makes the gap obvious immediately.
+
+        Returns:
+            The validated config instance.
+
+        Raises:
+            ValueError: If ``bind_transport`` is True with a transport
+                that is not yet wired end-to-end.
+        """
+        if not self.bind_transport:
+            return self
+        supported = {"stdio"}
+        if self.transport not in supported:
+            msg = (
+                f"mcp.bind_transport=true is only supported with "
+                f"mcp.transport in {sorted(supported)} for now; "
+                f"got mcp.transport={self.transport!r}. "
+                "SSE and streamable_http are tracked in MCP_NEXT_STEPS.md."
             )
             raise ValueError(msg)
         return self
@@ -2512,9 +2593,6 @@ class Settings(BaseSettings):
     )
     logging: LoggingConfig = Field(default_factory=_settings_default_factory(LoggingConfig))
     training: TrainingConfig = Field(default_factory=_settings_default_factory(TrainingConfig))
-    domain_randomization: DomainRandomizationConfig = Field(
-        default_factory=_settings_default_factory(DomainRandomizationConfig)
-    )
     health: HealthConfig = Field(default_factory=_settings_default_factory(HealthConfig))
     retry: RetryConfig = Field(default_factory=_settings_default_factory(RetryConfig))
     circuit_breaker: CircuitBreakerConfig = Field(
@@ -2527,6 +2605,13 @@ class Settings(BaseSettings):
     llm: LLMConfig = Field(default_factory=_settings_default_factory(LLMConfig))
     reward: RewardConfig = Field(default_factory=_settings_default_factory(RewardConfig))
     curiosity: CuriosityConfig = Field(default_factory=_settings_default_factory(CuriosityConfig))
+    domain_randomization: DomainRandomizationConfig = Field(
+        default_factory=_settings_default_factory(DomainRandomizationConfig),
+        description=(
+            "Per-episode sim-to-real randomization for RSSM data generation; "
+            "set ``enabled: false`` for byte-identical legacy behaviour."
+        ),
+    )
     metacognitive: MetacognitiveConfig = Field(
         default_factory=_settings_default_factory(MetacognitiveConfig)
     )

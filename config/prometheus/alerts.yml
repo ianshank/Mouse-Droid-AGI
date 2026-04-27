@@ -193,3 +193,60 @@ groups:
             {{ $labels.instance }}. Safety monitor should have already engaged
             the emergency brake; investigate if the droid is still moving.
           config_ref: "SafetyConfig — obstacle proximity"
+
+  # ------------------------------------------------------------------
+  # MCP server — request latency, circuit breaker, rate limiting.
+  # Series originate from MetricsRegistry under the configured
+  # namespace ("mousedroid_" by default; if MetricsConfig.namespace is
+  # overridden, swap the prefix here to match).
+  # ------------------------------------------------------------------
+  - name: mousedroid_mcp
+    rules:
+      # Warning: p95 request latency > 500 ms over 5 min.
+      - alert: MCPHighLatency
+        expr: histogram_quantile(0.95, rate(mousedroid_mcp_request_latency_ms_bucket[5m])) > 500
+        for: 5m
+        labels:
+          severity: warning
+          subsystem: mcp
+        annotations:
+          summary: "MCP p95 request latency above 500 ms"
+          description: >-
+            p95 of mousedroid_mcp_request_latency_ms_bucket is
+            {{ $value | printf "%.1f" }} ms on {{ $labels.instance }}.
+            Investigate slow tool handlers (set_velocity, tensorrt_compile)
+            or saturated stdio/SSE transports.
+          config_ref: "MCPConfig.request_timeout_s, MCPConfig.rate_limit_rps"
+
+      # Page: any circuit breaker trip on a tool call indicates an
+      # underlying handler failing repeatedly inside the bridge.
+      - alert: MCPCircuitOpen
+        expr: rate(mousedroid_mcp_tool_calls{result="circuit_open"}[1m]) > 1
+        for: 1m
+        labels:
+          severity: page
+          subsystem: mcp
+        annotations:
+          summary: "MCP tool circuit breaker tripping"
+          description: >-
+            mousedroid_mcp_tool_calls{result="circuit_open"} is rising at
+            {{ $value | printf "%.2f" }} per second on tool {{ $labels.tool }}.
+            Inspect the handler and the upstream driver (ESP32, LLM gateway,
+            TensorRT compiler) for cascading failures.
+          config_ref: "MCPConfig.circuit_breaker (or root CircuitBreakerConfig)"
+
+      # Warning: rate limiter sustained activation suggests a misbehaving
+      # client or undersized rate budget for the workload.
+      - alert: MCPRateLimitedSurge
+        expr: rate(mousedroid_mcp_tool_calls{result="rate_limited"}[5m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+          subsystem: mcp
+        annotations:
+          summary: "MCP rate limiter sustained activation"
+          description: >-
+            mousedroid_mcp_tool_calls{result="rate_limited"} = {{ $value }} /s
+            on {{ $labels.instance }}. Consider raising
+            MCPConfig.rate_limit_rps or throttling the offending client.
+          config_ref: "MCPConfig.rate_limit_rps"

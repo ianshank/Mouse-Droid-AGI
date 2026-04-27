@@ -48,7 +48,11 @@ async def test_play_phrase_routes_piper_audio_into_mock_speaker() -> None:
     assert samples_written == 4
     assert peak_abs == pytest.approx(0.5, abs=5e-4)
     assert len(chunks) == 1
-    np.testing.assert_allclose(chunks[0], np.array([0.0, 0.5, -0.25, 0.125], dtype=np.float32), atol=5e-4)
+    np.testing.assert_allclose(
+        chunks[0],
+        np.array([0.0, 0.5, -0.25, 0.125], dtype=np.float32),
+        atol=5e-4,
+    )
 
 
 @pytest.mark.asyncio

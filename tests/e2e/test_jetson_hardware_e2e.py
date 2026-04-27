@@ -56,9 +56,9 @@ async def test_ultrasonic_reads_distance(runtime_settings) -> None:
     distance_sensor = build_distance_sensor(cfg)
 
     reading = await distance_sensor.read_distance_m()
-    assert 0.0 <= reading <= distance_sensor.max_range_m, (
-        f"Distance {reading}m outside valid range [0, {distance_sensor.max_range_m}]"
-    )
+    assert (
+        0.0 <= reading <= distance_sensor.max_range_m
+    ), f"Distance {reading}m outside valid range [0, {distance_sensor.max_range_m}]"
 
 
 # ---------------------------------------------------------------------------

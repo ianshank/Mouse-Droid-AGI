@@ -29,7 +29,7 @@ Planning and architecture docs now live under `docs/planning/` and `docs/analysi
 
 | Pillar | Module | Description |
 | ------ | ------ | ----------- |
-| 1. World Model | `world_model/` | Dual-Stream CfC/GRU RSSM latent dynamics + MCTS planning |
+| 1. World Model | `world_model/` + `training/domain_randomization` | Dual-Stream CfC/GRU RSSM latent dynamics + MCTS planning, with per-episode sim-to-real domain randomization driving RSSM pretraining (Phase 1, Physical AI roadmap) |
 | 2. Cognitive Architecture | `cognitive/` | Dual-cadence BDI + metacognitive loop |
 | 3. Memory Systems | `memory/` | Working, episodic, semantic, consolidation |
 | 4. Continual Learning | `learning/` | EWC + progressive neural networks |

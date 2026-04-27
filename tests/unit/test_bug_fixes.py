@@ -560,9 +560,9 @@ class TestCuriosityAggregatorDedup:
         from mousedroid.cognitive.metacognitive import MetacognitiveModel
 
         core = CognitiveCore(NeuralBDI(), MetacognitiveModel(), ConstitutionalChecker())
-        assert not hasattr(core, "_curiosity"), (
-            "CognitiveCore should not have _curiosity; use _rl._curiosity"
-        )
+        assert not hasattr(
+            core, "_curiosity"
+        ), "CognitiveCore should not have _curiosity; use _rl._curiosity"
 
     def test_rl_bundle_has_curiosity(self) -> None:
         from mousedroid.cognitive.bdi_model import NeuralBDI

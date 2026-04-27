@@ -9,12 +9,12 @@ from pathlib import Path
 import lmdb
 import numpy as np
 import torch
+from training.rssm_dataset import RSSMSequenceDataset
 
 from mousedroid.config.schema import ExperienceConfig, ModelConfig, TrainingReplayConfig
 from mousedroid.constants import SENSOR_SLOT_MAP
 from mousedroid.experience.record import MouseDroidExperienceRecord
 from tests import TEST_EXPERIENCE_MAP_SIZE_GB
-from training.rssm_dataset import RSSMSequenceDataset
 
 
 def _make_record(
@@ -69,7 +69,11 @@ class TestRSSMReplayDataset:
     def test_replay_only_dataset_loads_lmdb_episodes(self, tmp_path: Path) -> None:
         base_time = time.time()
         replay_path = tmp_path / "experience"
-        _populate_lmdb(replay_path, [base_time, base_time + 0.1, base_time + 10.0], action_value=7.0)
+        _populate_lmdb(
+            replay_path,
+            [base_time, base_time + 0.1, base_time + 10.0],
+            action_value=7.0,
+        )
 
         dataset = RSSMSequenceDataset(
             tmp_path / "missing.pt",

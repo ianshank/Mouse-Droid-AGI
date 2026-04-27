@@ -110,6 +110,11 @@ run_pillar_check() {
 
     log "--- pillar:${label} kind:${kind} blocking:${blocking} timeout:${tmo}s ---"
     log "    cmd: $*"
+    # Save the caller's errexit state so we don't permanently force `set -e`
+    # if it wasn't already enabled.  The stage command is allowed to fail; we
+    # capture the rc and let the caller decide blocking semantics.
+    local prev_errexit="off"
+    case "$-" in *e*) prev_errexit="on";; esac
     set +e
     if [[ "${tmo}" != "0" ]]; then
         MOUSEDROID_SMOKE_STAGE_TIMEOUT="${tmo}" \
@@ -119,7 +124,9 @@ run_pillar_check() {
         MOUSEDROID_SMOKE_STAGE_TIMEOUT="0" "$@" >"${logfile}" 2>&1
     fi
     local rc=$?
-    set -e
+    if [[ "${prev_errexit}" == "on" ]]; then
+        set -e
+    fi
 
     if [[ ${rc} -eq 0 ]]; then
         record_pillar "${label}" "PASS" "kind=${kind}"

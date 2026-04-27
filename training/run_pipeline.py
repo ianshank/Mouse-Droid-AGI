@@ -63,8 +63,8 @@ def run_phase_0_data_gen(cfg: Settings, *, seed: int | None = None) -> Path:
 
     Args:
         cfg: Root settings.
-        seed: Optional integer seed forwarded to the generator. Only consumed
-            when domain randomization is enabled.
+        seed: Optional integer seed forwarded to the data generator. Only
+            consumed when ``cfg.domain_randomization.enabled`` is true.
 
     Returns:
         Path to the data directory containing sequences.pt.
@@ -84,9 +84,20 @@ def run_phase_0_data_gen(cfg: Settings, *, seed: int | None = None) -> Path:
             "rssm_epoch_randomization",
             brightness=[dr_cfg.brightness.low, dr_cfg.brightness.high],
             contrast=[dr_cfg.contrast.low, dr_cfg.contrast.high],
+            ultrasonic_noise_m=[
+                dr_cfg.ultrasonic_noise_m.low,
+                dr_cfg.ultrasonic_noise_m.high,
+            ],
+            ultrasonic_dropout_prob=[
+                dr_cfg.ultrasonic_dropout_prob.low,
+                dr_cfg.ultrasonic_dropout_prob.high,
+            ],
             wheel_friction=[dr_cfg.wheel_friction.low, dr_cfg.wheel_friction.high],
             motor_gain=[dr_cfg.motor_gain.low, dr_cfg.motor_gain.high],
-            feature_noise_std=[dr_cfg.feature_noise_std.low, dr_cfg.feature_noise_std.high],
+            feature_noise_std=[
+                dr_cfg.feature_noise_std.low,
+                dr_cfg.feature_noise_std.high,
+            ],
         )
     from training.data_generator import SyntheticSequenceGenerator
 
@@ -128,7 +139,7 @@ def run_phase_1_rssm(cfg: Settings, data_dir: Path, *, resume_from: Path | None 
 
     Args:
         cfg: Root settings.
-        data_dir: Data directory containing sequences.pt when synthetic data is used.
+        data_dir: Data directory containing sequences.pt.
         resume_from: Optional checkpoint path to resume from.
 
     Returns:
@@ -137,13 +148,11 @@ def run_phase_1_rssm(cfg: Settings, data_dir: Path, *, resume_from: Path | None 
     _log.info("phase_1_start", phase="rssm_pretraining")
     from training.train_rssm import train_rssm
 
-    data_path = data_dir / "sequences.pt"
-    if not data_path.exists() and not cfg.training.replay.enabled:
-        data_path = _require_existing_path(
-            data_path,
-            description="RSSM training data file 'sequences.pt'",
-            phase=1,
-        )
+    data_path = _require_existing_path(
+        data_dir / "sequences.pt",
+        description="RSSM training data file 'sequences.pt'",
+        phase=1,
+    )
     checkpoint = train_rssm(cfg, data_path, resume_from=resume_from)
     _log.info("phase_1_complete", checkpoint=str(checkpoint))
     return checkpoint
@@ -263,19 +272,22 @@ def run_pipeline(
 
     # Phase 1: RSSM
     if 1 in all_phases:
-        if 0 not in all_phases and not cfg.training.replay.enabled:
-            data_dir = _require_existing_path(
-                data_dir,
-                description="training data directory",
-                phase=1,
-            )
+        if 0 not in all_phases:
+            # Replay-only training does not require a synthetic data directory;
+            # the dataset builder ingests episodes from the LMDB experience store.
+            if not cfg.training.replay.enabled:
+                data_dir = _require_existing_path(
+                    data_dir,
+                    description="training data directory",
+                    phase=1,
+                )
         effective_resume_from = resume_from or cfg.training.resume_from
         resume_path = Path(effective_resume_from) if effective_resume_from else None
         rssm_checkpoint = run_phase_1_rssm(cfg, data_dir, resume_from=resume_path)
 
     # Phase 2: Warm-start
     if 2 in all_phases:
-        if 0 not in all_phases and not cfg.training.replay.enabled:
+        if 0 not in all_phases:
             data_dir = _require_existing_path(
                 data_dir,
                 description="training data directory",

@@ -42,5 +42,5 @@ def test_harness_summary_includes_stage_table(harness_text: str) -> None:
 
 def test_harness_summary_includes_voice_remediation(harness_text: str) -> None:
     assert 'echo "## Rocky voice prerequisites"' in harness_text
-    assert 'voice_remediation' in harness_text
-    assert 'voice.tts_model_path' in harness_text
+    assert "voice_remediation" in harness_text
+    assert "voice.tts_model_path" in harness_text

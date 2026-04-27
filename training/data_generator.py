@@ -2,15 +2,22 @@
 
 Generates training data by running the MouseDroidOrchestrator in mock mode
 and collecting (observation, action, reward) tuples.
+
+Phase 1 — Domain Randomization: when ``cfg.domain_randomization.enabled`` is
+true, per-episode :class:`EpisodeParams` are sampled from a seeded
+:class:`numpy.random.Generator` and applied to the observation tensors
+(feature noise on vision; additive noise + dropout on the ultrasonic). When
+disabled, the generator falls back to the legacy ``torch.randn`` action path
+so existing artifacts and golden hashes remain byte-identical.
 """
 
 from __future__ import annotations
 
 import asyncio
-import numpy as np
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 
 from mousedroid.config.schema import ModelConfig, Settings
@@ -21,6 +28,7 @@ from mousedroid.training.domain_randomization import (
     DomainRandomizer,
     EpisodeParams,
     apply_feature_noise,
+    apply_range_sensor_randomization,
 )
 
 _log = get_logger(__name__)
@@ -61,26 +69,35 @@ def _apply_episode_randomization(
     ep_params: EpisodeParams,
     rng: np.random.Generator,
 ) -> dict[str, torch.Tensor]:
-    """Apply one episode's randomization parameters to tensorised observations."""
+    """Apply :class:`EpisodeParams` to an already-tensorised observation dict.
+
+    Empty ``ep_params`` returns ``obs_tensors`` unchanged so the disabled-DR
+    code path is byte-identical to the pre-feature behaviour.
+
+    Args:
+        obs_tensors: Output of :func:`_bundle_to_tensors`.
+        ep_params: Per-episode randomization bundle.
+        rng: Per-step RNG.
+
+    Returns:
+        New dict with feature-noise vision and noisy/dropped ultrasonic
+        tensors. Other modalities are forwarded unchanged.
+    """
     if ep_params.is_empty:
         return obs_tensors
 
-    randomized = dict(obs_tensors)
-    if ep_params.feature:
-        noisy_vision = apply_feature_noise(
-            randomized["vision"].detach().cpu().numpy(),
-            ep_params.feature,
-            rng,
-        )
-        randomized["vision"] = torch.from_numpy(np.ascontiguousarray(noisy_vision)).to(torch.float32)
+    randomized: dict[str, torch.Tensor] = dict(obs_tensors)
 
-        if randomized["lidar"].numel() > 0:
-            noisy_lidar = apply_feature_noise(
-                randomized["lidar"].detach().cpu().numpy(),
-                ep_params.feature,
-                rng,
-            )
-            randomized["lidar"] = torch.from_numpy(np.ascontiguousarray(noisy_lidar)).to(torch.float32)
+    if ep_params.feature:
+        vision_np = obs_tensors["vision"].detach().cpu().numpy()
+        noisy = apply_feature_noise(vision_np, ep_params.feature, rng)
+        randomized["vision"] = torch.from_numpy(np.ascontiguousarray(noisy)).to(torch.float32)
+
+    if ep_params.range_sensor and obs_tensors["ultrasonic"].numel() > 0:
+        nominal = float(obs_tensors["ultrasonic"][0].item())
+        sampled = apply_range_sensor_randomization(nominal, ep_params.range_sensor, rng)
+        if not np.isnan(sampled):
+            randomized["ultrasonic"] = torch.tensor([sampled], dtype=torch.float32)
 
     return randomized
 
@@ -90,6 +107,10 @@ class SyntheticSequenceGenerator:
 
     Args:
         cfg: Root settings (must have ``mock_hardware=True``).
+        seed: Optional integer seed for the per-run RNG. ``None`` defers to
+            ``numpy.random.default_rng()`` (non-deterministic). Only consumed
+            when ``cfg.domain_randomization.enabled`` is true; otherwise the
+            legacy ``torch.randn`` action path is preserved verbatim.
     """
 
     def __init__(self, cfg: Settings, *, seed: int | None = None) -> None:
@@ -110,30 +131,33 @@ class SyntheticSequenceGenerator:
 
         Args:
             max_steps: Maximum steps per episode.
+            ep_params: Per-episode randomization bundle (empty disables DR).
+            rng: Numpy RNG used for randomization + action sampling. ``None``
+                preserves the legacy ``torch.randn`` action path.
 
         Returns:
-            List of transition dicts with keys: obs, action, reward.
+            List of transition dicts with keys: ``vision``, ``ultrasonic``,
+            ``motor_state``, ``valid_mask``, ``lidar``, ``action``.
         """
         orchestrator = build_orchestrator(self._cfg)
         await orchestrator.start()  # type: ignore[attr-defined]
 
         transitions: list[dict[str, Any]] = []
+        action_dim = self._cfg.model.action_dim
 
         for _ in range(max_steps):
             # Use the sensor manager to read observations
             obs = await orchestrator._sensor_manager.read_all()  # type: ignore[attr-defined]
             obs_tensors = _bundle_to_tensors(obs, self._cfg.model)
+
             if rng is not None and not ep_params.is_empty:
                 obs_tensors = _apply_episode_randomization(obs_tensors, ep_params, rng)
 
-            # Random action for data collection
             if rng is None:
-                action = torch.tanh(torch.randn(1, self._cfg.model.action_dim))
+                # Legacy path — preserves byte-identical output when DR off.
+                action = torch.tanh(torch.randn(1, action_dim))
             else:
-                action_np = np.tanh(rng.standard_normal(self._cfg.model.action_dim)).astype(
-                    np.float32,
-                    copy=False,
-                )
+                action_np = np.tanh(rng.standard_normal(action_dim, dtype=np.float32))
                 action = torch.from_numpy(action_np).unsqueeze(0)
 
             transitions.append(
@@ -160,21 +184,24 @@ class SyntheticSequenceGenerator:
         log_every = self._cfg.training.generation.log_every_n_episodes
 
         if self._randomizer.enabled:
-            _log.info("dr_enabled_for_generation", seed=self._seed, n_episodes=n_episodes)
             master_rng = np.random.default_rng(self._seed)
+            _log.info(
+                "dr_enabled_for_generation",
+                seed=self._seed,
+                n_episodes=n_episodes,
+            )
         else:
             master_rng = None
             if self._seed is not None:
                 _log.info("dr_disabled_seed_ignored", seed=self._seed)
 
         for ep in range(n_episodes):
-            if master_rng is None:
+            if master_rng is not None:
+                episode_rng = np.random.default_rng(master_rng.integers(0, np.iinfo(np.int64).max))
+                ep_params = self._randomizer.sample(episode_rng)
+            else:
                 episode_rng = None
                 ep_params = EpisodeParams()
-            else:
-                episode_seed = int(master_rng.integers(0, np.iinfo(np.int64).max))
-                episode_rng = np.random.default_rng(episode_seed)
-                ep_params = self._randomizer.sample(episode_rng)
 
             transitions = await self._run_episode(max_steps, ep_params, episode_rng)
             all_episodes.append(transitions)

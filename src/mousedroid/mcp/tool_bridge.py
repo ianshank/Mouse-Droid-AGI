@@ -188,6 +188,24 @@ class MCPToolBridge:
             specs.append(spec)
         return specs
 
+    def get_tool_description(self, name: str) -> str:
+        """Return the description for a registered tool, or the name as fallback.
+
+        Public accessor used by the SDK transport adapter so it can build
+        ``mcp.types.Tool`` payloads without reaching into private bridge
+        attributes.
+
+        Args:
+            name: Tool identifier.
+
+        Returns:
+            The registered description, or ``name`` when the tool was
+            removed from the registry mid-session (defensive — keeps the
+            list_tools response well-formed).
+        """
+        spec = self._registry.get(name)
+        return spec.description if spec is not None else name
+
     # ------------------------------------------------------------------
     # Dispatch
     # ------------------------------------------------------------------

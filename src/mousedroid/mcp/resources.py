@@ -450,8 +450,8 @@ def _coerce_field(value: Any) -> Any:
         }
     if isinstance(value, dict):
         return {k: _coerce_field(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list | tuple):
         return [_coerce_field(item) for item in value]
-    if isinstance(value, (str, int, float, bool)) or value is None:
+    if isinstance(value, str | int | float | bool) or value is None:
         return value
     return repr(value)
