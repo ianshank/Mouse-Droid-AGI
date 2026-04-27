@@ -101,22 +101,31 @@ the `VLAPolicyProtocol`. Reuse `weights_manager.download_weights_from_huggingfac
 - Optional CI matrix entry that installs `[vla]` and runs the unit + smoke tests
   (advisory for the first PR; promote to required after a green week) — TBD
 
-### Phase 4 — VLM-Derived Dense Rewards (VLAC)
+### Phase 4 — VLM-Derived Dense Rewards (VLAC) ✅ LANDED
 
 Replace handcrafted reward shaping in `train_constitutional_rl.py` with VLM-
 derived progress rewards. Plug into the existing `MultiObjectiveRewardModel`
 via a new head — do **not** fork the aggregator.
 
-**Scope:**
-- `src/mousedroid/reward/vlm_progress.py` — `VLMProgressHead` registers as a
-  weighted term alongside truthfulness/helpfulness/safety/engagement
-- `RewardConfig.weight_vlm_progress: float = 0.0` (off by default for safety)
-- LRU caching keyed by `(prev_hash, curr_hash, instruction_hash)` via
-  `cachetools.LRUCache(maxsize=cfg.reward.vlm_progress.cache_size)` — never
-  `functools.lru_cache` (no memory cap)
-- Constitutional override hypothesis test: a contrived high VLM reward that
-  violates Law 1 must still be Law-1-blocked (multiplicative sigmoid gate
-  preserved)
+**Delivered:**
+- `src/mousedroid/reward/vlm_progress.py` — `VLMProgressBackend` Protocol,
+  `MockVLMProgress` constant backend, `VLMProgressHead` with bounded
+  `cachetools.LRUCache` keyed on rounded-tensor SHA-1 hashes ✅
+- `RewardConfig.weight_vlm_progress: float = 0.0` (off by default) plus
+  `RewardConfig.vlm_progress: VLMProgressConfig` (`enabled`, `cache_size`,
+  `instruction`, `mock_progress_value`, `hash_decimals`) ✅
+- `MultiObjectiveRewardModel` extended with optional `vlm_head` and
+  optional `prev_obs`/`curr_obs`/`instruction` kwargs; **Law-1
+  multiplicative sigmoid gate preserved** — the VLM term is added inside
+  the harm-gated bonus when laws are present ✅
+- `factory.build_reward_model(cfg)` factory; opt-in only when **both**
+  `vlm_progress.enabled` and `weight_vlm_progress > 0` ✅
+- `train_constitutional_rl.py` migrated to the factory ✅
+- 20 new tests including Hypothesis property test (`max_examples=50`)
+  asserting `out ≈ sigmoid(harm) * weight * vlm` to `1e-4` for any
+  `(harm_bias, vlm_value, weight)` — Law 1 always zeros the VLM
+  contribution ✅
+- All 2940 unit tests still pass; `cachetools>=5.0` added to core deps ✅
 
 ### Phase 5 (stretch) — Real Physics Simulator
 

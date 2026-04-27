@@ -8,6 +8,79 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Phase 4: VLM-Derived Dense Progress Reward (`feat/phase4-vlm-progress-rewards`)
+
+- **`src/mousedroid/reward/vlm_progress.py`** — new module
+  - `VLMProgressBackend` — `@runtime_checkable Protocol` with
+    `score(prev_obs, curr_obs, instruction) -> float` so the actual VLM
+    call site is pluggable without coupling the reward module to a
+    specific model SDK
+  - `MockVLMProgress` — constant-value backend used for tests and the
+    default-off operating mode; raises `ValueError` for out-of-`[0, 1]`
+    initial values
+  - `VLMProgressHead(nn.Module)` — wraps a backend with a bounded
+    **`cachetools.LRUCache`** (NOT `functools.lru_cache` — the project
+    requires explicit `maxsize` to keep memory bounded across long
+    training runs). Cache key is
+    `(sha1(round(prev,d)), sha1(round(curr,d)), sha1(instruction))`
+    where the rounding precision `d` is configurable via
+    `VLMProgressConfig.hash_decimals`. Inference runs under
+    `torch.no_grad()`; out-of-`[0, 1]` backend returns raise
+    `ValueError`; cache hits/misses exposed via `cache_info` for
+    observability
+- **`src/mousedroid/reward/model.py`** — `MultiObjectiveRewardModel`
+  extended with optional `vlm_head: VLMProgressHead | None = None` and
+  optional `prev_obs` / `curr_obs` / `instruction` kwargs on
+  `compute_reward`, `aggregate`, and `forward`. **The Law-1
+  multiplicative sigmoid gate is preserved**: when the Three Laws head
+  is present, the VLM term is added to the gated bonus (alongside
+  laws 2/3) so a contrived high progress score cannot override a harm
+  violation. When `vlm_head=None`, behaviour is byte-identical to the
+  pre-Phase-4 path
+- **`src/mousedroid/config/schema.py`** — new `VLMProgressConfig`
+  (`enabled`, `cache_size`, `instruction`, `mock_progress_value`,
+  `hash_decimals`) with all defaults set per CLAUDE.md rule 3, plus
+  `RewardConfig.weight_vlm_progress: float = 0.0` (off by default for
+  safety) and `RewardConfig.vlm_progress: VLMProgressConfig`
+- **`src/mousedroid/factory.py`** — new `build_reward_model(cfg)` factory.
+  The VLM head is attached only when **both**
+  `cfg.reward.vlm_progress.enabled` and
+  `cfg.reward.weight_vlm_progress > 0` so a stray flag flip cannot
+  silently change reward behaviour
+- **`training/train_constitutional_rl.py`** — replaced direct
+  `MultiObjectiveRewardModel(...)` construction with
+  `build_reward_model(cfg)`; the existing constitutional check
+  (`law1 → -1.0`, other violations → `0.0`) is unchanged — Phase 4
+  augments the multi-objective signal, it does not weaken the safety
+  override
+- **`pyproject.toml`** — added `cachetools>=5.0` to core dependencies
+- **`tests/unit/reward/test_vlm_progress.py`** — 20 new tests across six
+  classes covering: `MockVLMProgress` value validation; cache hit/miss
+  + LRU eviction at `cache_size=2`; instruction-keyed determinism;
+  `hash_decimals` floating-point grouping; backend out-of-range
+  guarding; backwards-compatible aggregator (no head, weight set);
+  weight-zero invisibility (byte-identical to no-head path); factory
+  default-off + opt-in + zero-weight wiring; **constitutional override
+  Hypothesis property test** (`max_examples=50`) verifying that for any
+  `(harm_bias, vlm_value, weight)` the contribution equals
+  `sigmoid(harm_bias) * weight * vlm_value` to `1e-4` tolerance — i.e.
+  Law-1 violations always zero the VLM contribution
+
+### Backwards compatibility
+
+- `RewardConfig` adds new optional fields with defaults — existing YAML
+  configs load unchanged
+- `MultiObjectiveRewardModel.__init__` adds keyword-only `vlm_head`
+  defaulting to `None` — all existing call sites unchanged
+- `compute_reward` / `aggregate` / `forward` add keyword-only optional
+  args — all existing call sites unchanged
+- All 36 pre-existing reward + Three Laws + constitutional RL tests
+  pass unmodified
+
+---
+
+## [Released]
+
 ### Added — Phase 3b: DistilledVLAOnnx + HF weights pull (`feat/phase3b-distilled-onnx-vla`)
 
 - **`src/mousedroid/vla/policy.py`** — new `DistilledVLAOnnx` class

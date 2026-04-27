@@ -10,6 +10,7 @@ from torch import Tensor
 
 from mousedroid.config.schema import ModelConfig, RewardConfig
 from mousedroid.logging.setup import get_logger
+from mousedroid.reward.vlm_progress import VLMProgressHead
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import ThreeLawsConfig
@@ -84,20 +85,28 @@ class MultiObjectiveRewardModel(nn.Module):
 
     Heads: truthfulness, helpfulness, safety, engagement.
     Optional: law1_harm, law2_obedience, law3_preservation.
+    Optional: vlm_progress (Phase 4) — VLM-derived dense progress reward
+    that is gated by the Law-1 multiplicative sigmoid when the law head is
+    present, so a contrived high progress value cannot override harm.
 
     Args:
         model_cfg: Model dimensions (uses ``obs_dim`` as input).
         reward_cfg: Per-objective weight configuration.
         law_cfg: Optional Three Laws configuration for law reward heads.
+        vlm_head: Optional pre-built :class:`VLMProgressHead`. When ``None``,
+            no VLM progress term is contributed even if
+            ``reward_cfg.weight_vlm_progress > 0``.
     """
 
     _HEAD_NAMES = ("truthfulness", "helpfulness", "safety", "engagement")
+    _VLM_HEAD_KEY = "vlm_progress"
 
     def __init__(
         self,
         model_cfg: ModelConfig,
         reward_cfg: RewardConfig,
         law_cfg: ThreeLawsConfig | None = None,
+        vlm_head: VLMProgressHead | None = None,
     ) -> None:
         super().__init__()
         input_dim = model_cfg.obs_dim
@@ -110,22 +119,38 @@ class MultiObjectiveRewardModel(nn.Module):
             "safety": reward_cfg.weight_safety,
             "engagement": reward_cfg.weight_engagement,
         }
+        self._weight_vlm_progress = reward_cfg.weight_vlm_progress
 
         self.law_head: ThreeLawsRewardHead | None = None
         if law_cfg is not None and law_cfg.enabled:
             self.law_head = ThreeLawsRewardHead(input_dim, law_cfg)
 
+        self.vlm_head: VLMProgressHead | None = vlm_head
+
         _log.info(
             "reward_model_init",
             weights=self._weights,
             three_laws_enabled=self.law_head is not None,
+            vlm_progress_enabled=self.vlm_head is not None,
+            weight_vlm_progress=self._weight_vlm_progress,
         )
 
-    def compute_reward(self, state: Tensor) -> dict[str, Tensor]:
+    def compute_reward(
+        self,
+        state: Tensor,
+        prev_obs: Tensor | None = None,
+        curr_obs: Tensor | None = None,
+        instruction: str | None = None,
+    ) -> dict[str, Tensor]:
         """Compute per-objective reward scores.
 
         Args:
             state: State embedding, shape ``(batch, obs_dim)``.
+            prev_obs: Optional previous observation for the VLM progress head.
+            curr_obs: Optional current observation for the VLM progress head.
+                When both are provided and ``vlm_head`` is set, a
+                ``vlm_progress`` entry is added to the returned dict.
+            instruction: Optional instruction override for the VLM head.
 
         Returns:
             Dictionary mapping head name to scalar reward tensor.
@@ -133,27 +158,33 @@ class MultiObjectiveRewardModel(nn.Module):
         scores = {name: head(state) for name, head in self.heads.items()}
         if self.law_head is not None:
             scores.update(self.law_head.compute_scores(state))
+        if self.vlm_head is not None and prev_obs is not None and curr_obs is not None:
+            scores[self._VLM_HEAD_KEY] = self.vlm_head.score(prev_obs, curr_obs, instruction)
         return scores
 
     def aggregate(self, scores: dict[str, Tensor]) -> Tensor:
         """Aggregate per-objective scores into a scalar reward.
 
-        If Three Laws heads are present, the base reward is modulated
-        by the law reward gate (Law 1 violations suppress total reward).
+        The base reward sums the four standard heads. When Three Laws heads
+        are present, the law-2/3 bonus and the (optional) VLM progress term
+        are summed and multiplied by the Law-1 ``sigmoid(harm)`` gate, then
+        added to the base. When the law head is absent, the VLM term is
+        added directly.
 
         Args:
-            scores: Per-head score tensors from ``compute_reward``.
+            scores: Per-head score tensors from :meth:`compute_reward`.
 
         Returns:
             Weighted scalar reward, shape ``(batch, 1)``.
         """
-        # Base reward from standard heads
+        # Base reward from standard heads (unchanged from pre-Phase 4 behavior).
         base_scores = {k: v for k, v in scores.items() if k in self._HEAD_NAMES}
         result = torch.zeros_like(next(iter(base_scores.values())))
         for name, score in base_scores.items():
             result = result + self._weights[name] * score
 
-        # Apply Three Laws modulation
+        # Gated extras: law-2/3 bonus + VLM progress, all under sigmoid(law1_harm).
+        vlm_score = scores.get(self._VLM_HEAD_KEY)
         if self.law_head is not None:
             law_scores = {
                 k: v for k, v in scores.items() if k in ThreeLawsRewardHead._LAW_HEAD_NAMES
@@ -161,17 +192,31 @@ class MultiObjectiveRewardModel(nn.Module):
             if law_scores:
                 law_modifier = self.law_head.aggregate(law_scores)
                 result = result + law_modifier
+                if vlm_score is not None:
+                    harm_gate = torch.sigmoid(law_scores["law1_harm"])
+                    result = result + harm_gate * (self._weight_vlm_progress * vlm_score)
+        elif vlm_score is not None:
+            result = result + self._weight_vlm_progress * vlm_score
 
         return result
 
-    def forward(self, state: Tensor) -> Tensor:
+    def forward(
+        self,
+        state: Tensor,
+        prev_obs: Tensor | None = None,
+        curr_obs: Tensor | None = None,
+        instruction: str | None = None,
+    ) -> Tensor:
         """Compute and aggregate reward in one call.
 
         Args:
             state: State embedding, shape ``(batch, obs_dim)``.
+            prev_obs: Optional previous observation for the VLM progress head.
+            curr_obs: Optional current observation for the VLM progress head.
+            instruction: Optional instruction override for the VLM head.
 
         Returns:
             Scalar reward, shape ``(batch, 1)``.
         """
-        scores = self.compute_reward(state)
+        scores = self.compute_reward(state, prev_obs, curr_obs, instruction)
         return self.aggregate(scores)

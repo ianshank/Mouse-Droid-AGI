@@ -1081,6 +1081,40 @@ class RetryConfig(BaseModel):
     )
 
 
+class VLMProgressConfig(BaseModel):
+    """VLM-derived dense progress reward configuration (Phase 4).
+
+    The VLM progress head produces a scalar in ``[0, 1]`` that estimates how
+    much closer the current observation is to satisfying ``instruction``
+    compared to the previous observation. The score is gated by the Three
+    Laws Law-1 sigmoid in :class:`MultiObjectiveRewardModel`, so a contrived
+    high progress value cannot override a harm violation.
+    """
+
+    enabled: bool = Field(False, description="Toggle VLM progress head")
+    cache_size: int = Field(
+        4096,
+        ge=1,
+        description="Max entries in the (prev,curr,instruction) LRU cache",
+    )
+    instruction: str = Field(
+        "complete the task safely",
+        description="Default natural-language instruction passed to the VLM",
+    )
+    mock_progress_value: float = Field(
+        0.0,
+        ge=0.0,
+        le=1.0,
+        description="Constant value returned by MockVLMProgress backend (tests/default-off)",
+    )
+    hash_decimals: int = Field(
+        4,
+        ge=0,
+        le=12,
+        description="Decimal places used when hashing obs tensors for cache key stability",
+    )
+
+
 class RewardConfig(BaseModel):
     """Multi-objective reward configuration (Pillar 6)."""
 
@@ -1088,6 +1122,16 @@ class RewardConfig(BaseModel):
     weight_helpfulness: float = Field(0.3, ge=0, le=1, description="Help reward weight")
     weight_safety: float = Field(0.2, ge=0, le=1, description="Safety reward weight")
     weight_engagement: float = Field(0.1, ge=0, le=1, description="Engagement reward weight")
+    weight_vlm_progress: float = Field(
+        0.0,
+        ge=0.0,
+        le=1.0,
+        description="VLM progress reward weight (off by default for safety)",
+    )
+    vlm_progress: VLMProgressConfig = Field(
+        default_factory=VLMProgressConfig,
+        description="VLM-derived progress reward head settings",
+    )
 
 
 class RobotConfig(BaseModel):

@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     from mousedroid.mcp.protocol import MCPServerProtocol
     from mousedroid.memory.tier import MemoryTier
     from mousedroid.orchestrator.face_controller import FaceController
+    from mousedroid.reward.model import MultiObjectiveRewardModel
     from mousedroid.sensing.manager import SensorManager
     from mousedroid.telemetry.log_buffer import LogRingBuffer
     from mousedroid.telemetry.metrics import MetricsRegistry
@@ -57,7 +58,6 @@ if TYPE_CHECKING:
     from mousedroid.voice.mock_tts import MockTTS
     from mousedroid.voice.tts import PiperTTS
     from mousedroid.world_model.protocol import WorldModelProtocol
-
 _log = get_logger(__name__)
 
 
@@ -573,6 +573,43 @@ def _build_distilled_onnx_vla(cfg: Settings, action_dim: int) -> VLAPolicyProtoc
         model_path=str(model_path),
     )
     return policy
+
+
+def build_reward_model(cfg: Settings) -> MultiObjectiveRewardModel:
+    """Build the multi-objective reward model with optional VLM progress head.
+
+    The Three Laws head is constructed inside
+    :class:`MultiObjectiveRewardModel` whenever ``cfg.three_laws.enabled``.
+    The Phase 4 VLM progress head is attached only when both
+    ``cfg.reward.vlm_progress.enabled`` and
+    ``cfg.reward.weight_vlm_progress > 0`` so that, by default, behaviour is
+    byte-identical to the pre-Phase 4 reward path.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Configured reward model.
+    """
+    from mousedroid.reward.model import MultiObjectiveRewardModel
+    from mousedroid.reward.vlm_progress import VLMProgressHead
+
+    vlm_head: VLMProgressHead | None = None
+    if cfg.reward.vlm_progress.enabled and cfg.reward.weight_vlm_progress > 0.0:
+        vlm_head = VLMProgressHead(cfg.reward.vlm_progress)
+
+    model = MultiObjectiveRewardModel(
+        cfg.model,
+        cfg.reward,
+        law_cfg=cfg.three_laws,
+        vlm_head=vlm_head,
+    )
+    _log.info(
+        "reward_model_built",
+        vlm_progress_enabled=vlm_head is not None,
+        three_laws_enabled=cfg.three_laws.enabled,
+    )
+    return model
 
 
 def build_mission_parser(cfg: Settings) -> MissionParserProtocol:

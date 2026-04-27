@@ -21,7 +21,7 @@ from mousedroid.cognitive.constitutional_rl import (
     ValueMLP,
 )
 from mousedroid.config.schema import Settings
-from mousedroid.reward.model import MultiObjectiveRewardModel
+from mousedroid.factory import build_reward_model
 from mousedroid.safety.three_laws import RoboticsLawChecker
 from mousedroid.world_model.checkpoint_migration import load_rssm_with_migration
 
@@ -184,12 +184,9 @@ def train_constitutional_rl(
     rssm = load_rssm_with_migration(rssm_checkpoint, cfg.model, device)
     rssm.eval()
 
-    # Build reward model with Three Laws integration
-    reward_model = MultiObjectiveRewardModel(
-        cfg.model,
-        cfg.reward,
-        law_cfg=cfg.three_laws,
-    ).to(device)
+    # Build reward model with Three Laws integration and optional Phase 4
+    # VLM-derived progress head (gated by Law-1 sigmoid).
+    reward_model = build_reward_model(cfg).to(device)
 
     # Init policy and value networks
     policy = PolicyMLP(input_dim=cfg.model.latent_dim, action_dim=cfg.model.action_dim)
