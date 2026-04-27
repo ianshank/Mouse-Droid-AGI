@@ -152,7 +152,7 @@ def _load_checkpoint(
 
 def train_rssm(
     cfg: Settings,
-    data_path: Path,
+    data_path: Path | None,
     device: torch.device | None = None,
     *,
     resume_from: Path | None = None,

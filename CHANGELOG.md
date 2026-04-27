@@ -11,15 +11,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added — Ten Pillars Validation Campaign (`feat/smoke-post-pr55`)
 
 - **`scripts/validate_pillar.sh`** — headless Ten Pillars campaign dispatcher
-  - Accepts a pillar name or `all` as its single argument; runs `pytest` for the pillar's
-    unit/integration tests and then executes a factory-backed in-container Python probe
+  - Accepts a pillar name (e.g. `safety`) or `all` as its first positional argument;
+    optionally a second argument `yes|no` to override the default blocking mode for that
+    pillar; runs `pytest` headlessly then executes a factory-backed in-container Python probe
   - Correct probe implementations for all 10 pillars — uses `build_memory_tier`,
     `build_world_model`, `build_cognitive_core`, `build_curiosity_module`, and
     `build_safety_monitor` from `factory.py`; uses direct class instantiation for
     `MultiObjectiveRewardModel`, `EWCAgent`, `MAMLAdapter`, `AdaptiveCompute`, and
     `KnowledgeDistiller` (no phantom factory functions)
   - Writes a Markdown result table to `ten_pillars.log` alongside the SUMMARY.md
-  - Blocking / non-blocking pillar classification encoded in the script (`blocking` array)
+  - Blocking / non-blocking default mode declared per-pillar via `run_pillar_check
+    <name> <yes|no> ...` call sites; individual pillars can be overridden via
+    `MOUSEDROID_PILLAR_BLOCKING_<PILLAR>=yes|no` environment variable
 
 - **`scripts/jetson_full_smoke_run.sh`** — wired Ten Pillars section into SUMMARY.md
   - Appends `## Ten Pillars Validation` block (from `ten_pillars.log`) to the smoke

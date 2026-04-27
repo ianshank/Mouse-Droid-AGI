@@ -165,11 +165,13 @@ ssh ian@mousedroid.local "export MOUSEDROID_SMOKE_PYTHON=$LATEST/python3-in-cont
   done | tee $LATEST/ten_pillars.log"
 ```
 
-`scripts/validate_pillar.sh` does not exist yet; it is the only new
-artefact this plan introduces and is in scope as a follow-up. It will
-dispatch each pillar's commands above using the same env contract as
-`jetson_full_smoke_run.sh` (reads `MOUSEDROID_SMOKE_PYTHON`, writes per
-pillar log files to `$LATEST/pillar_<name>.log`).
+`scripts/validate_pillar.sh` is present in the repository and implements
+this plan. It dispatches each pillar's commands using the same env contract
+as `jetson_full_smoke_run.sh`: reads `MOUSEDROID_SMOKE_PYTHON`, writes
+per-pillar log files to `$REPORT_DIR/pillar_<name>_<kind>.log`, and writes
+the campaign summary table to `$REPORT_DIR/ten_pillars.log`.
+Use `bash scripts/validate_pillar.sh all` to run all ten pillars, or
+`bash scripts/validate_pillar.sh <pillar>` to run a single pillar.
 
 ## Reporting
 

@@ -148,11 +148,16 @@ def run_phase_1_rssm(cfg: Settings, data_dir: Path, *, resume_from: Path | None 
     _log.info("phase_1_start", phase="rssm_pretraining")
     from training.train_rssm import train_rssm
 
-    data_path = _require_existing_path(
-        data_dir / "sequences.pt",
-        description="RSSM training data file 'sequences.pt'",
-        phase=1,
-    )
+    # When replay is enabled the dataset builder ingests LMDB episodes directly
+    # and sequences.pt may not exist yet — only require it for synthetic-only runs.
+    if not cfg.training.replay.enabled:
+        data_path: Path | None = _require_existing_path(
+            data_dir / "sequences.pt",
+            description="RSSM training data file 'sequences.pt'",
+            phase=1,
+        )
+    else:
+        data_path = data_dir / "sequences.pt" if (data_dir / "sequences.pt").exists() else None
     checkpoint = train_rssm(cfg, data_path, resume_from=resume_from)
     _log.info("phase_1_complete", checkpoint=str(checkpoint))
     return checkpoint

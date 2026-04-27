@@ -253,6 +253,29 @@ class TestRunPipeline:
 
         mock_p1.assert_called_once()
 
+    @patch("training.train_rssm.train_rssm")
+    def test_run_phase_1_rssm_skips_sequences_check_when_replay_enabled(
+        self,
+        mock_train: MagicMock,
+        cfg: Settings,
+        tmp_path: Path,
+    ) -> None:
+        """run_phase_1_rssm must not raise FileNotFoundError when replay is on."""
+        from training.run_pipeline import run_phase_1_rssm
+
+        cfg.training.replay.enabled = True
+        cfg.training.weights_dir = str(tmp_path / "weights")
+        mock_train.return_value = tmp_path / "weights" / "rssm" / "final.pt"
+
+        # data_dir with no sequences.pt must not raise
+        result = run_phase_1_rssm(cfg, tmp_path / "no-sequences")
+
+        assert result == mock_train.return_value
+        mock_train.assert_called_once()
+        # data_path arg should be None (sequences.pt absent) rather than raising
+        call_args = mock_train.call_args
+        assert call_args[0][1] is None  # second positional arg is data_path
+
     @patch("training.train_bdi.train_bdi")
     def test_phase_3_uses_training_hyperparameters(
         self,

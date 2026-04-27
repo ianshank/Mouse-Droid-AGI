@@ -167,7 +167,7 @@ class UsbSpeaker:
             deadline = loop.time() + self._cfg.write_timeout_s
             while True:
                 available_raw = get_write_available()
-                if not isinstance(available_raw, int | float):
+                if not isinstance(available_raw, (int, float)):  # noqa: UP038
                     break
                 if int(available_raw) >= frames_to_write:
                     break
