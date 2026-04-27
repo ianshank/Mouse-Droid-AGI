@@ -95,6 +95,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     empty-LMDB exit-0, argparse wiring.
 - **Coverage** — 97.21% on Phase 2 + 2.1 modules (gate is 85%).
 
+### Added — Phase 2 acceptance: integration test on synthetic LMDB
+
+- **`tests/integration/test_phase2_replay_pipeline.py`** — 6 new tests
+  closing the third Phase 2 acceptance bullet from `NEXT_STEPS.md`. The
+  end-to-end test:
+  1. Writes 10 deterministic synthetic records via the production
+     `ExperienceLogger` (so the same write path used on the Jetson is
+     exercised).
+  2. Builds the reader through `factory.build_replay_reader` and
+     drains it via async `stream(chunk_size=4)`.
+  3. Asserts every record round-tripped (`read_records == 10`,
+     `skipped_schema_mismatch == 0`).
+  4. Tensorizes `vision_features -> states`, `action -> actions`,
+     runs 25 BC updates on a `CQLTrainer`, asserts loss strictly
+     decreases.
+  5. Saves a checkpoint to disk, re-loads it into a fresh trainer,
+     and asserts policy outputs match byte-exactly on the training
+     batch.
+- Companion tests guarantee `weight=0.0` is byte-identical (CLAUDE.md
+  invariant 9 backwards compat) and that reader output is invariant
+  across `chunk_size ∈ {1, 3, 4, 64}`.
+
 ### Added — Phase 4: VLM-Derived Dense Progress Reward (`feat/phase4-vlm-progress-rewards`)
 
 - **`src/mousedroid/reward/vlm_progress.py`** — new module
