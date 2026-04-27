@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     from mousedroid.sensing.manager import SensorManager
     from mousedroid.sensing.protocol import ObservationProtocol
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
+    from mousedroid.vla.policy import VLAPolicyProtocol
     from mousedroid.voice.protocol import VoiceEngineProtocol
     from mousedroid.world_model.protocol import WorldModelProtocol
 
@@ -84,6 +85,7 @@ class MouseDroidOrchestrator:
         tool_registry: Any | None = None,
         face_controller: FaceController | None = None,
         mcp_server: MCPServerProtocol | None = None,
+        vla_policy: VLAPolicyProtocol | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -115,6 +117,11 @@ class MouseDroidOrchestrator:
                 the telemetry server during ``start()`` and stopped just
                 before it during ``stop()``. Runs as its own supervised
                 background tasks; never blocks the control loop.
+            vla_policy: Optional VLA policy (Phase 3a). When supplied and
+                ``cfg.loop.policy_selector`` selects it, the orchestrator
+                routes action selection through the policy with a per-tick
+                inference timeout (``cfg.loop.inference_timeout_s``,
+                defaulting to ``1.0 / control_hz``).
         """
         if not agents:
             msg = "At least one agent is required"
@@ -141,6 +148,7 @@ class MouseDroidOrchestrator:
         self._tool_registry = tool_registry
         self._face_controller = face_controller
         self._mcp_server = mcp_server
+        self._vla_policy = vla_policy
         self._cfg = cfg
         self._running = False
         self._tick_count: int = 0
@@ -367,7 +375,85 @@ class MouseDroidOrchestrator:
             if action is not None:
                 return action
 
+        # VLA branch (Phase 3a). Default policy_selector='nav_agent'
+        # short-circuits this and preserves byte-identical pre-Phase-3a
+        # behavior. Only active when the orchestrator was wired with a
+        # VLA policy AND the config selects it.
+        selector = self._cfg.loop.policy_selector
+        if selector != "nav_agent" and self._vla_policy is not None:
+            vla_action = self._try_vla_action(observation)
+            if vla_action is not None:
+                return vla_action
+            # Fallthrough to nav_agent below in 'auto' mode, or to a
+            # zero-action safe stop in strict 'vla' mode.
+            if selector == "vla" and not self._cfg.vla.fallback_on_timeout:
+                _log.warning("vla_timeout_safe_stop", selector=selector)
+                return torch.zeros(
+                    int(self._cfg.model.action_dim), dtype=torch.float32
+                )
+
         return self._agents[0].act(self._h, self._z, safety_ctx)
+
+    def _try_vla_action(
+        self,
+        observation: ObservationProtocol,
+    ) -> torch.Tensor | None:
+        """Run a single VLA inference under the per-tick latency budget.
+
+        Returns ``None`` when the policy raises, when inference exceeds
+        ``cfg.loop.inference_timeout_s`` (defaulting to
+        ``1.0 / cfg.loop.control_hz``), or when the resulting action
+        tensor has the wrong shape. The orchestrator decides how to
+        respond to ``None`` (fall back to nav_agent or emit a safe
+        stop) via ``policy_selector``/``vla.fallback_on_timeout``.
+
+        Args:
+            observation: Current sensor observation (unused by MockVLA;
+                forwarded for richer policies).
+
+        Returns:
+            The VLA action tensor on success, otherwise ``None``.
+        """
+        del observation  # forwarded via VLAObservation below
+        assert self._vla_policy is not None  # narrowed by caller
+
+        from mousedroid.vla.policy import VLAObservation
+
+        budget = self._cfg.loop.inference_timeout_s
+        if budget is None:
+            budget = 1.0 / float(self._cfg.loop.control_hz)
+
+        start = time.monotonic()
+        try:
+            with torch.no_grad():
+                result = self._vla_policy.predict(
+                    VLAObservation(h=self._h, z=self._z)
+                )
+        except Exception:  # never let VLA crash the loop
+            _log.warning("vla_predict_failed", policy=self._vla_policy.name, exc_info=True)
+            return None
+
+        elapsed = time.monotonic() - start
+        if elapsed > budget:
+            _log.warning(
+                "vla_inference_timeout",
+                policy=self._vla_policy.name,
+                elapsed_s=elapsed,
+                budget_s=budget,
+            )
+            return None
+
+        action_dim = int(self._cfg.model.action_dim)
+        if result.action.shape != (action_dim,):
+            _log.warning(
+                "vla_action_shape_mismatch",
+                policy=self._vla_policy.name,
+                expected=(action_dim,),
+                got=tuple(result.action.shape),
+            )
+            return None
+
+        return result.action
 
     def _try_cognitive_action(
         self,

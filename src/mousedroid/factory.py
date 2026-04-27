@@ -21,6 +21,7 @@ from mousedroid.health.watchdog import WatchdogProtocol
 from mousedroid.llm_gateway.protocol import LLMGatewayProtocol
 from mousedroid.logging.setup import get_logger
 from mousedroid.safety.protocol import SafetyMonitorProtocol
+from mousedroid.vla.policy import VLAPolicyProtocol
 from mousedroid.voice.protocol import VoiceEngineProtocol
 
 if TYPE_CHECKING:
@@ -427,6 +428,58 @@ def build_llm_gateway(cfg: Settings) -> LLMGatewayProtocol:
     )
     _log.info("llm_gateway_built", enabled=cfg.llm.enabled)
     return LLMGateway(gateway_cfg)
+
+
+def build_vla_policy(cfg: Settings) -> VLAPolicyProtocol | None:
+    """Build the VLA policy if configured (Phase 3a).
+
+    Returns ``None`` when ``cfg.vla.backend == "none"`` so callers (the
+    orchestrator) can skip the VLA branch without inspecting backend
+    strings. The Phase 3b ``"distilled_onnx"`` backend is intentionally
+    not implemented here yet — selecting it raises ``NotImplementedError``.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        A :class:`VLAPolicyProtocol` instance, or ``None`` when disabled.
+
+    Raises:
+        ValueError: When ``vla.canned_action`` length disagrees with
+            ``model.action_dim``.
+        NotImplementedError: When ``vla.backend == "distilled_onnx"``
+            (reserved for Phase 3b).
+    """
+    backend = cfg.vla.backend
+    if backend == "none":
+        _log.info("vla_policy_disabled")
+        return None
+
+    import torch as _torch  # runtime import; torch is a project dependency
+
+    action_dim = cfg.model.action_dim
+    canned: _torch.Tensor | None = None
+    if cfg.vla.canned_action is not None:
+        if len(cfg.vla.canned_action) != action_dim:
+            msg = (
+                f"vla.canned_action length {len(cfg.vla.canned_action)} "
+                f"!= model.action_dim ({action_dim})"
+            )
+            raise ValueError(msg)
+        canned = _torch.tensor(cfg.vla.canned_action, dtype=_torch.float32)
+
+    if backend == "mock":
+        from mousedroid.vla.policy import MockVLA
+
+        _log.info("vla_policy_built", backend="mock", action_dim=action_dim)
+        return MockVLA(
+            action_dim=action_dim,
+            canned_action=canned,
+            confidence=cfg.vla.confidence,
+        )
+
+    msg = f"VLA backend {backend!r} is reserved for Phase 3b"
+    raise NotImplementedError(msg)
 
 
 def build_mission_parser(cfg: Settings) -> MissionParserProtocol:
@@ -1171,6 +1224,9 @@ def build_orchestrator(cfg: Settings) -> object:
         llm_gateway = build_llm_gateway(cfg)
     mission_parser: MissionParserProtocol | None = build_mission_parser(cfg)
 
+    # VLA policy (optional — gated by vla.backend, default 'none')
+    vla_policy: VLAPolicyProtocol | None = build_vla_policy(cfg)
+
     from mousedroid.common.tools.registry import create_default_registry
 
     _tool_registry = create_default_registry(
@@ -1251,6 +1307,7 @@ def build_orchestrator(cfg: Settings) -> object:
         tool_registry=_tool_registry,
         face_controller=face_controller,
         mcp_server=mcp_server,
+        vla_policy=vla_policy,
     )
 
 

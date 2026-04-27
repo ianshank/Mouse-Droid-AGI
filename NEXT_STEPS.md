@@ -57,19 +57,25 @@ the RSSM and the Constitutional-RL policy. Closes the second of four gaps.
   and verifies a checkpoint is produced
 - Golden RSSM loss curve at fixed seed within ±1% of baseline
 
-### Phase 3a — VLA Protocol + `MockVLA`
+### Phase 3a — VLA Protocol + `MockVLA` ✅ LANDED (`feat/phase3a-vla-protocol`)
 
 Add an end-to-end Vision-Language-Action policy alongside the existing
 `llm_gateway` + navigation-agent split, gated by a new `LoopConfig.policy_selector`
 flag (default `nav_agent` → backwards compatible).
 
 **Scope:**
-- `src/mousedroid/vla/policy.py` — `VLAObservation`, `VLAAction`, `VLAConfig`,
-  `@runtime_checkable VLAPolicyProtocol`, `MockVLA`
-- Factory hook `build_vla_policy` next to `build_llm_gateway` in `factory.py`
-- Orchestrator branch on `cfg.loop.policy_selector ∈ {nav_agent, vla, auto}`
+- `src/mousedroid/vla/policy.py` — `VLAObservation`, `VLAAction`,
+  `@runtime_checkable VLAPolicyProtocol`, `MockVLA` ✅
+- New top-level `VLAConfig` Pydantic block (`Settings.vla`), default
+  `backend="none"` for byte-identical legacy behavior ✅
+- Factory hook `build_vla_policy` next to `build_llm_gateway` in `factory.py` ✅
+- Orchestrator branch on `cfg.loop.policy_selector ∈ {nav_agent, vla, auto}` ✅
 - Latency budget: `inference_timeout_s` defaults to `1.0 / cfg.loop.control_hz`;
-  on `TimeoutError` the safety monitor emits `vla_timeout_safe_stop`
+  on timeout strict `vla` mode emits `vla_timeout_safe_stop` and returns a
+  zero action; `auto` and `vla` (with `fallback_on_timeout=True`) fall back
+  to the nav agent ✅
+- 43 new unit tests (`tests/unit/vla/test_policy.py`,
+  `tests/unit/orchestrator/test_policy_selector.py`) ✅
 
 ### Phase 3b — `DistilledVLAOnnx` + HF Weights Pull
 
