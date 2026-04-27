@@ -388,9 +388,7 @@ class MouseDroidOrchestrator:
             # zero-action safe stop in strict 'vla' mode.
             if selector == "vla" and not self._cfg.vla.fallback_on_timeout:
                 _log.warning("vla_timeout_safe_stop", selector=selector)
-                return torch.zeros(
-                    int(self._cfg.model.action_dim), dtype=torch.float32
-                )
+                return torch.zeros(int(self._cfg.model.action_dim), dtype=torch.float32)
 
         return self._agents[0].act(self._h, self._z, safety_ctx)
 
@@ -426,9 +424,7 @@ class MouseDroidOrchestrator:
         start = time.monotonic()
         try:
             with torch.no_grad():
-                result = self._vla_policy.predict(
-                    VLAObservation(h=self._h, z=self._z)
-                )
+                result = self._vla_policy.predict(VLAObservation(h=self._h, z=self._z))
         except Exception:  # never let VLA crash the loop
             _log.warning("vla_predict_failed", policy=self._vla_policy.name, exc_info=True)
             return None

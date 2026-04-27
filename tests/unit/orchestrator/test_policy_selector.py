@@ -114,9 +114,7 @@ class TestVLASelector:
         cfg.loop.policy_selector = "vla"
         canned = torch.tensor([0.1, 0.2, 0.3])
         vla = MockVLA(action_dim=cfg.model.action_dim, canned_action=canned)
-        orch = _make_orchestrator(
-            cfg=cfg, nav_action=torch.zeros(3), vla_policy=vla
-        )
+        orch = _make_orchestrator(cfg=cfg, nav_action=torch.zeros(3), vla_policy=vla)
         out = orch._select_action(_ctx(), _make_observation(cfg), 0.0)
         assert torch.allclose(out, canned)
 
@@ -125,9 +123,7 @@ class TestVLASelector:
         cfg.loop.policy_selector = "auto"
         canned = torch.tensor([0.4, 0.5, 0.6])
         vla = MockVLA(action_dim=cfg.model.action_dim, canned_action=canned)
-        orch = _make_orchestrator(
-            cfg=cfg, nav_action=torch.zeros(3), vla_policy=vla
-        )
+        orch = _make_orchestrator(cfg=cfg, nav_action=torch.zeros(3), vla_policy=vla)
         out = orch._select_action(_ctx(), _make_observation(cfg), 0.0)
         assert torch.allclose(out, canned)
 
@@ -202,9 +198,7 @@ class TestVLATimeoutAndFallback:
         cfg = Settings(mock_hardware=True)
         cfg.loop.policy_selector = "auto"
         nav = torch.tensor([0.4, 0.0, 0.0])
-        orch = _make_orchestrator(
-            cfg=cfg, nav_action=nav, vla_policy=_ExplodingVLA()
-        )
+        orch = _make_orchestrator(cfg=cfg, nav_action=nav, vla_policy=_ExplodingVLA())
         out = orch._select_action(_ctx(), _make_observation(cfg), 0.0)
         assert torch.equal(out, nav)
 
@@ -225,8 +219,6 @@ class TestVLATimeoutAndFallback:
         cfg.loop.inference_timeout_s = None
         canned = torch.tensor([0.05, 0.0, 0.0])
         vla = MockVLA(action_dim=cfg.model.action_dim, canned_action=canned)
-        orch = _make_orchestrator(
-            cfg=cfg, nav_action=torch.zeros(3), vla_policy=vla
-        )
+        orch = _make_orchestrator(cfg=cfg, nav_action=torch.zeros(3), vla_policy=vla)
         out = orch._select_action(_ctx(), _make_observation(cfg), 0.0)
         assert torch.allclose(out, canned)
