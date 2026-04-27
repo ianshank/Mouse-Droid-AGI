@@ -8,6 +8,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Production-config validation gate
+
+- **`scripts/validate_configs.py`** — CLI that loads every `config/*.yaml`
+  through `mousedroid.config.loader.load_settings()` and reports per-file
+  pass/fail. Catches Pydantic schema drift, type drift, and cross-field
+  validator regressions before they reach the Jetson. Supports a
+  `# config-validator: skip` marker (in the YAML's first 10 lines) to
+  exclude deploy-time descriptors that share the `config/` directory but
+  are not runtime overlays. Flags: `--config-dir`, `--fail-fast`,
+  `--include-default`. Exit codes: 0 / 1 (validation failures) / 2 (usage).
+- **`tests/regression/test_config_overlays_load.py`** — 16 tests that
+  parametrize over every overlay returned by
+  `validate_configs.discover_overlays()`, assert `Settings` construction
+  succeeds with a valid `platform`, and end-to-end exercise the CLI via
+  `subprocess`. Test set stays in lockstep with the script by importing
+  its `discover_overlays` helper.
+- **`config/jetson_setup.yaml`** — annotated with `# config-validator: skip`
+  (deploy descriptor; reuses the `jetson:` namespace with deploy-only keys
+  `host`/`user`/`ssh_port`/`install_dir`/`swap_size_gb` that conflict with
+  the runtime `JetsonConfig` schema).
+- **`.github/workflows/ci.yml`** — new `config-validate` job (Python 3.11,
+  needs `lint`) that runs `python scripts/validate_configs.py
+  --include-default` after a runtime-only `pip install -e .`. Fast,
+  isolated, no heavy deps.
+
 ### Added — Phase 2 acceptance: golden RSSM loss-curve regression
 
 - **`tests/regression/_rssm_golden_helper.py`** — deterministic, CPU-only,

@@ -234,7 +234,10 @@ ExecStartPre=/bin/cp /opt/mousedroid/config/jetson_production.yaml /etc/mousedro
 
 ### P2 — CI / Quality
 
-- Add production-config validation to the local pre-commit path.
+- Add production-config validation to the local pre-commit path. ✅ **Done** —
+  `scripts/validate_configs.py` + `tests/regression/test_config_overlays_load.py`
+  + `config-validate` CI job; skip-marker (`# config-validator: skip`) supports
+  deploy-time YAMLs.
 - Publish coverage badge automation if it provides signal beyond the existing branch gate.
 - Consider mutation testing for `voice/` and `hardware/audio/` once the current rollout is stable.
 
