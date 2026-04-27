@@ -58,7 +58,7 @@ the RSSM and the Constitutional-RL policy. Closes the second of four gaps.
 - Empty LMDB produces a clean no-op (logged warning, training proceeds) ✅
 - Mixer's realized ratio over 10 k draws is within 1% of target ✅ (parametrized test at 0.1/0.5/0.9)
 - Integration test on a 10-episode synthetic LMDB → checkpoint produced ✅ (`tests/integration/test_phase2_replay_pipeline.py`, 6 tests: end-to-end LMDB→reader→BC→checkpoint round-trip, weight=0 byte-identity, chunk-size invariance at {1,3,4,64})
-- Golden RSSM loss curve at fixed seed within ±1% of baseline — **pending future PR** (requires capturing a stable baseline first)
+- Golden RSSM loss curve at fixed seed within ±1% of baseline ✅ (`tests/regression/test_phase2_rssm_golden.py` + helper at `tests/regression/_rssm_golden_helper.py`; baseline JSON at `tests/regression/fixtures/phase2_rssm_golden_baseline.json`; 8 tests covering existence, length, finite-keys, monotone-trend, baseline-tolerance with ±1% on recon/total and ±5% on KL, and prefix-stability at n∈{1,3,10}; regenerate via `MOUSEDROID_UPDATE_GOLDEN=1 pytest tests/regression/test_phase2_rssm_golden.py`)
 
 ### Phase 3a — VLA Protocol + `MockVLA` ✅ LANDED (`feat/phase3a-vla-protocol`)
 

@@ -8,6 +8,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Phase 2 acceptance: golden RSSM loss-curve regression
+
+- **`tests/regression/_rssm_golden_helper.py`** — deterministic, CPU-only,
+  tiny-dim RSSM training harness. Runs N (default 10) optimizer steps on
+  synthetic batches sampled from a seeded `torch.Generator`; mirrors the
+  per-step loss formula in `training/train_rssm.py` (recon MSE + kl_beta·KL)
+  but strips file I/O, the `DataLoader`, and the AMP path so the curve is
+  bit-stable across runs. `ModelConfig` is built via `model_validate` so the
+  harness stays backwards-compatible when new schema fields land.
+- **`tests/regression/fixtures/phase2_rssm_golden_baseline.json`** — committed
+  10-step baseline (schema_version=1, seed=0). Regenerate intentionally via
+  `MOUSEDROID_UPDATE_GOLDEN=1 pytest tests/regression/test_phase2_rssm_golden.py`.
+- **`tests/regression/test_phase2_rssm_golden.py`** — 8 tests:
+  fixture presence, curve length, finite/typed loss keys, monotone-decrease
+  smoke, baseline tolerance (±1% on `recon`/`total`, ±5% on `kl` for
+  reparameterized-sample noise), and prefix stability at `num_steps ∈
+  {1, 3, 10}` (guards against accidental coupling between batch generation
+  and step count). Closes the last open Phase 2 acceptance bullet from
+  `NEXT_STEPS.md`.
+- **Repo hygiene** — dropped 3 unused `# noqa: UP038` directives flagged by
+  `RUF100` in `usb_speaker.py` and `mcp/resources.py` (autofix; no behavior
+  change).
+- All 3,391 unit/regression/integration tests pass; ruff + ruff format +
+  `mypy --strict` (on the new files) + hardcoded-value gate clean.
+
 ### Added — Phase 2: Real-Episode Replay Loop (`feat/phase2-real-episode-replay`)
 
 - **`src/mousedroid/training/replay/`** — new package
