@@ -97,9 +97,9 @@ class TestVLMProgressHead:
         head = VLMProgressHead(cfg, backend=backend)
         prev = torch.zeros(1, 4)
         curr = torch.ones(1, 4)
-        head.score(prev, curr, "task")
-        head.score(prev, curr, "task")
-        head.score(prev, curr, "task")
+        head.score(prev, curr, instruction="task")
+        head.score(prev, curr, instruction="task")
+        head.score(prev, curr, instruction="task")
         assert backend.calls == 1
         info = head.cache_info
         assert info["hits"] == 2
@@ -111,8 +111,8 @@ class TestVLMProgressHead:
         head = VLMProgressHead(cfg, backend=backend)
         prev = torch.zeros(1, 4)
         curr = torch.ones(1, 4)
-        head.score(prev, curr, "go left")
-        head.score(prev, curr, "go right")
+        head.score(prev, curr, instruction="go left")
+        head.score(prev, curr, instruction="go right")
         assert backend.calls == 2
 
     def test_lru_eviction_respects_maxsize(self) -> None:
@@ -121,9 +121,9 @@ class TestVLMProgressHead:
         head = VLMProgressHead(cfg, backend=backend)
         # Fill cache with 3 distinct keys → first one evicts.
         for i in range(3):
-            head.score(torch.full((1, 4), float(i)), torch.zeros(1, 4), "x")
+            head.score(torch.full((1, 4), float(i)), torch.zeros(1, 4), instruction="x")
         # Re-querying the first key must miss again.
-        head.score(torch.full((1, 4), 0.0), torch.zeros(1, 4), "x")
+        head.score(torch.full((1, 4), 0.0), torch.zeros(1, 4), instruction="x")
         assert backend.calls == 4
         assert head.cache_info["size"] <= 2
 
@@ -152,9 +152,25 @@ class TestVLMProgressHead:
         head = VLMProgressHead(cfg, backend=backend)
         prev = torch.zeros(1, 4)
         # Two values that round to the same 2-decimal grid:
-        head.score(prev, torch.full((1, 4), 0.12345), "t")
-        head.score(prev, torch.full((1, 4), 0.12399), "t")
+        head.score(prev, torch.full((1, 4), 0.12345), instruction="t")
+        head.score(prev, torch.full((1, 4), 0.12399), instruction="t")
         assert backend.calls == 1
+
+    def test_forward_alias_matches_score(self) -> None:
+        cfg = VLMProgressConfig(enabled=True, mock_progress_value=0.25)
+        head = VLMProgressHead(cfg)
+        prev = torch.zeros(1, 4)
+        curr = torch.ones(1, 4)
+        out_score = head.score(prev, curr, instruction="x").item()
+        out_forward = head(prev, curr, instruction="x").item()
+        assert out_score == pytest.approx(out_forward)
+
+    def test_instruction_is_keyword_only(self) -> None:
+        cfg = VLMProgressConfig(enabled=True)
+        head = VLMProgressHead(cfg)
+        with pytest.raises(TypeError):
+            # Positional instruction must be rejected for API safety.
+            head.score(torch.zeros(1, 4), torch.zeros(1, 4), "go")  # type: ignore[misc]
 
 
 class TestMultiObjectiveBackwardCompat:

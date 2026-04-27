@@ -17,6 +17,11 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
+# Module-level constants — single source of truth so other classes/tests don't
+# reach into the private attributes of :class:`ThreeLawsRewardHead`.
+LAW_HEAD_NAMES: tuple[str, ...] = ("law1_harm", "law2_obedience", "law3_preservation")
+LAW1_HARM_KEY = "law1_harm"
+
 
 class ThreeLawsRewardHead(nn.Module):
     """Reward heads encoding the Three Laws of Robotics.
@@ -33,11 +38,11 @@ class ThreeLawsRewardHead(nn.Module):
         law_cfg: Three Laws configuration with reward weights.
     """
 
-    _LAW_HEAD_NAMES = ("law1_harm", "law2_obedience", "law3_preservation")
+    _LAW_HEAD_NAMES = LAW_HEAD_NAMES
 
     def __init__(self, input_dim: int, law_cfg: ThreeLawsConfig) -> None:
         super().__init__()
-        self.heads = nn.ModuleDict({name: nn.Linear(input_dim, 1) for name in self._LAW_HEAD_NAMES})
+        self.heads = nn.ModuleDict({name: nn.Linear(input_dim, 1) for name in LAW_HEAD_NAMES})
         self._weights = {
             "law1_harm": law_cfg.law1_reward_weight,
             "law2_obedience": law_cfg.law2_reward_weight,
@@ -69,7 +74,7 @@ class ThreeLawsRewardHead(nn.Module):
             Scalar law reward modifier, shape ``(batch, 1)``.
         """
         # Law 1: sigmoid gate (negative harm score → near-zero multiplier)
-        harm_gate = torch.sigmoid(scores["law1_harm"])
+        harm_gate = torch.sigmoid(scores[LAW1_HARM_KEY])
 
         # Laws 2 & 3: additive bonus
         bonus = (
@@ -138,6 +143,7 @@ class MultiObjectiveRewardModel(nn.Module):
     def compute_reward(
         self,
         state: Tensor,
+        *,
         prev_obs: Tensor | None = None,
         curr_obs: Tensor | None = None,
         instruction: str | None = None,
@@ -159,7 +165,9 @@ class MultiObjectiveRewardModel(nn.Module):
         if self.law_head is not None:
             scores.update(self.law_head.compute_scores(state))
         if self.vlm_head is not None and prev_obs is not None and curr_obs is not None:
-            scores[self._VLM_HEAD_KEY] = self.vlm_head.score(prev_obs, curr_obs, instruction)
+            scores[self._VLM_HEAD_KEY] = self.vlm_head.score(
+                prev_obs, curr_obs, instruction=instruction
+            )
         return scores
 
     def aggregate(self, scores: dict[str, Tensor]) -> Tensor:
@@ -186,14 +194,12 @@ class MultiObjectiveRewardModel(nn.Module):
         # Gated extras: law-2/3 bonus + VLM progress, all under sigmoid(law1_harm).
         vlm_score = scores.get(self._VLM_HEAD_KEY)
         if self.law_head is not None:
-            law_scores = {
-                k: v for k, v in scores.items() if k in ThreeLawsRewardHead._LAW_HEAD_NAMES
-            }
+            law_scores = {k: v for k, v in scores.items() if k in LAW_HEAD_NAMES}
             if law_scores:
                 law_modifier = self.law_head.aggregate(law_scores)
                 result = result + law_modifier
                 if vlm_score is not None:
-                    harm_gate = torch.sigmoid(law_scores["law1_harm"])
+                    harm_gate = torch.sigmoid(law_scores[LAW1_HARM_KEY])
                     result = result + harm_gate * (self._weight_vlm_progress * vlm_score)
         elif vlm_score is not None:
             result = result + self._weight_vlm_progress * vlm_score
@@ -203,6 +209,7 @@ class MultiObjectiveRewardModel(nn.Module):
     def forward(
         self,
         state: Tensor,
+        *,
         prev_obs: Tensor | None = None,
         curr_obs: Tensor | None = None,
         instruction: str | None = None,
@@ -218,5 +225,7 @@ class MultiObjectiveRewardModel(nn.Module):
         Returns:
             Scalar reward, shape ``(batch, 1)``.
         """
-        scores = self.compute_reward(state, prev_obs, curr_obs, instruction)
+        scores = self.compute_reward(
+            state, prev_obs=prev_obs, curr_obs=curr_obs, instruction=instruction
+        )
         return self.aggregate(scores)

@@ -145,6 +145,7 @@ class VLMProgressHead(nn.Module):
         self,
         prev_obs: Tensor,
         curr_obs: Tensor,
+        *,
         instruction: str | None = None,
     ) -> Tensor:
         """Return progress score as a ``(1, 1)`` tensor.
@@ -183,5 +184,21 @@ class VLMProgressHead(nn.Module):
                 )
             self._cache[key] = value
             self._misses += 1
+            _log.debug(
+                "vlm_progress_cache_miss",
+                value=value,
+                cache_size=len(self._cache),
+                cache_max=self._cache.maxsize,
+            )
 
         return torch.tensor([[value]], dtype=torch.float32, device=curr_obs.device)
+
+    def forward(
+        self,
+        prev_obs: Tensor,
+        curr_obs: Tensor,
+        *,
+        instruction: str | None = None,
+    ) -> Tensor:
+        """:class:`nn.Module` alias for :meth:`score`."""
+        return self.score(prev_obs, curr_obs, instruction=instruction)
