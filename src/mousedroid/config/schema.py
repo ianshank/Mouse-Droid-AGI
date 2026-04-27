@@ -2222,6 +2222,45 @@ class TrainingReplayConfig(BaseModel):
     )
 
 
+class ReplayMixerConfig(BaseModel):
+    """Phase 2 sim/real episode mixer configuration.
+
+    Mirrors :class:`mousedroid.training.replay.mixer.MixerConfig` so YAML can
+    drive the mixer without importing the implementation. All fields default
+    to inert values — `alpha_target=0.0` means sim-only and produces the same
+    behavior as legacy training paths.
+    """
+
+    alpha_target: float = Field(
+        0.0,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Target probability of drawing from the real replay source. "
+            "0.0 disables mixing (sim-only); 1.0 is real-only."
+        ),
+    )
+    alpha_ramp_steps: int = Field(
+        1000,
+        gt=0,
+        description=("Number of mix steps to linearly ramp alpha from 0 to alpha_target."),
+    )
+    chunk_size: int = Field(
+        64,
+        gt=0,
+        description="LMDB read chunk size for the async replay reader.",
+    )
+    seed: int | None = Field(
+        None,
+        description="Optional RNG seed for deterministic mixing.",
+    )
+    log_every_n: int = Field(
+        500,
+        gt=0,
+        description="Emit a `mixer_ratio_check` log every N draws.",
+    )
+
+
 class TrainingConfig(BaseModel):
     """Offline training configuration."""
 
@@ -2253,6 +2292,13 @@ class TrainingConfig(BaseModel):
     )
     replay: TrainingReplayConfig = Field(
         default_factory=_settings_default_factory(TrainingReplayConfig)
+    )
+    replay_mixer: ReplayMixerConfig = Field(
+        default_factory=_settings_default_factory(ReplayMixerConfig),
+        description=(
+            "Phase 2 sim/real interleaver configuration. Defaults are inert "
+            "(alpha_target=0.0) so existing training pipelines are unchanged."
+        ),
     )
     gpu: GPUConfig = Field(
         default_factory=lambda: GPUConfig(

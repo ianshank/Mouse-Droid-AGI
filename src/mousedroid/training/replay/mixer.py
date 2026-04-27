@@ -27,6 +27,15 @@ T = TypeVar("T")
 
 _log = get_logger(__name__)
 
+# Default ramp horizon (steps) for alpha 0 -> alpha_target.
+DEFAULT_RAMP_STEPS: int = 1000
+# Default cadence (steps) for emitting `mixer_ratio_check` telemetry.
+DEFAULT_LOG_INTERVAL: int = 500
+# The mixer interleaves exactly two sources: sim and real.
+_NUM_SOURCES: int = 2  # hardcoded-ok: structural invariant — two sources only
+# Decimal precision used when logging realized/current alpha.
+_LOG_ALPHA_PRECISION: int = 4  # hardcoded-ok: log formatting precision
+
 
 class MixerConfig(BaseModel):
     """Configuration for :class:`RealSimMixer`.
@@ -45,7 +54,7 @@ class MixerConfig(BaseModel):
         ),
     )
     alpha_ramp_steps: int = Field(
-        1000,  # hardcoded-ok: Pydantic field default — callers override via config
+        DEFAULT_RAMP_STEPS,
         gt=0,
         description=(
             "Number of mix steps over which alpha linearly ramps from 0 "
@@ -57,10 +66,32 @@ class MixerConfig(BaseModel):
         description="Optional RNG seed for deterministic mixing.",
     )
     log_every_n: int = Field(
-        500,  # hardcoded-ok: Pydantic field default — callers override via config
+        DEFAULT_LOG_INTERVAL,
         gt=0,
         description="Emit a `mixer_ratio_check` log every N draws.",
     )
+
+    @classmethod
+    def from_settings(cls, replay_mixer_cfg: object) -> MixerConfig:
+        """Build a :class:`MixerConfig` from a YAML-loaded ``ReplayMixerConfig``.
+
+        The arg is typed as ``object`` to avoid a circular import with
+        :mod:`mousedroid.config.schema`. Only the field names are required to
+        match.
+
+        Args:
+            replay_mixer_cfg: A ``ReplayMixerConfig`` (or any object with the
+                same field names).
+
+        Returns:
+            Equivalent :class:`MixerConfig`.
+        """
+        return cls(
+            alpha_target=getattr(replay_mixer_cfg, "alpha_target", 0.0),
+            alpha_ramp_steps=getattr(replay_mixer_cfg, "alpha_ramp_steps", DEFAULT_RAMP_STEPS),
+            seed=getattr(replay_mixer_cfg, "seed", None),
+            log_every_n=getattr(replay_mixer_cfg, "log_every_n", DEFAULT_LOG_INTERVAL),
+        )
 
 
 class RealSimMixer(Generic[T]):
@@ -146,8 +177,8 @@ class RealSimMixer(Generic[T]):
         if self._stopped:
             raise StopIteration
 
-        # 2 sources, 4 termination paths — bounded loop avoids ambiguity.
-        for _ in range(2):  # hardcoded-ok: exactly two sources
+        # Bounded loop over the two sources: avoids ambiguous fall-through.
+        for _ in range(_NUM_SOURCES):
             alpha = self._current_alpha()
             pick_real = bool(self._rng.random() < alpha)
             primary = self._draw_real if pick_real else self._draw_sim
@@ -159,8 +190,8 @@ class RealSimMixer(Generic[T]):
             if item is not None:
                 self._step += 1
                 if self._step % self._cfg.log_every_n == 0:
-                    realized = round(self.stats["realized_alpha"], 4)  # hardcoded-ok: log precision
-                    current = round(alpha, 4)  # hardcoded-ok: log precision
+                    realized = round(self.stats["realized_alpha"], _LOG_ALPHA_PRECISION)
+                    current = round(alpha, _LOG_ALPHA_PRECISION)
                     _log.info(
                         "mixer_ratio_check",
                         step=self._step,

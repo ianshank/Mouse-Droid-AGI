@@ -54,6 +54,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   retrofitting BC there warrants its own PR with a dedicated
   numerical-stability test.
 
+### Added — Phase 2.1: BC auxiliary loss + tech-debt sweep
+
+- **`src/mousedroid/learning/offline_rl.py`** — new `bc_update(states,
+  actions, weight)` method on the `OfflineRLTrainer` ABC. Computes
+  `MSE(policy(s_real), a_real)` and steps **only** the policy
+  optimizer (Q-network frozen). When `weight <= 0.0` it is a strict
+  no-op returning `{"bc_loss": 0.0}`, so any trainer wired through the
+  default `real_supervised_weight=0.0` is byte-identical to the
+  pre-Phase-2 path. Lands the BC hook in the torch trainer instead of
+  the numpy `train_constitutional_rl.py` MLP — much cleaner integration
+  surface.
+- **`src/mousedroid/training/replay/mixer.py`** — magic numbers `1000`,
+  `500`, `2`, `4` hoisted to named module-level constants
+  (`DEFAULT_RAMP_STEPS`, `DEFAULT_LOG_INTERVAL`, `_NUM_SOURCES`,
+  `_LOG_ALPHA_PRECISION`). New `MixerConfig.from_settings()` classmethod
+  builds a mixer config from a YAML-loaded `ReplayMixerConfig` without
+  importing the schema (avoids circular imports).
+- **`src/mousedroid/config/schema.py`** — new `ReplayMixerConfig`
+  Pydantic model exposed as `TrainingConfig.replay_mixer`. YAML can now
+  drive `alpha_target`, `alpha_ramp_steps`, `chunk_size`, `seed`, and
+  `log_every_n` without touching code. All fields default to inert
+  values so existing YAMLs load unchanged (CLAUDE.md invariant 9).
+- **`training/replay_real_episodes.py`** — CLI now reads defaults from
+  `cfg.training.replay_mixer`; `--alpha-target` and `--seed` flags
+  override per-invocation. `--dry-run` now strictly wins over
+  `--use-real-replay` (logs and skips the LMDB open). Argparse defaults
+  hoisted to `DEFAULT_DRAWS` / `DEFAULT_CHUNK_SIZE` constants. Fixed
+  pre-existing bug where `load_settings(str)` raised because the loader
+  needs a `Path`.
+- **Tests** — three new test files:
+  - `tests/unit/test_offline_rl_bc.py` (6 tests, both CQL and IQL):
+    weight=0 is byte-identical, positive weight reduces loss
+    monotonically over 20 steps, Q-network never moves.
+  - `tests/unit/test_factory_replay_reader.py` (2 tests):
+    `build_replay_reader` returns a `ReplayReaderProtocol`; respects
+    `training.replay.source_path` override.
+  - `tests/unit/training/replay/test_cli_replay_real_episodes.py` (4
+    tests): dry-run exit-0, `--dry-run` overrides `--use-real-replay`,
+    empty-LMDB exit-0, argparse wiring.
+- **Coverage** — 97.21% on Phase 2 + 2.1 modules (gate is 85%).
+
 ### Added — Phase 4: VLM-Derived Dense Progress Reward (`feat/phase4-vlm-progress-rewards`)
 
 - **`src/mousedroid/reward/vlm_progress.py`** — new module

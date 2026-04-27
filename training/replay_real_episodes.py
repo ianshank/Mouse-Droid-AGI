@@ -36,6 +36,12 @@ from mousedroid.training.replay import (
 
 _log = get_logger(__name__)
 
+# CLI defaults — overridable per-invocation. Kept module-level so they are
+# discoverable and surface cleanly in --help.
+DEFAULT_DRAWS: int = 10_000
+DEFAULT_CHUNK_SIZE: int = 64
+_LOG_ALPHA_PRECISION: int = 4
+
 
 def _synthetic_iter(n: int) -> Iterator[MouseDroidExperienceRecord]:
     """Yield ``n`` zero-filled stub records as the sim source."""
@@ -65,7 +71,7 @@ def _run(
     seed: int | None,
 ) -> int:
     """Execute the replay smoke. Returns the process exit code."""
-    cfg = load_settings(str(config_path))
+    cfg = load_settings(Path(config_path))
 
     # Real source: empty in dry-run; bounded LMDB pull otherwise.
     real_records: list[MouseDroidExperienceRecord] = []
@@ -74,7 +80,10 @@ def _run(
         "skipped_schema_mismatch": 0,
         "chunks_yielded": 0,
     }
-    if use_real_replay:
+    if use_real_replay and dry_run:
+        _log.info("replay_cli_dry_run_overrides_real", note="--dry-run wins over --use-real-replay")
+
+    if use_real_replay and not dry_run:
         reader = LMDBReplayReader(cfg.experience)
         real_records = asyncio.run(_drain_reader(reader, chunk_size))
         reader_stats = reader.stats
@@ -84,14 +93,15 @@ def _run(
                 path=str(reader.path),
             )
 
-    mixer_cfg = MixerConfig(
-        alpha_target=(
-            alpha_target
-            if alpha_target is not None
-            else (cfg.training.replay.real_episode_ratio if use_real_replay else 0.0)
-        ),
-        seed=seed if seed is not None else cfg.training.replay.seed,
-    )
+    # Pull defaults from Settings; CLI flags override per-invocation.
+    mixer_cfg = MixerConfig.from_settings(cfg.training.replay_mixer)
+    if alpha_target is None and use_real_replay and mixer_cfg.alpha_target == 0.0:
+        # Legacy fallback for invocations that pre-date replay_mixer.
+        alpha_target = float(cfg.training.replay.real_episode_ratio)
+    if alpha_target is not None:
+        mixer_cfg = mixer_cfg.model_copy(update={"alpha_target": alpha_target})
+    if seed is not None:
+        mixer_cfg = mixer_cfg.model_copy(update={"seed": seed})
 
     mixer = RealSimMixer(
         sim_source=_synthetic_iter(draws),
@@ -113,7 +123,7 @@ def _run(
         use_real_replay=use_real_replay,
         draws=consumed,
         target_alpha=mixer_cfg.alpha_target,
-        realized_alpha=round(realized, 4),
+        realized_alpha=round(realized, _LOG_ALPHA_PRECISION),
         real_drawn=int(mixer.stats["real_drawn"]),
         sim_drawn=int(mixer.stats["sim_drawn"]),
         reader=reader_stats,
@@ -146,13 +156,13 @@ def main() -> int:
     parser.add_argument(
         "--draws",
         type=int,
-        default=10_000,
+        default=DEFAULT_DRAWS,
         help="Number of mixer samples to consume.",
     )
     parser.add_argument(
         "--chunk-size",
         type=int,
-        default=64,
+        default=DEFAULT_CHUNK_SIZE,
         help="LMDB chunk size for the async reader.",
     )
     parser.add_argument(
