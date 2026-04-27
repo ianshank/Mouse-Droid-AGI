@@ -212,6 +212,18 @@ ExecStartPre=/bin/cp /opt/mousedroid/config/jetson_production.yaml /etc/mousedro
 - Activate FAISS-backed semantic retrieval only after index population and retrieval verification.
 - Run the planned Jetson LLM benchmark pass before any production model swap.
 
+### P2 — Quality-Debt Follow-Ups (deferred from `feat/phase2-replay-and-quality-debt`)
+
+- **Mypy override trim** (plan item B1): reduce `[[tool.mypy.overrides]]` entries
+  for pure-Python modules (candidates: `mousedroid.llm_gateway.config`,
+  `mousedroid.config.schema`, `mousedroid.curiosity.icm`). Time-boxed to one
+  afternoon; revert per-module if any one proves invasive.
+- **`hardware/display/expressions.py` typing** (plan item B2): replace ~15
+  `# type: ignore[attr-defined]` on `draw.*` calls with a single typed `Protocol`
+  for the `PIL.ImageDraw.Draw` surface (line/ellipse/arc/polygon).
+- Both items are independent of the Physical-AI roadmap; can land alongside
+  Phase 3a prep.
+
 ### P2 — Voice Features Beyond Current Rollout
 
 - Streaming TTS for longer utterances.
