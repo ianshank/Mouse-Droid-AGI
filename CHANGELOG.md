@@ -8,6 +8,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Phase 2.1: BC supervised loss into offline-RL training loop
+
+- **`training/train_offline_rl.py`** — wires the existing
+  `OfflineRLTrainer.bc_update(states, actions, weight)` auxiliary loss
+  into the per-batch training loop, gated by
+  `cfg.offline_rl.real_supervised_weight` (default `0.0`). Adopts the
+  TD3+BC pattern (Fujimoto & Gu 2021): on each batch, after the
+  algorithm-specific `update_step`, an auxiliary `weight * MSE(policy(s),
+  a_data)` is applied to the actor optimizer. At the schema default
+  (`weight=0.0`) `bc_update` short-circuits and performs **no optimizer
+  step**, so legacy training paths remain byte-identical (proven by the
+  new regression tests below). When `weight > 0`, a one-shot
+  `offline_rl_bc_active` structured log is emitted at run start and the
+  scalar `bc_loss` is aggregated alongside `q_loss` / `policy_loss` in
+  the epoch summary, surfacing as `final_bc_loss` in the returned stats.
+- **`tests/integration/test_phase21_bc_into_offline_rl.py`** — 8 tests
+  covering: byte-identity at `weight=0` (CQL + IQL), measurable parameter
+  divergence at `weight>0` (CQL + IQL), finite-weights guarantee,
+  `final_bc_loss` aggregation into the run-summary stats, and the empty
+  LMDB short-circuit being unaffected by the BC weight.
+- **`docs/planning/PHASE_2_1_AND_BEYOND_PLAN.md`** — plan-of-record for
+  the next sprint cycle (PR-A1/A2/B1/B2) with risks and Definition of Done.
+
 ### Added — Production-config validation gate
 
 - **`scripts/validate_configs.py`** — CLI that loads every `config/*.yaml`

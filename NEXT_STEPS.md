@@ -49,9 +49,13 @@ the RSSM and the Constitutional-RL policy. Closes the second of four gaps.
 - `experience/record.py` already carries `schema_version = 1`; reader counts
   + skips incompatible records with structured `replay_schema_mismatch` log ✅
 - `OfflineRLConfig.real_supervised_weight` field added (default `0.0`); BC-style
-  supervised loss injection into PPO is **deferred to Phase 2.1** because the
-  current `train_constitutional_rl.py` is a numpy-MLP with custom numerical
-  gradients — retrofitting BC there warrants its own PR.
+  supervised loss injection ✅ **(Phase 2.1 complete)** — wired into the torch
+  `train_offline_rl.py` loop via `OfflineRLTrainer.bc_update` (TD3+BC pattern,
+  no-op at the `weight=0` default; `tests/integration/test_phase21_bc_into_offline_rl.py`
+  proves byte-identity at `weight=0` and measurable parameter divergence at
+  `weight>0` for both CQL and IQL). Retrofitting BC into the numpy-MLP
+  `train_constitutional_rl.py` (PPO) remains deferred to a future PR-A1.5
+  pending an obs→latent encoder bridge.
 - `factory.build_replay_reader(cfg) -> ReplayReaderProtocol` wiring ✅
 
 **Acceptance:**
