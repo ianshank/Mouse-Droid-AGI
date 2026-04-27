@@ -8,6 +8,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Phase 3a: VLA Protocol + MockVLA (`feat/phase3a-vla-protocol`)
+
+- **`src/mousedroid/vla/`** — new package
+  - `VLAObservation` / `VLAAction` frozen dataclasses; `@runtime_checkable
+    VLAPolicyProtocol` with sync `predict(obs) -> VLAAction`
+  - `MockVLA` — deterministic, zero-dependency reference implementation;
+    optional canned action and configurable confidence; runs inference
+    under `torch.no_grad()`; validates `action_dim`, `confidence`, and
+    canned-action shape
+- **`config/schema.py`** — backwards-compatible additions
+  - `LoopConfig.policy_selector: Literal["nav_agent", "vla", "auto"]`
+    (default `"nav_agent"` preserves byte-identical legacy behavior)
+  - `LoopConfig.inference_timeout_s: float | None` (None ⇒ `1/control_hz`)
+  - New `VLAConfig` block with `backend ∈ {"none", "mock", "distilled_onnx"}`
+    (default `"none"`), optional `canned_action`, `confidence`, and
+    `fallback_on_timeout`. Wired into `Settings.vla` with safe defaults
+  - `"distilled_onnx"` backend reserved for Phase 3b — raises
+    `NotImplementedError` from the factory
+- **`factory.py`** — `build_vla_policy(cfg) -> VLAPolicyProtocol | None`
+  next to `build_llm_gateway`; orchestrator construction wires
+  `vla_policy=build_vla_policy(cfg)`. Returns `None` for `backend="none"`
+- **`orchestrator/orchestrator.py`** — VLA branch in `_select_action`
+  - Default selector skips VLA entirely; `"vla"` and `"auto"` route through
+    the policy and enforce a per-tick latency budget via `time.monotonic()`
+  - `"auto"` mode silently falls back to the nav agent on timeout, predict
+    exception, or shape mismatch
+  - Strict `"vla"` mode honors `vla.fallback_on_timeout`: when False emits
+    a structlog `vla_timeout_safe_stop` event and returns a zero action so
+    the safety monitor can escalate; when True falls back like `"auto"`
+- **Tests (43 new)**
+  - `tests/unit/vla/test_policy.py` — protocol conformance, validation,
+    determinism, no-grad inference, factory plumbing
+  - `tests/unit/orchestrator/test_policy_selector.py` — default
+    backwards-compatibility, all selector modes, timeout / exception /
+    shape-mismatch fallback paths, default budget derivation from
+    `control_hz`
+
 ### Added — Ten Pillars Validation Campaign (`feat/smoke-post-pr55`)
 
 - **`scripts/validate_pillar.sh`** — headless Ten Pillars campaign dispatcher

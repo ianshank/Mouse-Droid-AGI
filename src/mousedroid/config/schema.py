@@ -621,6 +621,48 @@ class LLMConfig(BaseModel):
     )
 
 
+class VLAConfig(BaseModel):
+    """Vision-Language-Action policy configuration (Phase 3a).
+
+    Default ``backend = "none"`` keeps the VLA branch fully disabled so
+    pre-Phase-3a behavior is preserved byte-identical. Selecting
+    ``"mock"`` activates the deterministic ``MockVLA`` reference; the
+    Phase 3b ``"distilled_onnx"`` backend will reuse this same config
+    block.
+    """
+
+    backend: Literal["none", "mock", "distilled_onnx"] = Field(
+        "none",
+        description=(
+            "VLA backend. 'none' (default) leaves the VLA branch unwired. "
+            "'mock' selects the in-tree zero-dependency MockVLA. "
+            "'distilled_onnx' is reserved for Phase 3b."
+        ),
+    )
+    canned_action: list[float] | None = Field(
+        None,
+        description=(
+            "Optional fixed action vector for MockVLA. Length must equal "
+            "model.action_dim. None => zero action."
+        ),
+    )
+    confidence: float = Field(
+        1.0,
+        ge=0.0,
+        le=1.0,
+        description="Confidence value emitted by MockVLA on every predict() call.",
+    )
+    fallback_on_timeout: bool = Field(
+        True,
+        description=(
+            "When True, a VLA inference timeout transparently falls back "
+            "to the nav_agent. When False, the orchestrator emits a "
+            "'vla_timeout_safe_stop' event and returns a zero action so "
+            "the safety monitor can escalate on the next tick."
+        ),
+    )
+
+
 class LoggingConfig(BaseModel):
     """Structured logging configuration."""
 
@@ -662,6 +704,22 @@ class LoopConfig(BaseModel):
         "/tmp/mousedroid_heartbeat",  # noqa: S108
         # watchdog_mode 'file' or 'auto' fallback
         description="Path for file-based watchdog heartbeat",
+    )
+    policy_selector: Literal["nav_agent", "vla", "auto"] = Field(
+        "nav_agent",
+        description=(
+            "Action policy selector. 'nav_agent' (default) preserves legacy "
+            "behavior. 'vla' routes through the VLA policy and falls back "
+            "to nav_agent only on timeout. 'auto' prefers VLA when one is "
+            "wired and silently falls back otherwise."
+        ),
+    )
+    inference_timeout_s: float | None = Field(
+        None,
+        description=(
+            "Per-tick VLA inference timeout (seconds). When None the "
+            "orchestrator uses 1.0 / control_hz."
+        ),
     )
 
 
@@ -2603,6 +2661,13 @@ class Settings(BaseSettings):
     memory: MemoryConfig = Field(default_factory=_settings_default_factory(MemoryConfig))
     learning: LearningConfig = Field(default_factory=_settings_default_factory(LearningConfig))
     llm: LLMConfig = Field(default_factory=_settings_default_factory(LLMConfig))
+    vla: VLAConfig = Field(
+        default_factory=_settings_default_factory(VLAConfig),
+        description=(
+            "VLA policy block (Phase 3a). Default backend='none' preserves "
+            "legacy nav-agent behaviour."
+        ),
+    )
     reward: RewardConfig = Field(default_factory=_settings_default_factory(RewardConfig))
     curiosity: CuriosityConfig = Field(default_factory=_settings_default_factory(CuriosityConfig))
     domain_randomization: DomainRandomizationConfig = Field(
