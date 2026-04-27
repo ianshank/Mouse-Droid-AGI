@@ -47,11 +47,40 @@ def test_sync_overlay_uses_nonfatal_dash_prefix(service_text: str) -> None:
     lines = service_text.splitlines()
     for line in lines:
         if "sync_jetson_overlay.sh" in line and "ExecStartPre" in line:
-            assert "ExecStartPre=-" in line, (
-                f"overlay-sync ExecStartPre must use non-fatal form 'ExecStartPre=-', got: {line!r}"
-            )
+            assert (
+                "ExecStartPre=-" in line
+            ), f"overlay-sync ExecStartPre must use non-fatal form 'ExecStartPre=-', got: {line!r}"
             return
     pytest.fail("sync_jetson_overlay.sh ExecStartPre line not found")
+
+
+def test_install_dir_scripts_use_absolute_shell_wrapper(service_text: str) -> None:
+    """Install-dir scripts must be launched via an absolute shell executable.
+
+    systemd validates the first token in ExecStartPre as an executable path
+    before it expands environment variables.  Shell-wrapping keeps the first
+    token absolute while still allowing MOUSEDROID_INSTALL_DIR overrides.
+    """
+    lines = service_text.splitlines()
+    sync_line = next(
+        (ln for ln in lines if "ExecStartPre" in ln and "sync_jetson_overlay.sh" in ln),
+        None,
+    )
+    preflight_line = next(
+        (ln for ln in lines if "ExecStartPre" in ln and "preflight_check.sh" in ln),
+        None,
+    )
+
+    assert sync_line is not None, "sync_jetson_overlay.sh ExecStartPre line not found"
+    assert preflight_line is not None, "preflight_check.sh ExecStartPre line not found"
+    assert sync_line.startswith("ExecStartPre=-/bin/bash -lc "), (
+        "overlay-sync ExecStartPre must start with an absolute shell wrapper, "
+        f"got: {sync_line!r}"
+    )
+    assert preflight_line.startswith("ExecStartPre=/bin/bash -lc "), (
+        "preflight ExecStartPre must start with an absolute shell wrapper, "
+        f"got: {preflight_line!r}"
+    )
 
 
 def test_sync_overlay_comes_before_preflight(service_text: str) -> None:
@@ -90,9 +119,9 @@ def test_compose_file_uses_env_var_indirection(service_text: str) -> None:
     ]
     assert compose_lines, "No docker-compose ExecStart* lines found"
     for line in compose_lines:
-        assert "${COMPOSE_FILE}" in line, (
-            f"docker compose ExecStart line must use bare ${{COMPOSE_FILE}} (no default): {line!r}"
-        )
+        assert (
+            "${COMPOSE_FILE}" in line
+        ), f"docker compose ExecStart line must use bare ${{COMPOSE_FILE}} (no default): {line!r}"
 
 
 def test_no_shell_default_expansion_in_exec_lines(service_text: str) -> None:
@@ -105,9 +134,9 @@ def test_no_shell_default_expansion_in_exec_lines(service_text: str) -> None:
     lines = service_text.splitlines()
     exec_lines = [ln for ln in lines if re.search(r"^\s*(ExecStartPre|ExecStart|ExecStop)=", ln)]
     for line in exec_lines:
-        assert ":-" not in line, (
-            f"ExecStart* line uses unsupported bash ':-' default syntax: {line!r}"
-        )
+        assert (
+            ":-" not in line
+        ), f"ExecStart* line uses unsupported bash ':-' default syntax: {line!r}"
 
 
 def test_environment_defaults_are_set(service_text: str) -> None:
@@ -116,12 +145,12 @@ def test_environment_defaults_are_set(service_text: str) -> None:
     These allow ExecStart* lines to reference bare ${VAR} without shell defaulting.
     The EnvironmentFile can override them at deployment time.
     """
-    assert "Environment=MOUSEDROID_INSTALL_DIR=" in service_text, (
-        "Missing 'Environment=MOUSEDROID_INSTALL_DIR=' default in service file"
-    )
-    assert "Environment=COMPOSE_FILE=" in service_text, (
-        "Missing 'Environment=COMPOSE_FILE=' default in service file"
-    )
+    assert (
+        "Environment=MOUSEDROID_INSTALL_DIR=" in service_text
+    ), "Missing 'Environment=MOUSEDROID_INSTALL_DIR=' default in service file"
+    assert (
+        "Environment=COMPOSE_FILE=" in service_text
+    ), "Missing 'Environment=COMPOSE_FILE=' default in service file"
 
 
 # ---------------------------------------------------------------------------

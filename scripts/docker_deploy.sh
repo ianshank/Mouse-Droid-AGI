@@ -253,6 +253,10 @@ if [ "$INSTALL_SERVICE" = true ]; then
 
     cp "$DOCKER_SERVICE" /etc/systemd/system/mousedroid-docker.service
     systemctl daemon-reload
+    if command -v systemd-analyze >/dev/null 2>&1; then
+        info "  Verifying systemd unit"
+        systemd-analyze verify /etc/systemd/system/mousedroid-docker.service
+    fi
     systemctl enable mousedroid-docker
     info "  Service installed and enabled"
 

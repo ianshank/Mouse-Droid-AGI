@@ -76,6 +76,12 @@ RUN pip install --no-cache-dir "aiohttp>=3.9" "zeroconf>=0.80" 2>&1 \
 RUN pip install --no-cache-dir pyaudio 2>&1 \
     || echo "WARNING: pyaudio install failed (audio capture disabled)"
 
+# SSD1306 OLED face display dependencies (I²C). Pinned via [hardware] extra in
+# pyproject.toml; install explicitly here so the production image has them
+# even though the base `pip install -e "."` only resolves required deps.
+RUN pip install --no-cache-dir "smbus2>=0.4" "luma.oled>=3.12" "Pillow>=10.0" 2>&1 \
+    || echo "WARNING: SSD1306 OLED deps install failed (face display disabled)"
+
 # ---------------------------------------------------------------------------
 # Stage 3: Dev tools (pytest, ruff, mypy, coverage)
 # Set INSTALL_DEV_TOOLS=true to include; skipped in production by default.
@@ -86,6 +92,7 @@ RUN if [ "$INSTALL_DEV_TOOLS" = "true" ]; then \
         "pytest>=7.0" \
         "pytest-asyncio>=0.21" \
         "pytest-cov>=4.0" \
+        "pytest-timeout>=2.3" \
         "pytest-xdist>=3.0" \
         "hypothesis>=6.80" \
         "ruff>=0.4" \

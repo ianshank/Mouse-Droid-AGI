@@ -2,7 +2,11 @@
 
 > **Date**: 2026-03-11
 > **Author**: Antigravity Agent
-> **Status**: Draft — Awaiting Review
+> **Status**: Historical containerization plan — baseline implemented; follow-up is operational validation
+
+> **2026-04-26 rebaseline**: containerization milestones M1-M5 are complete on the current branch,
+> overlay sync is automated via `scripts/sync_jetson_overlay.sh` as a non-fatal `ExecStartPre`
+> step, and the active Jetson production scope excludes HC-SR04 / robot-arm work.
 
 ---
 

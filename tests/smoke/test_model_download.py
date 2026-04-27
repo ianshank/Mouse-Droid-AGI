@@ -51,14 +51,14 @@ def test_download_script_is_executable() -> None:
             check=True,
             cwd=_REPO_ROOT,
         )
-        assert result.stdout.startswith("100755"), (
-            f"download_model.sh git mode is not executable: {result.stdout.strip()}"
-        )
+        assert result.stdout.startswith(
+            "100755"
+        ), f"download_model.sh git mode is not executable: {result.stdout.strip()}"
     else:
         mode = _SCRIPT_PATH.stat().st_mode
-        assert mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH), (
-            "download_model.sh is not executable"
-        )
+        assert mode & (
+            stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+        ), "download_model.sh is not executable"
 
 
 def test_download_script_has_shebang() -> None:

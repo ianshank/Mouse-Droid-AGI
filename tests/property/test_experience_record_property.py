@@ -62,29 +62,29 @@ def test_serialize_deserialize_roundtrip(
 
     # Scalar fields
     assert restored.schema_version == original.schema_version
-    assert restored.timestamp == original.timestamp, (
-        f"timestamp mismatch: {restored.timestamp} != {original.timestamp}"
-    )
-    assert restored.distance_m == original.distance_m, (
-        f"distance_m mismatch: {restored.distance_m} != {original.distance_m}"
-    )
-    assert restored.reward == original.reward, (
-        f"reward mismatch: {restored.reward} != {original.reward}"
-    )
-    assert restored.surprise == original.surprise, (
-        f"surprise mismatch: {restored.surprise} != {original.surprise}"
-    )
+    assert (
+        restored.timestamp == original.timestamp
+    ), f"timestamp mismatch: {restored.timestamp} != {original.timestamp}"
+    assert (
+        restored.distance_m == original.distance_m
+    ), f"distance_m mismatch: {restored.distance_m} != {original.distance_m}"
+    assert (
+        restored.reward == original.reward
+    ), f"reward mismatch: {restored.reward} != {original.reward}"
+    assert (
+        restored.surprise == original.surprise
+    ), f"surprise mismatch: {restored.surprise} != {original.surprise}"
 
     # Array fields — use np.allclose for float comparison
-    assert np.allclose(restored.vision_features, original.vision_features, atol=1e-6), (
-        "vision_features mismatch after roundtrip"
-    )
-    assert np.allclose(restored.motor_state, original.motor_state, atol=1e-6), (
-        "motor_state mismatch after roundtrip"
-    )
-    assert np.allclose(restored.action, original.action, atol=1e-6), (
-        "action mismatch after roundtrip"
-    )
+    assert np.allclose(
+        restored.vision_features, original.vision_features, atol=1e-6
+    ), "vision_features mismatch after roundtrip"
+    assert np.allclose(
+        restored.motor_state, original.motor_state, atol=1e-6
+    ), "motor_state mismatch after roundtrip"
+    assert np.allclose(
+        restored.action, original.action, atol=1e-6
+    ), "action mismatch after roundtrip"
 
 
 @given(
@@ -149,9 +149,9 @@ def test_embedding_matches_vision_features(
         motor_state=motor_state,
         action=action,
     )
-    assert np.array_equal(record.embedding, record.vision_features), (
-        "embedding property does not match vision_features"
-    )
+    assert np.array_equal(
+        record.embedding, record.vision_features
+    ), "embedding property does not match vision_features"
 
 
 def test_schema_version_mismatch_raises() -> None:

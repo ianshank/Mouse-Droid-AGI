@@ -297,7 +297,7 @@ def train_dual_stream_rssm(
     resume_from: Path | None = None,
     validate_only: bool = False,
 ) -> Path:
-    """Train Dual-Stream CfC/GRU RSSM on synthetic sequences.
+    """Train Dual-Stream CfC/GRU RSSM on synthetic and optional replay sequences.
 
     Trains a :class:`~mousedroid.world_model.dual_stream_rssm.DualStreamRSSM`
     with dual optimizers, CfC loss warmup, and periodic fallback monitoring.
@@ -307,7 +307,7 @@ def train_dual_stream_rssm(
         cfg: Root settings with ``training``, ``dual_stream_training``, and
             ``model`` configs.
         data_path: Path to ``sequences.pt`` file produced by
-            ``SyntheticSequenceGenerator``.
+            ``SyntheticSequenceGenerator``. May be absent when replay is enabled.
         device: Torch device (None = auto-detect via ``resolve_device``).
         resume_from: Optional checkpoint path to resume from.
         validate_only: When True, runs a single epoch then exits without
@@ -365,7 +365,13 @@ def train_dual_stream_rssm(
     # ------------------------------------------------------------------
     # Dataset and DataLoader
     # ------------------------------------------------------------------
-    dataset = RSSMSequenceDataset(data_path, seq_len=tcfg.sequence_length)
+    dataset = RSSMSequenceDataset(
+        data_path,
+        seq_len=tcfg.sequence_length,
+        replay_cfg=tcfg.replay,
+        experience_cfg=cfg.experience,
+        model_cfg=cfg.model,
+    )
     loader = DataLoader(
         dataset,
         batch_size=tcfg.batch_size,

@@ -83,13 +83,63 @@ class SSD1306FaceDriver:
             i2c_bus=cfg.i2c_bus,
             i2c_address=cfg.i2c_address,
         )
-        with SMBus(cfg.i2c_bus) as bus:
-            bus.read_byte(cfg.i2c_address)
+        try:
+            with SMBus(cfg.i2c_bus) as bus:
+                bus.read_byte(cfg.i2c_address)
+        except OSError as exc:
+            # Add an actionable hint that distinguishes "no responder on the
+            # configured address" from "bus node missing" without changing
+            # the exception type the factory checks against.
+            responders = SSD1306FaceDriver._scan_i2c_bus(cfg.i2c_bus)
+            hint_parts = [
+                f"errno={exc.errno}",
+                f"bus={cfg.i2c_bus}",
+                f"addr=0x{cfg.i2c_address:02x}",
+            ]
+            if responders is None:
+                hint_parts.append("bus node missing or inaccessible")
+            elif not responders:
+                hint_parts.append(
+                    "no I2C responders on this bus; check OLED power, "
+                    "ribbon orientation, and that the device is wired to "
+                    "the configured bus"
+                )
+            else:
+                addrs = ", ".join(f"0x{a:02x}" for a in responders)
+                hint_parts.append(
+                    f"responders found at: {addrs}; update "
+                    f"face_display.i2c_address or i2c_bus in config"
+                )
+            raise OSError(exc.errno, f"{exc.strerror or exc} :: {' | '.join(hint_parts)}") from exc
         _log.debug(
             "face_display_probe_success",
             i2c_bus=cfg.i2c_bus,
             i2c_address=cfg.i2c_address,
         )
+
+    @staticmethod
+    def _scan_i2c_bus(bus_id: int) -> list[int] | None:
+        """Return the list of responding 7-bit addresses on ``bus_id``.
+
+        Returns ``None`` when the bus device node cannot be opened. The scan
+        skips reserved address ranges (0x00-0x02 and 0x78-0x7F) and is best
+        effort: any per-address read error is treated as "no responder".
+        """
+        from smbus2 import SMBus
+
+        try:
+            bus_ctx = SMBus(bus_id)
+        except (FileNotFoundError, PermissionError, OSError):
+            return None
+        responders: list[int] = []
+        with bus_ctx as bus:
+            for addr in range(0x03, 0x78):
+                try:
+                    bus.read_byte(addr)
+                except OSError:
+                    continue
+                responders.append(addr)
+        return responders
 
     async def start(self) -> None:
         """Probe the I²C bus and initialise the SSD1306 device."""

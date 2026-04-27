@@ -105,9 +105,9 @@ async def test_emergency_stop_latency_within_budget(jetson_settings: Settings) -
         await driver.emergency_stop()
         elapsed_ms = (time.monotonic() - t0) * 1000.0
         budget_ms = jetson_settings.esp32.emergency_stop_budget_ms
-        assert elapsed_ms <= budget_ms, (
-            f"emergency_stop took {elapsed_ms:.1f} ms, budget {budget_ms:.1f} ms"
-        )
+        assert (
+            elapsed_ms <= budget_ms
+        ), f"emergency_stop took {elapsed_ms:.1f} ms, budget {budget_ms:.1f} ms"
     finally:
         await driver.disconnect()
 

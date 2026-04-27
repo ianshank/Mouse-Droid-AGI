@@ -38,11 +38,12 @@ Environment=COMPOSE_FILE=/opt/mousedroid/docker-compose.jetson.yml
 EnvironmentFile=-/etc/mousedroid/docker.env
 
 # Sync production config overlay from repo to /etc/mousedroid (non-fatal).
-# Path controlled via MOUSEDROID_INSTALL_DIR in docker.env.
-ExecStartPre=-${MOUSEDROID_INSTALL_DIR}/scripts/sync_jetson_overlay.sh
+# systemd requires an absolute executable path in ExecStartPre, so invoke a
+# shell and let bash expand MOUSEDROID_INSTALL_DIR inside the command string.
+ExecStartPre=-/bin/bash -lc 'exec "${MOUSEDROID_INSTALL_DIR}/scripts/sync_jetson_overlay.sh"'
 
 # Pre-flight validation — abort if required hardware/config is missing
-ExecStartPre=${MOUSEDROID_INSTALL_DIR}/scripts/preflight_check.sh
+ExecStartPre=/bin/bash -lc 'exec "${MOUSEDROID_INSTALL_DIR}/scripts/preflight_check.sh"'
 
 # Compose file path — default set above, overridable via COMPOSE_FILE in docker.env
 ExecStartPre=/usr/bin/docker compose -f ${COMPOSE_FILE} pull --quiet

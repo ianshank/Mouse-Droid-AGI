@@ -2011,6 +2011,42 @@ class TrainingConstitutionalConfig(BaseModel):
     )
 
 
+class TrainingReplayConfig(BaseModel):
+    """Replay-ingestion settings for RSSM and activation training flows."""
+
+    enabled: bool = Field(
+        False,
+        description="Enable LMDB-backed replay ingestion alongside or instead of synthetic data",
+    )
+    source_path: str | None = Field(
+        None,
+        description="Optional LMDB replay source path (None uses experience.path)",
+    )
+    terminal_gap_s: float = Field(
+        5.0,
+        gt=0,
+        description="Timestamp gap used to infer episode boundaries in LMDB replay",
+    )
+    real_episode_ratio: float = Field(
+        0.0,
+        ge=0.0,
+        description=(
+            "Number of real replay episodes to include per synthetic episode. "
+            "Ignored when synthetic data is absent, in which case all available replay episodes "
+            "are used."
+        ),
+    )
+    max_real_episodes: int | None = Field(
+        None,
+        gt=0,
+        description="Optional cap on replay episodes mixed into one training dataset build",
+    )
+    seed: int | None = Field(
+        None,
+        description="Optional seed used when selecting a subset of replay episodes",
+    )
+
+
 class TrainingConfig(BaseModel):
     """Offline training configuration."""
 
@@ -2039,6 +2075,9 @@ class TrainingConfig(BaseModel):
     )
     constitutional: TrainingConstitutionalConfig = Field(
         default_factory=_settings_default_factory(TrainingConstitutionalConfig)
+    )
+    replay: TrainingReplayConfig = Field(
+        default_factory=_settings_default_factory(TrainingReplayConfig)
     )
     gpu: GPUConfig = Field(
         default_factory=lambda: GPUConfig(
@@ -2129,12 +2168,28 @@ class VoiceConfig(BaseModel):
             "Keyed by event name; falls back to intensity_threshold when absent."
         ),
     )
+    output_volume: float = Field(
+        1.0,
+        ge=0.0,
+        description=(
+            "Linear gain applied to synthesized samples before they reach the "
+            "speaker. 1.0 = unity gain; values >1 amplify but are clipped to "
+            "[-1, 1] in float32 to keep DAC output in the safe range."
+        ),
+    )
 
     @field_validator("personality_to_model_map", mode="after")
     @classmethod
     def _validate_personality_model_map(cls, v: dict[str, str]) -> dict[str, str]:
+        """Validate and normalize personality→model path map.
+
+        Strips whitespace from each value so runtime consumers (Piper loader)
+        receive exactly the validated path. Empty/whitespace-only and relative
+        paths are rejected at schema-load time.
+        """
         from pathlib import PurePosixPath
 
+        normalized: dict[str, str] = {}
         for key, value in v.items():
             stripped = value.strip()
             if not stripped:
@@ -2145,7 +2200,8 @@ class VoiceConfig(BaseModel):
                 raise ValueError(
                     f"personality_to_model_map[{key!r}] must be an absolute path, got {value!r}"
                 )
-        return v
+            normalized[key] = stripped
+        return normalized
 
     @field_validator("event_intensity_thresholds", mode="after")
     @classmethod

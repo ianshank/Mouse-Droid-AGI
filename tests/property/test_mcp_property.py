@@ -77,9 +77,10 @@ def test_every_visible_tool_is_dispatchable(names: list[str], deny_size: int) ->
         result = asyncio.run(bridge.call_tool(name, None, ctx))
         # The non-actuation default tools can either succeed or hit the
         # rate limiter — but they must NEVER come back denied / unknown.
-        assert result.status in {"ok", "rate_limited"}, (
-            f"{name} unexpectedly returned {result.status}"
-        )
+        assert result.status in {
+            "ok",
+            "rate_limited",
+        }, f"{name} unexpectedly returned {result.status}"
 
 
 @settings(max_examples=50, deadline=None)

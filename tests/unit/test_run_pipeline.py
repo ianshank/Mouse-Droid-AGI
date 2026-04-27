@@ -46,59 +46,6 @@ def test_load_training_settings_honours_env_override(
     assert settings.debug is True
 
 
-class TestPhase0DomainRandomization:
-    """Phase 1 — DR config logging branch coverage in ``run_phase_0_data_gen``."""
-
-    @patch("training.data_generator.SyntheticSequenceGenerator")
-    def test_phase_0_logs_dr_block_when_enabled(
-        self,
-        mock_gen_cls: MagicMock,
-        tmp_path: Path,
-    ) -> None:
-        from training.run_pipeline import run_phase_0_data_gen
-
-        from mousedroid.config.schema import DomainRandomizationConfig
-
-        cfg = Settings(
-            mock_hardware=True,
-            domain_randomization=DomainRandomizationConfig(enabled=True),
-        )
-        cfg.training.data_dir = str(tmp_path)
-        gen_instance = MagicMock()
-        gen_instance.generate_sequences.return_value = tmp_path
-        mock_gen_cls.return_value = gen_instance
-
-        out = run_phase_0_data_gen(cfg, seed=11)
-
-        assert out == tmp_path
-        mock_gen_cls.assert_called_once_with(cfg, seed=11)
-        gen_instance.generate_sequences.assert_called_once()
-
-    @patch("training.data_generator.SyntheticSequenceGenerator")
-    def test_phase_0_skips_dr_logging_when_disabled(
-        self,
-        mock_gen_cls: MagicMock,
-        tmp_path: Path,
-    ) -> None:
-        from training.run_pipeline import run_phase_0_data_gen
-
-        from mousedroid.config.schema import DomainRandomizationConfig
-
-        cfg = Settings(
-            mock_hardware=True,
-            domain_randomization=DomainRandomizationConfig(enabled=False),
-        )
-        cfg.training.data_dir = str(tmp_path)
-        gen_instance = MagicMock()
-        gen_instance.generate_sequences.return_value = tmp_path
-        mock_gen_cls.return_value = gen_instance
-
-        out = run_phase_0_data_gen(cfg)
-
-        assert out == tmp_path
-        mock_gen_cls.assert_called_once_with(cfg, seed=None)
-
-
 class TestRunPipeline:
     """Tests for run_pipeline()."""
 
@@ -287,6 +234,48 @@ class TestRunPipeline:
         _, kwargs = mock_p1.call_args
         assert kwargs["resume_from"] == Path(cfg.training.resume_from)
 
+    @patch("training.run_pipeline.run_phase_1_rssm")
+    def test_phase_1_allows_replay_only_mode_without_synthetic_directory(
+        self,
+        mock_p1: MagicMock,
+        cfg: Settings,
+        tmp_path: Path,
+    ) -> None:
+        """Replay-enabled Phase 1 should not require a pre-generated synthetic data dir."""
+        from training.run_pipeline import run_pipeline
+
+        cfg.training.data_dir = str(tmp_path / "missing-data")
+        cfg.training.replay.enabled = True
+        cfg.experience.path = str(tmp_path / "experience")
+        mock_p1.return_value = tmp_path / "weights" / "rssm" / "final.pt"
+
+        run_pipeline(cfg, phases={1})
+
+        mock_p1.assert_called_once()
+
+    @patch("training.train_rssm.train_rssm")
+    def test_run_phase_1_rssm_skips_sequences_check_when_replay_enabled(
+        self,
+        mock_train: MagicMock,
+        cfg: Settings,
+        tmp_path: Path,
+    ) -> None:
+        """run_phase_1_rssm must not raise FileNotFoundError when replay is on."""
+        from training.run_pipeline import run_phase_1_rssm
+
+        cfg.training.replay.enabled = True
+        cfg.training.weights_dir = str(tmp_path / "weights")
+        mock_train.return_value = tmp_path / "weights" / "rssm" / "final.pt"
+
+        # data_dir with no sequences.pt must not raise
+        result = run_phase_1_rssm(cfg, tmp_path / "no-sequences")
+
+        assert result == mock_train.return_value
+        mock_train.assert_called_once()
+        # data_path arg should be None (sequences.pt absent) rather than raising
+        call_args = mock_train.call_args
+        assert call_args[0][1] is None  # second positional arg is data_path
+
     @patch("training.train_bdi.train_bdi")
     def test_phase_3_uses_training_hyperparameters(
         self,
@@ -355,3 +344,86 @@ class TestRunPipeline:
 
         with pytest.raises(FileNotFoundError, match="Phase 2 requires RSSM checkpoint"):
             run_pipeline(cfg, phases={2, 3, 4})
+
+
+class TestPhase0DomainRandomization:
+    """Phase-0 domain randomization logging and seed threading."""
+
+    @staticmethod
+    def _cfg(tmp_path: Path, *, enabled: bool) -> Settings:
+        return Settings.model_validate(
+            {
+                "mock_hardware": True,
+                "training": {
+                    "n_episodes": 2,
+                    "sequence_length": 3,
+                    "data_dir": str(tmp_path),
+                },
+                "domain_randomization": {
+                    "enabled": enabled,
+                },
+            }
+        )
+
+    @patch("training.run_pipeline._log.info")
+    @patch("training.data_generator.SyntheticSequenceGenerator")
+    def test_phase_0_logs_dr_block_when_enabled(
+        self,
+        mock_gen_cls: MagicMock,
+        mock_log_info: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        from training.run_pipeline import run_phase_0_data_gen
+
+        cfg = self._cfg(tmp_path, enabled=True)
+        mock_gen_cls.return_value.generate_sequences.return_value = tmp_path
+
+        result = run_phase_0_data_gen(cfg, seed=11)
+
+        assert result == tmp_path
+        mock_gen_cls.assert_called_once_with(cfg, seed=11)
+        mock_gen_cls.return_value.generate_sequences.assert_called_once_with(
+            n_episodes=cfg.training.n_episodes,
+            max_steps=cfg.training.sequence_length,
+            output_dir=cfg.training.data_dir,
+        )
+        mock_log_info.assert_any_call(
+            "phase_0_start",
+            phase="data_generation",
+            n_episodes=cfg.training.n_episodes,
+            max_steps=cfg.training.sequence_length,
+            output_dir=cfg.training.data_dir,
+            domain_randomization_enabled=True,
+            seed=11,
+        )
+        mock_log_info.assert_any_call(
+            "rssm_epoch_randomization",
+            brightness=[0.6, 1.4],
+            contrast=[0.7, 1.3],
+            ultrasonic_noise_m=[0.0, 0.03],
+            ultrasonic_dropout_prob=[0.0, 0.05],
+            wheel_friction=[0.7, 1.3],
+            motor_gain=[0.85, 1.15],
+            feature_noise_std=[0.0, 0.02],
+        )
+
+    @patch("training.run_pipeline._log.info")
+    @patch("training.data_generator.SyntheticSequenceGenerator")
+    def test_phase_0_skips_dr_logging_when_disabled(
+        self,
+        mock_gen_cls: MagicMock,
+        mock_log_info: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        from training.run_pipeline import run_phase_0_data_gen
+
+        cfg = self._cfg(tmp_path, enabled=False)
+        mock_gen_cls.return_value.generate_sequences.return_value = tmp_path
+
+        result = run_phase_0_data_gen(cfg)
+
+        assert result == tmp_path
+        mock_gen_cls.assert_called_once_with(cfg, seed=None)
+        assert all(
+            call.args[0] != "rssm_epoch_randomization" for call in mock_log_info.call_args_list
+        )

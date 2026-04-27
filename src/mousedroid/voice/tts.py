@@ -47,6 +47,7 @@ class PiperTTS:
             "piper_tts_init",
             model_path=cfg.tts_model_path,
             sample_rate=cfg.tts_sample_rate,
+            output_volume=cfg.output_volume,
         )
 
     def start(self) -> None:
@@ -121,9 +122,12 @@ class PiperTTS:
         if width == 2:
             samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / INT16_MAX_F
         else:
-            samples = np.frombuffer(raw, dtype=np.float32)
+            samples = np.frombuffer(raw, dtype=np.float32).copy()
 
-        return samples
+        if self._cfg.output_volume != 1.0:
+            samples = np.clip(samples * np.float32(self._cfg.output_volume), -1.0, 1.0)
+
+        return samples.astype(np.float32, copy=False)
 
     async def synthesize(self, text: str) -> NDArray[np.float32]:
         """Synthesise text to audio samples (async).

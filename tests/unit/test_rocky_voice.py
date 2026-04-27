@@ -323,9 +323,9 @@ async def test_global_threshold_used_when_no_event_override() -> None:
         await asyncio.sleep(0.3)
         calls = tts.get_calls()
         assert len(calls) == 1
-        assert calls[0].endswith("!"), (
-            "With global threshold=0.3 and valence=0.5, exclamation expected"
-        )
+        assert calls[0].endswith(
+            "!"
+        ), "With global threshold=0.3 and valence=0.5, exclamation expected"
     finally:
         await engine.stop()
 

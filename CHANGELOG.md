@@ -8,6 +8,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Ten Pillars Validation Campaign (`feat/smoke-post-pr55`)
+
+- **`scripts/validate_pillar.sh`** — headless Ten Pillars campaign dispatcher
+  - Accepts a pillar name (e.g. `safety`) or `all` as its first positional argument;
+    optionally a second argument `yes|no` to override the default blocking mode for that
+    pillar; runs `pytest` headlessly then executes a factory-backed in-container Python probe
+  - Correct probe implementations for all 10 pillars — uses `build_memory_tier`,
+    `build_world_model`, `build_cognitive_core`, `build_curiosity_module`, and
+    `build_safety_monitor` from `factory.py`; uses direct class instantiation for
+    `MultiObjectiveRewardModel`, `EWCAgent`, `MAMLAdapter`, `AdaptiveCompute`, and
+    `KnowledgeDistiller` (no phantom factory functions)
+  - Writes a Markdown result table to `ten_pillars.log` alongside the SUMMARY.md
+  - Blocking / non-blocking default mode declared per-pillar via `run_pillar_check
+    <name> <yes|no> ...` call sites; individual pillars can be overridden via
+    `MOUSEDROID_PILLAR_BLOCKING_<PILLAR>=yes|no` environment variable
+
+- **`scripts/jetson_full_smoke_run.sh`** — wired Ten Pillars section into SUMMARY.md
+  - Appends `## Ten Pillars Validation` block (from `ten_pillars.log`) to the smoke
+    run SUMMARY.md when a pillar campaign was run in the same invocation
+
+- **`docs/planning/TEN_PILLARS_VALIDATION.md`** — operator-grade Ten Pillars validation plan
+  - Pre-conditions, per-pillar dependency order, PASS criteria, telemetry, and reporting layout
+
+- **`.github/skills/jetson-hardware-debug/`** — Jetson hardware debug skill for Copilot agent
+  - Covers SSH connection, sensor verification (camera, GPIO, LiDAR, speaker, microphone),
+    config sync, Docker deployment, smoke testing, and hardware failure troubleshooting
+
+- **`tests/regression/test_validate_pillar.py`** — 9 regression tests for `validate_pillar.sh`
+  - Structural invariants: all 10 pillars have `case` branches, blocking defaults are correct,
+    summary writes `ten_pillars.log` with correct columns, fallback shim creation,
+    `jetson_full_smoke_run.sh` references `ten_pillars.log`
+
+### Validated — Jetson Ten Pillars Campaign (`2026-04-26T23:55:42Z`)
+
+- All **20 checks PASS** (20/20): 10 pytest stages + 10 factory probes
+- Pillar results: World Model ✅, Cognitive ✅, Memory ✅, Continual ✅, Meta ✅,
+  Curiosity ✅, Growth ✅, Reward ✅, Scaling ✅, Safety ✅
+- Platform: Jetson Orin Nano, L4T r36.4.0, CUDA 12.6, TensorRT 10.4.0
+
 ### Added — Phase 1: Domain Randomization for Sim-to-Real RSSM Pretraining
 
 First of four Physical AI gaps closed (per Martin Keen, IBM Technology — "What is
@@ -57,11 +96,23 @@ simulator configuration. **Training-only change; runtime control loop untouched.
   - `tests/regression/test_domain_randomization_backcompat.py` — 18 pinned-default
     regression tests guarding YAML load hygiene, `RangeF` validation invariants,
     disabled-DR identity, env-var override path, and `Settings` round-trips
-- **Docs**:
-  - `docs/architecture.md` — new "Phase 1 — Domain Randomization" subsection
-    under Training Pipeline, with an updated Mermaid diagram
-  - `README.md` — Pillar 1 updated to mention domain randomization
-  - `NEXT_STEPS.md` — Physical AI Phases 2 → 6 roadmap added
+
+### Added — Current-branch voice rollout completion
+
+- `VoiceConfig` gains `output_volume` with a backwards-compatible default of `1.0`
+- `config/jetson_production.yaml` now uses `voice.personality_to_model_map`,
+  `voice.event_intensity_thresholds`, and `voice.output_volume`
+- `src/mousedroid/voice/tts.py` now applies configured output gain with clipping in the
+  synthesized float32 path
+- Added end-to-end TTS integration coverage, speaker+TTS integration coverage, and smoke-harness
+  unit coverage
+- Added operator recovery playbooks under `docs/playbooks/` for voice, LiDAR, and camera failures
+
+### Changed
+
+- Documentation is rebased to the current production truth: overlay sync is automatic under
+  `mousedroid-docker.service`, the active Jetson baseline is camera + LiDAR + USB audio + ESP32,
+  and the HC-SR04 / robot-arm tracks are explicitly deferred from the active roadmap.
 
 ### Added — Rocky Voice Engine (Piper TTS) + Full Jetson Smoke Harness
 
@@ -115,9 +166,9 @@ simulator configuration. **Training-only change; runtime control loop untouched.
 
 - **Piper ≥ 1.3 API compatibility** — `synthesize(text, wav_file)` no longer writes a WAV
   file in the new API; `_synthesize_sync` now calls `synthesize_wav()` when available
-- **`/etc/mousedroid/jetson_production.yaml` overlay drift** — documented that the bind-mounted
-  config must be manually synced after each git pull (`sudo cp config/jetson_production.yaml
-  /etc/mousedroid/`); bootstrap automation is listed in NEXT_STEPS
+- **`/etc/mousedroid/jetson_production.yaml` overlay sync** — the service contract now uses
+  `scripts/sync_jetson_overlay.sh` as a non-fatal `ExecStartPre` step before preflight, so the
+  deployment docs no longer describe manual post-`git pull` copying as the standard path
 - **`reports/jetson_smoke/` gitignore gap** — smoke run timestamped directories and
   `python3-in-container` shims were being committed; `.gitignore` now excludes
   `reports/jetson_smoke/*/` and the two committed run directories have been removed from tracking

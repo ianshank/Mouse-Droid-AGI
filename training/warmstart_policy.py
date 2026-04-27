@@ -215,7 +215,7 @@ def run_warmstart(
     Args:
         cfg: Root settings.
         rssm_checkpoint: Path to pretrained RSSM checkpoint.
-        data_path: Path to sequences.pt for computing latent stats.
+        data_path: Path to sequences.pt for computing latent stats. May be absent when replay is enabled.
         output_dir: Output directory for weights/config.
     """
     device = resolve_device(
@@ -230,6 +230,7 @@ def run_warmstart(
         "warmstart_start",
         rssm_checkpoint=str(rssm_checkpoint),
         data_path=str(data_path),
+        replay_enabled=cfg.training.replay.enabled,
         latent_stats_max_episodes=warmstart_cfg.latent_stats_max_episodes,
         tuning_episodes=warmstart_cfg.tuning_episodes,
         rollout_steps=warmstart_cfg.rollout_steps,
@@ -241,7 +242,13 @@ def run_warmstart(
     rssm.eval()
 
     # Compute latent statistics
-    dataset = RSSMSequenceDataset(data_path, seq_len=cfg.training.sequence_length)
+    dataset = RSSMSequenceDataset(
+        data_path,
+        seq_len=cfg.training.sequence_length,
+        replay_cfg=cfg.training.replay,
+        experience_cfg=cfg.experience,
+        model_cfg=cfg.model,
+    )
     latent_mean, latent_std = compute_latent_statistics(
         rssm,
         dataset,

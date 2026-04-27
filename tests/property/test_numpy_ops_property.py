@@ -29,9 +29,9 @@ _safe_floats = st.floats(min_value=-1e6, max_value=1e6, allow_nan=False, allow_i
 def test_softmax_sums_to_one(x: np.ndarray) -> None:
     """softmax output along the last axis must sum to 1.0 within tolerance."""
     result = softmax(x)
-    assert np.isclose(result.sum(), 1.0, atol=1e-5), (
-        f"softmax sum {result.sum()} is not close to 1.0 for input {x}"
-    )
+    assert np.isclose(
+        result.sum(), 1.0, atol=1e-5
+    ), f"softmax sum {result.sum()} is not close to 1.0 for input {x}"
 
 
 @given(
@@ -61,9 +61,9 @@ def test_softmax_shift_invariant(x: np.ndarray) -> None:
     shifted = x - np.max(x)
     result_original = softmax(x)
     result_shifted = softmax(shifted)
-    assert np.allclose(result_original, result_shifted, atol=1e-6), (
-        f"softmax is not shift-invariant for input {x}"
-    )
+    assert np.allclose(
+        result_original, result_shifted, atol=1e-6
+    ), f"softmax is not shift-invariant for input {x}"
 
 
 @given(
@@ -81,9 +81,9 @@ def test_softmax_2d_each_row_sums_to_one(x: np.ndarray) -> None:
     """For 2-D input each row (axis=-1) must sum to 1.0."""
     result = softmax(x, axis=-1)
     row_sums = result.sum(axis=-1)
-    assert np.allclose(row_sums, 1.0, atol=1e-5), (
-        f"2-D softmax row sums {row_sums} not close to 1 for input shape {x.shape}"
-    )
+    assert np.allclose(
+        row_sums, 1.0, atol=1e-5
+    ), f"2-D softmax row sums {row_sums} not close to 1 for input shape {x.shape}"
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +187,6 @@ def test_layer_norm_translation_invariant(x: np.ndarray, shift: float) -> None:
     assume(not np.all(x == x[0]))
     result_orig = layer_norm(x)
     result_shifted = layer_norm(x + shift)
-    assert np.allclose(result_orig, result_shifted, atol=1e-5), (
-        f"layer_norm is not translation-invariant for input {x} shifted by {shift}"
-    )
+    assert np.allclose(
+        result_orig, result_shifted, atol=1e-5
+    ), f"layer_norm is not translation-invariant for input {x} shifted by {shift}"
