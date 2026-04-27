@@ -117,19 +117,6 @@ voice:
     low_battery: 0.6
     emergency_stop: 0.0
 
-domain_randomization:
-  brightness: {low: 0.85, high: 1.15}
-  contrast: {low: 0.9, high: 1.1}
-  gaussian_noise_std: {low: 0.0, high: 0.015}
-  wheel_friction: {low: 0.9, high: 1.1}
-  wheel_slip: {low: 0.0, high: 0.05}
-  motor_gain: {low: 0.95, high: 1.05}
-  uart_latency_ms: {low: 2.0, high: 8.0}
-  encoder_dropout_prob: {low: 0.0, high: 0.005}
-  push_force_n: {low: 0.0, high: 0.5}
-  push_event_prob: 0.01
-  feature_noise_std: {low: 0.0, high: 0.005}
-
 logging:
   level: "INFO"
   format: "json"
