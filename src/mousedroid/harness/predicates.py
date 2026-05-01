@@ -79,8 +79,12 @@ class TickCountReached:
     n: int
 
     def __call__(self, task_state: TaskState, ctx: TickContext) -> bool:
-        start_tick = task_state.spec.metadata.get("submitted_at_tick")
-        if not isinstance(start_tick, int):
+        # Prefer the auto-populated tick captured by the tracker; fall back
+        # to the legacy ``submitted_at_tick`` metadata key for callers that
+        # threaded the value through ``TaskSpec.metadata`` directly.
+        meta_start = task_state.spec.metadata.get("submitted_at_tick")
+        start_tick = meta_start if isinstance(meta_start, int) else task_state.started_at_tick
+        if start_tick is None:
             return False
         return (ctx.tick_index - start_tick) >= self.n
 
@@ -116,8 +120,8 @@ class ObservationFieldEquals:
         if obs is None:
             return False
         if isinstance(obs, dict):
-            return obs.get(self.field_name) == self.expected
-        return getattr(obs, self.field_name, object()) == self.expected
+            return bool(obs.get(self.field_name) == self.expected)
+        return bool(getattr(obs, self.field_name, object()) == self.expected)
 
 
 __all__ = [

@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Sequence
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -29,7 +30,7 @@ _FRONT_MATTER_RE = re.compile(
 )
 
 
-def _spec_from_dict(raw: dict, *, source: str) -> SkillSpec:
+def _spec_from_dict(raw: dict[str, Any], *, source: str) -> SkillSpec:
     name = raw.get("name")
     if not isinstance(name, str) or not name:
         msg = f"Skill manifest missing required 'name' field (source={source})"

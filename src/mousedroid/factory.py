@@ -6,6 +6,7 @@ returns the correct implementation based on ``Settings``.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from mousedroid.comms.protocol import ESP32CommProtocol
@@ -1508,12 +1509,20 @@ def build_hook_registry(cfg: Settings, journal: Any) -> Any:
                 )
             )
 
+        def _make_handler(
+            phase_value: str,
+        ) -> Callable[[Any], Awaitable[None]]:
+            async def _handler(ctx: Any) -> None:
+                await _append_for(phase_value, ctx)
+
+            return _handler
+
         for phase in HookPhase:
             registry.register(
                 HookSpec(
                     name=f"journal:{phase.value}",
                     phase=phase,
-                    handler=lambda c, _p=phase.value: _append_for(_p, c),
+                    handler=_make_handler(phase.value),
                     error_policy=cfg.harness.hooks.error_policy,
                 )
             )

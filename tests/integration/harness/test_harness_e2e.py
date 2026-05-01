@@ -287,7 +287,9 @@ async def test_task_tracker_runs_off_orchestrator(tmp_path: Path) -> None:
             id="three-ticks",
             goal="wait three ticks",
             acceptance_predicate=TickCountReached(n=3),
-            metadata={"submitted_at_tick": 0},
+            # No ``submitted_at_tick`` metadata — the tracker auto-populates
+            # ``started_at_tick`` on first evaluation, which the predicate
+            # reads as a fallback.
         )
         tracker.submit(spec)
         for _ in range(4):

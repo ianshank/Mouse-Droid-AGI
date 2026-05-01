@@ -172,3 +172,15 @@ def test_tick_count_reached_without_metadata_is_false() -> None:
     state = TaskState(spec=spec)
     p = TickCountReached(n=1)
     assert not p(state, _ctx(tick=100))
+
+
+def test_tick_count_reached_uses_started_at_tick_field() -> None:
+    """When ``TaskSpec.metadata`` lacks ``submitted_at_tick`` but the
+    tracker has populated ``state.started_at_tick``, the predicate should
+    still fire correctly (the tracker auto-populates this on first
+    evaluation, so callers no longer need to thread metadata manually)."""
+    spec = TaskSpec(id="t", goal="", acceptance_predicate=AlwaysTrue())
+    state = TaskState(spec=spec, started_at_tick=10)
+    p = TickCountReached(n=3)
+    assert not p(state, _ctx(tick=12))  # delta = 2
+    assert p(state, _ctx(tick=13))  # delta = 3

@@ -14,7 +14,7 @@ import contextlib
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import IO, TYPE_CHECKING
 
 from mousedroid.harness.journal.protocol import JournalEntry
 from mousedroid.logging.setup import get_logger
@@ -66,14 +66,16 @@ class JSONLJournal:
         self._queue: asyncio.Queue[JournalEntry] = asyncio.Queue(maxsize=cfg.queue_max)
         self._writer_task: asyncio.Task[None] | None = None
         self._running = False
+        # Persistent file handle held open across writes; closed on stop().
+        # Avoids repeated open/close metadata operations on every entry.
+        self._fh: IO[str] | None = None
 
     async def start(self) -> None:
         if self._running:
             return
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        # Touch the file so ``read_all`` can be called even before any writes.
-        if not self._path.exists():
-            await asyncio.to_thread(self._path.touch)
+        # Open in append mode so existing entries are preserved across runs.
+        self._fh = await asyncio.to_thread(self._path.open, "a", encoding="utf-8")
         self._running = True
         self._writer_task = asyncio.create_task(self._writer_loop(), name="jsonl-journal-writer")
         _log.info("jsonl_journal_started", path=str(self._path), queue_max=self._cfg.queue_max)
@@ -89,6 +91,12 @@ class JSONLJournal:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._writer_task
             self._writer_task = None
+        # Close the persistent file handle inside a worker so we never
+        # block the event loop on filesystem flushes.
+        fh = self._fh
+        self._fh = None
+        if fh is not None:
+            await asyncio.to_thread(fh.close)
         _log.info("jsonl_journal_stopped", path=str(self._path))
 
     async def append(self, entry: JournalEntry) -> None:
@@ -110,19 +118,43 @@ class JSONLJournal:
             try:
                 self._queue.put_nowait(entry)
             except asyncio.QueueFull:  # pragma: no cover - defensive
-                _log.error("journal_dropped_after_overflow", event=entry.event)
+                _log.error(
+                    "journal_dropped_after_overflow",
+                    dropped_event=entry.event,
+                )
 
     async def read_all(self) -> AsyncIterator[JournalEntry]:
+        """Stream every persisted entry, oldest first.
+
+        Reads the file line-by-line and yields each parsed entry without
+        ever holding the full ledger in memory — safe for journals that
+        outgrow available RAM.
+        """
         await self._flush_queue()
         if not self._path.exists():
             return
-        # File reads happen in a worker thread to avoid blocking the loop.
-        contents = await asyncio.to_thread(self._path.read_text, encoding="utf-8")
-        for line in contents.splitlines():
+        # ``aiter_lines`` runs ``readline`` calls inside ``asyncio.to_thread``
+        # so a single worker thread carries the file cursor across awaits
+        # without blocking the event loop.
+        async for line in self._aiter_lines():
             stripped = line.strip()
             if not stripped:
                 continue
             yield _deserialize(stripped)
+
+    async def _aiter_lines(self) -> AsyncIterator[str]:
+        """Yield one line at a time from the journal file."""
+        # Open a dedicated reader handle so concurrent appends to ``self._fh``
+        # don't perturb the read cursor.
+        reader = await asyncio.to_thread(self._path.open, "r", encoding="utf-8")
+        try:
+            while True:
+                line = await asyncio.to_thread(reader.readline)
+                if not line:
+                    return
+                yield line
+        finally:
+            await asyncio.to_thread(reader.close)
 
     @property
     def is_running(self) -> bool:
@@ -155,8 +187,15 @@ class JSONLJournal:
         await asyncio.to_thread(self._append_to_disk, line)
 
     def _append_to_disk(self, line: str) -> None:
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(line)
+        # Use the persistent handle opened in ``start()``; flush so readers
+        # (including ``read_all``) see the latest write immediately.
+        fh = self._fh
+        if fh is None:  # pragma: no cover - defensive; start() runs first
+            with self._path.open("a", encoding="utf-8") as one_off:
+                one_off.write(line)
+            return
+        fh.write(line)
+        fh.flush()
 
 
 __all__ = ["JSONLJournal"]

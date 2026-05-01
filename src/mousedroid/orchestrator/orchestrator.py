@@ -22,6 +22,7 @@ from mousedroid.constants import (
     MILLISECONDS_PER_SECOND,
     MOTOR_STATE_BATTERY_INDEX,
 )
+from mousedroid.harness.protocol import HookPhase, TickContext
 from mousedroid.logging.setup import get_logger
 from mousedroid.telemetry.frame_builder import build_telemetry_frame
 
@@ -288,8 +289,6 @@ class MouseDroidOrchestrator:
         ``Settings.harness=None`` every harness call is a constant-time
         no-op, so the legacy behaviour is bit-identical.
         """
-        from mousedroid.harness.protocol import HookPhase, TickContext
-
         loop_start = time.monotonic()
         ctx = TickContext(
             tick_index=self._tick_count,

@@ -25,8 +25,12 @@ def _state(predicates: set[str] | None = None) -> SymbolicState:
     )
 
 
-def _fake_sdk(response_text: str) -> Any:
-    """Build a minimal stand-in for the ``anthropic`` SDK."""
+def _fake_sdk(response_text: str, *, with_async: bool = False) -> Any:
+    """Build a minimal stand-in for the ``anthropic`` SDK.
+
+    ``with_async=True`` also exposes an ``AsyncAnthropic`` class whose
+    ``messages.create`` is awaitable, used by the ``areplan`` tests.
+    """
 
     class _Block:
         def __init__(self, text: str) -> None:
@@ -50,7 +54,23 @@ def _fake_sdk(response_text: str) -> Any:
             self.api_key = api_key
             self.messages = _Messages()
 
-    sdk = SimpleNamespace(Anthropic=_Client)
+    class _AsyncMessages:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        async def create(self, **kwargs: Any) -> _Response:
+            self.calls.append(kwargs)
+            return _Response(response_text)
+
+    class _AsyncClient:
+        def __init__(self, api_key: str | None = None) -> None:
+            self.api_key = api_key
+            self.messages = _AsyncMessages()
+
+    members: dict[str, Any] = {"Anthropic": _Client}
+    if with_async:
+        members["AsyncAnthropic"] = _AsyncClient
+    sdk = SimpleNamespace(**members)
     return sdk
 
 
@@ -175,6 +195,38 @@ def test_anthropic_passes_config_to_sdk() -> None:
     assert call["temperature"] == 0.7
     assert call["system"] == "You are a robot."
     assert call["timeout"] == 12.5
+
+
+@pytest.mark.asyncio
+async def test_anthropic_areplan_uses_async_client() -> None:
+    cfg = LLMReplannerConfig(enabled=True, backend="anthropic")
+    sdk = _fake_sdk('[{"action": "ok", "args": []}]', with_async=True)
+    r = AnthropicReplanner(cfg, sdk=sdk)
+    steps = await r.areplan(_state(), _state(), "fail")
+    assert len(steps) == 1
+    assert steps[0].action == "ok"
+    # Verify the async client was actually used (not the sync one).
+    async_client = r._async_client_cache
+    assert async_client is not None
+    assert len(async_client.messages.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_anthropic_areplan_disabled_returns_empty() -> None:
+    cfg = LLMReplannerConfig(enabled=False, backend="anthropic")
+    sdk = _fake_sdk("[]", with_async=True)
+    r = AnthropicReplanner(cfg, sdk=sdk)
+    assert await r.areplan(_state(), _state(), "x") == []
+
+
+@pytest.mark.asyncio
+async def test_anthropic_areplan_raises_when_async_missing() -> None:
+    """When the SDK lacks ``AsyncAnthropic``, ``areplan`` raises a clear error."""
+    cfg = LLMReplannerConfig(enabled=True, backend="anthropic")
+    sdk = _fake_sdk("[]", with_async=False)  # no AsyncAnthropic exposed
+    r = AnthropicReplanner(cfg, sdk=sdk)
+    with pytest.raises(AnthropicSDKMissingError, match="AsyncAnthropic"):
+        await r.areplan(_state(), _state(), "x")
 
 
 def test_anthropic_sdk_missing_raises() -> None:

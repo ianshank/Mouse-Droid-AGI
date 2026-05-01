@@ -60,6 +60,10 @@ def _deserialize(blob: bytes) -> JournalEntry:
 class LMDBJournal:
     """Append-only LMDB-backed agent ledger with a background writer."""
 
+    # Number of entries pulled per LMDB read transaction inside ``read_all``.
+    # Bounded so memory pressure stays constant for journals of any size.
+    _READ_BATCH: int = 256
+
     def __init__(self, cfg: HarnessJournalConfig) -> None:
         self._cfg = cfg
         self._path = Path(cfg.path)
@@ -115,15 +119,32 @@ class LMDBJournal:
             try:
                 self._queue.put_nowait(entry)
             except asyncio.QueueFull:  # pragma: no cover - defensive
-                _log.error("journal_dropped_after_overflow", event=entry.event)
+                _log.error(
+                    "journal_dropped_after_overflow",
+                    dropped_event=entry.event,
+                )
 
     async def read_all(self) -> AsyncIterator[JournalEntry]:
+        """Stream every persisted entry, oldest first, in bounded batches.
+
+        Pulls ``_READ_BATCH`` entries per ``asyncio.to_thread`` call so the
+        cursor is held under the LMDB read transaction only briefly and
+        the working-set memory stays bounded irrespective of journal size.
+        """
         await self._flush_queue()
         if self._env is None:
             return
-        entries = await asyncio.to_thread(self._read_all_blocking)
-        for entry in entries:
-            yield entry
+        last_key: bytes | None = None
+        while True:
+            batch, last_key = await asyncio.to_thread(
+                self._read_batch_blocking, last_key, self._READ_BATCH
+            )
+            if not batch:
+                return
+            for entry in batch:
+                yield entry
+            if len(batch) < self._READ_BATCH:
+                return
 
     @property
     def is_running(self) -> bool:
@@ -177,14 +198,36 @@ class LMDBJournal:
             self._env.sync()
             self._write_count = 0
 
-    def _read_all_blocking(self) -> list[JournalEntry]:
+    def _read_batch_blocking(
+        self,
+        after_key: bytes | None,
+        batch_size: int,
+    ) -> tuple[list[JournalEntry], bytes | None]:
+        """Read up to ``batch_size`` entries starting just after ``after_key``.
+
+        Returns ``(entries, last_key)`` so the async caller can resume the
+        cursor on the next call without holding the LMDB transaction open
+        across awaits.
+        """
         if self._env is None:
-            return []
+            return [], after_key
         out: list[JournalEntry] = []
+        last_key = after_key
         with self._env.begin() as txn, txn.cursor() as cursor:
-            for _key, blob in cursor:
-                out.append(_deserialize(bytes(blob)))
-        return out
+            if after_key is not None:
+                # ``set_range`` positions just AT the key; we want strictly after.
+                if cursor.set_range(after_key) and bytes(cursor.key()) == after_key:
+                    cursor.next()
+            else:
+                cursor.first()
+            for _ in range(batch_size):
+                if not cursor.key():
+                    break
+                last_key = bytes(cursor.key())
+                out.append(_deserialize(bytes(cursor.value())))
+                if not cursor.next():
+                    break
+        return out, last_key
 
 
 __all__ = ["LMDBJournal"]

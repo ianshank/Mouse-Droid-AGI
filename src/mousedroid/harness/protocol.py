@@ -13,7 +13,7 @@ import enum
 import sys
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 if sys.version_info >= (3, 11):
     from enum import StrEnum
@@ -21,10 +21,6 @@ else:
 
     class StrEnum(str, enum.Enum):
         """Backport of ``enum.StrEnum`` for Python 3.10."""
-
-
-if TYPE_CHECKING:
-    from mousedroid.harness.protocol import TaskState  # for forward reference
 
 
 class TaskStatus(StrEnum):
@@ -122,6 +118,10 @@ class TaskState:
     finished_at_s: float | None = None
     last_error: str | None = None
     last_evaluated_at_s: float | None = None
+    # Tick counter captured the first time the tracker evaluates this task.
+    # ``TickCountReached`` reads it so callers don't have to manually inject
+    # ``submitted_at_tick`` into ``TaskSpec.metadata``.
+    started_at_tick: int | None = None
 
     @property
     def id(self) -> str:

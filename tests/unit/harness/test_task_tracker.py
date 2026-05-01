@@ -84,6 +84,18 @@ def test_submit_duplicate_raises(tracker: InMemoryTaskTracker) -> None:
         tracker.submit(_spec("a"))
 
 
+def test_submit_duplicate_id_in_history_also_rejected(
+    tracker: InMemoryTaskTracker,
+) -> None:
+    """A task whose id matches a completed/cancelled task in history must be
+    rejected so ids stay unique across the tracker's full state."""
+    state = tracker.submit(_spec("a", predicate=AlwaysTrue()))
+    tracker.evaluate(state, _ctx())  # moves "a" to history (COMPLETED)
+    assert {s.id for s in tracker.history()} == {"a"}
+    with pytest.raises(TaskTrackerError, match="already exists"):
+        tracker.submit(_spec("a"))
+
+
 def test_submit_capped_by_max_active(tracker: InMemoryTaskTracker) -> None:
     tracker.submit(_spec("a"))
     tracker.submit(_spec("b"))
@@ -134,6 +146,21 @@ def test_evaluate_default_timeout_used_when_spec_omits_it(
     state = tracker.submit(_spec("a", predicate=AlwaysFalse()))  # uses default 10s
     clock.advance(11.0)
     assert tracker.evaluate(state, _ctx()) == TaskStatus.TIMED_OUT
+
+
+def test_evaluate_auto_populates_started_at_tick(
+    tracker: InMemoryTaskTracker,
+) -> None:
+    """The first ``evaluate`` call must capture ``ctx.tick_index`` so
+    tick-based predicates (e.g. ``TickCountReached``) work without callers
+    threading the value through ``TaskSpec.metadata`` manually."""
+    state = tracker.submit(_spec("a", predicate=AlwaysFalse()))
+    assert state.started_at_tick is None
+    tracker.evaluate(state, _ctx(tick=42))
+    assert state.started_at_tick == 42
+    # Subsequent evaluations must NOT overwrite the captured start tick.
+    tracker.evaluate(state, _ctx(tick=999))
+    assert state.started_at_tick == 42
 
 
 def test_predicate_exception_marks_failed(tracker: InMemoryTaskTracker) -> None:

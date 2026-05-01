@@ -76,10 +76,12 @@ class InMemoryTaskTracker:
 
         Raises:
             TaskTrackerError: If the active set is at ``max_active`` or a
-                duplicate id was submitted.
+                task with the same id already exists in either the active
+                set or the bounded history (so ids stay unique across the
+                tracker's full state, not just ``_active``).
         """
-        if spec.id in self._active:
-            msg = f"Task already active: {spec.id!r}"
+        if self.get(spec.id) is not None:
+            msg = f"Task ID already exists: {spec.id!r}"
             raise TaskTrackerError(msg)
         if len(self._active) >= self._cfg.max_active:
             msg = f"Active task cap reached ({self._cfg.max_active}); cannot submit {spec.id!r}"
@@ -141,11 +143,17 @@ class InMemoryTaskTracker:
     def evaluate(self, state: TaskState, ctx: TickContext) -> TaskStatus:
         """Apply the predicate + timeout to ``state``.
 
-        Predicate exceptions are caught and recorded as ``FAILED``.
+        Predicate exceptions are caught and recorded as ``FAILED``. The
+        first evaluation also captures ``ctx.tick_index`` into
+        ``state.started_at_tick`` so tick-based predicates (e.g.
+        :class:`TickCountReached`) work without callers having to thread
+        the start tick through ``TaskSpec.metadata`` themselves.
         """
         if state.is_terminal:
             return state.status
         state.last_evaluated_at_s = self._clock()
+        if state.started_at_tick is None:
+            state.started_at_tick = ctx.tick_index
 
         # Timeout takes precedence — the predicate may never be queried
         # again once the task has expired.
@@ -176,16 +184,16 @@ class InMemoryTaskTracker:
             self.update(state.id, TaskStatus.COMPLETED)
             _log.info("task_terminal", task_id=state.id, status=TaskStatus.COMPLETED.value)
             return TaskStatus.COMPLETED
-        return state.status
+        return TaskStatus(state.status)
 
     async def evaluate_active(self, ctx: TickContext) -> tuple[TaskState, ...]:
-        """Evaluate every currently-active task; returns a snapshot tuple."""
+        """Evaluate every currently-active task; returns the same snapshot."""
         # Copy keys defensively — ``evaluate`` may move tasks to history.
         snapshot = tuple(self._active.values())
         for state in snapshot:
             self.evaluate(state, ctx)
-        # Return states post-evaluation (including those just terminated).
-        return tuple(state for state in snapshot)
+        # ``snapshot`` already references the (now possibly mutated) states.
+        return snapshot
 
     def active(self) -> Iterable[TaskState]:
         return tuple(self._active.values())
