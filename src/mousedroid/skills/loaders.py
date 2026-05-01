@@ -35,7 +35,7 @@ def _spec_from_dict(raw: dict, *, source: str) -> SkillSpec:
         msg = f"Skill manifest missing required 'name' field (source={source})"
         raise ValueError(msg)
     tools = raw.get("tools") or raw.get("tool_names") or ()
-    if not isinstance(tools, (list, tuple)):
+    if not isinstance(tools, list | tuple):
         msg = f"Skill {name!r} 'tools' must be a list (source={source})"
         raise ValueError(msg)
     metadata = raw.get("metadata", {}) or {}

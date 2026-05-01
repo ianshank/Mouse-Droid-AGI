@@ -52,13 +52,9 @@ def test_tracker_invariants_under_random_sequences(
     for op, key in actions:
         try:
             if op == "submit_true":
-                tracker.submit(
-                    TaskSpec(id=key, goal="g", acceptance_predicate=AlwaysTrue())
-                )
+                tracker.submit(TaskSpec(id=key, goal="g", acceptance_predicate=AlwaysTrue()))
             elif op == "submit_false":
-                tracker.submit(
-                    TaskSpec(id=key, goal="g", acceptance_predicate=AlwaysFalse())
-                )
+                tracker.submit(TaskSpec(id=key, goal="g", acceptance_predicate=AlwaysFalse()))
             elif op == "evaluate":
                 state = tracker.get(key)
                 if state is not None:

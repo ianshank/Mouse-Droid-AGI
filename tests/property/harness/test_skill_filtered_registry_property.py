@@ -25,9 +25,7 @@ _tool_names = st.text(
     allowed=st.lists(_tool_names, min_size=0, max_size=10, unique=True),
 )
 @settings(max_examples=80, deadline=None)
-def test_filtered_registry_subset_invariant(
-    parent_names: list[str], allowed: list[str]
-) -> None:
+def test_filtered_registry_subset_invariant(parent_names: list[str], allowed: list[str]) -> None:
     parent = ToolRegistry()
     for n in parent_names:
         parent.register(ToolSpec(name=n, description="", handler=_h))
