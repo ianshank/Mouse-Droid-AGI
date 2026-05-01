@@ -69,20 +69,41 @@ class ToolRegistry:
     async def dispatch(self, name: str, **kwargs: Any) -> Any:
         """Dispatch a tool by name.
 
+        When ``spec`` is a :class:`ValidatedToolSpec` with non-``None``
+        schemas, the input ``**kwargs`` and return value are validated by
+        Pydantic. Plain :class:`ToolSpec` instances keep the legacy zero-
+        overhead path so existing callers and tools are unaffected.
+
         Args:
             name: Tool identifier.
             **kwargs: Arguments to pass to the tool handler.
 
         Returns:
-            Tool execution result.
+            Tool execution result (validated when ``output_schema`` is set).
 
         Raises:
             KeyError: If tool is not registered.
+            ToolInputValidationError: If validated input is invalid.
+            ToolOutputValidationError: If validated output is invalid.
         """
         spec = self._tools.get(name)
         if spec is None:
             msg = f"Tool not registered: {name}"
             raise KeyError(msg)
+
+        # Local import to avoid an import cycle (validation imports ToolSpec).
+        from mousedroid.common.tools.validation import (
+            ValidatedToolSpec,
+            validate_input,
+            validate_output,
+        )
+
+        if isinstance(spec, ValidatedToolSpec):
+            kwargs = validate_input(spec, kwargs)
+            _log.info("tool_dispatch", name=name, validated=True)
+            result = await spec.handler(**kwargs)
+            return validate_output(spec, result)
+
         _log.info("tool_dispatch", name=name)
         return await spec.handler(**kwargs)
 

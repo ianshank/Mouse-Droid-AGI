@@ -13,6 +13,7 @@ from mousedroid.arm.protocols import ArmPlannerProtocol, PlanStep, SymbolicState
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
+    from mousedroid.arm.planning.llm_replanners.base import LLMReplannerProtocol
     from mousedroid.config.schema import ArmPlanningConfig
 
 _log = get_logger(__name__)
@@ -34,20 +35,34 @@ class Replanner:
         self,
         planning_cfg: ArmPlanningConfig,
         planner: ArmPlannerProtocol,
+        *,
+        llm_replanner: LLMReplannerProtocol | None = None,
     ) -> None:
         """Initialise replanner.
 
         Args:
             planning_cfg: Planning config with replanner settings.
             planner: Injected planner implementing ArmPlannerProtocol.
+            llm_replanner: Optional LLM-backed replanner. When ``None``
+                (the default) and the legacy ``llm_replanner_enabled``
+                flag is True, a :class:`NullLLMReplanner` is wired so the
+                outer fall-back to symbolic planning is preserved.
         """
         self._planning_cfg = planning_cfg
         self._planner = planner
         self._attempt_count = 0
+        if llm_replanner is None:
+            from mousedroid.arm.planning.llm_replanners.null_backend import (
+                NullLLMReplanner,
+            )
+
+            llm_replanner = NullLLMReplanner()
+        self._llm_replanner = llm_replanner
         _log.info(
             "replanner_init",
             llm_enabled=planning_cfg.llm_replanner_enabled,
             max_attempts=planning_cfg.max_replan_attempts,
+            llm_backend=getattr(self._llm_replanner, "name", "unknown"),
         )
 
     def replan(
@@ -94,21 +109,22 @@ class Replanner:
         goal_state: SymbolicState,
         error: str,
     ) -> list[PlanStep]:
-        """Use LLM to analyse error and generate recovery plan.
+        """Use the injected ``LLMReplannerProtocol`` to generate a recovery plan.
 
-        Args:
-            current_state: Current symbolic state.
-            goal_state: Target symbolic state.
-            error: Failure description.
-
-        Returns:
-            Recovery plan from LLM analysis.
+        When the backend returns an empty list (the default for
+        :class:`NullLLMReplanner`, or any backend that fails / is
+        disabled), fall back to symbolic replanning. This keeps existing
+        callers working when the LLM extra is not installed.
         """
-        _log.info("llm_replan_start", error=error)
-
-        # LLM integration placeholder — will use Claude API
-        # For now, fall back to symbolic replanning
-        _log.warning("llm_replan_not_implemented", fallback="symbolic")
+        _log.info(
+            "llm_replan_start",
+            error=error,
+            backend=getattr(self._llm_replanner, "name", "unknown"),
+        )
+        steps = self._llm_replanner.replan(current_state, goal_state, error)
+        if steps:
+            return steps
+        _log.warning("llm_replan_empty_falling_back", fallback="symbolic")
         return self._planner.plan(current_state, goal_state)
 
     def reset(self) -> None:

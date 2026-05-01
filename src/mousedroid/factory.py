@@ -6,7 +6,7 @@ returns the correct implementation based on ``Settings``.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from mousedroid.comms.protocol import ESP32CommProtocol
 from mousedroid.hardware.protocols import (
@@ -1264,6 +1264,262 @@ def build_watchdog(cfg: Settings) -> WatchdogProtocol:
     return NullNotifier()
 
 
+def build_llm_replanner(cfg: Settings) -> Any:
+    """Build the configured arm LLM replanner backend.
+
+    Returns a concrete :class:`LLMReplannerProtocol` implementation. When
+    ``cfg.arm_planning.llm_replanner`` is None or the config disables the
+    backend, returns :class:`NullLLMReplanner` so the existing
+    :class:`Replanner` fall-back to symbolic planning is preserved.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        A concrete LLM replanner conforming to ``LLMReplannerProtocol``.
+    """
+    from mousedroid.arm.planning.llm_replanners.null_backend import (
+        NullLLMReplanner,
+    )
+
+    if cfg.arm_planning is None or cfg.arm_planning.llm_replanner is None:
+        return NullLLMReplanner()
+    rp_cfg = cfg.arm_planning.llm_replanner
+    if not rp_cfg.enabled or rp_cfg.backend == "null":
+        return NullLLMReplanner()
+    if rp_cfg.backend == "anthropic":
+        from mousedroid.arm.planning.llm_replanners.anthropic_backend import (
+            AnthropicReplanner,
+            AnthropicSDKMissingError,
+        )
+
+        try:
+            return AnthropicReplanner(rp_cfg)
+        except AnthropicSDKMissingError as exc:
+            _log.warning(
+                "anthropic_replanner_sdk_missing_falling_back",
+                error=str(exc),
+            )
+            return NullLLMReplanner()
+    # 'llama' is reserved for a future llm_gateway-backed implementation;
+    # defaulting to null until that backend ships keeps factory honest.
+    _log.debug("llm_replanner_backend_not_implemented", backend=rp_cfg.backend)
+    return NullLLMReplanner()
+
+
+def build_task_tracker(cfg: Settings) -> Any:
+    """Build the harness task tracker, or ``None`` when the harness is off.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        ``InMemoryTaskTracker`` when ``cfg.harness.tracker.enabled`` is
+        ``True``; otherwise ``None`` so the orchestrator can short-circuit.
+    """
+    if cfg.harness is None or not cfg.harness.tracker.enabled:
+        return None
+    from mousedroid.harness.task_tracker import InMemoryTaskTracker
+
+    return InMemoryTaskTracker(cfg.harness.tracker)
+
+
+def build_journal(cfg: Settings) -> Any:
+    """Build the harness journal backend.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        A concrete journal implementing ``JournalProtocol``. ``NullJournal``
+        is the default — never raises and never writes to disk.
+    """
+    from mousedroid.harness.journal.null_journal import NullJournal
+
+    if cfg.harness is None:
+        return NullJournal()
+    backend = cfg.harness.journal.backend
+    if backend == "jsonl":
+        from mousedroid.harness.journal.jsonl_journal import JSONLJournal
+
+        return JSONLJournal(cfg.harness.journal)
+    if backend == "lmdb":
+        from mousedroid.harness.journal.lmdb_journal import LMDBJournal
+
+        return LMDBJournal(cfg.harness.journal)
+    return NullJournal()
+
+
+def build_approval_gate(cfg: Settings) -> Any:
+    """Build the configured :class:`ApprovalGateProtocol`.
+
+    The default ``"auto"`` gate approves every request (the
+    ``PolicyApprovalGate`` wrapper is unnecessary when no patterns are
+    configured). Other modes use an inner gate matched to ``cfg.harness.approval``.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        A concrete approval gate implementing ``ApprovalGateProtocol``.
+    """
+    from mousedroid.harness.approval.auto import AutoApproveGate
+    from mousedroid.harness.approval.policy import PolicyApprovalGate
+
+    if cfg.harness is None:
+        return AutoApproveGate()
+    approval = cfg.harness.approval
+    inner: object
+    if approval.gate == "auto":
+        inner = AutoApproveGate()
+    elif approval.gate == "cli":
+        from mousedroid.harness.approval.cli import CLIApprovalGate
+
+        inner = CLIApprovalGate(
+            timeout_s=approval.cli_timeout_s,
+            on_timeout=approval.on_timeout,
+        )
+    elif approval.gate == "callback":
+        from mousedroid.harness.approval.callback import (
+            AsyncCallbackApprovalGate,
+        )
+
+        async def _missing(_request: Any) -> bool:
+            return False
+
+        inner = AsyncCallbackApprovalGate(
+            _missing, timeout_s=approval.cli_timeout_s, on_timeout=approval.on_timeout
+        )
+    else:  # "policy" — caller is expected to supply patterns; default to auto
+        inner = AutoApproveGate()
+
+    if not approval.require_approval_tool_patterns and not approval.require_approval_skill_patterns:
+        return inner
+    return PolicyApprovalGate(
+        inner,
+        tool_patterns=tuple(approval.require_approval_tool_patterns),
+        skill_patterns=tuple(approval.require_approval_skill_patterns),
+    )
+
+
+def build_skill_loaders(cfg: Settings) -> tuple[Any, ...]:
+    """Build the configured tuple of :class:`SkillLoaderProtocol` instances.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        Tuple of skill loaders to drain into the registry. Empty when
+        ``cfg.harness.skills.enabled`` is False.
+    """
+    if cfg.harness is None or not cfg.harness.skills.enabled:
+        return ()
+    from mousedroid.skills.loaders import (
+        MarkdownAgentLoader,
+        YAMLManifestLoader,
+    )
+
+    skills_cfg = cfg.harness.skills
+    return (
+        YAMLManifestLoader(skills_cfg.manifest_glob),
+        MarkdownAgentLoader(skills_cfg.markdown_agent_dirs),
+    )
+
+
+def build_skill_registry(cfg: Settings, loaders: tuple[Any, ...] = ()) -> Any:
+    """Build the skill registry pre-populated from ``loaders``.
+
+    Args:
+        cfg: Root settings (currently unused — reserved for future hooks).
+        loaders: Skill loaders to drain at construction time.
+
+    Returns:
+        A populated ``SkillRegistry``.
+    """
+    from mousedroid.skills.registry import SkillRegistry
+
+    registry = SkillRegistry()
+    if loaders:
+        registry.load_all(loaders)
+    return registry
+
+
+def build_skill_delegator(
+    cfg: Settings,
+    skill_registry: Any,
+    approval_gate: Any,
+    journal: Any,
+    task_tracker: Any,
+) -> Any:
+    """Wire the :class:`SkillDelegator` once all dependencies are built.
+
+    Args:
+        cfg: Root settings.
+        skill_registry: The populated skill registry.
+        approval_gate: Approval gate to consult before delegation.
+        journal: Journal that receives delegation events.
+        task_tracker: Tracker that owns task lifecycle.
+
+    Returns:
+        Configured ``SkillDelegator``, or ``None`` when the harness or the
+        skills sub-config is disabled.
+    """
+    if cfg.harness is None or not cfg.harness.skills.enabled or task_tracker is None:
+        return None
+    from mousedroid.skills.delegator import SkillDelegator
+
+    return SkillDelegator(skill_registry, approval_gate, journal, task_tracker)
+
+
+def build_hook_registry(cfg: Settings, journal: Any) -> Any:
+    """Build the hook registry, optionally seeded with default hooks.
+
+    When ``cfg.harness.hooks.journal_events`` is True (the default), a
+    journal-append hook is registered on every phase so the ledger
+    captures tick activity without further wiring.
+
+    Args:
+        cfg: Root settings.
+        journal: Journal used by the seeded ``journal:*`` hooks.
+
+    Returns:
+        Concrete ``HookRegistry`` (or ``NullHookRegistry`` when the
+        harness is disabled).
+    """
+    from mousedroid.harness.hooks import HookRegistry, NullHookRegistry
+
+    if cfg.harness is None:
+        # Harness disabled — return the no-op registry so the 30 Hz hot
+        # loop pays no cost for hook dispatch.
+        return NullHookRegistry()
+
+    registry = HookRegistry()
+
+    if cfg.harness.hooks.journal_events:
+        from mousedroid.harness.journal.protocol import JournalEntry
+        from mousedroid.harness.protocol import HookPhase, HookSpec
+
+        async def _append_for(phase_value: str, ctx: Any) -> None:
+            await journal.append(
+                JournalEntry(
+                    phase=phase_value,
+                    event=f"orchestrator_{phase_value}",
+                    payload={"tick": ctx.tick_index},
+                )
+            )
+
+        for phase in HookPhase:
+            registry.register(
+                HookSpec(
+                    name=f"journal:{phase.value}",
+                    phase=phase,
+                    handler=lambda c, _p=phase.value: _append_for(_p, c),
+                    error_policy=cfg.harness.hooks.error_policy,
+                )
+            )
+    return registry
+
+
 def build_orchestrator(cfg: Settings) -> object:
     """Build fully-wired orchestrator.
 
@@ -1414,6 +1670,21 @@ def build_orchestrator(cfg: Settings) -> object:
     cloud_sink = build_cloud_telemetry_sink(cfg, metrics_registry=metrics_registry)
     cloud_experience_exporter = build_cloud_experience_exporter(cfg)
 
+    # Agent harness (all opt-in; passing None preserves byte-identical legacy behaviour)
+    task_tracker = build_task_tracker(cfg)
+    journal = build_journal(cfg)
+    approval_gate = build_approval_gate(cfg)
+    skill_loaders = build_skill_loaders(cfg)
+    skill_registry = build_skill_registry(cfg, skill_loaders)
+    skill_delegator = build_skill_delegator(
+        cfg,
+        skill_registry,
+        approval_gate,
+        journal,
+        task_tracker,
+    )
+    hook_registry = build_hook_registry(cfg, journal)
+
     return MouseDroidOrchestrator(
         world_model=wm,
         agents=[agent],
@@ -1438,6 +1709,10 @@ def build_orchestrator(cfg: Settings) -> object:
         face_controller=face_controller,
         mcp_server=mcp_server,
         vla_policy=vla_policy,
+        hook_registry=hook_registry,
+        task_tracker=task_tracker,
+        journal=journal,
+        skill_delegator=skill_delegator,
     )
 
 
