@@ -38,9 +38,7 @@ def test_force_real_env_true_flips_mock_off(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.mark.parametrize("value", ["true", "yes", "1", "TRUE", "Yes"])
-def test_force_real_truthy_values_accepted(
-    monkeypatch: pytest.MonkeyPatch, value: str
-) -> None:
+def test_force_real_truthy_values_accepted(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
     """Any case-insensitive truthy spelling enables the opt-in."""
     monkeypatch.setenv("MOUSEDROID_ENDURANCE_FORCE_REAL", value)
     mod = _reload_endurance(monkeypatch)
@@ -48,9 +46,7 @@ def test_force_real_truthy_values_accepted(
 
 
 @pytest.mark.parametrize("value", ["", "0", "false", "no", "off"])
-def test_force_real_falsy_values_disable_optin(
-    monkeypatch: pytest.MonkeyPatch, value: str
-) -> None:
+def test_force_real_falsy_values_disable_optin(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
     """Empty / "0" / "false" / "no" all keep the opt-in disabled."""
     monkeypatch.setenv("MOUSEDROID_ENDURANCE_FORCE_REAL", value)
     mod = _reload_endurance(monkeypatch)
@@ -64,14 +60,13 @@ def test_metrics_dir_default_under_reports(monkeypatch: pytest.MonkeyPatch) -> N
     assert mod._METRICS_DIR.parts[-2:] == ("reports", "endurance")
 
 
-def test_metrics_dir_env_override(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_metrics_dir_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """`MOUSEDROID_ENDURANCE_REPORT_DIR` redirects the snapshot path."""
     custom = tmp_path / "custom-endurance"
     monkeypatch.setenv("MOUSEDROID_ENDURANCE_REPORT_DIR", str(custom))
     mod = _reload_endurance(monkeypatch)
-    assert mod._METRICS_DIR == custom
+    metrics_dir = mod._METRICS_DIR
+    assert metrics_dir == custom
 
 
 def test_metrics_snapshot_writes_valid_json(
@@ -93,7 +88,8 @@ def test_metrics_snapshot_writes_valid_json(
         max_gpu_temp_c=58.0,
     )
 
-    assert out is not None and out.is_file()
+    assert out is not None
+    assert out.is_file()
     payload = json.loads(out.read_text(encoding="utf-8"))
     for key in (
         "stamp",
