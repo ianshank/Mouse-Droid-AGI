@@ -165,47 +165,55 @@ ExecStartPre=/bin/cp /opt/mousedroid/config/jetson_production.yaml /etc/mousedro
 
 ---
 
-## P0 — Voice Engine Quality
+## P0 — Voice Engine Quality ✅ LANDED
 
-### Piper Model Diversity
-- Download and evaluate additional Piper voices (`en_US-amy-medium`, `en_GB-alba-medium`)
-  for the Rocky personality; make model selection config-driven (`voice.personality_to_model_map`)
-- Add a voice latency benchmark to `scripts/benchmark_latency.py`
+### Piper Model Diversity ✅
+- ✅ Config-driven model selection via `voice.personality_to_model_map`
+  (`src/mousedroid/voice/tts.py`, `VoiceConfig.resolved_tts_model_path()`)
+- ✅ Voice latency benchmark at `scripts/benchmark_voice_latency.py` (230 LOC)
+  with personality sweep + p95 target gate; unit-tested in
+  `tests/unit/test_voice_latency_bench.py`
 
-### Phrase Bank Expansion
-- Current phrase bank covers: startup, shutdown, obstacle, error, sensor_recovery
-- Add: navigation events (`turn_left`, `turn_right`, `arrived`), battery warnings, LLM
-  translation acknowledgements
-- Support per-event `intensity_threshold` tuning in `VoiceConfig.phrase_overrides`
+### Phrase Bank Expansion ✅
+- ✅ Navigation events (`turn_left`, `turn_right`, `arrived`), battery warnings, and
+  LLM translation acknowledgements all live in `src/mousedroid/voice/phrase_bank.py`
+- ✅ Per-event intensity threshold tuning is in `VoiceConfig.phrase_overrides` /
+  `VoiceConfig.event_intensity_thresholds`
 
 ---
 
-## P1 — Test Coverage
+## P1 — Test Coverage ✅ LANDED
 
-### Integration Tests for TTS Pipeline
-`tests/unit/test_piper_tts.py` provides mock-only coverage. Add integration tests:
-- `tests/integration/test_tts_integration.py` — verify end-to-end WAV generation using an
-  actual (or mocked) Piper voice object; validate sample count and normalization range
-- `tests/integration/test_speaker_tts_integration.py` — UsbSpeaker + PiperTTS pipeline test
-  in mock hardware mode (PyAudio mock, no real device required)
+### Integration Tests for TTS Pipeline ✅
+- ✅ `tests/integration/test_tts_integration.py` (62 LOC) — verifies end-to-end WAV
+  generation, sample count, and normalisation/gain clipping
+- ✅ `tests/integration/test_speaker_tts_integration.py` (72 LOC) — UsbSpeaker +
+  PiperTTS pipeline in mock hardware mode (no real device required)
 
-### Smoke Harness Unit Tests
-`scripts/jetson_full_smoke_run.sh` logic is not currently unit-tested. Add:
-- `tests/unit/test_smoke_harness.py` — test SUMMARY.md generation, voice-failure enricher
-  output, and stage timeout enforcement using subprocess mocks or a bats-style shell test
+### Smoke Harness Unit Tests ✅
+- ✅ `tests/unit/test_smoke_harness.py` (46 LOC) — covers blocking-override
+  resolution, stage-timeout export, non-blocking timeout classification,
+  SUMMARY.md table generation, and voice-failure remediation enrichment
 
 ---
 
 ## Immediate Follow-up
 
-1. Integrate `scripts/validate_pillar.sh all` into CI (or Jetson nightly job) so the Ten Pillars
-   campaign is run automatically on each deployment — currently only run manually on Jetson.
+1. ✅ **Jetson nightly Ten Pillars** — `.github/workflows/jetson-nightly.yml`
+   runs `scripts/validate_pillar.sh all` on a self-hosted Jetson runner every
+   night and on `workflow_dispatch`. Advisory at first; promote to required
+   after one full green week. Per-pillar logs and the markdown summary upload
+   as build artifacts (30-day retention).
 2. Run `scripts/benchmark_voice_latency.py` on Jetson for the production personalities
    (`rocky`, `scout`, `friendly`) and capture median / P95 latency before any further voice changes.
-3. Rebuild the Jetson image, restart `mousedroid-docker.service`, and rerun
+3. Install `promtool` on the Windows validation host so the Prometheus rule stage in
+   `bash scripts/ci.sh` becomes enforced rather than skipped — see
+   [`docs/playbooks/promtool-install.md`](docs/playbooks/promtool-install.md) for
+   step-by-step Windows / Linux / macOS instructions.
+4. Rebuild the Jetson image, restart `mousedroid-docker.service`, and rerun
    `scripts/jetson_full_smoke_run.sh` against the updated production config.
-4. Use the recovery playbooks in `docs/playbooks/` for any camera, LiDAR, or voice failures
-   discovered during the next hardware validation pass.
+5. Use the recovery playbooks in `docs/playbooks/` for any camera, LiDAR, voice, or
+   `promtool` failures discovered during the next hardware validation pass.
 
 ---
 
