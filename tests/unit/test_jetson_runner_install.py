@@ -10,7 +10,6 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -27,7 +26,10 @@ _BASH_AVAILABLE = pytest.mark.skipif(
 )
 
 
-def _run_script(*args: str, env_extra: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def _run_script(
+    *args: str,
+    env_extra: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     """Invoke the installer with a pruned env so secrets cannot leak in."""
     env = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
