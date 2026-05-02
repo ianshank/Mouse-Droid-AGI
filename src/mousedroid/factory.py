@@ -634,10 +634,12 @@ def build_replay_reader(cfg: Settings) -> ReplayReaderProtocol:
     reader = LMDBReplayReader(
         cfg.experience,
         path_override=cfg.training.replay.source_path,
+        debug_log_every_n=cfg.training.replay_mixer.debug_log_every_n,
     )
     _log.info(
         "replay_reader_built",
         path=str(reader.path),
+        debug_log_every_n=cfg.training.replay_mixer.debug_log_every_n,
     )
     return reader
 

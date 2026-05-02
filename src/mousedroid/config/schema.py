@@ -2259,6 +2259,17 @@ class ReplayMixerConfig(BaseModel):
         gt=0,
         description="Emit a `mixer_ratio_check` log every N draws.",
     )
+    debug_log_every_n: int = Field(
+        0,
+        ge=0,
+        description=(
+            "Emit a structlog DEBUG line ('mixer_draw' / 'replay_chunk_decoded') "
+            "every N mixer/reader operations. 0 disables debug logs entirely. "
+            "Useful for live triage on Jetson; set to e.g. 100 to surface state "
+            "without flooding the journal. The throttle is independent of "
+            "`log_every_n`, which controls INFO-level cadence."
+        ),
+    )
 
 
 class TrainingConfig(BaseModel):

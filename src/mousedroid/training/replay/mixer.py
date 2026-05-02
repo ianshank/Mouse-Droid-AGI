@@ -70,6 +70,15 @@ class MixerConfig(BaseModel):
         gt=0,
         description="Emit a `mixer_ratio_check` log every N draws.",
     )
+    debug_log_every_n: int = Field(
+        0,
+        ge=0,
+        description=(
+            "Emit a structlog DEBUG `mixer_draw` line every N draws "
+            "(0 disables). Mirrors "
+            "`mousedroid.config.schema.ReplayMixerConfig.debug_log_every_n`."
+        ),
+    )
 
     @classmethod
     def from_settings(cls, replay_mixer_cfg: object) -> MixerConfig:
@@ -91,6 +100,7 @@ class MixerConfig(BaseModel):
             alpha_ramp_steps=getattr(replay_mixer_cfg, "alpha_ramp_steps", DEFAULT_RAMP_STEPS),
             seed=getattr(replay_mixer_cfg, "seed", None),
             log_every_n=getattr(replay_mixer_cfg, "log_every_n", DEFAULT_LOG_INTERVAL),
+            debug_log_every_n=getattr(replay_mixer_cfg, "debug_log_every_n", 0),
         )
 
 
@@ -199,6 +209,19 @@ class RealSimMixer(Generic[T]):
                         current_alpha=current,
                         real_drawn=self._real_drawn,
                         sim_drawn=self._sim_drawn,
+                    )
+                # Throttled DEBUG-level live triage (operator opt-in via
+                # cfg.training.replay_mixer.debug_log_every_n; 0 disables).
+                if (
+                    self._cfg.debug_log_every_n > 0
+                    and self._step % self._cfg.debug_log_every_n == 0
+                ):
+                    _log.debug(
+                        "mixer_draw",
+                        step=self._step,
+                        source="real" if pick_real else "sim",
+                        alpha=round(alpha, _LOG_ALPHA_PRECISION),
+                        realized=round(self.stats["realized_alpha"], _LOG_ALPHA_PRECISION),
                     )
                 return item
 
