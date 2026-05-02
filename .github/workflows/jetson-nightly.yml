@@ -1,0 +1,135 @@
+# =============================================================================
+# MouseDroidAGI — Jetson Nightly Validation
+# =============================================================================
+# Runs the Ten Pillars validation campaign (`scripts/validate_pillar.sh all`)
+# on a self-hosted Jetson Orin Nano runner every night and on-demand, then
+# uploads the per-pillar logs and the markdown summary as build artifacts.
+#
+# Closes the "Integrate scripts/validate_pillar.sh all into CI (or Jetson
+# nightly job) so the Ten Pillars campaign is run automatically on each
+# deployment" follow-up from NEXT_STEPS.md.
+#
+# Runner requirements:
+#   - GitHub Actions self-hosted runner labelled [self-hosted, jetson]
+#   - Docker container `mousedroid` running (mousedroid-docker.service)
+#   - `validate_pillar.sh` finds python via MOUSEDROID_SMOKE_PYTHON or docker exec
+#
+# Advisory mode: this workflow does not block any branch — it reports failures
+# via the GitHub Actions status page and uploaded artifacts. Promote to
+# required after one full green week.
+# =============================================================================
+
+name: Jetson Nightly
+
+on:
+    schedule:
+        # 06:00 UTC daily (=22:00 PST / 23:00 PDT) — outside typical operator
+        # working hours so a failed run doesn't compete with active dev work.
+        - cron: "0 6 * * *"
+    workflow_dispatch:
+        inputs:
+            pillars:
+                description: "Pillars to run (space-separated, or 'all')"
+                required: false
+                default: "all"
+                type: string
+
+# Allow only one concurrent nightly run per branch. A queued run is cancelled
+# in favour of the newer one to avoid double-booking the single Jetson runner.
+concurrency:
+    group: jetson-nightly-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    ten-pillars:
+        name: Ten Pillars on Jetson
+        runs-on: [self-hosted, jetson]
+        timeout-minutes: 60
+
+        # Advisory: a single failed pillar should not silently break this
+        # workflow's exit code — operators read the artifact for triage.
+        continue-on-error: true
+
+        env:
+            MOUSEDROID_SMOKE_CONTAINER: mousedroid
+            # The validation overlay drives the runtime probes through
+            # /etc/mousedroid/* — keep this aligned with the systemd unit.
+            MOUSEDROID_JETSON_CONFIGS: "/etc/mousedroid/default.yaml,/etc/mousedroid/jetson_production.yaml"
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Confirm Jetson container is running
+              run: |
+                  if ! docker ps --filter "name=^/${MOUSEDROID_SMOKE_CONTAINER}$" \
+                          --format '{{.Names}}' | grep -qx "${MOUSEDROID_SMOKE_CONTAINER}"; then
+                      echo "::error::Container '${MOUSEDROID_SMOKE_CONTAINER}' not running on Jetson — start with mousedroid-docker.service"
+                      exit 2
+                  fi
+
+            - name: Sync production config overlay
+              # The systemd ExecStartPre already does this on service start;
+              # rerun here so the nightly always validates the latest repo state
+              # rather than the last service-restart snapshot.
+              run: |
+                  if [ -x /opt/mousedroid/scripts/sync_jetson_overlay.sh ]; then
+                      sudo /opt/mousedroid/scripts/sync_jetson_overlay.sh
+                  else
+                      echo "::warning::sync_jetson_overlay.sh not found — using existing /etc/mousedroid/*.yaml"
+                  fi
+
+            - name: Resolve report directory
+              id: reportdir
+              run: |
+                  STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+                  REPORT_DIR="reports/jetson_smoke/${STAMP}"
+                  mkdir -p "${REPORT_DIR}"
+                  echo "stamp=${STAMP}" >> "$GITHUB_OUTPUT"
+                  echo "dir=${REPORT_DIR}" >> "$GITHUB_OUTPUT"
+
+            - name: Run Ten Pillars validation
+              env:
+                  MOUSEDROID_PILLAR_REPORT_DIR: ${{ steps.reportdir.outputs.dir }}
+                  PILLARS: ${{ github.event.inputs.pillars || 'all' }}
+              run: |
+                  set +e
+                  bash scripts/validate_pillar.sh ${PILLARS}
+                  rc=$?
+                  set -e
+                  echo "PILLAR_RC=${rc}" >> "$GITHUB_ENV"
+                  # Don't exit non-zero here — the upload + summary steps
+                  # below need to run regardless. Final gating happens in
+                  # the "Report status" step.
+
+            - name: Upload pillar logs
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: ten-pillars-${{ steps.reportdir.outputs.stamp }}
+                  path: ${{ steps.reportdir.outputs.dir }}/
+                  retention-days: 30
+
+            - name: Append summary to GitHub Actions UI
+              if: always()
+              run: |
+                  SUMMARY="${{ steps.reportdir.outputs.dir }}/ten_pillars.log"
+                  if [ -f "${SUMMARY}" ]; then
+                      echo "### Ten Pillars Result — ${{ steps.reportdir.outputs.stamp }}" >> "$GITHUB_STEP_SUMMARY"
+                      echo "" >> "$GITHUB_STEP_SUMMARY"
+                      cat "${SUMMARY}" >> "$GITHUB_STEP_SUMMARY"
+                  else
+                      echo "::warning::No ten_pillars.log emitted — validate_pillar.sh may have aborted before writing the summary"
+                  fi
+
+            - name: Report status
+              if: always()
+              run: |
+                  if [ "${PILLAR_RC:-1}" = "0" ]; then
+                      echo "::notice::Ten Pillars: PASS"
+                  else
+                      echo "::warning::Ten Pillars: FAIL (rc=${PILLAR_RC}) — advisory; see uploaded artifact for triage"
+                  fi
+                  # Exit 0 so the workflow itself is a green status; the
+                  # advisory gate lives in the operator-facing summary above.
+                  exit 0
