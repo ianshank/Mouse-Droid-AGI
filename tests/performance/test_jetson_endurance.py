@@ -11,20 +11,88 @@ Marked ``@pytest.mark.hardware`` and ``@pytest.mark.slow``.
 Run with::
 
     pytest -m "hardware and slow" -v --timeout=600 tests/performance/
+
+**Real-hardware opt-in.** Setting ``MOUSEDROID_ENDURANCE_FORCE_REAL=1``
+flips ``MOUSEDROID_MOCK_HARDWARE`` to ``false`` at module-import time so an
+operator can re-run the endurance test against the actual rover even when
+the conftest defaults to mock mode. The test still skips inside the
+function body if the resolved settings still report ``mock_hardware``,
+guarding against environments where the env-var flip didn't take.
+
+On completion the test writes a JSON metrics dump to
+``${MOUSEDROID_ENDURANCE_REPORT_DIR:-reports/endurance}/endurance-<utc>.json``
+so historical runs can be diffed without re-parsing log scrollback.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
+from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
+
+# Real-hardware opt-in must run *before* any other module imports the rover
+# config — the conftest's autouse fixture defaults `MOUSEDROID_MOCK_HARDWARE`
+# to "true" if absent.
+_FORCE_REAL: bool = os.getenv("MOUSEDROID_ENDURANCE_FORCE_REAL", "").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+if _FORCE_REAL:
+    os.environ["MOUSEDROID_MOCK_HARDWARE"] = "false"
+
+_METRICS_DIR: Path = Path(
+    os.getenv("MOUSEDROID_ENDURANCE_REPORT_DIR", "reports/endurance"),
+)
 
 pytestmark = [pytest.mark.hardware, pytest.mark.slow]
 
 # Duration is configurable via env var (default 60s for CI, 300s for full validation)
 ENDURANCE_DURATION_S = float(os.getenv("MOUSEDROID_ENDURANCE_DURATION_S", "60"))
+
+
+def _write_metrics_snapshot(
+    *,
+    duration_s: float,
+    p95_ms: float,
+    p99_ms: float,
+    rss_start_mb: float,
+    rss_end_mb: float,
+    tick_count: int,
+    error_count: int,
+    max_gpu_temp_c: float,
+) -> Path | None:
+    """Persist endurance run metrics so historical runs can be diffed.
+
+    Returns the path written, or ``None`` if `_METRICS_DIR` could not be
+    created (e.g. read-only filesystem). Failure is non-fatal — the test
+    asserts come from in-memory data either way.
+    """
+    try:
+        _METRICS_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    out = _METRICS_DIR / f"endurance-{stamp}.json"
+    payload: dict[str, float | int | bool | str] = {
+        "stamp": stamp,
+        "force_real": _FORCE_REAL,
+        "duration_s": duration_s,
+        "p95_ms": p95_ms,
+        "p99_ms": p99_ms,
+        "rss_start_mb": rss_start_mb,
+        "rss_end_mb": rss_end_mb,
+        "tick_count": tick_count,
+        "error_count": error_count,
+        "max_gpu_temp_c": max_gpu_temp_c,
+    }
+    out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return out
 
 
 def _get_rss_mb() -> float:
@@ -123,16 +191,31 @@ async def test_endurance_30hz_loop(runtime_settings) -> None:
 
     assert len(loop_times_ms) > 0, "No ticks completed"
 
-    # Loop time p95
+    # Loop time p95 + p99 (p99 captured for the metrics snapshot below)
     sorted_times = sorted(loop_times_ms)
     p95_idx = int(0.95 * len(sorted_times))
+    p99_idx = int(0.99 * len(sorted_times))
     p95_ms = sorted_times[min(p95_idx, len(sorted_times) - 1)]
+    p99_ms = sorted_times[min(p99_idx, len(sorted_times) - 1)]
+
+    # Persist a JSON snapshot before any assertion fires so an operator can
+    # diff endurance runs even when one regresses.
+    max_gpu_temp = max(gpu_temps) if gpu_temps else 0.0
+    _write_metrics_snapshot(
+        duration_s=ENDURANCE_DURATION_S,
+        p95_ms=p95_ms,
+        p99_ms=p99_ms,
+        rss_start_mb=rss_start_mb,
+        rss_end_mb=rss_end_mb,
+        tick_count=tick_count,
+        error_count=error_count,
+        max_gpu_temp_c=max_gpu_temp,
+    )
 
     assert p95_ms < target_loop_ms, f"Loop p95={p95_ms:.1f}ms exceeds target {target_loop_ms:.1f}ms"
 
     # GPU temperature
     if gpu_temps:
-        max_gpu_temp = max(gpu_temps)
         assert (
             max_gpu_temp < gpu_critical_temp
         ), f"GPU temp {max_gpu_temp:.1f}°C exceeds critical {gpu_critical_temp}°C"
