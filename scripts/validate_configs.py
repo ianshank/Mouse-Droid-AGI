@@ -191,16 +191,32 @@ def run(
 
 
 def _print_report(results: list[OverlayResult]) -> None:
-    """Human-friendly stdout summary; CI logs use ``_log`` already."""
+    """Emit per-overlay structured log lines summarising the run.
+
+    Uses :data:`_log` (structlog) rather than ``print()`` so the script
+    obeys CLAUDE.md invariant 4 ("Never use ``print()``") and so CI runs
+    can ingest the output as JSON instead of free-form lines.
+    """
     passed = sum(1 for r in results if r.ok)
     failed = len(results) - passed
-    print(f"config-validate: {passed} passed, {failed} failed")
+    _log.info(
+        "config_validate_summary",
+        passed=passed,
+        failed=failed,
+        total=len(results),
+    )
     for result in results:
-        marker = "OK " if result.ok else "FAIL"
-        print(f"  [{marker}] {result.path}")
-        if result.error:
-            for line in result.error.splitlines():
-                print(f"        {line}")
+        if result.ok:
+            _log.info(
+                "config_validate_overlay_ok",
+                path=str(result.path),
+            )
+        else:
+            _log.error(
+                "config_validate_overlay_failed",
+                path=str(result.path),
+                error=result.error,
+            )
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -8,6 +8,11 @@ training.
 The reader is async-friendly: chunk reads run inside ``asyncio.to_thread``
 so the LMDB cursor never blocks the event loop. The 8 GB Jetson Orin Nano
 RAM budget is respected — no full-DB load.
+
+The LMDB environment handle is opened **once per ``stream()`` call** and
+reused across every chunk; opening per-chunk would be wasteful and
+contradicts LMDB's design (envs are designed to be opened once and
+reused across many transactions).
 """
 
 from __future__ import annotations
@@ -97,57 +102,47 @@ class LMDBReplayReader:
         """LMDB env path."""
         return self._path
 
-    def _read_keys(self) -> list[bytes]:
-        """Open the env, snapshot the key list, close. Sync; off the loop."""
-        # An LMDB env is a directory containing ``data.mdb`` + ``lock.mdb``.
-        # Treat a missing dir or a dir without ``data.mdb`` as an empty store
-        # so a fresh Jetson can opt-in to real replay safely.
-        if not self._path.exists() or not (self._path / "data.mdb").exists():
-            return []
-        env = lmdb.open(
+    def _open_env(self) -> lmdb.Environment:
+        """Open the LMDB environment in read-only, no-lock mode."""
+        return lmdb.open(
             str(self._path),
             map_size=self._map_size,
             readonly=True,
             lock=False,
         )
-        try:
-            with env.begin() as txn:
-                cursor = txn.cursor()
-                return [bytes(k) for k, _ in cursor]
-        finally:
-            env.close()
 
-    def _read_chunk(self, keys: list[bytes]) -> list[MouseDroidExperienceRecord]:
-        """Open the env, read this chunk's records, close. Sync; off the loop."""
-        env = lmdb.open(
-            str(self._path),
-            map_size=self._map_size,
-            readonly=True,
-            lock=False,
-        )
+    def _read_keys_with_env(self, env: lmdb.Environment) -> list[bytes]:
+        """Snapshot the key list inside ``env``. Sync; off the loop."""
+        with env.begin() as txn:
+            cursor = txn.cursor()
+            return [bytes(k) for k, _ in cursor]
+
+    def _read_chunk_with_env(
+        self,
+        env: lmdb.Environment,
+        keys: list[bytes],
+    ) -> list[MouseDroidExperienceRecord]:
+        """Read this chunk's records inside ``env``. Sync; off the loop."""
         out: list[MouseDroidExperienceRecord] = []
-        try:
-            with env.begin() as txn:
-                for key in keys:
-                    blob = txn.get(key)
-                    if blob is None:
-                        continue
-                    try:
-                        record = MouseDroidExperienceRecord.deserialize(bytes(blob))
-                    except ValueError as exc:
-                        # Schema mismatch — count, log once per occurrence,
-                        # do not crash training.
-                        self._skipped_schema += 1
-                        _log.warning(
-                            "replay_schema_mismatch",
-                            error=str(exc),
-                            cumulative_skipped=self._skipped_schema,
-                        )
-                        continue
-                    out.append(record)
-            return out
-        finally:
-            env.close()
+        with env.begin() as txn:
+            for key in keys:
+                blob = txn.get(key)
+                if blob is None:
+                    continue
+                try:
+                    record = MouseDroidExperienceRecord.deserialize(bytes(blob))
+                except ValueError as exc:
+                    # Schema mismatch — count, log once per occurrence,
+                    # do not crash training.
+                    self._skipped_schema += 1
+                    _log.warning(
+                        "replay_schema_mismatch",
+                        error=str(exc),
+                        cumulative_skipped=self._skipped_schema,
+                    )
+                    continue
+                out.append(record)
+        return out
 
     async def stream(
         self,
@@ -163,28 +158,45 @@ class LMDBReplayReader:
 
         Raises:
             ValueError: If ``chunk_size`` is not positive.
+
+        Notes:
+            The LMDB env is opened **once** at the start and held for the
+            duration of the stream. Both the key snapshot and every chunk
+            read share the same env handle (closed in the ``finally`` block
+            on a worker thread to avoid blocking the event loop).
         """
         if chunk_size <= 0:
             msg = f"chunk_size must be positive, got {chunk_size}"
             raise ValueError(msg)
 
-        keys = await asyncio.to_thread(self._read_keys)
-        if not keys:
+        # An LMDB env is a directory containing ``data.mdb`` + ``lock.mdb``.
+        # Treat a missing dir or a dir without ``data.mdb`` as an empty store
+        # so a fresh Jetson can opt-in to real replay safely.
+        if not self._path.exists() or not (self._path / "data.mdb").exists():
             _log.warning("replay_empty_db", path=str(self._path))
             return
 
-        _log.info(
-            "replay_stream_open",
-            path=str(self._path),
-            n_keys=len(keys),
-            chunk_size=chunk_size,
-        )
+        env = await asyncio.to_thread(self._open_env)
+        try:
+            keys = await asyncio.to_thread(self._read_keys_with_env, env)
+            if not keys:
+                _log.warning("replay_empty_db", path=str(self._path))
+                return
 
-        for start in range(0, len(keys), chunk_size):
-            window = keys[start : start + chunk_size]
-            chunk = await asyncio.to_thread(self._read_chunk, window)
-            if not chunk:
-                continue
-            self._read_records += len(chunk)
-            self._chunks_yielded += 1
-            yield chunk
+            _log.info(
+                "replay_stream_open",
+                path=str(self._path),
+                n_keys=len(keys),
+                chunk_size=chunk_size,
+            )
+
+            for start in range(0, len(keys), chunk_size):
+                window = keys[start : start + chunk_size]
+                chunk = await asyncio.to_thread(self._read_chunk_with_env, env, window)
+                if not chunk:
+                    continue
+                self._read_records += len(chunk)
+                self._chunks_yielded += 1
+                yield chunk
+        finally:
+            await asyncio.to_thread(env.close)
