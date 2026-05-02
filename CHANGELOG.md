@@ -8,6 +8,188 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Phase 2.1: BC supervised loss into offline-RL training loop
+
+- **`training/train_offline_rl.py`** — wires the existing
+  `OfflineRLTrainer.bc_update(states, actions, weight)` auxiliary loss
+  into the per-batch training loop, gated by
+  `cfg.offline_rl.real_supervised_weight` (default `0.0`). Adopts the
+  TD3+BC pattern (Fujimoto & Gu 2021): on each batch, after the
+  algorithm-specific `update_step`, an auxiliary `weight * MSE(policy(s),
+  a_data)` is applied to the actor optimizer. At the schema default
+  (`weight=0.0`) `bc_update` short-circuits and performs **no optimizer
+  step**, so legacy training paths remain byte-identical (proven by the
+  new regression tests below). When `weight > 0`, a one-shot
+  `offline_rl_bc_active` structured log is emitted at run start and the
+  scalar `bc_loss` is aggregated alongside `q_loss` / `policy_loss` in
+  the epoch summary, surfacing as `final_bc_loss` in the returned stats.
+- **`tests/integration/test_phase21_bc_into_offline_rl.py`** — 8 tests
+  covering: byte-identity at `weight=0` (CQL + IQL), measurable parameter
+  divergence at `weight>0` (CQL + IQL), finite-weights guarantee,
+  `final_bc_loss` aggregation into the run-summary stats, and the empty
+  LMDB short-circuit being unaffected by the BC weight.
+- **`docs/planning/PHASE_2_1_AND_BEYOND_PLAN.md`** — plan-of-record for
+  the next sprint cycle (PR-A1/A2/B1/B2) with risks and Definition of Done.
+
+### Added — Production-config validation gate
+
+- **`scripts/validate_configs.py`** — CLI that loads every `config/*.yaml`
+  through `mousedroid.config.loader.load_settings()` and reports per-file
+  pass/fail. Catches Pydantic schema drift, type drift, and cross-field
+  validator regressions before they reach the Jetson. Supports a
+  `# config-validator: skip` marker (in the YAML's first 10 lines) to
+  exclude deploy-time descriptors that share the `config/` directory but
+  are not runtime overlays. Flags: `--config-dir`, `--fail-fast`,
+  `--include-default`. Exit codes: 0 / 1 (validation failures) / 2 (usage).
+- **`tests/regression/test_config_overlays_load.py`** — 16 tests that
+  parametrize over every overlay returned by
+  `validate_configs.discover_overlays()`, assert `Settings` construction
+  succeeds with a valid `platform`, and end-to-end exercise the CLI via
+  `subprocess`. Test set stays in lockstep with the script by importing
+  its `discover_overlays` helper.
+- **`config/jetson_setup.yaml`** — annotated with `# config-validator: skip`
+  (deploy descriptor; reuses the `jetson:` namespace with deploy-only keys
+  `host`/`user`/`ssh_port`/`install_dir`/`swap_size_gb` that conflict with
+  the runtime `JetsonConfig` schema).
+- **`.github/workflows/ci.yml`** — new `config-validate` job (Python 3.11,
+  needs `lint`) that runs `python scripts/validate_configs.py
+  --include-default` after a runtime-only `pip install -e .`. Fast,
+  isolated, no heavy deps.
+
+### Added — Phase 2 acceptance: golden RSSM loss-curve regression
+
+- **`tests/regression/_rssm_golden_helper.py`** — deterministic, CPU-only,
+  tiny-dim RSSM training harness. Runs N (default 10) optimizer steps on
+  synthetic batches sampled from a seeded `torch.Generator`; mirrors the
+  per-step loss formula in `training/train_rssm.py` (recon MSE + kl_beta·KL)
+  but strips file I/O, the `DataLoader`, and the AMP path so the curve is
+  bit-stable across runs. `ModelConfig` is built via `model_validate` so the
+  harness stays backwards-compatible when new schema fields land.
+- **`tests/regression/fixtures/phase2_rssm_golden_baseline.json`** — committed
+  10-step baseline (schema_version=1, seed=0). Regenerate intentionally via
+  `MOUSEDROID_UPDATE_GOLDEN=1 pytest tests/regression/test_phase2_rssm_golden.py`.
+- **`tests/regression/test_phase2_rssm_golden.py`** — 8 tests:
+  fixture presence, curve length, finite/typed loss keys, monotone-decrease
+  smoke, baseline tolerance (±1% on `recon`/`total`, ±5% on `kl` for
+  reparameterized-sample noise), and prefix stability at `num_steps ∈
+  {1, 3, 10}` (guards against accidental coupling between batch generation
+  and step count). Closes the last open Phase 2 acceptance bullet from
+  `NEXT_STEPS.md`.
+- **Repo hygiene** — dropped 3 unused `# noqa: UP038` directives flagged by
+  `RUF100` in `usb_speaker.py` and `mcp/resources.py` (autofix; no behavior
+  change).
+- All 3,391 unit/regression/integration tests pass; ruff + ruff format +
+  `mypy --strict` (on the new files) + hardcoded-value gate clean.
+
+### Added — Phase 2: Real-Episode Replay Loop (`feat/phase2-real-episode-replay`)
+
+- **`src/mousedroid/training/replay/`** — new package
+  - `ReplayReaderProtocol` — `@runtime_checkable Protocol` defining
+    `stream(chunk_size) -> AsyncIterator[list[MouseDroidExperienceRecord]]`
+    plus a `stats` dict, so callers cannot couple to LMDB internals
+    (CLAUDE.md invariants 1+2).
+  - `LMDBReplayReader` — async, chunked reader. Each chunk is fetched
+    via `asyncio.to_thread` so the LMDB cursor never blocks the event
+    loop; an empty or missing env logs a single `replay_empty_db`
+    warning and yields nothing rather than raising. Schema-mismatched
+    records are counted under `stats["skipped_schema_mismatch"]` and
+    skipped.
+  - `MixerConfig` (Pydantic) + `RealSimMixer` — deterministic sim/real
+    interleaver seeded by a single `numpy.random.Generator`. Linear
+    `current_alpha = min(target, target * step / ramp_steps)` ramp
+    realises the RL-Co two-stage curriculum. Realized fraction is
+    exposed via `stats["realized_alpha"]` for tests and telemetry.
+- **`training/replay_real_episodes.py`** — new operator CLI exercising
+  the reader+mixer end-to-end. Supports `--dry-run`, `--use-real-replay`,
+  `--draws`, `--chunk-size`, `--alpha-target`, `--seed`. Empty LMDB is
+  a no-op exit-0.
+- **`src/mousedroid/factory.py`** — `build_replay_reader(cfg)` returns a
+  `ReplayReaderProtocol`; concrete `LMDBReplayReader` import lives
+  inside the function per project DI rules.
+- **`src/mousedroid/config/schema.py`** — `OfflineRLConfig.real_supervised_weight`
+  added with default `0.0`. The new field gates the future BC auxiliary
+  loss in `train_constitutional_rl.py` (Phase 2.1 follow-up). Default of
+  `0.0` keeps offline-RL training byte-identical to the pre-Phase-2
+  path; backwards compat is preserved.
+- **Tests** — `tests/unit/training/replay/test_lmdb_reader.py` (7 tests:
+  protocol fit, empty/missing path, full round-trip, chunk-size guard,
+  schema-mismatch counting, path override) and `test_mixer.py` (11
+  tests: parametrized realized-ratio at `{0.1, 0.5, 0.9}` over 10 000
+  draws within ±1.5%, seed determinism, monotone ramp, exhaustion
+  fallback, validation guards).
+
+### Notes
+
+- The auxiliary BC loss `MSE(policy(s_real), a_real)` weighted by
+  `real_supervised_weight` is intentionally deferred to Phase 2.1
+  because the existing `train_constitutional_rl.py` is a numpy-MLP with
+  custom numerical-gradient updates rather than a torch loop;
+  retrofitting BC there warrants its own PR with a dedicated
+  numerical-stability test.
+
+### Added — Phase 2.1: BC auxiliary loss + tech-debt sweep
+
+- **`src/mousedroid/learning/offline_rl.py`** — new `bc_update(states,
+  actions, weight)` method on the `OfflineRLTrainer` ABC. Computes
+  `MSE(policy(s_real), a_real)` and steps **only** the policy
+  optimizer (Q-network frozen). When `weight <= 0.0` it is a strict
+  no-op returning `{"bc_loss": 0.0}`, so any trainer wired through the
+  default `real_supervised_weight=0.0` is byte-identical to the
+  pre-Phase-2 path. Lands the BC hook in the torch trainer instead of
+  the numpy `train_constitutional_rl.py` MLP — much cleaner integration
+  surface.
+- **`src/mousedroid/training/replay/mixer.py`** — magic numbers `1000`,
+  `500`, `2`, `4` hoisted to named module-level constants
+  (`DEFAULT_RAMP_STEPS`, `DEFAULT_LOG_INTERVAL`, `_NUM_SOURCES`,
+  `_LOG_ALPHA_PRECISION`). New `MixerConfig.from_settings()` classmethod
+  builds a mixer config from a YAML-loaded `ReplayMixerConfig` without
+  importing the schema (avoids circular imports).
+- **`src/mousedroid/config/schema.py`** — new `ReplayMixerConfig`
+  Pydantic model exposed as `TrainingConfig.replay_mixer`. YAML can now
+  drive `alpha_target`, `alpha_ramp_steps`, `chunk_size`, `seed`, and
+  `log_every_n` without touching code. All fields default to inert
+  values so existing YAMLs load unchanged (CLAUDE.md invariant 9).
+- **`training/replay_real_episodes.py`** — CLI now reads defaults from
+  `cfg.training.replay_mixer`; `--alpha-target` and `--seed` flags
+  override per-invocation. `--dry-run` now strictly wins over
+  `--use-real-replay` (logs and skips the LMDB open). Argparse defaults
+  hoisted to `DEFAULT_DRAWS` / `DEFAULT_CHUNK_SIZE` constants. Fixed
+  pre-existing bug where `load_settings(str)` raised because the loader
+  needs a `Path`.
+- **Tests** — three new test files:
+  - `tests/unit/test_offline_rl_bc.py` (6 tests, both CQL and IQL):
+    weight=0 is byte-identical, positive weight reduces loss
+    monotonically over 20 steps, Q-network never moves.
+  - `tests/unit/test_factory_replay_reader.py` (2 tests):
+    `build_replay_reader` returns a `ReplayReaderProtocol`; respects
+    `training.replay.source_path` override.
+  - `tests/unit/training/replay/test_cli_replay_real_episodes.py` (4
+    tests): dry-run exit-0, `--dry-run` overrides `--use-real-replay`,
+    empty-LMDB exit-0, argparse wiring.
+- **Coverage** — 97.21% on Phase 2 + 2.1 modules (gate is 85%).
+
+### Added — Phase 2 acceptance: integration test on synthetic LMDB
+
+- **`tests/integration/test_phase2_replay_pipeline.py`** — 6 new tests
+  closing the third Phase 2 acceptance bullet from `NEXT_STEPS.md`. The
+  end-to-end test:
+  1. Writes 10 deterministic synthetic records via the production
+     `ExperienceLogger` (so the same write path used on the Jetson is
+     exercised).
+  2. Builds the reader through `factory.build_replay_reader` and
+     drains it via async `stream(chunk_size=4)`.
+  3. Asserts every record round-tripped (`read_records == 10`,
+     `skipped_schema_mismatch == 0`).
+  4. Tensorizes `vision_features -> states`, `action -> actions`,
+     runs 25 BC updates on a `CQLTrainer`, asserts loss strictly
+     decreases.
+  5. Saves a checkpoint to disk, re-loads it into a fresh trainer,
+     and asserts policy outputs match byte-exactly on the training
+     batch.
+- Companion tests guarantee `weight=0.0` is byte-identical (CLAUDE.md
+  invariant 9 backwards compat) and that reader output is invariant
+  across `chunk_size ∈ {1, 3, 4, 64}`.
+
 ### Added — Phase 4: VLM-Derived Dense Progress Reward (`feat/phase4-vlm-progress-rewards`)
 
 - **`src/mousedroid/reward/vlm_progress.py`** — new module

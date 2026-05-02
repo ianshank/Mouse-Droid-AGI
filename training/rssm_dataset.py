@@ -67,7 +67,10 @@ def _normalize_episode(
     return normalized
 
 
-def _record_to_episode_step(record: MouseDroidExperienceRecord, model_cfg: ModelConfig) -> dict[str, Tensor]:
+def _record_to_episode_step(
+    record: MouseDroidExperienceRecord,
+    model_cfg: ModelConfig,
+) -> dict[str, Tensor]:
     """Convert one LMDB experience record to the RSSM episode-step contract."""
     valid_mask = torch.zeros(len(SENSOR_SLOT_MAP), dtype=torch.float32)
     valid_mask[SENSOR_SLOT_MAP["vision"]] = 1.0
@@ -129,7 +132,9 @@ def _select_replay_subset(
     )
     selected = list(replay_episodes)
     if replay_cfg.seed is not None:
-        Random(replay_cfg.seed).shuffle(selected)
+        # `Random(seed).shuffle(...)` here is dataset sampling, not crypto;
+        # using `secrets` would defeat the purpose of a deterministic seed.
+        Random(replay_cfg.seed).shuffle(selected)  # noqa: S311
     return selected[:target_count]
 
 

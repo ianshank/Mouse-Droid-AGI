@@ -215,7 +215,8 @@ def run_warmstart(
     Args:
         cfg: Root settings.
         rssm_checkpoint: Path to pretrained RSSM checkpoint.
-        data_path: Path to sequences.pt for computing latent stats. May be absent when replay is enabled.
+        data_path: Path to sequences.pt for computing latent stats. May be
+            absent when replay is enabled.
         output_dir: Output directory for weights/config.
     """
     device = resolve_device(

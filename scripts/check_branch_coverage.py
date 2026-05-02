@@ -159,6 +159,12 @@ def _build_pytest_command(tests: list[str], changed_files: list[str], json_out: 
         "pytest",
         "-o",
         "addopts=",
+        # Re-add --import-mode=importlib explicitly: clearing addopts above
+        # drops the project's default importmode, and falling back to pytest's
+        # "prepend" mode triggers numpy's "cannot load module more than once
+        # per process" error under coverage instrumentation. The main test
+        # stage in scripts/ci.sh runs with importlib too — keep them aligned.
+        "--import-mode=importlib",
         *tests,
         "-q",
         "--disable-warnings",
@@ -167,9 +173,20 @@ def _build_pytest_command(tests: list[str], changed_files: list[str], json_out: 
         "--cov-fail-under=0",
     ]
 
-    # Track only changed modules for branch-level enforcement.
-    for f in changed_files:
-        cmd.append(f"--cov={_path_to_module(f)}")
+    # Track only the directories containing changed files. We deliberately
+    # avoid the dotted-module-name form (e.g. ``--cov=mousedroid.foo.bar``)
+    # because coverage imports those modules before tests run, and that
+    # import chain often hits ``numpy._core`` which raises
+    # ``ImportError: cannot load module more than once per process`` under
+    # numpy 2.x once instrumentation is active. Directory targets capture
+    # the same data without forcing coverage to walk the import graph at
+    # startup. ``_load_coverage`` filters back to per-file results, so the
+    # broader sweep does not leak into the per-file gate.
+    cov_dirs: list[str] = _dedupe_keep_order(
+        [str(PurePosixPath(_normalize_repo_path(f)).parent) for f in changed_files]
+    )
+    for d in cov_dirs:
+        cmd.append(f"--cov={d}")
 
     return cmd
 

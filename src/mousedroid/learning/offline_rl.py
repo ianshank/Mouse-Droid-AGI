@@ -196,6 +196,42 @@ class OfflineRLTrainer(abc.ABC):
             Dict of loss statistics for logging.
         """
 
+    def bc_update(
+        self,
+        states: Tensor,
+        actions: Tensor,
+        weight: float,
+    ) -> dict[str, float]:
+        """Apply a behavior-cloning auxiliary loss against real-replay actions.
+
+        Computes ``weight * MSE(policy(s), a)`` and steps the policy optimizer.
+        The Q-network is **not** updated, so this is a strict regularizer on
+        the actor toward the demonstrator distribution.
+
+        When ``weight <= 0`` this is a no-op and returns ``{"bc_loss": 0.0}``,
+        guaranteeing byte-identical behavior for legacy training paths whose
+        ``OfflineRLConfig.real_supervised_weight`` defaults to 0.0.
+
+        Args:
+            states: Real-replay states, shape ``(batch, state_dim)``.
+            actions: Real-replay actions, shape ``(batch, action_dim)``.
+            weight: Scalar multiplier on the BC loss. Must be ``>= 0``.
+
+        Returns:
+            ``{"bc_loss": <float>}``.
+        """
+        if weight <= 0.0:
+            return {"bc_loss": 0.0}
+        predicted = self.policy(states)
+        bc_loss = F.mse_loss(predicted, actions)
+        scaled = weight * bc_loss
+
+        self.policy_optimizer.zero_grad()
+        scaled.backward()  # type: ignore[no-untyped-call]
+        self.policy_optimizer.step()
+
+        return {"bc_loss": float(bc_loss.item())}
+
     def save(self, path: str) -> None:
         """Save all network weights.
 

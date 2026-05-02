@@ -32,7 +32,7 @@ lands in an isolated PR off the default branch. Dependency direction is
 strictly **Phase 1 → 2 → 3 → 4**; Phases 5 and 6 are deferred until Phase 3b
 has been in production for ≥30 days.
 
-### Phase 2 — Real-Episode Replay Loop (sim-to-real feedback)
+### Phase 2 — Real-Episode Replay Loop (sim-to-real feedback) ✅ IN-FLIGHT (`feat/phase2-real-episode-replay`)
 
 Wire the existing LMDB experience logger back into the offline training
 pipeline so successes and failures from real-world rollouts continuously refine
@@ -41,21 +41,28 @@ the RSSM and the Constitutional-RL policy. Closes the second of four gaps.
 **Scope:**
 - `src/mousedroid/training/replay/lmdb_reader.py` — async streaming iterator
   over an LMDB env (chunks of 64 records via `asyncio.to_thread`; never load
-  the whole DB into RAM on the 8 GB Orin)
+  the whole DB into RAM on the 8 GB Orin) ✅
 - `src/mousedroid/training/replay/mixer.py` — ratio-controlled sampler over
   `(sim_iter, real_iter)` with a deterministic `numpy.random.Generator`; ramped
-  `alpha` from 0.0 → target over a configurable number of steps (RL-Co two-stage)
-- `training/replay_real_episodes.py` — CLI with `--dry-run`, `--use-real-replay`
-- `experience/record.py` already carries `schema_version = 1`; add a versioned
-  reader contract that refuses incompatible records with a counter
-- Auxiliary BC-style supervised loss in PPO via `OfflineRLConfig.real_supervised_weight`
+  `alpha` from 0.0 → target over a configurable number of steps (RL-Co two-stage) ✅
+- `training/replay_real_episodes.py` — CLI with `--dry-run`, `--use-real-replay` ✅
+- `experience/record.py` already carries `schema_version = 1`; reader counts
+  + skips incompatible records with structured `replay_schema_mismatch` log ✅
+- `OfflineRLConfig.real_supervised_weight` field added (default `0.0`); BC-style
+  supervised loss injection ✅ **(Phase 2.1 complete)** — wired into the torch
+  `train_offline_rl.py` loop via `OfflineRLTrainer.bc_update` (TD3+BC pattern,
+  no-op at the `weight=0` default; `tests/integration/test_phase21_bc_into_offline_rl.py`
+  proves byte-identity at `weight=0` and measurable parameter divergence at
+  `weight>0` for both CQL and IQL). Retrofitting BC into the numpy-MLP
+  `train_constitutional_rl.py` (PPO) remains deferred to a future PR-A1.5
+  pending an obs→latent encoder bridge.
+- `factory.build_replay_reader(cfg) -> ReplayReaderProtocol` wiring ✅
 
 **Acceptance:**
-- Empty LMDB produces a clean no-op (logged warning, training proceeds)
-- Mixer's realized ratio over 10 k draws is within 1% of target
-- Integration test runs the pipeline end-to-end on a 10-episode synthetic LMDB
-  and verifies a checkpoint is produced
-- Golden RSSM loss curve at fixed seed within ±1% of baseline
+- Empty LMDB produces a clean no-op (logged warning, training proceeds) ✅
+- Mixer's realized ratio over 10 k draws is within 1% of target ✅ (parametrized test at 0.1/0.5/0.9)
+- Integration test on a 10-episode synthetic LMDB → checkpoint produced ✅ (`tests/integration/test_phase2_replay_pipeline.py`, 6 tests: end-to-end LMDB→reader→BC→checkpoint round-trip, weight=0 byte-identity, chunk-size invariance at {1,3,4,64})
+- Golden RSSM loss curve at fixed seed within ±1% of baseline ✅ (`tests/regression/test_phase2_rssm_golden.py` + helper at `tests/regression/_rssm_golden_helper.py`; baseline JSON at `tests/regression/fixtures/phase2_rssm_golden_baseline.json`; 8 tests covering existence, length, finite-keys, monotone-trend, baseline-tolerance with ±1% on recon/total and ±5% on KL, and prefix-stability at n∈{1,3,10}; regenerate via `MOUSEDROID_UPDATE_GOLDEN=1 pytest tests/regression/test_phase2_rssm_golden.py`)
 
 ### Phase 3a — VLA Protocol + `MockVLA` ✅ LANDED (`feat/phase3a-vla-protocol`)
 
@@ -231,7 +238,10 @@ ExecStartPre=/bin/cp /opt/mousedroid/config/jetson_production.yaml /etc/mousedro
 
 ### P2 — CI / Quality
 
-- Add production-config validation to the local pre-commit path.
+- Add production-config validation to the local pre-commit path. ✅ **Done** —
+  `scripts/validate_configs.py` + `tests/regression/test_config_overlays_load.py`
+  + `config-validate` CI job; skip-marker (`# config-validator: skip`) supports
+  deploy-time YAMLs.
 - Publish coverage badge automation if it provides signal beyond the existing branch gate.
 - Consider mutation testing for `voice/` and `hardware/audio/` once the current rollout is stable.
 

@@ -1,5 +1,9 @@
 # Jetson Orin Nano deployment configuration.
 # Used by deploy scripts — not loaded by the application.
+# config-validator: skip
+# (deploy descriptor; reuses the `jetson:` namespace with deploy-only keys
+# host/user/ssh_port/install_dir/swap_size_gb that conflict with the runtime
+# JetsonConfig schema. Validated by deploy scripts, not by Pydantic.)
 jetson:
   host: "mousedroid.local"
   user: "jetson"

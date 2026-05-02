@@ -161,6 +161,17 @@ def train_offline_rl(
         total_steps = 0
         epoch_losses: dict[str, list[float]] = {}
 
+        # Phase 2.1 — TD3+BC-style auxiliary supervised loss against the
+        # real-replay batch. ``bc_update`` is a no-op at weight 0.0, which is
+        # the schema default, so legacy training paths remain byte-identical.
+        bc_weight = offline_cfg.real_supervised_weight
+        if bc_weight > 0.0:
+            _log.info(
+                "offline_rl_bc_active",
+                weight=bc_weight,
+                rationale="td3_plus_bc_aux_loss",
+            )
+
         for epoch in range(1, offline_cfg.epochs + 1):
             batch_count = 0
             for batch in dataset.iterate_batches(
@@ -175,6 +186,16 @@ def train_offline_rl(
                     next_states=batch["next_states"],
                     dones=batch["dones"],
                 )
+
+                # Phase 2.1: add the auxiliary BC term on the same (s, a)
+                # batch. ``bc_update`` returns ``{"bc_loss": 0.0}`` and
+                # performs no optimizer step when ``bc_weight <= 0``.
+                bc_losses = trainer.bc_update(
+                    states=batch["states"],
+                    actions=batch["actions"],
+                    weight=bc_weight,
+                )
+                losses.update(bc_losses)
 
                 for key, val in losses.items():
                     epoch_losses.setdefault(key, []).append(val)
