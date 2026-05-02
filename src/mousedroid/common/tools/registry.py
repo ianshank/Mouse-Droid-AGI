@@ -34,15 +34,34 @@ class ToolSpec:
     handler: Callable[..., Awaitable[Any]]
 
 
+class ToolDispatchDeniedError(PermissionError):
+    """Raised when an approval gate denies a dispatch with ``requires_approval``."""
+
+
 class ToolRegistry:
     """Registry for MouseDroid tools.
 
     Provides registration and dispatch for platform tools.
+
+    When constructed with an ``approval_gate``, any dispatched tool whose
+    spec is a :class:`ValidatedToolSpec` with ``requires_approval=True``
+    must clear the gate before its handler runs. The gate is consulted
+    asynchronously and a denial raises :class:`ToolDispatchDeniedError`
+    so callers can distinguish "tool denied" from "tool failed".
     """
 
-    def __init__(self) -> None:
-        """Initialise empty registry."""
+    def __init__(self, approval_gate: object | None = None) -> None:
+        """Initialise empty registry.
+
+        Args:
+            approval_gate: Optional :class:`ApprovalGateProtocol`.
+                When supplied, validated specs flagged with
+                ``requires_approval=True`` are gated through it.
+                Defaults to ``None`` so existing callers (and the
+                legacy plain-``ToolSpec`` path) are unaffected.
+        """
         self._tools: dict[str, ToolSpec] = {}
+        self._approval_gate = approval_gate
 
     def register(self, spec: ToolSpec) -> None:
         """Register a tool.
@@ -54,6 +73,14 @@ class ToolRegistry:
             _log.warning("tool_already_registered", name=spec.name)
         self._tools[spec.name] = spec
         _log.debug("tool_registered", name=spec.name)
+
+    def set_approval_gate(self, gate: object | None) -> None:
+        """Bind (or clear) the approval gate post-construction.
+
+        Lets the factory wire the gate after both the registry and the
+        gate have been built without forcing a reconstruction.
+        """
+        self._approval_gate = gate
 
     def get(self, name: str) -> ToolSpec | None:
         """Get tool spec by name.
@@ -71,8 +98,11 @@ class ToolRegistry:
 
         When ``spec`` is a :class:`ValidatedToolSpec` with non-``None``
         schemas, the input ``**kwargs`` and return value are validated by
-        Pydantic. Plain :class:`ToolSpec` instances keep the legacy zero-
-        overhead path so existing callers and tools are unaffected.
+        Pydantic. When ``spec.requires_approval`` is True and an
+        ``approval_gate`` was bound on the registry, the gate's
+        ``decide()`` method is awaited before the handler runs. Plain
+        :class:`ToolSpec` instances keep the legacy zero-overhead path so
+        existing callers and tools are unaffected.
 
         Args:
             name: Tool identifier.
@@ -85,6 +115,7 @@ class ToolRegistry:
             KeyError: If tool is not registered.
             ToolInputValidationError: If validated input is invalid.
             ToolOutputValidationError: If validated output is invalid.
+            ToolDispatchDeniedError: If the approval gate denies dispatch.
         """
         spec = self._tools.get(name)
         if spec is None:
@@ -99,6 +130,7 @@ class ToolRegistry:
         )
 
         if isinstance(spec, ValidatedToolSpec):
+            await self._maybe_check_approval(spec, kwargs)
             kwargs = validate_input(spec, kwargs)
             _log.info("tool_dispatch", name=name, validated=True)
             result = await spec.handler(**kwargs)
@@ -106,6 +138,47 @@ class ToolRegistry:
 
         _log.info("tool_dispatch", name=name)
         return await spec.handler(**kwargs)
+
+    async def _maybe_check_approval(
+        self,
+        spec: Any,
+        kwargs: dict[str, Any],
+    ) -> None:
+        """Consult the approval gate when ``spec.requires_approval`` is set.
+
+        No-ops when no gate is bound or the spec doesn't require approval,
+        keeping the hot path free of overhead. Denial is logged at WARNING
+        and surfaces as :class:`ToolDispatchDeniedError`.
+        """
+        if not getattr(spec, "requires_approval", False):
+            return
+        gate = self._approval_gate
+        if gate is None:
+            _log.warning(
+                "tool_requires_approval_no_gate",
+                tool=spec.name,
+            )
+            return
+        # Local import keeps the registry decoupled from the harness package
+        # at import time (the gate is duck-typed via its ``decide`` coroutine).
+        from mousedroid.harness.approval.protocol import ApprovalRequest
+
+        request = ApprovalRequest(
+            tool_name=spec.name,
+            action="tool_dispatch",
+            payload={"kwargs_keys": sorted(kwargs.keys())},
+        )
+        decision = await gate.decide(request)  # type: ignore[attr-defined]
+        if not decision.approved:
+            _log.warning(
+                "tool_dispatch_denied",
+                tool=spec.name,
+                reason=decision.reason,
+                decided_by=decision.decided_by,
+            )
+            raise ToolDispatchDeniedError(
+                f"Tool dispatch denied for {spec.name!r}: {decision.reason}"
+            )
 
     @property
     def names(self) -> list[str]:

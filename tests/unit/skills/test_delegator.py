@@ -213,3 +213,56 @@ async def test_delegate_with_null_journal(
     delegator = SkillDelegator(registry_with_skill, AutoApproveGate(), j, tracker)
     result = await delegator.delegate("diag", _task())
     assert result.status == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Tracker rejection — must fail-closed (no sub-agent invocation)
+# ---------------------------------------------------------------------------
+
+
+class _SideEffectingSubAgent:
+    name = "side_effecting"
+    is_busy = False
+
+    def __init__(self) -> None:
+        self.invoked = False
+
+    async def invoke(self, spec: TaskSpec, parent_ctx: Any | None = None) -> SubAgentResult:
+        self.invoked = True
+        return SubAgentResult(task_id=spec.id, status="ok")
+
+    def cancel(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_delegate_fail_closed_when_tracker_rejects_submission(
+    registry_with_skill: SkillRegistry,
+    journal: _RecordingJournal,
+) -> None:
+    """If the tracker refuses ``submit`` (duplicate id, capacity), the
+    delegator must skip the sub-agent invocation and return a rejection
+    result. Side-effecting skills must not run on tasks the tracker
+    refused to accept."""
+    tracker = InMemoryTaskTracker(
+        HarnessTrackerConfig(enabled=True, history_size=4, max_active=4),
+    )
+    # Pre-populate "t1" so the second submission raises TaskTrackerError.
+    pre = TaskSpec(id="t1", goal="prior", acceptance_predicate=AlwaysFalse())
+    tracker.submit(pre)
+
+    sub_agent = _SideEffectingSubAgent()
+    delegator = SkillDelegator(
+        registry_with_skill,
+        AutoApproveGate(),
+        journal,
+        tracker,
+        agent_factory=lambda _name: sub_agent,
+    )
+    result = await delegator.delegate("diag", _task())
+    assert result.status == "rejected"
+    assert result.error is not None
+    assert "tracker rejected" in result.error
+    assert sub_agent.invoked is False
+    events = [e.event for e in journal.entries]
+    assert events == ["delegate_requested", "delegate_rejected"]

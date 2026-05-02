@@ -123,14 +123,28 @@ class SkillDelegator:
             )
 
         # Submit to tracker so the orchestrator's tick loop can evaluate it.
+        # If the tracker rejects the submission (duplicate id, capacity cap,
+        # ...), fail-closed: skip the sub-agent invocation entirely so we
+        # never run a side-effecting skill against a task the tracker did
+        # not accept.
         try:
             self._tracker.submit(spec)
-        except Exception as exc:  # pragma: no cover - defensive
+        except Exception as exc:  # pylint: disable=broad-except
             _log.warning(
                 "skill_delegate_tracker_submit_failed",
                 skill=skill_name,
                 task_id=spec.id,
                 error=str(exc),
+            )
+            await self._append(
+                "delegate_rejected",
+                spec.id,
+                {"skill": skill_name, "error": str(exc)},
+            )
+            return SubAgentResult(
+                task_id=spec.id,
+                status="rejected",
+                error=f"tracker rejected submission: {exc}",
             )
 
         sub_agent = self._build_sub_agent(skill_name)

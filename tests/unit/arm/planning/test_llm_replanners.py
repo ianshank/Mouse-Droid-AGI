@@ -300,3 +300,51 @@ def test_replanner_default_uses_null_llm_when_enabled_flag_set() -> None:
     replanner = Replanner(cfg, planner)
     out = replanner.replan(_state(), _state(), "boom")
     assert out[0].action == "legacy"
+
+
+def test_replanner_uses_new_config_without_legacy_flag() -> None:
+    """The new ``arm_planning.llm_replanner.enabled`` sub-config must be
+    sufficient to enable the LLM path — callers should not have to also
+    set the legacy ``llm_replanner_enabled`` boolean."""
+    from mousedroid.arm.planning.replanner import Replanner
+    from mousedroid.config.schema import ArmPlanningConfig, LLMReplannerConfig
+
+    class _StubLLM:
+        name = "stub"
+
+        def replan(self, *_args: Any, **_kwargs: Any) -> list[PlanStep]:
+            return [PlanStep(action="from_new_config", args=[])]
+
+    planner = MagicMock()
+    planner.plan.return_value = [PlanStep(action="symbolic_fallback", args=[])]
+    cfg = ArmPlanningConfig(
+        llm_replanner_enabled=False,  # legacy flag intentionally OFF
+        max_replan_attempts=3,
+        llm_replanner=LLMReplannerConfig(enabled=True, backend="anthropic"),
+    )
+    replanner = Replanner(cfg, planner, llm_replanner=_StubLLM())
+    out = replanner.replan(_state(), _state(), "boom")
+    assert out[0].action == "from_new_config"
+
+
+def test_replanner_new_config_disabled_falls_back_to_symbolic() -> None:
+    """When neither flag is set, the LLM path must be skipped entirely."""
+    from mousedroid.arm.planning.replanner import Replanner
+    from mousedroid.config.schema import ArmPlanningConfig, LLMReplannerConfig
+
+    class _ShouldNotBeCalled:
+        name = "should_not_run"
+
+        def replan(self, *_args: Any, **_kwargs: Any) -> list[PlanStep]:
+            raise AssertionError("LLM replanner should not have been invoked")
+
+    planner = MagicMock()
+    planner.plan.return_value = [PlanStep(action="symbolic_only", args=[])]
+    cfg = ArmPlanningConfig(
+        llm_replanner_enabled=False,
+        max_replan_attempts=3,
+        llm_replanner=LLMReplannerConfig(enabled=False),  # explicitly off
+    )
+    replanner = Replanner(cfg, planner, llm_replanner=_ShouldNotBeCalled())
+    out = replanner.replan(_state(), _state(), "boom")
+    assert out[0].action == "symbolic_only"

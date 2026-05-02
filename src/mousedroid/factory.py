@@ -1351,6 +1351,60 @@ def build_journal(cfg: Settings) -> Any:
     return NullJournal()
 
 
+def _resolve_approval_callback(
+    dotted_path: str | None,
+) -> Callable[[Any], Awaitable[bool]]:
+    """Import an async ``(ApprovalRequest) -> bool`` callable from a dotted path.
+
+    When the path is ``None`` or the import fails, returns a fail-closed
+    fallback that denies every request — explicit configuration is
+    required to grant approvals through the callback gate. The error is
+    logged at WARNING so misconfigured deployments are visible without
+    silently permitting actions.
+    """
+
+    async def _deny(_request: Any) -> bool:
+        return False
+
+    if not dotted_path:
+        _log.warning(
+            "approval_callback_dotted_path_missing",
+            note="callback gate will deny all requests until configured",
+        )
+        return _deny
+
+    module_path, _, attr = dotted_path.rpartition(".")
+    if not module_path or not attr:
+        _log.warning(
+            "approval_callback_dotted_path_invalid",
+            dotted_path=dotted_path,
+        )
+        return _deny
+
+    try:
+        import importlib
+
+        module = importlib.import_module(module_path)
+        target = getattr(module, attr)
+    except (ImportError, AttributeError) as exc:
+        _log.warning(
+            "approval_callback_resolution_failed",
+            dotted_path=dotted_path,
+            error=str(exc),
+        )
+        return _deny
+
+    if not callable(target):
+        _log.warning(
+            "approval_callback_not_callable",
+            dotted_path=dotted_path,
+        )
+        return _deny
+
+    _log.info("approval_callback_resolved", dotted_path=dotted_path)
+    return target  # type: ignore[no-any-return]
+
+
 def build_approval_gate(cfg: Settings) -> Any:
     """Build the configured :class:`ApprovalGateProtocol`.
 
@@ -1385,11 +1439,11 @@ def build_approval_gate(cfg: Settings) -> Any:
             AsyncCallbackApprovalGate,
         )
 
-        async def _missing(_request: Any) -> bool:
-            return False
-
+        callback = _resolve_approval_callback(approval.callback_dotted_path)
         inner = AsyncCallbackApprovalGate(
-            _missing, timeout_s=approval.cli_timeout_s, on_timeout=approval.on_timeout
+            callback,
+            timeout_s=approval.cli_timeout_s,
+            on_timeout=approval.on_timeout,
         )
     else:  # "policy" — caller is expected to supply patterns; default to auto
         inner = AutoApproveGate()
@@ -1445,12 +1499,74 @@ def build_skill_registry(cfg: Settings, loaders: tuple[Any, ...] = ()) -> Any:
     return registry
 
 
+def _build_sub_agent_factory(
+    cfg: Settings,
+    skill_registry: Any,
+    journal: Any,
+    llm_gateway: Any,
+) -> Callable[[str], Any]:
+    """Return a ``(skill_name) -> SubAgentProtocol`` factory honouring config.
+
+    The configured ``cfg.harness.skills.backend`` selects the concrete
+    sub-agent class:
+
+    * ``"noop"`` (default) — a deterministic :class:`NoOpSubAgent` per
+      skill so tests and dry-runs stay free of external dependencies.
+    * ``"llm_gateway"`` — :class:`LLMBackedSubAgent` wired to the local
+      LLM gateway when available, falling back to the no-op.
+    * ``"anthropic"`` — :class:`LLMBackedSubAgent` backed by an
+      :class:`AnthropicReplanner` when ``arm_planning.llm_replanner.backend``
+      points at Anthropic; otherwise falls back to ``noop`` with a warning.
+
+    The journal is threaded through so sub-agents can record their own
+    lifecycle events alongside the delegator's.
+    """
+    from mousedroid.skills.sub_agent import LLMBackedSubAgent, NoOpSubAgent
+
+    backend = "noop" if cfg.harness is None else cfg.harness.skills.backend
+
+    async def _journal_append(entry: Any) -> None:
+        await journal.append(entry)
+
+    def _factory(skill_name: str) -> Any:
+        skill = skill_registry.get(skill_name) if skill_registry is not None else None
+        if backend == "llm_gateway" and llm_gateway is not None and skill is not None:
+            return LLMBackedSubAgent(
+                skill,
+                llm_gateway=llm_gateway,
+                journal_append=_journal_append,
+            )
+        if backend == "anthropic":
+            anthropic_gateway = build_llm_replanner(cfg)
+            if skill is not None and anthropic_gateway is not None:
+                return LLMBackedSubAgent(
+                    skill,
+                    llm_gateway=anthropic_gateway,
+                    journal_append=_journal_append,
+                )
+            _log.warning(
+                "skill_backend_anthropic_unavailable_fallback_noop",
+                skill=skill_name,
+            )
+        if backend != "noop":
+            _log.debug(
+                "skill_backend_falling_back_to_noop",
+                skill=skill_name,
+                backend=backend,
+            )
+        return NoOpSubAgent(skill_name)
+
+    return _factory
+
+
 def build_skill_delegator(
     cfg: Settings,
     skill_registry: Any,
     approval_gate: Any,
     journal: Any,
     task_tracker: Any,
+    *,
+    llm_gateway: Any = None,
 ) -> Any:
     """Wire the :class:`SkillDelegator` once all dependencies are built.
 
@@ -1460,6 +1576,8 @@ def build_skill_delegator(
         approval_gate: Approval gate to consult before delegation.
         journal: Journal that receives delegation events.
         task_tracker: Tracker that owns task lifecycle.
+        llm_gateway: Optional local LLM gateway used when the configured
+            ``skills.backend`` is ``"llm_gateway"``.
 
     Returns:
         Configured ``SkillDelegator``, or ``None`` when the harness or the
@@ -1469,7 +1587,15 @@ def build_skill_delegator(
         return None
     from mousedroid.skills.delegator import SkillDelegator
 
-    return SkillDelegator(skill_registry, approval_gate, journal, task_tracker)
+    agent_factory = _build_sub_agent_factory(cfg, skill_registry, journal, llm_gateway)
+
+    return SkillDelegator(
+        skill_registry,
+        approval_gate,
+        journal,
+        task_tracker,
+        agent_factory=agent_factory,
+    )
 
 
 def build_hook_registry(cfg: Settings, journal: Any) -> Any:
@@ -1494,9 +1620,15 @@ def build_hook_registry(cfg: Settings, journal: Any) -> Any:
         # loop pays no cost for hook dispatch.
         return NullHookRegistry()
 
+    hooks_cfg = cfg.harness.hooks
     registry = HookRegistry()
+    enabled_set = frozenset(hooks_cfg.enabled_hooks)
 
-    if cfg.harness.hooks.journal_events:
+    # ``fail_fast=True`` overrides per-hook ``error_policy`` so any failure
+    # propagates and aborts the tick. Otherwise the per-hook policy is used.
+    effective_policy = "raise" if hooks_cfg.fail_fast else hooks_cfg.error_policy
+
+    if hooks_cfg.journal_events:
         from mousedroid.harness.journal.protocol import JournalEntry
         from mousedroid.harness.protocol import HookPhase, HookSpec
 
@@ -1518,12 +1650,17 @@ def build_hook_registry(cfg: Settings, journal: Any) -> Any:
             return _handler
 
         for phase in HookPhase:
+            spec_name = f"journal:{phase.value}"
+            # When ``enabled_hooks`` is non-empty it acts as an opt-in
+            # allowlist; otherwise every default hook is registered.
+            if enabled_set and spec_name not in enabled_set:
+                continue
             registry.register(
                 HookSpec(
-                    name=f"journal:{phase.value}",
+                    name=spec_name,
                     phase=phase,
                     handler=_make_handler(phase.value),
-                    error_policy=cfg.harness.hooks.error_policy,
+                    error_policy=effective_policy,
                 )
             )
     return registry
@@ -1691,7 +1828,12 @@ def build_orchestrator(cfg: Settings) -> object:
         approval_gate,
         journal,
         task_tracker,
+        llm_gateway=llm_gateway,
     )
+    # Wire the approval gate onto the tool registry so dispatched tools
+    # flagged with ``requires_approval=True`` are gated through it.
+    if hasattr(_tool_registry, "set_approval_gate"):
+        _tool_registry.set_approval_gate(approval_gate)
     hook_registry = build_hook_registry(cfg, journal)
 
     return MouseDroidOrchestrator(

@@ -218,3 +218,126 @@ def test_requires_approval_can_be_set() -> None:
         requires_approval=True,
     )
     assert spec.requires_approval is True
+
+
+# ---------------------------------------------------------------------------
+# requires_approval is enforced on dispatch
+# ---------------------------------------------------------------------------
+
+
+class _SpyApprovalGate:
+    name = "spy"
+
+    def __init__(self, approved: bool, reason: str = "") -> None:
+        self._approved = approved
+        self._reason = reason
+        self.calls: list[Any] = []
+
+    async def decide(self, request: Any) -> Any:
+        from mousedroid.harness.approval.protocol import ApprovalDecision
+
+        self.calls.append(request)
+        return ApprovalDecision(
+            approved=self._approved,
+            reason=self._reason,
+            decided_by=self.name,
+        )
+
+
+@pytest.mark.asyncio
+async def test_dispatch_with_requires_approval_consults_gate_and_runs() -> None:
+    from mousedroid.common.tools.registry import ToolRegistry
+
+    gate = _SpyApprovalGate(approved=True, reason="ok")
+    registry = ToolRegistry(approval_gate=gate)
+    spec = ValidatedToolSpec(
+        name="risky",
+        description="dangerous",
+        handler=_ping_handler,
+        requires_approval=True,
+    )
+    registry.register(spec)
+    out = await registry.dispatch("risky", message="hi", count=1)
+    assert out["count"] == 1
+    assert len(gate.calls) == 1
+    request = gate.calls[0]
+    assert request.tool_name == "risky"
+    assert request.action == "tool_dispatch"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_denied_when_gate_denies() -> None:
+    from mousedroid.common.tools.registry import (
+        ToolDispatchDeniedError,
+        ToolRegistry,
+    )
+
+    gate = _SpyApprovalGate(approved=False, reason="not allowed")
+    registry = ToolRegistry(approval_gate=gate)
+    spec = ValidatedToolSpec(
+        name="risky",
+        description="dangerous",
+        handler=_ping_handler,
+        requires_approval=True,
+    )
+    registry.register(spec)
+    with pytest.raises(ToolDispatchDeniedError, match="not allowed"):
+        await registry.dispatch("risky", message="hi")
+
+
+@pytest.mark.asyncio
+async def test_dispatch_without_requires_approval_skips_gate() -> None:
+    from mousedroid.common.tools.registry import ToolRegistry
+
+    gate = _SpyApprovalGate(approved=False)  # would deny if consulted
+    registry = ToolRegistry(approval_gate=gate)
+    spec = ValidatedToolSpec(
+        name="safe",
+        description="safe",
+        handler=_ping_handler,
+        # requires_approval defaults to False
+    )
+    registry.register(spec)
+    out = await registry.dispatch("safe", message="hi", count=1)
+    assert out["count"] == 1
+    assert gate.calls == []  # gate must not have been consulted
+
+
+@pytest.mark.asyncio
+async def test_dispatch_requires_approval_without_gate_logs_and_runs() -> None:
+    """When ``requires_approval=True`` but no gate is bound, the registry
+    logs a warning and still runs the handler — the alternative (silent
+    refusal) would surprise callers who simply forgot to wire a gate."""
+    from mousedroid.common.tools.registry import ToolRegistry
+
+    registry = ToolRegistry()
+    spec = ValidatedToolSpec(
+        name="risky",
+        description="",
+        handler=_ping_handler,
+        requires_approval=True,
+    )
+    registry.register(spec)
+    out = await registry.dispatch("risky", message="hi", count=1)
+    assert out["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_set_approval_gate_post_construction() -> None:
+    from mousedroid.common.tools.registry import (
+        ToolDispatchDeniedError,
+        ToolRegistry,
+    )
+
+    registry = ToolRegistry()  # no gate at construction
+    registry.register(
+        ValidatedToolSpec(
+            name="risky",
+            description="",
+            handler=_ping_handler,
+            requires_approval=True,
+        )
+    )
+    registry.set_approval_gate(_SpyApprovalGate(approved=False, reason="late deny"))
+    with pytest.raises(ToolDispatchDeniedError, match="late deny"):
+        await registry.dispatch("risky", message="hi")

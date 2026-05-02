@@ -97,11 +97,26 @@ class Replanner:
             error=error,
         )
 
-        if self._planning_cfg.llm_replanner_enabled:
+        if self._is_llm_replan_enabled():
             return self._llm_replan(current_state, goal_state, error)
 
         # Fall back to symbolic replanning from current state
         return self._planner.plan(current_state, goal_state)
+
+    def _is_llm_replan_enabled(self) -> bool:
+        """True when LLM replanning is requested by either config surface.
+
+        The new :class:`LLMReplannerConfig` sub-model takes precedence: if
+        ``planning_cfg.llm_replanner.enabled`` is True the LLM path runs
+        regardless of the legacy ``llm_replanner_enabled`` flag, so a
+        deployment configured solely through the new sub-model works
+        without also setting the legacy boolean. Conversely, the legacy
+        flag remains an opt-in for backwards compatibility.
+        """
+        rp_cfg = getattr(self._planning_cfg, "llm_replanner", None)
+        if rp_cfg is not None and rp_cfg.enabled:
+            return True
+        return bool(self._planning_cfg.llm_replanner_enabled)
 
     def _llm_replan(
         self,
