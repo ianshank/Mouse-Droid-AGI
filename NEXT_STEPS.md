@@ -206,21 +206,55 @@ ExecStartPre=/bin/cp /opt/mousedroid/config/jetson_production.yaml /etc/mousedro
 
 ## Immediate Follow-up
 
-1. ✅ **Jetson nightly Ten Pillars** — `.github/workflows/jetson-nightly.yml`
+1. ✅ **Jetson nightly Ten Pillars workflow** — [`.github/workflows/jetson-nightly.yml`](.github/workflows/jetson-nightly.yml)
    runs `scripts/validate_pillar.sh all` on a self-hosted Jetson runner every
    night and on `workflow_dispatch`. Advisory at first; promote to required
    after one full green week. Per-pillar logs and the markdown summary upload
    as build artifacts (30-day retention).
-2. Run `scripts/benchmark_voice_latency.py` on Jetson for the production personalities
+2. ✅ **Self-hosted runner installation path** — [`scripts/jetson-runner-install.sh`](scripts/jetson-runner-install.sh)
+   (non-interactive, `--dry-run` safe), [`scripts/github-actions-runner.service.template`](scripts/github-actions-runner.service.template),
+   and [`docs/jetson-runner-setup.md`](docs/jetson-runner-setup.md) operator
+   runbook. Operator pastes a one-time `RUNNER_TOKEN` from the GitHub UI and
+   the runner registers + starts under systemd. Closes the
+   `[self-hosted, jetson]` label gap that left the nightly workflow queued.
+3. ✅ **Phase 2 replay loop activated in production overlay** — `config/jetson_production.yaml`
+   now declares the `training.replay_mixer.*` block (defaults inert,
+   `alpha_target=0.0`). Operator-tunable live triage knob
+   `debug_log_every_n` surfaces throttled `mixer_draw` /
+   `replay_chunk_decoded` DEBUG lines without flooding the journal.
+4. ✅ **Operator-facing failure-mode playbooks** — [`docs/playbooks/esp32-fail.md`](docs/playbooks/esp32-fail.md),
+   [`gpio-fail.md`](docs/playbooks/gpio-fail.md), [`replay-fail.md`](docs/playbooks/replay-fail.md),
+   [`bringup-fail.md`](docs/playbooks/bringup-fail.md) close the recovery-doc
+   gap (camera/lidar/voice/promtool already shipped).
+5. ✅ **Real-hardware endurance opt-in** — `MOUSEDROID_ENDURANCE_FORCE_REAL=1`
+   flips `MOUSEDROID_MOCK_HARDWARE=false` so the operator can rerun the
+   30 Hz endurance suite against the actual rover.
+   `tests/performance/test_jetson_endurance.py` writes a JSON metrics
+   snapshot to `reports/endurance/<utc>.json` per run for historical
+   diff'ing.
+6. ✅ **LMDB → training export CLI** — [`scripts/export_experience_to_training.py`](scripts/export_experience_to_training.py)
+   streams rover experience records (Phase 2 chunked reader, memory-bounded)
+   into msgpack-gz shards. `--dry-run` verifies the source size before any
+   destination write.
+7. Run `scripts/benchmark_voice_latency.py` on Jetson for the production personalities
    (`rocky`, `scout`, `friendly`) and capture median / P95 latency before any further voice changes.
-3. Install `promtool` on the Windows validation host so the Prometheus rule stage in
+8. Install `promtool` on the Windows validation host so the Prometheus rule stage in
    `bash scripts/ci.sh` becomes enforced rather than skipped — see
-   [`docs/playbooks/promtool-install.md`](docs/playbooks/promtool-install.md) for
-   step-by-step Windows / Linux / macOS instructions.
-4. Rebuild the Jetson image, restart `mousedroid-docker.service`, and rerun
+   [`docs/playbooks/promtool-install.md`](docs/playbooks/promtool-install.md).
+9. Rebuild the Jetson image, restart `mousedroid-docker.service`, and rerun
    `scripts/jetson_full_smoke_run.sh` against the updated production config.
-5. Use the recovery playbooks in `docs/playbooks/` for any camera, LiDAR, voice, or
-   `promtool` failures discovered during the next hardware validation pass.
+10. Use the recovery playbooks in `docs/playbooks/` for any camera, LiDAR, voice,
+    GPIO, ESP32, replay-loop, or full-rover-bringup failures discovered during
+    the next hardware validation pass.
+
+### Pending follow-up (deferred to a separate PR)
+
+- **Resilience wrappers for camera + voice + LLM gateway** — drop the three
+  remaining bare driver constructions in `factory.py` behind the existing
+  `CircuitBreaker` + `retry_async` machinery (per-driver opt-in via a new
+  `cfg.resilience.<driver>.enabled` flag, defaults `False`). ESP32 and
+  LiDAR are already wrapped (`src/mousedroid/resilience/`); these three
+  are the residual gap. Cleanly composes with the current branch.
 
 ---
 

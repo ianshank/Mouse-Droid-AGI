@@ -42,6 +42,8 @@ src/mousedroid/
     environments/     # MuJoCo Gymnasium envs, domain randomization, curriculum
     hardware/         # SO-ARM100 driver, mock driver
   hardware/           # Sensor drivers (camera, ultrasonic, audio)
+  harness/            # Agent harness — task tracker, hooks, journal, skills, HITL, replanner (PR #61)
+  training/replay/    # Phase 2 real-episode replay loop — async LMDB reader + sim/real mixer (PR #60)
   comms/              # ESP32 serial/WiFi communication
   sensing/            # Sensor fusion
   telemetry/          # REST + WebSocket monitoring server
@@ -70,11 +72,12 @@ src/mousedroid/
 
 ## Code Style
 
-- **Linter**: `ruff` — line length 100, Google docstrings, comprehensive rule set
+- **Linter**: `ruff==0.8.0` — version pinned in `pyproject.toml [dev]` to match `.github/workflows/ci.yml`. Line length 100, Google docstrings, comprehensive rule set.
 - **Type checker**: `mypy --strict` with `ignore_missing_imports`
-- **Format**: `ruff format`
+- **Format**: `ruff format` (CI runs `ruff format --check src/ tests/`; same in `bash scripts/ci.sh` post-PR #62)
 - **Docstrings**: Google convention, required on all public functions/classes
 - **Imports**: `from __future__ import annotations` in every module
+- **Pytest invocation**: always pass `--import-mode=importlib` (matches `scripts/ci.sh`); `pytest tests/` works at root because of the auto-loaded `tests/conftest.py`
 
 ## CI Pipeline (5 stages)
 
