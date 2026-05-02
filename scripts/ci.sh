@@ -31,6 +31,12 @@ echo "=== Python Environment ==="
 echo "=== Lint ==="
 "$PYTHON_BIN" -m ruff check src/ tests/
 
+echo "=== Format Check ==="
+# Mirrors the `Format check` step in .github/workflows/ci.yml. The ruff
+# version is pinned in pyproject.toml's [dev] extra to match CI exactly —
+# bump both in the same change to avoid local/CI lint drift.
+"$PYTHON_BIN" -m ruff format --check src/ tests/
+
 echo "=== Type Check ==="
 "$PYTHON_BIN" -m mypy src/ --strict --ignore-missing-imports
 

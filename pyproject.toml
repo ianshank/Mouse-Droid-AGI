@@ -107,7 +107,11 @@ dev = [
     "pytest-timeout>=2.3",
     "pytest-xdist>=3.0",
     "hypothesis>=6.80",
-    "ruff>=0.4",
+    # Pinned to match .github/workflows/ci.yml — newer ruff versions wrap
+    # lines slightly differently, so a wider range here causes
+    # `ruff format --check src/ tests/` to fail in CI even when it passes
+    # locally. Bump both pyproject.toml and ci.yml in the same change.
+    "ruff==0.8.0",
     "mypy>=1.5",
     "types-PyYAML>=6.0",
     "ncps>=0.0.7",
