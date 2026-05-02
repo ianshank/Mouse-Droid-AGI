@@ -182,9 +182,9 @@ def test_clamp_output_within_bounds(value: float, bounds: tuple[float, float]) -
     """Output is always within the (sorted) bounds."""
     lower, upper = sorted(bounds)
     result = _clamp(value, lower=lower, upper=upper)
-    assert lower <= result <= upper, (
-        f"clamp({value}, [{lower}, {upper}]) -> {result} escaped the bounds"
-    )
+    assert (
+        lower <= result <= upper
+    ), f"clamp({value}, [{lower}, {upper}]) -> {result} escaped the bounds"
 
 
 @given(
