@@ -465,3 +465,120 @@ def test_settings_minimal_args():
     s = Settings(mock_hardware=True)
     assert s.esp32.protocol == "serial"
     assert s.camera.fps == 30
+
+
+# -- Harness config (agent-harness layer) ------------------------------------
+
+
+def test_settings_harness_default_is_none():
+    """Harness must default to None to keep existing YAML byte-identical."""
+    s = Settings(mock_hardware=True)
+    assert s.harness is None
+
+
+def test_harness_config_defaults():
+    from mousedroid.config.schema import HarnessConfig
+
+    cfg = HarnessConfig()
+    assert cfg.tracker.enabled is False
+    assert cfg.tracker.history_size == 256
+    assert cfg.tracker.default_timeout_s == 30.0
+    assert cfg.tracker.max_active == 8
+    assert cfg.hooks.enabled_hooks == []
+    assert cfg.hooks.error_policy == "warn"
+    assert cfg.hooks.journal_events is True
+    assert cfg.hooks.fail_fast is False
+    assert cfg.journal.backend == "null"
+    assert cfg.journal.queue_max == 1024
+    assert cfg.approval.gate == "auto"
+    assert cfg.approval.on_timeout == "deny"
+    assert cfg.skills.enabled is False
+    assert cfg.skills.backend == "noop"
+
+
+def test_harness_config_invalid_history_size_rejected():
+    from mousedroid.config.schema import HarnessTrackerConfig
+
+    with pytest.raises(ValidationError):
+        HarnessTrackerConfig(history_size=0)
+
+
+def test_harness_config_invalid_journal_backend_rejected():
+    from mousedroid.config.schema import HarnessJournalConfig
+
+    with pytest.raises(ValidationError):
+        HarnessJournalConfig(backend="not_a_backend")  # type: ignore[arg-type]
+
+
+def test_harness_config_invalid_approval_gate_rejected():
+    from mousedroid.config.schema import HarnessApprovalConfig
+
+    with pytest.raises(ValidationError):
+        HarnessApprovalConfig(gate="bogus")  # type: ignore[arg-type]
+
+
+def test_settings_with_harness_enabled():
+    from mousedroid.config.schema import HarnessConfig
+
+    s = Settings(mock_hardware=True, harness=HarnessConfig())
+    assert s.harness is not None
+    assert s.harness.tracker.enabled is False
+    assert s.harness.journal.backend == "null"
+
+
+def test_harness_approval_timeout_decision_configurable():
+    from mousedroid.config.schema import HarnessApprovalConfig
+
+    cfg = HarnessApprovalConfig(on_timeout="approve")
+    assert cfg.on_timeout == "approve"
+
+
+# -- LLM replanner config (arm) ----------------------------------------------
+
+
+def test_arm_planning_config_llm_replanner_default_none():
+    from mousedroid.config.schema import ArmPlanningConfig
+
+    cfg = ArmPlanningConfig()
+    assert cfg.llm_replanner is None
+
+
+def test_llm_replanner_config_defaults():
+    from mousedroid.config.schema import LLMReplannerConfig
+
+    cfg = LLMReplannerConfig()
+    assert cfg.enabled is False
+    assert cfg.backend == "null"
+    assert cfg.max_tokens == 1024
+    assert cfg.temperature == 0.0
+    assert cfg.api_key_env_var == "ANTHROPIC_API_KEY"
+    assert cfg.request_timeout_s == 30.0
+    assert cfg.max_retries == 3
+
+
+def test_llm_replanner_config_temperature_bounds():
+    from mousedroid.config.schema import LLMReplannerConfig
+
+    with pytest.raises(ValidationError):
+        LLMReplannerConfig(temperature=-0.1)
+    with pytest.raises(ValidationError):
+        LLMReplannerConfig(temperature=2.5)
+
+
+def test_llm_replanner_config_max_retries_nonneg():
+    from mousedroid.config.schema import LLMReplannerConfig
+
+    LLMReplannerConfig(max_retries=0)  # 0 retries permitted
+    with pytest.raises(ValidationError):
+        LLMReplannerConfig(max_retries=-1)
+
+
+def test_arm_planning_config_with_llm_replanner_enabled():
+    from mousedroid.config.schema import ArmPlanningConfig, LLMReplannerConfig
+
+    cfg = ArmPlanningConfig(
+        llm_replanner=LLMReplannerConfig(enabled=True, backend="anthropic"),
+    )
+    assert cfg.llm_replanner is not None
+    assert cfg.llm_replanner.enabled is True
+    assert cfg.llm_replanner.backend == "anthropic"

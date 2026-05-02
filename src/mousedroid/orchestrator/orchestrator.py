@@ -22,6 +22,7 @@ from mousedroid.constants import (
     MILLISECONDS_PER_SECOND,
     MOTOR_STATE_BATTERY_INDEX,
 )
+from mousedroid.harness.protocol import HookPhase, TickContext
 from mousedroid.logging.setup import get_logger
 from mousedroid.telemetry.frame_builder import build_telemetry_frame
 
@@ -37,6 +38,11 @@ if TYPE_CHECKING:
     from mousedroid.curiosity.protocol import CuriosityProtocol
     from mousedroid.experience.logger import ExperienceLogger
     from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
+    from mousedroid.harness.journal.protocol import JournalProtocol
+    from mousedroid.harness.protocol import (
+        HookRegistryProtocol,
+        TaskTrackerProtocol,
+    )
     from mousedroid.health.watchdog import WatchdogProtocol
     from mousedroid.llm_gateway.mission_parser import MissionParserProtocol
     from mousedroid.llm_gateway.protocol import GoalVector, LLMGatewayProtocol
@@ -47,6 +53,7 @@ if TYPE_CHECKING:
     from mousedroid.safety.protocol import SafetyMonitorProtocol
     from mousedroid.sensing.manager import SensorManager
     from mousedroid.sensing.protocol import ObservationProtocol
+    from mousedroid.skills.delegator import SkillDelegator
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
     from mousedroid.vla.policy import VLAPolicyProtocol
     from mousedroid.voice.protocol import VoiceEngineProtocol
@@ -86,6 +93,10 @@ class MouseDroidOrchestrator:
         face_controller: FaceController | None = None,
         mcp_server: MCPServerProtocol | None = None,
         vla_policy: VLAPolicyProtocol | None = None,
+        hook_registry: HookRegistryProtocol | None = None,
+        task_tracker: TaskTrackerProtocol | None = None,
+        journal: JournalProtocol | None = None,
+        skill_delegator: SkillDelegator | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -122,6 +133,15 @@ class MouseDroidOrchestrator:
                 routes action selection through the policy with a per-tick
                 inference timeout (``cfg.loop.inference_timeout_s``,
                 defaulting to ``1.0 / control_hz``).
+            hook_registry: Optional :class:`HookRegistryProtocol`. When
+                ``None``, a :class:`NullHookRegistry` is used so the
+                30 Hz hot loop is byte-identical to the legacy path.
+            task_tracker: Optional :class:`TaskTrackerProtocol`. When
+                ``None``, no task tracking is performed.
+            journal: Optional :class:`JournalProtocol`. When ``None``,
+                a :class:`NullJournal` is used (no-op start/stop/append).
+            skill_delegator: Optional :class:`SkillDelegator` used by the
+                MCP bridge / skills to dispatch tasks to sub-agents.
         """
         if not agents:
             msg = "At least one agent is required"
@@ -150,6 +170,18 @@ class MouseDroidOrchestrator:
         self._mcp_server = mcp_server
         self._vla_policy = vla_policy
         self._cfg = cfg
+        # ---- Agent harness (all opt-in, defaults preserve legacy behaviour) --
+        # When ``cfg.harness is None`` the orchestrator runs against no-op
+        # registries / journal so the 30 Hz hot loop is byte-identical.
+        from mousedroid.harness.hooks import NullHookRegistry  # local: avoid cycle
+        from mousedroid.harness.journal.null_journal import NullJournal
+
+        self._hook_registry: HookRegistryProtocol = (
+            hook_registry if hook_registry is not None else NullHookRegistry()
+        )
+        self._task_tracker: TaskTrackerProtocol | None = task_tracker
+        self._journal: JournalProtocol = journal if journal is not None else NullJournal()
+        self._skill_delegator: SkillDelegator | None = skill_delegator
         self._running = False
         self._tick_count: int = 0
         self._consolidation_task: asyncio.Task[None] | None = None
@@ -200,6 +232,8 @@ class MouseDroidOrchestrator:
                 self._consolidation_loop(),
                 name=self._consolidation_loop.__name__,
             )
+        # Harness journal (background writer task). NullJournal is a no-op.
+        await self._journal.start()
         self._running = True
         _log.info("orchestrator_started")
 
@@ -242,52 +276,95 @@ class MouseDroidOrchestrator:
         await self._esp32.disconnect()
         if self._hailo_runtime is not None:
             await self._hailo_runtime.stop()
+        # Drain and stop the harness journal last so terminal events persist.
+        await self._journal.stop()
         _log.info("orchestrator_stopped")
 
     async def tick(self) -> None:
-        """Execute one sense-plan-act cycle."""
+        """Execute one sense-plan-act cycle.
+
+        When the agent harness is configured, hooks fire at five phases —
+        ``pre_tick``, ``pre_action``, ``post_action``, ``post_tick``, and
+        ``on_error`` — and active tasks are evaluated once per tick. With
+        ``Settings.harness=None`` every harness call is a constant-time
+        no-op, so the legacy behaviour is bit-identical.
+        """
         loop_start = time.monotonic()
+        ctx = TickContext(
+            tick_index=self._tick_count,
+            timestamp_s=loop_start,
+            prev_action=self._prev_action,
+        )
+        try:
+            observation = await self._sensor_manager.read_all()
+            loop_time_ms = (time.monotonic() - loop_start) * MILLISECONDS_PER_SECOND
 
-        observation = await self._sensor_manager.read_all()
-        loop_time_ms = (time.monotonic() - loop_start) * MILLISECONDS_PER_SECOND
+            safety_ctx = self._safety_monitor.evaluate(observation, loop_time_ms)
 
-        safety_ctx = self._safety_monitor.evaluate(observation, loop_time_ms)
+            self._update_world_model(observation)
 
-        self._update_world_model(observation)
-
-        if safety_ctx.is_emergency:
-            # Attempt sensor recovery before emergency stop if sensors degraded
-            if await self._try_sensor_recovery(safety_ctx):
-                # Re-read after recovery — sensors may have come back
-                observation = await self._sensor_manager.read_all()
-                loop_time_ms = (time.monotonic() - loop_start) * MILLISECONDS_PER_SECOND
-                safety_ctx = self._safety_monitor.evaluate(observation, loop_time_ms)
+            ctx.observation = observation
+            ctx.safety_ctx = safety_ctx
+            ctx.loop_time_ms = loop_time_ms
+            if self._task_tracker is not None:
+                ctx.active_tasks = tuple(s.id for s in self._task_tracker.active())
+            await self._hook_registry.run_phase(HookPhase.PRE_TICK, ctx)
 
             if safety_ctx.is_emergency:
-                await self._esp32.emergency_stop()
-                await self._voice_event("emergency_stop", observation)
-                await self._update_face(safety_ctx=safety_ctx, action=None)
-                _log.warning("emergency_stop_triggered")
-                self._tick_count += 1
-                await self._publish_telemetry(observation, safety_ctx, loop_time_ms)
-                return
+                # Attempt sensor recovery before emergency stop if sensors degraded
+                if await self._try_sensor_recovery(safety_ctx):
+                    # Re-read after recovery — sensors may have come back
+                    observation = await self._sensor_manager.read_all()
+                    loop_time_ms = (time.monotonic() - loop_start) * MILLISECONDS_PER_SECOND
+                    safety_ctx = self._safety_monitor.evaluate(observation, loop_time_ms)
+                    ctx.observation = observation
+                    ctx.safety_ctx = safety_ctx
+                    ctx.loop_time_ms = loop_time_ms
 
-        action = self._select_action(safety_ctx, observation, loop_time_ms)
-        self._prev_action = action.unsqueeze(0) if action.dim() == 1 else action
+                if safety_ctx.is_emergency:
+                    await self._esp32.emergency_stop()
+                    await self._voice_event("emergency_stop", observation)
+                    await self._update_face(safety_ctx=safety_ctx, action=None)
+                    _log.warning("emergency_stop_triggered")
+                    self._tick_count += 1
+                    await self._publish_telemetry(observation, safety_ctx, loop_time_ms)
+                    await self._hook_registry.run_phase(HookPhase.POST_TICK, ctx)
+                    return
 
-        await self._execute_action(action)
-        self._log_experience(observation, action)
-        await self._voice_observe(observation, safety_ctx)
-        await self._update_face(safety_ctx=safety_ctx, action=action)
+            action = self._select_action(safety_ctx, observation, loop_time_ms)
+            self._prev_action = action.unsqueeze(0) if action.dim() == 1 else action
 
-        self._tick_count += 1
-        await self._publish_telemetry(observation, safety_ctx, loop_time_ms)
+            ctx.proposed_action = action
+            await self._hook_registry.run_phase(HookPhase.PRE_ACTION, ctx)
 
-        _log.debug(
-            "tick_complete",
-            loop_time_ms=loop_time_ms,
-            emergency=safety_ctx.is_emergency,
-        )
+            await self._execute_action(action)
+            ctx.executed_action = action
+            await self._hook_registry.run_phase(HookPhase.POST_ACTION, ctx)
+
+            self._log_experience(observation, action)
+            await self._voice_observe(observation, safety_ctx)
+            await self._update_face(safety_ctx=safety_ctx, action=action)
+
+            self._tick_count += 1
+            await self._publish_telemetry(observation, safety_ctx, loop_time_ms)
+
+            if self._task_tracker is not None:
+                await self._task_tracker.evaluate_active(ctx)
+
+            await self._hook_registry.run_phase(HookPhase.POST_TICK, ctx)
+
+            _log.debug(
+                "tick_complete",
+                loop_time_ms=loop_time_ms,
+                emergency=safety_ctx.is_emergency,
+            )
+        except Exception as exc:
+            ctx.error = exc
+            # Hooks observe the error before we re-raise. If a hook itself
+            # raises, the HookRegistry's error_policy decides whether to
+            # propagate (default: warn-and-continue).
+            await self._hook_registry.run_phase(HookPhase.ON_ERROR, ctx)
+            raise
 
     async def process_mission(self, nl_command: str) -> GoalVector:
         """Process a natural language mission command.

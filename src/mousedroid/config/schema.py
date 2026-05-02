@@ -1870,6 +1870,13 @@ class ArmPlanningConfig(BaseModel):
     )
     max_replan_attempts: int = Field(3, gt=0, description="Max replanning attempts before abort")
     planning_timeout_s: float = Field(5.0, gt=0, description="Maximum planning time (s)")
+    llm_replanner: LLMReplannerConfig | None = Field(
+        None,
+        description=(
+            "LLM-backed replanner config (None=use legacy symbolic fallback). "
+            "Backwards compatible: existing arm runs are unchanged when omitted."
+        ),
+    )
 
 
 class ArmTrainingConfig(BaseModel):
@@ -2698,6 +2705,217 @@ class MCPConfig(BaseModel):
         return self
 
 
+class HarnessTrackerConfig(BaseModel):
+    """Task-tracker configuration for the agent harness.
+
+    The tracker persists in-memory state of submitted tasks and their
+    acceptance predicates; the orchestrator consults it once per tick.
+    Disabled by default — enabling is opt-in and adds no work to the
+    30 Hz hot loop while ``enabled=False``.
+    """
+
+    enabled: bool = Field(
+        False,
+        description="Enable in-memory task tracker (None=disabled)",
+    )
+    history_size: int = Field(
+        256,
+        gt=0,
+        description="Bounded deque size for completed-task history",
+    )
+    default_timeout_s: float = Field(
+        30.0,
+        gt=0,
+        description="Fallback timeout (s) for tasks that do not specify one",
+    )
+    max_active: int = Field(
+        8,
+        gt=0,
+        description="Hard cap on simultaneously active tasks",
+    )
+
+
+class HarnessJournalConfig(BaseModel):
+    """Persistent agent ledger backend selection and tunables."""
+
+    backend: Literal["null", "jsonl", "lmdb"] = Field(
+        "null",
+        description="Journal backend (null=disabled)",
+    )
+    path: Path = Field(
+        Path("var/harness/journal"),
+        description="Journal directory (LMDB) or file path (JSONL)",
+    )
+    map_size_gb: float = Field(
+        1.0,
+        gt=0,
+        description="LMDB map size cap in GB (LMDB backend only)",
+    )
+    flush_every_n: int = Field(
+        16,
+        gt=0,
+        description="Flush LMDB transactions every N writes",
+    )
+    queue_max: int = Field(
+        1024,
+        gt=0,
+        description="Max queued entries; on full, oldest is dropped (warn-log)",
+    )
+
+
+class HarnessHooksConfig(BaseModel):
+    """Tick-loop middleware configuration."""
+
+    enabled_hooks: list[str] = Field(
+        default_factory=list,
+        description="Names of hooks to wire from the registry (empty=no-op)",
+    )
+    error_policy: Literal["raise", "warn", "swallow"] = Field(
+        "warn",
+        description="How hook exceptions are handled",
+    )
+    journal_events: bool = Field(
+        True,
+        description="When True, default JournalAppendHook is auto-registered",
+    )
+    fail_fast: bool = Field(
+        False,
+        description="Abort tick on first hook failure (overrides error_policy)",
+    )
+
+
+class HarnessApprovalConfig(BaseModel):
+    """Human-in-the-loop / policy approval configuration."""
+
+    gate: Literal["auto", "cli", "callback", "policy"] = Field(
+        "auto",
+        description="Approval gate strategy (auto=AutoApproveGate)",
+    )
+    require_approval_tool_patterns: list[str] = Field(
+        default_factory=list,
+        description="fnmatch patterns of tool names that require approval",
+    )
+    require_approval_skill_patterns: list[str] = Field(
+        default_factory=list,
+        description="fnmatch patterns of skill names that require approval",
+    )
+    cli_timeout_s: float = Field(
+        30.0,
+        gt=0,
+        description="CLI approval prompt timeout (s)",
+    )
+    on_timeout: Literal["deny", "approve"] = Field(
+        "deny",
+        description="Decision when approval times out (default: fail-closed)",
+    )
+    callback_dotted_path: str | None = Field(
+        None,
+        description="Dotted path to async callable for callback gate",
+    )
+
+
+class SkillsConfig(BaseModel):
+    """Sub-agent / skill registry configuration."""
+
+    enabled: bool = Field(
+        False,
+        description="Enable skill registry and sub-agent delegation",
+    )
+    manifest_glob: str = Field(
+        "config/skills/*.yaml",
+        description="Glob for YAML skill manifests",
+    )
+    markdown_agent_dirs: list[Path] = Field(
+        default_factory=lambda: [Path("src/mousedroid/agents")],
+        description="Directories scanned for markdown agent definitions",
+    )
+    default_system_prompt: str = Field(
+        "",
+        description="Fallback system prompt when a skill omits its own",
+    )
+    backend: Literal["llm_gateway", "anthropic", "noop"] = Field(
+        "noop",
+        description="Default sub-agent backend",
+    )
+
+
+class HarnessConfig(BaseModel):
+    """Top-level agent-harness configuration.
+
+    Bundles task tracker, hook registry, journal, approval gate, and skills
+    sub-models. Every nested section ships a working default; the entire
+    harness is opt-in via ``Settings.harness`` (None=disabled).
+    """
+
+    tracker: HarnessTrackerConfig = Field(
+        default_factory=_settings_default_factory(HarnessTrackerConfig),
+    )
+    hooks: HarnessHooksConfig = Field(
+        default_factory=_settings_default_factory(HarnessHooksConfig),
+    )
+    journal: HarnessJournalConfig = Field(
+        default_factory=_settings_default_factory(HarnessJournalConfig),
+    )
+    approval: HarnessApprovalConfig = Field(
+        default_factory=_settings_default_factory(HarnessApprovalConfig),
+    )
+    skills: SkillsConfig = Field(
+        default_factory=_settings_default_factory(SkillsConfig),
+    )
+
+
+class LLMReplannerConfig(BaseModel):
+    """Configuration for the LLM-backed arm replanner.
+
+    Disabled by default; when enabled, ``backend`` selects the concrete
+    implementation. ``model``, ``max_tokens``, ``temperature`` and the
+    request envelope come from this config so no values are hardcoded
+    in the backend modules.
+    """
+
+    enabled: bool = Field(
+        False,
+        description="Enable LLM-backed replanning (None=disabled)",
+    )
+    backend: Literal["null", "llama", "anthropic"] = Field(
+        "null",
+        description="Replanner backend selection",
+    )
+    model: str = Field(
+        "claude-sonnet-4-6",
+        description="Model identifier passed to the backend",
+    )
+    max_tokens: int = Field(
+        1024,
+        gt=0,
+        description="Per-request max tokens",
+    )
+    temperature: float = Field(
+        0.0,
+        ge=0.0,
+        le=2.0,
+        description="Sampling temperature",
+    )
+    system_prompt: str = Field(
+        "",
+        description="System prompt passed to the backend",
+    )
+    api_key_env_var: str = Field(
+        "ANTHROPIC_API_KEY",
+        description="Env var holding the API key (Anthropic backend only)",
+    )
+    request_timeout_s: float = Field(
+        30.0,
+        gt=0,
+        description="Per-request timeout (s)",
+    )
+    max_retries: int = Field(
+        3,
+        ge=0,
+        description="Max exponential-backoff retries on transient errors",
+    )
+
+
 class Settings(BaseSettings):
     """Root configuration — single source of truth for all settings.
 
@@ -2845,6 +3063,13 @@ class Settings(BaseSettings):
     arm_task: ArmTaskConfig | None = Field(
         None,
         description="Arm task config (Tower of Hanoi / laundry sorting params)",
+    )
+
+    # Agent harness — opt-in deterministic exoskeleton around the orchestrator
+    # (task tracker, hooks, journal, approval gate, skills). None=disabled.
+    harness: HarnessConfig | None = Field(
+        None,
+        description="Agent harness config (None=disabled, backwards compatible)",
     )
 
     @model_validator(mode="before")

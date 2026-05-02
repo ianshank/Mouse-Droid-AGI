@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import torch
 import torch.nn as nn
-from cachetools import LRUCache  # type: ignore[import-untyped]
+from cachetools import LRUCache
 from torch import Tensor
 
 from mousedroid.logging.setup import get_logger
@@ -158,7 +158,9 @@ class VLMProgressHead(nn.Module):
             "hits": self._hits,
             "misses": self._misses,
             "size": len(self._cache),
-            "maxsize": self._cache.maxsize,
+            # ``LRUCache.maxsize`` is typed loosely (float in some stub
+            # versions); cast to int since we always configure it as one.
+            "maxsize": int(self._cache.maxsize),
         }
 
     def score(

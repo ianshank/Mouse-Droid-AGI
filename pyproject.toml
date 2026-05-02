@@ -81,6 +81,9 @@ lidar = [
 cfc = [
     "ncps>=0.0.7",
 ]
+anthropic = [
+    "anthropic>=0.40",
+]
 gcp = [
     "google-cloud-pubsub>=2.18",
     "google-cloud-storage>=2.10",
@@ -136,6 +139,13 @@ ignore = ["D100", "D104", "D107", "D203", "D213", "S101", "ANN401", "TCH", "TC"]
 "tests/**/*.py" = ["D", "ANN", "S101", "S108", "S603", "S607", "E402"]
 "tools/**/*.py" = ["D", "ANN", "T20"]
 "scripts/**/*.py" = ["D", "T20", "S603", "S104", "E501"]
+# Harness / skills / LLM replanner: protocol method docstrings live on the
+# Protocol classes (and on the concrete classes' class docstrings) so the
+# per-method D102 / D105 rule produces redundant boilerplate. Class-level
+# docstrings remain mandatory.
+"src/mousedroid/harness/**/*.py" = ["D102", "D105"]
+"src/mousedroid/skills/**/*.py" = ["D102", "D105"]
+"src/mousedroid/arm/planning/llm_replanners/**/*.py" = ["D102"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
