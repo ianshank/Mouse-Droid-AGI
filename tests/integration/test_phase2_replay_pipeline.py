@@ -104,9 +104,9 @@ def test_phase2_replay_pipeline_end_to_end(tmp_path: Path) -> None:
 
     # 3) Drain the reader and assert we got every record back.
     records = asyncio.run(_drain(reader))  # type: ignore[arg-type]
-    assert len(records) == _NUM_EPISODES, (
-        f"Reader lost records: wrote {_NUM_EPISODES} got {len(records)}"
-    )
+    assert (
+        len(records) == _NUM_EPISODES
+    ), f"Reader lost records: wrote {_NUM_EPISODES} got {len(records)}"
     assert reader.stats["read_records"] == _NUM_EPISODES
     assert reader.stats["skipped_schema_mismatch"] == 0
 
@@ -132,9 +132,9 @@ def test_phase2_replay_pipeline_end_to_end(tmp_path: Path) -> None:
         losses.append(out["bc_loss"])
 
     # BC loss must trend down — full convergence not required, just direction.
-    assert losses[-1] < losses[0], (
-        f"BC loss did not decrease over {_BC_STEPS} steps: {losses[0]} -> {losses[-1]}"
-    )
+    assert (
+        losses[-1] < losses[0]
+    ), f"BC loss did not decrease over {_BC_STEPS} steps: {losses[0]} -> {losses[-1]}"
 
     # 6) Save a checkpoint and assert the file was produced on disk.
     ckpt_path = tmp_path / "checkpoint.pt"
@@ -191,9 +191,9 @@ def test_phase2_zero_weight_does_not_train(tmp_path: Path) -> None:
 
     assert out == {"bc_loss": 0.0}
     for k, v in trainer.policy.state_dict().items():
-        assert torch.equal(v, snapshot[k]), (
-            f"policy[{k}] changed under weight=0.0; backwards-compat broken"
-        )
+        assert torch.equal(
+            v, snapshot[k]
+        ), f"policy[{k}] changed under weight=0.0; backwards-compat broken"
 
 
 @pytest.mark.parametrize("chunk_size", [1, 3, 4, 64])

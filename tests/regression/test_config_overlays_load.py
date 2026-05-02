@@ -45,9 +45,9 @@ def test_overlay_loads_against_schema(overlay_path: Path) -> None:
     """Every YAML overlay must produce a valid ``Settings`` object."""
     settings = load_settings(overlay_path, config_dir=_CONFIG_DIR)
     assert isinstance(settings, Settings)
-    assert settings.platform in _VALID_PLATFORMS, (
-        f"{overlay_path.name}: unexpected platform {settings.platform!r}"
-    )
+    assert (
+        settings.platform in _VALID_PLATFORMS
+    ), f"{overlay_path.name}: unexpected platform {settings.platform!r}"
 
 
 def test_default_yaml_loads_standalone() -> None:
