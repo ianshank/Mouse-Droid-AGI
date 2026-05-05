@@ -26,6 +26,7 @@ import uuid
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from mousedroid.common.rate_limit import TokenBucket
 from mousedroid.logging.setup import get_logger
 from mousedroid.mcp.metrics import record_request, record_tool_call
 from mousedroid.mcp.protocol import MCPRequestContext, MCPToolResult
@@ -48,42 +49,11 @@ _log = get_logger(__name__)
 BREAKER_NAME = "mcp_tool_call"
 
 
-class _TokenBucket:
-    """Per-session token bucket for cheap rate limiting."""
-
-    __slots__ = ("_capacity", "_last", "_lock", "_refill_per_s", "_tokens")
-
-    def __init__(self, rate_per_s: float, *, capacity: float | None = None) -> None:
-        """Initialise the bucket.
-
-        Args:
-            rate_per_s: Sustained refill rate in tokens / second.
-            capacity: Burst capacity. Defaults to ``rate_per_s`` (1 s
-                burst), which keeps memory bounded and matches the
-                MCP-config-driven envelope.
-        """
-        self._capacity = capacity if capacity is not None else max(1.0, rate_per_s)
-        self._refill_per_s = rate_per_s
-        self._tokens: float = self._capacity
-        self._last: float = time.monotonic()
-        self._lock = asyncio.Lock()
-
-    async def take(self) -> bool:
-        """Consume one token if available.
-
-        Returns:
-            ``True`` when a token was consumed, ``False`` when the bucket
-            was empty (caller should respond with ``rate_limited``).
-        """
-        async with self._lock:
-            now = time.monotonic()
-            elapsed = now - self._last
-            self._last = now
-            self._tokens = min(self._capacity, self._tokens + elapsed * self._refill_per_s)
-            if self._tokens >= 1.0:
-                self._tokens -= 1.0
-                return True
-            return False
+# Backwards-compatible alias: the implementation moved to
+# :mod:`mousedroid.common.rate_limit` so the OpenClaw REST mission endpoint
+# can share the exact same bucket. Keeping the underscore-prefixed name as
+# an alias preserves any in-tree imports that referenced ``_TokenBucket``.
+_TokenBucket = TokenBucket
 
 
 class MCPToolBridge:
@@ -127,7 +97,7 @@ class MCPToolBridge:
         self._safety_monitor = safety_monitor
         self._metrics = metrics
         self._observation_provider = observation_provider
-        self._rate_limiter = _TokenBucket(cfg.rate_limit_rps)
+        self._rate_limiter = TokenBucket(cfg.rate_limit_rps)
         breaker_cfg = (
             cfg.circuit_breaker if cfg.circuit_breaker is not None else root_cfg.circuit_breaker
         )
@@ -282,10 +252,18 @@ class MCPToolBridge:
         if spec is None:
             return self._finish(start, name, "denied", error="tool not registered", log=log)
 
-        # 5. Rate limit.
-        if not await self._rate_limiter.take():
+        # 5. Rate limit. ``take`` returns ``(ok, retry_after_s)``; we
+        # only surface ``ok`` here because the MCP error envelope has
+        # no retry-hint field, but the hint is included in the error
+        # string for operator-side observability.
+        taken, retry_after_s = await self._rate_limiter.take()
+        if not taken:
             return self._finish(
-                start, name, "rate_limited", error="per-session rate limit exceeded", log=log
+                start,
+                name,
+                "rate_limited",
+                error=f"per-session rate limit exceeded; retry_after_s={retry_after_s:.3f}",
+                log=log,
             )
 
         # 6. Safety gate (only for actuation tools that survived the toggle).

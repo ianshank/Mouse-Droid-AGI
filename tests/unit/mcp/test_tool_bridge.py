@@ -166,8 +166,10 @@ class TestTokenBucket:
     @pytest.mark.asyncio
     async def test_starts_full(self) -> None:
         bucket = _TokenBucket(2.0)
-        assert await bucket.take() is True
-        assert await bucket.take() is True
+        ok, _ = await bucket.take()
+        assert ok is True
+        ok, _ = await bucket.take()
+        assert ok is True
 
     @pytest.mark.asyncio
     async def test_refills_over_time(self) -> None:
@@ -176,7 +178,8 @@ class TestTokenBucket:
             await bucket.take()
         # Sleep enough to refill several tokens
         await asyncio.sleep(0.05)
-        assert await bucket.take() is True
+        ok, _ = await bucket.take()
+        assert ok is True
 
 
 class TestEdgeCases:

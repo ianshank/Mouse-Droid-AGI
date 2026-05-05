@@ -47,8 +47,10 @@ if TYPE_CHECKING:
     from mousedroid.llm_gateway.mission_parser import MissionParserProtocol
     from mousedroid.llm_gateway.protocol import GoalVector, LLMGatewayProtocol
     from mousedroid.mcp.protocol import MCPServerProtocol
+    from mousedroid.memory.exporter import MemoryExporterProtocol
     from mousedroid.memory.tier import MemoryTier
     from mousedroid.orchestrator.face_controller import FaceController
+    from mousedroid.orchestrator.mission_dispatcher import MissionDispatcherProtocol
     from mousedroid.safety.context import SafetyContext
     from mousedroid.safety.protocol import SafetyMonitorProtocol
     from mousedroid.sensing.manager import SensorManager
@@ -97,6 +99,8 @@ class MouseDroidOrchestrator:
         task_tracker: TaskTrackerProtocol | None = None,
         journal: JournalProtocol | None = None,
         skill_delegator: SkillDelegator | None = None,
+        memory_exporter: MemoryExporterProtocol | None = None,
+        mission_dispatcher: MissionDispatcherProtocol | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -142,6 +146,16 @@ class MouseDroidOrchestrator:
                 a :class:`NullJournal` is used (no-op start/stop/append).
             skill_delegator: Optional :class:`SkillDelegator` used by the
                 MCP bridge / skills to dispatch tasks to sub-agents.
+            memory_exporter: Optional :class:`MemoryExporterProtocol`. When
+                supplied together with a non-None ``memory_tier`` and a
+                non-None ``mission_dispatcher``, the orchestrator runs a
+                snapshot export from the POST_TICK path on the cadence
+                set by :attr:`OpenClawConfig.export_every_n_ticks`.
+                ``None`` keeps existing deployments byte-identical.
+            mission_dispatcher: Optional :class:`MissionDispatcherProtocol`.
+                When supplied, its ``mission_just_completed`` flag gates
+                the export hook so MEMORY.md is only refreshed after a
+                channel-driven mission completes.
         """
         if not agents:
             msg = "At least one agent is required"
@@ -182,6 +196,11 @@ class MouseDroidOrchestrator:
         self._task_tracker: TaskTrackerProtocol | None = task_tracker
         self._journal: JournalProtocol = journal if journal is not None else NullJournal()
         self._skill_delegator: SkillDelegator | None = skill_delegator
+        self._memory_exporter: MemoryExporterProtocol | None = memory_exporter
+        self._mission_dispatcher: MissionDispatcherProtocol | None = mission_dispatcher
+        self._memory_export_every_n: int = (
+            cfg.openclaw.export_every_n_ticks if cfg.openclaw is not None else 0
+        )
         self._running = False
         self._tick_count: int = 0
         self._consolidation_task: asyncio.Task[None] | None = None
@@ -352,6 +371,7 @@ class MouseDroidOrchestrator:
                 await self._task_tracker.evaluate_active(ctx)
 
             await self._hook_registry.run_phase(HookPhase.POST_TICK, ctx)
+            await self._maybe_export_memory()
 
             _log.debug(
                 "tick_complete",
@@ -365,6 +385,45 @@ class MouseDroidOrchestrator:
             # propagate (default: warn-and-continue).
             await self._hook_registry.run_phase(HookPhase.ON_ERROR, ctx)
             raise
+
+    async def _maybe_export_memory(self) -> None:
+        """Run the OpenClaw MEMORY.md exporter if all three gates pass.
+
+        Gates (any failing gate makes this a no-op):
+
+        1. ``memory_exporter`` was injected (OpenClaw enabled with a
+           configured ``shared_memory_path``).
+        2. ``memory_tier.episodic`` is non-None (replay buffer exists).
+        3. The mission dispatcher's ``mission_just_completed`` flag is
+           set AND the tick count is a multiple of
+           ``OpenClawConfig.export_every_n_ticks``.
+
+        Exceptions are swallowed and logged so a transient filesystem
+        failure on the shared path never crashes the control loop.
+        """
+        if self._memory_exporter is None or self._memory_tier is None:
+            return
+        if self._mission_dispatcher is None:
+            return
+        if not self._mission_dispatcher.mission_just_completed:
+            return
+        if self._memory_export_every_n <= 0:
+            return
+        if self._tick_count % self._memory_export_every_n != 0:
+            return
+        episodic = getattr(self._memory_tier, "episodic", None)
+        if episodic is None:
+            return
+        try:
+            _log.info("memory_export_started", path_known=True)
+            await self._memory_exporter.export(episodic)
+        except Exception as exc:  # pylint: disable=broad-except
+            _log.warning(
+                "memory_export_hook_failed",
+                error=f"{type(exc).__name__}:{exc}",
+            )
+        finally:
+            self._mission_dispatcher.clear_mission_completed()
 
     async def process_mission(self, nl_command: str) -> GoalVector:
         """Process a natural language mission command.

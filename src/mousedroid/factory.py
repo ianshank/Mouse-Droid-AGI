@@ -22,6 +22,10 @@ from mousedroid.health.watchdog import WatchdogProtocol
 from mousedroid.llm_gateway.protocol import LLMGatewayProtocol
 from mousedroid.logging.setup import get_logger
 from mousedroid.safety.protocol import SafetyMonitorProtocol
+from mousedroid.security.injection_filter import (
+    PromptInjectionFilterProtocol,
+    RegexInjectionFilter,
+)
 from mousedroid.vla.policy import VLAPolicyProtocol
 from mousedroid.voice.protocol import VoiceEngineProtocol
 
@@ -51,6 +55,7 @@ if TYPE_CHECKING:
     from mousedroid.mcp.protocol import MCPServerProtocol
     from mousedroid.memory.tier import MemoryTier
     from mousedroid.orchestrator.face_controller import FaceController
+    from mousedroid.orchestrator.mission_dispatcher import MissionDispatcherProtocol
     from mousedroid.reward.protocol import RewardModelProtocol
     from mousedroid.sensing.manager import SensorManager
     from mousedroid.telemetry.log_buffer import LogRingBuffer
@@ -395,7 +400,34 @@ def build_world_model(cfg: Settings) -> WorldModelProtocol:
     return RSSM(cfg.model)
 
 
-def build_llm_gateway(cfg: Settings) -> LLMGatewayProtocol:
+def build_injection_filter(cfg: Settings) -> PromptInjectionFilterProtocol:
+    """Build the shared :class:`PromptInjectionFilterProtocol` instance.
+
+    Combines patterns from ``cfg.llm.injection_patterns`` (the historical
+    source) so existing YAML/env behaviour is preserved. The same filter
+    is later threaded into both :func:`build_llm_gateway` and the
+    OpenClaw :class:`MissionDispatcher` so REST + MCP + LLM ingress all
+    enforce the same envelope.
+
+    The length cap defers to ``cfg.openclaw.max_command_len`` only when
+    OpenClaw is **enabled** — so the dispatcher is the single source of
+    truth for the cap on production deployments. Disabled (or absent)
+    OpenClaw blocks fall back to ``cfg.llm.max_command_len`` so a YAML
+    block like ``openclaw: {enabled: false, max_command_len: 128}``
+    cannot silently lower the LLM gateway's length cap.
+    """
+    if cfg.openclaw is not None and cfg.openclaw.enabled:
+        max_len = cfg.openclaw.max_command_len
+    else:
+        max_len = cfg.llm.max_command_len
+    return RegexInjectionFilter(cfg.llm.injection_patterns, max_len=max_len)
+
+
+def build_llm_gateway(
+    cfg: Settings,
+    *,
+    injection_filter: PromptInjectionFilterProtocol | None = None,
+) -> LLMGatewayProtocol:
     """Build LLM gateway for NL command translation.
 
     Constructs a ``GatewayConfig`` from the root settings' ``llm`` section
@@ -403,6 +435,11 @@ def build_llm_gateway(cfg: Settings) -> LLMGatewayProtocol:
 
     Args:
         cfg: Root settings.
+        injection_filter: Optional shared :class:`PromptInjectionFilterProtocol`.
+            When ``None``, the gateway constructs its own filter from
+            ``cfg.llm.injection_patterns`` (legacy behaviour); when supplied
+            (the default in :func:`build_orchestrator`), the same filter is
+            reused by the OpenClaw mission dispatcher.
 
     Returns:
         LLM gateway conforming to ``LLMGatewayProtocol``.
@@ -431,7 +468,7 @@ def build_llm_gateway(cfg: Settings) -> LLMGatewayProtocol:
         injection_patterns=cfg.llm.injection_patterns,
     )
     _log.info("llm_gateway_built", enabled=cfg.llm.enabled)
-    return LLMGateway(gateway_cfg)
+    return LLMGateway(gateway_cfg, injection_filter=injection_filter)
 
 
 def build_vla_policy(cfg: Settings) -> VLAPolicyProtocol | None:
@@ -833,6 +870,7 @@ def build_telemetry_server(
     log_buffer: LogRingBuffer | None = None,
     metrics_registry: MetricsRegistry | None = None,
     camera: VisionProtocol | None = None,
+    mission_dispatcher: MissionDispatcherProtocol | None = None,
 ) -> TelemetryServerProtocol | None:
     """Build telemetry server if telemetry is enabled.
 
@@ -845,6 +883,9 @@ def build_telemetry_server(
         camera: Optional vision driver; used as a raw-frame source for
             the MJPEG ``/camera/stream`` endpoint when it also implements
             :class:`RawFrameSourceProtocol`.
+        mission_dispatcher: Optional :class:`MissionDispatcherProtocol`.
+            When supplied together with an enabled ``cfg.openclaw``, the
+            ``POST /api/v1/mission`` endpoint is registered.
 
     Returns:
         ``TelemetryServer`` or ``None`` if telemetry disabled.
@@ -896,6 +937,8 @@ def build_telemetry_server(
         raw_frame_source=raw_frame_source,
         raw_frame_hz=cfg.telemetry.raw_frame_hz,
         cloud_enabled=cfg.gcp is not None,
+        mission_dispatcher=mission_dispatcher,
+        openclaw_cfg=cfg.openclaw,
     )
 
 
@@ -1510,12 +1553,57 @@ def build_skill_loaders(cfg: Settings) -> tuple[Any, ...]:
     )
 
 
+def build_memory_exporter(cfg: Settings) -> Any | None:
+    """Build the OpenClaw MEMORY.md exporter when configured.
+
+    Returns ``None`` when OpenClaw is disabled OR when
+    ``cfg.openclaw.shared_memory_path`` is unset; the orchestrator hook
+    is gated on a non-None return so disabled deployments incur zero
+    runtime cost.
+
+    Tunable parameters (``max_entries``, ``entry_truncate_chars``) come
+    from :class:`OpenClawConfig` so the exporter has zero hardcoded
+    knobs at construction time (per CLAUDE.md rule #3).
+    """
+    if cfg.openclaw is None or not cfg.openclaw.enabled or cfg.openclaw.shared_memory_path is None:
+        return None
+    from mousedroid.memory.exporter import MarkdownReplayExporter
+
+    _log.info(
+        "memory_exporter_built",
+        path=str(cfg.openclaw.shared_memory_path),
+        max_entries=cfg.openclaw.export_max_entries,
+        entry_truncate_chars=cfg.openclaw.export_entry_truncate_chars,
+    )
+    return MarkdownReplayExporter(
+        cfg.openclaw.shared_memory_path,
+        max_entries=cfg.openclaw.export_max_entries,
+        entry_truncate_chars=cfg.openclaw.export_entry_truncate_chars,
+    )
+
+
+def build_builtin_skills(cfg: Settings) -> tuple[Any, ...]:
+    """Return the OpenClaw-publishable :class:`SkillSpec` tuple.
+
+    Returns the four builtin specs (``mousedroid-navigate``,
+    ``mousedroid-sensor-report``, ``mousedroid-voice``,
+    ``mousedroid-world-model``) when OpenClaw is enabled; otherwise an
+    empty tuple so existing deployments still see an empty registry.
+    """
+    if cfg.openclaw is None or not cfg.openclaw.enabled:
+        return ()
+    from mousedroid.skills.builtin import all_builtin_specs
+
+    return all_builtin_specs()
+
+
 def build_skill_registry(cfg: Settings, loaders: tuple[Any, ...] = ()) -> Any:
-    """Build the skill registry pre-populated from ``loaders``.
+    """Build the skill registry pre-populated from ``loaders`` and builtins.
 
     Args:
-        cfg: Root settings (currently unused — reserved for future hooks).
-        loaders: Skill loaders to drain at construction time.
+        cfg: Root settings — drives whether the OpenClaw builtin specs
+            (``mousedroid-navigate`` etc.) are auto-registered.
+        loaders: Additional skill loaders to drain at construction time.
 
     Returns:
         A populated ``SkillRegistry``.
@@ -1525,6 +1613,8 @@ def build_skill_registry(cfg: Settings, loaders: tuple[Any, ...] = ()) -> Any:
     registry = SkillRegistry()
     if loaders:
         registry.load_all(loaders)
+    for spec in build_builtin_skills(cfg):
+        registry.register(spec)
     return registry
 
 
@@ -1770,6 +1860,22 @@ def build_orchestrator(cfg: Settings) -> object:
 
     metrics_registry = build_metrics_registry(cfg)
 
+    # Shared prompt-injection filter — reused by the LLM gateway and the
+    # OpenClaw mission dispatcher so REST + MCP + LLM ingress share one
+    # rejection envelope. Built before the telemetry server because the
+    # dispatcher (which the server registers POST /api/v1/mission against)
+    # consumes it.
+    injection_filter = build_injection_filter(cfg)
+
+    # OpenClaw mission dispatcher (None when openclaw is disabled). The
+    # deferred orchestrator ref is bound just before returning the
+    # orchestrator at the end of this function.
+    from mousedroid.orchestrator.mission_dispatcher import build_mission_dispatcher
+
+    mission_dispatcher, deferred_orchestrator_ref = build_mission_dispatcher(
+        cfg.openclaw, injection_filter=injection_filter
+    )
+
     telemetry_server = build_telemetry_server(
         cfg,
         telemetry_publisher,
@@ -1777,12 +1883,13 @@ def build_orchestrator(cfg: Settings) -> object:
         log_buffer=log_buffer,
         metrics_registry=metrics_registry,
         camera=camera,
+        mission_dispatcher=mission_dispatcher,
     )
 
     # LLM gateway + mission parser (optional — gated by llm.enabled)
     llm_gateway: LLMGatewayProtocol | None = None
     if cfg.llm.enabled:
-        llm_gateway = build_llm_gateway(cfg)
+        llm_gateway = build_llm_gateway(cfg, injection_filter=injection_filter)
     mission_parser: MissionParserProtocol | None = build_mission_parser(cfg)
 
     # VLA policy (optional — gated by vla.backend, default 'none')
@@ -1828,6 +1935,9 @@ def build_orchestrator(cfg: Settings) -> object:
     experience_logger = build_experience_logger(cfg)
     curiosity_module = build_curiosity_module(cfg)
 
+    # OpenClaw MEMORY.md exporter (None unless cfg.openclaw.shared_memory_path set)
+    memory_exporter = build_memory_exporter(cfg)
+
     mcp_server = build_mcp_server(
         cfg,
         tool_registry=_tool_registry,
@@ -1865,7 +1975,7 @@ def build_orchestrator(cfg: Settings) -> object:
         _tool_registry.set_approval_gate(approval_gate)
     hook_registry = build_hook_registry(cfg, journal)
 
-    return MouseDroidOrchestrator(
+    orchestrator = MouseDroidOrchestrator(
         world_model=wm,
         agents=[agent],
         safety_monitor=monitor,
@@ -1893,7 +2003,15 @@ def build_orchestrator(cfg: Settings) -> object:
         task_tracker=task_tracker,
         journal=journal,
         skill_delegator=skill_delegator,
+        memory_exporter=memory_exporter,
+        mission_dispatcher=mission_dispatcher,
     )
+    # Bind the deferred orchestrator reference so the OpenClaw mission
+    # dispatcher (built before the orchestrator above) can route through
+    # ``orchestrator.process_mission`` from this point onwards.
+    if deferred_orchestrator_ref is not None:
+        deferred_orchestrator_ref.bind(orchestrator)
+    return orchestrator
 
 
 # ---------------------------------------------------------------------------

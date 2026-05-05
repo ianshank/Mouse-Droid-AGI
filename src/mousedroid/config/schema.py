@@ -2681,6 +2681,16 @@ class MCPConfig(BaseModel):
         gt=0,
         description="Duration of the MCP-polling-during-actuation smoke window (s)",
     )
+    bind_external: bool = Field(
+        False,
+        description=(
+            "Permit binding a non-loopback host (e.g. 0.0.0.0) for cross-host "
+            "OpenClaw access. When False, ``host`` other than 127.0.0.1/localhost "
+            "fails validation early so an operator does not accidentally expose "
+            "the MCP server. Pair with ``transport`` in {sse, streamable_http} "
+            "and a non-empty ``MOUSEDROID_MCP_TOKEN`` env var."
+        ),
+    )
 
     @field_validator("tools_denylist")
     @classmethod
@@ -2730,33 +2740,55 @@ class MCPConfig(BaseModel):
 
     @model_validator(mode="after")
     def _bind_transport_only_for_supported(self) -> Self:
-        """Reject ``bind_transport=true`` with not-yet-supported transports.
+        """Validate bind_transport ↔ transport ↔ external-bind interplay.
 
-        SSE and streamable_http transports currently raise
-        :class:`NotImplementedError` from
-        :class:`~mousedroid.mcp.transport.MCPTransportAdapter`. Because
-        ``_serve_loop`` runs as a background task, that failure would
-        only surface in logs — easy to miss in production. Failing
-        validation at config load makes the gap obvious immediately.
+        Three guards run here so misconfigurations fail fast at config
+        load rather than from a background task hours later:
+
+        1. ``bind_transport=true`` requires a known transport string.
+        2. Non-loopback ``host`` requires ``bind_external=true`` so an
+           operator never exposes the server by accident.
+        3. ``bind_external=true`` requires a non-stdio transport (stdio
+           has no listener anyway) AND a non-empty token in the
+           ``auth_token_env_var`` env var so the listening port can never
+           accept unauthenticated requests.
 
         Returns:
             The validated config instance.
 
         Raises:
-            ValueError: If ``bind_transport`` is True with a transport
-                that is not yet wired end-to-end.
+            ValueError: When any of the three guards trip.
         """
         if not self.bind_transport:
             return self
-        supported = {"stdio"}
+        supported = {"stdio", "sse", "streamable_http"}
         if self.transport not in supported:
             msg = (
                 f"mcp.bind_transport=true is only supported with "
-                f"mcp.transport in {sorted(supported)} for now; "
-                f"got mcp.transport={self.transport!r}. "
-                "SSE and streamable_http are tracked in MCP_NEXT_STEPS.md."
+                f"mcp.transport in {sorted(supported)}; "
+                f"got mcp.transport={self.transport!r}."
             )
             raise ValueError(msg)
+        is_loopback = self.host == "127.0.0.1" or self.host == "localhost"
+        if not is_loopback and not self.bind_external:
+            msg = (
+                f"mcp.host={self.host!r} is non-loopback but "
+                "mcp.bind_external is False. Set bind_external=true "
+                "explicitly to expose the MCP server outside the host."
+            )
+            raise ValueError(msg)
+        if self.bind_external:
+            if self.transport == "stdio":
+                msg = "mcp.bind_external=true requires a network transport (sse/streamable_http)"
+                raise ValueError(msg)
+            import os
+
+            if not os.environ.get(self.auth_token_env_var):
+                msg = (
+                    f"mcp.bind_external=true requires {self.auth_token_env_var} to be set "
+                    "in the environment; refusing to bind without a bearer secret."
+                )
+                raise ValueError(msg)
         return self
 
 
@@ -2971,6 +3003,113 @@ class LLMReplannerConfig(BaseModel):
     )
 
 
+class OpenClawConfig(BaseModel):
+    """OpenClaw integration — multi-channel NL control plane.
+
+    OpenClaw runs on a dedicated Mac mini host and dispatches NL commands
+    into MouseDroidAGI either via the REST ``POST /api/v1/mission``
+    endpoint or via the MCP server (cross-host SSE / streamable_http).
+    Both channels enforce the same prompt-injection envelope, the same
+    rate-limit token bucket, and (for actuation skills) the same safety
+    gate — wiring described in ``docs/openclaw_skills/README.md``.
+
+    Disabled by default. Existing YAML files load unchanged because the
+    ``openclaw`` field on :class:`Settings` defaults to ``None`` and every
+    field on this model has a default.
+    """
+
+    enabled: bool = Field(
+        False,
+        description="Enable the OpenClaw control plane (REST + MCP gating)",
+    )
+    mac_mini_origin: str | None = Field(
+        None,
+        description=(
+            "Origin URL of the OpenClaw host (e.g. https://mini.tail-xxxx.ts.net). "
+            "When set AND ``telemetry.cors_origins`` is restrictive (does not "
+            "contain '*'), :class:`TelemetryServer` automatically appends this "
+            "origin to the CORS allow-list at boot so the OpenClaw dashboard "
+            "can hit the REST mission endpoint without operators having to "
+            "duplicate the URL in two YAML keys."
+        ),
+    )
+    allowed_channels: tuple[Literal["rest", "mcp"], ...] = Field(
+        ("rest", "mcp"),
+        description="Channels the dispatcher accepts; others are refused.",
+    )
+    dm_pairing_required: bool = Field(
+        True,
+        description=(
+            "Mac-mini-side hint: enforce dmPolicy=pairing in OpenClaw config. "
+            "Mirrored here so operator docs and integration tests stay in sync."
+        ),
+    )
+    max_command_len: int = Field(
+        512,
+        gt=0,
+        description="Maximum NL command length accepted by the dispatcher.",
+    )
+    shared_memory_path: Path | None = Field(
+        None,
+        description=(
+            "Filesystem path (Tailscale-shared dir or NFS mount) where the "
+            "Phase D MarkdownReplayExporter writes MEMORY.md. None disables "
+            "the exporter entirely."
+        ),
+    )
+    mdns_service_name: str = Field(
+        "_mousedroid._tcp.local.",
+        description="Advisory mDNS service name; Tailscale MagicDNS is preferred.",
+    )
+    command_dedup_window_s: float = Field(
+        5.0,
+        gt=0,
+        description="In-memory TTL window for idempotency_key dedup on REST.",
+    )
+    export_every_n_ticks: int = Field(
+        600,
+        gt=0,
+        description=(
+            "How often the MEMORY.md exporter is allowed to fire (ticks). "
+            "At the default 30 Hz control loop this is one snapshot every 20 s."
+        ),
+    )
+    rest_rate_limit_rps: float = Field(
+        2.0,
+        gt=0,
+        description="POST /api/v1/mission token-bucket refill rate (req/s).",
+    )
+    rest_rate_limit_burst: int = Field(
+        4,
+        gt=0,
+        description="POST /api/v1/mission token-bucket burst capacity.",
+    )
+    require_actuation_ack: bool = Field(
+        True,
+        description=(
+            "Skills declared with metadata['actuation']=True require this flag "
+            "AND mcp.expose_actuation_tools=true. Defence-in-depth even when "
+            "an operator flips one of the two by accident."
+        ),
+    )
+    export_max_entries: int = Field(
+        32,
+        gt=0,
+        description=(
+            "Cap on episodic samples included in each MEMORY.md snapshot "
+            "(threaded into MarkdownReplayExporter)."
+        ),
+    )
+    export_entry_truncate_chars: int = Field(
+        240,
+        gt=0,
+        description=(
+            "Per-entry display cap (chars) in MEMORY.md so large episodic "
+            "payloads don't blow the OpenClaw agent's context window."
+        ),
+    )
+
+
 class Settings(BaseSettings):
     """Root configuration — single source of truth for all settings.
 
@@ -3125,6 +3264,13 @@ class Settings(BaseSettings):
     harness: HarnessConfig | None = Field(
         None,
         description="Agent harness config (None=disabled, backwards compatible)",
+    )
+
+    # OpenClaw integration — multi-channel NL control plane on a dedicated
+    # Mac mini host. None=disabled; existing YAML files load unchanged.
+    openclaw: OpenClawConfig | None = Field(
+        None,
+        description="OpenClaw integration config (None=disabled, backwards compatible)",
     )
 
     @model_validator(mode="before")

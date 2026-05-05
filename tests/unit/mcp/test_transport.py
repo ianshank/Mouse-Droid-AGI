@@ -232,18 +232,18 @@ class TestServeDispatch:
         await adapter.serve()
         assert called == ["registered", "stdio"]
 
-    async def test_serve_streamable_http_raises_not_implemented(
+    async def test_serve_routes_to_streamable_http(
         self,
         monkeypatch: pytest.MonkeyPatch,
         root_settings: Settings,
         safe_safety_monitor: object,
     ) -> None:
-        """Networked transports refuse to bind until proper SSE/HTTP wiring lands.
+        """``streamable_http`` dispatches to ``_serve_streamable_http``.
 
-        See ``_serve_sse`` / ``_serve_streamable_http`` docstrings; the
-        previous implementation passed an ``@asynccontextmanager`` as an
-        ASGI app and would have failed at first request. Refusing to
-        bind is safer than shipping a broken adapter.
+        We don't actually open a port — we patch the per-transport
+        method to simply record the call so this stays a fast unit test.
+        Phase B's real bind-up is verified by
+        ``tests/integration/test_mcp_sse_e2e.py``.
         """
         monkeypatch.setenv("MOUSEDROID_MCP_TOKEN", "test-token")
         cfg = MCPConfig.model_validate(
@@ -259,17 +259,23 @@ class TestServeDispatch:
         server = _make_server(cfg, root_settings, safe_safety_monitor)
         adapter = build_transport_adapter(server)
         assert adapter is not None
-        monkeypatch.setattr(MCPTransportAdapter, "_register_handlers", lambda self: None)
-        with pytest.raises(NotImplementedError, match="streamable_http"):
-            await adapter.serve()
+        called: list[str] = []
 
-    async def test_serve_sse_raises_not_implemented(
+        async def fake(self: MCPTransportAdapter) -> None:
+            called.append("streamable_http")
+
+        monkeypatch.setattr(MCPTransportAdapter, "_serve_streamable_http", fake)
+        monkeypatch.setattr(MCPTransportAdapter, "_register_handlers", lambda self: None)
+        await adapter.serve()
+        assert called == ["streamable_http"]
+
+    async def test_serve_routes_to_sse(
         self,
         monkeypatch: pytest.MonkeyPatch,
         root_settings: Settings,
         safe_safety_monitor: object,
     ) -> None:
-        """SSE transport refuses to bind until proper Starlette routing lands."""
+        """``sse`` dispatches to ``_serve_sse``."""
         cfg = MCPConfig.model_validate(
             {"enabled": True, "transport": "sse", "host": "127.0.0.1", "port": 18766}
         )
@@ -278,9 +284,15 @@ class TestServeDispatch:
         server = _make_server(cfg, root_settings, safe_safety_monitor)
         adapter = build_transport_adapter(server)
         assert adapter is not None
+        called: list[str] = []
+
+        async def fake(self: MCPTransportAdapter) -> None:
+            called.append("sse")
+
+        monkeypatch.setattr(MCPTransportAdapter, "_serve_sse", fake)
         monkeypatch.setattr(MCPTransportAdapter, "_register_handlers", lambda self: None)
-        with pytest.raises(NotImplementedError, match="SSE"):
-            await adapter.serve()
+        await adapter.serve()
+        assert called == ["sse"]
 
 
 @requires_mcp_sdk
