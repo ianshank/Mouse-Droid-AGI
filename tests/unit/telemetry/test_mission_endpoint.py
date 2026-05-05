@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -207,6 +208,99 @@ async def test_rate_limit_returns_429_with_retry_after() -> None:
         body = await second.json()
         assert body["error"] == "rate_limited"
         assert body["retry_after_s"] > 0
+
+
+async def test_client_cannot_spoof_channel_to_bypass_allowed_channels() -> None:
+    """REGRESSION: a malicious client cannot smuggle ``channel="mcp"``.
+
+    Devin Review #BUG_pr-review-job-..._0001 — if an operator locks the
+    box down to MCP-only via ``allowed_channels=("mcp",)``, a REST
+    client must not be able to bypass that policy by submitting
+    ``{"nl_command": "...", "channel": "mcp"}``. Two layers of defence:
+
+    1. ``MissionRequest.channel`` is :data:`Literal["rest"]` so any
+       non-``"rest"`` value fails Pydantic validation with HTTP 400.
+    2. The handler hard-codes ``channel="rest"`` at the dispatch site,
+       ignoring whatever the client supplied — so even if (1) is ever
+       relaxed, the channel string the dispatcher sees is the one the
+       endpoint claims.
+    """
+    cfg = OpenClawConfig(enabled=True, allowed_channels=("mcp",))
+    server, orch = _make_server(openclaw_cfg=cfg)
+    app = _build_app(server)
+    async with TestClient(TestServer(app)) as client:
+        # Layer 1: schema rejects spoof at validation.
+        spoofed = await client.post(
+            "/api/v1/mission",
+            json={"nl_command": "go", "channel": "mcp"},
+        )
+        assert spoofed.status == 400
+        assert (await spoofed.json())["error"] == "invalid_body"
+        # The legitimately-mismatched channel for the locked-down operator
+        # also gets refused, because the handler always tells the
+        # dispatcher ``channel="rest"`` regardless of what the body said.
+        legit = await client.post(
+            "/api/v1/mission",
+            json={"nl_command": "go", "channel": "rest"},
+        )
+        assert legit.status == 400
+        assert (await legit.json())["error"] == "invalid_command"
+        # Orchestrator was never reached.
+        assert orch is not None
+        assert orch.calls == 0
+
+
+async def test_handler_ignores_client_channel_field() -> None:
+    """Even when the schema accepts the value, the handler hard-codes 'rest'.
+
+    Belt-and-braces check: if the schema's :data:`Literal["rest"]`
+    constraint is ever loosened, the handler still passes
+    ``channel="rest"`` to the dispatcher. We confirm by stubbing the
+    dispatcher to capture its kwargs.
+    """
+    captured: list[str] = []
+
+    class _Capture:
+        @property
+        def mission_just_completed(self) -> bool:
+            return False
+
+        def clear_mission_completed(self) -> None:
+            return None
+
+        async def dispatch(self, _nl: str, *, channel: str, peer: str) -> Any:
+            captured.append(channel)
+            from mousedroid.orchestrator.mission_dispatcher import DispatchResult
+
+            return DispatchResult(
+                goal_vector=GoalVector(),
+                trace_id="x" * 16,
+                command_hash="y" * 12,
+                channel=channel,
+                peer=peer,
+                latency_ms=0.0,
+            )
+
+    queue: asyncio.Queue[TelemetryFrame] = asyncio.Queue(maxsize=4)
+    health = AsyncMock()
+    health.check_health = AsyncMock(return_value={"status": "ok"})
+    server = TelemetryServer(
+        cfg=TelemetryConfig(enabled=True),
+        telemetry_queue=queue,
+        health_monitor=health,
+        mission_dispatcher=_Capture(),
+        openclaw_cfg=OpenClawConfig(enabled=True),
+    )
+    server._running = True
+    app = _build_app(server)
+    async with TestClient(TestServer(app)) as client:
+        # Schema accepts 'rest'; dispatcher should still see 'rest'.
+        resp = await client.post(
+            "/api/v1/mission",
+            json={"nl_command": "go", "channel": "rest"},
+        )
+        assert resp.status == 202
+    assert captured == ["rest"]
 
 
 async def test_bearer_auth_required_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:

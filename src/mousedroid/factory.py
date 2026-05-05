@@ -408,12 +408,17 @@ def build_injection_filter(cfg: Settings) -> PromptInjectionFilterProtocol:
     OpenClaw :class:`MissionDispatcher` so REST + MCP + LLM ingress all
     enforce the same envelope.
 
-    The length cap defers to ``cfg.openclaw.max_command_len`` when
-    OpenClaw is enabled so the dispatcher is the single source of truth
-    for the cap; otherwise it falls back to ``cfg.llm.max_command_len``
-    so non-OpenClaw deployments keep the historical bound.
+    The length cap defers to ``cfg.openclaw.max_command_len`` only when
+    OpenClaw is **enabled** — so the dispatcher is the single source of
+    truth for the cap on production deployments. Disabled (or absent)
+    OpenClaw blocks fall back to ``cfg.llm.max_command_len`` so a YAML
+    block like ``openclaw: {enabled: false, max_command_len: 128}``
+    cannot silently lower the LLM gateway's length cap.
     """
-    max_len = cfg.openclaw.max_command_len if cfg.openclaw is not None else cfg.llm.max_command_len
+    if cfg.openclaw is not None and cfg.openclaw.enabled:
+        max_len = cfg.openclaw.max_command_len
+    else:
+        max_len = cfg.llm.max_command_len
     return RegexInjectionFilter(cfg.llm.injection_patterns, max_len=max_len)
 
 

@@ -14,7 +14,7 @@ import asyncio
 import contextlib
 import json
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -46,9 +46,14 @@ class MissionRequest(BaseModel):
     """Body schema for ``POST /api/v1/mission``.
 
     Defined at module scope so OpenClaw clients (and the test suite) can
-    import it without instantiating the whole server. ``channel`` is fixed
-    to ``"rest"`` so a future MCP-routed call cannot impersonate a REST
-    submission on this endpoint.
+    import it without instantiating the whole server.
+
+    ``channel`` is constrained to :data:`Literal["rest"]` AND ignored by
+    the handler — defence-in-depth. A REST client cannot smuggle
+    ``channel="mcp"`` past the dispatcher's
+    :class:`OpenClawConfig.allowed_channels` gate either by Pydantic
+    validation (this constraint) or by handler logic (the call site
+    hard-codes the channel string).
     """
 
     nl_command: str = Field(..., description="Natural language mission command")
@@ -56,7 +61,13 @@ class MissionRequest(BaseModel):
         None,
         description="Optional dedup token; replays within the window return 202 with cached body.",
     )
-    channel: str = Field("rest", description="Channel marker; pinned to 'rest' for this endpoint.")
+    channel: Literal["rest"] = Field(
+        "rest",
+        description=(
+            "Channel marker. Constrained to 'rest' on this endpoint; clients "
+            "cannot spoof a different channel to bypass allowed_channels."
+        ),
+    )
 
 
 _log = get_logger(__name__)
@@ -542,9 +553,14 @@ class TelemetryServer:
         )
 
         try:
+            # ``channel`` is hard-coded here, NOT taken from ``req.channel``,
+            # so a malicious client cannot smuggle a different channel
+            # string past the dispatcher's ``allowed_channels`` gate (the
+            # schema also constrains ``req.channel`` to Literal["rest"] —
+            # this hard-coding is the defence-in-depth layer).
             result = await self._mission_dispatcher.dispatch(
                 req.nl_command,
-                channel=req.channel,
+                channel="rest",
                 peer=peer,
             )
         except InjectionRejected:
