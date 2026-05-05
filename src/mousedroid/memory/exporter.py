@@ -74,7 +74,15 @@ class MarkdownReplayExporter:
         return self._path
 
     async def export(self, replay: EpisodicReplay) -> Path | None:
-        """Snapshot the replay buffer and atomically replace MEMORY.md."""
+        """Snapshot the replay buffer and atomically replace MEMORY.md.
+
+        Every disk-touching call is offloaded via :func:`asyncio.to_thread`
+        so the 30 Hz orchestrator tick that triggers this hook never
+        blocks on filesystem latency — important when the configured
+        ``shared_memory_path`` lives on a Tailscale-shared NFS mount or
+        SMB share where ``mkdir`` / ``write_text`` / ``replace`` can each
+        cost tens of milliseconds.
+        """
         if len(replay) == 0:
             _log.debug(
                 "memory_export_skipped",
@@ -88,10 +96,7 @@ class MarkdownReplayExporter:
         samples = await asyncio.to_thread(replay.sample, self._max_entries)
         body = _render_markdown(samples, replay_size=len(replay))
         try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-            tmp.write_text(body, encoding="utf-8")
-            os.replace(tmp, self._path)
+            await asyncio.to_thread(self._write_atomic, body)
         except OSError as exc:
             _log.warning(
                 "memory_export_failed",
@@ -108,6 +113,18 @@ class MarkdownReplayExporter:
             latency_ms=latency_ms,
         )
         return self._path
+
+    def _write_atomic(self, body: str) -> None:
+        """Synchronous atomic write, intended to be run via ``asyncio.to_thread``.
+
+        Splitting this out keeps :meth:`export` free of any sync I/O and
+        makes the call site grep-able for callers who want to confirm
+        the off-loop guarantee.
+        """
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self._path.with_suffix(self._path.suffix + ".tmp")
+        tmp.write_text(body, encoding="utf-8")
+        os.replace(tmp, self._path)
 
 
 def _render_markdown(samples: list[Any], *, replay_size: int) -> str:

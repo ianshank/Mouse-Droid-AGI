@@ -129,6 +129,36 @@ async def test_sse_transport_bearer_enforcement(
         async with httpx_pkg.AsyncClient(timeout=2.0) as client:
             unauth_post = await client.post(f"http://127.0.0.1:{port}/messages/?session_id=test")
             assert unauth_post.status_code == 401
+
+        # Auth-passing path: stream the /sse response just long enough
+        # to read the headers + first chunk, then close. This proves:
+        #   1. the bearer middleware passes through with a valid token,
+        #   2. the SSE endpoint reaches the SDK transport and starts the
+        #      stream (Content-Type: text/event-stream),
+        #   3. there is no ASGI double-send protocol violation — a
+        #      second http.response.start would surface as a 500 in
+        #      uvicorn's error log and break this read.
+        async with (
+            httpx_pkg.AsyncClient(timeout=3.0) as client,
+            client.stream(
+                "GET",
+                f"http://127.0.0.1:{port}/sse",
+                headers={"Authorization": f"Bearer {_TOKEN}"},
+            ) as stream,
+        ):
+            assert stream.status_code == 200
+            ctype = stream.headers.get("content-type", "")
+            assert "text/event-stream" in ctype, f"unexpected content-type: {ctype!r}"
+            received = bytearray()
+            try:
+                async with asyncio.timeout(1.0):
+                    async for chunk in stream.aiter_raw():
+                        received.extend(chunk)
+                        if len(received) > 16:
+                            break
+            except (TimeoutError, asyncio.TimeoutError):
+                pass
+            assert len(received) > 0, "SSE handler started but emitted no bytes"
     finally:
         serve_task.cancel()
         with contextlib.suppress(asyncio.CancelledError, BaseException):

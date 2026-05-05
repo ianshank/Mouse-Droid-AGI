@@ -135,13 +135,16 @@ class MCPTransportAdapter:
 
         import uvicorn
 
+        # ``lifespan="on"`` is required for the streamable_http transport's
+        # session-manager context (see ``_build_starlette_app``); SSE has
+        # no lifespan and Starlette runs an empty default one cleanly.
         config = uvicorn.Config(
             app,
             host=cfg.host,
             port=cfg.port,
             log_config=None,
             access_log=False,
-            lifespan="off",
+            lifespan="on",
         )
         srv = uvicorn.Server(config)
         _log.info(
@@ -214,33 +217,34 @@ class MCPTransportAdapter:
 
         if transport_kind == "sse":
             from mcp.server.sse import SseServerTransport
-            from starlette.requests import Request
-            from starlette.responses import Response
             from starlette.routing import Route
 
             sse = SseServerTransport("/messages/")
             sdk_server = self.sdk_server
 
-            async def _sse_endpoint(request: Request) -> Response:
-                # Bridge Starlette's Request → raw ASGI for the SDK
-                # transport. The empty ``Response()`` is a placeholder
-                # returned after ``connect_sse`` has fully drained the
-                # stream over ``send`` — Starlette's contract is
-                # satisfied by the prior ``http.response.body`` events.
-                async with sse.connect_sse(
-                    request.scope,
-                    request.receive,
-                    request._send,
-                ) as (read, write):
-                    await sdk_server.run(
-                        read,
-                        write,
-                        sdk_server.create_initialization_options(),
-                    )
-                return Response()
+            class _SSEEndpoint:
+                """Raw-ASGI endpoint for the SSE handshake.
+
+                Starlette's :class:`Route` only wraps async *functions*
+                in :func:`starlette.routing.request_response` (which
+                expects a returned :class:`~starlette.responses.Response`
+                and emits a fresh ``http.response.start``). A class
+                instance with ``__call__(scope, receive, send)`` is
+                treated as raw ASGI instead — so the start event sent
+                by ``connect_sse`` is the only one on the wire and there
+                is no double-send protocol violation.
+                """
+
+                async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+                    async with sse.connect_sse(scope, receive, send) as (read, write):
+                        await sdk_server.run(
+                            read,
+                            write,
+                            sdk_server.create_initialization_options(),
+                        )
 
             routes = [
-                Route("/sse", endpoint=_sse_endpoint, methods=["GET"]),
+                Route("/sse", endpoint=_SSEEndpoint(), methods=["GET"]),
                 Mount("/messages/", app=sse.handle_post_message),
             ]
             return Starlette(routes=routes, middleware=middleware)
