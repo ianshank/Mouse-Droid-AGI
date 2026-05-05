@@ -55,6 +55,7 @@ if TYPE_CHECKING:
     from mousedroid.mcp.protocol import MCPServerProtocol
     from mousedroid.memory.tier import MemoryTier
     from mousedroid.orchestrator.face_controller import FaceController
+    from mousedroid.orchestrator.mission_dispatcher import MissionDispatcherProtocol
     from mousedroid.reward.protocol import RewardModelProtocol
     from mousedroid.sensing.manager import SensorManager
     from mousedroid.telemetry.log_buffer import LogRingBuffer
@@ -869,7 +870,7 @@ def build_telemetry_server(
     log_buffer: LogRingBuffer | None = None,
     metrics_registry: MetricsRegistry | None = None,
     camera: VisionProtocol | None = None,
-    mission_dispatcher: Any | None = None,
+    mission_dispatcher: MissionDispatcherProtocol | None = None,
 ) -> TelemetryServerProtocol | None:
     """Build telemetry server if telemetry is enabled.
 
@@ -1559,6 +1560,10 @@ def build_memory_exporter(cfg: Settings) -> Any | None:
     ``cfg.openclaw.shared_memory_path`` is unset; the orchestrator hook
     is gated on a non-None return so disabled deployments incur zero
     runtime cost.
+
+    Tunable parameters (``max_entries``, ``entry_truncate_chars``) come
+    from :class:`OpenClawConfig` so the exporter has zero hardcoded
+    knobs at construction time (per CLAUDE.md rule #3).
     """
     if cfg.openclaw is None or not cfg.openclaw.enabled or cfg.openclaw.shared_memory_path is None:
         return None
@@ -1567,8 +1572,14 @@ def build_memory_exporter(cfg: Settings) -> Any | None:
     _log.info(
         "memory_exporter_built",
         path=str(cfg.openclaw.shared_memory_path),
+        max_entries=cfg.openclaw.export_max_entries,
+        entry_truncate_chars=cfg.openclaw.export_entry_truncate_chars,
     )
-    return MarkdownReplayExporter(cfg.openclaw.shared_memory_path)
+    return MarkdownReplayExporter(
+        cfg.openclaw.shared_memory_path,
+        max_entries=cfg.openclaw.export_max_entries,
+        entry_truncate_chars=cfg.openclaw.export_entry_truncate_chars,
+    )
 
 
 def build_builtin_skills(cfg: Settings) -> tuple[Any, ...]:

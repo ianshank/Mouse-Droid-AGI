@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from mousedroid.config.schema import OpenClawConfig, Settings
 from mousedroid.factory import build_builtin_skills, build_skill_registry
 
@@ -93,3 +95,36 @@ def test_build_injection_filter_falls_back_when_openclaw_absent() -> None:
     assert s.openclaw is None
     f = build_injection_filter(s)
     assert f.max_len == s.llm.max_command_len
+
+
+# ---------------------------------------------------------------------------
+# Regression: build_memory_exporter threads max_entries + entry_truncate_chars
+#             through OpenClawConfig (Devin Review #BUG_..._0001)
+# ---------------------------------------------------------------------------
+
+
+def test_build_memory_exporter_threads_config_knobs(tmp_path: Path) -> None:
+    """REGRESSION: Devin — exporter knobs must come from config, not hardcoded.
+
+    Constructing the exporter through the factory must respect
+    ``cfg.openclaw.export_max_entries`` and
+    ``cfg.openclaw.export_entry_truncate_chars`` instead of falling
+    back to the dataclass defaults.
+    """
+    from mousedroid.factory import build_memory_exporter
+
+    cfg = Settings.model_validate(
+        {
+            "mock_hardware": True,
+            "openclaw": {
+                "enabled": True,
+                "shared_memory_path": str(tmp_path / "MEMORY.md"),
+                "export_max_entries": 4,
+                "export_entry_truncate_chars": 16,
+            },
+        }
+    )
+    exporter = build_memory_exporter(cfg)
+    assert exporter is not None
+    assert exporter._max_entries == 4
+    assert exporter._entry_truncate_chars == 16

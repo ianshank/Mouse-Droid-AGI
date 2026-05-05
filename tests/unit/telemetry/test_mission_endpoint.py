@@ -303,6 +303,166 @@ async def test_handler_ignores_client_channel_field() -> None:
     assert captured == ["rest"]
 
 
+async def test_mac_mini_origin_added_to_cors_allow_list() -> None:
+    """REGRESSION: Devin — ``mac_mini_origin`` must actually wire into CORS.
+
+    The OpenClaw doc claimed that setting ``mac_mini_origin`` would
+    allow the origin via CORS; previously this was unimplemented.
+    With the fix, the constructor splices the origin into the
+    middleware's allow-list at boot.
+    """
+    from mousedroid.config.schema import TelemetryConfig as _TCfg
+
+    queue: asyncio.Queue[TelemetryFrame] = asyncio.Queue(maxsize=4)
+    health = AsyncMock()
+    health.check_health = AsyncMock(return_value={"status": "ok"})
+    cfg = _TCfg(enabled=True, cors_origins=["https://other.example"])
+    openclaw_cfg = OpenClawConfig(
+        enabled=True,
+        mac_mini_origin="https://mini.tail-xxxx.ts.net",
+    )
+    server = TelemetryServer(
+        cfg=cfg,
+        telemetry_queue=queue,
+        health_monitor=health,
+        openclaw_cfg=openclaw_cfg,
+    )
+    server._running = True
+    app = _build_app(server)
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get(
+            "/api/v1/status",
+            headers={"Origin": "https://mini.tail-xxxx.ts.net"},
+        )
+        assert resp.headers.get("Access-Control-Allow-Origin") == ("https://mini.tail-xxxx.ts.net")
+
+
+async def test_mac_mini_origin_skipped_when_wildcard_already_present() -> None:
+    """Wildcard CORS already lets everything in; don't redundantly append."""
+    from mousedroid.config.schema import TelemetryConfig as _TCfg
+
+    queue: asyncio.Queue[TelemetryFrame] = asyncio.Queue(maxsize=4)
+    health = AsyncMock()
+    health.check_health = AsyncMock(return_value={"status": "ok"})
+    cfg = _TCfg(enabled=True, cors_origins=["*"])
+    openclaw_cfg = OpenClawConfig(
+        enabled=True,
+        mac_mini_origin="https://mini.tail-xxxx.ts.net",
+    )
+    server = TelemetryServer(
+        cfg=cfg,
+        telemetry_queue=queue,
+        health_monitor=health,
+        openclaw_cfg=openclaw_cfg,
+    )
+    server._running = True
+    app = _build_app(server)
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get(
+            "/api/v1/status",
+            headers={"Origin": "https://mini.tail-xxxx.ts.net"},
+        )
+        # Wildcard origin is what the middleware emits when '*' is set.
+        assert resp.headers.get("Access-Control-Allow-Origin") == "*"
+
+
+async def test_oversized_idempotency_key_rejected_with_400() -> None:
+    """REGRESSION: Copilot — unbounded idempotency_key inflates dedup map.
+
+    The schema caps the key at 128 chars and constrains the charset.
+    Oversized or malformed keys must fail validation BEFORE the
+    handler stores anything in ``_mission_dedup``.
+    """
+    server, _orch = _make_server(openclaw_cfg=OpenClawConfig(enabled=True))
+    app = _build_app(server)
+    async with TestClient(TestServer(app)) as client:
+        too_long = await client.post(
+            "/api/v1/mission",
+            json={"nl_command": "go", "idempotency_key": "a" * 200},
+        )
+        assert too_long.status == 400
+        assert (await too_long.json())["error"] == "invalid_body"
+        bad_chars = await client.post(
+            "/api/v1/mission",
+            json={"nl_command": "go", "idempotency_key": "tx 1\nbad"},
+        )
+        assert bad_chars.status == 400
+    # The dedup map is empty — invalid keys never get stored.
+    assert server._mission_dedup == {}
+
+
+async def test_concurrent_idempotency_dispatches_only_once() -> None:
+    """REGRESSION: Copilot — concurrent retries with the same key.
+
+    Two requests fired with the same ``idempotency_key`` must result in
+    AT MOST ONE call to the underlying dispatcher; the follower waits
+    on the leader's in-flight future and gets the same body back.
+    """
+    dispatch_started = asyncio.Event()
+    release_dispatch = asyncio.Event()
+    call_count = 0
+
+    class _SlowOrch:
+        async def process_mission(self, _nl: str) -> GoalVector:
+            nonlocal call_count
+            call_count += 1
+            dispatch_started.set()
+            await release_dispatch.wait()
+            return GoalVector(0.7, 0.0, 0.0)
+
+    deferred = DeferredOrchestratorRef()
+    deferred.bind(_SlowOrch())
+    dispatcher = OrchestratorMissionDispatcher(
+        deferred,
+        injection_filter=RegexInjectionFilter([], max_len=64),
+        cfg=OpenClawConfig(enabled=True),
+    )
+    queue: asyncio.Queue[TelemetryFrame] = asyncio.Queue(maxsize=4)
+    health = AsyncMock()
+    health.check_health = AsyncMock(return_value={"status": "ok"})
+    server = TelemetryServer(
+        cfg=TelemetryConfig(enabled=True),
+        telemetry_queue=queue,
+        health_monitor=health,
+        mission_dispatcher=dispatcher,
+        openclaw_cfg=OpenClawConfig(enabled=True),
+    )
+    server._running = True
+    app = _build_app(server)
+
+    async with TestClient(TestServer(app)) as client:
+        leader = asyncio.create_task(
+            client.post(
+                "/api/v1/mission",
+                json={"nl_command": "patrol", "idempotency_key": "tx-race"},
+            )
+        )
+        # Wait until the leader has reached the dispatcher; only then
+        # send the follower so the in-flight future is already populated.
+        await dispatch_started.wait()
+        follower = asyncio.create_task(
+            client.post(
+                "/api/v1/mission",
+                json={"nl_command": "patrol", "idempotency_key": "tx-race"},
+            )
+        )
+        # Give the follower a moment to register on the future.
+        await asyncio.sleep(0.05)
+        # Release the leader; both requests now resolve.
+        release_dispatch.set()
+        leader_resp = await leader
+        follower_resp = await follower
+        leader_body = await leader_resp.json()
+        follower_body = await follower_resp.json()
+
+    assert leader_resp.status == 202
+    assert follower_resp.status == 202
+    # Same trace_id proves the follower got the leader's body, not a
+    # parallel dispatch outcome.
+    assert leader_body["trace_id"] == follower_body["trace_id"]
+    assert call_count == 1
+
+
 async def test_bearer_auth_required_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MOUSEDROID_TELEMETRY_TOKEN", "secret-1")
     auth_cfg = TelemetryAuthConfig(

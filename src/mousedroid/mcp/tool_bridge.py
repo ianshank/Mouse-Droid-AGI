@@ -252,10 +252,18 @@ class MCPToolBridge:
         if spec is None:
             return self._finish(start, name, "denied", error="tool not registered", log=log)
 
-        # 5. Rate limit.
-        if not await self._rate_limiter.take():
+        # 5. Rate limit. ``take`` returns ``(ok, retry_after_s)``; we
+        # only surface ``ok`` here because the MCP error envelope has
+        # no retry-hint field, but the hint is included in the error
+        # string for operator-side observability.
+        taken, retry_after_s = await self._rate_limiter.take()
+        if not taken:
             return self._finish(
-                start, name, "rate_limited", error="per-session rate limit exceeded", log=log
+                start,
+                name,
+                "rate_limited",
+                error=f"per-session rate limit exceeded; retry_after_s={retry_after_s:.3f}",
+                log=log,
             )
 
         # 6. Safety gate (only for actuation tools that survived the toggle).

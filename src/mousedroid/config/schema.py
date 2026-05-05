@@ -3026,7 +3026,11 @@ class OpenClawConfig(BaseModel):
         None,
         description=(
             "Origin URL of the OpenClaw host (e.g. https://mini.tail-xxxx.ts.net). "
-            "When set, the REST mission endpoint allows this origin via CORS."
+            "When set AND ``telemetry.cors_origins`` is restrictive (does not "
+            "contain '*'), :class:`TelemetryServer` automatically appends this "
+            "origin to the CORS allow-list at boot so the OpenClaw dashboard "
+            "can hit the REST mission endpoint without operators having to "
+            "duplicate the URL in two YAML keys."
         ),
     )
     allowed_channels: tuple[Literal["rest", "mcp"], ...] = Field(
@@ -3086,6 +3090,22 @@ class OpenClawConfig(BaseModel):
             "Skills declared with metadata['actuation']=True require this flag "
             "AND mcp.expose_actuation_tools=true. Defence-in-depth even when "
             "an operator flips one of the two by accident."
+        ),
+    )
+    export_max_entries: int = Field(
+        32,
+        gt=0,
+        description=(
+            "Cap on episodic samples included in each MEMORY.md snapshot "
+            "(threaded into MarkdownReplayExporter)."
+        ),
+    )
+    export_entry_truncate_chars: int = Field(
+        240,
+        gt=0,
+        description=(
+            "Per-entry display cap (chars) in MEMORY.md so large episodic "
+            "payloads don't blow the OpenClaw agent's context window."
         ),
     )
 

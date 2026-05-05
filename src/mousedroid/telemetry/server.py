@@ -54,12 +54,26 @@ class MissionRequest(BaseModel):
     :class:`OpenClawConfig.allowed_channels` gate either by Pydantic
     validation (this constraint) or by handler logic (the call site
     hard-codes the channel string).
+
+    ``idempotency_key`` is bounded by length and charset so an attacker
+    cannot inflate the in-memory dedup map with arbitrary-length keys
+    or smuggle log-corrupting bytes into the structured logs.
     """
 
     nl_command: str = Field(..., description="Natural language mission command")
     idempotency_key: str | None = Field(
         None,
-        description="Optional dedup token; replays within the window return 202 with cached body.",
+        # 128 chars is generous: a UUID4 hex is 32, a UUIDv7+suffix
+        # comfortably fits below 64. The bound is on the schema (so 400
+        # is returned before the dedup map is touched) and the charset
+        # regex blocks log-injection / unicode shenanigans.
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_\-:.]+$",
+        description=(
+            "Optional dedup token; replays within the window return 202 "
+            "with cached body. ASCII alphanumeric + ``_-:.`` only, "
+            "max_length=128."
+        ),
     )
     channel: Literal["rest"] = Field(
         "rest",
@@ -165,8 +179,17 @@ class TelemetryServer:
         else:
             self._mission_rate_limiter = None
             self._mission_dedup_window_s = 0.0
-        # idempotency_key -> (expires_monotonic, cached_response_dict)
+        # Two-tier idempotency state:
+        # - ``_mission_dedup``  : completed responses keyed by
+        #   idempotency_key, paired with their expiry timestamp. Replays
+        #   inside the dedup window return the cached body.
+        # - ``_mission_inflight``: futures for in-progress dispatches.
+        #   Concurrent retries with the same key block on the leader's
+        #   future instead of starting a parallel dispatch — so the
+        #   contract is "at most one downstream dispatch per
+        #   idempotency_key per dedup window" even under burst replays.
         self._mission_dedup: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._mission_inflight: dict[str, asyncio.Future[tuple[int, dict[str, Any]]]] = {}
 
         self._ws_clients: list[web.WebSocketResponse] = []
         self._latest_frame: TelemetryFrame | None = None
@@ -291,7 +314,23 @@ class TelemetryServer:
 
         from mousedroid.telemetry.auth import build_bearer_auth_middleware, build_cors_middleware
 
-        cors_origins = self._cfg.cors_origins
+        cors_origins = list(self._cfg.cors_origins)
+        # If OpenClaw is wired and the operator named the Mac mini's
+        # origin, splice it into the CORS allow-list so cross-host
+        # requests from the OpenClaw dashboard succeed without forcing
+        # operators to keep two YAML lists in sync.
+        if (
+            self._openclaw_cfg is not None
+            and self._openclaw_cfg.mac_mini_origin
+            and "*" not in cors_origins
+            and self._openclaw_cfg.mac_mini_origin not in cors_origins
+        ):
+            cors_origins.append(self._openclaw_cfg.mac_mini_origin)
+            _log.info(
+                "telemetry_cors_origin_added",
+                origin=self._openclaw_cfg.mac_mini_origin,
+                source="openclaw.mac_mini_origin",
+            )
         api_key = self._cfg.api_key
         auth_cfg = self._cfg.auth
 
@@ -505,17 +544,18 @@ class TelemetryServer:
             log.warning("mission_endpoint_rejected", reason="openclaw_disabled")
             return web.json_response({"error": "openclaw_disabled"}, status=503)
 
-        if self._mission_rate_limiter is not None and not await self._mission_rate_limiter.take():
-            retry_after = self._mission_rate_limiter.retry_after_s()
-            log.warning(
-                "mission_endpoint_rejected",
-                reason="rate_limited",
-                retry_after_s=retry_after,
-            )
-            return web.json_response(
-                {"error": "rate_limited", "retry_after_s": round(retry_after, 3)},
-                status=429,
-            )
+        if self._mission_rate_limiter is not None:
+            taken, retry_after = await self._mission_rate_limiter.take()
+            if not taken:
+                log.warning(
+                    "mission_endpoint_rejected",
+                    reason="rate_limited",
+                    retry_after_s=retry_after,
+                )
+                return web.json_response(
+                    {"error": "rate_limited", "retry_after_s": round(retry_after, 3)},
+                    status=429,
+                )
 
         try:
             payload = await request.json()
@@ -532,24 +572,44 @@ class TelemetryServer:
                 status=400,
             )
 
-        # Idempotency: replay returns the cached body for the configured
-        # window so OpenClaw can safely re-send on transient failures.
+        # Idempotency: two-phase dedup so concurrent retries with the
+        # same key never start parallel dispatches.
+        # - ``_mission_dedup`` caches the leader's *successful* (202)
+        #   body for ``command_dedup_window_s`` so later replays return
+        #   the cached body without touching the dispatcher.
+        # - ``_mission_inflight`` carries the leader's in-progress
+        #   future; followers ``await`` it so they see the same
+        #   outcome (success or error) without a parallel dispatch.
         now = time.monotonic()
-        # Evict expired entries lazily (cheap; bounded by request rate).
         if self._mission_dedup:
             self._mission_dedup = {k: v for k, v in self._mission_dedup.items() if v[0] > now}
-        if req.idempotency_key and req.idempotency_key in self._mission_dedup:
-            cached = self._mission_dedup[req.idempotency_key][1]
-            log.info(
-                "mission_endpoint_dedup_hit",
-                idempotency_key=req.idempotency_key,
-            )
+        key = req.idempotency_key
+        if key is not None and key in self._mission_dedup:
+            cached = self._mission_dedup[key][1]
+            log.info("mission_endpoint_dedup_hit", idempotency_key=key, kind="cached")
             return web.json_response(cached, status=202)
+        if key is not None and key in self._mission_inflight:
+            log.info("mission_endpoint_dedup_hit", idempotency_key=key, kind="inflight")
+            try:
+                leader_status, leader_body = await self._mission_inflight[key]
+            except (asyncio.CancelledError, Exception):
+                # Leader exited abnormally; surface a 500 so the
+                # follower can retry instead of seeing a stale
+                # in-flight future.
+                return web.json_response({"error": "internal_error"}, status=500)
+            return web.json_response(leader_body, status=leader_status)
+
+        # Reserve the in-flight slot BEFORE awaiting dispatch, so any
+        # concurrent retry with the same key sees the future and waits.
+        leader_future: asyncio.Future[tuple[int, dict[str, Any]]] | None = None
+        if key is not None:
+            leader_future = asyncio.get_running_loop().create_future()
+            self._mission_inflight[key] = leader_future
 
         log.info(
             "mission_endpoint_received",
             length=len(req.nl_command),
-            has_idempotency_key=req.idempotency_key is not None,
+            has_idempotency_key=key is not None,
         )
 
         try:
@@ -558,50 +618,66 @@ class TelemetryServer:
             # string past the dispatcher's ``allowed_channels`` gate (the
             # schema also constrains ``req.channel`` to Literal["rest"] —
             # this hard-coding is the defence-in-depth layer).
-            result = await self._mission_dispatcher.dispatch(
-                req.nl_command,
-                channel="rest",
-                peer=peer,
-            )
-        except InjectionRejected:
-            return web.json_response(
-                {"error": "invalid_command", "reason": "injection_pattern"},
-                status=400,
-            )
-        except ValueError as exc:
-            return web.json_response(
-                {"error": "invalid_command", "reason": str(exc)},
-                status=400,
-            )
-        except TimeoutError:
-            log.warning("mission_endpoint_timeout")
-            return web.json_response({"error": "timeout"}, status=504)
-        except Exception as exc:  # pylint: disable=broad-except
-            log.warning("mission_endpoint_failed", error=f"{type(exc).__name__}:{exc}")
-            return web.json_response({"error": "internal_error"}, status=500)
+            status: int
+            body: dict[str, Any]
+            try:
+                result = await self._mission_dispatcher.dispatch(
+                    req.nl_command,
+                    channel="rest",
+                    peer=peer,
+                )
+            except InjectionRejected:
+                status = 400
+                body = {"error": "invalid_command", "reason": "injection_pattern"}
+            except ValueError as exc:
+                status = 400
+                body = {"error": "invalid_command", "reason": str(exc)}
+            except TimeoutError:
+                log.warning("mission_endpoint_timeout")
+                status = 504
+                body = {"error": "timeout"}
+            except Exception as exc:  # pylint: disable=broad-except
+                log.warning("mission_endpoint_failed", error=f"{type(exc).__name__}:{exc}")
+                status = 500
+                body = {"error": "internal_error"}
+            else:
+                body = {
+                    "status": "accepted",
+                    "trace_id": result.trace_id,
+                    "command_hash": result.command_hash,
+                    "latency_ms": round(result.latency_ms, 3),
+                    "goal_vector": {
+                        "vx": result.goal_vector.vx_target,
+                        "vy": result.goal_vector.vy_target,
+                        "omega": result.goal_vector.omega_target,
+                    },
+                }
+                status = 202
+                log.info(
+                    "mission_endpoint_dispatched",
+                    trace_id=result.trace_id,
+                    latency_ms=result.latency_ms,
+                )
 
-        body: dict[str, Any] = {
-            "status": "accepted",
-            "trace_id": result.trace_id,
-            "command_hash": result.command_hash,
-            "latency_ms": round(result.latency_ms, 3),
-            "goal_vector": {
-                "vx": result.goal_vector.vx_target,
-                "vy": result.goal_vector.vy_target,
-                "omega": result.goal_vector.omega_target,
-            },
-        }
-        if req.idempotency_key:
-            self._mission_dedup[req.idempotency_key] = (
-                now + self._mission_dedup_window_s,
-                body,
-            )
-        log.info(
-            "mission_endpoint_dispatched",
-            trace_id=result.trace_id,
-            latency_ms=result.latency_ms,
-        )
-        return web.json_response(body, status=202)
+            # Cache only successful 202s; transient 5xx must be
+            # retryable with the same key. Client errors (400, 504)
+            # propagate to in-flight followers via the future but are
+            # not persisted — the request body that produced them was
+            # rejected for cause and a retry deserves a fresh check.
+            if key is not None and status == 202:
+                self._mission_dedup[key] = (now + self._mission_dedup_window_s, body)
+            if leader_future is not None:
+                leader_future.set_result((status, body))
+            return web.json_response(body, status=status)
+        finally:
+            if key is not None:
+                self._mission_inflight.pop(key, None)
+                # Defensive: if we somehow exited without resolving the
+                # future, signal followers so they don't hang.
+                if leader_future is not None and not leader_future.done():
+                    leader_future.set_exception(
+                        RuntimeError("mission leader exited without setting a result")
+                    )
 
     async def _handle_metrics(self, request: web.Request) -> web.Response:
         """GET /metrics — Prometheus text-format metrics scrape endpoint.

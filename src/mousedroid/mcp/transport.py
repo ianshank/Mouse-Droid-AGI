@@ -196,14 +196,21 @@ class MCPTransportAdapter:
         """Compose the Starlette app for the given transport kind.
 
         Two transports map onto the same app shape so both share the
-        bearer middleware composition; the only divergence is the route
-        mounting strategy of the underlying SDK transport.
+        bearer middleware composition; the only divergence is the
+        routing strategy of the underlying SDK transport.
 
-        Both transports use raw-ASGI ``Mount`` rather than Starlette
-        ``Route`` because Starlette routes require endpoints to return
-        a :class:`~starlette.responses.Response`, while the MCP SDK
-        transports take over ``send`` directly inside their context
-        managers.
+        * **SSE** uses a Starlette :class:`~starlette.routing.Route`
+          pinned to ``/sse``, with a class-based ASGI endpoint
+          (:class:`_SSEEndpoint`). A class instance bypasses Starlette's
+          :func:`request_response` wrapper — which would otherwise emit
+          a fresh ``http.response.start`` after the SDK already wrote
+          one — and is treated as raw ASGI. The companion
+          ``/messages/`` endpoint is mounted as a raw-ASGI handler.
+        * **streamable_http** uses a single ``Mount("/", ...)`` because
+          the SDK's session manager dispatches every method/path
+          internally. A lifespan context wraps the session manager's
+          ``run()`` so its background task group is alive for the
+          server's lifetime.
         """
         from starlette.applications import Starlette
         from starlette.middleware import Middleware

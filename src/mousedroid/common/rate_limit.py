@@ -41,12 +41,17 @@ class TokenBucket:
         self._last: float = time.monotonic()
         self._lock = asyncio.Lock()
 
-    async def take(self) -> bool:
+    async def take(self) -> tuple[bool, float]:
         """Consume one token if available.
 
         Returns:
-            ``True`` when a token was consumed, ``False`` when the bucket
-            was empty (caller should respond with a rate-limit error).
+            ``(True, 0.0)`` when a token was consumed; ``(False, hint)``
+            when the bucket was empty, where ``hint`` is the approximate
+            seconds until the next refill makes a token available.
+
+            Returning the hint atomically with the take outcome avoids
+            torn reads against ``_tokens`` from a separate accessor —
+            the value is computed under the same lock as the refill.
         """
         async with self._lock:
             now = time.monotonic()
@@ -55,15 +60,23 @@ class TokenBucket:
             self._tokens = min(self._capacity, self._tokens + elapsed * self._refill_per_s)
             if self._tokens >= 1.0:
                 self._tokens -= 1.0
-                return True
-            return False
+                return True, 0.0
+            return False, self._retry_after_s_locked()
 
-    def retry_after_s(self) -> float:
-        """Approximate seconds until at least one token is available.
+    async def retry_after_s(self) -> float:
+        """Async snapshot of the seconds-until-refill hint.
 
-        Used for the ``Retry-After`` hint in HTTP 429 responses. Does not
-        consume a token.
+        Acquires the same lock as :meth:`take` so concurrent callers
+        can't observe a torn ``_tokens`` value. For callers in the hot
+        path, prefer the ``(taken, hint)`` tuple from :meth:`take`
+        directly — this accessor exists for observability code that
+        wants the hint without consuming a token.
         """
+        async with self._lock:
+            return self._retry_after_s_locked()
+
+    def _retry_after_s_locked(self) -> float:
+        """Compute the hint while holding ``_lock`` (caller's responsibility)."""
         deficit = max(0.0, 1.0 - self._tokens)
         if self._refill_per_s <= 0:  # pragma: no cover - guarded by config
             return float("inf")
