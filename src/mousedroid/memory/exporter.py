@@ -33,6 +33,11 @@ _log = get_logger(__name__)
 
 SCHEMA_VERSION = 1
 
+# Per-entry display cap so MEMORY.md stays readable even when episodic
+# payloads are large dicts. Configurable per exporter instance via the
+# ``entry_truncate_chars`` constructor arg; this constant is the default.
+_DEFAULT_ENTRY_TRUNCATE_CHARS = 240
+
 
 @runtime_checkable
 class MemoryExporterProtocol(Protocol):
@@ -50,9 +55,15 @@ class MemoryExporterProtocol(Protocol):
 class MarkdownReplayExporter:
     """Default :class:`MemoryExporterProtocol` implementation."""
 
-    __slots__ = ("_max_entries", "_path")
+    __slots__ = ("_entry_truncate_chars", "_max_entries", "_path")
 
-    def __init__(self, path: Path, *, max_entries: int = 32) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        max_entries: int = 32,
+        entry_truncate_chars: int = _DEFAULT_ENTRY_TRUNCATE_CHARS,
+    ) -> None:
         """Initialise the exporter.
 
         Args:
@@ -61,12 +72,18 @@ class MarkdownReplayExporter:
             max_entries: Cap on the number of episodic samples included
                 in the snapshot. Bounded so ``MEMORY.md`` stays small
                 enough for the OpenClaw agent's context window.
+            entry_truncate_chars: Per-entry display cap (in characters).
+                Defaults to :data:`_DEFAULT_ENTRY_TRUNCATE_CHARS`.
         """
         if max_entries <= 0:
             msg = "max_entries must be positive"
             raise ValueError(msg)
+        if entry_truncate_chars <= 0:
+            msg = "entry_truncate_chars must be positive"
+            raise ValueError(msg)
         self._path = path
         self._max_entries = max_entries
+        self._entry_truncate_chars = entry_truncate_chars
 
     @property
     def path(self) -> Path:
@@ -94,7 +111,11 @@ class MarkdownReplayExporter:
         # ``EpisodicReplay.sample`` is sync; offload to a thread so the
         # orchestrator's hot loop is not blocked during the snapshot.
         samples = await asyncio.to_thread(replay.sample, self._max_entries)
-        body = _render_markdown(samples, replay_size=len(replay))
+        body = _render_markdown(
+            samples,
+            replay_size=len(replay),
+            entry_truncate_chars=self._entry_truncate_chars,
+        )
         try:
             await asyncio.to_thread(self._write_atomic, body)
         except OSError as exc:
@@ -127,7 +148,7 @@ class MarkdownReplayExporter:
         os.replace(tmp, self._path)
 
 
-def _render_markdown(samples: list[Any], *, replay_size: int) -> str:
+def _render_markdown(samples: list[Any], *, replay_size: int, entry_truncate_chars: int) -> str:
     """Render the snapshot body. Stable format keyed by SCHEMA_VERSION.
 
     Front-matter is YAML so OpenClaw skills can parse it without a full
@@ -153,7 +174,7 @@ def _render_markdown(samples: list[Any], *, replay_size: int) -> str:
         "",
     ]
     for idx, item in enumerate(samples):
-        out.append(f"- `[{idx}]` {_truncate(repr(item), 240)}")
+        out.append(f"- `[{idx}]` {_truncate(repr(item), entry_truncate_chars)}")
     out.append("")
     return "\n".join(out)
 

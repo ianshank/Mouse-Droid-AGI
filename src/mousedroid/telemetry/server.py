@@ -487,7 +487,11 @@ class TelemetryServer:
         log = _log.bind(endpoint="mission", peer=peer)
 
         if not self._mission_route_enabled or self._mission_dispatcher is None:
-            # Belt-and-braces; the route should not be registered.
+            # Belt-and-braces; the route should not be registered when the
+            # gate is closed. Log so an operator who hits this path during
+            # a partial / mid-rollout deployment sees why the request was
+            # refused (no silent 503s).
+            log.warning("mission_endpoint_rejected", reason="openclaw_disabled")
             return web.json_response({"error": "openclaw_disabled"}, status=503)
 
         if self._mission_rate_limiter is not None and not await self._mission_rate_limiter.take():

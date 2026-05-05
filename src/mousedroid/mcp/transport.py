@@ -254,7 +254,9 @@ class MCPTransportAdapter:
 
         manager = StreamableHTTPSessionManager(app=self.sdk_server)
 
-        async def _handle_streamable(scope: Any, receive: Any, send: Any) -> None:
+        async def _handle_streamable(  # pragma: no cover - exercised by uvicorn
+            scope: Any, receive: Any, send: Any
+        ) -> None:
             await manager.handle_request(scope, receive, send)
 
         routes = [Mount("/", app=_handle_streamable)]
@@ -265,7 +267,7 @@ class MCPTransportAdapter:
         from contextlib import asynccontextmanager
 
         @asynccontextmanager
-        async def _lifespan(_: Any) -> Any:
+        async def _lifespan(_: Any) -> Any:  # pragma: no cover - exercised by uvicorn
             async with manager.run():
                 yield
 

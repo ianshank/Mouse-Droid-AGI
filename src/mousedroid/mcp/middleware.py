@@ -95,7 +95,7 @@ def _extract_bearer_from_scope(scope: Any) -> str | None:
         if name.lower() == b"authorization":
             try:
                 raw = value.decode("latin-1")
-            except UnicodeDecodeError:
+            except UnicodeDecodeError:  # pragma: no cover - latin-1 maps every byte
                 return None
             parts = raw.split(None, 1)
             if len(parts) != 2 or parts[0].lower() != "bearer":

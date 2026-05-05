@@ -43,6 +43,11 @@ _log = get_logger(__name__)
 # log lines stay readable.
 _COMMAND_HASH_PREFIX = 12
 
+# Length of the uuid4 hex prefix used as the per-dispatch trace id. 16
+# hex chars = 64 bits of entropy, plenty to disambiguate dispatches
+# within a session while staying short enough to grep across telemetry.
+_TRACE_ID_PREFIX = 16
+
 
 @runtime_checkable
 class MissionDispatcherProtocol(Protocol):
@@ -205,7 +210,7 @@ class OrchestratorMissionDispatcher:
         peer: str,
     ) -> DispatchResult:
         """Dispatch path for every NL channel — see protocol docstring."""
-        trace_id = uuid.uuid4().hex[:16]
+        trace_id = uuid.uuid4().hex[:_TRACE_ID_PREFIX]
         bind_contextvars(trace_id=trace_id, channel=channel)
         try:
             if channel not in self._allowed:
@@ -287,12 +292,21 @@ def build_mission_dispatcher(
     later :meth:`DeferredOrchestratorRef.bind` to the real orchestrator.
     """
     if cfg is None or not cfg.enabled:
+        _log.debug(
+            "mission_dispatcher_disabled",
+            reason="openclaw_none" if cfg is None else "openclaw_disabled",
+        )
         return None, None
     deferred = DeferredOrchestratorRef()
     dispatcher = OrchestratorMissionDispatcher(
         deferred,
         injection_filter=injection_filter,
         cfg=cfg,
+    )
+    _log.info(
+        "mission_dispatcher_built",
+        allowed_channels=sorted(cfg.allowed_channels),
+        max_command_len=cfg.max_command_len,
     )
     return dispatcher, deferred
 
