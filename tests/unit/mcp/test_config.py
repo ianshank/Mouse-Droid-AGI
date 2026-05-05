@@ -72,29 +72,76 @@ class TestMCPConfigValidators:
         )
         assert cfg.bind_transport is True
 
-    def test_bind_transport_with_sse_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_bind_transport_with_sse_loopback_allowed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SSE on loopback with a token loads cleanly (Phase B wired the transport)."""
         monkeypatch.setenv("MOUSEDROID_MCP_TOKEN", "abc123")
-        with pytest.raises(ValueError, match="bind_transport"):
+        cfg = MCPConfig.model_validate(
+            {
+                "enabled": True,
+                "transport": "sse",
+                "host": "127.0.0.1",
+                "bind_transport": True,
+            }
+        )
+        assert cfg.bind_transport is True
+        assert cfg.transport == "sse"
+
+    def test_bind_transport_with_streamable_http_loopback_allowed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """streamable_http on loopback with a token loads cleanly."""
+        monkeypatch.setenv("MOUSEDROID_MCP_TOKEN", "abc123")
+        cfg = MCPConfig.model_validate(
+            {
+                "enabled": True,
+                "transport": "streamable_http",
+                "host": "127.0.0.1",
+                "bind_transport": True,
+            }
+        )
+        assert cfg.bind_transport is True
+        assert cfg.transport == "streamable_http"
+
+    def test_bind_external_required_for_non_loopback(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Non-loopback host without bind_external=true fails fast at config load."""
+        monkeypatch.setenv("MOUSEDROID_MCP_TOKEN", "abc123")
+        with pytest.raises(ValueError, match="bind_external"):
             MCPConfig.model_validate(
                 {
                     "enabled": True,
                     "transport": "sse",
-                    "host": "127.0.0.1",
+                    "host": "0.0.0.0",  # noqa: S104
                     "bind_transport": True,
                 }
             )
 
-    def test_bind_transport_with_streamable_http_rejected(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("MOUSEDROID_MCP_TOKEN", "abc123")
-        with pytest.raises(ValueError, match="bind_transport"):
+    def test_bind_external_requires_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """bind_external=true with no token in env fails fast."""
+        monkeypatch.delenv("MOUSEDROID_MCP_TOKEN", raising=False)
+        with pytest.raises(ValueError, match="MOUSEDROID_MCP_TOKEN"):
             MCPConfig.model_validate(
                 {
                     "enabled": True,
-                    "transport": "streamable_http",
+                    "transport": "sse",
+                    "host": "0.0.0.0",  # noqa: S104
+                    "bind_transport": True,
+                    "bind_external": True,
+                }
+            )
+
+    def test_bind_external_with_stdio_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """bind_external=true requires a network transport (stdio has no listener)."""
+        monkeypatch.setenv("MOUSEDROID_MCP_TOKEN", "abc123")
+        with pytest.raises(ValueError, match="network transport"):
+            MCPConfig.model_validate(
+                {
+                    "enabled": True,
+                    "transport": "stdio",
                     "host": "127.0.0.1",
                     "bind_transport": True,
+                    "bind_external": True,
                 }
             )
 

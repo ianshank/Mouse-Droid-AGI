@@ -8,12 +8,16 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import time
 from typing import TYPE_CHECKING, Any
 
 from mousedroid.llm_gateway.protocol import GoalVector
 from mousedroid.logging.setup import get_logger
+from mousedroid.security.injection_filter import (
+    InjectionRejected,
+    PromptInjectionFilterProtocol,
+    RegexInjectionFilter,
+)
 
 if TYPE_CHECKING:
     from mousedroid.llm_gateway.config import GatewayConfig
@@ -29,35 +33,33 @@ class LLMGateway:
     :attr:`is_ready` will remain ``False`` until a model is loaded.
     """
 
-    def __init__(self, cfg: GatewayConfig) -> None:
+    def __init__(
+        self,
+        cfg: GatewayConfig,
+        *,
+        injection_filter: PromptInjectionFilterProtocol | None = None,
+    ) -> None:
         """Initialise gateway.
 
         Args:
             cfg: Gateway configuration.
+            injection_filter: Optional shared prompt-injection filter. When
+                ``None`` (the default), the gateway constructs its own
+                :class:`RegexInjectionFilter` from
+                ``cfg.injection_patterns`` and ``cfg.max_command_len`` so
+                existing call sites stay byte-identical. The factory wires
+                an external filter so the OpenClaw REST endpoint and the
+                LLM gateway share the same rejection envelope.
         """
         self._cfg = cfg
         self._model: Any = None
         self._degraded = False
-        # Empty injection_patterns disables the filter; otherwise "()" would
-        # compile to a pattern that matches every string and reject everything.
-        # An invalid user-supplied regex must not crash startup: fall back to
-        # the disabled-filter state and log a warning so the operator can fix
-        # the config without losing the rest of the process.
-        if cfg.injection_patterns:
-            try:
-                self._injection_re: re.Pattern[str] | None = re.compile(
-                    "(" + "|".join(cfg.injection_patterns) + ")",
-                    re.IGNORECASE,
-                )
-            except re.error as exc:
-                _log.warning(
-                    "llm_gateway_invalid_injection_pattern",
-                    error=str(exc),
-                    patterns=list(cfg.injection_patterns),
-                )
-                self._injection_re = None
-        else:
-            self._injection_re = None
+        if injection_filter is None:
+            injection_filter = RegexInjectionFilter(
+                cfg.injection_patterns,
+                max_len=cfg.max_command_len,
+            )
+        self._injection_filter: PromptInjectionFilterProtocol = injection_filter
 
     @property
     def is_ready(self) -> bool:
@@ -112,12 +114,19 @@ class LLMGateway:
         )
 
     def _sanitize_command(self, text: str) -> str:
-        """Sanitize NL command to mitigate prompt injection."""
-        text = text.strip()[: self._cfg.max_command_len]
-        if self._injection_re is not None and self._injection_re.search(text):
-            msg = "Mission command contains disallowed content"
-            raise ValueError(msg)
-        return text
+        """Sanitize NL command to mitigate prompt injection.
+
+        Delegates to the injected :class:`PromptInjectionFilterProtocol`
+        so the same rejection envelope applies across every NL ingress.
+        :class:`InjectionRejected` is a :class:`ValueError` subclass —
+        callers that catch ``ValueError`` keep working unchanged.
+        """
+        try:
+            return self._injection_filter.sanitize(text)
+        except InjectionRejected:
+            raise
+        except ValueError:
+            raise
 
     async def translate_mission(self, nl_command: str) -> GoalVector:
         """Translate NL mission to GoalVector.

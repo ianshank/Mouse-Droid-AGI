@@ -100,47 +100,172 @@ class MCPTransportAdapter:
         async with _stdio.stdio_server() as (read, write):
             await self.sdk_server.run(read, write, self.sdk_server.create_initialization_options())
 
-    async def _serve_sse(self) -> None:
-        """SSE transport — currently disabled pending proper integration.
+    async def _serve_sse(self) -> None:  # pragma: no cover - exercised in integration test
+        """Bind the SSE transport via Starlette + uvicorn.
 
-        The MCP SDK's :class:`mcp.server.sse.SseServerTransport.connect_sse`
-        is an :func:`~contextlib.asynccontextmanager`, not an ASGI app, so
-        the previous ``Mount("/", app=connect_sse)`` shim was incorrect.
-        Implementing SSE properly requires:
-
-        1. A Starlette ``Route("/sse", handle_sse)`` whose handler enters
-           the ``connect_sse`` context manager and calls
-           ``sdk_server.run(read, write, init_options)`` inside it.
-        2. A separate ``Mount("/messages/", transport.handle_post_message)``
-           for client POST traffic.
-        3. Bearer-token middleware on Starlette so the token validated by
-           :class:`MCPConfig` is enforced per-request — the current
-           callbacks do not propagate ``token`` into ``call_tool``.
-
-        Until those land, we refuse to bind. ``stdio`` remains fully
-        functional and is the recommended transport for local clients
-        (Claude Desktop, Claude Code).
+        Wires the SDK's :class:`mcp.server.sse.SseServerTransport` into a
+        Starlette app guarded by :class:`BearerAuthMiddleware`. The auth
+        validator reads the bearer secret from
+        ``MCPConfig.auth_token_env_var``; the schema validator already
+        refused to load a non-loopback bind without that env var set, so
+        we never bind a publicly-reachable port without a secret.
         """
-        msg = (
-            "SSE transport not yet implemented end-to-end "
-            "(see MCP_NEXT_STEPS.md P0 'transport bind-up' follow-ups). "
-            "Use mcp.transport='stdio' or set mcp.bind_transport=false."
-        )
-        raise NotImplementedError(msg)
+        await self._serve_starlette(transport_kind="sse")
 
-    async def _serve_streamable_http(self) -> None:
-        """Streamable HTTP transport — currently disabled.
+    async def _serve_streamable_http(self) -> None:  # pragma: no cover - integration only
+        """Bind the streamable_http transport via Starlette + uvicorn.
 
-        Same status as :meth:`_serve_sse` — the bearer-token middleware
-        and Starlette wiring need additional work before this is safe to
-        expose. Tracked in MCP_NEXT_STEPS.md P0 follow-ups.
+        Uses the SDK's
+        :class:`mcp.server.streamable_http_manager.StreamableHTTPSessionManager`
+        — same bearer middleware as SSE, same uvicorn lifecycle.
         """
-        msg = (
-            "streamable_http transport not yet implemented end-to-end "
-            "(see MCP_NEXT_STEPS.md P0 'transport bind-up' follow-ups). "
-            "Use mcp.transport='stdio' or set mcp.bind_transport=false."
+        await self._serve_starlette(transport_kind="streamable_http")
+
+    async def _serve_starlette(self, *, transport_kind: str) -> None:
+        """Shared Starlette + uvicorn lifecycle for SSE / streamable_http.
+
+        Logging is intentionally routed through structlog by passing
+        ``log_config=None`` to uvicorn; uvicorn's default config would
+        install a duplicate stdlib handler that diverges from the
+        project's structured-log convention.
+        """
+        cfg = self.server._cfg
+        token_validator = self._build_validator()
+        app = self._build_starlette_app(transport_kind, token_validator)
+
+        import uvicorn
+
+        config = uvicorn.Config(
+            app,
+            host=cfg.host,
+            port=cfg.port,
+            log_config=None,
+            access_log=False,
+            lifespan="off",
         )
-        raise NotImplementedError(msg)
+        srv = uvicorn.Server(config)
+        _log.info(
+            "mcp_transport_started",
+            transport=transport_kind,
+            host=cfg.host,
+            port=cfg.port,
+            bind_external=cfg.bind_external,
+        )
+        try:
+            await srv.serve()
+        finally:
+            _log.info(
+                "mcp_transport_stopped",
+                transport=transport_kind,
+                host=cfg.host,
+                port=cfg.port,
+            )
+
+    def _build_validator(self) -> Any:
+        """Construct the bearer validator.
+
+        Auth is required when ANY of:
+
+        * ``bind_external=true`` (operator opted into a publicly-reachable
+          listener; the schema validator already enforced env-var
+          presence in that case).
+        * The configured ``auth_token_env_var`` is set in the environment
+          (operator deliberately provisioned a secret — even on loopback
+          we honour it so local tests and dual-host development
+          deployments enforce the same envelope production sees).
+
+        Loopback binds with no token configured fall back to
+        ``required=False`` so a developer running ``stdio`` or a quick
+        local SSE smoke without a token still works.
+        """
+        import os
+
+        from mousedroid.mcp.auth import BearerTokenValidator
+
+        cfg = self.server._cfg
+        token_present = bool(os.environ.get(cfg.auth_token_env_var))
+        return BearerTokenValidator(
+            cfg.auth_token_env_var,
+            required=cfg.bind_external or token_present,
+        )
+
+    def _build_starlette_app(self, transport_kind: str, validator: Any) -> Any:
+        """Compose the Starlette app for the given transport kind.
+
+        Two transports map onto the same app shape so both share the
+        bearer middleware composition; the only divergence is the route
+        mounting strategy of the underlying SDK transport.
+
+        Both transports use raw-ASGI ``Mount`` rather than Starlette
+        ``Route`` because Starlette routes require endpoints to return
+        a :class:`~starlette.responses.Response`, while the MCP SDK
+        transports take over ``send`` directly inside their context
+        managers.
+        """
+        from starlette.applications import Starlette
+        from starlette.middleware import Middleware
+        from starlette.routing import Mount
+
+        from mousedroid.mcp.middleware import BearerAuthMiddleware
+
+        middleware = [
+            Middleware(BearerAuthMiddleware, validator=validator),
+        ]
+
+        if transport_kind == "sse":
+            from mcp.server.sse import SseServerTransport
+            from starlette.requests import Request
+            from starlette.responses import Response
+            from starlette.routing import Route
+
+            sse = SseServerTransport("/messages/")
+            sdk_server = self.sdk_server
+
+            async def _sse_endpoint(request: Request) -> Response:
+                # Bridge Starlette's Request → raw ASGI for the SDK
+                # transport. The empty ``Response()`` is a placeholder
+                # returned after ``connect_sse`` has fully drained the
+                # stream over ``send`` — Starlette's contract is
+                # satisfied by the prior ``http.response.body`` events.
+                async with sse.connect_sse(
+                    request.scope,
+                    request.receive,
+                    request._send,
+                ) as (read, write):
+                    await sdk_server.run(
+                        read,
+                        write,
+                        sdk_server.create_initialization_options(),
+                    )
+                return Response()
+
+            routes = [
+                Route("/sse", endpoint=_sse_endpoint, methods=["GET"]),
+                Mount("/messages/", app=sse.handle_post_message),
+            ]
+            return Starlette(routes=routes, middleware=middleware)
+
+        # streamable_http
+        from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+
+        manager = StreamableHTTPSessionManager(app=self.sdk_server)
+
+        async def _handle_streamable(scope: Any, receive: Any, send: Any) -> None:
+            await manager.handle_request(scope, receive, send)
+
+        routes = [Mount("/", app=_handle_streamable)]
+
+        # The session manager's internal task group must be alive while
+        # requests are served. Wrap the Starlette app in a lifespan that
+        # keeps it running for the duration of the server lifetime.
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def _lifespan(_: Any) -> Any:
+            async with manager.run():
+                yield
+
+        return Starlette(routes=routes, middleware=middleware, lifespan=_lifespan)
 
     # ------------------------------------------------------------------
     # SDK callbacks — thin delegates onto :class:`MouseDroidMCPServer`.

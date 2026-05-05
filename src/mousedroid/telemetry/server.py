@@ -16,9 +16,13 @@ import json
 import time
 from typing import TYPE_CHECKING, Any
 
+from pydantic import BaseModel, Field, ValidationError
+
 from mousedroid.common.async_utils import cancel_and_drain, spawn_tracked
+from mousedroid.common.rate_limit import TokenBucket
 from mousedroid.constants import MAX_LOG_ENTRIES, MDNS_SERVICE_TYPE, TELEMETRY_QUEUE_TIMEOUT_S
 from mousedroid.logging.setup import get_logger
+from mousedroid.security.injection_filter import InjectionRejected
 from mousedroid.telemetry.network import (
     get_default_ip,
     get_interface_ip,
@@ -29,12 +33,31 @@ from mousedroid.telemetry.protocol import TelemetryFrame
 if TYPE_CHECKING:
     from aiohttp import web
 
-    from mousedroid.config.schema import TelemetryConfig
+    from mousedroid.config.schema import OpenClawConfig, TelemetryConfig
     from mousedroid.hardware.protocols import RawFrameSourceProtocol
     from mousedroid.health.monitor import HealthMonitor
+    from mousedroid.orchestrator.mission_dispatcher import MissionDispatcherProtocol
     from mousedroid.telemetry.log_buffer import LogRingBuffer
     from mousedroid.telemetry.metrics import MetricsRegistry
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol
+
+
+class MissionRequest(BaseModel):
+    """Body schema for ``POST /api/v1/mission``.
+
+    Defined at module scope so OpenClaw clients (and the test suite) can
+    import it without instantiating the whole server. ``channel`` is fixed
+    to ``"rest"`` so a future MCP-routed call cannot impersonate a REST
+    submission on this endpoint.
+    """
+
+    nl_command: str = Field(..., description="Natural language mission command")
+    idempotency_key: str | None = Field(
+        None,
+        description="Optional dedup token; replays within the window return 202 with cached body.",
+    )
+    channel: str = Field("rest", description="Channel marker; pinned to 'rest' for this endpoint.")
+
 
 _log = get_logger(__name__)
 
@@ -65,6 +88,8 @@ class TelemetryServer:
         raw_frame_source: RawFrameSourceProtocol | None = None,
         raw_frame_hz: float = 10.0,
         cloud_enabled: bool = False,
+        mission_dispatcher: MissionDispatcherProtocol | None = None,
+        openclaw_cfg: OpenClawConfig | None = None,
     ) -> None:
         """Initialise the telemetry server.
 
@@ -92,6 +117,15 @@ class TelemetryServer:
             raw_frame_hz: Target frame rate for ``/camera/stream``.
             cloud_enabled: When ``True``, register cloud-health routes when
                 a metrics registry is also present.
+            mission_dispatcher: Optional :class:`MissionDispatcherProtocol`.
+                When provided together with an enabled
+                :class:`OpenClawConfig`, the server registers
+                ``POST /api/v1/mission`` for the OpenClaw control plane.
+                Without it the route is not registered, which preserves
+                existing deployments byte-identically.
+            openclaw_cfg: Optional :class:`OpenClawConfig`. When supplied
+                and ``enabled=True``, gates registration of the mission
+                endpoint and supplies its rate-limit / dedup parameters.
         """
         self._cfg = cfg
         self._queue = telemetry_queue
@@ -105,6 +139,23 @@ class TelemetryServer:
         self._raw_frame_interval_s = 1.0 / max(0.1, raw_frame_hz)
         self._cloud_enabled = cloud_enabled
         self._reported_frame_drops = 0
+
+        self._mission_dispatcher = mission_dispatcher
+        self._openclaw_cfg = openclaw_cfg
+        self._mission_route_enabled = (
+            mission_dispatcher is not None and openclaw_cfg is not None and openclaw_cfg.enabled
+        )
+        if self._mission_route_enabled and openclaw_cfg is not None:
+            self._mission_rate_limiter: TokenBucket | None = TokenBucket(
+                openclaw_cfg.rest_rate_limit_rps,
+                capacity=float(openclaw_cfg.rest_rate_limit_burst),
+            )
+            self._mission_dedup_window_s: float = openclaw_cfg.command_dedup_window_s
+        else:
+            self._mission_rate_limiter = None
+            self._mission_dedup_window_s = 0.0
+        # idempotency_key -> (expires_monotonic, cached_response_dict)
+        self._mission_dedup: dict[str, tuple[float, dict[str, Any]]] = {}
 
         self._ws_clients: list[web.WebSocketResponse] = []
         self._latest_frame: TelemetryFrame | None = None
@@ -201,6 +252,8 @@ class TelemetryServer:
         app.router.add_get(f"{prefix}/health", self._handle_health)
         app.router.add_get(f"{prefix}/logs", self._handle_logs)
         app.router.add_get(f"{prefix}/network", self._handle_network)
+        if self._mission_route_enabled:
+            app.router.add_post(f"{prefix}/mission", self._handle_mission_post)
         app.router.add_get(self._cfg.ws_path, self._handle_ws)
         app.router.add_get(f"{prefix}/logs/stream", self._handle_log_stream)
         app.router.add_get("/lidar", self._handle_lidar_page)
@@ -412,6 +465,123 @@ class TelemetryServer:
             data["mdns_name"] = f"{self._cfg.mdns_service_name.lower().replace(' ', '-')}.local"
 
         return web.json_response(data)
+
+    # ------------------------------------------------------------------
+    # OpenClaw mission endpoint
+    # ------------------------------------------------------------------
+
+    async def _handle_mission_post(self, request: web.Request) -> web.Response:
+        """POST /api/v1/mission — OpenClaw NL command ingress.
+
+        Wired only when both ``mission_dispatcher`` and an enabled
+        :class:`OpenClawConfig` are supplied. Auth (bearer or X-API-Key)
+        is enforced by the existing global middleware. This handler adds
+        token-bucket rate limiting, idempotency-key dedup, prompt-injection
+        rejection (delegated to the shared filter via the dispatcher),
+        and a structured response carrying the dispatcher's ``trace_id``
+        for end-to-end correlation.
+        """
+        from aiohttp import web
+
+        peer = request.remote or "unknown"
+        log = _log.bind(endpoint="mission", peer=peer)
+
+        if not self._mission_route_enabled or self._mission_dispatcher is None:
+            # Belt-and-braces; the route should not be registered.
+            return web.json_response({"error": "openclaw_disabled"}, status=503)
+
+        if self._mission_rate_limiter is not None and not await self._mission_rate_limiter.take():
+            retry_after = self._mission_rate_limiter.retry_after_s()
+            log.warning(
+                "mission_endpoint_rejected",
+                reason="rate_limited",
+                retry_after_s=retry_after,
+            )
+            return web.json_response(
+                {"error": "rate_limited", "retry_after_s": round(retry_after, 3)},
+                status=429,
+            )
+
+        try:
+            payload = await request.json()
+        except (json.JSONDecodeError, ValueError):
+            log.warning("mission_endpoint_rejected", reason="invalid_json")
+            return web.json_response({"error": "invalid_json"}, status=400)
+
+        try:
+            req = MissionRequest.model_validate(payload)
+        except ValidationError as exc:
+            log.warning("mission_endpoint_rejected", reason="invalid_body")
+            return web.json_response(
+                {"error": "invalid_body", "details": exc.errors()},
+                status=400,
+            )
+
+        # Idempotency: replay returns the cached body for the configured
+        # window so OpenClaw can safely re-send on transient failures.
+        now = time.monotonic()
+        # Evict expired entries lazily (cheap; bounded by request rate).
+        if self._mission_dedup:
+            self._mission_dedup = {k: v for k, v in self._mission_dedup.items() if v[0] > now}
+        if req.idempotency_key and req.idempotency_key in self._mission_dedup:
+            cached = self._mission_dedup[req.idempotency_key][1]
+            log.info(
+                "mission_endpoint_dedup_hit",
+                idempotency_key=req.idempotency_key,
+            )
+            return web.json_response(cached, status=202)
+
+        log.info(
+            "mission_endpoint_received",
+            length=len(req.nl_command),
+            has_idempotency_key=req.idempotency_key is not None,
+        )
+
+        try:
+            result = await self._mission_dispatcher.dispatch(
+                req.nl_command,
+                channel=req.channel,
+                peer=peer,
+            )
+        except InjectionRejected:
+            return web.json_response(
+                {"error": "invalid_command", "reason": "injection_pattern"},
+                status=400,
+            )
+        except ValueError as exc:
+            return web.json_response(
+                {"error": "invalid_command", "reason": str(exc)},
+                status=400,
+            )
+        except TimeoutError:
+            log.warning("mission_endpoint_timeout")
+            return web.json_response({"error": "timeout"}, status=504)
+        except Exception as exc:  # pylint: disable=broad-except
+            log.warning("mission_endpoint_failed", error=f"{type(exc).__name__}:{exc}")
+            return web.json_response({"error": "internal_error"}, status=500)
+
+        body: dict[str, Any] = {
+            "status": "accepted",
+            "trace_id": result.trace_id,
+            "command_hash": result.command_hash,
+            "latency_ms": round(result.latency_ms, 3),
+            "goal_vector": {
+                "vx": result.goal_vector.vx_target,
+                "vy": result.goal_vector.vy_target,
+                "omega": result.goal_vector.omega_target,
+            },
+        }
+        if req.idempotency_key:
+            self._mission_dedup[req.idempotency_key] = (
+                now + self._mission_dedup_window_s,
+                body,
+            )
+        log.info(
+            "mission_endpoint_dispatched",
+            trace_id=result.trace_id,
+            latency_ms=result.latency_ms,
+        )
+        return web.json_response(body, status=202)
 
     async def _handle_metrics(self, request: web.Request) -> web.Response:
         """GET /metrics — Prometheus text-format metrics scrape endpoint.

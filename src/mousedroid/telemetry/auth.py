@@ -139,7 +139,7 @@ def build_cors_middleware(
 
         if origin_header_value is not None:
             resp.headers["Access-Control-Allow-Origin"] = origin_header_value
-        resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         resp.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-API-Key"
         return resp
 
