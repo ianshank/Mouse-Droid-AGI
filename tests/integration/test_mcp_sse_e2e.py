@@ -150,14 +150,16 @@ async def test_sse_transport_bearer_enforcement(
             ctype = stream.headers.get("content-type", "")
             assert "text/event-stream" in ctype, f"unexpected content-type: {ctype!r}"
             received = bytearray()
-            try:
-                async with asyncio.timeout(1.0):
-                    async for chunk in stream.aiter_raw():
-                        received.extend(chunk)
-                        if len(received) > 16:
-                            break
-            except (TimeoutError, asyncio.TimeoutError):
-                pass
+
+            async def _drain_until_some_bytes() -> None:
+                async for chunk in stream.aiter_raw():
+                    received.extend(chunk)
+                    if len(received) > 16:
+                        return
+
+            # asyncio.timeout is 3.11+; asyncio.wait_for works on 3.10.
+            with contextlib.suppress(TimeoutError, asyncio.TimeoutError):
+                await asyncio.wait_for(_drain_until_some_bytes(), timeout=1.0)
             assert len(received) > 0, "SSE handler started but emitted no bytes"
     finally:
         serve_task.cancel()
