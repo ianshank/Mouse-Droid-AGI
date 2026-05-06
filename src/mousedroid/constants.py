@@ -227,3 +227,53 @@ IQL_EXP_ADVANTAGE_CLAMP_MAX: float = 100.0
 
 EMA_DEFAULT_ALPHA: float = 0.1
 """Default exponential moving average smoothing factor."""
+
+# ---------------------------------------------------------------------------
+# Hailo-8 mock runtime defaults
+# ---------------------------------------------------------------------------
+
+HAILO_MOCK_YOLO_OUTPUT_SHAPE: tuple[int, int] = (25200, 85)
+"""Default mock output shape for the YOLO model.
+
+25200 == number of anchor predictions for a 640x480 input under YOLOv5-style
+architecture (80x80 + 40x40 + 20x20 heads x 3 anchors).  85 == 80 COCO
+classes + 5 box/confidence values.  Override via ``MockHailoRuntime``'s
+``output_shapes`` constructor argument to match a different model or input
+resolution.
+"""
+
+HAILO_MOCK_FEATURE_EXTRACTOR_DIM: int = 256
+"""Default output feature-vector size for the mock Hailo feature extractor.
+
+Mirrors ``ModelConfig.vision_dim`` so unit-tests using the mock runtime
+produce tensors that flow cleanly through the downstream RSSM encoder.
+"""
+
+# ---------------------------------------------------------------------------
+# Mock camera procedural-frame rendering
+# ---------------------------------------------------------------------------
+
+MOCK_CAMERA_PROCEDURAL_WIDTH: int = 320
+"""Pixel width of the procedurally generated mock camera frame.
+
+The telemetry dashboard endpoint doubles this (x2) to produce a 640-wide
+JPEG in screen-capture mode, matching the default ``CameraConfig.resolution_width``.
+"""
+
+MOCK_CAMERA_PROCEDURAL_HEIGHT: int = 240
+"""Pixel height of the procedurally generated mock camera frame.
+
+The telemetry dashboard endpoint doubles this (x2) to produce a 480-tall
+JPEG in screen-capture mode, matching the default ``CameraConfig.resolution_height``.
+"""
+
+# ---------------------------------------------------------------------------
+# Mock sensor pin defaults
+# ---------------------------------------------------------------------------
+
+MOCK_ULTRASONIC_PIN_DEFAULT: int = 0
+"""Placeholder GPIO pin number used when constructing a mock UltrasonicConfig.
+
+Real hardware requires explicit pin numbers in YAML.  This sentinel value is
+only ever used in mock_hardware mode where GPIO is never accessed.
+"""

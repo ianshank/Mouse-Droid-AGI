@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from mousedroid.comms.protocol import ESP32CommProtocol
+from mousedroid.constants import MOCK_ULTRASONIC_PIN_DEFAULT
 from mousedroid.hardware.protocols import (
     AudioProtocol,
     DistanceSensorProtocol,
@@ -162,7 +163,7 @@ def build_distance_sensor(cfg: Settings) -> DistanceSensorProtocol:
         from mousedroid.hardware.sensors.mock_ultrasonic import MockUltrasonic
 
         ultrasonic_cfg: UltrasonicConfig = cfg.ultrasonic or UltraCfg.model_validate(
-            {"trigger_pin": 0, "echo_pin": 0}
+            {"trigger_pin": MOCK_ULTRASONIC_PIN_DEFAULT, "echo_pin": MOCK_ULTRASONIC_PIN_DEFAULT}
         )
         return MockUltrasonic(ultrasonic_cfg)
 

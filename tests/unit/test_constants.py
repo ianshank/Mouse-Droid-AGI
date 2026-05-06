@@ -12,6 +12,8 @@ from mousedroid.constants import (
     DEFAULT_MOTOR_STATE_DIM,
     DEFAULT_VISION_DIM,
     DESIRE_ENCODER_SEED,
+    HAILO_MOCK_FEATURE_EXTRACTOR_DIM,
+    HAILO_MOCK_YOLO_OUTPUT_SHAPE,
     INTENTION_PREDICTOR_SEED,
     LIDAR_CRC8_POLYNOMIAL,
     LIDAR_DEFAULT_MOCK_CONFIDENCE,
@@ -19,6 +21,9 @@ from mousedroid.constants import (
     LIDAR_MM_PER_M,
     LIDAR_SCAN_TIMEOUT_MULTIPLIER,
     MILLISECONDS_PER_SECOND,
+    MOCK_CAMERA_PROCEDURAL_HEIGHT,
+    MOCK_CAMERA_PROCEDURAL_WIDTH,
+    MOCK_ULTRASONIC_PIN_DEFAULT,
     N_SENSOR_MODALITIES,
     N_SENSOR_MODALITIES_WITH_LIDAR,
     POLICY_MLP_SEED,
@@ -109,3 +114,84 @@ def test_lidar_scan_timeout_multiplier():
 def test_lidar_default_mock_confidence():
     """LIDAR_DEFAULT_MOCK_CONFIDENCE should be 200."""
     assert LIDAR_DEFAULT_MOCK_CONFIDENCE == 200
+
+
+# ---------------------------------------------------------------------------
+# Hailo mock output shape constants
+# ---------------------------------------------------------------------------
+
+
+def test_hailo_mock_yolo_output_shape_is_2d():
+    """HAILO_MOCK_YOLO_OUTPUT_SHAPE must be a 2-tuple of positive ints."""
+    assert len(HAILO_MOCK_YOLO_OUTPUT_SHAPE) == 2
+    assert all(v > 0 for v in HAILO_MOCK_YOLO_OUTPUT_SHAPE)
+
+
+def test_hailo_mock_yolo_output_shape_matches_runtime_default():
+    """HAILO_MOCK_YOLO_OUTPUT_SHAPE must match MockHailoRuntime.DEFAULT_OUTPUT_SHAPES."""
+    from mousedroid.hardware.accelerator.hailo_runtime import MockHailoRuntime
+
+    assert MockHailoRuntime.DEFAULT_OUTPUT_SHAPES["yolo"] == HAILO_MOCK_YOLO_OUTPUT_SHAPE
+
+
+def test_hailo_mock_feature_extractor_dim_positive():
+    """HAILO_MOCK_FEATURE_EXTRACTOR_DIM must be a positive integer."""
+    assert HAILO_MOCK_FEATURE_EXTRACTOR_DIM > 0
+
+
+def test_hailo_mock_feature_extractor_dim_matches_runtime_default():
+    """HAILO_MOCK_FEATURE_EXTRACTOR_DIM must match MockHailoRuntime.DEFAULT_OUTPUT_SHAPES."""
+    from mousedroid.hardware.accelerator.hailo_runtime import MockHailoRuntime
+
+    assert MockHailoRuntime.DEFAULT_OUTPUT_SHAPES["feature_extractor"] == (
+        HAILO_MOCK_FEATURE_EXTRACTOR_DIM,
+    )
+
+
+def test_hailo_mock_feature_extractor_dim_matches_vision_dim():
+    """Mock feature extractor output must match the default vision feature dimension."""
+    assert HAILO_MOCK_FEATURE_EXTRACTOR_DIM == DEFAULT_VISION_DIM
+
+
+# ---------------------------------------------------------------------------
+# Mock camera procedural-frame dimension constants
+# ---------------------------------------------------------------------------
+
+
+def test_mock_camera_procedural_dimensions_positive():
+    """Mock camera procedural frame dimensions must be positive."""
+    assert MOCK_CAMERA_PROCEDURAL_WIDTH > 0
+    assert MOCK_CAMERA_PROCEDURAL_HEIGHT > 0
+
+
+def test_mock_camera_procedural_dimensions_match_class():
+    """MockCamera must use the constants for its internal raw dimensions."""
+    from mousedroid.config.schema import CameraConfig
+    from mousedroid.hardware.camera.mock_camera import MockCamera
+
+    cfg = CameraConfig()
+    cam = MockCamera(cfg)
+    assert cam._raw_width == MOCK_CAMERA_PROCEDURAL_WIDTH
+    assert cam._raw_height == MOCK_CAMERA_PROCEDURAL_HEIGHT
+
+
+# ---------------------------------------------------------------------------
+# Mock sensor pin default constant
+# ---------------------------------------------------------------------------
+
+
+def test_mock_ultrasonic_pin_default_is_zero():
+    """MOCK_ULTRASONIC_PIN_DEFAULT is the sentinel value 0 (no real GPIO)."""
+    assert MOCK_ULTRASONIC_PIN_DEFAULT == 0
+
+
+def test_mock_ultrasonic_pin_default_used_in_factory(monkeypatch) -> None:
+    """factory.build_distance_sensor uses MOCK_ULTRASONIC_PIN_DEFAULT for pins."""
+    from mousedroid.config.schema import Settings
+
+    cfg = Settings.model_validate({"mock_hardware": True})
+    # In mock mode the factory must succeed even without an ultrasonic block.
+    from mousedroid.factory import build_distance_sensor
+
+    sensor = build_distance_sensor(cfg)
+    assert sensor is not None
