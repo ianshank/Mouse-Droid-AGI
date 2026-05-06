@@ -309,25 +309,7 @@ All settings are defined in `config/default.yaml` and validated by Pydantic v2. 
 | `config/jetson_dual_stream.yaml` | Jetson + dual-stream CfC/GRU world model (requires human activation) |
 | `config/jetson_sdcard_64gb.yaml` | Jetson on SD card (64 GB) resource limits |
 
-No values are hardcoded — every threshold, dimension, pin, and rate is configurable or documented
-as an intentional constant in `src/mousedroid/constants.py`.
-
-### Config Hygiene Guarantees
-
-All 16 YAML config files are validated on every CI run by two regression gates:
-
-- **`tests/regression/test_config_no_duplicate_keys.py`** — asserts no mapping in any YAML file
-  contains a duplicate key (PyYAML silently discards the first occurrence, which can silently
-  drop config values).
-- **`tests/regression/test_config_overlays_load.py`** — asserts every overlay file produces a
-  valid `Settings` object against the current Pydantic schema.
-
-Named constants for mock subsystem defaults (Hailo output shapes, mock camera frame dimensions,
-GPIO pin sentinels) live in `src/mousedroid/constants.py` with full docstrings, and are kept in
-sync with runtime code by cross-module consistency tests in `tests/unit/test_constants.py`.
-
-See [docs/architecture.md — Level 3g](docs/architecture.md#level-3g--component-diagram-constants-and-config-hygiene-layer)
-for the full C4 diagram of this layer.
+No values are hardcoded — every threshold, dimension, pin, and rate is configurable.
 
 ---
 

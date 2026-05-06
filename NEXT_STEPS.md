@@ -21,15 +21,6 @@ Rebased on 2026-04-27 for `feat/smoke-post-pr55` after the Ten Pillars validatio
   **Overall: PASS (20/20)** on Jetson Orin Nano (`2026-04-26T23:55:42Z`).
 - **Active production scope**: camera + LiDAR + USB audio + ESP32 on Jetson. The HC-SR04
   ultrasonic path is parked, and the robot-arm platform is deferred from the active delivery plan.
-- **Codebase modernization — Phases 1 + 2 landed** (PR: `copilot/refactor-codebase-for-modularity`):
-  - Duplicate `domain_randomization:` blocks removed from `config/default.yaml` and
-    `config/jetson_production.yaml` (PyYAML last-wins was silently dropping sensor-noise fields).
-  - New regression test `tests/regression/test_config_no_duplicate_keys.py` gates all 16 YAML
-    config files against duplicate-key silent-override bugs.
-  - Five new named constants added to `src/mousedroid/constants.py` replacing bare magic literals
-    in `hailo_runtime.py`, `mock_camera.py`, and `factory.py`.
-  - 10 new cross-module consistency tests in `tests/unit/test_constants.py`.
-  - **Coverage**: 89.24% total; 3 323 tests pass (≥85% gate maintained throughout).
 
 ---
 
@@ -261,41 +252,6 @@ ExecStartPre=/bin/cp /opt/mousedroid/config/jetson_production.yaml /etc/mousedro
   deploy-time YAMLs.
 - Publish coverage badge automation if it provides signal beyond the existing branch gate.
 - Consider mutation testing for `voice/` and `hardware/audio/` once the current rollout is stable.
-
-### P2 — Codebase Modernization (Phases 3–6 of strategic refactor plan)
-
-The Phases 1 + 2 of the modularization plan are now landed. The remaining phases are tracked here
-as ordered work items. Each phase ships as its own isolated PR to keep review scope bounded:
-
-**Phase 3 — Factory internal decomposition (PR-M3)**
-
-- Keep `factory.py` as the public wiring entrypoint (all `build_*()` signatures unchanged).
-- Split its ~700-line body into focused private submodules: `_wiring/hardware.py`,
-  `_wiring/telemetry.py`, `_wiring/arm.py`, `_wiring/cloud.py`.
-- Re-export through `factory.py` via `from ._wiring.hardware import *` delegation.
-- Add protocol-return-type conformance tests to `tests/unit/test_factory.py`.
-- Acceptance: existing callers produce identical `isinstance(obj, Protocol)` results.
-
-**Phase 4 — Orchestrator lifecycle extraction (PR-M4)**
-
-- Extract `start()` / `stop()` lifecycle coordination for each optional subsystem
-  (telemetry, cloud, voice, MCP, memory, harness, VLA) into small reusable helpers.
-- Keep all existing constructor parameters during the transition.
-- Add tests around startup/shutdown ordering and failure-isolation semantics.
-
-**Phase 5 — Async/blocking-call isolation (PR-M5)**
-
-- Audit every `time.sleep` and `threading.Lock` usage; annotate hardware-only blocking
-  paths with `asyncio.to_thread` wrappers or `# noqa: ASYNC100 — hardware isolation`.
-- Convert retry sleeps in async-capable paths (e.g. weights download) to configurable
-  `asyncio.sleep`-based backoff using values from config.
-- No hardware behavior changes without mock and integration coverage.
-
-**Phase 6 — Mock configurability improvements (PR-M6)**
-
-- Move remaining mock queue sizes, synthetic sensor behavior, and procedural-frame rendering
-  parameters into config or constants depending on whether they are tunable at runtime.
-- Ensure all defaults preserve current behavior — no behavior change allowed.
 
 ---
 
