@@ -8,48 +8,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added — Config/YAML hygiene and hardcoded-value extraction (branch: `copilot/refactor-codebase-for-modularity`)
-
-This PR implements **Phases 1 and 2** of the strategic codebase modernization plan aimed at making
-the system more maintainable, testable, and auditable.
-
-#### Phase 1 — Configuration/YAML deduplication
-
-- **`config/default.yaml`** — Removed duplicate `domain_randomization:` block (second occurrence
-  at lines 203–222 was silently overriding the first via PyYAML last-wins semantics, dropping
-  `ultrasonic_noise_m` and `ultrasonic_dropout_prob` overrides from the authoritative first block).
-- **`config/jetson_production.yaml`** — Removed duplicate `domain_randomization:` block (trailing
-  block at lines 120–131 was missing sensor-noise fields present in the authoritative first block).
-- **`tests/regression/test_config_no_duplicate_keys.py`** (new) — Parametrised regression test
-  covering all 16 YAML config files under `config/`. Uses `yaml.compose()` to walk every mapping
-  node at any nesting depth and asserts no key appears twice within the same mapping. Prevents
-  silent-override bugs from recurring. Fires before schema validation so the failure message names
-  the exact YAML path (e.g. `(root): ['domain_randomization']`).
-
-#### Phase 2 — Hardcoded-value extraction to `constants.py`
-
-Five new named constants were added to `src/mousedroid/constants.py` with full docstrings explaining
-their physical meaning, protocol provenance, and when to override via constructor injection:
-
-| Constant | Value | Source |
-|---|---|---|
-| `HAILO_MOCK_YOLO_OUTPUT_SHAPE` | `(25200, 85)` | `MockHailoRuntime.DEFAULT_OUTPUT_SHAPES` |
-| `HAILO_MOCK_FEATURE_EXTRACTOR_DIM` | `256` | `MockHailoRuntime.DEFAULT_OUTPUT_SHAPES` |
-| `MOCK_CAMERA_PROCEDURAL_WIDTH` | `320` | `MockCamera.__init__` |
-| `MOCK_CAMERA_PROCEDURAL_HEIGHT` | `240` | `MockCamera.__init__` |
-| `MOCK_ULTRASONIC_PIN_DEFAULT` | `0` | `factory.build_distance_sensor` |
-
-- **`src/mousedroid/hardware/accelerator/hailo_runtime.py`** — `MockHailoRuntime.DEFAULT_OUTPUT_SHAPES`
-  now references `HAILO_MOCK_YOLO_OUTPUT_SHAPE` and `HAILO_MOCK_FEATURE_EXTRACTOR_DIM` instead of
-  inline tuples, making the mock's output contract explicit and centrally auditable.
-- **`src/mousedroid/hardware/camera/mock_camera.py`** — `MockCamera.__init__` now references
-  `MOCK_CAMERA_PROCEDURAL_WIDTH` and `MOCK_CAMERA_PROCEDURAL_HEIGHT` instead of bare `320`/`240`.
-- **`src/mousedroid/factory.py`** — `build_distance_sensor` mock path uses `MOCK_ULTRASONIC_PIN_DEFAULT`
-  instead of inline `{"trigger_pin": 0, "echo_pin": 0}`.
-- **`tests/unit/test_constants.py`** — 10 new tests added, including cross-module consistency checks
-  (e.g. `MockHailoRuntime.DEFAULT_OUTPUT_SHAPES["yolo"] == HAILO_MOCK_YOLO_OUTPUT_SHAPE`,
-  `cam._raw_width == MOCK_CAMERA_PROCEDURAL_WIDTH`) and factory smoke assertions.
-
 ### Added — Phase 2.1: BC supervised loss into offline-RL training loop
 
 - **`training/train_offline_rl.py`** — wires the existing

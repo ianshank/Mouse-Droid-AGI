@@ -21,7 +21,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast, runtime_checkab
 import numpy as np
 from numpy.typing import NDArray
 
-from mousedroid.constants import HAILO_MOCK_FEATURE_EXTRACTOR_DIM, HAILO_MOCK_YOLO_OUTPUT_SHAPE
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
@@ -334,8 +333,8 @@ class MockHailoRuntime:
 
     # Default output shapes per model — overridable via constructor
     DEFAULT_OUTPUT_SHAPES: ClassVar[dict[str, tuple[int, ...]]] = {
-        "yolo": HAILO_MOCK_YOLO_OUTPUT_SHAPE,
-        "feature_extractor": (HAILO_MOCK_FEATURE_EXTRACTOR_DIM,),
+        "yolo": (25200, 85),
+        "feature_extractor": (256,),
     }
 
     def __init__(
