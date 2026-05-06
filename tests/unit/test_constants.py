@@ -165,7 +165,14 @@ def test_mock_camera_procedural_dimensions_positive():
 
 
 def test_mock_camera_procedural_dimensions_match_class():
-    """MockCamera must use the constants for its internal raw dimensions."""
+    """MockCamera stores constants as raw frame dimensions.
+
+    This is an intentional white-box test: ``_raw_width`` and ``_raw_height`` are
+    the private fields that control the generated frame size for both the JPEG and
+    the feature-extraction path.  There is no public frame-shape accessor because
+    Pillow (needed for JPEG capture) is an optional dependency absent in CI.  The
+    constants invariant is important enough to verify directly at the field level.
+    """
     from mousedroid.config.schema import CameraConfig
     from mousedroid.hardware.camera.mock_camera import MockCamera
 
@@ -186,7 +193,14 @@ def test_mock_ultrasonic_pin_default_is_zero():
 
 
 def test_mock_ultrasonic_pin_default_used_in_factory() -> None:
-    """factory.build_distance_sensor uses MOCK_ULTRASONIC_PIN_DEFAULT for pins."""
+    """factory.build_distance_sensor uses MOCK_ULTRASONIC_PIN_DEFAULT for pins.
+
+    Pin values are configuration-only sentinel data; there is no observable
+    runtime behavior in mock mode that differs between pin 0 and pin N (GPIO is
+    never accessed).  The invariant is therefore verified directly on the stored
+    UltrasonicConfig — acceptable white-box testing for a constant-propagation
+    contract.
+    """
     from mousedroid.config.schema import Settings
 
     cfg = Settings.model_validate({"mock_hardware": True})
