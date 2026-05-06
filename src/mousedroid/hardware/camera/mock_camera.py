@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from numpy.typing import NDArray
 
+from mousedroid.constants import MOCK_CAMERA_PROCEDURAL_HEIGHT, MOCK_CAMERA_PROCEDURAL_WIDTH
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
@@ -45,8 +46,8 @@ class MockCamera:
         """
         self._cfg = cfg
         self._rng = np.random.default_rng()
-        self._raw_width = 320
-        self._raw_height = 240
+        self._raw_width = MOCK_CAMERA_PROCEDURAL_WIDTH
+        self._raw_height = MOCK_CAMERA_PROCEDURAL_HEIGHT
         self._frame_counter = 0
         self._latest_rgb: NDArray[np.uint8] | None = None
         self._mode = cfg.mock_source

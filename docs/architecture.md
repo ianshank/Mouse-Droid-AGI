@@ -529,6 +529,61 @@ tool_bridge at 100%; `server.py` at 97% (the 3 uncovered lines are behind the op
 
 ---
 
+## Level 3g — Component Diagram: Constants and Config Hygiene Layer
+
+This layer was introduced in the **Phases 1 + 2 codebase modernization** (PR:
+`copilot/refactor-codebase-for-modularity`) to eliminate silent-override YAML bugs and
+centralize magic literals behind named, documented constants.
+
+```mermaid
+graph TD
+    subgraph ConfigYAML["config/*.yaml  (16 files)"]
+        DefaultYAML["default.yaml\nall schema defaults"]
+        ProdYAML["jetson_production.yaml\nproduction overrides"]
+        OtherYAML["... 14 overlay files"]
+    end
+
+    subgraph HygieneGate["Regression Safety Net"]
+        DupKeyTest["tests/regression/test_config_no_duplicate_keys.py\nparametrised over all 16 YAMLs\nuses yaml.compose() — walks every mapping node\nfails if any key duplicated in same mapping"]
+        OverlayTest["tests/regression/test_config_overlays_load.py\nasserts every overlay produces valid Settings\n+ exercises validate_configs.py CLI"]
+    end
+
+    subgraph ConstantsLayer["src/mousedroid/constants.py\nSingle source of truth for named literals"]
+        MockHailo["HAILO_MOCK_YOLO_OUTPUT_SHAPE  (25200, 85)\nHAILO_MOCK_FEATURE_EXTRACTOR_DIM  (256)\nYOLOv5-style anchor grid / feature dim"]
+        MockCamera["MOCK_CAMERA_PROCEDURAL_WIDTH  (320)\nMOCK_CAMERA_PROCEDURAL_HEIGHT  (240)\nProcedural mock frame size"]
+        MockPin["MOCK_ULTRASONIC_PIN_DEFAULT  (0)\nSentinel GPIO pin for mock mode"]
+        SensorSlots["SENSOR_SLOT_MAP\nvision=0, ultrasonic=1, motor=2,\naudio=3, lidar=4"]
+        LidarConst["LIDAR_* constants\nLD19 protocol — header, CRC poly, mm/m"]
+    end
+
+    subgraph Consumers["Modules consuming constants (never bare literals)"]
+        HailoRT["hardware/accelerator/hailo_runtime.py\nMockHailoRuntime.DEFAULT_OUTPUT_SHAPES"]
+        MockCam["hardware/camera/mock_camera.py\nMockCamera._raw_width / _raw_height"]
+        FactoryMod["factory.py\nbuild_distance_sensor mock path"]
+        Encoder["world_model/encoder.py\nMultimodalEncoder valid-mask gating"]
+        LidarDriver["hardware/lidar/ld19_driver.py\nCRC, header, timeout, feature dim"]
+    end
+
+    subgraph UnitTests["tests/unit/test_constants.py"]
+        ConsistencyTests["Cross-module consistency tests\nMockHailoRuntime.DEFAULT_OUTPUT_SHAPES == constants\nMockCamera._raw_width == constants\nbuild_distance_sensor returns non-None in mock mode"]
+    end
+
+    ConfigYAML --> HygieneGate
+    ConstantsLayer --> Consumers
+    ConstantsLayer --> UnitTests
+```
+
+**Design invariants enforced by this layer:**
+
+| Invariant | Enforcement |
+|---|---|
+| No duplicate YAML keys | `test_config_no_duplicate_keys.py` (parametrised, all 16 files) |
+| No bare magic literals in production code | `scripts/check_no_hardcoded_values.py` changed-line gate |
+| Constants match runtime default shapes | Cross-module consistency tests in `test_constants.py` |
+| All overlays produce valid `Settings` | `test_config_overlays_load.py` + CI `config-validate` job |
+
+---
+
 ## Level 4 — Code: Dependency Injection Pattern
 
 Every interface is a `@runtime_checkable Protocol`. Factory functions are the only place that branch on platform:
