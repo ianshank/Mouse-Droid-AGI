@@ -185,7 +185,7 @@ def test_mock_ultrasonic_pin_default_is_zero():
     assert MOCK_ULTRASONIC_PIN_DEFAULT == 0
 
 
-def test_mock_ultrasonic_pin_default_used_in_factory(monkeypatch) -> None:
+def test_mock_ultrasonic_pin_default_used_in_factory() -> None:
     """factory.build_distance_sensor uses MOCK_ULTRASONIC_PIN_DEFAULT for pins."""
     from mousedroid.config.schema import Settings
 
