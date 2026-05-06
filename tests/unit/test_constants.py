@@ -195,3 +195,6 @@ def test_mock_ultrasonic_pin_default_used_in_factory() -> None:
 
     sensor = build_distance_sensor(cfg)
     assert sensor is not None
+    # Verify the constant propagated all the way into the sensor's stored config.
+    assert sensor._cfg.trigger_pin == MOCK_ULTRASONIC_PIN_DEFAULT
+    assert sensor._cfg.echo_pin == MOCK_ULTRASONIC_PIN_DEFAULT

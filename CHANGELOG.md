@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added — Config/YAML hygiene and hardcoded-value extraction (PR: refactor/config-hygiene-and-constants)
+### Added — Config/YAML hygiene and hardcoded-value extraction (branch: `copilot/refactor-codebase-for-modularity`)
 
 This PR implements **Phases 1 and 2** of the strategic codebase modernization plan aimed at making
 the system more maintainable, testable, and auditable.
