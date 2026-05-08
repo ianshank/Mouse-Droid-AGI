@@ -80,10 +80,12 @@ class LMDBReplayReader:
         experience_cfg: ExperienceConfig,
         *,
         path_override: str | None = None,
+        debug_log_every_n: int = 0,
     ) -> None:
         path_str = path_override if path_override is not None else experience_cfg.path
         self._path = Path(path_str)
         self._map_size = max(1, math.ceil(experience_cfg.map_size_gb * GB_TO_BYTES))
+        self._debug_log_every_n = max(0, int(debug_log_every_n))
         self._read_records = 0
         self._skipped_schema = 0
         self._chunks_yielded = 0
@@ -197,6 +199,20 @@ class LMDBReplayReader:
                     continue
                 self._read_records += len(chunk)
                 self._chunks_yielded += 1
+                # Throttled DEBUG-level live triage. Operator sets
+                # `cfg.training.replay_mixer.debug_log_every_n` and the factory
+                # forwards it via the constructor; 0 disables completely.
+                if (
+                    self._debug_log_every_n > 0
+                    and self._chunks_yielded % self._debug_log_every_n == 0
+                ):
+                    _log.debug(
+                        "replay_chunk_decoded",
+                        chunks_yielded=self._chunks_yielded,
+                        read_records=self._read_records,
+                        skipped_schema=self._skipped_schema,
+                        last_chunk_len=len(chunk),
+                    )
                 yield chunk
         finally:
             await asyncio.to_thread(env.close)

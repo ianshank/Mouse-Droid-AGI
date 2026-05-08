@@ -168,6 +168,25 @@ experience:
   map_size_gb: 40
   flush_every_n: 60
 
+# Phase 2 real-episode replay loop (PR #60).
+#
+# Defaults are inert (`alpha_target: 0.0` = sim-only) so the rover keeps the
+# pre-Phase-2 byte-identical training behaviour until an operator opts in.
+# To start drawing real episodes into PPO's BC-aux loss, ramp `alpha_target`
+# in a follow-up PR (suggested first step: 0.05 over 1000 ramp steps).
+#
+# `debug_log_every_n` is the live-triage knob: set to e.g. 100 to surface
+# `mixer_draw` and `replay_chunk_decoded` DEBUG lines without flooding
+# the journal. Default 0 keeps debug logs off.
+training:
+  replay_mixer:
+    alpha_target: 0.0
+    alpha_ramp_steps: 1000
+    chunk_size: 64
+    seed: null
+    log_every_n: 500
+    debug_log_every_n: 0
+
 # MSE-6 SSD1306 OLED face display (PR #45).
 # Wiring on Jetson Orin Nano 40-pin header:
 #   VCC -> pin 1 (3.3V)   GND -> pin 6

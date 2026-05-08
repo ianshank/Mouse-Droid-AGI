@@ -1,0 +1,35 @@
+# Systemd unit template for the MouseDroidAGI Jetson self-hosted runner.
+#
+# Installed by `scripts/jetson-runner-install.sh`. The placeholders below
+# (@RUNNER_USER@, @RUNNER_INSTALL_DIR@) are substituted via `sed -i` at install
+# time so this file stays static and committable.
+
+[Unit]
+Description=GitHub Actions Self-Hosted Runner (Jetson)
+After=network-online.target docker.service
+Wants=network-online.target
+# Make the runner wait until the rover container is up before claiming the
+# nightly Ten Pillars job — validate_pillar.sh shells into the container.
+Requires=mousedroid-docker.service
+
+[Service]
+Type=simple
+User=@RUNNER_USER@
+Group=@RUNNER_USER@
+WorkingDirectory=@RUNNER_INSTALL_DIR@
+ExecStart=@RUNNER_INSTALL_DIR@/run.sh
+Restart=always
+RestartSec=10s
+KillSignal=SIGTERM
+TimeoutStopSec=30s
+# Keep stdout/stderr in journald so `journalctl -u actions-runner-mousedroid`
+# is the single operator entry point.
+StandardOutput=journal
+StandardError=journal
+# Resource caps mirror what scripts/mousedroid-docker.service uses so the
+# runner does not steal headroom from the rover during a job.
+MemoryHigh=1G
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target
