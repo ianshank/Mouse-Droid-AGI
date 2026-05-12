@@ -1156,6 +1156,114 @@ class RobotConfig(BaseModel):
     )
 
 
+# ---------------------------------------------------------------------------
+# 4WD rover sim-to-real configuration (Phase A scaffold)
+# ---------------------------------------------------------------------------
+
+
+class RoverInertialConfig(BaseModel):
+    """Mass-property overrides for the MSE-6 shell + 4WD chassis URDF.
+
+    Used by the Isaac Lab env stub (and future MuJoCo backend) to update
+    the URDF's documentation-quality defaults with values derived from
+    the actual 3D-print parameters of the physical droid. A top-heavy
+    ``com_offset_xyz_m`` is intentional — the policy must experience the
+    roll tendency in sim to generalise to hardware.
+    """
+
+    shell_mass_kg: float = Field(0.85, gt=0, description="MSE-6 shell mass (kg)")
+    shell_thickness_m: float = Field(
+        0.003, gt=0, description="Shell wall thickness for hollow inertia (m)"
+    )
+    shell_infill: float = Field(0.20, gt=0, le=1.0, description="Print infill fraction [0, 1]")
+    com_offset_xyz_m: tuple[float, float, float] = Field(
+        (0.0, 0.0, 0.04),
+        description="COM offset from base_link origin (top-heavy: positive z)",
+    )
+    wheel_mass_kg: float = Field(0.06, gt=0, description="Per-wheel mass (kg)")
+
+
+class RoverSimConfig(BaseModel):
+    """Simulation backend selection and physics timing for rover training."""
+
+    backend: Literal["isaac_lab", "mujoco", "mock"] = Field(
+        "mock",
+        description=(
+            "Sim backend. 'mock' (NumPy, no physics) is the default so CI "
+            "and unit tests run without GPU/Isaac dependencies."
+        ),
+    )
+    urdf_path: str = Field(
+        "assets/rover/mse6_4wd.urdf",
+        description="Path to the rover URDF (relative to repo root)",
+    )
+    sim_dt_s: float = Field(
+        1.0 / 120.0, gt=0, description="Physics step (s); decimation maps to control rate"
+    )
+    decimation: int = Field(
+        4, ge=1, description="Physics steps per control step (30 Hz control at dt=1/120)"
+    )
+    episode_length_s: float = Field(
+        20.0, gt=0, description="Max episode duration before truncation (s)"
+    )
+    num_envs: int = Field(1, ge=1, description="Parallel envs (use 4096+ for Isaac Lab training)")
+    headless: bool = Field(True, description="Run Isaac Lab without a viewer")
+    inertial: RoverInertialConfig = Field(
+        default_factory=RoverInertialConfig,
+        description="Mass-property overrides for the URDF defaults",
+    )
+
+
+class RoverActionConfig(BaseModel):
+    """Action space configuration for the rover policy."""
+
+    mode: Literal["differential", "body_velocity"] = Field(
+        "differential",
+        description=(
+            "'differential' -> [left_wheel_rad_s, right_wheel_rad_s]; "
+            "'body_velocity' -> [vx_mps, omega_rads]."
+        ),
+    )
+    max_wheel_rad_s: float = Field(
+        25.0, gt=0, description="Hard cap on per-wheel angular velocity (rad/s)"
+    )
+    slew_rad_s2: float = Field(
+        60.0,
+        gt=0,
+        description=(
+            "Max wheel angular acceleration (rad/s^2). Consumed by the "
+            "Phase B neurosymbolic action validator; recorded here so the "
+            "URDF, env, and safety layer share one source of truth."
+        ),
+    )
+
+
+class RoverObservationConfig(BaseModel):
+    """Observation-space toggles for the rover env."""
+
+    include_imu: bool = Field(True, description="6-D linear-accel + ang-vel vector")
+    include_wheel_encoders: bool = Field(True, description="4-D wheel angular velocities")
+    include_chassis_pose: bool = Field(
+        True, description="4-D [x, y, cos(theta), sin(theta)] body pose"
+    )
+    include_lidar_sectors: bool = Field(True, description="Sector-binned LiDAR clearance features")
+    lidar_num_sectors: int = Field(
+        16, ge=1, description="Number of angular sectors for LiDAR features"
+    )
+
+
+class RoverConfig(BaseModel):
+    """Top-level rover sim-to-real configuration (None preserves legacy).
+
+    Optional on the root :class:`Settings`. When ``None``, existing YAML
+    files load unchanged and the orchestrator behaves as before.
+    """
+
+    sim: RoverSimConfig = Field(default_factory=RoverSimConfig)
+    action: RoverActionConfig = Field(default_factory=RoverActionConfig)
+    observation: RoverObservationConfig = Field(default_factory=RoverObservationConfig)
+
+
 class SafetyConfig(BaseModel):
     """Safety monitor thresholds."""
 
@@ -3170,6 +3278,14 @@ class Settings(BaseSettings):
     camera: CameraConfig = Field(default_factory=_settings_default_factory(CameraConfig))
     jetson: JetsonConfig = Field(default_factory=_settings_default_factory(JetsonConfig))
     robot: RobotConfig = Field(default_factory=_settings_default_factory(RobotConfig))
+    rover: RoverConfig | None = Field(
+        None,
+        description=(
+            "4WD rover sim-to-real configuration (None=disabled, "
+            "backwards compatible). Required only when building "
+            "``build_rover_env`` for Isaac Lab / MuJoCo training."
+        ),
+    )
     experience: ExperienceConfig = Field(
         default_factory=_settings_default_factory(ExperienceConfig)
     )

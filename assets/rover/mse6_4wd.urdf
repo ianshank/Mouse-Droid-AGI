@@ -1,0 +1,246 @@
+<?xml version="1.0"?>
+<!--
+  MSE-6 4WD rover URDF — placeholder geometry for the sim-to-real scaffold.
+
+  Conventions:
+    - SI units: meters, kilograms, radians.
+    - World/base frame: x forward, y left, z up.
+    - Continuous wheel joints (no angle limits) per the differential-drive
+      action space. Front-left + rear-left share a side, FR + RR the other.
+    - Inertial values reflect a top-heavy hollow shell over a 4WD chassis;
+      shell_mass/com_offset are overridden at runtime from
+      ``RoverInertialConfig`` so this file stays a sensible default.
+    - Meshes intentionally absent: this PR ships primitive boxes/cylinders
+      so the URDF loads in any viewer without external assets. Real CAD
+      meshes will replace these once authored.
+-->
+<robot name="mse6_4wd">
+
+  <!-- ===================== Materials ===================== -->
+  <material name="droid_white">
+    <color rgba="0.92 0.92 0.92 1.0"/>
+  </material>
+  <material name="tire_black">
+    <color rgba="0.08 0.08 0.08 1.0"/>
+  </material>
+  <material name="chassis_grey">
+    <color rgba="0.35 0.35 0.38 1.0"/>
+  </material>
+
+  <!-- ===================== Base / Chassis ===================== -->
+  <!--
+    base_link models the chassis plate plus the MSE-6 shell as a single
+    rigid body. The shell sits above the chassis so the COM is biased
+    upward, matching the top-heavy roll dynamics the policy must learn.
+
+    Approximate values for a 230 mm x 180 mm chassis with a hollow ABS
+    shell at 3 mm wall / 20% infill. Re-derived at runtime from
+    RoverInertialConfig — these are documentation-quality defaults only.
+  -->
+  <link name="base_link">
+    <inertial>
+      <origin xyz="0.0 0.0 0.04" rpy="0 0 0"/>
+      <mass value="1.45"/>
+      <!--
+        Cuboid approximation: 0.23 m (x) x 0.18 m (y) x 0.14 m (z).
+          ixx = (1/12) * m * (y^2 + z^2)
+          iyy = (1/12) * m * (x^2 + z^2)
+          izz = (1/12) * m * (x^2 + y^2)
+      -->
+      <inertia
+        ixx="0.00629" ixy="0.0" ixz="0.0"
+        iyy="0.00876" iyz="0.0"
+        izz="0.01030"/>
+    </inertial>
+    <visual>
+      <origin xyz="0.0 0.0 0.02" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.23 0.18 0.04"/>
+      </geometry>
+      <material name="chassis_grey"/>
+    </visual>
+    <visual>
+      <origin xyz="0.0 0.0 0.10" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.20 0.16 0.12"/>
+      </geometry>
+      <material name="droid_white"/>
+    </visual>
+    <collision>
+      <origin xyz="0.0 0.0 0.06" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.23 0.18 0.16"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- ===================== Wheels ===================== -->
+  <!--
+    Continuous joints (no angle limits) so the policy can command
+    unbounded rotation. Wheels are visually cylinders aligned along
+    the body Y axis (rotated 90 deg about X for the URDF convention).
+  -->
+
+  <!-- Front-Left wheel -->
+  <link name="wheel_fl">
+    <inertial>
+      <origin xyz="0.0 0.0 0.0" rpy="0 0 0"/>
+      <mass value="0.06"/>
+      <!-- Solid cylinder: r=0.042, h=0.024
+           ixx = iyy = (1/12) m (3 r^2 + h^2)
+           izz = (1/2) m r^2  (axis through cylinder axis) -->
+      <inertia
+        ixx="0.0000293" ixy="0.0" ixz="0.0"
+        iyy="0.0000293" iyz="0.0"
+        izz="0.0000529"/>
+    </inertial>
+    <visual>
+      <origin xyz="0.0 0.0 0.0" rpy="1.5707963 0 0"/>
+      <geometry>
+        <cylinder radius="0.042" length="0.024"/>
+      </geometry>
+      <material name="tire_black"/>
+    </visual>
+    <collision>
+      <origin xyz="0.0 0.0 0.0" rpy="1.5707963 0 0"/>
+      <geometry>
+        <cylinder radius="0.042" length="0.024"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="joint_wheel_fl" type="continuous">
+    <parent link="base_link"/>
+    <child link="wheel_fl"/>
+    <origin xyz="0.085 0.10 -0.018" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <dynamics damping="0.01" friction="0.0"/>
+  </joint>
+
+  <!-- Front-Right wheel -->
+  <link name="wheel_fr">
+    <inertial>
+      <origin xyz="0.0 0.0 0.0" rpy="0 0 0"/>
+      <mass value="0.06"/>
+      <inertia
+        ixx="0.0000293" ixy="0.0" ixz="0.0"
+        iyy="0.0000293" iyz="0.0"
+        izz="0.0000529"/>
+    </inertial>
+    <visual>
+      <origin xyz="0.0 0.0 0.0" rpy="1.5707963 0 0"/>
+      <geometry>
+        <cylinder radius="0.042" length="0.024"/>
+      </geometry>
+      <material name="tire_black"/>
+    </visual>
+    <collision>
+      <origin xyz="0.0 0.0 0.0" rpy="1.5707963 0 0"/>
+      <geometry>
+        <cylinder radius="0.042" length="0.024"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="joint_wheel_fr" type="continuous">
+    <parent link="base_link"/>
+    <child link="wheel_fr"/>
+    <origin xyz="0.085 -0.10 -0.018" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <dynamics damping="0.01" friction="0.0"/>
+  </joint>
+
+  <!-- Rear-Left wheel -->
+  <link name="wheel_rl">
+    <inertial>
+      <origin xyz="0.0 0.0 0.0" rpy="0 0 0"/>
+      <mass value="0.06"/>
+      <inertia
+        ixx="0.0000293" ixy="0.0" ixz="0.0"
+        iyy="0.0000293" iyz="0.0"
+        izz="0.0000529"/>
+    </inertial>
+    <visual>
+      <origin xyz="0.0 0.0 0.0" rpy="1.5707963 0 0"/>
+      <geometry>
+        <cylinder radius="0.042" length="0.024"/>
+      </geometry>
+      <material name="tire_black"/>
+    </visual>
+    <collision>
+      <origin xyz="0.0 0.0 0.0" rpy="1.5707963 0 0"/>
+      <geometry>
+        <cylinder radius="0.042" length="0.024"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="joint_wheel_rl" type="continuous">
+    <parent link="base_link"/>
+    <child link="wheel_rl"/>
+    <origin xyz="-0.085 0.10 -0.018" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <dynamics damping="0.01" friction="0.0"/>
+  </joint>
+
+  <!-- Rear-Right wheel -->
+  <link name="wheel_rr">
+    <inertial>
+      <origin xyz="0.0 0.0 0.0" rpy="0 0 0"/>
+      <mass value="0.06"/>
+      <inertia
+        ixx="0.0000293" ixy="0.0" ixz="0.0"
+        iyy="0.0000293" iyz="0.0"
+        izz="0.0000529"/>
+    </inertial>
+    <visual>
+      <origin xyz="0.0 0.0 0.0" rpy="1.5707963 0 0"/>
+      <geometry>
+        <cylinder radius="0.042" length="0.024"/>
+      </geometry>
+      <material name="tire_black"/>
+    </visual>
+    <collision>
+      <origin xyz="0.0 0.0 0.0" rpy="1.5707963 0 0"/>
+      <geometry>
+        <cylinder radius="0.042" length="0.024"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="joint_wheel_rr" type="continuous">
+    <parent link="base_link"/>
+    <child link="wheel_rr"/>
+    <origin xyz="-0.085 -0.10 -0.018" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <dynamics damping="0.01" friction="0.0"/>
+  </joint>
+
+  <!-- ===================== Sensor frames ===================== -->
+  <!--
+    Zero-mass frames for IMU + camera + LiDAR. The Isaac Lab env stub
+    attaches sensors to these frames; real driver coordinates flow
+    through the same names.
+  -->
+  <link name="imu_link"/>
+  <joint name="joint_imu" type="fixed">
+    <parent link="base_link"/>
+    <child link="imu_link"/>
+    <origin xyz="0.0 0.0 0.04" rpy="0 0 0"/>
+  </joint>
+
+  <link name="lidar_link"/>
+  <joint name="joint_lidar" type="fixed">
+    <parent link="base_link"/>
+    <child link="lidar_link"/>
+    <origin xyz="0.05 0.0 0.17" rpy="0 0 0"/>
+  </joint>
+
+  <link name="camera_link"/>
+  <joint name="joint_camera" type="fixed">
+    <parent link="base_link"/>
+    <child link="camera_link"/>
+    <origin xyz="0.10 0.0 0.13" rpy="0 0 0"/>
+  </joint>
+
+</robot>
