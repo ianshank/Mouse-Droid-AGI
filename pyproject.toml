@@ -72,6 +72,16 @@ arm = [
     "ultralytics>=8.0",
     "scipy>=1.10",
 ]
+# Isaac Lab + Isaac Sim are NOT installed by CI. The dep is declared here
+# so workstation users can opt in with `pip install -e ".[isaac]"` and so
+# the rover env stub at src/mousedroid/sim/isaaclab/ has a documented
+# install path. Tests detect availability via the
+# ``_isaaclab_available()`` helper in that module and skip Isaac-Lab-only
+# cases with ``@pytest.mark.skipif(not _isaaclab_available(), ...)``.
+isaac = [
+    "isaaclab>=0.20",
+    "gymnasium>=0.29",
+]
 hailo = [
     "hailort>=4.18",
 ]

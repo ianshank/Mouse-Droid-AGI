@@ -330,6 +330,41 @@ mcp:
 #   angry_arousal_min: 0.45
 #   idle_sleepy_after_s: 20.0
 
+# 4WD rover sim-to-real configuration (Phase A scaffold)
+# Optional — omit this block entirely to preserve legacy mouse-droid
+# behaviour. ``build_rover_env`` requires this block to be present.
+rover:
+  sim:
+    backend: mock                          # mock | isaac_lab | mujoco
+    urdf_path: assets/rover/mse6_4wd.urdf
+    sim_dt_s: 0.008333333                  # 1/120 s; physics step
+    decimation: 4                          # -> 30 Hz control rate
+    episode_length_s: 20.0
+    num_envs: 1                            # bump to 4096+ for Isaac Lab training
+    headless: true
+    inertial:
+      shell_mass_kg: 0.85
+      shell_thickness_m: 0.003
+      shell_infill: 0.20
+      com_offset_xyz_m: [0.0, 0.0, 0.04]   # top-heavy MSE-6 shell
+      wheel_mass_kg: 0.06
+  action:
+    mode: differential                     # differential | body_velocity
+    max_wheel_rad_s: 25.0
+    slew_rad_s2: 60.0
+  observation:
+    include_imu: true
+    include_wheel_encoders: true
+    include_chassis_pose: true
+    include_lidar_sectors: true
+    lidar_num_sectors: 16
+  task:
+    # Placeholder goal-reach reward consumed by the mock env. The full
+    # reward shaper (Phase C) replaces these knobs with a structured
+    # multi-objective signal.
+    goal_xy_m: [2.0, 0.0]
+    goal_reach_radius_m: 0.10
+
 # Hailo-8 neural accelerator (M.2 PCIe, 26 TOPS INT8)
 # Offloads perception (YOLO, feature extraction) to dedicated silicon,
 # freeing the Jetson GPU for reasoning (RSSM, MCTS, SAC, LLM).

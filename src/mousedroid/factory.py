@@ -58,6 +58,7 @@ if TYPE_CHECKING:
     from mousedroid.orchestrator.mission_dispatcher import MissionDispatcherProtocol
     from mousedroid.reward.protocol import RewardModelProtocol
     from mousedroid.sensing.manager import SensorManager
+    from mousedroid.sim.protocols import RoverEnvProtocol
     from mousedroid.telemetry.log_buffer import LogRingBuffer
     from mousedroid.telemetry.metrics import MetricsRegistry
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
@@ -2181,6 +2182,75 @@ def build_arm_perception(
         intrinsics,
         object_detector=detector,
     )
+
+
+# ---------------------------------------------------------------------------
+# 4WD rover sim-to-real factory functions (Phase A scaffold)
+# ---------------------------------------------------------------------------
+
+
+def build_rover_env(cfg: Settings) -> RoverEnvProtocol:
+    """Build the rover simulation environment selected by ``cfg.rover.sim.backend``.
+
+    Backends:
+        - ``"mock"`` (default): NumPy-only kinematic integrator. Has no
+          physics or GPU dependency and is the only backend used in CI.
+        - ``"isaac_lab"``: Isaac Lab env stub; requires
+          ``pip install -e ".[isaac]"`` on a workstation with NVIDIA
+          Isaac Lab prerequisites. Phase B fills in the actual
+          articulation / sensor wiring.
+        - ``"mujoco"``: reserved for a future PR — raises
+          :class:`NotImplementedError`.
+
+    Args:
+        cfg: Root settings. ``cfg.rover`` must be populated.
+
+    Returns:
+        Environment conforming to :class:`RoverEnvProtocol`.
+
+    Raises:
+        ValueError: If ``cfg.rover`` is ``None``.
+        NotImplementedError: For backends not yet wired in this phase.
+    """
+    if cfg.rover is None:
+        msg = (
+            "rover config required for build_rover_env; set the top-level "
+            "'rover:' block in your YAML or pass RoverConfig() directly."
+        )
+        raise ValueError(msg)
+
+    backend = cfg.rover.sim.backend
+    if backend == "mock":
+        from mousedroid.sim.mock_rover_env import MockRoverEnv
+
+        _log.info(
+            "rover_env_mock_built",
+            mode=cfg.rover.action.mode,
+            obs_keys=list(cfg.rover.observation.enabled_keys()),
+        )
+        return MockRoverEnv(
+            cfg.rover,
+            wheel_radius_m=cfg.robot.wheel_radius_m,
+            track_width_m=cfg.robot.track_width_m,
+        )
+
+    if backend == "isaac_lab":
+        from mousedroid.sim.isaaclab.rover_env import RoverIsaacLabEnv
+
+        env = RoverIsaacLabEnv(
+            cfg.rover,
+            wheel_radius_m=cfg.robot.wheel_radius_m,
+            track_width_m=cfg.robot.track_width_m,
+        )
+        _log.info("rover_env_isaaclab_built", num_envs=cfg.rover.sim.num_envs)
+        return env
+
+    if backend == "mujoco":
+        msg = "MuJoCo rover backend is reserved; see Phase B of the sim-to-real plan."
+        raise NotImplementedError(msg)
+
+    msg = f"unknown rover sim backend: {backend!r}"
+    raise ValueError(msg)
 
 
 def build_cloud_telemetry_sink(
