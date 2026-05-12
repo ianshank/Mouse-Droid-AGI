@@ -157,9 +157,12 @@ ENV CUDA_HOME=/usr/local/cuda
 ENV PATH="${CUDA_HOME}/bin:${PATH}"
 ENV LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}"
 
-# Health check: verify GPU + mousedroid import
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD python3 -c "import torch; assert torch.cuda.is_available(); import mousedroid" || exit 1
+# Health check: invoke the canonical mousedroid --health-check CLI,
+# the same signal exercised by scripts/jetson_smoke_test.sh `app` and
+# scripts/ci.sh. `_health_check()` calls sys.exit(1) on failure, so no
+# `|| exit 1` wrapper is needed.
+HEALTHCHECK --interval=30s --timeout=15s --start-period=60s --retries=3 \
+    CMD python3 -m mousedroid.main --health-check
 
 ENTRYPOINT ["python3", "-m", "mousedroid.main"]
 CMD ["--config", "/etc/mousedroid/default.yaml"]
