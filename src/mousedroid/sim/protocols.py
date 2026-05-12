@@ -34,15 +34,18 @@ ROVER_NUM_WHEELS: int = 4
 class RoverEnvProtocol(Protocol):
     """Minimal env contract shared by mock + Isaac Lab + MuJoCo backends.
 
-    Mirrors the Gymnasium API (`reset`, `step`, `action_space`,
-    `observation_space`, `close`) without importing Gymnasium itself —
-    the mock backend has no Gym dependency so this stays import-free at
-    the protocol level.
+    The surface intentionally mirrors the Gymnasium *lifecycle methods*
+    (``reset``, ``step``, ``close``) but deliberately exposes
+    :attr:`action_dim` + :attr:`observation_keys` instead of the heavier
+    ``action_space`` / ``observation_space`` Gymnasium ``Space`` objects.
+    That keeps the protocol import-free of ``gymnasium`` so the mock
+    backend can satisfy it with stdlib + NumPy only; concrete backends
+    are free to expose proper Gymnasium spaces in addition.
     """
 
     @property
     def action_dim(self) -> int:
-        """Return the action vector dimensionality (2 for differential)."""
+        """Return the action vector dimensionality (per ``RoverActionConfig.mode``)."""
         ...
 
     @property

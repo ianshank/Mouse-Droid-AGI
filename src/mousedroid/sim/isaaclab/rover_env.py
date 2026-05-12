@@ -225,20 +225,30 @@ class RoverIsaacLabEnv:
             raise RoverEnvNotBuiltError(msg)
 
     def _zero_observation(self) -> dict[str, NDArray[np.float32]]:
-        """Return a zero-valued observation matching the configured keys.
+        """Return an identity-reset observation matching the configured keys.
 
-        Each modality's shape is the same one :class:`MockRoverEnv`
-        produces so callers can swap backends without touching downstream
-        feature extractors.
+        Each modality's shape mirrors :class:`MockRoverEnv` so callers
+        can swap backends without touching downstream feature extractors.
+        ``chassis_pose`` is seeded with the identity heading
+        ``[0, 0, cos(0), sin(0)] = [0, 0, 1, 0]`` rather than all-zeros,
+        because ``[0, 0, 0, 0]`` violates the ``cos^2 + sin^2 = 1``
+        constraint and would disagree with the mock backend's reset.
         """
         obs_cfg = self._cfg.observation
         obs: dict[str, NDArray[np.float32]] = {}
         if obs_cfg.include_imu:
             obs["imu"] = np.zeros(ROVER_IMU_DIM, dtype=np.float32)
         if obs_cfg.include_chassis_pose:
-            obs["chassis_pose"] = np.zeros(ROVER_CHASSIS_POSE_DIM, dtype=np.float32)
+            obs["chassis_pose"] = _identity_chassis_pose()
         if obs_cfg.include_wheel_encoders:
             obs["wheel_vel"] = np.zeros(ROVER_NUM_WHEELS, dtype=np.float32)
         if obs_cfg.include_lidar_sectors:
             obs["lidar"] = np.zeros(obs_cfg.lidar_num_sectors, dtype=np.float32)
         return obs
+
+
+def _identity_chassis_pose() -> NDArray[np.float32]:
+    """Return ``[x=0, y=0, cos(theta)=1, sin(theta)=0]`` — the URDF home pose."""
+    pose = np.zeros(ROVER_CHASSIS_POSE_DIM, dtype=np.float32)
+    pose[2] = 1.0
+    return pose

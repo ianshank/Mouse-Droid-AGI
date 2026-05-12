@@ -21,6 +21,7 @@ from mousedroid.sim.isaaclab.rover_env import (
     RoverIsaacLabEnv,
     _isaaclab_available,
 )
+from mousedroid.sim.mock_rover_env import MockRoverEnv
 from mousedroid.sim.protocols import RoverEnvProtocol
 
 
@@ -115,3 +116,26 @@ def test_close_resets_built_flag(monkeypatch):
     env.close()
     with pytest.raises(RoverEnvNotBuiltError):
         env.reset(seed=0)
+
+
+def test_chassis_pose_matches_mock_reset_identity(monkeypatch):
+    """Stub reset() must agree with MockRoverEnv reset() on chassis_pose.
+
+    Both encode heading as ``[x, y, cos(theta), sin(theta)]``. At reset
+    (theta=0) the only valid identity value is ``[0, 0, 1, 0]``; the
+    earlier ``[0, 0, 0, 0]`` violated cos^2 + sin^2 = 1 and disagreed
+    with the mock backend.
+    """
+    cfg = RoverConfig(sim=RoverSimConfig(backend="isaac_lab"))
+    mock_env = MockRoverEnv(cfg, wheel_radius_m=0.042, track_width_m=0.20)
+    mock_obs, _ = mock_env.reset(seed=0)
+
+    monkeypatch.setattr(rover_env_module, "_isaaclab_available", lambda: True)
+    isaac_env = _make_env()
+    isaac_env._built = True
+    isaac_obs, _ = isaac_env.reset(seed=0)
+
+    np.testing.assert_array_equal(isaac_obs["chassis_pose"], mock_obs["chassis_pose"])
+    # And the encoding must actually be a unit heading vector.
+    cos_t, sin_t = float(isaac_obs["chassis_pose"][2]), float(isaac_obs["chassis_pose"][3])
+    assert cos_t**2 + sin_t**2 == pytest.approx(1.0)
