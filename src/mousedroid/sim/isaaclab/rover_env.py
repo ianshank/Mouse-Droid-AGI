@@ -36,6 +36,10 @@ class IsaacLabUnavailableError(RuntimeError):
     """Raised when the Isaac Lab backend is requested without the dep installed."""
 
 
+class RoverEnvNotBuiltError(RuntimeError):
+    """Raised when ``reset``/``step`` is called before :meth:`build`."""
+
+
 def _isaaclab_available() -> bool:
     """Return ``True`` iff Isaac Lab can be imported in the current env."""
     try:
@@ -49,9 +53,9 @@ class RoverIsaacLabEnv:
     """Isaac Lab env stub conforming to :class:`RoverEnvProtocol`.
 
     The constructor does **not** initialise Isaac Lab; call
-    :meth:`build` to do so. This split keeps the class
-    importable without GPU drivers and lets unit tests skip via
-    ``pytest.importorskip``.
+    :meth:`build` to do so. This split keeps the class importable
+    without GPU drivers; tests that need a live backend skip with
+    ``pytest.skipif(not _isaaclab_available(), ...)``.
     """
 
     def __init__(self, cfg: RoverConfig, wheel_radius_m: float, track_width_m: float) -> None:
@@ -67,6 +71,8 @@ class RoverIsaacLabEnv:
         self._track_width = track_width_m
         self._sim: Any = None  # Populated by ``build``.
         self._scene: Any = None
+        self._built: bool = False
+        self._step_idx: int = 0
         self._action_dim = 2
         self._obs_keys: tuple[str, ...] = cfg.observation.enabled_keys()
 
@@ -100,6 +106,7 @@ class RoverIsaacLabEnv:
         # URDF as USD, attach IMU + LiDAR sensors at imu_link / lidar_link,
         # wire actuators to the four continuous wheel joints, and apply
         # ``EpisodeParams.chassis`` domain randomization on reset.
+        self._built = True
 
     # ----- protocol surface -------------------------------------------------
 
@@ -127,13 +134,16 @@ class RoverIsaacLabEnv:
             ``(observation, info)``.
 
         Raises:
-            IsaacLabUnavailableError: When :meth:`build` has not been
-                called (i.e. Isaac Lab is not initialised).
+            IsaacLabUnavailableError: When the ``isaaclab`` package is
+                not installed.
+            RoverEnvNotBuiltError: When :meth:`build` has not yet been
+                called.
         """
         self._require_built()
         # TODO(Phase B): scene.reset, sensor zero, randomization sample.
         _log.debug("rover_isaaclab_env_reset_stub", seed=seed)
-        return self._zero_observation(), {"step_idx": 0}
+        self._step_idx = 0
+        return self._zero_observation(), {"step_idx": self._step_idx}
 
     def step(
         self,
@@ -155,7 +165,9 @@ class RoverIsaacLabEnv:
             ``(obs, reward, terminated, truncated, info)``.
 
         Raises:
-            IsaacLabUnavailableError: When :meth:`build` has not been
+            IsaacLabUnavailableError: When the ``isaaclab`` package is
+                not installed.
+            RoverEnvNotBuiltError: When :meth:`build` has not yet been
                 called.
         """
         if action.shape != (self._action_dim,):
@@ -165,7 +177,14 @@ class RoverIsaacLabEnv:
         # TODO(Phase B): forward wheel-velocity commands to articulation
         # actuators, sub-step ``decimation`` physics ticks, read sensors,
         # compute reward, return.
-        return self._zero_observation(), 0.0, False, False, {"step_idx": -1}
+        self._step_idx += 1
+        return (
+            self._zero_observation(),
+            0.0,
+            False,
+            False,
+            {"step_idx": self._step_idx},
+        )
 
     def close(self) -> None:
         """Tear down the Isaac Lab simulation context."""
@@ -173,17 +192,32 @@ class RoverIsaacLabEnv:
             # TODO(Phase B): self._sim.close() — Isaac Lab teardown.
             self._sim = None
             self._scene = None
+        self._built = False
+        self._step_idx = 0
 
     # ----- internals --------------------------------------------------------
 
     def _require_built(self) -> None:
-        """Raise if the simulation context has not yet been built."""
+        """Raise if the env can't service ``reset``/``step``.
+
+        Two distinct failure modes:
+
+          * ``isaaclab`` is not installed -> :class:`IsaacLabUnavailableError`
+          * ``isaaclab`` is installed but :meth:`build` was never called
+            -> :class:`RoverEnvNotBuiltError`
+        """
         if not _isaaclab_available():
             msg = (
                 "Isaac Lab is not installed; cannot run RoverIsaacLabEnv. "
                 "Use backend='mock' for CI / unit tests."
             )
             raise IsaacLabUnavailableError(msg)
+        if not self._built:
+            msg = (
+                "RoverIsaacLabEnv.build() has not been called; "
+                "call env.build() before reset() / step()."
+            )
+            raise RoverEnvNotBuiltError(msg)
 
     def _zero_observation(self) -> dict[str, NDArray[np.float32]]:
         """Return a zero-valued observation matching the configured keys."""

@@ -14,8 +14,10 @@ import pytest
 
 from mousedroid.config.schema import RoverConfig, RoverSimConfig, Settings
 from mousedroid.factory import build_rover_env
+from mousedroid.sim.isaaclab import rover_env as rover_env_module
 from mousedroid.sim.isaaclab.rover_env import (
     IsaacLabUnavailableError,
+    RoverEnvNotBuiltError,
     RoverIsaacLabEnv,
     _isaaclab_available,
 )
@@ -49,6 +51,21 @@ def test_reset_raises_when_isaaclab_missing():
         env.reset(seed=0)
 
 
+def test_reset_raises_not_built_when_isaaclab_present_but_unbuilt(monkeypatch):
+    """If isaaclab is installed but build() was never called, raise NotBuilt."""
+    monkeypatch.setattr(rover_env_module, "_isaaclab_available", lambda: True)
+    env = _make_env()
+    with pytest.raises(RoverEnvNotBuiltError):
+        env.reset(seed=0)
+
+
+def test_step_raises_not_built_when_isaaclab_present_but_unbuilt(monkeypatch):
+    monkeypatch.setattr(rover_env_module, "_isaaclab_available", lambda: True)
+    env = _make_env()
+    with pytest.raises(RoverEnvNotBuiltError):
+        env.step(np.zeros(2, dtype=np.float32))
+
+
 def test_step_validates_action_shape_before_isaaclab():
     """Shape validation runs before the Isaac Lab availability check."""
     env = _make_env()
@@ -72,7 +89,29 @@ def test_build_succeeds_when_isaaclab_installed():
     env.close()
 
 
+def test_step_idx_increments_under_build_bypass(monkeypatch):
+    """step_idx must increment monotonically to match MockRoverEnv parity."""
+    monkeypatch.setattr(rover_env_module, "_isaaclab_available", lambda: True)
+    env = _make_env()
+    env._built = True  # bypass the real Isaac Lab build for the stub
+    _obs, info = env.reset(seed=0)
+    assert info["step_idx"] == 0
+    for expected in (1, 2, 3):
+        _o, _r, _t, _tr, info = env.step(np.zeros(2, dtype=np.float32))
+        assert info["step_idx"] == expected
+
+
 def test_close_is_idempotent_without_build():
     env = _make_env()
     env.close()
     env.close()
+
+
+def test_close_resets_built_flag(monkeypatch):
+    """After close(), the env must require a fresh build() before reuse."""
+    monkeypatch.setattr(rover_env_module, "_isaaclab_available", lambda: True)
+    env = _make_env()
+    env._built = True
+    env.close()
+    with pytest.raises(RoverEnvNotBuiltError):
+        env.reset(seed=0)
