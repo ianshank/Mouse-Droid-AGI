@@ -1,9 +1,14 @@
-"""Protocols for rover simulation backends.
+"""Protocols and shared invariants for rover simulation backends.
 
 The :class:`RoverEnvProtocol` is the minimal Gymnasium-compatible surface
 that all rover backends (mock, Isaac Lab, MuJoCo) must satisfy. Concrete
 backends are imported only inside factory functions (architectural
 invariant #1).
+
+The ``ROVER_*`` module constants pin the observation-modality dimensions
+that come from physical / format invariants (IMU layout, chassis-pose
+encoding, URDF wheel count). Tunable quantities live on
+:class:`RoverObservationConfig` (e.g. ``lidar_num_sectors``).
 """
 
 from __future__ import annotations
@@ -12,6 +17,17 @@ from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 from numpy.typing import NDArray
+
+# Linear-accel (3) + angular-velocity (3) vector — fixed by the IMU
+# modality definition recorded on RoverObservationConfig.include_imu.
+ROVER_IMU_DIM: int = 6
+
+# Body-frame pose as ``[x, y, cos(theta), sin(theta)]`` — the cos/sin
+# encoding keeps the heading continuous for the policy network.
+ROVER_CHASSIS_POSE_DIM: int = 4
+
+# URDF (assets/rover/mse6_4wd.urdf) ships four continuous wheel joints.
+ROVER_NUM_WHEELS: int = 4
 
 
 @runtime_checkable

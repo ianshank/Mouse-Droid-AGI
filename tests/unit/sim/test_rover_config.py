@@ -17,6 +17,7 @@ from mousedroid.config.schema import (
     RoverInertialConfig,
     RoverObservationConfig,
     RoverSimConfig,
+    RoverTaskConfig,
     Settings,
 )
 
@@ -64,6 +65,24 @@ def test_rover_action_modes():
     assert body.mode == "body_velocity"
 
 
+def test_rover_action_dim_derived_per_mode():
+    """action_dim must come from RoverActionConfig, not a magic constant."""
+    assert RoverActionConfig(mode="differential").action_dim == 2
+    assert RoverActionConfig(mode="body_velocity").action_dim == 2
+
+
+def test_rover_task_defaults():
+    task = RoverTaskConfig()
+    assert task.goal_xy_m == (2.0, 0.0)
+    assert task.goal_reach_radius_m == 0.10
+
+
+def test_rover_task_custom_goal_overrides_defaults():
+    task = RoverTaskConfig(goal_xy_m=(5.0, -1.5), goal_reach_radius_m=0.25)
+    assert task.goal_xy_m == (5.0, -1.5)
+    assert task.goal_reach_radius_m == 0.25
+
+
 def test_rover_observation_enabled_keys_default():
     """Default toggles enable all four observation modalities in order."""
     obs = RoverObservationConfig()
@@ -100,5 +119,8 @@ def test_default_yaml_has_rover_block():
     yaml_path = repo_root / "config" / "default.yaml"
     data = yaml.safe_load(yaml_path.read_text())
     assert "rover" in data
-    assert data["rover"]["sim"]["backend"] == "mock"
-    assert data["rover"]["action"]["mode"] == "differential"
+    rover = data["rover"]
+    assert rover["sim"]["backend"] == "mock"
+    assert rover["action"]["mode"] == "differential"
+    assert rover["task"]["goal_xy_m"] == [2.0, 0.0]
+    assert rover["task"]["goal_reach_radius_m"] == 0.10

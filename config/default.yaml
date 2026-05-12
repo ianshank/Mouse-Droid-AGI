@@ -358,6 +358,12 @@ rover:
     include_chassis_pose: true
     include_lidar_sectors: true
     lidar_num_sectors: 16
+  task:
+    # Placeholder goal-reach reward consumed by the mock env. The full
+    # reward shaper (Phase C) replaces these knobs with a structured
+    # multi-objective signal.
+    goal_xy_m: [2.0, 0.0]
+    goal_reach_radius_m: 0.10
 
 # Hailo-8 neural accelerator (M.2 PCIe, 26 TOPS INT8)
 # Offloads perception (YOLO, feature extraction) to dedicated silicon,

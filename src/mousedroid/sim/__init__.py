@@ -8,6 +8,16 @@ dependencies.
 
 from __future__ import annotations
 
-from mousedroid.sim.protocols import RoverEnvProtocol
+from mousedroid.sim.protocols import (
+    ROVER_CHASSIS_POSE_DIM,
+    ROVER_IMU_DIM,
+    ROVER_NUM_WHEELS,
+    RoverEnvProtocol,
+)
 
-__all__ = ["RoverEnvProtocol"]
+__all__ = [
+    "ROVER_CHASSIS_POSE_DIM",
+    "ROVER_IMU_DIM",
+    "ROVER_NUM_WHEELS",
+    "RoverEnvProtocol",
+]

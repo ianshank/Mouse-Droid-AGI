@@ -14,11 +14,17 @@ from mousedroid.config.schema import (
     RoverConfig,
     RoverObservationConfig,
     RoverSimConfig,
+    RoverTaskConfig,
     Settings,
 )
 from mousedroid.factory import build_rover_env
 from mousedroid.sim.mock_rover_env import MockRoverEnv
-from mousedroid.sim.protocols import RoverEnvProtocol
+from mousedroid.sim.protocols import (
+    ROVER_CHASSIS_POSE_DIM,
+    ROVER_IMU_DIM,
+    ROVER_NUM_WHEELS,
+    RoverEnvProtocol,
+)
 
 
 def _make_env(**rover_overrides):
@@ -43,9 +49,9 @@ def test_default_observation_keys():
     env = _make_env()
     obs, _ = env.reset(seed=0)
     assert set(obs.keys()) == {"imu", "chassis_pose", "wheel_vel", "lidar"}
-    assert obs["imu"].shape == (6,)
-    assert obs["chassis_pose"].shape == (4,)
-    assert obs["wheel_vel"].shape == (4,)
+    assert obs["imu"].shape == (ROVER_IMU_DIM,)
+    assert obs["chassis_pose"].shape == (ROVER_CHASSIS_POSE_DIM,)
+    assert obs["wheel_vel"].shape == (ROVER_NUM_WHEELS,)
     assert obs["lidar"].shape == (16,)
 
 
@@ -61,6 +67,21 @@ def test_observation_toggles_drop_keys():
     env = MockRoverEnv(cfg, wheel_radius_m=0.042, track_width_m=0.20)
     obs, _ = env.reset(seed=0)
     assert set(obs.keys()) == {"chassis_pose"}
+
+
+def test_observation_toggles_all_disabled_yields_empty_dict():
+    """Branch coverage: every include_* off must produce an empty observation."""
+    cfg = RoverConfig(
+        observation=RoverObservationConfig(
+            include_imu=False,
+            include_wheel_encoders=False,
+            include_chassis_pose=False,
+            include_lidar_sectors=False,
+        )
+    )
+    env = MockRoverEnv(cfg, wheel_radius_m=0.042, track_width_m=0.20)
+    obs, _ = env.reset(seed=0)
+    assert obs == {}
 
 
 def test_action_dim_is_two_for_differential():
@@ -171,3 +192,40 @@ def test_build_rover_env_mujoco_not_implemented():
     cfg = Settings(rover=RoverConfig(sim=RoverSimConfig(backend="mujoco")))
     with pytest.raises(NotImplementedError, match="MuJoCo rover backend"):
         build_rover_env(cfg)
+
+
+def test_goal_xy_from_task_config_drives_reward():
+    """Reward / termination must follow RoverTaskConfig, not hardcoded (2, 0)."""
+    cfg = RoverConfig(task=RoverTaskConfig(goal_xy_m=(-3.0, 4.0), goal_reach_radius_m=0.10))
+    env = MockRoverEnv(cfg, wheel_radius_m=0.042, track_width_m=0.20)
+    env.reset(seed=0)
+    _o, reward, terminated, _tr, info = env.step(np.zeros(2, dtype=np.float32))
+    expected_distance = (3.0**2 + 4.0**2) ** 0.5
+    assert info["distance_to_goal_m"] == pytest.approx(expected_distance)
+    assert reward == pytest.approx(-expected_distance)
+    assert terminated is False  # 5 m > 0.10 m reach radius
+
+
+def test_goal_reach_radius_terminates_at_origin():
+    """Generous reach radius around origin (0,0) terminates immediately."""
+    cfg = RoverConfig(task=RoverTaskConfig(goal_xy_m=(0.0, 0.0), goal_reach_radius_m=0.5))
+    env = MockRoverEnv(cfg, wheel_radius_m=0.042, track_width_m=0.20)
+    env.reset(seed=0)
+    _o, _r, terminated, _tr, info = env.step(np.zeros(2, dtype=np.float32))
+    assert terminated is True
+    assert info["distance_to_goal_m"] == pytest.approx(0.0)
+
+
+def test_reset_seed_arg_is_accepted_without_side_effects():
+    """Seed is a no-op in Phase A (deterministic integrator). Must not raise."""
+    env = _make_env()
+    obs_none, _ = env.reset(seed=None)
+    obs_zero, _ = env.reset(seed=0)
+    # Identical state because integrator is deterministic regardless of seed.
+    assert np.array_equal(obs_none["chassis_pose"], obs_zero["chassis_pose"])
+
+
+def test_close_is_noop_on_mock_backend():
+    env = _make_env()
+    env.close()  # must not raise; idempotent
+    env.close()

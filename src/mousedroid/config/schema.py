@@ -1214,6 +1214,15 @@ class RoverSimConfig(BaseModel):
     )
 
 
+# Action vector dimensionality per supported mode. Centralised so env
+# classes don't carry a magic ``2`` — adding e.g. a 4-wheel mecanum mode
+# in Phase B is a single-line dict update plus the new mode literal.
+_ROVER_ACTION_DIM_BY_MODE: dict[str, int] = {
+    "differential": 2,
+    "body_velocity": 2,
+}
+
+
 class RoverActionConfig(BaseModel):
     """Action space configuration for the rover policy."""
 
@@ -1236,6 +1245,11 @@ class RoverActionConfig(BaseModel):
             "URDF, env, and safety layer share one source of truth."
         ),
     )
+
+    @property
+    def action_dim(self) -> int:
+        """Return the action-vector dimensionality implied by ``mode``."""
+        return _ROVER_ACTION_DIM_BY_MODE[self.mode]
 
 
 class RoverObservationConfig(BaseModel):
@@ -1270,6 +1284,27 @@ class RoverObservationConfig(BaseModel):
         return tuple(keys)
 
 
+class RoverTaskConfig(BaseModel):
+    """Placeholder goal-reach task parameters for the Phase A mock env.
+
+    The mock env's reward is a placeholder ``-||pose - goal_xy_m||`` that
+    terminates inside ``goal_reach_radius_m``. The full reward shaper
+    (Phase C, ``mousedroid.training.rover_reward``) will replace both
+    fields with a structured multi-objective signal; until then these
+    knobs let callers steer the placeholder without editing code.
+    """
+
+    goal_xy_m: tuple[float, float] = Field(
+        (2.0, 0.0),
+        description="World-frame goal pose (x, y) in metres",
+    )
+    goal_reach_radius_m: float = Field(
+        0.10,
+        gt=0,
+        description="Distance to goal at which the episode terminates (m)",
+    )
+
+
 class RoverConfig(BaseModel):
     """Top-level rover sim-to-real configuration (None preserves legacy).
 
@@ -1280,6 +1315,7 @@ class RoverConfig(BaseModel):
     sim: RoverSimConfig = Field(default_factory=RoverSimConfig)
     action: RoverActionConfig = Field(default_factory=RoverActionConfig)
     observation: RoverObservationConfig = Field(default_factory=RoverObservationConfig)
+    task: RoverTaskConfig = Field(default_factory=RoverTaskConfig)
 
 
 class SafetyConfig(BaseModel):

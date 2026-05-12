@@ -28,6 +28,11 @@ from numpy.typing import NDArray
 
 from mousedroid.config.schema import RoverConfig
 from mousedroid.logging.setup import get_logger
+from mousedroid.sim.protocols import (
+    ROVER_CHASSIS_POSE_DIM,
+    ROVER_IMU_DIM,
+    ROVER_NUM_WHEELS,
+)
 
 _log = get_logger(__name__)
 
@@ -69,11 +74,9 @@ class RoverIsaacLabEnv:
         self._cfg = cfg
         self._wheel_radius = wheel_radius_m
         self._track_width = track_width_m
-        self._sim: Any = None  # Populated by ``build``.
-        self._scene: Any = None
         self._built: bool = False
         self._step_idx: int = 0
-        self._action_dim = 2
+        self._action_dim = cfg.action.action_dim
         self._obs_keys: tuple[str, ...] = cfg.observation.enabled_keys()
 
     # ----- lifecycle --------------------------------------------------------
@@ -187,11 +190,13 @@ class RoverIsaacLabEnv:
         )
 
     def close(self) -> None:
-        """Tear down the Isaac Lab simulation context."""
-        if self._sim is not None:
-            # TODO(Phase B): self._sim.close() — Isaac Lab teardown.
-            self._sim = None
-            self._scene = None
+        """Tear down the Isaac Lab simulation context.
+
+        Phase B will call into the live ``isaaclab`` scene / sim handles
+        here; for now there is no underlying resource to release, so
+        we only reset the lifecycle flags so a follow-up ``build()`` is
+        required before the env can step again.
+        """
         self._built = False
         self._step_idx = 0
 
@@ -220,15 +225,20 @@ class RoverIsaacLabEnv:
             raise RoverEnvNotBuiltError(msg)
 
     def _zero_observation(self) -> dict[str, NDArray[np.float32]]:
-        """Return a zero-valued observation matching the configured keys."""
+        """Return a zero-valued observation matching the configured keys.
+
+        Each modality's shape is the same one :class:`MockRoverEnv`
+        produces so callers can swap backends without touching downstream
+        feature extractors.
+        """
         obs_cfg = self._cfg.observation
         obs: dict[str, NDArray[np.float32]] = {}
         if obs_cfg.include_imu:
-            obs["imu"] = np.zeros(6, dtype=np.float32)
+            obs["imu"] = np.zeros(ROVER_IMU_DIM, dtype=np.float32)
         if obs_cfg.include_chassis_pose:
-            obs["chassis_pose"] = np.zeros(4, dtype=np.float32)
+            obs["chassis_pose"] = np.zeros(ROVER_CHASSIS_POSE_DIM, dtype=np.float32)
         if obs_cfg.include_wheel_encoders:
-            obs["wheel_vel"] = np.zeros(4, dtype=np.float32)
+            obs["wheel_vel"] = np.zeros(ROVER_NUM_WHEELS, dtype=np.float32)
         if obs_cfg.include_lidar_sectors:
             obs["lidar"] = np.zeros(obs_cfg.lidar_num_sectors, dtype=np.float32)
         return obs
