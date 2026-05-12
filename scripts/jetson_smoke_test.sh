@@ -88,6 +88,54 @@ record_skip() {
     RESULTS+=("SKIP: ${name} ${reason}")
 }
 
+# ---------------------------------------------------------------------------
+# Host detection + tunable paths
+# ---------------------------------------------------------------------------
+#
+# Mirrors `tests/_jetson_hardware.py::is_jetson_host` so bash + python agree:
+# a Jetson host is Linux with /etc/nv_tegra_release present (existence — NOT
+# readability — to match Python's `Path(...).exists()`; the script never reads
+# the contents of that file, only uses presence as a marker).
+#
+# Override for tests / dev-box debugging:
+#   MOUSEDROID_SMOKE_FORCE_PLATFORM=jetson      -> always treat as Jetson
+#   MOUSEDROID_SMOKE_FORCE_PLATFORM=non-jetson  -> always treat as non-Jetson
+#   MOUSEDROID_SMOKE_FORCE_PLATFORM=auto        -> use real detection (default)
+#   (unset and empty-string both map to "auto"; unknown values warn + fall through)
+#
+# Optional path overrides for tests / vendor builds where Jetson paths differ:
+#   MOUSEDROID_SMOKE_TEGRA_RELEASE_PATH=/path/to/marker  (default: /etc/nv_tegra_release)
+#   MOUSEDROID_SMOKE_MEMINFO_PATH=/path/to/meminfo       (default: /proc/meminfo)
+#   MOUSEDROID_SMOKE_THERMAL_PATH=/path/to/temp          (default: /sys/devices/virtual/thermal/thermal_zone0/temp)
+
+# Resolve the configured tegra-release marker once, exposed so test_system can
+# log the actually-checked path (rather than hardcoding /etc/nv_tegra_release
+# in the human-readable echo, which would mis-report when an override is set).
+_jetson_tegra_release_path() {
+    printf '%s' "${MOUSEDROID_SMOKE_TEGRA_RELEASE_PATH:-/etc/nv_tegra_release}"
+}
+
+is_jetson_host() {
+    local override="${MOUSEDROID_SMOKE_FORCE_PLATFORM:-auto}"
+    # Treat empty-string the same as unset to avoid surprising users who
+    # `export MOUSEDROID_SMOKE_FORCE_PLATFORM=` to "clear" it.
+    if [[ -z "${override}" ]]; then
+        override="auto"
+    fi
+    case "${override}" in
+        jetson)     return 0 ;;
+        non-jetson) return 1 ;;
+        auto)       ;;
+        *)
+            echo "WARN: ignoring unknown MOUSEDROID_SMOKE_FORCE_PLATFORM='${override}' (use jetson|non-jetson|auto)" >&2
+            ;;
+    esac
+
+    local tegra_release_path
+    tegra_release_path="$(_jetson_tegra_release_path)"
+    [[ "$(uname -s)" == "Linux" && -e "${tegra_release_path}" ]]
+}
+
 resolve_python() {
     local candidate=""
 
@@ -137,26 +185,58 @@ check_python() {
 test_system() {
     log_section "System Health"
 
-    # CUDA / torch
+    local tegra_path
+    tegra_path="$(_jetson_tegra_release_path)"
+    local force_platform="${MOUSEDROID_SMOKE_FORCE_PLATFORM:-}"
+    [[ -z "${force_platform}" ]] && force_platform="auto"
+    local on_jetson=0
+    if is_jetson_host; then
+        on_jetson=1
+        case "${force_platform}" in
+            jetson)
+                echo "  Host treated as Jetson (forced via MOUSEDROID_SMOKE_FORCE_PLATFORM=jetson; uname / ${tegra_path} were not checked)"
+                ;;
+            *)
+                echo "  Host detected as Jetson (Linux + ${tegra_path} present)"
+                ;;
+        esac
+    else
+        case "${force_platform}" in
+            non-jetson)
+                echo "  Host treated as NOT a Jetson (forced via MOUSEDROID_SMOKE_FORCE_PLATFORM=non-jetson); Jetson-only checks will be SKIPped"
+                ;;
+            *)
+                echo "  Host is NOT a Jetson (${tegra_path} absent or non-Linux); Jetson-only checks will be SKIPped"
+                ;;
+        esac
+    fi
+
+    # CUDA / torch  --  Jetson-only (CI/dev-box may legitimately lack CUDA wheels)
     log_step "Checking torch.cuda.is_available()"
-    if "${PYTHON}" -c "import torch; assert torch.cuda.is_available(), 'no CUDA'" 2>/dev/null; then
+    if [[ "${on_jetson}" -eq 0 ]]; then
+        record_skip "torch.cuda.is_available" "not running on a Jetson host"
+    elif "${PYTHON}" -c "import torch; assert torch.cuda.is_available(), 'no CUDA'" 2>/dev/null; then
         record_pass "torch.cuda.is_available"
     else
         record_fail "torch.cuda.is_available" "CUDA GPU not detected by PyTorch"
     fi
 
-    # TensorRT
+    # TensorRT  --  Jetson-only
     log_step "Checking TensorRT import"
-    if "${PYTHON}" -c "import tensorrt; print(f'TensorRT {tensorrt.__version__}')" 2>/dev/null; then
+    if [[ "${on_jetson}" -eq 0 ]]; then
+        record_skip "import tensorrt" "not running on a Jetson host"
+    elif "${PYTHON}" -c "import tensorrt; print(f'TensorRT {tensorrt.__version__}')" 2>/dev/null; then
         record_pass "import tensorrt"
     else
         record_fail "import tensorrt" "TensorRT not importable"
     fi
 
-    # Thermal sensor
+    # Thermal sensor  --  Jetson-only (path is tegra-specific)
     log_step "Reading thermal sensor"
-    local thermal_path="/sys/devices/virtual/thermal/thermal_zone0/temp"
-    if [[ -r "${thermal_path}" ]]; then
+    local thermal_path="${MOUSEDROID_SMOKE_THERMAL_PATH:-/sys/devices/virtual/thermal/thermal_zone0/temp}"
+    if [[ "${on_jetson}" -eq 0 ]]; then
+        record_skip "thermal sensor read" "not running on a Jetson host"
+    elif [[ -r "${thermal_path}" ]]; then
         local temp_raw
         temp_raw="$(cat "${thermal_path}")"
         local temp_c
@@ -167,21 +247,34 @@ test_system() {
         record_fail "thermal sensor read" "${thermal_path} not readable"
     fi
 
-    # Memory check
+    # Memory check  --  needs Linux /proc; SKIP cleanly on non-Linux dev boxes
     log_step "Checking available memory"
-    local mem_total_kb mem_avail_kb mem_used_pct
-    mem_total_kb="$(grep MemTotal /proc/meminfo | awk '{print $2}')"
-    mem_avail_kb="$(grep MemAvailable /proc/meminfo | awk '{print $2}')"
-    if [[ -n "${mem_total_kb}" && -n "${mem_avail_kb}" && "${mem_total_kb}" -gt 0 ]]; then
-        mem_used_pct="$(( (mem_total_kb - mem_avail_kb) * 100 / mem_total_kb ))"
-        echo "  Memory: ${mem_used_pct}% used (${mem_avail_kb}kB available of ${mem_total_kb}kB)"
-        if [[ "${mem_used_pct}" -lt 95 ]]; then
-            record_pass "memory check (${mem_used_pct}% used)"
-        else
-            record_fail "memory check" "Memory usage critical: ${mem_used_pct}%"
-        fi
+    local meminfo_path="${MOUSEDROID_SMOKE_MEMINFO_PATH:-/proc/meminfo}"
+    if [[ ! -r "${meminfo_path}" ]]; then
+        record_skip "memory check" "${meminfo_path} not readable (non-Linux host?)"
     else
-        record_fail "memory check" "Could not read /proc/meminfo"
+        local mem_total_kb mem_avail_kb mem_used_pct mem_source="MemAvailable"
+        mem_total_kb="$(awk '/^MemTotal:/ {print $2; exit}' "${meminfo_path}" 2>/dev/null || true)"
+        mem_avail_kb="$(awk '/^MemAvailable:/ {print $2; exit}' "${meminfo_path}" 2>/dev/null || true)"
+        # Fallback for kernels < 3.14 or non-Linux emulation layers that lack MemAvailable.
+        if [[ -z "${mem_avail_kb}" ]]; then
+            mem_avail_kb="$(awk '/^MemFree:/ {print $2; exit}' "${meminfo_path}" 2>/dev/null || true)"
+            mem_source="MemFree"
+            echo "WARN: MemAvailable not present in ${meminfo_path}; falling back to MemFree (kernel < 3.14 or emulated /proc?)" >&2
+        fi
+        if [[ -n "${mem_total_kb}" && -n "${mem_avail_kb}" \
+                && "${mem_total_kb}" =~ ^[0-9]+$ && "${mem_avail_kb}" =~ ^[0-9]+$ \
+                && "${mem_total_kb}" -gt 0 ]]; then
+            mem_used_pct="$(( (mem_total_kb - mem_avail_kb) * 100 / mem_total_kb ))"
+            echo "  Memory: ${mem_used_pct}% used (${mem_avail_kb}kB ${mem_source} of ${mem_total_kb}kB)"
+            if [[ "${mem_used_pct}" -lt 95 ]]; then
+                record_pass "memory check (${mem_used_pct}% used)"
+            else
+                record_fail "memory check" "Memory usage critical: ${mem_used_pct}%"
+            fi
+        else
+            record_fail "memory check" "Could not parse ${meminfo_path}"
+        fi
     fi
 }
 
