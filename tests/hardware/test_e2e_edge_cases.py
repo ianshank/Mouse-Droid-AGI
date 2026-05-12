@@ -13,28 +13,21 @@ from __future__ import annotations
 
 import math
 import os
-import platform
 import statistics
 import time
-from pathlib import Path
 
 import pytest
 
 from mousedroid.validation.runtime import camera_unavailable_reason
-from tests._jetson_hardware import load_jetson_runtime_settings
+from tests._jetson_hardware import is_jetson_host, load_jetson_runtime_settings
 
 JETSON_PROD_CONFIG = os.getenv("MOUSEDROID_JETSON_CONFIG", "config/jetson_production.yaml")
 _BURST_TICKS = int(os.getenv("MOUSEDROID_E2E_BURST_TICKS", "50"))
 _HARD_DEADLINE_MULT = float(os.getenv("MOUSEDROID_E2E_HARD_DEADLINE_MULT", "5.0"))
 
-
-def _is_jetson_host() -> bool:
-    return platform.system() == "Linux" and Path("/etc/nv_tegra_release").exists()
-
-
 pytestmark = [
     pytest.mark.hardware,
-    pytest.mark.skipif(not _is_jetson_host(), reason="Jetson-only hardware test"),
+    pytest.mark.skipif(not is_jetson_host(), reason="Jetson-only hardware test"),
 ]
 
 
