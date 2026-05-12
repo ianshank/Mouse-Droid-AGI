@@ -1251,6 +1251,24 @@ class RoverObservationConfig(BaseModel):
         16, ge=1, description="Number of angular sectors for LiDAR features"
     )
 
+    def enabled_keys(self) -> tuple[str, ...]:
+        """Return the obs-dict keys implied by the enabled modality toggles.
+
+        Single source of truth for the observation contract — the mock and
+        Isaac Lab env classes plus the factory log call this so the keys
+        and their order can never drift between backends.
+        """
+        keys: list[str] = []
+        if self.include_imu:
+            keys.append("imu")
+        if self.include_chassis_pose:
+            keys.append("chassis_pose")
+        if self.include_wheel_encoders:
+            keys.append("wheel_vel")
+        if self.include_lidar_sectors:
+            keys.append("lidar")
+        return tuple(keys)
+
 
 class RoverConfig(BaseModel):
     """Top-level rover sim-to-real configuration (None preserves legacy).

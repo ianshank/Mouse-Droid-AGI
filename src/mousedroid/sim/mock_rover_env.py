@@ -64,7 +64,7 @@ class MockRoverEnv:
         self._step_idx = 0
         self._rng: np.random.Generator = np.random.default_rng()
 
-        self._obs_keys: tuple[str, ...] = self._compute_observation_keys()
+        self._obs_keys: tuple[str, ...] = cfg.observation.enabled_keys()
         _log.info(
             "mock_rover_env_initialised",
             mode=cfg.action.mode,
@@ -178,20 +178,6 @@ class MockRoverEnv:
         right = (vx_body + 0.5 * omega * self._track_width) / self._wheel_radius
         self._wheel_vel = np.asarray([left, right, left, right], dtype=np.float32)
         return vx_body, omega
-
-    def _compute_observation_keys(self) -> tuple[str, ...]:
-        """Enumerate the obs keys based on observation toggles in config."""
-        obs_cfg = self._cfg.observation
-        keys: list[str] = []
-        if obs_cfg.include_imu:
-            keys.append("imu")
-        if obs_cfg.include_chassis_pose:
-            keys.append("chassis_pose")
-        if obs_cfg.include_wheel_encoders:
-            keys.append("wheel_vel")
-        if obs_cfg.include_lidar_sectors:
-            keys.append("lidar")
-        return tuple(keys)
 
     def _observe(self) -> dict[str, NDArray[np.float32]]:
         """Produce an observation dict in the configured key order."""

@@ -64,10 +64,14 @@ def test_rover_action_modes():
     assert body.mode == "body_velocity"
 
 
-def test_rover_observation_keys_match_factory_helper():
-    """Schema-level toggles must drive the same order the factory logs."""
-    from mousedroid.factory import _observation_keys
+def test_rover_observation_enabled_keys_default():
+    """Default toggles enable all four observation modalities in order."""
+    obs = RoverObservationConfig()
+    assert obs.enabled_keys() == ("imu", "chassis_pose", "wheel_vel", "lidar")
 
+
+def test_rover_observation_enabled_keys_drops_disabled():
+    """Disabled toggles must drop their key while preserving the order."""
     obs = RoverObservationConfig(
         include_imu=True,
         include_chassis_pose=True,
@@ -75,8 +79,7 @@ def test_rover_observation_keys_match_factory_helper():
         include_lidar_sectors=True,
         lidar_num_sectors=8,
     )
-    cfg = RoverConfig(observation=obs)
-    assert _observation_keys(cfg) == ("imu", "chassis_pose", "lidar")
+    assert obs.enabled_keys() == ("imu", "chassis_pose", "lidar")
 
 
 def test_settings_loads_without_rover_block():

@@ -2226,7 +2226,7 @@ def build_rover_env(cfg: Settings) -> RoverEnvProtocol:
         _log.info(
             "rover_env_mock_built",
             mode=cfg.rover.action.mode,
-            obs_keys=list(_observation_keys(cfg.rover)),
+            obs_keys=list(cfg.rover.observation.enabled_keys()),
         )
         return MockRoverEnv(
             cfg.rover,
@@ -2251,26 +2251,6 @@ def build_rover_env(cfg: Settings) -> RoverEnvProtocol:
 
     msg = f"unknown rover sim backend: {backend!r}"
     raise ValueError(msg)
-
-
-def _observation_keys(rover_cfg: Any) -> tuple[str, ...]:
-    """Return the obs-dict keys implied by a :class:`RoverConfig` snapshot.
-
-    Pulled out of the env classes so the factory can log the contract
-    without instantiating a backend (and so the mock + Isaac Lab stubs
-    stay in lock-step).
-    """
-    keys: list[str] = []
-    obs_cfg = rover_cfg.observation
-    if obs_cfg.include_imu:
-        keys.append("imu")
-    if obs_cfg.include_chassis_pose:
-        keys.append("chassis_pose")
-    if obs_cfg.include_wheel_encoders:
-        keys.append("wheel_vel")
-    if obs_cfg.include_lidar_sectors:
-        keys.append("lidar")
-    return tuple(keys)
 
 
 def build_cloud_telemetry_sink(

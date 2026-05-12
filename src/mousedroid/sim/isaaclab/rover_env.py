@@ -68,7 +68,7 @@ class RoverIsaacLabEnv:
         self._sim: Any = None  # Populated by ``build``.
         self._scene: Any = None
         self._action_dim = 2
-        self._obs_keys: tuple[str, ...] = self._compute_observation_keys()
+        self._obs_keys: tuple[str, ...] = cfg.observation.enabled_keys()
 
     # ----- lifecycle --------------------------------------------------------
 
@@ -184,20 +184,6 @@ class RoverIsaacLabEnv:
                 "Use backend='mock' for CI / unit tests."
             )
             raise IsaacLabUnavailableError(msg)
-
-    def _compute_observation_keys(self) -> tuple[str, ...]:
-        """Mirror :class:`MockRoverEnv` so backends are interchangeable."""
-        obs_cfg = self._cfg.observation
-        keys: list[str] = []
-        if obs_cfg.include_imu:
-            keys.append("imu")
-        if obs_cfg.include_chassis_pose:
-            keys.append("chassis_pose")
-        if obs_cfg.include_wheel_encoders:
-            keys.append("wheel_vel")
-        if obs_cfg.include_lidar_sectors:
-            keys.append("lidar")
-        return tuple(keys)
 
     def _zero_observation(self) -> dict[str, NDArray[np.float32]]:
         """Return a zero-valued observation matching the configured keys."""
