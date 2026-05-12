@@ -157,12 +157,21 @@ ENV CUDA_HOME=/usr/local/cuda
 ENV PATH="${CUDA_HOME}/bin:${PATH}"
 ENV LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}"
 
-# Health check: invoke the canonical mousedroid --health-check CLI,
-# the same signal exercised by scripts/jetson_smoke_test.sh `app` and
-# scripts/ci.sh. `_health_check()` calls sys.exit(1) on failure, so no
-# `|| exit 1` wrapper is needed.
-HEALTHCHECK --interval=30s --timeout=15s --start-period=60s --retries=3 \
-    CMD python3 -m mousedroid.main --health-check
+# Health check: liveness probe via the orchestrator's watchdog heartbeat
+# file. The running orchestrator calls watchdog.notify() after every
+# successful tick (orchestrator.py:1017), which touches the file at
+# cfg.loop.watchdog_heartbeat_path. If the tick loop hangs or deadlocks,
+# the file goes stale and this check flips the container to unhealthy.
+#
+# This is a true liveness check — it observes the *running* process, not
+# a fresh import. It avoids spawning Python (no torch import cost, no
+# resource contention with hardware buses held by the main process).
+#
+# Threshold: 30s tolerates ~3 missed beats at the default 10s watchdog
+# interval (cfg.loop.watchdog_interval_s). Requires
+# cfg.loop.watchdog_enabled=true in the runtime config.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+    CMD test "$(( $(date +%s) - $(stat -c %Y /tmp/mousedroid_heartbeat 2>/dev/null || echo 0) ))" -lt 30
 
 ENTRYPOINT ["python3", "-m", "mousedroid.main"]
 CMD ["--config", "/etc/mousedroid/default.yaml"]
