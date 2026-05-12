@@ -104,7 +104,7 @@ async def test_sse_transport_bearer_enforcement(
                 except (
                     httpx_pkg.ConnectError,
                     httpx_pkg.ReadError,
-                    httpx_pkg.ReadTimeout,
+                    httpx_pkg.TimeoutException,
                 ):
                     await asyncio.sleep(0.1)
             else:  # pragma: no cover - test infra failure

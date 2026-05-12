@@ -17,8 +17,12 @@ from pathlib import Path
 import pytest
 
 from mousedroid.validation.runtime import camera_unavailable_reason, capture_camera_frame
+from tests._jetson_hardware import is_jetson_host
 
-pytestmark = pytest.mark.hardware
+pytestmark = [
+    pytest.mark.hardware,
+    pytest.mark.skipif(not is_jetson_host(), reason="Jetson-only hardware test"),
+]
 
 
 # ---------------------------------------------------------------------------
