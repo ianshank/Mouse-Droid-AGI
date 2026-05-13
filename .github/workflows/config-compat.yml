@@ -1,0 +1,81 @@
+# =============================================================================
+# MouseDroidAGI — Config Schema Compatibility Gate
+# =============================================================================
+# Detects PRs that change config/*.yaml in ways the currently-deployed
+# Jetson container image's schema cannot accept. Catches the silent-drift
+# class of failures where a yaml-only PR merges, the rover pulls main,
+# and the container crash-loops with `Extra inputs are not permitted`.
+#
+# Triggers only when config YAML changes; skipped otherwise.
+# Source of truth for the deployed image SHA: deployments/<platform>-image.json
+# =============================================================================
+
+name: Config Schema Compat
+
+on:
+    pull_request:
+        paths:
+            - "config/**/*.yaml"
+            - "config/**/*.yml"
+            - "deployments/*.json"
+            - "scripts/check_config_compat.py"
+            - ".github/workflows/config-compat.yml"
+
+permissions:
+    contents: read
+
+jobs:
+    config-compat:
+        runs-on: ubuntu-latest
+        strategy:
+            fail-fast: false
+            matrix:
+                # Add more platforms here as additional deployment records
+                # are added under deployments/.
+                platform: [jetson]
+        steps:
+            - name: Checkout PR head with full history
+              uses: actions/checkout@v4
+              with:
+                  # The script worktrees out the deployed SHA, so we need
+                  # the full history available locally.
+                  fetch-depth: 0
+
+            - name: Set up Python
+              uses: actions/setup-python@v5
+              with:
+                  python-version: "3.11"
+                  cache: pip
+
+            - name: Install runtime deps (for schema loading)
+              run: |
+                  pip install -e ".[dev]"
+
+            - name: Determine changed YAML files
+              id: changed
+              run: |
+                  # PR base branch SHA → HEAD SHA diff
+                  base="${{ github.event.pull_request.base.sha }}"
+                  files=$(git diff --name-only --diff-filter=AM "$base" HEAD -- 'config/*.yaml' 'config/**/*.yaml' || true)
+                  echo "files<<EOF" >> "$GITHUB_OUTPUT"
+                  printf '%s\n' "$files" >> "$GITHUB_OUTPUT"
+                  echo "EOF" >> "$GITHUB_OUTPUT"
+                  if [ -z "$files" ]; then
+                      echo "no_config_changes=true" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "no_config_changes=false" >> "$GITHUB_OUTPUT"
+                  fi
+
+            - name: Skip when no config YAML changed
+              if: steps.changed.outputs.no_config_changes == 'true'
+              run: echo "No config YAML changes; gate skipped."
+
+            - name: Run schema compatibility check
+              if: steps.changed.outputs.no_config_changes != 'true'
+              run: |
+                  # Pass changed files explicitly so the script does not
+                  # need to re-derive the diff inside the runner.
+                  # shellcheck disable=SC2086
+                  python scripts/check_config_compat.py \
+                      --platform "${{ matrix.platform }}" \
+                      --changed-files ${{ steps.changed.outputs.files }}
