@@ -167,9 +167,7 @@ class RockyVoiceEngine:
         # start() can build a MockSpeaker without accessing private attrs.
         _cfg_attr = getattr(speaker, "_cfg", None)
         self._speaker_cfg: SpeakerConfig = (
-            _cfg_attr
-            if isinstance(_cfg_attr, SpeakerConfig)
-            else SpeakerConfig.model_validate({})
+            _cfg_attr if isinstance(_cfg_attr, SpeakerConfig) else SpeakerConfig.model_validate({})
         )
         self._queue: asyncio.PriorityQueue[SpeechRequest] = asyncio.PriorityQueue(
             maxsize=cfg.queue_size,
