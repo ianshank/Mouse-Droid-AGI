@@ -807,7 +807,7 @@ class LoopConfig(BaseModel):
         import re
 
         if not re.fullmatch(r"^[A-Za-z0-9._/\-:]+$", v):
-            msg = f"path {v!r} contains shell-unsafe characters; " f"allowed: [A-Za-z0-9._/-:]"
+            msg = f"path {v!r} contains shell-unsafe characters; allowed: [A-Za-z0-9._/-:]"
             raise ValueError(msg)
         return v
 
@@ -2567,6 +2567,21 @@ class SpeakerConfig(BaseModel):
         gt=0,
         description="Seconds between speaker buffer readiness polls",
     )
+    reconnect_backoff_initial_s: float = Field(
+        0.5,
+        gt=0,
+        description="Initial backoff delay (seconds) between USB speaker open retries",
+    )
+    reconnect_backoff_max_s: float = Field(
+        10.0,
+        gt=0,
+        description="Maximum backoff delay (seconds) between USB speaker open retries",
+    )
+    reconnect_max_attempts: int = Field(
+        3,
+        ge=1,
+        description="Maximum USB speaker open attempts before raising SpeakerUnavailable",
+    )
 
 
 class VoiceConfig(BaseModel):
@@ -2609,6 +2624,14 @@ class VoiceConfig(BaseModel):
         description=(
             "Per-event intensity threshold overrides (0.0-1.0). "
             "Keyed by event name; falls back to intensity_threshold when absent."
+        ),
+    )
+    tts_failure_threshold: int = Field(
+        3,
+        ge=1,
+        description=(
+            "Consecutive TTS synthesis failures before promoting warning log to ERROR. "
+            "Counter resets on any successful synthesis."
         ),
     )
     output_volume: float = Field(

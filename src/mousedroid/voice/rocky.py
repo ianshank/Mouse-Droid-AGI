@@ -18,6 +18,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from mousedroid.logging.setup import get_logger
+from mousedroid.voice.exceptions import SpeakerUnavailableError
 from mousedroid.voice.phrase_bank import DEFAULT_PHRASES
 
 if TYPE_CHECKING:
@@ -240,8 +241,29 @@ class RockyVoiceEngine:
                 _log.debug("rocky_voice_queue_full", voice_event=event)
 
     async def start(self) -> None:
-        """Start the speaker, TTS engine, and background worker."""
-        await self._speaker.start()
+        """Start the speaker, TTS engine, and background worker.
+
+        If the hardware speaker raises ``SpeakerUnavailable``, automatically
+        downgrades to a ``MockSpeaker`` and logs a WARNING so the operator has
+        a visible signal. The orchestrator continues; voice output is silenced.
+        """
+        try:
+            await self._speaker.start()
+        except SpeakerUnavailableError as exc:
+            from mousedroid.hardware.audio.mock_speaker import MockSpeaker
+
+            # UsbSpeaker (the only raiser of SpeakerUnavailableError) always
+            # exposes _cfg; fall back to the existing speaker's cfg if present.
+            speaker_cfg = getattr(self._speaker, "_cfg")
+            self._speaker = MockSpeaker(speaker_cfg)
+            await self._speaker.start()
+            _log.warning(
+                "voice_speaker_degraded",
+                reason=str(exc),
+                fallback="MockSpeaker",
+            )
+            # TODO: wire voice_speaker_degraded_total Prometheus counter once
+            # feat/observability-primitive lands (PR #2).
         self._tts.start()
         self._running = True
         self._worker_task = asyncio.create_task(self._worker())
