@@ -165,10 +165,11 @@ class RockyVoiceEngine:
         self._tts = tts
         # Capture speaker config at construction so the degradation path in
         # start() can build a MockSpeaker without accessing private attrs.
+        _cfg_attr = getattr(speaker, "_cfg", None)
         self._speaker_cfg: SpeakerConfig = (
-            speaker._cfg  # type: ignore[union-attr]
-            if hasattr(speaker, "_cfg")
-            else SpeakerConfig()
+            _cfg_attr
+            if isinstance(_cfg_attr, SpeakerConfig)
+            else SpeakerConfig.model_validate({})
         )
         self._queue: asyncio.PriorityQueue[SpeechRequest] = asyncio.PriorityQueue(
             maxsize=cfg.queue_size,
