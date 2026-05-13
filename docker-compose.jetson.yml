@@ -87,14 +87,18 @@ services:
       # plus explicit /dev/gpiochip* passthrough is the actual access path.
 
     # --- Health check ---
-    # Polls the telemetry HTTP health endpoint exposed by the service
-    # at /api/v1/health on the configured telemetry port.
+    # Delegates to /usr/local/bin/mousedroid_healthcheck.sh (baked into
+    # the image, see Dockerfile.jetson). The script reads the heartbeat
+    # path and staleness threshold from /run/mousedroid.env, which the
+    # entrypoint writes from cfg.loop.* — no values are duplicated
+    # between this compose file and the Python config. Requires
+    # cfg.loop.watchdog_enabled=true (set in config/jetson_production.yaml).
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:${MOUSEDROID_TELEMETRY_PORT:-8080}/api/v1/health"]
+      test: ["CMD", "/usr/local/bin/mousedroid_healthcheck.sh"]
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 10s
 
     # --- Networking ---
     network_mode: host

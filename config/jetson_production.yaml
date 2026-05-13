@@ -216,3 +216,21 @@ face_display:
 #   feature_extractor_hef_path: "/opt/mousedroid/models/hailo/feature_extractor.hef"
 #   power_mode: "performance"
 #   fallback_on_failure: true
+
+# Watchdog — emits a file-based liveness heartbeat that the Docker
+# HEALTHCHECK reads. The orchestrator calls watchdog.notify() after every
+# successful tick; if the loop hangs, the file goes stale and the
+# container flips to unhealthy. See scripts/mousedroid_healthcheck.sh
+# for the stat-based recency probe and
+# src/mousedroid/health/watchdog.py for the FileHeartbeatNotifier
+# implementation. Staleness threshold is derived as
+# `watchdog_interval_s * watchdog_tolerance_factor` in
+# `mousedroid.health.healthcheck_env.derive_healthcheck_env`.
+loop:
+  watchdog_enabled: true
+  watchdog_mode: "file"
+  watchdog_interval_s: 10.0
+  watchdog_heartbeat_path: "/tmp/mousedroid_heartbeat"
+  watchdog_tolerance_factor: 3.0
+  start_grace_s: 60.0
+  start_grace_file: "/run/mousedroid.start"

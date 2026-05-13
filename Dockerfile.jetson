@@ -157,9 +157,24 @@ ENV CUDA_HOME=/usr/local/cuda
 ENV PATH="${CUDA_HOME}/bin:${PATH}"
 ENV LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}"
 
-# Health check: verify GPU + mousedroid import
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD python3 -c "import torch; assert torch.cuda.is_available(); import mousedroid" || exit 1
+# Healthcheck + entrypoint helpers. The entrypoint script derives
+# Settings-driven env vars (heartbeat path, staleness threshold, grace
+# window) and writes them to /run/mousedroid.env before execing the main
+# process. The healthcheck script reads that env file and stat's the
+# heartbeat file touched by the orchestrator's tick loop
+# (orchestrator.py:1017 calls watchdog.notify()). True liveness probe —
+# observes the running process, no Python startup, no resource
+# contention. See scripts/mousedroid_healthcheck.sh and
+# src/mousedroid/health/healthcheck_env.py for the wiring.
+COPY scripts/mousedroid_entrypoint.sh scripts/mousedroid_healthcheck.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/mousedroid_entrypoint.sh \
+              /usr/local/bin/mousedroid_healthcheck.sh
 
-ENTRYPOINT ["python3", "-m", "mousedroid.main"]
+# start-period is small (10s) because the healthcheck script has its own
+# grace logic driven by cfg.loop.start_grace_s. Docker's grace becomes a
+# safety net for "process didn't even reach the entrypoint" cases.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
+    CMD /usr/local/bin/mousedroid_healthcheck.sh
+
+ENTRYPOINT ["/usr/local/bin/mousedroid_entrypoint.sh"]
 CMD ["--config", "/etc/mousedroid/default.yaml"]
