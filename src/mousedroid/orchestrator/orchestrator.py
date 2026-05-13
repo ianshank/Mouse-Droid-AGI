@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections import deque
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -231,6 +232,10 @@ class MouseDroidOrchestrator:
         self._h = torch.zeros(1, _combined_hidden_dim)
         self._z = torch.zeros(1, cfg.model.latent_dim)
         self._prev_action = torch.zeros(1, cfg.model.action_dim)
+        # Rolling buffer of (h, z) tuples for latent NaN recovery.
+        self._latent_buffer: deque[tuple[torch.Tensor, torch.Tensor]] = deque(
+            maxlen=cfg.model.latent_recovery_buffer_size
+        )
 
     async def start(self) -> None:
         """Start all subsystems."""
@@ -394,6 +399,7 @@ class MouseDroidOrchestrator:
 
             await self._hook_registry.run_phase(HookPhase.POST_TICK, ctx)
             await self._maybe_export_memory()
+            self._maybe_reset_curiosity()
 
             _log.debug(
                 "tick_complete",
@@ -446,6 +452,16 @@ class MouseDroidOrchestrator:
             )
         finally:
             self._mission_dispatcher.clear_mission_completed()
+
+    def _maybe_reset_curiosity(self) -> None:
+        """Reset curiosity accumulator at episode boundaries (mission completion)."""
+        if (
+            self._mission_dispatcher is not None
+            and self._mission_dispatcher.mission_just_completed
+            and self._curiosity_module is not None
+        ):
+            self._curiosity_module.reset_episode()
+            _log.info("curiosity_episode_reset", tick=self._tick_count)
 
     async def process_mission(self, nl_command: str) -> GoalVector:
         """Process a natural language mission command.
@@ -511,6 +527,50 @@ class MouseDroidOrchestrator:
                 self._h,
                 self._z,
             )
+        self._h, self._z = self._validate_latent(self._h, self._z)
+
+    def _validate_latent(
+        self,
+        h: torch.Tensor,
+        z: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Check latent state for NaN / saturation; recover from buffer on NaN.
+
+        Args:
+            h: Hidden state tensor from ``observe_step``.
+            z: Latent state tensor from ``observe_step``.
+
+        Returns:
+            ``(h, z)`` — possibly replaced by the last known-good values when
+            NaN is detected and the recovery buffer is non-empty.
+        """
+        if torch.isnan(h).any() or torch.isnan(z).any():
+            self._failure_recorder.record(
+                "world_model",
+                "latent_nan",
+                level="critical",
+                extra={"tick": self._tick_count},
+            )
+            _log.critical("world_model_latent_nan", tick=self._tick_count)
+            if self._latent_buffer:
+                h_last, z_last = self._latent_buffer[-1]
+                _log.info("world_model_latent_recovered", tick=self._tick_count)
+                return h_last.clone(), z_last.clone()
+            _log.critical("world_model_latent_unrecoverable", tick=self._tick_count)
+            return h, z
+
+        h_norm = float(torch.linalg.norm(h))
+        if h_norm > self._cfg.model.latent_norm_threshold:
+            self._failure_recorder.record(
+                "world_model",
+                "latent_saturated",
+                level="warning",
+                extra={"h_norm": round(h_norm, 3)},
+            )
+            _log.warning("world_model_latent_saturated", h_norm=h_norm)
+
+        self._latent_buffer.append((h.clone(), z.clone()))
+        return h, z
 
     def _select_action(
         self,
@@ -584,11 +644,18 @@ class MouseDroidOrchestrator:
             with torch.no_grad():
                 result = self._vla_policy.predict(VLAObservation(h=self._h, z=self._z))
         except Exception:  # never let VLA crash the loop
+            self._failure_recorder.record("orchestrator", "vla_exception", level="warning")
             _log.warning("vla_predict_failed", policy=self._vla_policy.name, exc_info=True)
             return None
 
         elapsed = self._clock.monotonic() - start
         if elapsed > budget:
+            self._failure_recorder.record(
+                "orchestrator",
+                "vla_timeout",
+                level="warning",
+                extra={"elapsed_s": round(elapsed, 4), "budget_s": round(budget, 4)},
+            )
             _log.warning(
                 "vla_inference_timeout",
                 policy=self._vla_policy.name,
@@ -599,6 +666,15 @@ class MouseDroidOrchestrator:
 
         action_dim = int(self._cfg.model.action_dim)
         if result.action.shape != (action_dim,):
+            self._failure_recorder.record(
+                "orchestrator",
+                "vla_wrong_shape",
+                level="warning",
+                extra={
+                    "expected": action_dim,
+                    "got": result.action.shape[0] if result.action.dim() > 0 else -1,
+                },
+            )
             _log.warning(
                 "vla_action_shape_mismatch",
                 policy=self._vla_policy.name,
@@ -659,6 +735,9 @@ class MouseDroidOrchestrator:
 
             return self._normalize_cognitive_action(action_np)
         except Exception as e:  # pylint: disable=broad-except
+            self._failure_recorder.record(
+                "orchestrator", "cognitive_core_exception", level="warning"
+            )
             _log.warning(
                 "cognitive_core_action_selection_failed",
                 error=str(e),
