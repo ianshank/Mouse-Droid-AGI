@@ -59,6 +59,7 @@ if TYPE_CHECKING:
     from mousedroid.reward.protocol import RewardModelProtocol
     from mousedroid.sensing.manager import SensorManager
     from mousedroid.sim.protocols import RoverEnvProtocol
+    from mousedroid.telemetry.failure_recorder import FailureRecorder
     from mousedroid.telemetry.log_buffer import LogRingBuffer
     from mousedroid.telemetry.metrics import MetricsRegistry
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
@@ -713,6 +714,34 @@ def build_metrics_registry(cfg: Settings) -> MetricsRegistry | None:
     from mousedroid.telemetry.metrics import MetricsRegistry
 
     return MetricsRegistry(cfg.metrics)
+
+
+def build_failure_recorder(
+    cfg: Settings,
+    metrics: MetricsRegistry | None = None,
+) -> FailureRecorder:
+    """Build a failure recorder wired to the given metrics registry.
+
+    Returns a :class:`~mousedroid.telemetry.failure_recorder.PrometheusFailureRecorder`
+    when *metrics* is non-None (telemetry enabled), otherwise a
+    :class:`~mousedroid.telemetry.failure_recorder.NullFailureRecorder`.
+
+    Args:
+        cfg: Root settings (reserved for future per-subsystem gating).
+        metrics: Shared metrics registry, or ``None`` when telemetry is
+            disabled.  Pass the result of :func:`build_metrics_registry`.
+
+    Returns:
+        A ``FailureRecorder`` implementation appropriate for the environment.
+    """
+    from mousedroid.telemetry.failure_recorder import NullFailureRecorder, PrometheusFailureRecorder
+
+    if metrics is not None:
+        _log.debug("failure_recorder_built", backend="prometheus")
+        return PrometheusFailureRecorder(metrics)
+
+    _log.debug("failure_recorder_built", backend="null")
+    return NullFailureRecorder()
 
 
 def build_safety_monitor(cfg: Settings) -> SafetyMonitorProtocol:
