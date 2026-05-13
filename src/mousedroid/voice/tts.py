@@ -153,10 +153,9 @@ class PiperTTS:
         try:
             if self._use_wav_api:
                 wav_bytes = self._synthesize_via_wav(text)
-                wav_buffer = io.BytesIO(wav_bytes)
             else:
                 wav_bytes = self._synthesize_via_legacy(text)
-                wav_buffer = io.BytesIO(wav_bytes)
+            wav_buffer = io.BytesIO(wav_bytes)
 
             self._consecutive_failures = 0
         except Exception as exc:

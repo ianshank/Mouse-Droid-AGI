@@ -158,9 +158,18 @@ class RockyVoiceEngine:
             speaker: Speaker driver for audio output.
             tts: Text-to-speech synthesiser.
         """
+        from mousedroid.config.schema import SpeakerConfig
+
         self._cfg = cfg
         self._speaker = speaker
         self._tts = tts
+        # Capture speaker config at construction so the degradation path in
+        # start() can build a MockSpeaker without accessing private attrs.
+        self._speaker_cfg: SpeakerConfig = (
+            speaker._cfg  # type: ignore[union-attr]
+            if hasattr(speaker, "_cfg")
+            else SpeakerConfig()
+        )
         self._queue: asyncio.PriorityQueue[SpeechRequest] = asyncio.PriorityQueue(
             maxsize=cfg.queue_size,
         )
@@ -252,10 +261,7 @@ class RockyVoiceEngine:
         except SpeakerUnavailableError as exc:
             from mousedroid.hardware.audio.mock_speaker import MockSpeaker
 
-            # UsbSpeaker (the only raiser of SpeakerUnavailableError) always
-            # exposes _cfg; fall back to the existing speaker's cfg if present.
-            speaker_cfg = getattr(self._speaker, "_cfg")
-            self._speaker = MockSpeaker(speaker_cfg)
+            self._speaker = MockSpeaker(self._speaker_cfg)
             await self._speaker.start()
             _log.warning(
                 "voice_speaker_degraded",

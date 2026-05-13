@@ -224,6 +224,7 @@ class UsbSpeaker:
         try:
             await asyncio.to_thread(self._write_raw, raw_data)
         except SpeakerUnavailableError:
+            await self.stop()
             raise
         except Exception as exc:
             await self.stop()
