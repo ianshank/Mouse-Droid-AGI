@@ -762,6 +762,55 @@ class LoopConfig(BaseModel):
         # watchdog_mode 'file' or 'auto' fallback
         description="Path for file-based watchdog heartbeat",
     )
+    watchdog_tolerance_factor: float = Field(
+        3.0,
+        gt=0,
+        description=(
+            "Multiplier on watchdog_interval_s used to derive the Docker "
+            "HEALTHCHECK staleness threshold. A heartbeat older than "
+            "(interval * tolerance_factor) seconds flips the container to "
+            "unhealthy. Default 3.0 tolerates three missed beats before "
+            "alarming."
+        ),
+    )
+    start_grace_s: float = Field(
+        60.0,
+        ge=0,
+        description=(
+            "Grace window (seconds) after container start during which the "
+            "heartbeat healthcheck returns success even if the heartbeat "
+            "file is absent. Covers the gap between container start and the "
+            "first orchestrator tick."
+        ),
+    )
+    start_grace_file: str = Field(
+        "/run/mousedroid.start",
+        description=(
+            "Path the container entrypoint touches at startup; the "
+            "healthcheck script reads its mtime as the grace-window anchor. "
+            "Configurable for deployments that cannot write to /run."
+        ),
+    )
+
+    @field_validator("watchdog_heartbeat_path", "start_grace_file")
+    @classmethod
+    def _validate_shell_safe_path(cls, v: str) -> str:
+        """Reject paths with characters unsafe for shell-source env files.
+
+        The healthcheck script dot-sources an env file derived from these
+        values; any single quote, backtick, dollar sign, or whitespace
+        would be a code-execution path. Whitelist matches what real path
+        configurations need: alphanumerics, dot, dash, underscore, slash,
+        colon. Validated at YAML load so malicious config fails fast with
+        a clear error.
+        """
+        import re
+
+        if not re.fullmatch(r"^[A-Za-z0-9._/\-:]+$", v):
+            msg = f"path {v!r} contains shell-unsafe characters; " f"allowed: [A-Za-z0-9._/-:]"
+            raise ValueError(msg)
+        return v
+
     policy_selector: Literal["nav_agent", "vla", "auto"] = Field(
         "nav_agent",
         description=(

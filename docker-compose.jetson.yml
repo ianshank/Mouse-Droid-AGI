@@ -87,25 +87,18 @@ services:
       # plus explicit /dev/gpiochip* passthrough is the actual access path.
 
     # --- Health check ---
-    # Liveness probe via the orchestrator's watchdog heartbeat file.
-    # The running orchestrator touches /tmp/mousedroid_heartbeat after
-    # every successful tick (see orchestrator.py:1017). If the tick
-    # loop hangs or deadlocks the file goes stale, flipping the
-    # container to unhealthy.
-    #
-    # This observes the *running* process, not a fresh import — no
-    # Python startup cost, no resource contention with hardware buses
-    # held by the main process.
-    #
-    # Requires cfg.loop.watchdog_enabled=true in the runtime config
-    # (set in config/jetson_production.yaml). The 30s threshold
-    # tolerates ~3 missed beats at the default 10s watchdog interval.
+    # Delegates to /usr/local/bin/mousedroid_healthcheck.sh (baked into
+    # the image, see Dockerfile.jetson). The script reads the heartbeat
+    # path and staleness threshold from /run/mousedroid.env, which the
+    # entrypoint writes from cfg.loop.* — no values are duplicated
+    # between this compose file and the Python config. Requires
+    # cfg.loop.watchdog_enabled=true (set in config/jetson_production.yaml).
     healthcheck:
-      test: ["CMD-SHELL", "test \"$(( $(date +%s) - $(stat -c %Y /tmp/mousedroid_heartbeat 2>/dev/null || echo 0) ))\" -lt 30"]
+      test: ["CMD", "/usr/local/bin/mousedroid_healthcheck.sh"]
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 10s
 
     # --- Networking ---
     network_mode: host
