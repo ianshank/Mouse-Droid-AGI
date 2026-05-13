@@ -156,16 +156,25 @@ def test_env_file_absent_uses_safe_defaults(tmp_path: Path) -> None:
 
 
 def test_float_threshold_compares_with_awk(tmp_path: Path) -> None:
-    """Sub-second tolerances work via awk float comparison."""
+    """Fractional thresholds work via awk float comparison.
+
+    Note: file age is always integer (``stat -c %Y`` returns Unix epoch
+    seconds, no sub-second precision). The float path is exercised by
+    a fractional ``MOUSEDROID_HEARTBEAT_STALE_S``. POSIX shell ``$((..))``
+    can't compare int<float, so the script delegates to awk; this test
+    proves that delegation works.
+    """
     hb = tmp_path / "hb"
     hb.touch()
-    _age(hb, 4.5)
+    _age(hb, 4.0)
     env_file = tmp_path / "env"
     _write_env(
         env_file,
         MOUSEDROID_HEARTBEAT_PATH=str(hb),
-        MOUSEDROID_HEARTBEAT_STALE_S="5.0",
+        MOUSEDROID_HEARTBEAT_STALE_S="4.5",
         MOUSEDROID_START_GRACE_S="60",
         MOUSEDROID_START_GRACE_FILE=str(tmp_path / "start"),
     )
+    # 4 < 4.5 → fresh, exit 0. POSIX ``$((4 < 4.5))`` would error;
+    # the script's awk delegation handles it.
     assert _run(env_file) == 0
