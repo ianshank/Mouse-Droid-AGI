@@ -1,0 +1,7 @@
+{
+  "platform": "jetson",
+  "image_tag": "mousedroid:jetson",
+  "sha": "76dfb1e9831a2284b6aaff8939e450f32f2bb167",
+  "deployed_at": "2026-04-25T15:21:51-04:00",
+  "notes": "Bootstrap entry. SHA reflects the hardware/jetson-full-smoke branch HEAD that built the currently-deployed image on the rover at /opt/mousedroid. Update this file (in the same PR or immediately after) whenever the Jetson image is rebuilt and pushed. The CI schema-compat gate (scripts/check_config_compat.py) loads changed config YAMLs against THIS sha's Settings schema to detect when a config change requires an image rebuild before deploy."
+}
