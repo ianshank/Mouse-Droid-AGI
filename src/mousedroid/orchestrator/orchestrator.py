@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import time
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -17,6 +16,7 @@ from numpy.typing import NDArray
 
 from mousedroid.common.actions import normalize_action_numpy
 from mousedroid.common.async_utils import cancel_and_drain, spawn_tracked
+from mousedroid.common.time.protocol import ClockProtocol, RealClock
 from mousedroid.constants import (
     DEFAULT_BATTERY_VOLTAGE,
     MILLISECONDS_PER_SECOND,
@@ -101,6 +101,7 @@ class MouseDroidOrchestrator:
         skill_delegator: SkillDelegator | None = None,
         memory_exporter: MemoryExporterProtocol | None = None,
         mission_dispatcher: MissionDispatcherProtocol | None = None,
+        clock: ClockProtocol | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -156,6 +157,10 @@ class MouseDroidOrchestrator:
                 When supplied, its ``mission_just_completed`` flag gates
                 the export hook so MEMORY.md is only refreshed after a
                 channel-driven mission completes.
+            clock: Optional :class:`ClockProtocol` for time and sleep
+                primitives. Defaults to :class:`RealClock` (production).
+                Pass a :class:`MockClock` in tests to control simulated time
+                without wall-clock delays.
         """
         if not agents:
             msg = "At least one agent is required"
@@ -201,6 +206,7 @@ class MouseDroidOrchestrator:
         self._memory_export_every_n: int = (
             cfg.openclaw.export_every_n_ticks if cfg.openclaw is not None else 0
         )
+        self._clock: ClockProtocol = clock if clock is not None else RealClock()
         self._running = False
         self._tick_count: int = 0
         self._consolidation_task: asyncio.Task[None] | None = None
@@ -308,7 +314,7 @@ class MouseDroidOrchestrator:
         ``Settings.harness=None`` every harness call is a constant-time
         no-op, so the legacy behaviour is bit-identical.
         """
-        loop_start = time.monotonic()
+        loop_start = self._clock.monotonic()
         ctx = TickContext(
             tick_index=self._tick_count,
             timestamp_s=loop_start,
@@ -316,7 +322,7 @@ class MouseDroidOrchestrator:
         )
         try:
             observation = await self._sensor_manager.read_all()
-            loop_time_ms = (time.monotonic() - loop_start) * MILLISECONDS_PER_SECOND
+            loop_time_ms = (self._clock.monotonic() - loop_start) * MILLISECONDS_PER_SECOND
 
             safety_ctx = self._safety_monitor.evaluate(observation, loop_time_ms)
 
@@ -334,7 +340,7 @@ class MouseDroidOrchestrator:
                 if await self._try_sensor_recovery(safety_ctx):
                     # Re-read after recovery — sensors may have come back
                     observation = await self._sensor_manager.read_all()
-                    loop_time_ms = (time.monotonic() - loop_start) * MILLISECONDS_PER_SECOND
+                    loop_time_ms = (self._clock.monotonic() - loop_start) * MILLISECONDS_PER_SECOND
                     safety_ctx = self._safety_monitor.evaluate(observation, loop_time_ms)
                     ctx.observation = observation
                     ctx.safety_ctx = safety_ctx
@@ -557,7 +563,7 @@ class MouseDroidOrchestrator:
         if budget is None:
             budget = 1.0 / float(self._cfg.loop.control_hz)
 
-        start = time.monotonic()
+        start = self._clock.monotonic()
         try:
             with torch.no_grad():
                 result = self._vla_policy.predict(VLAObservation(h=self._h, z=self._z))
@@ -565,7 +571,7 @@ class MouseDroidOrchestrator:
             _log.warning("vla_predict_failed", policy=self._vla_policy.name, exc_info=True)
             return None
 
-        elapsed = time.monotonic() - start
+        elapsed = self._clock.monotonic() - start
         if elapsed > budget:
             _log.warning(
                 "vla_inference_timeout",
@@ -870,7 +876,7 @@ class MouseDroidOrchestrator:
                 )
                 return True
             if attempt < max_attempts - 1:
-                await asyncio.sleep(self._cfg.safety.sensor_recovery_delay_s)
+                await self._clock.sleep(self._cfg.safety.sensor_recovery_delay_s)
 
         _log.error("sensor_recovery_exhausted", attempts=max_attempts)
         return False
@@ -966,7 +972,7 @@ class MouseDroidOrchestrator:
         interval = self._cfg.memory.consolidation_interval_s
         _log.info("consolidation_loop_started", interval_s=interval)
         while True:
-            await asyncio.sleep(interval)
+            await self._clock.sleep(interval)
             if self._memory_tier is None:
                 break
             try:
@@ -997,14 +1003,14 @@ class MouseDroidOrchestrator:
         )
 
         while self._running:
-            tick_start = time.monotonic()
+            tick_start = self._clock.monotonic()
             try:
                 await asyncio.wait_for(self.tick(), timeout=tick_timeout)
             except asyncio.TimeoutError:
                 _log.critical(
                     "tick_timeout",
                     timeout_s=tick_timeout,
-                    elapsed_s=time.monotonic() - tick_start,
+                    elapsed_s=self._clock.monotonic() - tick_start,
                 )
                 await self._esp32.emergency_stop()
                 await self._voice_lifecycle("error")
@@ -1017,10 +1023,10 @@ class MouseDroidOrchestrator:
                 if self._watchdog is not None:
                     self._watchdog.notify()
 
-            elapsed = time.monotonic() - tick_start
+            elapsed = self._clock.monotonic() - tick_start
             sleep_time = max(0.0, control_period - elapsed)
             if sleep_time > 0:
-                await asyncio.sleep(sleep_time)
+                await self._clock.sleep(sleep_time)
 
     async def health_check(self) -> dict[str, object]:
         """Run a quick health check of all subsystems.
