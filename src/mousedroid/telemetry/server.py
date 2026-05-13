@@ -199,13 +199,20 @@ class TelemetryServer:
         self._runner: web.AppRunner | None = None
         self._zeroconf: Any = None
         self._service_info: Any = None
+        self._bound_port: int = self._cfg.port
 
         if self._metrics is not None:
             self._metrics.set_publish_hz(self._cfg.publish_hz)
 
     async def start(self) -> None:
-        """Start the aiohttp server and background broadcast loop."""
+        """Start the aiohttp server and background broadcast loop.
+
+        Raises:
+            TelemetryUnavailableError: When all candidate ports are exhausted.
+        """
         from aiohttp import web
+
+        from mousedroid.telemetry.exceptions import TelemetryUnavailableError
 
         app = web.Application(middlewares=self._build_middlewares())
         self._register_routes(app)
@@ -213,8 +220,66 @@ class TelemetryServer:
         self._runner = web.AppRunner(app)
         await self._runner.setup()
 
-        site = web.TCPSite(self._runner, self._cfg.host, self._cfg.port)
-        await site.start()
+        strategy = self._cfg.port_discovery_strategy
+        if strategy == "kernel_assigned":
+            site = web.TCPSite(self._runner, self._cfg.host, 0)
+            await site.start()
+            # Read the actual OS-assigned port from the underlying socket.
+            sockets = site._server.sockets  # type: ignore[union-attr]
+            self._bound_port = sockets[0].getsockname()[1] if sockets else self._cfg.port
+            _log.info(
+                "telemetry_port_bound",
+                strategy=strategy,
+                host=self._cfg.host,
+                port=self._bound_port,
+            )
+        elif strategy == "fallback_range":
+            max_attempts = self._cfg.port_discovery_max_attempts
+            bound = False
+            for offset in range(max_attempts):
+                candidate = self._cfg.port + offset
+                _log.info(
+                    "telemetry_port_bind_attempt",
+                    strategy=strategy,
+                    host=self._cfg.host,
+                    port=candidate,
+                    attempt=offset + 1,
+                    max_attempts=max_attempts,
+                )
+                try:
+                    site = web.TCPSite(self._runner, self._cfg.host, candidate)
+                    await site.start()
+                    self._bound_port = candidate
+                    bound = True
+                    _log.info(
+                        "telemetry_port_bound",
+                        strategy=strategy,
+                        host=self._cfg.host,
+                        port=candidate,
+                    )
+                    break
+                except OSError:
+                    continue
+            if not bound:
+                raise TelemetryUnavailableError(
+                    f"telemetry: all {max_attempts} candidate ports starting at "
+                    f"{self._cfg.port} are in use on {self._cfg.host}"
+                )
+        else:  # "fixed"
+            try:
+                site = web.TCPSite(self._runner, self._cfg.host, self._cfg.port)
+                await site.start()
+                self._bound_port = self._cfg.port
+                _log.info(
+                    "telemetry_port_bound",
+                    strategy=strategy,
+                    host=self._cfg.host,
+                    port=self._bound_port,
+                )
+            except OSError as exc:
+                raise TelemetryUnavailableError(
+                    f"telemetry: cannot bind to {self._cfg.host}:{self._cfg.port}: {exc}"
+                ) from exc
 
         self._running = True
         self._broadcast_task = spawn_tracked(
@@ -229,7 +294,7 @@ class TelemetryServer:
         _log.info(
             "telemetry_server_started",
             host=self._cfg.host,
-            port=self._cfg.port,
+            port=self._bound_port,
         )
 
     async def stop(self) -> None:
@@ -1056,7 +1121,7 @@ class TelemetryServer:
                 type_=MDNS_SERVICE_TYPE,
                 name=f"{self._cfg.mdns_service_name}.{MDNS_SERVICE_TYPE}",
                 addresses=[packed_ip],
-                port=self._cfg.port,
+                port=self._bound_port,
                 properties={
                     "path": self._cfg.ws_path,
                     "api": self._cfg.api_prefix,
@@ -1071,7 +1136,7 @@ class TelemetryServer:
                 "telemetry_mdns_registered",
                 service_name=self._cfg.mdns_service_name,
                 ip=ip,
-                port=self._cfg.port,
+                port=self._bound_port,
             )
         except ImportError:
             _log.warning("telemetry_mdns_zeroconf_not_installed")

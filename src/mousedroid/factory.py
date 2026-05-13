@@ -931,6 +931,20 @@ def build_telemetry_server(
         _log.info("telemetry_mock_server_built")
         return MockTelemetryServer()
 
+    # D4: validate bearer token is present in env when auth is enabled.
+    auth_cfg = cfg.telemetry.auth
+    if auth_cfg is not None and auth_cfg.auth_enabled:
+        import os
+
+        from mousedroid.telemetry.exceptions import TelemetryConfigError
+
+        token = os.environ.get(auth_cfg.token_env_var, "")
+        if not token:
+            raise TelemetryConfigError(
+                f"telemetry auth_enabled=True but ${auth_cfg.token_env_var} is unset or empty; "
+                "export the token or set auth_enabled=False"
+            )
+
     shared_metrics_registry = metrics_registry
     metrics_path = cfg.metrics.path
     telemetry_metrics_path_default = type(cfg.telemetry).model_fields["metrics_path"].default

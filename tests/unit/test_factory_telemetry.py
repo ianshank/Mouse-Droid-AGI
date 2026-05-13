@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import os
+from unittest.mock import patch
 
-from mousedroid.config.schema import Settings
+import pytest
+
+from mousedroid.config.schema import Settings, TelemetryAuthConfig
 from mousedroid.factory import build_telemetry_publisher, build_telemetry_server
 from mousedroid.health.monitor import HealthMonitor
+from mousedroid.telemetry.exceptions import TelemetryConfigError
 from mousedroid.telemetry.mock_server import MockTelemetryServer
 from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
 from mousedroid.telemetry.server import TelemetryServer
@@ -160,3 +164,54 @@ def test_build_server_reuses_provided_metrics_registry():
 
     assert isinstance(server, TelemetryServer)
     assert server._metrics is metrics_registry
+
+
+# ---------------------------------------------------------------------------
+# D4: bearer token env-var validation in factory
+# ---------------------------------------------------------------------------
+
+
+def _real_server_settings_with_auth(token_env_var: str) -> tuple[Settings, object]:
+    """Return (cfg, publisher) for a real server with bearer auth enabled."""
+    cfg = _make_settings()
+    cfg = cfg.model_copy(
+        update={
+            "mock_hardware": False,
+            "telemetry": cfg.telemetry.model_copy(
+                update={
+                    "enabled": True,
+                    "auth": TelemetryAuthConfig(
+                        auth_enabled=True,
+                        token_env_var=token_env_var,
+                    ),
+                }
+            ),
+        }
+    )
+    pub = build_telemetry_publisher(cfg)
+    return cfg, pub
+
+
+def test_build_server_raises_when_auth_enabled_and_token_unset():
+    """build_telemetry_server raises TelemetryConfigError when token env var is missing."""
+    cfg, pub = _real_server_settings_with_auth("_NONEXISTENT_TOKEN_VAR_TEST")
+    health = HealthMonitor(cfg.health, cfg.jetson)
+
+    env = os.environ.copy()
+    env.pop("_NONEXISTENT_TOKEN_VAR_TEST", None)
+    with (
+        patch.dict(os.environ, env, clear=True),
+        pytest.raises(TelemetryConfigError, match="auth_enabled=True"),
+    ):
+        build_telemetry_server(cfg, pub, health)
+
+
+def test_build_server_succeeds_when_auth_enabled_and_token_set():
+    """build_telemetry_server returns TelemetryServer when token env var is present."""
+    cfg, pub = _real_server_settings_with_auth("_TEST_TELEM_TOKEN_SET")
+    health = HealthMonitor(cfg.health, cfg.jetson)
+
+    with patch.dict(os.environ, {"_TEST_TELEM_TOKEN_SET": "secret-token"}):
+        server = build_telemetry_server(cfg, pub, health)
+
+    assert isinstance(server, TelemetryServer)

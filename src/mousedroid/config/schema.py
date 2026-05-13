@@ -1456,8 +1456,31 @@ class TelemetryAuthConfig(BaseModel):
     )
     exempt_paths: list[str] = Field(
         default_factory=lambda: ["/health", "/metrics"],
-        description="Paths that bypass authentication",
+        description=(
+            "Paths that bypass authentication. Each entry must start with '/' "
+            "and contain only lowercase letters, digits, hyphens, underscores, "
+            "and forward slashes."
+        ),
     )
+
+    @field_validator("exempt_paths")
+    @classmethod
+    def _validate_exempt_paths(cls, paths: list[str]) -> list[str]:
+        """Reject paths with traversal components, query strings, or unusual chars.
+
+        Prevents config typos that could widen the exemption surface (e.g.
+        '/healthz' unintentionally exempting '/health') from going unnoticed.
+        """
+        import re
+
+        exempt_re = re.compile(r"^/[a-z0-9_/\-]*$")
+        for path in paths:
+            if not exempt_re.match(path):
+                raise ValueError(
+                    f"exempt_paths entry {path!r} is invalid: must start with '/' "
+                    "and contain only [a-z0-9_/-] (no query strings, no '..')"
+                )
+        return paths
 
 
 class TelemetryConfig(BaseModel):
@@ -1501,6 +1524,22 @@ class TelemetryConfig(BaseModel):
         description="Server bind address (0.0.0.0 = all interfaces)",
     )
     port: int = Field(8080, gt=0, le=65535, description="Server port")
+    port_discovery_strategy: Literal["fixed", "fallback_range", "kernel_assigned"] = Field(
+        "fixed",
+        description=(
+            "Port binding strategy. 'fixed': bind exactly to port (raises on conflict). "
+            "'fallback_range': try port, port+1, ..., port+port_discovery_max_attempts. "
+            "'kernel_assigned': bind to port 0 and let the OS assign a free port."
+        ),
+    )
+    port_discovery_max_attempts: int = Field(
+        10,
+        gt=0,
+        le=100,
+        description=(
+            "Number of consecutive ports to try when " "port_discovery_strategy='fallback_range'."
+        ),
+    )
     preferred_interface: str | None = Field(
         None,
         description=(
