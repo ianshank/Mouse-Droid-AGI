@@ -311,12 +311,18 @@ def build_speaker(cfg: Settings) -> SpeakerProtocol | None:
 def build_voice_engine(
     cfg: Settings,
     speaker: SpeakerProtocol | None = None,
+    failure_recorder: FailureRecorder | None = None,
 ) -> VoiceEngineProtocol | None:
     """Build Rocky voice engine based on config.
 
     Args:
         cfg: Root settings.
         speaker: Pre-built speaker driver (built if not provided).
+        failure_recorder: Optional ``FailureRecorder`` injected so the voice
+            engine can emit observable signals (Prometheus counter +
+            structured log) whenever events are dropped due to per-event
+            cooldown or token-bucket backpressure. Defaults to a no-op when
+            unspecified.
 
     Returns:
         Voice engine conforming to ``VoiceEngineProtocol``, or None if disabled.
@@ -356,7 +362,7 @@ def build_voice_engine(
 
     from mousedroid.voice.rocky import RockyVoiceEngine
 
-    engine = RockyVoiceEngine(cfg.voice, speaker, tts)
+    engine = RockyVoiceEngine(cfg.voice, speaker, tts, failure_recorder=failure_recorder)
     _log.info(
         "voice_engine_built",
         personality=cfg.voice.personality,

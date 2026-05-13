@@ -2808,6 +2808,27 @@ class VoiceConfig(BaseModel):
             "Counter resets on any successful synthesis."
         ),
     )
+    cooldown_per_event: dict[str, float] = Field(
+        default_factory=dict,
+        description=(
+            "Per-event cooldown overrides (seconds). Keyed by event name; "
+            "events not listed fall back to the global cooldown_s. "
+            "Must be > 0 for each entry."
+        ),
+    )
+    token_bucket_capacity: int = Field(
+        3,
+        gt=0,
+        description=(
+            "Max tokens per priority-class bucket. Each HIGH/NORMAL priority "
+            "class has its own token bucket; EMERGENCY is never rate-limited."
+        ),
+    )
+    token_bucket_refill_rate: float = Field(
+        1.0,
+        gt=0,
+        description="Token-bucket refill rate (tokens/second) per priority class.",
+    )
     output_volume: float = Field(
         1.0,
         ge=0.0,
@@ -2852,6 +2873,47 @@ class VoiceConfig(BaseModel):
                     f"event_intensity_thresholds[{key!r}] must be in [0.0, 1.0], got {value!r}"
                 )
         return v
+
+    @field_validator("cooldown_per_event", mode="after")
+    @classmethod
+    def _validate_cooldown_per_event(cls, v: dict[str, float]) -> dict[str, float]:
+        for key, value in v.items():
+            if value <= 0.0:
+                raise ValueError(f"cooldown_per_event[{key!r}] must be > 0.0, got {value!r}")
+        return v
+
+    @model_validator(mode="after")
+    def _validate_event_names_in_phrase_bank(self) -> Self:
+        """Ensure event keys reference known phrase-bank events.
+
+        Validates that every key in ``event_intensity_thresholds`` and
+        ``cooldown_per_event`` exists in the default phrase bank or has been
+        registered via ``phrase_overrides``. Typos that previously fell back
+        silently to the global defaults now fail at config-load time.
+        """
+        # Local import keeps the schema module decoupled from the voice
+        # package import graph at module load time.
+        from mousedroid.voice.phrase_bank import DEFAULT_PHRASES
+
+        known: set[str] = set(DEFAULT_PHRASES.keys()) | set(self.phrase_overrides.keys())
+
+        bad_thresholds = sorted(set(self.event_intensity_thresholds.keys()) - known)
+        bad_cooldowns = sorted(set(self.cooldown_per_event.keys()) - known)
+
+        if bad_thresholds or bad_cooldowns:
+            parts: list[str] = []
+            if bad_thresholds:
+                parts.append(
+                    f"event_intensity_thresholds contains unknown event(s): {bad_thresholds!r}"
+                )
+            if bad_cooldowns:
+                parts.append(f"cooldown_per_event contains unknown event(s): {bad_cooldowns!r}")
+            parts.append(
+                "Known events come from mousedroid.voice.phrase_bank.DEFAULT_PHRASES "
+                "and any keys registered via phrase_overrides."
+            )
+            raise ValueError(" ".join(parts))
+        return self
 
     def resolved_tts_model_path(self) -> str | None:
         """Return the effective TTS model path for the configured personality.

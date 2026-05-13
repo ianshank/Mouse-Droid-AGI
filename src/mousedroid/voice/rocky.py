@@ -18,12 +18,14 @@ import numpy as np
 from numpy.typing import NDArray
 
 from mousedroid.logging.setup import get_logger
+from mousedroid.telemetry.failure_recorder import NullFailureRecorder
 from mousedroid.voice.exceptions import SpeakerUnavailableError
 from mousedroid.voice.phrase_bank import DEFAULT_PHRASES
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import VoiceConfig
     from mousedroid.hardware.protocols import SpeakerProtocol
+    from mousedroid.telemetry.failure_recorder import FailureRecorder
     from mousedroid.voice.mock_tts import MockTTS
     from mousedroid.voice.tts import PiperTTS
 
@@ -136,6 +138,37 @@ def rocky_transform(
     return transformed
 
 
+@dataclass
+class _TokenBucket:
+    """Simple monotonic token bucket for rate limiting.
+
+    Each call to :meth:`consume` refills the bucket based on elapsed time
+    since the previous call (up to ``capacity``), then attempts to consume
+    one token. Returns ``True`` when a token was available, ``False`` when
+    the bucket is empty.
+    """
+
+    capacity: int
+    refill_rate: float
+    _tokens: float = field(init=False)
+    _last_refill: float = field(init=False)
+
+    def __post_init__(self) -> None:
+        self._tokens = float(self.capacity)
+        self._last_refill = time.monotonic()
+
+    def consume(self) -> bool:
+        """Try to consume one token, refilling first based on elapsed time."""
+        now = time.monotonic()
+        elapsed = now - self._last_refill
+        self._tokens = min(float(self.capacity), self._tokens + elapsed * self.refill_rate)
+        self._last_refill = now
+        if self._tokens >= 1.0:
+            self._tokens -= 1.0
+            return True
+        return False
+
+
 class RockyVoiceEngine:
     """Rocky-personality voice engine for the Mouse Droid.
 
@@ -150,6 +183,7 @@ class RockyVoiceEngine:
         cfg: VoiceConfig,
         speaker: SpeakerProtocol,
         tts: PiperTTS | MockTTS,
+        failure_recorder: FailureRecorder | None = None,
     ) -> None:
         """Initialise the Rocky voice engine.
 
@@ -157,6 +191,10 @@ class RockyVoiceEngine:
             cfg: Voice engine configuration.
             speaker: Speaker driver for audio output.
             tts: Text-to-speech synthesiser.
+            failure_recorder: Optional :class:`FailureRecorder` used to
+                report dropped events (rate-limit or cooldown). Defaults to
+                :class:`NullFailureRecorder` (no-op) so unit tests and
+                offline contexts work without telemetry wiring.
         """
         from mousedroid.config.schema import SpeakerConfig
 
@@ -169,12 +207,32 @@ class RockyVoiceEngine:
         self._speaker_cfg: SpeakerConfig = (
             _cfg_attr if isinstance(_cfg_attr, SpeakerConfig) else SpeakerConfig.model_validate({})
         )
+        self._failure_recorder: FailureRecorder = failure_recorder or NullFailureRecorder()
         self._queue: asyncio.PriorityQueue[SpeechRequest] = asyncio.PriorityQueue(
             maxsize=cfg.queue_size,
         )
         self._worker_task: asyncio.Task[None] | None = None
+        # Cooldown tracking. Events that have an entry in
+        # ``cfg.cooldown_per_event`` are tracked individually in
+        # ``_last_speak_time_per_event``; all other events share the global
+        # ``_last_speak_time`` slot (preserving the legacy single-cooldown
+        # semantics for unconfigured events).
         self._last_speak_time: float = 0.0
+        self._last_speak_time_per_event: dict[str, float] = {}
         self._running = False
+
+        # One token bucket per non-emergency priority class. Emergency events
+        # are never rate-limited so they don't appear here.
+        self._buckets: dict[Priority, _TokenBucket] = {
+            Priority.HIGH: _TokenBucket(
+                capacity=cfg.token_bucket_capacity,
+                refill_rate=cfg.token_bucket_refill_rate,
+            ),
+            Priority.NORMAL: _TokenBucket(
+                capacity=cfg.token_bucket_capacity,
+                refill_rate=cfg.token_bucket_refill_rate,
+            ),
+        }
 
         # Build phrase bank: defaults + user overrides
         self._phrases: dict[str, list[str]] = dict(DEFAULT_PHRASES)
@@ -185,13 +243,29 @@ class RockyVoiceEngine:
             "rocky_voice_engine_init",
             cooldown_s=cfg.cooldown_s,
             queue_size=cfg.queue_size,
+            token_bucket_capacity=cfg.token_bucket_capacity,
+            token_bucket_refill_rate=cfg.token_bucket_refill_rate,
             phrase_events=list(self._phrases.keys()),
         )
+
+    def _get_cooldown(self, event: str) -> float:
+        """Return effective cooldown for an event (per-event override or global)."""
+        return self._cfg.cooldown_per_event.get(event, self._cfg.cooldown_s)
 
     async def speak(self, event: str, context: dict[str, float] | None = None) -> None:
         """Queue a speech event for playback.
 
-        Non-blocking: drops the request if the queue is full.
+        Non-blocking. Non-emergency events are gated by:
+
+        - **Per-event cooldown** — if the event was spoken less than its
+          effective cooldown ago, the request is dropped and recorded as
+          ``event_dropped_cooldown``.
+        - **Token-bucket backpressure** — each non-emergency priority class
+          owns a token bucket; if the bucket is empty when the event
+          arrives, the request is dropped and recorded as
+          ``event_dropped_rate_limit``.
+
+        Emergency events bypass both gates and forcibly drain the queue.
 
         Args:
             event: Semantic event name (e.g. ``"obstacle_detected"``).
@@ -230,11 +304,60 @@ class RockyVoiceEngine:
         else:
             priority = Priority.NORMAL
 
+        # Per-event cooldown gate (non-emergency only). Burst-suppression
+        # happens here at enqueue-time so the worker never has to throw
+        # away cooled-down requests it already dequeued.
+        #
+        # Events with an explicit per-event cooldown are tracked
+        # individually; all other events share the global last-speak slot,
+        # preserving legacy single-cooldown semantics for unconfigured
+        # events.
+        if priority != Priority.EMERGENCY:
+            cooldown_s = self._get_cooldown(event)
+            has_per_event = event in self._cfg.cooldown_per_event
+            last = (
+                self._last_speak_time_per_event.get(event, 0.0)
+                if has_per_event
+                else self._last_speak_time
+            )
+            elapsed = time.monotonic() - last
+            if elapsed < cooldown_s:
+                self._record_drop(
+                    event=event,
+                    reason="event_dropped_cooldown",
+                    priority=priority,
+                    extra={
+                        "cooldown_s": float(cooldown_s),
+                        "elapsed_s": float(elapsed),
+                    },
+                )
+                return
+
+            # Token-bucket backpressure gate (per priority class).
+            bucket = self._buckets[priority]
+            if not bucket.consume():
+                self._record_drop(
+                    event=event,
+                    reason="event_dropped_rate_limit",
+                    priority=priority,
+                )
+                return
+
         request = SpeechRequest(
             priority=-priority,  # Negate so higher priority sorts first
             timestamp=time.monotonic(),
             text=text,
         )
+
+        # Reserve the cooldown slot at enqueue time so subsequent burst
+        # events in the same cooldown window are suppressed even if the
+        # worker hasn't drained the queue yet.
+        if priority != Priority.EMERGENCY:
+            now = time.monotonic()
+            if event in self._cfg.cooldown_per_event:
+                self._last_speak_time_per_event[event] = now
+            else:
+                self._last_speak_time = now
 
         try:
             self._queue.put_nowait(request)
@@ -246,7 +369,51 @@ class RockyVoiceEngine:
                 self._queue.put_nowait(request)
                 _log.info("rocky_voice_emergency_queued", text=text)
             else:
-                _log.debug("rocky_voice_queue_full", voice_event=event)
+                self._record_drop(
+                    event=event,
+                    reason="event_dropped_rate_limit",
+                    priority=priority,
+                    extra={"queue_full": 1},
+                )
+
+    def _record_drop(
+        self,
+        *,
+        event: str,
+        reason: str,
+        priority: Priority,
+        extra: dict[str, float | int] | None = None,
+    ) -> None:
+        """Emit structured log + failure-recorder metric for a dropped event.
+
+        Args:
+            event: Voice event name being dropped.
+            reason: Machine-readable drop reason (``event_dropped_cooldown``
+                or ``event_dropped_rate_limit``).
+            priority: Priority class of the dropped event.
+            extra: Optional additional structured fields.
+        """
+        log_kv: dict[str, str | int | float] = {
+            "voice_event": event,
+            "reason": reason,
+            "priority": priority.name,
+        }
+        recorder_extra: dict[str, str | int | float] = {
+            "event": event,
+            "priority": priority.name,
+        }
+        if extra:
+            for k, v in extra.items():
+                log_kv[k] = v
+                recorder_extra[k] = v
+
+        _log.debug("voice_event_dropped", **log_kv)
+        self._failure_recorder.record(
+            subsystem="voice",
+            reason=reason,
+            level="warning",
+            extra=recorder_extra,
+        )
 
     async def start(self) -> None:
         """Start the speaker, TTS engine, and background worker.
@@ -315,7 +482,11 @@ class RockyVoiceEngine:
         return int(samples.size), peak_abs
 
     async def _worker(self) -> None:
-        """Background task: drain the queue and play speech."""
+        """Background task: drain the queue and play speech.
+
+        Cooldown and rate-limit gating are now performed at enqueue time in
+        :meth:`speak`, so the worker simply plays whatever it dequeues.
+        """
         while self._running:
             try:
                 request = await asyncio.wait_for(
@@ -327,20 +498,7 @@ class RockyVoiceEngine:
             except asyncio.CancelledError:
                 break
 
-            # Respect cooldown (bypass for emergency)
-            now = time.monotonic()
-            elapsed = now - self._last_speak_time
-            is_emergency = request.priority == -Priority.EMERGENCY
-            if elapsed < self._cfg.cooldown_s and not is_emergency:
-                _log.debug(
-                    "rocky_voice_cooldown_skip",
-                    text=request.text,
-                    remaining_s=self._cfg.cooldown_s - elapsed,
-                )
-                continue
-
             await self._play(request.text)
-            self._last_speak_time = time.monotonic()
 
     async def _play(self, text: str) -> None:
         """Synthesise and play a phrase through the speaker.
