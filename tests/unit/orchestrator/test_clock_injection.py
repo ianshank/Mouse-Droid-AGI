@@ -13,17 +13,21 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 import torch
 
 from mousedroid.common.time.protocol import MockClock, RealClock
 from mousedroid.config.schema import Settings
 from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator
 from mousedroid.safety.context import SafetyContext
+from mousedroid.telemetry.exceptions import TelemetryUnavailableError
+from mousedroid.telemetry.failure_recorder import FailureRecorder, NullFailureRecorder
 
 
 def _make_orchestrator(
     cfg: Settings,
     clock: MockClock | None = None,
+    failure_recorder: FailureRecorder | None = None,
 ) -> MouseDroidOrchestrator:
     """Build a minimal orchestrator with all optional subsystems absent."""
     world_model = MagicMock()
@@ -51,6 +55,7 @@ def _make_orchestrator(
         sensor_manager=sensor_manager,
         cfg=cfg,
         clock=clock,
+        failure_recorder=failure_recorder,
     )
 
 
@@ -170,3 +175,66 @@ class TestMockClockControlsTicks:
             await loop_task
 
         assert consolidate_calls >= 1
+
+
+class TestFailureRecorderInjection:
+    """FailureRecorder injection and default behaviour."""
+
+    def test_default_is_null_failure_recorder(self) -> None:
+        """When no failure_recorder is supplied, orchestrator uses NullFailureRecorder."""
+        cfg = Settings(mock_hardware=True)
+        orch = _make_orchestrator(cfg)
+        assert isinstance(orch._failure_recorder, NullFailureRecorder)
+
+    def test_injected_recorder_is_stored(self) -> None:
+        """An explicitly supplied FailureRecorder is stored on the orchestrator."""
+        cfg = Settings(mock_hardware=True)
+        recorder = NullFailureRecorder()
+        orch = _make_orchestrator(cfg, failure_recorder=recorder)
+        assert orch._failure_recorder is recorder
+
+    def test_injected_recorder_satisfies_protocol(self) -> None:
+        """The stored recorder always satisfies the FailureRecorder protocol."""
+        cfg = Settings(mock_hardware=True)
+        orch = _make_orchestrator(cfg)
+        assert isinstance(orch._failure_recorder, FailureRecorder)
+
+
+class TestTelemetryStartDegradation:
+    """Orchestrator degrades gracefully when telemetry server fails to bind."""
+
+    async def test_telemetry_start_failure_degrades_to_none(self) -> None:
+        """When telemetry_server.start() raises TelemetryUnavailableError, orchestrator
+        sets _telemetry_server = None and continues startup without crashing."""
+        cfg = Settings(mock_hardware=True)
+        orch = _make_orchestrator(cfg)
+
+        telemetry_server = AsyncMock()
+        telemetry_server.start.side_effect = TelemetryUnavailableError("port exhausted")
+        orch._telemetry_server = telemetry_server
+
+        # Patch out the remaining start() dependencies to avoid needing real hardware
+        orch._esp32 = AsyncMock()
+        orch._sensor_manager = AsyncMock()
+        orch._sensor_manager.start = AsyncMock()
+
+        await orch.start()
+
+        assert orch._telemetry_server is None
+
+    async def test_telemetry_start_success_retains_server(self) -> None:
+        """When telemetry_server.start() succeeds, _telemetry_server remains set."""
+        cfg = Settings(mock_hardware=True)
+        orch = _make_orchestrator(cfg)
+
+        telemetry_server = AsyncMock()
+        telemetry_server.start = AsyncMock(return_value=None)
+        orch._telemetry_server = telemetry_server
+
+        orch._esp32 = AsyncMock()
+        orch._sensor_manager = AsyncMock()
+        orch._sensor_manager.start = AsyncMock()
+
+        await orch.start()
+
+        assert orch._telemetry_server is telemetry_server

@@ -28,6 +28,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Literal
 
+from typing_extensions import Protocol, runtime_checkable
+
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
@@ -38,11 +40,14 @@ _log = get_logger(__name__)
 SeverityLevel = Literal["warning", "error", "critical"]
 
 
-class FailureRecorder:
-    """Protocol for recording cross-cutting subsystem failure events.
+@runtime_checkable
+class FailureRecorder(Protocol):
+    """Structural protocol for recording cross-cutting subsystem failure events.
 
-    Implementations emit a structured log entry and update a Prometheus
-    counter so operators can observe failure rates without reading logs.
+    Any object with a matching ``record()`` signature satisfies this protocol —
+    no explicit inheritance needed.  Implementations emit a structured log entry
+    and update a Prometheus counter so operators can observe failure rates without
+    reading logs.
     """
 
     def record(
@@ -64,9 +69,10 @@ class FailureRecorder:
             extra: Optional mapping of additional structured key-value pairs to
                 include in the log event. Values must be str, int, or float.
         """
+        ...
 
 
-class PrometheusFailureRecorder(FailureRecorder):
+class PrometheusFailureRecorder:
     """Failure recorder that increments a Prometheus counter and emits a structlog event.
 
     Args:
@@ -112,7 +118,7 @@ class PrometheusFailureRecorder(FailureRecorder):
         log_fn("subsystem_failure_recorded", **log_kv)
 
 
-class NullFailureRecorder(FailureRecorder):
+class NullFailureRecorder:
     """No-op failure recorder used when telemetry is disabled or in unit tests."""
 
     def record(

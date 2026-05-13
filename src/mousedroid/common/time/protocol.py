@@ -18,12 +18,9 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, runtime_checkable
+from typing import runtime_checkable
 
 from typing_extensions import Protocol
-
-if TYPE_CHECKING:
-    pass
 
 
 @runtime_checkable
@@ -107,7 +104,7 @@ class MockClock:
         if seconds <= 0:
             return
         deadline = self._now + seconds
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         future: asyncio.Future[None] = loop.create_future()
         self._waiters.append((deadline, future))
         self._waiters.sort(key=lambda t: t[0])

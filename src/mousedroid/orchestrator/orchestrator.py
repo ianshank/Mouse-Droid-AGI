@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from mousedroid.sensing.manager import SensorManager
     from mousedroid.sensing.protocol import ObservationProtocol
     from mousedroid.skills.delegator import SkillDelegator
+    from mousedroid.telemetry.failure_recorder import FailureRecorder
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
     from mousedroid.vla.policy import VLAPolicyProtocol
     from mousedroid.voice.protocol import VoiceEngineProtocol
@@ -102,6 +103,7 @@ class MouseDroidOrchestrator:
         memory_exporter: MemoryExporterProtocol | None = None,
         mission_dispatcher: MissionDispatcherProtocol | None = None,
         clock: ClockProtocol | None = None,
+        failure_recorder: FailureRecorder | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -161,6 +163,9 @@ class MouseDroidOrchestrator:
                 primitives. Defaults to :class:`RealClock` (production).
                 Pass a :class:`MockClock` in tests to control simulated time
                 without wall-clock delays.
+            failure_recorder: Optional :class:`FailureRecorder` for emitting
+                structured failure events and Prometheus counters. Defaults
+                to a :class:`NullFailureRecorder` (no-op) when ``None``.
         """
         if not agents:
             msg = "At least one agent is required"
@@ -207,6 +212,11 @@ class MouseDroidOrchestrator:
             cfg.openclaw.export_every_n_ticks if cfg.openclaw is not None else 0
         )
         self._clock: ClockProtocol = clock if clock is not None else RealClock()
+        from mousedroid.telemetry.failure_recorder import NullFailureRecorder
+
+        self._failure_recorder: FailureRecorder = (
+            failure_recorder if failure_recorder is not None else NullFailureRecorder()
+        )
         self._running = False
         self._tick_count: int = 0
         self._consolidation_task: asyncio.Task[None] | None = None
@@ -232,7 +242,13 @@ class MouseDroidOrchestrator:
         if self._cognitive_core is not None:
             await self._cognitive_core.start()
         if self._telemetry_server is not None:
-            await self._telemetry_server.start()
+            from mousedroid.telemetry.exceptions import TelemetryUnavailableError
+
+            try:
+                await self._telemetry_server.start()
+            except TelemetryUnavailableError:
+                _log.warning("telemetry_start_degraded", exc_info=True)
+                self._telemetry_server = None
         if self._mcp_server is not None:
             await self._mcp_server.start()
         if self._llm_gateway is not None:

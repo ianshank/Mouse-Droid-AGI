@@ -971,6 +971,7 @@ def build_telemetry_server(
         port=cfg.telemetry.port,
         raw_frame_source=raw_frame_source is not None,
     )
+    failure_recorder = build_failure_recorder(cfg, shared_metrics_registry)
     return TelemetryServer(
         cfg=cfg.telemetry,
         telemetry_queue=publisher.get_queue(),
@@ -985,6 +986,7 @@ def build_telemetry_server(
         cloud_enabled=cfg.gcp is not None,
         mission_dispatcher=mission_dispatcher,
         openclaw_cfg=cfg.openclaw,
+        failure_recorder=failure_recorder,
     )
 
 
@@ -1905,6 +1907,7 @@ def build_orchestrator(cfg: Settings) -> object:
         log_buffer = _LogRingBuffer(buffer_size)
 
     metrics_registry = build_metrics_registry(cfg)
+    failure_recorder = build_failure_recorder(cfg, metrics_registry)
 
     # Shared prompt-injection filter — reused by the LLM gateway and the
     # OpenClaw mission dispatcher so REST + MCP + LLM ingress share one
@@ -2051,6 +2054,7 @@ def build_orchestrator(cfg: Settings) -> object:
         skill_delegator=skill_delegator,
         memory_exporter=memory_exporter,
         mission_dispatcher=mission_dispatcher,
+        failure_recorder=failure_recorder,
     )
     # Bind the deferred orchestrator reference so the OpenClaw mission
     # dispatcher (built before the orchestrator above) can route through

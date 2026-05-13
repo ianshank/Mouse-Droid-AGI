@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import os
+from unittest.mock import patch
+
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
 from pydantic import ValidationError
 
 from mousedroid.config.schema import TelemetryAuthConfig
+from mousedroid.telemetry.auth import build_bearer_auth_middleware
+from mousedroid.telemetry.failure_recorder import NullFailureRecorder
 
 # ---------------------------------------------------------------------------
 # Config validator — exempt_paths format enforcement
@@ -122,3 +129,108 @@ class TestExemptPathMiddlewareSafety:
     def test_sibling_path_not_exempt(self) -> None:
         """/api/v1/healthcheck is NOT exempt when '/api/v1/health' is listed."""
         assert self._run_middleware("/api/v1/healthcheck", ["/api/v1/health"]) is False
+
+
+# ---------------------------------------------------------------------------
+# Real middleware integration — uses actual build_bearer_auth_middleware
+# ---------------------------------------------------------------------------
+
+
+def _make_auth_app(token: str, exempt_paths: list[str]) -> web.Application:
+    """Build a minimal aiohttp app protected by bearer auth middleware."""
+    auth_cfg = TelemetryAuthConfig(
+        auth_enabled=True,
+        token_env_var="_TEST_BEARER_TOKEN",  # noqa: S106
+        exempt_paths=exempt_paths,
+    )
+    middleware = build_bearer_auth_middleware(auth_cfg, NullFailureRecorder())
+
+    app = web.Application(middlewares=[middleware])
+
+    async def protected(request: web.Request) -> web.Response:
+        return web.Response(text="ok")
+
+    app.router.add_get("/data", protected)
+    app.router.add_get("/health", protected)
+    app.router.add_get("/health/detail", protected)
+    app.router.add_get("/healthz", protected)
+    return app
+
+
+class TestRealMiddleware:
+    """build_bearer_auth_middleware integration — against a real aiohttp app."""
+
+    async def test_valid_token_passes(self) -> None:
+        """A correct Bearer token gets through on a protected path."""
+        with patch.dict(os.environ, {"_TEST_BEARER_TOKEN": "secret"}):
+            app = _make_auth_app("secret", ["/health"])
+            async with TestClient(TestServer(app)) as client:
+                resp = await client.get("/data", headers={"Authorization": "Bearer secret"})
+                assert resp.status == 200
+
+    async def test_missing_token_rejected(self) -> None:
+        """A request with no Authorization header is rejected 401."""
+        with patch.dict(os.environ, {"_TEST_BEARER_TOKEN": "secret"}):
+            app = _make_auth_app("secret", ["/health"])
+            async with TestClient(TestServer(app)) as client:
+                resp = await client.get("/data")
+                assert resp.status == 401
+
+    async def test_wrong_token_rejected(self) -> None:
+        """A request with an incorrect Bearer token is rejected 401."""
+        with patch.dict(os.environ, {"_TEST_BEARER_TOKEN": "secret"}):
+            app = _make_auth_app("secret", ["/health"])
+            async with TestClient(TestServer(app)) as client:
+                resp = await client.get("/data", headers={"Authorization": "Bearer wrong"})
+                assert resp.status == 401
+
+    async def test_exempt_path_passes_without_token(self) -> None:
+        """/health is exempt and passes without a token."""
+        with patch.dict(os.environ, {"_TEST_BEARER_TOKEN": "secret"}):
+            app = _make_auth_app("secret", ["/health"])
+            async with TestClient(TestServer(app)) as client:
+                resp = await client.get("/health")
+                assert resp.status == 200
+
+    async def test_exempt_subpath_passes(self) -> None:
+        """/health/detail (sub-path of /health) is exempt."""
+        with patch.dict(os.environ, {"_TEST_BEARER_TOKEN": "secret"}):
+            app = _make_auth_app("secret", ["/health"])
+            async with TestClient(TestServer(app)) as client:
+                resp = await client.get("/health/detail")
+                assert resp.status == 200
+
+    async def test_sibling_path_healthz_not_exempt(self) -> None:
+        """/healthz is NOT exempt when only /health is listed."""
+        with patch.dict(os.environ, {"_TEST_BEARER_TOKEN": "secret"}):
+            app = _make_auth_app("secret", ["/health"])
+            async with TestClient(TestServer(app)) as client:
+                resp = await client.get("/healthz")
+                assert resp.status == 401
+
+    async def test_failure_recorder_called_on_rejection(self) -> None:
+        """build_bearer_auth_middleware calls failure_recorder.record() on 401."""
+        from mousedroid.telemetry.failure_recorder import NullFailureRecorder
+
+        calls: list[tuple[str, str]] = []
+
+        class SpyRecorder(NullFailureRecorder):
+            def record(self, subsystem: str, reason: str, **kwargs: object) -> None:
+                calls.append((subsystem, reason))
+
+        auth_cfg = TelemetryAuthConfig(
+            auth_enabled=True,
+            token_env_var="_TEST_BEARER_TOKEN",  # noqa: S106
+            exempt_paths=["/health"],
+        )
+        with patch.dict(os.environ, {"_TEST_BEARER_TOKEN": "secret"}):
+            middleware = build_bearer_auth_middleware(auth_cfg, SpyRecorder())
+            app = web.Application(middlewares=[middleware])
+
+            async def protected(request: web.Request) -> web.Response:
+                return web.Response(text="ok")
+
+            app.router.add_get("/data", protected)
+            async with TestClient(TestServer(app)) as client:
+                await client.get("/data")  # no token → 401
+                assert calls == [("telemetry", "auth_missing_token")]

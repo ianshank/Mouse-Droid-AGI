@@ -19,12 +19,14 @@ if TYPE_CHECKING:
     from aiohttp import web
 
     from mousedroid.config.schema import TelemetryAuthConfig
+    from mousedroid.telemetry.failure_recorder import FailureRecorder
 
 _log = get_logger(__name__)
 
 
 def build_bearer_auth_middleware(
     auth_cfg: TelemetryAuthConfig,
+    failure_recorder: FailureRecorder | None = None,
 ) -> Any:
     """Build an aiohttp middleware that enforces Bearer token authentication.
 
@@ -34,6 +36,7 @@ def build_bearer_auth_middleware(
 
     Args:
         auth_cfg: Authentication configuration.
+        failure_recorder: Optional recorder for auth rejection events.
 
     Returns:
         An aiohttp middleware function.
@@ -86,12 +89,20 @@ def build_bearer_auth_middleware(
             supplied_token = request.query.get("token", "")
 
         if not token or supplied_token != token:
+            reason = "missing_token" if not supplied_token else "wrong_token"
             _log.warning(
-                "telemetry_auth_failed",
+                "telemetry_auth_rejected",
                 path=path,
                 method=request.method,
                 peer=request.remote or "unknown",
+                reason=reason,
             )
+            if failure_recorder is not None:
+                failure_recorder.record(
+                    "telemetry",
+                    f"auth_{reason}",
+                    level="warning",
+                )
             raise web.HTTPUnauthorized(
                 text='{"error": "unauthorized", "message": "Invalid or missing bearer token"}',
                 content_type="application/json",

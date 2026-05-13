@@ -18,15 +18,17 @@ def _registry() -> MetricsRegistry:
 
 
 class TestProtocolConformance:
-    """Both implementations must conform to the FailureRecorder interface."""
+    """Both implementations must conform to the FailureRecorder protocol."""
 
-    def test_prometheus_recorder_is_failure_recorder(self) -> None:
-        """PrometheusFailureRecorder is a subclass of FailureRecorder."""
-        assert issubclass(PrometheusFailureRecorder, FailureRecorder)
+    def test_prometheus_recorder_satisfies_protocol(self) -> None:
+        """PrometheusFailureRecorder structurally satisfies FailureRecorder."""
+        rec = PrometheusFailureRecorder(_registry())
+        assert isinstance(rec, FailureRecorder)
 
-    def test_null_recorder_is_failure_recorder(self) -> None:
-        """NullFailureRecorder is a subclass of FailureRecorder."""
-        assert issubclass(NullFailureRecorder, FailureRecorder)
+    def test_null_recorder_satisfies_protocol(self) -> None:
+        """NullFailureRecorder structurally satisfies FailureRecorder."""
+        rec = NullFailureRecorder()
+        assert isinstance(rec, FailureRecorder)
 
     def test_prometheus_recorder_has_record_method(self) -> None:
         """PrometheusFailureRecorder exposes .record()."""

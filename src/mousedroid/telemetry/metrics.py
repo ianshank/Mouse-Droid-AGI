@@ -298,9 +298,7 @@ def _render_triple_labeled_counter(
         ea = _escape_label_value(val_a)
         eb = _escape_label_value(val_b)
         ec = _escape_label_value(val_c)
-        lines.append(
-            f'{name}_total{{{label_a}="{ea}",{label_b}="{eb}",{label_c}="{ec}"}} {count}'
-        )
+        lines.append(f'{name}_total{{{label_a}="{ea}",{label_b}="{eb}",{label_c}="{ec}"}} {count}')
     return lines
 
 

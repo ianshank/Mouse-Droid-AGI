@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from mousedroid.hardware.protocols import RawFrameSourceProtocol
     from mousedroid.health.monitor import HealthMonitor
     from mousedroid.orchestrator.mission_dispatcher import MissionDispatcherProtocol
+    from mousedroid.telemetry.failure_recorder import FailureRecorder
     from mousedroid.telemetry.log_buffer import LogRingBuffer
     from mousedroid.telemetry.metrics import MetricsRegistry
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol
@@ -115,6 +116,7 @@ class TelemetryServer:
         cloud_enabled: bool = False,
         mission_dispatcher: MissionDispatcherProtocol | None = None,
         openclaw_cfg: OpenClawConfig | None = None,
+        failure_recorder: FailureRecorder | None = None,
     ) -> None:
         """Initialise the telemetry server.
 
@@ -151,7 +153,15 @@ class TelemetryServer:
             openclaw_cfg: Optional :class:`OpenClawConfig`. When supplied
                 and ``enabled=True``, gates registration of the mission
                 endpoint and supplies its rate-limit / dedup parameters.
+            failure_recorder: Optional :class:`FailureRecorder` for recording
+                bind failures and auth rejections as Prometheus metrics.
+                Defaults to a no-op when ``None``.
         """
+        from mousedroid.telemetry.failure_recorder import NullFailureRecorder
+
+        self._failure_recorder: FailureRecorder = (
+            failure_recorder if failure_recorder is not None else NullFailureRecorder()
+        )
         self._cfg = cfg
         self._queue = telemetry_queue
         self._health_monitor = health_monitor
@@ -261,6 +271,12 @@ class TelemetryServer:
                 except OSError:
                     continue
             if not bound:
+                self._failure_recorder.record(
+                    "telemetry",
+                    "bind_exhausted",
+                    level="error",
+                    extra={"port_start": self._cfg.port, "attempts": max_attempts},
+                )
                 raise TelemetryUnavailableError(
                     f"telemetry: all {max_attempts} candidate ports starting at "
                     f"{self._cfg.port} are in use on {self._cfg.host}"
@@ -277,6 +293,12 @@ class TelemetryServer:
                     port=self._bound_port,
                 )
             except OSError as exc:
+                self._failure_recorder.record(
+                    "telemetry",
+                    "bind_failed",
+                    level="error",
+                    extra={"port": self._cfg.port},
+                )
                 raise TelemetryUnavailableError(
                     f"telemetry: cannot bind to {self._cfg.host}:{self._cfg.port}: {exc}"
                 ) from exc
@@ -404,7 +426,7 @@ class TelemetryServer:
 
         # Bearer token auth takes priority if configured
         if auth_cfg is not None and auth_cfg.auth_enabled:
-            middlewares.append(build_bearer_auth_middleware(auth_cfg))
+            middlewares.append(build_bearer_auth_middleware(auth_cfg, self._failure_recorder))
         elif api_key is not None:
             # Legacy X-API-Key auth for backwards compatibility
             @web.middleware  # type: ignore[misc,untyped-decorator,unused-ignore]
