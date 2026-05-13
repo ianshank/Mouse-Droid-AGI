@@ -1,7 +1,7 @@
 {
   "platform": "jetson",
   "image_tag": "mousedroid:jetson",
-  "sha": "76dfb1e9831a2284b6aaff8939e450f32f2bb167",
-  "deployed_at": "2026-04-25T15:21:51-04:00",
-  "notes": "Bootstrap entry. SHA reflects the hardware/jetson-full-smoke branch HEAD that built the currently-deployed image on the rover at /opt/mousedroid. Update this file (in the same PR or immediately after) whenever the Jetson image is rebuilt and pushed. The CI schema-compat gate (scripts/check_config_compat.py) loads changed config YAMLs against THIS sha's Settings schema to detect when a config change requires an image rebuild before deploy."
+  "sha": "90119effd02ca3dae58e4aff0f8d8c106980b81c",
+  "deployed_at": "2026-05-13T14:42:48Z",
+  "notes": "Post-PR-72 healthcheck rewrite. Image rebuilt on the rover from main HEAD (commit 90119ef, the squash-merge of PR #72). Verified healthy (status=healthy fails=0), heartbeat file fresh (age=0s, watchdog firing every 10s), env file correctly derived (STALE_S=30.0=interval*tolerance), 4-case script proxy probe (stale/fresh/grace/past-grace) all return expected exit codes, full Jetson smoke run reports Overall: PASS. CI schema-compat gate now validates config YAML changes against THIS SHA's Settings schema (which includes the new LoopConfig fields watchdog_tolerance_factor, start_grace_s, start_grace_file, plus the _validate_shell_safe_path field validator). Update this file in the same PR (or immediately after) whenever the Jetson image is rebuilt."
 }
