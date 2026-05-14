@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from mousedroid.config.schema import SpeakerConfig
+from mousedroid.voice.exceptions import SpeakerUnavailableError
 
 
 def _cfg(**overrides: object) -> SpeakerConfig:
@@ -244,12 +245,15 @@ async def test_write_chunk_rejects_channel_misalignment() -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_handles_missing_pyaudio() -> None:
-    """start() is a no-op when pyaudio is not importable."""
+async def test_start_raises_when_pyaudio_missing() -> None:
+    """start() raises SpeakerUnavailableError when pyaudio is not importable."""
     from mousedroid.hardware.audio.usb_speaker import UsbSpeaker
 
     speaker = UsbSpeaker(_cfg())
-    with patch.dict("sys.modules", {"pyaudio": None}):
+    with (
+        patch.dict("sys.modules", {"pyaudio": None}),  # type: ignore[dict-item]
+        pytest.raises(SpeakerUnavailableError, match="pyaudio not installed"),
+    ):
         await speaker.start()
 
     assert speaker._stream is None
@@ -257,8 +261,8 @@ async def test_start_handles_missing_pyaudio() -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_handles_oserror() -> None:
-    """start() leaves speaker disabled on OSError from ALSA."""
+async def test_start_raises_after_oserror_retries() -> None:
+    """start() raises SpeakerUnavailableError after exhausting retry attempts."""
     mock_pyaudio = _mock_pyaudio()
     mock_pa = MagicMock()
     mock_pa.open.side_effect = OSError("No ALSA devices")
@@ -267,11 +271,19 @@ async def test_start_handles_oserror() -> None:
     with patch.dict("sys.modules", {"pyaudio": mock_pyaudio}):
         from mousedroid.hardware.audio.usb_speaker import UsbSpeaker
 
-        speaker = UsbSpeaker(_cfg(device_index=0))
-        await speaker.start()
+        speaker = UsbSpeaker(
+            _cfg(
+                device_index=0,
+                reconnect_max_attempts=3,
+                reconnect_backoff_initial_s=0.001,
+                reconnect_backoff_max_s=0.005,
+            )
+        )
+        with pytest.raises(SpeakerUnavailableError, match="3 attempts"):
+            await speaker.start()
 
     assert speaker._stream is None
-    mock_pa.terminate.assert_called_once()
+    assert mock_pa.open.call_count == 3
 
 
 def test_write_raw_raises_when_stream_is_none() -> None:
@@ -304,8 +316,8 @@ def test_write_raw_falls_back_on_type_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_write_chunk_stream_error_wraps_as_runtime_error() -> None:
-    """write_chunk() wraps unexpected stream errors as RuntimeError and calls stop()."""
+async def test_write_chunk_oserror_raises_speaker_unavailable() -> None:
+    """write_chunk() raises SpeakerUnavailableError on OSError (device disconnected)."""
     from mousedroid.hardware.audio.usb_speaker import UsbSpeaker
 
     speaker = UsbSpeaker(_cfg(format="float32"))
@@ -314,13 +326,10 @@ async def test_write_chunk_stream_error_wraps_as_runtime_error() -> None:
     speaker._stream = mock_stream
     speaker._pa = mock_pa
 
-    # OSError is not caught by the TypeError fallback, so it propagates out of _write_raw.
+    # OSError in _write_raw is now converted to SpeakerUnavailableError.
     mock_stream.write.side_effect = OSError("ALSA buffer overrun")
     # Return a non-numeric value from get_write_available to skip the buffer-wait loop.
     mock_stream.get_write_available.return_value = "not_a_number"
 
-    with pytest.raises(RuntimeError, match="USB speaker write failed"):
+    with pytest.raises(SpeakerUnavailableError, match="device disconnected"):
         await speaker.write_chunk(np.ones(4, dtype=np.float32))
-
-    # stop() must have been called to release resources
-    assert speaker._stream is None

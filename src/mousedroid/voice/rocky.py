@@ -18,6 +18,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from mousedroid.logging.setup import get_logger
+from mousedroid.voice.exceptions import SpeakerUnavailableError
 from mousedroid.voice.phrase_bank import DEFAULT_PHRASES
 
 if TYPE_CHECKING:
@@ -157,9 +158,17 @@ class RockyVoiceEngine:
             speaker: Speaker driver for audio output.
             tts: Text-to-speech synthesiser.
         """
+        from mousedroid.config.schema import SpeakerConfig
+
         self._cfg = cfg
         self._speaker = speaker
         self._tts = tts
+        # Capture speaker config at construction so the degradation path in
+        # start() can build a MockSpeaker without accessing private attrs.
+        _cfg_attr = getattr(speaker, "_cfg", None)
+        self._speaker_cfg: SpeakerConfig = (
+            _cfg_attr if isinstance(_cfg_attr, SpeakerConfig) else SpeakerConfig.model_validate({})
+        )
         self._queue: asyncio.PriorityQueue[SpeechRequest] = asyncio.PriorityQueue(
             maxsize=cfg.queue_size,
         )
@@ -240,8 +249,26 @@ class RockyVoiceEngine:
                 _log.debug("rocky_voice_queue_full", voice_event=event)
 
     async def start(self) -> None:
-        """Start the speaker, TTS engine, and background worker."""
-        await self._speaker.start()
+        """Start the speaker, TTS engine, and background worker.
+
+        If the hardware speaker raises ``SpeakerUnavailable``, automatically
+        downgrades to a ``MockSpeaker`` and logs a WARNING so the operator has
+        a visible signal. The orchestrator continues; voice output is silenced.
+        """
+        try:
+            await self._speaker.start()
+        except SpeakerUnavailableError as exc:
+            from mousedroid.hardware.audio.mock_speaker import MockSpeaker
+
+            self._speaker = MockSpeaker(self._speaker_cfg)
+            await self._speaker.start()
+            _log.warning(
+                "voice_speaker_degraded",
+                reason=str(exc),
+                fallback="MockSpeaker",
+            )
+            # TODO: wire voice_speaker_degraded_total Prometheus counter once
+            # feat/observability-primitive lands (PR #2).
         self._tts.start()
         self._running = True
         self._worker_task = asyncio.create_task(self._worker())

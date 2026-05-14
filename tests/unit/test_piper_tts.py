@@ -122,7 +122,7 @@ def _make_wav_bytes(n_samples: int, sample_rate: int = 22050) -> bytes:
 
 
 def test_synthesize_sync_with_loaded_voice_int16() -> None:
-    """_synthesize_sync decodes int16 WAV written by Piper's binary-buffer API."""
+    """_synthesize_sync decodes int16 WAV returned by Piper's modern API."""
     from mousedroid.voice.tts import PiperTTS
 
     tts = PiperTTS(_cfg(tts_sample_rate=22050))
@@ -130,22 +130,17 @@ def test_synthesize_sync_with_loaded_voice_int16() -> None:
     wav_bytes = _make_wav_bytes(n_samples)
 
     mock_voice = MagicMock()
-
-    def write_wav_buffer(text: str, buf: io.BytesIO) -> None:
-        assert text == "hello"
-        assert hasattr(buf, "write")
-        buf.write(wav_bytes)
-
-    mock_voice.synthesize_wav = MagicMock(side_effect=write_wav_buffer)
+    mock_voice.synthesize_wav = MagicMock(return_value=wav_bytes)
     mock_voice.synthesize = MagicMock()
     tts._voice = mock_voice
+    tts._use_wav_api = True  # simulate detection of the modern API in start()
 
     samples = tts._synthesize_sync("hello")
     assert samples.dtype == np.float32
     assert len(samples) == n_samples
     # int16 values should be normalised to [-1, 1]
     assert np.all(np.abs(samples) <= 1.0)
-    mock_voice.synthesize_wav.assert_called_once()
+    mock_voice.synthesize_wav.assert_called_once_with("hello")
     mock_voice.synthesize.assert_not_called()
 
 

@@ -13,6 +13,7 @@ from numpy.typing import NDArray
 
 from mousedroid.hardware.audio.constants import INT16_MAX_F
 from mousedroid.logging.setup import get_logger
+from mousedroid.voice.exceptions import SpeakerUnavailableError
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import SpeakerConfig
@@ -66,10 +67,15 @@ class UsbSpeaker:
         return None
 
     async def start(self) -> None:
-        """Open the PyAudio stream for playback.
+        """Open the PyAudio stream for playback with exponential-backoff retry.
 
-        Handles missing PyAudio or ALSA errors gracefully, leaving
-        the speaker in a disabled (no-op write) state with a warning.
+        Retries up to ``cfg.reconnect_max_attempts`` times with backoff between
+        ``cfg.reconnect_backoff_initial_s`` and ``cfg.reconnect_backoff_max_s``.
+
+        Raises:
+            SpeakerUnavailableError: When all retry attempts are exhausted or pyaudio
+                is not installed. Callers should catch this and downgrade to a
+                MockSpeaker so the orchestrator continues operating.
         """
         try:
             import pyaudio
@@ -79,42 +85,71 @@ class UsbSpeaker:
                 reason="pyaudio_import_failed",
                 device_name=self._cfg.device_name,
             )
-            return
+            msg = f"pyaudio not installed; USB speaker '{self._cfg.device_name}' unavailable"
+            raise SpeakerUnavailableError(msg) from None
 
-        try:
-            self._pa = pyaudio.PyAudio()
+        last_exc: Exception | None = None
+        for attempt in range(1, self._cfg.reconnect_max_attempts + 1):
+            try:
+                self._pa = pyaudio.PyAudio()
 
-            device_index = self._cfg.device_index
-            if device_index is None:
-                device_index = self._find_device_index()
+                device_index = self._cfg.device_index
                 if device_index is None:
+                    device_index = self._find_device_index()
+                    if device_index is None:
+                        _log.warning(
+                            "usb_speaker_not_found",
+                            device_name=self._cfg.device_name,
+                            attempt=attempt,
+                        )
+
+                fmt = pyaudio.paFloat32 if self._cfg.format == "float32" else pyaudio.paInt16
+
+                self._stream = self._pa.open(
+                    format=fmt,
+                    channels=self._cfg.channels,
+                    rate=self._cfg.sample_rate,
+                    output=True,
+                    output_device_index=device_index,
+                    frames_per_buffer=self._cfg.chunk_size,
+                )
+                _log.info("usb_speaker_started", device_index=device_index, attempt=attempt)
+                return
+            except OSError as exc:
+                last_exc = exc
+                if self._pa is not None:
+                    self._pa.terminate()
+                self._pa = None
+                self._stream = None
+
+                if attempt < self._cfg.reconnect_max_attempts:
+                    backoff = min(
+                        self._cfg.reconnect_backoff_initial_s * (2 ** (attempt - 1)),
+                        self._cfg.reconnect_backoff_max_s,
+                    )
                     _log.warning(
-                        "usb_speaker_not_found",
+                        "usb_speaker_device_missing",
+                        attempt=attempt,
+                        max_attempts=self._cfg.reconnect_max_attempts,
+                        next_backoff_s=round(backoff, 3),
+                        error=str(exc),
                         device_name=self._cfg.device_name,
                     )
+                    await asyncio.sleep(backoff)
 
-            fmt = pyaudio.paFloat32 if self._cfg.format == "float32" else pyaudio.paInt16
-
-            self._stream = self._pa.open(
-                format=fmt,
-                channels=self._cfg.channels,
-                rate=self._cfg.sample_rate,
-                output=True,
-                output_device_index=device_index,
-                frames_per_buffer=self._cfg.chunk_size,
-            )
-            _log.info("usb_speaker_started", device_index=device_index)
-        except OSError as exc:
-            if self._pa is not None:
-                self._pa.terminate()
-            self._pa = None
-            self._stream = None
-            _log.warning(
-                "usb_speaker_unavailable",
-                reason="pyaudio_open_failed",
-                error=str(exc),
-                device_name=self._cfg.device_name,
-            )
+        _log.error(
+            "usb_speaker_unavailable_after_retries",
+            attempts=self._cfg.reconnect_max_attempts,
+            device_name=self._cfg.device_name,
+            error=str(last_exc),
+        )
+        # TODO: wire voice_speaker_degraded_total Prometheus counter once
+        # feat/observability-primitive lands (PR #2).
+        msg = (
+            f"USB speaker '{self._cfg.device_name}' unavailable after "
+            f"{self._cfg.reconnect_max_attempts} attempts: {last_exc}"
+        )
+        raise SpeakerUnavailableError(msg) from last_exc
 
     async def stop(self) -> None:
         """Close the PyAudio stream and terminate."""
@@ -188,13 +223,21 @@ class UsbSpeaker:
 
         try:
             await asyncio.to_thread(self._write_raw, raw_data)
+        except SpeakerUnavailableError:
+            await self.stop()
+            raise
         except Exception as exc:
             await self.stop()
             _log.warning("usb_speaker_write_failed", error=str(exc))
             raise RuntimeError(f"USB speaker write failed: {exc}") from exc
 
     def _write_raw(self, raw_data: bytes) -> None:
-        """Synchronously write raw bytes to the underlying PyAudio stream."""
+        """Synchronously write raw bytes to the underlying PyAudio stream.
+
+        Raises:
+            SpeakerUnavailableError: If the stream is gone or PyAudio raises IOError,
+                indicating the device was disconnected mid-stream.
+        """
         if self._stream is None:
             msg = "USB speaker stream unavailable"
             raise RuntimeError(msg)
@@ -202,6 +245,10 @@ class UsbSpeaker:
             self._stream.write(raw_data, exception_on_underflow=False)
         except TypeError:
             self._stream.write(raw_data)
+        except OSError as exc:
+            _log.error("usb_speaker_write_error", error=str(exc), exc_type=type(exc).__name__)
+            msg = f"USB speaker write failed (device disconnected?): {exc}"
+            raise SpeakerUnavailableError(msg) from exc
 
     @property
     def sample_rate(self) -> int:

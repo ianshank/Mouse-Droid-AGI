@@ -24,7 +24,7 @@ _log = get_logger(__name__)
 class _PiperVoiceLike(Protocol):
     """Minimal interface required from a loaded piper voice."""
 
-    def synthesize_wav(self, text: str, wav_file: Any) -> Any: ...
+    def synthesize_wav(self, text: str) -> bytes: ...
 
     def synthesize(self, text: str, *args: Any, **kwargs: Any) -> Any: ...
 
@@ -33,6 +33,14 @@ class PiperTTS:
     """Piper text-to-speech synthesiser.
 
     Wraps ``piper.PiperVoice`` for async-safe speech synthesis.
+
+    Piper-tts has two API generations:
+    - New (>=0.0.7): ``synthesize_wav(text) -> bytes`` returns a complete WAV blob.
+    - Legacy: ``synthesize(text, wav_file)`` writes PCM frames into a
+      ``wave.Wave_write`` object opened by the caller.
+
+    The API version is detected once in ``start()`` and cached so the hot path
+    in ``_synthesize_sync`` never re-inspects the object on every call.
     """
 
     def __init__(self, cfg: VoiceConfig) -> None:
@@ -43,6 +51,8 @@ class PiperTTS:
         """
         self._cfg = cfg
         self._voice: _PiperVoiceLike | None = None
+        self._use_wav_api: bool = False
+        self._consecutive_failures: int = 0
         _log.info(
             "piper_tts_init",
             model_path=cfg.tts_model_path,
@@ -51,7 +61,7 @@ class PiperTTS:
         )
 
     def start(self) -> None:
-        """Load the piper voice model."""
+        """Load the piper voice model and detect the API generation."""
         try:
             from piper import PiperVoice
 
@@ -69,7 +79,16 @@ class PiperTTS:
                     source=source,
                 )
                 self._voice = PiperVoice.load(resolved_path)
-                _log.info("piper_tts_model_loaded", path=resolved_path)
+                self._use_wav_api = hasattr(self._voice, "synthesize_wav")
+                _log.info(
+                    "piper_tts_model_loaded",
+                    path=resolved_path,
+                    api="synthesize_wav" if self._use_wav_api else "synthesize",
+                )
+                _log.info(
+                    "voice_tts_api_selected",
+                    api="synthesize_wav" if self._use_wav_api else "synthesize",
+                )
             else:
                 _log.warning("piper_tts_no_model_path")
         except ImportError:
@@ -81,6 +100,39 @@ class PiperTTS:
         """Release the piper voice model."""
         self._voice = None
         _log.info("piper_tts_stopped")
+
+    def _synthesize_via_wav(self, text: str) -> bytes:
+        """Synthesise using the modern piper API that returns WAV bytes directly.
+
+        Args:
+            text: Text to synthesise.
+
+        Returns:
+            Raw WAV file bytes.
+        """
+        assert self._voice is not None  # guarded by caller
+        return self._voice.synthesize_wav(text)
+
+    def _synthesize_via_legacy(self, text: str) -> bytes:
+        """Synthesise using the legacy piper API that writes into a wave writer.
+
+        Args:
+            text: Text to synthesise.
+
+        Returns:
+            Raw WAV file bytes.
+        """
+        import io
+        import wave
+
+        assert self._voice is not None  # guarded by caller
+        wav_buffer = io.BytesIO()
+        with wave.open(wav_buffer, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(np.dtype(np.int16).itemsize)
+            wav_file.setframerate(self._cfg.tts_sample_rate)
+            self._voice.synthesize(text, wav_file)
+        return wav_buffer.getvalue()
 
     def _synthesize_sync(self, text: str) -> NDArray[np.float32]:
         """Synthesise text to audio samples (blocking).
@@ -98,20 +150,31 @@ class PiperTTS:
         import io
         import wave
 
-        wav_buffer = io.BytesIO()
-        # piper-tts >=1.3 writes a complete WAV into a binary buffer. Older
-        # versions wrote frames into a configured wave.Wave_write instead.
-        synth_wav = getattr(self._voice, "synthesize_wav", None)
-        if callable(synth_wav):
-            _log.debug("piper_tts_synthesize_api", api="synthesize_wav")
-            synth_wav(text, wav_buffer)
-        else:
-            _log.debug("piper_tts_synthesize_api", api="synthesize")
-            with wave.open(wav_buffer, "wb") as wav_file:
-                wav_file.setnchannels(1)
-                wav_file.setsampwidth(np.dtype(np.int16).itemsize)
-                wav_file.setframerate(self._cfg.tts_sample_rate)
-                self._voice.synthesize(text, wav_file)
+        try:
+            if self._use_wav_api:
+                wav_bytes = self._synthesize_via_wav(text)
+            else:
+                wav_bytes = self._synthesize_via_legacy(text)
+            wav_buffer = io.BytesIO(wav_bytes)
+
+            self._consecutive_failures = 0
+        except Exception as exc:
+            self._consecutive_failures += 1
+            log_fn = (
+                _log.error
+                if self._consecutive_failures >= self._cfg.tts_failure_threshold
+                else _log.warning
+            )
+            log_fn(
+                "voice_tts_synthesize_failed",
+                api="synthesize_wav" if self._use_wav_api else "synthesize",
+                exc_type=type(exc).__name__,
+                exc_msg=str(exc),
+                consecutive_failures=self._consecutive_failures,
+            )
+            # TODO: wire voice_tts_synthesize_failures_total Prometheus counter
+            # once feat/observability-primitive lands (PR #2).
+            return np.zeros(self._cfg.tts_sample_rate, dtype=np.float32)
 
         wav_buffer.seek(0)
         with wave.open(wav_buffer, "rb") as wav_file:
