@@ -54,6 +54,32 @@ async def test_start_twice_keeps_single_task(cfg: TelemetryConfig) -> None:
     await source.stop()
 
 
+async def test_run_loop_recovers_from_emit_exception(cfg: TelemetryConfig) -> None:
+    """A transient ``_emit_frame`` failure must not terminate the loop."""
+
+    publisher = TelemetryPublisher(cfg)
+    source = MockTelemetrySource(cfg, publisher)
+    calls = {"count": 0}
+
+    async def _flaky_emit_frame() -> None:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("transient")
+        # subsequent calls succeed by delegating to the real method
+        # (no-op for this test — we only need to prove the loop keeps
+        # running after the first exception).
+
+    source._emit_frame = _flaky_emit_frame  # type: ignore[method-assign]
+    await source.start()
+    try:
+        await asyncio.sleep(0.2)
+    finally:
+        await source.stop()
+    # Loop kept ticking through the exception → emit was called
+    # multiple times instead of bailing after the first raise.
+    assert calls["count"] >= 2
+
+
 async def test_synthetic_scan_shape(cfg: TelemetryConfig) -> None:
     publisher = TelemetryPublisher(cfg)
     source = MockTelemetrySource(cfg, publisher, lidar_points_per_scan=16)

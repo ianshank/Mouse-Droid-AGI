@@ -1947,6 +1947,33 @@ def build_orchestrator(cfg: Settings) -> object:
     telemetry_publisher = build_telemetry_publisher(cfg)
     health_monitor = build_health_monitor(cfg)
 
+    # PR #4: per-sensor liveness tracker — declared once at build time
+    # so the orchestrator can attach a four-state liveness map
+    # (disabled / awaiting / live / stale) to every telemetry frame.
+    # Disabled when telemetry itself is off (no consumers).
+    liveness_tracker = None
+    if cfg.telemetry.enabled:
+        from mousedroid.telemetry.sensor_liveness import SensorLivenessTracker
+
+        liveness_tracker = SensorLivenessTracker(
+            stale_s=cfg.telemetry.sensor_liveness_stale_s,
+        )
+        liveness_tracker.register("lidar", enabled=lidar_driver is not None)
+        liveness_tracker.register("vision", enabled=camera is not None)
+        liveness_tracker.register("audio", enabled=microphone is not None)
+        liveness_tracker.register("motor", enabled=True)
+        _log.info(
+            "sensor_liveness_tracker_built",
+            stale_s=cfg.telemetry.sensor_liveness_stale_s,
+            lidar_enabled=lidar_driver is not None,
+            vision_enabled=camera is not None,
+            audio_enabled=microphone is not None,
+        )
+
+    # PR #4: synthetic telemetry source for mock_hardware mode (None in
+    # production). Lifecycle is owned by the orchestrator.
+    mock_telemetry_source = build_mock_telemetry_source(cfg, telemetry_publisher)
+
     # Optional log ring buffer for telemetry log streaming
     from mousedroid.telemetry.log_buffer import LogRingBuffer as _LogRingBuffer
 
@@ -2104,6 +2131,8 @@ def build_orchestrator(cfg: Settings) -> object:
         memory_exporter=memory_exporter,
         mission_dispatcher=mission_dispatcher,
         failure_recorder=failure_recorder,
+        liveness_tracker=liveness_tracker,
+        mock_telemetry_source=mock_telemetry_source,
     )
     # Bind the deferred orchestrator reference so the OpenClaw mission
     # dispatcher (built before the orchestrator above) can route through

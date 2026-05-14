@@ -75,3 +75,29 @@ class TestStateTransitions:
 def test_to_dict_roundtrip() -> None:
     liveness = SensorLiveness(state="live", age_s=0.42)
     assert liveness.to_dict() == {"state": "live", "age_s": 0.42}
+
+
+class TestClockSkewSafety:
+    """Defensive clamps for clock skew / replay scenarios."""
+
+    def test_negative_age_floored_to_zero(self) -> None:
+        """When ``now_s < last_ts`` (clock skew), age must not go negative."""
+        tracker = SensorLivenessTracker(stale_s=2.0)
+        tracker.register("lidar", enabled=True)
+        tracker.mark_observed("lidar", now_s=10.0)
+        snap = tracker.snapshot(now_s=5.0)  # clock went backwards
+        assert snap["lidar"].state == "live"
+        assert snap["lidar"].age_s == 0.0
+
+    def test_enable_toggle_preserves_observation(self) -> None:
+        """Re-registering as disabled then enabled keeps the cached timestamp."""
+        tracker = SensorLivenessTracker(stale_s=10.0)
+        tracker.register("lidar", enabled=True)
+        tracker.mark_observed("lidar", now_s=1.0)
+        tracker.register("lidar", enabled=False)
+        snap = tracker.snapshot(now_s=2.0)
+        assert snap["lidar"].state == "disabled"
+        # Re-enable: the original observation timestamp should still be live.
+        tracker.register("lidar", enabled=True)
+        snap = tracker.snapshot(now_s=2.0)
+        assert snap["lidar"].state == "live"

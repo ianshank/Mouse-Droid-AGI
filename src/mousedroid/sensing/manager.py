@@ -35,6 +35,7 @@ if TYPE_CHECKING:
         LidarProtocol,
         VisionProtocol,
     )
+    from mousedroid.sensing.lidar_scan import LidarScan
 
 T = TypeVar("T")
 
@@ -96,6 +97,10 @@ class SensorManager:
             self._lidar_buf: deque[NDArray[np.float32] | None] = deque(maxlen=lidar_buf_size)
         else:
             self._lidar_buf = deque(maxlen=1)
+        # PR #4: cache the most-recent raw scan so the orchestrator can
+        # republish it on the raw-LiDAR telemetry channel without a
+        # second serial read.
+        self._last_lidar_scan: LidarScan | None = None
 
         # Motor degraded-mode state.
         self._motor_degraded: bool = False
@@ -422,6 +427,10 @@ class SensorManager:
         When a :class:`LidarFeatureExtractor` is configured, raw scans are
         transformed into sector-binned distance features.  Returns ``None``
         when LiDAR is not configured.
+
+        The raw :class:`LidarScan` is cached on the manager so the
+        orchestrator can republish it on the raw-streaming channel
+        without driving a second serial read.
         """
         if self._lidar is None:
             return None, False
@@ -432,6 +441,10 @@ class SensorManager:
 
         try:
             scan = await self._lidar.read_scan()
+            # Cache the most-recent raw scan for downstream consumers
+            # (telemetry raw-LiDAR streaming). Always overwritten — we
+            # only need the latest valid scan.
+            self._last_lidar_scan = scan
             if self._lidar_feature_extractor is not None:
                 features = self._lidar_feature_extractor.extract(scan)
                 return features, True
@@ -439,3 +452,12 @@ class SensorManager:
         except Exception:
             _log.warning("lidar_read_failed", exc_info=True)
             return default, False
+
+    @property
+    def last_lidar_scan(self) -> LidarScan | None:
+        """Most-recent raw LiDAR scan, or ``None`` when none has been read.
+
+        Telemetry's raw-LiDAR streaming channel publishes this scan after
+        each tick; cached on the manager so we avoid a second serial read.
+        """
+        return self._last_lidar_scan

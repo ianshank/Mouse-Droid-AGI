@@ -97,16 +97,34 @@ class MockTelemetrySource:
         _log.info("mock_telemetry_source_stopped")
 
     async def _run(self) -> None:
-        """Emit synthetic frames + scans on a fixed interval."""
+        """Emit synthetic frames + scans on a fixed interval.
+
+        The loop catches every non-cancellation exception so a transient
+        publisher failure (queue full, etc.) doesn't kill the source —
+        we log at WARNING and retry on the next tick.
+        """
         # Use the shorter of the two periods as the loop tick so the
         # publisher's rate-limit naturally drops duplicates.
         tick_period = min(self._frame_period, self._scan_period)
+        _log.info(
+            "mock_telemetry_source_loop_started",
+            tick_period_s=round(tick_period, 4),
+        )
         try:
             while self._running:
-                await self._emit_frame()
-                await self._emit_scan()
+                try:
+                    await self._emit_frame()
+                    await self._emit_scan()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.warning(
+                        "mock_telemetry_source_emit_failed",
+                        exc_info=True,
+                    )
                 await asyncio.sleep(tick_period)
         except asyncio.CancelledError:
+            _log.info("mock_telemetry_source_loop_cancelled")
             return
 
     async def _emit_frame(self) -> None:

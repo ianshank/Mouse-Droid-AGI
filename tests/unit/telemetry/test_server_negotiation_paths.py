@@ -115,6 +115,39 @@ async def test_negotiate_picks_client_preferred() -> None:
 
 
 @pytest.mark.asyncio
+async def test_negotiate_returns_default_when_client_sends_close() -> None:
+    """CLOSE frame before hello → server falls back silently (no ack sent)."""
+    server = _make_server()
+    ws = _StubWs(queued=[_StubWsMsg(type=WSMsgType.CLOSE, data="")])
+    chosen = await server._negotiate_ws(ws)  # type: ignore[arg-type]
+    assert chosen == "json"
+    assert ws.sent == []  # no ack because client is gone
+
+
+@pytest.mark.asyncio
+async def test_negotiate_rejects_oversized_hello() -> None:
+    """A hello above ``WS_HELLO_MAX_BYTES`` is dropped with a recorded failure."""
+    from mousedroid.constants import WS_HELLO_MAX_BYTES
+
+    server = _make_server()
+    oversize = json.dumps({"hello": {"padding": "x" * (WS_HELLO_MAX_BYTES + 1)}})
+    ws = _StubWs(queued=[_StubWsMsg(type=WSMsgType.TEXT, data=oversize)])
+
+    calls: list[tuple[str, str]] = []
+
+    def _spy(subsystem: str, reason: str, **_kw: Any) -> None:
+        calls.append((subsystem, reason))
+
+    server._failure_recorder.record = _spy  # type: ignore[method-assign]
+
+    chosen = await server._negotiate_ws(ws)  # type: ignore[arg-type]
+    assert chosen == "json"
+    assert ws.sent == []  # oversized payload is dropped, no ack sent
+    assert calls
+    assert calls[0] == ("telemetry", "ws_negotiation_oversized")
+
+
+@pytest.mark.asyncio
 async def test_negotiate_records_failure_when_rejected() -> None:
     """Mismatch → ack with ``ok=False`` + FailureRecorder hit."""
     server = _make_server()
