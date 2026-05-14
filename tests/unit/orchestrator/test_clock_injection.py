@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 import torch
 
 from mousedroid.common.time.protocol import MockClock, RealClock
