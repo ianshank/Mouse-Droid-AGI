@@ -26,7 +26,7 @@ When telemetry is disabled (or ``metrics_registry`` is ``None``), a
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal
 
 from typing_extensions import Protocol, runtime_checkable
 
@@ -80,6 +80,14 @@ class PrometheusFailureRecorder:
             ``mousedroid_subsystem_failures_total`` counter on.
     """
 
+    # Module-level set so each call avoids rebuilding a dispatch table
+    # (addresses PR #78 Gemini medium review). Using ``getattr(_log,
+    # level)`` keeps dispatch dynamic so structlog test fixtures that
+    # patch ``_log`` see the patched methods — a class-level mapping of
+    # the bound methods captures them at import time and breaks test
+    # capture.
+    _ALLOWED_LEVELS: ClassVar[frozenset[str]] = frozenset({"warning", "error", "critical"})
+
     def __init__(self, metrics: MetricsRegistry) -> None:
         self._metrics = metrics
 
@@ -110,11 +118,10 @@ class PrometheusFailureRecorder:
             for k, v in extra.items():
                 log_kv[k] = v
 
-        log_fn = {
-            "warning": _log.warning,
-            "error": _log.error,
-            "critical": _log.critical,
-        }.get(level, _log.warning)
+        # ``getattr`` is O(1) on a Python object and produces no dict
+        # allocation; the fallback to ``_log.warning`` happens only on
+        # an unknown level (already constrained by ``SeverityLevel``).
+        log_fn = getattr(_log, level) if level in self._ALLOWED_LEVELS else _log.warning
         log_fn("subsystem_failure_recorded", **log_kv)
 
 

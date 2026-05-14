@@ -232,8 +232,25 @@ class TelemetryServer:
 
         strategy = self._cfg.port_discovery_strategy
         if strategy == "kernel_assigned":
-            site = web.TCPSite(self._runner, self._cfg.host, 0)
-            await site.start()
+            # Wrap in try/except OSError to match the ``fixed`` and
+            # ``fallback_range`` strategies — an invalid host or
+            # system-wide port exhaustion would otherwise raise a raw
+            # OSError that bypasses the orchestrator's
+            # TelemetryUnavailableError degradation handler. Addresses
+            # PR #78 review (Gemini high + Copilot).
+            try:
+                site = web.TCPSite(self._runner, self._cfg.host, 0)
+                await site.start()
+            except OSError as exc:
+                self._failure_recorder.record(
+                    "telemetry",
+                    "bind_failed",
+                    level="error",
+                    extra={"strategy": strategy, "host": self._cfg.host},
+                )
+                raise TelemetryUnavailableError(
+                    f"telemetry: kernel_assigned bind on {self._cfg.host}:0 failed: {exc}"
+                ) from exc
             # Read the actual OS-assigned port from the underlying socket.
             # ``site._server`` is typed Optional[asyncio.AbstractServer] in
             # aiohttp's stubs, but only the concrete asyncio.Server has

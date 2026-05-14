@@ -1468,6 +1468,13 @@ class TelemetryAuthConfig(BaseModel):
     def _validate_exempt_paths(cls, paths: list[str]) -> list[str]:
         """Reject paths with traversal components, query strings, or unusual chars.
 
+        Also reject (a) trailing slashes on non-root entries and (b)
+        empty segments (``//``). The middleware uses segment-exact
+        matching so ``/health/`` and ``/health`` would be different
+        exemptions — silently accepting a trailing slash would make
+        operator misconfigurations invisible. Addresses Gemini /
+        Copilot review (PR #78).
+
         Prevents config typos that could widen the exemption surface (e.g.
         '/healthz' unintentionally exempting '/health') from going unnoticed.
         """
@@ -1479,6 +1486,16 @@ class TelemetryAuthConfig(BaseModel):
                 raise ValueError(
                     f"exempt_paths entry {path!r} is invalid: must start with '/' "
                     "and contain only [a-z0-9_/-] (no query strings, no '..')"
+                )
+            if len(path) > 1 and path.endswith("/"):
+                raise ValueError(
+                    f"exempt_paths entry {path!r} must not have a trailing slash "
+                    "(non-root). Use '/health' rather than '/health/'."
+                )
+            if "//" in path:
+                raise ValueError(
+                    f"exempt_paths entry {path!r} contains an empty segment ('//'). "
+                    "Use single-slash boundaries only."
                 )
         return paths
 
