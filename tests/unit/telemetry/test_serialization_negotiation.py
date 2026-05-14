@@ -142,6 +142,41 @@ class TestNegotiateFailures:
         assert result.reason == REASON_INVALID_HELLO
 
 
+class TestPreferenceEdgeCases:
+    """Edge cases around the ``preferred_serialization`` field."""
+
+    def test_preferred_not_in_overlap_falls_back_to_server_default(self) -> None:
+        """Client requests an unsupported preference → server default wins."""
+        hello = {
+            "hello": {
+                "protocol_version": 1,
+                "supported_serializations": ["json", "msgpack"],
+                "preferred_serialization": "cbor",  # not in server's set
+            }
+        }
+        result = negotiate(hello, **_DEFAULT_KW)  # type: ignore[arg-type]
+        assert result.ok is True
+        assert result.serialization == "json"
+
+    def test_non_string_supported_entries_are_dropped(self) -> None:
+        """Mixed-type ``supported_serializations`` only counts string entries."""
+        hello = {
+            "hello": {
+                "protocol_version": 1,
+                "supported_serializations": ["json", 42, None, "msgpack"],
+            }
+        }
+        result = negotiate(hello, **_DEFAULT_KW)  # type: ignore[arg-type]
+        assert result.ok is True
+        assert result.serialization in ("json", "msgpack")
+
+    def test_explicit_null_hello_rejected(self) -> None:
+        """``{"hello": null}`` is treated as invalid_hello."""
+        result = negotiate({"hello": None}, **_DEFAULT_KW)  # type: ignore[arg-type]
+        assert result.ok is False
+        assert result.reason == REASON_INVALID_HELLO
+
+
 class TestAckEnrichment:
     """Successful and failed acks both carry helpful diagnostic fields."""
 

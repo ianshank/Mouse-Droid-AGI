@@ -75,6 +75,41 @@ class TelemetryFrame:
         return asdict(self)
 
 
+def lidar_scan_to_raw(scan: Any) -> LidarRawScan:
+    """Convert a ``LidarScan`` from the driver into a ``LidarRawScan``.
+
+    Converts angles from degrees to radians and distances from mm to
+    metres. The input is typed loosely (``Any``) to avoid a hard
+    dependency on the sensing layer; the function expects an object
+    with ``angles_deg`` (NDArray-like in degrees), ``distances_mm``
+    (NDArray-like in mm), ``confidences`` (NDArray-like), ``timestamp``,
+    and ``n_points`` attributes.
+
+    Args:
+        scan: Source scan in the driver's native units.
+
+    Returns:
+        A :class:`LidarRawScan` in SI units (radians, metres) ready for
+        WebSocket publishing.
+    """
+    import math as _math
+
+    raw_angles = list(scan.angles_deg)
+    raw_distances = list(scan.distances_mm)
+    raw_confidences = list(getattr(scan, "confidences", []))
+    angles_rad = [float(a) * _math.pi / 180.0 for a in raw_angles]
+    distances_m = [float(d) / 1000.0 for d in raw_distances]
+    intensities = [float(c) / 255.0 for c in raw_confidences] if raw_confidences else []
+    return LidarRawScan(
+        timestamp=float(scan.timestamp),
+        angles_rad=angles_rad,
+        distances_m=distances_m,
+        n_points=int(scan.n_points),
+        scan_duration_s=0.0,
+        intensities=intensities,
+    )
+
+
 @dataclass(frozen=True)
 class LidarRawScan:
     """Single raw LiDAR scan snapshot for the live streaming endpoint.

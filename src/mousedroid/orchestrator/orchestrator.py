@@ -104,6 +104,8 @@ class MouseDroidOrchestrator:
         mission_dispatcher: MissionDispatcherProtocol | None = None,
         clock: ClockProtocol | None = None,
         failure_recorder: FailureRecorder | None = None,
+        liveness_tracker: Any | None = None,
+        mock_telemetry_source: Any | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -166,6 +168,18 @@ class MouseDroidOrchestrator:
             failure_recorder: Optional :class:`FailureRecorder` for emitting
                 structured failure events and Prometheus counters. Defaults
                 to a :class:`NullFailureRecorder` (no-op) when ``None``.
+            liveness_tracker: Optional :class:`SensorLivenessTracker`.
+                When supplied, the orchestrator threads it through
+                :func:`build_telemetry_frame` so every published frame
+                carries a per-sensor liveness map
+                (``disabled`` / ``awaiting`` / ``live`` / ``stale``).
+                ``None`` (default) preserves byte-identical behaviour
+                with an empty ``sensor_liveness`` field.
+            mock_telemetry_source: Optional ``MockTelemetrySource`` (or
+                any object exposing ``async start()`` / ``async stop()``).
+                When supplied, started after telemetry server during
+                ``start()`` and stopped just before it during ``stop()``
+                so the dashboard renders synthetic motion in mock mode.
         """
         if not agents:
             msg = "At least one agent is required"
@@ -217,6 +231,8 @@ class MouseDroidOrchestrator:
         self._failure_recorder: FailureRecorder = (
             failure_recorder if failure_recorder is not None else NullFailureRecorder()
         )
+        self._liveness_tracker: Any | None = liveness_tracker
+        self._mock_telemetry_source: Any | None = mock_telemetry_source
         self._running = False
         self._tick_count: int = 0
         self._consolidation_task: asyncio.Task[None] | None = None
@@ -249,6 +265,16 @@ class MouseDroidOrchestrator:
             except TelemetryUnavailableError:
                 _log.warning("telemetry_start_degraded", exc_info=True)
                 self._telemetry_server = None
+        # PR #4: start the mock telemetry source after the server is
+        # up so its synthesised payloads land on a live publisher queue.
+        # Wrapped in try/except so a buggy mock source never blocks
+        # production startup.
+        if self._mock_telemetry_source is not None:
+            try:
+                await self._mock_telemetry_source.start()
+                _log.info("mock_telemetry_source_running")
+            except Exception:
+                _log.warning("mock_telemetry_source_start_failed", exc_info=True)
         if self._mcp_server is not None:
             await self._mcp_server.start()
         if self._llm_gateway is not None:
@@ -306,6 +332,12 @@ class MouseDroidOrchestrator:
             await self._voice_engine.stop()
         if self._mcp_server is not None:
             await self._mcp_server.stop()
+        # PR #4: stop the mock telemetry source BEFORE the server so
+        # synthetic payloads drain cleanly into the broadcast loop.
+        if self._mock_telemetry_source is not None:
+            with contextlib.suppress(Exception):
+                await self._mock_telemetry_source.stop()
+            _log.info("mock_telemetry_source_stopped_via_orchestrator")
         if self._telemetry_server is not None:
             await self._telemetry_server.stop()
         if self._cognitive_core is not None:
@@ -717,13 +749,50 @@ class MouseDroidOrchestrator:
                 safety_ctx,
                 loop_time_ms,
                 self._tick_count,
+                liveness_tracker=self._liveness_tracker,
+                now_s=self._clock.monotonic(),
             )
             if self._telemetry_publisher is not None:
                 await self._telemetry_publisher.publish(frame)
+                # PR #4: also publish the latest raw LiDAR scan to the
+                # streaming channel when both the publisher and the
+                # sensor manager expose them.
+                await self._publish_raw_lidar()
             if self._cloud_sink is not None:
                 await self._cloud_sink.publish_telemetry(frame.to_dict())
         except Exception:
             _log.debug("telemetry_publish_failed", exc_info=True)
+
+    async def _publish_raw_lidar(self) -> None:
+        """Publish the latest raw LiDAR scan to the streaming channel.
+
+        No-op when:
+
+        * The publisher does not expose ``publish_lidar_raw`` (legacy
+          publishers without raw-LiDAR support).
+        * The sensor manager has no ``last_lidar_scan`` (LiDAR not
+          configured or no scan yet).
+
+        Exceptions are swallowed and logged at DEBUG so a publisher
+        backpressure event never crashes the 30 Hz control loop.
+        """
+        publish_raw = getattr(self._telemetry_publisher, "publish_lidar_raw", None)
+        if publish_raw is None:
+            return
+        scan_source = getattr(self._sensor_manager, "last_lidar_scan", None)
+        if scan_source is None:
+            return
+        try:
+            from mousedroid.telemetry.protocol import lidar_scan_to_raw
+
+            raw = lidar_scan_to_raw(scan_source)
+        except Exception:
+            _log.debug("lidar_raw_conversion_failed", exc_info=True)
+            return
+        try:
+            await publish_raw(raw)
+        except Exception:
+            _log.debug("lidar_raw_publish_failed", exc_info=True)
 
     async def _voice_lifecycle(self, event: str) -> None:
         """Fire a lifecycle voice event (startup/shutdown) without an observation.

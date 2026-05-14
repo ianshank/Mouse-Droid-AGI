@@ -20,7 +20,15 @@ from pydantic import BaseModel, Field, ValidationError
 
 from mousedroid.common.async_utils import cancel_and_drain, spawn_tracked
 from mousedroid.common.rate_limit import TokenBucket
-from mousedroid.constants import MAX_LOG_ENTRIES, MDNS_SERVICE_TYPE, TELEMETRY_QUEUE_TIMEOUT_S
+from mousedroid.constants import (
+    MAX_LOG_ENTRIES,
+    MDNS_SERVICE_TYPE,
+    TELEMETRY_QUEUE_TIMEOUT_S,
+    WS_CLOSE_LIDAR_RAW_UNAVAILABLE,
+    WS_CLOSE_LOG_BUFFER_DISABLED,
+    WS_CLOSE_MAX_CLIENTS,
+    WS_HELLO_MAX_BYTES,
+)
 from mousedroid.logging.setup import get_logger
 from mousedroid.security.injection_filter import InjectionRejected
 from mousedroid.telemetry.network import (
@@ -1043,7 +1051,7 @@ class TelemetryServer:
         if len(self._ws_clients) >= self._cfg.max_clients:
             resp = web.WebSocketResponse()
             await resp.prepare(request)
-            await resp.close(code=4029, message=b"max_clients_reached")
+            await resp.close(code=WS_CLOSE_MAX_CLIENTS, message=b"max_clients_reached")
             return resp
         # Note: API key auth is already enforced by auth_middleware when
         # cfg.api_key is set.  No secondary check needed here.
@@ -1122,13 +1130,35 @@ class TelemetryServer:
             return server_choice
 
         if raw.type != WSMsgType.TEXT:
-            # Binary or close before hello — fall back silently. We can
-            # still try to send an ack but most non-text first messages
-            # mean the peer doesn't speak our protocol.
+            # Binary, CLOSE, or ERROR before hello — fall back silently.
+            # Most non-text first messages mean the peer doesn't speak
+            # our protocol or already disconnected mid-handshake.
+            _log.info(
+                "telemetry_ws_negotiation_skipped",
+                msg_type=int(raw.type),
+                fallback_serialization=server_choice,
+            )
+            return server_choice
+
+        # Reject oversized hellos to keep ``_negotiate_ws`` bounded in
+        # memory (aiohttp's max_msg_size only caps the global ceiling).
+        data = raw.data if isinstance(raw.data, str) else ""
+        if len(data.encode("utf-8")) > WS_HELLO_MAX_BYTES:
+            self._failure_recorder.record(
+                "telemetry",
+                "ws_negotiation_oversized",
+                level="warning",
+                extra={"limit_bytes": WS_HELLO_MAX_BYTES, "received_bytes": len(data)},
+            )
+            _log.warning(
+                "telemetry_ws_negotiation_oversized",
+                limit_bytes=WS_HELLO_MAX_BYTES,
+                received_bytes=len(data),
+            )
             return server_choice
 
         try:
-            payload = json.loads(raw.data)
+            payload = json.loads(data)
         except (TypeError, ValueError):
             _log.warning(
                 "telemetry_ws_negotiation_failed",
@@ -1172,12 +1202,12 @@ class TelemetryServer:
         if self._lidar_raw_queue is None:
             resp = web.WebSocketResponse()
             await resp.prepare(request)
-            await resp.close(code=4404, message=b"lidar_raw_unavailable")
+            await resp.close(code=WS_CLOSE_LIDAR_RAW_UNAVAILABLE, message=b"lidar_raw_unavailable")
             return resp
         if len(self._lidar_ws_clients) >= self._cfg.max_clients:
             resp = web.WebSocketResponse()
             await resp.prepare(request)
-            await resp.close(code=4029, message=b"max_clients_reached")
+            await resp.close(code=WS_CLOSE_MAX_CLIENTS, message=b"max_clients_reached")
             return resp
 
         ws = web.WebSocketResponse()
@@ -1224,7 +1254,7 @@ class TelemetryServer:
         if self._log_buffer is None:
             resp = web.WebSocketResponse()
             await resp.prepare(request)
-            await resp.close(code=4030, message=b"log_buffer_disabled")
+            await resp.close(code=WS_CLOSE_LOG_BUFFER_DISABLED, message=b"log_buffer_disabled")
             return resp
 
         # Enforce API key for WebSocket log streaming if configured.
@@ -1356,6 +1386,10 @@ class TelemetryServer:
         """
         if self._lidar_raw_queue is None:
             return
+        _log.info(
+            "telemetry_lidar_raw_broadcast_started",
+            queue_size=self._lidar_raw_queue.maxsize,
+        )
         while self._running:
             try:
                 scan = await asyncio.wait_for(

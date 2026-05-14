@@ -22,7 +22,15 @@ def _make_frame(**kwargs) -> TelemetryFrame:
 
 def test_publisher_initial_stats():
     pub = _make_publisher()
-    assert pub.stats == {"frames_published": 0, "frames_dropped": 0}
+    # PR #4 added raw-LiDAR counters; verify the legacy keys remain
+    # zero AND the new keys are present (back-compat for consumers that
+    # subscript existing keys).
+    assert pub.stats == {
+        "frames_published": 0,
+        "frames_dropped": 0,
+        "lidar_raw_published": 0,
+        "lidar_raw_dropped": 0,
+    }
 
 
 def test_publisher_get_queue():
