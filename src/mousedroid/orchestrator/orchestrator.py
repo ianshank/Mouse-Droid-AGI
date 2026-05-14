@@ -568,6 +568,12 @@ class MouseDroidOrchestrator:
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Check latent state for NaN / saturation; recover from buffer on NaN.
 
+        Performance: three independent scalars (NaN-in-h, NaN-in-z,
+        h-norm) are computed on-device, stacked into a single rank-1
+        tensor, and read back with one ``.tolist()`` call. This collapses
+        three GPU→CPU syncs down to one on the 30 Hz hot path. Addresses
+        review comments on GPU synchronization overhead.
+
         Args:
             h: Hidden state tensor from ``observe_step``.
             z: Latent state tensor from ``observe_step``.
@@ -576,7 +582,20 @@ class MouseDroidOrchestrator:
             ``(h, z)`` — possibly replaced by the last known-good values when
             NaN is detected and the recovery buffer is non-empty.
         """
-        if torch.isnan(h).any() or torch.isnan(z).any():
+        # Single GPU→CPU sync covering all three diagnostics. ``stack``
+        # forces consistent dtype/device so ``.tolist()`` returns Python
+        # floats in one round-trip.
+        diagnostics = torch.stack(
+            [
+                torch.isnan(h).any().to(torch.float32),
+                torch.isnan(z).any().to(torch.float32),
+                torch.linalg.norm(h.float()),
+            ]
+        )
+        nan_h_float, nan_z_float, h_norm = diagnostics.tolist()
+        has_nan = bool(nan_h_float) or bool(nan_z_float)
+
+        if has_nan:
             self._failure_recorder.record(
                 "world_model",
                 "latent_nan",
@@ -591,7 +610,6 @@ class MouseDroidOrchestrator:
             _log.critical("world_model_latent_unrecoverable", tick=self._tick_count)
             return h, z
 
-        h_norm = float(torch.linalg.norm(h))
         if h_norm > self._cfg.model.latent_norm_threshold:
             self._failure_recorder.record(
                 "world_model",
@@ -675,8 +693,15 @@ class MouseDroidOrchestrator:
         try:
             with torch.no_grad():
                 result = self._vla_policy.predict(VLAObservation(h=self._h, z=self._z))
-        except Exception:  # never let VLA crash the loop
-            self._failure_recorder.record("orchestrator", "vla_exception", level="warning")
+        except Exception as exc:  # never let VLA crash the loop
+            # Surface the exception type so dashboards can distinguish
+            # CUDA-OOM from logic errors at a glance (Gemini review).
+            self._failure_recorder.record(
+                "orchestrator",
+                "vla_exception",
+                level="warning",
+                extra={"error": type(exc).__name__},
+            )
             _log.warning("vla_predict_failed", policy=self._vla_policy.name, exc_info=True)
             return None
 
@@ -770,8 +795,13 @@ class MouseDroidOrchestrator:
 
             return self._normalize_cognitive_action(action_np)
         except Exception as e:  # pylint: disable=broad-except
+            # Surface the exception type so dashboards can distinguish
+            # the failure mode (Gemini review).
             self._failure_recorder.record(
-                "orchestrator", "cognitive_core_exception", level="warning"
+                "orchestrator",
+                "cognitive_core_exception",
+                level="warning",
+                extra={"error": type(e).__name__},
             )
             _log.warning(
                 "cognitive_core_action_selection_failed",
