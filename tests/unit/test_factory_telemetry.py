@@ -45,15 +45,53 @@ def test_build_server_disabled():
     assert server is None
 
 
-def test_build_server_enabled_mock_hardware():
+def test_build_server_enabled_mock_hardware_legacy_mock():
+    """``mock_force_real_when_enabled=False`` restores the no-op MockTelemetryServer."""
     cfg = _make_settings()
-    cfg = cfg.model_copy(update={"telemetry": cfg.telemetry.model_copy(update={"enabled": True})})
+    cfg = cfg.model_copy(
+        update={
+            "telemetry": cfg.telemetry.model_copy(
+                update={"enabled": True, "mock_force_real_when_enabled": False}
+            )
+        }
+    )
     pub = build_telemetry_publisher(cfg)
     health = HealthMonitor(cfg.health, cfg.jetson)
     server = build_telemetry_server(cfg, pub, health)
     assert server is not None
     assert isinstance(server, MockTelemetryServer)
     assert isinstance(server, TelemetryServerProtocol)
+
+
+def test_build_server_enabled_mock_hardware_defaults_to_real():
+    """PR #4 default: mock_hardware+enabled telemetry yields a real server."""
+    cfg = _make_settings()
+    cfg = cfg.model_copy(update={"telemetry": cfg.telemetry.model_copy(update={"enabled": True})})
+    pub = build_telemetry_publisher(cfg)
+    health = HealthMonitor(cfg.health, cfg.jetson)
+    server = build_telemetry_server(cfg, pub, health)
+    assert server is not None
+    assert isinstance(server, TelemetryServer)
+
+
+def test_build_server_force_real_server_legacy_wins():
+    """``force_real_server=True`` overrides ``mock_force_real_when_enabled=False``."""
+    cfg = _make_settings()
+    cfg = cfg.model_copy(
+        update={
+            "telemetry": cfg.telemetry.model_copy(
+                update={
+                    "enabled": True,
+                    "force_real_server": True,
+                    "mock_force_real_when_enabled": False,
+                }
+            )
+        }
+    )
+    pub = build_telemetry_publisher(cfg)
+    health = HealthMonitor(cfg.health, cfg.jetson)
+    server = build_telemetry_server(cfg, pub, health)
+    assert isinstance(server, TelemetryServer)
 
 
 def test_build_server_returns_none_without_publisher():

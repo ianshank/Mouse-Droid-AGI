@@ -18,6 +18,11 @@
   .dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
   .nav a { color: #58a6ff; text-decoration: none; margin-right: 10px; }
   .nav a:hover { text-decoration: underline; }
+  .chip { padding: 1px 6px; border-radius: 4px; font-size: 11px; background: #1f2730; }
+  .chip.live { color: #3fb950; }
+  .chip.stale { color: #d29922; }
+  .chip.awaiting { color: #d29922; }
+  .chip.disabled { color: #8b949e; }
 </style>
 </head>
 <body>
@@ -29,6 +34,8 @@
   <span class="stat">dim <b id="dim">-</b></span>
   <span class="stat">‖v‖ <b id="vnorm">-</b></span>
   <span class="stat">tick <b id="tick">-</b></span>
+  <span class="stat">vision <span id="visionChip" class="chip awaiting">awaiting</span></span>
+  <span class="stat">audio <span id="audioChip" class="chip awaiting">awaiting</span></span>
 </header>
 <main>
   <div class="col">
@@ -40,16 +47,17 @@
     <span id="streamWarn" style="color:#f85149; font-size:12px;"></span>
   </div>
   <div class="col">
-    <span class="label">Feature heatmap (256→16×16) — /ws vision_features</span>
+    <span class="label">Feature heatmap — /ws vision_features</span>
     <canvas id="cam" width="256" height="256"></canvas>
     <div class="legend">
       <p>Raw frame (left) is the pre-inference RGB image when the driver
-         supports it. Heatmap (above) reshapes the 256-dim feature vector
-         — warm = positive, cool = negative.</p>
+         supports it. Heatmap (above) reshapes the feature vector —
+         warm = positive, cool = negative. Auto-sized to ⌈√dim⌉ on a side.</p>
       <p><span class="dot" style="background:#3d1a1a"></span>negative
          <span class="dot" style="background:#1a1a1a"></span>zero
          <span class="dot" style="background:#d9822b"></span>positive</p>
       <p id="warn" style="color:#f85149"></p>
+      <p id="msgpackHint" style="display:none; color:#f85149"></p>
     </div>
   </div>
 </main>
@@ -66,6 +74,9 @@
   const tickEl = document.getElementById("tick");
   const warnEl = document.getElementById("warn");
   const streamEl = document.getElementById("stream");
+  const visionChip = document.getElementById("visionChip");
+  const audioChip = document.getElementById("audioChip");
+  const msgpackHintEl = document.getElementById("msgpackHint");
 
   const pageParams = new URLSearchParams(location.search);
   function authQueryString() {
@@ -95,28 +106,19 @@
   }, 1000);
 
   function colorFor(v) {
-    // v normalised to roughly [-1, 1] via tanh-ish scaling handled upstream
     const a = Math.max(-1, Math.min(1, v));
     if (a >= 0) {
       const t = a;
-      const r = Math.round(20 + 217 * t);
-      const g = Math.round(20 + 110 * t);
-      const b = Math.round(20 + 43 * t);
-      return [r, g, b];
-    } else {
-      const t = -a;
-      const r = Math.round(20 + 80 * t);
-      const g = Math.round(20 + 30 * t);
-      const b = Math.round(20 + 30 * t);
-      return [r, g, b];
+      return [Math.round(20 + 217 * t), Math.round(20 + 110 * t), Math.round(20 + 43 * t)];
     }
+    const t = -a;
+    return [Math.round(20 + 80 * t), Math.round(20 + 30 * t), Math.round(20 + 30 * t)];
   }
 
   function render(features) {
     const n = features.length;
     const side = Math.max(1, Math.round(Math.sqrt(n)));
     const cell = Math.floor(Math.min(W, H) / side);
-    // scale: divide by max-abs so pattern is visible regardless of magnitude
     let maxAbs = 1e-6;
     for (let i = 0; i < n; i++) {
       const a = Math.abs(features[i]);
@@ -140,10 +142,21 @@
     ctx.putImageData(img, 0, 0);
   }
 
+  function updateChip(el, state) {
+    if (!state) return;
+    el.textContent = state;
+    el.className = "chip " + state;
+  }
+
   function handleFrame(obj) {
     if (!obj) return;
     if (typeof obj.tick_count === "number") tickEl.textContent = obj.tick_count;
     if (typeof obj.vision_norm === "number") vnormEl.textContent = obj.vision_norm.toFixed(2);
+    const liveness = obj.sensor_liveness;
+    if (liveness && typeof liveness === "object") {
+      if (liveness.vision) updateChip(visionChip, liveness.vision.state);
+      if (liveness.audio) updateChip(audioChip, liveness.audio.state);
+    }
     const feats = obj.vision_features;
     if (Array.isArray(feats) && feats.length > 0) {
       dimEl.textContent = feats.length;
@@ -156,12 +169,27 @@
   }
 
   let ws = null, backoff = 500;
+  let ackReceived = false;
   function connect() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const url = proto + "://" + location.host + withAuth("/ws");
     wsEl.textContent = "connecting";
     ws = new WebSocket(url);
-    ws.onopen = () => { wsEl.textContent = "open"; backoff = 500; };
+    ws.binaryType = "arraybuffer";
+    ws.onopen = () => {
+      wsEl.textContent = "open";
+      backoff = 500;
+      ackReceived = false;
+      try {
+        ws.send(JSON.stringify({
+          hello: {
+            protocol_version: 1,
+            supported_serializations: ["json"],
+            preferred_serialization: "json"
+          }
+        }));
+      } catch (_) { /* ignore */ }
+    };
     ws.onclose = () => {
       wsEl.textContent = "closed";
       setTimeout(connect, backoff);
@@ -169,14 +197,24 @@
     };
     ws.onerror = () => { wsEl.textContent = "error"; };
     ws.onmessage = (ev) => {
-      // Telemetry server may use JSON or msgpack (binary). This dashboard
-      // only supports JSON; surface the unsupported mode instead of silently
-      // appearing stuck so operators can switch the server to JSON.
       if (typeof ev.data !== "string") {
-        wsEl.textContent = "binary (msgpack) — set telemetry.serialization=json";
+        const url = msgpackHintEl.dataset.url || "msgpack JS decoder";
+        msgpackHintEl.style.display = "block";
+        msgpackHintEl.textContent = "Server is sending binary (msgpack). " +
+          "Install a decoder or switch the server to JSON: " + url;
+        wsEl.textContent = "binary (msgpack)";
         return;
       }
-      try { handleFrame(JSON.parse(ev.data)); } catch (_) { /* ignore */ }
+      let obj = null;
+      try { obj = JSON.parse(ev.data); } catch (_) { return; }
+      if (!ackReceived && obj && obj.hello_ack) {
+        ackReceived = true;
+        if (obj.hello_ack.msgpack_client_lib_url) {
+          msgpackHintEl.dataset.url = obj.hello_ack.msgpack_client_lib_url;
+        }
+        return;
+      }
+      handleFrame(obj);
     };
   }
   connect();
