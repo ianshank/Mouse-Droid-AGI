@@ -430,8 +430,24 @@ class MouseDroidOrchestrator:
                 await self._task_tracker.evaluate_active(ctx)
 
             await self._hook_registry.run_phase(HookPhase.POST_TICK, ctx)
-            await self._maybe_export_memory()
-            self._maybe_reset_curiosity()
+            # Snapshot the one-shot ``mission_just_completed`` flag BEFORE
+            # any consumer reads it, then run every observer (memory
+            # exporter + curiosity reset), then clear exactly once. This
+            # avoids two bugs:
+            #   * Export running first would clear the flag in its
+            #     ``finally`` block, so curiosity reset would silently
+            #     skip every mission boundary.
+            #   * If the export gate short-circuits (e.g. memory_exporter
+            #     is None) the flag would never be cleared and curiosity
+            #     would reset on every tick after the first completion.
+            mission_completed = (
+                self._mission_dispatcher is not None
+                and self._mission_dispatcher.mission_just_completed
+            )
+            await self._maybe_export_memory(mission_completed=mission_completed)
+            self._maybe_reset_curiosity(mission_completed=mission_completed)
+            if mission_completed and self._mission_dispatcher is not None:
+                self._mission_dispatcher.clear_mission_completed()
 
             _log.debug(
                 "tick_complete",
@@ -446,7 +462,7 @@ class MouseDroidOrchestrator:
             await self._hook_registry.run_phase(HookPhase.ON_ERROR, ctx)
             raise
 
-    async def _maybe_export_memory(self) -> None:
+    async def _maybe_export_memory(self, *, mission_completed: bool) -> None:
         """Run the OpenClaw MEMORY.md exporter if all three gates pass.
 
         Gates (any failing gate makes this a no-op):
@@ -454,18 +470,25 @@ class MouseDroidOrchestrator:
         1. ``memory_exporter`` was injected (OpenClaw enabled with a
            configured ``shared_memory_path``).
         2. ``memory_tier.episodic`` is non-None (replay buffer exists).
-        3. The mission dispatcher's ``mission_just_completed`` flag is
-           set AND the tick count is a multiple of
+        3. ``mission_completed`` (caller-snapshotted) is ``True`` AND the
+           tick count is a multiple of
            ``OpenClawConfig.export_every_n_ticks``.
+
+        The caller is responsible for clearing
+        ``mission_just_completed`` exactly once after ALL observers
+        (memory exporter, curiosity reset, …) have run; this method no
+        longer touches the dispatcher's flag.
 
         Exceptions are swallowed and logged so a transient filesystem
         failure on the shared path never crashes the control loop.
+
+        Args:
+            mission_completed: Snapshot of the dispatcher's
+                ``mission_just_completed`` latch taken once per tick.
         """
+        if not mission_completed:
+            return
         if self._memory_exporter is None or self._memory_tier is None:
-            return
-        if self._mission_dispatcher is None:
-            return
-        if not self._mission_dispatcher.mission_just_completed:
             return
         if self._memory_export_every_n <= 0:
             return
@@ -482,18 +505,23 @@ class MouseDroidOrchestrator:
                 "memory_export_hook_failed",
                 error=f"{type(exc).__name__}:{exc}",
             )
-        finally:
-            self._mission_dispatcher.clear_mission_completed()
 
-    def _maybe_reset_curiosity(self) -> None:
-        """Reset curiosity accumulator at episode boundaries (mission completion)."""
-        if (
-            self._mission_dispatcher is not None
-            and self._mission_dispatcher.mission_just_completed
-            and self._curiosity_module is not None
-        ):
-            self._curiosity_module.reset_episode()
-            _log.info("curiosity_episode_reset", tick=self._tick_count)
+    def _maybe_reset_curiosity(self, *, mission_completed: bool) -> None:
+        """Reset curiosity accumulator at episode boundaries.
+
+        Args:
+            mission_completed: Snapshot of the dispatcher's
+                ``mission_just_completed`` latch from the tick's
+                centralised read so reset fires exactly once per
+                mission boundary even when the memory exporter is
+                disabled.
+        """
+        if not mission_completed:
+            return
+        if self._curiosity_module is None:
+            return
+        self._curiosity_module.reset_episode()
+        _log.info("curiosity_episode_reset", tick=self._tick_count)
 
     async def process_mission(self, nl_command: str) -> GoalVector:
         """Process a natural language mission command.
@@ -698,13 +726,16 @@ class MouseDroidOrchestrator:
 
         action_dim = int(self._cfg.model.action_dim)
         if result.action.shape != (action_dim,):
+            # Record the full tensor shape (stringified for Prometheus
+            # label-friendliness) so dashboards distinguish 0-D outputs
+            # from rank-2 outputs like ``(1, action_dim)``.
             self._failure_recorder.record(
                 "orchestrator",
                 "vla_wrong_shape",
                 level="warning",
                 extra={
-                    "expected": action_dim,
-                    "got": result.action.shape[0] if result.action.dim() > 0 else -1,
+                    "expected": str((action_dim,)),
+                    "got": str(tuple(result.action.shape)),
                 },
             )
             _log.warning(
