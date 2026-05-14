@@ -273,36 +273,36 @@ class TestLatentValidation:
 class TestCuriosityReset:
     """Orchestrator calls curiosity_module.reset_episode() on mission completion."""
 
-    def test_reset_called_on_mission_complete(self) -> None:
-        """_maybe_reset_curiosity calls reset_episode when mission_just_completed."""
+    def test_reset_called_when_caller_snapshots_completed(self) -> None:
+        """``_maybe_reset_curiosity(mission_completed=True)`` invokes reset_episode."""
         cfg = Settings(mock_hardware=True)
         spy = _SpyRecorder()
         orch = _make_orch(cfg, spy)
 
         curiosity = MagicMock()
-        mission_dispatcher = MagicMock()
-        mission_dispatcher.mission_just_completed = True
-
         orch._curiosity_module = curiosity
-        orch._mission_dispatcher = mission_dispatcher
-
-        orch._maybe_reset_curiosity()
+        # Caller is responsible for snapshotting — pass True directly.
+        orch._maybe_reset_curiosity(mission_completed=True)
 
         curiosity.reset_episode.assert_called_once()
 
-    def test_reset_not_called_when_mission_not_complete(self) -> None:
-        """_maybe_reset_curiosity does NOT reset when mission_just_completed is False."""
+    def test_reset_not_called_when_snapshot_false(self) -> None:
+        """No reset when the caller's snapshot says no mission completed this tick."""
         cfg = Settings(mock_hardware=True)
         spy = _SpyRecorder()
         orch = _make_orch(cfg, spy)
 
         curiosity = MagicMock()
-        mission_dispatcher = MagicMock()
-        mission_dispatcher.mission_just_completed = False
-
         orch._curiosity_module = curiosity
-        orch._mission_dispatcher = mission_dispatcher
-
-        orch._maybe_reset_curiosity()
+        orch._maybe_reset_curiosity(mission_completed=False)
 
         curiosity.reset_episode.assert_not_called()
+
+    def test_reset_no_op_when_curiosity_module_absent(self) -> None:
+        """Without a curiosity module the method is a no-op."""
+        cfg = Settings(mock_hardware=True)
+        spy = _SpyRecorder()
+        orch = _make_orch(cfg, spy)
+        orch._curiosity_module = None  # explicit
+        # Must not raise even with mission_completed=True.
+        orch._maybe_reset_curiosity(mission_completed=True)

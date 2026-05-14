@@ -78,7 +78,7 @@ async def test_no_op_when_exporter_missing(tmp_path: Path) -> None:
     s = _orchestrator(exporter=None, dispatcher=_dispatcher(), tier=MagicMock(episodic=_replay()))
     s._tick_count = 5  # type: ignore[attr-defined]
     s._mission_dispatcher._mission_completed = True  # type: ignore[attr-defined]
-    await s._maybe_export_memory()  # type: ignore[attr-defined]
+    await s._maybe_export_memory(mission_completed=True)  # type: ignore[attr-defined]
     assert not any(tmp_path.iterdir())
 
 
@@ -87,7 +87,8 @@ async def test_no_op_when_dispatcher_missing(tmp_path: Path) -> None:
     exporter = MarkdownReplayExporter(tmp_path / "MEMORY.md")
     s = _orchestrator(exporter=exporter, dispatcher=None, tier=MagicMock(episodic=_replay()))
     s._tick_count = 5  # type: ignore[attr-defined]
-    await s._maybe_export_memory()  # type: ignore[attr-defined]
+    # When dispatcher is None the tick-loop snapshot is False.
+    await s._maybe_export_memory(mission_completed=False)  # type: ignore[attr-defined]
     assert not (tmp_path / "MEMORY.md").exists()
 
 
@@ -95,10 +96,9 @@ async def test_no_op_when_dispatcher_missing(tmp_path: Path) -> None:
 async def test_no_op_when_mission_not_completed(tmp_path: Path) -> None:
     exporter = MarkdownReplayExporter(tmp_path / "MEMORY.md")
     dispatcher = _dispatcher()
-    # mission_just_completed defaults to False
     s = _orchestrator(exporter=exporter, dispatcher=dispatcher, tier=MagicMock(episodic=_replay()))
     s._tick_count = 5  # type: ignore[attr-defined]
-    await s._maybe_export_memory()  # type: ignore[attr-defined]
+    await s._maybe_export_memory(mission_completed=False)  # type: ignore[attr-defined]
     assert not (tmp_path / "MEMORY.md").exists()
 
 
@@ -109,26 +109,32 @@ async def test_no_op_when_off_cadence(tmp_path: Path) -> None:
     dispatcher._mission_completed = True  # type: ignore[attr-defined]
     s = _orchestrator(exporter=exporter, dispatcher=dispatcher, tier=MagicMock(episodic=_replay()))
     s._tick_count = 7  # not divisible by 5  # type: ignore[attr-defined]
-    await s._maybe_export_memory()  # type: ignore[attr-defined]
+    await s._maybe_export_memory(mission_completed=True)  # type: ignore[attr-defined]
     assert not (tmp_path / "MEMORY.md").exists()
-    # Flag stays set since the hook didn't run.
+    # Flag stays set since neither this method nor the tick-loop has
+    # cleared it yet.
     assert dispatcher.mission_just_completed is True
 
 
 @pytest.mark.asyncio
-async def test_exports_when_all_gates_pass_and_clears_flag(tmp_path: Path) -> None:
+async def test_exports_when_all_gates_pass(tmp_path: Path) -> None:
+    """When all gates pass the export runs but does NOT clear the flag.
+
+    The tick loop is now the sole owner of clearing
+    ``mission_just_completed`` — see ``MouseDroidOrchestrator.tick``.
+    """
     out_path = tmp_path / "MEMORY.md"
     exporter = MarkdownReplayExporter(out_path)
     dispatcher = _dispatcher()
     dispatcher._mission_completed = True  # type: ignore[attr-defined]
     s = _orchestrator(exporter=exporter, dispatcher=dispatcher, tier=MagicMock(episodic=_replay()))
     s._tick_count = 5  # divisible by export_every_n_ticks  # type: ignore[attr-defined]
-    await s._maybe_export_memory()  # type: ignore[attr-defined]
+    await s._maybe_export_memory(mission_completed=True)  # type: ignore[attr-defined]
     assert out_path.exists()
     body = out_path.read_text(encoding="utf-8")
     assert "## Recent experiences" in body
-    # Hook clears the flag so the next mission gets exactly one export.
-    assert dispatcher.mission_just_completed is False
+    # Flag is untouched — tick loop clears it after every observer runs.
+    assert dispatcher.mission_just_completed is True
 
 
 @pytest.mark.asyncio
@@ -150,6 +156,6 @@ async def test_exporter_failure_does_not_crash_tick(
     )
     s._tick_count = 5  # type: ignore[attr-defined]
     # Must not raise.
-    await s._maybe_export_memory()  # type: ignore[attr-defined]
-    # Flag is cleared in the finally block even on failure.
-    assert dispatcher.mission_just_completed is False
+    await s._maybe_export_memory(mission_completed=True)  # type: ignore[attr-defined]
+    # Failure is logged but the flag is left for the tick loop to clear.
+    assert dispatcher.mission_just_completed is True
