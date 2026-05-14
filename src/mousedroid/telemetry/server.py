@@ -28,7 +28,12 @@ from mousedroid.telemetry.network import (
     get_interface_ip,
     get_network_interfaces,
 )
-from mousedroid.telemetry.protocol import TelemetryFrame
+from mousedroid.telemetry.protocol import LidarRawScan, TelemetryFrame
+from mousedroid.telemetry.serialization import (
+    SerializationName,
+    build_default_ack,
+    negotiate,
+)
 
 if TYPE_CHECKING:
     from aiohttp import web
@@ -117,6 +122,7 @@ class TelemetryServer:
         mission_dispatcher: MissionDispatcherProtocol | None = None,
         openclaw_cfg: OpenClawConfig | None = None,
         failure_recorder: FailureRecorder | None = None,
+        lidar_raw_queue: asyncio.Queue[LidarRawScan] | None = None,
     ) -> None:
         """Initialise the telemetry server.
 
@@ -156,6 +162,12 @@ class TelemetryServer:
             failure_recorder: Optional :class:`FailureRecorder` for recording
                 bind failures and auth rejections as Prometheus metrics.
                 Defaults to a no-op when ``None``.
+            lidar_raw_queue: Optional ``asyncio.Queue[LidarRawScan]``
+                produced by the publisher's raw-LiDAR channel. When
+                supplied, the server spawns an additional broadcast
+                loop that fans scans out to ``/ws/v1/lidar/raw``
+                subscribers; otherwise the endpoint returns close-code
+                4404.
         """
         from mousedroid.telemetry.failure_recorder import NullFailureRecorder
 
@@ -174,6 +186,8 @@ class TelemetryServer:
         self._raw_frame_interval_s = 1.0 / max(0.1, raw_frame_hz)
         self._cloud_enabled = cloud_enabled
         self._reported_frame_drops = 0
+        # PR #4: separate publisher counter for raw LiDAR drops.
+        self._reported_lidar_raw_drops = 0
 
         self._mission_dispatcher = mission_dispatcher
         self._openclaw_cfg = openclaw_cfg
@@ -202,13 +216,24 @@ class TelemetryServer:
         self._mission_inflight: dict[str, asyncio.Future[tuple[int, dict[str, Any]]]] = {}
 
         self._ws_clients: list[web.WebSocketResponse] = []
+        # PR #4: per-client serialization choice (defaults to cfg.serialization)
+        # filled in by the optional hello-negotiation handshake.
+        self._ws_serializations: dict[int, SerializationName] = {}
+        # PR #4: separate broadcast list for /ws/v1/lidar/raw clients.
+        self._lidar_ws_clients: list[web.WebSocketResponse] = []
+        self._lidar_ws_serializations: dict[int, SerializationName] = {}
+        self._lidar_raw_queue: asyncio.Queue[LidarRawScan] | None = lidar_raw_queue
         self._latest_frame: TelemetryFrame | None = None
+        self._latest_lidar_raw: LidarRawScan | None = None
         self._running = False
         self._broadcast_task: asyncio.Task[None] | None = None
+        self._lidar_raw_broadcast_task: asyncio.Task[None] | None = None
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._runner: web.AppRunner | None = None
         self._zeroconf: Any = None
         self._service_info: Any = None
+        self._mdns_registered_event: asyncio.Event = asyncio.Event()
+        self._mdns_ok: bool = False
         self._bound_port: int = self._cfg.port
 
         if self._metrics is not None:
@@ -333,8 +358,43 @@ class TelemetryServer:
             name=self._broadcast_loop.__name__,
         )
 
+        # PR #4: spawn the raw LiDAR fan-out loop when a queue is wired.
+        if self._lidar_raw_queue is not None:
+            self._lidar_raw_broadcast_task = spawn_tracked(
+                self._background_tasks,
+                self._lidar_raw_broadcast_loop(),
+                name=self._lidar_raw_broadcast_loop.__name__,
+            )
+
+        if self._metrics is not None:
+            self._metrics.set_bound_port(self._bound_port)
+
         if self._cfg.mdns_enabled:
-            await self._register_mdns()
+            # PR #4: bounded-wait mDNS registration. The thread-pool
+            # call is launched in the background; we wait at most
+            # ``mdns_register_timeout_s`` for the event to fire so a
+            # slow / hung Zeroconf install can't stall startup.
+            mdns_task = asyncio.create_task(self._register_mdns(), name="telemetry_mdns_register")
+            self._background_tasks.add(mdns_task)
+            mdns_task.add_done_callback(self._background_tasks.discard)
+            try:
+                await asyncio.wait_for(
+                    self._mdns_registered_event.wait(),
+                    timeout=self._cfg.mdns_register_timeout_s,
+                )
+            except asyncio.TimeoutError:
+                self._failure_recorder.record(
+                    "telemetry",
+                    "mdns_register_timeout",
+                    level="warning",
+                    extra={"timeout_s": self._cfg.mdns_register_timeout_s},
+                )
+                _log.warning(
+                    "telemetry_mdns_register_timeout",
+                    timeout_s=self._cfg.mdns_register_timeout_s,
+                )
+                if self._metrics is not None:
+                    self._metrics.set_mdns_registered(self._cfg.mdns_service_name, ok=False)
 
         _log.info(
             "telemetry_server_started",
@@ -360,6 +420,18 @@ class TelemetryServer:
         for ws in list(self._ws_clients):
             await ws.close()
         self._ws_clients.clear()
+        self._ws_serializations.clear()
+
+        for ws in list(self._lidar_ws_clients):
+            await ws.close()
+        self._lidar_ws_clients.clear()
+        self._lidar_ws_serializations.clear()
+
+        if self._lidar_raw_broadcast_task is not None and not self._lidar_raw_broadcast_task.done():
+            self._lidar_raw_broadcast_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._lidar_raw_broadcast_task
+        self._lidar_raw_broadcast_task = None
 
         if self._cfg.mdns_enabled:
             await self._unregister_mdns()
@@ -399,6 +471,9 @@ class TelemetryServer:
         if self._mission_route_enabled:
             app.router.add_post(f"{prefix}/mission", self._handle_mission_post)
         app.router.add_get(self._cfg.ws_path, self._handle_ws)
+        # PR #4: live raw LiDAR streaming. Registered unconditionally —
+        # if no publisher wired a raw queue, the handler returns 503.
+        app.router.add_get(self._cfg.lidar_raw_ws_path, self._handle_lidar_raw_ws)
         app.router.add_get(f"{prefix}/logs/stream", self._handle_log_stream)
         app.router.add_get("/lidar", self._handle_lidar_page)
         app.router.add_get("/camera", self._handle_camera_page)
@@ -950,6 +1025,13 @@ class TelemetryServer:
     async def _handle_ws(self, request: web.Request) -> web.WebSocketResponse:
         """WebSocket handler — stream TelemetryFrames to connected clients.
 
+        Optionally honours a single ``hello`` negotiation message at
+        connect time. If the client sends one within
+        ``ws_handshake_timeout_s`` the chosen serialization overrides
+        ``TelemetryConfig.serialization`` for that connection only.
+        Otherwise the server falls back to the configured serialization
+        — keeping legacy clients working byte-identically.
+
         Args:
             request: The incoming WebSocket upgrade request.
 
@@ -969,19 +1051,163 @@ class TelemetryServer:
         ws = web.WebSocketResponse()
         await ws.prepare(request)
 
+        # Register the client BEFORE negotiation so:
+        #   1. max_clients enforcement counts in-flight handshakes.
+        #   2. legacy tests that assert ``server.client_count == 1``
+        #      immediately after ``ws_connect`` still pass.
+        # The broadcast loop reads ``_ws_serializations`` with a default,
+        # so frames are still sent (in server-default serialization)
+        # if the broadcast fires before negotiation completes.
         self._ws_clients.append(ws)
         peer = request.remote or "unknown"
         _log.info("telemetry_ws_client_connected", peer=peer, total=len(self._ws_clients))
 
         try:
+            chosen = await self._negotiate_ws(ws)
+            self._ws_serializations[id(ws)] = chosen
+            _log.info(
+                "telemetry_ws_serialization_set",
+                peer=peer,
+                serialization=chosen,
+            )
             async for msg in ws:
                 if msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                     break
         finally:
             if ws in self._ws_clients:
                 self._ws_clients.remove(ws)
+            self._ws_serializations.pop(id(ws), None)
             _log.info("telemetry_ws_client_disconnected", peer=peer, total=len(self._ws_clients))
 
+        return ws
+
+    async def _negotiate_ws(self, ws: web.WebSocketResponse) -> SerializationName:
+        """Read an optional client hello and pick a serialization.
+
+        Listens for at most one message within
+        ``TelemetryConfig.ws_handshake_timeout_s``. The message must be
+        a JSON-encoded ``hello`` object (see :mod:`telemetry.serialization`).
+
+        Any failure mode — timeout, unparseable payload, schema
+        violation — falls back to the server-configured serialization
+        and emits a structured log so operators can tell why a
+        dashboard appears stuck on the wrong format.
+
+        Args:
+            ws: The accepted WebSocket response.
+
+        Returns:
+            The serialization to use for outbound frames on this
+            connection.
+        """
+        from aiohttp import WSMsgType
+
+        server_choice: SerializationName = (
+            "msgpack" if self._cfg.serialization == "msgpack" else "json"
+        )
+        try:
+            raw = await asyncio.wait_for(
+                ws.receive(),
+                timeout=self._cfg.ws_handshake_timeout_s,
+            )
+        except asyncio.TimeoutError:
+            # No hello within window — keep server default. This is the
+            # normal path for legacy dashboards that never negotiate.
+            ack = build_default_ack(
+                serialization=server_choice,
+                protocol_version=self._cfg.ws_protocol_version,
+            )
+            with contextlib.suppress(ConnectionResetError, RuntimeError):
+                await ws.send_json(ack)
+            return server_choice
+
+        if raw.type != WSMsgType.TEXT:
+            # Binary or close before hello — fall back silently. We can
+            # still try to send an ack but most non-text first messages
+            # mean the peer doesn't speak our protocol.
+            return server_choice
+
+        try:
+            payload = json.loads(raw.data)
+        except (TypeError, ValueError):
+            _log.warning(
+                "telemetry_ws_negotiation_failed",
+                reason="invalid_hello",
+                detail="malformed JSON",
+            )
+            return server_choice
+
+        result = negotiate(
+            payload,
+            server_serialization=server_choice,
+            server_protocol_version=self._cfg.ws_protocol_version,
+            msgpack_client_lib_url=self._cfg.msgpack_client_lib_url,
+        )
+        with contextlib.suppress(ConnectionResetError, RuntimeError):
+            await ws.send_json(result.ack_payload)
+        if not result.ok:
+            self._failure_recorder.record(
+                "telemetry",
+                "ws_negotiation_failed",
+                level="warning",
+                extra={"reason": result.reason or "unknown"},
+            )
+        return result.serialization
+
+    async def _handle_lidar_raw_ws(self, request: web.Request) -> web.WebSocketResponse:
+        """WebSocket handler — stream raw LiDAR scans.
+
+        Returns HTTP-style WebSocket close code ``4404`` when the
+        publisher did not wire a raw queue (so this endpoint is
+        unavailable for the current deployment).
+
+        Args:
+            request: The incoming WebSocket upgrade request.
+
+        Returns:
+            The WebSocket response.
+        """
+        from aiohttp import WSMsgType, web
+
+        if self._lidar_raw_queue is None:
+            resp = web.WebSocketResponse()
+            await resp.prepare(request)
+            await resp.close(code=4404, message=b"lidar_raw_unavailable")
+            return resp
+        if len(self._lidar_ws_clients) >= self._cfg.max_clients:
+            resp = web.WebSocketResponse()
+            await resp.prepare(request)
+            await resp.close(code=4029, message=b"max_clients_reached")
+            return resp
+
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+
+        # See ``_handle_ws`` for the rationale — register first, then
+        # negotiate, so max_clients accounting and synchronous-client
+        # assertions both work.
+        self._lidar_ws_clients.append(ws)
+        peer = request.remote or "unknown"
+        _log.info(
+            "telemetry_lidar_ws_client_connected",
+            peer=peer,
+            total=len(self._lidar_ws_clients),
+        )
+        try:
+            chosen = await self._negotiate_ws(ws)
+            self._lidar_ws_serializations[id(ws)] = chosen
+            async for msg in ws:
+                if msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
+                    break
+        finally:
+            if ws in self._lidar_ws_clients:
+                self._lidar_ws_clients.remove(ws)
+            self._lidar_ws_serializations.pop(id(ws), None)
+            _log.info(
+                "telemetry_lidar_ws_client_disconnected",
+                peer=peer,
+                total=len(self._lidar_ws_clients),
+            )
         return ws
 
     async def _handle_log_stream(self, request: web.Request) -> web.WebSocketResponse:
@@ -1087,6 +1313,15 @@ class TelemetryServer:
                         self._metrics.set_lidar_min_distance_m(frame.lidar_min_dist_m)
                     self._metrics.set_lidar_scan_points(frame.lidar_n_points)
 
+            # PR #4: surface per-sensor liveness via the live gauge so
+            # operators can alert on stale sensors directly from Prom.
+            if self._metrics is not None and frame.sensor_liveness:
+                liveness_states = {
+                    sensor: str(payload.get("state", "awaiting"))
+                    for sensor, payload in frame.sensor_liveness.items()
+                }
+                self._metrics.set_sensor_liveness(liveness_states)
+
             dead_clients: list[web.WebSocketResponse] = []
             send_tasks = []
 
@@ -1094,7 +1329,11 @@ class TelemetryServer:
                 if ws.closed:
                     dead_clients.append(ws)
                     continue
-                if self._cfg.serialization == "msgpack":
+                serialization = self._ws_serializations.get(
+                    id(ws),
+                    "msgpack" if self._cfg.serialization == "msgpack" else "json",
+                )
+                if serialization == "msgpack":
                     send_tasks.append(self._send_msgpack(ws, data))
                 else:
                     send_tasks.append(self._send_json(ws, data))
@@ -1105,6 +1344,60 @@ class TelemetryServer:
             for ws in dead_clients:
                 if ws in self._ws_clients:
                     self._ws_clients.remove(ws)
+                self._ws_serializations.pop(id(ws), None)
+
+    async def _lidar_raw_broadcast_loop(self) -> None:
+        """Fan-out raw LiDAR scans to ``/ws/v1/lidar/raw`` clients.
+
+        Runs only when the publisher provided a raw queue (otherwise the
+        task is not started). Mirrors the main broadcast loop's
+        per-client serialization, dead-client pruning, and metrics
+        updates — but for the raw scan stream.
+        """
+        if self._lidar_raw_queue is None:
+            return
+        while self._running:
+            try:
+                scan = await asyncio.wait_for(
+                    self._lidar_raw_queue.get(),
+                    timeout=TELEMETRY_QUEUE_TIMEOUT_S,
+                )
+            except asyncio.TimeoutError:
+                continue
+
+            self._latest_lidar_raw = scan
+            data = scan.to_dict()
+            if self._metrics is not None:
+                self._metrics.inc_lidar_raw_published()
+
+            dead_clients: list[web.WebSocketResponse] = []
+            send_tasks = []
+            for ws in self._lidar_ws_clients:
+                if ws.closed:
+                    dead_clients.append(ws)
+                    continue
+                serialization = self._lidar_ws_serializations.get(
+                    id(ws),
+                    "msgpack" if self._cfg.serialization == "msgpack" else "json",
+                )
+                if serialization == "msgpack":
+                    send_tasks.append(self._send_msgpack(ws, data))
+                else:
+                    send_tasks.append(self._send_json(ws, data))
+            if send_tasks:
+                await asyncio.gather(*send_tasks, return_exceptions=True)
+            for ws in dead_clients:
+                if ws in self._lidar_ws_clients:
+                    self._lidar_ws_clients.remove(ws)
+                self._lidar_ws_serializations.pop(id(ws), None)
+
+            # Publisher drop counter -> metrics (mirrors publisher.stats).
+            if self._metrics is not None and self._publisher is not None:
+                dropped_total = self._publisher.stats.get("lidar_raw_dropped", 0)
+                delta = dropped_total - self._reported_lidar_raw_drops
+                if delta > 0:
+                    self._metrics.inc_lidar_raw_dropped(delta)
+                    self._reported_lidar_raw_drops = dropped_total
 
     def _sync_publisher_metrics(self) -> None:
         """Synchronise publisher-owned stats into the metrics registry."""
@@ -1148,7 +1441,17 @@ class TelemetryServer:
     # ------------------------------------------------------------------
 
     async def _register_mdns(self) -> None:
-        """Register telemetry service via Zeroconf for LAN discovery."""
+        """Register telemetry service via Zeroconf for LAN discovery.
+
+        PR #4: set ``_mdns_registered_event`` whether the call succeeds
+        or fails so ``start()`` can stop awaiting and continue startup
+        on a bounded timeline. Outcomes are also reflected in:
+
+        * ``telemetry_mdns_registered{service=...}`` Prometheus gauge.
+        * ``FailureRecorder.record(subsystem="telemetry",
+          reason="mdns_register_failed")`` on exceptions.
+        """
+        ok = False
         try:
             from zeroconf import ServiceInfo, Zeroconf
 
@@ -1177,6 +1480,7 @@ class TelemetryServer:
                 self._zeroconf.register_service,
                 self._service_info,
             )
+            ok = True
             _log.info(
                 "telemetry_mdns_registered",
                 service_name=self._cfg.mdns_service_name,
@@ -1186,7 +1490,18 @@ class TelemetryServer:
         except ImportError:
             _log.warning("telemetry_mdns_zeroconf_not_installed")
         except Exception as exc:
+            self._failure_recorder.record(
+                "telemetry",
+                "mdns_register_failed",
+                level="warning",
+                extra={"error": type(exc).__name__},
+            )
             _log.warning("telemetry_mdns_registration_failed", error=str(exc))
+        finally:
+            self._mdns_ok = ok
+            if self._metrics is not None:
+                self._metrics.set_mdns_registered(self._cfg.mdns_service_name, ok=ok)
+            self._mdns_registered_event.set()
 
     async def _unregister_mdns(self) -> None:
         """Unregister mDNS service."""
