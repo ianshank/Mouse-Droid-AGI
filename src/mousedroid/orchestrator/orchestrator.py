@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections import deque
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -231,6 +232,10 @@ class MouseDroidOrchestrator:
         self._h = torch.zeros(1, _combined_hidden_dim)
         self._z = torch.zeros(1, cfg.model.latent_dim)
         self._prev_action = torch.zeros(1, cfg.model.action_dim)
+        # Rolling buffer of (h, z) tuples for latent NaN recovery.
+        self._latent_buffer: deque[tuple[torch.Tensor, torch.Tensor]] = deque(
+            maxlen=cfg.model.latent_recovery_buffer_size
+        )
 
     async def start(self) -> None:
         """Start all subsystems."""
@@ -393,7 +398,28 @@ class MouseDroidOrchestrator:
                 await self._task_tracker.evaluate_active(ctx)
 
             await self._hook_registry.run_phase(HookPhase.POST_TICK, ctx)
-            await self._maybe_export_memory()
+            # Snapshot AND clear the one-shot ``mission_just_completed``
+            # flag atomically (between awaits) BEFORE any observer runs.
+            # This avoids three bugs:
+            #   * Export running first would clear the flag in its
+            #     ``finally`` block, so curiosity reset would silently
+            #     skip every mission boundary.
+            #   * If the export gate short-circuits (e.g. memory_exporter
+            #     is None) the flag would never be cleared and curiosity
+            #     would reset on every tick after the first completion.
+            #   * Clearing AFTER the export ``await`` would race with a
+            #     new mission completing during the I/O window — the
+            #     post-await clear would wipe the freshly-latched flag.
+            #     By clearing before any await, any completion that lands
+            #     during export remains latched for the next tick.
+            mission_completed = (
+                self._mission_dispatcher is not None
+                and self._mission_dispatcher.mission_just_completed
+            )
+            if mission_completed and self._mission_dispatcher is not None:
+                self._mission_dispatcher.clear_mission_completed()
+            await self._maybe_export_memory(mission_completed=mission_completed)
+            self._maybe_reset_curiosity(mission_completed=mission_completed)
 
             _log.debug(
                 "tick_complete",
@@ -408,7 +434,7 @@ class MouseDroidOrchestrator:
             await self._hook_registry.run_phase(HookPhase.ON_ERROR, ctx)
             raise
 
-    async def _maybe_export_memory(self) -> None:
+    async def _maybe_export_memory(self, *, mission_completed: bool) -> None:
         """Run the OpenClaw MEMORY.md exporter if all three gates pass.
 
         Gates (any failing gate makes this a no-op):
@@ -416,18 +442,25 @@ class MouseDroidOrchestrator:
         1. ``memory_exporter`` was injected (OpenClaw enabled with a
            configured ``shared_memory_path``).
         2. ``memory_tier.episodic`` is non-None (replay buffer exists).
-        3. The mission dispatcher's ``mission_just_completed`` flag is
-           set AND the tick count is a multiple of
+        3. ``mission_completed`` (caller-snapshotted) is ``True`` AND the
+           tick count is a multiple of
            ``OpenClawConfig.export_every_n_ticks``.
+
+        The caller is responsible for clearing
+        ``mission_just_completed`` exactly once after ALL observers
+        (memory exporter, curiosity reset, …) have run; this method no
+        longer touches the dispatcher's flag.
 
         Exceptions are swallowed and logged so a transient filesystem
         failure on the shared path never crashes the control loop.
+
+        Args:
+            mission_completed: Snapshot of the dispatcher's
+                ``mission_just_completed`` latch taken once per tick.
         """
+        if not mission_completed:
+            return
         if self._memory_exporter is None or self._memory_tier is None:
-            return
-        if self._mission_dispatcher is None:
-            return
-        if not self._mission_dispatcher.mission_just_completed:
             return
         if self._memory_export_every_n <= 0:
             return
@@ -444,8 +477,23 @@ class MouseDroidOrchestrator:
                 "memory_export_hook_failed",
                 error=f"{type(exc).__name__}:{exc}",
             )
-        finally:
-            self._mission_dispatcher.clear_mission_completed()
+
+    def _maybe_reset_curiosity(self, *, mission_completed: bool) -> None:
+        """Reset curiosity accumulator at episode boundaries.
+
+        Args:
+            mission_completed: Snapshot of the dispatcher's
+                ``mission_just_completed`` latch from the tick's
+                centralised read so reset fires exactly once per
+                mission boundary even when the memory exporter is
+                disabled.
+        """
+        if not mission_completed:
+            return
+        if self._curiosity_module is None:
+            return
+        self._curiosity_module.reset_episode()
+        _log.info("curiosity_episode_reset", tick=self._tick_count)
 
     async def process_mission(self, nl_command: str) -> GoalVector:
         """Process a natural language mission command.
@@ -511,6 +559,68 @@ class MouseDroidOrchestrator:
                 self._h,
                 self._z,
             )
+        self._h, self._z = self._validate_latent(self._h, self._z)
+
+    def _validate_latent(
+        self,
+        h: torch.Tensor,
+        z: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Check latent state for NaN / saturation; recover from buffer on NaN.
+
+        Performance: three independent scalars (NaN-in-h, NaN-in-z,
+        h-norm) are computed on-device, stacked into a single rank-1
+        tensor, and read back with one ``.tolist()`` call. This collapses
+        three GPU→CPU syncs down to one on the 30 Hz hot path. Addresses
+        review comments on GPU synchronization overhead.
+
+        Args:
+            h: Hidden state tensor from ``observe_step``.
+            z: Latent state tensor from ``observe_step``.
+
+        Returns:
+            ``(h, z)`` — possibly replaced by the last known-good values when
+            NaN is detected and the recovery buffer is non-empty.
+        """
+        # Single GPU→CPU sync covering all three diagnostics. ``stack``
+        # forces consistent dtype/device so ``.tolist()`` returns Python
+        # floats in one round-trip.
+        diagnostics = torch.stack(
+            [
+                torch.isnan(h).any().to(torch.float32),
+                torch.isnan(z).any().to(torch.float32),
+                torch.linalg.norm(h.float()),
+            ]
+        )
+        nan_h_float, nan_z_float, h_norm = diagnostics.tolist()
+        has_nan = bool(nan_h_float) or bool(nan_z_float)
+
+        if has_nan:
+            self._failure_recorder.record(
+                "world_model",
+                "latent_nan",
+                level="critical",
+                extra={"tick": self._tick_count},
+            )
+            _log.critical("world_model_latent_nan", tick=self._tick_count)
+            if self._latent_buffer:
+                h_last, z_last = self._latent_buffer[-1]
+                _log.info("world_model_latent_recovered", tick=self._tick_count)
+                return h_last.clone(), z_last.clone()
+            _log.critical("world_model_latent_unrecoverable", tick=self._tick_count)
+            return h, z
+
+        if h_norm > self._cfg.model.latent_norm_threshold:
+            self._failure_recorder.record(
+                "world_model",
+                "latent_saturated",
+                level="warning",
+                extra={"h_norm": round(h_norm, 3)},
+            )
+            _log.warning("world_model_latent_saturated", h_norm=h_norm)
+
+        self._latent_buffer.append((h.clone(), z.clone()))
+        return h, z
 
     def _select_action(
         self,
@@ -583,12 +693,26 @@ class MouseDroidOrchestrator:
         try:
             with torch.no_grad():
                 result = self._vla_policy.predict(VLAObservation(h=self._h, z=self._z))
-        except Exception:  # never let VLA crash the loop
+        except Exception as exc:  # never let VLA crash the loop
+            # Surface the exception type so dashboards can distinguish
+            # CUDA-OOM from logic errors at a glance (Gemini review).
+            self._failure_recorder.record(
+                "orchestrator",
+                "vla_exception",
+                level="warning",
+                extra={"error": type(exc).__name__},
+            )
             _log.warning("vla_predict_failed", policy=self._vla_policy.name, exc_info=True)
             return None
 
         elapsed = self._clock.monotonic() - start
         if elapsed > budget:
+            self._failure_recorder.record(
+                "orchestrator",
+                "vla_timeout",
+                level="warning",
+                extra={"elapsed_s": round(elapsed, 4), "budget_s": round(budget, 4)},
+            )
             _log.warning(
                 "vla_inference_timeout",
                 policy=self._vla_policy.name,
@@ -599,6 +723,18 @@ class MouseDroidOrchestrator:
 
         action_dim = int(self._cfg.model.action_dim)
         if result.action.shape != (action_dim,):
+            # Record the full tensor shape (stringified for Prometheus
+            # label-friendliness) so dashboards distinguish 0-D outputs
+            # from rank-2 outputs like ``(1, action_dim)``.
+            self._failure_recorder.record(
+                "orchestrator",
+                "vla_wrong_shape",
+                level="warning",
+                extra={
+                    "expected": str((action_dim,)),
+                    "got": str(tuple(result.action.shape)),
+                },
+            )
             _log.warning(
                 "vla_action_shape_mismatch",
                 policy=self._vla_policy.name,
@@ -659,6 +795,14 @@ class MouseDroidOrchestrator:
 
             return self._normalize_cognitive_action(action_np)
         except Exception as e:  # pylint: disable=broad-except
+            # Surface the exception type so dashboards can distinguish
+            # the failure mode (Gemini review).
+            self._failure_recorder.record(
+                "orchestrator",
+                "cognitive_core_exception",
+                level="warning",
+                extra={"error": type(e).__name__},
+            )
             _log.warning(
                 "cognitive_core_action_selection_failed",
                 error=str(e),
