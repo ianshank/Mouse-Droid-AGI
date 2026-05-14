@@ -1060,6 +1060,18 @@ class ModelConfig(BaseModel):
     intention_classes: int = Field(10, gt=0, description="BDI intention classes")
     affect_dim: int = Field(2, gt=0, description="BDI affect dim (valence, arousal)")
 
+    # Latent state health monitoring
+    latent_norm_threshold: float = Field(
+        50.0,
+        gt=0.0,
+        description="h-state L2 norm above this value triggers a latent_saturated warning",
+    )
+    latent_recovery_buffer_size: int = Field(
+        5,
+        gt=0,
+        description="Number of recent valid (h, z) pairs kept for NaN recovery",
+    )
+
     # CfC liquid neural network stream (Dual-Stream RSSM)
     cfc_hidden_dim: int = Field(0, ge=0, description="CfC stream hidden dim (0=disabled, pure GRU)")
     cfc_backbone_units: int = Field(64, gt=0, description="CfC backbone MLP hidden units")
