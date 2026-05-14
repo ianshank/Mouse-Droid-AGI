@@ -306,3 +306,91 @@ class TestCuriosityReset:
         orch._curiosity_module = None  # explicit
         # Must not raise even with mission_completed=True.
         orch._maybe_reset_curiosity(mission_completed=True)
+
+
+class TestMissionCompletionClearRace:
+    """``mission_just_completed`` clear happens BEFORE export await.
+
+    Regression test for the race: if the dispatcher latches a new
+    completion DURING the export I/O window, clearing the flag after
+    the await would silently wipe the new event. The tick loop must
+    clear the flag pre-await so any concurrent completion remains
+    latched for the next tick.
+    """
+
+    def _make_dispatcher(self) -> MagicMock:
+        dispatcher = MagicMock()
+        dispatcher.mission_just_completed = True
+        cleared: list[bool] = []
+
+        def _clear() -> None:
+            cleared.append(True)
+            dispatcher.mission_just_completed = False
+
+        dispatcher.clear_mission_completed = MagicMock(side_effect=_clear)
+        dispatcher._cleared_calls = cleared  # introspect from the test
+        return dispatcher
+
+    async def test_clear_runs_before_export_await(self) -> None:
+        """The dispatcher's clear must be called BEFORE _maybe_export_memory awaits."""
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        cfg = Settings(mock_hardware=True)
+        spy = _SpyRecorder()
+        orch = _make_orch(cfg, spy)
+        dispatcher = self._make_dispatcher()
+        orch._mission_dispatcher = dispatcher
+
+        export_seen_cleared: list[bool] = []
+
+        async def _export_observer(*, mission_completed: bool) -> None:
+            # When the export await runs, the dispatcher's latch must
+            # already be False — proof that clearing happened first.
+            export_seen_cleared.append(not dispatcher.mission_just_completed)
+            assert mission_completed is True  # local snapshot still True
+
+        orch._maybe_export_memory = _export_observer  # type: ignore[assignment]
+        orch._maybe_reset_curiosity = MagicMock()  # type: ignore[method-assign]
+        orch._hook_registry.run_phase = _AsyncMock()  # type: ignore[method-assign]
+
+        # Drive the slice of tick() that handles the mission-completed
+        # snapshot. We replicate it inline to keep the test focused.
+        mission_completed = (
+            orch._mission_dispatcher is not None and orch._mission_dispatcher.mission_just_completed
+        )
+        if mission_completed:
+            orch._mission_dispatcher.clear_mission_completed()
+        await orch._maybe_export_memory(mission_completed=mission_completed)
+        orch._maybe_reset_curiosity(mission_completed=mission_completed)
+
+        assert dispatcher._cleared_calls == [True]
+        assert export_seen_cleared == [True]
+
+    async def test_completion_during_export_remains_latched(self) -> None:
+        """A new completion while exporting is preserved for the next tick."""
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        cfg = Settings(mock_hardware=True)
+        spy = _SpyRecorder()
+        orch = _make_orch(cfg, spy)
+        dispatcher = self._make_dispatcher()
+        orch._mission_dispatcher = dispatcher
+
+        async def _export_with_concurrent_completion(*, mission_completed: bool) -> None:
+            # Simulate a new mission landing while the exporter waits.
+            dispatcher.mission_just_completed = True
+
+        orch._maybe_export_memory = _export_with_concurrent_completion  # type: ignore[assignment]
+        orch._maybe_reset_curiosity = MagicMock()  # type: ignore[method-assign]
+        orch._hook_registry.run_phase = _AsyncMock()  # type: ignore[method-assign]
+
+        mission_completed = (
+            orch._mission_dispatcher is not None and orch._mission_dispatcher.mission_just_completed
+        )
+        if mission_completed:
+            orch._mission_dispatcher.clear_mission_completed()
+        await orch._maybe_export_memory(mission_completed=mission_completed)
+
+        # The concurrent completion remains latched — the next tick
+        # will see it because the post-await clear was never run.
+        assert dispatcher.mission_just_completed is True

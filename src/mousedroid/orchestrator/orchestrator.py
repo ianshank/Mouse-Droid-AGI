@@ -398,24 +398,28 @@ class MouseDroidOrchestrator:
                 await self._task_tracker.evaluate_active(ctx)
 
             await self._hook_registry.run_phase(HookPhase.POST_TICK, ctx)
-            # Snapshot the one-shot ``mission_just_completed`` flag BEFORE
-            # any consumer reads it, then run every observer (memory
-            # exporter + curiosity reset), then clear exactly once. This
-            # avoids two bugs:
+            # Snapshot AND clear the one-shot ``mission_just_completed``
+            # flag atomically (between awaits) BEFORE any observer runs.
+            # This avoids three bugs:
             #   * Export running first would clear the flag in its
             #     ``finally`` block, so curiosity reset would silently
             #     skip every mission boundary.
             #   * If the export gate short-circuits (e.g. memory_exporter
             #     is None) the flag would never be cleared and curiosity
             #     would reset on every tick after the first completion.
+            #   * Clearing AFTER the export ``await`` would race with a
+            #     new mission completing during the I/O window — the
+            #     post-await clear would wipe the freshly-latched flag.
+            #     By clearing before any await, any completion that lands
+            #     during export remains latched for the next tick.
             mission_completed = (
                 self._mission_dispatcher is not None
                 and self._mission_dispatcher.mission_just_completed
             )
-            await self._maybe_export_memory(mission_completed=mission_completed)
-            self._maybe_reset_curiosity(mission_completed=mission_completed)
             if mission_completed and self._mission_dispatcher is not None:
                 self._mission_dispatcher.clear_mission_completed()
+            await self._maybe_export_memory(mission_completed=mission_completed)
+            self._maybe_reset_curiosity(mission_completed=mission_completed)
 
             _log.debug(
                 "tick_complete",
