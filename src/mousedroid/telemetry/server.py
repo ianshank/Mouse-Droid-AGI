@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from mousedroid.hardware.protocols import RawFrameSourceProtocol
     from mousedroid.health.monitor import HealthMonitor
     from mousedroid.orchestrator.mission_dispatcher import MissionDispatcherProtocol
+    from mousedroid.telemetry.failure_recorder import FailureRecorder
     from mousedroid.telemetry.log_buffer import LogRingBuffer
     from mousedroid.telemetry.metrics import MetricsRegistry
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol
@@ -115,6 +116,7 @@ class TelemetryServer:
         cloud_enabled: bool = False,
         mission_dispatcher: MissionDispatcherProtocol | None = None,
         openclaw_cfg: OpenClawConfig | None = None,
+        failure_recorder: FailureRecorder | None = None,
     ) -> None:
         """Initialise the telemetry server.
 
@@ -151,7 +153,15 @@ class TelemetryServer:
             openclaw_cfg: Optional :class:`OpenClawConfig`. When supplied
                 and ``enabled=True``, gates registration of the mission
                 endpoint and supplies its rate-limit / dedup parameters.
+            failure_recorder: Optional :class:`FailureRecorder` for recording
+                bind failures and auth rejections as Prometheus metrics.
+                Defaults to a no-op when ``None``.
         """
+        from mousedroid.telemetry.failure_recorder import NullFailureRecorder
+
+        self._failure_recorder: FailureRecorder = (
+            failure_recorder if failure_recorder is not None else NullFailureRecorder()
+        )
         self._cfg = cfg
         self._queue = telemetry_queue
         self._health_monitor = health_monitor
@@ -199,13 +209,20 @@ class TelemetryServer:
         self._runner: web.AppRunner | None = None
         self._zeroconf: Any = None
         self._service_info: Any = None
+        self._bound_port: int = self._cfg.port
 
         if self._metrics is not None:
             self._metrics.set_publish_hz(self._cfg.publish_hz)
 
     async def start(self) -> None:
-        """Start the aiohttp server and background broadcast loop."""
+        """Start the aiohttp server and background broadcast loop.
+
+        Raises:
+            TelemetryUnavailableError: When all candidate ports are exhausted.
+        """
         from aiohttp import web
+
+        from mousedroid.telemetry.exceptions import TelemetryUnavailableError
 
         app = web.Application(middlewares=self._build_middlewares())
         self._register_routes(app)
@@ -213,8 +230,101 @@ class TelemetryServer:
         self._runner = web.AppRunner(app)
         await self._runner.setup()
 
-        site = web.TCPSite(self._runner, self._cfg.host, self._cfg.port)
-        await site.start()
+        strategy = self._cfg.port_discovery_strategy
+        if strategy == "kernel_assigned":
+            # Wrap in try/except OSError to match the ``fixed`` and
+            # ``fallback_range`` strategies — an invalid host or
+            # system-wide port exhaustion would otherwise raise a raw
+            # OSError that bypasses the orchestrator's
+            # TelemetryUnavailableError degradation handler. Addresses
+            # PR #78 review (Gemini high + Copilot).
+            try:
+                site = web.TCPSite(self._runner, self._cfg.host, 0)
+                await site.start()
+            except OSError as exc:
+                self._failure_recorder.record(
+                    "telemetry",
+                    "bind_failed",
+                    level="error",
+                    extra={"strategy": strategy, "host": self._cfg.host},
+                )
+                raise TelemetryUnavailableError(
+                    f"telemetry: kernel_assigned bind on {self._cfg.host}:0 failed: {exc}"
+                ) from exc
+            # Read the actual OS-assigned port from the underlying socket.
+            # ``site._server`` is typed Optional[asyncio.AbstractServer] in
+            # aiohttp's stubs, but only the concrete asyncio.Server has
+            # ``.sockets``. Using ``getattr`` with a default keeps both
+            # old mypy (would flag union-attr) and new mypy (would flag
+            # an unused ``# type: ignore``) happy without sacrificing
+            # the runtime contract.
+            sockets = getattr(site._server, "sockets", None)
+            self._bound_port = sockets[0].getsockname()[1] if sockets else self._cfg.port
+            _log.info(
+                "telemetry_port_bound",
+                strategy=strategy,
+                host=self._cfg.host,
+                port=self._bound_port,
+            )
+        elif strategy == "fallback_range":
+            max_attempts = self._cfg.port_discovery_max_attempts
+            bound = False
+            for offset in range(max_attempts):
+                candidate = self._cfg.port + offset
+                _log.info(
+                    "telemetry_port_bind_attempt",
+                    strategy=strategy,
+                    host=self._cfg.host,
+                    port=candidate,
+                    attempt=offset + 1,
+                    max_attempts=max_attempts,
+                )
+                try:
+                    site = web.TCPSite(self._runner, self._cfg.host, candidate)
+                    await site.start()
+                    self._bound_port = candidate
+                    bound = True
+                    _log.info(
+                        "telemetry_port_bound",
+                        strategy=strategy,
+                        host=self._cfg.host,
+                        port=candidate,
+                    )
+                    break
+                except OSError:
+                    continue
+            if not bound:
+                self._failure_recorder.record(
+                    "telemetry",
+                    "bind_exhausted",
+                    level="error",
+                    extra={"port_start": self._cfg.port, "attempts": max_attempts},
+                )
+                raise TelemetryUnavailableError(
+                    f"telemetry: all {max_attempts} candidate ports starting at "
+                    f"{self._cfg.port} are in use on {self._cfg.host}"
+                )
+        else:  # "fixed"
+            try:
+                site = web.TCPSite(self._runner, self._cfg.host, self._cfg.port)
+                await site.start()
+                self._bound_port = self._cfg.port
+                _log.info(
+                    "telemetry_port_bound",
+                    strategy=strategy,
+                    host=self._cfg.host,
+                    port=self._bound_port,
+                )
+            except OSError as exc:
+                self._failure_recorder.record(
+                    "telemetry",
+                    "bind_failed",
+                    level="error",
+                    extra={"port": self._cfg.port},
+                )
+                raise TelemetryUnavailableError(
+                    f"telemetry: cannot bind to {self._cfg.host}:{self._cfg.port}: {exc}"
+                ) from exc
 
         self._running = True
         self._broadcast_task = spawn_tracked(
@@ -229,7 +339,7 @@ class TelemetryServer:
         _log.info(
             "telemetry_server_started",
             host=self._cfg.host,
-            port=self._cfg.port,
+            port=self._bound_port,
         )
 
     async def stop(self) -> None:
@@ -339,7 +449,7 @@ class TelemetryServer:
 
         # Bearer token auth takes priority if configured
         if auth_cfg is not None and auth_cfg.auth_enabled:
-            middlewares.append(build_bearer_auth_middleware(auth_cfg))
+            middlewares.append(build_bearer_auth_middleware(auth_cfg, self._failure_recorder))
         elif api_key is not None:
             # Legacy X-API-Key auth for backwards compatibility
             @web.middleware  # type: ignore[misc,untyped-decorator,unused-ignore]
@@ -1056,7 +1166,7 @@ class TelemetryServer:
                 type_=MDNS_SERVICE_TYPE,
                 name=f"{self._cfg.mdns_service_name}.{MDNS_SERVICE_TYPE}",
                 addresses=[packed_ip],
-                port=self._cfg.port,
+                port=self._bound_port,
                 properties={
                     "path": self._cfg.ws_path,
                     "api": self._cfg.api_prefix,
@@ -1071,7 +1181,7 @@ class TelemetryServer:
                 "telemetry_mdns_registered",
                 service_name=self._cfg.mdns_service_name,
                 ip=ip,
-                port=self._cfg.port,
+                port=self._bound_port,
             )
         except ImportError:
             _log.warning("telemetry_mdns_zeroconf_not_installed")

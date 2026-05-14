@@ -59,6 +59,7 @@ if TYPE_CHECKING:
     from mousedroid.reward.protocol import RewardModelProtocol
     from mousedroid.sensing.manager import SensorManager
     from mousedroid.sim.protocols import RoverEnvProtocol
+    from mousedroid.telemetry.failure_recorder import FailureRecorder
     from mousedroid.telemetry.log_buffer import LogRingBuffer
     from mousedroid.telemetry.metrics import MetricsRegistry
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
@@ -715,6 +716,34 @@ def build_metrics_registry(cfg: Settings) -> MetricsRegistry | None:
     return MetricsRegistry(cfg.metrics)
 
 
+def build_failure_recorder(
+    cfg: Settings,
+    metrics: MetricsRegistry | None = None,
+) -> FailureRecorder:
+    """Build a failure recorder wired to the given metrics registry.
+
+    Returns a :class:`~mousedroid.telemetry.failure_recorder.PrometheusFailureRecorder`
+    when *metrics* is non-None (telemetry enabled), otherwise a
+    :class:`~mousedroid.telemetry.failure_recorder.NullFailureRecorder`.
+
+    Args:
+        cfg: Root settings (reserved for future per-subsystem gating).
+        metrics: Shared metrics registry, or ``None`` when telemetry is
+            disabled.  Pass the result of :func:`build_metrics_registry`.
+
+    Returns:
+        A ``FailureRecorder`` implementation appropriate for the environment.
+    """
+    from mousedroid.telemetry.failure_recorder import NullFailureRecorder, PrometheusFailureRecorder
+
+    if metrics is not None:
+        _log.debug("failure_recorder_built", backend="prometheus")
+        return PrometheusFailureRecorder(metrics)
+
+    _log.debug("failure_recorder_built", backend="null")
+    return NullFailureRecorder()
+
+
 def build_safety_monitor(cfg: Settings) -> SafetyMonitorProtocol:
     """Build safety monitor for configured platform.
 
@@ -902,6 +931,20 @@ def build_telemetry_server(
         _log.info("telemetry_mock_server_built")
         return MockTelemetryServer()
 
+    # D4: validate bearer token is present in env when auth is enabled.
+    auth_cfg = cfg.telemetry.auth
+    if auth_cfg is not None and auth_cfg.auth_enabled:
+        import os
+
+        from mousedroid.telemetry.exceptions import TelemetryConfigError
+
+        token = os.environ.get(auth_cfg.token_env_var, "")
+        if not token:
+            raise TelemetryConfigError(
+                f"telemetry auth_enabled=True but ${auth_cfg.token_env_var} is unset or empty; "
+                "export the token or set auth_enabled=False"
+            )
+
     shared_metrics_registry = metrics_registry
     metrics_path = cfg.metrics.path
     telemetry_metrics_path_default = type(cfg.telemetry).model_fields["metrics_path"].default
@@ -928,6 +971,7 @@ def build_telemetry_server(
         port=cfg.telemetry.port,
         raw_frame_source=raw_frame_source is not None,
     )
+    failure_recorder = build_failure_recorder(cfg, shared_metrics_registry)
     return TelemetryServer(
         cfg=cfg.telemetry,
         telemetry_queue=publisher.get_queue(),
@@ -942,6 +986,7 @@ def build_telemetry_server(
         cloud_enabled=cfg.gcp is not None,
         mission_dispatcher=mission_dispatcher,
         openclaw_cfg=cfg.openclaw,
+        failure_recorder=failure_recorder,
     )
 
 
@@ -1862,6 +1907,7 @@ def build_orchestrator(cfg: Settings) -> object:
         log_buffer = _LogRingBuffer(buffer_size)
 
     metrics_registry = build_metrics_registry(cfg)
+    failure_recorder = build_failure_recorder(cfg, metrics_registry)
 
     # Shared prompt-injection filter — reused by the LLM gateway and the
     # OpenClaw mission dispatcher so REST + MCP + LLM ingress share one
@@ -2008,6 +2054,7 @@ def build_orchestrator(cfg: Settings) -> object:
         skill_delegator=skill_delegator,
         memory_exporter=memory_exporter,
         mission_dispatcher=mission_dispatcher,
+        failure_recorder=failure_recorder,
     )
     # Bind the deferred orchestrator reference so the OpenClaw mission
     # dispatcher (built before the orchestrator above) can route through

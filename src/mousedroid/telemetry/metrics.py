@@ -114,6 +114,29 @@ class _DoubleLabeledCounter:
             self._values.clear()
 
 
+class _TripleLabeledCounter:
+    """Counter keyed by a triple of string label values (e.g. subsystem, reason, level)."""
+
+    __slots__ = ("_lock", "_values")
+
+    def __init__(self) -> None:
+        self._values: dict[tuple[str, str, str], int] = {}
+        self._lock = threading.Lock()
+
+    def inc(self, label_a: str, label_b: str, label_c: str, amount: int = 1) -> None:
+        with self._lock:
+            key = (label_a, label_b, label_c)
+            self._values[key] = self._values.get(key, 0) + amount
+
+    def snapshot(self) -> dict[tuple[str, str, str], int]:
+        with self._lock:
+            return dict(self._values)
+
+    def reset(self) -> None:
+        with self._lock:
+            self._values.clear()
+
+
 class _Gauge:
     """Thread-safe Prometheus Gauge (set to any float)."""
 
@@ -259,6 +282,26 @@ def _render_double_labeled_counter(
     return lines
 
 
+def _render_triple_labeled_counter(
+    name: str,
+    help_text: str,
+    label_a: str,
+    label_b: str,
+    label_c: str,
+    values: dict[tuple[str, str, str], int],
+) -> list[str]:
+    lines = [
+        f"# HELP {name}_total {_escape_help_text(help_text)}",
+        f"# TYPE {name}_total counter",
+    ]
+    for (val_a, val_b, val_c), count in sorted(values.items()):
+        ea = _escape_label_value(val_a)
+        eb = _escape_label_value(val_b)
+        ec = _escape_label_value(val_c)
+        lines.append(f'{name}_total{{{label_a}="{ea}",{label_b}="{eb}",{label_c}="{ec}"}} {count}')
+    return lines
+
+
 def _render_gauge(name: str, help_text: str, value: float) -> list[str]:
     lines = [
         f"# HELP {name} {_escape_help_text(help_text)}",
@@ -365,6 +408,9 @@ class MetricsRegistry:
         # Labeled counters (Phase 7)
         self._voice_events = _LabeledCounter()
 
+        # Cross-cutting subsystem failure counter (FailureRecorder)
+        self._subsystem_failures = _TripleLabeledCounter()
+
         # Histogram (loop latency) — sort and guarantee +Inf sentinel
         raw_buckets = sorted(cfg.loop_latency_buckets_ms)
         if not raw_buckets or raw_buckets[-1] != float("inf"):
@@ -411,6 +457,7 @@ class MetricsRegistry:
         self._name_semantic_size = f"{ns}_memory_semantic_size"
         self._name_working_size = f"{ns}_memory_working_size"
         self._name_voice_events = f"{ns}_voice_events"
+        self._name_subsystem_failures = f"{ns}_subsystem_failures"
         self._name_llm_latency_ms = f"{ns}_llm_latency_ms"
         self._name_llm_requests = f"{ns}_llm_requests"
         self._name_curiosity_reward = f"{ns}_curiosity_intrinsic_reward"
@@ -534,6 +581,26 @@ class MetricsRegistry:
         """
         if self._cfg.track_voice_events:
             self._voice_events.inc(event_type)
+
+    def inc_subsystem_failure(
+        self,
+        subsystem: str,
+        reason: str,
+        level: str = "warning",
+        amount: int = 1,
+    ) -> None:
+        """Increment the cross-cutting subsystem failure counter.
+
+        Always recorded regardless of config toggles — failure observability
+        should never be silenced by configuration.
+
+        Args:
+            subsystem: Logical subsystem name (e.g. ``"voice"``, ``"telemetry"``).
+            reason: Machine-readable failure reason (e.g. ``"device_disconnected"``).
+            level: Severity level string (``"warning"``, ``"error"``, ``"critical"``).
+            amount: Increment amount (default 1).
+        """
+        self._subsystem_failures.inc(subsystem, reason, level, amount)
 
     def set_llm_latency_ms(self, value: float) -> None:
         """Set the last LLM mission parse latency in milliseconds."""
@@ -1033,6 +1100,20 @@ class MetricsRegistry:
                     )
                 )
 
+        # Subsystem failures — always emitted regardless of config toggles
+        failure_snapshot = self._subsystem_failures.snapshot()
+        if failure_snapshot:
+            sections.append(
+                _render_triple_labeled_counter(
+                    self._name_subsystem_failures,
+                    "Subsystem failure events (labels: subsystem, reason, level)",
+                    "subsystem",
+                    "reason",
+                    "level",
+                    failure_snapshot,
+                )
+            )
+
         sections.append(
             _render_gauge(
                 self._name_publish_hz,
@@ -1073,5 +1154,7 @@ def generate_metrics_sample() -> str:
     registry.set_lidar_sectors([0.9, 0.4, 1.0, 1.0, 0.7, 1.0, 1.0, 0.2], max_range_m=12.0)
     registry.set_lidar_min_distance_m(2.4)
     registry.set_lidar_scan_points(456)
+    registry.inc_subsystem_failure("voice", "device_disconnected", "error")
+    registry.inc_subsystem_failure("telemetry", "bind_exhausted", "warning")
 
     return registry.render_prometheus()
