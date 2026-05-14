@@ -235,7 +235,13 @@ class TelemetryServer:
             site = web.TCPSite(self._runner, self._cfg.host, 0)
             await site.start()
             # Read the actual OS-assigned port from the underlying socket.
-            sockets = site._server.sockets  # type: ignore[union-attr]
+            # ``site._server`` is typed Optional[asyncio.AbstractServer] in
+            # aiohttp's stubs, but only the concrete asyncio.Server has
+            # ``.sockets``. Using ``getattr`` with a default keeps both
+            # old mypy (would flag union-attr) and new mypy (would flag
+            # an unused ``# type: ignore``) happy without sacrificing
+            # the runtime contract.
+            sockets = getattr(site._server, "sockets", None)
             self._bound_port = sockets[0].getsockname()[1] if sockets else self._cfg.port
             _log.info(
                 "telemetry_port_bound",
