@@ -200,5 +200,3 @@ mcp_token
 *.mcp_token
 mcp_sessions/
 mcp_transcripts/
-
-%SystemDrive%/
