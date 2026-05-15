@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import random
-import time
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import TYPE_CHECKING
@@ -17,12 +16,15 @@ from typing import TYPE_CHECKING
 import numpy as np
 from numpy.typing import NDArray
 
+from mousedroid.common.rate_limit import TokenBucket
+from mousedroid.common.time.protocol import RealClock
 from mousedroid.logging.setup import get_logger
 from mousedroid.telemetry.failure_recorder import NullFailureRecorder
 from mousedroid.voice.exceptions import SpeakerUnavailableError
 from mousedroid.voice.phrase_bank import DEFAULT_PHRASES
 
 if TYPE_CHECKING:
+    from mousedroid.common.time.protocol import ClockProtocol
     from mousedroid.config.schema import VoiceConfig
     from mousedroid.hardware.protocols import SpeakerProtocol
     from mousedroid.telemetry.failure_recorder import FailureRecorder
@@ -138,37 +140,6 @@ def rocky_transform(
     return transformed
 
 
-@dataclass
-class _TokenBucket:
-    """Simple monotonic token bucket for rate limiting.
-
-    Each call to :meth:`consume` refills the bucket based on elapsed time
-    since the previous call (up to ``capacity``), then attempts to consume
-    one token. Returns ``True`` when a token was available, ``False`` when
-    the bucket is empty.
-    """
-
-    capacity: int
-    refill_rate: float
-    _tokens: float = field(init=False)
-    _last_refill: float = field(init=False)
-
-    def __post_init__(self) -> None:
-        self._tokens = float(self.capacity)
-        self._last_refill = time.monotonic()
-
-    def consume(self) -> bool:
-        """Try to consume one token, refilling first based on elapsed time."""
-        now = time.monotonic()
-        elapsed = now - self._last_refill
-        self._tokens = min(float(self.capacity), self._tokens + elapsed * self.refill_rate)
-        self._last_refill = now
-        if self._tokens >= 1.0:
-            self._tokens -= 1.0
-            return True
-        return False
-
-
 class RockyVoiceEngine:
     """Rocky-personality voice engine for the Mouse Droid.
 
@@ -184,6 +155,7 @@ class RockyVoiceEngine:
         speaker: SpeakerProtocol,
         tts: PiperTTS | MockTTS,
         failure_recorder: FailureRecorder | None = None,
+        clock: ClockProtocol | None = None,
     ) -> None:
         """Initialise the Rocky voice engine.
 
@@ -195,6 +167,11 @@ class RockyVoiceEngine:
                 report dropped events (rate-limit or cooldown). Defaults to
                 :class:`NullFailureRecorder` (no-op) so unit tests and
                 offline contexts work without telemetry wiring.
+            clock: Optional :class:`ClockProtocol` for cooldown and
+                rate-limit time. Defaults to :class:`RealClock`
+                (production); inject :class:`MockClock` in tests to
+                drive simulated time without wall-clock waits. Addresses
+                Gemini high-priority review (PR #76).
         """
         from mousedroid.config.schema import SpeakerConfig
 
@@ -208,6 +185,7 @@ class RockyVoiceEngine:
             _cfg_attr if isinstance(_cfg_attr, SpeakerConfig) else SpeakerConfig.model_validate({})
         )
         self._failure_recorder: FailureRecorder = failure_recorder or NullFailureRecorder()
+        self._clock: ClockProtocol = clock if clock is not None else RealClock()
         self._queue: asyncio.PriorityQueue[SpeechRequest] = asyncio.PriorityQueue(
             maxsize=cfg.queue_size,
         )
@@ -222,15 +200,20 @@ class RockyVoiceEngine:
         self._running = False
 
         # One token bucket per non-emergency priority class. Emergency events
-        # are never rate-limited so they don't appear here.
-        self._buckets: dict[Priority, _TokenBucket] = {
-            Priority.HIGH: _TokenBucket(
-                capacity=cfg.token_bucket_capacity,
-                refill_rate=cfg.token_bucket_refill_rate,
+        # are never rate-limited so they don't appear here. Uses the shared
+        # ``TokenBucket`` from ``mousedroid.common.rate_limit`` (DRY — also
+        # used by the MCP and REST control planes) with the engine's clock
+        # injected so test runs are deterministic.
+        self._buckets: dict[Priority, TokenBucket] = {
+            Priority.HIGH: TokenBucket(
+                rate_per_s=cfg.token_bucket_refill_rate,
+                capacity=float(cfg.token_bucket_capacity),
+                clock=self._clock,
             ),
-            Priority.NORMAL: _TokenBucket(
-                capacity=cfg.token_bucket_capacity,
-                refill_rate=cfg.token_bucket_refill_rate,
+            Priority.NORMAL: TokenBucket(
+                rate_per_s=cfg.token_bucket_refill_rate,
+                capacity=float(cfg.token_bucket_capacity),
+                clock=self._clock,
             ),
         }
 
@@ -276,6 +259,8 @@ class RockyVoiceEngine:
             _log.debug("rocky_voice_no_phrases_for_event", voice_event=event)
             return
 
+        # Phrase selection is for personality, not security — random.choice
+        # is fine here. S311 flags non-crypto random for sensitive contexts.
         text = random.choice(phrases)  # noqa: S311
 
         # Apply Rocky personality transform using context intensity
@@ -320,7 +305,7 @@ class RockyVoiceEngine:
                 if has_per_event
                 else self._last_speak_time
             )
-            elapsed = time.monotonic() - last
+            elapsed = self._clock.monotonic() - last
             if elapsed < cooldown_s:
                 self._record_drop(
                     event=event,
@@ -335,7 +320,8 @@ class RockyVoiceEngine:
 
             # Token-bucket backpressure gate (per priority class).
             bucket = self._buckets[priority]
-            if not bucket.consume():
+            taken, _retry_hint_s = await bucket.take()
+            if not taken:
                 self._record_drop(
                     event=event,
                     reason="event_dropped_rate_limit",
@@ -345,7 +331,7 @@ class RockyVoiceEngine:
 
         request = SpeechRequest(
             priority=-priority,  # Negate so higher priority sorts first
-            timestamp=time.monotonic(),
+            timestamp=self._clock.monotonic(),
             text=text,
         )
 
@@ -353,7 +339,7 @@ class RockyVoiceEngine:
         # events in the same cooldown window are suppressed even if the
         # worker hasn't drained the queue yet.
         if priority != Priority.EMERGENCY:
-            now = time.monotonic()
+            now = self._clock.monotonic()
             if event in self._cfg.cooldown_per_event:
                 self._last_speak_time_per_event[event] = now
             else:

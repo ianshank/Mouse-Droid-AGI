@@ -18,11 +18,13 @@ from dataclasses import dataclass, field
 
 import pytest
 
+from mousedroid.common.rate_limit import TokenBucket
+from mousedroid.common.time.protocol import MockClock
 from mousedroid.config.schema import SpeakerConfig, VoiceConfig
 from mousedroid.hardware.audio.mock_speaker import MockSpeaker
 from mousedroid.telemetry.failure_recorder import SeverityLevel
 from mousedroid.voice.mock_tts import MockTTS
-from mousedroid.voice.rocky import RockyVoiceEngine, _TokenBucket
+from mousedroid.voice.rocky import RockyVoiceEngine
 
 
 @dataclass
@@ -97,36 +99,56 @@ def _make_engine(
 
 
 class TestTokenBucket:
-    def test_consumes_until_empty(self) -> None:
-        bucket = _TokenBucket(capacity=3, refill_rate=0.0)
-        assert bucket.consume()
-        assert bucket.consume()
-        assert bucket.consume()
-        assert not bucket.consume()
+    """Verify the shared :class:`TokenBucket` from ``mousedroid.common.rate_limit``.
 
-    def test_refills_over_time(self) -> None:
-        bucket = _TokenBucket(capacity=2, refill_rate=1000.0)
-        assert bucket.consume()
-        assert bucket.consume()
-        # Drain to empty by forcing _last_refill so we can verify refill math
-        # without sleeping in tests.
-        bucket._tokens = 0.0
-        # Backdate last_refill by ~10 ms; with 1000 tok/s that's >= 1 token.
-        import time as _time
+    PR #76 follow-up: the voice engine used to have a redundant
+    ``_TokenBucket``. It now shares :class:`TokenBucket` with the
+    MCP and REST control planes, with :class:`ClockProtocol` injected
+    so tests can drive time deterministically (no wall-clock waits).
+    Addresses Gemini medium DRY review on PR #76.
+    """
 
-        bucket._last_refill = _time.monotonic() - 0.01
-        assert bucket.consume()
+    async def test_consumes_until_empty(self) -> None:
+        clock = MockClock(start=0.0)
+        bucket = TokenBucket(rate_per_s=0.0, capacity=3.0, clock=clock)
+        taken1, _ = await bucket.take()
+        taken2, _ = await bucket.take()
+        taken3, _ = await bucket.take()
+        taken4, _ = await bucket.take()
+        assert taken1
+        assert taken2
+        assert taken3
+        assert not taken4
 
-    def test_capped_at_capacity(self) -> None:
-        bucket = _TokenBucket(capacity=2, refill_rate=1000.0)
-        # Force a huge elapsed-time interval and ensure tokens cap at capacity.
-        import time as _time
+    async def test_refills_over_time(self) -> None:
+        clock = MockClock(start=0.0)
+        bucket = TokenBucket(rate_per_s=1000.0, capacity=2.0, clock=clock)
+        taken1, _ = await bucket.take()
+        taken2, _ = await bucket.take()
+        taken3, _ = await bucket.take()
+        assert taken1
+        assert taken2
+        assert not taken3  # exhausted at capacity=2
+        # Advance simulated time by 10 ms — at 1000 tok/s that's >= 1 token.
+        clock._now = 0.01  # type: ignore[attr-defined]
+        taken4, _ = await bucket.take()
+        assert taken4
 
-        bucket._tokens = 0.0
-        bucket._last_refill = _time.monotonic() - 10.0
-        assert bucket.consume()  # one consumed
-        assert bucket.consume()  # another consumed -- capacity was 2
-        assert not bucket.consume()
+    async def test_capped_at_capacity(self) -> None:
+        clock = MockClock(start=0.0)
+        bucket = TokenBucket(rate_per_s=1000.0, capacity=2.0, clock=clock)
+        # Drain initial 2 tokens, then jump simulated time 10 s ahead;
+        # refill would mathematically add 10 000 tokens but the cap
+        # holds at 2 — so we should get exactly 2 takes, then a drop.
+        await bucket.take()
+        await bucket.take()
+        clock._now = 10.0  # type: ignore[attr-defined]
+        taken1, _ = await bucket.take()
+        taken2, _ = await bucket.take()
+        taken3, _ = await bucket.take()
+        assert taken1
+        assert taken2
+        assert not taken3
 
 
 # ---------------------------------------------------------------------------
