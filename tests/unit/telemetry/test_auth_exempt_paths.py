@@ -67,6 +67,21 @@ class TestExemptPathValidator:
         cfg = TelemetryAuthConfig(exempt_paths=[])
         assert cfg.exempt_paths == []
 
+    def test_rejects_trailing_slash_on_nonroot_path(self) -> None:
+        """``/health/`` is rejected — segment-exact matching means it != ``/health``."""
+        with pytest.raises(ValidationError, match="trailing slash"):
+            TelemetryAuthConfig(exempt_paths=["/health/"])
+
+    def test_root_path_with_only_slash_is_accepted(self) -> None:
+        """Root ``/`` is allowed (it IS just a single slash, not a trailing one)."""
+        cfg = TelemetryAuthConfig(exempt_paths=["/"])
+        assert cfg.exempt_paths == ["/"]
+
+    def test_rejects_empty_segment(self) -> None:
+        """Paths with ``//`` (empty segments) are rejected as ambiguous."""
+        with pytest.raises(ValidationError, match="empty segment"):
+            TelemetryAuthConfig(exempt_paths=["/api//v1"])
+
 
 # ---------------------------------------------------------------------------
 # Middleware prefix-collision safety — via build_bearer_auth_middleware

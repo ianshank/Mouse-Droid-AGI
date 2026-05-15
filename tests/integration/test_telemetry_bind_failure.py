@@ -99,6 +99,27 @@ async def test_kernel_assigned_always_succeeds() -> None:
 
 
 @pytest.mark.slow
+async def test_kernel_assigned_invalid_host_raises_telemetry_unavailable() -> None:
+    """An invalid bind host on ``kernel_assigned`` surfaces TelemetryUnavailableError.
+
+    Regression for the PR #78 Gemini/Copilot review: previously the
+    strategy lacked a try/except around ``site.start()``, so an invalid
+    host raised a raw OSError that bypassed the orchestrator's
+    degradation handler.
+    """
+    cfg = TelemetryConfig(
+        enabled=True,
+        host="256.256.256.256",  # syntactically valid but unbindable
+        port=8080,
+        port_discovery_strategy="kernel_assigned",
+        mdns_enabled=False,
+    )
+    server = _make_server(cfg)
+    with pytest.raises(TelemetryUnavailableError):
+        await server.start()
+
+
+@pytest.mark.slow
 async def test_orchestrator_continues_when_bind_fails() -> None:
     """Orchestrator-like code that catches TelemetryUnavailableError keeps running."""
     sock, port = _occupy_port()
