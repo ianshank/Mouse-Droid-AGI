@@ -266,6 +266,34 @@ asyncio.run(main())'
             "${PY_WRAPPER}" -c "${LLM_PROBE}"
 fi
 
+# --- Stage 15: New features probes (Phase B) ------------------------------
+# Exercises operator-observable surfaces introduced by PRs #75-#82 that the
+# 14-stage smoke does NOT cover (lidar raw WS, sensor liveness, port
+# discovery, mDNS readiness, hello negotiation, voice event fairness,
+# orchestrator FailureRecorder, ClockProtocol, dashboard data flow, logs WS).
+# Blocking by default — a green Phase A with a red Phase B should NOT
+# advance the deployment SHA bump.
+#
+# When Phase A already failed we still record an explicit SKIPPED entry
+# so the SUMMARY has a Phase B row instead of looking like "the stage
+# never existed" — operators triaging a partial failure need to see the
+# stage is intentionally not run (Copilot review on PR #83).
+mkdir -p "${RUN_DIR}/new_features"
+if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
+    run_stage "new_features" "yes" 240 \
+        env \
+            MOUSEDROID_SMOKE_CONTAINER="${CONTAINER}" \
+            MOUSEDROID_PROBE_REPORT_DIR="${RUN_DIR}/new_features" \
+            bash scripts/jetson_new_features_probe.sh
+else
+    {
+        echo "SKIPPED: Phase B was not run because Phase A failed earlier."
+        echo "Re-run scripts/jetson_full_smoke_run.sh after fixing the blocking"
+        echo "stage(s) above. Phase B requires a healthy app_health + llm_probe."
+    } > "${RUN_DIR}/new_features.log"
+    record "new_features" "SKIPPED" "Phase A failed; see preceding stages"
+fi
+
 # --- Summary -------------------------------------------------------------
 
 # Enrich notes for the voice stage so the precise reason for any failure is
