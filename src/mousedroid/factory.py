@@ -925,11 +925,18 @@ def build_telemetry_server(
     if not cfg.telemetry.enabled or publisher is None:
         return None
 
+    # PR #4: when mock_hardware is on, prefer building the real
+    # aiohttp server bound to localhost so the dashboard is exercisable
+    # end-to-end without rover hardware. ``force_real_server=True``
+    # (legacy override) still wins. ``mock_force_real_when_enabled=False``
+    # restores the no-op MockTelemetryServer for tests that prefer it.
     if cfg.mock_hardware and not cfg.telemetry.force_real_server:
-        from mousedroid.telemetry.mock_server import MockTelemetryServer
+        if not cfg.telemetry.mock_force_real_when_enabled:
+            from mousedroid.telemetry.mock_server import MockTelemetryServer
 
-        _log.info("telemetry_mock_server_built")
-        return MockTelemetryServer()
+            _log.info("telemetry_mock_server_built")
+            return MockTelemetryServer()
+        _log.info("telemetry_real_server_in_mock_mode")
 
     # D4: validate bearer token is present in env when auth is enabled.
     auth_cfg = cfg.telemetry.auth
@@ -972,6 +979,13 @@ def build_telemetry_server(
         raw_frame_source=raw_frame_source is not None,
     )
     failure_recorder = build_failure_recorder(cfg, shared_metrics_registry)
+    # PR #4: wire the raw LiDAR queue when the publisher exposes one.
+    # Older custom publishers without ``get_lidar_raw_queue`` keep
+    # working — the server simply registers the raw route as 503.
+    lidar_raw_queue = None
+    get_raw_queue = getattr(publisher, "get_lidar_raw_queue", None)
+    if callable(get_raw_queue):
+        lidar_raw_queue = get_raw_queue()
     return TelemetryServer(
         cfg=cfg.telemetry,
         telemetry_queue=publisher.get_queue(),
@@ -987,7 +1001,42 @@ def build_telemetry_server(
         mission_dispatcher=mission_dispatcher,
         openclaw_cfg=cfg.openclaw,
         failure_recorder=failure_recorder,
+        lidar_raw_queue=lidar_raw_queue,
     )
+
+
+def build_mock_telemetry_source(
+    cfg: Settings,
+    publisher: TelemetryPublisherProtocol | None,
+) -> Any:
+    """Build a ``MockTelemetrySource`` when running in mock mode.
+
+    Returns ``None`` when the source is disabled or when no publisher
+    is available. The returned object exposes ``start()`` / ``stop()``
+    coroutines so the orchestrator can manage its lifecycle alongside
+    the telemetry server.
+
+    Args:
+        cfg: Root settings.
+        publisher: Telemetry publisher to push synthetic payloads into.
+
+    Returns:
+        A ``MockTelemetrySource`` instance, or ``None`` if disabled.
+    """
+    if not cfg.mock_hardware:
+        return None
+    if not cfg.telemetry.enabled:
+        return None
+    if publisher is None:
+        return None
+    if not cfg.telemetry.mock_telemetry_source_enabled:
+        return None
+
+    from mousedroid.telemetry.mock_source import MockTelemetrySource
+
+    source = MockTelemetrySource(cfg.telemetry, publisher)
+    _log.info("mock_telemetry_source_built")
+    return source
 
 
 def build_mcp_server(
@@ -1898,6 +1947,33 @@ def build_orchestrator(cfg: Settings) -> object:
     telemetry_publisher = build_telemetry_publisher(cfg)
     health_monitor = build_health_monitor(cfg)
 
+    # PR #4: per-sensor liveness tracker — declared once at build time
+    # so the orchestrator can attach a four-state liveness map
+    # (disabled / awaiting / live / stale) to every telemetry frame.
+    # Disabled when telemetry itself is off (no consumers).
+    liveness_tracker = None
+    if cfg.telemetry.enabled:
+        from mousedroid.telemetry.sensor_liveness import SensorLivenessTracker
+
+        liveness_tracker = SensorLivenessTracker(
+            stale_s=cfg.telemetry.sensor_liveness_stale_s,
+        )
+        liveness_tracker.register("lidar", enabled=lidar_driver is not None)
+        liveness_tracker.register("vision", enabled=camera is not None)
+        liveness_tracker.register("audio", enabled=microphone is not None)
+        liveness_tracker.register("motor", enabled=True)
+        _log.info(
+            "sensor_liveness_tracker_built",
+            stale_s=cfg.telemetry.sensor_liveness_stale_s,
+            lidar_enabled=lidar_driver is not None,
+            vision_enabled=camera is not None,
+            audio_enabled=microphone is not None,
+        )
+
+    # PR #4: synthetic telemetry source for mock_hardware mode (None in
+    # production). Lifecycle is owned by the orchestrator.
+    mock_telemetry_source = build_mock_telemetry_source(cfg, telemetry_publisher)
+
     # Optional log ring buffer for telemetry log streaming
     from mousedroid.telemetry.log_buffer import LogRingBuffer as _LogRingBuffer
 
@@ -2055,6 +2131,8 @@ def build_orchestrator(cfg: Settings) -> object:
         memory_exporter=memory_exporter,
         mission_dispatcher=mission_dispatcher,
         failure_recorder=failure_recorder,
+        liveness_tracker=liveness_tracker,
+        mock_telemetry_source=mock_telemetry_source,
     )
     # Bind the deferred orchestrator reference so the OpenClaw mission
     # dispatcher (built before the orchestrator above) can route through

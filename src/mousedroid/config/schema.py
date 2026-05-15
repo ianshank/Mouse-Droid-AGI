@@ -807,7 +807,7 @@ class LoopConfig(BaseModel):
         import re
 
         if not re.fullmatch(r"^[A-Za-z0-9._/\-:]+$", v):
-            msg = f"path {v!r} contains shell-unsafe characters; " f"allowed: [A-Za-z0-9._/-:]"
+            msg = f"path {v!r} contains shell-unsafe characters; allowed: [A-Za-z0-9._/-:]"
             raise ValueError(msg)
         return v
 
@@ -1566,7 +1566,7 @@ class TelemetryConfig(BaseModel):
         gt=0,
         le=100,
         description=(
-            "Number of consecutive ports to try when " "port_discovery_strategy='fallback_range'."
+            "Number of consecutive ports to try when port_discovery_strategy='fallback_range'."
         ),
     )
     preferred_interface: str | None = Field(
@@ -1611,6 +1611,112 @@ class TelemetryConfig(BaseModel):
     auth: TelemetryAuthConfig | None = Field(
         None,
         description="Bearer token authentication config (None=disabled)",
+    )
+
+    # ------------------------------------------------------------------
+    # PR #4: live streaming, mock visibility, serialization negotiation,
+    # mDNS readiness, and sensor-liveness fields. All optional, all with
+    # safe defaults so existing YAML files load unchanged.
+    # ------------------------------------------------------------------
+    lidar_raw_publish_hz: float = Field(
+        5.0,
+        gt=0,
+        le=30,
+        description=(
+            "Target broadcast rate (Hz) for the /ws/v1/lidar/raw WebSocket "
+            "stream. The LD19 driver runs at ~10 Hz natively; this rate "
+            "downsamples on the server side before fan-out to clients."
+        ),
+    )
+    lidar_raw_queue_size: int = Field(
+        16,
+        gt=0,
+        le=1024,
+        description=(
+            "Internal queue depth for raw LiDAR scan publishing. When the "
+            "queue is full new scans are dropped (non-blocking) to keep the "
+            "control loop responsive."
+        ),
+    )
+    lidar_raw_ws_path: str = Field(
+        "/ws/v1/lidar/raw",
+        description=(
+            "WebSocket path for the raw LiDAR scan stream. Versioned so "
+            "future protocol breaks land on /ws/v2/* without breaking "
+            "existing dashboards."
+        ),
+    )
+    mock_force_real_when_enabled: bool = Field(
+        True,
+        description=(
+            "When True (default) and mock_hardware=True, the factory still "
+            "builds the real aiohttp TelemetryServer on localhost instead of "
+            "the no-op MockTelemetryServer so the dashboard can be exercised "
+            "locally. Existing tests that construct MockTelemetryServer "
+            "directly remain unaffected; the legacy force_real_server flag "
+            "still wins when set explicitly."
+        ),
+    )
+    mock_telemetry_source_enabled: bool = Field(
+        True,
+        description=(
+            "When True and mock_hardware=True, factory wires a "
+            "MockTelemetrySource that synthesises plausible scan + camera "
+            "data into the publisher so the dashboard renders meaningful "
+            "patterns without a real rover attached."
+        ),
+    )
+    msgpack_client_lib_url: str = Field(
+        "https://github.com/msgpack/msgpack-javascript",
+        description=(
+            "Public URL pointing to a msgpack JS decoder. Surfaced in the "
+            "dashboard error banner when the server is configured for "
+            "msgpack but the connecting client lacks a decoder."
+        ),
+    )
+    mdns_register_timeout_s: float = Field(
+        5.0,
+        gt=0,
+        le=60,
+        description=(
+            "Maximum time TelemetryServer.start() waits for the mDNS "
+            "register call (in a thread pool) to complete or fail before "
+            "continuing startup. Timeout is non-fatal: server keeps "
+            "running, mDNS becomes best-effort and the failure is "
+            "recorded via FailureRecorder."
+        ),
+    )
+    ws_protocol_version: int = Field(
+        1,
+        ge=1,
+        le=99,
+        description=(
+            "Server-side WebSocket protocol version advertised in the "
+            "handshake hello-ack. Clients should send their accepted "
+            "versions in the hello message."
+        ),
+    )
+    ws_handshake_timeout_s: float = Field(
+        2.0,
+        gt=0,
+        le=30,
+        description=(
+            "Maximum time to wait for the optional client hello negotiation "
+            "message before falling back to the server-configured "
+            "serialization. Keeps the path backwards-compatible with "
+            "non-negotiating clients."
+        ),
+    )
+    sensor_liveness_stale_s: float = Field(
+        2.0,
+        gt=0,
+        le=60,
+        description=(
+            "Age threshold (seconds) above which a sensor's data is "
+            "reported as 'stale' rather than 'live' in the liveness map. "
+            "Tune per deployment based on the slowest sensor's expected "
+            "update rate."
+        ),
     )
 
 

@@ -2,6 +2,12 @@
 
 Centralises the observation-to-TelemetryFrame conversion so the orchestrator
 doesn't need to know about frame field mapping.
+
+PR #4 introduces an optional :class:`SensorLivenessTracker` parameter that
+attaches a per-sensor liveness map (``disabled`` / ``awaiting`` / ``live`` /
+``stale``) to every frame. This replaces the previous "0 = either disabled
+or broken" silent fallback for lidar/vision data, giving dashboards three
+distinct UI states to render.
 """
 
 from __future__ import annotations
@@ -16,6 +22,7 @@ from mousedroid.telemetry.protocol import TelemetryFrame
 if TYPE_CHECKING:
     from mousedroid.safety.context import SafetyContext
     from mousedroid.sensing.protocol import ObservationProtocol
+    from mousedroid.telemetry.sensor_liveness import SensorLivenessTracker
 
 
 def build_telemetry_frame(
@@ -25,6 +32,8 @@ def build_telemetry_frame(
     tick_count: int,
     *,
     vision_feature_max_samples: int = 256,
+    liveness_tracker: SensorLivenessTracker | None = None,
+    now_s: float | None = None,
 ) -> TelemetryFrame:
     """Build a ``TelemetryFrame`` from an observation and safety context.
 
@@ -36,15 +45,24 @@ def build_telemetry_frame(
         vision_feature_max_samples: Upper bound on the number of vision
             samples encoded into ``TelemetryFrame.vision_features``.
             Sourced from ``TelemetryConfig.vision_feature_max_samples``.
+        liveness_tracker: Optional :class:`SensorLivenessTracker`. When
+            provided, the builder records observations and attaches the
+            resulting state map to the frame. ``None`` preserves the
+            pre-PR-#4 behaviour (empty liveness dict).
+        now_s: Monotonic timestamp to feed the liveness tracker. When
+            ``None``, ``observation.timestamp`` is used so tests and
+            replay flows remain deterministic.
 
     Returns:
         Fully-populated ``TelemetryFrame`` ready for publishing.
     """
     vision_arr = observation.vision_features
-    vision_norm = float(np.sqrt(np.sum(vision_arr * vision_arr)))
+    vision_norm = float(np.sqrt(np.sum(vision_arr * vision_arr))) if vision_arr.size > 0 else 0.0
 
     audio_arr = observation.audio_chunk
-    audio_rms = float(np.sqrt(np.mean(audio_arr * audio_arr)))
+    # Empty audio chunks happen in mock-mode bring-up; ``np.mean`` of an
+    # empty array warns and returns NaN, so short-circuit here.
+    audio_rms = float(np.sqrt(np.mean(audio_arr * audio_arr))) if audio_arr.size > 0 else 0.0
 
     lidar_min_dist_m: float | None = None
     if safety_ctx.lidar_min_dist_m != float("inf"):
@@ -58,6 +76,9 @@ def build_telemetry_frame(
     # ``lidar_n_points`` is an optional liveness attribute on concrete
     # observation bundles; fall back to ``0`` when the bundle doesn't
     # expose it (keeps the ObservationProtocol contract unchanged).
+    # The downstream three-state ``sensor_liveness`` map distinguishes
+    # "lidar disabled" from "lidar enabled but no points yet" so the
+    # dashboard can render the difference.
     lidar_n_points = int(getattr(observation, "lidar_n_points", 0))
 
     # Vision features are downsampled to a bounded payload for
@@ -80,6 +101,20 @@ def build_telemetry_frame(
         float(motor[MOTOR_STATE_BATTERY_INDEX]) if motor.size > MOTOR_STATE_BATTERY_INDEX else 0.0
     )
 
+    sensor_liveness: dict[str, dict[str, object]] = {}
+    if liveness_tracker is not None:
+        timestamp_for_liveness = now_s if now_s is not None else observation.timestamp
+        if lidar_features is not None or lidar_n_points > 0:
+            liveness_tracker.mark_observed("lidar", timestamp_for_liveness)
+        if vision_features is not None:
+            liveness_tracker.mark_observed("vision", timestamp_for_liveness)
+        if audio_arr.size > 0 and audio_rms > 0.0:
+            liveness_tracker.mark_observed("audio", timestamp_for_liveness)
+        if motor.size > 0:
+            liveness_tracker.mark_observed("motor", timestamp_for_liveness)
+        snapshot = liveness_tracker.snapshot(now_s=timestamp_for_liveness)
+        sensor_liveness = {name: status.to_dict() for name, status in snapshot.items()}
+
     return TelemetryFrame(
         timestamp=observation.timestamp,
         distance_m=observation.distance_m,
@@ -100,4 +135,5 @@ def build_telemetry_frame(
         vision_features=vision_features,
         loop_time_ms=loop_time_ms,
         tick_count=tick_count,
+        sensor_liveness=sensor_liveness,
     )
