@@ -218,3 +218,13 @@ class IntrinsicCuriosityModule(nn.Module):
             reward = reward * scales
 
         return reward
+
+    def reset_episode(self) -> None:
+        """Reset per-episode accumulators.
+
+        Clears novelty-decay visit counts so curiosity scores start fresh
+        at the next episode boundary.
+        """
+        if self._novelty_decay is not None:
+            self._novelty_decay.reset()
+        _log.info("icm_episode_reset")

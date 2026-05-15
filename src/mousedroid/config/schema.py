@@ -1060,6 +1060,18 @@ class ModelConfig(BaseModel):
     intention_classes: int = Field(10, gt=0, description="BDI intention classes")
     affect_dim: int = Field(2, gt=0, description="BDI affect dim (valence, arousal)")
 
+    # Latent state health monitoring
+    latent_norm_threshold: float = Field(
+        50.0,
+        gt=0.0,
+        description="h-state L2 norm above this value triggers a latent_saturated warning",
+    )
+    latent_recovery_buffer_size: int = Field(
+        5,
+        gt=0,
+        description="Number of recent valid (h, z) pairs kept for NaN recovery",
+    )
+
     # CfC liquid neural network stream (Dual-Stream RSSM)
     cfc_hidden_dim: int = Field(0, ge=0, description="CfC stream hidden dim (0=disabled, pure GRU)")
     cfc_backbone_units: int = Field(64, gt=0, description="CfC backbone MLP hidden units")
@@ -1554,7 +1566,7 @@ class TelemetryConfig(BaseModel):
         gt=0,
         le=100,
         description=(
-            "Number of consecutive ports to try when " "port_discovery_strategy='fallback_range'."
+            "Number of consecutive ports to try when port_discovery_strategy='fallback_range'."
         ),
     )
     preferred_interface: str | None = Field(
@@ -1599,6 +1611,112 @@ class TelemetryConfig(BaseModel):
     auth: TelemetryAuthConfig | None = Field(
         None,
         description="Bearer token authentication config (None=disabled)",
+    )
+
+    # ------------------------------------------------------------------
+    # PR #4: live streaming, mock visibility, serialization negotiation,
+    # mDNS readiness, and sensor-liveness fields. All optional, all with
+    # safe defaults so existing YAML files load unchanged.
+    # ------------------------------------------------------------------
+    lidar_raw_publish_hz: float = Field(
+        5.0,
+        gt=0,
+        le=30,
+        description=(
+            "Target broadcast rate (Hz) for the /ws/v1/lidar/raw WebSocket "
+            "stream. The LD19 driver runs at ~10 Hz natively; this rate "
+            "downsamples on the server side before fan-out to clients."
+        ),
+    )
+    lidar_raw_queue_size: int = Field(
+        16,
+        gt=0,
+        le=1024,
+        description=(
+            "Internal queue depth for raw LiDAR scan publishing. When the "
+            "queue is full new scans are dropped (non-blocking) to keep the "
+            "control loop responsive."
+        ),
+    )
+    lidar_raw_ws_path: str = Field(
+        "/ws/v1/lidar/raw",
+        description=(
+            "WebSocket path for the raw LiDAR scan stream. Versioned so "
+            "future protocol breaks land on /ws/v2/* without breaking "
+            "existing dashboards."
+        ),
+    )
+    mock_force_real_when_enabled: bool = Field(
+        True,
+        description=(
+            "When True (default) and mock_hardware=True, the factory still "
+            "builds the real aiohttp TelemetryServer on localhost instead of "
+            "the no-op MockTelemetryServer so the dashboard can be exercised "
+            "locally. Existing tests that construct MockTelemetryServer "
+            "directly remain unaffected; the legacy force_real_server flag "
+            "still wins when set explicitly."
+        ),
+    )
+    mock_telemetry_source_enabled: bool = Field(
+        True,
+        description=(
+            "When True and mock_hardware=True, factory wires a "
+            "MockTelemetrySource that synthesises plausible scan + camera "
+            "data into the publisher so the dashboard renders meaningful "
+            "patterns without a real rover attached."
+        ),
+    )
+    msgpack_client_lib_url: str = Field(
+        "https://github.com/msgpack/msgpack-javascript",
+        description=(
+            "Public URL pointing to a msgpack JS decoder. Surfaced in the "
+            "dashboard error banner when the server is configured for "
+            "msgpack but the connecting client lacks a decoder."
+        ),
+    )
+    mdns_register_timeout_s: float = Field(
+        5.0,
+        gt=0,
+        le=60,
+        description=(
+            "Maximum time TelemetryServer.start() waits for the mDNS "
+            "register call (in a thread pool) to complete or fail before "
+            "continuing startup. Timeout is non-fatal: server keeps "
+            "running, mDNS becomes best-effort and the failure is "
+            "recorded via FailureRecorder."
+        ),
+    )
+    ws_protocol_version: int = Field(
+        1,
+        ge=1,
+        le=99,
+        description=(
+            "Server-side WebSocket protocol version advertised in the "
+            "handshake hello-ack. Clients should send their accepted "
+            "versions in the hello message."
+        ),
+    )
+    ws_handshake_timeout_s: float = Field(
+        2.0,
+        gt=0,
+        le=30,
+        description=(
+            "Maximum time to wait for the optional client hello negotiation "
+            "message before falling back to the server-configured "
+            "serialization. Keeps the path backwards-compatible with "
+            "non-negotiating clients."
+        ),
+    )
+    sensor_liveness_stale_s: float = Field(
+        2.0,
+        gt=0,
+        le=60,
+        description=(
+            "Age threshold (seconds) above which a sensor's data is "
+            "reported as 'stale' rather than 'live' in the liveness map. "
+            "Tune per deployment based on the slowest sensor's expected "
+            "update rate."
+        ),
     )
 
 
@@ -2690,6 +2808,27 @@ class VoiceConfig(BaseModel):
             "Counter resets on any successful synthesis."
         ),
     )
+    cooldown_per_event: dict[str, float] = Field(
+        default_factory=dict,
+        description=(
+            "Per-event cooldown overrides (seconds). Keyed by event name; "
+            "events not listed fall back to the global cooldown_s. "
+            "Must be > 0 for each entry."
+        ),
+    )
+    token_bucket_capacity: int = Field(
+        3,
+        gt=0,
+        description=(
+            "Max tokens per priority-class bucket. Each HIGH/NORMAL priority "
+            "class has its own token bucket; EMERGENCY is never rate-limited."
+        ),
+    )
+    token_bucket_refill_rate: float = Field(
+        1.0,
+        gt=0,
+        description="Token-bucket refill rate (tokens/second) per priority class.",
+    )
     output_volume: float = Field(
         1.0,
         ge=0.0,
@@ -2734,6 +2873,47 @@ class VoiceConfig(BaseModel):
                     f"event_intensity_thresholds[{key!r}] must be in [0.0, 1.0], got {value!r}"
                 )
         return v
+
+    @field_validator("cooldown_per_event", mode="after")
+    @classmethod
+    def _validate_cooldown_per_event(cls, v: dict[str, float]) -> dict[str, float]:
+        for key, value in v.items():
+            if value <= 0.0:
+                raise ValueError(f"cooldown_per_event[{key!r}] must be > 0.0, got {value!r}")
+        return v
+
+    @model_validator(mode="after")
+    def _validate_event_names_in_phrase_bank(self) -> Self:
+        """Ensure event keys reference known phrase-bank events.
+
+        Validates that every key in ``event_intensity_thresholds`` and
+        ``cooldown_per_event`` exists in the default phrase bank or has been
+        registered via ``phrase_overrides``. Typos that previously fell back
+        silently to the global defaults now fail at config-load time.
+        """
+        # Local import keeps the schema module decoupled from the voice
+        # package import graph at module load time.
+        from mousedroid.voice.phrase_bank import DEFAULT_PHRASES
+
+        known: set[str] = set(DEFAULT_PHRASES.keys()) | set(self.phrase_overrides.keys())
+
+        bad_thresholds = sorted(set(self.event_intensity_thresholds.keys()) - known)
+        bad_cooldowns = sorted(set(self.cooldown_per_event.keys()) - known)
+
+        if bad_thresholds or bad_cooldowns:
+            parts: list[str] = []
+            if bad_thresholds:
+                parts.append(
+                    f"event_intensity_thresholds contains unknown event(s): {bad_thresholds!r}"
+                )
+            if bad_cooldowns:
+                parts.append(f"cooldown_per_event contains unknown event(s): {bad_cooldowns!r}")
+            parts.append(
+                "Known events come from mousedroid.voice.phrase_bank.DEFAULT_PHRASES "
+                "and any keys registered via phrase_overrides."
+            )
+            raise ValueError(" ".join(parts))
+        return self
 
     def resolved_tts_model_path(self) -> str | None:
         """Return the effective TTS model path for the configured personality.

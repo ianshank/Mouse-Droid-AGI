@@ -157,6 +157,21 @@ telemetry:
   serialization: "json"
   mdns_enabled: true
   mdns_service_name: "MouseDroid Telemetry"
+  # PR #4 — live streaming + frame liveness defaults. Override here if
+  # the deployment needs a different cadence or namespace.
+  lidar_raw_publish_hz: 5.0          # raw 360° scan WS rate (Hz)
+  lidar_raw_queue_size: 16           # raw-scan queue depth (drops if full)
+  lidar_raw_ws_path: "/ws/v1/lidar/raw"
+  ws_protocol_version: 1
+  ws_handshake_timeout_s: 2.0
+  msgpack_client_lib_url: "https://github.com/msgpack/msgpack-javascript"
+  sensor_liveness_stale_s: 2.0       # age (s) above which sensors flip to "stale"
+  mdns_register_timeout_s: 5.0       # max wait for Zeroconf register during start()
+  # Mock-mode flags (production keeps both at defaults; explicit for clarity).
+  # Set ``mock_force_real_when_enabled: false`` to restore the legacy
+  # MockTelemetryServer in mock_hardware mode (tests-only escape hatch).
+  mock_force_real_when_enabled: true
+  mock_telemetry_source_enabled: true
   auth:
     auth_enabled: true
     token_env_var: "MOUSEDROID_TELEMETRY_TOKEN"

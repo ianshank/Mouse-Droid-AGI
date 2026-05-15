@@ -162,6 +162,31 @@ MOTOR_STATE_BATTERY_INDEX: int = 3
 TELEMETRY_QUEUE_TIMEOUT_S: float = 1.0
 """Timeout for telemetry queue polling in broadcast/log loops."""
 
+# WebSocket close codes (private range 4000-4999 per RFC 6455 §7.4.2).
+# Centralised so dashboard clients, documentation, and tests reference
+# a single source of truth.
+WS_CLOSE_MAX_CLIENTS: int = 4029
+"""Close code: telemetry server rejected the connection because
+``TelemetryConfig.max_clients`` is already reached."""
+
+WS_CLOSE_LOG_BUFFER_DISABLED: int = 4030
+"""Close code: ``/api/v1/logs/stream`` rejected because no log buffer
+is wired (``TelemetryConfig.log_stream_buffer`` was zero)."""
+
+WS_CLOSE_LIDAR_RAW_UNAVAILABLE: int = 4404
+"""Close code: ``/ws/v1/lidar/raw`` rejected because the publisher
+does not expose a raw-LiDAR queue (no LiDAR driver wired)."""
+
+WS_CLOSE_NEGOTIATION_FAILED: int = 4400
+"""Close code: hello negotiation could not find a mutually-acceptable
+(serialization, protocol_version). The server sends the ack envelope
+(with ``ok=False`` and the failure reason) BEFORE closing so the
+client can surface a useful error to operators."""
+
+WS_HELLO_MAX_BYTES: int = 4096
+"""Maximum accepted size (bytes) of a client ``hello`` negotiation
+message. Defends ``_negotiate_ws`` from oversized payloads."""
+
 # ---------------------------------------------------------------------------
 # Sensor constants
 # ---------------------------------------------------------------------------

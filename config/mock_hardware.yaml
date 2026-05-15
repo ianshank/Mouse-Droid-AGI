@@ -6,6 +6,22 @@ logging:
   level: "DEBUG"
   format: "console"
 
+# PR #4 — mock-mode dashboard. The real aiohttp telemetry server is
+# bound on localhost and the MockTelemetrySource synthesises plausible
+# scans + camera features so operators can hit
+# http://localhost:8080/lidar with no rover attached.
+telemetry:
+  enabled: true
+  host: "127.0.0.1"
+  port: 8080
+  mdns_enabled: false
+  # PR #4 mock visibility (both defaults are True — listed here so
+  # operators know the knobs exist).
+  mock_force_real_when_enabled: true
+  mock_telemetry_source_enabled: true
+  lidar_raw_publish_hz: 5.0
+  sensor_liveness_stale_s: 2.0
+
 # Mock-hardware overlay widens DR ranges for stress testing — exercises
 # wider noise/drop envelopes than the production overlay so unit/integration
 # tests catch failure modes early.
