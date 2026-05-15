@@ -500,12 +500,14 @@ class MetricsRegistry:
         self._mcp_request_latency_ms = _Histogram(tuple(mcp_raw_buckets))
 
         # PR-A2 — Phase 2 replay / Phase 3 VLA / Phase 4 VLM observability.
-        # All four metrics are pure-add: they ship as registered-but-zero on
-        # default deployments and only increment when the corresponding
-        # subsystem fires. No config toggle is required to disable them — the
-        # writer-side helpers (record_replay_event / observe_vla_inference_seconds
-        # / record_vla_timeout / record_vlm_cache_hit|miss) are no-ops at the
-        # call site when ``metrics is None``.
+        # All four metric families are pure-add: their internal state is
+        # constructed up-front, but they are **omitted from the rendered
+        # /metrics output** until the first observation/increment lands
+        # (see the conditional blocks in ``render_prometheus``). Default
+        # deployments therefore produce byte-identical exposition output to
+        # pre-PR-A2 — the new families surface only after a writer touches them.
+        # No config toggle is required to disable them — writer-side guards
+        # in the calling subsystems treat ``metrics is None`` as a no-op.
         self._replay_records = _LabeledCounter()
         vla_raw_buckets = sorted(cfg.vla_inference_seconds_buckets)
         if not vla_raw_buckets or vla_raw_buckets[-1] != float("inf"):
@@ -892,8 +894,16 @@ class MetricsRegistry:
     # future histogram helper that needs to reject clock-skewed samples.
     _MIN_OBSERVABLE_SECONDS: float = 0.0
 
-    def inc_replay_record(self, outcome: ReplayOutcomeLiteral) -> None:
+    def inc_replay_record(
+        self,
+        outcome: ReplayOutcomeLiteral,
+        amount: int = 1,
+    ) -> None:
         """Increment the replay-record counter for one read outcome.
+
+        Non-positive ``amount`` is a no-op so the Prometheus counter
+        monotonicity invariant is preserved if a buggy caller passes
+        zero or a negative delta.
 
         Args:
             outcome: ``"ok"`` for a successfully deserialised record;
@@ -901,25 +911,44 @@ class MetricsRegistry:
                 schema version did not match the runtime ``SCHEMA_VERSION``.
                 Typed as :data:`mousedroid.config.schema.ReplayOutcomeLiteral`
                 so mypy catches any drift.
+            amount: Increment magnitude (default 1). Values ``<= 0`` are
+                ignored.
         """
-        self._replay_records.inc(outcome)
+        if amount > 0:
+            self._replay_records.inc(outcome, amount)
 
     def observe_vla_inference_seconds(self, value: float) -> None:
         """Observe one VLA policy inference latency sample (seconds).
 
-        Defensively drops negative samples (clock skew) so they cannot
-        corrupt the histogram sum.
+        Defensively drops samples that would corrupt the histogram sum:
+
+        * Negative values (clock skew / wall-clock wrap)
+        * NaN (timer misuse / division-by-zero upstream)
+
+        Drops emit a DEBUG-level structured log so operators can correlate
+        missing histogram observations with the upstream root cause.
 
         Args:
             value: Wall-clock seconds spent inside the VLA backend's
                 ``predict()`` call, measured by the caller wrapping the
                 inference site with ``time.perf_counter()``.
         """
-        if value < self._MIN_OBSERVABLE_SECONDS:
+        # ``value != value`` is the canonical NaN check that does not
+        # depend on importing ``math``.
+        if value != value or value < self._MIN_OBSERVABLE_SECONDS:
+            _log.debug(
+                "vla_inference_seconds_dropped",
+                reason="nan" if value != value else "negative",
+                value=value,
+            )
             return
         self._vla_inference_seconds.observe(value)
 
-    def inc_vla_timeout(self, mode: VLABackendLiteral) -> None:
+    def inc_vla_timeout(
+        self,
+        mode: VLABackendLiteral,
+        amount: int = 1,
+    ) -> None:
         """Increment the VLA timeout counter for one fallback event.
 
         Args:
@@ -927,16 +956,27 @@ class MetricsRegistry:
                 ``cfg.vla.backend`` and typed as
                 :data:`mousedroid.config.schema.VLABackendLiteral` —
                 a backend rename propagates here via the alias.
+            amount: Increment magnitude (default 1). Values ``<= 0`` are
+                ignored to preserve Prometheus counter monotonicity.
         """
-        self._vla_timeouts.inc(mode)
+        if amount > 0:
+            self._vla_timeouts.inc(mode, amount)
 
     def inc_vlm_cache_hit(self, amount: int = 1) -> None:
-        """Increment the VLM progress-reward cache-hit counter."""
-        self._vlm_progress_cache_hits.inc(amount)
+        """Increment the VLM progress-reward cache-hit counter.
+
+        Non-positive ``amount`` is a no-op (counter monotonicity guard).
+        """
+        if amount > 0:
+            self._vlm_progress_cache_hits.inc(amount)
 
     def inc_vlm_cache_miss(self, amount: int = 1) -> None:
-        """Increment the VLM progress-reward cache-miss counter."""
-        self._vlm_progress_cache_misses.inc(amount)
+        """Increment the VLM progress-reward cache-miss counter.
+
+        Non-positive ``amount`` is a no-op (counter monotonicity guard).
+        """
+        if amount > 0:
+            self._vlm_progress_cache_misses.inc(amount)
 
     @staticmethod
     def _decode_cloud_circuit_state(value: float) -> str:

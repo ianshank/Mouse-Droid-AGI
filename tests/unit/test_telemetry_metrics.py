@@ -818,3 +818,109 @@ class TestLiteralTypeAliases:
         from mousedroid.config.schema import ReplayOutcomeLiteral
 
         assert set(_typing.get_args(ReplayOutcomeLiteral)) == {"ok", "schema_mismatch"}
+
+
+class TestPrA2DefensiveGuards:
+    """Counter monotonicity + histogram NaN/negative-value rejection guards
+    enforced after PR-A2 review feedback.
+    """
+
+    def test_observe_vla_inference_seconds_drops_nan(self) -> None:
+        """NaN samples must not enter the histogram sum (which would taint it)."""
+        registry = _make_registry()
+        registry.observe_vla_inference_seconds(float("nan"))
+        registry.observe_vla_inference_seconds(0.05)  # valid sample
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f"{ns}_vla_inference_seconds_count 1" in text
+        # The sum must not be NaN — render it and confirm no NaN substring.
+        assert "NaN" not in text
+
+    def test_observe_vla_inference_seconds_drops_negative(self) -> None:
+        """Negative samples are dropped (regression-locked from original PR-A2 work)."""
+        registry = _make_registry()
+        registry.observe_vla_inference_seconds(-1.0)
+        registry.observe_vla_inference_seconds(0.05)
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f"{ns}_vla_inference_seconds_count 1" in text
+
+    def test_drop_emits_debug_log(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Dropped samples must emit a DEBUG-level structured log."""
+        import logging as _logging
+
+        import structlog
+
+        # Route structlog to stdlib logging so caplog captures it.
+        structlog.configure(
+            processors=[structlog.stdlib.add_log_level, structlog.processors.KeyValueRenderer()],
+            wrapper_class=structlog.make_filtering_bound_logger(_logging.DEBUG),
+            logger_factory=structlog.stdlib.LoggerFactory(),
+            cache_logger_on_first_use=False,
+        )
+
+        registry = _make_registry()
+        with caplog.at_level(_logging.DEBUG):
+            registry.observe_vla_inference_seconds(float("nan"))
+            registry.observe_vla_inference_seconds(-0.001)
+
+        joined = " ".join(rec.message for rec in caplog.records)
+        assert "vla_inference_seconds_dropped" in joined
+        # Both drop reasons must appear in the captured logs.
+        assert "reason=nan" in joined or "'nan'" in joined
+        assert "reason=negative" in joined or "'negative'" in joined
+
+    @pytest.mark.parametrize(
+        "helper_name",
+        [
+            "inc_replay_record",
+            "inc_vla_timeout",
+            "inc_vlm_cache_hit",
+            "inc_vlm_cache_miss",
+        ],
+    )
+    def test_non_positive_amount_is_noop(self, helper_name: str) -> None:
+        """All four counter helpers must guard counter monotonicity at amount <= 0."""
+        registry = _make_registry()
+        # Build a call signature appropriate for each helper.
+        if helper_name == "inc_replay_record":
+            registry.inc_replay_record("ok", amount=0)
+            registry.inc_replay_record("ok", amount=-1)
+        elif helper_name == "inc_vla_timeout":
+            registry.inc_vla_timeout("mock", amount=0)
+            registry.inc_vla_timeout("mock", amount=-1)
+        elif helper_name == "inc_vlm_cache_hit":
+            registry.inc_vlm_cache_hit(amount=0)
+            registry.inc_vlm_cache_hit(amount=-1)
+        else:  # inc_vlm_cache_miss
+            registry.inc_vlm_cache_miss(amount=0)
+            registry.inc_vlm_cache_miss(amount=-1)
+
+        text = registry.render_prometheus()
+        # No metric family should appear since no positive amount was applied.
+        assert "replay_records_total" not in text
+        assert "vla_timeouts_total" not in text
+        assert "vlm_progress_cache_hits_total" not in text
+        assert "vlm_progress_cache_misses_total" not in text
+
+    def test_inc_replay_record_accepts_amount(self) -> None:
+        """API consistency: ``amount`` kwarg works on inc_replay_record."""
+        registry = _make_registry()
+        registry.inc_replay_record("ok", amount=3)
+        registry.inc_replay_record("schema_mismatch", amount=5)
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f'{ns}_replay_records_total{{outcome="ok"}} 3' in text
+        assert f'{ns}_replay_records_total{{outcome="schema_mismatch"}} 5' in text
+
+    def test_inc_vla_timeout_accepts_amount(self) -> None:
+        """API consistency: ``amount`` kwarg works on inc_vla_timeout."""
+        registry = _make_registry()
+        registry.inc_vla_timeout("distilled_onnx", amount=4)
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f'{ns}_vla_timeouts_total{{mode="distilled_onnx"}} 4' in text
