@@ -28,9 +28,9 @@
 
 | Track | Production-ready | Partial / stub / missing |
 |---|---|---|
-| **Training** | RSSM pretraining (`training/train_rssm.py`), HF upload (`training/upload_weights.py`), LMDB replay reader, BC `bc_update` wired (`training/train_offline_rl.py:193`) | **MISSING:** `training/train_arm.py`; **STUB:** EWC/MAML never called from any training script; **STUB:** Dreamer-V3 imagination rollout; **MISSING:** W&B; **MISSING:** BC test at `real_supervised_weight>0` |
-| **Autonomy** | Orchestrator loop (`orchestrator/orchestrator.py:370-410`), safety monitor (`safety/monitor.py`), memory tier + LMDB journal | **PARTIAL:** Mission lifecycle (no persistent goal+odometry; `mission_dispatcher.py:1-80`); **STUB:** VLA only `MockVLA` (`vla/policy.py:58-80`); **PARTIAL:** MCTS planning horizon fixed; **MISSING:** Multi-minute autonomous E2E |
-| **Dashboard** | Backend WebSockets, Prometheus metrics, sensor liveness, `/lidar` + `/camera` pages | **MISSING:** Unified dashboard / mission control / e-stop / log panel page / arm page / voice page; **MISSING:** Grafana wiring verified end-to-end |
+| **Training** | RSSM pretraining (`training/train_rssm.py`), HF upload (`training/upload_weights.py`), LMDB replay reader, BC `bc_update` wired AND tested at weight=0 (byte-identity) + weight>0 (divergence + finiteness + stats) in `tests/integration/test_phase21_bc_into_offline_rl.py`; `OfflineRLConfig.real_supervised_weight: Field(0.0, ge=0.0)` enforced (`src/mousedroid/config/schema.py:911-919`) | **MISSING:** `training/train_arm.py`; **STUB:** EWC/MAML never called from any training script; **STUB:** Dreamer-V3 imagination rollout; **MISSING:** W&B integration |
+| **Autonomy** | Orchestrator loop (`orchestrator/orchestrator.py:370-410`), safety monitor (`safety/monitor.py`), memory tier + LMDB journal, `MCTSConfig.rollout_depth` already config-driven (`src/mousedroid/config/schema.py:927`) and consumed by `src/mousedroid/world_model/mcts.py` | **PARTIAL:** Mission lifecycle (no persistent goal+odometry; `mission_dispatcher.py:1-80`); **STUB:** VLA only `MockVLA` (`vla/policy.py:58-80`); **PARTIAL:** MCTS has no goal-direction cost heuristic; **MISSING:** Multi-minute autonomous E2E |
+| **Dashboard** | Backend WebSockets, Prometheus metrics, sensor liveness, `/lidar` + `/camera` pages, `promtool` validation of `config/prometheus/alerts.yml` already wired in `scripts/ci.sh` | **MISSING:** Unified dashboard / mission control / e-stop / log panel page / arm page / voice page; **MISSING:** Grafana dashboard end-to-end render verified |
 | **Isaac Lab** | Research doc (`docs/planning/ISAAC_LAB_ROVER_RESEARCH.md`), env protocol (`src/mousedroid/sim/protocols.py`), mock env (`src/mousedroid/sim/mock_rover_env.py`) | **STUB:** `src/mousedroid/sim/isaaclab/rover_env.py:1-255` (`build()` is placeholder; raises `IsaacLabUnavailableError`); **MISSING:** URDF/USD assets, sensor adapter, PPO smoke, ONNX→TRT validation harness |
 
 ### Where we are going
@@ -39,11 +39,24 @@ Four parallel **tracks**, each a focused PR sequence that ships value independen
 
 | Track | PR count | Independent? | Acceptance |
 |---|---|---|---|
-| **T — Training** | 5 PRs (T1–T5) | Yes (touches only `training/`, `src/mousedroid/{learning,meta,curiosity,growth,world_model}`) | A real arm policy improves measurably on a held-out MuJoCo eval; nightly W&B run produces curves |
-| **S — Sim / Isaac Lab** | 4 PRs (S1–S4) | Depends on T1 for shared training utilities | Rover trains in Isaac Lab PPO baseline → ONNX → TensorRT engine deploys on Jetson; >50% goal-reach transfer rate documented |
+| **T — Training** | 4 PRs (T2–T5; T1 already shipped before this plan, see "Pre-execution audit" below) | Yes (touches only `training/`, `src/mousedroid/{learning,meta,curiosity,growth,world_model}`) | A real arm policy improves measurably on a held-out MuJoCo eval; nightly W&B run produces curves |
+| **S — Sim / Isaac Lab** | 4 PRs (S1–S4) | Depends on T2 for shared training-logger utility | Rover trains in Isaac Lab PPO baseline → ONNX → TensorRT engine deploys on Jetson; >50% goal-reach transfer rate documented |
 | **A — Autonomy** | 5 PRs (A1–A5) | A2 depends on T-track distilled-VLA artifact; A1, A3, A4, A5 independent | Rover autonomously navigates to a goal across 5 simulated minutes (`MockClock`) and 5 real wall-clock minutes (Jetson) without operator intervention |
-| **D — Dashboard** | 6 PRs (D1–D6) | Independent (touches only `src/mousedroid/telemetry/` and tests) | Unified `/` page with live mission control + e-stop + log panel + per-subsystem health; Grafana dashboard renders metrics from `docs/grafana_dashboard.json` |
+| **D — Dashboard** | 6 PRs (D1–D6) | Mostly independent (D1–D5 touch only `src/mousedroid/telemetry/` + tests; **D6 also touches `.github/workflows/ci.yml` and `config/prometheus/`** for Grafana + alert-rule work) | Unified `/` page with live mission control + e-stop + log panel + per-subsystem health; Grafana dashboard renders metrics from `docs/grafana_dashboard.json` |
 | **H — Hardening** | 4 PRs (H1–H4) | Independent | Coverage ≥87% (+2 over current), ruff/mypy clean, no hardcoded values, secrets scanned in CI |
+
+**Total executable PRs: 23** (T2–T5 + S1–S4 + A1–A5 + D1–D6 + H1–H4 = 4+4+5+6+4). T1's claimed gap was already shipped in `tests/integration/test_phase21_bc_into_offline_rl.py`; treat T1 as a documentation pointer rather than executable work.
+
+### Pre-execution audit (2026-05-15)
+
+A pre-execution sweep against the current tree found that **several survey claims were stale**. The roadmap below has been reconciled, but execution agents should still run a "verify the gap is still real" sub-step at the start of each PR. Already-shipped work surfaced during the audit:
+
+| Original claim | Reality | Plan adjustment |
+|---|---|---|
+| MISSING: BC test at weight>0 (T1) | DONE in `tests/integration/test_phase21_bc_into_offline_rl.py` (byte-identity + divergence + finiteness + IQL + empty-data; 8 test methods). Schema already enforces `ge=0.0`. | T1 retired; see "Track T" preamble. |
+| MCTS planning horizon fixed (A3) | `MCTSConfig.rollout_depth` already config-driven at `src/mousedroid/config/schema.py:927`, consumed by `src/mousedroid/world_model/mcts.py`. | A3 reframed around the goal-direction cost heuristic only. |
+| `check_no_hardcoded_values.py` not enforced (H1) | Already wired in `scripts/ci.sh:44` as a **changed-lines** gate against `src/mousedroid/`. | H1 reframed: full-tree sweep + extend checker beyond changed-lines. |
+| Promtool not wired (D6) | Already wired in `scripts/ci.sh` against `config/prometheus/alerts.yml`. | D6 reframed: extend existing `config/prometheus/alerts.yml` with new alert rules + Grafana validation. |
 
 ### Plan format
 
@@ -60,17 +73,28 @@ Four parallel **tracks**, each a focused PR sequence that ships value independen
 
 | PR | Title | Depends on | Suggested subagent |
 |---|---|---|---|
-| T1 | `test(training): BC weight regression at real_supervised_weight>0` | none | `test-runner` |
+| ~~T1~~ | ~~`test(training): BC weight regression at real_supervised_weight>0`~~ — **ALREADY SHIPPED** | n/a | n/a |
 | T2 | `feat(training): W&B logger adapter wired into train_rssm/train_offline_rl` | none | `ml-training-orchestrator` |
 | T3 | `feat(training): train_arm.py — SAC+HER MuJoCo entry point + curriculum + checkpoints` | T2 (for logging) | `ai-ml-toolkit:ml-engineer` |
-| T4 | `feat(learning): EWC consolidation wired into offline-RL epoch loop` | T1 (BC stable) | `distributed-training` |
+| T4 | `feat(learning): EWC consolidation wired into offline-RL epoch loop` | T2 (logger) | `distributed-training` |
 | T5 | `feat(world_model): Dreamer-V3 imagination rollout + latent offline-RL` | T2, T3 | `neural-network-architect` |
 
 ---
 
-## PR T1 — BC weight regression test
+## ~~PR T1 — BC weight regression test~~ (already shipped — kept for traceability)
 
-**Why:** `bc_update` is wired at `training/train_offline_rl.py:193` but the default `real_supervised_weight=0` makes it a no-op. Phase 2.1 of `docs/planning/PHASE_2_1_AND_BEYOND_PLAN.md` cannot ship without a test that drives BC loss to non-zero AND verifies it aggregates into the epoch summary without corrupting Q-values byte-for-byte at weight=0.
+**Status:** ✅ **DONE before this plan was written.** The Explore agent surveying the training stack reported "MISSING: BC test at `real_supervised_weight>0`" but the gap had already been closed in an earlier PR. The detailed task list below is preserved for traceability/reference only — DO NOT execute.
+
+**Verification** (run before opening any T-track PR to confirm this is still true):
+
+```bash
+pytest tests/integration/test_phase21_bc_into_offline_rl.py -v --import-mode=importlib
+grep -nE "real_supervised_weight" src/mousedroid/config/schema.py
+```
+
+If the tests run and `real_supervised_weight: float = Field(0.0, ge=0.0, ...)` appears at `src/mousedroid/config/schema.py:911-919`, T1 is done — proceed to T2.
+
+The original T1 motivation is preserved below for historical context:
 
 **Files:**
 - Create: `tests/integration/training/test_offline_rl_bc_weight.py`
@@ -714,16 +738,20 @@ on the state object. Backwards compat preserved via MissionState.from_directive.
 
 ---
 
-## PR A3 — Configurable MCTS planning horizon + goal-cost heuristic
+## PR A3 — MCTS goal-direction cost heuristic
 
-**Why:** Today MCTS rollout depth is fixed; survey notes "extend rollout depth from 4 to 8+ steps". Hard-coding the depth violates Invariant #3. Plus, when a goal is active (PR A1), MCTS should bias rollouts toward goal-direction.
+**Why:** `MCTSConfig.rollout_depth` is already config-driven (`src/mousedroid/config/schema.py:927`) and consumed by `src/mousedroid/world_model/mcts.py` — the original "horizon hardcoded" survey claim was wrong. The actual gap is that MCTS rollouts give zero weight to the active mission goal (PR A1's `MissionState.goal`); the search expands uniformly. A goal-direction cost term biases simulations toward the mission goal without changing the search algorithm.
 
 **Files:**
-- Modify: `src/mousedroid/world_model/mcts.py` — accept `MCTSConfig.max_horizon`, `MCTSConfig.goal_cost_weight`
-- Modify: `src/mousedroid/config/schema.py` — `MCTSConfig` fields
-- Create: `tests/unit/world_model/test_mcts_horizon.py`
+- Modify: `src/mousedroid/world_model/mcts.py` — read `MCTSConfig.goal_cost_weight`, accept an optional `goal_vector` arg in the search entry point, add the goal-cost term to the rollout reward
+- Modify: `src/mousedroid/config/schema.py` — `MCTSConfig.goal_cost_weight: float = Field(0.0, ge=0.0)` (default 0 → backwards-compat no-op)
+- Modify: `src/mousedroid/orchestrator/orchestrator.py` — pass the current `MissionState.goal.forward_m`/`lateral_m` as the goal vector when MCTS runs
+- Create: `tests/unit/world_model/test_mcts_goal_cost.py`
 
-**Acceptance:** Horizon flows from config; given a synthetic 4-step world model, the MCTS visit counts under `max_horizon=8` differ from `max_horizon=4` (proving the depth is honoured). Goal-cost weight ≠ 0 biases visits toward goal direction in a deterministic test fixture.
+**Acceptance:**
+- `goal_cost_weight=0.0` → MCTS visit counts byte-identical to the pre-PR baseline (Invariant: backwards compat).
+- `goal_cost_weight>0` + a deterministic 4-action world model → visit counts shift toward the goal-direction action in ≥80% of seeds (regression test).
+- No new hardcoded weights: every term in the rollout reward is read from `MCTSConfig`.
 
 ---
 
@@ -853,17 +881,20 @@ on the state object. Backwards compat preserved via MissionState.from_directive.
 
 ---
 
-## PR D6 — Grafana dashboard + promtool CI gate
+## PR D6 — Grafana dashboard end-to-end + extend existing alert rules
 
-**Why:** `docs/grafana_dashboard.json` is checked in but never validated; `docs/planning/NEXT_STEPS.md:228-229` lists "Grafana completion + alert rules" as an immediate follow-up. The promtool CI gate is also on that immediate-follow-up list.
+**Why:** `promtool` validation IS already wired in `scripts/ci.sh` against `config/prometheus/alerts.yml` — DO NOT create a parallel `monitoring/prometheus/` layout. The actual gap is twofold: (a) `docs/grafana_dashboard.json` has not been kept current with PRs #75-#83's new metrics, (b) `config/prometheus/alerts.yml` needs new alert rules for the same metrics, and (c) the Grafana JSON is checked in but its `targets[*].expr` strings are never validated against the metrics actually exposed.
 
 **Files:**
-- Modify: `docs/grafana_dashboard.json` — add panels for the new PR #75-#83 metrics (sensor_liveness, subsystem_failures, bound_port, mdns_registered, mission_lifecycle, replanner_invocations)
-- Create: `monitoring/prometheus/rules.yml` — alert rules (high failure rate, mDNS unregistered, mission timeout exceeded)
-- Modify: `.github/workflows/ci.yml` — add `promtool check rules monitoring/prometheus/rules.yml` step
-- Create: `tests/integration/test_grafana_dashboard_loads.py` — assert all `targets[*].expr` in the JSON parse via `promtool`
+- Modify: `docs/grafana_dashboard.json` — add panels for `mousedroid_telemetry_sensor_liveness`, `mousedroid_subsystem_failures_total`, `mousedroid_telemetry_bound_port`, `mousedroid_telemetry_mdns_registered`, and (once A1 lands) `mousedroid_mission_lifecycle_total`
+- Modify: `config/prometheus/alerts.yml` — append rules for: sensor stale > N s, subsystem-failure rate spike, mDNS unregistered when expected, bound-port absent
+- Create: `tests/integration/test_grafana_dashboard_loads.py` — parse `docs/grafana_dashboard.json`, extract every `targets[*].expr`, assert each parses via `promtool query parse` (or PromQL Python parser if `promtool` isn't on PATH)
+- No CI workflow change required — `scripts/ci.sh` already runs `promtool` against `config/prometheus/alerts.yml`
 
-**Acceptance:** CI runs `promtool` and rejects malformed rules; Grafana dashboard JSON validated; alert rules cover the top 10 production signals.
+**Acceptance:**
+- New panels render in a local Grafana instance with the live `/metrics` endpoint.
+- Every new alert in `config/prometheus/alerts.yml` parses under `promtool check rules`.
+- `tests/integration/test_grafana_dashboard_loads.py` catches any panel whose PromQL expression references a metric not actually exposed by the server.
 
 ---
 
@@ -880,16 +911,19 @@ on the state object. Backwards compat preserved via MissionState.from_directive.
 
 ---
 
-## PR H1 — `check_no_hardcoded_values.py` enforcement
+## PR H1 — `check_no_hardcoded_values.py` full-tree sweep + scope expansion
 
-**Why:** `scripts/check_no_hardcoded_values.py` exists (referenced in the prior plan); we need it as a CI gate plus a one-pass sweep to fix existing leaks. Recent PRs (#75-#83) introduced a few hardcoded host/port defaults that should derive from config.
+**Why:** The checker IS already wired in `scripts/ci.sh:44`, but it currently runs in **changed-lines mode** only (against `src/mousedroid/`). That means pre-existing debt accumulated before the gate was installed is never surfaced. The gap is twofold: (a) a one-pass sweep of the whole tree, and (b) extending the checker to a full-tree mode that future PRs can opt into.
 
 **Files:**
-- Modify: `scripts/ci.sh` — add `python scripts/check_no_hardcoded_values.py src/`
-- Sweep: any `localhost`, `127.0.0.1`, `8080`, port literals, IP literals in `src/` that aren't reading from `Settings` → move to schema
-- Add: `tests/integration/test_no_hardcoded_values.py` calling the same checker on `src/`
+- Modify: `scripts/check_no_hardcoded_values.py` — accept a `--full-tree` flag (in addition to today's changed-lines mode); refuse to exit non-zero on debt found in `--audit-only` mode for staged rollout
+- Sweep: any literal `localhost`, `127.0.0.1`, port number, IP literal, magic numeric threshold in `src/mousedroid/` that does not derive from a `Settings` field → move to schema with a safe default
+- Modify: `scripts/ci.sh` — add a second invocation `python scripts/check_no_hardcoded_values.py --full-tree --audit-only src/mousedroid/` that logs but does not fail; flip to fail mode once the sweep is complete
 
-**Acceptance:** CI fails if any literal `localhost` or `127.0.0.1` appears in `src/mousedroid/` outside `mock_*` files.
+**Acceptance:**
+- Running `python scripts/check_no_hardcoded_values.py --full-tree src/mousedroid/` returns 0 findings (sweep complete).
+- The existing changed-lines mode behaviour is unchanged (back-compat).
+- CI gains a second invocation in audit mode that surfaces drift for review.
 
 ---
 
@@ -906,16 +940,33 @@ on the state object. Backwards compat preserved via MissionState.from_directive.
 
 ---
 
-## PR H3 — Bearer-token auth on more WS endpoints
+## PR H3 — Verify + harden bearer-token auth on WS endpoints
 
-**Why:** `/ws/v1/lidar/raw` and `/api/v1/logs/stream` (added in PR #79) accept connections without enforcing the same bearer-token validation as `/ws`. Survey notes this as a security gap.
+**Why:** The aiohttp auth middleware in `src/mousedroid/telemetry/auth.py` already runs for **every** route — including `/ws/v1/lidar/raw` and `/api/v1/logs/stream` — because middlewares attach at the app level, not per-route. The middleware raises `HTTPUnauthorized`, which aiohttp converts to a **plain HTTP 401 response BEFORE the WebSocket upgrade**. There is no WS close code `4401` today; achieving close-code semantics would require auth INSIDE the handlers (post-upgrade), which is a bigger architectural change.
+
+This PR has two scopes — pick one per the operator's preference:
+
+### Scope A (recommended, smaller) — verify + lock in 401-before-upgrade
 
 **Files:**
-- Modify: `src/mousedroid/telemetry/auth.py` — apply middleware to ALL WS routes by default; explicit allow-list for unauthenticated endpoints
-- Modify: `src/mousedroid/telemetry/server.py` — pass auth context to `_handle_lidar_raw_ws` and `_handle_log_stream`
-- Create: `tests/integration/test_ws_auth_enforcement.py` — assert each WS endpoint rejects connections without `Authorization: Bearer ...` when `auth_enabled=true`
+- Create: `tests/integration/test_ws_auth_enforcement.py` — for each of `/ws`, `/ws/v1/lidar/raw`, `/api/v1/logs/stream`, assert that an unauthenticated connect returns HTTP 401 before the WS upgrade succeeds
+- Verify: existing middleware already covers these routes; no `auth.py` or `server.py` changes needed
+- Document the auth model in `src/mousedroid/telemetry/auth.py` module docstring (401-before-upgrade, not close-code 4401)
 
-**Acceptance:** Unauthenticated WS connect → close code `4401` (new constant in `mousedroid.constants`); existing tests pass byte-for-byte; Phase B P3 + P12a + P13 probes still PASS (they already send the token via `MOUSEDROID_TELEMETRY_TOKEN`).
+**Acceptance:** Three new tests pass; no production code changes; aiohttp returns HTTP 401 before the WS handshake completes for any of the three endpoints when `auth_enabled=true` and the bearer token is absent or wrong.
+
+### Scope B (larger, optional follow-up) — migrate to close-code 4401
+
+If close-code semantics are desired for richer client-side error handling, the migration requires:
+
+**Files:**
+- Modify: `src/mousedroid/telemetry/auth.py` — add an `is_websocket_path(request)` check that skips the middleware raise and instead lets the WS handler accept the upgrade
+- Modify: `src/mousedroid/telemetry/server.py` — `_handle_ws`, `_handle_lidar_raw_ws`, `_handle_log_stream` each call a shared `_authenticate_ws(request, ws) -> bool` helper post-upgrade and close with code 4401 on failure
+- Add: `mousedroid/constants.py` — `WS_CLOSE_AUTH_FAILED: int = 4401`
+
+This is a meaningful change to the auth path; defer until a frontend page demonstrably needs the close-code (current dashboards are happy with the HTTP 401 because they retry the upgrade).
+
+**Default**: ship Scope A in this PR; track Scope B as a separate item if needed.
 
 ---
 
@@ -936,13 +987,14 @@ on the state object. Backwards compat preserved via MissionState.from_directive.
 
 ## Parallel batches (worktree pattern)
 
-The 24-PR roadmap is structured for **4 parallel worktrees per batch**. Each worktree is created via the `superpowers:using-git-worktrees` skill; each PR is dispatched to a subagent via `superpowers:subagent-driven-development`.
+The 23-PR roadmap (T1 retired during the pre-execution audit — already shipped) is structured for **4 parallel worktrees per batch**. Each worktree is created via the `superpowers:using-git-worktrees` skill; each PR is dispatched to a subagent via `superpowers:subagent-driven-development`. The original Batch 1 (T1, D1, H1, H2) drops T1 → 3 worktrees that batch; remaining batches unchanged.
 
 ### Batch 1 (week 1) — independent quick wins
 
+T1 retired (already shipped — see "Pre-execution audit" earlier in this doc); Batch 1 ships with 3 worktrees instead of 4.
+
 | Worktree | PR | Subagent type |
 |---|---|---|
-| `wt-t1-bc-weight` | T1 | `test-runner` |
 | `wt-d1-shell` | D1 | `nextjs-vercel-pro:frontend-developer` |
 | `wt-h1-no-hardcodes` | H1 | `code-quality` |
 | `wt-h2-numpy` | H2 | `python-pro` |
