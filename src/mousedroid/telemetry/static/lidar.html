@@ -23,6 +23,7 @@
   #conn { color: var(--warn); }
   #conn.ok { color: var(--ok); }
   #conn.err { color: var(--crit); }
+  #conn.stale { color: var(--warn); }
   main { display: flex; gap: 20px; padding: 20px; flex-wrap: wrap; }
   #canvas-wrap { background: #10171f; border: 1px solid var(--grid); border-radius: 8px; padding: 12px; }
   canvas { display: block; }
@@ -34,20 +35,22 @@
   .s-crit { background: var(--crit); }
   .s-none { background: var(--grid); }
   code { color: var(--accent); }
+  a { color: var(--accent); }
 </style>
 </head>
 <body>
 <header>
   <h1>MouseDroid LiDAR</h1>
-  <div class="status">WS: <strong id="conn">connecting…</strong></div>
+  <div class="status">main: <strong id="conn">connecting…</strong></div>
+  <div class="status">raw: <strong id="rawConn">connecting…</strong></div>
   <div class="status">FPS: <strong id="fps">0</strong></div>
-  <div class="status">Sectors: <strong id="nsect">0</strong></div>
-  <div class="status">Min: <strong id="mindist">—</strong> m</div>
   <div class="status">Points: <strong id="npoints">0</strong></div>
+  <div class="status">Min: <strong id="mindist">—</strong> m</div>
+  <div class="status">Liveness: <strong id="liveness">—</strong></div>
 </header>
 <main>
   <div id="canvas-wrap">
-    <canvas id="polar" width="520" height="520"></canvas>
+    <canvas id="polar" width="560" height="560"></canvas>
   </div>
   <aside id="legend">
     <h2>Legend</h2>
@@ -55,15 +58,16 @@
     <p><span class="swatch s-warn"></span>near (0.3 – 0.6 &times; max_range)</p>
     <p><span class="swatch s-crit"></span>collision risk (&lt; 0.3 &times; max_range)</p>
     <p><span class="swatch s-none"></span>no data</p>
-    <p style="margin-top:16px">Each wedge spans one sector around the droid.
-    Radius maps 0 → center (blocked) to outer ring (clear).
-    Source: WebSocket <code>TelemetryFrame.lidar_sectors</code>.</p>
+    <p style="margin-top:16px">Dots: raw points from
+       <code>WS /ws/v1/lidar/raw</code>.<br>
+       Wedges: aggregated sectors from <code>WS /ws</code>.</p>
     <p>Endpoints:
       <br><code>GET /lidar</code> (this page)
-      <br><code>WS /ws</code> (frames)
+      <br><code>WS /ws</code> (TelemetryFrame)
+      <br><code>WS /ws/v1/lidar/raw</code> (raw points)
       <br><code>GET /metrics</code> (Prometheus)
-      <br><code>GET /api/v1/sensors</code> (snapshot)
     </p>
+    <p id="msgpackHint" style="display:none; color: var(--crit);"></p>
   </aside>
 </main>
 <script>
@@ -72,28 +76,35 @@
   const canvas = document.getElementById("polar");
   const ctx = canvas.getContext("2d");
   const connEl = document.getElementById("conn");
+  const rawConnEl = document.getElementById("rawConn");
   const fpsEl = document.getElementById("fps");
-  const nsectEl = document.getElementById("nsect");
   const mindistEl = document.getElementById("mindist");
   const npointsEl = document.getElementById("npoints");
+  const livenessEl = document.getElementById("liveness");
+  const msgpackHintEl = document.getElementById("msgpackHint");
 
-  // State
-  let latest = { sectors: null, min: null, n: 0 };
+  // --- State -----------------------------------------------------------
+  let latest = { sectors: null, min: null, n: 0, liveness: null };
+  let latestRaw = { angles: null, distances: null, ts: 0 };
   let frameCount = 0;
   let lastFpsT = performance.now();
 
   function colorFor(norm) {
-    // norm in [0, 1]; 1.0 = clear, 0 = blocked.
     if (norm == null) return "#30363d";
     if (norm >= 0.6) return "#3fb950";
     if (norm >= 0.3) return "#d29922";
     return "#f85149";
   }
 
+  function distanceColor(d, maxRange) {
+    const norm = Math.max(0, Math.min(1, d / maxRange));
+    return colorFor(norm);
+  }
+
   function draw() {
     const w = canvas.width, h = canvas.height;
     const cx = w / 2, cy = h / 2;
-    const R = Math.min(cx, cy) - 20;
+    const R = Math.min(cx, cy) - 24;
 
     ctx.clearRect(0, 0, w, h);
 
@@ -122,36 +133,58 @@
     ctx.closePath();
     ctx.fill();
 
+    // Sectors (TelemetryFrame.lidar_sectors). Drawn first as a soft
+    // background so raw points overlay cleanly.
     const sectors = latest.sectors;
-    if (!sectors || sectors.length === 0) {
+    if (sectors && sectors.length > 0) {
+      const n = sectors.length;
+      const step = (Math.PI * 2) / n;
+      const a0 = -Math.PI / 2 - step / 2;
+      for (let i = 0; i < n; i++) {
+        const norm = Math.max(0, Math.min(1, sectors[i]));
+        const radius = norm * R;
+        const start = a0 + i * step;
+        const end = start + step;
+        ctx.fillStyle = colorFor(norm);
+        ctx.globalAlpha = 0.45;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.arc(cx, cy, radius, start, end);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    } else if (!latestRaw.distances) {
       ctx.fillStyle = "#8b949e";
       ctx.font = "13px ui-monospace, monospace";
       ctx.textAlign = "center";
-      ctx.fillText("waiting for lidar_sectors…", cx, cy);
-      return;
+      ctx.fillText("waiting for lidar data…", cx, cy);
     }
 
-    const n = sectors.length;
-    const step = (Math.PI * 2) / n;
-    // Rotate so sector 0 starts at forward (up) and wedges go clockwise.
-    const a0 = -Math.PI / 2 - step / 2;
-
-    for (let i = 0; i < n; i++) {
-      const norm = Math.max(0, Math.min(1, sectors[i]));
-      const radius = norm * R;
-      const start = a0 + i * step;
-      const end = start + step;
-      ctx.fillStyle = colorFor(norm);
+    // Raw points (LidarRawScan). Each point is plotted as a small dot.
+    const angles = latestRaw.angles;
+    const distances = latestRaw.distances;
+    if (angles && distances && angles.length === distances.length) {
+      // Compute max range from the data for normalisation (defensive).
+      let maxRange = 0.1;
+      for (let i = 0; i < distances.length; i++) {
+        if (distances[i] > maxRange) maxRange = distances[i];
+      }
       ctx.globalAlpha = 0.85;
-      ctx.beginPath();
-      ctx.moveTo(cx, cy);
-      ctx.arc(cx, cy, radius, start, end);
-      ctx.closePath();
-      ctx.fill();
+      for (let i = 0; i < angles.length; i++) {
+        const theta = angles[i] - Math.PI / 2;  // rotate so 0 rad → up
+        const r = (distances[i] / maxRange) * R;
+        const x = cx + Math.cos(theta) * r;
+        const y = cy + Math.sin(theta) * r;
+        ctx.fillStyle = distanceColor(distances[i], maxRange);
+        ctx.beginPath();
+        ctx.arc(x, y, 1.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
     }
-    ctx.globalAlpha = 1;
 
-    // Center dot
+    // Centre dot
     ctx.fillStyle = "#e6edf3";
     ctx.beginPath();
     ctx.arc(cx, cy, 3, 0, Math.PI * 2);
@@ -162,13 +195,27 @@
     const sectors = Array.isArray(obj.lidar_sectors) ? obj.lidar_sectors : null;
     const minDist = (typeof obj.lidar_min_dist_m === "number") ? obj.lidar_min_dist_m : null;
     const n = (typeof obj.lidar_n_points === "number") ? obj.lidar_n_points : 0;
-    latest = { sectors, min: minDist, n };
+    const liveness = (obj.sensor_liveness && typeof obj.sensor_liveness === "object")
+      ? obj.sensor_liveness : null;
+    latest = { sectors, min: minDist, n, liveness };
 
-    nsectEl.textContent = sectors ? String(sectors.length) : "0";
     mindistEl.textContent = minDist == null ? "—" : minDist.toFixed(2);
     npointsEl.textContent = String(n);
+    if (liveness && liveness.lidar && liveness.lidar.state) {
+      livenessEl.textContent = liveness.lidar.state;
+      connEl.className = liveness.lidar.state === "live" ? "ok"
+        : liveness.lidar.state === "stale" ? "stale" : "err";
+    }
 
     frameCount++;
+    draw();
+  }
+
+  function handleRaw(obj) {
+    const angles = Array.isArray(obj.angles_rad) ? obj.angles_rad : null;
+    const distances = Array.isArray(obj.distances_m) ? obj.distances_m : null;
+    const ts = typeof obj.timestamp === "number" ? obj.timestamp : 0;
+    latestRaw = { angles, distances, ts };
     draw();
   }
 
@@ -184,68 +231,92 @@
   }
   requestAnimationFrame(updateFps);
 
-  let ws = null;
-  let backoff = 500;
-  function connect() {
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    // Propagate auth material from the page URL onto the /ws upgrade so the
-    // dashboard works when telemetry bearer auth or legacy X-API-Key is on.
-    // Browsers cannot set custom headers on new WebSocket(), so the server
-    // accepts ?token=... (bearer) and ?api_key=... (legacy) as a fallback.
+  // --- WebSocket plumbing (with hello negotiation) ----------------------
+  function pageAuthParams() {
     const pageParams = new URLSearchParams(location.search);
     const wsParams = new URLSearchParams();
     const token = pageParams.get("token");
     const apiKey = pageParams.get("api_key");
     if (token) wsParams.set("token", token);
     if (apiKey) wsParams.set("api_key", apiKey);
-    const qs = wsParams.toString();
-    const url = `${proto}//${location.host}/ws` + (qs ? `?${qs}` : "");
-    connEl.textContent = "connecting…";
-    connEl.className = "";
-    try {
-      ws = new WebSocket(url);
-    } catch (e) {
-      scheduleReconnect();
-      return;
-    }
-    ws.binaryType = "arraybuffer";
-    ws.onopen = () => {
-      connEl.textContent = "open";
-      connEl.className = "ok";
-      backoff = 500;
-    };
-    ws.onmessage = (ev) => {
-      // Dashboard only supports JSON frames. When the server is configured
-      // for msgpack serialization, surface the mode explicitly so operators
-      // know to switch telemetry.serialization to "json" rather than see a
-      // silently-stuck dashboard.
-      if (typeof ev.data !== "string") {
-        connEl.textContent = "binary (msgpack) — set telemetry.serialization=json";
-        connEl.className = "err";
+    return wsParams.toString();
+  }
+
+  function buildUrl(path) {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    const qs = pageAuthParams();
+    return `${proto}//${location.host}${path}` + (qs ? `?${qs}` : "");
+  }
+
+  function connect(path, statusEl, onFrame) {
+    let ws = null;
+    let backoff = 500;
+    let ackReceived = false;
+    function open() {
+      statusEl.textContent = "connecting…";
+      statusEl.className = "";
+      try {
+        ws = new WebSocket(buildUrl(path));
+      } catch (_) {
+        scheduleReconnect();
         return;
       }
-      try {
-        const obj = JSON.parse(ev.data);
-        handleFrame(obj);
-      } catch (err) {
-        // ignore malformed JSON
-      }
-    };
-    ws.onclose = () => {
-      connEl.textContent = "closed";
-      connEl.className = "err";
-      scheduleReconnect();
-    };
-    ws.onerror = () => {
-      connEl.textContent = "error";
-      connEl.className = "err";
-    };
+      ws.binaryType = "arraybuffer";
+      ws.onopen = () => {
+        statusEl.textContent = "open";
+        statusEl.className = "ok";
+        backoff = 500;
+        // Send hello — server falls back gracefully if it ignores it.
+        try {
+          ws.send(JSON.stringify({
+            hello: {
+              protocol_version: 1,
+              supported_serializations: ["json"],
+              preferred_serialization: "json"
+            }
+          }));
+        } catch (_) { /* ignore */ }
+      };
+      ws.onmessage = (ev) => {
+        if (typeof ev.data !== "string") {
+          const url = msgpackHintEl.dataset.url || "msgpack JS decoder";
+          msgpackHintEl.style.display = "block";
+          msgpackHintEl.textContent = "Server is sending binary (msgpack). " +
+            "Install a decoder or switch the server to JSON: " + url;
+          statusEl.textContent = "binary (msgpack)";
+          statusEl.className = "err";
+          return;
+        }
+        let obj = null;
+        try { obj = JSON.parse(ev.data); } catch (_) { return; }
+        if (!ackReceived && obj && obj.hello_ack) {
+          ackReceived = true;
+          if (obj.hello_ack.msgpack_client_lib_url) {
+            msgpackHintEl.dataset.url = obj.hello_ack.msgpack_client_lib_url;
+          }
+          return;
+        }
+        onFrame(obj);
+      };
+      ws.onclose = () => {
+        statusEl.textContent = "closed";
+        statusEl.className = "err";
+        scheduleReconnect();
+      };
+      ws.onerror = () => {
+        statusEl.textContent = "error";
+        statusEl.className = "err";
+      };
+    }
+    function scheduleReconnect() {
+      setTimeout(open, backoff);
+      backoff = Math.min(backoff * 2, 5000);
+    }
+    open();
   }
-  function scheduleReconnect() {
-    setTimeout(connect, backoff);
-    backoff = Math.min(backoff * 2, 5000);
-  }
-  connect();
+
+  connect("/ws", connEl, handleFrame);
+  connect("/ws/v1/lidar/raw", rawConnEl, handleRaw);
   draw();
 })();
 </script>

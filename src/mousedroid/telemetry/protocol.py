@@ -60,12 +60,89 @@ class TelemetryFrame:
     vision_features: list[float] | None = None
     loop_time_ms: float = 0.0
     tick_count: int = 0
+    # PR #4: per-sensor liveness map distinguishes disabled/awaiting/live/
+    # stale so the dashboard can render three distinct UI states instead
+    # of conflating "off" with "broken". Empty when no liveness tracker
+    # is wired (preserves backwards-compat for direct constructions).
+    sensor_liveness: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise to a plain dict for JSON/msgpack encoding.
 
         Returns:
             Dictionary representation of all fields.
+        """
+        return asdict(self)
+
+
+def lidar_scan_to_raw(scan: Any) -> LidarRawScan:
+    """Convert a ``LidarScan`` from the driver into a ``LidarRawScan``.
+
+    Converts angles from degrees to radians and distances from mm to
+    metres. The input is typed loosely (``Any``) to avoid a hard
+    dependency on the sensing layer; the function expects an object
+    with ``angles_deg`` (NDArray-like in degrees), ``distances_mm``
+    (NDArray-like in mm), ``confidences`` (NDArray-like), ``timestamp``,
+    and ``n_points`` attributes.
+
+    Args:
+        scan: Source scan in the driver's native units.
+
+    Returns:
+        A :class:`LidarRawScan` in SI units (radians, metres) ready for
+        WebSocket publishing.
+    """
+    import math as _math
+
+    raw_angles = list(scan.angles_deg)
+    raw_distances = list(scan.distances_mm)
+    raw_confidences = list(getattr(scan, "confidences", []))
+    angles_rad = [float(a) * _math.pi / 180.0 for a in raw_angles]
+    distances_m = [float(d) / 1000.0 for d in raw_distances]
+    intensities = [float(c) / 255.0 for c in raw_confidences] if raw_confidences else []
+    return LidarRawScan(
+        timestamp=float(scan.timestamp),
+        angles_rad=angles_rad,
+        distances_m=distances_m,
+        n_points=int(scan.n_points),
+        scan_duration_s=0.0,
+        intensities=intensities,
+    )
+
+
+@dataclass(frozen=True)
+class LidarRawScan:
+    """Single raw LiDAR scan snapshot for the live streaming endpoint.
+
+    Carries the decoded points (angle, distance) of a complete 360° scan
+    plus minimal diagnostic metadata. Independent from
+    :class:`TelemetryFrame` because the raw scan stream is published at
+    a different rate and to a different WebSocket endpoint.
+
+    Attributes:
+        timestamp: Monotonic timestamp of scan completion (seconds).
+        angles_rad: Polar angle of each point in radians, in ``[0, 2π)``.
+        distances_m: Distance (metres) at each corresponding angle.
+            Same length as ``angles_rad``.
+        intensities: Optional per-point intensity / confidence values in
+            ``[0, 1]``. Empty when the driver does not provide them.
+        n_points: Total point count in the scan (``len(angles_rad)``).
+        scan_duration_s: Time taken to assemble this scan (seconds).
+    """
+
+    timestamp: float
+    angles_rad: list[float]
+    distances_m: list[float]
+    n_points: int
+    scan_duration_s: float
+    intensities: list[float] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialise to a plain dict for JSON/msgpack encoding.
+
+        Returns:
+            Dictionary representation suitable for the
+            ``/ws/v1/lidar/raw`` payload.
         """
         return asdict(self)
 
@@ -86,6 +163,18 @@ class TelemetryPublisherProtocol(Protocol):
         """
         ...
 
+    async def publish_lidar_raw(self, scan: LidarRawScan) -> None:
+        """Publish a raw LiDAR scan to the streaming queue.
+
+        Non-blocking — drops the scan if the raw queue is full.
+        Implementations may rate-limit based on
+        ``TelemetryConfig.lidar_raw_publish_hz``.
+
+        Args:
+            scan: Raw scan snapshot to publish.
+        """
+        ...
+
     def get_queue(self) -> asyncio.Queue[TelemetryFrame]:
         """Return the internal queue for consumers.
 
@@ -94,12 +183,21 @@ class TelemetryPublisherProtocol(Protocol):
         """
         ...
 
+    def get_lidar_raw_queue(self) -> asyncio.Queue[LidarRawScan]:
+        """Return the raw-LiDAR streaming queue for the server to consume.
+
+        Returns:
+            The ``asyncio.Queue`` carrying ``LidarRawScan`` snapshots.
+        """
+        ...
+
     @property
     def stats(self) -> dict[str, int]:
         """Publishing statistics.
 
         Returns:
-            Dict with ``frames_published`` and ``frames_dropped`` counts.
+            Dict with at least ``frames_published``, ``frames_dropped``,
+            ``lidar_raw_published``, and ``lidar_raw_dropped`` counts.
         """
         ...
 
