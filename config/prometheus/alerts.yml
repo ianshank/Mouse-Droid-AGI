@@ -329,19 +329,24 @@ groups:
             policy_selector to nav_agent.
           config_ref: "operator-tunable threshold (default 0.01/s over 5m)"
 
-      # Info: VLM progress-reward cache hit-rate collapsed below 50%.
-      # Not critical — the cache is an optimization — but a sustained
-      # collapse points at either a sparse VLM key space or aggressive
-      # eviction. The +0.0001 guard prevents 0/0 NaN when both counters are
-      # zero (no observations yet).
+      # Info: VLM progress-reward cache hit-rate collapsed below 50% in
+      # the recent 10-minute window. Not critical — the cache is an
+      # optimization — but a sustained collapse points at either a sparse
+      # VLM key space or aggressive eviction. Uses ``rate()`` rather than
+      # raw counters so a fresh collapse triggers promptly even after a
+      # long history of good hit-rates (raw-counter ratios are dominated
+      # by lifetime totals and would mask recent regressions). The
+      # +0.0001 guard prevents 0/0 NaN when both rate windows are zero
+      # (no observations yet — the deferred writer-side instrumentation
+      # hasn't landed).
       - alert: VLMCacheHitRateCollapse
         expr: |
           (
-            mousedroid_vlm_progress_cache_hits_total
+            rate(mousedroid_vlm_progress_cache_hits_total[10m])
             /
             (
-              mousedroid_vlm_progress_cache_hits_total
-              + mousedroid_vlm_progress_cache_misses_total
+              rate(mousedroid_vlm_progress_cache_hits_total[10m])
+              + rate(mousedroid_vlm_progress_cache_misses_total[10m])
               + 0.0001
             )
           ) < 0.5
@@ -352,7 +357,7 @@ groups:
         annotations:
           summary: "VLM progress-cache hit-rate below 50% for 10m"
           description: >-
-            hits / (hits + misses) = {{ $value | printf "%.2%%" }} on
-            {{ $labels.instance }}. Cache is thrashing — investigate VLM key
+            hits / (hits + misses) over the last 10m = {{ $value | printf "%.2f" }}
+            on {{ $labels.instance }}. Cache is thrashing — investigate VLM key
             sparsity or LRU sizing in mousedroid.reward.vlm_progress.
           config_ref: "operator-tunable threshold (default 0.5 ratio over 10m)"

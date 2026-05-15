@@ -956,7 +956,7 @@
       },
       "targets": [
         {
-          "expr": "rate(mousedroid_mcp_requests[1m])",
+          "expr": "rate(mousedroid_mcp_requests_total[1m])",
           "legendFormat": "requests/s",
           "refId": "A"
         }
@@ -1000,7 +1000,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (tool, result) (mousedroid_mcp_tool_calls)",
+          "expr": "sum by (tool, result) (rate(mousedroid_mcp_tool_calls_total[5m]))",
           "legendFormat": "{{tool}} / {{result}}",
           "refId": "A",
           "format": "table",
@@ -1232,7 +1232,7 @@
       },
       "targets": [
         {
-          "expr": "(mousedroid_vlm_progress_cache_hits_total) / (mousedroid_vlm_progress_cache_hits_total + mousedroid_vlm_progress_cache_misses_total + 0.0001)",
+          "expr": "rate(mousedroid_vlm_progress_cache_hits_total[5m]) / (rate(mousedroid_vlm_progress_cache_hits_total[5m]) + rate(mousedroid_vlm_progress_cache_misses_total[5m]) + 0.0001)",
           "refId": "A"
         }
       ],

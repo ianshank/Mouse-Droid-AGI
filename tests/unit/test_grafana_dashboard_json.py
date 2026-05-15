@@ -115,13 +115,16 @@ class TestPanelExpressionsReferenceKnownMetrics:
         # aren't emitted in the sample (e.g. metrics whose render path is
         # gated on a feature flag the sample doesn't enable). Each entry
         # is the bare query name without a Prometheus suffix.
+        # Whitelist must use the *rendered* metric names (with the suffix
+        # Prometheus actually emits) so the test catches dashboards that
+        # reference unsuffixed counter base names. Counters render with
+        # ``_total``; histograms render base + ``_bucket`` / ``_sum`` /
+        # ``_count``. The MCP family is gated on ``track_mcp=True`` plus
+        # an actual request having fired — the default sample exercises
+        # neither, but the rendered names are these:
         sample_omits: set[str] = {
-            # The MCP family is gated on ``track_mcp=True`` plus an actual
-            # request having fired — the default sample exercises neither.
-            "mousedroid_mcp_requests",
-            "mousedroid_mcp_tool_calls",
+            "mousedroid_mcp_requests_total",
             "mousedroid_mcp_tool_calls_total",
-            "mousedroid_mcp_request_latency_ms",
             "mousedroid_mcp_request_latency_ms_bucket",
             "mousedroid_mcp_request_latency_ms_sum",
             "mousedroid_mcp_request_latency_ms_count",
