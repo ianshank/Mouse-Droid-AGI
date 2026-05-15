@@ -23,13 +23,66 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `offline_rl_bc_active` structured log is emitted at run start and the
   scalar `bc_loss` is aggregated alongside `q_loss` / `policy_loss` in
   the epoch summary, surfacing as `final_bc_loss` in the returned stats.
-- **`tests/integration/test_phase21_bc_into_offline_rl.py`** — 8 tests
-  covering: byte-identity at `weight=0` (CQL + IQL), measurable parameter
-  divergence at `weight>0` (CQL + IQL), finite-weights guarantee,
-  `final_bc_loss` aggregation into the run-summary stats, and the empty
-  LMDB short-circuit being unaffected by the BC weight.
+- **Optional dedicated BC optimizer** (`OfflineRLConfig.bc_lr`,
+  `OfflineRLConfig.bc_batch_size`) — when `bc_lr` is set, the trainer
+  builds a separate `bc_optimizer` over policy parameters so the BC
+  auxiliary loss can step at a different learning rate from the actor
+  PPO step. When `bc_lr is None` (default), `bc_optimizer is
+  policy_optimizer` — byte-identical to the pre-Phase-2.1 path. The
+  trainer emits a one-shot `offline_rl_bc_optimizer_built` log at
+  construction documenting whether the optimizer is shared or dedicated.
+  Checkpoint compatibility is preserved: legacy checkpoints (no
+  `bc_optimizer` key) load cleanly into trainers with or without a
+  dedicated optimizer.
+- **Sim/real ReplayMixer integration** (`OfflineRLConfig.use_replay_mixer`)
+  — when `True` and `cfg.training.replay.enabled` is `True` with a
+  distinct `cfg.training.replay.source_path`, `train_offline_rl` draws
+  batches from a deterministic `RealSimMixer` interleaving the sim
+  (`cfg.experience.path`) and real (`cfg.training.replay.source_path`)
+  LMDB stores. Alpha ramp is driven by `cfg.training.replay_mixer`. If
+  the mixer is requested but the real path is missing or identical, a
+  `offline_rl_mixer_requested_but_unavailable` warning is logged and
+  training proceeds on the single LMDB. Default `False` preserves
+  byte-identical legacy behavior.
+- **`tests/integration/test_phase21_bc_into_offline_rl.py`** — patches
+  `test_bc_loss_recorded_in_stats` to assert the `offline_rl_bc_active`
+  activation log fires (closes a prior gap where `caplog` was passed but
+  never asserted). Existing 6 integration test classes (byte-identity at
+  `weight=0` for CQL + IQL, measurable parameter divergence at
+  `weight>0`, finite-weights guarantee, `final_bc_loss` aggregation, and
+  the empty-LMDB short-circuit) all continue to pass unchanged.
+- **`tests/integration/test_train_offline_rl_mixer.py`** (new) — 4 tests
+  covering the new `use_replay_mixer` toggle: default-false safety,
+  fallback when no distinct real path is configured, fallback when the
+  source path is identical to the experience path, and the mixer-active
+  log + training-completes path when a distinct real LMDB is present.
+- **`tests/unit/test_offline_rl_bc.py`** (extended) — 8 new tests
+  covering the dedicated `bc_optimizer` wiring: alias-when-`bc_lr=None`,
+  separation-when-`bc_lr` set, policy_optimizer state isolation,
+  legacy-checkpoint-loads-without-bc-state, dedicated-bc-checkpoint
+  round-trip, empty-batch no-op, and shape-mismatch raises.
+- **`tests/unit/test_config_schema.py`** (extended) — 7 new tests
+  validating `bc_lr`, `bc_batch_size`, and `use_replay_mixer` defaults,
+  positive-value acceptance, zero/negative rejection, and composite
+  field configuration.
+- **`tests/performance/test_offline_rl_bc_overhead.py`** (new) — slow
+  regression: BC-active training must stay within `2.5×` baseline
+  wall-clock (operator-tunable via `MOUSEDROID_BC_OVERHEAD_BUDGET`).
+  Adam internal state size is bounded to one entry per policy
+  parameter.
 - **`docs/planning/PHASE_2_1_AND_BEYOND_PLAN.md`** — plan-of-record for
   the next sprint cycle (PR-A1/A2/B1/B2) with risks and Definition of Done.
+
+#### Rollback path (no code revert required)
+
+- To fully disable Phase 2.1 in production: set
+  `offline_rl.real_supervised_weight: 0.0` in YAML and restart training.
+  Byte-identity at this default is guaranteed by the existing
+  `TestBcByteIdentityAtZeroWeight` integration test.
+- To disable only the dedicated BC optimizer: set
+  `offline_rl.bc_lr: null` (the default).
+- To disable only the sim/real mixer: set
+  `offline_rl.use_replay_mixer: false` (the default).
 
 ### Added — Production-config validation gate
 

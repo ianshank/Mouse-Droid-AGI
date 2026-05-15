@@ -914,7 +914,37 @@ class OfflineRLConfig(BaseModel):
         description=(
             "Phase 2: weight on the auxiliary BC-style supervised loss applied to real "
             "replay batches drawn from the LMDB store. 0.0 disables the BC term — "
-            "training is then byte-identical to the pre-Phase-2 path."
+            "training is then byte-identical to the pre-Phase-2 path. See also "
+            "``bc_lr`` and ``bc_batch_size`` for optional dedicated BC optimizer tuning, "
+            "and ``use_replay_mixer`` to source batches from the sim/real mixer."
+        ),
+    )
+    bc_lr: float | None = Field(
+        None,
+        gt=0,
+        description=(
+            "Phase 2.1: optional dedicated learning rate for the BC auxiliary loss. "
+            "When ``None`` the policy optimizer (and its learning_rate) is reused — "
+            "byte-identical to the pre-Phase-2.1 path. When set, a separate "
+            "``bc_optimizer`` is built over policy parameters."
+        ),
+    )
+    bc_batch_size: int | None = Field(
+        None,
+        gt=0,
+        description=(
+            "Phase 2.1: optional dedicated mini-batch size for the BC step. "
+            "When ``None`` the main ``batch_size`` is reused. Reserved for future "
+            "use when the BC update is decoupled from the actor-critic batch; "
+            "currently consumed by the trainer constructor and exposed in checkpoints."
+        ),
+    )
+    use_replay_mixer: bool = Field(
+        False,
+        description=(
+            "Phase 2.1: when True, draw training batches from the sim/real "
+            "``ReplayMixer`` instead of the single ``OfflineRLDataset`` LMDB. "
+            "Default False preserves byte-identical behavior to the single-LMDB path."
         ),
     )
 

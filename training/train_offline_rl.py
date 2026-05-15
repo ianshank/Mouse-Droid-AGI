@@ -12,15 +12,23 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import copy
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import structlog
 
 from mousedroid.config.loader import load_settings
-from mousedroid.config.schema import OfflineRLConfig, Settings
+from mousedroid.config.schema import ExperienceConfig, OfflineRLConfig, Settings
 from mousedroid.experience.dataset import OfflineRLDataset
 from mousedroid.learning.offline_rl import CQLTrainer, IQLTrainer, OfflineRLTrainer
+from mousedroid.training.replay.mixer import MixerConfig, RealSimMixer
 from training.gpu_utils import resolve_device
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from torch import Tensor
 
 _log = structlog.get_logger(__name__)
 
@@ -79,6 +87,8 @@ def _build_trainer(
             cql_alpha=offline_cfg.cql_alpha,
             n_random_actions=offline_cfg.cql_n_random_actions,
             device=device,
+            bc_lr=offline_cfg.bc_lr,
+            bc_batch_size=offline_cfg.bc_batch_size,
         )
     if algorithm == "iql":
         return IQLTrainer(
@@ -91,9 +101,93 @@ def _build_trainer(
             iql_tau=offline_cfg.iql_expectile,
             beta=offline_cfg.iql_beta,
             device=device,
+            bc_lr=offline_cfg.bc_lr,
+            bc_batch_size=offline_cfg.bc_batch_size,
         )
     msg = f"Unknown offline RL algorithm: {algorithm!r}. Use 'cql' or 'iql'."
     raise ValueError(msg)
+
+
+def _resolve_real_replay_dataset(
+    cfg: Settings,
+    device_str: str,
+) -> OfflineRLDataset | None:
+    """Resolve and open a separate real-replay :class:`OfflineRLDataset`.
+
+    Phase 2.1: returns a second dataset only when both
+    ``cfg.training.replay.enabled`` is True and
+    ``cfg.training.replay.source_path`` points to a distinct LMDB store from
+    ``cfg.experience.path``. Otherwise returns ``None`` and the caller falls
+    back to the single-source path (byte-identical to pre-Phase-2.1 behavior).
+
+    Args:
+        cfg: Root settings.
+        device_str: Torch device string.
+
+    Returns:
+        Opened :class:`OfflineRLDataset` over the real-replay LMDB, or ``None``.
+    """
+    import torch
+
+    replay_cfg = cfg.training.replay
+    if not replay_cfg.enabled:
+        return None
+    if not replay_cfg.source_path:
+        return None
+    if replay_cfg.source_path == cfg.experience.path:
+        # Same store on both sides degenerates to a single-source path; skip.
+        return None
+
+    real_experience_cfg = copy.deepcopy(cfg.experience)
+    # ``ExperienceConfig`` is the schema consumed by ``OfflineRLDataset``; we
+    # only need to redirect the path. The other fields (map_size_gb, flush
+    # cadence) are reused as-is so real and sim datasets honor the same
+    # operator-tuned envelope.
+    real_experience_cfg = ExperienceConfig(
+        **{**real_experience_cfg.model_dump(), "path": replay_cfg.source_path}
+    )
+    real_dataset = OfflineRLDataset(
+        experience_cfg=real_experience_cfg,
+        model_cfg=cfg.model,
+        device=torch.device(device_str),
+    )
+    real_dataset.open()
+    return real_dataset
+
+
+def _build_mixed_batch_iterator(
+    sim_dataset: OfflineRLDataset,
+    real_dataset: OfflineRLDataset,
+    offline_cfg: OfflineRLConfig,
+    mixer_cfg: MixerConfig,
+    epoch: int,
+) -> Iterator[dict[str, Tensor]]:
+    """Wrap sim + real batch iterators in a deterministic :class:`RealSimMixer`.
+
+    A fresh mixer is built per epoch so the alpha ramp restarts deterministically
+    and the seeded interleaving is reproducible.
+
+    Args:
+        sim_dataset: Primary ("sim") :class:`OfflineRLDataset`.
+        real_dataset: Secondary ("real") :class:`OfflineRLDataset`.
+        offline_cfg: Offline-RL configuration (drives batch shape).
+        mixer_cfg: Mixer configuration (drives alpha + seed).
+        epoch: Current epoch index (forwarded as dataset shuffle seed).
+
+    Returns:
+        Iterator over interleaved batch dicts.
+    """
+    sim_iter = sim_dataset.iterate_batches(
+        batch_size=offline_cfg.batch_size,
+        seed=epoch,
+        terminal_gap_s=offline_cfg.terminal_gap_s,
+    )
+    real_iter = real_dataset.iterate_batches(
+        batch_size=offline_cfg.batch_size,
+        seed=epoch,
+        terminal_gap_s=offline_cfg.terminal_gap_s,
+    )
+    return iter(RealSimMixer(sim_iter, real_iter, mixer_cfg))
 
 
 def train_offline_rl(
@@ -136,6 +230,33 @@ def train_offline_rl(
     )
     dataset.open()
 
+    # Phase 2.1: optionally open a second real-replay dataset for sim/real
+    # interleaving via :class:`RealSimMixer`. Returns ``None`` when the user
+    # has not opted in, preserving the single-source path.
+    real_dataset: OfflineRLDataset | None = None
+    mixer_cfg: MixerConfig | None = None
+    if offline_cfg.use_replay_mixer:
+        real_dataset = _resolve_real_replay_dataset(cfg, device_str)
+        if real_dataset is None:
+            _log.warning(
+                "offline_rl_mixer_requested_but_unavailable",
+                reason=(
+                    "use_replay_mixer=True but cfg.training.replay is disabled "
+                    "or source_path is unset/identical — falling back to single LMDB"
+                ),
+                replay_enabled=cfg.training.replay.enabled,
+                source_path=cfg.training.replay.source_path,
+            )
+        else:
+            mixer_cfg = MixerConfig.from_settings(cfg.training.replay_mixer)
+            _log.info(
+                "offline_rl_mixer_active",
+                alpha_target=mixer_cfg.alpha_target,
+                alpha_ramp_steps=mixer_cfg.alpha_ramp_steps,
+                sim_path=cfg.experience.path,
+                real_path=cfg.training.replay.source_path,
+            )
+
     try:
         n_transitions = len(dataset)
         if n_transitions == 0:
@@ -174,11 +295,22 @@ def train_offline_rl(
 
         for epoch in range(1, offline_cfg.epochs + 1):
             batch_count = 0
-            for batch in dataset.iterate_batches(
-                batch_size=offline_cfg.batch_size,
-                seed=epoch,
-                terminal_gap_s=offline_cfg.terminal_gap_s,
-            ):
+            batch_iter: Iterator[dict[str, Tensor]] = (
+                _build_mixed_batch_iterator(
+                    sim_dataset=dataset,
+                    real_dataset=real_dataset,
+                    offline_cfg=offline_cfg,
+                    mixer_cfg=mixer_cfg,
+                    epoch=epoch,
+                )
+                if real_dataset is not None and mixer_cfg is not None
+                else dataset.iterate_batches(
+                    batch_size=offline_cfg.batch_size,
+                    seed=epoch,
+                    terminal_gap_s=offline_cfg.terminal_gap_s,
+                )
+            )
+            for batch in batch_iter:
                 losses = trainer.update_step(
                     states=batch["states"],
                     actions=batch["actions"],
@@ -243,6 +375,8 @@ def train_offline_rl(
 
     finally:
         dataset.close()
+        if real_dataset is not None:
+            real_dataset.close()
 
 
 def main() -> None:

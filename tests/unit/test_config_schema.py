@@ -582,3 +582,76 @@ def test_arm_planning_config_with_llm_replanner_enabled():
     assert cfg.llm_replanner is not None
     assert cfg.llm_replanner.enabled is True
     assert cfg.llm_replanner.backend == "anthropic"
+
+
+# -- OfflineRLConfig — Phase 2.1 fields (bc_lr, bc_batch_size, use_replay_mixer) -----------
+
+
+def test_offline_rl_config_defaults_are_backwards_compatible():
+    """Default construction preserves byte-identical pre-Phase-2.1 behavior."""
+    from mousedroid.config.schema import OfflineRLConfig
+
+    cfg = OfflineRLConfig()
+    # Phase 2 baseline:
+    assert cfg.real_supervised_weight == 0.0
+    # Phase 2.1 additions must default to opt-in disabled:
+    assert cfg.bc_lr is None
+    assert cfg.bc_batch_size is None
+    assert cfg.use_replay_mixer is False
+
+
+def test_offline_rl_config_bc_lr_accepts_positive_float():
+    from mousedroid.config.schema import OfflineRLConfig
+
+    cfg = OfflineRLConfig(bc_lr=1e-4)
+    assert cfg.bc_lr == 1e-4
+
+
+def test_offline_rl_config_bc_lr_rejects_zero_and_negative():
+    from mousedroid.config.schema import OfflineRLConfig
+
+    with pytest.raises(ValidationError):
+        OfflineRLConfig(bc_lr=0.0)
+    with pytest.raises(ValidationError):
+        OfflineRLConfig(bc_lr=-1e-4)
+
+
+def test_offline_rl_config_bc_batch_size_accepts_positive_int():
+    from mousedroid.config.schema import OfflineRLConfig
+
+    cfg = OfflineRLConfig(bc_batch_size=128)
+    assert cfg.bc_batch_size == 128
+
+
+def test_offline_rl_config_bc_batch_size_rejects_zero_and_negative():
+    from mousedroid.config.schema import OfflineRLConfig
+
+    with pytest.raises(ValidationError):
+        OfflineRLConfig(bc_batch_size=0)
+    with pytest.raises(ValidationError):
+        OfflineRLConfig(bc_batch_size=-1)
+
+
+def test_offline_rl_config_use_replay_mixer_toggle():
+    from mousedroid.config.schema import OfflineRLConfig
+
+    cfg_off = OfflineRLConfig()
+    cfg_on = OfflineRLConfig(use_replay_mixer=True)
+    assert cfg_off.use_replay_mixer is False
+    assert cfg_on.use_replay_mixer is True
+
+
+def test_offline_rl_config_all_phase21_fields_compose():
+    """All three Phase 2.1 fields can be set together without conflict."""
+    from mousedroid.config.schema import OfflineRLConfig
+
+    cfg = OfflineRLConfig(
+        real_supervised_weight=0.5,
+        bc_lr=5e-4,
+        bc_batch_size=32,
+        use_replay_mixer=True,
+    )
+    assert cfg.real_supervised_weight == 0.5
+    assert cfg.bc_lr == 5e-4
+    assert cfg.bc_batch_size == 32
+    assert cfg.use_replay_mixer is True

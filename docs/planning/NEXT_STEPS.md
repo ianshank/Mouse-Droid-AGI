@@ -1,6 +1,17 @@
 # MouseDroidAGI — Next Steps
 
-> **Last updated**: 2026-04-24 | **Version**: 0.3.1-dev | **Pre-PR validation**: Ruff clean, mypy strict clean, coverage gate maintained (>94% in latest local run)
+> **Last updated**: 2026-05-15 | **Version**: 0.3.2-dev | **Pre-PR validation**: Ruff clean, mypy strict clean, coverage gate maintained
+
+## Recently Completed — 2026-05-15 Phase 2.1 PR-A1 — Close the Policy Learning Loop
+
+- ✅ **Dedicated `bc_optimizer`** wired into `OfflineRLTrainer` via new optional `OfflineRLConfig.bc_lr` and `OfflineRLConfig.bc_batch_size` fields. When `bc_lr is None` (default), the BC optimizer is aliased to `policy_optimizer` (byte-identical legacy behavior). When `bc_lr` is set, a dedicated Adam over policy parameters is built — BC steps no longer corrupt the actor PPO optimizer state.
+- ✅ **Sim/real `RealSimMixer` integration** behind the new `OfflineRLConfig.use_replay_mixer` toggle. When enabled with a distinct `cfg.training.replay.source_path`, `train_offline_rl` deterministically interleaves sim + real LMDB batches via the existing `MixerConfig.from_settings` pipeline. Graceful fallback when the real path is missing or identical.
+- ✅ **Activation log assertion** patched into `tests/integration/test_phase21_bc_into_offline_rl.py::test_bc_loss_recorded_in_stats` (closes prior gap where `caplog` was passed but never asserted).
+- ✅ **Performance budget regression** at `tests/performance/test_offline_rl_bc_overhead.py` — operator-tunable via `MOUSEDROID_BC_OVERHEAD_BUDGET` (default 2.5×).
+- ✅ **Backwards-compatible checkpoints** — legacy `.pt` files (no `bc_optimizer` key) load cleanly into trainers with or without a dedicated optimizer.
+- See [CHANGELOG.md](../../CHANGELOG.md) `## [Unreleased]` for full surface diff and rollback paths.
+
+
 
 This document tracks planned enhancements, organised by priority and category.
 

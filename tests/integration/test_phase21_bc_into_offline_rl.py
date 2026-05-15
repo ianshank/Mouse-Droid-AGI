@@ -178,8 +178,11 @@ class TestBcActiveAtPositiveWeight:
         for key, tensor in bc_on.items():
             assert torch.isfinite(tensor).all(), f"non-finite parameter at {key}"
 
-    def test_bc_loss_recorded_in_stats(self, tmp_path: Path, caplog: Any) -> None:
-        """``bc_loss`` aggregates into the final ``stats`` dict."""
+    def test_bc_loss_recorded_in_stats(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``bc_loss`` aggregates into the final ``stats`` dict and the
+        ``offline_rl_bc_active`` activation log fires exactly once."""
         from training.train_offline_rl import train_offline_rl
 
         db_path = tmp_path / "experience"
@@ -190,6 +193,7 @@ class TestBcActiveAtPositiveWeight:
         _seed_all()
 
         _result_dir, stats = train_offline_rl(cfg=cfg, output_dir=tmp_path / "out")
+        captured = capsys.readouterr()
 
         # The aggregator key is ``final_bc_loss`` (mirrors other ``final_*`` keys).
         assert "final_bc_loss" in stats, f"bc_loss missing from stats: {stats!r}"
@@ -197,6 +201,12 @@ class TestBcActiveAtPositiveWeight:
         assert isinstance(bc_loss, float)
         assert np.isfinite(bc_loss)
         assert bc_loss > 0.0, "BC loss should be strictly positive on random init"
+
+        # The Phase 2.1 activation log must have fired (structlog → stdout).
+        # Single-shot at trainer setup when ``real_supervised_weight > 0``.
+        assert (
+            "offline_rl_bc_active" in captured.out
+        ), f"activation log missing from stdout:\n{captured.out!r}"
 
 
 class TestBcOnIQL:
