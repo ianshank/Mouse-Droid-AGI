@@ -133,6 +133,14 @@ class OfflineRLTrainer(abc.ABC):
         tau: Soft target update coefficient.
         lr: Learning rate.
         device: Torch device.
+        bc_lr: Optional dedicated learning rate for the BC auxiliary loss. When
+            ``None`` the policy optimizer is reused (byte-identical to the
+            pre-Phase-2.1 path). When set, a separate ``bc_optimizer`` is built
+            over policy parameters.
+        bc_batch_size: Optional dedicated mini-batch size for the BC step.
+            Stored on the trainer for downstream consumers and checkpoint
+            visibility; currently informational (BC consumes the same batch as
+            the actor-critic step).
     """
 
     def __init__(
@@ -144,12 +152,16 @@ class OfflineRLTrainer(abc.ABC):
         tau: float = 0.005,
         lr: float = 3e-4,
         device: torch.device | None = None,
+        bc_lr: float | None = None,
+        bc_batch_size: int | None = None,
     ) -> None:
         self._device = device or torch.device("cpu")
         self._gamma = gamma
         self._tau = tau
         self._state_dim = state_dim
         self._action_dim = action_dim
+        self._bc_lr = bc_lr
+        self._bc_batch_size = bc_batch_size
 
         self.q_network = QNetwork(state_dim, action_dim, hidden_dim).to(self._device)
         self.target_q_network = QNetwork(state_dim, action_dim, hidden_dim).to(
@@ -163,6 +175,22 @@ class OfflineRLTrainer(abc.ABC):
 
         self.q_optimizer = torch.optim.Adam(self.q_network.parameters(), lr=lr)
         self.policy_optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr)
+        # Phase 2.1: when ``bc_lr`` is None we alias the policy optimizer so
+        # ``bc_optimizer is policy_optimizer`` and any BC step is byte-identical
+        # to stepping the policy optimizer directly. When set, we build a
+        # dedicated Adam over the same parameters so the BC and actor steps
+        # can run at independent learning rates.
+        self.bc_optimizer: torch.optim.Optimizer = (
+            torch.optim.Adam(self.policy.parameters(), lr=bc_lr)
+            if bc_lr is not None
+            else self.policy_optimizer
+        )
+        _log.info(
+            "offline_rl_bc_optimizer_built",
+            bc_lr=bc_lr,
+            bc_batch_size=bc_batch_size,
+            shared_with_policy=self.bc_optimizer is self.policy_optimizer,
+        )
 
     def _soft_update_targets(self) -> None:
         """Polyak-average target Q-network toward current Q-network."""
@@ -222,36 +250,56 @@ class OfflineRLTrainer(abc.ABC):
         """
         if weight <= 0.0:
             return {"bc_loss": 0.0}
+        if states.shape[0] == 0:
+            return {"bc_loss": 0.0}
         predicted = self.policy(states)
         bc_loss = F.mse_loss(predicted, actions)
         scaled = weight * bc_loss
 
-        self.policy_optimizer.zero_grad()
+        # Phase 2.1: ``bc_optimizer`` is aliased to ``policy_optimizer`` when
+        # ``bc_lr is None`` (byte-identical path). When ``bc_lr`` is set, this
+        # steps an independent Adam state without touching the actor's PPO
+        # optimizer state.
+        self.bc_optimizer.zero_grad()
         scaled.backward()  # type: ignore[no-untyped-call]
-        self.policy_optimizer.step()
+        self.bc_optimizer.step()
 
         return {"bc_loss": float(bc_loss.item())}
 
     def save(self, path: str) -> None:
         """Save all network weights.
 
+        The ``bc_optimizer`` state is only checkpointed when it differs from
+        ``policy_optimizer``. This keeps legacy (pre-Phase-2.1) checkpoints
+        byte-identical when ``bc_lr is None`` and lets older code paths load
+        new checkpoints without a key error.
+
         Args:
             path: File path for the checkpoint.
         """
-        torch.save(
-            {
-                "q_network": self.q_network.state_dict(),
-                "target_q_network": self.target_q_network.state_dict(),
-                "policy": self.policy.state_dict(),
-                "q_optimizer": self.q_optimizer.state_dict(),
-                "policy_optimizer": self.policy_optimizer.state_dict(),
-            },
-            path,
+        payload: dict[str, object] = {
+            "q_network": self.q_network.state_dict(),
+            "target_q_network": self.target_q_network.state_dict(),
+            "policy": self.policy.state_dict(),
+            "q_optimizer": self.q_optimizer.state_dict(),
+            "policy_optimizer": self.policy_optimizer.state_dict(),
+        }
+        if self.bc_optimizer is not self.policy_optimizer:
+            payload["bc_optimizer"] = self.bc_optimizer.state_dict()
+            payload["bc_lr"] = self._bc_lr
+        torch.save(payload, path)
+        _log.info(
+            "offline_rl_saved",
+            path=path,
+            has_bc_optimizer=self.bc_optimizer is not self.policy_optimizer,
         )
-        _log.info("offline_rl_saved", path=path)
 
     def load(self, path: str) -> None:
         """Load all network weights.
+
+        Backwards-compatible with pre-Phase-2.1 checkpoints: ``bc_optimizer``
+        state is only restored when both (a) the checkpoint contains it and
+        (b) the current trainer has a dedicated ``bc_optimizer``.
 
         Args:
             path: File path to the checkpoint.
@@ -262,7 +310,15 @@ class OfflineRLTrainer(abc.ABC):
         self.policy.load_state_dict(checkpoint["policy"])
         self.q_optimizer.load_state_dict(checkpoint["q_optimizer"])
         self.policy_optimizer.load_state_dict(checkpoint["policy_optimizer"])
-        _log.info("offline_rl_loaded", path=path)
+        has_bc_state = "bc_optimizer" in checkpoint
+        if has_bc_state and self.bc_optimizer is not self.policy_optimizer:
+            self.bc_optimizer.load_state_dict(checkpoint["bc_optimizer"])
+        _log.info(
+            "offline_rl_loaded",
+            path=path,
+            bc_optimizer_state_restored=has_bc_state
+            and self.bc_optimizer is not self.policy_optimizer,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +359,8 @@ class CQLTrainer(OfflineRLTrainer):
         cql_alpha: float = 1.0,
         n_random_actions: int = 10,
         device: torch.device | None = None,
+        bc_lr: float | None = None,
+        bc_batch_size: int | None = None,
     ) -> None:
         super().__init__(
             state_dim=state_dim,
@@ -312,6 +370,8 @@ class CQLTrainer(OfflineRLTrainer):
             tau=tau,
             lr=lr,
             device=device,
+            bc_lr=bc_lr,
+            bc_batch_size=bc_batch_size,
         )
         self._cql_alpha = cql_alpha
         self._n_random_actions = n_random_actions
@@ -485,6 +545,8 @@ class IQLTrainer(OfflineRLTrainer):
         iql_tau: float = 0.7,
         beta: float = 3.0,
         device: torch.device | None = None,
+        bc_lr: float | None = None,
+        bc_batch_size: int | None = None,
     ) -> None:
         super().__init__(
             state_dim=state_dim,
@@ -494,6 +556,8 @@ class IQLTrainer(OfflineRLTrainer):
             tau=tau,
             lr=lr,
             device=device,
+            bc_lr=bc_lr,
+            bc_batch_size=bc_batch_size,
         )
         self._iql_tau = iql_tau
         self._beta = beta

@@ -16,7 +16,7 @@ landed on `feat/phase2-real-episode-replay` (PR #60).
 | Phase 3b — `DistilledVLAOnnx` + HF pull | ✅ landed (CI matrix `[vla]` still TBD) |
 | Phase 4 — VLM-derived dense rewards (Law-1 gated) | ✅ landed |
 | CI: production-config validation gate | ✅ landed (commit `aeb0c15`) |
-| Phase 2.1 — BC supervised loss into PPO | ⏳ **deferred from Phase 2 — next** |
+| Phase 2.1 — BC supervised loss into PPO | ✅ **landed (PR-A1)** — call site + dedicated `bc_optimizer` + sim/real mixer integration + perf budget regression; see [CHANGELOG.md](../../CHANGELOG.md) `## [Unreleased]`. |
 | Phases 5–6 — Real-physics sim / on-device co-training | ⛔ blocked |
 
 The four Physical-AI gaps are closed at the protocol layer. What remains is
@@ -108,8 +108,8 @@ know whether any of this is actually helping on hardware.
 ## 3. Recommended sprint sequence (next 3 PRs)
 
 ```
-PR-A1  Phase 2.1: BC into PPO                   ← THIS SPRINT
-PR-A2  Phase 3b CI matrix + telemetry counters  (combined PR)
+PR-A1  Phase 2.1: BC into PPO                   ✅ LANDED 2026-05-15
+PR-A2  Phase 3b CI matrix + telemetry counters  ← NEXT SPRINT
 PR-B2  Pillar nightly + Grafana panel for new metrics
 ```
 
