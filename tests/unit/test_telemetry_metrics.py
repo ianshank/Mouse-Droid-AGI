@@ -909,11 +909,7 @@ class TestPrA2DefensiveGuards:
         registry.observe_vla_inference_seconds(-0.001)
         registry.observe_vla_inference_seconds(0.05)  # accepted — no log
 
-        drops = [
-            (event, kwargs)
-            for event, kwargs in captured
-            if event == self._DROP_EVENT
-        ]
+        drops = [(event, kwargs) for event, kwargs in captured if event == self._DROP_EVENT]
         assert len(drops) == 2, f"expected 2 drop logs, got {drops!r}"
         reasons = [kwargs.get("reason") for _, kwargs in drops]
         assert set(reasons) == {"nan", "negative"}
