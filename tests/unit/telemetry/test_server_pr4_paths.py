@@ -174,12 +174,20 @@ async def test_negotiation_after_close_handled_gracefully() -> None:
     class _ClosingWs:
         def __init__(self) -> None:
             self.received = False
+            self.closed = False
 
         async def receive(self) -> Any:
             return type("Msg", (), {"type": WSMsgType.TEXT, "data": '{"hello":{}}'})()
 
         async def send_json(self, _: Any) -> None:
             raise ConnectionResetError("client gone")
+
+        async def close(self, *, code: int = 1000, message: bytes = b"") -> None:
+            # ``_negotiate_ws`` calls close() on hard failures; the
+            # ConnectionResetError surrogate above means the ack send
+            # failed, but the negotiation result is still ok=False
+            # (invalid_hello) so close() is still invoked.
+            self.closed = True
 
     chosen = await server._negotiate_ws(_ClosingWs())  # type: ignore[arg-type]
     assert chosen == "json"  # server default after invalid_hello rejection

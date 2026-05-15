@@ -33,11 +33,13 @@ class _StubWsMsg:
 
 
 class _StubWs:
-    """Minimal ``ws.receive``/``ws.send_json`` stub for negotiation tests."""
+    """Minimal ``ws.receive``/``ws.send_json``/``close`` stub for negotiation tests."""
 
     def __init__(self, queued: list[_StubWsMsg]) -> None:
         self._queue: list[_StubWsMsg] = list(queued)
         self.sent: list[Any] = []
+        self.closed: bool = False
+        self.close_calls: list[tuple[int, bytes]] = []
 
     async def receive(self) -> _StubWsMsg:
         if not self._queue:
@@ -46,6 +48,16 @@ class _StubWs:
 
     async def send_json(self, payload: Any) -> None:
         self.sent.append(payload)
+
+    async def close(self, *, code: int = 1000, message: bytes = b"") -> None:
+        """Mirror the aiohttp ``WebSocketResponse.close`` signature.
+
+        PR #79 honours the NegotiationResult contract by closing the
+        WebSocket on hard negotiation failures; tests exercise the
+        close path via this stub.
+        """
+        self.closed = True
+        self.close_calls.append((code, message))
 
 
 def _make_server() -> TelemetryServer:
@@ -172,3 +184,9 @@ async def test_negotiate_records_failure_when_rejected() -> None:
     assert calls
     assert calls[0][0] == "telemetry"
     assert calls[0][1] == "ws_negotiation_failed"
+    # Honour the NegotiationResult contract: hard failure closes the WS.
+    from mousedroid.constants import WS_CLOSE_NEGOTIATION_FAILED
+
+    assert ws.closed is True
+    assert ws.close_calls
+    assert ws.close_calls[0][0] == WS_CLOSE_NEGOTIATION_FAILED

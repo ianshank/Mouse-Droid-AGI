@@ -177,6 +177,12 @@ WS_CLOSE_LIDAR_RAW_UNAVAILABLE: int = 4404
 """Close code: ``/ws/v1/lidar/raw`` rejected because the publisher
 does not expose a raw-LiDAR queue (no LiDAR driver wired)."""
 
+WS_CLOSE_NEGOTIATION_FAILED: int = 4400
+"""Close code: hello negotiation could not find a mutually-acceptable
+(serialization, protocol_version). The server sends the ack envelope
+(with ``ok=False`` and the failure reason) BEFORE closing so the
+client can surface a useful error to operators."""
+
 WS_HELLO_MAX_BYTES: int = 4096
 """Maximum accepted size (bytes) of a client ``hello`` negotiation
 message. Defends ``_negotiate_ws`` from oversized payloads."""
