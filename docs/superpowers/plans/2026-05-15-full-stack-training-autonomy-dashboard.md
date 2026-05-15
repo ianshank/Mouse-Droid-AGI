@@ -427,6 +427,52 @@ def test_goal_reached_when_displacement_covers_goal() -> None:
     assert m.lifecycle is MissionLifecycle.COMPLETED
 
 
+def test_backward_mission_completes_at_negative_displacement() -> None:
+    """Signed displacement: backward goal completes when the signed
+    odometry value reaches the negative target — not when its absolute
+    value does."""
+    goal = MissionGoal.navigate_relative(forward_m=-1.0)
+    m = MissionState(goal=goal)
+    m.activate(now_s=0.0)
+    m.update(now_s=5.0, displacement_m=-1.05)  # overshoots in the negative direction
+    assert m.lifecycle is MissionLifecycle.COMPLETED
+
+
+def test_backward_mission_does_not_complete_on_positive_displacement() -> None:
+    """A backward goal must NOT complete if the rover happens to drift
+    forward — regression for the abs() bug."""
+    goal = MissionGoal.navigate_relative(forward_m=-1.0, timeout_s=100.0)
+    m = MissionState(goal=goal)
+    m.activate(now_s=0.0)
+    m.update(now_s=1.0, displacement_m=1.05)  # would have completed under abs() logic
+    assert m.lifecycle is MissionLifecycle.ACTIVE
+
+
+def test_zero_forward_mission_does_not_complete_on_activation() -> None:
+    """forward_m=0 (pure rotation/lateral mission) must NOT instantly
+    complete on the first ``update`` call — regression for the
+    ``0.0 + tolerance_m >= 0.0`` bug."""
+    goal = MissionGoal.navigate_relative(forward_m=0.0, timeout_s=10.0)
+    m = MissionState(goal=goal)
+    m.activate(now_s=0.0)
+    m.update(now_s=0.1, displacement_m=0.0)
+    assert m.lifecycle is MissionLifecycle.ACTIVE
+    # Still ACTIVE after non-zero displacement too — pure-rotation
+    # missions need a separate completion criterion (A1.1 follow-up).
+    m.update(now_s=0.2, displacement_m=0.05)
+    assert m.lifecycle is MissionLifecycle.ACTIVE
+
+
+def test_zero_forward_mission_still_honours_timeout() -> None:
+    """A zero-distance mission must still fail on timeout so it never hangs."""
+    goal = MissionGoal.navigate_relative(forward_m=0.0, timeout_s=1.0)
+    m = MissionState(goal=goal)
+    m.activate(now_s=0.0)
+    m.update(now_s=2.0, displacement_m=0.0)
+    assert m.lifecycle is MissionLifecycle.FAILED
+    assert m.abort_reason is AbortReason.TIMEOUT
+
+
 def test_timeout_aborts_with_reason() -> None:
     goal = MissionGoal.navigate_relative(forward_m=1.0, timeout_s=2.0)
     m = MissionState(goal=goal)
@@ -530,14 +576,44 @@ class MissionState:
         self.started_at_s = now_s
 
     def update(self, *, now_s: float, displacement_m: float) -> None:
+        """Advance the mission state given the latest signed displacement.
+
+        ``displacement_m`` is the SIGNED odometry value along the goal's
+        forward axis (positive = forward of the start pose, negative =
+        backward). The completion check is sign-aware so a backward
+        mission (``forward_m=-1.0``) completes when ``displacement_m``
+        reaches roughly ``-1.0``, not when ``|displacement_m|`` does.
+
+        For pure rotation / lateral missions (``forward_m == 0``), the
+        forward-displacement check is skipped — completion must come
+        from a different source (heading reached, lateral goal met,
+        operator confirm). Avoids the bug where ``0 + tolerance >= 0``
+        completed the mission on activation.
+        """
         if self.lifecycle is not MissionLifecycle.ACTIVE:
             return
         self.accumulated_displacement_m = displacement_m
-        target = abs(self.goal.forward_m)
-        if displacement_m + self.goal.tolerance_m >= target:
-            self.lifecycle = MissionLifecycle.COMPLETED
-            self.ended_at_s = now_s
-            return
+
+        forward_goal = self.goal.forward_m
+        tol = self.goal.tolerance_m
+        if forward_goal > 0.0:
+            # Forward mission: complete when signed displacement is
+            # within tolerance of the positive target.
+            if displacement_m + tol >= forward_goal:
+                self.lifecycle = MissionLifecycle.COMPLETED
+                self.ended_at_s = now_s
+                return
+        elif forward_goal < 0.0:
+            # Backward mission: complete when signed displacement has
+            # reached the negative target (within tolerance toward zero).
+            if displacement_m - tol <= forward_goal:
+                self.lifecycle = MissionLifecycle.COMPLETED
+                self.ended_at_s = now_s
+                return
+        # forward_goal == 0.0 → no forward-displacement completion;
+        # falls through to the timeout check below. Rotation/lateral
+        # completion criteria land in a follow-up PR (A1.1).
+
         if self.started_at_s is not None and (now_s - self.started_at_s) >= self.goal.timeout_s:
             self.lifecycle = MissionLifecycle.FAILED
             self.ended_at_s = now_s
@@ -556,21 +632,50 @@ class MissionState:
 pytest tests/unit/orchestrator/test_mission_state.py -v --import-mode=importlib
 ```
 
-Expected: 6 PASSED.
+Expected: 10 PASSED (initial 6 + backward-completes + backward-no-false-complete + zero-forward-no-instant-complete + zero-forward-still-times-out).
 
 - [ ] **Step 6 — Wire MissionState into the dispatcher**
 
-Modify `src/mousedroid/orchestrator/mission_dispatcher.py` — emit `MissionState` instances. Existing one-shot directive call sites get a `MissionState.from_directive(...)` migration helper that keeps backwards compat.
+Modify `src/mousedroid/orchestrator/mission_dispatcher.py` — emit `MissionState` instances. Existing one-shot dispatcher call sites get a `MissionState.from_goal_vector(...)` migration helper that keeps backwards compat. Note the source type is `GoalVector` from `mousedroid.llm_gateway.protocol` (normalised velocity targets; ``vx_target, vy_target, omega_target`` ∈ ``[-1, 1]``) — there is no ``VelocityDirective`` in this codebase.
+
+Because `GoalVector` does not carry a distance or timeout, the dispatcher MUST supply them from its own config when it constructs the `MissionState`:
 
 ```python
+from mousedroid.llm_gateway.protocol import GoalVector
+
+
 @classmethod
-def from_directive(cls, directive: VelocityDirective) -> MissionState:
-    """Backwards-compat: wrap a one-shot velocity directive as a
-    short-timeout navigate_relative mission."""
-    return cls(goal=MissionGoal.navigate_relative(
-        forward_m=directive.distance_m or 0.0,
-        timeout_s=directive.timeout_s or 5.0,
-    ))
+def from_goal_vector(
+    cls,
+    goal_vector: GoalVector,
+    *,
+    forward_m: float,
+    timeout_s: float,
+    tolerance_m: float = 0.10,
+) -> MissionState:
+    """Backwards-compat: wrap a normalised :class:`GoalVector` plus an
+    explicit forward-distance + timeout into a navigate-relative
+    ``MissionState``.
+
+    Args:
+        goal_vector: Velocity targets in ``[-1, 1]``. ``vx_target`` sets
+            the SIGN of the mission (forward vs backward); magnitude is
+            consumed by the existing velocity-tracking loop, not by
+            this state machine.
+        forward_m: Magnitude of forward distance to travel along the
+            current heading (metres). Caller-side config; this method
+            applies the sign from ``goal_vector.vx_target``.
+        timeout_s: Mission timeout (seconds).
+        tolerance_m: Goal-reach tolerance (metres).
+    """
+    signed_forward = forward_m if goal_vector.vx_target >= 0.0 else -forward_m
+    return cls(
+        goal=MissionGoal.navigate_relative(
+            forward_m=signed_forward,
+            timeout_s=timeout_s,
+            tolerance_m=tolerance_m,
+        )
+    )
 ```
 
 - [ ] **Step 7 — Add orchestrator consume side**
