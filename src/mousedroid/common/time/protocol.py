@@ -17,6 +17,7 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import bisect
 import time
 from typing import runtime_checkable
 
@@ -106,8 +107,11 @@ class MockClock:
         deadline = self._now + seconds
         loop = asyncio.get_running_loop()
         future: asyncio.Future[None] = loop.create_future()
-        self._waiters.append((deadline, future))
-        self._waiters.sort(key=lambda t: t[0])
+        # PR #82 follow-up (Gemini): keep ``_waiters`` sorted by deadline
+        # via ``bisect.insort`` (O(log N) bisect + O(N) shift) instead of
+        # ``list.append + list.sort`` (O(N log N)). Materially faster
+        # when many concurrent simulated tasks queue up in tests.
+        bisect.insort(self._waiters, (deadline, future), key=lambda t: t[0])
         await future
 
     def advance(self, delta: float) -> None:
@@ -120,10 +124,15 @@ class MockClock:
             msg = "MockClock.advance() delta must be non-negative"
             raise ValueError(msg)
         self._now += delta
-        remaining: list[tuple[float, asyncio.Future[None]]] = []
-        for deadline, future in self._waiters:
-            if deadline <= self._now and not future.done():
+        # PR #82 follow-up (Gemini): ``_waiters`` is sorted by deadline,
+        # so a single ``bisect_right`` finds the split between expired
+        # and pending waiters in O(log N) rather than scanning every
+        # entry. The two-slice rebuild keeps the post-condition: the
+        # remaining list stays sorted and contains only deadlines >
+        # ``self._now``.
+        idx = bisect.bisect_right(self._waiters, self._now, key=lambda t: t[0])
+        expired = self._waiters[:idx]
+        self._waiters = self._waiters[idx:]
+        for _deadline, future in expired:
+            if not future.done():
                 future.set_result(None)
-            else:
-                remaining.append((deadline, future))
-        self._waiters = remaining
