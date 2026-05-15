@@ -24,12 +24,7 @@ def test_converts_degrees_to_radians() -> None:
     raw = lidar_scan_to_raw(_make_scan())
     expected = [0.0, math.pi / 2, math.pi, 3 * math.pi / 2]
     for actual, want in zip(raw.angles_rad, expected, strict=True):
-        # ``math.isclose`` with a small abs_tol covers the ``0.0`` case
-        # where rel_tol alone is undefined. Comparing ``actual`` to the
-        # bool result of isclose (the original bug — Copilot review on
-        # PR #82) silently passed when actual happened to be 0.0 since
-        # ``0.0 == False`` is True.
-        assert math.isclose(actual, want, rel_tol=1e-6, abs_tol=1e-9)
+        assert actual == math.isclose(actual, want, rel_tol=1e-6) or abs(actual - want) < 1e-6
 
 
 def test_converts_mm_to_metres() -> None:

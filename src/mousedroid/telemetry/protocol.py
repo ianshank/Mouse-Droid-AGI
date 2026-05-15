@@ -85,11 +85,6 @@ def lidar_scan_to_raw(scan: Any) -> LidarRawScan:
     (NDArray-like in mm), ``confidences`` (NDArray-like), ``timestamp``,
     and ``n_points`` attributes.
 
-    PR #82 follow-up (Gemini): unit conversions use NumPy vectorised
-    operations rather than per-element Python list comprehensions —
-    materially faster on the high-frequency telemetry path (LD19 scan
-    is ~450 points at 10 Hz).
-
     Args:
         scan: Source scan in the driver's native units.
 
@@ -97,25 +92,14 @@ def lidar_scan_to_raw(scan: Any) -> LidarRawScan:
         A :class:`LidarRawScan` in SI units (radians, metres) ready for
         WebSocket publishing.
     """
-    import numpy as np
+    import math as _math
 
-    # ``np.asarray`` does not copy when the input is already an ndarray,
-    # which is the production hot path (LD19 driver returns NDArray).
-    # ``dtype=float64`` keeps the per-element multiply numerically
-    # consistent with the prior ``float()`` conversion.
-    angles_deg = np.asarray(scan.angles_deg, dtype=np.float64)
-    distances_mm = np.asarray(scan.distances_mm, dtype=np.float64)
-    angles_rad: list[float] = (angles_deg * (np.pi / 180.0)).tolist()
-    distances_m: list[float] = (distances_mm / 1000.0).tolist()
-
-    raw_confidences = getattr(scan, "confidences", None)
-    intensities: list[float]
-    if raw_confidences is None or len(raw_confidences) == 0:
-        intensities = []
-    else:
-        conf = np.asarray(raw_confidences, dtype=np.float64)
-        intensities = (conf / 255.0).tolist()
-
+    raw_angles = list(scan.angles_deg)
+    raw_distances = list(scan.distances_mm)
+    raw_confidences = list(getattr(scan, "confidences", []))
+    angles_rad = [float(a) * _math.pi / 180.0 for a in raw_angles]
+    distances_m = [float(d) / 1000.0 for d in raw_distances]
+    intensities = [float(c) / 255.0 for c in raw_confidences] if raw_confidences else []
     return LidarRawScan(
         timestamp=float(scan.timestamp),
         angles_rad=angles_rad,

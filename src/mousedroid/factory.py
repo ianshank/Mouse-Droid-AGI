@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     )
     from mousedroid.cognitive.bdi_model import NeuralBDI
     from mousedroid.cognitive.cognitive_core import CognitiveCore
+    from mousedroid.common.time.protocol import ClockProtocol
     from mousedroid.common.tools.registry import ToolRegistry
     from mousedroid.config.schema import Settings, UltrasonicConfig
     from mousedroid.curiosity.protocol import CuriosityProtocol
@@ -311,12 +312,23 @@ def build_speaker(cfg: Settings) -> SpeakerProtocol | None:
 def build_voice_engine(
     cfg: Settings,
     speaker: SpeakerProtocol | None = None,
+    failure_recorder: FailureRecorder | None = None,
+    clock: ClockProtocol | None = None,
 ) -> VoiceEngineProtocol | None:
     """Build Rocky voice engine based on config.
 
     Args:
         cfg: Root settings.
         speaker: Pre-built speaker driver (built if not provided).
+        failure_recorder: Optional ``FailureRecorder`` injected so the voice
+            engine can emit observable signals (Prometheus counter +
+            structured log) whenever events are dropped due to per-event
+            cooldown or token-bucket backpressure. Defaults to a no-op when
+            unspecified.
+        clock: Optional :class:`ClockProtocol`. Defaults to
+            :class:`RealClock` (production); tests inject
+            :class:`MockClock` so cooldown / token-bucket logic is
+            deterministic without wall-clock waits.
 
     Returns:
         Voice engine conforming to ``VoiceEngineProtocol``, or None if disabled.
@@ -356,7 +368,13 @@ def build_voice_engine(
 
     from mousedroid.voice.rocky import RockyVoiceEngine
 
-    engine = RockyVoiceEngine(cfg.voice, speaker, tts)
+    engine = RockyVoiceEngine(
+        cfg.voice,
+        speaker,
+        tts,
+        failure_recorder=failure_recorder,
+        clock=clock,
+    )
     _log.info(
         "voice_engine_built",
         personality=cfg.voice.personality,
