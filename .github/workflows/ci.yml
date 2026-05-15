@@ -9,10 +9,21 @@
 name: CI
 
 on:
+    # Branch filters cover the active integration patterns:
+    # * ``main`` and ``claude/**`` — the default branch family.
+    # * ``feature/**`` — long-running feature integrations.
+    # * ``refactor/**`` — multi-PR refactor staging branches (e.g.
+    #   ``refactor/clock-protocol`` which fans into a stack of
+    #   dependent PRs). Without this, PRs *targeting* a refactor
+    #   branch never trigger CI — silent gap.
+    # * ``fix/**`` and ``feat/**`` — short-lived staging branches used
+    #   as bases for follow-up patches against the refactor branch
+    #   (e.g. PR #81 against ``fix/orchestrator-...``). Mirrors the
+    #   pattern above for consistency.
     push:
-        branches: [main, "feature/**", "claude/**"]
+        branches: [main, "feature/**", "claude/**", "refactor/**", "fix/**", "feat/**"]
     pull_request:
-        branches: [main, "feature/**", "claude/**"]
+        branches: [main, "feature/**", "claude/**", "refactor/**", "fix/**", "feat/**"]
 
 env:
     MOUSEDROID_MOCK_HARDWARE: "true"
