@@ -12,7 +12,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import copy
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -120,6 +119,9 @@ def _resolve_real_replay_dataset(
     ``cfg.experience.path``. Otherwise returns ``None`` and the caller falls
     back to the single-source path (byte-identical to pre-Phase-2.1 behavior).
 
+    Each early-return branch emits a debug-level structured log so operators
+    can reconstruct mixer-setup decisions from the journal without re-running.
+
     Args:
         cfg: Root settings.
         device_str: Torch device string.
@@ -131,20 +133,33 @@ def _resolve_real_replay_dataset(
 
     replay_cfg = cfg.training.replay
     if not replay_cfg.enabled:
+        _log.debug(
+            "offline_rl_real_replay_skipped",
+            reason="training.replay.enabled is False",
+        )
         return None
     if not replay_cfg.source_path:
+        _log.debug(
+            "offline_rl_real_replay_skipped",
+            reason="training.replay.source_path is empty",
+            enabled=True,
+        )
         return None
     if replay_cfg.source_path == cfg.experience.path:
         # Same store on both sides degenerates to a single-source path; skip.
+        _log.debug(
+            "offline_rl_real_replay_skipped",
+            reason="training.replay.source_path equals experience.path",
+            path=cfg.experience.path,
+        )
         return None
 
-    real_experience_cfg = copy.deepcopy(cfg.experience)
     # ``ExperienceConfig`` is the schema consumed by ``OfflineRLDataset``; we
     # only need to redirect the path. The other fields (map_size_gb, flush
     # cadence) are reused as-is so real and sim datasets honor the same
     # operator-tuned envelope.
     real_experience_cfg = ExperienceConfig(
-        **{**real_experience_cfg.model_dump(), "path": replay_cfg.source_path}
+        **{**cfg.experience.model_dump(), "path": replay_cfg.source_path}
     )
     real_dataset = OfflineRLDataset(
         experience_cfg=real_experience_cfg,
@@ -152,6 +167,11 @@ def _resolve_real_replay_dataset(
         device=torch.device(device_str),
     )
     real_dataset.open()
+    _log.debug(
+        "offline_rl_real_replay_opened",
+        path=replay_cfg.source_path,
+        device=device_str,
+    )
     return real_dataset
 
 
