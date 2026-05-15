@@ -69,10 +69,11 @@ run_probe() {
     local label="$1" blocking="$2" fn="$3"; shift 3
     local logfile="${REPORT_DIR}/${label}.log"
     log "=== PROBE ${label} (blocking=${blocking}) ==="
-    set +e
+    # The script header sets `+uo pipefail` (not `-e`); we run the probe
+    # in a subshell so its exit code is captured cleanly and any local
+    # `set -e` it might use does not propagate back to this runner.
     ( "${fn}" "$@" ) > "${logfile}" 2>&1
     local rc=$?
-    set +e
     if [[ ${rc} -eq 0 ]]; then
         record "${label}" "PASS"
         return 0
@@ -251,28 +252,66 @@ probe_p6() {
 }
 
 # ---------- P7/P8/P9: failure_recorder series + value-line assertions ----------
-_assert_failures_series() {
+#
+# Each probe must match BOTH subsystem= AND a reason-label pattern so
+# P7 (event-fairness) and P8 (speaker-fail-loud) verify their actual
+# surface and not just "any voice failure metric exists" (Copilot
+# review on PR #83). The reason patterns are deliberately fuzzy
+# (anchored on a substring) so the probes do not break when PR #76
+# / #75 add new sub-reasons.
+_assert_failures_series_with_reason() {
     local subsystem="$1"
+    local reason_substr="$2"
     local metrics
     metrics="$(curl -sS --max-time 10 "${BASE}/metrics")" || return 71
-    local pattern="^mousedroid_subsystem_failures_total\\{[^}]*subsystem=\"${subsystem}\""
+    # Greedy on the label set so subsystem= and reason= can appear in
+    # any order; anchor on a value-line (HELP/TYPE comment lines start
+    # with '#' and would not match this anchor).
+    local pattern="^mousedroid_subsystem_failures_total\\{[^}]*subsystem=\"${subsystem}\"[^}]*reason=\"[^\"]*${reason_substr}[^\"]*\""
+    local pattern_alt="^mousedroid_subsystem_failures_total\\{[^}]*reason=\"[^\"]*${reason_substr}[^\"]*\"[^}]*subsystem=\"${subsystem}\""
     local matches
-    matches="$(printf '%s' "${metrics}" | grep -E "${pattern}" || true)"
+    matches="$(printf '%s' "${metrics}" | grep -E "${pattern}|${pattern_alt}" || true)"
     if [[ -z "${matches}" ]]; then
-        echo "FAIL: no value-line for subsystem=${subsystem} in mousedroid_subsystem_failures_total" >&2
-        printf '%s\n' "${metrics}" | grep subsystem_failures | head -5 >&2 || true
+        echo "FAIL: no value-line for subsystem=${subsystem} reason~=${reason_substr}" >&2
+        printf '%s\n' "${metrics}" | grep "subsystem=\"${subsystem}\"" | head -5 >&2 || true
         return 72
     fi
-    printf 'PASS: subsystem=%s exposes %d label permutation(s)\n' \
-        "${subsystem}" "$(printf '%s\n' "${matches}" | wc -l | tr -d ' ')"
+    printf 'PASS: subsystem=%s reason~=%s exposes %d label permutation(s)\n' \
+        "${subsystem}" "${reason_substr}" \
+        "$(printf '%s\n' "${matches}" | wc -l | tr -d ' ')"
     printf '%s\n' "${matches}" | head -3
 }
 
-probe_p7() { _assert_failures_series voice; }
-probe_p8() { _assert_failures_series voice; }
+# P7: voice event-fairness (PR #76) — token-bucket + cooldown drops.
+probe_p7() { _assert_failures_series_with_reason voice "event_dropped"; }
+
+# P8: voice speaker fail-loud (PR #75) — USB speaker degraded/unavailable.
+probe_p8() {
+    # PR #75 uses `speaker_unavailable`; PR #76's degraded-write path uses
+    # `speaker_degraded`. Either reason satisfies the "speaker fail-loud"
+    # surface, so accept the common `speaker` prefix.
+    _assert_failures_series_with_reason voice "speaker"
+}
+
+# P9: orchestrator + world_model FailureRecorder wiring (PR #77).
+# Reason can be any of latent_nan / latent_saturated / cognitive_fallback /
+# vla_safe_stop / mission_parser_low_confidence — we just require the
+# subsystem label exists (the SERIES, not a specific reason).
 probe_p9() {
-    _assert_failures_series orchestrator || return $?
-    _assert_failures_series world_model
+    local metrics
+    metrics="$(curl -sS --max-time 10 "${BASE}/metrics")" || return 91
+    for subsystem in orchestrator world_model; do
+        local matches
+        matches="$(printf '%s' "${metrics}" \
+            | grep -E "^mousedroid_subsystem_failures_total\\{[^}]*subsystem=\"${subsystem}\"" \
+            || true)"
+        if [[ -z "${matches}" ]]; then
+            echo "FAIL: no value-line for subsystem=${subsystem}" >&2
+            return 92
+        fi
+        printf 'PASS-PART: subsystem=%s -> %d label permutation(s)\n' \
+            "${subsystem}" "$(printf '%s\n' "${matches}" | wc -l | tr -d ' ')"
+    done
 }
 
 # ---------- P10: ClockProtocol/RealClock pair ships ----------

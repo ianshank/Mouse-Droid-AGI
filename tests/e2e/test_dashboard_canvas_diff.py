@@ -23,7 +23,7 @@ Why this test is decoupled from the Jetson conftest:
     therefore override the autouse fixture locally.
 
 Skip conditions:
-    * ``--no-playwright`` CLI flag → SKIP with explicit reason
+    * ``MOUSEDROID_NO_PLAYWRIGHT=1`` env var → SKIP with explicit reason
       (CI environments without Chromium installed).
     * ``MOUSEDROID_DASHBOARD_URL`` env var unset → SKIP with explicit
       reason (test target unknown).
@@ -32,6 +32,7 @@ Skip conditions:
 Environment:
     MOUSEDROID_DASHBOARD_URL          base URL, e.g. http://mousedroid-telemetry.local:8080
     MOUSEDROID_DASHBOARD_TOKEN        bearer token (sent as ``?token=...`` query param)
+    MOUSEDROID_NO_PLAYWRIGHT          set to ``1`` to skip even if Playwright is installed
     MOUSEDROID_DASHBOARD_SETTLE_S     wait after page load before first capture (default 2.0)
     MOUSEDROID_DASHBOARD_GAP_S        gap between captures (default 2.0)
     MOUSEDROID_DASHBOARD_MIN_DIFF_PCT min % pixel diff threshold (default 1.0)
@@ -50,27 +51,24 @@ if TYPE_CHECKING:
     from playwright.sync_api import Page
 
 
-# Override the Jetson conftest's autouse fixture for this module ONLY.
-# The canvas-diff test runs on the OPERATOR WORKSTATION, not the Jetson,
-# so it must NOT clobber MOUSEDROID_MOCK_HARDWARE or skip on non-Jetson hosts.
+# Override the Jetson conftest's ``_mock_hardware_env`` autouse fixture.
+# pytest only matches autouse overrides by NAME — using any other name
+# (the prior ``_no_jetson_env_override``) leaves the parent fixture
+# active and silently clobbers MOUSEDROID_MOCK_HARDWARE on this test
+# module, which is meant to run on the operator workstation against
+# a live rover URL (Copilot review on PR #83).
 @pytest.fixture(autouse=True)
-def _no_jetson_env_override() -> None:
-    """No-op replacement for the parent autouse env fixture."""
+def _mock_hardware_env() -> None:
+    """Shadow the Jetson conftest's autouse env fixture (do not modify env)."""
     return None
 
 
-def pytest_addoption(parser: pytest.Parser) -> None:  # pragma: no cover - hook
-    """Register the ``--no-playwright`` flag for CI environments.
-
-    Args:
-        parser: The pytest CLI parser.
-    """
-    parser.addoption(
-        "--no-playwright",
-        action="store_true",
-        default=False,
-        help="Skip Playwright-dependent tests (operator workstation CI fallback).",
-    )
+# NOTE: we do NOT register a ``--no-playwright`` CLI flag here.
+# ``pytest_addoption`` is only honoured in ``conftest.py`` or plugin
+# modules — defining it inside a test module is silently ignored, and
+# any later ``getoption("--no-playwright")`` would raise (Copilot review
+# on PR #83). Use the ``MOUSEDROID_NO_PLAYWRIGHT`` env var instead.
+NO_PLAYWRIGHT_ENV = "MOUSEDROID_NO_PLAYWRIGHT"
 
 
 @pytest.fixture
@@ -92,9 +90,14 @@ def dashboard_token() -> str | None:
     return token or None
 
 
-def _maybe_skip_no_playwright(request: pytest.FixtureRequest) -> None:
-    if request.config.getoption("--no-playwright"):
-        pytest.skip("Playwright disabled via --no-playwright flag")
+def _maybe_skip_no_playwright() -> None:
+    """Skip when Playwright is unavailable or explicitly disabled.
+
+    Honours ``MOUSEDROID_NO_PLAYWRIGHT=1`` (CI fallback when Chromium
+    isn't installed) and ``pytest.importorskip`` for the actual import.
+    """
+    if os.environ.get(NO_PLAYWRIGHT_ENV, "").strip().lower() in {"1", "true", "yes"}:
+        pytest.skip(f"Playwright disabled via {NO_PLAYWRIGHT_ENV} env var")
     pytest.importorskip(
         "playwright.sync_api",
         reason=(
@@ -190,7 +193,6 @@ def _diff_pct(png_a: bytes, png_b: bytes) -> float:
     ],
 )
 def test_dashboard_canvas_redraws(
-    request: pytest.FixtureRequest,
     dashboard_url: str,
     dashboard_token: str | None,
     tmp_path: Path,
@@ -200,14 +202,13 @@ def test_dashboard_canvas_redraws(
     """Each dashboard canvas must redraw between two captures 2s apart.
 
     Args:
-        request: pytest fixture-request handle, used for ``--no-playwright``.
         dashboard_url: Base URL of the deployed telemetry server.
         dashboard_token: Bearer token (passed as ``?token=`` query param).
         tmp_path: pytest-provided temp dir for capture artefacts.
         page_path: ``/lidar`` or ``/camera``.
         canvas_selector: CSS selector inside the page for the redrawing canvas.
     """
-    _maybe_skip_no_playwright(request)
+    _maybe_skip_no_playwright()
     from playwright.sync_api import sync_playwright
 
     url = _build_page_url(dashboard_url, page_path, dashboard_token)
