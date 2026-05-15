@@ -8,6 +8,63 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — PR-A2: Replay / VLA / VLM Prometheus observability metrics
+
+- **`src/mousedroid/telemetry/metrics.py`** — four new metric families
+  available on the existing `/metrics` endpoint:
+  - `mousedroid_replay_records_total{outcome="ok"|"schema_mismatch"}` —
+    LMDB replay-record deserialization outcomes
+  - `mousedroid_vla_inference_seconds` — config-driven histogram
+    (`MetricsConfig.vla_inference_seconds_buckets`, default 5 ms..2.5 s)
+  - `mousedroid_vla_timeouts_total{mode="mock"|"distilled_onnx"}` —
+    VLA fallback events by backend mode
+  - `mousedroid_vlm_progress_cache_hits_total` and `..._misses_total` —
+    VLM progress-reward cache effectiveness
+- Public writer-side helpers (`inc_replay_record`,
+  `observe_vla_inference_seconds`, `inc_vla_timeout`, `inc_vlm_cache_hit`,
+  `inc_vlm_cache_miss`) follow the project's existing `inc_*` / `observe_*`
+  naming convention. All counters accept an `amount: int = 1` kwarg
+  and guard against non-positive deltas to preserve Prometheus counter
+  monotonicity. `observe_vla_inference_seconds` rejects both negative
+  values and NaN, emitting a DEBUG-level `vla_inference_seconds_dropped`
+  structured log so operators can correlate missing histogram observations
+  with upstream timer bugs.
+- Label values are typed via new public `Literal` aliases in
+  `mousedroid.config.schema` so mypy `--strict` catches label drift:
+  - `ReplayOutcomeLiteral = Literal["ok", "schema_mismatch"]`
+  - `VLABackendLiteral = Literal["none", "mock", "distilled_onnx"]` (matches `VLAConfig.backend`)
+  - `VLAActiveBackendLiteral = Literal["mock", "distilled_onnx"]` (subset of `VLABackendLiteral` minus `"none"`, used for metrics that only fire from a running backend — prevents accidental `{mode="none"}` cardinality on `mousedroid_vla_timeouts_total`)
+
+  `VLAConfig.backend` now uses `VLABackendLiteral` directly — single source of truth.
+- `.github/workflows/ci.yml` adds an advisory `vla-extras` job
+  (Python 3.11, `[dev,vla]` extras, `continue-on-error: true`) covering
+  `tests/unit/vla/`. Promotion gate documented in
+  `docs/planning/PHASE_2_1_AND_BEYOND_PLAN.md` Story 2.5.
+- `docs/architecture/ADR-006-telemetry-server.md` gains a PR-A2 addendum
+  documenting the new metrics, design invariants, and deferred items.
+
+### Changed — Histogram bucket validation now enforced at schema load
+
+- `src/mousedroid/config/schema.py` adds a shared
+  `_validate_histogram_buckets` Pydantic validator applied via
+  `@field_validator` to **four** `MetricsConfig` bucket fields:
+  - `loop_latency_buckets_ms` (existing)
+  - `llm_latency_buckets_ms` (existing)
+  - `mcp_latency_buckets_ms` (existing)
+  - `vla_inference_seconds_buckets` (new in PR-A2)
+- Invariants enforced: monotonically ascending, strictly positive,
+  unique, non-empty (a trailing `+Inf` sentinel is permitted but
+  optional — the registry appends one at runtime if missing).
+- **⚠ Behavior change for downstream operator overlays.** Any
+  externally-supplied YAML / env overlay that previously specified a
+  bucket tuple containing zeros, negatives, duplicates, descending values,
+  or an empty tuple will now fail config load with a Pydantic
+  `ValidationError`. Previously such input would silently render
+  malformed histograms. All in-repo `config/*.yaml` defaults pass the
+  validator unchanged. If you maintain external overlays and hit a
+  `ValidationError`, fix the offending bucket tuple to be ascending,
+  positive, and unique.
+
 ### Added — Phase 2.1: BC supervised loss into offline-RL training loop
 
 - **`training/train_offline_rl.py`** — wires the existing

@@ -519,3 +519,464 @@ class TestGenerateMetricsSample:
         sample = generate_metrics_sample()
         assert re.search(r"^# HELP \S+ .+$", sample, re.MULTILINE)
         assert re.search(r"^# TYPE \S+ (counter|gauge|histogram)$", sample, re.MULTILINE)
+
+
+# ---------------------------------------------------------------------------
+# PR-A2 — replay / VLA / VLM observability metrics
+# ---------------------------------------------------------------------------
+
+
+class TestReplayRecordsCounter:
+    """``mousedroid_replay_records_total{outcome}`` — labeled by ok|schema_mismatch."""
+
+    def test_zero_observations_omits_metric_family(self) -> None:
+        """No replay reads → no metric family rendered (pure-add contract)."""
+        registry = _make_registry()
+        text = registry.render_prometheus()
+        assert "replay_records_total" not in text
+
+    def test_records_ok_outcome(self) -> None:
+        registry = _make_registry()
+        registry.inc_replay_record("ok")
+        registry.inc_replay_record("ok")
+        registry.inc_replay_record("ok")
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f'{ns}_replay_records_total{{outcome="ok"}} 3' in text
+        assert f"# TYPE {ns}_replay_records_total counter" in text
+
+    def test_records_schema_mismatch_outcome(self) -> None:
+        registry = _make_registry()
+        registry.inc_replay_record("schema_mismatch")
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f'{ns}_replay_records_total{{outcome="schema_mismatch"}} 1' in text
+
+    def test_records_both_outcomes_independently(self) -> None:
+        registry = _make_registry()
+        registry.inc_replay_record("ok")
+        registry.inc_replay_record("ok")
+        registry.inc_replay_record("schema_mismatch")
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f'{ns}_replay_records_total{{outcome="ok"}} 2' in text
+        assert f'{ns}_replay_records_total{{outcome="schema_mismatch"}} 1' in text
+
+
+class TestVlaInferenceSecondsHistogram:
+    """``mousedroid_vla_inference_seconds`` — config-driven buckets, sum, count."""
+
+    def test_zero_observations_omits_metric_family(self) -> None:
+        registry = _make_registry()
+        text = registry.render_prometheus()
+        assert "vla_inference_seconds" not in text
+
+    def test_records_inference_latency(self) -> None:
+        registry = _make_registry()
+        registry.observe_vla_inference_seconds(0.012)
+        registry.observe_vla_inference_seconds(0.025)
+        registry.observe_vla_inference_seconds(0.5)
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f"# TYPE {ns}_vla_inference_seconds histogram" in text
+        assert f"{ns}_vla_inference_seconds_count 3" in text
+        # Each observation lands in exactly one bucket; cumulative counts grow.
+        assert f"{ns}_vla_inference_seconds_bucket" in text
+        assert f"{ns}_vla_inference_seconds_sum" in text
+
+    def test_negative_observation_is_dropped(self) -> None:
+        """Defensive: negative latencies (clock skew) must not corrupt sum/count."""
+        registry = _make_registry()
+        registry.observe_vla_inference_seconds(-1.0)  # rejected
+        registry.observe_vla_inference_seconds(0.05)  # accepted
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f"{ns}_vla_inference_seconds_count 1" in text
+
+    def test_buckets_come_from_config(self) -> None:
+        """Bucket boundaries must mirror ``MetricsConfig.vla_inference_seconds_buckets``."""
+        custom_buckets = (0.01, 0.1, 1.0)
+        registry = _make_registry(vla_inference_seconds_buckets=custom_buckets)
+        registry.observe_vla_inference_seconds(0.05)
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        for boundary in custom_buckets:
+            assert f'{ns}_vla_inference_seconds_bucket{{le="{boundary:.6g}"}}' in text
+
+
+class TestVlaTimeoutCounter:
+    """``mousedroid_vla_timeouts_total{mode}`` — labeled by backend mode."""
+
+    def test_zero_timeouts_omits_metric_family(self) -> None:
+        registry = _make_registry()
+        text = registry.render_prometheus()
+        assert "vla_timeouts_total" not in text
+
+    @pytest.mark.parametrize("mode", ["mock", "distilled_onnx"])
+    def test_records_timeout_by_mode(self, mode: str) -> None:
+        registry = _make_registry()
+        registry.inc_vla_timeout(mode)
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f'{ns}_vla_timeouts_total{{mode="{mode}"}} 1' in text
+
+
+class TestVlmProgressCacheCounters:
+    """``mousedroid_vlm_progress_cache_hits_total`` and ``..._misses_total``."""
+
+    def test_zero_hits_and_misses_omits_families(self) -> None:
+        registry = _make_registry()
+        text = registry.render_prometheus()
+        assert "vlm_progress_cache_hits" not in text
+        assert "vlm_progress_cache_misses" not in text
+
+    def test_records_cache_hit(self) -> None:
+        registry = _make_registry()
+        registry.inc_vlm_cache_hit()
+        registry.inc_vlm_cache_hit(amount=2)
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f"{ns}_vlm_progress_cache_hits_total 3" in text
+
+    def test_records_cache_miss(self) -> None:
+        registry = _make_registry()
+        registry.inc_vlm_cache_miss()
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f"{ns}_vlm_progress_cache_misses_total 1" in text
+
+    def test_hit_and_miss_increment_independently(self) -> None:
+        """Hit and miss counters must not bleed across each other."""
+        registry = _make_registry()
+        registry.inc_vlm_cache_hit()
+        registry.inc_vlm_cache_miss()
+        registry.inc_vlm_cache_miss()
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f"{ns}_vlm_progress_cache_hits_total 1" in text
+        assert f"{ns}_vlm_progress_cache_misses_total 2" in text
+
+
+class TestGenerateMetricsSampleNewMetrics:
+    """Ensure the PR-A2 metrics appear in the CI promtool sample."""
+
+    def test_sample_exercises_all_four_new_metrics(self) -> None:
+        sample = generate_metrics_sample()
+        # Pull namespace from default config so the assertions stay
+        # config-driven (no hardcoded ``mousedroid_`` prefix).
+        ns = MetricsConfig().namespace
+        for name in (
+            f"{ns}_replay_records_total",
+            f"{ns}_vla_inference_seconds_bucket",
+            f"{ns}_vla_inference_seconds_sum",
+            f"{ns}_vla_inference_seconds_count",
+            f"{ns}_vla_timeouts_total",
+            f"{ns}_vlm_progress_cache_hits_total",
+            f"{ns}_vlm_progress_cache_misses_total",
+        ):
+            assert name in sample, f"PR-A2 metric missing from sample: {name}"
+
+    def test_sample_includes_both_replay_outcomes(self) -> None:
+        sample = generate_metrics_sample()
+        ns = MetricsConfig().namespace
+        assert f'{ns}_replay_records_total{{outcome="ok"}}' in sample
+        assert f'{ns}_replay_records_total{{outcome="schema_mismatch"}}' in sample
+
+
+class TestMetricsConfigBucketField:
+    """``MetricsConfig.vla_inference_seconds_buckets`` is a Pydantic-validated tuple."""
+
+    def test_default_buckets_are_finite_and_ascending(self) -> None:
+        cfg = MetricsConfig()
+        buckets = cfg.vla_inference_seconds_buckets
+        # Drop the +Inf sentinel before checking monotonicity.
+        finite = [b for b in buckets if b != float("inf")]
+        assert finite == sorted(finite), "Default buckets must be ascending"
+        assert all(b > 0 for b in finite), "Default buckets must be positive"
+
+    def test_custom_buckets_round_trip(self) -> None:
+        cfg = MetricsConfig(vla_inference_seconds_buckets=(0.001, 0.01, 0.1))
+        assert cfg.vla_inference_seconds_buckets == (0.001, 0.01, 0.1)
+
+
+class TestHistogramBucketValidator:
+    """The shared ``_validate_histogram_buckets`` Pydantic validator covers
+    all four bucket fields: loop_latency_buckets_ms, llm_latency_buckets_ms,
+    mcp_latency_buckets_ms, and vla_inference_seconds_buckets.
+
+    Negative, zero, duplicate, and non-ascending values would silently corrupt
+    histogram bucket accumulation, so the validator rejects them at schema-load.
+    """
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "loop_latency_buckets_ms",
+            "llm_latency_buckets_ms",
+            "mcp_latency_buckets_ms",
+            "vla_inference_seconds_buckets",
+        ],
+    )
+    def test_validator_rejects_descending_order(self, field: str) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="monotonically ascending"):
+            MetricsConfig(**{field: (10.0, 5.0, 1.0)})
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "loop_latency_buckets_ms",
+            "llm_latency_buckets_ms",
+            "mcp_latency_buckets_ms",
+            "vla_inference_seconds_buckets",
+        ],
+    )
+    def test_validator_rejects_negative_values(self, field: str) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="strictly positive"):
+            MetricsConfig(**{field: (-1.0, 5.0, 10.0)})
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "loop_latency_buckets_ms",
+            "llm_latency_buckets_ms",
+            "mcp_latency_buckets_ms",
+            "vla_inference_seconds_buckets",
+        ],
+    )
+    def test_validator_rejects_zero_value(self, field: str) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="strictly positive"):
+            MetricsConfig(**{field: (0.0, 5.0, 10.0)})
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "loop_latency_buckets_ms",
+            "llm_latency_buckets_ms",
+            "mcp_latency_buckets_ms",
+            "vla_inference_seconds_buckets",
+        ],
+    )
+    def test_validator_rejects_duplicates(self, field: str) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="unique"):
+            MetricsConfig(**{field: (1.0, 5.0, 5.0, 10.0)})
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "loop_latency_buckets_ms",
+            "llm_latency_buckets_ms",
+            "mcp_latency_buckets_ms",
+            "vla_inference_seconds_buckets",
+        ],
+    )
+    def test_validator_accepts_inf_sentinel(self, field: str) -> None:
+        cfg = MetricsConfig(**{field: (1.0, 5.0, 10.0, float("inf"))})
+        assert getattr(cfg, field) == (1.0, 5.0, 10.0, float("inf"))
+
+    def test_validator_rejects_empty_tuple(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="non-empty"):
+            MetricsConfig(vla_inference_seconds_buckets=())
+
+    @pytest.mark.parametrize(
+        "bad_tuple",
+        [
+            (float("inf"), 1.0, 5.0),  # inf at the head
+            (1.0, float("inf"), 5.0, 10.0),  # inf in the middle
+            (1.0, 5.0, float("inf"), 10.0),  # inf in the middle (before another finite)
+        ],
+    )
+    def test_validator_rejects_inf_in_non_trailing_position(
+        self, bad_tuple: tuple[float, ...]
+    ) -> None:
+        """``+inf`` is only meaningful as the trailing sentinel — anywhere else
+        it would yield surprising bucket cardinality after the registry's
+        runtime sort."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="trailing sentinel"):
+            MetricsConfig(vla_inference_seconds_buckets=bad_tuple)
+
+
+class TestLiteralTypeAliases:
+    """The exported Literal aliases keep label values in sync with the schema."""
+
+    def test_vla_backend_literal_matches_vla_config_field(self) -> None:
+        """The :data:`VLABackendLiteral` alias must enumerate the same values
+        as :class:`VLAConfig.backend`."""
+        import typing as _typing
+
+        from mousedroid.config.schema import VLABackendLiteral, VLAConfig
+
+        alias_args = set(_typing.get_args(VLABackendLiteral))
+        field_args = set(_typing.get_args(VLAConfig.model_fields["backend"].annotation))
+        assert alias_args == field_args, (
+            f"VLABackendLiteral drift: alias has {alias_args}, "
+            f"VLAConfig.backend has {field_args}"
+        )
+
+    def test_replay_outcome_literal_has_expected_values(self) -> None:
+        import typing as _typing
+
+        from mousedroid.config.schema import ReplayOutcomeLiteral
+
+        assert set(_typing.get_args(ReplayOutcomeLiteral)) == {"ok", "schema_mismatch"}
+
+    def test_vla_active_backend_literal_is_strict_subset_of_full_backend(self) -> None:
+        """``VLAActiveBackendLiteral`` must exclude ``"none"`` and otherwise
+        match :data:`VLABackendLiteral` — used to type
+        :meth:`MetricsRegistry.inc_vla_timeout` so a disabled backend cannot
+        emit timeouts and pollute the metric with ``{mode="none"}`` series."""
+        import typing as _typing
+
+        from mousedroid.config.schema import VLAActiveBackendLiteral, VLABackendLiteral
+
+        full = set(_typing.get_args(VLABackendLiteral))
+        active = set(_typing.get_args(VLAActiveBackendLiteral))
+        assert active < full, "VLAActiveBackendLiteral must be a strict subset"
+        assert active == full - {"none"}, (
+            f"VLAActiveBackendLiteral must equal VLABackendLiteral minus 'none'; "
+            f"got active={active}, full={full}"
+        )
+
+
+class TestPrA2DefensiveGuards:
+    """Counter monotonicity + histogram NaN/negative-value rejection guards
+    enforced after PR-A2 review feedback.
+    """
+
+    def test_observe_vla_inference_seconds_drops_nan(self) -> None:
+        """NaN samples must not enter the histogram sum (which would taint it)."""
+        registry = _make_registry()
+        registry.observe_vla_inference_seconds(float("nan"))
+        registry.observe_vla_inference_seconds(0.05)  # valid sample
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f"{ns}_vla_inference_seconds_count 1" in text
+        # The sum must not be NaN — render it and confirm no NaN substring.
+        assert "NaN" not in text
+
+    def test_observe_vla_inference_seconds_drops_negative(self) -> None:
+        """Negative samples are dropped (regression-locked from original PR-A2 work)."""
+        registry = _make_registry()
+        registry.observe_vla_inference_seconds(-1.0)
+        registry.observe_vla_inference_seconds(0.05)
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f"{ns}_vla_inference_seconds_count 1" in text
+
+    _DROP_EVENT = "vla_inference_seconds_dropped"
+
+    def test_drop_emits_debug_log(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Dropped samples must emit a DEBUG-level structured log.
+
+        Asserted by intercepting the module-level ``_log.debug`` call rather
+        than reconfiguring the global structlog state — avoids leaking
+        test-only logger configuration into adjacent tests in the session.
+        """
+        from mousedroid.telemetry import metrics as metrics_module
+
+        captured: list[tuple[str, dict[str, object]]] = []
+
+        def _fake_debug(event: str, **kwargs: object) -> None:
+            captured.append((event, dict(kwargs)))
+
+        # Patch the module-level logger so the registry constructor's
+        # ``metrics_registry_initialised`` debug log is also captured but
+        # filtered below to the drop event only.
+        registry = _make_registry()
+        monkeypatch.setattr(metrics_module._log, "debug", _fake_debug)
+
+        registry.observe_vla_inference_seconds(float("nan"))
+        registry.observe_vla_inference_seconds(-0.001)
+        registry.observe_vla_inference_seconds(0.05)  # accepted — no log
+
+        drops = [(event, kwargs) for event, kwargs in captured if event == self._DROP_EVENT]
+        assert len(drops) == 2, f"expected 2 drop logs, got {drops!r}"
+        reasons = [kwargs.get("reason") for _, kwargs in drops]
+        assert set(reasons) == {"nan", "negative"}
+
+    @pytest.mark.parametrize(
+        "helper_name",
+        [
+            "inc_replay_record",
+            "inc_vla_timeout",
+            "inc_vlm_cache_hit",
+            "inc_vlm_cache_miss",
+        ],
+    )
+    def test_non_positive_amount_is_noop(self, helper_name: str) -> None:
+        """All four counter helpers must guard counter monotonicity at amount <= 0."""
+        registry = _make_registry()
+        # Build a call signature appropriate for each helper.
+        if helper_name == "inc_replay_record":
+            registry.inc_replay_record("ok", amount=0)
+            registry.inc_replay_record("ok", amount=-1)
+        elif helper_name == "inc_vla_timeout":
+            registry.inc_vla_timeout("mock", amount=0)
+            registry.inc_vla_timeout("mock", amount=-1)
+        elif helper_name == "inc_vlm_cache_hit":
+            registry.inc_vlm_cache_hit(amount=0)
+            registry.inc_vlm_cache_hit(amount=-1)
+        else:  # inc_vlm_cache_miss
+            registry.inc_vlm_cache_miss(amount=0)
+            registry.inc_vlm_cache_miss(amount=-1)
+
+        text = registry.render_prometheus()
+        # No metric family should appear since no positive amount was applied.
+        assert "replay_records_total" not in text
+        assert "vla_timeouts_total" not in text
+        assert "vlm_progress_cache_hits_total" not in text
+        assert "vlm_progress_cache_misses_total" not in text
+
+    def test_inc_replay_record_accepts_amount(self) -> None:
+        """API consistency: ``amount`` kwarg works on inc_replay_record."""
+        registry = _make_registry()
+        registry.inc_replay_record("ok", amount=3)
+        registry.inc_replay_record("schema_mismatch", amount=5)
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f'{ns}_replay_records_total{{outcome="ok"}} 3' in text
+        assert f'{ns}_replay_records_total{{outcome="schema_mismatch"}} 5' in text
+
+    def test_inc_vla_timeout_accepts_amount(self) -> None:
+        """API consistency: ``amount`` kwarg works on inc_vla_timeout."""
+        registry = _make_registry()
+        registry.inc_vla_timeout("distilled_onnx", amount=4)
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f'{ns}_vla_timeouts_total{{mode="distilled_onnx"}} 4' in text
+
+    def test_inc_vla_timeout_type_excludes_none_mode(self) -> None:
+        """The narrowed ``VLAActiveBackendLiteral`` excludes ``"none"`` so
+        mypy --strict rejects ``inc_vla_timeout("none")`` at type-check time.
+        We verify the *runtime* narrowing at the alias level — ``"none"`` is
+        not a legal value of the parameter type, so no test calls it
+        directly (would be a mypy error). This test pins the structural
+        invariant in case the alias is widened in the future.
+        """
+        import typing as _typing
+
+        from mousedroid.config.schema import VLAActiveBackendLiteral
+
+        assert "none" not in _typing.get_args(VLAActiveBackendLiteral)

@@ -37,6 +37,38 @@ from mousedroid.config.migration import (
 )
 from mousedroid.constants import DEFAULT_UCB_CANDIDATES, DEFAULT_UCB_TARGET_MS
 
+# ---------------------------------------------------------------------------
+# Public Literal type aliases — single source of truth for label values used
+# across config schemas and telemetry metric helpers. Keeping these here
+# (rather than inlining string literals at each call site) means a backend
+# rename only needs to touch this module.
+# ---------------------------------------------------------------------------
+
+VLABackendLiteral = Literal["none", "mock", "distilled_onnx"]
+"""VLA policy backend identifier. Source of truth: :class:`VLAConfig.backend`.
+
+Includes ``"none"`` (the disabled default). For label values on metrics
+that only fire from a *running* backend (e.g.
+``mousedroid_vla_timeouts_total{mode}``) use the narrower
+:data:`VLAActiveBackendLiteral` alias below."""
+
+VLAActiveBackendLiteral = Literal["mock", "distilled_onnx"]
+"""Subset of :data:`VLABackendLiteral` excluding ``"none"``.
+
+Use this for any metric or callback where a value of ``"none"`` is
+operationally impossible (the disabled backend cannot run inference, so
+it cannot fire a timeout or emit a latency sample). Narrowing at the
+call site prevents accidental cardinality growth from spurious
+``{mode="none"}`` series."""
+
+ReplayOutcomeLiteral = Literal["ok", "schema_mismatch"]
+"""LMDB replay-record deserialization outcome. Drives the
+``mousedroid_replay_records_total{outcome}`` Prometheus counter labels.
+``"ok"`` = record passed schema-version check; ``"schema_mismatch"`` =
+record was skipped because its ``SCHEMA_VERSION`` differed from the
+runtime constant in :mod:`mousedroid.experience.record`."""
+
+
 _TOP_LEVEL_SECTION_ALIASES: dict[str, str] = {
     "arm_hardware": "arm",
     "arm_simulation": "arm_sim",
@@ -636,12 +668,13 @@ class VLAConfig(BaseModel):
     # not fire under tests / CI.
     model_config = {"protected_namespaces": ()}
 
-    backend: Literal["none", "mock", "distilled_onnx"] = Field(
+    backend: VLABackendLiteral = Field(
         "none",
         description=(
             "VLA backend. 'none' (default) leaves the VLA branch unwired. "
             "'mock' selects the in-tree zero-dependency MockVLA. "
-            "'distilled_onnx' is reserved for Phase 3b."
+            "'distilled_onnx' is reserved for Phase 3b. "
+            "See ``VLABackendLiteral`` in schema.py for the canonical type."
         ),
     )
     canned_action: list[float] | None = Field(
@@ -1066,6 +1099,56 @@ class MetricsConfig(BaseModel):
         (5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 5000.0, float("inf")),
         description="Histogram bucket boundaries for MCP request latency (ms)",
     )
+    vla_inference_seconds_buckets: tuple[float, ...] = Field(
+        (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, float("inf")),
+        description=(
+            "Histogram bucket boundaries for VLA policy inference latency (seconds). "
+            "Phase 3b: covers the 30 Hz orchestrator budget (~33 ms) up to long-tail "
+            "fallbacks beyond 1 s. Operator-tunable per deployment."
+        ),
+    )
+
+    @field_validator(
+        "loop_latency_buckets_ms",
+        "llm_latency_buckets_ms",
+        "mcp_latency_buckets_ms",
+        "vla_inference_seconds_buckets",
+    )
+    @classmethod
+    def _validate_histogram_buckets(cls, value: tuple[float, ...]) -> tuple[float, ...]:
+        """Enforce monotonically ascending, strictly positive bucket boundaries.
+
+        A trailing ``float("inf")`` sentinel is permitted (and conventional for
+        Prometheus histograms) but not required — the registry appends one at
+        runtime if missing. When present, ``float("inf")`` MUST be the last
+        element; an ``inf`` in any other position would yield surprising bucket
+        cardinality after the runtime ``sorted(...)`` call in ``MetricsRegistry``.
+        Negative, zero, or duplicate boundaries would silently corrupt bucket
+        accumulation, so they're rejected at schema-load time.
+        """
+        inf = float("inf")
+        if not value:
+            msg = "histogram bucket tuple must be non-empty"
+            raise ValueError(msg)
+        # Reject ``inf`` anywhere except the trailing position.
+        inf_positions = [i for i, b in enumerate(value) if b == inf]
+        if inf_positions and inf_positions != [len(value) - 1]:
+            msg = (
+                f"histogram bucket boundaries may only contain +inf as the "
+                f"trailing sentinel; got {value!r}"
+            )
+            raise ValueError(msg)
+        finite = [b for b in value if b != inf]
+        if finite != sorted(finite):
+            msg = f"histogram bucket boundaries must be monotonically ascending; got {value!r}"
+            raise ValueError(msg)
+        if any(b <= 0.0 for b in finite):
+            msg = f"histogram bucket boundaries must be strictly positive; got {value!r}"
+            raise ValueError(msg)
+        if len(set(finite)) != len(finite):
+            msg = f"histogram bucket boundaries must be unique (no duplicates); got {value!r}"
+            raise ValueError(msg)
+        return value
 
 
 class ModelConfig(BaseModel):

@@ -40,9 +40,19 @@ from typing import TYPE_CHECKING
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
-    from mousedroid.config.schema import MetricsConfig
+    from mousedroid.config.schema import (
+        MetricsConfig,
+        ReplayOutcomeLiteral,
+        VLAActiveBackendLiteral,
+    )
 
 _log = get_logger(__name__)
+
+# Defensive lower-bound for any latency-style histogram observation.
+# Module-level so future histogram helpers can reference the same value
+# (e.g. an upcoming planner-inference histogram) without each helper
+# re-declaring its own threshold.
+_MIN_OBSERVABLE_SECONDS: float = 0.0
 
 
 class _Counter:
@@ -495,6 +505,24 @@ class MetricsRegistry:
             mcp_raw_buckets.append(float("inf"))
         self._mcp_request_latency_ms = _Histogram(tuple(mcp_raw_buckets))
 
+        # PR-A2 — Phase 2 replay / Phase 3 VLA / Phase 4 VLM observability.
+        # All four metric families are pure-add: their internal state is
+        # constructed up-front, but they are **omitted from the rendered
+        # /metrics output** until the first observation/increment lands
+        # (see the conditional blocks in ``render_prometheus``). Default
+        # deployments therefore produce byte-identical exposition output to
+        # pre-PR-A2 — the new families surface only after a writer touches them.
+        # No config toggle is required to disable them — writer-side guards
+        # in the calling subsystems treat ``metrics is None`` as a no-op.
+        self._replay_records = _LabeledCounter()
+        vla_raw_buckets = sorted(cfg.vla_inference_seconds_buckets)
+        if not vla_raw_buckets or vla_raw_buckets[-1] != float("inf"):
+            vla_raw_buckets.append(float("inf"))
+        self._vla_inference_seconds = _Histogram(tuple(vla_raw_buckets))
+        self._vla_timeouts = _LabeledCounter()
+        self._vlm_progress_cache_hits = _Counter()
+        self._vlm_progress_cache_misses = _Counter()
+
         # Pre-format metric names from namespace
         self._name_frame_drops = f"{ns}_frame_drops"
         self._name_safety_violations = f"{ns}_safety_violations"
@@ -541,6 +569,13 @@ class MetricsRegistry:
         self._name_cloud_experience_export_records = f"{ns}_cloud_experience_export_records"
         self._name_cloud_experience_hwm_lag = f"{ns}_cloud_experience_hwm_lag"
         self._name_cloud_experience_queue_depth = f"{ns}_cloud_experience_queue_depth"
+
+        # PR-A2 — replay / VLA / VLM metric names
+        self._name_replay_records = f"{ns}_replay_records"
+        self._name_vla_inference_seconds = f"{ns}_vla_inference_seconds"
+        self._name_vla_timeouts = f"{ns}_vla_timeouts"
+        self._name_vlm_progress_cache_hits = f"{ns}_vlm_progress_cache_hits"
+        self._name_vlm_progress_cache_misses = f"{ns}_vlm_progress_cache_misses"
 
         _log.debug("metrics_registry_initialised", namespace=ns)
 
@@ -842,6 +877,113 @@ class MetricsRegistry:
         """Record total MCP request latency in milliseconds."""
         if self._cfg.track_mcp:
             self._mcp_request_latency_ms.observe(value)
+
+    # ------------------------------------------------------------------
+    # PR-A2 — replay / VLA / VLM observability helpers.
+    #
+    # Naming follows the project convention:
+    #   * ``inc_*``      — counter increments (any cardinality)
+    #   * ``observe_*``  — histogram observations
+    #
+    # All four families are pure-add: they have no config toggle (operators
+    # disable them by simply not consuming them, since the writer-side guards
+    # in the calling subsystems treat ``metrics is None`` as a no-op).
+    #
+    # Label values use ``Literal`` aliases from
+    # :mod:`mousedroid.config.schema` (``ReplayOutcomeLiteral``,
+    # ``VLABackendLiteral``) so a backend rename in one place propagates
+    # to every caller via mypy.
+    # ------------------------------------------------------------------
+
+    def inc_replay_record(
+        self,
+        outcome: ReplayOutcomeLiteral,
+        amount: int = 1,
+    ) -> None:
+        """Increment the replay-record counter for one read outcome.
+
+        Non-positive ``amount`` is a no-op so the Prometheus counter
+        monotonicity invariant is preserved if a buggy caller passes
+        zero or a negative delta.
+
+        Args:
+            outcome: ``"ok"`` for a successfully deserialised record;
+                ``"schema_mismatch"`` for records dropped because their
+                schema version did not match the runtime ``SCHEMA_VERSION``.
+                Typed as :data:`mousedroid.config.schema.ReplayOutcomeLiteral`
+                so mypy catches any drift.
+            amount: Increment magnitude (default 1). Values ``<= 0`` are
+                ignored.
+        """
+        if amount > 0:
+            self._replay_records.inc(outcome, amount)
+
+    def observe_vla_inference_seconds(self, value: float) -> None:
+        """Observe one VLA policy inference latency sample (seconds).
+
+        Defensively drops samples that would corrupt the histogram sum:
+
+        * Negative values (clock skew / wall-clock wrap)
+        * NaN (timer misuse / division-by-zero upstream)
+
+        Drops emit a DEBUG-level structured log so operators can correlate
+        missing histogram observations with the upstream root cause.
+
+        Args:
+            value: Wall-clock seconds spent inside the VLA backend's
+                ``predict()`` call, measured by the caller wrapping the
+                inference site with ``time.perf_counter()``.
+        """
+        # ``value != value`` is the canonical NaN check that does not
+        # depend on importing ``math``.
+        if value != value or value < _MIN_OBSERVABLE_SECONDS:
+            _log.debug(
+                "vla_inference_seconds_dropped",
+                reason="nan" if value != value else "negative",
+                value=value,
+            )
+            return
+        self._vla_inference_seconds.observe(value)
+
+    def inc_vla_timeout(
+        self,
+        mode: VLAActiveBackendLiteral,
+        amount: int = 1,
+    ) -> None:
+        """Increment the VLA timeout counter for one fallback event.
+
+        The ``mode`` parameter is typed as
+        :data:`mousedroid.config.schema.VLAActiveBackendLiteral` — the
+        narrowed subset of :data:`VLABackendLiteral` that excludes
+        ``"none"``. The disabled backend cannot run inference and therefore
+        cannot fire a timeout, so the type system forbids that label value
+        and prevents accidental cardinality growth from spurious
+        ``{mode="none"}`` series.
+
+        Args:
+            mode: Active VLA backend mode that timed out (``"mock"`` or
+                ``"distilled_onnx"``). Sourced from ``cfg.vla.backend``.
+            amount: Increment magnitude (default 1). Values ``<= 0`` are
+                ignored to preserve Prometheus counter monotonicity.
+        """
+        if amount > 0:
+            self._vla_timeouts.inc(mode, amount)
+
+    def inc_vlm_cache_hit(self, amount: int = 1) -> None:
+        """Increment the VLM progress-reward cache-hit counter.
+
+        Non-positive ``amount`` is a no-op (counter monotonicity guard).
+        """
+        if amount > 0:
+            self._vlm_progress_cache_hits.inc(amount)
+
+    def inc_vlm_cache_miss(self, amount: int = 1) -> None:
+        """Increment the VLM progress-reward cache-miss counter.
+
+        Non-positive ``amount`` is a no-op (counter monotonicity guard).
+        """
+        if amount > 0:
+            self._vlm_progress_cache_misses.inc(amount)
 
     @staticmethod
     def _decode_cloud_circuit_state(value: float) -> str:
@@ -1222,6 +1364,58 @@ class MetricsRegistry:
                     )
                 )
 
+        # PR-A2 — replay / VLA / VLM observability metrics. Emit conditionally
+        # so deployments that never exercise these paths don't ship zero-valued
+        # series. The Prometheus exposition spec allows a metric to be absent
+        # entirely when no observations exist; promtool tolerates that.
+        replay_snapshot = self._replay_records.snapshot()
+        if replay_snapshot:
+            sections.append(
+                _render_labeled_counter(
+                    self._name_replay_records,
+                    "LMDB replay records read (labels: outcome=ok|schema_mismatch)",
+                    "outcome",
+                    replay_snapshot,
+                )
+            )
+        vla_buckets, vla_sum, vla_count = self._vla_inference_seconds.snapshot()
+        if vla_count > 0:
+            sections.append(
+                _render_histogram(
+                    self._name_vla_inference_seconds,
+                    "VLA policy inference latency histogram (seconds)",
+                    vla_buckets,
+                    vla_sum,
+                    vla_count,
+                )
+            )
+        vla_timeout_snapshot = self._vla_timeouts.snapshot()
+        if vla_timeout_snapshot:
+            sections.append(
+                _render_labeled_counter(
+                    self._name_vla_timeouts,
+                    "VLA inference timeouts / fallbacks (label: mode)",
+                    "mode",
+                    vla_timeout_snapshot,
+                )
+            )
+        if self._vlm_progress_cache_hits.value > 0:
+            sections.append(
+                _render_counter(
+                    self._name_vlm_progress_cache_hits,
+                    "VLM progress-reward cache hits",
+                    self._vlm_progress_cache_hits.value,
+                )
+            )
+        if self._vlm_progress_cache_misses.value > 0:
+            sections.append(
+                _render_counter(
+                    self._name_vlm_progress_cache_misses,
+                    "VLM progress-reward cache misses",
+                    self._vlm_progress_cache_misses.value,
+                )
+            )
+
         # Subsystem failures — always emitted regardless of config toggles
         failure_snapshot = self._subsystem_failures.snapshot()
         if failure_snapshot:
@@ -1326,5 +1520,14 @@ def generate_metrics_sample() -> str:
     registry.set_lidar_scan_points(456)
     registry.inc_subsystem_failure("voice", "device_disconnected", "error")
     registry.inc_subsystem_failure("telemetry", "bind_exhausted", "warning")
+
+    # PR-A2 — exercise the new replay / VLA / VLM observability metrics so
+    # ``promtool check metrics`` sees them in the CI rendered output.
+    registry.inc_replay_record("ok")
+    registry.inc_replay_record("schema_mismatch")
+    registry.observe_vla_inference_seconds(0.012)
+    registry.inc_vla_timeout("distilled_onnx")
+    registry.inc_vlm_cache_hit()
+    registry.inc_vlm_cache_miss()
 
     return registry.render_prometheus()
