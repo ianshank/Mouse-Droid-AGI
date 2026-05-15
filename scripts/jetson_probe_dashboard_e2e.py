@@ -81,11 +81,13 @@ async def _capture_frames(
 ) -> list[dict[str, Any]]:
     """Connect, optionally send hello, collect frames for ``duration_s``."""
     try:
+        # NOTE: ``aiohttp.ClientWSTimeout`` is 3.10+; project pins
+        # ``aiohttp>=3.9``. ``asyncio.wait_for`` around ``ws.receive``
+        # below bounds the read budget without needing it.
         ws = await session.ws_connect(
             url,
             headers=_auth_headers(),
             heartbeat=None,
-            timeout=aiohttp.ClientWSTimeout(ws_close=5.0),
         )
     except Exception as exc:
         raise RuntimeError(f"cannot open WS: {type(exc).__name__}: {exc}") from exc

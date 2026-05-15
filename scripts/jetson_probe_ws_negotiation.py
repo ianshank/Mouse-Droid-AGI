@@ -68,11 +68,13 @@ async def _probe() -> int:
 
     async with aiohttp.ClientSession() as session:
         try:
+            # NOTE: avoid ``aiohttp.ClientWSTimeout`` — only exists in
+            # aiohttp >= 3.10 but the project pins >= 3.9. The
+            # ``asyncio.wait_for`` around each receive already bounds reads.
             ws = await session.ws_connect(
                 url,
                 headers=_auth_headers(),
                 heartbeat=None,
-                timeout=aiohttp.ClientWSTimeout(ws_close=5.0),
             )
         except aiohttp.WSServerHandshakeError as exc:
             print(f"FAIL: WS handshake rejected: status={exc.status}", file=sys.stderr)
