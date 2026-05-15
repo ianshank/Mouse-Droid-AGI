@@ -90,11 +90,15 @@ def dashboard_token() -> str | None:
     return token or None
 
 
-def _maybe_skip_no_playwright() -> None:
-    """Skip when Playwright is unavailable or explicitly disabled.
+def _maybe_skip_no_deps() -> None:
+    """Skip BEFORE any browser work if a runtime dep is missing.
 
-    Honours ``MOUSEDROID_NO_PLAYWRIGHT=1`` (CI fallback when Chromium
-    isn't installed) and ``pytest.importorskip`` for the actual import.
+    Hoisted here (rather than splitting Playwright + Pillow checks) so
+    that operators on a fresh workstation see the skip reason instantly
+    instead of waiting for Chromium to launch and capture two
+    screenshots only to discover Pillow is unavailable for the diff
+    (Copilot review on PR #83). Honours ``MOUSEDROID_NO_PLAYWRIGHT=1``
+    for CI environments that intentionally elide Chromium.
     """
     if os.environ.get(NO_PLAYWRIGHT_ENV, "").strip().lower() in {"1", "true", "yes"}:
         pytest.skip(f"Playwright disabled via {NO_PLAYWRIGHT_ENV} env var")
@@ -105,6 +109,10 @@ def _maybe_skip_no_playwright() -> None:
             "`pip install playwright && playwright install chromium` to enable"
         ),
     )
+    # Pillow is required by ``_diff_pct``; surface the missing-dep skip
+    # BEFORE we burn ~4-5 s on Chromium + page navigation.
+    pytest.importorskip("PIL.Image", reason="Pillow not installed; pip install pillow")
+    pytest.importorskip("PIL.ImageChops")
 
 
 def _settle_seconds() -> float:
@@ -208,7 +216,7 @@ def test_dashboard_canvas_redraws(
         page_path: ``/lidar`` or ``/camera``.
         canvas_selector: CSS selector inside the page for the redrawing canvas.
     """
-    _maybe_skip_no_playwright()
+    _maybe_skip_no_deps()
     from playwright.sync_api import sync_playwright
 
     url = _build_page_url(dashboard_url, page_path, dashboard_token)

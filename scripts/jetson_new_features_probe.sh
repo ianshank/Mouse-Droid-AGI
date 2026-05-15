@@ -148,27 +148,31 @@ probe_p1() {
 
 # ---------- P2: auth exempt segment-exact match ----------
 probe_p2() {
-    # /api/v1/sensors WITHOUT token → must reject when auth_enabled=true.
+    # /api/v1/sensors WITHOUT token: when auth_enabled, this MUST be
+    # rejected. When auth is disabled the request returns 200 and we
+    # cannot meaningfully test segment-exact matching — but we still
+    # have to check the prefix-collision paths because the bug we are
+    # guarding against (startswith bypass) would manifest the same way
+    # regardless of whether the rest of auth is enabled (Copilot review
+    # on PR #83).
     local status
     status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "${BASE}/api/v1/sensors")"
+    local auth_active=1
     if [[ "${status}" == "200" ]]; then
-        # If auth is disabled in this deployment, the entire probe is N/A.
-        # Mark as skip-pass via stderr note; runner still scores PASS for
-        # the unauth path "did not crash".
         echo "INFO: /api/v1/sensors returned 200 unauthenticated — auth_enabled likely false"
-        echo "INFO: skipping prefix-collision sub-checks; deployment has auth disabled"
-        echo "PASS: P2 auth path responds (auth disabled or behind reverse proxy)"
-        return 0
-    fi
-    if [[ "${status}" != "401" && "${status}" != "403" ]]; then
-        echo "FAIL: /api/v1/sensors no-token expected 401/403, got ${status}" >&2
+        auth_active=0
+    elif [[ "${status}" == "401" || "${status}" == "403" ]]; then
+        echo "PASS-PART: /api/v1/sensors no-token -> ${status}"
+    else
+        echo "FAIL: /api/v1/sensors no-token expected 401/403 or 200, got ${status}" >&2
         return 21
     fi
-    echo "PASS-PART: /api/v1/sensors no-token -> ${status}"
 
-    # Prefix-collision attempts: /api/v1/healthz and /api/v1/healthexploit
-    # must NOT bypass auth via the old startswith match. Both should return
-    # 401/403 or 404 (path not registered).
+    # Prefix-collision attempts run UNCONDITIONALLY. /api/v1/healthz and
+    # /api/v1/healthexploit are not real routes — they must EITHER 404
+    # (route not registered) OR (when auth is enabled) 401/403 — but
+    # NEVER 200, because 200 would be the startswith-bypass failure mode.
+    local collision_seen=0
     for path in /api/v1/healthz /api/v1/healthexploit; do
         local s
         s="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "${BASE}${path}")"
@@ -176,9 +180,19 @@ probe_p2() {
             echo "FAIL: ${path} returned 200 — exempt prefix bypass" >&2
             return 22
         fi
+        collision_seen=1
         echo "INFO: ${path} -> ${s} (no bypass)"
     done
-    echo "PASS: P2 auth exempt segment-exact (prefix-collision blocked)"
+    if [[ "${collision_seen}" -ne 1 ]]; then
+        echo "FAIL: no prefix-collision paths probed (curl failed for all)" >&2
+        return 23
+    fi
+
+    if [[ "${auth_active}" -eq 1 ]]; then
+        echo "PASS: P2 auth exempt segment-exact (prefix-collision blocked + token enforced)"
+    else
+        echo "PASS: P2 prefix-collision blocked (auth disabled — segment-exact path n/a)"
+    fi
 }
 
 # ---------- P3: lidar raw WS ----------
