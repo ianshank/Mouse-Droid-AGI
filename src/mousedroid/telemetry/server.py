@@ -27,6 +27,7 @@ from mousedroid.constants import (
     WS_CLOSE_LIDAR_RAW_UNAVAILABLE,
     WS_CLOSE_LOG_BUFFER_DISABLED,
     WS_CLOSE_MAX_CLIENTS,
+    WS_CLOSE_NEGOTIATION_FAILED,
     WS_HELLO_MAX_BYTES,
 )
 from mousedroid.logging.setup import get_logger
@@ -1048,30 +1049,38 @@ class TelemetryServer:
         """
         from aiohttp import WSMsgType, web
 
-        if len(self._ws_clients) >= self._cfg.max_clients:
-            resp = web.WebSocketResponse()
-            await resp.prepare(request)
-            await resp.close(code=WS_CLOSE_MAX_CLIENTS, message=b"max_clients_reached")
-            return resp
-        # Note: API key auth is already enforced by auth_middleware when
-        # cfg.api_key is set.  No secondary check needed here.
-
+        # Construct ws synchronously so the check + reservation below is
+        # atomic with respect to other concurrent connects (no awaits in
+        # between). Addresses Gemini medium review comment_id=3238374802
+        # — previously ``await ws.prepare(request)`` yielded between
+        # the count check and the append, letting two clients slip past
+        # the ``max_clients`` limit.
         ws = web.WebSocketResponse()
-        await ws.prepare(request)
-
-        # Register the client BEFORE negotiation so:
-        #   1. max_clients enforcement counts in-flight handshakes.
-        #   2. legacy tests that assert ``server.client_count == 1``
-        #      immediately after ``ws_connect`` still pass.
-        # The broadcast loop reads ``_ws_serializations`` with a default,
-        # so frames are still sent (in server-default serialization)
-        # if the broadcast fires before negotiation completes.
+        # --- synchronous critical section -------------------------------
+        if len(self._ws_clients) >= self._cfg.max_clients:
+            await ws.prepare(request)
+            await ws.close(code=WS_CLOSE_MAX_CLIENTS, message=b"max_clients_reached")
+            return ws
+        # API key auth is enforced by auth_middleware when cfg.api_key is set.
+        # Register before any await — same rationale as above: keeps
+        # max_clients accounting atomic AND lets legacy tests that
+        # assert ``server.client_count == 1`` immediately after
+        # ``ws_connect`` keep passing. The broadcast loop reads
+        # ``_ws_serializations`` with a default, so frames are still
+        # sent (in server-default serialization) if a broadcast fires
+        # before negotiation completes.
         self._ws_clients.append(ws)
+        # --- end critical section ---------------------------------------
         peer = request.remote or "unknown"
-        _log.info("telemetry_ws_client_connected", peer=peer, total=len(self._ws_clients))
 
         try:
+            await ws.prepare(request)
+            _log.info("telemetry_ws_client_connected", peer=peer, total=len(self._ws_clients))
             chosen = await self._negotiate_ws(ws)
+            if ws.closed:
+                # ``_negotiate_ws`` closes on negotiation failure per the
+                # NegotiationResult contract. Skip the message loop.
+                return ws
             self._ws_serializations[id(ws)] = chosen
             _log.info(
                 "telemetry_ws_serialization_set",
@@ -1096,17 +1105,24 @@ class TelemetryServer:
         ``TelemetryConfig.ws_handshake_timeout_s``. The message must be
         a JSON-encoded ``hello`` object (see :mod:`telemetry.serialization`).
 
-        Any failure mode — timeout, unparseable payload, schema
-        violation — falls back to the server-configured serialization
-        and emits a structured log so operators can tell why a
-        dashboard appears stuck on the wrong format.
+        Soft failure modes — timeout, non-TEXT first message, oversized
+        payload, unparseable JSON — fall back to the server-configured
+        serialization. These are legitimately legacy clients or
+        misbehaving peers and should still receive frames.
+
+        Hard failure modes — protocol version mismatch or no
+        serialization overlap — honour the ``NegotiationResult``
+        contract: the server sends the ``hello_ack`` envelope with
+        ``ok=False`` and the failure reason, then closes the WebSocket
+        with ``WS_CLOSE_NEGOTIATION_FAILED``. Callers should check
+        ``ws.closed`` after this method returns and skip the read loop.
 
         Args:
             ws: The accepted WebSocket response.
 
         Returns:
             The serialization to use for outbound frames on this
-            connection.
+            connection. Always populated; meaningless when ``ws.closed``.
         """
         from aiohttp import WSMsgType
 
@@ -1176,12 +1192,22 @@ class TelemetryServer:
         with contextlib.suppress(ConnectionResetError, RuntimeError):
             await ws.send_json(result.ack_payload)
         if not result.ok:
+            # Honour the NegotiationResult contract: hard failures
+            # (no overlap / unsupported version) MUST close the
+            # WebSocket. The ack envelope was already sent so the
+            # client sees the reason; the close code disambiguates
+            # from network-level failures.
             self._failure_recorder.record(
                 "telemetry",
                 "ws_negotiation_failed",
                 level="warning",
                 extra={"reason": result.reason or "unknown"},
             )
+            with contextlib.suppress(ConnectionResetError, RuntimeError):
+                await ws.close(
+                    code=WS_CLOSE_NEGOTIATION_FAILED,
+                    message=(result.reason or "negotiation_failed").encode("utf-8"),
+                )
         return result.serialization
 
     async def _handle_lidar_raw_ws(self, request: web.Request) -> web.WebSocketResponse:
@@ -1199,32 +1225,37 @@ class TelemetryServer:
         """
         from aiohttp import WSMsgType, web
 
-        if self._lidar_raw_queue is None:
-            resp = web.WebSocketResponse()
-            await resp.prepare(request)
-            await resp.close(code=WS_CLOSE_LIDAR_RAW_UNAVAILABLE, message=b"lidar_raw_unavailable")
-            return resp
-        if len(self._lidar_ws_clients) >= self._cfg.max_clients:
-            resp = web.WebSocketResponse()
-            await resp.prepare(request)
-            await resp.close(code=WS_CLOSE_MAX_CLIENTS, message=b"max_clients_reached")
-            return resp
-
+        # Construct ws synchronously so the count check + reservation
+        # below is atomic. Mirrors ``_handle_ws``; addresses Gemini
+        # medium review comment_id=3238374802.
         ws = web.WebSocketResponse()
-        await ws.prepare(request)
-
-        # See ``_handle_ws`` for the rationale — register first, then
-        # negotiate, so max_clients accounting and synchronous-client
-        # assertions both work.
+        # --- synchronous critical section -------------------------------
+        if self._lidar_raw_queue is None:
+            await ws.prepare(request)
+            await ws.close(
+                code=WS_CLOSE_LIDAR_RAW_UNAVAILABLE,
+                message=b"lidar_raw_unavailable",
+            )
+            return ws
+        if len(self._lidar_ws_clients) >= self._cfg.max_clients:
+            await ws.prepare(request)
+            await ws.close(code=WS_CLOSE_MAX_CLIENTS, message=b"max_clients_reached")
+            return ws
         self._lidar_ws_clients.append(ws)
+        # --- end critical section ---------------------------------------
         peer = request.remote or "unknown"
-        _log.info(
-            "telemetry_lidar_ws_client_connected",
-            peer=peer,
-            total=len(self._lidar_ws_clients),
-        )
+
         try:
+            await ws.prepare(request)
+            _log.info(
+                "telemetry_lidar_ws_client_connected",
+                peer=peer,
+                total=len(self._lidar_ws_clients),
+            )
             chosen = await self._negotiate_ws(ws)
+            if ws.closed:
+                # Negotiation closed the WS — skip the read loop.
+                return ws
             self._lidar_ws_serializations[id(ws)] = chosen
             async for msg in ws:
                 if msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):

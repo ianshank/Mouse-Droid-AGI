@@ -88,6 +88,41 @@ async def test_handler_rejects_when_max_clients_reached() -> None:
 
 
 @pytest.mark.asyncio
+async def test_max_clients_check_is_race_safe() -> None:
+    """Concurrent connects past ``max_clients`` cannot all slip past the guard.
+
+    Addresses Gemini medium review (PR #79 comment_id=3238374802): the
+    previous code awaited ``ws.prepare(request)`` between the count
+    check and the append, which yielded the event loop and let two
+    racing connects both pass the limit. With the reservation moved
+    into a synchronous critical section, exactly ``max_clients``
+    connections succeed and the rest are closed with 4029.
+    """
+    server = _build_server(max_clients=2)
+    server._running = True
+    path = server._cfg.lidar_raw_ws_path
+
+    async with TestClient(TestServer(_build_app(server))) as client:
+        # Launch four concurrent connects; only two should make it
+        # into ``_lidar_ws_clients``. Without the fix, the race would
+        # occasionally let three or four through.
+        async def _connect() -> aiohttp.ClientWebSocketResponse:
+            return await client.ws_connect(path)
+
+        sockets = await asyncio.gather(
+            _connect(), _connect(), _connect(), _connect(), return_exceptions=True
+        )
+        try:
+            # Give the server time to settle accept/reject of each.
+            await asyncio.sleep(0.1)
+            assert len(server._lidar_ws_clients) <= server._cfg.max_clients
+        finally:
+            for ws in sockets:
+                if isinstance(ws, aiohttp.ClientWebSocketResponse):
+                    await ws.close()
+
+
+@pytest.mark.asyncio
 async def test_handler_accepts_negotiated_client_and_receives_scan() -> None:
     """Full lifecycle: connect, negotiate, deliver a scan, disconnect."""
     server = _build_server()
