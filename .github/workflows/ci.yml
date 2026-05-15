@@ -204,6 +204,40 @@ jobs:
               run: echo "promtool not available — skipping Prometheus metrics validation"
 
     # -------------------------------------------------------------------------
+    # Stage 4b: VLA extras smoke (advisory)
+    # -------------------------------------------------------------------------
+    # Catches ONNX Runtime API drift, HF-Hub pull regressions, and
+    # provider-list changes that are invisible to the default test stage
+    # (which only installs ``[dev,telemetry,mcp]``). Advisory for the first
+    # green week — promote to required by removing ``continue-on-error``
+    # once the job has been green for 7 consecutive runs (see
+    # ``docs/planning/PHASE_2_1_AND_BEYOND_PLAN.md`` Story 2.5 promotion gate).
+    vla-extras:
+        runs-on: ubuntu-latest
+        needs: lint
+        continue-on-error: true
+        strategy:
+            matrix:
+                python-version: ["3.11"]
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                  python-version: ${{ matrix.python-version }}
+                  cache: pip
+
+            - name: Install dependencies (dev + vla extras)
+              run: pip install -e ".[dev,vla]"
+
+            - name: Run VLA-only test suite
+              run: |
+                  pytest tests/unit/vla \
+                    -v --tb=short \
+                    -m "not slow" \
+                    --no-cov \
+                    --import-mode=importlib
+
+    # -------------------------------------------------------------------------
     # Stage 5: Security audit
     # -------------------------------------------------------------------------
     security:

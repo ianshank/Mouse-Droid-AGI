@@ -495,6 +495,22 @@ class MetricsRegistry:
             mcp_raw_buckets.append(float("inf"))
         self._mcp_request_latency_ms = _Histogram(tuple(mcp_raw_buckets))
 
+        # PR-A2 — Phase 2 replay / Phase 3 VLA / Phase 4 VLM observability.
+        # All four metrics are pure-add: they ship as registered-but-zero on
+        # default deployments and only increment when the corresponding
+        # subsystem fires. No config toggle is required to disable them — the
+        # writer-side helpers (record_replay_event / observe_vla_inference_seconds
+        # / record_vla_timeout / record_vlm_cache_hit|miss) are no-ops at the
+        # call site when ``metrics is None``.
+        self._replay_records = _LabeledCounter()
+        vla_raw_buckets = sorted(cfg.vla_inference_seconds_buckets)
+        if not vla_raw_buckets or vla_raw_buckets[-1] != float("inf"):
+            vla_raw_buckets.append(float("inf"))
+        self._vla_inference_seconds = _Histogram(tuple(vla_raw_buckets))
+        self._vla_timeouts = _LabeledCounter()
+        self._vlm_progress_cache_hits = _Counter()
+        self._vlm_progress_cache_misses = _Counter()
+
         # Pre-format metric names from namespace
         self._name_frame_drops = f"{ns}_frame_drops"
         self._name_safety_violations = f"{ns}_safety_violations"
@@ -541,6 +557,13 @@ class MetricsRegistry:
         self._name_cloud_experience_export_records = f"{ns}_cloud_experience_export_records"
         self._name_cloud_experience_hwm_lag = f"{ns}_cloud_experience_hwm_lag"
         self._name_cloud_experience_queue_depth = f"{ns}_cloud_experience_queue_depth"
+
+        # PR-A2 — replay / VLA / VLM metric names
+        self._name_replay_records = f"{ns}_replay_records"
+        self._name_vla_inference_seconds = f"{ns}_vla_inference_seconds"
+        self._name_vla_timeouts = f"{ns}_vla_timeouts"
+        self._name_vlm_progress_cache_hits = f"{ns}_vlm_progress_cache_hits"
+        self._name_vlm_progress_cache_misses = f"{ns}_vlm_progress_cache_misses"
 
         _log.debug("metrics_registry_initialised", namespace=ns)
 
@@ -842,6 +865,53 @@ class MetricsRegistry:
         """Record total MCP request latency in milliseconds."""
         if self._cfg.track_mcp:
             self._mcp_request_latency_ms.observe(value)
+
+    # ------------------------------------------------------------------
+    # PR-A2 — replay / VLA / VLM observability helpers.
+    # All four are pure-add: they have no config toggle (operators disable
+    # them by simply not consuming them, since the writer-side guards in
+    # the calling subsystems treat ``metrics is None`` as a no-op).
+    # ------------------------------------------------------------------
+
+    def record_replay_event(self, outcome: str) -> None:
+        """Record one outcome from an LMDB replay-record read.
+
+        Args:
+            outcome: ``"ok"`` for a successfully deserialised record;
+                ``"schema_mismatch"`` for records dropped because their
+                schema version did not match the runtime ``SCHEMA_VERSION``.
+        """
+        self._replay_records.inc(outcome)
+
+    def observe_vla_inference_seconds(self, value: float) -> None:
+        """Observe one VLA policy inference latency sample (seconds).
+
+        Args:
+            value: Wall-clock seconds spent inside the VLA backend's
+                ``predict()`` call, measured by the caller wrapping the
+                inference site with ``time.perf_counter()``.
+        """
+        if value < 0.0:
+            # Defensive — bad clock skew should not corrupt the histogram.
+            return
+        self._vla_inference_seconds.observe(value)
+
+    def record_vla_timeout(self, mode: str) -> None:
+        """Record one VLA inference timeout / fallback event.
+
+        Args:
+            mode: VLA backend mode that timed out (e.g. ``"mock"``,
+                ``"distilled_onnx"``). Sourced from ``cfg.vla.backend``.
+        """
+        self._vla_timeouts.inc(mode)
+
+    def record_vlm_cache_hit(self, amount: int = 1) -> None:
+        """Increment the VLM progress-reward cache-hit counter."""
+        self._vlm_progress_cache_hits.inc(amount)
+
+    def record_vlm_cache_miss(self, amount: int = 1) -> None:
+        """Increment the VLM progress-reward cache-miss counter."""
+        self._vlm_progress_cache_misses.inc(amount)
 
     @staticmethod
     def _decode_cloud_circuit_state(value: float) -> str:
@@ -1222,6 +1292,58 @@ class MetricsRegistry:
                     )
                 )
 
+        # PR-A2 — replay / VLA / VLM observability metrics. Emit conditionally
+        # so deployments that never exercise these paths don't ship zero-valued
+        # series. The Prometheus exposition spec allows a metric to be absent
+        # entirely when no observations exist; promtool tolerates that.
+        replay_snapshot = self._replay_records.snapshot()
+        if replay_snapshot:
+            sections.append(
+                _render_labeled_counter(
+                    self._name_replay_records,
+                    "LMDB replay records read (labels: outcome=ok|schema_mismatch)",
+                    "outcome",
+                    replay_snapshot,
+                )
+            )
+        vla_buckets, vla_sum, vla_count = self._vla_inference_seconds.snapshot()
+        if vla_count > 0:
+            sections.append(
+                _render_histogram(
+                    self._name_vla_inference_seconds,
+                    "VLA policy inference latency histogram (seconds)",
+                    vla_buckets,
+                    vla_sum,
+                    vla_count,
+                )
+            )
+        vla_timeout_snapshot = self._vla_timeouts.snapshot()
+        if vla_timeout_snapshot:
+            sections.append(
+                _render_labeled_counter(
+                    self._name_vla_timeouts,
+                    "VLA inference timeouts / fallbacks (label: mode)",
+                    "mode",
+                    vla_timeout_snapshot,
+                )
+            )
+        if self._vlm_progress_cache_hits.value > 0:
+            sections.append(
+                _render_counter(
+                    self._name_vlm_progress_cache_hits,
+                    "VLM progress-reward cache hits",
+                    self._vlm_progress_cache_hits.value,
+                )
+            )
+        if self._vlm_progress_cache_misses.value > 0:
+            sections.append(
+                _render_counter(
+                    self._name_vlm_progress_cache_misses,
+                    "VLM progress-reward cache misses",
+                    self._vlm_progress_cache_misses.value,
+                )
+            )
+
         # Subsystem failures — always emitted regardless of config toggles
         failure_snapshot = self._subsystem_failures.snapshot()
         if failure_snapshot:
@@ -1326,5 +1448,14 @@ def generate_metrics_sample() -> str:
     registry.set_lidar_scan_points(456)
     registry.inc_subsystem_failure("voice", "device_disconnected", "error")
     registry.inc_subsystem_failure("telemetry", "bind_exhausted", "warning")
+
+    # PR-A2 — exercise the new replay / VLA / VLM observability metrics so
+    # ``promtool check metrics`` sees them in the CI rendered output.
+    registry.record_replay_event("ok")
+    registry.record_replay_event("schema_mismatch")
+    registry.observe_vla_inference_seconds(0.012)
+    registry.record_vla_timeout("distilled_onnx")
+    registry.record_vlm_cache_hit()
+    registry.record_vlm_cache_miss()
 
     return registry.render_prometheus()

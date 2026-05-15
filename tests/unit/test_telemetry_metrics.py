@@ -519,3 +519,188 @@ class TestGenerateMetricsSample:
         sample = generate_metrics_sample()
         assert re.search(r"^# HELP \S+ .+$", sample, re.MULTILINE)
         assert re.search(r"^# TYPE \S+ (counter|gauge|histogram)$", sample, re.MULTILINE)
+
+
+# ---------------------------------------------------------------------------
+# PR-A2 — replay / VLA / VLM observability metrics
+# ---------------------------------------------------------------------------
+
+
+class TestReplayRecordsCounter:
+    """``mousedroid_replay_records_total{outcome}`` — labeled by ok|schema_mismatch."""
+
+    def test_zero_observations_omits_metric_family(self) -> None:
+        """No replay reads → no metric family rendered (pure-add contract)."""
+        registry = _make_registry()
+        text = registry.render_prometheus()
+        assert "replay_records_total" not in text
+
+    def test_records_ok_outcome(self) -> None:
+        registry = _make_registry()
+        registry.record_replay_event("ok")
+        registry.record_replay_event("ok")
+        registry.record_replay_event("ok")
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f'{ns}_replay_records_total{{outcome="ok"}} 3' in text
+        assert f"# TYPE {ns}_replay_records_total counter" in text
+
+    def test_records_schema_mismatch_outcome(self) -> None:
+        registry = _make_registry()
+        registry.record_replay_event("schema_mismatch")
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f'{ns}_replay_records_total{{outcome="schema_mismatch"}} 1' in text
+
+    def test_records_both_outcomes_independently(self) -> None:
+        registry = _make_registry()
+        registry.record_replay_event("ok")
+        registry.record_replay_event("ok")
+        registry.record_replay_event("schema_mismatch")
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f'{ns}_replay_records_total{{outcome="ok"}} 2' in text
+        assert f'{ns}_replay_records_total{{outcome="schema_mismatch"}} 1' in text
+
+
+class TestVlaInferenceSecondsHistogram:
+    """``mousedroid_vla_inference_seconds`` — config-driven buckets, sum, count."""
+
+    def test_zero_observations_omits_metric_family(self) -> None:
+        registry = _make_registry()
+        text = registry.render_prometheus()
+        assert "vla_inference_seconds" not in text
+
+    def test_records_inference_latency(self) -> None:
+        registry = _make_registry()
+        registry.observe_vla_inference_seconds(0.012)
+        registry.observe_vla_inference_seconds(0.025)
+        registry.observe_vla_inference_seconds(0.5)
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f"# TYPE {ns}_vla_inference_seconds histogram" in text
+        assert f"{ns}_vla_inference_seconds_count 3" in text
+        # Each observation lands in exactly one bucket; cumulative counts grow.
+        assert f"{ns}_vla_inference_seconds_bucket" in text
+        assert f"{ns}_vla_inference_seconds_sum" in text
+
+    def test_negative_observation_is_dropped(self) -> None:
+        """Defensive: negative latencies (clock skew) must not corrupt sum/count."""
+        registry = _make_registry()
+        registry.observe_vla_inference_seconds(-1.0)  # rejected
+        registry.observe_vla_inference_seconds(0.05)  # accepted
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f"{ns}_vla_inference_seconds_count 1" in text
+
+    def test_buckets_come_from_config(self) -> None:
+        """Bucket boundaries must mirror ``MetricsConfig.vla_inference_seconds_buckets``."""
+        custom_buckets = (0.01, 0.1, 1.0)
+        registry = _make_registry(vla_inference_seconds_buckets=custom_buckets)
+        registry.observe_vla_inference_seconds(0.05)
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        for boundary in custom_buckets:
+            assert f'{ns}_vla_inference_seconds_bucket{{le="{boundary:.6g}"}}' in text
+
+
+class TestVlaTimeoutCounter:
+    """``mousedroid_vla_timeouts_total{mode}`` — labeled by backend mode."""
+
+    def test_zero_timeouts_omits_metric_family(self) -> None:
+        registry = _make_registry()
+        text = registry.render_prometheus()
+        assert "vla_timeouts_total" not in text
+
+    @pytest.mark.parametrize("mode", ["mock", "distilled_onnx"])
+    def test_records_timeout_by_mode(self, mode: str) -> None:
+        registry = _make_registry()
+        registry.record_vla_timeout(mode)
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f'{ns}_vla_timeouts_total{{mode="{mode}"}} 1' in text
+
+
+class TestVlmProgressCacheCounters:
+    """``mousedroid_vlm_progress_cache_hits_total`` and ``..._misses_total``."""
+
+    def test_zero_hits_and_misses_omits_families(self) -> None:
+        registry = _make_registry()
+        text = registry.render_prometheus()
+        assert "vlm_progress_cache_hits" not in text
+        assert "vlm_progress_cache_misses" not in text
+
+    def test_records_cache_hit(self) -> None:
+        registry = _make_registry()
+        registry.record_vlm_cache_hit()
+        registry.record_vlm_cache_hit(amount=2)
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f"{ns}_vlm_progress_cache_hits_total 3" in text
+
+    def test_records_cache_miss(self) -> None:
+        registry = _make_registry()
+        registry.record_vlm_cache_miss()
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f"{ns}_vlm_progress_cache_misses_total 1" in text
+
+    def test_hit_and_miss_increment_independently(self) -> None:
+        """Hit and miss counters must not bleed across each other."""
+        registry = _make_registry()
+        registry.record_vlm_cache_hit()
+        registry.record_vlm_cache_miss()
+        registry.record_vlm_cache_miss()
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f"{ns}_vlm_progress_cache_hits_total 1" in text
+        assert f"{ns}_vlm_progress_cache_misses_total 2" in text
+
+
+class TestGenerateMetricsSampleNewMetrics:
+    """Ensure the PR-A2 metrics appear in the CI promtool sample."""
+
+    def test_sample_exercises_all_four_new_metrics(self) -> None:
+        sample = generate_metrics_sample()
+        # Pull namespace from default config so the assertions stay
+        # config-driven (no hardcoded ``mousedroid_`` prefix).
+        ns = MetricsConfig().namespace
+        for name in (
+            f"{ns}_replay_records_total",
+            f"{ns}_vla_inference_seconds_bucket",
+            f"{ns}_vla_inference_seconds_sum",
+            f"{ns}_vla_inference_seconds_count",
+            f"{ns}_vla_timeouts_total",
+            f"{ns}_vlm_progress_cache_hits_total",
+            f"{ns}_vlm_progress_cache_misses_total",
+        ):
+            assert name in sample, f"PR-A2 metric missing from sample: {name}"
+
+    def test_sample_includes_both_replay_outcomes(self) -> None:
+        sample = generate_metrics_sample()
+        ns = MetricsConfig().namespace
+        assert f'{ns}_replay_records_total{{outcome="ok"}}' in sample
+        assert f'{ns}_replay_records_total{{outcome="schema_mismatch"}}' in sample
+
+
+class TestMetricsConfigBucketField:
+    """``MetricsConfig.vla_inference_seconds_buckets`` is a Pydantic-validated tuple."""
+
+    def test_default_buckets_are_finite_and_ascending(self) -> None:
+        cfg = MetricsConfig()
+        buckets = cfg.vla_inference_seconds_buckets
+        # Drop the +Inf sentinel before checking monotonicity.
+        finite = [b for b in buckets if b != float("inf")]
+        assert finite == sorted(finite), "Default buckets must be ascending"
+        assert all(b > 0 for b in finite), "Default buckets must be positive"
+
+    def test_custom_buckets_round_trip(self) -> None:
+        cfg = MetricsConfig(vla_inference_seconds_buckets=(0.001, 0.01, 0.1))
+        assert cfg.vla_inference_seconds_buckets == (0.001, 0.01, 0.1)
