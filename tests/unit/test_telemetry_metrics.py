@@ -794,6 +794,25 @@ class TestHistogramBucketValidator:
         with pytest.raises(ValidationError, match="non-empty"):
             MetricsConfig(vla_inference_seconds_buckets=())
 
+    @pytest.mark.parametrize(
+        "bad_tuple",
+        [
+            (float("inf"), 1.0, 5.0),  # inf at the head
+            (1.0, float("inf"), 5.0, 10.0),  # inf in the middle
+            (1.0, 5.0, float("inf"), 10.0),  # inf in the middle (before another finite)
+        ],
+    )
+    def test_validator_rejects_inf_in_non_trailing_position(
+        self, bad_tuple: tuple[float, ...]
+    ) -> None:
+        """``+inf`` is only meaningful as the trailing sentinel — anywhere else
+        it would yield surprising bucket cardinality after the registry's
+        runtime sort."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="trailing sentinel"):
+            MetricsConfig(vla_inference_seconds_buckets=bad_tuple)
+
 
 class TestLiteralTypeAliases:
     """The exported Literal aliases keep label values in sync with the schema."""
@@ -818,6 +837,23 @@ class TestLiteralTypeAliases:
         from mousedroid.config.schema import ReplayOutcomeLiteral
 
         assert set(_typing.get_args(ReplayOutcomeLiteral)) == {"ok", "schema_mismatch"}
+
+    def test_vla_active_backend_literal_is_strict_subset_of_full_backend(self) -> None:
+        """``VLAActiveBackendLiteral`` must exclude ``"none"`` and otherwise
+        match :data:`VLABackendLiteral` — used to type
+        :meth:`MetricsRegistry.inc_vla_timeout` so a disabled backend cannot
+        emit timeouts and pollute the metric with ``{mode="none"}`` series."""
+        import typing as _typing
+
+        from mousedroid.config.schema import VLAActiveBackendLiteral, VLABackendLiteral
+
+        full = set(_typing.get_args(VLABackendLiteral))
+        active = set(_typing.get_args(VLAActiveBackendLiteral))
+        assert active < full, "VLAActiveBackendLiteral must be a strict subset"
+        assert active == full - {"none"}, (
+            f"VLAActiveBackendLiteral must equal VLABackendLiteral minus 'none'; "
+            f"got active={active}, full={full}"
+        )
 
 
 class TestPrA2DefensiveGuards:
@@ -847,30 +883,40 @@ class TestPrA2DefensiveGuards:
         ns = registry._cfg.namespace
         assert f"{ns}_vla_inference_seconds_count 1" in text
 
-    def test_drop_emits_debug_log(self, caplog: pytest.LogCaptureFixture) -> None:
-        """Dropped samples must emit a DEBUG-level structured log."""
-        import logging as _logging
+    _DROP_EVENT = "vla_inference_seconds_dropped"
 
-        import structlog
+    def test_drop_emits_debug_log(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Dropped samples must emit a DEBUG-level structured log.
 
-        # Route structlog to stdlib logging so caplog captures it.
-        structlog.configure(
-            processors=[structlog.stdlib.add_log_level, structlog.processors.KeyValueRenderer()],
-            wrapper_class=structlog.make_filtering_bound_logger(_logging.DEBUG),
-            logger_factory=structlog.stdlib.LoggerFactory(),
-            cache_logger_on_first_use=False,
-        )
+        Asserted by intercepting the module-level ``_log.debug`` call rather
+        than reconfiguring the global structlog state — avoids leaking
+        test-only logger configuration into adjacent tests in the session.
+        """
+        from mousedroid.telemetry import metrics as metrics_module
 
+        captured: list[tuple[str, dict[str, object]]] = []
+
+        def _fake_debug(event: str, **kwargs: object) -> None:
+            captured.append((event, dict(kwargs)))
+
+        # Patch the module-level logger so the registry constructor's
+        # ``metrics_registry_initialised`` debug log is also captured but
+        # filtered below to the drop event only.
         registry = _make_registry()
-        with caplog.at_level(_logging.DEBUG):
-            registry.observe_vla_inference_seconds(float("nan"))
-            registry.observe_vla_inference_seconds(-0.001)
+        monkeypatch.setattr(metrics_module._log, "debug", _fake_debug)
 
-        joined = " ".join(rec.message for rec in caplog.records)
-        assert "vla_inference_seconds_dropped" in joined
-        # Both drop reasons must appear in the captured logs.
-        assert "reason=nan" in joined or "'nan'" in joined
-        assert "reason=negative" in joined or "'negative'" in joined
+        registry.observe_vla_inference_seconds(float("nan"))
+        registry.observe_vla_inference_seconds(-0.001)
+        registry.observe_vla_inference_seconds(0.05)  # accepted — no log
+
+        drops = [
+            (event, kwargs)
+            for event, kwargs in captured
+            if event == self._DROP_EVENT
+        ]
+        assert len(drops) == 2, f"expected 2 drop logs, got {drops!r}"
+        reasons = [kwargs.get("reason") for _, kwargs in drops]
+        assert set(reasons) == {"nan", "negative"}
 
     @pytest.mark.parametrize(
         "helper_name",
@@ -924,3 +970,17 @@ class TestPrA2DefensiveGuards:
         text = registry.render_prometheus()
         ns = registry._cfg.namespace
         assert f'{ns}_vla_timeouts_total{{mode="distilled_onnx"}} 4' in text
+
+    def test_inc_vla_timeout_type_excludes_none_mode(self) -> None:
+        """The narrowed ``VLAActiveBackendLiteral`` excludes ``"none"`` so
+        mypy --strict rejects ``inc_vla_timeout("none")`` at type-check time.
+        We verify the *runtime* narrowing at the alias level — ``"none"`` is
+        not a legal value of the parameter type, so no test calls it
+        directly (would be a mypy error). This test pins the structural
+        invariant in case the alias is widened in the future.
+        """
+        import typing as _typing
+
+        from mousedroid.config.schema import VLAActiveBackendLiteral
+
+        assert "none" not in _typing.get_args(VLAActiveBackendLiteral)

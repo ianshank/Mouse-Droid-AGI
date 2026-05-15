@@ -45,7 +45,21 @@ from mousedroid.constants import DEFAULT_UCB_CANDIDATES, DEFAULT_UCB_TARGET_MS
 # ---------------------------------------------------------------------------
 
 VLABackendLiteral = Literal["none", "mock", "distilled_onnx"]
-"""VLA policy backend identifier. Source of truth: :class:`VLAConfig.backend`."""
+"""VLA policy backend identifier. Source of truth: :class:`VLAConfig.backend`.
+
+Includes ``"none"`` (the disabled default). For label values on metrics
+that only fire from a *running* backend (e.g.
+``mousedroid_vla_timeouts_total{mode}``) use the narrower
+:data:`VLAActiveBackendLiteral` alias below."""
+
+VLAActiveBackendLiteral = Literal["mock", "distilled_onnx"]
+"""Subset of :data:`VLABackendLiteral` excluding ``"none"``.
+
+Use this for any metric or callback where a value of ``"none"`` is
+operationally impossible (the disabled backend cannot run inference, so
+it cannot fire a timeout or emit a latency sample). Narrowing at the
+call site prevents accidental cardinality growth from spurious
+``{mode="none"}`` series."""
 
 ReplayOutcomeLiteral = Literal["ok", "schema_mismatch"]
 """LMDB replay-record deserialization outcome. Drives the
@@ -1106,21 +1120,33 @@ class MetricsConfig(BaseModel):
 
         A trailing ``float("inf")`` sentinel is permitted (and conventional for
         Prometheus histograms) but not required — the registry appends one at
-        runtime if missing. Negative or zero boundaries would silently corrupt
-        bucket accumulation, so they're rejected at schema-load time.
+        runtime if missing. When present, ``float("inf")`` MUST be the last
+        element; an ``inf`` in any other position would yield surprising bucket
+        cardinality after the runtime ``sorted(...)`` call in ``MetricsRegistry``.
+        Negative, zero, or duplicate boundaries would silently corrupt bucket
+        accumulation, so they're rejected at schema-load time.
         """
+        inf = float("inf")
         if not value:
             msg = "histogram bucket tuple must be non-empty"
             raise ValueError(msg)
-        finite = [b for b in value if b != float("inf")]
+        # Reject ``inf`` anywhere except the trailing position.
+        inf_positions = [i for i, b in enumerate(value) if b == inf]
+        if inf_positions and inf_positions != [len(value) - 1]:
+            msg = (
+                f"histogram bucket boundaries may only contain +inf as the "
+                f"trailing sentinel; got {value!r}"
+            )
+            raise ValueError(msg)
+        finite = [b for b in value if b != inf]
         if finite != sorted(finite):
-            msg = f"histogram bucket boundaries must be monotonically ascending; " f"got {value!r}"
+            msg = f"histogram bucket boundaries must be monotonically ascending; got {value!r}"
             raise ValueError(msg)
         if any(b <= 0.0 for b in finite):
-            msg = f"histogram bucket boundaries must be strictly positive; " f"got {value!r}"
+            msg = f"histogram bucket boundaries must be strictly positive; got {value!r}"
             raise ValueError(msg)
         if len(set(finite)) != len(finite):
-            msg = f"histogram bucket boundaries must be unique (no duplicates); " f"got {value!r}"
+            msg = f"histogram bucket boundaries must be unique (no duplicates); got {value!r}"
             raise ValueError(msg)
         return value
 

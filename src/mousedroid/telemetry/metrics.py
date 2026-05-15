@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from mousedroid.config.schema import (
         MetricsConfig,
         ReplayOutcomeLiteral,
-        VLABackendLiteral,
+        VLAActiveBackendLiteral,
     )
 
 _log = get_logger(__name__)
@@ -947,16 +947,22 @@ class MetricsRegistry:
 
     def inc_vla_timeout(
         self,
-        mode: VLABackendLiteral,
+        mode: VLAActiveBackendLiteral,
         amount: int = 1,
     ) -> None:
         """Increment the VLA timeout counter for one fallback event.
 
+        The ``mode`` parameter is typed as
+        :data:`mousedroid.config.schema.VLAActiveBackendLiteral` — the
+        narrowed subset of :data:`VLABackendLiteral` that excludes
+        ``"none"``. The disabled backend cannot run inference and therefore
+        cannot fire a timeout, so the type system forbids that label value
+        and prevents accidental cardinality growth from spurious
+        ``{mode="none"}`` series.
+
         Args:
-            mode: VLA backend mode that timed out. Sourced from
-                ``cfg.vla.backend`` and typed as
-                :data:`mousedroid.config.schema.VLABackendLiteral` —
-                a backend rename propagates here via the alias.
+            mode: Active VLA backend mode that timed out (``"mock"`` or
+                ``"distilled_onnx"``). Sourced from ``cfg.vla.backend``.
             amount: Increment magnitude (default 1). Values ``<= 0`` are
                 ignored to preserve Prometheus counter monotonicity.
         """

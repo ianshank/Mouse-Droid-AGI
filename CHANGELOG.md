@@ -29,11 +29,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   values and NaN, emitting a DEBUG-level `vla_inference_seconds_dropped`
   structured log so operators can correlate missing histogram observations
   with upstream timer bugs.
-- Label values are typed via new public `Literal` aliases
-  (`ReplayOutcomeLiteral`, `VLABackendLiteral`) in
-  `mousedroid.config.schema` so mypy `--strict` catches label drift.
-  `VLAConfig.backend` now uses `VLABackendLiteral` directly — single
-  source of truth.
+- Label values are typed via new public `Literal` aliases in
+  `mousedroid.config.schema` so mypy `--strict` catches label drift:
+  - `ReplayOutcomeLiteral = Literal["ok", "schema_mismatch"]`
+  - `VLABackendLiteral = Literal["none", "mock", "distilled_onnx"]` (matches `VLAConfig.backend`)
+  - `VLAActiveBackendLiteral = Literal["mock", "distilled_onnx"]` (subset of `VLABackendLiteral` minus `"none"`, used for metrics that only fire from a running backend — prevents accidental `{mode="none"}` cardinality on `mousedroid_vla_timeouts_total`)
+
+  `VLAConfig.backend` now uses `VLABackendLiteral` directly — single source of truth.
 - `.github/workflows/ci.yml` adds an advisory `vla-extras` job
   (Python 3.11, `[dev,vla]` extras, `continue-on-error: true`) covering
   `tests/unit/vla/`. Promotion gate documented in

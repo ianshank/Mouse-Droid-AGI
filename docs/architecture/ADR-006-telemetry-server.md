@@ -164,9 +164,19 @@ Story 2.5).
 - **Writer-side call-site instrumentation** in `LMDBReplayReader`,
   `VLAPolicy.predict()`, and `VLMProgressHead.score()` — factory-level
   threading of the `MetricsRegistry` parameter is intentionally out of scope
-  for PR-A2 to keep the surface tight. Until those land, the new metrics ship
-  registered-but-zero.
+  for PR-A2 to keep the surface tight. Until those land, the new metrics
+  ship constructed-but-unwritten and are **omitted from the rendered
+  `/metrics` output**.
 - **Grafana dashboard panels** over the new metrics — covered by PR-B2 per
   the approved sprint plan.
 - **Prometheus alert rules** in `config/prometheus/alerts.yml` for VLA
   latency / timeout / replay schema-mismatch spike — also in PR-B2.
+
+> **⚠ Operator note:** Because writer-side instrumentation is deferred, any
+> dashboards or alert rules built on the PR-A2 metric names **will have no
+> data to render** until the follow-up writer-side PR lands. Operators
+> should not build production dashboards on these names before that follow-up
+> merges; the new families will be absent from `/metrics` until the first
+> observation fires. The `vla-extras` CI matrix entry similarly does not
+> exercise these counters, so green CI is not evidence that the metrics
+> will be populated at runtime.
