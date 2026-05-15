@@ -325,16 +325,23 @@ def test_histogram_always_has_inf_bucket() -> None:
     assert "loop_latency_ms_count 1" in output
 
 
-def test_histogram_unsorted_buckets_are_sorted() -> None:
-    """Config buckets provided in wrong order are sorted."""
-    reg = _make_registry(loop_latency_buckets_ms=[50.0, 10.0, 25.0])
-    reg.set_loop_time_ms(15.0)  # should land in the 25ms bucket
-    output = reg.render_prometheus()
-    # Buckets must appear in ascending order
-    idx_10 = output.index('le="10"')
-    idx_25 = output.index('le="25"')
-    idx_50 = output.index('le="50"')
-    assert idx_10 < idx_25 < idx_50
+def test_histogram_unsorted_buckets_rejected_at_schema_load() -> None:
+    """Unsorted bucket tuples are now rejected at MetricsConfig validation.
+
+    Previously the registry silently sorted unsorted input at runtime. PR-A2's
+    new ``_validate_histogram_buckets`` Pydantic validator (covering all four
+    bucket fields: loop_latency_buckets_ms, llm_latency_buckets_ms,
+    mcp_latency_buckets_ms, vla_inference_seconds_buckets) rejects
+    non-ascending input at schema-load time so any operator misconfiguration
+    surfaces immediately instead of producing silently malformed histograms.
+    See ``CHANGELOG.md`` under "Changed — Histogram bucket validation now
+    enforced at schema load" for migration guidance.
+    """
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="monotonically ascending"):
+        _make_registry(loop_latency_buckets_ms=[50.0, 10.0, 25.0])
 
 
 def test_render_prometheus_ends_with_newline() -> None:
