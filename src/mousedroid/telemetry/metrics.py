@@ -48,6 +48,12 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
+# Defensive lower-bound for any latency-style histogram observation.
+# Module-level so future histogram helpers can reference the same value
+# (e.g. an upcoming planner-inference histogram) without each helper
+# re-declaring its own threshold.
+_MIN_OBSERVABLE_SECONDS: float = 0.0
+
 
 class _Counter:
     """Thread-safe Prometheus Counter (only increments)."""
@@ -889,11 +895,6 @@ class MetricsRegistry:
     # to every caller via mypy.
     # ------------------------------------------------------------------
 
-    # Defensive lower-bound for VLA inference latency observations.
-    # Sourced as a module-level constant so it can be referenced by any
-    # future histogram helper that needs to reject clock-skewed samples.
-    _MIN_OBSERVABLE_SECONDS: float = 0.0
-
     def inc_replay_record(
         self,
         outcome: ReplayOutcomeLiteral,
@@ -935,7 +936,7 @@ class MetricsRegistry:
         """
         # ``value != value`` is the canonical NaN check that does not
         # depend on importing ``math``.
-        if value != value or value < self._MIN_OBSERVABLE_SECONDS:
+        if value != value or value < _MIN_OBSERVABLE_SECONDS:
             _log.debug(
                 "vla_inference_seconds_dropped",
                 reason="nan" if value != value else "negative",
