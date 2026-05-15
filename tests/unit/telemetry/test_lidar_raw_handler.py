@@ -26,7 +26,7 @@ from mousedroid.config.schema import (
 )
 from mousedroid.health.monitor import HealthMonitor
 from mousedroid.telemetry.metrics import MetricsRegistry
-from mousedroid.telemetry.protocol import LidarRawScan
+from mousedroid.telemetry.protocol import LidarRawScan, TelemetryFrame
 from mousedroid.telemetry.publisher import TelemetryPublisher
 from mousedroid.telemetry.server import TelemetryServer
 
@@ -85,6 +85,110 @@ async def test_handler_rejects_when_max_clients_reached() -> None:
     ):
         msg = await asyncio.wait_for(ws2.receive(), timeout=1.0)
         assert msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED)
+
+
+@pytest.mark.asyncio
+async def test_broadcast_skips_unprepared_clients() -> None:
+    """Frames are NOT sent to clients still inside the reservation window.
+
+    Regression for the Copilot finding on PR #81: the synchronous
+    ``max_clients`` reservation appends the ``ws`` BEFORE
+    ``await ws.prepare(request)``. Without a prepared-gate, the
+    broadcast loop would call ``send_*`` on an unprepared
+    WebSocketResponse and raise ``RuntimeError`` — silently swallowed
+    by ``gather(..., return_exceptions=True)``. The fix tracks
+    ``id(ws)`` in ``_ws_prepared`` and the loop skips clients absent
+    from that set.
+    """
+    server = _build_server()
+    server._running = True
+
+    sent: list[Any] = []
+    raised: list[Exception] = []
+
+    class _UnpreparedWs:
+        closed = False
+
+        async def send_json(self, payload: Any) -> None:
+            err = RuntimeError("Cannot send a message in non-started state.")
+            raised.append(err)
+            raise err
+
+        async def send_bytes(self, _: bytes) -> None:
+            err = RuntimeError("Cannot send a message in non-started state.")
+            raised.append(err)
+            raise err
+
+    class _PreparedWs:
+        closed = False
+
+        async def send_json(self, payload: Any) -> None:
+            sent.append(payload)
+
+        async def send_bytes(self, payload: bytes) -> None:
+            sent.append(payload)
+
+    pending_ws = _UnpreparedWs()
+    ready_ws = _PreparedWs()
+    server._ws_clients.append(pending_ws)  # type: ignore[arg-type]
+    server._ws_clients.append(ready_ws)  # type: ignore[arg-type]
+    # Only the prepared ws is registered in the prepared set.
+    server._ws_prepared.add(id(ready_ws))
+
+    frame = TelemetryFrame(timestamp=1.0, tick_count=1)
+    server._queue.put_nowait(frame)
+
+    bg = asyncio.create_task(server._broadcast_loop())
+    try:
+        for _ in range(20):
+            if server._queue.empty() and sent:
+                break
+            await asyncio.sleep(0.02)
+    finally:
+        server._running = False
+        bg.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await bg
+
+    # Only the prepared client received the frame; the unprepared
+    # client was skipped — its send_json was never called.
+    assert len(sent) == 1
+    assert raised == []
+
+
+@pytest.mark.asyncio
+async def test_max_clients_check_is_race_safe() -> None:
+    """Concurrent connects past ``max_clients`` cannot all slip past the guard.
+
+    Addresses Gemini medium review (PR #79 comment_id=3238374802): the
+    previous code awaited ``ws.prepare(request)`` between the count
+    check and the append, which yielded the event loop and let two
+    racing connects both pass the limit. With the reservation moved
+    into a synchronous critical section, exactly ``max_clients``
+    connections succeed and the rest are closed with 4029.
+    """
+    server = _build_server(max_clients=2)
+    server._running = True
+    path = server._cfg.lidar_raw_ws_path
+
+    async with TestClient(TestServer(_build_app(server))) as client:
+        # Launch four concurrent connects; only two should make it
+        # into ``_lidar_ws_clients``. Without the fix, the race would
+        # occasionally let three or four through.
+        async def _connect() -> aiohttp.ClientWebSocketResponse:
+            return await client.ws_connect(path)
+
+        sockets = await asyncio.gather(
+            _connect(), _connect(), _connect(), _connect(), return_exceptions=True
+        )
+        try:
+            # Give the server time to settle accept/reject of each.
+            await asyncio.sleep(0.1)
+            assert len(server._lidar_ws_clients) <= server._cfg.max_clients
+        finally:
+            for ws in sockets:
+                if isinstance(ws, aiohttp.ClientWebSocketResponse):
+                    await ws.close()
 
 
 @pytest.mark.asyncio
