@@ -2,6 +2,10 @@
 
 Verifies structural invariants so that pillar names, blocking defaults, and
 the summary-writing contract are not accidentally broken by future edits.
+
+Marked with :data:`pytest.mark.pillar` so the Ten-Pillars campaign suite
+can be selected by the Jetson nightly workflow via ``pytest -m pillar``
+(see ``.github/workflows/jetson-nightly.yml``).
 """
 
 from __future__ import annotations
@@ -10,6 +14,8 @@ import re
 from pathlib import Path
 
 import pytest
+
+pytestmark = pytest.mark.pillar
 
 _SCRIPT = Path("scripts/validate_pillar.sh")
 

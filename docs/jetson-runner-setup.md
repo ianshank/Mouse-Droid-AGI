@@ -103,6 +103,49 @@ The removal token comes from the same page as the registration token.
 - [`scripts/validate_pillar.sh`](../scripts/validate_pillar.sh) — the Ten Pillars dispatcher the workflow runs. Operator can run it ad-hoc on the Jetson host outside the runner with `bash scripts/validate_pillar.sh all`.
 - [`docs/playbooks/bringup-fail.md`](playbooks/bringup-fail.md) — full-rover bringup runbook (referenced when the runner can't shell into a healthy container).
 
+## Promotion to Required Check (PR-B2 follow-up gate)
+
+The `ten-pillars` job in [`jetson-nightly.yml`](../.github/workflows/jetson-nightly.yml)
+currently runs in advisory mode (`continue-on-error: true`). PR-B2 wired the
+`pillar` pytest marker (in `pyproject.toml`) and applied it to
+[`tests/regression/test_validate_pillar.py`](../tests/regression/test_validate_pillar.py)
+so the campaign can be invoked with `pytest -m pillar`. Promotion gate:
+
+1. **Register the self-hosted runner** following the steps above. Confirm
+   `/opt/actions-runner/_diag/Runner_*.log` shows `Listening for Jobs` and
+   the runner appears as **Idle / Online** in the repo's runners settings.
+2. **Trigger the workflow manually** via `gh workflow run jetson-nightly.yml`.
+   The first run is fully advisory — any failure is captured in the
+   `ten-pillars-<stamp>` artifact (30 day retention) and the
+   `$GITHUB_STEP_SUMMARY` markdown block.
+3. **Watch 7 consecutive nightly runs.** A "green run" means every
+   blocking pillar (`safety`, `world_model`, `memory`, `cognitive`,
+   `reward`) reports PASS in `ten_pillars.log`. Non-blocking pillars
+   (`curiosity`, `continual`, `meta`, `scaling`, `growth`) may be SKIP
+   but must not be FAIL.
+4. **Open a follow-up PR** that removes `continue-on-error: true` from the
+   `ten-pillars` job block. After merge, GitHub's "Require status checks
+   to pass before merging" branch protection will start blocking merges to
+   `main` on red nights. Document the date in
+   [`docs/planning/PHASE_2_1_AND_BEYOND_PLAN.md`](planning/PHASE_2_1_AND_BEYOND_PLAN.md)
+   so the rollback path is auditable.
+
+### Local nightly equivalent
+
+Operators can mirror the nightly check on the Jetson host without waiting
+for the cron:
+
+```bash
+# Run all pillars sequentially with per-pillar timeout from the script.
+bash scripts/validate_pillar.sh all
+
+# Or run only the pytest-marker subset (faster, in-Docker, no probe hardware).
+docker exec mousedroid pytest -m pillar --import-mode=importlib --no-cov
+
+# Inspect the markdown summary the workflow uploads as a build artifact:
+cat reports/jetson_smoke/$(ls -1 reports/jetson_smoke/ | tail -1)/ten_pillars.log
+```
+
 ## Security
 
 GitHub Actions self-hosted runners execute arbitrary workflow YAML from the

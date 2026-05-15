@@ -1072,6 +1072,185 @@
           "placement": "bottom"
         }
       }
+    },
+    {
+      "id": 18,
+      "title": "Replay Records (rate by outcome)",
+      "description": "Per-second rate of LMDB replay-record deserialization outcomes. A non-zero {outcome=\"schema_mismatch\"} series indicates replay corruption or schema drift since the last training run. Source: mousedroid_replay_records_total. Note: no data until writer-side instrumentation lands (see ADR-006 addendum).",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 64
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "sum by (outcome) (rate(mousedroid_replay_records_total[1m]))",
+          "legendFormat": "{{outcome}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cps",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "showLegend": true,
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 19,
+      "title": "VLA Inference Latency p50 / p95 / p99 (seconds)",
+      "description": "Histogram quantiles of VLA policy inference wall-clock seconds. p95 above the 30 Hz orchestrator budget (~33 ms) means the VLA branch is missing its tick deadline and fallback should fire. Source: mousedroid_vla_inference_seconds histogram. Note: no data until writer-side instrumentation lands.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 64
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(mousedroid_vla_inference_seconds_bucket[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(mousedroid_vla_inference_seconds_bucket[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(mousedroid_vla_inference_seconds_bucket[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "showLegend": true,
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 20,
+      "title": "VLA Timeouts (rate by mode)",
+      "description": "Per-second rate of VLA inference timeouts / fallback events, by active backend mode (mock / distilled_onnx). A sustained non-zero rate indicates the VLA branch cannot meet its budget and the policy-selector is repeatedly falling back. Source: mousedroid_vla_timeouts_total. The 'none' backend is excluded by type (VLAActiveBackendLiteral).",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 72
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "sum by (mode) (rate(mousedroid_vla_timeouts_total[5m]))",
+          "legendFormat": "{{mode}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cps",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "showLegend": true,
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 21,
+      "title": "VLM Progress Cache Hit Rate",
+      "description": "Ratio of VLM progress-reward cache hits to total lookups (hits + misses). Sustained low hit rate (<50%) means the cache is thrashing \u2014 either the VLM key space is too sparse or eviction is too aggressive. Source: mousedroid_vlm_progress_cache_hits_total / mousedroid_vlm_progress_cache_misses_total. Note: no data until writer-side instrumentation lands.",
+      "type": "stat",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 72
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "(mousedroid_vlm_progress_cache_hits_total) / (mousedroid_vlm_progress_cache_hits_total + mousedroid_vlm_progress_cache_misses_total + 0.0001)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
     }
   ],
   "refresh": "5s",

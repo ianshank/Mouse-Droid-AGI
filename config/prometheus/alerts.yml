@@ -250,3 +250,109 @@ groups:
             on {{ $labels.instance }}. Consider raising
             MCPConfig.rate_limit_rps or throttling the offending client.
           config_ref: "MCPConfig.rate_limit_rps"
+
+  # ------------------------------------------------------------------
+  # PR-A2 Replay / VLA / VLM observability alerts (added in PR-B2).
+  #
+  # All thresholds are documented operator-tunable defaults — adjust the
+  # `expr:` values and the matching `for:` window when tuning. See
+  # `docs/architecture/ADR-006-telemetry-server.md` "PR-A2 addendum" for
+  # design rationale.
+  #
+  # NOTE: writer-side instrumentation for these metric families is deferred
+  # to a follow-up PR (see ADR-006 addendum). Until that lands these rules
+  # will silently match-zero — promtool still validates their syntax.
+  # ------------------------------------------------------------------
+  - name: mousedroid_replay_vla_vlm
+    rules:
+      # Warning: replay schema-mismatch rate elevated. A non-zero rate over
+      # 5 minutes means LMDB replay records are being dropped — either the
+      # store has corrupt entries or training-side SCHEMA_VERSION has drifted
+      # ahead of the runtime constant.
+      - alert: ReplaySchemaMismatchSpike
+        expr: rate(mousedroid_replay_records_total{outcome="schema_mismatch"}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          subsystem: replay
+        annotations:
+          summary: "Replay schema-mismatch rate elevated (>0.1/s sustained 5m)"
+          description: >-
+            mousedroid_replay_records_total{outcome="schema_mismatch"} is rising at
+            {{ $value | printf "%.3f" }} /s on {{ $labels.instance }}.
+            Replay corruption or schema drift. See
+            mousedroid.experience.record.SCHEMA_VERSION for the runtime constant
+            and re-export experience if the store is stale.
+          config_ref: "operator-tunable threshold (default 0.1/s over 5m)"
+
+      # Warning: VLA p95 inference latency >100 ms means the policy branch
+      # cannot keep up with the 30 Hz orchestrator tick — fallback should be
+      # firing. Match the value against the configured
+      # MetricsConfig.vla_inference_seconds_buckets envelope.
+      - alert: VLAInferenceLatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(mousedroid_vla_inference_seconds_bucket[5m]))
+          ) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+          subsystem: vla
+        annotations:
+          summary: "VLA p95 inference latency >100 ms sustained 2m"
+          description: >-
+            histogram_quantile(0.95, ...vla_inference_seconds_bucket...) =
+            {{ $value | printf "%.3fs" }} on {{ $labels.instance }}.
+            VLA branch is missing its 30 Hz tick deadline; the policy_selector
+            should be falling back. Check the VLATimeoutSpike alert below.
+          config_ref: "operator-tunable threshold (default 0.1 s over 2m)"
+
+      # Warning: a sustained VLA timeout rate by mode indicates the active
+      # backend cannot meet its budget under load. The narrowed
+      # VLAActiveBackendLiteral excludes "none", so any series here is
+      # actionable.
+      - alert: VLATimeoutSpike
+        expr: sum by (mode) (rate(mousedroid_vla_timeouts_total[5m])) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+          subsystem: vla
+        annotations:
+          summary: "VLA timeout rate elevated for mode={{ $labels.mode }}"
+          description: >-
+            mousedroid_vla_timeouts_total{mode="{{ $labels.mode }}"} is rising at
+            {{ $value | printf "%.3f" }} /s on {{ $labels.instance }}.
+            VLA backend cannot meet its inference budget; correlate with
+            VLAInferenceLatencyHigh and consider widening
+            MetricsConfig.vla_inference_seconds_buckets or downgrading the
+            policy_selector to nav_agent.
+          config_ref: "operator-tunable threshold (default 0.01/s over 5m)"
+
+      # Info: VLM progress-reward cache hit-rate collapsed below 50%.
+      # Not critical — the cache is an optimization — but a sustained
+      # collapse points at either a sparse VLM key space or aggressive
+      # eviction. The +0.0001 guard prevents 0/0 NaN when both counters are
+      # zero (no observations yet).
+      - alert: VLMCacheHitRateCollapse
+        expr: |
+          (
+            mousedroid_vlm_progress_cache_hits_total
+            /
+            (
+              mousedroid_vlm_progress_cache_hits_total
+              + mousedroid_vlm_progress_cache_misses_total
+              + 0.0001
+            )
+          ) < 0.5
+        for: 10m
+        labels:
+          severity: info
+          subsystem: vlm
+        annotations:
+          summary: "VLM progress-cache hit-rate below 50% for 10m"
+          description: >-
+            hits / (hits + misses) = {{ $value | printf "%.2%%" }} on
+            {{ $labels.instance }}. Cache is thrashing — investigate VLM key
+            sparsity or LRU sizing in mousedroid.reward.vlm_progress.
+          config_ref: "operator-tunable threshold (default 0.5 ratio over 10m)"

@@ -33,6 +33,31 @@
 #
 #   All errors and critical events:
 #     {job="mousedroid"} | json | level=~"error|critical"
+#
+#   --- PR-A2 telemetry events ---
+#
+#   Phase 2.1 BC training activations (one-shot per training run):
+#     {job="mousedroid"} |= "offline_rl_bc_active"
+#
+#   Replay-record schema-mismatch drops (LMDB corruption / schema drift):
+#     {job="mousedroid"} | json | event=~"replay_schema_mismatch.*"
+#     # Correlate spikes with the mousedroid_replay_records_total
+#     # {outcome="schema_mismatch"} Prometheus counter.
+#
+#   Sim/real ReplayMixer activation events (per training run):
+#     {job="mousedroid"} |= "offline_rl_mixer_active"
+#     {job="mousedroid"} |= "offline_rl_mixer_requested_but_unavailable"
+#
+#   VLA inference latency drops (clock-skew / NaN samples rejected):
+#     {job="mousedroid"} | json | event="vla_inference_seconds_dropped"
+#     # Field "reason" tells you nan vs negative; field "value" carries the
+#     # offending sample. Spikes here correlate with missing histogram
+#     # observations in mousedroid_vla_inference_seconds_count.
+#
+#   --- Ten-Pillars campaign (PR-B2) ---
+#
+#   Pillar test pass/fail breadcrumbs (run via scripts/validate_pillar.sh):
+#     {job="mousedroid"} |= "pillar_validation"
 # ---------------------------------------------------------------
 
 server:

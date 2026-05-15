@@ -108,9 +108,9 @@ know whether any of this is actually helping on hardware.
 ## 3. Recommended sprint sequence (next 3 PRs)
 
 ```
-PR-A1  Phase 2.1: BC into PPO                   ✅ LANDED 2026-05-15
-PR-A2  Phase 3b CI matrix + telemetry counters  ← NEXT SPRINT
-PR-B2  Pillar nightly + Grafana panel for new metrics
+PR-A1  Phase 2.1: BC into PPO                                ✅ LANDED 2026-05-15
+PR-A2  Phase 3b CI matrix + telemetry counters               🔄 IN REVIEW (PR #87)
+PR-B2  Pillar nightly + Grafana panels + alert rules         📝 DRAFT (stacked on PR-A2)
 ```
 
 **Why this order:**

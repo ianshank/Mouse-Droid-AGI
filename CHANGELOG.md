@@ -8,6 +8,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — PR-B2: Ten-Pillars nightly regression net + Grafana visibility
+
+- **`pyproject.toml`** — new ``pillar`` pytest marker registered under
+  ``[tool.pytest.ini_options].markers``. Selects exactly the Ten-Pillars
+  validation suite in [`tests/regression/test_validate_pillar.py`](tests/regression/test_validate_pillar.py)
+  (9 tests) via ``pytest -m pillar``. The Jetson nightly workflow can now
+  invoke the campaign without coupling to specific test file paths.
+- **`tests/regression/test_validate_pillar.py`** — added ``pytestmark =
+  pytest.mark.pillar`` at module level so the marker selection works.
+- **`docs/grafana_dashboard.json`** — four new panels (ids 18-21) covering
+  the PR-A2 metric families:
+  - Panel 18: *Replay Records (rate by outcome)* — ``rate(mousedroid_replay_records_total[1m])`` split by ``outcome`` label
+  - Panel 19: *VLA Inference Latency p50 / p95 / p99 (seconds)* — three ``histogram_quantile`` queries over ``mousedroid_vla_inference_seconds_bucket``
+  - Panel 20: *VLA Timeouts (rate by mode)* — ``rate(mousedroid_vla_timeouts_total[5m])`` split by ``mode``
+  - Panel 21: *VLM Progress Cache Hit Rate* — hits / (hits + misses) ratio gauge with a tiny epsilon to prevent ``0/0`` NaN
+- **`tests/unit/test_grafana_dashboard_json.py`** (new) — 9 structural tests
+  that lock in: dashboard JSON parses, every panel has stable id + title,
+  panel ids are unique, every Prometheus expression references a metric
+  emitted by ``generate_metrics_sample`` (catches typo-on-rename drift),
+  and one panel per PR-A2 metric family exists. The query-vs-sample test
+  has an explicit whitelist for MCP metrics that are gated on
+  ``track_mcp=True`` and absent from the default sample.
+- **`config/prometheus/alerts.yml`** — new ``mousedroid_replay_vla_vlm``
+  group with 4 alert rules:
+  - ``ReplaySchemaMismatchSpike`` — warning when schema-mismatch rate >0.1/s for 5m
+  - ``VLAInferenceLatencyHigh`` — warning when p95 inference >100ms for 2m
+  - ``VLATimeoutSpike`` — warning when timeout rate by mode >0.01/s for 5m
+  - ``VLMCacheHitRateCollapse`` — info when hit-rate <50% for 10m
+  All thresholds are documented as operator-tunable in the rule annotations.
+- **`config/loki/promtail.yml`** — comment-block LogQL query examples
+  extended with PR-A2 event names: ``offline_rl_bc_active``,
+  ``replay_schema_mismatch.*``, ``offline_rl_mixer_active``,
+  ``offline_rl_mixer_requested_but_unavailable``,
+  ``vla_inference_seconds_dropped`` (with field references), and a
+  ``pillar_validation`` placeholder for the Ten-Pillars campaign.
+- **`docs/jetson-runner-setup.md`** — new "Promotion to Required Check"
+  section documenting the 4-step gate to remove ``continue-on-error: true``
+  from the ``ten-pillars`` job: register runner, manual trigger, 7
+  consecutive green nights, follow-up PR removing the advisory flag.
+  Includes a local-nightly-equivalent command set so operators can mirror
+  the workflow on the Jetson host.
+
+> ⚠ **No data in dashboards until writer-side instrumentation lands.** The
+> Grafana panels and alert rules above reference PR-A2 metric names. Per
+> ADR-006's PR-A2 addendum, the writer-side call-site instrumentation in
+> ``replay/lmdb_reader.py``, ``vla/policy.py``, and ``reward/vlm_progress.py``
+> is deferred to a follow-up PR. Until that lands, all four panels and all
+> four alert rules will match-zero — they're staged in advance so the
+> dashboard layout and alert thresholds can be reviewed offline.
+
 ### Added — PR-A2: Replay / VLA / VLM Prometheus observability metrics
 
 - **`src/mousedroid/telemetry/metrics.py`** — four new metric families
