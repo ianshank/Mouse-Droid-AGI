@@ -537,9 +537,9 @@ class TestReplayRecordsCounter:
 
     def test_records_ok_outcome(self) -> None:
         registry = _make_registry()
-        registry.record_replay_event("ok")
-        registry.record_replay_event("ok")
-        registry.record_replay_event("ok")
+        registry.inc_replay_record("ok")
+        registry.inc_replay_record("ok")
+        registry.inc_replay_record("ok")
 
         text = registry.render_prometheus()
         ns = registry._cfg.namespace
@@ -548,16 +548,16 @@ class TestReplayRecordsCounter:
 
     def test_records_schema_mismatch_outcome(self) -> None:
         registry = _make_registry()
-        registry.record_replay_event("schema_mismatch")
+        registry.inc_replay_record("schema_mismatch")
         text = registry.render_prometheus()
         ns = registry._cfg.namespace
         assert f'{ns}_replay_records_total{{outcome="schema_mismatch"}} 1' in text
 
     def test_records_both_outcomes_independently(self) -> None:
         registry = _make_registry()
-        registry.record_replay_event("ok")
-        registry.record_replay_event("ok")
-        registry.record_replay_event("schema_mismatch")
+        registry.inc_replay_record("ok")
+        registry.inc_replay_record("ok")
+        registry.inc_replay_record("schema_mismatch")
 
         text = registry.render_prometheus()
         ns = registry._cfg.namespace
@@ -620,7 +620,7 @@ class TestVlaTimeoutCounter:
     @pytest.mark.parametrize("mode", ["mock", "distilled_onnx"])
     def test_records_timeout_by_mode(self, mode: str) -> None:
         registry = _make_registry()
-        registry.record_vla_timeout(mode)
+        registry.inc_vla_timeout(mode)
         text = registry.render_prometheus()
         ns = registry._cfg.namespace
         assert f'{ns}_vla_timeouts_total{{mode="{mode}"}} 1' in text
@@ -637,8 +637,8 @@ class TestVlmProgressCacheCounters:
 
     def test_records_cache_hit(self) -> None:
         registry = _make_registry()
-        registry.record_vlm_cache_hit()
-        registry.record_vlm_cache_hit(amount=2)
+        registry.inc_vlm_cache_hit()
+        registry.inc_vlm_cache_hit(amount=2)
 
         text = registry.render_prometheus()
         ns = registry._cfg.namespace
@@ -646,7 +646,7 @@ class TestVlmProgressCacheCounters:
 
     def test_records_cache_miss(self) -> None:
         registry = _make_registry()
-        registry.record_vlm_cache_miss()
+        registry.inc_vlm_cache_miss()
         text = registry.render_prometheus()
         ns = registry._cfg.namespace
         assert f"{ns}_vlm_progress_cache_misses_total 1" in text
@@ -654,9 +654,9 @@ class TestVlmProgressCacheCounters:
     def test_hit_and_miss_increment_independently(self) -> None:
         """Hit and miss counters must not bleed across each other."""
         registry = _make_registry()
-        registry.record_vlm_cache_hit()
-        registry.record_vlm_cache_miss()
-        registry.record_vlm_cache_miss()
+        registry.inc_vlm_cache_hit()
+        registry.inc_vlm_cache_miss()
+        registry.inc_vlm_cache_miss()
 
         text = registry.render_prometheus()
         ns = registry._cfg.namespace
@@ -704,3 +704,117 @@ class TestMetricsConfigBucketField:
     def test_custom_buckets_round_trip(self) -> None:
         cfg = MetricsConfig(vla_inference_seconds_buckets=(0.001, 0.01, 0.1))
         assert cfg.vla_inference_seconds_buckets == (0.001, 0.01, 0.1)
+
+
+class TestHistogramBucketValidator:
+    """The shared ``_validate_histogram_buckets`` Pydantic validator covers
+    all four bucket fields: loop_latency_buckets_ms, llm_latency_buckets_ms,
+    mcp_latency_buckets_ms, and vla_inference_seconds_buckets.
+
+    Negative, zero, duplicate, and non-ascending values would silently corrupt
+    histogram bucket accumulation, so the validator rejects them at schema-load.
+    """
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "loop_latency_buckets_ms",
+            "llm_latency_buckets_ms",
+            "mcp_latency_buckets_ms",
+            "vla_inference_seconds_buckets",
+        ],
+    )
+    def test_validator_rejects_descending_order(self, field: str) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="monotonically ascending"):
+            MetricsConfig(**{field: (10.0, 5.0, 1.0)})
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "loop_latency_buckets_ms",
+            "llm_latency_buckets_ms",
+            "mcp_latency_buckets_ms",
+            "vla_inference_seconds_buckets",
+        ],
+    )
+    def test_validator_rejects_negative_values(self, field: str) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="strictly positive"):
+            MetricsConfig(**{field: (-1.0, 5.0, 10.0)})
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "loop_latency_buckets_ms",
+            "llm_latency_buckets_ms",
+            "mcp_latency_buckets_ms",
+            "vla_inference_seconds_buckets",
+        ],
+    )
+    def test_validator_rejects_zero_value(self, field: str) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="strictly positive"):
+            MetricsConfig(**{field: (0.0, 5.0, 10.0)})
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "loop_latency_buckets_ms",
+            "llm_latency_buckets_ms",
+            "mcp_latency_buckets_ms",
+            "vla_inference_seconds_buckets",
+        ],
+    )
+    def test_validator_rejects_duplicates(self, field: str) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="unique"):
+            MetricsConfig(**{field: (1.0, 5.0, 5.0, 10.0)})
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "loop_latency_buckets_ms",
+            "llm_latency_buckets_ms",
+            "mcp_latency_buckets_ms",
+            "vla_inference_seconds_buckets",
+        ],
+    )
+    def test_validator_accepts_inf_sentinel(self, field: str) -> None:
+        cfg = MetricsConfig(**{field: (1.0, 5.0, 10.0, float("inf"))})
+        assert getattr(cfg, field) == (1.0, 5.0, 10.0, float("inf"))
+
+    def test_validator_rejects_empty_tuple(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="non-empty"):
+            MetricsConfig(vla_inference_seconds_buckets=())
+
+
+class TestLiteralTypeAliases:
+    """The exported Literal aliases keep label values in sync with the schema."""
+
+    def test_vla_backend_literal_matches_vla_config_field(self) -> None:
+        """The :data:`VLABackendLiteral` alias must enumerate the same values
+        as :class:`VLAConfig.backend`."""
+        import typing as _typing
+
+        from mousedroid.config.schema import VLABackendLiteral, VLAConfig
+
+        alias_args = set(_typing.get_args(VLABackendLiteral))
+        field_args = set(_typing.get_args(VLAConfig.model_fields["backend"].annotation))
+        assert alias_args == field_args, (
+            f"VLABackendLiteral drift: alias has {alias_args}, "
+            f"VLAConfig.backend has {field_args}"
+        )
+
+    def test_replay_outcome_literal_has_expected_values(self) -> None:
+        import typing as _typing
+
+        from mousedroid.config.schema import ReplayOutcomeLiteral
+
+        assert set(_typing.get_args(ReplayOutcomeLiteral)) == {"ok", "schema_mismatch"}

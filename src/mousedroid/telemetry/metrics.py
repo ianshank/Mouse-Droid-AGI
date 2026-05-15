@@ -40,7 +40,11 @@ from typing import TYPE_CHECKING
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
-    from mousedroid.config.schema import MetricsConfig
+    from mousedroid.config.schema import (
+        MetricsConfig,
+        ReplayOutcomeLiteral,
+        VLABackendLiteral,
+    )
 
 _log = get_logger(__name__)
 
@@ -868,48 +872,69 @@ class MetricsRegistry:
 
     # ------------------------------------------------------------------
     # PR-A2 — replay / VLA / VLM observability helpers.
-    # All four are pure-add: they have no config toggle (operators disable
-    # them by simply not consuming them, since the writer-side guards in
-    # the calling subsystems treat ``metrics is None`` as a no-op).
+    #
+    # Naming follows the project convention:
+    #   * ``inc_*``      — counter increments (any cardinality)
+    #   * ``observe_*``  — histogram observations
+    #
+    # All four families are pure-add: they have no config toggle (operators
+    # disable them by simply not consuming them, since the writer-side guards
+    # in the calling subsystems treat ``metrics is None`` as a no-op).
+    #
+    # Label values use ``Literal`` aliases from
+    # :mod:`mousedroid.config.schema` (``ReplayOutcomeLiteral``,
+    # ``VLABackendLiteral``) so a backend rename in one place propagates
+    # to every caller via mypy.
     # ------------------------------------------------------------------
 
-    def record_replay_event(self, outcome: str) -> None:
-        """Record one outcome from an LMDB replay-record read.
+    # Defensive lower-bound for VLA inference latency observations.
+    # Sourced as a module-level constant so it can be referenced by any
+    # future histogram helper that needs to reject clock-skewed samples.
+    _MIN_OBSERVABLE_SECONDS: float = 0.0
+
+    def inc_replay_record(self, outcome: ReplayOutcomeLiteral) -> None:
+        """Increment the replay-record counter for one read outcome.
 
         Args:
             outcome: ``"ok"`` for a successfully deserialised record;
                 ``"schema_mismatch"`` for records dropped because their
                 schema version did not match the runtime ``SCHEMA_VERSION``.
+                Typed as :data:`mousedroid.config.schema.ReplayOutcomeLiteral`
+                so mypy catches any drift.
         """
         self._replay_records.inc(outcome)
 
     def observe_vla_inference_seconds(self, value: float) -> None:
         """Observe one VLA policy inference latency sample (seconds).
 
+        Defensively drops negative samples (clock skew) so they cannot
+        corrupt the histogram sum.
+
         Args:
             value: Wall-clock seconds spent inside the VLA backend's
                 ``predict()`` call, measured by the caller wrapping the
                 inference site with ``time.perf_counter()``.
         """
-        if value < 0.0:
-            # Defensive — bad clock skew should not corrupt the histogram.
+        if value < self._MIN_OBSERVABLE_SECONDS:
             return
         self._vla_inference_seconds.observe(value)
 
-    def record_vla_timeout(self, mode: str) -> None:
-        """Record one VLA inference timeout / fallback event.
+    def inc_vla_timeout(self, mode: VLABackendLiteral) -> None:
+        """Increment the VLA timeout counter for one fallback event.
 
         Args:
-            mode: VLA backend mode that timed out (e.g. ``"mock"``,
-                ``"distilled_onnx"``). Sourced from ``cfg.vla.backend``.
+            mode: VLA backend mode that timed out. Sourced from
+                ``cfg.vla.backend`` and typed as
+                :data:`mousedroid.config.schema.VLABackendLiteral` —
+                a backend rename propagates here via the alias.
         """
         self._vla_timeouts.inc(mode)
 
-    def record_vlm_cache_hit(self, amount: int = 1) -> None:
+    def inc_vlm_cache_hit(self, amount: int = 1) -> None:
         """Increment the VLM progress-reward cache-hit counter."""
         self._vlm_progress_cache_hits.inc(amount)
 
-    def record_vlm_cache_miss(self, amount: int = 1) -> None:
+    def inc_vlm_cache_miss(self, amount: int = 1) -> None:
         """Increment the VLM progress-reward cache-miss counter."""
         self._vlm_progress_cache_misses.inc(amount)
 
@@ -1451,11 +1476,11 @@ def generate_metrics_sample() -> str:
 
     # PR-A2 — exercise the new replay / VLA / VLM observability metrics so
     # ``promtool check metrics`` sees them in the CI rendered output.
-    registry.record_replay_event("ok")
-    registry.record_replay_event("schema_mismatch")
+    registry.inc_replay_record("ok")
+    registry.inc_replay_record("schema_mismatch")
     registry.observe_vla_inference_seconds(0.012)
-    registry.record_vla_timeout("distilled_onnx")
-    registry.record_vlm_cache_hit()
-    registry.record_vlm_cache_miss()
+    registry.inc_vla_timeout("distilled_onnx")
+    registry.inc_vlm_cache_hit()
+    registry.inc_vlm_cache_miss()
 
     return registry.render_prometheus()

@@ -109,3 +109,64 @@ This avoids adding a C-extension to the dependency graph and ensures the discove
 ## Status
 
 Accepted — implemented in PR #14.
+
+## Addendum: PR-A2 — replay / VLA / VLM observability metrics
+
+The Phase 2 (real-episode replay) + Phase 3 (VLA inference) + Phase 4 (VLM dense
+rewards) subsystems shipped without first-class operational visibility. PR-A2
+closes that gap with four pure-add Prometheus metrics on the existing
+`/metrics` endpoint:
+
+| Metric | Type | Label(s) | Source |
+|---|---|---|---|
+| `mousedroid_replay_records_total` | Counter | `outcome=ok\|schema_mismatch` | `LMDBReplayReader` per-record deserialization outcome |
+| `mousedroid_vla_inference_seconds` | Histogram | _none_ | Wall-clock seconds spent inside `VLAPolicy.predict()` |
+| `mousedroid_vla_timeouts_total` | Counter | `mode=mock\|distilled_onnx` | VLA fallback events by backend mode |
+| `mousedroid_vlm_progress_cache_hits_total` + `..._misses_total` | Counter | _none_ | VLM progress-reward cache hit/miss accounting |
+
+### Design invariants
+
+- **Config-driven, not hardcoded.** Histogram bucket boundaries come from
+  `MetricsConfig.vla_inference_seconds_buckets`. All four bucket fields share
+  a single `_validate_histogram_buckets` Pydantic validator (ascending,
+  positive, unique, non-empty) — invalid configurations are rejected at
+  schema-load time.
+- **Type-safe label values.** `ReplayOutcomeLiteral` and `VLABackendLiteral`
+  in `mousedroid.config.schema` are the canonical sources of label values.
+  Helper signatures (`inc_replay_record(outcome: ReplayOutcomeLiteral)`,
+  `inc_vla_timeout(mode: VLABackendLiteral)`) use these aliases so a backend
+  rename in `VLAConfig.backend` propagates to every caller via mypy.
+- **Naming convention preserved.** Helpers follow the existing project
+  convention: `inc_*` for counters, `observe_*` for histograms, `set_*` for
+  gauges. Mirrors `inc_safety_violation`, `observe_llm_translation_latency_ms`,
+  `set_loop_time_ms`.
+- **Pure-add render.** Metric families are conditionally emitted only when
+  observations exist. Legacy deployments produce byte-identical `/metrics`
+  output. Promtool tolerates absent families.
+- **Defensive observation.** `observe_vla_inference_seconds` drops samples
+  below `_MIN_OBSERVABLE_SECONDS` (0.0) so clock-skewed negative latencies
+  cannot corrupt the histogram sum.
+
+### Advisory `[vla]` CI matrix
+
+A new `vla-extras` job in `.github/workflows/ci.yml` installs `[dev,vla]`
+extras (onnxruntime + transformers + huggingface-hub) and runs
+`tests/unit/vla/` on Python 3.11. The job is **advisory**
+(`continue-on-error: true`) for the first 7 green-run window so ONNX Runtime
+API drift and HF-Hub pull regressions surface without blocking unrelated
+merges. Promotion gate: remove `continue-on-error` after 7 consecutive green
+runs (operator action, tracked in
+[docs/planning/PHASE_2_1_AND_BEYOND_PLAN.md](../planning/PHASE_2_1_AND_BEYOND_PLAN.md)
+Story 2.5).
+
+### What's deferred to follow-up PRs
+
+- **Writer-side call-site instrumentation** in `LMDBReplayReader`,
+  `VLAPolicy.predict()`, and `VLMProgressHead.score()` — factory-level
+  threading of the `MetricsRegistry` parameter is intentionally out of scope
+  for PR-A2 to keep the surface tight. Until those land, the new metrics ship
+  registered-but-zero.
+- **Grafana dashboard panels** over the new metrics — covered by PR-B2 per
+  the approved sprint plan.
+- **Prometheus alert rules** in `config/prometheus/alerts.yml` for VLA
+  latency / timeout / replay schema-mismatch spike — also in PR-B2.
