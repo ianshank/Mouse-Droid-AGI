@@ -266,6 +266,22 @@ asyncio.run(main())'
             "${PY_WRAPPER}" -c "${LLM_PROBE}"
 fi
 
+# --- Stage 15: New features probes (Phase B) ------------------------------
+# Exercises operator-observable surfaces introduced by PRs #75-#82 that the
+# 14-stage smoke does NOT cover (lidar raw WS, sensor liveness, port
+# discovery, mDNS readiness, hello negotiation, voice event fairness,
+# orchestrator FailureRecorder, ClockProtocol, dashboard data flow, logs WS).
+# Blocking by default — a green Phase A with a red Phase B should NOT
+# advance the deployment SHA bump.
+if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
+    mkdir -p "${RUN_DIR}/new_features"
+    run_stage "new_features" "yes" 240 \
+        env \
+            MOUSEDROID_SMOKE_CONTAINER="${CONTAINER}" \
+            MOUSEDROID_PROBE_REPORT_DIR="${RUN_DIR}/new_features" \
+            bash scripts/jetson_new_features_probe.sh
+fi
+
 # --- Summary -------------------------------------------------------------
 
 # Enrich notes for the voice stage so the precise reason for any failure is
