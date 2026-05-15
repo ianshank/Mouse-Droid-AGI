@@ -277,7 +277,10 @@ probe_p9() {
 
 # ---------- P10: ClockProtocol/RealClock pair ships ----------
 probe_p10() {
-    docker exec "${CONTAINER}" python3 -c "
+    # Use docker_py so the container WORKDIR is set to the repo root and the
+    # package is importable regardless of what the image's default WORKDIR
+    # happens to be (Gemini review on PR #83).
+    docker_py -c "
 from mousedroid.common.time.protocol import ClockProtocol, RealClock
 clk = RealClock()
 assert isinstance(clk, ClockProtocol), 'RealClock does not satisfy ClockProtocol'

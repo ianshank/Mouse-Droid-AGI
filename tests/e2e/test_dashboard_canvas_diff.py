@@ -170,15 +170,15 @@ def _diff_pct(png_a: bytes, png_b: bytes) -> float:
     bbox = diff.getbbox()
     if bbox is None:
         return 0.0
-    # Count non-zero pixels via histogram on each channel; treat any
-    # channel difference as "changed". Faster than per-pixel iteration.
-    bands = diff.split()
     total_pixels = img_a.size[0] * img_a.size[1]
-    changed = 0
-    for band in bands:
-        hist = band.histogram()
-        # bins 1..255 == "this pixel had a difference on this channel"
-        changed = max(changed, total_pixels - hist[0])
+    # Convert the RGBA difference to grayscale ('L') so a single
+    # histogram lookup tells us how many pixels differ in ANY channel.
+    # The prior per-band ``max(... - hist[0])`` was a lower bound that
+    # undercounted when channel-differences were spread across pixels
+    # (Gemini review on PR #83).
+    diff_l = diff.convert("L")
+    hist = diff_l.histogram()
+    changed = total_pixels - hist[0]
     return float(100.0 * changed / total_pixels)
 
 
