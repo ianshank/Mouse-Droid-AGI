@@ -1174,18 +1174,22 @@ class TelemetryServer:
 
         # Reject oversized hellos to keep ``_negotiate_ws`` bounded in
         # memory (aiohttp's max_msg_size only caps the global ceiling).
+        # Use the encoded byte count for the check AND for the
+        # observability fields so non-ASCII payloads aren't under- or
+        # over-reported (Copilot review on PR #82).
         data = raw.data if isinstance(raw.data, str) else ""
-        if len(data.encode("utf-8")) > WS_HELLO_MAX_BYTES:
+        received_bytes = len(data.encode("utf-8"))
+        if received_bytes > WS_HELLO_MAX_BYTES:
             self._failure_recorder.record(
                 "telemetry",
                 "ws_negotiation_oversized",
                 level="warning",
-                extra={"limit_bytes": WS_HELLO_MAX_BYTES, "received_bytes": len(data)},
+                extra={"limit_bytes": WS_HELLO_MAX_BYTES, "received_bytes": received_bytes},
             )
             _log.warning(
                 "telemetry_ws_negotiation_oversized",
                 limit_bytes=WS_HELLO_MAX_BYTES,
-                received_bytes=len(data),
+                received_bytes=received_bytes,
             )
             return server_choice
 

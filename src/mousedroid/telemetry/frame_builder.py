@@ -76,9 +76,10 @@ def build_telemetry_frame(
     # ``lidar_n_points`` is an optional liveness attribute on concrete
     # observation bundles; fall back to ``0`` when the bundle doesn't
     # expose it (keeps the ObservationProtocol contract unchanged).
-    # The downstream three-state ``sensor_liveness`` map distinguishes
-    # "lidar disabled" from "lidar enabled but no points yet" so the
-    # dashboard can render the difference.
+    # The downstream four-state ``sensor_liveness`` map (disabled /
+    # awaiting / live / stale — see ``SensorLivenessTracker``)
+    # distinguishes "lidar disabled" from "lidar enabled but no points
+    # yet" so the dashboard can render the difference.
     lidar_n_points = int(getattr(observation, "lidar_n_points", 0))
 
     # Vision features are downsampled to a bounded payload for

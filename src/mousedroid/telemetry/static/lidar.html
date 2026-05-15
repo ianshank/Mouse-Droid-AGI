@@ -20,10 +20,13 @@
   header h1 { margin: 0; font-size: 18px; font-weight: 600; }
   header .status { color: var(--muted); font-size: 13px; }
   header .status strong { color: var(--fg); font-weight: 600; }
-  #conn { color: var(--warn); }
-  #conn.ok { color: var(--ok); }
-  #conn.err { color: var(--crit); }
-  #conn.stale { color: var(--warn); }
+  /* WS status indicators — selectors match both #conn (main /ws) and
+     #rawConn (/ws/v1/lidar/raw). Previously only #conn rules existed,
+     so the raw-channel indicator never coloured (Copilot review on PR #82). */
+  #conn, #rawConn { color: var(--warn); }
+  #conn.ok, #rawConn.ok { color: var(--ok); }
+  #conn.err, #rawConn.err { color: var(--crit); }
+  #conn.stale, #rawConn.stale { color: var(--warn); }
   main { display: flex; gap: 20px; padding: 20px; flex-wrap: wrap; }
   #canvas-wrap { background: #10171f; border: 1px solid var(--grid); border-radius: 8px; padding: 12px; }
   canvas { display: block; }
