@@ -56,8 +56,13 @@
 #
 #   --- Ten-Pillars campaign (PR-B2) ---
 #
-#   Pillar test pass/fail breadcrumbs (run via scripts/validate_pillar.sh):
-#     {job="mousedroid"} |= "pillar_validation"
+#   Pillar pass/fail breadcrumbs (run via scripts/validate_pillar.sh).
+#   The script emits lines like "PASS: pillar/<name> kind=..." or
+#   "FAIL: pillar/<name> rc=N kind=..." (see scripts/validate_pillar.sh
+#   ``record_pillar()``) — match the actual textual format:
+#     {job="mousedroid"} |~ "pillar/[a-z_]+"
+#     {job="mousedroid"} |= "FAIL: pillar/"
+#     {job="mousedroid"} |~ "Overall: (PASS|FAIL)"
 # ---------------------------------------------------------------
 
 server:

@@ -123,10 +123,25 @@ so the campaign can be invoked with `pytest -m pillar`. Promotion gate:
    `reward`) reports PASS in `ten_pillars.log`. Non-blocking pillars
    (`curiosity`, `continual`, `meta`, `scaling`, `growth`) may be SKIP
    but must not be FAIL.
-4. **Open a follow-up PR** that removes `continue-on-error: true` from the
-   `ten-pillars` job block. After merge, GitHub's "Require status checks
-   to pass before merging" branch protection will start blocking merges to
-   `main` on red nights. Document the date in
+4. **Open a follow-up PR** with **two** workflow-level changes —
+   removing the advisory flag alone is NOT sufficient because the current
+   `Report status` step always exits 0:
+   1. Remove `continue-on-error: true` from the `ten-pillars` job block.
+   2. Change the final `Report status` step's trailing `exit 0` to
+      `exit "${PILLAR_RC:-1}"` so the job's exit code actually reflects
+      pillar failures. The captured `PILLAR_RC` env var is already set by
+      the earlier `Run Ten Pillars validation` step (see
+      `.github/workflows/jetson-nightly.yml` line ~100); the playbook
+      just propagates it instead of swallowing it.
+
+   Both edits land in the same PR. **Without (2), removing
+   `continue-on-error` has no effect** — branch protection will still see
+   a green check on red pillar runs because the workflow's overall exit
+   code stays 0 from the swallowed `exit 0`.
+
+   After merge, GitHub's "Require status checks to pass before merging"
+   branch protection will start blocking merges to `main` on red nights.
+   Document the date in
    [`docs/planning/PHASE_2_1_AND_BEYOND_PLAN.md`](planning/PHASE_2_1_AND_BEYOND_PLAN.md)
    so the rollback path is auditable.
 

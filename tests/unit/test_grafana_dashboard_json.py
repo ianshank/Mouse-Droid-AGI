@@ -27,18 +27,6 @@ import pytest
 
 _DASHBOARD = Path("docs/grafana_dashboard.json")
 
-# Metric families introduced by PR-A2 and rendered by PR-B2 dashboards.
-# Each entry is the *bare* metric name as written in the Prometheus
-# expression (without ``_total`` / ``_bucket`` suffixes — those are
-# appended by Prometheus in the rendered exposition).
-_PR_A2_METRIC_NAMES: tuple[str, ...] = (
-    "mousedroid_replay_records_total",
-    "mousedroid_vla_inference_seconds_bucket",
-    "mousedroid_vla_timeouts_total",
-    "mousedroid_vlm_progress_cache_hits_total",
-    "mousedroid_vlm_progress_cache_misses_total",
-)
-
 
 @pytest.fixture(scope="module")
 def dashboard() -> dict[str, object]:
@@ -82,9 +70,20 @@ class TestPanelExpressionsReferenceKnownMetrics:
 
     @pytest.fixture(scope="class")
     def known_metric_names(self) -> set[str]:
-        """All metric names emitted by ``generate_metrics_sample`` plus the
-        PR-A2 families that are conditionally rendered (and therefore not
-        present in the default sample but still legal queries)."""
+        """All metric names emitted by ``generate_metrics_sample``.
+
+        ``generate_metrics_sample`` is responsible for exercising every metric
+        family the project considers operationally relevant — including the
+        PR-A2 conditional families (replay/VLA/VLM), which are exercised by
+        explicit ``inc_*`` / ``observe_*`` calls inside the sample helper.
+        That means this fixture's set is the single source of truth: any
+        Grafana query referencing a metric that is *not* in the sample is
+        either a typo, a stale rename, or a feature-flag-gated metric that
+        must be in ``sample_omits`` below with a documented reason.
+
+        Adding metric names directly to a static allowed-set would mask the
+        exact rename-drift this test is designed to catch.
+        """
         from mousedroid.telemetry.metrics import generate_metrics_sample
 
         sample = generate_metrics_sample()
@@ -99,9 +98,6 @@ class TestPanelExpressionsReferenceKnownMetrics:
             m = re.match(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)", stripped)
             if m:
                 names.add(m.group(1))
-        # PR-A2 conditional families are valid query targets even when the
-        # sample doesn't exercise every variant.
-        names.update(_PR_A2_METRIC_NAMES)
         return names
 
     def test_all_panel_exprs_reference_known_metrics(

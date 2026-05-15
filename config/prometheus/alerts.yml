@@ -289,11 +289,18 @@ groups:
       # cannot keep up with the 30 Hz orchestrator tick — fallback should be
       # firing. Match the value against the configured
       # MetricsConfig.vla_inference_seconds_buckets envelope.
+      #
+      # ``sum by (instance, le)`` (rather than ``sum by (le)``) preserves
+      # the ``instance`` label so the annotation's ``{{ $labels.instance }}``
+      # interpolation identifies *which* Jetson is slow when the fleet has
+      # multiple scrape targets. Aggregating by ``le`` alone would collapse
+      # all instances into a single fleet-wide quantile and mix unrelated
+      # latency distributions.
       - alert: VLAInferenceLatencyHigh
         expr: |
           histogram_quantile(
             0.95,
-            sum by (le) (rate(mousedroid_vla_inference_seconds_bucket[5m]))
+            sum by (instance, le) (rate(mousedroid_vla_inference_seconds_bucket[5m]))
           ) > 0.1
         for: 2m
         labels:
@@ -312,8 +319,13 @@ groups:
       # backend cannot meet its budget under load. The narrowed
       # VLAActiveBackendLiteral excludes "none", so any series here is
       # actionable.
+      #
+      # ``sum by (instance, mode)`` (rather than ``sum by (mode)``) preserves
+      # the ``instance`` label so the annotation can identify per-Jetson
+      # which fleet member is timing out — fleet-aggregated alerts mix
+      # unrelated targets and make triage ambiguous.
       - alert: VLATimeoutSpike
-        expr: sum by (mode) (rate(mousedroid_vla_timeouts_total[5m])) > 0.01
+        expr: sum by (instance, mode) (rate(mousedroid_vla_timeouts_total[5m])) > 0.01
         for: 5m
         labels:
           severity: warning
@@ -335,18 +347,24 @@ groups:
       # VLM key space or aggressive eviction. Uses ``rate()`` rather than
       # raw counters so a fresh collapse triggers promptly even after a
       # long history of good hit-rates (raw-counter ratios are dominated
-      # by lifetime totals and would mask recent regressions). The
-      # +0.0001 guard prevents 0/0 NaN when both rate windows are zero
-      # (no observations yet — the deferred writer-side instrumentation
-      # hasn't landed).
+      # by lifetime totals and would mask recent regressions).
+      #
+      # The ``or vector(0)`` clauses guard against the *absent-series*
+      # failure mode: each counter is rendered only when its value is
+      # positive, so an all-hit (or all-miss) workload would have one side
+      # absent and the binary expression would evaluate to an empty vector
+      # — silently masking the very collapse this alert is meant to catch.
+      # ``rate(...) or vector(0)`` ensures both sides resolve to a numeric
+      # value even when their series are absent. The +0.0001 NaN guard
+      # protects 0/0 when both rate windows are empty (no observations yet).
       - alert: VLMCacheHitRateCollapse
         expr: |
           (
-            rate(mousedroid_vlm_progress_cache_hits_total[10m])
+            (rate(mousedroid_vlm_progress_cache_hits_total[10m]) or vector(0))
             /
             (
-              rate(mousedroid_vlm_progress_cache_hits_total[10m])
-              + rate(mousedroid_vlm_progress_cache_misses_total[10m])
+              (rate(mousedroid_vlm_progress_cache_hits_total[10m]) or vector(0))
+              + (rate(mousedroid_vlm_progress_cache_misses_total[10m]) or vector(0))
               + 0.0001
             )
           ) < 0.5

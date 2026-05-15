@@ -986,7 +986,7 @@
     {
       "id": 16,
       "title": "MCP Tool Calls by Tool/Result",
-      "description": "Total tool-call invocations broken down by tool name and result label (ok / error / denied / actuation_disabled / refused_emergency / rate_limited / circuit_open / timeout). Useful for spotting tools that consistently fail or hit the safety/circuit gates.",
+      "description": "Per-second rate of MCP tool-call invocations bucketed by (tool, result). Use this to spot rate spikes, distribution shifts (e.g. a tool suddenly producing ``error`` results), or absent series (a tool that has stopped firing). The underlying counter is mousedroid_mcp_tool_calls_total; this panel wraps it in rate(...[5m]).",
       "type": "table",
       "gridPos": {
         "h": 8,
@@ -1134,17 +1134,17 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(mousedroid_vla_inference_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.50, sum by (instance, le) (rate(mousedroid_vla_inference_seconds_bucket[5m])))",
           "legendFormat": "p50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(mousedroid_vla_inference_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (instance, le) (rate(mousedroid_vla_inference_seconds_bucket[5m])))",
           "legendFormat": "p95",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(mousedroid_vla_inference_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.99, sum by (instance, le) (rate(mousedroid_vla_inference_seconds_bucket[5m])))",
           "legendFormat": "p99",
           "refId": "C"
         }
@@ -1218,7 +1218,7 @@
     {
       "id": 21,
       "title": "VLM Progress Cache Hit Rate",
-      "description": "Ratio of VLM progress-reward cache hits to total lookups (hits + misses). Sustained low hit rate (<50%) means the cache is thrashing \u2014 either the VLM key space is too sparse or eviction is too aggressive. Source: mousedroid_vlm_progress_cache_hits_total / mousedroid_vlm_progress_cache_misses_total. Note: no data until writer-side instrumentation lands.",
+      "description": "Ratio of VLM progress-reward cache hits to total lookups over the last 5 minutes. Uses ``rate(...) or vector(0)`` on each counter so the gauge still renders correctly when the workload is all hits or all misses (one side's series would otherwise be absent). Sustained low hit rate (<50%) means the cache is thrashing \u2014 either the VLM key space is too sparse or eviction is too aggressive. Source: mousedroid_vlm_progress_cache_hits_total / mousedroid_vlm_progress_cache_misses_total. Note: no data until writer-side instrumentation lands.",
       "type": "stat",
       "gridPos": {
         "h": 8,
@@ -1232,7 +1232,7 @@
       },
       "targets": [
         {
-          "expr": "rate(mousedroid_vlm_progress_cache_hits_total[5m]) / (rate(mousedroid_vlm_progress_cache_hits_total[5m]) + rate(mousedroid_vlm_progress_cache_misses_total[5m]) + 0.0001)",
+          "expr": "(rate(mousedroid_vlm_progress_cache_hits_total[5m]) or vector(0)) / ((rate(mousedroid_vlm_progress_cache_hits_total[5m]) or vector(0)) + (rate(mousedroid_vlm_progress_cache_misses_total[5m]) or vector(0)) + 0.0001)",
           "refId": "A"
         }
       ],
