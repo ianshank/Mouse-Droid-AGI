@@ -228,9 +228,21 @@ class TelemetryServer:
         # PR #4: per-client serialization choice (defaults to cfg.serialization)
         # filled in by the optional hello-negotiation handshake.
         self._ws_serializations: dict[int, SerializationName] = {}
+        # PR #81: set of ``id(ws)`` values for clients whose
+        # ``await ws.prepare(request)`` has completed. The broadcast
+        # loop only sends frames to clients in this set so frames
+        # produced during the synchronous ``max_clients`` reservation
+        # window (after append, before prepare) are not delivered to
+        # an unprepared ``WebSocketResponse`` — that would otherwise
+        # raise ``RuntimeError`` inside ``ws.send_json`` and get
+        # silently swallowed by ``gather(..., return_exceptions=True)``.
+        # Addresses Copilot review on PR #81.
+        self._ws_prepared: set[int] = set()
         # PR #4: separate broadcast list for /ws/v1/lidar/raw clients.
         self._lidar_ws_clients: list[web.WebSocketResponse] = []
         self._lidar_ws_serializations: dict[int, SerializationName] = {}
+        # PR #81: mirrors ``_ws_prepared`` for the raw-LiDAR endpoint.
+        self._lidar_ws_prepared: set[int] = set()
         self._lidar_raw_queue: asyncio.Queue[LidarRawScan] | None = lidar_raw_queue
         self._latest_frame: TelemetryFrame | None = None
         self._latest_lidar_raw: LidarRawScan | None = None
@@ -430,11 +442,13 @@ class TelemetryServer:
             await ws.close()
         self._ws_clients.clear()
         self._ws_serializations.clear()
+        self._ws_prepared.clear()
 
         for ws in list(self._lidar_ws_clients):
             await ws.close()
         self._lidar_ws_clients.clear()
         self._lidar_ws_serializations.clear()
+        self._lidar_ws_prepared.clear()
 
         if self._lidar_raw_broadcast_task is not None and not self._lidar_raw_broadcast_task.done():
             self._lidar_raw_broadcast_task.cancel()
@@ -1065,16 +1079,17 @@ class TelemetryServer:
         # Register before any await — same rationale as above: keeps
         # max_clients accounting atomic AND lets legacy tests that
         # assert ``server.client_count == 1`` immediately after
-        # ``ws_connect`` keep passing. The broadcast loop reads
-        # ``_ws_serializations`` with a default, so frames are still
-        # sent (in server-default serialization) if a broadcast fires
-        # before negotiation completes.
+        # ``ws_connect`` keep passing. The broadcast loop checks
+        # ``_ws_prepared`` (populated AFTER ``ws.prepare`` returns)
+        # so frames produced inside this critical section are NOT
+        # sent to an unprepared WebSocketResponse.
         self._ws_clients.append(ws)
         # --- end critical section ---------------------------------------
         peer = request.remote or "unknown"
 
         try:
             await ws.prepare(request)
+            self._ws_prepared.add(id(ws))
             _log.info("telemetry_ws_client_connected", peer=peer, total=len(self._ws_clients))
             chosen = await self._negotiate_ws(ws)
             if ws.closed:
@@ -1091,6 +1106,7 @@ class TelemetryServer:
                 if msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                     break
         finally:
+            self._ws_prepared.discard(id(ws))
             if ws in self._ws_clients:
                 self._ws_clients.remove(ws)
             self._ws_serializations.pop(id(ws), None)
@@ -1247,6 +1263,7 @@ class TelemetryServer:
 
         try:
             await ws.prepare(request)
+            self._lidar_ws_prepared.add(id(ws))
             _log.info(
                 "telemetry_lidar_ws_client_connected",
                 peer=peer,
@@ -1261,6 +1278,7 @@ class TelemetryServer:
                 if msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                     break
         finally:
+            self._lidar_ws_prepared.discard(id(ws))
             if ws in self._lidar_ws_clients:
                 self._lidar_ws_clients.remove(ws)
             self._lidar_ws_serializations.pop(id(ws), None)
@@ -1390,6 +1408,14 @@ class TelemetryServer:
                 if ws.closed:
                     dead_clients.append(ws)
                     continue
+                # PR #81: skip clients that are in the registry (for
+                # ``max_clients`` accounting) but whose ``ws.prepare()``
+                # has not completed yet. Calling ``send_*`` on an
+                # unprepared WebSocketResponse raises ``RuntimeError``
+                # which would be silently swallowed by
+                # ``gather(..., return_exceptions=True)``.
+                if id(ws) not in self._ws_prepared:
+                    continue
                 serialization = self._ws_serializations.get(
                     id(ws),
                     "msgpack" if self._cfg.serialization == "msgpack" else "json",
@@ -1440,6 +1466,9 @@ class TelemetryServer:
             for ws in self._lidar_ws_clients:
                 if ws.closed:
                     dead_clients.append(ws)
+                    continue
+                # PR #81: same prepared-gate as ``_broadcast_loop``.
+                if id(ws) not in self._lidar_ws_prepared:
                     continue
                 serialization = self._lidar_ws_serializations.get(
                     id(ws),

@@ -26,7 +26,7 @@ from mousedroid.config.schema import (
 )
 from mousedroid.health.monitor import HealthMonitor
 from mousedroid.telemetry.metrics import MetricsRegistry
-from mousedroid.telemetry.protocol import LidarRawScan
+from mousedroid.telemetry.protocol import LidarRawScan, TelemetryFrame
 from mousedroid.telemetry.publisher import TelemetryPublisher
 from mousedroid.telemetry.server import TelemetryServer
 
@@ -85,6 +85,75 @@ async def test_handler_rejects_when_max_clients_reached() -> None:
     ):
         msg = await asyncio.wait_for(ws2.receive(), timeout=1.0)
         assert msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED)
+
+
+@pytest.mark.asyncio
+async def test_broadcast_skips_unprepared_clients() -> None:
+    """Frames are NOT sent to clients still inside the reservation window.
+
+    Regression for the Copilot finding on PR #81: the synchronous
+    ``max_clients`` reservation appends the ``ws`` BEFORE
+    ``await ws.prepare(request)``. Without a prepared-gate, the
+    broadcast loop would call ``send_*`` on an unprepared
+    WebSocketResponse and raise ``RuntimeError`` — silently swallowed
+    by ``gather(..., return_exceptions=True)``. The fix tracks
+    ``id(ws)`` in ``_ws_prepared`` and the loop skips clients absent
+    from that set.
+    """
+    server = _build_server()
+    server._running = True
+
+    sent: list[Any] = []
+    raised: list[Exception] = []
+
+    class _UnpreparedWs:
+        closed = False
+
+        async def send_json(self, payload: Any) -> None:
+            err = RuntimeError("Cannot send a message in non-started state.")
+            raised.append(err)
+            raise err
+
+        async def send_bytes(self, _: bytes) -> None:
+            err = RuntimeError("Cannot send a message in non-started state.")
+            raised.append(err)
+            raise err
+
+    class _PreparedWs:
+        closed = False
+
+        async def send_json(self, payload: Any) -> None:
+            sent.append(payload)
+
+        async def send_bytes(self, payload: bytes) -> None:
+            sent.append(payload)
+
+    pending_ws = _UnpreparedWs()
+    ready_ws = _PreparedWs()
+    server._ws_clients.append(pending_ws)  # type: ignore[arg-type]
+    server._ws_clients.append(ready_ws)  # type: ignore[arg-type]
+    # Only the prepared ws is registered in the prepared set.
+    server._ws_prepared.add(id(ready_ws))
+
+    frame = TelemetryFrame(timestamp=1.0, tick_count=1)
+    server._queue.put_nowait(frame)
+
+    bg = asyncio.create_task(server._broadcast_loop())
+    try:
+        for _ in range(20):
+            if server._queue.empty() and sent:
+                break
+            await asyncio.sleep(0.02)
+    finally:
+        server._running = False
+        bg.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await bg
+
+    # Only the prepared client received the frame; the unprepared
+    # client was skipped — its send_json was never called.
+    assert len(sent) == 1
+    assert raised == []
 
 
 @pytest.mark.asyncio
