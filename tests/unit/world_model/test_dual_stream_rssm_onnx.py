@@ -301,10 +301,10 @@ class TestImagineStep:
 class _RecordingMetrics:
     """Minimal MetricsRegistry stand-in capturing world-model observations.
 
-    Has just the one attribute the runtime looks up via ``getattr`` — the
-    real :class:`MetricsRegistry` will expose this helper in B2 Story 4's
-    follow-up wiring. The runtime should call it with the elapsed
-    wall-clock seconds of one ``observe_step`` and nothing else.
+    Exposes the one method the runtime calls directly — Tier C3.1 wired
+    ``observe_world_model_observe_step_seconds`` unconditionally on
+    :class:`MetricsRegistry`, so the runtime no longer probes via
+    ``getattr`` and any registry-shaped object must expose this method.
     """
 
     def __init__(self) -> None:
@@ -346,32 +346,32 @@ class TestMetricsObservation:
             assert math.isfinite(sample)
             assert sample >= 0.0
 
-    def test_metrics_without_helper_attr_is_safe(
+    def test_metrics_none_disables_observation_path(
         self,
         exported_onnx: tuple[Path, DualStreamRSSM, ModelConfig],
     ) -> None:
-        """Defensive ``getattr`` path: legacy MetricsRegistry without the
-        helper should not crash observe_step.
+        """``metrics=None`` (the default) must skip the histogram-observe call.
 
-        Mirrors the production registry surface that pre-dates B2 Story 4.
-        The runtime intentionally falls back to a no-op rather than raising.
+        Pre-Tier-C3.1 the runtime used a defensive ``getattr`` lookup to
+        tolerate a legacy :class:`MetricsRegistry` that didn't expose the
+        helper. C3.1 wired the helper unconditionally, so the runtime now
+        calls it directly — but ``metrics=None`` is still a supported
+        deployment shape (operators without telemetry pay zero overhead).
+        This test pins the no-metrics path against accidental refactors
+        that would unconditionally dereference ``self._metrics``.
         """
-
-        class _LegacyRegistry:
-            """No ``observe_world_model_observe_step_seconds`` attribute."""
-
         path, _model, cfg = exported_onnx
         rt = DualStreamRSSMOnnx(
             model_path=path,
             cfg=cfg,
             providers=("CPUExecutionProvider",),
-            metrics=_LegacyRegistry(),  # type: ignore[arg-type]
+            metrics=None,
         )
         obs = _StubObservation()
         prev_action = torch.zeros(1, cfg.action_dim, dtype=torch.float32)
         h = torch.zeros(1, cfg.hidden_dim + cfg.cfc_hidden_dim, dtype=torch.float32)
         z = torch.zeros(1, cfg.latent_dim, dtype=torch.float32)
-        # No exception — the runtime tolerates the legacy registry surface.
+        # No exception — the metrics-disabled path is supported.
         rt.observe_step(obs, prev_action, h, z)
 
 

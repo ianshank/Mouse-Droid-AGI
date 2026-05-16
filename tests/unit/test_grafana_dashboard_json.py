@@ -157,12 +157,14 @@ class TestPrB2PanelsPresent:
             "VLA Inference Latency",  # histogram quantile panel
             "VLA Timeouts",  # timeout-by-mode panel
             "VLM Progress Cache",  # cache hit-rate panel
+            # Tier C3.1 — world-model observe_step histogram panel
+            "World-Model observe_step Latency",
         ],
     )
     def test_panel_covering_metric_family_exists(
         self, panel_titles: list[str], needle: str
     ) -> None:
-        """Each PR-A2 metric family must have at least one panel title that
+        """Each PR-A2 / Tier-C metric family must have at least one panel title that
         references it (substring match — title format is operator-tunable)."""
         matches = [t for t in panel_titles if needle.lower() in t.lower()]
         assert matches, f"No panel title contains {needle!r}. " f"Existing titles: {panel_titles}"

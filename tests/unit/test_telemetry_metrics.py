@@ -19,6 +19,7 @@ import pytest
 from mousedroid.config.schema import MetricsConfig
 from mousedroid.telemetry.metrics import (
     MetricsRegistry,
+    _classify_dropped_observation,
     _Counter,
     _Gauge,
     _Histogram,
@@ -46,6 +47,81 @@ def _lines(text: str) -> list[str]:
 # ---------------------------------------------------------------------------
 # Internal primitive tests
 # ---------------------------------------------------------------------------
+
+
+class TestClassifyDroppedObservation:
+    """Centralised defensive-guard helper shared by every latency histogram.
+
+    Tier C3.1 review (Gemini #3) tightened the drop predicate to also reject
+    ``+Inf`` — without this guard, a single watchdog-flagged hang would taint
+    the histogram ``_sum`` forever. This test class pins the exact
+    classification surface so a future refactor cannot silently re-enable
+    ``+Inf`` (or drop a previously-rejected value).
+    """
+
+    def test_nan_returns_nan(self) -> None:
+        assert _classify_dropped_observation(float("nan")) == "nan"
+
+    def test_positive_inf_returns_inf(self) -> None:
+        assert _classify_dropped_observation(float("inf")) == "inf"
+
+    def test_negative_inf_returns_negative(self) -> None:
+        """``-inf < _MIN_OBSERVABLE_SECONDS`` so it falls under the negative branch.
+
+        Pinning this prevents an asymmetric guard (``+Inf`` rejected but
+        ``-Inf`` slipping past the negativity check on some unusual platform).
+        """
+        assert _classify_dropped_observation(float("-inf")) == "negative"
+
+    def test_negative_finite_returns_negative(self) -> None:
+        assert _classify_dropped_observation(-0.001) == "negative"
+
+    def test_zero_passes_through(self) -> None:
+        """Zero is a valid (lower-bound) latency observation.
+
+        Some operations genuinely complete in <1µs and ``time.perf_counter()``
+        delta-of-deltas can round to zero. Rejecting zero would create a
+        survivorship bias in the histogram sum.
+        """
+        assert _classify_dropped_observation(0.0) is None
+
+    def test_positive_finite_passes_through(self) -> None:
+        assert _classify_dropped_observation(0.05) is None
+
+
+class TestPrepareBucketBoundaries:
+    """``MetricsRegistry._prepare_bucket_boundaries`` — shared bucket normaliser.
+
+    Tier C3.1 review (Gemini #2) DRY-ed five duplicated copies of the same
+    sort-and-guarantee-Inf-sentinel logic. This test class pins the helper's
+    contract so the DRY refactor stays correct as new histograms are added.
+    """
+
+    def test_sorts_ascending(self) -> None:
+        result = MetricsRegistry._prepare_bucket_boundaries((0.5, 0.1, 1.0))
+        # Last element MUST be +Inf even if input was monotonic.
+        assert result == (0.1, 0.5, 1.0, float("inf"))
+
+    def test_appends_inf_when_missing(self) -> None:
+        result = MetricsRegistry._prepare_bucket_boundaries((0.01, 0.1))
+        assert result[-1] == float("inf")
+        assert result == (0.01, 0.1, float("inf"))
+
+    def test_does_not_duplicate_inf_when_already_present(self) -> None:
+        result = MetricsRegistry._prepare_bucket_boundaries((0.01, 0.1, float("inf")))
+        # Exactly one +Inf, no doubling.
+        assert result.count(float("inf")) == 1
+        assert result == (0.01, 0.1, float("inf"))
+
+    def test_empty_input_yields_single_inf_bucket(self) -> None:
+        """Edge: empty buckets still produce a renderable histogram (le=+Inf only)."""
+        result = MetricsRegistry._prepare_bucket_boundaries(())
+        assert result == (float("inf"),)
+
+    def test_returns_tuple(self) -> None:
+        """Caller depends on the return being hashable / immutable."""
+        result = MetricsRegistry._prepare_bucket_boundaries([0.01, 0.1])
+        assert isinstance(result, tuple)
 
 
 class TestCounter:
@@ -609,6 +685,48 @@ class TestVlaInferenceSecondsHistogram:
             assert f'{ns}_vla_inference_seconds_bucket{{le="{boundary:.6g}"}}' in text
 
 
+class TestWorldModelObserveStepSecondsHistogram:
+    """``mousedroid_world_model_observe_step_seconds`` — Tier C3.1 wiring.
+
+    Mirrors :class:`TestVlaInferenceSecondsHistogram` so any future refactor
+    that breaks the world-model histogram fails fast — same render contract,
+    same config-driven bucket boundaries, same omit-when-empty behavior.
+    """
+
+    def test_zero_observations_omits_metric_family(self) -> None:
+        """Empty histogram MUST NOT appear in the scrape — keeps Prometheus
+        cardinality flat until the world-model runtime actually records a
+        sample (matches the VLA inference family precedent)."""
+        registry = _make_registry()
+        text = registry.render_prometheus()
+        assert "world_model_observe_step_seconds" not in text
+
+    def test_records_inference_latency(self) -> None:
+        """3 observations land in ``_count 3`` with bucket + sum lines present."""
+        registry = _make_registry()
+        registry.observe_world_model_observe_step_seconds(0.002)
+        registry.observe_world_model_observe_step_seconds(0.008)
+        registry.observe_world_model_observe_step_seconds(0.04)
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f"# TYPE {ns}_world_model_observe_step_seconds histogram" in text
+        assert f"{ns}_world_model_observe_step_seconds_count 3" in text
+        assert f"{ns}_world_model_observe_step_seconds_bucket" in text
+        assert f"{ns}_world_model_observe_step_seconds_sum" in text
+
+    def test_buckets_come_from_config(self) -> None:
+        """Bucket boundaries mirror ``MetricsConfig.world_model_observe_step_seconds_buckets``."""
+        custom_buckets = (0.005, 0.01, 0.05)
+        registry = _make_registry(world_model_observe_step_seconds_buckets=custom_buckets)
+        registry.observe_world_model_observe_step_seconds(0.008)
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        for boundary in custom_buckets:
+            assert f'{ns}_world_model_observe_step_seconds_bucket{{le="{boundary:.6g}"}}' in text
+
+
 class TestVlaTimeoutCounter:
     """``mousedroid_vla_timeouts_total{mode}`` — labeled by backend mode."""
 
@@ -883,7 +1001,69 @@ class TestPrA2DefensiveGuards:
         ns = registry._cfg.namespace
         assert f"{ns}_vla_inference_seconds_count 1" in text
 
+    def test_observe_world_model_observe_step_seconds_drops_nan(self) -> None:
+        """Tier C3.1 helper must reject NaN to keep the histogram sum sane.
+
+        Mirrors :meth:`test_observe_vla_inference_seconds_drops_nan` —
+        a single NaN observation would render ``_sum NaN`` and propagate to
+        every Grafana panel + alert that consumes the family.
+        """
+        registry = _make_registry()
+        registry.observe_world_model_observe_step_seconds(float("nan"))
+        registry.observe_world_model_observe_step_seconds(0.008)  # valid sample
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f"{ns}_world_model_observe_step_seconds_count 1" in text
+        assert "NaN" not in text
+
+    def test_observe_world_model_observe_step_seconds_drops_negative(self) -> None:
+        """Negative wall-clock samples (clock skew, division-by-zero) are dropped."""
+        registry = _make_registry()
+        registry.observe_world_model_observe_step_seconds(-0.001)
+        registry.observe_world_model_observe_step_seconds(0.008)
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f"{ns}_world_model_observe_step_seconds_count 1" in text
+
+    def test_observe_vla_inference_seconds_drops_inf(self) -> None:
+        """``+Inf`` samples MUST be rejected — they would taint ``_sum`` forever.
+
+        ``_Histogram.observe`` routes ``+Inf`` into the ``le=+Inf`` bucket
+        without complaint, but the rolling ``_sum`` accumulator would then
+        equal ``+Inf`` from that point onward and break every
+        ``histogram_quantile`` / ``rate`` computation downstream.
+        """
+        registry = _make_registry()
+        registry.observe_vla_inference_seconds(float("inf"))
+        registry.observe_vla_inference_seconds(0.05)
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f"{ns}_vla_inference_seconds_count 1" in text
+        # The +Inf sample must not have leaked into the sum.
+        assert "+Inf" not in text or "_sum +Inf" not in text
+
+    def test_observe_world_model_observe_step_seconds_drops_inf(self) -> None:
+        """``+Inf`` samples MUST be rejected on the world-model helper too.
+
+        Mirrors :meth:`test_observe_vla_inference_seconds_drops_inf` — same
+        rationale, same defensive guard. Pinning this on both helpers prevents
+        a future refactor from accidentally re-enabling ``+Inf`` on one but
+        not the other.
+        """
+        registry = _make_registry()
+        registry.observe_world_model_observe_step_seconds(float("inf"))
+        registry.observe_world_model_observe_step_seconds(0.008)
+
+        text = registry.render_prometheus()
+        ns = registry._cfg.namespace
+        assert f"{ns}_world_model_observe_step_seconds_count 1" in text
+        assert "+Inf" not in text or "_sum +Inf" not in text
+
     _DROP_EVENT = "vla_inference_seconds_dropped"
+    _WM_DROP_EVENT = "world_model_observe_step_seconds_dropped"
 
     def test_drop_emits_debug_log(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Dropped samples must emit a DEBUG-level structured log.
@@ -907,12 +1087,43 @@ class TestPrA2DefensiveGuards:
 
         registry.observe_vla_inference_seconds(float("nan"))
         registry.observe_vla_inference_seconds(-0.001)
+        registry.observe_vla_inference_seconds(float("inf"))
         registry.observe_vla_inference_seconds(0.05)  # accepted — no log
 
         drops = [(event, kwargs) for event, kwargs in captured if event == self._DROP_EVENT]
-        assert len(drops) == 2, f"expected 2 drop logs, got {drops!r}"
+        assert len(drops) == 3, f"expected 3 drop logs, got {drops!r}"
         reasons = [kwargs.get("reason") for _, kwargs in drops]
-        assert set(reasons) == {"nan", "negative"}
+        assert set(reasons) == {"nan", "negative", "inf"}
+
+    def test_world_model_drop_emits_debug_log(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Tier C3.1 helper must emit ``world_model_observe_step_seconds_dropped``
+        on NaN + negative samples, mirroring the VLA-inference drop-log shape.
+
+        Operator runbook: ``world_model_observe_step_seconds_dropped`` at
+        DEBUG correlates a missing-histogram-observation with the upstream
+        wall-clock root cause (clock skew, division-by-zero on a zero-budget
+        timer, etc.). Asserting the structured-log shape here pins the
+        contract so a future refactor that silently swallows the drop fails.
+        """
+        from mousedroid.telemetry import metrics as metrics_module
+
+        captured: list[tuple[str, dict[str, object]]] = []
+
+        def _fake_debug(event: str, **kwargs: object) -> None:
+            captured.append((event, dict(kwargs)))
+
+        registry = _make_registry()
+        monkeypatch.setattr(metrics_module._log, "debug", _fake_debug)
+
+        registry.observe_world_model_observe_step_seconds(float("nan"))
+        registry.observe_world_model_observe_step_seconds(-0.001)
+        registry.observe_world_model_observe_step_seconds(float("inf"))
+        registry.observe_world_model_observe_step_seconds(0.008)  # accepted — no drop log
+
+        drops = [(event, kwargs) for event, kwargs in captured if event == self._WM_DROP_EVENT]
+        assert len(drops) == 3, f"expected 3 drop logs, got {drops!r}"
+        reasons = [kwargs.get("reason") for _, kwargs in drops]
+        assert set(reasons) == {"nan", "negative", "inf"}
 
     @pytest.mark.parametrize(
         "helper_name",
