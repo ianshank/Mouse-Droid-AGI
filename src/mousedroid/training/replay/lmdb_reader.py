@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from mousedroid.config.schema import ExperienceConfig
+    from mousedroid.telemetry.metrics import MetricsRegistry
 
 _log = get_logger(__name__)
 
@@ -81,11 +82,30 @@ class LMDBReplayReader:
         *,
         path_override: str | None = None,
         debug_log_every_n: int = 0,
+        metrics: MetricsRegistry | None = None,
     ) -> None:
+        """Initialise the reader; defer LMDB env open until ``stream()``.
+
+        Args:
+            experience_cfg: LMDB store configuration (``path`` +
+                ``map_size_gb``).
+            path_override: Optional explicit path; ``None`` uses
+                ``experience_cfg.path``.
+            debug_log_every_n: Emit a DEBUG ``replay_chunk_decoded`` event
+                every N chunks; ``0`` disables debug logs entirely.
+            metrics: Optional :class:`MetricsRegistry`. When provided, each
+                successful decode increments
+                ``mousedroid_replay_records_total{outcome="ok"}`` and each
+                schema-mismatch drop increments
+                ``{outcome="schema_mismatch"}`` alongside the existing
+                ``replay_schema_mismatch`` structured log. ``None`` (default)
+                preserves byte-identical pre-PR-A2.1 behavior.
+        """
         path_str = path_override if path_override is not None else experience_cfg.path
         self._path = Path(path_str)
         self._map_size = max(1, math.ceil(experience_cfg.map_size_gb * GB_TO_BYTES))
         self._debug_log_every_n = max(0, int(debug_log_every_n))
+        self._metrics = metrics
         self._read_records = 0
         self._skipped_schema = 0
         self._chunks_yielded = 0
@@ -137,6 +157,8 @@ class LMDBReplayReader:
                     # Schema mismatch — count, log once per occurrence,
                     # do not crash training.
                     self._skipped_schema += 1
+                    if self._metrics is not None:
+                        self._metrics.inc_replay_record("schema_mismatch")
                     _log.warning(
                         "replay_schema_mismatch",
                         error=str(exc),
@@ -144,6 +166,8 @@ class LMDBReplayReader:
                     )
                     continue
                 out.append(record)
+                if self._metrics is not None:
+                    self._metrics.inc_replay_record("ok")
         return out
 
     async def stream(

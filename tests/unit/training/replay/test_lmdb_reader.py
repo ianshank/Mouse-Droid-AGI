@@ -134,3 +134,65 @@ def test_path_override_takes_precedence(tmp_path: Path) -> None:
     flat = [r for chunk in _drain(reader, 8) for r in chunk]
     assert len(flat) == 5
     assert reader.path == real_path
+
+
+# -- PR-A2.1: writer-side instrumentation ---------------------------------
+
+
+class _StubMetrics:
+    """Minimal MetricsRegistry stand-in for instrumentation tests.
+
+    Recording into a list keeps the assertions decoupled from the real
+    registry's render path — we're testing the *call site*, not the registry
+    semantics (those are covered by ``tests/unit/test_telemetry_metrics.py``).
+    """
+
+    def __init__(self) -> None:
+        self.replay_calls: list[str] = []
+
+    def inc_replay_record(self, outcome: str, amount: int = 1) -> None:
+        self.replay_calls.append(outcome)
+
+
+def test_replay_reader_emits_ok_metric_per_successful_decode(tmp_path: Path) -> None:
+    """Each successfully deserialised record increments ``inc_replay_record('ok')``."""
+    _populate(tmp_path, n=3)
+    metrics = _StubMetrics()
+    reader = LMDBReplayReader(_cfg(tmp_path), metrics=metrics)
+
+    _drain(reader, chunk_size=10)
+
+    assert metrics.replay_calls == ["ok", "ok", "ok"]
+
+
+def test_replay_reader_emits_schema_mismatch_metric(tmp_path: Path) -> None:
+    """Bad-schema records emit ``inc_replay_record('schema_mismatch')``."""
+    _populate(tmp_path, n=2)
+    # Inject a bad-schema record alongside the 2 valid ones.
+    env = lmdb.open(str(tmp_path), map_size=10 * 1024 * 1024)
+    with env.begin(write=True) as txn:
+        import msgpack
+
+        bad = msgpack.packb({"schema_version": 999, "payload": {}})
+        txn.put(b"\xff" * 8, bad)
+    env.close()
+
+    metrics = _StubMetrics()
+    reader = LMDBReplayReader(_cfg(tmp_path), metrics=metrics)
+    _drain(reader, chunk_size=10)
+
+    assert "schema_mismatch" in metrics.replay_calls
+    assert metrics.replay_calls.count("ok") == 2
+    assert metrics.replay_calls.count("schema_mismatch") == 1
+
+
+def test_replay_reader_no_metrics_param_is_byte_identical(tmp_path: Path) -> None:
+    """Constructing without ``metrics=`` matches pre-PR-A2.1 behavior."""
+    _populate(tmp_path, n=2)
+    # No ``metrics`` kwarg — must work exactly as before.
+    reader = LMDBReplayReader(_cfg(tmp_path))
+    chunks = _drain(reader, chunk_size=10)
+
+    flat = [r for chunk in chunks for r in chunk]
+    assert len(flat) == 2
+    assert reader.stats["read_records"] == 2
