@@ -539,7 +539,7 @@ config flag is the only operator action to enable them.
 ```mermaid
 graph TD
     subgraph CloudSide["GCP (Vertex AI custom training job)"]
-        ExpShards[("LMDB experience shards\ngs://<bucket>/experience_shards/")]
+        ExpShards[("LMDB experience shards\ngs://&lt;bucket&gt;/experience_shards/")]
         CloudTrain["Dockerfile.cloud\npytorch:2.5.1-cuda12.1\ntrain_offline_rl.py"]
         SharedMarker[("GCS shard_consumed_marker\nper-job idempotency")]
         HFHub2["HuggingFace Hub repo\nianshank/mousedroid-policy-v2\npolicy.onnx + sha256.txt"]
