@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from mousedroid.logging.setup import get_logger
@@ -53,6 +54,45 @@ _log = get_logger(__name__)
 # (e.g. an upcoming planner-inference histogram) without each helper
 # re-declaring its own threshold.
 _MIN_OBSERVABLE_SECONDS: float = 0.0
+
+
+def _classify_dropped_observation(value: float) -> str | None:
+    """Classify a histogram-observation candidate; return drop reason or ``None``.
+
+    Centralises the defensive guards that every latency-histogram helper
+    (``observe_vla_inference_seconds``, ``observe_world_model_observe_step_seconds``,
+    and future siblings) must apply uniformly. Returning a reason string instead
+    of a bool lets the caller emit the exact label that Grafana / log-aggregation
+    queries depend on without each helper rewriting the same chain of conditions.
+
+    Drop reasons (ordered by priority — NaN dominates because comparisons
+    against NaN return ``False``, so the inf and negative checks would silently
+    pass through it otherwise):
+
+    * ``"nan"`` — ``value != value`` (canonical NaN check, no ``math`` import).
+    * ``"inf"`` — ``value == float("inf")``. ``_Histogram`` routes ``+Inf``
+      into the ``le=+Inf`` bucket without complaint, but the ``_sum`` accumulator
+      would then go to ``+Inf`` forever, breaking every rate / quantile
+      computation downstream. Negative infinity is caught by the next branch.
+    * ``"negative"`` — ``value < _MIN_OBSERVABLE_SECONDS`` (clock skew, wrap,
+      or division-by-zero producing ``-inf``).
+
+    Args:
+        value: Wall-clock seconds candidate from a ``time.perf_counter()``
+            bracket. Untrusted — may be NaN / inf / negative.
+
+    Returns:
+        Drop-reason string for structured logging when the sample MUST be
+        discarded, or ``None`` when the sample is safe to feed to
+        :meth:`_Histogram.observe`.
+    """
+    if value != value:
+        return "nan"
+    if value == float("inf"):
+        return "inf"
+    if value < _MIN_OBSERVABLE_SECONDS:
+        return "negative"
+    return None
 
 
 class _Counter:
@@ -417,6 +457,34 @@ class MetricsRegistry:
     or orchestrator; call :meth:`render_prometheus` from the HTTP handler.
     """
 
+    @staticmethod
+    def _prepare_bucket_boundaries(raw_buckets: Sequence[float]) -> tuple[float, ...]:
+        """Sort ``raw_buckets`` ascending and guarantee a trailing ``+Inf`` sentinel.
+
+        Prometheus histogram semantics require the final bucket to be ``+Inf``
+        — without it, samples above the largest finite bucket are silently
+        dropped from the cumulative bucket counts (though they still update
+        ``_sum`` / ``_count``, producing inconsistent rendered exposition).
+
+        This helper centralises the boilerplate that previously appeared once
+        per histogram family (loop / LLM / MCP / VLA inference / world-model
+        observe_step). Adding a new histogram family is now: drop the bucket
+        field on :class:`MetricsConfig`, register it in the validator, and
+        call ``self._prepare_bucket_boundaries(cfg.<field>)`` here.
+
+        Args:
+            raw_buckets: Operator-configured bucket boundaries from
+                :class:`MetricsConfig` (any order, ``+Inf`` optional).
+
+        Returns:
+            Sorted-ascending tuple of bucket boundaries with ``+Inf`` as
+            the final element. Safe to feed directly to :class:`_Histogram`.
+        """
+        sorted_buckets = sorted(raw_buckets)
+        if not sorted_buckets or sorted_buckets[-1] != float("inf"):
+            sorted_buckets.append(float("inf"))
+        return tuple(sorted_buckets)
+
     def __init__(self, cfg: MetricsConfig) -> None:
         """Initialise registry and all metric families.
 
@@ -478,32 +546,27 @@ class MetricsRegistry:
         self._lidar_raw_published = _Counter()
         self._lidar_raw_dropped = _Counter()
 
-        # Histogram (loop latency) — sort and guarantee +Inf sentinel
-        raw_buckets = sorted(cfg.loop_latency_buckets_ms)
-        if not raw_buckets or raw_buckets[-1] != float("inf"):
-            raw_buckets.append(float("inf"))
-        self._loop_histogram = _Histogram(tuple(raw_buckets))
+        # Histogram families — bucket boundaries normalised via the shared
+        # ``_prepare_bucket_boundaries`` helper (sort ascending + guarantee
+        # the trailing ``+Inf`` sentinel Prometheus semantics require).
+        self._loop_histogram = _Histogram(
+            self._prepare_bucket_boundaries(cfg.loop_latency_buckets_ms)
+        )
+        llm_buckets = self._prepare_bucket_boundaries(cfg.llm_latency_buckets_ms)
+        self._llm_translation_latency_ms = _Histogram(llm_buckets)
 
-        # LLM latency histogram — sort and guarantee +Inf sentinel
-        llm_buckets = sorted(cfg.llm_latency_buckets_ms)
-        if not llm_buckets or llm_buckets[-1] != float("inf"):
-            llm_buckets.append(float("inf"))
-        self._llm_translation_latency_ms = _Histogram(tuple(llm_buckets))
-
-        # Cloud publish latency histograms - reuse LLM bucket layout by
+        # Cloud publish latency histograms — share the LLM bucket layout by
         # default; both telemetry and experience publishes fall in the
         # 25 ms - 2 s envelope.
-        cloud_buckets = list(llm_buckets)
-        self._cloud_telemetry_publish_latency_ms = _Histogram(tuple(cloud_buckets))
-        self._cloud_experience_publish_latency_ms = _Histogram(tuple(cloud_buckets))
+        self._cloud_telemetry_publish_latency_ms = _Histogram(llm_buckets)
+        self._cloud_experience_publish_latency_ms = _Histogram(llm_buckets)
 
         # MCP server metrics
         self._mcp_requests = _Counter()
         self._mcp_tool_calls = _DoubleLabeledCounter()
-        mcp_raw_buckets = sorted(cfg.mcp_latency_buckets_ms)
-        if not mcp_raw_buckets or mcp_raw_buckets[-1] != float("inf"):
-            mcp_raw_buckets.append(float("inf"))
-        self._mcp_request_latency_ms = _Histogram(tuple(mcp_raw_buckets))
+        self._mcp_request_latency_ms = _Histogram(
+            self._prepare_bucket_boundaries(cfg.mcp_latency_buckets_ms)
+        )
 
         # PR-A2 — Phase 2 replay / Phase 3 VLA / Phase 4 VLM observability.
         # All four metric families are pure-add: their internal state is
@@ -515,22 +578,18 @@ class MetricsRegistry:
         # No config toggle is required to disable them — writer-side guards
         # in the calling subsystems treat ``metrics is None`` as a no-op.
         self._replay_records = _LabeledCounter()
-        vla_raw_buckets = sorted(cfg.vla_inference_seconds_buckets)
-        if not vla_raw_buckets or vla_raw_buckets[-1] != float("inf"):
-            vla_raw_buckets.append(float("inf"))
-        self._vla_inference_seconds = _Histogram(tuple(vla_raw_buckets))
+        self._vla_inference_seconds = _Histogram(
+            self._prepare_bucket_boundaries(cfg.vla_inference_seconds_buckets)
+        )
         self._vla_timeouts = _LabeledCounter()
         self._vlm_progress_cache_hits = _Counter()
         self._vlm_progress_cache_misses = _Counter()
-        # World-model observe_step latency histogram (Tier B2 helper, wired
-        # by Tier C3.1). Mirrors the VLA inference shape so DualStreamRSSMOnnx
-        # can stop using the defensive ``getattr(..., None)`` fallback at
-        # ``world_model/dual_stream_rssm_onnx.py:293`` — the helper now exists
-        # unconditionally and the runtime calls it directly.
-        wm_raw_buckets = sorted(cfg.world_model_observe_step_seconds_buckets)
-        if not wm_raw_buckets or wm_raw_buckets[-1] != float("inf"):
-            wm_raw_buckets.append(float("inf"))
-        self._world_model_observe_step_seconds = _Histogram(tuple(wm_raw_buckets))
+        # World-model observe_step latency histogram — Tier B2 helper, wired
+        # by Tier C3.1 unconditionally. ``DualStreamRSSMOnnx`` now calls the
+        # helper directly (no defensive ``getattr`` fallback).
+        self._world_model_observe_step_seconds = _Histogram(
+            self._prepare_bucket_boundaries(cfg.world_model_observe_step_seconds_buckets)
+        )
 
         # Pre-format metric names from namespace
         self._name_frame_drops = f"{ns}_frame_drops"
@@ -934,8 +993,13 @@ class MetricsRegistry:
 
         Defensively drops samples that would corrupt the histogram sum:
 
-        * Negative values (clock skew / wall-clock wrap)
-        * NaN (timer misuse / division-by-zero upstream)
+        * NaN — timer misuse / division-by-zero upstream
+        * ``+Inf`` — a severe hang (e.g. the backend never returned and a
+          watchdog flagged the elapsed time as infinity). ``_Histogram``
+          would happily route ``+Inf`` into the ``le=+Inf`` bucket, but the
+          ``_sum`` accumulator would then go to ``+Inf`` forever, breaking
+          every rate / quantile computation downstream.
+        * Negative — clock skew / wall-clock wrap
 
         Drops emit a DEBUG-level structured log so operators can correlate
         missing histogram observations with the upstream root cause.
@@ -945,12 +1009,11 @@ class MetricsRegistry:
                 ``predict()`` call, measured by the caller wrapping the
                 inference site with ``time.perf_counter()``.
         """
-        # ``value != value`` is the canonical NaN check that does not
-        # depend on importing ``math``.
-        if value != value or value < _MIN_OBSERVABLE_SECONDS:
+        reason = _classify_dropped_observation(value)
+        if reason is not None:
             _log.debug(
                 "vla_inference_seconds_dropped",
-                reason="nan" if value != value else "negative",
+                reason=reason,
                 value=value,
             )
             return
@@ -961,15 +1024,15 @@ class MetricsRegistry:
 
         Tier B2 documented this helper in the export plan but the actual
         wiring was deferred — the ``DualStreamRSSMOnnx`` runtime class
-        used a defensive ``getattr(..., None)`` lookup at
-        ``world_model/dual_stream_rssm_onnx.py:293`` to avoid crashing on
-        a registry that didn't expose the helper yet. Tier C3.1 lands the
-        helper unconditionally so the runtime can call it directly.
+        used a defensive ``getattr(..., None)`` lookup until Tier C3.1
+        landed the helper unconditionally. The runtime now calls it directly.
 
-        Defensively drops samples that would corrupt the histogram sum:
+        Defensively drops samples that would corrupt the histogram sum
+        via :func:`_classify_dropped_observation`:
 
-        * Negative values (clock skew / wall-clock wrap)
-        * NaN (timer misuse / division-by-zero upstream)
+        * NaN — timer misuse / division-by-zero upstream
+        * ``+Inf`` — severe hang / watchdog-flagged elapsed time
+        * Negative — clock skew / wall-clock wrap
 
         Drops emit a DEBUG-level structured log so operators can correlate
         missing histogram observations with the upstream root cause.
@@ -979,10 +1042,11 @@ class MetricsRegistry:
                 call, measured by the caller wrapping the inference site
                 with ``time.perf_counter()``.
         """
-        if value != value or value < _MIN_OBSERVABLE_SECONDS:
+        reason = _classify_dropped_observation(value)
+        if reason is not None:
             _log.debug(
                 "world_model_observe_step_seconds_dropped",
-                reason="nan" if value != value else "negative",
+                reason=reason,
                 value=value,
             )
             return

@@ -77,8 +77,10 @@ class DualStreamRSSMOnnx:
         metrics: Optional :class:`MetricsRegistry`. When provided, each
             :meth:`observe_step` brackets ``session.run(...)`` with
             ``time.perf_counter()`` and observes a sample on the
-            world-model latency histogram (added in Story 4). ``None``
-            (default) preserves byte-identical pre-PR behavior.
+            world-model latency histogram (helper wired by Tier C3.1).
+            ``None`` (default) preserves byte-identical pre-PR behavior
+            — operators on a deployment without telemetry can omit the
+            kwarg and pay zero histogram-observation cost.
     """
 
     def __init__(
@@ -286,14 +288,14 @@ class DualStreamRSSMOnnx:
         surprise = float(np.asarray(surprise_arr).reshape(-1)[0])
 
         if self._metrics is not None:
-            # Future Story 4 hooks the world-model latency histogram here.
-            # Kept guarded so this Story 2 PR compiles cleanly against the
-            # current MetricsRegistry surface.
-            observe_helper = getattr(
-                self._metrics, "observe_world_model_observe_step_seconds", None
-            )
-            if observe_helper is not None:
-                observe_helper(elapsed)
+            # Tier C3.1 wired ``observe_world_model_observe_step_seconds``
+            # unconditionally on :class:`MetricsRegistry`. The defensive
+            # ``getattr(..., None)`` lookup used during the B2 Story 2
+            # interim has been removed; the helper now exists on every
+            # registry instance. If you encounter ``AttributeError`` here,
+            # a downstream module is passing a non-``MetricsRegistry`` stub
+            # — make it expose the helper or pass ``metrics=None``.
+            self._metrics.observe_world_model_observe_step_seconds(elapsed)
 
         return new_h, new_z, obs_embed, surprise
 
