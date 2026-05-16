@@ -331,8 +331,17 @@ async def test_run_loop_swallows_poll_failures_and_continues(tmp_path):
     that removes the catch (or narrows it) could turn a single transient
     HF Hub error into a poller-task death silently halting all OTA
     updates.
+
+    Synchronisation: uses an ``asyncio.Event`` to signal completion of
+    the SECOND poll cycle (rather than relying on wall-clock sleep,
+    which is non-deterministic under loaded CI scheduling — caused
+    flake on test (3.11) in run 25972028292). The fake API raises on
+    the first call, succeeds on the second, and sets the event after
+    the second call returns — proving the ``_run`` loop recovered from
+    the error and continued.
     """
     call_count = 0
+    second_cycle_done = asyncio.Event()
 
     class _FlakyApi:
         def repo_info(self, repo_id: str) -> _FakeRepoInfo:
@@ -340,7 +349,11 @@ async def test_run_loop_swallows_poll_failures_and_continues(tmp_path):
             call_count += 1
             if call_count == 1:
                 raise RuntimeError("simulated transient HF Hub failure")
-            return _FakeRepoInfo(sha="abc123")
+            try:
+                return _FakeRepoInfo(sha="abc123")
+            finally:
+                if call_count == 2:
+                    second_cycle_done.set()
 
     def _download(**_kwargs: Any) -> str:
         target_dir = Path(_kwargs["local_dir"])
@@ -353,7 +366,9 @@ async def test_run_loop_swallows_poll_failures_and_continues(tmp_path):
             target.write_bytes(b"artifact")
         return str(target)
 
-    # Use very short poll_interval so two cycles complete quickly.
+    # Very short poll interval keeps the test fast even under loaded
+    # CI scheduling; the deterministic ``second_cycle_done.wait()`` below
+    # is what actually gates the assertion, not wall-clock sleep.
     poller = _build_poller_with_overrides(
         tmp_path,
         hf_api=_FlakyApi(),
@@ -361,11 +376,14 @@ async def test_run_loop_swallows_poll_failures_and_continues(tmp_path):
         poll_interval_s=0.01,
     )
     await poller.start()
-    # Give the loop time to run a few cycles.
-    await asyncio.sleep(0.05)
-    await poller.stop()
-    # First cycle errored + got logged; subsequent cycles succeeded so the
-    # pending slot now holds the verified update.
+    # Wait deterministically for the second poll cycle to complete. Cap
+    # the wait so a hung loop can't deadlock the test suite.
+    try:
+        await asyncio.wait_for(second_cycle_done.wait(), timeout=5.0)
+    finally:
+        await poller.stop()
+    # First cycle errored + got logged; the loop's broad-except recovered
+    # and the second cycle succeeded. Both invariants pinned by call_count.
     assert call_count >= 2
 
 
