@@ -99,63 +99,92 @@ The removal token comes from the same page as the registration token.
 
 - [`scripts/jetson-runner-install.sh`](../scripts/jetson-runner-install.sh) — the installer.
 - [`scripts/github-actions-runner.service.template`](../scripts/github-actions-runner.service.template) — systemd unit (placeholders substituted at install time).
-- [`.github/workflows/jetson-nightly.yml`](../.github/workflows/jetson-nightly.yml) — the workflow that consumes this runner. **Status: required check** (promoted in Tier B1 after 7 consecutive green nights — see "Promotion Observation Log" below).
+- [`.github/workflows/jetson-nightly.yml`](../.github/workflows/jetson-nightly.yml) — the workflow that consumes this runner. **Status:** workflow exit code now propagates `PILLAR_RC` (Tier B1, this PR). The "required check" gating on `main` becomes effective once an operator configures branch protection in the GitHub UI (see "Promotion to Required Check — Workflow ready" below).
 - [`scripts/validate_pillar.sh`](../scripts/validate_pillar.sh) — the Ten Pillars dispatcher the workflow runs. Operator can run it ad-hoc on the Jetson host outside the runner with `bash scripts/validate_pillar.sh all`.
 - [`docs/playbooks/bringup-fail.md`](playbooks/bringup-fail.md) — full-rover bringup runbook (referenced when the runner can't shell into a healthy container).
 
-## Promotion to Required Check — ✅ Landed (Tier B1)
+## Promotion to Required Check — Workflow ready (Tier B1)
 
-The `ten-pillars` job is now a **required check** on `main`. After this PR
-landed:
+This PR ships the **workflow-side** half of the Ten-Pillars promotion.
+The **branch-protection** half is an operator UI step that happens
+after the PR merges. The two halves work together: without (1) the
+workflow exit code is always 0 (advisory); without (2) branch
+protection never blocks merges. Both are needed for the gate to be
+live.
+
+### What this PR changes
 
 1. ✅ `continue-on-error: true` removed from the `ten-pillars` job block.
 2. ✅ `Report status` step's trailing `exit 0` changed to
-   `exit "${PILLAR_RC:-1}"` so the job's exit code reflects pillar failures.
-3. ✅ Branch protection on `main` configured to require the
-   **Ten Pillars on Jetson** check (operator-facing UI step at
-   <https://github.com/ianshank/Mouse-Droid-AGI/settings/branches>).
+   `exit "${PILLAR_RC:-1}"` so the job's exit code reflects pillar
+   failures.
 
-The previous advisory-mode gate is documented in git history (see
-`.github/workflows/jetson-nightly.yml` history for commits referencing
-"continue-on-error: true").
+After this PR merges, the workflow's overall status reflects whether
+`validate_pillar.sh` returned `0`, `1`, or `2`. **It does not yet block
+merges** — see step 3 below.
+
+### What the operator must do post-merge (UI step)
+
+3. ⏯ Configure branch protection on `main` to require the
+   **Ten Pillars on Jetson** check:
+   <https://github.com/ianshank/Mouse-Droid-AGI/settings/branches>
+   Add `Ten Pillars on Jetson` under "Require status checks to pass
+   before merging". This is the step that makes the gate effective.
+
+Until step 3 is configured, the workflow runs and reports per-pillar
+results, but a red workflow does **not** block PRs from merging into
+`main`.
 
 ### How this was earned
 
-Per the original Tier B1 plan, the workflow had to ship 7 consecutive
-green nightly runs in advisory mode before promotion. See the
-**Promotion Observation Log** section below for the dated run-by-run
-record.
+Per the original Tier B1 plan, the workflow has to ship 7 consecutive
+green nightly runs in advisory mode before the operator flips the
+branch-protection toggle. The dated run-by-run record lives in the
+**Promotion Observation Log** section below — operators append rows
+during the observation window so the audit trail is reviewable when
+making the promotion decision.
 
-### Exit-code semantics (post-promotion)
+### Exit-code semantics
 
 `validate_pillar.sh` returns:
 
 - **0** — all blocking pillars (safety, world_model, memory, cognitive,
   reward) reported PASS. Non-blocking pillars (curiosity, continual,
-  meta, scaling, growth) may be SKIP but must not be FAIL.
-- **1** — at least one blocking pillar reported FAIL. **Merges to `main`
-  are blocked by branch protection** until the fail clears.
-- **2** — precondition error (Docker container down, sync_jetson_overlay
-  script missing, etc.). Also blocks merges — operators must investigate
-  the artifact's `ten_pillars.log` to distinguish 1 (real test fail) from
-  2 (infra problem) and fix accordingly.
+  meta, scaling, growth) may be SKIP but must not be FAIL. The summary
+  table is appended to `ten_pillars.log` in the workflow artifact.
+- **1** — at least one blocking pillar reported FAIL. The summary table
+  in `ten_pillars.log` distinguishes which pillar(s) failed. Once branch
+  protection is configured (step 3), merges to `main` are blocked until
+  the fail clears.
+- **2** — precondition error before any pillar ran (Docker container
+  down, sync_jetson_overlay script missing, usage error, etc.). In this
+  case `ten_pillars.log` is **not generated** (the script exits before
+  writing it) — operators must investigate the **workflow console
+  output** in the GitHub Actions run to distinguish 1 (real test fail)
+  from 2 (infra problem) and fix accordingly. Like `1`, once branch
+  protection is configured (step 3), `2` blocks merges to `main`.
 
 ### Rollback path
 
 If a wave of false-positive failures pollutes `main`'s merge queue:
 
 1. Revert this PR (re-adds `continue-on-error: true` + reverts the
-   exit-code change). Branch-protection check stays configured but the
-   job exit code is now always 0 → check is always green → merges flow.
+   exit-code change). Branch-protection check stays configured (if step
+   3 has been done) but the job exit code is now always 0 → check is
+   always green → merges flow.
 2. Re-disable the required-check requirement at
    <https://github.com/ianshank/Mouse-Droid-AGI/settings/branches> as a
    belt-and-suspenders measure.
 
 ## Promotion Observation Log
 
+Append one row per nightly run during the 7-green-runs observation
+window before merging this PR. The operator uses this table as the
+audit trail for the branch-protection decision in step 3.
+
 | Date (UTC) | Run ID | Conclusion | Blocking Pillars (S/W/M/C/R) | Notes |
 |---|---|---|---|---|
-| _operator_ | _operator_ | _operator_ | _5/5 required_ | _Append rows during the observation window before merging this PR._ |
+| _operator_ | _operator_ | _operator_ | _5/5 required_ | _Append a row per nightly run. Promotion (step 3) requires 7 consecutive PASS rows._ |
 
 ### Local nightly equivalent
 
