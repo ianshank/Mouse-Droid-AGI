@@ -1,9 +1,54 @@
 # MouseDroidAGI — Implementation Plan: Next Steps
 
-> **Date**: 2026-04-14 (last updated; originally 2026-03-19)
+> **Date**: 2026-05-16 (Tier C merged) — last updated; originally 2026-03-19
 > **Author**: System Architect Agent
-> **Status**: Rebased — historical plan plus 2026-04-26 Jetson/voice/training baseline note
+> **Status**: Post-Tier-C — see "Tier C Status (2026-05-16)" below for the
+> active milestone pointer. The pre-Tier-A historical plan + the 2026-04-26
+> Jetson/voice/training baseline note are preserved as-is for archaeology.
 > **Branch**: `claude/create-implementation-plan-aQp9z`
+
+---
+
+## Tier C Status (2026-05-16) — Closed-Loop Autonomy MERGED
+
+All four Tier C tracks have landed on the integration branch:
+
+| Track | PR | Scope | Status |
+|---|---|---|---|
+| **C3.1** | [#93](https://github.com/ianshank/Mouse-Droid-AGI/pull/93) | CI matrix promotion + B2 telemetry follow-through | ✅ Merged |
+| **C1** | [#94](https://github.com/ianshank/Mouse-Droid-AGI/pull/94) | Closed-loop cloud retraining + Jetson OTA puller | ✅ Merged |
+| **C2** | [#95](https://github.com/ianshank/Mouse-Droid-AGI/pull/95) | Mission lifecycle + geometric safety projection | ✅ Merged |
+| **C4** | [#96](https://github.com/ianshank/Mouse-Droid-AGI/pull/96) | Isaac Lab env body (B3.2-B3.5) + RoverRewardConfig | ✅ Merged |
+
+Phase status post-Tier-C:
+
+| Phase | Status | Notes |
+|---|---|---|
+| Phase 1 — Consolidate in-flight work | ✅ COMPLETE | Pre-Tier-A baseline |
+| Phase 2 — Self-healing resilience | ✅ COMPLETE | Pre-Tier-A baseline |
+| Phase 2.1 — BC into PPO + replay/VLM/VLA telemetry | ✅ COMPLETE | Tier A (PRs #85–#89) |
+| Phase 3 — Code quality + type safety | ✅ COMPLETE | mypy strict + ruff clean |
+| Phase 3b — VLA inference + ONNX | ✅ COMPLETE | Tier A + Tier B2 |
+| Phase 4 — Training pipeline execution | ✅ COMPLETE (cloud side) | C1 cloud trainer wired; HF Hub upload step deferred to PR-A1.5 follow-up |
+| Phase 5 — Real-physics sim-to-real foundation | ✅ COMPLETE | Tier B3 (constants + URDF→USD) + Tier C4 (env body). Operator runs `.usd` conversion on Linux to fully unlock. |
+| **Phase 6 — On-device incremental learning** | 🔜 **ACTIVE** | See [NEXT_STEPS.md](NEXT_STEPS.md) §"Next Major Milestone — Phase 6" for scope. Multi-week. Plan file TBD. |
+
+**Operator follow-ups blocking the next milestone** (post-merge, hardware/Linux):
+
+1. Run `scripts/convert_urdf_to_usd.py` on a Linux workstation + commit
+   `assets/rover/mse6_4wd.usd` (unblocks the 9 Isaac Lab unit tests on Linux CI).
+2. Validate the C1 / C2 / C4 Jetson E2E smokes (each PR body documents a
+   per-track smoke runbook).
+3. Configure branch protection to require `vla-extras (3.11)` (and promote
+   `onnx-world-model-extras (3.11)` once it accumulates 7 green runs).
+4. Build + push `mousedroid-cloud:tier-c1` Docker image to GCR for the
+   Vertex AI custom-training job spec.
+5. Write `training/upload_weights.py` (deferred from C1 per ADR-010
+   §"Out-of-Scope") so the cloud → HF Hub leg of the closed loop closes.
+
+Until items 1 + 5 land, the closed-loop is half-built: C1 ships the
+Jetson-side puller; the cloud trainer's output stays in GCS for manual
+`huggingface-cli upload`.
 
 ---
 

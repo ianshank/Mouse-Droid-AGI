@@ -529,6 +529,92 @@ tool_bridge at 100%; `server.py` at 97% (the 3 uncovered lines are behind the op
 
 ---
 
+## Level 3g — Component Diagram: Tier C Closed-Loop Autonomy
+
+Tier C (PRs #93–#96) wires three closed-loop seams into the orchestrator:
+(1) cloud-retraining OTA pull, (2) mission lifecycle with adaptive replan,
+(3) geometric safety projection. All three default-disabled — flipping the
+config flag is the only operator action to enable them.
+
+```mermaid
+graph TD
+    subgraph CloudSide["GCP (Vertex AI custom training job)"]
+        ExpShards[("LMDB experience shards\ngs://<bucket>/experience_shards/")]
+        CloudTrain["Dockerfile.cloud\npytorch:2.5.1-cuda12.1\ntrain_offline_rl.py"]
+        SharedMarker[("GCS shard_consumed_marker\nper-job idempotency")]
+        HFHub2["HuggingFace Hub repo\nianshank/mousedroid-policy-v2\npolicy.onnx + sha256.txt"]
+        ExpShards --> CloudTrain
+        CloudTrain -- "checks at startup,\nwrites on success" --> SharedMarker
+        CloudTrain -. "huggingface-cli upload\n(operator manual; PR-A1.5 follow-up\nautomates)" .-> HFHub2
+    end
+
+    subgraph JetsonSide["Jetson Orin Nano (mousedroid process)"]
+        WUPoller["HuggingFaceWeightUpdatePoller\ncloud/weight_update_poller.py\nlazy huggingface_hub import\nasyncio.wait_for + retry/backoff\nValidates SHA-256 via verify_sha256()"]
+        OTACache[("OTA cache dir\ncfg.cloud.weight_update.cache_dir\nprotected-root validation")]
+        PendingUpdate["PendingWeightUpdate\n@dataclass(frozen=True)"]
+
+        subgraph TickBody["Orchestrator.tick() (single coroutine, atomic swaps)"]
+            EmergencyStop["emergency_stop_check\nHARD short-circuit"]
+            UpdateWM["_update_world_model\n(h, z) latent step"]
+            SelectAction["_select_action\n4 return branches:\ncognitive / VLA / VLA-strict / nav_agent"]
+            ProjectAction["_maybe_project_action\nC2 seam: ONE call site,\nclamps ALL 4 branches"]
+            ApplySwap["_apply_pending_weight_update\nC1 seam: POST select_action,\natomic ref swap + zeros_like state reset"]
+            ExecuteAction["_execute_action\nESP32 motor command"]
+            PostTick["POST_TICK hooks\nmission_lifecycle.tick(progress)"]
+
+            EmergencyStop --> UpdateWM
+            UpdateWM --> SelectAction
+            SelectAction --> ProjectAction
+            ProjectAction --> ApplySwap
+            ApplySwap --> ExecuteAction
+            ExecuteAction --> PostTick
+        end
+
+        SafetyProj["GeometricSafetyProjector\nsafety/projector.py\nstateless, deterministic\nforward-velocity / human-proximity /\ntight-quarters clamps"]
+        MissionLC["MissionLifecycle\norchestrator/mission_lifecycle.py\nPENDING -> RUNNING ->\nSUCCEEDED | FAILED | REPLANNING\npolls VLMProgressHead"]
+        LLMRepln["LLM Gateway replan\nllm_gateway/protocol.py\nstall -> new GoalVector"]
+
+        Metrics3["Prometheus families (Tier C):\nmousedroid_cloud_weight_update_*\nmousedroid_safety_action_clamps\nmousedroid_mission_state_transitions\nmousedroid_mission_replans\nmousedroid_mission_active_duration_seconds"]
+    end
+
+    HFHub2 -. "periodic poll\ncfg.cloud.weight_update.poll_interval_s" .-> WUPoller
+    WUPoller --> OTACache
+    WUPoller -- "produces" --> PendingUpdate
+    PendingUpdate -. "consumed once per tick" .-> ApplySwap
+
+    ProjectAction -.-> SafetyProj
+    PostTick -.-> MissionLC
+    MissionLC -. "REPLANNING + within budget" .-> LLMRepln
+    LLMRepln -- "new GoalVector" --> MissionLC
+
+    TickBody -- "emits metrics" --> Metrics3
+```
+
+**Default state (out-of-the-box deployment):**
+
+| Config flag | Default | Effect |
+|---|---|---|
+| `cfg.cloud.weight_update.poll_interval_s` | `0.0` | Poller never constructed — byte-identical pre-C1 |
+| `cfg.safety.projection.enabled` | `false` | `_maybe_project_action` is a no-op pass-through |
+| `cfg.mission.replan_enabled` | `false` | `MissionLifecycle.tick` short-circuits, no LLM calls |
+| `cfg.cloud.weight_update.reset_state_on_swap` | `true` | Recurrent state zero-reset on world-model swap (`torch.zeros_like(...)` preserves device + dtype) |
+| `cfg.rover.reward` | `None` | Isaac Lab env raises `ValueError` only when explicitly built |
+
+**Safety invariants enforced by the tick ordering:**
+
+1. **Hard E-stop short-circuits everything**: `emergency_stop_check` runs BEFORE the world model + policy, so a safety-context emergency never even reaches `_select_action`.
+2. **Cloud swap timing**: `_apply_pending_weight_update` runs AFTER `_select_action` returns. The current tick saw ONE consistent weight set for both `_update_world_model` and `_select_action`. The swap's `_h` / `_z` / `_prev_action` reset uses `torch.zeros_like(...)` so CUDA-resident state stays on its original device.
+3. **Soft safety projection covers all branches**: `_maybe_project_action` wraps the `_select_action` return value at a single seam in `tick()`, so all four `_select_action` return paths (cognitive / VLA / VLA-strict-timeout / nav_agent) are clamped uniformly — no learned policy variant can leak an unsafe action.
+4. **Per-job cloud idempotency**: `shard_consumed_marker` blob in GCS is checked at startup and written ONLY on successful trainer completion. Failed runs remain re-runnable; successful runs short-circuit re-invocations.
+
+See:
+
+- ADR-010 (`docs/architecture/ADR-010-cloud-weight-update-ota.md`) — C1 cloud OTA invariants
+- ADR-011 (`docs/architecture/ADR-011-mission-closed-loop-safety-projection.md`) — C2 safety projection + mission lifecycle rationale (geometric over Lagrangian over masking)
+- ADR-009 (`docs/architecture/ADR-009-isaac-lab-phase-b.md`) — C4 Isaac Lab env body + RoverRewardConfig (amended post-merge)
+
+---
+
 ## Level 4 — Code: Dependency Injection Pattern
 
 Every interface is a `@runtime_checkable Protocol`. Factory functions are the only place that branch on platform:
