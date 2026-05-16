@@ -8,7 +8,19 @@
 #   * Dockerfile.jetson uses nvcr.io/nvidia/l4t-* (ARM64, JetPack-only).
 #     Those images won't run on Vertex AI's x86_64 workers.
 #   * Cloud workers don't need GPIO / serial / face-display drivers; this
-#     image trims the runtime to the offline-RL trainer + HF Hub uploader.
+#     image trims the runtime to the offline-RL trainer.
+#
+# What this image does today (Tier C1):
+#   * Runs ``training.train_offline_rl`` (CQL/IQL offline RL).
+#   * Honours the ``--shard-consumed-marker-uri`` GCS idempotency marker.
+#
+# What this image does NOT yet do (deferred follow-up):
+#   * Push trained artifacts to HuggingFace Hub. The upload module
+#     (``training/upload_weights.py``) does not exist yet; this image
+#     will gain HF Hub support together with that module + the
+#     ``--push-to-hf`` / ``--hf-repo-id`` / ``--hf-artifact-filename``
+#     trainer flags. Until then, trainer output stays in GCS.
+#     (Copilot 3253430590.)
 #
 # Build:  docker build -f docker/Dockerfile.cloud -t mousedroid-cloud:tier-c1 .
 # Run:    docker run --rm --gpus all -v /path/to/data:/data mousedroid-cloud:tier-c1
@@ -17,7 +29,7 @@
 FROM pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime
 
 LABEL maintainer="Ian Cruickshank"
-LABEL description="MouseDroidAGI cloud training — Vertex AI offline RL + HF Hub push"
+LABEL description="MouseDroidAGI cloud training — Vertex AI offline RL (HF Hub upload deferred to follow-up PR)"
 LABEL version="0.3.0"
 LABEL tier="C1"
 

@@ -393,22 +393,17 @@ def test_verify_sha256_handles_os_error_on_read(tmp_path, monkeypatch, capsys):
     crash the poller. Verified by patching ``Path.open`` to raise OSError
     after the existence check passed.
     """
-    import builtins
+    from pathlib import Path as _Path
 
     f = tmp_path / "weights.bin"
     f.write_bytes(b"data")
     digest = _sha256(b"data")
 
-    original_open = builtins.open
-
-    def _failing_open(file, *args, **kwargs):
-        if str(file).endswith("weights.bin") and (args and args[0] == "rb"):
-            raise OSError("simulated transient FS error")
-        return original_open(file, *args, **kwargs)
-
-    # Patch Path.open since verify_sha256 calls path.open("rb").
-    from pathlib import Path as _Path
-
+    # Patch Path.open since verify_sha256 calls ``path.open("rb")``.
+    # Capture the original via the descriptor protocol so the fake can
+    # delegate to it for any unrelated paths (none in this test, but
+    # keeping the delegation prevents side-effects if a future
+    # implementation does extra reads).
     original_path_open = _Path.open
 
     def _failing_path_open(self, *args, **kwargs):

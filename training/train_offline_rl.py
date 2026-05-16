@@ -530,21 +530,17 @@ def main() -> None:
         default=None,
         help="Resume from checkpoint path",
     )
-    # Tier C1 cloud-training flags. All optional so legacy local invocations
-    # remain byte-identical. The HF-Hub upload flags (--push-to-hf,
-    # --hf-repo-id, --hf-artifact-filename) were intentionally NOT shipped
-    # in C1 because the concrete upload implementation
-    # (``training/upload_weights.py``) does not yet exist — exposing the
-    # flags now would silently no-op and mislead operators. The flags will
-    # land in a follow-up PR together with the upload module; see ADR-010
-    # and the Tier C plan §"Out-of-Scope Items". (Copilot 3253293666 /
-    # 3253310017 / 3253293671 / 3253293675 / 3253310025.)
-    parser.add_argument(
-        "--lmdb-shards-gcs-prefix",
-        type=str,
-        default=None,
-        help="GCS prefix that holds Jetson-exported LMDB shards (Tier C1).",
-    )
+    # Tier C1 cloud-training flag. Only ``--shard-consumed-marker-uri`` is
+    # actually wired into the trainer today — the HF-Hub upload flags
+    # (--push-to-hf, --hf-repo-id, --hf-artifact-filename) AND the LMDB
+    # shard-prefix flag were intentionally NOT shipped in C1 because the
+    # concrete upload module (``training/upload_weights.py``) + shard
+    # iteration loop (which would consume ``--lmdb-shards-gcs-prefix``)
+    # do not yet exist. Exposing parsed-but-unused flags would silently
+    # no-op and mislead operators. The flags will land in a follow-up PR
+    # together with their implementations; see ADR-010 and the Tier C
+    # plan §"Out-of-Scope Items". (Copilot 3253293666 / 3253310017 /
+    # 3253293671 / 3253293675 / 3253310025 / 3253430586.)
     parser.add_argument(
         "--shard-consumed-marker-uri",
         type=str,

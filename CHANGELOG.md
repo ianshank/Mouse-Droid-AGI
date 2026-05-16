@@ -60,14 +60,18 @@ block merges.
 
 ### Added — Tier C1: Closed-loop cloud retraining + OTA weight updates
 
-Finishes the rover → GCP → HuggingFace Hub → Jetson loop. Cloud Vertex AI
-training jobs consume the experience LMDB shards exported by
-`cloud/experience_exporter.py`, retrain the policy, and upload to
-HuggingFace Hub. A new `WeightUpdatePoller` on the Jetson polls HF Hub for
-newer artifacts, downloads with **SHA-256 integrity verification**, and the
-orchestrator atomically swaps the live models **after** `_select_action`
-returns — so the current tick saw one consistent weight set for both
-`_update_world_model` and `_select_action`.
+Lands the **rover → GCP → Jetson** half of the closed-loop cloud-retraining
+flow. Cloud Vertex AI training jobs consume the experience LMDB shards
+exported by `cloud/experience_exporter.py` and retrain the policy; the
+trained artifact remains in GCS for an operator to publish to HuggingFace
+Hub manually via `huggingface-cli upload` (the in-process upload step + the
+`--push-to-hf` / `--hf-repo-id` / `--hf-artifact-filename` flags +
+`training/upload_weights.py` module are deferred to a follow-up PR — see
+ADR-010 §"Out-of-Scope"). A new `WeightUpdatePoller` on the Jetson polls
+HF Hub for newer artifacts (once published), downloads with **SHA-256
+integrity verification**, and the orchestrator atomically swaps the live
+models **after** `_select_action` returns — so the current tick saw one
+consistent weight set for both `_update_world_model` and `_select_action`.
 
 - **`src/mousedroid/cloud/protocol.py`** — added `PendingWeightUpdate`
   frozen dataclass and `WeightUpdatePollerProtocol`.
@@ -107,11 +111,15 @@ returns — so the current tick saw one consistent weight set for both
 - **`cloud/vertex_ai_job_spec.yaml`** — Vertex AI custom-training job
   spec template.
 - **`scripts/cloud_train.sh`** — container entry point.
-- **`training/train_offline_rl.py`** — added `--push-to-hf`,
-  `--lmdb-shards-gcs-prefix`, `--hf-repo-id`, `--hf-artifact-filename`,
-  and `--shard-consumed-marker-uri` flags. Idempotency: trainer checks
-  the GCS marker before running so duplicate Jetson uploads do not
-  double-train.
+- **`training/train_offline_rl.py`** — added `--shard-consumed-marker-uri`
+  flag (the only Tier C1 cloud flag actually wired today). Idempotency:
+  the trainer checks the GCS marker at startup and writes it on success
+  so duplicate Jetson re-uploads do NOT double-train. Per-job semantics
+  (single marker checked + written once per run), NOT per-shard. The
+  HF-upload flags (`--push-to-hf` / `--hf-repo-id` /
+  `--hf-artifact-filename`) and the LMDB-iteration flag
+  (`--lmdb-shards-gcs-prefix`) are deferred to the follow-up PR that
+  ships `training/upload_weights.py` + a shard-iteration loop.
 - **`docs/architecture/ADR-010-cloud-weight-update-ota.md`** — design
   rationale, swap-timing invariant, SHA-256 integrity contract.
 
