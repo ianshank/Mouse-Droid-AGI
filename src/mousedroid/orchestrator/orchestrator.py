@@ -761,9 +761,7 @@ class MouseDroidOrchestrator:
                 # can't see the upstream gate so we cast explicitly.
                 from mousedroid.config.schema import VLAActiveBackendLiteral
 
-                self._metrics.inc_vla_timeout(
-                    cast(VLAActiveBackendLiteral, self._cfg.vla.backend)
-                )
+                self._metrics.inc_vla_timeout(cast(VLAActiveBackendLiteral, self._cfg.vla.backend))
             _log.warning(
                 "vla_inference_timeout",
                 policy=self._vla_policy.name,
