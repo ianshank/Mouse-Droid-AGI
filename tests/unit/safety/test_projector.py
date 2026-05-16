@@ -207,6 +207,37 @@ def test_orchestrator_skips_projector_when_disabled() -> None:
     assert build_safety_projector(cfg) is None
 
 
+def test_build_safety_projector_returns_projector_when_enabled() -> None:
+    """build_safety_projector returns a GeometricSafetyProjector when enabled.
+
+    Covers the enabled branch of the Tier C2 / C2.1 factory helper —
+    the disabled branch is covered by ``test_orchestrator_skips_projector_when_disabled``.
+    """
+    from mousedroid.factory import build_safety_projector
+    from mousedroid.safety.projector import GeometricSafetyProjector
+    from mousedroid.safety.projector_protocol import SafetyActionProjectorProtocol
+
+    cfg = Settings(mock_hardware=True)
+    cfg.safety.projector.enabled = True
+    projector = build_safety_projector(cfg)
+    assert projector is not None
+    assert isinstance(projector, GeometricSafetyProjector)
+    assert isinstance(projector, SafetyActionProjectorProtocol)
+
+
+def test_build_safety_projector_threads_metrics_when_supplied() -> None:
+    """build_safety_projector forwards the optional metrics registry."""
+    from mousedroid.config.schema import MetricsConfig
+    from mousedroid.factory import build_safety_projector
+    from mousedroid.telemetry.metrics import MetricsRegistry
+
+    cfg = Settings(mock_hardware=True)
+    cfg.safety.projector.enabled = True
+    metrics = MetricsRegistry(MetricsConfig())
+    projector = build_safety_projector(cfg, metrics=metrics)
+    assert projector is not None
+
+
 # ---------------------------------------------------------------------------
 # Branch-coverage regression (3) — verify the projector seam in tick() runs
 # regardless of which _select_action return site produced the action.

@@ -234,3 +234,51 @@ async def test_lifecycle_emits_state_transition_metrics() -> None:
     assert 'from_state="running",to_state="succeeded"' in rendered
     # Terminal SUCCEEDED also records the active duration histogram.
     assert "mission_active_duration_seconds_count 1" in rendered
+
+
+# ---------------------------------------------------------------------------
+# Factory wiring — build_mission_lifecycle gates on cfg.mission.replan_enabled
+# ---------------------------------------------------------------------------
+
+
+def test_build_mission_lifecycle_returns_none_when_disabled() -> None:
+    """build_mission_lifecycle returns None when cfg.mission.replan_enabled=False."""
+    from mousedroid.config.schema import Settings
+    from mousedroid.factory import build_mission_lifecycle
+
+    cfg = Settings(mock_hardware=True)
+    assert cfg.mission.replan_enabled is False
+    assert build_mission_lifecycle(cfg) is None
+
+
+def test_build_mission_lifecycle_returns_lifecycle_when_enabled() -> None:
+    """build_mission_lifecycle returns a MissionLifecycle when enabled."""
+    from mousedroid.config.schema import Settings
+    from mousedroid.factory import build_mission_lifecycle
+
+    cfg = Settings(mock_hardware=True)
+    cfg.mission.replan_enabled = True
+    lifecycle = build_mission_lifecycle(cfg)
+    assert lifecycle is not None
+    assert isinstance(lifecycle, MissionLifecycle)
+
+
+def test_build_mission_lifecycle_threads_dependencies() -> None:
+    """build_mission_lifecycle wires task_tracker / vlm_progress / replanner / metrics."""
+    from mousedroid.config.schema import MetricsConfig, Settings
+    from mousedroid.factory import build_mission_lifecycle
+    from mousedroid.telemetry.metrics import MetricsRegistry
+
+    cfg = Settings(mock_hardware=True)
+    cfg.mission.replan_enabled = True
+    metrics = MetricsRegistry(MetricsConfig())
+    vlm = _StubVLM([0.9])
+    lifecycle = build_mission_lifecycle(
+        cfg,
+        task_tracker=None,
+        vlm_progress=vlm,  # type: ignore[arg-type]
+        replanner=None,
+        metrics=metrics,
+    )
+    assert lifecycle is not None
+    assert isinstance(lifecycle, MissionLifecycle)
