@@ -1,0 +1,48 @@
+# =============================================================================
+# Vertex AI Custom Training Job — Tier C1 closed-loop cloud retraining.
+# =============================================================================
+# Applied via:
+#   gcloud ai custom-jobs create \
+#     --region=us-central1 \
+#     --display-name=mousedroid-cloud-train \
+#     --config=cloud/vertex_ai_job_spec.yaml
+#
+# Operator must set:
+#   * imageUri — pushed Dockerfile.cloud image (e.g. gcr.io/<project>/mousedroid-cloud:tier-c1)
+#   * the GCS bucket name in args (replace ``REPLACE_BUCKET``) and pinned
+#     ``shard_consumed_marker`` prefix.
+#   * HUGGINGFACE_HUB_TOKEN Vertex AI secret (Secret Manager binding).
+#
+# Idempotency contract (ADR-010): the trainer checks ``shard_consumed_marker``
+# in GCS before processing each LMDB shard so Jetson exporter restarts that
+# re-upload shard N do NOT double-train.
+# =============================================================================
+workerPoolSpecs:
+  - machineSpec:
+      machineType: n1-standard-8
+      acceleratorType: NVIDIA_TESLA_T4
+      acceleratorCount: 1
+    replicaCount: 1
+    containerSpec:
+      imageUri: REPLACE_GCR_PATH/mousedroid-cloud:tier-c1
+      env:
+        - name: MOUSEDROID_CLOUD_TRAIN_CONFIG
+          value: /etc/mousedroid/cloud_train.yaml
+        - name: MOUSEDROID_SHARD_CONSUMED_MARKER_PREFIX
+          value: gs://REPLACE_BUCKET/cloud_train/shard_consumed_marker/
+        - name: HUGGINGFACE_HUB_TOKEN
+          # Use Secret Manager via Workload Identity in production.
+          value: REPLACE_HF_TOKEN_SECRET_BINDING
+      args:
+        - --lmdb-shards-gcs-prefix
+        - gs://REPLACE_BUCKET/experience_shards/
+        - --hf-repo-id
+        - ianshank/mousedroid-policy-v2
+        - --hf-artifact-filename
+        - policy.onnx
+
+# Optional: scheduled execution. Operators uncomment + customise once they're
+# ready to run nightly retraining.
+# schedule:
+#   cron: "0 3 * * *"  # 03:00 UTC nightly
+#   timeZone: UTC

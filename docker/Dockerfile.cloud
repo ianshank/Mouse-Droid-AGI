@@ -1,0 +1,69 @@
+# =============================================================================
+# MouseDroidAGI — Cloud Training Container (Tier C1)
+# =============================================================================
+# Base: pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime (x86_64)
+# Target: Vertex AI custom training jobs (NVIDIA T4 / L4 / A100 GPUs)
+#
+# Why a separate Dockerfile from Dockerfile.jetson:
+#   * Dockerfile.jetson uses nvcr.io/nvidia/l4t-* (ARM64, JetPack-only).
+#     Those images won't run on Vertex AI's x86_64 workers.
+#   * Cloud workers don't need GPIO / serial / face-display drivers; this
+#     image trims the runtime to the offline-RL trainer + HF Hub uploader.
+#
+# Build:  docker build -f docker/Dockerfile.cloud -t mousedroid-cloud:tier-c1 .
+# Run:    docker run --rm --gpus all -v /path/to/data:/data mousedroid-cloud:tier-c1
+# =============================================================================
+
+FROM pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime
+
+LABEL maintainer="Ian Cruickshank"
+LABEL description="MouseDroidAGI cloud training — Vertex AI offline RL + HF Hub push"
+LABEL version="0.3.0"
+LABEL tier="C1"
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# ---------------------------------------------------------------------------
+# System dependencies — minimal: we want the layer cache to stay warm.
+# ---------------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        git \
+        libgl1 \
+        && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/mousedroid
+
+# Copy package metadata first so the dependency install layer is cached
+# until pyproject.toml actually changes.
+COPY pyproject.toml ./
+COPY README.md ./
+COPY src ./src
+
+# Install the package + cloud-training extras. ``[dev,vla,onnx_world_model]``
+# pulls in pytest (smoke tests run inside the container), the VLA stack,
+# and onnxruntime for the SHA-256 + ONNX export validation step.
+RUN pip install --upgrade pip && \
+    pip install -e ".[dev,vla,onnx_world_model]"
+
+# Copy the rest of the repo (training scripts, configs).
+COPY training ./training
+COPY scripts ./scripts
+COPY config ./config
+
+# Vertex AI mounts operator-provided GCS shards under /gcs/<bucket>/.
+# Default training config path — operator overrides at run-time.
+ENV MOUSEDROID_CONFIG_DIR=/etc/mousedroid \
+    MOUSEDROID_CLOUD_TRAIN_CONFIG=/etc/mousedroid/cloud_train.yaml
+
+# ---------------------------------------------------------------------------
+# Entry point — driven by scripts/cloud_train.sh so the container can be
+# shelled into for debugging without re-pointing the training command.
+# ---------------------------------------------------------------------------
+ENTRYPOINT ["bash", "/opt/mousedroid/scripts/cloud_train.sh"]
