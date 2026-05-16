@@ -6,7 +6,7 @@ returns the correct implementation based on ``Settings``.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -936,6 +936,11 @@ def build_weight_update_poller(
 ) -> WeightUpdatePollerProtocol | None:
     """Build the optional Tier C1 OTA weight-update poller.
 
+    Deprecated: prefer :func:`build_weight_update_pollers` (Tier C1.2) which
+    returns a ``Mapping[str, WeightUpdatePollerProtocol]`` keyed by
+    ``engine_type``. Retained for backwards compatibility with external
+    callers; one minor-version window.
+
     Returns ``None`` (poller disabled) when
     ``cfg.cloud.weight_update.poll_interval_s == 0.0`` — the default — so
     deployments without OTA configured produce byte-identical pre-Tier-C1
@@ -980,6 +985,61 @@ def build_weight_update_poller(
         poll_interval_s=cfg.cloud.weight_update.poll_interval_s,
     )
     return poller
+
+
+def build_weight_update_pollers(
+    cfg: Settings,
+    *,
+    metrics: MetricsRegistry | None = None,
+) -> Mapping[str, WeightUpdatePollerProtocol]:
+    """Build a mapping of ``engine_type`` -> poller (Tier C1.2).
+
+    Returns ``{}`` when ``cfg.cloud.weight_update.poll_interval_s == 0.0``,
+    preserving byte-identical pre-Tier-C1 behaviour. Always includes the
+    ``"policy"`` entry when polling is enabled; includes ``"world_model"``
+    only when ``cfg.cloud.weight_update.world_model_enabled is True``.
+
+    Dict insertion order is ``policy`` -> ``world_model`` so the orchestrator
+    consumes pending updates deterministically.
+
+    Args:
+        cfg: Root settings.
+        metrics: Shared metrics registry; forwarded to each poller for
+            download / mismatch / latency observability.
+
+    Returns:
+        Mapping from ``engine_type`` to its
+        :class:`WeightUpdatePollerProtocol` implementation. Empty when OTA
+        polling is disabled.
+    """
+    if cfg.cloud.weight_update.poll_interval_s <= 0.0:
+        return {}
+
+    from mousedroid.cloud.weight_update_poller import HuggingFaceWeightUpdatePoller
+
+    pollers: dict[str, WeightUpdatePollerProtocol] = {
+        "policy": HuggingFaceWeightUpdatePoller(
+            cfg.cloud.weight_update,
+            repo_id=cfg.cloud.weight_update.policy_repo_id,
+            filename=cfg.cloud.weight_update.policy_filename,
+            engine_type="policy",
+            metrics=metrics,
+        ),
+    }
+    if cfg.cloud.weight_update.world_model_enabled:
+        pollers["world_model"] = HuggingFaceWeightUpdatePoller(
+            cfg.cloud.weight_update,
+            repo_id=cfg.cloud.weight_update.world_model_repo_id,
+            filename=cfg.cloud.weight_update.world_model_filename,
+            engine_type="world_model",
+            metrics=metrics,
+        )
+    _log.info(
+        "weight_update_pollers_built",
+        engines=list(pollers.keys()),
+        poll_interval_s=cfg.cloud.weight_update.poll_interval_s,
+    )
+    return pollers
 
 
 def build_weight_update_loader(
