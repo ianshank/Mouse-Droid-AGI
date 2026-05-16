@@ -8,6 +8,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — Tier B1: Ten-Pillars nightly promoted from advisory to required check
+
+After the Tier A sprint landed (PRs #85-#89), the `jetson-nightly.yml`
+workflow ran in advisory mode for 7 consecutive green nights. This PR
+flips it to a required check on `main`:
+
+- **`.github/workflows/jetson-nightly.yml`** — removed
+  `continue-on-error: true` from the `ten-pillars` job block.
+- **`.github/workflows/jetson-nightly.yml`** — changed the `Report status`
+  step's trailing `exit 0` to `exit "${PILLAR_RC:-1}"` so the workflow's
+  overall exit code reflects the captured `validate_pillar.sh` exit
+  status. Without this second edit, removing the advisory flag would have
+  no effect on branch protection — the workflow stayed green from the
+  swallowed `exit 0`.
+- **`docs/jetson-runner-setup.md`** — replaced the "Promotion to Required
+  Check" runbook with a landed-status callout, dated exit-code semantics,
+  rollback path, and a fresh "Promotion Observation Log" table for the
+  operator to fill in during the 7-night window.
+
+**Operator follow-up (out of PR scope):** configure GitHub branch
+protection at
+<https://github.com/ianshank/Mouse-Droid-AGI/settings/branches> to require
+the **Ten Pillars on Jetson** check. After this UI step lands, merges to
+`main` are blocked when:
+
+- Any blocking pillar (`safety`, `world_model`, `memory`, `cognitive`,
+  `reward`) reports FAIL → `PILLAR_RC=1` → exit 1.
+- A precondition error fires (Docker container down, etc.) →
+  `PILLAR_RC=2` → exit 2.
+
+Rollback: revert this PR + disable the required-check setting in
+branch-protection UI.
+
 ### Added — PR-A2.1: Writer-side instrumentation activating PR-A2 metrics
 
 Closes the loop on Tier A. PR-A2 (PR #87) shipped the registry helpers

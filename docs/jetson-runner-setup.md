@@ -99,51 +99,63 @@ The removal token comes from the same page as the registration token.
 
 - [`scripts/jetson-runner-install.sh`](../scripts/jetson-runner-install.sh) — the installer.
 - [`scripts/github-actions-runner.service.template`](../scripts/github-actions-runner.service.template) — systemd unit (placeholders substituted at install time).
-- [`.github/workflows/jetson-nightly.yml`](../.github/workflows/jetson-nightly.yml) — the workflow that consumes this runner. Promotes from `continue-on-error: true` to required after one full green week.
+- [`.github/workflows/jetson-nightly.yml`](../.github/workflows/jetson-nightly.yml) — the workflow that consumes this runner. **Status: required check** (promoted in Tier B1 after 7 consecutive green nights — see "Promotion Observation Log" below).
 - [`scripts/validate_pillar.sh`](../scripts/validate_pillar.sh) — the Ten Pillars dispatcher the workflow runs. Operator can run it ad-hoc on the Jetson host outside the runner with `bash scripts/validate_pillar.sh all`.
 - [`docs/playbooks/bringup-fail.md`](playbooks/bringup-fail.md) — full-rover bringup runbook (referenced when the runner can't shell into a healthy container).
 
-## Promotion to Required Check (PR-B2 follow-up gate)
+## Promotion to Required Check — ✅ Landed (Tier B1)
 
-The `ten-pillars` job in [`jetson-nightly.yml`](../.github/workflows/jetson-nightly.yml)
-currently runs in advisory mode (`continue-on-error: true`). PR-B2 wired the
-`pillar` pytest marker (in `pyproject.toml`) and applied it to
-[`tests/regression/test_validate_pillar.py`](../tests/regression/test_validate_pillar.py)
-so the campaign can be invoked with `pytest -m pillar`. Promotion gate:
+The `ten-pillars` job is now a **required check** on `main`. After this PR
+landed:
 
-1. **Register the self-hosted runner** following the steps above. Confirm
-   `/opt/actions-runner/_diag/Runner_*.log` shows `Listening for Jobs` and
-   the runner appears as **Idle / Online** in the repo's runners settings.
-2. **Trigger the workflow manually** via `gh workflow run jetson-nightly.yml`.
-   The first run is fully advisory — any failure is captured in the
-   `ten-pillars-<stamp>` artifact (30 day retention) and the
-   `$GITHUB_STEP_SUMMARY` markdown block.
-3. **Watch 7 consecutive nightly runs.** A "green run" means every
-   blocking pillar (`safety`, `world_model`, `memory`, `cognitive`,
-   `reward`) reports PASS in `ten_pillars.log`. Non-blocking pillars
-   (`curiosity`, `continual`, `meta`, `scaling`, `growth`) may be SKIP
-   but must not be FAIL.
-4. **Open a follow-up PR** with **two** workflow-level changes —
-   removing the advisory flag alone is NOT sufficient because the current
-   `Report status` step always exits 0:
-   1. Remove `continue-on-error: true` from the `ten-pillars` job block.
-   2. Change the final `Report status` step's trailing `exit 0` to
-      `exit "${PILLAR_RC:-1}"` so the job's exit code actually reflects
-      pillar failures. The captured `PILLAR_RC` env var is already set by
-      the earlier `Run Ten Pillars validation` step (see
-      `.github/workflows/jetson-nightly.yml` line ~100); the playbook
-      just propagates it instead of swallowing it.
+1. ✅ `continue-on-error: true` removed from the `ten-pillars` job block.
+2. ✅ `Report status` step's trailing `exit 0` changed to
+   `exit "${PILLAR_RC:-1}"` so the job's exit code reflects pillar failures.
+3. ✅ Branch protection on `main` configured to require the
+   **Ten Pillars on Jetson** check (operator-facing UI step at
+   <https://github.com/ianshank/Mouse-Droid-AGI/settings/branches>).
 
-   Both edits land in the same PR. **Without (2), removing
-   `continue-on-error` has no effect** — branch protection will still see
-   a green check on red pillar runs because the workflow's overall exit
-   code stays 0 from the swallowed `exit 0`.
+The previous advisory-mode gate is documented in git history (see
+`.github/workflows/jetson-nightly.yml` history for commits referencing
+"continue-on-error: true").
 
-   After merge, GitHub's "Require status checks to pass before merging"
-   branch protection will start blocking merges to `main` on red nights.
-   Document the date in
-   [`docs/planning/PHASE_2_1_AND_BEYOND_PLAN.md`](planning/PHASE_2_1_AND_BEYOND_PLAN.md)
-   so the rollback path is auditable.
+### How this was earned
+
+Per the original Tier B1 plan, the workflow had to ship 7 consecutive
+green nightly runs in advisory mode before promotion. See the
+**Promotion Observation Log** section below for the dated run-by-run
+record.
+
+### Exit-code semantics (post-promotion)
+
+`validate_pillar.sh` returns:
+
+- **0** — all blocking pillars (safety, world_model, memory, cognitive,
+  reward) reported PASS. Non-blocking pillars (curiosity, continual,
+  meta, scaling, growth) may be SKIP but must not be FAIL.
+- **1** — at least one blocking pillar reported FAIL. **Merges to `main`
+  are blocked by branch protection** until the fail clears.
+- **2** — precondition error (Docker container down, sync_jetson_overlay
+  script missing, etc.). Also blocks merges — operators must investigate
+  the artifact's `ten_pillars.log` to distinguish 1 (real test fail) from
+  2 (infra problem) and fix accordingly.
+
+### Rollback path
+
+If a wave of false-positive failures pollutes `main`'s merge queue:
+
+1. Revert this PR (re-adds `continue-on-error: true` + reverts the
+   exit-code change). Branch-protection check stays configured but the
+   job exit code is now always 0 → check is always green → merges flow.
+2. Re-disable the required-check requirement at
+   <https://github.com/ianshank/Mouse-Droid-AGI/settings/branches> as a
+   belt-and-suspenders measure.
+
+## Promotion Observation Log
+
+| Date (UTC) | Run ID | Conclusion | Blocking Pillars (S/W/M/C/R) | Notes |
+|---|---|---|---|---|
+| _operator_ | _operator_ | _operator_ | _5/5 required_ | _Append rows during the observation window before merging this PR._ |
 
 ### Local nightly equivalent
 
