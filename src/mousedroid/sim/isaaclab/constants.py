@@ -42,10 +42,21 @@ ROVER_WHEEL_JOINT_NAMES: Final[tuple[str, str, str, str]] = (
     "joint_wheel_rl",  # rear-left
     "joint_wheel_rr",  # rear-right
 )
-"""URDF joint names for the 4 continuous wheel revolutes. Order matches
-the action-vector layout passed to ``RoverIsaacLabEnv.step()`` — that is,
-``action[0]`` drives ``joint_wheel_fl``, ``action[1]`` drives
-``joint_wheel_fr``, and so on.
+"""URDF joint names for the 4 continuous wheel revolutes.
+
+**This is the actuator fan-out order**, not the policy action-vector
+layout. The policy action vector is mode-dependent and lives on
+:attr:`RoverActionConfig.action_dim` (2 for both supported modes —
+``differential`` and ``body_velocity`` — per ``_ROVER_ACTION_DIM_BY_MODE``
+in the schema). Phase B's ``RoverIsaacLabEnv.step()`` body fans out the
+incoming 2-D action onto these 4 wheel actuators in the same way
+:class:`MockRoverEnv` does: differential drive duplicates ``action[0]``
+into the FL+RL pair and ``action[1]`` into the FR+RR pair.
+
+The order ``(fl, fr, rl, rr)`` is the contract Phase B's fan-out builds
+on; reordering this tuple without also updating the env step body
+would route wheel commands to the wrong wheels. The test
+``test_wheel_joint_order_matches_actuator_fan_out`` pins the order.
 
 Length is guaranteed equal to :data:`ROVER_NUM_WHEELS` (4) — both come
 from the rover platform's single-source-of-truth and changing one
@@ -87,16 +98,26 @@ ROVER_OBSERVATION_KEYS: Final[tuple[str, ...]] = (
     "wheel_vel",
     "lidar",
 )
-"""Default observation dict keys emitted by ``RoverIsaacLabEnv.reset()``
-and ``.step()``. Mirrors :attr:`MockRoverEnv.observation_keys` exactly
-under the default :class:`RoverObservationConfig` so both backends are
-drop-in replacements at the orchestrator level.
+"""Observation dict keys emitted under the **default**
+:class:`RoverObservationConfig` (all four modality toggles enabled).
+Operators flipping any ``include_*`` toggle in the config get a
+different live observation set in both backends — the authoritative
+runtime source of truth is :meth:`RoverObservationConfig.enabled_keys`,
+which both ``MockRoverEnv`` and ``RoverIsaacLabEnv`` read at
+``__init__``.
 
-The list intentionally matches the default
-:meth:`RoverObservationConfig.enabled_keys` output **exactly** (no
-subset, no superset). Toggling a key on/off in the config flips it in
-both backends; the cross-backend contract test in
-``test_constants.py`` asserts that exact equality.
+This constant exists primarily for:
+  * Documentation in tests and ADRs (the "what does the rover emit
+    out of the box?" question)
+  * The cross-backend contract test
+    (:func:`test_observation_keys_match_mock_rover_env`) — which
+    confirms ``RoverIsaacLabEnv`` and ``MockRoverEnv`` agree under
+    the default config
+
+Non-default toggles (e.g. operator disables LiDAR) are NOT exercised
+by this constant; the contract test only validates the default-config
+case. Backend implementers should not branch on this tuple at runtime —
+read ``cfg.observation.enabled_keys()`` instead.
 
 **Excludes ultrasonic / HC-SR04 / arm / gripper** — the active rover
 production baseline is IMU + chassis pose + wheel velocity + LiDAR only.

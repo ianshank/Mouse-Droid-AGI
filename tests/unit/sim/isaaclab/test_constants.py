@@ -41,8 +41,9 @@ def urdf_root() -> ET.Element:
     if not _URDF_PATH.exists():
         pytest.skip(f"URDF not found at {_URDF_PATH}")
 
-    # version control; not untrusted input. stdlib ElementTree is the
-    # right tool here. defusedxml would add a runtime dep for no gain.
+    # The URDF lives under version control and is not untrusted input,
+    # so stdlib ElementTree is the right tool here. ``defusedxml`` would
+    # add a runtime dependency for no security gain on a known-safe file.
     tree = ET.parse(_URDF_PATH)  # noqa: S314
     return tree.getroot()
 
@@ -72,6 +73,34 @@ def test_wheel_joint_names_exist_in_urdf(urdf_root: ET.Element) -> None:
         )
 
 
+def test_wheel_joint_order_matches_actuator_fan_out(urdf_root: ET.Element) -> None:
+    """ROVER_WHEEL_JOINT_NAMES order is the actuator fan-out contract.
+
+    ``ROVER_WHEEL_JOINT_NAMES = (joint_wheel_fl, joint_wheel_fr,
+    joint_wheel_rl, joint_wheel_rr)`` — the order in which Phase B
+    fan-outs a differential-drive ``[left, right]`` policy action into
+    the four wheel actuators (left commands → ``joint_wheel_fl`` +
+    ``joint_wheel_rl``; right commands → ``joint_wheel_fr`` +
+    ``joint_wheel_rr``). If the constants tuple is reordered without
+    updating the env step body, wheel commands route to the wrong
+    wheels and the robot drives wrong.
+
+    This test pins the order by name pattern (fl→fr→rl→rr) so a swap
+    in the constants module is caught here, independent of the URDF's
+    own joint declaration order.
+    """
+    # Pattern-match: fl, fr, rl, rr — front-left, front-right,
+    # rear-left, rear-right. The fan-out logic in Phase B's env step
+    # body relies on this exact order.
+    expected_suffixes = ("fl", "fr", "rl", "rr")
+    for got, expected_suffix in zip(ROVER_WHEEL_JOINT_NAMES, expected_suffixes, strict=True):
+        assert got.endswith(f"_{expected_suffix}"), (
+            f"ROVER_WHEEL_JOINT_NAMES order broken: position for "
+            f"{expected_suffix!r} got {got!r}. Expected fl/fr/rl/rr order."
+        )
+    del urdf_root  # urdf_root fixture not needed; kept for fixture parity
+
+
 def test_sensor_link_names_exist_in_urdf(urdf_root: ET.Element) -> None:
     """Every ROVER_SENSOR_LINK_NAMES entry must appear in the URDF."""
     urdf_links = set(_urdf_link_names(urdf_root))
@@ -82,19 +111,27 @@ def test_sensor_link_names_exist_in_urdf(urdf_root: ET.Element) -> None:
         )
 
 
-def test_urdf_has_exactly_n_wheel_joints(urdf_root: ET.Element) -> None:
-    """The URDF must declare exactly ROVER_NUM_WHEELS continuous wheel joints.
+def test_urdf_continuous_joints_match_wheel_constants(urdf_root: ET.Element) -> None:
+    """URDF continuous-joint **set** must equal ROVER_WHEEL_JOINT_NAMES.
 
-    Catches the failure mode where a wheel is added or removed in the
-    URDF without updating the constants module.
+    Stronger than a bare count check: catches the failure mode where a
+    wheel joint is renamed in the URDF (or a non-wheel joint becomes
+    continuous) while the count stays at ROVER_NUM_WHEELS. Either of
+    those drifts breaks the actuator wiring Phase B builds on the
+    constants tuple.
     """
-    continuous_joints = [
+    continuous_joints = {
         j.attrib["name"] for j in urdf_root.findall("joint") if j.attrib.get("type") == "continuous"
-    ]
-    assert len(continuous_joints) == ROVER_NUM_WHEELS, (
-        f"URDF declares {len(continuous_joints)} continuous joints "
-        f"({continuous_joints!r}); constants expect {ROVER_NUM_WHEELS}"
+    }
+    expected = set(ROVER_WHEEL_JOINT_NAMES)
+    assert continuous_joints == expected, (
+        f"URDF continuous-joint set {sorted(continuous_joints)} != "
+        f"ROVER_WHEEL_JOINT_NAMES {sorted(expected)}. Either the URDF "
+        f"renamed/added/removed a wheel joint, or constants drifted."
     )
+    # And the count agrees with ROVER_NUM_WHEELS (defensive — guaranteed
+    # by the test above asserting ROVER_WHEEL_JOINT_NAMES length).
+    assert len(continuous_joints) == ROVER_NUM_WHEELS
 
 
 # ---------------------------------------------------------------------------
@@ -185,10 +222,42 @@ def test_observation_keys_match_mock_rover_env() -> None:
     )
 
 
-def test_imu_and_chassis_dims_imported_from_protocols() -> None:
-    """ROVER_IMU_DIM and ROVER_CHASSIS_POSE_DIM are re-exported, not redefined."""
-    from mousedroid.sim import protocols as sim_protocols
+def test_imu_and_chassis_dims_re_exported_from_protocols() -> None:
+    """ROVER_IMU_DIM and ROVER_CHASSIS_POSE_DIM are re-exported, not redefined.
 
-    assert ROVER_IMU_DIM is sim_protocols.ROVER_IMU_DIM
-    assert ROVER_CHASSIS_POSE_DIM is sim_protocols.ROVER_CHASSIS_POSE_DIM
-    assert ROVER_NUM_WHEELS is sim_protocols.ROVER_NUM_WHEELS
+    Uses value equality + identifier-by-identifier presence in the
+    ``isaaclab.constants`` module's globals — NOT ``is`` identity on the
+    integer values. CPython interns small integers (typically 0..256), so
+    ``ROVER_NUM_WHEELS is sim_protocols.ROVER_NUM_WHEELS`` evaluates to
+    True even when one side is a re-declared literal that happens to be
+    the same number, giving a false sense of "this is re-exported".
+
+    Instead this asserts: (a) the value matches and (b) the constants
+    module exposes the same identifier name as ``sim.protocols`` does.
+    A future PR that redefines ``ROVER_NUM_WHEELS = 4`` locally in
+    ``isaaclab.constants`` instead of re-importing it would still pass
+    a value check — but the import-graph contract is what we actually
+    want to pin. The ``__all__`` check below catches that drift.
+    """
+    from mousedroid.sim import protocols as sim_protocols
+    from mousedroid.sim.isaaclab import constants as isaaclab_constants
+
+    # Value equality: required regardless of import path.
+    assert ROVER_IMU_DIM == sim_protocols.ROVER_IMU_DIM
+    assert ROVER_CHASSIS_POSE_DIM == sim_protocols.ROVER_CHASSIS_POSE_DIM
+    assert ROVER_NUM_WHEELS == sim_protocols.ROVER_NUM_WHEELS
+
+    # Single-source-of-truth contract: each name in this module must be
+    # the same object reference as in sim.protocols (the import boundary
+    # passes the original int through unchanged because CPython caches
+    # module globals — but redefinition with a separate ``= N`` literal
+    # would land a new int object even when N matches).
+    assert isaaclab_constants.ROVER_IMU_DIM is sim_protocols.ROVER_IMU_DIM
+    assert isaaclab_constants.ROVER_CHASSIS_POSE_DIM is sim_protocols.ROVER_CHASSIS_POSE_DIM
+    assert isaaclab_constants.ROVER_NUM_WHEELS is sim_protocols.ROVER_NUM_WHEELS
+    # And the canonical names must appear in __all__.
+    for name in ("ROVER_IMU_DIM", "ROVER_CHASSIS_POSE_DIM", "ROVER_NUM_WHEELS"):
+        assert name in isaaclab_constants.__all__, (
+            f"{name} must be re-exported via __all__ to advertise the "
+            f"sim.protocols re-export contract."
+        )
