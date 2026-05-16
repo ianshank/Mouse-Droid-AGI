@@ -554,16 +554,16 @@ graph TD
         PendingUpdate["PendingWeightUpdate\n@dataclass(frozen=True)"]
 
         subgraph TickBody["Orchestrator.tick() (single coroutine, atomic swaps)"]
-            EmergencyStop["emergency_stop_check\nHARD short-circuit"]
             UpdateWM["_update_world_model\n(h, z) latent step"]
+            EmergencyStop["emergency_stop_check\nHARD short-circuit"]
             SelectAction["_select_action\n4 return branches:\ncognitive / VLA / VLA-strict / nav_agent"]
             ProjectAction["_maybe_project_action\nC2 seam: ONE call site,\nclamps ALL 4 branches"]
             ApplySwap["_apply_pending_weight_update\nC1 seam: POST select_action,\natomic ref swap + zeros_like state reset"]
             ExecuteAction["_execute_action\nESP32 motor command"]
             PostTick["POST_TICK hooks\nmission_lifecycle.tick(progress)"]
 
-            EmergencyStop --> UpdateWM
-            UpdateWM --> SelectAction
+            UpdateWM --> EmergencyStop
+            EmergencyStop --> SelectAction
             SelectAction --> ProjectAction
             ProjectAction --> ApplySwap
             ApplySwap --> ExecuteAction
