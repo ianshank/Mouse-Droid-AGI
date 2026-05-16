@@ -94,7 +94,10 @@ arm = [
 # ``_isaaclab_available()`` helper in that module and skip Isaac-Lab-only
 # cases with ``@pytest.mark.skipif(not _isaaclab_available(), ...)``.
 isaac = [
-    "isaaclab>=0.20",
+    # Tier C4 pins the upper bound — Isaac Lab tracks aggressive API
+    # iteration on its 0.x line; pinning <0.30 keeps the operator's
+    # Linux validation playbook (ADR-009 amendment) reproducible.
+    "isaaclab>=0.20,<0.30",
     "gymnasium>=0.29",
 ]
 hailo = [

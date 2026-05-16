@@ -12,7 +12,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from mousedroid.config.schema import RoverConfig, RoverSimConfig, Settings
+from mousedroid.config.schema import (
+    RoverConfig,
+    RoverRewardConfig,
+    RoverSimConfig,
+    Settings,
+)
 from mousedroid.factory import build_rover_env
 from mousedroid.sim.isaaclab import rover_env as rover_env_module
 from mousedroid.sim.isaaclab.rover_env import (
@@ -25,9 +30,21 @@ from mousedroid.sim.mock_rover_env import MockRoverEnv
 from mousedroid.sim.protocols import RoverEnvProtocol
 
 
-def _make_env():
+def _make_env(*, with_reward: bool = False):
+    """Construct an Isaac Lab env stub.
+
+    Args:
+        with_reward: If True, attach the C4 ``RoverRewardConfig`` block
+            so paths that bypass ``build()`` (the legacy stub tests)
+            still reach ``step()`` without tripping the new reward
+            presence check.
+    """
+    cfg = RoverConfig(
+        sim=RoverSimConfig(backend="isaac_lab"),
+        reward=RoverRewardConfig() if with_reward else None,
+    )
     return RoverIsaacLabEnv(
-        RoverConfig(sim=RoverSimConfig(backend="isaac_lab")),
+        cfg,
         wheel_radius_m=0.042,
         track_width_m=0.20,
     )
@@ -93,7 +110,9 @@ def test_build_succeeds_when_isaaclab_installed():
 def test_step_idx_increments_under_build_bypass(monkeypatch):
     """step_idx must increment monotonically to match MockRoverEnv parity."""
     monkeypatch.setattr(rover_env_module, "_isaaclab_available", lambda: True)
-    env = _make_env()
+    # Bypass build() but provide the reward block — step() requires it
+    # to compose the forward-velocity / collision reward (C4 wiring).
+    env = _make_env(with_reward=True)
     env._built = True  # bypass the real Isaac Lab build for the stub
     _obs, info = env.reset(seed=0)
     assert info["step_idx"] == 0

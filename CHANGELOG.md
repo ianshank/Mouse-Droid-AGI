@@ -134,6 +134,66 @@ placeholder for the C1 cloud OTA families is now a real assertion that
 all 4 families render in `generate_metrics_sample()` + per-label render
 contract tests.
 
+### Added — Tier C4: Isaac Lab env body (B3.2–B3.5) + `RoverRewardConfig`
+
+Replaces the three `TODO(Phase B)` markers in
+`src/mousedroid/sim/isaaclab/rover_env.py` (`build`, `reset`, `step`)
+with real Isaac Lab `ManagerBasedRLEnv`-style wiring. Ships the
+deferred `RoverRewardConfig` Pydantic block, 9 unit tests gated on
+`pytest.importorskip("isaaclab")`, and an ADR-009 amendment promoting
+the "PROPOSED" reward block to "implemented".
+
+- **`src/mousedroid/sim/isaaclab/rover_env.py`** — replaced the three
+  `TODO(Phase B)` markers. `build()` constructs the `SimulationContext`,
+  resolves the USD asset path from `cfg.sim.urdf_path`, and wires
+  actuators on `ROVER_WHEEL_JOINT_NAMES` + sensor handles on
+  `ROVER_SENSOR_LINK_NAMES`. `reset()` calls into the existing
+  `DomainRandomizer` (no duplication) and honours
+  `cfg.domain_randomization.enabled` (top-level, NOT
+  `cfg.sim.domain_randomization.enabled` — corrected per ADR-009
+  amendment). `step()` fans the 2-D differential-drive action onto 4
+  wheels in `[FL, FR, RL, RR] = [left, right, left, right]` order
+  (alternating layout, mirrors `MockRoverEnv._action_to_body_velocity`),
+  clips at `cfg.action.max_wheel_rad_s`, sub-steps `cfg.sim.decimation`
+  physics ticks, and computes reward via the new `RoverRewardConfig`
+  weights.
+- **`src/mousedroid/config/schema.py`** — added `RoverRewardConfig`
+  with `forward_velocity_weight: float = 0.01` and `collision_weight:
+  float = 0.1`. Optional on `RoverConfig` (`reward: RoverRewardConfig
+  | None = None`) so existing YAML files load byte-identically. The
+  Isaac Lab env raises a clear `ValueError` at `build()` time when
+  `cfg.rover.reward is None`, forcing operators to set the block
+  explicitly per ADR-009.
+- **`src/mousedroid/factory.py`** — threads `cfg.domain_randomization`
+  into `RoverIsaacLabEnv.__init__` as a keyword-only argument; logs
+  `dr_enabled` on the existing `rover_env_isaaclab_built` event.
+- **`tests/unit/sim/isaaclab/test_rover_env.py`** — 9 new unit tests
+  under `pytest.importorskip("isaaclab")` covering `build/reset/step`,
+  the gymnasium 5-tuple contract, action clipping, the 4-wheel
+  fan-out layout, domain randomization, the cross-backend wheel-layout
+  contract with `MockRoverEnv`, and a 50-step random-rollout
+  finiteness smoke check. Tests SKIP cleanly on CI hosts without
+  Isaac Lab; operator validates on Linux + Isaac Sim post-merge.
+- **`tests/unit/sim/test_rover_env_isaaclab.py`** — updated
+  `test_step_idx_increments_under_build_bypass` to set the new
+  reward block (the bypass skips `build()`, so the C4 ValueError
+  guard would otherwise fire from `step()`).
+- **`pyproject.toml`** — tightened the `[isaac]` extra to
+  `isaaclab>=0.20,<0.30` per the C4 risk-register entry (Isaac Lab
+  tracks aggressive API iteration on its 0.x line).
+- **`docs/architecture/ADR-009-isaac-lab-phase-b.md`** — promoted the
+  "PROPOSED" reward block to "IMPLEMENTED in Tier C4" with the actual
+  schema path; added operator validation playbook with the post-merge
+  test invocations; documented the
+  `cfg.sim.domain_randomization.enabled` → `cfg.domain_randomization.enabled`
+  amendment.
+
+No `mousedroid.arm.*` imports anywhere. No HC-SR04 / ultrasonic
+observation channels. `cfg.rover.reward = None` default preserves
+byte-identical pre-PR behaviour. `mypy --strict` clean on
+`src/mousedroid/sim/isaaclab/` + `src/mousedroid/config/schema.py` +
+`src/mousedroid/factory.py`.
+
 ### Changed — Tier B1: Ten-Pillars nightly — workflow-side promotion ready
 
 After the Tier A sprint landed (PRs #85-#89), the `jetson-nightly.yml`

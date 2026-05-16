@@ -1,10 +1,9 @@
 # ADR-009 — Isaac Lab Phase B (Real-Env Wiring for the Rover)
 
-**Status:** Accepted (foundation laid; full wiring iterates on operator-side
-Linux/Isaac Sim host)
-**Date:** 2026-05-16
-**Sprint:** Tier B Track B3 (sprint plan lives in the planning Linear
-project; cross-referenced from `docs/planning/IMPLEMENTATION_PLAN.md`)
+**Status:** Accepted (foundation + Tier C4 body wired; operator-on-Linux
+validation remains the Phase 5 gate)
+**Date:** 2026-05-16 (Tier C4 amendment)
+**Sprint:** Tier B Track B3 (foundation), Tier C Track C4 (body wiring)
 
 > **Note on numbering:** original sprint plan called this ADR-008. That
 > number was claimed by the World-Model ONNX Engine ADR being introduced
@@ -118,7 +117,7 @@ contract test, not a runtime gate.
   baseline (`CLAUDE.md` invariant).
 - Arm joint encoders — parked robot-arm platform.
 
-### Reward function (Phase B baseline — proposed config tree)
+### Reward function (Phase B baseline — implemented in Tier C4)
 
 Simple forward-progress baseline:
 
@@ -129,23 +128,32 @@ reward = (
 )
 ```
 
-> **Status: PROPOSED.** The config path `cfg.rover.reward.*` does NOT
-> exist in the current schema. The reward Pydantic block
-> (`RoverRewardConfig` or equivalent) ships in B3 Story 4 alongside the
-> `step()` body wiring. This ADR documents the intended shape so
-> operators can review the design ahead of the implementation PR.
+> **Status: IMPLEMENTED in Tier C4.** The
+> [`RoverRewardConfig`](../../src/mousedroid/config/schema.py)
+> Pydantic block ships alongside the `build/reset/step` body. The
+> field path is
+> [`cfg.rover.reward.forward_velocity_weight`](../../src/mousedroid/config/schema.py)
+> and
+> [`cfg.rover.reward.collision_weight`](../../src/mousedroid/config/schema.py)
+> as documented below.
 
-Proposed defaults:
-- `forward_velocity_weight: 0.01` (rewards ~1 m/s motion at +0.01 r/step)
-- `collision_weight: 0.1` (firm penalty for collision)
+Implemented defaults (Tier C4):
+- `forward_velocity_weight: float = 0.01` (rewards ~1 m/s motion at +0.01 r/step)
+- `collision_weight: float = 0.1` (firm penalty for collision frames)
+
+The reward block is **optional on `RoverConfig`** with a default of
+`None` so existing YAML files load byte-identically. The Isaac Lab
+env raises a clear `ValueError` at `build()` time when
+`cfg.rover.reward is None`, so operators set the block explicitly
+when they opt into the Isaac Lab backend.
 
 Rationale: Phase B's reward must be **cheap** (no learned VLM signals)
 so curriculum training can iterate fast. Richer reward shaping
 (instruction following, multi-objective) lands in Phase 5 via the
 existing `mousedroid.training.rover_reward` module.
 
-Both weights MUST be operator-tunable Pydantic fields in the final
-implementation. **No hardcoded reward weights.**
+Both weights are operator-tunable Pydantic fields — no hardcoded
+reward weights live inside `src/mousedroid/sim/isaaclab/`.
 
 ### Domain randomization
 
@@ -154,12 +162,20 @@ Phase 1 baseline (Pydantic block on `Settings`, not nested under
 `training`). The env's `reset()` calls into
 `mousedroid.training.domain_randomization` helpers — no duplication.
 
+> **Amendment (Tier C4):** earlier drafts of this ADR documented the
+> path as `cfg.sim.domain_randomization.enabled`. That is incorrect —
+> the runtime path threaded into `RoverIsaacLabEnv` by the factory is
+> `cfg.domain_randomization.enabled` (top-level on `Settings`). The
+> Isaac Lab env constructor takes the
+> `DomainRandomizationConfig` as a keyword-only argument; the factory
+> passes `cfg.domain_randomization` directly.
+
 Current defaults (per `Settings.domain_randomization` + `config/default.yaml`):
 `enabled: true`. Operators on hosts without Isaac Sim should set this
 to `false` for byte-identical pre-B3 mock-only runs; the env wiring
 respects the toggle so existing CI on mock hardware is unaffected.
 
-## What's in this PR (Foundation)
+## What's in this PR (Foundation + Tier C4 body)
 
 Limited to what's verifiable on a development workstation without
 Isaac Sim. Operator-side validation on Ubuntu 22.04 + Isaac Sim 4.5+
@@ -171,22 +187,24 @@ closes out the remaining sub-tasks.
 | URDF -> USD conversion script | ✅ Story 1 | `scripts/convert_urdf_to_usd.py` |
 | Conversion script smoke test (CI-skippable) | ✅ Story 1 | `tests/unit/sim/isaaclab/test_urdf_to_usd.py` |
 | ADR-009 documenting decisions | ✅ Story 6 | _this file_ |
+| `RoverIsaacLabEnv.build()` — scene + articulation + sensors | ✅ Tier C4 | `src/mousedroid/sim/isaaclab/rover_env.py` |
+| `RoverIsaacLabEnv.reset()` — domain randomization integration | ✅ Tier C4 | `src/mousedroid/sim/isaaclab/rover_env.py` |
+| `RoverIsaacLabEnv.step()` — action fan-out + reward + obs | ✅ Tier C4 | `src/mousedroid/sim/isaaclab/rover_env.py` |
+| `RoverRewardConfig` Pydantic block (defaults documented above) | ✅ Tier C4 | `src/mousedroid/config/schema.py` |
+| 9 unit tests under `pytest.importorskip("isaaclab")` | ✅ Tier C4 | `tests/unit/sim/isaaclab/test_rover_env.py` |
+| 50-step random-rollout liveness smoke check | ✅ Tier C4 (test 9/9) | `tests/unit/sim/isaaclab/test_rover_env.py::test_random_rollout_produces_finite_observations` |
 
-## What's deferred to a follow-up (operator-on-Linux PR)
+## What's deferred to a follow-up (operator-on-Linux validation)
 
 Each remaining sub-task requires a live Isaac Sim installation for
-end-to-end validation; writing the code on a Windows host without a way
-to test the Isaac Lab API calls is unsafe.
+end-to-end validation; the Tier C4 PR lands the code body but
+operator-on-Linux validation remains the gate for Phase 5.
 
-| Sub-task | Story | Owner |
-|---|---|---|
-| Commit `assets/rover/mse6_4wd.usd` (run conversion script once) | 1 | Operator |
-| `RoverIsaacLabEnv.build()` — scene + articulation + sensors | 2 | Operator |
-| `RoverIsaacLabEnv.reset()` — domain randomization integration | 3 | Operator |
-| `RoverIsaacLabEnv.step()` — action/observation mapping + reward | 4 | Operator |
-| 9 unit tests under `pytest.importorskip("isaaclab")` | 5 | Operator |
-| `IsaacLabRewardConfig` Pydantic block (defaults documented above) | 4 | Operator |
-| 50-step random-rollout liveness smoke check | 5 | Operator |
+| Sub-task | Owner |
+|---|---|
+| Commit `assets/rover/mse6_4wd.usd` (run conversion script once) | Operator |
+| Run all 9 unit tests under live `isaaclab` on Linux + Isaac Sim 4.5+ | Operator |
+| Confirm `test_random_rollout_produces_finite_observations` PASS (no NaN/Inf in obs over 50 steps) | Operator |
 
 The constants module + conversion script give the operator a
 production-ready starting point. The smoke test under
@@ -210,6 +228,38 @@ git add assets/rover/mse6_4wd.usd
 git commit -m "feat(sim): commit converted mse6_4wd.usd (B3 Story 1)"
 # 5. Run the smoke test (will no longer skip)
 pytest tests/unit/sim/isaaclab/test_urdf_to_usd.py -m slow -v
+```
+
+## Operator validation playbook (Tier C4 post-merge)
+
+Once the C4 PR lands, the operator runs the 9 unit tests on a Linux
+workstation with Isaac Sim installed. The tests are guarded by
+`pytest.importorskip("isaaclab")` so they SKIP cleanly on CI hosts
+(Windows / Jetson) where Isaac Lab is not installed.
+
+```bash
+# On Linux workstation with isaaclab installed:
+pip install -e ".[isaac]"
+# Confirm the .usd asset is present (operator commits it once per URDF
+# revision via scripts/convert_urdf_to_usd.py).
+ls assets/rover/mse6_4wd.usd
+
+# Run all 9 C4 tests. Expected: 9 PASSED.
+python -m pytest tests/unit/sim/isaaclab/test_rover_env.py -v \
+    --import-mode=importlib --no-cov
+
+# Run the 50-step random-rollout smoke check in isolation.
+python -m pytest \
+    tests/unit/sim/isaaclab/test_rover_env.py::TestRoverIsaacLabEnv::test_random_rollout_produces_finite_observations \
+    -v --import-mode=importlib --no-cov
+# Expected: PASSED. Surfaces NaN/Inf regressions in the build/reset/step body.
+
+# Cross-backend contract: same 2-D action -> same wheel velocities under
+# both MockRoverEnv and RoverIsaacLabEnv. Pins the [FL=L, FR=R, RL=L, RR=R]
+# fan-out layout.
+python -m pytest \
+    tests/unit/sim/isaaclab/test_rover_env.py::TestRoverIsaacLabEnv::test_observation_contract_matches_mock_rover_env \
+    -v --import-mode=importlib --no-cov
 ```
 
 ## Consequences
