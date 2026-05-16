@@ -35,6 +35,7 @@ from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import VLMProgressConfig
+    from mousedroid.telemetry.metrics import MetricsRegistry
 
 _log = get_logger(__name__)
 
@@ -117,6 +118,8 @@ class VLMProgressHead(nn.Module):
         self,
         cfg: VLMProgressConfig,
         backend: VLMProgressBackend | None = None,
+        *,
+        metrics: MetricsRegistry | None = None,
     ) -> None:
         super().__init__()
         self._cfg = cfg
@@ -135,6 +138,7 @@ class VLMProgressHead(nn.Module):
         self._instr_hashes: dict[str, str] = {}
         self._hits = 0
         self._misses = 0
+        self._metrics = metrics
         _log.info(
             "vlm_progress_head_init",
             cache_size=cfg.cache_size,
@@ -216,6 +220,8 @@ class VLMProgressHead(nn.Module):
         cached_id = self._id_cache.get(id_key)
         if cached_id is not None:
             self._hits += 1
+            if self._metrics is not None:
+                self._metrics.inc_vlm_cache_hit()
             return torch.tensor([[cached_id]], dtype=torch.float32, device=curr_obs.device)
 
         # Content cache (cross-tensor-instance reuse).
@@ -228,6 +234,8 @@ class VLMProgressHead(nn.Module):
         cached = self._cache.get(key)
         if cached is not None:
             self._hits += 1
+            if self._metrics is not None:
+                self._metrics.inc_vlm_cache_hit()
             value = cached
         else:
             with torch.no_grad():
@@ -238,6 +246,8 @@ class VLMProgressHead(nn.Module):
                 )
             self._cache[key] = value
             self._misses += 1
+            if self._metrics is not None:
+                self._metrics.inc_vlm_cache_miss()
             _log.debug(
                 "vlm_progress_cache_miss",
                 value=value,

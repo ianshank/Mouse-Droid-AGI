@@ -8,6 +8,84 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — PR-A2.1: Writer-side instrumentation activating PR-A2 metrics
+
+Closes the loop on Tier A. PR-A2 (PR #87) shipped the registry helpers
+and metric definitions; PR-B2 (PR #88) shipped the Grafana panels +
+Prometheus alert rules. Until this PR merged, all four PR-A2 metric
+families were registered-but-zero in production. After PR-A2.1, the
+dashboards populate the first time their respective code paths fire.
+
+- **`src/mousedroid/training/replay/lmdb_reader.py`** — `LMDBReplayReader`
+  accepts optional `metrics: MetricsRegistry | None = None`. On each
+  successful decode in `_read_chunk_with_env`, emits
+  `inc_replay_record("ok")`; on schema mismatch, emits
+  `inc_replay_record("schema_mismatch")` alongside the existing
+  `replay_schema_mismatch` structured log.
+- **`src/mousedroid/vla/policy.py`** — both `MockVLA` and `DistilledVLAOnnx`
+  accept optional `metrics`. Each `predict()` brackets inference with
+  `time.perf_counter()` and calls `observe_vla_inference_seconds(elapsed)`
+  **outside** the `torch.no_grad()` block (matches the existing
+  orchestrator timing convention at `orchestrator.py:733`). MockVLA also
+  emits (near-zero observation) so end-to-end test runs populate the
+  histogram for operator visibility on mock-hardware deployments.
+- **`src/mousedroid/orchestrator/orchestrator.py`** —
+  `MouseDroidOrchestrator` accepts optional `metrics`. `_try_vla_action()`
+  calls `metrics.inc_vla_timeout(cast(VLAActiveBackendLiteral, cfg.vla.backend))`
+  on the timeout branch. The mode value is guaranteed in
+  `VLAActiveBackendLiteral` because the policy-selector gate
+  short-circuits when `backend == "none"` (no `_try_vla_action` call in
+  that case). mypy can't see the upstream gate, so the cast is explicit.
+- **`src/mousedroid/reward/vlm_progress.py`** — `VLMProgressHead` accepts
+  optional `metrics`. Three cache decision branches in `_score_single`
+  each emit a guarded metric call alongside the existing `self._hits` /
+  `self._misses` counter bumps: identity-cache hit → `inc_vlm_cache_hit()`;
+  content-cache hit → `inc_vlm_cache_hit()`; cache miss →
+  `inc_vlm_cache_miss()`.
+- **`src/mousedroid/factory.py`** — `build_replay_reader`,
+  `build_vla_policy`, `_build_distilled_onnx_vla`, and `build_reward_model`
+  thread the optional `metrics: MetricsRegistry | None = None` parameter
+  through. The `MetricsRegistry` `TYPE_CHECKING` import was already in
+  place from the pre-existing `build_metrics_registry` factory; no new
+  imports required.
+
+**Test coverage** (16 new tests, all green):
+
+- `tests/unit/training/replay/test_lmdb_reader.py` (extended, +3): ok
+  outcome metric, schema-mismatch metric, no-op-when-`metrics=None`
+- `tests/unit/vla/test_policy.py` (extended, +2): MockVLA emits + no-op default
+- `tests/unit/vla/test_distilled_onnx.py` (extended, +2): DistilledVLAOnnx
+  emits + finite-value bound + no-op default
+- `tests/unit/orchestrator/test_policy_selector.py` (extended, +4):
+  timeout emits with `mode="mock"`, happy path silent, no-op when
+  `metrics=None`, timeout emits with `mode="distilled_onnx"`
+- `tests/unit/reward/test_vlm_progress.py` (extended, +4): miss emits,
+  identity-cache hit emits, content-cache hit emits, no-op default
+- `tests/integration/test_writer_side_instrumentation_http.py` (new, +1
+  parametrized over 2 cases): full `/metrics` HTTP scrape via aiohttp
+  `TestClient(TestServer(app))` against a real `TelemetryServer` +
+  `MetricsRegistry`; verifies all 4 PR-A2 families appear when
+  instrumentation is wired, AND verifies they're correctly omitted from
+  `/metrics` output when no observations fire
+- `tests/integration/test_writer_side_e2e_concurrent.py` (new, +2):
+  replay (async) + VLA (sync thread) + VLM (sync thread) fired in
+  parallel — counter totals exact under contention; mid-burst render
+  produces well-formed Prometheus exposition output
+- `tests/smoke/test_writer_side_metrics_smoke.py` (new, +1): in-process
+  smoke; <1s; `pytest -m smoke` selector picks it up so CI's smoke stage
+  catches wiring regressions before the slower integration suite runs
+- `tests/performance/test_instrumentation_overhead.py` (new, +2,
+  `slow`-marked): per-call overhead budget (default 1.15x;
+  `MOUSEDROID_INSTRUMENTATION_OVERHEAD_BUDGET` env override for slower
+  hardware)
+
+**Backwards compatibility:** Every new constructor parameter is
+`Optional[MetricsRegistry] = None`. Existing call sites that don't pass
+`metrics` continue to work unchanged. No schema additions. No log
+additions (every instrumentation site piggybacks on an existing
+structured event: `replay_schema_mismatch`, `vla_inference_seconds_dropped`,
+`vla_timeout`).
+
 ### Added — PR-B2: Ten-Pillars nightly regression net + Grafana visibility
 
 - **`pyproject.toml`** — new ``pillar`` pytest marker registered under

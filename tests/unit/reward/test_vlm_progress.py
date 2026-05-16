@@ -405,3 +405,86 @@ class TestFactoryWiring:
         cfg.reward.vlm_progress.enabled = True  # but weight stays 0
         model = build_reward_model(cfg)
         assert model.vlm_head is None
+
+
+# -- PR-A2.1: writer-side instrumentation for VLMProgressHead ------------
+
+
+class _StubMetrics:
+    """Captures inc_vlm_cache_hit / inc_vlm_cache_miss calls for assertion."""
+
+    def __init__(self) -> None:
+        self.hits = 0
+        self.misses = 0
+
+    def inc_vlm_cache_hit(self, amount: int = 1) -> None:
+        self.hits += amount
+
+    def inc_vlm_cache_miss(self, amount: int = 1) -> None:
+        self.misses += amount
+
+
+class TestVlmProgressMetrics:
+    """``VLMProgressHead`` emits cache hit/miss metrics through ``MetricsRegistry``."""
+
+    def test_miss_emits_inc_vlm_cache_miss(self) -> None:
+        cfg = VLMProgressConfig(cache_size=8)
+        backend = _CountingBackend()
+        metrics = _StubMetrics()
+        head = VLMProgressHead(cfg, backend=backend, metrics=metrics)
+
+        prev = torch.zeros(1, 4)
+        curr = torch.ones(1, 4)
+        head.score(prev, curr, instruction="go")
+
+        assert metrics.misses == 1
+        assert metrics.hits == 0
+
+    def test_identity_cache_hit_emits_inc_vlm_cache_hit(self) -> None:
+        """Repeat call with the same tensor objects → identity-cache hit."""
+        cfg = VLMProgressConfig(cache_size=8)
+        backend = _CountingBackend()
+        metrics = _StubMetrics()
+        head = VLMProgressHead(cfg, backend=backend, metrics=metrics)
+
+        prev = torch.zeros(1, 4)
+        curr = torch.ones(1, 4)
+        head.score(prev, curr, instruction="go")  # miss → populate both caches
+        head.score(prev, curr, instruction="go")  # identity-cache hit
+
+        assert metrics.misses == 1
+        assert metrics.hits == 1
+
+    def test_content_cache_hit_emits_inc_vlm_cache_hit(self) -> None:
+        """Different tensor objects with same content → content-cache hit."""
+        cfg = VLMProgressConfig(cache_size=8)
+        backend = _CountingBackend()
+        metrics = _StubMetrics()
+        head = VLMProgressHead(cfg, backend=backend, metrics=metrics)
+
+        prev = torch.zeros(1, 4)
+        curr = torch.ones(1, 4)
+        head.score(prev, curr, instruction="go")  # miss → populate content cache
+
+        # Fresh tensor objects with same content — identity-cache misses but
+        # content-cache hits.
+        prev2 = torch.zeros(1, 4)
+        curr2 = torch.ones(1, 4)
+        head.score(prev2, curr2, instruction="go")
+
+        assert metrics.misses == 1
+        assert metrics.hits == 1
+
+    def test_no_metrics_param_is_byte_identical(self) -> None:
+        """Constructing without ``metrics=`` preserves pre-PR-A2.1 behavior."""
+        cfg = VLMProgressConfig(cache_size=8)
+        backend = _CountingBackend()
+        head = VLMProgressHead(cfg, backend=backend)  # no metrics kwarg
+        prev = torch.zeros(1, 4)
+        curr = torch.ones(1, 4)
+        # Must not raise AttributeError on self._metrics.
+        result = head.score(prev, curr, instruction="go")
+        info = head.cache_info
+        assert info["misses"] == 1
+        assert info["hits"] == 0
+        assert result.shape == (1, 1)

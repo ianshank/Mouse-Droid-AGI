@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections import deque
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import torch
@@ -58,6 +58,7 @@ if TYPE_CHECKING:
     from mousedroid.sensing.protocol import ObservationProtocol
     from mousedroid.skills.delegator import SkillDelegator
     from mousedroid.telemetry.failure_recorder import FailureRecorder
+    from mousedroid.telemetry.metrics import MetricsRegistry
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
     from mousedroid.vla.policy import VLAPolicyProtocol
     from mousedroid.voice.protocol import VoiceEngineProtocol
@@ -107,6 +108,7 @@ class MouseDroidOrchestrator:
         failure_recorder: FailureRecorder | None = None,
         liveness_tracker: Any | None = None,
         mock_telemetry_source: Any | None = None,
+        metrics: MetricsRegistry | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -181,6 +183,11 @@ class MouseDroidOrchestrator:
                 When supplied, started after telemetry server during
                 ``start()`` and stopped just before it during ``stop()``
                 so the dashboard renders synthetic motion in mock mode.
+            metrics: Optional :class:`MetricsRegistry`. When supplied,
+                ``_try_vla_action()`` calls ``inc_vla_timeout(mode=cfg.vla.backend)``
+                on the timeout branch so operators see VLA fallback events
+                in Prometheus. ``None`` (default) preserves byte-identical
+                pre-PR-A2.1 behavior.
         """
         if not agents:
             msg = "At least one agent is required"
@@ -234,6 +241,7 @@ class MouseDroidOrchestrator:
         )
         self._liveness_tracker: Any | None = liveness_tracker
         self._mock_telemetry_source: Any | None = mock_telemetry_source
+        self._metrics = metrics
         self._running = False
         self._tick_count: int = 0
         self._consolidation_task: asyncio.Task[None] | None = None
@@ -745,11 +753,21 @@ class MouseDroidOrchestrator:
                 level="warning",
                 extra={"elapsed_s": round(elapsed, 4), "budget_s": round(budget, 4)},
             )
+            if self._metrics is not None:
+                # Cast is safe: the policy_selector gate at the caller
+                # guarantees ``self._vla_policy is not None``, which means
+                # ``cfg.vla.backend != "none"``. The runtime value belongs
+                # to :data:`VLAActiveBackendLiteral` by construction; mypy
+                # can't see the upstream gate so we cast explicitly.
+                from mousedroid.config.schema import VLAActiveBackendLiteral
+
+                self._metrics.inc_vla_timeout(cast(VLAActiveBackendLiteral, self._cfg.vla.backend))
             _log.warning(
                 "vla_inference_timeout",
                 policy=self._vla_policy.name,
                 elapsed_s=elapsed,
                 budget_s=budget,
+                mode=self._cfg.vla.backend,
             )
             return None
 

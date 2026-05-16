@@ -41,6 +41,7 @@ def _make_orchestrator(
     cfg: Settings,
     nav_action: torch.Tensor,
     vla_policy: object | None = None,
+    metrics: object | None = None,
 ) -> MouseDroidOrchestrator:
     world_model = MagicMock()
     world_model.observe_step.return_value = (
@@ -64,6 +65,7 @@ def _make_orchestrator(
         sensor_manager=AsyncMock(),
         cfg=cfg,
         vla_policy=vla_policy,  # type: ignore[arg-type]
+        metrics=metrics,  # type: ignore[arg-type]
     )
 
 
@@ -222,3 +224,97 @@ class TestVLATimeoutAndFallback:
         orch = _make_orchestrator(cfg=cfg, nav_action=torch.zeros(3), vla_policy=vla)
         out = orch._select_action(_ctx(), _make_observation(cfg), 0.0)
         assert torch.allclose(out, canned)
+
+
+# -- PR-A2.1: VLA timeout counter ----------------------------------------
+
+
+class _TimeoutMetrics:
+    """Captures inc_vla_timeout calls for assertion."""
+
+    def __init__(self) -> None:
+        self.timeout_calls: list[str] = []
+
+    def inc_vla_timeout(self, mode: str, amount: int = 1) -> None:
+        self.timeout_calls.append(mode)
+
+
+class TestVlaTimeoutMetric:
+    """``_try_vla_action`` emits ``inc_vla_timeout(mode=cfg.vla.backend)`` on timeout."""
+
+    def test_timeout_emits_counter_with_backend_mode(self) -> None:
+        cfg = Settings(mock_hardware=True)
+        cfg.loop.policy_selector = "auto"
+        cfg.loop.inference_timeout_s = 0.001
+        cfg.vla = VLAConfig(backend="mock", fallback_on_timeout=True)
+        slow = _SlowVLA(action_dim=cfg.model.action_dim, sleep_s=0.05)
+
+        metrics = _TimeoutMetrics()
+        orch = _make_orchestrator(
+            cfg=cfg,
+            nav_action=torch.zeros(cfg.model.action_dim),
+            vla_policy=slow,
+            metrics=metrics,
+        )
+        orch._select_action(_ctx(), _make_observation(cfg), 0.0)
+
+        assert metrics.timeout_calls == [
+            "mock"
+        ], f"expected one timeout call with mode='mock', got {metrics.timeout_calls!r}"
+
+    def test_happy_path_does_not_emit_timeout_counter(self) -> None:
+        """Fast VLA inference (under budget) must NOT call inc_vla_timeout."""
+        cfg = Settings(mock_hardware=True)
+        cfg.loop.policy_selector = "auto"
+        cfg.loop.inference_timeout_s = 1.0  # generous budget
+        cfg.vla = VLAConfig(backend="mock", fallback_on_timeout=True)
+        fast = MockVLA(action_dim=cfg.model.action_dim)
+
+        metrics = _TimeoutMetrics()
+        orch = _make_orchestrator(
+            cfg=cfg,
+            nav_action=torch.zeros(cfg.model.action_dim),
+            vla_policy=fast,
+            metrics=metrics,
+        )
+        orch._select_action(_ctx(), _make_observation(cfg), 0.0)
+
+        assert metrics.timeout_calls == []
+
+    def test_timeout_safe_when_metrics_none(self) -> None:
+        """Timeout branch must not crash when no MetricsRegistry is wired."""
+        cfg = Settings(mock_hardware=True)
+        cfg.loop.policy_selector = "auto"
+        cfg.loop.inference_timeout_s = 0.001
+        cfg.vla = VLAConfig(backend="mock", fallback_on_timeout=True)
+        slow = _SlowVLA(action_dim=cfg.model.action_dim, sleep_s=0.05)
+
+        # No metrics kwarg — orchestrator stores None.
+        orch = _make_orchestrator(
+            cfg=cfg,
+            nav_action=torch.zeros(cfg.model.action_dim),
+            vla_policy=slow,
+        )
+        # Must not raise AttributeError on self._metrics.
+        out = orch._select_action(_ctx(), _make_observation(cfg), 0.0)
+        # Action returned must equal nav fallback shape (timeout path).
+        assert out.shape == (cfg.model.action_dim,)
+
+    def test_timeout_emits_with_distilled_onnx_mode(self) -> None:
+        """When backend is ``distilled_onnx``, the label value is ``distilled_onnx``."""
+        cfg = Settings(mock_hardware=True)
+        cfg.loop.policy_selector = "auto"
+        cfg.loop.inference_timeout_s = 0.001
+        cfg.vla = VLAConfig(backend="distilled_onnx", fallback_on_timeout=True)
+        slow = _SlowVLA(action_dim=cfg.model.action_dim, sleep_s=0.05)
+
+        metrics = _TimeoutMetrics()
+        orch = _make_orchestrator(
+            cfg=cfg,
+            nav_action=torch.zeros(cfg.model.action_dim),
+            vla_policy=slow,
+            metrics=metrics,
+        )
+        orch._select_action(_ctx(), _make_observation(cfg), 0.0)
+
+        assert metrics.timeout_calls == ["distilled_onnx"]

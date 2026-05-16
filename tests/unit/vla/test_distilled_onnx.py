@@ -490,3 +490,60 @@ def test_module_level_imports_have_not_loaded_onnxruntime() -> None:
     importlib.import_module("mousedroid.vla.policy")
     assert "onnxruntime" not in sys.modules
     assert "transformers" not in sys.modules
+
+
+# -- PR-A2.1: writer-side instrumentation for DistilledVLAOnnx ------------
+
+
+class _StubMetrics:
+    """Captures observe_vla_inference_seconds calls for assertion."""
+
+    def __init__(self) -> None:
+        self.observed_seconds: list[float] = []
+
+    def observe_vla_inference_seconds(self, value: float) -> None:
+        self.observed_seconds.append(value)
+
+
+def test_distilled_onnx_emits_inference_latency_metric(
+    fake_onnx_file: Path, stub_ort_factory: Any
+) -> None:
+    """DistilledVLAOnnx.predict() observes one latency sample per inference call."""
+    import math
+
+    stub_ort_factory()
+    metrics = _StubMetrics()
+    policy = DistilledVLAOnnx(
+        model_path=fake_onnx_file,
+        action_dim=3,
+        warmup_iterations=0,
+        metrics=metrics,
+    )
+    obs = VLAObservation(h=torch.zeros(1, 4), z=torch.zeros(1, 4))
+
+    policy.predict(obs)
+
+    assert len(metrics.observed_seconds) == 1
+    value = metrics.observed_seconds[0]
+    assert math.isfinite(value)
+    assert value >= 0.0
+    # Stubbed inference completes in microseconds; bound loosely above to
+    # catch wildly-wrong timing (e.g. accidentally measuring seconds-since-
+    # epoch). 5 seconds is a generous upper bound that still catches bugs.
+    assert value < 5.0
+
+
+def test_distilled_onnx_no_metrics_param_is_byte_identical(
+    fake_onnx_file: Path, stub_ort_factory: Any
+) -> None:
+    """Constructing without ``metrics=`` preserves pre-PR-A2.1 behavior."""
+    stub_ort_factory()
+    policy = DistilledVLAOnnx(
+        model_path=fake_onnx_file,
+        action_dim=3,
+        warmup_iterations=0,
+    )
+    obs = VLAObservation(h=torch.zeros(1, 4), z=torch.zeros(1, 4))
+    # Must not raise AttributeError on self._metrics.
+    result = policy.predict(obs)
+    assert result.action.shape == (3,)
