@@ -219,6 +219,7 @@ markers = [
     "slow: marks tests as slow",
     "hardware: marks tests requiring real hardware",
     "smoke: marks smoke tests for end-to-end telemetry stack validation",
+    "pillar: marks tests as part of the Ten-Pillars validation campaign (nightly regression net)",
 ]
 addopts = "-v --tb=short"
 
