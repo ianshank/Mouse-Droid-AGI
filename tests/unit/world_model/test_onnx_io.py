@@ -77,10 +77,11 @@ class TestRequiredInputNames:
 class TestOptionalInputNames:
     """Optional inputs are filtered by ``ModelConfig`` modality toggles."""
 
-    def test_all_disabled_returns_empty(self) -> None:
-        # Need at least one distance modality enabled to satisfy the
-        # Pydantic validator (`ultrasonic_dim == 0 AND lidar_dim == 0` is
-        # rejected); enable ultrasonic, disable the other two.
+    def test_minimum_distance_modality_returns_only_ultrasonic(self) -> None:
+        # Pydantic requires at least one distance modality enabled
+        # (ultrasonic OR lidar) — so the smallest legal optional set is
+        # ultrasonic-only. ``all_disabled`` is therefore unreachable from a
+        # valid ``ModelConfig``; this test exercises the minimum-valid case.
         cfg = _cfg(ultrasonic=True, audio=False, lidar=False)
         optional = optional_input_names_for_cfg(cfg)
         assert optional == (OBSERVE_STEP_INPUT_ULTRASONIC,)

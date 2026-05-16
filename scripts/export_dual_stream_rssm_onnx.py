@@ -255,6 +255,30 @@ def run_export(
     input_names = list(inputs.keys())
     output_names = list(OBSERVE_STEP_OUTPUT_NAMES)
 
+    # Build (positional, kwargs) ``args`` so torch.onnx.export binds inputs
+    # to the shim's forward by NAME, not by position. Without this, when
+    # ``cfg.ultrasonic_dim == 0`` but ``cfg.audio_dim > 0`` (or any other
+    # gap in the optional-modality run), ``tuple(inputs.values())`` would
+    # shift the later optional into the slot of the disabled earlier one
+    # — e.g. the audio tensor would land in the ``ultrasonic`` parameter
+    # and the lidar tensor would land in ``audio``. torch.onnx.export
+    # accepts ``args = (positional_tuple, kwargs_dict)`` to bind by name.
+    required_names = {
+        OBSERVE_STEP_INPUT_VISION,
+        OBSERVE_STEP_INPUT_MOTOR,
+        OBSERVE_STEP_INPUT_VALID_MASK,
+        OBSERVE_STEP_INPUT_PREV_ACTION,
+        OBSERVE_STEP_INPUT_H,
+        OBSERVE_STEP_INPUT_Z,
+    }
+    positional_args = tuple(inputs[name] for name in input_names if name in required_names)
+    keyword_args: dict[str, Tensor] = {
+        name: inputs[name] for name in input_names if name not in required_names
+    }
+    export_args: tuple[Tensor | dict[str, Tensor], ...] = (
+        (*positional_args, keyword_args) if keyword_args else positional_args
+    )
+
     _log.info(
         "world_model_export_started",
         output=str(output_path),
@@ -264,6 +288,8 @@ def run_export(
         ultrasonic_enabled=cfg.ultrasonic_dim > 0,
         audio_enabled=cfg.audio_dim > 0,
         lidar_enabled=cfg.lidar_dim > 0,
+        n_required=len(positional_args),
+        n_optional=len(keyword_args),
     )
     started = time.perf_counter()
 
@@ -286,7 +312,7 @@ def run_export(
         _log.debug("world_model_export_using_legacy_exporter")
     torch.onnx.export(
         shim,
-        tuple(inputs.values()),
+        export_args,
         str(output_path),
         **export_kwargs,
     )

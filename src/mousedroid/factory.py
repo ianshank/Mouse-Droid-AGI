@@ -461,19 +461,38 @@ def _build_onnx_world_model(cfg: Settings) -> WorldModelProtocol:
         )
         raise ValueError(msg)
 
+    from mousedroid.world_model.composite import CompositeWorldModel
+    from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
     from mousedroid.world_model.dual_stream_rssm_onnx import DualStreamRSSMOnnx
 
     model_path = _resolve_world_model_onnx_path(cfg)
+
+    # observe_step path: ONNX-accelerated (the hot 30Hz tick benefit).
+    observe_engine = DualStreamRSSMOnnx(
+        model_path=model_path,
+        cfg=cfg.model,
+        warmup_iterations=cfg.world_model.onnx_warmup_iterations,
+    )
+    # imagine_step + get_safety_trace path: PyTorch DualStreamRSSM. The
+    # ONNX export (B2 Story 1) is scoped to observe_step only, so MCTS
+    # rollouts and the safety monitor's CfC inspection need the PyTorch
+    # graph. Both engines share the same ModelConfig so dimensions stay
+    # consistent across the composition boundary.
+    imagine_engine = DualStreamRSSM(cfg.model)
+    imagine_engine.train(False)
+
     _log.info(
         "world_model_engine_selected",
         engine="onnx_trt",
         model_path=str(model_path),
         cfc_dim=cfg.model.cfc_hidden_dim,
+        composite=True,
+        observe_engine=type(observe_engine).__name__,
+        imagine_engine=type(imagine_engine).__name__,
     )
-    return DualStreamRSSMOnnx(
-        model_path=model_path,
-        cfg=cfg.model,
-        warmup_iterations=cfg.world_model.onnx_warmup_iterations,
+    return CompositeWorldModel(
+        observe_engine=observe_engine,
+        imagine_engine=imagine_engine,
     )
 
 

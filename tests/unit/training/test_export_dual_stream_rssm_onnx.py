@@ -253,3 +253,64 @@ class TestRunExport:
         outputs = sess.run(None, np_inputs)
         # new_h is outputs[0]; batch dim should now be 3.
         assert outputs[0].shape[0] == 3
+
+    def test_export_with_ultrasonic_off_but_lidar_on_binds_correctly(
+        self,
+        export_module: Any,
+        tmp_path: Path,
+    ) -> None:
+        """Regression net: positional-vs-kwargs binding when optionals have a gap.
+
+        Before this fix, ``ultrasonic_dim=0 + lidar_dim>0`` would cause
+        ``tuple(inputs.values())`` to shift the lidar tensor into the
+        ``ultrasonic`` parameter slot (because the export shim's forward
+        signature has them as consecutive optionals). The fix uses the
+        ``(positional_tuple, kwargs_dict)`` form for ``torch.onnx.export``
+        so binding happens by name, not position.
+
+        This test exercises that config combination end-to-end and
+        verifies the exported ONNX consumes the lidar input correctly.
+        """
+        import onnxruntime as ort
+
+        from mousedroid.config.schema import ModelConfig
+        from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
+
+        cfg = ModelConfig(
+            vision_dim=16,
+            # Disable ultrasonic, enable lidar — the bug's trigger condition.
+            # Pydantic requires at least one distance modality enabled
+            # (ultrasonic OR lidar), so lidar covers the requirement.
+            ultrasonic_dim=0,
+            ultrasonic_proj_dim=0,
+            motor_state_dim=4,
+            hidden_dim=32,
+            latent_dim=8,
+            action_dim=2,
+            obs_dim=16,
+            vision_proj_dim=8,
+            motor_proj_dim=4,
+            audio_dim=0,
+            audio_proj_dim=0,
+            lidar_dim=12,
+            lidar_proj_dim=4,
+            cfc_hidden_dim=16,
+            cfc_backbone_units=32,
+            cfc_backbone_layers=1,
+        )
+        model = DualStreamRSSM(cfg)
+        model.train(False)
+
+        output_path = tmp_path / "observe_step.onnx"
+        export_module.run_export(model=model, cfg=cfg, output_path=output_path, opset=17)
+
+        sess = ort.InferenceSession(str(output_path), providers=["CPUExecutionProvider"])
+        # Verify the ONNX graph's input set includes "lidar" but NOT "ultrasonic".
+        ort_input_names = {inp.name for inp in sess.get_inputs()}
+        assert "lidar" in ort_input_names
+        assert "ultrasonic" not in ort_input_names
+        # And the run actually works end-to-end with a lidar input.
+        torch_inputs = export_module.build_example_inputs(cfg, device=torch.device("cpu"))
+        np_inputs = {name: tensor.detach().cpu().numpy() for name, tensor in torch_inputs.items()}
+        outputs = sess.run(None, np_inputs)
+        assert len(outputs) == 4

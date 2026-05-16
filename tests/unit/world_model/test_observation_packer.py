@@ -12,7 +12,7 @@ suite locks in:
 3. Empty-buffer handling (``audio_chunk`` of length 0)
 4. ``lidar_features=None`` handling
 5. Device/dtype invariants (float32, target device)
-6. No silent silent ``ultrasonic`` injection — when ``ultrasonic_dim=0``
+6. No silent ``ultrasonic`` injection — when ``ultrasonic_dim=0``
    the packer must NOT return an ultrasonic tensor (rover baseline)
 """
 
@@ -242,3 +242,101 @@ class TestPackedObservationDataclass:
         assert hasattr(packed, "ultrasonic")
         assert hasattr(packed, "audio")
         assert hasattr(packed, "lidar")
+
+
+class TestValidMaskWidthNormalization:
+    """``valid_mask`` is right-padded/truncated to a stable width.
+
+    Without normalisation, cross-deployment masks (4-wide without LiDAR,
+    5-wide with LiDAR) crash the ONNX engine — ORT requires exact input
+    shapes at runtime.
+    """
+
+    def test_four_wide_mask_is_padded_to_five(self) -> None:
+        from mousedroid.constants import N_SENSOR_MODALITIES_WITH_LIDAR
+
+        cfg = _base_cfg()
+        # Older sensing produces 4-wide masks (vision/ultrasonic/motor/audio).
+        narrow_mask = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32)
+        obs = _StubObservation(valid_mask=narrow_mask)
+        packed = pack_observation(obs, cfg, device=torch.device("cpu"))
+        # Width is exactly the canonical N_SENSOR_MODALITIES_WITH_LIDAR.
+        assert packed.valid_mask.shape == (1, N_SENSOR_MODALITIES_WITH_LIDAR)
+        # First 4 slots preserved; padding slot is 0 (invalid).
+        assert torch.all(packed.valid_mask[..., :4] == 1.0)
+        assert packed.valid_mask[..., 4].item() == 0.0
+
+    def test_five_wide_mask_passes_through_unchanged(self) -> None:
+        from mousedroid.constants import N_SENSOR_MODALITIES_WITH_LIDAR
+
+        cfg = _base_cfg()
+        mask = np.array([1.0, 0.0, 1.0, 0.0, 1.0], dtype=np.float32)
+        obs = _StubObservation(valid_mask=mask)
+        packed = pack_observation(obs, cfg, device=torch.device("cpu"))
+        assert packed.valid_mask.shape == (1, N_SENSOR_MODALITIES_WITH_LIDAR)
+        assert torch.allclose(packed.valid_mask.flatten(), torch.from_numpy(mask), atol=1e-6)
+
+    def test_wider_mask_is_truncated(self) -> None:
+        """6-wide mask (defensive — no current sensor emits this) is truncated."""
+        from mousedroid.constants import N_SENSOR_MODALITIES_WITH_LIDAR
+
+        cfg = _base_cfg()
+        mask = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 0.5], dtype=np.float32)
+        obs = _StubObservation(valid_mask=mask, n_modalities=6)
+        packed = pack_observation(obs, cfg, device=torch.device("cpu"))
+        assert packed.valid_mask.shape == (1, N_SENSOR_MODALITIES_WITH_LIDAR)
+        # The trailing 0.5 is dropped — only the first 5 slots survive.
+        assert torch.all(packed.valid_mask[..., :5] == 1.0)
+
+
+class TestMissingDataMaskZeroing:
+    """Enabled-but-missing modality data zeroes the slot in valid_mask.
+
+    Without this, the encoder's ``_gate_projection`` would multiply the
+    Linear projection of zero (= ``relu(bias)``, generally non-zero) by
+    a non-zero mask slot, contributing junk activations. Zeroing the
+    slot makes the missing-data case match the encoder's native "no data"
+    path (zeros in projected space, bypassing bias).
+    """
+
+    def test_audio_missing_zeros_audio_slot(self) -> None:
+        from mousedroid.constants import SENSOR_SLOT_MAP
+
+        cfg = _base_cfg(audio_dim=8)
+        # All slots initially valid (1.0), but audio data is empty.
+        obs = _StubObservation(
+            audio_chunk=np.zeros(0, dtype=np.float32),
+            valid_mask=np.ones(5, dtype=np.float32),
+        )
+        packed = pack_observation(obs, cfg, device=torch.device("cpu"))
+        audio_slot = SENSOR_SLOT_MAP["audio"]
+        assert packed.valid_mask[..., audio_slot].item() == 0.0
+        # Other slots untouched.
+        for slot_name in ("vision", "ultrasonic", "motor"):
+            slot = SENSOR_SLOT_MAP[slot_name]
+            assert packed.valid_mask[..., slot].item() == 1.0
+
+    def test_lidar_missing_zeros_lidar_slot(self) -> None:
+        from mousedroid.constants import SENSOR_SLOT_MAP
+
+        cfg = _base_cfg(lidar_dim=12)
+        obs = _StubObservation(
+            lidar_features=None,
+            valid_mask=np.ones(5, dtype=np.float32),
+        )
+        packed = pack_observation(obs, cfg, device=torch.device("cpu"))
+        lidar_slot = SENSOR_SLOT_MAP["lidar"]
+        assert packed.valid_mask[..., lidar_slot].item() == 0.0
+
+    def test_audio_present_preserves_audio_slot(self) -> None:
+        """When audio data is provided, the audio slot stays at the source value."""
+        from mousedroid.constants import SENSOR_SLOT_MAP
+
+        cfg = _base_cfg(audio_dim=8)
+        obs = _StubObservation(
+            audio_chunk=np.ones(8, dtype=np.float32),
+            valid_mask=np.ones(5, dtype=np.float32),
+        )
+        packed = pack_observation(obs, cfg, device=torch.device("cpu"))
+        audio_slot = SENSOR_SLOT_MAP["audio"]
+        assert packed.valid_mask[..., audio_slot].item() == 1.0
