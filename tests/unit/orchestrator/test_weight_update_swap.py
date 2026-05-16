@@ -75,8 +75,34 @@ def _build_orch(
     poller: Any | None = None,
     loader: Any | None = None,
     metrics: MetricsRegistry | None = None,
+    weight_update_pollers: Any | None = None,
+    weight_update_loader: Any | None = None,
 ) -> tuple[MouseDroidOrchestrator, MagicMock, MagicMock]:
-    """Build a minimal orchestrator with mocked subsystems."""
+    """Build a minimal orchestrator with mocked subsystems.
+
+    Accepts both the legacy ``poller=``/``loader=`` kwargs (single-poller
+    path; preserved for backwards compatibility with the Tier C1 tests
+    in this file) and the Tier C1.2 ``weight_update_pollers=``/
+    ``weight_update_loader=`` kwargs (multi-poller mapping path). The
+    loader is resolved via "new kwarg wins, fall back to legacy" so a
+    caller passing ``weight_update_loader=`` overrides ``loader=``.
+
+    Args:
+        cfg: Root settings.
+        poller: Legacy single Tier C1 poller (folded into the orchestrator's
+            internal mapping on construction).
+        loader: Legacy weight-update loader. Used iff ``weight_update_loader``
+            is not provided.
+        metrics: Optional metrics registry forwarded to the orchestrator.
+        weight_update_pollers: Tier C1.2 mapping ``{engine_type: poller}``.
+            ``None`` (default) means use the legacy single-poller path.
+        weight_update_loader: Tier C1.2 alias for ``loader=``. Wins over
+            ``loader=`` when both are supplied.
+
+    Returns:
+        ``(orchestrator, world_model_mock, agent_mock)``.
+    """
+    resolved_loader = weight_update_loader if weight_update_loader is not None else loader
     world_model = MagicMock(name="world_model")
     world_model.observe_step.return_value = (
         torch.zeros(1, cfg.model.hidden_dim + cfg.model.cfc_hidden_dim),
@@ -104,7 +130,8 @@ def _build_orch(
         sensor_manager=sensor_manager,
         cfg=cfg,
         weight_update_poller=poller,
-        weight_update_loader=loader,
+        weight_update_pollers=weight_update_pollers,
+        weight_update_loader=resolved_loader,
         metrics=metrics,
     )
     return orch, world_model, agent

@@ -28,7 +28,7 @@ from mousedroid.logging.setup import get_logger
 from mousedroid.telemetry.frame_builder import build_telemetry_frame
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
     from mousedroid.agents.base import AgentProtocol
     from mousedroid.cloud.protocol import (
@@ -115,6 +115,7 @@ class MouseDroidOrchestrator:
         mock_telemetry_source: Any | None = None,
         metrics: MetricsRegistry | None = None,
         weight_update_poller: WeightUpdatePollerProtocol | None = None,
+        weight_update_pollers: Mapping[str, WeightUpdatePollerProtocol] | None = None,
         weight_update_loader: Callable[[PendingWeightUpdate], object] | None = None,
         safety_projector: SafetyActionProjectorProtocol | None = None,
     ) -> None:
@@ -201,7 +202,21 @@ class MouseDroidOrchestrator:
                 orchestrator polls ``pending_update`` once per tick AFTER
                 ``_select_action`` and atomically swaps the live world-model
                 / policy with the newly downloaded artifact. ``None`` (default)
-                preserves byte-identical pre-Tier-C1 behavior.
+                preserves byte-identical pre-Tier-C1 behavior. Legacy single-
+                poller kwarg retained for one minor-version window for
+                backwards compatibility — folded into
+                ``self._weight_update_pollers`` under the poller's
+                ``_engine_type`` (or ``"policy"`` if absent) so internal
+                handling is uniform between the two shapes. Prefer
+                ``weight_update_pollers`` for new call sites.
+            weight_update_pollers: Optional Tier C1.2 mapping
+                ``{engine_type: WeightUpdatePollerProtocol}``. When supplied,
+                each tick the orchestrator iterates all pollers (in insertion
+                order — ``policy`` before ``world_model`` is the documented
+                contract) and applies any pending update. Supersedes
+                ``weight_update_poller`` for multi-engine OTA deployments.
+                Empty mapping (``{}``) and ``None`` both preserve byte-
+                identical pre-Tier-C1 behaviour (swap helper short-circuits).
             weight_update_loader: Optional callable
                 ``(PendingWeightUpdate) -> engine``. Invoked inside
                 ``_apply_pending_weight_update`` to materialise the new
@@ -273,9 +288,21 @@ class MouseDroidOrchestrator:
         self._liveness_tracker: Any | None = liveness_tracker
         self._mock_telemetry_source: Any | None = mock_telemetry_source
         self._metrics = metrics
-        # Tier C1 — OTA weight-update wiring. ``None`` keeps the pre-C1
-        # tick path byte-identical (swap helper short-circuits).
-        self._weight_update_poller: WeightUpdatePollerProtocol | None = weight_update_poller
+        # Tier C1 / C1.2 — OTA weight-update wiring. An empty mapping (or
+        # both kwargs left at ``None``) keeps the pre-C1 tick path byte-
+        # identical (swap helper short-circuits). The legacy single
+        # ``weight_update_poller=`` kwarg stays on the constructor for one
+        # minor-version window for backwards compatibility; it is folded
+        # into ``self._weight_update_pollers`` under the poller's
+        # ``_engine_type`` attribute (defaulting to ``"policy"`` when the
+        # attribute is missing) so the rest of the orchestrator only ever
+        # sees the mapping shape.
+        self._weight_update_pollers: dict[str, WeightUpdatePollerProtocol] = dict(
+            weight_update_pollers or {}
+        )
+        if weight_update_poller is not None and not self._weight_update_pollers:
+            engine_type = getattr(weight_update_poller, "_engine_type", "policy")
+            self._weight_update_pollers[engine_type] = weight_update_poller
         self._weight_update_loader: Callable[[PendingWeightUpdate], object] | None = (
             weight_update_loader
         )
@@ -348,14 +375,16 @@ class MouseDroidOrchestrator:
             await self._cloud_sink.start()
         if self._cloud_experience_exporter is not None:
             await self._cloud_experience_exporter.start()
-        # Tier C1 — start the OTA poller as part of orchestrator lifecycle.
-        # Wrapped in try/except so a poller failure (HF Hub unreachable at
-        # boot, etc.) can't block the orchestrator from coming up. The
-        # poller's own ``start`` is a no-op when ``poll_interval_s = 0.0``,
-        # so default deployments pay zero cost. (Copilot 3253293644/3253309972.)
-        if self._weight_update_poller is not None:
+        # Tier C1 / C1.2 — start every wired OTA poller as part of the
+        # orchestrator lifecycle. Wrapped in try/except so a poller failure
+        # (HF Hub unreachable at boot, etc.) can't block the orchestrator
+        # from coming up. Each poller's own ``start`` is a no-op when
+        # ``poll_interval_s = 0.0``, so default deployments pay zero cost.
+        # An empty mapping skips the loop entirely. (Copilot 3253293644 /
+        # 3253309972.)
+        for poller in self._weight_update_pollers.values():
             try:
-                await self._weight_update_poller.start()
+                await poller.start()
             except Exception:  # pylint: disable=broad-except
                 _log.warning("cloud_weight_update_poller_start_failed", exc_info=True)
         if self._memory_tier is not None:
@@ -383,11 +412,13 @@ class MouseDroidOrchestrator:
             self._consolidation_tasks.discard(self._consolidation_task)
             self._consolidation_task = None
         await cancel_and_drain(self._cloud_publish_tasks)
-        # Tier C1 — stop the OTA poller. Wrapped in try/except so a stuck
-        # in-flight download can't block orchestrator shutdown.
-        if self._weight_update_poller is not None:
+        # Tier C1 / C1.2 — stop every wired OTA poller. Wrapped in
+        # try/except so a stuck in-flight download on one poller can't
+        # block shutdown of the others or of the orchestrator itself.
+        # An empty mapping skips the loop entirely.
+        for poller in self._weight_update_pollers.values():
             try:
-                await self._weight_update_poller.stop()
+                await poller.stop()
             except Exception:  # pylint: disable=broad-except
                 _log.warning("cloud_weight_update_poller_stop_failed", exc_info=True)
         if self._cloud_experience_exporter is not None:
@@ -666,13 +697,59 @@ class MouseDroidOrchestrator:
         return GoalVector()
 
     def _apply_pending_weight_update(self) -> bool:
-        """Atomically swap policy / world-model if poller has a verified update.
+        """Atomically swap policy / world-model if any poller has a verified update.
 
         Runs ONCE per tick, AFTER ``_select_action`` returns. Guarantees the
         current tick saw one consistent weight set for both
         ``_update_world_model`` and ``_select_action``. Reference assignment
         is atomic at the Python interpreter level; we hold no locks because
         the orchestrator's ``tick()`` is single-coroutine on the event loop.
+
+        With Tier C1.2 the orchestrator holds a ``Mapping[str, poller]``
+        keyed by ``engine_type``. Each tick this method iterates the mapping
+        in insertion order (``policy`` before ``world_model`` by the factory's
+        documented contract) and delegates per-poller swap work to
+        :meth:`_apply_one_pending_update`. Iteration order matters: a
+        world-model swap may zero the recurrent state on the same tick, so
+        applying ``policy`` first prevents a stale-policy artefact from
+        leaking into a freshly reset world model.
+
+        Method is INTENTIONALLY synchronous: ``tick()`` is the only caller,
+        the swap runs entirely in process memory (no I/O after the poller
+        downloaded), and keeping it sync avoids scheduling churn between
+        select_action and execute_action.
+
+        Returns:
+            ``True`` iff at least one world-model swap performed a recurrent-
+            state reset (caller MUST skip its own ``_prev_action = action``
+            assignment so the zero-state survives into the next tick).
+            ``False`` for any other code path (empty mapping, no pendings,
+            policy-only swap, loader failure, dead-letter, etc.).
+        """
+        if not self._weight_update_pollers:
+            return False
+        any_reset = False
+        for poller in self._weight_update_pollers.values():
+            update = poller.pending_update
+            if update is None:
+                continue
+            if self._apply_one_pending_update(poller, update):
+                any_reset = True
+        return any_reset
+
+    def _apply_one_pending_update(
+        self,
+        poller: WeightUpdatePollerProtocol,
+        update: PendingWeightUpdate,
+    ) -> bool:
+        """Apply one pending update from one poller.
+
+        Extracted from :meth:`_apply_pending_weight_update` so the multi-
+        poller loop can delegate per-poller swap work uniformly. The body
+        is the unchanged single-poller swap path from Tier C1 — it owns
+        the loader invocation, atomic reference swap, engine-type dispatch,
+        recurrent-state reset, metric increment, structured-log emission,
+        and the final ``acknowledge_swap`` call.
 
         The new engine is fully materialised via ``self._weight_update_loader``
         BEFORE the reference swap, so a loader failure does NOT corrupt the
@@ -688,24 +765,18 @@ class MouseDroidOrchestrator:
         dtype are preserved via ``torch.zeros_like`` so a CUDA-resident
         world-model state survives the swap on its original device.
 
-        Method is INTENTIONALLY synchronous: ``tick()`` is the only caller,
-        the swap runs entirely in process memory (no I/O after the poller
-        downloaded), and keeping it sync avoids scheduling churn between
-        select_action and execute_action.
+        Args:
+            poller: The poller that surfaced ``update``. Used to invoke
+                ``acknowledge_swap`` once the swap (or failure path) lands.
+            update: The pending update to apply.
 
         Returns:
-            ``True`` iff a world-model swap performed a recurrent-state
-            reset (caller MUST skip its own ``_prev_action = action``
-            assignment so the zero-state survives into the next tick).
-            ``False`` for any other code path (no poller, no pending,
-            policy-only swap, loader failure, dead-letter, etc.).
+            ``True`` iff this swap zeroed the recurrent state (world-model
+            engine only, gated by
+            ``cfg.cloud.weight_update.reset_state_on_swap``). ``False`` for
+            the no-loader branch, the loader-exception branch, a policy swap,
+            and the unknown-engine-type dead-letter branch.
         """
-        poller = self._weight_update_poller
-        if poller is None:
-            return False
-        update = poller.pending_update
-        if update is None:
-            return False
         if self._weight_update_loader is None:
             # Acknowledge-and-warn-once: without ack the same pending update
             # would re-fire ``cloud_weight_update_swap_skipped_no_loader``

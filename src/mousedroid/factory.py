@@ -2534,9 +2534,13 @@ def build_orchestrator(cfg: Settings) -> object:
         _tool_registry.set_approval_gate(approval_gate)
     hook_registry = build_hook_registry(cfg, journal)
 
-    # Tier C1 — wire the optional OTA weight-update poller. Default
-    # ``cfg.cloud.weight_update.poll_interval_s = 0.0`` keeps it disabled.
-    weight_update_poller = build_weight_update_poller(cfg, metrics=metrics_registry)
+    # Tier C1 / C1.2 — wire the optional OTA weight-update pollers. Default
+    # ``cfg.cloud.weight_update.poll_interval_s = 0.0`` keeps the mapping
+    # empty so the orchestrator's swap helper short-circuits and existing
+    # deployments remain byte-identical. When polling is enabled the
+    # ``policy`` poller is always present; the ``world_model`` poller is
+    # added iff ``cfg.cloud.weight_update.world_model_enabled is True``.
+    weight_update_pollers = build_weight_update_pollers(cfg, metrics=metrics_registry)
     weight_update_loader = build_weight_update_loader(cfg)
     # Tier C2 / C2.1 — soft-constraint safety projector. Returns ``None``
     # when ``cfg.safety.projector.enabled`` is ``False`` (the default),
@@ -2578,7 +2582,7 @@ def build_orchestrator(cfg: Settings) -> object:
         liveness_tracker=liveness_tracker,
         mock_telemetry_source=mock_telemetry_source,
         metrics=metrics_registry,
-        weight_update_poller=weight_update_poller,
+        weight_update_pollers=weight_update_pollers,
         weight_update_loader=weight_update_loader,
         safety_projector=safety_projector,
     )
