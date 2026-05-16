@@ -183,3 +183,44 @@ class TestBuildVLAPolicy:
         assert policy is not None
         obs = VLAObservation(h=torch.zeros(1), z=torch.zeros(1))
         assert policy.predict(obs).confidence == 0.7
+
+
+# -- PR-A2.1: writer-side instrumentation for MockVLA ---------------------
+
+
+class _StubMetrics:
+    """Captures observe_vla_inference_seconds calls for assertion.
+
+    Decoupled from the real MetricsRegistry so we test the call site only;
+    registry semantics live in tests/unit/test_telemetry_metrics.py.
+    """
+
+    def __init__(self) -> None:
+        self.observed_seconds: list[float] = []
+
+    def observe_vla_inference_seconds(self, value: float) -> None:
+        self.observed_seconds.append(value)
+
+
+def test_mock_vla_emits_inference_latency_metric() -> None:
+    """MockVLA.predict() emits a non-negative observation when metrics is provided."""
+    metrics = _StubMetrics()
+    policy = MockVLA(action_dim=3, confidence=0.7, metrics=metrics)
+    obs = VLAObservation(h=torch.zeros(8), z=torch.zeros(4))
+
+    policy.predict(obs)
+    policy.predict(obs)
+
+    assert len(metrics.observed_seconds) == 2
+    assert all(v >= 0.0 for v in metrics.observed_seconds)
+
+
+def test_mock_vla_no_metrics_param_is_byte_identical() -> None:
+    """Constructing without ``metrics=`` preserves pre-PR-A2.1 behavior."""
+    policy = MockVLA(action_dim=3, confidence=0.5)  # no metrics kwarg
+    obs = VLAObservation(h=torch.zeros(8), z=torch.zeros(4))
+
+    # Must not raise AttributeError on self._metrics.
+    result = policy.predict(obs)
+    assert result.action.shape == (3,)
+    assert result.confidence == 0.5

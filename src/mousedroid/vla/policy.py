@@ -13,12 +13,16 @@ All thresholds, dimensions, and timeouts come from
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import structlog
 import torch
+
+if TYPE_CHECKING:
+    from mousedroid.telemetry.metrics import MetricsRegistry
 
 _log = structlog.get_logger(__name__)
 
@@ -89,6 +93,7 @@ class MockVLA:
         canned_action: torch.Tensor | None = None,
         confidence: float = 1.0,
         name: str = "mock_vla",
+        metrics: MetricsRegistry | None = None,
     ) -> None:
         """Initialize a ``MockVLA``.
 
@@ -100,6 +105,11 @@ class MockVLA:
             confidence: Confidence value emitted with each ``VLAAction``.
                 Must be in ``[0.0, 1.0]``.
             name: Telemetry name; defaults to ``"mock_vla"``.
+            metrics: Optional :class:`MetricsRegistry`. When provided, each
+                ``predict()`` call records an observation on
+                ``mousedroid_vla_inference_seconds`` for end-to-end metric-
+                pipeline visibility on mock-hardware deployments. ``None``
+                (default) preserves byte-identical pre-PR-A2.1 behavior.
 
         Raises:
             ValueError: If ``action_dim`` is not positive, ``confidence``
@@ -127,6 +137,7 @@ class MockVLA:
         )
         self._confidence = confidence
         self._name = name
+        self._metrics = metrics
         _log.debug(
             "mock_vla_initialized",
             action_dim=action_dim,
@@ -149,11 +160,13 @@ class MockVLA:
             A :class:`VLAAction` with a fresh clone of the canned action.
         """
         del observation  # unused — MockVLA is stateless and deterministic
+        start = time.perf_counter()
         with torch.no_grad():
-            return VLAAction(
-                action=self._canned_action.detach().clone(),
-                confidence=self._confidence,
-            )
+            action = self._canned_action.detach().clone()
+        elapsed = time.perf_counter() - start
+        if self._metrics is not None:
+            self._metrics.observe_vla_inference_seconds(elapsed)
+        return VLAAction(action=action, confidence=self._confidence)
 
 
 class DistilledVLAOnnx:
@@ -181,6 +194,7 @@ class DistilledVLAOnnx:
         warmup_iterations: int = 1,
         confidence: float = 1.0,
         name: str = "distilled_vla_onnx",
+        metrics: MetricsRegistry | None = None,
     ) -> None:
         """Capture ONNX configuration; defer session creation to warmup.
 
@@ -196,6 +210,12 @@ class DistilledVLAOnnx:
             warmup_iterations: Number of dummy passes during warmup.
             confidence: Static confidence emitted with every action.
             name: Telemetry name.
+            metrics: Optional :class:`MetricsRegistry`. When provided, each
+                ``predict()`` call brackets the ONNX inference with
+                ``time.perf_counter()`` and records an observation on
+                ``mousedroid_vla_inference_seconds`` outside the
+                ``torch.no_grad()`` block. ``None`` (default) preserves
+                byte-identical pre-PR-A2.1 behavior.
 
         Raises:
             ValueError: If ``action_dim`` is not positive, ``confidence``
@@ -223,6 +243,7 @@ class DistilledVLAOnnx:
         self._warmup_iterations = warmup_iterations
         self._confidence = confidence
         self._name = name
+        self._metrics = metrics
 
         self._session: Any | None = None
         self._active_providers: tuple[str, ...] = ()
@@ -353,6 +374,7 @@ class DistilledVLAOnnx:
             self.warmup()
         assert self._session is not None
 
+        start = time.perf_counter()
         with torch.no_grad():
             h_np = observation.h.detach().cpu().numpy().astype("float32", copy=False)
             z_np = observation.z.detach().cpu().numpy().astype("float32", copy=False)
@@ -371,4 +393,10 @@ class DistilledVLAOnnx:
                     f"does not match (action_dim,) = ({self._action_dim},)"
                 )
                 raise ValueError(msg)
-            return VLAAction(action=action_tensor, confidence=self._confidence)
+            result = VLAAction(action=action_tensor, confidence=self._confidence)
+        elapsed = time.perf_counter() - start
+        if self._metrics is not None:
+            # Observation lives outside the no_grad block (no tensor ops);
+            # MetricsRegistry guards NaN / negative samples internally.
+            self._metrics.observe_vla_inference_seconds(elapsed)
+        return result
