@@ -22,7 +22,16 @@ from mousedroid.telemetry.metrics import MetricsRegistry
 
 
 class _StubPoller:
-    """Minimal stub conforming to ``WeightUpdatePollerProtocol`` for tests."""
+    """Test stub for WeightUpdatePollerProtocol.
+
+    Note: lacks ``_engine_type`` attribute. When used via the legacy
+    ``weight_update_poller=`` kwarg, the orchestrator's fold-in logic
+    defaults the map key to ``"policy"``. The map key controls
+    start/stop iteration order only; swap dispatch reads
+    ``update.engine_type`` from each ``PendingWeightUpdate``, so tests
+    can still surface ``engine_type="world_model"`` updates from a
+    stub registered under the ``"policy"`` map key.
+    """
 
     def __init__(self, updates: list[PendingWeightUpdate] | None = None) -> None:
         self._queue: list[PendingWeightUpdate] = list(updates or [])

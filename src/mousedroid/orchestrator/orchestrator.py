@@ -303,6 +303,11 @@ class MouseDroidOrchestrator:
         if weight_update_poller is not None and not self._weight_update_pollers:
             engine_type = getattr(weight_update_poller, "_engine_type", "policy")
             self._weight_update_pollers[engine_type] = weight_update_poller
+        elif weight_update_poller is not None and self._weight_update_pollers:
+            _log.warning(
+                "weight_update_poller_kwarg_ignored",
+                reason="weight_update_pollers mapping takes precedence",
+            )
         self._weight_update_loader: Callable[[PendingWeightUpdate], object] | None = (
             weight_update_loader
         )
@@ -707,12 +712,15 @@ class MouseDroidOrchestrator:
 
         With Tier C1.2 the orchestrator holds a ``Mapping[str, poller]``
         keyed by ``engine_type``. Each tick this method iterates the mapping
-        in insertion order (``policy`` before ``world_model`` by the factory's
-        documented contract) and delegates per-poller swap work to
-        :meth:`_apply_one_pending_update`. Iteration order matters: a
-        world-model swap may zero the recurrent state on the same tick, so
-        applying ``policy`` first prevents a stale-policy artefact from
-        leaking into a freshly reset world model.
+        in the caller-provided insertion order of
+        ``self._weight_update_pollers`` and delegates per-poller swap work
+        to :meth:`_apply_one_pending_update`. The
+        ``build_weight_update_pollers`` factory guarantees ``policy`` before
+        ``world_model``; callers constructing ``MouseDroidOrchestrator``
+        directly are responsible for the ordering they want. Iteration
+        order matters: a world-model swap may zero the recurrent state on
+        the same tick, so applying ``policy`` first prevents a stale-policy
+        artefact from leaking into a freshly reset world model.
 
         Method is INTENTIONALLY synchronous: ``tick()`` is the only caller,
         the swap runs entirely in process memory (no I/O after the poller

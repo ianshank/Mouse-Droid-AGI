@@ -6,8 +6,6 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-
 from mousedroid.cloud.protocol import PendingWeightUpdate
 from mousedroid.config.schema import Settings
 
@@ -30,8 +28,7 @@ def _pending(engine_type: str, rev: str) -> PendingWeightUpdate:
     )
 
 
-@pytest.mark.asyncio
-async def test_dual_pollers_swap_independently() -> None:
+def test_dual_pollers_swap_independently() -> None:
     """Both pollers' pending updates are consumed in one _apply call."""
     cfg = Settings(mock_hardware=True)
     policy_poller = _StubPoller([_pending("policy", "rev-p1")])
@@ -51,16 +48,14 @@ async def test_dual_pollers_swap_independently() -> None:
     assert loader.call_count == 2
 
 
-@pytest.mark.asyncio
-async def test_empty_pollers_mapping_is_noop() -> None:
+def test_empty_pollers_mapping_is_noop() -> None:
     """Empty pollers mapping short-circuits with no state mutation."""
     cfg = Settings(mock_hardware=True)
     orch, *_ = _build_orch(cfg, weight_update_pollers={})
     assert orch._apply_pending_weight_update() is False
 
 
-@pytest.mark.asyncio
-async def test_both_pollers_pending_same_tick_iteration_order() -> None:
+def test_both_pollers_pending_same_tick_iteration_order() -> None:
     """Policy-before-world-model is the documented contract — assert insertion order."""
     cfg = Settings(mock_hardware=True)
     policy_poller = _StubPoller([_pending("policy", "rev-p2")])
