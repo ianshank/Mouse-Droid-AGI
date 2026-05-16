@@ -491,7 +491,11 @@ def build_llm_gateway(
     return LLMGateway(gateway_cfg, injection_filter=injection_filter)
 
 
-def build_vla_policy(cfg: Settings) -> VLAPolicyProtocol | None:
+def build_vla_policy(
+    cfg: Settings,
+    *,
+    metrics: MetricsRegistry | None = None,
+) -> VLAPolicyProtocol | None:
     """Build the VLA policy if configured.
 
     Returns ``None`` when ``cfg.vla.backend == "none"`` so callers (the
@@ -511,6 +515,10 @@ def build_vla_policy(cfg: Settings) -> VLAPolicyProtocol | None:
 
     Args:
         cfg: Root settings.
+        metrics: Optional :class:`MetricsRegistry` forwarded to the chosen
+            backend so ``predict()`` calls populate
+            ``mousedroid_vla_inference_seconds``. ``None`` (default)
+            preserves byte-identical pre-PR-A2.1 behavior.
 
     Returns:
         A :class:`VLAPolicyProtocol` instance, or ``None`` when disabled.
@@ -547,21 +555,30 @@ def build_vla_policy(cfg: Settings) -> VLAPolicyProtocol | None:
             action_dim=action_dim,
             canned_action=canned,
             confidence=cfg.vla.confidence,
+            metrics=metrics,
         )
 
     if backend == "distilled_onnx":
-        return _build_distilled_onnx_vla(cfg, action_dim)
+        return _build_distilled_onnx_vla(cfg, action_dim, metrics=metrics)
 
     msg = f"Unknown VLA backend {backend!r}"
     raise ValueError(msg)
 
 
-def _build_distilled_onnx_vla(cfg: Settings, action_dim: int) -> VLAPolicyProtocol:
+def _build_distilled_onnx_vla(
+    cfg: Settings,
+    action_dim: int,
+    *,
+    metrics: MetricsRegistry | None = None,
+) -> VLAPolicyProtocol:
     """Resolve the ONNX model and instantiate :class:`DistilledVLAOnnx`.
 
     Args:
         cfg: Root settings.
         action_dim: Configured action dimensionality.
+        metrics: Optional :class:`MetricsRegistry` forwarded to
+            :class:`DistilledVLAOnnx` so each inference call populates
+            ``mousedroid_vla_inference_seconds``.
 
     Returns:
         An un-warmed :class:`DistilledVLAOnnx`. Warmup happens on first
@@ -626,6 +643,7 @@ def _build_distilled_onnx_vla(cfg: Settings, action_dim: int) -> VLAPolicyProtoc
         action_output_name=cfg.vla.action_output_name,
         warmup_iterations=cfg.vla.warmup_iterations,
         confidence=cfg.vla.confidence,
+        metrics=metrics,
     )
     _log.info(
         "vla_policy_built",
@@ -636,7 +654,11 @@ def _build_distilled_onnx_vla(cfg: Settings, action_dim: int) -> VLAPolicyProtoc
     return policy
 
 
-def build_reward_model(cfg: Settings) -> RewardModelProtocol:
+def build_reward_model(
+    cfg: Settings,
+    *,
+    metrics: MetricsRegistry | None = None,
+) -> RewardModelProtocol:
     """Build the multi-objective reward model with optional VLM progress head.
 
     The Three Laws head is constructed inside
@@ -648,6 +670,10 @@ def build_reward_model(cfg: Settings) -> RewardModelProtocol:
 
     Args:
         cfg: Root settings.
+        metrics: Optional :class:`MetricsRegistry` forwarded to
+            :class:`VLMProgressHead` so cache hit/miss decisions populate
+            ``mousedroid_vlm_progress_cache_hits_total`` / ``..._misses_total``.
+            ``None`` (default) preserves byte-identical pre-PR-A2.1 behavior.
 
     Returns:
         Configured reward model.
@@ -657,7 +683,7 @@ def build_reward_model(cfg: Settings) -> RewardModelProtocol:
 
     vlm_head: VLMProgressHead | None = None
     if cfg.reward.vlm_progress.enabled and cfg.reward.weight_vlm_progress > 0.0:
-        vlm_head = VLMProgressHead(cfg.reward.vlm_progress)
+        vlm_head = VLMProgressHead(cfg.reward.vlm_progress, metrics=metrics)
 
     model = MultiObjectiveRewardModel(
         cfg.model,
@@ -673,13 +699,21 @@ def build_reward_model(cfg: Settings) -> RewardModelProtocol:
     return model
 
 
-def build_replay_reader(cfg: Settings) -> ReplayReaderProtocol:
+def build_replay_reader(
+    cfg: Settings,
+    *,
+    metrics: MetricsRegistry | None = None,
+) -> ReplayReaderProtocol:
     """Build the Phase 2 LMDB replay reader.
 
     Args:
         cfg: Root settings. Reads ``cfg.experience`` (LMDB path + map size)
             and respects ``cfg.training.replay.source_path`` as a path
             override when set.
+        metrics: Optional :class:`MetricsRegistry` forwarded to the reader
+            so each decoded record / schema-mismatch drop populates
+            ``mousedroid_replay_records_total{outcome=...}``. ``None``
+            (default) preserves byte-identical pre-PR-A2.1 behavior.
 
     Returns:
         Reader conforming to :class:`ReplayReaderProtocol`. The concrete
@@ -692,11 +726,13 @@ def build_replay_reader(cfg: Settings) -> ReplayReaderProtocol:
         cfg.experience,
         path_override=cfg.training.replay.source_path,
         debug_log_every_n=cfg.training.replay_mixer.debug_log_every_n,
+        metrics=metrics,
     )
     _log.info(
         "replay_reader_built",
         path=str(reader.path),
         debug_log_every_n=cfg.training.replay_mixer.debug_log_every_n,
+        metrics_enabled=metrics is not None,
     )
     return reader
 
