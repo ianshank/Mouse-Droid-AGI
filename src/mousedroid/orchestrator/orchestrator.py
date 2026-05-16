@@ -28,10 +28,14 @@ from mousedroid.logging.setup import get_logger
 from mousedroid.telemetry.frame_builder import build_telemetry_frame
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from mousedroid.agents.base import AgentProtocol
     from mousedroid.cloud.protocol import (
         CloudExperienceExporterProtocol,
         CloudTelemetrySinkProtocol,
+        PendingWeightUpdate,
+        WeightUpdatePollerProtocol,
     )
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.comms.protocol import ESP32CommProtocol
@@ -109,6 +113,8 @@ class MouseDroidOrchestrator:
         liveness_tracker: Any | None = None,
         mock_telemetry_source: Any | None = None,
         metrics: MetricsRegistry | None = None,
+        weight_update_poller: WeightUpdatePollerProtocol | None = None,
+        weight_update_loader: Callable[[PendingWeightUpdate], object] | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -188,6 +194,21 @@ class MouseDroidOrchestrator:
                 on the timeout branch so operators see VLA fallback events
                 in Prometheus. ``None`` (default) preserves byte-identical
                 pre-PR-A2.1 behavior.
+            weight_update_poller: Optional Tier C1
+                :class:`WeightUpdatePollerProtocol`. When supplied, the
+                orchestrator polls ``pending_update`` once per tick AFTER
+                ``_select_action`` and atomically swaps the live world-model
+                / policy with the newly downloaded artifact. ``None`` (default)
+                preserves byte-identical pre-Tier-C1 behavior.
+            weight_update_loader: Optional callable
+                ``(PendingWeightUpdate) -> engine``. Invoked inside
+                ``_apply_pending_weight_update`` to materialise the new
+                engine BEFORE the reference swap (so a load failure does
+                NOT corrupt the live model). Tests inject a stub; production
+                wires a loader that lazy-imports ``onnxruntime`` and builds
+                a fresh engine of the same type as the live one. Must be
+                supplied alongside ``weight_update_poller`` — the poller
+                downloads, the loader materialises.
         """
         if not agents:
             msg = "At least one agent is required"
@@ -242,6 +263,12 @@ class MouseDroidOrchestrator:
         self._liveness_tracker: Any | None = liveness_tracker
         self._mock_telemetry_source: Any | None = mock_telemetry_source
         self._metrics = metrics
+        # Tier C1 — OTA weight-update wiring. ``None`` keeps the pre-C1
+        # tick path byte-identical (swap helper short-circuits).
+        self._weight_update_poller: WeightUpdatePollerProtocol | None = weight_update_poller
+        self._weight_update_loader: Callable[[PendingWeightUpdate], object] | None = (
+            weight_update_loader
+        )
         self._running = False
         self._tick_count: int = 0
         self._consolidation_task: asyncio.Task[None] | None = None
@@ -306,6 +333,16 @@ class MouseDroidOrchestrator:
             await self._cloud_sink.start()
         if self._cloud_experience_exporter is not None:
             await self._cloud_experience_exporter.start()
+        # Tier C1 — start the OTA poller as part of orchestrator lifecycle.
+        # Wrapped in try/except so a poller failure (HF Hub unreachable at
+        # boot, etc.) can't block the orchestrator from coming up. The
+        # poller's own ``start`` is a no-op when ``poll_interval_s = 0.0``,
+        # so default deployments pay zero cost. (Copilot 3253293644/3253309972.)
+        if self._weight_update_poller is not None:
+            try:
+                await self._weight_update_poller.start()
+            except Exception:  # pylint: disable=broad-except
+                _log.warning("cloud_weight_update_poller_start_failed", exc_info=True)
         if self._memory_tier is not None:
             self._consolidation_task = spawn_tracked(
                 self._consolidation_tasks,
@@ -331,6 +368,13 @@ class MouseDroidOrchestrator:
             self._consolidation_tasks.discard(self._consolidation_task)
             self._consolidation_task = None
         await cancel_and_drain(self._cloud_publish_tasks)
+        # Tier C1 — stop the OTA poller. Wrapped in try/except so a stuck
+        # in-flight download can't block orchestrator shutdown.
+        if self._weight_update_poller is not None:
+            try:
+                await self._weight_update_poller.stop()
+            except Exception:  # pylint: disable=broad-except
+                _log.warning("cloud_weight_update_poller_stop_failed", exc_info=True)
         if self._cloud_experience_exporter is not None:
             await self._cloud_experience_exporter.close()
         if self._cloud_sink is not None:
@@ -418,7 +462,18 @@ class MouseDroidOrchestrator:
                     return
 
             action = self._select_action(safety_ctx, observation, loop_time_ms)
-            self._prev_action = action.unsqueeze(0) if action.dim() == 1 else action
+            # Tier C1 — atomic OTA swap. Runs AFTER ``_select_action`` so the
+            # current tick saw one consistent weight set for both
+            # ``_update_world_model`` and ``_select_action``. No-op when the
+            # poller is not wired or has no pending update. Returns ``True``
+            # iff a world-model swap performed a recurrent-state reset; in
+            # that case ``_prev_action`` has already been zeroed by the
+            # helper (preserving device + dtype) and MUST NOT be overwritten
+            # with the pre-swap action — overwriting would void the
+            # ``reset_state_on_swap`` invariant documented in ADR-010.
+            swap_reset = self._apply_pending_weight_update()
+            if not swap_reset:
+                self._prev_action = action.unsqueeze(0) if action.dim() == 1 else action
 
             ctx.proposed_action = action
             await self._hook_registry.run_phase(HookPhase.PRE_ACTION, ctx)
@@ -585,6 +640,124 @@ class MouseDroidOrchestrator:
         # Stage 3: Fallback to zero (safe default)
         _log.warning("mission_unresolved", command=nl_command)
         return GoalVector()
+
+    def _apply_pending_weight_update(self) -> bool:
+        """Atomically swap policy / world-model if poller has a verified update.
+
+        Runs ONCE per tick, AFTER ``_select_action`` returns. Guarantees the
+        current tick saw one consistent weight set for both
+        ``_update_world_model`` and ``_select_action``. Reference assignment
+        is atomic at the Python interpreter level; we hold no locks because
+        the orchestrator's ``tick()`` is single-coroutine on the event loop.
+
+        The new engine is fully materialised via ``self._weight_update_loader``
+        BEFORE the reference swap, so a loader failure does NOT corrupt the
+        live model — the helper logs the error, leaves the live model
+        untouched, and clears the pending slot only on success.
+
+        When ``cfg.cloud.weight_update.reset_state_on_swap`` is ``True`` (the
+        default) the latent recurrent state ``(h, z)`` is reset to zeros
+        after a world-model swap to avoid one-tick cross-model contamination
+        (see ADR-010). The previous-action tensor and latent recovery buffer
+        are also cleared in the same pass — they were produced by the OLD
+        weights and would seed the new engine with stale context. Device +
+        dtype are preserved via ``torch.zeros_like`` so a CUDA-resident
+        world-model state survives the swap on its original device.
+
+        Method is INTENTIONALLY synchronous: ``tick()`` is the only caller,
+        the swap runs entirely in process memory (no I/O after the poller
+        downloaded), and keeping it sync avoids scheduling churn between
+        select_action and execute_action.
+
+        Returns:
+            ``True`` iff a world-model swap performed a recurrent-state
+            reset (caller MUST skip its own ``_prev_action = action``
+            assignment so the zero-state survives into the next tick).
+            ``False`` for any other code path (no poller, no pending,
+            policy-only swap, loader failure, dead-letter, etc.).
+        """
+        poller = self._weight_update_poller
+        if poller is None:
+            return False
+        update = poller.pending_update
+        if update is None:
+            return False
+        if self._weight_update_loader is None:
+            # Acknowledge-and-warn-once: without ack the same pending update
+            # would re-fire ``cloud_weight_update_swap_skipped_no_loader``
+            # at 30 Hz forever (one log line per tick). Ack clears the slot
+            # so the poller's next download cycle can surface a fresh update,
+            # at which point the operator-visible warning fires again — once
+            # per revision, not once per tick. (Copilot 3253293630.)
+            _log.warning(
+                "cloud_weight_update_swap_skipped_no_loader",
+                repo_id=update.repo_id,
+                revision=update.revision,
+                engine_type=update.engine_type,
+            )
+            poller.acknowledge_swap(update)
+            return False
+
+        try:
+            new_engine = self._weight_update_loader(update)
+        except Exception:  # pylint: disable=broad-except
+            _log.error(
+                "cloud_weight_update_swap_failed",
+                repo_id=update.repo_id,
+                revision=update.revision,
+                engine_type=update.engine_type,
+                exc_info=True,
+            )
+            # Ack the bad revision so we don't log-spam at 30 Hz. The
+            # poller will surface a new PendingWeightUpdate on the next
+            # cycle if the upstream artifact changes.
+            poller.acknowledge_swap(update)
+            return False
+
+        # Atomic reference swap. Single-coroutine guarantee on tick() means
+        # no concurrent reader observes a half-swapped state.
+        reset_recurrent_state = False
+        if update.engine_type == "world_model":
+            self._world_model = cast("WorldModelProtocol", new_engine)
+            reset_recurrent_state = self._cfg.cloud.weight_update.reset_state_on_swap
+        elif update.engine_type == "policy":
+            self._vla_policy = cast("VLAPolicyProtocol", new_engine)
+        else:
+            # Unknown engine type — acknowledge + dead-letter so the same
+            # bad pending update doesn't stick around firing this warning
+            # at 30 Hz. (Copilot 3253293637.)
+            _log.warning(
+                "cloud_weight_update_unknown_engine_type",
+                engine_type=update.engine_type,
+                repo_id=update.repo_id,
+                revision=update.revision,
+            )
+            poller.acknowledge_swap(update)
+            return False
+
+        if reset_recurrent_state:
+            # Use ``zeros_like`` so device + dtype are preserved. The live
+            # world-model may run on CUDA; ``torch.zeros(...)`` with default
+            # device would silently move state back to CPU and break the
+            # next ``observe_step`` with a device-mismatch error.
+            # (Copilot 3253293626 / 3253309982.)
+            self._h = torch.zeros_like(self._h)
+            self._z = torch.zeros_like(self._z)
+            self._prev_action = torch.zeros_like(self._prev_action)
+            self._latent_buffer.clear()
+
+        if self._metrics is not None:
+            self._metrics.inc_cloud_weight_update_swap(update.engine_type)
+
+        _log.info(
+            "cloud_weight_update_swap_applied",
+            repo_id=update.repo_id,
+            revision=update.revision,
+            engine_type=update.engine_type,
+            reset_state=reset_recurrent_state,
+        )
+        poller.acknowledge_swap(update)
+        return reset_recurrent_state
 
     def _update_world_model(self, observation: ObservationProtocol) -> None:
         """Run world model observation step to update latent state.

@@ -1118,6 +1118,14 @@ class MetricsConfig(BaseModel):
             "Operator-tunable per deployment."
         ),
     )
+    cloud_weight_update_download_seconds_buckets: tuple[float, ...] = Field(
+        (0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, float("inf")),
+        description=(
+            "Histogram bucket boundaries for OTA weight-update download latency "
+            "(seconds). Tier C1: covers cellular-fleet downloads on the order of "
+            "tens of MB. Operator-tunable per deployment."
+        ),
+    )
 
     @field_validator(
         "loop_latency_buckets_ms",
@@ -1125,6 +1133,7 @@ class MetricsConfig(BaseModel):
         "mcp_latency_buckets_ms",
         "vla_inference_seconds_buckets",
         "world_model_observe_step_seconds_buckets",
+        "cloud_weight_update_download_seconds_buckets",
     )
     @classmethod
     def _validate_histogram_buckets(cls, value: tuple[float, ...]) -> tuple[float, ...]:
@@ -2315,6 +2324,98 @@ class GCPConfig(BaseModel):
         if self.pubsub.telemetry_topic == self.pubsub.experience_topic:
             raise ValueError("GCPConfig.pubsub.telemetry_topic and experience_topic must differ")
         return self
+
+
+# ---------------------------------------------------------------------------
+# Tier C1 — Closed-loop cloud retraining + OTA weight updates
+# ---------------------------------------------------------------------------
+
+
+class WeightUpdatePollConfig(BaseModel):
+    """Configuration for the HuggingFace Hub OTA weight-update poller.
+
+    Default ``poll_interval_s = 0.0`` disables the poller entirely so
+    existing YAML files load with byte-identical pre-Tier-C1 behaviour.
+    """
+
+    poll_interval_s: float = Field(
+        0.0,
+        ge=0.0,
+        description=(
+            "Background poll interval in seconds. ``0.0`` disables the poller "
+            "entirely (default — preserves byte-identical pre-Tier-C1 "
+            "behaviour). Operators flip this to e.g. 300.0 to poll every "
+            "five minutes for new artifacts."
+        ),
+    )
+    policy_repo_id: str = Field(
+        "ianshank/mousedroid-policy-v2",
+        description="HuggingFace Hub repo ID containing the trained policy artifact.",
+    )
+    policy_filename: str = Field(
+        "policy.onnx",
+        description="Filename within ``policy_repo_id`` of the policy artifact.",
+    )
+    world_model_repo_id: str = Field(
+        "ianshank/mousedroid-dual-stream-rssm",
+        description="HuggingFace Hub repo ID containing the trained world-model artifact.",
+    )
+    world_model_filename: str = Field(
+        "observe_step.onnx",
+        description="Filename within ``world_model_repo_id`` of the observe_step ONNX export.",
+    )
+    cache_dir: str = Field(
+        "weights/cloud_updates",
+        description=(
+            "Local directory the poller writes verified artifacts into. "
+            "Resolved relative to the runtime CWD unless absolute."
+        ),
+    )
+    sha256_manifest_filename: str = Field(
+        "sha256.txt",
+        description=(
+            "Filename inside the HF repo carrying the expected hex-encoded "
+            "SHA-256 digest for the downloaded artifact. Single-line file "
+            "containing only the hex digest. SAFETY-CRITICAL: a download is "
+            "refused if the local SHA does not match this manifest."
+        ),
+    )
+    reset_state_on_swap: bool = Field(
+        True,
+        description=(
+            "Reset h/z to zeros after swap. Default ``True`` because the "
+            "orchestrator's ``tick()`` body runs ``_update_world_model`` "
+            "BEFORE ``_select_action``, so a swap mid-sprint leaves the next "
+            "tick's ``observe_step`` receiving ``(h, z)`` computed by the OLD "
+            "world model. Zeroing the recurrent state on swap is the only "
+            "way to avoid that one-tick cross-model contamination — trade-off "
+            "is one tick of context loss, which is acceptable for an OTA "
+            "event operators expect to happen at minute-scale, not 30 Hz."
+        ),
+    )
+    download_timeout_s: float = Field(
+        60.0,
+        gt=0.0,
+        description="Per-download wall-clock timeout (seconds).",
+    )
+    max_retries: int = Field(
+        3,
+        ge=0,
+        description="Maximum retry attempts per artifact (forwarded to weights_manager).",
+    )
+
+
+class CloudConfig(BaseModel):
+    """Tier C1 cloud retraining loop umbrella configuration.
+
+    Owns the OTA weight-update poller block. Orthogonal to :class:`GCPConfig`
+    which covers the Pub/Sub / GCS data pipeline.
+    """
+
+    weight_update: WeightUpdatePollConfig = Field(
+        default_factory=_settings_default_factory(WeightUpdatePollConfig),
+        description="HuggingFace Hub OTA weight-update poller configuration.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -3905,6 +4006,17 @@ class Settings(BaseSettings):
     gcp: GCPConfig | None = Field(
         None,
         description="GCP Digital Twin config (None=fully offline autonomous mode)",
+    )
+
+    # Tier C1 — Closed-loop cloud retraining + OTA weight-update poller block.
+    # Default-on with ``weight_update.poll_interval_s = 0.0`` so existing YAML
+    # files load with byte-identical pre-Tier-C1 behavior (poller disabled).
+    cloud: CloudConfig = Field(
+        default_factory=_settings_default_factory(CloudConfig),
+        description=(
+            "Tier C1 cloud retraining loop config. Default-on with the OTA "
+            "poller disabled (``cloud.weight_update.poll_interval_s = 0.0``)."
+        ),
     )
 
     # Robot arm platform configs (optional — only used when platform=robot_arm)

@@ -1,0 +1,66 @@
+# =============================================================================
+# Vertex AI Custom Training Job — Tier C1 closed-loop cloud retraining.
+# =============================================================================
+# Applied via:
+#   gcloud ai custom-jobs create \
+#     --region=us-central1 \
+#     --display-name=mousedroid-cloud-train \
+#     --config=cloud/vertex_ai_job_spec.yaml
+#
+# Operator must set:
+#   * imageUri — pushed Dockerfile.cloud image (e.g. gcr.io/<project>/mousedroid-cloud:tier-c1)
+#   * the GCS bucket name in args (replace ``REPLACE_BUCKET``) and the
+#     ``shard_consumed_marker`` blob name (replace ``run_id_placeholder``
+#     with a per-run identifier — e.g. the Vertex AI job ID).
+#
+# What this spec runs today (Tier C1):
+#   * Offline RL training (CQL/IQL) via training/train_offline_rl.py
+#   * Per-job GCS idempotency: trainer checks ``--shard-consumed-marker-uri``
+#     at startup and writes the marker on success so re-invocations
+#     short-circuit. Per-job semantics — NOT per-shard. See ADR-010.
+#
+# What this spec does NOT yet do (deferred follow-up):
+#   * Upload trained artifacts to HuggingFace Hub. The upload module
+#     (training/upload_weights.py) does not exist yet. When it lands,
+#     the spec will be extended to:
+#       - Add ``HUGGINGFACE_HUB_TOKEN`` via ``valueFrom.secretKeyRef``.
+#       - Pass ``--push-to-hf --hf-repo-id ... --hf-artifact-filename ...``.
+#     Until then, the trainer's output remains in GCS and an operator
+#     hands off via ``huggingface-cli upload`` manually.
+#   * Iterate over LMDB shards under a ``--lmdb-shards-gcs-prefix``. The
+#     flag was removed from the trainer because no shard-iteration loop
+#     consumes it yet; it'll land in the same follow-up as the upload
+#     module. (Copilot 3253430586.)
+# =============================================================================
+workerPoolSpecs:
+  - machineSpec:
+      machineType: n1-standard-8
+      acceleratorType: NVIDIA_TESLA_T4
+      acceleratorCount: 1
+    replicaCount: 1
+    containerSpec:
+      imageUri: REPLACE_GCR_PATH/mousedroid-cloud:tier-c1
+      env:
+        - name: MOUSEDROID_CLOUD_TRAIN_CONFIG
+          value: /etc/mousedroid/cloud_train.yaml
+        # HUGGINGFACE_HUB_TOKEN is intentionally NOT injected here — no
+        # HF Hub upload runs in Tier C1, so provisioning a privileged
+        # secret would unnecessarily expand the job's blast radius. The
+        # follow-up PR that ships the upload module will re-add this
+        # env var via ``valueFrom.secretKeyRef`` (Secret Manager binding,
+        # never plaintext). (Copilot 3253430595 / 3253430599.)
+      args:
+        # --shard-consumed-marker-uri is the ONLY trainer flag consumed
+        # by Tier C1. It gates the per-job GCS idempotency check
+        # (existence check at startup, blob write on success). The
+        # trainer does NOT read ``MOUSEDROID_SHARD_CONSUMED_MARKER_PREFIX``;
+        # pass the marker URI here explicitly. (Copilot 3253293678 /
+        # 3253310030.)
+        - --shard-consumed-marker-uri
+        - gs://REPLACE_BUCKET/cloud_train/shard_consumed_marker/run_id_placeholder
+
+# Optional: scheduled execution. Operators uncomment + customise once they're
+# ready to run nightly retraining.
+# schedule:
+#   cron: "0 3 * * *"  # 03:00 UTC nightly
+#   timeZone: UTC

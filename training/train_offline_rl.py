@@ -399,6 +399,109 @@ def train_offline_rl(
             real_dataset.close()
 
 
+def _shard_is_consumed(marker_uri: str) -> bool:
+    """Return ``True`` when a ``shard_consumed_marker`` already exists in GCS.
+
+    Tier C1 idempotency hook: the Jetson exporter may re-upload an LMDB
+    shard if it crashes between the upload + HWM-write. The cloud trainer
+    treats one ``--shard-consumed-marker-uri`` as a **single per-job
+    idempotency token**: when the marker exists at startup the job
+    short-circuits without retraining; when it does not, the trainer runs
+    and :func:`_write_shard_consumed_marker` lands the marker on success.
+
+    The implementation is lazy-imported because ``google-cloud-storage`` is
+    optional inside the editable repo install — only Vertex AI workers
+    need it. The Dockerfile.cloud image installs the ``[gcp]`` extra so
+    the import always succeeds inside the container; the warning path is
+    a safety net for local dev runs that pass a ``gs://`` marker without
+    the GCP extras installed.
+    """
+    try:
+        from google.cloud import storage
+    except ImportError:
+        _log.warning("cloud_train_gcs_unavailable", marker_uri=marker_uri)
+        return False
+    if not marker_uri.startswith("gs://"):
+        return False
+    rest = marker_uri[len("gs://") :]
+    bucket_name, _, blob_name = rest.partition("/")
+    if not bucket_name or not blob_name:
+        return False
+    # Wrap the Client construction + RPC in try/except so missing
+    # Application Default Credentials, transient 5xx responses, or a
+    # bucket-permission failure can't crash the training job. Per
+    # ADR-010 the idempotency check is an OPTIMISATION: a failure to
+    # read the marker SHOULD let the job proceed (fail-open) rather
+    # than abort, since the worst case is retraining a previously-
+    # consumed shard (wasted compute), not data corruption. We log
+    # the failure with ``exc_info`` so an operator can see why the
+    # check skipped and decide whether to retune the deployment.
+    # (Copilot 3253369562.)
+    try:
+        client = storage.Client()
+        # google-cloud-storage's stubs declare exists() as -> bool but the
+        # runtime returns Any when GOOGLE_APPLICATION_CREDENTIALS is missing;
+        # cast explicitly so mypy --strict stays clean without a global
+        # ignore on the optional dep.
+        exists: bool = bool(client.bucket(bucket_name).blob(blob_name).exists())
+    except Exception:  # pylint: disable=broad-except
+        # Fail-open: idempotency check is an optimisation, not a safety
+        # gate. Worst case the trainer re-runs a previously-consumed
+        # shard (wasted compute). The structured log captures the full
+        # traceback so operators can debug the GCS failure mode.
+        _log.warning(
+            "cloud_train_idempotency_check_failed",
+            marker_uri=marker_uri,
+            exc_info=True,
+        )
+        return False
+    return exists
+
+
+def _write_shard_consumed_marker(marker_uri: str) -> None:
+    """Create the GCS ``shard_consumed_marker`` blob after a successful run.
+
+    Idempotency contract complement to :func:`_shard_is_consumed`. Without
+    this write the idempotency check at startup is a no-op (the marker
+    never appears, so re-runs always train). Per ADR-010 the marker MUST
+    be written only AFTER training completes successfully — a failed run
+    must remain re-runnable. (Copilot 3253293667 / 3253310012.)
+    """
+    try:
+        from google.cloud import storage
+    except ImportError:
+        _log.warning("cloud_train_gcs_unavailable_write", marker_uri=marker_uri)
+        return
+    if not marker_uri.startswith("gs://"):
+        _log.warning("cloud_train_marker_uri_invalid", marker_uri=marker_uri)
+        return
+    rest = marker_uri[len("gs://") :]
+    bucket_name, _, blob_name = rest.partition("/")
+    if not bucket_name or not blob_name:
+        _log.warning("cloud_train_marker_uri_invalid", marker_uri=marker_uri)
+        return
+    # Same fail-open contract as ``_shard_is_consumed``: a write failure
+    # MUST NOT crash the training job after the real work is done. The
+    # idempotency marker is an optimisation; missing it just means a
+    # future re-run won't short-circuit (wasted compute, not data loss).
+    # (Copilot 3253369562 / 3253310003.)
+    try:
+        client = storage.Client()
+        blob = client.bucket(bucket_name).blob(blob_name)
+        blob.upload_from_string(
+            "shard consumed by mousedroid offline_rl_train\n",
+            content_type="text/plain",
+        )
+    except Exception:  # pylint: disable=broad-except
+        _log.warning(
+            "cloud_train_shard_marker_write_failed",
+            marker_uri=marker_uri,
+            exc_info=True,
+        )
+        return
+    _log.info("cloud_train_shard_marker_written", marker_uri=marker_uri)
+
+
 def main() -> None:
     """CLI entry point for offline RL training."""
     parser = argparse.ArgumentParser(description="Offline RL training (CQL/IQL)")
@@ -427,8 +530,38 @@ def main() -> None:
         default=None,
         help="Resume from checkpoint path",
     )
+    # Tier C1 cloud-training flag. Only ``--shard-consumed-marker-uri`` is
+    # actually wired into the trainer today — the HF-Hub upload flags
+    # (--push-to-hf, --hf-repo-id, --hf-artifact-filename) AND the LMDB
+    # shard-prefix flag were intentionally NOT shipped in C1 because the
+    # concrete upload module (``training/upload_weights.py``) + shard
+    # iteration loop (which would consume ``--lmdb-shards-gcs-prefix``)
+    # do not yet exist. Exposing parsed-but-unused flags would silently
+    # no-op and mislead operators. The flags will land in a follow-up PR
+    # together with their implementations; see ADR-010 and the Tier C
+    # plan §"Out-of-Scope Items". (Copilot 3253293666 / 3253310017 /
+    # 3253293671 / 3253293675 / 3253310025 / 3253430586.)
+    parser.add_argument(
+        "--shard-consumed-marker-uri",
+        type=str,
+        default=None,
+        help=(
+            "Optional GCS URI used as a per-job idempotency marker. When the "
+            "blob already exists at startup the trainer short-circuits without "
+            "retraining; on a successful run the trainer writes the marker so "
+            "subsequent re-invocations short-circuit. See ADR-010."
+        ),
+    )
 
     args = parser.parse_args()
+
+    if args.shard_consumed_marker_uri and _shard_is_consumed(args.shard_consumed_marker_uri):
+        _log.info(
+            "cloud_train_shard_already_consumed",
+            marker_uri=args.shard_consumed_marker_uri,
+        )
+        return
+
     cfg = load_settings(args.config)
 
     output_dir = Path(args.output_dir) if args.output_dir else None
@@ -438,6 +571,11 @@ def main() -> None:
         output_dir=output_dir,
         resume_from=args.resume,
     )
+
+    # Write the GCS idempotency marker AFTER successful training so a
+    # failed run remains re-runnable. (Copilot 3253293667.)
+    if args.shard_consumed_marker_uri:
+        _write_shard_consumed_marker(args.shard_consumed_marker_uri)
 
 
 if __name__ == "__main__":

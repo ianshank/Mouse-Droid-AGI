@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from unittest.mock import patch
 
 import pytest
@@ -10,6 +11,7 @@ from mousedroid.utils.weights_manager import (
     _HF_HUB_AVAILABLE,
     _hf_hub_download,
     download_weights_from_huggingface,
+    verify_sha256,
     weights_exist_locally,
 )
 
@@ -319,3 +321,100 @@ def test_hf_hub_available_flag_set_when_hub_importable():
         else:
             sys.modules["huggingface_hub"] = saved
         importlib.reload(wm)
+
+
+# ---------------------------------------------------------------------------
+# Tier C1 — verify_sha256 helper
+# ---------------------------------------------------------------------------
+
+
+def _sha256(data: bytes) -> str:
+    """Compute the lowercase hex SHA-256 digest of ``data``."""
+    return hashlib.sha256(data).hexdigest()
+
+
+def test_verify_sha256_match_returns_true(tmp_path):
+    """verify_sha256 returns True when the digest matches."""
+    payload = b"mousedroid-tier-c1-weight-update"
+    f = tmp_path / "weights.bin"
+    f.write_bytes(payload)
+    assert verify_sha256(f, _sha256(payload)) is True
+
+
+def test_verify_sha256_mismatch_returns_false(tmp_path):
+    """verify_sha256 returns False on a digest mismatch — safety-critical."""
+    f = tmp_path / "weights.bin"
+    f.write_bytes(b"actual-contents")
+    bogus = _sha256(b"different-contents")
+    assert verify_sha256(f, bogus) is False
+
+
+def test_verify_sha256_case_insensitive_and_whitespace_tolerant(tmp_path):
+    """Expected digest is normalised (lowercase, stripped)."""
+    payload = b"abc"
+    f = tmp_path / "weights.bin"
+    f.write_bytes(payload)
+    digest = _sha256(payload).upper()
+    assert verify_sha256(f, f"  {digest}\n") is True
+
+
+def test_verify_sha256_missing_file_returns_false(tmp_path):
+    """verify_sha256 returns False (no crash) when the file is missing."""
+    assert verify_sha256(tmp_path / "nope.bin", _sha256(b"anything")) is False
+
+
+def test_verify_sha256_rejects_malformed_expected(tmp_path):
+    """Malformed expected digest is refused without computing the hash."""
+    f = tmp_path / "weights.bin"
+    f.write_bytes(b"data")
+    assert verify_sha256(f, "deadbeef") is False  # too short
+    assert verify_sha256(f, "z" * 64) is False  # non-hex
+    assert verify_sha256(f, "") is False
+
+
+def test_verify_sha256_log_event_prefix_propagates(tmp_path, capsys):
+    """The log_event_prefix kwarg gates the structured-log event name."""
+    f = tmp_path / "weights.bin"
+    f.write_bytes(b"data")
+    bogus = _sha256(b"other")
+    assert verify_sha256(f, bogus, log_event_prefix="cloud_weight_update") is False
+    # structlog renders to stdout/stderr; the event-name string appears in
+    # the captured output regardless of formatter (key=value / json / dev).
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert "cloud_weight_update_sha256_mismatch" in combined
+
+
+def test_verify_sha256_handles_os_error_on_read(tmp_path, monkeypatch, capsys):
+    """OSError during file read must fail closed + log + NOT propagate.
+
+    Regression net for Copilot 3253310002: safety-critical OTA gating must
+    NEVER let an OSError from ``path.open('rb').read(...)`` propagate and
+    crash the poller. Verified by patching ``Path.open`` to raise OSError
+    after the existence check passed.
+    """
+    from pathlib import Path as _Path
+
+    f = tmp_path / "weights.bin"
+    f.write_bytes(b"data")
+    digest = _sha256(b"data")
+
+    # Patch Path.open since verify_sha256 calls ``path.open("rb")``.
+    # Capture the original via the descriptor protocol so the fake can
+    # delegate to it for any unrelated paths (none in this test, but
+    # keeping the delegation prevents side-effects if a future
+    # implementation does extra reads).
+    original_path_open = _Path.open
+
+    def _failing_path_open(self, *args, **kwargs):
+        if str(self).endswith("weights.bin") and (args and args[0] == "rb"):
+            raise OSError("simulated transient FS error")
+        return original_path_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(_Path, "open", _failing_path_open)
+
+    result = verify_sha256(f, digest, log_event_prefix="cloud_weight_update")
+    assert result is False, "OSError on read must yield False (fail-closed)"
+    captured = capsys.readouterr()
+    assert "cloud_weight_update_sha256_invalid_input" in (captured.out + captured.err)
+    assert "file_read_failed" in (captured.out + captured.err)

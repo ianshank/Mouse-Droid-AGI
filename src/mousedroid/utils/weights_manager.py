@@ -7,6 +7,7 @@ logic and graceful degradation if hf_hub not installed.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -235,6 +236,119 @@ def _download_file_with_retry(
                     error=str(e),
                 )
     return False
+
+
+# ---------------------------------------------------------------------------
+# Tier C1 — SHA-256 integrity verification helper
+# ---------------------------------------------------------------------------
+
+# Chunk size for streaming SHA-256 over a file. Picked to balance loop
+# overhead against memory pressure on the Jetson Orin Nano. Not a tunable
+# the operator should touch; hash output is independent of the chunk size.
+_SHA256_CHUNK_BYTES: int = 64 * 1024
+
+
+def verify_sha256(
+    local_path: Path | str,
+    expected_hex: str,
+    *,
+    log_event_prefix: str = "weights",
+) -> bool:
+    """Verify that ``local_path`` matches the SHA-256 digest ``expected_hex``.
+
+    Safety-critical helper: returns ``True`` only when the file exists, the
+    expected digest is a syntactically valid 64-char lowercase hex string,
+    and the computed digest matches. Any failure path returns ``False`` and
+    emits a structured log event with prefix ``log_event_prefix`` so the
+    caller can correlate the failure with the upstream subsystem (e.g.
+    ``"cloud_weight_update"`` for the OTA poller).
+
+    The expected digest is supplied by the caller (typically read from a
+    ``sha256.txt`` manifest in the same HuggingFace repo as the artifact).
+    NEVER hardcoded inside this helper — Tier C1 requirement.
+
+    Args:
+        local_path: Path to the local file to verify.
+        expected_hex: Hex-encoded SHA-256 digest the file MUST match
+            (case-insensitive; whitespace is stripped). Must be exactly
+            64 hex characters after normalisation.
+        log_event_prefix: Structured-log event-name prefix. The helper emits
+            ``<prefix>_sha256_verified`` on success and
+            ``<prefix>_sha256_mismatch`` / ``<prefix>_sha256_invalid_input``
+            on failure.
+
+    Returns:
+        ``True`` iff the file exists, ``expected_hex`` is a valid 64-char
+        hex string, and the computed SHA-256 digest matches.
+    """
+    # Pre-compute structured-log event names as plain-string locals so the
+    # actual ``_log.*(<event_name>, ...)`` calls below pass an immutable
+    # string literal rather than an f-string. Project convention reserves
+    # f-strings for value formatting; event names appear in Loki / Grafana
+    # search indexes and MUST be greppable across the codebase. Computing
+    # them once at the top of the function also avoids the redundant
+    # string construction on every failure path. (Copilot 3253369574.)
+    invalid_input_event = log_event_prefix + "_sha256_invalid_input"
+    mismatch_event = log_event_prefix + "_sha256_mismatch"
+    verified_event = log_event_prefix + "_sha256_verified"
+
+    path = Path(local_path)
+    if not path.is_file():
+        _log.warning(
+            invalid_input_event,
+            reason="missing_file",
+            local_path=str(path),
+        )
+        return False
+
+    expected = expected_hex.strip().lower()
+    if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
+        _log.warning(
+            invalid_input_event,
+            reason="malformed_expected_digest",
+            local_path=str(path),
+            expected_len=len(expected),
+        )
+        return False
+
+    hasher = hashlib.sha256()
+    try:
+        with path.open("rb") as fh:
+            while True:
+                chunk = fh.read(_SHA256_CHUNK_BYTES)
+                if not chunk:
+                    break
+                hasher.update(chunk)
+    except OSError as exc:
+        # Transient filesystem errors (permissions, vanished file mid-read,
+        # network mount glitches) MUST fail closed — never let the OS error
+        # propagate to the caller, since safety-critical OTA gating depends
+        # on this returning False on any verification failure.
+        _log.warning(
+            invalid_input_event,
+            reason="file_read_failed",
+            local_path=str(path),
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+        return False
+    computed = hasher.hexdigest()
+
+    if computed != expected:
+        _log.warning(
+            mismatch_event,
+            local_path=str(path),
+            expected=expected,
+            computed=computed,
+        )
+        return False
+
+    _log.info(
+        verified_event,
+        local_path=str(path),
+        sha256=computed,
+    )
+    return True
 
 
 def weights_exist_locally(weights_dir: Path | str, filenames: list[str]) -> bool:
