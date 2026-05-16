@@ -571,8 +571,8 @@ graph TD
         end
 
         SafetyProj["GeometricSafetyProjector\nsafety/projector.py\nstateless, deterministic\nforward-velocity / human-proximity /\ntight-quarters clamps"]
-        MissionLC["MissionLifecycle\norchestrator/mission_lifecycle.py\nPENDING -> RUNNING ->\nSUCCEEDED | FAILED | REPLANNING\npolls VLMProgressHead"]
-        LLMRepln["LLM Gateway replan\nllm_gateway/protocol.py\nstall -> new GoalVector"]
+        MissionLC["MissionLifecycle (BUILT but not orchestrator-wired)\norchestrator/mission_lifecycle.py\nPENDING -> RUNNING ->\nSUCCEEDED | FAILED | REPLANNING\npolls VLMProgressHead\nFactory builds it via build_mission_lifecycle();\nC2.1 follow-up will wire it into tick()"]
+        LLMRepln["LLM Gateway replan\nllm_gateway/protocol.py\nstall -> new GoalVector\n(wired when C2.1 lands)"]
 
         Metrics3["Prometheus families (Tier C):\nmousedroid_cloud_weight_update_*\nmousedroid_safety_action_clamps\nmousedroid_mission_state_transitions\nmousedroid_mission_replans\nmousedroid_mission_active_duration_seconds"]
     end
@@ -583,7 +583,7 @@ graph TD
     PendingUpdate -. "consumed once per tick" .-> ApplySwap
 
     ProjectAction -.-> SafetyProj
-    PostTick -.-> MissionLC
+    MissionLC -. "PLANNED for C2.1\n(currently external drivers only)" .-> PostTick
     MissionLC -. "REPLANNING + within budget" .-> LLMRepln
     LLMRepln -- "new GoalVector" --> MissionLC
 
@@ -596,7 +596,7 @@ graph TD
 |---|---|---|
 | `cfg.cloud.weight_update.poll_interval_s` | `0.0` | Poller never constructed — byte-identical pre-C1 |
 | `cfg.safety.projection.enabled` | `false` | `_maybe_project_action` is a no-op pass-through |
-| `cfg.mission.replan_enabled` | `false` | `MissionLifecycle.tick` short-circuits, no LLM calls |
+| `cfg.mission.replan_enabled` | `false` | `MissionLifecycle` not built by factory; tick is byte-identical |
 | `cfg.cloud.weight_update.reset_state_on_swap` | `true` | Recurrent state zero-reset on world-model swap (`torch.zeros_like(...)` preserves device + dtype) |
 | `cfg.rover.reward` | `None` | Isaac Lab env raises `ValueError` only when explicitly built |
 
@@ -612,6 +612,22 @@ See:
 - ADR-010 (`architecture/ADR-010-cloud-weight-update-ota.md`) — C1 cloud OTA invariants
 - ADR-011 (`architecture/ADR-011-mission-closed-loop-safety-projection.md`) — C2 safety projection + mission lifecycle rationale (geometric over Lagrangian over masking)
 - ADR-009 (`architecture/ADR-009-isaac-lab-phase-b.md`) — C4 Isaac Lab env body + RoverRewardConfig (amended post-merge)
+
+**Tier C2.1 follow-up — MissionLifecycle orchestrator wiring**:
+
+PR #95 (Tier C2) shipped the `MissionLifecycle` class +
+`build_mission_lifecycle()` factory + 4 mission/safety Prometheus families,
+but DID NOT add a `mission_lifecycle` kwarg to `MouseDroidOrchestrator.__init__`
+or invoke `mission_lifecycle.tick()` inside `tick()`. Verified by
+`grep -n "mission_lifecycle" src/mousedroid/orchestrator/orchestrator.py` →
+0 matches. The lifecycle is currently exercised standalone via its own
+tests + external orchestrator drivers. A follow-up PR tracked as Tier
+C2.1 (see `docs/planning/NEXT_STEPS.md`) will thread the lifecycle
+through the constructor + invoke it at the POST_TICK seam so the
+closed-loop mission state machine fires automatically on every
+orchestrator tick. Until C2.1 lands, the lifecycle works but operators
+must drive it explicitly — the orchestrator does NOT poll
+`VLMProgressHead` per tick despite the C2 PR's claim.
 
 ---
 

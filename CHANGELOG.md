@@ -197,7 +197,15 @@ Adds two stateless, default-disabled seams to the orchestrator tick:
   transitions to REPLANNING on stall and submits an async replan
   request via the LLM gateway. All thresholds come from `cfg.mission.*`;
   default `replan_enabled=false` keeps existing deployments
-  byte-identical.
+  byte-identical. **NOTE (post-merge audit, surfaced by Gemini review on
+  PR #97)**: this PR ships the class + `build_mission_lifecycle()` factory
+  + telemetry families, but the orchestrator constructor does NOT yet
+  thread a `mission_lifecycle` kwarg and `tick()` does NOT yet invoke
+  `mission_lifecycle.tick()`. The lifecycle is currently exercised
+  standalone via its own tests + external orchestrator drivers. A
+  follow-up PR (Tier C2.1) will close this gap by wiring the lifecycle
+  through `__init__` + invoking it at the POST_TICK seam. See
+  `docs/planning/NEXT_STEPS.md` §"Tier C2.1 follow-up".
   See `src/mousedroid/orchestrator/mission_lifecycle.py`.
 - **Orchestrator tick seam** — single insertion point at
   `Orchestrator.tick()` around the unified `_select_action` call site

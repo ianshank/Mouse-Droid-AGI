@@ -33,22 +33,31 @@ Phase status post-Tier-C:
 | Phase 5 — Real-physics sim-to-real foundation | ✅ COMPLETE | Tier B3 (constants + URDF→USD) + Tier C4 (env body). Operator runs `.usd` conversion on Linux to fully unlock. |
 | **Phase 6 — On-device incremental learning** | 🔜 **ACTIVE** | See [NEXT_STEPS.md](NEXT_STEPS.md) §"Next Major Milestone — Phase 6" for scope. Multi-week. Plan file TBD. |
 
-**Operator follow-ups blocking the next milestone** (post-merge, hardware/Linux):
+**Code-level follow-ups** (small PRs, do these first):
 
-1. Run `scripts/convert_urdf_to_usd.py` on a Linux workstation + commit
+1. **Tier C2.1 — MissionLifecycle orchestrator wiring** (~1 day, surfaced
+   by Gemini review on PR #97). PR #95 shipped the lifecycle class +
+   factory + Prometheus families but did NOT thread it through
+   `MouseDroidOrchestrator.__init__` / `tick()`. Verified by
+   `grep -n "mission_lifecycle" src/mousedroid/orchestrator/orchestrator.py`
+   → 0 matches. See [NEXT_STEPS.md](NEXT_STEPS.md) §"Tier C2.1 Follow-Up"
+   for the scope.
+2. **`training/upload_weights.py`** (deferred from C1 per ADR-010
+   §"Out-of-Scope"). Closes the cloud → HF Hub leg of the closed loop —
+   without it the loop is half-built: C1 ships the Jetson-side puller; the
+   cloud trainer's output currently stays in GCS for manual
+   `huggingface-cli upload`.
+
+**Operator follow-ups** (post-merge, hardware/Linux access required):
+
+3. Run `scripts/convert_urdf_to_usd.py` on a Linux workstation + commit
    `assets/rover/mse6_4wd.usd` (unblocks the 9 Isaac Lab unit tests on Linux CI).
-2. Validate the C1 / C2 / C4 Jetson E2E smokes (each PR body documents a
+4. Validate the C1 / C2 / C4 Jetson E2E smokes (each PR body documents a
    per-track smoke runbook).
-3. Configure branch protection to require `vla-extras (3.11)` (and promote
+5. Configure branch protection to require `vla-extras (3.11)` (and promote
    `onnx-world-model-extras (3.11)` once it accumulates 7 green runs).
-4. Build + push `mousedroid-cloud:tier-c1` Docker image to GCR for the
+6. Build + push `mousedroid-cloud:tier-c1` Docker image to GCR for the
    Vertex AI custom-training job spec.
-5. Write `training/upload_weights.py` (deferred from C1 per ADR-010
-   §"Out-of-Scope") so the cloud → HF Hub leg of the closed loop closes.
-
-Until items 1 + 5 land, the closed-loop is half-built: C1 ships the
-Jetson-side puller; the cloud trainer's output stays in GCS for manual
-`huggingface-cli upload`.
 
 ---
 

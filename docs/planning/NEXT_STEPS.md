@@ -2,6 +2,35 @@
 
 > **Last updated**: 2026-05-16 | **Version**: 0.4.0-dev (Tier C merged) | **Pre-PR validation**: Ruff clean, mypy strict clean, coverage gate maintained
 
+## Tier C2.1 Follow-Up — Wire MissionLifecycle into the Orchestrator Tick
+
+**Surfaced by post-merge audit on PR #97 (Gemini code review)**: PR #95 (Tier C2)
+shipped the `MissionLifecycle` class, the `build_mission_lifecycle()` factory
+helper, and four `mousedroid_mission_*` Prometheus families, but did NOT thread
+a `mission_lifecycle` kwarg into `MouseDroidOrchestrator.__init__` and `tick()`
+never invokes `mission_lifecycle.tick(...)`. Verified by
+`grep -n "mission_lifecycle" src/mousedroid/orchestrator/orchestrator.py` →
+0 matches. The lifecycle is currently exercised standalone via its own tests
++ external orchestrator drivers.
+
+Scope (small, ~1 day):
+
+- Add `mission_lifecycle: MissionLifecycle | None = None` to
+  `MouseDroidOrchestrator.__init__` (matches the existing protocol-typed
+  kwargs for `safety_projector` + `weight_update_poller`).
+- Invoke `await self._mission_lifecycle.tick(observation, prev_observation)`
+  at the POST_TICK seam (after `_publish_telemetry`, before
+  `await self._hook_registry.run_phase(HookPhase.POST_TICK, ctx)` so hook
+  observers see the post-tick mission state).
+- Thread the lifecycle through `build_orchestrator(...)` in `factory.py`.
+- Add a regression test asserting `mission_lifecycle.tick()` fires once per
+  orchestrator tick when wired + remains a no-op when `mission_lifecycle=None`.
+- Branch-coverage gate 85%+ on changed lines.
+
+Tracked separately so PR #97 stays scoped to documentation refresh.
+
+---
+
 ## Next Major Milestone — Phase 6: On-Device Incremental Learning
 
 With Tier C merged (cloud retraining + OTA + closed-loop missions + safety
