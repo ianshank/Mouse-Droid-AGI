@@ -23,7 +23,6 @@ from mousedroid.sim.protocols import (
 
 # Re-export for ergonomic ``from .constants import ROVER_NUM_WHEELS``.
 __all__ = [
-    "ROVER_ACTION_DIM",
     "ROVER_CHASSIS_POSE_DIM",
     "ROVER_IMU_DIM",
     "ROVER_NUM_WHEELS",
@@ -64,12 +63,22 @@ to these links during ``RoverIsaacLabEnv.build()``."""
 
 
 # ---------------------------------------------------------------------------
-# Action / observation layout — kept in lockstep with MockRoverEnv contract
+# Observation layout — kept in lockstep with MockRoverEnv contract
 # ---------------------------------------------------------------------------
-
-ROVER_ACTION_DIM: Final[int] = ROVER_NUM_WHEELS
-"""One velocity command per wheel. Matches
-:attr:`MockRoverEnv.action_dim` — cross-backend contract guarantee."""
+#
+# Action-vector dimensionality is intentionally NOT a constant here. The
+# policy action_dim is mode-dependent (2 for differential / body_velocity,
+# could be 4 for a future independent-wheel mode) and lives on
+# :attr:`RoverActionConfig.action_dim` (mapped via
+# ``_ROVER_ACTION_DIM_BY_MODE`` in the schema). Both ``MockRoverEnv`` and
+# ``RoverIsaacLabEnv`` read it from ``cfg.action.action_dim`` so the two
+# backends cannot diverge.
+#
+# The 4-wheel articulation count remains :data:`ROVER_NUM_WHEELS` — that
+# is a property of the physical chassis (URDF defines 4 wheel revolutes)
+# and is unrelated to whatever shape the policy chooses to emit. The
+# Isaac Lab ``step()`` body is responsible for fanning a 2-D
+# differential-drive action across the 4 wheel actuators.
 
 
 ROVER_OBSERVATION_KEYS: Final[tuple[str, ...]] = (
@@ -83,9 +92,11 @@ and ``.step()``. Mirrors :attr:`MockRoverEnv.observation_keys` exactly
 under the default :class:`RoverObservationConfig` so both backends are
 drop-in replacements at the orchestrator level.
 
-Optional keys (``camera``, etc.) are gated by
-:class:`RoverObservationConfig` toggles and surface only when the
-corresponding flag is enabled — both backends honour the same toggles.
+The list intentionally matches the default
+:meth:`RoverObservationConfig.enabled_keys` output **exactly** (no
+subset, no superset). Toggling a key on/off in the config flips it in
+both backends; the cross-backend contract test in
+``test_constants.py`` asserts that exact equality.
 
 **Excludes ultrasonic / HC-SR04 / arm / gripper** — the active rover
 production baseline is IMU + chassis pose + wheel velocity + LiDAR only.

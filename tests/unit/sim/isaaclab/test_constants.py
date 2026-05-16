@@ -16,7 +16,6 @@ from pathlib import Path
 import pytest
 
 from mousedroid.sim.isaaclab.constants import (
-    ROVER_ACTION_DIM,
     ROVER_CHASSIS_POSE_DIM,
     ROVER_IMU_DIM,
     ROVER_NUM_WHEELS,
@@ -108,9 +107,35 @@ def test_wheel_joint_count_matches_num_wheels() -> None:
     assert len(ROVER_WHEEL_JOINT_NAMES) == ROVER_NUM_WHEELS
 
 
-def test_action_dim_equals_num_wheels() -> None:
-    """One velocity command per wheel — action dim must match wheel count."""
-    assert ROVER_ACTION_DIM == ROVER_NUM_WHEELS
+def test_policy_action_dim_decoupled_from_wheel_count() -> None:
+    """Action dim is mode-dependent and lives on RoverActionConfig.
+
+    The constants module deliberately does NOT export a numeric action
+    dim. The 4-wheel chassis (``ROVER_NUM_WHEELS``) is a physical
+    property of the URDF; the policy action vector is a mode-dependent
+    value (2 for the default differential / body_velocity modes, could
+    be 4 for a future independent-wheel mode). Conflating the two
+    would lock the policy into 4-D commands and silently break the
+    cross-backend contract with ``MockRoverEnv``.
+
+    Both backends must read action dim from ``cfg.action.action_dim`` —
+    this test pins that decoupling so a future PR can't re-add a
+    misleading ``ROVER_ACTION_DIM`` constant.
+    """
+    from mousedroid.config.schema import RoverActionConfig
+    from mousedroid.sim.isaaclab import constants as isaaclab_constants
+
+    # The constants module exposes wheel count for physical chassis use,
+    # not for action-vector sizing.
+    assert ROVER_NUM_WHEELS == 4
+    # The action dim lives on the config (mode-dependent) and is always
+    # less than or equal to the wheel count.
+    differential_dim = RoverActionConfig(mode="differential").action_dim
+    body_velocity_dim = RoverActionConfig(mode="body_velocity").action_dim
+    assert differential_dim == 2
+    assert body_velocity_dim == 2
+    # No ``ROVER_ACTION_DIM`` export — readers should never reach for it.
+    assert not hasattr(isaaclab_constants, "ROVER_ACTION_DIM")
 
 
 def test_observation_keys_exclude_ultrasonic() -> None:
@@ -133,28 +158,31 @@ def test_observation_keys_exclude_ultrasonic() -> None:
 
 
 def test_observation_keys_match_mock_rover_env() -> None:
-    """The Isaac Lab observation contract must mirror MockRoverEnv exactly.
+    """The Isaac Lab observation contract must mirror MockRoverEnv **exactly**.
 
     Both backends conform to :class:`RoverEnvProtocol` — they're drop-in
-    replacements. If their observation keys drift, the orchestrator would
-    silently break when switching backends.
+    replacements. If their observation keys drift in either direction
+    (mock adds one, Isaac Lab skips one, ordering changes) the
+    orchestrator silently breaks when switching backends.
+
+    Exact-equality assertion (not subset) is deliberate — a subset
+    check would let the mock backend add a new default key the Isaac
+    Lab backend silently drops, breaking the cross-backend contract
+    while the test stays green.
     """
     from mousedroid.config.schema import RoverConfig
 
     # MockRoverEnv requires a RoverConfig + wheel geometry. Default values
-    # exercise the same observation keys the rover production baseline
-    # uses (IMU + chassis pose + LiDAR + camera, no ultrasonic).
+    # exercise the rover production baseline (IMU + chassis pose +
+    # wheel velocity + LiDAR, no ultrasonic, no camera).
     mock = MockRoverEnv(cfg=RoverConfig(), wheel_radius_m=0.1, track_width_m=0.3)
     mock_keys = mock.observation_keys
 
-    # Every Isaac Lab key must be a subset of what MockRoverEnv emits —
-    # the cross-backend swap is then safe at the orchestrator boundary.
-    for key in ROVER_OBSERVATION_KEYS:
-        assert key in mock_keys, (
-            f"ROVER_OBSERVATION_KEYS references {key!r} which MockRoverEnv "
-            f"does not emit. Backends would diverge. MockRoverEnv keys: "
-            f"{mock_keys!r}"
-        )
+    assert mock_keys == ROVER_OBSERVATION_KEYS, (
+        f"ROVER_OBSERVATION_KEYS {ROVER_OBSERVATION_KEYS!r} does not match "
+        f"MockRoverEnv keys {mock_keys!r} exactly. Update both backends "
+        f"in lockstep, or one will diverge from the orchestrator contract."
+    )
 
 
 def test_imu_and_chassis_dims_imported_from_protocols() -> None:
