@@ -609,9 +609,9 @@ graph TD
 
 See:
 
-- ADR-010 (`docs/architecture/ADR-010-cloud-weight-update-ota.md`) — C1 cloud OTA invariants
-- ADR-011 (`docs/architecture/ADR-011-mission-closed-loop-safety-projection.md`) — C2 safety projection + mission lifecycle rationale (geometric over Lagrangian over masking)
-- ADR-009 (`docs/architecture/ADR-009-isaac-lab-phase-b.md`) — C4 Isaac Lab env body + RoverRewardConfig (amended post-merge)
+- ADR-010 (`architecture/ADR-010-cloud-weight-update-ota.md`) — C1 cloud OTA invariants
+- ADR-011 (`architecture/ADR-011-mission-closed-loop-safety-projection.md`) — C2 safety projection + mission lifecycle rationale (geometric over Lagrangian over masking)
+- ADR-009 (`architecture/ADR-009-isaac-lab-phase-b.md`) — C4 Isaac Lab env body + RoverRewardConfig (amended post-merge)
 
 ---
 
