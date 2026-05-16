@@ -29,17 +29,19 @@ per test case).
 from __future__ import annotations
 
 import argparse
+import inspect
 import logging
 import sys
 import time
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 
 from mousedroid.config.schema import ModelConfig
+from mousedroid.constants import N_SENSOR_MODALITIES_WITH_LIDAR
 from mousedroid.logging.setup import get_logger
 from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
 from mousedroid.world_model.onnx_io import (
@@ -172,12 +174,13 @@ def build_example_inputs(
         ``torch.onnx.export(... , tuple(inputs.values()), ...)``.
     """
     combined_h_dim = cfg.hidden_dim + cfg.cfc_hidden_dim
-    # vision + ultrasonic + motor + audio + lidar = 5 slots (mirrors
-    # mousedroid.constants.SENSOR_SLOT_MAP). Note this is the number of
-    # modality SLOTS in the valid_mask vector, not the count of enabled
-    # modalities — disabled modalities still occupy their slot for stable
-    # ordering across deployments.
-    n_modalities = 5
+    # Modality slot count in the valid_mask vector. Single source of truth
+    # lives in ``mousedroid.constants.SENSOR_SLOT_MAP`` / the explicit
+    # ``N_SENSOR_MODALITIES_WITH_LIDAR`` constant so the export contract
+    # tracks the encoder's slot layout automatically — operators adding a
+    # new modality update one place. Note this is SLOTS, not enabled count:
+    # disabled modalities still occupy their slot for stable ordering.
+    n_modalities = N_SENSOR_MODALITIES_WITH_LIDAR
     inputs: dict[str, Tensor] = {
         OBSERVE_STEP_INPUT_VISION: torch.zeros(
             batch_size, cfg.vision_dim, dtype=torch.float32, device=device
@@ -264,15 +267,28 @@ def run_export(
     )
     started = time.perf_counter()
 
+    export_kwargs: dict[str, Any] = {
+        "opset_version": opset,
+        "input_names": input_names,
+        "output_names": output_names,
+        "dynamic_axes": _dynamic_axes_for_inputs(input_names, output_names),
+        "do_constant_folding": True,
+    }
+    # torch >= 2.4 added the ``dynamo`` kwarg; torch >= 2.6 flipped its
+    # default from False to True (new dynamo exporter, requires onnxscript).
+    # Pin to the legacy TorchScript exporter that the CfC spike (B2 Story 0)
+    # validated against — same exporter the CfC numerical-equivalence test
+    # was tuned for. Older torch (<2.4) doesn't recognise the kwarg, so we
+    # introspect the signature and pass it only when supported. Project's
+    # minimum is ``torch>=2.1`` per pyproject.toml.
+    if "dynamo" in inspect.signature(torch.onnx.export).parameters:
+        export_kwargs["dynamo"] = False
+        _log.debug("world_model_export_using_legacy_exporter")
     torch.onnx.export(
         shim,
         tuple(inputs.values()),
         str(output_path),
-        opset_version=opset,
-        input_names=input_names,
-        output_names=output_names,
-        dynamic_axes=_dynamic_axes_for_inputs(input_names, output_names),
-        do_constant_folding=True,
+        **export_kwargs,
     )
 
     elapsed_s = time.perf_counter() - started
@@ -332,7 +348,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         required=False,
         default=None,
-        help="Path to a Settings YAML. When omitted, uses ModelConfig() defaults.",
+        help=(
+            "Path to a Settings YAML. When omitted, the script uses "
+            "ModelConfig defaults — note this requires cfc_hidden_dim > 0, "
+            "which the schema default does NOT satisfy. Pass --config "
+            "for production exports."
+        ),
     )
     parser.add_argument(
         "--output",
@@ -383,10 +404,13 @@ def _build_model_from_cli(args: argparse.Namespace) -> tuple[DualStreamRSSM, Mod
         # construction path for an empty input.
         cfg = ModelConfig.model_validate({})
     if cfg.cfc_hidden_dim <= 0:
+        config_arg = "--config <path-to-yaml>" if args.config is None else f"--config {args.config}"
         msg = (
-            "DualStreamRSSM requires cfc_hidden_dim > 0; "
-            f"got {cfg.cfc_hidden_dim}. Set ModelConfig.cfc_hidden_dim "
-            "in your config YAML."
+            f"DualStreamRSSM requires cfc_hidden_dim > 0; got "
+            f"{cfg.cfc_hidden_dim}. The schema default is 0 (pure-GRU mode); "
+            f"pass {config_arg} pointing at a YAML that sets "
+            "model.cfc_hidden_dim to a positive value (e.g. "
+            "config/jetson_production.yaml)."
         )
         raise ValueError(msg)
     model = DualStreamRSSM(cfg)

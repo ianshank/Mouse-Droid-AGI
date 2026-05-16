@@ -45,10 +45,12 @@ from numpy.typing import NDArray
 from torch import Tensor
 
 from mousedroid.config.schema import ModelConfig
-from mousedroid.logging.setup import get_logger
 from mousedroid.sensing.protocol import ObservationProtocol
 
-_log = get_logger(__name__)
+# No module-level logger here on purpose: the packer is a pure stateless
+# converter, every code path is covered by upstream / downstream logs in
+# observe_step and DualStreamRSSMOnnx.observe_step. Adding a redundant
+# logger would emit ~30Hz times packer-call duplicates of those events.
 
 
 @dataclass(frozen=True)

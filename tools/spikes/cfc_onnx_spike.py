@@ -66,19 +66,41 @@ def _run_torch(cfc: CfCWrapper, x: torch.Tensor, h: torch.Tensor) -> torch.Tenso
         return cfc(x, h)
 
 
-def _run_onnx(model_path: Path, x: torch.Tensor, h: torch.Tensor):  # type: ignore[no-untyped-def]
-    """Load + run the exported ONNX via onnxruntime."""
+def _build_onnx_session(model_path: Path):  # type: ignore[no-untyped-def]
+    """Build a fresh ``onnxruntime.InferenceSession`` on the CPU provider.
+
+    Kept separate from :func:`_run_onnx_with_session` so the stability
+    check loop below can reuse one session across iterations — building
+    a session per call reloads the model from disk and re-allocates ORT
+    runtime resources, which is both slow and unrepresentative of how
+    production inference behaves.
+    """
     import onnxruntime as ort
 
-    sess = ort.InferenceSession(
+    return ort.InferenceSession(
         str(model_path),
         providers=["CPUExecutionProvider"],  # CPU is enough for the spike
     )
+
+
+def _run_onnx_with_session(sess, x: torch.Tensor, h: torch.Tensor):  # type: ignore[no-untyped-def]
+    """Run inference on an already-built ORT session."""
     outputs = sess.run(
         None,
         {"x": x.detach().cpu().numpy(), "h": h.detach().cpu().numpy()},
     )
     return outputs[0]
+
+
+def _run_onnx(model_path: Path, x: torch.Tensor, h: torch.Tensor):  # type: ignore[no-untyped-def]
+    """One-shot helper: build a session + run inference + drop the session.
+
+    Used for the equivalence check (single call). The repeated-call
+    stability check uses :func:`_build_onnx_session` directly so it can
+    reuse the session across iterations.
+    """
+    sess = _build_onnx_session(model_path)
+    return _run_onnx_with_session(sess, x, h)
 
 
 def main() -> int:
@@ -184,9 +206,12 @@ def main() -> int:
     )
 
     # Inference-stability check across multiple calls — catches non-determinism
-    # in the export.
+    # in the export. Reuse one ORT session across iterations: building a new
+    # session per call would reload the .onnx from disk and re-allocate ORT
+    # resources, which is both slow and not what production inference does.
+    stability_session = _build_onnx_session(args.output)
     for i in range(_INFERENCE_ITERATIONS):
-        out_i = _run_onnx(args.output, example_x, example_h)
+        out_i = _run_onnx_with_session(stability_session, example_x, example_h)
         if abs(out_i - onnx_out_np).max() > 1e-9:
             print(f"      [WARN] Iteration {i} non-deterministic — diverges from first run")
             return 1

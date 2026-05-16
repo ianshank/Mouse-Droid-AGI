@@ -26,6 +26,7 @@ pytest.importorskip("onnxruntime")
 
 from mousedroid.config.schema import ModelConfig, Settings, WorldModelConfig
 from mousedroid.factory import build_world_model
+from mousedroid.world_model.composite import CompositeWorldModel
 from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
 from mousedroid.world_model.dual_stream_rssm_onnx import DualStreamRSSMOnnx
 
@@ -111,7 +112,7 @@ class TestEngineOnnxTrt:
     """``engine='onnx_trt'`` constructs ``DualStreamRSSMOnnx`` from the local artifact."""
 
     def test_engine_onnx_trt_with_local_path(self, tmp_path: Path) -> None:
-        """When ``onnx_path`` points at a valid .onnx, build_world_model returns the runtime."""
+        """When ``onnx_path`` points at a valid .onnx, build_world_model returns the composite."""
         # Export a fresh .onnx — Story 1's library entry point makes this fast.
         export_module = _load_export_module()
         cfg_for_export = _make_cfg().model
@@ -124,7 +125,44 @@ class TestEngineOnnxTrt:
 
         cfg = _make_cfg(engine="onnx_trt", onnx_path=str(onnx_path))
         model = build_world_model(cfg)
-        assert isinstance(model, DualStreamRSSMOnnx)
+        # ``engine="onnx_trt"`` returns a CompositeWorldModel that routes
+        # observe_step to the ONNX runtime and imagine_step to the PyTorch
+        # model — MCTS planning calls imagine_step, so the composite is
+        # essential to avoid NotImplementedError at runtime.
+        assert isinstance(model, CompositeWorldModel)
+        assert isinstance(model.observe_engine, DualStreamRSSMOnnx)
+        assert isinstance(model.imagine_engine, DualStreamRSSM)
+
+    def test_engine_onnx_trt_imagine_step_does_not_raise(self, tmp_path: Path) -> None:
+        """Regression net for the composite: imagine_step must NOT raise NotImplementedError.
+
+        Before B2 Story 3.1, the factory returned ``DualStreamRSSMOnnx``
+        directly, whose ``imagine_step`` raised NotImplementedError —
+        which would crash MCTSPlanner.plan() at the first rollout. The
+        composite splits observe_step (ONNX) from imagine_step (PyTorch)
+        so the planner sees a fully-functional WorldModelProtocol.
+        """
+        export_module = _load_export_module()
+        cfg_for_export = _make_cfg().model
+        torch_model = DualStreamRSSM(cfg_for_export)
+        torch_model.train(False)
+        onnx_path = tmp_path / "observe_step.onnx"
+        export_module.run_export(
+            model=torch_model, cfg=cfg_for_export, output_path=onnx_path, opset=17
+        )
+
+        cfg = _make_cfg(engine="onnx_trt", onnx_path=str(onnx_path))
+        model = build_world_model(cfg)
+
+        action = torch.zeros(1, cfg.model.action_dim)
+        h = torch.zeros(1, cfg.model.hidden_dim + cfg.model.cfc_hidden_dim)
+        z = torch.zeros(1, cfg.model.latent_dim)
+
+        # Must not raise — this was the regression we fixed.
+        new_h, new_z, reward = model.imagine_step(action, h, z)
+        assert new_h.shape == (1, cfg.model.hidden_dim + cfg.model.cfc_hidden_dim)
+        assert new_z.shape == (1, cfg.model.latent_dim)
+        assert reward.shape == (1, 1)
 
     def test_engine_onnx_trt_observe_step_runs(self, tmp_path: Path) -> None:
         """The factory-built ONNX runtime can run observe_step end-to-end."""
@@ -192,16 +230,23 @@ class TestOnnxTrtRequiresPath:
     """``engine='onnx_trt'`` with no path AND no HF fallback raises a clear error."""
 
     def test_onnx_trt_without_path_raises_when_artifact_missing(self, tmp_path: Path) -> None:
-        """The factory raises FileNotFoundError when the onnx_path doesn't exist."""
+        """The factory builds a composite whose observe-engine raises on warmup.
+
+        Both runtime + composite construction succeed cheaply (no I/O).
+        The FileNotFoundError surfaces at the first observe_step (or
+        explicit warmup) because the underlying ONNX file doesn't exist.
+        The composite's imagine engine is a PyTorch DualStreamRSSM and
+        is therefore unaffected by the missing .onnx — operators can
+        still run MCTS-only flows on the composite while debugging the
+        missing artifact.
+        """
         bogus_path = tmp_path / "does_not_exist.onnx"
         cfg = _make_cfg(engine="onnx_trt", onnx_path=str(bogus_path))
-        # Construction succeeds (the runtime is lazy) but warmup will fail.
-        # Per the existing DistilledVLAOnnx pattern, the factory may eagerly
-        # warm up or not. The simpler contract: factory returns the runtime
-        # and lets the first observe_step trigger the FileNotFoundError.
-        # We verify the runtime CAN be built but observe_step will raise.
         model = build_world_model(cfg)
-        assert isinstance(model, DualStreamRSSMOnnx)
-        # Calling warmup should fail — file doesn't exist.
+        # The factory returns the composite for engine='onnx_trt' so
+        # MCTS planning (imagine_step) works regardless of ONNX state.
+        assert isinstance(model, CompositeWorldModel)
+        assert isinstance(model.observe_engine, DualStreamRSSMOnnx)
+        # Warming the ONNX engine surfaces the missing file as a clear error.
         with pytest.raises(FileNotFoundError):
-            model.warmup()
+            model.observe_engine.warmup()

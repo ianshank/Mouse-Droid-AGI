@@ -70,6 +70,13 @@ onnx_world_model = [
     "onnxruntime-gpu>=1.18; platform_machine=='aarch64'",
     "onnxruntime>=1.18; platform_machine!='aarch64'",
     "onnx>=1.15",
+    # ``torch.onnx.export`` in torch>=2.6 unconditionally imports
+    # ``onnxscript`` at function-call time (even when ``dynamo=False`` is
+    # passed). The B2 export script + smoke tests touch ``torch.onnx.export``
+    # under this extras, so the dep must be present. The [vla] extras don't
+    # need it because the VLA path only LOADS .onnx via onnxruntime — it
+    # never invokes the exporter.
+    "onnxscript>=0.2",
     "huggingface-hub>=0.20",
 ]
 arm = [
