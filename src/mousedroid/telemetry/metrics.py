@@ -605,6 +605,20 @@ class MetricsRegistry:
             self._prepare_bucket_boundaries(cfg.cloud_weight_update_download_seconds_buckets)
         )
         self._cloud_weight_update_swaps = _LabeledCounter()
+        # Tier C2 (C2.3) — mission lifecycle + safety projection metrics.
+        # All four families are pure-add: their internal state is constructed
+        # up-front, but they are omitted from the rendered /metrics output
+        # until the first observation / increment lands (see the conditional
+        # blocks in ``render_prometheus``). Default deployments therefore
+        # produce byte-identical exposition output to pre-C2 — the new
+        # families surface only after a writer touches them.
+        self._safety_action_clamps = _LabeledCounter()
+        self._mission_state_transitions = _DoubleLabeledCounter()
+        self._mission_replans = _LabeledCounter()
+        # Bucket boundaries normalised via the shared helper (C3.1 Gemini #2).
+        self._mission_active_duration_seconds = _Histogram(
+            self._prepare_bucket_boundaries(cfg.mission_duration_seconds_buckets)
+        )
 
         # Pre-format metric names from namespace
         self._name_frame_drops = f"{ns}_frame_drops"
@@ -671,6 +685,11 @@ class MetricsRegistry:
             f"{ns}_cloud_weight_update_download_seconds"
         )
         self._name_cloud_weight_update_swaps = f"{ns}_cloud_weight_update_swaps"
+        # Tier C2 (C2.3) — mission lifecycle + safety projection metric names
+        self._name_safety_action_clamps = f"{ns}_safety_action_clamps"
+        self._name_mission_state_transitions = f"{ns}_mission_state_transitions"
+        self._name_mission_replans = f"{ns}_mission_replans"
+        self._name_mission_active_duration_seconds = f"{ns}_mission_active_duration_seconds"
 
         _log.debug("metrics_registry_initialised", namespace=ns)
 
@@ -1188,6 +1207,89 @@ class MetricsRegistry:
         if amount > 0:
             self._cloud_weight_update_swaps.inc(engine_type, amount)
 
+    # Tier C2 (C2.3) — mission lifecycle + safety projection helpers.
+    #
+    # All four families default-disabled by writer-side guards: the
+    # projector is only built when ``cfg.safety.projector.enabled`` is
+    # True, and the mission lifecycle is only built when
+    # ``cfg.mission.replan_enabled`` is True. Pre-C2 deployments therefore
+    # produce byte-identical /metrics output — these names appear only
+    # after a writer first touches them.
+    # ------------------------------------------------------------------
+
+    def inc_safety_action_clamp(self, reason: str, amount: int = 1) -> None:
+        """Increment the safety-action-clamp counter for one clamp reason.
+
+        Args:
+            reason: One of ``forward_velocity`` / ``human_proximity`` /
+                ``tight_quarters``. Other values are accepted but
+                discouraged — they would grow the label cardinality.
+            amount: Increment magnitude (default 1). Values ``<= 0`` are
+                ignored to preserve Prometheus counter monotonicity.
+        """
+        if amount > 0:
+            self._safety_action_clamps.inc(reason, amount)
+
+    def inc_mission_state_transition(
+        self,
+        from_state: str,
+        to_state: str,
+        amount: int = 1,
+    ) -> None:
+        """Increment the mission state-transition counter for one edge.
+
+        Args:
+            from_state: Lower-case ``TaskStatus`` value the lifecycle is
+                leaving (e.g. ``"running"``).
+            to_state: Lower-case ``TaskStatus`` value the lifecycle is
+                entering (e.g. ``"replanning"``).
+            amount: Increment magnitude (default 1). Values ``<= 0`` are
+                ignored.
+        """
+        if amount > 0:
+            self._mission_state_transitions.inc(from_state, to_state, amount)
+
+    def inc_mission_replan(self, outcome: str, amount: int = 1) -> None:
+        """Increment the mission-replan counter for one replan outcome.
+
+        Args:
+            outcome: ``"succeeded"`` when the LLM returned a fresh
+                ``GoalVector`` and the lifecycle resumed RUNNING;
+                ``"failed"`` when the LLM returned ``None`` and the
+                lifecycle transitioned to FAILED.
+            amount: Increment magnitude (default 1). Values ``<= 0`` are
+                ignored.
+        """
+        if amount > 0:
+            self._mission_replans.inc(outcome, amount)
+
+    def observe_mission_active_duration_seconds(self, value: float) -> None:
+        """Record one terminal mission's active duration (seconds).
+
+        Defensively drops samples that would corrupt the histogram sum
+        via :func:`_classify_dropped_observation` (the shared C3.1 helper):
+
+        * NaN — timer misuse / division-by-zero upstream
+        * ``+Inf`` — severe hang / watchdog-flagged elapsed time
+        * Negative — clock skew / wall-clock wrap
+
+        Drops emit a DEBUG-level structured log so operators can correlate
+        missing observations with the upstream root cause.
+
+        Args:
+            value: Wall-clock seconds the mission spent in RUNNING /
+                REPLANNING before terminating (SUCCEEDED or FAILED).
+        """
+        reason = _classify_dropped_observation(value)
+        if reason is not None:
+            _log.debug(
+                "mission_active_duration_seconds_dropped",
+                reason=reason,
+                value=value,
+            )
+            return
+        self._mission_active_duration_seconds.observe(value)
+
     @staticmethod
     def _decode_cloud_circuit_state(value: float) -> str:
         """Map numeric breaker gauge values back to symbolic states."""
@@ -1676,6 +1778,56 @@ class MetricsRegistry:
                 )
             )
 
+        # Tier C2 (C2.3) — mission lifecycle + safety projection.
+        # Emit conditionally so deployments that never exercise these
+        # paths don't ship zero-valued series (matches the PR-A2 pattern).
+        safety_clamps_snapshot = self._safety_action_clamps.snapshot()
+        if safety_clamps_snapshot:
+            sections.append(
+                _render_labeled_counter(
+                    self._name_safety_action_clamps,
+                    "Safety action clamps applied by the projector (label: reason)",
+                    "reason",
+                    safety_clamps_snapshot,
+                )
+            )
+        mission_transitions_snapshot = self._mission_state_transitions.snapshot()
+        if mission_transitions_snapshot:
+            sections.append(
+                _render_double_labeled_counter(
+                    self._name_mission_state_transitions,
+                    "Mission lifecycle state transitions (labels: from_state, to_state)",
+                    "from_state",
+                    "to_state",
+                    mission_transitions_snapshot,
+                )
+            )
+        mission_replans_snapshot = self._mission_replans.snapshot()
+        if mission_replans_snapshot:
+            sections.append(
+                _render_labeled_counter(
+                    self._name_mission_replans,
+                    "Mission replans by outcome (label: outcome)",
+                    "outcome",
+                    mission_replans_snapshot,
+                )
+            )
+        (
+            mission_buckets,
+            mission_sum,
+            mission_count,
+        ) = self._mission_active_duration_seconds.snapshot()
+        if mission_count > 0:
+            sections.append(
+                _render_histogram(
+                    self._name_mission_active_duration_seconds,
+                    "Mission active duration histogram (seconds)",
+                    mission_buckets,
+                    mission_sum,
+                    mission_count,
+                )
+            )
+
         # Subsystem failures — always emitted regardless of config toggles
         failure_snapshot = self._subsystem_failures.snapshot()
         if failure_snapshot:
@@ -1803,5 +1955,17 @@ def generate_metrics_sample() -> str:
     registry.observe_cloud_weight_update_download_seconds(2.5)
     registry.inc_cloud_weight_update_swap("policy")
     registry.inc_cloud_weight_update_swap("world_model")
+
+    # Tier C2 (C2.3) — exercise mission lifecycle + safety projection
+    # families so ``promtool check metrics`` sees them in CI.
+    registry.inc_safety_action_clamp("forward_velocity")
+    registry.inc_safety_action_clamp("human_proximity")
+    registry.inc_safety_action_clamp("tight_quarters")
+    registry.inc_mission_state_transition("pending", "running")
+    registry.inc_mission_state_transition("running", "replanning")
+    registry.inc_mission_state_transition("running", "succeeded")
+    registry.inc_mission_replan("succeeded")
+    registry.inc_mission_replan("failed")
+    registry.observe_mission_active_duration_seconds(45.0)
 
     return registry.render_prometheus()
