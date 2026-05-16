@@ -1,0 +1,2 @@
+# Spike artifacts are regenerable from the scripts — don't commit them.
+*.onnx

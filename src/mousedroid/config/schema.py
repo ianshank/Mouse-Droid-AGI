@@ -1225,6 +1225,67 @@ class ModelConfig(BaseModel):
         return self
 
 
+class WorldModelConfig(BaseModel):
+    """World-model runtime engine selector (Tier B2).
+
+    Drives :func:`mousedroid.factory.build_world_model` dispatch. The
+    default (``engine="torch"``) preserves byte-identical behavior with
+    pre-B2 deployments: existing ``config/*.yaml`` files without a
+    ``world_model:`` block load unchanged and continue to use the
+    PyTorch :class:`~mousedroid.world_model.dual_stream_rssm.DualStreamRSSM`.
+
+    Flip ``engine="onnx_trt"`` in ``config/jetson_production.yaml`` to
+    serve ``observe_step`` from an exported ``.onnx`` via
+    ``onnxruntime`` + TensorRT execution provider. ``imagine_step`` (MCTS
+    rollouts) always runs on the PyTorch model regardless of engine; the
+    factory wires both paths.
+    """
+
+    engine: Literal["torch", "onnx_trt"] = Field(
+        "torch",
+        description=(
+            "World-model inference engine. 'torch' runs DualStreamRSSM "
+            "as a PyTorch module (default, byte-identical pre-PR). "
+            "'onnx_trt' loads an exported .onnx via onnxruntime with "
+            "the TensorrtExecutionProvider -> CUDAExecutionProvider -> "
+            "CPUExecutionProvider fallback chain."
+        ),
+    )
+    onnx_path: str | None = Field(
+        None,
+        description=(
+            "Filesystem path to the exported .onnx for engine='onnx_trt'. "
+            "When None and engine='onnx_trt', the factory falls back to "
+            "downloading from onnx_repo_id via HuggingFace Hub."
+        ),
+    )
+    onnx_repo_id: str = Field(
+        "ianshank/mousedroid-dual-stream-rssm",
+        description=(
+            "HuggingFace Hub repo holding the .onnx artifact for the "
+            "ONNX runtime path. Mirrors the [vla] backend convention."
+        ),
+    )
+    onnx_filename: str = Field(
+        "observe_step.onnx",
+        description="Filename inside the HF repo / cache directory.",
+    )
+    onnx_cache_dir: str = Field(
+        "weights/dual_stream_rssm",
+        description=(
+            "Filesystem directory where the factory caches the HF-downloaded "
+            ".onnx artifact. Mirrors VLAConfig.cache_dir. Operators can point "
+            "this at /opt/mousedroid/weights/... on Jetson deployments so the "
+            "download persists across container restarts."
+        ),
+    )
+    onnx_warmup_iterations: int = Field(
+        1,
+        ge=0,
+        description="Dummy inferences run during ONNX session warmup.",
+    )
+
+
 class DualStreamTrainingConfig(BaseModel):
     """Dual-stream RSSM training configuration."""
 
@@ -3725,6 +3786,9 @@ class Settings(BaseSettings):
 
     loop: LoopConfig = Field(default_factory=_settings_default_factory(LoopConfig))
     model: ModelConfig = Field(default_factory=_settings_default_factory(ModelConfig))
+    world_model: WorldModelConfig = Field(
+        default_factory=_settings_default_factory(WorldModelConfig)
+    )
     mcts: MCTSConfig = Field(default_factory=_settings_default_factory(MCTSConfig))
     surprise: SurpriseConfig = Field(default_factory=_settings_default_factory(SurpriseConfig))
     safety: SafetyConfig = Field(default_factory=_settings_default_factory(SafetyConfig))

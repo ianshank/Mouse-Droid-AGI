@@ -7,6 +7,7 @@ returns the correct implementation based on ``Settings``.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from mousedroid.comms.protocol import ESP32CommProtocol
@@ -388,9 +389,22 @@ def build_voice_engine(
 def build_world_model(cfg: Settings) -> WorldModelProtocol:
     """Build world model for configured platform.
 
-    Selects :class:`~mousedroid.world_model.dual_stream_rssm.DualStreamRSSM`
-    when ``cfc_hidden_dim > 0``, otherwise falls back to the classic
-    :class:`~mousedroid.world_model.rssm.RSSM`.
+    Dispatch order:
+
+    1. ``cfg.world_model.engine == "onnx_trt"`` — construct
+       :class:`~mousedroid.world_model.dual_stream_rssm_onnx.DualStreamRSSMOnnx`
+       backed by the exported ``.onnx`` at ``cfg.world_model.onnx_path``.
+       The runtime is constructed cheaply (no ORT import at this point)
+       and warms up on first ``observe_step()`` call. Requires
+       ``cfc_hidden_dim > 0`` because the ONNX export is built from
+       :class:`DualStreamRSSM`.
+    2. ``cfg.world_model.engine == "torch"`` (default) AND
+       ``cfc_hidden_dim > 0`` — construct :class:`DualStreamRSSM`.
+    3. Fallback — construct the classic :class:`~mousedroid.world_model.rssm.RSSM`.
+
+    Default behavior (``engine="torch"``) is byte-identical to pre-B2:
+    existing ``config/*.yaml`` files that omit the ``world_model:`` block
+    load unchanged.
 
     Args:
         cfg: Root settings.
@@ -398,6 +412,16 @@ def build_world_model(cfg: Settings) -> WorldModelProtocol:
     Returns:
         World model conforming to ``WorldModelProtocol``.
     """
+    engine = cfg.world_model.engine
+    if engine == "onnx_trt":
+        return _build_onnx_world_model(cfg)
+    if engine != "torch":
+        # Pydantic Literal["torch", "onnx_trt"] should catch this earlier,
+        # but defend in depth so dynamic instantiation doesn't drift past
+        # the dispatcher.
+        msg = f"Unknown world_model.engine {engine!r}"
+        raise ValueError(msg)
+
     if cfg.model.cfc_hidden_dim > 0:
         try:
             from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
@@ -409,7 +433,8 @@ def build_world_model(cfg: Settings) -> WorldModelProtocol:
             )
         else:
             _log.info(
-                "world_model_dual_stream",
+                "world_model_engine_selected",
+                engine="torch",
                 gru_dim=cfg.model.hidden_dim,
                 cfc_dim=cfg.model.cfc_hidden_dim,
             )
@@ -418,6 +443,131 @@ def build_world_model(cfg: Settings) -> WorldModelProtocol:
     from mousedroid.world_model.rssm import RSSM
 
     return RSSM(cfg.model)
+
+
+def _build_onnx_world_model(cfg: Settings) -> WorldModelProtocol:
+    """Construct the ONNX runtime world model.
+
+    Resolves ``cfg.world_model.onnx_path`` (filesystem-first, HF Hub
+    fallback) and hands it to :class:`DualStreamRSSMOnnx`. The runtime
+    is constructed lazily — ``onnxruntime`` is not imported here.
+    """
+    if cfg.model.cfc_hidden_dim <= 0:
+        msg = (
+            "world_model.engine='onnx_trt' requires model.cfc_hidden_dim > 0 "
+            "(the ONNX export is built from DualStreamRSSM, which requires "
+            "the CfC stream). Set cfc_hidden_dim in your config YAML or "
+            "switch to engine='torch'."
+        )
+        raise ValueError(msg)
+
+    from mousedroid.world_model.composite import CompositeWorldModel
+    from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
+    from mousedroid.world_model.dual_stream_rssm_onnx import DualStreamRSSMOnnx
+
+    model_path = _resolve_world_model_onnx_path(cfg)
+
+    # observe_step path: ONNX-accelerated (the hot 30Hz tick benefit).
+    observe_engine = DualStreamRSSMOnnx(
+        model_path=model_path,
+        cfg=cfg.model,
+        warmup_iterations=cfg.world_model.onnx_warmup_iterations,
+    )
+    # imagine_step + get_safety_trace path: PyTorch DualStreamRSSM. The
+    # ONNX export (B2 Story 1) is scoped to observe_step only, so MCTS
+    # rollouts and the safety monitor's CfC inspection need the PyTorch
+    # graph. Both engines share the same ModelConfig so dimensions stay
+    # consistent across the composition boundary.
+    imagine_engine = DualStreamRSSM(cfg.model)
+    imagine_engine.train(False)
+
+    _log.info(
+        "world_model_engine_selected",
+        engine="onnx_trt",
+        model_path=str(model_path),
+        cfc_dim=cfg.model.cfc_hidden_dim,
+        composite=True,
+        observe_engine=type(observe_engine).__name__,
+        imagine_engine=type(imagine_engine).__name__,
+    )
+    return CompositeWorldModel(
+        observe_engine=observe_engine,
+        imagine_engine=imagine_engine,
+    )
+
+
+def _resolve_world_model_onnx_path(cfg: Settings) -> Path:
+    """Resolve the .onnx artifact path for the ONNX runtime engine.
+
+    Resolution order:
+
+    1. ``cfg.world_model.onnx_path`` when set — use it directly. If the
+       file is missing, the runtime's :meth:`warmup` will raise
+       ``FileNotFoundError`` so operators get a clear error from the
+       runtime, not a confusing ``hf_hub_download`` traceback.
+    2. HF Hub download via
+       ``cfg.world_model.onnx_repo_id``/``cfg.world_model.onnx_filename``.
+       Mirrors the [vla] pattern at ``_build_distilled_onnx_vla``.
+       Cached under ``weights/dual_stream_rssm/`` so the same file is
+       reused across runs without re-downloading.
+    """
+    explicit = cfg.world_model.onnx_path
+    if explicit is not None:
+        return Path(explicit)
+
+    # HF Hub auto-download fallback. Reuses the same
+    # ``download_weights_from_huggingface`` helper the VLA path uses, so
+    # retries / auth tokens / progress bars work identically.
+    from mousedroid.utils.weights_manager import (
+        download_weights_from_huggingface,
+    )
+
+    # Operator-tunable per deployment via ``cfg.world_model.onnx_cache_dir``
+    # (default ``weights/dual_stream_rssm``). Mirrors the VLA pattern at
+    # ``_build_distilled_onnx_vla`` so Jetson deployments can repoint both
+    # caches under ``/opt/mousedroid/weights/...`` in one place.
+    cache_dir = Path(cfg.world_model.onnx_cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    model_path = cache_dir / cfg.world_model.onnx_filename
+
+    if model_path.is_file():
+        _log.info(
+            "world_model_onnx_cache_hit",
+            cache_path=str(model_path),
+            repo_id=cfg.world_model.onnx_repo_id,
+        )
+        return model_path
+
+    _log.info(
+        "world_model_onnx_download_start",
+        repo_id=cfg.world_model.onnx_repo_id,
+        filename=cfg.world_model.onnx_filename,
+        cache_dir=str(cache_dir),
+    )
+    success = download_weights_from_huggingface(
+        repo_id=cfg.world_model.onnx_repo_id,
+        filenames=[cfg.world_model.onnx_filename],
+        cache_dir=cache_dir,
+        # Force flat layout so model_path.is_file() check succeeds.
+        # Without local_dir, hf_hub_download uses its blob/snapshot
+        # cache layout and the file would not be at the expected path.
+        local_dir=cache_dir,
+    )
+    if not success or not model_path.is_file():
+        msg = (
+            f"failed to download world-model ONNX artifact "
+            f"({cfg.world_model.onnx_repo_id}/{cfg.world_model.onnx_filename}) "
+            f"into {cache_dir}. Set world_model.onnx_path to a local path "
+            f"or run scripts/export_dual_stream_rssm_onnx.py --push-to-hf "
+            f"to publish a fresh artifact first."
+        )
+        raise FileNotFoundError(msg)
+    _log.info(
+        "world_model_onnx_downloaded",
+        path=str(model_path),
+        repo_id=cfg.world_model.onnx_repo_id,
+    )
+    return model_path
 
 
 def build_injection_filter(cfg: Settings) -> PromptInjectionFilterProtocol:

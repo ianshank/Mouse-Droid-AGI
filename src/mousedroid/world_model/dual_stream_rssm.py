@@ -29,6 +29,7 @@ from mousedroid.sensing.protocol import ObservationProtocol
 from mousedroid.world_model.cfc_cell import CfCWrapper
 from mousedroid.world_model.encoder import MultimodalEncoder
 from mousedroid.world_model.latent_utils import kl_divergence, sample_gaussian
+from mousedroid.world_model.observation_packer import pack_observation
 from mousedroid.world_model.stream_fusion import StreamFusion
 
 _log = get_logger(__name__)
@@ -195,80 +196,102 @@ class DualStreamRSSM(nn.Module):
             z: Previous latent sample, shape ``(1, latent_dim)``.
 
         Returns:
-            ``(new_h, new_z, obs_embed, surprise)``
+            ``(new_h, new_z, obs_embed, surprise)`` where ``surprise`` is
+            a Python ``float`` (backwards-compatible contract). Internally
+            this method delegates to :meth:`observe_step_traceable` so the
+            PyTorch and ONNX runtime paths share a single implementation —
+            see ``world_model.observation_packer`` for the shared
+            ``ObservationProtocol`` → ``Tensor`` conversion.
         """
         device = h.device
+        packed = pack_observation(observation, self._cfg, device=device)
+        new_h, new_z, obs_embed, surprise_tensor = self.observe_step_traceable(
+            vision=packed.vision,
+            motor=packed.motor,
+            valid_mask=packed.valid_mask,
+            ultrasonic=packed.ultrasonic,
+            audio=packed.audio,
+            lidar=packed.lidar,
+            prev_action=prev_action,
+            h=h,
+            z=z,
+        )
+        return new_h, new_z, obs_embed, float(surprise_tensor.item())
 
-        # --- Convert observation arrays to tensors ---
-        vision = torch.as_tensor(
-            observation.vision_features,
-            dtype=torch.float32,
-            device=device,
-        ).unsqueeze(0)
-        ultrasonic = torch.as_tensor(
-            [observation.distance_m],
-            dtype=torch.float32,
-            device=device,
-        ).unsqueeze(0)
-        motor = torch.as_tensor(
-            observation.motor_state,
-            dtype=torch.float32,
-            device=device,
-        ).unsqueeze(0)
-        mask = torch.as_tensor(
-            observation.valid_mask,
-            dtype=torch.float32,
-            device=device,
-        ).unsqueeze(0)
+    @torch.no_grad()
+    def observe_step_traceable(
+        self,
+        *,
+        vision: Tensor,
+        motor: Tensor,
+        valid_mask: Tensor,
+        prev_action: Tensor,
+        h: Tensor,
+        z: Tensor,
+        ultrasonic: Tensor | None = None,
+        audio: Tensor | None = None,
+        lidar: Tensor | None = None,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        """Tensor-only variant of :meth:`observe_step` — ONNX-traceable.
 
-        # Extract audio if the encoder supports it.
-        audio: Tensor | None = None
-        if self.encoder.audio_enabled:
-            audio_data = observation.audio_chunk
-            if len(audio_data) > 0:
-                audio = torch.as_tensor(
-                    audio_data,
-                    dtype=torch.float32,
-                    device=device,
-                ).unsqueeze(0)
+        This is the single point of truth for one dual-stream observation
+        update. :meth:`observe_step` calls it (after running the packer)
+        for the PyTorch path; ``scripts/export_dual_stream_rssm_onnx.py``
+        traces it for the ONNX path. Returning surprise as a ``Tensor``
+        (not ``float``) is what makes the method consumable by
+        ``torch.onnx.export``.
 
-        # Extract LiDAR features if the encoder supports it.
-        lidar: Tensor | None = None
-        if self.encoder.lidar_enabled:
-            lidar_data = observation.lidar_features
-            if lidar_data is not None and len(lidar_data) > 0:
-                lidar = torch.as_tensor(
-                    lidar_data,
-                    dtype=torch.float32,
-                    device=device,
-                ).unsqueeze(0)
+        Args:
+            vision: Vision features, shape ``(batch, cfg.vision_dim)``.
+            motor: Motor state, shape ``(batch, cfg.motor_state_dim)``.
+            valid_mask: Per-modality validity scores,
+                shape ``(batch, n_modalities)``.
+            ultrasonic: Optional ultrasonic reading,
+                shape ``(batch, cfg.ultrasonic_dim)``; ``None`` when
+                ``cfg.ultrasonic_dim == 0``.
+            audio: Optional audio samples, shape ``(batch, cfg.audio_dim)``;
+                ``None`` when ``cfg.audio_dim == 0``.
+            lidar: Optional LiDAR features, shape ``(batch, cfg.lidar_dim)``;
+                ``None`` when ``cfg.lidar_dim == 0``.
+            prev_action: Previous action, shape ``(batch, cfg.action_dim)``.
+            h: Previous combined hidden state, shape ``(batch, combined_dim)``.
+            z: Previous latent sample, shape ``(batch, cfg.latent_dim)``.
 
-        # Encode
-        obs_embed = self.encoder(vision, ultrasonic, motor, mask, audio=audio, lidar=lidar)
+        Returns:
+            ``(new_h, new_z, obs_embed, surprise)`` — all ``Tensor``.
+        """
+        # Encode (the encoder already branches on enabled-modality flags).
+        obs_embed = self.encoder(
+            vision,
+            ultrasonic,
+            motor,
+            valid_mask,
+            audio=audio,
+            lidar=lidar,
+        )
 
-        # --- Split combined hidden state ---
+        # Split combined hidden state.
         h_slow = self.fusion.extract_gru_state(h)
         h_fast = self.fusion.extract_cfc_state(h)
 
-        # --- Dual-stream recurrent step ---
+        # Dual-stream recurrent step.
         recurrent_input = torch.cat([z, prev_action], dim=-1)
         new_h_slow: Tensor = self.gru(recurrent_input, h_slow)
         new_h_fast: Tensor = self.cfc(recurrent_input, h_fast)
 
-        # --- Fuse streams ---
+        # Fuse streams.
         new_h = self.fusion.fuse(new_h_slow, new_h_fast)
 
-        # --- Posterior ---
+        # Posterior.
         post_params = self.posterior(torch.cat([new_h, obs_embed], dim=-1))
         new_z, post_mean, post_logvar = self._sample_gaussian(post_params)
 
-        # --- Prior (for KL surprise) ---
+        # Prior (for KL surprise).
         prior_params = self.prior(new_h)
         _, prior_mean, prior_logvar = self._sample_gaussian(prior_params)
 
         surprise = self._kl_divergence(post_mean, post_logvar, prior_mean, prior_logvar)
-
-        return new_h, new_z, obs_embed, float(surprise.item())
+        return new_h, new_z, obs_embed, surprise
 
     @torch.no_grad()
     def imagine_step(
