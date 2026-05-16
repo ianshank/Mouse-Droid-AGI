@@ -159,24 +159,25 @@ runs (operator action, tracked in
 [docs/planning/PHASE_2_1_AND_BEYOND_PLAN.md](../planning/PHASE_2_1_AND_BEYOND_PLAN.md)
 Story 2.5).
 
-### What's deferred to follow-up PRs
+### What was deferred (now landed in PR-A2.1)
 
-- **Writer-side call-site instrumentation** in `LMDBReplayReader`,
-  `VLAPolicy.predict()`, and `VLMProgressHead.score()` — factory-level
-  threading of the `MetricsRegistry` parameter is intentionally out of scope
-  for PR-A2 to keep the surface tight. Until those land, the new metrics
-  ship constructed-but-unwritten and are **omitted from the rendered
-  `/metrics` output**.
-- **Grafana dashboard panels** over the new metrics — covered by PR-B2 per
-  the approved sprint plan.
-- **Prometheus alert rules** in `config/prometheus/alerts.yml` for VLA
-  latency / timeout / replay schema-mismatch spike — also in PR-B2.
+- ✅ **Writer-side call-site instrumentation** in `LMDBReplayReader`,
+  `MockVLA.predict()`, `DistilledVLAOnnx.predict()`,
+  `MouseDroidOrchestrator._try_vla_action()` (timeout branch), and
+  `VLMProgressHead._score_single()` — **landed in PR-A2.1**.
+  Factory-level threading of the `MetricsRegistry` parameter completed in
+  `build_replay_reader`, `build_vla_policy`, `_build_distilled_onnx_vla`,
+  and `build_reward_model`. The four PR-A2 metric families now populate at
+  runtime; the Grafana panels and alert rules from PR-B2 produce real data
+  the first time their code paths fire.
+- ✅ **Grafana dashboard panels** over the new metrics — shipped in PR-B2.
+- ✅ **Prometheus alert rules** in `config/prometheus/alerts.yml` for VLA
+  latency / timeout / replay schema-mismatch spike — shipped in PR-B2.
 
-> **⚠ Operator note:** Because writer-side instrumentation is deferred, any
-> dashboards or alert rules built on the PR-A2 metric names **will have no
-> data to render** until the follow-up writer-side PR lands. Operators
-> should not build production dashboards on these names before that follow-up
-> merges; the new families will be absent from `/metrics` until the first
-> observation fires. The `vla-extras` CI matrix entry similarly does not
-> exercise these counters, so green CI is not evidence that the metrics
-> will be populated at runtime.
+The operator note about dashboards-have-no-data is **no longer current**.
+After PR-A2.1 merges, the Grafana queries surface live observations as
+soon as the corresponding subsystem (replay reader / VLA inference / VLM
+cache lookup) fires. The end-to-end test in
+`tests/integration/test_writer_side_instrumentation_http.py` proves the
+full pipeline (subsystem → `MetricsRegistry` → `/metrics` HTTP scrape) is
+wired correctly.
