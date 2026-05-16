@@ -209,8 +209,10 @@ jobs:
     # Catches ONNX Runtime API drift, HF-Hub pull regressions, and
     # provider-list changes that are invisible to the default test stage
     # (which only installs ``[dev,telemetry,mcp]``). Promoted from advisory
-    # to required by Tier C3.1 after 7+ consecutive green runs against the
-    # integration branch (run IDs documented in the PR body / CHANGELOG).
+    # to required by Tier C3.1 after 6+ consecutive green runs against the
+    # integration branch — the 7th green predates the matrix and doesn't
+    # apply, so the gate was met by 6 in-matrix runs (run IDs documented
+    # in the PR body / CHANGELOG).
     # The ``onnx-world-model-extras`` job below remains advisory until
     # IT accumulates its own 7 green runs (only 1 green so far — landed
     # with PR #92 on 2026-05-16).

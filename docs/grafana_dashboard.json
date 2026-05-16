@@ -1255,7 +1255,7 @@
     {
       "id": 22,
       "title": "World-Model observe_step Latency p50 / p95 / p99 (seconds)",
-      "description": "Histogram quantiles of DualStreamRSSM.observe_step wall-clock seconds. p95 above the 30 Hz orchestrator budget (~33 ms) means the world-model hot path is missing its tick deadline. On the Orin Nano with cfg.world_model.engine=onnx_trt the target is <10 ms (TensorRT EP); on CPU dev hosts the portable bound is 33 ms. Source: mousedroid_world_model_observe_step_seconds histogram, wired by Tier B2 PR #92. Note: no data until the orchestrator passes a MetricsRegistry into the world model.",
+      "description": "Histogram quantiles of DualStreamRSSM.observe_step wall-clock seconds. p95 above the 30 Hz orchestrator budget (~33 ms) means the world-model hot path is missing its tick deadline. On the Orin Nano with cfg.world_model.engine=onnx_trt the target is <10 ms (TensorRT EP); on CPU dev hosts the portable bound is 33 ms. Source: mousedroid_world_model_observe_step_seconds histogram, documented in Tier B2 PR #92 and wired in Tier C3.1. Note: no data until the orchestrator passes a MetricsRegistry into the world model.",
       "type": "timeseries",
       "gridPos": {
         "h": 8,

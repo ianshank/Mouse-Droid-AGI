@@ -11,7 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed — Tier C3.1: Production hardening (CI matrix promotion + B2 telemetry/dashboard polish)
 
 Lands first in the Tier C sprint to enable real CI gating before the
-C1/C2/C4 PRs merge. Three concrete changes:
+C1/C2/C4 PRs merge. Four concrete changes:
 
 1. **`vla-extras` CI matrix promoted from advisory to required.** The
    matrix has 6+ consecutive green runs against the integration branch
