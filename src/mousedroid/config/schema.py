@@ -2589,6 +2589,16 @@ class WeightUpdatePollConfig(BaseModel):
         ge=0,
         description="Maximum retry attempts per artifact (forwarded to weights_manager).",
     )
+    world_model_enabled: bool = Field(
+        False,
+        description=(
+            "Enable a second OTA poller targeting ``world_model_repo_id`` / "
+            "``world_model_filename``. Default ``False`` preserves "
+            "byte-identical pre-C1.2 behaviour — only the policy poller is "
+            "built. Operators flip to ``True`` when the world-model export "
+            "pipeline is producing artifacts to OTA-deploy."
+        ),
+    )
 
 
 class CloudConfig(BaseModel):
