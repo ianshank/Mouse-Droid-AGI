@@ -42,6 +42,19 @@ from torch import Tensor
 from mousedroid.config.schema import ModelConfig
 from mousedroid.logging.setup import get_logger
 from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
+from mousedroid.world_model.onnx_io import (
+    OBSERVE_STEP_BATCH_DIM_NAME,
+    OBSERVE_STEP_INPUT_AUDIO,
+    OBSERVE_STEP_INPUT_H,
+    OBSERVE_STEP_INPUT_LIDAR,
+    OBSERVE_STEP_INPUT_MOTOR,
+    OBSERVE_STEP_INPUT_PREV_ACTION,
+    OBSERVE_STEP_INPUT_ULTRASONIC,
+    OBSERVE_STEP_INPUT_VALID_MASK,
+    OBSERVE_STEP_INPUT_VISION,
+    OBSERVE_STEP_INPUT_Z,
+    OBSERVE_STEP_OUTPUT_NAMES,
+)
 
 _log = get_logger(__name__)
 
@@ -51,7 +64,6 @@ _log = get_logger(__name__)
 # ---------------------------------------------------------------------------
 _DEFAULT_OPSET = 17
 _EXPORT_BATCH = 1
-_BATCH_DIM_NAME = "batch"
 
 
 class _ObserveStepExportShim(nn.Module):
@@ -160,23 +172,44 @@ def build_example_inputs(
         ``torch.onnx.export(... , tuple(inputs.values()), ...)``.
     """
     combined_h_dim = cfg.hidden_dim + cfg.cfc_hidden_dim
-    n_modalities = 5  # vision, ultrasonic, motor, audio, lidar slots
+    # vision + ultrasonic + motor + audio + lidar = 5 slots (mirrors
+    # mousedroid.constants.SENSOR_SLOT_MAP). Note this is the number of
+    # modality SLOTS in the valid_mask vector, not the count of enabled
+    # modalities — disabled modalities still occupy their slot for stable
+    # ordering across deployments.
+    n_modalities = 5
     inputs: dict[str, Tensor] = {
-        "vision": torch.zeros(batch_size, cfg.vision_dim, dtype=torch.float32, device=device),
-        "motor": torch.zeros(batch_size, cfg.motor_state_dim, dtype=torch.float32, device=device),
-        "valid_mask": torch.ones(batch_size, n_modalities, dtype=torch.float32, device=device),
-        "prev_action": torch.zeros(batch_size, cfg.action_dim, dtype=torch.float32, device=device),
-        "h": torch.zeros(batch_size, combined_h_dim, dtype=torch.float32, device=device),
-        "z": torch.zeros(batch_size, cfg.latent_dim, dtype=torch.float32, device=device),
+        OBSERVE_STEP_INPUT_VISION: torch.zeros(
+            batch_size, cfg.vision_dim, dtype=torch.float32, device=device
+        ),
+        OBSERVE_STEP_INPUT_MOTOR: torch.zeros(
+            batch_size, cfg.motor_state_dim, dtype=torch.float32, device=device
+        ),
+        OBSERVE_STEP_INPUT_VALID_MASK: torch.ones(
+            batch_size, n_modalities, dtype=torch.float32, device=device
+        ),
+        OBSERVE_STEP_INPUT_PREV_ACTION: torch.zeros(
+            batch_size, cfg.action_dim, dtype=torch.float32, device=device
+        ),
+        OBSERVE_STEP_INPUT_H: torch.zeros(
+            batch_size, combined_h_dim, dtype=torch.float32, device=device
+        ),
+        OBSERVE_STEP_INPUT_Z: torch.zeros(
+            batch_size, cfg.latent_dim, dtype=torch.float32, device=device
+        ),
     }
     if cfg.ultrasonic_dim > 0:
-        inputs["ultrasonic"] = torch.zeros(
+        inputs[OBSERVE_STEP_INPUT_ULTRASONIC] = torch.zeros(
             batch_size, cfg.ultrasonic_dim, dtype=torch.float32, device=device
         )
     if cfg.audio_dim > 0:
-        inputs["audio"] = torch.zeros(batch_size, cfg.audio_dim, dtype=torch.float32, device=device)
+        inputs[OBSERVE_STEP_INPUT_AUDIO] = torch.zeros(
+            batch_size, cfg.audio_dim, dtype=torch.float32, device=device
+        )
     if cfg.lidar_dim > 0:
-        inputs["lidar"] = torch.zeros(batch_size, cfg.lidar_dim, dtype=torch.float32, device=device)
+        inputs[OBSERVE_STEP_INPUT_LIDAR] = torch.zeros(
+            batch_size, cfg.lidar_dim, dtype=torch.float32, device=device
+        )
     return inputs
 
 
@@ -191,7 +224,7 @@ def _dynamic_axes_for_inputs(
     """
     axes: dict[str, dict[int, str]] = {}
     for name in input_names + output_names:
-        axes[name] = {0: _BATCH_DIM_NAME}
+        axes[name] = {0: OBSERVE_STEP_BATCH_DIM_NAME}
     return axes
 
 
@@ -217,7 +250,7 @@ def run_export(
     shim = build_export_shim(model)
     inputs = build_example_inputs(cfg, device=torch.device("cpu"))
     input_names = list(inputs.keys())
-    output_names = ["new_h", "new_z", "obs_embed", "surprise"]
+    output_names = list(OBSERVE_STEP_OUTPUT_NAMES)
 
     _log.info(
         "world_model_export_started",

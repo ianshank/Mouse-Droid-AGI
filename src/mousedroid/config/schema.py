@@ -1270,6 +1270,15 @@ class WorldModelConfig(BaseModel):
         "observe_step.onnx",
         description="Filename inside the HF repo / cache directory.",
     )
+    onnx_cache_dir: str = Field(
+        "weights/dual_stream_rssm",
+        description=(
+            "Filesystem directory where the factory caches the HF-downloaded "
+            ".onnx artifact. Mirrors VLAConfig.cache_dir. Operators can point "
+            "this at /opt/mousedroid/weights/... on Jetson deployments so the "
+            "download persists across container restarts."
+        ),
+    )
     onnx_warmup_iterations: int = Field(
         1,
         ge=0,

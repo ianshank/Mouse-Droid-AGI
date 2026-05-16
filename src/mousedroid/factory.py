@@ -503,7 +503,11 @@ def _resolve_world_model_onnx_path(cfg: Settings) -> Path:
         download_weights_from_huggingface,
     )
 
-    cache_dir = Path("weights") / "dual_stream_rssm"
+    # Operator-tunable per deployment via ``cfg.world_model.onnx_cache_dir``
+    # (default ``weights/dual_stream_rssm``). Mirrors the VLA pattern at
+    # ``_build_distilled_onnx_vla`` so Jetson deployments can repoint both
+    # caches under ``/opt/mousedroid/weights/...`` in one place.
+    cache_dir = Path(cfg.world_model.onnx_cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
     model_path = cache_dir / cfg.world_model.onnx_filename
 

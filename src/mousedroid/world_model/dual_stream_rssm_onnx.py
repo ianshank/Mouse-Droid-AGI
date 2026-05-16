@@ -36,6 +36,18 @@ from mousedroid.logging.setup import get_logger
 from mousedroid.sensing.protocol import ObservationProtocol
 from mousedroid.vla.policy import DEFAULT_ORT_PROVIDERS
 from mousedroid.world_model.observation_packer import pack_observation
+from mousedroid.world_model.onnx_io import (
+    OBSERVE_STEP_INPUT_AUDIO,
+    OBSERVE_STEP_INPUT_H,
+    OBSERVE_STEP_INPUT_LIDAR,
+    OBSERVE_STEP_INPUT_MOTOR,
+    OBSERVE_STEP_INPUT_PREV_ACTION,
+    OBSERVE_STEP_INPUT_ULTRASONIC,
+    OBSERVE_STEP_INPUT_VALID_MASK,
+    OBSERVE_STEP_INPUT_VISION,
+    OBSERVE_STEP_INPUT_Z,
+    OBSERVE_STEP_OUTPUT_NAMES,
+)
 
 if TYPE_CHECKING:
     from mousedroid.telemetry.metrics import MetricsRegistry
@@ -102,9 +114,12 @@ class DualStreamRSSMOnnx:
         self._session: Any | None = None
         self._active_providers: tuple[str, ...] = ()
 
-        # ONNX output index order, established by run_export's output_names.
-        # Mirror it here so observe_step doesn't have to look up by name.
-        self._output_names = ["new_h", "new_z", "obs_embed", "surprise"]
+        # ONNX output names — shared with the exporter via the
+        # ``onnx_io`` module so a future rename in either place trips
+        # type-check, not silent runtime divergence. ``list(...)`` is
+        # required because ``onnxruntime.InferenceSession.run`` mutates
+        # the list argument internally on some ORT versions.
+        self._output_names = list(OBSERVE_STEP_OUTPUT_NAMES)
 
         _log.debug(
             "dual_stream_rssm_onnx_initialized",
@@ -240,19 +255,19 @@ class DualStreamRSSMOnnx:
         packed = pack_observation(observation, self._cfg, device=torch.device("cpu"))
 
         feeds: dict[str, np.ndarray[Any, Any]] = {
-            "vision": packed.vision.detach().cpu().numpy(),
-            "motor": packed.motor.detach().cpu().numpy(),
-            "valid_mask": packed.valid_mask.detach().cpu().numpy(),
-            "prev_action": prev_action.detach().cpu().numpy(),
-            "h": h.detach().cpu().numpy(),
-            "z": z.detach().cpu().numpy(),
+            OBSERVE_STEP_INPUT_VISION: packed.vision.detach().cpu().numpy(),
+            OBSERVE_STEP_INPUT_MOTOR: packed.motor.detach().cpu().numpy(),
+            OBSERVE_STEP_INPUT_VALID_MASK: packed.valid_mask.detach().cpu().numpy(),
+            OBSERVE_STEP_INPUT_PREV_ACTION: prev_action.detach().cpu().numpy(),
+            OBSERVE_STEP_INPUT_H: h.detach().cpu().numpy(),
+            OBSERVE_STEP_INPUT_Z: z.detach().cpu().numpy(),
         }
         if packed.ultrasonic is not None:
-            feeds["ultrasonic"] = packed.ultrasonic.detach().cpu().numpy()
+            feeds[OBSERVE_STEP_INPUT_ULTRASONIC] = packed.ultrasonic.detach().cpu().numpy()
         if packed.audio is not None:
-            feeds["audio"] = packed.audio.detach().cpu().numpy()
+            feeds[OBSERVE_STEP_INPUT_AUDIO] = packed.audio.detach().cpu().numpy()
         if packed.lidar is not None:
-            feeds["lidar"] = packed.lidar.detach().cpu().numpy()
+            feeds[OBSERVE_STEP_INPUT_LIDAR] = packed.lidar.detach().cpu().numpy()
 
         start = time.perf_counter()
         with torch.no_grad():

@@ -296,3 +296,143 @@ class TestImagineStep:
         z = torch.zeros(1, cfg.latent_dim, dtype=torch.float32)
         with pytest.raises(NotImplementedError, match="imagine_step"):
             rt.imagine_step(action, h, z)
+
+
+class _RecordingMetrics:
+    """Minimal MetricsRegistry stand-in capturing world-model observations.
+
+    Has just the one attribute the runtime looks up via ``getattr`` — the
+    real :class:`MetricsRegistry` will expose this helper in B2 Story 4's
+    follow-up wiring. The runtime should call it with the elapsed
+    wall-clock seconds of one ``observe_step`` and nothing else.
+    """
+
+    def __init__(self) -> None:
+        self.observed_seconds: list[float] = []
+
+    def observe_world_model_observe_step_seconds(self, value: float) -> None:
+        self.observed_seconds.append(value)
+
+
+class TestMetricsObservation:
+    """``DualStreamRSSMOnnx`` emits a latency observation when metrics is provided."""
+
+    def test_observe_step_records_one_observation_per_call(
+        self,
+        exported_onnx: tuple[Path, DualStreamRSSM, ModelConfig],
+    ) -> None:
+        """Each observe_step call appends exactly one finite, positive sample."""
+        import math
+
+        path, _model, cfg = exported_onnx
+        metrics = _RecordingMetrics()
+        rt = DualStreamRSSMOnnx(
+            model_path=path,
+            cfg=cfg,
+            providers=("CPUExecutionProvider",),
+            metrics=metrics,  # type: ignore[arg-type]
+        )
+        obs = _StubObservation()
+        prev_action = torch.zeros(1, cfg.action_dim, dtype=torch.float32)
+        h = torch.zeros(1, cfg.hidden_dim + cfg.cfc_hidden_dim, dtype=torch.float32)
+        z = torch.zeros(1, cfg.latent_dim, dtype=torch.float32)
+
+        rt.observe_step(obs, prev_action, h, z)
+        rt.observe_step(obs, prev_action, h, z)
+        rt.observe_step(obs, prev_action, h, z)
+
+        assert len(metrics.observed_seconds) == 3
+        for sample in metrics.observed_seconds:
+            assert math.isfinite(sample)
+            assert sample >= 0.0
+
+    def test_metrics_without_helper_attr_is_safe(
+        self,
+        exported_onnx: tuple[Path, DualStreamRSSM, ModelConfig],
+    ) -> None:
+        """Defensive ``getattr`` path: legacy MetricsRegistry without the
+        helper should not crash observe_step.
+
+        Mirrors the production registry surface that pre-dates B2 Story 4.
+        The runtime intentionally falls back to a no-op rather than raising.
+        """
+
+        class _LegacyRegistry:
+            """No ``observe_world_model_observe_step_seconds`` attribute."""
+
+        path, _model, cfg = exported_onnx
+        rt = DualStreamRSSMOnnx(
+            model_path=path,
+            cfg=cfg,
+            providers=("CPUExecutionProvider",),
+            metrics=_LegacyRegistry(),  # type: ignore[arg-type]
+        )
+        obs = _StubObservation()
+        prev_action = torch.zeros(1, cfg.action_dim, dtype=torch.float32)
+        h = torch.zeros(1, cfg.hidden_dim + cfg.cfc_hidden_dim, dtype=torch.float32)
+        z = torch.zeros(1, cfg.latent_dim, dtype=torch.float32)
+        # No exception — the runtime tolerates the legacy registry surface.
+        rt.observe_step(obs, prev_action, h, z)
+
+
+class TestOptionalModalityFeeds:
+    """The runtime feeds audio / lidar tensors only when the modality is enabled."""
+
+    def _make_audio_lidar_cfg(self) -> ModelConfig:
+        """ModelConfig that turns on both audio and lidar to exercise feeds."""
+        return ModelConfig(
+            vision_dim=16,
+            ultrasonic_dim=1,
+            ultrasonic_proj_dim=4,
+            motor_state_dim=4,
+            hidden_dim=32,
+            latent_dim=8,
+            action_dim=2,
+            obs_dim=16,
+            vision_proj_dim=8,
+            motor_proj_dim=4,
+            audio_dim=8,
+            audio_proj_dim=4,
+            lidar_dim=12,
+            lidar_proj_dim=4,
+            cfc_hidden_dim=16,
+            cfc_backbone_units=32,
+            cfc_backbone_layers=1,
+        )
+
+    def test_audio_and_lidar_feeds_when_enabled(self, tmp_path: Path) -> None:
+        """Cfg with audio + lidar enabled produces feeds for both modalities."""
+        export_module = _load_export_module()
+        cfg = self._make_audio_lidar_cfg()
+        torch_model = DualStreamRSSM(cfg)
+        torch_model.train(False)
+        onnx_path = tmp_path / "observe_step.onnx"
+        export_module.run_export(model=torch_model, cfg=cfg, output_path=onnx_path, opset=17)
+
+        rt = DualStreamRSSMOnnx(model_path=onnx_path, cfg=cfg, providers=("CPUExecutionProvider",))
+
+        obs = _StubObservation(
+            audio_chunk=np.ones(8, dtype=np.float32),
+            lidar_features=np.ones(12, dtype=np.float32),
+        )
+        prev_action = torch.zeros(1, cfg.action_dim, dtype=torch.float32)
+        h = torch.zeros(1, cfg.hidden_dim + cfg.cfc_hidden_dim, dtype=torch.float32)
+        z = torch.zeros(1, cfg.latent_dim, dtype=torch.float32)
+        new_h, new_z, obs_embed, _surprise = rt.observe_step(obs, prev_action, h, z)
+        assert new_h.shape == (1, cfg.hidden_dim + cfg.cfc_hidden_dim)
+        assert new_z.shape == (1, cfg.latent_dim)
+        assert obs_embed.shape == (1, cfg.obs_dim)
+
+    def test_name_property_returns_constructor_value(
+        self,
+        exported_onnx: tuple[Path, DualStreamRSSM, ModelConfig],
+    ) -> None:
+        """The ``name`` property surfaces the operator-supplied telemetry label."""
+        path, _model, cfg = exported_onnx
+        rt = DualStreamRSSMOnnx(
+            model_path=path,
+            cfg=cfg,
+            providers=("CPUExecutionProvider",),
+            name="custom_label",
+        )
+        assert rt.name == "custom_label"
