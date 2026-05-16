@@ -281,10 +281,21 @@ def verify_sha256(
         ``True`` iff the file exists, ``expected_hex`` is a valid 64-char
         hex string, and the computed SHA-256 digest matches.
     """
+    # Pre-compute structured-log event names as plain-string locals so the
+    # actual ``_log.*(<event_name>, ...)`` calls below pass an immutable
+    # string literal rather than an f-string. Project convention reserves
+    # f-strings for value formatting; event names appear in Loki / Grafana
+    # search indexes and MUST be greppable across the codebase. Computing
+    # them once at the top of the function also avoids the redundant
+    # string construction on every failure path. (Copilot 3253369574.)
+    invalid_input_event = log_event_prefix + "_sha256_invalid_input"
+    mismatch_event = log_event_prefix + "_sha256_mismatch"
+    verified_event = log_event_prefix + "_sha256_verified"
+
     path = Path(local_path)
     if not path.is_file():
         _log.warning(
-            f"{log_event_prefix}_sha256_invalid_input",
+            invalid_input_event,
             reason="missing_file",
             local_path=str(path),
         )
@@ -293,7 +304,7 @@ def verify_sha256(
     expected = expected_hex.strip().lower()
     if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
         _log.warning(
-            f"{log_event_prefix}_sha256_invalid_input",
+            invalid_input_event,
             reason="malformed_expected_digest",
             local_path=str(path),
             expected_len=len(expected),
@@ -314,7 +325,7 @@ def verify_sha256(
         # propagate to the caller, since safety-critical OTA gating depends
         # on this returning False on any verification failure.
         _log.warning(
-            f"{log_event_prefix}_sha256_invalid_input",
+            invalid_input_event,
             reason="file_read_failed",
             local_path=str(path),
             error_type=type(exc).__name__,
@@ -325,7 +336,7 @@ def verify_sha256(
 
     if computed != expected:
         _log.warning(
-            f"{log_event_prefix}_sha256_mismatch",
+            mismatch_event,
             local_path=str(path),
             expected=expected,
             computed=computed,
@@ -333,7 +344,7 @@ def verify_sha256(
         return False
 
     _log.info(
-        f"{log_event_prefix}_sha256_verified",
+        verified_event,
         local_path=str(path),
         sha256=computed,
     )

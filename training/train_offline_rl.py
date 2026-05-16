@@ -427,12 +427,34 @@ def _shard_is_consumed(marker_uri: str) -> bool:
     bucket_name, _, blob_name = rest.partition("/")
     if not bucket_name or not blob_name:
         return False
-    client = storage.Client()
-    # google-cloud-storage's stubs declare exists() as -> bool but the
-    # runtime returns Any when GOOGLE_APPLICATION_CREDENTIALS is missing;
-    # cast explicitly so mypy --strict stays clean without a global
-    # ignore on the optional dep.
-    exists: bool = bool(client.bucket(bucket_name).blob(blob_name).exists())
+    # Wrap the Client construction + RPC in try/except so missing
+    # Application Default Credentials, transient 5xx responses, or a
+    # bucket-permission failure can't crash the training job. Per
+    # ADR-010 the idempotency check is an OPTIMISATION: a failure to
+    # read the marker SHOULD let the job proceed (fail-open) rather
+    # than abort, since the worst case is retraining a previously-
+    # consumed shard (wasted compute), not data corruption. We log
+    # the failure with ``exc_info`` so an operator can see why the
+    # check skipped and decide whether to retune the deployment.
+    # (Copilot 3253369562.)
+    try:
+        client = storage.Client()
+        # google-cloud-storage's stubs declare exists() as -> bool but the
+        # runtime returns Any when GOOGLE_APPLICATION_CREDENTIALS is missing;
+        # cast explicitly so mypy --strict stays clean without a global
+        # ignore on the optional dep.
+        exists: bool = bool(client.bucket(bucket_name).blob(blob_name).exists())
+    except Exception:  # pylint: disable=broad-except
+        # Fail-open: idempotency check is an optimisation, not a safety
+        # gate. Worst case the trainer re-runs a previously-consumed
+        # shard (wasted compute). The structured log captures the full
+        # traceback so operators can debug the GCS failure mode.
+        _log.warning(
+            "cloud_train_idempotency_check_failed",
+            marker_uri=marker_uri,
+            exc_info=True,
+        )
+        return False
     return exists
 
 
@@ -458,12 +480,25 @@ def _write_shard_consumed_marker(marker_uri: str) -> None:
     if not bucket_name or not blob_name:
         _log.warning("cloud_train_marker_uri_invalid", marker_uri=marker_uri)
         return
-    client = storage.Client()
-    blob = client.bucket(bucket_name).blob(blob_name)
-    blob.upload_from_string(
-        "shard consumed by mousedroid offline_rl_train\n",
-        content_type="text/plain",
-    )
+    # Same fail-open contract as ``_shard_is_consumed``: a write failure
+    # MUST NOT crash the training job after the real work is done. The
+    # idempotency marker is an optimisation; missing it just means a
+    # future re-run won't short-circuit (wasted compute, not data loss).
+    # (Copilot 3253369562 / 3253310003.)
+    try:
+        client = storage.Client()
+        blob = client.bucket(bucket_name).blob(blob_name)
+        blob.upload_from_string(
+            "shard consumed by mousedroid offline_rl_train\n",
+            content_type="text/plain",
+        )
+    except Exception:  # pylint: disable=broad-except
+        _log.warning(
+            "cloud_train_shard_marker_write_failed",
+            marker_uri=marker_uri,
+            exc_info=True,
+        )
+        return
     _log.info("cloud_train_shard_marker_written", marker_uri=marker_uri)
 
 
