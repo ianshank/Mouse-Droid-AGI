@@ -19,8 +19,11 @@ class PendingWeightUpdate:
 
     Produced by :class:`WeightUpdatePollerProtocol` implementations and
     consumed by ``MouseDroidOrchestrator._apply_pending_weight_update``.
-    Frozen + slotless so the orchestrator can treat it as a value-class
-    snapshot — no mutation after creation.
+    Frozen (``@dataclass(frozen=True)``) so the orchestrator can treat it
+    as a value-class snapshot — no mutation after creation. Slot generation
+    is intentionally NOT enabled because operators occasionally subclass
+    this dataclass in tests to add extra metadata fields without paying
+    the ``__slots__`` ergonomic cost.
 
     Attributes:
         repo_id: HuggingFace Hub repo ID the artifact came from.

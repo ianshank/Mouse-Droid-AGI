@@ -402,13 +402,19 @@ def train_offline_rl(
 def _shard_is_consumed(marker_uri: str) -> bool:
     """Return ``True`` when a ``shard_consumed_marker`` already exists in GCS.
 
-    Tier C1 idempotency hook: the Jetson exporter may re-upload shard N if
-    it crashes between upload + HWM-write. The cloud trainer touches a
-    marker object per consumed shard so the next pass skips it.
+    Tier C1 idempotency hook: the Jetson exporter may re-upload an LMDB
+    shard if it crashes between the upload + HWM-write. The cloud trainer
+    treats one ``--shard-consumed-marker-uri`` as a **single per-job
+    idempotency token**: when the marker exists at startup the job
+    short-circuits without retraining; when it does not, the trainer runs
+    and :func:`_write_shard_consumed_marker` lands the marker on success.
 
     The implementation is lazy-imported because ``google-cloud-storage`` is
     optional inside the editable repo install — only Vertex AI workers
-    need it.
+    need it. The Dockerfile.cloud image installs the ``[gcp]`` extra so
+    the import always succeeds inside the container; the warning path is
+    a safety net for local dev runs that pass a ``gs://`` marker without
+    the GCP extras installed.
     """
     try:
         from google.cloud import storage
@@ -422,7 +428,43 @@ def _shard_is_consumed(marker_uri: str) -> bool:
     if not bucket_name or not blob_name:
         return False
     client = storage.Client()
-    return client.bucket(bucket_name).blob(blob_name).exists()
+    # google-cloud-storage's stubs declare exists() as -> bool but the
+    # runtime returns Any when GOOGLE_APPLICATION_CREDENTIALS is missing;
+    # cast explicitly so mypy --strict stays clean without a global
+    # ignore on the optional dep.
+    exists: bool = bool(client.bucket(bucket_name).blob(blob_name).exists())
+    return exists
+
+
+def _write_shard_consumed_marker(marker_uri: str) -> None:
+    """Create the GCS ``shard_consumed_marker`` blob after a successful run.
+
+    Idempotency contract complement to :func:`_shard_is_consumed`. Without
+    this write the idempotency check at startup is a no-op (the marker
+    never appears, so re-runs always train). Per ADR-010 the marker MUST
+    be written only AFTER training completes successfully — a failed run
+    must remain re-runnable. (Copilot 3253293667 / 3253310012.)
+    """
+    try:
+        from google.cloud import storage
+    except ImportError:
+        _log.warning("cloud_train_gcs_unavailable_write", marker_uri=marker_uri)
+        return
+    if not marker_uri.startswith("gs://"):
+        _log.warning("cloud_train_marker_uri_invalid", marker_uri=marker_uri)
+        return
+    rest = marker_uri[len("gs://") :]
+    bucket_name, _, blob_name = rest.partition("/")
+    if not bucket_name or not blob_name:
+        _log.warning("cloud_train_marker_uri_invalid", marker_uri=marker_uri)
+        return
+    client = storage.Client()
+    blob = client.bucket(bucket_name).blob(blob_name)
+    blob.upload_from_string(
+        "shard consumed by mousedroid offline_rl_train\n",
+        content_type="text/plain",
+    )
+    _log.info("cloud_train_shard_marker_written", marker_uri=marker_uri)
 
 
 def main() -> None:
@@ -454,15 +496,14 @@ def main() -> None:
         help="Resume from checkpoint path",
     )
     # Tier C1 cloud-training flags. All optional so legacy local invocations
-    # remain byte-identical.
-    parser.add_argument(
-        "--push-to-hf",
-        action="store_true",
-        help=(
-            "Upload the trained artifact + sha256.txt manifest to HuggingFace "
-            "Hub. Requires HUGGINGFACE_HUB_TOKEN."
-        ),
-    )
+    # remain byte-identical. The HF-Hub upload flags (--push-to-hf,
+    # --hf-repo-id, --hf-artifact-filename) were intentionally NOT shipped
+    # in C1 because the concrete upload implementation
+    # (``training/upload_weights.py``) does not yet exist — exposing the
+    # flags now would silently no-op and mislead operators. The flags will
+    # land in a follow-up PR together with the upload module; see ADR-010
+    # and the Tier C plan §"Out-of-Scope Items". (Copilot 3253293666 /
+    # 3253310017 / 3253293671 / 3253293675 / 3253310025.)
     parser.add_argument(
         "--lmdb-shards-gcs-prefix",
         type=str,
@@ -470,24 +511,14 @@ def main() -> None:
         help="GCS prefix that holds Jetson-exported LMDB shards (Tier C1).",
     )
     parser.add_argument(
-        "--hf-repo-id",
-        type=str,
-        default=None,
-        help="HuggingFace Hub repo ID for ``--push-to-hf``.",
-    )
-    parser.add_argument(
-        "--hf-artifact-filename",
-        type=str,
-        default="policy.onnx",
-        help="Filename of the artifact written to the HF Hub repo.",
-    )
-    parser.add_argument(
         "--shard-consumed-marker-uri",
         type=str,
         default=None,
         help=(
             "Optional GCS URI used as a per-job idempotency marker. When the "
-            "blob already exists training short-circuits — see ADR-010."
+            "blob already exists at startup the trainer short-circuits without "
+            "retraining; on a successful run the trainer writes the marker so "
+            "subsequent re-invocations short-circuit. See ADR-010."
         ),
     )
 
@@ -510,16 +541,10 @@ def main() -> None:
         resume_from=args.resume,
     )
 
-    if args.push_to_hf:
-        _log.info(
-            "cloud_train_push_to_hf_requested",
-            repo_id=args.hf_repo_id,
-            filename=args.hf_artifact_filename,
-        )
-        # Concrete artifact-upload wiring lives in
-        # ``training.upload_weights``. C1 ships the CLI seam; operators
-        # finish the upload step in a follow-up PR once the HF Hub repo
-        # exists. Emitting the log keeps the smoke-test observable.
+    # Write the GCS idempotency marker AFTER successful training so a
+    # failed run remains re-runnable. (Copilot 3253293667.)
+    if args.shard_consumed_marker_uri:
+        _write_shard_consumed_marker(args.shard_consumed_marker_uri)
 
 
 if __name__ == "__main__":

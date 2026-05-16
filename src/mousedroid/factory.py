@@ -934,10 +934,18 @@ def build_weight_update_poller(
     deployments without OTA configured produce byte-identical pre-Tier-C1
     behavior.
 
-    For Tier C1 the factory only wires the policy poller. The world-model
-    poller can be added by the operator setting a second
-    ``world_model_repo_id`` config block; the orchestrator's swap helper
-    already routes by ``engine_type``.
+    For Tier C1 the factory wires a SINGLE poller — the policy poller —
+    and ``MouseDroidOrchestrator`` accepts exactly one poller slot. The
+    schema already exposes ``cfg.cloud.weight_update.world_model_repo_id``
+    + ``world_model_filename`` for a future world-model poller, and the
+    orchestrator's swap helper already routes by ``engine_type``, but the
+    aggregator that fans both pollers' pending updates into one orchestrator
+    slot is a documented C1.x follow-up (it'd require either a multiplexer
+    poller wrapping both children or extending the orchestrator constructor
+    to accept ``list[WeightUpdatePollerProtocol]``). Operators who need
+    world-model OTA today can leave ``policy_repo_id`` pointing at the
+    world-model repo and set ``engine_type="world_model"`` on a custom
+    poller construction. (Copilot 3253293662 / 3253293698.)
 
     Args:
         cfg: Root settings.

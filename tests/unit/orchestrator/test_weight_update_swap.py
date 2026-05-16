@@ -123,15 +123,24 @@ def test_pending_update_none_is_noop():
     assert orch._world_model is original_wm
 
 
-def test_pending_update_with_no_loader_logs_and_skips(capsys):
-    """Poller has an update but loader is None — log warning, no swap."""
+def test_pending_update_with_no_loader_logs_and_acks(capsys):
+    """Poller has an update but loader is None — log warning, ack-and-clear.
+
+    Updated post-review (Copilot 3253293630): the original
+    implementation left the pending slot populated, which caused the
+    same warning to fire at 30 Hz forever until operator intervention.
+    The fixed implementation acknowledges the update so the warning
+    fires ONCE per revision; the poller can re-surface the same
+    revision on the next download cycle, at which point the operator-
+    visible warning re-fires.
+    """
     cfg = Settings(mock_hardware=True)
     update = _make_update()
     poller = _StubPoller([update])
     orch, original_wm, _ = _build_orch(cfg, poller=poller)
     orch._apply_pending_weight_update()
-    assert orch._world_model is original_wm
-    assert poller.pending_update is update  # not cleared
+    assert orch._world_model is original_wm  # no swap performed
+    assert poller.pending_update is None  # ACK-ed to prevent log spam
     captured = capsys.readouterr()
     assert "cloud_weight_update_swap_skipped_no_loader" in (captured.out + captured.err)
 
@@ -160,6 +169,90 @@ async def test_swap_happens_after_select_action():
     await orch.tick()
     assert captured["wm_at_select"] is original_wm
     assert orch._world_model is new_engine  # swap landed after select_action
+
+
+@pytest.mark.asyncio
+async def test_tick_path_world_model_swap_preserves_zeroed_prev_action():
+    """tick() honours the swap-reset flag — ``_prev_action`` stays zeroed.
+
+    Regression net for the Copilot review on PR #94 (comment 3253293621):
+    the original commit had ``tick()`` unconditionally overwriting
+    ``self._prev_action = action`` AFTER ``_apply_pending_weight_update()``
+    returned, which silently voided the ``reset_state_on_swap`` invariant
+    documented in ADR-010. The fix makes the helper return a ``swap_reset``
+    flag and gates the ``_prev_action`` assignment on it. Without this
+    test, a future refactor that drops the ``if not swap_reset:`` guard
+    in ``tick()`` would re-introduce the bug while
+    ``test_swap_resets_h_and_z_when_configured`` (which calls
+    ``_apply_pending_weight_update`` directly) keeps passing.
+    """
+    cfg = Settings(mock_hardware=True)
+    assert cfg.cloud.weight_update.reset_state_on_swap is True
+    update = _make_update(engine_type="world_model")
+    poller = _StubPoller([update])
+    new_engine = MagicMock(name="new_world_model")
+    loader = MagicMock(return_value=new_engine)
+    orch, _original_wm, _ = _build_orch(cfg, poller=poller, loader=loader)
+
+    # Seed h/z + prev_action + latent buffer with non-zero values so a
+    # missing reset would leave detectable residue.
+    orch._h = torch.ones_like(orch._h) * 3.14
+    orch._z = torch.ones_like(orch._z) * 2.71
+    orch._prev_action = torch.ones_like(orch._prev_action) * 0.5
+    orch._latent_buffer.append((orch._h.clone(), orch._z.clone()))
+
+    # Pin _select_action to return a NON-ZERO action — if the buggy
+    # overwrite path runs, _prev_action would equal this non-zero value
+    # at the assertion below.
+    def _select(self_ref, safety_ctx, observation, loop_time_ms):
+        return torch.full((cfg.model.action_dim,), 0.7)
+
+    orch._select_action = _select.__get__(orch, MouseDroidOrchestrator)  # type: ignore[method-assign]
+    await orch.tick()
+
+    # All four state slots MUST be zero after a world-model swap, on the
+    # tick() path. The swap_reset flag is what guarantees this — a future
+    # bug that breaks the flag will fail here even if direct-call tests pass.
+    assert torch.all(orch._h == 0), "h not zeroed after world-model swap on tick path"
+    assert torch.all(orch._z == 0), "z not zeroed after world-model swap on tick path"
+    assert torch.all(
+        orch._prev_action == 0
+    ), "prev_action not zeroed after world-model swap on tick path (Copilot 3253293621)"
+    assert len(orch._latent_buffer) == 0, "latent_buffer not cleared on tick path"
+
+
+@pytest.mark.asyncio
+async def test_tick_path_policy_swap_does_not_reset_prev_action():
+    """tick() does NOT zero ``_prev_action`` for policy-only swaps.
+
+    Policy swaps don't touch the world-model recurrent state, so
+    ``_prev_action`` MUST continue to reflect the freshly-selected action
+    (which seeds the NEXT tick's ``_update_world_model`` call). Pinning
+    this prevents an overcorrection where a future refactor zeros
+    ``_prev_action`` on every swap regardless of ``engine_type``.
+    """
+    cfg = Settings(mock_hardware=True)
+    update = _make_update(engine_type="policy")
+    poller = _StubPoller([update])
+    new_engine = MagicMock(name="new_policy")
+    loader = MagicMock(return_value=new_engine)
+    orch, _, _ = _build_orch(cfg, poller=poller, loader=loader)
+
+    selected_action_value = 0.42
+
+    def _select(self_ref, safety_ctx, observation, loop_time_ms):
+        return torch.full((cfg.model.action_dim,), selected_action_value)
+
+    orch._select_action = _select.__get__(orch, MouseDroidOrchestrator)  # type: ignore[method-assign]
+    await orch.tick()
+
+    # Policy swap landed; prev_action must equal the freshly-selected action.
+    assert torch.all(
+        torch.isclose(
+            orch._prev_action,
+            torch.full_like(orch._prev_action, selected_action_value),
+        )
+    ), "policy swap should NOT zero prev_action"
 
 
 def test_swap_resets_h_and_z_when_configured():
@@ -242,7 +335,18 @@ def test_multiple_updates_apply_in_order():
 
 
 def test_loader_exception_does_not_corrupt_live_model(capsys):
-    """A loader raising mid-load leaves the live model untouched."""
+    """A loader raising mid-load leaves the live model untouched + ACKs the slot.
+
+    Updated post-review (Copilot 3253293630): the original test expected
+    ``poller.pending_update is update`` (slot NOT cleared) so a manual
+    retry could re-apply the same bad revision. But at 30 Hz that meant
+    the loader would be re-called every tick — wasting CPU + flooding
+    logs with ``cloud_weight_update_swap_failed``. The fixed
+    implementation acknowledges the failed revision so the poller can
+    re-surface the SAME revision on its next download cycle (the poller
+    will compare its remembered SHA against the upstream HF Hub commit
+    SHA, so a re-published artifact triggers a fresh attempt).
+    """
     cfg = Settings(mock_hardware=True)
     update = _make_update(engine_type="world_model")
     poller = _StubPoller([update])
@@ -254,8 +358,8 @@ def test_loader_exception_does_not_corrupt_live_model(capsys):
     # Must not raise — the helper swallows + logs.
     orch._apply_pending_weight_update()
     assert orch._world_model is original_wm
-    # Pending slot NOT cleared so a manual retry / next poll can re-apply.
-    assert poller.pending_update is update
+    # Pending slot ACK-ed to prevent tick-rate retry storms.
+    assert poller.pending_update is None
     captured = capsys.readouterr()
     assert "cloud_weight_update_swap_failed" in (captured.out + captured.err)
 
@@ -271,3 +375,121 @@ def test_swap_routes_policy_engine_type():
     orch._apply_pending_weight_update()
     assert orch._world_model is original_wm
     assert orch._vla_policy is new_policy
+
+
+# ---------------------------------------------------------------------------
+# Defensive-path additions per PR #94 review feedback
+# ---------------------------------------------------------------------------
+
+
+def test_swap_acks_pending_when_engine_type_unknown(capsys):
+    """Unknown engine_type → log + acknowledge so the same bad update doesn't spam.
+
+    Regression net for Copilot 3253293637: previously the helper logged
+    + returned without ack-ing the pending update, leaving the same bad
+    revision stuck in the pending slot firing the warning at 30 Hz.
+    """
+    cfg = Settings(mock_hardware=True)
+    bogus_update = _make_update(engine_type="banana")  # not "policy" or "world_model"
+    poller = _StubPoller([bogus_update])
+    loader = MagicMock()
+    orch, _, _ = _build_orch(cfg, poller=poller, loader=loader)
+    orch._apply_pending_weight_update()
+    # Ack-ed despite the bad engine_type → no log spam at tick rate.
+    assert poller.pending_update is None
+    captured = capsys.readouterr()
+    assert "cloud_weight_update_unknown_engine_type" in (captured.out + captured.err)
+
+
+def test_swap_reset_preserves_device_and_dtype():
+    """zeros_like preserves dtype + device — pin against accidental ``torch.zeros(...)``.
+
+    Regression net for Copilot 3253293626 / 3253309982. The original
+    implementation reset state via ``torch.zeros(...)`` which defaults to
+    CPU + float32. On a CUDA-resident world-model that would silently
+    move state to CPU and crash the next ``observe_step``. The fix uses
+    ``torch.zeros_like(self._h)`` etc; this test verifies dtype is
+    preserved (device check is skipped on CI runners without CUDA).
+    """
+    cfg = Settings(mock_hardware=True)
+    assert cfg.cloud.weight_update.reset_state_on_swap is True
+    update = _make_update(engine_type="world_model")
+    poller = _StubPoller([update])
+    new_engine = MagicMock(name="new_world_model")
+    loader = MagicMock(return_value=new_engine)
+    orch, _, _ = _build_orch(cfg, poller=poller, loader=loader)
+
+    # Set state to a non-default dtype to detect any path that creates a
+    # new tensor with default dtype.
+    orch._h = torch.ones_like(orch._h, dtype=torch.float64)
+    orch._z = torch.ones_like(orch._z, dtype=torch.float64)
+    orch._prev_action = torch.ones_like(orch._prev_action, dtype=torch.float64)
+
+    orch._apply_pending_weight_update()
+
+    assert orch._h.dtype == torch.float64, "h dtype lost on swap reset"
+    assert orch._z.dtype == torch.float64, "z dtype lost on swap reset"
+    assert orch._prev_action.dtype == torch.float64, "prev_action dtype lost on swap reset"
+    # Device parity check — on a CPU-only runner this is trivially true,
+    # but on a CUDA host the assertion catches the device-mismatch bug.
+    assert orch._h.device == orch._z.device
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_start_invokes_poller_start():
+    """Regression net for Copilot 3253293644 / 3253309972 — poller wired into lifecycle."""
+    cfg = Settings(mock_hardware=True)
+    poller = _StubPoller([])
+
+    # Spy on start/stop calls.
+    start_calls: list[bool] = []
+    stop_calls: list[bool] = []
+    original_start = poller.start
+    original_stop = poller.stop
+
+    async def _spy_start() -> None:
+        start_calls.append(True)
+        await original_start()
+
+    async def _spy_stop() -> None:
+        stop_calls.append(True)
+        await original_stop()
+
+    poller.start = _spy_start  # type: ignore[method-assign]
+    poller.stop = _spy_stop  # type: ignore[method-assign]
+
+    orch, _, _ = _build_orch(cfg, poller=poller)
+
+    # Mock orchestrator subsystem start/stop calls to avoid real I/O — we
+    # only care that the poller hooks fire as part of the lifecycle.
+    orch._esp32.connect = AsyncMock()
+    orch._sensor_manager.start = AsyncMock()
+    orch._journal.start = AsyncMock()
+    await orch.start()
+    assert start_calls == [True], "orchestrator.start() must invoke poller.start()"
+
+    orch._journal.stop = AsyncMock()  # type: ignore[method-assign]
+    orch._sensor_manager.stop = AsyncMock()  # type: ignore[method-assign]
+    orch._esp32.disconnect = AsyncMock()  # type: ignore[method-assign]
+    await orch.stop()
+    assert stop_calls == [True], "orchestrator.stop() must invoke poller.stop()"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_start_tolerates_poller_start_failure(capsys):
+    """A failing poller start MUST NOT block orchestrator startup."""
+    cfg = Settings(mock_hardware=True)
+
+    class _FailingPoller(_StubPoller):
+        async def start(self) -> None:
+            raise RuntimeError("simulated HF Hub unreachable at boot")
+
+    poller = _FailingPoller([])
+    orch, _, _ = _build_orch(cfg, poller=poller)
+    orch._esp32.connect = AsyncMock()
+    orch._sensor_manager.start = AsyncMock()
+    orch._journal.start = AsyncMock()
+    # Must not raise.
+    await orch.start()
+    captured = capsys.readouterr()
+    assert "cloud_weight_update_poller_start_failed" in (captured.out + captured.err)

@@ -301,12 +301,26 @@ def verify_sha256(
         return False
 
     hasher = hashlib.sha256()
-    with path.open("rb") as fh:
-        while True:
-            chunk = fh.read(_SHA256_CHUNK_BYTES)
-            if not chunk:
-                break
-            hasher.update(chunk)
+    try:
+        with path.open("rb") as fh:
+            while True:
+                chunk = fh.read(_SHA256_CHUNK_BYTES)
+                if not chunk:
+                    break
+                hasher.update(chunk)
+    except OSError as exc:
+        # Transient filesystem errors (permissions, vanished file mid-read,
+        # network mount glitches) MUST fail closed — never let the OS error
+        # propagate to the caller, since safety-critical OTA gating depends
+        # on this returning False on any verification failure.
+        _log.warning(
+            f"{log_event_prefix}_sha256_invalid_input",
+            reason="file_read_failed",
+            local_path=str(path),
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+        return False
     computed = hasher.hexdigest()
 
     if computed != expected:

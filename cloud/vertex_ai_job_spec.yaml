@@ -28,18 +28,33 @@ workerPoolSpecs:
       env:
         - name: MOUSEDROID_CLOUD_TRAIN_CONFIG
           value: /etc/mousedroid/cloud_train.yaml
-        - name: MOUSEDROID_SHARD_CONSUMED_MARKER_PREFIX
-          value: gs://REPLACE_BUCKET/cloud_train/shard_consumed_marker/
         - name: HUGGINGFACE_HUB_TOKEN
-          # Use Secret Manager via Workload Identity in production.
-          value: REPLACE_HF_TOKEN_SECRET_BINDING
+          # SECURITY: HUGGINGFACE_HUB_TOKEN is grade-A privileged — it
+          # authorises push to ianshank/mousedroid-*. NEVER embed in
+          # plaintext. Bind via Secret Manager so the secret value never
+          # appears in the job spec, container env-dump, or Vertex AI
+          # audit logs. (Gemini security-high.)
+          valueFrom:
+            secretKeyRef:
+              name: REPLACE_WITH_SECRET_MANAGER_SECRET_NAME
+              version: latest
       args:
+        # --shard-consumed-marker-uri is consumed by training/train_offline_rl.py
+        # to gate the per-job GCS idempotency check (existence check at startup,
+        # blob write on success). The trainer does NOT read
+        # MOUSEDROID_SHARD_CONSUMED_MARKER_PREFIX; pass the marker URI here
+        # explicitly. (Copilot 3253293678 / 3253310030.)
+        #
+        # NOTE: --push-to-hf / --hf-repo-id / --hf-artifact-filename were
+        # removed from the trainer because the upload module
+        # (training/upload_weights.py) does not exist yet. The Vertex AI job
+        # spec will gain them back when that follow-up PR lands; until then
+        # the trainer's output remains in GCS and an operator hands off to
+        # `huggingface-cli upload`.
         - --lmdb-shards-gcs-prefix
         - gs://REPLACE_BUCKET/experience_shards/
-        - --hf-repo-id
-        - ianshank/mousedroid-policy-v2
-        - --hf-artifact-filename
-        - policy.onnx
+        - --shard-consumed-marker-uri
+        - gs://REPLACE_BUCKET/cloud_train/shard_consumed_marker/run_id_placeholder
 
 # Optional: scheduled execution. Operators uncomment + customise once they're
 # ready to run nightly retraining.

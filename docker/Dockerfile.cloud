@@ -46,11 +46,16 @@ COPY pyproject.toml ./
 COPY README.md ./
 COPY src ./src
 
-# Install the package + cloud-training extras. ``[dev,vla,onnx_world_model]``
-# pulls in pytest (smoke tests run inside the container), the VLA stack,
-# and onnxruntime for the SHA-256 + ONNX export validation step.
+# Install the package + cloud-training extras. The four extras pull in:
+#   * ``dev`` — pytest, ruff, mypy (so smoke tests run inside the container).
+#   * ``vla`` — VLA stack for policy inference + ONNX export validation.
+#   * ``onnx_world_model`` — onnxruntime for world-model SHA-256 verify.
+#   * ``gcp`` — google-cloud-storage for the trainer's GCS shard-marker
+#     idempotency check. Without this extra the cloud trainer silently
+#     disables the marker check via the ImportError fallback path, defeating
+#     the idempotency contract documented in ADR-010. (Copilot 3253293683.)
 RUN pip install --upgrade pip && \
-    pip install -e ".[dev,vla,onnx_world_model]"
+    pip install -e ".[dev,vla,onnx_world_model,gcp]"
 
 # Copy the rest of the repo (training scripts, configs).
 COPY training ./training

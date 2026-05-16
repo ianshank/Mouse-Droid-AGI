@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 from mousedroid.cloud.protocol import PendingWeightUpdate
 from mousedroid.logging.setup import get_logger
-from mousedroid.utils.weights_manager import verify_sha256
+from mousedroid.utils.weights_manager import _validate_download_directory, verify_sha256
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import WeightUpdatePollConfig
@@ -40,8 +40,10 @@ class HuggingFaceWeightUpdatePoller:
     """Background poller that fetches latest HF Hub revisions and verifies SHA-256.
 
     One instance polls one ``(repo_id, filename)`` pair tagged with one
-    ``engine_type`` (``"policy"`` or ``"world_model"``). The factory builds
-    two instances when both engines have non-zero poll intervals.
+    ``engine_type`` (``"policy"`` or ``"world_model"``). C1 wires a single
+    policy poller via :func:`mousedroid.factory.build_weight_update_poller`;
+    extending to a world-model poller is a documented C1.x follow-up that
+    requires adding orchestrator support for an additional poller slot.
 
     Conforms to :class:`WeightUpdatePollerProtocol` structurally.
     """
@@ -92,6 +94,13 @@ class HuggingFaceWeightUpdatePoller:
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
         self._cache_dir = Path(cfg.cache_dir).resolve()
+        # Reuse the same protected-path policy weights_manager applies to
+        # ``download_weights_from_huggingface`` — a misconfigured or
+        # compromised ``cfg.cloud.weight_update.cache_dir`` MUST NOT be able
+        # to write into /etc, /root, /sys, etc. Validation runs at
+        # construction so a bad config fails fast at orchestrator build,
+        # not at first poll cycle 30 seconds in.
+        _validate_download_directory(self._cache_dir)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -217,24 +226,49 @@ class HuggingFaceWeightUpdatePoller:
         )
 
         # Download the SHA-256 manifest first so we can verify the artifact.
-        manifest_path = await asyncio.to_thread(
-            hf_download,
-            repo_id=self._repo_id,
-            filename=self._cfg.sha256_manifest_filename,
-            revision=latest_sha,
-            local_dir=str(self._cache_dir),
-        )
-        expected_hex = Path(manifest_path).read_text(encoding="utf-8").strip().split()[0]
+        # Each download wrapped in asyncio.wait_for + retry-with-backoff using
+        # the operator-tunable cfg.download_timeout_s / cfg.max_retries so a
+        # hung HF Hub session can't block the poll task indefinitely.
+        try:
+            manifest_path = await self._download_with_timeout_and_retry(
+                hf_download,
+                filename=self._cfg.sha256_manifest_filename,
+                revision=latest_sha,
+            )
+        except (asyncio.TimeoutError, RuntimeError) as exc:
+            _log.warning(
+                "cloud_weight_update_manifest_download_failed",
+                repo_id=self._repo_id,
+                revision=latest_sha,
+                error_type=type(exc).__name__,
+            )
+            return False
+
+        expected_hex = self._parse_sha256_manifest(manifest_path)
+        if expected_hex is None:
+            # Refuse the update; do NOT mark the revision as seen so a
+            # corrected manifest upload upstream is picked up on the next
+            # cycle. The fail-closed path is the only safe option for the
+            # SHA-256 gate — a missing/empty manifest must never silently
+            # bypass integrity verification.
+            return False
 
         # Time the artifact download for the latency histogram.
         download_start = time.perf_counter()
-        artifact_path = await asyncio.to_thread(
-            hf_download,
-            repo_id=self._repo_id,
-            filename=self._filename,
-            revision=latest_sha,
-            local_dir=str(self._cache_dir),
-        )
+        try:
+            artifact_path = await self._download_with_timeout_and_retry(
+                hf_download,
+                filename=self._filename,
+                revision=latest_sha,
+            )
+        except (asyncio.TimeoutError, RuntimeError) as exc:
+            _log.warning(
+                "cloud_weight_update_artifact_download_failed",
+                repo_id=self._repo_id,
+                revision=latest_sha,
+                error_type=type(exc).__name__,
+            )
+            return False
         download_seconds = time.perf_counter() - download_start
 
         if self._metrics is not None:
@@ -269,6 +303,127 @@ class HuggingFaceWeightUpdatePoller:
             engine_type=self._engine_type,
         )
         return True
+
+    # ------------------------------------------------------------------
+    # Download helpers (timeout + retry + manifest parsing)
+    # ------------------------------------------------------------------
+
+    async def _download_with_timeout_and_retry(
+        self,
+        hf_download: Any,
+        *,
+        filename: str,
+        revision: str,
+    ) -> str:
+        """Run ``hf_hub_download`` under ``download_timeout_s`` with retry/backoff.
+
+        Wraps ``asyncio.to_thread(hf_download, ...)`` in
+        :func:`asyncio.wait_for` so the worker thread cannot hang the poll
+        task indefinitely. Retries up to ``cfg.max_retries`` with exponential
+        backoff (1s, 2s, 4s, ...) on transient failures (TimeoutError and
+        any non-asyncio exception raised by ``hf_hub_download`` — network
+        glitches, 5xx responses, etc.). The final attempt's exception is
+        re-raised as :class:`RuntimeError` so the caller can fail closed
+        without unconditionally swallowing programming errors.
+
+        Args:
+            hf_download: Resolved ``huggingface_hub.hf_hub_download``
+                callable (lazy-imported by :meth:`_resolve_hf_download`).
+            filename: HF Hub filename to fetch.
+            revision: HF Hub revision SHA.
+
+        Returns:
+            Local filesystem path of the downloaded artifact.
+
+        Raises:
+            asyncio.TimeoutError: All attempts exhausted by per-attempt
+                timeout. Caller MUST treat as fail-closed.
+            RuntimeError: All attempts exhausted by transient network /
+                upstream failures. Caller MUST treat as fail-closed.
+        """
+        attempts = max(1, self._cfg.max_retries + 1)
+        last_exc: BaseException | None = None
+        for attempt in range(attempts):
+            try:
+                result: str = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        hf_download,
+                        repo_id=self._repo_id,
+                        filename=filename,
+                        revision=revision,
+                        local_dir=str(self._cache_dir),
+                    ),
+                    timeout=self._cfg.download_timeout_s,
+                )
+                return result
+            except asyncio.CancelledError:
+                raise
+            except (asyncio.TimeoutError, Exception) as exc:  # pylint: disable=broad-except
+                last_exc = exc
+                if attempt + 1 >= attempts:
+                    break
+                backoff_s = 2.0**attempt
+                _log.warning(
+                    "cloud_weight_update_download_retry",
+                    repo_id=self._repo_id,
+                    revision=revision,
+                    filename=filename,
+                    attempt=attempt + 1,
+                    max_attempts=attempts,
+                    backoff_s=backoff_s,
+                    error_type=type(exc).__name__,
+                )
+                await asyncio.sleep(backoff_s)
+        # Exhausted retries. Normalise the exception type so callers can
+        # write a single except clause covering both timeout + network
+        # failure (asyncio.TimeoutError or RuntimeError).
+        if isinstance(last_exc, asyncio.TimeoutError):
+            raise last_exc
+        raise RuntimeError(
+            f"hf_hub_download failed after {attempts} attempts for "
+            f"{self._repo_id}:{filename}@{revision}: {last_exc!r}"
+        ) from last_exc
+
+    def _parse_sha256_manifest(self, manifest_path: str) -> str | None:
+        """Read + parse the SHA-256 manifest, returning the digest or ``None``.
+
+        The HF Hub manifest is expected to be a text file containing the
+        64-char hex digest as its first whitespace-delimited token (the
+        conventional ``sha256sum`` output format ``<digest>  <filename>``).
+        Defensively handles three failure modes so a bad manifest fails
+        closed instead of crashing the poll cycle:
+
+        * Empty / whitespace-only file → ``IndexError`` on ``[0]``.
+        * Missing / unreadable file → ``OSError`` from ``read_text``.
+        * Manifest exists but first token is not a valid SHA-256 digest →
+          falls through to :func:`verify_sha256`'s own malformed-input
+          guard (returns False there + emits the canonical
+          ``cloud_weight_update_sha256_invalid_input`` log event).
+
+        Returns:
+            The first whitespace-delimited token (the expected digest) when
+            the file parses, or ``None`` when the file is missing / empty /
+            unreadable. ``None`` callers MUST treat as fail-closed.
+        """
+        try:
+            text = Path(manifest_path).read_text(encoding="utf-8")
+        except OSError as exc:
+            _log.warning(
+                "cloud_weight_update_manifest_read_failed",
+                repo_id=self._repo_id,
+                manifest_path=manifest_path,
+                error_type=type(exc).__name__,
+            )
+            return None
+        parts = text.strip().split()
+        if not parts:
+            _log.warning(
+                "cloud_weight_update_manifest_empty",
+                repo_id=self._repo_id,
+                manifest_path=manifest_path,
+            )
+            return None
+        return parts[0]
 
     # ------------------------------------------------------------------
     # Lazy import resolution — kept out of module top-level so importing

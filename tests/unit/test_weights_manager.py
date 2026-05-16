@@ -383,3 +383,43 @@ def test_verify_sha256_log_event_prefix_propagates(tmp_path, capsys):
     captured = capsys.readouterr()
     combined = captured.out + captured.err
     assert "cloud_weight_update_sha256_mismatch" in combined
+
+
+def test_verify_sha256_handles_os_error_on_read(tmp_path, monkeypatch, capsys):
+    """OSError during file read must fail closed + log + NOT propagate.
+
+    Regression net for Copilot 3253310002: safety-critical OTA gating must
+    NEVER let an OSError from ``path.open('rb').read(...)`` propagate and
+    crash the poller. Verified by patching ``Path.open`` to raise OSError
+    after the existence check passed.
+    """
+    import builtins
+
+    f = tmp_path / "weights.bin"
+    f.write_bytes(b"data")
+    digest = _sha256(b"data")
+
+    original_open = builtins.open
+
+    def _failing_open(file, *args, **kwargs):
+        if str(file).endswith("weights.bin") and (args and args[0] == "rb"):
+            raise OSError("simulated transient FS error")
+        return original_open(file, *args, **kwargs)
+
+    # Patch Path.open since verify_sha256 calls path.open("rb").
+    from pathlib import Path as _Path
+
+    original_path_open = _Path.open
+
+    def _failing_path_open(self, *args, **kwargs):
+        if str(self).endswith("weights.bin") and (args and args[0] == "rb"):
+            raise OSError("simulated transient FS error")
+        return original_path_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(_Path, "open", _failing_path_open)
+
+    result = verify_sha256(f, digest, log_event_prefix="cloud_weight_update")
+    assert result is False, "OSError on read must yield False (fail-closed)"
+    captured = capsys.readouterr()
+    assert "cloud_weight_update_sha256_invalid_input" in (captured.out + captured.err)
+    assert "file_read_failed" in (captured.out + captured.err)
