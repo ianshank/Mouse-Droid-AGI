@@ -1251,6 +1251,60 @@
           ]
         }
       }
+    },
+    {
+      "id": 22,
+      "title": "World-Model observe_step Latency p50 / p95 / p99 (seconds)",
+      "description": "Histogram quantiles of DualStreamRSSM.observe_step wall-clock seconds. p95 above the 30 Hz orchestrator budget (~33 ms) means the world-model hot path is missing its tick deadline. On the Orin Nano with cfg.world_model.engine=onnx_trt the target is <10 ms (TensorRT EP); on CPU dev hosts the portable bound is 33 ms. Source: mousedroid_world_model_observe_step_seconds histogram, wired by Tier B2 PR #92. Note: no data until the orchestrator passes a MetricsRegistry into the world model.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 80
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (instance, le) (rate(mousedroid_world_model_observe_step_seconds_bucket[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (instance, le) (rate(mousedroid_world_model_observe_step_seconds_bucket[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (instance, le) (rate(mousedroid_world_model_observe_step_seconds_bucket[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "showLegend": true,
+          "placement": "bottom"
+        }
+      }
     }
   ],
   "refresh": "5s",

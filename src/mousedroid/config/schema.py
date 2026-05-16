@@ -1107,12 +1107,24 @@ class MetricsConfig(BaseModel):
             "fallbacks beyond 1 s. Operator-tunable per deployment."
         ),
     )
+    world_model_observe_step_seconds_buckets: tuple[float, ...] = Field(
+        (0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, float("inf")),
+        description=(
+            "Histogram bucket boundaries for DualStreamRSSM.observe_step latency "
+            "(seconds). Default envelope covers <1 ms baseline up to long-tail "
+            "PyTorch ticks beyond 100 ms. The 10 ms target on Orin Nano (with "
+            "cfg.world_model.engine=onnx_trt + TensorRT EP) lands within the "
+            "(0.005, 0.01] bucket; the portable dev gate is 33 ms (30 Hz tick). "
+            "Operator-tunable per deployment."
+        ),
+    )
 
     @field_validator(
         "loop_latency_buckets_ms",
         "llm_latency_buckets_ms",
         "mcp_latency_buckets_ms",
         "vla_inference_seconds_buckets",
+        "world_model_observe_step_seconds_buckets",
     )
     @classmethod
     def _validate_histogram_buckets(cls, value: tuple[float, ...]) -> tuple[float, ...]:

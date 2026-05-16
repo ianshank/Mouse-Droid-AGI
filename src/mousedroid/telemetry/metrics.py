@@ -522,6 +522,15 @@ class MetricsRegistry:
         self._vla_timeouts = _LabeledCounter()
         self._vlm_progress_cache_hits = _Counter()
         self._vlm_progress_cache_misses = _Counter()
+        # World-model observe_step latency histogram (Tier B2 helper, wired
+        # by Tier C3.1). Mirrors the VLA inference shape so DualStreamRSSMOnnx
+        # can stop using the defensive ``getattr(..., None)`` fallback at
+        # ``world_model/dual_stream_rssm_onnx.py:293`` — the helper now exists
+        # unconditionally and the runtime calls it directly.
+        wm_raw_buckets = sorted(cfg.world_model_observe_step_seconds_buckets)
+        if not wm_raw_buckets or wm_raw_buckets[-1] != float("inf"):
+            wm_raw_buckets.append(float("inf"))
+        self._world_model_observe_step_seconds = _Histogram(tuple(wm_raw_buckets))
 
         # Pre-format metric names from namespace
         self._name_frame_drops = f"{ns}_frame_drops"
@@ -576,6 +585,8 @@ class MetricsRegistry:
         self._name_vla_timeouts = f"{ns}_vla_timeouts"
         self._name_vlm_progress_cache_hits = f"{ns}_vlm_progress_cache_hits"
         self._name_vlm_progress_cache_misses = f"{ns}_vlm_progress_cache_misses"
+        # Tier B2 — world-model observe_step latency histogram
+        self._name_world_model_observe_step_seconds = f"{ns}_world_model_observe_step_seconds"
 
         _log.debug("metrics_registry_initialised", namespace=ns)
 
@@ -944,6 +955,38 @@ class MetricsRegistry:
             )
             return
         self._vla_inference_seconds.observe(value)
+
+    def observe_world_model_observe_step_seconds(self, value: float) -> None:
+        """Observe one ``DualStreamRSSM.observe_step`` latency sample (seconds).
+
+        Tier B2 documented this helper in the export plan but the actual
+        wiring was deferred — the ``DualStreamRSSMOnnx`` runtime class
+        used a defensive ``getattr(..., None)`` lookup at
+        ``world_model/dual_stream_rssm_onnx.py:293`` to avoid crashing on
+        a registry that didn't expose the helper yet. Tier C3.1 lands the
+        helper unconditionally so the runtime can call it directly.
+
+        Defensively drops samples that would corrupt the histogram sum:
+
+        * Negative values (clock skew / wall-clock wrap)
+        * NaN (timer misuse / division-by-zero upstream)
+
+        Drops emit a DEBUG-level structured log so operators can correlate
+        missing histogram observations with the upstream root cause.
+
+        Args:
+            value: Wall-clock seconds spent inside one ``observe_step``
+                call, measured by the caller wrapping the inference site
+                with ``time.perf_counter()``.
+        """
+        if value != value or value < _MIN_OBSERVABLE_SECONDS:
+            _log.debug(
+                "world_model_observe_step_seconds_dropped",
+                reason="nan" if value != value else "negative",
+                value=value,
+            )
+            return
+        self._world_model_observe_step_seconds.observe(value)
 
     def inc_vla_timeout(
         self,
@@ -1389,6 +1432,17 @@ class MetricsRegistry:
                     vla_count,
                 )
             )
+        wm_buckets, wm_sum, wm_count = self._world_model_observe_step_seconds.snapshot()
+        if wm_count > 0:
+            sections.append(
+                _render_histogram(
+                    self._name_world_model_observe_step_seconds,
+                    "DualStreamRSSM.observe_step latency histogram (seconds)",
+                    wm_buckets,
+                    wm_sum,
+                    wm_count,
+                )
+            )
         vla_timeout_snapshot = self._vla_timeouts.snapshot()
         if vla_timeout_snapshot:
             sections.append(
@@ -1529,5 +1583,9 @@ def generate_metrics_sample() -> str:
     registry.inc_vla_timeout("distilled_onnx")
     registry.inc_vlm_cache_hit()
     registry.inc_vlm_cache_miss()
+    # Tier B2 — exercise the world-model observe_step histogram. 8 ms is
+    # representative of the Orin Nano <10 ms target with TensorRT EP; lands
+    # in the (0.005, 0.01] bucket of the default schema configuration.
+    registry.observe_world_model_observe_step_seconds(0.008)
 
     return registry.render_prometheus()

@@ -8,6 +8,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — Tier C3.1: Production hardening (CI matrix promotion + B2 telemetry/dashboard polish)
+
+Lands first in the Tier C sprint to enable real CI gating before the
+C1/C2/C4 PRs merge. Three concrete changes:
+
+1. **`vla-extras` CI matrix promoted from advisory to required.** The
+   matrix has 6+ consecutive green runs against the integration branch
+   (run IDs 25966739992, 25966733947, 25964900365, 25951166960,
+   25948534154, 25944439195 — the seventh predates the matrix and
+   doesn't apply). `continue-on-error: true` removed; subsequent
+   merges that break the `[vla]` extras path will now fail the gate.
+2. **`onnx-world-model-extras` CI matrix stays advisory** (intentional)
+   because it only has 1 green run since landing with PR #92 on
+   2026-05-16. Comment in `.github/workflows/ci.yml` documents the
+   pending 7-run gate; promotion follow-up in Tier C2's PR (by which
+   time the gate will have been met).
+3. **Wired the missing Tier B2 telemetry helper.** PR #92 documented
+   `MetricsRegistry.observe_world_model_observe_step_seconds` but
+   never wired it — `DualStreamRSSMOnnx` was using a defensive
+   `getattr(self._metrics, "observe_world_model_observe_step_seconds",
+   None)` lookup at `world_model/dual_stream_rssm_onnx.py:293`. The
+   helper now exists unconditionally, the runtime calls it directly
+   (still gated on `metrics is None`), and `generate_metrics_sample()`
+   exercises it so promtool + Grafana see non-empty series.
+   - `MetricsConfig.world_model_observe_step_seconds_buckets` added
+     (default `(0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, inf)`)
+     — covers the 10 ms Orin Nano + TensorRT EP target and the 33 ms
+     portable dev gate (30 Hz tick).
+   - Grafana panel id=22 `World-Model observe_step Latency p50 / p95 /
+     p99` lands in `docs/grafana_dashboard.json`. Test extension
+     `test_grafana_dashboard_json.py::TestPrB2PanelsPresent` asserts
+     the panel title is present.
+   - Prometheus alert rule `WorldModelObserveStepLatencyHigh` lands in
+     `config/prometheus/alerts.yml` group `mousedroid_world_model` —
+     fires when p95 > 33 ms for 2 minutes. Operators on Jetson tighten
+     to 10 ms via their alertmanager overlay or by editing the
+     threshold inline.
+4. **Tier C dashboard E2E smoke scaffold** —
+   `tests/smoke/test_prometheus_format_tier_c.py` covers the B2
+   `observe_step` histogram surface end-to-end via
+   `generate_metrics_sample()`. Placeholders (currently `pytest.skip`)
+   for the C1 (cloud OTA) + C2 (mission + safety) metric families
+   are documented inline so the follow-up PRs extend the scaffold
+   instead of creating parallel test files.
+
+**Operator follow-up (out of PR scope):** confirm branch protection on
+the integration branch is configured to require the `vla-extras (3.11)`
+status check at <https://github.com/ianshank/Mouse-Droid-AGI/settings/branches>.
+Until that UI step is done, the workflow reports red/green but doesn't
+block merges.
+
 ### Changed — Tier B1: Ten-Pillars nightly — workflow-side promotion ready
 
 After the Tier A sprint landed (PRs #85-#89), the `jetson-nightly.yml`

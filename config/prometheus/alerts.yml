@@ -379,3 +379,40 @@ groups:
             on {{ $labels.instance }}. Cache is thrashing — investigate VLM key
             sparsity or LRU sizing in mousedroid.reward.vlm_progress.
           config_ref: "operator-tunable threshold (default 0.5 ratio over 10m)"
+
+  # Tier B2 — world-model observe_step latency
+  - name: mousedroid_world_model
+    interval: 30s
+    rules:
+      # Warning: DualStreamRSSM.observe_step p95 latency exceeded the 30 Hz
+      # orchestrator tick budget (33 ms). On the Orin Nano with TensorRT EP
+      # the target is <10 ms; this warning fires when even the portable
+      # dev gate of 33 ms is breached, which means the world model is
+      # missing its tick deadline and downstream systems (MCTS, action
+      # selection) are running on stale (h, z).
+      #
+      # The 33 ms threshold corresponds to one 30 Hz tick. Operators on the
+      # Jetson should tighten this to 10 ms (Orin Nano + TensorRT EP target)
+      # by overriding the alert threshold OR by relying on the matching
+      # MOUSEDROID_OBSERVE_STEP_BUDGET_MS=10 env var in the perf-budget test.
+      - alert: WorldModelObserveStepLatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (instance, le) (
+              rate(mousedroid_world_model_observe_step_seconds_bucket[5m])
+            )
+          ) > 0.033
+        for: 2m
+        labels:
+          severity: warning
+          subsystem: world_model
+        annotations:
+          summary: "DualStreamRSSM.observe_step p95 above 33 ms (30 Hz tick budget)"
+          description: >-
+            p95 observe_step wall-clock = {{ $value | printf "%.3f" }} s on
+            {{ $labels.instance }}. World model is missing its 30 Hz tick
+            deadline. On Jetson Orin Nano, flip cfg.world_model.engine to
+            "onnx_trt" (PR #92) or run scripts/export_dual_stream_rssm_onnx.py
+            to acquire the ONNX artifact.
+          config_ref: "operator-tunable threshold (default 33 ms / Jetson 10 ms)"
