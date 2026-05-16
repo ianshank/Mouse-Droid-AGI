@@ -46,9 +46,9 @@ Four PRs landed in sequence over 2026-05-16 in the documented order:
 
 Each track was default-disabled (config flags default to `False` / `0.0` /
 `None`) so existing deployments produce byte-identical pre-Tier-C behaviour;
-operators flip one config flag per track to opt in. See the original
-`## [Unreleased]` sections preserved below for the surface diff per PR plus
-rollback paths.
+operators flip one config flag per track to opt in. See the Tier C track
+sections below under `## [v0.4.0]` for the surface diff per PR plus rollback
+paths.
 
 ### Changed — Tier C3.1: Production hardening (CI matrix promotion + B2 telemetry/dashboard polish)
 
