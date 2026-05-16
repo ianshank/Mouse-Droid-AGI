@@ -930,8 +930,11 @@ class MouseDroidOrchestrator:
         was_unbatched = action.dim() == 1
         flat: torch.Tensor = action if was_unbatched else action.squeeze(0)
         action_np = flat.detach().cpu().numpy().astype(np.float32, copy=False)
+        # ``project()`` is typed to return ``NDArray[np.float32]`` and the
+        # implementation guarantees that dtype, so no defensive
+        # ``np.asarray(..., dtype=np.float32)`` cast is required here.
         projected_np = self._safety_projector.project(action_np, safety_ctx)
-        projected = torch.from_numpy(np.asarray(projected_np, dtype=np.float32)).to(flat.device)
+        projected = torch.from_numpy(projected_np).to(flat.device)
         if not was_unbatched:
             projected = projected.unsqueeze(0)
         return projected

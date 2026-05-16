@@ -124,8 +124,11 @@ class GeometricSafetyProjector:
         if safety_ctx.human_detected and safety_ctx.human_dist_m < cfg.human_keepout_m:
             cap = np.float32(cfg.human_proximity_speed_mps)
             if np.any(np.abs(clamped) > cap):
+                # ``np.sign`` / ``np.minimum`` of float32 inputs preserve
+                # dtype, so no explicit ``.astype(np.float32)`` cast is
+                # required here (the return-site cast at the bottom of
+                # this method covers the ``Any`` numpy stubs return).
                 clamped = np.sign(clamped) * np.minimum(np.abs(clamped), cap)
-                clamped = clamped.astype(np.float32, copy=False)
                 reasons.append(_REASON_HUMAN_PROXIMITY)
 
         # Rotational clamp in tight quarters. Caps |omega| only — leaves
@@ -149,7 +152,15 @@ class GeometricSafetyProjector:
                 for reason in reasons:
                     self._metrics.inc_safety_action_clamp(reason)
 
-        return clamped
+        # Explicit cast keeps mypy --strict happy: ``np.asarray(...)`` /
+        # ``np.sign(...) * np.minimum(...)`` return ``Any`` per numpy's
+        # current stubs, even though the runtime values are guaranteed
+        # ``ndarray[..., np.float32]`` by the ``.astype(np.float32)`` /
+        # ``np.float32(...)`` wrappers above. Casting at the return site
+        # documents the invariant + lets ``mypy --strict`` pass without
+        # a module-wide ``# type: ignore``.
+        result: NDArray[np.float32] = clamped
+        return result
 
 
 __all__ = ["GeometricSafetyProjector"]

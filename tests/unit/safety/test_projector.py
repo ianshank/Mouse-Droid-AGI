@@ -1,11 +1,12 @@
 """Unit tests for the geometric safety action projector (Tier C2 / C2.1).
 
-The 11 tests below split as 8 unit + 3 branch-coverage regression. The
-branch-coverage tests ensure all four return sites in
-``Orchestrator._select_action`` (cognitive / VLA / VLA-strict-timeout /
-nav_agent) get clamped uniformly — a future refactor that adds a 5th
-return path inside ``_select_action`` would fail this regression net
-because the seam lives in ``tick()`` itself.
+The 14 tests below split as 9 unit (including one orchestrator-skip
+guard) + 5 branch-coverage regression. The branch-coverage tests ensure
+all four return sites in ``Orchestrator._select_action`` (cognitive /
+VLA / VLA-strict-timeout / nav_agent) plus the post-``tick()`` seam get
+clamped uniformly — a future refactor that adds a 5th return path
+inside ``_select_action`` would fail this regression net because the
+seam lives in ``tick()`` itself.
 """
 
 from __future__ import annotations

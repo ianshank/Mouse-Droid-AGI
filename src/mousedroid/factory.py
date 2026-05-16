@@ -62,7 +62,12 @@ if TYPE_CHECKING:
     from mousedroid.memory.tier import MemoryTier
     from mousedroid.orchestrator.face_controller import FaceController
     from mousedroid.orchestrator.mission_dispatcher import MissionDispatcherProtocol
+    from mousedroid.orchestrator.mission_lifecycle import (
+        MissionLifecycle,
+        MissionReplannerProtocol,
+    )
     from mousedroid.reward.protocol import RewardModelProtocol
+    from mousedroid.reward.vlm_progress import VLMProgressHead
     from mousedroid.sensing.manager import SensorManager
     from mousedroid.sim.protocols import RoverEnvProtocol
     from mousedroid.telemetry.failure_recorder import FailureRecorder
@@ -1050,10 +1055,10 @@ def build_mission_lifecycle(
     cfg: Settings,
     *,
     task_tracker: TaskTrackerProtocol | None = None,
-    vlm_progress: object | None = None,
-    replanner: object | None = None,
+    vlm_progress: VLMProgressHead | None = None,
+    replanner: MissionReplannerProtocol | None = None,
     metrics: MetricsRegistry | None = None,
-) -> object | None:
+) -> MissionLifecycle | None:
     """Build the optional :class:`MissionLifecycle` (Tier C2 / C2.2).
 
     Returns ``None`` when ``cfg.mission.replan_enabled`` is ``False`` so
@@ -1087,8 +1092,8 @@ def build_mission_lifecycle(
     return MissionLifecycle(
         cfg.mission,
         task_tracker=task_tracker,
-        vlm_progress=vlm_progress,  # type: ignore[arg-type]
-        replanner=replanner,  # type: ignore[arg-type]
+        vlm_progress=vlm_progress,
+        replanner=replanner,
         metrics=metrics,
     )
 

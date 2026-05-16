@@ -117,11 +117,8 @@ async def test_stall_then_llm_replan_then_succeed() -> None:
     lifecycle.start_mission("mission-stall-then-recover", "patrol the corridor")
 
     final_state = None
-    saw_replanning = False
     for _ in range(100):
         result = await lifecycle.tick(_obs(), _obs())
-        if result.state == MissionLifecycleState.REPLANNING:
-            saw_replanning = True
         final_state = result.state
         if final_state in (MissionLifecycleState.SUCCEEDED, MissionLifecycleState.FAILED):
             break
@@ -130,17 +127,16 @@ async def test_stall_then_llm_replan_then_succeed() -> None:
     assert lifecycle.replan_count == 1
     assert len(replanner.calls) == 1
 
+    # The labeled-pair counter is the authoritative signal that the
+    # RUNNING → REPLANNING → RUNNING → SUCCEEDED transition path fired.
+    # The external tick result can't observe REPLANNING directly because
+    # ``_handle_stall`` collapses REPLANNING → RUNNING within the same
+    # tick when the replanner succeeds — only the metric labels persist.
     rendered = metrics.render_prometheus()
     assert 'from_state="running",to_state="replanning"' in rendered
     assert 'from_state="replanning",to_state="running"' in rendered
     assert 'from_state="running",to_state="succeeded"' in rendered
     assert 'outcome="succeeded"' in rendered
-
-    # The lifecycle may transition through REPLANNING in the same tick it
-    # consumed the stall window — saw_replanning may be False because the
-    # final state of the tick is RUNNING. The labeled-pair counter check
-    # above is the authoritative signal that the transition occurred.
-    del saw_replanning  # intentionally informational
 
 
 @pytest.mark.asyncio
@@ -174,3 +170,8 @@ async def test_repeated_stalls_exceed_replan_limit_fails_mission() -> None:
     rendered = metrics.render_prometheus()
     assert 'outcome="succeeded"' in rendered
     assert 'outcome="failed"' in rendered
+    # ADR-011: even the replan-limit-exceeded path must transition
+    # through REPLANNING first so the from_state="replanning",
+    # to_state="failed" counter label is recorded. This is the
+    # authoritative regression assertion for that requirement.
+    assert 'from_state="replanning",to_state="failed"' in rendered

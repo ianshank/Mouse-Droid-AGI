@@ -33,6 +33,7 @@ from __future__ import annotations
 import enum
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
@@ -140,7 +141,7 @@ class MissionLifecycle:
         vlm_progress: VLMProgressHead | None = None,
         replanner: MissionReplannerProtocol | None = None,
         metrics: MetricsRegistry | None = None,
-        clock: object | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         """Build the lifecycle.
 
@@ -196,7 +197,7 @@ class MissionLifecycle:
             goal_text: Natural-language description scored by the VLM
                 progress head every tick.
         """
-        now = float(self._clock())  # type: ignore[operator]
+        now = float(self._clock())
         self._mission = _MissionState(
             mission_id=mission_id,
             goal_text=goal_text,
@@ -282,32 +283,23 @@ class MissionLifecycle:
 
     async def _handle_stall(self) -> MissionTickResult:
         assert self._mission is not None
-        if self._mission.replan_count >= self._cfg.max_replans_per_mission:
-            self._transition(MissionLifecycleState.FAILED, reason="replan_limit_exceeded")
-            if self._metrics is not None:
-                self._metrics.inc_mission_replan("failed")
-            return MissionTickResult(
-                state=MissionLifecycleState.FAILED,
-                progress=self._mission.last_progress,
-                transitioned=True,
-                reason="replan_limit_exceeded",
-            )
 
-        # Transition to REPLANNING and invoke the LLM replanner.
+        # Always transition through REPLANNING first so the
+        # ``mission_state_transitions_total{from_state="replanning",
+        # to_state="failed"}`` counter labels match ADR-011 and the
+        # state-machine documented in the module docstring. The replan
+        # itself may immediately fail (limit exceeded, no replanner
+        # wired, LLM returned None, LLM raised) — in every case the
+        # subsequent FAILED transition originates from REPLANNING.
         self._transition(MissionLifecycleState.REPLANNING, reason="stalled")
         self._mission.stall_counter = 0
 
+        if self._mission.replan_count >= self._cfg.max_replans_per_mission:
+            return self._transition_to_failed(reason="replan_limit_exceeded")
+
         if self._replanner is None:
             # No replanner wired — replan is impossible, fail the mission.
-            self._transition(MissionLifecycleState.FAILED, reason="llm_replan_unavailable")
-            if self._metrics is not None:
-                self._metrics.inc_mission_replan("failed")
-            return MissionTickResult(
-                state=MissionLifecycleState.FAILED,
-                progress=self._mission.last_progress,
-                transitioned=True,
-                reason="llm_replan_unavailable",
-            )
+            return self._transition_to_failed(reason="llm_replan_unavailable")
 
         try:
             new_goal: GoalVector | None = await self._replanner.submit_replan_request(
@@ -324,15 +316,7 @@ class MissionLifecycle:
             new_goal = None
 
         if new_goal is None:
-            self._transition(MissionLifecycleState.FAILED, reason="llm_replan_unavailable")
-            if self._metrics is not None:
-                self._metrics.inc_mission_replan("failed")
-            return MissionTickResult(
-                state=MissionLifecycleState.FAILED,
-                progress=self._mission.last_progress,
-                transitioned=True,
-                reason="llm_replan_unavailable",
-            )
+            return self._transition_to_failed(reason="llm_replan_unavailable")
 
         # Success — resume RUNNING with the new goal vector.
         self._mission.last_goal_vector = new_goal
@@ -345,6 +329,25 @@ class MissionLifecycle:
             progress=self._mission.last_progress,
             transitioned=True,
             reason="replan_succeeded",
+        )
+
+    def _transition_to_failed(self, *, reason: str) -> MissionTickResult:
+        """Transition the active mission to FAILED + emit the replan-fail metric.
+
+        Centralises the three stall-path FAILED branches (replan limit
+        exceeded, no replanner wired, LLM returned None / raised) so the
+        state transition + the ``inc_mission_replan('failed')`` increment
+        + the returned :class:`MissionTickResult` stay in lock-step.
+        """
+        assert self._mission is not None
+        self._transition(MissionLifecycleState.FAILED, reason=reason)
+        if self._metrics is not None:
+            self._metrics.inc_mission_replan("failed")
+        return MissionTickResult(
+            state=MissionLifecycleState.FAILED,
+            progress=self._mission.last_progress,
+            transitioned=True,
+            reason=reason,
         )
 
     def _transition(
@@ -374,7 +377,7 @@ class MissionLifecycle:
         assert self._mission is not None
         if self._metrics is None or self._mission.started_at_s is None:
             return
-        elapsed = float(self._clock()) - self._mission.started_at_s  # type: ignore[operator]
+        elapsed = float(self._clock()) - self._mission.started_at_s
         if elapsed < 0:
             return
         self._metrics.observe_mission_active_duration_seconds(elapsed)
