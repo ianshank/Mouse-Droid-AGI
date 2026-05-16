@@ -1625,6 +1625,44 @@ class RoverTaskConfig(BaseModel):
     )
 
 
+class RoverRewardConfig(BaseModel):
+    """Reward weights for the Isaac Lab rover env (Tier C4 — Phase B baseline).
+
+    Implements the design documented in ADR-009 (Isaac Lab Phase B). The
+    Isaac Lab ``step()`` body composes the per-step reward as::
+
+        reward = (
+            forward_velocity_weight * forward_velocity_mps
+            - collision_weight * is_colliding
+        )
+
+    Both weights are operator-tunable; no hardcoded reward weights live
+    inside :mod:`mousedroid.sim.isaaclab`. Backwards-compatible default
+    on :class:`RoverConfig` is ``reward=None``; the Isaac Lab env raises
+    a clear :class:`ValueError` when built without an explicit reward
+    block so operators set it intentionally per ADR-009.
+    """
+
+    forward_velocity_weight: float = Field(
+        0.01,
+        ge=0,
+        description=(
+            "Reward per m/s forward (linear body-frame velocity). Must "
+            "be ``>= 0``; negative values would invert the safety sign "
+            "(rewarding reverse motion) and contradict ADR-009."
+        ),
+    )
+    collision_weight: float = Field(
+        0.1,
+        ge=0,
+        description=(
+            "Penalty per collision frame (subtracted from reward). Must "
+            "be ``>= 0``; negative values would reward crashes and "
+            "violate the constitutional safety invariant."
+        ),
+    )
+
+
 class RoverConfig(BaseModel):
     """Top-level rover sim-to-real configuration (None preserves legacy).
 
@@ -1636,6 +1674,15 @@ class RoverConfig(BaseModel):
     action: RoverActionConfig = Field(default_factory=RoverActionConfig)
     observation: RoverObservationConfig = Field(default_factory=RoverObservationConfig)
     task: RoverTaskConfig = Field(default_factory=RoverTaskConfig)
+    reward: RoverRewardConfig | None = Field(
+        None,
+        description=(
+            "Isaac Lab reward weights (Tier C4). ``None`` preserves "
+            "byte-identical pre-PR behaviour; the Isaac Lab env raises "
+            "``ValueError`` when built without an explicit block so "
+            "operators set the weights intentionally per ADR-009."
+        ),
+    )
 
 
 class SafetyProjectorConfig(BaseModel):

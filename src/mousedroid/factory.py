@@ -2752,8 +2752,13 @@ def build_rover_env(cfg: Settings) -> RoverEnvProtocol:
             cfg.rover,
             wheel_radius_m=cfg.robot.wheel_radius_m,
             track_width_m=cfg.robot.track_width_m,
+            domain_randomization=cfg.domain_randomization,
         )
-        _log.info("rover_env_isaaclab_built", num_envs=cfg.rover.sim.num_envs)
+        _log.info(
+            "rover_env_isaaclab_built",
+            num_envs=cfg.rover.sim.num_envs,
+            dr_enabled=cfg.domain_randomization.enabled,
+        )
         return env
 
     if backend == "mujoco":
