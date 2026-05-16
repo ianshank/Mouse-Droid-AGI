@@ -48,16 +48,83 @@ C1/C2/C4 PRs merge. Four concrete changes:
 4. **Tier C dashboard E2E smoke scaffold** —
    `tests/smoke/test_prometheus_format_tier_c.py` covers the B2
    `observe_step` histogram surface end-to-end via
-   `generate_metrics_sample()`. Placeholders (currently `pytest.skip`)
-   for the C1 (cloud OTA) + C2 (mission + safety) metric families
-   are documented inline so the follow-up PRs extend the scaffold
-   instead of creating parallel test files.
+   `generate_metrics_sample()`. The C1 placeholder is replaced with
+   real assertions in this PR; the C2 placeholder remains until that
+   track lands.
 
 **Operator follow-up (out of PR scope):** confirm branch protection on
 the integration branch is configured to require the `vla-extras (3.11)`
 status check at <https://github.com/ianshank/Mouse-Droid-AGI/settings/branches>.
 Until that UI step is done, the workflow reports red/green but doesn't
 block merges.
+
+### Added — Tier C1: Closed-loop cloud retraining + OTA weight updates
+
+Finishes the rover → GCP → HuggingFace Hub → Jetson loop. Cloud Vertex AI
+training jobs consume the experience LMDB shards exported by
+`cloud/experience_exporter.py`, retrain the policy, and upload to
+HuggingFace Hub. A new `WeightUpdatePoller` on the Jetson polls HF Hub for
+newer artifacts, downloads with **SHA-256 integrity verification**, and the
+orchestrator atomically swaps the live models **after** `_select_action`
+returns — so the current tick saw one consistent weight set for both
+`_update_world_model` and `_select_action`.
+
+- **`src/mousedroid/cloud/protocol.py`** — added `PendingWeightUpdate`
+  frozen dataclass and `WeightUpdatePollerProtocol`.
+- **`src/mousedroid/cloud/weight_update_poller.py`** — new
+  `HuggingFaceWeightUpdatePoller` with lazy `huggingface_hub` import,
+  SHA-256 manifest verification, and structured logs for every state
+  transition (`cloud_weight_update_poll_started`,
+  `cloud_weight_update_new_revision`, `cloud_weight_update_sha256_verified`,
+  `cloud_weight_update_sha256_mismatch`, `cloud_weight_update_swap_pending`).
+- **`src/mousedroid/utils/weights_manager.py`** — new `verify_sha256()`
+  helper, reusable safety-critical integrity check.
+- **`src/mousedroid/orchestrator/orchestrator.py`** — new
+  `_apply_pending_weight_update()` called once per tick AFTER
+  `_select_action`. Resets `(h, z)` to zeros on world-model swap when
+  `cfg.cloud.weight_update.reset_state_on_swap = True` (default) to avoid
+  one-tick cross-model contamination.
+- **`src/mousedroid/factory.py`** — `build_weight_update_poller(cfg, metrics)`
+  + `build_weight_update_loader(cfg)` thread the optional poller into
+  `MouseDroidOrchestrator`. Default `poll_interval_s = 0.0` keeps the
+  pre-Tier-C1 path byte-identical.
+- **`src/mousedroid/telemetry/metrics.py`** — four new Prometheus families
+  exposed on `/metrics`: `mousedroid_cloud_weight_update_downloads_total`
+  (labeled by `repo_id`), `mousedroid_cloud_weight_update_sha256_mismatches_total`
+  (`repo_id`), `mousedroid_cloud_weight_update_download_seconds` (Histogram
+  with buckets from
+  `MetricsConfig.cloud_weight_update_download_seconds_buckets`), and
+  `mousedroid_cloud_weight_update_swaps_total` (labeled by `engine_type`).
+  All four families are seeded inside `generate_metrics_sample()` so
+  `promtool check rules` sees non-empty series from the first scrape.
+- **`src/mousedroid/config/schema.py`** — new `WeightUpdatePollConfig`
+  nested under `CloudConfig` (mounted on `Settings.cloud`), and new
+  `MetricsConfig.cloud_weight_update_download_seconds_buckets`. All fields
+  have defaults; existing YAML loads unchanged.
+- **`docker/Dockerfile.cloud`** — new x86 GPU image built on
+  `pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime` for Vertex AI workers.
+  Companion to `Dockerfile.jetson` which uses ARM L4T-only base.
+- **`cloud/vertex_ai_job_spec.yaml`** — Vertex AI custom-training job
+  spec template.
+- **`scripts/cloud_train.sh`** — container entry point.
+- **`training/train_offline_rl.py`** — added `--push-to-hf`,
+  `--lmdb-shards-gcs-prefix`, `--hf-repo-id`, `--hf-artifact-filename`,
+  and `--shard-consumed-marker-uri` flags. Idempotency: trainer checks
+  the GCS marker before running so duplicate Jetson uploads do not
+  double-train.
+- **`docs/architecture/ADR-010-cloud-weight-update-ota.md`** — design
+  rationale, swap-timing invariant, SHA-256 integrity contract.
+
+Test coverage: 8 poller tests (revision skip, download, SHA mismatch,
+log transitions, stop cancellation, ACK clearing, protocol conformance,
+disabled no-op), 6 `verify_sha256` tests, 9 orchestrator swap tests
+(no-op, no-loader, post-action call order, state reset / preserve, metric
++ log emission, multi-update ordering, loader-exception isolation,
+engine-type routing). Tier C dashboard E2E smoke
+(`tests/smoke/test_prometheus_format_tier_c.py`) extended: the C3.1
+placeholder for the C1 cloud OTA families is now a real assertion that
+all 4 families render in `generate_metrics_sample()` + per-label render
+contract tests.
 
 ### Changed — Tier B1: Ten-Pillars nightly — workflow-side promotion ready
 

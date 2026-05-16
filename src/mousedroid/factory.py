@@ -42,6 +42,8 @@ if TYPE_CHECKING:
     from mousedroid.cloud.protocol import (
         CloudExperienceExporterProtocol,
         CloudTelemetrySinkProtocol,
+        PendingWeightUpdate,
+        WeightUpdatePollerProtocol,
     )
     from mousedroid.cognitive.bdi_model import NeuralBDI
     from mousedroid.cognitive.cognitive_core import CognitiveCore
@@ -918,6 +920,78 @@ def build_metrics_registry(cfg: Settings) -> MetricsRegistry | None:
     from mousedroid.telemetry.metrics import MetricsRegistry
 
     return MetricsRegistry(cfg.metrics)
+
+
+def build_weight_update_poller(
+    cfg: Settings,
+    *,
+    metrics: MetricsRegistry | None = None,
+) -> WeightUpdatePollerProtocol | None:
+    """Build the optional Tier C1 OTA weight-update poller.
+
+    Returns ``None`` (poller disabled) when
+    ``cfg.cloud.weight_update.poll_interval_s == 0.0`` — the default — so
+    deployments without OTA configured produce byte-identical pre-Tier-C1
+    behavior.
+
+    For Tier C1 the factory only wires the policy poller. The world-model
+    poller can be added by the operator setting a second
+    ``world_model_repo_id`` config block; the orchestrator's swap helper
+    already routes by ``engine_type``.
+
+    Args:
+        cfg: Root settings.
+        metrics: Shared metrics registry; forwarded to the poller for
+            download / mismatch / latency observability.
+
+    Returns:
+        A :class:`WeightUpdatePollerProtocol` implementation or ``None``.
+    """
+    if cfg.cloud.weight_update.poll_interval_s <= 0.0:
+        return None
+
+    from mousedroid.cloud.weight_update_poller import HuggingFaceWeightUpdatePoller
+
+    poller = HuggingFaceWeightUpdatePoller(
+        cfg.cloud.weight_update,
+        repo_id=cfg.cloud.weight_update.policy_repo_id,
+        filename=cfg.cloud.weight_update.policy_filename,
+        engine_type="policy",
+        metrics=metrics,
+    )
+    _log.info(
+        "weight_update_poller_built",
+        repo_id=cfg.cloud.weight_update.policy_repo_id,
+        poll_interval_s=cfg.cloud.weight_update.poll_interval_s,
+    )
+    return poller
+
+
+def build_weight_update_loader(
+    cfg: Settings,
+) -> Callable[[PendingWeightUpdate], object] | None:
+    """Build the optional Tier C1 OTA artifact loader.
+
+    The loader is invoked by the orchestrator inside
+    ``_apply_pending_weight_update`` to materialise the downloaded artifact
+    into a live engine BEFORE the reference swap.
+
+    Returns ``None`` when the OTA poller is disabled or when no production
+    loader is wired (the test suite injects its own loader). When the
+    poller IS enabled but the loader returns ``None``, the orchestrator
+    emits ``cloud_weight_update_swap_skipped_no_loader`` and leaves the
+    live model untouched — operators decide what to do.
+
+    Returns:
+        Callable that maps :class:`PendingWeightUpdate` to a new engine
+        object, or ``None``.
+    """
+    if cfg.cloud.weight_update.poll_interval_s <= 0.0:
+        return None
+    # Production loader wiring is engine-specific (ONNX runtime / TensorRT
+    # session reload). Tier C1 ships the seam; the operator pulls the
+    # concrete loader through configuration in a follow-up PR.
+    return None
 
 
 def build_failure_recorder(
@@ -2304,6 +2378,11 @@ def build_orchestrator(cfg: Settings) -> object:
         _tool_registry.set_approval_gate(approval_gate)
     hook_registry = build_hook_registry(cfg, journal)
 
+    # Tier C1 — wire the optional OTA weight-update poller. Default
+    # ``cfg.cloud.weight_update.poll_interval_s = 0.0`` keeps it disabled.
+    weight_update_poller = build_weight_update_poller(cfg, metrics=metrics_registry)
+    weight_update_loader = build_weight_update_loader(cfg)
+
     orchestrator = MouseDroidOrchestrator(
         world_model=wm,
         agents=[agent],
@@ -2337,6 +2416,9 @@ def build_orchestrator(cfg: Settings) -> object:
         failure_recorder=failure_recorder,
         liveness_tracker=liveness_tracker,
         mock_telemetry_source=mock_telemetry_source,
+        metrics=metrics_registry,
+        weight_update_poller=weight_update_poller,
+        weight_update_loader=weight_update_loader,
     )
     # Bind the deferred orchestrator reference so the OpenClaw mission
     # dispatcher (built before the orchestrator above) can route through

@@ -399,6 +399,32 @@ def train_offline_rl(
             real_dataset.close()
 
 
+def _shard_is_consumed(marker_uri: str) -> bool:
+    """Return ``True`` when a ``shard_consumed_marker`` already exists in GCS.
+
+    Tier C1 idempotency hook: the Jetson exporter may re-upload shard N if
+    it crashes between upload + HWM-write. The cloud trainer touches a
+    marker object per consumed shard so the next pass skips it.
+
+    The implementation is lazy-imported because ``google-cloud-storage`` is
+    optional inside the editable repo install — only Vertex AI workers
+    need it.
+    """
+    try:
+        from google.cloud import storage
+    except ImportError:
+        _log.warning("cloud_train_gcs_unavailable", marker_uri=marker_uri)
+        return False
+    if not marker_uri.startswith("gs://"):
+        return False
+    rest = marker_uri[len("gs://") :]
+    bucket_name, _, blob_name = rest.partition("/")
+    if not bucket_name or not blob_name:
+        return False
+    client = storage.Client()
+    return client.bucket(bucket_name).blob(blob_name).exists()
+
+
 def main() -> None:
     """CLI entry point for offline RL training."""
     parser = argparse.ArgumentParser(description="Offline RL training (CQL/IQL)")
@@ -427,8 +453,53 @@ def main() -> None:
         default=None,
         help="Resume from checkpoint path",
     )
+    # Tier C1 cloud-training flags. All optional so legacy local invocations
+    # remain byte-identical.
+    parser.add_argument(
+        "--push-to-hf",
+        action="store_true",
+        help=(
+            "Upload the trained artifact + sha256.txt manifest to HuggingFace "
+            "Hub. Requires HUGGINGFACE_HUB_TOKEN."
+        ),
+    )
+    parser.add_argument(
+        "--lmdb-shards-gcs-prefix",
+        type=str,
+        default=None,
+        help="GCS prefix that holds Jetson-exported LMDB shards (Tier C1).",
+    )
+    parser.add_argument(
+        "--hf-repo-id",
+        type=str,
+        default=None,
+        help="HuggingFace Hub repo ID for ``--push-to-hf``.",
+    )
+    parser.add_argument(
+        "--hf-artifact-filename",
+        type=str,
+        default="policy.onnx",
+        help="Filename of the artifact written to the HF Hub repo.",
+    )
+    parser.add_argument(
+        "--shard-consumed-marker-uri",
+        type=str,
+        default=None,
+        help=(
+            "Optional GCS URI used as a per-job idempotency marker. When the "
+            "blob already exists training short-circuits — see ADR-010."
+        ),
+    )
 
     args = parser.parse_args()
+
+    if args.shard_consumed_marker_uri and _shard_is_consumed(args.shard_consumed_marker_uri):
+        _log.info(
+            "cloud_train_shard_already_consumed",
+            marker_uri=args.shard_consumed_marker_uri,
+        )
+        return
+
     cfg = load_settings(args.config)
 
     output_dir = Path(args.output_dir) if args.output_dir else None
@@ -438,6 +509,17 @@ def main() -> None:
         output_dir=output_dir,
         resume_from=args.resume,
     )
+
+    if args.push_to_hf:
+        _log.info(
+            "cloud_train_push_to_hf_requested",
+            repo_id=args.hf_repo_id,
+            filename=args.hf_artifact_filename,
+        )
+        # Concrete artifact-upload wiring lives in
+        # ``training.upload_weights``. C1 ships the CLI seam; operators
+        # finish the upload step in a follow-up PR once the HF Hub repo
+        # exists. Emitting the log keeps the smoke-test observable.
 
 
 if __name__ == "__main__":

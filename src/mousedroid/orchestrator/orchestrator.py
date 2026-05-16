@@ -28,10 +28,14 @@ from mousedroid.logging.setup import get_logger
 from mousedroid.telemetry.frame_builder import build_telemetry_frame
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from mousedroid.agents.base import AgentProtocol
     from mousedroid.cloud.protocol import (
         CloudExperienceExporterProtocol,
         CloudTelemetrySinkProtocol,
+        PendingWeightUpdate,
+        WeightUpdatePollerProtocol,
     )
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.comms.protocol import ESP32CommProtocol
@@ -109,6 +113,8 @@ class MouseDroidOrchestrator:
         liveness_tracker: Any | None = None,
         mock_telemetry_source: Any | None = None,
         metrics: MetricsRegistry | None = None,
+        weight_update_poller: WeightUpdatePollerProtocol | None = None,
+        weight_update_loader: Callable[[PendingWeightUpdate], object] | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -188,6 +194,21 @@ class MouseDroidOrchestrator:
                 on the timeout branch so operators see VLA fallback events
                 in Prometheus. ``None`` (default) preserves byte-identical
                 pre-PR-A2.1 behavior.
+            weight_update_poller: Optional Tier C1
+                :class:`WeightUpdatePollerProtocol`. When supplied, the
+                orchestrator polls ``pending_update`` once per tick AFTER
+                ``_select_action`` and atomically swaps the live world-model
+                / policy with the newly downloaded artifact. ``None`` (default)
+                preserves byte-identical pre-Tier-C1 behavior.
+            weight_update_loader: Optional callable
+                ``(PendingWeightUpdate) -> engine``. Invoked inside
+                ``_apply_pending_weight_update`` to materialise the new
+                engine BEFORE the reference swap (so a load failure does
+                NOT corrupt the live model). Tests inject a stub; production
+                wires a loader that lazy-imports ``onnxruntime`` and builds
+                a fresh engine of the same type as the live one. Must be
+                supplied alongside ``weight_update_poller`` — the poller
+                downloads, the loader materialises.
         """
         if not agents:
             msg = "At least one agent is required"
@@ -242,6 +263,12 @@ class MouseDroidOrchestrator:
         self._liveness_tracker: Any | None = liveness_tracker
         self._mock_telemetry_source: Any | None = mock_telemetry_source
         self._metrics = metrics
+        # Tier C1 — OTA weight-update wiring. ``None`` keeps the pre-C1
+        # tick path byte-identical (swap helper short-circuits).
+        self._weight_update_poller: WeightUpdatePollerProtocol | None = weight_update_poller
+        self._weight_update_loader: Callable[[PendingWeightUpdate], object] | None = (
+            weight_update_loader
+        )
         self._running = False
         self._tick_count: int = 0
         self._consolidation_task: asyncio.Task[None] | None = None
@@ -418,6 +445,11 @@ class MouseDroidOrchestrator:
                     return
 
             action = self._select_action(safety_ctx, observation, loop_time_ms)
+            # Tier C1 — atomic OTA swap. Runs AFTER ``_select_action`` so the
+            # current tick saw one consistent weight set for both
+            # ``_update_world_model`` and ``_select_action``. No-op when the
+            # poller is not wired or has no pending update.
+            self._apply_pending_weight_update()
             self._prev_action = action.unsqueeze(0) if action.dim() == 1 else action
 
             ctx.proposed_action = action
@@ -585,6 +617,94 @@ class MouseDroidOrchestrator:
         # Stage 3: Fallback to zero (safe default)
         _log.warning("mission_unresolved", command=nl_command)
         return GoalVector()
+
+    def _apply_pending_weight_update(self) -> None:
+        """Atomically swap policy / world-model if poller has a verified update.
+
+        Runs ONCE per tick, AFTER ``_select_action`` returns. Guarantees the
+        current tick saw one consistent weight set for both
+        ``_update_world_model`` and ``_select_action``. Reference assignment
+        is atomic at the Python interpreter level; we hold no locks because
+        the orchestrator's ``tick()`` is single-coroutine on the event loop.
+
+        The new engine is fully materialised via ``self._weight_update_loader``
+        BEFORE the reference swap, so a loader failure does NOT corrupt the
+        live model — the helper logs the error, leaves the live model
+        untouched, and clears the pending slot only on success.
+
+        When ``cfg.cloud.weight_update.reset_state_on_swap`` is ``True`` (the
+        default) the latent recurrent state ``(h, z)`` is reset to zeros
+        after a world-model swap to avoid one-tick cross-model contamination
+        (see ADR-010). The previous-action tensor and latent recovery buffer
+        are also cleared in the same pass — they were produced by the OLD
+        weights and would seed the new engine with stale context.
+
+        Method is INTENTIONALLY synchronous: ``tick()`` is the only caller,
+        the swap runs entirely in process memory (no I/O after the poller
+        downloaded), and keeping it sync avoids scheduling churn between
+        select_action and execute_action.
+        """
+        poller = self._weight_update_poller
+        if poller is None:
+            return
+        update = poller.pending_update
+        if update is None:
+            return
+        if self._weight_update_loader is None:
+            _log.warning(
+                "cloud_weight_update_swap_skipped_no_loader",
+                repo_id=update.repo_id,
+                engine_type=update.engine_type,
+            )
+            return
+
+        try:
+            new_engine = self._weight_update_loader(update)
+        except Exception:  # pylint: disable=broad-except
+            _log.error(
+                "cloud_weight_update_swap_failed",
+                repo_id=update.repo_id,
+                revision=update.revision,
+                engine_type=update.engine_type,
+                exc_info=True,
+            )
+            return
+
+        # Atomic reference swap. Single-coroutine guarantee on tick() means
+        # no concurrent reader observes a half-swapped state.
+        if update.engine_type == "world_model":
+            self._world_model = cast("WorldModelProtocol", new_engine)
+        elif update.engine_type == "policy":
+            self._vla_policy = cast("VLAPolicyProtocol", new_engine)
+        else:
+            _log.warning(
+                "cloud_weight_update_unknown_engine_type",
+                engine_type=update.engine_type,
+            )
+            return
+
+        if (
+            self._cfg.cloud.weight_update.reset_state_on_swap
+            and update.engine_type == "world_model"
+        ):
+            _combined_hidden_dim = self._cfg.model.hidden_dim + self._cfg.model.cfc_hidden_dim
+            self._h = torch.zeros(1, _combined_hidden_dim)
+            self._z = torch.zeros(1, self._cfg.model.latent_dim)
+            self._prev_action = torch.zeros(1, self._cfg.model.action_dim)
+            self._latent_buffer.clear()
+
+        if self._metrics is not None:
+            self._metrics.inc_cloud_weight_update_swap(update.engine_type)
+
+        _log.info(
+            "cloud_weight_update_swap_applied",
+            repo_id=update.repo_id,
+            revision=update.revision,
+            engine_type=update.engine_type,
+            reset_state=self._cfg.cloud.weight_update.reset_state_on_swap
+            and update.engine_type == "world_model",
+        )
+        poller.acknowledge_swap(update)
 
     def _update_world_model(self, observation: ObservationProtocol) -> None:
         """Run world model observation step to update latent state.

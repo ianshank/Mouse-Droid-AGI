@@ -591,6 +591,21 @@ class MetricsRegistry:
             self._prepare_bucket_boundaries(cfg.world_model_observe_step_seconds_buckets)
         )
 
+        # Tier C1 — Closed-loop cloud retraining + OTA weight updates.
+        # Four pure-add metric families surface the OTA loop on /metrics:
+        # downloads, SHA-256 mismatches, download latency, and engine swaps.
+        # All four are emitted unconditionally (no track_* toggle) — operators
+        # disable them by leaving cfg.cloud.weight_update.poll_interval_s = 0
+        # so the poller never fires. The render path emits them only after
+        # the first observation/increment lands, mirroring PR-A2.
+        self._cloud_weight_update_downloads = _LabeledCounter()
+        self._cloud_weight_update_sha256_mismatches = _LabeledCounter()
+        # Bucket boundaries normalised via the shared helper (C3.1 Gemini #2).
+        self._cloud_weight_update_download_seconds = _Histogram(
+            self._prepare_bucket_boundaries(cfg.cloud_weight_update_download_seconds_buckets)
+        )
+        self._cloud_weight_update_swaps = _LabeledCounter()
+
         # Pre-format metric names from namespace
         self._name_frame_drops = f"{ns}_frame_drops"
         self._name_safety_violations = f"{ns}_safety_violations"
@@ -646,6 +661,16 @@ class MetricsRegistry:
         self._name_vlm_progress_cache_misses = f"{ns}_vlm_progress_cache_misses"
         # Tier B2 — world-model observe_step latency histogram
         self._name_world_model_observe_step_seconds = f"{ns}_world_model_observe_step_seconds"
+
+        # Tier C1 — cloud weight-update OTA metric names
+        self._name_cloud_weight_update_downloads = f"{ns}_cloud_weight_update_downloads"
+        self._name_cloud_weight_update_sha256_mismatches = (
+            f"{ns}_cloud_weight_update_sha256_mismatches"
+        )
+        self._name_cloud_weight_update_download_seconds = (
+            f"{ns}_cloud_weight_update_download_seconds"
+        )
+        self._name_cloud_weight_update_swaps = f"{ns}_cloud_weight_update_swaps"
 
         _log.debug("metrics_registry_initialised", namespace=ns)
 
@@ -1092,6 +1117,77 @@ class MetricsRegistry:
         if amount > 0:
             self._vlm_progress_cache_misses.inc(amount)
 
+    # ------------------------------------------------------------------
+    # Tier C1 — cloud weight-update OTA observability helpers
+    # ------------------------------------------------------------------
+
+    def inc_cloud_weight_update_download(self, repo_id: str, amount: int = 1) -> None:
+        """Increment the cloud weight-update download counter for ``repo_id``.
+
+        Non-positive ``amount`` is a no-op (counter monotonicity guard).
+
+        Args:
+            repo_id: HuggingFace Hub repo ID the artifact was downloaded
+                from (e.g. ``"ianshank/mousedroid-policy-v2"``). Used as
+                the Prometheus label value.
+            amount: Increment magnitude (default 1).
+        """
+        if amount > 0:
+            self._cloud_weight_update_downloads.inc(repo_id, amount)
+
+    def inc_cloud_weight_update_sha256_mismatch(self, repo_id: str, amount: int = 1) -> None:
+        """Increment the cloud weight-update SHA-256 mismatch counter.
+
+        SAFETY-CRITICAL: every increment of this counter corresponds to a
+        refused artifact swap. Operator alert rules should page on any
+        non-zero rate.
+
+        Args:
+            repo_id: HF Hub repo ID whose downloaded artifact failed the
+                SHA-256 integrity check.
+            amount: Increment magnitude (default 1).
+        """
+        if amount > 0:
+            self._cloud_weight_update_sha256_mismatches.inc(repo_id, amount)
+
+    def observe_cloud_weight_update_download_seconds(self, value: float) -> None:
+        """Observe one OTA artifact download latency sample (seconds).
+
+        Defensively drops samples that would corrupt the histogram sum
+        via :func:`_classify_dropped_observation` (the shared C3.1 helper):
+
+        * NaN — timer misuse / division-by-zero upstream
+        * ``+Inf`` — severe hang / watchdog-flagged elapsed time
+        * Negative — clock skew / wall-clock wrap
+
+        Args:
+            value: Wall-clock seconds spent inside ``hf_hub_download(...)``,
+                measured by the caller wrapping the download with
+                ``time.perf_counter()``.
+        """
+        reason = _classify_dropped_observation(value)
+        if reason is not None:
+            _log.debug(
+                "cloud_weight_update_download_seconds_dropped",
+                reason=reason,
+                value=value,
+            )
+            return
+        self._cloud_weight_update_download_seconds.observe(value)
+
+    def inc_cloud_weight_update_swap(self, engine_type: str, amount: int = 1) -> None:
+        """Increment the cloud weight-update swap counter for one engine swap.
+
+        Args:
+            engine_type: ``"policy"`` for VLA policy swaps or
+                ``"world_model"`` for world-model swaps. Free-form string —
+                kept un-Literal to allow future engine kinds (e.g.
+                ``"vlm_progress"``) without churning the schema.
+            amount: Increment magnitude (default 1).
+        """
+        if amount > 0:
+            self._cloud_weight_update_swaps.inc(engine_type, amount)
+
     @staticmethod
     def _decode_cloud_circuit_state(value: float) -> str:
         """Map numeric breaker gauge values back to symbolic states."""
@@ -1534,6 +1630,52 @@ class MetricsRegistry:
                 )
             )
 
+        # Tier C1 — cloud weight-update OTA metrics. Emitted only after the
+        # first observation/increment lands so deployments with the OTA
+        # poller disabled (default ``cloud.weight_update.poll_interval_s = 0``)
+        # produce byte-identical Prometheus exposition output to pre-C1.
+        cwu_downloads = self._cloud_weight_update_downloads.snapshot()
+        if cwu_downloads:
+            sections.append(
+                _render_labeled_counter(
+                    self._name_cloud_weight_update_downloads,
+                    "OTA weight-update downloads from HF Hub (label: repo_id)",
+                    "repo_id",
+                    cwu_downloads,
+                )
+            )
+        cwu_mismatches = self._cloud_weight_update_sha256_mismatches.snapshot()
+        if cwu_mismatches:
+            sections.append(
+                _render_labeled_counter(
+                    self._name_cloud_weight_update_sha256_mismatches,
+                    "OTA weight-update SHA-256 integrity failures (label: repo_id)",
+                    "repo_id",
+                    cwu_mismatches,
+                )
+            )
+        cwu_buckets, cwu_sum, cwu_count = self._cloud_weight_update_download_seconds.snapshot()
+        if cwu_count > 0:
+            sections.append(
+                _render_histogram(
+                    self._name_cloud_weight_update_download_seconds,
+                    "OTA weight-update download latency histogram (seconds)",
+                    cwu_buckets,
+                    cwu_sum,
+                    cwu_count,
+                )
+            )
+        cwu_swaps = self._cloud_weight_update_swaps.snapshot()
+        if cwu_swaps:
+            sections.append(
+                _render_labeled_counter(
+                    self._name_cloud_weight_update_swaps,
+                    "OTA atomic engine swaps applied by the orchestrator (label: engine_type)",
+                    "engine_type",
+                    cwu_swaps,
+                )
+            )
+
         # Subsystem failures — always emitted regardless of config toggles
         failure_snapshot = self._subsystem_failures.snapshot()
         if failure_snapshot:
@@ -1651,5 +1793,15 @@ def generate_metrics_sample() -> str:
     # representative of the Orin Nano <10 ms target with TensorRT EP; lands
     # in the (0.005, 0.01] bucket of the default schema configuration.
     registry.observe_world_model_observe_step_seconds(0.008)
+
+    # Tier C1 — exercise the cloud weight-update OTA metric families so
+    # promtool / Grafana / alert evaluation all see non-empty series from
+    # the first scrape (REQUIRED, not optional — alert rules reference
+    # these series and would fail without seed values).
+    registry.inc_cloud_weight_update_download("ianshank/mousedroid-policy-v2")
+    registry.inc_cloud_weight_update_sha256_mismatch("ianshank/mousedroid-policy-v2")
+    registry.observe_cloud_weight_update_download_seconds(2.5)
+    registry.inc_cloud_weight_update_swap("policy")
+    registry.inc_cloud_weight_update_swap("world_model")
 
     return registry.render_prometheus()

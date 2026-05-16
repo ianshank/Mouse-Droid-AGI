@@ -6,9 +6,73 @@ so that the orchestrator and factory never import GCP SDK types directly.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from mousedroid.experience.protocol import ExperienceProtocol
+
+
+@dataclass(frozen=True)
+class PendingWeightUpdate:
+    """Verified OTA weight artifact awaiting an orchestrator-side atomic swap.
+
+    Produced by :class:`WeightUpdatePollerProtocol` implementations and
+    consumed by ``MouseDroidOrchestrator._apply_pending_weight_update``.
+    Frozen + slotless so the orchestrator can treat it as a value-class
+    snapshot — no mutation after creation.
+
+    Attributes:
+        repo_id: HuggingFace Hub repo ID the artifact came from.
+        filename: Filename within the repo (e.g. ``"policy.onnx"``).
+        revision: HF Hub commit SHA the artifact was pinned to.
+        sha256: Hex-encoded SHA-256 digest verified against the published
+            manifest before the update became pending.
+        local_path: Local filesystem path the artifact was atomically
+            renamed into (final destination).
+        downloaded_at: Wall-clock seconds since the epoch when the download
+            finished (set with ``time.time()``).
+        engine_type: Engine identifier this artifact targets. One of
+            ``"policy"`` or ``"world_model"``. Drives the orchestrator's
+            swap dispatch + the ``engine_type`` Prometheus label.
+    """
+
+    repo_id: str
+    filename: str
+    revision: str
+    sha256: str
+    local_path: Path
+    downloaded_at: float
+    engine_type: str
+
+
+@runtime_checkable
+class WeightUpdatePollerProtocol(Protocol):
+    """Polls HF Hub for newer model weights and gates atomic orchestrator swap.
+
+    Implementations download artifacts in the background and surface a
+    verified :class:`PendingWeightUpdate` via :attr:`pending_update` for the
+    orchestrator to consume at a tick boundary. ``acknowledge_swap`` clears
+    the slot once the orchestrator has applied the update so the same
+    revision is not re-applied on the next tick.
+    """
+
+    async def start(self) -> None:
+        """Begin the background poll loop."""
+        ...
+
+    async def stop(self) -> None:
+        """Stop the poll loop + cancel any in-flight downloads."""
+        ...
+
+    @property
+    def pending_update(self) -> PendingWeightUpdate | None:
+        """Latest verified update awaiting orchestrator swap; ``None`` when no update."""
+        ...
+
+    def acknowledge_swap(self, update: PendingWeightUpdate) -> None:
+        """Clear the pending slot after the orchestrator has applied ``update``."""
+        ...
 
 
 @runtime_checkable
