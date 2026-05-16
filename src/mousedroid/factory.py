@@ -942,7 +942,7 @@ def build_weight_update_poller(
     callers; one minor-version window.
 
     Returns ``None`` (poller disabled) when
-    ``cfg.cloud.weight_update.poll_interval_s == 0.0`` — the default — so
+    ``cfg.cloud.weight_update.poll_interval_s <= 0.0`` — the default — so
     deployments without OTA configured produce byte-identical pre-Tier-C1
     behavior.
 
@@ -994,7 +994,7 @@ def build_weight_update_pollers(
 ) -> Mapping[str, WeightUpdatePollerProtocol]:
     """Build a mapping of ``engine_type`` -> poller (Tier C1.2).
 
-    Returns ``{}`` when ``cfg.cloud.weight_update.poll_interval_s == 0.0``,
+    Returns ``{}`` when ``cfg.cloud.weight_update.poll_interval_s <= 0.0``,
     preserving byte-identical pre-Tier-C1 behaviour. Always includes the
     ``"policy"`` entry when polling is enabled; includes ``"world_model"``
     only when ``cfg.cloud.weight_update.world_model_enabled is True``.
@@ -1010,7 +1010,9 @@ def build_weight_update_pollers(
     Returns:
         Mapping from ``engine_type`` to its
         :class:`WeightUpdatePollerProtocol` implementation. Empty when OTA
-        polling is disabled.
+        polling is disabled. Insertion order is guaranteed to be ``policy``
+        before ``world_model`` so the orchestrator consumes updates
+        deterministically.
     """
     if cfg.cloud.weight_update.poll_interval_s <= 0.0:
         return {}

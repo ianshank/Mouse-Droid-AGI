@@ -30,6 +30,8 @@ def test_returns_both_pollers_when_world_model_enabled() -> None:
     cfg.cloud.weight_update.world_model_enabled = True
     pollers = build_weight_update_pollers(cfg)
     assert set(pollers.keys()) == {"policy", "world_model"}
+    assert isinstance(pollers["policy"], WeightUpdatePollerProtocol)
+    assert isinstance(pollers["world_model"], WeightUpdatePollerProtocol)
     # Insertion order is policy-before-world-model so the orchestrator
     # consumes pending updates in a deterministic order.
     assert list(pollers.keys()) == ["policy", "world_model"]
