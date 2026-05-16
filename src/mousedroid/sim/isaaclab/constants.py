@@ -24,6 +24,7 @@ from mousedroid.sim.protocols import (
 # Re-export for ergonomic ``from .constants import ROVER_NUM_WHEELS``.
 __all__ = [
     "ROVER_CHASSIS_POSE_DIM",
+    "ROVER_CONTACT_SENSOR_NAME",
     "ROVER_IMU_DIM",
     "ROVER_NUM_WHEELS",
     "ROVER_OBSERVATION_KEYS",
@@ -71,6 +72,15 @@ ROVER_SENSOR_LINK_NAMES: Final[tuple[str, str, str]] = (
 """URDF link names for the 3 fixed sensor frames. Isaac Lab attaches
 ``IMUSensorCfg``, ``RayCasterSensorCfg`` (LiDAR), and ``CameraSensorCfg``
 to these links during ``RoverIsaacLabEnv.build()``."""
+
+
+ROVER_CONTACT_SENSOR_NAME: Final[str] = "contact_sensor"
+"""Key under which the chassis :class:`ContactSensor` lives in
+``RoverIsaacLabEnv._sensors``. The sensor's USD prim path expression
+covers every articulation body so the per-frame collision flag in
+:meth:`RoverIsaacLabEnv._read_collision_flag` reflects any body-vs-world
+contact, which feeds the ``-collision_weight * is_colliding`` term of
+:class:`RoverRewardConfig`."""
 
 
 # ---------------------------------------------------------------------------

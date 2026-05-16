@@ -43,6 +43,7 @@ from numpy.typing import NDArray
 from mousedroid.config.schema import RoverConfig
 from mousedroid.logging.setup import get_logger
 from mousedroid.sim.isaaclab.constants import (
+    ROVER_CONTACT_SENSOR_NAME,
     ROVER_SENSOR_LINK_NAMES,
     ROVER_WHEEL_JOINT_NAMES,
 )
@@ -160,57 +161,13 @@ class RoverIsaacLabEnv:
             )
             raise ValueError(msg)
 
-        # Lazy imports — pull in CUDA-bound heavy deps only here.
-        from isaaclab.assets import ArticulationCfg
-        from isaaclab.sim import SimulationContext
-
-        _log.info(
-            "isaac_lab_env_building",
-            urdf_path=self._cfg.sim.urdf_path,
-            num_envs=self._cfg.sim.num_envs,
-            headless=self._cfg.sim.headless,
-            sim_dt_s=self._cfg.sim.sim_dt_s,
-            decimation=self._cfg.sim.decimation,
-        )
-
-        sim_cfg = SimulationContext.Config(
-            dt=self._cfg.sim.sim_dt_s,
-            substeps=self._cfg.sim.decimation,
-            headless=self._cfg.sim.headless,
-        )
-        self._sim_context = SimulationContext(sim_cfg)
-
-        # USD asset committed at the same path the URDF lives at, with
-        # the extension swapped — ``scripts/convert_urdf_to_usd.py``
-        # writes this file. The operator commits it once on Linux.
-        usd_path = self._cfg.sim.urdf_path.replace(".urdf", ".usd")
-        articulation_cfg = ArticulationCfg(
-            prim_path="/World/envs/env_.*/Robot",
-            spawn={"usd_path": usd_path},
-            actuators={name: {"joint_names_expr": [name]} for name in ROVER_WHEEL_JOINT_NAMES},
-        )
-        self._articulation = articulation_cfg
-
-        # Sensor handles keyed by the URDF link name so reset/step
-        # body can resolve them without re-reading the constants tuple.
-        # Concrete sensor classes (IMUSensorCfg / RayCasterSensorCfg /
-        # CameraSensorCfg) are constructed lazily inside the live
-        # build context — operator validates the exact API surface on
-        # Linux + Isaac Sim post-merge per the C4 playbook.
-        self._sensors = {link_name: None for link_name in ROVER_SENSOR_LINK_NAMES}
-
-        self._built = True
-        _log.info(
-            "isaac_lab_env_built",
-            urdf_path=self._cfg.sim.urdf_path,
-            usd_path=usd_path,
-            wheel_joints=list(ROVER_WHEEL_JOINT_NAMES),
-            sensor_links=list(ROVER_SENSOR_LINK_NAMES),
-            reward_weights={
-                "forward_velocity_weight": self._cfg.reward.forward_velocity_weight,
-                "collision_weight": self._cfg.reward.collision_weight,
-            },
-        )
+        # Delegate the Isaac-Lab-only wiring to a helper that lives
+        # under ``# pragma: no cover`` — the CI host (where this branch
+        # never runs because of the ``_isaaclab_available`` guard) does
+        # not need to count those lines against the coverage gate. The
+        # operator validates the live path on Linux + Isaac Sim per the
+        # C4 playbook.
+        self._wire_isaaclab_scene()
 
     # ----- protocol surface -------------------------------------------------
 
@@ -253,6 +210,15 @@ class RoverIsaacLabEnv:
         """
         self._require_built()
         self._step_idx = 0
+
+        # Reset the simulation context to its initial state BEFORE
+        # applying per-episode domain randomization, so the randomizer
+        # acts on the freshly-reset scene and the observation we return
+        # reflects the post-randomization world. Isaac Lab requires
+        # this call between episodes (see SimulationContext.reset in
+        # the >=0.20 API).
+        if self._sim_context is not None and hasattr(self._sim_context, "reset"):
+            self._sim_context.reset()  # pragma: no cover
 
         dr_enabled = self._dr_cfg is not None and self._dr_cfg.enabled
         episode_params: Any = None
@@ -393,6 +359,99 @@ class RoverIsaacLabEnv:
 
     # ----- internals --------------------------------------------------------
 
+    def _wire_isaaclab_scene(self) -> None:  # pragma: no cover - live Isaac Sim only
+        """Construct the live Isaac Lab scene (sim ctx, articulation, contact sensor).
+
+        This helper is intentionally excluded from the CI coverage gate
+        because the import path it walks is unreachable without the
+        ``[isaac]`` extra installed. The operator's Linux + Isaac Sim
+        validation post-merge exercises every line.
+
+        API surface targets ``isaaclab >=0.20,<0.30`` per
+        ``pyproject.toml`` — field names verified against the upstream
+        docs at ``https://isaac-sim.github.io/IsaacLab/`` (see fixup
+        commit body for the explicit references).
+        """
+        from isaaclab.actuators import ImplicitActuatorCfg
+        from isaaclab.assets import Articulation, ArticulationCfg
+        from isaaclab.sensors import ContactSensor, ContactSensorCfg
+        from isaaclab.sim import SimulationCfg, SimulationContext, UsdFileCfg
+
+        assert self._cfg.reward is not None  # build() guards this
+
+        # ``SimulationCfg.device`` selects the physics device per the
+        # >=0.20 API; headless control is handled by ``AppLauncher``
+        # upstream (not a field on ``SimulationCfg``).
+        sim_device = "cuda:0" if self._cfg.sim.headless else "cpu"
+        _log.info(
+            "isaac_lab_env_building",
+            urdf_path=self._cfg.sim.urdf_path,
+            num_envs=self._cfg.sim.num_envs,
+            headless=self._cfg.sim.headless,
+            sim_dt_s=self._cfg.sim.sim_dt_s,
+            decimation=self._cfg.sim.decimation,
+            sim_device=sim_device,
+        )
+
+        sim_cfg = SimulationCfg(
+            dt=self._cfg.sim.sim_dt_s,
+            device=sim_device,
+        )
+        self._sim_context = SimulationContext(sim_cfg)
+
+        # USD asset committed at the same path the URDF lives at, with
+        # the extension swapped — ``scripts/convert_urdf_to_usd.py``
+        # writes this file. The operator commits it once on Linux.
+        usd_path = self._cfg.sim.urdf_path.replace(".urdf", ".usd")
+        articulation_cfg = ArticulationCfg(
+            prim_path="/World/envs/env_.*/Robot",
+            spawn=UsdFileCfg(usd_path=usd_path),
+            actuators={
+                name: ImplicitActuatorCfg(
+                    joint_names_expr=[name],
+                    stiffness=0.0,
+                    damping=self._cfg.action.slew_rad_s2,
+                )
+                for name in ROVER_WHEEL_JOINT_NAMES
+            },
+        )
+        # ``Articulation(cfg)`` is the live runtime handle Isaac Lab
+        # expects — storing the cfg here would break ``step()`` because
+        # the cfg object does not expose ``set_joint_velocity_target``.
+        self._articulation = Articulation(articulation_cfg)
+
+        # Sensor handles keyed by the URDF link name so reset/step
+        # body can resolve them without re-reading the constants tuple.
+        # IMU / LiDAR / camera sensors are wired lazily by the operator
+        # on Linux + Isaac Sim post-merge per the C4 playbook; the
+        # contact sensor MUST be wired here because the reward signal
+        # in ``RoverRewardConfig.collision_weight`` depends on it.
+        self._sensors = dict.fromkeys(ROVER_SENSOR_LINK_NAMES)
+        contact_cfg = ContactSensorCfg(
+            # Match every articulation body so any chassis/wheel-vs-world
+            # contact reports through. The glob is anchored to the
+            # ``ArticulationCfg.prim_path`` regex above.
+            prim_path="/World/envs/env_.*/Robot/.*",
+            update_period=self._cfg.sim.sim_dt_s,
+            history_length=0,
+            track_air_time=False,
+        )
+        self._sensors[ROVER_CONTACT_SENSOR_NAME] = ContactSensor(contact_cfg)
+
+        self._built = True
+        _log.info(
+            "isaac_lab_env_built",
+            urdf_path=self._cfg.sim.urdf_path,
+            usd_path=usd_path,
+            wheel_joints=list(ROVER_WHEEL_JOINT_NAMES),
+            sensor_links=list(ROVER_SENSOR_LINK_NAMES),
+            sensor_keys=sorted(self._sensors.keys()),
+            reward_weights={
+                "forward_velocity_weight": self._cfg.reward.forward_velocity_weight,
+                "collision_weight": self._cfg.reward.collision_weight,
+            },
+        )
+
     def _require_built(self) -> None:
         """Raise if the env can't service ``reset``/``step``.
 
@@ -454,16 +513,30 @@ class RoverIsaacLabEnv:
     def _read_collision_flag(self) -> bool:
         """Read the per-frame collision flag from the contact sensor.
 
-        Returns ``False`` when no live contact sensor is attached
-        (covers the CI host where ``isaaclab`` is missing — protected
-        upstream by :meth:`_require_built`, but kept defensive). The
-        operator's Linux validation exercises the real contact-sensor
-        path post-merge.
+        The contact sensor is wired in :meth:`build` under the
+        :data:`ROVER_CONTACT_SENSOR_NAME` key. We surface a collision
+        whenever any tracked contact force has a non-zero magnitude in
+        the current physics frame. Returns ``False`` when no live
+        sensor is attached (defensive guard for the test bypass path
+        in ``test_rover_env_isaaclab.py`` that flips ``_built`` without
+        calling :meth:`build`). The operator's Linux validation
+        exercises the real contact-sensor path post-merge.
         """
-        contact = self._sensors.get("contact_sensor")
-        if contact is None or not hasattr(contact, "has_contact"):
+        contact = self._sensors.get(ROVER_CONTACT_SENSOR_NAME)
+        if contact is None:
+            _log.debug(
+                "isaac_lab_env_contact_sensor_unavailable",
+                sensor_name=ROVER_CONTACT_SENSOR_NAME,
+                wired_keys=sorted(self._sensors.keys()),
+            )
             return False
-        return bool(contact.has_contact())  # pragma: no cover
+        data = getattr(contact, "data", None)
+        net_forces = getattr(data, "net_forces_w", None) if data is not None else None
+        if net_forces is None:  # pragma: no cover - exercised on Linux
+            return False
+        # ``net_forces_w`` is shape ``(num_envs, num_bodies, 3)`` in the
+        # >=0.20 Isaac Lab API; any non-zero magnitude reports contact.
+        return bool(np.any(np.asarray(net_forces) != 0.0))  # pragma: no cover
 
     def _read_observation(
         self, wheel_velocities: NDArray[np.float32]

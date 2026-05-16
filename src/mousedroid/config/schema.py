@@ -1581,11 +1581,21 @@ class RoverRewardConfig(BaseModel):
 
     forward_velocity_weight: float = Field(
         0.01,
-        description="Reward per m/s forward (linear body-frame velocity).",
+        ge=0,
+        description=(
+            "Reward per m/s forward (linear body-frame velocity). Must "
+            "be ``>= 0``; negative values would invert the safety sign "
+            "(rewarding reverse motion) and contradict ADR-009."
+        ),
     )
     collision_weight: float = Field(
         0.1,
-        description="Penalty per collision frame (subtracted from reward).",
+        ge=0,
+        description=(
+            "Penalty per collision frame (subtracted from reward). Must "
+            "be ``>= 0``; negative values would reward crashes and "
+            "violate the constitutional safety invariant."
+        ),
     )
 
 

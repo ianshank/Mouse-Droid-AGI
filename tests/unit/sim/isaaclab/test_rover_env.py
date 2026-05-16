@@ -23,6 +23,7 @@ isaaclab = pytest.importorskip("isaaclab")
 
 from mousedroid.config.schema import (
     DomainRandomizationConfig,
+    RoverActionConfig,
     RoverConfig,
     RoverRewardConfig,
     RoverSimConfig,
@@ -39,19 +40,28 @@ _WHEEL_RADIUS_M = 0.042
 _TRACK_WIDTH_M = 0.20
 
 
-def _make_cfg(*, dr_enabled: bool = False) -> tuple[RoverConfig, DomainRandomizationConfig]:
+def _make_cfg(
+    *,
+    dr_enabled: bool = False,
+    action_mode: str = "differential",
+) -> tuple[RoverConfig, DomainRandomizationConfig]:
     """Build a RoverConfig with an explicit reward block (required by C4 build)."""
     return (
         RoverConfig(
             sim=RoverSimConfig(backend="isaac_lab"),
+            action=RoverActionConfig(mode=action_mode),  # type: ignore[arg-type]
             reward=RoverRewardConfig(),
         ),
         DomainRandomizationConfig(enabled=dr_enabled),
     )
 
 
-def _make_env(*, dr_enabled: bool = False) -> RoverIsaacLabEnv:
-    cfg, dr = _make_cfg(dr_enabled=dr_enabled)
+def _make_env(
+    *,
+    dr_enabled: bool = False,
+    action_mode: str = "differential",
+) -> RoverIsaacLabEnv:
+    cfg, dr = _make_cfg(dr_enabled=dr_enabled, action_mode=action_mode)
     return RoverIsaacLabEnv(
         cfg,
         wheel_radius_m=_WHEEL_RADIUS_M,
@@ -105,17 +115,42 @@ class TestRoverIsaacLabEnv:
         assert "step_idx" in info
         env.close()
 
-    def test_step_clips_action_to_wheel_velocity_bounds(self) -> None:
-        """Wheel velocities post-clip respect ``cfg.action.max_wheel_rad_s``."""
-        env = _make_env()
+    @pytest.mark.parametrize("action_mode", ["differential", "body_velocity"])
+    def test_step_clips_action_to_wheel_velocity_bounds(self, action_mode: str) -> None:
+        """Wheel velocities post-clip respect per-mode bounds.
+
+        ``differential`` mode: both action components are clipped to
+        ``±cfg.action.max_wheel_rad_s`` and forwarded directly to the
+        four wheels, so every per-wheel velocity must respect the cap.
+
+        ``body_velocity`` mode: ``action[0]`` is clipped to
+        ``±cap * wheel_radius`` (body-frame linear m/s), ``action[1]``
+        (omega) is passed through unclipped per the
+        :meth:`MockRoverEnv._action_to_body_velocity` contract. The
+        resulting per-wheel rad/s can therefore exceed ``cap``; what we
+        assert is that ``vx_body`` was clipped (the forward-velocity
+        component of every wheel agrees with the clipped ``vx_body``)
+        and that the values are still finite.
+        """
+        env = _make_env(action_mode=action_mode)
         env.build()
         env.reset(seed=0)
         # Over-the-cap action — must be clipped before forwarding.
         oversized = np.array([1e6, -1e6], dtype=np.float32)
         _, _, _, _, info = env.step(oversized)
         cap = env._cfg.action.max_wheel_rad_s
-        for v in info["wheel_velocities"]:
-            assert -cap <= v <= cap
+        wheels = info["wheel_velocities"]
+        assert all(np.isfinite(v) for v in wheels)
+        if action_mode == "differential":
+            for v in wheels:
+                assert -cap <= v <= cap
+        else:
+            # body_velocity: vx_body is clipped to cap * wheel_radius
+            # so the forward (body-frame) velocity returned by the env
+            # must respect that bound. ``omega`` is intentionally not
+            # clipped, mirroring MockRoverEnv.
+            max_vx_body = cap * env._wheel_radius
+            assert abs(info["forward_velocity_mps"]) <= max_vx_body + 1e-6
         env.close()
 
     def test_step_fans_2d_action_onto_4_wheels(self) -> None:
