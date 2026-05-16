@@ -8,6 +8,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — Tier B1: Ten-Pillars nightly — workflow-side promotion ready
+
+After the Tier A sprint landed (PRs #85-#89), the `jetson-nightly.yml`
+workflow has been running in advisory mode. This PR ships the
+**workflow-side** half of the required-check promotion; the
+**branch-protection** UI step is a post-merge operator follow-up (full
+playbook in `docs/jetson-runner-setup.md`).
+
+- **`.github/workflows/jetson-nightly.yml`** — removed
+  `continue-on-error: true` from the `ten-pillars` job block.
+- **`.github/workflows/jetson-nightly.yml`** — changed the `Report status`
+  step's trailing `exit 0` to `exit "${PILLAR_RC:-1}"` so the workflow's
+  overall exit code reflects the captured `validate_pillar.sh` exit
+  status. Without this second edit, removing the advisory flag would have
+  no effect on branch protection — the workflow stayed green from the
+  swallowed `exit 0`.
+- **`docs/jetson-runner-setup.md`** — replaced the "Promotion to Required
+  Check" runbook with a two-half framing (workflow change in this PR /
+  branch-protection UI step post-merge), updated exit-code semantics
+  (rc=2 points operators at the workflow console output because
+  `ten_pillars.log` is only generated on successful completion),
+  rollback path, and a fresh "Promotion Observation Log" table for the
+  operator to populate during the 7-night observation window.
+
+**Operator follow-up (out of PR scope, required to make the gate
+effective):** configure GitHub branch protection at
+<https://github.com/ianshank/Mouse-Droid-AGI/settings/branches> to require
+the **Ten Pillars on Jetson** check. Until this UI step is done, the
+workflow reports red/green but does not block merges. After it is done,
+merges to `main` are blocked when:
+
+- Any blocking pillar (`safety`, `world_model`, `memory`, `cognitive`,
+  `reward`) reports FAIL → `PILLAR_RC=1` → exit 1.
+- A precondition error fires (Docker container down, etc.) →
+  `PILLAR_RC=2` → exit 2 (inspect workflow console output —
+  `ten_pillars.log` is not written on this path).
+
+Rollback: revert this PR + disable the required-check setting in
+branch-protection UI.
+
 ### Added — PR-A2.1: Writer-side instrumentation activating PR-A2 metrics
 
 Closes the loop on Tier A. PR-A2 (PR #87) shipped the registry helpers
