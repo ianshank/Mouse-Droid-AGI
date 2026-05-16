@@ -8,98 +8,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added — Tier B Track B2: ONNX-via-ORT export of DualStreamRSSM
+### Changed — Tier B1: Ten-Pillars nightly — workflow-side promotion ready
 
-Tier B Track B2 ships a portable ONNX export of `DualStreamRSSM.observe_step`
-plus the `onnxruntime` runtime class that consumes it. Operators flip
-`cfg.world_model.engine = "onnx_trt"` in `config/jetson_production.yaml`
-to swap the PyTorch hot path for the TensorRT-accelerated ONNX path.
-Default `engine="torch"` is byte-identical to pre-B2 — existing YAML
-files load unchanged.
+After the Tier A sprint landed (PRs #85-#89), the `jetson-nightly.yml`
+workflow has been running in advisory mode. This PR ships the
+**workflow-side** half of the required-check promotion; the
+**branch-protection** UI step is a post-merge operator follow-up (full
+playbook in `docs/jetson-runner-setup.md`).
 
-**B2 Story 0 — de-risk spike** (`tools/spikes/cfc_onnx_spike.py`):
-proved `ncps.torch.CfC` exports cleanly via `torch.onnx.export`.
-Numerical equivalence 4.47e-08, deterministic across 5 ORT runs.
-Outcome documented in `tools/spikes/CFC_ONNX_SPIKE_REPORT.md`.
+- **`.github/workflows/jetson-nightly.yml`** — removed
+  `continue-on-error: true` from the `ten-pillars` job block.
+- **`.github/workflows/jetson-nightly.yml`** — changed the `Report status`
+  step's trailing `exit 0` to `exit "${PILLAR_RC:-1}"` so the workflow's
+  overall exit code reflects the captured `validate_pillar.sh` exit
+  status. Without this second edit, removing the advisory flag would have
+  no effect on branch protection — the workflow stayed green from the
+  swallowed `exit 0`.
+- **`docs/jetson-runner-setup.md`** — replaced the "Promotion to Required
+  Check" runbook with a two-half framing (workflow change in this PR /
+  branch-protection UI step post-merge), updated exit-code semantics
+  (rc=2 points operators at the workflow console output because
+  `ten_pillars.log` is only generated on successful completion),
+  rollback path, and a fresh "Promotion Observation Log" table for the
+  operator to populate during the 7-night observation window.
 
-**B2 Story 1 — export tooling**:
-- New module `src/mousedroid/world_model/observation_packer.py` —
-  single source of truth for `ObservationProtocol → Tensor` conversion.
-  Both `DualStreamRSSM.observe_step` and `DualStreamRSSMOnnx.observe_step`
-  call `pack_observation` so the two engines cannot drift on dtype,
-  empty-buffer handling, or disabled-modality semantics.
-- New `DualStreamRSSM.observe_step_traceable(*, vision, motor,
-  valid_mask, prev_action, h, z, ultrasonic=None, audio=None,
-  lidar=None) → (new_h, new_z, obs_embed, surprise_tensor)` — surprise
-  as a scalar Tensor for ONNX tracing. The public `observe_step`
-  delegates to it; behaviour unchanged.
-- New CLI `scripts/export_dual_stream_rssm_onnx.py` produces the
-  `.onnx` from a checkpoint. Library entry points
-  (`build_export_shim`, `build_example_inputs`, `run_export`) let
-  tests exercise the export in-process. Dynamic batch axis preserves
-  future training-time use of the same artifact.
+**Operator follow-up (out of PR scope, required to make the gate
+effective):** configure GitHub branch protection at
+<https://github.com/ianshank/Mouse-Droid-AGI/settings/branches> to require
+the **Ten Pillars on Jetson** check. Until this UI step is done, the
+workflow reports red/green but does not block merges. After it is done,
+merges to `main` are blocked when:
 
-**B2 Story 2 — ONNX runtime class**
-(`src/mousedroid/world_model/dual_stream_rssm_onnx.py`):
-- Drop-in `WorldModelProtocol` impl using
-  `onnxruntime.InferenceSession`. Mirrors `DistilledVLAOnnx` from
-  `vla/policy.py` — lazy `onnxruntime` import inside `warmup()`,
-  TensorRT → CUDA → CPU provider fallback (`_resolve_providers`),
-  idempotent warmup, `torch.no_grad()` wrapping at the call boundary.
-- `imagine_step` raises `NotImplementedError` — MCTS planning continues
-  to run on the PyTorch model (factory dispatch routes appropriately).
+- Any blocking pillar (`safety`, `world_model`, `memory`, `cognitive`,
+  `reward`) reports FAIL → `PILLAR_RC=1` → exit 1.
+- A precondition error fires (Docker container down, etc.) →
+  `PILLAR_RC=2` → exit 2 (inspect workflow console output —
+  `ten_pillars.log` is not written on this path).
 
-**B2 Story 3 — factory engine selector**:
-- New Pydantic `WorldModelConfig` block: `engine: Literal["torch",
-  "onnx_trt"] = "torch"` (default preserves pre-B2 behaviour) plus
-  `onnx_path`, `onnx_repo_id`, `onnx_filename`, `onnx_warmup_iterations`
-  with safe defaults.
-- `build_world_model(cfg)` dispatches on `cfg.world_model.engine`.
-  Unknown engine values raise `ValueError`. Engine selection emits
-  `world_model_engine_selected` structured log with `engine`,
-  `gru_dim`/`cfc_dim`/`model_path` fields.
-
-**B2 Story 4 — performance budget regression**
-(`tests/performance/test_observe_step_budget.py`):
-- Slow-marked perf gate asserting both engines complete one
-  `observe_step` within `MOUSEDROID_OBSERVE_STEP_BUDGET_MS` (default
-  33ms = 30Hz tick; Jetson production override = 10ms).
-- 3 tests: torch engine, ONNX engine, env-var validation.
-- Mirrors the env-var-tunable budget pattern from PR-A1's
-  `test_offline_rl_bc_overhead.py`.
-
-**B2 Story 5 — HF Hub integration**:
-- `scripts/export_dual_stream_rssm_onnx.py --push-to-hf` optionally
-  uploads the freshly-exported `.onnx` to `cfg.world_model.onnx_repo_id`
-  (or `--hf-repo` CLI override) using the same HfApi the [vla] backend
-  uses. Imports `huggingface_hub` lazily — no cost when not used.
-- `factory._resolve_world_model_onnx_path` falls back to
-  `download_weights_from_huggingface` when `onnx_path` is unset,
-  caching under `weights/dual_stream_rssm/`. Identical retry / auth /
-  cache semantics as the [vla] download path.
-
-**B2 Story 6 — advisory CI matrix** (`pyproject.toml`,
-`.github/workflows/ci.yml`):
-- New `[onnx_world_model]` extras (mirrors `[vla]`):
-  `onnxruntime-gpu` on aarch64, `onnxruntime` on x86, `onnx>=1.15`,
-  `huggingface-hub>=0.20`.
-- New `onnx-world-model-extras` CI job (advisory, `continue-on-error: true`)
-  runs the B2 unit suite under the new extras. Promotion to required
-  follows the same 7-green-runs gate as `vla-extras`.
-
-**B2 Story 7 — architecture decision record**:
-- `docs/architecture/ADR-008-world-model-onnx-engine.md` documents the
-  decision, the public surface, the performance contract, the
-  cross-engine equivalence guarantee, the migration path, and the
-  rationale for keeping MCTS on the PyTorch model.
-  (Originally planned as ADR-007; renamed to ADR-008 because ADR-007
-  is the Hailo-8 accelerator ADR. Isaac Lab Phase B is bumped to ADR-009.)
-
-**Backwards compatibility**: every new schema field has a safe default
-that produces byte-identical pre-B2 behaviour. Existing `config/*.yaml`
-files load unchanged. `cfg.world_model.engine = "onnx_trt"` requires
-operator opt-in via YAML (or `MOUSEDROID_WORLD_MODEL__ENGINE=onnx_trt`
-env override).
+Rollback: revert this PR + disable the required-check setting in
+branch-protection UI.
 
 ### Added — PR-A2.1: Writer-side instrumentation activating PR-A2 metrics
 

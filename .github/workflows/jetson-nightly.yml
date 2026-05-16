@@ -46,9 +46,15 @@ jobs:
         runs-on: [self-hosted, jetson]
         timeout-minutes: 60
 
-        # Advisory: a single failed pillar should not silently break this
-        # workflow's exit code — operators read the artifact for triage.
-        continue-on-error: true
+        # Tier B1 promotion: workflow-side ready.
+        # This job no longer swallows pillar failures — its exit code
+        # reflects the captured PILLAR_RC from validate_pillar.sh. The
+        # *required-check* status on `main` becomes effective once an
+        # operator configures branch protection in the GitHub UI to
+        # require the "Ten Pillars on Jetson" check; until then the
+        # workflow runs and reports red/green but does not block merges.
+        # See docs/jetson-runner-setup.md for the operator UI step and
+        # the run-by-run observation log.
 
         env:
             MOUSEDROID_SMOKE_CONTAINER: mousedroid
@@ -128,8 +134,18 @@ jobs:
                   if [ "${PILLAR_RC:-1}" = "0" ]; then
                       echo "::notice::Ten Pillars: PASS"
                   else
-                      echo "::warning::Ten Pillars: FAIL (rc=${PILLAR_RC}) — advisory; see uploaded artifact for triage"
+                      # PILLAR_RC=1: any blocking pillar (safety, world_model,
+                      #              memory, cognitive, reward) reported FAIL.
+                      # PILLAR_RC=2: precondition error (container down, env
+                      #              missing). Operators distinguish via the
+                      #              uploaded artifact's ten_pillars.log.
+                      echo "::error::Ten Pillars: FAIL (rc=${PILLAR_RC}) — required check; see uploaded artifact for triage"
                   fi
-                  # Exit 0 so the workflow itself is a green status; the
-                  # advisory gate lives in the operator-facing summary above.
-                  exit 0
+                  # Required check: propagate the captured pillar exit code
+                  # so GitHub branch protection sees a real status. PILLAR_RC
+                  # was set by the "Run Ten Pillars validation" step above;
+                  # the validate_pillar.sh exit contract is:
+                  #   0 = all blocking PASS
+                  #   1 = any blocking FAIL
+                  #   2 = precondition error (infra problem, not test fail)
+                  exit "${PILLAR_RC:-1}"
