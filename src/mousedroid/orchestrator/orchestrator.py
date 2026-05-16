@@ -57,6 +57,7 @@ if TYPE_CHECKING:
     from mousedroid.orchestrator.face_controller import FaceController
     from mousedroid.orchestrator.mission_dispatcher import MissionDispatcherProtocol
     from mousedroid.safety.context import SafetyContext
+    from mousedroid.safety.projector_protocol import SafetyActionProjectorProtocol
     from mousedroid.safety.protocol import SafetyMonitorProtocol
     from mousedroid.sensing.manager import SensorManager
     from mousedroid.sensing.protocol import ObservationProtocol
@@ -115,6 +116,7 @@ class MouseDroidOrchestrator:
         metrics: MetricsRegistry | None = None,
         weight_update_poller: WeightUpdatePollerProtocol | None = None,
         weight_update_loader: Callable[[PendingWeightUpdate], object] | None = None,
+        safety_projector: SafetyActionProjectorProtocol | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -209,6 +211,14 @@ class MouseDroidOrchestrator:
                 a fresh engine of the same type as the live one. Must be
                 supplied alongside ``weight_update_poller`` — the poller
                 downloads, the loader materialises.
+            safety_projector: Optional :class:`SafetyActionProjectorProtocol`
+                (Tier C2 / C2.1). When supplied, every action returned by
+                :meth:`_select_action` is run through the projector at the
+                tick-level seam, so all four ``_select_action`` return
+                branches (cognitive / VLA / VLA-strict-timeout / nav_agent)
+                are clamped uniformly. ``None`` (default, gated by
+                ``cfg.safety.projector.enabled=false``) makes the seam a
+                pure pass-through so existing deployments are byte-identical.
         """
         if not agents:
             msg = "At least one agent is required"
@@ -269,6 +279,11 @@ class MouseDroidOrchestrator:
         self._weight_update_loader: Callable[[PendingWeightUpdate], object] | None = (
             weight_update_loader
         )
+        # Tier C2 / C2.1 — soft-constraint safety projector. ``None`` (the
+        # default, gated by ``cfg.safety.projector.enabled=False``) makes
+        # ``_maybe_project_action`` a no-op so existing deployments produce
+        # byte-identical actions to pre-C2.
+        self._safety_projector: SafetyActionProjectorProtocol | None = safety_projector
         self._running = False
         self._tick_count: int = 0
         self._consolidation_task: asyncio.Task[None] | None = None
@@ -462,6 +477,15 @@ class MouseDroidOrchestrator:
                     return
 
             action = self._select_action(safety_ctx, observation, loop_time_ms)
+            # Tier C2 / C2.1 — geometric safety projection seam. Wrapping
+            # at the ``tick()`` call site (NOT inside ``_select_action``)
+            # ensures all four return sites in ``_select_action`` — cognitive,
+            # VLA, VLA-strict-timeout, nav_agent — get clamped uniformly.
+            # ``_maybe_project_action`` is a no-op when the projector is
+            # disabled, preserving byte-identical pre-PR behaviour. Runs
+            # BEFORE the Tier C1 OTA swap so the projector clamps the action
+            # produced by the (pre-swap) policy weights this tick saw.
+            action = self._maybe_project_action(action, safety_ctx)
             # Tier C1 — atomic OTA swap. Runs AFTER ``_select_action`` so the
             # current tick saw one consistent weight set for both
             # ``_update_world_model`` and ``_select_action``. No-op when the
@@ -872,6 +896,45 @@ class MouseDroidOrchestrator:
                 return torch.zeros(int(self._cfg.model.action_dim), dtype=torch.float32)
 
         return self._agents[0].act(self._h, self._z, safety_ctx)
+
+    def _maybe_project_action(
+        self,
+        action: torch.Tensor,
+        safety_ctx: SafetyContext,
+    ) -> torch.Tensor:
+        """Apply the optional geometric safety projector to ``action``.
+
+        Wraps the four return sites of :meth:`_select_action` at a single
+        seam in :meth:`tick`. The projector is a soft constraint applied
+        AFTER the policy returns — it is the complement of the hard E-stop
+        short-circuit at the top of :meth:`tick`.
+
+        When ``self._safety_projector is None`` (the default, gated by
+        ``cfg.safety.projector.enabled=False``) this method is a pure
+        identity pass-through so existing deployments produce
+        byte-identical actions to pre-C2.
+
+        Args:
+            action: Proposed action from :meth:`_select_action`. Shape is
+                ``(action_dim,)`` or ``(1, action_dim)`` depending on the
+                upstream policy branch.
+            safety_ctx: Frozen safety context for the current tick.
+
+        Returns:
+            Either the original ``action`` (when no projector is wired)
+            or a clamped copy with the same shape and dtype.
+        """
+        if self._safety_projector is None:
+            return action
+
+        was_unbatched = action.dim() == 1
+        flat: torch.Tensor = action if was_unbatched else action.squeeze(0)
+        action_np = flat.detach().cpu().numpy().astype(np.float32, copy=False)
+        projected_np = self._safety_projector.project(action_np, safety_ctx)
+        projected = torch.from_numpy(np.asarray(projected_np, dtype=np.float32)).to(flat.device)
+        if not was_unbatched:
+            projected = projected.unsqueeze(0)
+        return projected
 
     def _try_vla_action(
         self,

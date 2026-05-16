@@ -22,6 +22,7 @@ from mousedroid.hardware.protocols import (
 from mousedroid.health.watchdog import WatchdogProtocol
 from mousedroid.llm_gateway.protocol import LLMGatewayProtocol
 from mousedroid.logging.setup import get_logger
+from mousedroid.safety.projector_protocol import SafetyActionProjectorProtocol
 from mousedroid.safety.protocol import SafetyMonitorProtocol
 from mousedroid.security.injection_filter import (
     PromptInjectionFilterProtocol,
@@ -54,6 +55,7 @@ if TYPE_CHECKING:
     from mousedroid.efficiency.tensorrt import TensorRTCompilerProtocol
     from mousedroid.experience.logger import ExperienceLogger
     from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
+    from mousedroid.harness.protocol import TaskTrackerProtocol
     from mousedroid.health.monitor import HealthMonitor
     from mousedroid.llm_gateway.mission_parser import MissionParserProtocol
     from mousedroid.mcp.protocol import MCPServerProtocol
@@ -1042,6 +1044,85 @@ def build_safety_monitor(cfg: Settings) -> SafetyMonitorProtocol:
     from mousedroid.safety.monitor import MouseDroidSafetyMonitor
 
     return MouseDroidSafetyMonitor(cfg.safety)
+
+
+def build_mission_lifecycle(
+    cfg: Settings,
+    *,
+    task_tracker: TaskTrackerProtocol | None = None,
+    vlm_progress: object | None = None,
+    replanner: object | None = None,
+    metrics: MetricsRegistry | None = None,
+) -> object | None:
+    """Build the optional :class:`MissionLifecycle` (Tier C2 / C2.2).
+
+    Returns ``None`` when ``cfg.mission.replan_enabled`` is ``False`` so
+    pre-C2 deployments produce byte-identical behaviour (no lifecycle,
+    no replans, no new structured events).
+
+    Args:
+        cfg: Root settings.
+        task_tracker: Optional :class:`TaskTrackerProtocol` for the
+            lifecycle to forward terminal states to.
+        vlm_progress: Optional :class:`VLMProgressHead` providing
+            goal-progress feedback per tick.
+        replanner: Optional :class:`MissionReplannerProtocol`-compliant
+            object. When ``None`` and a stall fires, the mission
+            transitions to FAILED with ``reason='llm_replan_unavailable'``.
+        metrics: Optional shared metrics registry. When supplied, every
+            transition + replan + terminal duration increments the
+            corresponding Tier C2 metric family.
+
+    Returns:
+        :class:`MissionLifecycle` when ``cfg.mission.replan_enabled`` is
+        True, otherwise ``None``.
+    """
+    if not cfg.mission.replan_enabled:
+        _log.debug("mission_lifecycle_disabled")
+        return None
+
+    from mousedroid.orchestrator.mission_lifecycle import MissionLifecycle
+
+    _log.info("mission_lifecycle_built")
+    return MissionLifecycle(
+        cfg.mission,
+        task_tracker=task_tracker,
+        vlm_progress=vlm_progress,  # type: ignore[arg-type]
+        replanner=replanner,  # type: ignore[arg-type]
+        metrics=metrics,
+    )
+
+
+def build_safety_projector(
+    cfg: Settings,
+    *,
+    metrics: MetricsRegistry | None = None,
+) -> SafetyActionProjectorProtocol | None:
+    """Build the optional geometric safety action projector (Tier C2 / C2.1).
+
+    Returns ``None`` when ``cfg.safety.projector.enabled`` is ``False`` —
+    the orchestrator skips the projection seam entirely in that case, so
+    pre-C2 deployments produce byte-identical actions.
+
+    Args:
+        cfg: Root settings.
+        metrics: Optional shared metrics registry. When supplied, the
+            projector increments ``mousedroid_safety_action_clamps_total``
+            with one of ``forward_velocity`` / ``human_proximity`` /
+            ``tight_quarters`` on every materially different clamp.
+
+    Returns:
+        :class:`SafetyActionProjectorProtocol` implementation when enabled,
+        ``None`` otherwise.
+    """
+    if not cfg.safety.projector.enabled:
+        _log.debug("safety_projector_disabled")
+        return None
+
+    from mousedroid.safety.projector import GeometricSafetyProjector
+
+    _log.info("safety_projector_built", backend="geometric")
+    return GeometricSafetyProjector(cfg.safety.projector, metrics=metrics)
 
 
 def build_agent(cfg: Settings, world_model: WorldModelProtocol) -> AgentProtocol:
@@ -2390,6 +2471,11 @@ def build_orchestrator(cfg: Settings) -> object:
     # ``cfg.cloud.weight_update.poll_interval_s = 0.0`` keeps it disabled.
     weight_update_poller = build_weight_update_poller(cfg, metrics=metrics_registry)
     weight_update_loader = build_weight_update_loader(cfg)
+    # Tier C2 / C2.1 — soft-constraint safety projector. Returns ``None``
+    # when ``cfg.safety.projector.enabled`` is ``False`` (the default),
+    # which makes the orchestrator's projection seam a no-op so pre-C2
+    # deployments produce byte-identical actions.
+    safety_projector = build_safety_projector(cfg, metrics=metrics_registry)
 
     orchestrator = MouseDroidOrchestrator(
         world_model=wm,
@@ -2427,6 +2513,7 @@ def build_orchestrator(cfg: Settings) -> object:
         metrics=metrics_registry,
         weight_update_poller=weight_update_poller,
         weight_update_loader=weight_update_loader,
+        safety_projector=safety_projector,
     )
     # Bind the deferred orchestrator reference so the OpenClaw mission
     # dispatcher (built before the orchestrator above) can route through

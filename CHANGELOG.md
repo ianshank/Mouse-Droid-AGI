@@ -134,6 +134,67 @@ placeholder for the C1 cloud OTA families is now a real assertion that
 all 4 families render in `generate_metrics_sample()` + per-label render
 contract tests.
 
+### Added — Tier C2: Mission Closed-Loop + Safety Projection
+
+Closes Track C2 of the Tier C sprint (see plan
+`.claude/plans/please-create-a-comprehensive-sunny-hennessy.md`).
+Adds two stateless, default-disabled seams to the orchestrator tick:
+
+- **`SafetyActionProjector`** — geometric soft-constraint projection of
+  the policy's proposed action, applied AFTER `_select_action` returns
+  and BEFORE `_execute_action` runs. Pure function of `SafetyContext` +
+  action; three independent clamp rules (forward velocity / human
+  keepout / tight quarters). All thresholds come from
+  `cfg.safety.projector.*`; default `enabled=false` keeps existing
+  deployments byte-identical.
+  See `src/mousedroid/safety/projector.py`,
+  `src/mousedroid/safety/projector_protocol.py`.
+- **`MissionLifecycle`** — state machine (PENDING → RUNNING →
+  SUCCEEDED | FAILED | REPLANNING → RUNNING) wrapping the existing
+  `TaskTrackerProtocol`. Polls `VLMProgressHead` once per tick;
+  transitions to REPLANNING on stall and submits an async replan
+  request via the LLM gateway. All thresholds come from `cfg.mission.*`;
+  default `replan_enabled=false` keeps existing deployments
+  byte-identical.
+  See `src/mousedroid/orchestrator/mission_lifecycle.py`.
+- **Orchestrator tick seam** — single insertion point at
+  `Orchestrator.tick()` around the unified `_select_action` call site
+  ensures all four `_select_action` return branches (cognitive / VLA /
+  VLA-strict-timeout / nav_agent) hit the projector uniformly. The
+  three branch-coverage regression tests parametrise this contract so a
+  future refactor that adds a fifth return path fails the suite.
+- **Telemetry families** — four new Prometheus families wired into
+  `MetricsRegistry`:
+  - `mousedroid_safety_action_clamps_total{reason}` (counter)
+  - `mousedroid_mission_state_transitions_total{from_state,to_state}` (counter)
+  - `mousedroid_mission_replans_total{outcome}` (counter)
+  - `mousedroid_mission_active_duration_seconds` (histogram with
+    operator-tunable buckets from
+    `MetricsConfig.mission_duration_seconds_buckets`).
+  All four follow the PR-A2 pure-add pattern — rendered only after a
+  writer first touches them, so default-disabled deployments produce
+  byte-identical `/metrics` output.
+- **Factory wiring** — `build_safety_projector(cfg, metrics=...)` and
+  `build_mission_lifecycle(cfg, ...)` both return `None` when their
+  feature flag is off; the orchestrator behaves byte-identically.
+- **ADR-011** — documents the geometric-over-Lagrangian-over-masking
+  rationale, the soft-vs-hard constraint split (projection = soft;
+  `emergency_stop` = hard), and the `MissionLifecycle`'s relationship
+  to the existing `TaskTrackerProtocol`.
+  See `docs/architecture/ADR-011-mission-closed-loop-safety-projection.md`.
+
+**Test coverage:**
+- 14 projector unit + branch-coverage tests in
+  `tests/unit/safety/test_projector.py` (8 unit + 3 branch-coverage
+  required by plan + 3 additional regression-net tests).
+- 10 mission lifecycle unit tests in
+  `tests/unit/orchestrator/test_mission_lifecycle.py`.
+- 3 multi-minute closed-loop integration tests in
+  `tests/integration/test_mission_closed_loop.py` (rising progress,
+  stall + LLM replan, replan limit exhaustion).
+- 4 Tier-C smoke tests in `tests/smoke/test_prometheus_format_tier_c.py`
+  (replaces the C3.1 placeholder for C2 with real assertions).
+
 ### Changed — Tier B1: Ten-Pillars nightly — workflow-side promotion ready
 
 After the Tier A sprint landed (PRs #85-#89), the `jetson-nightly.yml`
