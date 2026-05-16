@@ -916,6 +916,61 @@ class MissionParserConfig(BaseModel):
     )
 
 
+class MissionConfig(BaseModel):
+    """Mission lifecycle state-machine configuration (Tier C2 / C2.2).
+
+    Drives the ``MissionLifecycle`` state machine that wraps
+    :class:`InMemoryTaskTracker` and adds VLM-driven goal-progress feedback
+    plus LLM-driven adaptive replan. When ``replan_enabled=False`` (the
+    default), the lifecycle never trips into ``REPLANNING`` and never calls
+    the LLM gateway — existing deployments produce byte-identical pre-PR
+    behaviour because the orchestrator does not build a lifecycle at all
+    when this block is at defaults.
+    """
+
+    replan_enabled: bool = Field(
+        False,
+        description=(
+            "Enable adaptive LLM-driven replan when VLM progress stalls. "
+            "Default ``False`` preserves byte-identical pre-PR behaviour."
+        ),
+    )
+    success_threshold: float = Field(
+        0.90,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "VLM progress score must cross this value to transition the "
+            "mission to ``SUCCEEDED``."
+        ),
+    )
+    stall_threshold: float = Field(
+        0.05,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "VLM progress score below this value counts as a stalled tick. "
+            "``stall_window_ticks`` consecutive stalls trip replan."
+        ),
+    )
+    stall_window_ticks: int = Field(
+        30,
+        gt=0,
+        description=(
+            "Number of consecutive low-progress ticks before the lifecycle "
+            "transitions to ``REPLANNING``. At 30 Hz this is ~1 second."
+        ),
+    )
+    max_replans_per_mission: int = Field(
+        3,
+        ge=0,
+        description=(
+            "Hard cap on replans per mission. Once exceeded the lifecycle "
+            "transitions to ``FAILED`` with reason='replan_limit_exceeded'."
+        ),
+    )
+
+
 class OfflineRLConfig(BaseModel):
     """Offline RL training configuration (CQL / IQL)."""
 
@@ -1126,6 +1181,14 @@ class MetricsConfig(BaseModel):
             "tens of MB. Operator-tunable per deployment."
         ),
     )
+    mission_duration_seconds_buckets: tuple[float, ...] = Field(
+        (1.0, 5.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0, float("inf")),
+        description=(
+            "Histogram bucket boundaries for mission active duration (seconds). "
+            "Tier C2 (C2.3): covers short single-objective missions (< 1 min) "
+            "through multi-minute autonomous navigation runs (> 10 min)."
+        ),
+    )
 
     @field_validator(
         "loop_latency_buckets_ms",
@@ -1134,6 +1197,7 @@ class MetricsConfig(BaseModel):
         "vla_inference_seconds_buckets",
         "world_model_observe_step_seconds_buckets",
         "cloud_weight_update_download_seconds_buckets",
+        "mission_duration_seconds_buckets",
     )
     @classmethod
     def _validate_histogram_buckets(cls, value: tuple[float, ...]) -> tuple[float, ...]:
@@ -1621,6 +1685,72 @@ class RoverConfig(BaseModel):
     )
 
 
+class SafetyProjectorConfig(BaseModel):
+    """Geometric safety action projector configuration (Tier C2 / C2.1).
+
+    Geometric constraint projection is the right fit for continuous action
+    spaces: it is a pure function of the frozen :class:`SafetyContext` plus
+    the proposed action — no Lagrangian variable, no state across ticks.
+    Clamping is deterministic and stateless. When ``enabled=False`` (the
+    default), the orchestrator never builds a projector and the tick body
+    short-circuits the projection seam, so existing deployments produce
+    byte-identical actions.
+    """
+
+    enabled: bool = Field(
+        False,
+        description=(
+            "Enable the soft-constraint safety projector. Default ``False`` "
+            "preserves byte-identical pre-PR behaviour."
+        ),
+    )
+    lidar_brake_distance_m: float = Field(
+        0.30,
+        gt=0,
+        description=(
+            "Forward-velocity clamp kicks in when ``lidar_min_dist_m`` falls "
+            "below this threshold (m)."
+        ),
+    )
+    crawl_velocity_mps: float = Field(
+        0.10,
+        ge=0,
+        description=(
+            "Maximum forward velocity (m/s) the projector permits when LiDAR "
+            "clearance is low or ``forward_clearance_ok`` is ``False``."
+        ),
+    )
+    human_keepout_m: float = Field(
+        1.0,
+        gt=0,
+        description=(
+            "Human-proximity clamp activates when ``human_detected`` is True "
+            "AND ``human_dist_m`` is below this distance (m)."
+        ),
+    )
+    human_proximity_speed_mps: float = Field(
+        0.05,
+        ge=0,
+        description=(
+            "Per-component magnitude cap (m/s) applied to every action "
+            "dimension when a human is inside the keepout radius."
+        ),
+    )
+    tight_quarters_dist_m: float = Field(
+        0.50,
+        gt=0,
+        description=(
+            "Rotational clamp activates when ``lidar_min_dist_m`` is below "
+            "this distance (m) — operating in tight corridors."
+        ),
+    )
+    tight_quarters_omega_max_rads: float = Field(
+        0.50,
+        ge=0,
+        description=("Maximum angular velocity magnitude (rad/s) permitted in tight " "quarters."),
+    )
+
+
 class SafetyConfig(BaseModel):
     """Safety monitor thresholds."""
 
@@ -1680,6 +1810,15 @@ class SafetyConfig(BaseModel):
         0.5,
         gt=0,
         description="Delay between sensor recovery attempts (s)",
+    )
+    projector: SafetyProjectorConfig = Field(
+        default_factory=_settings_default_factory(SafetyProjectorConfig),
+        description=(
+            "Geometric safety action projection block (Tier C2). "
+            "Default ``projector.enabled=false`` preserves byte-identical "
+            "pre-C2 behaviour — the orchestrator skips the projection seam "
+            "entirely when disabled."
+        ),
     )
 
 
@@ -4021,6 +4160,15 @@ class Settings(BaseSettings):
     )
     mission_parser: MissionParserConfig = Field(
         default_factory=_settings_default_factory(MissionParserConfig)
+    )
+    mission: MissionConfig = Field(
+        default_factory=_settings_default_factory(MissionConfig),
+        description=(
+            "Mission lifecycle state-machine block (Tier C2). Default "
+            "``mission.replan_enabled=false`` preserves byte-identical "
+            "pre-C2 behaviour — the orchestrator skips wiring the "
+            "MissionLifecycle entirely when disabled."
+        ),
     )
     offline_rl: OfflineRLConfig = Field(default_factory=_settings_default_factory(OfflineRLConfig))
     ppo: PPOConfig = Field(default_factory=_settings_default_factory(PPOConfig))

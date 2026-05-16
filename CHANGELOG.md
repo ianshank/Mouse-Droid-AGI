@@ -134,65 +134,66 @@ placeholder for the C1 cloud OTA families is now a real assertion that
 all 4 families render in `generate_metrics_sample()` + per-label render
 contract tests.
 
-### Added — Tier C4: Isaac Lab env body (B3.2–B3.5) + `RoverRewardConfig`
+### Added — Tier C2: Mission Closed-Loop + Safety Projection
 
-Replaces the three `TODO(Phase B)` markers in
-`src/mousedroid/sim/isaaclab/rover_env.py` (`build`, `reset`, `step`)
-with real Isaac Lab `ManagerBasedRLEnv`-style wiring. Ships the
-deferred `RoverRewardConfig` Pydantic block, 9 unit tests gated on
-`pytest.importorskip("isaaclab")`, and an ADR-009 amendment promoting
-the "PROPOSED" reward block to "implemented".
+Closes Track C2 of the Tier C sprint (see plan
+`.claude/plans/please-create-a-comprehensive-sunny-hennessy.md`).
+Adds two stateless, default-disabled seams to the orchestrator tick:
 
-- **`src/mousedroid/sim/isaaclab/rover_env.py`** — replaced the three
-  `TODO(Phase B)` markers. `build()` constructs the `SimulationContext`,
-  resolves the USD asset path from `cfg.sim.urdf_path`, and wires
-  actuators on `ROVER_WHEEL_JOINT_NAMES` + sensor handles on
-  `ROVER_SENSOR_LINK_NAMES`. `reset()` calls into the existing
-  `DomainRandomizer` (no duplication) and honours
-  `cfg.domain_randomization.enabled` (top-level, NOT
-  `cfg.sim.domain_randomization.enabled` — corrected per ADR-009
-  amendment). `step()` fans the 2-D differential-drive action onto 4
-  wheels in `[FL, FR, RL, RR] = [left, right, left, right]` order
-  (alternating layout, mirrors `MockRoverEnv._action_to_body_velocity`),
-  clips at `cfg.action.max_wheel_rad_s`, sub-steps `cfg.sim.decimation`
-  physics ticks, and computes reward via the new `RoverRewardConfig`
-  weights.
-- **`src/mousedroid/config/schema.py`** — added `RoverRewardConfig`
-  with `forward_velocity_weight: float = 0.01` and `collision_weight:
-  float = 0.1`. Optional on `RoverConfig` (`reward: RoverRewardConfig
-  | None = None`) so existing YAML files load byte-identically. The
-  Isaac Lab env raises a clear `ValueError` at `build()` time when
-  `cfg.rover.reward is None`, forcing operators to set the block
-  explicitly per ADR-009.
-- **`src/mousedroid/factory.py`** — threads `cfg.domain_randomization`
-  into `RoverIsaacLabEnv.__init__` as a keyword-only argument; logs
-  `dr_enabled` on the existing `rover_env_isaaclab_built` event.
-- **`tests/unit/sim/isaaclab/test_rover_env.py`** — 9 new unit tests
-  under `pytest.importorskip("isaaclab")` covering `build/reset/step`,
-  the gymnasium 5-tuple contract, action clipping, the 4-wheel
-  fan-out layout, domain randomization, the cross-backend wheel-layout
-  contract with `MockRoverEnv`, and a 50-step random-rollout
-  finiteness smoke check. Tests SKIP cleanly on CI hosts without
-  Isaac Lab; operator validates on Linux + Isaac Sim post-merge.
-- **`tests/unit/sim/test_rover_env_isaaclab.py`** — updated
-  `test_step_idx_increments_under_build_bypass` to set the new
-  reward block (the bypass skips `build()`, so the C4 ValueError
-  guard would otherwise fire from `step()`).
-- **`pyproject.toml`** — tightened the `[isaac]` extra to
-  `isaaclab>=0.20,<0.30` per the C4 risk-register entry (Isaac Lab
-  tracks aggressive API iteration on its 0.x line).
-- **`docs/architecture/ADR-009-isaac-lab-phase-b.md`** — promoted the
-  "PROPOSED" reward block to "IMPLEMENTED in Tier C4" with the actual
-  schema path; added operator validation playbook with the post-merge
-  test invocations; documented the
-  `cfg.sim.domain_randomization.enabled` → `cfg.domain_randomization.enabled`
-  amendment.
+- **`SafetyActionProjector`** — geometric soft-constraint projection of
+  the policy's proposed action, applied AFTER `_select_action` returns
+  and BEFORE `_execute_action` runs. Pure function of `SafetyContext` +
+  action; three independent clamp rules (forward velocity / human
+  keepout / tight quarters). All thresholds come from
+  `cfg.safety.projector.*`; default `enabled=false` keeps existing
+  deployments byte-identical.
+  See `src/mousedroid/safety/projector.py`,
+  `src/mousedroid/safety/projector_protocol.py`.
+- **`MissionLifecycle`** — state machine (PENDING → RUNNING →
+  SUCCEEDED | FAILED | REPLANNING → RUNNING) wrapping the existing
+  `TaskTrackerProtocol`. Polls `VLMProgressHead` once per tick;
+  transitions to REPLANNING on stall and submits an async replan
+  request via the LLM gateway. All thresholds come from `cfg.mission.*`;
+  default `replan_enabled=false` keeps existing deployments
+  byte-identical.
+  See `src/mousedroid/orchestrator/mission_lifecycle.py`.
+- **Orchestrator tick seam** — single insertion point at
+  `Orchestrator.tick()` around the unified `_select_action` call site
+  ensures all four `_select_action` return branches (cognitive / VLA /
+  VLA-strict-timeout / nav_agent) hit the projector uniformly. The
+  three branch-coverage regression tests parametrise this contract so a
+  future refactor that adds a fifth return path fails the suite.
+- **Telemetry families** — four new Prometheus families wired into
+  `MetricsRegistry`:
+  - `mousedroid_safety_action_clamps_total{reason}` (counter)
+  - `mousedroid_mission_state_transitions_total{from_state,to_state}` (counter)
+  - `mousedroid_mission_replans_total{outcome}` (counter)
+  - `mousedroid_mission_active_duration_seconds` (histogram with
+    operator-tunable buckets from
+    `MetricsConfig.mission_duration_seconds_buckets`).
+  All four follow the PR-A2 pure-add pattern — rendered only after a
+  writer first touches them, so default-disabled deployments produce
+  byte-identical `/metrics` output.
+- **Factory wiring** — `build_safety_projector(cfg, metrics=...)` and
+  `build_mission_lifecycle(cfg, ...)` both return `None` when their
+  feature flag is off; the orchestrator behaves byte-identically.
+- **ADR-011** — documents the geometric-over-Lagrangian-over-masking
+  rationale, the soft-vs-hard constraint split (projection = soft;
+  `emergency_stop` = hard), and the `MissionLifecycle`'s relationship
+  to the existing `TaskTrackerProtocol`.
+  See `docs/architecture/ADR-011-mission-closed-loop-safety-projection.md`.
 
-No `mousedroid.arm.*` imports anywhere. No HC-SR04 / ultrasonic
-observation channels. `cfg.rover.reward = None` default preserves
-byte-identical pre-PR behaviour. `mypy --strict` clean on
-`src/mousedroid/sim/isaaclab/` + `src/mousedroid/config/schema.py` +
-`src/mousedroid/factory.py`.
+**Test coverage:**
+- 14 projector unit + branch-coverage tests in
+  `tests/unit/safety/test_projector.py` (8 unit + 3 branch-coverage
+  required by plan + 3 additional regression-net tests).
+- 10 mission lifecycle unit tests in
+  `tests/unit/orchestrator/test_mission_lifecycle.py`.
+- 3 multi-minute closed-loop integration tests in
+  `tests/integration/test_mission_closed_loop.py` (rising progress,
+  stall + LLM replan, replan limit exhaustion).
+- 4 Tier-C smoke tests in `tests/smoke/test_prometheus_format_tier_c.py`
+  (replaces the C3.1 placeholder for C2 with real assertions).
 
 ### Changed — Tier B1: Ten-Pillars nightly — workflow-side promotion ready
 
