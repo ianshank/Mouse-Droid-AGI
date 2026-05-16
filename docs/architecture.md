@@ -602,7 +602,7 @@ graph TD
 
 **Safety invariants enforced by the tick ordering:**
 
-1. **Hard E-stop short-circuits everything**: `emergency_stop_check` runs BEFORE the world model + policy, so a safety-context emergency never even reaches `_select_action`.
+1. **Hard E-stop short-circuits everything**: `emergency_stop_check` runs BEFORE the policy, so a safety-context emergency never even reaches `_select_action`. (Note: `_update_world_model` still executes before the check in the current implementation).
 2. **Cloud swap timing**: `_apply_pending_weight_update` runs AFTER `_select_action` returns. The current tick saw ONE consistent weight set for both `_update_world_model` and `_select_action`. The swap's `_h` / `_z` / `_prev_action` reset uses `torch.zeros_like(...)` so CUDA-resident state stays on its original device.
 3. **Soft safety projection covers all branches**: `_maybe_project_action` wraps the `_select_action` return value at a single seam in `tick()`, so all four `_select_action` return paths (cognitive / VLA / VLA-strict-timeout / nav_agent) are clamped uniformly — no learned policy variant can leak an unsafe action.
 4. **Per-job cloud idempotency**: `shard_consumed_marker` blob in GCS is checked at startup and written ONLY on successful trainer completion. Failed runs remain re-runnable; successful runs short-circuit re-invocations.
