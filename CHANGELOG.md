@@ -8,6 +8,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Documentation — Tier C3.2: Sprint closeout — planning docs refreshed to post-Tier-C reality
+
+Closes the Tier C sprint. No source code changes — only the planning + architecture
+docs are refreshed to reflect what shipped across PRs #93 / #94 / #95 / #96:
+
+- `docs/planning/IMPLEMENTATION_PLAN.md` — new "Tier C Status (2026-05-16)"
+  section near the top with the 4-track table, phase-status table (Phase 1-5
+  marked complete; Phase 6 promoted to ACTIVE), and the 5-item operator-follow-up
+  checklist for items blocked on hardware/Linux access.
+- `docs/planning/NEXT_STEPS.md` — new "Next Major Milestone — Phase 6: On-Device
+  Incremental Learning" entry at the top, plus a "Recently Completed — 2026-05-16
+  Tier C" block summarising each of the four PRs (#93 C3.1 / #94 C1 / #95 C2 /
+  #96 C4) + operator follow-up tasks.
+- `docs/architecture.md` — new Level 3g diagram "Tier C Closed-Loop Autonomy"
+  showing the cloud→Jetson OTA pull, the orchestrator tick ordering with both
+  the C1 atomic swap seam (post-`_select_action`) and the C2 safety-projection
+  seam (wraps `_select_action` return value, covers all 4 branches), the
+  default-state config-flag table, the safety invariants the tick ordering
+  enforces, and the ADR cross-references (ADR-009/010/011).
+
+---
+
+## [v0.4.0] — 2026-05-16 — Tier C: Closed-Loop Autonomy + Cloud Retraining + Isaac Lab
+
+Tier C is the sprint that converts the Tier B foundation (ONNX-via-ORT world
+model + Isaac Lab Phase B foundation) into a closed-loop autonomous rover.
+After Tier C, the only autonomy gap is on-device incremental learning
+(Phase 6, multi-week, deferred).
+
+Four PRs landed in sequence over 2026-05-16 in the documented order:
+
+1. **PR #93** — Tier C3.1: Production hardening + B2 telemetry follow-through
+2. **PR #94** — Tier C1: Closed-loop cloud retraining + Jetson OTA puller
+3. **PR #95** — Tier C2: Mission lifecycle + geometric safety projection
+4. **PR #96** — Tier C4: Isaac Lab env body (B3.2–B3.5) + RoverRewardConfig
+
+Each track was default-disabled (config flags default to `False` / `0.0` /
+`None`) so existing deployments produce byte-identical pre-Tier-C behaviour;
+operators flip one config flag per track to opt in. See the Tier C track
+sections below under `## [v0.4.0]` for the surface diff per PR plus rollback
+paths.
+
 ### Changed — Tier C3.1: Production hardening (CI matrix promotion + B2 telemetry/dashboard polish)
 
 Lands first in the Tier C sprint to enable real CI gating before the
@@ -155,7 +197,15 @@ Adds two stateless, default-disabled seams to the orchestrator tick:
   transitions to REPLANNING on stall and submits an async replan
   request via the LLM gateway. All thresholds come from `cfg.mission.*`;
   default `replan_enabled=false` keeps existing deployments
-  byte-identical.
+  byte-identical. **NOTE (post-merge audit, surfaced by Gemini review on
+  PR #97)**: this PR ships the class + `build_mission_lifecycle()` factory
+  + telemetry families, but the orchestrator constructor does NOT yet
+  thread a `mission_lifecycle` kwarg and `tick()` does NOT yet invoke
+  `mission_lifecycle.tick()`. The lifecycle is currently exercised
+  standalone via its own tests + external orchestrator drivers. A
+  follow-up PR (Tier C2.1) will close this gap by wiring the lifecycle
+  through `__init__` + invoking it at the POST_TICK seam. See
+  `docs/planning/NEXT_STEPS.md` §"Tier C2.1 follow-up".
   See `src/mousedroid/orchestrator/mission_lifecycle.py`.
 - **Orchestrator tick seam** — single insertion point at
   `Orchestrator.tick()` around the unified `_select_action` call site
