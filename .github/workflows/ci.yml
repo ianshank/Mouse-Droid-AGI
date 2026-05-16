@@ -238,6 +238,40 @@ jobs:
                     --import-mode=importlib
 
     # -------------------------------------------------------------------------
+    # Stage 4b: Advisory CI matrix — [onnx_world_model] extras (Tier B2)
+    # -------------------------------------------------------------------------
+    # Catches ONNX Runtime API drift on the world-model export path
+    # (which is invisible to the default test stage — it only installs
+    # ``[dev,telemetry,mcp]``). Mirrors the ``vla-extras`` shape exactly,
+    # including the 7-green-runs promotion gate documented in Tier B2's
+    # plan (``docs/planning/sprint_plan_tier_b.md`` Story B2.6).
+    onnx-world-model-extras:
+        runs-on: ubuntu-latest
+        needs: lint
+        continue-on-error: true
+        strategy:
+            matrix:
+                python-version: ["3.11"]
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                  python-version: ${{ matrix.python-version }}
+                  cache: pip
+
+            - name: Install dependencies (dev + onnx_world_model extras)
+              run: pip install -e ".[dev,onnx_world_model]"
+
+            - name: Run world-model ONNX test suite
+              run: |
+                  pytest tests/unit/world_model \
+                         tests/unit/training/test_export_dual_stream_rssm_onnx.py \
+                    -v --tb=short \
+                    -m "not slow" \
+                    --no-cov \
+                    --import-mode=importlib
+
+    # -------------------------------------------------------------------------
     # Stage 5: Security audit
     # -------------------------------------------------------------------------
     security:

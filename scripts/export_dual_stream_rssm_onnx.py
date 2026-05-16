@@ -313,6 +313,26 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=_DEFAULT_OPSET,
         help=f"ONNX opset version (default {_DEFAULT_OPSET}).",
     )
+    parser.add_argument(
+        "--push-to-hf",
+        action="store_true",
+        help=(
+            "After successful export, upload the .onnx to HuggingFace Hub. "
+            "Requires HUGGINGFACE_TOKEN env var or prior `huggingface-cli login`. "
+            "Repo defaults to --hf-repo (or cfg.world_model.onnx_repo_id when "
+            "--config is provided)."
+        ),
+    )
+    parser.add_argument(
+        "--hf-repo",
+        type=str,
+        default=None,
+        help=(
+            "HuggingFace Hub repo to upload to. When omitted, falls back to "
+            "cfg.world_model.onnx_repo_id (when --config is provided) or "
+            "'ianshank/mousedroid-dual-stream-rssm'."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -342,11 +362,78 @@ def _build_model_from_cli(args: argparse.Namespace) -> tuple[DualStreamRSSM, Mod
     return model, cfg
 
 
+def _push_to_hf(
+    onnx_path: Path,
+    repo_id: str,
+    filename: str,
+) -> None:
+    """Upload the freshly-exported ``.onnx`` to HuggingFace Hub.
+
+    Imports ``huggingface_hub`` lazily — the dependency is only required
+    when ``--push-to-hf`` is set. Errors are surfaced upward so CI sees
+    the failure clearly; no silent retry / no exception swallowing.
+
+    Args:
+        onnx_path: Local ``.onnx`` to upload.
+        repo_id: Target HF repo (e.g. ``ianshank/mousedroid-dual-stream-rssm``).
+        filename: Destination filename inside the repo.
+    """
+    from huggingface_hub import HfApi  # lazy import
+
+    _log.info(
+        "world_model_onnx_push_start",
+        repo_id=repo_id,
+        filename=filename,
+        local_path=str(onnx_path),
+    )
+    api = HfApi()
+    api.upload_file(
+        path_or_fileobj=str(onnx_path),
+        path_in_repo=filename,
+        repo_id=repo_id,
+        repo_type="model",
+    )
+    _log.info(
+        "world_model_onnx_push_finished",
+        repo_id=repo_id,
+        filename=filename,
+    )
+
+
+def _resolve_hf_repo(args: argparse.Namespace) -> tuple[str, str]:
+    """Resolve (repo_id, filename) for HF upload.
+
+    Order of preference:
+    1. --hf-repo CLI arg
+    2. cfg.world_model.onnx_repo_id when --config is provided
+    3. Default 'ianshank/mousedroid-dual-stream-rssm' /
+       'observe_step.onnx'
+    """
+    repo_id: str
+    filename: str
+    if args.hf_repo is not None:
+        repo_id = args.hf_repo
+        filename = args.output.name
+    elif args.config is not None:
+        from mousedroid.config.loader import load_settings
+
+        settings = load_settings(args.config)
+        repo_id = settings.world_model.onnx_repo_id
+        filename = settings.world_model.onnx_filename
+    else:
+        repo_id = "ianshank/mousedroid-dual-stream-rssm"
+        filename = args.output.name
+    return repo_id, filename
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO)
     args = _parse_args(argv)
     model, cfg = _build_model_from_cli(args)
     run_export(model=model, cfg=cfg, output_path=args.output, opset=args.opset)
+    if args.push_to_hf:
+        repo_id, filename = _resolve_hf_repo(args)
+        _push_to_hf(args.output, repo_id=repo_id, filename=filename)
     return 0
 
 

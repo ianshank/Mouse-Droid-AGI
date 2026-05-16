@@ -483,26 +483,68 @@ def _resolve_world_model_onnx_path(cfg: Settings) -> Path:
     Resolution order:
 
     1. ``cfg.world_model.onnx_path`` when set — use it directly. If the
-       file is missing, return the path anyway and let
-       :meth:`DualStreamRSSMOnnx.warmup` raise ``FileNotFoundError`` so
-       operators get a clear error from the runtime, not a confusing
-       ``hf_hub_download`` traceback.
-    2. Future: HF Hub download via ``cfg.world_model.onnx_repo_id``
-       (mirrors the [vla] pattern). Not yet wired — Story 5.
+       file is missing, the runtime's :meth:`warmup` will raise
+       ``FileNotFoundError`` so operators get a clear error from the
+       runtime, not a confusing ``hf_hub_download`` traceback.
+    2. HF Hub download via
+       ``cfg.world_model.onnx_repo_id``/``cfg.world_model.onnx_filename``.
+       Mirrors the [vla] pattern at ``_build_distilled_onnx_vla``.
+       Cached under ``weights/dual_stream_rssm/`` so the same file is
+       reused across runs without re-downloading.
     """
     explicit = cfg.world_model.onnx_path
     if explicit is not None:
         return Path(explicit)
-    # No explicit path → defer HF download to Story 5. For now, raise a
-    # helpful error rather than silently passing nothing through.
-    msg = (
-        "world_model.engine='onnx_trt' requires world_model.onnx_path "
-        "to be set. HF Hub auto-download will land in Tier B2 Story 5 "
-        "(ianshank/mousedroid-dual-stream-rssm). For now, run "
-        "scripts/export_dual_stream_rssm_onnx.py to produce a local "
-        ".onnx and set world_model.onnx_path in your config."
+
+    # HF Hub auto-download fallback. Reuses the same
+    # ``download_weights_from_huggingface`` helper the VLA path uses, so
+    # retries / auth tokens / progress bars work identically.
+    from mousedroid.utils.weights_manager import (
+        download_weights_from_huggingface,
     )
-    raise ValueError(msg)
+
+    cache_dir = Path("weights") / "dual_stream_rssm"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    model_path = cache_dir / cfg.world_model.onnx_filename
+
+    if model_path.is_file():
+        _log.info(
+            "world_model_onnx_cache_hit",
+            cache_path=str(model_path),
+            repo_id=cfg.world_model.onnx_repo_id,
+        )
+        return model_path
+
+    _log.info(
+        "world_model_onnx_download_start",
+        repo_id=cfg.world_model.onnx_repo_id,
+        filename=cfg.world_model.onnx_filename,
+        cache_dir=str(cache_dir),
+    )
+    success = download_weights_from_huggingface(
+        repo_id=cfg.world_model.onnx_repo_id,
+        filenames=[cfg.world_model.onnx_filename],
+        cache_dir=cache_dir,
+        # Force flat layout so model_path.is_file() check succeeds.
+        # Without local_dir, hf_hub_download uses its blob/snapshot
+        # cache layout and the file would not be at the expected path.
+        local_dir=cache_dir,
+    )
+    if not success or not model_path.is_file():
+        msg = (
+            f"failed to download world-model ONNX artifact "
+            f"({cfg.world_model.onnx_repo_id}/{cfg.world_model.onnx_filename}) "
+            f"into {cache_dir}. Set world_model.onnx_path to a local path "
+            f"or run scripts/export_dual_stream_rssm_onnx.py --push-to-hf "
+            f"to publish a fresh artifact first."
+        )
+        raise FileNotFoundError(msg)
+    _log.info(
+        "world_model_onnx_downloaded",
+        path=str(model_path),
+        repo_id=cfg.world_model.onnx_repo_id,
+    )
+    return model_path
 
 
 def build_injection_filter(cfg: Settings) -> PromptInjectionFilterProtocol:
