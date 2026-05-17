@@ -35,18 +35,12 @@ Phase status post-Tier-C:
 
 **Code-level follow-ups** (small PRs, do these first):
 
-1. **Tier C2.1 — MissionLifecycle orchestrator wiring** (~1 day, surfaced
-   by Gemini review on PR #97). PR #95 shipped the lifecycle class +
-   factory + Prometheus families but did NOT thread it through
-   `MouseDroidOrchestrator.__init__` / `tick()`. Verified by
-   `grep -n "mission_lifecycle" src/mousedroid/orchestrator/orchestrator.py`
-   → 0 matches. See [NEXT_STEPS.md](NEXT_STEPS.md) §"Tier C2.1 Follow-Up"
-   for the scope.
-2. **`training/upload_weights.py`** (deferred from C1 per ADR-010
-   §"Out-of-Scope"). Closes the cloud → HF Hub leg of the closed loop —
-   without it the loop is half-built: C1 ships the Jetson-side puller; the
-   cloud trainer's output currently stays in GCS for manual
-   `huggingface-cli upload`.
+1. ✅ **Tier C2.1 — MissionLifecycle orchestrator wiring** — COMPLETED in
+   `claude/tier-c-closeout-harden`. The lifecycle now ticks at POST_TICK and
+   `process_mission` calls `start_mission()`.
+2. ✅ **`training/upload_weights.py`** — COMPLETED in
+   `claude/tier-c-closeout-harden`. `sync_gcs_to_hf()` + CLI `--from-gcs` close
+   the cloud -> HF Hub leg of the OTA loop.
 
 **Operator follow-ups** (post-merge, hardware/Linux access required):
 

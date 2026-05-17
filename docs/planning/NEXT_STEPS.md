@@ -4,30 +4,10 @@
 
 ## Tier C2.1 Follow-Up — Wire MissionLifecycle into the Orchestrator Tick
 
-**Surfaced by post-merge audit on PR #97 (Gemini code review)**: PR #95 (Tier C2)
-shipped the `MissionLifecycle` class, the `build_mission_lifecycle()` factory
-helper, and four `mousedroid_mission_*` Prometheus families, but did NOT thread
-a `mission_lifecycle` kwarg into `MouseDroidOrchestrator.__init__` and `tick()`
-never invokes `mission_lifecycle.tick(...)`. Verified by
-`grep -n "mission_lifecycle" src/mousedroid/orchestrator/orchestrator.py` →
-0 matches. The lifecycle is currently exercised standalone via its own tests
-+ external orchestrator drivers.
-
-Scope (small, ~1 day):
-
-- Add `mission_lifecycle: MissionLifecycle | None = None` to
-  `MouseDroidOrchestrator.__init__` (matches the existing protocol-typed
-  kwargs for `safety_projector` + `weight_update_poller`).
-- Invoke `await self._mission_lifecycle.tick(observation, prev_observation)`
-  at the POST_TICK seam (after `_publish_telemetry`, before
-  `await self._hook_registry.run_phase(HookPhase.POST_TICK, ctx)` so hook
-  observers see the post-tick mission state).
-- Thread the lifecycle through `build_orchestrator(...)` in `factory.py`.
-- Add a regression test asserting `mission_lifecycle.tick()` fires once per
-  orchestrator tick when wired + remains a no-op when `mission_lifecycle=None`.
-- Branch-coverage gate 85%+ on changed lines.
-
-Tracked separately so PR #97 stays scoped to documentation refresh.
+COMPLETED on 2026-05-16 in branch `claude/tier-c-closeout-harden` —
+`MissionLifecycle` now ticks at the POST_TICK seam (after `task_tracker.evaluate_active`)
+and `process_mission` calls `start_mission()` so the lifecycle actually transitions
+PENDING -> RUNNING in production. See the Tier C Closeout section below.
 
 ---
 
@@ -52,14 +32,51 @@ Scope (multi-week, deferred from Tier C):
   on-device-updated policy drops below it on a held-out replay sample, the
   orchestrator reverts to the cloud weights and emits a
   `mousedroid_on_device_learning_reverted_total{reason}` counter (new family).
-- **Operator follow-up to land first** — `training/upload_weights.py` (the
-  cloud→HF Hub upload module deferred from C1 — see ADR-010 §"Out-of-Scope").
-  Without it, the closed loop is half-built: C1 ships the Jetson-side puller
-  but the cloud trainer's output stays in GCS for manual `huggingface-cli upload`.
+- **Operator follow-up** — `training/upload_weights.py::sync_gcs_to_hf` shipped
+  in the Tier C Closeout branch (`claude/tier-c-closeout-harden`); the cloud
+  loop is now fully closed (GCS -> HF Hub via `--from-gcs`).
 
 Estimated scope: 3–4 sprints. Plan file: TBD (will be authored under
 `.claude/plans/` once the upload module + operator validation of Tier C
 land on the rover).
+
+---
+
+## Recently Completed — 2026-05-16 Tier C Closeout + Harden
+
+Closed the three documented Tier C follow-ups and added two test-suite improvements:
+
+- ✅ **C1.2 dual weight-update pollers** — `WeightUpdatePollConfig.world_model_enabled`
+  config field (default `False`, backwards-compatible) gates a second
+  `HuggingFaceWeightUpdatePoller` slot for the world-model engine. New
+  `build_weight_update_pollers()` factory returns a `Mapping[str, ...]` keyed
+  by `engine_type`. Orchestrator's `_apply_pending_weight_update` now iterates
+  the mapping; the legacy `weight_update_poller=` kwarg is retained for one
+  minor-version deprecation cycle and folded into the mapping at construction.
+- ✅ **C1.1 cloud-trainer GCS->HF Hub leg** — `training/upload_weights.py::sync_gcs_to_hf`
+  downloads blobs under a GCS prefix and pushes to HF Hub via the existing
+  `upload_weights()`. CLI `--from-gcs --gcs-bucket --gcs-prefix` flags resolve
+  defaults from `Settings.gcp.training.training_bucket` and
+  `Settings.cloud.weight_update.policy_repo_id`.
+- ✅ **C2.1 MissionLifecycle wiring** — `mission_lifecycle` constructor kwarg +
+  `_maybe_tick_mission_lifecycle()` helper fires at the POST_TICK seam (after
+  `task_tracker.evaluate_active` so terminal-state forwarding is correctly
+  ordered). `process_mission` calls `start_mission()` so the lifecycle actually
+  transitions PENDING -> RUNNING in production (not a permanent no-op).
+- ✅ **Hygiene: numpy soft pin** — `numpy>=1.24,!=2.0.0,!=2.0.1` locks out the
+  initial NumPy 2.x releases that broke transitive deps without blocking future
+  2.x once the ecosystem catches up. Tree audit confirmed no in-repo usage of
+  deprecated symbols (`np.float_`, `np.NAN`, `np.in1d`, etc.).
+- ✅ **Integration test** — `tests/integration/test_tier_c_closeout_integration.py`
+  exercises lifecycle + dual poller + projector together on a single tick AND
+  round-trips through `build_orchestrator()` to prove the factory DI graph.
+- ✅ **Property test** — `tests/property/test_mission_lifecycle_property.py`
+  uses Hypothesis (100 examples) to verify the lifecycle's state machine never
+  makes illegal transitions across arbitrary VLM-score sequences.
+
+**Deferred from this PR:** `onnx-world-model-extras (3.11)` CI promotion to
+required — the gate (≥7 consecutive green per-job runs on the integration
+branch) was only met 6/7 times. Re-attempt once accumulated.
 
 ---
 

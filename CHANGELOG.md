@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Tier C2.1**: `MissionLifecycle` now ticks once per orchestrator loop at the POST_TICK seam (was a no-op since PR #95 shipped the class). `process_mission` calls `start_mission()` so the lifecycle actually transitions PENDING→RUNNING in production.
+- **Tier C1.1**: `training/upload_weights.py::sync_gcs_to_hf` closes the cloud→HF Hub leg of the OTA loop. New CLI flags `--from-gcs`, `--gcs-bucket`, `--gcs-prefix`.
+- **Tier C1.2**: Dual `WeightUpdatePoller` slots — `policy` and `world_model` engines can both receive OTA updates. Gated by `cloud.weight_update.world_model_enabled` (default `False`, backwards-compatible). New `build_weight_update_pollers()` factory returns `Mapping[str, WeightUpdatePollerProtocol]`.
+- Integration test (`tests/integration/test_tier_c_closeout_integration.py`) covering MissionLifecycle + dual poller + safety projector on a single tick + via factory.
+- Property test (`tests/property/test_mission_lifecycle_property.py`) verifying MissionLifecycle state-machine transitions across 100 Hypothesis-generated score sequences.
+
+### Changed
+- `numpy` soft-pinned to `>=1.24,!=2.0.0,!=2.0.1` to lock out the initial NumPy 2.x releases that broke transitive deps. Tree audit confirmed no in-repo usage of removed symbols (`np.float_`, `np.NAN`, `np.in1d`, etc.); the pin is defensive.
+
+### Backwards compatibility
+- All new config fields default to `False`. Existing YAML files load unchanged.
+- `build_weight_update_poller()` (singular) retained as a deprecated shim for one minor version; new code should call `build_weight_update_pollers()` (plural).
+- `MouseDroidOrchestrator` constructor accepts both the legacy `weight_update_poller=` kwarg and the new `weight_update_pollers=` mapping; legacy is folded into the mapping at runtime under the poller's `_engine_type` (defaults to `"policy"`).
+- `mission_lifecycle=None` is a true no-op — `_maybe_tick_mission_lifecycle` short-circuits.
+
 ### Documentation — Tier C3.2: Sprint closeout — planning docs refreshed to post-Tier-C reality
 
 Closes the Tier C sprint. No source code changes — only the planning + architecture
