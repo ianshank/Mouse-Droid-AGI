@@ -8,9 +8,26 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, TypeAlias, runtime_checkable
 
 from mousedroid.experience.protocol import ExperienceProtocol
+
+# Canonical engine-type discriminator for OTA weight-update routing. New
+# engines (e.g. ``"affect"``) extend this Literal and the orchestrator's
+# ``_apply_one_pending_update`` dispatch in lock-step so a typo at any
+# call site fails mypy --strict at the boundary rather than landing as a
+# silent ``cloud_weight_update_unknown_engine_type`` dead-letter at
+# runtime. The string values are part of the
+# ``PendingWeightUpdate.engine_type`` public contract — Prometheus
+# ``engine_type`` labels and the ``HuggingFaceWeightUpdatePoller(...,
+# engine_type=...)`` constructor argument both rely on them.
+EngineType: TypeAlias = Literal["policy", "world_model"]
+
+#: Canonical string for the VLA-policy engine. Use over bare ``"policy"``
+#: in production code paths so renames stay greppable.
+ENGINE_TYPE_POLICY: EngineType = "policy"
+#: Canonical string for the world-model engine.
+ENGINE_TYPE_WORLD_MODEL: EngineType = "world_model"
 
 
 @dataclass(frozen=True)
@@ -46,7 +63,7 @@ class PendingWeightUpdate:
     sha256: str
     local_path: Path
     downloaded_at: float
-    engine_type: str
+    engine_type: EngineType
 
 
 @runtime_checkable
@@ -59,6 +76,16 @@ class WeightUpdatePollerProtocol(Protocol):
     the slot once the orchestrator has applied the update so the same
     revision is not re-applied on the next tick.
     """
+
+    @property
+    def engine_type(self) -> EngineType:
+        """Engine discriminator the orchestrator dispatches on.
+
+        Exposed on the protocol so the orchestrator no longer needs to
+        reach into a private ``_engine_type`` attribute when folding a
+        legacy single-poller kwarg into the C1.2 dual-poller mapping.
+        """
+        ...
 
     async def start(self) -> None:
         """Begin the background poll loop."""

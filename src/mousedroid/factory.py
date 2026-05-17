@@ -10,6 +10,10 @@ from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from mousedroid.cloud.protocol import (
+    ENGINE_TYPE_POLICY,
+    ENGINE_TYPE_WORLD_MODEL,
+)
 from mousedroid.comms.protocol import ESP32CommProtocol
 from mousedroid.hardware.protocols import (
     AudioProtocol,
@@ -976,7 +980,7 @@ def build_weight_update_poller(
         cfg.cloud.weight_update,
         repo_id=cfg.cloud.weight_update.policy_repo_id,
         filename=cfg.cloud.weight_update.policy_filename,
-        engine_type="policy",
+        engine_type=ENGINE_TYPE_POLICY,
         metrics=metrics,
     )
     _log.info(
@@ -1020,20 +1024,20 @@ def build_weight_update_pollers(
     from mousedroid.cloud.weight_update_poller import HuggingFaceWeightUpdatePoller
 
     pollers: dict[str, WeightUpdatePollerProtocol] = {
-        "policy": HuggingFaceWeightUpdatePoller(
+        ENGINE_TYPE_POLICY: HuggingFaceWeightUpdatePoller(
             cfg.cloud.weight_update,
             repo_id=cfg.cloud.weight_update.policy_repo_id,
             filename=cfg.cloud.weight_update.policy_filename,
-            engine_type="policy",
+            engine_type=ENGINE_TYPE_POLICY,
             metrics=metrics,
         ),
     }
     if cfg.cloud.weight_update.world_model_enabled:
-        pollers["world_model"] = HuggingFaceWeightUpdatePoller(
+        pollers[ENGINE_TYPE_WORLD_MODEL] = HuggingFaceWeightUpdatePoller(
             cfg.cloud.weight_update,
             repo_id=cfg.cloud.weight_update.world_model_repo_id,
             filename=cfg.cloud.weight_update.world_model_filename,
-            engine_type="world_model",
+            engine_type=ENGINE_TYPE_WORLD_MODEL,
             metrics=metrics,
         )
     _log.info(

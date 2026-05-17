@@ -13,9 +13,33 @@ import json
 from pathlib import Path
 from typing import Any
 
-import structlog
+from mousedroid.logging.setup import get_logger
 
-_log = structlog.get_logger(__name__)
+_log = get_logger(__name__)
+
+# Legacy default repo for the non-``--from-gcs`` CLI mode. Centralised here so
+# the constant is not duplicated between the function signature, the CLI help
+# text, and the CLI fallback branch.
+_DEFAULT_LEGACY_REPO_ID = "ianshank/mousedroid-weights"
+# Default extension set used by ``upload_weights()`` when no override is
+# supplied. ``sync_gcs_to_hf`` overrides this via the schema-driven
+# ``cloud.weight_update.upload_extensions`` field so the cloud-trainer leg
+# can include ``.onnx`` / ``.safetensors`` without mutating the legacy CLI
+# default.
+_DEFAULT_UPLOAD_EXTENSIONS: frozenset[str] = frozenset({".pt", ".npz", ".json"})
+# Cloud-trainer extension set — mirrors the
+# ``WeightUpdatePollConfig.upload_extensions`` schema default. Defined as a
+# module-level fallback so ``sync_gcs_to_hf`` still works when called
+# programmatically without a ``Settings`` instance (tests, ad-hoc scripts).
+# The CLI ``--from-gcs`` mode prefers the schema-driven value resolved from
+# ``Settings`` so an operator override flows through.
+_CLOUD_TRAINER_UPLOAD_EXTENSIONS: tuple[str, ...] = (
+    ".onnx",
+    ".pt",
+    ".npz",
+    ".json",
+    ".safetensors",
+)
 
 _HF_AVAILABLE = False
 try:
@@ -23,13 +47,15 @@ try:
 
     _HF_AVAILABLE = True
 except ImportError:
-    HfApi = None
+    # Optional dependency — module still imports without huggingface_hub so
+    # the CLI can fail gracefully via the ``_HF_AVAILABLE`` guard.
+    HfApi = None  # type: ignore[assignment,misc]
 
 
 def upload_weights(
     weights_dir: str | Path,
     *,
-    repo_id: str = "ianshank/mousedroid-weights",
+    repo_id: str = _DEFAULT_LEGACY_REPO_ID,
     commit_message: str = "Update trained weights",
     extensions: set[str] | None = None,
 ) -> bool:
@@ -59,7 +85,7 @@ def upload_weights(
         return False
 
     # Collect files to upload
-    exts = extensions or {".pt", ".npz", ".json"}
+    exts = extensions if extensions is not None else set(_DEFAULT_UPLOAD_EXTENSIONS)
     files_to_upload = [f for f in weights_dir.rglob("*") if f.is_file() and f.suffix in exts]
 
     if not files_to_upload:
@@ -164,6 +190,7 @@ def sync_gcs_to_hf(
     local_dir: Path,
     gcs_client: Any | None = None,
     commit_message: str = "Cloud trainer auto-upload",
+    upload_extensions: tuple[str, ...] | set[str] | None = None,
 ) -> bool:
     """Download every blob under ``gs://<bucket>/<prefix>/*`` and push to HF Hub.
 
@@ -184,6 +211,13 @@ def sync_gcs_to_hf(
             (``build_gcs_client``); tests inject a ``MagicMock``. ``None``
             triggers a lazy ``google.cloud.storage.Client()`` construction.
         commit_message: Forwarded to ``upload_weights``.
+        upload_extensions: Extension filter forwarded to ``upload_weights``.
+            ``None`` (default) uses the cloud-trainer extension set —
+            ``.onnx``/``.pt``/``.npz``/``.json``/``.safetensors`` — so the
+            world-model export and HF-native weight formats round-trip.
+            Operators override per-call (or via
+            ``cfg.cloud.weight_update.upload_extensions``) to extend the
+            filter without mutating the legacy CLI default.
 
     Returns:
         ``True`` iff at least one blob was downloaded **and** the subsequent
@@ -191,7 +225,10 @@ def sync_gcs_to_hf(
         on an empty prefix (logged as a warning).
     """
     if gcs_client is None:
-        from google.cloud import storage  # local import — optional dep
+        # Local import — optional dep. The project-wide mypy override
+        # ``ignore_missing_imports = true`` handles the missing typeshed
+        # stubs without needing a per-call ``# type: ignore``.
+        from google.cloud import storage
 
         gcs_client = storage.Client()
     bucket = gcs_client.bucket(gcs_bucket)
@@ -221,16 +258,18 @@ def sync_gcs_to_hf(
         dest = local_dir / filename
         blob.download_to_filename(str(dest))
         _log.info("gcs_blob_downloaded", blob=blob.name, dest=str(dest))
+    # Cloud trainer emits .onnx alongside .pt/.npz/.json — the default
+    # extension filter in upload_weights() omits .onnx, which would silently
+    # drop the world-model artifact and log "no_weight_files_found". Resolve
+    # the schema-driven default (cloud.weight_update.upload_extensions) when
+    # the caller has not supplied an override so the round-trip is observable.
+    if upload_extensions is None:
+        upload_extensions = _CLOUD_TRAINER_UPLOAD_EXTENSIONS
     return upload_weights(
         weights_dir=local_dir,
         repo_id=repo_id,
         commit_message=commit_message,
-        # Cloud trainer emits .onnx alongside .pt/.npz/.json — the default
-        # extension filter in upload_weights() omits .onnx, which would
-        # silently drop the world-model artifact and log
-        # "no_weight_files_found". Include the cloud-side extension set
-        # explicitly so the round-trip is observable.
-        extensions={".onnx", ".pt", ".npz", ".json", ".safetensors"},
+        extensions=set(upload_extensions),
     )
 
 
@@ -299,17 +338,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--gcs-prefix",
         type=str,
-        default="trained/",
-        help="GCS object prefix to sync (only used with ``--from-gcs``).",
+        default=None,
+        help=(
+            "GCS object prefix to sync (only used with ``--from-gcs``). "
+            "Defaults to ``Settings().cloud.weight_update.gcs_artifact_prefix``."
+        ),
     )
     args = parser.parse_args(argv)
 
     if args.from_gcs:
         # Resolve config-driven defaults lazily so the CLI still imports in
         # minimal cloud environments that may not have pydantic installed.
-        gcs_bucket = args.gcs_bucket
-        repo_id = args.repo_id
-        if gcs_bucket is None or repo_id is None:
+        gcs_bucket: str | None = args.gcs_bucket
+        repo_id: str | None = args.repo_id
+        gcs_prefix: str | None = args.gcs_prefix
+        upload_extensions: tuple[str, ...] | None = None
+        if gcs_bucket is None or repo_id is None or gcs_prefix is None:
             from mousedroid.config.loader import load_settings  # local import
 
             settings = load_settings()
@@ -323,22 +367,35 @@ def main(argv: list[str] | None = None) -> int:
                     gcs_bucket = settings.gcp.training.training_bucket
             if repo_id is None:
                 repo_id = settings.cloud.weight_update.policy_repo_id
-        # Narrow Optional[str] -> str: gcs_bucket is set via either parser.error
-        # or settings resolution above; repo_id is set via settings resolution.
-        assert gcs_bucket is not None
-        assert repo_id is not None
+            if gcs_prefix is None:
+                gcs_prefix = settings.cloud.weight_update.gcs_artifact_prefix
+            # Forward the schema-driven extension filter so an operator
+            # override (e.g. adding ``.bin`` for the HF native format)
+            # propagates without code changes.
+            upload_extensions = settings.cloud.weight_update.upload_extensions
+        # Defensive explicit guards instead of ``assert`` — Python's ``-O``
+        # flag strips ``assert`` and would let ``None`` slip into
+        # ``sync_gcs_to_hf`` and raise a confusing downstream
+        # ``AttributeError`` deep inside the GCS client.
+        if gcs_bucket is None:
+            parser.error("--gcs-bucket could not be resolved from CLI or Settings.")
+        if repo_id is None:
+            parser.error("--repo could not be resolved from CLI or Settings.")
+        if gcs_prefix is None:
+            parser.error("--gcs-prefix could not be resolved from CLI or Settings.")
         success = sync_gcs_to_hf(
             gcs_bucket=gcs_bucket,
-            gcs_prefix=args.gcs_prefix,
+            gcs_prefix=gcs_prefix,
             repo_id=repo_id,
             local_dir=args.weights_dir,
             commit_message=args.commit_message,
+            upload_extensions=upload_extensions,
         )
     else:
-        repo_id = args.repo_id or "ianshank/mousedroid-weights"
+        legacy_repo_id: str = args.repo_id or _DEFAULT_LEGACY_REPO_ID
         success = upload_weights(
             weights_dir=args.weights_dir,
-            repo_id=repo_id,
+            repo_id=legacy_repo_id,
             commit_message=args.commit_message,
         )
     return 0 if success else 1

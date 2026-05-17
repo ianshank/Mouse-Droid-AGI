@@ -15,6 +15,10 @@ import numpy as np
 import torch
 from numpy.typing import NDArray
 
+from mousedroid.cloud.protocol import (
+    ENGINE_TYPE_POLICY,
+    ENGINE_TYPE_WORLD_MODEL,
+)
 from mousedroid.common.actions import normalize_action_numpy
 from mousedroid.common.async_utils import cancel_and_drain, spawn_tracked
 from mousedroid.common.time.protocol import ClockProtocol, RealClock
@@ -208,8 +212,10 @@ class MouseDroidOrchestrator:
                 poller kwarg retained for one minor-version window for
                 backwards compatibility — folded into
                 ``self._weight_update_pollers`` under the poller's
-                ``_engine_type`` (or ``"policy"`` if absent) so internal
-                handling is uniform between the two shapes. Prefer
+                ``engine_type`` property (falling back to the legacy private
+                ``_engine_type`` attribute, then to
+                :data:`mousedroid.cloud.protocol.ENGINE_TYPE_POLICY`) so
+                internal handling is uniform between the two shapes. Prefer
                 ``weight_update_pollers`` for new call sites.
             weight_update_pollers: Optional Tier C1.2 mapping
                 ``{engine_type: WeightUpdatePollerProtocol}``. When supplied,
@@ -305,16 +311,27 @@ class MouseDroidOrchestrator:
         # ``weight_update_poller=`` kwarg stays on the constructor for one
         # minor-version window for backwards compatibility; it is folded
         # into ``self._weight_update_pollers`` under the poller's
-        # ``_engine_type`` attribute (defaulting to ``"policy"`` when the
-        # attribute is missing) so the rest of the orchestrator only ever
-        # sees the mapping shape.
+        # ``engine_type`` property so the rest of the orchestrator only ever
+        # sees the mapping shape. Precedence is keyed on whether the
+        # mapping kwarg was *provided* (not whether it is non-empty) so an
+        # explicit ``weight_update_pollers={}`` cleanly disables OTA
+        # without being silently overridden by a legacy single-poller arg.
         self._weight_update_pollers: dict[str, WeightUpdatePollerProtocol] = dict(
             weight_update_pollers or {}
         )
-        if weight_update_poller is not None and not self._weight_update_pollers:
-            engine_type = getattr(weight_update_poller, "_engine_type", "policy")
+        if weight_update_poller is not None and weight_update_pollers is None:
+            # Fall back to the typed ``engine_type`` property; the legacy
+            # ``_engine_type`` private attribute fallback is retained for one
+            # release only as a safety net for external pollers that
+            # implement the protocol structurally but predate the property
+            # addition.
+            engine_type = getattr(
+                weight_update_poller,
+                "engine_type",
+                getattr(weight_update_poller, "_engine_type", ENGINE_TYPE_POLICY),
+            )
             self._weight_update_pollers[engine_type] = weight_update_poller
-        elif weight_update_poller is not None and self._weight_update_pollers:
+        elif weight_update_poller is not None and weight_update_pollers is not None:
             _log.warning(
                 "weight_update_poller_kwarg_ignored",
                 reason="weight_update_pollers mapping takes precedence",
@@ -873,10 +890,10 @@ class MouseDroidOrchestrator:
         # Atomic reference swap. Single-coroutine guarantee on tick() means
         # no concurrent reader observes a half-swapped state.
         reset_recurrent_state = False
-        if update.engine_type == "world_model":
+        if update.engine_type == ENGINE_TYPE_WORLD_MODEL:
             self._world_model = cast("WorldModelProtocol", new_engine)
             reset_recurrent_state = self._cfg.cloud.weight_update.reset_state_on_swap
-        elif update.engine_type == "policy":
+        elif update.engine_type == ENGINE_TYPE_POLICY:
             self._vla_policy = cast("VLAPolicyProtocol", new_engine)
         else:
             # Unknown engine type — acknowledge + dead-letter so the same

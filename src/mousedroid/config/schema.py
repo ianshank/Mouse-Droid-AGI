@@ -2517,6 +2517,15 @@ class GCPConfig(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+#: Default ``world_model_repo_id`` literal. Defined as a module-level constant
+#: so the field default and the
+#: ``_warn_on_default_world_model_repo`` validator share one canonical value
+#: and a future rename touches one place. This is the maintainer's personal
+#: HF Hub repo — operators MUST override before enabling the world-model
+#: poller in production.
+_WORLD_MODEL_DEFAULT_REPO_ID: str = "ianshank/mousedroid-dual-stream-rssm"
+
+
 class WeightUpdatePollConfig(BaseModel):
     """Configuration for the HuggingFace Hub OTA weight-update poller.
 
@@ -2543,7 +2552,7 @@ class WeightUpdatePollConfig(BaseModel):
         description="Filename within ``policy_repo_id`` of the policy artifact.",
     )
     world_model_repo_id: str = Field(
-        "ianshank/mousedroid-dual-stream-rssm",
+        _WORLD_MODEL_DEFAULT_REPO_ID,
         description="HuggingFace Hub repo ID containing the trained world-model artifact.",
     )
     world_model_filename: str = Field(
@@ -2599,6 +2608,58 @@ class WeightUpdatePollConfig(BaseModel):
             "pipeline is producing artifacts to OTA-deploy."
         ),
     )
+    upload_extensions: tuple[str, ...] = Field(
+        (".onnx", ".pt", ".npz", ".json", ".safetensors"),
+        description=(
+            "File extensions ``training/upload_weights.py::sync_gcs_to_hf`` "
+            "publishes to HF Hub when running the cloud-trainer leg of the "
+            "OTA loop. Default includes ``.onnx`` + ``.safetensors`` so the "
+            "world-model export and HF-native weight formats round-trip "
+            "without operator intervention. Stored as a hashable ``tuple`` "
+            "(not a ``set``) so the Pydantic schema stays hashable."
+        ),
+    )
+    gcs_artifact_prefix: str = Field(
+        "trained/",
+        description=(
+            "Object prefix inside ``gcp.training.training_bucket`` that the "
+            "``--from-gcs`` CLI mode lists. Trailing slash preserved verbatim "
+            "(forwarded to ``bucket.list_blobs(prefix=...)``). Default "
+            "matches the cloud trainer's output convention."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _warn_on_default_world_model_repo(self) -> WeightUpdatePollConfig:
+        """Warn when ``world_model_enabled=True`` but the repo is left at default.
+
+        The default ``world_model_repo_id`` is the maintainer's personal HF
+        Hub repo. An operator who flips ``world_model_enabled`` without
+        explicitly overriding the repo + filename would silently OTA-deploy
+        weights from that repo into production — a footgun the validator
+        surfaces at config-load time rather than after the first poll cycle.
+        The validator only logs; it does NOT raise, so operators who *intend*
+        to consume the default repo (the maintainer themselves, e2e tests)
+        keep working.
+
+        Returns:
+            The unchanged instance.
+        """
+        if self.world_model_enabled and self.world_model_repo_id == _WORLD_MODEL_DEFAULT_REPO_ID:
+            # Local import — avoid circular-import risk during settings build.
+            from mousedroid.logging.setup import get_logger
+
+            _log = get_logger(__name__)
+            _log.warning(
+                "world_model_poller_using_default_repo",
+                repo_id=self.world_model_repo_id,
+                hint=(
+                    "Set ``cloud.weight_update.world_model_repo_id`` to your "
+                    "fleet's HF Hub repo to avoid silently OTA-deploying "
+                    "from the maintainer's personal repo."
+                ),
+            )
+        return self
 
 
 class CloudConfig(BaseModel):

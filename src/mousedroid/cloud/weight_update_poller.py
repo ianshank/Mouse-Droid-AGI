@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from mousedroid.cloud.protocol import PendingWeightUpdate
+from mousedroid.cloud.protocol import EngineType, PendingWeightUpdate
 from mousedroid.logging.setup import get_logger
 from mousedroid.utils.weights_manager import _validate_download_directory, verify_sha256
 
@@ -54,7 +54,7 @@ class HuggingFaceWeightUpdatePoller:
         *,
         repo_id: str,
         filename: str,
-        engine_type: str,
+        engine_type: EngineType,
         metrics: MetricsRegistry | None = None,
         hf_api_factory: Any | None = None,
         hf_download: Any | None = None,
@@ -84,7 +84,7 @@ class HuggingFaceWeightUpdatePoller:
         self._cfg = cfg
         self._repo_id = repo_id
         self._filename = filename
-        self._engine_type = engine_type
+        self._engine_type: EngineType = engine_type
         self._metrics = metrics
         self._hf_api_factory_override = hf_api_factory
         self._hf_download_override = hf_download
@@ -148,6 +148,17 @@ class HuggingFaceWeightUpdatePoller:
     # ------------------------------------------------------------------
     # Public surface for the orchestrator
     # ------------------------------------------------------------------
+
+    @property
+    def engine_type(self) -> EngineType:
+        """Engine discriminator the orchestrator dispatches on.
+
+        Exposes the otherwise-private ``_engine_type`` so the
+        orchestrator's legacy-kwarg fold-in path can route a single-poller
+        construction to the right slot in ``_weight_update_pollers``
+        without ``getattr`` reflection.
+        """
+        return self._engine_type
 
     @property
     def pending_update(self) -> PendingWeightUpdate | None:
