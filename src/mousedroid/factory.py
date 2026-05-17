@@ -1151,6 +1151,99 @@ def build_safety_monitor(cfg: Settings) -> SafetyMonitorProtocol:
     return MouseDroidSafetyMonitor(cfg.safety)
 
 
+def build_vlm_progress(cfg: Settings) -> VLMProgressHead | None:
+    """Build the optional Tier C2.3 :class:`VLMProgressHead`.
+
+    Returns ``None`` when ``cfg.mission.vlm_progress_enabled is False``
+    (the default) — :func:`build_mission_lifecycle` then short-circuits
+    and the orchestrator's POST_TICK seam stays a no-op so pre-Tier-C2.3
+    deployments are byte-identical.
+
+    When enabled the head wraps a :class:`MockVLMProgress` backend whose
+    constant value comes from ``cfg.mission.vlm_mock_progress_value``. A
+    real VLM backend (HF-hosted, BLIP-2, …) is a separate sprint — the
+    protocol surface this factory targets is identical for either.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        A :class:`VLMProgressHead` instance or ``None`` when disabled.
+    """
+    if not cfg.mission.vlm_progress_enabled:
+        _log.debug("vlm_progress_disabled")
+        return None
+
+    from mousedroid.config.schema import VLMProgressConfig
+    from mousedroid.reward.vlm_progress import MockVLMProgress, VLMProgressHead
+
+    backend = MockVLMProgress(cfg.mission.vlm_mock_progress_value)
+    head = VLMProgressHead(cfg=VLMProgressConfig(), backend=backend)
+    _log.info(
+        "vlm_progress_built",
+        backend="MockVLMProgress",
+        mock_value=cfg.mission.vlm_mock_progress_value,
+    )
+    return head
+
+
+def build_mission_replanner(
+    cfg: Settings,
+    *,
+    llm_gateway: LLMGatewayProtocol | None,
+    metrics: MetricsRegistry | None = None,
+) -> MissionReplannerProtocol | None:
+    """Build the optional Tier C2.3 LLM-backed mission replanner.
+
+    Returns ``None`` in two cases (both preserve the defensive null path
+    that :func:`build_mission_lifecycle` already handles):
+
+    * ``cfg.mission.llm_replanner_enabled`` is ``False`` (the default).
+    * ``llm_gateway`` is ``None`` — typically because
+      ``cfg.llm.enabled`` is False. A warning is logged so an operator
+      who enabled the replanner without enabling the gateway sees the
+      misconfiguration at boot.
+
+    The adapter is backend-agnostic: it wraps any
+    :class:`LLMGatewayProtocol`-conforming instance (in-process
+    llama-cpp OR the new HTTP ``OpenAICompatibleLLMGateway``), so the
+    same wiring covers both deployment topologies — local Ollama, host-
+    PC Ollama via 192.168.55.1, or OpenAI cloud.
+
+    Args:
+        cfg: Root settings.
+        llm_gateway: Wired :class:`LLMGatewayProtocol`-conformant
+            instance, or ``None`` when the gateway is disabled.
+        metrics: Optional :class:`MetricsRegistry` for the
+            ``mission_replan_llm_calls_total`` counter.
+
+    Returns:
+        An :class:`LLMGatewayMissionReplanner` or ``None``.
+    """
+    if not cfg.mission.llm_replanner_enabled:
+        _log.debug("mission_replanner_disabled")
+        return None
+    if llm_gateway is None:
+        _log.warning(
+            "mission_replanner_no_gateway",
+            hint=(
+                "cfg.mission.llm_replanner_enabled=True but no LLM gateway "
+                "is wired (cfg.llm.enabled likely False). Enable the "
+                "gateway or leave the replanner disabled."
+            ),
+        )
+        return None
+
+    from mousedroid.orchestrator.llm_replanner import LLMGatewayMissionReplanner
+
+    _log.info("mission_replanner_built", gateway_type=type(llm_gateway).__name__)
+    return LLMGatewayMissionReplanner(
+        gateway=llm_gateway,
+        cfg=cfg.mission.replanner,
+        metrics=metrics,
+    )
+
+
 def build_mission_lifecycle(
     cfg: Settings,
     *,
