@@ -916,8 +916,41 @@ class MissionParserConfig(BaseModel):
     )
 
 
+class MissionReplannerConfig(BaseModel):
+    """Tier C2.3 — LLM-backed mission replanner adapter configuration.
+
+    Tunables for ``LLMGatewayMissionReplanner`` (built by
+    :func:`mousedroid.factory.build_mission_replanner` when
+    ``mission.llm_replanner_enabled`` is ``True``). Distinct from
+    :class:`LLMReplannerConfig` defined later in this module — that one
+    configures the robot-arm symbolic planner. The two share a naming
+    prefix but are unrelated subsystems.
+    """
+
+    max_prompt_chars: int = Field(
+        512,
+        gt=0,
+        description=(
+            "Maximum characters in the augmented goal_text prompt forwarded "
+            "to the LLM gateway. The adapter clips longer prompts at this "
+            "boundary so a runaway goal_text cannot exceed the gateway's "
+            "context window. Default 512 mirrors the rule-based parser's "
+            "command-length policy."
+        ),
+    )
+    include_progress_in_prompt: bool = Field(
+        True,
+        description=(
+            "When True (default), the adapter appends "
+            "``(last_progress=<float>)`` to the prompt so the LLM sees the "
+            "stall context. Operators can disable when their LLM is tuned "
+            "for raw goals only."
+        ),
+    )
+
+
 class MissionConfig(BaseModel):
-    """Mission lifecycle state-machine configuration (Tier C2 / C2.2).
+    """Mission lifecycle state-machine configuration (Tier C2 / C2.2 / C2.3).
 
     Drives the ``MissionLifecycle`` state machine that wraps
     :class:`InMemoryTaskTracker` and adds VLM-driven goal-progress feedback
@@ -926,6 +959,12 @@ class MissionConfig(BaseModel):
     the LLM gateway — existing deployments produce byte-identical pre-PR
     behaviour because the orchestrator does not build a lifecycle at all
     when this block is at defaults.
+
+    Tier C2.3 adds four fields (``vlm_progress_enabled``,
+    ``vlm_mock_progress_value``, ``llm_replanner_enabled``, ``replanner``)
+    that gate the VLM progress head + LLM replanner wiring inside
+    :func:`build_orchestrator`. All four default to safe values so
+    existing YAML loads unchanged.
     """
 
     replan_enabled: bool = Field(
@@ -968,6 +1007,41 @@ class MissionConfig(BaseModel):
             "Hard cap on replans per mission. Once exceeded the lifecycle "
             "transitions to ``FAILED`` with reason='replan_limit_exceeded'."
         ),
+    )
+    vlm_progress_enabled: bool = Field(
+        False,
+        description=(
+            "Tier C2.3: build a ``VLMProgressHead`` for the mission "
+            "lifecycle. Default False preserves pre-Tier-C2.3 byte-identical "
+            "behaviour (factory short-circuits to None). When True the head "
+            "uses ``MockVLMProgress(mock_progress_value)`` by default; a "
+            "real VLM backend is a separate sprint."
+        ),
+    )
+    vlm_mock_progress_value: float = Field(
+        0.95,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Constant value the default ``MockVLMProgress`` backend returns. "
+            "Default 0.95 sits above the default ``success_threshold=0.90`` "
+            "so a smoke-mode mission transitions to SUCCEEDED on the first "
+            "scored tick — useful for the boot-time smoke test."
+        ),
+    )
+    llm_replanner_enabled: bool = Field(
+        False,
+        description=(
+            "Tier C2.3: build an ``LLMGatewayMissionReplanner`` for the "
+            "mission lifecycle. Default False preserves pre-Tier-C2.3 "
+            "behaviour. Requires the LLM gateway to be enabled — when "
+            "``cfg.llm.enabled is False`` the factory still short-circuits "
+            "to None even with this flag True (with a structured warning)."
+        ),
+    )
+    replanner: MissionReplannerConfig = Field(
+        default_factory=MissionReplannerConfig,
+        description="Sub-block tuning the LLM replanner adapter.",
     )
 
 
