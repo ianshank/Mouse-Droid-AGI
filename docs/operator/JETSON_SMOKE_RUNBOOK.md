@@ -39,14 +39,20 @@ sudo bash scripts/sync_jetson_overlay.sh
 ```
 
 Also ensure `/etc/mousedroid/docker.env` exists and matches the template at
-`config/.env.jetson.example`. The compose `env_file:` directive (F-014) reads
-from `/etc/mousedroid/docker.env` for `MOUSEDROID_MOCK_HARDWARE`,
-`MOUSEDROID_TELEMETRY_TOKEN`, and any per-host `MOUSEDROID_LLM__*` overrides.
+`config/.env.jetson.example`. The compose `env_file:` directive (F-014) loads
+that file into the container's environment. Because Compose's inline
+`environment:` block always overrides `env_file:` values, the production
+compose file deliberately keeps `MOUSEDROID_TELEMETRY_TOKEN`,
+`MOUSEDROID_MOCK_HARDWARE`, and any `MOUSEDROID_LLM__*` overrides OUT of
+its inline block — so docker.env is the single source of truth for those.
 
 ```bash
 # First-time setup (then populate the token):
 sudo cp config/.env.jetson.example /etc/mousedroid/docker.env
 sudoedit /etc/mousedroid/docker.env   # set MOUSEDROID_TELEMETRY_TOKEN to a real value
+
+# Verify the values actually reached the container after restart:
+docker exec mousedroid env | grep -E "MOUSEDROID_MOCK_HARDWARE|MOUSEDROID_TELEMETRY_TOKEN"
 ```
 
 ## Step 2 — Pre-flight check (shell + Python)

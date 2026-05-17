@@ -93,33 +93,45 @@ def test_compose_env_file_marked_required_false() -> None:
     ), f"docker.env entry must declare ``required: false``; got {docker_env!r}"
 
 
-def test_mock_hardware_default_is_false_not_true() -> None:
-    """Production deployments must default to real hardware (F-014).
+def test_mock_hardware_is_supplied_by_env_file_not_inline() -> None:
+    """``MOUSEDROID_MOCK_HARDWARE`` must come from env_file, not inline environment.
 
-    The previous ``:-true`` default meant every restart silently flipped
-    the container into mock mode, hiding real-hardware regressions.
+    Copilot review of PR #101 caught that inline ``environment:`` entries
+    ALWAYS override ``env_file:`` values per Compose spec. The earlier draft
+    had ``MOUSEDROID_MOCK_HARDWARE=${VAR:-false}`` inline, which silently
+    overrode whatever operators set in /etc/mousedroid/docker.env. The fix
+    is to leave the variable OUT of the inline block so the env_file value
+    is honoured. Operators control the value via docker.env (single source
+    of truth, no precedence ambiguity).
     """
     svc = _load_service()
     env: list[str] = svc.get("environment", [])
-    mock_line = next((e for e in env if "MOUSEDROID_MOCK_HARDWARE=" in e), None)
-    assert mock_line is not None, "MOUSEDROID_MOCK_HARDWARE must be set in environment"
-    assert (
-        ":-false" in mock_line
-    ), f"MOUSEDROID_MOCK_HARDWARE compose default must be ``:-false``: {mock_line!r}"
+    inline_mock = [e for e in env if "MOUSEDROID_MOCK_HARDWARE" in e]
+    assert inline_mock == [], (
+        "MOUSEDROID_MOCK_HARDWARE must NOT appear in inline environment: "
+        "(env_file is the source of truth). Got: "
+        f"{inline_mock!r}"
+    )
 
 
-def test_telemetry_token_is_forwarded_to_container() -> None:
-    """``MOUSEDROID_TELEMETRY_TOKEN`` reaches the container so auth_enabled works.
+def test_telemetry_token_is_supplied_by_env_file_not_inline() -> None:
+    """``MOUSEDROID_TELEMETRY_TOKEN`` must come from env_file, not inline environment.
 
-    Without this line, the container raises ``TelemetryConfigError`` and
-    crash-loops on every restart when ``telemetry.auth.auth_enabled=true``
-    in jetson_production.yaml (the production default).
+    Copilot HIGH finding on PR #101: the inline default ``${VAR:-}``
+    substitutes EMPTY when the host shell var is unset, silently overriding
+    whatever ``/etc/mousedroid/docker.env`` provides — reintroducing the
+    TelemetryConfigError crash-loop that F-014 was meant to fix. The token
+    MUST be supplied by env_file alone (the inline block must omit it).
     """
     svc = _load_service()
     env: list[str] = svc.get("environment", [])
-    assert any(
-        "MOUSEDROID_TELEMETRY_TOKEN=" in e for e in env
-    ), "compose environment must forward MOUSEDROID_TELEMETRY_TOKEN (see F-014)"
+    inline_token = [e for e in env if "MOUSEDROID_TELEMETRY_TOKEN" in e]
+    assert inline_token == [], (
+        "MOUSEDROID_TELEMETRY_TOKEN must NOT appear in inline environment: "
+        "(env_file is the source of truth — inline empty default would "
+        "silently mask the docker.env value). Got: "
+        f"{inline_token!r}"
+    )
 
 
 def test_env_jetson_example_is_checked_in_and_documents_token() -> None:

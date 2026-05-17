@@ -33,8 +33,8 @@ def test_env_override_n_gpu_layers_takes_precedence_over_yaml(
     config must reflect the env, not the overlay.
     """
     monkeypatch.setenv("MOUSEDROID_LLM__N_GPU_LAYERS", "8")
-    # Repo root is two parents up from this test file
-    # (.../tests/unit/llm_gateway/test_*.py -> .../).
+    # Repo root is THREE parents up from this test file
+    # (llm_gateway -> unit -> tests -> repo root).
     repo_root = Path(__file__).resolve().parents[3]
     overlay = repo_root / "config" / "jetson_production.yaml"
     cfg = load_settings(overlay)

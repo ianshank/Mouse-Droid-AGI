@@ -8,8 +8,10 @@
 #
 # Invoked by scripts/mousedroid-docker.service as a non-fatal ExecStartPre
 # step (the unit uses a leading dash so a failure here never blocks startup).
-# Operators can flip ``Environment=MOUSEDROID_OVERLAY_STRICT=1`` to make
-# the unit fatal on overlay drift.
+# Default mode auto-repairs drift; operators wanting a fail-on-drift gate
+# should add a separate ExecStartPre that runs ``sync_jetson_overlay.sh
+# --verify`` (without the leading dash) — that path is strict and exits
+# non-zero on drift / missing destination.
 #
 # Two modes:
 #   - Default (no args):  copy repo overlay over the deployed copy.
