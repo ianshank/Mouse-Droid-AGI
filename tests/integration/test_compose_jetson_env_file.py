@@ -1,4 +1,4 @@
-"""F-014 regression: docker-compose.jetson.yml env_file + defaults + token forwarding.
+"""F-014 regression: docker-compose.jetson.yml env_file + env-file-sourced settings.
 
 The smoke-stability sprint surfaced two coupled problems on the live Jetson:
 
@@ -14,10 +14,20 @@ The smoke-stability sprint surfaced two coupled problems on the live Jetson:
    ``TelemetryConfigError: telemetry auth_enabled=True but
    $MOUSEDROID_TELEMETRY_TOKEN is unset``.
 
-These tests parse the YAML directly (no Docker daemon required) and pin the
-fix end-to-end: env_file declared, production default is real-hardware,
-telemetry token is forwarded, and the operator-template file documents the
-canonical settings.
+The fix has two parts: add the ``env_file:`` directive AND keep
+``MOUSEDROID_MOCK_HARDWARE`` and ``MOUSEDROID_TELEMETRY_TOKEN`` OUT of the
+inline ``environment:`` block. Per Compose spec, inline ``environment:``
+ALWAYS overrides ``env_file:`` values — so any inline default
+(``${VAR:-...}``) would silently mask the docker.env value when the host
+shell var is unset, reintroducing the same crash-loop. The corrected
+design makes ``/etc/mousedroid/docker.env`` the single source of truth
+for both keys with zero precedence ambiguity.
+
+These tests parse the YAML directly (no Docker daemon required) and pin
+the fix end-to-end: env_file declared with ``required: false``,
+MOCK_HARDWARE absent from inline environment, TELEMETRY_TOKEN absent from
+inline environment, and the operator template at
+``config/.env.jetson.example`` documents the canonical settings.
 """
 
 from __future__ import annotations
