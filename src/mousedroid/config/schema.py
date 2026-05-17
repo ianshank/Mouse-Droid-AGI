@@ -23,7 +23,7 @@ else:
         """Backport of enum.StrEnum for Python 3.10."""
 
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from mousedroid.config.migration import (
@@ -650,6 +650,57 @@ class LLMConfig(BaseModel):
             r"you are now",
         ],
         description="Regex patterns to detect prompt injection attempts",
+    )
+
+    # Tier C2.3 — OpenAI-compatible HTTP backend knobs.
+    backend: Literal["llama_cpp", "openai_compatible"] = Field(
+        "llama_cpp",
+        description=(
+            "LLM backend dispatch. Default ``llama_cpp`` preserves pre-Tier-"
+            "C2.3 behaviour — ``build_llm_gateway`` instantiates the existing "
+            "in-process GGUF loader. ``openai_compatible`` instantiates the "
+            "Tier C2.3 ``OpenAICompatibleLLMGateway`` which talks HTTP to "
+            "``{base_url}/v1/chat/completions`` (Ollama 0.1.18+ exposes this "
+            "endpoint; LM Studio and OpenAI also conform)."
+        ),
+    )
+    base_url: str = Field(
+        "http://127.0.0.1:11434",
+        description=(
+            "Base URL for the ``openai_compatible`` backend. Default targets "
+            "the canonical local Ollama port. Env override: "
+            "``MOUSEDROID_LLM__BASE_URL``. Examples: "
+            "``http://localhost:1234`` (LM Studio), "
+            "``https://api.openai.com`` (OpenAI cloud)."
+        ),
+    )
+    model_name: str = Field(
+        "gemma-4-e4b",
+        description=(
+            "Model identifier passed in the ``model`` field of "
+            "``/v1/chat/completions``. Default matches the operator's local "
+            "Ollama tag. Env override: ``MOUSEDROID_LLM__MODEL_NAME``."
+        ),
+    )
+    api_key: SecretStr | None = Field(
+        None,
+        description=(
+            "Optional bearer token forwarded as ``Authorization: Bearer "
+            "<key>``. ``None`` (default) is correct for anonymous local "
+            "Ollama. Env override: ``MOUSEDROID_LLM__API_KEY``. Stored as "
+            "``SecretStr`` so it never appears in repr / structlog output."
+        ),
+    )
+    request_timeout_s: float = Field(
+        10.0,
+        gt=0.0,
+        description=(
+            "Wall-clock timeout for a single ``/v1/chat/completions`` POST. "
+            "Default 10s covers the ``latency_target_ms`` (500ms) with "
+            "20x headroom for Jetson-on-battery deployments. Smaller than "
+            "the orchestrator's tick budget so a slow LLM never starves the "
+            "control loop."
+        ),
     )
 
 
