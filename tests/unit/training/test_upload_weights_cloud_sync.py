@@ -46,3 +46,32 @@ def test_sync_gcs_to_hf_returns_false_when_bucket_empty(tmp_path: Path) -> None:
         gcs_client=fake_gcs_client,
     )
     assert ok is False
+
+
+def test_sync_gcs_to_hf_skips_prefix_itself_blob(tmp_path: Path) -> None:
+    """list_blobs may surface the prefix itself as a zero-byte blob — skip it."""
+    fake_gcs_client = MagicMock()
+    fake_bucket = MagicMock()
+    prefix_blob = MagicMock()
+    prefix_blob.name = "trained/"  # the prefix directory itself
+    real_blob = MagicMock()
+    real_blob.name = "trained/policy.onnx"
+    real_blob.download_to_filename = MagicMock(
+        side_effect=lambda dest: Path(dest).write_bytes(b"weights")
+    )
+    fake_bucket.list_blobs.return_value = [prefix_blob, real_blob]
+    fake_gcs_client.bucket.return_value = fake_bucket
+
+    with patch("training.upload_weights.upload_weights", return_value=True):
+        ok = sync_gcs_to_hf(
+            gcs_bucket="b",
+            gcs_prefix="trained/",
+            repo_id="ianshank/x",
+            local_dir=tmp_path,
+            gcs_client=fake_gcs_client,
+        )
+
+    assert ok is True
+    prefix_blob.download_to_filename.assert_not_called()
+    real_blob.download_to_filename.assert_called_once()
+    assert (tmp_path / "policy.onnx").read_bytes() == b"weights"

@@ -174,7 +174,7 @@ def sync_gcs_to_hf(
 
     Args:
         gcs_bucket: GCS bucket name (operators typically wire from
-            ``cfg.gcp.gcs.weights_bucket``).
+            ``cfg.gcp.training.training_bucket``).
         gcs_prefix: Object prefix inside the bucket (e.g. ``"trained/"``).
             Trailing slash is preserved verbatim — blobs are listed via
             ``bucket.list_blobs(prefix=gcs_prefix)``.
@@ -205,7 +205,20 @@ def sync_gcs_to_hf(
         return False
     local_dir.mkdir(parents=True, exist_ok=True)
     for blob in blobs:
-        dest = local_dir / Path(blob.name).name
+        # Skip prefix-itself blobs (e.g. a zero-byte object named "trained/")
+        # which list_blobs may surface alongside real files. ``pathlib`` strips
+        # trailing slashes from ``.name`` on every platform, so guard on the
+        # raw blob name's trailing separator before computing the filename —
+        # otherwise the prefix-itself blob would resolve to a sibling file
+        # named ``trained`` inside ``local_dir`` (or, when the prefix had no
+        # leading path components, to ``local_dir`` itself, raising
+        # ``IsADirectoryError`` on Linux).
+        if blob.name.endswith("/"):
+            continue
+        filename = Path(blob.name).name
+        if not filename:
+            continue
+        dest = local_dir / filename
         blob.download_to_filename(str(dest))
         _log.info("gcs_blob_downloaded", blob=blob.name, dest=str(dest))
     return upload_weights(
@@ -310,6 +323,10 @@ def main(argv: list[str] | None = None) -> int:
                     gcs_bucket = settings.gcp.training.training_bucket
             if repo_id is None:
                 repo_id = settings.cloud.weight_update.policy_repo_id
+        # Narrow Optional[str] -> str: gcs_bucket is set via either parser.error
+        # or settings resolution above; repo_id is set via settings resolution.
+        assert gcs_bucket is not None
+        assert repo_id is not None
         success = sync_gcs_to_hf(
             gcs_bucket=gcs_bucket,
             gcs_prefix=args.gcs_prefix,
