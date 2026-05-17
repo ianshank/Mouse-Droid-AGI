@@ -611,22 +611,48 @@ def build_llm_gateway(
     *,
     injection_filter: PromptInjectionFilterProtocol | None = None,
 ) -> LLMGatewayProtocol:
-    """Build LLM gateway for NL command translation.
+    """Build the LLM gateway selected by ``cfg.llm.backend``.
 
-    Constructs a ``GatewayConfig`` from the root settings' ``llm`` section
-    and returns an ``LLMGateway`` conforming to ``LLMGatewayProtocol``.
+    Two backends ship today (both conform to :class:`LLMGatewayProtocol`):
+
+    * ``llama_cpp`` (default, pre-Tier-C2.3): in-process GGUF loader via
+      ``llama-cpp-python``. Loads from ``cfg.llm.model_path``.
+    * ``openai_compatible`` (Tier C2.3): async HTTP client talking to
+      ``{cfg.llm.base_url}/v1/chat/completions``. Default targets the
+      local Ollama daemon at ``http://127.0.0.1:11434``. The same
+      endpoint is served by Ollama, LM Studio, OpenAI, and most
+      OpenAI-compatible local-LLM tooling — operators swap deployments
+      by changing only ``cfg.llm.base_url`` (and ``cfg.llm.model_name``).
+
+    The ``injection_filter`` argument applies only to the ``llama_cpp``
+    backend; the HTTP backend skips local injection filtering because
+    the upstream provider is expected to enforce its own guardrails.
 
     Args:
         cfg: Root settings.
         injection_filter: Optional shared :class:`PromptInjectionFilterProtocol`.
-            When ``None``, the gateway constructs its own filter from
-            ``cfg.llm.injection_patterns`` (legacy behaviour); when supplied
-            (the default in :func:`build_orchestrator`), the same filter is
-            reused by the OpenClaw mission dispatcher.
+            When ``None``, the ``llama_cpp`` gateway constructs its own
+            filter from ``cfg.llm.injection_patterns`` (legacy
+            behaviour); when supplied (the default in
+            :func:`build_orchestrator`), the same filter is reused by
+            the OpenClaw mission dispatcher.
 
     Returns:
-        LLM gateway conforming to ``LLMGatewayProtocol``.
+        LLM gateway conforming to :class:`LLMGatewayProtocol`.
     """
+    if cfg.llm.backend == "openai_compatible":
+        from mousedroid.llm_gateway.openai_compatible import OpenAICompatibleLLMGateway
+
+        _log.info(
+            "llm_gateway_built",
+            backend="openai_compatible",
+            base_url=cfg.llm.base_url,
+            model=cfg.llm.model_name,
+            enabled=cfg.llm.enabled,
+        )
+        return OpenAICompatibleLLMGateway(cfg.llm)
+
+    # Default / legacy ``llama_cpp`` path.
     from mousedroid.llm_gateway.config import GatewayConfig
     from mousedroid.llm_gateway.gateway import LLMGateway
 
@@ -650,7 +676,7 @@ def build_llm_gateway(
         system_prompt=cfg.llm.system_prompt,
         injection_patterns=cfg.llm.injection_patterns,
     )
-    _log.info("llm_gateway_built", enabled=cfg.llm.enabled)
+    _log.info("llm_gateway_built", backend="llama_cpp", enabled=cfg.llm.enabled)
     return LLMGateway(gateway_cfg, injection_filter=injection_filter)
 
 
@@ -1123,6 +1149,102 @@ def build_safety_monitor(cfg: Settings) -> SafetyMonitorProtocol:
     from mousedroid.safety.monitor import MouseDroidSafetyMonitor
 
     return MouseDroidSafetyMonitor(cfg.safety)
+
+
+def build_vlm_progress(cfg: Settings) -> VLMProgressHead | None:
+    """Build the optional Tier C2.3 :class:`VLMProgressHead`.
+
+    Returns ``None`` when ``cfg.mission.vlm_progress_enabled is False``
+    (the default) — :func:`build_mission_lifecycle` then short-circuits
+    and the orchestrator's POST_TICK seam stays a no-op so pre-Tier-C2.3
+    deployments are byte-identical.
+
+    When enabled the head wraps a :class:`MockVLMProgress` backend whose
+    constant value comes from ``cfg.mission.vlm_mock_progress_value``. A
+    real VLM backend (HF-hosted, BLIP-2, …) is a separate sprint — the
+    protocol surface this factory targets is identical for either.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        A :class:`VLMProgressHead` instance or ``None`` when disabled.
+    """
+    if not cfg.mission.vlm_progress_enabled:
+        _log.debug("vlm_progress_disabled")
+        return None
+
+    from mousedroid.reward.vlm_progress import MockVLMProgress, VLMProgressHead
+
+    # Reuse the existing ``cfg.reward.vlm_progress`` block (cache size,
+    # instruction, hash precision) — Tier C2.3 only adds the mock-value
+    # gate inside ``MissionConfig`` so we can choose a value tuned to
+    # the success threshold without disturbing the reward-module config.
+    backend = MockVLMProgress(cfg.mission.vlm_mock_progress_value)
+    head = VLMProgressHead(cfg=cfg.reward.vlm_progress, backend=backend)
+    _log.info(
+        "vlm_progress_built",
+        backend="MockVLMProgress",
+        mock_value=cfg.mission.vlm_mock_progress_value,
+    )
+    return head
+
+
+def build_mission_replanner(
+    cfg: Settings,
+    *,
+    llm_gateway: LLMGatewayProtocol | None,
+    metrics: MetricsRegistry | None = None,
+) -> MissionReplannerProtocol | None:
+    """Build the optional Tier C2.3 LLM-backed mission replanner.
+
+    Returns ``None`` in two cases (both preserve the defensive null path
+    that :func:`build_mission_lifecycle` already handles):
+
+    * ``cfg.mission.llm_replanner_enabled`` is ``False`` (the default).
+    * ``llm_gateway`` is ``None`` — typically because
+      ``cfg.llm.enabled`` is False. A warning is logged so an operator
+      who enabled the replanner without enabling the gateway sees the
+      misconfiguration at boot.
+
+    The adapter is backend-agnostic: it wraps any
+    :class:`LLMGatewayProtocol`-conforming instance (in-process
+    llama-cpp OR the new HTTP ``OpenAICompatibleLLMGateway``), so the
+    same wiring covers both deployment topologies — local Ollama, host-
+    PC Ollama via 192.168.55.1, or OpenAI cloud.
+
+    Args:
+        cfg: Root settings.
+        llm_gateway: Wired :class:`LLMGatewayProtocol`-conformant
+            instance, or ``None`` when the gateway is disabled.
+        metrics: Optional :class:`MetricsRegistry` for the
+            ``mission_replan_llm_calls_total`` counter.
+
+    Returns:
+        An :class:`LLMGatewayMissionReplanner` or ``None``.
+    """
+    if not cfg.mission.llm_replanner_enabled:
+        _log.debug("mission_replanner_disabled")
+        return None
+    if llm_gateway is None:
+        _log.warning(
+            "mission_replanner_no_gateway",
+            hint=(
+                "cfg.mission.llm_replanner_enabled=True but no LLM gateway "
+                "is wired (cfg.llm.enabled likely False). Enable the "
+                "gateway or leave the replanner disabled."
+            ),
+        )
+        return None
+
+    from mousedroid.orchestrator.llm_replanner import LLMGatewayMissionReplanner
+
+    _log.info("mission_replanner_built", gateway_type=type(llm_gateway).__name__)
+    return LLMGatewayMissionReplanner(
+        gateway=llm_gateway,
+        cfg=cfg.mission.replanner,
+        metrics=metrics,
+    )
 
 
 def build_mission_lifecycle(
@@ -2599,22 +2721,31 @@ def build_orchestrator(cfg: Settings) -> object:
     # which makes the orchestrator's projection seam a no-op so pre-C2
     # deployments produce byte-identical actions.
     safety_projector = build_safety_projector(cfg, metrics=metrics_registry)
+    # Tier C2.3 — build VLM head + LLM replanner so the lifecycle is no
+    # longer the defensive None from PR #98. Both build_* helpers short-
+    # circuit on their own flags so this remains byte-identical to
+    # pre-Tier-C2.3 behaviour when the new ``cfg.mission.vlm_progress_enabled``
+    # and ``cfg.mission.llm_replanner_enabled`` flags stay at False.
+    vlm_progress = build_vlm_progress(cfg)
+    mission_replanner = build_mission_replanner(
+        cfg,
+        llm_gateway=llm_gateway,
+        metrics=metrics_registry,
+    )
     # Tier C2 / C2.2 — mission lifecycle state machine. Returns ``None``
-    # in three scenarios so the orchestrator's POST_TICK seam stays a
-    # no-op and pre-C2.2 deployments are byte-identical:
+    # in four scenarios so the orchestrator's POST_TICK seam stays a no-op
+    # and pre-Tier-C2.3 deployments are byte-identical:
     #   1. ``cfg.mission.replan_enabled`` is ``False`` (the default).
-    #   2. No :class:`VLMProgressHead` is wired (lifecycle would stall).
-    #   3. No :class:`MissionReplannerProtocol` is wired (lifecycle would
-    #      fail at the first stall with ``llm_replan_unavailable``).
-    # ``build_orchestrator`` does NOT yet wire a VLM head or replanner —
-    # both are operator-supplied dependencies tracked under Tier C2.3 —
-    # so this call deliberately resolves to ``None`` until those are
-    # wired. The shared task tracker is still threaded through so the
-    # lifecycle's submit/update calls land in the unified active-task
-    # list once the missing dependencies are supplied.
+    #   2. ``cfg.mission.vlm_progress_enabled`` is ``False`` (vlm_progress=None).
+    #   3. ``cfg.mission.llm_replanner_enabled`` is ``False`` OR
+    #      ``cfg.llm.enabled`` is ``False`` (mission_replanner=None).
+    #   4. Either of the above missing — defensive guard inside
+    #      :func:`build_mission_lifecycle` (PR #98 Copilot HIGH fix).
     mission_lifecycle = build_mission_lifecycle(
         cfg,
         task_tracker=task_tracker,
+        vlm_progress=vlm_progress,
+        replanner=mission_replanner,
         metrics=metrics_registry,
     )
 

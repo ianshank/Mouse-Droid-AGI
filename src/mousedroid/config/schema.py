@@ -23,7 +23,7 @@ else:
         """Backport of enum.StrEnum for Python 3.10."""
 
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from mousedroid.config.migration import (
@@ -652,6 +652,57 @@ class LLMConfig(BaseModel):
         description="Regex patterns to detect prompt injection attempts",
     )
 
+    # Tier C2.3 — OpenAI-compatible HTTP backend knobs.
+    backend: Literal["llama_cpp", "openai_compatible"] = Field(
+        "llama_cpp",
+        description=(
+            "LLM backend dispatch. Default ``llama_cpp`` preserves pre-Tier-"
+            "C2.3 behaviour — ``build_llm_gateway`` instantiates the existing "
+            "in-process GGUF loader. ``openai_compatible`` instantiates the "
+            "Tier C2.3 ``OpenAICompatibleLLMGateway`` which talks HTTP to "
+            "``{base_url}/v1/chat/completions`` (Ollama 0.1.18+ exposes this "
+            "endpoint; LM Studio and OpenAI also conform)."
+        ),
+    )
+    base_url: str = Field(
+        "http://127.0.0.1:11434",
+        description=(
+            "Base URL for the ``openai_compatible`` backend. Default targets "
+            "the canonical local Ollama port. Env override: "
+            "``MOUSEDROID_LLM__BASE_URL``. Examples: "
+            "``http://localhost:1234`` (LM Studio), "
+            "``https://api.openai.com`` (OpenAI cloud)."
+        ),
+    )
+    model_name: str = Field(
+        "gemma-4-e4b",
+        description=(
+            "Model identifier passed in the ``model`` field of "
+            "``/v1/chat/completions``. Default matches the operator's local "
+            "Ollama tag. Env override: ``MOUSEDROID_LLM__MODEL_NAME``."
+        ),
+    )
+    api_key: SecretStr | None = Field(
+        None,
+        description=(
+            "Optional bearer token forwarded as ``Authorization: Bearer "
+            "<key>``. ``None`` (default) is correct for anonymous local "
+            "Ollama. Env override: ``MOUSEDROID_LLM__API_KEY``. Stored as "
+            "``SecretStr`` so it never appears in repr / structlog output."
+        ),
+    )
+    request_timeout_s: float = Field(
+        10.0,
+        gt=0.0,
+        description=(
+            "Wall-clock timeout for a single ``/v1/chat/completions`` POST. "
+            "Default 10s covers the ``latency_target_ms`` (500ms) with "
+            "20x headroom for Jetson-on-battery deployments. Smaller than "
+            "the orchestrator's tick budget so a slow LLM never starves the "
+            "control loop."
+        ),
+    )
+
 
 class VLAConfig(BaseModel):
     """Vision-Language-Action policy configuration (Phase 3a).
@@ -916,8 +967,41 @@ class MissionParserConfig(BaseModel):
     )
 
 
+class MissionReplannerConfig(BaseModel):
+    """Tier C2.3 — LLM-backed mission replanner adapter configuration.
+
+    Tunables for ``LLMGatewayMissionReplanner`` (built by
+    :func:`mousedroid.factory.build_mission_replanner` when
+    ``mission.llm_replanner_enabled`` is ``True``). Distinct from
+    :class:`LLMReplannerConfig` defined later in this module — that one
+    configures the robot-arm symbolic planner. The two share a naming
+    prefix but are unrelated subsystems.
+    """
+
+    max_prompt_chars: int = Field(
+        512,
+        gt=0,
+        description=(
+            "Maximum characters in the augmented goal_text prompt forwarded "
+            "to the LLM gateway. The adapter clips longer prompts at this "
+            "boundary so a runaway goal_text cannot exceed the gateway's "
+            "context window. Default 512 mirrors the rule-based parser's "
+            "command-length policy."
+        ),
+    )
+    include_progress_in_prompt: bool = Field(
+        True,
+        description=(
+            "When True (default), the adapter appends "
+            "``(last_progress=<float>)`` to the prompt so the LLM sees the "
+            "stall context. Operators can disable when their LLM is tuned "
+            "for raw goals only."
+        ),
+    )
+
+
 class MissionConfig(BaseModel):
-    """Mission lifecycle state-machine configuration (Tier C2 / C2.2).
+    """Mission lifecycle state-machine configuration (Tier C2 / C2.2 / C2.3).
 
     Drives the ``MissionLifecycle`` state machine that wraps
     :class:`InMemoryTaskTracker` and adds VLM-driven goal-progress feedback
@@ -926,6 +1010,12 @@ class MissionConfig(BaseModel):
     the LLM gateway — existing deployments produce byte-identical pre-PR
     behaviour because the orchestrator does not build a lifecycle at all
     when this block is at defaults.
+
+    Tier C2.3 adds four fields (``vlm_progress_enabled``,
+    ``vlm_mock_progress_value``, ``llm_replanner_enabled``, ``replanner``)
+    that gate the VLM progress head + LLM replanner wiring inside
+    :func:`build_orchestrator`. All four default to safe values so
+    existing YAML loads unchanged.
     """
 
     replan_enabled: bool = Field(
@@ -968,6 +1058,41 @@ class MissionConfig(BaseModel):
             "Hard cap on replans per mission. Once exceeded the lifecycle "
             "transitions to ``FAILED`` with reason='replan_limit_exceeded'."
         ),
+    )
+    vlm_progress_enabled: bool = Field(
+        False,
+        description=(
+            "Tier C2.3: build a ``VLMProgressHead`` for the mission "
+            "lifecycle. Default False preserves pre-Tier-C2.3 byte-identical "
+            "behaviour (factory short-circuits to None). When True the head "
+            "uses ``MockVLMProgress(mock_progress_value)`` by default; a "
+            "real VLM backend is a separate sprint."
+        ),
+    )
+    vlm_mock_progress_value: float = Field(
+        0.95,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Constant value the default ``MockVLMProgress`` backend returns. "
+            "Default 0.95 sits above the default ``success_threshold=0.90`` "
+            "so a smoke-mode mission transitions to SUCCEEDED on the first "
+            "scored tick — useful for the boot-time smoke test."
+        ),
+    )
+    llm_replanner_enabled: bool = Field(
+        False,
+        description=(
+            "Tier C2.3: build an ``LLMGatewayMissionReplanner`` for the "
+            "mission lifecycle. Default False preserves pre-Tier-C2.3 "
+            "behaviour. Requires the LLM gateway to be enabled — when "
+            "``cfg.llm.enabled is False`` the factory still short-circuits "
+            "to None even with this flag True (with a structured warning)."
+        ),
+    )
+    replanner: MissionReplannerConfig = Field(
+        default_factory=MissionReplannerConfig,
+        description="Sub-block tuning the LLM replanner adapter.",
     )
 
 

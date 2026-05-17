@@ -41,6 +41,15 @@ Phase status post-Tier-C:
 2. ✅ **`training/upload_weights.py`** — COMPLETED in
    `claude/tier-c-closeout-harden`. `sync_gcs_to_hf()` + CLI `--from-gcs` close
    the cloud -> HF Hub leg of the OTA loop.
+3. ✅ **Tier C2.3 — Mission Lifecycle Activation** — COMPLETED on
+   `claude/tier-c2-3-mission-lifecycle-activation`. Adds the new
+   `OpenAICompatibleLLMGateway` (HTTP, Ollama-default), `LLMGatewayMissionReplanner`
+   adapter, `build_vlm_progress` + `build_mission_replanner` factories, and threads
+   both new dependencies through `build_orchestrator → build_mission_lifecycle`.
+   The lifecycle is no longer a permanent `None` in production once the three
+   new flags (`mission.vlm_progress_enabled`, `mission.llm_replanner_enabled`,
+   `llm.enabled`) are turned on. All defaults preserve byte-identical
+   pre-Tier-C2.3 behaviour. Env-driven via `MOUSEDROID_LLM__*`.
 
 **Operator follow-ups** (post-merge, hardware/Linux access required):
 
