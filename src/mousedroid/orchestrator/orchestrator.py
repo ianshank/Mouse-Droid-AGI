@@ -551,6 +551,16 @@ class MouseDroidOrchestrator:
                     _log.warning("emergency_stop_triggered")
                     self._tick_count += 1
                     await self._publish_telemetry(observation, safety_ctx, loop_time_ms)
+                    # Tier C2 / C2.2 (Copilot MED follow-up): drive the
+                    # mission lifecycle on the emergency-stop branch too
+                    # so active missions keep accumulating progress/stall
+                    # state during emergency ticks. Without this, a
+                    # stuck-emergency condition would freeze the
+                    # lifecycle's stall counter and silently extend any
+                    # in-flight mission past its stall window. The helper
+                    # is a no-op when no lifecycle is wired, so pre-C2.2
+                    # deployments are byte-identical.
+                    await self._maybe_tick_mission_lifecycle(observation)
                     await self._hook_registry.run_phase(HookPhase.POST_TICK, ctx)
                     return
 
@@ -721,24 +731,6 @@ class MouseDroidOrchestrator:
             _log.debug("process_mission_empty_command")
             return GoalVector()
 
-        # Tier C2.1 completion: transition the optional MissionLifecycle from
-        # PENDING -> RUNNING so its per-tick scoring becomes active. Without
-        # this call, lifecycle.tick() short-circuits forever on self._mission
-        # is None. Done before parsing because a valid NL command is itself
-        # the trigger for "a mission was requested"; parser/LLM may still
-        # decline, but the lifecycle owns its own SUCCEEDED/FAILED/REPLANNING
-        # transitions from the tick stream.
-        if self._mission_lifecycle is not None:
-            self._mission_seq += 1
-            mission_id = f"mission-{self._mission_seq:06d}"
-            try:
-                self._mission_lifecycle.start_mission(
-                    mission_id=mission_id,
-                    goal_text=nl_command,
-                )
-            except Exception:  # pragma: no cover - defensive
-                _log.warning("mission_lifecycle_start_failed", exc_info=True)
-
         # Stage 1: Rule-based parser (fast path, < 1ms)
         if self._mission_parser is not None:
             intent = self._mission_parser.parse(nl_command)
@@ -750,6 +742,13 @@ class MouseDroidOrchestrator:
                     intent=intent.intent_type.value,
                     confidence=intent.confidence,
                 )
+                # Defer lifecycle ``start_mission`` until AFTER a parser
+                # accepts (Copilot MED). Starting the lifecycle on every
+                # NL command — even unrecognized ones — leaves the
+                # state machine RUNNING on the neutral fallback
+                # ``GoalVector()`` path below and lets it stall/fail
+                # missions that were never actually accepted.
+                self._start_mission_lifecycle_if_wired(nl_command)
                 return intent.goal_vector
 
         # Stage 2: LLM fallback (slow path, ~100-500ms)
@@ -763,13 +762,38 @@ class MouseDroidOrchestrator:
                     vy=goal.vy_target,
                     omega=goal.omega_target,
                 )
+                # See Stage-1 note above: start the lifecycle only once
+                # the LLM has produced an accepted goal.
+                self._start_mission_lifecycle_if_wired(nl_command)
                 return goal
             except Exception:
                 _log.warning("mission_llm_fallback_failed", exc_info=True)
 
-        # Stage 3: Fallback to zero (safe default)
+        # Stage 3: Fallback to zero (safe default). The lifecycle is
+        # NOT started here — an unrecognized command must not leave the
+        # state machine RUNNING on the neutral fallback goal.
         _log.warning("mission_unresolved", command=nl_command)
         return GoalVector()
+
+    def _start_mission_lifecycle_if_wired(self, nl_command: str) -> None:
+        """Begin a MissionLifecycle mission iff one is wired.
+
+        Centralises the bump-counter + build-id + ``start_mission``
+        sequence used from both accepted Stage-1 (parser) and Stage-2
+        (LLM) paths. Failures are logged and swallowed so a misbehaving
+        lifecycle never crashes the mission-acceptance hot path.
+        """
+        if self._mission_lifecycle is None:
+            return
+        self._mission_seq += 1
+        mission_id = f"mission-{self._mission_seq:06d}"
+        try:
+            self._mission_lifecycle.start_mission(
+                mission_id=mission_id,
+                goal_text=nl_command,
+            )
+        except Exception:  # pragma: no cover - defensive
+            _log.warning("mission_lifecycle_start_failed", exc_info=True)
 
     def _apply_pending_weight_update(self) -> bool:
         """Atomically swap policy / world-model if any poller has a verified update.
@@ -1107,14 +1131,25 @@ class MouseDroidOrchestrator:
         # ObservationProtocol.vision_features is typed NDArray[np.float32]
         # (never None per src/mousedroid/sensing/protocol.py). The only
         # degenerate case is the zero-length / zero-d fallback array that
-        # mock_hardware emits before the camera warms up.
+        # mock_hardware emits before the camera warms up. Invalidate the
+        # cached previous frame so the next non-empty observation does
+        # NOT get paired with a stale pre-dropout frame — that would
+        # silently violate the lifecycle's ``(obs_t, obs_tminus1)``
+        # adjacency contract and corrupt VLM progress scoring.
         if vf.size == 0:
+            self._prev_obs_for_vlm = None
             return
-        # Clone so the cached _prev_obs_for_vlm owns its data — the
-        # camera/sensor manager may recycle the underlying numpy buffer
-        # between ticks (Jetson ring-buffer pattern, see CLAUDE.md
-        # deque(maxlen=N) convention).
-        obs_t = torch.from_numpy(vf).unsqueeze(0).float().clone()
+        # ``torch.tensor`` performs a single copy and tolerates a non-
+        # contiguous ``vf`` (camera/sensor manager may recycle the
+        # underlying numpy buffer between ticks — Jetson ring-buffer
+        # pattern, see CLAUDE.md deque(maxlen=N) convention). The owned
+        # copy means a subsequent ``shared_buffer[:] = ...`` mutation
+        # never aliases the cached prev-frame. Explicit ``dtype`` is
+        # required even though ``vf`` is already ``np.float32`` because
+        # the sensor protocol pins the numpy dtype, not the torch dtype,
+        # so a future widening of the protocol shouldn't silently change
+        # the VLM input dtype.
+        obs_t = torch.tensor(vf, dtype=torch.float32).unsqueeze(0)
         prev = self._prev_obs_for_vlm
         self._prev_obs_for_vlm = obs_t
         if prev is None:

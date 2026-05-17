@@ -58,6 +58,7 @@ class HuggingFaceWeightUpdatePoller:
         metrics: MetricsRegistry | None = None,
         hf_api_factory: Any | None = None,
         hf_download: Any | None = None,
+        cache_dir_override: str | Path | None = None,
     ) -> None:
         """Construct the poller.
 
@@ -80,6 +81,15 @@ class HuggingFaceWeightUpdatePoller:
                 a stub HfApi-like object.
             hf_download: Override for ``huggingface_hub.hf_hub_download``.
                 Same lazy-import contract as ``hf_api_factory``.
+            cache_dir_override: When supplied, takes precedence over
+                ``cfg.cache_dir`` for this poller instance. Used by the
+                multi-engine factory (Tier C1.2) to give the policy and
+                world-model pollers per-engine subdirectories so their
+                concurrent ``sha256.txt`` downloads do not overwrite each
+                other in a shared parent directory. ``None`` (default)
+                preserves the legacy single-engine cache-dir behaviour
+                for back-compat with the deprecated singular factory and
+                with external callers constructing the poller directly.
         """
         self._cfg = cfg
         self._repo_id = repo_id
@@ -93,7 +103,10 @@ class HuggingFaceWeightUpdatePoller:
         self._last_known_sha: str | None = None
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
-        self._cache_dir = Path(cfg.cache_dir).resolve()
+        if cache_dir_override is not None:
+            self._cache_dir = Path(cache_dir_override).resolve()
+        else:
+            self._cache_dir = Path(cfg.cache_dir).resolve()
         # Reuse the same protected-path policy weights_manager applies to
         # ``download_weights_from_huggingface`` — a misconfigured or
         # compromised ``cfg.cloud.weight_update.cache_dir`` MUST NOT be able

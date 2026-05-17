@@ -121,7 +121,14 @@ def test_sync_gcs_to_hf_constructs_default_client_when_none(tmp_path: Path) -> N
 
 
 def test_sync_gcs_to_hf_skips_blob_with_empty_filename(tmp_path: Path) -> None:
-    """Defends against pathological blob names like ``trained//`` that survive ``/`` filter."""
+    """Pathological blob name ``trained//`` is skipped, sync returns False.
+
+    The trailing-slash guard catches the bogus blob, and the post-iteration
+    ``downloaded_count == 0`` check short-circuits before ``upload_weights``
+    is called — there's nothing to upload, so calling ``upload_weights``
+    on an empty staging dir would be pointless cost + a misleading
+    ``no_weight_files_found`` warning.
+    """
     fake_gcs_client = MagicMock()
     fake_bucket = MagicMock()
     bogus_blob = MagicMock()
@@ -138,14 +145,117 @@ def test_sync_gcs_to_hf_skips_blob_with_empty_filename(tmp_path: Path) -> None:
             gcs_client=fake_gcs_client,
         )
 
-    # Only blob was skipped — upload_weights still fires on the empty
-    # local_dir; the existence + filter path is what we're pinning.
     bogus_blob.download_to_filename.assert_not_called()
-    # upload was called (with empty dir) — sync_gcs_to_hf does not gate on
-    # "at least one download succeeded", so the return value mirrors the
-    # mocked upload_weights result.
+    # No downloads → sync returns False AND ``upload_weights`` is NOT
+    # called (nothing to upload).
+    assert ok is False
+    upload.assert_not_called()
+
+
+def test_sync_gcs_to_hf_preserves_nested_directory_structure(tmp_path: Path) -> None:
+    """Nested blobs land in matching local subdirs (regression for dir flattening).
+
+    ``trained/policy/model.pt`` and ``trained/world_model/model.pt`` previously
+    both resolved to ``local_dir/model.pt`` via ``Path(blob.name).name``,
+    silently overwriting each other before ``upload_weights`` ran. The fix
+    computes a prefix-relative path and mkdirs parents so both files
+    survive the round-trip.
+    """
+    fake_gcs_client = MagicMock()
+    fake_bucket = MagicMock()
+    policy_blob = MagicMock()
+    policy_blob.name = "trained/policy/model.pt"
+    policy_blob.download_to_filename = MagicMock(
+        side_effect=lambda d: Path(d).write_bytes(b"policy-bytes")
+    )
+    world_blob = MagicMock()
+    world_blob.name = "trained/world_model/model.pt"
+    world_blob.download_to_filename = MagicMock(
+        side_effect=lambda d: Path(d).write_bytes(b"world-bytes")
+    )
+    fake_bucket.list_blobs.return_value = [policy_blob, world_blob]
+    fake_gcs_client.bucket.return_value = fake_bucket
+
+    with patch("training.upload_weights.upload_weights", return_value=True):
+        ok = sync_gcs_to_hf(
+            gcs_bucket="b",
+            gcs_prefix="trained/",
+            repo_id="ianshank/x",
+            local_dir=tmp_path,
+            gcs_client=fake_gcs_client,
+        )
+
     assert ok is True
-    upload.assert_called_once()
+    # Both files exist under their original subpath — no overwrite.
+    assert (tmp_path / "policy" / "model.pt").read_bytes() == b"policy-bytes"
+    assert (tmp_path / "world_model" / "model.pt").read_bytes() == b"world-bytes"
+
+
+def test_sync_gcs_to_hf_tolerates_prefix_without_trailing_slash(tmp_path: Path) -> None:
+    """``gcs_prefix='trained'`` (no slash) still strips the prefix from blob names.
+
+    Operators may wire ``cfg.cloud.weight_update.gcs_artifact_prefix`` with or
+    without a trailing slash; the prefix-relative path computation must be
+    tolerant of both forms.
+    """
+    fake_gcs_client = MagicMock()
+    fake_bucket = MagicMock()
+    blob = MagicMock()
+    blob.name = "trained/policy/model.pt"
+    blob.download_to_filename = MagicMock(side_effect=lambda d: Path(d).write_bytes(b"x"))
+    fake_bucket.list_blobs.return_value = [blob]
+    fake_gcs_client.bucket.return_value = fake_bucket
+
+    with patch("training.upload_weights.upload_weights", return_value=True):
+        ok = sync_gcs_to_hf(
+            gcs_bucket="b",
+            gcs_prefix="trained",  # no trailing slash
+            repo_id="ianshank/x",
+            local_dir=tmp_path,
+            gcs_client=fake_gcs_client,
+        )
+
+    assert ok is True
+    assert (tmp_path / "policy" / "model.pt").read_bytes() == b"x"
+
+
+def test_sync_gcs_to_hf_streams_listing_lazily(tmp_path: Path) -> None:
+    """``bucket.list_blobs`` result is iterated, never wrapped in ``list()``.
+
+    Regression net for the previous eager ``list(...)`` call that
+    materialised the entire blob listing before downloading anything.
+    Pins streaming behaviour by using a generator that raises if exhausted
+    more than once (which would indicate an eager materialisation).
+    """
+    blob = MagicMock()
+    blob.name = "trained/policy.onnx"
+    blob.download_to_filename = MagicMock(side_effect=lambda d: Path(d).write_bytes(b"w"))
+
+    iteration_count = 0
+
+    def _one_shot_iter() -> object:
+        nonlocal iteration_count
+        iteration_count += 1
+        if iteration_count > 1:
+            raise AssertionError("list_blobs iterated more than once — caller wrapped in list()")
+        yield blob
+
+    fake_gcs_client = MagicMock()
+    fake_bucket = MagicMock()
+    fake_bucket.list_blobs.return_value = _one_shot_iter()
+    fake_gcs_client.bucket.return_value = fake_bucket
+
+    with patch("training.upload_weights.upload_weights", return_value=True):
+        ok = sync_gcs_to_hf(
+            gcs_bucket="b",
+            gcs_prefix="trained/",
+            repo_id="ianshank/x",
+            local_dir=tmp_path,
+            gcs_client=fake_gcs_client,
+        )
+
+    assert ok is True
+    assert iteration_count == 1
 
 
 def test_sync_gcs_to_hf_forwards_custom_upload_extensions(tmp_path: Path) -> None:

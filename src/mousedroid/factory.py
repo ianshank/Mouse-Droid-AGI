@@ -938,30 +938,22 @@ def build_weight_update_poller(
     *,
     metrics: MetricsRegistry | None = None,
 ) -> WeightUpdatePollerProtocol | None:
-    """Build the optional Tier C1 OTA weight-update poller.
+    """Build the optional Tier C1 OTA weight-update poller (legacy single-engine shim).
 
-    Deprecated: prefer :func:`build_weight_update_pollers` (Tier C1.2) which
-    returns a ``Mapping[str, WeightUpdatePollerProtocol]`` keyed by
-    ``engine_type``. Retained for backwards compatibility with external
-    callers; one minor-version window.
+    Deprecated: prefer :func:`build_weight_update_pollers` (Tier C1.2)
+    which returns a ``Mapping[str, WeightUpdatePollerProtocol]`` keyed by
+    ``engine_type`` and supports a second world-model poller alongside
+    the policy poller. Retained for backwards compatibility with external
+    callers for one minor-version window.
 
     Returns ``None`` (poller disabled) when
     ``cfg.cloud.weight_update.poll_interval_s <= 0.0`` — the default — so
     deployments without OTA configured produce byte-identical pre-Tier-C1
-    behavior.
-
-    For Tier C1 the factory wires a SINGLE poller — the policy poller —
-    and ``MouseDroidOrchestrator`` accepts exactly one poller slot. The
-    schema already exposes ``cfg.cloud.weight_update.world_model_repo_id``
-    + ``world_model_filename`` for a future world-model poller, and the
-    orchestrator's swap helper already routes by ``engine_type``, but the
-    aggregator that fans both pollers' pending updates into one orchestrator
-    slot is a documented C1.x follow-up (it'd require either a multiplexer
-    poller wrapping both children or extending the orchestrator constructor
-    to accept ``list[WeightUpdatePollerProtocol]``). Operators who need
-    world-model OTA today can leave ``policy_repo_id`` pointing at the
-    world-model repo and set ``engine_type="world_model"`` on a custom
-    poller construction. (Copilot 3253293662 / 3253293698.)
+    behavior. Always builds a single ``policy`` poller when polling is
+    enabled; world-model OTA is now reachable via the plural
+    :func:`build_weight_update_pollers` factory + the
+    ``cfg.cloud.weight_update.world_model_enabled`` schema flag (Tier
+    C1.2). New callers should migrate.
 
     Args:
         cfg: Root settings.
@@ -1021,8 +1013,21 @@ def build_weight_update_pollers(
     if cfg.cloud.weight_update.poll_interval_s <= 0.0:
         return {}
 
+    from pathlib import Path as _Path
+
     from mousedroid.cloud.weight_update_poller import HuggingFaceWeightUpdatePoller
 
+    # Per-engine cache subdirectory layout (Copilot MED): both pollers
+    # download a ``sha256.txt`` manifest into their cache dir each cycle.
+    # When both share the same root, the world-model poller's manifest
+    # writer races the policy poller's writer and produces spurious
+    # mismatches. Giving each poller a per-engine subdir under the
+    # configured root preserves the operator-facing
+    # ``cfg.cloud.weight_update.cache_dir`` knob (root unchanged) while
+    # eliminating the collision. The subdir name reuses the typed
+    # ``EngineType`` literal so a future engine addition only needs to
+    # extend the enum.
+    cache_root = _Path(cfg.cloud.weight_update.cache_dir)
     pollers: dict[str, WeightUpdatePollerProtocol] = {
         ENGINE_TYPE_POLICY: HuggingFaceWeightUpdatePoller(
             cfg.cloud.weight_update,
@@ -1030,6 +1035,7 @@ def build_weight_update_pollers(
             filename=cfg.cloud.weight_update.policy_filename,
             engine_type=ENGINE_TYPE_POLICY,
             metrics=metrics,
+            cache_dir_override=cache_root / ENGINE_TYPE_POLICY,
         ),
     }
     if cfg.cloud.weight_update.world_model_enabled:
@@ -1039,11 +1045,13 @@ def build_weight_update_pollers(
             filename=cfg.cloud.weight_update.world_model_filename,
             engine_type=ENGINE_TYPE_WORLD_MODEL,
             metrics=metrics,
+            cache_dir_override=cache_root / ENGINE_TYPE_WORLD_MODEL,
         )
     _log.info(
         "weight_update_pollers_built",
         engines=list(pollers.keys()),
         poll_interval_s=cfg.cloud.weight_update.poll_interval_s,
+        cache_root=str(cache_root),
     )
     return pollers
 
@@ -1131,25 +1139,65 @@ def build_mission_lifecycle(
     pre-C2 deployments produce byte-identical behaviour (no lifecycle,
     no replans, no new structured events).
 
+    Also returns ``None`` (defensively) when ``replan_enabled=True`` but
+    either ``vlm_progress`` or ``replanner`` is missing — in that
+    configuration the lifecycle would stall on every tick (no VLM head
+    means ``_score_progress`` is constant ``0.0``, which trips
+    ``stall_window_ticks`` and then fails with
+    ``reason='llm_replan_unavailable'`` because no replanner is wired).
+    Returning ``None`` is strictly safer than instantiating a
+    self-failing state machine; the orchestrator's tick seam becomes a
+    no-op exactly as in the disabled case. The decision is logged at
+    warning level so operators can spot the missing dependency at boot
+    rather than after the first stall window elapses.
+
     Args:
         cfg: Root settings.
-        task_tracker: Optional :class:`TaskTrackerProtocol` for the
-            lifecycle to forward terminal states to.
-        vlm_progress: Optional :class:`VLMProgressHead` providing
-            goal-progress feedback per tick.
-        replanner: Optional :class:`MissionReplannerProtocol`-compliant
-            object. When ``None`` and a stall fires, the mission
-            transitions to FAILED with ``reason='llm_replan_unavailable'``.
+        task_tracker: Optional :class:`TaskTrackerProtocol`. When wired,
+            :class:`MissionLifecycle` submits a synthetic task on
+            ``start_mission`` and forwards terminal lifecycle states
+            (SUCCEEDED → COMPLETED, FAILED → FAILED) via
+            ``tracker.update`` so the unified active-task list reflects
+            mission outcomes alongside skill / OpenClaw tasks.
+        vlm_progress: :class:`VLMProgressHead` providing goal-progress
+            feedback per tick. Required for the lifecycle to make
+            forward progress; ``None`` triggers the defensive ``None``
+            return described above.
+        replanner: :class:`MissionReplannerProtocol`-compliant object.
+            Required so the lifecycle has a recovery path when stalls
+            fire; ``None`` triggers the defensive ``None`` return.
         metrics: Optional shared metrics registry. When supplied, every
             transition + replan + terminal duration increments the
             corresponding Tier C2 metric family.
 
     Returns:
         :class:`MissionLifecycle` when ``cfg.mission.replan_enabled`` is
-        True, otherwise ``None``.
+        True AND both ``vlm_progress`` and ``replanner`` are wired,
+        otherwise ``None``.
     """
     if not cfg.mission.replan_enabled:
         _log.debug("mission_lifecycle_disabled")
+        return None
+
+    # Defensive dependency check (Copilot HIGH): wiring the lifecycle
+    # without a VLM progress head and an LLM-backed replanner produces a
+    # state machine that can only ever fail with ``llm_replan_unavailable``.
+    # Skip construction and surface the missing-dependency warning instead.
+    missing_deps: list[str] = []
+    if vlm_progress is None:
+        missing_deps.append("vlm_progress")
+    if replanner is None:
+        missing_deps.append("replanner")
+    if missing_deps:
+        _log.warning(
+            "mission_lifecycle_dependencies_missing",
+            missing=missing_deps,
+            hint=(
+                "Wire VLMProgressHead + MissionReplannerProtocol before "
+                "setting cfg.mission.replan_enabled=True, or leave the "
+                "lifecycle disabled to keep the pre-C2.2 byte-identical path."
+            ),
+        )
         return None
 
     from mousedroid.orchestrator.mission_lifecycle import MissionLifecycle
@@ -2552,11 +2600,18 @@ def build_orchestrator(cfg: Settings) -> object:
     # deployments produce byte-identical actions.
     safety_projector = build_safety_projector(cfg, metrics=metrics_registry)
     # Tier C2 / C2.2 — mission lifecycle state machine. Returns ``None``
-    # when ``cfg.mission.replan_enabled`` is ``False`` (the default), so
-    # the orchestrator's POST_TICK seam stays a no-op and pre-C2.2
-    # deployments are byte-identical. The lifecycle is wired with the
-    # shared task tracker so terminal state forwards land in the unified
-    # active-task list.
+    # in three scenarios so the orchestrator's POST_TICK seam stays a
+    # no-op and pre-C2.2 deployments are byte-identical:
+    #   1. ``cfg.mission.replan_enabled`` is ``False`` (the default).
+    #   2. No :class:`VLMProgressHead` is wired (lifecycle would stall).
+    #   3. No :class:`MissionReplannerProtocol` is wired (lifecycle would
+    #      fail at the first stall with ``llm_replan_unavailable``).
+    # ``build_orchestrator`` does NOT yet wire a VLM head or replanner —
+    # both are operator-supplied dependencies tracked under Tier C2.3 —
+    # so this call deliberately resolves to ``None`` until those are
+    # wired. The shared task tracker is still threaded through so the
+    # lifecycle's submit/update calls land in the unified active-task
+    # list once the missing dependencies are supplied.
     mission_lifecycle = build_mission_lifecycle(
         cfg,
         task_tracker=task_tracker,

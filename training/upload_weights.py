@@ -232,32 +232,60 @@ def sync_gcs_to_hf(
 
         gcs_client = storage.Client()
     bucket = gcs_client.bucket(gcs_bucket)
-    blobs = list(bucket.list_blobs(prefix=gcs_prefix))
-    if not blobs:
+    # Stream the listing (Copilot LOW): a large trained-artifacts prefix
+    # can hold thousands of objects, and ``list(...)`` materialises every
+    # blob's metadata before the first download starts. Iterate lazily
+    # and rely on a separate counter to detect the empty-prefix case
+    # AFTER iteration so the warning fires without paying the eager
+    # ``list()`` cost.
+    local_dir.mkdir(parents=True, exist_ok=True)
+    # ``rstrip("/")`` once so the per-blob suffix logic below tolerates
+    # both ``"trained"`` and ``"trained/"`` prefixes — operators wire
+    # either form via ``cfg.cloud.weight_update.gcs_artifact_prefix`` and
+    # blob names always include the prefix verbatim plus the relative
+    # subpath.
+    normalised_prefix = gcs_prefix.rstrip("/")
+    downloaded_count = 0
+    for blob in bucket.list_blobs(prefix=gcs_prefix):
+        # Skip prefix-itself blobs (e.g. a zero-byte object named "trained/")
+        # which list_blobs may surface alongside real files. ``pathlib`` strips
+        # trailing slashes from ``.name`` on every platform, so guard on the
+        # raw blob name's trailing separator before computing the relative
+        # path — otherwise the prefix-itself blob would resolve to a sibling
+        # file named ``trained`` inside ``local_dir`` (or, when the prefix had
+        # no leading path components, to ``local_dir`` itself, raising
+        # ``IsADirectoryError`` on Linux).
+        if blob.name.endswith("/"):
+            continue
+        # Preserve nested directory structure under ``gcs_prefix`` (Gemini /
+        # Copilot MED). The previous ``Path(blob.name).name`` flattened
+        # every artifact into ``local_dir`` root and let two blobs with
+        # the same basename in different subdirs (e.g.
+        # ``trained/policy/model.pt`` vs ``trained/world_model/model.pt``)
+        # silently overwrite each other before upload. Computing a
+        # prefix-relative path and mkdir-ing parents keeps the on-disk
+        # layout faithful to the cloud-trainer's output convention so the
+        # downstream ``upload_weights`` rglob picks every artifact up
+        # under its original subpath.
+        rel_path = blob.name
+        if normalised_prefix and rel_path.startswith(normalised_prefix):
+            rel_path = rel_path[len(normalised_prefix) :]
+        rel_path = rel_path.lstrip("/")
+        if not rel_path:
+            # Defends against pathological blob names like ``trained//``.
+            continue
+        dest = local_dir / rel_path
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        blob.download_to_filename(str(dest))
+        downloaded_count += 1
+        _log.info("gcs_blob_downloaded", blob=blob.name, dest=str(dest))
+    if downloaded_count == 0:
         _log.warning(
             "gcs_sync_empty_prefix",
             bucket=gcs_bucket,
             prefix=gcs_prefix,
         )
         return False
-    local_dir.mkdir(parents=True, exist_ok=True)
-    for blob in blobs:
-        # Skip prefix-itself blobs (e.g. a zero-byte object named "trained/")
-        # which list_blobs may surface alongside real files. ``pathlib`` strips
-        # trailing slashes from ``.name`` on every platform, so guard on the
-        # raw blob name's trailing separator before computing the filename —
-        # otherwise the prefix-itself blob would resolve to a sibling file
-        # named ``trained`` inside ``local_dir`` (or, when the prefix had no
-        # leading path components, to ``local_dir`` itself, raising
-        # ``IsADirectoryError`` on Linux).
-        if blob.name.endswith("/"):
-            continue
-        filename = Path(blob.name).name
-        if not filename:
-            continue
-        dest = local_dir / filename
-        blob.download_to_filename(str(dest))
-        _log.info("gcs_blob_downloaded", blob=blob.name, dest=str(dest))
     # Cloud trainer emits .onnx alongside .pt/.npz/.json — the default
     # extension filter in upload_weights() omits .onnx, which would silently
     # drop the world-model artifact and log "no_weight_files_found". Resolve

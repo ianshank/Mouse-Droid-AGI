@@ -75,17 +75,18 @@ class WeightUpdatePollerProtocol(Protocol):
     orchestrator to consume at a tick boundary. ``acknowledge_swap`` clears
     the slot once the orchestrator has applied the update so the same
     revision is not re-applied on the next tick.
+
+    Note for external implementors: the public surface is intentionally
+    minimal so pollers predating the Tier C1.2 multi-engine mapping
+    continue to satisfy this protocol structurally. The optional
+    ``engine_type`` property used by the orchestrator's per-engine
+    dispatch lives on :class:`EngineTypedWeightUpdatePollerProtocol`
+    (an extension protocol). The orchestrator's legacy-kwarg fold-in
+    path queries ``getattr(poller, "engine_type", getattr(poller,
+    "_engine_type", "policy"))`` so external pollers may declare the
+    extended protocol, expose the legacy private ``_engine_type``
+    attribute, or omit both (defaulting to the policy engine).
     """
-
-    @property
-    def engine_type(self) -> EngineType:
-        """Engine discriminator the orchestrator dispatches on.
-
-        Exposed on the protocol so the orchestrator no longer needs to
-        reach into a private ``_engine_type`` attribute when folding a
-        legacy single-poller kwarg into the C1.2 dual-poller mapping.
-        """
-        ...
 
     async def start(self) -> None:
         """Begin the background poll loop."""
@@ -102,6 +103,32 @@ class WeightUpdatePollerProtocol(Protocol):
 
     def acknowledge_swap(self, update: PendingWeightUpdate) -> None:
         """Clear the pending slot after the orchestrator has applied ``update``."""
+        ...
+
+
+@runtime_checkable
+class EngineTypedWeightUpdatePollerProtocol(WeightUpdatePollerProtocol, Protocol):
+    """Extension protocol for pollers that expose ``engine_type`` (Tier C1.2).
+
+    The base :class:`WeightUpdatePollerProtocol` deliberately omits this
+    property so external pollers written before Tier C1.2 still satisfy
+    it structurally. The Tier C1.2 multi-engine factory + dispatch path
+    queries ``engine_type`` via the orchestrator's ``getattr`` fallback
+    chain, so implementing this extension is optional — but recommended
+    for new pollers because it gives both ``mypy --strict`` callers and
+    ``isinstance(poller, EngineTypedWeightUpdatePollerProtocol)``
+    runtime checks a precise signal.
+    """
+
+    @property
+    def engine_type(self) -> EngineType:
+        """Engine discriminator the orchestrator dispatches on.
+
+        Exposed on this extension protocol so the orchestrator no longer
+        needs to reach into a private ``_engine_type`` attribute when
+        folding a legacy single-poller kwarg into the C1.2 dual-poller
+        mapping.
+        """
         ...
 
 

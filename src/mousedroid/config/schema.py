@@ -2621,13 +2621,38 @@ class WeightUpdatePollConfig(BaseModel):
     )
     gcs_artifact_prefix: str = Field(
         "trained/",
+        min_length=1,
         description=(
             "Object prefix inside ``gcp.training.training_bucket`` that the "
             "``--from-gcs`` CLI mode lists. Trailing slash preserved verbatim "
             "(forwarded to ``bucket.list_blobs(prefix=...)``). Default "
-            "matches the cloud trainer's output convention."
+            "matches the cloud trainer's output convention. MUST be non-empty: "
+            "an empty / whitespace prefix would enumerate the entire training "
+            "bucket and publish every matching artifact extension to HF Hub — "
+            "a high-impact operator footgun. Enforced both by ``min_length=1`` "
+            "and the ``_reject_blank_gcs_artifact_prefix`` validator below."
         ),
     )
+
+    @field_validator("gcs_artifact_prefix", mode="after")
+    @classmethod
+    def _reject_blank_gcs_artifact_prefix(cls, value: str) -> str:
+        """Reject whitespace-only prefixes (Copilot MED follow-up, PR #98).
+
+        ``min_length=1`` blocks the literal empty string but lets a whitespace
+        prefix like ``"  /"`` slip through, which would also list the bucket
+        root once ``bucket.list_blobs`` strips it. Strip + non-empty check is
+        the only safe gate.
+        """
+        if not value.strip():
+            msg = (
+                "cloud.weight_update.gcs_artifact_prefix must be a non-blank string; "
+                "an empty / whitespace prefix would publish every artifact in the "
+                "training bucket to HF Hub. Set it to e.g. 'trained/' or a "
+                "fleet-specific subpath."
+            )
+            raise ValueError(msg)
+        return value
 
     @model_validator(mode="after")
     def _warn_on_default_world_model_repo(self) -> WeightUpdatePollConfig:
