@@ -101,6 +101,21 @@ class OpenAICompatibleLLMGateway:
             _log.info("llm_gateway_disabled")
             return
 
+        # Reset both flags at the top of every ``start()`` so retries
+        # cleanly reflect the latest health-probe outcome (Copilot HIGH).
+        # Without this:
+        #   * A previously-successful run leaves ``_ready=True`` even
+        #     after a later non-200 / connection-refused, so
+        #     ``translate_mission`` would happily POST to a downed
+        #     daemon.
+        #   * A previously-degraded run leaves ``_degraded=True`` even
+        #     after a recovery, hiding the fact that the gateway is
+        #     usable again from operator dashboards.
+        # The two flags are now mutually exclusive on every exit path
+        # (success → _ready=True, _degraded=False; failure → reverse).
+        self._ready = False
+        self._degraded = False
+
         # Idempotent session creation: a second ``start()`` (operator
         # retry / reconnect) must not leak the prior ``ClientSession``.
         # The session is only torn down by :meth:`stop` (which sets

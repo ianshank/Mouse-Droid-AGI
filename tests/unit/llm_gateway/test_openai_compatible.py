@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from http import HTTPStatus
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -211,6 +212,75 @@ async def test_start_idempotent_reuses_existing_session() -> None:
 
     assert first_session is second_session
     assert len(sessions) == 1, "start() must not construct a second session"
+
+
+@pytest.mark.asyncio
+async def test_start_clears_ready_on_subsequent_non_200(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``_ready`` is cleared when a later start() fails after a successful one.
+
+    Copilot HIGH finding: prior code left ``_ready=True`` stale across a
+    later 503/connection-refused, so ``translate_mission`` would happily
+    POST to a downed daemon after the operator restarted it.
+    """
+    cfg = _config()
+    gw = OpenAICompatibleLLMGateway(cfg)
+
+    ok_resp = MagicMock()
+    ok_resp.status = HTTPStatus.OK
+    bad_resp = MagicMock()
+    bad_resp.status = HTTPStatus.SERVICE_UNAVAILABLE
+
+    sequence: list[MagicMock] = [ok_resp, bad_resp]
+    fake_session = MagicMock()
+    fake_session.get = MagicMock(
+        side_effect=lambda *_a, **_kw: _async_context_manager(sequence.pop(0))
+    )
+
+    with patch.object(gw, "_build_session", return_value=fake_session):
+        await gw.start()
+        assert gw.is_ready is True
+        assert gw.is_degraded is False
+
+        await gw.start()  # daemon went down between probes
+        assert gw.is_ready is False, "_ready must clear when later probe returns non-200"
+        assert gw.is_degraded is True
+
+
+@pytest.mark.asyncio
+async def test_start_clears_degraded_on_recovery() -> None:
+    """``_degraded`` is cleared when a later start() succeeds after a failure.
+
+    Copilot HIGH finding: prior code left ``_degraded=True`` stale even
+    after a successful recovery, hiding the back-to-healthy state from
+    operator dashboards.
+    """
+    import aiohttp as _aiohttp
+
+    cfg = _config()
+    gw = OpenAICompatibleLLMGateway(cfg)
+
+    ok_resp = MagicMock()
+    ok_resp.status = HTTPStatus.OK
+
+    call_count = {"n": 0}
+
+    def _get(*_args: object, **_kwargs: object) -> MagicMock:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise _aiohttp.ClientConnectionError("daemon offline")
+        return _async_context_manager(ok_resp)
+
+    fake_session = MagicMock()
+    fake_session.get = MagicMock(side_effect=_get)
+
+    with patch.object(gw, "_build_session", return_value=fake_session):
+        await gw.start()
+        assert gw.is_ready is False
+        assert gw.is_degraded is True
+
+        await gw.start()  # daemon recovered
+        assert gw.is_ready is True
+        assert gw.is_degraded is False, "_degraded must clear on successful recovery"
 
 
 @pytest.mark.asyncio
