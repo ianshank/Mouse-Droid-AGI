@@ -48,9 +48,9 @@ def test_compose_declares_env_file_directive() -> None:
     svc = _load_service()
     env_files = svc.get("env_file", [])
     assert env_files, "compose service must declare env_file (see F-014)"
-    assert any("/etc/mousedroid/docker.env" in p for p in env_files), (
-        f"env_file must include /etc/mousedroid/docker.env; got {env_files!r}"
-    )
+    assert any(
+        "/etc/mousedroid/docker.env" in p for p in env_files
+    ), f"env_file must include /etc/mousedroid/docker.env; got {env_files!r}"
 
 
 def test_mock_hardware_default_is_false_not_true() -> None:
@@ -63,9 +63,9 @@ def test_mock_hardware_default_is_false_not_true() -> None:
     env: list[str] = svc.get("environment", [])
     mock_line = next((e for e in env if "MOUSEDROID_MOCK_HARDWARE=" in e), None)
     assert mock_line is not None, "MOUSEDROID_MOCK_HARDWARE must be set in environment"
-    assert ":-false" in mock_line, (
-        f"MOUSEDROID_MOCK_HARDWARE compose default must be ``:-false``: {mock_line!r}"
-    )
+    assert (
+        ":-false" in mock_line
+    ), f"MOUSEDROID_MOCK_HARDWARE compose default must be ``:-false``: {mock_line!r}"
 
 
 def test_telemetry_token_is_forwarded_to_container() -> None:
@@ -77,9 +77,9 @@ def test_telemetry_token_is_forwarded_to_container() -> None:
     """
     svc = _load_service()
     env: list[str] = svc.get("environment", [])
-    assert any("MOUSEDROID_TELEMETRY_TOKEN=" in e for e in env), (
-        "compose environment must forward MOUSEDROID_TELEMETRY_TOKEN (see F-014)"
-    )
+    assert any(
+        "MOUSEDROID_TELEMETRY_TOKEN=" in e for e in env
+    ), "compose environment must forward MOUSEDROID_TELEMETRY_TOKEN (see F-014)"
 
 
 def test_env_jetson_example_is_checked_in_and_documents_token() -> None:
@@ -91,9 +91,9 @@ def test_env_jetson_example_is_checked_in_and_documents_token() -> None:
     template = _REPO_ROOT / "config" / ".env.jetson.example"
     assert template.exists(), "config/.env.jetson.example must be checked in"
     text = template.read_text(encoding="utf-8")
-    assert "MOUSEDROID_TELEMETRY_TOKEN" in text, (
-        "template must document the telemetry token setting"
-    )
-    assert "MOUSEDROID_MOCK_HARDWARE=false" in text, (
-        "template must show the production-default (real hardware) value"
-    )
+    assert (
+        "MOUSEDROID_TELEMETRY_TOKEN" in text
+    ), "template must document the telemetry token setting"
+    assert (
+        "MOUSEDROID_MOCK_HARDWARE=false" in text
+    ), "template must show the production-default (real hardware) value"
