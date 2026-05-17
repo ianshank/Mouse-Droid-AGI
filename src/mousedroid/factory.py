@@ -611,22 +611,48 @@ def build_llm_gateway(
     *,
     injection_filter: PromptInjectionFilterProtocol | None = None,
 ) -> LLMGatewayProtocol:
-    """Build LLM gateway for NL command translation.
+    """Build the LLM gateway selected by ``cfg.llm.backend``.
 
-    Constructs a ``GatewayConfig`` from the root settings' ``llm`` section
-    and returns an ``LLMGateway`` conforming to ``LLMGatewayProtocol``.
+    Two backends ship today (both conform to :class:`LLMGatewayProtocol`):
+
+    * ``llama_cpp`` (default, pre-Tier-C2.3): in-process GGUF loader via
+      ``llama-cpp-python``. Loads from ``cfg.llm.model_path``.
+    * ``openai_compatible`` (Tier C2.3): async HTTP client talking to
+      ``{cfg.llm.base_url}/v1/chat/completions``. Default targets the
+      local Ollama daemon at ``http://127.0.0.1:11434``. The same
+      endpoint is served by Ollama, LM Studio, OpenAI, and most
+      OpenAI-compatible local-LLM tooling — operators swap deployments
+      by changing only ``cfg.llm.base_url`` (and ``cfg.llm.model_name``).
+
+    The ``injection_filter`` argument applies only to the ``llama_cpp``
+    backend; the HTTP backend skips local injection filtering because
+    the upstream provider is expected to enforce its own guardrails.
 
     Args:
         cfg: Root settings.
         injection_filter: Optional shared :class:`PromptInjectionFilterProtocol`.
-            When ``None``, the gateway constructs its own filter from
-            ``cfg.llm.injection_patterns`` (legacy behaviour); when supplied
-            (the default in :func:`build_orchestrator`), the same filter is
-            reused by the OpenClaw mission dispatcher.
+            When ``None``, the ``llama_cpp`` gateway constructs its own
+            filter from ``cfg.llm.injection_patterns`` (legacy
+            behaviour); when supplied (the default in
+            :func:`build_orchestrator`), the same filter is reused by
+            the OpenClaw mission dispatcher.
 
     Returns:
-        LLM gateway conforming to ``LLMGatewayProtocol``.
+        LLM gateway conforming to :class:`LLMGatewayProtocol`.
     """
+    if cfg.llm.backend == "openai_compatible":
+        from mousedroid.llm_gateway.openai_compatible import OpenAICompatibleLLMGateway
+
+        _log.info(
+            "llm_gateway_built",
+            backend="openai_compatible",
+            base_url=cfg.llm.base_url,
+            model=cfg.llm.model_name,
+            enabled=cfg.llm.enabled,
+        )
+        return OpenAICompatibleLLMGateway(cfg.llm)
+
+    # Default / legacy ``llama_cpp`` path.
     from mousedroid.llm_gateway.config import GatewayConfig
     from mousedroid.llm_gateway.gateway import LLMGateway
 
@@ -650,7 +676,7 @@ def build_llm_gateway(
         system_prompt=cfg.llm.system_prompt,
         injection_patterns=cfg.llm.injection_patterns,
     )
-    _log.info("llm_gateway_built", enabled=cfg.llm.enabled)
+    _log.info("llm_gateway_built", backend="llama_cpp", enabled=cfg.llm.enabled)
     return LLMGateway(gateway_cfg, injection_filter=injection_filter)
 
 
