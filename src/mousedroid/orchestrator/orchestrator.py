@@ -335,6 +335,12 @@ class MouseDroidOrchestrator:
         # tick after wiring populates the cache and skips the lifecycle.
         self._mission_lifecycle = mission_lifecycle
         self._prev_obs_for_vlm: torch.Tensor | None = None
+        # Per-mission monotonic counter used to build collision-free
+        # mission IDs in ``process_mission``. Decoupled from ``_tick_count``
+        # so back-to-back process_mission calls (between control-loop ticks,
+        # or before the loop starts) cannot generate duplicate IDs that
+        # silently overwrite ``MissionLifecycle._mission`` state.
+        self._mission_seq: int = 0
         self._running = False
         self._tick_count: int = 0
         self._consolidation_task: asyncio.Task[None] | None = None
@@ -706,11 +712,15 @@ class MouseDroidOrchestrator:
         # decline, but the lifecycle owns its own SUCCEEDED/FAILED/REPLANNING
         # transitions from the tick stream.
         if self._mission_lifecycle is not None:
-            mission_id = f"mission-{self._tick_count}"
-            self._mission_lifecycle.start_mission(
-                mission_id=mission_id,
-                goal_text=nl_command,
-            )
+            self._mission_seq += 1
+            mission_id = f"mission-{self._mission_seq:06d}"
+            try:
+                self._mission_lifecycle.start_mission(
+                    mission_id=mission_id,
+                    goal_text=nl_command,
+                )
+            except Exception:  # pragma: no cover - defensive
+                _log.warning("mission_lifecycle_start_failed", exc_info=True)
 
         # Stage 1: Rule-based parser (fast path, < 1ms)
         if self._mission_parser is not None:
