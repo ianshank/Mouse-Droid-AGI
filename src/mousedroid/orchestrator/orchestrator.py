@@ -567,14 +567,19 @@ class MouseDroidOrchestrator:
 
             self._tick_count += 1
             await self._publish_telemetry(observation, safety_ctx, loop_time_ms)
+
+            if self._task_tracker is not None:
+                await self._task_tracker.evaluate_active(ctx)
+
             # Tier C2 / C2.2 — drive the optional mission lifecycle once per
             # tick. No-op when no lifecycle is wired or the previous tick's
             # vision-feature cache is unpopulated; failures are logged and
             # swallowed so the control loop never crashes on lifecycle bugs.
+            # Runs AFTER task_tracker.evaluate_active so the tracker observes
+            # active tasks BEFORE the lifecycle potentially transitions them
+            # to terminal (SUCCEEDED/FAILED) states — preventing double-count
+            # or stale timeout enforcement on just-completed tasks.
             await self._maybe_tick_mission_lifecycle(observation)
-
-            if self._task_tracker is not None:
-                await self._task_tracker.evaluate_active(ctx)
 
             await self._hook_registry.run_phase(HookPhase.POST_TICK, ctx)
             # Snapshot AND clear the one-shot ``mission_just_completed``
@@ -1064,7 +1069,11 @@ class MouseDroidOrchestrator:
         # mock_hardware emits before the camera warms up.
         if vf.size == 0:
             return
-        obs_t = torch.from_numpy(vf).unsqueeze(0).float()
+        # Clone so the cached _prev_obs_for_vlm owns its data — the
+        # camera/sensor manager may recycle the underlying numpy buffer
+        # between ticks (Jetson ring-buffer pattern, see CLAUDE.md
+        # deque(maxlen=N) convention).
+        obs_t = torch.from_numpy(vf).unsqueeze(0).float().clone()
         prev = self._prev_obs_for_vlm
         self._prev_obs_for_vlm = obs_t
         if prev is None:
