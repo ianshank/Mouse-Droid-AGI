@@ -252,15 +252,75 @@ def test_build_mission_lifecycle_returns_none_when_disabled() -> None:
 
 
 def test_build_mission_lifecycle_returns_lifecycle_when_enabled() -> None:
-    """build_mission_lifecycle returns a MissionLifecycle when enabled."""
+    """build_mission_lifecycle returns a MissionLifecycle when enabled + deps wired."""
     from mousedroid.config.schema import Settings
     from mousedroid.factory import build_mission_lifecycle
 
     cfg = Settings(mock_hardware=True)
     cfg.mission.replan_enabled = True
-    lifecycle = build_mission_lifecycle(cfg)
+    vlm = _StubVLM([0.5])
+    replanner = _StubReplanner([])
+    lifecycle = build_mission_lifecycle(
+        cfg,
+        vlm_progress=vlm,  # type: ignore[arg-type]
+        replanner=replanner,  # type: ignore[arg-type]
+    )
     assert lifecycle is not None
     assert isinstance(lifecycle, MissionLifecycle)
+
+
+def test_build_mission_lifecycle_returns_none_when_vlm_missing(capsys) -> None:
+    """Defensive null return (Copilot HIGH): no VLM head → returns None.
+
+    Without a VLM progress head ``_score_progress`` is a constant 0.0, which
+    trips ``stall_window_ticks`` on every mission and fails with
+    ``llm_replan_unavailable``. ``build_mission_lifecycle`` refuses to
+    construct that self-failing state machine and logs a warning naming
+    the missing dependency so operators spot it at boot.
+    """
+    from mousedroid.config.schema import Settings
+    from mousedroid.factory import build_mission_lifecycle
+
+    cfg = Settings(mock_hardware=True)
+    cfg.mission.replan_enabled = True
+    replanner = _StubReplanner([])
+
+    result = build_mission_lifecycle(
+        cfg,
+        vlm_progress=None,
+        replanner=replanner,  # type: ignore[arg-type]
+    )
+
+    assert result is None
+    # Structured warning event surfaces via structlog → stdout; matches
+    # the project's existing capsys pattern (see
+    # tests/unit/orchestrator/test_weight_update_kwarg_precedence.py).
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+    assert "mission_lifecycle_dependencies_missing" in output
+    assert "vlm_progress" in output
+
+
+def test_build_mission_lifecycle_returns_none_when_replanner_missing(capsys) -> None:
+    """Defensive null return: no replanner → returns None + warns."""
+    from mousedroid.config.schema import Settings
+    from mousedroid.factory import build_mission_lifecycle
+
+    cfg = Settings(mock_hardware=True)
+    cfg.mission.replan_enabled = True
+    vlm = _StubVLM([0.5])
+
+    result = build_mission_lifecycle(
+        cfg,
+        vlm_progress=vlm,  # type: ignore[arg-type]
+        replanner=None,
+    )
+
+    assert result is None
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+    assert "mission_lifecycle_dependencies_missing" in output
+    assert "replanner" in output
 
 
 def test_build_mission_lifecycle_threads_dependencies() -> None:
@@ -273,11 +333,12 @@ def test_build_mission_lifecycle_threads_dependencies() -> None:
     cfg.mission.replan_enabled = True
     metrics = MetricsRegistry(MetricsConfig())
     vlm = _StubVLM([0.9])
+    replanner = _StubReplanner([])
     lifecycle = build_mission_lifecycle(
         cfg,
         task_tracker=None,
         vlm_progress=vlm,  # type: ignore[arg-type]
-        replanner=None,
+        replanner=replanner,  # type: ignore[arg-type]
         metrics=metrics,
     )
     assert lifecycle is not None

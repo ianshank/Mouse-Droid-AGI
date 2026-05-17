@@ -8,6 +8,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Tier C hardening (gap + tech-debt closure)
+
+- **Typed `EngineType` discriminator** — `mousedroid.cloud.protocol` now exports `EngineType: TypeAlias = Literal["policy", "world_model"]` plus `ENGINE_TYPE_POLICY` / `ENGINE_TYPE_WORLD_MODEL` constants. Factory, orchestrator, and `HuggingFaceWeightUpdatePoller` all switch from bare string literals to the typed constants; a typo at any call site now fails `mypy --strict` instead of silently dead-lettering as `cloud_weight_update_unknown_engine_type` at runtime.
+- **`engine_type` property** exposed via a new opt-in extension protocol `EngineTypedWeightUpdatePollerProtocol` (subclass of `WeightUpdatePollerProtocol`). The base `WeightUpdatePollerProtocol` deliberately does NOT require `engine_type` so external pollers predating Tier C1.2 keep satisfying it structurally; the orchestrator's legacy-kwarg fold-in path queries `getattr(poller, "engine_type", getattr(poller, "_engine_type", ENGINE_TYPE_POLICY))` to support all three shapes (extension protocol, legacy private attribute, missing-default-to-policy).
+- **Two schema-driven fields** on `WeightUpdatePollConfig` — `upload_extensions: tuple[str, ...]` (default `(".onnx", ".pt", ".npz", ".json", ".safetensors")`) and `gcs_artifact_prefix: str` (default `"trained/"`). The cloud-trainer leg of the OTA loop resolves both from `Settings` instead of carrying hardcoded literals; operators can extend the filter or change the prefix without code changes.
+- **Footgun validator** on `WeightUpdatePollConfig`: when `world_model_enabled=True` and `world_model_repo_id` is still the maintainer's default repo, the validator logs a structured warning at config-load time (`world_model_poller_using_default_repo`) so an operator who enables the WM poller without overriding the repo gets a loud warning instead of silently OTA-deploying from someone else's HF Hub repo.
+- New tests across the hardening surface: `tests/unit/cloud/test_engine_type_protocol.py` (Literal + property + protocol conformance), `tests/unit/orchestrator/test_weight_update_kwarg_precedence.py` (kwarg precedence + back-compat fallback chain), 5 extra `tests/unit/cloud/test_weight_update_poll_config.py` cases (new fields + validator branches), 8 extra `tests/unit/training/test_upload_weights_cloud_sync.py` cases (`main()` CLI flow, lazy GCS client, empty filename, custom extensions, model-card metadata branch), and an empty-vision-features test in `tests/unit/orchestrator/test_mission_lifecycle_wiring.py`.
+
+### Fixed — Tier C hardening
+
+- `training/upload_weights.py` now uses `mousedroid.logging.setup.get_logger` (the project's mandatory structlog setup) instead of calling `structlog.get_logger` directly — the prior call bypassed the project's processor chain (JSON renderer, contextvars, bound fields), so cloud log aggregation saw a different format from this file (violated CLAUDE.md invariant 4).
+- `training/upload_weights.py::main` replaced bare `assert gcs_bucket is not None` / `assert repo_id is not None` guards with explicit `if … is None: parser.error(...)` checks. The previous asserts would have been stripped under `python -O`, letting `None` slip into `sync_gcs_to_hf` and surface as a confusing downstream `AttributeError` deep in the GCS client.
+- `MouseDroidOrchestrator.__init__` precedence: the legacy `weight_update_poller=` kwarg now only folds into the internal mapping when `weight_update_pollers=` was *omitted* (was previously: when the resolved mapping was *empty*). Explicit `weight_update_pollers={}` is now a clean "disable OTA" signal that cannot be silently overridden by a stale legacy kwarg.
+- Module-level `_DEFAULT_LEGACY_REPO_ID` + `_DEFAULT_UPLOAD_EXTENSIONS` + `_CLOUD_TRAINER_UPLOAD_EXTENSIONS` constants in `training/upload_weights.py` so the function signature default, the CLI fallback branch, and the help text cannot drift apart.
+- Module-level `_WORLD_MODEL_DEFAULT_REPO_ID` constant in `mousedroid.config.schema` so the `world_model_repo_id` field default and the footgun validator's match check share one source of truth.
+
+### Added
+- **Tier C2.1**: `MissionLifecycle` now ticks once per orchestrator loop at the POST_TICK seam (was a no-op since PR #95 shipped the class). `process_mission` calls `start_mission()` so the lifecycle actually transitions PENDING→RUNNING in production.
+- **Tier C1.1**: `training/upload_weights.py::sync_gcs_to_hf` closes the cloud→HF Hub leg of the OTA loop. New CLI flags `--from-gcs`, `--gcs-bucket`, `--gcs-prefix`.
+- **Tier C1.2**: Dual `WeightUpdatePoller` slots — `policy` and `world_model` engines can both receive OTA updates. Gated by `cloud.weight_update.world_model_enabled` (default `False`, backwards-compatible). New `build_weight_update_pollers()` factory returns `Mapping[str, WeightUpdatePollerProtocol]`.
+- Integration test (`tests/integration/test_tier_c_closeout_integration.py`) covering MissionLifecycle + dual poller + safety projector on a single tick + via factory.
+- Property test (`tests/property/test_mission_lifecycle_property.py`) verifying MissionLifecycle state-machine transitions across 100 Hypothesis-generated score sequences.
+
+### Changed
+- `numpy` soft-pinned to `>=1.24,!=2.0.0,!=2.0.1` to lock out the initial NumPy 2.x releases that broke transitive deps. Tree audit confirmed no in-repo usage of removed symbols (`np.float_`, `np.NAN`, `np.in1d`, etc.); the pin is defensive.
+
+### Backwards compatibility
+- Existing YAML files load unchanged. The new boolean gate `cloud.weight_update.world_model_enabled` defaults to `False` (preserves the policy-only pre-C1.2 wiring), and the new non-boolean fields are schema-defaulted to safe values: `cloud.weight_update.upload_extensions = (".onnx", ".pt", ".npz", ".json", ".safetensors")` and `cloud.weight_update.gcs_artifact_prefix = "trained/"` (validated non-blank to block a full-bucket enumeration footgun).
+- `build_weight_update_poller()` (singular) retained as a deprecated shim for one minor version; new code should call `build_weight_update_pollers()` (plural).
+- `MouseDroidOrchestrator` constructor accepts both the legacy `weight_update_poller=` kwarg and the new `weight_update_pollers=` mapping; legacy is folded into the mapping at runtime under the poller's `engine_type` property (falling back to the legacy private `_engine_type` attribute, then defaulting to `"policy"`).
+- The Tier C1.2 `engine_type` property lives on the new opt-in `EngineTypedWeightUpdatePollerProtocol` extension protocol — the base `WeightUpdatePollerProtocol` keeps its pre-C1.2 surface so external pollers predating this PR continue to satisfy it structurally without modification.
+- `mission_lifecycle=None` is a true no-op — `_maybe_tick_mission_lifecycle` short-circuits.
+- `build_mission_lifecycle` returns `None` (and logs `mission_lifecycle_dependencies_missing` at warning level) when `cfg.mission.replan_enabled=True` but either `vlm_progress` or `replanner` is unwired, so the orchestrator's POST_TICK seam stays a no-op until both Tier C2.3 dependencies are supplied — pre-C2.2 deployments remain byte-identical.
+
 ### Documentation — Tier C3.2: Sprint closeout — planning docs refreshed to post-Tier-C reality
 
 Closes the Tier C sprint. No source code changes — only the planning + architecture

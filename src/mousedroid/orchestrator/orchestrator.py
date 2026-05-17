@@ -15,6 +15,10 @@ import numpy as np
 import torch
 from numpy.typing import NDArray
 
+from mousedroid.cloud.protocol import (
+    ENGINE_TYPE_POLICY,
+    ENGINE_TYPE_WORLD_MODEL,
+)
 from mousedroid.common.actions import normalize_action_numpy
 from mousedroid.common.async_utils import cancel_and_drain, spawn_tracked
 from mousedroid.common.time.protocol import ClockProtocol, RealClock
@@ -28,7 +32,7 @@ from mousedroid.logging.setup import get_logger
 from mousedroid.telemetry.frame_builder import build_telemetry_frame
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
     from mousedroid.agents.base import AgentProtocol
     from mousedroid.cloud.protocol import (
@@ -56,6 +60,7 @@ if TYPE_CHECKING:
     from mousedroid.memory.tier import MemoryTier
     from mousedroid.orchestrator.face_controller import FaceController
     from mousedroid.orchestrator.mission_dispatcher import MissionDispatcherProtocol
+    from mousedroid.orchestrator.mission_lifecycle import MissionLifecycle
     from mousedroid.safety.context import SafetyContext
     from mousedroid.safety.projector_protocol import SafetyActionProjectorProtocol
     from mousedroid.safety.protocol import SafetyMonitorProtocol
@@ -115,8 +120,10 @@ class MouseDroidOrchestrator:
         mock_telemetry_source: Any | None = None,
         metrics: MetricsRegistry | None = None,
         weight_update_poller: WeightUpdatePollerProtocol | None = None,
+        weight_update_pollers: Mapping[str, WeightUpdatePollerProtocol] | None = None,
         weight_update_loader: Callable[[PendingWeightUpdate], object] | None = None,
         safety_projector: SafetyActionProjectorProtocol | None = None,
+        mission_lifecycle: MissionLifecycle | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -201,7 +208,23 @@ class MouseDroidOrchestrator:
                 orchestrator polls ``pending_update`` once per tick AFTER
                 ``_select_action`` and atomically swaps the live world-model
                 / policy with the newly downloaded artifact. ``None`` (default)
-                preserves byte-identical pre-Tier-C1 behavior.
+                preserves byte-identical pre-Tier-C1 behavior. Legacy single-
+                poller kwarg retained for one minor-version window for
+                backwards compatibility — folded into
+                ``self._weight_update_pollers`` under the poller's
+                ``engine_type`` property (falling back to the legacy private
+                ``_engine_type`` attribute, then to
+                :data:`mousedroid.cloud.protocol.ENGINE_TYPE_POLICY`) so
+                internal handling is uniform between the two shapes. Prefer
+                ``weight_update_pollers`` for new call sites.
+            weight_update_pollers: Optional Tier C1.2 mapping
+                ``{engine_type: WeightUpdatePollerProtocol}``. When supplied,
+                each tick the orchestrator iterates all pollers (in insertion
+                order — ``policy`` before ``world_model`` is the documented
+                contract) and applies any pending update. Supersedes
+                ``weight_update_poller`` for multi-engine OTA deployments.
+                Empty mapping (``{}``) and ``None`` both preserve byte-
+                identical pre-Tier-C1 behaviour (swap helper short-circuits).
             weight_update_loader: Optional callable
                 ``(PendingWeightUpdate) -> engine``. Invoked inside
                 ``_apply_pending_weight_update`` to materialise the new
@@ -219,6 +242,15 @@ class MouseDroidOrchestrator:
                 are clamped uniformly. ``None`` (default, gated by
                 ``cfg.safety.projector.enabled=false``) makes the seam a
                 pure pass-through so existing deployments are byte-identical.
+            mission_lifecycle: Optional :class:`MissionLifecycle` (Tier
+                C2 / C2.2). When supplied, the orchestrator drives a
+                single ``lifecycle.tick(obs_t, obs_tminus1)`` call at the
+                POST_TICK seam each tick, after telemetry and just before
+                the POST_TICK hook fires. The helper caches the previous
+                tick's ``observation.vision_features`` so the lifecycle's
+                two-frame contract is honoured. ``None`` (default, gated
+                by ``cfg.mission.replan_enabled=false``) makes the seam a
+                no-op so existing deployments are byte-identical.
         """
         if not agents:
             msg = "At least one agent is required"
@@ -273,9 +305,37 @@ class MouseDroidOrchestrator:
         self._liveness_tracker: Any | None = liveness_tracker
         self._mock_telemetry_source: Any | None = mock_telemetry_source
         self._metrics = metrics
-        # Tier C1 — OTA weight-update wiring. ``None`` keeps the pre-C1
-        # tick path byte-identical (swap helper short-circuits).
-        self._weight_update_poller: WeightUpdatePollerProtocol | None = weight_update_poller
+        # Tier C1 / C1.2 — OTA weight-update wiring. An empty mapping (or
+        # both kwargs left at ``None``) keeps the pre-C1 tick path byte-
+        # identical (swap helper short-circuits). The legacy single
+        # ``weight_update_poller=`` kwarg stays on the constructor for one
+        # minor-version window for backwards compatibility; it is folded
+        # into ``self._weight_update_pollers`` under the poller's
+        # ``engine_type`` property so the rest of the orchestrator only ever
+        # sees the mapping shape. Precedence is keyed on whether the
+        # mapping kwarg was *provided* (not whether it is non-empty) so an
+        # explicit ``weight_update_pollers={}`` cleanly disables OTA
+        # without being silently overridden by a legacy single-poller arg.
+        self._weight_update_pollers: dict[str, WeightUpdatePollerProtocol] = dict(
+            weight_update_pollers or {}
+        )
+        if weight_update_poller is not None and weight_update_pollers is None:
+            # Fall back to the typed ``engine_type`` property; the legacy
+            # ``_engine_type`` private attribute fallback is retained for one
+            # release only as a safety net for external pollers that
+            # implement the protocol structurally but predate the property
+            # addition.
+            engine_type = getattr(
+                weight_update_poller,
+                "engine_type",
+                getattr(weight_update_poller, "_engine_type", ENGINE_TYPE_POLICY),
+            )
+            self._weight_update_pollers[engine_type] = weight_update_poller
+        elif weight_update_poller is not None and weight_update_pollers is not None:
+            _log.warning(
+                "weight_update_poller_kwarg_ignored",
+                reason="weight_update_pollers mapping takes precedence",
+            )
         self._weight_update_loader: Callable[[PendingWeightUpdate], object] | None = (
             weight_update_loader
         )
@@ -284,6 +344,20 @@ class MouseDroidOrchestrator:
         # ``_maybe_project_action`` a no-op so existing deployments produce
         # byte-identical actions to pre-C2.
         self._safety_projector: SafetyActionProjectorProtocol | None = safety_projector
+        # Tier C2 / C2.2 — optional mission lifecycle state machine. ``None``
+        # (gated by ``cfg.mission.replan_enabled=False``) makes
+        # ``_maybe_tick_mission_lifecycle`` a no-op. The previous tick's
+        # vision-feature tensor is cached between ticks so the lifecycle
+        # receives the (obs_t, obs_tminus1) pair it expects; the first
+        # tick after wiring populates the cache and skips the lifecycle.
+        self._mission_lifecycle = mission_lifecycle
+        self._prev_obs_for_vlm: torch.Tensor | None = None
+        # Per-mission monotonic counter used to build collision-free
+        # mission IDs in ``process_mission``. Decoupled from ``_tick_count``
+        # so back-to-back process_mission calls (between control-loop ticks,
+        # or before the loop starts) cannot generate duplicate IDs that
+        # silently overwrite ``MissionLifecycle._mission`` state.
+        self._mission_seq: int = 0
         self._running = False
         self._tick_count: int = 0
         self._consolidation_task: asyncio.Task[None] | None = None
@@ -348,14 +422,16 @@ class MouseDroidOrchestrator:
             await self._cloud_sink.start()
         if self._cloud_experience_exporter is not None:
             await self._cloud_experience_exporter.start()
-        # Tier C1 — start the OTA poller as part of orchestrator lifecycle.
-        # Wrapped in try/except so a poller failure (HF Hub unreachable at
-        # boot, etc.) can't block the orchestrator from coming up. The
-        # poller's own ``start`` is a no-op when ``poll_interval_s = 0.0``,
-        # so default deployments pay zero cost. (Copilot 3253293644/3253309972.)
-        if self._weight_update_poller is not None:
+        # Tier C1 / C1.2 — start every wired OTA poller as part of the
+        # orchestrator lifecycle. Wrapped in try/except so a poller failure
+        # (HF Hub unreachable at boot, etc.) can't block the orchestrator
+        # from coming up. Each poller's own ``start`` is a no-op when
+        # ``poll_interval_s = 0.0``, so default deployments pay zero cost.
+        # An empty mapping skips the loop entirely. (Copilot 3253293644 /
+        # 3253309972.)
+        for poller in self._weight_update_pollers.values():
             try:
-                await self._weight_update_poller.start()
+                await poller.start()
             except Exception:  # pylint: disable=broad-except
                 _log.warning("cloud_weight_update_poller_start_failed", exc_info=True)
         if self._memory_tier is not None:
@@ -383,11 +459,13 @@ class MouseDroidOrchestrator:
             self._consolidation_tasks.discard(self._consolidation_task)
             self._consolidation_task = None
         await cancel_and_drain(self._cloud_publish_tasks)
-        # Tier C1 — stop the OTA poller. Wrapped in try/except so a stuck
-        # in-flight download can't block orchestrator shutdown.
-        if self._weight_update_poller is not None:
+        # Tier C1 / C1.2 — stop every wired OTA poller. Wrapped in
+        # try/except so a stuck in-flight download on one poller can't
+        # block shutdown of the others or of the orchestrator itself.
+        # An empty mapping skips the loop entirely.
+        for poller in self._weight_update_pollers.values():
             try:
-                await self._weight_update_poller.stop()
+                await poller.stop()
             except Exception:  # pylint: disable=broad-except
                 _log.warning("cloud_weight_update_poller_stop_failed", exc_info=True)
         if self._cloud_experience_exporter is not None:
@@ -473,6 +551,16 @@ class MouseDroidOrchestrator:
                     _log.warning("emergency_stop_triggered")
                     self._tick_count += 1
                     await self._publish_telemetry(observation, safety_ctx, loop_time_ms)
+                    # Tier C2 / C2.2 (Copilot MED follow-up): drive the
+                    # mission lifecycle on the emergency-stop branch too
+                    # so active missions keep accumulating progress/stall
+                    # state during emergency ticks. Without this, a
+                    # stuck-emergency condition would freeze the
+                    # lifecycle's stall counter and silently extend any
+                    # in-flight mission past its stall window. The helper
+                    # is a no-op when no lifecycle is wired, so pre-C2.2
+                    # deployments are byte-identical.
+                    await self._maybe_tick_mission_lifecycle(observation)
                     await self._hook_registry.run_phase(HookPhase.POST_TICK, ctx)
                     return
 
@@ -515,6 +603,16 @@ class MouseDroidOrchestrator:
 
             if self._task_tracker is not None:
                 await self._task_tracker.evaluate_active(ctx)
+
+            # Tier C2 / C2.2 — drive the optional mission lifecycle once per
+            # tick. No-op when no lifecycle is wired or the previous tick's
+            # vision-feature cache is unpopulated; failures are logged and
+            # swallowed so the control loop never crashes on lifecycle bugs.
+            # Runs AFTER task_tracker.evaluate_active so the tracker observes
+            # active tasks BEFORE the lifecycle potentially transitions them
+            # to terminal (SUCCEEDED/FAILED) states — preventing double-count
+            # or stale timeout enforcement on just-completed tasks.
+            await self._maybe_tick_mission_lifecycle(observation)
 
             await self._hook_registry.run_phase(HookPhase.POST_TICK, ctx)
             # Snapshot AND clear the one-shot ``mission_just_completed``
@@ -644,6 +742,13 @@ class MouseDroidOrchestrator:
                     intent=intent.intent_type.value,
                     confidence=intent.confidence,
                 )
+                # Defer lifecycle ``start_mission`` until AFTER a parser
+                # accepts (Copilot MED). Starting the lifecycle on every
+                # NL command — even unrecognized ones — leaves the
+                # state machine RUNNING on the neutral fallback
+                # ``GoalVector()`` path below and lets it stall/fail
+                # missions that were never actually accepted.
+                self._start_mission_lifecycle_if_wired(nl_command)
                 return intent.goal_vector
 
         # Stage 2: LLM fallback (slow path, ~100-500ms)
@@ -657,22 +762,96 @@ class MouseDroidOrchestrator:
                     vy=goal.vy_target,
                     omega=goal.omega_target,
                 )
+                # See Stage-1 note above: start the lifecycle only once
+                # the LLM has produced an accepted goal.
+                self._start_mission_lifecycle_if_wired(nl_command)
                 return goal
             except Exception:
                 _log.warning("mission_llm_fallback_failed", exc_info=True)
 
-        # Stage 3: Fallback to zero (safe default)
+        # Stage 3: Fallback to zero (safe default). The lifecycle is
+        # NOT started here — an unrecognized command must not leave the
+        # state machine RUNNING on the neutral fallback goal.
         _log.warning("mission_unresolved", command=nl_command)
         return GoalVector()
 
+    def _start_mission_lifecycle_if_wired(self, nl_command: str) -> None:
+        """Begin a MissionLifecycle mission iff one is wired.
+
+        Centralises the bump-counter + build-id + ``start_mission``
+        sequence used from both accepted Stage-1 (parser) and Stage-2
+        (LLM) paths. Failures are logged and swallowed so a misbehaving
+        lifecycle never crashes the mission-acceptance hot path.
+        """
+        if self._mission_lifecycle is None:
+            return
+        self._mission_seq += 1
+        mission_id = f"mission-{self._mission_seq:06d}"
+        try:
+            self._mission_lifecycle.start_mission(
+                mission_id=mission_id,
+                goal_text=nl_command,
+            )
+        except Exception:  # pragma: no cover - defensive
+            _log.warning("mission_lifecycle_start_failed", exc_info=True)
+
     def _apply_pending_weight_update(self) -> bool:
-        """Atomically swap policy / world-model if poller has a verified update.
+        """Atomically swap policy / world-model if any poller has a verified update.
 
         Runs ONCE per tick, AFTER ``_select_action`` returns. Guarantees the
         current tick saw one consistent weight set for both
         ``_update_world_model`` and ``_select_action``. Reference assignment
         is atomic at the Python interpreter level; we hold no locks because
         the orchestrator's ``tick()`` is single-coroutine on the event loop.
+
+        With Tier C1.2 the orchestrator holds a ``Mapping[str, poller]``
+        keyed by ``engine_type``. Each tick this method iterates the mapping
+        in the caller-provided insertion order of
+        ``self._weight_update_pollers`` and delegates per-poller swap work
+        to :meth:`_apply_one_pending_update`. The
+        ``build_weight_update_pollers`` factory guarantees ``policy`` before
+        ``world_model``; callers constructing ``MouseDroidOrchestrator``
+        directly are responsible for the ordering they want. Iteration
+        order matters: a world-model swap may zero the recurrent state on
+        the same tick, so applying ``policy`` first prevents a stale-policy
+        artefact from leaking into a freshly reset world model.
+
+        Method is INTENTIONALLY synchronous: ``tick()`` is the only caller,
+        the swap runs entirely in process memory (no I/O after the poller
+        downloaded), and keeping it sync avoids scheduling churn between
+        select_action and execute_action.
+
+        Returns:
+            ``True`` iff at least one world-model swap performed a recurrent-
+            state reset (caller MUST skip its own ``_prev_action = action``
+            assignment so the zero-state survives into the next tick).
+            ``False`` for any other code path (empty mapping, no pendings,
+            policy-only swap, loader failure, dead-letter, etc.).
+        """
+        if not self._weight_update_pollers:
+            return False
+        any_reset = False
+        for poller in self._weight_update_pollers.values():
+            update = poller.pending_update
+            if update is None:
+                continue
+            if self._apply_one_pending_update(poller, update):
+                any_reset = True
+        return any_reset
+
+    def _apply_one_pending_update(
+        self,
+        poller: WeightUpdatePollerProtocol,
+        update: PendingWeightUpdate,
+    ) -> bool:
+        """Apply one pending update from one poller.
+
+        Extracted from :meth:`_apply_pending_weight_update` so the multi-
+        poller loop can delegate per-poller swap work uniformly. The body
+        is the unchanged single-poller swap path from Tier C1 — it owns
+        the loader invocation, atomic reference swap, engine-type dispatch,
+        recurrent-state reset, metric increment, structured-log emission,
+        and the final ``acknowledge_swap`` call.
 
         The new engine is fully materialised via ``self._weight_update_loader``
         BEFORE the reference swap, so a loader failure does NOT corrupt the
@@ -688,24 +867,18 @@ class MouseDroidOrchestrator:
         dtype are preserved via ``torch.zeros_like`` so a CUDA-resident
         world-model state survives the swap on its original device.
 
-        Method is INTENTIONALLY synchronous: ``tick()`` is the only caller,
-        the swap runs entirely in process memory (no I/O after the poller
-        downloaded), and keeping it sync avoids scheduling churn between
-        select_action and execute_action.
+        Args:
+            poller: The poller that surfaced ``update``. Used to invoke
+                ``acknowledge_swap`` once the swap (or failure path) lands.
+            update: The pending update to apply.
 
         Returns:
-            ``True`` iff a world-model swap performed a recurrent-state
-            reset (caller MUST skip its own ``_prev_action = action``
-            assignment so the zero-state survives into the next tick).
-            ``False`` for any other code path (no poller, no pending,
-            policy-only swap, loader failure, dead-letter, etc.).
+            ``True`` iff this swap zeroed the recurrent state (world-model
+            engine only, gated by
+            ``cfg.cloud.weight_update.reset_state_on_swap``). ``False`` for
+            the no-loader branch, the loader-exception branch, a policy swap,
+            and the unknown-engine-type dead-letter branch.
         """
-        poller = self._weight_update_poller
-        if poller is None:
-            return False
-        update = poller.pending_update
-        if update is None:
-            return False
         if self._weight_update_loader is None:
             # Acknowledge-and-warn-once: without ack the same pending update
             # would re-fire ``cloud_weight_update_swap_skipped_no_loader``
@@ -741,10 +914,10 @@ class MouseDroidOrchestrator:
         # Atomic reference swap. Single-coroutine guarantee on tick() means
         # no concurrent reader observes a half-swapped state.
         reset_recurrent_state = False
-        if update.engine_type == "world_model":
+        if update.engine_type == ENGINE_TYPE_WORLD_MODEL:
             self._world_model = cast("WorldModelProtocol", new_engine)
             reset_recurrent_state = self._cfg.cloud.weight_update.reset_state_on_swap
-        elif update.engine_type == "policy":
+        elif update.engine_type == ENGINE_TYPE_POLICY:
             self._vla_policy = cast("VLAPolicyProtocol", new_engine)
         else:
             # Unknown engine type — acknowledge + dead-letter so the same
@@ -938,6 +1111,56 @@ class MouseDroidOrchestrator:
         if not was_unbatched:
             projected = projected.unsqueeze(0)
         return projected
+
+    async def _maybe_tick_mission_lifecycle(
+        self,
+        observation: ObservationProtocol,
+    ) -> None:
+        """Tier C2.1 — drive the optional MissionLifecycle once per tick.
+
+        Caches ``observation.vision_features`` between ticks so the
+        lifecycle's ``(obs_t, obs_tminus1)`` contract is honoured. No-op
+        when no lifecycle is wired or the observation has a zero-length
+        vision-feature vector. Failures in the lifecycle never propagate
+        into the control loop — they're logged and the orchestrator tick
+        continues.
+        """
+        if self._mission_lifecycle is None:
+            return
+        vf = observation.vision_features
+        # ObservationProtocol.vision_features is typed NDArray[np.float32]
+        # (never None per src/mousedroid/sensing/protocol.py). The only
+        # degenerate case is the zero-length / zero-d fallback array that
+        # mock_hardware emits before the camera warms up. Invalidate the
+        # cached previous frame so the next non-empty observation does
+        # NOT get paired with a stale pre-dropout frame — that would
+        # silently violate the lifecycle's ``(obs_t, obs_tminus1)``
+        # adjacency contract and corrupt VLM progress scoring.
+        if vf.size == 0:
+            self._prev_obs_for_vlm = None
+            return
+        # ``torch.tensor`` performs a single copy and tolerates a non-
+        # contiguous ``vf`` (camera/sensor manager may recycle the
+        # underlying numpy buffer between ticks — Jetson ring-buffer
+        # pattern, see CLAUDE.md deque(maxlen=N) convention). The owned
+        # copy means a subsequent ``shared_buffer[:] = ...`` mutation
+        # never aliases the cached prev-frame. Explicit ``dtype`` is
+        # required even though ``vf`` is already ``np.float32`` because
+        # the sensor protocol pins the numpy dtype, not the torch dtype,
+        # so a future widening of the protocol shouldn't silently change
+        # the VLM input dtype.
+        obs_t = torch.tensor(vf, dtype=torch.float32).unsqueeze(0)
+        prev = self._prev_obs_for_vlm
+        self._prev_obs_for_vlm = obs_t
+        if prev is None:
+            return
+        # Local rebind so mypy --strict sees Tensor (not Tensor | None)
+        # at the tick() call site.
+        prev_t: torch.Tensor = prev
+        try:
+            await self._mission_lifecycle.tick(obs_t, prev_t)
+        except Exception:  # pragma: no cover - defensive
+            _log.warning("mission_lifecycle_tick_failed", exc_info=True)
 
     def _try_vla_action(
         self,

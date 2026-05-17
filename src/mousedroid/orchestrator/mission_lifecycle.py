@@ -51,12 +51,33 @@ if TYPE_CHECKING:
     from torch import Tensor
 
     from mousedroid.config.schema import MissionConfig
-    from mousedroid.harness.protocol import TaskTrackerProtocol
+    from mousedroid.harness.protocol import TaskState, TaskTrackerProtocol, TickContext
     from mousedroid.llm_gateway.protocol import GoalVector
     from mousedroid.reward.vlm_progress import VLMProgressHead
     from mousedroid.telemetry.metrics import MetricsRegistry
 
 _log = get_logger(__name__)
+
+
+# Acceptance predicate used when the lifecycle submits a synthetic task
+# to the harness ``TaskTrackerProtocol`` (Tier C2.2). The lifecycle owns
+# mission termination via its own state machine and calls
+# ``tracker.update`` on terminal transitions, so the predicate must
+# never auto-complete the synthetic task — it always returns ``False``
+# so the tracker leaves the task RUNNING until the lifecycle explicitly
+# forces a terminal status. Implemented as a callable class so it
+# structurally satisfies :class:`AcceptancePredicateProtocol`'s
+# ``__call__`` shape under ``mypy --strict`` (a bare ``def`` would not).
+class _MissionOwnedPredicate:
+    """Always-False acceptance predicate for lifecycle-owned tasks."""
+
+    def __call__(self, task_state: TaskState, ctx: TickContext) -> bool:
+        """Return ``False`` so the tracker never auto-completes the task."""
+        del task_state, ctx
+        return False
+
+
+_MISSION_OWNED_PREDICATE = _MissionOwnedPredicate()
 
 
 class MissionLifecycleState(StrEnum):
@@ -192,6 +213,14 @@ class MissionLifecycle:
     def start_mission(self, mission_id: str, goal_text: str) -> None:
         """Begin a new mission, transitioning from PENDING to RUNNING.
 
+        When a :class:`TaskTrackerProtocol` is wired, also submits a
+        synthetic task to the tracker so the mission appears in the
+        unified active-task list alongside skill / OpenClaw tasks. The
+        synthetic task uses an always-False acceptance predicate
+        (``_mission_owned_predicate``) so the tracker never auto-
+        completes it — the lifecycle drives its own terminal transitions
+        and forwards them via :meth:`_forward_terminal_to_tracker`.
+
         Args:
             mission_id: Stable identifier for the mission.
             goal_text: Natural-language description scored by the VLM
@@ -203,9 +232,83 @@ class MissionLifecycle:
             goal_text=goal_text,
             state=MissionLifecycleState.PENDING,
         )
+        self._submit_to_tracker(mission_id=mission_id, goal_text=goal_text)
         self._transition(MissionLifecycleState.RUNNING, reason="start")
         self._mission.started_at_s = now
         _log.info("mission_started", mission_id=mission_id, goal_text=goal_text)
+
+    def _submit_to_tracker(self, *, mission_id: str, goal_text: str) -> None:
+        """Register the mission with the harness tracker if one is wired.
+
+        Failures are logged and swallowed — the tracker is observability
+        bookkeeping, never a hard dependency of the lifecycle's state
+        machine.
+        """
+        if self._tracker is None:
+            return
+        # Local imports — keep ``mousedroid.harness.protocol`` out of the
+        # module-level import graph because :class:`MissionLifecycle`
+        # itself imports lazily under ``TYPE_CHECKING`` to avoid cycles.
+        from mousedroid.harness.protocol import TaskSpec
+
+        try:
+            self._tracker.submit(
+                TaskSpec(
+                    id=mission_id,
+                    goal=goal_text,
+                    acceptance_predicate=_MISSION_OWNED_PREDICATE,
+                    metadata={"source": "mission_lifecycle"},
+                )
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            _log.warning(
+                "mission_tracker_submit_failed",
+                mission_id=mission_id,
+                error=f"{type(exc).__name__}:{exc}",
+            )
+
+    def _forward_terminal_to_tracker(
+        self,
+        *,
+        mission_id: str,
+        to_state: MissionLifecycleState,
+        reason: str,
+    ) -> None:
+        """Map a terminal lifecycle state to the harness tracker.
+
+        Mapping (state → :class:`TaskStatus`):
+
+        * :attr:`MissionLifecycleState.SUCCEEDED` → ``TaskStatus.COMPLETED``
+        * :attr:`MissionLifecycleState.FAILED` → ``TaskStatus.FAILED``
+
+        Failures are logged and swallowed for the same reason as
+        :meth:`_submit_to_tracker` — the tracker is observability.
+        """
+        if self._tracker is None:
+            return
+        from mousedroid.harness.protocol import TaskStatus
+
+        status_map: dict[MissionLifecycleState, TaskStatus] = {
+            MissionLifecycleState.SUCCEEDED: TaskStatus.COMPLETED,
+            MissionLifecycleState.FAILED: TaskStatus.FAILED,
+        }
+        mapped = status_map.get(to_state)
+        if mapped is None:
+            # Defensive — only terminal states should reach this method.
+            return
+        try:
+            self._tracker.update(
+                mission_id,
+                mapped,
+                error=reason if mapped == TaskStatus.FAILED else None,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            _log.warning(
+                "mission_tracker_update_failed",
+                mission_id=mission_id,
+                to_state=to_state.value,
+                error=f"{type(exc).__name__}:{exc}",
+            )
 
     async def tick(
         self,
@@ -372,6 +475,15 @@ class MissionLifecycle:
             self._metrics.inc_mission_state_transition(from_state.value, to_state.value)
         if to_state in _TERMINAL_STATES:
             self._record_terminal_duration()
+            # Tier C2.2: forward the terminal state to the harness
+            # ``TaskTrackerProtocol`` so the unified active-task list
+            # reflects the mission outcome. No-op when no tracker is
+            # wired; failures are logged and swallowed inside the helper.
+            self._forward_terminal_to_tracker(
+                mission_id=self._mission.mission_id,
+                to_state=to_state,
+                reason=reason,
+            )
 
     def _record_terminal_duration(self) -> None:
         assert self._mission is not None

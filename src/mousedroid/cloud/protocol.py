@@ -8,9 +8,26 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, TypeAlias, runtime_checkable
 
 from mousedroid.experience.protocol import ExperienceProtocol
+
+# Canonical engine-type discriminator for OTA weight-update routing. New
+# engines (e.g. ``"affect"``) extend this Literal and the orchestrator's
+# ``_apply_one_pending_update`` dispatch in lock-step so a typo at any
+# call site fails mypy --strict at the boundary rather than landing as a
+# silent ``cloud_weight_update_unknown_engine_type`` dead-letter at
+# runtime. The string values are part of the
+# ``PendingWeightUpdate.engine_type`` public contract — Prometheus
+# ``engine_type`` labels and the ``HuggingFaceWeightUpdatePoller(...,
+# engine_type=...)`` constructor argument both rely on them.
+EngineType: TypeAlias = Literal["policy", "world_model"]
+
+#: Canonical string for the VLA-policy engine. Use over bare ``"policy"``
+#: in production code paths so renames stay greppable.
+ENGINE_TYPE_POLICY: EngineType = "policy"
+#: Canonical string for the world-model engine.
+ENGINE_TYPE_WORLD_MODEL: EngineType = "world_model"
 
 
 @dataclass(frozen=True)
@@ -46,7 +63,7 @@ class PendingWeightUpdate:
     sha256: str
     local_path: Path
     downloaded_at: float
-    engine_type: str
+    engine_type: EngineType
 
 
 @runtime_checkable
@@ -58,6 +75,17 @@ class WeightUpdatePollerProtocol(Protocol):
     orchestrator to consume at a tick boundary. ``acknowledge_swap`` clears
     the slot once the orchestrator has applied the update so the same
     revision is not re-applied on the next tick.
+
+    Note for external implementors: the public surface is intentionally
+    minimal so pollers predating the Tier C1.2 multi-engine mapping
+    continue to satisfy this protocol structurally. The optional
+    ``engine_type`` property used by the orchestrator's per-engine
+    dispatch lives on :class:`EngineTypedWeightUpdatePollerProtocol`
+    (an extension protocol). The orchestrator's legacy-kwarg fold-in
+    path queries ``getattr(poller, "engine_type", getattr(poller,
+    "_engine_type", "policy"))`` so external pollers may declare the
+    extended protocol, expose the legacy private ``_engine_type``
+    attribute, or omit both (defaulting to the policy engine).
     """
 
     async def start(self) -> None:
@@ -75,6 +103,32 @@ class WeightUpdatePollerProtocol(Protocol):
 
     def acknowledge_swap(self, update: PendingWeightUpdate) -> None:
         """Clear the pending slot after the orchestrator has applied ``update``."""
+        ...
+
+
+@runtime_checkable
+class EngineTypedWeightUpdatePollerProtocol(WeightUpdatePollerProtocol, Protocol):
+    """Extension protocol for pollers that expose ``engine_type`` (Tier C1.2).
+
+    The base :class:`WeightUpdatePollerProtocol` deliberately omits this
+    property so external pollers written before Tier C1.2 still satisfy
+    it structurally. The Tier C1.2 multi-engine factory + dispatch path
+    queries ``engine_type`` via the orchestrator's ``getattr`` fallback
+    chain, so implementing this extension is optional — but recommended
+    for new pollers because it gives both ``mypy --strict`` callers and
+    ``isinstance(poller, EngineTypedWeightUpdatePollerProtocol)``
+    runtime checks a precise signal.
+    """
+
+    @property
+    def engine_type(self) -> EngineType:
+        """Engine discriminator the orchestrator dispatches on.
+
+        Exposed on this extension protocol so the orchestrator no longer
+        needs to reach into a private ``_engine_type`` attribute when
+        folding a legacy single-poller kwarg into the C1.2 dual-poller
+        mapping.
+        """
         ...
 
 
