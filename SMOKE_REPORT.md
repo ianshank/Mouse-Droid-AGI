@@ -213,6 +213,23 @@ These can run real today but require operator opt-in. The fallback-to-mock behav
 - [x] Four new findings logged (F-006 through F-009/F-012). F-006 is the only operationally blocking item (LLM perf); the rest are observability / documentation follow-ups.
 - [x] **Live telemetry dashboard verification — surfaced F-013 (HIGH, ops) + F-014 (HIGH, ops), now CONFIRMED working end-to-end after F-013 deploy-side fix:** After `scp config/jetson_production.yaml jetson:/etc/mousedroid/jetson_production.yaml` (and `auth_enabled: false` temp set while F-014 token-forwarding is pending), `docker compose ... up -d --force-recreate mousedroid` brought up the real `TelemetryServer` bound to `0.0.0.0:8080`. Container log proves the path: `telemetry_real_server_in_mock_mode → telemetry_lidar_raw_broadcast_started (5 Hz queue=16) → telemetry_port_bound 0.0.0.0:8080 → telemetry_mdns_registered → mock_telemetry_source_running`. A WS client at `ws://127.0.0.1:8080/ws/v1/lidar/raw` received **8 frames** with schema `{angles_rad, distances_m, intensities, n_points=360, scan_duration_s, timestamp}` — i.e. the dashboard pipeline plumbing is proven correct. Frames are still **mock data** (F-014 keeps the container in mock_hardware mode), but the orchestrator → publisher → server → WS → client chain has been end-to-end exercised on the real Jetson with the real aiohttp telemetry server.
 
+### Addendum C — Isaac Sim / Lab validation on Jetson
+
+Per operator request, ran the Isaac validation surface on the live Jetson. **Result: Isaac Lab is not, and should not be, installed on the Jetson.** Per ADR-009, Isaac Sim / Lab training runs on a separate Linux x86 + RTX workstation; the Jetson is inference-only. The Jetson validation surface is therefore:
+
+| Check | Outcome | Detail |
+|---|---|---|
+| `mousedroid.sim.isaaclab` module import | ✅ loads cleanly | The package's `__init__.py` keeps Isaac imports inside method bodies. |
+| `_isaaclab_available()` | ✅ `False` (as expected) | Confirms ADR-009's "Jetson is inference, not training" invariant. |
+| `cfg.rover.sim.backend` on production overlay | ✅ `"mock"` | Schema default. The Jetson never wires Isaac Lab at startup. |
+| Construct `RoverIsaacLabEnv(cfg.rover, wheel_radius_m=…, track_width_m=…)` | ✅ constructs | No-op at construction (heavy imports deferred to `.build()`). |
+| Call `env.build()` without isaaclab | ✅ raises `IsaacLabUnavailableError` gracefully | Message correctly directs operator to `pip install -e ".[isaac]"` on a workstation. |
+| `MockRoverEnv` build via factory | ✅ instantiates and steps | Same protocol as the Isaac env — cross-backend contract preserved. |
+| Constants (`ROVER_WHEEL_JOINT_NAMES`, `ROVER_SENSOR_LINK_NAMES`, `ROVER_NUM_WHEELS=4`) | ✅ resolve | Confirms the URDF-derived joint/link names are import-safe on Jetson. |
+| Host-side `tests/unit/sim/` pytest run | ✅ **62 passed, 4 skipped** | The 4 skips are `_isaaclab_available()`-gated tests that only run on the workstation. |
+
+**Conclusion:** the Isaac Lab "scaffold-only on Jetson, full training on workstation" architecture works as documented in ADR-009. No code action required from the smoke-stability sprint. A full Isaac Sim / Lab end-to-end validation belongs on the operator's Linux x86 box; the protocol contract that lets `MockRoverEnv` substitute for `RoverIsaacLabEnv` (verified by the cross-backend tests) is what guarantees the model trained in Isaac transfers to the Jetson runtime.
+
 ### Host-side full pytest sweep (Windows host, 2026-05-17)
 
 - Command: `pytest tests/ --ignore=tests/hardware -p no:cacheprovider`
