@@ -24,11 +24,22 @@ services:
     restart: unless-stopped
 
     # --- Environment ---
+    # F-014: the operator-managed /etc/mousedroid/docker.env is the source of
+    # truth for everything that varies per-host (MOCK_HARDWARE, TELEMETRY_TOKEN,
+    # LLM__N_GPU_LAYERS override, etc.). The inline ``environment:`` block below
+    # only carries values that must be host-shell-resolved (NVIDIA caps,
+    # GCP_CREDENTIALS) or that we always want to pin (MOUSEDROID_CONFIG path).
+    # Production default for MOUSEDROID_MOCK_HARDWARE is FALSE (real hardware);
+    # tests/dev wrappers can opt back into mock by exporting =true before
+    # ``docker compose up``. See config/.env.jetson.example.
+    env_file:
+      - /etc/mousedroid/docker.env
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
       - MOUSEDROID_CONFIG=/etc/mousedroid/jetson_production.yaml
-      - MOUSEDROID_MOCK_HARDWARE=${MOUSEDROID_MOCK_HARDWARE:-true}
+      - MOUSEDROID_MOCK_HARDWARE=${MOUSEDROID_MOCK_HARDWARE:-false}
+      - MOUSEDROID_TELEMETRY_TOKEN=${MOUSEDROID_TELEMETRY_TOKEN:-}
       - CUDA_HOME=/usr/local/cuda
       # GCP Digital Twin (optional — set GCP_PROJECT_ID in host env or .env file to enable)
       # NOTE: do NOT set MOUSEDROID_GCP__PROJECT_ID here with a default of ""; an
