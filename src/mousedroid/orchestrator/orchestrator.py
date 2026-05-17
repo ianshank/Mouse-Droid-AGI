@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from mousedroid.memory.tier import MemoryTier
     from mousedroid.orchestrator.face_controller import FaceController
     from mousedroid.orchestrator.mission_dispatcher import MissionDispatcherProtocol
+    from mousedroid.orchestrator.mission_lifecycle import MissionLifecycle
     from mousedroid.safety.context import SafetyContext
     from mousedroid.safety.projector_protocol import SafetyActionProjectorProtocol
     from mousedroid.safety.protocol import SafetyMonitorProtocol
@@ -118,6 +119,7 @@ class MouseDroidOrchestrator:
         weight_update_pollers: Mapping[str, WeightUpdatePollerProtocol] | None = None,
         weight_update_loader: Callable[[PendingWeightUpdate], object] | None = None,
         safety_projector: SafetyActionProjectorProtocol | None = None,
+        mission_lifecycle: MissionLifecycle | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -234,6 +236,15 @@ class MouseDroidOrchestrator:
                 are clamped uniformly. ``None`` (default, gated by
                 ``cfg.safety.projector.enabled=false``) makes the seam a
                 pure pass-through so existing deployments are byte-identical.
+            mission_lifecycle: Optional :class:`MissionLifecycle` (Tier
+                C2 / C2.2). When supplied, the orchestrator drives a
+                single ``lifecycle.tick(obs_t, obs_tminus1)`` call at the
+                POST_TICK seam each tick, after telemetry and just before
+                the POST_TICK hook fires. The helper caches the previous
+                tick's ``observation.vision_features`` so the lifecycle's
+                two-frame contract is honoured. ``None`` (default, gated
+                by ``cfg.mission.replan_enabled=false``) makes the seam a
+                no-op so existing deployments are byte-identical.
         """
         if not agents:
             msg = "At least one agent is required"
@@ -316,6 +327,14 @@ class MouseDroidOrchestrator:
         # ``_maybe_project_action`` a no-op so existing deployments produce
         # byte-identical actions to pre-C2.
         self._safety_projector: SafetyActionProjectorProtocol | None = safety_projector
+        # Tier C2 / C2.2 — optional mission lifecycle state machine. ``None``
+        # (gated by ``cfg.mission.replan_enabled=False``) makes
+        # ``_maybe_tick_mission_lifecycle`` a no-op. The previous tick's
+        # vision-feature tensor is cached between ticks so the lifecycle
+        # receives the (obs_t, obs_tminus1) pair it expects; the first
+        # tick after wiring populates the cache and skips the lifecycle.
+        self._mission_lifecycle = mission_lifecycle
+        self._prev_obs_for_vlm: torch.Tensor | None = None
         self._running = False
         self._tick_count: int = 0
         self._consolidation_task: asyncio.Task[None] | None = None
@@ -548,6 +567,11 @@ class MouseDroidOrchestrator:
 
             self._tick_count += 1
             await self._publish_telemetry(observation, safety_ctx, loop_time_ms)
+            # Tier C2 / C2.2 — drive the optional mission lifecycle once per
+            # tick. No-op when no lifecycle is wired or the previous tick's
+            # vision-feature cache is unpopulated; failures are logged and
+            # swallowed so the control loop never crashes on lifecycle bugs.
+            await self._maybe_tick_mission_lifecycle(observation)
 
             if self._task_tracker is not None:
                 await self._task_tracker.evaluate_active(ctx)
@@ -1017,6 +1041,41 @@ class MouseDroidOrchestrator:
         if not was_unbatched:
             projected = projected.unsqueeze(0)
         return projected
+
+    async def _maybe_tick_mission_lifecycle(
+        self,
+        observation: ObservationProtocol,
+    ) -> None:
+        """Tier C2.1 — drive the optional MissionLifecycle once per tick.
+
+        Caches ``observation.vision_features`` between ticks so the
+        lifecycle's ``(obs_t, obs_tminus1)`` contract is honoured. No-op
+        when no lifecycle is wired or the observation has a zero-length
+        vision-feature vector. Failures in the lifecycle never propagate
+        into the control loop — they're logged and the orchestrator tick
+        continues.
+        """
+        if self._mission_lifecycle is None:
+            return
+        vf = observation.vision_features
+        # ObservationProtocol.vision_features is typed NDArray[np.float32]
+        # (never None per src/mousedroid/sensing/protocol.py). The only
+        # degenerate case is the zero-length / zero-d fallback array that
+        # mock_hardware emits before the camera warms up.
+        if vf.size == 0:
+            return
+        obs_t = torch.from_numpy(vf).unsqueeze(0).float()
+        prev = self._prev_obs_for_vlm
+        self._prev_obs_for_vlm = obs_t
+        if prev is None:
+            return
+        # Local rebind so mypy --strict sees Tensor (not Tensor | None)
+        # at the tick() call site.
+        prev_t: torch.Tensor = prev
+        try:
+            await self._mission_lifecycle.tick(obs_t, prev_t)
+        except Exception:  # pragma: no cover - defensive
+            _log.warning("mission_lifecycle_tick_failed", exc_info=True)
 
     def _try_vla_action(
         self,

@@ -2547,6 +2547,17 @@ def build_orchestrator(cfg: Settings) -> object:
     # which makes the orchestrator's projection seam a no-op so pre-C2
     # deployments produce byte-identical actions.
     safety_projector = build_safety_projector(cfg, metrics=metrics_registry)
+    # Tier C2 / C2.2 — mission lifecycle state machine. Returns ``None``
+    # when ``cfg.mission.replan_enabled`` is ``False`` (the default), so
+    # the orchestrator's POST_TICK seam stays a no-op and pre-C2.2
+    # deployments are byte-identical. The lifecycle is wired with the
+    # shared task tracker so terminal state forwards land in the unified
+    # active-task list.
+    mission_lifecycle = build_mission_lifecycle(
+        cfg,
+        task_tracker=task_tracker,
+        metrics=metrics_registry,
+    )
 
     orchestrator = MouseDroidOrchestrator(
         world_model=wm,
@@ -2585,6 +2596,7 @@ def build_orchestrator(cfg: Settings) -> object:
         weight_update_pollers=weight_update_pollers,
         weight_update_loader=weight_update_loader,
         safety_projector=safety_projector,
+        mission_lifecycle=mission_lifecycle,
     )
     # Bind the deferred orchestrator reference so the OpenClaw mission
     # dispatcher (built before the orchestrator above) can route through
