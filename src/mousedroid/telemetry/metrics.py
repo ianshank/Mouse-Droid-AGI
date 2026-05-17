@@ -615,6 +615,9 @@ class MetricsRegistry:
         self._safety_action_clamps = _LabeledCounter()
         self._mission_state_transitions = _DoubleLabeledCounter()
         self._mission_replans = _LabeledCounter()
+        # Tier C2.3 — LLM-backed replan attempts per outcome
+        # (``ok`` | ``degraded`` | ``exception``).
+        self._mission_replan_llm_calls = _LabeledCounter()
         # Bucket boundaries normalised via the shared helper (C3.1 Gemini #2).
         self._mission_active_duration_seconds = _Histogram(
             self._prepare_bucket_boundaries(cfg.mission_duration_seconds_buckets)
@@ -689,6 +692,9 @@ class MetricsRegistry:
         self._name_safety_action_clamps = f"{ns}_safety_action_clamps"
         self._name_mission_state_transitions = f"{ns}_mission_state_transitions"
         self._name_mission_replans = f"{ns}_mission_replans"
+        # Tier C2.3 — LLM replan call counter (suffixed ``_total`` by the
+        # shared ``_render_labeled_counter`` helper, so omit it here).
+        self._name_mission_replan_llm_calls = f"{ns}_mission_replan_llm_calls"
         self._name_mission_active_duration_seconds = f"{ns}_mission_active_duration_seconds"
 
         _log.debug("metrics_registry_initialised", namespace=ns)
@@ -1263,6 +1269,23 @@ class MetricsRegistry:
         if amount > 0:
             self._mission_replans.inc(outcome, amount)
 
+    def inc_mission_replan_llm(self, outcome: str, amount: int = 1) -> None:
+        """Increment the Tier C2.3 LLM-backed replan attempt counter.
+
+        Args:
+            outcome: One of ``"ok"`` (gateway returned a parsed
+                ``GoalVector``), ``"degraded"`` (gateway's ``is_ready``
+                property was False so the adapter short-circuited),
+                or ``"exception"`` (gateway raised mid-call). Other
+                strings are accepted but operators should reserve them
+                for future expansion — Prometheus alerts can pin the
+                allowed label set.
+            amount: Increment magnitude (default 1). Values ``<= 0`` are
+                ignored, mirroring :meth:`inc_mission_replan`.
+        """
+        if amount > 0:
+            self._mission_replan_llm_calls.inc(outcome, amount)
+
     def observe_mission_active_duration_seconds(self, value: float) -> None:
         """Record one terminal mission's active duration (seconds).
 
@@ -1810,6 +1833,17 @@ class MetricsRegistry:
                     "Mission replans by outcome (label: outcome)",
                     "outcome",
                     mission_replans_snapshot,
+                )
+            )
+        # Tier C2.3 — LLM replan call counter (ok/degraded/exception).
+        mission_replan_llm_snapshot = self._mission_replan_llm_calls.snapshot()
+        if mission_replan_llm_snapshot:
+            sections.append(
+                _render_labeled_counter(
+                    self._name_mission_replan_llm_calls,
+                    "LLM-backed replan attempts by outcome (label: outcome)",
+                    "outcome",
+                    mission_replan_llm_snapshot,
                 )
             )
         (
