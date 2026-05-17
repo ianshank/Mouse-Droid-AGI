@@ -85,3 +85,47 @@ def test_help_flag_exits_zero_and_prints_usage(
     assert excinfo.value.code == 0
     captured = capsys.readouterr()
     assert "validate_pillars" in captured.out or "usage" in captured.out.lower()
+
+
+def test_cli_exits_0_when_overall_status_is_degraded(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """DEGRADED (WARN-only, no FAIL) must exit 0 — mirrors preflight CLI contract.
+
+    Reviewer caught a bug where the CLI exited 1 on DEGRADED. CI uses
+    these exit codes as the canonical "is the pillar dispatch broken?"
+    signal, so DEGRADED → 1 would spuriously fail otherwise-clean runs.
+    Pinned by patching ``validate_all_pillars`` to return a synthetic
+    DEGRADED report and asserting ``main(...) == 0``.
+    """
+    from mousedroid.cli import validate_pillars as _cli
+    from mousedroid.validation.pillars import (
+        PillarReport,
+        PillarResult,
+        PillarStatus,
+    )
+
+    degraded_report = PillarReport(
+        results=[
+            PillarResult(
+                name="curiosity",
+                status=PillarStatus.WARN,
+                detail="optional subsystem warning",
+                elapsed_s=0.0,
+            ),
+        ],
+    )
+
+    async def _fake_validate(*_args: object, **_kwargs: object) -> PillarReport:
+        return degraded_report
+
+    monkeypatch.setattr(_cli, "validate_all_pillars", _fake_validate)
+    # Use text render (not --json) so the "overall=degraded" line that
+    # ``PillarReport.render_text()`` produces shows up in stdout — the
+    # JSON dump excludes the ``overall_status`` computed property by
+    # default.
+    rc = _cli.main([])
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "degraded" in captured.out.lower()

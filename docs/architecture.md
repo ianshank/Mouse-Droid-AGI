@@ -336,6 +336,88 @@ used by `jetson_full_smoke_run.sh`. Voice smoke status: **PASS** (39,424 samples
 > overlay is synced automatically via `scripts/sync_jetson_overlay.sh` before
 > `preflight_check.sh` executes.
 
+### Programmatic validation surface (smoke-stability sprint)
+
+The shell-only validation flow is augmented by a Pydantic-typed async API that the orchestrator,
+operator CLIs, and CI dispatcher all share. Same overlays, same factory builders, same hardware
+helpers — but the surface now returns a structured report instead of stdout text.
+
+```mermaid
+graph TD
+    OperatorCLI["python -m mousedroid.cli.preflight\nargparse: --config / --checks / --json / --mock-hardware"]
+    PillarCLI["python -m mousedroid.cli.validate_pillars\nargparse: --pillars / --json / --dry-run"]
+    ProbeTool["tools/lidar_telemetry_probe.py\nstandalone WS verification probe (port 8090)"]
+    RunPreflight["mousedroid.validation.preflight.run_preflight\nasync — Pydantic PreflightReport"]
+    ValidatePillars["mousedroid.validation.pillars.validate_all_pillars\nasync — Pydantic PillarReport"]
+    CheckCamera["_check_camera (WARN on CSI ribbon disconnect)"]
+    CheckMic["_check_microphone"]
+    CheckSpeaker["_check_speaker"]
+    CheckLidar["_check_lidar"]
+    CheckEsp32["_check_esp32"]
+    CheckConfig["_check_config"]
+    PatternA["Pattern A — factory smoke\nsafety/world_model/memory/cognitive/reward/curiosity\nexplicit if x is None: return _fail(...)"]
+    PatternB["Pattern B — pytest delegation\ncontinual/meta/scaling/growth\npaths resolved against _REPO_ROOT"]
+    RuntimeHelpers["validation/runtime.py\nresolve_runtime_config_paths()\ncapture_camera_frame() / collect_lidar_diagnostics()"]
+    FactoryLayer["factory.py — protocol-based DI"]
+    TelemetryServer["TelemetryServer (aiohttp)\n/api/v1/health + /ws/v1/lidar/raw"]
+
+    OperatorCLI --> RunPreflight
+    PillarCLI --> ValidatePillars
+    ProbeTool --> FactoryLayer
+    ProbeTool --> TelemetryServer
+    RunPreflight --> CheckCamera
+    RunPreflight --> CheckMic
+    RunPreflight --> CheckSpeaker
+    RunPreflight --> CheckLidar
+    RunPreflight --> CheckEsp32
+    RunPreflight --> CheckConfig
+    ValidatePillars --> PatternA
+    ValidatePillars --> PatternB
+    CheckCamera --> RuntimeHelpers
+    CheckLidar --> RuntimeHelpers
+    PatternA --> FactoryLayer
+    RuntimeHelpers --> FactoryLayer
+```
+
+Key contracts (enforced by tests + reviewer):
+
+- **CLI exit codes** — `0` on `OK` *or* `DEGRADED` (WARN-only); `1` only on any `FAIL` entry. The
+  two CLIs share this contract so CI gates can treat them interchangeably.
+- **WARN vs FAIL** — `WARN` is operator-actionable without a code change (e.g. reconnect CSI
+  ribbon); `FAIL` is a driver crash, wrong cfg, or permission denied. Dashboards rely on the
+  distinction.
+- **Pattern-B path resolution** — `_PYTEST_DELEGATION_PATHS` entries are repo-relative strings;
+  the dispatcher prefixes each with `_REPO_ROOT = Path(__file__).resolve().parents[3]`. Works
+  regardless of caller CWD.
+- **Pattern-A smoke** — explicit `if x is None: return _fail(...)`, never `assert`. The Jetson
+  Docker entrypoint runs under `python -O` which strips `assert` statements.
+
+### Live-Jetson telemetry / dashboard pipeline (verified end-to-end)
+
+```mermaid
+graph LR
+    LiDAR["FHL-LD19 LiDAR\n/dev/ttyUSB0 @ 230400"]
+    Publisher["TelemetryPublisher\npublish_lidar_raw() @ 5 Hz"]
+    Server["TelemetryServer\naiohttp, port 8080"]
+    WSEndpoint["/ws/v1/lidar/raw\nJSON: {angles_rad, distances_m, intensities, n_points, scan_duration_s, timestamp}"]
+    Dashboard["Operator dashboard\n(WS client)"]
+    Health["/api/v1/health\nGPU temp + safety state"]
+    MDNS["mDNS broadcast\n_telemetry._tcp"]
+
+    LiDAR --> Publisher
+    Publisher --> Server
+    Server --> WSEndpoint
+    Server --> Health
+    Server --> MDNS
+    WSEndpoint --> Dashboard
+```
+
+Live-verified on the rover at `192.168.55.1` (`SMOKE_REPORT.md` Addendum A): 8 frames received,
+360 points each, full schema intact. The path goes through the real `TelemetryServer` (not
+`MockTelemetryServer`) when `cfg.telemetry.mock_force_real_when_enabled=true` even under
+`MOUSEDROID_MOCK_HARDWARE=true` — the production overlay enables this flag explicitly so the
+dashboard remains reachable when the orchestrator runs in mock mode (e.g. during operator probes).
+
 ---
 
 ## Level 3d — Component Diagram: GCP Digital Twin (Optional)

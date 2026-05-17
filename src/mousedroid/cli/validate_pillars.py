@@ -72,7 +72,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     output = report.model_dump_json(indent=2) if args.json else report.render_text()
     sys.stdout.write(output + "\n")
-    return 0 if report.overall_status == PillarStatus.OK else 1
+    # Exit 0 on OK or DEGRADED (WARN-only) — mirrors preflight CLI. Only
+    # FAIL (or skipped-only with no OK) blocks CI.
+    return 0 if report.overall_status != PillarStatus.FAIL else 1
 
 
 if __name__ == "__main__":

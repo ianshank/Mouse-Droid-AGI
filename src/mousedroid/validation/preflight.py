@@ -180,9 +180,7 @@ def _detect_csi_ribbon_disconnect(
 
     text = _load_proc_modules() if modules_text is None else modules_text
     loaded_csi_sensors = [
-        line.split()[0]
-        for line in text.splitlines()
-        if line.startswith(_CSI_SENSOR_PREFIXES)
+        line.split()[0] for line in text.splitlines() if line.startswith(_CSI_SENSOR_PREFIXES)
     ]
     if not loaded_csi_sensors:
         return None  # no sensor module loaded → not a ribbon-disconnect case

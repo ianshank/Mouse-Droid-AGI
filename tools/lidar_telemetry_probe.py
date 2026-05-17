@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import sys
 import time
@@ -55,21 +56,27 @@ async def _drive_lidar_to_publisher(lidar, publisher, stop_event: asyncio.Event)
 async def _consume_lidar_ws(url: str, max_frames: int, timeout_s: float) -> list[dict]:
     """Connect to the WS endpoint; collect up to ``max_frames`` JSON messages."""
     frames: list[dict] = []
-    async with aiohttp.ClientSession() as session:
-        async with session.ws_connect(url, timeout=aiohttp.ClientWSTimeout(ws_close=10.0)) as ws:
-            deadline = time.monotonic() + timeout_s
-            while len(frames) < max_frames and time.monotonic() < deadline:
-                try:
-                    msg = await asyncio.wait_for(ws.receive(), timeout=2.0)
-                except asyncio.TimeoutError:
-                    continue
-                if msg.type == aiohttp.WSMsgType.TEXT:
-                    try:
-                        frames.append(json.loads(msg.data))
-                    except json.JSONDecodeError:
-                        pass
-                elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
-                    break
+    ws_close_timeout = aiohttp.ClientWSTimeout(ws_close=10.0)
+    terminal_msg_types = (
+        aiohttp.WSMsgType.CLOSE,
+        aiohttp.WSMsgType.CLOSED,
+        aiohttp.WSMsgType.ERROR,
+    )
+    async with (
+        aiohttp.ClientSession() as session,
+        session.ws_connect(url, timeout=ws_close_timeout) as ws,
+    ):
+        deadline = time.monotonic() + timeout_s
+        while len(frames) < max_frames and time.monotonic() < deadline:
+            try:
+                msg = await asyncio.wait_for(ws.receive(), timeout=2.0)
+            except asyncio.TimeoutError:
+                continue
+            if msg.type == aiohttp.WSMsgType.TEXT:
+                with contextlib.suppress(json.JSONDecodeError):
+                    frames.append(json.loads(msg.data))
+            elif msg.type in terminal_msg_types:
+                break
     return frames
 
 
@@ -131,7 +138,12 @@ async def _main(args: argparse.Namespace) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="/etc/mousedroid/jetson_production.yaml")
-    parser.add_argument("--port", type=int, default=8090, help="non-default to avoid orchestrator collision")
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8090,
+        help="non-default to avoid orchestrator collision",
+    )
     parser.add_argument("--duration", type=float, default=15.0, help="seconds to listen on the WS")
     parser.add_argument("--max-frames", type=int, default=20)
     args = parser.parse_args()

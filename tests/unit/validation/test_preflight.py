@@ -116,10 +116,13 @@ def test_detect_csi_ribbon_disconnect_returns_none_when_video_node_present() -> 
     """``/dev/video*`` present → not a ribbon issue."""
     from mousedroid.validation.preflight import _detect_csi_ribbon_disconnect
 
-    assert _detect_csi_ribbon_disconnect(
-        video_nodes=["/dev/video0"],
-        modules_text="imx708 20480 0 - Live 0xfff0000000\n",
-    ) is None
+    assert (
+        _detect_csi_ribbon_disconnect(
+            video_nodes=["/dev/video0"],
+            modules_text="imx708 20480 0 - Live 0xfff0000000\n",
+        )
+        is None
+    )
 
 
 def test_detect_csi_ribbon_disconnect_flags_loaded_imx_module() -> None:
@@ -139,10 +142,13 @@ def test_detect_csi_ribbon_disconnect_silent_when_no_sensor_module() -> None:
     """No sensor module loaded → not a ribbon issue; return None."""
     from mousedroid.validation.preflight import _detect_csi_ribbon_disconnect
 
-    assert _detect_csi_ribbon_disconnect(
-        video_nodes=[],
-        modules_text="other_mod 1024 0\nyet_another 2048 0\n",
-    ) is None
+    assert (
+        _detect_csi_ribbon_disconnect(
+            video_nodes=[],
+            modules_text="other_mod 1024 0\nyet_another 2048 0\n",
+        )
+        is None
+    )
 
 
 def test_detect_csi_ribbon_disconnect_flags_ov_and_ar0_prefixes() -> None:
@@ -155,6 +161,36 @@ def test_detect_csi_ribbon_disconnect_flags_ov_and_ar0_prefixes() -> None:
     )
     assert msg is not None
     assert "ov5693" in msg or "ar0234" in msg
+
+
+@pytest.mark.asyncio
+async def test_check_camera_returns_warn_when_ribbon_disconnect_detected() -> None:
+    """Real-hardware path: ribbon-disconnect detector hit → WARN, not FAIL.
+
+    Pins the operator-actionable WARN signal end-to-end (the unit tests
+    above prove ``_detect_csi_ribbon_disconnect`` returns the right
+    string; this test proves ``_check_camera`` surfaces it as WARN with
+    the message body intact rather than swallowing it or returning FAIL).
+    """
+    from mousedroid.validation import preflight as _p
+
+    # Construct via ``mock_hardware=True`` (bypasses the "at least one
+    # distance sensor required" root validator) then flip the flag so
+    # ``_check_camera`` exercises the real-hardware branch.
+    cfg = Settings(mock_hardware=True)
+    cfg.mock_hardware = False
+
+    with unittest.mock.patch.object(
+        _p,
+        "_detect_csi_ribbon_disconnect",
+        return_value="CSI ribbon appears disconnected: imx708 loaded but no /dev/video*",
+    ):
+        result = await _p._check_camera(cfg)
+
+    assert result.name == "camera"
+    assert result.status == PreflightStatus.WARN
+    assert "imx708" in result.detail
+    assert "ribbon" in result.detail.lower()
 
 
 def test_preflight_report_render_text_includes_overall_status() -> None:

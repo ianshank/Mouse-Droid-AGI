@@ -184,20 +184,27 @@ mousedroid --health-check --config config/default.yaml
 
 ### Pre-Flight Validation
 
-Before starting the service, validate all hardware is present:
+Before starting the service, validate all hardware is present. Two equivalent entry points:
 
 ```bash
-# Run pre-flight checks (device paths configurable via env vars)
+# Bash entry point — coloured diagnostics, suitable for systemd ExecStartPre.
 bash scripts/preflight_check.sh
 
-# Override device paths if non-standard
+# Override device paths if non-standard.
 MOUSEDROID_ESP32_DEV=/dev/ttyUSB1 \
 MOUSEDROID_CAMERA_DEV=/dev/video1 \
 bash scripts/preflight_check.sh
+
+# Python entry point — Pydantic-typed PreflightReport, machine-parseable.
+python -m mousedroid.cli.preflight                     # text output
+python -m mousedroid.cli.preflight --json              # JSON report
+python -m mousedroid.cli.preflight --checks camera,esp32  # filter to subset
+python -m mousedroid.cli.preflight --mock-hardware     # smoke wiring without devices
 ```
 
-Exits 0 if all required hardware is present; exits 1 with coloured diagnostics on failure.
-The systemd service units run this automatically as `ExecStartPre`.
+Both exit `0` when every check is `OK` or `WARN` (the latter is operator-actionable — e.g. CSI ribbon
+disconnect — but not a stop ship). Exit `1` only on `FAIL` (real driver crash or missing device).
+The systemd service units run the bash entry point automatically as `ExecStartPre`.
 
 ### Jetson Validation / Smoke
 
@@ -246,6 +253,37 @@ and the full SUMMARY.md produced by `scripts/jetson_full_smoke_run.sh` appends t
 
 See [docs/planning/TEN_PILLARS_VALIDATION.md](docs/planning/TEN_PILLARS_VALIDATION.md) for the
 full operator validation plan, per-pillar pass criteria, and telemetry requirements.
+
+#### Programmatic pillar dispatch (`validate_all_pillars`)
+
+An async API + thin CLI mirroring the preflight entry points:
+
+```bash
+# Dry-run the dispatcher (CI-safe; lists every pillar as SKIPPED in ~µs).
+python -m mousedroid.cli.validate_pillars --dry-run
+
+# JSON report against a subset of pillars.
+python -m mousedroid.cli.validate_pillars --pillars safety,world_model --json
+```
+
+Exit `0` on `OK` or `DEGRADED`; exit `1` only on `FAIL`. Six pillars (safety / world_model / memory /
+cognitive / reward / curiosity) use Pattern A (factory-builder smoke); four (continual / meta /
+scaling / growth) use Pattern B (in-process `pytest.main` delegation). The CLI runs as a CI gate
+between typecheck and tests via `scripts/ci.sh`.
+
+#### Telemetry-dashboard verification probe
+
+When the operator wants to verify the dashboard data path on a live Jetson without standing up the
+full orchestrator (e.g. when the rover is detached and the ESP32 / CSI aren't reachable):
+
+```bash
+# Spins up real LiDAR → publisher → telemetry server on port 8090, then connects a WS client.
+docker exec mousedroid python3 /opt/mousedroid/tools/lidar_telemetry_probe.py
+```
+
+The probe binds a non-default port so it doesn't collide with the running orchestrator on `8080`,
+and prints the per-frame `n_points` count for the first frames received. See
+`SMOKE_REPORT.md` Addendum A for the live-Jetson run results.
 
 ### Rocky Voice Engine (Piper TTS)
 

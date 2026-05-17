@@ -35,6 +35,7 @@ import enum
 import importlib.util
 import time
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
@@ -45,6 +46,11 @@ if TYPE_CHECKING:
     from mousedroid.config.schema import Settings
 
 _log = get_logger(__name__)
+
+# Repo root resolved from this module's location so Pattern-B test paths
+# work regardless of the caller's CWD. ``__file__`` is .../src/mousedroid/
+# validation/pillars.py — parents[3] is the repo root.
+_REPO_ROOT: Path = Path(__file__).resolve().parents[3]
 
 
 class PillarStatus(str, enum.Enum):
@@ -151,7 +157,8 @@ async def _check_safety(cfg: Settings) -> PillarResult:
     from mousedroid.factory import build_safety_monitor
 
     monitor = build_safety_monitor(cfg)
-    assert monitor is not None
+    if monitor is None:
+        return _fail("safety", "build_safety_monitor returned None", time.monotonic() - t0)
     return _ok("safety", f"monitor={type(monitor).__name__}", time.monotonic() - t0)
 
 
@@ -160,7 +167,8 @@ async def _check_world_model(cfg: Settings) -> PillarResult:
     from mousedroid.factory import build_world_model
 
     wm = build_world_model(cfg)
-    assert wm is not None
+    if wm is None:
+        return _fail("world_model", "build_world_model returned None", time.monotonic() - t0)
     return _ok("world_model", f"engine={type(wm).__name__}", time.monotonic() - t0)
 
 
@@ -179,7 +187,8 @@ async def _check_cognitive(cfg: Settings) -> PillarResult:
     from mousedroid.factory import build_cognitive_core
 
     core = build_cognitive_core(cfg)
-    assert core is not None
+    if core is None:
+        return _fail("cognitive", "build_cognitive_core returned None", time.monotonic() - t0)
     return _ok("cognitive", f"core={type(core).__name__}", time.monotonic() - t0)
 
 
@@ -188,7 +197,8 @@ async def _check_reward(cfg: Settings) -> PillarResult:
     from mousedroid.factory import build_reward_model
 
     model = build_reward_model(cfg)
-    assert model is not None
+    if model is None:
+        return _fail("reward", "build_reward_model returned None", time.monotonic() - t0)
     return _ok("reward", f"model={type(model).__name__}", time.monotonic() - t0)
 
 
@@ -216,12 +226,13 @@ def _run_pytest_delegated(pillar: str, test_paths: tuple[str, ...]) -> PillarRes
     a documented reason rather than crashing the whole dispatcher.
     """
     t0 = time.monotonic()
-    # Filter to existing paths so a renamed test doesn't crash the pillar
-    # — the missing path becomes part of the diagnostic message instead.
-    from pathlib import Path
-
-    existing = [p for p in test_paths if Path(p).exists()]
-    missing = [p for p in test_paths if not Path(p).exists()]
+    # Resolve each relative test path against the module-level _REPO_ROOT
+    # so the dispatcher works regardless of the caller's CWD. Filter to
+    # existing paths so a renamed test doesn't crash the pillar — the
+    # missing path becomes part of the diagnostic message instead.
+    resolved = [(_REPO_ROOT / rel) for rel in test_paths]
+    existing = [str(p) for p in resolved if p.exists()]
+    missing = [str(p) for p in resolved if not p.exists()]
     if not existing:
         return _fail(
             pillar,
@@ -235,7 +246,7 @@ def _run_pytest_delegated(pillar: str, test_paths: tuple[str, ...]) -> PillarRes
             (
                 "pytest not installed in this runtime (Pattern-B pillar "
                 "delegation requires the dev extra; install with "
-                "`pip install -e \".[dev]\"` to enable)."
+                '`pip install -e ".[dev]"` to enable).'
             ),
         )
 

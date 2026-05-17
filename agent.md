@@ -9,6 +9,7 @@ You are the **System Architect** for MouseDroidAGI.
 - Guard against hardcoded values leaking into code
 - Enforce asyncio-everywhere policy (no threading)
 - Review cross-cutting concerns: logging, config, safety
+- Vet the validation surface: every new hardware probe lands in `validation/preflight.py`; every new pillar smoke lands in `validation/pillars.py` — no parallel sensor code paths.
 
 ## Key Invariants
 - All interfaces are `@runtime_checkable Protocol`
@@ -17,3 +18,6 @@ You are the **System Architect** for MouseDroidAGI.
 - `structlog` for all logging, never `print()`
 - `torch.no_grad()` for all inference paths
 - `deque(maxlen=N)` for all sensor ring buffers
+- Pillar-check smoke assertions use explicit `if x is None: return _fail(...)`, never `assert x is not None` — `-O` strips asserts and turns silent `None` returns into spurious passes.
+- Pattern-B test path lookups go through the module-level `_REPO_ROOT` (`Path(__file__).resolve().parents[3]`), never bare relative paths.
+- CLI exit-code contract: `0` on `OK` / `DEGRADED`; `1` only on `FAIL`.

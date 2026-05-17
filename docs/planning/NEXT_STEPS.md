@@ -1,13 +1,74 @@
 # MouseDroidAGI — Next Steps
 
-> **Last updated**: 2026-05-16 | **Version**: 0.4.0-dev (Tier C merged) | **Pre-PR validation**: Ruff clean, mypy strict clean, coverage gate maintained
+> **Last updated**: 2026-05-17 | **Version**: 0.4.1-dev (smoke-stability pass + live-Jetson verification) | **Pre-PR validation**: Ruff clean, mypy strict clean, 4792 tests pass on host + dashboard pipeline live-verified on rover
 
-## Tier C2.1 Follow-Up — Wire MissionLifecycle into the Orchestrator Tick
+## Smoke-stability sprint findings — operator-actionable follow-ups
 
-COMPLETED on 2026-05-16 in branch `claude/tier-c-closeout-harden` —
-`MissionLifecycle` now ticks at the POST_TICK seam (after `task_tracker.evaluate_active`)
-and `process_mission` calls `start_mission()` so the lifecycle actually transitions
-PENDING -> RUNNING in production. See the Tier C Closeout section below.
+The intermediate smoke-test stability sprint (`claude/smoke-test-stability-pass`,
+2026-05-17) live-verified the rover stack at `192.168.55.1` and surfaced 14 findings
+(F-001…F-014 in `SMOKE_REPORT.md`). Most are documented expected states; these are
+the ones that still need action.
+
+### F-006 (HIGH, operator-actionable) — LLM inference too slow for real-time control
+
+- **Symptom:** `translate_mission("turn left slowly")` on the live Jetson took **260 s**
+  (Phi-3-mini-q4 at 0.52 tok/s, eval). Orchestrator latency budget is 500 ms.
+- **Root cause:** `jetson_production.yaml` ships `llm.n_gpu_layers: 0` — CUDA KV cache
+  is allocated but matmul stays on CPU.
+- **Fix (no code):** set `llm.n_gpu_layers: -1` (offload all) in
+  `config/jetson_production.yaml` and re-deploy. Validate via `tools/lidar_telemetry_probe`-style
+  one-shot probe that calls `LLMGateway.translate_mission` and asserts elapsed ≤ 500 ms.
+- **Code follow-up:** add a runtime guard in `LLMGateway` that emits a
+  `llm_latency_budget_exceeded` structured log when a single call exceeds
+  `cfg.llm.latency_target_ms`. Operator dashboard then alerts before this regresses
+  silently again.
+
+### F-013 + F-014 (HIGH, ops) — Dashboard plumbing fragility
+
+The dashboard data path is correct end-to-end (verified live) but two deployment fragilities
+must be closed in a code follow-up:
+
+- **F-013:** there are **two copies** of `jetson_production.yaml` on each Jetson —
+  `config/jetson_production.yaml` (in-repo, the source of truth) and
+  `/etc/mousedroid/jetson_production.yaml` (operator-deployed, drifts). No sync job
+  closes the gap. The live verification needed an `scp config/jetson_production.yaml
+  jetson:/etc/mousedroid/jetson_production.yaml` step before the dashboard would come up.
+- **F-014:** `docker-compose.jetson.yml:31` substitutes
+  `MOUSEDROID_MOCK_HARDWARE=${VAR:-true}` from the **host shell env at compose-up time**,
+  ignoring the `MOUSEDROID_MOCK_HARDWARE=false` setting inside
+  `/etc/mousedroid/docker.env`. Production thus defaults to mock unless the operator
+  explicitly exports the var.
+
+**Proposed code follow-up sprint** (a single PR after this one ships):
+
+1. Add `scripts/deploy_config_jetson.sh` that runs `scp config/*.yaml
+   jetson:/etc/mousedroid/` + verifies checksums + restarts the orchestrator. Document
+   in `JETSON_SMOKE_RUNBOOK.md` as the canonical config-refresh path.
+2. Flip the compose default to `:-false` so production deployments default to real
+   hardware. Tests pass `MOUSEDROID_MOCK_HARDWARE=true` explicitly.
+3. Add `MOUSEDROID_TELEMETRY_TOKEN=${MOUSEDROID_TELEMETRY_TOKEN}` to the compose
+   `environment:` block so the token defined in `docker.env` actually reaches the
+   container at startup.
+4. Add a `_log.info("mock_hardware_resolved", value=cfg.mock_hardware)` line at
+   orchestrator boot so the resolved boolean is always visible in container logs.
+
+### F-009 (INFO, observability) — TensorRT silent mock fallback
+
+`build_tensorrt_compiler` returns `MockTensorRTCompiler` when the `tensorrt` Python
+wheel fails to import, with the choice only logged at DEBUG. On a production Jetson
+this means the operator can't tell from logs whether the real compiler or the mock is
+selected. Promote `tensorrt_compiler_built` to INFO with a `backend` field whose
+value is `real | mock`, and add a one-liner to the operator runbook to pin the real
+class.
+
+### F-010 (MED, Tier C3 sprint) — VLM progress is constant mock
+
+The Tier C2.3 mission-replanner loop runs against `MockVLMProgress` which returns
+`cfg.mission.vlm_mock_progress_value` regardless of input. The plumbing works
+(closed-loop test passes) but the operator should know "replanner decisions are
+evaluating the wiring, not the real VLM signal." Document in `CHANGELOG.md` until
+Tier C3 lands a real BLIP-2 / SmolVLM backend behind the same
+`VLMProgressBackendProtocol`.
 
 ---
 
