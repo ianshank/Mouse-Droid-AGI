@@ -8,6 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Tier C2.3: Mission Lifecycle Activation
+
+- **`OpenAICompatibleLLMGateway`** (`src/mousedroid/llm_gateway/openai_compatible.py`) — new HTTP backend implementing `LLMGatewayProtocol` against `{base_url}/v1/chat/completions`. Talks to Ollama (default at `http://127.0.0.1:11434`), LM Studio, OpenAI, or any OpenAI-compatible endpoint. Selected via `cfg.llm.backend = "openai_compatible"`. Always returns a neutral `GoalVector` on transport / parse failures so the orchestrator never crashes on a misbehaving LLM. API key stored as `SecretStr` and forwarded as `Authorization: Bearer …` only (never logged).
+- **`LLMGatewayMissionReplanner`** (`src/mousedroid/orchestrator/llm_replanner.py`) — adapter implementing `MissionReplannerProtocol` on any `LLMGatewayProtocol`. Built by `build_mission_replanner(cfg, *, llm_gateway, metrics)` when `cfg.mission.llm_replanner_enabled=True` and a gateway is wired. Augments the goal text with `(last_progress=<float>)` (toggle via `replanner.include_progress_in_prompt`) and clips at `replanner.max_prompt_chars`. Counts outcomes (`ok | degraded | exception`) via the new `mission_replan_llm_calls_total` Prometheus counter.
+- **`build_vlm_progress(cfg)`** factory — builds a `VLMProgressHead` (reusing `cfg.reward.vlm_progress` sub-block) with the existing `MockVLMProgress` backend whose value comes from `cfg.mission.vlm_mock_progress_value`. Default off; pre-Tier-C2.3 deployments byte-identical.
+- **`build_orchestrator`** now threads both new dependencies into `build_mission_lifecycle`, so the orchestrator's POST_TICK lifecycle seam is no longer a permanent no-op once the operator enables the three new flags.
+- **Five new fields on `LLMConfig`** (`backend`, `base_url`, `model_name`, `api_key`, `request_timeout_s`) — env-driven via the existing `MOUSEDROID_LLM__*` Pydantic prefix.
+- **Four new fields on `MissionConfig`** (`vlm_progress_enabled`, `vlm_mock_progress_value`, `llm_replanner_enabled`, `replanner`) + new nested `MissionReplannerConfig`. All defaults preserve byte-identical pre-Tier-C2.3 behavior.
+- New Prometheus counter `mousedroid_mission_replan_llm_calls_total{outcome=ok|degraded|exception}` registered in `MetricsRegistry`.
+- Tests: 49 new across `tests/unit/{config,factory,llm_gateway,orchestrator,telemetry}/`, plus the closed-loop integration (`tests/integration/test_mission_lifecycle_closed_loop.py`), boot smoke (`tests/smoke/test_mission_lifecycle_smoke.py`), Hypothesis property pinning terminal-state absorption, and an E2E mission-success path appended to `tests/e2e/test_full_pipeline.py`.
+
+### Backwards compatibility — Tier C2.3
+
+- Existing YAML loads unchanged. `cfg.llm.backend` defaults to `"llama_cpp"`. All three new boolean gates on `MissionConfig` default to `False`. `cfg.llm.api_key` defaults to `None` so anonymous local Ollama works without env vars.
+- The `OpenAICompatibleLLMGateway` is opt-in via `cfg.llm.backend="openai_compatible"`; the legacy in-process `LLMGateway` remains the default and is unchanged.
+- Env overrides via the established `MOUSEDROID_LLM__*` prefix (e.g. `MOUSEDROID_LLM__BASE_URL=http://192.168.55.1:11434` to point the Jetson at the host-PC LLM over the documented USB-network bridge).
+
 ### Added — Tier C hardening (gap + tech-debt closure)
 
 - **Typed `EngineType` discriminator** — `mousedroid.cloud.protocol` now exports `EngineType: TypeAlias = Literal["policy", "world_model"]` plus `ENGINE_TYPE_POLICY` / `ENGINE_TYPE_WORLD_MODEL` constants. Factory, orchestrator, and `HuggingFaceWeightUpdatePoller` all switch from bare string literals to the typed constants; a typo at any call site now fails `mypy --strict` instead of silently dead-lettering as `cloud_weight_update_unknown_engine_type` at runtime.
