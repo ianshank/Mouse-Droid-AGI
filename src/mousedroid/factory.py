@@ -1855,9 +1855,19 @@ def build_lidar_feature_extractor(cfg: Settings) -> object | None:
 def build_tensorrt_compiler(cfg: Settings) -> TensorRTCompilerProtocol:
     """Build TensorRT compiler based on config and hardware availability.
 
-    Returns a real ``JetsonTensorRTCompiler`` when TensorRT is enabled and
-    the ``torch2trt`` package is available. Falls back to
-    ``MockTensorRTCompiler`` otherwise.
+    Returns a real ``JetsonTensorRTCompiler`` when ``cfg.jetson.tensorrt_enabled``
+    is True. The real compiler itself falls back to ``torch.jit.trace`` at
+    compile time if ``torch2trt`` is missing (operators get a runtime warning
+    on the first compile call); the ``torch2trt_available`` field in the
+    structured-log event below surfaces that decision at boot time too so
+    operator dashboards can ingest it without waiting for the first inference.
+
+    Falls back to ``MockTensorRTCompiler`` when ``tensorrt_enabled`` is False.
+
+    F-009: consolidated the previous two log events
+    (``tensorrt_compiler_built`` / ``tensorrt_compiler_mock_built``) into a
+    single ``tensorrt_compiler_built`` event with a ``backend`` label so
+    operator dashboards can ingest backend selection without a label split.
 
     Args:
         cfg: Root settings.
@@ -1865,19 +1875,33 @@ def build_tensorrt_compiler(cfg: Settings) -> TensorRTCompilerProtocol:
     Returns:
         Compiler conforming to ``TensorRTCompilerProtocol``.
     """
+    # Import _TORCH2TRT_AVAILABLE once so both branches log the truthful
+    # boolean. Previously the mock branch hardcoded ``torch2trt_available=False``
+    # which misled dashboards on dev hosts where torch2trt IS installed but
+    # tensorrt is just disabled in cfg.
+    from mousedroid.efficiency.tensorrt import _TORCH2TRT_AVAILABLE
+
     if cfg.jetson.tensorrt_enabled:
         from mousedroid.efficiency.tensorrt import JetsonTensorRTCompiler
 
         _log.info(
             "tensorrt_compiler_built",
+            backend="real",
+            torch2trt_available=_TORCH2TRT_AVAILABLE,
             precision=cfg.jetson.precision,
             cache_dir=str(cfg.jetson.tensorrt_cache_dir),
+            reason="tensorrt_enabled=true",
         )
         return JetsonTensorRTCompiler(cfg.jetson)
 
     from mousedroid.efficiency.tensorrt import MockTensorRTCompiler
 
-    _log.info("tensorrt_compiler_mock_built")
+    _log.info(
+        "tensorrt_compiler_built",
+        backend="mock",
+        torch2trt_available=_TORCH2TRT_AVAILABLE,
+        reason="tensorrt_enabled=false",
+    )
     return MockTensorRTCompiler()
 
 

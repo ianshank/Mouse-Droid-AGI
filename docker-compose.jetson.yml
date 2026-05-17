@@ -24,11 +24,36 @@ services:
     restart: unless-stopped
 
     # --- Environment ---
+    # F-014: ``/etc/mousedroid/docker.env`` is the authoritative source for
+    # per-host secrets and tunables (MOUSEDROID_TELEMETRY_TOKEN,
+    # MOUSEDROID_MOCK_HARDWARE, MOUSEDROID_LLM__N_GPU_LAYERS, etc.). The
+    # inline ``environment:`` block below ONLY carries values that:
+    #   1. Must be host-shell-resolved at compose-up time (NVIDIA caps,
+    #      GOOGLE_APPLICATION_CREDENTIALS), OR
+    #   2. We always want to pin regardless of docker.env contents
+    #      (MOUSEDROID_CONFIG path).
+    #
+    # Per Compose spec, inline ``environment:`` ALWAYS wins over ``env_file:``
+    # values. We deliberately keep MOUSEDROID_TELEMETRY_TOKEN and
+    # MOUSEDROID_MOCK_HARDWARE OUT of the inline block so that:
+    #   - The token defined in docker.env actually reaches the container
+    #     (previous Copilot-flagged crash-loop bug: the inline default
+    #     ``${VAR:-}`` substitutes empty when the host shell var is unset,
+    #     silently overriding whatever docker.env contained).
+    #   - ``MOUSEDROID_MOCK_HARDWARE`` in docker.env is honoured directly
+    #     (operator-managed = single source of truth, no precedence ambiguity).
+    #
+    # ``required: false`` is critical for first-time bringup and CI
+    # ``docker compose config --quiet`` lint runs where /etc/mousedroid/
+    # doesn't exist yet — without it compose fails immediately with
+    # "env file not found".
+    env_file:
+      - path: /etc/mousedroid/docker.env
+        required: false
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
       - MOUSEDROID_CONFIG=/etc/mousedroid/jetson_production.yaml
-      - MOUSEDROID_MOCK_HARDWARE=${MOUSEDROID_MOCK_HARDWARE:-true}
       - CUDA_HOME=/usr/local/cuda
       # GCP Digital Twin (optional — set GCP_PROJECT_ID in host env or .env file to enable)
       # NOTE: do NOT set MOUSEDROID_GCP__PROJECT_ID here with a default of ""; an

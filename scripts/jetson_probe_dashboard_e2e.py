@@ -169,7 +169,7 @@ def _check_liveness_shape(frames: list[dict[str, Any]]) -> tuple[str | None, dic
                     observed,
                 )
             age = entry.get("age_s")
-            if age is not None and not (isinstance(age, (int, float)) and age >= 0):
+            if age is not None and not (isinstance(age, int | float) and age >= 0):
                 return (
                     f"sensor_liveness.{sensor}.age_s invalid: {age!r}",
                     observed,

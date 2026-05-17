@@ -101,6 +101,31 @@ def load_settings(
     for key in env_overridden:
         merged.pop(key, None)
 
+    # F-006: extend the same env-precedence guarantee to NESTED keys.
+    # MOUSEDROID_LLM__N_GPU_LAYERS=0 from /etc/mousedroid/docker.env must be
+    # able to override config/jetson_production.yaml's llm.n_gpu_layers=-1
+    # so an operator can fall back to CPU-only on a host without flipping
+    # any committed file. Pop the nested entry from the merged dict so
+    # pydantic-settings' env-var source wins on construction.
+    for env_name, env_val in list(os.environ.items()):
+        if not env_name.upper().startswith(env_prefix):
+            continue
+        suffix = env_name[len(env_prefix) :]
+        if "__" not in suffix:
+            continue
+        if not env_val.strip():
+            # Handled by the empty-value sanitizer below.
+            continue
+        path_parts = [p.lower() for p in suffix.split("__")]
+        cursor: Any = merged
+        for part in path_parts[:-1]:
+            if not isinstance(cursor, dict) or part not in cursor:
+                cursor = None
+                break
+            cursor = cursor[part]
+        if isinstance(cursor, dict):
+            cursor.pop(path_parts[-1], None)
+
     # Sanitize nested env vars whose value is empty/whitespace. pydantic-settings
     # v2 interprets MOUSEDROID_SECTION__FIELD="" as {"section": {"field": ""}},
     # which then materializes an Optional nested config (e.g. GCPConfig) with
