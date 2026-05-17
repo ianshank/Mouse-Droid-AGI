@@ -33,10 +33,14 @@ async def test_submit_replan_request_success_returns_goal_vector() -> None:
     expected = GoalVector(vx_target=0.4, vy_target=0.0, omega_target=0.1)
     gw = _make_gateway(ready=True, goal=expected)
     adapter = LLMGatewayMissionReplanner(
-        gateway=gw, cfg=MissionReplannerConfig(), metrics=metrics,
+        gateway=gw,
+        cfg=MissionReplannerConfig(),
+        metrics=metrics,
     )
     result = await adapter.submit_replan_request(
-        mission_id="m-1", goal_text="navigate to charger", last_progress=0.1,
+        mission_id="m-1",
+        goal_text="navigate to charger",
+        last_progress=0.1,
     )
     assert result == expected
     gw.translate_mission.assert_awaited_once()
@@ -51,17 +55,18 @@ async def test_submit_replan_request_returns_none_when_gateway_degraded() -> Non
     metrics = MetricsRegistry(MetricsConfig())
     gw = _make_gateway(ready=False)
     adapter = LLMGatewayMissionReplanner(
-        gateway=gw, cfg=MissionReplannerConfig(), metrics=metrics,
+        gateway=gw,
+        cfg=MissionReplannerConfig(),
+        metrics=metrics,
     )
     result = await adapter.submit_replan_request(
-        mission_id="m-2", goal_text="go to kitchen", last_progress=0.05,
+        mission_id="m-2",
+        goal_text="go to kitchen",
+        last_progress=0.05,
     )
     assert result is None
     gw.translate_mission.assert_not_awaited()
-    assert (
-        'mission_replan_llm_calls_total{outcome="degraded"} 1'
-        in metrics.render_prometheus()
-    )
+    assert 'mission_replan_llm_calls_total{outcome="degraded"} 1' in metrics.render_prometheus()
 
 
 @pytest.mark.asyncio
@@ -69,16 +74,17 @@ async def test_submit_replan_request_swallows_exception_and_returns_none() -> No
     metrics = MetricsRegistry(MetricsConfig())
     gw = _make_gateway(ready=True, raises=RuntimeError("LLM timeout"))
     adapter = LLMGatewayMissionReplanner(
-        gateway=gw, cfg=MissionReplannerConfig(), metrics=metrics,
+        gateway=gw,
+        cfg=MissionReplannerConfig(),
+        metrics=metrics,
     )
     result = await adapter.submit_replan_request(
-        mission_id="m-3", goal_text="patrol perimeter", last_progress=0.2,
+        mission_id="m-3",
+        goal_text="patrol perimeter",
+        last_progress=0.2,
     )
     assert result is None
-    assert (
-        'mission_replan_llm_calls_total{outcome="exception"} 1'
-        in metrics.render_prometheus()
-    )
+    assert 'mission_replan_llm_calls_total{outcome="exception"} 1' in metrics.render_prometheus()
 
 
 @pytest.mark.asyncio
@@ -91,7 +97,9 @@ async def test_prompt_clipped_at_max_prompt_chars() -> None:
         metrics=metrics,
     )
     await adapter.submit_replan_request(
-        mission_id="m-4", goal_text="x" * 500, last_progress=0.1,
+        mission_id="m-4",
+        goal_text="x" * 500,
+        last_progress=0.1,
     )
     forwarded = gw.translate_mission.await_args.args[0]
     assert len(forwarded) <= 32
@@ -107,7 +115,9 @@ async def test_include_progress_in_prompt_false_omits_progress_hint() -> None:
         metrics=metrics,
     )
     await adapter.submit_replan_request(
-        mission_id="m-5", goal_text="explore", last_progress=0.05,
+        mission_id="m-5",
+        goal_text="explore",
+        last_progress=0.05,
     )
     forwarded = gw.translate_mission.await_args.args[0]
     assert "last_progress" not in forwarded
@@ -118,9 +128,12 @@ async def test_include_progress_in_prompt_false_omits_progress_hint() -> None:
 async def test_metrics_optional_does_not_crash_when_omitted() -> None:
     gw = _make_gateway(ready=True)
     adapter = LLMGatewayMissionReplanner(
-        gateway=gw, cfg=MissionReplannerConfig(),
+        gateway=gw,
+        cfg=MissionReplannerConfig(),
     )
     result = await adapter.submit_replan_request(
-        mission_id="m-6", goal_text="explore", last_progress=0.1,
+        mission_id="m-6",
+        goal_text="explore",
+        last_progress=0.1,
     )
     assert result is not None

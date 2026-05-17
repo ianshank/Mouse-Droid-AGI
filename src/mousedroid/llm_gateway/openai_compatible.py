@@ -50,6 +50,19 @@ _HEALTH_PATH = "/v1/models"
 _CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
 # Authorization header format for bearer-token auth (RFC 6750).
 _BEARER_PREFIX = "Bearer "
+# ``GoalVector`` velocity-axis bounds. Mirrors the clamp the legacy
+# in-process :class:`LLMGateway._parse_response` applies so both
+# backends produce equivalent ``GoalVector`` output for the same LLM
+# response. Not config-driven because the bounds are part of the
+# ``GoalVector`` semantic contract (normalised in ``[-1, 1]``), not an
+# operator-tunable knob.
+_GOAL_VECTOR_MIN = -1.0
+_GOAL_VECTOR_MAX = 1.0
+
+
+def _clamp_unit(value: float) -> float:
+    """Clamp ``value`` to the GoalVector ``[-1, 1]`` velocity range."""
+    return max(_GOAL_VECTOR_MIN, min(_GOAL_VECTOR_MAX, value))
 
 
 class OpenAICompatibleLLMGateway:
@@ -88,7 +101,14 @@ class OpenAICompatibleLLMGateway:
             _log.info("llm_gateway_disabled")
             return
 
-        self._session = self._build_session()
+        # Idempotent session creation: a second ``start()`` (operator
+        # retry / reconnect) must not leak the prior ``ClientSession``.
+        # The session is only torn down by :meth:`stop` (which sets
+        # ``_session = None``), so reusing the existing handle here is
+        # safe and avoids socket-handle leaks under flaky network
+        # conditions where ``start()`` is invoked multiple times.
+        if self._session is None:
+            self._session = self._build_session()
         try:
             async with self._session.get(
                 f"{self._cfg.base_url}{_HEALTH_PATH}",
@@ -153,9 +173,7 @@ class OpenAICompatibleLLMGateway:
         }
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._cfg.api_key is not None:
-            headers["Authorization"] = (
-                f"{_BEARER_PREFIX}{self._cfg.api_key.get_secret_value()}"
-            )
+            headers["Authorization"] = f"{_BEARER_PREFIX}{self._cfg.api_key.get_secret_value()}"
 
         start = time.monotonic()
         try:
@@ -173,7 +191,12 @@ class OpenAICompatibleLLMGateway:
                     )
                     return GoalVector()
                 body = await resp.json()
-        except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
+        except (asyncio.TimeoutError, aiohttp.ClientError, json.JSONDecodeError) as exc:
+            # ``resp.json()`` raises ``json.JSONDecodeError`` when the
+            # body bytes don't decode as JSON even if the server set
+            # ``Content-Type: application/json`` — caught here so the
+            # docstring's "never raises" invariant holds on misbehaving
+            # upstreams (a half-buffered Ollama response, for instance).
             _log.warning(
                 "llm_gateway_http_error",
                 error=f"{type(exc).__name__}:{exc}",
@@ -196,23 +219,42 @@ class OpenAICompatibleLLMGateway:
 
     @staticmethod
     def _parse_goal_vector(content: str) -> GoalVector:
-        """Parse ``content`` as JSON and build a :class:`GoalVector`.
+        """Parse ``content`` as JSON and build a clamped :class:`GoalVector`.
 
-        Returns a neutral GoalVector when ``content`` is not valid JSON
-        or when expected fields are missing — the orchestrator's
-        ``process_mission`` already treats neutral GoalVectors as
-        "mission unresolved" (Stage-3 fallback).
+        Keys (``"vx"``, ``"vy"``, ``"omega"``) and the ``[-1, 1]`` clamp
+        mirror the legacy in-process :class:`LLMGateway._parse_response`
+        contract so swapping ``cfg.llm.backend`` between ``llama_cpp``
+        and ``openai_compatible`` produces equivalent ``GoalVector``
+        output for a given LLM response. The legacy parser's key choice
+        matches the canonical ``LLMConfig.system_prompt`` instruction
+        ("output a JSON object with keys 'vx', 'vy', 'omega'").
+
+        Returns a neutral :class:`GoalVector` when ``content`` is not
+        valid JSON, when the decoded payload isn't a JSON object, or
+        when any field is non-numeric — keeping the "never raises"
+        invariant intact.
         """
         try:
             doc = json.loads(content)
         except json.JSONDecodeError:
             _log.warning("llm_gateway_http_non_json_content")
             return GoalVector()
-        return GoalVector(
-            vx_target=float(doc.get("vx_target", 0.0)),
-            vy_target=float(doc.get("vy_target", 0.0)),
-            omega_target=float(doc.get("omega_target", 0.0)),
-        )
+        if not isinstance(doc, dict):
+            # Some LLMs occasionally emit a top-level list or scalar
+            # instead of the requested object — surface as a neutral
+            # GoalVector rather than blowing up the parser.
+            _log.warning("llm_gateway_http_non_object_content")
+            return GoalVector()
+        try:
+            return GoalVector(
+                vx_target=_clamp_unit(float(doc.get("vx", 0.0))),
+                vy_target=_clamp_unit(float(doc.get("vy", 0.0))),
+                omega_target=_clamp_unit(float(doc.get("omega", 0.0))),
+            )
+        except (TypeError, ValueError):
+            # Defends against non-numeric fields (e.g. ``{"vx": "fast"}``).
+            _log.warning("llm_gateway_http_non_numeric_fields")
+            return GoalVector()
 
     async def stop(self) -> None:
         """Close the underlying aiohttp session."""

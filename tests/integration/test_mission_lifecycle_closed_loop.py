@@ -44,7 +44,6 @@ async def test_closed_loop_first_tick_after_mission_succeeds() -> None:
     assert orch._mission_lifecycle is not None
     _install_accepting_parser(orch, "navigate to charger")
 
-
     await orch.process_mission("navigate to charger")
     assert orch._mission_lifecycle.current_state == MissionLifecycleState.RUNNING
 

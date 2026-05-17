@@ -52,9 +52,7 @@ async def test_start_marks_degraded_on_connection_error() -> None:
     cfg = _config()
     gw = OpenAICompatibleLLMGateway(cfg)
     fake_session = MagicMock()
-    fake_session.get = MagicMock(
-        side_effect=aiohttp.ClientConnectionError("connection refused")
-    )
+    fake_session.get = MagicMock(side_effect=aiohttp.ClientConnectionError("connection refused"))
     with patch.object(gw, "_build_session", return_value=fake_session):
         await gw.start()
     assert gw.is_ready is False
@@ -72,6 +70,7 @@ async def test_start_no_op_when_disabled() -> None:
 
 @pytest.mark.asyncio
 async def test_translate_mission_parses_goal_vector_from_chat_response() -> None:
+    """Parses ``vx``/``vy``/``omega`` keys (matches the system prompt + legacy gateway)."""
     cfg = _config()
     gw = OpenAICompatibleLLMGateway(cfg)
     payload = {
@@ -79,11 +78,11 @@ async def test_translate_mission_parses_goal_vector_from_chat_response() -> None
             {
                 "message": {
                     "content": json.dumps(
-                        {"vx_target": 0.5, "vy_target": 0.0, "omega_target": 0.1}
-                    )
-                }
-            }
-        ]
+                        {"vx": 0.5, "vy": 0.0, "omega": 0.1},
+                    ),
+                },
+            },
+        ],
     }
     fake_response = MagicMock()
     fake_response.status = 200
@@ -95,6 +94,123 @@ async def test_translate_mission_parses_goal_vector_from_chat_response() -> None
 
     goal = await gw.translate_mission("navigate to charger")
     assert goal == GoalVector(vx_target=0.5, vy_target=0.0, omega_target=0.1)
+
+
+@pytest.mark.asyncio
+async def test_translate_mission_clamps_oversized_values_to_unit_range() -> None:
+    """``vx=1.5`` clamps to ``1.0`` (matches legacy gateway behaviour)."""
+    cfg = _config()
+    gw = OpenAICompatibleLLMGateway(cfg)
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps({"vx": 1.5, "vy": -2.0, "omega": 0.3}),
+                },
+            },
+        ],
+    }
+    fake_response = MagicMock()
+    fake_response.status = 200
+    fake_response.json = AsyncMock(return_value=payload)
+    fake_session = MagicMock()
+    fake_session.post = MagicMock(return_value=_async_context_manager(fake_response))
+    gw._session = fake_session  # type: ignore[attr-defined]
+    gw._ready = True  # type: ignore[attr-defined]
+
+    goal = await gw.translate_mission("explore")
+    assert goal == GoalVector(vx_target=1.0, vy_target=-1.0, omega_target=0.3)
+
+
+@pytest.mark.asyncio
+async def test_translate_mission_returns_neutral_goal_on_non_object_content() -> None:
+    """Top-level list / scalar JSON → neutral GoalVector (defends parser)."""
+    cfg = _config()
+    gw = OpenAICompatibleLLMGateway(cfg)
+    payload = {"choices": [{"message": {"content": json.dumps([1, 2, 3])}}]}
+    fake_response = MagicMock()
+    fake_response.status = 200
+    fake_response.json = AsyncMock(return_value=payload)
+    fake_session = MagicMock()
+    fake_session.post = MagicMock(return_value=_async_context_manager(fake_response))
+    gw._session = fake_session  # type: ignore[attr-defined]
+    gw._ready = True  # type: ignore[attr-defined]
+
+    goal = await gw.translate_mission("explore")
+    assert goal == GoalVector()
+
+
+@pytest.mark.asyncio
+async def test_translate_mission_returns_neutral_goal_on_non_numeric_fields() -> None:
+    """``{"vx": "fast"}`` → neutral GoalVector (defends parser)."""
+    cfg = _config()
+    gw = OpenAICompatibleLLMGateway(cfg)
+    payload = {
+        "choices": [{"message": {"content": json.dumps({"vx": "fast", "vy": 0.0, "omega": 0.0})}}],
+    }
+    fake_response = MagicMock()
+    fake_response.status = 200
+    fake_response.json = AsyncMock(return_value=payload)
+    fake_session = MagicMock()
+    fake_session.post = MagicMock(return_value=_async_context_manager(fake_response))
+    gw._session = fake_session  # type: ignore[attr-defined]
+    gw._ready = True  # type: ignore[attr-defined]
+
+    goal = await gw.translate_mission("explore")
+    assert goal == GoalVector()
+
+
+@pytest.mark.asyncio
+async def test_translate_mission_returns_neutral_goal_on_resp_json_raises() -> None:
+    """``resp.json()`` raising ``JSONDecodeError`` is caught + neutral goal returned.
+
+    Gemini code-review finding: server may set ``Content-Type:
+    application/json`` but return malformed bytes; the gateway must not
+    raise (per its public docstring contract).
+    """
+    cfg = _config()
+    gw = OpenAICompatibleLLMGateway(cfg)
+    fake_response = MagicMock()
+    fake_response.status = 200
+    fake_response.json = AsyncMock(side_effect=json.JSONDecodeError("bad", "doc", 0))
+    fake_session = MagicMock()
+    fake_session.post = MagicMock(return_value=_async_context_manager(fake_response))
+    gw._session = fake_session  # type: ignore[attr-defined]
+    gw._ready = True  # type: ignore[attr-defined]
+
+    goal = await gw.translate_mission("explore")
+    assert goal == GoalVector()
+
+
+@pytest.mark.asyncio
+async def test_start_idempotent_reuses_existing_session() -> None:
+    """Calling ``start()`` twice must NOT leak the first session.
+
+    Gemini code-review finding: prior code unconditionally assigned a new
+    ``ClientSession`` on each ``start()``, leaking the previous handle
+    under operator-driven retry / reconnect.
+    """
+    cfg = _config()
+    gw = OpenAICompatibleLLMGateway(cfg)
+
+    sessions: list[MagicMock] = []
+
+    def _factory() -> MagicMock:
+        fake_response = MagicMock()
+        fake_response.status = 200
+        s = MagicMock()
+        s.get = MagicMock(return_value=_async_context_manager(fake_response))
+        sessions.append(s)
+        return s
+
+    with patch.object(gw, "_build_session", side_effect=_factory):
+        await gw.start()
+        first_session = gw._session  # type: ignore[attr-defined]
+        await gw.start()  # idempotent — must NOT build a second session
+        second_session = gw._session  # type: ignore[attr-defined]
+
+    assert first_session is second_session
+    assert len(sessions) == 1, "start() must not construct a second session"
 
 
 @pytest.mark.asyncio
@@ -142,9 +258,7 @@ async def test_api_key_forwarded_as_bearer_header() -> None:
     gw = OpenAICompatibleLLMGateway(cfg)
     fake_response = MagicMock()
     fake_response.status = 200
-    fake_response.json = AsyncMock(
-        return_value={"choices": [{"message": {"content": "{}"}}]}
-    )
+    fake_response.json = AsyncMock(return_value={"choices": [{"message": {"content": "{}"}}]})
     fake_session = MagicMock()
     fake_session.post = MagicMock(return_value=_async_context_manager(fake_response))
     gw._session = fake_session  # type: ignore[attr-defined]
@@ -246,7 +360,7 @@ async def test_build_session_constructs_real_aiohttp_session() -> None:
 
     cfg = _config()
     gw = OpenAICompatibleLLMGateway(cfg)
-    session = gw._build_session()  # noqa: SLF001
+    session = gw._build_session()
     try:
         assert isinstance(session, aiohttp.ClientSession)
     finally:

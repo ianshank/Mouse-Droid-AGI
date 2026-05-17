@@ -144,9 +144,9 @@ async def _walk_with_replanner(scores: list[float], ready_schedule: list[bool]) 
             # Subsequent ticks must NOT leave the terminal state.
             for _ in range(3):
                 next_result = await lc.tick(obs, obs)
-                assert next_result.state == terminal, (
-                    f"Terminal state {terminal} leaked to {next_result.state}"
-                )
+                assert (
+                    next_result.state == terminal
+                ), f"Terminal state {terminal} leaked to {next_result.state}"
             return
 
 
