@@ -19,6 +19,36 @@ git fetch origin
 git checkout <branch-under-review>
 ```
 
+## Step 1b — Config-deploy verification (F-013)
+
+After every `git pull` on the Jetson, run the overlay-sync verification so the
+deployed `/etc/mousedroid/jetson_production.yaml` matches the repo. The
+production restart that surfaced F-013 only failed because the deployed copy
+silently drifted four days behind the repo and the silent mode of the
+sync script hid the drift.
+
+```bash
+# Verify the deployed overlay matches the repo (read-only; never mutates state).
+sudo bash scripts/sync_jetson_overlay.sh --verify
+# Expected on a clean deploy:
+#   [sync_jetson_overlay] OK overlay_sync_match src=... dst=... sha256=...
+# Exit 0 = synced; exit 1 = drift (run without --verify to repair).
+
+# Apply the sync (idempotent — logs overlay_sync_match if already current).
+sudo bash scripts/sync_jetson_overlay.sh
+```
+
+Also ensure `/etc/mousedroid/docker.env` exists and matches the template at
+`config/.env.jetson.example`. The compose `env_file:` directive (F-014) reads
+from `/etc/mousedroid/docker.env` for `MOUSEDROID_MOCK_HARDWARE`,
+`MOUSEDROID_TELEMETRY_TOKEN`, and any per-host `MOUSEDROID_LLM__*` overrides.
+
+```bash
+# First-time setup (then populate the token):
+sudo cp config/.env.jetson.example /etc/mousedroid/docker.env
+sudoedit /etc/mousedroid/docker.env   # set MOUSEDROID_TELEMETRY_TOKEN to a real value
+```
+
 ## Step 2 — Pre-flight check (shell + Python)
 
 The existing shell preflight stays as the bash entry point; the new programmatic API is the in-process replacement that the orchestrator + CLI consume.
