@@ -133,3 +133,30 @@ async def test_dispatch_records_elapsed_per_pillar() -> None:
     cfg = Settings(mock_hardware=True)
     report = await validate_all_pillars(cfg, pillar_names={"safety"}, dry_run=False)
     assert all(r.elapsed_s >= 0.0 for r in report.results)
+
+
+def test_pattern_b_pillar_skips_gracefully_when_pytest_absent() -> None:
+    """Pattern-B pillars SKIP (not crash) when pytest isn't installed.
+
+    Pins the production-container fix — ``validate_pillars`` must remain
+    importable + invokable on a runtime with no dev extras. Mocks
+    ``importlib.util.find_spec`` to simulate pytest absence and verifies
+    the pillar lands as SKIPPED with the documented diagnostic.
+    """
+    from mousedroid.validation import pillars as _p
+
+    real_find_spec = _p.importlib.util.find_spec
+
+    def _fake_find_spec(name: str) -> object | None:
+        if name == "pytest":
+            return None
+        return real_find_spec(name)
+
+    with unittest.mock.patch.object(_p.importlib.util, "find_spec", _fake_find_spec):
+        result = _p._run_pytest_delegated(
+            "continual",
+            _p._PYTEST_DELEGATION_PATHS["continual"],
+        )
+
+    assert result.status == PillarStatus.SKIPPED
+    assert "pytest not installed" in result.detail

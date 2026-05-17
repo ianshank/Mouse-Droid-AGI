@@ -32,11 +32,11 @@ from __future__ import annotations
 
 import asyncio
 import enum
+import importlib.util
 import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
-import pytest
 from pydantic import BaseModel, Field
 
 from mousedroid.logging.setup import get_logger
@@ -208,7 +208,13 @@ async def _check_curiosity(cfg: Settings) -> PillarResult:
 
 
 def _run_pytest_delegated(pillar: str, test_paths: tuple[str, ...]) -> PillarResult:
-    """Run ``pytest.main`` over ``test_paths`` and map exit code to PillarResult."""
+    """Run ``pytest.main`` over ``test_paths`` and map exit code to PillarResult.
+
+    Lazy-imports ``pytest`` so the dispatch module stays importable in
+    production runtimes (e.g. the Jetson Docker image) where pytest is
+    a dev-only dependency. When pytest is absent, the pillar SKIPs with
+    a documented reason rather than crashing the whole dispatcher.
+    """
     t0 = time.monotonic()
     # Filter to existing paths so a renamed test doesn't crash the pillar
     # — the missing path becomes part of the diagnostic message instead.
@@ -222,6 +228,18 @@ def _run_pytest_delegated(pillar: str, test_paths: tuple[str, ...]) -> PillarRes
             f"all delegated test paths missing: {missing}",
             time.monotonic() - t0,
         )
+
+    if importlib.util.find_spec("pytest") is None:
+        return _skipped(
+            pillar,
+            (
+                "pytest not installed in this runtime (Pattern-B pillar "
+                "delegation requires the dev extra; install with "
+                "`pip install -e \".[dev]\"` to enable)."
+            ),
+        )
+
+    import pytest
 
     args = ["-q", "--no-header", "-x", *existing]
     exit_code = pytest.main(args)
