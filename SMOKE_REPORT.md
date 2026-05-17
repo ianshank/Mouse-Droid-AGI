@@ -209,4 +209,16 @@ These can run real today but require operator opt-in. The fallback-to-mock behav
 - [x] All `Mock*` classes in `src/mousedroid/` catalogued + mapped to factory switch-points + production-overlay state.
 - [x] Three categories surfaced: real-backed (B.1), mock-only-by-design (B.2), opt-in-with-fallback (B.3).
 - [x] Four new findings logged (F-006 through F-009/F-012). F-006 is the only operationally blocking item (LLM perf); the rest are observability / documentation follow-ups.
+- [x] **Live telemetry dashboard confirmation (operator-observed, 2026-05-17):** LiDAR scan data renders on the rover's WS dashboard — proves end-to-end pipeline (LiDAR driver → sensor manager → telemetry publisher → `/ws/v1/lidar/raw` at 5 Hz → dashboard) is healthy on real hardware. Closes any lingering doubt around the F-005 "LiDAR FAIL" observation: that was a config-overlay issue (default.yaml has no `lidar:` block), not a hardware fault.
+
+### Host-side full pytest sweep (Windows host, 2026-05-17)
+
+- Command: `pytest tests/ --ignore=tests/hardware -p no:cacheprovider`
+- Result: **4792 passed, 65 skipped, 1 failed** in 140.92 s
+- Sole failure: `tests/performance/test_instrumentation_overhead.py::test_mock_vla_instrumentation_within_budget` — flaky wall-clock perf budget. **Passes in isolation in 0.34 s.** Pre-existing instability unrelated to this sprint; same class of issue as the docker_gpu and jetson_smoke_orchestrator failures we fixed.
+- All three previously-failing Windows-host tests now pass / skip cleanly:
+  - `tests/smoke/test_telemetry_smoke.py` — 43 passed (was 1 failed)
+  - `tests/integration/test_docker_gpu.py` — 9 passed + 5 skipped (was 1 failed)
+  - `tests/unit/test_jetson_smoke_orchestrator.py` — 13 skipped (was 10 failed)
+- All 37 new tests from this sprint (preflight + pillars + CLI + smoke + integration) pass.
 
