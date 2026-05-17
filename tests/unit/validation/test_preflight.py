@@ -112,6 +112,51 @@ async def test_run_preflight_records_elapsed_per_check() -> None:
     assert report.total_elapsed_s + 0.001 >= sum(c.elapsed_s for c in report.checks)
 
 
+def test_detect_csi_ribbon_disconnect_returns_none_when_video_node_present() -> None:
+    """``/dev/video*`` present → not a ribbon issue."""
+    from mousedroid.validation.preflight import _detect_csi_ribbon_disconnect
+
+    assert _detect_csi_ribbon_disconnect(
+        video_nodes=["/dev/video0"],
+        modules_text="imx708 20480 0 - Live 0xfff0000000\n",
+    ) is None
+
+
+def test_detect_csi_ribbon_disconnect_flags_loaded_imx_module() -> None:
+    """Sensor module loaded + no /dev/video* → returns ribbon-disconnect diagnostic."""
+    from mousedroid.validation.preflight import _detect_csi_ribbon_disconnect
+
+    msg = _detect_csi_ribbon_disconnect(
+        video_nodes=[],
+        modules_text="imx708 20480 0 - Live 0xfff0000000\nother_mod 1024 0\n",
+    )
+    assert msg is not None
+    assert "imx708" in msg
+    assert "ribbon" in msg.lower()
+
+
+def test_detect_csi_ribbon_disconnect_silent_when_no_sensor_module() -> None:
+    """No sensor module loaded → not a ribbon issue; return None."""
+    from mousedroid.validation.preflight import _detect_csi_ribbon_disconnect
+
+    assert _detect_csi_ribbon_disconnect(
+        video_nodes=[],
+        modules_text="other_mod 1024 0\nyet_another 2048 0\n",
+    ) is None
+
+
+def test_detect_csi_ribbon_disconnect_flags_ov_and_ar0_prefixes() -> None:
+    """Other Jetson sensor prefixes (ov*, ar0*) also surface the diagnostic."""
+    from mousedroid.validation.preflight import _detect_csi_ribbon_disconnect
+
+    msg = _detect_csi_ribbon_disconnect(
+        video_nodes=[],
+        modules_text="ov5693 16384 0\nar0234 24576 0\n",
+    )
+    assert msg is not None
+    assert "ov5693" in msg or "ar0234" in msg
+
+
 def test_preflight_report_render_text_includes_overall_status() -> None:
     """``PreflightReport.render_text()`` includes overall status + per-check lines."""
     report = PreflightReport(

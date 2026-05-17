@@ -121,8 +121,93 @@ def _warn(name: str, detail: str, elapsed_s: float) -> PreflightCheckResult:
     )
 
 
+# Common Jetson CSI sensor kernel-module name prefixes. Extracted as a
+# module constant so the detector stays testable + future sensors land
+# in one place (CLAUDE.md "no hardcoded values" applies to scattered
+# literals; this is the single canonical list).
+_CSI_SENSOR_PREFIXES: tuple[str, ...] = ("imx", "ov", "ar0")
+
+
+def _load_proc_modules() -> str:
+    """Read ``/proc/modules``. Returns ``""`` if unreadable (e.g. container)."""
+    from pathlib import Path
+
+    try:
+        return Path("/proc/modules").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _list_video_device_nodes() -> list[str]:
+    """Return ``/dev/video*`` device-node paths sorted by name."""
+    from pathlib import Path
+
+    return [str(p) for p in sorted(Path("/dev").glob("video*"))]
+
+
+def _detect_csi_ribbon_disconnect(
+    *,
+    video_nodes: list[str] | None = None,
+    modules_text: str | None = None,
+) -> str | None:
+    """Return a diagnostic if the CSI camera sensor isn't responding on I2C.
+
+    Distinguishes "ribbon physically disconnected" from "driver bug" by
+    checking the canonical Jetson signature:
+
+    * The ``imx*`` sensor kernel module is loaded (so the device tree
+      registered the sensor), AND
+    * No ``/dev/video*`` device node exists (so the driver failed to
+      enumerate after probe).
+
+    This pattern correlates with Jetson dmesg lines like
+    ``imx708 9-001a: imx708_board_setup: error during i2c read probe (-121)``
+    (EREMOTEIO) — universally documented on NVIDIA Developer Forums as
+    "CSI ribbon not seated / damaged / sensor not powered." Returns a
+    string description of the inferred root cause, or ``None`` if the
+    signature doesn't match (the driver path is actually broken
+    elsewhere — let the upstream FAIL surface).
+
+    Args:
+        video_nodes: Optional override for ``/dev/video*`` listing (tests
+            inject; production passes ``None`` for live probe).
+        modules_text: Optional override for ``/proc/modules`` contents
+            (tests inject; production passes ``None`` for live probe).
+    """
+    nodes = _list_video_device_nodes() if video_nodes is None else video_nodes
+    if nodes:
+        return None  # /dev/video* present — not a ribbon issue
+
+    text = _load_proc_modules() if modules_text is None else modules_text
+    loaded_csi_sensors = [
+        line.split()[0]
+        for line in text.splitlines()
+        if line.startswith(_CSI_SENSOR_PREFIXES)
+    ]
+    if not loaded_csi_sensors:
+        return None  # no sensor module loaded → not a ribbon-disconnect case
+
+    return (
+        f"CSI ribbon appears disconnected: sensor driver(s) "
+        f"{','.join(loaded_csi_sensors)} loaded but no /dev/video* nodes "
+        "present. Typical cause: ribbon cable not seated / damaged / "
+        "sensor power rail down. Run `dmesg | grep -i imx` to confirm "
+        "i2c probe -121 errors."
+    )
+
+
 async def _check_camera(cfg: Settings) -> PreflightCheckResult:
-    """Probe the camera (mock_hardware short-circuits to OK)."""
+    """Probe the camera (mock_hardware short-circuits to OK).
+
+    Returns three distinct outcomes for real-hardware mode:
+
+    * **OK** — frame captured.
+    * **WARN** — operator-actionable: CSI ribbon detached (loaded sensor
+      driver + no ``/dev/video*``). Surfaced separately from a real
+      driver failure so dashboards don't conflate them.
+    * **FAIL** — something else is wrong (driver crash, wrong cfg,
+      permission denied, etc.) — full error message bubbled up.
+    """
     t0 = time.monotonic()
     if cfg.mock_hardware:
         return _ok("camera", "mock_hardware=true", time.monotonic() - t0)
@@ -131,6 +216,13 @@ async def _check_camera(cfg: Settings) -> PreflightCheckResult:
         camera_unavailable_reason,
         capture_camera_frame,
     )
+
+    # Surface the CSI-ribbon-disconnect case as WARN before the generic
+    # FAIL path — operators get a clearer signal that no driver fix is
+    # needed; reconnecting the ribbon is the action.
+    ribbon_msg = _detect_csi_ribbon_disconnect()
+    if ribbon_msg is not None:
+        return _warn("camera", ribbon_msg, time.monotonic() - t0)
 
     reason = camera_unavailable_reason(cfg)
     if reason is not None:
