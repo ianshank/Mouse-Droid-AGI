@@ -54,7 +54,11 @@ llm:
   model_path: "/opt/mousedroid/models/Phi-3-mini-4k-instruct-q4.gguf"
   context_length: 2048
   n_threads: 6
-  n_gpu_layers: 0
+  # F-006: -1 offloads every layer to the iGPU so matmul stays on CUDA instead
+  # of CPU (where Phi-3-mini-q4 runs at ~0.5 tok/s, blowing latency_target_ms).
+  # Override per-host via MOUSEDROID_LLM__N_GPU_LAYERS=<int> in
+  # /etc/mousedroid/docker.env (e.g. =0 on a CPU-only fallback host).
+  n_gpu_layers: -1
   n_batch: 32
   max_tokens: 128
   temperature: 0.1
