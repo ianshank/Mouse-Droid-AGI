@@ -698,6 +698,20 @@ class MouseDroidOrchestrator:
             _log.debug("process_mission_empty_command")
             return GoalVector()
 
+        # Tier C2.1 completion: transition the optional MissionLifecycle from
+        # PENDING -> RUNNING so its per-tick scoring becomes active. Without
+        # this call, lifecycle.tick() short-circuits forever on self._mission
+        # is None. Done before parsing because a valid NL command is itself
+        # the trigger for "a mission was requested"; parser/LLM may still
+        # decline, but the lifecycle owns its own SUCCEEDED/FAILED/REPLANNING
+        # transitions from the tick stream.
+        if self._mission_lifecycle is not None:
+            mission_id = f"mission-{self._tick_count}"
+            self._mission_lifecycle.start_mission(
+                mission_id=mission_id,
+                goal_text=nl_command,
+            )
+
         # Stage 1: Rule-based parser (fast path, < 1ms)
         if self._mission_parser is not None:
             intent = self._mission_parser.parse(nl_command)
