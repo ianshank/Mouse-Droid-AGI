@@ -1174,11 +1174,14 @@ def build_vlm_progress(cfg: Settings) -> VLMProgressHead | None:
         _log.debug("vlm_progress_disabled")
         return None
 
-    from mousedroid.config.schema import VLMProgressConfig
     from mousedroid.reward.vlm_progress import MockVLMProgress, VLMProgressHead
 
+    # Reuse the existing ``cfg.reward.vlm_progress`` block (cache size,
+    # instruction, hash precision) — Tier C2.3 only adds the mock-value
+    # gate inside ``MissionConfig`` so we can choose a value tuned to
+    # the success threshold without disturbing the reward-module config.
     backend = MockVLMProgress(cfg.mission.vlm_mock_progress_value)
-    head = VLMProgressHead(cfg=VLMProgressConfig(), backend=backend)
+    head = VLMProgressHead(cfg=cfg.reward.vlm_progress, backend=backend)
     _log.info(
         "vlm_progress_built",
         backend="MockVLMProgress",
@@ -2725,7 +2728,9 @@ def build_orchestrator(cfg: Settings) -> object:
     # and ``cfg.mission.llm_replanner_enabled`` flags stay at False.
     vlm_progress = build_vlm_progress(cfg)
     mission_replanner = build_mission_replanner(
-        cfg, llm_gateway=llm_gateway, metrics=metrics_registry,
+        cfg,
+        llm_gateway=llm_gateway,
+        metrics=metrics_registry,
     )
     # Tier C2 / C2.2 — mission lifecycle state machine. Returns ``None``
     # in four scenarios so the orchestrator's POST_TICK seam stays a no-op

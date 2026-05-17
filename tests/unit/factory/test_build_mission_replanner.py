@@ -27,4 +27,4 @@ def test_returns_adapter_when_enabled_with_gateway() -> None:
     gateway = MagicMock()
     replanner = build_mission_replanner(cfg, llm_gateway=gateway)
     assert isinstance(replanner, LLMGatewayMissionReplanner)
-    assert replanner._gateway is gateway  # noqa: SLF001
+    assert replanner._gateway is gateway

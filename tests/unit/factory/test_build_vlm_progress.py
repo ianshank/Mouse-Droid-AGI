@@ -27,4 +27,4 @@ def test_default_backend_is_mock_vlm_progress() -> None:
     cfg.mission.vlm_mock_progress_value = 0.75
     head = build_vlm_progress(cfg)
     assert head is not None
-    assert isinstance(head._backend, MockVLMProgress)  # noqa: SLF001
+    assert isinstance(head._backend, MockVLMProgress)

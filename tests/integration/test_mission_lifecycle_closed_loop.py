@@ -79,7 +79,7 @@ async def test_closed_loop_stall_triggers_llm_replanner() -> None:
     fake_gw = MagicMock()
     fake_gw.is_ready = True
     fake_gw.translate_mission = AsyncMock(return_value=GoalVector(vx_target=0.5))
-    orch._mission_lifecycle._replanner._gateway = fake_gw  # noqa: SLF001
+    orch._mission_lifecycle._replanner._gateway = fake_gw
 
     _install_accepting_parser(orch, "walk")
 

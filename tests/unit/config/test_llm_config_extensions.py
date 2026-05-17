@@ -35,7 +35,7 @@ def test_request_timeout_default_above_latency_target() -> None:
 
 
 def test_backend_rejects_unknown_literal() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="backend"):
         LLMConfig(backend="bogus")  # type: ignore[arg-type]
 
 
