@@ -1,0 +1,217 @@
+"""Tier C2.3: OpenAI-compatible HTTP LLM gateway.
+
+Talks to ``{base_url}/v1/chat/completions`` over HTTP. Conforms to
+:class:`LLMGatewayProtocol` so the existing factory + adapter wiring
+treats it identically to the in-process llama-cpp gateway. The same
+endpoint is served by Ollama (0.1.18+), LM Studio (0.2.x+), OpenAI,
+and most local-LLM tooling — operators swap deployments by changing
+``cfg.llm.base_url`` only.
+
+Architecture invariants (per CLAUDE.md):
+
+* Asyncio-only — uses ``aiohttp.ClientSession``. No blocking I/O.
+* Structured logging via ``mousedroid.logging.setup.get_logger``.
+* No hardcoded URLs / model names / timeouts — every tunable comes from
+  :class:`LLMConfig`.
+* Never raises on the happy path; on any failure mode the gateway logs
+  a structured event, sets ``_degraded=True`` if persistent, and
+  returns a neutral :class:`GoalVector` so the orchestrator never
+  crashes on a misbehaving LLM.
+* API key is stored as ``SecretStr`` on the config and only resolved
+  via ``get_secret_value()`` inside the HTTP layer — never logged.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+from typing import TYPE_CHECKING, Any
+
+from mousedroid.llm_gateway.protocol import GoalVector
+from mousedroid.logging.setup import get_logger
+
+if TYPE_CHECKING:
+    import aiohttp
+
+    from mousedroid.config.schema import LLMConfig
+
+_log = get_logger(__name__)
+
+
+class OpenAICompatibleLLMGateway:
+    """HTTP-backed LLM gateway hitting ``/v1/chat/completions``.
+
+    Conforms structurally to :class:`LLMGatewayProtocol`. Production
+    deployments wire this via :func:`build_llm_gateway` when
+    ``cfg.llm.backend == "openai_compatible"``.
+    """
+
+    def __init__(self, cfg: LLMConfig) -> None:
+        self._cfg = cfg
+        self._session: aiohttp.ClientSession | None = None
+        self._ready = False
+        self._degraded = False
+
+    @property
+    def is_ready(self) -> bool:
+        """True iff ``start()`` confirmed the server is reachable."""
+        return self._ready
+
+    @property
+    def is_degraded(self) -> bool:
+        """True iff a persistent transport-level failure was seen during ``start()``."""
+        return self._degraded
+
+    async def start(self) -> None:
+        """Open a session and probe ``GET {base_url}/v1/models``.
+
+        On any transport-level failure the gateway logs a structured
+        ``llm_gateway_http_degraded`` event and sets ``_degraded=True``;
+        :meth:`translate_mission` returns neutral GoalVectors until
+        :meth:`start` is retried.
+        """
+        if not self._cfg.enabled:
+            _log.info("llm_gateway_disabled")
+            return
+
+        import aiohttp  # local import — optional dep
+
+        self._session = self._build_session()
+        try:
+            async with self._session.get(
+                f"{self._cfg.base_url}/v1/models",
+                timeout=aiohttp.ClientTimeout(total=self._cfg.request_timeout_s),
+            ) as resp:
+                if resp.status == 200:
+                    self._ready = True
+                    _log.info(
+                        "llm_gateway_http_started",
+                        base_url=self._cfg.base_url,
+                        model=self._cfg.model_name,
+                    )
+                else:
+                    self._degraded = True
+                    _log.warning(
+                        "llm_gateway_http_health_non_200",
+                        status=resp.status,
+                        base_url=self._cfg.base_url,
+                    )
+        except aiohttp.ClientConnectionError as exc:
+            self._degraded = True
+            _log.warning(
+                "llm_gateway_http_degraded",
+                error=f"{type(exc).__name__}:{exc}",
+                base_url=self._cfg.base_url,
+            )
+        except asyncio.TimeoutError:
+            self._degraded = True
+            _log.warning(
+                "llm_gateway_http_health_timeout",
+                base_url=self._cfg.base_url,
+                timeout_s=self._cfg.request_timeout_s,
+            )
+
+    def _build_session(self) -> aiohttp.ClientSession:
+        """Construct the aiohttp session (extracted for test patching)."""
+        import aiohttp
+
+        return aiohttp.ClientSession()
+
+    async def translate_mission(self, nl_command: str) -> GoalVector:
+        """POST to ``/v1/chat/completions`` and parse a GoalVector from the body.
+
+        Returns a neutral :class:`GoalVector` on any failure path
+        (gateway not started, network error, non-200, non-JSON content,
+        missing fields). Never raises.
+        """
+        if self._session is None or not self._ready:
+            _log.warning(
+                "llm_gateway_http_not_started",
+                ready=self._ready,
+                session=self._session is not None,
+            )
+            return GoalVector()
+
+        payload: dict[str, Any] = {
+            "model": self._cfg.model_name,
+            "messages": [
+                {"role": "system", "content": self._cfg.system_prompt},
+                {"role": "user", "content": nl_command},
+            ],
+            "temperature": self._cfg.temperature,
+            "max_tokens": self._cfg.max_tokens,
+        }
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self._cfg.api_key is not None:
+            headers["Authorization"] = f"Bearer {self._cfg.api_key.get_secret_value()}"
+
+        import aiohttp
+
+        start = time.monotonic()
+        try:
+            async with self._session.post(
+                f"{self._cfg.base_url}/v1/chat/completions",
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=self._cfg.request_timeout_s),
+            ) as resp:
+                if resp.status != 200:
+                    _log.warning(
+                        "llm_gateway_http_non_200",
+                        status=resp.status,
+                        elapsed_ms=(time.monotonic() - start) * 1000.0,
+                    )
+                    return GoalVector()
+                body = await resp.json()
+        except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
+            _log.warning(
+                "llm_gateway_http_error",
+                error=f"{type(exc).__name__}:{exc}",
+            )
+            return GoalVector()
+
+        content = self._extract_message_content(body)
+        if content is None:
+            return GoalVector()
+        return self._parse_goal_vector(content)
+
+    @staticmethod
+    def _extract_message_content(body: dict[str, Any]) -> str | None:
+        """Pull ``choices[0].message.content`` defensively."""
+        try:
+            return str(body["choices"][0]["message"]["content"])
+        except (KeyError, IndexError, TypeError):
+            _log.warning("llm_gateway_http_malformed_body")
+            return None
+
+    @staticmethod
+    def _parse_goal_vector(content: str) -> GoalVector:
+        """Parse ``content`` as JSON and build a :class:`GoalVector`.
+
+        Returns a neutral GoalVector when ``content`` is not valid JSON
+        or when expected fields are missing — the orchestrator's
+        ``process_mission`` already treats neutral GoalVectors as
+        "mission unresolved" (Stage-3 fallback).
+        """
+        try:
+            doc = json.loads(content)
+        except json.JSONDecodeError:
+            _log.warning("llm_gateway_http_non_json_content")
+            return GoalVector()
+        return GoalVector(
+            vx_target=float(doc.get("vx_target", 0.0)),
+            vy_target=float(doc.get("vy_target", 0.0)),
+            omega_target=float(doc.get("omega_target", 0.0)),
+        )
+
+    async def stop(self) -> None:
+        """Close the underlying aiohttp session."""
+        if self._session is not None:
+            await self._session.close()
+            self._session = None
+        self._ready = False
+        _log.info("llm_gateway_http_stopped")
+
+
+__all__ = ["OpenAICompatibleLLMGateway"]
