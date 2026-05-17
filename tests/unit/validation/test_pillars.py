@@ -49,7 +49,9 @@ async def test_pillar_names_filter_restricts_dispatch() -> None:
     """``pillar_names`` filter only runs the requested subset."""
     cfg = Settings(mock_hardware=True)
     report = await validate_all_pillars(
-        cfg, pillar_names={"safety", "world_model"}, dry_run=True,
+        cfg,
+        pillar_names={"safety", "world_model"},
+        dry_run=True,
     )
     assert {r.name for r in report.results} == {"safety", "world_model"}
 

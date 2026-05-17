@@ -38,10 +38,16 @@ def test_overall_status_degraded_on_any_warn() -> None:
     report = PreflightReport(
         checks=[
             PreflightCheckResult(
-                name="camera", status=PreflightStatus.OK, detail="ok", elapsed_s=0.01,
+                name="camera",
+                status=PreflightStatus.OK,
+                detail="ok",
+                elapsed_s=0.01,
             ),
             PreflightCheckResult(
-                name="lidar", status=PreflightStatus.WARN, detail="low coverage", elapsed_s=0.02,
+                name="lidar",
+                status=PreflightStatus.WARN,
+                detail="low coverage",
+                elapsed_s=0.02,
             ),
         ],
     )
@@ -53,10 +59,16 @@ def test_overall_status_failed_on_any_fail() -> None:
     report = PreflightReport(
         checks=[
             PreflightCheckResult(
-                name="camera", status=PreflightStatus.OK, detail="ok", elapsed_s=0.01,
+                name="camera",
+                status=PreflightStatus.OK,
+                detail="ok",
+                elapsed_s=0.01,
             ),
             PreflightCheckResult(
-                name="esp32", status=PreflightStatus.FAIL, detail="no device", elapsed_s=0.0,
+                name="esp32",
+                status=PreflightStatus.FAIL,
+                detail="no device",
+                elapsed_s=0.0,
             ),
         ],
     )
@@ -105,7 +117,10 @@ def test_preflight_report_render_text_includes_overall_status() -> None:
     report = PreflightReport(
         checks=[
             PreflightCheckResult(
-                name="camera", status=PreflightStatus.OK, detail="ok", elapsed_s=0.01,
+                name="camera",
+                status=PreflightStatus.OK,
+                detail="ok",
+                elapsed_s=0.01,
             ),
         ],
     )

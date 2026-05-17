@@ -96,19 +96,28 @@ CheckCallable = Callable[["Settings"], Awaitable[PreflightCheckResult]]
 
 def _ok(name: str, detail: str, elapsed_s: float) -> PreflightCheckResult:
     return PreflightCheckResult(
-        name=name, status=PreflightStatus.OK, detail=detail, elapsed_s=elapsed_s,
+        name=name,
+        status=PreflightStatus.OK,
+        detail=detail,
+        elapsed_s=elapsed_s,
     )
 
 
 def _fail(name: str, detail: str, elapsed_s: float) -> PreflightCheckResult:
     return PreflightCheckResult(
-        name=name, status=PreflightStatus.FAIL, detail=detail, elapsed_s=elapsed_s,
+        name=name,
+        status=PreflightStatus.FAIL,
+        detail=detail,
+        elapsed_s=elapsed_s,
     )
 
 
 def _warn(name: str, detail: str, elapsed_s: float) -> PreflightCheckResult:
     return PreflightCheckResult(
-        name=name, status=PreflightStatus.WARN, detail=detail, elapsed_s=elapsed_s,
+        name=name,
+        status=PreflightStatus.WARN,
+        detail=detail,
+        elapsed_s=elapsed_s,
     )
 
 
@@ -150,7 +159,9 @@ async def _check_microphone(cfg: Settings) -> PreflightCheckResult:
             time.monotonic() - t0,
         )
     return _ok(
-        "microphone", f"samples={chunk.size} dtype={chunk.dtype}", time.monotonic() - t0,
+        "microphone",
+        f"samples={chunk.size} dtype={chunk.dtype}",
+        time.monotonic() - t0,
     )
 
 

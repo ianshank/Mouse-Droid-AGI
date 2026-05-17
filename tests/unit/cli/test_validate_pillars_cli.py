@@ -67,7 +67,8 @@ def test_invalid_pillar_filter_returns_empty_results(
 
 
 def test_main_without_argv_uses_sys_argv_default(
-    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Calling ``main()`` without argv parses ``sys.argv`` (operator runbook flow)."""
     monkeypatch.setattr("sys.argv", ["validate_pillars", "--dry-run"])

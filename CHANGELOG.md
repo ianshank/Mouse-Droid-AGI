@@ -8,6 +8,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Smoke-Test Stability Pass
+
+- **`run_preflight(cfg) -> PreflightReport`** async API (`src/mousedroid/validation/preflight.py`) — replaces the shell-only `scripts/preflight_check.sh` flow with a Pydantic-typed report. Six built-in checks (camera, microphone, speaker, lidar, esp32, config) reuse `validation/runtime.py` helpers; per-check exceptions are caught and recorded as FAIL entries (never bubble).
+- **`validate_all_pillars(cfg)` + `python -m mousedroid.cli.validate_pillars` CLI** (`src/mousedroid/validation/pillars.py` + `src/mousedroid/cli/validate_pillars.py`) — dispatch-table over the 10 pillars from `TEN_PILLARS_VALIDATION.md`. Six pillars use Pattern A (factory-builder smoke); four (continual / meta / scaling / growth) use Pattern B (in-process `pytest.main` delegation) because their `build_*` factories don't yet exist. CI runs the `--dry-run` variant on every commit between typecheck and tests.
+- **SSD1306 face display smoke test** (`tests/hardware/test_face_display_smoke.py`) — exercises `build_face_display` + `build_face_controller` + the `fallback_to_mock_on_error` path.
+- **Hailo accelerator smoke test** (`tests/hardware/test_hailo_smoke.py`) — gated by `pytest.importorskip("hailort")` + `is_jetson_host()`; covers disabled / mock-fallback / mock-inference branches.
+- New structured log events: `preflight_{start,complete,check_exception}` and `pillar_validation_{start,complete}` + `pillar_check_exception` for operator dashboard ingestion.
+
+### Fixed — Pre-existing Windows-host infra failures
+
+- `tests/smoke/test_telemetry_smoke.py::test_publisher_initial_stats_are_zero` — inclusive assertion that auto-inherits new counters (`lidar_raw_published` / `lidar_raw_dropped` added by Tier C1).
+- `tests/integration/test_docker_gpu.py::TestContainerEnvironment::test_nvcc_available` — `@pytest.mark.skipif(shutil.which("nvcc") is None, ...)`.
+- `tests/unit/test_jetson_smoke_orchestrator.py` (10 tests) — module-level `pytest.mark.skipif` on Windows hosts without `python3` reachable from the bash subprocess. Tests still RUN on Linux / Jetson hosts (operator runbook validates this).
+
+### Docs — Smoke pass
+
+- `docs/operator/JETSON_SMOKE_RUNBOOK.md` — step-by-step rover validation runbook.
+- `docs/planning/SMOKE_REPORT_TEMPLATE.md` — empty template the operator fills after running the runbook.
+
+### Backwards compatibility — Smoke pass
+
+- `scripts/preflight_check.sh` retained unchanged as the bash entry point; new programmatic API is an addition, not a replacement.
+- Three pre-existing Windows-host failures now SKIP cleanly with documented reasons. Tests still RUN on Linux / Jetson hosts.
+- No new runtime dependencies — every new module reuses existing `validation/runtime.py` helpers + `factory.py` builders.
+
 ### Added — Tier C2.3: Mission Lifecycle Activation
 
 - **`OpenAICompatibleLLMGateway`** (`src/mousedroid/llm_gateway/openai_compatible.py`) — new HTTP backend implementing `LLMGatewayProtocol` against `{base_url}/v1/chat/completions`. Talks to Ollama (default at `http://127.0.0.1:11434`), LM Studio, OpenAI, or any OpenAI-compatible endpoint. Selected via `cfg.llm.backend = "openai_compatible"`. Always returns a neutral `GoalVector` on transport / parse failures so the orchestrator never crashes on a misbehaving LLM. API key stored as `SecretStr` and forwarded as `Authorization: Bearer …` only (never logged).

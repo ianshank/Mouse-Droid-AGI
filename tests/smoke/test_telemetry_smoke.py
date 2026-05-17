@@ -190,9 +190,7 @@ async def test_publisher_initial_stats_are_zero() -> None:
     assert stats["frames_published"] == 0
     assert stats["frames_dropped"] == 0
     # Generic invariant: any counter on a fresh publisher must start at 0.
-    assert all(v == 0 for v in stats.values()), (
-        f"non-zero counter on fresh publisher: {stats}"
-    )
+    assert all(v == 0 for v in stats.values()), f"non-zero counter on fresh publisher: {stats}"
 
 
 async def test_publisher_enqueues_frame_and_updates_stats() -> None:

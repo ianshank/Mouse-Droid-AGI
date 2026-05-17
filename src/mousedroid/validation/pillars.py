@@ -116,19 +116,28 @@ _PYTEST_DELEGATION_PATHS: dict[str, tuple[str, ...]] = {
 
 def _ok(name: str, detail: str, elapsed_s: float) -> PillarResult:
     return PillarResult(
-        name=name, status=PillarStatus.OK, detail=detail, elapsed_s=elapsed_s,
+        name=name,
+        status=PillarStatus.OK,
+        detail=detail,
+        elapsed_s=elapsed_s,
     )
 
 
 def _fail(name: str, detail: str, elapsed_s: float) -> PillarResult:
     return PillarResult(
-        name=name, status=PillarStatus.FAIL, detail=detail, elapsed_s=elapsed_s,
+        name=name,
+        status=PillarStatus.FAIL,
+        detail=detail,
+        elapsed_s=elapsed_s,
     )
 
 
 def _skipped(name: str, detail: str) -> PillarResult:
     return PillarResult(
-        name=name, status=PillarStatus.SKIPPED, detail=detail, elapsed_s=0.0,
+        name=name,
+        status=PillarStatus.SKIPPED,
+        detail=detail,
+        elapsed_s=0.0,
     )
 
 
@@ -232,28 +241,36 @@ def _run_pytest_delegated(pillar: str, test_paths: tuple[str, ...]) -> PillarRes
 async def _check_continual(cfg: Settings) -> PillarResult:
     del cfg  # unused — pytest delegation reads its own cfg
     return await asyncio.to_thread(
-        _run_pytest_delegated, "continual", _PYTEST_DELEGATION_PATHS["continual"],
+        _run_pytest_delegated,
+        "continual",
+        _PYTEST_DELEGATION_PATHS["continual"],
     )
 
 
 async def _check_meta(cfg: Settings) -> PillarResult:
     del cfg
     return await asyncio.to_thread(
-        _run_pytest_delegated, "meta", _PYTEST_DELEGATION_PATHS["meta"],
+        _run_pytest_delegated,
+        "meta",
+        _PYTEST_DELEGATION_PATHS["meta"],
     )
 
 
 async def _check_scaling(cfg: Settings) -> PillarResult:
     del cfg
     return await asyncio.to_thread(
-        _run_pytest_delegated, "scaling", _PYTEST_DELEGATION_PATHS["scaling"],
+        _run_pytest_delegated,
+        "scaling",
+        _PYTEST_DELEGATION_PATHS["scaling"],
     )
 
 
 async def _check_growth(cfg: Settings) -> PillarResult:
     del cfg
     return await asyncio.to_thread(
-        _run_pytest_delegated, "growth", _PYTEST_DELEGATION_PATHS["growth"],
+        _run_pytest_delegated,
+        "growth",
+        _PYTEST_DELEGATION_PATHS["growth"],
     )
 
 
