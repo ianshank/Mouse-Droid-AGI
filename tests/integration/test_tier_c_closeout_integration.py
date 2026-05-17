@@ -99,16 +99,13 @@ async def test_tier_c_features_coexist_on_single_tick() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tier_c_features_wired_via_build_orchestrator() -> None:
-    """Round-trip through the factory to prove the DI graph is correct.
+async def test_tier_c_features_wired_via_build_orchestrator_defaults_off() -> None:
+    """Defaults-off path (post-Tier-C2.3): lifecycle still None.
 
-    ``build_orchestrator`` does NOT yet wire a VLMProgressHead or
-    MissionReplannerProtocol (operator-supplied dependencies tracked
-    under Tier C2.3), so the defensive guard inside
-    :func:`build_mission_lifecycle` deliberately returns ``None`` even
-    when ``cfg.mission.replan_enabled=True``. The factory's safety
-    projector and dual weight-update pollers ARE fully wireable from
-    config alone — those assertions pin the working DI surface.
+    With ``replan_enabled=True`` but ``vlm_progress_enabled=False`` and
+    ``llm_replanner_enabled=False`` (the defaults), the factory still
+    short-circuits to ``None`` — exactly as in the pre-Tier-C2.3 path.
+    Safety projector + dual pollers remain non-None.
     """
     from mousedroid.factory import build_orchestrator
 
@@ -119,20 +116,33 @@ async def test_tier_c_features_wired_via_build_orchestrator() -> None:
     cfg.cloud.weight_update.world_model_enabled = True
 
     orch = build_orchestrator(cfg)
+    assert orch._mission_lifecycle is None
+    assert orch._safety_projector is not None
+    assert set(orch._weight_update_pollers.keys()) == {"policy", "world_model"}
 
-    # MissionLifecycle: factory short-circuits to None until a
-    # VLMProgressHead + MissionReplannerProtocol are wired (PR #98
-    # Copilot HIGH). The orchestrator's POST_TICK seam stays a no-op,
-    # exactly as in the ``replan_enabled=False`` path, so production
-    # missions never silently stall + fail.
-    assert orch._mission_lifecycle is None, (
-        "factory must defensively return None when VLM head / replanner "
-        "are not wired — operator wires both before flipping replan_enabled"
+
+@pytest.mark.asyncio
+async def test_tier_c_features_wired_via_build_orchestrator_full_activation() -> None:
+    """Tier C2.3: with all three flags on the lifecycle is fully wired.
+
+    Inverts the PR #98 assertion — ``build_orchestrator`` now threads
+    the VLM head + LLM replanner into :func:`build_mission_lifecycle`,
+    so the lifecycle stops being a permanent ``None`` in production.
+    """
+    from mousedroid.factory import build_orchestrator
+
+    cfg = Settings(mock_hardware=True)
+    cfg.mission = MissionConfig(
+        replan_enabled=True,
+        vlm_progress_enabled=True,
+        llm_replanner_enabled=True,
     )
-    # Safety projector and dual pollers ARE fully wireable from config
-    # alone — those remain non-None assertions.
-    assert orch._safety_projector is not None, "factory must build SafetyProjector when enabled"
-    assert set(orch._weight_update_pollers.keys()) == {
-        "policy",
-        "world_model",
-    }, "factory must build both pollers when world_model_enabled"
+    cfg.safety.projector.enabled = True
+    cfg.cloud.weight_update.poll_interval_s = 1.0
+    cfg.cloud.weight_update.world_model_enabled = True
+    cfg.llm.enabled = True  # NOTE: field is cfg.llm, NOT cfg.llm_gateway.
+
+    orch = build_orchestrator(cfg)
+    assert orch._mission_lifecycle is not None
+    assert orch._safety_projector is not None
+    assert set(orch._weight_update_pollers.keys()) == {"policy", "world_model"}

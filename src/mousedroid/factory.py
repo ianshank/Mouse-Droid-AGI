@@ -2718,22 +2718,29 @@ def build_orchestrator(cfg: Settings) -> object:
     # which makes the orchestrator's projection seam a no-op so pre-C2
     # deployments produce byte-identical actions.
     safety_projector = build_safety_projector(cfg, metrics=metrics_registry)
+    # Tier C2.3 — build VLM head + LLM replanner so the lifecycle is no
+    # longer the defensive None from PR #98. Both build_* helpers short-
+    # circuit on their own flags so this remains byte-identical to
+    # pre-Tier-C2.3 behaviour when the new ``cfg.mission.vlm_progress_enabled``
+    # and ``cfg.mission.llm_replanner_enabled`` flags stay at False.
+    vlm_progress = build_vlm_progress(cfg)
+    mission_replanner = build_mission_replanner(
+        cfg, llm_gateway=llm_gateway, metrics=metrics_registry,
+    )
     # Tier C2 / C2.2 — mission lifecycle state machine. Returns ``None``
-    # in three scenarios so the orchestrator's POST_TICK seam stays a
-    # no-op and pre-C2.2 deployments are byte-identical:
+    # in four scenarios so the orchestrator's POST_TICK seam stays a no-op
+    # and pre-Tier-C2.3 deployments are byte-identical:
     #   1. ``cfg.mission.replan_enabled`` is ``False`` (the default).
-    #   2. No :class:`VLMProgressHead` is wired (lifecycle would stall).
-    #   3. No :class:`MissionReplannerProtocol` is wired (lifecycle would
-    #      fail at the first stall with ``llm_replan_unavailable``).
-    # ``build_orchestrator`` does NOT yet wire a VLM head or replanner —
-    # both are operator-supplied dependencies tracked under Tier C2.3 —
-    # so this call deliberately resolves to ``None`` until those are
-    # wired. The shared task tracker is still threaded through so the
-    # lifecycle's submit/update calls land in the unified active-task
-    # list once the missing dependencies are supplied.
+    #   2. ``cfg.mission.vlm_progress_enabled`` is ``False`` (vlm_progress=None).
+    #   3. ``cfg.mission.llm_replanner_enabled`` is ``False`` OR
+    #      ``cfg.llm.enabled`` is ``False`` (mission_replanner=None).
+    #   4. Either of the above missing — defensive guard inside
+    #      :func:`build_mission_lifecycle` (PR #98 Copilot HIGH fix).
     mission_lifecycle = build_mission_lifecycle(
         cfg,
         task_tracker=task_tracker,
+        vlm_progress=vlm_progress,
+        replanner=mission_replanner,
         metrics=metrics_registry,
     )
 
