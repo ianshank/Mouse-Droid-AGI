@@ -165,3 +165,89 @@ async def test_stop_closes_session() -> None:
     await gw.stop()
     fake_session.close.assert_awaited_once()
     assert gw.is_ready is False
+
+
+# ---------------------------------------------------------------------------
+# Coverage-gap closure — non-200 + timeout + malformed body branches
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_start_marks_degraded_on_non_200_health_response() -> None:
+    """``GET /v1/models`` returning 503 marks the gateway degraded."""
+    cfg = _config()
+    gw = OpenAICompatibleLLMGateway(cfg)
+    fake_response = MagicMock()
+    fake_response.status = 503
+    fake_session = MagicMock()
+    fake_session.get = MagicMock(return_value=_async_context_manager(fake_response))
+    with patch.object(gw, "_build_session", return_value=fake_session):
+        await gw.start()
+    assert gw.is_ready is False
+    assert gw.is_degraded is True
+
+
+@pytest.mark.asyncio
+async def test_start_marks_degraded_on_health_check_timeout() -> None:
+    """``GET /v1/models`` timing out marks the gateway degraded."""
+    cfg = _config(request_timeout_s=0.01)
+    gw = OpenAICompatibleLLMGateway(cfg)
+    fake_session = MagicMock()
+    fake_session.get = MagicMock(side_effect=asyncio.TimeoutError("slow"))
+    with patch.object(gw, "_build_session", return_value=fake_session):
+        await gw.start()
+    assert gw.is_ready is False
+    assert gw.is_degraded is True
+
+
+@pytest.mark.asyncio
+async def test_translate_mission_returns_neutral_goal_on_non_200_response() -> None:
+    """Server returning 500 → translate_mission yields a neutral GoalVector."""
+    cfg = _config()
+    gw = OpenAICompatibleLLMGateway(cfg)
+    fake_response = MagicMock()
+    fake_response.status = 500
+    fake_response.json = AsyncMock(return_value={})
+    fake_session = MagicMock()
+    fake_session.post = MagicMock(return_value=_async_context_manager(fake_response))
+    gw._session = fake_session  # type: ignore[attr-defined]
+    gw._ready = True  # type: ignore[attr-defined]
+
+    goal = await gw.translate_mission("explore")
+    assert goal == GoalVector()
+
+
+@pytest.mark.asyncio
+async def test_translate_mission_returns_neutral_goal_on_malformed_body() -> None:
+    """Missing ``choices`` key → neutral GoalVector, no exception bubble."""
+    cfg = _config()
+    gw = OpenAICompatibleLLMGateway(cfg)
+    fake_response = MagicMock()
+    fake_response.status = 200
+    fake_response.json = AsyncMock(return_value={"error": "no choices field"})
+    fake_session = MagicMock()
+    fake_session.post = MagicMock(return_value=_async_context_manager(fake_response))
+    gw._session = fake_session  # type: ignore[attr-defined]
+    gw._ready = True  # type: ignore[attr-defined]
+
+    goal = await gw.translate_mission("explore")
+    assert goal == GoalVector()
+
+
+@pytest.mark.asyncio
+async def test_build_session_constructs_real_aiohttp_session() -> None:
+    """``_build_session`` returns a live ``aiohttp.ClientSession`` (covers L117-119).
+
+    ``aiohttp.ClientSession()`` requires a running event loop, so this
+    test must be ``async``. We close the session immediately to avoid
+    leaking sockets in the test process.
+    """
+    import aiohttp
+
+    cfg = _config()
+    gw = OpenAICompatibleLLMGateway(cfg)
+    session = gw._build_session()  # noqa: SLF001
+    try:
+        assert isinstance(session, aiohttp.ClientSession)
+    finally:
+        await session.close()

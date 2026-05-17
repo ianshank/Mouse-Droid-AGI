@@ -26,17 +26,30 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Any
 
+import aiohttp
+
+from mousedroid.constants import MILLISECONDS_PER_SECOND
 from mousedroid.llm_gateway.protocol import GoalVector
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
-    import aiohttp
-
     from mousedroid.config.schema import LLMConfig
 
 _log = get_logger(__name__)
+
+# OpenAI-compatible REST endpoint paths. Constants so a future spec
+# revision (e.g. a hypothetical ``/v2/chat/completions``) lands in one
+# place rather than across three call sites. Matches the
+# "no hardcoded values" CLAUDE.md invariant — the host portion already
+# lives on ``LLMConfig.base_url`` and these path tails are part of the
+# OpenAI REST contract, not operator-tunable knobs.
+_HEALTH_PATH = "/v1/models"
+_CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
+# Authorization header format for bearer-token auth (RFC 6750).
+_BEARER_PREFIX = "Bearer "
 
 
 class OpenAICompatibleLLMGateway:
@@ -75,15 +88,13 @@ class OpenAICompatibleLLMGateway:
             _log.info("llm_gateway_disabled")
             return
 
-        import aiohttp  # local import — optional dep
-
         self._session = self._build_session()
         try:
             async with self._session.get(
-                f"{self._cfg.base_url}/v1/models",
+                f"{self._cfg.base_url}{_HEALTH_PATH}",
                 timeout=aiohttp.ClientTimeout(total=self._cfg.request_timeout_s),
             ) as resp:
-                if resp.status == 200:
+                if resp.status == HTTPStatus.OK:
                     self._ready = True
                     _log.info(
                         "llm_gateway_http_started",
@@ -114,8 +125,6 @@ class OpenAICompatibleLLMGateway:
 
     def _build_session(self) -> aiohttp.ClientSession:
         """Construct the aiohttp session (extracted for test patching)."""
-        import aiohttp
-
         return aiohttp.ClientSession()
 
     async def translate_mission(self, nl_command: str) -> GoalVector:
@@ -144,23 +153,23 @@ class OpenAICompatibleLLMGateway:
         }
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._cfg.api_key is not None:
-            headers["Authorization"] = f"Bearer {self._cfg.api_key.get_secret_value()}"
-
-        import aiohttp
+            headers["Authorization"] = (
+                f"{_BEARER_PREFIX}{self._cfg.api_key.get_secret_value()}"
+            )
 
         start = time.monotonic()
         try:
             async with self._session.post(
-                f"{self._cfg.base_url}/v1/chat/completions",
+                f"{self._cfg.base_url}{_CHAT_COMPLETIONS_PATH}",
                 json=payload,
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=self._cfg.request_timeout_s),
             ) as resp:
-                if resp.status != 200:
+                if resp.status != HTTPStatus.OK:
                     _log.warning(
                         "llm_gateway_http_non_200",
                         status=resp.status,
-                        elapsed_ms=(time.monotonic() - start) * 1000.0,
+                        elapsed_ms=(time.monotonic() - start) * MILLISECONDS_PER_SECOND,
                     )
                     return GoalVector()
                 body = await resp.json()
