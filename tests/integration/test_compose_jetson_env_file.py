@@ -34,7 +34,8 @@ _COMPOSE = _REPO_ROOT / "docker-compose.jetson.yml"
 def _load_service() -> dict[str, Any]:
     raw: dict[str, Any] = yaml.safe_load(_COMPOSE.read_text(encoding="utf-8"))
     services = raw["services"]
-    return services["mousedroid"]
+    svc: dict[str, Any] = services["mousedroid"]
+    return svc
 
 
 def test_compose_declares_env_file_directive() -> None:
@@ -43,14 +44,53 @@ def test_compose_declares_env_file_directive() -> None:
     Without this directive the compose `environment:` block can't pick up
     the operator's docker.env values; the production restart this fix is
     addressing crashed exactly because the telemetry token never reached
-    the container.
+    the container. Long-form (``{path:, required: false}``) is required so
+    first-time bringup (and ``docker compose config --quiet`` lint runs)
+    don't crash when ``/etc/mousedroid/docker.env`` isn't deployed yet.
     """
     svc = _load_service()
     env_files = svc.get("env_file", [])
     assert env_files, "compose service must declare env_file (see F-014)"
+
+    def _matches(entry: object) -> bool:
+        # Short-form: bare string path.
+        if isinstance(entry, str):
+            return "/etc/mousedroid/docker.env" in entry
+        # Long-form: {path: ..., required: ...} dict — required for first-
+        # time bringup safety.
+        if isinstance(entry, dict):
+            return "/etc/mousedroid/docker.env" in str(entry.get("path", ""))
+        return False
+
     assert any(
-        "/etc/mousedroid/docker.env" in p for p in env_files
+        _matches(p) for p in env_files
     ), f"env_file must include /etc/mousedroid/docker.env; got {env_files!r}"
+
+
+def test_compose_env_file_marked_required_false() -> None:
+    """First-time bringup safety: ``required: false`` so missing docker.env doesn't crash.
+
+    Critical reviewer finding — without ``required: false`` (the Docker Compose
+    default), ``docker compose up`` fails immediately with "env file not found"
+    on any host that hasn't yet provisioned ``/etc/mousedroid/docker.env``.
+    This also breaks the ``docker compose config --quiet`` syntax-check step
+    in CI where the file is absent.
+    """
+    svc = _load_service()
+    env_files = svc.get("env_file", [])
+    long_form_entries = [e for e in env_files if isinstance(e, dict)]
+    assert long_form_entries, (
+        "env_file must use long-form ``{path:, required: false}`` so first-time "
+        "deployments don't crash"
+    )
+    docker_env = next(
+        (e for e in long_form_entries if "/etc/mousedroid/docker.env" in str(e.get("path", ""))),
+        None,
+    )
+    assert docker_env is not None, "long-form env_file entry for docker.env must exist"
+    assert (
+        docker_env.get("required") is False
+    ), f"docker.env entry must declare ``required: false``; got {docker_env!r}"
 
 
 def test_mock_hardware_default_is_false_not_true() -> None:

@@ -25,15 +25,29 @@ services:
 
     # --- Environment ---
     # F-014: the operator-managed /etc/mousedroid/docker.env is the source of
-    # truth for everything that varies per-host (MOCK_HARDWARE, TELEMETRY_TOKEN,
+    # truth for everything that varies per-host (TELEMETRY_TOKEN,
     # LLM__N_GPU_LAYERS override, etc.). The inline ``environment:`` block below
     # only carries values that must be host-shell-resolved (NVIDIA caps,
     # GCP_CREDENTIALS) or that we always want to pin (MOUSEDROID_CONFIG path).
     # Production default for MOUSEDROID_MOCK_HARDWARE is FALSE (real hardware);
     # tests/dev wrappers can opt back into mock by exporting =true before
     # ``docker compose up``. See config/.env.jetson.example.
+    #
+    # NOTE on precedence (Compose spec): the inline ``environment:`` block
+    # ALWAYS wins over values defined in ``env_file``. That means
+    # MOUSEDROID_MOCK_HARDWARE set in /etc/mousedroid/docker.env is silently
+    # overridden by the line below — operators must export the var in the
+    # host shell *before* ``docker compose up`` to change the default.
+    # MOUSEDROID_TELEMETRY_TOKEN and any MOUSEDROID_LLM__* / MOUSEDROID_*__*
+    # nested keys NOT listed in the inline block do read from docker.env.
+    #
+    # ``required: false`` is critical for first-time bringup and for CI
+    # ``docker compose config --quiet`` lint runs where /etc/mousedroid/
+    # doesn't exist yet — without it compose fails immediately with
+    # "env file not found".
     env_file:
-      - /etc/mousedroid/docker.env
+      - path: /etc/mousedroid/docker.env
+        required: false
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all

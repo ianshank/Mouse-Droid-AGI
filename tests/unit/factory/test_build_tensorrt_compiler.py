@@ -85,7 +85,12 @@ def test_build_returns_mock_compiler_when_tensorrt_disabled(
     event = _find_tensorrt_event(captured_logs)
     assert event["backend"] == "mock"
     assert event["reason"] == "tensorrt_enabled=false"
-    assert event["torch2trt_available"] is False
+    # ``torch2trt_available`` reports the truthful library state regardless
+    # of branch — dev hosts with torch2trt installed but tensorrt disabled
+    # used to log False here, misleading dashboards. Test the field is
+    # present + boolean (don't pin a specific value: torch2trt may or may
+    # not be installed in the test runner environment).
+    assert isinstance(event["torch2trt_available"], bool)
 
 
 def test_single_log_event_name_across_both_branches(

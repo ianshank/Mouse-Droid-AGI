@@ -1875,8 +1875,14 @@ def build_tensorrt_compiler(cfg: Settings) -> TensorRTCompilerProtocol:
     Returns:
         Compiler conforming to ``TensorRTCompilerProtocol``.
     """
+    # Import _TORCH2TRT_AVAILABLE once so both branches log the truthful
+    # boolean. Previously the mock branch hardcoded ``torch2trt_available=False``
+    # which misled dashboards on dev hosts where torch2trt IS installed but
+    # tensorrt is just disabled in cfg.
+    from mousedroid.efficiency.tensorrt import _TORCH2TRT_AVAILABLE
+
     if cfg.jetson.tensorrt_enabled:
-        from mousedroid.efficiency.tensorrt import _TORCH2TRT_AVAILABLE, JetsonTensorRTCompiler
+        from mousedroid.efficiency.tensorrt import JetsonTensorRTCompiler
 
         _log.info(
             "tensorrt_compiler_built",
@@ -1893,7 +1899,7 @@ def build_tensorrt_compiler(cfg: Settings) -> TensorRTCompilerProtocol:
     _log.info(
         "tensorrt_compiler_built",
         backend="mock",
-        torch2trt_available=False,
+        torch2trt_available=_TORCH2TRT_AVAILABLE,
         reason="tensorrt_enabled=false",
     )
     return MockTensorRTCompiler()
