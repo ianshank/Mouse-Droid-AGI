@@ -131,6 +131,4 @@ async def test_mission_lifecycle_prev_obs_owns_buffer_after_caching() -> None:
     obs_t, prev_t = args
     # prev_t was cached on tick 1 (zeros) and must NOT have been mutated
     # by the shared_buffer[:] = 7.0 between ticks.
-    assert torch.all(prev_t == 0.0).item(), (
-        f"prev_t leaked the shared buffer mutation: {prev_t}"
-    )
+    assert torch.all(prev_t == 0.0).item(), f"prev_t leaked the shared buffer mutation: {prev_t}"
