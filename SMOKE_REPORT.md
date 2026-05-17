@@ -241,3 +241,42 @@ Per operator request, ran the Isaac validation surface on the live Jetson. **Res
   - `tests/unit/test_jetson_smoke_orchestrator.py` — 13 skipped (was 10 failed)
 - All 37 new tests from this sprint (preflight + pillars + CLI + smoke + integration) pass.
 
+---
+
+## Addendum D — F-006 live-Jetson verification (post-PR-101 deploy)
+
+**Method:** new `tools/llm_latency_probe.py` (PR-1) measures `LLMGateway.translate_mission("turn left slowly")` elapsed against `cfg.llm.latency_target_ms = 500`. Run on the live Jetson at `192.168.55.1` inside the orchestrator container after pulling `db366f7` (post-PR-101 integration branch) + `sudo bash scripts/sync_jetson_overlay.sh` (F-013 hardening confirmed `overlay_sync_replaced` → `overlay_sync_match` audible).
+
+### Probe runs
+
+| Setting | Cold-start ms | Translate ms | Pass? | Notes |
+|---|---|---|---|---|
+| `n_gpu_layers=-1` (PR #101 default, fresh container) | n/a — load failed | n/a | ❌ | `cudaMalloc failed: out of memory` allocating 2228 MiB on iGPU. llama-cpp-python IS CUDA-built (`load_tensors: layer N assigned to device CUDA0`); the failure is iGPU heap exhaustion when the orchestrator's other CUDA contexts are resident. Probe emitted the new structured `llm_gateway_load_failed` event with full diagnostic. |
+| `n_gpu_layers=16` (partial offload, env override) | n/a — load failed | n/a | ❌ | Same `cudaMalloc OOM` at smaller (384 MiB) allocation — even partial offload is blocked by iGPU heap state. |
+| `n_gpu_layers=0` (CPU-only baseline, env override) | 985 ms | **269 s** | ❌ (target 500 ms) | Cold-start fast (CPU loader skips GPU upload). Inference: 5.40 tok/s prompt eval, 0.50 tok/s generation, 269148 ms total for `translate_mission`. **Confirms the original F-006 symptom from PR #100 (260 s baseline) is reproducible — PR #101's YAML flip alone does not fix it.** |
+
+### Findings
+
+| ID | Severity | Surface | Root cause | Resolution |
+|---|---|---|---|---|
+| **F-006** | **HIGH (ops, still open)** | PR #101's `llm.n_gpu_layers: -1` flip is the theoretically correct fix but causes `cudaMalloc OOM` on the live Orin Nano 8GB when the orchestrator's other CUDA contexts (TensorRT, mock subsystems) are already resident in the iGPU heap. The container falls back to model-load failure, not slow inference. | Jetson Orin Nano has unified 8GB shared CPU/GPU RAM. Phi-3-mini-q4 (~2.4 GB on disk; needs ~2.2 GB iGPU heap at full offload) cannot fit alongside an active orchestrator process holding TensorRT contexts. Partial offload (`=16`) also fails — the iGPU heap allocator can't satisfy any contiguous GPU allocation while other CUDA contexts hold memory. | **Operator follow-up (next sprint):** (a) try `Phi-3-mini-q3_K_S` (~1.5 GB) — smaller quant likely fits at partial offload; (b) tune `cfg.jetson.gpu_memory_fraction` lower so other CUDA contexts release more; (c) accept the 269 s CPU-only latency and raise `cfg.llm.latency_target_ms` to a realistic value (260 s + headroom) so the `llm_inference_slow` event isn't fired on every call. **Do NOT revert PR #101's YAML flip**: the operator escape hatch via `MOUSEDROID_LLM__N_GPU_LAYERS=0` works correctly + the schema default of `-1` is right for hosts without orchestrator contention. |
+| **F-015** | **MED (ops)** | Probe + orchestrator iGPU contention: any `docker exec ... llm_latency_probe.py` run while the orchestrator is also running fails because both processes try to claim the iGPU heap. | Two CUDA processes in one container on a UMA iGPU. | Operator runbook should: (a) for one-shot latency measurements, stop the orchestrator first (`docker stop mousedroid`), run the probe in a fresh container, then restart; (b) for steady-state monitoring, scrape the `llm_inference_slow` Prometheus event from the orchestrator's `/metrics` endpoint — that's the same signal the probe measures, but free. |
+| **F-016** | **LOW** | Phi-3-mini occasionally emits multi-mission JSON output (training-data echo): `{"vx": 0, "vy": -0.1, "omega": -0.1}\n\nMission: accelerate forward\n\nJSON: {"vx": 1, ...}`. The parser falls back to the configured neutral `GoalVector(0,0,0)` + logs `llm_parse_failed` — graceful, but the goal vector is wrong. | Phi-3-mini-q4 is small + the system_prompt may not be tight enough to suppress training-data continuation. | Tighter system prompt (e.g., add "Output ONLY one JSON object. Do NOT echo additional mission examples.") OR switch to a more capable model. Out of scope for PR-1; documented for the Tier C3 follow-up. |
+
+### Probe correctness confirmation
+
+The probe (PR-1) functioned as designed across all three runs:
+
+- ✅ Distinguished "load-time GPU offload failure" (`cudaMalloc OOM`, exit 2) from "loaded but slow" (CPU baseline, exit 1) cleanly via the new structured `llm_gateway_load_failed` event.
+- ✅ Emitted `llama_model_metadata` with parsed `model_params_n_gpu_layers=0` on the CPU baseline, confirming the env override actually took effect.
+- ✅ Emitted `probe_cfg` with all relevant llm config fields including the env override value (so the audit trail is self-documenting).
+- ⚠️ `tegrastats_not_available host_kind=non_jetson` — the orchestrator container doesn't have `tegrastats` on PATH. The probe gracefully falls back to `None`-valued snapshot fields. Operator-side runbook should run the probe on the Jetson host (outside the container) when GPU memory headroom is the question being asked.
+
+### Sprint conclusion (PR-1)
+
+- ✅ Probe TOOL is correct, well-tested (11 unit tests), ruff/mypy clean, and ready for operator use.
+- ✅ F-006 verification CONCLUSIVE: the bug is **deeper than a YAML flip**; full GPU offload OOMs in production. Three follow-up resolutions queued (F-015 + F-016 + Phi-3-mini-q3 swap).
+- ❌ The 500 ms `latency_target_ms` is unachievable on the Orin Nano 8GB at CPU-only Phi-3-mini-q4. The target needs to be either:
+  - raised to ~270 s (current CPU-only reality), or
+  - met by switching to a smaller quant + partial GPU offload (F-006 next-sprint scope), or
+  - met by moving the LLM off-Jetson (Tier C3 `openai_compatible` backend pointing at the host PC).
