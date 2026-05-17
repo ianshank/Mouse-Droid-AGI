@@ -199,4 +199,22 @@ gcp_credentials/
 mcp_token
 *.mcp_token
 mcp_sessions/
+
+# Smoke-stability sprint — operator-driven verification artefacts
+# ---------------------------------------------------------------
+# ``tools/lidar_telemetry_probe.py`` writes no artefacts of its own;
+# these patterns cover the byproducts of preflight / pillar / WS-probe
+# runs invoked via the operator runbook so they never end up in commits.
+preflight_report*.json
+pillar_report*.json
+lidar_ws_capture*.jsonl
+dashboard_capture*.jsonl
+
+# SMOKE_REPORT_*.md other than the canonical one at repo root are
+# operator-run-specific (date-stamped) and should not be committed —
+# the template at docs/planning/SMOKE_REPORT_TEMPLATE.md is the source
+# of truth, and the canonical SMOKE_REPORT.md is kept tracked.
+SMOKE_REPORT_*.md
+!SMOKE_REPORT.md
+!docs/planning/SMOKE_REPORT_TEMPLATE.md
 mcp_transcripts/

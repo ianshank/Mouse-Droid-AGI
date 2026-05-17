@@ -8,6 +8,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Smoke-Test Stability Pass
+
+- **`run_preflight(cfg) -> PreflightReport`** async API (`src/mousedroid/validation/preflight.py`) — replaces the shell-only `scripts/preflight_check.sh` flow with a Pydantic-typed report. Six built-in checks (camera, microphone, speaker, lidar, esp32, config) reuse `validation/runtime.py` helpers; per-check exceptions are caught and recorded as FAIL entries (never bubble).
+- **`validate_all_pillars(cfg)` + `python -m mousedroid.cli.validate_pillars` CLI** (`src/mousedroid/validation/pillars.py` + `src/mousedroid/cli/validate_pillars.py`) — dispatch-table over the 10 pillars from `TEN_PILLARS_VALIDATION.md`. Six pillars use Pattern A (factory-builder smoke); four (continual / meta / scaling / growth) use Pattern B (in-process `pytest.main` delegation) because their `build_*` factories don't yet exist. CI runs the `--dry-run` variant on every commit between typecheck and tests.
+- **SSD1306 face display smoke test** (`tests/hardware/test_face_display_smoke.py`) — exercises `build_face_display` + `build_face_controller` + the `fallback_to_mock_on_error` path.
+- **Hailo accelerator smoke test** (`tests/hardware/test_hailo_smoke.py`) — gated by `pytest.importorskip("hailort")` + `is_jetson_host()`; covers disabled / mock-fallback / mock-inference branches.
+- New structured log events: `preflight_{start,complete,check_exception}` and `pillar_validation_{start,complete}` + `pillar_check_exception` for operator dashboard ingestion.
+
+### Fixed — Pre-existing Windows-host infra failures
+
+- `tests/smoke/test_telemetry_smoke.py::test_publisher_initial_stats_are_zero` — inclusive assertion that auto-inherits new counters (`lidar_raw_published` / `lidar_raw_dropped` added by Tier C1).
+- `tests/integration/test_docker_gpu.py::TestContainerEnvironment::test_nvcc_available` — `@pytest.mark.skipif(shutil.which("nvcc") is None, ...)`.
+- `tests/unit/test_jetson_smoke_orchestrator.py` (10 tests) — module-level `pytest.mark.skipif` on Windows hosts without `python3` reachable from the bash subprocess. Tests still RUN on Linux / Jetson hosts (operator runbook validates this).
+
+### Docs — Smoke pass
+
+- `docs/operator/JETSON_SMOKE_RUNBOOK.md` — step-by-step rover validation runbook.
+- `docs/planning/SMOKE_REPORT_TEMPLATE.md` — empty template the operator fills after running the runbook.
+
+### Backwards compatibility — Smoke pass
+
+- `scripts/preflight_check.sh` retained unchanged as the bash entry point; new programmatic API is an addition, not a replacement.
+- Three pre-existing Windows-host failures now SKIP cleanly with documented reasons. Tests still RUN on Linux / Jetson hosts.
+- No new runtime dependencies — every new module reuses existing `validation/runtime.py` helpers + `factory.py` builders.
+
+### Added — Live-Jetson verification + diagnostics (smoke pass, second phase)
+
+- **`tools/lidar_telemetry_probe.py`** — standalone non-orchestrator LiDAR → telemetry publisher → telemetry server → `/ws/v1/lidar/raw` WS-client probe. Lets the operator verify the dashboard pipeline end-to-end even when the rover is detached (ESP32 / CSI not present): the probe binds a non-default port (8090) so it never collides with the running orchestrator on 8080.
+- **CSI-ribbon-disconnect diagnostic** in `_check_camera` — `_detect_csi_ribbon_disconnect(video_nodes=…, modules_text=…)` distinguishes the operator-actionable "reconnect the ribbon" case from a real driver bug. The detector accepts injected `/proc/modules` text and `/dev/video*` node lists so it's unit-testable without root or Jetson hardware. The check helper surfaces it as `WARN`, not `FAIL`.
+- **`python -m mousedroid.cli.preflight`** — argparse wrapper over `run_preflight(cfg)` (mirrors the `validate_pillars` CLI). Flags: `--config`, `--checks` (subset filter), `--mock-hardware`, `--json`. Exit 0 on OK or DEGRADED (WARN-only); exit 1 only on FAIL.
+- **Findings F-006 → F-014** documented in `SMOKE_REPORT.md` addenda A+B+C from the live Jetson run at `192.168.55.1`. Notably: F-006 (Phi-3-mini at 0.52 tok/s = 260 s per `translate_mission` — operator fix is `llm.n_gpu_layers: -1`), F-013 (stale `/etc/mousedroid/jetson_production.yaml` was missing `mock_force_real_when_enabled: true` → telemetry server bound nothing), F-014 (compose default `MOUSEDROID_MOCK_HARDWARE=${VAR:-true}` overrides the env_file's `false`).
+
+### Fixed — Reviewer findings (PR-prep)
+
+- `mousedroid/cli/validate_pillars.py` — exit code 0 on `DEGRADED` (WARN-only), not just `OK`. Matches the preflight CLI contract; prevents CI false-fails on warn-only runs. Pinned by `test_cli_exits_0_when_overall_status_is_degraded`.
+- `mousedroid/validation/pillars.py` — Pattern-B `_PYTEST_DELEGATION_PATHS` now resolves against a module-level `_REPO_ROOT` (`Path(__file__).resolve().parents[3]`) instead of relying on `os.getcwd()`. The dispatcher works regardless of which directory the operator invokes the CLI from.
+- `mousedroid/validation/pillars.py` — replaced `assert x is not None` smoke checks in Pattern-A pillar checks with explicit `if x is None: return _fail(...)` blocks. `assert` is stripped under `python -O` (the standard Jetson Docker entrypoint typically sets `PYTHONOPTIMIZE=1`) so the previous code silently returned `OK` on a `None` factory result. The new pattern is correct under any optimisation level.
+- Added missing coverage: `test_check_camera_returns_warn_when_ribbon_disconnect_detected` proves the end-to-end WARN propagation from `_detect_csi_ribbon_disconnect` through `_check_camera`.
+
 ### Added — Tier C2.3: Mission Lifecycle Activation
 
 - **`OpenAICompatibleLLMGateway`** (`src/mousedroid/llm_gateway/openai_compatible.py`) — new HTTP backend implementing `LLMGatewayProtocol` against `{base_url}/v1/chat/completions`. Talks to Ollama (default at `http://127.0.0.1:11434`), LM Studio, OpenAI, or any OpenAI-compatible endpoint. Selected via `cfg.llm.backend = "openai_compatible"`. Always returns a neutral `GoalVector` on transport / parse failures so the orchestrator never crashes on a misbehaving LLM. API key stored as `SecretStr` and forwarded as `Authorization: Bearer …` only (never logged).

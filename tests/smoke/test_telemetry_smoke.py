@@ -175,8 +175,22 @@ async def test_log_buffer_double_unsubscribe_is_safe() -> None:
 
 
 async def test_publisher_initial_stats_are_zero() -> None:
+    """Initial stats are all zero (forward-compatible with new counter additions).
+
+    Inclusive check rather than ``== {expected_dict}`` so adding a new
+    counter to ``TelemetryPublisher.stats`` (e.g. ``lidar_raw_published`` /
+    ``lidar_raw_dropped`` added by Tier C1) doesn't silently break this
+    smoke gate. We pin the two baseline counter names that have always
+    been part of the contract, then assert every counter on a fresh
+    publisher starts at 0 so new counters auto-inherit the invariant.
+    """
     pub = TelemetryPublisher(_cfg())
-    assert pub.stats == {"frames_published": 0, "frames_dropped": 0}
+    stats = pub.stats
+    # Baseline counters that have always been part of the contract.
+    assert stats["frames_published"] == 0
+    assert stats["frames_dropped"] == 0
+    # Generic invariant: any counter on a fresh publisher must start at 0.
+    assert all(v == 0 for v in stats.values()), f"non-zero counter on fresh publisher: {stats}"
 
 
 async def test_publisher_enqueues_frame_and_updates_stats() -> None:

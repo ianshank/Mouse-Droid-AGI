@@ -40,6 +40,12 @@ echo "=== Format Check ==="
 echo "=== Type Check ==="
 "$PYTHON_BIN" -m mypy src/ --strict --ignore-missing-imports
 
+echo "=== Pillar Validation Dispatch (--dry-run) ==="
+# Proves the validate_all_pillars CLI + dispatch table are importable
+# and invokable on every CI run, even though full per-pillar checks
+# live inside the pytest stages below. --dry-run keeps cost ~50ms.
+"$PYTHON_BIN" -m mousedroid.cli.validate_pillars --dry-run
+
 echo "=== Hardcoded Value Gate (changed lines) ==="
 "$PYTHON_BIN" scripts/check_no_hardcoded_values.py
 
