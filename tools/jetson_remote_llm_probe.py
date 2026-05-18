@@ -102,12 +102,11 @@ async def _cold_ping_models(base_url: str, api_key: SecretStr | None) -> int:
     url = f"{base_url}{_MODELS_ENDPOINT_PATH}"
     t0 = time.monotonic()
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=_COLD_PING_TIMEOUT_S),
-            ) as resp:
+        ping_timeout = aiohttp.ClientTimeout(total=_COLD_PING_TIMEOUT_S)
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(url, headers=headers, timeout=ping_timeout) as resp,
+        ):
                 elapsed_ms = (time.monotonic() - t0) * 1000.0
                 if resp.status != 200:
                     _log.error(
