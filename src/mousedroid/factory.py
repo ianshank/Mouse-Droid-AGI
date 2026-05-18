@@ -624,18 +624,25 @@ def build_llm_gateway(
       OpenAI-compatible local-LLM tooling — operators swap deployments
       by changing only ``cfg.llm.base_url`` (and ``cfg.llm.model_name``).
 
-    The ``injection_filter`` argument applies only to the ``llama_cpp``
-    backend; the HTTP backend skips local injection filtering because
-    the upstream provider is expected to enforce its own guardrails.
+    The ``injection_filter`` is applied to BOTH backends as of the
+    f006-remote-llm sprint — previously the HTTP backend silently
+    discarded it ("upstream provider expected to enforce its own
+    guardrails") which created a documented attack surface once the
+    operator runbook started teaching mission text via the new
+    ``jetson_remote_llm_probe``. The HTTP path now calls
+    ``injection_filter.sanitize(nl)`` inside ``translate_mission``,
+    mirroring ``LLMGateway._sanitize_command`` at
+    ``llm_gateway/gateway.py:148``.
 
     Args:
         cfg: Root settings.
         injection_filter: Optional shared :class:`PromptInjectionFilterProtocol`.
             When ``None``, the ``llama_cpp`` gateway constructs its own
             filter from ``cfg.llm.injection_patterns`` (legacy
-            behaviour); when supplied (the default in
+            behaviour) and the ``openai_compatible`` gateway skips
+            local sanitisation; when supplied (the default in
             :func:`build_orchestrator`), the same filter is reused by
-            the OpenClaw mission dispatcher.
+            both backends + the OpenClaw mission dispatcher.
 
     Returns:
         LLM gateway conforming to :class:`LLMGatewayProtocol`.
@@ -649,8 +656,9 @@ def build_llm_gateway(
             base_url=cfg.llm.base_url,
             model=cfg.llm.model_name,
             enabled=cfg.llm.enabled,
+            injection_filter_wired=injection_filter is not None,
         )
-        return OpenAICompatibleLLMGateway(cfg.llm)
+        return OpenAICompatibleLLMGateway(cfg.llm, injection_filter=injection_filter)
 
     # Default / legacy ``llama_cpp`` path.
     from mousedroid.llm_gateway.config import GatewayConfig

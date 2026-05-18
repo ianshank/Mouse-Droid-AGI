@@ -37,6 +37,7 @@ from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import LLMConfig
+    from mousedroid.security.injection_filter import PromptInjectionFilterProtocol
 
 _log = get_logger(__name__)
 
@@ -73,11 +74,37 @@ class OpenAICompatibleLLMGateway:
     ``cfg.llm.backend == "openai_compatible"``.
     """
 
-    def __init__(self, cfg: LLMConfig) -> None:
+    def __init__(
+        self,
+        cfg: LLMConfig,
+        *,
+        injection_filter: PromptInjectionFilterProtocol | None = None,
+    ) -> None:
+        """Construct the HTTP gateway.
+
+        Args:
+            cfg: Loaded :class:`LLMConfig`.
+            injection_filter: Optional shared
+                :class:`PromptInjectionFilterProtocol`. When supplied (the
+                production default via :func:`build_orchestrator`),
+                ``translate_mission`` calls ``injection_filter.sanitize(nl)``
+                before sending the user content to the upstream LLM —
+                mirroring the local llama-cpp gateway's behaviour at
+                :meth:`LLMGateway._sanitize_command` so both backends apply
+                the same guardrails. The previous Tier-C2.3 implementation
+                discarded this argument on the HTTP path (factory.py:627-629
+                commented "upstream provider expected to enforce its own
+                guardrails"); the f006-remote-llm sprint closes that gap so
+                operator-supplied mission text from probes / dashboards /
+                voice intent can't bypass the local rejection envelope.
+                When ``None`` (legacy default), the gateway skips local
+                sanitisation — backwards-compatible.
+        """
         self._cfg = cfg
         self._session: aiohttp.ClientSession | None = None
         self._ready = False
         self._degraded = False
+        self._injection_filter = injection_filter
 
     @property
     def is_ready(self) -> bool:
@@ -176,6 +203,23 @@ class OpenAICompatibleLLMGateway:
                 session=self._session is not None,
             )
             return GoalVector()
+
+        # Apply the prompt-injection filter BEFORE sending to the upstream
+        # LLM. Mirrors the local llama-cpp gateway's _sanitize_command
+        # (gateway.py:148). Backwards-compat: when no filter was injected
+        # we skip sanitisation and pass nl_command through unchanged.
+        # On any sanitiser exception, return a neutral GoalVector so the
+        # gateway's "never raises" docstring contract holds even on a
+        # misbehaving filter implementation.
+        if self._injection_filter is not None:
+            try:
+                nl_command = self._injection_filter.sanitize(nl_command)
+            except Exception as exc:  # boundary catch — never crash orchestrator
+                _log.warning(
+                    "llm_gateway_http_sanitize_failed",
+                    error=f"{type(exc).__name__}:{exc}",
+                )
+                return GoalVector()
 
         payload: dict[str, Any] = {
             "model": self._cfg.model_name,
