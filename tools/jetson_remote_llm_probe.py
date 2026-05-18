@@ -125,7 +125,7 @@ async def _cold_ping_models(base_url: str, api_key: SecretStr | None) -> int:
                 )
                 return 2
             body = await resp.json()
-    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+    except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as exc:
         elapsed_ms = (time.monotonic() - t0) * 1000.0
         _log.error(
             "llm_gateway_load_failed",
