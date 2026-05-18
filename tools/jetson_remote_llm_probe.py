@@ -107,24 +107,24 @@ async def _cold_ping_models(base_url: str, api_key: SecretStr | None) -> int:
             aiohttp.ClientSession() as session,
             session.get(url, headers=headers, timeout=ping_timeout) as resp,
         ):
-                elapsed_ms = (time.monotonic() - t0) * 1000.0
-                if resp.status != 200:
-                    _log.error(
-                        "llm_gateway_load_failed",
-                        stage="cold_ping",
-                        url=url,
-                        status=resp.status,
-                        elapsed_ms=elapsed_ms,
-                        hint=(
-                            "Cold ping to /v1/models returned non-200. Check "
-                            "that Ollama is running on the host PC and the "
-                            "base_url IP is correct (look at "
-                            "tools/jetson_remote_llm_probe --help for the "
-                            "operator runbook reference)."
-                        ),
-                    )
-                    return 2
-                body = await resp.json()
+            elapsed_ms = (time.monotonic() - t0) * 1000.0
+            if resp.status != 200:
+                _log.error(
+                    "llm_gateway_load_failed",
+                    stage="cold_ping",
+                    url=url,
+                    status=resp.status,
+                    elapsed_ms=elapsed_ms,
+                    hint=(
+                        "Cold ping to /v1/models returned non-200. Check "
+                        "that Ollama is running on the host PC and the "
+                        "base_url IP is correct (look at "
+                        "tools/jetson_remote_llm_probe --help for the "
+                        "operator runbook reference)."
+                    ),
+                )
+                return 2
+            body = await resp.json()
     except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
         elapsed_ms = (time.monotonic() - t0) * 1000.0
         _log.error(
