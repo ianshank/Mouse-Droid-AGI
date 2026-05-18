@@ -67,7 +67,10 @@ def test_tegrastats_snapshot_returns_none_keys_when_binary_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """No tegrastats binary (non-Jetson host) → all keys ``None``, never raises."""
-    monkeypatch.setattr(probe.shutil, "which", lambda _name: None)
+    # _tegrastats_snapshot was promoted to tools/_jetson_helpers in the
+    # f006-remote-llm sprint; patch the new location.
+    from tools import _jetson_helpers
+    monkeypatch.setattr(_jetson_helpers.shutil, "which", lambda _name: None)
     result = probe._tegrastats_snapshot()
     assert result == {"ram_used_mb": None, "ram_total_mb": None, "raw_line": None}
 
@@ -78,7 +81,8 @@ def test_tegrastats_snapshot_parses_ram_line(
 ) -> None:
     """Realistic tegrastats line → parsed ram_used_mb + ram_total_mb."""
     fake_line = "RAM 2914/7619MB (lfb 12x4MB) SWAP 0/3810MB GR3D_FREQ 0%@[306,...]"
-    monkeypatch.setattr(probe.shutil, "which", lambda _name: "/usr/bin/tegrastats")
+    from tools import _jetson_helpers
+    monkeypatch.setattr(_jetson_helpers.shutil, "which", lambda _name: "/usr/bin/tegrastats")
 
     fake_completed = subprocess.CompletedProcess(
         args=["tegrastats", "--interval", "100", "--count", "1"],
@@ -86,7 +90,7 @@ def test_tegrastats_snapshot_parses_ram_line(
         stdout=fake_line + "\n",
         stderr="",
     )
-    monkeypatch.setattr(probe.subprocess, "run", lambda *a, **kw: fake_completed)
+    monkeypatch.setattr(_jetson_helpers.subprocess, "run", lambda *a, **kw: fake_completed)
 
     result = probe._tegrastats_snapshot()
     assert result["ram_used_mb"] == 2914
@@ -99,12 +103,13 @@ def test_tegrastats_snapshot_handles_timeout_gracefully(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """tegrastats hang → TimeoutExpired caught, all keys None, no raise."""
-    monkeypatch.setattr(probe.shutil, "which", lambda _name: "/usr/bin/tegrastats")
+    from tools import _jetson_helpers
+    monkeypatch.setattr(_jetson_helpers.shutil, "which", lambda _name: "/usr/bin/tegrastats")
 
     def _raise_timeout(*_args: Any, **_kwargs: Any) -> Any:
         raise subprocess.TimeoutExpired(cmd="tegrastats", timeout=2.0)
 
-    monkeypatch.setattr(probe.subprocess, "run", _raise_timeout)
+    monkeypatch.setattr(_jetson_helpers.subprocess, "run", _raise_timeout)
     result = probe._tegrastats_snapshot()
     assert result == {"ram_used_mb": None, "ram_total_mb": None, "raw_line": None}
 

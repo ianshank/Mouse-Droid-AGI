@@ -43,9 +43,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
-import re
-import shutil
-import subprocess
 import sys
 import time
 from collections.abc import Callable
@@ -56,59 +53,23 @@ from mousedroid.config.loader import load_settings
 from mousedroid.factory import build_injection_filter, build_llm_gateway
 from mousedroid.logging.setup import get_logger
 
+# Shared Jetson-side helper (promoted out of this file during the F-006
+# remote-LLM sprint so jetson_remote_llm_probe can reuse it). Aliased to
+# the prior private name so existing test patches at
+# ``probe._tegrastats_snapshot`` keep working without test changes.
+from tools._jetson_helpers import tegrastats_snapshot as _tegrastats_snapshot
+
 _log = get_logger("llm_latency_probe")
 
 # Default mission text — short + deterministic enough that the parser path is
 # exercised but inference time isn't dominated by token-count variance.
 _DEFAULT_MISSION = "turn left slowly"
 
-# tegrastats output line shape (Orin Nano):
-#   RAM 2914/7619MB ...  GR3D_FREQ 0%@[306,...]  ... NVRGTX_FREQ ...
-# We extract two numbers: used RAM (MB) and total RAM (MB). On non-Jetson hosts
-# tegrastats is absent — the probe falls back to ``None`` for the snapshot
-# fields. We deliberately don't try to use ``nvidia-smi`` because the Orin
-# Nano's iGPU shares system RAM (UMA) — RAM is the right signal here, not
-# discrete VRAM.
-_TEGRASTATS_RAM_RE = re.compile(r"\bRAM\s+(\d+)/(\d+)MB")
-
-
-def _tegrastats_snapshot(timeout_s: float = 2.0) -> dict[str, int | str | None]:
-    """Capture one ``tegrastats`` line and parse the RAM usage.
-
-    Returns a dict with keys ``ram_used_mb``, ``ram_total_mb``, ``raw_line``.
-    All values are ``None`` when ``tegrastats`` is absent (non-Jetson host) or
-    the parse fails. Never raises.
-    """
-    if shutil.which("tegrastats") is None:
-        _log.warning("tegrastats_not_available", host_kind="non_jetson")
-        return {"ram_used_mb": None, "ram_total_mb": None, "raw_line": None}
-    try:
-        # ``--interval`` is in ms; ``--count`` exits after N samples.
-        # S603/S607: fixed argv list, no shell, executable resolved via PATH
-        # (the shutil.which check above guarantees presence). Operator-side
-        # diagnostic tool — not exposed to untrusted input.
-        result = subprocess.run(  # noqa: S603
-            ["tegrastats", "--interval", "100", "--count", "1"],  # noqa: S607
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-            check=False,
-        )
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        _log.warning("tegrastats_invocation_failed", error=f"{type(exc).__name__}: {exc}")
-        return {"ram_used_mb": None, "ram_total_mb": None, "raw_line": None}
-
-    raw_line = (result.stdout or "").strip().splitlines()[-1:] or [""]
-    line = raw_line[0]
-    match = _TEGRASTATS_RAM_RE.search(line)
-    if match is None:
-        _log.warning("tegrastats_parse_failed", raw_line=line[:120])
-        return {"ram_used_mb": None, "ram_total_mb": None, "raw_line": line}
-    return {
-        "ram_used_mb": int(match.group(1)),
-        "ram_total_mb": int(match.group(2)),
-        "raw_line": line,
-    }
+# NOTE: ``_tegrastats_snapshot`` and ``_TEGRASTATS_RAM_RE`` moved to
+# ``tools/_jetson_helpers.py`` during the F-006 remote-LLM sprint. The
+# module-level import above re-exports the function under the prior
+# private name so existing test patches at ``probe._tegrastats_snapshot``
+# keep working.
 
 
 def _llama_model_metadata(gateway: Any) -> dict[str, Any]:
