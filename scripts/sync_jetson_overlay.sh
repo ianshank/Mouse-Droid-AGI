@@ -131,8 +131,7 @@ sync_pair() {
     tmp="$(mktemp "${dst_dir}/.overlay_sync.XXXXXX")"
     trap 'rm -f "${tmp}"' RETURN
 
-    if cp -f "${src}" "${tmp}"; then
-        mv -f "${tmp}" "${dst}"
+    if cp -f "${src}" "${tmp}" && mv -f "${tmp}" "${dst}"; then
         trap - RETURN  # success → don't try to clean up the moved file
         log "OK overlay_sync_replaced pair_index=${pair_index} src=${src} dst=${dst} sha256=${src_hash}"
         return 0
