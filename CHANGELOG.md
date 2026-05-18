@@ -8,6 +8,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Hardware smoke hardening (PR #104 follow-up)
+
+Resolution of the gap-analysis + tech-debt findings on the smoke-test PR. All changes are backwards-compatible (new schema fields default to the previously-hardcoded values).
+
+- **Schema-driven thresholds** — four new Pydantic fields replace the previously-hardcoded literals in `mousedroid.validation.runtime`:
+  - `camera.snapshot_jpeg_quality: int` (default `90`, range 1-100) — Pillow JPEG quality for the `--save-frame` snapshot encoder
+  - `experience.nvme_device: str` (default `/dev/nvme0n1`) — `smartctl` target
+  - `experience.nvme_partition: str` (default `/dev/nvme0n1p1`) — `findmnt` target
+  - `experience.diagnostics_subprocess_timeout_s: float` (default `10.0`) — per-tool timeout for `lspci` / `lsblk` / `smartctl` / `findmnt`
+  - `hailo.synthetic_input_shape: tuple[int, int, int]` (default `(640, 640, 3)`) — zero-tensor shape for the Hailo synthetic-inference round-trip
+- **Schema-driven HEF role inventory** — `verify_hailo_accelerator` now derives the HEF role list from `HailoConfig.model_fields` (any field ending in `_hef_path`) instead of a hardcoded `("yolo", "feature_extractor")` tuple. Adding a third HEF role (e.g. `depth_hef_path`, `segmentation_hef_path`) flows into the smoke automatically.
+
+### Fixed — Hardware smoke hardening
+
+- **Logging hygiene** — replaced plain `import logging` + `logging.getLogger` in `verify_hailo_accelerator`'s `finally` with the project-mandatory `mousedroid.logging.setup.get_logger` so smoke stop-failures route through the same structlog processor chain as the rest of the orchestrator (CLAUDE.md invariant 4).
+- **`_resolve_pcie_ssd_mount` rootfs-parent FALSE PASS** — removed the `cfg.experience.path.parent` fallback. On a freshly-imaged Orin Nano with no NVMe at all, the previous chain would accept `/home/jetson/` (the rootfs!) as the "SSD mount" and report the LMDB path as "on SSD" — defeating the entire point of the check. The smoke now SKIPs cleanly when neither `$MOUSEDROID_SSD_MOUNT` nor `findmnt /dev/nvme0n1p1` can pin the mount.
+- **`infer_sync` event-loop block** — wrapped the Hailo synthetic-inference call in `asyncio.to_thread` so the smoke does not stall the asyncio event loop during the (potentially tens-of-ms) blocking PCIe VStream call. Mirrors how `HailoRuntime.start()` dispatches its own blocking calls.
+- **Dead `_device_id`/`_fw_version`/`_arch` reflection** — `HailoRuntime` never assigns these attrs, so the `getattr` loop produced a perpetually-empty `device_info` dict. Replaced with two concrete operator-meaningful signals: `device_path` (resolved from `cfg.hailo.device_path`) and `models_loaded` count (derived from the HEF inventory).
+- **Misleading `is_available()` signal** — `runtime.is_available()` returns `False` if HEFs failed to load even when the device was found, producing confusing PASS/FAIL signals. Removed; the new `device_info` keys carry concrete signals operators can interpret.
+- **Sync `capture_raw_frame` crash** — `_resolve_raw_frame_capture` now `asyncio.iscoroutinefunction`-checks the method and wraps sync drivers in `asyncio.to_thread`. The previous code would `await` a non-coroutine and produce a confusing `TypeError` deep inside `capture_camera_frame`.
+- **`_via_jpeg` Pillow import** — wrapped in `try/except ImportError` so bare `[dev]` CI installs (without `[hardware]` or `[telemetry]` extras) get a clear operator-actionable `RuntimeError` instead of a bare ImportError traceback.
+- **Dead-defensive `getattr(cfg.hailo, "fallback_on_failure", True)`** — replaced with direct attribute access. The `HailoConfig` field is guaranteed by the schema; the wrapper would silently swallow a future rename.
+
+### Documentation — Hardware smoke hardening
+
+- `docs/operations/jetson_smoke_runbook.md` — three new common-failure sections:
+  - `$MOUSEDROID_SSD_MOUNT` operator override for non-standard mount points
+  - YAML override pattern for non-canonical `experience.nvme_device` / `nvme_partition`
+  - `frame shape FAIL` interpretation when running with `MOUSEDROID_MOCK_HARDWARE=true` on a dev host (MockCamera 320×240 vs default 640×480)
+
 ### Added — Hardware smoke (post-adjust evidence + PCIe SSD + Hailo-8)
 
 Three additive sensor-verification flows that extend the existing `scripts/verify_sensors.py` + `scripts/jetson_smoke_test.sh` harness so the operator can validate the rover end-to-end after a hardware change. Zero new top-level deps; every threshold and path comes from existing Pydantic config or a documented `MOUSEDROID_*` env override.

@@ -21,6 +21,9 @@ from numpy.typing import NDArray
 
 from mousedroid.config.loader import load_settings
 from mousedroid.factory import build_camera, build_microphone, build_speaker, build_voice_engine
+from mousedroid.logging.setup import get_logger
+
+_log = get_logger(__name__)
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import Settings
@@ -282,7 +285,20 @@ def _resolve_raw_frame_capture(
     """
     capture_raw = getattr(camera, "capture_raw_frame", None)
     if callable(capture_raw):
-        return capture_raw  # type: ignore[no-any-return]
+        # Some legacy drivers expose ``capture_raw_frame`` as a SYNC method
+        # (older Jetson CSI shims, test stubs that predate the async API).
+        # ``await`` on a non-coroutine raises a confusing ``TypeError:
+        # object NoneType can't be used in 'await' expression`` deep
+        # inside ``capture_camera_frame`` — wrap with ``asyncio.to_thread``
+        # so sync drivers still work and the smoke produces a clean
+        # signal.
+        if asyncio.iscoroutinefunction(capture_raw):
+            return capture_raw  # type: ignore[no-any-return]
+
+        async def _via_sync_capture_raw_frame() -> NDArray[np.uint8]:
+            return np.asarray(await asyncio.to_thread(capture_raw), dtype=np.uint8)
+
+        return _via_sync_capture_raw_frame
 
     capture_jpeg = getattr(camera, "capture_raw_jpeg", None)
     if callable(capture_jpeg):
@@ -290,7 +306,20 @@ def _resolve_raw_frame_capture(
         async def _via_jpeg() -> NDArray[np.uint8]:
             from io import BytesIO
 
-            from PIL import Image
+            try:
+                from PIL import Image
+            except ImportError as exc:
+                # Pillow lives in ``[hardware]`` / ``[telemetry]`` extras
+                # (pyproject.toml lines 35, 51); bare ``[dev]`` CI installs
+                # don't get it. Produce a clear operator-actionable error
+                # rather than a bare ImportError traceback from the
+                # closure call site.
+                msg = (
+                    "camera exposes only capture_raw_jpeg() but Pillow is "
+                    'unavailable; install with `pip install -e ".[hardware]"` '
+                    "or `[telemetry]`"
+                )
+                raise RuntimeError(msg) from exc
 
             jpeg_bytes = await capture_jpeg()
             if not jpeg_bytes:
@@ -340,10 +369,28 @@ async def _encode_camera_frame_jpeg(
     except ImportError:
         return None
 
+    quality = _snapshot_jpeg_quality(camera)
     img = Image.fromarray(fallback_rgb)
     buf = BytesIO()
-    img.save(buf, format="JPEG", quality=90)
+    img.save(buf, format="JPEG", quality=quality)
     return buf.getvalue()
+
+
+def _snapshot_jpeg_quality(camera: object) -> int:
+    """Return the JPEG quality used by the fallback Pillow encoder.
+
+    Prefers ``camera._cfg.snapshot_jpeg_quality`` (the schema-driven
+    config the camera was built from) when available, falling back to
+    ``90`` for stubs / drivers that don't carry the cfg. Operators can
+    bump quality to 100 for lossless visual inspection or drop to 70 for
+    smaller snapshot files in disk-pressed deployments.
+    """
+    cfg_obj = getattr(camera, "_cfg", None)
+    if cfg_obj is not None:
+        value = getattr(cfg_obj, "snapshot_jpeg_quality", None)
+        if isinstance(value, int):
+            return max(1, min(100, value))
+    return 90
 
 
 async def verify_hailo_accelerator(cfg: Settings) -> HailoDiagnostics:
@@ -374,8 +421,29 @@ async def verify_hailo_accelerator(cfg: Settings) -> HailoDiagnostics:
     Returns:
         :class:`HailoDiagnostics` instance.
     """
-    device_path = Path(getattr(cfg.hailo, "device_path", "/dev/hailo0"))
+    # ``cfg.hailo`` is ``HailoConfig | None`` (schema.py:4468) — operators
+    # who never opt into the Hailo accelerator may leave the entire block
+    # unconfigured. Returning a SKIP-style record narrows the type for
+    # mypy --strict and tells the CLI consumer to emit
+    # "hailo not configured in settings" rather than crashing on a None
+    # attribute access.
+    if cfg.hailo is None:
+        return HailoDiagnostics(
+            device_path_exists=False,
+            sdk_importable=False,
+            fallback_on_failure=True,
+        )
+
+    # From here on ``cfg.hailo`` is guaranteed non-None. ``HailoConfig``
+    # (schema.py:455-493) declares both fields with defaults; the
+    # dead-defensive ``getattr`` wrappers that used to live here would
+    # silently swallow a future rename instead of producing a clean
+    # AttributeError. Reading the field directly is the more honest
+    # contract.
+    hailo_cfg = cfg.hailo
+    device_path = Path(hailo_cfg.device_path)
     device_path_exists = device_path.exists()
+    fallback_on_failure = bool(hailo_cfg.fallback_on_failure)
 
     # SDK importability — does NOT instantiate the runtime yet.
     try:
@@ -384,14 +452,14 @@ async def verify_hailo_accelerator(cfg: Settings) -> HailoDiagnostics:
         return HailoDiagnostics(
             device_path_exists=device_path_exists,
             sdk_importable=False,
-            fallback_on_failure=bool(getattr(cfg.hailo, "fallback_on_failure", True)),
+            fallback_on_failure=fallback_on_failure,
         )
 
     if not device_path_exists:
         return HailoDiagnostics(
             device_path_exists=False,
             sdk_importable=True,
-            fallback_on_failure=bool(getattr(cfg.hailo, "fallback_on_failure", True)),
+            fallback_on_failure=fallback_on_failure,
         )
 
     # Construct via the factory so we exercise the same code path as production.
@@ -402,7 +470,7 @@ async def verify_hailo_accelerator(cfg: Settings) -> HailoDiagnostics:
         return HailoDiagnostics(
             device_path_exists=True,
             sdk_importable=True,
-            fallback_on_failure=bool(getattr(cfg.hailo, "fallback_on_failure", True)),
+            fallback_on_failure=fallback_on_failure,
         )
 
     hef_files: dict[str, str] = {}
@@ -412,25 +480,17 @@ async def verify_hailo_accelerator(cfg: Settings) -> HailoDiagnostics:
     try:
         await runtime.start()
 
-        # Best-effort device info — the protocol does not expose this, so we
-        # synthesize from the runtime's ``is_available()`` and any private
-        # attributes the concrete HailoRuntime happens to surface.
-        device_info["available"] = str(bool(runtime.is_available()))
-        for attr in ("_device_id", "_fw_version", "_arch"):
-            value = getattr(runtime, attr, None)
-            if value is not None:
-                device_info[attr.lstrip("_")] = str(value)
-
-        # HEF load-status inventory. We read the runtime's _models dict
-        # (private but documented as the source of truth post-start) via
-        # getattr-reflection so a future protocol that doesn't expose it
-        # degrades gracefully to "loaded-or-not-known".
+        # Inventory HEF roles via schema reflection — any
+        # ``HailoConfig`` field whose name ends in ``_hef_path`` is a
+        # candidate role. This lets a future ``depth_hef_path`` /
+        # ``segmentation_hef_path`` schema field flow into the smoke
+        # without code edits here, and removes the duplication between
+        # the hardcoded ``("yolo", "feature_extractor")`` tuple in this
+        # helper and the same pair in ``HailoRuntime.start()``.
         models = getattr(runtime, "_models", {})
-        for role, field_name in (
-            ("yolo", "yolo_hef_path"),
-            ("feature_extractor", "feature_extractor_hef_path"),
-        ):
-            hef_path_value = getattr(cfg.hailo, field_name, None)
+        hef_role_fields = _discover_hef_role_fields(hailo_cfg)
+        for role, field_name in hef_role_fields:
+            hef_path_value = getattr(hailo_cfg, field_name, None)
             if hef_path_value is None or not str(hef_path_value).strip():
                 hef_files[role] = "missing (path not configured)"
                 continue
@@ -443,16 +503,32 @@ async def verify_hailo_accelerator(cfg: Settings) -> HailoDiagnostics:
             else:
                 hef_files[role] = "loaded (model registered)"
 
-        # Synthetic inference — guard input-shape introspection behind a
+        # Device-info acquisition. The HailoRuntimeProtocol does not
+        # expose device descriptors; ``HailoRuntime`` similarly has no
+        # ``_device_id`` / ``_fw_version`` / ``_arch`` attrs. Avoid
+        # reflecting against non-existent fields (would always yield an
+        # empty dict). Instead report two boolean signals the operator
+        # actually cares about: device-found (path exists) and
+        # models-loaded (at least one HEF in the inventory). A future
+        # protocol extension can replace this with a real
+        # ``runtime.device_info`` mapping.
+        loaded_count = sum(1 for status in hef_files.values() if status.startswith("loaded"))
+        device_info["device_path"] = str(device_path)
+        device_info["models_loaded"] = str(loaded_count)
+        device_info["models_configured"] = str(len(hef_role_fields))
+
+        # Synthetic inference — guard input-shape introspection behind
         # try/except so a Hailo runtime that doesn't expose vstream info
-        # still gets a smoke signal via the canonical (640, 640, 3) shape.
-        input_shape: tuple[int, ...] = (640, 640, 3)
+        # still gets a smoke signal via the schema-driven fallback shape.
+        input_shape: tuple[int, ...] = tuple(
+            int(dim) for dim in getattr(hailo_cfg, "synthetic_input_shape", (640, 640, 3))
+        )
         yolo_model = models.get("yolo") if isinstance(models, dict) else None
         if yolo_model is not None:
             try:
                 vstreams = yolo_model["input_vstream_infos"]
                 if vstreams:
-                    input_shape = tuple(vstreams[0].shape)
+                    input_shape = tuple(int(dim) for dim in vstreams[0].shape)
             except (KeyError, IndexError, AttributeError, TypeError):
                 pass
 
@@ -460,9 +536,14 @@ async def verify_hailo_accelerator(cfg: Settings) -> HailoDiagnostics:
             zero_img: NDArray[np.uint8] = np.zeros(input_shape, dtype=np.uint8)
             t0 = time.perf_counter()
             try:
-                runtime.infer_sync("yolo", zero_img)
+                # ``infer_sync`` acquires a threading.Lock and runs blocking
+                # hailo_platform VStream calls. Offload to a worker thread
+                # so the smoke does not stall the asyncio event loop —
+                # mirrors how ``HailoRuntime.start()`` dispatches its own
+                # blocking calls via ``asyncio.to_thread``.
+                await asyncio.to_thread(runtime.infer_sync, "yolo", zero_img)
                 inference_latency_ms = (time.perf_counter() - t0) * 1000.0
-            except Exception as exc:  # pragma: no cover - defensive
+            except Exception as exc:
                 hef_files["yolo"] = f"inference_failed ({type(exc).__name__})"
 
         return HailoDiagnostics(
@@ -471,20 +552,51 @@ async def verify_hailo_accelerator(cfg: Settings) -> HailoDiagnostics:
             device_info=device_info,
             hef_files=hef_files,
             inference_latency_ms=inference_latency_ms,
-            fallback_on_failure=bool(getattr(cfg.hailo, "fallback_on_failure", True)),
+            fallback_on_failure=fallback_on_failure,
         )
     finally:
         # CRITICAL — release the PCIe device lock even if start/infer
-        # raised. Log + swallow shutdown errors so they don't mask the
-        # original failure visible to the CLI consumer.
+        # raised. Use the project's structlog setup so the warning lands
+        # in the same processor chain as the rest of the orchestrator
+        # (JSON renderer, contextvars, cloud log forwarding).
         try:
             await runtime.stop()
-        except Exception as stop_exc:  # pragma: no cover - defensive
-            import logging  # local import — keep validation cold-import light
-
-            logging.getLogger(__name__).warning(
-                "hailo_runtime_stop_failed_in_smoke", exc_info=stop_exc
+        except Exception as stop_exc:
+            _log.warning(
+                "hailo_runtime_stop_failed_in_smoke",
+                device_path=str(device_path),
+                error=type(stop_exc).__name__,
+                error_message=str(stop_exc),
             )
+
+
+def _discover_hef_role_fields(hailo_cfg: object) -> list[tuple[str, str]]:
+    """Return ``[(role, field_name), ...]`` for every ``*_hef_path`` field.
+
+    Drops the trailing ``"_hef_path"`` suffix to produce the canonical role
+    identifier (e.g. ``"yolo_hef_path"`` → role ``"yolo"``). Iterates
+    ``HailoConfig.model_fields`` so a future schema field
+    ``depth_hef_path`` flows into the smoke automatically — single source
+    of truth for HEF roles between the schema and the smoke.
+
+    Falls back to the canonical YOLO + feature-extractor pair when the
+    Pydantic ``model_fields`` introspection isn't available (e.g. the
+    config object is a stub in tests).
+    """
+    model_fields = getattr(hailo_cfg, "model_fields", None) or getattr(
+        type(hailo_cfg), "model_fields", None
+    )
+    if model_fields:
+        pairs: list[tuple[str, str]] = []
+        for field_name in model_fields:
+            if field_name.endswith("_hef_path"):
+                role = field_name[: -len("_hef_path")]
+                pairs.append((role, field_name))
+        if pairs:
+            return pairs
+    # Fallback — preserves Tier C C2.1 contract for stubs / non-Pydantic
+    # objects used in tests.
+    return [("yolo", "yolo_hef_path"), ("feature_extractor", "feature_extractor_hef_path")]
 
 
 def verify_pcie_ssd_layout(cfg: Settings) -> PcieSsdDiagnostics:
@@ -514,6 +626,8 @@ def verify_pcie_ssd_layout(cfg: Settings) -> PcieSsdDiagnostics:
     """
     import shutil
 
+    timeout_s = _subprocess_timeout_s(cfg)
+
     # 1. PCIe device enumeration (best-effort; missing lspci -> empty list).
     pcie_devices: tuple[str, ...] = ()
     if shutil.which("lspci"):
@@ -523,7 +637,7 @@ def verify_pcie_ssd_layout(cfg: Settings) -> PcieSsdDiagnostics:
                 capture_output=True,
                 text=True,
                 check=False,
-                timeout=10,
+                timeout=timeout_s,
             )
             if result.returncode == 0:
                 pcie_devices = tuple(
@@ -543,7 +657,7 @@ def verify_pcie_ssd_layout(cfg: Settings) -> PcieSsdDiagnostics:
                 capture_output=True,
                 text=True,
                 check=False,
-                timeout=10,
+                timeout=timeout_s,
             )
             if result.returncode == 0:
                 block_devices = tuple(
@@ -570,12 +684,12 @@ def verify_pcie_ssd_layout(cfg: Settings) -> PcieSsdDiagnostics:
     smartctl_health: str | None = None
     if shutil.which("smartctl"):
         try:
-            result = subprocess.run(
-                ["smartctl", "-H", "/dev/nvme0n1"],  # noqa: S607
+            result = subprocess.run(  # noqa: S603 - args list, no shell
+                ["smartctl", "-H", _nvme_device_for(cfg)],  # noqa: S607
                 capture_output=True,
                 text=True,
                 check=False,
-                timeout=10,
+                timeout=timeout_s,
             )
             if result.returncode == 0:
                 for line in result.stdout.splitlines():
@@ -601,24 +715,34 @@ def verify_pcie_ssd_layout(cfg: Settings) -> PcieSsdDiagnostics:
 
 
 def _resolve_pcie_ssd_mount(cfg: Settings) -> Path | None:
-    """Resolution chain for the NVMe mount target (see public helper docstring)."""
+    """Resolution chain for the NVMe mount target (see public helper docstring).
+
+    Returns ``None`` when neither the env override nor ``findmnt`` can pin
+    the mount — the CLI consumer then emits a SKIP. The previous
+    ``cfg.experience.path.parent`` fallback was deliberately removed
+    (PR #104 follow-up): on a freshly imaged Orin Nano with no NVMe at
+    all, the parent of ``/home/jetson/mousedroid_experience`` is the
+    rootfs ``/home/jetson`` — accepting that as the "SSD mount" produced
+    a FALSE PASS on the "is the LMDB actually on the SSD?" check, which
+    is the entire reason this smoke exists.
+    """
     env_mount = os.environ.get("MOUSEDROID_SSD_MOUNT", "").strip()
     if env_mount:
         candidate = Path(env_mount)
         if candidate.exists():
             return candidate
 
-    # findmnt against the canonical first NVMe partition.
+    # findmnt against the configured NVMe partition path.
     import shutil
 
     if shutil.which("findmnt"):
         try:
-            result = subprocess.run(
-                ["findmnt", "-no", "TARGET", "/dev/nvme0n1p1"],  # noqa: S607
+            result = subprocess.run(  # noqa: S603 - args list, no shell
+                ["findmnt", "-no", "TARGET", _nvme_partition_for(cfg)],  # noqa: S607
                 capture_output=True,
                 text=True,
                 check=False,
-                timeout=5,
+                timeout=_subprocess_timeout_s(cfg),
             )
             if result.returncode == 0:
                 target = result.stdout.strip()
@@ -629,12 +753,28 @@ def _resolve_pcie_ssd_mount(cfg: Settings) -> Path | None:
         except (subprocess.TimeoutExpired, OSError):
             pass
 
-    # Last-resort: infer from the LMDB path's parent.
-    exp_path = Path(cfg.experience.path)
-    if exp_path.parent.exists():
-        return exp_path.parent
-
     return None
+
+
+def _nvme_partition_for(cfg: Settings) -> str:
+    """Return the NVMe partition path to feed ``findmnt``.
+
+    Schema-driven via ``cfg.experience.nvme_partition`` (added in the
+    PR #104 hardening pass); falls back to the canonical first-partition
+    string for tests that build minimal ``Settings`` instances without
+    overriding the new field.
+    """
+    return str(getattr(cfg.experience, "nvme_partition", "/dev/nvme0n1p1"))
+
+
+def _nvme_device_for(cfg: Settings) -> str:
+    """Return the NVMe block device path to feed ``smartctl``."""
+    return str(getattr(cfg.experience, "nvme_device", "/dev/nvme0n1"))
+
+
+def _subprocess_timeout_s(cfg: Settings) -> float:
+    """Return the per-subprocess timeout (seconds) for the verify_* probes."""
+    return float(getattr(cfg.experience, "diagnostics_subprocess_timeout_s", 10.0))
 
 
 def _collect_configured_runtime_paths(cfg: Settings) -> dict[str, str]:

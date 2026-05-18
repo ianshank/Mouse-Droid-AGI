@@ -135,6 +135,37 @@ ssh jetson@192.168.55.1 'lspci -nn | grep -iE "nvme|non-volatile"'
 
 If empty, the drive isn't seen by the PCIe controller — reseat (see safety steps below).
 
+### `mount target` SKIP — non-standard mount location
+
+The PCIe smoke resolves the SSD mount via this chain (highest priority first):
+
+1. `$MOUSEDROID_SSD_MOUNT` environment variable — explicit operator override
+2. `findmnt -no TARGET /dev/nvme0n1p1` — auto-discovery via the configured partition
+
+If your SSD is mounted at a non-standard location (e.g. `/data` instead of `/mnt/ssd`), set the env override so the smoke can find it:
+
+```bash
+ssh jetson@192.168.55.1 \
+  'MOUSEDROID_SSD_MOUNT=/data bash scripts/jetson_smoke_test.sh pcie_ssd'
+```
+
+To persist the override across runs, add it to `/etc/mousedroid/docker.env` (the env-file sourced by `docker-compose.jetson.yml`) or `/etc/environment`.
+
+If your NVMe partition layout differs (e.g. ESP first, ext4 second), override the device paths in your YAML overlay:
+
+```yaml
+experience:
+  nvme_device: /dev/nvme0n1       # smartctl target
+  nvme_partition: /dev/nvme0n1p2  # findmnt target (non-canonical partition)
+```
+
+### `frame shape` FAIL — running with mock hardware
+
+When `MOUSEDROID_MOCK_HARDWARE=true` (developer host without the IMX500), the `MockCamera` procedurally generates 320×240 frames. The default config expects 640×480, so the shape check FAILs. Either:
+
+- Run the smoke on the actual Jetson (the common case — this runbook is intended for on-rover verification).
+- Or override the resolution in your dev overlay to match the mock: `camera.resolution_width=320`, `camera.resolution_height=240`.
+
 ### `capacity below required` FAIL
 
 Free space is below `cfg.experience.map_size_gb` (default 20 GB). Diagnose before deleting:
