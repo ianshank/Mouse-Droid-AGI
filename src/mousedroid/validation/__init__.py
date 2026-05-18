@@ -1,7 +1,10 @@
 """Validation helpers for Jetson smoke and hardware checks."""
 
 from mousedroid.validation.runtime import (
+    CameraFrameDiagnostics,
+    HailoDiagnostics,
     LidarScanDiagnostics,
+    PcieSsdDiagnostics,
     capture_camera_frame,
     capture_microphone_chunk,
     collect_lidar_diagnostics,
@@ -12,10 +15,15 @@ from mousedroid.validation.runtime import (
     play_speaker_tone,
     read_lidar_scan,
     resolve_runtime_config_paths,
+    verify_hailo_accelerator,
+    verify_pcie_ssd_layout,
 )
 
 __all__ = [
+    "CameraFrameDiagnostics",
+    "HailoDiagnostics",
     "LidarScanDiagnostics",
+    "PcieSsdDiagnostics",
     "capture_camera_frame",
     "capture_microphone_chunk",
     "collect_lidar_diagnostics",
@@ -26,4 +34,6 @@ __all__ = [
     "play_speaker_tone",
     "read_lidar_scan",
     "resolve_runtime_config_paths",
+    "verify_hailo_accelerator",
+    "verify_pcie_ssd_layout",
 ]

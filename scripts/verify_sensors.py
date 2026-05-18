@@ -38,6 +38,8 @@ from mousedroid.validation.runtime import (  # noqa: E402
     play_rocky_voice_phrase,
     play_speaker_tone,
     resolve_runtime_config_paths,
+    verify_hailo_accelerator,
+    verify_pcie_ssd_layout,
 )
 
 # ---------------------------------------------------------------------------
@@ -143,13 +145,28 @@ def _diagnose_camera_host(cfg: Settings) -> str | None:
     return " | ".join(notes)
 
 
-def check_camera(cfg: Settings) -> None:
-    """Verify the configured camera can capture one frame."""
+def check_camera(
+    cfg: Settings,
+    *,
+    save_path: Path | None = None,
+    frames: int = 1,
+) -> None:
+    """Verify the configured camera can capture one or more frames.
+
+    Args:
+        cfg: Resolved settings.
+        save_path: Optional path the LAST captured frame's JPEG is written
+            to. Useful for visually verifying ribbon-cable / lens / refocus
+            adjustments — SCP the file back to the workstation to inspect.
+        frames: Number of consecutive frames to capture (default ``1``).
+    """
     _section("Video (Camera)")
 
     t0 = time.monotonic()
     try:
-        frame, backend_name = asyncio.run(capture_camera_frame(cfg))
+        diagnostics, backend_name = asyncio.run(
+            capture_camera_frame(cfg, save_path=save_path, frames=max(1, frames))
+        )
     except Exception as exc:
         diagnosis = _diagnose_camera_host(cfg)
         detail = f"{exc} :: {diagnosis}" if diagnosis else str(exc)
@@ -157,6 +174,10 @@ def check_camera(cfg: Settings) -> None:
         return
 
     elapsed = time.monotonic() - t0
+    frame = diagnostics.frame
+    if frame is None:
+        _fail("camera capture", "no frame returned by driver", sensor="camera")
+        return
     height, width = int(frame.shape[0]), int(frame.shape[1])
     expected_height = cfg.camera.resolution_height
     expected_width = cfg.camera.resolution_width
@@ -169,11 +190,134 @@ def check_camera(cfg: Settings) -> None:
         )
         return
 
-    _ok(
-        "frame capture",
-        f"{width}x{height} via {backend_name} in {elapsed:.2f}s, dtype={frame.dtype}",
-        sensor="camera",
+    detail = (
+        f"{width}x{height} via {backend_name} in {elapsed:.2f}s, "
+        f"frames={diagnostics.frames_captured}, "
+        f"mean={diagnostics.mean_capture_ms:.1f}ms, "
+        f"max={diagnostics.max_capture_ms:.1f}ms, dtype={frame.dtype}"
     )
+    _ok("frame capture", detail, sensor="camera")
+    if diagnostics.saved_to is not None:
+        _ok("snapshot saved", diagnostics.saved_to, sensor="camera")
+
+
+def check_pcie_ssd(cfg: Settings) -> None:
+    """Probe the NVMe SSD on PCIe and assert capacity for the configured paths."""
+    _section("PCIe NVMe SSD")
+
+    try:
+        diagnostics = verify_pcie_ssd_layout(cfg)
+    except Exception as exc:
+        _fail("pcie_ssd probe", str(exc), sensor="pcie_ssd")
+        return
+
+    if diagnostics.pcie_devices:
+        _ok(
+            "nvme device found",
+            "; ".join(diagnostics.pcie_devices),
+            sensor="pcie_ssd",
+        )
+    else:
+        _skip(
+            "nvme device found",
+            "no NVMe device enumerated by lspci (or lspci unavailable)",
+            sensor="pcie_ssd",
+        )
+
+    if diagnostics.block_devices:
+        _ok(
+            "block device",
+            "; ".join(diagnostics.block_devices),
+            sensor="pcie_ssd",
+        )
+    else:
+        _skip("block device", "no NVMe block device via lsblk", sensor="pcie_ssd")
+
+    if diagnostics.mount_target is not None:
+        capacity_detail = (
+            f"{diagnostics.mount_target} "
+            f"({diagnostics.free_gb:.1f}/{diagnostics.total_gb:.1f} GB free)"
+        )
+        if diagnostics.free_gb < diagnostics.required_gb:
+            _fail(
+                "capacity below required",
+                f"{capacity_detail}; LMDB needs ≥ {diagnostics.required_gb:.1f} GB",
+                sensor="pcie_ssd",
+            )
+        else:
+            _ok("mount + capacity", capacity_detail, sensor="pcie_ssd")
+    else:
+        _skip("mount target", "no mount detected for /dev/nvme0n1p1", sensor="pcie_ssd")
+
+    if diagnostics.smartctl_health is not None:
+        _ok("smartctl health", diagnostics.smartctl_health, sensor="pcie_ssd")
+    else:
+        _skip("smartctl health", "smartctl unavailable or no output", sensor="pcie_ssd")
+
+    for field_name, path_str in diagnostics.configured_paths.items():
+        on_mount = diagnostics.mount_target is not None and Path(
+            path_str
+        ).resolve().as_posix().startswith(diagnostics.mount_target.resolve().as_posix())
+        marker = "on SSD" if on_mount else "NOT on SSD mount"
+        _ok(f"path {field_name}", f"{path_str} [{marker}]", sensor="pcie_ssd")
+
+
+def check_hailo(cfg: Settings) -> None:
+    """Probe the Hailo-8 accelerator and exercise one synthetic inference."""
+    _section("Hailo-8 Accelerator")
+
+    if not getattr(cfg.hailo, "enabled", False):
+        _skip("hailo accelerator", "disabled in config (cfg.hailo.enabled=False)", sensor="hailo")
+        return
+
+    try:
+        diagnostics = asyncio.run(verify_hailo_accelerator(cfg))
+    except Exception as exc:
+        _fail("hailo probe", str(exc), sensor="hailo")
+        return
+
+    if not diagnostics.device_path_exists:
+        _skip(
+            "hailo device",
+            f"{cfg.hailo.device_path} not present "
+            "(check `lsmod | grep hailo` and `dmesg | grep hailo`)",
+            sensor="hailo",
+        )
+        return
+
+    if not diagnostics.sdk_importable:
+        _skip(
+            "hailo SDK",
+            'hailo_platform not importable (pip install -e ".[hailo]")',
+            sensor="hailo",
+        )
+        return
+
+    info_detail = ", ".join(f"{k}={v}" for k, v in diagnostics.device_info.items()) or "no info"
+    _ok("device", info_detail, sensor="hailo")
+
+    for hef_role, status in diagnostics.hef_files.items():
+        if status == "missing" or status.startswith("missing"):
+            _skip(f"hef {hef_role}", status, sensor="hailo")
+        elif status.startswith("loaded"):
+            _ok(f"hef {hef_role}", status, sensor="hailo")
+        else:
+            _fail(f"hef {hef_role}", status, sensor="hailo")
+
+    if diagnostics.inference_latency_ms is not None:
+        budget = float(cfg.hailo.timeout_ms)
+        if diagnostics.inference_latency_ms > budget:
+            _fail(
+                "inference latency",
+                f"{diagnostics.inference_latency_ms:.1f}ms > timeout {budget:.0f}ms",
+                sensor="hailo",
+            )
+        else:
+            _ok(
+                "inference latency",
+                f"{diagnostics.inference_latency_ms:.1f}ms (timeout={budget:.0f}ms)",
+                sensor="hailo",
+            )
 
 
 def check_audio(cfg: Settings) -> None:
@@ -407,7 +551,16 @@ def check_voice(cfg: Settings) -> None:
 # Entry point
 # ---------------------------------------------------------------------------
 
-_ALL_SENSORS = ("camera", "audio", "ultrasonic", "lidar", "speaker", "voice")
+_ALL_SENSORS = (
+    "camera",
+    "audio",
+    "ultrasonic",
+    "lidar",
+    "speaker",
+    "voice",
+    "pcie_ssd",
+    "hailo",
+)
 
 
 def main() -> None:
@@ -445,6 +598,25 @@ def main() -> None:
         default=1,
         help="Repeat LiDAR scans N times when --sensor lidar is selected (default: 1)",
     )
+    ap.add_argument(
+        "--save-frame",
+        type=Path,
+        default=None,
+        help=(
+            "Path to write a captured JPEG frame to (--sensor camera only). "
+            "Useful for visually verifying lens/exposure/ribbon-cable "
+            "adjustments — SCP the file back to the workstation and open it."
+        ),
+    )
+    ap.add_argument(
+        "--frames",
+        type=int,
+        default=1,
+        help=(
+            "Number of consecutive frames to capture (--sensor camera only). "
+            "The LAST frame is the one written when --save-frame is set."
+        ),
+    )
     args = ap.parse_args()
 
     cfg_paths = resolve_runtime_config_paths(args.config)
@@ -468,12 +640,20 @@ def main() -> None:
         "lidar": check_lidar,
         "speaker": check_speaker,
         "voice": check_voice,
+        "pcie_ssd": check_pcie_ssd,
+        "hailo": check_hailo,
     }
 
     for name, check_fn in sensor_checks.items():
         if args.sensor in ("all", name):
             if name == "lidar":
                 check_lidar(cfg, repeat=max(1, args.repeat))
+            elif name == "camera":
+                check_camera(
+                    cfg,
+                    save_path=args.save_frame,
+                    frames=max(1, args.frames),
+                )
             else:
                 check_fn(cfg)
 

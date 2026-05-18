@@ -162,9 +162,14 @@ async def test_capture_camera_frame_uses_runtime_driver(
     stub = StubCamera()
     monkeypatch.setattr(runtime, "build_camera", lambda cfg: stub)
 
-    frame, backend_name = await runtime.capture_camera_frame(Settings(mock_hardware=True))
+    diagnostics, backend_name = await runtime.capture_camera_frame(Settings(mock_hardware=True))
 
-    assert frame.shape == (4, 5, 3)
+    # capture_camera_frame now returns (CameraFrameDiagnostics, backend_name)
+    # — the 2-tuple shape is preserved; the frame is in .frame on the dataclass.
+    assert diagnostics.frame is not None
+    assert diagnostics.frame.shape == (4, 5, 3)
+    assert diagnostics.frames_captured == 1
+    assert diagnostics.saved_to is None  # no save_path supplied
     assert backend_name == "gstreamer"
     assert stub.started is True
     assert stub.stopped is True
@@ -194,12 +199,66 @@ async def test_capture_camera_frame_falls_back_to_private_method(
     stub = LegacyStubCamera()
     monkeypatch.setattr(runtime, "build_camera", lambda cfg: stub)
 
-    frame, backend_name = await runtime.capture_camera_frame(Settings(mock_hardware=True))
+    diagnostics, backend_name = await runtime.capture_camera_frame(Settings(mock_hardware=True))
 
-    assert frame.shape == (3, 6, 3)
+    assert diagnostics.frame is not None
+    assert diagnostics.frame.shape == (3, 6, 3)
     assert backend_name == "v4l2"
     assert stub.started is True
     assert stub.stopped is True
+
+
+@pytest.mark.asyncio
+async def test_capture_camera_frame_captures_multiple_frames_and_saves_jpeg(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """``--save-frame`` + ``--frames N`` round-trip — Task 1 acceptance regression."""
+
+    class JpegStubCamera:
+        """Stub exposing ``capture_raw_frame`` so the JPEG fallback (Pillow encode) fires."""
+
+        def __init__(self) -> None:
+            self._backend = "jpegstub"
+            self.capture_count = 0
+
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+        async def capture_raw_frame(self) -> np.ndarray:
+            self.capture_count += 1
+            return np.full((8, 12, 3), self.capture_count, dtype=np.uint8)
+
+    stub = JpegStubCamera()
+    monkeypatch.setattr(runtime, "build_camera", lambda cfg: stub)
+
+    snap = tmp_path / "snap.jpg"
+    diagnostics, backend_name = await runtime.capture_camera_frame(
+        Settings(mock_hardware=True),
+        save_path=snap,
+        frames=3,
+    )
+
+    assert backend_name == "jpegstub"
+    assert diagnostics.frames_captured == 3
+    assert stub.capture_count == 3
+    # The LAST frame's data should be in the diagnostics (value=3 from the
+    # third call to capture_raw_frame).
+    assert diagnostics.frame is not None
+    assert int(diagnostics.frame[0, 0, 0]) == 3
+    # JPEG snapshot landed on disk.
+    assert diagnostics.saved_to is not None
+    assert snap.exists()
+    assert snap.stat().st_size > 0
+    # And it round-trips through Pillow.
+    from PIL import Image
+
+    with Image.open(snap) as img:
+        assert img.size == (12, 8)  # (width, height)
+        assert img.format == "JPEG"
 
 
 @pytest.mark.asyncio
@@ -559,3 +618,156 @@ async def test_collect_lidar_diagnostics_uses_driver_stats(
     assert diagnostics[0].meets_min_coverage is True
     assert stub.started is True
     assert stub.stopped is True
+
+
+# ---------------------------------------------------------------------------
+# Task 2 — PCIe NVMe SSD smoke (verify_pcie_ssd_layout)
+# ---------------------------------------------------------------------------
+
+
+def test_verify_pcie_ssd_layout_skips_when_no_tools_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing lspci/lsblk/findmnt/smartctl → SKIP-style empty result, not FAIL."""
+    monkeypatch.setattr("shutil.which", lambda cmd: None)
+
+    cfg = Settings(mock_hardware=True)
+    result = runtime.verify_pcie_ssd_layout(cfg)
+
+    assert result.pcie_devices == ()
+    assert result.block_devices == ()
+    assert result.smartctl_health is None
+    assert result.required_gb == pytest.approx(cfg.experience.map_size_gb)
+    # configured_paths populated from cfg regardless of tool availability.
+    assert "experience.path" in result.configured_paths
+
+
+def test_verify_pcie_ssd_layout_uses_env_mount_override(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """``$MOUSEDROID_SSD_MOUNT`` env var wins over findmnt + path-parent inference."""
+    custom_mount = tmp_path / "ssd_mount"
+    custom_mount.mkdir()
+    monkeypatch.setenv("MOUSEDROID_SSD_MOUNT", str(custom_mount))
+    monkeypatch.setattr("shutil.which", lambda cmd: None)  # disable subprocess probes
+
+    cfg = Settings(mock_hardware=True)
+    result = runtime.verify_pcie_ssd_layout(cfg)
+
+    assert result.mount_target == custom_mount
+    assert result.total_gb > 0  # shutil.disk_usage on a real path returns >0
+
+
+def test_verify_pcie_ssd_layout_falls_back_to_experience_path_parent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Mount resolution chain ends at ``cfg.experience.path.parent`` when env + findmnt absent."""
+    monkeypatch.delenv("MOUSEDROID_SSD_MOUNT", raising=False)
+    monkeypatch.setattr("shutil.which", lambda cmd: None)
+
+    exp_path = tmp_path / "lmdb_root" / "experience.lmdb"
+    exp_path.parent.mkdir(parents=True)
+    cfg = Settings(
+        mock_hardware=True,
+        experience={"path": str(exp_path)},
+    )
+    result = runtime.verify_pcie_ssd_layout(cfg)
+
+    assert result.mount_target == exp_path.parent
+
+
+def test_verify_pcie_ssd_layout_collects_configured_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """All four documented schema fields land in ``configured_paths`` when present."""
+    monkeypatch.setattr("shutil.which", lambda cmd: None)
+
+    cfg = Settings(mock_hardware=True)
+    result = runtime.verify_pcie_ssd_layout(cfg)
+
+    paths = result.configured_paths
+    assert "experience.path" in paths
+    # The other fields land conditionally based on the schema default's
+    # presence on the loaded config — at minimum experience.path is always
+    # populated, so the test pins that invariant strictly and the others
+    # softly (they're populated by default but the schema could change).
+    for optional_field in (
+        "jetson.tensorrt_cache_dir",
+        "cloud.weight_update.cache_dir",
+    ):
+        if optional_field in paths:
+            assert Path(paths[optional_field]).is_absolute()
+
+
+# ---------------------------------------------------------------------------
+# Task 3 — Hailo-8 smoke (verify_hailo_accelerator)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_verify_hailo_accelerator_skips_when_device_path_absent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """No ``/dev/hailo0`` → SKIP-style record (device_path_exists=False)."""
+    cfg = Settings(
+        mock_hardware=True,
+        hailo={"enabled": True, "device_path": str(tmp_path / "nonexistent_hailo")},
+    )
+
+    # Force hailo_platform to APPEAR importable so we exercise the
+    # "SDK present but device missing" branch (the most common operator-
+    # facing case post-reseat).
+    import sys as _sys
+    from types import ModuleType
+
+    fake_hailo = ModuleType("hailo_platform")
+    monkeypatch.setitem(_sys.modules, "hailo_platform", fake_hailo)
+
+    result = await runtime.verify_hailo_accelerator(cfg)
+
+    assert result.device_path_exists is False
+    assert result.sdk_importable is True
+    assert result.inference_latency_ms is None
+    assert result.fallback_on_failure is True  # schema default
+
+
+@pytest.mark.asyncio
+async def test_verify_hailo_accelerator_skips_when_sdk_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Missing ``hailo_platform`` import → SKIP record (sdk_importable=False)."""
+    cfg = Settings(
+        mock_hardware=True,
+        hailo={"enabled": True, "device_path": str(tmp_path / "nonexistent_hailo")},
+    )
+
+    # Force the import to fail by injecting a sentinel that raises on access.
+    import sys as _sys
+
+    monkeypatch.delitem(_sys.modules, "hailo_platform", raising=False)
+
+    class _ImportBlocker:
+        def find_module(self, name: str, _path: object = None) -> object | None:
+            if name == "hailo_platform":
+                return self
+            return None
+
+        def find_spec(self, name: str, _path: object = None, _target: object = None) -> None:
+            if name == "hailo_platform":
+                msg = "blocked for test"
+                raise ImportError(msg)
+            return None
+
+    blocker = _ImportBlocker()
+    _sys.meta_path.insert(0, blocker)
+    try:
+        result = await runtime.verify_hailo_accelerator(cfg)
+    finally:
+        _sys.meta_path.remove(blocker)
+
+    assert result.sdk_importable is False
+    assert result.inference_latency_ms is None
