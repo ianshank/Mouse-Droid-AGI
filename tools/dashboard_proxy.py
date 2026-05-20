@@ -118,11 +118,25 @@ async def _ws_handler(req: web.Request) -> web.StreamResponse:
             elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING):
                 break
 
+    # When one direction of the pipe completes (client closed, upstream
+    # closed, or either side erroring), we MUST cancel the peer task —
+    # otherwise the survivor blocks on ``async for msg in ws_X`` forever,
+    # holding a slot in the ``TCPConnector`` pool (limit=64). Under a
+    # browser that closes the LiDAR-WS tab repeatedly the pool would
+    # exhaust quickly. ``asyncio.wait`` with FIRST_COMPLETED gives us the
+    # cancellation hook ``asyncio.gather`` doesn't.
+    s2c_task = asyncio.create_task(_pipe_server_to_client())
+    c2s_task = asyncio.create_task(_pipe_client_to_server())
     try:
-        await asyncio.gather(
-            _pipe_server_to_client(),
-            _pipe_client_to_server(),
+        _done, pending = await asyncio.wait(
+            {s2c_task, c2s_task},
+            return_when=asyncio.FIRST_COMPLETED,
         )
+        for task in pending:
+            task.cancel()
+        # Drain cancelled + completed tasks; ``return_exceptions=True`` so
+        # the close path always runs even if one pipe raised.
+        await asyncio.gather(s2c_task, c2s_task, return_exceptions=True)
     finally:
         await ws_client.close()
         if not ws_server.closed:
@@ -145,14 +159,19 @@ async def _http_handler(req: web.Request) -> web.StreamResponse:
         timeout=aiohttp.ClientTimeout(total=None, connect=10, sock_read=None),
     )
 
-    out = web.StreamResponse(
-        status=upstream.status,
-        reason=upstream.reason,
-        headers=_upstream_response_headers(upstream),
-    )
-    await out.prepare(req)
-
+    # ``out.prepare`` may raise if the client disconnected between us
+    # receiving the upstream response and writing the response head.
+    # Wrap the entire downstream-write block in a try/finally so the
+    # upstream connection is ALWAYS released — otherwise the upstream
+    # body stays open until the session's reaper sweeps, holding pool
+    # slots that the WS pool fix above also depends on.
     try:
+        out = web.StreamResponse(
+            status=upstream.status,
+            reason=upstream.reason,
+            headers=_upstream_response_headers(upstream),
+        )
+        await out.prepare(req)
         async for chunk in upstream.content.iter_any():
             if not chunk:
                 continue
@@ -196,7 +215,16 @@ def main() -> int:
     app.on_startup.append(_on_startup)
     app.on_cleanup.append(_on_cleanup)
     print(f"[proxy] forwarding http://{PROXY_HOST}:{PROXY_PORT} -> {UPSTREAM_HTTP}")
-    print(f"[proxy] auth bearer token: {TOKEN[:24]}...")
+    # Avoid the prior misleading-log bug where ``TOKEN[:24]...`` was printed
+    # even when no token was configured — the proxy correctly skipped auth
+    # injection, but the log line still implied a bearer was in play. Now
+    # the three states are reported faithfully (none / short / truncated).
+    if not TOKEN:
+        print("[proxy] auth bearer token: (none — auth injection disabled)")
+    elif len(TOKEN) <= 24:
+        print(f"[proxy] auth bearer token: {TOKEN[:24]}")
+    else:
+        print(f"[proxy] auth bearer token: {TOKEN[:24]}...")
     web.run_app(app, host=PROXY_HOST, port=PROXY_PORT, print=None)
     return 0
 

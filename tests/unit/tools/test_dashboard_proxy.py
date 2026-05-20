@@ -303,3 +303,142 @@ async def test_http_streaming_response_chunks_flow_through(
     finally:
         await proxy_runner.cleanup()
         await upstream_runner.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# WebSocket — covers the FIRST_COMPLETED cancellation fix from PR #104 review
+# ---------------------------------------------------------------------------
+
+
+async def _spin_up_ws_servers(
+    proxy_mod, ws_handler: web.RequestHandler
+) -> tuple[str, web.AppRunner, web.AppRunner]:
+    """Bind upstream (WS) + proxy aiohttp servers for a WebSocket test.
+
+    Identical topology to :func:`_spin_up_servers` but routes a WebSocket
+    handler at ``/ws`` upstream so the proxy's ``_ws_handler`` path is
+    exercised end-to-end.
+    """
+    upstream_app = web.Application()
+    upstream_app.router.add_get("/ws", ws_handler)
+    upstream_runner = web.AppRunner(upstream_app)
+    await upstream_runner.setup()
+    upstream_site = web.TCPSite(upstream_runner, "127.0.0.1", 0)
+    await upstream_site.start()
+    upstream_port = upstream_site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+
+    proxy_mod.UPSTREAM_HTTP = f"http://127.0.0.1:{upstream_port}"
+    proxy_mod.UPSTREAM_WS = f"ws://127.0.0.1:{upstream_port}"
+
+    proxy_app = web.Application()
+    proxy_app.router.add_route("*", "/{path:.*}", proxy_mod._dispatch)
+    proxy_app.on_startup.append(proxy_mod._on_startup)
+    proxy_app.on_cleanup.append(proxy_mod._on_cleanup)
+    proxy_runner = web.AppRunner(proxy_app)
+    await proxy_runner.setup()
+    proxy_site = web.TCPSite(proxy_runner, "127.0.0.1", 0)
+    await proxy_site.start()
+    proxy_port = proxy_site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+
+    return f"http://127.0.0.1:{proxy_port}", proxy_runner, upstream_runner
+
+
+@pytest.mark.asyncio
+async def test_websocket_text_message_round_trips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: client → proxy → upstream WS sees the text echo round-trip.
+
+    Exercises ``_ws_handler``'s bidirectional pipe + the FIRST_COMPLETED
+    cancellation path landed in PR #104's review-follow-up. Without that
+    fix, the surviving pipe task hung indefinitely after the client closed,
+    leaking pool slots — which is exactly what this test covers (the
+    upstream sends its echo, the client closes, the test cleans up and
+    proves the proxy task didn't deadlock).
+    """
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["dashboard_proxy.py", "0", "http://127.0.0.1:0", "tok-ws"],
+    )
+    mod = _load_dashboard_proxy_module(monkeypatch)
+
+    async def upstream_ws(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.TEXT:
+                await ws.send_str(f"echo:{msg.data}")
+            elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING):
+                break
+        return ws
+
+    proxy_url, proxy_runner, upstream_runner = await _spin_up_ws_servers(mod, upstream_ws)
+    ws_url = proxy_url.replace("http://", "ws://") + "/ws"
+    try:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.ws_connect(ws_url, headers={"Upgrade": "websocket"}) as ws,
+        ):
+            await ws.send_str("hello")
+            msg = await asyncio.wait_for(ws.receive(), timeout=2.0)
+            assert msg.type == aiohttp.WSMsgType.TEXT
+            assert msg.data == "echo:hello"
+            await ws.close()
+    finally:
+        # Pin the bug-fix surface: cleanup must complete in well under the
+        # asyncio.wait timeout below — if FIRST_COMPLETED hadn't been
+        # applied, the surviving _pipe_client_to_server task would block
+        # cleanup until aiohttp tore the upstream down forcibly.
+        await asyncio.wait_for(proxy_runner.cleanup(), timeout=5.0)
+        await asyncio.wait_for(upstream_runner.cleanup(), timeout=5.0)
+
+
+@pytest.mark.asyncio
+async def test_websocket_upstream_close_propagates_to_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the upstream WS closes first, the proxy propagates the close cleanly.
+
+    Mirror of the previous test from the OPPOSITE side: this time the
+    upstream sends one message then closes its own end. The proxy must
+    cancel ``_pipe_server_to_client`` (which is blocked on the client's
+    ``async for``) and close the client-side WS so the operator's browser
+    sees the disconnect instead of hanging.
+    """
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["dashboard_proxy.py", "0", "http://127.0.0.1:0", ""],
+    )
+    mod = _load_dashboard_proxy_module(monkeypatch)
+
+    async def upstream_ws_close_after_one(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.send_str("only-message")
+        await ws.close()
+        return ws
+
+    proxy_url, proxy_runner, upstream_runner = await _spin_up_ws_servers(
+        mod, upstream_ws_close_after_one
+    )
+    ws_url = proxy_url.replace("http://", "ws://") + "/ws"
+    try:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.ws_connect(ws_url, headers={"Upgrade": "websocket"}) as ws,
+        ):
+            first = await asyncio.wait_for(ws.receive(), timeout=2.0)
+            assert first.type == aiohttp.WSMsgType.TEXT
+            assert first.data == "only-message"
+            # Next receive should yield CLOSE / CLOSED, not hang forever.
+            closing = await asyncio.wait_for(ws.receive(), timeout=2.0)
+            assert closing.type in (
+                aiohttp.WSMsgType.CLOSE,
+                aiohttp.WSMsgType.CLOSED,
+                aiohttp.WSMsgType.CLOSING,
+            )
+    finally:
+        await asyncio.wait_for(proxy_runner.cleanup(), timeout=5.0)
+        await asyncio.wait_for(upstream_runner.cleanup(), timeout=5.0)

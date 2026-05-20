@@ -245,6 +245,14 @@ class JetsonCSICamera:
             # GStreamer-plugin background.
             gray = frame[..., 1]
             return np.stack([gray, gray, gray], axis=-1)
+        # Defensive guard for a future V4L2 ``GREY`` mode that returns a 2-D
+        # luma plane directly: skip the BGR-swap (which would IndexError on
+        # ``frame[..., ::-1]`` for ndim==2) and clone the luma to RGB. Today
+        # this path is unreachable because every backend produces a 3-D
+        # frame, but the explicit branch is cheap insurance against a future
+        # driver-mode addition.
+        if frame.ndim == 2:
+            return np.stack([frame, frame, frame], axis=-1)
         if self._backend != "jetson_utils":
             # OpenCV (gstreamer / v4l2 paths when grayscale-extract is off)
             # returns BGR; swap to RGB before Pillow encodes the snapshot.

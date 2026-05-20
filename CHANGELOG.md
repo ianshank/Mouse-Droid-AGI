@@ -8,6 +8,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — PR #104 harden-3: Test pyramid expansion + project-wide doc hardening + reviewer-follow-up fixes
+
+Final pre-PR pass that closes the dashboard-stability sprint. Builds on the PR #104 harden-1 (smoke hardening) and harden-2 (live-dashboard enablement) blocks below.
+
+**Test pyramid expansion — 6 new files, 58 tests + 3 hardware-gated**
+
+- `tests/integration/test_pr104_esp32_disabled_integration.py` (8) — `build_esp32_driver` end-to-end through `ResilientESP32Driver` + `MockESP32Driver`; concurrent `send_velocity` fan-out.
+- `tests/e2e/test_pr104_dashboard_e2e.py` (5) — `MockCamera` → in-process upstream → `dashboard_proxy` → aiohttp client; bearer-token injection + JPEG round-trip + 503 propagation.
+- `tests/regression/test_pr104_backwards_compat.py` (9) — CLAUDE.md invariant #9; defaults pinned (`esp32.enabled=True`, `v4l2_grayscale_extract=True`, `snapshot_jpeg_quality=90`); standalone YAML roots parse; Pydantic ge/le range guards.
+- `tests/regression/test_pr104_aqa.py` (21) — Automated QA on schema-field hygiene (description ≥20 chars + documented default reachable via `FieldInfo`); protocol conformance for `MockCamera` + `JetsonCSICamera` (`RawFrameSourceProtocol`) and `MockESP32Driver` (`ESP32CommProtocol`); RFC-9110 §7.6.1 hop-by-hop blocklist parametrized over `dashboard_proxy._HOP_BY_HOP`; env-override surface (`MOUSEDROID_ESP32__ENABLED=false`).
+- `tests/smoke/test_pr104_sanity.py` (13) — sub-second module-import smoke; YAML round-trip preserves PR-104 fields; standalone YAML root validation.
+- `tests/hardware/test_pr104_jetson_dashboard.py` (3 hw-gated) — rover-side mirror: live JetsonCSI JPEG decode via Pillow, factory wires `MockESP32Driver` on the Jetson, orchestrator boots + stops cleanly with `esp32.enabled=False`.
+
+**C4 architecture documentation**
+
+- `docs/architecture/c4-overview.md` — Level 1 (Context) + Level 2 (Container) for the whole system, workstation ↔ Jetson topology with the dashboard proxy.
+- `docs/architecture/c4-dashboard-proxy.md` — Level 3 (Component) for the proxy with HTTP + WebSocket sequence diagrams + configuration precedence + failure-mode matrix.
+- `docs/architecture/c4-orchestrator.md` — Level 3 for the 30 Hz sense-plan-act loop with the factory-wiring branch diagram (PR #104 `esp32.enabled` branch emphasised) + lifecycle sequence.
+- `docs/architecture/c4-arm-platform.md` — Level 3 for the four-layer hierarchical arm reasoning architecture + curriculum state diagram + reused-modules matrix.
+
+**Agentic-worker contract surface**
+
+- Top-level `AGENTS.md` — behavioural rules for Claude Code + subagents + MCP clients (factory-first DI, schema-driven config, structured logging, asyncio, strict typing, backwards-compat, `torch.no_grad()`, test-pyramid discipline, commit-message tone, red flags).
+- Top-level `SKILLS.md` — capability index keyed by trigger phrase. Maps operator skills (`dashboard-proxy`, `live-camera-verification`, `esp32-disconnected-mode`, `preflight-validation`) + engineering skills (`add-schema-field`, `add-hardware-driver`, `run-pre-pr-validation`) + subagent dispatch patterns to the files + commands needed.
+
+**Docs updates**
+
+- `CLAUDE.md` — new "Dashboard live-verification surface" section documenting the three PR-104 schema toggles + dashboard proxy invariants + test-pyramid mirror table.
+- `README.md` — new "Workstation Dashboard Verification (PR #104)" section (proxy quickstart + dashboard-mode escape-hatch table) + new "Next Steps / Roadmap" section with 5-item forward roadmap.
+- `.gitignore` — added `torch-baseline-*.txt`, `workstation-smoke-*.log`, `coverage-pr104-*.json`, the literal `%SystemDrive%/` Windows-shell stray, mock-smoke snapshot artefacts, `.vscode/launch.local.json`.
+
+**Reviewer-follow-up fixes (harden-3-review-fixes)**
+
+Independent code review surfaced 4 issues; all addressed before push:
+
+- **HIGH — WS pipe pool-slot leak** (`tools/dashboard_proxy.py:_ws_handler`) — replaced `asyncio.gather` of two pipe coroutines with `asyncio.create_task` + `asyncio.wait(..., return_when=FIRST_COMPLETED)` + explicit task cancellation. Without the fix, surviving pipe blocks indefinitely after one-sided close, holding `TCPConnector` pool slots (limit=64).
+- **HIGH — misleading bearer-token startup log** (`tools/dashboard_proxy.py:main`) — was emitting `[proxy] auth bearer token: ...` even when TOKEN was empty (auth injection legitimately disabled). Now three faithful states logged.
+- **MEDIUM — `_http_handler` upstream not released if `out.prepare` raises** — wrapped the downstream-write block in `try/finally` so the upstream `ClientResponse` is released on client-disconnect-during-prepare.
+- **MEDIUM — `_frame_to_rgb_for_snapshot` 2-D luma frame `IndexError`** — added explicit `elif frame.ndim == 2` guard cloning the luma plane to RGB.
+
+Plus 3 new tests covering the fixes:
+- `tests/unit/tools/test_dashboard_proxy.py::test_websocket_text_message_round_trips`
+- `tests/unit/tools/test_dashboard_proxy.py::test_websocket_upstream_close_propagates_to_client`
+- `tests/unit/test_jetson_csi.py::test_frame_to_rgb_2d_luma_frame_cloned_to_rgb_without_crash`
+
+**Verification**
+
+- **Tests**: 130 passing across the combined PR-104 surface; 3 hardware-gated tests skip cleanly on workstation.
+- **Ruff**: `check` + `format --check` clean across all touched files.
+- **Mypy**: `mypy --strict` clean on touched src files.
+- **Branch coverage** (vs PR-104 base commit `8f89186`): `schema.py 100%`, `factory.py 100%`, `jetson_csi.py 100%`, `validation/runtime.py 85.71%`. Gate held.
+- **Security audit**: clean — no hardcoded production credentials, RFC-compliant hop-by-hop stripping, intentional loopback-only proxy scope, test sentinels properly `noqa: S105`-tagged.
+- **Independent code review**: APPROVE_WITH_FIXES → APPROVE after the 4 review findings fixed + verified.
+
 ### Added — Live-dashboard E2E enablement (PR #104 harden-2)
 
 Resolution of the gap-analysis + tech-debt findings discovered while running the live Jetson dashboard end-to-end. All changes backwards-compatible (new schema fields default to legacy behaviour).

@@ -390,6 +390,30 @@ def test_frame_to_rgb_v4l2_grayscale_extract_disabled_falls_back_to_bgr_swap():
     assert out[0, 0, 2] == 200
 
 
+def test_frame_to_rgb_2d_luma_frame_cloned_to_rgb_without_crash():
+    """A 2-D luma frame (future V4L2 GREY mode) cloned to RGB, no IndexError.
+
+    Regression guard for the PR #104 reviewer-flagged MEDIUM issue: if a
+    future V4L2 mode (or any custom subclass) emits a 2-D luma plane
+    instead of the typical 3-channel BGR, the previous code would fall
+    through to ``frame[..., ::-1]`` and crash with ``IndexError`` on the
+    third axis. The 2-D guard added in the fix clones the plane to RGB
+    and returns a valid 3-channel array.
+    """
+    from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
+
+    cam = JetsonCSICamera(_cfg(v4l2_grayscale_extract=False))
+    cam._backend = "gstreamer"  # any backend other than jetson_utils to hit BGR-swap
+    luma = np.arange(24, dtype=np.uint8).reshape(4, 6)
+    out = cam._frame_to_rgb_for_snapshot(luma)
+    assert out.ndim == 3
+    assert out.shape == (4, 6, 3)
+    # All three channels equal the original luma plane.
+    assert np.array_equal(out[..., 0], luma)
+    assert np.array_equal(out[..., 1], luma)
+    assert np.array_equal(out[..., 2], luma)
+
+
 @pytest.mark.asyncio
 async def test_capture_raw_jpeg_round_trips_through_pillow():
     """Full capture_raw_jpeg → real Pillow-encoded JPEG bytes."""
