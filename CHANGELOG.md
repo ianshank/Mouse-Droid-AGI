@@ -8,6 +8,110 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — PR #104 harden-3: Test pyramid expansion + project-wide doc hardening + reviewer-follow-up fixes
+
+Final pre-PR pass that closes the dashboard-stability sprint. Builds on the PR #104 harden-1 (smoke hardening) and harden-2 (live-dashboard enablement) blocks below.
+
+**Test pyramid expansion — 6 new files, 58 tests + 3 hardware-gated**
+
+- `tests/integration/test_pr104_esp32_disabled_integration.py` (8) — `build_esp32_driver` end-to-end through `ResilientESP32Driver` + `MockESP32Driver`; concurrent `send_velocity` fan-out.
+- `tests/e2e/test_pr104_dashboard_e2e.py` (5) — `MockCamera` → in-process upstream → `dashboard_proxy` → aiohttp client; bearer-token injection + JPEG round-trip + 503 propagation.
+- `tests/regression/test_pr104_backwards_compat.py` (9) — CLAUDE.md invariant #9; defaults pinned (`esp32.enabled=True`, `v4l2_grayscale_extract=True`, `snapshot_jpeg_quality=90`); standalone YAML roots parse; Pydantic ge/le range guards.
+- `tests/regression/test_pr104_aqa.py` (21) — Automated QA on schema-field hygiene (description ≥20 chars + documented default reachable via `FieldInfo`); protocol conformance for `MockCamera` + `JetsonCSICamera` (`RawFrameSourceProtocol`) and `MockESP32Driver` (`ESP32CommProtocol`); RFC-9110 §7.6.1 hop-by-hop blocklist parametrized over `dashboard_proxy._HOP_BY_HOP`; env-override surface (`MOUSEDROID_ESP32__ENABLED=false`).
+- `tests/smoke/test_pr104_sanity.py` (13) — sub-second module-import smoke; YAML round-trip preserves PR-104 fields; standalone YAML root validation.
+- `tests/hardware/test_pr104_jetson_dashboard.py` (3 hw-gated) — rover-side mirror: live JetsonCSI JPEG decode via Pillow, factory wires `MockESP32Driver` on the Jetson, orchestrator boots + stops cleanly with `esp32.enabled=False`.
+
+**C4 architecture documentation**
+
+- `docs/architecture/c4-overview.md` — Level 1 (Context) + Level 2 (Container) for the whole system, workstation ↔ Jetson topology with the dashboard proxy.
+- `docs/architecture/c4-dashboard-proxy.md` — Level 3 (Component) for the proxy with HTTP + WebSocket sequence diagrams + configuration precedence + failure-mode matrix.
+- `docs/architecture/c4-orchestrator.md` — Level 3 for the 30 Hz sense-plan-act loop with the factory-wiring branch diagram (PR #104 `esp32.enabled` branch emphasised) + lifecycle sequence.
+- `docs/architecture/c4-arm-platform.md` — Level 3 for the four-layer hierarchical arm reasoning architecture + curriculum state diagram + reused-modules matrix.
+
+**Agentic-worker contract surface**
+
+- Top-level `AGENTS.md` — behavioural rules for Claude Code + subagents + MCP clients (factory-first DI, schema-driven config, structured logging, asyncio, strict typing, backwards-compat, `torch.no_grad()`, test-pyramid discipline, commit-message tone, red flags).
+- Top-level `SKILLS.md` — capability index keyed by trigger phrase. Maps operator skills (`dashboard-proxy`, `live-camera-verification`, `esp32-disconnected-mode`, `preflight-validation`) + engineering skills (`add-schema-field`, `add-hardware-driver`, `run-pre-pr-validation`) + subagent dispatch patterns to the files + commands needed.
+
+**Docs updates**
+
+- `CLAUDE.md` — new "Dashboard live-verification surface" section documenting the three PR-104 schema toggles + dashboard proxy invariants + test-pyramid mirror table.
+- `README.md` — new "Workstation Dashboard Verification (PR #104)" section (proxy quickstart + dashboard-mode escape-hatch table) + new "Next Steps / Roadmap" section with 5-item forward roadmap.
+- `.gitignore` — added `torch-baseline-*.txt`, `workstation-smoke-*.log`, `coverage-pr104-*.json`, the literal `%SystemDrive%/` Windows-shell stray, mock-smoke snapshot artefacts, `.vscode/launch.local.json`.
+
+**Reviewer-follow-up fixes (harden-3-review-fixes)**
+
+Independent code review surfaced 4 issues; all addressed before push:
+
+- **HIGH — WS pipe pool-slot leak** (`tools/dashboard_proxy.py:_ws_handler`) — replaced `asyncio.gather` of two pipe coroutines with `asyncio.create_task` + `asyncio.wait(..., return_when=FIRST_COMPLETED)` + explicit task cancellation. Without the fix, surviving pipe blocks indefinitely after one-sided close, holding `TCPConnector` pool slots (limit=64).
+- **HIGH — misleading bearer-token startup log** (`tools/dashboard_proxy.py:main`) — was emitting `[proxy] auth bearer token: ...` even when TOKEN was empty (auth injection legitimately disabled). Now three faithful states logged.
+- **MEDIUM — `_http_handler` upstream not released if `out.prepare` raises** — wrapped the downstream-write block in `try/finally` so the upstream `ClientResponse` is released on client-disconnect-during-prepare.
+- **MEDIUM — `_frame_to_rgb_for_snapshot` 2-D luma frame `IndexError`** — added explicit `elif frame.ndim == 2` guard cloning the luma plane to RGB.
+
+Plus 3 new tests covering the fixes:
+- `tests/unit/tools/test_dashboard_proxy.py::test_websocket_text_message_round_trips`
+- `tests/unit/tools/test_dashboard_proxy.py::test_websocket_upstream_close_propagates_to_client`
+- `tests/unit/test_jetson_csi.py::test_frame_to_rgb_2d_luma_frame_cloned_to_rgb_without_crash`
+
+**Verification**
+
+- **Tests**: 130 passing across the combined PR-104 surface; 3 hardware-gated tests skip cleanly on workstation.
+- **Ruff**: `check` + `format --check` clean across all touched files.
+- **Mypy**: `mypy --strict` clean on touched src files.
+- **Branch coverage** (vs PR-104 base commit `8f89186`): `schema.py 100%`, `factory.py 100%`, `jetson_csi.py 100%`, `validation/runtime.py 85.71%`. Gate held.
+- **Security audit**: clean — no hardcoded production credentials, RFC-compliant hop-by-hop stripping, intentional loopback-only proxy scope, test sentinels properly `noqa: S105`-tagged.
+- **Independent code review**: APPROVE_WITH_FIXES → APPROVE after the 4 review findings fixed + verified.
+
+### Added — Live-dashboard E2E enablement (PR #104 harden-2)
+
+Resolution of the gap-analysis + tech-debt findings discovered while running the live Jetson dashboard end-to-end. All changes backwards-compatible (new schema fields default to legacy behaviour).
+
+- **`ESP32Config.enabled: bool = Field(True)`** + factory wiring — `build_esp32_driver` now returns `MockESP32Driver` whenever `esp32.enabled is False`, regardless of `mock_hardware`. Replaces the prior workaround of monkey-patching `orchestrator.start()` to swallow ESP32 connect failures (see PR #104 harden-2 conversation): operators running the orchestrator on a Jetson WITHOUT the motor controller plugged in (camera + LiDAR + Hailo dashboard verification, hardware bring-up) flip the flag in their YAML overlay and the full orchestrator pipeline runs at real-hardware speeds — no patches, no open circuit breakers dragging the tick rate down.
+- **`JetsonCSICamera.capture_raw_jpeg()`** implementing `RawFrameSourceProtocol` — `/camera/frame.jpg` and `/camera/stream` now register (previously HTTP 404 because the driver only implemented `VisionProtocol`). Three backend-specific colour paths: `jetson_utils` (already RGB), `gstreamer` (BGR → RGB swap), `v4l2` (workaround for IMX708-on-RG10-Bayer-via-V4L2; see new schema field below). Encoded via Pillow at `cfg.camera.snapshot_jpeg_quality`.
+- **`CameraConfig.v4l2_grayscale_extract: bool = Field(True)`** — workaround toggle for the JetsonCSICamera's V4L2 fallback path. When the container lacks the `nvarguscamerasrc` GStreamer plugin, the IMX708 sensor's RG10 Bayer raw output gets misinterpreted as YUYV by OpenCV → solid green output. With the workaround on (default), the green channel (which carries the actual luma signal) is extracted as grayscale and cloned across R/G/B so operators see the scene (with mosaic artefacts) instead of nothing. Set `False` once the container rebuilds with proper `nvarguscamerasrc` support.
+- **`tools/dashboard_proxy.py`** — workstation-side reverse proxy that forwards HTTP + WebSocket traffic from a local port to a configurable upstream (the Jetson telemetry server, Grafana, Prometheus, …) with optional bearer-token injection. Used to make the auth-gated mousedroid telemetry server (port 8080) + the no-auth Grafana (3000) + Prometheus (9090) all browsable from a single Claude Preview session. CLI args + env-var configurable; tests round-trip through an in-process aiohttp upstream so we never need to bind to 192.168.55.1 during CI.
+- **`launch_dashboard.ps1`** + **`config/dev_dashboard.yaml.example`** — PowerShell launcher + dev YAML overlay template. The example overlay disables the in-process llama.cpp LLM (operators can wire LM Studio via the existing `openai_compatible` backend), enables telemetry with `force_real_server`, and switches the camera to `mock_source: screen_capture` for desktop content. `dev_dashboard.yaml` is gitignored so operator-personal values (LM Studio model name, etc.) don't leak.
+
+### Added — Hardware smoke hardening (PR #104 follow-up)
+
+Resolution of the gap-analysis + tech-debt findings on the smoke-test PR. All changes are backwards-compatible (new schema fields default to the previously-hardcoded values).
+
+- **Schema-driven thresholds** — four new Pydantic fields replace the previously-hardcoded literals in `mousedroid.validation.runtime`:
+  - `camera.snapshot_jpeg_quality: int` (default `90`, range 1-100) — Pillow JPEG quality for the `--save-frame` snapshot encoder
+  - `experience.nvme_device: str` (default `/dev/nvme0n1`) — `smartctl` target
+  - `experience.nvme_partition: str` (default `/dev/nvme0n1p1`) — `findmnt` target
+  - `experience.diagnostics_subprocess_timeout_s: float` (default `10.0`) — per-tool timeout for `lspci` / `lsblk` / `smartctl` / `findmnt`
+  - `hailo.synthetic_input_shape: tuple[int, int, int]` (default `(640, 640, 3)`) — zero-tensor shape for the Hailo synthetic-inference round-trip
+- **Schema-driven HEF role inventory** — `verify_hailo_accelerator` now derives the HEF role list from `HailoConfig.model_fields` (any field ending in `_hef_path`) instead of a hardcoded `("yolo", "feature_extractor")` tuple. Adding a third HEF role (e.g. `depth_hef_path`, `segmentation_hef_path`) flows into the smoke automatically.
+
+### Fixed — Hardware smoke hardening
+
+- **Logging hygiene** — replaced plain `import logging` + `logging.getLogger` in `verify_hailo_accelerator`'s `finally` with the project-mandatory `mousedroid.logging.setup.get_logger` so smoke stop-failures route through the same structlog processor chain as the rest of the orchestrator (CLAUDE.md invariant 4).
+- **`_resolve_pcie_ssd_mount` rootfs-parent FALSE PASS** — removed the `cfg.experience.path.parent` fallback. On a freshly-imaged Orin Nano with no NVMe at all, the previous chain would accept `/home/jetson/` (the rootfs!) as the "SSD mount" and report the LMDB path as "on SSD" — defeating the entire point of the check. The smoke now SKIPs cleanly when neither `$MOUSEDROID_SSD_MOUNT` nor `findmnt /dev/nvme0n1p1` can pin the mount.
+- **`infer_sync` event-loop block** — wrapped the Hailo synthetic-inference call in `asyncio.to_thread` so the smoke does not stall the asyncio event loop during the (potentially tens-of-ms) blocking PCIe VStream call. Mirrors how `HailoRuntime.start()` dispatches its own blocking calls.
+- **Dead `_device_id`/`_fw_version`/`_arch` reflection** — `HailoRuntime` never assigns these attrs, so the `getattr` loop produced a perpetually-empty `device_info` dict. Replaced with two concrete operator-meaningful signals: `device_path` (resolved from `cfg.hailo.device_path`) and `models_loaded` count (derived from the HEF inventory).
+- **Misleading `is_available()` signal** — `runtime.is_available()` returns `False` if HEFs failed to load even when the device was found, producing confusing PASS/FAIL signals. Removed; the new `device_info` keys carry concrete signals operators can interpret.
+- **Sync `capture_raw_frame` crash** — `_resolve_raw_frame_capture` now `asyncio.iscoroutinefunction`-checks the method and wraps sync drivers in `asyncio.to_thread`. The previous code would `await` a non-coroutine and produce a confusing `TypeError` deep inside `capture_camera_frame`.
+- **`_via_jpeg` Pillow import** — wrapped in `try/except ImportError` so bare `[dev]` CI installs (without `[hardware]` or `[telemetry]` extras) get a clear operator-actionable `RuntimeError` instead of a bare ImportError traceback.
+- **Dead-defensive `getattr(cfg.hailo, "fallback_on_failure", True)`** — replaced with direct attribute access. The `HailoConfig` field is guaranteed by the schema; the wrapper would silently swallow a future rename.
+
+### Documentation — Hardware smoke hardening
+
+- `docs/operations/jetson_smoke_runbook.md` — three new common-failure sections:
+  - `$MOUSEDROID_SSD_MOUNT` operator override for non-standard mount points
+  - YAML override pattern for non-canonical `experience.nvme_device` / `nvme_partition`
+  - `frame shape FAIL` interpretation when running with `MOUSEDROID_MOCK_HARDWARE=true` on a dev host (MockCamera 320×240 vs default 640×480)
+
+### Added — Hardware smoke (post-adjust evidence + PCIe SSD + Hailo-8)
+
+Three additive sensor-verification flows that extend the existing `scripts/verify_sensors.py` + `scripts/jetson_smoke_test.sh` harness so the operator can validate the rover end-to-end after a hardware change. Zero new top-level deps; every threshold and path comes from existing Pydantic config or a documented `MOUSEDROID_*` env override.
+
+- **Camera snapshot capture** (`scripts/verify_sensors.py --sensor camera --save-frame PATH --frames N`). Writes a real JPEG snapshot of the LAST captured frame so the operator can visually verify focus/exposure/framing after a ribbon-cable / lens / refocus adjustment. JPEG encoding happens in the validation helper via Pillow (already a project dep via `[telemetry]` / `[hardware]` extras). New `CameraFrameDiagnostics` frozen dataclass carries the frame + per-call timing + saved-JPEG path. `capture_camera_frame()` return shape changed from `tuple[NDArray, str]` to `tuple[CameraFrameDiagnostics, str]` — the 2-tuple form is preserved so the existing destructure in `verify_sensors.py::check_camera` keeps working; the consumer is updated atomically in the same commit. Backend resolution chain widened: `capture_raw_frame()` → `capture_raw_jpeg()` + Pillow decode → private `_capture_frame` legacy, covering both `IMX500Camera` and `MockCamera`.
+- **PCIe NVMe SSD smoke** (`scripts/verify_sensors.py --sensor pcie_ssd`). Probes `lspci` / `lsblk` / `findmnt` / `smartctl` (each via `shutil.which`-guarded `subprocess.run`; missing tools are SKIPs not FAILs) and asserts the configured runtime paths (`experience.path`, `jetson.tensorrt_cache_dir`, `cloud.weight_update.cache_dir`, `harness.journal.path`) resolve to a mount with ≥ `cfg.experience.map_size_gb` free capacity. Mount detection uses `$MOUSEDROID_SSD_MOUNT` env override, falling back to `findmnt /dev/nvme0n1p1`, then to the parent dir of `cfg.experience.path`. New `PcieSsdDiagnostics` frozen dataclass.
+- **Hailo-8 smoke** (`scripts/verify_sensors.py --sensor hailo`). Runs the same `HailoRuntime` the orchestrator uses (via `build_hailo_runtime()`) — dumps best-effort device info, loads `cfg.hailo.yolo_hef_path` + `cfg.hailo.feature_extractor_hef_path`, and times one synthetic inference against `cfg.hailo.timeout_ms`. SKIP semantics on missing SDK / missing `/dev/hailo0` / `cfg.hailo.enabled=False` (Hailo is opt-in extras and the runtime is documented to fall back to GPU). `try/finally` around `runtime.start()` / `stop()` so the PCIe device lock is ALWAYS released even if inference raises. Input-shape resolution falls back to the YOLO-canonical `(640, 640, 3)` when the runtime API doesn't expose vstream shapes. New `HailoDiagnostics` frozen dataclass.
+- **Bash harness dispatch** (`scripts/jetson_smoke_test.sh`). Two new dispatch entries: `bash scripts/jetson_smoke_test.sh pcie_ssd` (`ssd` is an alias) and `bash scripts/jetson_smoke_test.sh hailo`, both delegating to the existing `_run_verify_sensor` aggregator for PASS/SKIP/FAIL accounting. Inclusion in the `all` aggregator after `speaker` and BEFORE `app` so device-lock collisions (PCIe NVMe, Hailo) surface before the app-health step.
+- **Operator runbook** (`docs/operations/jetson_smoke_runbook.md`). One-page post-hardware-change playbook: pre-flight (ping + SSH key + venv + systemd service check), rsync with `.gitignore`-aware filtering, three smoke commands with `tee` transcript logging, camera-snapshot SCP-back workflow, PASS/SKIP/FAIL interpretation table, common failure modes (incl. Hailo module-name discovery via `lsmod | grep hailo` rather than hardcoded `modprobe hailo_pci`), and the safe reseat protocol (power off + ground first).
+
 ### Fixed — Ops Hardening (F-006 / F-009 / F-013 / F-014 follow-ups from PR #100)
 
 The smoke-stability sprint (PR #100) live-verified the rover at `192.168.55.1` and surfaced five operator-actionable findings. This sprint closes four of them in code (the fifth — Hailo PCIe wiring — is an operator hardware decision):

@@ -42,6 +42,37 @@ def test_build_esp32_wifi():
     assert isinstance(driver.inner, WiFiESP32Driver)
 
 
+def test_build_esp32_disabled_returns_mock_even_on_real_hardware() -> None:
+    """``cfg.esp32.enabled = False`` swaps in MockESP32Driver even when mock_hardware=False.
+
+    Regression net for the PR #104 harden-2 ESP32-tolerance landing: the
+    Jetson runs without the motor controller plugged in (dashboard
+    verification, hardware-bringup, etc.) and previously had to monkey-
+    patch ``orchestrator.start()`` to swallow connect failures. With the new
+    schema field the factory simply returns the mock so the orchestrator's
+    full pipeline keeps working at real-hardware speeds.
+    """
+    cfg = _real_settings(esp32={"protocol": "serial", "enabled": False})
+
+    from mousedroid.comms.mock_driver import MockESP32Driver
+    from mousedroid.factory import build_esp32_driver
+    from mousedroid.resilience.resilient_driver import ResilientESP32Driver
+
+    driver = build_esp32_driver(cfg)
+    assert isinstance(driver, ResilientESP32Driver)
+    assert isinstance(driver.inner, MockESP32Driver)
+
+
+def test_build_esp32_enabled_default_is_true_preserves_legacy_behavior() -> None:
+    """Backwards-compat: ``enabled`` defaults to ``True`` — existing YAML keeps working."""
+    from mousedroid.config.schema import ESP32Config
+
+    cfg = ESP32Config()
+    assert cfg.enabled is True
+    # And the legacy ``protocol`` field is still ``serial`` by default.
+    assert cfg.protocol == "serial"
+
+
 def test_build_distance_sensor_missing_config_raises():
     # Must bypass the Settings validator to test the factory guard
     cfg = MagicMock(spec=Settings)

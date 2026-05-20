@@ -1,0 +1,54 @@
+# Dev overlay for local dashboard E2E verification — LIVE mode.
+# Loaded on top of config/default.yaml via:
+#   mousedroid --config config/default.yaml dev_dashboard.yaml
+#
+# What's LIVE on this workstation:
+#   - Telemetry server (real aiohttp at 127.0.0.1:8080)
+#   - Camera: screen-capture mode (PIL.ImageGrab of the actual desktop)
+#   - LLM: HTTP client pointing at LM Studio (uncensored-phi-3-mini-4k-geminified)
+#
+# What stays mocked (physically not on this workstation — the rover holds them):
+#   - ESP32 + motor + ultrasonic + battery
+#   - LD19 LiDAR + Hailo-8 accelerator + IMX500 ribbon camera
+#   - Microphone + Speaker + Rocky voice
+#   - PCIe NVMe SSD (workstation has its own — but the validation paths target
+#     the rover's /home/jetson/* paths)
+
+mock_hardware: true
+
+telemetry:
+  enabled: true
+  force_real_server: true
+  host: "127.0.0.1"
+  port: 8080
+  mdns_enabled: false
+  raw_frame_hz: 5.0
+
+camera:
+  # LIVE: PIL.ImageGrab captures the real desktop (2560x1440 on this rig,
+  # downscaled to the camera resolution by the MockCamera driver). Operators
+  # see whatever's on their primary monitor in the /camera dashboard pane.
+  mock_source: screen_capture
+  resolution_width: 640
+  resolution_height: 480
+
+llm:
+  # LIVE: HTTP client → LM Studio's OpenAI-compatible server at
+  # localhost:1234. Model name must match exactly what `GET /v1/models`
+  # reports — verified via `curl http://localhost:1234/v1/models` to be
+  # "uncensored-phi-3-mini-4k-geminified".
+  enabled: true
+  backend: openai_compatible
+  base_url: "http://127.0.0.1:1234"
+  model_name: "uncensored-phi-3-mini-4k-geminified"
+  context_length: 4096
+  max_tokens: 128
+  temperature: 0.1
+  latency_target_ms: 5000.0    # LM Studio first-token is slower than llama.cpp local
+
+cognitive:
+  enabled: false
+  auto_download: false
+
+mission:
+  replan_enabled: false

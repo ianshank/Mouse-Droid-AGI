@@ -174,6 +174,92 @@ class JetsonCSICamera:
         """
         return np.asarray(await asyncio.to_thread(self._capture_frame), dtype=np.uint8)
 
+    async def capture_raw_jpeg(self) -> bytes | None:
+        """Capture a frame and encode as JPEG for ``RawFrameSourceProtocol``.
+
+        Implementing this method makes the camera satisfy
+        :class:`mousedroid.hardware.protocols.RawFrameSourceProtocol`, which is
+        what the telemetry server's ``isinstance`` check uses to decide
+        whether to register the ``/camera/frame.jpg`` and ``/camera/stream``
+        endpoints. Without it, the factory's ``raw_frame_source`` resolves to
+        ``None`` and the dashboard's camera pane returns HTTP 404.
+
+        Three backend-specific colour-conversion paths:
+
+        * ``jetson_utils`` — already RGB; no swap needed.
+        * ``gstreamer`` (the ``nvarguscamerasrc`` path) — already BGR after
+          ``videoconvert``; swap to RGB before Pillow encoding.
+        * ``v4l2`` — fallback path used when the container lacks the
+          ``nvarguscamerasrc`` plugin. The IMX708 sensor only outputs RG10
+          Bayer raw, the kernel driver advertises ``YUYV`` at the active
+          format but the bytes are Bayer-packed, and OpenCV's ``YUYV->BGR``
+          conversion produces uniform green output because the sensor isn't
+          being driven through its ISP. With
+          ``cfg.camera.v4l2_grayscale_extract = True`` (default), the green
+          channel of the misinterpreted frame is extracted as luma and
+          cloned across R/G/B so the operator sees the scene (with mosaic
+          artefacts) instead of solid green. Disable the override once the
+          container has proper ``nvarguscamerasrc`` support.
+
+        Returns:
+            JPEG bytes, or ``None`` if Pillow is unavailable / the frame
+            grab failed.
+        """
+        try:
+            from io import BytesIO
+
+            from PIL import Image
+        except ImportError:
+            return None
+
+        frame = await asyncio.to_thread(self._capture_frame)
+        if frame is None or frame.size == 0:
+            return None
+
+        rgb = self._frame_to_rgb_for_snapshot(frame)
+        try:
+            img = Image.fromarray(np.ascontiguousarray(rgb), mode="RGB")
+        except (TypeError, ValueError):
+            return None
+
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=int(self._cfg.snapshot_jpeg_quality))
+        return buf.getvalue()
+
+    def _frame_to_rgb_for_snapshot(self, frame: NDArray[np.uint8]) -> NDArray[np.uint8]:
+        """Backend-specific colour conversion for the JPEG snapshot path.
+
+        Split out from :meth:`capture_raw_jpeg` so it stays pure + testable
+        without needing a live ``/dev/video0`` device. See the
+        ``capture_raw_jpeg`` docstring for the per-backend rationale.
+        """
+        if (
+            self._backend == "v4l2"
+            and self._cfg.v4l2_grayscale_extract
+            and frame.ndim == 3
+            and frame.shape[2] == 3
+        ):
+            # Green channel of OpenCV's YUYV-misinterpretation carries the
+            # actual luma signal — clone it to R/G/B for an honest grayscale
+            # snapshot. See the field's docstring for the IMX708 + container-
+            # GStreamer-plugin background.
+            gray = frame[..., 1]
+            return np.stack([gray, gray, gray], axis=-1)
+        # Defensive guard for a future V4L2 ``GREY`` mode that returns a 2-D
+        # luma plane directly: skip the BGR-swap (which would IndexError on
+        # ``frame[..., ::-1]`` for ndim==2) and clone the luma to RGB. Today
+        # this path is unreachable because every backend produces a 3-D
+        # frame, but the explicit branch is cheap insurance against a future
+        # driver-mode addition.
+        if frame.ndim == 2:
+            return np.stack([frame, frame, frame], axis=-1)
+        if self._backend != "jetson_utils":
+            # OpenCV (gstreamer / v4l2 paths when grayscale-extract is off)
+            # returns BGR; swap to RGB before Pillow encodes the snapshot.
+            return frame[..., ::-1]
+        # jetson_utils returns RGB directly.
+        return frame
+
     def _capture_frame(self) -> NDArray[np.uint8]:  # pragma: no cover
         """Capture a single frame from the camera (blocking).
 

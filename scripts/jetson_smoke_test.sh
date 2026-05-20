@@ -11,6 +11,8 @@
 #   bash scripts/jetson_smoke_test.sh camera        # Run only camera tests
 #   bash scripts/jetson_smoke_test.sh lidar         # Run only LiDAR tests
 #   bash scripts/jetson_smoke_test.sh speaker       # Run only speaker tests
+#   bash scripts/jetson_smoke_test.sh pcie_ssd      # Run only NVMe SSD on PCIe smoke
+#   bash scripts/jetson_smoke_test.sh hailo         # Run only Hailo-8 accelerator smoke
 #   bash scripts/jetson_smoke_test.sh app           # Run only application health check
 #   bash scripts/jetson_smoke_test.sh pytest        # Run only hardware pytest suite
 #   bash scripts/jetson_smoke_test.sh e2e           # Run only E2E 5-second run
@@ -512,6 +514,18 @@ test_voice() {
 }
 
 # ---------------------------------------------------------------------------
+# 5d. PCIe NVMe SSD / 5e. Hailo-8 accelerator -- delegate to verify_sensors.py
+# ---------------------------------------------------------------------------
+
+test_pcie_ssd() {
+    _run_verify_sensor "pcie_ssd" "PCIe NVMe SSD"
+}
+
+test_hailo() {
+    _run_verify_sensor "hailo" "Hailo-8"
+}
+
+# ---------------------------------------------------------------------------
 # 6. Application health check
 # ---------------------------------------------------------------------------
 
@@ -678,6 +692,8 @@ main() {
             test_lidar
             test_speaker
             test_voice
+            test_pcie_ssd
+            test_hailo
             test_app
             test_pytest
             test_e2e
@@ -691,12 +707,14 @@ main() {
         lidar)    test_lidar ;;
         speaker)  test_speaker ;;
         voice)    test_voice ;;
+        pcie_ssd|ssd) test_pcie_ssd ;;
+        hailo)    test_hailo ;;
         app)      test_app ;;
         pytest)   test_pytest ;;
         e2e)      test_e2e ;;
         *)
             echo "Unknown step: ${step}"
-            echo "Valid steps: all, system, gpio, serial, motor, camera, audio, lidar, speaker, voice, app, pytest, e2e"
+            echo "Valid steps: all, system, gpio, serial, motor, camera, audio, lidar, speaker, voice, pcie_ssd, hailo, app, pytest, e2e"
             exit 1
             ;;
     esac

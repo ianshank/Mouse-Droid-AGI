@@ -155,3 +155,55 @@ When adding hardware probes or pillar checks, follow the established split:
 - **`tools/lidar_telemetry_probe.py`** — standalone non-orchestrator probe for verifying the telemetry → dashboard pipeline when the rover is partially detached (ESP32 / CSI absent). Binds a non-default port (8090) so it never collides with a running orchestrator.
 
 When adding ribbon-disconnect-style operator-actionable diagnostics, distinguish **WARN** (operator can fix without a code change) from **FAIL** (driver crash / wrong cfg / permission denied). Dashboards rely on this distinction.
+
+## Dashboard live-verification surface (PR #104 — dashboard-stability sprint)
+
+When working on the live-Jetson dashboard path, the schema-driven escape
+hatches are non-negotiable contracts:
+
+- **`ESP32Config.enabled: bool = True`** — flip to `False` (YAML or
+  `MOUSEDROID_ESP32__ENABLED=false` env) to make `build_esp32_driver`
+  resolve to `MockESP32Driver` even with `mock_hardware=False`. The
+  resilience wrapper stays in place; only the *inner* driver changes.
+  This avoids the prior workaround of monkey-patching
+  `orchestrator.start()` to swallow connect failures.
+- **`CameraConfig.v4l2_grayscale_extract: bool = True`** — IMX708 Bayer
+  workaround for the V4L2 fallback path (the container ships without
+  `nvarguscamerasrc`). When `True`, `capture_raw_jpeg` extracts the green
+  channel as luma + clones to RGB so the operator sees the scene with
+  mosaic artefacts instead of solid green. Flip to `False` once the
+  container gains the GStreamer plugin.
+- **`CameraConfig.snapshot_jpeg_quality: int = 90`** — Pillow quality for
+  the snapshot path used by `scripts/verify_sensors.py --save-frame`.
+  Range-gated `1..100` by Pydantic.
+
+**Workstation reverse proxy:** `tools/dashboard_proxy.py` is the canonical
+bridge from a Windows / macOS browser to the auth-gated Jetson telemetry
+server. It accepts CLI positional args (`port upstream [token]`) AND env
+vars (`PROXY_PORT` / `JETSON_HTTP` / `JETSON_TOKEN`) — never hardcode the
+token. Three transport modes supported: plain HTTP, streaming (MJPEG /
+SSE), WebSocket. Hop-by-hop headers (RFC-9110 §7.6.1) are stripped before
+forward; the proxy injects the configured Bearer token at the upstream
+edge so the browser never sees it. WebSocket forwarding uses
+`asyncio.wait(..., return_when=FIRST_COMPLETED)` + explicit task
+cancellation to avoid pool-slot leaks on one-sided close.
+
+**Test surface mirror:** every dashboard-touching change should land
+under the matching tier:
+
+| Tier | Directory | When to add |
+|------|-----------|-------------|
+| Unit | `tests/unit/` | Single-function behaviour, mocked deps |
+| Integration | `tests/integration/test_pr*_integration.py` | Multi-module wiring through the factory |
+| E2E | `tests/e2e/test_pr*_e2e.py` | Full request path through proxy / camera / driver chain |
+| Regression | `tests/regression/test_pr*_backwards_compat.py` | YAML / env / default-value invariants |
+| AQA | `tests/regression/test_pr*_aqa.py` | Schema-field hygiene + protocol conformance |
+| Sanity | `tests/smoke/test_pr*_sanity.py` | Sub-second import + parse smoke |
+| Hardware | `tests/hardware/test_pr*_<surface>.py` | `@pytest.mark.hardware`-gated, runs on rover only |
+
+The PR #104 test files are the reference implementations — copy their
+docstring style + skip-gate pattern (`tests/_jetson_hardware.is_jetson_host`)
+when adding new ones.
+
+See `AGENTS.md` (agentic-worker behavioural contract) and `SKILLS.md`
+(capability index keyed by trigger phrase) for additional context.

@@ -326,6 +326,42 @@ docker inspect mousedroid | grep -A5 Health
 
 In mock/dev mode, `NullNotifier` is used — no external dependency required.
 
+### Workstation Dashboard Verification (PR #104)
+
+The Jetson telemetry server is bearer-token-gated, but modern browsers
+can't easily inject an Authorization header. PR #104 adds a local
+reverse proxy that bridges the gap:
+
+```bash
+# CLI form — recommended for launch.json
+python tools/dashboard_proxy.py 8081 http://192.168.55.1:8080 "$JETSON_TOKEN"
+python tools/dashboard_proxy.py 8082 http://192.168.55.1:3000   # Grafana (no token)
+python tools/dashboard_proxy.py 8083 http://192.168.55.1:9090   # Prometheus
+
+# PowerShell launcher (Windows) — picks up dev_dashboard.yaml or env
+pwsh -File launch_dashboard.ps1
+```
+
+Then browse `http://127.0.0.1:8081/lidar`, `:8081/camera/stream`,
+`:8081/api/v1/sensors` etc. The proxy forwards HTTP, MJPEG streams, and
+WebSocket frames transparently — see
+[`docs/architecture/c4-dashboard-proxy.md`](docs/architecture/c4-dashboard-proxy.md)
+for the full component + sequence diagrams.
+
+#### Dashboard-mode escape hatches
+
+When verifying the dashboard against a Jetson that *isn't* fully wired
+up (ESP32 unplugged, container missing GStreamer plugin), flip the
+schema-driven dev toggles:
+
+| YAML / env | Effect |
+|------------|--------|
+| `esp32.enabled: false` / `MOUSEDROID_ESP32__ENABLED=false` | Factory resolves `MockESP32Driver` even with `mock_hardware=False`. Orchestrator boots without an ESP32. |
+| `camera.v4l2_grayscale_extract: true` (default) | IMX708 Bayer workaround for the V4L2 fallback path — sensor would otherwise produce solid green. |
+| `camera.snapshot_jpeg_quality: 1..100` (default 90) | Pillow JPEG quality for `/camera/frame.jpg`. |
+
+Reference YAML: [`config/dev_dashboard.yaml.example`](config/dev_dashboard.yaml.example).
+
 ### Run with Custom Config
 
 ```bash
@@ -703,13 +739,46 @@ Ian Cruickshank
 
 ---
 
+## Next Steps / Roadmap
+
+Currently in flight (PR #104 dashboard-stability sprint just landed):
+
+- **Container rebuild with `nvarguscamerasrc`** — removes the need for
+  `camera.v4l2_grayscale_extract`; IMX708 will be debayered + ISP-processed
+  inside the container so `capture_raw_jpeg` produces a fully-formed RGB
+  image without the green-channel-as-luma workaround.
+- **Reverse-proxy hardening for Wi-Fi access** — `tools/dashboard_proxy.py`
+  is intentionally loopback-only today. A follow-up will add CSRF +
+  Origin checks so it can be bound to `0.0.0.0` safely for passenger
+  observers on the rover's Wi-Fi AP.
+- **Full Tower-of-Hanoi → laundry curriculum on the SO-ARM100** — the
+  arm-platform code (`src/mousedroid/arm/`) is wired but the curriculum
+  is currently sim-only. Phase-B (real-hardware sim2real) is next once
+  the workstation Blackwell PyTorch upgrade lands.
+- **Cloud weight OTA** — `cloud-weight-update-ota` ADR landed; runtime
+  fetcher + safe-rollback still TODO. Tracked in
+  `docs/architecture/ADR-010-cloud-weight-update-ota.md`.
+- **Mission closed-loop safety projection** — see ADR-011. Currently the
+  safety monitor short-circuits on hard limits; the projection-based
+  guard is queued for the next sprint.
+
+Architecture documentation:
+[`docs/architecture/c4-overview.md`](docs/architecture/c4-overview.md) is
+the index. C4 component diagrams exist for the dashboard proxy,
+orchestrator, and arm platform.
+
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature/my-feature`
 3. Follow the coding standards (ruff, mypy strict, Google docstrings)
-4. Write tests — coverage must remain ≥85%
-5. Open a pull request
+4. Write tests — coverage must remain ≥85%; new schema fields require
+   regression + AQA tests (see [PR #104 reference tests](tests/regression/test_pr104_aqa.py))
+5. Read [`AGENTS.md`](AGENTS.md) and [`SKILLS.md`](SKILLS.md) if you're an
+   agentic worker (Claude Code, subagents, MCP clients) — those are the
+   behavioural contracts for this repo
+6. Open a pull request — the body should describe *why* (the diff shows
+   the *what*)
 
 ---
 

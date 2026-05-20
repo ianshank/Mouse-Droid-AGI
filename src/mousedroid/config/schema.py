@@ -198,6 +198,38 @@ class CameraConfig(BaseModel):
         description="Feature extraction backend: mean_pool (fallback), tensorrt, hailo, or auto",
     )
     l2_normalize: bool = Field(True, description="Apply L2 normalization to feature vectors")
+    snapshot_jpeg_quality: int = Field(
+        90,
+        ge=1,
+        le=100,
+        description=(
+            "Pillow JPEG quality (1-100) for the camera snapshot path used "
+            "by ``scripts/verify_sensors.py --sensor camera --save-frame``. "
+            "Higher = larger files + more visible focus / banding detail; "
+            "operators inspecting a post-adjustment lens issue may bump to "
+            "100 for lossless inspection, or drop to 70 in disk-pressed "
+            "deployments. Default 90 matches the long-standing Pillow "
+            "default used by the telemetry MJPEG stream."
+        ),
+    )
+    v4l2_grayscale_extract: bool = Field(
+        True,
+        description=(
+            "Workaround for the JetsonCSICamera's ``v4l2`` backend when the "
+            "sensor is IMX708 (or any sensor that only exposes RG10 Bayer "
+            "raw via V4L2). The kernel driver advertises ``YUYV`` at the "
+            "active format but the bytes are Bayer-packed, so OpenCV's "
+            "YUYV->BGR conversion produces solid green / uniform output. "
+            "When ``True`` (default), ``capture_raw_jpeg`` extracts the "
+            "green channel of the resulting 3-plane frame as luma and "
+            "returns a grayscale-cloned RGB JPEG — the operator sees the "
+            "scene (with mosaic artefacts) instead of solid green. Flip to "
+            "``False`` once the container rebuilds with the "
+            "``nvarguscamerasrc`` GStreamer plugin (or a host-side libargus "
+            "capture daemon) so the raw frame is properly debayered + "
+            "white-balanced and the workaround can be retired."
+        ),
+    )
 
 
 class CircuitBreakerConfig(BaseModel):
@@ -353,6 +385,21 @@ class DomainRandomizationConfig(BaseModel):
 class ESP32Config(BaseModel):
     """ESP32 communication configuration for Wave Rover motor control."""
 
+    enabled: bool = Field(
+        True,
+        description=(
+            "Enable the ESP32 motor-controller driver. Default ``True`` "
+            "preserves byte-identical pre-PR-104-harden-2 behaviour. Operators "
+            "running the orchestrator on a Jetson WITHOUT the ESP32 plugged "
+            "in (dev / dashboard verification) flip this to ``False`` so the "
+            "factory swaps in :class:`MockESP32Driver` regardless of "
+            "``mock_hardware`` — avoids the prior workaround of monkey-"
+            "patching ``orchestrator.start()`` to swallow connect failures. "
+            "The mock driver short-circuits ``connect()`` / ``send_velocity`` "
+            "/ ``emergency_stop`` so the orchestrator can tick at full speed "
+            "while features-only smokes (camera + LiDAR + Hailo) run live."
+        ),
+    )
     protocol: Literal["serial", "wifi"] = Field(
         "serial",
         description="Communication protocol: serial (UART) or wifi (HTTP)",
@@ -441,6 +488,35 @@ class ExperienceConfig(BaseModel):
     )
     flush_every_n: int = Field(30, gt=0, description="Flush after N records")
     export_path: str = Field("/tmp/export", description="Default experience export path")  # noqa: S108
+    nvme_device: str = Field(
+        "/dev/nvme0n1",
+        description=(
+            "NVMe block device path the PCIe SSD smoke probes via "
+            "``smartctl -H``. Operators with secondary NVMe slots or "
+            "USB-NVMe enclosures override to point at the correct device. "
+            "Lives on ``ExperienceConfig`` because the SSD layout is "
+            "primarily about hosting the experience LMDB."
+        ),
+    )
+    nvme_partition: str = Field(
+        "/dev/nvme0n1p1",
+        description=(
+            "NVMe partition path the PCIe SSD smoke probes via "
+            "``findmnt -no TARGET``. Operators with non-standard "
+            "partition tables (e.g. an ESP first, ext4 second) override "
+            "to point at the data partition."
+        ),
+    )
+    diagnostics_subprocess_timeout_s: float = Field(
+        10.0,
+        gt=0,
+        description=(
+            "Per-subprocess timeout (seconds) for the diagnostics probes "
+            "in ``mousedroid.validation.runtime`` (lspci / lsblk / "
+            "smartctl / findmnt). 10 s is generous for healthy tools; "
+            "operators on slow USB-NVMe enclosures may bump higher."
+        ),
+    )
 
 
 class HealthConfig(BaseModel):
@@ -490,6 +566,16 @@ class HailoConfig(BaseModel):
     fallback_on_failure: bool = Field(
         True,
         description="Fall back to GPU/CPU pipeline if Hailo inference fails",
+    )
+    synthetic_input_shape: tuple[int, int, int] = Field(
+        (640, 640, 3),
+        description=(
+            "Zero-tensor shape (height, width, channels) the Hailo-8 smoke "
+            "feeds to ``infer_sync('yolo', ...)`` when the runtime does not "
+            "expose its input-vstream shape via reflection. Default matches "
+            "the YOLO11-disk-detector input contract; operators with a "
+            "custom HEF override to match their compiled model."
+        ),
     )
 
 
@@ -1030,8 +1116,7 @@ class MissionConfig(BaseModel):
         ge=0.0,
         le=1.0,
         description=(
-            "VLM progress score must cross this value to transition the "
-            "mission to ``SUCCEEDED``."
+            "VLM progress score must cross this value to transition the mission to ``SUCCEEDED``."
         ),
     )
     stall_threshold: float = Field(
@@ -1872,7 +1957,7 @@ class SafetyProjectorConfig(BaseModel):
     tight_quarters_omega_max_rads: float = Field(
         0.50,
         ge=0,
-        description=("Maximum angular velocity magnitude (rad/s) permitted in tight " "quarters."),
+        description=("Maximum angular velocity magnitude (rad/s) permitted in tight quarters."),
     )
 
 

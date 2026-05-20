@@ -218,3 +218,23 @@ SMOKE_REPORT_*.md
 !SMOKE_REPORT.md
 !docs/planning/SMOKE_REPORT_TEMPLATE.md
 mcp_transcripts/
+
+# Operator-personal dashboard dev overlay (see config/dev_dashboard.yaml.example)
+dev_dashboard.yaml
+
+# Workstation smoke artefacts (PR #104 workstation-runbook outputs)
+torch-baseline-*.txt
+workstation-smoke-*.log
+coverage-pr104-*.json
+
+# Windows shell quirk: PowerShell/Git-Bash mis-quoting sometimes creates a
+# literal '%SystemDrive%' directory in the worktree root when env-var
+# substitution fails. Ignore it so it never lands in a commit.
+%SystemDrive%/
+
+# Workstation snapshot inspection artefacts (verify_sensors.py --save-frame)
+mock-smoke*.jpg
+snap-*.jpg
+
+# Editor-local launch artefacts not intended for the repo
+.vscode/launch.local.json
