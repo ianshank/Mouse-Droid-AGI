@@ -632,8 +632,8 @@ def verify_pcie_ssd_layout(cfg: Settings) -> PcieSsdDiagnostics:
     pcie_devices: tuple[str, ...] = ()
     if shutil.which("lspci"):
         try:
-            result = subprocess.run(
-                ["lspci", "-nn"],  # noqa: S607 - same source
+            result = subprocess.run(  # noqa: S603 - fixed argv list from shutil.which("lspci")
+                ["lspci", "-nn"],  # noqa: S607 - resolved via shutil.which above
                 capture_output=True,
                 text=True,
                 check=False,
@@ -652,7 +652,7 @@ def verify_pcie_ssd_layout(cfg: Settings) -> PcieSsdDiagnostics:
     block_devices: tuple[str, ...] = ()
     if shutil.which("lsblk"):
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # noqa: S603 - fixed argv list from shutil.which("lsblk")
                 ["lsblk", "-d", "-o", "NAME,SIZE,TYPE,TRAN", "-n"],  # noqa: S607
                 capture_output=True,
                 text=True,

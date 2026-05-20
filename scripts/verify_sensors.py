@@ -255,11 +255,38 @@ def check_pcie_ssd(cfg: Settings) -> None:
         _skip("smartctl health", "smartctl unavailable or no output", sensor="pcie_ssd")
 
     for field_name, path_str in diagnostics.configured_paths.items():
-        on_mount = diagnostics.mount_target is not None and Path(
-            path_str
-        ).resolve().as_posix().startswith(diagnostics.mount_target.resolve().as_posix())
-        marker = "on SSD" if on_mount else "NOT on SSD mount"
-        _ok(f"path {field_name}", f"{path_str} [{marker}]", sensor="pcie_ssd")
+        # Use ``Path.is_relative_to`` (py3.9+) for a component-wise check —
+        # ``str.startswith`` was fragile against neighbouring mount points
+        # (e.g. ``/mnt/ssd_backup`` startswith ``/mnt/ssd`` would FALSE-PASS).
+        # ``is_relative_to`` walks the resolved path parts, so a sibling
+        # directory at the same prefix length is correctly rejected.
+        on_mount = False
+        if diagnostics.mount_target is not None:
+            try:
+                on_mount = (
+                    Path(path_str).resolve().is_relative_to(diagnostics.mount_target.resolve())
+                )
+            except (OSError, ValueError):
+                # ``Path.resolve`` raises ``OSError`` on Windows symlinks that
+                # point at unavailable drives; ``is_relative_to`` raises
+                # ``ValueError`` on incompatible drive letters. Either case
+                # means "we can't verify it's on the SSD" — treat as off-mount.
+                on_mount = False
+        if on_mount:
+            _ok(f"path {field_name}", f"{path_str} [on SSD]", sensor="pcie_ssd")
+        else:
+            # Previously this branch emitted ``_ok`` with a "NOT on SSD mount"
+            # marker — misleading for an operator scanning the smoke output
+            # for PASS/FAIL signals. The intent of the configured-path check
+            # is to VERIFY that runtime paths (LMDB, TRT cache, journal) land
+            # on the SSD. Emit ``_fail`` so it surfaces in the runbook's
+            # FAIL bucket and the operator knows to either move the path or
+            # remount the SSD.
+            _fail(
+                f"path {field_name}",
+                f"{path_str} [NOT on SSD mount]",
+                sensor="pcie_ssd",
+            )
 
 
 def check_hailo(cfg: Settings) -> None:
