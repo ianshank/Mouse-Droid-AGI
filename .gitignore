@@ -218,3 +218,6 @@ SMOKE_REPORT_*.md
 !SMOKE_REPORT.md
 !docs/planning/SMOKE_REPORT_TEMPLATE.md
 mcp_transcripts/
+
+# Operator-personal dashboard dev overlay (see config/dev_dashboard.yaml.example)
+dev_dashboard.yaml

@@ -102,7 +102,14 @@ def build_esp32_driver(cfg: Settings) -> ESP32CommProtocol:
     """
     inner: ESP32CommProtocol
 
-    if cfg.mock_hardware:
+    # ``cfg.esp32.enabled = False`` is the schema-driven dev escape hatch
+    # for running the orchestrator on hardware where the ESP32 isn't
+    # plugged in (e.g. Jetson + camera + LiDAR + Hailo for dashboard
+    # verification — see PR #104 harden-2). The mock driver short-circuits
+    # connect / send_velocity / emergency_stop without touching any serial
+    # port, so the orchestrator's start() doesn't crash and tick rate isn't
+    # dragged down by ResilientESP32Driver's open-circuit timeouts.
+    if cfg.mock_hardware or not cfg.esp32.enabled:
         from mousedroid.comms.mock_driver import MockESP32Driver
 
         inner = MockESP32Driver(cfg.esp32)

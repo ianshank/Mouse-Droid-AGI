@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Live-dashboard E2E enablement (PR #104 harden-2)
+
+Resolution of the gap-analysis + tech-debt findings discovered while running the live Jetson dashboard end-to-end. All changes backwards-compatible (new schema fields default to legacy behaviour).
+
+- **`ESP32Config.enabled: bool = Field(True)`** + factory wiring — `build_esp32_driver` now returns `MockESP32Driver` whenever `esp32.enabled is False`, regardless of `mock_hardware`. Replaces the prior workaround of monkey-patching `orchestrator.start()` to swallow ESP32 connect failures (see PR #104 harden-2 conversation): operators running the orchestrator on a Jetson WITHOUT the motor controller plugged in (camera + LiDAR + Hailo dashboard verification, hardware bring-up) flip the flag in their YAML overlay and the full orchestrator pipeline runs at real-hardware speeds — no patches, no open circuit breakers dragging the tick rate down.
+- **`JetsonCSICamera.capture_raw_jpeg()`** implementing `RawFrameSourceProtocol` — `/camera/frame.jpg` and `/camera/stream` now register (previously HTTP 404 because the driver only implemented `VisionProtocol`). Three backend-specific colour paths: `jetson_utils` (already RGB), `gstreamer` (BGR → RGB swap), `v4l2` (workaround for IMX708-on-RG10-Bayer-via-V4L2; see new schema field below). Encoded via Pillow at `cfg.camera.snapshot_jpeg_quality`.
+- **`CameraConfig.v4l2_grayscale_extract: bool = Field(True)`** — workaround toggle for the JetsonCSICamera's V4L2 fallback path. When the container lacks the `nvarguscamerasrc` GStreamer plugin, the IMX708 sensor's RG10 Bayer raw output gets misinterpreted as YUYV by OpenCV → solid green output. With the workaround on (default), the green channel (which carries the actual luma signal) is extracted as grayscale and cloned across R/G/B so operators see the scene (with mosaic artefacts) instead of nothing. Set `False` once the container rebuilds with proper `nvarguscamerasrc` support.
+- **`tools/dashboard_proxy.py`** — workstation-side reverse proxy that forwards HTTP + WebSocket traffic from a local port to a configurable upstream (the Jetson telemetry server, Grafana, Prometheus, …) with optional bearer-token injection. Used to make the auth-gated mousedroid telemetry server (port 8080) + the no-auth Grafana (3000) + Prometheus (9090) all browsable from a single Claude Preview session. CLI args + env-var configurable; tests round-trip through an in-process aiohttp upstream so we never need to bind to 192.168.55.1 during CI.
+- **`launch_dashboard.ps1`** + **`config/dev_dashboard.yaml.example`** — PowerShell launcher + dev YAML overlay template. The example overlay disables the in-process llama.cpp LLM (operators can wire LM Studio via the existing `openai_compatible` backend), enables telemetry with `force_real_server`, and switches the camera to `mock_source: screen_capture` for desktop content. `dev_dashboard.yaml` is gitignored so operator-personal values (LM Studio model name, etc.) don't leak.
+
 ### Added — Hardware smoke hardening (PR #104 follow-up)
 
 Resolution of the gap-analysis + tech-debt findings on the smoke-test PR. All changes are backwards-compatible (new schema fields default to the previously-hardcoded values).

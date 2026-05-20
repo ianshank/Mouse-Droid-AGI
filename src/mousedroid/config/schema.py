@@ -212,6 +212,24 @@ class CameraConfig(BaseModel):
             "default used by the telemetry MJPEG stream."
         ),
     )
+    v4l2_grayscale_extract: bool = Field(
+        True,
+        description=(
+            "Workaround for the JetsonCSICamera's ``v4l2`` backend when the "
+            "sensor is IMX708 (or any sensor that only exposes RG10 Bayer "
+            "raw via V4L2). The kernel driver advertises ``YUYV`` at the "
+            "active format but the bytes are Bayer-packed, so OpenCV's "
+            "YUYV->BGR conversion produces solid green / uniform output. "
+            "When ``True`` (default), ``capture_raw_jpeg`` extracts the "
+            "green channel of the resulting 3-plane frame as luma and "
+            "returns a grayscale-cloned RGB JPEG — the operator sees the "
+            "scene (with mosaic artefacts) instead of solid green. Flip to "
+            "``False`` once the container rebuilds with the "
+            "``nvarguscamerasrc`` GStreamer plugin (or a host-side libargus "
+            "capture daemon) so the raw frame is properly debayered + "
+            "white-balanced and the workaround can be retired."
+        ),
+    )
 
 
 class CircuitBreakerConfig(BaseModel):
@@ -367,6 +385,21 @@ class DomainRandomizationConfig(BaseModel):
 class ESP32Config(BaseModel):
     """ESP32 communication configuration for Wave Rover motor control."""
 
+    enabled: bool = Field(
+        True,
+        description=(
+            "Enable the ESP32 motor-controller driver. Default ``True`` "
+            "preserves byte-identical pre-PR-104-harden-2 behaviour. Operators "
+            "running the orchestrator on a Jetson WITHOUT the ESP32 plugged "
+            "in (dev / dashboard verification) flip this to ``False`` so the "
+            "factory swaps in :class:`MockESP32Driver` regardless of "
+            "``mock_hardware`` — avoids the prior workaround of monkey-"
+            "patching ``orchestrator.start()`` to swallow connect failures. "
+            "The mock driver short-circuits ``connect()`` / ``send_velocity`` "
+            "/ ``emergency_stop`` so the orchestrator can tick at full speed "
+            "while features-only smokes (camera + LiDAR + Hailo) run live."
+        ),
+    )
     protocol: Literal["serial", "wifi"] = Field(
         "serial",
         description="Communication protocol: serial (UART) or wifi (HTTP)",

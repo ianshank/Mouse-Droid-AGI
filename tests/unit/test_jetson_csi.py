@@ -323,3 +323,164 @@ async def test_stop_without_start():
 
     cam = JetsonCSICamera(_cfg())
     await cam.stop()  # Should not raise
+
+
+# ---------------------------------------------------------------------------
+# capture_raw_jpeg + _frame_to_rgb_for_snapshot — RawFrameSourceProtocol
+# conformance + the V4L2 grayscale-extract workaround for IMX708 sensors
+# whose container lacks the nvarguscamerasrc GStreamer plugin (PR #104
+# harden-2 follow-up).
+# ---------------------------------------------------------------------------
+
+
+def test_frame_to_rgb_jetson_utils_passes_rgb_through():
+    """jetson_utils backend already returns RGB — no channel swap."""
+    from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
+
+    cam = JetsonCSICamera(_cfg())
+    cam._backend = "jetson_utils"
+    frame = np.zeros((4, 6, 3), dtype=np.uint8)
+    frame[..., 0] = 200  # red plane only
+    out = cam._frame_to_rgb_for_snapshot(frame)
+    # No swap — red stays in slot 0.
+    assert out[0, 0, 0] == 200
+    assert out[0, 0, 1] == 0
+    assert out[0, 0, 2] == 0
+
+
+def test_frame_to_rgb_gstreamer_swaps_bgr_to_rgb():
+    """gstreamer backend returns BGR — swap to RGB before Pillow encode."""
+    from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
+
+    cam = JetsonCSICamera(_cfg())
+    cam._backend = "gstreamer"
+    frame = np.zeros((4, 6, 3), dtype=np.uint8)
+    frame[..., 0] = 200  # BGR: blue plane is 200
+    out = cam._frame_to_rgb_for_snapshot(frame)
+    # After swap, the blue value lands in RGB slot 2.
+    assert out[0, 0, 2] == 200
+    assert out[0, 0, 0] == 0
+
+
+def test_frame_to_rgb_v4l2_grayscale_extract_uses_green_channel():
+    """v4l2 backend with the workaround on → green channel cloned to R/G/B."""
+    from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
+
+    cam = JetsonCSICamera(_cfg(v4l2_grayscale_extract=True))
+    cam._backend = "v4l2"
+    frame = np.zeros((4, 6, 3), dtype=np.uint8)
+    frame[..., 1] = 153  # the YUYV-misinterpretation puts luma into green
+    frame[..., 0] = 0
+    frame[..., 2] = 0
+    out = cam._frame_to_rgb_for_snapshot(frame)
+    # Every pixel should be grey at exactly the green value.
+    assert np.all(out == 153)
+
+
+def test_frame_to_rgb_v4l2_grayscale_extract_disabled_falls_back_to_bgr_swap():
+    """v4l2 backend with the workaround OFF → standard BGR -> RGB swap."""
+    from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
+
+    cam = JetsonCSICamera(_cfg(v4l2_grayscale_extract=False))
+    cam._backend = "v4l2"
+    frame = np.zeros((4, 6, 3), dtype=np.uint8)
+    frame[..., 0] = 200  # BGR blue
+    out = cam._frame_to_rgb_for_snapshot(frame)
+    # Workaround off → standard BGR -> RGB swap (200 lands in slot 2).
+    assert out[0, 0, 2] == 200
+
+
+@pytest.mark.asyncio
+async def test_capture_raw_jpeg_round_trips_through_pillow():
+    """Full capture_raw_jpeg → real Pillow-encoded JPEG bytes."""
+    from io import BytesIO
+
+    from PIL import Image
+
+    from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
+
+    cam = JetsonCSICamera(_cfg(snapshot_jpeg_quality=85))
+    cam._backend = "gstreamer"
+    fake = np.zeros((10, 16, 3), dtype=np.uint8)
+    fake[..., 2] = 240  # BGR red plane
+    cam._capture_frame = lambda: fake  # type: ignore[assignment]
+
+    jpeg = await cam.capture_raw_jpeg()
+    assert jpeg is not None
+    assert len(jpeg) > 0
+    img = Image.open(BytesIO(jpeg))
+    assert img.format == "JPEG"
+    assert img.size == (16, 10)
+
+
+@pytest.mark.asyncio
+async def test_capture_raw_jpeg_returns_none_on_empty_frame():
+    """A zero-size frame from the underlying driver short-circuits to None."""
+    from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
+
+    cam = JetsonCSICamera(_cfg())
+    cam._backend = "v4l2"
+    cam._capture_frame = lambda: np.zeros((0, 0, 3), dtype=np.uint8)  # type: ignore[assignment]
+
+    assert await cam.capture_raw_jpeg() is None
+
+
+@pytest.mark.asyncio
+async def test_capture_raw_jpeg_satisfies_raw_frame_source_protocol():
+    """JetsonCSICamera now satisfies RawFrameSourceProtocol structurally."""
+    from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
+    from mousedroid.hardware.protocols import RawFrameSourceProtocol
+
+    cam = JetsonCSICamera(_cfg())
+    # Runtime-checkable Protocol via isinstance — what the telemetry server
+    # factory uses to gate /camera/frame.jpg + /camera/stream registration.
+    assert isinstance(cam, RawFrameSourceProtocol)
+
+
+@pytest.mark.asyncio
+async def test_capture_raw_jpeg_returns_none_when_pillow_unavailable():
+    """Defensive: missing Pillow extra → return None so the server can 503."""
+    import sys
+
+    from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
+
+    cam = JetsonCSICamera(_cfg())
+    cam._backend = "v4l2"
+    # Stash + clear the cached PIL.Image import so the inline `from PIL
+    # import Image` inside capture_raw_jpeg triggers an ImportError.
+    saved_pil = sys.modules.pop("PIL", None)
+    saved_image = sys.modules.pop("PIL.Image", None)
+    sys.modules["PIL"] = None  # type: ignore[assignment]
+    try:
+        jpeg = await cam.capture_raw_jpeg()
+        assert jpeg is None
+    finally:
+        # Restore the module so other tests can still encode JPEGs.
+        if saved_pil is not None:
+            sys.modules["PIL"] = saved_pil
+        elif "PIL" in sys.modules:
+            del sys.modules["PIL"]
+        if saved_image is not None:
+            sys.modules["PIL.Image"] = saved_image
+
+
+@pytest.mark.asyncio
+async def test_capture_raw_jpeg_returns_none_when_pillow_rejects_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defensive: Image.fromarray raising TypeError → return None (no 500)."""
+    from PIL import Image
+
+    from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
+
+    cam = JetsonCSICamera(_cfg())
+    cam._backend = "gstreamer"
+    cam._capture_frame = lambda: np.ones((4, 6, 3), dtype=np.uint8)  # type: ignore[assignment]
+
+    def _raises(*_a, **_kw):
+        msg = "simulated PIL rejection (e.g. unsupported dtype)"
+        raise TypeError(msg)
+
+    monkeypatch.setattr(Image, "fromarray", _raises)
+    jpeg = await cam.capture_raw_jpeg()
+    assert jpeg is None
