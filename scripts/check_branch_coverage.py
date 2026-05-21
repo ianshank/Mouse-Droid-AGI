@@ -54,25 +54,95 @@ def _dedupe_keep_order(items: list[str]) -> list[str]:
     return out
 
 
-def _git_base_candidates(base_ref: str | None) -> list[str]:
-    """Return candidate git base refs from CLI/env in priority order."""
-    raw = (base_ref or os.environ.get("GITHUB_BASE_REF") or "").strip()
-    if not raw:
-        return []
+def _local_dev_base_candidates() -> list[str]:
+    """Return git base-ref candidates for local-dev use (no CI env / no CLI flag).
 
-    candidates = [raw]
-    # In GitHub Actions GITHUB_BASE_REF is often a plain branch name.
-    if "/" not in raw:
-        candidates.insert(0, f"origin/{raw}")
+    Each candidate is probed via ``git rev-parse --verify`` downstream; the
+    first one that resolves wins. PR-105b added this chain so the script's
+    branch-coverage gate works locally without operators having to export
+    ``GITHUB_BASE_REF`` manually (the gap that bit PR #104).
+
+    Order of preference:
+
+    1. Upstream-tracking branch (``git rev-parse --abbrev-ref @{u}``) —
+       the branch the local one was created from, available whenever
+       ``git push -u`` was used.
+    2. ``origin/HEAD`` symbolic ref target — the remote's default branch
+       as recorded at clone time (typically ``main`` or ``master``, but
+       can be any branch the maintainer set as default).
+    3. ``origin/main`` as a literal fallback for clones that lack
+       ``origin/HEAD``.
+    """
+    candidates: list[str] = []
+
+    upstream = _run(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+    if upstream.returncode == 0:
+        ref = upstream.stdout.strip()
+        if ref:
+            candidates.append(ref)
+
+    origin_head = _run(["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"])
+    if origin_head.returncode == 0:
+        ref = origin_head.stdout.strip()
+        if ref:
+            # ``refs/remotes/origin/main`` → ``origin/main`` for the diff command.
+            short = ref.removeprefix("refs/remotes/")
+            if short:
+                candidates.append(short)
+
+    candidates.append("origin/main")
+    return _dedupe_keep_order(candidates)
+
+
+def _git_base_candidates(base_ref: str | None) -> list[str]:
+    """Return candidate git base refs from CLI / env / local-dev fallbacks.
+
+    PR-105b extended the previous (CLI + env only) chain so a local
+    invocation without ``--base-ref`` or ``GITHUB_BASE_REF`` still
+    resolves to a meaningful diff base (upstream-tracking branch first,
+    then ``origin/HEAD``, then ``origin/main``). Without this extension
+    the script silently fell back to ``git status --porcelain`` working-
+    tree diffs, which miss every committed-but-unpushed change — the
+    failure mode that masked PR #104's per-file coverage data.
+    """
+    raw = (base_ref or os.environ.get("GITHUB_BASE_REF") or "").strip()
+
+    candidates: list[str] = []
+    if raw:
+        candidates.append(raw)
+        # In GitHub Actions ``GITHUB_BASE_REF`` is often a plain branch name.
+        if "/" not in raw:
+            candidates.insert(0, f"origin/{raw}")
+
+    # Local-dev fallbacks only fire when nothing higher-priority resolved.
+    # They are SAFE to enumerate even in CI — CI's CLI/env path resolves
+    # first, so the fallbacks never run there.
+    candidates.extend(_local_dev_base_candidates())
     return _dedupe_keep_order(candidates)
 
 
 def _first_valid_base_ref(base_ref: str | None) -> str | None:
-    """Resolve the first valid base ref available in the local clone."""
-    for candidate in _git_base_candidates(base_ref):
+    """Resolve the first valid base ref available in the local clone.
+
+    Emits an informational line on stderr identifying which candidate
+    fired so the operator can see whether the gate is comparing against
+    the expected base. Silent base-ref resolution was the PR-104 footgun.
+    """
+    candidates = _git_base_candidates(base_ref)
+    for candidate in candidates:
         result = _run(["git", "rev-parse", "--verify", f"{candidate}^{{commit}}"])
         if result.returncode == 0:
+            print(
+                f"[check_branch_coverage] resolved base ref: {candidate}",
+                file=sys.stderr,
+            )
             return candidate
+    if candidates:
+        print(
+            "[check_branch_coverage] no candidate base ref resolved; "
+            f"tried: {', '.join(candidates)}",
+            file=sys.stderr,
+        )
     return None
 
 

@@ -142,6 +142,12 @@ dev = [
     "ruff==0.8.0",
     "mypy>=1.5",
     "types-PyYAML>=6.0",
+    # PR-105b: close the second pre-existing mypy --strict error.
+    # ``src/mousedroid/reward/vlm_progress.py:31`` imports ``cachetools``
+    # which ships no type stubs in the upstream wheel; the stub package
+    # below resolves the `[import-untyped]` mypy error without polluting
+    # the runtime install (it's [dev]-only).
+    "types-cachetools>=5.3",
     "ncps>=0.0.7",
 ]
 
