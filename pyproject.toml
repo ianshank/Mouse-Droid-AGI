@@ -147,7 +147,13 @@ dev = [
     # which ships no type stubs in the upstream wheel; the stub package
     # below resolves the `[import-untyped]` mypy error without polluting
     # the runtime install (it's [dev]-only).
-    "types-cachetools>=5.3",
+    #
+    # PR-105b harden gap-fix #7: lower bound aligned with the runtime
+    # ``cachetools>=5.0`` pin at line 21 so environments resolving any
+    # supported runtime version get matching stubs. Upper bound ``<6``
+    # pins the major to defend against a hypothetical breaking 6.0
+    # release that wouldn't reflect runtime API.
+    "types-cachetools>=5.0,<6",
     "ncps>=0.0.7",
 ]
 

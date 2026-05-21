@@ -21,6 +21,11 @@ Coverage scope:
 All assertions duck-type via ``isinstance(gate, ApprovalGateProtocol)`` so
 the runtime invariant the mypy fix represents stays pinned regardless of
 which concrete class lands in any branch.
+
+Tier rationale (PR-105b harden gap-fix #8): the change is a single-file
+type-annotation tightening with no orchestrator / hardware / network
+surface, so unit tests are the canonical tier. Integration / e2e /
+property / hardware tiers are N/A — formally considered + declined.
 """
 
 from __future__ import annotations

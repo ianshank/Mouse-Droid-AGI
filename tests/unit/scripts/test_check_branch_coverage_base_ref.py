@@ -5,14 +5,20 @@ without ``GITHUB_BASE_REF`` set, local invocations returned "no changed
 src/mousedroid Python files detected" instead of the actual per-file
 coverage data. The B.3 fix extended the candidate chain with three
 local-dev fallbacks (upstream-tracking branch, ``origin/HEAD``,
-``origin/main``). These tests pin every leg of the chain via tmp-dir git
-repos so a future refactor cannot silently re-introduce the gap.
+``COVERAGE_FALLBACK_BASE_REF`` env-var default ``origin/main``). These
+tests pin every leg of the chain via tmp-dir git repos so a future
+refactor cannot silently re-introduce the gap.
 
 Test isolation: each test stands up its own throwaway git repo inside
 ``tmp_path`` (pattern from ``tests/integration/test_sync_jetson_overlay.py``).
 The repo's HEAD + remote branches are seeded with a minimal commit so the
 candidate chain has something to resolve against. We never touch the real
 host repo's git state.
+
+Tier rationale (PR-105b harden gap-fix #8): the changes are pure
+script-level utility code with no orchestrator / hardware / network
+surface, so unit tests are the canonical tier. Integration / e2e /
+property / hardware tiers are N/A — formally considered + declined.
 """
 
 from __future__ import annotations
@@ -57,8 +63,14 @@ def _load_coverage_script_module() -> object:
 # ---------------------------------------------------------------------------
 
 
-def _git(args: list[str], cwd: Path) -> str:
-    """Run a git subprocess in ``cwd`` and return stdout (raises on failure).
+def _git_checked(args: list[str], cwd: Path) -> str:
+    """Run a git subprocess in ``cwd`` and return stdout — raises on failure.
+
+    Named ``_git_checked`` (not ``_git``) per PR-105b harden gap-fix #6:
+    distinguishes this test helper's ``check=True`` exception-raising
+    contract from the script-under-test's ``_run`` helper which uses
+    ``check=False`` and returns the full ``CompletedProcess`` for caller
+    inspection. Both wrap ``git``; only the error handling differs.
 
     The argv is a fixed list from the test (never user input); the
     ``shutil.which``-equivalent ``git`` resolution is the system's
@@ -89,31 +101,31 @@ def _make_sandbox_repo(
     """
     repo = tmp_path / "repo"
     repo.mkdir()
-    _git(["init", "--initial-branch=feature"], repo)
-    _git(["config", "user.email", "test@example.invalid"], repo)
-    _git(["config", "user.name", "Test"], repo)
+    _git_checked(["init", "--initial-branch=feature"], repo)
+    _git_checked(["config", "user.email", "test@example.invalid"], repo)
+    _git_checked(["config", "user.name", "Test"], repo)
     (repo / "seed.txt").write_text("seed\n")
-    _git(["add", "seed.txt"], repo)
-    _git(["commit", "-m", "seed"], repo)
+    _git_checked(["add", "seed.txt"], repo)
+    _git_checked(["commit", "-m", "seed"], repo)
 
     if with_upstream or with_origin_head or with_origin_main:
         bare = tmp_path / "remote.git"
-        _git(["init", "--bare", str(bare)], repo)
-        _git(["remote", "add", "origin", str(bare)], repo)
-        _git(["push", "origin", "feature"], repo)
+        _git_checked(["init", "--bare", str(bare)], repo)
+        _git_checked(["remote", "add", "origin", str(bare)], repo)
+        _git_checked(["push", "origin", "feature"], repo)
 
     if with_origin_main:
-        _git(["push", "origin", "feature:main"], repo)
+        _git_checked(["push", "origin", "feature:main"], repo)
 
     if with_origin_head:
         # Point origin/HEAD at the freshly-pushed branch so the script's
         # ``git symbolic-ref refs/remotes/origin/HEAD`` candidate resolves.
         # Operators usually get this automatically via ``git clone``; the
         # ``set-head -a`` here mimics that initial setup.
-        _git(["remote", "set-head", "origin", "feature"], repo)
+        _git_checked(["remote", "set-head", "origin", "feature"], repo)
 
     if with_upstream:
-        _git(["branch", "--set-upstream-to=origin/feature"], repo)
+        _git_checked(["branch", "--set-upstream-to=origin/feature"], repo)
 
     return repo
 
@@ -241,3 +253,109 @@ def test_first_valid_base_ref_logs_when_none_resolve(
     out_err = capsys.readouterr()
     assert "no candidate base ref resolved" in out_err.err
     assert "origin/main" in out_err.err
+
+
+# ---------------------------------------------------------------------------
+# PR-105b harden-fix tests (gap-fixes #1, #2, #4)
+# ---------------------------------------------------------------------------
+
+
+def test_fallback_base_ref_env_overrides_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``COVERAGE_FALLBACK_BASE_REF`` env overrides the hardcoded fallback.
+
+    PR-105b harden gap-fix #2: clones whose remote default branch is
+    ``master`` / ``develop`` / ``trunk`` previously fell off the chain
+    because ``origin/main`` was hardcoded. Operators now flip the env
+    var; this test pins that path.
+    """
+    mod = _load_coverage_script_module()
+    repo = _make_sandbox_repo(tmp_path)  # no remote — only the fallback fires
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("COVERAGE_FALLBACK_BASE_REF", "origin/master")
+    candidates = mod._local_dev_base_candidates()  # type: ignore[attr-defined]
+    # The env-var value takes the slot the hardcoded default used to occupy.
+    assert candidates == ["origin/master"]
+
+
+def test_fallback_base_ref_defaults_to_origin_main(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Without env override the chain still ends in ``origin/main``.
+
+    Backwards-compatibility guard: legacy operators who never set
+    ``COVERAGE_FALLBACK_BASE_REF`` get the same final-leg behaviour as
+    before the harden-fix.
+    """
+    mod = _load_coverage_script_module()
+    repo = _make_sandbox_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    monkeypatch.delenv("COVERAGE_FALLBACK_BASE_REF", raising=False)
+    candidates = mod._local_dev_base_candidates()  # type: ignore[attr-defined]
+    assert candidates == ["origin/main"]
+
+
+def test_script_tag_constant_used_by_stderr_lines(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The ``_SCRIPT_TAG`` module-level constant prefixes every stderr line.
+
+    PR-105b harden gap-fix #4: the previously-hardcoded
+    ``"[check_branch_coverage]"`` literal appeared in two separate
+    ``print`` calls. Centralising it lets renames/repurposes update one
+    place. This test pins the constant is actually used.
+    """
+    mod = _load_coverage_script_module()
+    repo = _make_sandbox_repo(tmp_path, with_origin_head=True, with_origin_main=True)
+    monkeypatch.chdir(repo)
+    tag = mod._SCRIPT_TAG  # type: ignore[attr-defined]
+    assert tag == "[check_branch_coverage]"
+    # Trigger both stderr-emitting branches in sequence + confirm the tag
+    # appears in each.
+    mod._first_valid_base_ref(None)  # type: ignore[attr-defined]  # resolved path
+    out_err_ok = capsys.readouterr().err
+    assert tag in out_err_ok
+
+    # Now exercise the "no candidate resolves" path in a fresh repo +
+    # assert the same tag prefixes that diagnostic too. ``_make_sandbox_repo``
+    # expects its parent dir to exist (it ``mkdir``s ``<parent>/repo``
+    # one level deeper) so create the bare-test parent explicitly.
+    bare_parent = tmp_path / "bare"
+    bare_parent.mkdir()
+    bare_repo = _make_sandbox_repo(bare_parent)
+    monkeypatch.chdir(bare_repo)
+    mod._first_valid_base_ref(None)  # type: ignore[attr-defined]
+    out_err_fail = capsys.readouterr().err
+    assert tag in out_err_fail
+
+
+def test_resolved_base_threaded_through_avoids_double_print(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``_changed_source_files`` + ``_changed_line_map`` accept a resolved base ref.
+
+    PR-105b harden gap-fix #1: pre-harden, both helpers called
+    ``_first_valid_base_ref`` internally, which emitted the
+    ``resolved base ref`` stderr line TWICE per ``main()`` invocation.
+    Now ``main()`` resolves once and threads via the ``resolved_base``
+    kwarg, suppressing the second emission. This test exercises the
+    threading path directly and confirms NO stderr line fires when the
+    resolved value is passed.
+    """
+    mod = _load_coverage_script_module()
+    repo = _make_sandbox_repo(tmp_path, with_origin_head=True, with_origin_main=True)
+    monkeypatch.chdir(repo)
+
+    # Resolve once + capture the stderr line.
+    resolved = mod._first_valid_base_ref(None)  # type: ignore[attr-defined]
+    first_log = capsys.readouterr().err
+    assert "resolved base ref:" in first_log
+    assert resolved is not None
+
+    # Now call the threaded variant — must produce NO additional
+    # ``resolved base ref:`` line because the helper short-circuits when
+    # ``resolved_base`` is supplied.
+    _ = mod._changed_source_files(None, resolved_base=resolved)  # type: ignore[attr-defined]
+    second_log = capsys.readouterr().err
+    assert "resolved base ref:" not in second_log

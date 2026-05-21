@@ -19,6 +19,25 @@ import re
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
+from typing import Final
+
+# Module-level constants — PR-105b harden gap-fix #4:
+# Pull every magic string operators / log scrapers might rely on into one
+# place so renames / repurposes don't fan out across the file.
+_SCRIPT_TAG: Final[str] = "[check_branch_coverage]"
+
+# PR-105b harden gap-fix #2: the previously-hardcoded ``"origin/main"``
+# literal at the end of the local-dev candidate chain assumed every clone
+# uses ``main`` as the remote default branch. Clones with ``master`` /
+# ``develop`` / ``trunk`` / etc. defaults silently fell off the chain.
+# Operators override via env; default preserves prior behaviour exactly.
+_DEFAULT_FALLBACK_BASE_REF_ENV: Final[str] = "COVERAGE_FALLBACK_BASE_REF"
+_DEFAULT_FALLBACK_BASE_REF: Final[str] = "origin/main"
+
+
+def _fallback_base_ref() -> str:
+    """Final-leg fallback ref for the autodetect chain (env-overridable)."""
+    return os.environ.get(_DEFAULT_FALLBACK_BASE_REF_ENV, _DEFAULT_FALLBACK_BASE_REF)
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
@@ -70,8 +89,10 @@ def _local_dev_base_candidates() -> list[str]:
     2. ``origin/HEAD`` symbolic ref target — the remote's default branch
        as recorded at clone time (typically ``main`` or ``master``, but
        can be any branch the maintainer set as default).
-    3. ``origin/main`` as a literal fallback for clones that lack
-       ``origin/HEAD``.
+    3. ``COVERAGE_FALLBACK_BASE_REF`` env var (default ``origin/main``) —
+       final literal fallback for clones that lack ``origin/HEAD``.
+       Operators on a ``master``- or ``develop``-default repo override
+       via ``COVERAGE_FALLBACK_BASE_REF=origin/master``.
     """
     candidates: list[str] = []
 
@@ -90,7 +111,7 @@ def _local_dev_base_candidates() -> list[str]:
             if short:
                 candidates.append(short)
 
-    candidates.append("origin/main")
+    candidates.append(_fallback_base_ref())
     return _dedupe_keep_order(candidates)
 
 
@@ -133,14 +154,13 @@ def _first_valid_base_ref(base_ref: str | None) -> str | None:
         result = _run(["git", "rev-parse", "--verify", f"{candidate}^{{commit}}"])
         if result.returncode == 0:
             print(
-                f"[check_branch_coverage] resolved base ref: {candidate}",
+                f"{_SCRIPT_TAG} resolved base ref: {candidate}",
                 file=sys.stderr,
             )
             return candidate
     if candidates:
         print(
-            "[check_branch_coverage] no candidate base ref resolved; "
-            f"tried: {', '.join(candidates)}",
+            f"{_SCRIPT_TAG} no candidate base ref resolved; " f"tried: {', '.join(candidates)}",
             file=sys.stderr,
         )
     return None
@@ -182,13 +202,26 @@ def _status_rows() -> list[tuple[str, str]]:
     return rows
 
 
-def _changed_source_files(base_ref: str | None) -> list[str]:
+def _changed_source_files(
+    base_ref: str | None,
+    *,
+    resolved_base: str | None = None,
+) -> list[str]:
     """Return changed Python files under src/mousedroid.
 
     In CI, prefer commit-based detection from ``git diff <base>...HEAD``.
     Fallback to local working-tree detection via ``git status --porcelain``.
+
+    Args:
+        base_ref: The raw base-ref candidate (CLI flag / env value); only
+            used when ``resolved_base`` is ``None``.
+        resolved_base: If supplied (PR-105b harden gap-fix #1), skip the
+            inner ``_first_valid_base_ref`` call to avoid double-emitting
+            the structured stderr line. ``main()`` resolves once + threads
+            the result through both consumers.
     """
-    resolved_base = _first_valid_base_ref(base_ref)
+    if resolved_base is None:
+        resolved_base = _first_valid_base_ref(base_ref)
     if resolved_base is not None:
         from_diff = _changed_files_from_base(resolved_base)
         if from_diff:
@@ -285,11 +318,26 @@ def _parse_unified_zero(diff_text: str, line_map: dict[str, set[int]]) -> None:
         line_map[current_path].update(range(start, start + count))
 
 
-def _changed_line_map(changed_files: list[str], base_ref: str | None) -> dict[str, set[int]]:
-    """Return changed line numbers for each changed source file."""
+def _changed_line_map(
+    changed_files: list[str],
+    base_ref: str | None,
+    *,
+    resolved_base: str | None = None,
+) -> dict[str, set[int]]:
+    """Return changed line numbers for each changed source file.
+
+    Args:
+        changed_files: Files to populate line-number sets for.
+        base_ref: Raw base-ref candidate; only used when ``resolved_base``
+            is ``None``.
+        resolved_base: PR-105b harden gap-fix #1 — share the resolution
+            done in ``main()`` instead of re-running it (which fired the
+            ``resolved base ref`` stderr line twice per invocation).
+    """
     line_map: dict[str, set[int]] = {p: set() for p in changed_files}
 
-    resolved_base = _first_valid_base_ref(base_ref)
+    if resolved_base is None:
+        resolved_base = _first_valid_base_ref(base_ref)
     if resolved_base is not None:
         result = _run(
             [
@@ -395,7 +443,15 @@ def main() -> int:
             if candidate:
                 base_ref = candidate
 
-    changed_files = _changed_source_files(base_ref)
+    # PR-105b harden gap-fix #1: resolve the base ref ONCE here and thread
+    # the result through both downstream consumers. The prior code called
+    # ``_first_valid_base_ref`` from inside both ``_changed_source_files``
+    # and ``_changed_line_map``, which emitted the structured stderr line
+    # twice per invocation — annoying for operators reading the script's
+    # diagnostic output.
+    resolved_base = _first_valid_base_ref(base_ref)
+
+    changed_files = _changed_source_files(base_ref, resolved_base=resolved_base)
     if not changed_files:
         if os.getenv("CI"):
             print(
@@ -466,7 +522,7 @@ def main() -> int:
         return run_result.returncode
 
     coverage_by_path = _load_coverage(json_out)
-    line_map = _changed_line_map(changed_files, base_ref)
+    line_map = _changed_line_map(changed_files, base_ref, resolved_base=resolved_base)
 
     failures: list[tuple[str, float]] = []
     print("\nChanged-line coverage:")
