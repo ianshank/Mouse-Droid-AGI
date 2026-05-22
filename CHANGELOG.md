@@ -8,6 +8,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — PR #105b: Tech-debt closure (mypy + coverage-script base-ref autodetect)
+
+First half of a two-PR stack (#105a follows). Tiny, isolated, low-risk. Lands FIRST so its `scripts/check_branch_coverage.py` fix can gate PR #105a's own coverage check correctly. No new features, no schema changes; pure debt closure.
+
+**Mypy `--strict` errors closed** — `mypy --strict --no-incremental src/mousedroid/` now reports zero errors (previously two):
+
+- **`src/mousedroid/factory.py:2216-2261`** — tightened the local `inner: object` annotation to `inner: ApprovalGateProtocol` on `build_approval_gate`. Closes the PR-98-introduced `Argument 1 to "PolicyApprovalGate" has incompatible type "object"` error. Added the protocol to the file's `TYPE_CHECKING` block at line 62 so the annotation resolves at static-analysis time without a runtime-import cost.
+- **`src/mousedroid/reward/vlm_progress.py:31`** — added `types-cachetools>=5.3` to the `[dev]` extras. Resolves the `[import-untyped]` error without polluting the runtime install (the stub is dev-only). CI's typecheck job installs `[dev]`.
+
+**Coverage-script footgun fixed** — `scripts/check_branch_coverage.py`:
+
+- New `_local_dev_base_candidates()` adds three local-dev fallbacks to the base-ref autodetect chain: (1) upstream-tracking branch via `git rev-parse --abbrev-ref @{u}`, (2) `origin/HEAD` symbolic-ref target, (3) `origin/main` literal. The chain previously only honoured `--base-ref` CLI flag + `GITHUB_BASE_REF` env, which silently failed during PR #104 local invocations and returned empty per-file coverage data.
+- `_first_valid_base_ref` now emits a stderr line naming the resolved candidate (or listing the tried set when none resolve). The silent-resolution behaviour was the PR-104 footgun.
+
+**New tests** (regression-guard surface):
+
+- `tests/unit/factory/test_policy_approval_gate.py` (7 tests) — pin every branch of `build_approval_gate` and the `PolicyApprovalGate` inner-protocol-conformance invariant the mypy fix represents.
+- `tests/unit/scripts/test_check_branch_coverage_base_ref.py` (10 tests after harden — 6 base + 4 harden-fix) — tmp-dir git-repo sandbox exercising each fallback leg + CLI/env precedence + stderr-logging invariant + the new `COVERAGE_FALLBACK_BASE_REF` env override + the `_SCRIPT_TAG` constant + the `resolved_base` double-print suppression.
+- `tests/regression/test_pr105b_mypy_clean.py` (1 `@pytest.mark.slow` test) — subprocess-runs `mypy --strict --no-incremental` on the two touched files + asserts `Success`. Wall time ~282 s on workstation; timeout sourced from `MYPY_TIMEOUT_S` env (default 300 s, harden-fix #3). CI's typecheck job runs it.
+
+**Harden pass (gap-analysis follow-up)** — addressed 7/8 findings from an independent peer-review scan; defers the 8th (importlib helper consolidation — 6+ call sites, scope creep):
+
+- **#1 double stderr print** — `_first_valid_base_ref` was called by BOTH `_changed_source_files` and `_changed_line_map`, emitting the structured `resolved base ref` line twice per `main()` invocation. Fixed by resolving once in `main()` + threading the result through both consumers via a new `resolved_base` keyword arg. Pinned by `test_resolved_base_threaded_through_avoids_double_print`.
+- **#2 hardcoded `"origin/main"` literal** — clones whose remote default branch is `master`/`develop`/`trunk` previously fell off the chain. Replaced with `_fallback_base_ref()` reading the new `COVERAGE_FALLBACK_BASE_REF` env var; default `"origin/main"` preserves prior behaviour exactly. Pinned by `test_fallback_base_ref_env_overrides_default` + `test_fallback_base_ref_defaults_to_origin_main`.
+- **#3 hardcoded `timeout=300` in mypy regression test** — slow CI runners (or the Jetson) might need more. Replaced with `_MYPY_TIMEOUT_S = int(os.environ.get("MYPY_TIMEOUT_S", "300"))`; operator overrides via env.
+- **#4 hardcoded stderr prefix `"[check_branch_coverage]"`** — appeared in two `print` calls. Centralised in a module-level `_SCRIPT_TAG: Final[str]` constant + both call sites reference it. Pinned by `test_script_tag_constant_used_by_stderr_lines`.
+- **#6 `_git` helper naming collision with script's `_run`** — renamed to `_git_checked` to make the `check=True`-raises-on-failure contract visible vs the script's `check=False`-returns-CompletedProcess `_run`.
+- **#7 `types-cachetools>=5.3` pin wider than runtime `cachetools>=5.0`** — environments resolving runtime `cachetools<5.3` got mismatched stubs. Lowered to `>=5.0,<6` so stub range matches the runtime contract + caps the major to defend against a hypothetical breaking 6.0 release.
+- **#8 tier rationale undocumented** — added a "Tier rationale" paragraph to both new test file docstrings: this is script-/annotation-level utility code, so unit + slow-regression are the canonical tiers; integration / e2e / property / hardware tiers are N/A — formally considered + declined.
+- **#5 importlib-helper consolidation DEFERRED** — same `spec_from_file_location` pattern appears in 6+ test files across the repo. The right fix is a shared `tests/conftest.py` helper; out of scope for this PR. Tracked as future tech-debt.
+
+**Verification** — all green on workstation (post-harden):
+
+- `ruff check src/ tests/` (pinned `ruff==0.8.0`, matches CI) — clean
+- `ruff format --check src/ tests/` — 762 files already formatted
+- `mypy --strict --no-incremental src/mousedroid/` — Success: no issues found in 289 source files
+- PR-105b suite (17 tests: 7 factory + 10 script-helper) — all passing
+- Full non-hardware-non-slow suite: **4,965 passed, 22 skipped, 10 deselected** in 169 s
+- Branch coverage gate: `factory.py` 100% on the 1 changed line (gate ≥85% held)
+- Mypy regression guard (`test_pr105b_mypy_clean.py`) — passes in 282 s, env-overridable via `MYPY_TIMEOUT_S`
+- Coverage script self-validation: `scripts/check_branch_coverage.py --base-ref HEAD --min 0` → `resolved base ref: origin/HEAD`, gate passed; no double-emit of the resolved-ref line
+- Security audit (security-auditor subagent): PASS — no hardcoded credentials, list-form subprocess argv, read-only git ops
+- Independent code reviewer (feature-dev:code-reviewer subagent): APPROVE on the pre-harden surface; gap-analysis pass found 8 findings (7 addressed inline, 1 deferred as scope creep)
+
 ### Added — PR #104 harden-3: Test pyramid expansion + project-wide doc hardening + reviewer-follow-up fixes
 
 Final pre-PR pass that closes the dashboard-stability sprint. Builds on the PR #104 harden-1 (smoke hardening) and harden-2 (live-dashboard enablement) blocks below.

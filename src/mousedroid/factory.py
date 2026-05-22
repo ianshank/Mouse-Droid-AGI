@@ -59,6 +59,7 @@ if TYPE_CHECKING:
     from mousedroid.efficiency.tensorrt import TensorRTCompilerProtocol
     from mousedroid.experience.logger import ExperienceLogger
     from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
+    from mousedroid.harness.approval.protocol import ApprovalGateProtocol
     from mousedroid.harness.protocol import TaskTrackerProtocol
     from mousedroid.health.monitor import HealthMonitor
     from mousedroid.llm_gateway.mission_parser import MissionParserProtocol
@@ -2213,7 +2214,7 @@ def _resolve_approval_callback(
     return target  # type: ignore[no-any-return]
 
 
-def build_approval_gate(cfg: Settings) -> Any:
+def build_approval_gate(cfg: Settings) -> ApprovalGateProtocol:
     """Build the configured :class:`ApprovalGateProtocol`.
 
     The default ``"auto"`` gate approves every request (the
@@ -2226,13 +2227,19 @@ def build_approval_gate(cfg: Settings) -> Any:
     Returns:
         A concrete approval gate implementing ``ApprovalGateProtocol``.
     """
+    # PR-105b: tighten the `inner` annotation from ``object`` to the
+    # protocol so ``PolicyApprovalGate(inner, ...)`` typechecks under
+    # ``mypy --strict`` (closes the PR-98-introduced type hole reported
+    # at factory.py:2262). All concrete branches below assign a
+    # protocol-conforming instance — the previous ``object`` annotation
+    # was an over-broad placeholder.
     from mousedroid.harness.approval.auto import AutoApproveGate
     from mousedroid.harness.approval.policy import PolicyApprovalGate
 
     if cfg.harness is None:
         return AutoApproveGate()
     approval = cfg.harness.approval
-    inner: object
+    inner: ApprovalGateProtocol
     if approval.gate == "auto":
         inner = AutoApproveGate()
     elif approval.gate == "cli":
