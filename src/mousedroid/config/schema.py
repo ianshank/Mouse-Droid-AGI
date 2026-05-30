@@ -4401,9 +4401,7 @@ class USBCDiscoveryConfig(BaseModel):
     @model_validator(mode="after")
     def _require_endpoints_when_enabled(self) -> USBCDiscoveryConfig:
         if self.enabled and not self.required_endpoints:
-            raise ValueError(
-                "usbc_discovery.enabled=true requires at least one required_endpoint"
-            )
+            raise ValueError("usbc_discovery.enabled=true requires at least one required_endpoint")
         return self
 
 
