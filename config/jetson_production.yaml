@@ -90,6 +90,20 @@ lidar:
   scan_acquisition_timeout_s: 1.0
   n_sectors: 36
 
+# USB-C smoke gate — globs intentionally reuse the existing by-id paths so
+# changing the serial_port above propagates to discovery automatically. Plan:
+# docs/superpowers/plans/2026-05-30-jetson-rover-usbc-smoke-validation.md
+usbc_discovery:
+  enabled: true
+  by_id_root: "/dev/serial/by-id"
+  required_endpoints:
+    - name: rover_esp32
+      by_id_glob: "usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_*-if00-port0"
+      required: true
+    - name: lidar_ld19
+      by_id_glob: "usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_*-if00-port0"
+      required: true
+
 camera:
   # Arducam IMX708 dual via Jetson CSI (nvarguscamerasrc / libargus).
   # DT overlay: tegra234-p3767-camera-p3768-imx708-dual.dtbo.

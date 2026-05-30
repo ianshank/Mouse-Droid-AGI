@@ -377,3 +377,12 @@ rover:
 #   power_mode: "performance"
 #   timeout_ms: 100.0
 #   fallback_on_failure: true
+
+# USB-C smoke gate (default overlay). Disabled here so tests on non-Jetson
+# hosts and bare ``Settings()`` instantiations remain inert. Production
+# overlays opt in by setting ``usbc_discovery.enabled: true`` and listing
+# required endpoints (see config/jetson_production.yaml).
+usbc_discovery:
+  enabled: false
+  by_id_root: "/dev/serial/by-id"
+  required_endpoints: []
