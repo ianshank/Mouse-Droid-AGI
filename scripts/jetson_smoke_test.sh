@@ -281,6 +281,33 @@ test_system() {
 }
 
 # ---------------------------------------------------------------------------
+# 1b. USB-C enumeration (config-driven, gated on usbc_discovery.enabled)
+# ---------------------------------------------------------------------------
+
+test_usbc() {
+    log_section "USB-C Enumeration"
+    log_step "Running scripts/check_usbc_devices.py"
+
+    if [[ ${#CONFIG_ARGS[@]} -eq 0 ]]; then
+        record_skip "usbc enumeration" "no MOUSEDROID_JETSON_CONFIGS overlays supplied"
+        return
+    fi
+
+    local output rc
+    set +e
+    output="$("${PYTHON}" "${PROJECT_DIR}/scripts/check_usbc_devices.py" "${CONFIG_ARGS[@]}" 2>&1)"
+    rc=$?
+    set -e
+
+    echo "${output}"
+    if [[ ${rc} -eq 0 ]]; then
+        record_pass "usbc enumeration"
+    else
+        record_fail "usbc enumeration" "missing required endpoint(s) (see above)"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # 2. GPIO
 # ---------------------------------------------------------------------------
 
@@ -454,6 +481,35 @@ test_motor() {
         local failed_count
         failed_count="$(echo "${pytest_output}" | grep -oP '\d+ failed' | grep -oP '\d+' || echo "?")"
         record_fail "motor loopback smoke" "${failed_count} test(s) failed"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# 3c. Power chain smoke (battery + zero-vel + e-stop within budget)
+# ---------------------------------------------------------------------------
+
+test_power() {
+    log_section "Power Chain Smoke"
+    log_step "Running power-chain hardware test"
+    local test_file="${PROJECT_DIR}/tests/hardware/test_power_chain_smoke.py"
+    if [[ ! -f "${test_file}" ]]; then
+        record_skip "power chain smoke" "test_power_chain_smoke.py not found"
+        return
+    fi
+
+    if ! "${PYTHON}" -m pytest --version >/dev/null 2>&1; then
+        record_skip "power chain smoke" "pytest not available in selected Python runtime"
+        return
+    fi
+
+    local pytest_output
+    if pytest_output="$(MOUSEDROID_JETSON_CONFIGS="${CONFIGS_CSV}" MOUSEDROID_MOCK_HARDWARE=false \
+            "${PYTHON}" -m pytest -m hardware -ra -v "${test_file}" 2>&1)"; then
+        echo "${pytest_output}"
+        record_pass "power chain smoke"
+    else
+        echo "${pytest_output}"
+        record_fail "power chain smoke" "see output for battery/e-stop violation"
     fi
 }
 
@@ -684,9 +740,11 @@ main() {
     case "${step}" in
         all)
             test_system
+            test_usbc
             test_gpio
             test_serial
             test_motor
+            test_power
             test_camera
             test_audio
             test_lidar
@@ -699,9 +757,11 @@ main() {
             test_e2e
             ;;
         system)   test_system ;;
+        usbc)     test_usbc ;;
         gpio)     test_gpio ;;
         serial)   test_serial ;;
         motor)    test_motor ;;
+        power)    test_power ;;
         camera)   test_camera ;;
         audio)    test_audio ;;
         lidar)    test_lidar ;;
@@ -714,7 +774,7 @@ main() {
         e2e)      test_e2e ;;
         *)
             echo "Unknown step: ${step}"
-            echo "Valid steps: all, system, gpio, serial, motor, camera, audio, lidar, speaker, voice, pcie_ssd, hailo, app, pytest, e2e"
+            echo "Valid steps: all, system, usbc, gpio, serial, motor, power, camera, audio, lidar, speaker, voice, pcie_ssd, hailo, app, pytest, e2e"
             exit 1
             ;;
     esac
