@@ -128,3 +128,13 @@ class BaseESP32Driver(ABC):
         await self._send_command({"T": ESP32_CMD_TYPE_STOP})
         self._last_velocity = (0.0, 0.0, 0.0)
         _log.warning("esp32_emergency_stop")
+
+
+def log_command_dispatch(*, driver_name: str, vx: float, vy: float, omega: float) -> None:
+    """Emit a structured INFO event used by smoke-time triage.
+
+    Centralised so every driver (Serial, WiFi, Mock, Resilient) can emit the
+    same event shape — operators grepping smoke logs for ``command_dispatch``
+    get a uniform record regardless of which driver fielded the call.
+    """
+    _log.info("command_dispatch", driver=driver_name, vx=vx, vy=vy, omega=omega)
