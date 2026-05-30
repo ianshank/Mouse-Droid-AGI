@@ -72,4 +72,5 @@ def test_cli_short_circuits_when_discovery_disabled(tmp_path: Path) -> None:
         check=False,
     )
     assert result.returncode == 0
-    assert "usbc_discovery not configured" in result.stderr
+    assert "usbc_discovery" in result.stderr  # message identifies the gate
+    assert "nothing to check" in result.stderr

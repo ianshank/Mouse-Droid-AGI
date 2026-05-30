@@ -48,8 +48,11 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
     settings = load_settings(*args.config)
-    if settings.usbc_discovery is None:
-        print("usbc_discovery not configured; nothing to check", file=sys.stderr)
+    if settings.usbc_discovery is None or not settings.usbc_discovery.enabled:
+        print(
+            "usbc_discovery not configured or disabled; nothing to check",
+            file=sys.stderr,
+        )
         return 0
 
     results = enumerate_usbc_devices(settings.usbc_discovery)
