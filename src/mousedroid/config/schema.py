@@ -4370,6 +4370,43 @@ class OpenClawConfig(BaseModel):
     )
 
 
+class USBCEndpointSpec(BaseModel):
+    """A single USB-C endpoint the smoke gate expects to find under by-id."""
+
+    name: str = Field(..., min_length=1, description="Logical role, e.g. rover_esp32")
+    by_id_glob: str = Field(
+        ...,
+        min_length=1,
+        description="Glob applied under by_id_root (e.g. '*CP2102N*-if00-port0').",
+    )
+    required: bool = Field(
+        True,
+        description="If False, missing endpoint is a WARN instead of FAIL.",
+    )
+
+
+class USBCDiscoveryConfig(BaseModel):
+    """Config-driven enumeration of USB-C endpoints required for smoke."""
+
+    enabled: bool = Field(
+        False,
+        description="Master switch — keeps default YAML inert.",
+    )
+    by_id_root: Path = Field(
+        default=Path("/dev/serial/by-id"),
+        description="Filesystem root scanned for endpoints.",
+    )
+    required_endpoints: list[USBCEndpointSpec] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _require_endpoints_when_enabled(self) -> USBCDiscoveryConfig:
+        if self.enabled and not self.required_endpoints:
+            raise ValueError(
+                "usbc_discovery.enabled=true requires at least one required_endpoint"
+            )
+        return self
+
+
 class Settings(BaseSettings):
     """Root configuration — single source of truth for all settings.
 
@@ -4482,6 +4519,13 @@ class Settings(BaseSettings):
     mcp: MCPConfig | None = Field(
         None,
         description="MCP server config (None=disabled, backwards compatible)",
+    )
+    usbc_discovery: USBCDiscoveryConfig | None = Field(
+        None,
+        description=(
+            "Optional USB-C enumeration gate used by the Jetson smoke "
+            "scripts. None disables (backwards compatible)."
+        ),
     )
     three_laws: ThreeLawsConfig = Field(default_factory=_settings_default_factory(ThreeLawsConfig))
     dual_stream_training: DualStreamTrainingConfig = Field(
