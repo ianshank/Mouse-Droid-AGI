@@ -48,7 +48,7 @@ def jetson_settings() -> Settings:
 
 
 @pytest.fixture
-def allow_motion(jetson_settings: "Settings") -> bool:
+def allow_motion(jetson_settings: Settings) -> bool:
     """True only when the operator has explicitly enabled the motion gate.
 
     Surfaces ``ESP32Config.smoke_test_allow_motion`` as a fixture so hardware
