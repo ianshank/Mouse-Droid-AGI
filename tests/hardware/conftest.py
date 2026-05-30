@@ -45,3 +45,13 @@ def jetson_settings() -> Settings:
         settings = settings.model_copy(update={"mock_hardware": True})
 
     return settings
+
+
+@pytest.fixture
+def allow_motion(jetson_settings: "Settings") -> bool:
+    """True only when the operator has explicitly enabled the motion gate.
+
+    Surfaces ``ESP32Config.smoke_test_allow_motion`` as a fixture so hardware
+    tests can branch on it without re-importing Settings each time.
+    """
+    return bool(jetson_settings.esp32.smoke_test_allow_motion)
