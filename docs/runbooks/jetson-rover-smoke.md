@@ -59,16 +59,34 @@ Exit code 0 means every `required_endpoints` entry in
 
 The motor and power-chain stages default to **dispatching zero-velocity
 commands** so an untethered rover does not roll while the smoke runs
-unattended. Override only when the rover is on rollers or tethered:
+unattended. Two env vars gate motion, used by two different layers:
+
+| Layer | Env var | Default | Purpose |
+|-------|---------|---------|---------|
+| Bash `jetson_smoke_test.sh motor` (direct invocation) | `MOUSEDROID_SMOKE_ALLOW_MOTION` | `0` | Bash-level skip guard on the `test_motor` stage. |
+| Python `assert_power_chain` / `tests/hardware/test_motor_smoke.py` | `MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION` | `false` | Pydantic-resolved gate on `ESP32Config.smoke_test_allow_motion`. |
+
+**Through the wrapper (`jetson_full_smoke_run.sh`)** — the wrapper already
+sets the bash env var when running the motor stage, so operators only
+need to override the Pydantic one:
 
 ```bash
 MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION=true \
     bash scripts/jetson_full_smoke_run.sh
 ```
 
-This routes through `ESP32Config.smoke_test_allow_motion`. The actual
-setpoint comes from `ESP32Config.smoke_test_velocity_mps`; the assertion
-window from `smoke_test_min_velocity_fraction`.
+**Direct invocation (`jetson_smoke_test.sh motor`)** — operators must set
+BOTH env vars so the bash gate AND the Python gate let motion through:
+
+```bash
+MOUSEDROID_SMOKE_ALLOW_MOTION=1 \
+MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION=true \
+    bash scripts/jetson_smoke_test.sh motor
+```
+
+The actual setpoint comes from `ESP32Config.smoke_test_velocity_mps`
+(setting `0.0` permanently locks the smoke harness to zero-motion); the
+assertion window from `smoke_test_min_velocity_fraction`.
 
 ## Triage matrix
 

@@ -264,6 +264,14 @@ ExecStartPre=/bin/cp /opt/mousedroid/config/jetson_production.yaml /etc/mousedro
   the `spec_from_file_location` pattern appears in 6+ test files across
   the repo. Consolidate behind a shared `tests/conftest.py` helper so a
   future change can update one site instead of N.
+- **SHA-pin GitHub action references** (CodeRabbit PR #106 finding 4) —
+  `.github/workflows/ci.yml` currently uses `actions/checkout@v4` and
+  `actions/setup-python@v5` tag references. Security best practice is
+  SHA pinning (`actions/checkout@<sha>`) to defend against tag rebasing
+  / supply-chain attacks. Best done as a single sweep across the
+  workflow file with Dependabot configured to auto-bump the SHAs.
+  Deferred from PR #106 because it spans multiple workflows + needs a
+  Dependabot config update in the same PR for sustainable maintenance.
 
 ---
 

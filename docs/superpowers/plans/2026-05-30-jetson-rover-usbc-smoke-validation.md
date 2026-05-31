@@ -1312,7 +1312,7 @@ Create `docs/runbooks/jetson-rover-smoke.md` with these sections (write each sec
 
 ## Quick start
 
-```
+```bash
 bash scripts/jetson_full_smoke_run.sh
 ```
 
