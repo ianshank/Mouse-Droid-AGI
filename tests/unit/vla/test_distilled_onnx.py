@@ -218,8 +218,20 @@ class TestImportGraphIsolation:
 
         Run in a fresh subprocess so any prior test that injected a stub
         ``onnxruntime`` into the parent ``sys.modules`` cannot mask a
-        regression here.
+        regression here. PYTHONPATH is propagated explicitly so the
+        spawned interpreter can resolve ``mousedroid.vla.policy`` —
+        pytest's ``pythonpath = ['src', '.']`` does not survive the
+        subprocess boundary.
         """
+        import os
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[3]
+        env = dict(os.environ)
+        extra = os.pathsep.join([str(repo / "src"), str(repo)])
+        existing = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = extra + (os.pathsep + existing if existing else "")
+
         script = textwrap.dedent(
             """
             import sys
@@ -238,6 +250,7 @@ class TestImportGraphIsolation:
             capture_output=True,
             text=True,
             check=False,
+            env=env,
         )
         assert result.returncode == 0, (
             f"isolation check failed:\nstdout={result.stdout}\n" f"stderr={result.stderr}"

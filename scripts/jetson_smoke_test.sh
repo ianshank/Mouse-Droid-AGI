@@ -288,14 +288,18 @@ test_usbc() {
     log_section "USB-C Enumeration"
     log_step "Running scripts/check_usbc_devices.py"
 
-    if [[ ${#CONFIG_ARGS[@]} -eq 0 ]]; then
-        record_skip "usbc enumeration" "no MOUSEDROID_JETSON_CONFIGS overlays supplied"
-        return
-    fi
-
+    # check_usbc_devices.py auto-resolves overlays via resolve_runtime_config_paths()
+    # when --config is omitted, so we no longer need a skip-if-empty guard
+    # here (which previously caused the blocking-stage silent-bypass that
+    # CodeRabbit flagged: record_skip → return 0 → wrapper sees PASS even
+    # when nothing was actually checked).
     local output rc
     set +e
-    output="$("${PYTHON}" "${PROJECT_DIR}/scripts/check_usbc_devices.py" "${CONFIG_ARGS[@]}" 2>&1)"
+    if [[ ${#CONFIG_ARGS[@]} -gt 0 ]]; then
+        output="$("${PYTHON}" "${PROJECT_DIR}/scripts/check_usbc_devices.py" "${CONFIG_ARGS[@]}" 2>&1)"
+    else
+        output="$("${PYTHON}" "${PROJECT_DIR}/scripts/check_usbc_devices.py" 2>&1)"
+    fi
     rc=$?
     set -e
 

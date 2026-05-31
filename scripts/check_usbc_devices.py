@@ -30,6 +30,9 @@ from mousedroid.diagnostics.usbc import (  # noqa: E402
     EndpointStatus,
     enumerate_usbc_devices,
 )
+from mousedroid.validation.runtime import (  # noqa: E402
+    resolve_runtime_config_paths,
+)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -37,9 +40,15 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--config",
         action="append",
-        required=True,
+        default=None,
         type=Path,
-        help="One or more YAML overlays (repeatable).",
+        help=(
+            "One or more YAML overlays (repeatable). When omitted, falls back "
+            "to the resolve_runtime_config_paths() chain "
+            "(MOUSEDROID_JETSON_CONFIGS env var + MOUSEDROID_CONFIG_DIR + "
+            "config/default.yaml), aligning with the rest of the smoke "
+            "surface so an operator can run this script with zero arguments."
+        ),
     )
     p.add_argument("--json", action="store_true", help="Emit JSON instead of human output.")
     return p.parse_args()
@@ -47,7 +56,11 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
-    settings = load_settings(*args.config)
+    # When --config is omitted, fall back to the runtime resolver so this
+    # script behaves identically to the orchestrator + smoke wrappers
+    # (single source of truth for which overlays apply on this host).
+    config_paths = resolve_runtime_config_paths(args.config)
+    settings = load_settings(*config_paths)
     if settings.usbc_discovery is None or not settings.usbc_discovery.enabled:
         print(
             "usbc_discovery not configured or disabled; nothing to check",

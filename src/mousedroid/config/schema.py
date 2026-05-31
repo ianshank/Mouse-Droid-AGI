@@ -479,6 +479,20 @@ class ESP32Config(BaseModel):
         gt=0,
         description="Probe interval while degraded — poll once per N seconds instead of every tick",
     )
+    debug_log_max_chars: int = Field(
+        200,
+        ge=16,
+        le=4096,
+        description=(
+            "Maximum character length for raw serial-line payloads emitted in "
+            "DEBUG / WARNING log events (``esp32_raw_line``, "
+            "``esp32_non_json_response``, ``esp32_response_not_object``). The "
+            "default 200 keeps log files compact during normal smoke runs; "
+            "increase to 1024+ when triaging firmware-protocol drift where "
+            "the full payload matters. Lower bound 16 ensures the truncated "
+            'string carries at least the JSON-framing bytes ``{"T": ...}``.'
+        ),
+    )
 
 
 class ExperienceConfig(BaseModel):
@@ -4400,7 +4414,21 @@ class USBCDiscoveryConfig(BaseModel):
         default=Path("/dev/serial/by-id"),
         description="Filesystem root scanned for endpoints.",
     )
-    required_endpoints: list[USBCEndpointSpec] = Field(default_factory=list)
+    required_endpoints: list[USBCEndpointSpec] = Field(
+        default_factory=list,
+        description=(
+            "Ordered list of USB-C endpoints the smoke gate must resolve. "
+            "Each entry declares a ``name`` (operator-readable handle used "
+            "in structured logs + factory overrides like "
+            "``_resolve_esp32_serial_via_usbc_discovery('rover_esp32')``), a "
+            "``by_id_glob`` (matched against ``by_id_root``), and an "
+            "optional ``required`` bool (True → MISSING is FAIL, False → "
+            "WARN). Empty by default so non-discovery overlays load "
+            "unchanged; populate on the rover-side production overlay. "
+            "Validated by ``_require_endpoints_when_enabled`` — an empty "
+            "list with ``enabled=True`` is rejected at YAML-load time."
+        ),
+    )
 
     @model_validator(mode="after")
     def _require_endpoints_when_enabled(self) -> USBCDiscoveryConfig:

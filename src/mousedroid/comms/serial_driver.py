@@ -231,19 +231,28 @@ class SerialESP32Driver(BaseESP32Driver):
         if not raw:
             self._record_timeout()
             return {}
-        _log.debug("esp32_raw_line", line=raw[:200], len=len(raw))
+        # Truncation length is config-driven (cfg.debug_log_max_chars) so
+        # operators triaging firmware-protocol drift can widen the window
+        # without editing source. Default 200 stays compact for normal smoke
+        # runs; bump via MOUSEDROID_ESP32__DEBUG_LOG_MAX_CHARS for triage.
+        truncate = self._cfg.debug_log_max_chars
+        _log.debug("esp32_raw_line", line=raw[:truncate], len=len(raw))
         self._record_success()
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError as exc:
             _log.warning(
                 "esp32_non_json_response",
-                line=raw[:200],
+                line=raw[:truncate],
                 error=str(exc),
             )
             return {}
         if not isinstance(parsed, dict):
-            _log.warning("esp32_response_not_object", line=raw[:200], got=type(parsed).__name__)
+            _log.warning(
+                "esp32_response_not_object",
+                line=raw[:truncate],
+                got=type(parsed).__name__,
+            )
             return {}
         return parsed
 

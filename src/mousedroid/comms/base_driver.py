@@ -93,7 +93,13 @@ class BaseESP32Driver(ABC):
         """Send velocity command as PWM values.
 
         Converts physical velocity setpoints to the integer PWM range and
-        dispatches the command via the transport layer.
+        dispatches the command via the transport layer. Emits the uniform
+        ``command_dispatch`` INFO event (via :func:`log_command_dispatch`)
+        so operators grepping smoke logs see one consistent record shape
+        regardless of which transport (serial / wifi / mock / resilient
+        wrapper) fielded the call. The original per-call DEBUG event
+        ``esp32_velocity_sent`` is retained for backwards compatibility
+        with existing log-greps.
 
         Args:
             vx: Forward velocity in m/s.
@@ -103,6 +109,16 @@ class BaseESP32Driver(ABC):
         cmd = build_velocity_cmd(vx, vy, omega, self._cfg)
         await self._send_command(cmd)
         self._last_velocity = (vx, vy, omega)
+        # Uniform INFO-level dispatch event for smoke-triage greps.
+        # Uses the concrete subclass name so the resilient wrapper still
+        # surfaces the *inner* transport in ``driver=`` for traceability.
+        log_command_dispatch(
+            driver_name=type(self).__name__,
+            vx=vx,
+            vy=vy,
+            omega=omega,
+        )
+        # Per-driver DEBUG event preserved (existing log-grep recipes still work).
         _log.debug("esp32_velocity_sent", vx=vx, vy=vy, omega=omega)
 
     async def read_encoders(self) -> EncoderReading:

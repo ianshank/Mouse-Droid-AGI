@@ -662,10 +662,17 @@ def test_offline_rl_config_all_phase21_fields_compose():
 # ---------------------------------------------------------------------------
 
 
-def test_usbc_discovery_optional_defaults_to_none():
-    """Settings must instantiate without an explicit usbc_discovery block."""
+def test_usbc_discovery_optional_defaults_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Settings must instantiate without an explicit usbc_discovery block.
+
+    Explicitly forces ``MOUSEDROID_MOCK_HARDWARE=true`` so the test does
+    not silently depend on the ambient environment (CodeRabbit finding 10).
+    A local run with ``MOUSEDROID_MOCK_HARDWARE=false`` previously made
+    this test fail for reasons unrelated to USB-C config defaults.
+    """
     from mousedroid.config.schema import Settings
 
+    monkeypatch.setenv("MOUSEDROID_MOCK_HARDWARE", "true")
     s = Settings()
     assert s.usbc_discovery is None
 
