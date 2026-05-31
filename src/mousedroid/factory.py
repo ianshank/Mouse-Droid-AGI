@@ -54,7 +54,7 @@ if TYPE_CHECKING:
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.common.time.protocol import ClockProtocol
     from mousedroid.common.tools.registry import ToolRegistry
-    from mousedroid.config.schema import ESP32Config, Settings, UltrasonicConfig
+    from mousedroid.config.schema import ESP32Config, LLMConfig, Settings, UltrasonicConfig
     from mousedroid.curiosity.protocol import CuriosityProtocol
     from mousedroid.efficiency.tensorrt import TensorRTCompilerProtocol
     from mousedroid.experience.logger import ExperienceLogger

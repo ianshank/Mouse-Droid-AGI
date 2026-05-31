@@ -1,8 +1,8 @@
 """LLM gateway for natural-language goal translation."""
 
-from mousedroid.llm_gateway.anthropic_gateway import AnthropicLLMGateway
+from __future__ import annotations
+
 from mousedroid.llm_gateway.config import GatewayConfig
-from mousedroid.llm_gateway.fallback_gateway import FallbackLLMGateway
 from mousedroid.llm_gateway.gateway import LLMGateway
 from mousedroid.llm_gateway.mission_parser import (
     IntentType,
@@ -12,16 +12,16 @@ from mousedroid.llm_gateway.mission_parser import (
 )
 from mousedroid.llm_gateway.protocol import GoalVector, LLMGatewayProtocol
 
-# NOTE: ``OpenAICompatibleLLMGateway`` is intentionally NOT re-exported here.
-# It imports ``aiohttp`` (an optional ``[telemetry]`` dependency) at module
-# load time; eagerly importing it would force that dep on every
-# ``import mousedroid.llm_gateway``. The factory imports it lazily instead.
-# ``AnthropicLLMGateway`` is safe to export — its SDK import is deferred to
-# ``start()`` — and ``FallbackLLMGateway`` has no heavy imports.
+# NOTE: the concrete cloud/composite gateways (``AnthropicLLMGateway``,
+# ``FallbackLLMGateway``) and ``OpenAICompatibleLLMGateway`` are intentionally
+# NOT re-exported here. Per the CLAUDE.md DI invariant, concrete gateway types
+# are imported only inside the :mod:`mousedroid.factory` builders; application
+# code depends on :class:`LLMGatewayProtocol`. (``OpenAICompatibleLLMGateway``
+# additionally imports ``aiohttp`` — an optional ``[telemetry]`` dep — at module
+# load time, so eager re-export would force that dependency.) Import the
+# concrete classes from their submodules directly when needed (e.g. tests).
 
 __all__ = [
-    "AnthropicLLMGateway",
-    "FallbackLLMGateway",
     "GatewayConfig",
     "GoalVector",
     "IntentType",

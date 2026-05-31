@@ -326,9 +326,10 @@ async def test_start_runs_children_concurrently_not_sequentially() -> None:
     secondary = _SlowGateway()
     gw = FallbackLLMGateway(primary, secondary)
 
-    start = asyncio.get_event_loop().time()
+    loop = asyncio.get_running_loop()
+    start = loop.time()
     await gw.start()
-    elapsed = asyncio.get_event_loop().time() - start
+    elapsed = loop.time() - start
 
     assert primary.started
     assert secondary.started
