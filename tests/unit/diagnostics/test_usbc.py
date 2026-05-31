@@ -10,6 +10,7 @@ from mousedroid.config.schema import USBCDiscoveryConfig, USBCEndpointSpec
 from mousedroid.diagnostics.usbc import (
     EndpointStatus,
     enumerate_usbc_devices,
+    resolve_endpoint,
 )
 
 
@@ -88,3 +89,44 @@ def test_enumerate_picks_first_match_when_multiple_endpoints_match(
     assert result["rover"].resolved_path is not None
     # First sorted match wins → AAA before ZZZ.
     assert "AAA" in result["rover"].resolved_path.name
+
+
+def test_resolve_endpoint_returns_path_when_present(fake_by_id_root: Path) -> None:
+    """resolve_endpoint(name) returns the same path enumerate_usbc_devices would."""
+    cfg = USBCDiscoveryConfig(
+        enabled=True,
+        by_id_root=fake_by_id_root,
+        required_endpoints=[
+            USBCEndpointSpec(name="rover_esp32", by_id_glob="*CP2102N*-if00-port0"),
+        ],
+    )
+    path = resolve_endpoint(cfg, "rover_esp32")
+    assert path is not None
+    assert "CP2102N" in path.name
+
+
+def test_resolve_endpoint_returns_none_when_missing(fake_by_id_root: Path) -> None:
+    cfg = USBCDiscoveryConfig(
+        enabled=True,
+        by_id_root=fake_by_id_root,
+        required_endpoints=[
+            USBCEndpointSpec(name="aux", by_id_glob="*NONEXISTENT*"),
+        ],
+    )
+    assert resolve_endpoint(cfg, "aux") is None
+
+
+def test_resolve_endpoint_returns_none_when_name_unknown(fake_by_id_root: Path) -> None:
+    cfg = USBCDiscoveryConfig(
+        enabled=True,
+        by_id_root=fake_by_id_root,
+        required_endpoints=[
+            USBCEndpointSpec(name="rover_esp32", by_id_glob="*CP2102N*-if00-port0"),
+        ],
+    )
+    assert resolve_endpoint(cfg, "lidar") is None
+
+
+def test_resolve_endpoint_returns_none_when_discovery_disabled() -> None:
+    cfg = USBCDiscoveryConfig()
+    assert resolve_endpoint(cfg, "rover_esp32") is None

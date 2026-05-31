@@ -36,6 +36,26 @@ class EndpointResult:
     status: EndpointStatus
 
 
+def resolve_endpoint(cfg: USBCDiscoveryConfig, name: str) -> Path | None:
+    """Resolve a single endpoint name to its current by-id path, or None.
+
+    Returns None when discovery is disabled, the named endpoint is not
+    declared, or no by-id file matches the configured glob. Callers can
+    use this to override a stale literal ``serial_port`` config field
+    (e.g. ``esp32.serial_port``) with the live USB-C device path.
+    """
+    if not cfg.enabled:
+        return None
+    for spec in cfg.required_endpoints:
+        if spec.name != name:
+            continue
+        matches = sorted(cfg.by_id_root.glob(spec.by_id_glob))
+        if matches:
+            return matches[0]
+        return None
+    return None
+
+
 def enumerate_usbc_devices(
     cfg: USBCDiscoveryConfig,
 ) -> dict[str, EndpointResult]:
