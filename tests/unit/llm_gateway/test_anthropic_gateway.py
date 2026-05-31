@@ -405,3 +405,22 @@ async def test_conforms_to_protocol() -> None:
 
     gw = AnthropicLLMGateway(_config(), sdk=_make_sdk(response=_text_response("{}")))
     assert isinstance(gw, LLMGatewayProtocol)
+
+
+@pytest.mark.asyncio
+async def test_stop_clears_degraded_flag() -> None:
+    """Regression — code-reviewer PR #107 finding 1.
+
+    A previously-degraded gateway that is stopped and restarted should
+    not carry stale ``_degraded`` state through the gap between
+    ``stop()`` and the next ``start()``. ``start()`` already resets at
+    the top (mirrors the OpenAI-compatible gateway's pattern); ``stop()``
+    now mirrors that explicitly so a stop -> start cycle reflects only
+    the *new* startup outcome.
+    """
+    gw = AnthropicLLMGateway(_config(), sdk=_make_sdk(response=_text_response("{}")))
+    await gw.start()
+    gw._degraded = True  # simulate a prior failure that latched the flag
+    await gw.stop()
+    assert gw.is_degraded is False
+    assert gw.is_ready is False

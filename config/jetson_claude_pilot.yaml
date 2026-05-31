@@ -47,6 +47,14 @@ llm:
   max_tokens: 256
   max_command_len: 512
 
+  # Cloud Claude round-trips are typically 1-5 s wall-clock — well above
+  # the 500 ms default ``latency_target_ms`` which is calibrated for local
+  # GGUF. Without raising this, every normal cloud response logs an
+  # ``anthropic_gateway_slow`` WARNING, drowning real degradation signals
+  # (code-reviewer PR #107 finding 3). 5 s is generous for the median +
+  # tail of Claude Haiku; raise further if you switch to Sonnet/Opus.
+  latency_target_ms: 5000.0
+
   # Off-network fallback: a local GGUF model served in-process. llama_cpp
   # reads model_path (below) and ignores model_name, so no override is
   # needed. Switch to "openai_compatible" + set fallback_model_name to point

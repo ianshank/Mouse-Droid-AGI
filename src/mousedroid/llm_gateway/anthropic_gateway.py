@@ -345,10 +345,14 @@ class AnthropicLLMGateway:
         The async SDK manages its own connection pool; dropping the
         reference is sufficient. ``_ready`` is cleared so a subsequent
         :meth:`translate_mission` short-circuits to a neutral GoalVector
-        until :meth:`start` runs again.
+        until :meth:`start` runs again. ``_degraded`` is ALSO cleared so
+        a stop -> start cycle reflects only the *new* startup outcome —
+        a previously-degraded gateway that is rebuilt does not carry
+        stale state through the gap (code-reviewer PR #107 finding 1).
         """
         self._client = None
         self._ready = False
+        self._degraded = False
         _log.info("anthropic_gateway_stopped")
 
 

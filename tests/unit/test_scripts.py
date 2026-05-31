@@ -9,6 +9,7 @@ content, and Python module import integrity.
 from __future__ import annotations
 
 import ast
+import os
 import re
 import subprocess
 import sys
@@ -20,6 +21,28 @@ import pytest
 _REPO = Path(__file__).parent.parent.parent
 _SCRIPTS = _REPO / "scripts"
 _TRAINING = _REPO / "training"
+
+
+def _subprocess_env() -> dict[str, str]:
+    """Build a subprocess env that mirrors pytest's ``pythonpath = ['src', '.']``.
+
+    The ``training/`` CLI scripts ``import mousedroid.<...>``, which only
+    resolves when ``src/`` is on ``PYTHONPATH``. Pytest configures that
+    via ``[tool.pytest.ini_options] pythonpath`` in ``pyproject.toml`` —
+    but a bare ``subprocess.run([sys.executable, '-c', ...])`` spawns
+    Python with the *system* sys.path, dropping that pytest hook. Without
+    the explicit env propagation here, the import-smoke tests below all
+    fail with ``ModuleNotFoundError: No module named 'mousedroid.config'``
+    even though the package is reachable from the parent test process.
+    (Same fix landed in PR #106 commit 3a86477 — re-applied here because
+    PR #107 was branched off the pre-PR-#106 base; the import-smoke
+    failure is a rebase artifact, not a new regression.)
+    """
+    env = dict(os.environ)
+    extra = os.pathsep.join([str(_REPO / "src"), str(_REPO)])
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = extra + (os.pathsep + existing if existing else "")
+    return env
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +236,7 @@ class TestTrainingModuleImports:
             capture_output=True,
             text=True,
             cwd=str(_REPO),
+            env=_subprocess_env(),
         )
         assert result.returncode == 0, result.stderr
 
@@ -225,6 +249,7 @@ class TestTrainingModuleImports:
             capture_output=True,
             text=True,
             cwd=str(_REPO),
+            env=_subprocess_env(),
         )
         assert result.returncode == 0, result.stderr
 
@@ -235,6 +260,7 @@ class TestTrainingModuleImports:
             capture_output=True,
             text=True,
             cwd=str(_REPO),
+            env=_subprocess_env(),
         )
         assert result.returncode == 0, result.stderr
 
@@ -245,6 +271,7 @@ class TestTrainingModuleImports:
             capture_output=True,
             text=True,
             cwd=str(_REPO),
+            env=_subprocess_env(),
         )
         assert result.returncode == 0, result.stderr
 
@@ -255,6 +282,7 @@ class TestTrainingModuleImports:
             capture_output=True,
             text=True,
             cwd=str(_REPO),
+            env=_subprocess_env(),
         )
         assert result.returncode == 0, result.stderr
 
@@ -265,6 +293,7 @@ class TestTrainingModuleImports:
             capture_output=True,
             text=True,
             cwd=str(_REPO),
+            env=_subprocess_env(),
         )
         assert result.returncode == 0, result.stderr
 
@@ -277,6 +306,7 @@ class TestTrainingModuleImports:
             capture_output=True,
             text=True,
             cwd=str(_REPO),
+            env=_subprocess_env(),
         )
         assert result.returncode == 0, result.stderr
 

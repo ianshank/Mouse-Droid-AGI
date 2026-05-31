@@ -266,3 +266,112 @@ async def test_conforms_to_protocol() -> None:
 
     gw = FallbackLLMGateway(_FakeGateway(), _FakeGateway())
     assert isinstance(gw, LLMGatewayProtocol)
+
+
+# --------------------------------------------------------------------------- #
+# Round-2 supplemental tests — secondary guard + concurrent start + safe stop.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_secondary_unexpected_exception_returns_neutral_not_raised() -> None:
+    """Regression — code-reviewer PR #107 finding 2.
+
+    The composite docstring promises ``never raises on backend failure``.
+    Previously a non-ValueError raise from the secondary (e.g. local
+    GGUF malloc failure during failover) propagated raw to the
+    orchestrator. The fix wraps the secondary call symmetrically with
+    the primary's try/except.
+    """
+    primary = _FakeGateway(ready=False)  # forces secondary
+    secondary = _FakeGateway(raise_runtime_error=True)
+    gw = FallbackLLMGateway(primary, secondary)
+    # MUST return neutral, NOT raise.
+    result = await gw.translate_mission("go")
+    assert result == GoalVector()
+
+
+@pytest.mark.asyncio
+async def test_secondary_value_error_still_propagates() -> None:
+    """Symmetric with the primary's ValueError-propagates contract.
+
+    A caller-error rejection (empty / injection-rejected) from the
+    secondary should also propagate — both backends would reject the
+    same input identically, and the caller needs to see the error.
+    """
+    primary = _FakeGateway(ready=False)
+    secondary = _FakeGateway(raise_value_error=True)
+    gw = FallbackLLMGateway(primary, secondary)
+    with pytest.raises(ValueError, match="command rejected"):
+        await gw.translate_mission("nope")
+
+
+@pytest.mark.asyncio
+async def test_start_runs_children_concurrently_not_sequentially() -> None:
+    """Regression — code-reviewer PR #107 finding 5.
+
+    Sequential ``await primary.start(); await secondary.start()`` blocks
+    boot for ``T_primary + T_secondary``. ``asyncio.gather`` runs them
+    in parallel, so for two ~50ms starts the composite is ready in
+    ~50-60ms instead of ~100-110ms.
+    """
+    import asyncio
+
+    class _SlowGateway(_FakeGateway):
+        async def start(self) -> None:
+            await asyncio.sleep(0.05)
+            self.started = True
+
+    primary = _SlowGateway()
+    secondary = _SlowGateway()
+    gw = FallbackLLMGateway(primary, secondary)
+
+    start = asyncio.get_event_loop().time()
+    await gw.start()
+    elapsed = asyncio.get_event_loop().time() - start
+
+    assert primary.started
+    assert secondary.started
+    # <= 90ms means the two 50ms starts overlapped; sequential would be ≥100ms.
+    assert (
+        elapsed < 0.09
+    ), f"concurrent start should overlap; sequential ~100ms, got {elapsed * 1000:.1f}ms"
+
+
+@pytest.mark.asyncio
+async def test_start_does_not_raise_when_primary_start_fails() -> None:
+    """asyncio.gather(return_exceptions=True) swallows + logs the failure."""
+
+    class _FailingStartGateway(_FakeGateway):
+        async def start(self) -> None:
+            raise RuntimeError("primary cold-start crash")
+
+    primary = _FailingStartGateway()
+    secondary = _FakeGateway()
+    gw = FallbackLLMGateway(primary, secondary)
+    # MUST NOT raise.
+    await gw.start()
+    # Secondary still gets to start.
+    assert secondary.started
+
+
+@pytest.mark.asyncio
+async def test_stop_always_calls_secondary_even_when_primary_stop_raises() -> None:
+    """Regression — code-explorer PR #107 finding.
+
+    A failed primary ``stop`` (e.g. SDK connection-pool teardown error)
+    previously skipped the secondary's ``stop``, leaking the local
+    model's mmap'd memory on the long-running Jetson process. The fix
+    uses ``asyncio.gather(return_exceptions=True)`` so both flow through.
+    """
+
+    class _FailingStopGateway(_FakeGateway):
+        async def stop(self) -> None:
+            raise RuntimeError("primary stop blew up")
+
+    primary = _FailingStopGateway()
+    secondary = _FakeGateway()
+    gw = FallbackLLMGateway(primary, secondary)
+    # MUST NOT raise; secondary's stop MUST run.
+    await gw.stop()
+    assert secondary.stopped

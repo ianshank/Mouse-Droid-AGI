@@ -30,6 +30,7 @@ Failover semantics (the key design point — see PR peer review):
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import TYPE_CHECKING
 
@@ -111,9 +112,34 @@ class FallbackLLMGateway:
         return _is_degraded(self._primary) and _is_degraded(self._secondary)
 
     async def start(self) -> None:
-        """Start both children so the secondary is warm before it's needed."""
-        await self._primary.start()
-        await self._secondary.start()
+        """Start both children CONCURRENTLY so the secondary is warm sooner.
+
+        Both child ``start()`` calls are I/O-bound (cloud TLS handshake +
+        local GGUF model mmap) and fully independent. Sequential startup
+        blocks the rover for ``T_primary + T_secondary``;
+        ``asyncio.gather`` runs them in parallel so the rover is ready in
+        ``max(T_primary, T_secondary)`` instead (code-reviewer PR #107
+        finding 5). ``return_exceptions=True`` ensures a primary-start
+        failure does not abort the secondary's startup — the composite's
+        whole reason for existing is to gracefully degrade.
+        """
+        results = await asyncio.gather(
+            self._primary.start(),
+            self._secondary.start(),
+            return_exceptions=True,
+        )
+        # Surface any start-time exception in the structured log without
+        # raising — both children already mark themselves degraded on
+        # init failure, and the composite's ``is_ready`` / ``is_degraded``
+        # properties already reflect that. Re-raising would defeat the
+        # gateway's own degrade-don't-crash contract.
+        for tier_name, outcome in zip(("primary", "secondary"), results, strict=True):
+            if isinstance(outcome, BaseException):
+                _log.warning(
+                    "fallback_gateway_child_start_failed",
+                    tier=tier_name,
+                    error=f"{type(outcome).__name__}:{outcome}",
+                )
         _log.info(
             "fallback_gateway_started",
             primary_ready=self._primary.is_ready,
@@ -169,7 +195,23 @@ class FallbackLLMGateway:
                 return goal
             _log.warning("fallback_primary_to_secondary", was_retry_probe=primary_degraded)
 
-        goal = await self._secondary.translate_mission(nl_command)
+        try:
+            goal = await self._secondary.translate_mission(nl_command)
+        except ValueError:
+            # Caller error — propagate. Symmetric with the primary branch:
+            # neither backend gets a second chance at a malformed command.
+            raise
+        except Exception as exc:
+            # Preserve the composite-level "never raises on backend failure"
+            # invariant: a malloc failure / corrupted-weight crash in the
+            # local secondary becomes a neutral GoalVector + structured
+            # warning, not a crash propagating into the orchestrator's
+            # mission handler (code-reviewer PR #107 finding 2).
+            _log.warning(
+                "fallback_secondary_exception",
+                error=f"{type(exc).__name__}:{exc}",
+            )
+            return GoalVector()
         _log.debug(
             "fallback_served",
             served_by="secondary",
@@ -178,9 +220,26 @@ class FallbackLLMGateway:
         return goal
 
     async def stop(self) -> None:
-        """Stop both children."""
-        await self._primary.stop()
-        await self._secondary.stop()
+        """Stop both children — never let a primary failure skip the secondary.
+
+        ``asyncio.gather(return_exceptions=True)`` so a raise in one
+        child's ``stop`` does not skip the other's cleanup. A leaked
+        GGUF mmap or HTTP session in the secondary would be a real
+        resource leak on the long-running Jetson process (code-explorer
+        PR #107 finding).
+        """
+        results = await asyncio.gather(
+            self._primary.stop(),
+            self._secondary.stop(),
+            return_exceptions=True,
+        )
+        for tier_name, outcome in zip(("primary", "secondary"), results, strict=True):
+            if isinstance(outcome, BaseException):
+                _log.warning(
+                    "fallback_gateway_child_stop_failed",
+                    tier=tier_name,
+                    error=f"{type(outcome).__name__}:{outcome}",
+                )
         _log.info("fallback_gateway_stopped")
 
 
