@@ -41,6 +41,7 @@ Architecture invariants (per CLAUDE.md):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -244,6 +245,14 @@ class AnthropicLLMGateway:
                 messages=[{"role": "user", "content": nl_command}],
                 timeout=self._cfg.request_timeout_s,
             )
+        except asyncio.CancelledError:
+            # Cooperative cancellation (orchestrator loop teardown / e-stop).
+            # Propagate without flipping ``_degraded`` — the request never
+            # completed, so we cannot conclude the backend is unhealthy
+            # (code-reviewer PR #107 round-3 finding 1). The SDK's
+            # underlying httpx connection is closed automatically by the
+            # task cancellation.
+            raise
         except Exception as exc:
             self._degraded = True
             _log.warning(

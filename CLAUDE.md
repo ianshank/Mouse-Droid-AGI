@@ -205,5 +205,123 @@ The PR #104 test files are the reference implementations — copy their
 docstring style + skip-gate pattern (`tests/_jetson_hardware.is_jetson_host`)
 when adding new ones.
 
+## USB-C smoke validation surface (PR #106 — rover smoke-stability sprint)
+
+The Wave Rover USB-C wiring must be discoverable and stable across rover
+swaps. Three non-negotiable contracts encode this:
+
+- **`USBCDiscoveryConfig.enabled: bool = False`** — master switch lives in
+  `src/mousedroid/config/schema.py`. Defaults `False` so pre-PR YAML files
+  load unchanged. Flip to `True` only on the Jetson production overlay,
+  where `required_endpoints` declares the named cables the rover expects.
+  When `enabled=True` with an empty list, `_require_endpoints_when_enabled`
+  raises at YAML-load time — a misconfigured gate never silently passes.
+- **Factory override chain** — `_resolve_esp32_serial_via_usbc_discovery`
+  in `src/mousedroid/factory.py` (commit `34ab760`) supersedes
+  `cfg.esp32.serial_port` with the live `rover_esp32` by-id path **only
+  when** (a) discovery is enabled AND (b) the literal `serial_port` does
+  not exist on disk. A pinned, valid `serial_port` always wins so an
+  operator override is never silently shadowed. Log the override fire
+  via the `esp32_serial_port_overridden` structured event.
+- **`ESP32Config.smoke_test_velocity_mps: float = 0.05` (`ge=0`)** —
+  setpoint for the power-chain probe in
+  `src/mousedroid/diagnostics/power_chain.py`. The `ge=0` (not `gt=0`)
+  bound lets operators express a permanent zero-motion safe-bench config;
+  the runtime `allow_motion` gate in `assert_power_chain` is still
+  authoritative regardless of this setpoint.
+
+**USB-C boot-race guard:** `enumerate_usbc_devices` and `resolve_endpoint`
+in `src/mousedroid/diagnostics/usbc.py` MUST guard `Path.glob` against a
+missing `by_id_root` directory. Without the guard, a pre-udev call (boot
+race during container startup) raises `FileNotFoundError` and crashes the
+smoke harness. The guard surfaces every required endpoint as `MISSING`
+instead — the harness sees a structured FAIL list, not an unhandled
+exception.
+
+**Serial driver decode hygiene:** `SerialESP32Driver._read_line` in
+`src/mousedroid/comms/serial_driver.py` MUST decode with
+`errors="replace"`. A garbled byte (firmware churn, brown-out, UART
+noise) under the default strict codec raises `UnicodeDecodeError` out of
+the `asyncio.to_thread` wrapper, bypassing the adaptive-timeout state
+machine. With `errors="replace"`, the replacement char flows into
+`json.loads` and the existing `esp32_non_json_response` warning path
+handles it cleanly.
+
+**E2E inline scripts:** every smoke / e2e bash one-liner that asserts
+factory-builder return types MUST use explicit `if not isinstance(x, ...):
+raise RuntimeError(...)`, NOT `assert isinstance(x, ...)`. The Jetson
+Docker entrypoint sets `PYTHONOPTIMIZE=1` which strips asserts. The
+`scripts/jetson_smoke_test.sh` E2E stage demonstrates the correct shape.
+
+**Operator triage:** see `docs/runbooks/jetson-rover-smoke.md` for the
+warm-vs-cold smoke discipline, rover-swap by-id-drift symptom, and the
+canonical structlog grep recipes (`usbc_endpoint_*`,
+`esp32_serial_port_overridden`, `power_chain_probe_complete`,
+`esp32_raw_line`). The C4 component diagram for the smoke gate is at
+`docs/architecture/c4-usbc-smoke.md`.
+
+## LLM gateway + cloud/local failover (PR #107 — Tier C-rover deliberative brain)
+
+The deliberative mission-translation path now supports cloud Claude as
+the primary brain with a local model as the off-network fallback. The
+30 Hz reactive control loop (RSSM → MCTS → ESP32) stays deterministic
+and LLM-free; only the natural-language → `GoalVector` translation goes
+through this layer, OUTSIDE the hot loop.
+
+Non-negotiable contracts:
+
+- **`LLMConfig.backend: Literal["llama_cpp", "openai_compatible", "anthropic"]`**
+  — single dispatch key. `llama_cpp` (default) preserves byte-identical
+  legacy behaviour; `anthropic` selects the Claude Messages API
+  backend; `openai_compatible` reaches any OpenAI-shaped HTTP endpoint
+  (local Ollama / LM Studio / cloud).
+- **`LLMConfig.fallback_backend: Literal["none", "llama_cpp", "openai_compatible"]`**
+  — local-only fallback. Setting `anthropic` here is rejected at YAML
+  parse time (cloud-to-cloud failover is anti-pattern — you'd lose the
+  off-network autonomy). Default `none` skips the composite.
+- **`LLMConfig.fallback_retry_cooldown_s: float = 30.0`** — operator-
+  tunable seconds before the composite re-probes a degraded primary
+  (mobile rover WAN dropouts). Lower (e.g. 5 s) for lab bench tests,
+  higher (120 s) behind a flaky uplink. **Threaded through the factory**
+  — `tests/unit/factory/test_build_llm_gateway_dispatch.py` pins this so
+  a future refactor that swapped the kwarg for a literal fails fast.
+- **`LLMConfig.api_key: SecretStr | None`** — Pydantic `SecretStr` wraps
+  the Anthropic API key. **NEVER** `.get_secret_value()` in a log call
+  or exception message. The factory passes the resolved value to the
+  SDK constructor ONCE; everywhere else the wrapper masks repr to
+  `SecretStr('**********')`. Operators supply the key via
+  `ANTHROPIC_API_KEY` env var (preferred — SDK resolves natively) or
+  `MOUSEDROID_LLM__API_KEY` schema-mapped override.
+- **Prompt-injection filter pre-egress.** The `RegexInjectionFilter`
+  MUST `.sanitize()` the NL command BEFORE any `messages.create` call
+  reaches `api.anthropic.com`. This is the only place rover NL goes
+  third-party — the filter envelope is what stops
+  `"ignore all instructions and..."`-shaped commands from leaving the
+  rover. Pinned by `tests/unit/llm_gateway/test_anthropic_gateway.py`.
+- **`asyncio.CancelledError` propagates** in BOTH gateways and in the
+  composite — explicit `except asyncio.CancelledError: raise` before
+  the broad `except Exception`. The composite's "never raises on
+  backend failure" contract is for *backend* failures, NOT for
+  cooperative task cancellation. The composite also stamps
+  `_last_primary_attempt` AFTER the await returns (not before) so a
+  cancelled probe never poisons the cooldown timer.
+- **Markdown-fence JSON resilience.** `_JSON_OBJECT_RE` extracts the
+  first `{...}` span before `json.loads` — Claude routinely wraps
+  responses in ```` ```json ... ``` ```` fences despite system-prompt
+  instructions. Dict-shaped response blocks (mocks + alternative SDK
+  clients) are also handled by `_extract_text`.
+- **Concurrent + safe lifecycle.** `FallbackLLMGateway.start()` and
+  `stop()` both use `await asyncio.gather(..., return_exceptions=True)`
+  — cold-boot time is `max(T_primary, T_secondary)` (not the sum), and
+  a primary start/stop crash never skips the secondary's cleanup.
+
+**Operator deployment:** see `config/jetson_claude_pilot.yaml` for the
+canonical anthropic-primary + llama_cpp-fallback overlay. Note
+`latency_target_ms: 5000.0` — the default 500 ms (calibrated for local
+GGUF) would spam `anthropic_gateway_slow` warnings on every normal
+cloud round-trip.
+
+**Architecture diagram:** `docs/architecture/c4-llm-gateway.md`.
+
 See `AGENTS.md` (agentic-worker behavioural contract) and `SKILLS.md`
 (capability index keyed by trigger phrase) for additional context.

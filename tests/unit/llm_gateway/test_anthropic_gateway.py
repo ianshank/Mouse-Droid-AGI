@@ -424,3 +424,35 @@ async def test_stop_clears_degraded_flag() -> None:
     await gw.stop()
     assert gw.is_degraded is False
     assert gw.is_ready is False
+
+
+@pytest.mark.asyncio
+async def test_cancelled_error_propagates_without_degrading() -> None:
+    """Regression — code-reviewer PR #107 round-3 High finding.
+
+    When the orchestrator cancels an in-flight ``translate_mission``
+    (e.g. e-stop loop teardown), ``asyncio.CancelledError`` MUST
+    propagate cleanly out of the gateway WITHOUT flipping ``_degraded``.
+    The request never reached the backend, so we cannot conclude the
+    backend is unhealthy — falsely setting ``_degraded`` would push the
+    composite to the secondary on the next call even though the cloud
+    is still healthy.
+    """
+    import asyncio
+
+    class _CancellingMessages:
+        async def create(self, **_kwargs: Any) -> Any:
+            raise asyncio.CancelledError
+
+    class _Client:
+        def __init__(self, **_kwargs: Any) -> None:
+            self.messages = _CancellingMessages()
+
+    sdk = types.SimpleNamespace(AsyncAnthropic=_Client)
+    gw = AnthropicLLMGateway(_config(), sdk=sdk)
+    await gw.start()
+    assert gw.is_degraded is False  # pre-condition
+    with pytest.raises(asyncio.CancelledError):
+        await gw.translate_mission("forward")
+    # MUST NOT have flipped degraded.
+    assert gw.is_degraded is False

@@ -8,6 +8,326 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — PR #107: Anthropic Claude LLM gateway + cloud/local failover for rover missions
+
+Enables Claude (via the Anthropic Messages API) as the deliberative
+mission-translation brain for the MSE-6 rover, with transparent fallback
+to a local model when off-network. Natural-language missions are
+translated to a normalised `GoalVector` (vx, vy, omega ∈ [-1, 1])
+**outside** the 30 Hz reactive control loop — the deterministic,
+LLM-free hot path (RSSM → MCTS → ESP32 velocity command) is untouched
+by design.
+
+**New modules**
+
+- `src/mousedroid/llm_gateway/anthropic_gateway.py` — `AnthropicLLMGateway`,
+  async-native Claude backend conforming structurally to
+  `LLMGatewayProtocol`. Lazy SDK import (deferred to `start()`), degrades
+  rather than crashing when `anthropic` is missing / blank model id /
+  init failure. `SecretStr` API key (read once at client construction,
+  never logged). Markdown-fence JSON resilience via `_JSON_OBJECT_RE`
+  (claims first `{...}` span before `json.loads`). Dict-block defensive
+  text extraction. Self-heals on a successful request (clears
+  `_degraded`). `asyncio.CancelledError` propagates cleanly without
+  poisoning the degrade flag.
+- `src/mousedroid/llm_gateway/fallback_gateway.py` — `FallbackLLMGateway`,
+  primary/secondary composite. Failover keyed off `is_degraded` (not the
+  returned vector — a legitimate `"stop"` neutral vector does not
+  trigger spurious failover). Cooldown-based primary retry
+  (operator-tunable `recovery_interval_s` / `LLMConfig.fallback_retry_cooldown_s`)
+  with injectable clock for deterministic tests. Concurrent
+  `start()`/`stop()` via `asyncio.gather(return_exceptions=True)`.
+  Secondary call wrapped symmetrically with the primary's try/except.
+  CancelledError propagates without stamping `_last_primary_attempt`.
+
+**Schema additions** (`src/mousedroid/config/schema.py`)
+
+- `LLMConfig.backend: Literal["llama_cpp", "openai_compatible", "anthropic"]`
+  — default `"llama_cpp"` keeps existing YAML byte-identical.
+- `LLMConfig.fallback_backend: Literal["none", "llama_cpp", "openai_compatible"]`
+  — local-only fallback target. `"anthropic"` is rejected at
+  YAML-parse time (cloud-to-cloud failover defeats off-network
+  autonomy). Default `"none"`.
+- `LLMConfig.fallback_model_name: str | None` — secondary `model_name`
+  override; `None` reuses primary's.
+- `LLMConfig.fallback_retry_cooldown_s: float = 30.0` — cooldown
+  before re-probing a degraded primary. Range-gated `gt=0`.
+- `LLMConfig.api_key: SecretStr | None` — read via `.get_secret_value()`
+  ONCE at client construction, never logged.
+
+**Factory wiring** (`src/mousedroid/factory.py`)
+
+- `_build_single_llm_gateway(llm_cfg, *, injection_filter)` extracted
+  for reuse across both tiers.
+- `build_llm_gateway(cfg)` wraps primary + secondary in
+  `FallbackLLMGateway` when `fallback_backend != "none"` AND
+  `fallback_backend != backend`. Same-backend fallback is a logged
+  no-op. `cfg.llm.fallback_retry_cooldown_s` threaded through to the
+  composite.
+
+**Config example**
+
+- `config/jetson_claude_pilot.yaml` — canonical anthropic-primary +
+  llama_cpp-fallback overlay with secret-handling + network-policy
+  notes. `latency_target_ms: 5000.0` (default 500 ms is calibrated for
+  local GGUF; cloud round-trips are 1-5 s and would spam
+  `anthropic_gateway_slow` WARNINGs without the override).
+  `fallback_retry_cooldown_s: 30.0` with operator-tuning guidance.
+
+**Tests added** (across the pyramid)
+
+- `tests/unit/llm_gateway/test_anthropic_gateway.py` — start /
+  degrade / parse / clamp / injection-rejected / lifecycle / slow-path
+  / self-heal / markdown-fence (3 variants) / dict-block extract /
+  end-to-end recovery after WAN flap / `stop()` clears degraded /
+  CancelledError handling.
+- `tests/unit/llm_gateway/test_fallback_gateway.py` — failover
+  semantics, value-error propagation, cooldown retry (in-cooldown
+  skip + cooldown-elapsed re-probe + primary-recovers-on-reprobe),
+  secondary unexpected-exception guard, concurrent `start()` timing,
+  safe `stop()` fan-out, CancelledError propagation without poisoning
+  the cooldown timer.
+- `tests/unit/config/test_llm_config_anthropic_fallback.py` — backend
+  Literal extensions + backcompat defaults + env overrides + SecretStr
+  hygiene + cooldown range gates.
+- `tests/unit/factory/test_build_llm_gateway_dispatch.py` — anthropic
+  dispatch + composite wrap branches + same-backend no-op +
+  `fallback_model_name` override scope + `fallback_retry_cooldown_s`
+  threaded through to composite.
+- `tests/integration/test_anthropic_gateway_wiring.py` — full path
+  through `build_llm_gateway` + orchestrator `process_mission` with
+  faked SDK (no network / no key).
+
+**Security posture** (final audit: PASS)
+
+- API key never appears in repr / logs / exception messages
+  (`SecretStr` wraps; `.get_secret_value()` is called ONCE at client
+  construction in `factory.py`).
+- Prompt-injection filter (`RegexInjectionFilter.sanitize()`) fires
+  BEFORE `client.messages.create` so `"ignore all instructions and..."`-
+  shaped commands never leave the rover.
+- Example YAML overlay contains NO real credentials — placeholders +
+  env-var instructions only.
+- Exception logs use `f"{type(exc).__name__}:{exc}"` (SDK error type +
+  message); no request payload (NL command + system prompt) leaked.
+- Failover does NOT bypass filtering — both primary and secondary
+  independently apply the shared filter instance.
+
+**Docs added**
+
+- `docs/architecture/c4-llm-gateway.md` — Level-3 C4 component diagram
+  for the LLM gateway showing the configuration → dispatch → composite
+  → child-gateway chain plus the cross-cutting RegexInjectionFilter +
+  the api.anthropic.com cloud boundary.
+- `CLAUDE.md` — new "LLM gateway + cloud/local failover" section
+  pinning the seven non-negotiable contracts (backend Literal, fallback
+  Literal, cooldown, SecretStr, pre-egress filter, CancelledError,
+  markdown-fence, concurrent lifecycle).
+- `AGENTS.md` — new "LLM gateway — adding a new backend" 10-step
+  workflow.
+- `SKILLS.md` — two new skill entries: `claude-llm-gateway`,
+  `llm-prompt-injection-filter`.
+- `NEXT_STEPS.md` — PR #107 follow-ups + a new "Claude Code on Jetson
+  — install + configure" operator runbook so engineers can run the
+  Claude Code agent natively on the rover.
+
+**Pre-merge resolution history** (three rounds)
+
+- **Round 1** — Gemini Code Assist 5-finding pass folded in by
+  upstream commit `7010648` (degrade-reset-on-success, dict-block
+  extract, JSON-extraction regex, primary cooldown retry, schema
+  cooldown field).
+- **Round 2** (commit `a989a8f`) — independent `feature-dev:code-reviewer`
+  + `code-explorer` agents raised 5 additional findings outside
+  Gemini's scope: `stop()` clears `_degraded`, concurrent `start()`,
+  safe `stop()` fan-out, secondary unexpected-exception guard,
+  `latency_target_ms` overlay. + the PR #106 subprocess PYTHONPATH
+  fix re-applied (rebase artifact, 8 pre-existing failures closed).
+- **Round 3** (merge commit) — final review pass: CancelledError
+  propagation in both gateways, `_last_primary_attempt` ordering
+  (stamp AFTER await), factory wiring assertion test. Security-auditor
+  PASS across all 8 critical checks.
+
+### Added — PR #106: USB-C smoke validation gate + rover-swap auto-override + power-chain probe
+
+Closes the rover-bringup gap left after PR #104's dashboard-stability sprint.
+Adds a config-driven USB-C enumeration layer so the Jetson smoke pipeline
+fails loudly when the rover is wired wrong, and so swapping rovers
+between bench units stops breaking the literal `esp32.serial_port` path.
+
+**New modules**
+
+- `src/mousedroid/diagnostics/usbc.py` — pure USB-C endpoint enumeration
+  helper. `enumerate_usbc_devices(cfg)` returns a `{name: EndpointResult}`
+  dict; `resolve_endpoint(cfg, name)` returns a single live by-id `Path`.
+  Both short-circuit when `usbc_discovery.enabled=False` and now both
+  guard against `by_id_root` not existing (boot race with udev) so the
+  smoke harness sees a structured `MISSING` instead of an uncaught
+  `FileNotFoundError`. Status enum: `PRESENT` / `MISSING` / `WARN`.
+- `src/mousedroid/diagnostics/power_chain.py` — `assert_power_chain`
+  three-probe sequence (battery → send_velocity → emergency_stop timing)
+  against an `@runtime_checkable Protocol` slice of the ESP32 driver.
+  Returns a frozen `PowerChainResult` for the smoke harness to assert
+  the e-stop latency against `ESP32Config.emergency_stop_budget_ms`.
+- `scripts/check_usbc_devices.py` — standalone CLI smoke gate. Exits 1
+  iff any `required=True` endpoint is `MISSING`. Supports `--json`. Does
+  not need the orchestrator running.
+
+**Factory wiring** (`src/mousedroid/factory.py:_resolve_esp32_serial_via_usbc_discovery`)
+
+Two-condition override chain for `ESP32Config.serial_port`:
+1. Discovery disabled OR `usbc_discovery is None` → return cfg unchanged.
+2. Literal `esp32.serial_port` exists on disk → return cfg unchanged
+   (a pinned operator override is never silently shadowed).
+3. Resolver returns `None` (no matching glob) → warn + return cfg
+   unchanged (driver will surface the failure with a clean errno).
+4. Glob matches → `cfg.esp32.model_copy(update={"serial_port": str(resolved)})`,
+   log the `esp32_serial_port_overridden` structured event. Original
+   `cfg.esp32` is not mutated.
+
+**Schema additions** (`src/mousedroid/config/schema.py`)
+
+- `USBCEndpointSpec(name, by_id_glob, required: bool = True)` —
+  declarative endpoint contract for the discovery layer.
+- `USBCDiscoveryConfig(enabled: bool = False, by_id_root: Path =
+  "/dev/serial/by-id", required_endpoints: list = [])` — master config.
+  `_require_endpoints_when_enabled` model validator forbids
+  `enabled=True` with an empty list at YAML-load time so a misconfigured
+  gate never silently passes.
+- `Settings.usbc_discovery: USBCDiscoveryConfig | None = None` —
+  backwards-compat default; pre-PR YAML files load unchanged.
+- `ESP32Config.smoke_test_velocity_mps` constraint relaxed from `gt=0`
+  to `ge=0` so operators can express a permanent zero-motion safe-bench
+  config; the runtime `allow_motion` gate in `assert_power_chain`
+  remains authoritative regardless of this setpoint.
+
+**Smoke wrapper** (`scripts/jetson_smoke_test.sh`, `scripts/jetson_full_smoke_run.sh`)
+
+- New `usbc` blocking stage runs `python scripts/check_usbc_devices.py`
+  before `serial` so a wiring problem fails at the cheapest possible
+  test rather than after the serial driver tries to open a non-existent
+  port.
+- New `power` blocking stage runs `assert_power_chain` against the
+  built ESP32 driver (mock or real). Defaults to zero-velocity so an
+  untethered rover does not roll while the smoke runs unattended.
+- Stage gating env-var matrix documented in `docs/runbooks/jetson-rover-smoke.md`
+  (every stage flippable via `MOUSEDROID_SMOKE_BLOCKING_<NAME>={yes,no}`).
+- E2E inline script's `assert isinstance(orch, MouseDroidOrchestrator)`
+  replaced with an explicit `if not isinstance(...): raise RuntimeError(...)`
+  so the Jetson Docker entrypoint's `PYTHONOPTIMIZE=1` cannot silently
+  strip the check (CLAUDE.md validation contract).
+
+**Comms hardening** (`src/mousedroid/comms/serial_driver.py`)
+
+- `_read_line` now decodes with `errors="replace"` instead of the strict
+  default codec. A garbled byte from firmware churn, brown-out, or UART
+  noise no longer propagates `UnicodeDecodeError` past the adaptive-
+  timeout state machine — the replacement char flows into `json.loads`
+  and surfaces via the existing `esp32_non_json_response` log path.
+- New `esp32_raw_line` DEBUG event lets operators grep the structlog
+  stream for the literal bytes the ESP32 emitted, useful for triaging
+  firmware-version drift without rewiring the driver.
+
+**Security hardening** (`tools/dashboard_proxy.py`)
+
+- Removed hardcoded default token `dev-dashboard-token-1779157616` from
+  the env-fallback default. Operators MUST now supply `JETSON_TOKEN`
+  (env var) or the third positional CLI arg; no hardcoded fallback means
+  a deploy without the env var fails loudly at the upstream's 401, never
+  silently reusing a baked-in dev credential. Surfaced by `security-auditor`
+  subagent during PR #106 pre-merge review.
+
+**CI surface**
+
+- `.github/workflows/ci.yml` adds a `usbc-config-gate` job that runs
+  `pytest tests/unit/test_jetson_production_overlay.py` after the
+  config-validate stage. Asserts: `jetson_production.yaml` declares
+  `usbc_discovery.enabled=True` with both `rover_esp32` and `lidar_ld19`
+  endpoint names present; the `rover_esp32` glob and `esp32.serial_port`
+  share the same `"CP2102N"` chip family marker; `default.yaml` does
+  not auto-enable discovery. Required job (no `continue-on-error`).
+- `scripts/ci.sh` extended to lint `scripts/` so the bash smoke wrappers
+  get the same ruff treatment as the Python sources.
+
+**Tests added** (extensions + new files)
+
+- `tests/unit/diagnostics/test_usbc.py` (10 tests, extended) — PRESENT
+  / MISSING / WARN transitions, deterministic sort-first-match,
+  disabled-discovery short-circuit, and the new boot-race
+  `by_id_root`-missing guard.
+- `tests/unit/diagnostics/test_power_chain.py` — battery probe, motion
+  gate, e-stop timing assertion.
+- `tests/unit/test_factory_esp32_discovery.py` — every branch of the
+  two-condition override chain (disabled / None / literal-exists /
+  glob-match / no-match).
+- `tests/unit/scripts/test_check_usbc_devices.py` — CLI smoke (exit
+  codes, `--json` payload shape, no-orchestrator path).
+- `tests/unit/test_serial_driver.py` (extended) — regression test for
+  `_read_line` `UnicodeDecodeError`-resistance (the chip emits `0xff
+  0xfe` invalid UTF-8 start bytes; decode must not raise).
+- `tests/unit/tools/test_dashboard_proxy.py` (extended) — regression
+  for the security-auditor finding (`TOKEN == ""` and `_AUTH_HEADER ==
+  {}` when neither CLI positional nor env var is set).
+- `tests/hardware/test_usbc_enumeration.py` (`@pytest.mark.hardware`) —
+  rover-side: every required endpoint resolves on a live Jetson.
+- `tests/hardware/test_power_chain_smoke.py` (`@pytest.mark.hardware`) —
+  rover-side: battery + e-stop latency within
+  `ESP32Config.emergency_stop_budget_ms`.
+
+**Docs added**
+
+- `docs/runbooks/jetson-rover-smoke.md` — operator runbook for the full
+  smoke pass, the warm-vs-cold smoke discipline (orchestrator container
+  holds FDs; restart before smoke or trust `/api/v1/health` for warm
+  signal), the rover-swap by-id drift symptom + override trigger, the
+  structlog grep recipes (`usbc_endpoint_*`,
+  `esp32_serial_port_overridden`, `power_chain_probe_complete`,
+  `esp32_raw_line`), and the triage matrix.
+- `docs/architecture/c4-usbc-smoke.md` — Level-3 C4 component diagram
+  for the USB-C smoke gate, including the configuration → resolver →
+  driver chain, the CI regression-gate side path, and the standalone
+  operator probe path.
+- `CLAUDE.md` — new "USB-C smoke validation surface" section pinning the
+  four contracts (master switch default, factory override chain,
+  zero-motion bound, boot-race guard) + the explicit-raise vs. assert
+  rule for Jetson Docker entrypoint code.
+- `AGENTS.md` — new "USB-C smoke gate — adding a new endpoint" workflow
+  + red-flag entries for `assert isinstance` under `PYTHONOPTIMIZE`,
+  hardcoded credentials, missing `Path.glob` guards, and `*.bak.*`
+  hygiene.
+- `SKILLS.md` — three new skill entries: `usbc-smoke-validation`,
+  `power-chain-smoke`, `rover-firmware-diagnosis`.
+
+**.gitignore additions**
+
+- `*.bak`, `*.bak.*` — config-edit backup sidecars from `sed -i.bak` /
+  `cp foo.yaml foo.yaml.bak.<timestamp>` drills (the rover-swap /
+  baud-change operator runbook emits these on the Jetson).
+- `/tmp/wave_rover_*`, `/tmp/*.html` — external-doc research scratch
+  files (firecrawl / curl caches from looking up Wave Rover wiki +
+  `ugv_base_ros` GitHub repo).
+
+**Pre-merge verification** (workstation, post-fix)
+
+- `ruff check src/ tests/ tools/` — clean across the PR's touched files.
+- `ruff format --check` — clean.
+- `mypy --strict --no-incremental` on `src/mousedroid/diagnostics/` and
+  `src/mousedroid/comms/serial_driver.py` — `Success: no issues found`.
+- `pytest tests/unit tests/integration tests/property tests/regression
+  tests/smoke -m "not hardware and not slow"` —
+  **4993 passed, 22 skipped, 8 pre-existing failures, 95.45% coverage**
+  (gate is 85%). The 8 failures are subprocess-import issues in
+  `tests/unit/test_scripts.py` (last touched in PR #44) and
+  `tests/unit/vla/test_distilled_onnx.py` (PR #89) — neither file is
+  modified on this branch; the root cause is a Windows-specific
+  PYTHONPATH issue in the test subprocess, tracked separately.
+- Independent `feature-dev:code-reviewer` subagent: HOLD on 7 findings
+  → all Critical + High addressed in-branch (`UnicodeDecodeError`,
+  `by_id_root` guard, explicit-raise, `ge=0`); Medium asyncio-mode
+  check confirmed `auto`; Lows folded into `NEXT_STEPS.md` for follow-up.
+- Independent `security-auditor` subagent: FAIL → addressed (hardcoded
+  `dev-dashboard-token` removed; regression test added).
+
 ### Fixed — PR #105b: Tech-debt closure (mypy + coverage-script base-ref autodetect)
 
 First half of a two-PR stack (#105a follows). Tiny, isolated, low-risk. Lands FIRST so its `scripts/check_branch_coverage.py` fix can gate PR #105a's own coverage check correctly. No new features, no schema changes; pure debt closure.

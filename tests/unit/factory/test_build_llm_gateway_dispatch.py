@@ -82,3 +82,36 @@ def test_same_backend_fallback_is_noop() -> None:
     gw = build_llm_gateway(cfg)
     assert isinstance(gw, LLMGateway)
     assert not isinstance(gw, FallbackLLMGateway)
+
+
+def test_fallback_retry_cooldown_s_threaded_through_to_composite() -> None:
+    """Regression — code-reviewer PR #107 round-3 finding 2.
+
+    The composite's cooldown is operator-tunable via
+    ``LLMConfig.fallback_retry_cooldown_s``. The factory MUST pass the
+    configured value into ``FallbackLLMGateway`` rather than letting the
+    constructor default mask a misconfiguration. Without this assertion,
+    a future refactor that swapped the kwarg for a hardcoded literal
+    would pass both the schema test (which checks the default) and the
+    composite tests (which use their own custom values) while the rover
+    silently used the wrong cooldown.
+    """
+    cfg = Settings(mock_hardware=True)
+    cfg.llm.backend = "anthropic"
+    cfg.llm.model_name = "claude-haiku-4-5"
+    cfg.llm.fallback_backend = "llama_cpp"
+    cfg.llm.fallback_retry_cooldown_s = 75.0
+    gw = build_llm_gateway(cfg)
+    assert isinstance(gw, FallbackLLMGateway)
+    assert gw._retry_cooldown_s == 75.0
+
+
+def test_default_fallback_retry_cooldown_s_propagates() -> None:
+    """Default 30 s also propagates correctly — no silent override anywhere."""
+    cfg = Settings(mock_hardware=True)
+    cfg.llm.backend = "anthropic"
+    cfg.llm.model_name = "claude-haiku-4-5"
+    cfg.llm.fallback_backend = "llama_cpp"
+    gw = build_llm_gateway(cfg)
+    assert isinstance(gw, FallbackLLMGateway)
+    assert gw._retry_cooldown_s == 30.0

@@ -93,6 +93,8 @@ Each subsystem owns a Component diagram in its own file:
 | Dashboard proxy + telemetry bridge | [`c4-dashboard-proxy.md`](./c4-dashboard-proxy.md) | `tests/unit/tools/test_dashboard_proxy.py`, `tests/e2e/test_pr104_dashboard_e2e.py` |
 | 30 Hz orchestrator loop | [`c4-orchestrator.md`](./c4-orchestrator.md) | `tests/integration/test_sense_plan_act.py` |
 | Robot-arm training platform | [`c4-arm-platform.md`](./c4-arm-platform.md) | `tests/unit/arm/*` |
+| USB-C smoke validation gate (PR #106) | [`c4-usbc-smoke.md`](./c4-usbc-smoke.md) | `tests/unit/diagnostics/test_usbc.py`, `tests/unit/diagnostics/test_power_chain.py`, `tests/unit/test_factory_esp32_discovery.py`, `tests/hardware/test_usbc_enumeration.py`, `tests/hardware/test_power_chain_smoke.py` |
+| LLM gateway + cloud/local failover (PR #107) | [`c4-llm-gateway.md`](./c4-llm-gateway.md) | `tests/unit/llm_gateway/test_anthropic_gateway.py`, `tests/unit/llm_gateway/test_fallback_gateway.py`, `tests/unit/config/test_llm_config_anthropic_fallback.py`, `tests/unit/factory/test_build_llm_gateway_dispatch.py`, `tests/integration/test_anthropic_gateway_wiring.py` |
 
 The component-level diagrams are the right entry point when you need to
 understand *which protocol object talks to which* — they map every

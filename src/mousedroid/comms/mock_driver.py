@@ -1,12 +1,18 @@
 """Mock ESP32 communication driver for testing and simulation.
 
 Implements ``ESP32CommProtocol`` with no real hardware dependencies.
+``MockESP32Driver`` is a standalone class — it deliberately does NOT
+inherit ``BaseESP32Driver`` (no transport layer to share), so we wire
+the shared ``log_command_dispatch`` helper in explicitly to preserve the
+"every driver emits the same ``command_dispatch`` event shape" guarantee
+operators rely on when grepping smoke logs.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from mousedroid.comms.base_driver import log_command_dispatch
 from mousedroid.comms.protocol import EncoderReading
 from mousedroid.logging.setup import get_logger
 
@@ -46,12 +52,22 @@ class MockESP32Driver:
     async def send_velocity(self, vx: float, vy: float, omega: float) -> None:
         """Store and log velocity command.
 
+        Emits the uniform ``command_dispatch`` INFO event used by smoke-
+        time triage AND the legacy per-driver ``mock_velocity_sent`` DEBUG
+        event for backwards compatibility with existing log-greps.
+
         Args:
             vx: Forward velocity in m/s.
             vy: Lateral velocity in m/s.
             omega: Angular velocity in rad/s.
         """
         self._last_velocity = (vx, vy, omega)
+        log_command_dispatch(
+            driver_name=type(self).__name__,
+            vx=vx,
+            vy=vy,
+            omega=omega,
+        )
         _log.debug("mock_velocity_sent", vx=vx, vy=vy, omega=omega)
 
     async def read_encoders(self) -> EncoderReading:

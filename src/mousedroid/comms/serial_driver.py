@@ -217,7 +217,11 @@ class SerialESP32Driver(BaseESP32Driver):
         """Read one JSON line from serial.
 
         Tracks adaptive timeout state: empty reads increment the timeout
-        counter; successful reads reset it and restore normal timeout.
+        counter; successful reads reset it and restore normal timeout. The
+        raw decoded line is logged at DEBUG so operators can grep
+        ``esp32_raw_line`` to triage protocol-level mismatches (firmware
+        version drift, partial framing, non-JSON output) without rewiring
+        the driver.
 
         Returns:
             Parsed JSON dictionary.
@@ -227,14 +231,42 @@ class SerialESP32Driver(BaseESP32Driver):
         if not raw:
             self._record_timeout()
             return {}
+        # Truncation length is config-driven (cfg.debug_log_max_chars) so
+        # operators triaging firmware-protocol drift can widen the window
+        # without editing source. Default 200 stays compact for normal smoke
+        # runs; bump via MOUSEDROID_ESP32__DEBUG_LOG_MAX_CHARS for triage.
+        truncate = self._cfg.debug_log_max_chars
+        _log.debug("esp32_raw_line", line=raw[:truncate], len=len(raw))
         self._record_success()
-        return json.loads(raw)  # type: ignore[no-any-return]
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            _log.warning(
+                "esp32_non_json_response",
+                line=raw[:truncate],
+                error=str(exc),
+            )
+            return {}
+        if not isinstance(parsed, dict):
+            _log.warning(
+                "esp32_response_not_object",
+                line=raw[:truncate],
+                got=type(parsed).__name__,
+            )
+            return {}
+        return parsed
 
     def _read_line(self) -> str:  # pragma: no cover
         """Read one line from serial port (blocking).
+
+        Uses ``errors="replace"`` so a garbled byte from firmware churn,
+        UART noise, or a partial flash never raises ``UnicodeDecodeError``
+        out of the ``asyncio.to_thread`` wrapper. The replacement char
+        survives into the downstream ``json.loads`` which then emits the
+        existing ``esp32_non_json_response`` warning path.
 
         Returns:
             Decoded line string.
         """
         line: bytes = self._serial.readline()
-        return line.decode().strip()
+        return line.decode(errors="replace").strip()

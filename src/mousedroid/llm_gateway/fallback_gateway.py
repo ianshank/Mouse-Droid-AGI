@@ -173,13 +173,26 @@ class FallbackLLMGateway:
         cooldown_elapsed = (now - self._last_primary_attempt) >= self._retry_cooldown_s
         use_primary = self._primary.is_ready and (not primary_degraded or cooldown_elapsed)
         if use_primary:
-            self._last_primary_attempt = now
             goal: GoalVector | None
             try:
                 goal = await self._primary.translate_mission(nl_command)
+            except asyncio.CancelledError:
+                # Cooperative cancellation (orchestrator loop teardown, e-stop
+                # tearing down the pending mission task). Propagate without
+                # touching ``_last_primary_attempt`` or ``_degraded`` so the
+                # cancelled probe does not poison the cooldown timer or
+                # falsely mark the primary as degraded. The composite
+                # contract reserves ``never raises on backend failure`` for
+                # *backend* failures, not for caller-initiated cancellation
+                # (code-reviewer PR #107 round-3 finding 1).
+                raise
             except ValueError:
                 # Empty / injection-rejected command — the secondary would
                 # reject it identically. Propagate; do not failover.
+                # Stamp the attempt timestamp because the primary did "see"
+                # the request — operator can still see the timestamp move
+                # in observability dashboards.
+                self._last_primary_attempt = now
                 raise
             except Exception as exc:
                 _log.warning(
@@ -187,6 +200,11 @@ class FallbackLLMGateway:
                     error=f"{type(exc).__name__}:{exc}",
                 )
                 goal = None
+            # Stamp the attempt timestamp AFTER the await returns so a
+            # cancelled probe does not advance the cooldown window
+            # (would falsely keep the secondary serving even when the
+            # primary recovered — code-reviewer PR #107 round-3 finding 1).
+            self._last_primary_attempt = now
             # A primary that stayed healthy served this command (even a
             # legitimately-neutral GoalVector). Only failover when the call
             # degraded the primary or raised unexpectedly.
@@ -197,6 +215,9 @@ class FallbackLLMGateway:
 
         try:
             goal = await self._secondary.translate_mission(nl_command)
+        except asyncio.CancelledError:
+            # Same cooperative-cancellation handling as the primary branch.
+            raise
         except ValueError:
             # Caller error — propagate. Symmetric with the primary branch:
             # neither backend gets a second chance at a malformed command.

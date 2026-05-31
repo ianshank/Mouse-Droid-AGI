@@ -375,3 +375,82 @@ async def test_stop_always_calls_secondary_even_when_primary_stop_raises() -> No
     # MUST NOT raise; secondary's stop MUST run.
     await gw.stop()
     assert secondary.stopped
+
+
+@pytest.mark.asyncio
+async def test_cancelled_error_propagates_and_does_not_advance_cooldown() -> None:
+    """Regression — code-reviewer PR #107 round-3 High finding.
+
+    When the orchestrator cancels an in-flight ``translate_mission``
+    (e.g. e-stop tearing down the loop, or graceful shutdown), the
+    cancellation MUST:
+    1. Propagate out of the composite (no swallow by the broad
+       ``except Exception``) so the cancelling task sees the
+       cancellation.
+    2. NOT advance ``_last_primary_attempt`` — a cancelled probe never
+       reached the backend, so it shouldn't extend the cooldown window
+       (which would falsely keep the secondary serving even after the
+       primary recovered).
+    """
+    import asyncio
+
+    class _CancellingGateway(_FakeGateway):
+        async def translate_mission(self, nl_command: str) -> GoalVector:
+            self.calls += 1
+            raise asyncio.CancelledError
+
+    primary = _CancellingGateway(result=_PRIMARY_GOAL)
+    secondary = _FakeGateway(result=_SECONDARY_GOAL)
+    gw = FallbackLLMGateway(primary, secondary, retry_cooldown_s=30.0)
+    timestamp_before = gw._last_primary_attempt
+    with pytest.raises(asyncio.CancelledError):
+        await gw.translate_mission("go")
+    # Composite did not silently fail over to the secondary.
+    assert secondary.calls == 0
+    # Cancelled probe did NOT advance the cooldown timestamp.
+    assert gw._last_primary_attempt == timestamp_before
+
+
+@pytest.mark.asyncio
+async def test_cancelled_error_from_secondary_propagates() -> None:
+    """Symmetric to the primary CancelledError test.
+
+    When failover routes to the secondary and the secondary is
+    cancelled (e.g. local llama-cpp call gets task-cancelled mid-flight
+    by an orchestrator e-stop), the cancellation MUST propagate cleanly
+    out of the composite — the bare ``except Exception`` must NOT
+    swallow it.
+    """
+    import asyncio
+
+    class _CancellingGateway(_FakeGateway):
+        async def translate_mission(self, nl_command: str) -> GoalVector:
+            self.calls += 1
+            raise asyncio.CancelledError
+
+    primary = _FakeGateway(ready=False)  # forces secondary path
+    secondary = _CancellingGateway()
+    gw = FallbackLLMGateway(primary, secondary)
+    with pytest.raises(asyncio.CancelledError):
+        await gw.translate_mission("go")
+    assert secondary.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_value_error_from_primary_stamps_cooldown_timestamp() -> None:
+    """A caller-error ValueError from the primary DID reach the backend.
+
+    Symmetric to the CancelledError test above: a ValueError raise from
+    the primary means the request was sent and rejected — so the
+    timestamp SHOULD advance (the operator's observability of "last
+    primary attempt" expects this). Pinpoints the timestamp-on-await-
+    success ordering decision so a future refactor doesn't drop the
+    stamp by mistake.
+    """
+    primary = _FakeGateway(raise_value_error=True)
+    secondary = _FakeGateway(result=_SECONDARY_GOAL)
+    gw = FallbackLLMGateway(primary, secondary)
+    timestamp_before = gw._last_primary_attempt
+    with pytest.raises(ValueError, match="command rejected"):
+        await gw.translate_mission("nope")
+    assert gw._last_primary_attempt > timestamp_before
