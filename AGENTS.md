@@ -119,6 +119,43 @@ When delegating to a subagent (security-auditor, code-quality, code-reviewer):
 - About to add `time.sleep()` in async code? That's `await asyncio.sleep()`.
 - About to mutate a session-scoped pytest fixture in a test? Use
   `Settings.model_copy(deep=True)` instead.
+- About to write `assert isinstance(x, ...)` in any code path that runs
+  under the Jetson Docker entrypoint? Stop. `PYTHONOPTIMIZE=1` strips
+  asserts. Use `if not isinstance(x, ...): raise RuntimeError(...)`.
+- About to add a hardcoded default credential / token / dev-key
+  fallback ("just for dev")? Stop. The security-auditor subagent will
+  flag it. Require explicit env var or CLI arg; fail loudly if missing.
+- About to call `Path.glob(...)` on a directory that might not exist?
+  Add an `is_dir()` guard first — `Path.glob` raises `FileNotFoundError`
+  on a missing root in Python 3.10/3.11, not an empty iterator.
+- About to copy a YAML to `*.bak.<timestamp>` for safety before editing?
+  The repo's `.gitignore` covers `*.bak.*` — but if you're editing on
+  the Jetson, the file lives outside the repo tree. Either way: don't
+  commit the backup.
 
 If any of these apply, the PR will bounce on review — fix before
 pushing.
+
+## USB-C smoke gate — adding a new endpoint
+
+When the rover gains a new USB-C device (a second LiDAR, an IMU bridge,
+etc.), wire it through the discovery layer rather than hardcoding the
+path:
+
+1. Add a `USBCEndpointSpec(name="...", by_id_glob="...", required=...)`
+   to the `usbc_discovery.required_endpoints` list in
+   `config/jetson_production.yaml`.
+2. If a driver needs to override its literal `serial_port` based on this
+   endpoint (as `esp32` does), add a sibling helper to
+   `factory.py:_resolve_esp32_serial_via_usbc_discovery` following the
+   same two-condition contract (only override when discovery is enabled
+   AND the literal does not exist on disk).
+3. Add a unit test under `tests/unit/diagnostics/test_usbc.py` covering
+   PRESENT / MISSING / WARN status transitions.
+4. Add a hardware test under `tests/hardware/test_usbc_enumeration.py`
+   (skip-gated by `tests/_jetson_hardware.is_jetson_host`) asserting
+   the endpoint resolves on a live Jetson.
+5. Add the regression assertion to
+   `tests/unit/test_jetson_production_overlay.py` so the CI
+   `usbc-config-gate` job (`.github/workflows/ci.yml`) catches any
+   YAML-vs-driver drift before merge.
