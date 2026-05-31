@@ -131,3 +131,26 @@ async def test_read_json_empty_line():
     with patch.object(driver, "_read_line", return_value=""):
         result = await driver._read_json()
     assert result == {}
+
+
+async def test_read_json_returns_empty_on_non_json_line():
+    """Stock-firmware boot banners must not crash the driver — return {}."""
+    driver = _make_driver()
+    with patch.object(driver, "_read_line", return_value="ESP32-WROOM boot banner OK"):
+        result = await driver._read_json()
+    assert result == {}
+
+
+async def test_read_json_returns_empty_on_json_array():
+    """Driver expects a dict; arrays/strings are tolerated as empty."""
+    driver = _make_driver()
+    with patch.object(driver, "_read_line", return_value="[1, 2, 3]"):
+        result = await driver._read_json()
+    assert result == {}
+
+
+async def test_read_json_returns_parsed_dict_on_valid_response():
+    driver = _make_driver()
+    with patch.object(driver, "_read_line", return_value='{"lv": 0.1, "rv": 0.1}'):
+        result = await driver._read_json()
+    assert result == {"lv": 0.1, "rv": 0.1}

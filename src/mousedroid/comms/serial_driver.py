@@ -217,7 +217,11 @@ class SerialESP32Driver(BaseESP32Driver):
         """Read one JSON line from serial.
 
         Tracks adaptive timeout state: empty reads increment the timeout
-        counter; successful reads reset it and restore normal timeout.
+        counter; successful reads reset it and restore normal timeout. The
+        raw decoded line is logged at DEBUG so operators can grep
+        ``esp32_raw_line`` to triage protocol-level mismatches (firmware
+        version drift, partial framing, non-JSON output) without rewiring
+        the driver.
 
         Returns:
             Parsed JSON dictionary.
@@ -227,8 +231,21 @@ class SerialESP32Driver(BaseESP32Driver):
         if not raw:
             self._record_timeout()
             return {}
+        _log.debug("esp32_raw_line", line=raw[:200], len=len(raw))
         self._record_success()
-        return json.loads(raw)  # type: ignore[no-any-return]
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            _log.warning(
+                "esp32_non_json_response",
+                line=raw[:200],
+                error=str(exc),
+            )
+            return {}
+        if not isinstance(parsed, dict):
+            _log.warning("esp32_response_not_object", line=raw[:200], got=type(parsed).__name__)
+            return {}
+        return parsed
 
     def _read_line(self) -> str:  # pragma: no cover
         """Read one line from serial port (blocking).
