@@ -97,4 +97,49 @@ jq -c 'select(.event|startswith("usbc_endpoint"))' reports/jetson_smoke/*/usbc.l
 
 # Power-chain probe summary:
 jq -c 'select(.event=="power_chain_probe_complete")' reports/jetson_smoke/*/power.log
+
+# When rover firmware drifts (stock vs custom JSON schema), the raw line is
+# logged at DEBUG so operators can see exactly what came back:
+jq -c 'select(.event=="esp32_raw_line" or .event=="esp32_non_json_response")' \
+    reports/jetson_smoke/*/power.log
+
+# Confirm the factory used the live by-id path instead of the stale literal:
+jq -c 'select(.event=="esp32_serial_port_overridden")' reports/jetson_smoke/*/*.log
 ```
+
+## Warm-state vs cold-state smoke
+
+A "warm" smoke run (orchestrator container is up) will fail every stage
+whose hardware is already owned by the running orchestrator — LiDAR
+(serial port), GPIO (ultrasonic pins), USB speaker (PCM stream), and the
+CSI camera (V4L2 device). These are **false negatives**, not real failures:
+the orchestrator's own `/api/v1/health` endpoint confirms the same hardware
+is working.
+
+For a true cold-state smoke run:
+
+```bash
+docker stop mousedroid
+bash scripts/jetson_full_smoke_run.sh
+docker start mousedroid
+```
+
+If a warm smoke is the only option (e.g. you don't want to interrupt a
+live run), trust the orchestrator's `/api/v1/health` for the hardware
+status of LiDAR/camera/speaker, and use the smoke gate purely for
+`usbc`, `system`, `power`, and `app_health`.
+
+## Rover swap / by-id drift
+
+`config/jetson_production.yaml` previously hardcoded a literal CP2102N
+by-id path; swapping rovers (each ESP32's CP2102N has a unique serial)
+broke `esp32.serial_port`. As of the USB-C smoke PR follow-up, the
+factory consults `usbc_discovery.required_endpoints["rover_esp32"]`
+first when:
+
+1. `usbc_discovery.enabled: true`, AND
+2. the literal `esp32.serial_port` does not exist on disk
+
+In every other case the literal pin still wins (operator's choice is
+preserved). Watch for the `esp32_serial_port_overridden` log event to
+confirm the override fired during boot.
