@@ -147,10 +147,21 @@ class BaseESP32Driver(ABC):
 
 
 def log_command_dispatch(*, driver_name: str, vx: float, vy: float, omega: float) -> None:
-    """Emit a structured INFO event used by smoke-time triage.
+    """Emit a structured ``command_dispatch`` DEBUG event used by smoke triage.
 
     Centralised so every driver (Serial, WiFi, Mock, Resilient) can emit the
     same event shape — operators grepping smoke logs for ``command_dispatch``
     get a uniform record regardless of which driver fielded the call.
+
+    Emitted at DEBUG (not INFO) because ``BaseESP32Driver.send_velocity``
+    AND ``MockESP32Driver.send_velocity`` invoke this on every orchestrator
+    tick (30 Hz). An INFO emission rate of 30/s saturates Windows / Linux
+    structlog processors enough to push the 5-second e2e orchestrator
+    integration test past its pytest-timeout on Python 3.10 (CI run
+    26718393212 — passed on 3.11/3.12 with more headroom, failed on
+    3.10). Operators wanting to see the events during a smoke run set
+    ``LOG_LEVEL=DEBUG`` or filter the structured stream — the legacy
+    per-driver events (``esp32_velocity_sent`` / ``mock_velocity_sent``)
+    were already DEBUG for the same reason.
     """
-    _log.info("command_dispatch", driver=driver_name, vx=vx, vy=vy, omega=omega)
+    _log.debug("command_dispatch", driver=driver_name, vx=vx, vy=vy, omega=omega)
