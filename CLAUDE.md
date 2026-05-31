@@ -205,5 +205,60 @@ The PR #104 test files are the reference implementations — copy their
 docstring style + skip-gate pattern (`tests/_jetson_hardware.is_jetson_host`)
 when adding new ones.
 
+## USB-C smoke validation surface (PR #106 — rover smoke-stability sprint)
+
+The Wave Rover USB-C wiring must be discoverable and stable across rover
+swaps. Three non-negotiable contracts encode this:
+
+- **`USBCDiscoveryConfig.enabled: bool = False`** — master switch lives in
+  `src/mousedroid/config/schema.py`. Defaults `False` so pre-PR YAML files
+  load unchanged. Flip to `True` only on the Jetson production overlay,
+  where `required_endpoints` declares the named cables the rover expects.
+  When `enabled=True` with an empty list, `_require_endpoints_when_enabled`
+  raises at YAML-load time — a misconfigured gate never silently passes.
+- **Factory override chain** — `_resolve_esp32_serial_via_usbc_discovery`
+  in `src/mousedroid/factory.py` (commit `34ab760`) supersedes
+  `cfg.esp32.serial_port` with the live `rover_esp32` by-id path **only
+  when** (a) discovery is enabled AND (b) the literal `serial_port` does
+  not exist on disk. A pinned, valid `serial_port` always wins so an
+  operator override is never silently shadowed. Log the override fire
+  via the `esp32_serial_port_overridden` structured event.
+- **`ESP32Config.smoke_test_velocity_mps: float = 0.05` (`ge=0`)** —
+  setpoint for the power-chain probe in
+  `src/mousedroid/diagnostics/power_chain.py`. The `ge=0` (not `gt=0`)
+  bound lets operators express a permanent zero-motion safe-bench config;
+  the runtime `allow_motion` gate in `assert_power_chain` is still
+  authoritative regardless of this setpoint.
+
+**USB-C boot-race guard:** `enumerate_usbc_devices` and `resolve_endpoint`
+in `src/mousedroid/diagnostics/usbc.py` MUST guard `Path.glob` against a
+missing `by_id_root` directory. Without the guard, a pre-udev call (boot
+race during container startup) raises `FileNotFoundError` and crashes the
+smoke harness. The guard surfaces every required endpoint as `MISSING`
+instead — the harness sees a structured FAIL list, not an unhandled
+exception.
+
+**Serial driver decode hygiene:** `SerialESP32Driver._read_line` in
+`src/mousedroid/comms/serial_driver.py` MUST decode with
+`errors="replace"`. A garbled byte (firmware churn, brown-out, UART
+noise) under the default strict codec raises `UnicodeDecodeError` out of
+the `asyncio.to_thread` wrapper, bypassing the adaptive-timeout state
+machine. With `errors="replace"`, the replacement char flows into
+`json.loads` and the existing `esp32_non_json_response` warning path
+handles it cleanly.
+
+**E2E inline scripts:** every smoke / e2e bash one-liner that asserts
+factory-builder return types MUST use explicit `if not isinstance(x, ...):
+raise RuntimeError(...)`, NOT `assert isinstance(x, ...)`. The Jetson
+Docker entrypoint sets `PYTHONOPTIMIZE=1` which strips asserts. The
+`scripts/jetson_smoke_test.sh` E2E stage demonstrates the correct shape.
+
+**Operator triage:** see `docs/runbooks/jetson-rover-smoke.md` for the
+warm-vs-cold smoke discipline, rover-swap by-id-drift symptom, and the
+canonical structlog grep recipes (`usbc_endpoint_*`,
+`esp32_serial_port_overridden`, `power_chain_probe_complete`,
+`esp32_raw_line`). The C4 component diagram for the smoke gate is at
+`docs/architecture/c4-usbc-smoke.md`.
+
 See `AGENTS.md` (agentic-worker behavioural contract) and `SKILLS.md`
 (capability index keyed by trigger phrase) for additional context.

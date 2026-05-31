@@ -418,11 +418,15 @@ class ESP32Config(BaseModel):
     max_omega_rads: float = Field(2.0, gt=0, description="Max angular velocity (rad/s)")
     smoke_test_velocity_mps: float = Field(
         0.05,
-        gt=0,
+        ge=0,
         description=(
             "Target forward velocity for the rover hardware smoke test "
             "(see tests/hardware/test_motor_smoke.py). Kept low so an "
-            "untethered rover can stop within tabletop bounds."
+            "untethered rover can stop within tabletop bounds. Set to "
+            "0.0 to permanently lock the smoke harness into zero-motion "
+            "mode (preferred for benches with no roll-off protection); "
+            "the runtime ``allow_motion`` gate in assert_power_chain "
+            "remains authoritative regardless of this setpoint."
         ),
     )
     smoke_test_settle_s: float = Field(
@@ -474,6 +478,20 @@ class ESP32Config(BaseModel):
         1.0,
         gt=0,
         description="Probe interval while degraded — poll once per N seconds instead of every tick",
+    )
+    debug_log_max_chars: int = Field(
+        200,
+        ge=16,
+        le=4096,
+        description=(
+            "Maximum character length for raw serial-line payloads emitted in "
+            "DEBUG / WARNING log events (``esp32_raw_line``, "
+            "``esp32_non_json_response``, ``esp32_response_not_object``). The "
+            "default 200 keeps log files compact during normal smoke runs; "
+            "increase to 1024+ when triaging firmware-protocol drift where "
+            "the full payload matters. Lower bound 16 ensures the truncated "
+            'string carries at least the JSON-framing bytes ``{"T": ...}``.'
+        ),
     )
 
 
@@ -4370,6 +4388,55 @@ class OpenClawConfig(BaseModel):
     )
 
 
+class USBCEndpointSpec(BaseModel):
+    """A single USB-C endpoint the smoke gate expects to find under by-id."""
+
+    name: str = Field(..., min_length=1, description="Logical role, e.g. rover_esp32")
+    by_id_glob: str = Field(
+        ...,
+        min_length=1,
+        description="Glob applied under by_id_root (e.g. '*CP2102N*-if00-port0').",
+    )
+    required: bool = Field(
+        True,
+        description="If False, missing endpoint is a WARN instead of FAIL.",
+    )
+
+
+class USBCDiscoveryConfig(BaseModel):
+    """Config-driven enumeration of USB-C endpoints required for smoke."""
+
+    enabled: bool = Field(
+        False,
+        description="Master switch — keeps default YAML inert.",
+    )
+    by_id_root: Path = Field(
+        default=Path("/dev/serial/by-id"),
+        description="Filesystem root scanned for endpoints.",
+    )
+    required_endpoints: list[USBCEndpointSpec] = Field(
+        default_factory=list,
+        description=(
+            "Ordered list of USB-C endpoints the smoke gate must resolve. "
+            "Each entry declares a ``name`` (operator-readable handle used "
+            "in structured logs + factory overrides like "
+            "``_resolve_esp32_serial_via_usbc_discovery('rover_esp32')``), a "
+            "``by_id_glob`` (matched against ``by_id_root``), and an "
+            "optional ``required`` bool (True → MISSING is FAIL, False → "
+            "WARN). Empty by default so non-discovery overlays load "
+            "unchanged; populate on the rover-side production overlay. "
+            "Validated by ``_require_endpoints_when_enabled`` — an empty "
+            "list with ``enabled=True`` is rejected at YAML-load time."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _require_endpoints_when_enabled(self) -> USBCDiscoveryConfig:
+        if self.enabled and not self.required_endpoints:
+            raise ValueError("usbc_discovery.enabled=true requires at least one required_endpoint")
+        return self
+
+
 class Settings(BaseSettings):
     """Root configuration — single source of truth for all settings.
 
@@ -4482,6 +4549,13 @@ class Settings(BaseSettings):
     mcp: MCPConfig | None = Field(
         None,
         description="MCP server config (None=disabled, backwards compatible)",
+    )
+    usbc_discovery: USBCDiscoveryConfig | None = Field(
+        None,
+        description=(
+            "Optional USB-C enumeration gate used by the Jetson smoke "
+            "scripts. None disables (backwards compatible)."
+        ),
     )
     three_laws: ThreeLawsConfig = Field(default_factory=_settings_default_factory(ThreeLawsConfig))
     dual_stream_training: DualStreamTrainingConfig = Field(

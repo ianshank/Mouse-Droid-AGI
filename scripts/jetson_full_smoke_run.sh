@@ -162,8 +162,8 @@ record "container_health" "INFO" "see container_health.log"
 
 # --- Stages 1-8: delegated to jetson_smoke_test.sh via PY_WRAPPER --------
 # Bench-debug sensors (camera/audio/lidar/speaker/voice) are non-blocking until the
-# physical wiring/overlays land; system/gpio/serial and the bounded motor smoke are hard gates.
-for stage in system gpio serial; do
+# physical wiring/overlays land; system/usbc/gpio/serial and the bounded motor smoke are hard gates.
+for stage in system usbc gpio serial; do
     run_stage "${stage}" "yes" 60 bash scripts/jetson_smoke_test.sh "${stage}" || break
 done
 
@@ -175,6 +175,13 @@ if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
         env \
             MOUSEDROID_SMOKE_ALLOW_MOTION=1 \
             bash scripts/jetson_smoke_test.sh motor || true
+fi
+
+if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
+    # Power chain (battery + zero-vel + e-stop). Blocking by default once
+    # USB-C wiring is verified; operators can demote at runtime with
+    # MOUSEDROID_SMOKE_BLOCKING_POWER=no.
+    run_stage "power" "yes" 120 bash scripts/jetson_smoke_test.sh power || true
 fi
 
 if [[ "${OVERALL_FAIL}" -eq 0 ]]; then

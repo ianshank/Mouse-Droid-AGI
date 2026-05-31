@@ -255,6 +255,62 @@ ExecStartPre=/bin/cp /opt/mousedroid/config/jetson_production.yaml /etc/mousedro
   `cfg.resilience.<driver>.enabled` flag, defaults `False`). ESP32 and
   LiDAR are already wrapped (`src/mousedroid/resilience/`); these three
   are the residual gap. Cleanly composes with the current branch.
+- **`set -e` on `scripts/jetson_full_smoke_run.sh`** (review-agent low finding) —
+  the wrapper currently uses `set -uo pipefail` but not `-e`; inner stage
+  logic tracks `OVERALL_FAIL` correctly so this is intentional, but
+  top-level scripting errors silently continue. Align with `jetson_smoke_test.sh`
+  which uses `set -euo pipefail`. Low risk — surface-level only.
+- **importlib helper consolidation** (PR #105b finding deferred again) —
+  the `spec_from_file_location` pattern appears in 6+ test files across
+  the repo. Consolidate behind a shared `tests/conftest.py` helper so a
+  future change can update one site instead of N.
+- **SHA-pin GitHub action references** (CodeRabbit PR #106 finding 4) —
+  `.github/workflows/ci.yml` currently uses `actions/checkout@v4` and
+  `actions/setup-python@v5` tag references. Security best practice is
+  SHA pinning (`actions/checkout@<sha>`) to defend against tag rebasing
+  / supply-chain attacks. Best done as a single sweep across the
+  workflow file with Dependabot configured to auto-bump the SHAs.
+  Deferred from PR #106 because it spans multiple workflows + needs a
+  Dependabot config update in the same PR for sustainable maintenance.
+
+---
+
+## PR #106 follow-ups — Rover hardware fault recovery
+
+PR #106's diagnostic surface surfaced (and the operator confirmed) that
+the current Wave Rover ESP32 is **functionally dead** on UART, ROM
+bootloader, AND WiFi AP broadcast across both rover USB-C ports. Repair
+requires physical hardware work that the diagnostic surface cannot
+perform remotely. Sequenced follow-ups:
+
+1. **Bench-side hardware repair** — multimeter continuity probe ESP32
+   UART0 TX → CP2102N RXD on the canonical USB-C port; visual inspect
+   for damaged traces / lifted pads near the BOOT button (most likely
+   stress point from the 2026-05-31 BOOT-button-during-power-cycle
+   diagnostic). Worst case: replace the ESP32 module / Wave Rover
+   driver PCB. Documented in
+   `~/.claude/projects/<this>/memory/project_pr106_usbc_smoke_progress.md`.
+2. **Firmware re-flash plan** — once UART works, the chip needs Waveshare
+   stock firmware (or the original custom mousedroid build). Build
+   path: clone `https://github.com/waveshareteam/ugv_base_ros`, install
+   Arduino IDE + ESP32 board package + the SCServo / Adafruit_SSD1306
+   / etc. libraries, flash via the Waveshare ESP32 download tool
+   (Factory workmode). Stock firmware uses `Serial.begin(115200)` and
+   responds to JSON `{"T":1,"L":<lv>,"R":<rv>}` — operator must then
+   reconcile the mousedroid driver's custom `vx/vy/omega` keys against
+   the stock `L/R` keys (and align `cfg.esp32.serial_baud` to 115200
+   if running stock).
+3. **Live-rover smoke re-run** — `bash scripts/jetson_full_smoke_run.sh`
+   end-to-end with all stages blocking; confirm `power` stage
+   `estop_latency_ms` lands well under
+   `ESP32Config.emergency_stop_budget_ms` and `motor` loopback shows
+   non-zero encoder velocity.
+4. **Decoupled merge of PR #106** — the *code* in PR #106 is verified
+   and not blocked on the live rover. The USB-C enumeration gate,
+   factory override, and power-chain probe all unit-tested clean and
+   land safely under the current "rover detached" smoke posture. The
+   live-rover *motion* validation is a separate, hardware-blocked
+   operational concern tracked here rather than as a PR-merge gate.
 
 ---
 

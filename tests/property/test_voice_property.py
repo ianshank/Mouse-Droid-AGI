@@ -40,7 +40,12 @@ def test_rocky_transform_intensity_range(intensity: float) -> None:
 
 
 @given(data=st.data())
-@settings(max_examples=30)
+# deadline=None: this test spins up a fresh asyncio loop + structlog handlers per
+# example, which Windows cold-starts in 500-900ms on the first iteration before
+# warming to <2ms. The hypothesis default 200ms deadline produced spurious
+# FlakyFailure reports during PR #106 pre-commit; the assertion (chunk
+# independence) does not depend on timing so the deadline buys nothing real.
+@settings(max_examples=30, deadline=None)
 def test_mock_speaker_chunks_are_copies(data: st.DataObject) -> None:
     """Written chunks are independent copies of the original array."""
     import asyncio
