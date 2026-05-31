@@ -33,6 +33,7 @@ from mousedroid.security.injection_filter import (
     RegexInjectionFilter,
 )
 from mousedroid.vla.policy import VLAPolicyProtocol
+from mousedroid.voice.greeting import Greeter
 from mousedroid.voice.protocol import VoiceEngineProtocol
 
 if TYPE_CHECKING:
@@ -369,6 +370,66 @@ def build_speaker(cfg: Settings) -> SpeakerProtocol | None:
         device_name=cfg.speaker.device_name,
     )
     return UsbSpeaker(cfg.speaker)
+
+
+def build_greeter(
+    cfg: Settings,
+    *,
+    voice_engine: VoiceEngineProtocol | None = None,
+) -> Greeter:
+    """Build the operator-tools greeting subsystem.
+
+    Opt-in: raises :class:`ValueError` when ``cfg.greeting is None`` or
+    when ``cfg.greeting.enabled is False``. This makes mis-invocations
+    surface as a clear error rather than a silently-skipped no-op
+    (mirrors the discipline of every other ``build_*`` builder that
+    handles disabled subsystems by returning ``None`` — the greeter
+    is operator-tools, NOT orchestrator wiring, so a None return
+    would obscure operator intent).
+
+    Args:
+        cfg: Root settings. ``cfg.greeting`` MUST be a non-None
+            enabled :class:`GreetingConfig`.
+        voice_engine: Optional pre-built voice engine. Test seam so
+            unit tests can inject a mock without depending on the
+            ``build_voice_engine`` factory chain. Production callers
+            (the ``scripts/greet_intro.py`` CLI) pass ``None`` so
+            this builder routes through the standard factory path.
+
+    Returns:
+        Configured :class:`Greeter` ready to be ``await``ed via
+        :meth:`Greeter.greet`. Caller still owns the voice-engine
+        lifecycle (``await voice_engine.start()`` before, ``stop()``
+        after) — see :class:`Greeter` docstring.
+
+    Raises:
+        ValueError: When greeting is disabled / unconfigured, or when
+            the voice engine cannot be built (e.g. ``cfg.voice.enabled``
+            is False).
+    """
+    if cfg.greeting is None or not cfg.greeting.enabled:
+        msg = (
+            "build_greeter requires Settings.greeting to be a non-None "
+            "GreetingConfig with enabled=True (see "
+            "config/greeting_pilot.yaml.example for the canonical overlay)"
+        )
+        raise ValueError(msg)
+
+    engine = voice_engine if voice_engine is not None else build_voice_engine(cfg)
+    if engine is None:
+        msg = (
+            "build_greeter could not obtain a voice engine — cfg.voice.enabled "
+            "must be True for the greeting subsystem to play audio"
+        )
+        raise ValueError(msg)
+
+    _log.info(
+        "greeter_built",
+        names_count=len(cfg.greeting.names),
+        pre_chirp_event=cfg.greeting.pre_chirp_event or "(none)",
+        excitement_intensity=cfg.greeting.excitement_intensity,
+    )
+    return Greeter(engine, cfg.greeting)
 
 
 def build_voice_engine(

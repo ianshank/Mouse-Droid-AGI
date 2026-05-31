@@ -1,0 +1,60 @@
+# =============================================================================
+# Operator-tools overlay: MSE-6 spoken greeting subsystem
+# =============================================================================
+# Activate the named greeting flow (scripts/greet_intro.py) without
+# touching the production overlays. Pass this file via:
+#
+#   python scripts/greet_intro.py --config config/greeting_pilot.yaml
+#
+# or as a stacked overlay alongside the production config:
+#
+#   MOUSEDROID_JETSON_CONFIGS=config/jetson_production.yaml,config/greeting_pilot.yaml \
+#       python scripts/greet_intro.py
+#
+# Names live HERE (YAML-only by design — operator-edited config is the
+# single source of truth for who the rover knows about). Editing the
+# list does not require code changes; the schema validator catches an
+# empty list at parse time.
+# =============================================================================
+
+platform: mouse_droid
+mock_hardware: false   # Set true (or pass --dry-run) to run on a dev
+                       # machine without a Jetson — MockTTS records
+                       # all speech and MockSpeaker drops chunks.
+
+# Voice engine MUST be enabled — the greeter has no audio path otherwise.
+# All other voice tunables (TTS model path, sample rate, cooldowns) come
+# from the production overlay you stack this on top of.
+voice:
+  enabled: true
+
+greeting:
+  enabled: true
+
+  # Loaded from YAML only (no CLI override). Edit this list to change
+  # who the rover greets — the script auto-formats the names as
+  # "A, B, C and D" (Oxford comma).
+  names:
+    - John
+    - Jordan
+    - Parvathay
+    - Jeff
+
+  # The {names} placeholder is required (validated). Edit to change
+  # the wording without touching code.
+  message_template: "Hello {names}! I have been waiting to meet you for some time"
+
+  # Plays before the custom message as an MSE-6-style audible flourish.
+  # Set to "" to skip the pre-flourish entirely.
+  pre_chirp_event: "greeting_excited"
+
+  # Pause between chirp and the custom message — prevents the chirp's
+  # tail from being clipped by the message. 0 = back-to-back. Range
+  # [0, 5] seconds.
+  inter_chirp_delay_s: 0.25
+
+  # rocky_transform intensity for the custom message. Range [0, 1].
+  # 0.9 stays just below the alert intensity_threshold default so
+  # names get the excited repetition + exclamation without sliding
+  # into emergency-stop territory.
+  excitement_intensity: 0.9
