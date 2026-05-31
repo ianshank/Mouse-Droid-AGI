@@ -2,7 +2,7 @@
 
 > The deliberative mission-translation path. Operator natural-language
 > commands enter via the OpenClaw mission dispatcher (HTTP / MCP),
-> get sanitised by the shared prompt-injection filter, and are routed
+> get sanitized by the shared prompt-injection filter, and are routed
 > to a concrete LLM gateway selected by `cfg.llm.backend`. When
 > `cfg.llm.fallback_backend` is non-`"none"`, the primary is wrapped
 > with a local secondary in a `FallbackLLMGateway` composite for
@@ -71,10 +71,10 @@ flowchart TB
     %% Filter wiring
     InjFilter -. "injection_filter=" .-> Anthropic
     InjFilter -. "injection_filter=" .-> Llama
-    InjFilter -. "sanitise(nl) BEFORE egress" .-> OpenClaw
+    InjFilter -. "sanitize(nl) BEFORE egress" .-> OpenClaw
 
     %% Network/egress
-    Anthropic -- "messages.create()\nHTTPS (post-sanitise)" --> AnthropicAPI
+    Anthropic -- "messages.create()\nHTTPS (post-sanitize)" --> AnthropicAPI
     Llama -- "llama_cpp.generate" --> LocalGGUF
     OAI -- "/v1/chat/completions" --> LocalOpenAI
 
