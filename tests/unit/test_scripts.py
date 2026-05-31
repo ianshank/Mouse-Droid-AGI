@@ -34,9 +34,6 @@ def _subprocess_env() -> dict[str, str]:
     the explicit env propagation here, the import-smoke tests below all
     fail with ``ModuleNotFoundError: No module named 'mousedroid.config'``
     even though the package is reachable from the parent test process.
-    (Same fix landed in PR #106 commit 3a86477 — re-applied here because
-    PR #107 was branched off the pre-PR-#106 base; the import-smoke
-    failure is a rebase artifact, not a new regression.)
     """
     env = dict(os.environ)
     extra = os.pathsep.join([str(_REPO / "src"), str(_REPO)])

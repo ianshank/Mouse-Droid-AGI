@@ -99,6 +99,32 @@ def test_resolve_settings_empty_token_skips_auth_injection(
     assert mod._AUTH_HEADER == {}
 
 
+def test_resolve_settings_no_env_no_cli_token_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression — no hardcoded dev-token fallback (security-auditor finding).
+
+    Earlier revisions of ``dashboard_proxy.py`` baked the literal token
+    ``dev-dashboard-token-1779157616`` into the env-fallback default. That
+    leaked a real credential string into git history and meant any deploy
+    that forgot to set ``JETSON_TOKEN`` silently re-used the dev token
+    against the production rover. Confirmed removed: with neither CLI
+    positional nor env var set, ``TOKEN`` must be the empty string and the
+    proxy must NOT inject an Authorization header upstream.
+    """
+    monkeypatch.setattr(sys, "argv", ["dashboard_proxy.py"])
+    monkeypatch.delenv("JETSON_TOKEN", raising=False)
+    monkeypatch.delenv("PROXY_PORT", raising=False)
+    monkeypatch.delenv("JETSON_HTTP", raising=False)
+
+    mod = _load_dashboard_proxy_module(monkeypatch)
+    assert mod.TOKEN == ""
+    assert mod._AUTH_HEADER == {}
+    # Defence-in-depth: even if a future refactor reintroduced a default,
+    # this guard would catch a string that looks like a baked-in dev token.
+    assert "dev-dashboard-token" not in mod.TOKEN
+
+
 def test_client_headers_drops_hop_by_hop_and_injects_auth(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -221,7 +221,7 @@ class TestImportGraphIsolation:
         regression here. PYTHONPATH is propagated explicitly so the
         spawned interpreter can resolve ``mousedroid.vla.policy`` —
         pytest's ``pythonpath = ['src', '.']`` does not survive the
-        subprocess boundary. (Same fix landed in PR #106 commit 3a86477.)
+        subprocess boundary.
         """
         import os
         from pathlib import Path

@@ -655,3 +655,78 @@ def test_offline_rl_config_all_phase21_fields_compose():
     assert cfg.bc_lr == 5e-4
     assert cfg.bc_batch_size == 32
     assert cfg.use_replay_mixer is True
+
+
+# ---------------------------------------------------------------------------
+# USB-C discovery (Jetson smoke gate, plan 2026-05-30)
+# ---------------------------------------------------------------------------
+
+
+def test_usbc_discovery_optional_defaults_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Settings must instantiate without an explicit usbc_discovery block.
+
+    Explicitly forces ``MOUSEDROID_MOCK_HARDWARE=true`` so the test does
+    not silently depend on the ambient environment (CodeRabbit finding 10).
+    A local run with ``MOUSEDROID_MOCK_HARDWARE=false`` previously made
+    this test fail for reasons unrelated to USB-C config defaults.
+    """
+    from mousedroid.config.schema import Settings
+
+    monkeypatch.setenv("MOUSEDROID_MOCK_HARDWARE", "true")
+    s = Settings()
+    assert s.usbc_discovery is None
+
+
+def test_usbc_discovery_enabled_requires_required_endpoints():
+    """enabled=True with no endpoints must fail validation."""
+    from mousedroid.config.schema import USBCDiscoveryConfig
+
+    with pytest.raises(ValidationError):
+        USBCDiscoveryConfig(enabled=True, required_endpoints=[])
+
+
+def test_usbc_discovery_disabled_with_empty_endpoints_valid():
+    """Disabled config does not require endpoints — default YAML stays inert."""
+    from mousedroid.config.schema import USBCDiscoveryConfig
+
+    cfg = USBCDiscoveryConfig(enabled=False, required_endpoints=[])
+    assert cfg.enabled is False
+    assert cfg.required_endpoints == []
+
+
+def test_usbc_endpoint_glob_is_required():
+    """USBCEndpointSpec must reject name-only entries."""
+    from mousedroid.config.schema import USBCEndpointSpec
+
+    with pytest.raises(ValidationError):
+        USBCEndpointSpec(name="rover_esp32")  # type: ignore[call-arg]
+
+
+def test_usbc_discovery_resolves_default_by_id_root():
+    """by_id_root defaults to /dev/serial/by-id and is overridable."""
+    from mousedroid.config.schema import USBCDiscoveryConfig, USBCEndpointSpec
+
+    cfg = USBCDiscoveryConfig(
+        enabled=True,
+        required_endpoints=[
+            USBCEndpointSpec(name="rover_esp32", by_id_glob="*CP2102N*"),
+        ],
+    )
+    # as_posix() so Windows test hosts can compare against the Linux literal.
+    assert cfg.by_id_root.as_posix() == "/dev/serial/by-id"
+
+
+def test_usbc_endpoint_required_defaults_true():
+    """Endpoints default to required=True so missing ones surface as FAIL."""
+    from mousedroid.config.schema import USBCEndpointSpec
+
+    spec = USBCEndpointSpec(name="aux", by_id_glob="*aux*")
+    assert spec.required is True
+
+
+def test_usbc_endpoint_required_can_be_optional():
+    """Operators can mark non-critical endpoints as required=False (WARN)."""
+    from mousedroid.config.schema import USBCEndpointSpec
+
+    spec = USBCEndpointSpec(name="aux", by_id_glob="*aux*", required=False)
+    assert spec.required is False

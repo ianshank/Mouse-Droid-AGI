@@ -54,7 +54,7 @@ if TYPE_CHECKING:
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.common.time.protocol import ClockProtocol
     from mousedroid.common.tools.registry import ToolRegistry
-    from mousedroid.config.schema import LLMConfig, Settings, UltrasonicConfig
+    from mousedroid.config.schema import ESP32Config, Settings, UltrasonicConfig
     from mousedroid.curiosity.protocol import CuriosityProtocol
     from mousedroid.efficiency.tensorrt import TensorRTCompilerProtocol
     from mousedroid.experience.logger import ExperienceLogger
@@ -95,6 +95,11 @@ def build_esp32_driver(cfg: Settings) -> ESP32CommProtocol:
     fault tolerance.  The wrapper implements ``ESP32CommProtocol``
     so the orchestrator doesn't need to know about it.
 
+    When ``cfg.usbc_discovery`` is enabled and declares a ``rover_esp32``
+    endpoint, that endpoint's live by-id path supersedes the literal
+    ``cfg.esp32.serial_port``. This keeps the config stable across rover
+    swaps (CP2102N serial numbers differ per unit).
+
     Args:
         cfg: Root settings.
 
@@ -117,7 +122,8 @@ def build_esp32_driver(cfg: Settings) -> ESP32CommProtocol:
     elif cfg.esp32.protocol == "serial":
         from mousedroid.comms.serial_driver import SerialESP32Driver
 
-        inner = SerialESP32Driver(cfg.esp32)
+        esp32_cfg = _resolve_esp32_serial_via_usbc_discovery(cfg)
+        inner = SerialESP32Driver(esp32_cfg)
     else:
         from mousedroid.comms.wifi_driver import WiFiESP32Driver
 
@@ -126,6 +132,40 @@ def build_esp32_driver(cfg: Settings) -> ESP32CommProtocol:
     from mousedroid.resilience.resilient_driver import ResilientESP32Driver
 
     return ResilientESP32Driver(inner, cfg.retry, cfg.circuit_breaker)
+
+
+def _resolve_esp32_serial_via_usbc_discovery(cfg: Settings) -> ESP32Config:
+    """Override ``esp32.serial_port`` with the live rover_esp32 by-id path.
+
+    Returns the original ESP32Config when discovery is disabled, the
+    ``rover_esp32`` endpoint is absent, or the literal serial_port path
+    already exists on disk (an exact match wins — avoids surprise
+    overrides when the operator pinned a specific path).
+    """
+    from pathlib import Path as _Path
+
+    if cfg.usbc_discovery is None or not cfg.usbc_discovery.enabled:
+        return cfg.esp32
+    if _Path(cfg.esp32.serial_port).exists():
+        return cfg.esp32
+
+    from mousedroid.diagnostics.usbc import resolve_endpoint
+
+    resolved = resolve_endpoint(cfg.usbc_discovery, "rover_esp32")
+    if resolved is None:
+        _log.warning(
+            "esp32_serial_port_unresolved",
+            literal=cfg.esp32.serial_port,
+            hint="usbc_discovery has no rover_esp32 endpoint matching the bus",
+        )
+        return cfg.esp32
+
+    _log.info(
+        "esp32_serial_port_overridden",
+        literal=cfg.esp32.serial_port,
+        resolved=str(resolved),
+    )
+    return cfg.esp32.model_copy(update={"serial_port": str(resolved)})
 
 
 def build_camera(

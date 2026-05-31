@@ -238,3 +238,16 @@ snap-*.jpg
 
 # Editor-local launch artefacts not intended for the repo
 .vscode/launch.local.json
+
+# Config-edit backup files (sed -i.bak / cp foo.yaml foo.yaml.bak.<timestamp>).
+# Operators editing /etc/mousedroid/*.yaml on the Jetson — and the smoke runbook
+# itself — emit timestamped .bak.* sidecars; these are local-only sidecars and
+# must never make it into a commit. Keep this generic so it also catches
+# *.bak.YYYYMMDD_HHMMSS_<label> patterns from rover-swap / baud-change drills.
+*.bak
+*.bak.*
+
+# Web-research scratch fetches (firecrawl/curl output cached under /tmp/ during
+# external-doc lookups — see the Wave Rover platform reference memory).
+/tmp/wave_rover_*
+/tmp/*.html
