@@ -42,6 +42,7 @@ Architecture invariants (per CLAUDE.md):
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -66,6 +67,15 @@ _log = get_logger(__name__)
 # (normalised in ``[-1, 1]``), not an operator-tunable knob.
 _GOAL_VECTOR_MIN = -1.0
 _GOAL_VECTOR_MAX = 1.0
+
+# First ``{...}`` span in a response. Claude (and most chat models)
+# frequently wrap the requested JSON object in markdown code fences
+# (```json ... ```) or a sentence of prose despite the system prompt's
+# "ONLY the JSON object" instruction. Extracting the brace span before
+# ``json.loads`` makes parsing robust to that without a hardcoded fence
+# format. ``DOTALL`` lets the object span newlines; the greedy ``.*``
+# captures the outermost object so nested braces survive.
+_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
 def _clamp_unit(value: float) -> float:
@@ -242,6 +252,12 @@ class AnthropicLLMGateway:
             )
             return GoalVector()
 
+        # A successful round-trip clears a prior transient-failure degrade so
+        # the gateway recovers in-session (and the FallbackLLMGateway composite
+        # routes back to it on its next cooldown probe). Only request failures
+        # set the flag; start()-time degrades (no SDK / blank model) leave
+        # ``_ready`` False, so this line is unreachable in that state.
+        self._degraded = False
         elapsed_ms = (time.monotonic() - start) * MILLISECONDS_PER_SECOND
         if elapsed_ms > self._cfg.latency_target_ms:
             _log.warning(
@@ -266,14 +282,20 @@ class AnthropicLLMGateway:
         """Concatenate the ``.text`` of every text block in the response.
 
         The Messages API returns ``content`` as a list of blocks, each with a
-        ``.text`` attribute for ``type='text'`` blocks. Defensive against a
-        missing / non-list ``content`` so the "never raises on backend"
-        invariant holds for a malformed response object.
+        ``.text`` attribute for ``type='text'`` blocks. Both the response and
+        each block are handled whether they arrive as SDK objects (attribute
+        access) or plain dicts — the latter covers mock responses and
+        alternative client implementations. Defensive against a missing /
+        non-list ``content`` so the "never raises on backend" invariant holds
+        for a malformed response object.
         """
-        content = getattr(response, "content", None) or []
+        if isinstance(response, dict):
+            content = response.get("content") or []
+        else:
+            content = getattr(response, "content", None) or []
         chunks: list[str] = []
         for block in content:
-            text = getattr(block, "text", None)
+            text = block.get("text") if isinstance(block, dict) else getattr(block, "text", None)
             if isinstance(text, str):
                 chunks.append(text)
         return "".join(chunks).strip()
@@ -288,10 +310,17 @@ class AnthropicLLMGateway:
         given model response. Returns a neutral :class:`GoalVector` when
         ``content`` is empty / not JSON, when the decoded payload isn't a
         JSON object, or when a field is non-numeric.
+
+        Tolerates models that wrap the object in markdown code fences or
+        surrounding prose by extracting the first ``{...}`` span before
+        decoding (see :data:`_JSON_OBJECT_RE`).
         """
         if not content:
             _log.warning("anthropic_gateway_empty_content")
             return GoalVector()
+        match = _JSON_OBJECT_RE.search(content)
+        if match is not None:
+            content = match.group(0)
         try:
             doc = json.loads(content)
         except json.JSONDecodeError:

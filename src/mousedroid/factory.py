@@ -765,8 +765,13 @@ def build_llm_gateway(
         primary=cfg.llm.backend,
         secondary=fallback_backend,
         fallback_model_name=cfg.llm.fallback_model_name,
+        retry_cooldown_s=cfg.llm.fallback_retry_cooldown_s,
     )
-    return FallbackLLMGateway(primary, secondary)
+    return FallbackLLMGateway(
+        primary,
+        secondary,
+        retry_cooldown_s=cfg.llm.fallback_retry_cooldown_s,
+    )
 
 
 def build_vla_policy(

@@ -830,6 +830,20 @@ class LLMConfig(BaseModel):
             "``model_name``)."
         ),
     )
+    fallback_retry_cooldown_s: float = Field(
+        30.0,
+        gt=0.0,
+        description=(
+            "Seconds the ``FallbackLLMGateway`` composite waits before "
+            "re-probing a degraded primary backend. A mobile rover sees "
+            "transient WAN dropouts, so once the cloud primary degrades the "
+            "composite periodically re-attempts it (rather than pinning to "
+            "the local secondary until the next process restart). A "
+            "successful re-probe clears the primary's degraded state and "
+            "resumes cloud serving. Only consulted when "
+            "``fallback_backend != 'none'``."
+        ),
+    )
 
 
 class VLAConfig(BaseModel):

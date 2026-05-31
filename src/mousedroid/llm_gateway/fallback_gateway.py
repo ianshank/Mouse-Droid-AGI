@@ -30,15 +30,25 @@ Failover semantics (the key design point — see PR peer review):
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
 
 from mousedroid.llm_gateway.protocol import GoalVector
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from mousedroid.llm_gateway.protocol import LLMGatewayProtocol
 
 _log = get_logger(__name__)
+
+# Default seconds between primary re-probe attempts once it is degraded.
+# Used only when the factory does not supply ``cfg.llm.fallback_retry_cooldown_s``
+# (e.g. a direct construction in a test). Production always passes the
+# config value, so this is a sane fallback, not an operator-tunable knob
+# living in code.
+_DEFAULT_RETRY_COOLDOWN_S = 30.0
 
 
 def _is_degraded(gateway: LLMGatewayProtocol) -> bool:
@@ -63,6 +73,9 @@ class FallbackLLMGateway:
         self,
         primary: LLMGatewayProtocol,
         secondary: LLMGatewayProtocol,
+        *,
+        retry_cooldown_s: float = _DEFAULT_RETRY_COOLDOWN_S,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         """Initialise the composite.
 
@@ -70,9 +83,22 @@ class FallbackLLMGateway:
             primary: Preferred gateway (e.g. cloud Claude).
             secondary: Local fallback gateway used when the primary is
                 unavailable / degraded.
+            retry_cooldown_s: Seconds to wait before re-probing a degraded
+                primary. A mobile rover sees transient WAN dropouts, so the
+                composite periodically re-attempts the cloud primary rather
+                than bypassing it forever once degraded. The factory wires
+                ``cfg.llm.fallback_retry_cooldown_s`` here.
+            clock: Monotonic time source (seconds). Defaults to
+                :func:`time.monotonic`; injectable so tests can advance the
+                cooldown deterministically.
         """
         self._primary = primary
         self._secondary = secondary
+        self._retry_cooldown_s = retry_cooldown_s
+        self._clock: Callable[[], float] = clock if clock is not None else time.monotonic
+        # ``-inf`` guarantees the first call always attempts the primary,
+        # regardless of the cooldown window.
+        self._last_primary_attempt = float("-inf")
 
     @property
     def is_ready(self) -> bool:
@@ -110,7 +136,18 @@ class FallbackLLMGateway:
             ValueError: Propagated from a child when the command is empty or
                 rejected by the injection filter (caller error — no failover).
         """
-        if self._primary.is_ready and not _is_degraded(self._primary):
+        # Use the primary when it's ready AND either healthy or its cooldown
+        # has elapsed since the last attempt. The cooldown re-probe lets the
+        # rover recover the cloud connection after a transient WAN dropout
+        # instead of being pinned to the local secondary until the next
+        # start(). A successful primary call clears its own ``is_degraded``
+        # (see AnthropicLLMGateway), so a recovered primary resumes serving.
+        now = self._clock()
+        primary_degraded = _is_degraded(self._primary)
+        cooldown_elapsed = (now - self._last_primary_attempt) >= self._retry_cooldown_s
+        use_primary = self._primary.is_ready and (not primary_degraded or cooldown_elapsed)
+        if use_primary:
+            self._last_primary_attempt = now
             goal: GoalVector | None
             try:
                 goal = await self._primary.translate_mission(nl_command)
@@ -128,9 +165,9 @@ class FallbackLLMGateway:
             # legitimately-neutral GoalVector). Only failover when the call
             # degraded the primary or raised unexpectedly.
             if goal is not None and not _is_degraded(self._primary):
-                _log.debug("fallback_served", served_by="primary")
+                _log.debug("fallback_served", served_by="primary", retry_probe=primary_degraded)
                 return goal
-            _log.warning("fallback_primary_to_secondary")
+            _log.warning("fallback_primary_to_secondary", was_retry_probe=primary_degraded)
 
         goal = await self._secondary.translate_mission(nl_command)
         _log.debug(

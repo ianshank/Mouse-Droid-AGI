@@ -41,6 +41,15 @@ def test_fallback_backend_rejects_anthropic_as_secondary() -> None:
         LLMConfig(fallback_backend="anthropic")  # type: ignore[arg-type]
 
 
+def test_fallback_retry_cooldown_defaults_to_30s() -> None:
+    assert LLMConfig().fallback_retry_cooldown_s == 30.0
+
+
+def test_fallback_retry_cooldown_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="fallback_retry_cooldown_s"):
+        LLMConfig(fallback_retry_cooldown_s=0.0)
+
+
 def test_existing_minimal_yaml_loads_unchanged() -> None:
     """A config that predates these fields still validates with defaults."""
     cfg = LLMConfig(enabled=True, model_name="gemma-4-e4b")

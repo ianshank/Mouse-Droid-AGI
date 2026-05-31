@@ -24,6 +24,7 @@ class _FakeGateway:
         degraded: bool = False,
         result: GoalVector | None = None,
         degrade_on_call: bool = False,
+        clear_degraded_on_call: bool = False,
         raise_value_error: bool = False,
         raise_runtime_error: bool = False,
     ) -> None:
@@ -31,6 +32,7 @@ class _FakeGateway:
         self._degraded = degraded
         self._result = result if result is not None else GoalVector()
         self._degrade_on_call = degrade_on_call
+        self._clear_degraded_on_call = clear_degraded_on_call
         self._raise_value_error = raise_value_error
         self._raise_runtime_error = raise_runtime_error
         self.calls = 0
@@ -57,10 +59,25 @@ class _FakeGateway:
             raise RuntimeError("unexpected backend explosion")
         if self._degrade_on_call:
             self._degraded = True
+        if self._clear_degraded_on_call:
+            self._degraded = False
         return self._result
 
     async def stop(self) -> None:
         self.stopped = True
+
+
+class _FakeClock:
+    """Manually-advanced monotonic clock for deterministic cooldown tests."""
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self._t = start
+
+    def __call__(self) -> float:
+        return self._t
+
+    def advance(self, dt: float) -> None:
+        self._t += dt
 
 
 _PRIMARY_GOAL = GoalVector(vx_target=0.7, vy_target=0.0, omega_target=0.0)
@@ -98,13 +115,62 @@ async def test_secondary_used_when_primary_not_ready() -> None:
 
 
 @pytest.mark.asyncio
-async def test_secondary_used_when_primary_already_degraded() -> None:
+async def test_degraded_primary_is_reprobed_on_first_call_then_fails_over() -> None:
+    """First-ever call always probes the primary (cooldown from -inf elapsed).
+
+    The fake primary stays degraded across the call (it does not model the
+    real gateway's reset-on-success), so the composite fails over.
+    """
     primary = _FakeGateway(degraded=True, result=_PRIMARY_GOAL)
     secondary = _FakeGateway(result=_SECONDARY_GOAL)
     gw = FallbackLLMGateway(primary, secondary)
     assert await gw.translate_mission("go") == _SECONDARY_GOAL
-    assert primary.calls == 0
+    assert primary.calls == 1  # re-probed despite degraded
     assert secondary.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_degraded_primary_skipped_within_cooldown() -> None:
+    """After a failed probe, the primary is skipped until the cooldown lapses."""
+    clock = _FakeClock()
+    primary = _FakeGateway(degraded=True, result=_PRIMARY_GOAL)
+    secondary = _FakeGateway(result=_SECONDARY_GOAL)
+    gw = FallbackLLMGateway(primary, secondary, retry_cooldown_s=30.0, clock=clock)
+
+    await gw.translate_mission("go")  # first call probes (calls -> 1)
+    assert primary.calls == 1
+
+    clock.advance(10.0)  # still inside the 30s cooldown
+    await gw.translate_mission("go")
+    assert primary.calls == 1  # NOT re-probed
+    assert secondary.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_degraded_primary_reprobed_after_cooldown() -> None:
+    clock = _FakeClock()
+    primary = _FakeGateway(degraded=True, result=_PRIMARY_GOAL)
+    secondary = _FakeGateway(result=_SECONDARY_GOAL)
+    gw = FallbackLLMGateway(primary, secondary, retry_cooldown_s=30.0, clock=clock)
+
+    await gw.translate_mission("go")  # probe 1
+    assert primary.calls == 1
+
+    clock.advance(31.0)  # cooldown elapsed
+    await gw.translate_mission("go")  # probe 2
+    assert primary.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_primary_recovers_on_reprobe_and_resumes_serving() -> None:
+    """A degraded primary that clears its flag on a re-probe resumes serving."""
+    primary = _FakeGateway(degraded=True, result=_PRIMARY_GOAL, clear_degraded_on_call=True)
+    secondary = _FakeGateway(result=_SECONDARY_GOAL)
+    gw = FallbackLLMGateway(primary, secondary)
+    # First call re-probes (cooldown from -inf), primary clears degraded and
+    # returns its goal — the composite serves from the recovered primary.
+    assert await gw.translate_mission("go") == _PRIMARY_GOAL
+    assert secondary.calls == 0
 
 
 @pytest.mark.asyncio

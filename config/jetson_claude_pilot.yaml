@@ -55,3 +55,8 @@ llm:
   model_path: "/opt/mousedroid/models/llama-3-8b-instruct.Q4_K_M.gguf"
   n_gpu_layers: -1
   n_threads: 4
+
+  # Once the cloud primary degrades (transient WAN dropout), the composite
+  # serves from the local model and re-probes Claude every this-many seconds.
+  # A successful re-probe clears the degrade and resumes cloud serving.
+  fallback_retry_cooldown_s: 30.0

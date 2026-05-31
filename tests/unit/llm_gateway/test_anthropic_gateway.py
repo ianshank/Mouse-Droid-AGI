@@ -283,6 +283,58 @@ async def test_translate_degrades_and_returns_neutral_on_api_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_translate_clears_degraded_on_success_after_failure() -> None:
+    """A successful request recovers the gateway from a prior transient degrade."""
+    messages = _FakeMessages(exc=RuntimeError("transient 529"))
+    sdk = _make_sdk()
+    # Reuse the fake client but swap its messages handler between calls.
+    gw = AnthropicLLMGateway(_config(), sdk=sdk)
+    await gw.start()
+    gw._client.messages = messages  # first call fails  # type: ignore[attr-defined]
+    assert await gw.translate_mission("go") == GoalVector()
+    assert gw.is_degraded is True
+
+    # Network recovers — next call succeeds and clears the degraded flag.
+    gw._client.messages = _FakeMessages(  # type: ignore[attr-defined]
+        response=_text_response(json.dumps({"vx": 0.5, "vy": 0.0, "omega": 0.0})),
+    )
+    goal = await gw.translate_mission("go")
+    assert goal == GoalVector(vx_target=0.5, vy_target=0.0, omega_target=0.0)
+    assert gw.is_degraded is False
+
+
+@pytest.mark.asyncio
+async def test_translate_strips_markdown_code_fence() -> None:
+    """JSON wrapped in a ```json fence is extracted before parsing."""
+    fenced = '```json\n{"vx": 0.4, "vy": 0.0, "omega": -0.2}\n```'
+    sdk = _make_sdk(response=_text_response(fenced))
+    gw = AnthropicLLMGateway(_config(), sdk=sdk)
+    await gw.start()
+    goal = await gw.translate_mission("go")
+    assert goal == GoalVector(vx_target=0.4, vy_target=0.0, omega_target=-0.2)
+
+
+@pytest.mark.asyncio
+async def test_translate_extracts_json_from_surrounding_prose() -> None:
+    """Leading/trailing prose around the JSON object is tolerated."""
+    chatty = 'Sure! Here is the plan: {"vx": 0.1, "vy": 0.0, "omega": 0.0}. Safe travels.'
+    sdk = _make_sdk(response=_text_response(chatty))
+    gw = AnthropicLLMGateway(_config(), sdk=sdk)
+    await gw.start()
+    goal = await gw.translate_mission("go")
+    assert goal == GoalVector(vx_target=0.1, vy_target=0.0, omega_target=0.0)
+
+
+def test_extract_text_handles_dict_response_and_blocks() -> None:
+    """Dict-shaped responses / blocks (mocks, alt clients) are handled."""
+    dict_response = {"content": [{"text": '{"vx": 0.3}'}, {"type": "tool_use"}]}
+    assert AnthropicLLMGateway._extract_text(dict_response) == '{"vx": 0.3}'
+    # Mixed object + dict blocks.
+    mixed = _FakeResponse([{"text": "a"}, _FakeBlock("b")])
+    assert AnthropicLLMGateway._extract_text(mixed) == "ab"
+
+
+@pytest.mark.asyncio
 async def test_translate_raises_on_empty_command() -> None:
     gw = AnthropicLLMGateway(_config(), sdk=_make_sdk(response=_text_response("{}")))
     await gw.start()
