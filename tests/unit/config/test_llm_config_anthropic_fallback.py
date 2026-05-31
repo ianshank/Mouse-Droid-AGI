@@ -60,6 +60,8 @@ def test_existing_minimal_yaml_loads_unchanged() -> None:
 
 def test_env_overrides_for_anthropic_failover(monkeypatch: pytest.MonkeyPatch) -> None:
     """Operators can wire cloud-primary + local-fallback purely by env."""
+    # Pin mock-hardware so ``Settings()`` doesn't depend on ambient sensor env.
+    monkeypatch.setenv("MOUSEDROID_MOCK_HARDWARE", "true")
     monkeypatch.setenv("MOUSEDROID_LLM__BACKEND", "anthropic")
     monkeypatch.setenv("MOUSEDROID_LLM__MODEL_NAME", "claude-haiku-4-5")
     monkeypatch.setenv("MOUSEDROID_LLM__API_KEY", "sk-ant-xyz")
