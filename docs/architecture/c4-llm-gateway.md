@@ -124,7 +124,7 @@ flowchart TB
 
 ## Security boundary
 
-- **Cloud egress only at `AnthropicLLMGateway.translate_mission` line `client.messages.create`.** Every command flowing through this line was sanitised by `RegexInjectionFilter.sanitize()` 8 lines earlier — confirmed by `tests/unit/llm_gateway/test_anthropic_gateway.py` and the round-3 security-auditor agent.
+- **Cloud egress only at `AnthropicLLMGateway.translate_mission` line `client.messages.create`.** Every command flowing through this line was sanitized by `RegexInjectionFilter.sanitize()` 8 lines earlier — confirmed by `tests/unit/llm_gateway/test_anthropic_gateway.py` and the round-3 security-auditor agent.
 - **API key never logged.** `LLMConfig.api_key` is `SecretStr`; `.get_secret_value()` is called ONCE at `start()` (line ~188) and passed to the SDK constructor. Pydantic's `SecretStr.__repr__` masks to `SecretStr('**********')`. Confirmed by `test_llm_config_anthropic_fallback.py::test_env_overrides_for_anthropic_failover` (asserts `"sk-ant-xyz" not in repr(settings.llm)`).
 - **Example YAML overlay has no credentials.** `config/jetson_claude_pilot.yaml` line 39-40 explicitly omits `api_key` with operator instructions to supply via `ANTHROPIC_API_KEY` env var or `MOUSEDROID_LLM__API_KEY` schema-mapped override.
 - **Same-input failover invariant.** When primary fails, the SAME `nl_command` reaches the secondary — both apply the SAME shared filter instance. An injection-rejected command propagates `InjectionRejected` (`ValueError` subclass) without failover.
