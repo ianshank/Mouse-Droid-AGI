@@ -656,7 +656,13 @@ from mousedroid.validation.runtime import camera_unavailable_reason, resolve_run
 cfg = load_settings(*resolve_runtime_config_paths())
 
 orch = build_orchestrator(cfg)
-assert isinstance(orch, MouseDroidOrchestrator)
+if not isinstance(orch, MouseDroidOrchestrator):
+    # Explicit raise (not assert) — PYTHONOPTIMIZE=1 on the Jetson Docker
+    # entrypoint strips asserts, which would silently turn a wrong-type
+    # return into a spurious E2E PASS. Per CLAUDE.md validation contract.
+    raise RuntimeError(
+        f"build_orchestrator returned {type(orch).__name__}, expected MouseDroidOrchestrator"
+    )
 
 async def run_e2e():
     await orch.start()

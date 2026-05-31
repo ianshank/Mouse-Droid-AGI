@@ -34,7 +34,14 @@ from aiohttp import web
 
 
 def _resolve_settings() -> tuple[str, int, str, str]:
-    """Resolve (proxy_host, proxy_port, upstream_http, token) from CLI args or env."""
+    """Resolve (proxy_host, proxy_port, upstream_http, token) from CLI args or env.
+
+    Token defaults to empty (no auth header injected). Operators MUST supply
+    a real token via the third CLI positional or ``JETSON_TOKEN`` env var
+    when proxying an auth-gated upstream — there is intentionally no
+    hardcoded fallback so a deploy without the env var fails loudly at the
+    upstream's 401 rather than silently re-using a baked-in dev credential.
+    """
     args = sys.argv[1:]
     if len(args) >= 2:
         proxy_port = int(args[0])
@@ -43,7 +50,7 @@ def _resolve_settings() -> tuple[str, int, str, str]:
     else:
         proxy_port = int(os.environ.get("PROXY_PORT", "8081"))
         upstream_http = os.environ.get("JETSON_HTTP", "http://192.168.55.1:8080").rstrip("/")
-        token = os.environ.get("JETSON_TOKEN", "dev-dashboard-token-1779157616")
+        token = os.environ.get("JETSON_TOKEN", "")
     proxy_host = os.environ.get("PROXY_HOST", "127.0.0.1")
     return proxy_host, proxy_port, upstream_http, token
 

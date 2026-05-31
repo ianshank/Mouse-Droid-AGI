@@ -154,3 +154,25 @@ async def test_read_json_returns_parsed_dict_on_valid_response():
     with patch.object(driver, "_read_line", return_value='{"lv": 0.1, "rv": 0.1}'):
         result = await driver._read_json()
     assert result == {"lv": 0.1, "rv": 0.1}
+
+
+def test_read_line_handles_non_utf8_bytes_without_raising():
+    """Regression — ``_read_line`` must not raise UnicodeDecodeError on garbled bytes.
+
+    The original code used ``line.decode()`` with the strict default codec,
+    which raised ``UnicodeDecodeError`` whenever the ESP32 emitted a partial
+    framing byte (e.g. post-firmware-flash, brown-out, or UART noise). The
+    exception propagated through ``asyncio.to_thread`` bypassing the
+    adaptive-timeout state machine. The fix is ``errors="replace"`` — the
+    replacement char then flows into ``json.loads`` which produces the
+    existing ``esp32_non_json_response`` warning rather than a crash.
+    """
+    driver = _make_driver()
+    mock_serial = MagicMock()
+    # 0xFF and 0xFE are invalid UTF-8 start bytes.
+    mock_serial.readline.return_value = b'\xff\xfe{"lv": 0.1}\n'
+    driver._serial = mock_serial
+    # MUST NOT raise.
+    decoded = driver._read_line()
+    # Replacement character preserves the payload's parseable suffix.
+    assert "lv" in decoded

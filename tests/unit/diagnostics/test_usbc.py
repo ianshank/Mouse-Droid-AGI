@@ -130,3 +130,41 @@ def test_resolve_endpoint_returns_none_when_name_unknown(fake_by_id_root: Path) 
 def test_resolve_endpoint_returns_none_when_discovery_disabled() -> None:
     cfg = USBCDiscoveryConfig()
     assert resolve_endpoint(cfg, "rover_esp32") is None
+
+
+def test_enumerate_returns_missing_when_by_id_root_absent(tmp_path: Path) -> None:
+    """Boot-race guard — ``Path.glob`` on a non-existent dir raises FileNotFoundError.
+
+    Before the guard was added, a pre-udev call to ``enumerate_usbc_devices``
+    crashed the smoke gate with an uncaught OSError. After the fix, every
+    required endpoint should surface as MISSING (or WARN if not required)
+    so the harness sees a structured FAIL list instead.
+    """
+    nonexistent = tmp_path / "no-such-by-id"
+    assert not nonexistent.exists()
+    cfg = USBCDiscoveryConfig(
+        enabled=True,
+        by_id_root=nonexistent,
+        required_endpoints=[
+            USBCEndpointSpec(name="rover_esp32", by_id_glob="*CP2102N*", required=True),
+            USBCEndpointSpec(name="aux_sensor", by_id_glob="*AUX*", required=False),
+        ],
+    )
+    result = enumerate_usbc_devices(cfg)
+    assert result["rover_esp32"].status is EndpointStatus.MISSING
+    assert result["rover_esp32"].resolved_path is None
+    assert result["aux_sensor"].status is EndpointStatus.WARN
+    assert result["aux_sensor"].resolved_path is None
+
+
+def test_resolve_endpoint_returns_none_when_by_id_root_absent(tmp_path: Path) -> None:
+    """Same boot-race guard surfaces via ``resolve_endpoint`` → None (factory falls back)."""
+    nonexistent = tmp_path / "no-such-by-id"
+    cfg = USBCDiscoveryConfig(
+        enabled=True,
+        by_id_root=nonexistent,
+        required_endpoints=[
+            USBCEndpointSpec(name="rover_esp32", by_id_glob="*CP2102N*"),
+        ],
+    )
+    assert resolve_endpoint(cfg, "rover_esp32") is None

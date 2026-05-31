@@ -40,11 +40,19 @@ def resolve_endpoint(cfg: USBCDiscoveryConfig, name: str) -> Path | None:
     """Resolve a single endpoint name to its current by-id path, or None.
 
     Returns None when discovery is disabled, the named endpoint is not
-    declared, or no by-id file matches the configured glob. Callers can
+    declared, the ``by_id_root`` directory doesn't exist yet (boot-race
+    with udev), or no by-id file matches the configured glob. Callers can
     use this to override a stale literal ``serial_port`` config field
     (e.g. ``esp32.serial_port``) with the live USB-C device path.
     """
     if not cfg.enabled:
+        return None
+    if not cfg.by_id_root.is_dir():
+        _log.warning(
+            "usbc_by_id_root_missing",
+            by_id_root=str(cfg.by_id_root),
+            hint="udev may not have mounted the by-id symlinks yet",
+        )
         return None
     for spec in cfg.required_endpoints:
         if spec.name != name:
@@ -62,11 +70,34 @@ def enumerate_usbc_devices(
     """Resolve every required endpoint against ``cfg.by_id_root``.
 
     Returns an empty dict when discovery is disabled so callers can short-
-    circuit without per-call enabled checks.
+    circuit without per-call enabled checks. When ``by_id_root`` doesn't
+    exist yet (e.g., pre-udev), every required endpoint surfaces as MISSING
+    so the smoke gate fails loudly instead of crashing with a bare
+    ``FileNotFoundError`` from ``Path.glob``.
     """
     if not cfg.enabled:
         _log.debug("usbc_enumerate_skipped", reason="discovery_disabled")
         return {}
+
+    if not cfg.by_id_root.is_dir():
+        _log.warning(
+            "usbc_by_id_root_missing",
+            by_id_root=str(cfg.by_id_root),
+            hint="udev may not have mounted the by-id symlinks yet",
+        )
+        # Every declared endpoint becomes MISSING (or WARN if not required)
+        # so the smoke harness sees a clean structured FAIL list instead
+        # of an uncaught OSError from glob().
+        return {
+            spec.name: EndpointResult(
+                name=spec.name,
+                glob=spec.by_id_glob,
+                required=spec.required,
+                resolved_path=None,
+                status=EndpointStatus.MISSING if spec.required else EndpointStatus.WARN,
+            )
+            for spec in cfg.required_endpoints
+        }
 
     results: dict[str, EndpointResult] = {}
     for spec in cfg.required_endpoints:

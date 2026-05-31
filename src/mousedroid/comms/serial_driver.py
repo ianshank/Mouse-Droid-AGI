@@ -250,8 +250,14 @@ class SerialESP32Driver(BaseESP32Driver):
     def _read_line(self) -> str:  # pragma: no cover
         """Read one line from serial port (blocking).
 
+        Uses ``errors="replace"`` so a garbled byte from firmware churn,
+        UART noise, or a partial flash never raises ``UnicodeDecodeError``
+        out of the ``asyncio.to_thread`` wrapper. The replacement char
+        survives into the downstream ``json.loads`` which then emits the
+        existing ``esp32_non_json_response`` warning path.
+
         Returns:
             Decoded line string.
         """
         line: bytes = self._serial.readline()
-        return line.decode().strip()
+        return line.decode(errors="replace").strip()

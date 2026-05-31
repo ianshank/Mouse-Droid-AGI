@@ -418,11 +418,15 @@ class ESP32Config(BaseModel):
     max_omega_rads: float = Field(2.0, gt=0, description="Max angular velocity (rad/s)")
     smoke_test_velocity_mps: float = Field(
         0.05,
-        gt=0,
+        ge=0,
         description=(
             "Target forward velocity for the rover hardware smoke test "
             "(see tests/hardware/test_motor_smoke.py). Kept low so an "
-            "untethered rover can stop within tabletop bounds."
+            "untethered rover can stop within tabletop bounds. Set to "
+            "0.0 to permanently lock the smoke harness into zero-motion "
+            "mode (preferred for benches with no roll-off protection); "
+            "the runtime ``allow_motion`` gate in assert_power_chain "
+            "remains authoritative regardless of this setpoint."
         ),
     )
     smoke_test_settle_s: float = Field(
