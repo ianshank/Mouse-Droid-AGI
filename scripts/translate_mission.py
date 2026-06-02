@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""MSE-6 mission-translation dry-run probe (PR #107).
+
+Translates a single natural-language mission into a normalised ``GoalVector``
+via the deliberative LLM gateway — WITHOUT issuing any motor command — so the
+Claude-primary / Phi-3-fallback path can be verified live on the rover even
+when the ESP32 / drivetrain is detached.
+
+It builds the gateway through the real factory (``build_llm_gateway``), so it
+honours whatever ``llm:`` config the rover runs (cloud Claude when reachable,
+local llama_cpp fallback when off-network). The served tier + degraded state
+are printed so an operator can confirm which path answered.
+
+Examples::
+
+    # On the Jetson with the production overlay:
+    MOUSEDROID_CONFIG=/etc/mousedroid/jetson_production.yaml \\
+        python scripts/translate_mission.py --mission "patrol left then stop"
+
+    # Dev box with an explicit overlay:
+    python scripts/translate_mission.py \\
+        --config config/jetson_production.yaml --mission "go forward slowly"
+
+Exit codes:
+
+* ``0`` — mission translated (prints the GoalVector + tier/degraded state).
+* ``1`` — runtime / gateway failure.
+* ``2`` — configuration error (config load failed).
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import sys
+from pathlib import Path
+
+# Make src/ importable when run from repo root.
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(_PROJECT_ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT / "src"))
+
+# Force structlog to stderr BEFORE importing mousedroid so the import-time
+# configure() in mousedroid.config.loader doesn't latch onto stdout — keeps
+# the GoalVector print on stdout clean for piping. (Mirrors greet_intro.py.)
+import structlog  # noqa: E402
+
+structlog.configure(
+    processors=[structlog.processors.JSONRenderer()],
+    wrapper_class=structlog.make_filtering_bound_logger(20),  # INFO and above
+    logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
+    cache_logger_on_first_use=False,
+)
+
+from mousedroid.config.loader import load_settings  # noqa: E402
+from mousedroid.factory import build_llm_gateway  # noqa: E402
+from mousedroid.logging.setup import get_logger  # noqa: E402
+
+_log = get_logger(__name__)
+
+_EXIT_OK = 0
+_EXIT_RUNTIME_ERROR = 1
+_EXIT_CONFIG_ERROR = 2
+
+
+def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--mission",
+        required=True,
+        help="Natural-language mission to translate into a GoalVector.",
+    )
+    parser.add_argument(
+        "--config",
+        action="append",
+        default=None,
+        type=Path,
+        help=(
+            "One or more YAML overlays (repeatable). When omitted, "
+            "load_settings() uses default.yaml + the MOUSEDROID_CONFIG env "
+            "overlay (same resolution as the orchestrator)."
+        ),
+    )
+    return parser.parse_args(argv)
+
+
+async def _run(mission: str, gateway: object) -> int:
+    """Start the gateway, translate one mission, print the result, stop."""
+    start = gateway.start  # type: ignore[attr-defined]
+    stop = gateway.stop  # type: ignore[attr-defined]
+    translate = gateway.translate_mission  # type: ignore[attr-defined]
+    await start()
+    try:
+        vector = await translate(mission)
+    finally:
+        await stop()
+
+    degraded = getattr(gateway, "is_degraded", False)
+    tier = "local-fallback (degraded primary)" if degraded else "primary"
+    # GoalVector is a dataclass — print its fields explicitly on stdout.
+    print(
+        f"mission={mission!r} tier={tier} degraded={degraded} "
+        f"GoalVector(vx_target={vector.vx_target:.3f}, "
+        f"vy_target={vector.vy_target:.3f}, "
+        f"omega_target={vector.omega_target:.3f})"
+    )
+    return _EXIT_OK
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
+
+    overlays = tuple(args.config) if args.config else ()
+    # Operator probe: catch broadly and report via structured logs + exit code
+    # rather than dumping a traceback at the operator. (BLE001 is not enabled.)
+    try:
+        settings = load_settings(*overlays)
+    except Exception:
+        _log.exception("translate_mission_config_error", overlays=[str(p) for p in overlays])
+        return _EXIT_CONFIG_ERROR
+
+    try:
+        gateway = build_llm_gateway(settings)
+    except Exception:
+        _log.exception("translate_mission_build_error")
+        return _EXIT_RUNTIME_ERROR
+
+    try:
+        return asyncio.run(_run(args.mission, gateway))
+    except Exception:
+        _log.exception("translate_mission_runtime_error")
+        return _EXIT_RUNTIME_ERROR
+
+
+if __name__ == "__main__":
+    sys.exit(main())
