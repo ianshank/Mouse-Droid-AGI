@@ -54,7 +54,14 @@ from mousedroid.factory import build_greeter  # noqa: E402
 from mousedroid.logging.setup import get_logger  # noqa: E402
 from mousedroid.validation.runtime import resolve_runtime_config_paths  # noqa: E402
 
-_log = get_logger(__name__)
+# Round-3 review (Gemini): the module-level ``get_logger(__name__)``
+# call was firing at import time, BEFORE :func:`main` runs
+# :func:`_configure_stderr_logging`. ``cache_logger_on_first_use=False``
+# (set inside the configure call) makes structlog re-bind on every
+# emit, so a stale cached logger was unlikely — but tying the logger
+# acquisition to ``_run()`` removes the ordering question entirely
+# and matches the pattern used elsewhere in scripts/ that respect
+# late-bound logging configuration.
 
 _EXIT_OK = 0
 _EXIT_RUNTIME_ERROR = 1
@@ -89,6 +96,9 @@ def _parse_args() -> argparse.Namespace:
 
 async def _run(args: argparse.Namespace) -> int:
     """Async entry — returns the desired process exit code."""
+    # Logger acquisition deferred from module scope so it picks up the
+    # structlog config installed by :func:`_configure_stderr_logging`.
+    _log = get_logger(__name__)
     config_paths = resolve_runtime_config_paths(args.config)
     settings = load_settings(*config_paths)
 

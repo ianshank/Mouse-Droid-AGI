@@ -11,6 +11,7 @@ pin the canonical behaviour at the new location; the legacy import in
 from __future__ import annotations
 
 import pytest
+import structlog.testing
 
 from mousedroid.common.text_utils import format_names_oxford
 
@@ -70,3 +71,46 @@ def test_re_export_via_voice_greeting_matches_canonical() -> None:
     from mousedroid.voice.greeting import format_names_oxford as via_voice
 
     assert via_voice is format_names_oxford
+
+
+def test_drops_none_entries_without_raising() -> None:
+    """A ``None`` slipping in from sloppy YAML must NOT crash playback.
+
+    Round-3 review (Gemini #2): the prior implementation called
+    ``.strip()`` directly on each entry, raising ``AttributeError`` on
+    a non-string. Now non-strings are dropped silently with a
+    structured debug log so misconfigured overlays are diagnosable
+    without taking down the greeter.
+    """
+    assert format_names_oxford(["Alpha", None, "Bravo"]) == "Alpha and Bravo"  # type: ignore[list-item]
+
+
+def test_drops_numeric_entries_without_raising() -> None:
+    assert format_names_oxford(["Alpha", 42, "Bravo"]) == "Alpha and Bravo"  # type: ignore[list-item]
+
+
+def test_all_non_string_entries_yields_empty_string() -> None:
+    """A pathological YAML with zero string entries returns empty cleanly."""
+    assert format_names_oxford([None, 42, object()]) == ""  # type: ignore[list-item]
+
+
+def test_dropped_entries_logged_as_structured_event() -> None:
+    """The drop must surface as a ``format_names_dropped_non_string`` event.
+
+    Uses ``structlog.testing.capture_logs`` — the project's standard
+    pattern for asserting structured-log events without depending on
+    stdlib-logging routing (see e.g.
+    ``tests/unit/telemetry/test_failure_recorder.py``).
+    """
+    with structlog.testing.capture_logs() as logs:
+        format_names_oxford(["Alpha", None, 7, "Bravo"])  # type: ignore[list-item]
+
+    drop_events = [r for r in logs if r.get("event") == "format_names_dropped_non_string"]
+    assert len(drop_events) == 1
+    payload = drop_events[0]
+    assert payload["count"] == 2
+    # Order-independent on the contents; sorting is deterministic in the
+    # production code (``sorted(set(dropped))``) so the set form here is
+    # not a brittleness concern, just future-proofing against a sort
+    # comparator change.
+    assert set(payload["types"]) == {"NoneType", "int"}

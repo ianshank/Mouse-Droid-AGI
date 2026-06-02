@@ -26,8 +26,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from mousedroid.config.loader import load_settings
 from mousedroid.config.schema import GreetingConfig, Settings
 
@@ -57,8 +55,16 @@ def test_greeting_pilot_example_overlay_loads_with_enabled_greeting() -> None:
     :class:`GreetingConfig` with the documented name list.
     """
     overlay = _REPO_ROOT / "config" / "greeting_pilot.yaml.example"
-    if not overlay.exists():  # pragma: no cover — exists in repo at HEAD
-        pytest.skip("greeting_pilot.yaml.example missing from working tree")
+    # Round-3 review (CodeRabbit): a missing overlay file was previously
+    # silently skipped — but the WHOLE point of this regression test is
+    # to trip CI if the example overlay is deleted or renamed. Fail
+    # loud so a stray ``git rm`` shows up as a red CI check, not a
+    # quiet skip noise line.
+    assert overlay.exists(), (
+        f"config/greeting_pilot.yaml.example missing at {overlay} — "
+        "operator documentation deleted? Restore the file or update "
+        "this regression test before removing the overlay."
+    )
 
     settings = load_settings(overlay)
     assert settings.greeting is not None
