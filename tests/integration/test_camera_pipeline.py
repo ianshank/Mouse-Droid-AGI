@@ -309,19 +309,20 @@ class TestCameraDisconnectHandling:
         import importlib
         import sys
 
+        pytest.importorskip(
+            "cv2",
+            reason="opencv-python not installed; this regression only applies when cv2 is present",
+        )
         import mousedroid.hardware.camera.jetson_csi as jcsi_mod
-
-        cv2_present_before = "cv2" in sys.modules
 
         with patch.object(jcsi_mod, "_jetson_utils", MagicMock()):
             jcsi_mod.JetsonCSICamera(camera_cfg)
 
-        # The exact corruption mode: cv2 evicted from the module cache.
-        if cv2_present_before:
-            assert "cv2" in sys.modules, "cv2 was evicted from sys.modules"
+        assert "cv2" in sys.modules, "cv2 was evicted from sys.modules"
 
-        # A fresh import of jetson_csi must still succeed (re-triggers
-        # ``import cv2`` only if cv2 was evicted — which is the failure mode).
+        # Simulate a later test importing jetson_csi fresh in the same process.
+        sys.modules.pop("mousedroid.hardware.camera.jetson_csi", None)
+        importlib.invalidate_caches()
         importlib.import_module("mousedroid.hardware.camera.jetson_csi")
 
 
