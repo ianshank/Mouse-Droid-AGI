@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import sys
 from pathlib import Path
 
@@ -41,18 +42,12 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(_PROJECT_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
-# Force structlog to stderr BEFORE importing anything from mousedroid so the
-# import-time configure() inside mousedroid.config.loader doesn't latch on to
-# stdout (mirrors scripts/check_usbc_devices.py to keep --json paths clean
-# for future structured-output additions).
+# structlog is imported at module scope but configured inside ``main()``
+# so import-as-a-library callers (e.g. test collection that happens to
+# import this script) don't get a global structlog override as a side
+# effect. The configuration is still applied BEFORE any greet_intro
+# work happens — see ``_configure_stderr_logging`` below.
 import structlog  # noqa: E402
-
-structlog.configure(
-    processors=[structlog.processors.JSONRenderer()],
-    wrapper_class=structlog.make_filtering_bound_logger(20),  # INFO and above
-    logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
-    cache_logger_on_first_use=False,
-)
 
 from mousedroid.config.loader import load_settings  # noqa: E402
 from mousedroid.factory import build_greeter  # noqa: E402
@@ -139,8 +134,32 @@ async def _run(args: argparse.Namespace) -> int:
     return _EXIT_OK
 
 
+def _configure_stderr_logging(level: int = logging.INFO) -> None:
+    """Pin structlog to JSON-on-stderr at the given level.
+
+    Called from :func:`main` so importing this module as a library
+    (e.g. during test collection) doesn't have the side effect of
+    reconfiguring the importing process's structlog state. The
+    orchestrator's structlog configuration is left untouched until a
+    direct CLI invocation explicitly calls this.
+
+    Args:
+        level: Numeric log level (``logging.INFO`` by default). The
+            named constant avoids the prior magic-number ``20`` and
+            lets future operator-tools surface a ``--log-level`` flag
+            by forwarding to this helper.
+    """
+    structlog.configure(
+        processors=[structlog.processors.JSONRenderer()],
+        wrapper_class=structlog.make_filtering_bound_logger(level),
+        logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
+        cache_logger_on_first_use=False,
+    )
+
+
 def main() -> int:
     """Synchronous entry point — wraps :func:`_run` in ``asyncio.run``."""
+    _configure_stderr_logging()
     args = _parse_args()
     return asyncio.run(_run(args))
 

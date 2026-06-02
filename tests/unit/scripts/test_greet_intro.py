@@ -57,6 +57,30 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _stderr_event_names(stderr: str) -> set[str]:
+    """Extract structlog event names from the CLI's stderr JSON stream.
+
+    Mirrors the pattern in ``test_dry_run_log_shows_greeting_done``.
+    Centralised so all CLI tests assert on the structured event-name
+    set rather than raw substring matches — a rename of the event
+    key surfaces as a clear AssertionError on the missing event, not
+    as a brittle string-not-found failure.
+    """
+    events: set[str] = set()
+    for raw in stderr.splitlines():
+        line = raw.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        event = payload.get("event")
+        if isinstance(event, str):
+            events.add(event)
+    return events
+
+
 def test_dry_run_with_enabled_greeting_exits_zero(tmp_path: Path) -> None:
     cfg = _write_yaml(
         tmp_path,
@@ -88,8 +112,7 @@ voice:
     )
     result = _run_cli("--config", str(cfg))
     assert result.returncode == 2
-    # The structured-log JSON on stderr should call out the config error.
-    assert "greet_intro_config_error" in result.stderr
+    assert "greet_intro_config_error" in _stderr_event_names(result.stderr)
 
 
 def test_disabled_greeting_exits_config_error(tmp_path: Path) -> None:
@@ -106,7 +129,7 @@ greeting:
     )
     result = _run_cli("--config", str(cfg))
     assert result.returncode == 2
-    assert "greet_intro_config_error" in result.stderr
+    assert "greet_intro_config_error" in _stderr_event_names(result.stderr)
 
 
 def test_dry_run_log_shows_greeting_done(tmp_path: Path) -> None:
@@ -127,16 +150,6 @@ greeting:
     )
     result = _run_cli("--config", str(cfg), "--dry-run")
     assert result.returncode == 0, result.stderr
-    # Each stderr line is a structlog JSON record.
-    events = []
-    for line in result.stderr.splitlines():
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            events.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    event_names = {e.get("event") for e in events}
+    event_names = _stderr_event_names(result.stderr)
     assert "greeting_started" in event_names
     assert "greeting_done" in event_names

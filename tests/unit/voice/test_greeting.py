@@ -1,6 +1,6 @@
 """Unit tests for ``Greeter`` + ``format_names_oxford``.
 
-Uses a lightweight ``_FakeVoiceEngine`` (not the mock-library Mock) so
+Uses a lightweight ``FakeVoiceEngine`` (not the mock-library Mock) so
 the call ordering between the pre-flourish chirp and the rocky-styled
 custom message is verifiable as a deterministic event list, matching
 the test discipline of the existing voice tests.
@@ -15,42 +15,7 @@ import pytest
 
 from mousedroid.config.schema import GreetingConfig
 from mousedroid.voice.greeting import Greeter, _select_chirp_text, format_names_oxford
-
-
-class _FakeVoiceEngine:
-    """Async ``VoiceEngineProtocol`` stand-in that records playback order.
-
-    Exposes the subset of :class:`VoiceEngineProtocol` the greeter calls
-    (``start`` / ``stop`` / ``play_phrase``) plus an ``utterances``
-    list so tests can assert the chirp landed BEFORE the message and
-    that the rocky-transformed text actually flowed through.
-    """
-
-    def __init__(self) -> None:
-        self.started = False
-        self.stopped = False
-        self.utterances: list[str] = []
-
-    @property
-    def is_ready(self) -> bool:  # pragma: no cover — not exercised by greeter
-        return self.started
-
-    async def start(self) -> None:
-        self.started = True
-
-    async def stop(self) -> None:
-        self.stopped = True
-
-    async def speak(self, event: str, context: dict[str, float] | None = None) -> None:
-        # Greeter doesn't currently call speak(); the protocol requires it.
-        # pragma: no cover
-        raise NotImplementedError
-
-    async def play_phrase(self, text: str) -> tuple[int, float]:
-        self.utterances.append(text)
-        # Return plausible (samples, peak) without driving real audio.
-        return (len(text) * 100, 0.5)
-
+from tests.unit.voice._fakes import FakeVoiceEngine
 
 # --------------------------------------------------------------------------- #
 # format_names_oxford
@@ -128,13 +93,14 @@ def test_select_chirp_text_with_rng_picks_from_entries() -> None:
 
 
 def _cfg(**overrides: Any) -> GreetingConfig:
+    # Source defaults from the schema rather than duplicating literals.
+    # ``inter_chirp_delay_s`` is explicitly overridden to zero so most
+    # tests don't pay the configured 0.25 s wall-clock; the delay-branch
+    # coverage test below overrides this back to a small positive value.
     defaults: dict[str, Any] = {
         "enabled": True,
         "names": ["John", "Jordan", "Parvathay", "Jeff"],
-        "message_template": "Hello {names}! I have been waiting to meet you for some time",
-        "pre_chirp_event": "greeting_excited",
-        "excitement_intensity": 0.9,
-        "inter_chirp_delay_s": 0.0,  # zero delay in tests for speed
+        "inter_chirp_delay_s": 0.0,
     }
     defaults.update(overrides)
     return GreetingConfig(**defaults)
@@ -142,7 +108,7 @@ def _cfg(**overrides: Any) -> GreetingConfig:
 
 @pytest.mark.asyncio
 async def test_greet_plays_chirp_then_custom_message_in_order() -> None:
-    engine = _FakeVoiceEngine()
+    engine = FakeVoiceEngine()
     greeter = Greeter(engine, _cfg())
     await greeter.greet()
     assert len(engine.utterances) == 2
@@ -160,7 +126,7 @@ async def test_greet_plays_chirp_then_custom_message_in_order() -> None:
 
 @pytest.mark.asyncio
 async def test_greet_skips_chirp_when_pre_chirp_event_is_empty() -> None:
-    engine = _FakeVoiceEngine()
+    engine = FakeVoiceEngine()
     greeter = Greeter(engine, _cfg(pre_chirp_event=""))
     await greeter.greet()
     assert len(engine.utterances) == 1
@@ -170,7 +136,7 @@ async def test_greet_skips_chirp_when_pre_chirp_event_is_empty() -> None:
 @pytest.mark.asyncio
 async def test_greet_skips_chirp_when_event_unknown() -> None:
     """Unknown event → warn + skip flourish; custom message still plays."""
-    engine = _FakeVoiceEngine()
+    engine = FakeVoiceEngine()
     greeter = Greeter(engine, _cfg(pre_chirp_event="bogus_event_name_xyz"))
     await greeter.greet()
     assert len(engine.utterances) == 1
@@ -178,7 +144,7 @@ async def test_greet_skips_chirp_when_event_unknown() -> None:
 
 @pytest.mark.asyncio
 async def test_greet_uses_runtime_names_override() -> None:
-    engine = _FakeVoiceEngine()
+    engine = FakeVoiceEngine()
     greeter = Greeter(engine, _cfg())
     await greeter.greet(names=["Alice", "Bob"])
     # Last utterance is the custom message — should contain the override
@@ -193,7 +159,7 @@ async def test_greet_uses_runtime_names_override() -> None:
 @pytest.mark.asyncio
 async def test_greet_raises_on_empty_names_override() -> None:
     """Runtime override with [] reaches the runtime guard."""
-    engine = _FakeVoiceEngine()
+    engine = FakeVoiceEngine()
     greeter = Greeter(engine, _cfg())
     with pytest.raises(ValueError, match="at least one name"):
         await greeter.greet(names=[])
@@ -201,7 +167,7 @@ async def test_greet_raises_on_empty_names_override() -> None:
 
 @pytest.mark.asyncio
 async def test_greet_oxford_comma_formatting_in_message() -> None:
-    engine = _FakeVoiceEngine()
+    engine = FakeVoiceEngine()
     greeter = Greeter(engine, _cfg())
     await greeter.greet()
     msg = engine.utterances[-1]
@@ -218,9 +184,55 @@ async def test_greet_oxford_comma_formatting_in_message() -> None:
 @pytest.mark.asyncio
 async def test_greeter_does_not_manage_engine_lifecycle() -> None:
     """Caller owns start/stop — Greeter never calls either of them."""
-    engine = _FakeVoiceEngine()
+    engine = FakeVoiceEngine()
     greeter = Greeter(engine, _cfg())
     await greeter.greet()
     # The greeter MUST NOT have called start/stop on the engine.
     assert engine.started is False
     assert engine.stopped is False
+
+
+@pytest.mark.asyncio
+async def test_greet_honours_inter_chirp_delay_branch() -> None:
+    """Exercises the ``inter_chirp_delay_s > 0`` ``await asyncio.sleep`` path.
+
+    With ``inter_chirp_delay_s=0.001`` we touch the awaited-sleep branch
+    that the zero-delay default never reaches, closing the last
+    uncovered line in :mod:`mousedroid.voice.greeting`. The 1 ms delay
+    keeps the test sub-second while still proving the await fires
+    (a synchronous ``time.sleep`` regression would not satisfy the
+    ``await`` contract on the protocol).
+    """
+    engine = FakeVoiceEngine()
+    greeter = Greeter(engine, _cfg(inter_chirp_delay_s=0.001))
+    await greeter.greet()
+    # Both the pre-chirp and the styled message reached the engine in order.
+    assert len(engine.utterances) == 2
+    assert "John" in engine.utterances[1]
+
+
+@pytest.mark.asyncio
+async def test_greet_forwards_explicit_intensity_threshold() -> None:
+    """High threshold (1.1) suppresses rocky-style excited effects.
+
+    ``rocky_transform`` only applies effects when ``intensity >
+    intensity_threshold``. A threshold above the maximum intensity
+    (1.0) cannot be exceeded by any ``excitement_intensity`` value, so
+    the message must emerge un-styled (no trailing ``!`` added).
+    Asserting this proves the threshold is actually forwarded — not
+    silently dropped — and gives an objective regression handle for
+    the ``VoiceConfig.intensity_threshold`` plumbing.
+    """
+    engine = FakeVoiceEngine()
+    greeter = Greeter(
+        engine,
+        _cfg(pre_chirp_event="", message_template="hello {names}"),
+        intensity_threshold=1.1,
+    )
+    await greeter.greet()
+    assert len(engine.utterances) == 1
+    # rocky_transform with intensity 0.9 < threshold 1.1 must NOT
+    # append the excitement exclamation. The lowercase "hello" also
+    # confirms no uppercase styling fired.
+    msg = engine.utterances[0]
+    assert msg.endswith("hello John, Jordan, Parvathay and Jeff")

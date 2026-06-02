@@ -4501,8 +4501,11 @@ class GreetingConfig(BaseModel):
             "Intensity passed to ``rocky_transform`` for the custom message "
             "— pushes the phrase past the personality engine's intensity "
             "threshold so names get the excited repetition + exclamation. "
-            "Range-gated [0, 1]; default 0.9 stays just below the "
-            "``intensity_threshold`` default of 1.0 used by alerts."
+            "Range-gated [0, 1]; default 0.9 exceeds the "
+            "``VoiceConfig.intensity_threshold`` default of 0.7 (or any "
+            "per-event override), so excited repetition + exclamation "
+            "are applied. Reduce below the configured threshold to "
+            "suppress personality effects without disabling the greeter."
         ),
     )
     inter_chirp_delay_s: float = Field(
