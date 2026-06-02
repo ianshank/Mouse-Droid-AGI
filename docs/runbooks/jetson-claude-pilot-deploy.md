@@ -34,12 +34,16 @@ the SDK second, `restart` (not recreate) third.
 4. **Provision key** (editor, NOT `echo >>` — avoids shell history):
    ```bash
    sudo nano /etc/mousedroid/docker.env      # add: ANTHROPIC_API_KEY=sk-ant-...
-   sudo chmod 600 /etc/mousedroid/docker.env
+   # compose runs as `ian`; chown so the owner can read, then 600 (see findings #4).
+   sudo chown ian:ian /etc/mousedroid/docker.env && sudo chmod 600 /etc/mousedroid/docker.env
    ```
 5. **Recreate** (loads env + config + source):
    `docker compose -f docker-compose.jetson.yml up -d --force-recreate mousedroid`
    → Stage-1 validation (fallback; SDK still absent).
-6. **Hot-install** the SDK: `docker exec mousedroid python3 -m pip install "anthropic>=0.40"`
+6. **Hot-install** the SDK (pin to the rover-validated version for a reproducible
+   recovery): `docker exec mousedroid python3 -m pip install "anthropic==0.105.2"`
+   `0.105.2` is the version validated live on the rover; the `Dockerfile.jetson` /
+   `pyproject.toml` keep the `anthropic>=0.40` lower bound for the image build.
 7. **Restart** (preserves the writable-layer SDK; recreate would wipe it):
    `docker compose -f docker-compose.jetson.yml restart mousedroid`
    → Stage-2 validation (cloud).
@@ -64,7 +68,10 @@ the SDK second, `restart` (not recreate) third.
 The hot-installed `anthropic` survives `restart`/reboot but NOT a future
 `--force-recreate`/rebuild. The Dockerfile `Stage 4b` bake (this PR) ensures
 future image builds include it, so a later rebuild won't silently lose the cloud
-tier.
+tier. Manual recovery commands in this runbook pin `anthropic==0.105.2` (the
+version validated live on the rover) for reproducibility; the `Dockerfile.jetson`
+/ `pyproject.toml` deliberately keep the `anthropic>=0.40` lower-bound range for
+the image build.
 
 ## Live-deploy findings (first deploy, 2026-06-02) — host-specific reality
 
@@ -92,7 +99,7 @@ re-deploy until the image is rebuilt with this PR's `Dockerfile.jetson`:
    the moment you change any `docker.env` value and recreate, the cloud primary
    degrades until you **reinstall + `restart`**:
    ```bash
-   docker exec mousedroid python3 -m pip install --no-cache-dir "anthropic>=0.40"
+   docker exec mousedroid python3 -m pip install --no-cache-dir "anthropic==0.105.2"
    docker compose -f docker-compose.jetson.yml restart mousedroid   # NOT recreate
    ```
    `restart` re-runs the process (re-imports the SDK, reloads config) without wiping

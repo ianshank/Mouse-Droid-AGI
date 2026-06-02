@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,8 +20,9 @@ from mousedroid.llm_gateway.protocol import GoalVector
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "translate_mission.py"
 
 
-def _load_cli():
-    """Import the script module by path (it lives in scripts/, not a package)."""
+@pytest.fixture(scope="module")
+def cli() -> ModuleType:
+    """Load the script module by path once per test module (it lives in scripts/)."""
     spec = importlib.util.spec_from_file_location("translate_mission", _SCRIPT)
     assert spec is not None
     assert spec.loader is not None
@@ -42,26 +43,44 @@ def _fake_gateway(vector: GoalVector, *, degraded: bool = False) -> MagicMock:
 
 
 def _fake_composite(
-    vector: GoalVector, *, primary_degraded: bool, both_degraded: bool = False
+    vector: GoalVector,
+    *,
+    primary_degraded: bool,
+    both_degraded: bool = False,
+    stop_clears_degraded: bool = False,
 ) -> MagicMock:
-    """A composite gateway exposing ``_primary`` (mirrors FallbackLLMGateway)."""
+    """A composite gateway exposing ``_primary`` (mirrors FallbackLLMGateway).
+
+    When ``stop_clears_degraded`` is set, ``stop()`` resets the degraded flags —
+    mirroring the real ``AnthropicLLMGateway.stop()``, which clears ``_degraded``.
+    This lets a test prove the probe captures the serving tier BEFORE ``stop()``.
+    """
     gw = MagicMock(
         spec=["is_ready", "is_degraded", "start", "stop", "translate_mission", "_primary"]
     )
+    primary = SimpleNamespace(is_degraded=primary_degraded)
     gw.is_ready = True
     gw.is_degraded = both_degraded
-    gw._primary = SimpleNamespace(is_degraded=primary_degraded)
+    gw._primary = primary
     gw.start = AsyncMock(return_value=None)
-    gw.stop = AsyncMock(return_value=None)
     gw.translate_mission = AsyncMock(return_value=vector)
+
+    async def _stop() -> None:
+        if stop_clears_degraded:
+            primary.is_degraded = False
+            gw.is_degraded = False
+
+    gw.stop = AsyncMock(side_effect=_stop)
     return gw
 
 
 # --------------------------------------------------------------------------- #
 # Happy path + output formatting
 # --------------------------------------------------------------------------- #
-def test_translate_prints_goalvector_and_exits_zero(capsys: pytest.CaptureFixture[str]) -> None:
-    cli = _load_cli()
+def test_translate_prints_goalvector_and_exits_zero(
+    cli: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Happy path: prints the GoalVector, reports tier=primary, exits 0."""
     gw = _fake_gateway(GoalVector(vx_target=0.4, vy_target=0.0, omega_target=-0.2))
     with (
         patch.object(cli, "load_settings", return_value=SimpleNamespace()),
@@ -78,8 +97,10 @@ def test_translate_prints_goalvector_and_exits_zero(capsys: pytest.CaptureFixtur
     gw.stop.assert_awaited_once()
 
 
-def test_single_gateway_degraded_tier_reported(capsys: pytest.CaptureFixture[str]) -> None:
-    cli = _load_cli()
+def test_single_gateway_degraded_tier_reported(
+    cli: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A degraded single gateway reports tier=degraded."""
     gw = _fake_gateway(GoalVector(), degraded=True)
     with (
         patch.object(cli, "load_settings", return_value=SimpleNamespace()),
@@ -91,9 +112,10 @@ def test_single_gateway_degraded_tier_reported(capsys: pytest.CaptureFixture[str
     assert "tier=degraded" in out
 
 
-def test_composite_secondary_tier_reported(capsys: pytest.CaptureFixture[str]) -> None:
+def test_composite_secondary_tier_reported(
+    cli: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
     """When the primary is degraded, the composite serves via the secondary."""
-    cli = _load_cli()
     gw = _fake_composite(GoalVector(vx_target=0.1), primary_degraded=True)
     with (
         patch.object(cli, "load_settings", return_value=SimpleNamespace()),
@@ -106,8 +128,33 @@ def test_composite_secondary_tier_reported(capsys: pytest.CaptureFixture[str]) -
     assert "tier=primary " not in out  # must NOT misreport as primary
 
 
-def test_composite_primary_tier_reported(capsys: pytest.CaptureFixture[str]) -> None:
-    cli = _load_cli()
+def test_composite_tier_captured_before_stop_clears_degraded(
+    cli: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regression (Copilot finding): the serving tier must be read BEFORE stop().
+
+    The real AnthropicLLMGateway.stop() clears its degraded flag. If the probe
+    described the tier AFTER stop(), it would misreport a secondary-served call
+    as 'primary'. This double clears the degraded flags in stop().
+    """
+    gw = _fake_composite(
+        GoalVector(vx_target=0.2), primary_degraded=True, stop_clears_degraded=True
+    )
+    with (
+        patch.object(cli, "load_settings", return_value=SimpleNamespace()),
+        patch.object(cli, "build_llm_gateway", return_value=gw),
+    ):
+        rc = cli.main(["--mission", "hold position"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "secondary" in out  # captured before stop() cleared the degraded flag
+    gw.stop.assert_awaited_once()
+
+
+def test_composite_primary_tier_reported(
+    cli: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A usable primary in the composite reports tier=primary."""
     gw = _fake_composite(GoalVector(vx_target=0.3), primary_degraded=False)
     with (
         patch.object(cli, "load_settings", return_value=SimpleNamespace()),
@@ -119,8 +166,10 @@ def test_composite_primary_tier_reported(capsys: pytest.CaptureFixture[str]) -> 
     assert "tier=primary" in out
 
 
-def test_composite_both_degraded_tier_reported(capsys: pytest.CaptureFixture[str]) -> None:
-    cli = _load_cli()
+def test_composite_both_degraded_tier_reported(
+    cli: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Both tiers degraded must be surfaced in the output."""
     gw = _fake_composite(GoalVector(), primary_degraded=True, both_degraded=True)
     with (
         patch.object(cli, "load_settings", return_value=SimpleNamespace()),
@@ -129,14 +178,14 @@ def test_composite_both_degraded_tier_reported(capsys: pytest.CaptureFixture[str
         rc = cli.main(["--mission", "stop"])
     out = capsys.readouterr().out
     assert rc == 0
-    assert "degraded" in out  # both tiers down must be visible
+    assert "degraded" in out
 
 
 # --------------------------------------------------------------------------- #
 # Config resolution (the production gap: MOUSEDROID_CONFIG must be honored)
 # --------------------------------------------------------------------------- #
-def test_explicit_config_is_passed_to_load_settings() -> None:
-    cli = _load_cli()
+def test_explicit_config_is_passed_to_load_settings(cli: ModuleType) -> None:
+    """An explicit --config overlay is forwarded to load_settings."""
     gw = _fake_gateway(GoalVector())
     captured: dict[str, object] = {}
 
@@ -153,9 +202,10 @@ def test_explicit_config_is_passed_to_load_settings() -> None:
     assert captured["paths"] == (Path("/etc/mousedroid/jetson_production.yaml"),)
 
 
-def test_env_config_resolved_when_no_cli_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    """MOUSEDROID_CONFIG must be resolved (the bug this fixes)."""
-    cli = _load_cli()
+def test_env_config_resolved_when_no_cli_flag(
+    cli: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MOUSEDROID_CONFIG must be resolved when --config is omitted (the bug this fixes)."""
     gw = _fake_gateway(GoalVector())
     captured: dict[str, object] = {}
 
@@ -178,15 +228,15 @@ def test_env_config_resolved_when_no_cli_flag(monkeypatch: pytest.MonkeyPatch) -
 # --------------------------------------------------------------------------- #
 # Error-exit contract + cleanup guarantee
 # --------------------------------------------------------------------------- #
-def test_config_load_error_exits_2() -> None:
-    cli = _load_cli()
+def test_config_load_error_exits_2(cli: ModuleType) -> None:
+    """A config-load failure exits 2 (config error)."""
     with patch.object(cli, "load_settings", side_effect=FileNotFoundError("no such file")):
         rc = cli.main(["--mission", "go"])
     assert rc == 2
 
 
-def test_build_error_exits_1() -> None:
-    cli = _load_cli()
+def test_build_error_exits_1(cli: ModuleType) -> None:
+    """A gateway-build failure exits 1 (runtime error)."""
     with (
         patch.object(cli, "load_settings", return_value=SimpleNamespace()),
         patch.object(cli, "build_llm_gateway", side_effect=RuntimeError("build failed")),
@@ -195,8 +245,8 @@ def test_build_error_exits_1() -> None:
     assert rc == 1
 
 
-def test_runtime_error_exits_1_and_still_stops() -> None:
-    cli = _load_cli()
+def test_runtime_error_exits_1_and_still_stops(cli: ModuleType) -> None:
+    """A translate failure exits 1 and still calls stop() (cleanup guarantee)."""
     gw = _fake_gateway(GoalVector())
     gw.translate_mission = AsyncMock(side_effect=RuntimeError("network down"))
     with (
@@ -208,8 +258,8 @@ def test_runtime_error_exits_1_and_still_stops() -> None:
     gw.stop.assert_awaited_once()  # cleanup runs even when translate raises
 
 
-def test_start_failure_still_stops() -> None:
-    cli = _load_cli()
+def test_start_failure_still_stops(cli: ModuleType) -> None:
+    """A start() failure exits 1 and still calls stop() (cleanup guarantee)."""
     gw = _fake_gateway(GoalVector())
     gw.start = AsyncMock(side_effect=RuntimeError("start boom"))
     with (
@@ -221,8 +271,8 @@ def test_start_failure_still_stops() -> None:
     gw.stop.assert_awaited_once()  # stop() guaranteed even if start() raises
 
 
-def test_missing_mission_arg_exits_nonzero() -> None:
-    cli = _load_cli()
-    with pytest.raises(SystemExit) as exc:  # argparse error
+def test_missing_mission_arg_exits_nonzero(cli: ModuleType) -> None:
+    """Missing --mission is an argparse error (non-zero exit)."""
+    with pytest.raises(SystemExit) as exc:
         cli.main([])
     assert exc.value.code != 0

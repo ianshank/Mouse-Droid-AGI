@@ -26,7 +26,7 @@
 
 ---
 
-# PHASE A — Repo changes
+## PHASE A — Repo changes
 
 ### Task A0: Confirm branch & clean baseline
 
@@ -737,7 +737,7 @@ Expected: all required checks SUCCESS (lint×3, typecheck×3, test×3, config-va
 
 ---
 
-# PHASE B — Live deploy to `ian@mousedroid.local`
+## PHASE B — Live deploy to `ian@mousedroid.local`
 
 > Run each SSH step and read its output before the next. Stop on any unexpected result. The probe in Task B5/B7 needs no motors (ESP32 may be dead). **Never paste the API key into a command that lands in shell history.**
 
@@ -901,5 +901,5 @@ Summarize to the user: Phase A PR + CI status, which validation stages passed (f
 - **Spec coverage:** Dockerfile layer (A1 ↔ spec §4.1); config merge (A2 ↔ §4.2); docker.env docs (A3 ↔ §4.3); probe (A4 ↔ §4.4/§7); config-pinning test (A5 ↔ §4.5); integration test (A6 ↔ §4.5); backwards-compat (covered by existing `test_pr107_backwards_compat.py`, verified in A2.4 — no new task needed); runbook (A7 ↔ §4.6); CI gate (A8 ↔ §8); deploy sequence B1-B8 ↔ §5/§6 with the post-review ordering (recreate→install→restart), `.bak` validation, secret hygiene, host-network egress, push-first.
 - **No placeholders:** all code blocks complete; all commands have expected output.
 - **Type/name consistency:** `vx_target/vy_target/omega_target`, `translate_mission`, `build_llm_gateway`, `FallbackLLMGateway(..., retry_cooldown_s=)`, `load_settings(*overlays, config_dir=)`, `is_degraded` via getattr — all match the verified API surface.
-```
+```text
 

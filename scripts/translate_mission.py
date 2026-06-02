@@ -122,16 +122,21 @@ async def _run(mission: str, gateway: LLMGatewayProtocol) -> int:
 
     ``stop()`` is guaranteed even if ``start()`` or ``translate_mission()``
     raises — both are inside the single ``try`` whose ``finally`` calls stop.
+
+    The serving tier is described BEFORE ``stop()`` runs: some gateways clear
+    their degraded flag on stop (e.g. ``AnthropicLLMGateway.stop()``), which
+    would otherwise make a secondary-served call misreport as ``primary``.
     """
     try:
         await gateway.start()
         vector = await gateway.translate_mission(mission)
+        tier = _describe_tier(gateway)  # capture before stop() may clear degraded state
     finally:
         await gateway.stop()
 
     # GoalVector is a dataclass — print its fields explicitly on stdout.
     print(
-        f"mission={mission!r} tier={_describe_tier(gateway)} "
+        f"mission={mission!r} tier={tier} "
         f"GoalVector(vx_target={vector.vx_target:.3f}, "
         f"vy_target={vector.vy_target:.3f}, "
         f"omega_target={vector.omega_target:.3f})"
