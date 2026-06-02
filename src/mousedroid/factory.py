@@ -33,7 +33,6 @@ from mousedroid.security.injection_filter import (
     RegexInjectionFilter,
 )
 from mousedroid.vla.policy import VLAPolicyProtocol
-from mousedroid.voice.greeting import Greeter
 from mousedroid.voice.protocol import VoiceEngineProtocol
 
 if TYPE_CHECKING:
@@ -81,6 +80,7 @@ if TYPE_CHECKING:
     from mousedroid.telemetry.metrics import MetricsRegistry
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
     from mousedroid.training.replay import ReplayReaderProtocol
+    from mousedroid.voice.greeting import Greeter
     from mousedroid.voice.mock_tts import MockTTS
     from mousedroid.voice.tts import PiperTTS
     from mousedroid.world_model.protocol import WorldModelProtocol
@@ -423,13 +423,22 @@ def build_greeter(
         )
         raise ValueError(msg)
 
+    # Source the intensity threshold from VoiceConfig so an operator
+    # tuning ``voice.intensity_threshold`` doesn't get silently
+    # shadowed by the rocky_transform default (CLAUDE.md "no hardcoded
+    # values"). Concrete ``Greeter`` import deferred per Invariant 1.
+    from mousedroid.voice.greeting import Greeter
+
+    intensity_threshold = cfg.voice.intensity_threshold
+
     _log.info(
         "greeter_built",
         names_count=len(cfg.greeting.names),
         pre_chirp_event=cfg.greeting.pre_chirp_event or "(none)",
         excitement_intensity=cfg.greeting.excitement_intensity,
+        intensity_threshold=intensity_threshold,
     )
-    return Greeter(engine, cfg.greeting)
+    return Greeter(engine, cfg.greeting, intensity_threshold=intensity_threshold)
 
 
 def build_voice_engine(

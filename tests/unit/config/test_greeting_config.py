@@ -100,6 +100,45 @@ def test_pre_chirp_event_empty_string_disables_flourish() -> None:
     assert cfg.pre_chirp_event == ""
 
 
+def test_message_template_foreign_placeholder_rejected_at_load() -> None:
+    """A foreign placeholder ({wrong}) fails YAML-load — not runtime.
+
+    Round-3 review (Gemini #1): before this guard, an operator-typo
+    template like ``"Hello {names} from {wrong}"`` would parse cleanly
+    and then crash the greeter at runtime with ``KeyError: 'wrong'``,
+    masking the YAML-config fault as a hardware error. The probe
+    ``self.message_template.format(names="__probe__")`` in the model
+    validator surfaces the bad template at load time with an
+    operator-actionable error.
+    """
+    with pytest.raises(ValidationError, match="message_template formatting failed"):
+        GreetingConfig(
+            enabled=True,
+            names=["Pat"],
+            message_template="Hello {names} from {wrong_key}",
+        )
+
+
+def test_message_template_positional_placeholder_rejected() -> None:
+    """Positional ``{0}`` also fails the probe — only ``{names}`` is allowed."""
+    with pytest.raises(ValidationError, match="message_template formatting failed"):
+        GreetingConfig(
+            enabled=True,
+            names=["Pat"],
+            message_template="Hello {names} {0}",
+        )
+
+
+def test_message_template_unbalanced_brace_rejected() -> None:
+    """A stray unbalanced brace raises ValueError inside ``.format()``."""
+    with pytest.raises(ValidationError, match="message_template formatting failed"):
+        GreetingConfig(
+            enabled=True,
+            names=["Pat"],
+            message_template="Hello {names} {",
+        )
+
+
 def test_settings_greeting_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     """Operators can flip the master switch via env (then YAML supplies names)."""
     # The Pydantic env-prefix only flips scalar fields at Settings level;

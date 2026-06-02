@@ -4557,8 +4557,15 @@ class GreetingConfig(BaseModel):
             "Intensity passed to ``rocky_transform`` for the custom message "
             "— pushes the phrase past the personality engine's intensity "
             "threshold so names get the excited repetition + exclamation. "
-            "Range-gated [0, 1]; default 0.9 stays just below the "
-            "``intensity_threshold`` default of 1.0 used by alerts."
+            "Range-gated [0, 1]. Default 0.9 exceeds the GLOBAL "
+            "``VoiceConfig.intensity_threshold`` default of 0.7, so the "
+            "excited path fires unless an operator has set a per-event "
+            "override above 0.9 in ``VoiceConfig.event_intensity_thresholds`` "
+            "(note: ``rocky_transform`` is invoked with the message text "
+            "directly, not an event name — only the global threshold is "
+            "consulted by the greeter today, but raising this comparison "
+            "above the configured value is the supported way to suppress "
+            "personality effects without disabling the greeter)."
         ),
     )
     inter_chirp_delay_s: float = Field(
@@ -4574,11 +4581,11 @@ class GreetingConfig(BaseModel):
 
     @model_validator(mode="after")
     def _require_names_when_enabled(self) -> GreetingConfig:
-        # Both guards gate on ``enabled`` so a disabled overlay can carry
-        # an in-progress / placeholder template without failing YAML-load
-        # (code-reviewer round-1 finding #1: an operator setting
-        # ``enabled: false`` with a custom template should not be rejected
-        # — the template is never read while disabled).
+        # All three guards gate on ``enabled`` so a disabled overlay can
+        # carry an in-progress / placeholder template without failing
+        # YAML-load (code-reviewer round-1 finding #1: an operator setting
+        # ``enabled: false`` with a custom template should not be
+        # rejected — the template is never read while disabled).
         if not self.enabled:
             return self
         if not self.names:
@@ -4587,6 +4594,21 @@ class GreetingConfig(BaseModel):
         if "{names}" not in self.message_template:
             msg = "greeting.message_template must contain the '{names}' placeholder"
             raise ValueError(msg)
+        # Round-3 review (Gemini): ``.format(names=...)`` at runtime can
+        # raise ``KeyError`` / ``ValueError`` / ``IndexError`` if the
+        # operator's template also references foreign placeholders (e.g.
+        # ``{wrong_key}``, positional ``{0}``, or unbalanced braces).
+        # Validate at YAML-load with a probe so the error surfaces where
+        # the operator can fix it, not in the live greeter call.
+        try:
+            self.message_template.format(names="__probe__")
+        except (KeyError, ValueError, IndexError) as exc:
+            msg = (
+                "greeting.message_template formatting failed at config "
+                f"load — only the '{{names}}' placeholder is supported "
+                f"({type(exc).__name__}: {exc})"
+            )
+            raise ValueError(msg) from exc
         return self
 
 

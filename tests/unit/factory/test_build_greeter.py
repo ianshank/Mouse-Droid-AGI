@@ -9,33 +9,41 @@ on the real Piper/USB stack.
 from __future__ import annotations
 
 import pytest
+from tests.unit.voice._fakes import FakeVoiceEngine
 
 from mousedroid.config.schema import GreetingConfig, Settings
 from mousedroid.factory import build_greeter
 from mousedroid.voice.greeting import Greeter
 
 
-class _FakeVoiceEngine:
-    """Minimal ``VoiceEngineProtocol`` for factory-wiring assertions."""
-
-    @property
-    def is_ready(self) -> bool:
-        return True
-
-    async def start(self) -> None: ...
-
-    async def stop(self) -> None: ...
-
-    async def speak(self, event: str, context: dict[str, float] | None = None) -> None: ...
-
-    async def play_phrase(self, text: str) -> tuple[int, float]:
-        return (0, 0.0)
-
-
 def _enabled_settings() -> Settings:
-    cfg = Settings(mock_hardware=True)
-    cfg.greeting = GreetingConfig(enabled=True, names=["A", "B"])
-    return cfg
+    """Build an enabled greeting Settings via the Pydantic constructor.
+
+    Constructs through ``Settings(...)`` so every Pydantic validator
+    runs (including any future ``@model_validator`` added to
+    ``Settings`` itself). Direct attribute mutation after construction
+    would silently bypass those validators — a hygiene gap flagged by
+    the round-2 code review.
+    """
+    return Settings(
+        mock_hardware=True,
+        greeting=GreetingConfig(enabled=True, names=["A", "B"]),
+    )
+
+
+def _enabled_settings_with_voice_disabled() -> Settings:
+    """Enabled greeting + voice disabled — the no-voice-engine path.
+
+    Constructed via :meth:`Settings.model_validate` so the nested
+    voice override flows through the canonical validation path.
+    """
+    return Settings.model_validate(
+        {
+            "mock_hardware": True,
+            "greeting": {"enabled": True, "names": ["A", "B"]},
+            "voice": {"enabled": False},
+        }
+    )
 
 
 def test_raises_when_greeting_is_none() -> None:
@@ -46,32 +54,29 @@ def test_raises_when_greeting_is_none() -> None:
 
 
 def test_raises_when_greeting_disabled() -> None:
-    cfg = Settings(mock_hardware=True)
-    cfg.greeting = GreetingConfig()  # enabled defaults False
+    cfg = Settings(mock_hardware=True, greeting=GreetingConfig())  # enabled defaults False
     with pytest.raises(ValueError, match="enabled=True"):
         build_greeter(cfg)
 
 
 def test_returns_greeter_when_enabled_and_voice_engine_provided() -> None:
     cfg = _enabled_settings()
-    greeter = build_greeter(cfg, voice_engine=_FakeVoiceEngine())  # type: ignore[arg-type]
+    greeter = build_greeter(cfg, voice_engine=FakeVoiceEngine())  # type: ignore[arg-type]
     assert isinstance(greeter, Greeter)
 
 
 def test_raises_when_voice_engine_cannot_be_built() -> None:
     """No voice engine path → operator-actionable error, not a None return."""
-    cfg = _enabled_settings()
-    cfg.voice.enabled = False  # voice gateway disabled
+    cfg = _enabled_settings_with_voice_disabled()
     with pytest.raises(ValueError, match="voice engine"):
         build_greeter(cfg)  # no voice_engine override either
 
 
 def test_voice_engine_test_seam_used_when_provided() -> None:
     """The test seam bypasses the build_voice_engine factory chain."""
-    cfg = _enabled_settings()
     # Even if voice were disabled, an explicit voice_engine override wins.
-    cfg.voice.enabled = False
-    engine = _FakeVoiceEngine()
+    cfg = _enabled_settings_with_voice_disabled()
+    engine = FakeVoiceEngine()
     greeter = build_greeter(cfg, voice_engine=engine)  # type: ignore[arg-type]
     # The greeter must hold the *exact* engine we passed in. Read via the
     # public ``voice_engine`` property (round-1 finding #3) rather than

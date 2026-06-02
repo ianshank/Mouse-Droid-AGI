@@ -40,6 +40,7 @@ import asyncio
 import random
 from typing import TYPE_CHECKING
 
+from mousedroid.common.text_utils import format_names_oxford
 from mousedroid.logging.setup import get_logger
 from mousedroid.voice.phrase_bank import DEFAULT_PHRASES
 from mousedroid.voice.rocky import rocky_transform
@@ -52,29 +53,11 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
-
-def format_names_oxford(names: Sequence[str]) -> str:
-    """Format ``names`` as an Oxford-comma list (``"A, B, C and D"``).
-
-    Empty list returns ``""``; single name returns the name verbatim;
-    two names join with ``" and "``; three or more use commas + Oxford
-    ``" and "`` before the final item. Pure function, no I/O — pinned
-    by ``tests/unit/voice/test_greeting.py``.
-
-    Args:
-        names: Ordered list of names to format.
-
-    Returns:
-        Oxford-comma-joined string.
-    """
-    cleaned = [n.strip() for n in names if n.strip()]
-    if not cleaned:
-        return ""
-    if len(cleaned) == 1:
-        return cleaned[0]
-    if len(cleaned) == 2:
-        return f"{cleaned[0]} and {cleaned[1]}"
-    return f"{', '.join(cleaned[:-1])} and {cleaned[-1]}"
+# Cap on how many phrase-bank events surface in the
+# ``greeting_pre_chirp_event_unknown`` warning log. Tunable here only —
+# the warning is operator-diagnostic, not a hot path, so this is fine as
+# a module-level named constant rather than a config field.
+_AVAILABLE_EVENTS_LOG_LIMIT: int = 8
 
 
 def _select_chirp_text(event_name: str, rng: random.Random | None = None) -> str | None:
@@ -103,7 +86,7 @@ def _select_chirp_text(event_name: str, rng: random.Random | None = None) -> str
         _log.warning(
             "greeting_pre_chirp_event_unknown",
             phrase_event=event_name,
-            available=sorted(DEFAULT_PHRASES.keys())[:8],
+            available=sorted(DEFAULT_PHRASES.keys())[:_AVAILABLE_EVENTS_LOG_LIMIT],
         )
         return None
     if rng is None:
@@ -132,6 +115,7 @@ class Greeter:
         voice_engine: VoiceEngineProtocol,
         cfg: GreetingConfig,
         *,
+        intensity_threshold: float | None = None,
         rng: random.Random | None = None,
     ) -> None:
         """Initialise the greeter.
@@ -146,12 +130,20 @@ class Greeter:
             cfg: Resolved :class:`GreetingConfig` from
                 ``Settings.greeting``. Caller MUST pass a non-``None``
                 config; the factory enforces that.
+            intensity_threshold: Threshold passed to
+                :func:`rocky_transform` — effects activate when the
+                excitement intensity exceeds this value. ``None``
+                (default) lets ``rocky_transform`` fall back to its
+                own pinned default. The factory passes the resolved
+                ``VoiceConfig.intensity_threshold`` so an operator
+                tuning the voice config sees the same threshold here.
             rng: Optional :class:`random.Random` for chirp-entry
                 selection. Defaults to ``None`` which picks the first
                 phrase-bank entry deterministically.
         """
         self._voice = voice_engine
         self._cfg = cfg
+        self._intensity_threshold = intensity_threshold
         self._rng = rng
 
     @property
@@ -211,10 +203,17 @@ class Greeter:
             if self._cfg.inter_chirp_delay_s > 0:
                 await asyncio.sleep(self._cfg.inter_chirp_delay_s)
 
-        # Custom message with rocky-style excitement.
+        # Custom message with rocky-style excitement. Forward the
+        # operator-configured ``VoiceConfig.intensity_threshold`` so the
+        # personality engine fires at the same threshold the rest of the
+        # voice subsystem uses — silent shadowing of an operator override
+        # would violate CLAUDE.md "no hardcoded values".
         oxford_names = format_names_oxford(resolved)
         raw_message = self._cfg.message_template.format(names=oxford_names)
-        styled = rocky_transform(raw_message, intensity=self._cfg.excitement_intensity)
+        rocky_kwargs: dict[str, float] = {"intensity": self._cfg.excitement_intensity}
+        if self._intensity_threshold is not None:
+            rocky_kwargs["intensity_threshold"] = self._intensity_threshold
+        styled = rocky_transform(raw_message, **rocky_kwargs)
         _log.info(
             "greeting_message_playing",
             text=styled,
