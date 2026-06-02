@@ -51,6 +51,30 @@ domain_randomization:
 
 llm:
   enabled: true
+
+  # --- Primary tier: Claude (Anthropic) — deliberative mission translation ---
+  # PR #107. Cloud Claude translates NL missions -> GoalVector OUTSIDE the 30 Hz
+  # hot loop; the deterministic RSSM->MCTS->ESP32 path is unchanged.
+  backend: "anthropic"
+  # No model id is hardcoded in the gateway. Haiku = lowest-latency on-rover
+  # default for short velocity-goal translations; switch to a Sonnet id for
+  # harder multi-step mission language.
+  model_name: "claude-haiku-4-5"
+  # api_key intentionally absent here — supply via ANTHROPIC_API_KEY or
+  # MOUSEDROID_LLM__API_KEY in /etc/mousedroid/docker.env (SecretStr; never YAML).
+  request_timeout_s: 20.0
+  # Cloud round-trips are 1-5 s; the 500 ms local default would spam
+  # anthropic_gateway_slow WARNINGs (code-reviewer PR #107 finding 3).
+  latency_target_ms: 5000.0
+
+  # --- Off-network fallback tier: local Phi-3-mini via llama_cpp ---
+  # When api.anthropic.com is unreachable, the composite serves locally so the
+  # rover stays autonomous. llama_cpp loads model_path (below) and ignores
+  # model_name, so no fallback_model_name override is needed.
+  fallback_backend: "llama_cpp"
+  fallback_retry_cooldown_s: 30.0
+
+  # --- Local-tier knobs (RETAINED verbatim — drive the llama_cpp fallback) ---
   model_path: "/opt/mousedroid/models/Phi-3-mini-4k-instruct-q4.gguf"
   context_length: 2048
   n_threads: 6
@@ -62,7 +86,6 @@ llm:
   n_batch: 32
   max_tokens: 128
   temperature: 0.1
-  latency_target_ms: 500.0
 
 microphone:
   enabled: true
