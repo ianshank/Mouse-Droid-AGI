@@ -1,19 +1,25 @@
-# Runbook — Jetson Claude-Pilot Deploy (PR #107)
+# Runbook — Jetson Claude-Pilot Deploy (PR #107 / #111)
 
 Deploy the Anthropic Claude mission-translation gateway + Phi-3 off-network
 fallback to the rover. Design: `docs/superpowers/specs/2026-06-02-jetson-claude-pilot-deploy-design.md`.
 
+## Current deployed image (PR #111)
+
+As of PR #111 the rover image `mousedroid:jetson` is rebuilt from `9c31968`
+(recorded in `deployments/jetson-image.json`) and **bakes both** the PR #107
+LLMConfig schema **and** the `anthropic` SDK (Dockerfile `Stage 4b`). Consequently
+the cloud tier survives `docker compose up -d --force-recreate` with **no manual
+hot-install** — the recommended deploy path below is a plain recreate. The
+hot-install dance is retained only as a **fallback** (see step 5a) for an image
+that predates #111, or where the *non-fatal* `Stage 4b` layer failed at build
+time (e.g. PyPI unreachable).
+
 ## Prerequisites
 - Deploy branch pushed to `origin` (`feat/jetson-claude-pilot-deploy`).
-- An `ANTHROPIC_API_KEY` (`sk-ant-...`) to provision (cloud tier; fallback works without it).
+- An `ANTHROPIC_API_KEY` (`sk-ant-...`) to provision (cloud tier; the Phi-3 fallback works without it).
 - SSH: `ssh ian@mousedroid.local` (WiFi). Container `mousedroid` healthy.
 
-## Deploy sequence (ordering matters — see design §5)
-
-The ordering is forced by two facts: a `docker exec ... pip install` lands in the
-container's **writable layer** (wiped by `--force-recreate`), and the API key lives
-only in the `env_file` (read at container **creation**). So: recreate first, install
-the SDK second, `restart` (not recreate) third.
+## Deploy sequence
 
 1. **Backup + validate** the live config:
    ```bash
@@ -37,22 +43,30 @@ the SDK second, `restart` (not recreate) third.
    # compose runs as `ian`; chown so the owner can read, then 600 (see findings #4).
    sudo chown ian:ian /etc/mousedroid/docker.env && sudo chmod 600 /etc/mousedroid/docker.env
    ```
-5. **Recreate** (loads env + config + source):
+5. **Recreate** on the baked image (loads env + config + source):
    `docker compose -f docker-compose.jetson.yml up -d --force-recreate mousedroid`
-   → Stage-1 validation (fallback; SDK still absent).
-6. **Hot-install** the SDK (pin to the rover-validated version for a reproducible
-   recovery): `docker exec mousedroid python3 -m pip install "anthropic==0.105.2"`
-   `0.105.2` is the version validated live on the rover; the `Dockerfile.jetson` /
+   With the #111 image, `anthropic` is baked and the key is in `docker.env`, so
+   **both tiers come up directly** — no hot-install needed. Confirm via the
+   `fallback_gateway_started` event: `primary_ready: true` (Claude) **and**
+   `secondary_ready: true` (Phi-3). Proceed to Validation.
+
+   **5a. Fallback — ONLY if `anthropic` is not baked** (pre-#111 image, or the
+   non-fatal `Stage 4b` failed at build): if the log instead shows
+   `anthropic_gateway_degraded_no_sdk`, the running image lacks the SDK. Recover
+   it in the writable layer, then `restart` (NOT recreate — recreate would wipe
+   the writable-layer install):
+   ```bash
+   docker exec mousedroid python3 -m pip install --no-cache-dir "anthropic==0.105.2"
+   docker compose -f docker-compose.jetson.yml restart mousedroid
+   ```
+   `0.105.2` is the version validated on the rover; `Dockerfile.jetson` /
    `pyproject.toml` keep the `anthropic>=0.40` lower bound for the image build.
-7. **Restart** (preserves the writable-layer SDK; recreate would wipe it):
-   `docker compose -f docker-compose.jetson.yml restart mousedroid`
-   → Stage-2 validation (cloud).
 
 ## Validation
 - Probe (no motors needed):
   `docker exec mousedroid python3 /opt/mousedroid/scripts/translate_mission.py --mission "patrol left then stop"`
-  - Stage-1 (no key/SDK): prints `tier=local-fallback (degraded primary)` + a GoalVector.
-  - Stage-2 (key set, SDK installed): prints `tier=primary` + a GoalVector.
+  - Online + key provisioned: prints `tier=primary` + a GoalVector (cloud Claude).
+  - Off-network OR key absent: prints `tier=secondary (local fallback)` + a GoalVector (Phi-3).
 - Structured-log grep recipes (`docker logs mousedroid` / Loki):
   - `anthropic_gateway_degraded` — primary unreachable (expected off-network / no key).
   - `anthropic_gateway_recovered` — primary self-healed after cooldown re-probe.
@@ -65,18 +79,20 @@ the SDK second, `restart` (not recreate) third.
 3. `docker compose -f docker-compose.jetson.yml up -d --force-recreate mousedroid`.
 
 ## Durability note
-The hot-installed `anthropic` survives `restart`/reboot but NOT a future
-`--force-recreate`/rebuild. The Dockerfile `Stage 4b` bake (this PR) ensures
-future image builds include it, so a later rebuild won't silently lose the cloud
-tier. Manual recovery commands in this runbook pin `anthropic==0.105.2` (the
-version validated live on the rover) for reproducibility; the `Dockerfile.jetson`
-/ `pyproject.toml` deliberately keep the `anthropic>=0.40` lower-bound range for
-the image build.
+The #111 image **bakes** `anthropic` (Dockerfile `Stage 4b`), so the cloud tier
+survives `--force-recreate`/reboot — the prior writable-layer hot-install (which a
+recreate would wipe) is no longer required for the deployed image. Keep
+`deployments/jetson-image.json` pointed at the built-from SHA whenever the image
+is rebuilt, so the CI config-schema-compat gate validates config YAML against the
+schema that is actually deployed. The step-5a fallback commands pin
+`anthropic==0.105.2` (the rover-validated version); the image build itself uses
+the `anthropic>=0.40` lower-bound range in `Dockerfile.jetson` / `pyproject.toml`.
 
 ## Live-deploy findings (first deploy, 2026-06-02) — host-specific reality
 
-These were discovered deploying to the actual rover and are required for any
-re-deploy until the image is rebuilt with this PR's `Dockerfile.jetson`:
+Discovered during the first deploy. Items 1, 2, 4, 5 are ongoing host realities;
+item 3 (SDK-wipe) is **resolved for the deployed image** by the #111 rebuild and
+kept here only as a fallback note.
 
 1. **`MOUSEDROID_LLM__ENABLED=false` in `docker.env` gates everything.** A prior
    operator override disabled the gateway entirely; env beats YAML in
@@ -94,16 +110,14 @@ re-deploy until the image is rebuilt with this PR's `Dockerfile.jetson`:
    fallback translation is actively running*; idle steady-state is unaffected
    (verified 0 overruns post-startup).
 
-3. **Recreate ordering (the SDK-wipe trap).** `docker compose up -d --force-recreate`
-   wipes the writable-layer `anthropic` install (image lacks it until rebuilt). So
-   the moment you change any `docker.env` value and recreate, the cloud primary
-   degrades until you **reinstall + `restart`**:
-   ```bash
-   docker exec mousedroid python3 -m pip install --no-cache-dir "anthropic==0.105.2"
-   docker compose -f docker-compose.jetson.yml restart mousedroid   # NOT recreate
-   ```
-   `restart` re-runs the process (re-imports the SDK, reloads config) without wiping
-   the writable layer. Confirm both tiers via the `fallback_gateway_started` event:
+3. **(Resolved by the #111 rebuild) Recreate SDK-wipe trap.** *Before* #111 the
+   deployed image lacked `anthropic`, so `docker compose up -d --force-recreate`
+   wiped the writable-layer install and the cloud primary degraded until a
+   `reinstall + restart`. The #111 image **bakes** the SDK
+   (`deployments/jetson-image.json` @ 9c31968), so recreate is now safe and the
+   cloud tier persists. If you ever run an image WITHOUT the baked SDK, recover via
+   the step-5a fallback (`pip install "anthropic==0.105.2"` then `restart`, NOT
+   recreate). Confirm both tiers via `fallback_gateway_started`:
    `primary_ready: true` (Claude) **and** `secondary_ready: true` (Phi-3).
 
 4. **`docker.env` must be readable by the compose-running user.** `chmod 600` alone
@@ -114,7 +128,7 @@ re-deploy until the image is rebuilt with this PR's `Dockerfile.jetson`:
 5. **Validating with `scripts/translate_mission.py` inside the live container** loads
    a *second* gateway → a second Phi-3 copy → GPU/RAM contention. Always pass
    `--config /etc/mousedroid/jetson_production.yaml` **or** rely on the container's
-   `MOUSEDROID_CONFIG` env var — the probe now resolves it via
+   `MOUSEDROID_CONFIG` env var — the probe resolves it via
    `resolve_runtime_config_paths` (same as the orchestrator), so inside the container
    it picks up the production overlay automatically. The probe reports the
    actually-serving tier (`tier=primary` / `tier=secondary (local fallback)` /
