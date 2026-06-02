@@ -4437,6 +4437,103 @@ class USBCDiscoveryConfig(BaseModel):
         return self
 
 
+class GreetingConfig(BaseModel):
+    """Operator-tools: MSE-6 spoken greeting subsystem (``scripts/greet_intro.py``).
+
+    Drives a one-shot named greeting through the existing
+    :class:`RockyVoiceEngine` — a pre-flourish phrase-bank event (default
+    ``greeting_excited``) followed by the operator-configured message
+    template with names interpolated. Designed to opt-in via a dedicated
+    YAML overlay; ``Settings.greeting`` defaults to ``None`` so existing
+    YAML files load byte-identical.
+
+    The OLED face controller is NOT wired here — the operator's current
+    dev rover has no SSD1306 attached. The :class:`Greeter` class
+    exposes an extension point so the face can be added later without
+    touching this config.
+    """
+
+    enabled: bool = Field(
+        False,
+        description=(
+            "Master switch. ``False`` (default) keeps the greeting subsystem "
+            "inert so default YAML files load unchanged. Operators flip to "
+            "``True`` on an overlay (see ``config/greeting_pilot.yaml.example``)."
+        ),
+    )
+    names: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Ordered list of names to greet. Empty by default so the schema "
+            "can default-construct in any context; the ``@model_validator`` "
+            "below rejects ``enabled=True`` with an empty ``names`` list so a "
+            "misconfigured overlay is caught at YAML-load time rather than "
+            "surfacing a confusing empty-greeting at runtime. Loaded from "
+            "YAML only (no CLI override) per the PR design decision: "
+            "operator-edited config is the single source of truth for who "
+            "the rover knows about."
+        ),
+    )
+    message_template: str = Field(
+        "Hello {names}! I have been waiting to meet you for some time",
+        min_length=4,
+        description=(
+            "Template string with a single ``{names}`` placeholder. The "
+            "placeholder is filled by an Oxford-comma list (``A, B, C and D``). "
+            "Edit on the overlay to change the wording without code changes."
+        ),
+    )
+    pre_chirp_event: str = Field(
+        "greeting_excited",
+        description=(
+            "Phrase-bank event name to fire as an MSE-6-style audible "
+            "flourish before the custom message. Defaults to "
+            "``greeting_excited`` (existing entry in "
+            "``src/mousedroid/voice/phrase_bank.py``). Set to empty "
+            "string to skip the pre-flourish entirely."
+        ),
+    )
+    excitement_intensity: float = Field(
+        0.9,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Intensity passed to ``rocky_transform`` for the custom message "
+            "— pushes the phrase past the personality engine's intensity "
+            "threshold so names get the excited repetition + exclamation. "
+            "Range-gated [0, 1]; default 0.9 stays just below the "
+            "``intensity_threshold`` default of 1.0 used by alerts."
+        ),
+    )
+    inter_chirp_delay_s: float = Field(
+        0.25,
+        ge=0.0,
+        le=5.0,
+        description=(
+            "Pause (seconds) between the pre-flourish phrase finishing and "
+            "the custom message starting. Avoids run-on audio that masks "
+            "the chirp's tail. Range-gated [0, 5]."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _require_names_when_enabled(self) -> GreetingConfig:
+        # Both guards gate on ``enabled`` so a disabled overlay can carry
+        # an in-progress / placeholder template without failing YAML-load
+        # (code-reviewer round-1 finding #1: an operator setting
+        # ``enabled: false`` with a custom template should not be rejected
+        # — the template is never read while disabled).
+        if not self.enabled:
+            return self
+        if not self.names:
+            msg = "greeting.enabled=true requires a non-empty greeting.names list"
+            raise ValueError(msg)
+        if "{names}" not in self.message_template:
+            msg = "greeting.message_template must contain the '{names}' placeholder"
+            raise ValueError(msg)
+        return self
+
+
 class Settings(BaseSettings):
     """Root configuration — single source of truth for all settings.
 
@@ -4555,6 +4652,19 @@ class Settings(BaseSettings):
         description=(
             "Optional USB-C enumeration gate used by the Jetson smoke "
             "scripts. None disables (backwards compatible)."
+        ),
+    )
+    greeting: GreetingConfig | None = Field(
+        None,
+        description=(
+            "Optional MSE-6 spoken-greeting subsystem "
+            "(``scripts/greet_intro.py``). ``None`` (default) disables — "
+            "existing YAML loads byte-identical. Populate on an "
+            "operator-tools overlay (``config/greeting_pilot.yaml.example``) "
+            "to enable the named greeting flow. Pure speech surface today "
+            "(no OLED face animation — the operator's dev rover has no "
+            "display attached); the ``Greeter`` class exposes a documented "
+            "extension point for the face when one is reconnected."
         ),
     )
     three_laws: ThreeLawsConfig = Field(default_factory=_settings_default_factory(ThreeLawsConfig))
