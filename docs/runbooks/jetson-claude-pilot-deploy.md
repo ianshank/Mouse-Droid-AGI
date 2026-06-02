@@ -65,3 +65,47 @@ The hot-installed `anthropic` survives `restart`/reboot but NOT a future
 `--force-recreate`/rebuild. The Dockerfile `Stage 4b` bake (this PR) ensures
 future image builds include it, so a later rebuild won't silently lose the cloud
 tier.
+
+## Live-deploy findings (first deploy, 2026-06-02) — host-specific reality
+
+These were discovered deploying to the actual rover and are required for any
+re-deploy until the image is rebuilt with this PR's `Dockerfile.jetson`:
+
+1. **`MOUSEDROID_LLM__ENABLED=false` in `docker.env` gates everything.** A prior
+   operator override disabled the gateway entirely; env beats YAML in
+   pydantic-settings. Set `MOUSEDROID_LLM__ENABLED=true` or the gateway never runs
+   regardless of `llm.enabled: true` in the overlay.
+
+2. **Phi-3 fallback must run on CPU on this host: `MOUSEDROID_LLM__N_GPU_LAYERS=0`.**
+   The world model already occupies the shared 7.4 GB iGPU, so a full-offload
+   (`n_gpu_layers: -1`, the repo default) second model fails with
+   `unable to allocate CUDA0 buffer`. CPU offload loads the GGUF via mmap (sits in
+   reclaimable page cache, ~0 hard RAM, no swap pressure). The repo YAML keeps `-1`
+   for hosts with GPU headroom — this is a **per-host `docker.env` override**, not a
+   committed change. Trade-off: CPU inference is slower (acceptable for an
+   off-network fallback) and may cause transient 30 Hz `loop_overrun` *only while a
+   fallback translation is actively running*; idle steady-state is unaffected
+   (verified 0 overruns post-startup).
+
+3. **Recreate ordering (the SDK-wipe trap).** `docker compose up -d --force-recreate`
+   wipes the writable-layer `anthropic` install (image lacks it until rebuilt). So
+   the moment you change any `docker.env` value and recreate, the cloud primary
+   degrades until you **reinstall + `restart`**:
+   ```bash
+   docker exec mousedroid python3 -m pip install --no-cache-dir "anthropic>=0.40"
+   docker compose -f docker-compose.jetson.yml restart mousedroid   # NOT recreate
+   ```
+   `restart` re-runs the process (re-imports the SDK, reloads config) without wiping
+   the writable layer. Confirm both tiers via the `fallback_gateway_started` event:
+   `primary_ready: true` (Claude) **and** `secondary_ready: true` (Phi-3).
+
+4. **`docker.env` must be readable by the compose-running user.** `chmod 600` alone
+   breaks `env_file` loading (compose runs as `ian`, file was root:root). Use
+   `chown ian:ian` + `chmod 600` so the owner can read it (more secure than the
+   prior world-readable `755`).
+
+5. **Validating with `scripts/translate_mission.py` inside the live container** loads
+   a *second* gateway → a second Phi-3 copy → GPU/RAM contention. Always pass
+   `--config /etc/mousedroid/jetson_production.yaml` (the script does not consume the
+   `MOUSEDROID_CONFIG` env var); prefer reading the orchestrator's own
+   `anthropic_gateway_*` / `fallback_gateway_started` log events for production state.
