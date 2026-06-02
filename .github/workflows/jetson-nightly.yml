@@ -100,6 +100,11 @@ jobs:
                   PILLARS: ${{ github.event.inputs.pillars || 'all' }}
               run: |
                   set +e
+                  # PILLARS is intentionally unquoted: it may be a space-
+                  # separated list of pillar names passed as separate args
+                  # (or the literal "all"). Word-splitting is the desired
+                  # behaviour here.
+                  # shellcheck disable=SC2086
                   bash scripts/validate_pillar.sh ${PILLARS}
                   rc=$?
                   set -e
@@ -121,9 +126,11 @@ jobs:
               run: |
                   SUMMARY="${{ steps.reportdir.outputs.dir }}/ten_pillars.log"
                   if [ -f "${SUMMARY}" ]; then
-                      echo "### Ten Pillars Result — ${{ steps.reportdir.outputs.stamp }}" >> "$GITHUB_STEP_SUMMARY"
-                      echo "" >> "$GITHUB_STEP_SUMMARY"
-                      cat "${SUMMARY}" >> "$GITHUB_STEP_SUMMARY"
+                      {
+                          echo "### Ten Pillars Result — ${{ steps.reportdir.outputs.stamp }}"
+                          echo ""
+                          cat "${SUMMARY}"
+                      } >> "$GITHUB_STEP_SUMMARY"
                   else
                       echo "::warning::No ten_pillars.log emitted — validate_pillar.sh may have aborted before writing the summary"
                   fi

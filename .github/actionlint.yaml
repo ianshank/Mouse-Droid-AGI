@@ -1,0 +1,7 @@
+# actionlint configuration.
+# Declares custom self-hosted runner labels that actionlint cannot infer from
+# the hosted-runner list. Without this, `runs-on: [self-hosted, jetson]` in
+# jetson-nightly.yml is flagged as an unknown label [runner-label].
+self-hosted-runner:
+  labels:
+    - jetson
