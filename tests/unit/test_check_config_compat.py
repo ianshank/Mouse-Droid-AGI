@@ -109,3 +109,45 @@ def test_deployment_required_keys_constant_includes_sha() -> None:
     assert "sha" in check_config_compat.REQUIRED_KEYS
     assert "platform" in check_config_compat.REQUIRED_KEYS
     assert "image_tag" in check_config_compat.REQUIRED_KEYS
+
+
+# ---------------------------------------------------------------------------
+# _validation_env — the subprocess environment for schema validation.
+# Regression: replacing the whole env (only PYTHONPATH/PATH/MOCK) breaks the
+# interpreter on platforms that need base vars (Windows SYSTEMROOT etc.),
+# causing spurious "No module named yaml" failures. It must INHERIT the base
+# env, STRIP MOUSEDROID_* (so host overrides don't pollute the file-vs-schema
+# check), PIN PYTHONPATH to the deployed worktree's src, and force mock hardware.
+# ---------------------------------------------------------------------------
+def test_validation_env_inherits_base_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Base (non-MOUSEDROID) env vars are inherited so the interpreter works."""
+    monkeypatch.setenv("CONFIG_COMPAT_BASE_PROBE", "present")
+    env = check_config_compat._validation_env(tmp_path)
+    assert env.get("CONFIG_COMPAT_BASE_PROBE") == "present"
+
+
+def test_validation_env_strips_mousedroid_overrides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Host MOUSEDROID_* overrides must not leak into the schema check."""
+    monkeypatch.setenv("MOUSEDROID_LLM__ENABLED", "false")
+    monkeypatch.setenv("MOUSEDROID_TELEMETRY_TOKEN", "secret")
+    env = check_config_compat._validation_env(tmp_path)
+    assert not any(k.startswith("MOUSEDROID_") and k != "MOUSEDROID_MOCK_HARDWARE" for k in env)
+
+
+def test_validation_env_pins_pythonpath_to_worktree_src(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PYTHONPATH is pinned to the deployed worktree's src, overriding any host value."""
+    monkeypatch.setenv("PYTHONPATH", "/some/host/path")
+    env = check_config_compat._validation_env(tmp_path)
+    assert env["PYTHONPATH"] == str((tmp_path / "src").resolve())
+
+
+def test_validation_env_forces_mock_hardware(tmp_path: Path) -> None:
+    """Schema load must not init real hardware."""
+    env = check_config_compat._validation_env(tmp_path)
+    assert env["MOUSEDROID_MOCK_HARDWARE"] == "true"
