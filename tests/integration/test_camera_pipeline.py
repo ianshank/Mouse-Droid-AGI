@@ -263,6 +263,8 @@ class TestCameraDisconnectHandling:
     @pytest.mark.asyncio
     async def test_jetson_csi_stop_releases_camera(self, camera_cfg: CameraConfig) -> None:
         """JetsonCSICamera.stop() should set _camera to None."""
+        import mousedroid.hardware.camera.jetson_csi as jcsi_mod
+
         mock_jutils = MagicMock()
         mock_source = MagicMock()
         mock_jutils.videoSource.return_value = mock_source
@@ -271,14 +273,16 @@ class TestCameraDisconnectHandling:
             dtype=np.uint8,
         )
 
-        with patch.dict("sys.modules", {"jetson_utils": mock_jutils}):
-            # Need to reimport after patching
-            import importlib
-
-            import mousedroid.hardware.camera.jetson_csi as jcsi_mod
-
-            importlib.reload(jcsi_mod)
-
+        # Patch the module-level backend handle in place — DO NOT reload the
+        # module under ``patch.dict("sys.modules", ...)``. The old pattern
+        # re-executed jetson_csi's body (including ``import cv2``) and, on block
+        # exit, ``patch.dict`` restored its whole sys.modules snapshot, evicting
+        # every ``cv2.*`` entry the reload had added. opencv-python cannot be
+        # re-imported after eviction (``cv2.dnn.DictValue`` typing bug), so
+        # every later test that imported ``jetson_csi`` fresh crashed when the
+        # full suite ran in one process. ``patch.object`` restores cleanly and
+        # never touches ``sys.modules``. See ``test_..._does_not_evict_cv2``.
+        with patch.object(jcsi_mod, "_jetson_utils", mock_jutils):
             cam = jcsi_mod.JetsonCSICamera(camera_cfg)
             # Manually set up to simulate started state
             cam._camera = mock_source
@@ -286,6 +290,40 @@ class TestCameraDisconnectHandling:
 
             await cam.stop()
             assert cam._camera is None
+
+    @pytest.mark.asyncio
+    async def test_jetson_csi_backend_patch_does_not_evict_cv2(
+        self, camera_cfg: CameraConfig
+    ) -> None:
+        """Regression: mocking the jetson_utils backend must not churn sys.modules.
+
+        Guards the full-suite test-isolation bug where the prior
+        ``patch.dict("sys.modules", ...) + importlib.reload`` pattern evicted
+        ``cv2`` (and its submodules) from ``sys.modules`` on context exit.
+        opencv-python raises ``AttributeError: module 'cv2.dnn' has no
+        attribute 'DictValue'`` when re-imported after eviction, so every later
+        test that imports ``jetson_csi`` fresh failed once the whole tree ran in
+        a single pytest process (``pytest tests/``). The clean ``patch.object``
+        pattern below leaves ``cv2`` cached, so a fresh import keeps working.
+        """
+        import importlib
+        import sys
+
+        pytest.importorskip(
+            "cv2",
+            reason="opencv-python not installed; this regression only applies when cv2 is present",
+        )
+        import mousedroid.hardware.camera.jetson_csi as jcsi_mod
+
+        with patch.object(jcsi_mod, "_jetson_utils", MagicMock()):
+            jcsi_mod.JetsonCSICamera(camera_cfg)
+
+        assert "cv2" in sys.modules, "cv2 was evicted from sys.modules"
+
+        # Simulate a later test importing jetson_csi fresh in the same process.
+        sys.modules.pop("mousedroid.hardware.camera.jetson_csi", None)
+        importlib.invalidate_caches()
+        importlib.import_module("mousedroid.hardware.camera.jetson_csi")
 
 
 # ---------------------------------------------------------------------------
