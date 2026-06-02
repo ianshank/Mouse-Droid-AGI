@@ -106,6 +106,11 @@ re-deploy until the image is rebuilt with this PR's `Dockerfile.jetson`:
 
 5. **Validating with `scripts/translate_mission.py` inside the live container** loads
    a *second* gateway → a second Phi-3 copy → GPU/RAM contention. Always pass
-   `--config /etc/mousedroid/jetson_production.yaml` (the script does not consume the
-   `MOUSEDROID_CONFIG` env var); prefer reading the orchestrator's own
-   `anthropic_gateway_*` / `fallback_gateway_started` log events for production state.
+   `--config /etc/mousedroid/jetson_production.yaml` **or** rely on the container's
+   `MOUSEDROID_CONFIG` env var — the probe now resolves it via
+   `resolve_runtime_config_paths` (same as the orchestrator), so inside the container
+   it picks up the production overlay automatically. The probe reports the
+   actually-serving tier (`tier=primary` / `tier=secondary (local fallback)` /
+   `none — both tiers degraded`). For the live production gateway state, the
+   orchestrator's own `anthropic_gateway_*` / `fallback_gateway_started` log events
+   remain authoritative.

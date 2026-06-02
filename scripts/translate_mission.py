@@ -8,12 +8,18 @@ when the ESP32 / drivetrain is detached.
 
 It builds the gateway through the real factory (``build_llm_gateway``), so it
 honours whatever ``llm:`` config the rover runs (cloud Claude when reachable,
-local llama_cpp fallback when off-network). The served tier + degraded state
-are printed so an operator can confirm which path answered.
+local llama_cpp fallback when off-network). The tier that actually served and
+the composite's degraded state are printed so an operator can confirm which
+path answered.
+
+Config resolution mirrors the orchestrator/greeting CLIs via
+``resolve_runtime_config_paths``: explicit ``--config`` wins, else the
+``MOUSEDROID_CONFIGS`` / ``MOUSEDROID_JETSON_CONFIGS`` CSV env vars, else the
+single ``MOUSEDROID_CONFIG`` / ``MOUSEDROID_JETSON_CONFIG`` env var.
 
 Examples::
 
-    # On the Jetson with the production overlay:
+    # On the Jetson with the production overlay (resolved from the env var):
     MOUSEDROID_CONFIG=/etc/mousedroid/jetson_production.yaml \\
         python scripts/translate_mission.py --mission "patrol left then stop"
 
@@ -32,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import sys
 from pathlib import Path
 
@@ -47,14 +54,16 @@ import structlog  # noqa: E402
 
 structlog.configure(
     processors=[structlog.processors.JSONRenderer()],
-    wrapper_class=structlog.make_filtering_bound_logger(20),  # INFO and above
+    wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
     logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
     cache_logger_on_first_use=False,
 )
 
 from mousedroid.config.loader import load_settings  # noqa: E402
 from mousedroid.factory import build_llm_gateway  # noqa: E402
+from mousedroid.llm_gateway.protocol import LLMGatewayProtocol  # noqa: E402
 from mousedroid.logging.setup import get_logger  # noqa: E402
+from mousedroid.validation.runtime import resolve_runtime_config_paths  # noqa: E402
 
 _log = get_logger(__name__)
 
@@ -76,30 +85,53 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=None,
         type=Path,
         help=(
-            "One or more YAML overlays (repeatable). When omitted, "
-            "load_settings() uses default.yaml + the MOUSEDROID_CONFIG env "
-            "overlay (same resolution as the orchestrator)."
+            "One or more YAML overlays (repeatable). When omitted, the config "
+            "is resolved from MOUSEDROID_CONFIG(S)/MOUSEDROID_JETSON_CONFIG(S) "
+            "env vars — the same resolution the orchestrator uses."
         ),
     )
     return parser.parse_args(argv)
 
 
-async def _run(mission: str, gateway: object) -> int:
-    """Start the gateway, translate one mission, print the result, stop."""
-    start = gateway.start  # type: ignore[attr-defined]
-    stop = gateway.stop  # type: ignore[attr-defined]
-    translate = gateway.translate_mission  # type: ignore[attr-defined]
-    await start()
-    try:
-        vector = await translate(mission)
-    finally:
-        await stop()
+def _describe_tier(gateway: object) -> str:
+    """Best-effort label for which tier served the translation.
 
-    degraded = getattr(gateway, "is_degraded", False)
-    tier = "local-fallback (degraded primary)" if degraded else "primary"
+    Tolerant of the gateway's concrete shape (diagnostic only): a
+    :class:`FallbackLLMGateway` composite exposes ``_primary``/``is_degraded``,
+    while a single backend exposes only ``is_degraded``. ``is_degraded`` is not
+    part of :class:`LLMGatewayProtocol`, so every read is guarded.
+
+    * composite, both tiers down  -> ``"none — both tiers degraded"``
+    * composite, primary degraded -> ``"secondary (local fallback)"``
+    * composite, primary usable   -> ``"primary"``
+    * single gateway, degraded    -> ``"degraded"``
+    * single gateway, usable      -> ``"primary"``
+    """
+    composite_primary = getattr(gateway, "_primary", None)
+    if composite_primary is not None:
+        if bool(getattr(gateway, "is_degraded", False)):
+            return "none — both tiers degraded"
+        if bool(getattr(composite_primary, "is_degraded", False)):
+            return "secondary (local fallback)"
+        return "primary"
+    return "degraded" if bool(getattr(gateway, "is_degraded", False)) else "primary"
+
+
+async def _run(mission: str, gateway: LLMGatewayProtocol) -> int:
+    """Start the gateway, translate one mission, print the result, stop.
+
+    ``stop()`` is guaranteed even if ``start()`` or ``translate_mission()``
+    raises — both are inside the single ``try`` whose ``finally`` calls stop.
+    """
+    try:
+        await gateway.start()
+        vector = await gateway.translate_mission(mission)
+    finally:
+        await gateway.stop()
+
     # GoalVector is a dataclass — print its fields explicitly on stdout.
     print(
-        f"mission={mission!r} tier={tier} degraded={degraded} "
+        f"mission={mission!r} tier={_describe_tier(gateway)} "
         f"GoalVector(vx_target={vector.vx_target:.3f}, "
         f"vy_target={vector.vy_target:.3f}, "
         f"omega_target={vector.omega_target:.3f})"
@@ -110,13 +142,18 @@ async def _run(mission: str, gateway: object) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
 
-    overlays = tuple(args.config) if args.config else ()
-    # Operator probe: catch broadly and report via structured logs + exit code
-    # rather than dumping a traceback at the operator. (BLE001 is not enabled.)
+    # Resolve config the same way the orchestrator does: explicit --config wins,
+    # else the MOUSEDROID_CONFIG(S) env vars (so the probe matches production).
+    config_paths = resolve_runtime_config_paths(args.config)
     try:
-        settings = load_settings(*overlays)
+        settings = load_settings(*config_paths)
     except Exception:
-        _log.exception("translate_mission_config_error", overlays=[str(p) for p in overlays])
+        # Operator probe: report via structured logs + exit code rather than
+        # dumping a traceback. (BLE001 is not enabled in this project.)
+        _log.exception(
+            "translate_mission_config_error",
+            config_paths=[str(p) for p in config_paths],
+        )
         return _EXIT_CONFIG_ERROR
 
     try:
