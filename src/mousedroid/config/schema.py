@@ -757,7 +757,7 @@ class LLMConfig(BaseModel):
     )
 
     # Tier C2.3 — OpenAI-compatible HTTP backend knobs.
-    backend: Literal["llama_cpp", "openai_compatible"] = Field(
+    backend: Literal["llama_cpp", "openai_compatible", "anthropic"] = Field(
         "llama_cpp",
         description=(
             "LLM backend dispatch. Default ``llama_cpp`` preserves pre-Tier-"
@@ -765,7 +765,15 @@ class LLMConfig(BaseModel):
             "in-process GGUF loader. ``openai_compatible`` instantiates the "
             "Tier C2.3 ``OpenAICompatibleLLMGateway`` which talks HTTP to "
             "``{base_url}/v1/chat/completions`` (Ollama 0.1.18+ exposes this "
-            "endpoint; LM Studio and OpenAI also conform)."
+            "endpoint; LM Studio and OpenAI also conform). ``anthropic`` "
+            "instantiates the ``AnthropicLLMGateway`` (Claude Messages API) "
+            "for cloud deliberative mission translation — it reuses "
+            "``model_name`` (a Claude model id, e.g. "
+            "``claude-haiku-4-5``), ``api_key`` (or the ``ANTHROPIC_API_KEY`` "
+            "env var when unset), ``system_prompt``, ``temperature``, "
+            "``max_tokens`` and ``request_timeout_s``. The ``anthropic`` SDK "
+            "is an OPTIONAL dependency — install with "
+            '``pip install -e ".[anthropic]"``.'
         ),
     )
     base_url: str = Field(
@@ -799,11 +807,59 @@ class LLMConfig(BaseModel):
         10.0,
         gt=0.0,
         description=(
-            "Wall-clock timeout for a single ``/v1/chat/completions`` POST. "
-            "Default 10s covers the ``latency_target_ms`` (500ms) with "
-            "20x headroom for Jetson-on-battery deployments. Smaller than "
-            "the orchestrator's tick budget so a slow LLM never starves the "
-            "control loop."
+            "Wall-clock timeout for a single ``/v1/chat/completions`` POST "
+            "(``openai_compatible``) or ``messages.create`` call "
+            "(``anthropic``). Default 10s covers the ``latency_target_ms`` "
+            "(500ms) with 20x headroom for Jetson-on-battery deployments. "
+            "Smaller than the orchestrator's tick budget so a slow LLM never "
+            "starves the control loop. Cloud Claude round-trips are seconds — "
+            "raise this (e.g. 15-30s) when ``backend='anthropic'``."
+        ),
+    )
+
+    # Tier C-rover — cloud-primary / local-secondary failover knobs.
+    fallback_backend: Literal["none", "llama_cpp", "openai_compatible"] = Field(
+        "none",
+        description=(
+            "Optional LOCAL backend used when the primary ``backend`` is "
+            "unavailable or degraded (e.g. the Jetson is off-network and "
+            "``backend='anthropic'`` cannot reach the Claude API). Default "
+            "``none`` disables failover so existing single-backend "
+            "deployments are byte-identical. When set, "
+            "``build_llm_gateway`` wraps the primary + this secondary in a "
+            "``FallbackLLMGateway`` composite. Restricted to local backends "
+            "(``llama_cpp`` GGUF, or ``openai_compatible`` pointed at a local "
+            "Ollama / LM Studio) so the rover stays autonomous without "
+            "connectivity. Set equal to ``backend`` is a no-op (the composite "
+            "is skipped)."
+        ),
+    )
+    fallback_model_name: str | None = Field(
+        None,
+        description=(
+            "Optional ``model_name`` override applied ONLY to the "
+            "``fallback_backend`` gateway. ``None`` (default) reuses "
+            "``model_name``. Needed when the primary and secondary backends "
+            "want different model identifiers — e.g. primary "
+            "``backend='anthropic'`` with ``model_name='claude-haiku-4-5'`` "
+            "and ``fallback_backend='openai_compatible'`` needing a local "
+            "Ollama tag here. The canonical ``anthropic`` -> ``llama_cpp`` "
+            "pairing needs no override (llama_cpp loads ``model_path``, not "
+            "``model_name``)."
+        ),
+    )
+    fallback_retry_cooldown_s: float = Field(
+        30.0,
+        gt=0.0,
+        description=(
+            "Seconds the ``FallbackLLMGateway`` composite waits before "
+            "re-probing a degraded primary backend. A mobile rover sees "
+            "transient WAN dropouts, so once the cloud primary degrades the "
+            "composite periodically re-attempts it (rather than pinning to "
+            "the local secondary until the next process restart). A "
+            "successful re-probe clears the primary's degraded state and "
+            "resumes cloud serving. Only consulted when "
+            "``fallback_backend != 'none'``."
         ),
     )
 

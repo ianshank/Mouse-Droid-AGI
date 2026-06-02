@@ -260,5 +260,68 @@ canonical structlog grep recipes (`usbc_endpoint_*`,
 `esp32_raw_line`). The C4 component diagram for the smoke gate is at
 `docs/architecture/c4-usbc-smoke.md`.
 
+## LLM gateway + cloud/local failover (PR #107 — Tier C-rover deliberative brain)
+
+The deliberative mission-translation path now supports cloud Claude as
+the primary brain with a local model as the off-network fallback. The
+30 Hz reactive control loop (RSSM → MCTS → ESP32) stays deterministic
+and LLM-free; only the natural-language → `GoalVector` translation goes
+through this layer, OUTSIDE the hot loop.
+
+Non-negotiable contracts:
+
+- **`LLMConfig.backend: Literal["llama_cpp", "openai_compatible", "anthropic"]`**
+  — single dispatch key. `llama_cpp` (default) preserves byte-identical
+  legacy behaviour; `anthropic` selects the Claude Messages API
+  backend; `openai_compatible` reaches any OpenAI-shaped HTTP endpoint
+  (local Ollama / LM Studio / cloud).
+- **`LLMConfig.fallback_backend: Literal["none", "llama_cpp", "openai_compatible"]`**
+  — local-only fallback. Setting `anthropic` here is rejected at YAML
+  parse time (cloud-to-cloud failover is anti-pattern — you'd lose the
+  off-network autonomy). Default `none` skips the composite.
+- **`LLMConfig.fallback_retry_cooldown_s: float = 30.0`** — operator-
+  tunable seconds before the composite re-probes a degraded primary
+  (mobile rover WAN dropouts). Lower (e.g. 5 s) for lab bench tests,
+  higher (120 s) behind a flaky uplink. **Threaded through the factory**
+  — `tests/unit/factory/test_build_llm_gateway_dispatch.py` pins this so
+  a future refactor that swapped the kwarg for a literal fails fast.
+- **`LLMConfig.api_key: SecretStr | None`** — Pydantic `SecretStr` wraps
+  the Anthropic API key. **NEVER** `.get_secret_value()` in a log call
+  or exception message. The factory passes the resolved value to the
+  SDK constructor ONCE; everywhere else the wrapper masks repr to
+  `SecretStr('**********')`. Operators supply the key via
+  `ANTHROPIC_API_KEY` env var (preferred — SDK resolves natively) or
+  `MOUSEDROID_LLM__API_KEY` schema-mapped override.
+- **Prompt-injection filter pre-egress.** The `RegexInjectionFilter`
+  MUST `.sanitize()` the NL command BEFORE any `messages.create` call
+  reaches `api.anthropic.com`. This is the only place rover NL goes
+  third-party — the filter envelope is what stops
+  `"ignore all instructions and..."`-shaped commands from leaving the
+  rover. Pinned by `tests/unit/llm_gateway/test_anthropic_gateway.py`.
+- **`asyncio.CancelledError` propagates** in BOTH gateways and in the
+  composite — explicit `except asyncio.CancelledError: raise` before
+  the broad `except Exception`. The composite's "never raises on
+  backend failure" contract is for *backend* failures, NOT for
+  cooperative task cancellation. The composite also stamps
+  `_last_primary_attempt` AFTER the await returns (not before) so a
+  cancelled probe never poisons the cooldown timer.
+- **Markdown-fence JSON resilience.** `_JSON_OBJECT_RE` extracts the
+  first `{...}` span before `json.loads` — Claude routinely wraps
+  responses in ```` ```json ... ``` ```` fences despite system-prompt
+  instructions. Dict-shaped response blocks (mocks + alternative SDK
+  clients) are also handled by `_extract_text`.
+- **Concurrent + safe lifecycle.** `FallbackLLMGateway.start()` and
+  `stop()` both use `await asyncio.gather(..., return_exceptions=True)`
+  — cold-boot time is `max(T_primary, T_secondary)` (not the sum), and
+  a primary start/stop crash never skips the secondary's cleanup.
+
+**Operator deployment:** see `config/jetson_claude_pilot.yaml` for the
+canonical anthropic-primary + llama_cpp-fallback overlay. Note
+`latency_target_ms: 5000.0` — the default 500 ms (calibrated for local
+GGUF) would spam `anthropic_gateway_slow` warnings on every normal
+cloud round-trip.
+
+**Architecture diagram:** `docs/architecture/c4-llm-gateway.md`.
+
 See `AGENTS.md` (agentic-worker behavioural contract) and `SKILLS.md`
 (capability index keyed by trigger phrase) for additional context.

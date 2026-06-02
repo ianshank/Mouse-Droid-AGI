@@ -159,3 +159,49 @@ path:
    `tests/unit/test_jetson_production_overlay.py` so the CI
    `usbc-config-gate` job (`.github/workflows/ci.yml`) catches any
    YAML-vs-driver drift before merge.
+
+## LLM gateway — adding a new backend (PR #107 pattern)
+
+When the rover gains a new LLM backend (a future tier-A reasoning model,
+a different cloud provider, a self-hosted vLLM endpoint), wire it
+through the existing dispatch + composite layers rather than forking
+the factory:
+
+1. Add a concrete gateway class in `src/mousedroid/llm_gateway/<name>_gateway.py`
+   that structurally conforms to `LLMGatewayProtocol` (`is_ready`,
+   `start`, `translate_mission`, `stop` — `is_degraded` is non-protocol
+   but expected by the composite via `getattr`).
+2. **Never raise on backend failure** — return a neutral `GoalVector`
+   and flip `_degraded = True`. Reset `_degraded` on a successful
+   round-trip to enable composite self-heal. Explicit
+   `except asyncio.CancelledError: raise` BEFORE the broad
+   `except Exception` so cooperative task cancellation propagates
+   (e.g. orchestrator e-stop tearing down the mission task).
+3. **Lazy SDK import** in `start()` (NEVER in `__init__`) so the
+   factory + import-graph tests work without the optional dependency
+   installed. Degrade rather than crash when the SDK is absent.
+4. **`SecretStr` for credentials.** The API key is read via
+   `cfg.api_key.get_secret_value()` ONCE at client construction;
+   anywhere else the wrapper masks repr. Never `.get_secret_value()`
+   inside a log call or exception message.
+5. **Prompt-injection filter pre-egress** for any cloud-hitting
+   backend — the rover sends operator NL commands to a third-party
+   service, so `RegexInjectionFilter.sanitize()` MUST fire BEFORE the
+   API call.
+6. Extend `LLMConfig.backend` Literal in `src/mousedroid/config/schema.py`
+   with the new backend name; do NOT touch `fallback_backend` Literal
+   unless the new backend is local (only local backends are valid as
+   failover targets — cloud-to-cloud failover defeats the off-network
+   autonomy invariant).
+7. Wire dispatch in `_build_single_llm_gateway` in `factory.py`. Log
+   the `llm_gateway_built` event with `backend=<name>` for triage.
+8. Add unit tests under `tests/unit/llm_gateway/test_<name>_gateway.py`
+   (PR #107's `test_anthropic_gateway.py` is the reference shape:
+   end-to-end with a faked SDK via `sdk=` test seam — no network).
+9. Add a regression test in `tests/unit/config/test_llm_config_<name>.py`
+   pinning the Literal extension default + that existing YAML still
+   loads byte-identical.
+10. Add a factory-dispatch test that asserts the new backend resolves
+    to the right class and that any operator-tunable cooldown / timing
+    flows through to the composite (see
+    `test_fallback_retry_cooldown_s_threaded_through_to_composite`).

@@ -55,7 +55,7 @@ if TYPE_CHECKING:
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.common.time.protocol import ClockProtocol
     from mousedroid.common.tools.registry import ToolRegistry
-    from mousedroid.config.schema import ESP32Config, Settings, UltrasonicConfig
+    from mousedroid.config.schema import ESP32Config, LLMConfig, Settings, UltrasonicConfig
     from mousedroid.curiosity.protocol import CuriosityProtocol
     from mousedroid.efficiency.tensorrt import TensorRTCompilerProtocol
     from mousedroid.experience.logger import ExperienceLogger
@@ -715,6 +715,81 @@ def build_injection_filter(cfg: Settings) -> PromptInjectionFilterProtocol:
     return RegexInjectionFilter(cfg.llm.injection_patterns, max_len=max_len)
 
 
+def _build_single_llm_gateway(
+    llm_cfg: LLMConfig,
+    *,
+    injection_filter: PromptInjectionFilterProtocol | None = None,
+) -> LLMGatewayProtocol:
+    """Build ONE concrete gateway for ``llm_cfg.backend`` (no failover wrap).
+
+    Extracted so :func:`build_llm_gateway` can reuse the same dispatch for
+    both the primary and the optional ``fallback_backend`` secondary.
+
+    Args:
+        llm_cfg: The :class:`LLMConfig` to build from. The secondary path
+            passes a ``model_copy`` with ``backend`` (and optionally
+            ``model_name``) overridden.
+        injection_filter: Optional shared prompt-injection filter. Applied to
+            the ``llama_cpp`` and ``anthropic`` backends (both forward NL
+            commands that warrant local filtering — the GGUF model runs the
+            command verbatim, and ``anthropic`` ships it to a third-party
+            cloud). The ``openai_compatible`` backend skips it, trusting the
+            upstream provider's guardrails.
+
+    Returns:
+        A gateway conforming to :class:`LLMGatewayProtocol`.
+    """
+    if llm_cfg.backend == "openai_compatible":
+        from mousedroid.llm_gateway.openai_compatible import OpenAICompatibleLLMGateway
+
+        _log.info(
+            "llm_gateway_built",
+            backend="openai_compatible",
+            base_url=llm_cfg.base_url,
+            model=llm_cfg.model_name,
+            enabled=llm_cfg.enabled,
+        )
+        return OpenAICompatibleLLMGateway(llm_cfg)
+
+    if llm_cfg.backend == "anthropic":
+        from mousedroid.llm_gateway.anthropic_gateway import AnthropicLLMGateway
+
+        _log.info(
+            "llm_gateway_built",
+            backend="anthropic",
+            model=llm_cfg.model_name,
+            enabled=llm_cfg.enabled,
+        )
+        return AnthropicLLMGateway(llm_cfg, injection_filter=injection_filter)
+
+    # Default / legacy ``llama_cpp`` path.
+    from mousedroid.llm_gateway.config import GatewayConfig
+    from mousedroid.llm_gateway.gateway import LLMGateway
+
+    gateway_cfg = GatewayConfig(
+        enabled=llm_cfg.enabled,
+        model_path=llm_cfg.model_path,
+        model_url=llm_cfg.model_url,
+        model_checksum=llm_cfg.model_checksum,
+        context_length=llm_cfg.context_length,
+        n_threads=llm_cfg.n_threads,
+        n_gpu_layers=llm_cfg.n_gpu_layers,
+        n_batch=llm_cfg.n_batch,
+        max_tokens=llm_cfg.max_tokens,
+        temperature=llm_cfg.temperature,
+        latency_target_ms=llm_cfg.latency_target_ms,
+        stop_tokens=llm_cfg.stop_tokens,
+        max_vx_norm_mps=llm_cfg.max_vx_norm_mps,
+        max_vy_norm_mps=llm_cfg.max_vy_norm_mps,
+        max_omega_norm_rads=llm_cfg.max_omega_norm_rads,
+        max_command_len=llm_cfg.max_command_len,
+        system_prompt=llm_cfg.system_prompt,
+        injection_patterns=llm_cfg.injection_patterns,
+    )
+    _log.info("llm_gateway_built", backend="llama_cpp", enabled=llm_cfg.enabled)
+    return LLMGateway(gateway_cfg, injection_filter=injection_filter)
+
+
 def build_llm_gateway(
     cfg: Settings,
     *,
@@ -722,7 +797,7 @@ def build_llm_gateway(
 ) -> LLMGatewayProtocol:
     """Build the LLM gateway selected by ``cfg.llm.backend``.
 
-    Two backends ship today (both conform to :class:`LLMGatewayProtocol`):
+    Three backends ship (all conform to :class:`LLMGatewayProtocol`):
 
     * ``llama_cpp`` (default, pre-Tier-C2.3): in-process GGUF loader via
       ``llama-cpp-python``. Loads from ``cfg.llm.model_path``.
@@ -732,61 +807,72 @@ def build_llm_gateway(
       endpoint is served by Ollama, LM Studio, OpenAI, and most
       OpenAI-compatible local-LLM tooling — operators swap deployments
       by changing only ``cfg.llm.base_url`` (and ``cfg.llm.model_name``).
+    * ``anthropic`` (Tier C-rover): async Claude Messages API client for
+      cloud deliberative mission translation. Reads the Claude model id
+      from ``cfg.llm.model_name`` and the key from ``cfg.llm.api_key`` (or
+      the ``ANTHROPIC_API_KEY`` env var).
 
-    The ``injection_filter`` argument applies only to the ``llama_cpp``
-    backend; the HTTP backend skips local injection filtering because
-    the upstream provider is expected to enforce its own guardrails.
+    When ``cfg.llm.fallback_backend != "none"`` the primary is wrapped with
+    the selected LOCAL secondary in a :class:`FallbackLLMGateway` composite,
+    so an off-network rover transparently degrades from cloud Claude to a
+    local model. Setting ``fallback_backend == backend`` is treated as a
+    no-op (the composite is skipped) — falling back to the same backend
+    serves no purpose.
+
+    The ``injection_filter`` is shared with the ``llama_cpp`` and
+    ``anthropic`` backends (and both tiers of the composite); the
+    ``openai_compatible`` backend skips local injection filtering because the
+    upstream provider is expected to enforce its own guardrails.
 
     Args:
         cfg: Root settings.
         injection_filter: Optional shared :class:`PromptInjectionFilterProtocol`.
-            When ``None``, the ``llama_cpp`` gateway constructs its own
-            filter from ``cfg.llm.injection_patterns`` (legacy
-            behaviour); when supplied (the default in
-            :func:`build_orchestrator`), the same filter is reused by
-            the OpenClaw mission dispatcher.
+            When ``None``, each filter-aware gateway constructs its own filter
+            from ``cfg.llm.injection_patterns`` (legacy behaviour); when
+            supplied (the default in :func:`build_orchestrator`), the same
+            filter is reused by the OpenClaw mission dispatcher.
 
     Returns:
         LLM gateway conforming to :class:`LLMGatewayProtocol`.
     """
-    if cfg.llm.backend == "openai_compatible":
-        from mousedroid.llm_gateway.openai_compatible import OpenAICompatibleLLMGateway
+    primary = _build_single_llm_gateway(cfg.llm, injection_filter=injection_filter)
 
-        _log.info(
-            "llm_gateway_built",
-            backend="openai_compatible",
-            base_url=cfg.llm.base_url,
-            model=cfg.llm.model_name,
-            enabled=cfg.llm.enabled,
+    fallback_backend = cfg.llm.fallback_backend
+    if fallback_backend == "none":
+        return primary
+    if fallback_backend == cfg.llm.backend:
+        # Falling back to the same backend is pointless — skip the composite
+        # so we don't double-instantiate an identical gateway.
+        _log.warning(
+            "llm_gateway_fallback_same_as_primary",
+            backend=cfg.llm.backend,
         )
-        return OpenAICompatibleLLMGateway(cfg.llm)
+        return primary
 
-    # Default / legacy ``llama_cpp`` path.
-    from mousedroid.llm_gateway.config import GatewayConfig
-    from mousedroid.llm_gateway.gateway import LLMGateway
+    # Build the secondary from a copy of the LLM config with the backend
+    # (and optional model name) overridden, so the local fallback can use a
+    # different model identifier than the cloud primary without a second
+    # config block.
+    secondary_overrides: dict[str, object] = {"backend": fallback_backend}
+    if cfg.llm.fallback_model_name is not None:
+        secondary_overrides["model_name"] = cfg.llm.fallback_model_name
+    secondary_cfg = cfg.llm.model_copy(update=secondary_overrides)
+    secondary = _build_single_llm_gateway(secondary_cfg, injection_filter=injection_filter)
 
-    gateway_cfg = GatewayConfig(
-        enabled=cfg.llm.enabled,
-        model_path=cfg.llm.model_path,
-        model_url=cfg.llm.model_url,
-        model_checksum=cfg.llm.model_checksum,
-        context_length=cfg.llm.context_length,
-        n_threads=cfg.llm.n_threads,
-        n_gpu_layers=cfg.llm.n_gpu_layers,
-        n_batch=cfg.llm.n_batch,
-        max_tokens=cfg.llm.max_tokens,
-        temperature=cfg.llm.temperature,
-        latency_target_ms=cfg.llm.latency_target_ms,
-        stop_tokens=cfg.llm.stop_tokens,
-        max_vx_norm_mps=cfg.llm.max_vx_norm_mps,
-        max_vy_norm_mps=cfg.llm.max_vy_norm_mps,
-        max_omega_norm_rads=cfg.llm.max_omega_norm_rads,
-        max_command_len=cfg.llm.max_command_len,
-        system_prompt=cfg.llm.system_prompt,
-        injection_patterns=cfg.llm.injection_patterns,
+    from mousedroid.llm_gateway.fallback_gateway import FallbackLLMGateway
+
+    _log.info(
+        "llm_gateway_fallback_wired",
+        primary=cfg.llm.backend,
+        secondary=fallback_backend,
+        fallback_model_name=cfg.llm.fallback_model_name,
+        retry_cooldown_s=cfg.llm.fallback_retry_cooldown_s,
     )
-    _log.info("llm_gateway_built", backend="llama_cpp", enabled=cfg.llm.enabled)
-    return LLMGateway(gateway_cfg, injection_filter=injection_filter)
+    return FallbackLLMGateway(
+        primary,
+        secondary,
+        retry_cooldown_s=cfg.llm.fallback_retry_cooldown_s,
+    )
 
 
 def build_vla_policy(

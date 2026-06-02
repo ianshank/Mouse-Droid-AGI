@@ -8,6 +8,146 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — PR #107: Anthropic Claude LLM gateway + cloud/local failover for rover missions
+
+Enables Claude (via the Anthropic Messages API) as the deliberative
+mission-translation brain for the MSE-6 rover, with transparent fallback
+to a local model when off-network. Natural-language missions are
+translated to a normalised `GoalVector` (vx, vy, omega ∈ [-1, 1])
+**outside** the 30 Hz reactive control loop — the deterministic,
+LLM-free hot path (RSSM → MCTS → ESP32 velocity command) is untouched
+by design.
+
+**New modules**
+
+- `src/mousedroid/llm_gateway/anthropic_gateway.py` — `AnthropicLLMGateway`,
+  async-native Claude backend conforming structurally to
+  `LLMGatewayProtocol`. Lazy SDK import (deferred to `start()`), degrades
+  rather than crashing when `anthropic` is missing / blank model id /
+  init failure. `SecretStr` API key (read once at client construction,
+  never logged). Markdown-fence JSON resilience via `_JSON_OBJECT_RE`
+  (claims first `{...}` span before `json.loads`). Dict-block defensive
+  text extraction. Self-heals on a successful request (clears
+  `_degraded`). `asyncio.CancelledError` propagates cleanly without
+  poisoning the degrade flag.
+- `src/mousedroid/llm_gateway/fallback_gateway.py` — `FallbackLLMGateway`,
+  primary/secondary composite. Failover keyed off `is_degraded` (not the
+  returned vector — a legitimate `"stop"` neutral vector does not
+  trigger spurious failover). Cooldown-based primary retry
+  (operator-tunable `recovery_interval_s` / `LLMConfig.fallback_retry_cooldown_s`)
+  with injectable clock for deterministic tests. Concurrent
+  `start()`/`stop()` via `asyncio.gather(return_exceptions=True)`.
+  Secondary call wrapped symmetrically with the primary's try/except.
+  CancelledError propagates without stamping `_last_primary_attempt`.
+
+**Schema additions** (`src/mousedroid/config/schema.py`)
+
+- `LLMConfig.backend: Literal["llama_cpp", "openai_compatible", "anthropic"]`
+  — default `"llama_cpp"` keeps existing YAML byte-identical.
+- `LLMConfig.fallback_backend: Literal["none", "llama_cpp", "openai_compatible"]`
+  — local-only fallback target. `"anthropic"` is rejected at
+  YAML-parse time (cloud-to-cloud failover defeats off-network
+  autonomy). Default `"none"`.
+- `LLMConfig.fallback_model_name: str | None` — secondary `model_name`
+  override; `None` reuses primary's.
+- `LLMConfig.fallback_retry_cooldown_s: float = 30.0` — cooldown
+  before re-probing a degraded primary. Range-gated `gt=0`.
+- `LLMConfig.api_key: SecretStr | None` — read via `.get_secret_value()`
+  ONCE at client construction, never logged.
+
+**Factory wiring** (`src/mousedroid/factory.py`)
+
+- `_build_single_llm_gateway(llm_cfg, *, injection_filter)` extracted
+  for reuse across both tiers.
+- `build_llm_gateway(cfg)` wraps primary + secondary in
+  `FallbackLLMGateway` when `fallback_backend != "none"` AND
+  `fallback_backend != backend`. Same-backend fallback is a logged
+  no-op. `cfg.llm.fallback_retry_cooldown_s` threaded through to the
+  composite.
+
+**Config example**
+
+- `config/jetson_claude_pilot.yaml` — canonical anthropic-primary +
+  llama_cpp-fallback overlay with secret-handling + network-policy
+  notes. `latency_target_ms: 5000.0` (default 500 ms is calibrated for
+  local GGUF; cloud round-trips are 1-5 s and would spam
+  `anthropic_gateway_slow` WARNINGs without the override).
+  `fallback_retry_cooldown_s: 30.0` with operator-tuning guidance.
+
+**Tests added** (across the pyramid)
+
+- `tests/unit/llm_gateway/test_anthropic_gateway.py` — start /
+  degrade / parse / clamp / injection-rejected / lifecycle / slow-path
+  / self-heal / markdown-fence (3 variants) / dict-block extract /
+  end-to-end recovery after WAN flap / `stop()` clears degraded /
+  CancelledError handling.
+- `tests/unit/llm_gateway/test_fallback_gateway.py` — failover
+  semantics, value-error propagation, cooldown retry (in-cooldown
+  skip + cooldown-elapsed re-probe + primary-recovers-on-reprobe),
+  secondary unexpected-exception guard, concurrent `start()` timing,
+  safe `stop()` fan-out, CancelledError propagation without poisoning
+  the cooldown timer.
+- `tests/unit/config/test_llm_config_anthropic_fallback.py` — backend
+  Literal extensions + backcompat defaults + env overrides + SecretStr
+  hygiene + cooldown range gates.
+- `tests/unit/factory/test_build_llm_gateway_dispatch.py` — anthropic
+  dispatch + composite wrap branches + same-backend no-op +
+  `fallback_model_name` override scope + `fallback_retry_cooldown_s`
+  threaded through to composite.
+- `tests/integration/test_anthropic_gateway_wiring.py` — full path
+  through `build_llm_gateway` + orchestrator `process_mission` with
+  faked SDK (no network / no key).
+
+**Security posture** (final audit: PASS)
+
+- API key never appears in repr / logs / exception messages
+  (`SecretStr` wraps; `.get_secret_value()` is called ONCE at client
+  construction in `factory.py`).
+- Prompt-injection filter (`RegexInjectionFilter.sanitize()`) fires
+  BEFORE `client.messages.create` so `"ignore all instructions and..."`-
+  shaped commands never leave the rover.
+- Example YAML overlay contains NO real credentials — placeholders +
+  env-var instructions only.
+- Exception logs use `f"{type(exc).__name__}:{exc}"` (SDK error type +
+  message); no request payload (NL command + system prompt) leaked.
+- Failover does NOT bypass filtering — both primary and secondary
+  independently apply the shared filter instance.
+
+**Docs added**
+
+- `docs/architecture/c4-llm-gateway.md` — Level-3 C4 component diagram
+  for the LLM gateway showing the configuration → dispatch → composite
+  → child-gateway chain plus the cross-cutting RegexInjectionFilter +
+  the api.anthropic.com cloud boundary.
+- `CLAUDE.md` — new "LLM gateway + cloud/local failover" section
+  pinning the seven non-negotiable contracts (backend Literal, fallback
+  Literal, cooldown, SecretStr, pre-egress filter, CancelledError,
+  markdown-fence, concurrent lifecycle).
+- `AGENTS.md` — new "LLM gateway — adding a new backend" 10-step
+  workflow.
+- `SKILLS.md` — two new skill entries: `claude-llm-gateway`,
+  `llm-prompt-injection-filter`.
+- `NEXT_STEPS.md` — PR #107 follow-ups + a new "Claude Code on Jetson
+  — install + configure" operator runbook so engineers can run the
+  Claude Code agent natively on the rover.
+
+**Pre-merge resolution history** (three rounds)
+
+- **Round 1** — Gemini Code Assist 5-finding pass folded in by
+  upstream commit `7010648` (degrade-reset-on-success, dict-block
+  extract, JSON-extraction regex, primary cooldown retry, schema
+  cooldown field).
+- **Round 2** (commit `a989a8f`) — independent `feature-dev:code-reviewer`
+  + `code-explorer` agents raised 5 additional findings outside
+  Gemini's scope: `stop()` clears `_degraded`, concurrent `start()`,
+  safe `stop()` fan-out, secondary unexpected-exception guard,
+  `latency_target_ms` overlay. + the PR #106 subprocess PYTHONPATH
+  fix re-applied (rebase artifact, 8 pre-existing failures closed).
+- **Round 3** (merge commit) — final review pass: CancelledError
+  propagation in both gateways, `_last_primary_attempt` ordering
+  (stamp AFTER await), factory wiring assertion test. Security-auditor
+  PASS across all 8 critical checks.
+
 ### Added — PR #106: USB-C smoke validation gate + rover-swap auto-override + power-chain probe
 
 Closes the rover-bringup gap left after PR #104's dashboard-stability sprint.

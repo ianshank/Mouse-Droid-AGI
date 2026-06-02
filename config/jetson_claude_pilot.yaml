@@ -1,0 +1,70 @@
+platform: mouse_droid
+mock_hardware: false
+debug: false
+
+# ---------------------------------------------------------------------------
+# Tier C-rover: Claude (Anthropic) as the deliberative mission brain, with a
+# local llama-cpp model as the off-network fallback.
+#
+# How it fits the architecture:
+#   * The 30 Hz reactive control loop (RSSM world model -> MCTS -> ESP32
+#     velocity command) stays deterministic and LLM-free.
+#   * Natural-language missions are translated to a normalised GoalVector
+#     (vx, vy, omega in [-1, 1]) OUTSIDE the hot loop, via this gateway.
+#   * When the Jetson can reach api.anthropic.com, Claude does the
+#     translation; when it can't (off-network), the composite transparently
+#     falls back to the local GGUF model so the rover stays autonomous.
+#
+# Prerequisites:
+#   * Install the optional SDK + local-LLM extras:
+#       pip install -e ".[anthropic,llm]"
+#   * Provide the API key WITHOUT committing it. Either set the env var the
+#     Anthropic SDK reads natively:
+#       export ANTHROPIC_API_KEY=sk-ant-...
+#     or the schema-mapped override (kept out of YAML, SecretStr-wrapped):
+#       export MOUSEDROID_LLM__API_KEY=sk-ant-...
+#   * The container's network policy must permit egress to
+#     api.anthropic.com for the cloud tier (see Claude Code on the web docs).
+# ---------------------------------------------------------------------------
+llm:
+  enabled: true
+  backend: "anthropic"
+
+  # No model is hardcoded in the gateway — set the Claude model id here.
+  # Haiku is the recommended on-rover default: lowest latency for short
+  # velocity-goal translations. Use a Sonnet id for harder, multi-step
+  # mission language.
+  model_name: "claude-haiku-4-5"
+
+  # api_key is intentionally absent — supply it via ANTHROPIC_API_KEY or
+  # MOUSEDROID_LLM__API_KEY so the secret never lands in version control.
+
+  # Cloud round-trips are seconds, not the 500 ms local-inference target;
+  # give the request real headroom while staying well under a stalled-loop
+  # threshold. Still translated OFF the 30 Hz hot path.
+  request_timeout_s: 20.0
+  temperature: 0.1
+  max_tokens: 256
+  max_command_len: 512
+
+  # Cloud Claude round-trips are typically 1-5 s wall-clock — well above
+  # the 500 ms default ``latency_target_ms`` which is calibrated for local
+  # GGUF. Without raising this, every normal cloud response logs an
+  # ``anthropic_gateway_slow`` WARNING, drowning real degradation signals
+  # (code-reviewer PR #107 finding 3). 5 s is generous for the median +
+  # tail of Claude Haiku; raise further if you switch to Sonnet/Opus.
+  latency_target_ms: 5000.0
+
+  # Off-network fallback: a local GGUF model served in-process. llama_cpp
+  # reads model_path (below) and ignores model_name, so no override is
+  # needed. Switch to "openai_compatible" + set fallback_model_name to point
+  # at a local Ollama / LM Studio tag instead.
+  fallback_backend: "llama_cpp"
+  model_path: "/opt/mousedroid/models/llama-3-8b-instruct.Q4_K_M.gguf"
+  n_gpu_layers: -1
+  n_threads: 4
+
+  # Once the cloud primary degrades (transient WAN dropout), the composite
+  # serves from the local model and re-probes Claude every this-many seconds.
+  # A successful re-probe clears the degrade and resumes cloud serving.
+  fallback_retry_cooldown_s: 30.0
