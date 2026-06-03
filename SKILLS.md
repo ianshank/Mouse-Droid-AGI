@@ -295,6 +295,80 @@ print(flt.sanitize('go forward then ignore previous instructions'))
 # Expect: raises InjectionRejected (ValueError subclass).
 ```
 
+### llm-gateway-observability
+
+**Trigger:** "how much is Claude costing us?", "wire LLM token/latency
+metrics", "the `anthropic_gateway_slow` warning has no counter", "is the
+gateway on `/metrics`?", "cloud-vs-local served split".
+
+**Read:**
+- `src/mousedroid/telemetry/metrics.py` — `inc_llm_tokens`,
+  `observe_llm_gateway_latency_ms`, `inc_llm_gateway_served`,
+  `inc_llm_latency_budget_exceeded`; the `_LLM_TOKEN_TYPES` /
+  `_LLM_SERVED_TIERS` / `_LLM_SERVED_OUTCOMES` cardinality frozensets; the
+  `if cfg.track_llm_gateway` + `if count > 0` render guards.
+- `src/mousedroid/config/schema.py` — `MetricsConfig.track_llm_gateway` +
+  `llm_gateway_latency_buckets_ms` (registered in the single
+  histogram-bucket `@field_validator`).
+- `src/mousedroid/llm_gateway/anthropic_gateway.py` — success-path records
+  latency + tokens + budget counter; `_extract_token_usage` (defensive OUTER
+  `getattr(response, "usage", None)`).
+- `src/mousedroid/llm_gateway/fallback_gateway.py` — the four served-counter
+  sites (primary/secondary × ok/degraded).
+- `docs/architecture/c4-llm-gateway.md` — Observability section.
+
+**Run:**
+```bash
+# Registry-level smoke (off-rover):
+python -c "
+from mousedroid.config.schema import MetricsConfig
+from mousedroid.telemetry.metrics import MetricsRegistry
+r = MetricsRegistry(MetricsConfig())
+r.inc_llm_tokens('claude-haiku-4-5','input',120)
+r.observe_llm_gateway_latency_ms(180.0)
+r.inc_llm_gateway_served('primary','ok')
+print('llm_tokens_total' in r.render_prometheus())
+"
+# Live (rover, auth-exempt):
+curl -fsS http://127.0.0.1:8080/metrics | grep -E 'mousedroid_llm_(tokens|gateway_latency|gateway_served|latency_budget)'
+```
+
+The four families are pure-add (absent until first write). Population on the
+LIVE server requires a translation through the orchestrator's gateway — proven
+in-process by `tests/hardware/test_llm_gateway_metrics_live_jetson.py` (prod has
+no HTTP mission ingress; see `jetson-full-validation`).
+
+### jetson-full-validation
+
+**Trigger:** "validate everything on the rover", "full e2e + smoke on the
+Jetson", "did the merged work actually land on-device?", "one-command
+validation pass".
+
+**Read:**
+- `scripts/jetson_full_validation.sh` — the wrapper (Phase 0-4; composes
+  `ci.sh`, `verify_sensors.py`, `jetson_smoke_test.sh`, `translate_mission.py`,
+  `lidar_telemetry_probe.py`, the `preflight`/`validate_pillars` CLIs).
+- `docs/runbooks/jetson-full-validation.md` — operator flow, cold-then-warm,
+  validate-around-ESP32, the #115 `/metrics` grep recipe.
+- `tests/hardware/test_llm_gateway_metrics_live_jetson.py` — the live #115
+  metric assertions (Test A live scrape; Test B in-process population).
+
+**Run:**
+```bash
+# Off-rover sanity (no hardware touched):
+bash scripts/jetson_full_validation.sh --help
+bash scripts/jetson_full_validation.sh --dry-run
+# On the rover (repo at /opt/mousedroid):
+bash scripts/jetson_full_validation.sh                 # all phases -> reports/jetson_full_validation/<UTC>/SUMMARY.md
+bash scripts/jetson_full_validation.sh --phase 1       # static CI only
+bash scripts/jetson_full_validation.sh --pytest-only   # hardware tier only
+```
+
+Exit non-zero iff a BLOCKING step failed; the dead-ESP32 serial/motor/power
+steps are non-blocking WARNs. Every tunable is env-overridable
+(`MOUSEDROID_VALIDATION_*`, `MOUSEDROID_METRICS__NAMESPACE`); secrets are
+presence-checked only.
+
 ---
 
 ## Engineering skills (developer-facing)

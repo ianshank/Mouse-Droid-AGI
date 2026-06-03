@@ -226,3 +226,60 @@ the factory:
     to the right class and that any operator-tunable cooldown / timing
     flows through to the composite (see
     `test_fallback_retry_cooldown_s_threaded_through_to_composite`).
+
+## Adding a metric family (PR #115 observability pattern)
+
+When instrumenting a subsystem, follow the LLM-gateway observability shape so
+the addition stays pure-add + byte-identical when unused:
+
+1. **One config flag + config-driven buckets.** Add `track_<area>: bool = True`
+   to the relevant config (e.g. `MetricsConfig`) and, for histograms, a
+   `*_buckets_*` tuple field registered in the SINGLE bucket `@field_validator`
+   — never a second decorator (Pydantic v2 shadows it).
+2. **Pure-add render.** Gate the render block on `if cfg.track_<area>:` AND a
+   per-family `if count > 0:` / `if snapshot:` guard so the family is omitted
+   from `/metrics` until first write. A registry with no activity must render
+   byte-identically to pre-feature.
+3. **Thread the shared registry keyword-only.** Forward `metrics:
+   MetricsRegistry | None = None` (keyword-only, default `None`) through the
+   factory builders; `build_orchestrator` already builds ONE registry and hands
+   the same instance to both `build_telemetry_server` and the subsystem builder.
+   `None` must be byte-identical legacy construction (pin with an
+   `inspect.signature` AQA test).
+4. **Low-cardinality labels, validated.** Define module-level frozensets of the
+   allowed label values and DROP out-of-set values with a DEBUG log in the
+   writer helper — never label by free text (mission strings, file paths, user
+   input). Pin the sets in an AQA test.
+5. **Record on the success path only**; never on the error/cancel path
+   (`asyncio.CancelledError` propagates). Defensive extraction from SDK
+   responses (OUTER `getattr(resp, "field", None)`) — production never assumes
+   the attribute exists.
+6. **Seed `generate_metrics_sample()`** for every new family (promtool
+   contract — `test_prometheus_format_*` requires it).
+7. **Full tier matrix** incl. an e2e that GETs `cfg.telemetry.metrics_path` on a
+   real `TelemetryServer` and a regression test asserting `/metrics` is
+   byte-identical when the feature is unused.
+
+## On-device validation (PR #116 discipline)
+
+When validating merged work on the rover, prefer the consolidated entry point
+over ad-hoc commands:
+
+1. **`bash scripts/jetson_full_validation.sh`** composes the existing tooling
+   (`ci.sh`, `verify_sensors.py`, `jetson_smoke_test.sh`, `translate_mission.py`,
+   `lidar_telemetry_probe.py`, `preflight`/`validate_pillars`) — extend it by
+   ADDING a step that calls existing tooling, never by re-implementing a probe.
+2. **Cold-then-warm.** Exclusive-device checks (LiDAR/camera/GPIO) run with the
+   container stopped; a `trap` MUST always restart it. Warm checks
+   (`/api/v1/health`, live `/metrics`, mission ingress) run against the running
+   container.
+3. **Validate-around dead hardware.** Steps that depend on broken hardware (the
+   ESP32 today) are non-blocking WARNs, not FAILs; gate motion behind BOTH
+   `MOUSEDROID_SMOKE_ALLOW_MOTION` and `MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION`.
+4. **No hardcoded values in scripts either.** Ports, timeouts, retries, and the
+   metric namespace are env-overridable (`MOUSEDROID_VALIDATION_*`,
+   `MOUSEDROID_METRICS__NAMESPACE`). Secrets are presence-checked only — never
+   echoed.
+5. **No `assert` in inline shell-python** that runs under the Jetson
+   `PYTHONOPTIMIZE=1` entrypoint — use explicit `if … raise RuntimeError(...)`.
+   Inside pytest, plain `assert` is fine.

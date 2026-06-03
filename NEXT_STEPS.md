@@ -30,10 +30,19 @@ follow-ups in priority order.
    live only in the Jetson's `/etc/mousedroid/docker.env` and would be lost on a rover
    reflash/swap. Capture them in a host-bootstrap script or a documented host overlay so a
    re-imaged rover comes up correctly without manual intervention.
-5. **[Observability — P2] LLM-gateway cost/latency telemetry.** Wire Claude API token usage +
-   round-trip latency into the existing Prometheus counters for mobile-rover budget visibility
-   (see PR #107 follow-up #4 below for the counter shape).
-6. **[Follow-up — P2] Issue #109** — MSE-6 greeting lifecycle wiring + integration/hardware
+5. **[Observability — P2] ✅ DONE (PR #115).** LLM-gateway cost/latency telemetry landed:
+   `{ns}_llm_tokens_total`, `{ns}_llm_gateway_latency_ms`, `{ns}_llm_gateway_served_total`,
+   `{ns}_llm_latency_budget_exceeded_total`. **Follow-up (P2, separate ops PR):** Grafana panels +
+   Prometheus alert rules for the four new families (the panel→sample test enforces panel→sample,
+   not the reverse, so this is safe to defer).
+6. **[Validation — P2] Run the consolidated on-device validation pass (PR #116).** Execute
+   `bash scripts/jetson_full_validation.sh` on the rover — confirms the #115 `/metrics` families
+   populate in-process against live Claude (Phase 2 Test B), the live `/metrics` endpoint is
+   healthy (Phase 3 Test A), and every recently-merged surface (#106/#107/#111/#113/#115) is green
+   except the expected dead-ESP32 WARNs. **Optional unblock for HTTP-driven `/metrics` population:**
+   add an `openclaw:` block with `enabled: true` to a validation overlay (the prod config has none,
+   so `POST /api/v1/mission` is unregistered and Test C skips).
+7. **[Follow-up — P2] Issue #109** — MSE-6 greeting lifecycle wiring + integration/hardware
    test tiers (separate track).
 
 ---

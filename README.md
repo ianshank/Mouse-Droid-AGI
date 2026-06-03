@@ -222,7 +222,20 @@ python scripts/verify_sensors.py --json
 
 # Full hardware smoke (all stages inside the Docker container)
 bash scripts/jetson_full_smoke_run.sh
+
+# Full on-device validation (PR #116) — static CI -> cold-hardware -> warm-live,
+# one timestamped report under reports/jetson_full_validation/<UTC>/SUMMARY.md
+bash scripts/jetson_full_validation.sh            # all phases
+bash scripts/jetson_full_validation.sh --dry-run  # print the plan, run nothing
+bash scripts/jetson_full_validation.sh --help     # env tunables + selectors
 ```
+
+The full-validation wrapper composes the smoke run together with `ci.sh`, the `preflight` /
+`validate_pillars` CLIs, the live `/metrics` scrape, and the deliberative-gateway checks, following
+the runbook's cold-then-warm discipline (it `docker stop`s the container for exclusive-device
+sensor checks and always restarts it via a `trap`). It tolerates the functionally-dead ESP32
+(serial/motor/power are non-blocking; no motion is armed) and has **no hardcoded values** — every
+port/timeout/namespace is env-overridable. See `docs/runbooks/jetson-full-validation.md`.
 
 Runtime overlays may be supplied explicitly or through `MOUSEDROID_CONFIGS` / `MOUSEDROID_JETSON_CONFIGS`, keeping smoke and validation paths aligned with deployed configuration.
 
@@ -313,6 +326,24 @@ curl http://127.0.0.1:8080/metrics
 ```
 
 `/metrics` names are derived from `cfg.metrics.namespace`, so metric naming is fully config-driven.
+
+**LLM-gateway observability (PR #115).** The deliberative Claude tier exports four config-gated
+families (gated by one flag, `MetricsConfig.track_llm_gateway`, default on; pure-add — absent until
+first write):
+
+```bash
+curl -fsS http://127.0.0.1:8080/metrics \
+  | grep -E 'mousedroid_llm_(tokens_total|gateway_latency_ms|gateway_served_total|latency_budget_exceeded_total)'
+```
+
+- `{ns}_llm_tokens_total{model,token_type}` — input/output token usage
+- `{ns}_llm_gateway_latency_ms` — round-trip latency histogram
+- `{ns}_llm_gateway_served_total{tier,outcome}` — cloud-vs-local served split
+- `{ns}_llm_latency_budget_exceeded_total{model}` — fires on the `anthropic_gateway_slow` branch
+
+Label values are validated against fixed low-cardinality sets (out-of-set values dropped), and the
+budget threshold comes from `cfg.llm.latency_target_ms` — no hardcoded values. See
+`docs/architecture/c4-llm-gateway.md` (Observability).
 
 ### Watchdog Integration
 
