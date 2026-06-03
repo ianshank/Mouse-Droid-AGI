@@ -323,5 +323,47 @@ cloud round-trip.
 
 **Architecture diagram:** `docs/architecture/c4-llm-gateway.md`.
 
+## Live deployment + CI-gate contracts (PR #111/#112/#113 — Claude-pilot rover deploy)
+
+The PR #107 gateway is now LIVE on the Jetson rover. Deploying it surfaced
+deployment + CI-gate invariants an agent MUST respect:
+
+- **`deployments/jetson-image.json` must point to a REACHABLE trunk
+  commit** whose `config/schema.py` the deployed image actually has. The
+  `config-compat` CI gate (`.github/workflows/config-compat.yml`) does
+  `git worktree` against this `sha` and validates every changed
+  `config/*.yaml` against that historical schema. NEVER pin a squash-source
+  feature commit — it becomes unreachable once the feature branch is
+  deleted post-merge, and the gate dies repo-wide. Update this record
+  whenever the image is rebuilt OR the rover's tracked source SHA changes.
+- **NEVER write a literal GitHub expression token `${{ ... }}` inside a
+  workflow `run:` block — even in a comment.** GitHub evaluates the
+  expression regardless of comment context; an empty `${{ }}` is an
+  "invalid workflow file" startup failure that silently disables the whole
+  workflow (this is the exact bug that left `config-compat` dead). The
+  pinned `actionlint` job (CI Stage 0, `docker://rhysd/actionlint:1.7.12`,
+  config `.github/actionlint.yaml` declaring the custom `jetson` runner
+  label) now guards this.
+- **Per-host rover overrides live ONLY in `/etc/mousedroid/docker.env`**
+  (`MOUSEDROID_LLM__ENABLED=true`, `MOUSEDROID_LLM__N_GPU_LAYERS=0` — Phi-3
+  fallback on CPU because the world model owns the shared iGPU). NEVER
+  commit these; `config/docker.env.example` documents the secret surface
+  (the `ANTHROPIC_API_KEY` slot included) without holding live values.
+- **`scripts/translate_mission.py` is the operator dry-run probe** —
+  NL→`GoalVector` via `build_llm_gateway` + `resolve_runtime_config_paths`,
+  no motors engaged. It validates the deliberative path end-to-end without
+  the (dead) ESP32. Use it to confirm cloud→local failover before a
+  mission.
+- **Test isolation:** NEVER `patch.dict("sys.modules", ...) +
+  importlib.reload` a module that imports `cv2` (PR #112). The reload
+  evicts the real `cv2` from the import cache and poisons every later test
+  in the same process under `pytest tests/`. Use `patch.object` on the
+  specific symbol instead.
+
+The Dockerfile.jetson Stage 4b installs the `anthropic` SDK non-fatally
+(the cloud tier survives `--force-recreate`); `config/jetson_production.yaml`
+carries the `llm:` block (Claude-haiku primary + Phi-3 `llama_cpp`
+fallback). Operator runbook: `docs/runbooks/jetson-claude-pilot-deploy.md`.
+
 See `AGENTS.md` (agentic-worker behavioural contract) and `SKILLS.md`
 (capability index keyed by trigger phrase) for additional context.

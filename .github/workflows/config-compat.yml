@@ -58,11 +58,14 @@ jobs:
                   base="${{ github.event.pull_request.base.sha }}"
                   files=$(git diff --name-only --diff-filter=AM "$base" HEAD -- 'config/*.yaml' 'config/**/*.yaml' || true)
                   # Join with spaces (not newlines): a multiline output
-                  # templated through ${{ }} into a shell command splits
-                  # at the newline and tries to execute the second file
-                  # as a command — exit 126 "permission denied" on the
-                  # YAML path. The downstream script accepts a
+                  # templated through a GitHub Actions expression into a shell
+                  # command splits at the newline and tries to execute the
+                  # second file as a command — exit 126 "permission denied" on
+                  # the YAML path. The downstream script accepts a
                   # space-separated whitespace list.
+                  # NOTE: do not write a literal GitHub expression token in this
+                  # run block (even in a comment) — the parser evaluates it and
+                  # an empty one is an "invalid workflow file" startup failure.
                   files_one_line=$(printf '%s' "$files" | tr '\n' ' ')
                   echo "files=$files_one_line" >> "$GITHUB_OUTPUT"
                   if [ -z "$files" ]; then

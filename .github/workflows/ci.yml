@@ -31,6 +31,23 @@ env:
 
 jobs:
     # -------------------------------------------------------------------------
+    # Stage 0: Workflow lint (actionlint)
+    # Catches INVALID workflow files before they merge — e.g. an empty
+    # ``${{ }}`` expression in a ``run:`` block (even inside a shell comment),
+    # which makes GitHub reject the whole file and silently startup-fail every
+    # run, disabling the gate. That exact bug left config-compat dead repo-wide
+    # until PR #113; this job prevents the recurrence of the whole class.
+    # -------------------------------------------------------------------------
+    actionlint:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - name: Lint GitHub Actions workflows
+              uses: docker://rhysd/actionlint:1.7.12
+              with:
+                  args: -color
+
+    # -------------------------------------------------------------------------
     # Stage 1: Lint (ruff check + format)
     # -------------------------------------------------------------------------
     lint:

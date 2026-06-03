@@ -32,6 +32,7 @@ System_Ext(hailo, "Hailo-8 NPU", "M.2 accelerator for YOLO\nfeature extraction."
 System_Ext(cloud, "Cloud weights bucket", "Periodic OTA model updates.")
 System_Ext(hf, "HuggingFace Hub", "Model + dataset registry\n(ianshank/* repos).")
 System_Ext(wandb, "Weights & Biases", "Experiment tracking for\ntraining runs.")
+System_Ext(anthropic, "Anthropic Claude API", "Cloud deliberative brain —\ntranslates NL missions to a GoalVector.\nLocal Phi-3 fallback when off-network.")
 
 Rel(operator, mousedroid, "Edits YAML, dispatches missions,\nbrowses dashboard")
 Rel(passenger, mousedroid, "Watches live camera + LiDAR")
@@ -41,7 +42,15 @@ Rel(jetson, hailo, "PCIe M.2")
 Rel(mousedroid, cloud, "Weight OTA")
 Rel(mousedroid, hf, "Model pull / push")
 Rel(mousedroid, wandb, "Metrics + run telemetry")
+Rel(mousedroid, anthropic, "NL mission translation\n(HTTPS, post sanitize, OUT of 30 Hz loop)")
 ```
+
+> The **Anthropic Claude API** is the *deliberative* tier only: it
+> turns a natural-language mission into a normalised `GoalVector`. It is
+> deliberately outside the 30 Hz reactive control loop, which stays
+> LLM-free and deterministic. When the rover is off-network, a local
+> Phi-3-mini (llama_cpp) fallback serves the same translation. See
+> Level 2 and [`c4-llm-gateway.md`](./c4-llm-gateway.md) for detail.
 
 ---
 
@@ -60,7 +69,8 @@ System_Boundary(workstation, "Workstation (Windows / macOS)") {
 }
 
 System_Boundary(jetson, "Jetson Orin Nano (Docker)") {
-    Container(orchestrator, "Orchestrator", "Python 3.11 + asyncio", "30 Hz sense-plan-act loop.\nFactory-wired modules behind protocols.")
+    Container(orchestrator, "Orchestrator", "Python 3.11 + asyncio", "30 Hz sense-plan-act loop.\nFactory-wired modules behind protocols.\nLLM-FREE hot path: sensors -> RSSM -> MCTS -> ESP32.")
+    Container(llmgw, "Deliberative LLM Gateway", "FallbackLLMGateway (asyncio)", "OUTSIDE the 30 Hz loop.\nNL mission -> normalised GoalVector\n(vx,vy,omega in [-1,1]) -> process_mission.\nPrimary: cloud Claude. Fallback: local Phi-3 (llama_cpp).")
     Container(telemetry, "Telemetry Server", "aiohttp REST + WS", "Bearer-token-auth API:\n/api/v1/*, /camera/*, /lidar, /ws.")
     Container(grafana, "Grafana", "OSS dashboard", "Prometheus-backed time-series.")
     Container(prom, "Prometheus", "TSDB", "Scrapes orchestrator metrics.")
@@ -68,6 +78,7 @@ System_Boundary(jetson, "Jetson Orin Nano (Docker)") {
 
 System_Ext(esp32, "ESP32 firmware", "Embedded C")
 System_Ext(hailo, "Hailo HailoRT", "NPU runtime")
+System_Ext(anthropic, "Anthropic Claude API", "Cloud Messages API\napi.anthropic.com (HTTPS)")
 
 Rel(operator, browser, "Browses dashboards")
 Rel(operator, claude, "Edits code")
@@ -75,12 +86,24 @@ Rel(browser, proxy, "HTTP/1.1 + WS\n(127.0.0.1:8081)", "loopback")
 Rel(proxy, telemetry, "HTTP/1.1 + WS + Bearer", "192.168.55.1:8080")
 Rel(browser, grafana, "via proxy\n127.0.0.1:8082")
 Rel(browser, prom, "via proxy\n127.0.0.1:8083")
+Rel(operator, llmgw, "Dispatches NL mission\n(via process_mission)")
+Rel(llmgw, orchestrator, "GoalVector\n(out-of-loop, then loop consumes it)")
+Rel(llmgw, anthropic, "messages.create()\nHTTPS, post prompt-injection sanitize")
 Rel(orchestrator, telemetry, "in-process")
 Rel(orchestrator, esp32, "Serial 1 Mbps")
 Rel(orchestrator, hailo, "PCIe")
 Rel(prom, orchestrator, "scrape /metrics")
 Rel(grafana, prom, "PromQL")
 ```
+
+> **Loop boundary.** The Deliberative LLM Gateway runs *beside* the
+> orchestrator, not inside its 30 Hz tick. NL → `GoalVector` translation
+> happens once per mission (or on cloud→local failover) and hands the
+> goal to `process_mission`; the deterministic hot path (sensors → RSSM
+> world model → MCTS → ESP32 velocity command) never calls an LLM.
+> Component-level wiring — the `build_llm_gateway` dispatch chain,
+> `FallbackLLMGateway` failover state machine, and the cloud-egress
+> security boundary — lives in [`c4-llm-gateway.md`](./c4-llm-gateway.md).
 
 ---
 
@@ -108,6 +131,7 @@ implementations.
 | C4 element | Source path |
 |------------|-------------|
 | Orchestrator container | `src/mousedroid/orchestrator/` |
+| Deliberative LLM Gateway | `src/mousedroid/llm_gateway/` (composite: `fallback_gateway.py`) |
 | Telemetry Server | `src/mousedroid/telemetry/` |
 | Dashboard Proxy | `tools/dashboard_proxy.py` |
 | Factory wiring | `src/mousedroid/factory.py` |
@@ -118,15 +142,37 @@ implementations.
 
 ---
 
+## Deployment + CI gates
+
+The Jetson container is the only deployed runtime. Its provenance and the
+guard rails that keep config + workflows from drifting away from it:
+
+| Concern | Where | Notes |
+|---------|-------|-------|
+| Deployed image record | `deployments/jetson-image.json` | Source-of-truth SHA for what the rover runs. The PR #107 LLM tier (anthropic SDK + `LLMConfig`) is baked here; the rover bind-mounts editable source over it but the baked SDK survives `--force-recreate`. Bump this whenever the image is rebuilt or the tracked source SHA changes. |
+| `config-compat` schema-drift gate | `.github/workflows/config-compat.yml`, `scripts/check_config_compat.py` | On any `config/*.yaml` (or `deployments/*.json`) change, worktrees out the deployed SHA and validates the changed YAML against *that* schema — catches the "yaml-only PR merges, rover crash-loops with `Extra inputs are not permitted`" class. |
+| `actionlint` workflow lint | `.github/workflows/ci.yml` (Stage 0) | Lints every workflow file so an invalid workflow (e.g. an empty `${{ }}` expression) can't silently startup-fail and disable a gate — the exact failure that killed `config-compat` repo-wide before PR #113. |
+
+The deliberative LLM tier is deployed via this image record; per-host
+secrets (`ANTHROPIC_API_KEY`) and the CPU-fallback toggle
+(`MOUSEDROID_LLM__N_GPU_LAYERS=0`) live in the rover's uncommitted
+`docker.env`, never in the image or repo.
+
+---
+
 ## Update discipline
 
 When any of these change:
 
 - Add or remove a top-level subsystem under `src/mousedroid/`.
 - Add or remove a protocol interface.
-- Add or remove an external dependency (HuggingFace, W&B, Hailo, etc.).
+- Add or remove an external dependency (HuggingFace, W&B, Hailo,
+  Anthropic Claude API, etc.).
 - Change the deployment topology (e.g. split telemetry out of the
   orchestrator container).
+- Rebuild the Jetson image or repoint the tracked source SHA (keep
+  `deployments/jetson-image.json` and the Deployment + CI gates table
+  in sync).
 
 …update the relevant C4 diagram in the same PR. Reviewers should bounce
 PRs that introduce a new container without a matching diagram update.

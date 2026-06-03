@@ -53,6 +53,19 @@
   (`pytest tests/regression -q`) before committing — the default-value
   invariants there exist BECAUSE a previous PR shipped a silent default
   flip.
+- When you change any `config/*.yaml`, the `config-compat` CI gate
+  validates it against the schema of the SHA pinned in
+  `deployments/jetson-image.json`. If your change needs a schema field the
+  deployed image doesn't have, you MUST bump that record to a reachable
+  trunk commit that carries the field (see "Live deployment + CI-gate
+  contracts" in `CLAUDE.md`) — otherwise the gate fails the PR.
+- When you edit any `.github/workflows/*.yml`, run `actionlint` locally
+  before pushing — it's a pinned CI gate (Stage 0). In particular, never
+  put a literal `${{ ... }}` token inside a `run:` block, even in a
+  comment; GitHub evaluates it and an empty one bricks the whole workflow.
+- Invoke the linter as `python -m ruff` (the pinned interpreter resolves
+  the pinned `ruff==0.8.0`), never bare `ruff` — a stray global install
+  drifts from the CI version and produces phantom pass/fail deltas.
 - Don't update `.git/config`. Don't `git push --force` on `main` or any
   shared branch.
 
@@ -132,6 +145,14 @@ When delegating to a subagent (security-auditor, code-quality, code-reviewer):
   The repo's `.gitignore` covers `*.bak.*` — but if you're editing on
   the Jetson, the file lives outside the repo tree. Either way: don't
   commit the backup.
+- About to write a literal `${{ ... }}` GitHub-expression token inside a
+  workflow `run:` block — even in a comment? Stop. GitHub evaluates it;
+  an empty `${{ }}` is an "invalid workflow file" startup failure that
+  silently disables the workflow. `actionlint` (CI Stage 0) catches it.
+- About to `patch.dict("sys.modules", ...) + importlib.reload` a module
+  that imports `cv2` (or any heavy native ext)? Stop. The reload evicts
+  the real `cv2` from the import cache and poisons every later test in the
+  same `pytest tests/` process. Use `patch.object` on the specific symbol.
 
 If any of these apply, the PR will bounce on review — fix before
 pushing.

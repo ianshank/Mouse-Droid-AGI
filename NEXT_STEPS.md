@@ -1,12 +1,61 @@
 # MouseDroidAGI — Next Steps
 
-Rebased on 2026-04-27 for `feat/smoke-post-pr55` after the Ten Pillars validation campaign
+Rebased on 2026-06-02 for `chore/post-merge-ci-deploy-hygiene` after the Anthropic Claude LLM
+gateway (PR #107) was deployed LIVE to the Jetson rover (PR #111) and the CI/test-isolation
+hardening landed (PR #112, PR #113). Prior baseline: Ten Pillars validation campaign
 (20/20 PASS on Jetson Orin Nano, 2026-04-26T23:55:42Z).
+
+---
+
+## ⚡ Current Next Steps (post-deployment, prioritized)
+
+The deliberative-brain gateway is live on the rover; these are the real, grounded
+follow-ups in priority order.
+
+1. **[Security — P0] Rotate the `ANTHROPIC_API_KEY`.** The key was exposed in a chat
+   transcript — treat it as compromised. Replace it in `/etc/mousedroid/docker.env` on
+   the Jetson and restart the container (`docker compose -f docker-compose.jetson.yml up -d`
+   or `sudo systemctl restart mousedroid-docker`). Confirm the cloud tier still authenticates
+   after the swap.
+2. **[Hardware blocker — P0] ESP32 repair.** The rover's ESP32 is functionally dead, so the
+   NL→GoalVector path is validated *up to the GoalVector* but the GoalVector→wheels leg cannot
+   be exercised end-to-end. This is the top blocker for true autonomous navigation. See the
+   sequenced bench-repair + reflash plan under **PR #106 follow-ups** below.
+3. **[Ops hygiene — P1] Re-point the rover's `/opt/mousedroid` source** to trunk
+   (`claude/markdown-implementation-plan-aVJ2l`). Blocked by pre-existing root-ownership drift
+   in the bind-mount (the container writes files as root), so a targeted
+   `sudo chown ian:ian` of the tracked files is required first before the checkout will succeed.
+4. **[Durability — P1] Make the per-host `docker.env` overrides durable.** The live overrides
+   `MOUSEDROID_LLM__ENABLED=true` and `MOUSEDROID_LLM__N_GPU_LAYERS=0` (CPU fallback) currently
+   live only in the Jetson's `/etc/mousedroid/docker.env` and would be lost on a rover
+   reflash/swap. Capture them in a host-bootstrap script or a documented host overlay so a
+   re-imaged rover comes up correctly without manual intervention.
+5. **[Observability — P2] LLM-gateway cost/latency telemetry.** Wire Claude API token usage +
+   round-trip latency into the existing Prometheus counters for mobile-rover budget visibility
+   (see PR #107 follow-up #4 below for the counter shape).
+6. **[Follow-up — P2] Issue #109** — MSE-6 greeting lifecycle wiring + integration/hardware
+   test tiers (separate track).
 
 ---
 
 ## Current Baseline
 
+- **Deliberative brain (Claude gateway) is LIVE on the rover** *(2026-06-02)*:
+  - **PR #107** merged the Anthropic Claude LLM gateway + cloud→local `FallbackLLMGateway`
+    composite.
+  - **PR #111** deployed it live to the Jetson — Claude-haiku primary + Phi-3-mini CPU
+    fallback, both tiers validated. The Jetson image was rebuilt to bake the Anthropic SDK
+    in so the cloud tier survives `docker compose ... --force-recreate` (previously the SDK
+    had to be hot-installed after every container recreate).
+  - The 30 Hz reactive control loop stays deterministic and LLM-free; only NL→`GoalVector`
+    translation routes through the gateway, OUTSIDE the hot loop.
+- **CI + test-isolation hardening is merged** *(2026-06-02)*:
+  - **PR #112** fixed the repo-wide cv2-eviction test-isolation footgun
+    (`patch.dict` + `importlib.reload` was evicting `cv2`, breaking 19 tests under
+    `pytest tests/`). Full-tree `pytest tests/` is green again.
+  - **PR #113** fixed the dead `config-compat` CI gate (an invalid-workflow startup failure),
+    hardened `check_config_compat.py` for cross-platform use, and added an `actionlint`
+    CI gate so future workflow syntax errors fail loudly at PR time.
 - **Phase 1 training baseline is merged**: domain-randomized Phase 0 generation, top-level
   `domain_randomization` schema/YAML support, seeded Phase 0 wiring, and the associated unit,
   integration, and regression tests are now part of the active line.
@@ -275,13 +324,16 @@ ExecStartPre=/bin/cp /opt/mousedroid/config/jetson_production.yaml /etc/mousedro
 
 ---
 
-## PR #106 follow-ups — Rover hardware fault recovery
+## PR #106 follow-ups — Rover hardware fault recovery ⛔ ACTIVE TOP BLOCKER
 
 PR #106's diagnostic surface surfaced (and the operator confirmed) that
 the current Wave Rover ESP32 is **functionally dead** on UART, ROM
 bootloader, AND WiFi AP broadcast across both rover USB-C ports. Repair
 requires physical hardware work that the diagnostic surface cannot
-perform remotely. Sequenced follow-ups:
+perform remotely. **This is the #2 current next step** (see top of file):
+with the Claude gateway now live, NL→`GoalVector` is validated, but the
+`GoalVector`→wheels leg can only be closed once the ESP32 is repaired.
+Sequenced follow-ups:
 
 1. **Bench-side hardware repair** — multimeter continuity probe ESP32
    UART0 TX → CP2102N RXD on the canonical USB-C port; visual inspect
@@ -314,16 +366,23 @@ perform remotely. Sequenced follow-ups:
 
 ---
 
-## PR #107 follow-ups — Anthropic Claude LLM gateway
+## PR #107 follow-ups — Anthropic Claude LLM gateway ✅ DEPLOYED (PR #111)
 
-PR #107 lands the Anthropic Claude backend + `FallbackLLMGateway`
+PR #107 landed the Anthropic Claude backend + `FallbackLLMGateway`
 composite cleanly under three rounds of review (Gemini + independent
 `feature-dev:code-reviewer` + `code-explorer` + `security-auditor`),
 with `mergeStateStatus: CLEAN` and the security audit returning PASS on
-all 8 critical checks. Remaining follow-ups (none are merge-blockers):
+all 8 critical checks. **PR #111 deployed it live to the Jetson** —
+Claude-haiku primary + Phi-3-mini CPU fallback, both tiers validated,
+image rebuilt to bake the Anthropic SDK in so the cloud tier survives
+`--force-recreate`. Status of the original follow-ups:
 
-1. **Live cloud round-trip benchmark** — once a real `ANTHROPIC_API_KEY`
-   is provisioned on the Jetson, run:
+1. ✅ **Live cloud round-trip benchmark** — exercised during the PR #111
+   live deploy; both the cloud (Claude-haiku) and local (Phi-3-mini CPU)
+   tiers were validated against the rover. Note the live overlay still
+   relies on `latency_target_ms: 5000` to avoid `anthropic_gateway_slow`
+   spam on normal cloud round-trips. The repro one-liner below remains
+   useful for re-benchmarking after a model swap:
    ```bash
    MOUSEDROID_JETSON_CONFIGS=config/jetson_claude_pilot.yaml \
        python -c "
@@ -340,17 +399,13 @@ all 8 critical checks. Remaining follow-ups (none are merge-blockers):
    asyncio.run(go())
    "
    ```
-   Capture: median + P95 round-trip; confirm `latency_target_ms: 5000`
-   covers tail. If P95 > 5 s in production, raise the overlay value.
-2. **Cold-network test of the failover composite** — disconnect the
-   Jetson WAN mid-mission (or block egress to `api.anthropic.com` via
-   firewall rule) and confirm:
-   - the orchestrator's mission handler continues serving GoalVectors
-     from the local llama_cpp secondary,
-   - the structured log shows `fallback_primary_to_secondary`,
-   - reconnecting WAN within `fallback_retry_cooldown_s` produces a
-     `fallback_primary_retry_attempt` event and the primary resumes
-     serving.
+2. ✅ **Cold-network / failover behavior** — the local Phi-3-mini CPU
+   fallback tier was validated as part of the PR #111 deploy, confirming
+   the composite serves GoalVectors off-network. A scripted WAN-drop /
+   egress-block soak (asserting `fallback_primary_to_secondary` and the
+   `fallback_primary_retry_attempt` recovery event) is still worth
+   capturing as a documented operator drill once the ESP32 is repaired and
+   a full end-to-end mission can run.
 3. **`__init__.py` lazy-import hardening** (round-3 Low finding,
    deferred) — `src/mousedroid/llm_gateway/__init__.py` currently eager-
    imports `AnthropicLLMGateway` + `FallbackLLMGateway`. Per CLAUDE.md
@@ -359,9 +414,10 @@ all 8 critical checks. Remaining follow-ups (none are merge-blockers):
    `TYPE_CHECKING`. The eager imports don't crash today (SDK loads
    lazily in `start()`), but they make `import mousedroid.llm_gateway`
    in a tool / test load the concrete classes unnecessarily.
-4. **Cloud token-cost telemetry** — add a Prometheus counter for
-   `anthropic_request_total{model,outcome}` so operators can see WAN
-   round-trips + failure rates over time. Not in scope for PR #107.
+4. **Cloud token-cost telemetry** *(current next step — see top of file)* —
+   add a Prometheus counter for `anthropic_request_total{model,outcome}`
+   (plus round-trip latency) so operators can see WAN round-trips, failure
+   rates, and token spend over time for mobile-rover budget visibility.
 
 ---
 
@@ -499,6 +555,10 @@ sudo journalctl -u claude-code-agent.service -f
   the mousedroid LLM gateway (via `MOUSEDROID_LLM__API_KEY` SecretStr
   override). Keep it in `/etc/mousedroid/docker.env` only — never in
   `~/.bashrc` that gets shared on screen-share.
+  - ⚠️ **The currently-deployed key was exposed in a chat transcript and
+    MUST be rotated** (current next step #1, top of file). Generate a fresh
+    key, replace it in `/etc/mousedroid/docker.env`, restart the container,
+    then revoke the old one in the Anthropic console.
 - The `denyShellCommands` list above is the minimum; tighten further
   if Claude Code will run with `sudo` privileges (it shouldn't —
   prefer running as user `ian` and only let it ask for sudo

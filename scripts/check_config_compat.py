@@ -37,6 +37,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -114,6 +116,11 @@ def worktree_at_sha(sha: str) -> Path:
             capture_output=True,
         )
     except subprocess.CalledProcessError as exc:
+        # ``git worktree add`` failed (e.g. an unreachable/orphaned SHA), so git
+        # never registered the worktree — ``remove_worktree`` can't reclaim it
+        # and ``main``'s finally never runs (we exit before returning). Clean up
+        # the empty tempdir directly to avoid leaking config-compat-* dirs.
+        shutil.rmtree(tmp, ignore_errors=True)
         stderr = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
         sys.stderr.write(
             f"error: failed to create worktree at {sha}: {stderr}\n",
@@ -161,6 +168,35 @@ def changed_yaml_files(base_ref: str, paths: list[Path] | None) -> list[Path]:
     ]
 
 
+def _validation_env(worktree: Path) -> dict[str, str]:
+    """Build the subprocess environment for the schema-validation probe.
+
+    INHERITS the parent environment (do NOT replace it) so the interpreter
+    initialises correctly on every platform — a minimal env strips vars some
+    platforms require (e.g. Windows ``SYSTEMROOT``/``SystemRoot``), which makes
+    the probe fail to import stdlib/site-packages and surface a spurious
+    "No module named yaml". Then:
+
+    * STRIP ``MOUSEDROID_*`` so host config overrides (e.g. a developer's
+      ``MOUSEDROID_LLM__ENABLED``) never pollute the file-vs-schema check — the
+      gate must validate the YAML's *content*, not the host environment.
+    * PIN ``PYTHONPATH`` to the deployed SHA's ``src`` so the probe loads the
+      *deployed* ``Settings`` schema, overriding any host ``PYTHONPATH``.
+    * Force ``MOUSEDROID_MOCK_HARDWARE`` so the schema load never touches real
+      hardware.
+
+    Args:
+        worktree: Path to the deployed-SHA git worktree.
+
+    Returns:
+        Environment mapping for :func:`subprocess.run`.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith("MOUSEDROID_")}
+    env["PYTHONPATH"] = str((worktree / "src").resolve())
+    env["MOUSEDROID_MOCK_HARDWARE"] = "true"
+    return env
+
+
 def validate_yaml_against_schema(
     yaml_path: Path,
     worktree: Path,
@@ -197,11 +233,7 @@ def validate_yaml_against_schema(
         check=False,
         capture_output=True,
         text=True,
-        env={
-            "PYTHONPATH": str((worktree / "src").resolve()),
-            "PATH": __import__("os").environ.get("PATH", ""),
-            "MOUSEDROID_MOCK_HARDWARE": "true",
-        },
+        env=_validation_env(worktree),
     )
     if probe.returncode == 0:
         return None

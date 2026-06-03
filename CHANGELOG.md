@@ -8,6 +8,141 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — PR #113: config-compat CI gate startup-failure + cross-platform validation hardening
+
+Repairs the repo-wide `config-compat` workflow, which was startup-failing
+(GitHub "invalid workflow file") on **every** push across all branches,
+and hardens the validation subprocess so the gate runs identically on the
+Jetson, CI, and a Windows workstation.
+
+**Workflow startup-failure fixed** (`.github/workflows/`)
+
+- The `config-compat` workflow declared a literal empty `${{ }}`
+  expression inside a shell **comment** in a `run:` block. GitHub
+  evaluates `${{ }}` interpolation even inside `#` comments, so the empty
+  expression failed validation and the workflow never started — every
+  push showed a red startup-failure. Reworded the comment to remove the
+  bare `${{ }}` token.
+
+**Deploy record re-pinned** (`deployments/jetson-image.json`)
+
+- The recorded SHA had been orphaned by an upstream squash-merge, so the
+  gate's `git worktree` checkout of the deployed commit failed. Re-pinned
+  to a reachable trunk commit so the gate can materialise the deployed
+  config tree.
+
+**Validation-subprocess hardening** (`scripts/check_config_compat.py`)
+
+- Extracted `_validation_env()` so the validation subprocess **inherits**
+  the base process environment instead of being handed a minimal env. A
+  minimal env broke the subprocess on Windows with a spurious
+  `No module named yaml` (the interpreter could not locate its
+  site-packages). The helper strips `MOUSEDROID_*` overrides (so an
+  operator's env cannot skew the compat check) and pins `PYTHONPATH` to
+  the deployed-SHA worktree.
+
+**CI surface — invalid-workflow guard** (`.github/workflows/`, `.github/actionlint.yaml`)
+
+- Added a pinned `actionlint` job (`rhysd/actionlint:1.7.12`) so the
+  whole `.github/workflows/` tree is lint-gated and this class of
+  invalid-workflow regression is caught repo-wide before merge.
+- New `.github/actionlint.yaml` declares the custom `jetson` self-hosted
+  runner label so actionlint does not flag the rover's hardware jobs as
+  unknown-runner errors.
+
+### Fixed — PR #112: cv2-eviction test isolation in the JetsonCSI camera pipeline
+
+Fixes a full-tree test-isolation footgun: running `pytest tests/` in a
+single process broke 19 `test_jetson_csi` tests that passed in isolation.
+
+- **Root cause** — `tests/integration/test_camera_pipeline.py::test_jetson_csi_stop_releases_camera`
+  used `patch.dict("sys.modules", ...)` + `importlib.reload(jetson_csi)`.
+  On `patch.dict` context exit, `cv2` was evicted from `sys.modules`, and
+  OpenCV cannot be re-imported within the same process (the
+  `cv2.dnn.DictValue` typing bug raises on re-import). Every later
+  `test_jetson_csi` test in the same process then failed at import.
+- **Fix** — replaced the `sys.modules` patch + reload with
+  `patch.object(jcsi_mod, "_jetson_utils", ...)`, which swaps only the
+  module-level backend handle with no `sys.modules` churn, so `cv2` is
+  never evicted.
+- **Regression guard** — added
+  `test_jetson_csi_backend_patch_does_not_evict_cv2` pinning that the
+  backend patch leaves `cv2` resident in `sys.modules`.
+- **Verification** — `pytest tests/` now runs green full-tree
+  (**5169 passed, 0 failures**).
+
+### Added — PR #111: Deploy the Anthropic Claude gateway live to the Jetson rover
+
+Lands the PR #107 LLM gateway as a live deployment on the MSE-6 rover:
+Claude-haiku as the primary deliberative mission-translation brain with
+the already-staged local Phi-3-mini GGUF as the off-network fallback. The
+deterministic, LLM-free 30 Hz reactive control loop (RSSM → MCTS → ESP32
+velocity command) is untouched — only natural-language → `GoalVector`
+translation is deliberative and runs off the hot path.
+
+**Container** (`Dockerfile.jetson`)
+
+- New non-fatal `anthropic>=0.40` install layer (Stage 4b) following the
+  graceful-degradation pattern — the build does not fail if the SDK wheel
+  cannot be resolved, and the gateway degrades to the local fallback at
+  runtime when `anthropic` is absent.
+
+**Production overlay** (`config/jetson_production.yaml`)
+
+- Minimal additive merge into the existing `llm:` block (no removals, so
+  the overlay still loads on the prior schema): `backend: "anthropic"`,
+  `model_name: "claude-haiku-4-5"`, cloud-calibrated `request_timeout_s`
+  and `latency_target_ms: 5000` (the local-GGUF default 500 ms would spam
+  `anthropic_gateway_slow` on normal cloud round-trips),
+  `fallback_backend: "llama_cpp"`, and `fallback_retry_cooldown_s`. The
+  fallback reuses the already-staged Phi-3-mini GGUF via the existing
+  `model_path` — no new model download.
+
+**Secret docs** (`config/docker.env.example`)
+
+- New example env file documenting the two credential paths the
+  anthropic backend accepts: `ANTHROPIC_API_KEY` (preferred — the SDK
+  resolves it natively) and the schema-mapped `MOUSEDROID_LLM__API_KEY`
+  override. No real credentials — placeholders + instructions only.
+
+**Operator probe** (`scripts/translate_mission.py`)
+
+- New dry-run CLI: takes a natural-language mission, runs it through the
+  full deliberative translation path, and prints the normalised
+  `GoalVector` **without** issuing any motor command. Resolves config via
+  `resolve_runtime_config_paths` and reports the serving tier (primary
+  cloud vs. local fallback) so an operator can confirm which brain
+  answered before trusting it on the rover.
+
+**Tests added**
+
+- `tests/regression/test_jetson_claude_pilot_config.py` — pins the
+  `jetson_production.yaml` `llm:` block contract (anthropic primary +
+  llama_cpp fallback + cloud-calibrated latency/timeout).
+- `tests/integration/test_jetson_pilot_gateway_wiring.py` — the
+  production overlay wires through `build_llm_gateway` to a
+  `FallbackLLMGateway` (faked SDK, no network / no key).
+- `tests/unit/test_translate_mission_cli.py` — the operator probe parses
+  args, resolves config, prints a `GoalVector`, and emits no motor
+  command.
+
+**Docs added**
+
+- `docs/runbooks/jetson-claude-pilot-deploy.md` — operator runbook for
+  the live deploy (SDK hot-install ordering, the `ENABLED` gate, CPU
+  fallback notes).
+
+**Deploy record** (`deployments/jetson-image.json`)
+
+- Records the rebuilt Jetson image SHA carrying the PR #107 schema + the
+  baked anthropic layer.
+
+**Live validation** (on the rover)
+
+- Claude-haiku primary translates a mission in ~1 s; the Phi-3 CPU
+  fallback is staged and ready; the 30 Hz reactive loop is unaffected by
+  the deliberative path.
+
 ### Added — PR #107: Anthropic Claude LLM gateway + cloud/local failover for rover missions
 
 Enables Claude (via the Anthropic Messages API) as the deliberative

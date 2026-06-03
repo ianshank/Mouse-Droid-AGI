@@ -251,3 +251,10 @@ snap-*.jpg
 # external-doc lookups — see the Wave Rover platform reference memory).
 /tmp/wave_rover_*
 /tmp/*.html
+
+# config-compat gate worktree scratch. scripts/check_config_compat.py materialises
+# the deployed-image SHA into a temporary git worktree via tempfile.mkdtemp
+# (prefix "config-compat-"). It normally lands under the system TMPDIR (/tmp,
+# %TEMP%), but guard the repo root in case TMPDIR resolves repo-relative on a
+# CI/dev host so a stray detached worktree never gets staged.
+config-compat-*/
