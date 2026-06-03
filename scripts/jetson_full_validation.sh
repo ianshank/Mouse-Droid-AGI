@@ -11,7 +11,7 @@
 #
 # Usage (run on the Jetson host, repo at /opt/mousedroid):
 #   bash scripts/jetson_full_validation.sh                 # all phases
-#   bash scripts/jetson_full_validation.sh --phase 1       # one phase (0-4)
+#   bash scripts/jetson_full_validation.sh --phase 1       # one phase (0-3; phase 4 report always runs)
 #   bash scripts/jetson_full_validation.sh --pytest-only   # hardware pytest tier only
 #   bash scripts/jetson_full_validation.sh --dry-run       # print the plan, run nothing
 #   bash scripts/jetson_full_validation.sh --help
@@ -26,6 +26,12 @@
 #   VENV_DIR                          host venv dir              (/opt/mousedroid/venv)
 #   ANTHROPIC_API_KEY                 cloud Claude key           (unset -> local fallback; presence only checked)
 #   MOUSEDROID_TELEMETRY_TOKEN        telemetry bearer token     (unset -> authed checks skip; presence only checked)
+#   MOUSEDROID_VALIDATION_HEALTH_RETRIES    warm health-poll attempts  (30)
+#   MOUSEDROID_VALIDATION_HEALTH_INTERVAL_S health-poll interval (s)    (1)
+#   MOUSEDROID_VALIDATION_HTTP_TIMEOUT_S    curl per-request timeout(s) (5)
+#   MOUSEDROID_VALIDATION_PYTEST_TIMEOUT_S  per-test timeout (s)        (120)
+#   MOUSEDROID_VALIDATION_LIDAR_DURATION_S  lidar->WS listen window (s) (15)
+#   MOUSEDROID_VALIDATION_LOG_TAIL          docker-logs tail lines      (2000)
 #
 # Secrets are NEVER echoed — only presence is checked. No motion is ever armed.
 
@@ -43,6 +49,21 @@ PROD_CONFIG="${MOUSEDROID_JETSON_CONFIG:-config/jetson_production.yaml}"
 LIDAR_PROBE_PORT="${MOUSEDROID_LIDAR_PROBE_PORT:-8090}"
 UNKNOWN_CMD="${MOUSEDROID_VALIDATION_MISSION:-navigate to the cantina}"
 VENV_DIR="${VENV_DIR:-/opt/mousedroid/venv}"
+
+# Tunables — all env-overridable so a flaky uplink / slow boot / long cloud
+# round-trip can be accommodated without editing the script (no hardcoded
+# values). Defaults suit a healthy bench rover.
+HEALTH_RETRIES="${MOUSEDROID_VALIDATION_HEALTH_RETRIES:-30}"
+HEALTH_INTERVAL_S="${MOUSEDROID_VALIDATION_HEALTH_INTERVAL_S:-1}"
+HTTP_TIMEOUT_S="${MOUSEDROID_VALIDATION_HTTP_TIMEOUT_S:-5}"
+PYTEST_TIMEOUT_S="${MOUSEDROID_VALIDATION_PYTEST_TIMEOUT_S:-120}"
+LIDAR_PROBE_DURATION_S="${MOUSEDROID_VALIDATION_LIDAR_DURATION_S:-15}"
+LOG_TAIL_LINES="${MOUSEDROID_VALIDATION_LOG_TAIL:-2000}"
+# Metric namespace — mirrors the schema field metrics.namespace and its env
+# override MOUSEDROID_METRICS__NAMESPACE (default "mousedroid"), so the /metrics
+# grep tracks an operator-renamed namespace instead of a hardcoded prefix.
+NAMESPACE="${MOUSEDROID_METRICS__NAMESPACE:-mousedroid}"
+
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 RUN_DIR="${REPORT_ROOT}/${STAMP}"
 
@@ -63,7 +84,10 @@ ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 log() { printf '[%s] %s\n' "$(ts)" "$*"; }
 
 usage() {
-    sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    # Print the leading comment header (everything from line 2 up to the first
+    # non-comment line), stripping the leading '# '. Robust to header growth —
+    # no hardcoded line range to drift out of sync.
+    awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "${BASH_SOURCE[0]}"
 }
 
 record() {
@@ -137,6 +161,18 @@ restore_container() {
 }
 trap restore_container EXIT
 
+# Run the hardware pytest tier (host venv). Shared by Phase 2 and --pytest-only
+# so the invocation lives in exactly one place (validate-around the dead ESP32;
+# the API key, when present, lets Test B reach the cloud primary). $1 = logfile.
+run_hardware_pytest() {
+    local logfile="$1"
+    run_step "hardware pytest (-m hardware)" no "${logfile}" \
+        env MOUSEDROID_MOCK_HARDWARE=false MOUSEDROID_ESP32__ENABLED=false \
+            MOUSEDROID_JETSON_CONFIG="${PROD_CONFIG}" \
+        "${HOST_PY}" -m pytest -m hardware tests/hardware/ \
+        --import-mode=importlib --timeout="${PYTEST_TIMEOUT_S}" -q
+}
+
 # --------------------------------------------------------------------------- #
 # Phase 0 — preconditions (blocking)
 # --------------------------------------------------------------------------- #
@@ -177,9 +213,16 @@ phase1() {
     log "=== PHASE 1: static CI (mock hardware) ==="
     local logfile="${RUN_DIR}/phase1_ci.log"
     if container_running; then
+        # Container branch: run all three checks via docker exec so coverage
+        # matches the host branch (ci.sh + preflight + pillars).
         run_step "static CI (ci.sh, container)" yes "${logfile}" \
             docker exec -e MOUSEDROID_MOCK_HARDWARE=true "${CONTAINER}" \
             bash -lc "cd /opt/mousedroid && bash scripts/ci.sh"
+        run_step "preflight (mock)" yes "${RUN_DIR}/phase1_preflight.log" \
+            docker exec "${CONTAINER}" python3 -m mousedroid.cli.preflight --mock-hardware --json
+        run_step "pillars (dry-run)" yes "${RUN_DIR}/phase1_pillars.log" \
+            docker exec "${CONTAINER}" python3 -m mousedroid.cli.validate_pillars \
+            --config "${PROD_CONFIG}" --dry-run --json
     else
         resolve_host_python || { record FAIL "static CI" "no python found"; return; }
         run_step "static CI (ci.sh, host)" yes "${logfile}" \
@@ -217,7 +260,7 @@ phase2() {
     # Smoke stages via jetson_smoke_test.sh single-stage interface (host venv).
     # ESP32-owned stages (serial/motor/power) are NON-blocking (validate-around
     # the dead ESP32); motion stays disabled (MOUSEDROID_SMOKE_ALLOW_MOTION unset).
-    local stage blk
+    local stage
     for stage in system usbc gpio camera lidar audio speaker voice pcie_ssd hailo; do
         run_step "smoke:${stage}" yes "${RUN_DIR}/phase2_smoke_${stage}.log" \
             env MOUSEDROID_SMOKE_PYTHON="${HOST_PY}" MOUSEDROID_JETSON_CONFIGS="${PROD_CONFIG}" \
@@ -230,12 +273,8 @@ phase2() {
     done
 
     # Hardware pytest tier — Test B (in-process orchestrator -> real Claude ->
-    # orch._metrics) populates and asserts the #115 families HERE. Export the
-    # API key into this stage so the cloud primary can answer.
-    run_step "hardware pytest (-m hardware)" no "${RUN_DIR}/phase2_pytest.log" \
-        env MOUSEDROID_MOCK_HARDWARE=false MOUSEDROID_ESP32__ENABLED=false \
-            MOUSEDROID_JETSON_CONFIG="${PROD_CONFIG}" \
-        "${HOST_PY}" -m pytest -m hardware tests/hardware/ --import-mode=importlib --timeout=120 -q
+    # orch._metrics) populates and asserts the #115 families HERE.
+    run_hardware_pytest "${RUN_DIR}/phase2_pytest.log"
 
     # Real pillar validation (10 pillars).
     run_step "pillars (real)" yes "${RUN_DIR}/phase2_pillars.log" \
@@ -252,9 +291,9 @@ phase2() {
 # --------------------------------------------------------------------------- #
 wait_for_health() {
     local url="${TELEMETRY_URL}/api/v1/health" i
-    for i in $(seq 1 30); do
-        if curl -fsS --max-time 3 "${url}" >/dev/null 2>&1; then return 0; fi
-        sleep 1
+    for ((i = 0; i < HEALTH_RETRIES; i++)); do
+        if curl -fsS --max-time "${HTTP_TIMEOUT_S}" "${url}" >/dev/null 2>&1; then return 0; fi
+        sleep "${HEALTH_INTERVAL_S}"
     done
     return 1
 }
@@ -287,18 +326,17 @@ phase3() {
     fi
 
     # Live /metrics is auth-exempt: confirm it is a healthy Prometheus surface.
+    # (Dry-run is already short-circuited at the top of phase3.)
     local metrics_log="${RUN_DIR}/phase3_metrics.log"
-    if [[ "${DRY_RUN}" == "1" ]]; then
-        record PASS "live /metrics scrape" "dry-run"
-    elif curl -fsS --max-time 5 "${TELEMETRY_URL}/metrics" >"${metrics_log}" 2>&1; then
-        if grep -q '^mousedroid_' "${metrics_log}"; then
-            record PASS "live /metrics scrape" "mousedroid_ namespace present"
+    if curl -fsS --max-time "${HTTP_TIMEOUT_S}" "${TELEMETRY_URL}/metrics" >"${metrics_log}" 2>&1; then
+        if grep -q "^${NAMESPACE}_" "${metrics_log}"; then
+            record PASS "live /metrics scrape" "${NAMESPACE}_ namespace present"
         else
-            record WARN "live /metrics scrape" "200 but no mousedroid_ samples"
+            record WARN "live /metrics scrape" "200 but no ${NAMESPACE}_ samples"
         fi
         # Note which #115 families are already populated (informational — prod
         # has no HTTP ingress, so population is proven by Phase-2 Test B).
-        if grep -q 'mousedroid_llm_gateway_served_total{' "${metrics_log}"; then
+        if grep -q "${NAMESPACE}_llm_gateway_served_total{" "${metrics_log}"; then
             record PASS "#115 served counter visible on /metrics"
         else
             record WARN "#115 families not yet populated on live /metrics" \
@@ -312,12 +350,12 @@ phase3() {
     if container_running; then
         run_step "lidar telemetry probe" no "${RUN_DIR}/phase3_lidar_ws.log" \
             docker exec "${CONTAINER}" python3 tools/lidar_telemetry_probe.py \
-            --port "${LIDAR_PROBE_PORT}" --duration 15
+            --port "${LIDAR_PROBE_PORT}" --duration "${LIDAR_PROBE_DURATION_S}"
     fi
 
     # Structured-log evidence for operator triage (best-effort).
     if container_running && [[ "${DRY_RUN}" != "1" ]]; then
-        docker logs --tail 2000 "${CONTAINER}" 2>&1 \
+        docker logs --tail "${LOG_TAIL_LINES}" "${CONTAINER}" 2>&1 \
             | grep -E 'usbc_endpoint_|esp32_serial_port_overridden|power_chain_probe_complete|esp32_raw_line|anthropic_gateway_|fallback_gateway_started' \
             >"${RUN_DIR}/phase3_structlog.log" 2>&1 || true
         record PASS "structlog evidence captured" "phase3_structlog.log"
@@ -330,10 +368,7 @@ phase3() {
 pytest_only() {
     log "=== --pytest-only: hardware tier ==="
     resolve_host_python || { record FAIL "hardware pytest" "no host python"; return; }
-    run_step "hardware pytest (-m hardware)" no "${RUN_DIR}/pytest_only.log" \
-        env MOUSEDROID_MOCK_HARDWARE=false MOUSEDROID_ESP32__ENABLED=false \
-            MOUSEDROID_JETSON_CONFIG="${PROD_CONFIG}" \
-        "${HOST_PY}" -m pytest -m hardware tests/hardware/ --import-mode=importlib --timeout=120 -q
+    run_hardware_pytest "${RUN_DIR}/pytest_only.log"
 }
 
 # --------------------------------------------------------------------------- #
@@ -400,7 +435,7 @@ case "${PHASE_SEL}" in
     1) phase1 ;;
     2) phase2 ;;
     3) phase3 ;;
-    *) echo "Invalid --phase '${PHASE_SEL}' (use 0-4 or all)" >&2; exit 2 ;;
+    *) echo "Invalid --phase '${PHASE_SEL}' (use 0-3 or all; phase 4 report+gate always runs last)" >&2; exit 2 ;;
 esac
 
 phase4
