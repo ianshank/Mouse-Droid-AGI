@@ -745,10 +745,11 @@ def _build_single_llm_gateway(
             command verbatim, and ``anthropic`` ships it to a third-party
             cloud). The ``openai_compatible`` backend skips it, trusting the
             upstream provider's guardrails.
-        metrics: Optional shared :class:`MetricsRegistry`. Forwarded only to
-            the ``anthropic`` backend (the cloud cost/latency concern); the
-            ``llama_cpp`` and ``openai_compatible`` backends accept and ignore
-            it (they are not instrumented in this scope).
+        metrics: Optional shared :class:`MetricsRegistry`. Forwarded to the
+            ``anthropic`` backend so successful cloud translations record
+            latency / token / budget metrics. The ``llama_cpp`` and
+            ``openai_compatible`` backends are not instrumented in this scope
+            and do not receive the registry.
 
     Returns:
         A gateway conforming to :class:`LLMGatewayProtocol`.

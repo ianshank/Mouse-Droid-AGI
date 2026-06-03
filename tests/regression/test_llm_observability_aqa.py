@@ -57,3 +57,12 @@ def test_served_counter_label_value_sets_fixed() -> None:
             reg.inc_llm_gateway_served(tier, outcome)
     out = reg.render_prometheus()
     assert out.count("llm_gateway_served_total{") == 4  # exactly the 2x2 grid
+
+
+def test_label_value_constant_sets_are_pinned() -> None:
+    """The single-source-of-truth label sets stay fixed (cardinality guard)."""
+    from mousedroid.telemetry import metrics as metrics_mod
+
+    assert frozenset({"input", "output"}) == metrics_mod._LLM_TOKEN_TYPES
+    assert frozenset({"primary", "secondary"}) == metrics_mod._LLM_SERVED_TIERS
+    assert frozenset({"ok", "degraded"}) == metrics_mod._LLM_SERVED_OUTCOMES

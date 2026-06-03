@@ -132,3 +132,27 @@ def test_track_flag_off_suppresses_all_families() -> None:
         "llm_latency_budget_exceeded_total",
     ):
         assert name not in out
+
+
+# --------------------------------------------------------------------------- #
+# Label-cardinality hygiene: out-of-set values are dropped (not new series)
+# --------------------------------------------------------------------------- #
+def test_token_counter_drops_invalid_token_type() -> None:
+    reg = _registry()
+    reg.inc_llm_tokens("claude-haiku-4-5", "inpt", 10)  # typo
+    assert "llm_tokens_total" not in reg.render_prometheus()
+
+
+def test_served_counter_drops_invalid_labels() -> None:
+    reg = _registry()
+    reg.inc_llm_gateway_served("tertiary", "ok")  # invalid tier
+    reg.inc_llm_gateway_served("primary", "kinda-ok")  # invalid outcome
+    assert "llm_gateway_served_total" not in reg.render_prometheus()
+
+
+def test_served_counter_accepts_full_valid_grid() -> None:
+    reg = _registry()
+    for tier in ("primary", "secondary"):
+        for outcome in ("ok", "degraded"):
+            reg.inc_llm_gateway_served(tier, outcome)
+    assert reg.render_prometheus().count("llm_gateway_served_total{") == 4

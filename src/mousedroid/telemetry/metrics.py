@@ -55,6 +55,14 @@ _log = get_logger(__name__)
 # re-declaring its own threshold.
 _MIN_OBSERVABLE_SECONDS: float = 0.0
 
+# Fixed low-cardinality label value sets for the LLM-gateway families.
+# Single source of truth so the writer helpers (runtime drop-guard) and the
+# AQA label-hygiene tests reference the same sets — a forwarded SDK value or a
+# future typo can never silently open a new Prometheus time series.
+_LLM_TOKEN_TYPES: frozenset[str] = frozenset({"input", "output"})
+_LLM_SERVED_TIERS: frozenset[str] = frozenset({"primary", "secondary"})
+_LLM_SERVED_OUTCOMES: frozenset[str] = frozenset({"ok", "degraded"})
+
 
 def _classify_dropped_observation(value: float) -> str | None:
     """Classify a histogram-observation candidate; return drop reason or ``None``.
@@ -1033,8 +1041,13 @@ class MetricsRegistry:
             token_type: ``"input"`` or ``"output"``.
             amount: Token count, or ``None`` when the response carried no usage.
         """
-        if self._cfg.track_llm_gateway and amount is not None and amount > 0:
-            self._llm_tokens.inc(model, token_type, amount)
+        if not self._cfg.track_llm_gateway or amount is None or amount <= 0:
+            return
+        if token_type not in _LLM_TOKEN_TYPES:
+            # An out-of-set value would open a fresh series and leak cardinality.
+            _log.debug("llm_tokens_dropped_invalid_token_type", token_type=token_type)
+            return
+        self._llm_tokens.inc(model, token_type, amount)
 
     def observe_llm_gateway_latency_ms(self, value: float) -> None:
         """Observe one LLM-gateway round-trip latency sample (milliseconds).
@@ -1062,8 +1075,14 @@ class MetricsRegistry:
             outcome: ``"ok"`` or ``"degraded"``.
             amount: Increment magnitude (default 1); ``<= 0`` is a no-op.
         """
-        if self._cfg.track_llm_gateway and amount > 0:
-            self._llm_gateway_served.inc(tier, outcome, amount)
+        if not self._cfg.track_llm_gateway or amount <= 0:
+            return
+        if tier not in _LLM_SERVED_TIERS or outcome not in _LLM_SERVED_OUTCOMES:
+            # Fixed 2x2 label grid — drop anything else so a typo never leaks
+            # cardinality into the served counter.
+            _log.debug("llm_gateway_served_dropped_invalid_labels", tier=tier, outcome=outcome)
+            return
+        self._llm_gateway_served.inc(tier, outcome, amount)
 
     def inc_llm_latency_budget_exceeded(self, model: str, amount: int = 1) -> None:
         """Increment the latency-budget-exceeded counter (label: model).
