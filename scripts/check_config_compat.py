@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -115,6 +116,11 @@ def worktree_at_sha(sha: str) -> Path:
             capture_output=True,
         )
     except subprocess.CalledProcessError as exc:
+        # ``git worktree add`` failed (e.g. an unreachable/orphaned SHA), so git
+        # never registered the worktree — ``remove_worktree`` can't reclaim it
+        # and ``main``'s finally never runs (we exit before returning). Clean up
+        # the empty tempdir directly to avoid leaking config-compat-* dirs.
+        shutil.rmtree(tmp, ignore_errors=True)
         stderr = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
         sys.stderr.write(
             f"error: failed to create worktree at {sha}: {stderr}\n",

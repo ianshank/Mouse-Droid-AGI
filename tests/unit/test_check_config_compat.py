@@ -151,3 +151,29 @@ def test_validation_env_forces_mock_hardware(tmp_path: Path) -> None:
     """Schema load must not init real hardware."""
     env = check_config_compat._validation_env(tmp_path)
     assert env["MOUSEDROID_MOCK_HARDWARE"] == "true"
+
+
+# ---------------------------------------------------------------------------
+# worktree_at_sha — must not leak the mkdtemp directory when `git worktree add`
+# fails (e.g. an unreachable/orphaned deployed SHA). Regression for the orphan
+# tempdir found in the finalization hardening pass.
+# ---------------------------------------------------------------------------
+def test_worktree_at_sha_cleans_tempdir_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed `git worktree add` removes the empty mkdtemp dir (no orphan)."""
+    import subprocess as _sp
+
+    leaked = tmp_path / "config-compat-probe"
+    leaked.mkdir()
+    monkeypatch.setattr(check_config_compat.tempfile, "mkdtemp", lambda *a, **k: str(leaked))
+
+    def _boom(*_a: object, **_k: object) -> None:
+        raise _sp.CalledProcessError(returncode=128, cmd="git", stderr=b"bad object")
+
+    monkeypatch.setattr(check_config_compat.subprocess, "run", _boom)
+
+    with pytest.raises(SystemExit) as exc_info:
+        check_config_compat.worktree_at_sha("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+    assert exc_info.value.code == 2
+    assert not leaked.exists()  # tempdir cleaned up, not orphaned
