@@ -127,6 +127,10 @@ reports/jetson_validate/
 reports/jetson_smoke/*/
 reports/jetson_smoke/**
 
+# Jetson full-validation outputs (timestamped run dirs from jetson_full_validation.sh)
+reports/jetson_full_validation/*/
+reports/jetson_full_validation/**
+
 # Local run artifacts moved out of repo root
 reports/local_runs/
 
