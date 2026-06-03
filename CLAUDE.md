@@ -365,5 +365,73 @@ The Dockerfile.jetson Stage 4b installs the `anthropic` SDK non-fatally
 carries the `llm:` block (Claude-haiku primary + Phi-3 `llama_cpp`
 fallback). Operator runbook: `docs/runbooks/jetson-claude-pilot-deploy.md`.
 
+## LLM-gateway observability (PR #115 — Prometheus token/latency/served/budget metrics)
+
+The cloud Claude tier now exports four config-gated Prometheus families
+(namespaced via `cfg.metrics.namespace`). Non-negotiable contracts:
+
+- **One flag, pure-add.** `MetricsConfig.track_llm_gateway: bool = True` gates
+  all four families: `{ns}_llm_tokens_total{model,token_type}` (counter),
+  `{ns}_llm_gateway_latency_ms` (label-free histogram, buckets from
+  `MetricsConfig.llm_gateway_latency_buckets_ms`),
+  `{ns}_llm_gateway_served_total{tier,outcome}` (counter), and
+  `{ns}_llm_latency_budget_exceeded_total{model}` (counter). Families are
+  **omitted from `/metrics` until first write** — a registry built without LLM
+  activity (or with `metrics=None`) renders byte-identically to pre-feature.
+- **Keep `anthropic_gateway_slow`.** The budget counter increments on the SAME
+  branch as the existing `anthropic_gateway_slow` log — **do NOT rename the log
+  event** (≥8 docs reference it). The metric name carries the budget semantics.
+- **Shared registry threaded keyword-only.** `build_orchestrator` passes ONE
+  `build_metrics_registry(cfg)` to BOTH `build_telemetry_server` AND
+  `build_llm_gateway(..., metrics=…)`, so a translation through the running
+  orchestrator surfaces on `/metrics`. The `metrics` param is keyword-only,
+  defaults `None` (byte-identical legacy construction — pinned by
+  `tests/unit/factory/test_build_llm_gateway_dispatch.py`).
+- **Record on SUCCESS only**; `asyncio.CancelledError` propagates untouched.
+  The per-tier served counter lives in `FallbackLLMGateway` (the only place that
+  knows which tier answered).
+- **Label-cardinality guard.** `inc_llm_tokens` / `inc_llm_gateway_served`
+  validate against module-level frozensets (`_LLM_TOKEN_TYPES` /
+  `_LLM_SERVED_TIERS` / `_LLM_SERVED_OUTCOMES` in `telemetry/metrics.py`) and
+  **drop** out-of-set values with a DEBUG log — never label by mission text.
+- **`generate_metrics_sample()` seeds all four** (promtool contract).
+- **`_extract_token_usage` is defensive:** OUTER
+  `getattr(response, "usage", None)` then inner `getattr`/`.get` for
+  `input_tokens`/`output_tokens` — production NEVER touches `response.usage`
+  directly (fakes/alt-SDK clients lack it).
+
+Architecture diagram: `docs/architecture/c4-llm-gateway.md` (Observability
+section).
+
+## Full Jetson on-device validation (PR #116)
+
+`scripts/jetson_full_validation.sh` is the single consolidated entry point that
+**composes** the existing tooling (no duplication) into three phases:
+static-CI → cold-hardware → warm-live. Contracts:
+
+- **Cold-then-warm.** Phase 2 `docker stop`s the container for exclusive-device
+  sensor + smoke checks (host venv) and a `trap` ALWAYS restarts it on exit —
+  never leave the rover brain down. Phase 3 runs the warm checks (`/api/v1/health`,
+  the auth-exempt live `/metrics` scrape, `translate_mission`, the LiDAR→WS probe,
+  structlog greps) against the running container.
+- **Validate-around the dead ESP32.** `serial`/`motor`/`power` smoke steps are
+  **non-blocking** (WARN, not FAIL); the orchestrator e2e and hardware pytest run
+  with `MOUSEDROID_ESP32__ENABLED=false`; **no motion is ever armed**.
+- **No hardcoded values.** Every tunable is env-overridable: container name,
+  report root, telemetry URL, config, lidar probe port/duration, health
+  retries/interval, curl/pytest timeouts, log tail, and the metric namespace
+  (`MOUSEDROID_METRICS__NAMESPACE`, mirroring the schema field). Secrets
+  (`ANTHROPIC_API_KEY`, `MOUSEDROID_TELEMETRY_TOKEN`) are **presence-checked
+  only — never echoed**.
+- **Live `/metrics` population is proven in-process, not over HTTP.**
+  `config/jetson_production.yaml` has no `openclaw:` block, so
+  `POST /api/v1/mission` is unregistered — nothing drives the gateway over the
+  wire. `tests/hardware/test_llm_gateway_metrics_live_jetson.py::test_inprocess_mission_populates_metric_families`
+  builds the real orchestrator and drives a **guaranteed-UNKNOWN** command
+  (`"navigate to the cantina"` — rule-parsed commands like `"go forward"` /
+  `"patrol …"` never reach the LLM) through `process_mission`, asserting
+  `orch._metrics` renders the families on live Claude. Operator runbook:
+  `docs/runbooks/jetson-full-validation.md`.
+
 See `AGENTS.md` (agentic-worker behavioural contract) and `SKILLS.md`
 (capability index keyed by trigger phrase) for additional context.

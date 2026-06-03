@@ -1,0 +1,101 @@
+"""Regression: jetson_full_validation.sh hardening contract (PR #116).
+
+Pins the no-hardcoded-values + parse-clean guarantees so a future edit that
+re-introduces a literal timeout/port/namespace, or breaks the shell syntax,
+fails loudly. Also asserts the PR #116 deliverable files exist (rename guard).
+
+These are static/text checks plus an optional ``bash -n`` parse — they run on
+any host (the ``bash -n`` step skips gracefully where bash is absent).
+"""
+
+from __future__ import annotations
+
+import re
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_SCRIPT = _REPO_ROOT / "scripts" / "jetson_full_validation.sh"
+_RUNBOOK = _REPO_ROOT / "docs" / "runbooks" / "jetson-full-validation.md"
+_LIVE_TEST = _REPO_ROOT / "tests" / "hardware" / "test_llm_gateway_metrics_live_jetson.py"
+
+
+def _script_text() -> str:
+    return _SCRIPT.read_text(encoding="utf-8")
+
+
+def test_deliverable_files_exist() -> None:
+    """Rename guard for the PR #116 deliverables."""
+    assert _SCRIPT.is_file(), f"missing wrapper: {_SCRIPT}"
+    assert _RUNBOOK.is_file(), f"missing runbook: {_RUNBOOK}"
+    assert _LIVE_TEST.is_file(), f"missing live-metrics test: {_LIVE_TEST}"
+
+
+def test_script_parses_clean() -> None:
+    """`bash -n` parse check (skips where bash is unavailable, e.g. some CI)."""
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash not on PATH")
+    result = subprocess.run(
+        [bash, "-n", str(_SCRIPT)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, f"bash -n failed:\n{result.stderr}"
+
+
+# Literals that would indicate a hardcoded tunable crept back in. Each tunable
+# must instead read an env var with a default (e.g. "${VAR:-N}").
+_HARDCODED_PATTERNS = (
+    r"--max-time\s+[0-9]",
+    r"--timeout=[0-9]",
+    r"--duration\s+[0-9]",
+    r"--tail\s+[0-9]",
+    r"seq\s+1\s+[0-9]",
+)
+
+
+@pytest.mark.parametrize("pattern", _HARDCODED_PATTERNS)
+def test_no_hardcoded_tunables(pattern: str) -> None:
+    """No literal timeout/retry/duration/tail values — all must be env-driven."""
+    matches = re.findall(pattern, _script_text())
+    assert not matches, f"hardcoded literal matching {pattern!r}: {matches}"
+
+
+def test_namespace_is_config_derived_not_literal() -> None:
+    """The /metrics grep must use the derived ${NAMESPACE}, not a literal prefix."""
+    text = _script_text()
+    assert "MOUSEDROID_METRICS__NAMESPACE" in text
+    # The hardcoded 'mousedroid_' prefix must not appear in a grep pattern.
+    assert "'^mousedroid_'" not in text
+    assert 'grep -q "^${NAMESPACE}_"' in text
+
+
+@pytest.mark.parametrize(
+    "env_var",
+    [
+        "MOUSEDROID_VALIDATION_HEALTH_RETRIES",
+        "MOUSEDROID_VALIDATION_HEALTH_INTERVAL_S",
+        "MOUSEDROID_VALIDATION_HTTP_TIMEOUT_S",
+        "MOUSEDROID_VALIDATION_PYTEST_TIMEOUT_S",
+        "MOUSEDROID_VALIDATION_LIDAR_DURATION_S",
+        "MOUSEDROID_VALIDATION_LOG_TAIL",
+    ],
+)
+def test_documented_env_tunables_present(env_var: str) -> None:
+    """Every tunable is wired (env override with a default) AND documented."""
+    text = _script_text()
+    assert f"{env_var}:-" in text, f"{env_var} not wired with a default"
+    assert text.count(env_var) >= 2, f"{env_var} not documented in the header"
+
+
+def test_secrets_presence_checked_only() -> None:
+    """Secrets must never be echoed — only their presence is tested."""
+    text = _script_text()
+    # No interpolation of the secret values into log/echo lines.
+    assert "${ANTHROPIC_API_KEY}" not in text
+    assert "${MOUSEDROID_TELEMETRY_TOKEN}" not in text

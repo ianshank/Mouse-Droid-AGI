@@ -140,6 +140,24 @@ flowchart TB
 | Boot blocks for `T_primary + T_secondary` | Sequential `await` in `start()` | Already fixed — `asyncio.gather(return_exceptions=True)` |
 | Cancelled task leaks `_last_primary_attempt` poison | Stamp BEFORE await | Already fixed — stamp AFTER await returns; `CancelledError` re-raised explicitly |
 | Claude wraps JSON in ` ```json ... ``` ` → neutral vector | `json.loads` chokes on the fence | Already fixed — `_JSON_OBJECT_RE` extracts first `{...}` span |
+| Cloud cost/latency invisible — quota burned silently | No metrics behind `anthropic_gateway_slow` | Already fixed (PR #115) — four `/metrics` families; see Observability below |
+| `/metrics` shows no LLM families on prod | No HTTP mission ingress (`openclaw` disabled) → gateway never driven over the wire | Expected — population is proven in-process by the Phase-2 hardware test; enable `openclaw` for HTTP-driven population |
+
+## Observability (PR #115)
+
+A shared `MetricsRegistry` is threaded `build_orchestrator → build_llm_gateway(metrics=…)` (keyword-only, defaults `None` → byte-identical when absent). The **same** registry instance is also handed to `build_telemetry_server`, so a translation through the running orchestrator surfaces on `/metrics`. Four config-gated families (namespaced via `cfg.metrics.namespace`; one flag `MetricsConfig.track_llm_gateway`):
+
+| Family | Type | Labels | Recorded by | When |
+|---|---|---|---|---|
+| `{ns}_llm_tokens_total` | counter | `model`, `token_type` (input/output) | `AnthropicLLMGateway` | success path, from `response.usage` |
+| `{ns}_llm_gateway_latency_ms` | histogram (label-free) | — | `AnthropicLLMGateway` | success path; buckets from `MetricsConfig.llm_gateway_latency_buckets_ms` |
+| `{ns}_llm_gateway_served_total` | counter | `tier` (primary/secondary), `outcome` (ok/degraded) | `FallbackLLMGateway` | every served translation (the durable cloud-vs-local split) |
+| `{ns}_llm_latency_budget_exceeded_total` | counter | `model` | `AnthropicLLMGateway` | same branch as the `anthropic_gateway_slow` log (event name KEPT) |
+
+- **Pure-add:** families are omitted from `/metrics` until the first write — a registry with no LLM activity (or `metrics=None`) renders byte-identically to pre-feature.
+- **Cardinality guard:** label values are validated against module-level frozensets (`_LLM_TOKEN_TYPES` / `_LLM_SERVED_TIERS` / `_LLM_SERVED_OUTCOMES`) and out-of-set values are dropped with a DEBUG log — a typo or forwarded SDK value can never open a new time series. Never label by mission text.
+- **Records on success only;** `asyncio.CancelledError` propagates untouched. `generate_metrics_sample()` seeds all four (promtool contract).
+- **Live validation:** `tests/hardware/test_llm_gateway_metrics_live_jetson.py` (Test A: live `/metrics` healthy; Test B: in-process `process_mission` populates the families on real Claude). Full pass via `scripts/jetson_full_validation.sh` — see `docs/runbooks/jetson-full-validation.md`.
 
 ## Related diagrams
 

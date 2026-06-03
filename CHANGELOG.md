@@ -8,6 +8,71 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — PR #115: LLM-gateway observability (Prometheus token/latency/served/budget metrics)
+
+First observability over the deliberative Claude tier (PRs #107/#111), which
+had been burning Anthropic API quota on every NL→`GoalVector` translation with
+zero metrics. Purely additive + config-gated — a deployment built with
+`metrics=None` is byte-identical.
+
+**Four config-gated metric families** (`src/mousedroid/telemetry/metrics.py`,
+namespaced via `cfg.metrics.namespace`)
+
+- `{ns}_llm_tokens_total{model,token_type}` — input/output token usage
+  (`_DoubleLabeledCounter`).
+- `{ns}_llm_gateway_latency_ms` — round-trip latency histogram (label-free;
+  buckets from `MetricsConfig.llm_gateway_latency_buckets_ms`).
+- `{ns}_llm_gateway_served_total{tier,outcome}` — the durable cloud-vs-local
+  served split (recorded by `FallbackLLMGateway`).
+- `{ns}_llm_latency_budget_exceeded_total{model}` — counter on the existing
+  `anthropic_gateway_slow` branch (the log event name was **kept** — the metric
+  carries the budget semantics).
+
+**Wiring + contracts**
+
+- One flag `MetricsConfig.track_llm_gateway` (default `True`) gates all four;
+  families are pure-add (omitted from `/metrics` until first write).
+- A shared `MetricsRegistry` is threaded `build_orchestrator → build_llm_gateway
+  → AnthropicLLMGateway / FallbackLLMGateway` via a keyword-only `metrics=None`
+  param. No hardcoded values: buckets, namespace, and the budget threshold
+  (`cfg.llm.latency_target_ms`) all come from config.
+- Label values are validated against fixed low-cardinality sets
+  (`_LLM_TOKEN_TYPES` / `_LLM_SERVED_TIERS` / `_LLM_SERVED_OUTCOMES`) and
+  out-of-set values are dropped with a DEBUG log — a typo can never open a new
+  Prometheus time series.
+- Records on the success path only; `asyncio.CancelledError` still propagates.
+
+**Tests** — full tier matrix: unit (registry + gateway + factory + fallback
+served-counter), integration (factory threading + faked translate), e2e (real
+`TelemetryServer` GET `cfg.telemetry.metrics_path`), regression
+(defaults/YAML/byte-identical), AQA (field + protocol + label hygiene), smoke
+(`-m smoke`), hardware (double-gated `is_jetson_host` + `ANTHROPIC_API_KEY`).
+
+### Added — PR #116: full Jetson on-device validation (one-command pass + live `/metrics` test)
+
+Consolidates the scattered on-device tooling into a single ordered,
+artifact-producing pass and adds the missing live confirmation of the PR #115
+`/metrics` families on the rover.
+
+- **`scripts/jetson_full_validation.sh`** — composes the existing tooling
+  (`ci.sh`, `verify_sensors.py`, `jetson_smoke_test.sh`, `translate_mission.py`,
+  `lidar_telemetry_probe.py`, the `preflight`/`validate_pillars` CLIs) into
+  static-CI → cold-hardware → warm-live phases with a timestamped report dir +
+  PASS/WARN/FAIL gate. Tolerates the functionally-dead ESP32 (validate-around:
+  `serial`/`motor`/`power` non-blocking, no motion, orchestrator e2e with
+  `MOUSEDROID_ESP32__ENABLED=false`); cold-then-warm discipline with a `trap`
+  that always restarts the container. Every tunable (ports, timeouts, retries,
+  namespace) is env-overridable — no hardcoded values; secrets presence-only.
+  Selectors: `--phase N`, `--pytest-only`, `--dry-run`, `--help`.
+- **`tests/hardware/test_llm_gateway_metrics_live_jetson.py`** — Test A scrapes
+  the live (auth-exempt) `/metrics` for a healthy Prometheus surface; Test B
+  drives the gateway **in-process** via `build_orchestrator → process_mission`
+  with a guaranteed-UNKNOWN command and asserts `orch._metrics` renders the four
+  families (proving the wiring on live Claude without needing the disabled
+  `openclaw` HTTP ingress); Test C (HTTP POST) skips on prod.
+- **Docs:** `docs/runbooks/jetson-full-validation.md` (+ cross-link from
+  `jetson-rover-smoke.md`); `.gitignore` ignores the new report dir.
+
 ### Fixed — PR #113: config-compat CI gate startup-failure + cross-platform validation hardening
 
 Repairs the repo-wide `config-compat` workflow, which was startup-failing

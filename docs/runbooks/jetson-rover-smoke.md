@@ -4,6 +4,12 @@ Operator-facing companion to `scripts/jetson_full_smoke_run.sh`. Every threshold
 referenced below lives in `config/jetson_production.yaml` (or the Pydantic
 `Settings` schema) — no values are hardcoded in this document.
 
+> For a full validation pass that wraps this smoke run together with static CI,
+> the runtime CLIs, the live `/metrics` surface, and the deliberative gateway
+> checks in one ordered, cold-then-warm flow, see
+> [`jetson-full-validation.md`](jetson-full-validation.md)
+> (`scripts/jetson_full_validation.sh`).
+
 ## Prerequisites
 
 - Wave Rover plugged into the Jetson Orin Nano USB-C data port (this enables
