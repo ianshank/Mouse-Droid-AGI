@@ -35,6 +35,34 @@ PROXY_PORT=8081 JETSON_HTTP=http://192.168.55.1:8080 JETSON_TOKEN=... \
 Then open `http://127.0.0.1:8081/lidar` in a browser; the proxy forwards
 the auth header + handles MJPEG + WebSockets transparently.
 
+### rover-dashboard
+
+**Trigger:** "show me the rover dashboard", "camera + lidar + sensor fusion in
+one view", "access the rover from my phone", "what's the `/dashboard` page".
+
+**Read:**
+- `src/mousedroid/telemetry/static/dashboard.html` — the unified page (single
+  `/ws` feed → camera MJPEG + lidar polar + fusion panel + status).
+- `src/mousedroid/telemetry/server.py` — `_handle_root` (`/`→302) +
+  `_handle_dashboard_page` (`/dashboard`).
+- `src/mousedroid/telemetry/frame_builder.py` — `_build_fused_summary` (the
+  `fused` field; handles the length-4 / length-5 `valid_mask`).
+- `docs/runbooks/jetson-full-bringup.md` — deploy + WiFi access flow.
+
+**Run:**
+```bash
+# From any device on the WiFi (token-gated):
+open "http://<rover-ip>:8080/?token=$MOUSEDROID_TELEMETRY_TOKEN"
+# or via mDNS: http://mousedroid-telemetry.local:8080/?token=...
+# Workstation, through the proxy:
+python tools/dashboard_proxy.py 8081 http://<rover-ip>:8080 "$JETSON_TOKEN"
+# then open http://127.0.0.1:8081/
+```
+
+The fusion panel reads `TelemetryFrame.fused` (`n_valid`/`n_modalities`/
+`lidar_present`/`modalities`/`fused_norm`) + the three-state `sensor_liveness`.
+`fused` is a pure summary of the existing observation — not a new fusion model.
+
 ### live-camera-verification
 
 **Trigger:** "the camera feed is solid green", "no JPEG appearing on

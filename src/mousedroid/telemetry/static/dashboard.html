@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MouseDroid — Dashboard</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0b0f14; color: #e6edf3; font: 14px/1.4 system-ui, -apple-system, sans-serif; }
+  header { padding: 10px 14px; border-bottom: 1px solid #1f2730; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  .stat { color: #8b949e; } .stat b { color: #e6edf3; font-variant-numeric: tabular-nums; }
+  .nav a { color: #58a6ff; text-decoration: none; margin-right: 10px; }
+  .nav a:hover { text-decoration: underline; }
+  main { padding: 14px; display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; align-items: start; }
+  .card { border: 1px solid #1f2730; border-radius: 8px; padding: 12px; background: #0d1218; }
+  .card h2 { font-size: 12px; margin: 0 0 8px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; }
+  canvas, img.stream { border: 1px solid #1f2730; background: #000; display: block; max-width: 100%; }
+  img.stream { width: 100%; height: auto; object-fit: contain; image-rendering: pixelated; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 8px; }
+  .tile { border: 1px solid #1f2730; border-radius: 6px; padding: 8px; text-align: center; }
+  .tile .name { font-size: 11px; color: #8b949e; text-transform: uppercase; }
+  .tile .state { font-size: 13px; font-weight: 600; margin-top: 2px; }
+  .live { color: #3fb950; } .stale { color: #d29922; } .awaiting { color: #d29922; }
+  .disabled { color: #8b949e; } .invalid { color: #f85149; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-variant-numeric: tabular-nums; }
+  .kv .k { color: #8b949e; } .warn { color: #f85149; font-size: 12px; }
+  .ok { color: #3fb950; } .bad { color: #f85149; }
+  code { background: #1f2730; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>MouseDroid — Dashboard</h1>
+  <span class="nav"><a id="navLidar" href="/lidar">lidar</a><a id="navCamera" href="/camera">camera</a><a id="navMetrics" href="/metrics">metrics</a><a id="navHealth" href="/api/v1/health">health</a></span>
+  <span class="stat">WS <b id="ws">-</b></span>
+  <span class="stat">tick <b id="tick">-</b></span>
+  <span class="stat">loop <b id="loop">-</b> ms</span>
+  <span class="stat">rover <b id="rover">-</b></span>
+</header>
+<main>
+  <div class="card">
+    <h2>Camera — /camera/stream (MJPEG)</h2>
+    <img id="stream" class="stream" src="" alt="camera stream"
+         onerror="this.onerror=null; document.getElementById('camWarn').textContent='raw stream unavailable (camera has no raw-frame source)';" />
+    <p id="camWarn" class="warn"></p>
+  </div>
+
+  <div class="card">
+    <h2>LiDAR — lidar_sectors (polar)</h2>
+    <canvas id="polar" width="320" height="320"></canvas>
+    <p id="lidarInfo" class="stat" style="margin:6px 0 0;">min <b id="lmin">-</b> m · pts <b id="lpts">-</b></p>
+  </div>
+
+  <div class="card">
+    <h2>Sensor fusion — fused + sensor_liveness</h2>
+    <div class="tiles" id="tiles"></div>
+    <p class="stat" style="margin:10px 0 0;">valid <b id="nValid">-</b>/<b id="nMod">-</b> · ‖fused‖ <b id="fnorm">-</b></p>
+    <p id="fuseWarn" class="warn"></p>
+  </div>
+
+  <div class="card">
+    <h2>Status</h2>
+    <div class="kv">
+      <span class="k">safety</span><span id="safety">-</span>
+      <span class="k">battery</span><span id="battery">-</span>
+      <span class="k">motor [vx,vy,ω]</span><span id="motor">-</span>
+      <span class="k">distance</span><span id="distance">-</span>
+      <span class="k">gpu temp</span><span id="gpu">-</span>
+    </div>
+    <p class="stat" style="margin:10px 0 0;">Reach this rover from another device on the WiFi:
+      <code id="reach">http://&lt;rover-ip&gt;:8080/</code></p>
+  </div>
+</main>
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const wsEl = $("ws"), tickEl = $("tick"), loopEl = $("loop");
+
+  // --- token-aware URL helpers (mirrors camera.html / lidar.html) ---
+  const pageParams = new URLSearchParams(location.search);
+  function authQueryString() {
+    const qs = new URLSearchParams();
+    const token = pageParams.get("token");
+    const apiKey = pageParams.get("api_key");
+    if (token) qs.set("token", token);
+    if (apiKey) qs.set("api_key", apiKey);
+    return qs.toString();
+  }
+  function withAuth(path) {
+    const qs = authQueryString();
+    return path + (qs ? "?" + qs : "");
+  }
+  $("stream").src = withAuth("/camera/stream");
+  for (const [id, path] of [["navLidar", "/lidar"], ["navCamera", "/camera"],
+                            ["navMetrics", "/metrics"], ["navHealth", "/api/v1/health"]]) {
+    $(id).href = withAuth(path);
+  }
+
+  // --- rover reach info (mDNS name + server URL) ---
+  fetch(withAuth("/api/v1/network")).then((r) => r.ok ? r.json() : null).then((net) => {
+    if (!net) return;
+    const name = net.mdns_name || "";
+    const url = net.server_url || (location.origin + "/");
+    $("rover").textContent = name || location.host;
+    $("reach").textContent = url + (name ? "  (mDNS: " + name + ")" : "");
+  }).catch(() => {});
+
+  // --- lidar polar plot from lidar_sectors (single-WS overview) ---
+  const canvas = $("polar"), ctx = canvas.getContext("2d");
+  let sectors = null;
+  function colorFor(norm) {
+    const t = Math.max(0, Math.min(1, norm));
+    return "rgb(" + Math.round(217 - 180 * t) + "," + Math.round(60 + 140 * t) + ",70)";
+  }
+  function drawLidar() {
+    const w = canvas.width, h = canvas.height, cx = w / 2, cy = h / 2, R = Math.min(cx, cy) - 16;
+    ctx.clearRect(0, 0, w, h);
+    ctx.strokeStyle = "#30363d"; ctx.lineWidth = 1;
+    for (let i = 1; i <= 4; i++) { ctx.beginPath(); ctx.arc(cx, cy, (R * i) / 4, 0, Math.PI * 2); ctx.stroke(); }
+    ctx.fillStyle = "#58a6ff";
+    ctx.beginPath(); ctx.moveTo(cx, cy - R - 8); ctx.lineTo(cx - 5, cy - R + 2); ctx.lineTo(cx + 5, cy - R + 2); ctx.closePath(); ctx.fill();
+    if (sectors && sectors.length > 0) {
+      const n = sectors.length, step = (Math.PI * 2) / n, a0 = -Math.PI / 2 - step / 2;
+      for (let i = 0; i < n; i++) {
+        const norm = Math.max(0, Math.min(1, sectors[i]));
+        const start = a0 + i * step;
+        ctx.fillStyle = colorFor(norm); ctx.globalAlpha = 0.5;
+        ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, norm * R, start, start + step); ctx.closePath(); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    } else {
+      ctx.fillStyle = "#8b949e"; ctx.font = "12px monospace"; ctx.textAlign = "center";
+      ctx.fillText("waiting for lidar…", cx, cy);
+    }
+  }
+  drawLidar();
+
+  // --- sensor-fusion tiles ---
+  const MODALITIES = ["vision", "ultrasonic", "motor", "audio", "lidar"];
+  const tilesEl = $("tiles");
+  const tileEls = {};
+  for (const name of MODALITIES) {
+    const t = document.createElement("div"); t.className = "tile";
+    t.innerHTML = '<div class="name">' + name + '</div><div class="state awaiting" id="tile_' + name + '">…</div>';
+    tilesEl.appendChild(t);
+    tileEls[name] = $("tile_" + name);
+  }
+
+  function renderFusion(fused, liveness, validMask) {
+    const mods = (fused && fused.modalities) || {};
+    for (const name of MODALITIES) {
+      const el = tileEls[name];
+      const live = liveness && liveness[name] ? liveness[name].state : null;
+      const valid = mods[name];
+      if (live) { el.textContent = live; el.className = "state " + live; }
+      else if (valid === true) { el.textContent = "valid"; el.className = "state live"; }
+      else if (valid === false) { el.textContent = "off"; el.className = "state disabled"; }
+      else { el.textContent = "—"; el.className = "state disabled"; }
+    }
+    if (fused && typeof fused.n_valid === "number") {
+      $("nValid").textContent = fused.n_valid;
+      $("nMod").textContent = fused.n_modalities;
+      $("fnorm").textContent = (fused.fused_norm || 0).toFixed(2);
+      $("fuseWarn").textContent = "";
+    } else if (Array.isArray(validMask)) {
+      // Backwards-compat: a pre-fused frame (older server) still has valid_mask.
+      $("fuseWarn").textContent = "frame has no 'fused' summary (older server) — using valid_mask";
+    }
+  }
+
+  function handleFrame(obj) {
+    if (!obj) return;
+    if (typeof obj.tick_count === "number") tickEl.textContent = obj.tick_count;
+    if (typeof obj.loop_time_ms === "number") loopEl.textContent = obj.loop_time_ms.toFixed(1);
+    sectors = Array.isArray(obj.lidar_sectors) ? obj.lidar_sectors : sectors;
+    drawLidar();
+    if (typeof obj.lidar_min_dist_m === "number") $("lmin").textContent = obj.lidar_min_dist_m.toFixed(2);
+    if (typeof obj.lidar_n_points === "number") $("lpts").textContent = obj.lidar_n_points;
+    renderFusion(obj.fused, obj.sensor_liveness, obj.valid_mask);
+    const safety = obj.safety || {};
+    const emerg = !!safety.is_emergency;
+    $("safety").innerHTML = emerg ? '<span class="bad">EMERGENCY</span>' : '<span class="ok">ok</span>';
+    if (typeof obj.battery_voltage === "number") $("battery").textContent = obj.battery_voltage.toFixed(2) + " V";
+    if (Array.isArray(obj.motor_state)) $("motor").textContent = obj.motor_state.slice(0, 3).map((v) => v.toFixed(2)).join(", ");
+    if (typeof obj.distance_m === "number") $("distance").textContent = obj.distance_m.toFixed(2) + " m";
+    const gpu = (obj.health || {}).gpu_temp_c;
+    if (typeof gpu === "number") $("gpu").textContent = gpu.toFixed(1) + " °C";
+  }
+
+  // --- single WebSocket feeding every panel (reconnect w/ backoff) ---
+  let ws = null, backoff = 500, ackReceived = false;
+  function connect() {
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const url = proto + "://" + location.host + withAuth("/ws");
+    wsEl.textContent = "connecting"; ws = new WebSocket(url); ws.binaryType = "arraybuffer";
+    ws.onopen = () => {
+      wsEl.textContent = "open"; backoff = 500; ackReceived = false;
+      try {
+        ws.send(JSON.stringify({ hello: { protocol_version: 1, supported_serializations: ["json"], preferred_serialization: "json" } }));
+      } catch (_) { /* ignore */ }
+    };
+    ws.onclose = () => { wsEl.textContent = "closed"; setTimeout(connect, backoff); backoff = Math.min(5000, backoff * 2); };
+    ws.onerror = () => { wsEl.textContent = "error"; };
+    ws.onmessage = (ev) => {
+      if (typeof ev.data !== "string") { wsEl.textContent = "binary (msgpack)"; return; }
+      let obj = null;
+      try { obj = JSON.parse(ev.data); } catch (_) { return; }
+      if (!ackReceived && obj && obj.hello_ack) { ackReceived = true; return; }
+      handleFrame(obj);
+    };
+  }
+  connect();
+})();
+</script>
+</body>
+</html>

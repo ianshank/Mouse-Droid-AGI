@@ -42,7 +42,13 @@ follow-ups in priority order.
    except the expected dead-ESP32 WARNs. **Optional unblock for HTTP-driven `/metrics` population:**
    add an `openclaw:` block with `enabled: true` to a validation overlay (the prod config has none,
    so `POST /api/v1/mission` is unregistered and Test C skips).
-7. **[Follow-up — P2] Issue #109** — MSE-6 greeting lifecycle wiring + integration/hardware
+7. **[Bring-up — P1] Full rover bring-up + unified dashboard (this branch).** `TelemetryFrame.fused`
+   summary + the `/dashboard` overview page (camera + lidar + sensor-fusion + status, WiFi-reachable)
+   are landed; run `docs/runbooks/jetson-full-bringup.md` on the rover. **Real motors are
+   probe-first** — the ESP32 is probed before bring-up and motors only go live if it responds;
+   otherwise `MOUSEDROID_ESP32__ENABLED=false` keeps the container from crash-looping. **ESP32
+   physical repair remains the gating item for actual motion** (P0, below).
+8. **[Follow-up — P2] Issue #109** — MSE-6 greeting lifecycle wiring + integration/hardware
    test tiers (separate track).
 
 ---

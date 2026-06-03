@@ -345,6 +345,24 @@ Label values are validated against fixed low-cardinality sets (out-of-set values
 budget threshold comes from `cfg.llm.latency_target_ms` — no hardcoded values. See
 `docs/architecture/c4-llm-gateway.md` (Observability).
 
+### Unified Dashboard (camera + lidar + sensor-fusion) over WiFi
+
+The telemetry server serves a single overview page at `/` (redirects to `/dashboard`) that renders
+the live camera (MJPEG), the lidar polar plot, a **sensor-fusion panel** (per-modality liveness +
+the `fused` summary on every `TelemetryFrame`), and safety/health/battery/motor status — all from one
+`/ws` connection. It binds `0.0.0.0:8080` and advertises mDNS, so any device on the WiFi can reach it:
+
+```bash
+# From a phone/laptop on the same network (token-gated):
+http://<rover-ip>:8080/?token=$MOUSEDROID_TELEMETRY_TOKEN
+http://mousedroid-telemetry.local:8080/?token=$MOUSEDROID_TELEMETRY_TOKEN   # via mDNS
+```
+
+The page derives its origin from `window.location` (no hardcoded host/port) and carries the token via
+`?token=`. `GET /api/v1/network` advertises the rover's `server_url` + `mdns_name`. For the full
+deploy-and-run-everything sequence (incl. the probe-first real-motor attempt), see
+`docs/runbooks/jetson-full-bringup.md`.
+
 ### Watchdog Integration
 
 When deployed via systemd, the watchdog is enabled automatically:

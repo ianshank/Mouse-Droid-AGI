@@ -8,6 +8,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Full rover bring-up: unified dashboard + sensor-fusion summary
+
+Deploy-and-run-everything bring-up plus a single dashboard showing camera + lidar
++ sensor-fusion + status, reachable over WiFi from any device on the network.
+
+**Sensor-fusion summary on telemetry frames** (`telemetry/protocol.py`,
+`telemetry/frame_builder.py`)
+
+- New `TelemetryFrame.fused` field (default-factory empty dict, mirrors
+  `sensor_liveness` — purely additive, byte-identical when unused). Shape:
+  `{n_valid, n_modalities, lidar_present, modalities{vision,ultrasonic,motor,
+  audio,lidar}, fused_norm}`.
+- Computed in `build_telemetry_frame` from the fused observation's `valid_mask`
+  + existing scalar norms — a pure function (no new sensor reads, no hot-loop
+  cost). Handles BOTH mask lengths (4 without lidar, 5 with) by zipping the fixed
+  modality-name tuple against the actual length — never indexes a fixed slot.
+
+**Unified dashboard** (`telemetry/server.py`, `telemetry/static/dashboard.html`)
+
+- New `/dashboard` page + `/` → `/dashboard` redirect (token-preserving). One
+  responsive page renders the live camera MJPEG, the lidar polar plot, a
+  sensor-fusion panel (per-modality `sensor_liveness` tiles + the `fused`
+  summary), and safety/health/battery/motor status — all from a single `/ws`
+  connection. No hardcoded host/port (derives origin from `window.location`);
+  token carried via `?token=` (the existing `/camera`+`/lidar` pattern).
+- WiFi access uses the existing posture: `0.0.0.0:8080`, bearer token, mDNS
+  `mousedroid-telemetry.local`; `/api/v1/network` advertises `server_url`+`mdns_name`.
+
+**Deploy + bring-up** (`docs/runbooks/jetson-full-bringup.md`)
+
+- One-command bring-up composing the container/systemd path + the #116
+  validation wrapper. **Real motors are attempted probe-first:** the ESP32 is
+  probed before bring-up; only if it responds does the orchestrator boot with
+  motors live, otherwise `MOUSEDROID_ESP32__ENABLED=false` keeps the container
+  from crash-looping (`start()`→`connect()` retry-then-raise on a dead board) and
+  the rest of the rover runs. No motion is armed without lifting the rover.
+
+**Tests:** unit (fused, both mask lengths), integration (publish-path + route
+wiring), e2e (real `TelemetryServer`: `/`→302, `/dashboard` 200), regression
+(additive/backwards-compat), AQA (modality-order + no-hardcoded-host hygiene),
+smoke (`-m smoke`), hardware (double-gated live `/dashboard` + `/ws` `fused`).
+
 ### Added — PR #115: LLM-gateway observability (Prometheus token/latency/served/budget metrics)
 
 First observability over the deliberative Claude tier (PRs #107/#111), which

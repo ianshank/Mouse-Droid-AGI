@@ -119,3 +119,15 @@ overlay if present.
 | WS handshake fails | Upstream cert / proto mismatch (https vs http) | Confirm `UPSTREAM_WS = UPSTREAM_HTTP.replace(...)` resolved correctly |
 | Stream drops mid-MJPEG | Client disconnected; `_http_handler` suppresses `write_eof` errors | Expected; reload the browser tab |
 | Grafana → "Unauthorized" through proxy | Configured token but Grafana has its own auth | Run proxy with empty token: `python dashboard_proxy.py 8082 http://192.168.55.1:3000 ""` |
+
+## Related: the on-rover unified dashboard (`/dashboard`)
+
+The proxy is the *workstation* bridge to the auth-gated server. The server itself
+now serves a **unified overview page** at `/` (→ `/dashboard`) — a single page
+(camera MJPEG + lidar polar + sensor-fusion panel + status) fed by one `/ws`
+connection, served by `TelemetryServer._handle_dashboard_page` from
+`telemetry/static/dashboard.html`. Any device on the WiFi reaches it directly at
+`http://<rover-ip>:8080/?token=…` (or `mousedroid-telemetry.local` via mDNS); the
+proxy is only needed for the Claude-Preview workstation path. The fusion panel
+renders `TelemetryFrame.fused` (a pure per-modality summary — see
+`docs/runbooks/jetson-full-bringup.md` and `CLAUDE.md`).

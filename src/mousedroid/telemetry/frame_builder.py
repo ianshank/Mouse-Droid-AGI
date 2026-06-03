@@ -20,9 +20,58 @@ from mousedroid.constants import MOTOR_STATE_BATTERY_INDEX
 from mousedroid.telemetry.protocol import TelemetryFrame
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from mousedroid.safety.context import SafetyContext
     from mousedroid.sensing.protocol import ObservationProtocol
     from mousedroid.telemetry.sensor_liveness import SensorLivenessTracker
+
+# Fixed per-modality slot order of ``MouseDroidObservationBundle.valid_mask``
+# (see ``sensing/bundle.py``). ``lidar`` only occupies a slot when the rover
+# runs with lidar enabled, so the mask is length 4 (no lidar) or 5 (with lidar).
+# We zip these names against the ACTUAL mask length — never index a fixed slot —
+# so a 4-element mask never raises.
+_MODALITY_NAMES: tuple[str, ...] = ("vision", "ultrasonic", "motor", "audio", "lidar")
+
+
+def _build_fused_summary(
+    valid_mask: Sequence[float],
+    *,
+    vision_norm: float,
+    audio_rms: float,
+) -> dict[str, object]:
+    """Summarise the fused observation for the dashboard fusion panel.
+
+    Pure function of values already computed for the frame — adds no sensor
+    reads and no hot-loop cost. Handles both mask lengths (4 without lidar,
+    5 with) by zipping :data:`_MODALITY_NAMES` against the actual length.
+
+    Args:
+        valid_mask: Per-modality validity flags (length 4 or 5).
+        vision_norm: L2 norm of the vision feature vector.
+        audio_rms: RMS of the audio chunk.
+
+    Returns:
+        The ``fused`` summary dict documented on :class:`TelemetryFrame`.
+    """
+    n_modalities = len(valid_mask)
+    modalities = {name: bool(flag) for name, flag in zip(_MODALITY_NAMES, valid_mask, strict=False)}
+    lidar_present = n_modalities >= len(_MODALITY_NAMES)
+    if not lidar_present:
+        # Surface the slot explicitly as False so dashboards can render a
+        # stable tile set regardless of the lidar build.
+        modalities.setdefault("lidar", False)
+    # Bounded "active continuous-signal magnitude" — the two true feature
+    # magnitudes. Range readings (distance / lidar-min) are shown separately
+    # on the dashboard, so they are deliberately excluded here.
+    fused_norm = float((vision_norm**2 + audio_rms**2) ** 0.5)
+    return {
+        "n_valid": int(sum(1 for flag in valid_mask if flag)),
+        "n_modalities": n_modalities,
+        "lidar_present": lidar_present,
+        "modalities": modalities,
+        "fused_norm": fused_norm,
+    }
 
 
 def build_telemetry_frame(
@@ -136,4 +185,9 @@ def build_telemetry_frame(
         loop_time_ms=loop_time_ms,
         tick_count=tick_count,
         sensor_liveness=sensor_liveness,
+        fused=_build_fused_summary(
+            observation.valid_mask.tolist(),
+            vision_norm=vision_norm,
+            audio_rms=audio_rms,
+        ),
     )

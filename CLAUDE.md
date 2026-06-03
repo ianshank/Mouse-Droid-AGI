@@ -433,5 +433,33 @@ static-CI → cold-hardware → warm-live. Contracts:
   `orch._metrics` renders the families on live Claude. Operator runbook:
   `docs/runbooks/jetson-full-validation.md`.
 
+## Unified dashboard + sensor-fusion summary (full rover bring-up)
+
+The telemetry server serves a single overview page at `/` (→ `/dashboard`)
+rendering camera + lidar + sensor-fusion + status, reachable over WiFi.
+Contracts:
+
+- **`TelemetryFrame.fused` is purely additive.** It defaults to an empty dict
+  (mirrors `sensor_liveness`); `to_dict()` is `asdict`, so it auto-serialises on
+  `/ws`. A registry/frame built without an observation is byte-identical to
+  pre-feature. Shape: `{n_valid, n_modalities, lidar_present, modalities{…},
+  fused_norm}`.
+- **The `valid_mask` is length 4 (no lidar) OR 5 (with lidar)** — slot order
+  `[vision, ultrasonic, motor, audio, (lidar)]` (`constants.N_SENSOR_MODALITIES`
+  / `_WITH_LIDAR`). `_build_fused_summary` in `telemetry/frame_builder.py` zips
+  `_MODALITY_NAMES` against the ACTUAL length and never indexes a fixed slot —
+  a 4-element mask must never IndexError. It is a pure function of the frame's
+  existing inputs (no sensor reads, no hot-loop cost) — NOT a new fusion
+  algorithm.
+- **Dashboard has no hardcoded host/port/token.** `static/dashboard.html`
+  derives its origin from `window.location` and carries the bearer token via
+  `?token=` (the existing `/camera`+`/lidar` pattern), persisting it to the WS +
+  MJPEG URLs. `/dashboard` stays behind the auth middleware.
+- **Real-motor bring-up is probe-first.** A dead ESP32 with `enabled=True` makes
+  `orchestrator.start()`→`esp32.connect()` retry-then-raise → the container
+  crash-loops. The bring-up runbook probes the ESP32 first and only keeps motors
+  live if it responds; otherwise `MOUSEDROID_ESP32__ENABLED=false`. Operator
+  runbook: `docs/runbooks/jetson-full-bringup.md`.
+
 See `AGENTS.md` (agentic-worker behavioural contract) and `SKILLS.md`
 (capability index keyed by trigger phrase) for additional context.

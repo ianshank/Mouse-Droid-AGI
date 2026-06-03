@@ -498,6 +498,8 @@ class TelemetryServer:
         # if no publisher wired a raw queue, the handler returns 503.
         app.router.add_get(self._cfg.lidar_raw_ws_path, self._handle_lidar_raw_ws)
         app.router.add_get(f"{prefix}/logs/stream", self._handle_log_stream)
+        app.router.add_get("/", self._handle_root)
+        app.router.add_get("/dashboard", self._handle_dashboard_page)
         app.router.add_get("/lidar", self._handle_lidar_page)
         app.router.add_get("/camera", self._handle_camera_page)
         if self._raw_frame_source is not None:
@@ -908,6 +910,51 @@ class TelemetryServer:
             headers={
                 "Content-Type": "text/plain; version=0.0.4; charset=utf-8",
                 "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    async def _handle_root(self, request: web.Request) -> web.StreamResponse:
+        """GET / — redirect to the unified dashboard, preserving the token query.
+
+        Other LAN devices open ``http://<rover>:8080/`` (optionally with
+        ``?token=``); we 302 to ``/dashboard`` carrying the query string so the
+        bearer token survives the hop.
+        """
+        from aiohttp import web
+
+        target = "/dashboard"
+        if request.query_string:
+            target = f"{target}?{request.query_string}"
+        raise web.HTTPFound(target)
+
+    async def _handle_dashboard_page(self, request: web.Request) -> web.Response:
+        """GET /dashboard — serve the unified overview page.
+
+        Single page that embeds the live camera MJPEG, the lidar polar plot,
+        and a sensor-fusion panel (per-modality liveness + the ``fused``
+        summary) by subscribing to ``/ws`` + ``/ws/v1/lidar/raw`` + the camera
+        stream. Behind the same bearer-auth middleware as ``/lidar`` /
+        ``/camera``; the page carries the token via the ``?token=`` query.
+        """
+        from importlib import resources
+
+        from aiohttp import web
+
+        try:
+            html = (
+                resources.files("mousedroid.telemetry.static")
+                .joinpath("dashboard.html")
+                .read_text(encoding="utf-8")
+            )
+        except (FileNotFoundError, ModuleNotFoundError):
+            return web.Response(status=404, text="dashboard_page_missing")
+
+        return web.Response(
+            body=html.encode("utf-8"),
+            headers={
+                "Content-Type": "text/html; charset=utf-8",
+                "X-Content-Type-Options": "nosniff",
+                "Cache-Control": "no-cache",
             },
         )
 
