@@ -1450,8 +1450,9 @@ class MetricsConfig(BaseModel):
         description=(
             "Histogram bucket boundaries for cloud LLM-gateway round-trip "
             "latency (ms). Wider than llm_latency_buckets_ms because cloud "
-            "Claude round-trips are seconds, not ms; the 5000 ms default "
-            "latency_target_ms lands on a bucket boundary."
+            "Claude round-trips are seconds, not ms. The 500 ms default "
+            "latency_target_ms and the 5000 ms cloud-pilot overlay value "
+            "(config/jetson_claude_pilot.yaml) both land on bucket boundaries."
         ),
     )
     mcp_latency_buckets_ms: tuple[float, ...] = Field(

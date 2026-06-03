@@ -2,9 +2,12 @@
 
 Double-gated — runs only on a Jetson host (:func:`is_jetson_host`) AND when
 ``ANTHROPIC_API_KEY`` is present. A real cloud translation must populate the
-latency histogram, token counters, and the per-tier served counter; and a
-normal cloud round-trip must NOT trip the 5000 ms budget (regression guard on
-the ``latency_target_ms`` calibration documented in CLAUDE.md).
+latency histogram and token counters; and a normal cloud round-trip must NOT
+trip the 5000 ms budget (regression guard on the ``latency_target_ms``
+calibration documented in CLAUDE.md). This test builds a single, non-composite
+:class:`AnthropicLLMGateway`, so it deliberately does NOT assert the per-tier
+served counter (``llm_gateway_served_total`` is emitted only by the
+:class:`FallbackLLMGateway` composite).
 """
 
 from __future__ import annotations

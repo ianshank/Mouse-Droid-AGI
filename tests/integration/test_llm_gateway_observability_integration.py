@@ -1,9 +1,10 @@
 """Integration: LLM-gateway observability threaded through the factory.
 
 Verifies the shared :class:`MetricsRegistry` reaches the concrete gateway via
-``build_orchestrator`` (the real wiring path the rover uses), and that a faked
-end-to-end translation populates all four metric families. The ``anthropic``
-SDK is faked end-to-end so no network / API key is required — mirroring
+``build_orchestrator`` (the real wiring path the rover uses), that a faked
+single-gateway translation populates the token + latency families, and that the
+composite records the per-tier served counter. The ``anthropic`` SDK is faked
+end-to-end so no network / API key is required — mirroring
 ``tests/integration/test_anthropic_gateway_wiring.py``.
 """
 
@@ -92,10 +93,12 @@ def test_build_orchestrator_threads_registry_into_composite_primary() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Faked translate populates every family through the factory-built gateway
+# Faked translate populates the token + latency families (single gateway).
+# The served / budget families are composite-only / threshold-gated and are
+# covered by test_composite_records_primary_ok_served and the e2e budget test.
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
-async def test_faked_translate_populates_all_families() -> None:
+async def test_faked_translate_populates_token_and_latency_families() -> None:
     cfg = _anthropic_cfg()
     reg = MetricsRegistry(MetricsConfig())
     gateway = build_llm_gateway(cfg, metrics=reg)
