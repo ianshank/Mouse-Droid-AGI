@@ -57,6 +57,7 @@ from mousedroid.security.injection_filter import (
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import LLMConfig
+    from mousedroid.telemetry.metrics import MetricsRegistry
 
 _log = get_logger(__name__)
 
@@ -98,6 +99,7 @@ class AnthropicLLMGateway:
         *,
         injection_filter: PromptInjectionFilterProtocol | None = None,
         sdk: Any | None = None,
+        metrics: MetricsRegistry | None = None,
     ) -> None:
         """Initialise the gateway.
 
@@ -114,12 +116,18 @@ class AnthropicLLMGateway:
                 every NL ingress.
             sdk: Optional pre-imported ``anthropic`` module (test seam). When
                 ``None`` the SDK is imported lazily in :meth:`start`.
+            metrics: Optional shared :class:`MetricsRegistry`. When supplied,
+                successful translations record round-trip latency + token
+                usage, and budget-exceeded events increment a counter. ``None``
+                (the default) makes every metric call a no-op — the gateway
+                behaves byte-identically, so existing callers are unaffected.
         """
         self._cfg = cfg
         self._sdk = sdk
         self._client: Any = None
         self._ready = False
         self._degraded = False
+        self._metrics = metrics
         if injection_filter is None:
             injection_filter = RegexInjectionFilter(
                 cfg.injection_patterns,
@@ -268,15 +276,23 @@ class AnthropicLLMGateway:
         # ``_ready`` False, so this line is unreachable in that state.
         self._degraded = False
         elapsed_ms = (time.monotonic() - start) * MILLISECONDS_PER_SECOND
+        if self._metrics is not None:
+            self._metrics.observe_llm_gateway_latency_ms(elapsed_ms)
         if elapsed_ms > self._cfg.latency_target_ms:
             _log.warning(
                 "anthropic_gateway_slow",
                 elapsed_ms=elapsed_ms,
                 target_ms=self._cfg.latency_target_ms,
             )
+            if self._metrics is not None:
+                self._metrics.inc_llm_latency_budget_exceeded(self._cfg.model_name)
 
         text = self._extract_text(response)
         goal = self._parse_goal_vector(text)
+        if self._metrics is not None:
+            input_tokens, output_tokens = self._extract_token_usage(response)
+            self._metrics.inc_llm_tokens(self._cfg.model_name, "input", input_tokens)
+            self._metrics.inc_llm_tokens(self._cfg.model_name, "output", output_tokens)
         _log.info(
             "anthropic_gateway_translation",
             elapsed_ms=elapsed_ms,
@@ -285,6 +301,32 @@ class AnthropicLLMGateway:
             omega=goal.omega_target,
         )
         return goal
+
+    @staticmethod
+    def _extract_token_usage(response: Any) -> tuple[int | None, int | None]:
+        """Extract ``(input_tokens, output_tokens)`` from the response usage.
+
+        Defensive like :meth:`_extract_text`: the Messages API attaches a
+        ``usage`` object with ``input_tokens`` / ``output_tokens``, but mocks
+        and alternative clients may omit it or arrive as a plain dict. Returns
+        ``(None, None)`` (or a partial pair) when usage is absent so token
+        recording degrades without crashing — preserving the "never raises on
+        backend" invariant. Production code must call THIS helper, never touch
+        ``response.usage`` directly.
+        """
+        usage = (
+            response.get("usage")
+            if isinstance(response, dict)
+            else getattr(response, "usage", None)
+        )
+        if usage is None:
+            return (None, None)
+
+        def _field(name: str) -> int | None:
+            raw = usage.get(name) if isinstance(usage, dict) else getattr(usage, name, None)
+            return raw if isinstance(raw, int) else None
+
+        return (_field("input_tokens"), _field("output_tokens"))
 
     @staticmethod
     def _extract_text(response: Any) -> str:

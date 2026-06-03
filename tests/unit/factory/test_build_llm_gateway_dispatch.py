@@ -115,3 +115,54 @@ def test_default_fallback_retry_cooldown_s_propagates() -> None:
     gw = build_llm_gateway(cfg)
     assert isinstance(gw, FallbackLLMGateway)
     assert gw._retry_cooldown_s == 30.0
+
+
+# --------------------------------------------------------------------------- #
+# Observability — MetricsRegistry threading (keyword-only, None default)
+# --------------------------------------------------------------------------- #
+def _registry() -> object:
+    from mousedroid.config.schema import MetricsConfig
+    from mousedroid.telemetry.metrics import MetricsRegistry
+
+    return MetricsRegistry(MetricsConfig())
+
+
+def test_metrics_threaded_into_anthropic_primary() -> None:
+    cfg = Settings(mock_hardware=True)
+    cfg.llm.backend = "anthropic"
+    cfg.llm.model_name = "claude-haiku-4-5"
+    reg = _registry()
+    gw = build_llm_gateway(cfg, metrics=reg)
+    assert isinstance(gw, AnthropicLLMGateway)
+    assert gw._metrics is reg
+
+
+def test_metrics_threaded_into_composite_and_both_tiers() -> None:
+    cfg = Settings(mock_hardware=True)
+    cfg.llm.backend = "anthropic"
+    cfg.llm.model_name = "claude-haiku-4-5"
+    cfg.llm.fallback_backend = "llama_cpp"
+    reg = _registry()
+    gw = build_llm_gateway(cfg, metrics=reg)
+    assert isinstance(gw, FallbackLLMGateway)
+    assert gw._metrics is reg
+    assert gw._primary._metrics is reg  # anthropic primary instrumented
+
+
+def test_metrics_none_default_keeps_legacy_construction() -> None:
+    cfg = Settings(mock_hardware=True)
+    cfg.llm.backend = "anthropic"
+    cfg.llm.model_name = "claude-haiku-4-5"
+    gw = build_llm_gateway(cfg)  # no metrics kwarg
+    assert isinstance(gw, AnthropicLLMGateway)
+    assert gw._metrics is None
+
+
+def test_metrics_kwarg_is_keyword_only_with_none_default() -> None:
+    """Pin the threading contract: metrics is keyword-only, defaults None."""
+    import inspect
+
+    sig = inspect.signature(build_llm_gateway)
+    param = sig.parameters["metrics"]
+    assert param.kind is inspect.Parameter.KEYWORD_ONLY
+    assert param.default is None

@@ -9,6 +9,7 @@ and keeps these tests runnable whether or not the real SDK is installed.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 import types
@@ -34,14 +35,39 @@ class _FakeBlock:
 
 
 class _FakeResponse:
-    """A Messages-API response whose ``.content`` is a list of blocks."""
+    """A Messages-API response whose ``.content`` is a list of blocks.
 
-    def __init__(self, blocks: list[Any]) -> None:
+    ``usage`` is attached ONLY when provided, so a default response genuinely
+    lacks the attribute — exercising the gateway's defensive
+    ``getattr(response, "usage", None)`` token-extraction path.
+    """
+
+    def __init__(self, blocks: list[Any], usage: Any = None) -> None:
         self.content = blocks
+        if usage is not None:
+            self.usage = usage
 
 
-def _text_response(text: str) -> _FakeResponse:
-    return _FakeResponse([_FakeBlock(text)])
+class _FakeUsage:
+    """A Messages-API ``usage`` object exposing token counts as attributes."""
+
+    def __init__(self, input_tokens: Any = None, output_tokens: Any = None) -> None:
+        if input_tokens is not None:
+            self.input_tokens = input_tokens
+        if output_tokens is not None:
+            self.output_tokens = output_tokens
+
+
+def _text_response(text: str, usage: Any = None) -> _FakeResponse:
+    return _FakeResponse([_FakeBlock(text)], usage=usage)
+
+
+def _make_registry(**overrides: object) -> Any:
+    """Build a real MetricsRegistry for observability assertions."""
+    from mousedroid.config.schema import MetricsConfig
+    from mousedroid.telemetry.metrics import MetricsRegistry
+
+    return MetricsRegistry(MetricsConfig(**overrides))  # type: ignore[arg-type]
 
 
 class _FakeMessages:
@@ -456,3 +482,129 @@ async def test_cancelled_error_propagates_without_degrading() -> None:
         await gw.translate_mission("forward")
     # MUST NOT have flipped degraded.
     assert gw.is_degraded is False
+
+
+# --------------------------------------------------------------------------- #
+# Observability — metrics recording (token usage, latency, budget guard)
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_translate_records_latency_and_tokens() -> None:
+    """A successful translation records latency + token-usage metrics."""
+    reg = _make_registry()
+    sdk = _make_sdk(response=_text_response("{}", usage=_FakeUsage(120, 40)))
+    gw = AnthropicLLMGateway(_config(), sdk=sdk, metrics=reg)
+    await gw.start()
+    await gw.translate_mission("go forward")
+    out = reg.render_prometheus()
+    assert 'mousedroid_llm_tokens_total{model="claude-haiku-4-5",token_type="input"} 120' in out
+    assert 'mousedroid_llm_tokens_total{model="claude-haiku-4-5",token_type="output"} 40' in out
+    assert "mousedroid_llm_gateway_latency_ms_count 1" in out
+
+
+@pytest.mark.asyncio
+async def test_translate_fires_budget_counter_when_slow(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exceeding latency_target_ms increments the budget counter; goal still returned.
+
+    ``time.monotonic`` is controlled so the elapsed time is deterministic
+    regardless of the host clock resolution (a near-instant fake call can read
+    < 1 us, below any real threshold).
+    """
+    import mousedroid.llm_gateway.anthropic_gateway as gw_mod
+
+    # Increment by 1000 s on EVERY call, so any consecutive start/end pair
+    # yields a 1000 s (1_000_000 ms) elapsed regardless of how many other
+    # monotonic() reads happen before translate_mission.
+    state = {"t": 0.0}
+
+    def _fake_monotonic() -> float:
+        state["t"] += 1000.0
+        return state["t"]
+
+    monkeypatch.setattr(gw_mod.time, "monotonic", _fake_monotonic)
+    reg = _make_registry()
+    sdk = _make_sdk(response=_text_response("{}", usage=_FakeUsage(1, 1)))
+    gw = AnthropicLLMGateway(_config(latency_target_ms=500.0), sdk=sdk, metrics=reg)
+    await gw.start()
+    goal = await gw.translate_mission("go")
+    assert isinstance(goal, GoalVector)
+    out = reg.render_prometheus()
+    assert 'mousedroid_llm_latency_budget_exceeded_total{model="claude-haiku-4-5"} 1' in out
+
+
+@pytest.mark.asyncio
+async def test_translate_under_budget_no_budget_counter() -> None:
+    """A fast translation does not emit the budget counter."""
+    reg = _make_registry()
+    sdk = _make_sdk(response=_text_response("{}", usage=_FakeUsage(1, 1)))
+    gw = AnthropicLLMGateway(_config(latency_target_ms=600000.0), sdk=sdk, metrics=reg)
+    await gw.start()
+    await gw.translate_mission("go")
+    assert "llm_latency_budget_exceeded_total" not in reg.render_prometheus()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        _text_response("{}"),  # object, no .usage attr
+        _text_response("{}", usage=_FakeUsage()),  # usage present but empty
+        _FakeResponse([_FakeBlock("{}")], usage={"input_tokens": 7}),  # dict, partial
+        {
+            "content": [{"text": "{}"}],
+            "usage": {"input_tokens": 5, "output_tokens": 2},
+        },  # full dict
+    ],
+)
+async def test_translate_token_extraction_degrades_without_crash(response: Any) -> None:
+    """Missing / partial / dict-shaped usage never crashes; goal still returned."""
+    reg = _make_registry()
+    gw = AnthropicLLMGateway(_config(), sdk=_make_sdk(response=response), metrics=reg)
+    await gw.start()
+    goal = await gw.translate_mission("go")
+    assert isinstance(goal, GoalVector)
+    assert "mousedroid_llm_gateway_latency_ms_count 1" in reg.render_prometheus()
+
+
+@pytest.mark.asyncio
+async def test_translate_dict_usage_records_tokens() -> None:
+    """Dict-shaped usage records token counts via the defensive extractor."""
+    reg = _make_registry()
+    response = {"content": [{"text": "{}"}], "usage": {"input_tokens": 9, "output_tokens": 3}}
+    gw = AnthropicLLMGateway(_config(), sdk=_make_sdk(response=response), metrics=reg)
+    await gw.start()
+    await gw.translate_mission("go")
+    out = reg.render_prometheus()
+    assert 'token_type="input"} 9' in out
+    assert 'token_type="output"} 3' in out
+
+
+@pytest.mark.asyncio
+async def test_translate_metrics_none_is_noop() -> None:
+    """metrics=None (default) never raises and returns a goal."""
+    gw = AnthropicLLMGateway(_config(), sdk=_make_sdk(response=_text_response("{}")), metrics=None)
+    await gw.start()
+    goal = await gw.translate_mission("go")
+    assert isinstance(goal, GoalVector)
+
+
+@pytest.mark.asyncio
+async def test_translate_backend_error_records_no_latency() -> None:
+    """An API error degrades + returns neutral, recording no latency sample."""
+    reg = _make_registry()
+    gw = AnthropicLLMGateway(_config(), sdk=_make_sdk(exc=RuntimeError("boom")), metrics=reg)
+    await gw.start()
+    goal = await gw.translate_mission("go")
+    assert goal == GoalVector()
+    assert gw.is_degraded is True
+    assert "mousedroid_llm_gateway_latency_ms" not in reg.render_prometheus()
+
+
+@pytest.mark.asyncio
+async def test_translate_cancelled_records_nothing() -> None:
+    """CancelledError propagates and records no metrics (not a backend failure)."""
+    reg = _make_registry()
+    gw = AnthropicLLMGateway(_config(), sdk=_make_sdk(exc=asyncio.CancelledError()), metrics=reg)
+    await gw.start()
+    with pytest.raises(asyncio.CancelledError):
+        await gw.translate_mission("go")
+    assert "mousedroid_llm_gateway_latency_ms" not in reg.render_prometheus()

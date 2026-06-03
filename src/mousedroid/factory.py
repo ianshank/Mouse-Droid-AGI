@@ -728,6 +728,7 @@ def _build_single_llm_gateway(
     llm_cfg: LLMConfig,
     *,
     injection_filter: PromptInjectionFilterProtocol | None = None,
+    metrics: MetricsRegistry | None = None,
 ) -> LLMGatewayProtocol:
     """Build ONE concrete gateway for ``llm_cfg.backend`` (no failover wrap).
 
@@ -744,6 +745,10 @@ def _build_single_llm_gateway(
             command verbatim, and ``anthropic`` ships it to a third-party
             cloud). The ``openai_compatible`` backend skips it, trusting the
             upstream provider's guardrails.
+        metrics: Optional shared :class:`MetricsRegistry`. Forwarded only to
+            the ``anthropic`` backend (the cloud cost/latency concern); the
+            ``llama_cpp`` and ``openai_compatible`` backends accept and ignore
+            it (they are not instrumented in this scope).
 
     Returns:
         A gateway conforming to :class:`LLMGatewayProtocol`.
@@ -769,7 +774,7 @@ def _build_single_llm_gateway(
             model=llm_cfg.model_name,
             enabled=llm_cfg.enabled,
         )
-        return AnthropicLLMGateway(llm_cfg, injection_filter=injection_filter)
+        return AnthropicLLMGateway(llm_cfg, injection_filter=injection_filter, metrics=metrics)
 
     # Default / legacy ``llama_cpp`` path.
     from mousedroid.llm_gateway.config import GatewayConfig
@@ -803,6 +808,7 @@ def build_llm_gateway(
     cfg: Settings,
     *,
     injection_filter: PromptInjectionFilterProtocol | None = None,
+    metrics: MetricsRegistry | None = None,
 ) -> LLMGatewayProtocol:
     """Build the LLM gateway selected by ``cfg.llm.backend``.
 
@@ -840,11 +846,15 @@ def build_llm_gateway(
             from ``cfg.llm.injection_patterns`` (legacy behaviour); when
             supplied (the default in :func:`build_orchestrator`), the same
             filter is reused by the OpenClaw mission dispatcher.
+        metrics: Optional shared :class:`MetricsRegistry`, forwarded to both
+            tiers (the anthropic gateway records latency/token metrics; the
+            composite records the per-tier served counter). ``None`` (default)
+            is a no-op — the gateway behaves byte-identically.
 
     Returns:
         LLM gateway conforming to :class:`LLMGatewayProtocol`.
     """
-    primary = _build_single_llm_gateway(cfg.llm, injection_filter=injection_filter)
+    primary = _build_single_llm_gateway(cfg.llm, injection_filter=injection_filter, metrics=metrics)
 
     fallback_backend = cfg.llm.fallback_backend
     if fallback_backend == "none":
@@ -866,7 +876,9 @@ def build_llm_gateway(
     if cfg.llm.fallback_model_name is not None:
         secondary_overrides["model_name"] = cfg.llm.fallback_model_name
     secondary_cfg = cfg.llm.model_copy(update=secondary_overrides)
-    secondary = _build_single_llm_gateway(secondary_cfg, injection_filter=injection_filter)
+    secondary = _build_single_llm_gateway(
+        secondary_cfg, injection_filter=injection_filter, metrics=metrics
+    )
 
     from mousedroid.llm_gateway.fallback_gateway import FallbackLLMGateway
 
@@ -881,6 +893,7 @@ def build_llm_gateway(
         primary,
         secondary,
         retry_cooldown_s=cfg.llm.fallback_retry_cooldown_s,
+        metrics=metrics,
     )
 
 
@@ -2856,7 +2869,9 @@ def build_orchestrator(cfg: Settings) -> object:
     # LLM gateway + mission parser (optional — gated by llm.enabled)
     llm_gateway: LLMGatewayProtocol | None = None
     if cfg.llm.enabled:
-        llm_gateway = build_llm_gateway(cfg, injection_filter=injection_filter)
+        llm_gateway = build_llm_gateway(
+            cfg, injection_filter=injection_filter, metrics=metrics_registry
+        )
     mission_parser: MissionParserProtocol | None = build_mission_parser(cfg)
 
     # VLA policy (optional — gated by vla.backend, default 'none')

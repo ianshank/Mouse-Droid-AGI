@@ -1406,6 +1406,17 @@ class MetricsConfig(BaseModel):
     track_memory_tier: bool = Field(True, description="Expose memory tier gauges")
     track_voice_events: bool = Field(True, description="Expose voice event counter")
     track_llm_latency: bool = Field(True, description="Expose LLM mission parse latency")
+    track_llm_gateway: bool = Field(
+        True,
+        description=(
+            "Expose deliberative LLM-gateway observability for the Anthropic "
+            "Claude tier: token-usage counter (labels: model, token_type), "
+            "round-trip latency histogram, per-tier served counter (labels: "
+            "tier, outcome), and a latency-budget-exceeded counter (label: "
+            "model). Emitted only when the gateway runs with a MetricsRegistry "
+            "and actually translates — safe to leave on."
+        ),
+    )
     track_curiosity: bool = Field(True, description="Expose curiosity intrinsic reward gauge")
     track_sensor_recovery: bool = Field(True, description="Expose sensor recovery counter")
     track_cloud: bool = Field(
@@ -1433,6 +1444,15 @@ class MetricsConfig(BaseModel):
     llm_latency_buckets_ms: tuple[float, ...] = Field(
         (25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, float("inf")),
         description="Histogram bucket boundaries for LLM translation latency (ms)",
+    )
+    llm_gateway_latency_buckets_ms: tuple[float, ...] = Field(
+        (50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, float("inf")),
+        description=(
+            "Histogram bucket boundaries for cloud LLM-gateway round-trip "
+            "latency (ms). Wider than llm_latency_buckets_ms because cloud "
+            "Claude round-trips are seconds, not ms; the 5000 ms default "
+            "latency_target_ms lands on a bucket boundary."
+        ),
     )
     mcp_latency_buckets_ms: tuple[float, ...] = Field(
         (5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 5000.0, float("inf")),
@@ -1477,6 +1497,7 @@ class MetricsConfig(BaseModel):
     @field_validator(
         "loop_latency_buckets_ms",
         "llm_latency_buckets_ms",
+        "llm_gateway_latency_buckets_ms",
         "mcp_latency_buckets_ms",
         "vla_inference_seconds_buckets",
         "world_model_observe_step_seconds_buckets",
