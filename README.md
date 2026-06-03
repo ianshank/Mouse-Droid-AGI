@@ -89,7 +89,7 @@ See [docs/architecture.md](docs/architecture.md) for full C4 diagrams (Context �
 - LD19 scan completeness is driven by config (`scan_acquisition_timeout_s`, `min_scan_coverage_deg`) and validated with the same coverage semantics the driver uses.
 - **USB-C smoke gate (PR #106):** `python scripts/check_usbc_devices.py --config config/jetson_production.yaml` runs a fast, no-orchestrator probe asserting every `usbc_discovery.required_endpoints` entry resolves under `/dev/serial/by-id/`. The Jetson smoke pipeline runs this as a blocking stage before opening the serial port; `factory.py:_resolve_esp32_serial_via_usbc_discovery` auto-overrides a stale literal `esp32.serial_port` when the live by-id path differs (rover swap). Full operator runbook: [`docs/runbooks/jetson-rover-smoke.md`](docs/runbooks/jetson-rover-smoke.md). C4 component diagram: [`docs/architecture/c4-usbc-smoke.md`](docs/architecture/c4-usbc-smoke.md).
 - **Power-chain probe (PR #106):** `src/mousedroid/diagnostics/power_chain.py:assert_power_chain` runs battery → send_velocity → emergency_stop and asserts the e-stop latency against `ESP32Config.emergency_stop_budget_ms`. Defaults to zero-velocity so an untethered rover does not roll while the smoke runs unattended — override via `MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION=true` only when the rover is on rollers or tethered.
-- **Anthropic Claude LLM gateway + cloud/local failover (PR #107):** The deliberative mission-translation path (natural language → `GoalVector`) now supports cloud Claude as primary with a local model as off-network fallback. Enable with `config/jetson_claude_pilot.yaml`, install extras via `pip install -e ".[anthropic,llm]"`, and supply the key via `ANTHROPIC_API_KEY` env var (the SDK reads natively) or `MOUSEDROID_LLM__API_KEY` for `SecretStr` wrapping. The composite re-probes a degraded primary every `LLMConfig.fallback_retry_cooldown_s` (default 30 s) so a transient WAN dropout does not pin the rover to the local model. The 30 Hz reactive control loop (RSSM → MCTS → ESP32) is deliberately LLM-free — no LLM in the E-stop path. C4 diagram: [`docs/architecture/c4-llm-gateway.md`](docs/architecture/c4-llm-gateway.md).
+- **Anthropic Claude LLM gateway + cloud/local failover (PR #107 — now deployed live):** The deliberative mission-translation path (natural language → `GoalVector`) runs **live on the Jetson rover** with cloud Claude (Anthropic Messages API) as the primary NL→`GoalVector` translator and a local Phi-3-mini (`llama_cpp`) off-network fallback, composed by `FallbackLLMGateway`. **Invariant:** this tier sits entirely OUTSIDE the 30 Hz reactive control loop — RSSM → MCTS → ESP32 stays deterministic and LLM-free, so there is no LLM in the E-stop path. Install extras via `pip install -e ".[anthropic,llm]"`, and supply the key via `ANTHROPIC_API_KEY` env var (the SDK reads natively) or `MOUSEDROID_LLM__API_KEY` for `SecretStr` wrapping — never in YAML. The composite re-probes a degraded primary every `LLMConfig.fallback_retry_cooldown_s` (default 30 s) so a transient WAN dropout does not pin the rover to the local model. Verify the path live with the dry-run probe `python scripts/translate_mission.py --mission "patrol left then stop"`, which translates a single NL mission into a `GoalVector` through the real factory (no motors) and prints which tier served. Operator runbook: [`docs/runbooks/jetson-claude-pilot-deploy.md`](docs/runbooks/jetson-claude-pilot-deploy.md). C4 diagram: [`docs/architecture/c4-llm-gateway.md`](docs/architecture/c4-llm-gateway.md).
 
 ---
 
@@ -388,6 +388,23 @@ All settings are defined in `config/default.yaml` and validated by Pydantic v2. 
 
 No values are hardcoded — every threshold, dimension, pin, and rate is configurable.
 
+### Deliberative LLM tier (`llm:` block)
+
+The live cloud/local mission-translation tier (PR #107) is configured in the
+`llm:` block of `config/jetson_production.yaml`:
+
+- `backend: "anthropic"` — Claude as the primary NL→`GoalVector` translator.
+- `model_name: "claude-haiku-4-5"` — lowest-latency on-rover default; swap to a
+  Sonnet id for harder multi-step mission language.
+- `fallback_backend: "llama_cpp"` + `model_path` (Phi-3-mini GGUF) — off-network
+  local fallback so the rover stays autonomous when `api.anthropic.com` is unreachable.
+- `fallback_retry_cooldown_s: 30.0` — seconds before the composite re-probes a
+  degraded primary (tune lower for bench, higher behind a flaky uplink).
+
+The Anthropic key is **never** stored in YAML. Supply it via `ANTHROPIC_API_KEY`
+(the SDK resolves it natively) or the schema-mapped `MOUSEDROID_LLM__API_KEY`
+override, set in `/etc/mousedroid/docker.env` on the rover.
+
 ---
 
 ## MCP — Model Context Protocol
@@ -685,6 +702,17 @@ ruff format --check src/ tests/
 # Type check
 mypy src/ --strict --ignore-missing-imports
 ```
+
+### CI quality gates
+
+Beyond lint / type / test, two structural gates run in CI:
+
+- **`config-compat`** (`.github/workflows/config-compat.yml`) — schema-drift gate
+  asserting existing YAML overlays still load against the current Pydantic schema,
+  enforcing the backwards-compatibility invariant (new config fields must have defaults).
+- **`actionlint`** (Stage 0 of `.github/workflows/ci.yml`) — workflow-lint gate that
+  validates the GitHub Actions workflow files themselves, catching invalid expressions
+  that would otherwise silently startup-fail a run and disable a gate.
 
 ---
 

@@ -235,6 +235,35 @@ jq -c 'select(.event|test("anthropic_gateway|fallback_"))' run.log
 #   fallback_served (served_by=...) — which tier handled the command
 ```
 
+### translate-mission
+
+**Trigger:** "translate a mission", "test the LLM gateway", "dry-run the
+deliberative path", "does NL→GoalVector work?", "validate Claude failover
+without driving the rover".
+
+**Read:**
+- `scripts/translate_mission.py` — operator dry-run probe: builds the
+  gateway via `build_llm_gateway` + `resolve_runtime_config_paths`,
+  translates an NL command to a `GoalVector`, engages NO motors (safe with
+  the dead ESP32).
+- `config/jetson_production.yaml` — the live `llm:` block (Claude-haiku
+  primary + Phi-3 `llama_cpp` fallback) the probe loads on the rover.
+- `docs/runbooks/jetson-claude-pilot-deploy.md` — deploy + verify runbook.
+- `config/docker.env.example` — secret surface (`ANTHROPIC_API_KEY`); the
+  live values live ONLY in `/etc/mousedroid/docker.env` on the rover.
+
+**Run:**
+```bash
+# Dry-run a mission through the deliberative path (no motors):
+python scripts/translate_mission.py \
+    --config config/jetson_production.yaml \
+    --mission "patrol the lab then return to dock"
+# Force the local fallback to confirm cloud→local failover:
+MOUSEDROID_LLM__BACKEND=llama_cpp python scripts/translate_mission.py \
+    --config config/jetson_production.yaml \
+    --mission "go forward two meters"
+```
+
 ### llm-prompt-injection-filter
 
 **Trigger:** "operator NL command bypassed our guardrails", "ignore all
@@ -336,6 +365,39 @@ Then delegate to subagents in parallel:
 
 When all three return green, push + open the PR with the body template
 from `.github/pull_request_template.md` (or PR #104 as a worked example).
+
+### ci-deploy-gates
+
+**Trigger:** "config-compat gate failing", "actionlint error", "invalid
+workflow file", "I changed a workflow / a config YAML — what CI runs?",
+"bump the deployed image SHA".
+
+**Read:**
+- `.github/workflows/config-compat.yml` — gate that `git worktree`s the
+  SHA in `deployments/jetson-image.json` and validates changed
+  `config/*.yaml` against that historical schema.
+- `scripts/check_config_compat.py` — the validator (`_validation_env`
+  builds a cross-platform child env for the worktree subprocess).
+- `deployments/jetson-image.json` — the deployed-image record; its `sha`
+  MUST be a reachable trunk commit carrying the schema the image has.
+- `.github/workflows/ci.yml` (Stage 0 `actionlint` job, pinned
+  `docker://rhysd/actionlint:1.7.12`) + `.github/actionlint.yaml` (custom
+  `jetson` runner label).
+
+**Run:**
+```bash
+# Lint all workflows the way CI Stage 0 does (pinned actionlint):
+docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color
+# Reproduce the config-compat gate for a changed YAML:
+python scripts/check_config_compat.py --platform jetson \
+    --changed-files config/jetson_production.yaml
+```
+
+**Gotcha:** never put a literal `${{ ... }}` token in a workflow `run:`
+block, even in a comment — GitHub evaluates it and an empty one is an
+"invalid workflow file" startup failure (PR #113). If a YAML change needs
+a schema field the deployed image lacks, bump `deployments/jetson-image.json`
+to a reachable commit that carries it.
 
 ---
 
