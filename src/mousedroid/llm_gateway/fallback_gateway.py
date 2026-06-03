@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from mousedroid.llm_gateway.protocol import LLMGatewayProtocol
+    from mousedroid.telemetry.metrics import MetricsRegistry
 
 _log = get_logger(__name__)
 
@@ -77,6 +78,7 @@ class FallbackLLMGateway:
         *,
         retry_cooldown_s: float = _DEFAULT_RETRY_COOLDOWN_S,
         clock: Callable[[], float] | None = None,
+        metrics: MetricsRegistry | None = None,
     ) -> None:
         """Initialise the composite.
 
@@ -92,11 +94,17 @@ class FallbackLLMGateway:
             clock: Monotonic time source (seconds). Defaults to
                 :func:`time.monotonic`; injectable so tests can advance the
                 cooldown deterministically.
+            metrics: Optional shared :class:`MetricsRegistry`. When supplied,
+                the composite records which tier served each translation
+                (``{ns}_llm_gateway_served_total`` with labels ``tier`` /
+                ``outcome``) — the only durable cloud-vs-local split. ``None``
+                makes it a no-op (byte-identical to pre-feature behaviour).
         """
         self._primary = primary
         self._secondary = secondary
         self._retry_cooldown_s = retry_cooldown_s
         self._clock: Callable[[], float] = clock if clock is not None else time.monotonic
+        self._metrics = metrics
         # ``-inf`` guarantees the first call always attempts the primary,
         # regardless of the cooldown window.
         self._last_primary_attempt = float("-inf")
@@ -210,8 +218,12 @@ class FallbackLLMGateway:
             # degraded the primary or raised unexpectedly.
             if goal is not None and not _is_degraded(self._primary):
                 _log.debug("fallback_served", served_by="primary", retry_probe=primary_degraded)
+                if self._metrics is not None:
+                    self._metrics.inc_llm_gateway_served("primary", "ok")
                 return goal
             _log.warning("fallback_primary_to_secondary", was_retry_probe=primary_degraded)
+            if self._metrics is not None:
+                self._metrics.inc_llm_gateway_served("primary", "degraded")
 
         try:
             goal = await self._secondary.translate_mission(nl_command)
@@ -232,12 +244,16 @@ class FallbackLLMGateway:
                 "fallback_secondary_exception",
                 error=f"{type(exc).__name__}:{exc}",
             )
+            if self._metrics is not None:
+                self._metrics.inc_llm_gateway_served("secondary", "degraded")
             return GoalVector()
         _log.debug(
             "fallback_served",
             served_by="secondary",
             secondary_ready=self._secondary.is_ready,
         )
+        if self._metrics is not None:
+            self._metrics.inc_llm_gateway_served("secondary", "ok")
         return goal
 
     async def stop(self) -> None:

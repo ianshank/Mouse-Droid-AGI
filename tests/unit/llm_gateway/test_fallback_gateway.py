@@ -455,3 +455,63 @@ async def test_value_error_from_primary_stamps_cooldown_timestamp() -> None:
     with pytest.raises(ValueError, match="command rejected"):
         await gw.translate_mission("nope")
     assert gw._last_primary_attempt > timestamp_before
+
+
+# --------------------------------------------------------------------------- #
+# Observability — per-tier served counter (all four sites)
+# --------------------------------------------------------------------------- #
+def _metrics_registry() -> object:
+    from mousedroid.config.schema import MetricsConfig
+    from mousedroid.telemetry.metrics import MetricsRegistry
+
+    return MetricsRegistry(MetricsConfig())
+
+
+@pytest.mark.asyncio
+async def test_served_counter_primary_ok() -> None:
+    reg = _metrics_registry()
+    gw = FallbackLLMGateway(
+        _FakeGateway(result=_PRIMARY_GOAL),
+        _FakeGateway(result=_SECONDARY_GOAL),
+        metrics=reg,
+    )
+    await gw.translate_mission("go")
+    assert 'tier="primary",outcome="ok"} 1' in reg.render_prometheus()
+
+
+@pytest.mark.asyncio
+async def test_served_counter_primary_degraded_then_secondary_ok() -> None:
+    """Primary degrades mid-call → records primary/degraded AND secondary/ok."""
+    reg = _metrics_registry()
+    gw = FallbackLLMGateway(
+        _FakeGateway(result=_PRIMARY_GOAL, degrade_on_call=True),
+        _FakeGateway(result=_SECONDARY_GOAL),
+        metrics=reg,
+    )
+    assert await gw.translate_mission("go") == _SECONDARY_GOAL
+    out = reg.render_prometheus()
+    assert 'tier="primary",outcome="degraded"} 1' in out
+    assert 'tier="secondary",outcome="ok"} 1' in out
+
+
+@pytest.mark.asyncio
+async def test_served_counter_secondary_degraded_on_exception() -> None:
+    """Secondary raises → composite returns neutral, records secondary/degraded."""
+    reg = _metrics_registry()
+    gw = FallbackLLMGateway(
+        _FakeGateway(ready=False, degraded=True),  # primary unusable
+        _FakeGateway(raise_runtime_error=True),
+        metrics=reg,
+    )
+    assert await gw.translate_mission("go") == GoalVector()
+    assert 'tier="secondary",outcome="degraded"} 1' in reg.render_prometheus()
+
+
+@pytest.mark.asyncio
+async def test_served_counter_absent_when_metrics_none() -> None:
+    gw = FallbackLLMGateway(
+        _FakeGateway(result=_PRIMARY_GOAL),
+        _FakeGateway(result=_SECONDARY_GOAL),
+    )
+    # No registry → no crash, served path is a no-op.
+    assert await gw.translate_mission("go") == _PRIMARY_GOAL
