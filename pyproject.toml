@@ -139,7 +139,7 @@ dev = [
     # lines slightly differently, so a wider range here causes
     # `ruff format --check src/ tests/` to fail in CI even when it passes
     # locally. Bump both pyproject.toml and ci.yml in the same change.
-    "ruff==0.8.0",
+    "ruff==0.15.16",
     "mypy>=1.5",
     "types-PyYAML>=6.0",
     # PR-105b: close the second pre-existing mypy --strict error.
