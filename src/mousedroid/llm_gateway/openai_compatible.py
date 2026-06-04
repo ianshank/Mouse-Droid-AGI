@@ -37,6 +37,7 @@ from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import LLMConfig
+    from mousedroid.telemetry.metrics import MetricsRegistry
 
 _log = get_logger(__name__)
 
@@ -73,11 +74,23 @@ class OpenAICompatibleLLMGateway:
     ``cfg.llm.backend == "openai_compatible"``.
     """
 
-    def __init__(self, cfg: LLMConfig) -> None:
+    def __init__(self, cfg: LLMConfig, *, metrics: MetricsRegistry | None = None) -> None:
+        """Initialise the gateway.
+
+        Args:
+            cfg: LLM gateway configuration (``base_url`` / ``model_name`` /
+                ``request_timeout_s`` / prompts).
+            metrics: Optional shared :class:`MetricsRegistry`. When supplied,
+                every ``/v1/chat/completions`` round-trip records latency,
+                token usage (from the response ``usage`` block), and a
+                latency-budget-exceeded counter. ``None`` (the default) makes
+                each metric call a no-op so existing callers are unaffected.
+        """
         self._cfg = cfg
         self._session: aiohttp.ClientSession | None = None
         self._ready = False
         self._degraded = False
+        self._metrics = metrics
 
     @property
     def is_ready(self) -> bool:
@@ -169,22 +182,70 @@ class OpenAICompatibleLLMGateway:
         (gateway not started, network error, non-200, non-JSON content,
         missing fields). Never raises.
         """
+        content = await self._chat_completion(
+            self._cfg.system_prompt, nl_command, self._cfg.max_tokens
+        )
+        if content is None:
+            return GoalVector()
+        return self._parse_goal_vector(content)
+
+    async def answer_query(self, query: str) -> str:
+        """Answer a free-text operator query with prose (NOT a GoalVector).
+
+        The conversational sibling of :meth:`translate_mission`: same HTTP
+        endpoint and telemetry, driven with ``cfg.query_system_prompt`` and
+        ``cfg.query_max_tokens`` so the response is prose rather than the JSON
+        GoalVector. Runs OUTSIDE the 30 Hz control loop — operator Q&A only.
+
+        Like the OpenAI-compatible ``translate_mission`` this backend trusts
+        the upstream provider's guardrails and applies no local injection
+        filter (matching the existing posture for this backend).
+
+        Args:
+            query: Natural language question. Must be non-empty.
+
+        Returns:
+            The model's free-text answer, or ``""`` on any failure path
+            (not started / network error / non-200 / malformed body) — the
+            neutral result mirroring the all-zero GoalVector.
+
+        Raises:
+            ValueError: If ``query`` is empty.
+        """
+        if not query.strip():
+            msg = "query must be non-empty"
+            raise ValueError(msg)
+        content = await self._chat_completion(
+            self._cfg.query_system_prompt, query, self._cfg.query_max_tokens
+        )
+        return "" if content is None else content.strip()
+
+    async def _chat_completion(
+        self, system_prompt: str, user_content: str, max_tokens: int
+    ) -> str | None:
+        """POST one chat completion, record telemetry, return the message text.
+
+        Shared by :meth:`translate_mission` and :meth:`answer_query` so both
+        paths get identical latency / token / budget instrumentation. Returns
+        ``None`` on any failure path (the caller maps that to its own neutral
+        result) so the "never raises on backend failure" invariant holds.
+        """
         if self._session is None or not self._ready:
             _log.warning(
                 "llm_gateway_http_not_started",
                 ready=self._ready,
                 session=self._session is not None,
             )
-            return GoalVector()
+            return None
 
         payload: dict[str, Any] = {
             "model": self._cfg.model_name,
             "messages": [
-                {"role": "system", "content": self._cfg.system_prompt},
-                {"role": "user", "content": nl_command},
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
             ],
             "temperature": self._cfg.temperature,
-            "max_tokens": self._cfg.max_tokens,
+            "max_tokens": max_tokens,
         }
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._cfg.api_key is not None:
@@ -204,7 +265,7 @@ class OpenAICompatibleLLMGateway:
                         status=resp.status,
                         elapsed_ms=(time.monotonic() - start) * MILLISECONDS_PER_SECOND,
                     )
-                    return GoalVector()
+                    return None
                 body = await resp.json()
         except (asyncio.TimeoutError, aiohttp.ClientError, json.JSONDecodeError) as exc:
             # ``resp.json()`` raises ``json.JSONDecodeError`` when the
@@ -216,12 +277,42 @@ class OpenAICompatibleLLMGateway:
                 "llm_gateway_http_error",
                 error=f"{type(exc).__name__}:{exc}",
             )
-            return GoalVector()
+            return None
 
-        content = self._extract_message_content(body)
-        if content is None:
-            return GoalVector()
-        return self._parse_goal_vector(content)
+        elapsed_ms = (time.monotonic() - start) * MILLISECONDS_PER_SECOND
+        self._record_metrics(elapsed_ms, body)
+        return self._extract_message_content(body)
+
+    def _record_metrics(self, elapsed_ms: float, body: dict[str, Any]) -> None:
+        """Record latency / token / budget metrics for one completion (no-op if unset)."""
+        if self._metrics is None:
+            return
+        self._metrics.observe_llm_gateway_latency_ms(elapsed_ms)
+        if elapsed_ms > self._cfg.latency_target_ms:
+            self._metrics.inc_llm_latency_budget_exceeded(self._cfg.model_name)
+        input_tokens, output_tokens = self._extract_usage(body)
+        self._metrics.inc_llm_tokens(self._cfg.model_name, "input", input_tokens)
+        self._metrics.inc_llm_tokens(self._cfg.model_name, "output", output_tokens)
+
+    @staticmethod
+    def _extract_usage(body: dict[str, Any]) -> tuple[int | None, int | None]:
+        """Extract ``(input_tokens, output_tokens)`` from the OpenAI ``usage`` block.
+
+        OpenAI-compatible servers report ``prompt_tokens`` / ``completion_tokens``
+        under ``usage``. Returns ``(None, None)`` (or a partial pair) when the
+        block is absent or a field is non-integer so token recording degrades to
+        a no-op — :meth:`MetricsRegistry.inc_llm_tokens` treats ``None`` as
+        "no usage reported".
+        """
+        usage = body.get("usage")
+        if not isinstance(usage, dict):
+            return (None, None)
+
+        def _field(name: str) -> int | None:
+            raw = usage.get(name)
+            return raw if isinstance(raw, int) else None
+
+        return (_field("prompt_tokens"), _field("completion_tokens"))
 
     @staticmethod
     def _extract_message_content(body: dict[str, Any]) -> str | None:

@@ -88,6 +88,25 @@ class TestPhraseBankCoverage:
         for event, phrases in DEFAULT_PHRASES.items():
             assert len(phrases) > 0, f"Event {event!r} has no phrases"
 
+    def test_every_event_has_at_least_three_phrases(self) -> None:
+        """Each event offers >= 3 non-empty candidates for personality variation."""
+        for event, phrases in DEFAULT_PHRASES.items():
+            assert len(phrases) >= 3, f"Event {event!r} has fewer than 3 phrases"
+            assert all(p.strip() for p in phrases), f"Event {event!r} has an empty phrase"
+
+    def test_conversational_query_events_present(self) -> None:
+        """The answer_query path's conversational vocabulary is available."""
+        conversational = {
+            "query_received",
+            "query_answered",
+            "query_failed",
+            "thinking",
+            "acknowledge",
+            "affirmative",
+            "negative",
+        }
+        assert conversational.issubset(set(DEFAULT_PHRASES.keys()))
+
 
 def _make_engine(
     cooldown_s: float = 0.1,
@@ -350,6 +369,14 @@ async def test_global_threshold_used_when_no_event_override() -> None:
         "greeting_formal",
         "greeting_excited",
         "farewell",
+        # Conversational vocabulary (LLM answer_query path).
+        "query_received",
+        "query_answered",
+        "query_failed",
+        "thinking",
+        "acknowledge",
+        "affirmative",
+        "negative",
     ],
 )
 async def test_new_events_produce_non_empty_phrases(new_event: str) -> None:

@@ -18,7 +18,13 @@
 #   MOUSEDROID_SMOKE_CONTAINER    -- container name (default mousedroid)
 #   MOUSEDROID_JETSON_CONFIGS     -- forwarded to jetson_smoke_test.sh + container
 
-set -uo pipefail
+# ``-e`` (errexit) catches harness-logic bugs early (a failed cd / mkdir /
+# heredoc), aligning with scripts/jetson_smoke_test.sh. STAGE failures are NOT
+# fatal — they are captured explicitly via the rc/OVERALL_FAIL accumulator in
+# run_stage (which brackets each stage command in `set +e ... set -e`), and the
+# few blocking run_stage call sites are guarded with `|| true`/`|| break` so a
+# stage failure still records + writes SUMMARY.md rather than aborting the run.
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "${SCRIPT_DIR}")"
@@ -83,7 +89,11 @@ run_stage() {
         MOUSEDROID_SMOKE_STAGE_TIMEOUT="0" "$@" >"${logfile}" 2>&1
     fi
     local rc=$?
-    set +e
+    # Re-enable errexit (disabled above only for the stage command itself) so
+    # any harness-logic bug below still fails fast. Under the old `set -uo`
+    # regime this line was a redundant `set +e`; with `set -euo` it must
+    # restore errexit.
+    set -e
     if [[ ${rc} -eq 0 ]]; then
         record "${label}" "PASS"
         return 0
@@ -157,7 +167,7 @@ fi
     docker inspect --format '{{range .State.Health.Log}}exit={{.ExitCode}} | out={{.Output}}{{println}}{{end}}' "${CONTAINER}" 2>/dev/null | tail -3 || true
     echo "--- container python3 sanity ---"
     docker exec "${CONTAINER}" python3 -c "import sys, mousedroid, pytest; print('python', sys.version.split()[0]); print('mousedroid', mousedroid.__file__); print('pytest', pytest.__version__)"
-} > "${RUN_DIR}/container_health.log" 2>&1
+} > "${RUN_DIR}/container_health.log" 2>&1 || true  # informational: never abort under set -e
 record "container_health" "INFO" "see container_health.log"
 
 # --- Stages 1-8: delegated to jetson_smoke_test.sh via PY_WRAPPER --------
@@ -207,8 +217,10 @@ if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
 fi
 
 # --- Stage 10: app health check -------------------------------------------
+# `|| true`: run_stage already records the FAIL + sets OVERALL_FAIL; the guard
+# only stops `set -e` aborting before SUMMARY.md is written for a blocking stage.
 if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
-    run_stage "app_health" "yes" 60 bash scripts/jetson_smoke_test.sh app
+    run_stage "app_health" "yes" 60 bash scripts/jetson_smoke_test.sh app || true
 fi
 
 # --- Stage 11: hardware pytest suite (non-blocking until camera/USB speaker/HC-SR04 are fixed)
@@ -270,7 +282,7 @@ asyncio.run(main())'
     run_stage "llm_probe" "yes" 120 \
         env \
             MOUSEDROID_LLM__N_GPU_LAYERS=-1 \
-            "${PY_WRAPPER}" -c "${LLM_PROBE}"
+            "${PY_WRAPPER}" -c "${LLM_PROBE}" || true  # blocking stage; OVERALL_FAIL set in run_stage
 fi
 
 # --- Stage 15: New features probes (Phase B) ------------------------------
@@ -291,7 +303,7 @@ if [[ "${OVERALL_FAIL}" -eq 0 ]]; then
         env \
             MOUSEDROID_SMOKE_CONTAINER="${CONTAINER}" \
             MOUSEDROID_PROBE_REPORT_DIR="${RUN_DIR}/new_features" \
-            bash scripts/jetson_new_features_probe.sh
+            bash scripts/jetson_new_features_probe.sh || true  # blocking; OVERALL_FAIL set in run_stage
 else
     {
         echo "SKIPPED: Phase B was not run because Phase A failed earlier."

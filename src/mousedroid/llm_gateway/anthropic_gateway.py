@@ -239,18 +239,89 @@ class AnthropicLLMGateway:
         # (ValueError subclass) propagates by design.
         nl_command = self._injection_filter.sanitize(nl_command)
 
+        response = await self._create_message(
+            self._cfg.system_prompt, nl_command, self._cfg.max_tokens
+        )
+        if response is None:
+            return GoalVector()
+
+        text = self._extract_text(response)
+        goal = self._parse_goal_vector(text)
+        _log.info(
+            "anthropic_gateway_translation",
+            vx=goal.vx_target,
+            vy=goal.vy_target,
+            omega=goal.omega_target,
+        )
+        return goal
+
+    async def answer_query(self, query: str) -> str:
+        """Answer a free-text operator query with prose (NOT a GoalVector).
+
+        The conversational sibling of :meth:`translate_mission`: same Claude
+        client, injection filter, degrade semantics, and telemetry, driven with
+        ``cfg.query_system_prompt`` and ``cfg.query_max_tokens`` so the reply is
+        prose. The NL query still passes the local injection filter before it
+        leaves the rover for ``api.anthropic.com`` (this backend always filters
+        third-party egress). Runs OUTSIDE the 30 Hz control loop — operator Q&A.
+
+        Args:
+            query: Natural language question. Must be non-empty.
+
+        Returns:
+            The model's free-text answer, or ``""`` on any backend failure
+            (not started / degraded / API error) — the neutral result
+            mirroring the all-zero GoalVector.
+
+        Raises:
+            ValueError: If ``query`` is empty, or :class:`InjectionRejected`
+                (a ``ValueError`` subclass) when the filter rejects it.
+        """
+        if not query.strip():
+            msg = "query must be non-empty"
+            raise ValueError(msg)
+
+        # Same pre-egress filtering posture as translate_mission: the query is
+        # forwarded to a third-party cloud endpoint, so it is sanitised here.
+        query = self._injection_filter.sanitize(query)
+
+        response = await self._create_message(
+            self._cfg.query_system_prompt, query, self._cfg.query_max_tokens
+        )
+        if response is None:
+            return ""
+        answer = self._extract_text(response).strip()
+        _log.info("anthropic_gateway_query_answered", answer_chars=len(answer))
+        return answer
+
+    async def _create_message(
+        self, system_prompt: str, user_content: str, max_tokens: int
+    ) -> Any | None:
+        """Issue one ``messages.create`` call, manage degrade state + telemetry.
+
+        Shared by :meth:`translate_mission` and :meth:`answer_query` so both
+        paths get identical readiness, cancellation, degrade-flag, and metric
+        semantics. Returns the raw SDK response, or ``None`` when the gateway
+        is not started or the request failed (the caller maps ``None`` to its
+        own neutral result — ``GoalVector()`` or ``""``).
+
+        Raises:
+            asyncio.CancelledError: Propagated unchanged (cooperative
+                cancellation is not a backend failure, so ``_degraded`` is left
+                untouched — code-reviewer PR #107 round-3 finding 1).
+        """
         if self._client is None or not self._ready:
             _log.warning("anthropic_gateway_not_started", ready=self._ready)
-            return GoalVector()
+            return None
 
         start = time.monotonic()
         try:
             response = await self._client.messages.create(
                 model=self._cfg.model_name,
-                max_tokens=self._cfg.max_tokens,
+                max_tokens=max_tokens,
                 temperature=self._cfg.temperature,
-                system=self._cfg.system_prompt,
-                messages=[{"role": "user", "content": nl_command}],
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_content}],
                 timeout=self._cfg.request_timeout_s,
             )
         except asyncio.CancelledError:
@@ -267,7 +338,7 @@ class AnthropicLLMGateway:
                 "anthropic_gateway_request_failed",
                 error=f"{type(exc).__name__}:{exc}",
             )
-            return GoalVector()
+            return None
 
         # A successful round-trip clears a prior transient-failure degrade so
         # the gateway recovers in-session (and the FallbackLLMGateway composite
@@ -286,21 +357,11 @@ class AnthropicLLMGateway:
             )
             if self._metrics is not None:
                 self._metrics.inc_llm_latency_budget_exceeded(self._cfg.model_name)
-
-        text = self._extract_text(response)
-        goal = self._parse_goal_vector(text)
         if self._metrics is not None:
             input_tokens, output_tokens = self._extract_token_usage(response)
             self._metrics.inc_llm_tokens(self._cfg.model_name, "input", input_tokens)
             self._metrics.inc_llm_tokens(self._cfg.model_name, "output", output_tokens)
-        _log.info(
-            "anthropic_gateway_translation",
-            elapsed_ms=elapsed_ms,
-            vx=goal.vx_target,
-            vy=goal.vy_target,
-            omega=goal.omega_target,
-        )
-        return goal
+        return response
 
     @staticmethod
     def _extract_token_usage(response: Any) -> tuple[int | None, int | None]:

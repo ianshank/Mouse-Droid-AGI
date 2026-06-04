@@ -11,6 +11,7 @@ import json
 import time
 from typing import TYPE_CHECKING, Any
 
+from mousedroid.constants import MILLISECONDS_PER_SECOND
 from mousedroid.llm_gateway.protocol import GoalVector
 from mousedroid.logging.setup import get_logger
 from mousedroid.security.injection_filter import (
@@ -21,6 +22,7 @@ from mousedroid.security.injection_filter import (
 
 if TYPE_CHECKING:
     from mousedroid.llm_gateway.config import GatewayConfig
+    from mousedroid.telemetry.metrics import MetricsRegistry
 
 _log = get_logger(__name__)
 
@@ -38,6 +40,7 @@ class LLMGateway:
         cfg: GatewayConfig,
         *,
         injection_filter: PromptInjectionFilterProtocol | None = None,
+        metrics: MetricsRegistry | None = None,
     ) -> None:
         """Initialise gateway.
 
@@ -50,10 +53,22 @@ class LLMGateway:
                 existing call sites stay byte-identical. The factory wires
                 an external filter so the OpenClaw REST endpoint and the
                 LLM gateway share the same rejection envelope.
+            metrics: Optional shared :class:`MetricsRegistry`. When supplied,
+                every inference records round-trip latency, token usage
+                (derived from the llama-cpp ``usage`` block when present), and
+                a latency-budget-exceeded counter. ``None`` (the default)
+                makes every metric call a no-op, so existing callers behave
+                byte-identically. Mirrors the Anthropic backend's wiring so
+                ``cfg.llm.backend`` can be swapped without losing observability.
         """
         self._cfg = cfg
         self._model: Any = None
         self._degraded = False
+        self._metrics = metrics
+        # Prometheus ``model`` label for the token / budget counters. The GGUF
+        # filename is the closest stable identifier the local backend has (it
+        # carries no ``model_name``), and it is low-cardinality / operator-set.
+        self._model_label = cfg.model_path.name
         if injection_filter is None:
             injection_filter = RegexInjectionFilter(
                 cfg.injection_patterns,
@@ -152,44 +167,136 @@ class LLMGateway:
             return GoalVector()
 
         prompt = f"{self._cfg.system_prompt}\n\nMission: {nl_command}\n\nJSON:"
-
-        start_time = time.monotonic()
-        raw = await asyncio.to_thread(self._infer_sync, prompt)
-        elapsed_ms = (time.monotonic() - start_time) * 1000.0
-
-        if elapsed_ms > self._cfg.latency_target_ms:
-            _log.warning(
-                "llm_inference_slow",
-                elapsed_ms=elapsed_ms,
-                target_ms=self._cfg.latency_target_ms,
-            )
-
+        raw, _elapsed_ms = await self._run_inference(prompt, self._cfg.max_tokens)
         goal = self._parse_response(raw)
         _log.info(
             "llm_translation_completed",
-            elapsed_ms=elapsed_ms,
             vx=goal.vx_target,
             vy=goal.vy_target,
             omega=goal.omega_target,
         )
         return goal
 
-    def _infer_sync(self, prompt: str) -> str:  # pragma: no cover
+    async def answer_query(self, query: str) -> str:
+        """Answer a free-text operator query with prose (NOT a GoalVector).
+
+        The conversational sibling of :meth:`translate_mission`: it reuses the
+        same model, injection filter, and telemetry path but drives the model
+        with ``cfg.query_system_prompt`` (free-text persona) and
+        ``cfg.query_max_tokens`` instead of the JSON-navigation prompt. Runs
+        OUTSIDE the 30 Hz control loop — operator Q&A only.
+
+        Args:
+            query: Natural language question. Must be non-empty.
+
+        Returns:
+            The model's free-text answer, or ``""`` when the gateway is not
+            started (the neutral result, mirroring the all-zero GoalVector
+            ``translate_mission`` returns in the same state).
+
+        Raises:
+            ValueError: If ``query`` is empty or rejected by the injection
+                filter (``InjectionRejected`` is a ``ValueError`` subclass).
+        """
+        if not query.strip():
+            msg = "query must be non-empty"
+            raise ValueError(msg)
+
+        query = self._sanitize_command(query)
+
+        if self._model is None:
+            _log.warning("llm_gateway_not_started")
+            return ""
+
+        prompt = f"{self._cfg.query_system_prompt}\n\nQuestion: {query}\n\nAnswer:"
+        answer, _elapsed_ms = await self._run_inference(prompt, self._cfg.query_max_tokens)
+        answer = answer.strip()
+        _log.info("llm_query_answered", answer_chars=len(answer))
+        return answer
+
+    async def _run_inference(self, prompt: str, max_tokens: int) -> tuple[str, float]:
+        """Run one blocking inference off-loop, record telemetry, return text.
+
+        Shared by :meth:`translate_mission` and :meth:`answer_query` so both
+        paths get identical latency / token / budget instrumentation.
+
+        Args:
+            prompt: Fully-rendered prompt string.
+            max_tokens: Generation cap (``cfg.max_tokens`` for translation,
+                ``cfg.query_max_tokens`` for the query path).
+
+        Returns:
+            ``(text, elapsed_ms)`` — the model's raw completion text and the
+            wall-clock latency.
+        """
+        start_time = time.monotonic()
+        output = await asyncio.to_thread(self._infer_sync, prompt, max_tokens)
+        elapsed_ms = (time.monotonic() - start_time) * MILLISECONDS_PER_SECOND
+
+        slow = elapsed_ms > self._cfg.latency_target_ms
+        if slow:
+            _log.warning(
+                "llm_inference_slow",
+                elapsed_ms=elapsed_ms,
+                target_ms=self._cfg.latency_target_ms,
+            )
+        if self._metrics is not None:
+            self._metrics.observe_llm_gateway_latency_ms(elapsed_ms)
+            if slow:
+                self._metrics.inc_llm_latency_budget_exceeded(self._model_label)
+            input_tokens, output_tokens = self._extract_usage(output)
+            self._metrics.inc_llm_tokens(self._model_label, "input", input_tokens)
+            self._metrics.inc_llm_tokens(self._model_label, "output", output_tokens)
+
+        return self._extract_text(output), elapsed_ms
+
+    def _infer_sync(self, prompt: str, max_tokens: int) -> dict[str, Any]:  # pragma: no cover
         """Run blocking LLM inference (via to_thread).
 
         Args:
             prompt: Full prompt string.
+            max_tokens: Generation token cap for this call.
 
         Returns:
-            Raw model output text.
+            The raw llama-cpp output mapping (carries ``choices`` and, when the
+            build reports it, a ``usage`` block consumed by :meth:`_extract_usage`).
         """
         output = self._model(
             prompt,
-            max_tokens=self._cfg.max_tokens,
+            max_tokens=max_tokens,
             temperature=self._cfg.temperature,
             stop=self._cfg.stop_tokens,
         )
-        return str(output["choices"][0]["text"])
+        return dict(output)
+
+    @staticmethod
+    def _extract_text(output: dict[str, Any]) -> str:
+        """Pull ``choices[0].text`` defensively, returning ``""`` if malformed."""
+        try:
+            return str(output["choices"][0]["text"])
+        except (KeyError, IndexError, TypeError):
+            _log.warning("llm_inference_malformed_output")
+            return ""
+
+    @staticmethod
+    def _extract_usage(output: dict[str, Any]) -> tuple[int | None, int | None]:
+        """Extract ``(input_tokens, output_tokens)`` from the llama-cpp usage block.
+
+        llama-cpp reports OpenAI-style ``prompt_tokens`` / ``completion_tokens``
+        under ``usage``. Returns ``(None, None)`` (or a partial pair) when the
+        block is absent or a field is non-integer so token recording degrades to
+        a no-op rather than crashing — :meth:`MetricsRegistry.inc_llm_tokens`
+        treats ``None`` as "no usage reported".
+        """
+        usage = output.get("usage")
+        if not isinstance(usage, dict):
+            return (None, None)
+
+        def _field(name: str) -> int | None:
+            raw = usage.get(name)
+            return raw if isinstance(raw, int) else None
+
+        return (_field("prompt_tokens"), _field("completion_tokens"))
 
     def _parse_response(self, raw: str) -> GoalVector:
         """Parse LLM JSON response into GoalVector.
