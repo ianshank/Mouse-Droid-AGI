@@ -231,10 +231,14 @@ def test_load_model_passes_n_batch() -> None:
 
 
 async def test_translate_mission_with_model(gateway: LLMGateway):
-    """Successful translation with mocked model."""
+    """Successful translation with mocked model.
+
+    ``_infer_sync`` now returns the raw llama-cpp output mapping (``choices`` +
+    optional ``usage``); the gateway extracts the completion text from it.
+    """
     gateway._model = MagicMock()
     raw_json = '{"vx": 0.7, "vy": 0.0, "omega": -0.2}'
-    with patch.object(gateway, "_infer_sync", return_value=raw_json):
+    with patch.object(gateway, "_infer_sync", return_value={"choices": [{"text": raw_json}]}):
         result = await gateway.translate_mission("go forward fast")
     assert result.vx_target == 0.7
     assert result.omega_target == -0.2
@@ -249,9 +253,9 @@ async def test_translate_mission_logs_slow_inference(gateway: LLMGateway):
     )
     raw_json = '{"vx": 0.5, "vy": 0.0, "omega": 0.0}'
 
-    def slow_infer(prompt: str) -> str:
+    def slow_infer(prompt: str, max_tokens: int) -> dict[str, object]:
         time.sleep(0.01)  # 10ms — well above 1ms target
-        return raw_json
+        return {"choices": [{"text": raw_json}]}
 
     with patch.object(gateway, "_infer_sync", side_effect=slow_infer):
         result = await gateway.translate_mission("go forward")
@@ -261,7 +265,9 @@ async def test_translate_mission_logs_slow_inference(gateway: LLMGateway):
 async def test_translate_mission_timeout_model_returns_default(gateway: LLMGateway):
     """Malformed model response returns default GoalVector."""
     gateway._model = MagicMock()
-    with patch.object(gateway, "_infer_sync", return_value="garbage output!!!"):
+    with patch.object(
+        gateway, "_infer_sync", return_value={"choices": [{"text": "garbage output!!!"}]}
+    ):
         result = await gateway.translate_mission("do something")
     assert result == GoalVector()
 

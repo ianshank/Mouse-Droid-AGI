@@ -34,6 +34,14 @@ _EXPECTED_EVENTS = [
     "greeting_formal",
     "greeting_excited",
     "farewell",
+    # Conversational vocabulary (LLM answer_query path).
+    "query_received",
+    "query_answered",
+    "query_failed",
+    "thinking",
+    "acknowledge",
+    "affirmative",
+    "negative",
 ]
 
 

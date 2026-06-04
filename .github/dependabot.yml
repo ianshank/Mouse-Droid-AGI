@@ -1,0 +1,16 @@
+# Dependabot keeps the SHA-pinned GitHub Actions current: it opens weekly PRs
+# bumping each `uses:` pin (and updating the trailing version comment) so the
+# security-hardened pins never go stale, and tracks Python deps from pyproject.toml.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
