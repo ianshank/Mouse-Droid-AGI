@@ -97,7 +97,7 @@ isaac = [
     # Tier C4 pins the upper bound — Isaac Lab tracks aggressive API
     # iteration on its 0.x line; pinning <0.30 keeps the operator's
     # Linux validation playbook (ADR-009 amendment) reproducible.
-    "isaaclab>=0.20,<0.30",
+    "isaaclab>=0.20,<2.2",
     "gymnasium>=0.29",
 ]
 hailo = [
