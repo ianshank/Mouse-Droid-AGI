@@ -129,6 +129,24 @@ async def test_llama_token_recording_degrades_without_usage_block() -> None:
     assert "_llm_tokens_total" not in out  # nothing fabricated
 
 
+@pytest.mark.asyncio
+async def test_llama_answer_query_empty_on_malformed_output() -> None:
+    """A malformed model output (no choices) yields the neutral empty answer."""
+    gw = LLMGateway(GatewayConfig())
+    gw._model = MagicMock(return_value={"choices": []})  # IndexError in _extract_text
+    assert await gw.answer_query("hi") == ""
+
+
+@pytest.mark.asyncio
+async def test_llama_records_budget_exceeded_when_slow() -> None:
+    """A round-trip over the latency target increments the budget counter."""
+    reg = _registry()
+    gw = LLMGateway(GatewayConfig(latency_target_ms=0.0001), metrics=reg)
+    gw._model = MagicMock(return_value=_llama_output("ok"))
+    await gw.answer_query("hi")
+    assert "llm_latency_budget_exceeded_total" in reg.render_prometheus()
+
+
 # --------------------------------------------------------------------------- #
 # openai_compatible — answer_query + telemetry
 # --------------------------------------------------------------------------- #
@@ -195,6 +213,18 @@ async def test_openai_records_latency_and_tokens() -> None:
     assert "llm_gateway_latency_ms_count 1" in out
     assert 'token_type="input"} 11' in out
     assert 'token_type="output"} 5' in out
+
+
+@pytest.mark.asyncio
+async def test_openai_records_latency_without_usage_block() -> None:
+    """No ``usage`` in the body → latency recorded, no token series fabricated."""
+    reg = _registry()
+    gw = OpenAICompatibleLLMGateway(LLMConfig(backend="openai_compatible"), metrics=reg)
+    _openai_ready(gw, {"choices": [{"message": {"content": "ok"}}]})  # no usage
+    await gw.answer_query("hi")
+    out = reg.render_prometheus()
+    assert "llm_gateway_latency_ms_count 1" in out
+    assert "_llm_tokens_total" not in out
 
 
 @pytest.mark.asyncio
@@ -432,3 +462,29 @@ async def test_fallback_answer_query_served_counter() -> None:
     gw = FallbackLLMGateway(primary, secondary, metrics=reg)
     await gw.answer_query("hi")
     assert 'tier="primary",outcome="ok"} 1' in reg.render_prometheus()
+
+
+@pytest.mark.asyncio
+async def test_fallback_answer_query_child_without_capability_fails_over() -> None:
+    """A child lacking answer_query is treated as a backend failure (defensive edge).
+
+    The primary here implements only the base LLMGatewayProtocol (no
+    answer_query); the composite's ``_answer_query`` raises AttributeError,
+    which the router treats as a degraded primary and fails over.
+    """
+
+    class _NoQueryGateway:
+        is_ready = True
+        is_degraded = False
+
+        async def start(self) -> None: ...
+
+        async def translate_mission(self, nl_command: str) -> GoalVector:
+            return GoalVector()
+
+        async def stop(self) -> None: ...
+
+    primary = _NoQueryGateway()
+    secondary = _FakeQueryGateway(answer="from secondary")
+    gw = FallbackLLMGateway(primary, secondary)  # type: ignore[arg-type]
+    assert await gw.answer_query("hi") == "from secondary"

@@ -12,10 +12,10 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from mousedroid.constants import MILLISECONDS_PER_SECOND
+from mousedroid.llm_gateway._telemetry import extract_token_pair, record_round_trip_metrics
 from mousedroid.llm_gateway.protocol import GoalVector
 from mousedroid.logging.setup import get_logger
 from mousedroid.security.injection_filter import (
-    InjectionRejected,
     PromptInjectionFilterProtocol,
     RegexInjectionFilter,
 )
@@ -133,15 +133,10 @@ class LLMGateway:
 
         Delegates to the injected :class:`PromptInjectionFilterProtocol`
         so the same rejection envelope applies across every NL ingress.
-        :class:`InjectionRejected` is a :class:`ValueError` subclass —
+        ``InjectionRejected`` (a :class:`ValueError` subclass) propagates —
         callers that catch ``ValueError`` keep working unchanged.
         """
-        try:
-            return self._injection_filter.sanitize(text)
-        except InjectionRejected:
-            raise
-        except ValueError:
-            raise
+        return self._injection_filter.sanitize(text)
 
     async def translate_mission(self, nl_command: str) -> GoalVector:
         """Translate NL mission to GoalVector.
@@ -240,13 +235,17 @@ class LLMGateway:
                 elapsed_ms=elapsed_ms,
                 target_ms=self._cfg.latency_target_ms,
             )
-        if self._metrics is not None:
-            self._metrics.observe_llm_gateway_latency_ms(elapsed_ms)
-            if slow:
-                self._metrics.inc_llm_latency_budget_exceeded(self._model_label)
-            input_tokens, output_tokens = self._extract_usage(output)
-            self._metrics.inc_llm_tokens(self._model_label, "input", input_tokens)
-            self._metrics.inc_llm_tokens(self._model_label, "output", output_tokens)
+        input_tokens, output_tokens = extract_token_pair(
+            output.get("usage"), input_key="prompt_tokens", output_key="completion_tokens"
+        )
+        record_round_trip_metrics(
+            self._metrics,
+            model=self._model_label,
+            elapsed_ms=elapsed_ms,
+            over_budget=slow,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
 
         return self._extract_text(output), elapsed_ms
 
@@ -277,26 +276,6 @@ class LLMGateway:
         except (KeyError, IndexError, TypeError):
             _log.warning("llm_inference_malformed_output")
             return ""
-
-    @staticmethod
-    def _extract_usage(output: dict[str, Any]) -> tuple[int | None, int | None]:
-        """Extract ``(input_tokens, output_tokens)`` from the llama-cpp usage block.
-
-        llama-cpp reports OpenAI-style ``prompt_tokens`` / ``completion_tokens``
-        under ``usage``. Returns ``(None, None)`` (or a partial pair) when the
-        block is absent or a field is non-integer so token recording degrades to
-        a no-op rather than crashing — :meth:`MetricsRegistry.inc_llm_tokens`
-        treats ``None`` as "no usage reported".
-        """
-        usage = output.get("usage")
-        if not isinstance(usage, dict):
-            return (None, None)
-
-        def _field(name: str) -> int | None:
-            raw = usage.get(name)
-            return raw if isinstance(raw, int) else None
-
-        return (_field("prompt_tokens"), _field("completion_tokens"))
 
     def _parse_response(self, raw: str) -> GoalVector:
         """Parse LLM JSON response into GoalVector.

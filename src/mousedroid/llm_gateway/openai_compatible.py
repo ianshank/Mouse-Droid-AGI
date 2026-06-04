@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any
 import aiohttp
 
 from mousedroid.constants import MILLISECONDS_PER_SECOND
+from mousedroid.llm_gateway._telemetry import extract_token_pair, record_round_trip_metrics
 from mousedroid.llm_gateway.protocol import GoalVector
 from mousedroid.logging.setup import get_logger
 
@@ -280,39 +281,18 @@ class OpenAICompatibleLLMGateway:
             return None
 
         elapsed_ms = (time.monotonic() - start) * MILLISECONDS_PER_SECOND
-        self._record_metrics(elapsed_ms, body)
+        input_tokens, output_tokens = extract_token_pair(
+            body.get("usage"), input_key="prompt_tokens", output_key="completion_tokens"
+        )
+        record_round_trip_metrics(
+            self._metrics,
+            model=self._cfg.model_name,
+            elapsed_ms=elapsed_ms,
+            over_budget=elapsed_ms > self._cfg.latency_target_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
         return self._extract_message_content(body)
-
-    def _record_metrics(self, elapsed_ms: float, body: dict[str, Any]) -> None:
-        """Record latency / token / budget metrics for one completion (no-op if unset)."""
-        if self._metrics is None:
-            return
-        self._metrics.observe_llm_gateway_latency_ms(elapsed_ms)
-        if elapsed_ms > self._cfg.latency_target_ms:
-            self._metrics.inc_llm_latency_budget_exceeded(self._cfg.model_name)
-        input_tokens, output_tokens = self._extract_usage(body)
-        self._metrics.inc_llm_tokens(self._cfg.model_name, "input", input_tokens)
-        self._metrics.inc_llm_tokens(self._cfg.model_name, "output", output_tokens)
-
-    @staticmethod
-    def _extract_usage(body: dict[str, Any]) -> tuple[int | None, int | None]:
-        """Extract ``(input_tokens, output_tokens)`` from the OpenAI ``usage`` block.
-
-        OpenAI-compatible servers report ``prompt_tokens`` / ``completion_tokens``
-        under ``usage``. Returns ``(None, None)`` (or a partial pair) when the
-        block is absent or a field is non-integer so token recording degrades to
-        a no-op — :meth:`MetricsRegistry.inc_llm_tokens` treats ``None`` as
-        "no usage reported".
-        """
-        usage = body.get("usage")
-        if not isinstance(usage, dict):
-            return (None, None)
-
-        def _field(name: str) -> int | None:
-            raw = usage.get(name)
-            return raw if isinstance(raw, int) else None
-
-        return (_field("prompt_tokens"), _field("completion_tokens"))
 
     @staticmethod
     def _extract_message_content(body: dict[str, Any]) -> str | None:

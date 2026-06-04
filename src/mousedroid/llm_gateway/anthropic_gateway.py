@@ -48,6 +48,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from mousedroid.constants import MILLISECONDS_PER_SECOND
+from mousedroid.llm_gateway._telemetry import extract_token_pair, record_round_trip_metrics
 from mousedroid.llm_gateway.protocol import GoalVector
 from mousedroid.logging.setup import get_logger
 from mousedroid.security.injection_filter import (
@@ -347,47 +348,38 @@ class AnthropicLLMGateway:
         # ``_ready`` False, so this line is unreachable in that state.
         self._degraded = False
         elapsed_ms = (time.monotonic() - start) * MILLISECONDS_PER_SECOND
-        if self._metrics is not None:
-            self._metrics.observe_llm_gateway_latency_ms(elapsed_ms)
-        if elapsed_ms > self._cfg.latency_target_ms:
+        slow = elapsed_ms > self._cfg.latency_target_ms
+        if slow:
             _log.warning(
                 "anthropic_gateway_slow",
                 elapsed_ms=elapsed_ms,
                 target_ms=self._cfg.latency_target_ms,
             )
-            if self._metrics is not None:
-                self._metrics.inc_llm_latency_budget_exceeded(self._cfg.model_name)
-        if self._metrics is not None:
-            input_tokens, output_tokens = self._extract_token_usage(response)
-            self._metrics.inc_llm_tokens(self._cfg.model_name, "input", input_tokens)
-            self._metrics.inc_llm_tokens(self._cfg.model_name, "output", output_tokens)
+        input_tokens, output_tokens = extract_token_pair(
+            self._usage_of(response), input_key="input_tokens", output_key="output_tokens"
+        )
+        record_round_trip_metrics(
+            self._metrics,
+            model=self._cfg.model_name,
+            elapsed_ms=elapsed_ms,
+            over_budget=slow,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
         return response
 
     @staticmethod
-    def _extract_token_usage(response: Any) -> tuple[int | None, int | None]:
-        """Extract ``(input_tokens, output_tokens)`` from the response usage.
+    def _usage_of(response: Any) -> Any:
+        """Return the response's ``usage`` container (object, dict, or ``None``).
 
         Defensive like :meth:`_extract_text`: the Messages API attaches a
-        ``usage`` object with ``input_tokens`` / ``output_tokens``, but mocks
-        and alternative clients may omit it or arrive as a plain dict. Returns
-        ``(None, None)`` (or a partial pair) when usage is absent so token
-        recording degrades without crashing — preserving the "never raises on
-        backend" invariant. Production code must call THIS helper, never touch
-        ``response.usage`` directly.
+        ``usage`` object, but mocks and alternative clients may omit it or
+        arrive as a plain dict. The actual token-count parsing is delegated to
+        :func:`mousedroid.llm_gateway._telemetry.extract_token_pair`.
         """
-        usage = (
-            response.get("usage")
-            if isinstance(response, dict)
-            else getattr(response, "usage", None)
-        )
-        if usage is None:
-            return (None, None)
-
-        def _field(name: str) -> int | None:
-            raw = usage.get(name) if isinstance(usage, dict) else getattr(usage, name, None)
-            return raw if isinstance(raw, int) else None
-
-        return (_field("input_tokens"), _field("output_tokens"))
+        if isinstance(response, dict):
+            return response.get("usage")
+        return getattr(response, "usage", None)
 
     @staticmethod
     def _extract_text(response: Any) -> str:
