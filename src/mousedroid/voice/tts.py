@@ -7,7 +7,7 @@ Synthesis is offloaded to a thread to avoid blocking the event loop.
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -22,11 +22,52 @@ _log = get_logger(__name__)
 
 
 class _PiperVoiceLike(Protocol):
-    """Minimal interface required from a loaded piper voice."""
+    """Minimal interface required from a loaded piper voice.
 
-    def synthesize_wav(self, text: str) -> bytes: ...
+    ``synthesize_wav`` is intentionally permissive: across piper-tts versions it
+    is either ``synthesize_wav(text) -> bytes`` (0.0.7..0.x) or
+    ``synthesize_wav(text, wav_file, ...)`` (piper 1.x, writes into a
+    ``wave.Wave_write``). The concrete arity is resolved at load time.
+    """
+
+    def synthesize_wav(self, text: str, *args: Any, **kwargs: Any) -> Any: ...
 
     def synthesize(self, text: str, *args: Any, **kwargs: Any) -> Any: ...
+
+
+def _synthesize_wav_needs_file(voice: object) -> bool:
+    """Return True if ``synthesize_wav`` requires a ``wav_file`` argument.
+
+    piper-tts 1.x exposes ``synthesize_wav(text, wav_file, ...)`` which writes a
+    complete WAV into a caller-provided ``wave.Wave_write`` object, whereas
+    0.0.7..0.x exposed ``synthesize_wav(text) -> bytes``. The signature is
+    inspected once at load so the hot path never re-introspects. Falls back to
+    ``False`` (the bytes API) when the signature can't be read (e.g. a C
+    extension or a ``MagicMock``).
+
+    Args:
+        voice: A loaded piper voice object.
+
+    Returns:
+        ``True`` for the piper-1.x ``(text, wav_file)`` form, else ``False``.
+    """
+    import inspect
+
+    synth_wav = getattr(voice, "synthesize_wav", None)
+    if not callable(synth_wav):
+        return False
+    try:
+        positional = [
+            p
+            for p in inspect.signature(synth_wav).parameters.values()
+            if p.kind
+            in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        ]
+    except (TypeError, ValueError):
+        return False
+    # ``self`` is already excluded for a bound method, so positional[0] is
+    # ``text``; a required positional beyond it means the wav-file-writing API.
+    return any(p.default is inspect.Parameter.empty for p in positional[1:])
 
 
 class PiperTTS:
@@ -52,6 +93,9 @@ class PiperTTS:
         self._cfg = cfg
         self._voice: _PiperVoiceLike | None = None
         self._use_wav_api: bool = False
+        # piper 1.x ``synthesize_wav(text, wav_file)`` vs ``synthesize_wav(text)``
+        # — resolved in ``start()`` and cached off the hot path.
+        self._wav_needs_file: bool = False
         self._consecutive_failures: int = 0
         _log.info(
             "piper_tts_init",
@@ -59,6 +103,13 @@ class PiperTTS:
             sample_rate=cfg.tts_sample_rate,
             output_volume=cfg.output_volume,
         )
+
+    @property
+    def _api_label(self) -> str:
+        """Human-readable label for the resolved synthesis API (for logs)."""
+        if not self._use_wav_api:
+            return "synthesize"
+        return "synthesize_wav(text,wav_file)" if self._wav_needs_file else "synthesize_wav(text)"
 
     def start(self) -> None:
         """Load the piper voice model and detect the API generation."""
@@ -80,14 +131,16 @@ class PiperTTS:
                 )
                 self._voice = PiperVoice.load(resolved_path)
                 self._use_wav_api = hasattr(self._voice, "synthesize_wav")
+                if self._use_wav_api:
+                    self._wav_needs_file = _synthesize_wav_needs_file(self._voice)
                 _log.info(
                     "piper_tts_model_loaded",
                     path=resolved_path,
-                    api="synthesize_wav" if self._use_wav_api else "synthesize",
+                    api=self._api_label,
                 )
                 _log.info(
                     "voice_tts_api_selected",
-                    api="synthesize_wav" if self._use_wav_api else "synthesize",
+                    api=self._api_label,
                 )
             else:
                 _log.warning("piper_tts_no_model_path")
@@ -102,7 +155,12 @@ class PiperTTS:
         _log.info("piper_tts_stopped")
 
     def _synthesize_via_wav(self, text: str) -> bytes:
-        """Synthesise using the modern piper API that returns WAV bytes directly.
+        """Synthesise using the ``synthesize_wav`` API (both arities).
+
+        Handles both piper shapes resolved at load:
+        - bytes API: ``synthesize_wav(text) -> bytes``.
+        - piper 1.x: ``synthesize_wav(text, wav_file)`` writes a complete WAV
+          (it sets the WAV format itself) into a caller-provided wave writer.
 
         Args:
             text: Text to synthesise.
@@ -110,8 +168,20 @@ class PiperTTS:
         Returns:
             Raw WAV file bytes.
         """
-        assert self._voice is not None  # guarded by caller
-        return self._voice.synthesize_wav(text)
+        if self._voice is None:
+            raise RuntimeError(
+                "piper voice not loaded — caller must check _voice "
+                "before invoking _synthesize_via_wav"
+            )
+        if not self._wav_needs_file:
+            return cast("bytes", self._voice.synthesize_wav(text))
+        import io
+        import wave
+
+        wav_buffer = io.BytesIO()
+        with wave.open(wav_buffer, "wb") as wav_file:
+            self._voice.synthesize_wav(text, wav_file)
+        return wav_buffer.getvalue()
 
     def _synthesize_via_legacy(self, text: str) -> bytes:
         """Synthesise using the legacy piper API that writes into a wave writer.
@@ -125,7 +195,11 @@ class PiperTTS:
         import io
         import wave
 
-        assert self._voice is not None  # guarded by caller
+        if self._voice is None:
+            raise RuntimeError(
+                "piper voice not loaded — caller must check _voice "
+                "before invoking _synthesize_via_legacy"
+            )
         wav_buffer = io.BytesIO()
         with wave.open(wav_buffer, "wb") as wav_file:
             wav_file.setnchannels(1)
@@ -167,7 +241,7 @@ class PiperTTS:
             )
             log_fn(
                 "voice_tts_synthesize_failed",
-                api="synthesize_wav" if self._use_wav_api else "synthesize",
+                api=self._api_label,
                 exc_type=type(exc).__name__,
                 exc_msg=str(exc),
                 consecutive_failures=self._consecutive_failures,

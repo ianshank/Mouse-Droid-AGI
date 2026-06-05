@@ -12,6 +12,7 @@ same fake shapes the per-backend test modules use.
 from __future__ import annotations
 
 import json
+import sys
 import types
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -138,6 +139,16 @@ async def test_llama_answer_query_empty_on_malformed_output() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason=(
+        "Windows time.monotonic + Sleep() are timer-tick-coarse "
+        "(~15 ms); a sub-ms latency_target_ms threshold cannot be "
+        "reliably crossed by a synchronous mock round-trip. The "
+        "behaviour is exercised on Linux CI where the clock has "
+        "nanosecond resolution."
+    ),
+)
 async def test_llama_records_budget_exceeded_when_slow() -> None:
     """A round-trip over the latency target increments the budget counter."""
     reg = _registry()

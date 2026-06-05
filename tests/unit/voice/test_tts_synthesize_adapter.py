@@ -16,6 +16,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 import structlog
 import structlog.testing
 
@@ -130,6 +131,88 @@ class TestSynthesizeViaWav:
         assert result.dtype == np.float32
 
 
+class _FakeVoiceWavBytes:
+    """piper 0.0.7..0.x: ``synthesize_wav(text) -> bytes``."""
+
+    def __init__(self, wav: bytes) -> None:
+        self._wav = wav
+
+    def synthesize_wav(self, text: str) -> bytes:
+        return self._wav
+
+
+class _FakeVoiceWavFile:
+    """piper 1.x: ``synthesize_wav(text, wav_file, ...)`` writes a complete WAV."""
+
+    def __init__(self, frames: bytes, sample_rate: int) -> None:
+        self._frames = frames
+        self._sr = sample_rate
+
+    def synthesize_wav(
+        self,
+        text: str,
+        wav_file: Any,
+        syn_config: Any = None,
+        set_wav_format: bool = True,
+    ) -> None:
+        if set_wav_format:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(self._sr)
+        wav_file.writeframes(self._frames)
+
+
+class _FakeVoiceLegacy:
+    """oldest piper: only ``synthesize(text, wav_file)``."""
+
+    def synthesize(self, text: str, wav_file: Any) -> None: ...
+
+
+class TestApiModeDetection:
+    """``_synthesize_wav_needs_file`` signature inspection (piper 1.x guard)."""
+
+    def test_wav_file_form_detected(self) -> None:
+        from mousedroid.voice.tts import _synthesize_wav_needs_file
+
+        assert _synthesize_wav_needs_file(_FakeVoiceWavFile(b"", 22050)) is True
+
+    def test_wav_bytes_form_detected(self) -> None:
+        from mousedroid.voice.tts import _synthesize_wav_needs_file
+
+        assert _synthesize_wav_needs_file(_FakeVoiceWavBytes(b"")) is False
+
+    def test_legacy_voice_has_no_wav(self) -> None:
+        from mousedroid.voice.tts import _synthesize_wav_needs_file
+
+        assert _synthesize_wav_needs_file(_FakeVoiceLegacy()) is False
+
+    def test_start_resolves_wav_file_label(self) -> None:
+        """A piper-1.x voice resolves to the (text,wav_file) api label."""
+        tts = PiperTTS(_make_cfg())
+        tts._voice = _FakeVoiceWavFile(b"", 22050)
+        tts._use_wav_api = True
+        tts._wav_needs_file = True
+        assert tts._api_label == "synthesize_wav(text,wav_file)"
+
+
+class TestSynthesizeViaWavFile:
+    """piper-1.x ``synthesize_wav(text, wav_file)`` adapter path."""
+
+    def test_returns_samples_from_writer(self) -> None:
+        cfg = _make_cfg(output_volume=1.0)
+        tts = PiperTTS(cfg)
+        frames = np.zeros(64, dtype=np.int16).tobytes()
+        tts._voice = _FakeVoiceWavFile(frames, 22050)
+        tts._use_wav_api = True
+        tts._wav_needs_file = True
+
+        result = tts._synthesize_sync("hello")
+
+        assert isinstance(result, np.ndarray)
+        assert result.dtype == np.float32
+        assert result.size == 64
+
+
 class TestFailureTracking:
     """Consecutive-failure counter and WARNING→ERROR escalation."""
 
@@ -170,3 +253,30 @@ class TestFailureTracking:
 
         tts._synthesize_sync("succeed")
         assert tts._consecutive_failures == 0
+
+
+class TestVoiceNoneGuards:
+    """Explicit-guard contract: callers must check _voice first.
+
+    The private ``_synthesize_via_wav`` / ``_synthesize_via_legacy`` paths
+    formerly relied on an ``assert self._voice is not None`` for type
+    narrowing. Asserts strip under ``PYTHONOPTIMIZE=1`` (the Jetson Docker
+    entrypoint default), so a misuse would surface a bare AttributeError.
+    The CodeRabbit PR #117 fix replaces those with explicit RuntimeErrors
+    — these tests pin the new contract so a future refactor cannot quietly
+    re-introduce the assert.
+    """
+
+    def test_synthesize_via_wav_raises_runtime_error_when_voice_none(self) -> None:
+        cfg = _make_cfg()
+        tts = PiperTTS(cfg)
+        tts._voice = None  # caller-contract violation
+        with pytest.raises(RuntimeError, match="_synthesize_via_wav"):
+            tts._synthesize_via_wav("hello")
+
+    def test_synthesize_via_legacy_raises_runtime_error_when_voice_none(self) -> None:
+        cfg = _make_cfg()
+        tts = PiperTTS(cfg)
+        tts._voice = None  # caller-contract violation
+        with pytest.raises(RuntimeError, match="_synthesize_via_legacy"):
+            tts._synthesize_via_legacy("hello")

@@ -247,14 +247,23 @@ class AnthropicLLMGateway:
             return GoalVector()
 
         text = self._extract_text(response)
-        goal = self._parse_goal_vector(text)
+        parsed = self._parse_goal_vector(text)
+        if parsed is None:
+            # API round-trip succeeded (latency / tokens already recorded by
+            # ``_create_message``), but the model returned content the parser
+            # treats as a backend failure (empty / non-JSON / non-object /
+            # non-numeric). Distinct log event so the mission-outcome signal
+            # is preserved alongside the per-call API metrics (CodeRabbit
+            # PR #117).
+            _log.info("anthropic_gateway_translation_unparseable")
+            return GoalVector()
         _log.info(
             "anthropic_gateway_translation",
-            vx=goal.vx_target,
-            vy=goal.vy_target,
-            omega=goal.omega_target,
+            vx=parsed.vx_target,
+            vy=parsed.vy_target,
+            omega=parsed.omega_target,
         )
-        return goal
+        return parsed
 
     async def answer_query(self, query: str) -> str:
         """Answer a free-text operator query with prose (NOT a GoalVector).
@@ -405,15 +414,18 @@ class AnthropicLLMGateway:
         return "".join(chunks).strip()
 
     @staticmethod
-    def _parse_goal_vector(content: str) -> GoalVector:
+    def _parse_goal_vector(content: str) -> GoalVector | None:
         """Parse ``content`` as JSON and build a clamped :class:`GoalVector`.
 
         Keys (``"vx"``, ``"vy"``, ``"omega"``) and the ``[-1, 1]`` clamp
         mirror the legacy and OpenAI-compatible parsers so swapping
         ``cfg.llm.backend`` produces equivalent ``GoalVector`` output for a
-        given model response. Returns a neutral :class:`GoalVector` when
-        ``content`` is empty / not JSON, when the decoded payload isn't a
-        JSON object, or when a field is non-numeric.
+        given model response. Returns ``None`` when ``content`` is empty /
+        not JSON, when the decoded payload isn't a JSON object, or when a
+        field is non-numeric — letting the caller distinguish a successfully-
+        translated mission from a backend-failure mode so observability
+        captures the mission-outcome signal separately from the API
+        round-trip signal (CodeRabbit PR #117).
 
         Tolerates models that wrap the object in markdown code fences or
         surrounding prose by extracting the first ``{...}`` span before
@@ -421,7 +433,7 @@ class AnthropicLLMGateway:
         """
         if not content:
             _log.warning("anthropic_gateway_empty_content")
-            return GoalVector()
+            return None
         match = _JSON_OBJECT_RE.search(content)
         if match is not None:
             content = match.group(0)
@@ -429,10 +441,10 @@ class AnthropicLLMGateway:
             doc = json.loads(content)
         except json.JSONDecodeError:
             _log.warning("anthropic_gateway_non_json_content")
-            return GoalVector()
+            return None
         if not isinstance(doc, dict):
             _log.warning("anthropic_gateway_non_object_content")
-            return GoalVector()
+            return None
         try:
             return GoalVector(
                 vx_target=_clamp_unit(float(doc.get("vx", 0.0))),
@@ -441,7 +453,7 @@ class AnthropicLLMGateway:
             )
         except (TypeError, ValueError):
             _log.warning("anthropic_gateway_non_numeric_fields")
-            return GoalVector()
+            return None
 
     async def stop(self) -> None:
         """Release the client reference.

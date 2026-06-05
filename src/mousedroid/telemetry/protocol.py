@@ -65,6 +65,24 @@ class TelemetryFrame:
     # of conflating "off" with "broken". Empty when no liveness tracker
     # is wired (preserves backwards-compat for direct constructions).
     sensor_liveness: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Sensor-fusion summary derived from the fused observation bundle's
+    # ``valid_mask`` + per-modality scalar magnitudes, so the dashboard can
+    # render one fusion panel instead of inferring it from raw fields. Shape::
+    #
+    #     {
+    #       "n_valid": int,        # modalities currently contributing
+    #       "n_modalities": int,   # mask length (4 without lidar, 5 with)
+    #       "lidar_present": bool, # whether the lidar slot exists
+    #       "modalities": {        # per-modality validity (lidar only when present)
+    #         "vision": bool, "ultrasonic": bool, "motor": bool,
+    #         "audio": bool, "lidar": bool,
+    #       },
+    #       "fused_norm": float,   # bounded L2 of the per-modality summary
+    #     }
+    #
+    # Empty dict when no observation is available (preserves backwards-compat
+    # for direct constructions — mirrors ``sensor_liveness``).
+    fused: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise to a plain dict for JSON/msgpack encoding.
