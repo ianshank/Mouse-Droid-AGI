@@ -150,22 +150,38 @@
 
   function renderFusion(fused, liveness, validMask) {
     const mods = (fused && fused.modalities) || {};
-    for (const name of MODALITIES) {
+    const haveFused = fused && typeof fused.n_valid === "number";
+    const haveMask = Array.isArray(validMask);
+    // Backwards-compat: a pre-fused frame (older server) ships ``valid_mask``
+    // in the canonical slot order [vision, ultrasonic, motor, audio, (lidar)].
+    // Use it to drive the per-modality tiles when ``fused`` is absent — the
+    // warning text alone is not enough; the tiles would show "—" otherwise
+    // (CodeRabbit / Gemini PR #117).
+    for (let i = 0; i < MODALITIES.length; i++) {
+      const name = MODALITIES[i];
       const el = tileEls[name];
       const live = liveness && liveness[name] ? liveness[name].state : null;
-      const valid = mods[name];
+      let valid = mods[name];
+      if (valid === undefined && haveMask && i < validMask.length) {
+        valid = !!validMask[i];
+      }
       if (live) { el.textContent = live; el.className = "state " + live; }
       else if (valid === true) { el.textContent = "valid"; el.className = "state live"; }
       else if (valid === false) { el.textContent = "off"; el.className = "state disabled"; }
       else { el.textContent = "—"; el.className = "state disabled"; }
     }
-    if (fused && typeof fused.n_valid === "number") {
+    if (haveFused) {
       $("nValid").textContent = fused.n_valid;
       $("nMod").textContent = fused.n_modalities;
       $("fnorm").textContent = (fused.fused_norm || 0).toFixed(2);
       $("fuseWarn").textContent = "";
-    } else if (Array.isArray(validMask)) {
-      // Backwards-compat: a pre-fused frame (older server) still has valid_mask.
+    } else if (haveMask) {
+      // Derive counts from the mask so the summary fields populate from older
+      // servers instead of going stale.
+      const nValid = validMask.reduce((a, v) => a + (v ? 1 : 0), 0);
+      $("nValid").textContent = nValid;
+      $("nMod").textContent = validMask.length;
+      $("fnorm").textContent = "—";
       $("fuseWarn").textContent = "frame has no 'fused' summary (older server) — using valid_mask";
     }
   }

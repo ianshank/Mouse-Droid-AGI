@@ -704,7 +704,7 @@ cognitive:
   enabled: true
   huggingface_repo: ianshank/mousedroid-weights
   huggingface_subfolder: bdi   # downloads bdi/belief.npz → weights/bdi/belief.npz
-    weights_dir: /opt/mousedroid/weights/bdi
+  weights_dir: /opt/mousedroid/weights/bdi
 ```
 
 ---

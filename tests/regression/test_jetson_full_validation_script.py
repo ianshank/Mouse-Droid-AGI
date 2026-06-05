@@ -78,6 +78,16 @@ def test_namespace_is_config_derived_not_literal() -> None:
 @pytest.mark.parametrize(
     "env_var",
     [
+        # Path / target tunables.
+        "MOUSEDROID_SMOKE_CONTAINER",
+        "MOUSEDROID_VALIDATION_REPORT_ROOT",
+        "MOUSEDROID_TELEMETRY_URL",
+        "MOUSEDROID_JETSON_CONFIG",
+        "MOUSEDROID_LIDAR_PROBE_PORT",
+        "MOUSEDROID_VALIDATION_MISSION",
+        "VENV_DIR",
+        "MOUSEDROID_METRICS__NAMESPACE",
+        # Timing / retry tunables.
         "MOUSEDROID_VALIDATION_HEALTH_RETRIES",
         "MOUSEDROID_VALIDATION_HEALTH_INTERVAL_S",
         "MOUSEDROID_VALIDATION_HTTP_TIMEOUT_S",
@@ -93,9 +103,21 @@ def test_documented_env_tunables_present(env_var: str) -> None:
     assert text.count(env_var) >= 2, f"{env_var} not documented in the header"
 
 
+# Patterns that would constitute a secret leak. Broader than the literal
+# ``${VAR}`` form so unbraced refs, printf/log/printenv shapes are also
+# caught (CodeRabbit PR #117).
+_SECRET_LEAK_PATTERN = re.compile(
+    r"(?m)^\s*(?:echo|printf|log|printenv)\b[^\n]*\b"
+    r"(?:ANTHROPIC_API_KEY|MOUSEDROID_TELEMETRY_TOKEN)\b"
+)
+
+
 def test_secrets_presence_checked_only() -> None:
     """Secrets must never be echoed — only their presence is tested."""
     text = _script_text()
-    # No interpolation of the secret values into log/echo lines.
+    leak = _SECRET_LEAK_PATTERN.search(text)
+    assert leak is None, f"secret-leak shape detected: {leak.group(0)!r}"
+    # The strict interpolation form is also rejected (defense in depth — catches
+    # cases where the secret appears outside a recognised log/echo verb).
     assert "${ANTHROPIC_API_KEY}" not in text
     assert "${MOUSEDROID_TELEMETRY_TOKEN}" not in text

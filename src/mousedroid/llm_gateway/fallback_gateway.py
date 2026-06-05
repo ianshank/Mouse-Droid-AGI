@@ -247,13 +247,23 @@ class FallbackLLMGateway:
             if self._metrics is not None:
                 self._metrics.inc_llm_gateway_served("secondary", "degraded")
             return GoalVector()
+        # Symmetric with the primary branch (line 219): a shipped gateway
+        # signals backend failure by returning a neutral GoalVector and
+        # flipping ``is_degraded`` rather than raising. Inspect the flag
+        # before counting ``secondary/ok`` so a degraded local fallback
+        # surfaces as ``secondary/degraded`` in observability — otherwise
+        # operators lose the signal that BOTH tiers failed
+        # (CodeRabbit PR #117).
+        secondary_degraded = _is_degraded(self._secondary)
         _log.debug(
             "fallback_served",
             served_by="secondary",
             secondary_ready=self._secondary.is_ready,
+            secondary_degraded=secondary_degraded,
         )
         if self._metrics is not None:
-            self._metrics.inc_llm_gateway_served("secondary", "ok")
+            outcome = "degraded" if secondary_degraded else "ok"
+            self._metrics.inc_llm_gateway_served("secondary", outcome)
         return goal
 
     async def stop(self) -> None:

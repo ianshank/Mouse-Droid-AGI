@@ -252,3 +252,38 @@ class TestFailureTracking:
 
         tts._synthesize_sync("succeed")
         assert tts._consecutive_failures == 0
+
+
+class TestVoiceNoneGuards:
+    """Explicit-guard contract: callers must check _voice first.
+
+    The private ``_synthesize_via_wav`` / ``_synthesize_via_legacy`` paths
+    formerly relied on an ``assert self._voice is not None`` for type
+    narrowing. Asserts strip under ``PYTHONOPTIMIZE=1`` (the Jetson Docker
+    entrypoint default), so a misuse would surface a bare AttributeError.
+    The CodeRabbit PR #117 fix replaces those with explicit RuntimeErrors
+    — these tests pin the new contract so a future refactor cannot quietly
+    re-introduce the assert.
+    """
+
+    def test_synthesize_via_wav_raises_runtime_error_when_voice_none(self) -> None:
+        cfg = _make_cfg()
+        tts = PiperTTS(cfg)
+        tts._voice = None  # caller-contract violation
+        try:
+            tts._synthesize_via_wav("hello")
+        except RuntimeError as exc:
+            assert "_synthesize_via_wav" in str(exc)
+        else:  # pragma: no cover - test fails if no exception
+            raise AssertionError("expected RuntimeError when _voice is None")
+
+    def test_synthesize_via_legacy_raises_runtime_error_when_voice_none(self) -> None:
+        cfg = _make_cfg()
+        tts = PiperTTS(cfg)
+        tts._voice = None  # caller-contract violation
+        try:
+            tts._synthesize_via_legacy("hello")
+        except RuntimeError as exc:
+            assert "_synthesize_via_legacy" in str(exc)
+        else:  # pragma: no cover - test fails if no exception
+            raise AssertionError("expected RuntimeError when _voice is None")

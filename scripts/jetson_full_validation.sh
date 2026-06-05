@@ -237,6 +237,23 @@ phase1() {
 # --------------------------------------------------------------------------- #
 # Phase 2 — cold hardware (container stopped; exclusive device access)
 # --------------------------------------------------------------------------- #
+
+# Trap handler — restart the container if we stopped it and never reached the
+# normal restart at the end of phase2. Without this, an early ``return`` (e.g.,
+# preflight FAIL) or an unhandled error between stop and restart leaves the
+# rover brain down. Registered ONLY while CONTAINER_STOPPED_FOR_PHASE2=1 so
+# normal teardown does not re-fire it (CodeRabbit PR #117).
+CONTAINER_STOPPED_FOR_PHASE2=0
+restart_container_on_exit() {
+    local rc=$?
+    if [[ "${CONTAINER_STOPPED_FOR_PHASE2}" == "1" ]]; then
+        log "trap: restarting container ${CONTAINER} after cold-phase exit (rc=${rc})"
+        docker start "${CONTAINER}" >/dev/null 2>&1 \
+            || log "trap: docker start failed — rover brain may be down"
+        CONTAINER_STOPPED_FOR_PHASE2=0
+    fi
+}
+
 phase2() {
     log "=== PHASE 2: cold hardware ==="
     if ! have_docker; then
@@ -248,7 +265,16 @@ phase2() {
     if container_running; then CONTAINER_WAS_RUNNING=1; fi
     if [[ "${DRY_RUN}" != "1" && "${CONTAINER_WAS_RUNNING}" == "1" ]]; then
         log "stopping container ${CONTAINER} for exclusive device access"
-        docker stop "${CONTAINER}" >/dev/null 2>&1 || record WARN "docker stop" "stop failed"
+        # Cold-phase contract: exclusive device access. If docker stop fails the
+        # container still owns LiDAR/camera/GPIO, so running "exclusive" probes
+        # would be unsafe (CodeRabbit PR #117). FAIL + abort, and the EXIT trap
+        # restarts whatever state we left the container in.
+        trap restart_container_on_exit EXIT
+        CONTAINER_STOPPED_FOR_PHASE2=1
+        if ! docker stop "${CONTAINER}" >/dev/null 2>&1; then
+            record FAIL "docker stop" "stop failed — aborting cold phase to keep exclusive-device contract"
+            return
+        fi
     fi
 
     # Real preflight + per-sensor probe (host venv).
@@ -259,16 +285,20 @@ phase2() {
 
     # Smoke stages via jetson_smoke_test.sh single-stage interface (host venv).
     # ESP32-owned stages (serial/motor/power) are NON-blocking (validate-around
-    # the dead ESP32); motion stays disabled (MOUSEDROID_SMOKE_ALLOW_MOTION unset).
+    # the dead ESP32); motion is FORCED off at the wrapper boundary via both
+    # the smoke-script switch AND the ESP32 schema switch — never relying on
+    # wrapper defaults (CodeRabbit PR #117).
     local stage
     for stage in system usbc gpio camera lidar audio speaker voice pcie_ssd hailo; do
         run_step "smoke:${stage}" yes "${RUN_DIR}/phase2_smoke_${stage}.log" \
             env MOUSEDROID_SMOKE_PYTHON="${HOST_PY}" MOUSEDROID_JETSON_CONFIGS="${PROD_CONFIG}" \
+                MOUSEDROID_SMOKE_ALLOW_MOTION= MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION= \
             bash scripts/jetson_smoke_test.sh "${stage}"
     done
     for stage in serial motor power; do
         run_step "smoke:${stage}" no "${RUN_DIR}/phase2_smoke_${stage}.log" \
             env MOUSEDROID_SMOKE_PYTHON="${HOST_PY}" MOUSEDROID_JETSON_CONFIGS="${PROD_CONFIG}" \
+                MOUSEDROID_SMOKE_ALLOW_MOTION= MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION= \
             bash scripts/jetson_smoke_test.sh "${stage}"
     done
 
@@ -283,6 +313,8 @@ phase2() {
     if [[ "${DRY_RUN}" != "1" && "${CONTAINER_WAS_RUNNING}" == "1" ]]; then
         log "restarting container ${CONTAINER}"
         docker start "${CONTAINER}" >/dev/null 2>&1 || record WARN "docker start" "restart failed"
+        CONTAINER_STOPPED_FOR_PHASE2=0
+        trap - EXIT
     fi
 }
 

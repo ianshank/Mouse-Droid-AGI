@@ -16,6 +16,7 @@ pytestmark = pytest.mark.smoke
 
 
 def test_modules_import() -> None:
+    pytest.importorskip("aiohttp")  # telemetry.server has a transitive import
     import mousedroid.telemetry.frame_builder
     import mousedroid.telemetry.protocol
     import mousedroid.telemetry.server  # noqa: F401

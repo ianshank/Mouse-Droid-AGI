@@ -276,6 +276,22 @@ class AnthropicLLMGateway:
         # ``_ready`` False, so this line is unreachable in that state.
         self._degraded = False
         elapsed_ms = (time.monotonic() - start) * MILLISECONDS_PER_SECOND
+
+        text = self._extract_text(response)
+        parsed = self._parse_goal_vector(text)
+        if parsed is None:
+            # Backend-failure mode: API returned 200 but content was
+            # empty / non-JSON / non-numeric. Per CodeRabbit (PR #117) and
+            # CLAUDE.md's "record on SUCCESS only" contract, all served-
+            # success metrics (latency, budget, tokens) are skipped here —
+            # the warning logs in ``_parse_goal_vector`` already record the
+            # failure for operator triage.
+            _log.info(
+                "anthropic_gateway_translation_unparseable",
+                elapsed_ms=elapsed_ms,
+            )
+            return GoalVector()
+
         if self._metrics is not None:
             self._metrics.observe_llm_gateway_latency_ms(elapsed_ms)
         if elapsed_ms > self._cfg.latency_target_ms:
@@ -286,9 +302,6 @@ class AnthropicLLMGateway:
             )
             if self._metrics is not None:
                 self._metrics.inc_llm_latency_budget_exceeded(self._cfg.model_name)
-
-        text = self._extract_text(response)
-        goal = self._parse_goal_vector(text)
         if self._metrics is not None:
             input_tokens, output_tokens = self._extract_token_usage(response)
             self._metrics.inc_llm_tokens(self._cfg.model_name, "input", input_tokens)
@@ -296,11 +309,11 @@ class AnthropicLLMGateway:
         _log.info(
             "anthropic_gateway_translation",
             elapsed_ms=elapsed_ms,
-            vx=goal.vx_target,
-            vy=goal.vy_target,
-            omega=goal.omega_target,
+            vx=parsed.vx_target,
+            vy=parsed.vy_target,
+            omega=parsed.omega_target,
         )
-        return goal
+        return parsed
 
     @staticmethod
     def _extract_token_usage(response: Any) -> tuple[int | None, int | None]:
@@ -352,15 +365,17 @@ class AnthropicLLMGateway:
         return "".join(chunks).strip()
 
     @staticmethod
-    def _parse_goal_vector(content: str) -> GoalVector:
+    def _parse_goal_vector(content: str) -> GoalVector | None:
         """Parse ``content`` as JSON and build a clamped :class:`GoalVector`.
 
         Keys (``"vx"``, ``"vy"``, ``"omega"``) and the ``[-1, 1]`` clamp
         mirror the legacy and OpenAI-compatible parsers so swapping
         ``cfg.llm.backend`` produces equivalent ``GoalVector`` output for a
-        given model response. Returns a neutral :class:`GoalVector` when
-        ``content`` is empty / not JSON, when the decoded payload isn't a
-        JSON object, or when a field is non-numeric.
+        given model response. Returns ``None`` when ``content`` is empty /
+        not JSON, when the decoded payload isn't a JSON object, or when a
+        field is non-numeric — letting the caller distinguish a successfully-
+        served translation from a backend-failure mode so observability
+        metrics are only recorded on actual success (CodeRabbit PR #117).
 
         Tolerates models that wrap the object in markdown code fences or
         surrounding prose by extracting the first ``{...}`` span before
@@ -368,7 +383,7 @@ class AnthropicLLMGateway:
         """
         if not content:
             _log.warning("anthropic_gateway_empty_content")
-            return GoalVector()
+            return None
         match = _JSON_OBJECT_RE.search(content)
         if match is not None:
             content = match.group(0)
@@ -376,10 +391,10 @@ class AnthropicLLMGateway:
             doc = json.loads(content)
         except json.JSONDecodeError:
             _log.warning("anthropic_gateway_non_json_content")
-            return GoalVector()
+            return None
         if not isinstance(doc, dict):
             _log.warning("anthropic_gateway_non_object_content")
-            return GoalVector()
+            return None
         try:
             return GoalVector(
                 vx_target=_clamp_unit(float(doc.get("vx", 0.0))),
@@ -388,7 +403,7 @@ class AnthropicLLMGateway:
             )
         except (TypeError, ValueError):
             _log.warning("anthropic_gateway_non_numeric_fields")
-            return GoalVector()
+            return None
 
     async def stop(self) -> None:
         """Release the client reference.

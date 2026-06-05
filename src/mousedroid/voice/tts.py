@@ -168,7 +168,11 @@ class PiperTTS:
         Returns:
             Raw WAV file bytes.
         """
-        assert self._voice is not None  # guarded by caller
+        if self._voice is None:
+            raise RuntimeError(
+                "piper voice not loaded — caller must check _voice "
+                "before invoking _synthesize_via_wav"
+            )
         if not self._wav_needs_file:
             return cast("bytes", self._voice.synthesize_wav(text))
         import io
@@ -191,7 +195,11 @@ class PiperTTS:
         import io
         import wave
 
-        assert self._voice is not None  # guarded by caller
+        if self._voice is None:
+            raise RuntimeError(
+                "piper voice not loaded — caller must check _voice "
+                "before invoking _synthesize_via_legacy"
+            )
         wav_buffer = io.BytesIO()
         with wave.open(wav_buffer, "wb") as wav_file:
             wav_file.setnchannels(1)
