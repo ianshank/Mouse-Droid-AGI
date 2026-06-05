@@ -5031,26 +5031,3 @@ class Settings(BaseSettings):
                 raise ValueError(msg)
 
         return self
-
-    def model_copy(
-        self,
-        *,
-        update: dict[str, Any] | None = None,
-        deep: bool = False,
-    ) -> Settings:
-        """Override to coerce dict-typed ``observability`` updates to the Pydantic model.
-
-        Pydantic v2 ``model_copy(update=...)`` does not run field validators, so
-        a raw dict supplied for an ``Optional[BaseModel]`` field stays a dict.
-        This override coerces the ``observability`` field only — all other fields
-        are passed through unchanged — so the env-var overlay pattern works
-        as expected without re-validating the entire settings object.
-        """
-        result = super().model_copy(update=update, deep=deep)
-        if update and "observability" in update and isinstance(result.observability, dict):
-            object.__setattr__(
-                result,
-                "observability",
-                ObservabilityConfig.model_validate(result.observability),
-            )
-        return result

@@ -70,20 +70,23 @@ def test_opt_in_overlay_parses() -> None:
 
 def test_env_var_override() -> None:
     """Env-var nested overrides work for the new sub-config."""
+    from mousedroid.config.schema import ExperimentLoggerConfig, ObservabilityConfig
+
     overlay = {"mock_hardware": True, "platform": "mouse_droid"}
     cfg = Settings.model_validate(overlay)
     updated = cfg.model_copy(
         update={
-            "observability": {
-                "experiment_logger": {
-                    "backend": "mlflow",
-                    "experiment_name": "from-env",
-                }
-            }
+            "observability": ObservabilityConfig(
+                experiment_logger=ExperimentLoggerConfig(
+                    backend="mlflow",
+                    experiment_name="from-env",
+                )
+            )
         }
     )
     assert updated.observability is not None
     assert updated.observability.experiment_logger.experiment_name == "from-env"
+    assert updated.observability.experiment_logger.backend == "mlflow"
 
 
 def test_rejects_invalid_backend_literal() -> None:
