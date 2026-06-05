@@ -747,6 +747,28 @@ class LLMConfig(BaseModel):
         "Respond with ONLY the JSON object.",
         description="System prompt for LLM mission translation",
     )
+    query_system_prompt: str = Field(
+        "You are Rocky, a friendly Star Wars MSE-6 Mouse Droid assistant. "
+        "Answer the operator's question concisely in one or two short sentences. "
+        "You are a small rover; you cannot perform actions from this channel — "
+        "this is question-and-answer only, not a command channel.",
+        description=(
+            "System prompt for the conversational ``answer_query`` path "
+            "(free-text Q&A), kept separate from ``system_prompt`` so the "
+            "navigation translator keeps emitting JSON while the query path "
+            "returns prose. Used by every backend's ``answer_query``."
+        ),
+    )
+    query_max_tokens: int = Field(
+        256,
+        gt=0,
+        description=(
+            "Max generation tokens for the ``answer_query`` conversational "
+            "path. Separate from ``max_tokens`` (which sizes the terse JSON "
+            "GoalVector response) so operators can allow longer prose answers "
+            "without enlarging every navigation translation."
+        ),
+    )
     injection_patterns: list[str] = Field(
         default_factory=lambda: [
             r"ignore (previous|above|all) instructions?",

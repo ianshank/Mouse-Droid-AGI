@@ -48,6 +48,16 @@ class GatewayConfig(BaseModel):
         "Respond with ONLY the JSON object.",
         description="System prompt for LLM mission translation",
     )
+    query_system_prompt: str = Field(
+        "You are Rocky, a friendly Star Wars MSE-6 Mouse Droid assistant. "
+        "Answer the operator's question concisely in one or two short sentences. "
+        "You are a small rover; you cannot perform actions from this channel — "
+        "this is question-and-answer only, not a command channel.",
+        description="System prompt for the conversational answer_query (free-text Q&A) path",
+    )
+    query_max_tokens: int = Field(
+        256, gt=0, description="Max generation tokens for the answer_query conversational path"
+    )
     injection_patterns: list[str] = Field(
         default_factory=lambda: [
             r"ignore (previous|above|all) instructions?",

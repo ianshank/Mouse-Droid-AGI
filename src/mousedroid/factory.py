@@ -745,11 +745,12 @@ def _build_single_llm_gateway(
             command verbatim, and ``anthropic`` ships it to a third-party
             cloud). The ``openai_compatible`` backend skips it, trusting the
             upstream provider's guardrails.
-        metrics: Optional shared :class:`MetricsRegistry`. Forwarded to the
-            ``anthropic`` backend so successful cloud translations record
-            latency / token / budget metrics. The ``llama_cpp`` and
-            ``openai_compatible`` backends are not instrumented in this scope
-            and do not receive the registry.
+        metrics: Optional shared :class:`MetricsRegistry`. Forwarded to ALL
+            three backends so successful translations / queries record
+            latency / token / budget metrics regardless of which backend
+            ``cfg.llm.backend`` selects (the ``openai_compatible`` token
+            counts come from the response ``usage`` block; the ``llama_cpp``
+            counts from the llama-cpp ``usage`` block when the build reports it).
 
     Returns:
         A gateway conforming to :class:`LLMGatewayProtocol`.
@@ -764,7 +765,7 @@ def _build_single_llm_gateway(
             model=llm_cfg.model_name,
             enabled=llm_cfg.enabled,
         )
-        return OpenAICompatibleLLMGateway(llm_cfg)
+        return OpenAICompatibleLLMGateway(llm_cfg, metrics=metrics)
 
     if llm_cfg.backend == "anthropic":
         from mousedroid.llm_gateway.anthropic_gateway import AnthropicLLMGateway
@@ -799,10 +800,12 @@ def _build_single_llm_gateway(
         max_omega_norm_rads=llm_cfg.max_omega_norm_rads,
         max_command_len=llm_cfg.max_command_len,
         system_prompt=llm_cfg.system_prompt,
+        query_system_prompt=llm_cfg.query_system_prompt,
+        query_max_tokens=llm_cfg.query_max_tokens,
         injection_patterns=llm_cfg.injection_patterns,
     )
     _log.info("llm_gateway_built", backend="llama_cpp", enabled=llm_cfg.enabled)
-    return LLMGateway(gateway_cfg, injection_filter=injection_filter)
+    return LLMGateway(gateway_cfg, injection_filter=injection_filter, metrics=metrics)
 
 
 def build_llm_gateway(
@@ -848,9 +851,9 @@ def build_llm_gateway(
             supplied (the default in :func:`build_orchestrator`), the same
             filter is reused by the OpenClaw mission dispatcher.
         metrics: Optional shared :class:`MetricsRegistry`, forwarded to both
-            tiers (the anthropic gateway records latency/token metrics; the
-            composite records the per-tier served counter). ``None`` (default)
-            is a no-op — the gateway behaves byte-identically.
+            tiers (every backend records latency/token/budget metrics; the
+            composite additionally records the per-tier served counter).
+            ``None`` (default) is a no-op — the gateway behaves byte-identically.
 
     Returns:
         LLM gateway conforming to :class:`LLMGatewayProtocol`.

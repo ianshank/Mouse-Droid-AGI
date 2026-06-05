@@ -50,16 +50,45 @@ docs/3D_printing_files/
 
 # Weights (large model files -- download at runtime)
 weights/
+models/
 *.pt
+*.pth
 *.onnx
 *.tflite
+*.gguf
+*.bin
+*.engine
+*.trt
+*.plan
 
 # Coverage / test artifacts
 .coverage
+.coverage.*
+coverage.xml
+coverage.json
+coverage-branch.json
 htmlcov/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.hypothesis/
 
-# Claude worktrees
+# Secrets / env (never bake into an image layer)
+.env
+.env.local
+*.env
+secrets.yaml
+gcp_credentials/
+*.credentials.json
+
+# Host-only runtime artefacts (LMDB experience, reports, training output)
+*.mdb
+*_experience/
+reports/
+runs/
+checkpoints/
+
+# Claude worktrees + agent workspaces
 .claude/
+.serena/
+.gemini/

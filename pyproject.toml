@@ -153,7 +153,7 @@ dev = [
     # supported runtime version get matching stubs. Upper bound ``<6``
     # pins the major to defend against a hypothetical breaking 6.0
     # release that wouldn't reflect runtime API.
-    "types-cachetools>=5.0,<6",
+    "types-cachetools>=5.0,<8",
     "ncps>=0.0.7",
 ]
 

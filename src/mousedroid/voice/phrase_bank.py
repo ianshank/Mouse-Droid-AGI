@@ -11,6 +11,8 @@ DEFAULT_PHRASES: dict[str, list[str]] = {
         "Good good good!",
         "Is done! Happy!",
         "Work finish! Very satisfy!",
+        "Task complete! Rocky proud!",
+        "Finish finish! We did good!",
     ],
     "obstacle_detected": [
         "Is problem! Object ahead!",
@@ -51,6 +53,8 @@ DEFAULT_PHRASES: dict[str, list[str]] = {
         "Hmm. Waiting waiting.",
         "Is boring. Want task!",
         "Nothing to do. Give command?",
+        "Rocky here. Ready when you ready.",
+        "Quiet quiet. Rocky wait patient.",
     ],
     "startup": [
         "Hello hello! Rocky ready!",
@@ -76,6 +80,8 @@ DEFAULT_PHRASES: dict[str, list[str]] = {
         "Is here! Destination reach!",
         "Arrive! Journey complete!",
         "We here! Very good!",
+        "Made it made it! Rocky happy!",
+        "Stop here. Is right place!",
     ],
     "battery_low_warn": [
         "Warning! Battery getting low.",
@@ -119,5 +125,50 @@ DEFAULT_PHRASES: dict[str, list[str]] = {
         "Safe travels! Rocky miss you!",
         "Until next time! Bye bye!",
         "Go well! Rocky wave goodbye!",
+    ],
+    # --- Conversational vocabulary (LLM answer_query path) ----------------- #
+    # Spoken around the deliberative Q&A path so the operator hears Rocky
+    # acknowledge / frame an answer. The answer text itself is dynamic (from
+    # the LLM) and is spoken via ``RockyVoiceEngine.play_phrase``; these events
+    # are the static framing the phrase bank supplies.
+    "query_received": [
+        "Question! Rocky think think.",
+        "You ask? Rocky listen good!",
+        "Ooh, good question. Let Rocky see.",
+        "Hmm! Rocky consider this.",
+    ],
+    "query_answered": [
+        "Rocky know this! Here answer:",
+        "Aha! Rocky tell you:",
+        "Is easy. Answer is:",
+        "Rocky figure out! Listen:",
+    ],
+    "query_failed": [
+        "Not sure. Rocky brain quiet.",
+        "No answer come. Sorry sorry.",
+        "Rocky not know this one. Ask different?",
+        "Confusion! Rocky cannot answer.",
+    ],
+    "thinking": [
+        "Hmm... compute compute.",
+        "Wait wait. Rocky think hard.",
+        "Processing... almost almost!",
+        "One moment. Brain work work.",
+    ],
+    "acknowledge": [
+        "Okay okay! Rocky understand.",
+        "Got it got it!",
+        "Roger roger! Rocky hear you.",
+        "Yes! Rocky on it.",
+    ],
+    "affirmative": [
+        "Yes yes! Is correct.",
+        "Affirmative! Rocky agree.",
+        "Yes! Very true very true.",
+    ],
+    "negative": [
+        "No no. Is not so.",
+        "Negative! Rocky disagree.",
+        "No. Wrong wrong wrong.",
     ],
 }

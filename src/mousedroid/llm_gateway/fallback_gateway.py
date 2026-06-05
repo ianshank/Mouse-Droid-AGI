@@ -32,18 +32,23 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 from mousedroid.llm_gateway.protocol import GoalVector
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from mousedroid.llm_gateway.protocol import LLMGatewayProtocol
     from mousedroid.telemetry.metrics import MetricsRegistry
 
 _log = get_logger(__name__)
+
+# Result type of a routed backend operation (``GoalVector`` for
+# ``translate_mission``, ``str`` for ``answer_query``). The composite routes
+# both through the same failover state machine via :meth:`_route_with_failover`.
+_T = TypeVar("_T")
 
 # Default seconds between primary re-probe attempts once it is degraded.
 # Used only when the factory does not supply ``cfg.llm.fallback_retry_cooldown_s``
@@ -61,6 +66,24 @@ def _is_degraded(gateway: LLMGatewayProtocol) -> bool:
     as never-degraded.
     """
     return bool(getattr(gateway, "is_degraded", False))
+
+
+def _answer_query(gateway: LLMGatewayProtocol, query: str) -> Awaitable[str]:
+    """Return the ``answer_query`` coroutine for ``gateway``.
+
+    ``answer_query`` belongs to the optional
+    :class:`~mousedroid.llm_gateway.protocol.QueryCapableLLMProtocol`, not
+    :class:`LLMGatewayProtocol`, so it is resolved dynamically. A child that
+    lacks it raises ``AttributeError`` here, which the composite's router
+    treats as a backend failure (fails over / returns ``""``). Every shipped
+    backend implements it, so this is a defensive edge only.
+    """
+    answer = getattr(gateway, "answer_query", None)
+    if answer is None:
+        msg = f"{type(gateway).__name__} does not support answer_query"
+        raise AttributeError(msg)
+    coro: Awaitable[str] = answer(query)
+    return coro
 
 
 class FallbackLLMGateway:
@@ -170,6 +193,57 @@ class FallbackLLMGateway:
             ValueError: Propagated from a child when the command is empty or
                 rejected by the injection filter (caller error — no failover).
         """
+        return await self._route_with_failover(
+            lambda gateway: gateway.translate_mission(nl_command),
+            GoalVector(),
+        )
+
+    async def answer_query(self, query: str) -> str:
+        """Route a free-text query to the primary, failing over to the secondary.
+
+        The conversational sibling of :meth:`translate_mission`: identical
+        degrade-triggered failover, cooldown re-probe, and per-tier served
+        counter — only the backend operation and the neutral result differ
+        (``""`` instead of a neutral GoalVector). A child that does not
+        implement ``answer_query`` raises ``AttributeError``, which the router
+        treats as a backend failure (fails over / returns ``""``); every
+        shipped backend implements it, so this is a defensive edge only.
+
+        Args:
+            query: Natural language question.
+
+        Returns:
+            The answer text from whichever tier served it, or ``""`` when both
+            are unavailable.
+
+        Raises:
+            ValueError: Propagated from a child for an empty / injection-rejected
+                query (caller error — no failover).
+        """
+        return await self._route_with_failover(
+            lambda gateway: _answer_query(gateway, query),
+            "",
+        )
+
+    async def _route_with_failover(
+        self,
+        op: Callable[[LLMGatewayProtocol], Awaitable[_T]],
+        neutral: _T,
+    ) -> _T:
+        """Run ``op`` on the primary, failing over to the secondary on degrade.
+
+        The single failover state machine shared by :meth:`translate_mission`
+        and :meth:`answer_query`. ``op`` is the per-call backend operation
+        (it closes over the command / query); ``neutral`` is the result
+        returned when both tiers are unavailable (a neutral ``GoalVector`` or
+        ``""``). ``None`` is reserved as the internal "the call raised / failed"
+        sentinel — neither real op ever returns ``None``.
+
+        Raises:
+            ValueError: A caller-error rejection from whichever tier ran it
+                (propagated, never failed over).
+            asyncio.CancelledError: Cooperative cancellation (propagated).
+        """
         # Use the primary when it's ready AND either healthy or its cooldown
         # has elapsed since the last attempt. The cooldown re-probe lets the
         # rover recover the cloud connection after a transient WAN dropout
@@ -181,9 +255,9 @@ class FallbackLLMGateway:
         cooldown_elapsed = (now - self._last_primary_attempt) >= self._retry_cooldown_s
         use_primary = self._primary.is_ready and (not primary_degraded or cooldown_elapsed)
         if use_primary:
-            goal: GoalVector | None
+            result: _T | None
             try:
-                goal = await self._primary.translate_mission(nl_command)
+                result = await op(self._primary)
             except asyncio.CancelledError:
                 # Cooperative cancellation (orchestrator loop teardown, e-stop
                 # tearing down the pending mission task). Propagate without
@@ -207,26 +281,26 @@ class FallbackLLMGateway:
                     "fallback_primary_exception",
                     error=f"{type(exc).__name__}:{exc}",
                 )
-                goal = None
+                result = None
             # Stamp the attempt timestamp AFTER the await returns so a
             # cancelled probe does not advance the cooldown window
             # (would falsely keep the secondary serving even when the
             # primary recovered — code-reviewer PR #107 round-3 finding 1).
             self._last_primary_attempt = now
             # A primary that stayed healthy served this command (even a
-            # legitimately-neutral GoalVector). Only failover when the call
+            # legitimately-neutral result). Only failover when the call
             # degraded the primary or raised unexpectedly.
-            if goal is not None and not _is_degraded(self._primary):
+            if result is not None and not _is_degraded(self._primary):
                 _log.debug("fallback_served", served_by="primary", retry_probe=primary_degraded)
                 if self._metrics is not None:
                     self._metrics.inc_llm_gateway_served("primary", "ok")
-                return goal
+                return result
             _log.warning("fallback_primary_to_secondary", was_retry_probe=primary_degraded)
             if self._metrics is not None:
                 self._metrics.inc_llm_gateway_served("primary", "degraded")
 
         try:
-            goal = await self._secondary.translate_mission(nl_command)
+            result = await op(self._secondary)
         except asyncio.CancelledError:
             # Same cooperative-cancellation handling as the primary branch.
             raise
@@ -237,23 +311,22 @@ class FallbackLLMGateway:
         except Exception as exc:
             # Preserve the composite-level "never raises on backend failure"
             # invariant: a malloc failure / corrupted-weight crash in the
-            # local secondary becomes a neutral GoalVector + structured
-            # warning, not a crash propagating into the orchestrator's
-            # mission handler (code-reviewer PR #107 finding 2).
+            # local secondary becomes a neutral result + structured warning,
+            # not a crash propagating into the orchestrator's mission handler
+            # (code-reviewer PR #107 finding 2).
             _log.warning(
                 "fallback_secondary_exception",
                 error=f"{type(exc).__name__}:{exc}",
             )
             if self._metrics is not None:
                 self._metrics.inc_llm_gateway_served("secondary", "degraded")
-            return GoalVector()
-        # Symmetric with the primary branch (line 219): a shipped gateway
-        # signals backend failure by returning a neutral GoalVector and
-        # flipping ``is_degraded`` rather than raising. Inspect the flag
-        # before counting ``secondary/ok`` so a degraded local fallback
-        # surfaces as ``secondary/degraded`` in observability — otherwise
-        # operators lose the signal that BOTH tiers failed
-        # (CodeRabbit PR #117).
+            return neutral
+        # Symmetric with the primary branch (line 293): a shipped gateway
+        # signals backend failure by returning the neutral value AND flipping
+        # ``is_degraded`` rather than raising. Inspect the flag before counting
+        # ``secondary/ok`` so a degraded local fallback surfaces as
+        # ``secondary/degraded`` in observability — otherwise operators lose
+        # the signal that BOTH tiers failed (CodeRabbit PR #117).
         secondary_degraded = _is_degraded(self._secondary)
         _log.debug(
             "fallback_served",
@@ -264,7 +337,7 @@ class FallbackLLMGateway:
         if self._metrics is not None:
             outcome = "degraded" if secondary_degraded else "ok"
             self._metrics.inc_llm_gateway_served("secondary", outcome)
-        return goal
+        return result
 
     async def stop(self) -> None:
         """Stop both children — never let a primary failure skip the secondary.
