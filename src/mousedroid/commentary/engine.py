@@ -198,6 +198,10 @@ class CommentaryEngine:
         return facts, outlier, peak
 
     def _suppress(self, reason: str) -> None:
+        # DEBUG so an operator can answer "why is it silent?" by enabling debug
+        # logs — without adding production-log noise (suppression is the common
+        # case). The Prometheus counter is the always-on aggregate signal.
+        _log.debug("commentary_suppressed", reason=reason)
         if self._metrics is not None:
             self._metrics.inc_commentary_suppressed(reason)
 
@@ -207,6 +211,20 @@ class CommentaryEngine:
         now = self._clock.monotonic()
         if self._metrics is not None:
             self._metrics.inc_commentary_considered()
+        # DEBUG snapshot of the gate inputs — the single most useful signal for
+        # tuning ``novelty_sigma`` / ``novelty_gate_alpha`` on the rover (mean,
+        # std, peak, sample count) and for diagnosing an unexpectedly quiet
+        # droid. Off by default; no hot-loop cost (this runs at ``cadence_s``).
+        _log.debug(
+            "commentary_evaluating",
+            peak_novelty=peak if math.isfinite(peak) else None,
+            novelty_mean=self._mean,
+            novelty_std=self._std(),
+            samples=self._count,
+            outlier=outlier,
+            has_facts=facts is not None,
+            emergency_active=self._emergency_active,
+        )
 
         if self._voice is None:  # defensive; the factory always wires a voice
             self._suppress(_REASON_NO_VOICE)

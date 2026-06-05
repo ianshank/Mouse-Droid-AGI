@@ -412,6 +412,39 @@ async def test_cancellation_during_compose_propagates() -> None:
         await task
 
 
+@pytest.mark.asyncio
+async def test_intensity_threshold_forwarded_to_transform() -> None:
+    """An operator intensity_threshold is threaded into rocky_transform on fire."""
+    voice = _voice()
+    eng = CommentaryEngine(
+        _cfg(allow_without_novelty=True),
+        voice_engine=voice,
+        composer=_StubComposer("good open space"),
+        clock=MockClock(),
+        intensity_threshold=0.5,
+    )
+    eng.observe(None, _idle_facts(novelty=None))
+    await eng._evaluate_and_speak()
+    assert voice.play_phrase.await_count == 1
+    # excitement_intensity (0.6) > threshold (0.5) -> adjective repetition fires.
+    spoken = voice.play_phrase.await_args.args[0]
+    assert "good good" in spoken
+
+
+@pytest.mark.asyncio
+async def test_debug_logs_evaluation_and_suppression_reason() -> None:
+    """Debug logs surface the gate inputs + reason (operator debuggability)."""
+    from structlog.testing import capture_logs
+
+    eng = _engine(_cfg())  # no facts observed -> suppressed no_facts
+    with capture_logs() as logs:
+        await eng._evaluate_and_speak()
+    events = {e.get("event"): e for e in logs}
+    assert "commentary_evaluating" in events
+    assert events["commentary_evaluating"]["has_facts"] is False
+    assert events["commentary_suppressed"]["reason"] == "no_facts"
+
+
 def test_suppression_reasons_complete() -> None:
     """Every reason the engine emits is in its exported frozenset."""
     assert len(SUPPRESSION_REASONS) == 10

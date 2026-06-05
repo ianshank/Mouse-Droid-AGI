@@ -35,6 +35,7 @@ src/mousedroid/
   reward/             # Constitutional multi-objective reward
   scaling/            # Mixture-of-Experts + adaptive compute
   safety/             # Constitutional RL + runtime safety monitor
+  commentary/         # Phase-0 grounded, novelty-gated spoken commentary (out-of-loop)
   arm/                # Robot arm training platform (Tower of Hanoi -> laundry sorting)
     perception/       # Depth camera, YOLO detection, 6-DoF pose, symbolic state
     planning/         # PDDL symbolic planner, LLM replanner, laundry rules

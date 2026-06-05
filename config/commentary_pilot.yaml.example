@@ -1,0 +1,70 @@
+# =============================================================================
+# Operator overlay: MSE-6 Phase-0 grounded spoken commentary
+# =============================================================================
+# Let the droid narrate its *situation* — spatial geometry, acoustic energy,
+# motion, battery — in Rocky's voice, but ONLY when a moment is statistically
+# novel and the droid is idle/safe. Runs entirely OUTSIDE the 30 Hz reactive
+# control loop. There are no object labels in the mouse-droid loop, so it never
+# names objects it cannot perceive.
+#
+# Stack this on top of a production overlay:
+#
+#   MOUSEDROID_JETSON_CONFIGS=config/jetson_production.yaml,config/commentary_pilot.yaml \
+#       python -m mousedroid
+#
+# Or dry-run any phrasing offline (no motors, no orchestrator loop):
+#
+#   python scripts/commentary_dryrun.py --config config/commentary_pilot.yaml \
+#       --battery-v 10.5            # -> "my power is getting low" (styled + spoken)
+# =============================================================================
+
+platform: mouse_droid
+mock_hardware: false   # true on a dev box: MockTTS/MockSpeaker, no Jetson needed.
+
+# Voice MUST be enabled — commentary has no audio path otherwise. Other voice
+# tunables (TTS model, cooldowns, intensity_threshold) come from the overlay
+# you stack this on top of.
+voice:
+  enabled: true
+
+# The statistical novelty gate needs the curiosity (ICM) module, which is only
+# built when memory is enabled. Without it, commentary stays silent unless you
+# set commentary.allow_without_novelty: true (cadence-only template narration).
+memory:
+  enabled: true
+
+commentary:
+  enabled: true
+
+  # auto: cloud/local LLM when a query-capable gateway is wired, else the
+  # deterministic offline template composer. Other options: "llm" | "template".
+  composer: auto
+
+  # --- When does a moment count as "worth commenting on"? --------------------
+  # Fire when the live novelty exceeds running_mean + sigma * running_std. The
+  # gate auto-calibrates per rover (no magic absolute threshold); raise sigma
+  # for a quieter droid, lower it for a chattier one.
+  novelty_sigma: 2.5
+  novelty_gate_alpha: 0.02     # EW smoothing of the novelty mean/std (forgets drift)
+  novelty_warmup_n: 50         # suppress until this many novelty samples seen
+  allow_without_novelty: false # true -> cadence-only template narration if no ICM
+
+  # --- How often / how restrained -------------------------------------------
+  cadence_s: 2.0               # how often a fire is *considered*
+  min_interval_s: 20.0         # minimum seconds between two spoken comments
+  observe_stride: 15           # build facts + sample novelty every Nth tick (~2 Hz)
+  max_words: 16                # cap on spoken length (short = safer overlap window)
+  excitement_intensity: 0.6    # rocky_transform intensity [0, 1]
+
+  # --- Safety: only muse when idle/safe, and defer around emergencies --------
+  idle_speed_mps: 0.1          # narrate only when |speed| <= this
+  idle_min_clearance_m: 0.5    # narrate only when forward clearance >= this
+  post_emergency_quiet_s: 10.0 # stay silent this long after any emergency tick
+
+  # Tune the template-composer classification thresholds + phrasing here (every
+  # string and threshold is operator-editable — no hardcoded values):
+  # tight_space_m: 0.4
+  # open_space_m: 3.0
+  # low_battery_v: 11.0
+  # templates:
+  #   default: "something new here"
