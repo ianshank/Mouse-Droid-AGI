@@ -1516,6 +1516,14 @@ class MetricsConfig(BaseModel):
             "through multi-minute autonomous navigation runs (> 10 min)."
         ),
     )
+    commentary_compose_seconds_buckets: tuple[float, ...] = Field(
+        (0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, float("inf")),
+        description=(
+            "Histogram bucket boundaries for commentary compose latency "
+            "(seconds): near-zero for the offline template composer, up to "
+            "several seconds for a cloud-LLM round-trip. Operator-tunable."
+        ),
+    )
 
     @field_validator(
         "loop_latency_buckets_ms",
@@ -1526,6 +1534,7 @@ class MetricsConfig(BaseModel):
         "world_model_observe_step_seconds_buckets",
         "cloud_weight_update_download_seconds_buckets",
         "mission_duration_seconds_buckets",
+        "commentary_compose_seconds_buckets",
     )
     @classmethod
     def _validate_histogram_buckets(cls, value: tuple[float, ...]) -> tuple[float, ...]:
@@ -4656,6 +4665,199 @@ class GreetingConfig(BaseModel):
         return self
 
 
+def _default_commentary_templates() -> dict[str, str]:
+    """Default plain-English templates for the offline template composer.
+
+    Plain (un-stylised) English keyed by classification situation; the engine
+    applies ``rocky_transform`` uniformly so these must NOT be pre-styled.
+    A ``"default"`` key is mandatory (enforced by the validator).
+    """
+    return {
+        "tight_space": "this place is very tight",
+        "open_space": "lots of open room here",
+        "loud": "very loud noise around me",
+        "moving_fast": "I am zooming along",
+        "low_battery": "my power is getting low",
+        "default": "something new here",
+    }
+
+
+class CommentaryConfig(BaseModel):
+    """Phase-0 grounded, novelty-gated spoken commentary subsystem.
+
+    The droid narrates its *situation* — spatial geometry, acoustic energy,
+    motion, battery — in Rocky's voice, fired ONLY on statistically-novel
+    moments and ONLY when idle/safe, entirely OUTSIDE the 30 Hz control loop.
+    There are no semantic object labels in the mouse-droid loop (vision is an
+    embedding, not detections), so commentary never names objects it cannot
+    perceive. ``Settings.commentary`` defaults to ``None`` so existing YAML
+    loads byte-identical; every threshold and string here is operator-tunable.
+    """
+
+    enabled: bool = Field(
+        False,
+        description="Master switch; ``False`` (default) keeps the subsystem inert.",
+    )
+
+    # --- Cadence / hot-loop safety -------------------------------------
+    cadence_s: float = Field(
+        2.0,
+        gt=0.0,
+        le=60.0,
+        description="``run()`` loop period: how often a fire is *considered* (seconds).",
+    )
+    observe_stride: int = Field(
+        15,
+        ge=1,
+        le=300,
+        description=(
+            "Build full CommentaryFacts + sample novelty only every Nth control "
+            "tick (hot-loop cost control). At 30 Hz, 15 -> ~2 Hz sampling."
+        ),
+    )
+    min_interval_s: float = Field(
+        20.0,
+        ge=0.0,
+        le=3600.0,
+        description="Minimum seconds between two spoken commentaries (cooldown).",
+    )
+
+    # --- Novelty statistical gate (scale-invariant, 0b) ----------------
+    novelty_sigma: float = Field(
+        2.5,
+        ge=0.0,
+        le=10.0,
+        description="Fire when novelty > running_mean + sigma * running_std.",
+    )
+    novelty_gate_alpha: float = Field(
+        0.02,
+        gt=0.0,
+        le=1.0,
+        description=(
+            "EWMA/EWVar smoothing factor for the running novelty mean/std. "
+            "Smaller = longer memory. Forgets non-stationary drift in the "
+            "forward-model MSE (only relative novelty matters -> scale-invariant)."
+        ),
+    )
+    novelty_warmup_n: int = Field(
+        50,
+        ge=1,
+        le=100000,
+        description="Suppress firing until this many novelty samples observed.",
+    )
+    novelty_std_floor: float = Field(
+        1e-9,
+        gt=0.0,
+        description=(
+            "Degenerate-variance guard. When running std < this, the novelty "
+            "stream is treated as effectively constant and commentary is "
+            "suppressed (prevents firing on every sample when variance collapses)."
+        ),
+    )
+    allow_without_novelty: bool = Field(
+        False,
+        description=(
+            "When no curiosity module exists (novelty unavailable), ``False`` "
+            "suppresses all commentary; ``True`` falls back to cadence-only "
+            "template narration with no statistical gate."
+        ),
+    )
+
+    # --- Safety / idle-gate --------------------------------------------
+    post_emergency_quiet_s: float = Field(
+        10.0,
+        ge=0.0,
+        le=600.0,
+        description="Suppress commentary for this long after any emergency tick.",
+    )
+    idle_speed_mps: float = Field(
+        0.1,
+        ge=0.0,
+        description="Only narrate when |speed| <= this (m/s) — muse when not moving.",
+    )
+    idle_min_clearance_m: float = Field(
+        0.5,
+        gt=0.0,
+        description="Only narrate when forward clearance >= this (m) — not while boxed in.",
+    )
+
+    # --- Composer selection / styling ----------------------------------
+    composer: Literal["auto", "llm", "template"] = Field(
+        "auto",
+        description=(
+            "auto: LLM when a query-capable gateway is available, else template. "
+            "llm: grounded answer_query prompt (requires a QueryCapableLLM "
+            "gateway; commentary disables with a warning if absent). "
+            "template: offline deterministic."
+        ),
+    )
+    max_words: int = Field(
+        16,
+        ge=1,
+        le=200,
+        description="Hard cap on spoken length (truncates LLM output); short = safer.",
+    )
+    excitement_intensity: float = Field(
+        0.6,
+        ge=0.0,
+        le=1.0,
+        description="Intensity passed to ``rocky_transform`` for narration phrasing.",
+    )
+    llm_prompt_template: str = Field(
+        "Briefly narrate, in five to twelve words, what you notice right now. "
+        "Facts: {facts}. Do not name objects you cannot identify.",
+        min_length=4,
+        description=(
+            "User-prompt template for the LLM composer. Single ``{facts}`` "
+            "placeholder, filled with a compact grounded fact string."
+        ),
+    )
+
+    # --- Template phrasing (config-driven, no hardcoded strings) -------
+    templates: dict[str, str] = Field(
+        default_factory=_default_commentary_templates,
+        description="Classification-key -> plain-English template (engine styles it).",
+    )
+    tight_space_m: float = Field(
+        0.4, gt=0.0, description="min_clearance below this -> 'tight_space'."
+    )
+    open_space_m: float = Field(
+        3.0, gt=0.0, description="min_clearance above this -> 'open_space'."
+    )
+    loud_rms: float = Field(0.3, ge=0.0, le=1.0, description="audio_rms above this -> 'loud'.")
+    fast_mps: float = Field(0.5, gt=0.0, description="speed above this -> 'moving_fast'.")
+    low_battery_v: float = Field(11.0, gt=0.0, description="battery_v below this -> 'low_battery'.")
+
+    @model_validator(mode="after")
+    def _validate(self) -> CommentaryConfig:
+        # Gate every cross-field guard on ``enabled`` so a disabled overlay can
+        # carry in-progress values without failing YAML-load (the GreetingConfig
+        # lesson).
+        if not self.enabled:
+            return self
+        if self.open_space_m <= self.tight_space_m:
+            msg = "commentary.open_space_m must exceed commentary.tight_space_m"
+            raise ValueError(msg)
+        if "default" not in self.templates:
+            msg = "commentary.templates must contain a 'default' key"
+            raise ValueError(msg)
+        if self.composer in ("llm", "auto") and "{facts}" not in self.llm_prompt_template:
+            msg = "commentary.llm_prompt_template must contain the '{facts}' placeholder"
+            raise ValueError(msg)
+        # Probe template formatting at load so a foreign/positional/unbalanced
+        # placeholder surfaces where the operator can fix it (mirrors greeting).
+        try:
+            self.llm_prompt_template.format(facts="__probe__")
+        except (KeyError, ValueError, IndexError) as exc:
+            msg = (
+                "commentary.llm_prompt_template formatting failed at config "
+                f"load — only the '{{facts}}' placeholder is supported "
+                f"({type(exc).__name__}: {exc})"
+            )
+            raise ValueError(msg) from exc
+        return self
+
+
 class Settings(BaseSettings):
     """Root configuration — single source of truth for all settings.
 
@@ -4787,6 +4989,17 @@ class Settings(BaseSettings):
             "(no OLED face animation — the operator's dev rover has no "
             "display attached); the ``Greeter`` class exposes a documented "
             "extension point for the face when one is reconnected."
+        ),
+    )
+    commentary: CommentaryConfig | None = Field(
+        None,
+        description=(
+            "Optional Phase-0 grounded spoken-commentary subsystem. ``None`` "
+            "(default) disables — existing YAML loads byte-identical. Populate "
+            "on an overlay to let the droid narrate its situation (geometry / "
+            "sound / motion / battery) in Rocky's voice when a moment is "
+            "statistically novel and the droid is idle/safe. Runs entirely "
+            "outside the 30 Hz control loop."
         ),
     )
     three_laws: ThreeLawsConfig = Field(default_factory=_settings_default_factory(ThreeLawsConfig))

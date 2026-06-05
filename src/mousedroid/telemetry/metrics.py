@@ -63,6 +63,24 @@ _LLM_TOKEN_TYPES: frozenset[str] = frozenset({"input", "output"})
 _LLM_SERVED_TIERS: frozenset[str] = frozenset({"primary", "secondary"})
 _LLM_SERVED_OUTCOMES: frozenset[str] = frozenset({"ok", "degraded"})
 
+# Fixed reason labels for the commentary suppression counter. Mirrors
+# ``CommentaryEngine.SUPPRESSION_REASONS`` (an AQA test pins them equal) so a
+# typo can never open a new time series.
+_COMMENTARY_SUPPRESS_REASONS: frozenset[str] = frozenset(
+    {
+        "no_voice",
+        "emergency",
+        "busy",
+        "no_facts",
+        "not_idle",
+        "below_threshold",
+        "no_novelty_signal",
+        "cooldown",
+        "empty",
+        "empty_after_transform",
+    }
+)
+
 
 def _classify_dropped_observation(value: float) -> str | None:
     """Classify a histogram-observation candidate; return drop reason or ``None``.
@@ -642,6 +660,16 @@ class MetricsRegistry:
         self._llm_gateway_served = _DoubleLabeledCounter()
         self._llm_latency_budget_exceeded = _LabeledCounter()
 
+        # Phase-0 commentary observability. Pure-add: omitted from /metrics until
+        # a writer touches them; writer-side ``metrics is None`` no-op upstream.
+        self._commentary_emitted = _Counter()
+        self._commentary_considered = _Counter()
+        self._commentary_suppressed = _LabeledCounter()  # label: reason
+        self._commentary_novelty = _Gauge()
+        self._commentary_compose_seconds = _Histogram(
+            self._prepare_bucket_boundaries(cfg.commentary_compose_seconds_buckets)
+        )
+
         # Pre-format metric names from namespace
         self._name_frame_drops = f"{ns}_frame_drops"
         self._name_safety_violations = f"{ns}_safety_violations"
@@ -721,6 +749,13 @@ class MetricsRegistry:
         self._name_llm_gateway_latency = f"{ns}_llm_gateway_latency_ms"
         self._name_llm_gateway_served = f"{ns}_llm_gateway_served"
         self._name_llm_latency_budget_exceeded = f"{ns}_llm_latency_budget_exceeded"
+        # Commentary observability metric names (counters get ``_total`` via the
+        # shared render helpers, so omit it here).
+        self._name_commentary_emitted = f"{ns}_commentary_emitted"
+        self._name_commentary_considered = f"{ns}_commentary_considered"
+        self._name_commentary_suppressed = f"{ns}_commentary_suppressed"
+        self._name_commentary_novelty = f"{ns}_commentary_novelty"
+        self._name_commentary_compose_seconds = f"{ns}_commentary_compose_seconds"
 
         _log.debug("metrics_registry_initialised", namespace=ns)
 
@@ -1096,6 +1131,54 @@ class MetricsRegistry:
         """
         if self._cfg.track_llm_gateway and amount > 0:
             self._llm_latency_budget_exceeded.inc(model, amount)
+
+    # ------------------------------------------------------------------
+    # Phase-0 commentary observability helpers. Pure-add (no track_* toggle —
+    # the writer-side ``metrics is None`` guard in CommentaryEngine disables
+    # them when no registry is wired; families render only after first write).
+    # ------------------------------------------------------------------
+
+    def inc_commentary_considered(self, amount: int = 1) -> None:
+        """Increment the count of commentary gate evaluations (non-positive no-op)."""
+        if amount > 0:
+            self._commentary_considered.inc(amount)
+
+    def inc_commentary_emitted(self, amount: int = 1) -> None:
+        """Increment the count of spoken commentaries (non-positive no-op)."""
+        if amount > 0:
+            self._commentary_emitted.inc(amount)
+
+    def inc_commentary_suppressed(self, reason: str, amount: int = 1) -> None:
+        """Increment the per-reason commentary suppression counter.
+
+        Args:
+            reason: One of :data:`_COMMENTARY_SUPPRESS_REASONS`. Out-of-set
+                values are dropped so a typo never opens a new series.
+            amount: Increment magnitude (default 1); ``<= 0`` is a no-op.
+        """
+        if amount <= 0:
+            return
+        if reason not in _COMMENTARY_SUPPRESS_REASONS:
+            _log.debug("commentary_suppressed_dropped_invalid_reason", reason=reason)
+            return
+        self._commentary_suppressed.inc(reason, amount)
+
+    def set_commentary_novelty(self, value: float) -> None:
+        """Record the novelty score of the most recent fired commentary (NaN-skip)."""
+        if value == value:  # not NaN
+            self._commentary_novelty.set(value)
+
+    def observe_commentary_compose_seconds(self, value: float) -> None:
+        """Observe one commentary compose latency sample (seconds).
+
+        Drops NaN/+Inf/negative via :func:`_classify_dropped_observation` so a
+        misused timer never corrupts the histogram sum.
+        """
+        reason = _classify_dropped_observation(value)
+        if reason is not None:
+            _log.debug("commentary_compose_seconds_dropped", reason=reason, value=value)
+            return
+        self._commentary_compose_seconds.observe(value)
 
     # ------------------------------------------------------------------
     # PR-A2 — replay / VLA / VLM observability helpers.
@@ -1899,6 +1982,55 @@ class MetricsRegistry:
                     self._name_vlm_progress_cache_misses,
                     "VLM progress-reward cache misses",
                     self._vlm_progress_cache_misses.value,
+                )
+            )
+
+        # Phase-0 commentary metrics. Pure-add: emitted only after the first
+        # write so default deployments produce byte-identical exposition output.
+        if self._commentary_emitted.value > 0:
+            sections.append(
+                _render_counter(
+                    self._name_commentary_emitted,
+                    "Spoken grounded commentaries",
+                    self._commentary_emitted.value,
+                )
+            )
+            sections.append(
+                _render_gauge(
+                    self._name_commentary_novelty,
+                    "Novelty score of the most recent fired commentary",
+                    self._commentary_novelty.value,
+                )
+            )
+        if self._commentary_considered.value > 0:
+            sections.append(
+                _render_counter(
+                    self._name_commentary_considered,
+                    "Commentary gate evaluations",
+                    self._commentary_considered.value,
+                )
+            )
+        commentary_suppressed_snapshot = self._commentary_suppressed.snapshot()
+        if commentary_suppressed_snapshot:
+            sections.append(
+                _render_labeled_counter(
+                    self._name_commentary_suppressed,
+                    "Suppressed commentary attempts (label: reason)",
+                    "reason",
+                    commentary_suppressed_snapshot,
+                )
+            )
+        commentary_buckets, commentary_sum, commentary_count = (
+            self._commentary_compose_seconds.snapshot()
+        )
+        if commentary_count > 0:
+            sections.append(
+                _render_histogram(
+                    self._name_commentary_compose_seconds,
+                    "Commentary compose latency histogram (seconds)",
+                    commentary_buckets,
+                    commentary_sum,
+                    commentary_count,
                 )
             )
 

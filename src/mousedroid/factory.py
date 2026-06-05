@@ -52,6 +52,10 @@ if TYPE_CHECKING:
     )
     from mousedroid.cognitive.bdi_model import NeuralBDI
     from mousedroid.cognitive.cognitive_core import CognitiveCore
+    from mousedroid.commentary.protocol import (
+        CommentaryComposerProtocol,
+        CommentaryEngineProtocol,
+    )
     from mousedroid.common.time.protocol import ClockProtocol
     from mousedroid.common.tools.registry import ToolRegistry
     from mousedroid.config.schema import ESP32Config, LLMConfig, Settings, UltrasonicConfig
@@ -439,6 +443,114 @@ def build_greeter(
         intensity_threshold=intensity_threshold,
     )
     return Greeter(engine, cfg.greeting, intensity_threshold=intensity_threshold)
+
+
+def build_commentary_composer(
+    cfg: Settings,
+    *,
+    gateway: LLMGatewayProtocol | None = None,
+) -> CommentaryComposerProtocol | None:
+    """Build the commentary composer selected by ``cfg.commentary.composer``.
+
+    Returns ``None`` when commentary is disabled, or when ``composer="llm"`` is
+    requested but no query-capable gateway is available (never silently
+    downgrades operator intent — ``build_commentary`` then disables the
+    subsystem with a warning).
+
+    Args:
+        cfg: Root settings.
+        gateway: Optional LLM gateway. The LLM composer is used only when this
+            satisfies :class:`QueryCapableLLMProtocol`.
+
+    Returns:
+        A :class:`CommentaryComposerProtocol`, or ``None``.
+    """
+    if cfg.commentary is None or not cfg.commentary.enabled:
+        return None
+
+    from mousedroid.commentary.composers import (
+        LLMCommentaryComposer,
+        TemplateCommentaryComposer,
+    )
+    from mousedroid.llm_gateway.protocol import QueryCapableLLMProtocol
+
+    query_capable = gateway if isinstance(gateway, QueryCapableLLMProtocol) else None
+    mode = cfg.commentary.composer
+    if mode == "template":
+        return TemplateCommentaryComposer(cfg.commentary)
+    if mode == "llm":
+        if query_capable is None:
+            _log.warning("commentary_composer_llm_requires_query_capable_gateway")
+            return None
+        return LLMCommentaryComposer(query_capable, cfg.commentary)
+    # "auto": LLM when query-capable, else deterministic template.
+    if query_capable is not None:
+        return LLMCommentaryComposer(query_capable, cfg.commentary)
+    return TemplateCommentaryComposer(cfg.commentary)
+
+
+def build_commentary(
+    cfg: Settings,
+    *,
+    voice_engine: VoiceEngineProtocol | None = None,
+    gateway: LLMGatewayProtocol | None = None,
+    metrics: MetricsRegistry | None = None,
+) -> CommentaryEngineProtocol | None:
+    """Build the Phase-0 grounded-commentary engine, or ``None`` when disabled.
+
+    Returns ``None`` (NOT raises — this is orchestrator wiring, unlike
+    ``build_greeter``) when ``cfg.commentary`` is absent/disabled, when no
+    composer can be built, or when no voice engine is available.
+
+    Args:
+        cfg: Root settings.
+        voice_engine: Optional pre-built voice engine (test seam / shared with
+            the orchestrator). Built via ``build_voice_engine`` when ``None``.
+        gateway: Optional LLM gateway for the LLM/auto composer.
+        metrics: Optional shared :class:`MetricsRegistry` (no-op when ``None``).
+
+    Returns:
+        A :class:`CommentaryEngineProtocol`, or ``None``.
+    """
+    if cfg.commentary is None or not cfg.commentary.enabled:
+        return None
+
+    # P3 dependency guard: statistical gating needs novelty, which requires the
+    # curiosity module — and ``build_curiosity_module`` only builds it when
+    # ``cfg.memory.enabled``. Warn loudly so "enabled but always silent" is
+    # diagnosable rather than mysterious.
+    if not cfg.commentary.allow_without_novelty and not cfg.memory.enabled:
+        _log.warning(
+            "commentary_enabled_without_novelty_source",
+            hint="statistical gating needs cfg.memory.enabled (curiosity module)",
+        )
+
+    composer = build_commentary_composer(cfg, gateway=gateway)
+    if composer is None:
+        _log.warning("commentary_disabled_no_composer", composer=cfg.commentary.composer)
+        return None
+
+    engine = voice_engine if voice_engine is not None else build_voice_engine(cfg)
+    if engine is None:
+        _log.warning("commentary_disabled_no_voice_engine")
+        return None
+
+    from mousedroid.commentary.engine import CommentaryEngine
+
+    commentary = CommentaryEngine(
+        cfg.commentary,
+        voice_engine=engine,
+        composer=composer,
+        metrics=metrics,
+        intensity_threshold=cfg.voice.intensity_threshold,
+    )
+    _log.info(
+        "commentary_built",
+        composer=type(composer).__name__,
+        cadence_s=cfg.commentary.cadence_s,
+        novelty_sigma=cfg.commentary.novelty_sigma,
+    )
+    return commentary
 
 
 def build_voice_engine(
@@ -3002,6 +3114,16 @@ def build_orchestrator(cfg: Settings) -> object:
         metrics=metrics_registry,
     )
 
+    # Phase-0 grounded commentary — optional; None when cfg.commentary is
+    # absent/disabled, so default deployments are byte-identical. Shares the
+    # already-built voice engine, gateway, and metrics registry.
+    commentary = build_commentary(
+        cfg,
+        voice_engine=voice_engine,
+        gateway=llm_gateway,
+        metrics=metrics_registry,
+    )
+
     orchestrator = MouseDroidOrchestrator(
         world_model=wm,
         agents=[agent],
@@ -3013,6 +3135,7 @@ def build_orchestrator(cfg: Settings) -> object:
         telemetry_publisher=telemetry_publisher,
         telemetry_server=telemetry_server,
         voice_engine=voice_engine,
+        commentary=commentary,
         hailo_runtime=hailo_runtime,
         memory_tier=memory_tier,
         experience_logger=experience_logger,

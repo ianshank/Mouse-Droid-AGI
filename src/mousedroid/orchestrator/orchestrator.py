@@ -42,6 +42,7 @@ if TYPE_CHECKING:
         WeightUpdatePollerProtocol,
     )
     from mousedroid.cognitive.cognitive_core import CognitiveCore
+    from mousedroid.commentary.protocol import CommentaryEngineProtocol
     from mousedroid.comms.protocol import ESP32CommProtocol
     from mousedroid.config.schema import Settings
     from mousedroid.curiosity.protocol import CuriosityProtocol
@@ -95,6 +96,7 @@ class MouseDroidOrchestrator:
         telemetry_publisher: TelemetryPublisherProtocol | None = None,
         telemetry_server: TelemetryServerProtocol | None = None,
         voice_engine: VoiceEngineProtocol | None = None,
+        commentary: CommentaryEngineProtocol | None = None,
         hailo_runtime: HailoRuntimeProtocol | None = None,
         memory_tier: MemoryTier | None = None,
         experience_logger: ExperienceLogger | None = None,
@@ -138,6 +140,10 @@ class MouseDroidOrchestrator:
             telemetry_publisher: Optional telemetry publisher for remote monitoring.
             telemetry_server: Optional telemetry server for remote connections.
             voice_engine: Optional Rocky voice engine for audio output.
+            commentary: Optional Phase-0 grounded-commentary engine. When
+                supplied, the orchestrator feeds it a strided novelty + facts
+                snapshot per tick and runs its narration loop OUTSIDE the 30 Hz
+                loop; ``None`` (default) keeps behaviour byte-identical.
             hailo_runtime: Optional Hailo-8 accelerator runtime for lifecycle management.
             memory_tier: Optional layered memory tier for episodic/semantic/working memory.
             experience_logger: Optional LMDB-backed experience logger.
@@ -265,6 +271,7 @@ class MouseDroidOrchestrator:
         self._telemetry_publisher = telemetry_publisher
         self._telemetry_server = telemetry_server
         self._voice_engine = voice_engine
+        self._commentary = commentary
         self._hailo_runtime = hailo_runtime
         self._memory_tier = memory_tier
         self._experience_logger = experience_logger
@@ -362,6 +369,8 @@ class MouseDroidOrchestrator:
         self._tick_count: int = 0
         self._consolidation_task: asyncio.Task[None] | None = None
         self._consolidation_tasks: set[asyncio.Task[Any]] = set()
+        # Strong-reference set for the out-of-loop commentary background loop.
+        self._commentary_tasks: set[asyncio.Task[Any]] = set()
         # Strong-reference set for fire-and-forget cloud publishes. Keeping
         # the reference prevents premature GC of the asyncio.Task; entries
         # are evicted by spawn_tracked's done-callback as tasks resolve.
@@ -440,6 +449,13 @@ class MouseDroidOrchestrator:
                 self._consolidation_loop(),
                 name=self._consolidation_loop.__name__,
             )
+        # Out-of-loop grounded-commentary background loop (None when disabled).
+        if self._commentary is not None:
+            spawn_tracked(
+                self._commentary_tasks,
+                self._commentary.run(),
+                name="commentary_loop",
+            )
         # Harness journal (background writer task). NullJournal is a no-op.
         await self._journal.start()
         self._running = True
@@ -458,6 +474,9 @@ class MouseDroidOrchestrator:
                     await self._consolidation_task
             self._consolidation_tasks.discard(self._consolidation_task)
             self._consolidation_task = None
+        if self._commentary is not None:
+            await self._commentary.stop()
+            await cancel_and_drain(self._commentary_tasks)
         await cancel_and_drain(self._cloud_publish_tasks)
         # Tier C1 / C1.2 — stop every wired OTA poller. Wrapped in
         # try/except so a stuck in-flight download on one poller can't
@@ -549,6 +568,10 @@ class MouseDroidOrchestrator:
                     await self._voice_event("emergency_stop", observation)
                     await self._update_face(safety_ctx=safety_ctx, action=None)
                     _log.warning("emergency_stop_triggered")
+                    # Arm the commentary post-emergency quiet window even on the
+                    # early-return emergency branch (which skips _observe_commentary).
+                    if self._commentary is not None:
+                        self._commentary.observe_emergency(True)
                     self._tick_count += 1
                     await self._publish_telemetry(observation, safety_ctx, loop_time_ms)
                     # Tier C2 / C2.2 (Copilot MED follow-up): drive the
@@ -596,6 +619,7 @@ class MouseDroidOrchestrator:
 
             self._log_experience(observation, action)
             await self._voice_observe(observation, safety_ctx)
+            self._observe_commentary(observation, safety_ctx)
             await self._update_face(safety_ctx=safety_ctx, action=action)
 
             self._tick_count += 1
@@ -1671,6 +1695,44 @@ class MouseDroidOrchestrator:
                 scores["epistemic"] = float(distance)
 
         return scores
+
+    def _current_novelty(self) -> float | None:
+        """Compute this moment's intrinsic novelty, or ``None`` if unavailable.
+
+        One ``torch.no_grad()`` ICM forward from the live recurrent state — the
+        same inputs as :meth:`_compute_curiosity_scores`. Called only on the
+        commentary observe-stride (~2 Hz), never every tick, so the cost is
+        negligible and there is no second 30 Hz forward pass.
+        """
+        if self._curiosity_module is None:
+            return None
+        with torch.no_grad():
+            s = self._h.flatten().unsqueeze(0)
+            a = self._prev_action
+            s_next = self._z.flatten().unsqueeze(0)
+            intrinsic = self._curiosity_module.intrinsic_reward(s, a, s_next)
+        return float(intrinsic.item())
+
+    def _observe_commentary(
+        self, observation: ObservationProtocol, safety_ctx: SafetyContext
+    ) -> None:
+        """Feed the out-of-loop commentary engine (no-op when unwired).
+
+        Every tick: an O(1) emergency stamp. On the observe-stride: compute
+        novelty fresh + build grounded facts and hand them to the engine. The
+        heavy speak path lives entirely in the engine's own background task.
+        """
+        if self._commentary is None or self._cfg.commentary is None:
+            return
+        self._commentary.observe_emergency(safety_ctx.is_emergency)
+        if self._tick_count % self._cfg.commentary.observe_stride == 0:
+            from mousedroid.commentary.facts import extract_commentary_facts
+
+            novelty = self._current_novelty()
+            facts = extract_commentary_facts(
+                observation, novelty=novelty, is_emergency=safety_ctx.is_emergency
+            )
+            self._commentary.observe(novelty, facts)
 
     async def _consolidation_loop(self) -> None:
         """Background loop that consolidates episodic memory into semantic index.
