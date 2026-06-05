@@ -16,6 +16,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 import structlog
 import structlog.testing
 
@@ -270,20 +271,12 @@ class TestVoiceNoneGuards:
         cfg = _make_cfg()
         tts = PiperTTS(cfg)
         tts._voice = None  # caller-contract violation
-        try:
+        with pytest.raises(RuntimeError, match="_synthesize_via_wav"):
             tts._synthesize_via_wav("hello")
-        except RuntimeError as exc:
-            assert "_synthesize_via_wav" in str(exc)
-        else:  # pragma: no cover - test fails if no exception
-            raise AssertionError("expected RuntimeError when _voice is None")
 
     def test_synthesize_via_legacy_raises_runtime_error_when_voice_none(self) -> None:
         cfg = _make_cfg()
         tts = PiperTTS(cfg)
         tts._voice = None  # caller-contract violation
-        try:
+        with pytest.raises(RuntimeError, match="_synthesize_via_legacy"):
             tts._synthesize_via_legacy("hello")
-        except RuntimeError as exc:
-            assert "_synthesize_via_legacy" in str(exc)
-        else:  # pragma: no cover - test fails if no exception
-            raise AssertionError("expected RuntimeError when _voice is None")
