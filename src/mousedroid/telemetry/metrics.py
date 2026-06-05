@@ -78,6 +78,7 @@ _COMMENTARY_SUPPRESS_REASONS: frozenset[str] = frozenset(
         "cooldown",
         "empty",
         "empty_after_transform",
+        "recognition_cooldown",
     }
 )
 
@@ -669,6 +670,9 @@ class MetricsRegistry:
         self._commentary_compose_seconds = _Histogram(
             self._prepare_bucket_boundaries(cfg.commentary_compose_seconds_buckets)
         )
+        # Phase-1 recognition: narrated recognitions + stored referents.
+        self._commentary_recognitions = _Counter()
+        self._commentary_referents_stored = _Counter()
 
         # Pre-format metric names from namespace
         self._name_frame_drops = f"{ns}_frame_drops"
@@ -756,6 +760,8 @@ class MetricsRegistry:
         self._name_commentary_suppressed = f"{ns}_commentary_suppressed"
         self._name_commentary_novelty = f"{ns}_commentary_novelty"
         self._name_commentary_compose_seconds = f"{ns}_commentary_compose_seconds"
+        self._name_commentary_recognitions = f"{ns}_commentary_recognitions"
+        self._name_commentary_referents_stored = f"{ns}_commentary_referents_stored"
 
         _log.debug("metrics_registry_initialised", namespace=ns)
 
@@ -1179,6 +1185,16 @@ class MetricsRegistry:
             _log.debug("commentary_compose_seconds_dropped", reason=reason, value=value)
             return
         self._commentary_compose_seconds.observe(value)
+
+    def inc_commentary_recognitions(self, amount: int = 1) -> None:
+        """Increment the count of narrated 'been here before' recognitions."""
+        if amount > 0:
+            self._commentary_recognitions.inc(amount)
+
+    def inc_commentary_referents_stored(self, amount: int = 1) -> None:
+        """Increment the count of stored recognition referents (new places learned)."""
+        if amount > 0:
+            self._commentary_referents_stored.inc(amount)
 
     # ------------------------------------------------------------------
     # PR-A2 — replay / VLA / VLM observability helpers.
@@ -2031,6 +2047,22 @@ class MetricsRegistry:
                     commentary_buckets,
                     commentary_sum,
                     commentary_count,
+                )
+            )
+        if self._commentary_recognitions.value > 0:
+            sections.append(
+                _render_counter(
+                    self._name_commentary_recognitions,
+                    "Narrated 'been here before' recognitions",
+                    self._commentary_recognitions.value,
+                )
+            )
+        if self._commentary_referents_stored.value > 0:
+            sections.append(
+                _render_counter(
+                    self._name_commentary_referents_stored,
+                    "Stored recognition referents (new places learned)",
+                    self._commentary_referents_stored.value,
                 )
             )
 

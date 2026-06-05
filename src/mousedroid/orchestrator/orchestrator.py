@@ -1729,10 +1729,28 @@ class MouseDroidOrchestrator:
             from mousedroid.commentary.facts import extract_commentary_facts
 
             novelty = self._current_novelty()
+            # Phase-1 recognition key — the live RSSM embedding. Computed only
+            # when recognition is enabled (cheap detach/copy at the ~2 Hz stride);
+            # ``None`` otherwise keeps the facts Phase-0-identical.
+            embedding = (
+                self._current_embedding() if self._cfg.commentary.recognition_enabled else None
+            )
             facts = extract_commentary_facts(
-                observation, novelty=novelty, is_emergency=safety_ctx.is_emergency
+                observation,
+                novelty=novelty,
+                is_emergency=safety_ctx.is_emergency,
+                embedding=embedding,
             )
             self._commentary.observe(novelty, facts)
+
+    def _current_embedding(self) -> NDArray[np.float32] | None:
+        """Return the current RSSM hidden state as a 1-D float32 embedding.
+
+        Mirrors the query used by :meth:`_compute_curiosity_scores` for epistemic
+        recall (``self._h`` flattened to ``float32``), so commentary recognition
+        keys referents in the same space the semantic index already uses.
+        """
+        return self._h.detach().cpu().numpy().flatten().astype(np.float32)
 
     async def _consolidation_loop(self) -> None:
         """Background loop that consolidates episodic memory into semantic index.

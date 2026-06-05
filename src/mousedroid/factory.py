@@ -55,6 +55,7 @@ if TYPE_CHECKING:
     from mousedroid.commentary.protocol import (
         CommentaryComposerProtocol,
         CommentaryEngineProtocol,
+        GroundedReferentStoreProtocol,
     )
     from mousedroid.common.time.protocol import ClockProtocol
     from mousedroid.common.tools.registry import ToolRegistry
@@ -537,18 +538,34 @@ def build_commentary(
 
     from mousedroid.commentary.engine import CommentaryEngine
 
+    # Phase-1: a self-contained in-memory referent store (reuses the FAISS-backed
+    # SemanticIndex, which already satisfies GroundedReferentStoreProtocol). Built
+    # only when recognition is enabled; keyed/queried by the RSSM embedding whose
+    # width is cfg.memory.semantic_dim. Within-session only (no persistence) — the
+    # GroundedReferentStoreProtocol is the seam for a future LMDB-backed store.
+    referent_store: GroundedReferentStoreProtocol | None = None
+    embedding_dim: int | None = None
+    if cfg.commentary.recognition_enabled:
+        from mousedroid.memory.semantic import SemanticIndex
+
+        referent_store = SemanticIndex(cfg.memory)
+        embedding_dim = cfg.memory.semantic_dim
+
     commentary = CommentaryEngine(
         cfg.commentary,
         voice_engine=engine,
         composer=composer,
         metrics=metrics,
         intensity_threshold=cfg.voice.intensity_threshold,
+        referent_store=referent_store,
+        embedding_dim=embedding_dim,
     )
     _log.info(
         "commentary_built",
         composer=type(composer).__name__,
         cadence_s=cfg.commentary.cadence_s,
         novelty_sigma=cfg.commentary.novelty_sigma,
+        recognition_enabled=cfg.commentary.recognition_enabled,
     )
     return commentary
 

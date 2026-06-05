@@ -81,6 +81,7 @@ def extract_commentary_facts(
     *,
     novelty: float | None,
     is_emergency: bool,
+    embedding: NDArray[np.float32] | None = None,
 ) -> CommentaryFacts:
     """Marshal a grounded :class:`CommentaryFacts` from one observation.
 
@@ -89,6 +90,9 @@ def extract_commentary_facts(
         novelty: The freshly-sampled curiosity novelty, or ``None`` when no
             curiosity module exists (distinct from a genuine ``0.0``).
         is_emergency: Whether this tick is flagged as an emergency.
+        embedding: Optional RSSM embedding of this moment (Phase-1 recognition
+            key). ``None`` (default) when recognition is disabled — keeps the
+            Phase-0 facts byte-identical.
 
     Returns:
         A frozen :class:`CommentaryFacts`. Never raises on degraded sensors.
@@ -112,6 +116,7 @@ def extract_commentary_facts(
         lidar_valid=lidar_valid,
         audio_valid=audio_valid,
         timestamp=_finite(observation.timestamp, 0.0),
+        embedding=embedding,
     )
 
 

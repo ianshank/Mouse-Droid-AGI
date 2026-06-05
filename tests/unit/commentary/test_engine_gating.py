@@ -447,4 +447,4 @@ async def test_debug_logs_evaluation_and_suppression_reason() -> None:
 
 def test_suppression_reasons_complete() -> None:
     """Every reason the engine emits is in its exported frozenset."""
-    assert len(SUPPRESSION_REASONS) == 10
+    assert len(SUPPRESSION_REASONS) == 11

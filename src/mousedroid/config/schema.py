@@ -4828,6 +4828,52 @@ class CommentaryConfig(BaseModel):
     fast_mps: float = Field(0.5, gt=0.0, description="speed above this -> 'moving_fast'.")
     low_battery_v: float = Field(11.0, gt=0.0, description="battery_v below this -> 'low_battery'.")
 
+    # --- Phase-1 situational recognition (within-session) ----------------
+    recognition_enabled: bool = Field(
+        False,
+        description=(
+            "Enable 'been here before' recognition: store the RSSM embedding of "
+            "each first-encountered novel moment (keyed by the spoken phrase) and, "
+            "on a close embedding match later, narrate recognition instead of "
+            "novelty. In-memory only (resets on reboot); default False keeps "
+            "Phase-0 behaviour byte-identical."
+        ),
+    )
+    recognition_distance_threshold: float = Field(
+        1.0,
+        gt=0.0,
+        description=(
+            "L2 distance (in RSSM-embedding space) below which the nearest stored "
+            "referent counts as 'recognised'. Scale-dependent on the world model — "
+            "operator-tunable; the DEBUG ``commentary_recognition_probe`` log "
+            "surfaces the live nearest distance so you can calibrate it."
+        ),
+    )
+    recognition_min_interval_s: float = Field(
+        30.0,
+        ge=0.0,
+        le=3600.0,
+        description="Minimum seconds between two spoken recognition narrations.",
+    )
+    recognition_max_referents: int = Field(
+        256,
+        ge=1,
+        le=100000,
+        description=(
+            "Cap on stored referents (bounds memory — the FAISS index has no "
+            "eviction, so storing stops at this cap)."
+        ),
+    )
+    recognition_template: str = Field(
+        "this place again! last time I said: {phrase}",
+        min_length=4,
+        description=(
+            "Plain-English recognition line (engine applies rocky_transform). The "
+            "single ``{phrase}`` placeholder is filled with the recalled first-"
+            "encounter utterance."
+        ),
+    )
+
     @model_validator(mode="after")
     def _validate(self) -> CommentaryConfig:
         # Gate every cross-field guard on ``enabled`` so a disabled overlay can
@@ -4855,6 +4901,19 @@ class CommentaryConfig(BaseModel):
                 f"({type(exc).__name__}: {exc})"
             )
             raise ValueError(msg) from exc
+        if self.recognition_enabled:
+            if "{phrase}" not in self.recognition_template:
+                msg = "commentary.recognition_template must contain the '{phrase}' placeholder"
+                raise ValueError(msg)
+            try:
+                self.recognition_template.format(phrase="__probe__")
+            except (KeyError, ValueError, IndexError) as exc:
+                msg = (
+                    "commentary.recognition_template formatting failed at config "
+                    f"load — only the '{{phrase}}' placeholder is supported "
+                    f"({type(exc).__name__}: {exc})"
+                )
+                raise ValueError(msg) from exc
         return self
 
 

@@ -55,10 +55,14 @@ async def test_factory_engine_fires_through_voice() -> None:
 # --------------------------------------------------------------------------- #
 # Orchestrator wiring: spawn on start, observe per tick, drain on stop
 # --------------------------------------------------------------------------- #
-def _orchestrator_with_commentary(commentary: object) -> MouseDroidOrchestrator:
+def _orchestrator_with_commentary(
+    commentary: object, *, recognition: bool = False
+) -> MouseDroidOrchestrator:
     cfg = Settings(
         mock_hardware=True,
-        commentary=CommentaryConfig(enabled=True, composer="template", observe_stride=1),
+        commentary=CommentaryConfig(
+            enabled=True, composer="template", observe_stride=1, recognition_enabled=recognition
+        ),
     )
     world_model = MagicMock()
     world_model.observe_step.return_value = (
@@ -116,3 +120,15 @@ async def test_orchestrator_tick_feeds_commentary() -> None:
     novelty_arg, facts_arg = commentary.observe.call_args.args
     assert novelty_arg is None  # no curiosity module wired
     assert facts_arg.min_clearance_m == 5.0
+    assert facts_arg.embedding is None  # recognition off -> no embedding threaded
+
+
+async def test_orchestrator_threads_embedding_when_recognition_enabled() -> None:
+    commentary = MagicMock(spec=CommentaryEngineProtocol)
+    orch = _orchestrator_with_commentary(commentary, recognition=True)
+    await orch.tick()
+    _novelty, facts = commentary.observe.call_args.args
+    assert facts.embedding is not None
+    # RSSM hidden state flattened to float32, width = hidden_dim + cfc_hidden_dim.
+    assert facts.embedding.dtype == np.float32
+    assert facts.embedding.ndim == 1

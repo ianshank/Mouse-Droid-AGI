@@ -74,6 +74,37 @@ def test_range_gates(field: str, value: float) -> None:
         CommentaryConfig(**{field: value})  # type: ignore[arg-type]
 
 
+def test_recognition_defaults_off() -> None:
+    cfg = CommentaryConfig()
+    assert cfg.recognition_enabled is False
+    assert cfg.recognition_distance_threshold > 0.0
+    assert "{phrase}" in cfg.recognition_template
+
+
+def test_recognition_template_requires_phrase_placeholder() -> None:
+    with pytest.raises(ValidationError, match=r"\{phrase\}"):
+        CommentaryConfig(enabled=True, recognition_enabled=True, recognition_template="no slot")
+
+
+def test_recognition_template_unchecked_when_recognition_disabled() -> None:
+    """recognition_template isn't validated unless recognition is enabled."""
+    cfg = CommentaryConfig(enabled=True, recognition_enabled=False, recognition_template="no slot")
+    assert cfg.recognition_enabled is False  # no raise
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("recognition_distance_threshold", 0.0),
+        ("recognition_max_referents", 0),
+        ("recognition_min_interval_s", -1.0),
+    ],
+)
+def test_recognition_range_gates(field: str, value: float) -> None:
+    with pytest.raises(ValidationError):
+        CommentaryConfig(**{field: value})  # type: ignore[arg-type]
+
+
 def test_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     """Env alone constructs the Optional nested model (no YAML / init-arg)."""
     monkeypatch.setenv("MOUSEDROID_MOCK_HARDWARE", "true")

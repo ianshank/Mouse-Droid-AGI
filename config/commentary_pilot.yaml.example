@@ -68,3 +68,14 @@ commentary:
   # low_battery_v: 11.0
   # templates:
   #   default: "something new here"
+
+  # --- Phase-1 situational recognition (in-memory; resets on reboot) ---------
+  # The droid stores the RSSM embedding of each first-encountered novel moment
+  # (keyed by what it said) and, on a close match later, narrates recognition
+  # instead of novelty. Calibrate recognition_distance_threshold against the
+  # DEBUG `commentary_recognition_probe` log (it prints the live nearest distance).
+  recognition_enabled: true
+  recognition_distance_threshold: 1.0   # L2 in embedding space (world-model-scaled)
+  recognition_min_interval_s: 30.0      # min seconds between recognition narrations
+  recognition_max_referents: 256        # cap on stored places (bounds memory)
+  recognition_template: "this place again! last time I said: {phrase}"

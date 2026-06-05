@@ -41,6 +41,26 @@ def test_template_engine_built() -> None:
     assert isinstance(eng, CommentaryEngineProtocol)
 
 
+def test_recognition_builds_referent_store() -> None:
+    """recognition_enabled wires a referent store + embedding_dim into the engine."""
+    from mousedroid.commentary.protocol import GroundedReferentStoreProtocol
+
+    eng = build_commentary(
+        _settings(composer="template", recognition_enabled=True), voice_engine=_voice()
+    )
+    assert eng is not None
+    assert isinstance(eng._referent_store, GroundedReferentStoreProtocol)  # type: ignore[attr-defined]
+    assert eng._embedding_dim == 256  # type: ignore[attr-defined]
+    assert eng._recognition_active is True  # type: ignore[attr-defined]
+
+
+def test_no_referent_store_when_recognition_disabled() -> None:
+    eng = build_commentary(_settings(composer="template"), voice_engine=_voice())
+    assert eng is not None
+    assert eng._referent_store is None  # type: ignore[attr-defined]
+    assert eng._recognition_active is False  # type: ignore[attr-defined]
+
+
 def test_none_when_voice_unavailable() -> None:
     cfg = Settings(
         mock_hardware=True,

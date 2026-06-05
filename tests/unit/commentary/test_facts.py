@@ -99,3 +99,11 @@ def test_nonfinite_novelty_coerced() -> None:
     obs = _Obs()
     f = extract_commentary_facts(obs, novelty=float("nan"), is_emergency=False)
     assert f.novelty == 0.0  # NaN coerced to safe 0.0 (still not None)
+
+
+def test_embedding_defaults_none_and_threads_through() -> None:
+    obs = _Obs()
+    assert extract_commentary_facts(obs, novelty=None, is_emergency=False).embedding is None
+    emb = np.arange(4, dtype=np.float32)
+    f = extract_commentary_facts(obs, novelty=None, is_emergency=False, embedding=emb)
+    assert f.embedding is emb

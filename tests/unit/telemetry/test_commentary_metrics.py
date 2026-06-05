@@ -60,7 +60,25 @@ def test_non_positive_increments_are_noops() -> None:
     reg.inc_commentary_emitted(0)
     reg.inc_commentary_considered(-1)
     reg.inc_commentary_suppressed("cooldown", 0)
+    reg.inc_commentary_recognitions(0)
+    reg.inc_commentary_referents_stored(-2)
     assert "commentary" not in reg.render_prometheus()
+
+
+def test_recognition_families_render_after_write() -> None:
+    reg = _reg()
+    assert "commentary_recognitions" not in reg.render_prometheus()
+    reg.inc_commentary_recognitions()
+    reg.inc_commentary_referents_stored(3)
+    out = reg.render_prometheus()
+    assert "commentary_recognitions_total 1" in out
+    assert "commentary_referents_stored_total 3" in out
+
+
+def test_recognition_cooldown_is_a_valid_suppress_reason() -> None:
+    reg = _reg()
+    reg.inc_commentary_suppressed("recognition_cooldown")
+    assert 'reason="recognition_cooldown"' in reg.render_prometheus()
 
 
 def test_novelty_nan_skipped() -> None:

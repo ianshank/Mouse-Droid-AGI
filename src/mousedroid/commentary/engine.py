@@ -21,9 +21,13 @@ from mousedroid.logging.setup import get_logger
 from mousedroid.voice.rocky import rocky_transform
 
 if TYPE_CHECKING:
+    import numpy as np
+    from numpy.typing import NDArray
+
     from mousedroid.commentary.protocol import (
         CommentaryComposerProtocol,
         CommentaryFacts,
+        GroundedReferentStoreProtocol,
     )
     from mousedroid.common.time.protocol import ClockProtocol
     from mousedroid.config.schema import CommentaryConfig
@@ -44,6 +48,9 @@ _REASON_NO_NOVELTY_SIGNAL = "no_novelty_signal"
 _REASON_COOLDOWN = "cooldown"
 _REASON_EMPTY = "empty"
 _REASON_EMPTY_AFTER_TRANSFORM = "empty_after_transform"
+# Phase-1: a recognised place was hit again within its recognition cooldown — we
+# stay quiet (and skip the novelty path, since the place is already known).
+_REASON_RECOGNITION_COOLDOWN = "recognition_cooldown"
 
 SUPPRESSION_REASONS: frozenset[str] = frozenset(
     {
@@ -57,6 +64,7 @@ SUPPRESSION_REASONS: frozenset[str] = frozenset(
         _REASON_COOLDOWN,
         _REASON_EMPTY,
         _REASON_EMPTY_AFTER_TRANSFORM,
+        _REASON_RECOGNITION_COOLDOWN,
     }
 )
 
@@ -73,6 +81,8 @@ class CommentaryEngine:
         metrics: MetricsRegistry | None = None,
         clock: ClockProtocol | None = None,
         intensity_threshold: float | None = None,
+        referent_store: GroundedReferentStoreProtocol | None = None,
+        embedding_dim: int | None = None,
     ) -> None:
         """Initialise the engine.
 
@@ -87,6 +97,14 @@ class CommentaryEngine:
                 cadence sleep and all cooldown/quiet-window timing.
             intensity_threshold: Forwarded ``VoiceConfig.intensity_threshold`` so
                 an operator override isn't shadowed (the greeting lesson).
+            referent_store: Optional Phase-1 referent store. When supplied AND
+                ``cfg.recognition_enabled``, the engine stores the embedding of
+                each fired novelty (keyed by the spoken phrase) and narrates
+                recognition on a close match. ``None`` (default) keeps Phase-0
+                behaviour byte-identical.
+            embedding_dim: Expected referent-embedding width (``semantic_dim``);
+                a fact embedding of any other width is skipped (with a one-time
+                warning) so a CfC-enabled rover never crashes the FAISS store.
         """
         self._cfg = cfg
         self._voice = voice_engine
@@ -111,6 +129,15 @@ class CommentaryEngine:
         self._last_emergency_t: float = -math.inf
         self._last_fire_t: float = -math.inf
         self._stopped: bool = False
+
+        # Phase-1 recognition state.
+        self._referent_store = referent_store
+        self._embedding_dim = embedding_dim
+        self._recognition_active = referent_store is not None and cfg.recognition_enabled
+        self._last_recognition_t: float = -math.inf
+        self._referent_count: int = 0
+        self._dim_warned: bool = False
+        self._full_warned: bool = False
 
     # -- Hot-path hooks (cheap) --------------------------------------------
 
@@ -248,6 +275,10 @@ class CommentaryEngine:
         ):
             self._suppress(_REASON_NOT_IDLE)
             return
+        # Phase-1 recognition: a known place short-circuits the novelty path —
+        # either narrating recognition or staying quiet within its cooldown.
+        if await self._handle_recognition(facts, now):
+            return
         # Novelty gate.
         if self._seen_novelty:
             if not outlier:
@@ -281,6 +312,85 @@ class CommentaryEngine:
             if self._seen_novelty and math.isfinite(peak):
                 self._metrics.set_commentary_novelty(peak)
         _log.info("commentary_spoken", text=styled, novelty=peak if self._seen_novelty else None)
+        # Learn this (unrecognised) place: store its embedding keyed by the plain
+        # spoken phrase so a later visit recalls "last time I said: <text>".
+        self._store_referent(facts, text)
+
+    # -- Phase-1 recognition -----------------------------------------------
+
+    def _usable_embedding(self, facts: CommentaryFacts) -> NDArray[np.float32] | None:
+        """Return the fact embedding iff recognition is active + dim matches."""
+        if not self._recognition_active or facts.embedding is None:
+            return None
+        emb = facts.embedding
+        if self._embedding_dim is not None and int(emb.shape[0]) != self._embedding_dim:
+            if not self._dim_warned:
+                _log.warning(
+                    "commentary_recognition_dim_mismatch",
+                    got=int(emb.shape[0]),
+                    expected=self._embedding_dim,
+                )
+                self._dim_warned = True
+            return None
+        return emb
+
+    def _nearest_referent(self, facts: CommentaryFacts) -> str | None:
+        """Return the recalled phrase of a recognised place, or ``None``."""
+        emb = self._usable_embedding(facts)
+        if emb is None or self._referent_store is None:
+            return None
+        results = self._referent_store.retrieve(emb, k=1)
+        if not results:
+            return None
+        key, distance = results[0]
+        # DEBUG so an operator can calibrate ``recognition_distance_threshold``
+        # against the live nearest distance.
+        _log.debug("commentary_recognition_probe", distance=distance, nearest=key)
+        return key if distance <= self._cfg.recognition_distance_threshold else None
+
+    async def _handle_recognition(self, facts: CommentaryFacts, now: float) -> bool:
+        """Handle a recognised place; return ``True`` iff it owns this evaluation.
+
+        Returns ``False`` for an unknown place so the caller falls through to the
+        novelty path. A recognised place either narrates recognition (when its
+        cooldown elapsed) or stays quiet — in both cases it owns the evaluation
+        (the novelty path is skipped, since the place is already known).
+        """
+        recalled = self._nearest_referent(facts)
+        if recalled is None:
+            return False
+        if (now - self._last_recognition_t) < self._cfg.recognition_min_interval_s:
+            self._suppress(_REASON_RECOGNITION_COOLDOWN)
+            return True
+        styled = self._style(self._cfg.recognition_template.format(phrase=recalled))
+        if not styled:
+            self._suppress(_REASON_EMPTY_AFTER_TRANSFORM)
+            return True
+        await self._voice.play_phrase(styled)
+        self._last_recognition_t = now
+        if self._metrics is not None:
+            self._metrics.inc_commentary_recognitions()
+        _log.info("commentary_recognition_spoken", text=styled, recalled=recalled)
+        return True
+
+    def _store_referent(self, facts: CommentaryFacts, phrase: str) -> None:
+        """Persist this (new) place's embedding keyed by the spoken phrase."""
+        emb = self._usable_embedding(facts)
+        if emb is None or self._referent_store is None:
+            return
+        if self._referent_count >= self._cfg.recognition_max_referents:
+            if not self._full_warned:
+                _log.warning(
+                    "commentary_referent_store_full",
+                    cap=self._cfg.recognition_max_referents,
+                )
+                self._full_warned = True
+            return
+        self._referent_store.store(phrase, emb)
+        self._referent_count += 1
+        if self._metrics is not None:
+            self._metrics.inc_commentary_referents_stored()
+        _log.debug("commentary_referent_stored", phrase=phrase, count=self._referent_count)
 
     def _style(self, text: str) -> str:
         """Apply Rocky styling, forwarding the operator intensity threshold."""
