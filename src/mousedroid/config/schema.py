@@ -1388,6 +1388,81 @@ class MemoryConfig(BaseModel):
     )
 
 
+class ExperimentLoggerConfig(BaseModel):
+    """Experiment-logger configuration for training runs (per-step + per-phase metrics).
+
+    Wired into :class:`PipelineOrchestrator` and :class:`OfflineRLTrainer`
+    via :func:`mousedroid.factory.build_experiment_logger`. Defaults to OFF
+    (``backend="none"``) so a YAML predating this feature loads unchanged
+    (CLAUDE.md invariant #9). Selecting ``backend="mlflow"`` requires the
+    ``mousedroid[mlflow]`` extras (``mlflow-skinny``); a missing dep
+    degrades gracefully to the NoOp logger with a structured warning.
+    """
+
+    backend: Literal["none", "mlflow"] = Field(
+        "none",
+        description=(
+            "Experiment-logger backend. ``none`` (default) selects the NoOp "
+            "logger — byte-identical to pre-feature behavior. ``mlflow`` "
+            "selects the MlflowClient-backed logger writing to "
+            "``tracking_uri`` (default ``file:./mlruns``)."
+        ),
+    )
+    tracking_uri: str = Field(
+        "file:./mlruns",
+        description=(
+            "MLflow tracking URI. ``file:./mlruns`` (default) writes to a "
+            "local directory relative to the factory's resolution time (the "
+            "factory pins this to an absolute path to avoid CWD surprises). "
+            "Set to ``http://host:port`` to use a remote tracking server."
+        ),
+    )
+    experiment_name: str = Field(
+        "mousedroid",
+        min_length=1,
+        description="MLflow experiment name (created if missing).",
+    )
+    run_name: str | None = Field(
+        None,
+        description=(
+            "Optional human-readable run name for the parent (pipeline) run. "
+            "When ``None`` the orchestrator constructs one from the pipeline "
+            "config + UTC timestamp."
+        ),
+    )
+    log_step_every_n: int = Field(
+        1,
+        gt=0,
+        description=(
+            "Per-update-step metric throttle. ``1`` (default) logs every "
+            "update_step call. Set higher for very-long training runs to "
+            "reduce store-write overhead."
+        ),
+    )
+    log_artifacts: bool = Field(
+        True,
+        description=(
+            "When True, the orchestrator logs the resolved Settings JSON "
+            "snapshot as a parent-run artifact at start, plus the per-phase "
+            "checkpoint file as a child-run artifact on phase completion."
+        ),
+    )
+
+
+class ObservabilityConfig(BaseModel):
+    """Top-level observability configuration for the training stack.
+
+    Currently contains the experiment-logger sub-config; future fields
+    (training-side Prometheus metrics, W&B integration, etc.) land here
+    to keep ``Settings`` flat.
+    """
+
+    experiment_logger: ExperimentLoggerConfig = Field(
+        default_factory=ExperimentLoggerConfig,
+        description="Per-run experiment-logger config (MLflow file backend).",
+    )
+
+
 class MetricsConfig(BaseModel):
     """Prometheus-compatible metrics export configuration.
 
@@ -4763,6 +4838,14 @@ class Settings(BaseSettings):
         ),
     )
     offline_rl: OfflineRLConfig = Field(default_factory=_settings_default_factory(OfflineRLConfig))
+    observability: ObservabilityConfig | None = Field(
+        None,
+        description=(
+            "Top-level observability config (experiment logger). None (default) "
+            "preserves byte-identical pre-feature behavior. Set to enable "
+            "MLflow-backed metric logging for training runs."
+        ),
+    )
     ppo: PPOConfig = Field(default_factory=_settings_default_factory(PPOConfig))
     telemetry: TelemetryConfig = Field(default_factory=_settings_default_factory(TelemetryConfig))
     mcp: MCPConfig | None = Field(
@@ -4948,3 +5031,26 @@ class Settings(BaseSettings):
                 raise ValueError(msg)
 
         return self
+
+    def model_copy(
+        self,
+        *,
+        update: dict[str, Any] | None = None,
+        deep: bool = False,
+    ) -> Settings:
+        """Override to coerce dict-typed ``observability`` updates to the Pydantic model.
+
+        Pydantic v2 ``model_copy(update=...)`` does not run field validators, so
+        a raw dict supplied for an ``Optional[BaseModel]`` field stays a dict.
+        This override coerces the ``observability`` field only — all other fields
+        are passed through unchanged — so the env-var overlay pattern works
+        as expected without re-validating the entire settings object.
+        """
+        result = super().model_copy(update=update, deep=deep)
+        if update and "observability" in update and isinstance(result.observability, dict):
+            object.__setattr__(
+                result,
+                "observability",
+                ObservabilityConfig.model_validate(result.observability),
+            )
+        return result
