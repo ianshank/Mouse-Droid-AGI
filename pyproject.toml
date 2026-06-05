@@ -54,6 +54,9 @@ mcp = [
     "mcp>=1.0",
     "anyio>=4.0",
 ]
+mlflow = [
+    "mlflow-skinny>=2.22,<3",
+]
 llm = [
     "llama-cpp-python>=0.2",
     "huggingface-hub>=0.20",
