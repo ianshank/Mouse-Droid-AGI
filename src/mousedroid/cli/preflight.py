@@ -52,7 +52,72 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Emit JSON instead of human-readable text.",
     )
+    parser.add_argument(
+        "--journal-path",
+        default=None,
+        help=(
+            "Append this run to a JSONL validation journal at PATH for "
+            "trend tracking across runs. Opt-in; omit to leave no trace."
+        ),
+    )
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Run identifier stored with --journal-path (default: UTC stamp).",
+    )
+    parser.add_argument(
+        "--trend",
+        action="store_true",
+        help=(
+            "After recording, compare against the previous run in the journal "
+            "and print any regressions (status downgrade, new FAIL, latency "
+            "creep). Requires --journal-path. Exit 1 if a regression is found."
+        ),
+    )
     return parser
+
+
+async def _record_and_trend(
+    *,
+    journal_path: str,
+    run_id: str,
+    report: object,
+    show_trend: bool,
+) -> bool:
+    """Persist ``report`` to a JSONL journal; optionally print regressions.
+
+    Returns True when a regression was detected (used to gate the exit code).
+    Kept out of :func:`main` so the import + journal lifecycle stays lazy —
+    operators who never pass ``--journal-path`` pay nothing.
+    """
+    from pathlib import Path as _Path
+
+    from mousedroid.config.schema import HarnessJournalConfig
+    from mousedroid.harness.journal.jsonl_journal import JSONLJournal
+    from mousedroid.validation.report_store import (
+        detect_regressions,
+        read_report_history,
+        record_report,
+    )
+
+    # model_validate (vs direct construction) lets the other journal tunables
+    # (map_size_gb / flush_every_n / queue_max) resolve to their schema defaults
+    # without restating them here — no hardcoded values, mypy-strict clean.
+    journal_cfg = HarnessJournalConfig.model_validate(
+        {"backend": "jsonl", "path": _Path(journal_path)},
+    )
+    journal = JSONLJournal(journal_cfg)
+    await journal.start()
+    try:
+        await record_report(journal, report, run_id=run_id)  # type: ignore[arg-type]
+        if not show_trend:
+            return False
+        history = await read_report_history(journal)
+        regression = detect_regressions(history)
+        sys.stdout.write(regression.render_text() + "\n")
+        return regression.has_regressions
+    finally:
+        await journal.stop()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -66,12 +131,32 @@ def main(argv: list[str] | None = None) -> int:
     if args.mock_hardware:
         cfg.mock_hardware = True
 
+    if args.trend and not args.journal_path:
+        parser.error("--trend requires --journal-path")
+
     check_names = set(args.checks.split(",")) if args.checks else None
     report = asyncio.run(run_preflight(cfg, check_names=check_names))
     output = report.model_dump_json(indent=2) if args.json else report.render_text()
     sys.stdout.write(output + "\n")
-    # Exit 0 on OK or DEGRADED (WARN-only); 1 on FAIL.
-    return 0 if report.overall_status != PreflightStatus.FAIL else 1
+
+    regressed = False
+    if args.journal_path:
+        from datetime import datetime, timezone
+
+        run_id = args.run_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        regressed = asyncio.run(
+            _record_and_trend(
+                journal_path=args.journal_path,
+                run_id=run_id,
+                report=report,
+                show_trend=args.trend,
+            ),
+        )
+
+    # Exit 0 on OK or DEGRADED (WARN-only); 1 on FAIL or detected regression.
+    if report.overall_status == PreflightStatus.FAIL or regressed:
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
