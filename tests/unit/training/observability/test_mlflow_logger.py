@@ -276,3 +276,132 @@ def test_end_phase_with_empty_ctx_is_safe(tracking_uri: str) -> None:
     logger = _build_logger(tracking_uri)
     ctx = PhaseContext(run_id="", phase="orphan")
     logger.end_phase(ctx)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Exception-path coverage — each except branch is exercised via patch.object
+# on the internal _client so all other methods still use the real client.
+# ---------------------------------------------------------------------------
+
+
+def test_start_run_backend_failure_returns_empty_string(tracking_uri: str) -> None:
+    """start_run except branch: returns "" and does not raise on client error."""
+    from unittest.mock import patch
+
+    logger = _build_logger(tracking_uri)
+    with patch.object(logger._client, "create_run", side_effect=RuntimeError("boom")):
+        result = logger.start_run(run_name="fail")
+    assert result == ""
+    assert logger._active_run_id is None
+
+
+def test_log_params_backend_failure_is_safe(tracking_uri: str) -> None:
+    """log_params except branch: does not raise when log_param raises."""
+    from unittest.mock import patch
+
+    logger = _build_logger(tracking_uri)
+    logger.start_run(run_name="x")
+    with patch.object(logger._client, "log_param", side_effect=RuntimeError("net")):
+        logger.log_params({"k": "v"})  # must not raise
+    logger.end_run()
+
+
+def test_log_metric_backend_failure_is_safe(tracking_uri: str) -> None:
+    """log_metric except branch: does not raise when log_metric raises."""
+    from unittest.mock import patch
+
+    logger = _build_logger(tracking_uri)
+    logger.start_run(run_name="x")
+    with patch.object(logger._client, "log_metric", side_effect=RuntimeError("net")):
+        logger.log_metric("loss", 0.5)  # must not raise
+    logger.end_run()
+
+
+def test_log_artifact_backend_failure_is_safe(tracking_uri: str, tmp_path: Path) -> None:
+    """log_artifact except branch: does not raise when log_artifact raises."""
+    from unittest.mock import patch
+
+    artifact = tmp_path / "ckpt.txt"
+    artifact.write_text("x")
+    logger = _build_logger(tracking_uri)
+    logger.start_run(run_name="x")
+    with patch.object(logger._client, "log_artifact", side_effect=RuntimeError("disk")):
+        logger.log_artifact(str(artifact))  # must not raise
+    logger.end_run()
+
+
+def test_end_run_backend_failure_still_clears_active_run(tracking_uri: str) -> None:
+    """end_run except branch: _active_run_id is cleared even when set_terminated raises."""
+    from unittest.mock import patch
+
+    logger = _build_logger(tracking_uri)
+    logger.start_run(run_name="x")
+    with patch.object(logger._client, "set_terminated", side_effect=RuntimeError("term")):
+        logger.end_run()  # must not raise
+    assert logger._active_run_id is None
+
+
+def test_start_phase_backend_failure_returns_empty_ctx(tracking_uri: str) -> None:
+    """start_phase except branch: returns empty PhaseContext when create_run raises."""
+    from unittest.mock import patch
+
+    logger = _build_logger(tracking_uri)
+    logger.start_run(run_name="x")
+    with patch.object(logger._client, "create_run", side_effect=RuntimeError("net")):
+        ctx = logger.start_phase(phase="rssm")
+    assert ctx.run_id == ""
+    assert ctx.phase == "rssm"
+    logger.end_run()
+
+
+def test_start_phase_param_logging_failure_is_safe(tracking_uri: str) -> None:
+    """start_phase param-logging except branch: returns valid ctx even if log_param fails."""
+    from unittest.mock import patch
+
+    logger = _build_logger(tracking_uri)
+    logger.start_run(run_name="x")
+    with patch.object(logger._client, "log_param", side_effect=RuntimeError("net")):
+        ctx = logger.start_phase(phase="rssm", params={"lr": 0.001})  # must not raise
+    assert ctx.run_id != ""
+    logger.end_phase(ctx)
+    logger.end_run()
+
+
+def test_log_phase_metric_backend_failure_is_safe(tracking_uri: str) -> None:
+    """log_phase_metric except branch: does not raise when log_metric raises."""
+    from unittest.mock import patch
+
+    logger = _build_logger(tracking_uri)
+    logger.start_run(run_name="x")
+    ctx = logger.start_phase(phase="rssm")
+    with patch.object(logger._client, "log_metric", side_effect=RuntimeError("net")):
+        logger.log_phase_metric(ctx, "loss", 0.5)  # must not raise
+    logger.end_phase(ctx)
+    logger.end_run()
+
+
+def test_log_phase_artifact_backend_failure_is_safe(tracking_uri: str, tmp_path: Path) -> None:
+    """log_phase_artifact except branch: does not raise when log_artifact raises."""
+    from unittest.mock import patch
+
+    artifact = tmp_path / "ph.txt"
+    artifact.write_text("x")
+    logger = _build_logger(tracking_uri)
+    logger.start_run(run_name="x")
+    ctx = logger.start_phase(phase="rssm")
+    with patch.object(logger._client, "log_artifact", side_effect=RuntimeError("disk")):
+        logger.log_phase_artifact(ctx, str(artifact))  # must not raise
+    logger.end_phase(ctx)
+    logger.end_run()
+
+
+def test_end_phase_backend_failure_is_safe(tracking_uri: str) -> None:
+    """end_phase except branch: does not raise when set_terminated raises."""
+    from unittest.mock import patch
+
+    logger = _build_logger(tracking_uri)
+    logger.start_run(run_name="x")
+    ctx = logger.start_phase(phase="rssm")
+    with patch.object(logger._client, "set_terminated", side_effect=RuntimeError("term")):
+        logger.end_phase(ctx)  # must not raise
+    logger.end_run()
