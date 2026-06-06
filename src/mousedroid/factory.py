@@ -79,6 +79,7 @@ if TYPE_CHECKING:
     from mousedroid.telemetry.log_buffer import LogRingBuffer
     from mousedroid.telemetry.metrics import MetricsRegistry
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
+    from mousedroid.training.observability import ExperimentLoggerProtocol
     from mousedroid.training.replay import ReplayReaderProtocol
     from mousedroid.voice.greeting import Greeter
     from mousedroid.voice.mock_tts import MockTTS
@@ -1178,6 +1179,88 @@ def build_metrics_registry(cfg: Settings) -> MetricsRegistry | None:
     from mousedroid.telemetry.metrics import MetricsRegistry
 
     return MetricsRegistry(cfg.metrics)
+
+
+def build_experiment_logger(cfg: Settings) -> ExperimentLoggerProtocol:
+    """Build the shared experiment logger for training pipelines.
+
+    Mirrors :func:`build_metrics_registry`'s shape: returns a NEVER-None
+    protocol type so callers can drop the ``logger is not None`` guard.
+    The NoOp implementation is the default and is byte-identically a no-op,
+    so threading the logger through the orchestrator/trainer is free when
+    observability is disabled.
+
+    Resolution order:
+
+    1. ``cfg.observability is None`` (the pre-feature default) →
+       :class:`NoOpExperimentLogger`.
+    2. ``cfg.observability.experiment_logger.backend == "none"`` →
+       :class:`NoOpExperimentLogger`.
+    3. ``cfg.observability.experiment_logger.backend == "mlflow"`` AND
+       the ``[mlflow]`` extras are installed →
+       :class:`MlflowExperimentLogger`.
+    4. ``cfg.observability.experiment_logger.backend == "mlflow"`` AND
+       ``mlflow-skinny`` is NOT installed →
+       :class:`NoOpExperimentLogger` (with a structured warning, so
+       operators see the misconfiguration without crashing the run).
+
+    ``file:./mlruns`` URIs are pinned to an absolute path at build time so
+    they survive working-dir changes inside the training process.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        A logger conforming to :class:`ExperimentLoggerProtocol`.
+    """
+    from mousedroid.training.observability import NoOpExperimentLogger
+
+    if cfg.observability is None:
+        return NoOpExperimentLogger()
+    logger_cfg = cfg.observability.experiment_logger
+    if logger_cfg.backend == "none":
+        return NoOpExperimentLogger()
+
+    if logger_cfg.backend == "mlflow":
+        try:
+            from mousedroid.training.observability.mlflow_logger import (
+                MlflowExperimentLogger,
+            )
+
+            tracking_uri = _resolve_tracking_uri(logger_cfg.tracking_uri)
+            return MlflowExperimentLogger(
+                tracking_uri=tracking_uri,
+                experiment_name=logger_cfg.experiment_name,
+                run_name=logger_cfg.run_name,
+            )
+        except ImportError as exc:
+            _log.warning(
+                "experiment_logger_mlflow_extras_missing",
+                error=f"{type(exc).__name__}:{exc}",
+            )
+            return NoOpExperimentLogger()
+
+    # Exhaustive Literal coverage; reached only on schema additions without a
+    # corresponding factory branch.
+    _log.warning(
+        "experiment_logger_unknown_backend",
+        backend=logger_cfg.backend,
+    )
+    return NoOpExperimentLogger()
+
+
+def _resolve_tracking_uri(raw: str) -> str:
+    """Pin a relative ``file:`` URI to an absolute path.
+
+    Non-file URIs (``http``, ``https``, ``databricks``, ``sqlite``) pass
+    through unchanged. The pin happens at factory time so the resolved
+    path survives chdir() inside trainers.
+    """
+    if not raw.startswith("file:"):
+        return raw
+    path_part = raw[len("file:") :]
+    abs_path = Path(path_part).resolve()
+    return f"file:{abs_path}"
 
 
 def build_weight_update_poller(
