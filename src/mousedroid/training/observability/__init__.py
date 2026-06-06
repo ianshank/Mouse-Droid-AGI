@@ -17,9 +17,10 @@ behavior to the pre-feature path.
 
 from __future__ import annotations
 
+from mousedroid.training.observability.noop_logger import NoOpExperimentLogger
 from mousedroid.training.observability.protocol import (
     ExperimentLoggerProtocol,
     PhaseContext,
 )
 
-__all__ = ["ExperimentLoggerProtocol", "PhaseContext"]
+__all__ = ["ExperimentLoggerProtocol", "NoOpExperimentLogger", "PhaseContext"]
