@@ -36,7 +36,7 @@ class TestPercentile:
 
     @pytest.mark.parametrize("q", [-1.0, 101.0])
     def test_out_of_range_q_raises(self, q: float) -> None:
-        with pytest.raises(ValueError, match=r"\[0, 100\]"):
+        with pytest.raises(ValueError, match=r"percentile q must be in"):
             percentile([1.0], q)
 
 

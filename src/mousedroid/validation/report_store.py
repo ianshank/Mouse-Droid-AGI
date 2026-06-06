@@ -43,8 +43,12 @@ _log = get_logger(__name__)
 EVENT_PREFLIGHT_REPORT = "preflight_report"
 
 # Ordinal severity used to detect an aggregate-status *downgrade* across runs.
-# Higher = worse. ``degraded`` sits between ``ok`` and ``fail``.
-_STATUS_RANK: dict[str, int] = {"ok": 0, "degraded": 1, "warn": 1, "fail": 2}
+# Higher = worse. ``degraded`` sits between ``ok`` and ``fail``. Definitional
+# ladder, not a runtime-tunable.
+_STATUS_RANK: dict[str, int] = {"ok": 0, "degraded": 1, "warn": 1, "fail": 2}  # hardcoded-ok
+
+# Minimum stored runs required to compute a trend (need a prev + curr).
+_MIN_RUNS_TO_COMPARE = 2  # hardcoded-ok: structural minimum, not tunable
 
 
 class CheckSnapshot(BaseModel):
@@ -190,8 +194,8 @@ async def read_report_history(journal: JournalProtocol) -> list[StoredReport]:
 def detect_regressions(
     history: list[StoredReport],
     *,
-    slow_ratio: float = 1.5,
-    slow_floor_s: float = 0.05,
+    slow_ratio: float = 1.5,  # hardcoded-ok: default; operator-tunable via preflight CLI
+    slow_floor_s: float = 0.05,  # hardcoded-ok: default; operator-tunable via preflight CLI
 ) -> RegressionReport:
     """Compare the two most-recent runs and flag regressions.
 
@@ -212,7 +216,7 @@ def detect_regressions(
     Returns:
         A :class:`RegressionReport`. ``compared=False`` when <2 runs exist.
     """
-    if len(history) < 2:
+    if len(history) < _MIN_RUNS_TO_COMPARE:
         return RegressionReport(compared=False)
     ordered = sorted(history, key=lambda r: r.recorded_at_ns)
     prev, curr = ordered[-2], ordered[-1]

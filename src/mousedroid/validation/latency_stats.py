@@ -21,6 +21,14 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+# Definitional constants (NOT runtime-tunable): the percentile domain, the
+# percentile points named in LatencySummary, and the seconds→ms unit factor.
+# Named so the maths reads intentionally rather than via bare literals.
+_PCT_MIN = 0.0
+_PCT_MAX = 100.0  # hardcoded-ok: percentile domain upper bound
+_P50, _P95, _P99 = 50.0, 95.0, 99.0  # hardcoded-ok: reported percentile points
+_MS_PER_S = 1000.0  # hardcoded-ok: seconds -> milliseconds
+
 
 class LatencySummary(BaseModel):
     """Percentile summary of a latency sample, in milliseconds.
@@ -64,11 +72,11 @@ def percentile(sorted_samples: list[float], q: float) -> float:
     """
     if not sorted_samples:
         raise ValueError("percentile() requires a non-empty sample")
-    if not 0.0 <= q <= 100.0:
-        raise ValueError(f"percentile q must be in [0, 100], got {q}")
+    if not _PCT_MIN <= q <= _PCT_MAX:
+        raise ValueError(f"percentile q must be in [{_PCT_MIN}, {_PCT_MAX}], got {q}")
     if len(sorted_samples) == 1:
         return sorted_samples[0]
-    rank = (q / 100.0) * (len(sorted_samples) - 1)
+    rank = (q / _PCT_MAX) * (len(sorted_samples) - 1)
     lo = int(rank)
     hi = min(lo + 1, len(sorted_samples) - 1)
     frac = rank - lo
@@ -94,9 +102,9 @@ def summarize(samples_ms: list[float]) -> LatencySummary:
         n=len(ordered),
         min_ms=ordered[0],
         mean_ms=sum(ordered) / len(ordered),
-        p50_ms=percentile(ordered, 50.0),
-        p95_ms=percentile(ordered, 95.0),
-        p99_ms=percentile(ordered, 99.0),
+        p50_ms=percentile(ordered, _P50),
+        p95_ms=percentile(ordered, _P95),
+        p99_ms=percentile(ordered, _P99),
         max_ms=ordered[-1],
     )
 
@@ -117,7 +125,9 @@ def intervals_ms(timestamps_s: list[float]) -> list[float]:
         ``len(timestamps_s) - 1`` inter-arrival gaps in milliseconds, or an
         empty list when fewer than two timestamps are supplied.
     """
-    return [(timestamps_s[i] - timestamps_s[i - 1]) * 1000.0 for i in range(1, len(timestamps_s))]
+    return [
+        (timestamps_s[i] - timestamps_s[i - 1]) * _MS_PER_S for i in range(1, len(timestamps_s))
+    ]
 
 
 __all__ = ["LatencySummary", "intervals_ms", "percentile", "summarize"]

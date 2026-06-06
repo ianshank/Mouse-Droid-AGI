@@ -8,6 +8,58 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Validation efficiency: latency percentiles, trend store, phase-1 caching
+
+Runtime/resource-efficiency layer on the existing Jetson validation harness. All
+three surfaces are additive and opt-in — defaults preserve byte-identical legacy
+behaviour.
+
+**Latency-percentile probes** (`src/mousedroid/validation/latency_stats.py`)
+
+- New pure, dependency-free `summarize(samples_ms) -> LatencySummary`
+  (min/mean/p50/p95/p99/max) + `intervals_ms(timestamps_s)` (arrival-timestamp →
+  inter-arrival gaps). No I/O, no clock reads, no verdict — the caller gates
+  against its config-supplied target. `mypy --strict` clean, 100 % covered.
+- `tools/llm_latency_probe.py --iterations N` — `1` (default) is the legacy
+  single-shot gate verbatim; `>1` emits `llm_latency_summary` and gates on **p95**
+  to absorb cloud/GPU tail variance.
+- `tools/lidar_telemetry_probe.py` emits `lidar_frame_interval_summary`
+  (inter-arrival jitter — high p95/p99 vs p50 = dropped/bunched dashboard frames).
+
+**Run-over-run trend store** (`src/mousedroid/validation/report_store.py`)
+
+- Persists each `PreflightReport` to the **existing** harness journal (no parallel
+  store) as a `preflight_report` event; `detect_regressions(history)` compares the
+  two newest runs for status downgrade / new FAIL / latency creep (gated by both a
+  `slow_ratio` and an absolute `slow_floor_s` so sub-50 ms checks don't false-fire).
+  `recorded_at_ns` is wall-clock `time.time_ns()` (stable across reboots).
+- Wired via `mousedroid.cli.preflight --journal-path PATH` (opt-in record) +
+  `--trend` (print regressions; exit 1 on regression) + operator-tunable
+  `--trend-slow-ratio` / `--trend-slow-floor-s` (no hardcoded call site).
+
+**Phase-1 caching** (`scripts/jetson_full_validation.sh`)
+
+- Phase 1 (static CI) is a pure function of the committed source: a clean tree
+  unchanged since the last green run SKIPs it (`PASS "static CI (cached)"`); a
+  dirty tree forces a miss (never masks an uncommitted edit). `--no-cache` forces a
+  re-run; `--phases 0,1,3` runs an ordered subset (`--phase` kept as the
+  single-phase alias). Hardware (Phase 2) + live (Phase 3) are never cached.
+
+**Modularity** (`src/mousedroid/validation/__init__.py`)
+
+- The heavy `runtime` sensor helpers (numpy/cv2/pyaudio) are now re-exported
+  **lazily** via PEP 562 `__getattr__`, so importing the pure `latency_stats` /
+  `report_store` modules no longer drags the sensor stack into the process.
+  Backwards compatible — the re-exported names still resolve on access.
+
+**Tests** — unit (`latency_stats`, `report_store`, lazy `__init__`, CLI flags),
+integration (`report_store` through factory `build_journal` for JSONL **and** LMDB +
+NullJournal default), regression (subprocess import-decoupling guard), smoke (script
+arg surface). Changed source files at 100 % line coverage.
+
+**Docs** — `docs/architecture/c4-validation-efficiency.md` (C4 component diagram),
+CLAUDE.md "Validation-efficiency surface" section, README validation block.
+
 ### Added — Full rover bring-up: unified dashboard + sensor-fusion summary
 
 Deploy-and-run-everything bring-up plus a single dashboard showing camera + lidar
