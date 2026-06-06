@@ -24,6 +24,7 @@ property / hardware tiers are N/A — formally considered + declined.
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 from pathlib import Path
 from typing import Final
@@ -32,6 +33,36 @@ import pytest
 
 _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[3]
 _SCRIPT_PATH: Final[Path] = _REPO_ROOT / "scripts" / "check_branch_coverage.py"
+
+# ---------------------------------------------------------------------------
+# Session-scoped autouse fixture — strips git plumbing env vars that are
+# injected by the pre-commit hook so that sandbox git repos created in
+# tmp_path are truly isolated from the outer repo's git state.
+# ---------------------------------------------------------------------------
+_GIT_PLUMBING_ENV_KEYS = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
+)
+
+
+@pytest.fixture(autouse=True)
+def _clear_git_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unset git plumbing env vars for every test in this module.
+
+    When tests are invoked from inside a pre-commit hook the hook sets
+    ``GIT_DIR`` (and sometimes ``GIT_WORK_TREE``) so that git commands run
+    against the correct worktree.  Without clearing these, sandbox repos
+    created via ``tmp_path`` inherit the outer repo's git state, causing
+    ``git add / commit`` to operate on the wrong directory and causing
+    ``_local_dev_base_candidates()`` to read the outer tracking branch
+    instead of the sandbox's (empty) remote config.
+    """
+    for key in _GIT_PLUMBING_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -76,8 +107,19 @@ def _git_checked(args: list[str], cwd: Path) -> str:
     ``shutil.which``-equivalent ``git`` resolution is the system's
     default. No noqa S603 needed — pytest already grants the test tree a
     broad subprocess waiver via ``pyproject.toml`` per-file-ignores.
+
+    ``GIT_DIR`` / ``GIT_WORK_TREE`` / ``GIT_INDEX_FILE`` are stripped from
+    the subprocess environment so that ``git commit`` calls inside the sandbox
+    repo do NOT inherit the outer repo's hook environment.  Without this,
+    running the tests from inside a pre-commit hook (which sets ``GIT_DIR``)
+    causes the sandbox's ``git commit`` to trigger the outer repo's
+    ``scripts/check_branch_coverage.py`` hook, which fails because that script
+    doesn't exist under the temp dir.
     """
-    result = subprocess.run(["git", *args], cwd=cwd, check=True, text=True, capture_output=True)
+    clean_env = {k: v for k, v in os.environ.items() if k not in _GIT_PLUMBING_ENV_KEYS}
+    result = subprocess.run(
+        ["git", *args], cwd=cwd, check=True, text=True, capture_output=True, env=clean_env
+    )
     return result.stdout
 
 
