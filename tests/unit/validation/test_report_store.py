@@ -153,3 +153,44 @@ class TestDetectRegressions:
         # Newest two by recorded_at_ns are c(2) then a(3): ok -> fail downgrade.
         result = detect_regressions([a, b, c])
         assert any("downgraded" in r for r in result.regressions)
+
+    def test_custom_thresholds_are_honoured(self) -> None:
+        # +0.15s is below a 0.2s floor -> not flagged even at a low ratio.
+        prev = self._stored(at=1, status="ok", total=1.0, checks=[("camera", "ok", 0.1)])
+        curr = self._stored(at=2, status="ok", total=1.0, checks=[("camera", "ok", 0.25)])
+        loose = detect_regressions([prev, curr], slow_ratio=1.1, slow_floor_s=0.2)
+        strict = detect_regressions([prev, curr], slow_ratio=1.1, slow_floor_s=0.01)
+        assert loose.has_regressions is False
+        assert strict.has_regressions is True
+
+    def test_render_text_no_regression_branch(self) -> None:
+        prev = self._stored(at=1, status="ok", total=1.0, checks=[])
+        curr = self._stored(at=2, status="ok", total=1.0, checks=[])
+        text = detect_regressions([prev, curr]).render_text()
+        assert "no regression" in text
+
+    def test_render_text_lists_each_regression(self) -> None:
+        prev = self._stored(at=1, status="ok", total=1.0, checks=[])
+        curr = self._stored(at=2, status="fail", total=3.0, checks=[])
+        text = detect_regressions([prev, curr]).render_text()
+        assert "regression(s)" in text
+        assert text.count("  - ") >= 1
+
+
+async def test_record_and_read_are_safe_on_null_journal() -> None:
+    """NullJournal (harness disabled) silently no-ops; history reads empty."""
+    from mousedroid.harness.journal.null_journal import NullJournal
+
+    journal = NullJournal()
+    await journal.start()
+    try:
+        stored = await record_report(
+            journal,
+            _report(("config", PreflightStatus.OK, 0.0)),
+            run_id="null-run",
+        )
+        assert stored.run_id == "null-run"  # return value still well-formed
+        history = await read_report_history(journal)
+    finally:
+        await journal.stop()
+    assert history == []

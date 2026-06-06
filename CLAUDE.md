@@ -447,6 +447,14 @@ single-shot / full-run behaviour:
   `llm_latency_summary` and gates on **p95** to absorb cloud/GPU tail variance).
   `lidar_telemetry_probe.py` now emits `lidar_frame_interval_summary` (inter-
   arrival jitter — a high p95/p99 vs p50 means dropped/bunched dashboard frames).
+  The pure `intervals_ms(timestamps_s)` helper (timestamps→inter-arrival gaps)
+  lives here too so the jitter maths is unit-tested, not inlined in the probe.
+  **Import-decoupling contract:** `mousedroid/validation/__init__.py` re-exports
+  the heavy `runtime` sensor helpers (numpy/cv2/pyaudio) **lazily** via :pep:`562`
+  `__getattr__`, so importing the pure modules never drags the sensor stack into
+  the process (locked by `tests/regression/test_validation_import_decoupling.py`).
+  Keep new pure helpers dependency-free; never add an eager `runtime` import to
+  `__init__`.
 - **`src/mousedroid/validation/report_store.py`** — persists each
   `PreflightReport` to the **existing** harness journal (no parallel store) as a
   `preflight_report` event, and `detect_regressions(history)` compares the two

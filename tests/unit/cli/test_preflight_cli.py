@@ -97,3 +97,50 @@ def test_trend_prints_summary_after_two_runs(
     assert main([*args, "--run-id", "b"]) == 0
     out = capsys.readouterr().out
     assert "Trend:" in out
+
+
+def test_fail_report_exits_one(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A FAIL aggregate status returns exit code 1 (the gate contract)."""
+    from mousedroid.validation.preflight import (
+        PreflightCheckResult,
+        PreflightReport,
+        PreflightStatus,
+    )
+
+    async def _fake_run_preflight(_cfg: object, **_kw: object) -> PreflightReport:
+        return PreflightReport(
+            checks=[
+                PreflightCheckResult(name="esp32", status=PreflightStatus.FAIL, detail="down"),
+            ],
+            total_elapsed_s=0.0,
+        )
+
+    monkeypatch.setattr("mousedroid.cli.preflight.run_preflight", _fake_run_preflight)
+    rc = main(["--mock-hardware"])
+    assert rc == 1
+    assert "overall=fail" in capsys.readouterr().out
+
+
+def test_trend_threshold_flags_are_accepted(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Operator-tunable trend thresholds parse and run (no hardcoded call site)."""
+    journal = tmp_path / "trend_thresh.jsonl"
+    args = [
+        "--mock-hardware",
+        "--journal-path",
+        str(journal),
+        "--trend",
+        "--trend-slow-ratio",
+        "2.0",
+        "--trend-slow-floor-s",
+        "0.1",
+    ]
+    assert main([*args, "--run-id", "a"]) == 0
+    capsys.readouterr()
+    assert main([*args, "--run-id", "b"]) == 0
+    assert "Trend:" in capsys.readouterr().out

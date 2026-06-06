@@ -14,7 +14,13 @@ from pathlib import Path
 
 from mousedroid.config.loader import load_settings
 from mousedroid.logging.setup import get_logger
-from mousedroid.validation.preflight import PreflightStatus, run_preflight
+from mousedroid.validation.preflight import PreflightReport, PreflightStatus, run_preflight
+
+# Trend-regression defaults — surfaced as CLI flags so operators can tune
+# sensitivity per uplink/bench without editing code (no hardcoded call site).
+# These mirror the library defaults in report_store.detect_regressions.
+_DEFAULT_TREND_SLOW_RATIO = 1.5
+_DEFAULT_TREND_SLOW_FLOOR_S = 0.05
 
 _log = get_logger(__name__)
 
@@ -74,6 +80,24 @@ def _build_parser() -> argparse.ArgumentParser:
             "creep). Requires --journal-path. Exit 1 if a regression is found."
         ),
     )
+    parser.add_argument(
+        "--trend-slow-ratio",
+        type=float,
+        default=_DEFAULT_TREND_SLOW_RATIO,
+        help=(
+            "Multiplicative slowdown threshold for --trend latency-creep "
+            "detection (default: %(default)s = +50%%). Raise on a noisy bench."
+        ),
+    )
+    parser.add_argument(
+        "--trend-slow-floor-s",
+        type=float,
+        default=_DEFAULT_TREND_SLOW_FLOOR_S,
+        help=(
+            "Absolute slowdown floor (s) below which --trend ignores latency "
+            "creep regardless of ratio (default: %(default)s)."
+        ),
+    )
     return parser
 
 
@@ -81,8 +105,10 @@ async def _record_and_trend(
     *,
     journal_path: str,
     run_id: str,
-    report: object,
+    report: PreflightReport,
     show_trend: bool,
+    slow_ratio: float,
+    slow_floor_s: float,
 ) -> bool:
     """Persist ``report`` to a JSONL journal; optionally print regressions.
 
@@ -90,8 +116,6 @@ async def _record_and_trend(
     Kept out of :func:`main` so the import + journal lifecycle stays lazy —
     operators who never pass ``--journal-path`` pay nothing.
     """
-    from pathlib import Path as _Path
-
     from mousedroid.config.schema import HarnessJournalConfig
     from mousedroid.harness.journal.jsonl_journal import JSONLJournal
     from mousedroid.validation.report_store import (
@@ -104,17 +128,33 @@ async def _record_and_trend(
     # (map_size_gb / flush_every_n / queue_max) resolve to their schema defaults
     # without restating them here — no hardcoded values, mypy-strict clean.
     journal_cfg = HarnessJournalConfig.model_validate(
-        {"backend": "jsonl", "path": _Path(journal_path)},
+        {"backend": "jsonl", "path": Path(journal_path)},
     )
     journal = JSONLJournal(journal_cfg)
     await journal.start()
     try:
-        await record_report(journal, report, run_id=run_id)  # type: ignore[arg-type]
+        stored = await record_report(journal, report, run_id=run_id)
+        _log.debug(
+            "trend_run_recorded",
+            run_id=stored.run_id,
+            overall=stored.overall_status,
+            show_trend=show_trend,
+        )
         if not show_trend:
             return False
         history = await read_report_history(journal)
-        regression = detect_regressions(history)
+        regression = detect_regressions(
+            history,
+            slow_ratio=slow_ratio,
+            slow_floor_s=slow_floor_s,
+        )
         sys.stdout.write(regression.render_text() + "\n")
+        _log.debug(
+            "trend_evaluated",
+            runs_compared=len(history),
+            has_regressions=regression.has_regressions,
+            regressions=len(regression.regressions),
+        )
         return regression.has_regressions
     finally:
         await journal.stop()
@@ -150,6 +190,8 @@ def main(argv: list[str] | None = None) -> int:
                 run_id=run_id,
                 report=report,
                 show_trend=args.trend,
+                slow_ratio=args.trend_slow_ratio,
+                slow_floor_s=args.trend_slow_floor_s,
             ),
         )
 

@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from mousedroid.validation.latency_stats import LatencySummary, percentile, summarize
+from mousedroid.validation.latency_stats import (
+    LatencySummary,
+    intervals_ms,
+    percentile,
+    summarize,
+)
 
 
 class TestPercentile:
@@ -76,3 +81,21 @@ class TestSummarize:
             "p99_ms",
             "max_ms",
         }
+
+
+class TestIntervalsMs:
+    def test_gaps_in_milliseconds(self) -> None:
+        # 0.0, 0.1, 0.25 s -> gaps of 100 ms and 150 ms.
+        assert intervals_ms([0.0, 0.1, 0.25]) == pytest.approx([100.0, 150.0])
+
+    def test_count_is_n_minus_one(self) -> None:
+        assert len(intervals_ms([1.0, 2.0, 3.0, 4.0])) == 3
+
+    @pytest.mark.parametrize("stamps", [[], [42.0]])
+    def test_fewer_than_two_yields_empty(self, stamps: list[float]) -> None:
+        assert intervals_ms(stamps) == []
+
+    def test_composes_with_summarize(self) -> None:
+        summary = summarize(intervals_ms([0.0, 0.1, 0.2, 0.3]))
+        assert summary.n == 3
+        assert summary.mean_ms == pytest.approx(100.0)

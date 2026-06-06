@@ -32,7 +32,7 @@ from mousedroid.factory import (
     build_telemetry_server,
 )
 from mousedroid.logging.setup import get_logger
-from mousedroid.validation.latency_stats import summarize
+from mousedroid.validation.latency_stats import intervals_ms, summarize
 
 _log = get_logger("lidar_telemetry_probe")
 
@@ -146,12 +146,12 @@ async def _main(args: argparse.Namespace) -> int:
     # Inter-frame arrival jitter — needs >=2 arrivals to form one interval.
     # Surfaces dashboard stutter (a high p95/p99 vs p50 means dropped/bunched
     # frames) that a raw frame count never reveals.
-    intervals_ms = [(arrivals_s[i] - arrivals_s[i - 1]) * 1000.0 for i in range(1, len(arrivals_s))]
-    if intervals_ms:
-        summary = summarize(intervals_ms)
+    gaps_ms = intervals_ms(arrivals_s)
+    if gaps_ms:
+        summary = summarize(gaps_ms)
         _log.info(
             "lidar_frame_interval_summary",
-            intervals=len(intervals_ms),
+            intervals=len(gaps_ms),
             min_ms=summary.min_ms,
             mean_ms=summary.mean_ms,
             p50_ms=summary.p50_ms,

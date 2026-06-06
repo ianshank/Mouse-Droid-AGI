@@ -101,4 +101,23 @@ def summarize(samples_ms: list[float]) -> LatencySummary:
     )
 
 
-__all__ = ["LatencySummary", "percentile", "summarize"]
+def intervals_ms(timestamps_s: list[float]) -> list[float]:
+    """Convert a sequence of arrival timestamps into inter-arrival gaps (ms).
+
+    Pure helper shared by streaming probes (e.g. the LiDAR→WebSocket frame
+    monitor): given monotonic arrival times in seconds, return the gaps between
+    consecutive arrivals in milliseconds. A sequence with fewer than two
+    timestamps yields an empty list (no interval can be formed) — never raises,
+    so callers can summarise unconditionally.
+
+    Args:
+        timestamps_s: Arrival times in seconds (monotonic clock recommended).
+
+    Returns:
+        ``len(timestamps_s) - 1`` inter-arrival gaps in milliseconds, or an
+        empty list when fewer than two timestamps are supplied.
+    """
+    return [(timestamps_s[i] - timestamps_s[i - 1]) * 1000.0 for i in range(1, len(timestamps_s))]
+
+
+__all__ = ["LatencySummary", "intervals_ms", "percentile", "summarize"]
