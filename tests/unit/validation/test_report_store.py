@@ -127,6 +127,19 @@ class TestDetectRegressions:
         result = detect_regressions([prev, curr])
         assert any("newly FAILing" in r for r in result.regressions)
 
+    def test_check_absent_in_previous_run_is_handled(self) -> None:
+        # esp32 is new this run (prior is None → no elapsed comparison); camera
+        # exists in both. Covers both branches of the per-check prior lookup.
+        prev = self._stored(at=1, status="ok", total=1.0, checks=[("camera", "ok", 0.1)])
+        curr = self._stored(
+            at=2,
+            status="fail",
+            total=1.0,
+            checks=[("camera", "ok", 0.1), ("esp32", "fail", 0.2)],
+        )
+        result = detect_regressions([prev, curr])
+        assert any("esp32" in r and "newly FAILing" in r for r in result.regressions)
+
     def test_latency_creep_flagged_above_ratio_and_floor(self) -> None:
         prev = self._stored(at=1, status="ok", total=1.0, checks=[("camera", "ok", 0.1)])
         curr = self._stored(at=2, status="ok", total=1.0, checks=[("camera", "ok", 0.4)])

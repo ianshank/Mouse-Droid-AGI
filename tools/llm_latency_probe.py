@@ -66,6 +66,11 @@ _log = get_logger("llm_latency_probe")
 # exercised but inference time isn't dominated by token-count variance.
 _DEFAULT_MISSION = "turn left slowly"
 
+# Default sample count. Single source of truth for both the argparse default and
+# the defensive fallback in ``_main`` (which is called directly in unit tests
+# with hand-built Namespaces that may predate the flag). 1 == legacy single-shot.
+_DEFAULT_ITERATIONS = 1
+
 # tegrastats output line shape (Orin Nano):
 #   RAM 2914/7619MB ...  GR3D_FREQ 0%@[306,...]  ... NVRGTX_FREQ ...
 # We extract two numbers: used RAM (MB) and total RAM (MB). On non-Jetson hosts
@@ -226,8 +231,10 @@ async def _main(args: argparse.Namespace) -> int:
     # gates on p95 so a flaky tail (cloud round-trip variance / GPU contention)
     # is caught without failing on a single unlucky sample.
     samples_ms: list[float] = []
-    goal = None
-    for i in range(args.iterations):
+    # ``getattr`` fallback keeps ``_main`` robust when called directly with a
+    # hand-built Namespace (unit tests) that predates the --iterations flag.
+    iterations = getattr(args, "iterations", _DEFAULT_ITERATIONS)
+    for i in range(iterations):
         t_translate = time.monotonic()
         goal = await gateway.translate_mission(args.mission)
         elapsed_ms = (time.monotonic() - t_translate) * 1000.0
@@ -250,7 +257,7 @@ async def _main(args: argparse.Namespace) -> int:
     passed = gate_ms <= cfg.llm.latency_target_ms
     _log.info(
         "llm_latency_summary",
-        iterations=args.iterations,
+        iterations=iterations,
         target_ms=cfg.llm.latency_target_ms,
         gate_ms=gate_ms,
         passed=passed,
@@ -288,7 +295,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--iterations",
         type=int,
-        default=1,
+        default=_DEFAULT_ITERATIONS,
         help=(
             "Number of translate_mission runs to sample. 1 (default) is the "
             "legacy single-shot gate; >1 emits a p50/p95/p99 summary and gates "

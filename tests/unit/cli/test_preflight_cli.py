@@ -99,6 +99,22 @@ def test_trend_prints_summary_after_two_runs(
     assert "Trend:" in out
 
 
+def test_non_mock_invocation_runs_without_mock_flag(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Default (no --mock-hardware) leaves cfg.mock_hardware untouched and exits 0."""
+    from mousedroid.validation.preflight import PreflightReport
+
+    async def _ok(_cfg: object, **_kw: object) -> PreflightReport:
+        return PreflightReport(checks=[], total_elapsed_s=0.0)
+
+    monkeypatch.setattr("mousedroid.cli.preflight.run_preflight", _ok)
+    rc = main([])  # no --mock-hardware → exercises the falsy branch
+    assert rc == 0
+    assert "overall=ok" in capsys.readouterr().out
+
+
 def test_fail_report_exits_one(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
