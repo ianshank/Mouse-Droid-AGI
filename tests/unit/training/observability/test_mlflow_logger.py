@@ -131,3 +131,148 @@ def test_end_phase_after_end_run_is_safe(tracking_uri: str) -> None:
     ctx = logger.start_phase(phase="p")
     logger.end_run()  # parent terminates first (unusual but possible on KeyboardInterrupt)
     logger.end_phase(ctx)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Blocker 2: reachable-path coverage
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_existing_experiment_returns_same_id(tracking_uri: str) -> None:
+    """Second construction with the same experiment_name reuses the existing id."""
+    logger1 = _build_logger(tracking_uri, "shared-exp")
+    logger2 = _build_logger(tracking_uri, "shared-exp")
+    assert logger1._experiment_id == logger2._experiment_id
+
+
+def test_log_params_before_start_run_is_safe(tracking_uri: str) -> None:
+    """log_params without an active run is a silent no-op + warning, never raises."""
+    logger = _build_logger(tracking_uri)
+    logger.log_params({"a": 1, "b": "two"})  # must not raise
+
+
+def test_log_artifact_before_start_run_is_safe(tracking_uri: str) -> None:
+    """log_artifact without an active run is a silent no-op + warning."""
+    logger = _build_logger(tracking_uri)
+    logger.log_artifact("/nonexistent/path/file.txt")  # must not raise
+
+
+def test_log_artifact_missing_file_is_safe(tracking_uri: str) -> None:
+    """log_artifact with a non-existent file path logs a warning and returns."""
+    logger = _build_logger(tracking_uri)
+    logger.start_run(run_name="artifact-miss")
+    logger.log_artifact("/path/does/not/exist.txt")  # must not raise
+    logger.end_run()
+
+
+def test_log_artifact_uploads_real_file(
+    tracking_uri: str, client: MlflowClient, tmp_path: Path
+) -> None:
+    """log_artifact with an existing file uploads it; list_artifacts confirms."""
+    artifact_file = tmp_path / "model_card.txt"
+    artifact_file.write_text("hello artifact")
+    logger = _build_logger(tracking_uri)
+    run_id = logger.start_run(run_name="artifact-ok")
+    logger.log_artifact(str(artifact_file))
+    logger.end_run()
+    artifacts = client.list_artifacts(run_id)
+    names = [a.path for a in artifacts]
+    assert "model_card.txt" in names
+
+
+def test_end_run_without_start_is_safe(tracking_uri: str) -> None:
+    """end_run with no active run is a silent no-op."""
+    logger = _build_logger(tracking_uri)
+    logger.end_run()  # must not raise
+
+
+def test_start_phase_without_parent_returns_empty_ctx(tracking_uri: str) -> None:
+    """start_phase without a parent run returns a PhaseContext with run_id==""."""
+    logger = _build_logger(tracking_uri)
+    ctx = logger.start_phase(phase="orphan")
+    assert ctx.run_id == ""
+    assert ctx.phase == "orphan"
+
+
+def test_log_phase_metric_with_empty_ctx_is_safe(tracking_uri: str) -> None:
+    """log_phase_metric with an empty-id ctx is a silent no-op."""
+    logger = _build_logger(tracking_uri)
+    ctx = PhaseContext(run_id="", phase="x")
+    logger.log_phase_metric(ctx, "loss", 0.5)  # must not raise
+
+
+def test_log_phase_metric_skips_nan(tracking_uri: str, client: MlflowClient) -> None:
+    """NaN is skipped by _to_finite_float; only the finite value is stored."""
+    logger = _build_logger(tracking_uri)
+    logger.start_run(run_name="nan-phase")
+    ctx = logger.start_phase(phase="nan-ph")
+    logger.log_phase_metric(ctx, "loss", float("nan"), step=0)
+    logger.log_phase_metric(ctx, "loss", 0.42, step=1)
+    logger.end_phase(ctx)
+    logger.end_run()
+    history = client.get_metric_history(ctx.run_id, "loss")
+    assert [(m.step, m.value) for m in history] == [(1, 0.42)]
+
+
+def test_log_phase_artifact_with_empty_ctx_is_safe(tracking_uri: str) -> None:
+    """log_phase_artifact with an empty-id ctx is a silent no-op."""
+    logger = _build_logger(tracking_uri)
+    ctx = PhaseContext(run_id="", phase="x")
+    logger.log_phase_artifact(ctx, "/nonexistent/file.txt")  # must not raise
+
+
+def test_log_phase_artifact_missing_file_is_safe(tracking_uri: str) -> None:
+    """log_phase_artifact with a missing file logs a warning and returns."""
+    logger = _build_logger(tracking_uri)
+    logger.start_run(run_name="pa-miss")
+    ctx = logger.start_phase(phase="miss-ph")
+    logger.log_phase_artifact(ctx, "/no/such/file.bin")  # must not raise
+    logger.end_phase(ctx)
+    logger.end_run()
+
+
+def test_log_phase_artifact_uploads_real_file(
+    tracking_uri: str, client: MlflowClient, tmp_path: Path
+) -> None:
+    """log_phase_artifact with an existing file uploads it; list_artifacts confirms."""
+    artifact_file = tmp_path / "phase_weights.pt"
+    artifact_file.write_bytes(b"\x00\x01\x02")
+    logger = _build_logger(tracking_uri)
+    logger.start_run(run_name="pa-ok")
+    ctx = logger.start_phase(phase="upload-ph")
+    logger.log_phase_artifact(ctx, str(artifact_file))
+    logger.end_phase(ctx)
+    logger.end_run()
+    artifacts = client.list_artifacts(ctx.run_id)
+    names = [a.path for a in artifacts]
+    assert "phase_weights.pt" in names
+
+
+def test_end_phase_invalid_status_normalised(tracking_uri: str, client: MlflowClient) -> None:
+    """An unknown status to end_phase is normalised to FINISHED with a warning."""
+    logger = _build_logger(tracking_uri)
+    logger.start_run(run_name="norm")
+    ctx = logger.start_phase(phase="norm-ph")
+    logger.end_phase(ctx, status="GARBAGE")  # must not raise
+    child = client.get_run(ctx.run_id)
+    assert child.info.status == "FINISHED"
+    logger.end_run()
+
+
+def test_start_phase_with_params_logs_them(tracking_uri: str, client: MlflowClient) -> None:
+    """start_phase with params= logs the params on the child run immediately."""
+    logger = _build_logger(tracking_uri)
+    logger.start_run(run_name="with-params")
+    ctx = logger.start_phase(phase="ph-with-params", params={"lr": 0.001, "epochs": 10})
+    child = client.get_run(ctx.run_id)
+    assert child.data.params["lr"] == "0.001"
+    assert child.data.params["epochs"] == "10"
+    logger.end_phase(ctx)
+    logger.end_run()
+
+
+def test_end_phase_with_empty_ctx_is_safe(tracking_uri: str) -> None:
+    """end_phase with an empty-id ctx (from a failed start_phase) is a no-op."""
+    logger = _build_logger(tracking_uri)
+    ctx = PhaseContext(run_id="", phase="orphan")
+    logger.end_phase(ctx)  # must not raise
