@@ -16,6 +16,11 @@ from torch import Tensor
 
 from mousedroid.constants import IQL_EXP_ADVANTAGE_CLAMP_MAX
 from mousedroid.logging.setup import get_logger
+from mousedroid.training.observability import (
+    ExperimentLoggerProtocol,
+    NoOpExperimentLogger,
+    PhaseContext,
+)
 
 _log = get_logger(__name__)
 
@@ -154,6 +159,9 @@ class OfflineRLTrainer(abc.ABC):
         device: torch.device | None = None,
         bc_lr: float | None = None,
         bc_batch_size: int | None = None,
+        *,
+        experiment_logger: ExperimentLoggerProtocol | None = None,
+        log_phase: PhaseContext | None = None,
     ) -> None:
         self._device = device or torch.device("cpu")
         self._gamma = gamma
@@ -185,12 +193,33 @@ class OfflineRLTrainer(abc.ABC):
             if bc_lr is not None
             else self.policy_optimizer
         )
+        self._experiment_logger: ExperimentLoggerProtocol = (
+            experiment_logger or NoOpExperimentLogger()
+        )
+        self._log_phase = log_phase
+        self._global_step = 0
         _log.info(
             "offline_rl_bc_optimizer_built",
             bc_lr=bc_lr,
             bc_batch_size=bc_batch_size,
             shared_with_policy=self.bc_optimizer is self.policy_optimizer,
         )
+
+    def _log_step_metrics(self, losses: dict[str, float]) -> None:
+        """Forward per-update_step losses to the experiment logger.
+
+        Called by ``update_step`` subclass implementations at the tail of
+        each call. When the trainer was built without an
+        ``experiment_logger`` OR without a ``log_phase`` context, this is a
+        byte-identical no-op via the NoOp logger.
+        """
+        if self._log_phase is None:
+            return
+        for key, value in losses.items():
+            self._experiment_logger.log_phase_metric(
+                self._log_phase, key, value, step=self._global_step
+            )
+        self._global_step += 1
 
     def _soft_update_targets(self) -> None:
         """Polyak-average target Q-network toward current Q-network."""
@@ -361,6 +390,9 @@ class CQLTrainer(OfflineRLTrainer):
         device: torch.device | None = None,
         bc_lr: float | None = None,
         bc_batch_size: int | None = None,
+        *,
+        experiment_logger: ExperimentLoggerProtocol | None = None,
+        log_phase: PhaseContext | None = None,
     ) -> None:
         super().__init__(
             state_dim=state_dim,
@@ -372,6 +404,8 @@ class CQLTrainer(OfflineRLTrainer):
             device=device,
             bc_lr=bc_lr,
             bc_batch_size=bc_batch_size,
+            experiment_logger=experiment_logger,
+            log_phase=log_phase,
         )
         self._cql_alpha = cql_alpha
         self._n_random_actions = n_random_actions
@@ -470,12 +504,14 @@ class CQLTrainer(OfflineRLTrainer):
         # --- Target update ---
         self._soft_update_targets()
 
-        return {
+        losses = {
             "q_loss": q_loss.item(),
             "bellman_loss": bellman_loss.item(),
             "cql_loss": cql_loss.item(),
             "policy_loss": policy_loss.item(),
         }
+        self._log_step_metrics(losses)
+        return losses
 
 
 # ---------------------------------------------------------------------------
@@ -547,6 +583,9 @@ class IQLTrainer(OfflineRLTrainer):
         device: torch.device | None = None,
         bc_lr: float | None = None,
         bc_batch_size: int | None = None,
+        *,
+        experiment_logger: ExperimentLoggerProtocol | None = None,
+        log_phase: PhaseContext | None = None,
     ) -> None:
         super().__init__(
             state_dim=state_dim,
@@ -558,6 +597,8 @@ class IQLTrainer(OfflineRLTrainer):
             device=device,
             bc_lr=bc_lr,
             bc_batch_size=bc_batch_size,
+            experiment_logger=experiment_logger,
+            log_phase=log_phase,
         )
         self._iql_tau = iql_tau
         self._beta = beta
@@ -640,11 +681,13 @@ class IQLTrainer(OfflineRLTrainer):
         # --- Target update ---
         self._soft_update_targets()
 
-        return {
+        losses = {
             "q_loss": q_loss.item(),
             "value_loss": value_loss.item(),
             "policy_loss": policy_loss.item(),
         }
+        self._log_step_metrics(losses)
+        return losses
 
     def save(self, path: str) -> None:
         """Save all network weights including value network.
