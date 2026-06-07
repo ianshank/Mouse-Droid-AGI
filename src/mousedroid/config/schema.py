@@ -1612,6 +1612,18 @@ class ModelConfig(BaseModel):
         description="Reserved for future AutoNCP/CfC wiring sparsity support; currently unused",
     )
 
+    # RSSM dynamics-pretraining KL knobs (Phase 5). Read by RSSM.train_sequence;
+    # build_rssm_trainable copies operator overrides from TrainingConfig onto these.
+    kl_beta: float = Field(
+        1.0, ge=0.0, description="KL weight in the RSSM training ELBO (recon + kl_beta*KL)."
+    )
+    kl_balance_alpha: float = Field(
+        0.8, ge=0.0, le=1.0, description="Dreamer KL-balancing weight (prior-update term)."
+    )
+    kl_free_nats: float = Field(
+        1.0, ge=0.0, description="Free-bits floor (nats) for the RSSM training KL."
+    )
+
     @model_validator(mode="after")
     def _validate_optional_modalities(self) -> Self:
         """Validate optional modality dimension pairs."""
@@ -3574,6 +3586,27 @@ class TrainingConfig(BaseModel):
     resume_from: str | None = Field(
         None,
         description="Path to checkpoint for resuming interrupted training",
+    )
+    # Phase 5 — MuJoCo->RSSM dynamics-pretraining knobs (opt-in; default OFF so
+    # pre-feature behaviour is unchanged). build_rssm_trainable copies
+    # rssm_free_nats / rssm_kl_balance_alpha onto the ModelConfig at build time.
+    rssm_pretrain_enabled: bool = Field(
+        False,
+        description="Opt-in: run the MuJoCo->RSSM dynamics pretraining loop in the rssm phase.",
+    )
+    rssm_free_nats: float = Field(
+        1.0, ge=0.0, description="Free-bits floor (nats) for the RSSM training KL."
+    )
+    rssm_kl_balance_alpha: float = Field(
+        0.8, ge=0.0, le=1.0, description="Dreamer KL-balancing weight (prior-update term)."
+    )
+    rssm_grad_clip: float = Field(
+        100.0, gt=0.0, description="Global grad-norm clip for RSSM pretraining."
+    )
+    rssm_checkpoint_name: str = Field(
+        "rssm_pretrained.pt",
+        min_length=1,
+        description="Filename for the RSSM pretrain checkpoint (under weights_dir).",
     )
     generation: TrainingGenerationConfig = Field(
         default_factory=_settings_default_factory(TrainingGenerationConfig)

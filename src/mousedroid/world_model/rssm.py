@@ -12,7 +12,11 @@ from mousedroid.config.schema import ModelConfig
 from mousedroid.logging.setup import get_logger
 from mousedroid.sensing.protocol import ObservationProtocol
 from mousedroid.world_model.encoder import MultimodalEncoder
-from mousedroid.world_model.latent_utils import kl_divergence, sample_gaussian
+from mousedroid.world_model.latent_utils import (
+    balanced_free_bits_kl,
+    kl_divergence,
+    sample_gaussian,
+)
 
 _log = get_logger(__name__)
 
@@ -51,12 +55,29 @@ class RSSM(nn.Module):
             cfg.obs_dim,
         )
 
+        # Raw-modality decoders used ONLY by train_sequence (the deployment
+        # path keeps observation_decoder/reward_head untouched). Reconstructing
+        # the RAW sim observations (fixed targets) is what avoids the obs_embed
+        # self-reconstruction collapse — gradients cannot move a fixed target.
+        self.decode_motor = nn.Linear(cfg.hidden_dim + cfg.latent_dim, cfg.motor_state_dim)
+        self._range_enabled = cfg.ultrasonic_dim > 0
+        if self._range_enabled:
+            self.decode_range = nn.Linear(cfg.hidden_dim + cfg.latent_dim, 1)
+        self._lidar_enabled = cfg.lidar_dim > 0
+        if self._lidar_enabled:
+            self.decode_lidar = nn.Linear(cfg.hidden_dim + cfg.latent_dim, cfg.lidar_dim)
+
         _log.info(
             "rssm_init",
             hidden_dim=cfg.hidden_dim,
             latent_dim=cfg.latent_dim,
             action_dim=cfg.action_dim,
         )
+
+    @property
+    def cfg(self) -> ModelConfig:
+        """Return the model configuration (read-only)."""
+        return self._cfg
 
     # ------------------------------------------------------------------
     # Helpers
@@ -206,3 +227,76 @@ class RSSM(nn.Module):
 
         predicted_reward: Tensor = self.reward_head(torch.cat([new_h, new_z], dim=-1))
         return new_h, new_z, predicted_reward
+
+    def train_sequence(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
+        """Gradient-enabled sequence rollout for dynamics pretraining.
+
+        Reconstructs the RAW per-modality sim observations (motor/range/lidar) —
+        fixed targets, so the objective cannot collapse the way an ``obs_embed``
+        self-reconstruction would. KL uses the balanced free-bits helper in
+        float32. Vision is expected OFF (encoder built with ``vision_dim=0``); the
+        ``batch`` therefore carries no vision tensor. This path is deliberately
+        NOT decorated ``@torch.no_grad`` — the deployment inference methods above
+        keep that decorator (CLAUDE.md invariant #7).
+
+        Args:
+            batch: Dict of ``(B, T, ...)`` tensors with keys ``motor``,
+                ``valid_mask``, ``action`` (always) and ``ultrasonic`` / ``lidar``
+                when those modalities are enabled.
+
+        Returns:
+            Dict with scalar tensors ``loss``, ``recon``, ``kl`` and a detached
+            ``posterior_std`` collapse probe.
+        """
+        motor = batch["motor"]
+        actions = batch["action"]
+        mask = batch["valid_mask"]
+        b, t, _ = motor.shape
+        device = motor.device
+        h = torch.zeros(b, self._cfg.hidden_dim, device=device)
+        z = torch.zeros(b, self._cfg.latent_dim, device=device)
+
+        recon = torch.zeros((), device=device)
+        kl_total = torch.zeros((), device=device)
+        post_stds: list[Tensor] = []
+
+        for step in range(t):
+            ultra = batch["ultrasonic"][:, step] if self._range_enabled else None
+            lidar = batch["lidar"][:, step] if self._lidar_enabled else None
+            obs_embed = self.encoder(None, ultra, motor[:, step], mask[:, step], lidar=lidar)
+
+            gru_in = torch.cat([z, actions[:, step]], dim=-1)
+            h = self.gru(gru_in, h)
+
+            post_params = self.posterior(torch.cat([h, obs_embed], dim=-1))
+            z, post_mean, post_logvar = self._sample_gaussian(post_params)
+            prior_params = self.prior(h)
+            _, prior_mean, prior_logvar = self._sample_gaussian(prior_params)
+
+            with torch.autocast(device_type=device.type, enabled=False):
+                kl_total = kl_total + balanced_free_bits_kl(
+                    post_mean,
+                    post_logvar,
+                    prior_mean,
+                    prior_logvar,
+                    alpha=self._cfg.kl_balance_alpha,
+                    free_nats=self._cfg.kl_free_nats,
+                )
+
+            hz = torch.cat([h, z], dim=-1)
+            recon = recon + nn.functional.mse_loss(self.decode_motor(hz), motor[:, step])
+            if self._range_enabled and ultra is not None:
+                recon = recon + nn.functional.mse_loss(self.decode_range(hz), ultra)
+            if self._lidar_enabled and lidar is not None:
+                recon = recon + nn.functional.mse_loss(self.decode_lidar(hz), lidar)
+            post_stds.append((0.5 * post_logvar).exp().mean().detach())
+
+        recon = recon / t
+        kl = kl_total / t
+        loss = recon + self._cfg.kl_beta * kl
+        return {
+            "loss": loss,
+            "recon": recon.detach(),
+            "kl": kl.detach(),
+            "posterior_std": torch.stack(post_stds).mean(),
+        }
