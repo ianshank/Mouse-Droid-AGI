@@ -84,6 +84,7 @@ if TYPE_CHECKING:
     from mousedroid.voice.mock_tts import MockTTS
     from mousedroid.voice.tts import PiperTTS
     from mousedroid.world_model.protocol import WorldModelProtocol
+    from mousedroid.world_model.rssm import RSSM
 
 
 _log = get_logger(__name__)
@@ -574,6 +575,36 @@ def build_world_model(cfg: Settings) -> WorldModelProtocol:
     from mousedroid.world_model.rssm import RSSM
 
     return RSSM(cfg.model)
+
+
+def build_rssm_trainable(cfg: Settings) -> RSSM:
+    """Build the concrete trainable RSSM for MuJoCo dynamics pretraining.
+
+    Unlike :func:`build_world_model` (which returns a ``WorldModelProtocol``
+    wrapper for deployment), this returns the concrete ``nn.Module`` so the
+    pretrainer can call ``train_sequence`` + backprop. Vision is disabled
+    (``vision_dim=0`` paired with ``vision_proj_dim=0`` per the schema
+    validator) — the sim has no camera; the dynamics core is what gets
+    pretrained. Operator pretrain knobs from :class:`TrainingConfig` are copied
+    onto the model config so they live in one place (``training:``).
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        A concrete :class:`~mousedroid.world_model.rssm.RSSM` with vision off.
+    """
+    from mousedroid.world_model.rssm import RSSM
+
+    model_cfg = cfg.model.model_copy(
+        update={
+            "vision_dim": 0,
+            "vision_proj_dim": 0,
+            "kl_free_nats": cfg.training.rssm_free_nats,
+            "kl_balance_alpha": cfg.training.rssm_kl_balance_alpha,
+        }
+    )
+    return RSSM(model_cfg)
 
 
 def _build_onnx_world_model(cfg: Settings) -> WorldModelProtocol:
