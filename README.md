@@ -203,6 +203,13 @@ python -m mousedroid.cli.preflight                     # text output
 python -m mousedroid.cli.preflight --json              # JSON report
 python -m mousedroid.cli.preflight --checks camera,esp32  # filter to subset
 python -m mousedroid.cli.preflight --mock-hardware     # smoke wiring without devices
+
+# Trend tracking — persist each run to a journal and flag run-over-run
+# regressions (status downgrade / new FAIL / latency creep). Opt-in; exits 1
+# on a detected regression. Sensitivity is operator-tunable (no hardcoded gate).
+python -m mousedroid.cli.preflight --journal-path var/preflight_trend.jsonl
+python -m mousedroid.cli.preflight --journal-path var/preflight_trend.jsonl --trend \
+    --trend-slow-ratio 1.5 --trend-slow-floor-s 0.05
 ```
 
 Both exit `0` when every check is `OK` or `WARN` (the latter is operator-actionable — e.g. CSI ribbon
@@ -226,6 +233,8 @@ bash scripts/jetson_full_smoke_run.sh
 # Full on-device validation (PR #116) — static CI -> cold-hardware -> warm-live,
 # one timestamped report under reports/jetson_full_validation/<UTC>/SUMMARY.md
 bash scripts/jetson_full_validation.sh            # all phases
+bash scripts/jetson_full_validation.sh --phases 0,1,3  # an ordered subset
+bash scripts/jetson_full_validation.sh --no-cache # force re-run cached static CI
 bash scripts/jetson_full_validation.sh --dry-run  # print the plan, run nothing
 bash scripts/jetson_full_validation.sh --help     # env tunables + selectors
 ```
@@ -235,7 +244,15 @@ The full-validation wrapper composes the smoke run together with `ci.sh`, the `p
 the runbook's cold-then-warm discipline (it `docker stop`s the container for exclusive-device
 sensor checks and always restarts it via a `trap`). It tolerates the functionally-dead ESP32
 (serial/motor/power are non-blocking; no motion is armed) and has **no hardcoded values** — every
-port/timeout/namespace is env-overridable. See `docs/runbooks/jetson-full-validation.md`.
+port/timeout/namespace is env-overridable. Phase 1 (static CI) is **cached on the committed
+source SHA** — a clean tree unchanged since the last green run SKIPs it (`--no-cache` forces a
+re-run); hardware/live phases are never cached. See `docs/runbooks/jetson-full-validation.md`.
+
+**Latency-regression probes.** `tools/llm_latency_probe.py --iterations N` and
+`tools/lidar_telemetry_probe.py` emit p50/p95/p99 summaries (gateway round-trip,
+LiDAR→WebSocket frame jitter) via the pure `mousedroid.validation.latency_stats`
+helper — turning single-shot presence checks into tail-latency gates. C4 component
+diagram: [`docs/architecture/c4-validation-efficiency.md`](docs/architecture/c4-validation-efficiency.md).
 
 Runtime overlays may be supplied explicitly or through `MOUSEDROID_CONFIGS` / `MOUSEDROID_JETSON_CONFIGS`, keeping smoke and validation paths aligned with deployed configuration.
 

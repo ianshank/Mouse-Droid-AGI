@@ -8,7 +8,10 @@ Jetson, not just in theory.
 What it measures:
 
 * Cold-start: time to ``LLMGateway.start()`` (model load + warm-up).
-* Single-shot: ``translate_mission("turn left slowly")`` elapsed ms.
+* Per-iteration: ``translate_mission("turn left slowly")`` elapsed ms, sampled
+  ``--iterations`` times (default 1). With >1 the probe emits a
+  ``llm_latency_summary`` (p50/p95/p99) and gates on p95 instead of a single
+  unlucky sample.
 * (Optional) tegrastats GPU memory before/after model load — operator-side
   signal that GPU layers actually landed. If ``tegrastats`` is unavailable
   (non-Jetson host) the probe falls back gracefully and logs a WARN.
@@ -55,12 +58,18 @@ from typing import Any
 from mousedroid.config.loader import load_settings
 from mousedroid.factory import build_injection_filter, build_llm_gateway
 from mousedroid.logging.setup import get_logger
+from mousedroid.validation.latency_stats import summarize
 
 _log = get_logger("llm_latency_probe")
 
 # Default mission text — short + deterministic enough that the parser path is
 # exercised but inference time isn't dominated by token-count variance.
 _DEFAULT_MISSION = "turn left slowly"
+
+# Default sample count. Single source of truth for both the argparse default and
+# the defensive fallback in ``_main`` (which is called directly in unit tests
+# with hand-built Namespaces that may predate the flag). 1 == legacy single-shot.
+_DEFAULT_ITERATIONS = 1
 
 # tegrastats output line shape (Orin Nano):
 #   RAM 2914/7619MB ...  GR3D_FREQ 0%@[306,...]  ... NVRGTX_FREQ ...
@@ -216,20 +225,48 @@ async def _main(args: argparse.Namespace) -> int:
 
     _log.info("llama_model_metadata", **_llama_model_metadata(gateway))
 
-    # Measure the single-shot translate_mission elapsed.
-    t_translate = time.monotonic()
-    goal = await gateway.translate_mission(args.mission)
-    elapsed_ms = (time.monotonic() - t_translate) * 1000.0
+    # Measure translate_mission elapsed over ``--iterations`` runs. iterations=1
+    # preserves the legacy single-shot ``llm_latency_result`` event + gate (a
+    # single elapsed <= target) byte-for-byte; >1 adds a percentile summary and
+    # gates on p95 so a flaky tail (cloud round-trip variance / GPU contention)
+    # is caught without failing on a single unlucky sample.
+    samples_ms: list[float] = []
+    # ``getattr`` fallback keeps ``_main`` robust when called directly with a
+    # hand-built Namespace (unit tests) that predates the --iterations flag.
+    iterations = getattr(args, "iterations", _DEFAULT_ITERATIONS)
+    for i in range(iterations):
+        t_translate = time.monotonic()
+        goal = await gateway.translate_mission(args.mission)
+        elapsed_ms = (time.monotonic() - t_translate) * 1000.0
+        samples_ms.append(elapsed_ms)
+        _log.info(
+            "llm_latency_result",
+            iteration=i,
+            elapsed_ms=elapsed_ms,
+            target_ms=cfg.llm.latency_target_ms,
+            passed=elapsed_ms <= cfg.llm.latency_target_ms,
+            goal_vx=goal.vx_target,
+            goal_vy=goal.vy_target,
+            goal_omega=goal.omega_target,
+            mission=args.mission,
+        )
 
-    passed = elapsed_ms <= cfg.llm.latency_target_ms
+    summary = summarize(samples_ms)
+    # Single-shot gates on the one sample (== p95); multi-shot gates on p95.
+    gate_ms = summary.p95_ms
+    passed = gate_ms <= cfg.llm.latency_target_ms
     _log.info(
-        "llm_latency_result",
-        elapsed_ms=elapsed_ms,
+        "llm_latency_summary",
+        iterations=iterations,
         target_ms=cfg.llm.latency_target_ms,
+        gate_ms=gate_ms,
         passed=passed,
-        goal_vx=goal.vx_target,
-        goal_vy=goal.vy_target,
-        goal_omega=goal.omega_target,
+        min_ms=summary.min_ms,
+        mean_ms=summary.mean_ms,
+        p50_ms=summary.p50_ms,
+        p95_ms=summary.p95_ms,
+        p99_ms=summary.p99_ms,
+        max_ms=summary.max_ms,
         mission=args.mission,
     )
 
@@ -255,7 +292,19 @@ def main(argv: list[str] | None = None) -> int:
         default=_DEFAULT_MISSION,
         help="Mission text to translate (default: %(default)r).",
     )
+    parser.add_argument(
+        "--iterations",
+        type=int,
+        default=_DEFAULT_ITERATIONS,
+        help=(
+            "Number of translate_mission runs to sample. 1 (default) is the "
+            "legacy single-shot gate; >1 emits a p50/p95/p99 summary and gates "
+            "on p95 to absorb tail variance."
+        ),
+    )
     args = parser.parse_args(argv)
+    if args.iterations < 1:
+        parser.error("--iterations must be >= 1")
     try:
         return asyncio.run(_main(args))
     except KeyboardInterrupt:
