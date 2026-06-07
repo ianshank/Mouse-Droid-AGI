@@ -51,3 +51,49 @@ def kl_divergence(
         - 1.0
     )
     return kl.sum(dim=-1).mean()
+
+
+_LOGVAR_CLAMP = 10.0
+
+
+def balanced_free_bits_kl(
+    post_mean: Tensor,
+    post_logvar: Tensor,
+    prior_mean: Tensor,
+    prior_logvar: Tensor,
+    *,
+    alpha: float,
+    free_nats: float,
+) -> Tensor:
+    """KL-balanced, free-bits, fp32-stable KL(posterior || prior).
+
+    Implements Dreamer-v2/v3-style KL balancing — ``alpha`` weights the
+    prior-update term (posterior detached) against the posterior-update term
+    (prior detached) — followed by a free-bits floor at ``free_nats`` nats.
+    Computed in float32 with logvars clamped to ``[-10, 10]`` so an fp16 AMP
+    context cannot overflow ``exp(logvar)`` into NaN.
+
+    Args:
+        post_mean: Posterior mean, shape ``(batch, latent_dim)``.
+        post_logvar: Posterior log-variance, same shape.
+        prior_mean: Prior mean, same shape.
+        prior_logvar: Prior log-variance, same shape.
+        alpha: Balancing weight in ``[0, 1]`` (Dreamer default ~0.8).
+        free_nats: Per-batch free-bits floor (nats). ``0`` disables the floor.
+
+    Returns:
+        Scalar mean KL (after balancing + free-bits), as a float32 tensor.
+    """
+
+    def _kl(pm: Tensor, plv: Tensor, qm: Tensor, qlv: Tensor) -> Tensor:
+        pm, plv = pm.float(), plv.float().clamp(-_LOGVAR_CLAMP, _LOGVAR_CLAMP)
+        qm, qlv = qm.float(), qlv.float().clamp(-_LOGVAR_CLAMP, _LOGVAR_CLAMP)
+        return 0.5 * (qlv - plv + (plv.exp() + (pm - qm) ** 2) / qlv.exp() - 1.0)
+
+    kl_lhs = _kl(post_mean.detach(), post_logvar.detach(), prior_mean, prior_logvar)
+    kl_rhs = _kl(post_mean, post_logvar, prior_mean.detach(), prior_logvar.detach())
+    kl = alpha * kl_lhs + (1.0 - alpha) * kl_rhs
+    kl = kl.sum(dim=-1).mean()  # sum over latent dims, mean over batch
+    if free_nats > 0.0:
+        kl = torch.clamp(kl, min=free_nats)
+    return kl
