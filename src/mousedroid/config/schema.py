@@ -1567,14 +1567,14 @@ class MetricsConfig(BaseModel):
 class ModelConfig(BaseModel):
     """Neural network model dimensions."""
 
-    vision_dim: int = Field(256, gt=0, description="Vision feature input dim")
+    vision_dim: int = Field(256, ge=0, description="Vision feature input dim (0=disabled)")
     ultrasonic_dim: int = Field(1, ge=0, description="Ultrasonic input dim (0=disabled)")
     motor_state_dim: int = Field(4, gt=0, description="Motor state dim [vx, vy, omega, battery]")
     hidden_dim: int = Field(256, gt=0, description="RNN hidden dim")
     latent_dim: int = Field(64, gt=0, description="Latent state dim")
     action_dim: int = Field(3, gt=0, description="Action dim [vx, vy, omega]")
     obs_dim: int = Field(256, gt=0, description="Fused observation embedding dim")
-    vision_proj_dim: int = Field(128, gt=0, description="Vision projection dim")
+    vision_proj_dim: int = Field(128, ge=0, description="Vision projection dim (0=disabled)")
     ultrasonic_proj_dim: int = Field(32, ge=0, description="Ultrasonic projection dim (0=disabled)")
     motor_proj_dim: int = Field(32, gt=0, description="Motor state projection dim")
     audio_dim: int = Field(0, ge=0, description="Audio feature input dim (0=disabled)")
@@ -1615,6 +1615,10 @@ class ModelConfig(BaseModel):
     @model_validator(mode="after")
     def _validate_optional_modalities(self) -> Self:
         """Validate optional modality dimension pairs."""
+        if (self.vision_dim == 0) != (self.vision_proj_dim == 0):
+            msg = "vision_dim and vision_proj_dim must both be zero when disabling vision"
+            raise ValueError(msg)
+
         if (self.ultrasonic_dim == 0) != (self.ultrasonic_proj_dim == 0):
             msg = (
                 "ultrasonic_dim and ultrasonic_proj_dim must both be zero when disabling ultrasonic"
