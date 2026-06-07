@@ -60,6 +60,14 @@ arg surface). Changed source files at 100 % line coverage.
 **Docs** — `docs/architecture/c4-validation-efficiency.md` (C4 component diagram),
 CLAUDE.md "Validation-efficiency surface" section, README validation block.
 
+### Added — MLflow experiment logger for training observability
+
+Training metrics logging via `mlflow-skinny` backend. Wired into
+`PipelineOrchestrator` (parent run per pipeline, child run per phase) and
+`OfflineRLTrainer` (per-step loss metrics for CQL + IQL). Defaults to OFF;
+opt in via YAML or `MOUSEDROID_OBSERVABILITY__EXPERIMENT_LOGGER__BACKEND=mlflow`.
+See `docs/runbooks/mlflow-local-ui.md` for the operator runbook.
+
 ### Added — Full rover bring-up: unified dashboard + sensor-fusion summary
 
 Deploy-and-run-everything bring-up plus a single dashboard showing camera + lidar
