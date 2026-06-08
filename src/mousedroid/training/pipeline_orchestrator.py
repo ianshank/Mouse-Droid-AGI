@@ -182,6 +182,9 @@ class PipelineOrchestrator:
                 generator's ``n_episodes`` sets the batch dimension).
         """
         tcfg = self._settings.training
+        if tcfg.rssm_vision_finetune_enabled:
+            await self._run_vision_finetune()
+            return
         if not tcfg.rssm_pretrain_enabled:
             logger.info("rssm_training_skipped", reason="pretrain_disabled", batch_size=batch_size)
             return
@@ -229,6 +232,88 @@ class PipelineOrchestrator:
         history = await asyncio.to_thread(_run)
         env.close()
         logger.info("rssm_training_done", first_loss=history[0], last_loss=history[-1])
+
+    async def _run_vision_finetune(self) -> None:
+        """Vision-on fine-tune: migrate a vision-OFF checkpoint and train with RGB.
+
+        Inert unless a ``mujoco`` rover is configured AND
+        ``training.rssm_finetune_checkpoint`` points at an existing vision-OFF
+        checkpoint. Renders RGB → ``MeanPoolExtractor`` → ``vision_features`` and
+        fine-tunes the migrated vision-ON RSSM. Runs the blocking torch loop in a
+        worker thread (thermal-pause safe).
+        """
+        tcfg = self._settings.training
+        rover = self._settings.rover
+        if rover is None or rover.sim.backend != "mujoco":
+            logger.info("rssm_vision_finetune_skipped", reason="non_mujoco_backend")
+            return
+        checkpoint = Path(tcfg.rssm_finetune_checkpoint)
+        if not tcfg.rssm_finetune_checkpoint or not checkpoint.exists():
+            logger.info("rssm_vision_finetune_skipped", reason="missing_checkpoint")
+            return
+
+        import torch  # local import keeps cold-start light
+
+        from mousedroid.factory import (
+            build_rover_env,
+            build_rssm_vision_finetune,
+            build_vision_feature_extractor,
+        )
+        from mousedroid.training.domain_randomization import DomainRandomizer
+        from mousedroid.training.rover_obs_adapter import RoverObsAdapter
+        from mousedroid.training.rssm_pretrainer import RSSMPretrainer
+        from mousedroid.training.sim_episode_generator import SimEpisodeGenerator
+
+        # Force render_vision on for the fine-tune env (it must produce frames).
+        render_cfg = self._settings.model_copy(
+            update={
+                "rover": rover.model_copy(
+                    update={
+                        "sim": rover.sim.model_copy(
+                            update={
+                                "mujoco": rover.sim.mujoco.model_copy(
+                                    update={"render_vision": True}
+                                )
+                            }
+                        )
+                    }
+                )
+            }
+        )
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = build_rssm_vision_finetune(self._settings, checkpoint)
+        env = build_rover_env(render_cfg)
+        adapter = RoverObsAdapter(battery_v=rover.sim.mujoco.battery_voltage_const_v)
+        generator = SimEpisodeGenerator(
+            env,
+            adapter,
+            n_episodes=tcfg.n_episodes,
+            seq_len=tcfg.sequence_length,
+            seed=tcfg.rssm_data_seed,
+            explore_action_rad_s=tcfg.rssm_explore_action_rad_s,
+            explore_smoothing=tcfg.rssm_explore_smoothing,
+            domain_randomizer=DomainRandomizer(self._settings.domain_randomization),
+            feature_extractor=build_vision_feature_extractor(self._settings),
+        )
+        out_ckpt = Path(tcfg.weights_dir) / tcfg.rssm_vision_checkpoint_name
+
+        def _run() -> list[float]:
+            batch = generator.generate()
+            trainer = RSSMPretrainer(
+                model,
+                lr=tcfg.learning_rate,
+                grad_clip=tcfg.rssm_grad_clip,
+                amp=self._config.amp_enabled,
+                device=device,
+            )
+            return trainer.train(
+                [batch], epochs=tcfg.rssm_finetune_epochs, checkpoint_path=out_ckpt
+            )
+
+        logger.info("rssm_vision_finetune_started", checkpoint=str(checkpoint), device=str(device))
+        history = await asyncio.to_thread(_run)
+        env.close()
+        logger.info("rssm_vision_finetune_done", first_loss=history[0], last_loss=history[-1])
 
     async def _train_warmstart(self, batch_size: int) -> None:
         """Run warm-start policy tuning phase."""

@@ -51,6 +51,64 @@ async def test_train_rssm_skipped_for_non_mujoco_backend(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
+async def test_vision_finetune_skipped_without_checkpoint(tmp_path: Path) -> None:
+    cfg = Settings(
+        mock_hardware=True,
+        rover=RoverConfig(sim=RoverSimConfig(backend="mujoco")),
+        training=TrainingConfig(rssm_vision_finetune_enabled=True, weights_dir=str(tmp_path)),
+    )
+    orch = _orch(cfg, tmp_path)
+    await orch._train_rssm(batch_size=2)
+    assert not (tmp_path / cfg.training.rssm_vision_checkpoint_name).exists()
+
+
+@pytest.mark.asyncio
+async def test_vision_finetune_runs_when_enabled(tmp_path: Path) -> None:
+    pytest.importorskip("mujoco")
+    import torch
+
+    from mousedroid.config.schema import MujocoSimConfig
+    from mousedroid.factory import build_rover_env, build_rssm_trainable
+
+    # Skip if offscreen GL rendering is unavailable (headless CI).
+    probe_cfg = Settings(
+        mock_hardware=True,
+        rover=RoverConfig(
+            sim=RoverSimConfig(backend="mujoco", mujoco=MujocoSimConfig(render_vision=True))
+        ),
+    )
+    probe = build_rover_env(probe_cfg)
+    try:
+        probe.reset(seed=0)
+        probe.render_rgb()
+    except Exception:
+        pytest.skip("offscreen GL rendering unavailable")
+    finally:
+        probe.close()
+
+    base_cfg = Settings(mock_hardware=True, rover=RoverConfig(sim=RoverSimConfig(backend="mujoco")))
+    pretrained = build_rssm_trainable(base_cfg)
+    ckpt = tmp_path / "pre.pt"
+    torch.save(pretrained.state_dict(), ckpt)
+
+    cfg = Settings(
+        mock_hardware=True,
+        rover=RoverConfig(sim=RoverSimConfig(backend="mujoco")),
+        training=TrainingConfig(
+            rssm_vision_finetune_enabled=True,
+            rssm_finetune_checkpoint=str(ckpt),
+            rssm_finetune_epochs=2,
+            n_episodes=2,
+            sequence_length=4,
+            weights_dir=str(tmp_path),
+        ),
+    )
+    orch = _orch(cfg, tmp_path)
+    await orch._train_rssm(batch_size=2)
+    assert (tmp_path / cfg.training.rssm_vision_checkpoint_name).exists()
+
+
+@pytest.mark.asyncio
 async def test_train_rssm_runs_when_enabled_and_mujoco(tmp_path: Path) -> None:
     pytest.importorskip("mujoco")
     cfg = Settings(
