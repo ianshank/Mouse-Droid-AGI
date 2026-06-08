@@ -1,0 +1,51 @@
+<mujoco model="mse6_4wd_skidsteer">
+  <compiler angle="radian" coordinate="local"/>
+  <option timestep="0.00833" integrator="implicitfast" gravity="0 0 -9.81"/>
+  <default>
+    <geom condim="3" friction="1 0.005 0.0001" solref="0.01 1" solimp="0.9 0.95 0.001"/>
+    <joint damping="0.01"/>
+  </default>
+  <worldbody>
+    <light pos="0 0 3"/>
+    <geom name="floor" type="plane" size="5 5 0.1" rgba="0.4 0.4 0.4 1"/>
+    <!-- Perimeter walls so the rangefinder lidar has geometry to hit. -->
+    <geom name="wall_n" type="box" pos="0 2 0.15" size="2 0.05 0.15"/>
+    <geom name="wall_s" type="box" pos="0 -2 0.15" size="2 0.05 0.15"/>
+    <geom name="wall_e" type="box" pos="2 0 0.15" size="0.05 2 0.15"/>
+    <geom name="wall_w" type="box" pos="-2 0 0.15" size="0.05 2 0.15"/>
+    <body name="chassis" pos="0 0 0.06">
+      <freejoint name="root"/>
+      <geom name="chassis_geom" type="box" size="0.11 0.09 0.03" mass="2.7"/>
+      <site name="imu_site" pos="0 0 0"/>
+      <!-- Reference lidar sector (forward); RoverMuJoCoEnv injects the rest from config. -->
+      <site name="lidar_0" pos="0.11 0 0.03" zaxis="1 0 0"/>
+      <body name="wheel_fl" pos="0.09 0.10 -0.018">
+        <joint name="j_fl" type="hinge" axis="0 1 0"/>
+        <geom name="g_fl" type="cylinder" size="0.042 0.02" quat="0.7071 0.7071 0 0" mass="0.05"/>
+      </body>
+      <body name="wheel_fr" pos="0.09 -0.10 -0.018">
+        <joint name="j_fr" type="hinge" axis="0 1 0"/>
+        <geom name="g_fr" type="cylinder" size="0.042 0.02" quat="0.7071 0.7071 0 0" mass="0.05"/>
+      </body>
+      <body name="wheel_rl" pos="-0.09 0.10 -0.018">
+        <joint name="j_rl" type="hinge" axis="0 1 0"/>
+        <geom name="g_rl" type="cylinder" size="0.042 0.02" quat="0.7071 0.7071 0 0" mass="0.05"/>
+      </body>
+      <body name="wheel_rr" pos="-0.09 -0.10 -0.018">
+        <joint name="j_rr" type="hinge" axis="0 1 0"/>
+        <geom name="g_rr" type="cylinder" size="0.042 0.02" quat="0.7071 0.7071 0 0" mass="0.05"/>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <velocity name="a_fl" joint="j_fl" kv="0.05"/>
+    <velocity name="a_fr" joint="j_fr" kv="0.05"/>
+    <velocity name="a_rl" joint="j_rl" kv="0.05"/>
+    <velocity name="a_rr" joint="j_rr" kv="0.05"/>
+  </actuator>
+  <sensor>
+    <accelerometer name="imu_acc" site="imu_site"/>
+    <gyro name="imu_gyro" site="imu_site"/>
+    <rangefinder name="lidar_s0" site="lidar_0"/>
+  </sensor>
+</mujoco>
