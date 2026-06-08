@@ -71,6 +71,7 @@ class RoverMuJoCoEnv:
         self._noise_rng = np.random.default_rng(self._mjcfg.noise_rng_seed)
         self._slip_noise = self._mjcfg.wheel_slip_default
         self._closed = False
+        self._renderer: Any = None  # lazily built on first render_rgb() call
 
         self._assert_rest_state_stable()
         _log.info(
@@ -212,9 +213,39 @@ class RoverMuJoCoEnv:
         }
         return obs, reward, terminated, truncated, info
 
+    def render_rgb(self) -> NDArray[np.uint8]:
+        """Render a forward-facing RGB frame from the configured camera.
+
+        Lazily builds a ``mujoco.Renderer`` (offscreen) on first use — only the
+        vision-fine-tune path pays the GL/render cost. Resolution + camera name
+        come from :class:`MujocoSimConfig` (invariant #3).
+
+        Returns:
+            RGB frame, shape ``(render_height, render_width, 3)`` ``uint8``.
+
+        Raises:
+            RuntimeError: If the env is closed or ``render_vision`` is disabled.
+        """
+        self._require_open()
+        if not self._mjcfg.render_vision:
+            msg = "render_rgb() requires rover.sim.mujoco.render_vision=True"
+            raise RuntimeError(msg)
+        if self._renderer is None:
+            self._renderer = self._mj.Renderer(
+                self._model,
+                height=self._mjcfg.render_height,
+                width=self._mjcfg.render_width,
+            )
+        self._renderer.update_scene(self._data, camera=self._mjcfg.camera_name)
+        frame: NDArray[np.uint8] = np.asarray(self._renderer.render(), dtype=np.uint8)
+        return frame
+
     def close(self) -> None:
-        """Release MuJoCo data (idempotent)."""
+        """Release MuJoCo data + renderer (idempotent)."""
         self._closed = True
+        if self._renderer is not None:
+            self._renderer.close()
+            self._renderer = None
         self._data = None
 
     # ----- domain randomization --------------------------------------------

@@ -19,6 +19,9 @@
       <!-- RoverMuJoCoEnv injects the full N-sector lidar site ring after imu_site,
            with geometry from MujocoSimConfig (no hand-authored lidar sites here). -->
       <site name="imu_site" pos="0 0 0"/>
+      <!-- Forward-facing RGB camera for vision-on RSSM fine-tune (looks down -z
+           toward +x, up=+z). Rendered offscreen via mujoco.Renderer when enabled. -->
+      <camera name="rover_cam" mode="fixed" pos="0.11 0 0.05" xyaxes="0 -1 0 0 0 1"/>
       <body name="wheel_fl" pos="0.09 0.10 -0.018">
         <joint name="j_fl" type="hinge" axis="0 1 0"/>
         <geom name="g_fl" type="cylinder" size="0.042 0.02" quat="0.7071 0.7071 0 0" mass="0.05"/>

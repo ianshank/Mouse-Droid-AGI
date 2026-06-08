@@ -20,6 +20,12 @@ def test_model_loads() -> None:
     assert model.nsensor == 2
 
 
+def test_camera_present() -> None:
+    model = mujoco.MjModel.from_xml_path(str(_MJCF))
+    cam_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "rover_cam")
+    assert cam_id >= 0  # the forward-facing rover camera exists
+
+
 def test_rest_state_is_finite() -> None:
     model = mujoco.MjModel.from_xml_path(str(_MJCF))
     data = mujoco.MjData(model)

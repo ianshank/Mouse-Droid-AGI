@@ -21,6 +21,33 @@ _WHEEL_RADIUS_M = 0.042
 _TRACK_WIDTH_M = 0.20
 
 
+def _render_cfg() -> RoverConfig:
+    cfg = RoverConfig()
+    return cfg.model_copy(
+        update={
+            "sim": cfg.sim.model_copy(
+                update={"mujoco": cfg.sim.mujoco.model_copy(update={"render_vision": True})}
+            )
+        }
+    )
+
+
+def _gl_available() -> bool:
+    """Whether offscreen GL rendering works here (false on headless CI)."""
+    env = RoverMuJoCoEnv(
+        _render_cfg(), wheel_radius_m=_WHEEL_RADIUS_M, track_width_m=_TRACK_WIDTH_M
+    )
+    try:
+        env.reset(seed=0)
+        env.render_rgb()
+    except Exception:  # any GL/context failure means "no rendering"
+        return False
+    else:
+        return True
+    finally:
+        env.close()
+
+
 def _mj() -> RoverMuJoCoEnv:
     return RoverMuJoCoEnv(
         RoverConfig(), wheel_radius_m=_WHEEL_RADIUS_M, track_width_m=_TRACK_WIDTH_M
@@ -82,6 +109,25 @@ def test_invalid_action_shape_raises() -> None:
     env.reset(seed=0)
     with pytest.raises(ValueError, match="action shape"):
         env.step(np.zeros(5, dtype=np.float32))
+
+
+def test_render_rgb_disabled_raises() -> None:
+    env = _mj()  # default render_vision=False
+    env.reset(seed=0)
+    with pytest.raises(RuntimeError, match="render_vision"):
+        env.render_rgb()
+
+
+def test_render_rgb_shape_and_dtype() -> None:
+    if not _gl_available():
+        pytest.skip("offscreen GL rendering unavailable (headless CI)")
+    cfg = _render_cfg()
+    env = RoverMuJoCoEnv(cfg, wheel_radius_m=_WHEEL_RADIUS_M, track_width_m=_TRACK_WIDTH_M)
+    env.reset(seed=0)
+    frame = env.render_rgb()
+    assert frame.shape == (cfg.sim.mujoco.render_height, cfg.sim.mujoco.render_width, 3)
+    assert frame.dtype == np.uint8
+    env.close()
 
 
 def test_close_is_idempotent() -> None:
