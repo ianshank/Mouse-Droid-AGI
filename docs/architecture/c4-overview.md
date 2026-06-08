@@ -118,6 +118,7 @@ Each subsystem owns a Component diagram in its own file:
 | Robot-arm training platform | [`c4-arm-platform.md`](./c4-arm-platform.md) | `tests/unit/arm/*` |
 | USB-C smoke validation gate (PR #106) | [`c4-usbc-smoke.md`](./c4-usbc-smoke.md) | `tests/unit/diagnostics/test_usbc.py`, `tests/unit/diagnostics/test_power_chain.py`, `tests/unit/test_factory_esp32_discovery.py`, `tests/hardware/test_usbc_enumeration.py`, `tests/hardware/test_power_chain_smoke.py` |
 | LLM gateway + cloud/local failover (PR #107) | [`c4-llm-gateway.md`](./c4-llm-gateway.md) | `tests/unit/llm_gateway/test_anthropic_gateway.py`, `tests/unit/llm_gateway/test_fallback_gateway.py`, `tests/unit/config/test_llm_config_anthropic_fallback.py`, `tests/unit/factory/test_build_llm_gateway_dispatch.py`, `tests/integration/test_anthropic_gateway_wiring.py` |
+| Validation efficiency: latency stats · trend store · phase caching (PR #126) | [`c4-validation-efficiency.md`](./c4-validation-efficiency.md) | `tests/unit/validation/test_latency_stats.py`, `tests/unit/validation/test_report_store.py`, `tests/unit/validation/test_init_lazy_exports.py`, `tests/unit/cli/test_preflight_cli.py`, `tests/integration/test_validation_report_store_integration.py`, `tests/regression/test_validation_import_decoupling.py`, `tests/smoke/test_jetson_full_validation_sanity.py` |
 
 The component-level diagrams are the right entry point when you need to
 understand *which protocol object talks to which* — they map every

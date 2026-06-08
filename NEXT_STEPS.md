@@ -50,6 +50,22 @@ follow-ups in priority order.
    physical repair remains the gating item for actual motion** (P0, below).
 8. **[Follow-up — P2] Issue #109** — MSE-6 greeting lifecycle wiring + integration/hardware
    test tiers (separate track).
+9. **[Validation efficiency — P2] Validation efficiency layer (this branch, PR #126).**
+   Landed: latency-percentile probes (`tools/llm_latency_probe.py --iterations N` and
+   `tools/lidar_telemetry_probe.py` emit p50/p95/p99 via `validation/latency_stats.py`),
+   a run-over-run trend store (`validation/report_store.py` + `preflight --journal-path
+   --trend`), and Phase-1 caching in `jetson_full_validation.sh` (`--phases` / `--no-cache`).
+   **Follow-ups:**
+   - **Auto-record trend in `jetson_full_validation.sh`** — thread `--journal-path` through
+     the Phase-2 `preflight (real)` step so every rover run appends to the trend journal,
+     then surface `--trend` regressions in the Phase-4 SUMMARY.md (currently the trend store
+     is wired only into the standalone `preflight` CLI).
+   - **Grafana panel for latency percentiles** — fold the probe `*_summary` events / the
+     `{ns}_llm_gateway_latency_ms` histogram (PR #115) into the deferred Grafana-panels PR
+     (item 5) so p95/p99 tails are dashboarded, not just logged.
+   - **Periodic on-rover trend sampling** — a lightweight systemd timer running
+     `preflight --journal-path … --trend` would turn the store into a continuous
+     degradation monitor (sensor FPS drift, LLM latency creep) rather than an on-demand check.
 
 ---
 
