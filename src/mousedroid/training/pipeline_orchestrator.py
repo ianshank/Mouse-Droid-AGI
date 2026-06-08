@@ -169,8 +169,58 @@ class PipelineOrchestrator:
         return runners[phase]
 
     async def _train_rssm(self, batch_size: int) -> None:
-        """Run RSSM pre-training phase."""
-        logger.info("rssm_training", batch_size=batch_size)
+        """Run RSSM dynamics pretraining on MuJoCo-generated episodes.
+
+        Inert (byte-identical to the prior stub) unless
+        ``training.rssm_pretrain_enabled`` is True AND a rover with the
+        ``mujoco`` backend is configured. The synchronous torch loop runs in a
+        worker thread so the orchestrator event loop (and the cooperative
+        thermal-pause check) is not blocked.
+
+        Args:
+            batch_size: Tuned batch size for this phase (currently advisory; the
+                generator's ``n_episodes`` sets the batch dimension).
+        """
+        tcfg = self._settings.training
+        if not tcfg.rssm_pretrain_enabled:
+            logger.info("rssm_training_skipped", reason="pretrain_disabled", batch_size=batch_size)
+            return
+        rover = self._settings.rover
+        if rover is None or rover.sim.backend != "mujoco":
+            logger.info("rssm_training_skipped", reason="non_mujoco_backend")
+            return
+
+        import torch  # local import keeps cold-start light
+
+        from mousedroid.factory import build_rover_env, build_rssm_trainable
+        from mousedroid.training.rover_obs_adapter import RoverObsAdapter
+        from mousedroid.training.rssm_pretrainer import RSSMPretrainer
+        from mousedroid.training.sim_episode_generator import SimEpisodeGenerator
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = build_rssm_trainable(self._settings)
+        env = build_rover_env(self._settings)
+        adapter = RoverObsAdapter(battery_v=rover.sim.mujoco.battery_voltage_const_v)
+        generator = SimEpisodeGenerator(
+            env, adapter, n_episodes=tcfg.n_episodes, seq_len=tcfg.sequence_length, seed=0
+        )
+        checkpoint = Path(tcfg.weights_dir) / tcfg.rssm_checkpoint_name
+
+        def _run() -> list[float]:
+            batch = generator.generate()
+            trainer = RSSMPretrainer(
+                model,
+                lr=tcfg.learning_rate,
+                grad_clip=tcfg.rssm_grad_clip,
+                amp=self._config.amp_enabled,
+                device=device,
+            )
+            return trainer.train([batch], epochs=tcfg.epochs, checkpoint_path=checkpoint)
+
+        logger.info("rssm_training_started", n_episodes=tcfg.n_episodes, device=str(device))
+        history = await asyncio.to_thread(_run)
+        env.close()
+        logger.info("rssm_training_done", first_loss=history[0], last_loss=history[-1])
 
     async def _train_warmstart(self, batch_size: int) -> None:
         """Run warm-start policy tuning phase."""
