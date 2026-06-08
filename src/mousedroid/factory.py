@@ -3315,8 +3315,19 @@ def build_rover_env(cfg: Settings) -> RoverEnvProtocol:
         return env
 
     if backend == "mujoco":
-        msg = "MuJoCo rover backend is reserved; see Phase B of the sim-to-real plan."
-        raise NotImplementedError(msg)
+        from mousedroid.sim.mujoco_rover_env import RoverMuJoCoEnv
+
+        mj_env = RoverMuJoCoEnv(
+            cfg.rover,
+            wheel_radius_m=cfg.robot.wheel_radius_m,
+            track_width_m=cfg.robot.track_width_m,
+        )
+        _log.info(
+            "rover_env_mujoco_built",
+            lidar_sectors=cfg.rover.sim.mujoco.lidar_num_sectors,
+            dr_enabled=cfg.domain_randomization.enabled,
+        )
+        return mj_env
 
     msg = f"unknown rover sim backend: {backend!r}"
     raise ValueError(msg)
