@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-mlflow = pytest.importorskip("mlflow")  # skip module entirely if extras missing
+pytest.importorskip("mlflow")  # skip module entirely if extras missing
 from mlflow import MlflowClient
 
 from mousedroid.training.observability.mlflow_logger import (

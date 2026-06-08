@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-mlflow = pytest.importorskip("mlflow")
+pytest.importorskip("mlflow")
 from mlflow import MlflowClient
 
 from mousedroid.config.schema import (
@@ -121,3 +121,108 @@ async def test_run_marks_parent_failed_when_phase_raises(
     )
     parent = runs[0]
     assert parent.info.status == "FAILED"
+
+
+@pytest.mark.asyncio
+async def test_configured_run_name_reaches_mlflow_run(tracking_uri: str) -> None:
+    """cfg.observability.experiment_logger.run_name is passed to the parent run."""
+    base = Settings(mock_hardware=True)
+    settings_with_name = base.model_copy(
+        update={
+            "observability": ObservabilityConfig(
+                experiment_logger=ExperimentLoggerConfig(
+                    backend="mlflow",
+                    tracking_uri=tracking_uri,
+                    experiment_name="pipeline-name-test",
+                    run_name="my-pipeline-name",
+                ),
+            ),
+            "training_pipeline": TrainingPipelineConfig(
+                phases=["rssm"],
+                checkpoint_dir=str(Path(tracking_uri.removeprefix("file:")).parent / "ckpt2"),
+                batch_sizes={"rssm": 4},
+                amp_enabled=False,
+                resume_from_phase=None,
+            ),
+        }
+    )
+    logger = MlflowExperimentLogger(
+        tracking_uri=tracking_uri,
+        experiment_name="pipeline-name-test",
+        run_name="my-pipeline-name",
+    )
+    gpu = MagicMock()
+    gpu.should_pause = AsyncMock(return_value=False)
+    tuner = MagicMock()
+    tuner.tune_batch_size = MagicMock(side_effect=lambda phase, base: base)
+
+    orch = PipelineOrchestrator(
+        settings=settings_with_name,
+        pipeline_config=settings_with_name.training_pipeline,  # type: ignore[arg-type]
+        gpu_monitor=gpu,
+        batch_tuner=tuner,
+        experiment_logger=logger,
+    )
+    await orch.run()
+
+    client = MlflowClient(tracking_uri=tracking_uri)
+    runs = client.search_runs(
+        experiment_ids=[logger._experiment_id],
+        order_by=["attributes.start_time ASC"],
+    )
+    parent = runs[0]
+    assert parent.info.run_name == "my-pipeline-name"
+
+
+@pytest.mark.asyncio
+async def test_log_artifacts_false_skips_checkpoint_upload(
+    settings: Settings, tracking_uri: str
+) -> None:
+    """When log_artifacts=False, no checkpoint artifact is uploaded for a phase run."""
+    base = Settings(mock_hardware=True)
+    settings_no_artifacts = base.model_copy(
+        update={
+            "observability": ObservabilityConfig(
+                experiment_logger=ExperimentLoggerConfig(
+                    backend="mlflow",
+                    tracking_uri=tracking_uri,
+                    experiment_name="pipeline-no-artifact-test",
+                    log_artifacts=False,
+                ),
+            ),
+            "training_pipeline": TrainingPipelineConfig(
+                phases=["rssm"],
+                checkpoint_dir=str(Path(tracking_uri.removeprefix("file:")).parent / "ckpt3"),
+                batch_sizes={"rssm": 4},
+                amp_enabled=False,
+                resume_from_phase=None,
+            ),
+        }
+    )
+    logger = MlflowExperimentLogger(
+        tracking_uri=tracking_uri,
+        experiment_name="pipeline-no-artifact-test",
+    )
+    gpu = MagicMock()
+    gpu.should_pause = AsyncMock(return_value=False)
+    tuner = MagicMock()
+    tuner.tune_batch_size = MagicMock(side_effect=lambda phase, base: base)
+
+    orch = PipelineOrchestrator(
+        settings=settings_no_artifacts,
+        pipeline_config=settings_no_artifacts.training_pipeline,  # type: ignore[arg-type]
+        gpu_monitor=gpu,
+        batch_tuner=tuner,
+        experiment_logger=logger,
+    )
+    await orch.run()
+
+    client = MlflowClient(tracking_uri=tracking_uri)
+    runs = client.search_runs(
+        experiment_ids=[logger._experiment_id],
+        order_by=["attributes.start_time ASC"],
+    )
+    # Find the rssm phase child run
+    phase_run = next(r for r in runs if r.data.tags.get("phase") == "rssm")
+    artifacts = client.list_artifacts(phase_run.info.run_id)
+    assert artifacts == [], "Expected no artifacts when log_artifacts=False"

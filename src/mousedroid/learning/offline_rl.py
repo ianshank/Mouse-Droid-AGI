@@ -146,6 +146,10 @@ class OfflineRLTrainer(abc.ABC):
             Stored on the trainer for downstream consumers and checkpoint
             visibility; currently informational (BC consumes the same batch as
             the actor-critic step).
+        log_step_every_n: Per-update-step metric throttle. ``1`` (default)
+            logs every call to ``_log_step_metrics``. Set higher (e.g. ``10``)
+            for long training runs to reduce store-write overhead. The global
+            step counter always increments regardless.
     """
 
     def __init__(
@@ -162,6 +166,7 @@ class OfflineRLTrainer(abc.ABC):
         *,
         experiment_logger: ExperimentLoggerProtocol | None = None,
         log_phase: PhaseContext | None = None,
+        log_step_every_n: int = 1,
     ) -> None:
         self._device = device or torch.device("cpu")
         self._gamma = gamma
@@ -197,6 +202,7 @@ class OfflineRLTrainer(abc.ABC):
             experiment_logger or NoOpExperimentLogger()
         )
         self._log_phase = log_phase
+        self._log_step_every_n = log_step_every_n
         self._global_step = 0
         _log.info(
             "offline_rl_bc_optimizer_built",
@@ -212,13 +218,20 @@ class OfflineRLTrainer(abc.ABC):
         each call. When the trainer was built without an
         ``experiment_logger`` OR without a ``log_phase`` context, this is a
         byte-identical no-op via the NoOp logger.
+
+        The step counter ALWAYS increments (so step indices remain monotonic
+        in the log), but only multiples of ``_log_step_every_n`` write to
+        the backend. The default of ``1`` preserves byte-identical pre-fix
+        behavior (every step is logged).
         """
         if self._log_phase is None:
+            self._global_step += 1
             return
-        for key, value in losses.items():
-            self._experiment_logger.log_phase_metric(
-                self._log_phase, key, value, step=self._global_step
-            )
+        if self._global_step % self._log_step_every_n == 0:
+            for key, value in losses.items():
+                self._experiment_logger.log_phase_metric(
+                    self._log_phase, key, value, step=self._global_step
+                )
         self._global_step += 1
 
     def _soft_update_targets(self) -> None:
@@ -393,6 +406,7 @@ class CQLTrainer(OfflineRLTrainer):
         *,
         experiment_logger: ExperimentLoggerProtocol | None = None,
         log_phase: PhaseContext | None = None,
+        log_step_every_n: int = 1,
     ) -> None:
         super().__init__(
             state_dim=state_dim,
@@ -406,6 +420,7 @@ class CQLTrainer(OfflineRLTrainer):
             bc_batch_size=bc_batch_size,
             experiment_logger=experiment_logger,
             log_phase=log_phase,
+            log_step_every_n=log_step_every_n,
         )
         self._cql_alpha = cql_alpha
         self._n_random_actions = n_random_actions
@@ -586,6 +601,7 @@ class IQLTrainer(OfflineRLTrainer):
         *,
         experiment_logger: ExperimentLoggerProtocol | None = None,
         log_phase: PhaseContext | None = None,
+        log_step_every_n: int = 1,
     ) -> None:
         super().__init__(
             state_dim=state_dim,
@@ -599,6 +615,7 @@ class IQLTrainer(OfflineRLTrainer):
             bc_batch_size=bc_batch_size,
             experiment_logger=experiment_logger,
             log_phase=log_phase,
+            log_step_every_n=log_step_every_n,
         )
         self._iql_tau = iql_tau
         self._beta = beta

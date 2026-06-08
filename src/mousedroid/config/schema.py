@@ -1426,8 +1426,8 @@ class ExperimentLoggerConfig(BaseModel):
         None,
         description=(
             "Optional human-readable run name for the parent (pipeline) run. "
-            "When ``None`` the orchestrator constructs one from the pipeline "
-            "config + UTC timestamp."
+            "When ``None`` the logger falls back to its configured default "
+            '(this field) or the ``"pipeline"`` sentinel.'
         ),
     )
     log_step_every_n: int = Field(

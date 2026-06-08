@@ -16,7 +16,9 @@ CLI usage::
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -104,9 +106,12 @@ class PipelineOrchestrator:
             phases=phases[start_idx:],
         )
 
-        run_name = self._config.run_name if hasattr(self._config, "run_name") else "pipeline"
+        observability_cfg = self._settings.observability
+        configured_run_name = (
+            observability_cfg.experiment_logger.run_name if observability_cfg is not None else None
+        )
         self._experiment_logger.start_run(
-            run_name=run_name,
+            run_name=configured_run_name,  # may be None → impl-defined default
             params={
                 "total_phases": len(phases),
                 "start_index": start_idx,
@@ -114,6 +119,30 @@ class PipelineOrchestrator:
             },
             tags={"track": "training"},
         )
+
+        if observability_cfg is not None and observability_cfg.experiment_logger.log_artifacts:
+            try:
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    settings_path = Path(tmpdir) / "resolved_settings.json"
+                    settings_path.write_text(
+                        json.dumps(
+                            self._settings.model_dump(mode="json"),
+                            indent=2,
+                            default=str,
+                        ),
+                        encoding="utf-8",
+                    )
+                    self._experiment_logger.log_artifact(str(settings_path))
+                    logger.info(
+                        "pipeline_settings_artifact_logged",
+                        artifact_path=str(settings_path),
+                    )
+            except Exception as exc:  # broad — settings dump must never break the run
+                logger.warning(
+                    "pipeline_settings_artifact_failed",
+                    error=f"{type(exc).__name__}:{exc}",
+                )
+
         run_status = "FINISHED"
 
         try:
@@ -179,7 +208,9 @@ class PipelineOrchestrator:
             checkpoint_path = self._checkpoint_dir / f"{phase}.done"
             checkpoint_path.write_text(f"phase={phase}\n")
             logger.info("checkpoint_written", path=str(checkpoint_path))
-            self._experiment_logger.log_phase_artifact(ctx, str(checkpoint_path))
+            observability_cfg = self._settings.observability
+            if observability_cfg is not None and observability_cfg.experiment_logger.log_artifacts:
+                self._experiment_logger.log_phase_artifact(ctx, str(checkpoint_path))
         except Exception:
             phase_status = "FAILED"
             raise

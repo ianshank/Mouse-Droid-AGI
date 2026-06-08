@@ -18,8 +18,8 @@ class PhaseContext:
     Returned by :meth:`ExperimentLoggerProtocol.start_phase` and passed back
     to ``log_phase_metric`` / ``end_phase`` so the logger can route per-phase
     metrics to the right child run without per-call lookups. ``run_id`` is
-    the backend's identifier (MLflow run-id, or a UUID4 for the NoOp logger);
-    callers MUST treat it as opaque.
+    the backend's identifier (an MLflow run-id, or a ``noop-phase-<phase>``
+    sentinel for the NoOp logger); callers MUST treat it as opaque.
     """
 
     run_id: str
@@ -49,11 +49,20 @@ class ExperimentLoggerProtocol(Protocol):
     def start_run(
         self,
         *,
-        run_name: str,
+        run_name: str | None = None,
         params: dict[str, Any] | None = None,
         tags: dict[str, str] | None = None,
     ) -> str:
-        """Start the parent run and return its run-id."""
+        """Start the parent run and return its run-id.
+
+        Args:
+            run_name: Optional display name for the parent run. When ``None``
+                the implementation falls back to its configured default run
+                name (e.g. ``ExperimentLoggerConfig.run_name``) or a
+                hard-coded sentinel such as ``"pipeline"``.
+            params: Static hyperparameters logged immediately.
+            tags: Key-value tags attached to the run.
+        """
         ...
 
     def log_params(self, params: dict[str, Any]) -> None:

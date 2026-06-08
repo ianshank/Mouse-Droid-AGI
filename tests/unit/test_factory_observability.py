@@ -79,6 +79,27 @@ def test_backend_mlflow_degrades_to_noop_when_extras_missing(
     assert isinstance(logger, NoOpExperimentLogger)
 
 
+def test_backend_mlflow_degrades_to_noop_on_construction_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-ImportError construction failure (bad URI / store init) degrades to NoOp.
+
+    Observability is best-effort — a broken tracking store must never crash the run.
+    """
+    pytest.importorskip("mlflow")
+    import mousedroid.training.observability.mlflow_logger as mod
+
+    def _boom(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("simulated tracking-store init failure")
+
+    monkeypatch.setattr(mod, "MlflowExperimentLogger", _boom)
+    cfg = _settings_with_logger(
+        backend="mlflow", tracking_uri="file:/nonexistent/mlruns", experiment_name="t"
+    )
+    logger = build_experiment_logger(cfg)
+    assert isinstance(logger, NoOpExperimentLogger)
+
+
 def test_relative_file_uri_is_resolved_to_absolute(tmp_path: object) -> None:
     """A ``file:./mlruns`` URI is pinned to an absolute path before construction."""
     pytest.importorskip("mlflow")

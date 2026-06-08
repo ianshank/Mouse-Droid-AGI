@@ -22,7 +22,7 @@ class NoOpExperimentLogger:
     def start_run(
         self,
         *,
-        run_name: str,
+        run_name: str | None = None,
         params: dict[str, Any] | None = None,
         tags: dict[str, str] | None = None,
     ) -> str:

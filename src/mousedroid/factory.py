@@ -1239,6 +1239,16 @@ def build_experiment_logger(cfg: Settings) -> ExperimentLoggerProtocol:
                 error=f"{type(exc).__name__}:{exc}",
             )
             return NoOpExperimentLogger()
+        except Exception as exc:
+            # Construction can also fail on a bad tracking_uri, an unreachable
+            # store, or permission errors. Degrade to NoOp (with a distinct
+            # warning) rather than crashing the whole training run — observability
+            # is best-effort, never load-bearing.
+            _log.warning(
+                "experiment_logger_mlflow_init_failed",
+                error=f"{type(exc).__name__}:{exc}",
+            )
+            return NoOpExperimentLogger()
 
     # Exhaustive Literal coverage; reached only on schema additions without a
     # corresponding factory branch.

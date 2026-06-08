@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-mlflow = pytest.importorskip("mlflow")
+pytest.importorskip("mlflow")
 torch = pytest.importorskip("torch")
 
 from mlflow import MlflowClient
@@ -78,3 +78,31 @@ def test_trainer_without_logger_is_byte_identical_default() -> None:
     assert set(out.keys()) == {"q_loss", "bellman_loss", "cql_loss", "policy_loss"}
     for v in out.values():
         assert isinstance(v, float)
+
+
+def test_cql_log_step_every_n_throttles_writes(
+    logger: MlflowExperimentLogger,
+) -> None:
+    """With log_step_every_n=2, only steps 0, 2, 4 produce metric history entries."""
+    logger.start_run(run_name="cql-throttle")
+    ctx = logger.start_phase(phase="cql-throttle")
+    trainer = CQLTrainer(
+        state_dim=4,
+        action_dim=2,
+        experiment_logger=logger,
+        log_phase=ctx,
+        log_step_every_n=2,
+    )
+    batch = _batch()
+    for _ in range(5):  # steps 0..4
+        trainer.update_step(**batch)
+    logger.end_phase(ctx)
+    logger.end_run()
+
+    client = MlflowClient(tracking_uri=logger._tracking_uri)
+    history = client.get_metric_history(ctx.run_id, "q_loss")
+    assert [m.step for m in history] == [
+        0,
+        2,
+        4,
+    ], f"Expected steps [0, 2, 4] with log_step_every_n=2, got {[m.step for m in history]}"

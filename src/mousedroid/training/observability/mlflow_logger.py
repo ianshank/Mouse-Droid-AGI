@@ -87,13 +87,14 @@ class MlflowExperimentLogger:
         existing = self._client.get_experiment_by_name(name)
         if existing is not None:
             return cast(str, existing.experiment_id)
+        # MlflowClient.create_experiment already returns str — no cast needed.
         return self._client.create_experiment(name)
 
     # ---- parent run --------------------------------------------------------
     def start_run(
         self,
         *,
-        run_name: str,
+        run_name: str | None = None,
         params: dict[str, Any] | None = None,
         tags: dict[str, str] | None = None,
     ) -> str:
