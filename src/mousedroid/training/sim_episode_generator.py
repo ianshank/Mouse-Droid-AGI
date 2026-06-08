@@ -1,0 +1,116 @@
+"""In-process sim episode generation -> batched tensors for RSSM pretraining."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+import torch
+from numpy.typing import NDArray
+from torch import Tensor
+
+from mousedroid.logging.setup import get_logger
+from mousedroid.sim.protocols import RoverEnvProtocol
+from mousedroid.training.rover_obs_adapter import RoverObsAdapter
+
+_log = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class EpisodeBatch:
+    """Batched ``(B, T, ...)`` tensors consumed by ``RSSM.train_sequence``.
+
+    A new in-memory container — NOT ``MouseDroidExperienceRecord`` (that schema
+    cannot hold the rover modalities). LMDB persistence is a deferred follow-on.
+    """
+
+    motor: Tensor
+    ultrasonic: Tensor
+    lidar: Tensor
+    valid_mask: Tensor
+    action: Tensor
+    reward: Tensor
+
+
+class SimEpisodeGenerator:
+    """Roll N episodes of T steps under a smoothed-random policy; adapt + stack."""
+
+    def __init__(
+        self,
+        env: RoverEnvProtocol,
+        adapter: RoverObsAdapter,
+        *,
+        n_episodes: int,
+        seq_len: int,
+        seed: int,
+    ) -> None:
+        """Initialise the generator.
+
+        Args:
+            env: A rover env conforming to ``RoverEnvProtocol``.
+            adapter: Maps rover obs -> RSSM encoder inputs.
+            n_episodes: Number of episodes (batch dimension).
+            seq_len: Steps per episode (time dimension).
+            seed: Seed for the deterministic exploration + reset stream.
+        """
+        self._env = env
+        self._adapter = adapter
+        self._n = n_episodes
+        self._t = seq_len
+        self._rng = np.random.default_rng(seed)
+        self._action_dim = env.action_dim
+
+    def _sample_action(self, prev: NDArray[np.float32]) -> NDArray[np.float32]:
+        # Smoothed uniform-random wheel commands (Dreamer seed-episode policy).
+        target = self._rng.uniform(-6.0, 6.0, size=self._action_dim).astype(np.float32)
+        out: NDArray[np.float32] = (0.7 * prev + 0.3 * target).astype(np.float32)
+        return out
+
+    def generate(self) -> EpisodeBatch:
+        """Roll the configured episodes and stack them into an ``EpisodeBatch``."""
+        motors: list[list[NDArray[np.float32]]] = []
+        ultras: list[list[NDArray[np.float32]]] = []
+        lidars: list[list[NDArray[np.float32]]] = []
+        masks: list[list[NDArray[np.float32]]] = []
+        actions: list[list[NDArray[np.float32]]] = []
+        rewards: list[list[np.float32]] = []
+
+        for _ep in range(self._n):
+            obs, info = self._env.reset(seed=int(self._rng.integers(0, 2**31 - 1)))
+            prev = np.zeros(self._action_dim, dtype=np.float32)
+            em, eu, el, ek, ea, er = ([] for _ in range(6))
+            for _step in range(self._t):
+                adapted = self._adapter.adapt(obs, info)
+                action = self._sample_action(prev)
+                # Pad 2-DoF wheel action to the RSSM's 3-DoF [vx, vy=0, omega] space.
+                padded = np.asarray([float(action[0]), 0.0, float(action[-1])], dtype=np.float32)
+                em.append(adapted["motor"])
+                eu.append(adapted["ultrasonic"])
+                el.append(adapted.get("lidar", np.zeros(0, dtype=np.float32)))
+                ek.append(adapted["valid_mask"])
+                ea.append(padded)
+                obs, reward, terminated, truncated, info = self._env.step(action)
+                er.append(np.float32(reward))
+                prev = action
+                if terminated or truncated:
+                    obs, info = self._env.reset(seed=int(self._rng.integers(0, 2**31 - 1)))
+                    prev = np.zeros(self._action_dim, dtype=np.float32)
+            motors.append(em)
+            ultras.append(eu)
+            lidars.append(el)
+            masks.append(ek)
+            actions.append(ea)
+            rewards.append(er)
+        _log.info("sim_episodes_generated", n_episodes=self._n, seq_len=self._t)
+
+        def _stack(x: list[list[NDArray[np.float32]]]) -> Tensor:
+            return torch.as_tensor(np.asarray(x, dtype=np.float32))
+
+        return EpisodeBatch(
+            motor=_stack(motors),
+            ultrasonic=_stack(ultras),
+            lidar=_stack(lidars),
+            valid_mask=_stack(masks),
+            action=_stack(actions),
+            reward=torch.as_tensor(np.asarray(rewards, dtype=np.float32)),
+        )
