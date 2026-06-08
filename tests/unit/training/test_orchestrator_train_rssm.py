@@ -109,6 +109,50 @@ async def test_vision_finetune_runs_when_enabled(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_pretrain_and_finetune_both_run_when_both_enabled(tmp_path: Path) -> None:
+    """Vision fine-tune must NOT short-circuit pretraining: both phases run + write."""
+    pytest.importorskip("mujoco")
+    from mousedroid.config.schema import MujocoSimConfig
+    from mousedroid.factory import build_rover_env
+
+    probe_cfg = Settings(
+        mock_hardware=True,
+        rover=RoverConfig(
+            sim=RoverSimConfig(backend="mujoco", mujoco=MujocoSimConfig(render_vision=True))
+        ),
+    )
+    probe = build_rover_env(probe_cfg)
+    try:
+        probe.reset(seed=0)
+        probe.render_rgb()
+    except Exception:
+        pytest.skip("offscreen GL rendering unavailable")
+    finally:
+        probe.close()
+
+    # Pretrain writes rssm_pretrained.pt FIRST; the fine-tune then consumes it.
+    cfg = Settings(
+        mock_hardware=True,
+        rover=RoverConfig(sim=RoverSimConfig(backend="mujoco")),
+        training=TrainingConfig(
+            rssm_pretrain_enabled=True,
+            rssm_vision_finetune_enabled=True,
+            rssm_checkpoint_name="rssm_pretrained.pt",
+            rssm_finetune_checkpoint=str(tmp_path / "rssm_pretrained.pt"),
+            rssm_finetune_epochs=2,
+            n_episodes=2,
+            sequence_length=4,
+            epochs=2,
+            weights_dir=str(tmp_path),
+        ),
+    )
+    orch = _orch(cfg, tmp_path)
+    await orch._train_rssm(batch_size=2)
+    assert (tmp_path / "rssm_pretrained.pt").exists()  # pretrain ran
+    assert (tmp_path / cfg.training.rssm_vision_checkpoint_name).exists()  # fine-tune ran
+
+
+@pytest.mark.asyncio
 async def test_train_rssm_runs_when_enabled_and_mujoco(tmp_path: Path) -> None:
     pytest.importorskip("mujoco")
     cfg = Settings(

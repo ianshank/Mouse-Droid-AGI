@@ -51,7 +51,7 @@
 
 # LAYER 1 — Encoder vision-optional + trainable RSSM (pure ML)
 
-### Task 1: Make the encoder's vision branch optional
+## Task 1: Make the encoder's vision branch optional
 
 **Files:**
 - Modify: `src/mousedroid/world_model/encoder.py`
@@ -734,7 +734,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 > working). `mujoco>=3.0` is **already** in the `[arm]` optional-dependency
 > extra — no new extra is added.
 
-### Task 6: Add `MujocoSimConfig` schema block
+## Task 6: Add `MujocoSimConfig` schema block
 
 **Files:**
 - Modify: `src/mousedroid/config/schema.py`
@@ -1488,7 +1488,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 # LAYER 3 — Glue: adapter, generator, pretrainer, orchestrator wiring
 
-### Task 11: `RoverObsAdapter`
+## Task 11: `RoverObsAdapter`
 
 **Files:**
 - Create: `src/mousedroid/training/rover_obs_adapter.py`

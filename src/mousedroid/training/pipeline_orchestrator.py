@@ -186,27 +186,34 @@ class PipelineOrchestrator:
                 generator's ``n_episodes`` sets the batch dimension).
         """
         tcfg = self._settings.training
+        rover = self._settings.rover
+        handled = False
+
+        # Pretrain (vision OFF) runs FIRST so a fine-tune in the same pass can
+        # consume the freshly written checkpoint. The two flags are independent —
+        # vision fine-tune must NOT short-circuit pretraining.
+        if tcfg.rssm_pretrain_enabled:
+            if rover is None or rover.sim.backend != "mujoco":
+                logger.info("rssm_training_skipped", reason="non_mujoco_backend")
+            else:
+                from mousedroid.factory import build_rover_env, build_rssm_trainable
+
+                await self._run_rssm_training(
+                    model=build_rssm_trainable(self._settings),
+                    env=build_rover_env(self._settings),
+                    battery_v=rover.sim.mujoco.battery_voltage_const_v,
+                    checkpoint=Path(tcfg.weights_dir) / tcfg.rssm_checkpoint_name,
+                    epochs=tcfg.epochs,
+                    event_prefix="rssm_training",
+                )
+            handled = True
+
         if tcfg.rssm_vision_finetune_enabled:
             await self._run_vision_finetune()
-            return
-        if not tcfg.rssm_pretrain_enabled:
+            handled = True
+
+        if not handled:
             logger.info("rssm_training_skipped", reason="pretrain_disabled", batch_size=batch_size)
-            return
-        rover = self._settings.rover
-        if rover is None or rover.sim.backend != "mujoco":
-            logger.info("rssm_training_skipped", reason="non_mujoco_backend")
-            return
-
-        from mousedroid.factory import build_rover_env, build_rssm_trainable
-
-        await self._run_rssm_training(
-            model=build_rssm_trainable(self._settings),
-            env=build_rover_env(self._settings),
-            battery_v=rover.sim.mujoco.battery_voltage_const_v,
-            checkpoint=Path(tcfg.weights_dir) / tcfg.rssm_checkpoint_name,
-            epochs=tcfg.epochs,
-            event_prefix="rssm_training",
-        )
 
     async def _run_vision_finetune(self) -> None:
         """Vision-on fine-tune: migrate a vision-OFF checkpoint and train with RGB.
@@ -316,14 +323,20 @@ class PipelineOrchestrator:
             )
             return trainer.train([batch], epochs=epochs, checkpoint_path=checkpoint)
 
-        logger.info(f"{event_prefix}_started", n_episodes=tcfg.n_episodes, device=str(device))
+        # Static event name + structured `phase` field (no runtime-built event
+        # strings) — keeps the structured-logging contract stable for consumers.
+        logger.info(
+            "rssm_phase_started", phase=event_prefix, n_episodes=tcfg.n_episodes, device=str(device)
+        )
         try:
             history = await asyncio.to_thread(_run)
         finally:
             # Always release the env (+ its MuJoCo renderer/GL context) even if
             # episode generation or training raises — otherwise the context leaks.
             env.close()
-        logger.info(f"{event_prefix}_done", first_loss=history[0], last_loss=history[-1])
+        logger.info(
+            "rssm_phase_done", phase=event_prefix, first_loss=history[0], last_loss=history[-1]
+        )
 
     async def _train_warmstart(self, batch_size: int) -> None:
         """Run warm-start policy tuning phase."""

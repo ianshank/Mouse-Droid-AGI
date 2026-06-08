@@ -30,7 +30,7 @@ slip, contact, and chassis dynamics the mock cannot produce.
 
 ## 3. Architecture & data flow
 
-```
+```text
 build_rover_env(cfg)  ──►  RoverMuJoCoEnv (RoverEnvProtocol; fills reserved "mujoco" slot)
         │                        │  obs dict: {imu, chassis_pose, wheel_vel, lidar}  (== MockRoverEnv contract)
         ▼                        ▼

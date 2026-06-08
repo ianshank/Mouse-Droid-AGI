@@ -58,20 +58,22 @@ def test_vision_finetune_round_trip(tmp_path: Path) -> None:
     model = build_rssm_vision_finetune(cfg, ckpt)
     assert model.encoder.vision_enabled is True
     env = build_rover_env(cfg)
-    adapter = RoverObsAdapter(battery_v=cfg.rover.sim.mujoco.battery_voltage_const_v)
-    batch = SimEpisodeGenerator(
-        env,
-        adapter,
-        n_episodes=4,
-        seq_len=6,
-        seed=0,
-        feature_extractor=build_vision_feature_extractor(cfg),
-    ).generate()
-    assert batch.vision.shape == (4, 6, cfg.camera.feature_dim)
+    try:
+        adapter = RoverObsAdapter(battery_v=cfg.rover.sim.mujoco.battery_voltage_const_v)
+        batch = SimEpisodeGenerator(
+            env,
+            adapter,
+            n_episodes=4,
+            seq_len=6,
+            seed=0,
+            feature_extractor=build_vision_feature_extractor(cfg),
+        ).generate()
+        assert batch.vision.shape == (4, 6, cfg.camera.feature_dim)
 
-    history = RSSMPretrainer(
-        model, lr=1e-3, grad_clip=100.0, amp=False, device=torch.device("cpu")
-    ).train([batch], epochs=40, checkpoint_path=tmp_path / "vis.pt")
-    env.close()
-    assert history[-1] < history[0]
-    assert (tmp_path / "vis.pt").exists()
+        history = RSSMPretrainer(
+            model, lr=1e-3, grad_clip=100.0, amp=False, device=torch.device("cpu")
+        ).train([batch], epochs=40, checkpoint_path=tmp_path / "vis.pt")
+        assert history[-1] < history[0]
+        assert (tmp_path / "vis.pt").exists()
+    finally:
+        env.close()

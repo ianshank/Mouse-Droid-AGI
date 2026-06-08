@@ -1623,12 +1623,21 @@ class ModelConfig(BaseModel):
     kl_free_nats: float = Field(
         1.0, ge=0.0, description="Free-bits floor (nats) for the RSSM training KL."
     )
+    logvar_clamp: float = Field(
+        10.0,
+        gt=0.0,
+        description="Symmetric |logvar| clamp before exp() in the balanced-KL "
+        "(fp16 AMP overflow guard). Tunable here rather than hardcoded.",
+    )
 
     @model_validator(mode="after")
     def _validate_optional_modalities(self) -> Self:
         """Validate optional modality dimension pairs."""
         if (self.vision_dim == 0) != (self.vision_proj_dim == 0):
-            msg = "vision_dim and vision_proj_dim must both be zero when disabling vision"
+            msg = (
+                "vision_dim and vision_proj_dim must both be zero (disabled) "
+                "or both non-zero (enabled) together"
+            )
             raise ValueError(msg)
 
         if (self.ultrasonic_dim == 0) != (self.ultrasonic_proj_dim == 0):

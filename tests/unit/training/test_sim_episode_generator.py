@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import numpy as np
 import pytest
 
@@ -9,8 +11,26 @@ mujoco = pytest.importorskip("mujoco")
 
 from mousedroid.config.schema import MujocoSimConfig, RoverConfig, RoverSimConfig, Settings
 from mousedroid.factory import build_rover_env
+from mousedroid.sim.protocols import RoverEnvProtocol
 from mousedroid.training.rover_obs_adapter import RoverObsAdapter
 from mousedroid.training.sim_episode_generator import SimEpisodeGenerator
+
+# Close every built env after each test so MuJoCo native handles never leak
+# across the suite (close() is idempotent).
+_OPEN_ENVS: list[RoverEnvProtocol] = []
+
+
+@pytest.fixture(autouse=True)
+def _close_tracked_envs() -> Iterator[None]:
+    yield
+    while _OPEN_ENVS:
+        _OPEN_ENVS.pop().close()
+
+
+def _track(env: RoverEnvProtocol) -> RoverEnvProtocol:
+    """Register an env for guaranteed teardown after the current test."""
+    _OPEN_ENVS.append(env)
+    return env
 
 
 def _gen(n: int, t: int) -> SimEpisodeGenerator:
@@ -18,7 +38,7 @@ def _gen(n: int, t: int) -> SimEpisodeGenerator:
         mock_hardware=True,
         rover=RoverConfig(sim=RoverSimConfig(backend="mujoco")),
     )
-    env = build_rover_env(cfg)
+    env = _track(build_rover_env(cfg))
     adapter = RoverObsAdapter(battery_v=cfg.rover.sim.mujoco.battery_voltage_const_v)
     return SimEpisodeGenerator(env, adapter, n_episodes=n, seq_len=t, seed=0)
 
@@ -41,7 +61,7 @@ def test_deterministic_for_fixed_seed() -> None:
 
 def _mj_env_and_adapter() -> tuple[object, RoverObsAdapter]:
     cfg = Settings(mock_hardware=True, rover=RoverConfig(sim=RoverSimConfig(backend="mujoco")))
-    env = build_rover_env(cfg)
+    env = _track(build_rover_env(cfg))
     adapter = RoverObsAdapter(battery_v=cfg.rover.sim.mujoco.battery_voltage_const_v)
     return env, adapter
 
@@ -77,7 +97,7 @@ def test_vision_features_populated_with_extractor() -> None:
             sim=RoverSimConfig(backend="mujoco", mujoco=MujocoSimConfig(render_vision=True))
         ),
     )
-    env = build_rover_env(cfg)
+    env = _track(build_rover_env(cfg))
     # Skip if offscreen GL rendering is unavailable (headless CI).
     try:
         env.reset(seed=0)

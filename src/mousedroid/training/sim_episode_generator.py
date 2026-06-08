@@ -78,6 +78,9 @@ class SimEpisodeGenerator:
         self._t = seq_len
         self._rng = np.random.default_rng(seed)
         self._action_dim = env.action_dim
+        if self._action_dim <= 0:
+            msg = f"env.action_dim must be > 0, got {self._action_dim}"
+            raise ValueError(msg)
         self._explore_bound = explore_action_rad_s
         self._explore_smoothing = explore_smoothing
         self._dr = domain_randomizer

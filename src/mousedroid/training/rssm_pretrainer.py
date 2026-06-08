@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -100,7 +101,12 @@ class RSSMPretrainer:
                 scaled = self._scaler.scale(loss)
                 scaled.backward()  # type: ignore[no-untyped-call]  # torch stub gap
                 self._scaler.unscale_(self._opt)
-                torch.nn.utils.clip_grad_norm_(self._model.parameters(), self._grad_clip)
+                # Clip ALL optimizer-managed params (model + decoders), not just
+                # the model — otherwise decoder grads can explode unchecked.
+                torch.nn.utils.clip_grad_norm_(
+                    chain(self._model.parameters(), self._decoders.parameters()),
+                    self._grad_clip,
+                )
                 self._scaler.step(self._opt)
                 self._scaler.update()
                 epoch_loss += float(loss.detach())

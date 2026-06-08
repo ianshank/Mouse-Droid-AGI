@@ -12,6 +12,7 @@
 `MujocoSimConfig.render_vision` defaults `False` and `TrainingConfig.rssm_vision_finetune_enabled` defaults `False` → Phase 5 (and all existing configs/checkpoints) byte-identical. The deployment RSSM is unaffected (vision was already a supported modality).
 
 ## File map
+
 | File | Status | Responsibility |
 |---|---|---|
 | `src/mousedroid/config/schema.py` | MODIFY | `MujocoSimConfig` render fields; `TrainingConfig` finetune fields |

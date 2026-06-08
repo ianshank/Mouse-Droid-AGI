@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import numpy as np
 import pytest
 
@@ -10,9 +12,22 @@ mujoco = pytest.importorskip("mujoco")
 from mousedroid.config.schema import RoverConfig
 from mousedroid.sim.mujoco_rover_env import RoverMuJoCoEnv
 
+# Close every env created via _env() after each test so MuJoCo native handles
+# never leak across the suite (close() is idempotent).
+_OPEN_ENVS: list[RoverMuJoCoEnv] = []
+
+
+@pytest.fixture(autouse=True)
+def _close_tracked_envs() -> Iterator[None]:
+    yield
+    while _OPEN_ENVS:
+        _OPEN_ENVS.pop().close()
+
 
 def _env() -> RoverMuJoCoEnv:
-    return RoverMuJoCoEnv(RoverConfig(), wheel_radius_m=0.042, track_width_m=0.20)
+    env = RoverMuJoCoEnv(RoverConfig(), wheel_radius_m=0.042, track_width_m=0.20)
+    _OPEN_ENVS.append(env)
+    return env
 
 
 def test_friction_param_writes_geom_friction() -> None:

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from typing import TypeVar
+
 import numpy as np
 import pytest
 
@@ -19,6 +22,27 @@ from mousedroid.sim.protocols import (
 
 _WHEEL_RADIUS_M = 0.042
 _TRACK_WIDTH_M = 0.20
+
+# Track every env created via the helpers and close them after each test so the
+# MuJoCo native handles / GL contexts never leak across the suite. close() is
+# idempotent, so tests that also close explicitly are unaffected.
+_OPEN_ENVS: list[RoverEnvProtocol] = []
+
+
+@pytest.fixture(autouse=True)
+def _close_tracked_envs() -> Iterator[None]:
+    yield
+    while _OPEN_ENVS:
+        _OPEN_ENVS.pop().close()
+
+
+_EnvT = TypeVar("_EnvT", bound=RoverEnvProtocol)
+
+
+def _track(env: _EnvT) -> _EnvT:
+    """Register an env for guaranteed teardown after the current test."""
+    _OPEN_ENVS.append(env)
+    return env
 
 
 def _render_cfg() -> RoverConfig:
@@ -49,13 +73,17 @@ def _gl_available() -> bool:
 
 
 def _mj() -> RoverMuJoCoEnv:
-    return RoverMuJoCoEnv(
+    env = RoverMuJoCoEnv(
         RoverConfig(), wheel_radius_m=_WHEEL_RADIUS_M, track_width_m=_TRACK_WIDTH_M
     )
+    _OPEN_ENVS.append(env)
+    return env
 
 
 def _mock() -> MockRoverEnv:
-    return MockRoverEnv(RoverConfig(), wheel_radius_m=_WHEEL_RADIUS_M, track_width_m=_TRACK_WIDTH_M)
+    env = MockRoverEnv(RoverConfig(), wheel_radius_m=_WHEEL_RADIUS_M, track_width_m=_TRACK_WIDTH_M)
+    _OPEN_ENVS.append(env)
+    return env
 
 
 def test_satisfies_protocol() -> None:
@@ -155,14 +183,14 @@ def test_step_after_close_raises_clear_error() -> None:
     env = _mj()
     env.close()
     with pytest.raises(RuntimeError, match="closed RoverMuJoCoEnv"):
-        env.reset(seed=0)
+        env.step(np.zeros(env.action_dim, dtype=np.float32))
 
 
 def test_body_velocity_mode_maps_to_wheel_setpoints() -> None:
     from mousedroid.config.schema import RoverActionConfig
 
     cfg = RoverConfig(action=RoverActionConfig(mode="body_velocity"))
-    env = RoverMuJoCoEnv(cfg, wheel_radius_m=_WHEEL_RADIUS_M, track_width_m=_TRACK_WIDTH_M)
+    env = _track(RoverMuJoCoEnv(cfg, wheel_radius_m=_WHEEL_RADIUS_M, track_width_m=_TRACK_WIDTH_M))
     env.reset(seed=0)
     # action = [vx, omega]; finite + advances without error
     obs, reward, _t, _tr, info = env.step(np.asarray([0.2, 0.3], dtype=np.float32))
@@ -187,7 +215,7 @@ def test_to_body_action_body_velocity_passthrough() -> None:
     from mousedroid.config.schema import RoverActionConfig
 
     cfg = RoverConfig(action=RoverActionConfig(mode="body_velocity"))
-    env = RoverMuJoCoEnv(cfg, wheel_radius_m=_WHEEL_RADIUS_M, track_width_m=_TRACK_WIDTH_M)
+    env = _track(RoverMuJoCoEnv(cfg, wheel_radius_m=_WHEEL_RADIUS_M, track_width_m=_TRACK_WIDTH_M))
     out = env.to_body_action(np.asarray([0.2, 0.3], dtype=np.float32))
     assert np.allclose(out, [0.2, 0.0, 0.3])
 

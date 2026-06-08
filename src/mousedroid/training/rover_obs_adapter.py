@@ -61,7 +61,9 @@ class RoverObsAdapter:
         ultrasonic = np.asarray([forward], dtype=np.float32)
 
         mask = np.ones(_N_SLOTS, dtype=np.float32)
-        mask[_VISION_SLOT] = 0.0  # vision omitted unless features are supplied
+        # Vision present only when features are supplied — set the slot up front so
+        # the mask is final before it is inserted into the output dict.
+        mask[_VISION_SLOT] = 1.0 if vision_features is not None else 0.0
 
         out: dict[str, NDArray[np.float32]] = {
             "motor": motor,
@@ -72,5 +74,4 @@ class RoverObsAdapter:
             out["lidar"] = lidar
         if vision_features is not None:
             out["vision"] = np.asarray(vision_features, dtype=np.float32)
-            mask[_VISION_SLOT] = 1.0  # vision present this step
         return out

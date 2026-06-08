@@ -123,12 +123,16 @@ class RSSM(nn.Module):
         """
         device = h.device
 
-        # Convert observation arrays to tensors.
-        vision = torch.as_tensor(
-            observation.vision_features,
-            dtype=torch.float32,
-            device=device,
-        ).unsqueeze(0)
+        # Convert observation arrays to tensors. Vision is gated on the encoder so
+        # a vision-OFF RSSM does not require camera features on the observation
+        # (mirrors MultimodalEncoder.forward accepting vision=None).
+        vision: Tensor | None = None
+        if self.encoder.vision_enabled:
+            vision = torch.as_tensor(
+                observation.vision_features,
+                dtype=torch.float32,
+                device=device,
+            ).unsqueeze(0)
         ultrasonic: Tensor | None = None
         if self.encoder.ultrasonic_enabled:
             ultrasonic = torch.as_tensor(
@@ -281,6 +285,7 @@ class RSSM(nn.Module):
                     prior_logvar,
                     alpha=self._cfg.kl_balance_alpha,
                     free_nats=self._cfg.kl_free_nats,
+                    logvar_clamp=self._cfg.logvar_clamp,
                 )
 
             hz = torch.cat([h, z], dim=-1)
