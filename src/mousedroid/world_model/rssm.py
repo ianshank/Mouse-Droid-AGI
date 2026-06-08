@@ -55,18 +55,6 @@ class RSSM(nn.Module):
             cfg.obs_dim,
         )
 
-        # Raw-modality decoders used ONLY by train_sequence (the deployment
-        # path keeps observation_decoder/reward_head untouched). Reconstructing
-        # the RAW sim observations (fixed targets) is what avoids the obs_embed
-        # self-reconstruction collapse — gradients cannot move a fixed target.
-        self.decode_motor = nn.Linear(cfg.hidden_dim + cfg.latent_dim, cfg.motor_state_dim)
-        self._range_enabled = cfg.ultrasonic_dim > 0
-        if self._range_enabled:
-            self.decode_range = nn.Linear(cfg.hidden_dim + cfg.latent_dim, 1)
-        self._lidar_enabled = cfg.lidar_dim > 0
-        if self._lidar_enabled:
-            self.decode_lidar = nn.Linear(cfg.hidden_dim + cfg.latent_dim, cfg.lidar_dim)
-
         _log.info(
             "rssm_init",
             hidden_dim=cfg.hidden_dim,
@@ -228,7 +216,9 @@ class RSSM(nn.Module):
         predicted_reward: Tensor = self.reward_head(torch.cat([new_h, new_z], dim=-1))
         return new_h, new_z, predicted_reward
 
-    def train_sequence(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
+    def train_sequence(
+        self, batch: dict[str, Tensor], decoders: RawModalityDecoders
+    ) -> dict[str, Tensor]:
         """Gradient-enabled sequence rollout for dynamics pretraining.
 
         Reconstructs the RAW per-modality sim observations (motor/range/lidar) —
@@ -239,10 +229,16 @@ class RSSM(nn.Module):
         NOT decorated ``@torch.no_grad`` — the deployment inference methods above
         keep that decorator (CLAUDE.md invariant #7).
 
+        The reconstruction heads live on the external ``decoders`` module (NOT on
+        ``self``) so the deployment RSSM's ``state_dict`` + seeded init stay
+        byte-identical; the pretrainer owns ``decoders`` and trains them jointly.
+
         Args:
             batch: Dict of ``(B, T, ...)`` tensors with keys ``motor``,
                 ``valid_mask``, ``action`` (always) and ``ultrasonic`` / ``lidar``
                 when those modalities are enabled.
+            decoders: Raw-modality reconstruction heads (built from this model's
+                config), owned + optimized by the pretrainer.
 
         Returns:
             Dict with scalar tensors ``loss``, ``recon``, ``kl`` and a detached
@@ -260,9 +256,11 @@ class RSSM(nn.Module):
         kl_total = torch.zeros((), device=device)
         post_stds: list[Tensor] = []
 
+        range_enabled = self.encoder.ultrasonic_enabled
+        lidar_enabled = self.encoder.lidar_enabled
         for step in range(t):
-            ultra = batch["ultrasonic"][:, step] if self._range_enabled else None
-            lidar = batch["lidar"][:, step] if self._lidar_enabled else None
+            ultra = batch["ultrasonic"][:, step] if range_enabled else None
+            lidar = batch["lidar"][:, step] if lidar_enabled else None
             obs_embed = self.encoder(None, ultra, motor[:, step], mask[:, step], lidar=lidar)
 
             gru_in = torch.cat([z, actions[:, step]], dim=-1)
@@ -284,11 +282,11 @@ class RSSM(nn.Module):
                 )
 
             hz = torch.cat([h, z], dim=-1)
-            recon = recon + nn.functional.mse_loss(self.decode_motor(hz), motor[:, step])
-            if self._range_enabled and ultra is not None:
-                recon = recon + nn.functional.mse_loss(self.decode_range(hz), ultra)
-            if self._lidar_enabled and lidar is not None:
-                recon = recon + nn.functional.mse_loss(self.decode_lidar(hz), lidar)
+            recon = recon + nn.functional.mse_loss(decoders.decode_motor(hz), motor[:, step])
+            if range_enabled and ultra is not None:
+                recon = recon + nn.functional.mse_loss(decoders.decode_range(hz), ultra)
+            if lidar_enabled and lidar is not None:
+                recon = recon + nn.functional.mse_loss(decoders.decode_lidar(hz), lidar)
             post_stds.append((0.5 * post_logvar).exp().mean().detach())
 
         recon = recon / t
@@ -300,3 +298,28 @@ class RSSM(nn.Module):
             "kl": kl.detach(),
             "posterior_std": torch.stack(post_stds).mean(),
         }
+
+
+class RawModalityDecoders(nn.Module):
+    """Raw per-modality reconstruction heads for RSSM dynamics pretraining.
+
+    Deliberately kept OUT of :class:`RSSM` so the deployment model's
+    ``state_dict`` and seeded weight init stay byte-identical (adding these
+    ``Linear`` heads to ``RSSM.__init__`` would break checkpoint loading and
+    shift the seeded golden curves). :class:`RSSMPretrainer` owns an instance,
+    includes it in the optimizer, and passes it to :meth:`RSSM.train_sequence`.
+
+    Args:
+        cfg: The model config (decoder dims mirror the encoder's modalities).
+    """
+
+    def __init__(self, cfg: ModelConfig) -> None:
+        super().__init__()
+        feat = cfg.hidden_dim + cfg.latent_dim
+        self.decode_motor = nn.Linear(feat, cfg.motor_state_dim)
+        self.range_enabled = cfg.ultrasonic_dim > 0
+        if self.range_enabled:
+            self.decode_range = nn.Linear(feat, 1)
+        self.lidar_enabled = cfg.lidar_dim > 0
+        if self.lidar_enabled:
+            self.decode_lidar = nn.Linear(feat, cfg.lidar_dim)

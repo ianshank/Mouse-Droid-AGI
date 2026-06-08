@@ -5,14 +5,14 @@ from __future__ import annotations
 import torch
 
 from mousedroid.config.schema import ModelConfig
-from mousedroid.world_model.rssm import RSSM
+from mousedroid.world_model.rssm import RSSM, RawModalityDecoders
 
 
-def _model() -> RSSM:
+def _model() -> tuple[RSSM, RawModalityDecoders]:
     # vision off (pretraining variant); lidar on so we exercise the lidar head.
     cfg = ModelConfig(vision_dim=0, vision_proj_dim=0, lidar_dim=16, lidar_proj_dim=32)
     torch.manual_seed(0)
-    return RSSM(cfg)
+    return RSSM(cfg), RawModalityDecoders(cfg)
 
 
 def _batch(model: RSSM, b: int = 4, t: int = 6) -> dict[str, torch.Tensor]:
@@ -26,31 +26,41 @@ def _batch(model: RSSM, b: int = 4, t: int = 6) -> dict[str, torch.Tensor]:
     }
 
 
+def test_decoders_not_on_rssm_state_dict() -> None:
+    """Deployment RSSM must NOT carry the pretraining decoder heads."""
+    model, _ = _model()
+    keys = set(model.state_dict())
+    assert not any(k.startswith("decode_") for k in keys)
+
+
 def test_train_sequence_returns_finite_losses() -> None:
-    model = _model()
-    out = model.train_sequence(_batch(model))
+    model, decoders = _model()
+    out = model.train_sequence(_batch(model), decoders)
     for key in ("loss", "recon", "kl"):
         assert torch.isfinite(out[key])
     assert out["loss"].requires_grad
 
 
 def test_train_sequence_backward_populates_grads() -> None:
-    model = _model()
-    out = model.train_sequence(_batch(model))
+    model, decoders = _model()
+    out = model.train_sequence(_batch(model), decoders)
     out["loss"].backward()
     grads = [p.grad for p in model.parameters() if p.requires_grad]
     assert any(g is not None and torch.isfinite(g).all() and g.abs().sum() > 0 for g in grads)
+    # the decoder heads also receive gradient
+    dgrads = [p.grad for p in decoders.parameters() if p.requires_grad]
+    assert any(g is not None and g.abs().sum() > 0 for g in dgrads)
 
 
 def test_overfits_single_batch_loss_decreases() -> None:
-    model = _model()
+    model, decoders = _model()
     batch = _batch(model)
-    opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+    opt = torch.optim.Adam(list(model.parameters()) + list(decoders.parameters()), lr=1e-3)
     first: float | None = None
     out: dict[str, torch.Tensor] = {}
     for _ in range(40):
         opt.zero_grad()
-        out = model.train_sequence(batch)
+        out = model.train_sequence(batch, decoders)
         out["loss"].backward()
         opt.step()
         if first is None:
@@ -61,6 +71,6 @@ def test_overfits_single_batch_loss_decreases() -> None:
 
 def test_no_posterior_collapse_probe() -> None:
     """posterior_std stays above a floor — guards the obs_embed-collapse failure."""
-    model = _model()
-    out = model.train_sequence(_batch(model))
+    model, decoders = _model()
+    out = model.train_sequence(_batch(model), decoders)
     assert float(out["posterior_std"]) > 1e-3

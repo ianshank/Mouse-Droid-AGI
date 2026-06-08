@@ -43,8 +43,15 @@ class RSSMPretrainer:
             amp: Enable mixed precision (only honoured on CUDA).
             device: Target device for the model + batches.
         """
+        from mousedroid.world_model.rssm import RawModalityDecoders
+
         self._model = model.to(device)
-        self._opt = torch.optim.Adam(model.parameters(), lr=lr)
+        # Pretraining reconstruction heads live here (not on the RSSM) so the
+        # deployment model stays byte-identical. They train jointly with the RSSM.
+        self._decoders = RawModalityDecoders(model.cfg).to(device)
+        self._opt = torch.optim.Adam(
+            list(model.parameters()) + list(self._decoders.parameters()), lr=lr
+        )
         self._grad_clip = grad_clip
         self._amp = amp and device.type == "cuda"
         # torch.amp.GradScaler is the non-deprecated API but is not re-exported
@@ -79,6 +86,7 @@ class RSSMPretrainer:
             return []
         history: list[float] = []
         self._model.train()
+        self._decoders.train()
         out: dict[str, torch.Tensor] = {}
         for epoch in range(epochs):
             epoch_loss = 0.0
@@ -86,7 +94,7 @@ class RSSMPretrainer:
                 tensors = self._to_device(batch)
                 self._opt.zero_grad()
                 with torch.autocast(device_type=self._device.type, enabled=self._amp):
-                    out = self._model.train_sequence(tensors)
+                    out = self._model.train_sequence(tensors, self._decoders)
                 loss = out["loss"]
                 scaled = self._scaler.scale(loss)
                 scaled.backward()  # type: ignore[no-untyped-call]  # torch stub gap

@@ -35,12 +35,13 @@ class MultimodalEncoder(nn.Module):
         self._audio_enabled = cfg.audio_dim > 0 and cfg.audio_proj_dim > 0
         self._lidar_enabled = cfg.lidar_dim > 0 and cfg.lidar_proj_dim > 0
 
+        # Construction order preserves the original (vision -> motor -> ...) so the
+        # seeded weight init is byte-identical for the default (vision-on) config.
         fused_dim = cfg.motor_proj_dim
-        self.motor_proj = nn.Linear(cfg.motor_state_dim, cfg.motor_proj_dim)
-
         if self._vision_enabled:
             self.vision_proj = nn.Linear(cfg.vision_dim, cfg.vision_proj_dim)
             fused_dim += cfg.vision_proj_dim
+        self.motor_proj = nn.Linear(cfg.motor_state_dim, cfg.motor_proj_dim)
 
         if self._ultrasonic_enabled:
             self.ultrasonic_proj = nn.Linear(cfg.ultrasonic_dim, cfg.ultrasonic_proj_dim)
@@ -131,10 +132,10 @@ class MultimodalEncoder(nn.Module):
         # zero-filling so vision-disabled paths don't need a camera tensor.
         ref = motor_state
 
-        m = self.act(self.motor_proj(motor_state))
-        m = self._gate_projection(m, valid_mask, "motor")
-
-        parts: list[Tensor] = [m]
+        # Concat order preserves the original [vision, ultrasonic, motor, audio,
+        # lidar] so a checkpoint's fusion weights stay valid (byte-identical
+        # default). Motor is always present; the rest are gated by config.
+        parts: list[Tensor] = []
 
         if self._vision_enabled:
             if vision is None:
@@ -154,6 +155,9 @@ class MultimodalEncoder(nn.Module):
                     dtype=ref.dtype,
                 )
             parts.append(self._gate_projection(u, valid_mask, "ultrasonic"))
+
+        m = self.act(self.motor_proj(motor_state))
+        parts.append(self._gate_projection(m, valid_mask, "motor"))
 
         if self._audio_enabled:
             if audio is not None:
