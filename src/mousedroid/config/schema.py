@@ -1847,6 +1847,46 @@ class RoverInertialConfig(BaseModel):
     wheel_mass_kg: float = Field(0.06, gt=0, description="Per-wheel mass (kg)")
 
 
+class MujocoSimConfig(BaseModel):
+    """MuJoCo backend parameters (consumed only when ``rover.sim.backend == 'mujoco'``).
+
+    Every physics knob is config-driven (invariant #3). ``wheel_slip_default``
+    is a documented OBSERVATION-NOISE proxy — MuJoCo has no first-class slip
+    parameter — applied as multiplicative noise on wheel_vel/pose, NOT a
+    contact-solver field.
+    """
+
+    mjcf_path: str = Field(
+        "assets/rover/mse6_4wd.xml",
+        min_length=1,
+        description="Repo-relative path to the skid-steer MJCF (resolved against repo root).",
+    )
+    arena_half_extent_m: float = Field(
+        2.0, gt=0.0, description="Half-size of the walled arena (walls give the lidar a signal)."
+    )
+    lidar_num_sectors: int = Field(
+        16, gt=0, description="Number of rangefinder sectors fanned around yaw."
+    )
+    lidar_max_range_m: float = Field(
+        4.0, gt=0.0, description="Rangefinder clip; readings normalised to [0,1] by this."
+    )
+    battery_voltage_const_v: float = Field(
+        12.0, gt=0.0, description="Constant battery voltage stamped into motor_state[3]."
+    )
+    wheel_friction_default: float = Field(
+        1.0, gt=0.0, description="Default tangential friction (geom_friction[:,0])."
+    )
+    wheel_slip_default: float = Field(
+        0.0, ge=0.0, description="Observation-noise proxy magnitude (NOT a MuJoCo field)."
+    )
+    motor_gain_default: float = Field(
+        1.0, gt=0.0, description="Default actuator gain (actuator_gainprm[:,0])."
+    )
+    chassis_mass_default_kg: float = Field(
+        2.7, gt=0.0, description="Default chassis mass (body_mass + inertia recompute)."
+    )
+
+
 class RoverSimConfig(BaseModel):
     """Simulation backend selection and physics timing for rover training."""
 
@@ -1875,6 +1915,10 @@ class RoverSimConfig(BaseModel):
     inertial: RoverInertialConfig = Field(
         default_factory=RoverInertialConfig,
         description="Mass-property overrides for the URDF defaults",
+    )
+    mujoco: MujocoSimConfig = Field(
+        default_factory=MujocoSimConfig,
+        description="MuJoCo backend parameters (used only when backend == 'mujoco').",
     )
 
 
