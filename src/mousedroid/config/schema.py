@@ -1894,6 +1894,15 @@ class MujocoSimConfig(BaseModel):
     chassis_mass_default_kg: float = Field(
         2.7, gt=0.0, description="Default chassis mass (body_mass + inertia recompute)."
     )
+    render_vision: bool = Field(
+        False,
+        description="Render an RGB camera for vision-on RSSM fine-tuning (off by default).",
+    )
+    render_width: int = Field(64, gt=0, description="Offscreen RGB render width (px).")
+    render_height: int = Field(64, gt=0, description="Offscreen RGB render height (px).")
+    camera_name: str = Field(
+        "rover_cam", min_length=1, description="Name of the MJCF camera to render from."
+    )
 
 
 class RoverSimConfig(BaseModel):
@@ -3674,6 +3683,22 @@ class TrainingConfig(BaseModel):
     )
     rssm_data_seed: int = Field(
         0, ge=0, description="Seed for the sim episode generator (exploration + reset stream)."
+    )
+    rssm_vision_finetune_enabled: bool = Field(
+        False,
+        description="Opt-in: run the vision-on RSSM fine-tune phase (renders RGB + MeanPool).",
+    )
+    rssm_finetune_checkpoint: str = Field(
+        "",
+        description="Path to the vision-OFF pretrained RSSM checkpoint to fine-tune (migrated on).",
+    )
+    rssm_finetune_epochs: int = Field(
+        50, gt=0, description="Epochs for the vision-on fine-tune phase."
+    )
+    rssm_vision_checkpoint_name: str = Field(
+        "rssm_vision_finetuned.pt",
+        min_length=1,
+        description="Filename for the vision-on fine-tuned checkpoint (under weights_dir).",
     )
     generation: TrainingGenerationConfig = Field(
         default_factory=_settings_default_factory(TrainingGenerationConfig)
