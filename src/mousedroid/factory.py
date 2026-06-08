@@ -616,6 +616,42 @@ def build_rssm_trainable(cfg: Settings) -> RSSM:
     return RSSM(model_cfg)
 
 
+def build_rssm_vision_finetune(cfg: Settings, checkpoint: Path) -> RSSM:
+    """Load a vision-OFF pretrained RSSM and migrate it to a vision-ON model.
+
+    Uses :func:`~mousedroid.world_model.checkpoint_migration.load_rssm_with_migration`
+    to transfer the dynamics core (gru/posterior/prior/decoder/reward) verbatim,
+    copy retained-modality fusion columns, and Kaiming-init the new vision
+    columns + ``vision_proj``. Vision dim = ``cfg.camera.feature_dim`` so the
+    model matches the sim ``MeanPoolExtractor`` output; lidar mirrors the rover.
+
+    Args:
+        cfg: Root settings.
+        checkpoint: Path to the vision-OFF pretrained RSSM checkpoint.
+
+    Returns:
+        A vision-ON :class:`~mousedroid.world_model.rssm.RSSM` ready to fine-tune.
+    """
+    import torch
+
+    from mousedroid.world_model.checkpoint_migration import load_rssm_with_migration
+
+    update: dict[str, object] = {
+        "vision_dim": cfg.camera.feature_dim,
+        "vision_proj_dim": cfg.model.vision_proj_dim or 128,
+        "kl_beta": cfg.training.kl_beta,
+        "kl_free_nats": cfg.training.rssm_free_nats,
+        "kl_balance_alpha": cfg.training.rssm_kl_balance_alpha,
+    }
+    rover = cfg.rover
+    if rover is not None and rover.sim.backend == "mujoco":
+        update["lidar_dim"] = rover.sim.mujoco.lidar_num_sectors
+        update["lidar_proj_dim"] = cfg.model.lidar_proj_dim or 32
+    model_cfg = cfg.model.model_copy(update=update)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return load_rssm_with_migration(checkpoint, model_cfg, device)
+
+
 def build_vision_feature_extractor(cfg: Settings) -> FeatureExtractorProtocol:
     """Build the sim vision feature extractor for RSSM vision-on fine-tuning.
 
