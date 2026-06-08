@@ -317,8 +317,12 @@ class PipelineOrchestrator:
             return trainer.train([batch], epochs=epochs, checkpoint_path=checkpoint)
 
         logger.info(f"{event_prefix}_started", n_episodes=tcfg.n_episodes, device=str(device))
-        history = await asyncio.to_thread(_run)
-        env.close()
+        try:
+            history = await asyncio.to_thread(_run)
+        finally:
+            # Always release the env (+ its MuJoCo renderer/GL context) even if
+            # episode generation or training raises — otherwise the context leaks.
+            env.close()
         logger.info(f"{event_prefix}_done", first_loss=history[0], last_loss=history[-1])
 
     async def _train_warmstart(self, batch_size: int) -> None:

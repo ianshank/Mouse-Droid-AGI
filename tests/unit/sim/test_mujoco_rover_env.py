@@ -170,6 +170,34 @@ def test_body_velocity_mode_maps_to_wheel_setpoints() -> None:
     assert np.isfinite(obs["chassis_pose"]).all()
 
 
+def test_to_body_action_differential_converts_wheels() -> None:
+    """Differential wheel setpoints map to body-frame [vx, vy=0, omega]."""
+    env = _mj()  # default differential mode
+    straight = env.to_body_action(np.asarray([10.0, 10.0], dtype=np.float32))
+    assert straight.shape == (3,)
+    assert straight[1] == 0.0  # vy always 0
+    assert straight[0] > 0.0  # forward
+    assert abs(straight[2]) < 1e-6  # no yaw
+    spin = env.to_body_action(np.asarray([-8.0, 8.0], dtype=np.float32))
+    assert abs(spin[0]) < 1e-6  # no forward
+    assert spin[2] > 0.0  # in-place left turn
+
+
+def test_to_body_action_body_velocity_passthrough() -> None:
+    from mousedroid.config.schema import RoverActionConfig
+
+    cfg = RoverConfig(action=RoverActionConfig(mode="body_velocity"))
+    env = RoverMuJoCoEnv(cfg, wheel_radius_m=_WHEEL_RADIUS_M, track_width_m=_TRACK_WIDTH_M)
+    out = env.to_body_action(np.asarray([0.2, 0.3], dtype=np.float32))
+    assert np.allclose(out, [0.2, 0.0, 0.3])
+
+
+def test_sensor_unknown_name_raises() -> None:
+    env = _mj()
+    with pytest.raises(ValueError, match="not found"):
+        env._sensor("does_not_exist", 1)  # white-box guard check
+
+
 def test_missing_mjcf_raises_file_not_found() -> None:
     cfg = RoverConfig()
     cfg = cfg.model_copy(

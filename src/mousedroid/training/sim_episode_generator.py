@@ -117,6 +117,7 @@ class SimEpisodeGenerator:
         rewards: list[list[np.float32]] = []
         visions: list[list[NDArray[np.float32]]] = []
         render_rgb = getattr(self._env, "render_rgb", None)
+        to_body = getattr(self._env, "to_body_action", None)
 
         for _ep in range(self._n):
             self._maybe_randomize()
@@ -130,8 +131,15 @@ class SimEpisodeGenerator:
                 vis = self._extract_vision(render_rgb)
                 adapted = self._adapter.adapt(obs, info, vision_features=vis)
                 action = self._sample_action(prev)
-                # Pad 2-DoF wheel action to the RSSM's 3-DoF [vx, vy=0, omega] space.
-                padded = np.asarray([float(action[0]), 0.0, float(action[-1])], dtype=np.float32)
+                # Convert the env action to the RSSM's body-frame [vx, vy=0, omega]
+                # so training conditioning matches deployment semantics (differential
+                # wheel setpoints are NOT body velocities). Envs without the helper
+                # (e.g. a body_velocity mock) fall back to a direct pad.
+                padded = (
+                    np.asarray(to_body(action), dtype=np.float32)
+                    if callable(to_body)
+                    else np.asarray([float(action[0]), 0.0, float(action[-1])], dtype=np.float32)
+                )
                 em.append(adapted["motor"])
                 eu.append(adapted["ultrasonic"])
                 el.append(adapted.get("lidar", np.zeros(0, dtype=np.float32)))

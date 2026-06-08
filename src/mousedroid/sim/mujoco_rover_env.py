@@ -286,6 +286,25 @@ class RoverMuJoCoEnv:
         right = (vx + 0.5 * omega * self._track_width) / self._wheel_radius
         return float(np.clip(left, -cap, cap)), float(np.clip(right, -cap, cap))
 
+    def to_body_action(self, action: NDArray[np.float32]) -> NDArray[np.float32]:
+        """Map a policy action to the RSSM's body-frame ``[vx, vy=0, omega]``.
+
+        Keeps the RSSM's action conditioning consistent with deployment
+        (``ModelConfig.action_dim = [vx, vy, omega]``, body-frame) regardless of
+        the env's action mode: differential WHEEL setpoints are converted through
+        the rover kinematics (``vx = r(L+R)/2``, ``omega = r(R-L)/track``), and
+        ``body_velocity`` ``[vx, omega]`` actions pass through. Training on raw
+        wheel setpoints would otherwise mislabel them as body velocities and make
+        the learned dynamics conditioning inconsistent with the deployed policy.
+        """
+        if self._cfg.action.mode == "differential":
+            left, right = float(action[0]), float(action[1])
+            vx = self._wheel_radius * (left + right) / 2.0
+            omega = self._wheel_radius * (right - left) / self._track_width
+        else:  # body_velocity: [vx, omega]
+            vx, omega = float(action[0]), float(action[1])
+        return np.asarray([vx, 0.0, omega], dtype=np.float32)
+
     def _body_velocity(self) -> tuple[float, float]:
         """Return ``(forward_speed_mps, yaw_rate_rads)`` from the freejoint qvel."""
         vx_world, vy_world = float(self._data.qvel[0]), float(self._data.qvel[1])
@@ -349,6 +368,11 @@ class RoverMuJoCoEnv:
 
     def _sensor(self, name: str, dim: int) -> NDArray[np.float32]:
         sid = self._mj.mj_name2id(self._model, self._mj.mjtObj.mjOBJ_SENSOR, name)
+        if sid < 0:
+            # mj_name2id returns -1 for an unknown name; fail fast rather than
+            # indexing sensor_adr[-1] and silently reading the wrong sensor.
+            msg = f"sensor {name!r} not found in the compiled MJCF model"
+            raise ValueError(msg)
         adr = int(self._model.sensor_adr[sid])
         out: NDArray[np.float32] = np.asarray(
             self._data.sensordata[adr : adr + dim], dtype=np.float32
