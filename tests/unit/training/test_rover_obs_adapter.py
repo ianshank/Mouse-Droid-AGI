@@ -41,6 +41,15 @@ def test_lidar_and_range_passed_through() -> None:
     assert out["ultrasonic"].shape == (1,)  # min-forward range scalar
 
 
+def test_vision_features_set_slot_and_key() -> None:
+    adp = RoverObsAdapter(battery_v=12.0)
+    vf = np.full(256, 0.1, dtype=np.float32)
+    out = adp.adapt(_obs(), info={"vx_body_mps": 0.0, "omega_rads": 0.0}, vision_features=vf)
+    assert "vision" in out
+    assert out["vision"].shape == (256,)
+    assert out["valid_mask"][SENSOR_SLOT_MAP["vision"]] == 1.0
+
+
 def test_no_lidar_yields_full_range_and_no_lidar_key() -> None:
     adp = RoverObsAdapter(battery_v=12.0)
     obs = {"chassis_pose": np.zeros(4, dtype=np.float32)}

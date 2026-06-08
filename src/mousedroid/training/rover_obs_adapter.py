@@ -31,17 +31,25 @@ class RoverObsAdapter:
         self._battery_v = float(battery_v)
 
     def adapt(
-        self, obs: dict[str, NDArray[np.float32]], info: dict[str, Any]
+        self,
+        obs: dict[str, NDArray[np.float32]],
+        info: dict[str, Any],
+        vision_features: NDArray[np.float32] | None = None,
     ) -> dict[str, NDArray[np.float32]]:
         """Adapt one ``(obs, info)`` pair to RSSM encoder inputs.
 
         Args:
             obs: Rover observation dict (``imu``/``chassis_pose``/``wheel_vel``/``lidar``).
             info: The env ``step`` info dict (carries ``vx_body_mps`` / ``omega_rads``).
+            vision_features: Optional pre-extracted vision feature vector. When
+                provided (vision-on fine-tune), the vision mask slot is set to 1
+                and the features are included; when ``None`` (Phase 5 pretrain),
+                the vision slot stays 0 and no vision key is emitted.
 
         Returns:
-            Dict with ``motor`` (4,), ``ultrasonic`` (1,), ``valid_mask`` (5,), and
-            ``lidar`` (N,) when the rover exposes a lidar.
+            Dict with ``motor`` (4,), ``ultrasonic`` (1,), ``valid_mask`` (5,),
+            ``lidar`` (N,) when the rover exposes a lidar, and ``vision``
+            (feature_dim,) when ``vision_features`` is provided.
         """
         vx = float(info.get("vx_body_mps", 0.0))
         omega = float(info.get("omega_rads", 0.0))
@@ -53,7 +61,7 @@ class RoverObsAdapter:
         ultrasonic = np.asarray([forward], dtype=np.float32)
 
         mask = np.ones(_N_SLOTS, dtype=np.float32)
-        mask[_VISION_SLOT] = 0.0  # vision omitted
+        mask[_VISION_SLOT] = 0.0  # vision omitted unless features are supplied
 
         out: dict[str, NDArray[np.float32]] = {
             "motor": motor,
@@ -62,4 +70,7 @@ class RoverObsAdapter:
         }
         if lidar.size:
             out["lidar"] = lidar
+        if vision_features is not None:
+            out["vision"] = np.asarray(vision_features, dtype=np.float32)
+            mask[_VISION_SLOT] = 1.0  # vision present this step
         return out
