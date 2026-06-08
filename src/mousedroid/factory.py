@@ -59,6 +59,7 @@ if TYPE_CHECKING:
     from mousedroid.efficiency.tensorrt import TensorRTCompilerProtocol
     from mousedroid.experience.logger import ExperienceLogger
     from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
+    from mousedroid.hardware.camera.feature_extractor import FeatureExtractorProtocol
     from mousedroid.harness.approval.protocol import ApprovalGateProtocol
     from mousedroid.harness.protocol import TaskTrackerProtocol
     from mousedroid.health.monitor import HealthMonitor
@@ -613,6 +614,25 @@ def build_rssm_trainable(cfg: Settings) -> RSSM:
         update["lidar_proj_dim"] = cfg.model.lidar_proj_dim or 32
     model_cfg = cfg.model.model_copy(update=update)
     return RSSM(model_cfg)
+
+
+def build_vision_feature_extractor(cfg: Settings) -> FeatureExtractorProtocol:
+    """Build the sim vision feature extractor for RSSM vision-on fine-tuning.
+
+    Returns the same non-learned :class:`MeanPoolExtractor` the deployed
+    ``mean_pool`` camera path uses (mean-pool → L2), so rendered-sim and real
+    ``vision_features`` share a distribution by construction — no CNN to train.
+    Dims come from :class:`CameraConfig` (invariant #3).
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        A ``FeatureExtractorProtocol`` producing ``cfg.camera.feature_dim`` features.
+    """
+    from mousedroid.hardware.camera.feature_extractor import MeanPoolExtractor
+
+    return MeanPoolExtractor(cfg.camera.feature_dim, l2_normalize=cfg.camera.l2_normalize)
 
 
 def _build_onnx_world_model(cfg: Settings) -> WorldModelProtocol:
