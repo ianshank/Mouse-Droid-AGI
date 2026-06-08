@@ -18,5 +18,6 @@ def test_returns_trainable_rssm_vision_off() -> None:
 def test_overrides_pretrain_knobs_from_training_config() -> None:
     cfg = Settings(mock_hardware=True)
     model = build_rssm_trainable(cfg)
+    assert model.cfg.kl_beta == cfg.training.kl_beta
     assert model.cfg.kl_free_nats == cfg.training.rssm_free_nats
     assert model.cfg.kl_balance_alpha == cfg.training.rssm_kl_balance_alpha

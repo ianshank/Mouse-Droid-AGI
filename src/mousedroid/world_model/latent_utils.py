@@ -93,7 +93,11 @@ def balanced_free_bits_kl(
     kl_lhs = _kl(post_mean.detach(), post_logvar.detach(), prior_mean, prior_logvar)
     kl_rhs = _kl(post_mean, post_logvar, prior_mean.detach(), prior_logvar.detach())
     kl = alpha * kl_lhs + (1.0 - alpha) * kl_rhs
-    kl = kl.sum(dim=-1).mean()  # sum over latent dims, mean over batch
+    # Free-bits floor is PER-SAMPLE (sum over latent dims), applied BEFORE the
+    # batch mean. Clamping the batch average instead would let a single
+    # high-KL sample lift the mean above ``free_nats`` and mask collapse
+    # (KL -> 0) in the other samples.
+    kl = kl.sum(dim=-1)
     if free_nats > 0.0:
         kl = torch.clamp(kl, min=free_nats)
-    return kl
+    return kl.mean()

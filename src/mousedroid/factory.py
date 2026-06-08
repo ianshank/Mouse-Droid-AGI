@@ -600,6 +600,7 @@ def build_rssm_trainable(cfg: Settings) -> RSSM:
         update={
             "vision_dim": 0,
             "vision_proj_dim": 0,
+            "kl_beta": cfg.training.kl_beta,
             "kl_free_nats": cfg.training.rssm_free_nats,
             "kl_balance_alpha": cfg.training.rssm_kl_balance_alpha,
         }
