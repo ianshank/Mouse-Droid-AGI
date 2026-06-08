@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -13,6 +14,9 @@ from mousedroid.logging.setup import get_logger
 from mousedroid.sim.protocols import RoverEnvProtocol
 from mousedroid.training.domain_randomization import DomainRandomizer
 from mousedroid.training.rover_obs_adapter import RoverObsAdapter
+
+if TYPE_CHECKING:
+    from mousedroid.hardware.camera.feature_extractor import FeatureExtractorProtocol
 
 _log = get_logger(__name__)
 
@@ -31,6 +35,7 @@ class EpisodeBatch:
     valid_mask: Tensor
     action: Tensor
     reward: Tensor
+    vision: Tensor  # (B, T, feature_dim) when a feature extractor is used, else (B, T, 0)
 
 
 class SimEpisodeGenerator:
@@ -47,6 +52,7 @@ class SimEpisodeGenerator:
         explore_action_rad_s: float = 6.0,
         explore_smoothing: float = 0.7,
         domain_randomizer: DomainRandomizer | None = None,
+        feature_extractor: FeatureExtractorProtocol | None = None,
     ) -> None:
         """Initialise the generator.
 
@@ -61,6 +67,10 @@ class SimEpisodeGenerator:
             domain_randomizer: Optional per-episode physics randomizer. When provided
                 and enabled, its sampled chassis params are applied to the env before
                 each episode (no-op for envs without ``apply_domain_params``).
+            feature_extractor: Optional vision feature extractor. When provided,
+                each step renders an RGB frame (``env.render_rgb()``) and extracts
+                ``vision_features``, populating ``EpisodeBatch.vision``. ``None``
+                (Phase 5 pretrain) leaves vision empty.
         """
         self._env = env
         self._adapter = adapter
@@ -71,6 +81,7 @@ class SimEpisodeGenerator:
         self._explore_bound = explore_action_rad_s
         self._explore_smoothing = explore_smoothing
         self._dr = domain_randomizer
+        self._extractor = feature_extractor
 
     def _sample_action(self, prev: NDArray[np.float32]) -> NDArray[np.float32]:
         # Smoothed uniform-random wheel commands (Dreamer seed-episode policy);
@@ -104,6 +115,8 @@ class SimEpisodeGenerator:
         masks: list[list[NDArray[np.float32]]] = []
         actions: list[list[NDArray[np.float32]]] = []
         rewards: list[list[np.float32]] = []
+        visions: list[list[NDArray[np.float32]]] = []
+        render_rgb = getattr(self._env, "render_rgb", None)
 
         for _ep in range(self._n):
             self._maybe_randomize()
@@ -112,9 +125,10 @@ class SimEpisodeGenerator:
             # as a strict 1-D shape, which then rejects the looser NDArray from
             # _sample_action (3.10 vs 3.11 stub drift). The loose type is correct.
             prev: NDArray[np.float32] = np.zeros(self._action_dim, dtype=np.float32)
-            em, eu, el, ek, ea, er = ([] for _ in range(6))
+            em, eu, el, ek, ea, er, ev = ([] for _ in range(7))
             for _step in range(self._t):
-                adapted = self._adapter.adapt(obs, info)
+                vis = self._extract_vision(render_rgb)
+                adapted = self._adapter.adapt(obs, info, vision_features=vis)
                 action = self._sample_action(prev)
                 # Pad 2-DoF wheel action to the RSSM's 3-DoF [vx, vy=0, omega] space.
                 padded = np.asarray([float(action[0]), 0.0, float(action[-1])], dtype=np.float32)
@@ -123,6 +137,7 @@ class SimEpisodeGenerator:
                 el.append(adapted.get("lidar", np.zeros(0, dtype=np.float32)))
                 ek.append(adapted["valid_mask"])
                 ea.append(padded)
+                ev.append(adapted.get("vision", np.zeros(0, dtype=np.float32)))
                 obs, reward, terminated, truncated, info = self._env.step(action)
                 er.append(np.float32(reward))
                 prev = action
@@ -135,7 +150,13 @@ class SimEpisodeGenerator:
             masks.append(ek)
             actions.append(ea)
             rewards.append(er)
-        _log.info("sim_episodes_generated", n_episodes=self._n, seq_len=self._t)
+            visions.append(ev)
+        _log.info(
+            "sim_episodes_generated",
+            n_episodes=self._n,
+            seq_len=self._t,
+            vision=self._extractor is not None,
+        )
 
         def _stack(x: list[list[NDArray[np.float32]]]) -> Tensor:
             return torch.as_tensor(np.asarray(x, dtype=np.float32))
@@ -147,4 +168,12 @@ class SimEpisodeGenerator:
             valid_mask=_stack(masks),
             action=_stack(actions),
             reward=torch.as_tensor(np.asarray(rewards, dtype=np.float32)),
+            vision=_stack(visions),
         )
+
+    def _extract_vision(self, render_rgb: object) -> NDArray[np.float32] | None:
+        """Render + extract vision features for the current step, or ``None``."""
+        if self._extractor is None or not callable(render_rgb):
+            return None
+        rgb = render_rgb()
+        return self._extractor.extract(rgb)

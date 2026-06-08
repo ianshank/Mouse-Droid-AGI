@@ -7,7 +7,7 @@ import pytest
 
 mujoco = pytest.importorskip("mujoco")
 
-from mousedroid.config.schema import RoverConfig, RoverSimConfig, Settings
+from mousedroid.config.schema import MujocoSimConfig, RoverConfig, RoverSimConfig, Settings
 from mousedroid.factory import build_rover_env
 from mousedroid.training.rover_obs_adapter import RoverObsAdapter
 from mousedroid.training.sim_episode_generator import SimEpisodeGenerator
@@ -30,6 +30,7 @@ def test_batch_tensor_shapes() -> None:
     assert batch.valid_mask.shape == (2, 5, 5)
     assert batch.lidar.shape == (2, 5, 16)
     assert batch.reward.shape == (2, 5)
+    assert batch.vision.shape == (2, 5, 0)  # no extractor -> empty vision
 
 
 def test_deterministic_for_fixed_seed() -> None:
@@ -64,6 +65,31 @@ def test_domain_randomizer_applied_per_episode(monkeypatch: pytest.MonkeyPatch) 
     ).generate()
     assert len(calls) == 3  # one DR sample per episode
     assert all(0.7 <= c["friction"] <= 1.3 for c in calls)  # within configured range
+
+
+def test_vision_features_populated_with_extractor() -> None:
+    """With a feature extractor + render-capable env, EpisodeBatch.vision is filled."""
+    from mousedroid.factory import build_vision_feature_extractor
+
+    cfg = Settings(
+        mock_hardware=True,
+        rover=RoverConfig(
+            sim=RoverSimConfig(backend="mujoco", mujoco=MujocoSimConfig(render_vision=True))
+        ),
+    )
+    env = build_rover_env(cfg)
+    # Skip if offscreen GL rendering is unavailable (headless CI).
+    try:
+        env.reset(seed=0)
+        env.render_rgb()
+    except Exception:
+        pytest.skip("offscreen GL rendering unavailable")
+    adapter = RoverObsAdapter(battery_v=cfg.rover.sim.mujoco.battery_voltage_const_v)
+    extractor = build_vision_feature_extractor(cfg)
+    batch = SimEpisodeGenerator(
+        env, adapter, n_episodes=2, seq_len=3, seed=0, feature_extractor=extractor
+    ).generate()
+    assert batch.vision.shape == (2, 3, cfg.camera.feature_dim)
 
 
 def test_domain_randomizer_disabled_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:

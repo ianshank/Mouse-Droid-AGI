@@ -258,10 +258,12 @@ class RSSM(nn.Module):
 
         range_enabled = self.encoder.ultrasonic_enabled
         lidar_enabled = self.encoder.lidar_enabled
+        vision_enabled = self.encoder.vision_enabled
         for step in range(t):
             ultra = batch["ultrasonic"][:, step] if range_enabled else None
             lidar = batch["lidar"][:, step] if lidar_enabled else None
-            obs_embed = self.encoder(None, ultra, motor[:, step], mask[:, step], lidar=lidar)
+            vision = batch["vision"][:, step] if vision_enabled else None
+            obs_embed = self.encoder(vision, ultra, motor[:, step], mask[:, step], lidar=lidar)
 
             gru_in = torch.cat([z, actions[:, step]], dim=-1)
             h = self.gru(gru_in, h)
@@ -287,6 +289,8 @@ class RSSM(nn.Module):
                 recon = recon + nn.functional.mse_loss(decoders.decode_range(hz), ultra)
             if lidar_enabled and lidar is not None:
                 recon = recon + nn.functional.mse_loss(decoders.decode_lidar(hz), lidar)
+            if decoders.vision_enabled and vision is not None:
+                recon = recon + nn.functional.mse_loss(decoders.decode_vision(hz), vision)
             post_stds.append((0.5 * post_logvar).exp().mean().detach())
 
         recon = recon / t
@@ -323,3 +327,6 @@ class RawModalityDecoders(nn.Module):
         self.lidar_enabled = cfg.lidar_dim > 0
         if self.lidar_enabled:
             self.decode_lidar = nn.Linear(feat, cfg.lidar_dim)
+        self.vision_enabled = cfg.vision_dim > 0
+        if self.vision_enabled:
+            self.decode_vision = nn.Linear(feat, cfg.vision_dim)

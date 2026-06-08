@@ -16,7 +16,7 @@ def _model() -> RSSM:
     return RSSM(ModelConfig(vision_dim=0, vision_proj_dim=0, lidar_dim=16, lidar_proj_dim=32))
 
 
-def _batch(b: int = 3, t: int = 5) -> EpisodeBatch:
+def _batch(b: int = 3, t: int = 5, vision_dim: int = 0) -> EpisodeBatch:
     return EpisodeBatch(
         motor=torch.randn(b, t, 4),
         ultrasonic=torch.rand(b, t, 1),
@@ -24,6 +24,7 @@ def _batch(b: int = 3, t: int = 5) -> EpisodeBatch:
         valid_mask=torch.ones(b, t, 5),
         action=torch.randn(b, t, 3),
         reward=torch.randn(b, t),
+        vision=torch.rand(b, t, vision_dim),
     )
 
 
@@ -45,6 +46,16 @@ def test_checkpoint_is_loadable(tmp_path: Path) -> None:
     # unpickle arbitrary objects from a model file.
     state = torch.load(tmp_path / "rssm.pt", map_location="cpu", weights_only=True)
     model.load_state_dict(state)  # round-trips
+
+
+def test_vision_on_pretrain_trains(tmp_path: Path) -> None:
+    """A vision-on RSSM + vision batch fine-tunes (loss decreases, ckpt written)."""
+    torch.manual_seed(0)
+    model = RSSM(ModelConfig(vision_dim=16, vision_proj_dim=8, lidar_dim=16, lidar_proj_dim=32))
+    trainer = RSSMPretrainer(model, lr=1e-3, grad_clip=100.0, amp=False, device=torch.device("cpu"))
+    history = trainer.train([_batch(vision_dim=16)], epochs=15, checkpoint_path=tmp_path / "vis.pt")
+    assert history[-1] < history[0]
+    assert (tmp_path / "vis.pt").exists()
 
 
 def test_empty_batches_returns_empty_history(tmp_path: Path) -> None:

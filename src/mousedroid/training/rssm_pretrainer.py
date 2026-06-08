@@ -66,6 +66,7 @@ class RSSMPretrainer:
             "lidar": batch.lidar.to(self._device),
             "valid_mask": batch.valid_mask.to(self._device),
             "action": batch.action.to(self._device),
+            "vision": batch.vision.to(self._device),
         }
 
     def train(
