@@ -193,6 +193,7 @@ class PipelineOrchestrator:
         import torch  # local import keeps cold-start light
 
         from mousedroid.factory import build_rover_env, build_rssm_trainable
+        from mousedroid.training.domain_randomization import DomainRandomizer
         from mousedroid.training.rover_obs_adapter import RoverObsAdapter
         from mousedroid.training.rssm_pretrainer import RSSMPretrainer
         from mousedroid.training.sim_episode_generator import SimEpisodeGenerator
@@ -202,7 +203,14 @@ class PipelineOrchestrator:
         env = build_rover_env(self._settings)
         adapter = RoverObsAdapter(battery_v=rover.sim.mujoco.battery_voltage_const_v)
         generator = SimEpisodeGenerator(
-            env, adapter, n_episodes=tcfg.n_episodes, seq_len=tcfg.sequence_length, seed=0
+            env,
+            adapter,
+            n_episodes=tcfg.n_episodes,
+            seq_len=tcfg.sequence_length,
+            seed=tcfg.rssm_data_seed,
+            explore_action_rad_s=tcfg.rssm_explore_action_rad_s,
+            explore_smoothing=tcfg.rssm_explore_smoothing,
+            domain_randomizer=DomainRandomizer(self._settings.domain_randomization),
         )
         checkpoint = Path(tcfg.weights_dir) / tcfg.rssm_checkpoint_name
 

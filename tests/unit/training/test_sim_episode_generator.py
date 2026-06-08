@@ -36,3 +36,45 @@ def test_deterministic_for_fixed_seed() -> None:
     b1 = _gen(2, 5).generate()
     b2 = _gen(2, 5).generate()
     assert np.allclose(b1.action.numpy(), b2.action.numpy())
+
+
+def _mj_env_and_adapter() -> tuple[object, RoverObsAdapter]:
+    cfg = Settings(mock_hardware=True, rover=RoverConfig(sim=RoverSimConfig(backend="mujoco")))
+    env = build_rover_env(cfg)
+    adapter = RoverObsAdapter(battery_v=cfg.rover.sim.mujoco.battery_voltage_const_v)
+    return env, adapter
+
+
+def test_domain_randomizer_applied_per_episode(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mousedroid.config.schema import DomainRandomizationConfig
+    from mousedroid.training.domain_randomization import DomainRandomizer
+
+    env, adapter = _mj_env_and_adapter()
+    dr = DomainRandomizer(DomainRandomizationConfig(enabled=True))
+    calls: list[dict[str, float]] = []
+    original = env.apply_domain_params  # type: ignore[attr-defined]
+
+    def _spy(**kwargs: float) -> None:
+        calls.append(kwargs)
+        original(**kwargs)
+
+    monkeypatch.setattr(env, "apply_domain_params", _spy)
+    SimEpisodeGenerator(
+        env, adapter, n_episodes=3, seq_len=3, seed=0, domain_randomizer=dr
+    ).generate()
+    assert len(calls) == 3  # one DR sample per episode
+    assert all(0.7 <= c["friction"] <= 1.3 for c in calls)  # within configured range
+
+
+def test_domain_randomizer_disabled_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mousedroid.config.schema import DomainRandomizationConfig
+    from mousedroid.training.domain_randomization import DomainRandomizer
+
+    env, adapter = _mj_env_and_adapter()
+    dr = DomainRandomizer(DomainRandomizationConfig(enabled=False))
+    calls: list[dict[str, float]] = []
+    monkeypatch.setattr(env, "apply_domain_params", lambda **kw: calls.append(kw))
+    SimEpisodeGenerator(
+        env, adapter, n_episodes=2, seq_len=3, seed=0, domain_randomizer=dr
+    ).generate()
+    assert calls == []  # disabled DR never touches the env

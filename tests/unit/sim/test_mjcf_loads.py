@@ -16,7 +16,8 @@ _MJCF = _REPO_ROOT / "assets" / "rover" / "mse6_4wd.xml"
 def test_model_loads() -> None:
     model = mujoco.MjModel.from_xml_path(str(_MJCF))
     assert model.nu == 4  # 4 wheel velocity actuators
-    assert model.nsensor >= 3  # accel + gyro + at least one rangefinder
+    # The base MJCF ships only accel + gyro; RoverMuJoCoEnv injects the lidar ring.
+    assert model.nsensor == 2
 
 
 def test_rest_state_is_finite() -> None:

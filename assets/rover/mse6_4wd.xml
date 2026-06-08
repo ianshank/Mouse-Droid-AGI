@@ -16,9 +16,9 @@
     <body name="chassis" pos="0 0 0.06">
       <freejoint name="root"/>
       <geom name="chassis_geom" type="box" size="0.11 0.09 0.03" mass="2.7"/>
+      <!-- RoverMuJoCoEnv injects the full N-sector lidar site ring after imu_site,
+           with geometry from MujocoSimConfig (no hand-authored lidar sites here). -->
       <site name="imu_site" pos="0 0 0"/>
-      <!-- Reference lidar sector (forward); RoverMuJoCoEnv injects the rest from config. -->
-      <site name="lidar_0" pos="0.11 0 0.03" zaxis="1 0 0"/>
       <body name="wheel_fl" pos="0.09 0.10 -0.018">
         <joint name="j_fl" type="hinge" axis="0 1 0"/>
         <geom name="g_fl" type="cylinder" size="0.042 0.02" quat="0.7071 0.7071 0 0" mass="0.05"/>
@@ -46,6 +46,6 @@
   <sensor>
     <accelerometer name="imu_acc" site="imu_site"/>
     <gyro name="imu_gyro" site="imu_site"/>
-    <rangefinder name="lidar_s0" site="lidar_0"/>
+    <!-- RoverMuJoCoEnv injects N rangefinder sensors after the gyro. -->
   </sensor>
 </mujoco>

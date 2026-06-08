@@ -20,12 +20,12 @@ from mousedroid.sim.protocols import (
 _log = get_logger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
-# Anchors in the base MJCF after which the env splices the configured N-sector
-# lidar fan. The base ships sector 0; the env adds 1..N-1 from config so the
-# sector count stays config-driven (invariant #3) without N hand-authored sites.
-_SITE_ANCHOR = '<site name="lidar_0" pos="0.11 0 0.03" zaxis="1 0 0"/>'
-_SENSOR_ANCHOR = '<rangefinder name="lidar_s0" site="lidar_0"/>'
-_LIDAR_RADIUS_M = 0.11
+# Stable anchors in the base MJCF after which the env splices the full,
+# config-driven N-sector lidar ring (sites after the IMU site; rangefinders after
+# the gyro). The base MJCF ships NO lidar sites/sensors — the whole ring comes
+# from MujocoSimConfig (invariant #3). Replacement is asserted (no silent no-op).
+_SITE_ANCHOR = '<site name="imu_site" pos="0 0 0"/>'
+_SENSOR_ANCHOR = '<gyro name="imu_gyro" site="imu_site"/>'
 
 _WHEEL_GEOMS = ("g_fl", "g_fr", "g_rl", "g_rr")
 _WHEEL_ACTUATORS = ("a_fl", "a_fr", "a_rl", "a_rr")
@@ -68,8 +68,9 @@ class RoverMuJoCoEnv:
         self._data = mujoco.MjData(self._model)
         self._wheel_vel = np.zeros(ROVER_NUM_WHEELS, dtype=np.float32)
         self._step_idx = 0
-        self._noise_rng = np.random.default_rng(0)
+        self._noise_rng = np.random.default_rng(self._mjcfg.noise_rng_seed)
         self._slip_noise = self._mjcfg.wheel_slip_default
+        self._closed = False
 
         self._assert_rest_state_stable()
         _log.info(
@@ -89,24 +90,50 @@ class RoverMuJoCoEnv:
             raise FileNotFoundError(msg)
         xml = path.read_text(encoding="utf-8")
         sites, sensors = self._lidar_fan_xml()
-        xml = xml.replace(_SITE_ANCHOR, _SITE_ANCHOR + sites, 1)
-        xml = xml.replace(_SENSOR_ANCHOR, _SENSOR_ANCHOR + sensors, 1)
+        xml = self._splice_after(xml, _SITE_ANCHOR, sites)
+        xml = self._splice_after(xml, _SENSOR_ANCHOR, sensors)
         return self._mj.MjModel.from_xml_string(xml)
 
+    @staticmethod
+    def _splice_after(xml: str, anchor: str, injected: str) -> str:
+        """Insert ``injected`` directly after ``anchor`` — raise if the anchor is absent.
+
+        ``str.replace`` is a silent no-op when the target is missing; asserting the
+        substitution actually fired prevents a drifted MJCF from compiling with a
+        truncated lidar ring (which would crash ``_read_lidar`` later).
+        """
+        spliced = xml.replace(anchor, anchor + injected, 1)
+        if spliced == xml:
+            msg = f"MJCF injection anchor not found: {anchor!r}"
+            raise ValueError(msg)
+        return spliced
+
     def _lidar_fan_xml(self) -> tuple[str, str]:
-        """Build the extra ``<site>`` + ``<rangefinder>`` XML for sectors 1..N-1."""
+        """Build the full ``<site>`` + ``<rangefinder>`` XML for sectors 0..N-1.
+
+        Geometry (ring radius + mount height) comes from :class:`MujocoSimConfig`
+        so a chassis change propagates through config, not hand-edited literals.
+        """
+        radius = self._mjcfg.lidar_ring_radius_m
+        z = self._mjcfg.lidar_mount_z_m
         site_lines: list[str] = []
         sensor_lines: list[str] = []
-        for i in range(1, self._lidar_sectors):
+        for i in range(self._lidar_sectors):
             ang = 2.0 * math.pi * i / self._lidar_sectors
             cx, sy = math.cos(ang), math.sin(ang)
             site_lines.append(
                 f'\n      <site name="lidar_{i}" '
-                f'pos="{_LIDAR_RADIUS_M * cx:.5f} {_LIDAR_RADIUS_M * sy:.5f} 0.03" '
+                f'pos="{radius * cx:.5f} {radius * sy:.5f} {z:.5f}" '
                 f'zaxis="{cx:.5f} {sy:.5f} 0"/>'
             )
             sensor_lines.append(f'\n    <rangefinder name="lidar_s{i}" site="lidar_{i}"/>')
         return "".join(site_lines), "".join(sensor_lines)
+
+    def _require_open(self) -> None:
+        """Raise a clear error if the env was closed (vs an opaque NoneType crash)."""
+        if self._closed:
+            msg = "operation on a closed RoverMuJoCoEnv; build a new instance"
+            raise RuntimeError(msg)
 
     def _assert_rest_state_stable(self) -> None:
         """Raise if the model free-falls / interpenetrates at rest (silent-NaN guard)."""
@@ -138,6 +165,7 @@ class RoverMuJoCoEnv:
         Returns:
             ``(observation, info)``.
         """
+        self._require_open()
         self._mj.mj_resetData(self._model, self._data)
         if seed is not None:
             self._noise_rng = np.random.default_rng(seed)
@@ -157,6 +185,7 @@ class RoverMuJoCoEnv:
         Returns:
             ``(obs, reward, terminated, truncated, info)``.
         """
+        self._require_open()
         if action.shape != (self._action_dim,):
             msg = f"action shape must be ({self._action_dim},), got {action.shape}"
             raise ValueError(msg)
@@ -185,6 +214,7 @@ class RoverMuJoCoEnv:
 
     def close(self) -> None:
         """Release MuJoCo data (idempotent)."""
+        self._closed = True
         self._data = None
 
     # ----- domain randomization --------------------------------------------

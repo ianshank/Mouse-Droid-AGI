@@ -45,3 +45,10 @@ def test_checkpoint_is_loadable(tmp_path: Path) -> None:
     # unpickle arbitrary objects from a model file.
     state = torch.load(tmp_path / "rssm.pt", map_location="cpu", weights_only=True)
     model.load_state_dict(state)  # round-trips
+
+
+def test_empty_batches_returns_empty_history(tmp_path: Path) -> None:
+    model = _model()
+    trainer = RSSMPretrainer(model, lr=1e-3, grad_clip=100.0, amp=False, device=torch.device("cpu"))
+    assert trainer.train([], epochs=5, checkpoint_path=tmp_path / "none.pt") == []
+    assert not (tmp_path / "none.pt").exists()  # no checkpoint written for empty input

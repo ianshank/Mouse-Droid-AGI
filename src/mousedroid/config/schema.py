@@ -1870,6 +1870,15 @@ class MujocoSimConfig(BaseModel):
     lidar_max_range_m: float = Field(
         4.0, gt=0.0, description="Rangefinder clip; readings normalised to [0,1] by this."
     )
+    lidar_ring_radius_m: float = Field(
+        0.11, gt=0.0, description="Radius of the lidar-site ring on the chassis (matches MJCF)."
+    )
+    lidar_mount_z_m: float = Field(
+        0.03, description="Z offset of the lidar sites above the chassis origin (matches MJCF)."
+    )
+    noise_rng_seed: int = Field(
+        0, ge=0, description="Default seed for the slip observation-noise RNG (reset overrides)."
+    )
     battery_voltage_const_v: float = Field(
         12.0, gt=0.0, description="Constant battery voltage stamped into motor_state[3]."
     )
@@ -3651,6 +3660,20 @@ class TrainingConfig(BaseModel):
         "rssm_pretrained.pt",
         min_length=1,
         description="Filename for the RSSM pretrain checkpoint (under weights_dir).",
+    )
+    rssm_explore_action_rad_s: float = Field(
+        6.0,
+        gt=0.0,
+        description="Exploration wheel-command bound (rad/s) for sim seed episodes.",
+    )
+    rssm_explore_smoothing: float = Field(
+        0.7,
+        ge=0.0,
+        le=1.0,
+        description="EMA weight on the previous action for the smoothed-random explore policy.",
+    )
+    rssm_data_seed: int = Field(
+        0, ge=0, description="Seed for the sim episode generator (exploration + reset stream)."
     )
     generation: TrainingGenerationConfig = Field(
         default_factory=_settings_default_factory(TrainingGenerationConfig)

@@ -11,6 +11,7 @@ from torch import Tensor
 
 from mousedroid.logging.setup import get_logger
 from mousedroid.sim.protocols import RoverEnvProtocol
+from mousedroid.training.domain_randomization import DomainRandomizer
 from mousedroid.training.rover_obs_adapter import RoverObsAdapter
 
 _log = get_logger(__name__)
@@ -43,6 +44,9 @@ class SimEpisodeGenerator:
         n_episodes: int,
         seq_len: int,
         seed: int,
+        explore_action_rad_s: float = 6.0,
+        explore_smoothing: float = 0.7,
+        domain_randomizer: DomainRandomizer | None = None,
     ) -> None:
         """Initialise the generator.
 
@@ -52,6 +56,11 @@ class SimEpisodeGenerator:
             n_episodes: Number of episodes (batch dimension).
             seq_len: Steps per episode (time dimension).
             seed: Seed for the deterministic exploration + reset stream.
+            explore_action_rad_s: Bound (rad/s) on the random wheel-command target.
+            explore_smoothing: EMA weight on the previous action (temporal correlation).
+            domain_randomizer: Optional per-episode physics randomizer. When provided
+                and enabled, its sampled chassis params are applied to the env before
+                each episode (no-op for envs without ``apply_domain_params``).
         """
         self._env = env
         self._adapter = adapter
@@ -59,12 +68,33 @@ class SimEpisodeGenerator:
         self._t = seq_len
         self._rng = np.random.default_rng(seed)
         self._action_dim = env.action_dim
+        self._explore_bound = explore_action_rad_s
+        self._explore_smoothing = explore_smoothing
+        self._dr = domain_randomizer
 
     def _sample_action(self, prev: NDArray[np.float32]) -> NDArray[np.float32]:
-        # Smoothed uniform-random wheel commands (Dreamer seed-episode policy).
-        target = self._rng.uniform(-6.0, 6.0, size=self._action_dim).astype(np.float32)
-        out: NDArray[np.float32] = (0.7 * prev + 0.3 * target).astype(np.float32)
+        # Smoothed uniform-random wheel commands (Dreamer seed-episode policy);
+        # bound + smoothing are config-driven (the env clips to its own cap).
+        bound = self._explore_bound
+        alpha = self._explore_smoothing
+        target = self._rng.uniform(-bound, bound, size=self._action_dim).astype(np.float32)
+        out: NDArray[np.float32] = (alpha * prev + (1.0 - alpha) * target).astype(np.float32)
         return out
+
+    def _maybe_randomize(self) -> None:
+        """Apply one fresh domain-randomization sample to the env, if enabled."""
+        if self._dr is None or not self._dr.enabled:
+            return
+        apply_dr = getattr(self._env, "apply_domain_params", None)
+        if not callable(apply_dr):
+            return
+        chassis = self._dr.sample(self._rng).chassis
+        apply_dr(
+            friction=float(chassis["friction"]),
+            slip=float(chassis["slip"]),
+            mass_kg=float(chassis["mass_kg"]),
+            motor_gain=float(chassis["motor_gain"]),
+        )
 
     def generate(self) -> EpisodeBatch:
         """Roll the configured episodes and stack them into an ``EpisodeBatch``."""
@@ -76,6 +106,7 @@ class SimEpisodeGenerator:
         rewards: list[list[np.float32]] = []
 
         for _ep in range(self._n):
+            self._maybe_randomize()
             obs, info = self._env.reset(seed=int(self._rng.integers(0, 2**31 - 1)))
             prev = np.zeros(self._action_dim, dtype=np.float32)
             em, eu, el, ek, ea, er = ([] for _ in range(6))

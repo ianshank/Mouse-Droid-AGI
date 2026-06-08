@@ -88,3 +88,35 @@ def test_close_is_idempotent() -> None:
     env = _mj()
     env.close()
     env.close()
+
+
+def test_step_after_close_raises_clear_error() -> None:
+    env = _mj()
+    env.close()
+    with pytest.raises(RuntimeError, match="closed RoverMuJoCoEnv"):
+        env.reset(seed=0)
+
+
+def test_body_velocity_mode_maps_to_wheel_setpoints() -> None:
+    from mousedroid.config.schema import RoverActionConfig
+
+    cfg = RoverConfig(action=RoverActionConfig(mode="body_velocity"))
+    env = RoverMuJoCoEnv(cfg, wheel_radius_m=_WHEEL_RADIUS_M, track_width_m=_TRACK_WIDTH_M)
+    env.reset(seed=0)
+    # action = [vx, omega]; finite + advances without error
+    obs, reward, _t, _tr, info = env.step(np.asarray([0.2, 0.3], dtype=np.float32))
+    assert np.isfinite(reward)
+    assert np.isfinite(obs["chassis_pose"]).all()
+
+
+def test_missing_mjcf_raises_file_not_found() -> None:
+    cfg = RoverConfig()
+    cfg = cfg.model_copy(
+        update={
+            "sim": cfg.sim.model_copy(
+                update={"mujoco": cfg.sim.mujoco.model_copy(update={"mjcf_path": "no/such.xml"})}
+            )
+        }
+    )
+    with pytest.raises(FileNotFoundError, match="MJCF not found"):
+        RoverMuJoCoEnv(cfg, wheel_radius_m=_WHEEL_RADIUS_M, track_width_m=_TRACK_WIDTH_M)

@@ -188,10 +188,13 @@ def test_build_rover_env_requires_rover_block():
         build_rover_env(cfg)
 
 
-def test_build_rover_env_mujoco_not_implemented():
+def test_build_rover_env_mujoco_builds_env():
+    """The 'mujoco' backend is now implemented (Phase 5) — it builds a real env."""
+    pytest.importorskip("mujoco")
+    from mousedroid.sim.mujoco_rover_env import RoverMuJoCoEnv
+
     cfg = Settings(rover=RoverConfig(sim=RoverSimConfig(backend="mujoco")))
-    with pytest.raises(NotImplementedError, match="MuJoCo rover backend"):
-        build_rover_env(cfg)
+    assert isinstance(build_rover_env(cfg), RoverMuJoCoEnv)
 
 
 def test_goal_xy_from_task_config_drives_reward():

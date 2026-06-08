@@ -74,6 +74,9 @@ class RSSMPretrainer:
         Returns:
             Per-epoch mean loss history.
         """
+        if not batches:
+            _log.warning("rssm_pretrain_no_batches")
+            return []
         history: list[float] = []
         self._model.train()
         out: dict[str, torch.Tensor] = {}

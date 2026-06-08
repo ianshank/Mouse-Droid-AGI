@@ -596,15 +596,22 @@ def build_rssm_trainable(cfg: Settings) -> RSSM:
     """
     from mousedroid.world_model.rssm import RSSM
 
-    model_cfg = cfg.model.model_copy(
-        update={
-            "vision_dim": 0,
-            "vision_proj_dim": 0,
-            "kl_beta": cfg.training.kl_beta,
-            "kl_free_nats": cfg.training.rssm_free_nats,
-            "kl_balance_alpha": cfg.training.rssm_kl_balance_alpha,
-        }
-    )
+    update: dict[str, object] = {
+        "vision_dim": 0,
+        "vision_proj_dim": 0,
+        "kl_beta": cfg.training.kl_beta,
+        "kl_free_nats": cfg.training.rssm_free_nats,
+        "kl_balance_alpha": cfg.training.rssm_kl_balance_alpha,
+    }
+    # Use the rover's full lidar signal when a MuJoCo rover is configured: size the
+    # model's lidar modality to the sim's sector count so train_sequence actually
+    # reconstructs lidar (otherwise it is silently dropped — leaving only motor +
+    # a single min-range scalar). Falls back to the model default when no rover.
+    rover = cfg.rover
+    if rover is not None and rover.sim.backend == "mujoco":
+        update["lidar_dim"] = rover.sim.mujoco.lidar_num_sectors
+        update["lidar_proj_dim"] = cfg.model.lidar_proj_dim or 32
+    model_cfg = cfg.model.model_copy(update=update)
     return RSSM(model_cfg)
 
 

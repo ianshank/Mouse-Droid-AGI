@@ -7,10 +7,10 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from mousedroid.constants import SENSOR_SLOT_MAP
+from mousedroid.constants import N_SENSOR_MODALITIES_WITH_LIDAR, SENSOR_SLOT_MAP
 
 _VISION_SLOT = SENSOR_SLOT_MAP["vision"]
-_N_SLOTS = 5  # vision, ultrasonic, motor, audio, lidar
+_N_SLOTS = N_SENSOR_MODALITIES_WITH_LIDAR  # [vision, ultrasonic, motor, audio, lidar]
 
 
 class RoverObsAdapter:
