@@ -108,7 +108,10 @@ class SimEpisodeGenerator:
         for _ep in range(self._n):
             self._maybe_randomize()
             obs, info = self._env.reset(seed=int(self._rng.integers(0, 2**31 - 1)))
-            prev = np.zeros(self._action_dim, dtype=np.float32)
+            # Annotate explicitly: numpy stubs on some versions type np.zeros(scalar)
+            # as a strict 1-D shape, which then rejects the looser NDArray from
+            # _sample_action (3.10 vs 3.11 stub drift). The loose type is correct.
+            prev: NDArray[np.float32] = np.zeros(self._action_dim, dtype=np.float32)
             em, eu, el, ek, ea, er = ([] for _ in range(6))
             for _step in range(self._t):
                 adapted = self._adapter.adapt(obs, info)
