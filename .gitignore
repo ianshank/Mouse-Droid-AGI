@@ -32,6 +32,7 @@ coverage.xml
 coverage-branch.json
 htmlcov/
 .pytest_cache/
+.benchmarks/
 .mypy_cache/
 .ruff_cache/
 

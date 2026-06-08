@@ -8,6 +8,58 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Physical-AI Phase 5: MuJoCo skid-steer sim → RSSM dynamics pretraining + vision-on fine-tune
+
+Replaces the NumPy kinematic rover sim with a MuJoCo (classic) skid-steer physics
+simulator and pretrains the RSSM world-model dynamics core on its episodes,
+end-to-end through the training pipeline orchestrator. A follow-on phase renders an
+RGB camera, extracts vision features, and fine-tunes the pretrained (vision-OFF)
+RSSM with vision turned ON. All opt-in and backwards-compatible — existing YAML,
+checkpoints, and the deployed world model are byte-identical.
+
+**MuJoCo skid-steer rover env** (`sim/mujoco_rover_env.py`, `assets/rover/mse6_4wd.xml`)
+
+- `RoverMuJoCoEnv` fills the reserved `rover.sim.backend == "mujoco"` factory slot
+  with the SAME observation-dict contract as `MockRoverEnv` (imu / chassis_pose /
+  wheel_vel / lidar, FL/FR/RL/RR order). IMU from `<accelerometer>`+`<gyro>`;
+  config-driven N-sector `<rangefinder>` lidar spliced into the MJCF at load; a
+  rest-state finite-`qacc` assertion guards the silent-NaN wheel-grounding footgun.
+- Domain-randomization params (`wheel_friction` → `geom_friction`, `chassis_mass_kg`
+  → `body_mass`+inertia, `motor_gain` → `actuator_gainprm`; `wheel_slip` as a
+  documented observation-noise proxy) are now consumed per-episode via
+  `SimEpisodeGenerator` + `DomainRandomizer`.
+
+**RSSM dynamics pretraining** (`world_model/rssm.py`, `world_model/encoder.py`,
+`world_model/latent_utils.py`, `training/rssm_pretrainer.py`)
+
+- `RSSM.train_sequence` — a gradient-enabled rollout reconstructing the RAW
+  per-modality observations (not the encoder's own embedding — avoids
+  representation collapse) with Dreamer-style balanced free-bits KL computed in
+  float32. Reconstruction heads live in a pretraining-only `RawModalityDecoders`
+  module so the deployment RSSM `state_dict` + seeded init stay byte-identical.
+- `MultimodalEncoder` vision branch is now optional (`vision_dim=0`), mirroring the
+  audio/lidar gating; default `vision_dim=256` is byte-identical.
+
+**Vision-on fine-tune** (`factory.build_rssm_vision_finetune`,
+`checkpoint_migration`, `pipeline_orchestrator`)
+
+- Renders RGB via `mujoco.Renderer` → the deployed (non-learned) `MeanPoolExtractor`
+  → 256-d `vision_features` (sim/deploy distributions match by construction — no CNN
+  trained). `build_rssm_vision_finetune` migrates a vision-OFF checkpoint to vision-ON
+  via the existing `checkpoint_migration` machinery (extended to handle the vision
+  modality) — dynamics core copied verbatim, vision fusion columns + `vision_proj`
+  Kaiming-initialised.
+- Opt-in orchestrator phases: `training.rssm_pretrain_enabled` and
+  `training.rssm_vision_finetune_enabled` (both default OFF). The blocking torch loop
+  runs in `asyncio.to_thread` so the thermal-pause safety check is never starved.
+
+**Config** (`config/schema.py`): additive `MujocoSimConfig` (mjcf path, arena, lidar
+sectors/range, render fields, DR defaults) under `rover.sim.mujoco`; `ModelConfig`
+KL knobs; `TrainingConfig` `rssm_*` pretrain/fine-tune knobs — all defaulted so
+pre-feature YAML loads unchanged.
+
+Architecture: [`docs/architecture/c4-rssm-sim-pretraining.md`](docs/architecture/c4-rssm-sim-pretraining.md).
+
 ### Added — Full rover bring-up: unified dashboard + sensor-fusion summary
 
 Deploy-and-run-everything bring-up plus a single dashboard showing camera + lidar
