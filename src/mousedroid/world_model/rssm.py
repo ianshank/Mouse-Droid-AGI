@@ -301,7 +301,10 @@ class RSSM(nn.Module):
                 # probe + the other raw-modality recon terms, so a plain MSE is
                 # sufficient — a cosine term is an available future refinement.
                 recon = recon + nn.functional.mse_loss(decoders.decode_vision(hz), vision)
-            post_stds.append((0.5 * post_logvar).exp().mean().detach())
+            # fp32 + clamp (like the KL) so an AMP fp16 logvar can't overflow the
+            # collapse probe into inf/nan and make the logged std unreliable.
+            _clamped_lv = post_logvar.float().clamp(-self._cfg.logvar_clamp, self._cfg.logvar_clamp)
+            post_stds.append((0.5 * _clamped_lv).exp().mean().detach())
 
         recon = recon / t
         kl = kl_total / t

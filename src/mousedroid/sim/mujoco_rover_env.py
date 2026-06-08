@@ -63,6 +63,20 @@ class RoverMuJoCoEnv:
         self._obs_keys: tuple[str, ...] = cfg.observation.enabled_keys()
         self._lidar_sectors = self._mjcfg.lidar_num_sectors
 
+        # Fail fast on lidar sector-count divergence: the MJCF injects
+        # `mujoco.lidar_num_sectors` rangefinders, but the obs vector is read at
+        # `observation.lidar_num_sectors`. A mismatch silently pads/truncates the
+        # lidar vector and breaks the RSSM lidar head's expected width.
+        if cfg.observation.include_lidar_sectors and (
+            cfg.observation.lidar_num_sectors != self._lidar_sectors
+        ):
+            msg = (
+                "lidar sector-count mismatch: observation.lidar_num_sectors="
+                f"{cfg.observation.lidar_num_sectors} != sim.mujoco.lidar_num_sectors="
+                f"{self._lidar_sectors}; they must match when lidar is enabled."
+            )
+            raise ValueError(msg)
+
         path = (_REPO_ROOT / self._mjcfg.mjcf_path).resolve()
         self._model = self._build_model(path)
         self._data = mujoco.MjData(self._model)
