@@ -175,9 +175,12 @@ def _new_proj_tensors(cfg: ModelConfig, modality: str) -> dict[str, Tensor]:
     if modality not in dim_map:
         raise ValueError(f"Unknown modality for projection init: {modality!r}")
     out_dim, in_dim = dim_map[modality]
+    if in_dim <= 0:
+        # NOT assert: stripped under PYTHONOPTIMIZE=1 (the Jetson Docker entrypoint).
+        msg = f"Cannot initialise projection from zero-dim input for {modality!r}"
+        raise ValueError(msg)
     w = torch.empty(out_dim, in_dim)
     nn.init.kaiming_uniform_(w, a=_KAIMING_LINEAR_A)
-    assert in_dim > 0, f"Cannot initialise projection from zero-dim input for {modality!r}"
     bound = 1.0 / math.sqrt(in_dim)
     b = torch.empty(out_dim).uniform_(-bound, bound)
     return {

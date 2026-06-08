@@ -130,6 +130,21 @@ def test_render_rgb_shape_and_dtype() -> None:
     env.close()
 
 
+def test_render_rgb_idempotent_reuses_renderer() -> None:
+    if not _gl_available():
+        pytest.skip("offscreen GL rendering unavailable (headless CI)")
+    cfg = _render_cfg()
+    env = RoverMuJoCoEnv(cfg, wheel_radius_m=_WHEEL_RADIUS_M, track_width_m=_TRACK_WIDTH_M)
+    env.reset(seed=0)
+    env.render_rgb()
+    renderer = env._renderer
+    env.step(np.zeros(env.action_dim, dtype=np.float32))
+    frame2 = env.render_rgb()
+    assert env._renderer is renderer
+    assert frame2.shape == (cfg.sim.mujoco.render_height, cfg.sim.mujoco.render_width, 3)
+    env.close()
+
+
 def test_close_is_idempotent() -> None:
     env = _mj()
     env.close()

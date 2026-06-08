@@ -290,6 +290,11 @@ class RSSM(nn.Module):
             if lidar_enabled and lidar is not None:
                 recon = recon + nn.functional.mse_loss(decoders.decode_lidar(hz), lidar)
             if decoders.vision_enabled and vision is not None:
+                # The vision target is the L2-normalised MeanPool feature vector;
+                # MSE here is an auxiliary alignment signal (not the primary
+                # objective). Collapse is guarded globally by the posterior_std
+                # probe + the other raw-modality recon terms, so a plain MSE is
+                # sufficient — a cosine term is an available future refinement.
                 recon = recon + nn.functional.mse_loss(decoders.decode_vision(hz), vision)
             post_stds.append((0.5 * post_logvar).exp().mean().detach())
 

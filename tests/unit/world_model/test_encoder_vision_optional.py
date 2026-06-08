@@ -33,6 +33,17 @@ def test_forward_without_vision_runs() -> None:
     assert out.shape == (2, cfg.obs_dim)
 
 
+def test_vision_enabled_but_none_raises() -> None:
+    import pytest
+
+    cfg = _cfg()  # vision enabled by default
+    enc = MultimodalEncoder(cfg)
+    motor = torch.zeros(1, cfg.motor_state_dim)
+    mask = torch.ones(1, 5)
+    with pytest.raises(ValueError, match="vision tensor"):
+        enc(None, None, motor, mask)
+
+
 def test_default_forward_byte_identical_path() -> None:
     cfg = _cfg()
     enc = MultimodalEncoder(cfg)

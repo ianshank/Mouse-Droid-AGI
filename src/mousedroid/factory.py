@@ -611,7 +611,7 @@ def build_rssm_trainable(cfg: Settings) -> RSSM:
     rover = cfg.rover
     if rover is not None and rover.sim.backend == "mujoco":
         update["lidar_dim"] = rover.sim.mujoco.lidar_num_sectors
-        update["lidar_proj_dim"] = cfg.model.lidar_proj_dim or 32
+        update["lidar_proj_dim"] = cfg.model.lidar_proj_dim
     model_cfg = cfg.model.model_copy(update=update)
     return RSSM(model_cfg)
 
@@ -638,7 +638,10 @@ def build_rssm_vision_finetune(cfg: Settings, checkpoint: Path) -> RSSM:
 
     update: dict[str, object] = {
         "vision_dim": cfg.camera.feature_dim,
-        "vision_proj_dim": cfg.model.vision_proj_dim or 128,
+        # Use the configured projection dim directly; the ModelConfig validator
+        # rejects a zero proj_dim paired with a nonzero modality dim, so a
+        # misconfig surfaces explicitly instead of being patched to a literal.
+        "vision_proj_dim": cfg.model.vision_proj_dim,
         "kl_beta": cfg.training.kl_beta,
         "kl_free_nats": cfg.training.rssm_free_nats,
         "kl_balance_alpha": cfg.training.rssm_kl_balance_alpha,
@@ -646,7 +649,7 @@ def build_rssm_vision_finetune(cfg: Settings, checkpoint: Path) -> RSSM:
     rover = cfg.rover
     if rover is not None and rover.sim.backend == "mujoco":
         update["lidar_dim"] = rover.sim.mujoco.lidar_num_sectors
-        update["lidar_proj_dim"] = cfg.model.lidar_proj_dim or 32
+        update["lidar_proj_dim"] = cfg.model.lidar_proj_dim
     model_cfg = cfg.model.model_copy(update=update)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     return load_rssm_with_migration(checkpoint, model_cfg, device)
