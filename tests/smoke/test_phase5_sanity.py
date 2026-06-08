@@ -16,3 +16,10 @@ def test_factory_exposes_rssm_trainable_and_rover_env() -> None:
 
     assert hasattr(factory, "build_rssm_trainable")
     assert hasattr(factory, "build_rover_env")
+
+
+def test_factory_exposes_vision_finetune_surface() -> None:
+    from mousedroid import factory
+
+    assert hasattr(factory, "build_vision_feature_extractor")
+    assert hasattr(factory, "build_rssm_vision_finetune")
