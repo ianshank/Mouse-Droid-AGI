@@ -87,8 +87,13 @@ class MlflowExperimentLogger:
         existing = self._client.get_experiment_by_name(name)
         if existing is not None:
             return cast(str, existing.experiment_id)
-        # MlflowClient.create_experiment already returns str — no cast needed.
-        return self._client.create_experiment(name)
+        # Bind to an annotated local rather than returning directly: under CI's
+        # ``--ignore-missing-imports`` mlflow is untyped, so create_experiment is
+        # ``Any`` and returning it trips ``no-any-return``; the annotation narrows
+        # it. A ``cast`` would instead be flagged ``redundant-cast`` when mlflow IS
+        # typed (e.g. a newer mlflow installed locally) — this form passes both.
+        new_experiment_id: str = self._client.create_experiment(name)
+        return new_experiment_id
 
     # ---- parent run --------------------------------------------------------
     def start_run(
