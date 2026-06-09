@@ -1642,14 +1642,14 @@ class MetricsConfig(BaseModel):
 class ModelConfig(BaseModel):
     """Neural network model dimensions."""
 
-    vision_dim: int = Field(256, gt=0, description="Vision feature input dim")
+    vision_dim: int = Field(256, ge=0, description="Vision feature input dim (0=disabled)")
     ultrasonic_dim: int = Field(1, ge=0, description="Ultrasonic input dim (0=disabled)")
     motor_state_dim: int = Field(4, gt=0, description="Motor state dim [vx, vy, omega, battery]")
     hidden_dim: int = Field(256, gt=0, description="RNN hidden dim")
     latent_dim: int = Field(64, gt=0, description="Latent state dim")
     action_dim: int = Field(3, gt=0, description="Action dim [vx, vy, omega]")
     obs_dim: int = Field(256, gt=0, description="Fused observation embedding dim")
-    vision_proj_dim: int = Field(128, gt=0, description="Vision projection dim")
+    vision_proj_dim: int = Field(128, ge=0, description="Vision projection dim (0=disabled)")
     ultrasonic_proj_dim: int = Field(32, ge=0, description="Ultrasonic projection dim (0=disabled)")
     motor_proj_dim: int = Field(32, gt=0, description="Motor state projection dim")
     audio_dim: int = Field(0, ge=0, description="Audio feature input dim (0=disabled)")
@@ -1687,9 +1687,34 @@ class ModelConfig(BaseModel):
         description="Reserved for future AutoNCP/CfC wiring sparsity support; currently unused",
     )
 
+    # RSSM dynamics-pretraining KL knobs (Phase 5). Read by RSSM.train_sequence;
+    # build_rssm_trainable copies operator overrides from TrainingConfig onto these.
+    kl_beta: float = Field(
+        1.0, ge=0.0, description="KL weight in the RSSM training ELBO (recon + kl_beta*KL)."
+    )
+    kl_balance_alpha: float = Field(
+        0.8, ge=0.0, le=1.0, description="Dreamer KL-balancing weight (prior-update term)."
+    )
+    kl_free_nats: float = Field(
+        1.0, ge=0.0, description="Free-bits floor (nats) for the RSSM training KL."
+    )
+    logvar_clamp: float = Field(
+        10.0,
+        gt=0.0,
+        description="Symmetric |logvar| clamp before exp() in the balanced-KL "
+        "(fp16 AMP overflow guard). Tunable here rather than hardcoded.",
+    )
+
     @model_validator(mode="after")
     def _validate_optional_modalities(self) -> Self:
         """Validate optional modality dimension pairs."""
+        if (self.vision_dim == 0) != (self.vision_proj_dim == 0):
+            msg = (
+                "vision_dim and vision_proj_dim must both be zero (disabled) "
+                "or both non-zero (enabled) together"
+            )
+            raise ValueError(msg)
+
         if (self.ultrasonic_dim == 0) != (self.ultrasonic_proj_dim == 0):
             msg = (
                 "ultrasonic_dim and ultrasonic_proj_dim must both be zero when disabling ultrasonic"
@@ -1906,6 +1931,64 @@ class RoverInertialConfig(BaseModel):
     wheel_mass_kg: float = Field(0.06, gt=0, description="Per-wheel mass (kg)")
 
 
+class MujocoSimConfig(BaseModel):
+    """MuJoCo backend parameters (consumed only when ``rover.sim.backend == 'mujoco'``).
+
+    Every physics knob is config-driven (invariant #3). ``wheel_slip_default``
+    is a documented OBSERVATION-NOISE proxy — MuJoCo has no first-class slip
+    parameter — applied as multiplicative noise on wheel_vel/pose, NOT a
+    contact-solver field.
+    """
+
+    mjcf_path: str = Field(
+        "assets/rover/mse6_4wd.xml",
+        min_length=1,
+        description="Repo-relative path to the skid-steer MJCF (resolved against repo root).",
+    )
+    arena_half_extent_m: float = Field(
+        2.0, gt=0.0, description="Half-size of the walled arena (walls give the lidar a signal)."
+    )
+    lidar_num_sectors: int = Field(
+        16, gt=0, description="Number of rangefinder sectors fanned around yaw."
+    )
+    lidar_max_range_m: float = Field(
+        4.0, gt=0.0, description="Rangefinder clip; readings normalised to [0,1] by this."
+    )
+    lidar_ring_radius_m: float = Field(
+        0.11, gt=0.0, description="Radius of the lidar-site ring on the chassis (matches MJCF)."
+    )
+    lidar_mount_z_m: float = Field(
+        0.03, description="Z offset of the lidar sites above the chassis origin (matches MJCF)."
+    )
+    noise_rng_seed: int = Field(
+        0, ge=0, description="Default seed for the slip observation-noise RNG (reset overrides)."
+    )
+    battery_voltage_const_v: float = Field(
+        12.0, gt=0.0, description="Constant battery voltage stamped into motor_state[3]."
+    )
+    wheel_friction_default: float = Field(
+        1.0, gt=0.0, description="Default tangential friction (geom_friction[:,0])."
+    )
+    wheel_slip_default: float = Field(
+        0.0, ge=0.0, description="Observation-noise proxy magnitude (NOT a MuJoCo field)."
+    )
+    motor_gain_default: float = Field(
+        1.0, gt=0.0, description="Default actuator gain (actuator_gainprm[:,0])."
+    )
+    chassis_mass_default_kg: float = Field(
+        2.7, gt=0.0, description="Default chassis mass (body_mass + inertia recompute)."
+    )
+    render_vision: bool = Field(
+        False,
+        description="Render an RGB camera for vision-on RSSM fine-tuning (off by default).",
+    )
+    render_width: int = Field(64, gt=0, description="Offscreen RGB render width (px).")
+    render_height: int = Field(64, gt=0, description="Offscreen RGB render height (px).")
+    camera_name: str = Field(
+        "rover_cam", min_length=1, description="Name of the MJCF camera to render from."
+    )
+
+
 class RoverSimConfig(BaseModel):
     """Simulation backend selection and physics timing for rover training."""
 
@@ -1934,6 +2017,10 @@ class RoverSimConfig(BaseModel):
     inertial: RoverInertialConfig = Field(
         default_factory=RoverInertialConfig,
         description="Mass-property overrides for the URDF defaults",
+    )
+    mujoco: MujocoSimConfig = Field(
+        default_factory=MujocoSimConfig,
+        description="MuJoCo backend parameters (used only when backend == 'mujoco').",
     )
 
 
@@ -3645,6 +3732,57 @@ class TrainingConfig(BaseModel):
     resume_from: str | None = Field(
         None,
         description="Path to checkpoint for resuming interrupted training",
+    )
+    # Phase 5 — MuJoCo->RSSM dynamics-pretraining knobs (opt-in; default OFF so
+    # pre-feature behaviour is unchanged). build_rssm_trainable copies
+    # rssm_free_nats / rssm_kl_balance_alpha onto the ModelConfig at build time.
+    rssm_pretrain_enabled: bool = Field(
+        False,
+        description="Opt-in: run the MuJoCo->RSSM dynamics pretraining loop in the rssm phase.",
+    )
+    rssm_free_nats: float = Field(
+        1.0, ge=0.0, description="Free-bits floor (nats) for the RSSM training KL."
+    )
+    rssm_kl_balance_alpha: float = Field(
+        0.8, ge=0.0, le=1.0, description="Dreamer KL-balancing weight (prior-update term)."
+    )
+    rssm_grad_clip: float = Field(
+        100.0, gt=0.0, description="Global grad-norm clip for RSSM pretraining."
+    )
+    rssm_checkpoint_name: str = Field(
+        "rssm_pretrained.pt",
+        min_length=1,
+        description="Filename for the RSSM pretrain checkpoint (under weights_dir).",
+    )
+    rssm_explore_action_rad_s: float = Field(
+        6.0,
+        gt=0.0,
+        description="Exploration wheel-command bound (rad/s) for sim seed episodes.",
+    )
+    rssm_explore_smoothing: float = Field(
+        0.7,
+        ge=0.0,
+        le=1.0,
+        description="EMA weight on the previous action for the smoothed-random explore policy.",
+    )
+    rssm_data_seed: int = Field(
+        0, ge=0, description="Seed for the sim episode generator (exploration + reset stream)."
+    )
+    rssm_vision_finetune_enabled: bool = Field(
+        False,
+        description="Opt-in: run the vision-on RSSM fine-tune phase (renders RGB + MeanPool).",
+    )
+    rssm_finetune_checkpoint: str = Field(
+        "",
+        description="Path to the vision-OFF pretrained RSSM checkpoint to fine-tune (migrated on).",
+    )
+    rssm_finetune_epochs: int = Field(
+        50, gt=0, description="Epochs for the vision-on fine-tune phase."
+    )
+    rssm_vision_checkpoint_name: str = Field(
+        "rssm_vision_finetuned.pt",
+        min_length=1,
+        description="Filename for the vision-on fine-tuned checkpoint (under weights_dir).",
     )
     generation: TrainingGenerationConfig = Field(
         default_factory=_settings_default_factory(TrainingGenerationConfig)

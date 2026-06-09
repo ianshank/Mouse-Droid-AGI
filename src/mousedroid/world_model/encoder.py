@@ -17,10 +17,11 @@ class MultimodalEncoder(nn.Module):
     """Project and fuse heterogeneous sensor streams into a single embedding.
 
     Each modality is linearly projected then gated by the corresponding slice
-    of *valid_mask* before concatenation and fusion.  Audio and LiDAR are
-    optional and controlled by ``cfg.audio_dim`` / ``cfg.lidar_dim`` — when
-    zero the encoder behaves identically to the original 3-modality version
-    for full backwards compatibility.
+    of *valid_mask* before concatenation and fusion.  Vision, audio and LiDAR
+    are optional and controlled by ``cfg.vision_dim`` / ``cfg.audio_dim`` /
+    ``cfg.lidar_dim`` — when zero the branch is dropped entirely.  The default
+    ``vision_dim=256`` keeps the deployed model byte-identical to pre-feature
+    builds (invariant #9).
 
     Args:
         cfg: Model configuration with all dimension parameters.
@@ -28,13 +29,20 @@ class MultimodalEncoder(nn.Module):
 
     def __init__(self, cfg: ModelConfig) -> None:
         super().__init__()
-        self.vision_proj = nn.Linear(cfg.vision_dim, cfg.vision_proj_dim)
-        self.motor_proj = nn.Linear(cfg.motor_state_dim, cfg.motor_proj_dim)
 
+        self._vision_enabled = cfg.vision_dim > 0 and cfg.vision_proj_dim > 0
         self._ultrasonic_enabled = cfg.ultrasonic_dim > 0 and cfg.ultrasonic_proj_dim > 0
         self._audio_enabled = cfg.audio_dim > 0 and cfg.audio_proj_dim > 0
         self._lidar_enabled = cfg.lidar_dim > 0 and cfg.lidar_proj_dim > 0
-        fused_dim = cfg.vision_proj_dim + cfg.motor_proj_dim
+
+        # Construction order preserves the original (vision -> motor -> ...) so the
+        # seeded weight init is byte-identical for the default (vision-on) config.
+        fused_dim = cfg.motor_proj_dim
+        if self._vision_enabled:
+            self.vision_proj = nn.Linear(cfg.vision_dim, cfg.vision_proj_dim)
+            fused_dim += cfg.vision_proj_dim
+        self.motor_proj = nn.Linear(cfg.motor_state_dim, cfg.motor_proj_dim)
+
         if self._ultrasonic_enabled:
             self.ultrasonic_proj = nn.Linear(cfg.ultrasonic_dim, cfg.ultrasonic_proj_dim)
             fused_dim += cfg.ultrasonic_proj_dim
@@ -50,7 +58,8 @@ class MultimodalEncoder(nn.Module):
 
         _log.info(
             "encoder_init",
-            vision_proj=cfg.vision_proj_dim,
+            vision_proj=cfg.vision_proj_dim if self._vision_enabled else 0,
+            vision_enabled=self._vision_enabled,
             ultrasonic_proj=cfg.ultrasonic_proj_dim if self._ultrasonic_enabled else 0,
             ultrasonic_enabled=self._ultrasonic_enabled,
             motor_proj=cfg.motor_proj_dim,
@@ -61,6 +70,11 @@ class MultimodalEncoder(nn.Module):
             fused_dim=fused_dim,
             obs_dim=cfg.obs_dim,
         )
+
+    @property
+    def vision_enabled(self) -> bool:
+        """Whether vision modality is active."""
+        return self._vision_enabled
 
     @property
     def audio_enabled(self) -> bool:
@@ -87,7 +101,7 @@ class MultimodalEncoder(nn.Module):
 
     def forward(
         self,
-        vision: Tensor,
+        vision: Tensor | None,
         ultrasonic: Tensor | None,
         motor_state: Tensor,
         valid_mask: Tensor,
@@ -97,7 +111,8 @@ class MultimodalEncoder(nn.Module):
         """Encode multimodal observation into a single embedding.
 
         Args:
-            vision: Vision features, shape ``(batch, vision_dim)``.
+            vision: Vision features, shape ``(batch, vision_dim)``, or ``None``
+                when vision is disabled (``vision_dim=0``).
             ultrasonic: Ultrasonic reading, shape ``(batch, ultrasonic_dim)``.
             motor_state: Motor state, shape ``(batch, motor_state_dim)``.
             valid_mask: Per-modality validity, shape ``(batch, n_modalities)``.
@@ -109,40 +124,51 @@ class MultimodalEncoder(nn.Module):
 
         Returns:
             Fused observation embedding, shape ``(batch, obs_dim)``.
+
+        Raises:
+            ValueError: If vision is enabled but ``vision`` tensor is ``None``.
         """
-        v = self.act(self.vision_proj(vision))
-        m = self.act(self.motor_proj(motor_state))
+        # ``motor_state`` is always present; use it as the reference tensor for
+        # zero-filling so vision-disabled paths don't need a camera tensor.
+        ref = motor_state
 
-        # Gate each projection by its validity score.
-        v = self._gate_projection(v, valid_mask, "vision")
-        m = self._gate_projection(m, valid_mask, "motor")
+        # Concat order preserves the original [vision, ultrasonic, motor, audio,
+        # lidar] so a checkpoint's fusion weights stay valid (byte-identical
+        # default). Motor is always present; the rest are gated by config.
+        parts: list[Tensor] = []
 
-        parts: list[Tensor] = [v, m]
+        if self._vision_enabled:
+            if vision is None:
+                msg = "vision tensor must be provided when vision_dim > 0"
+                raise ValueError(msg)
+            v = self.act(self.vision_proj(vision))
+            parts.append(self._gate_projection(v, valid_mask, "vision"))
 
         if self._ultrasonic_enabled:
             if ultrasonic is not None:
                 u = self.act(self.ultrasonic_proj(ultrasonic))
             else:
-                batch_size = vision.shape[0]
                 u = torch.zeros(
-                    batch_size,
+                    ref.shape[0],
                     self.ultrasonic_proj.out_features,
-                    device=vision.device,
-                    dtype=vision.dtype,
+                    device=ref.device,
+                    dtype=ref.dtype,
                 )
-            parts.insert(1, self._gate_projection(u, valid_mask, "ultrasonic"))
+            parts.append(self._gate_projection(u, valid_mask, "ultrasonic"))
+
+        m = self.act(self.motor_proj(motor_state))
+        parts.append(self._gate_projection(m, valid_mask, "motor"))
 
         if self._audio_enabled:
             if audio is not None:
                 a = self.act(self.audio_proj(audio))
             else:
                 # Audio enabled but no data provided — use zeros.
-                batch_size = vision.shape[0]
                 a = torch.zeros(
-                    batch_size,
+                    ref.shape[0],
                     self.audio_proj.out_features,
-                    device=vision.device,
-                    dtype=vision.dtype,
+                    device=ref.device,
+                    dtype=ref.dtype,
                 )
             parts.append(self._gate_projection(a, valid_mask, "audio"))
 
@@ -151,12 +177,11 @@ class MultimodalEncoder(nn.Module):
                 el = self.act(self.lidar_proj(lidar))
             else:
                 # LiDAR enabled but no data provided — use zeros.
-                batch_size = vision.shape[0]
                 el = torch.zeros(
-                    batch_size,
+                    ref.shape[0],
                     self.lidar_proj.out_features,
-                    device=vision.device,
-                    dtype=vision.dtype,
+                    device=ref.device,
+                    dtype=ref.dtype,
                 )
             parts.append(self._gate_projection(el, valid_mask, "lidar"))
 

@@ -59,6 +59,7 @@ if TYPE_CHECKING:
     from mousedroid.efficiency.tensorrt import TensorRTCompilerProtocol
     from mousedroid.experience.logger import ExperienceLogger
     from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
+    from mousedroid.hardware.camera.feature_extractor import FeatureExtractorProtocol
     from mousedroid.harness.approval.protocol import ApprovalGateProtocol
     from mousedroid.harness.protocol import TaskTrackerProtocol
     from mousedroid.health.monitor import HealthMonitor
@@ -85,6 +86,7 @@ if TYPE_CHECKING:
     from mousedroid.voice.mock_tts import MockTTS
     from mousedroid.voice.tts import PiperTTS
     from mousedroid.world_model.protocol import WorldModelProtocol
+    from mousedroid.world_model.rssm import RSSM
 
 
 _log = get_logger(__name__)
@@ -575,6 +577,102 @@ def build_world_model(cfg: Settings) -> WorldModelProtocol:
     from mousedroid.world_model.rssm import RSSM
 
     return RSSM(cfg.model)
+
+
+def build_rssm_trainable(cfg: Settings) -> RSSM:
+    """Build the concrete trainable RSSM for MuJoCo dynamics pretraining.
+
+    Unlike :func:`build_world_model` (which returns a ``WorldModelProtocol``
+    wrapper for deployment), this returns the concrete ``nn.Module`` so the
+    pretrainer can call ``train_sequence`` + backprop. Vision is disabled
+    (``vision_dim=0`` paired with ``vision_proj_dim=0`` per the schema
+    validator) — the sim has no camera; the dynamics core is what gets
+    pretrained. Operator pretrain knobs from :class:`TrainingConfig` are copied
+    onto the model config so they live in one place (``training:``).
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        A concrete :class:`~mousedroid.world_model.rssm.RSSM` with vision off.
+    """
+    from mousedroid.world_model.rssm import RSSM
+
+    update: dict[str, object] = {
+        "vision_dim": 0,
+        "vision_proj_dim": 0,
+        "kl_beta": cfg.training.kl_beta,
+        "kl_free_nats": cfg.training.rssm_free_nats,
+        "kl_balance_alpha": cfg.training.rssm_kl_balance_alpha,
+    }
+    # Use the rover's full lidar signal when a MuJoCo rover is configured: size the
+    # model's lidar modality to the sim's sector count so train_sequence actually
+    # reconstructs lidar (otherwise it is silently dropped — leaving only motor +
+    # a single min-range scalar). Falls back to the model default when no rover.
+    rover = cfg.rover
+    if rover is not None and rover.sim.backend == "mujoco":
+        update["lidar_dim"] = rover.sim.mujoco.lidar_num_sectors
+        update["lidar_proj_dim"] = cfg.model.lidar_proj_dim
+    model_cfg = cfg.model.model_copy(update=update)
+    return RSSM(model_cfg)
+
+
+def build_rssm_vision_finetune(cfg: Settings, checkpoint: Path) -> RSSM:
+    """Load a vision-OFF pretrained RSSM and migrate it to a vision-ON model.
+
+    Uses :func:`~mousedroid.world_model.checkpoint_migration.load_rssm_with_migration`
+    to transfer the dynamics core (gru/posterior/prior/decoder/reward) verbatim,
+    copy retained-modality fusion columns, and Kaiming-init the new vision
+    columns + ``vision_proj``. Vision dim = ``cfg.camera.feature_dim`` so the
+    model matches the sim ``MeanPoolExtractor`` output; lidar mirrors the rover.
+
+    Args:
+        cfg: Root settings.
+        checkpoint: Path to the vision-OFF pretrained RSSM checkpoint.
+
+    Returns:
+        A vision-ON :class:`~mousedroid.world_model.rssm.RSSM` ready to fine-tune.
+    """
+    import torch
+
+    from mousedroid.world_model.checkpoint_migration import load_rssm_with_migration
+
+    update: dict[str, object] = {
+        "vision_dim": cfg.camera.feature_dim,
+        # Use the configured projection dim directly; the ModelConfig validator
+        # rejects a zero proj_dim paired with a nonzero modality dim, so a
+        # misconfig surfaces explicitly instead of being patched to a literal.
+        "vision_proj_dim": cfg.model.vision_proj_dim,
+        "kl_beta": cfg.training.kl_beta,
+        "kl_free_nats": cfg.training.rssm_free_nats,
+        "kl_balance_alpha": cfg.training.rssm_kl_balance_alpha,
+    }
+    rover = cfg.rover
+    if rover is not None and rover.sim.backend == "mujoco":
+        update["lidar_dim"] = rover.sim.mujoco.lidar_num_sectors
+        update["lidar_proj_dim"] = cfg.model.lidar_proj_dim
+    model_cfg = cfg.model.model_copy(update=update)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return load_rssm_with_migration(checkpoint, model_cfg, device)
+
+
+def build_vision_feature_extractor(cfg: Settings) -> FeatureExtractorProtocol:
+    """Build the sim vision feature extractor for RSSM vision-on fine-tuning.
+
+    Returns the same non-learned :class:`MeanPoolExtractor` the deployed
+    ``mean_pool`` camera path uses (mean-pool → L2), so rendered-sim and real
+    ``vision_features`` share a distribution by construction — no CNN to train.
+    Dims come from :class:`CameraConfig` (invariant #3).
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        A ``FeatureExtractorProtocol`` producing ``cfg.camera.feature_dim`` features.
+    """
+    from mousedroid.hardware.camera.feature_extractor import MeanPoolExtractor
+
+    return MeanPoolExtractor(cfg.camera.feature_dim, l2_normalize=cfg.camera.l2_normalize)
 
 
 def _build_onnx_world_model(cfg: Settings) -> WorldModelProtocol:
@@ -3376,8 +3474,19 @@ def build_rover_env(cfg: Settings) -> RoverEnvProtocol:
         return env
 
     if backend == "mujoco":
-        msg = "MuJoCo rover backend is reserved; see Phase B of the sim-to-real plan."
-        raise NotImplementedError(msg)
+        from mousedroid.sim.mujoco_rover_env import RoverMuJoCoEnv
+
+        mj_env = RoverMuJoCoEnv(
+            cfg.rover,
+            wheel_radius_m=cfg.robot.wheel_radius_m,
+            track_width_m=cfg.robot.track_width_m,
+        )
+        _log.info(
+            "rover_env_mujoco_built",
+            lidar_sectors=cfg.rover.sim.mujoco.lidar_num_sectors,
+            dr_enabled=cfg.domain_randomization.enabled,
+        )
+        return mj_env
 
     msg = f"unknown rover sim backend: {backend!r}"
     raise ValueError(msg)

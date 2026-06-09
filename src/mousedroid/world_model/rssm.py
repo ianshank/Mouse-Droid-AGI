@@ -12,7 +12,11 @@ from mousedroid.config.schema import ModelConfig
 from mousedroid.logging.setup import get_logger
 from mousedroid.sensing.protocol import ObservationProtocol
 from mousedroid.world_model.encoder import MultimodalEncoder
-from mousedroid.world_model.latent_utils import kl_divergence, sample_gaussian
+from mousedroid.world_model.latent_utils import (
+    balanced_free_bits_kl,
+    kl_divergence,
+    sample_gaussian,
+)
 
 _log = get_logger(__name__)
 
@@ -57,6 +61,11 @@ class RSSM(nn.Module):
             latent_dim=cfg.latent_dim,
             action_dim=cfg.action_dim,
         )
+
+    @property
+    def cfg(self) -> ModelConfig:
+        """Return the model configuration (read-only)."""
+        return self._cfg
 
     # ------------------------------------------------------------------
     # Helpers
@@ -114,12 +123,16 @@ class RSSM(nn.Module):
         """
         device = h.device
 
-        # Convert observation arrays to tensors.
-        vision = torch.as_tensor(
-            observation.vision_features,
-            dtype=torch.float32,
-            device=device,
-        ).unsqueeze(0)
+        # Convert observation arrays to tensors. Vision is gated on the encoder so
+        # a vision-OFF RSSM does not require camera features on the observation
+        # (mirrors MultimodalEncoder.forward accepting vision=None).
+        vision: Tensor | None = None
+        if self.encoder.vision_enabled:
+            vision = torch.as_tensor(
+                observation.vision_features,
+                dtype=torch.float32,
+                device=device,
+            ).unsqueeze(0)
         ultrasonic: Tensor | None = None
         if self.encoder.ultrasonic_enabled:
             ultrasonic = torch.as_tensor(
@@ -206,3 +219,127 @@ class RSSM(nn.Module):
 
         predicted_reward: Tensor = self.reward_head(torch.cat([new_h, new_z], dim=-1))
         return new_h, new_z, predicted_reward
+
+    def train_sequence(
+        self, batch: dict[str, Tensor], decoders: RawModalityDecoders
+    ) -> dict[str, Tensor]:
+        """Gradient-enabled sequence rollout for dynamics pretraining.
+
+        Reconstructs the RAW per-modality sim observations (motor/range/lidar) —
+        fixed targets, so the objective cannot collapse the way an ``obs_embed``
+        self-reconstruction would. KL uses the balanced free-bits helper in
+        float32. Vision is expected OFF (encoder built with ``vision_dim=0``); the
+        ``batch`` therefore carries no vision tensor. This path is deliberately
+        NOT decorated ``@torch.no_grad`` — the deployment inference methods above
+        keep that decorator (CLAUDE.md invariant #7).
+
+        The reconstruction heads live on the external ``decoders`` module (NOT on
+        ``self``) so the deployment RSSM's ``state_dict`` + seeded init stay
+        byte-identical; the pretrainer owns ``decoders`` and trains them jointly.
+
+        Args:
+            batch: Dict of ``(B, T, ...)`` tensors with keys ``motor``,
+                ``valid_mask``, ``action`` (always) and ``ultrasonic`` / ``lidar``
+                when those modalities are enabled.
+            decoders: Raw-modality reconstruction heads (built from this model's
+                config), owned + optimized by the pretrainer.
+
+        Returns:
+            Dict with scalar tensors ``loss``, ``recon``, ``kl`` and a detached
+            ``posterior_std`` collapse probe.
+        """
+        motor = batch["motor"]
+        actions = batch["action"]
+        mask = batch["valid_mask"]
+        b, t, _ = motor.shape
+        device = motor.device
+        h = torch.zeros(b, self._cfg.hidden_dim, device=device)
+        z = torch.zeros(b, self._cfg.latent_dim, device=device)
+
+        recon = torch.zeros((), device=device)
+        kl_total = torch.zeros((), device=device)
+        post_stds: list[Tensor] = []
+
+        range_enabled = self.encoder.ultrasonic_enabled
+        lidar_enabled = self.encoder.lidar_enabled
+        vision_enabled = self.encoder.vision_enabled
+        for step in range(t):
+            ultra = batch["ultrasonic"][:, step] if range_enabled else None
+            lidar = batch["lidar"][:, step] if lidar_enabled else None
+            vision = batch["vision"][:, step] if vision_enabled else None
+            obs_embed = self.encoder(vision, ultra, motor[:, step], mask[:, step], lidar=lidar)
+
+            gru_in = torch.cat([z, actions[:, step]], dim=-1)
+            h = self.gru(gru_in, h)
+
+            post_params = self.posterior(torch.cat([h, obs_embed], dim=-1))
+            z, post_mean, post_logvar = self._sample_gaussian(post_params)
+            prior_params = self.prior(h)
+            _, prior_mean, prior_logvar = self._sample_gaussian(prior_params)
+
+            with torch.autocast(device_type=device.type, enabled=False):
+                kl_total = kl_total + balanced_free_bits_kl(
+                    post_mean,
+                    post_logvar,
+                    prior_mean,
+                    prior_logvar,
+                    alpha=self._cfg.kl_balance_alpha,
+                    free_nats=self._cfg.kl_free_nats,
+                    logvar_clamp=self._cfg.logvar_clamp,
+                )
+
+            hz = torch.cat([h, z], dim=-1)
+            recon = recon + nn.functional.mse_loss(decoders.decode_motor(hz), motor[:, step])
+            if range_enabled and ultra is not None:
+                recon = recon + nn.functional.mse_loss(decoders.decode_range(hz), ultra)
+            if lidar_enabled and lidar is not None:
+                recon = recon + nn.functional.mse_loss(decoders.decode_lidar(hz), lidar)
+            if decoders.vision_enabled and vision is not None:
+                # The vision target is the L2-normalised MeanPool feature vector;
+                # MSE here is an auxiliary alignment signal (not the primary
+                # objective). Collapse is guarded globally by the posterior_std
+                # probe + the other raw-modality recon terms, so a plain MSE is
+                # sufficient — a cosine term is an available future refinement.
+                recon = recon + nn.functional.mse_loss(decoders.decode_vision(hz), vision)
+            # fp32 + clamp (like the KL) so an AMP fp16 logvar can't overflow the
+            # collapse probe into inf/nan and make the logged std unreliable.
+            _clamped_lv = post_logvar.float().clamp(-self._cfg.logvar_clamp, self._cfg.logvar_clamp)
+            post_stds.append((0.5 * _clamped_lv).exp().mean().detach())
+
+        recon = recon / t
+        kl = kl_total / t
+        loss = recon + self._cfg.kl_beta * kl
+        return {
+            "loss": loss,
+            "recon": recon.detach(),
+            "kl": kl.detach(),
+            "posterior_std": torch.stack(post_stds).mean(),
+        }
+
+
+class RawModalityDecoders(nn.Module):
+    """Raw per-modality reconstruction heads for RSSM dynamics pretraining.
+
+    Deliberately kept OUT of :class:`RSSM` so the deployment model's
+    ``state_dict`` and seeded weight init stay byte-identical (adding these
+    ``Linear`` heads to ``RSSM.__init__`` would break checkpoint loading and
+    shift the seeded golden curves). :class:`RSSMPretrainer` owns an instance,
+    includes it in the optimizer, and passes it to :meth:`RSSM.train_sequence`.
+
+    Args:
+        cfg: The model config (decoder dims mirror the encoder's modalities).
+    """
+
+    def __init__(self, cfg: ModelConfig) -> None:
+        super().__init__()
+        feat = cfg.hidden_dim + cfg.latent_dim
+        self.decode_motor = nn.Linear(feat, cfg.motor_state_dim)
+        self.range_enabled = cfg.ultrasonic_dim > 0
+        if self.range_enabled:
+            self.decode_range = nn.Linear(feat, 1)
+        self.lidar_enabled = cfg.lidar_dim > 0
+        if self.lidar_enabled:
+            self.decode_lidar = nn.Linear(feat, cfg.lidar_dim)
+        self.vision_enabled = cfg.vision_dim > 0
+        if self.vision_enabled:
+            self.decode_vision = nn.Linear(feat, cfg.vision_dim)

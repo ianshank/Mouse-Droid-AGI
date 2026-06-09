@@ -22,16 +22,18 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import structlog
-
-from mousedroid.config.schema import Settings, TrainingPipelineConfig
+from mousedroid.config.schema import RoverConfig, Settings, TrainingPipelineConfig
+from mousedroid.logging.setup import get_logger
 from mousedroid.training.batch_tuner import VRAMBatchTuner
 from mousedroid.training.gpu_monitor import JetsonGPUMonitor
 
 if TYPE_CHECKING:
+    from mousedroid.hardware.camera.feature_extractor import FeatureExtractorProtocol
+    from mousedroid.sim.protocols import RoverEnvProtocol
     from mousedroid.training.observability import ExperimentLoggerProtocol
+    from mousedroid.world_model.rssm import RSSM
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 class PipelineOrchestrator:
@@ -238,8 +240,170 @@ class PipelineOrchestrator:
         return runners[phase]
 
     async def _train_rssm(self, batch_size: int) -> None:
-        """Run RSSM pre-training phase."""
-        logger.info("rssm_training", batch_size=batch_size)
+        """Run RSSM dynamics pretraining on MuJoCo-generated episodes.
+
+        Inert (byte-identical to the prior stub) unless
+        ``training.rssm_pretrain_enabled`` is True AND a rover with the
+        ``mujoco`` backend is configured. The synchronous torch loop runs in a
+        worker thread so the orchestrator event loop (and the cooperative
+        thermal-pause check) is not blocked.
+
+        Args:
+            batch_size: Tuned batch size for this phase (currently advisory; the
+                generator's ``n_episodes`` sets the batch dimension).
+        """
+        tcfg = self._settings.training
+        rover = self._settings.rover
+        handled = False
+
+        # Pretrain (vision OFF) runs FIRST so a fine-tune in the same pass can
+        # consume the freshly written checkpoint. The two flags are independent —
+        # vision fine-tune must NOT short-circuit pretraining.
+        if tcfg.rssm_pretrain_enabled:
+            if rover is None or rover.sim.backend != "mujoco":
+                logger.info("rssm_training_skipped", reason="non_mujoco_backend")
+            else:
+                from mousedroid.factory import build_rover_env, build_rssm_trainable
+
+                await self._run_rssm_training(
+                    model=build_rssm_trainable(self._settings),
+                    env=build_rover_env(self._settings),
+                    battery_v=rover.sim.mujoco.battery_voltage_const_v,
+                    checkpoint=Path(tcfg.weights_dir) / tcfg.rssm_checkpoint_name,
+                    epochs=tcfg.epochs,
+                    event_prefix="rssm_training",
+                )
+            handled = True
+
+        if tcfg.rssm_vision_finetune_enabled:
+            await self._run_vision_finetune()
+            handled = True
+
+        if not handled:
+            logger.info("rssm_training_skipped", reason="pretrain_disabled", batch_size=batch_size)
+
+    async def _run_vision_finetune(self) -> None:
+        """Vision-on fine-tune: migrate a vision-OFF checkpoint and train with RGB.
+
+        Inert unless a ``mujoco`` rover is configured AND
+        ``training.rssm_finetune_checkpoint`` points at an existing vision-OFF
+        checkpoint. Renders RGB → ``MeanPoolExtractor`` → ``vision_features`` and
+        fine-tunes the migrated vision-ON RSSM. Runs the blocking torch loop in a
+        worker thread (thermal-pause safe).
+        """
+        tcfg = self._settings.training
+        rover = self._settings.rover
+        if rover is None or rover.sim.backend != "mujoco":
+            logger.info("rssm_vision_finetune_skipped", reason="non_mujoco_backend")
+            return
+        checkpoint = Path(tcfg.rssm_finetune_checkpoint)
+        if not tcfg.rssm_finetune_checkpoint or not checkpoint.exists():
+            logger.info("rssm_vision_finetune_skipped", reason="missing_checkpoint")
+            return
+
+        from mousedroid.factory import (
+            build_rover_env,
+            build_rssm_vision_finetune,
+            build_vision_feature_extractor,
+        )
+
+        # Force render_vision on for the fine-tune env (it must produce frames);
+        # build the model + extractor from the SAME cfg so dims never diverge.
+        render_cfg = self._render_enabled_settings(rover)
+        await self._run_rssm_training(
+            model=build_rssm_vision_finetune(render_cfg, checkpoint),
+            env=build_rover_env(render_cfg),
+            battery_v=rover.sim.mujoco.battery_voltage_const_v,
+            checkpoint=Path(tcfg.weights_dir) / tcfg.rssm_vision_checkpoint_name,
+            epochs=tcfg.rssm_finetune_epochs,
+            event_prefix="rssm_vision_finetune",
+            feature_extractor=build_vision_feature_extractor(render_cfg),
+        )
+
+    def _render_enabled_settings(self, rover: RoverConfig) -> Settings:
+        """Return settings with ``rover.sim.mujoco.render_vision`` forced on."""
+        return self._settings.model_copy(
+            update={
+                "rover": rover.model_copy(
+                    update={
+                        "sim": rover.sim.model_copy(
+                            update={
+                                "mujoco": rover.sim.mujoco.model_copy(
+                                    update={"render_vision": True}
+                                )
+                            }
+                        )
+                    }
+                )
+            }
+        )
+
+    async def _run_rssm_training(
+        self,
+        *,
+        model: RSSM,
+        env: RoverEnvProtocol,
+        battery_v: float,
+        checkpoint: Path,
+        epochs: int,
+        event_prefix: str,
+        feature_extractor: FeatureExtractorProtocol | None = None,
+    ) -> None:
+        """Shared RSSM training loop for the pretrain + vision-fine-tune paths.
+
+        Builds the obs adapter + episode generator, runs the synchronous torch
+        loop in a worker thread (so the orchestrator event loop + thermal-pause
+        check are not blocked), closes the env, and logs ``{event_prefix}_started``
+        / ``{event_prefix}_done``. Centralising this prevents the two phases from
+        silently diverging on shared knobs.
+        """
+        import torch  # local import keeps cold-start light
+
+        from mousedroid.training.domain_randomization import DomainRandomizer
+        from mousedroid.training.rover_obs_adapter import RoverObsAdapter
+        from mousedroid.training.rssm_pretrainer import RSSMPretrainer
+        from mousedroid.training.sim_episode_generator import SimEpisodeGenerator
+
+        tcfg = self._settings.training
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        adapter = RoverObsAdapter(battery_v=battery_v)
+        generator = SimEpisodeGenerator(
+            env,
+            adapter,
+            n_episodes=tcfg.n_episodes,
+            seq_len=tcfg.sequence_length,
+            seed=tcfg.rssm_data_seed,
+            explore_action_rad_s=tcfg.rssm_explore_action_rad_s,
+            explore_smoothing=tcfg.rssm_explore_smoothing,
+            domain_randomizer=DomainRandomizer(self._settings.domain_randomization),
+            feature_extractor=feature_extractor,
+        )
+
+        def _run() -> list[float]:
+            batch = generator.generate()
+            trainer = RSSMPretrainer(
+                model,
+                lr=tcfg.learning_rate,
+                grad_clip=tcfg.rssm_grad_clip,
+                amp=self._config.amp_enabled,
+                device=device,
+            )
+            return trainer.train([batch], epochs=epochs, checkpoint_path=checkpoint)
+
+        # Static event name + structured `phase` field (no runtime-built event
+        # strings) — keeps the structured-logging contract stable for consumers.
+        logger.info(
+            "rssm_phase_started", phase=event_prefix, n_episodes=tcfg.n_episodes, device=str(device)
+        )
+        try:
+            history = await asyncio.to_thread(_run)
+        finally:
+            # Always release the env (+ its MuJoCo renderer/GL context) even if
+            # episode generation or training raises — otherwise the context leaks.
+            env.close()
+        logger.info(
+            "rssm_phase_done", phase=event_prefix, first_loss=history[0], last_loss=history[-1]
+        )
 
     async def _train_warmstart(self, batch_size: int) -> None:
         """Run warm-start policy tuning phase."""
