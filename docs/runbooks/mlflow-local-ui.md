@@ -27,6 +27,12 @@ This binds `127.0.0.1:5000` by default. Override:
 mlflow ui --backend-store-uri file:./mlruns --host 0.0.0.0 --port 5050
 ```
 
+> **⚠️ Network exposure:** `--host 0.0.0.0` binds every interface, exposing
+> experiment metadata (params, metrics, artifact paths) to anyone on the
+> reachable network — the MLflow UI has no authentication. Prefer the default
+> loopback (`127.0.0.1`); only use `0.0.0.0` on a trusted/private network, and
+> tunnel over SSH (`ssh -L 5000:127.0.0.1:5000 <host>`) for remote access.
+
 Open the URL it prints. The default experiment is `mousedroid`; runs are
 named after the pipeline (parent) and each phase (child, nested via the
 `mlflow.parentRunId` tag).

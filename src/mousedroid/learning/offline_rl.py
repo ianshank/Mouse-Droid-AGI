@@ -202,6 +202,12 @@ class OfflineRLTrainer(abc.ABC):
             experiment_logger or NoOpExperimentLogger()
         )
         self._log_phase = log_phase
+        if log_step_every_n < 1:
+            # Guard the modulo throttle: 0 would ZeroDivisionError, negatives are
+            # meaningless. (The schema field is ``gt=0`` but this kwarg is
+            # independently constructible, so validate at the boundary.)
+            msg = f"log_step_every_n must be >= 1, got {log_step_every_n}"
+            raise ValueError(msg)
         self._log_step_every_n = log_step_every_n
         self._global_step = 0
         _log.info(

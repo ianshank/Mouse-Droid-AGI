@@ -33,6 +33,13 @@ def _batch(batch_size: int = 4, state_dim: int = 4, action_dim: int = 2) -> dict
     }
 
 
+def test_log_step_every_n_zero_raises_value_error() -> None:
+    """log_step_every_n=0 fails fast in __init__ (the % throttle would ZeroDivide)."""
+    for cls in (CQLTrainer, IQLTrainer):
+        with pytest.raises(ValueError, match="log_step_every_n must be >= 1"):
+            cls(state_dim=4, action_dim=2, log_step_every_n=0)
+
+
 def test_cql_trainer_logs_q_bellman_cql_policy_losses_per_step(
     logger: MlflowExperimentLogger,
 ) -> None:

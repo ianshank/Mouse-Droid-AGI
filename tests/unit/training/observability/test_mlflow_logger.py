@@ -111,11 +111,14 @@ def test_end_run_status_failed_propagates(tracking_uri: str, client: MlflowClien
     assert client.get_run(run_id).info.status == "FAILED"
 
 
-def test_end_run_rejects_invalid_status_with_warning(tracking_uri: str) -> None:
+def test_end_run_rejects_invalid_status_with_warning(
+    tracking_uri: str, client: MlflowClient
+) -> None:
     """An unknown status string is normalised to FINISHED with a warning, never raises."""
     logger = _build_logger(tracking_uri)
-    logger.start_run(run_name="x")
+    run_id = logger.start_run(run_name="x")
     logger.end_run(status="GARBAGE")  # must not raise
+    assert client.get_run(run_id).info.status == "FINISHED"  # normalised, not GARBAGE
 
 
 def test_log_metric_before_start_run_is_safe(tracking_uri: str) -> None:
