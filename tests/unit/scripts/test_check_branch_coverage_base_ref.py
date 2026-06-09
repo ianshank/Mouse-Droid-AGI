@@ -24,11 +24,31 @@ property / hardware tiers are N/A — formally considered + declined.
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 from pathlib import Path
 from typing import Final
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolate_git_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Scrub inherited ``GIT_*`` context vars for every test in this module.
+
+    A git hook (e.g. the repo's pre-commit branch-coverage gate) exports
+    ``GIT_DIR`` / ``GIT_WORK_TREE`` / ``GIT_INDEX_FILE`` into the environment
+    of everything it runs — including this suite. If they leak into the
+    sandbox-repo ``git`` subprocesses (here AND inside the script under test),
+    ``git`` targets the REAL repository, which has no worktree in the hook
+    context, and fails with ``fatal: this operation must be run in a work
+    tree``. Scrubbing them keeps each throwaway repo self-contained whether
+    the suite runs from a shell or inside a git hook. ``monkeypatch`` restores
+    the original environment after each test automatically.
+    """
+    for key in [k for k in os.environ if k.startswith("GIT_")]:
+        monkeypatch.delenv(key, raising=False)
+
 
 _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[3]
 _SCRIPT_PATH: Final[Path] = _REPO_ROOT / "scripts" / "check_branch_coverage.py"
