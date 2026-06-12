@@ -97,3 +97,25 @@ def test_rejects_invalid_backend_literal() -> None:
     }
     with pytest.raises(ValidationError):
         Settings.model_validate(bad)
+
+
+def test_new_experiment_logger_field_defaults() -> None:
+    """The wired fields (run_name / log_step_every_n / log_artifacts) keep safe defaults.
+
+    Pins the contract so a future edit can't silently flip throttle/artifact
+    behaviour for existing opt-in YAML that omits these keys.
+    """
+    from mousedroid.config.schema import ExperimentLoggerConfig
+
+    cfg = ExperimentLoggerConfig(backend="mlflow")
+    assert cfg.run_name is None  # logger falls back to its own default
+    assert cfg.log_step_every_n == 1  # every step logged (byte-identical to pre-wiring)
+    assert cfg.log_artifacts is True  # artifacts uploaded by default
+
+
+def test_log_step_every_n_must_be_positive() -> None:
+    """``log_step_every_n`` is ``gt=0`` — 0 (which would ZeroDivide the throttle) is rejected."""
+    from mousedroid.config.schema import ExperimentLoggerConfig
+
+    with pytest.raises(ValidationError):
+        ExperimentLoggerConfig(backend="mlflow", log_step_every_n=0)

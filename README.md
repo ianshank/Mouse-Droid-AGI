@@ -363,6 +363,30 @@ Label values are validated against fixed low-cardinality sets (out-of-set values
 budget threshold comes from `cfg.llm.latency_target_ms` — no hardcoded values. See
 `docs/architecture/c4-llm-gateway.md` (Observability).
 
+**Training experiment logging (MLflow).** The offline GPU pre-training pipeline can log params,
+per-phase + per-step metrics, and artifacts to MLflow. It is wired via Protocol-DI through the
+factory as a NEVER-None `ExperimentLoggerProtocol`: the default `NoOpExperimentLogger` is a
+byte-identical no-op, so the path is unconditional and **defaults OFF**. Opt in per-config:
+
+```yaml
+observability:
+  experiment_logger:
+    backend: mlflow            # "none" (default) | "mlflow"
+    tracking_uri: file:./mlruns
+    experiment_name: mousedroid
+    run_name: my-pipeline      # optional; falls back to "pipeline"
+    log_step_every_n: 10       # throttle per-step metric writes on long runs
+    log_artifacts: true        # resolved-Settings snapshot + per-phase checkpoints
+```
+
+`PipelineOrchestrator` emits a parent run per pipeline + a child run per phase (nested via the
+`mlflow.parentRunId` tag); `OfflineRLTrainer` (CQL/IQL) logs per-step losses. Every config field is
+honoured (no inert knobs), all protocol methods are total (never raise on backend failure), and
+`build_experiment_logger` degrades to NoOp on a missing `[mlflow]` extra **or** a construction
+failure — observability is best-effort, never load-bearing. Install via `pip install -e ".[mlflow]"`.
+Operator runbook: [`docs/runbooks/mlflow-local-ui.md`](docs/runbooks/mlflow-local-ui.md); C4 diagram:
+[`docs/architecture/c4-experiment-logger.md`](docs/architecture/c4-experiment-logger.md).
+
 ### Unified Dashboard (camera + lidar + sensor-fusion) over WiFi
 
 The telemetry server serves a single overview page at `/` (redirects to `/dashboard`) that renders
