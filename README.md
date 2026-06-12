@@ -385,7 +385,9 @@ logs per-step losses and consumes `log_step_every_n` as its throttle (config→t
 orchestrator's offline-RL phases is follow-up). All protocol methods are total (never raise on
 backend failure), and
 `build_experiment_logger` degrades to NoOp on a missing `[mlflow]` extra **or** a construction
-failure — observability is best-effort, never load-bearing. Install via `pip install -e ".[mlflow]"`.
+failure — observability is best-effort, never load-bearing. The CLI entry point
+(`python -m mousedroid.training.pipeline_orchestrator --config <yaml>`) resolves the logger from
+config, so the YAML opt-in takes effect with no code change. Install via `pip install -e ".[mlflow]"`.
 Operator runbook: [`docs/runbooks/mlflow-local-ui.md`](docs/runbooks/mlflow-local-ui.md); C4 diagram:
 [`docs/architecture/c4-experiment-logger.md`](docs/architecture/c4-experiment-logger.md).
 

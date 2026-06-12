@@ -86,5 +86,17 @@ observability:
     log_artifacts: true        # settings snapshot + per-phase checkpoints
 ```
 
-Operator runbook (local UI, pitfalls, SSH-tunnel guidance):
-`docs/runbooks/mlflow-local-ui.md`.
+The CLI entry point resolves the logger from this config, so a YAML/env opt-in
+takes effect with no code change:
+
+```bash
+python -m mousedroid.training.pipeline_orchestrator --config <training.yaml>
+# async_main -> build_experiment_logger(settings) -> PipelineOrchestrator(experiment_logger=...)
+```
+
+**Operator triage** — structlog events to grep when runs do not appear:
+`mlflow_logger_initialised` (backend up), `experiment_logger_mlflow_extras_missing`
+/ `experiment_logger_mlflow_init_failed` (degraded to NoOp — check the `[mlflow]`
+extra and `tracking_uri`), and `mlflow_logger_*_failed` (per-call backend
+warnings; the run is never crashed). Operator runbook (local UI, pitfalls,
+SSH-tunnel guidance): `docs/runbooks/mlflow-local-ui.md`.
