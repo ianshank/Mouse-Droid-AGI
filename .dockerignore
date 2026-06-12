@@ -83,12 +83,13 @@ gcp_credentials/
 *.credentials.json
 
 # Host-only runtime artefacts (LMDB experience, reports, training output,
-# harness journal + validation trend store)
+# harness journal + validation trend store, MLflow tracking store)
 *.mdb
 *_experience/
 reports/
 runs/
 checkpoints/
+mlruns/
 var/
 
 # Claude worktrees + agent workspaces

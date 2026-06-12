@@ -50,7 +50,7 @@ follow-ups in priority order.
    physical repair remains the gating item for actual motion** (P0, below).
 8. **[Follow-up — P2] Issue #109** — MSE-6 greeting lifecycle wiring + integration/hardware
    test tiers (separate track).
-9. **[Validation efficiency — P2] Validation efficiency layer (this branch, PR #126).**
+9. **[Validation efficiency — P2] Validation efficiency layer (PR #126, merged).**
    Landed: latency-percentile probes (`tools/llm_latency_probe.py --iterations N` and
    `tools/lidar_telemetry_probe.py` emit p50/p95/p99 via `validation/latency_stats.py`),
    a run-over-run trend store (`validation/report_store.py` + `preflight --journal-path
@@ -66,6 +66,9 @@ follow-ups in priority order.
    - **Periodic on-rover trend sampling** — a lightweight systemd timer running
      `preflight --journal-path … --trend` would turn the store into a continuous
      degradation monitor (sensor FPS drift, LLM latency creep) rather than an on-demand check.
+10. **[Training observability — P1] ✅ DONE (PR T2 — this PR).** MLflow logger
+    wired into `PipelineOrchestrator` + `OfflineRLTrainer`. Operator runbook:
+    `docs/runbooks/mlflow-local-ui.md`. Next-in-arc: T3 (`train_arm.py` SAC+HER entry point).
 
 ---
 

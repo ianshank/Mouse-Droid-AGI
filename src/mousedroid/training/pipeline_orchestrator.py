@@ -16,7 +16,9 @@ CLI usage::
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -28,6 +30,7 @@ from mousedroid.training.gpu_monitor import JetsonGPUMonitor
 if TYPE_CHECKING:
     from mousedroid.hardware.camera.feature_extractor import FeatureExtractorProtocol
     from mousedroid.sim.protocols import RoverEnvProtocol
+    from mousedroid.training.observability import ExperimentLoggerProtocol
     from mousedroid.world_model.rssm import RSSM
 
 logger = get_logger(__name__)
@@ -45,6 +48,9 @@ class PipelineOrchestrator:
         pipeline_config: Pipeline-specific configuration.
         gpu_monitor: GPU thermal/VRAM monitor instance.
         batch_tuner: Dynamic batch size tuner instance.
+        experiment_logger: Optional experiment logger. Defaults to
+            ``NoOpExperimentLogger`` so callers never need a ``None``
+            guard.
     """
 
     def __init__(
@@ -53,12 +59,21 @@ class PipelineOrchestrator:
         pipeline_config: TrainingPipelineConfig,
         gpu_monitor: JetsonGPUMonitor | Any,
         batch_tuner: VRAMBatchTuner | Any,
+        *,
+        experiment_logger: ExperimentLoggerProtocol | None = None,
     ) -> None:
         self._settings = settings
         self._config = pipeline_config
         self._gpu_monitor = gpu_monitor
         self._batch_tuner = batch_tuner
         self._checkpoint_dir = Path(pipeline_config.checkpoint_dir)
+        # Default to NoOp so call sites never need a None guard. The factory
+        # provides the real logger when the user opts in.
+        if experiment_logger is None:
+            from mousedroid.training.observability import NoOpExperimentLogger
+
+            experiment_logger = NoOpExperimentLogger()
+        self._experiment_logger: ExperimentLoggerProtocol = experiment_logger
 
     async def run(self) -> None:
         """Execute all configured training phases in order.
@@ -93,64 +108,119 @@ class PipelineOrchestrator:
             phases=phases[start_idx:],
         )
 
-        for idx in range(start_idx, len(phases)):
-            phase = phases[idx]
-            phase_log = logger.bind(phase=phase, phase_index=idx)
+        observability_cfg = self._settings.observability
+        configured_run_name = (
+            observability_cfg.experiment_logger.run_name if observability_cfg is not None else None
+        )
+        self._experiment_logger.start_run(
+            run_name=configured_run_name,  # may be None → impl-defined default
+            params={
+                "total_phases": len(phases),
+                "start_index": start_idx,
+                "amp_enabled": self._config.amp_enabled,
+            },
+            tags={"track": "training"},
+        )
 
-            # Thermal check before each phase.
-            await self._wait_for_thermal_clearance(phase_log)
-
-            # Tune batch size.
-            base_batch = self._config.batch_sizes.get(phase, self._settings.training.batch_size)
-            tuned_batch = self._batch_tuner.tune_batch_size(phase, base_batch)
-
-            # Validate prior checkpoint (skip for first executed phase).
-            if idx > start_idx:
-                prev_phase = phases[idx - 1]
-                if not self._checkpoint_exists(prev_phase):
-                    msg = (
-                        f"Missing checkpoint for phase '{prev_phase}' — cannot proceed to '{phase}'"
-                    )
-                    raise RuntimeError(msg)
-
-            phase_log.info(
-                "phase_starting",
-                batch_size=tuned_batch,
-                amp_enabled=self._config.amp_enabled,
-            )
-
+        if observability_cfg is not None and observability_cfg.experiment_logger.log_artifacts:
             try:
-                await self._run_phase(phase, tuned_batch)
-            except Exception:
-                phase_log.exception("phase_failed")
-                raise
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    settings_path = Path(tmpdir) / "resolved_settings.json"
+                    settings_path.write_text(
+                        json.dumps(
+                            self._settings.model_dump(mode="json"),
+                            indent=2,
+                            default=str,
+                        ),
+                        encoding="utf-8",
+                    )
+                    self._experiment_logger.log_artifact(str(settings_path))
+                    logger.info(
+                        "pipeline_settings_artifact_logged",
+                        artifact_path=str(settings_path),
+                    )
+            except asyncio.CancelledError:
+                raise  # cooperative cancellation is not a backend failure
+            except Exception as exc:  # broad — settings dump must never break the run
+                logger.warning(
+                    "pipeline_settings_artifact_failed",
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
 
-            phase_log.info("phase_completed")
+        run_status = "FINISHED"
+
+        try:
+            for idx in range(start_idx, len(phases)):
+                phase = phases[idx]
+                phase_log = logger.bind(phase=phase, phase_index=idx)
+
+                await self._wait_for_thermal_clearance(phase_log)
+
+                base_batch = self._config.batch_sizes.get(phase, self._settings.training.batch_size)
+                tuned_batch = self._batch_tuner.tune_batch_size(phase, base_batch)
+
+                if idx > start_idx:
+                    prev_phase = phases[idx - 1]
+                    if not self._checkpoint_exists(prev_phase):
+                        msg = (
+                            f"Missing checkpoint for phase '{prev_phase}' — "
+                            f"cannot proceed to '{phase}'"
+                        )
+                        raise RuntimeError(msg)
+
+                phase_log.info(
+                    "phase_starting",
+                    batch_size=tuned_batch,
+                    amp_enabled=self._config.amp_enabled,
+                )
+
+                try:
+                    await self._run_phase(phase, tuned_batch)
+                except Exception:
+                    phase_log.exception("phase_failed")
+                    raise
+
+                phase_log.info("phase_completed")
+        except Exception:
+            run_status = "FAILED"
+            raise
+        finally:
+            self._experiment_logger.end_run(status=run_status)
 
         logger.info("pipeline_completed", phases_run=phases[start_idx:])
 
     async def _run_phase(self, phase: str, batch_size: int) -> None:
-        """Execute a single training phase.
+        """Execute a single training phase under a nested phase run.
 
-        Each phase creates its own checkpoint file on completion.
+        Each phase creates its own checkpoint file on completion and uploads
+        it as a phase-run artifact.
 
         Args:
             phase: Phase name (e.g. "rssm").
             batch_size: Tuned batch size for this phase.
         """
-        # Create checkpoint directory if needed.
         self._checkpoint_dir.mkdir(parents=True, exist_ok=True)
-
-        # Dispatch to phase-specific training logic.
-        # In a full implementation these would import and call the actual
-        # training modules (train_rssm, warmstart_policy, etc.).
-        phase_fn = self._get_phase_runner(phase)
-        await phase_fn(batch_size)
-
-        # Write checkpoint marker.
-        checkpoint_path = self._checkpoint_dir / f"{phase}.done"
-        checkpoint_path.write_text(f"phase={phase}\n")
-        logger.info("checkpoint_written", path=str(checkpoint_path))
+        ctx = self._experiment_logger.start_phase(
+            phase=phase,
+            params={"batch_size": batch_size, "amp_enabled": self._config.amp_enabled},
+            tags={"phase": phase},
+        )
+        phase_status = "FINISHED"
+        try:
+            phase_fn = self._get_phase_runner(phase)
+            await phase_fn(batch_size)
+            checkpoint_path = self._checkpoint_dir / f"{phase}.done"
+            checkpoint_path.write_text(f"phase={phase}\n")
+            logger.info("checkpoint_written", path=str(checkpoint_path))
+            observability_cfg = self._settings.observability
+            if observability_cfg is not None and observability_cfg.experiment_logger.log_artifacts:
+                self._experiment_logger.log_phase_artifact(ctx, str(checkpoint_path))
+        except Exception:
+            phase_status = "FAILED"
+            raise
+        finally:
+            self._experiment_logger.end_phase(ctx, status=phase_status)
 
     def _get_phase_runner(self, phase: str) -> Any:
         """Resolve phase name to its async runner function.
@@ -422,11 +492,17 @@ async def async_main(config_path: str, resume: bool) -> None:
     gpu_monitor = JetsonGPUMonitor(pipeline_config)
     batch_tuner = VRAMBatchTuner(pipeline_config)
 
+    # Resolve the experiment logger from config so a YAML/env opt-in
+    # (observability.experiment_logger.backend = mlflow) actually takes effect
+    # on the CLI path — NoOp otherwise.
+    from mousedroid.factory import build_experiment_logger
+
     orchestrator = PipelineOrchestrator(
         settings=settings,
         pipeline_config=pipeline_config,
         gpu_monitor=gpu_monitor,
         batch_tuner=batch_tuner,
+        experiment_logger=build_experiment_logger(settings),
     )
     await orchestrator.run()
 
