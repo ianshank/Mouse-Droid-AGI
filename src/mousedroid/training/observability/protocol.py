@@ -72,7 +72,7 @@ class ExperimentLoggerProtocol(Protocol):
     def log_metric(self, key: str, value: Any, step: int | None = None) -> None:
         """Log a scalar metric on the parent run.
 
-        ``value`` is coerced via :func:`_to_finite_float`; NaN/Inf are
+        ``value`` is coerced via :func:`to_finite_float`; NaN/Inf are
         skipped with a warning.
         """
         ...
@@ -119,7 +119,7 @@ class ExperimentLoggerProtocol(Protocol):
 
 
 # --- helpers --------------------------------------------------------------- #
-def _to_finite_float(value: Any) -> float | None:
+def to_finite_float(value: Any) -> float | None:
     """Coerce ``value`` to a finite Python ``float`` or return ``None``.
 
     Handles ``int``, ``float``, numpy scalars, and torch zero-dim tensors.
@@ -151,4 +151,4 @@ def _to_finite_float(value: Any) -> float | None:
     return coerced
 
 
-__all__ = ["ExperimentLoggerProtocol", "PhaseContext", "_to_finite_float"]
+__all__ = ["ExperimentLoggerProtocol", "PhaseContext", "to_finite_float"]

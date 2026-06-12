@@ -9,6 +9,11 @@ from mousedroid.training.observability.protocol import (
     PhaseContext,
 )
 
+# Opaque run-id sentinels (callers MUST treat run_id as opaque). Named so a
+# format change has a single source of truth.
+_NOOP_RUN_ID = "noop-run"
+_NOOP_PHASE_PREFIX = "noop-phase-"
+
 
 class NoOpExperimentLogger:
     """Every method is a silent no-op.
@@ -28,7 +33,7 @@ class NoOpExperimentLogger:
     ) -> str:
         """Return a stable run-id sentinel."""
         del run_name, params, tags
-        return "noop-run"
+        return _NOOP_RUN_ID
 
     def log_params(self, params: dict[str, Any]) -> None:
         """Silent no-op."""
@@ -55,7 +60,7 @@ class NoOpExperimentLogger:
     ) -> PhaseContext:
         """Return a PhaseContext with a stable id."""
         del params, tags
-        return PhaseContext(run_id=f"noop-phase-{phase}", phase=phase)
+        return PhaseContext(run_id=f"{_NOOP_PHASE_PREFIX}{phase}", phase=phase)
 
     def log_phase_metric(
         self,

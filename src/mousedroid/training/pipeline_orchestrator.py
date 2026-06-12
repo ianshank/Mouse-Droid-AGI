@@ -139,10 +139,13 @@ class PipelineOrchestrator:
                         "pipeline_settings_artifact_logged",
                         artifact_path=str(settings_path),
                     )
+            except asyncio.CancelledError:
+                raise  # cooperative cancellation is not a backend failure
             except Exception as exc:  # broad — settings dump must never break the run
                 logger.warning(
                     "pipeline_settings_artifact_failed",
-                    error=f"{type(exc).__name__}:{exc}",
+                    error_type=type(exc).__name__,
+                    error=str(exc),
                 )
 
         run_status = "FINISHED"
@@ -489,11 +492,17 @@ async def async_main(config_path: str, resume: bool) -> None:
     gpu_monitor = JetsonGPUMonitor(pipeline_config)
     batch_tuner = VRAMBatchTuner(pipeline_config)
 
+    # Resolve the experiment logger from config so a YAML/env opt-in
+    # (observability.experiment_logger.backend = mlflow) actually takes effect
+    # on the CLI path — NoOp otherwise.
+    from mousedroid.factory import build_experiment_logger
+
     orchestrator = PipelineOrchestrator(
         settings=settings,
         pipeline_config=pipeline_config,
         gpu_monitor=gpu_monitor,
         batch_tuner=batch_tuner,
+        experiment_logger=build_experiment_logger(settings),
     )
     await orchestrator.run()
 

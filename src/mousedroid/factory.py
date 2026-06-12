@@ -1334,7 +1334,8 @@ def build_experiment_logger(cfg: Settings) -> ExperimentLoggerProtocol:
         except ImportError as exc:
             _log.warning(
                 "experiment_logger_mlflow_extras_missing",
-                error=f"{type(exc).__name__}:{exc}",
+                error_type=type(exc).__name__,
+                error=str(exc),
             )
             return NoOpExperimentLogger()
         except Exception as exc:
@@ -1344,7 +1345,8 @@ def build_experiment_logger(cfg: Settings) -> ExperimentLoggerProtocol:
             # is best-effort, never load-bearing.
             _log.warning(
                 "experiment_logger_mlflow_init_failed",
-                error=f"{type(exc).__name__}:{exc}",
+                error_type=type(exc).__name__,
+                error=str(exc),
             )
             return NoOpExperimentLogger()
 

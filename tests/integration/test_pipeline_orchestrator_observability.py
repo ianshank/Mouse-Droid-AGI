@@ -226,3 +226,34 @@ async def test_log_artifacts_false_skips_checkpoint_upload(
     phase_run = next(r for r in runs if r.data.tags.get("phase") == "rssm")
     artifacts = client.list_artifacts(phase_run.info.run_id)
     assert artifacts == [], "Expected no artifacts when log_artifacts=False"
+
+
+@pytest.mark.asyncio
+async def test_async_main_wires_experiment_logger_from_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The CLI entry point resolves the logger from config — not always NoOp (regression for C2)."""
+    import mousedroid.training.pipeline_orchestrator as po
+
+    cfg_path = tmp_path / "cfg.yaml"
+    cfg_path.write_text("mock_hardware: true\nplatform: mouse_droid\n", encoding="utf-8")
+
+    sentinel = object()
+    # async_main imports build_experiment_logger from the factory at call time.
+    monkeypatch.setattr("mousedroid.factory.build_experiment_logger", lambda _s: sentinel)
+
+    captured: dict[str, object] = {}
+
+    class _FakeOrch:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+        async def run(self) -> None:
+            return None
+
+    monkeypatch.setattr(po, "PipelineOrchestrator", _FakeOrch)
+    monkeypatch.setattr(po, "JetsonGPUMonitor", lambda _c: object())
+    monkeypatch.setattr(po, "VRAMBatchTuner", lambda _c: object())
+
+    await po.async_main(str(cfg_path), resume=False)
+    assert captured["experiment_logger"] is sentinel

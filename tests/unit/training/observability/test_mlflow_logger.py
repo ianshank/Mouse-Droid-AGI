@@ -74,7 +74,7 @@ def test_log_metric_records_step_history(tracking_uri: str, client: MlflowClient
 
 
 def test_log_metric_skips_nonfinite_value(tracking_uri: str, client: MlflowClient) -> None:
-    """NaN must not reach the store; the warning is recorded by _to_finite_float."""
+    """NaN must not reach the store; the warning is recorded by to_finite_float."""
     logger = _build_logger(tracking_uri)
     run_id = logger.start_run(run_name="nan")
     logger.log_metric("loss", float("nan"), step=0)
@@ -148,6 +148,44 @@ def test_resolve_existing_experiment_returns_same_id(tracking_uri: str) -> None:
     assert logger1._experiment_id == logger2._experiment_id
 
 
+def test_resolve_experiment_handles_create_race(
+    tracking_uri: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lost create-race (concurrent process created the experiment) re-resolves it."""
+
+    class _Exp:
+        experiment_id = "raced-id"
+
+    logger = _build_logger(tracking_uri, "race-base")
+    calls = {"n": 0}
+
+    def _get(_name: str) -> object | None:
+        calls["n"] += 1
+        return None if calls["n"] == 1 else _Exp()  # absent, then present (other writer)
+
+    def _create(_name: str) -> str:
+        raise RuntimeError("experiment already exists")  # the race
+
+    monkeypatch.setattr(logger._client, "get_experiment_by_name", _get)
+    monkeypatch.setattr(logger._client, "create_experiment", _create)
+    assert logger._resolve_or_create_experiment("raced") == "raced-id"
+
+
+def test_resolve_experiment_reraises_genuine_failure(
+    tracking_uri: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A genuine store failure (still absent after retry) re-raises → factory degrades to NoOp."""
+    logger = _build_logger(tracking_uri, "fail-base")
+    monkeypatch.setattr(logger._client, "get_experiment_by_name", lambda _name: None)
+
+    def _create(_name: str) -> str:
+        raise RuntimeError("tracking store unreachable")
+
+    monkeypatch.setattr(logger._client, "create_experiment", _create)
+    with pytest.raises(RuntimeError, match="tracking store unreachable"):
+        logger._resolve_or_create_experiment("x")
+
+
 def test_log_params_before_start_run_is_safe(tracking_uri: str) -> None:
     """log_params without an active run is a silent no-op + warning, never raises."""
     logger = _build_logger(tracking_uri)
@@ -205,7 +243,7 @@ def test_log_phase_metric_with_empty_ctx_is_safe(tracking_uri: str) -> None:
 
 
 def test_log_phase_metric_skips_nan(tracking_uri: str, client: MlflowClient) -> None:
-    """NaN is skipped by _to_finite_float; only the finite value is stored."""
+    """NaN is skipped by to_finite_float; only the finite value is stored."""
     logger = _build_logger(tracking_uri)
     logger.start_run(run_name="nan-phase")
     ctx = logger.start_phase(phase="nan-ph")

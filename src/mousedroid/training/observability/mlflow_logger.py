@@ -29,13 +29,16 @@ from typing import Any, cast
 from mousedroid.logging.setup import get_logger
 from mousedroid.training.observability.protocol import (
     PhaseContext,
-    _to_finite_float,
+    to_finite_float,
 )
 
 _log = get_logger(__name__)
 
 _VALID_STATUSES: frozenset[str] = frozenset({"FINISHED", "FAILED", "KILLED"})
 _PARENT_RUN_TAG = "mlflow.parentRunId"
+# Fallback parent-run name when neither the call nor the config supplies one.
+# Operators override per-run via ``ExperimentLoggerConfig.run_name``.
+_DEFAULT_RUN_NAME = "pipeline"
 
 
 class MlflowExperimentLogger:
@@ -92,7 +95,18 @@ class MlflowExperimentLogger:
         # ``Any`` and returning it trips ``no-any-return``; the annotation narrows
         # it. A ``cast`` would instead be flagged ``redundant-cast`` when mlflow IS
         # typed (e.g. a newer mlflow installed locally) — this form passes both.
-        new_experiment_id: str = self._client.create_experiment(name)
+        try:
+            new_experiment_id: str = self._client.create_experiment(name)
+        except Exception:
+            # TOCTOU: a concurrent process (parallel workers on a shared file/DB
+            # backend) may create the experiment between our get and create.
+            # Re-resolve the experiment it created. If it is STILL absent the
+            # failure is genuine — re-raise so ``build_experiment_logger`` degrades
+            # to NoOp rather than returning a half-built logger.
+            raced = self._client.get_experiment_by_name(name)
+            if raced is None:
+                raise
+            return cast(str, raced.experiment_id)
         return new_experiment_id
 
     # ---- parent run --------------------------------------------------------
@@ -113,7 +127,7 @@ class MlflowExperimentLogger:
         Returns:
             The MLflow run-id string, or ``""`` if the backend call fails.
         """
-        effective_name = run_name or self._default_run_name or "pipeline"
+        effective_name = run_name or self._default_run_name or _DEFAULT_RUN_NAME
         try:
             run = self._client.create_run(
                 experiment_id=self._experiment_id,
@@ -123,10 +137,12 @@ class MlflowExperimentLogger:
         except Exception as exc:  # broad — never raise on backend failure  # noqa: BLE001, RUF100
             _log.warning(
                 "mlflow_logger_start_run_failed",
-                error=f"{type(exc).__name__}:{exc}",
+                error_type=type(exc).__name__,
+                error=str(exc),
             )
             return ""
-        self._active_run_id = cast(str, run.info.run_id)
+        active_run_id: str = run.info.run_id  # annotated-local (see _resolve note)
+        self._active_run_id = active_run_id
         if params:
             self.log_params(params)
         return self._active_run_id
@@ -147,7 +163,8 @@ class MlflowExperimentLogger:
                 _log.warning(
                     "mlflow_logger_log_param_failed",
                     key=key,
-                    error=f"{type(exc).__name__}:{exc}",
+                    error_type=type(exc).__name__,
+                    error=str(exc),
                 )
 
     def log_metric(self, key: str, value: Any, step: int | None = None) -> None:
@@ -161,16 +178,17 @@ class MlflowExperimentLogger:
         if self._active_run_id is None:
             _log.warning("mlflow_logger_log_metric_without_run", key=key)
             return
-        coerced = _to_finite_float(value)
+        coerced = to_finite_float(value)
         if coerced is None:
-            return  # _to_finite_float already logged the skip
+            return  # to_finite_float already logged the skip
         try:
             self._client.log_metric(self._active_run_id, key, coerced, step=step)
         except Exception as exc:  # noqa: BLE001, RUF100
             _log.warning(
                 "mlflow_logger_log_metric_failed",
                 key=key,
-                error=f"{type(exc).__name__}:{exc}",
+                error_type=type(exc).__name__,
+                error=str(exc),
             )
 
     def log_artifact(self, local_path: str) -> None:
@@ -191,7 +209,8 @@ class MlflowExperimentLogger:
             _log.warning(
                 "mlflow_logger_log_artifact_failed",
                 path=local_path,
-                error=f"{type(exc).__name__}:{exc}",
+                error_type=type(exc).__name__,
+                error=str(exc),
             )
 
     def end_run(self, *, status: str = "FINISHED") -> None:
@@ -216,7 +235,8 @@ class MlflowExperimentLogger:
         except Exception as exc:  # noqa: BLE001, RUF100
             _log.warning(
                 "mlflow_logger_end_run_failed",
-                error=f"{type(exc).__name__}:{exc}",
+                error_type=type(exc).__name__,
+                error=str(exc),
             )
         finally:
             self._active_run_id = None
@@ -258,7 +278,8 @@ class MlflowExperimentLogger:
             _log.warning(
                 "mlflow_logger_start_phase_failed",
                 phase=phase,
-                error=f"{type(exc).__name__}:{exc}",
+                error_type=type(exc).__name__,
+                error=str(exc),
             )
             return PhaseContext(run_id="", phase=phase)
         if params:
@@ -270,7 +291,8 @@ class MlflowExperimentLogger:
                         "mlflow_logger_phase_param_failed",
                         phase=phase,
                         key=key,
-                        error=f"{type(exc).__name__}:{exc}",
+                        error_type=type(exc).__name__,
+                        error=str(exc),
                     )
         return PhaseContext(run_id=run.info.run_id, phase=phase)
 
@@ -291,7 +313,7 @@ class MlflowExperimentLogger:
         """
         if not ctx.run_id:
             return
-        coerced = _to_finite_float(value)
+        coerced = to_finite_float(value)
         if coerced is None:
             return
         try:
@@ -301,7 +323,8 @@ class MlflowExperimentLogger:
                 "mlflow_logger_log_phase_metric_failed",
                 phase=ctx.phase,
                 key=key,
-                error=f"{type(exc).__name__}:{exc}",
+                error_type=type(exc).__name__,
+                error=str(exc),
             )
 
     def log_phase_artifact(self, ctx: PhaseContext, local_path: str) -> None:
@@ -322,7 +345,8 @@ class MlflowExperimentLogger:
             _log.warning(
                 "mlflow_logger_log_phase_artifact_failed",
                 phase=ctx.phase,
-                error=f"{type(exc).__name__}:{exc}",
+                error_type=type(exc).__name__,
+                error=str(exc),
             )
 
     def end_phase(self, ctx: PhaseContext, *, status: str = "FINISHED") -> None:
@@ -349,7 +373,8 @@ class MlflowExperimentLogger:
             _log.warning(
                 "mlflow_logger_end_phase_failed",
                 phase=ctx.phase,
-                error=f"{type(exc).__name__}:{exc}",
+                error_type=type(exc).__name__,
+                error=str(exc),
             )
 
 
