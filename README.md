@@ -380,8 +380,10 @@ observability:
 ```
 
 `PipelineOrchestrator` emits a parent run per pipeline + a child run per phase (nested via the
-`mlflow.parentRunId` tag); `OfflineRLTrainer` (CQL/IQL) logs per-step losses. Every config field is
-honoured (no inert knobs), all protocol methods are total (never raise on backend failure), and
+`mlflow.parentRunId` tag) and consumes `run_name` + `log_artifacts`; `OfflineRLTrainer` (CQL/IQL)
+logs per-step losses and consumes `log_step_every_n` as its throttle (config→trainer wiring in the
+orchestrator's offline-RL phases is follow-up). All protocol methods are total (never raise on
+backend failure), and
 `build_experiment_logger` degrades to NoOp on a missing `[mlflow]` extra **or** a construction
 failure — observability is best-effort, never load-bearing. Install via `pip install -e ".[mlflow]"`.
 Operator runbook: [`docs/runbooks/mlflow-local-ui.md`](docs/runbooks/mlflow-local-ui.md); C4 diagram:

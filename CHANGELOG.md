@@ -114,29 +114,7 @@ CLAUDE.md "Validation-efficiency surface" section, README validation block.
 
 ### Added — MLflow experiment logger for training observability
 
-Training metrics logging via the `mlflow-skinny` backend, threaded through the
-factory as a NEVER-None `ExperimentLoggerProtocol` (the `NoOpExperimentLogger`
-default is byte-identically a no-op, so the orchestrator/trainer wiring is free
-when observability is OFF). Wired into `PipelineOrchestrator` (parent run per
-pipeline, child run per phase) and `OfflineRLTrainer` (per-step loss metrics for
-CQL + IQL). Defaults to OFF; opt in via YAML or
-`MOUSEDROID_OBSERVABILITY__EXPERIMENT_LOGGER__BACKEND=mlflow`.
-
-Every `ExperimentLoggerConfig` field is honoured (no inert knobs):
-
-- **`run_name`** — passed to the parent run; falls back to the logger default
-  (`"pipeline"`) when unset.
-- **`log_step_every_n`** (`gt=0`, default `1`) — throttles per-step metric writes
-  (`step % n == 0`) while the global step counter always increments; the trainer
-  also fail-fasts on `< 1` so the modulo can never `ZeroDivisionError`.
-- **`log_artifacts`** (default `True`) — gates both the resolved-`Settings` JSON
-  snapshot (parent-run) and the per-phase checkpoint (child-run) uploads.
-
-`build_experiment_logger` degrades to NoOp — never crashes the run — on both a
-missing `[mlflow]` extra (`ImportError`) **and** a construction failure (bad
-`tracking_uri` / store / permissions), each with a distinct structured warning.
-See `docs/runbooks/mlflow-local-ui.md` for the operator runbook and
-`docs/architecture/c4-experiment-logger.md` for the C4 component diagram.
+Opt-in training-metrics logging via the `mlflow-skinny` backend, threaded through the factory as a NEVER-None `ExperimentLoggerProtocol` (the `NoOpExperimentLogger` default is a byte-identical no-op, so the wiring is free when OFF). `PipelineOrchestrator` emits a parent run per pipeline + a child run per phase and consumes `run_name` (falls back to `"pipeline"`) and `log_artifacts` (gates the resolved-`Settings` snapshot + per-phase checkpoint uploads); `OfflineRLTrainer` (CQL/IQL) logs per-step losses and consumes `log_step_every_n` (`gt=0`) as its `step % n` throttle — fail-fasting on `< 1` so the modulo can never `ZeroDivisionError` (config→trainer wiring in the orchestrator's offline-RL phases is follow-up). All protocol methods are total (never raise on backend failure), and `build_experiment_logger` degrades to NoOp on a missing `[mlflow]` extra **or** a construction failure (bad `tracking_uri`/store/permissions). Defaults OFF; opt in via YAML or `MOUSEDROID_OBSERVABILITY__EXPERIMENT_LOGGER__BACKEND=mlflow`. Runbook: `docs/runbooks/mlflow-local-ui.md`; C4: `docs/architecture/c4-experiment-logger.md`.
 
 ### Added — Full rover bring-up: unified dashboard + sensor-fusion summary
 

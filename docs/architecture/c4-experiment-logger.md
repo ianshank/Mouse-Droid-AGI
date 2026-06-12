@@ -53,8 +53,12 @@ Rel(mlflow, store, "writes runs/metrics/artifacts")
   callers drop the `logger is not None` guard.
 - **No hardcoded values (invariant #3).** `tracking_uri`, `experiment_name`,
   `run_name`, `log_step_every_n`, and `log_artifacts` all come from
-  `ObservabilityConfig.experiment_logger`. Every config field is actually
-  consumed (no inert knobs).
+  `ObservabilityConfig.experiment_logger`. Each is consumed by its owning
+  component: the orchestrator wires `run_name` + `log_artifacts`;
+  `log_step_every_n` is the per-step throttle of `OfflineRLTrainer` (CQL/IQL),
+  honoured wherever a trainer is constructed with it. (Threading
+  `log_step_every_n` from config into the orchestrator's offline-RL phases is
+  follow-up — those phases are stubs today.)
 - **Total methods.** Every protocol method MUST NOT raise on backend failure
   (network drop, malformed input, NaN) — it emits a structured warning and
   returns, mirroring the LLM gateways' "never raises on backend failure" contract.
