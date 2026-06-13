@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import urllib.request
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from mousedroid.comms.base_driver import BaseESP32Driver
 from mousedroid.logging.setup import get_logger
@@ -117,7 +117,7 @@ class WiFiESP32Driver(BaseESP32Driver):
             body = resp.read().decode()
         if not body.strip():
             return {}
-        return json.loads(body)  # type: ignore[no-any-return]
+        return cast("dict[str, Any]", json.loads(body))
 
     async def _get_json(self, path: str) -> dict[str, Any]:
         """HTTP GET JSON from ESP32.
@@ -145,4 +145,4 @@ class WiFiESP32Driver(BaseESP32Driver):
             body = resp.read().decode()
         if not body.strip():
             return {}
-        return json.loads(body)  # type: ignore[no-any-return]
+        return cast("dict[str, Any]", json.loads(body))

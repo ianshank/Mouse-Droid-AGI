@@ -21,6 +21,10 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from PIL.Image import Image as PILImage
+    from PIL.ImageDraw import ImageDraw as PILImageDraw
+    from PIL.ImageFont import FreeTypeFont, ImageFont
+
+    PILFont = ImageFont | FreeTypeFont
 
 # --- Artwork geometry constants (pixel-art parameters, not runtime tunables) -
 DEFAULT_HALF_DIVISOR: int = 2  # used to halve dimensions when centring
@@ -64,10 +68,10 @@ class Expression(str, Enum):
     BOOT = "boot"
 
 
-_DEFAULT_FONT: object | None = None
+_DEFAULT_FONT: PILFont | None = None
 
 
-def _get_default_font() -> object:
+def _get_default_font() -> PILFont:
     """Return a cached PIL default font, loading it lazily on first use.
 
     Avoids re-parsing the bitmap font data on every text render. The cache
@@ -81,7 +85,7 @@ def _get_default_font() -> object:
     return _DEFAULT_FONT
 
 
-def _new_canvas(width: int, height: int) -> tuple[PILImage, object]:
+def _new_canvas(width: int, height: int) -> tuple[PILImage, PILImageDraw]:
     """Create a 1-bit PIL canvas + ImageDraw, lazy-importing PIL."""
     from PIL import Image, ImageDraw
 
@@ -101,7 +105,7 @@ def _eye_geometry(width: int, height: int) -> tuple[int, int, int, int, int]:
 
 
 def _draw_eye(
-    draw: object,
+    draw: PILImageDraw,
     cx: int,
     cy: int,
     eye_w: int,
@@ -129,22 +133,22 @@ def _draw_eye(
     pupil_r = max(eye_h // DEFAULT_PUPIL_DIVISOR, DEFAULT_PUPIL_MIN_RADIUS_PX)
 
     if shape == "closed":
-        draw.line(  # type: ignore[attr-defined]
+        draw.line(
             (x0 + DEFAULT_CLOSED_INSET_PX, cy, x1 - DEFAULT_CLOSED_INSET_PX, cy),
             fill=1,
             width=DEFAULT_CLOSED_STROKE_PX,
         )
         return
     if shape == "round":
-        draw.ellipse((x0, y0, x1, y1), outline=1, fill=1)  # type: ignore[attr-defined]
-        draw.ellipse(  # type: ignore[attr-defined]
+        draw.ellipse((x0, y0, x1, y1), outline=1, fill=1)
+        draw.ellipse(
             (cx - pupil_r, cy - pupil_r, cx + pupil_r, cy + pupil_r),
             fill=0,
         )
         return
     if shape == "happy":
         # Upward-curved arc (smiling eyes).
-        draw.arc(  # type: ignore[attr-defined]
+        draw.arc(
             (x0, y0, x1, y1),
             start=DEFAULT_HAPPY_ARC_START_DEG,
             end=DEFAULT_HAPPY_ARC_END_DEG,
@@ -154,7 +158,7 @@ def _draw_eye(
         return
     if shape == "sad":
         # Downward-curved arc.
-        draw.arc(  # type: ignore[attr-defined]
+        draw.arc(
             (x0, y0, x1, y1),
             start=DEFAULT_SAD_ARC_START_DEG,
             end=DEFAULT_SAD_ARC_END_DEG,
@@ -172,8 +176,8 @@ def _draw_eye(
         else:
             # Right eye: inner corner is x0 (left side, toward centre).
             pts = [(x0, y0 + slant), (x1, y0), (x1, y1), (x0, y1)]
-        draw.polygon(pts, outline=1, fill=1)  # type: ignore[attr-defined]
-        draw.ellipse(  # type: ignore[attr-defined]
+        draw.polygon(pts, outline=1, fill=1)
+        draw.ellipse(
             (
                 cx - pupil_r,
                 cy,
@@ -185,18 +189,18 @@ def _draw_eye(
         return
     if shape == "wide":
         pad = max(eye_h // DEFAULT_WIDE_PAD_DIVISOR, DEFAULT_WIDE_PAD_MIN_PX)
-        draw.ellipse(  # type: ignore[attr-defined]
+        draw.ellipse(
             (x0 - pad, y0 - pad, x1 + pad, y1 + pad),
             outline=1,
             fill=1,
         )
-        draw.ellipse(  # type: ignore[attr-defined]
+        draw.ellipse(
             (cx - pupil_r, cy - pupil_r, cx + pupil_r, cy + pupil_r),
             fill=0,
         )
         return
     if shape == "sleepy":
-        draw.arc(  # type: ignore[attr-defined]
+        draw.arc(
             (x0, y0, x1, y1),
             start=DEFAULT_SLEEPY_ARC_START_DEG,
             end=DEFAULT_SLEEPY_ARC_END_DEG,
@@ -205,11 +209,11 @@ def _draw_eye(
         )
         return
     if shape == "cross":
-        draw.line((x0, y0, x1, y1), fill=1, width=DEFAULT_CROSS_STROKE_PX)  # type: ignore[attr-defined]
-        draw.line((x0, y1, x1, y0), fill=1, width=DEFAULT_CROSS_STROKE_PX)  # type: ignore[attr-defined]
+        draw.line((x0, y0, x1, y1), fill=1, width=DEFAULT_CROSS_STROKE_PX)
+        draw.line((x0, y1, x1, y0), fill=1, width=DEFAULT_CROSS_STROKE_PX)
         return
     # Fallback: open round eye.
-    draw.ellipse((x0, y0, x1, y1), outline=1, fill=1)  # type: ignore[attr-defined]
+    draw.ellipse((x0, y0, x1, y1), outline=1, fill=1)
 
 
 _SHAPE_BY_EXPR: dict[Expression, str] = {
@@ -245,9 +249,9 @@ def render_expression(expression: Expression, width: int, height: int) -> PILIma
     if expression in {Expression.EMERGENCY, Expression.BOOT}:
         label = "EMERGENCY" if expression is Expression.EMERGENCY else "BOOT"
         font = _get_default_font()
-        bbox = draw.textbbox((0, 0), label, font=font)  # type: ignore[attr-defined]
+        bbox = draw.textbbox((0, 0), label, font=font)
         text_w = bbox[2] - bbox[0]
-        draw.text(  # type: ignore[attr-defined]
+        draw.text(
             (
                 (width - text_w) // DEFAULT_HALF_DIVISOR,
                 DEFAULT_LABEL_PADDING_PX,
@@ -273,10 +277,10 @@ def render_text(message: str, width: int, height: int) -> PILImage:
     """
     img, draw = _new_canvas(width, height)
     font = _get_default_font()
-    bbox = draw.textbbox((0, 0), message, font=font)  # type: ignore[attr-defined]
+    bbox = draw.textbbox((0, 0), message, font=font)
     text_w = bbox[2] - bbox[0]
     text_h = bbox[3] - bbox[1]
     x = max((width - text_w) // DEFAULT_HALF_DIVISOR, 0)
     y = max((height - text_h) // DEFAULT_HALF_DIVISOR, 0)
-    draw.text((x, y), message, font=font, fill=1)  # type: ignore[attr-defined]
+    draw.text((x, y), message, font=font, fill=1)
     return img

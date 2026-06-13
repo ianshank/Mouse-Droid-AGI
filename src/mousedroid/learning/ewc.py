@@ -100,7 +100,7 @@ class EWCAgent:
             log_prob = torch.log_softmax(output, dim=-1)
             target_idx = log_prob.argmax(dim=-1)
             loss = -log_prob.gather(1, target_idx.unsqueeze(-1)).mean()
-            loss.backward()  # type: ignore[no-untyped-call]
+            loss.backward()  # type: ignore[no-untyped-call]  # torch ships no stub for Tensor.backward
 
             for name, param in self._named_parameters():
                 if param.grad is not None:

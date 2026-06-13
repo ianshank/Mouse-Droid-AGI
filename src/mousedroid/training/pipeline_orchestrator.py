@@ -239,7 +239,7 @@ async def async_main(config_path: str, resume: bool) -> None:
     """
     settings = _load_settings(config_path)
 
-    pipeline_config = settings.training_pipeline or TrainingPipelineConfig()  # type: ignore[call-arg]
+    pipeline_config = settings.training_pipeline or TrainingPipelineConfig()
 
     if resume and pipeline_config.resume_from_phase is None:
         # Auto-detect resume point from existing checkpoints.

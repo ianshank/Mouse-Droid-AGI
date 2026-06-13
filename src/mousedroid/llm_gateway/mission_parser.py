@@ -130,7 +130,7 @@ class RuleBasedMissionParser:
             cfg: Mission parser config. When ``None``, schema defaults apply.
         """
         if cfg is None:
-            cfg = MissionParserConfig()  # type: ignore[call-arg]
+            cfg = MissionParserConfig()
         self._speed_map = cfg.speed_map
         self._default_speed = cfg.default_speed
         self._patrol_speed = cfg.patrol_speed

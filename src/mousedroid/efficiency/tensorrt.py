@@ -108,7 +108,7 @@ def _trace_model(model: nn.Module, sample_input: Tensor) -> Any:
     Returns:
         Traced model via ``torch.jit.trace``.
     """
-    return torch.jit.trace(model, sample_input)  # type: ignore[no-untyped-call]
+    return torch.jit.trace(model, sample_input)  # type: ignore[no-untyped-call]  # torch.jit is untyped
 
 
 class JetsonTensorRTCompiler:
@@ -288,7 +288,7 @@ class JetsonTensorRTCompiler:
 
         def _load_sync() -> Any:
             try:
-                return torch.jit.load(str(path))  # type: ignore[no-untyped-call]
+                return torch.jit.load(str(path))  # type: ignore[no-untyped-call]  # torch.jit is untyped
             except Exception:
                 # weights_only=False is required to load torch2trt modules.
                 # SECURITY: only load from the local tensorrt_cache_dir which

@@ -14,7 +14,7 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -294,7 +294,7 @@ def _resolve_raw_frame_capture(
         # so sync drivers still work and the smoke produces a clean
         # signal.
         if asyncio.iscoroutinefunction(capture_raw):
-            return capture_raw  # type: ignore[no-any-return]
+            return cast("Callable[[], Awaitable[NDArray[np.uint8]]]", capture_raw)
 
         async def _via_sync_capture_raw_frame() -> NDArray[np.uint8]:
             return np.asarray(await asyncio.to_thread(capture_raw), dtype=np.uint8)

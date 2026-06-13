@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import GCPConfig
+    from mousedroid.harness.approval.protocol import ApprovalGateProtocol
     from mousedroid.llm_gateway.protocol import GoalVector, LLMGatewayProtocol
     from mousedroid.telemetry.metrics import MetricsRegistry
 
@@ -169,7 +170,7 @@ class ToolRegistry:
             action="tool_dispatch",
             payload={"kwargs_keys": sorted(kwargs.keys())},
         )
-        decision = await gate.decide(request)  # type: ignore[attr-defined]
+        decision = await cast("ApprovalGateProtocol", gate).decide(request)
         if not decision.approved:
             _log.warning(
                 "tool_dispatch_denied",

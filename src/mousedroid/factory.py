@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from mousedroid.cloud.protocol import (
     ENGINE_TYPE_POLICY,
@@ -2423,7 +2423,7 @@ def _resolve_approval_callback(
         return _deny
 
     _log.info("approval_callback_resolved", dotted_path=dotted_path)
-    return target  # type: ignore[no-any-return]
+    return cast("Callable[[Any], Awaitable[bool]]", target)
 
 
 def build_approval_gate(cfg: Settings) -> ApprovalGateProtocol:

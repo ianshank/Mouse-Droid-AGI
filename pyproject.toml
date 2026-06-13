@@ -203,6 +203,12 @@ convention = "google"
 python_version = "3.10"
 strict = true
 ignore_missing_imports = true
+# The pydantic mypy plugin teaches strict mode that BaseModel/BaseSettings
+# subclasses with all-default fields are constructible with no arguments —
+# eliminating spurious [call-arg] errors at every ``SomeConfig()`` call site
+# (three_laws, mission_parser, laundry_rules, pipeline_orchestrator) without
+# per-call ``# type: ignore[call-arg]`` suppressions.
+plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
 module = [

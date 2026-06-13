@@ -27,7 +27,9 @@ _log = get_logger(__name__)
 
 _ort: Any
 try:
-    import onnxruntime as _ort  # type: ignore[no-redef]
+    import onnxruntime as _onnxruntime_mod
+
+    _ort = _onnxruntime_mod
 except ImportError:  # pragma: no cover
     _ort = None
 
