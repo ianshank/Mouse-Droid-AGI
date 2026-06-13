@@ -198,8 +198,15 @@ under the matching tier:
 | E2E | `tests/e2e/test_pr*_e2e.py` | Full request path through proxy / camera / driver chain |
 | Regression | `tests/regression/test_pr*_backwards_compat.py` | YAML / env / default-value invariants |
 | AQA | `tests/regression/test_pr*_aqa.py` | Schema-field hygiene + protocol conformance |
+| Property | `tests/property/` | Hypothesis-driven invariants over input space |
+| Performance | `tests/performance/` | Latency / throughput budget assertions |
 | Sanity | `tests/smoke/test_pr*_sanity.py` | Sub-second import + parse smoke |
 | Hardware | `tests/hardware/test_pr*_<surface>.py` | `@pytest.mark.hardware`-gated, runs on rover only |
+
+The **Property** (`tests/property/`) and **Performance** (`tests/performance/`)
+tiers already exist and run in `scripts/ci.sh` (property folds into the unit +
+property + integration coverage stage; performance runs as its own stage) — they
+are part of the mirror, not optional extras.
 
 The PR #104 test files are the reference implementations — copy their
 docstring style + skip-gate pattern (`tests/_jetson_hardware.is_jetson_host`)
@@ -460,6 +467,36 @@ Contracts:
   crash-loops. The bring-up runbook probes the ESP32 first and only keeps motors
   live if it responds; otherwise `MOUSEDROID_ESP32__ENABLED=false`. Operator
   runbook: `docs/runbooks/jetson-full-bringup.md`.
+
+## Operator Q&A + full backend telemetry (PR #118)
+
+The deliberative path gained an operator natural-language Q&A route, and the
+telemetry backend now surfaces the full sensor/LLM/served picture. As with every
+deliberative surface, the 30 Hz reactive loop stays LLM-free — Q&A runs OUTSIDE
+the hot loop through the same gateway + prompt-injection-filter envelope as
+mission translation, and answers are served on the unified dashboard.
+
+## Skill-validation surface (rover-hardening sprint)
+
+Two skill families are now validated, each pinned by its own test so neither can
+silently drift:
+
+- **`.claude/commands/*.md` (slash-command skills)** — `tools/validate_skill_commands.py`
+  is the reusable library + CLI. Per skill file it asserts the YAML front-matter
+  carries a non-empty `description`, every backtick-wrapped repo path it
+  references actually exists, and no hardcoded host/IP leaks in. Paths are
+  **discovered** from the body (never enumerated) and format/glob tokens
+  (`{}`, `*`, `$`, `<>`) are excluded so illustrative patterns like
+  `weights/arm/{task}_final.pt` are not false-flagged. The contract is pinned by
+  `tests/regression/test_skill_commands_aqa.py` (the PR gate — runs in the
+  regression stage) and mirrored as a fast local signal in `scripts/ci.sh`
+  (`tools/` is now in the `ruff check` / `ruff format --check` scope too).
+- **Builtin `SkillSpec` ↔ publishable doc pairing** — `tests/unit/skills/builtin/test_skill_specs_match_docs.py`
+  enforces the pairing the `src/mousedroid/skills/builtin/__init__.py` docstring
+  has long promised: every builtin spec has a `docs/openclaw_skills/<name>/SKILL.md`
+  whose H1 (`# <name>`) names the skill, and every published doc maps back to a
+  registered spec (no orphans). It asserts the H1, **not** YAML front-matter —
+  these publishable docs intentionally have none.
 
 See `AGENTS.md` (agentic-worker behavioural contract) and `SKILLS.md`
 (capability index keyed by trigger phrase) for additional context.

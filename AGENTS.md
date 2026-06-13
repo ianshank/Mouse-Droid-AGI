@@ -282,4 +282,31 @@ over ad-hoc commands:
    echoed.
 5. **No `assert` in inline shell-python** that runs under the Jetson
    `PYTHONOPTIMIZE=1` entrypoint — use explicit `if … raise RuntimeError(...)`.
+
+## Adding / maintaining a skill (rover-hardening discipline)
+
+When you add or edit a `.claude/commands/*.md` slash-command skill, it must
+pass the shared validator (`tools/validate_skill_commands.py`, pinned by
+`tests/regression/test_skill_commands_aqa.py`):
+
+1. **Carry a non-empty `description`** in the YAML front-matter — it is the
+   trigger surface and the validator flags an empty one.
+2. **Reference only paths that exist.** Every backtick-wrapped repo path the
+   body mentions (e.g. `config/robot_arm_training.yaml`,
+   `src/mousedroid/arm/control/sac_agent.py`) must resolve on disk. If you
+   mean an illustrative *pattern* rather than a real file, write it with a
+   format/glob metacharacter (`{}`, `*`, `$`, `<>`) so the validator skips it
+   — never point at a path that does not exist (the dead
+   `configs/hanoi_3disk.yaml` default in `train-policy.md` is exactly the rot
+   this catches).
+3. **No hardcoded host/IP** — skills stay environment-agnostic; pass hosts via
+   env/args as `tools/dashboard_proxy.py` does.
+4. **If the skill produces an artifact, add an e2e output check** under
+   `tests/e2e/` that runs the documented workflow and asserts on what it emits
+   (dep-gated with `pytest.importorskip(...)` when it needs optional extras).
+5. **Builtin OpenClaw skills** additionally require a publishable
+   `docs/openclaw_skills/<name>/SKILL.md` whose H1 names the skill — the
+   pairing is pinned by
+   `tests/unit/skills/builtin/test_skill_specs_match_docs.py`, which also
+   rejects orphaned docs.
    Inside pytest, plain `assert` is fine.
