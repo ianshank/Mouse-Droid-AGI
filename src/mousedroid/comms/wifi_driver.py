@@ -107,13 +107,13 @@ class WiFiESP32Driver(BaseESP32Driver):
         """
         url = f"{self._base_url}{path}"
         payload = json.dumps(data).encode()
-        req = urllib.request.Request(  # noqa: S310
+        req = urllib.request.Request(  # noqa: S310 — scheme is a fixed http:// literal (see _base_url)
             url,
             data=payload,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=self._timeout) as resp:  # noqa: S310
+        with urllib.request.urlopen(req, timeout=self._timeout) as resp:  # noqa: S310 — fixed http:// scheme
             body = resp.read().decode()
         if not body.strip():
             return {}
@@ -140,8 +140,8 @@ class WiFiESP32Driver(BaseESP32Driver):
             Parsed JSON response.
         """
         url = f"{self._base_url}{path}"
-        req = urllib.request.Request(url, method="GET")  # noqa: S310
-        with urllib.request.urlopen(req, timeout=self._timeout) as resp:  # noqa: S310
+        req = urllib.request.Request(url, method="GET")  # noqa: S310 — fixed http:// scheme (see _base_url)
+        with urllib.request.urlopen(req, timeout=self._timeout) as resp:  # noqa: S310 — fixed http:// scheme
             body = resp.read().decode()
         if not body.strip():
             return {}

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import torch.nn as nn
-import torch.nn.functional as F  # noqa: N812
+import torch.nn.functional as F  # noqa: N812 — canonical PyTorch alias for functional
 from torch import Tensor
 
 from mousedroid.logging.setup import get_logger

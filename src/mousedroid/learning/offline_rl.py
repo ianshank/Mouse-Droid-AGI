@@ -11,7 +11,7 @@ import abc
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F  # noqa: N812
+import torch.nn.functional as F  # noqa: N812 — canonical PyTorch alias for functional
 from torch import Tensor
 
 from mousedroid.constants import IQL_EXP_ADVANTAGE_CLAMP_MAX

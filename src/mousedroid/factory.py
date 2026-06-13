@@ -14,6 +14,7 @@ from mousedroid.cloud.protocol import (
     ENGINE_TYPE_POLICY,
     ENGINE_TYPE_WORLD_MODEL,
 )
+from mousedroid.common.imports import module_available
 from mousedroid.comms.protocol import ESP32CommProtocol
 from mousedroid.hardware.protocols import (
     AudioProtocol,
@@ -201,17 +202,15 @@ def build_camera(
 
         return IMX500Camera(cfg.camera, hailo_runtime=hailo_runtime)
 
-    # auto: try picamera2 first, fall back to jetson_csi
-    try:
-        from picamera2 import Picamera2  # noqa: F401
-
+    # auto: prefer picamera2 when its stack is installed, else fall back to jetson_csi
+    if module_available("picamera2"):
         from mousedroid.hardware.camera.imx500 import IMX500Camera
 
         return IMX500Camera(cfg.camera, hailo_runtime=hailo_runtime)
-    except ImportError:
-        from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
 
-        return JetsonCSICamera(cfg.camera, hailo_runtime=hailo_runtime)
+    from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
+
+    return JetsonCSICamera(cfg.camera, hailo_runtime=hailo_runtime)
 
 
 def build_distance_sensor(cfg: Settings) -> DistanceSensorProtocol:

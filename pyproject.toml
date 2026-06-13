@@ -190,6 +190,11 @@ ignore = ["D100", "D104", "D107", "D203", "D213", "S101", "ANN401", "TCH", "TC"]
 "src/mousedroid/harness/**/*.py" = ["D102", "D105"]
 "src/mousedroid/skills/**/*.py" = ["D102", "D105"]
 "src/mousedroid/arm/planning/llm_replanners/**/*.py" = ["D102"]
+# Hardware-diagnostics module shells out to fixed, PATH-resolved system tools
+# (lspci / lsblk / smartctl / findmnt), each guarded by ``shutil.which`` with a
+# constant argv list and no shell — S603 (untrusted input) and S607 (partial
+# path) are structurally inapplicable here.
+"src/mousedroid/validation/runtime.py" = ["S603", "S607"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

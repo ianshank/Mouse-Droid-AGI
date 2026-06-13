@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from numpy.typing import NDArray
 
+from mousedroid.common.imports import module_available
 from mousedroid.config.schema import RoverConfig
 from mousedroid.logging.setup import get_logger
 from mousedroid.sim.isaaclab.constants import (
@@ -69,11 +70,7 @@ class RoverEnvNotBuiltError(RuntimeError):
 
 def _isaaclab_available() -> bool:
     """Return ``True`` iff Isaac Lab can be imported in the current env."""
-    try:
-        import isaaclab  # noqa: F401
-    except ImportError:
-        return False
-    return True
+    return module_available("isaaclab")
 
 
 class RoverIsaacLabEnv:

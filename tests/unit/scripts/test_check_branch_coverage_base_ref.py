@@ -33,6 +33,26 @@ import pytest
 _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[3]
 _SCRIPT_PATH: Final[Path] = _REPO_ROOT / "scripts" / "check_branch_coverage.py"
 
+# Git location vars that, if inherited (e.g. from a ``git commit`` pre-commit
+# hook that runs this suite), would redirect both the throwaway sandbox repos
+# AND the script-under-test's own ``git`` calls at the host repo — breaking
+# ``git add``/``commit`` with exit 128 and corrupting candidate resolution.
+# The autouse fixture below scrubs them so every ``git`` call in this module
+# resolves purely from its ``cwd``.
+_LEAKED_GIT_ENV_VARS: Final[tuple[str, ...]] = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_from_inherited_git_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Drop inherited git-location env vars so sandbox repos stay isolated."""
+    for var in _LEAKED_GIT_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+
 
 # ---------------------------------------------------------------------------
 # Module-loading helper — import the script as a Python module so we can

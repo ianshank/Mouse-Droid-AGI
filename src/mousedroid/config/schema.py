@@ -505,7 +505,10 @@ class ExperienceConfig(BaseModel):
         description="LMDB map size (GB; fractional values allowed)",
     )
     flush_every_n: int = Field(30, gt=0, description="Flush after N records")
-    export_path: str = Field("/tmp/export", description="Default experience export path")  # noqa: S108
+    export_path: str = Field(
+        "/tmp/export",  # noqa: S108 — operator-overridable default path, not a temp-file write
+        description="Default experience export path",
+    )
     nvme_device: str = Field(
         "/dev/nvme0n1",
         description=(
@@ -1024,7 +1027,7 @@ class LoopConfig(BaseModel):
         description="Maximum interval between watchdog heartbeats (seconds)",
     )
     watchdog_heartbeat_path: str = Field(
-        "/tmp/mousedroid_heartbeat",  # noqa: S108
+        "/tmp/mousedroid_heartbeat",  # noqa: S108 — operator-overridable default, not a temp-file write
         # watchdog_mode 'file' or 'auto' fallback
         description="Path for file-based watchdog heartbeat",
     )
@@ -2258,7 +2261,7 @@ class TelemetryConfig(BaseModel):
         ),
     )
     host: str = Field(
-        "0.0.0.0",  # noqa: S104
+        "0.0.0.0",  # noqa: S104 — intentional all-interfaces default for the rover WiFi dashboard
         description="Server bind address (0.0.0.0 = all interfaces)",
     )
     port: int = Field(8080, gt=0, le=65535, description="Server port")

@@ -261,7 +261,7 @@ class RockyVoiceEngine:
 
         # Phrase selection is for personality, not security — random.choice
         # is fine here. S311 flags non-crypto random for sensitive contexts.
-        text = random.choice(phrases)  # noqa: S311
+        text = random.choice(phrases)  # noqa: S311 — cosmetic phrase pick, not security
 
         # Apply Rocky personality transform using context intensity
         intensity = context.get("valence", 1.0) if context else 1.0

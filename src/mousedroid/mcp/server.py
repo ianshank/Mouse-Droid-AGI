@@ -26,7 +26,7 @@ from mousedroid.common.async_utils import cancel_and_drain, spawn_tracked
 from mousedroid.logging.setup import get_logger
 from mousedroid.mcp.auth import BearerTokenValidator
 from mousedroid.mcp.prompts import default_prompts
-from mousedroid.mcp.protocol import MCPServerProtocol  # noqa: F401  - protocol re-export
+from mousedroid.mcp.protocol import MCPServerProtocol as MCPServerProtocol  # re-export
 from mousedroid.mcp.resources import (
     ConfigResourceProvider,
     LogResourceProvider,
