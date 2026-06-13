@@ -8,7 +8,7 @@ Train a reinforcement learning policy for the robot arm. Uses SAC+HER by default
 
 ## Arguments
 
-- `$ARGUMENTS` — config file path or training preset (default: `configs/hanoi_3disk.yaml`)
+- `$ARGUMENTS` — config file path or training preset (default: `config/robot_arm_training.yaml`)
 
 ## Workflow
 
