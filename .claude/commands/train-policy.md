@@ -34,6 +34,6 @@ Train a reinforcement learning policy for the robot arm. Uses SAC+HER by default
 
 ## Expected Output
 
-- Policy checkpoint: `weights/arm/{task}_{stage}_final.pt`
+- Policy checkpoint: `<weights_dir>/sac_her_checkpoint.zip` (Stable-Baselines3 archive written by `SACAgent.save()`; `weights_dir` comes from config, defaults under `weights/arm/`)
 - Training metrics logged to TensorBoard/WandB
 - Evaluation summary printed to console
