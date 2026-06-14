@@ -80,6 +80,22 @@ def test_parent_escaping_reference_is_flagged(tmp_path: Path) -> None:
     assert not any(i.code == "missing-path" for i in issues)
 
 
+def test_absolute_reference_is_flagged(tmp_path: Path) -> None:
+    # An absolute POSIX ref must be flagged ``non-relative-path`` explicitly —
+    # even if it happens to resolve inside the repo — and never host-probed.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    skill = _write(
+        repo / "bad.md",
+        "---\ndescription: d\n---\nReads `/etc/secret/config.yaml`.\n",
+    )
+    issues = validate_command_skill(skill, repo_root=repo)
+    assert any(
+        i.code == "non-relative-path" and i.detail == "/etc/secret/config.yaml" for i in issues
+    )
+    assert not any(i.code == "missing-path" for i in issues)
+
+
 def test_validate_all_missing_dir_is_handled(tmp_path: Path) -> None:
     # A non-existent commands dir yields a deterministic issue, not a crash or
     # a false "all valid" empty result.

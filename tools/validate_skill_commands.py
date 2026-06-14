@@ -107,10 +107,23 @@ def validate_command_skill(path: Path, *, repo_root: Path) -> list[SkillCommandI
     repo_root_resolved = repo_root.resolve()
     for ref in referenced_repo_paths(body):
         # Skill docs promise *repo-relative* references only. Reject absolute
-        # paths (``/etc/passwd``, ``C:\…``) and parent-escaping traversals
-        # (``../../x.py``) BEFORE probing the filesystem, so a `.exists()` check
-        # can never reach outside the repo tree.
-        candidate = (repo_root / ref).resolve()
+        # refs and parent-escaping traversals (``../../x.py``) BEFORE probing the
+        # filesystem, so a ``.exists()`` check can never reach outside the repo.
+        # An absolute POSIX ref (``/etc/passwd.yaml``) is flagged explicitly even
+        # if it happens to resolve inside the repo. (A Windows-drive ``C:\…``
+        # literal never reaches here: ``referenced_repo_paths`` only emits
+        # ``/``-containing tokens, so a backslash drive path is filtered out at
+        # tokenisation.)
+        if Path(ref).is_absolute():
+            issues.append(SkillCommandIssue(path, "non-relative-path", ref))
+            continue
+        try:
+            candidate = (repo_root / ref).resolve()
+        except (OSError, RuntimeError) as exc:
+            # Symlink loop (RuntimeError) / permission or OS error from a
+            # malformed or malicious ref must not crash the whole sweep.
+            issues.append(SkillCommandIssue(path, "invalid-path", f"{ref}: {exc}"))
+            continue
         if not candidate.is_relative_to(repo_root_resolved):
             issues.append(SkillCommandIssue(path, "non-relative-path", ref))
             continue
