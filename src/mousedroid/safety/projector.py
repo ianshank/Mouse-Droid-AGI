@@ -158,7 +158,7 @@ class GeometricSafetyProjector:
         # ``ndarray[..., np.float32]`` by the ``.astype(np.float32)`` /
         # ``np.float32(...)`` wrappers above. Casting at the return site
         # documents the invariant + lets ``mypy --strict`` pass without
-        # a module-wide ``# type: ignore``.
+        # a module-wide inline type suppression.
         result: NDArray[np.float32] = clamped
         return result
 

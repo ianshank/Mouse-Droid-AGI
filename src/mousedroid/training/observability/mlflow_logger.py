@@ -134,7 +134,7 @@ class MlflowExperimentLogger:
                 run_name=effective_name,
                 tags=tags or {},
             )
-        except Exception as exc:  # broad — never raise on backend failure  # noqa: BLE001, RUF100
+        except Exception as exc:  # broad: never raise on backend failure
             _log.warning(
                 "mlflow_logger_start_run_failed",
                 error_type=type(exc).__name__,
@@ -159,7 +159,7 @@ class MlflowExperimentLogger:
         for key, value in params.items():
             try:
                 self._client.log_param(self._active_run_id, key, value)
-            except Exception as exc:  # noqa: BLE001, RUF100
+            except Exception as exc:  # broad: never raise on backend failure
                 _log.warning(
                     "mlflow_logger_log_param_failed",
                     key=key,
@@ -183,7 +183,7 @@ class MlflowExperimentLogger:
             return  # to_finite_float already logged the skip
         try:
             self._client.log_metric(self._active_run_id, key, coerced, step=step)
-        except Exception as exc:  # noqa: BLE001, RUF100
+        except Exception as exc:  # broad: never raise on backend failure
             _log.warning(
                 "mlflow_logger_log_metric_failed",
                 key=key,
@@ -205,7 +205,7 @@ class MlflowExperimentLogger:
             return
         try:
             self._client.log_artifact(self._active_run_id, local_path)
-        except Exception as exc:  # noqa: BLE001, RUF100
+        except Exception as exc:  # broad: never raise on backend failure
             _log.warning(
                 "mlflow_logger_log_artifact_failed",
                 path=local_path,
@@ -232,7 +232,7 @@ class MlflowExperimentLogger:
             )
         try:
             self._client.set_terminated(self._active_run_id, status=normalised)
-        except Exception as exc:  # noqa: BLE001, RUF100
+        except Exception as exc:  # broad: never raise on backend failure
             _log.warning(
                 "mlflow_logger_end_run_failed",
                 error_type=type(exc).__name__,
@@ -274,7 +274,7 @@ class MlflowExperimentLogger:
                 run_name=phase,
                 tags=merged_tags,
             )
-        except Exception as exc:  # noqa: BLE001, RUF100
+        except Exception as exc:  # broad: never raise on backend failure
             _log.warning(
                 "mlflow_logger_start_phase_failed",
                 phase=phase,
@@ -286,7 +286,7 @@ class MlflowExperimentLogger:
             for key, value in params.items():
                 try:
                     self._client.log_param(run.info.run_id, key, value)
-                except Exception as exc:  # noqa: BLE001, RUF100
+                except Exception as exc:  # broad: never raise on backend failure
                     _log.warning(
                         "mlflow_logger_phase_param_failed",
                         phase=phase,
@@ -318,7 +318,7 @@ class MlflowExperimentLogger:
             return
         try:
             self._client.log_metric(ctx.run_id, key, coerced, step=step)
-        except Exception as exc:  # noqa: BLE001, RUF100
+        except Exception as exc:  # broad: never raise on backend failure
             _log.warning(
                 "mlflow_logger_log_phase_metric_failed",
                 phase=ctx.phase,
@@ -341,7 +341,7 @@ class MlflowExperimentLogger:
             return
         try:
             self._client.log_artifact(ctx.run_id, local_path)
-        except Exception as exc:  # noqa: BLE001, RUF100
+        except Exception as exc:  # broad: never raise on backend failure
             _log.warning(
                 "mlflow_logger_log_phase_artifact_failed",
                 phase=ctx.phase,
@@ -369,7 +369,7 @@ class MlflowExperimentLogger:
             )
         try:
             self._client.set_terminated(ctx.run_id, status=normalised)
-        except Exception as exc:  # noqa: BLE001, RUF100
+        except Exception as exc:  # broad: never raise on backend failure
             _log.warning(
                 "mlflow_logger_end_phase_failed",
                 phase=ctx.phase,

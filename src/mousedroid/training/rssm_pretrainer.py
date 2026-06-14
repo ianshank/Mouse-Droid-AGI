@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import torch
+from torch.amp.grad_scaler import GradScaler
 
 from mousedroid.logging.setup import get_logger
 from mousedroid.training.sim_episode_generator import EpisodeBatch
@@ -56,8 +57,9 @@ class RSSMPretrainer:
         self._grad_clip = grad_clip
         self._amp = amp and device.type == "cuda"
         # torch.amp.GradScaler is the non-deprecated API but is not re-exported
-        # in torch's __all__, so mypy flags attr-defined; the runtime symbol exists.
-        self._scaler = torch.amp.GradScaler(enabled=self._amp)  # type: ignore[attr-defined]
+        # in torch.amp's __all__ (mypy attr-defined). Import the implementation
+        # submodule directly — runtime-valid AND mypy-clean, so no suppression.
+        self._scaler = GradScaler(enabled=self._amp)
         self._device = device
 
     def _to_device(self, batch: EpisodeBatch) -> dict[str, torch.Tensor]:
