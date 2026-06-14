@@ -730,6 +730,17 @@ class OnDeviceLearningConfig(BaseModel):
             "on-device update cycle is triggered"
         ),
     )
+    check_interval_s: float = Field(
+        300.0,
+        gt=0,
+        description=(
+            "Slow-cadence period (seconds) between replay-trigger checks. The "
+            "on-device update runs on its own background task OUTSIDE the 30 Hz "
+            "hot loop; this is how often the coordinator probes the new-record "
+            "count against ``trigger_min_new_records``. Defaults to 5 min so a "
+            "default-on deployment never busy-polls the replay store."
+        ),
+    )
     update_steps: int = Field(
         50,
         gt=0,
