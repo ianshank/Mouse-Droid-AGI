@@ -130,9 +130,7 @@ async def test_greet_honours_inter_chirp_delay() -> None:
 
     await engine.start()
     try:
-        with patch(
-            "mousedroid.voice.greeting.asyncio.sleep", new_callable=AsyncMock
-        ) as sleep_spy:
+        with patch("mousedroid.voice.greeting.asyncio.sleep", new_callable=AsyncMock) as sleep_spy:
             await greeter.greet()
     finally:
         await engine.stop()
