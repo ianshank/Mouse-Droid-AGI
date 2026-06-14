@@ -7,6 +7,7 @@ from pathlib import Path
 
 from tools.validate_skill_commands import (
     referenced_repo_paths,
+    validate_all,
     validate_command_skill,
 )
 
@@ -60,3 +61,65 @@ def test_hardcoded_ipv4_is_flagged(tmp_path: Path) -> None:
     )
     issues = validate_command_skill(skill, repo_root=tmp_path)
     assert any(i.code == "hardcoded-host" and i.detail == "192.168.1.5" for i in issues)
+
+
+def test_parent_escaping_reference_is_flagged(tmp_path: Path) -> None:
+    # A ``..`` traversal that escapes the repo root must be flagged as
+    # ``non-relative-path`` rather than silently probed on the host FS.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    skill = _write(
+        repo / "bad.md",
+        "---\ndescription: d\n---\nReads `../../etc/passwd.yaml`.\n",
+    )
+    issues = validate_command_skill(skill, repo_root=repo)
+    assert any(
+        i.code == "non-relative-path" and i.detail == "../../etc/passwd.yaml" for i in issues
+    )
+    # And it must NOT be reported as a (host-probed) missing-path.
+    assert not any(i.code == "missing-path" for i in issues)
+
+
+def test_absolute_reference_is_flagged(tmp_path: Path) -> None:
+    # An absolute POSIX ref must be flagged ``non-relative-path`` explicitly —
+    # even if it happens to resolve inside the repo — and never host-probed.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    skill = _write(
+        repo / "bad.md",
+        "---\ndescription: d\n---\nReads `/etc/secret/config.yaml`.\n",
+    )
+    issues = validate_command_skill(skill, repo_root=repo)
+    assert any(
+        i.code == "non-relative-path" and i.detail == "/etc/secret/config.yaml" for i in issues
+    )
+    assert not any(i.code == "missing-path" for i in issues)
+
+
+def test_validate_all_missing_dir_is_handled(tmp_path: Path) -> None:
+    # A non-existent commands dir yields a deterministic issue, not a crash or
+    # a false "all valid" empty result.
+    missing = tmp_path / "nope"
+    issues = validate_all(missing, repo_root=tmp_path)
+    assert [i.code for i in issues] == ["missing-commands-dir"]
+
+
+def test_non_utf8_file_is_reported_not_raised(tmp_path: Path) -> None:
+    # A skill file that is not valid UTF-8 must surface as an ``unreadable``
+    # issue, not crash the sweep with UnicodeDecodeError.
+    bad = tmp_path / "bad.md"
+    bad.write_bytes(b"\xff\xfe not utf-8 \x80\x81")
+    issues = validate_command_skill(bad, repo_root=tmp_path)
+    assert [i.code for i in issues] == ["unreadable"]
+
+
+def test_validate_all_skips_unreadable_without_aborting(tmp_path: Path) -> None:
+    # One corrupt file must not prevent the rest of the dir from validating.
+    _write(
+        tmp_path / "good.md",
+        "---\ndescription: ok\n---\nNo refs here.\n",
+    )
+    (tmp_path / "bad.md").write_bytes(b"\xff\xfe\x80")
+    issues = validate_all(tmp_path, repo_root=tmp_path)
+    codes = [i.code for i in issues]
+    assert codes == ["unreadable"]  # good.md produced zero issues

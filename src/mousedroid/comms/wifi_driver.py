@@ -114,10 +114,12 @@ class WiFiESP32Driver(BaseESP32Driver):
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=self._timeout) as resp:  # noqa: S310 — fixed http:// scheme
-            body = resp.read().decode()
-        if not body.strip():
-            return {}
-        return cast("dict[str, Any]", json.loads(body))
+            # errors="replace": a garbled byte (firmware churn / brown-out) must
+            # never raise UnicodeDecodeError out of the asyncio.to_thread wrapper;
+            # the replacement char flows into the JSON guard below. Mirrors the
+            # serial driver's decode hygiene.
+            body = resp.read().decode(errors="replace")
+        return self._decode_json_object(body, path=path)
 
     async def _get_json(self, path: str) -> dict[str, Any]:
         """HTTP GET JSON from ESP32.
@@ -142,7 +144,51 @@ class WiFiESP32Driver(BaseESP32Driver):
         url = f"{self._base_url}{path}"
         req = urllib.request.Request(url, method="GET")  # noqa: S310 — fixed http:// scheme (see _base_url)
         with urllib.request.urlopen(req, timeout=self._timeout) as resp:  # noqa: S310 — fixed http:// scheme
-            body = resp.read().decode()
+            # errors="replace": see _blocking_post — never raise out of to_thread.
+            body = resp.read().decode(errors="replace")
+        return self._decode_json_object(body, path=path)
+
+    def _decode_json_object(self, body: str, *, path: str) -> dict[str, Any]:
+        """Parse ``body`` as a JSON object, guarding against degraded payloads.
+
+        The ESP32 firmware is contracted to return JSON objects, but a brown-out
+        or firmware-churn response could be (a) non-JSON bytes (truncated frame,
+        an HTTP error page, UART noise) or (b) a syntactically-valid but
+        non-mapping shape (bare list/string/number). Both are degraded conditions
+        that must NOT surface as a raw ``json.JSONDecodeError`` out of the
+        ``asyncio.to_thread`` wrapper, nor as a non-mapping returned to callers
+        expecting ``dict`` semantics (which would manifest later as a confusing
+        ``AttributeError``/``KeyError``). Instead we log a structured warning and
+        return an empty mapping (the same shape used for an empty body) so the
+        protocol layer degrades gracefully — mirroring the serial driver's
+        ``esp32_non_json_response`` / ``esp32_response_not_object`` contract.
+
+        Args:
+            body: Raw decoded HTTP response body.
+            path: URL path the body came from (for log context).
+
+        Returns:
+            The parsed JSON object, or ``{}`` for an empty/malformed/non-object
+            payload.
+        """
         if not body.strip():
             return {}
-        return cast("dict[str, Any]", json.loads(body))
+        truncate = self._cfg.debug_log_max_chars
+        try:
+            decoded = json.loads(body)
+        except json.JSONDecodeError as exc:
+            _log.warning(
+                "wifi_esp32_non_json_response",
+                path=path,
+                body=body[:truncate],
+                error=str(exc),
+            )
+            return {}
+        if isinstance(decoded, dict):
+            return cast("dict[str, Any]", decoded)
+        _log.warning(
+            "wifi_esp32_unexpected_json_shape",
+            path=path,
+            shape=type(decoded).__name__,
+        )
+        return {}

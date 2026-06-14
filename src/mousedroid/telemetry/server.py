@@ -302,7 +302,7 @@ class TelemetryServer:
             # aiohttp's stubs, but only the concrete asyncio.Server has
             # ``.sockets``. Using ``getattr`` with a default keeps both
             # old mypy (would flag union-attr) and new mypy (would flag
-            # an unused ``# type: ignore``) happy without sacrificing
+            # an unused inline type suppression) happy without sacrificing
             # the runtime contract.
             sockets = getattr(site._server, "sockets", None)
             self._bound_port = sockets[0].getsockname()[1] if sockets else self._cfg.port

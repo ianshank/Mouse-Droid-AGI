@@ -169,6 +169,18 @@ jobs:
                     --cov-fail-under=${{ env.MINIMUM_COVERAGE }} \
                     -x
 
+            # Regression + E2E tiers are NOT coverage-gated (they mirror the
+            # separate, no-coverage invocations in scripts/ci.sh) but MUST run in
+            # CI — they hold the suppression-budget / numpy-hygiene / skill-output
+            # contracts. The marker filter skips hardware (rover-only) and slow
+            # (arm-extras) tests on the runner, which has no `[arm]` extras; the
+            # arm e2e tests then `importorskip("mujoco")` and skip cleanly.
+            - name: Run regression + e2e tiers
+              run: |
+                  pytest tests/regression tests/e2e \
+                    -m "not hardware and not slow" \
+                    -v --tb=short --no-cov
+
             - name: Upload coverage
               if: matrix.python-version == '3.11'
               uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

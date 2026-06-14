@@ -16,7 +16,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from mousedroid.common.imports import module_available
+from mousedroid.common.imports import module_importable
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
@@ -24,8 +24,12 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
-# Probe torch2trt availability at module level; concrete classes handle absence.
-_TORCH2TRT_AVAILABLE: bool = module_available("torch2trt")
+# Probe torch2trt at module level via a *real* guarded import: the positive
+# branch of ``_compile_sync`` does ``import torch2trt`` and uses it, so a
+# spec-present-but-import-fails install (e.g. a torch2trt built against a
+# different TensorRT ABI) must resolve to the JIT-trace fallback, not crash at
+# compile time. Spec-only probing (``module_available``) would skip the fallback.
+_TORCH2TRT_AVAILABLE: bool = module_importable("torch2trt")
 
 
 @runtime_checkable

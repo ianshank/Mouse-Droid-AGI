@@ -79,7 +79,7 @@ def test_train_policy_skill_emits_checkpoint(tmp_path: Path) -> None:
     from mousedroid.factory import build_arm_environment
     from mousedroid.validation.runtime import load_runtime_settings
 
-    cfg = load_runtime_settings(["config/robot_arm_training.yaml"])
+    cfg = load_runtime_settings([str(_REPO_ROOT / "config/robot_arm_training.yaml")])
     assert cfg.arm is not None, "arm config must load from YAML, not env"
     assert cfg.arm_training is not None, "arm_training config must load from YAML"
 

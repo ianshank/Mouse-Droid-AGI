@@ -79,8 +79,16 @@ def _split_front_matter(text: str) -> tuple[dict[str, object] | None, str]:
 
 
 def validate_command_skill(path: Path, *, repo_root: Path) -> list[SkillCommandIssue]:
-    """Validate one skill file; return a list of issues (empty == valid)."""
-    text = path.read_text(encoding="utf-8")
+    """Validate one skill file; return a list of issues (empty == valid).
+
+    A file that is not valid UTF-8 yields a single ``unreadable`` issue rather
+    than raising ``UnicodeDecodeError`` — one corrupt skill must not abort the
+    whole ``validate_all`` sweep (and the caller gets an actionable signal).
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError) as exc:
+        return [SkillCommandIssue(path, "unreadable", str(exc))]
     issues: list[SkillCommandIssue] = []
 
     meta, body = _split_front_matter(text)
@@ -96,8 +104,30 @@ def validate_command_skill(path: Path, *, repo_root: Path) -> list[SkillCommandI
             SkillCommandIssue(path, "missing-description", "front-matter 'description' is empty")
         )
 
+    repo_root_resolved = repo_root.resolve()
     for ref in referenced_repo_paths(body):
-        if not (repo_root / ref).exists():
+        # Skill docs promise *repo-relative* references only. Reject absolute
+        # refs and parent-escaping traversals (``../../x.py``) BEFORE probing the
+        # filesystem, so a ``.exists()`` check can never reach outside the repo.
+        # An absolute POSIX ref (``/etc/passwd.yaml``) is flagged explicitly even
+        # if it happens to resolve inside the repo. (A Windows-drive ``C:\…``
+        # literal never reaches here: ``referenced_repo_paths`` only emits
+        # ``/``-containing tokens, so a backslash drive path is filtered out at
+        # tokenisation.)
+        if Path(ref).is_absolute():
+            issues.append(SkillCommandIssue(path, "non-relative-path", ref))
+            continue
+        try:
+            candidate = (repo_root / ref).resolve()
+        except (OSError, RuntimeError) as exc:
+            # Symlink loop (RuntimeError) / permission or OS error from a
+            # malformed or malicious ref must not crash the whole sweep.
+            issues.append(SkillCommandIssue(path, "invalid-path", f"{ref}: {exc}"))
+            continue
+        if not candidate.is_relative_to(repo_root_resolved):
+            issues.append(SkillCommandIssue(path, "non-relative-path", ref))
+            continue
+        if not candidate.exists():
             issues.append(SkillCommandIssue(path, "missing-path", ref))
 
     for host in _HARDCODED_HOST_RE.findall(body):
@@ -107,8 +137,15 @@ def validate_command_skill(path: Path, *, repo_root: Path) -> list[SkillCommandI
 
 
 def validate_all(commands_dir: Path, *, repo_root: Path) -> list[SkillCommandIssue]:
-    """Validate every ``*.md`` skill in ``commands_dir``."""
+    """Validate every ``*.md`` skill in ``commands_dir``.
+
+    A missing/renamed ``commands_dir`` yields a single ``missing-commands-dir``
+    issue instead of relying on ``glob``'s silent empty result — the caller gets
+    a deterministic, actionable signal rather than a false "all valid".
+    """
     issues: list[SkillCommandIssue] = []
+    if not commands_dir.is_dir():
+        return [SkillCommandIssue(commands_dir, "missing-commands-dir", str(commands_dir))]
     for md in sorted(commands_dir.glob("*.md")):
         issues.extend(validate_command_skill(md, repo_root=repo_root))
     return issues

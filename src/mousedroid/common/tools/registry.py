@@ -460,6 +460,11 @@ async def _lidar_diagnostics() -> dict[str, str]:
     Returns:
         LiDAR diagnostic status including pyserial availability.
     """
+    # pyserial is pure-Python (no native deps): a discoverable spec reliably
+    # imports, and this diagnostic does NOT import/use ``serial`` here — it only
+    # reports availability. Spec-only probing is correct and avoids importing the
+    # transport just to answer a diagnostic; the driver re-imports under its own
+    # guard when it actually opens the port.
     if not module_available("serial"):
         return {"status": "pyserial_not_installed"}
 
