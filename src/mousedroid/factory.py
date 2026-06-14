@@ -83,7 +83,7 @@ if TYPE_CHECKING:
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
     from mousedroid.training.observability import ExperimentLoggerProtocol
     from mousedroid.training.replay import ReplayReaderProtocol
-    from mousedroid.voice.greeting import Greeter
+    from mousedroid.voice.greeting import Greeter, GreeterProtocol
     from mousedroid.voice.mock_tts import MockTTS
     from mousedroid.voice.tts import PiperTTS
     from mousedroid.world_model.protocol import WorldModelProtocol
@@ -456,6 +456,41 @@ def build_greeter(
         intensity_threshold=intensity_threshold,
     )
     return Greeter(engine, cfg.greeting, intensity_threshold=intensity_threshold)
+
+
+def _build_orchestrator_greeter(
+    cfg: Settings,
+    voice_engine: VoiceEngineProtocol | None,
+) -> GreeterProtocol | None:
+    """Wire the startup greeter onto the orchestrator (Issue #109).
+
+    Returns a :class:`Greeter` when ``cfg.greeting`` is enabled AND a
+    voice engine is available, reusing the orchestrator's already-built
+    ``voice_engine`` so a single engine instance serves both the greeting
+    one-shot and the normal voice output (no competing start/stop). The
+    orchestrator owns that engine's lifecycle.
+
+    Returns ``None`` — never raises — when greeting is unconfigured /
+    disabled or no voice engine was built, so this helper is safe to call
+    unconditionally from ``build_orchestrator``. (``build_greeter`` raises
+    on misconfiguration because it is the operator-tools entry point; the
+    orchestrator path is wiring, where a ``None`` cleanly disables the
+    seam.)
+
+    Args:
+        cfg: Root settings.
+        voice_engine: The orchestrator's voice engine (or ``None`` when
+            ``cfg.voice.enabled`` is ``False``).
+
+    Returns:
+        A :class:`Greeter` conforming to :class:`GreeterProtocol`, or
+        ``None``.
+    """
+    if cfg.greeting is None or not cfg.greeting.enabled or voice_engine is None:
+        return None
+    greeter = build_greeter(cfg, voice_engine=voice_engine)
+    _log.info("orchestrator_startup_greeter_wired", fire_on_startup=cfg.greeting.fire_on_startup)
+    return greeter
 
 
 def build_voice_engine(
@@ -3133,6 +3168,11 @@ def build_orchestrator(cfg: Settings) -> object:
     speaker = build_speaker(cfg)
     voice_engine = build_voice_engine(cfg, speaker=speaker)
 
+    # Issue #109 — one-shot startup greeter (None unless cfg.greeting is
+    # enabled). Reuses the orchestrator's own voice engine so a single
+    # engine serves both the greeting and normal voice output.
+    startup_greeter = _build_orchestrator_greeter(cfg, voice_engine)
+
     # Face display (optional — disabled by default)
     face_display = build_face_display(cfg)
     face_controller = build_face_controller(cfg, face_display)
@@ -3261,6 +3301,7 @@ def build_orchestrator(cfg: Settings) -> object:
         weight_update_loader=weight_update_loader,
         safety_projector=safety_projector,
         mission_lifecycle=mission_lifecycle,
+        greeter=startup_greeter,
     )
     # Bind the deferred orchestrator reference so the OpenClaw mission
     # dispatcher (built before the orchestrator above) can route through
