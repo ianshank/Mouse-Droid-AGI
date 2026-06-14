@@ -848,6 +848,65 @@ class OnDeviceLearningConfig(BaseModel):
             "reproducible. Config-driven so no seed is hardcoded."
         ),
     )
+    enable_hot_swap: bool = Field(
+        False,
+        description=(
+            "Phase-6 ENABLEMENT: master switch for hot-swapping a promoted "
+            "on-device candidate into the live world model through the C1 atomic-"
+            "swap seam. Promotion (``slot_store.mark_active``) stays SEPARATE from "
+            "activation: a candidate can pass the regression gate and be marked "
+            "active without ever being swapped into the running model. Default "
+            "``False`` keeps the orchestrator byte-identical to #134 — no swap ever "
+            "occurs. Requires ``enabled=True`` (validated below)."
+        ),
+    )
+    seed_state_source: Literal["sampled", "replay_encoded"] = Field(
+        "sampled",
+        description=(
+            "Phase-6 ENABLEMENT: how the regression gate's fixed seed-states are "
+            "produced. ``sampled`` (default) keeps the #134 ``manual_seed`` latent-"
+            "sampling path byte-identical; ``replay_encoded`` grounds the seed-"
+            "states by encoding a held-out replay slice through the live world model "
+            "(WS-E1). Config-driven so the source is never hardcoded."
+        ),
+    )
+    refine_sequence_length: int = Field(
+        16,
+        gt=0,
+        description=(
+            "Phase-6 ENABLEMENT: temporal length T of each ``(B, T, ...)`` sequence "
+            "the RSSM refiner assembles from replay for ``train_sequence`` (WS-E2). "
+            "Config-driven so the refinement window is never hardcoded."
+        ),
+    )
+    refine_batch_episodes: int = Field(
+        4,
+        gt=0,
+        description=(
+            "Phase-6 ENABLEMENT: batch dimension B (number of replay episodes) per "
+            "RSSM-refinement sequence batch (WS-E2). Config-driven so the batch "
+            "size is never hardcoded."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _require_enabled_for_hot_swap(self) -> OnDeviceLearningConfig:
+        """Reject ``enable_hot_swap=True`` while the master switch is off.
+
+        Hot-swapping a candidate into the live model is meaningless unless the
+        on-device learning loop that PRODUCES candidates is itself enabled.
+        Catching the contradiction at YAML load gives the operator a clear,
+        actionable message instead of a silently inert hot-swap flag. Mirrors the
+        cross-field gate style of ``_require_endpoints_when_enabled``.
+        """
+        if self.enable_hot_swap and not self.enabled:
+            msg = (
+                "on_device_learning.enable_hot_swap=true requires "
+                "on_device_learning.enabled=true (hot-swap activates a candidate "
+                "the disabled learning loop never produces)"
+            )
+            raise ValueError(msg)
+        return self
 
 
 class LLMConfig(BaseModel):

@@ -102,6 +102,57 @@ def test_learning_rate_must_be_positive(bad: float) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# WS-E0 enablement fields (additive, all defaulted)
+# --------------------------------------------------------------------------- #
+def test_ws_e0_fields_default_to_off_and_safe() -> None:
+    """The four enablement fields default to the byte-identical #134 behaviour."""
+    cfg = OnDeviceLearningConfig()
+    assert cfg.enable_hot_swap is False
+    assert cfg.seed_state_source == "sampled"
+    assert cfg.refine_sequence_length == 16
+    assert cfg.refine_batch_episodes == 4
+
+
+def test_enable_hot_swap_requires_enabled() -> None:
+    """Hot-swap without the master switch is an operator-actionable config error."""
+    with pytest.raises(ValidationError):
+        OnDeviceLearningConfig(enable_hot_swap=True, enabled=False)
+
+
+def test_enable_hot_swap_with_enabled_is_accepted() -> None:
+    """Hot-swap is permitted once the master switch is on."""
+    cfg = OnDeviceLearningConfig(enable_hot_swap=True, enabled=True)
+    assert cfg.enable_hot_swap is True
+    assert cfg.enabled is True
+
+
+def test_seed_state_source_rejects_out_of_literal() -> None:
+    """seed_state_source is a validated Literal — an unknown value is rejected."""
+    with pytest.raises(ValidationError):
+        OnDeviceLearningConfig(seed_state_source="bogus")
+
+
+def test_seed_state_source_accepts_both_literal_values() -> None:
+    assert OnDeviceLearningConfig(seed_state_source="sampled").seed_state_source == "sampled"
+    assert (
+        OnDeviceLearningConfig(seed_state_source="replay_encoded").seed_state_source
+        == "replay_encoded"
+    )
+
+
+@pytest.mark.parametrize("bad", [0, -1])
+def test_refine_sequence_length_must_be_positive(bad: int) -> None:
+    with pytest.raises(ValidationError):
+        OnDeviceLearningConfig(refine_sequence_length=bad)
+
+
+@pytest.mark.parametrize("bad", [0, -2])
+def test_refine_batch_episodes_must_be_positive(bad: int) -> None:
+    with pytest.raises(ValidationError):
+        OnDeviceLearningConfig(refine_batch_episodes=bad)
+
+
+# --------------------------------------------------------------------------- #
 # Field hygiene
 # --------------------------------------------------------------------------- #
 def test_every_field_has_a_description() -> None:

@@ -67,3 +67,99 @@ def test_build_coordinator_returns_coordinator_when_enabled(tmp_path: Path) -> N
     coordinator = build_on_device_coordinator(cfg)
 
     assert coordinator is not None
+
+
+# --------------------------------------------------------------------------- #
+# WS-E0: thread the LIVE world model into the gate
+# --------------------------------------------------------------------------- #
+def _extract_gate(coordinator: object) -> object:
+    """Pull the ``RegressionGate`` the gate-runner closure closes over.
+
+    The gate-runner is a closure over the ``RegressionGate`` instance; the cell
+    index is an implementation detail, so locate the cell holding a gate by its
+    ``_world_model`` attribute rather than a fixed position.
+    """
+    from mousedroid.learning.on_device.regression_gate import RegressionGate
+
+    runner = coordinator._gate_runner  # type: ignore[attr-defined]
+    for cell in runner.__closure__ or ():
+        contents = cell.cell_contents
+        if isinstance(contents, RegressionGate):
+            return contents
+    raise AssertionError("gate runner closure does not hold a RegressionGate")
+
+
+def _enabled_cfg(tmp_path: Path) -> Settings:
+    return Settings.model_validate(
+        {
+            "mock_hardware": True,
+            "experience": {"path": str(tmp_path / "root"), "map_size_gb": 0.01},
+            "on_device_learning": {"enabled": True, "trigger_min_new_records": 5},
+        }
+    )
+
+
+def test_coordinator_uses_injected_world_model(tmp_path: Path) -> None:
+    """When a live world model is injected, the gate scores against THAT model."""
+    from mousedroid.factory import build_world_model
+
+    cfg = _enabled_cfg(tmp_path)
+    wm = build_world_model(cfg)
+
+    coordinator = build_on_device_coordinator(cfg, world_model=wm)
+
+    assert coordinator is not None
+    # The gate runner closes over the gate, which holds the injected world model.
+    gate = _extract_gate(coordinator)
+    assert gate._world_model is wm
+
+
+def test_coordinator_builds_world_model_when_none(tmp_path: Path) -> None:
+    """``world_model=None`` builds a working gate via ``build_world_model(cfg)``."""
+    cfg = _enabled_cfg(tmp_path)
+
+    coordinator = build_on_device_coordinator(cfg, world_model=None)
+
+    assert coordinator is not None
+    gate = _extract_gate(coordinator)
+    # A real world model conforming to WorldModelProtocol was constructed.
+    assert gate._world_model is not None
+    assert hasattr(gate._world_model, "imagine_step")
+
+
+def test_gate_does_not_construct_bare_rssm_literal(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """WS-E0 fix: the gate never constructs ``RSSM(cfg.model)`` directly.
+
+    The pre-WS-E0 code built a fresh ``RSSM(cfg.model)`` in the gate runner,
+    divorced from the live model (a DualStreamRSSM-arch bug). Threading the
+    live model (or ``build_world_model(cfg)``) must replace that literal — so
+    constructing the gate must NOT call ``RSSM.__init__`` directly.
+    """
+    import mousedroid.world_model.rssm as rssm_mod
+
+    cfg = _enabled_cfg(cfg_tmp := tmp_path)
+    assert cfg_tmp is not None
+
+    calls: list[int] = []
+    real_init = rssm_mod.RSSM.__init__
+
+    def _spy_init(self: object, *args: object, **kwargs: object) -> None:
+        calls.append(1)
+        real_init(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(rssm_mod.RSSM, "__init__", _spy_init)
+
+    # Inject a live world model so the gate has no excuse to build its own RSSM.
+    from mousedroid.factory import build_world_model
+
+    # Build the WM BEFORE installing the spy so only gate-internal construction
+    # would register.
+    monkeypatch.undo()
+    wm = build_world_model(cfg)
+    monkeypatch.setattr(rssm_mod.RSSM, "__init__", _spy_init)
+    calls.clear()
+
+    coordinator = build_on_device_coordinator(cfg, world_model=wm)
+
+    assert coordinator is not None
+    assert calls == [], "gate runner must NOT construct a bare RSSM(cfg.model) literal"

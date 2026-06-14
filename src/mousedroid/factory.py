@@ -3006,7 +3006,10 @@ def build_hook_registry(cfg: Settings, journal: Any) -> Any:
 
 
 def build_on_device_coordinator(
-    cfg: Settings, *, metrics: MetricsRegistry | None = None
+    cfg: Settings,
+    *,
+    metrics: MetricsRegistry | None = None,
+    world_model: WorldModelProtocol | None = None,
 ) -> object | None:
     """Build the Phase-6 WS3/WS4 replay-trigger on-device update coordinator.
 
@@ -3029,6 +3032,13 @@ def build_on_device_coordinator(
         metrics: Optional shared metrics registry, threaded keyword-only so the
             WS4 revert counter surfaces on ``/metrics``. ``None`` (the default)
             keeps the revert path working without recording a metric.
+        world_model: Optional live world model (the orchestrator's already-built
+            ``build_world_model(cfg)`` result), threaded keyword-only so the gate
+            scores against the REAL model architecture (``RSSM`` or
+            ``DualStreamRSSM`` per ``cfg.model.cfc_hidden_dim``). ``None`` (the
+            default) keeps #134 behaviour but the gate builds its own model via
+            ``build_world_model(cfg)`` rather than the old wrong-arch
+            ``RSSM(cfg.model)`` literal.
 
     Returns:
         A ``ReplayTriggerCoordinator`` when enabled, else ``None``.
@@ -3072,7 +3082,9 @@ def build_on_device_coordinator(
         """Materialise one training batch tensor from replay vision-features."""
         return _load_replay_batch(reader, input_dim, cap)
 
-    gate_runner = _build_on_device_gate_runner(cfg, slot_store=slot_store, metrics=metrics)
+    gate_runner = _build_on_device_gate_runner(
+        cfg, slot_store=slot_store, metrics=metrics, world_model=world_model
+    )
 
     return ReplayTriggerCoordinator(
         cfg=on_device_cfg,
@@ -3089,23 +3101,34 @@ def _build_on_device_gate_runner(
     *,
     slot_store: OnDeviceSlotStore,
     metrics: MetricsRegistry | None,
+    world_model: WorldModelProtocol | None = None,
 ) -> Callable[[CandidateSlot], None]:
     """Build the WS4 safety-regression gate-runner closure.
 
-    Constructs the REUSED world model, a deterministic set of seed states (count
-    driven by ``held_out_fraction`` so the gate honours the held-out-slice knob)
-    and a config-sized policy STAND-IN, then returns a closure that scores a
-    persisted candidate slot vs the live baseline and promotes-or-reverts it.
+    Uses the LIVE world model (passed in by the orchestrator) — or, when
+    ``None``, the one ``build_world_model(cfg)`` would construct — so the gate
+    scores against the REAL model architecture (``RSSM`` or ``DualStreamRSSM``
+    per ``cfg.model.cfc_hidden_dim``). This replaces the pre-ENABLEMENT
+    ``RSSM(cfg.model)`` literal, which was divorced from the live model and
+    wrong-arch whenever the deployment ran a ``DualStreamRSSM``. Then builds a
+    deterministic set of seed states (count driven by ``held_out_fraction`` so
+    the gate honours the held-out-slice knob) and a config-sized policy
+    STAND-IN, and returns a closure that scores a persisted candidate slot vs
+    the live baseline and promotes-or-reverts it.
 
-    The candidate vs baseline distinction is the WS5 seam: today both adapters
-    wrap the same stand-in policy net (so the end-to-end gate path runs now), and
-    WS5 will load the persisted slot's weights into the candidate adapter and the
-    live policy into the baseline adapter behind the SAME :class:`PolicyProtocol`.
+    The candidate vs baseline distinction is the WS-E2/E3 seam: today both
+    adapters wrap the same stand-in policy net (so the end-to-end gate path runs
+    now), and later WS load the persisted slot's weights into the candidate
+    adapter and the live policy into the baseline adapter behind the SAME
+    :class:`PolicyProtocol`.
 
     Args:
         cfg: Root settings.
         slot_store: The slot store whose ``mark_active`` is called on PROMOTE.
         metrics: Optional revert counter.
+        world_model: The live world model to score against; ``None`` (default)
+            falls back to ``build_world_model(cfg)`` so the gate still uses the
+            real configured architecture, never a bare ``RSSM(cfg.model)``.
 
     Returns:
         A ``(CandidateSlot) -> None`` closure invoked by the coordinator after
@@ -3116,7 +3139,6 @@ def _build_on_device_gate_runner(
 
     from mousedroid.learning.on_device.regression_gate import RegressionGate
     from mousedroid.learning.on_device.scoring import StateDictPolicyAdapter
-    from mousedroid.world_model.rssm import RSSM
 
     on_device_cfg = cfg.on_device_learning
     if on_device_cfg is None:
@@ -3124,8 +3146,14 @@ def _build_on_device_gate_runner(
         msg = "on_device_learning config required to build the WS4 gate runner"
         raise ValueError(msg)
 
-    world_model = RSSM(cfg.model)
-    world_model.eval()
+    # Use the live world model when threaded through; otherwise construct the
+    # SAME architecture the orchestrator runs via build_world_model(cfg). Never a
+    # bare RSSM(cfg.model) literal (wrong arch under DualStreamRSSM).
+    gate_world_model = world_model if world_model is not None else build_world_model(cfg)
+    # eval() exists on the nn.Module engines (RSSM / DualStreamRSSM); guard so a
+    # non-Module engine (e.g. the ONNX runtime) never crashes gate construction.
+    if hasattr(gate_world_model, "eval"):
+        gate_world_model.eval()
     hidden_dim = cfg.model.hidden_dim
     latent_dim = cfg.model.latent_dim
     action_dim = cfg.model.action_dim
@@ -3165,7 +3193,7 @@ def _build_on_device_gate_runner(
         cfg=on_device_cfg,
         slot_store=slot_store,
         metrics=metrics,
-        world_model=world_model,
+        world_model=gate_world_model,
         seed_states=seed_states,
     )
 
@@ -3528,8 +3556,12 @@ def build_orchestrator(cfg: Settings) -> object:
     # byte-identical to pre-WS3); otherwise a slow-cadence background task
     # producing stamped candidate slots and (WS4) running the safety-regression
     # gate. The shared metrics registry is threaded so the WS4 revert counter
-    # surfaces on ``/metrics``.
-    on_device_coordinator = build_on_device_coordinator(cfg, metrics=metrics_registry)
+    # surfaces on ``/metrics``; the already-built live world model ``wm`` is
+    # threaded so the gate scores against the REAL model architecture (Phase-6
+    # ENABLEMENT) instead of a wrong-arch ``RSSM(cfg.model)`` literal.
+    on_device_coordinator = build_on_device_coordinator(
+        cfg, metrics=metrics_registry, world_model=wm
+    )
 
     orchestrator = MouseDroidOrchestrator(
         world_model=wm,

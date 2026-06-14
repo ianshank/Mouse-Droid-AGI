@@ -9,6 +9,9 @@ render when the family is unused.
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from mousedroid.config.schema import MetricsConfig, OnDeviceLearningConfig, Settings
 from mousedroid.telemetry import metrics as metrics_mod
 from mousedroid.telemetry.metrics import MetricsRegistry
@@ -23,6 +26,28 @@ def test_on_device_learning_field_is_optional_default_none() -> None:
 def test_config_fields_all_documented() -> None:
     for name, field in OnDeviceLearningConfig.model_fields.items():
         assert field.description, f"{name} must carry an operator description"
+
+
+def test_ws_e0_enablement_fields_present_typed_and_documented() -> None:
+    """The four WS-E0 enablement fields exist, are typed/defaulted, and documented."""
+    fields = OnDeviceLearningConfig.model_fields
+    for name, expected_default in (
+        ("enable_hot_swap", False),
+        ("seed_state_source", "sampled"),
+        ("refine_sequence_length", 16),
+        ("refine_batch_episodes", 4),
+    ):
+        assert name in fields, f"WS-E0 field {name} must be present"
+        assert fields[name].default == expected_default
+        assert fields[name].description, f"{name} must carry an operator description"
+
+
+def test_ws_e0_model_validator_enforced() -> None:
+    """The cross-field validator rejects hot-swap without the master switch."""
+    with pytest.raises(ValidationError):
+        OnDeviceLearningConfig(enable_hot_swap=True, enabled=False)
+    # ... and accepts it once enabled.
+    assert OnDeviceLearningConfig(enable_hot_swap=True, enabled=True).enable_hot_swap is True
 
 
 def test_metrics_gate_flag_documented_and_default_on() -> None:
