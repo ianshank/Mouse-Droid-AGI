@@ -3047,6 +3047,21 @@ def build_on_device_coordinator(
     if on_device_cfg is None or not on_device_cfg.enabled:
         return None
 
+    # Capability gate: on-device refinement requires ``train_sequence`` (present
+    # on ``RSSM`` but NOT on ``DualStreamRSSM`` / ``DualStreamRSSMOnnx``). Resolve
+    # the effective world model ONCE here (the injected instance, else the one
+    # ``build_world_model(cfg)`` constructs) and thread it down to the gate runner
+    # so it is never built twice. When the effective engine lacks the capability,
+    # disable refinement (return ``None``) instead of wiring an unusable refiner.
+    effective_wm = world_model if world_model is not None else build_world_model(cfg)
+    if not hasattr(effective_wm, "train_sequence"):
+        _log.warning(
+            "on_device_refiner_unsupported_engine",
+            engine_type=type(effective_wm).__name__,
+            hint="active world-model engine lacks train_sequence; on-device refinement disabled",
+        )
+        return None
+
     import torch.nn as nn
 
     from mousedroid.learning.on_device.ewc_online import EWCOnlineLearner
@@ -3083,7 +3098,7 @@ def build_on_device_coordinator(
         return _load_replay_batch(reader, input_dim, cap)
 
     gate_runner = _build_on_device_gate_runner(
-        cfg, slot_store=slot_store, metrics=metrics, world_model=world_model
+        cfg, slot_store=slot_store, metrics=metrics, world_model=effective_wm
     )
 
     return ReplayTriggerCoordinator(

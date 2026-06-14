@@ -890,7 +890,7 @@ class OnDeviceLearningConfig(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _require_enabled_for_hot_swap(self) -> OnDeviceLearningConfig:
+    def _require_enabled_for_hot_swap(self) -> Self:
         """Reject ``enable_hot_swap=True`` while the master switch is off.
 
         Hot-swapping a candidate into the live model is meaningless unless the

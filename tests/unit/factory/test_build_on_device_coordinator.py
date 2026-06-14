@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import structlog
 import torch
 
 from mousedroid.config.schema import Settings
@@ -163,3 +164,77 @@ def test_gate_does_not_construct_bare_rssm_literal(tmp_path: Path, monkeypatch) 
 
     assert coordinator is not None
     assert calls == [], "gate runner must NOT construct a bare RSSM(cfg.model) literal"
+
+
+# --------------------------------------------------------------------------- #
+# WS-E0: capability gate — refinement requires ``train_sequence``
+# --------------------------------------------------------------------------- #
+class _NoTrainSequenceWorldModel:
+    """A minimal world-model stand-in that lacks ``train_sequence``.
+
+    Mirrors ``DualStreamRSSM`` / ``DualStreamRSSMOnnx``, which expose
+    ``imagine_step`` / ``eval`` but not the ``train_sequence`` the on-device
+    refiner requires. Used to drive the capability-gate guard.
+    """
+
+    def eval(self) -> _NoTrainSequenceWorldModel:
+        return self
+
+    def imagine_step(self, *args: object, **kwargs: object) -> None:
+        return None
+
+
+def test_coordinator_disabled_for_engine_without_train_sequence(tmp_path: Path) -> None:
+    """An effective world model lacking ``train_sequence`` disables refinement.
+
+    The on-device refiner calls ``train_sequence`` (present on ``RSSM`` but not
+    on ``DualStreamRSSM`` / ``DualStreamRSSMOnnx``). When the EFFECTIVE engine
+    lacks that capability the coordinator returns ``None`` instead of building
+    an unusable refiner, and logs ``on_device_refiner_unsupported_engine``.
+    """
+    cfg = _enabled_cfg(tmp_path)
+    unsupported = _NoTrainSequenceWorldModel()
+
+    with structlog.testing.capture_logs() as logs:
+        coordinator = build_on_device_coordinator(cfg, world_model=unsupported)
+
+    assert coordinator is None
+    events = [entry for entry in logs if entry["event"] == "on_device_refiner_unsupported_engine"]
+    assert len(events) == 1
+    assert events[0]["log_level"] == "warning"
+    assert events[0]["engine_type"] == "_NoTrainSequenceWorldModel"
+
+
+def test_coordinator_builds_for_engine_with_train_sequence(tmp_path: Path) -> None:
+    """A real ``RSSM`` (default config) HAS ``train_sequence`` → still builds."""
+    from mousedroid.factory import build_world_model
+
+    cfg = _enabled_cfg(tmp_path)
+    wm = build_world_model(cfg)
+    assert hasattr(wm, "train_sequence")
+
+    with structlog.testing.capture_logs() as logs:
+        coordinator = build_on_device_coordinator(cfg, world_model=wm)
+
+    assert coordinator is not None
+    unsupported = [e for e in logs if e["event"] == "on_device_refiner_unsupported_engine"]
+    assert unsupported == []
+
+
+def test_coordinator_none_world_model_builds_default_rssm_with_train_sequence(
+    tmp_path: Path,
+) -> None:
+    """``world_model=None`` resolves the default plain-RSSM (has ``train_sequence``).
+
+    The default config builds a plain ``RSSM`` (no ``cfc_hidden_dim``), which
+    HAS ``train_sequence`` — so the None path still wires a coordinator and
+    never trips the capability gate.
+    """
+    cfg = _enabled_cfg(tmp_path)
+
+    with structlog.testing.capture_logs() as logs:
+        coordinator = build_on_device_coordinator(cfg, world_model=None)
+
+    assert coordinator is not None
+    unsupported = [e for e in logs if e["event"] == "on_device_refiner_unsupported_engine"]
+    assert unsupported == []
