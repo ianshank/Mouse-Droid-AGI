@@ -3098,7 +3098,7 @@ def build_on_device_coordinator(
         return _load_replay_batch(reader, input_dim, cap)
 
     gate_runner = _build_on_device_gate_runner(
-        cfg, slot_store=slot_store, metrics=metrics, world_model=effective_wm
+        cfg, slot_store=slot_store, metrics=metrics, world_model=effective_wm, reader=reader
     )
 
     return ReplayTriggerCoordinator(
@@ -3117,6 +3117,7 @@ def _build_on_device_gate_runner(
     slot_store: OnDeviceSlotStore,
     metrics: MetricsRegistry | None,
     world_model: WorldModelProtocol | None = None,
+    reader: LMDBReplayReader | None = None,
 ) -> Callable[[CandidateSlot], None]:
     """Build the WS4 safety-regression gate-runner closure.
 
@@ -3144,12 +3145,16 @@ def _build_on_device_gate_runner(
         world_model: The live world model to score against; ``None`` (default)
             falls back to ``build_world_model(cfg)`` so the gate still uses the
             real configured architecture, never a bare ``RSSM(cfg.model)``.
+        reader: Optional LMDB replay reader, used ONLY when
+            ``cfg.on_device_learning.seed_state_source == "replay_encoded"`` to
+            source a held-out slice for :func:`encode_seed_states`. ``None`` (or
+            the default ``"sampled"`` source) leaves the #134 sampled path
+            byte-identical — the reader is never touched.
 
     Returns:
         A ``(CandidateSlot) -> None`` closure invoked by the coordinator after
         persist (offloaded off the event loop).
     """
-    import torch
     import torch.nn as nn
 
     from mousedroid.learning.on_device.regression_gate import RegressionGate
@@ -3174,19 +3179,26 @@ def _build_on_device_gate_runner(
     action_dim = cfg.model.action_dim
 
     # Deterministic seed states. Their COUNT is driven by ``held_out_fraction``
-    # over the trigger window so the held-out-slice knob is honoured; the exact
-    # latent VALUES come from the fixed ``scoring_seed`` so the score is
-    # reproducible. WS5 sources these by encoding a held-out replay slice through
-    # the world model instead of sampling latents directly.
+    # over the trigger window so the held-out-slice knob is honoured. The SOURCE
+    # is selected by ``seed_state_source`` (WS-E1): ``"sampled"`` (default) draws
+    # the exact latent VALUES from the fixed ``scoring_seed`` so the score is
+    # reproducible AND the path is byte-identical to #134; ``"replay_encoded"``
+    # grounds the seed-states by rolling the live world model's ``observe_step``
+    # over a held-out replay slice (falling back to the sampled path on an empty
+    # store so a fresh Jetson never produces a zero-state gate).
     n_seed = max(1, int(on_device_cfg.held_out_fraction * on_device_cfg.trigger_min_new_records))
-    gen = torch.Generator().manual_seed(on_device_cfg.scoring_seed)
-    seed_states = [
-        (
-            torch.randn(1, hidden_dim, generator=gen),
-            torch.randn(1, latent_dim, generator=gen),
+    if on_device_cfg.seed_state_source == "replay_encoded":
+        seed_states = _build_replay_encoded_seed_states(
+            gate_world_model, reader=reader, n_seed=n_seed
         )
-        for _ in range(n_seed)
-    ]
+        if not seed_states:
+            seed_states = _build_sampled_seed_states(
+                hidden_dim, latent_dim, n_seed, seed=on_device_cfg.scoring_seed
+            )
+    else:
+        seed_states = _build_sampled_seed_states(
+            hidden_dim, latent_dim, n_seed, seed=on_device_cfg.scoring_seed
+        )
 
     # Candidate + baseline MUST wrap SEPARATE module instances. Aliasing one
     # net would mean loading the candidate slot's weights mutates the baseline
@@ -3216,6 +3228,106 @@ def _build_on_device_gate_runner(
         gate.evaluate(candidate=candidate_adapter, baseline=baseline_adapter, slot=slot)
 
     return _run_gate
+
+
+def _build_sampled_seed_states(
+    hidden_dim: int,
+    latent_dim: int,
+    n_seed: int,
+    *,
+    seed: int,
+) -> list[tuple[Tensor, Tensor]]:
+    """Build the #134 ``manual_seed``-sampled seed states (default path).
+
+    Kept byte-identical to the pre-WS-E1 inline implementation: a single
+    ``torch.Generator`` seeded with ``seed`` draws every ``(h, z)`` pair, so the
+    same seed + same dims ALWAYS yield identical seed states.
+
+    Args:
+        hidden_dim: RSSM hidden-state width.
+        latent_dim: RSSM latent width.
+        n_seed: Number of seed states to draw.
+        seed: Fixed generator seed (``scoring_seed``).
+
+    Returns:
+        A list of ``n_seed`` ``(h, z)`` pairs (each ``(1, dim)``) on CPU.
+    """
+    import torch
+
+    gen = torch.Generator().manual_seed(seed)
+    return [
+        (
+            torch.randn(1, hidden_dim, generator=gen),
+            torch.randn(1, latent_dim, generator=gen),
+        )
+        for _ in range(n_seed)
+    ]
+
+
+def _build_replay_encoded_seed_states(
+    world_model: WorldModelProtocol,
+    *,
+    reader: LMDBReplayReader | None,
+    n_seed: int,
+) -> list[tuple[Tensor, Tensor]]:
+    """Source seed states by encoding a held-out replay slice (WS-E1).
+
+    Loads up to ``n_seed`` records via ``reader`` (off the event loop through
+    :func:`_run_coro_blocking`) and rolls them through the live world model's
+    ``observe_step`` via
+    :func:`~mousedroid.learning.on_device.seed_states.encode_seed_states`. Returns
+    an empty list (so the caller falls back to the sampled path) when no reader is
+    wired or the replay store is empty.
+
+    The world model is guaranteed to be a concrete ``RSSM`` here: the
+    ``build_on_device_coordinator`` capability gate disables the coordinator
+    entirely when the engine lacks ``train_sequence`` (e.g. ``DualStreamRSSM``),
+    so the ``observe_step`` + ``.encoder`` + ``.cfg`` surface is present.
+
+    Args:
+        world_model: The live world model whose encoder + posterior produce the
+            latent states.
+        reader: The LMDB replay reader (or ``None`` ⇒ empty list).
+        n_seed: Maximum number of seed states to encode.
+
+    Returns:
+        A list of up to ``n_seed`` ``(h, z)`` seed-state pairs; empty when the
+        replay slice is empty or no reader is available.
+    """
+    import torch
+
+    from mousedroid.learning.on_device.seed_states import encode_seed_states
+    from mousedroid.world_model.rssm import RSSM
+
+    # The capability gate guarantees a concrete ``RSSM`` (engines without
+    # ``train_sequence`` disable the coordinator). Narrow explicitly so the
+    # ``encode_seed_states`` call is statically typed without a suppression; an
+    # unexpected non-RSSM engine falls back to the sampled path rather than crash.
+    if reader is None or not isinstance(world_model, RSSM):
+        _log.warning(
+            "on_device_seed_states_replay_unavailable",
+            n_seed=n_seed,
+            has_reader=reader is not None,
+            engine_type=type(world_model).__name__,
+        )
+        return []
+
+    async def _run() -> list[MouseDroidExperienceRecord]:
+        rows: list[MouseDroidExperienceRecord] = []
+        async for chunk in reader.stream(chunk_size=n_seed):
+            rows.extend(chunk)
+            if len(rows) >= n_seed:
+                break
+        return rows[:n_seed]
+
+    records = _run_coro_blocking(_run())
+
+    # Resolve the world model's device so the encoded ``(h, z)`` match the model
+    # the gate scores against (never a hardcoded CPU).
+    first_param = next(world_model.parameters(), None)
+    device = first_param.device if first_param is not None else torch.device("cpu")
+
+    return encode_seed_states(world_model, records, n_seed, device=device)
 
 
 def _run_coro_blocking(coro: Coroutine[Any, Any, _CoroResult]) -> _CoroResult:
