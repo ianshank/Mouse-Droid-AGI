@@ -21,7 +21,7 @@ see ``tests/unit/voice/test_tts_synthesize_adapter.py``).
 
 from __future__ import annotations
 
-import time
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import structlog.testing
@@ -113,11 +113,12 @@ async def test_greet_chirp_text_then_styled_message_with_names() -> None:
 
 @pytest.mark.asyncio
 async def test_greet_honours_inter_chirp_delay() -> None:
-    """A non-zero ``inter_chirp_delay_s`` is actually awaited between chirp+msg.
+    """A non-zero ``inter_chirp_delay_s`` is awaited between chirp and message.
 
-    Uses a small but measurable delay sourced from config (never
-    hardcoded in the greeter) and asserts the wall-clock gap is at least
-    that long — proving the delay branch fires end-to-end.
+    Asserts deterministically that the greeter awaits ``asyncio.sleep`` with
+    the config-sourced delay (never hardcoded in the greeter). A wall-clock
+    measurement would be flaky under cross-test event-loop state (another test
+    can leave ``asyncio.sleep`` sped/patched), so we spy the call instead.
     """
     delay_s = 0.05
     cfg = _settings(inter_chirp_delay_s=delay_s)
@@ -129,10 +130,15 @@ async def test_greet_honours_inter_chirp_delay() -> None:
 
     await engine.start()
     try:
-        start = time.monotonic()
-        await greeter.greet()
-        elapsed = time.monotonic() - start
+        with patch(
+            "mousedroid.voice.greeting.asyncio.sleep", new_callable=AsyncMock
+        ) as sleep_spy:
+            await greeter.greet()
     finally:
         await engine.stop()
 
-    assert elapsed >= delay_s, f"inter-chirp delay not honoured: {elapsed:.3f}s"
+    # The inter-chirp delay branch must fire with the EXACT config value —
+    # deterministic, no wall-clock dependency.
+    assert any(
+        call.args == (delay_s,) for call in sleep_spy.await_args_list
+    ), f"inter-chirp delay {delay_s}s not awaited: {sleep_spy.await_args_list}"
