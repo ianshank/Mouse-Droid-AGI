@@ -4838,6 +4838,19 @@ class GreetingConfig(BaseModel):
             "the chirp's tail. Range-gated [0, 5]."
         ),
     )
+    fire_on_startup: bool = Field(
+        False,
+        description=(
+            "Issue #109 lifecycle wiring. When ``True`` (and ``enabled`` is "
+            "``True``) the orchestrator fires the greeting ONCE during "
+            "``start()`` — before entering the 30 Hz control loop — through "
+            "the same voice engine it already manages. Defaults ``False`` so "
+            "existing YAML files load unchanged and the hot loop stays "
+            "byte-identical (the startup greeting is a one-shot OUTSIDE the "
+            "loop). A greeting failure is logged and swallowed; it never "
+            "blocks orchestrator startup."
+        ),
+    )
 
     @model_validator(mode="after")
     def _require_names_when_enabled(self) -> GreetingConfig:

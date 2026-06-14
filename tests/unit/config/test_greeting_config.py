@@ -139,6 +139,38 @@ def test_message_template_unbalanced_brace_rejected() -> None:
         )
 
 
+def test_fire_on_startup_defaults_false() -> None:
+    """New field defaults False so the orchestrator startup seam stays inert.
+
+    Issue #109 lifecycle wiring: ``fire_on_startup`` gates the one-shot
+    greeting at ``orchestrator.start()``. Default ``False`` keeps the
+    30 Hz loop byte-identical for every existing deployment.
+    """
+    cfg = GreetingConfig()
+    assert cfg.fire_on_startup is False
+
+
+def test_fire_on_startup_accepts_true() -> None:
+    """Operators flip it on the overlay alongside enabled=True + names."""
+    cfg = GreetingConfig(enabled=True, names=["Pat"], fire_on_startup=True)
+    assert cfg.fire_on_startup is True
+
+
+def test_existing_config_without_fire_on_startup_loads_unchanged() -> None:
+    """Backwards-compat: a pre-#109 overlay (no ``fire_on_startup`` key) loads.
+
+    Simulates an existing YAML file by validating a dict that omits the
+    new field entirely. It must load and default ``fire_on_startup`` to
+    ``False`` — the CLAUDE.md backwards-compatibility invariant.
+    """
+    cfg = GreetingConfig.model_validate(
+        {"enabled": True, "names": ["John", "Jordan"]}
+    )
+    assert cfg.fire_on_startup is False
+    assert cfg.enabled is True
+    assert cfg.names == ["John", "Jordan"]
+
+
 def test_settings_greeting_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     """Operators can flip the master switch via env (then YAML supplies names)."""
     # The Pydantic env-prefix only flips scalar fields at Settings level;
