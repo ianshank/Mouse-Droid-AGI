@@ -34,7 +34,7 @@ def _require_jetson() -> None:
 
 
 @pytest.mark.asyncio
-async def test_greet_synthesises_real_waveform_on_jetson(jetson_settings) -> None:  # noqa: ANN001
+async def test_greet_synthesises_real_waveform_on_jetson(jetson_settings) -> None:
     """Real Piper TTS + ALSA speaker: greeting plays and synthesises audio.
 
     Builds the greeter through the production factory against the live
@@ -62,7 +62,7 @@ async def test_greet_synthesises_real_waveform_on_jetson(jetson_settings) -> Non
 
     try:
         await engine.start()
-    except Exception as exc:  # noqa: BLE001 — degrade to skip when HW absent
+    except Exception as exc:
         pytest.skip(f"voice engine could not start on hardware: {exc}")
 
     try:

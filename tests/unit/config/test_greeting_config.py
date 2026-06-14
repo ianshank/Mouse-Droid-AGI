@@ -163,9 +163,7 @@ def test_existing_config_without_fire_on_startup_loads_unchanged() -> None:
     new field entirely. It must load and default ``fire_on_startup`` to
     ``False`` — the CLAUDE.md backwards-compatibility invariant.
     """
-    cfg = GreetingConfig.model_validate(
-        {"enabled": True, "names": ["John", "Jordan"]}
-    )
+    cfg = GreetingConfig.model_validate({"enabled": True, "names": ["John", "Jordan"]})
     assert cfg.fire_on_startup is False
     assert cfg.enabled is True
     assert cfg.names == ["John", "Jordan"]

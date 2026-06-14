@@ -65,6 +65,7 @@ class GreeterProtocol(Protocol):
         """Play the greeting once. See :meth:`Greeter.greet`."""
         ...
 
+
 _log = get_logger(__name__)
 
 # Cap on how many phrase-bank events surface in the

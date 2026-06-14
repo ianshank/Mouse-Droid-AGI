@@ -9,10 +9,11 @@ wiring contract is pinned without standing up the full orchestrator.
 
 from __future__ import annotations
 
+from tests.unit.voice._fakes import FakeVoiceEngine
+
 from mousedroid.config.schema import GreetingConfig, Settings
 from mousedroid.factory import _build_orchestrator_greeter
 from mousedroid.voice.greeting import Greeter
-from tests.unit.voice._fakes import FakeVoiceEngine
 
 
 def test_greeter_wired_when_greeting_enabled() -> None:
