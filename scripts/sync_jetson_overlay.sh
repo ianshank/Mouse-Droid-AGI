@@ -36,8 +36,10 @@
 #   MOUSEDROID_EXTRA_OVERLAYS — space-separated list of additional
 #                               ``src:dst`` pairs to sync. Each src/dst is an
 #                               absolute path. Empty/unset → script behaviour
-#                               is byte-identical to the pre-F-006 single-pair
-#                               flow. Example:
+#                               is functionally equivalent to the pre-F-006
+#                               single-pair flow (same files synced, same exit
+#                               codes); the only difference is log lines now
+#                               carry a ``pair_index=0`` annotation. Example:
 #                                 MOUSEDROID_EXTRA_OVERLAYS=\
 #                                   "/opt/mousedroid/config/jetson_production_remote_llm.yaml:\
 #                                    /etc/mousedroid/jetson_production_remote_llm.yaml"
@@ -131,14 +133,25 @@ sync_pair() {
     tmp="$(mktemp "${dst_dir}/.overlay_sync.XXXXXX")"
     trap 'rm -f "${tmp}"' RETURN
 
-    if cp -f "${src}" "${tmp}"; then
-        mv -f "${tmp}" "${dst}"
-        trap - RETURN  # success → don't try to clean up the moved file
-        log "OK overlay_sync_replaced pair_index=${pair_index} src=${src} dst=${dst} sha256=${src_hash}"
-        return 0
+    # cp + mv are checked explicitly rather than relying on ``set -e``: under
+    # ``set -e`` a failing ``mv`` after a successful ``cp`` aborts the whole
+    # script mid-loop with no diagnostic, leaving the temp file orphaned (the
+    # RETURN trap above only fires on a normal function return, not on a
+    # set -e abort) and skipping any remaining overlay pairs. Checking each
+    # step keeps the per-pair FAIL line + RETURN cleanup intact so the
+    # operator gets a recognizable structured-ish error and the loop can
+    # report all pairs.
+    if ! cp -f "${src}" "${tmp}"; then
+        log "FAIL overlay_sync_copy_failed pair_index=${pair_index} src=${src} dst=${dst}"
+        return 1
     fi
-    log "FAIL overlay_sync_copy_failed pair_index=${pair_index} src=${src} dst=${dst}"
-    return 1
+    if ! mv -f "${tmp}" "${dst}"; then
+        log "FAIL overlay_sync_move_failed pair_index=${pair_index} src=${src} dst=${dst} tmp=${tmp} (dst likely read-only or on a different fs)"
+        return 1
+    fi
+    trap - RETURN  # success → don't try to clean up the moved file
+    log "OK overlay_sync_replaced pair_index=${pair_index} src=${src} dst=${dst} sha256=${src_hash}"
+    return 0
 }
 
 # Build the list of pairs: always start with the primary pair, then append
