@@ -188,3 +188,41 @@ Premise (no policy net → refine RSSM); default-OFF discipline; promotion (`mar
 
 ### Net effect on sequencing
 WS-E0 → WS-E1 → **WS-E-SPIKE** → WS-E2a (plumbing) → WS-E2b (refiner, λ=0 v1) → WS-E3 (recon-loss gate) → WS-E4 (off-loop swap) → WS-E5 (docs + sim soak). Checkpoint with the user after the SPIKE (go/no-go on the core refactor) and before flipping any default ON.
+
+## SPIKE RESULTS — VERDICT: GO_WITH_CHANGES (verified 2026-06-14, multi-agent workflow + adversarial re-run)
+
+Both core uncertainties resolved with hard numbers (tiny RSSM hidden=8/latent=4/action=3). **Implementers MUST use these LOCKED contracts.**
+
+### WS-E2 refiner — LOCKED (proven works)
+1. **Capability guard:** `from mousedroid.world_model.rssm import RSSM` — refine ONLY when `hasattr(model, "train_sequence")`. Verified `RSSM.train_sequence` exists (rssm.py:223); `DualStreamRSSM` has NONE. `build_world_model` → RSSM iff `engine=="torch"` AND `cfg.model.cfc_hidden_dim==0`.
+2. **Isolation:** `candidate = copy.deepcopy(base_rssm)` — base bitwise-unchanged (torch.equal over named_parameters, confirmed).
+3. **Decoders (off the RSSM):** `from mousedroid.world_model.rssm import RawModalityDecoders; decoders = RawModalityDecoders(candidate.cfg)`. NEVER persisted into the slot (RSSM `state_dict` has no decode_* keys → deployment checkpoint byte-identical).
+4. **Batch dict (B,T,…)** = exactly `RSSMPretrainer._to_device` (rssm_pretrainer.py:65-73): `motor`(always), `action`(always), `valid_mask`(len 4 OR 5, both work), `ultrasonic`/`lidar`/`vision` (each read iff `encoder.<m>_enabled`; vision (B,T,0) when off). `train_sequence` zeros h,z internally. Returns `{loss,recon,kl,posterior_std}`; `loss.requires_grad=True`.
+5. **Optimizer = `autograd.grad` manual-SGD, NO `.backward()`** (stays in the 8 `type: ignore` budget — `.backward()` would add a 9th):
+   ```python
+   out = candidate.train_sequence(batch, decoders)
+   params = list(candidate.parameters()) + list(decoders.parameters())
+   grads = torch.autograd.grad(out["loss"], params, allow_unused=True)   # allow_unused=True MANDATORY — reward_head + 3 others are unused in the recon/KL graph; omitting it RAISES RuntimeError
+   with torch.no_grad():
+       for p, g in zip(params, grads):
+           if g is not None:  # None-grad guard MANDATORY
+               p -= lr * g
+   ```
+   ⚠️ **`EWCOnlineLearner` is NOT a drop-in:** its `update(batch: Tensor)→candidate(batch)` assumes `forward(tensor)`, which RSSM lacks; its line-137 `autograd.grad` OMITS `allow_unused` (→ raises on RSSM). Write an RSSM-aware sibling learner.
+6. **Round-trip:** `fresh = build_world_model(same cfg); fresh.load_state_dict(candidate.state_dict(), strict=True)` → missing=[] unexpected=[] (confirmed).
+7. **λ=0:** `train_sequence` loss == `recon + cfg.model.kl_beta*kl` exactly (no penalty term). EWC is purely additive in the caller; v1 ships λ=0 (no EWC); RSSM-native diagonal Fisher (mean per-sample grad² via autograd.grad) is feasible as a follow-up.
+
+### WS-E3 gate — LOCKED (recon-loss, retire score_policy)
+- **Metric:** held-out **reconstruction+KL loss** = `train_sequence(batch, decoders)["loss"]` on a FIXED held-out (B,T,…) batch under `model.eval()` + `torch.no_grad()`. **LOWER IS BETTER.**
+- **Direction (INVERTS the current gate):** PROMOTE iff `candidate_loss <= baseline_loss + cfg.regression_tolerance`; else REVERT + `inc_on_device_learning_reverted("regression_bound")`. `regression_gate.py:170` is currently higher-is-better (`>= baseline - tol`) and `GateDecision.delta` sign assumes higher=better → **both must flip** (positive delta = worse for loss).
+- **Determinism:** `torch.manual_seed(scoring_seed)` immediately before EACH `train_sequence` call (reparam noise draws from global RNG); same seed for baseline + candidate.
+- **Shared decoders:** the SAME `RawModalityDecoders(cfg)` instance scores baseline AND candidate (recon heads external to RSSM).
+- **Proof score_policy self-games (RETIRE from gate):** reward-head-inflated degraded model → imagined return +57.8 (looks better) but recon loss byte-identical to baseline; genuinely-degraded model → recon loss 3.35→95.7 (separates). `score_policy` sums the model's OWN `reward_head` → unsafe as a gate signal; keep only as a non-gating diagnostic.
+- **deg edge:** a heavily-corrupted candidate can blow KL to very-large/non-finite → still REVERTs (large > baseline); tests must assert large/non-finite ⇒ revert, not finite-loss.
+
+### Gate-seam rework required (WS-E3)
+`RegressionGate` (regression_gate.py) carries `world_model + seed_states + score_fn(policy→float)` — NO batch, NO decoders, higher-is-better. WS-E3 adds a held-out batch + shared decoders, a `score_dynamics(world_model, batch, decoders, *, seed)` scorer (scores the WORLD MODEL, not a policy), flips the comparison + delta sign. The injectable `score_fn` seam helps but the policy→float signature needs rework.
+
+### Test caveats (locked)
+- `Settings()` bare raises (distance-sensor validator) → tests use `Settings(mock_hardware=True)`; the real rover path is `mock_hardware=False` — confirm batch construction doesn't depend on the mock shortcut.
+- Held-out batch must be REPLAY-ENCODED (WS-E1), not `manual_seed`-sampled — `score_loss` correctness depends on a representative FIXED held-out batch.
