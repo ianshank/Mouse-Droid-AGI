@@ -157,6 +157,29 @@ async def test_greeting_hang_is_bounded_and_never_blocks_startup() -> None:
 
 
 @pytest.mark.asyncio
+async def test_startup_greeting_propagates_cancellation() -> None:
+    """Cooperative cancellation during the greeting is never swallowed.
+
+    On py3.10 ``asyncio.CancelledError`` subclasses ``Exception``, so the
+    broad failure-swallowing ``except`` must explicitly re-raise it
+    (Copilot #3409950174) — otherwise a caller can't cancel bring-up. The
+    greeting MUST NOT be reported as a mere ``greeting_startup_failed``.
+    """
+
+    class _CancellingGreeter:
+        async def greet(self, names: Sequence[str] | None = None) -> None:
+            raise asyncio.CancelledError
+
+    cfg = GreetingConfig(enabled=True, names=["John"], fire_on_startup=True)
+    orch = _make_orch(greeting=cfg, greeter=_CancellingGreeter())
+    with structlog.testing.capture_logs() as logs, pytest.raises(asyncio.CancelledError):
+        await orch.start()
+    events = [e["event"] for e in logs]
+    assert "greeting_startup_failed" not in events
+    assert "greeting_startup_complete" not in events
+
+
+@pytest.mark.asyncio
 async def test_greeter_defaults_to_none() -> None:
     """The greeter kwarg is keyword-only with a None default (legacy parity)."""
     cfg = Settings(mock_hardware=True)

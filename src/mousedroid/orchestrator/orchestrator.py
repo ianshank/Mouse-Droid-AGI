@@ -503,6 +503,13 @@ class MouseDroidOrchestrator:
                 timeout_s=greeting_cfg.startup_timeout_s,
             )
             return
+        except asyncio.CancelledError:
+            # Cooperative cancellation MUST propagate — never swallow it. On
+            # py3.10 CancelledError subclasses Exception, so without this
+            # explicit re-raise the broad ``except Exception`` below would
+            # eat it and leave the caller unable to cancel bring-up. Matches
+            # the LLM gateway/composite cancellation contract.
+            raise
         except Exception:  # pylint: disable=broad-except
             # A flaky speaker / TTS must never crash bring-up.
             _log.warning("greeting_startup_failed", exc_info=True)

@@ -80,7 +80,9 @@ async def test_greet_end_to_end_emits_ordered_events_through_real_engine() -> No
     events = [e["event"] for e in logs if e["event"].startswith("greeting_")]
     # The documented terminal event is present and last.
     assert events[-1] == "greeting_done"
-    # The full ordering is a subsequence of what was emitted.
+    # The emitted greeting_* events match the documented ordering EXACTLY
+    # (equality, not just a subsequence) — a reorder or an extra/missing
+    # greeting_* event fails here.
     assert events == list(_EXPECTED_EVENT_ORDER), events
 
 
