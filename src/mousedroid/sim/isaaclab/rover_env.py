@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from numpy.typing import NDArray
 
-from mousedroid.common.imports import module_available
+from mousedroid.common.imports import module_importable
 from mousedroid.config.schema import RoverConfig
 from mousedroid.logging.setup import get_logger
 from mousedroid.sim.isaaclab.constants import (
@@ -69,8 +69,16 @@ class RoverEnvNotBuiltError(RuntimeError):
 
 
 def _isaaclab_available() -> bool:
-    """Return ``True`` iff Isaac Lab can be imported in the current env."""
-    return module_available("isaaclab")
+    """Return ``True`` iff Isaac Lab can actually be imported in the current env.
+
+    Uses a *real* guarded import (not a spec-only probe): a positive result
+    gates :meth:`RoverIsaacLabEnv.build`, which proceeds to import and drive
+    Isaac Lab via ``_wire_isaaclab_scene``. A spec-present-but-import-fails
+    install (Isaac Lab discoverable but missing GPU/native bindings) must
+    surface as the graceful :class:`IsaacLabUnavailableError`, not a hard crash
+    deep inside scene wiring.
+    """
+    return module_importable("isaaclab")
 
 
 class RoverIsaacLabEnv:

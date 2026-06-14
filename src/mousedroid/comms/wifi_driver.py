@@ -115,9 +115,7 @@ class WiFiESP32Driver(BaseESP32Driver):
         )
         with urllib.request.urlopen(req, timeout=self._timeout) as resp:  # noqa: S310 — fixed http:// scheme
             body = resp.read().decode()
-        if not body.strip():
-            return {}
-        return cast("dict[str, Any]", json.loads(body))
+        return self._decode_json_object(body, path=path)
 
     async def _get_json(self, path: str) -> dict[str, Any]:
         """HTTP GET JSON from ESP32.
@@ -143,6 +141,33 @@ class WiFiESP32Driver(BaseESP32Driver):
         req = urllib.request.Request(url, method="GET")  # noqa: S310 — fixed http:// scheme (see _base_url)
         with urllib.request.urlopen(req, timeout=self._timeout) as resp:  # noqa: S310 — fixed http:// scheme
             body = resp.read().decode()
+        return self._decode_json_object(body, path=path)
+
+    def _decode_json_object(self, body: str, *, path: str) -> dict[str, Any]:
+        """Parse ``body`` as a JSON object, guarding against non-mapping shapes.
+
+        The ESP32 firmware is contracted to return JSON objects, but a brown-out
+        or firmware-churn response could be a bare list/string/number. Returning
+        those to callers expecting mapping semantics surfaces as confusing
+        downstream ``AttributeError``/``KeyError``; instead we log a structured
+        warning and return an empty mapping (the same shape used for an empty
+        body) so the protocol layer degrades gracefully.
+
+        Args:
+            body: Raw decoded HTTP response body.
+            path: URL path the body came from (for log context).
+
+        Returns:
+            The parsed JSON object, or ``{}`` for an empty/non-object payload.
+        """
         if not body.strip():
             return {}
-        return cast("dict[str, Any]", json.loads(body))
+        decoded = json.loads(body)
+        if isinstance(decoded, dict):
+            return cast("dict[str, Any]", decoded)
+        _log.warning(
+            "wifi_esp32_unexpected_json_shape",
+            path=path,
+            shape=type(decoded).__name__,
+        )
+        return {}

@@ -96,8 +96,17 @@ def validate_command_skill(path: Path, *, repo_root: Path) -> list[SkillCommandI
             SkillCommandIssue(path, "missing-description", "front-matter 'description' is empty")
         )
 
+    repo_root_resolved = repo_root.resolve()
     for ref in referenced_repo_paths(body):
-        if not (repo_root / ref).exists():
+        # Skill docs promise *repo-relative* references only. Reject absolute
+        # paths (``/etc/passwd``, ``C:\…``) and parent-escaping traversals
+        # (``../../x.py``) BEFORE probing the filesystem, so a `.exists()` check
+        # can never reach outside the repo tree.
+        candidate = (repo_root / ref).resolve()
+        if not candidate.is_relative_to(repo_root_resolved):
+            issues.append(SkillCommandIssue(path, "non-relative-path", ref))
+            continue
+        if not candidate.exists():
             issues.append(SkillCommandIssue(path, "missing-path", ref))
 
     for host in _HARDCODED_HOST_RE.findall(body):
@@ -107,8 +116,15 @@ def validate_command_skill(path: Path, *, repo_root: Path) -> list[SkillCommandI
 
 
 def validate_all(commands_dir: Path, *, repo_root: Path) -> list[SkillCommandIssue]:
-    """Validate every ``*.md`` skill in ``commands_dir``."""
+    """Validate every ``*.md`` skill in ``commands_dir``.
+
+    A missing/renamed ``commands_dir`` yields a single ``missing-commands-dir``
+    issue instead of relying on ``glob``'s silent empty result — the caller gets
+    a deterministic, actionable signal rather than a false "all valid".
+    """
     issues: list[SkillCommandIssue] = []
+    if not commands_dir.is_dir():
+        return [SkillCommandIssue(commands_dir, "missing-commands-dir", str(commands_dir))]
     for md in sorted(commands_dir.glob("*.md")):
         issues.extend(validate_command_skill(md, repo_root=repo_root))
     return issues

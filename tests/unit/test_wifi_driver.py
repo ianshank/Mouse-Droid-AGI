@@ -96,3 +96,25 @@ async def test_emergency_stop():
     with patch.object(driver, "_post_json", new_callable=AsyncMock, return_value={}):
         await driver.emergency_stop()
     assert driver._last_velocity == (0.0, 0.0, 0.0)
+
+
+# -- JSON-shape guard tests --
+
+
+def test_decode_json_object_returns_dict():
+    driver = _make_driver()
+    assert driver._decode_json_object('{"v": 11.8}', path="/bat") == {"v": 11.8}
+
+
+def test_decode_json_object_empty_body_returns_empty_dict():
+    driver = _make_driver()
+    assert driver._decode_json_object("   ", path="/bat") == {}
+
+
+def test_decode_json_object_non_object_returns_empty_dict():
+    # A bare list / number / string is not a mapping; the guard must degrade to
+    # ``{}`` instead of returning a non-dict to mapping-expecting callers.
+    driver = _make_driver()
+    assert driver._decode_json_object("[1, 2, 3]", path="/enc") == {}
+    assert driver._decode_json_object("42", path="/enc") == {}
+    assert driver._decode_json_object('"oops"', path="/enc") == {}

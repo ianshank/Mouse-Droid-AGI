@@ -7,6 +7,7 @@ from pathlib import Path
 
 from tools.validate_skill_commands import (
     referenced_repo_paths,
+    validate_all,
     validate_command_skill,
 )
 
@@ -60,3 +61,28 @@ def test_hardcoded_ipv4_is_flagged(tmp_path: Path) -> None:
     )
     issues = validate_command_skill(skill, repo_root=tmp_path)
     assert any(i.code == "hardcoded-host" and i.detail == "192.168.1.5" for i in issues)
+
+
+def test_parent_escaping_reference_is_flagged(tmp_path: Path) -> None:
+    # A ``..`` traversal that escapes the repo root must be flagged as
+    # ``non-relative-path`` rather than silently probed on the host FS.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    skill = _write(
+        repo / "bad.md",
+        "---\ndescription: d\n---\nReads `../../etc/passwd.yaml`.\n",
+    )
+    issues = validate_command_skill(skill, repo_root=repo)
+    assert any(
+        i.code == "non-relative-path" and i.detail == "../../etc/passwd.yaml" for i in issues
+    )
+    # And it must NOT be reported as a (host-probed) missing-path.
+    assert not any(i.code == "missing-path" for i in issues)
+
+
+def test_validate_all_missing_dir_is_handled(tmp_path: Path) -> None:
+    # A non-existent commands dir yields a deterministic issue, not a crash or
+    # a false "all valid" empty result.
+    missing = tmp_path / "nope"
+    issues = validate_all(missing, repo_root=tmp_path)
+    assert [i.code for i in issues] == ["missing-commands-dir"]
