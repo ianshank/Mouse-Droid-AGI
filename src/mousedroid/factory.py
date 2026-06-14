@@ -14,7 +14,7 @@ from mousedroid.cloud.protocol import (
     ENGINE_TYPE_POLICY,
     ENGINE_TYPE_WORLD_MODEL,
 )
-from mousedroid.common.imports import module_available
+from mousedroid.common.imports import module_importable
 from mousedroid.comms.protocol import ESP32CommProtocol
 from mousedroid.hardware.protocols import (
     AudioProtocol,
@@ -205,14 +205,29 @@ def build_camera(
 
         return IMX500Camera(cfg.camera, hailo_runtime=hailo_runtime)
 
-    # auto: prefer picamera2 when its stack is installed, else fall back to jetson_csi
-    if module_available("picamera2"):
+    # auto: prefer picamera2 only when its stack *actually imports* (spec
+    # presence is insufficient — picamera2 can resolve a spec yet fail to
+    # import when its libcamera/native bindings are absent), else fall back
+    # to jetson_csi.
+    if module_importable("picamera2"):
         from mousedroid.hardware.camera.imx500 import IMX500Camera
 
+        _log.info(
+            "camera_backend_resolved",
+            backend="picamera2",
+            driver="IMX500Camera",
+            reason="picamera2_importable",
+        )
         return IMX500Camera(cfg.camera, hailo_runtime=hailo_runtime)
 
     from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
 
+    _log.info(
+        "camera_backend_resolved",
+        backend="jetson_csi",
+        driver="JetsonCSICamera",
+        reason="picamera2_not_importable",
+    )
     return JetsonCSICamera(cfg.camera, hailo_runtime=hailo_runtime)
 
 

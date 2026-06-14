@@ -10,10 +10,11 @@ tests that inject fakes into :data:`sys.modules`.
 
 from __future__ import annotations
 
+import importlib
 import importlib.util
 import sys
 
-__all__ = ["module_available"]
+__all__ = ["module_available", "module_importable"]
 
 
 def module_available(name: str) -> bool:
@@ -37,3 +38,33 @@ def module_available(name: str) -> bool:
         return importlib.util.find_spec(name) is not None
     except (ImportError, ValueError):
         return False
+
+
+def module_importable(name: str) -> bool:
+    """Return ``True`` iff ``name`` actually imports in the current environment.
+
+    Unlike :func:`module_available` (which only resolves the module *spec*),
+    this performs a real, guarded ``importlib.import_module``. A package whose
+    spec is discoverable but whose import fails at runtime — typically because a
+    native/accelerator dependency is missing (e.g. ``picamera2`` without its
+    libcamera bindings) — counts as **not** importable here.
+
+    Use this (rather than :func:`module_available`) whenever a positive result
+    is immediately followed by importing the package; spec-presence is not a
+    sufficient guarantee that the subsequent import will succeed.
+
+    Args:
+        name: Fully-qualified top-level module name to probe.
+
+    Returns:
+        Whether the module can actually be imported.
+    """
+    if sys.modules.get(name) is not None:
+        return True
+    try:
+        importlib.import_module(name)
+    except Exception:
+        # Any import-time failure (native deps missing, side-effect error,
+        # etc.) means the module is not usable in this environment.
+        return False
+    return True

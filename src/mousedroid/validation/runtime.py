@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, cast
 import numpy as np
 from numpy.typing import NDArray
 
-from mousedroid.common.imports import module_available
+from mousedroid.common.imports import module_importable
 from mousedroid.config.loader import load_settings
 from mousedroid.factory import build_camera, build_microphone, build_speaker, build_voice_engine
 from mousedroid.logging.setup import get_logger
@@ -446,8 +446,11 @@ async def verify_hailo_accelerator(cfg: Settings) -> HailoDiagnostics:
     device_path_exists = device_path.exists()
     fallback_on_failure = bool(hailo_cfg.fallback_on_failure)
 
-    # SDK importability — does NOT instantiate the runtime yet.
-    if not module_available("hailo_platform"):
+    # SDK importability — does NOT instantiate the runtime yet. Use a real
+    # guarded import (not mere spec presence): hailo_platform ships native
+    # bindings that can resolve a spec yet fail to import on a host without
+    # the driver, which would otherwise mis-report sdk_importable=True.
+    if not module_importable("hailo_platform"):
         return HailoDiagnostics(
             device_path_exists=device_path_exists,
             sdk_importable=False,
