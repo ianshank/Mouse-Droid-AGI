@@ -197,12 +197,23 @@ class OnDeviceWeightUpdateSource:
             # Fail-closed: do NOT surface a pending update (the live model is
             # untouched), and COUNT the revert here — the C1 swap path never
             # increments the on-device counter. Mark the digest seen so a
-            # corrupt slot is not re-materialised every cadence.
+            # corrupt slot is not re-materialised every cadence. Evict any PRIOR
+            # unacknowledged pending engine: a rejected supersede must not strand
+            # the superseded engine in the cache (it can never be looked up again
+            # — the loader only ever sees the freshest update).
+            self._evict_pending_engine()
             self._seen_digest = digest
             if self._metrics is not None:
                 self._metrics.inc_on_device_learning_reverted("integrity_mismatch")
             _log.warning("on_device_hot_swap_slot_integrity_mismatch", digest=digest)
             return False
+
+        # A newer digest supersedes any still-unacknowledged pending update. Evict
+        # the prior pending engine BEFORE publishing the replacement so
+        # ``_engine_by_update`` never retains an unreachable engine (the orchestrator
+        # consumes the freshest ``pending_update`` and only acknowledges THAT one —
+        # a superseded engine would otherwise leak across every promotion).
+        self._evict_pending_engine()
 
         update = PendingWeightUpdate(
             repo_id=_ON_DEVICE_REPO_ID,
@@ -273,6 +284,23 @@ class OnDeviceWeightUpdateSource:
         if self._pending_update is update:
             self._pending_update = None
             _log.debug("on_device_hot_swap_swap_acknowledged", digest=update.sha256)
+
+    def _evict_pending_engine(self) -> None:
+        """Evict the current unacknowledged pending update's cached engine.
+
+        Called whenever a probe is about to replace (or reject-and-discard) the
+        outstanding pending update. The orchestrator looks engines up by
+        ``id(update)`` and only ever holds the freshest ``pending_update``, so a
+        superseded pending engine is unreachable — dropping it here keeps
+        ``_engine_by_update`` bounded to at most the single live pending engine.
+        A no-op when nothing is pending (a freshly surfaced update is added by the
+        caller AFTER this evicts the prior one).
+        """
+        previous = self._pending_update
+        if previous is None:
+            return
+        self._engine_by_update.pop(id(previous), None)
+        self._pending_update = None
 
 
 __all__ = ["OnDeviceWeightUpdateSource"]

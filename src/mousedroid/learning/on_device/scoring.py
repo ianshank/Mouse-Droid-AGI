@@ -114,7 +114,18 @@ def score_dynamics(
         )
         raise TypeError(msg)
 
+    # ``torch.manual_seed`` reseeds CPU AND every CUDA generator, and
+    # ``train_sequence``'s reparam ``randn_like`` draws from the CUDA generator
+    # when the model is on CUDA — so on a GPU rover the CUDA RNG must be captured +
+    # restored alongside the CPU RNG, else a caller sharing the process CUDA RNG is
+    # silently perturbed. Guarded by the model's device AND ``cuda.is_available()``
+    # so a CPU-only host never touches the CUDA RNG API (byte-identical CPU path).
+    first_param = next(world_model.parameters(), None)
+    on_cuda = (
+        first_param is not None and first_param.device.type == "cuda" and torch.cuda.is_available()
+    )
     rng_state = torch.get_rng_state()
+    cuda_rng_state = torch.cuda.get_rng_state_all() if on_cuda else None
     was_training = world_model.training
     decoder_was_training = decoders.training
 
@@ -127,6 +138,8 @@ def score_dynamics(
             loss = float(out["loss"].item())
     finally:
         torch.set_rng_state(rng_state)
+        if cuda_rng_state is not None:
+            torch.cuda.set_rng_state_all(cuda_rng_state)
         if was_training:
             world_model.train()
         if decoder_was_training:

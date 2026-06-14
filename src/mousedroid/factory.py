@@ -3186,9 +3186,32 @@ def build_on_device_coordinator(
     encoder = effective_wm.encoder
     model_cfg = effective_wm.cfg
 
+    # In-memory consumed offset: the count of replay records already consumed by
+    # a FIRED cycle. The trigger arms on records BEYOND this baseline, never on
+    # the total store size — otherwise a store that has crossed
+    # ``trigger_min_new_records`` would re-fire the refine + gate every cadence on
+    # byte-identical stale data (it never disarms). ``on_consumed`` advances it.
+    # A list cell (not ``nonlocal``) keeps the two closures sharing one mutable
+    # counter without rebinding gymnastics.
+    consumed_offset = [0]
+
     def _count_new_records() -> int:
-        """Count records currently in the replay store (slow-cadence probe)."""
-        return _count_replay_records(reader, cap)
+        """Count NEW replay records since the last consumed baseline (slow probe)."""
+        return _count_new_replay_records(reader, consumed=consumed_offset[0], cap=cap)
+
+    def _advance_consumed(n_new: int) -> None:
+        """Advance the consumed baseline by the NEW records a fired cycle drained.
+
+        Wired as the coordinator's ``on_consumed`` callback so the NEXT cycle
+        counts from the new baseline — the trigger disarms until fresh experience
+        accumulates past it again.
+        """
+        consumed_offset[0] += n_new
+        _log.debug(
+            "on_device_consumed_offset_advanced",
+            consumed_total=consumed_offset[0],
+            advanced_by=n_new,
+        )
 
     def _load_batch() -> dict[str, Tensor]:
         """Materialise one ``(B, T, ...)`` sequence-dict batch from replay.
@@ -3226,6 +3249,7 @@ def build_on_device_coordinator(
         slot_store=slot_store,
         count_new_records=_count_new_records,
         load_batch=_load_batch,
+        on_consumed=_advance_consumed,
         gate_runner=gate_runner,
     )
 
@@ -3433,9 +3457,17 @@ def _build_on_device_gate_runner(
     # SHARED reconstruction heads: the SAME instance scores baseline AND candidate
     # (recon heads are external to the RSSM ``state_dict``; scoring against
     # different heads is meaningless). Seed the head init so the held-out gate is
-    # reproducible across process restarts.
-    torch.manual_seed(on_device_cfg.scoring_seed)
-    decoders = RawModalityDecoders(model_cfg).to(device)
+    # reproducible across process restarts — but confine the seed to a
+    # ``fork_rng`` so it never leaks into the caller's process RNG stream (the
+    # build runs at orchestrator construction; an unrestored ``manual_seed`` would
+    # silently shift every subsequent draw). ``manual_seed`` reseeds CPU AND every
+    # CUDA generator, so fork the model's CUDA device too when on GPU; pass an
+    # explicit device list (never ``devices=None``) to avoid the slow all-device
+    # init + its UserWarning on a multi-GPU host.
+    fork_devices = [device.index or 0] if device.type == "cuda" else []
+    with torch.random.fork_rng(devices=fork_devices):
+        torch.manual_seed(on_device_cfg.scoring_seed)
+        decoders = RawModalityDecoders(model_cfg).to(device)
 
     if held_out_batch is None:
         # No disjoint held-out window available (no reader / too few records): the
@@ -3524,6 +3556,45 @@ def _count_replay_records(reader: LMDBReplayReader, cap: int) -> int:
             if seen >= cap:
                 break
         return seen
+
+    return _run_coro_blocking(_run())
+
+
+def _count_new_replay_records(reader: LMDBReplayReader, *, consumed: int, cap: int) -> int:
+    """Count replay records BEYOND a consumed baseline (sync wrapper).
+
+    The on-device trigger must arm on NEW experience — records that have arrived
+    since the last fired cycle drained the store — not on the absolute store size.
+    Counting the total re-fires the refine + gate every cadence on already-
+    consumed (stale) data because the count never drops below the threshold.
+
+    Streams chronologically, skips the first ``consumed`` records, and counts up
+    to ``cap`` records after them (so the NEW window is bounded the same way the
+    refine batch scan is). Returns ``0`` once ``consumed`` reaches/exceeds the
+    store size (the trigger is disarmed), never a negative.
+
+    Args:
+        reader: The LMDB replay reader.
+        consumed: Number of leading records already consumed by a prior cycle.
+        cap: Maximum NEW (post-consumed) records to count.
+
+    Returns:
+        The number of records after the consumed baseline, capped at ``cap``.
+    """
+
+    async def _run() -> int:
+        seen = 0  # records observed (including the consumed prefix)
+        new = 0  # records strictly AFTER the consumed baseline
+        # Stream in windows large enough to skip the consumed prefix AND fill the
+        # new-record cap in as few passes as possible.
+        async for chunk in reader.stream(chunk_size=consumed + cap):
+            for _record in chunk:
+                if seen >= consumed:
+                    new += 1
+                    if new >= cap:
+                        return new
+                seen += 1
+        return new
 
     return _run_coro_blocking(_run())
 

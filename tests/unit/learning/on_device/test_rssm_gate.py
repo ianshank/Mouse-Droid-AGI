@@ -197,6 +197,63 @@ def test_score_dynamics_runs_under_no_grad_and_restores_state() -> None:
         assert param.grad is None
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires a CUDA device")
+def test_score_dynamics_restores_cuda_rng_state() -> None:
+    """score_dynamics restores the CUDA RNG (not just CPU) on a GPU model.
+
+    ``torch.manual_seed`` reseeds every CUDA generator and ``train_sequence``'s
+    reparam ``randn_like`` draws from the CUDA generator when the model is on
+    CUDA. Capturing/restoring only the CPU RNG leaves the CUDA RNG perturbed,
+    poisoning any caller sharing the process CUDA RNG. Skipped on a CPU-only host
+    (CI); the structural CUDA-guard branch is asserted by the source-shape test
+    below + the CPU restore test above.
+    """
+    cfg = _model_cfg()
+    torch.manual_seed(0)
+    wm = RSSM(cfg).to("cuda")
+    wm.eval()
+    device = next(wm.parameters()).device
+    batch = build_sequence_batch(
+        _make_records(40), cfg, wm.encoder, sequence_length=4, n_episodes=3, device=device
+    )
+    decoders = RawModalityDecoders(cfg).to(device)
+
+    torch.cuda.manual_seed_all(2024)
+    before = [s.clone() for s in torch.cuda.get_rng_state_all()]
+
+    score_dynamics(wm, batch, decoders, seed=_SEED)
+
+    after = torch.cuda.get_rng_state_all()
+    assert all(
+        torch.equal(b, a) for b, a in zip(before, after, strict=True)
+    ), "score_dynamics perturbed the CUDA RNG (only CPU RNG was restored)"
+
+
+def test_score_dynamics_guards_cuda_rng_capture_on_cpu() -> None:
+    """On a CPU model, score_dynamics never touches the CUDA RNG API.
+
+    The CUDA capture/restore is guarded by the model's device type AND
+    ``cuda.is_available()`` — a CPU-only deployment must run the scorer without
+    calling ``torch.cuda.get_rng_state_all`` / ``set_rng_state_all`` at all (the
+    structural guard that keeps the CPU path byte-identical and CUDA-free).
+    """
+    from unittest.mock import patch
+
+    cfg = _model_cfg()
+    wm = _make_rssm(cfg)  # CPU
+    batch = _make_batch(cfg, wm)
+    decoders = RawModalityDecoders(cfg)
+
+    with (
+        patch("torch.cuda.get_rng_state_all") as get_all,
+        patch("torch.cuda.set_rng_state_all") as set_all,
+    ):
+        score_dynamics(wm, batch, decoders, seed=_SEED)
+
+    get_all.assert_not_called()
+    set_all.assert_not_called()
+
+
 def test_score_dynamics_degraded_model_scores_worse() -> None:
     """A genuinely-degraded RSSM has a strictly HIGHER held-out loss (worse)."""
     cfg = _model_cfg()

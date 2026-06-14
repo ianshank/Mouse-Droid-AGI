@@ -11,6 +11,7 @@ Covers the factory wiring branches not exercised by the integration path:
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import structlog
@@ -18,6 +19,7 @@ import torch
 
 from mousedroid.config.schema import Settings
 from mousedroid.factory import (
+    _count_new_replay_records,
     _count_replay_records,
     _load_replay_batch,
     build_on_device_coordinator,
@@ -284,3 +286,147 @@ def test_coordinator_none_world_model_builds_default_rssm_with_train_sequence(
     assert coordinator is not None
     unsupported = [e for e in logs if e["event"] == "on_device_refiner_unsupported_engine"]
     assert unsupported == []
+
+
+# --------------------------------------------------------------------------- #
+# WS-E6: trigger arming — count NEW-since-consumed, disarm after a fired cycle
+# --------------------------------------------------------------------------- #
+def test_count_new_replay_records_skips_consumed_offset(tmp_path: Path) -> None:
+    """``_count_new_replay_records`` counts only records AFTER the consumed offset.
+
+    The TOTAL-count probe re-armed the trigger every cadence on stale data. The
+    fix counts records BEYOND a consumed baseline; with ``consumed == total`` the
+    new count is 0 (disarmed) and with a partial offset it is the remainder.
+    """
+    cfg = _enabled_cfg(tmp_path)
+    _seed_records(cfg, 10)
+    reader = LMDBReplayReader(cfg.experience)
+
+    # No records consumed yet → all 10 are new (capped well above 10).
+    assert _count_new_replay_records(reader, consumed=0, cap=64) == 10
+    # Everything consumed → trigger disarmed.
+    assert _count_new_replay_records(reader, consumed=10, cap=64) == 0
+    # Partial consume → only the remainder is new.
+    assert _count_new_replay_records(reader, consumed=7, cap=64) == 3
+    # A consumed offset past the store size never underflows below zero.
+    assert _count_new_replay_records(reader, consumed=99, cap=64) == 0
+
+
+def test_count_new_replay_records_caps_the_new_window(tmp_path: Path) -> None:
+    """The cap bounds the NEW (post-consumed) scan, not the absolute total."""
+    cfg = _enabled_cfg(tmp_path)
+    _seed_records(cfg, 20)
+    reader = LMDBReplayReader(cfg.experience)
+
+    # 20 records, 5 consumed, cap the new window at 8 → counts at most 8 new.
+    assert _count_new_replay_records(reader, consumed=5, cap=8) == 8
+
+
+def test_coordinator_trigger_disarms_after_fire_no_regate_on_stale(tmp_path: Path) -> None:
+    """A fired cycle advances the consumed offset → no re-fire on the SAME records.
+
+    The pre-WS-E6 wiring counted the TOTAL store size and never advanced a
+    consumed marker, so once the store crossed ``trigger_min_new_records`` the
+    coordinator re-ran the refine + gate every cadence on byte-identical stale
+    data. After the fix the first ``maybe_update`` fires + records the consumed
+    baseline; a second ``maybe_update`` with no fresh records sees ZERO new and
+    is a no-op (returns ``None``).
+    """
+    cfg = _enabled_cfg(tmp_path)
+    # Refine geometry is 2*3=6; seed enough for the refine batch but FEWER than
+    # 2x so a second window's worth of NEW records cannot exist post-consume.
+    _seed_records(cfg, 8)
+
+    coordinator = build_on_device_coordinator(cfg)
+    assert coordinator is not None
+
+    first = asyncio.run(coordinator.maybe_update())  # type: ignore[attr-defined]
+    assert first is not None, "first cycle should fire (store >= trigger threshold)"
+
+    second = asyncio.run(coordinator.maybe_update())  # type: ignore[attr-defined]
+    assert second is None, "trigger must disarm — no re-gate on stale (already-consumed) data"
+
+
+def test_coordinator_rearms_when_fresh_records_arrive(tmp_path: Path) -> None:
+    """After consuming, NEW records crossing the threshold re-arm the trigger."""
+    cfg = _enabled_cfg(tmp_path)
+    _seed_records(cfg, 8)
+
+    coordinator = build_on_device_coordinator(cfg)
+    assert coordinator is not None
+
+    first = asyncio.run(coordinator.maybe_update())  # type: ignore[attr-defined]
+    assert first is not None
+
+    # No new records yet → disarmed.
+    assert asyncio.run(coordinator.maybe_update()) is None  # type: ignore[attr-defined]
+
+    # Fresh experience arrives (>= trigger_min_new_records=5 new records).
+    _seed_records(cfg, 6)
+    third = asyncio.run(coordinator.maybe_update())  # type: ignore[attr-defined]
+    assert third is not None, "fresh records beyond the consumed offset must re-arm the trigger"
+
+
+# --------------------------------------------------------------------------- #
+# WS-E6: gate-runner decoder init must NOT perturb the global RNG (fork_rng)
+# --------------------------------------------------------------------------- #
+def test_gate_runner_build_does_not_perturb_global_cpu_rng(tmp_path: Path) -> None:
+    """Building the WS-E3 gate runner restores the global CPU RNG (fork_rng).
+
+    The gate runner seeds the global RNG (``torch.manual_seed(scoring_seed)``)
+    to make the shared decoder init reproducible, then builds
+    ``RawModalityDecoders(...).to(device)``. Without restoring, that seed leaks
+    into the caller's RNG stream — every subsequent draw on the process RNG is
+    silently shifted. Wrapping the seed + decoder init in ``torch.random.fork_rng``
+    must leave the global RNG byte-identical across the build.
+
+    A CPU world model is injected so the build does NOT call ``build_world_model``
+    internally (which would legitimately consume CPU RNG constructing a fresh
+    RSSM) — this isolates the gate-runner seed leak from model construction.
+    """
+    from mousedroid.factory import build_world_model
+
+    cfg = _enabled_cfg(tmp_path)
+    _seed_records(cfg, 16)
+    wm = build_world_model(cfg).to("cpu")  # type: ignore[attr-defined]
+
+    # Pin a known global RNG state AFTER building the model, capture it, then build
+    # the coordinator (which builds the gate runner + its seeded decoders) and
+    # assert the state is byte-identical — the seed was confined to the fork.
+    torch.manual_seed(2024)
+    before = torch.get_rng_state().clone()
+
+    coordinator = build_on_device_coordinator(cfg, world_model=wm)
+
+    assert coordinator is not None
+    after = torch.get_rng_state()
+    assert torch.equal(before, after), "gate-runner decoder init leaked its seed into global RNG"
+
+
+def test_gate_runner_build_does_not_perturb_global_cuda_rng(tmp_path: Path) -> None:
+    """On a CUDA box, the gate-runner build also restores the CUDA RNG.
+
+    ``torch.manual_seed`` seeds CPU AND every CUDA generator, so the fork must
+    cover the model's CUDA device too. Skipped on a CPU-only host (CI); the guard
+    structure is exercised by the CPU test above. On the dev box (RTX) this proves
+    the real CUDA RNG round-trips.
+    """
+    if not torch.cuda.is_available():
+        import pytest
+
+        pytest.skip("no CUDA device — CUDA RNG restore path covered structurally on CPU")
+
+    from mousedroid.factory import build_world_model
+
+    cfg = _enabled_cfg(tmp_path)
+    _seed_records(cfg, 16)
+    wm = build_world_model(cfg).to("cuda")  # type: ignore[attr-defined]
+
+    torch.cuda.manual_seed_all(4096)
+    before = torch.cuda.get_rng_state(0).clone()
+
+    coordinator = build_on_device_coordinator(cfg, world_model=wm)
+
+    assert coordinator is not None
+    after = torch.cuda.get_rng_state(0)
+    assert torch.equal(before, after), "gate-runner decoder init leaked its seed into the CUDA RNG"

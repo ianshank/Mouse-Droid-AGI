@@ -231,23 +231,37 @@ class RSSMRefiner:
         )
 
         # Candidate = deep copy of the base; all gradient flow is confined here so
-        # the base RSSM stays bitwise-identical.
+        # the base RSSM stays bitwise-identical. It lives on the base's device.
         candidate = copy.deepcopy(self._base_rssm)
+        device = next(candidate.parameters()).device
 
         # Seed BEFORE building the decoders AND the rollout: the throwaway decoder
         # heads draw their init from the global RNG, and train_sequence's reparam
         # noise also draws from it, so a fixed seed makes the WHOLE refinement
         # reproducible. The prior RNG + train-mode state are captured + restored so
         # the call is side-effect free for a caller sharing the process RNG.
+        #
+        # ``torch.manual_seed`` reseeds CPU AND every CUDA generator, and
+        # ``train_sequence``'s ``randn_like`` reparam noise draws from the CUDA
+        # generator when the candidate is on CUDA — so on a GPU rover the CUDA RNG
+        # must be captured + restored too, else a caller sharing the process CUDA
+        # RNG is silently perturbed. Guarded by ``cuda.is_available()`` AND the
+        # candidate's device so a CPU-only host never touches the CUDA API.
         rng_state = torch.get_rng_state()
+        cuda_rng_state = (
+            torch.cuda.get_rng_state_all()
+            if device.type == "cuda" and torch.cuda.is_available()
+            else None
+        )
         was_training = candidate.training
 
         final_loss = 0.0
         try:
             torch.manual_seed(seed)
             # Throwaway reconstruction heads built from the candidate's read-only
-            # cfg. Refined jointly but NEVER persisted into the slot.
-            decoders = RawModalityDecoders(candidate.cfg)
+            # cfg, placed on the candidate's device so the joint train_sequence
+            # never hits a cross-device matmul. Refined jointly, NEVER persisted.
+            decoders = RawModalityDecoders(candidate.cfg).to(device)
             params = list(candidate.parameters()) + list(decoders.parameters())
             candidate.train()
             decoders.train()
@@ -265,6 +279,8 @@ class RSSMRefiner:
                 final_loss = float(loss.detach())
         finally:
             torch.set_rng_state(rng_state)
+            if cuda_rng_state is not None:
+                torch.cuda.set_rng_state_all(cuda_rng_state)
             if not was_training:
                 candidate.eval()
 

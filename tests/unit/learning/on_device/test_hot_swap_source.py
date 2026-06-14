@@ -235,6 +235,96 @@ async def test_new_digest_after_ack_materialises_again() -> None:
 
 
 @pytest.mark.asyncio
+async def test_superseded_unacked_pending_engine_is_evicted() -> None:
+    """A newer pending update evicts the PRIOR unacknowledged engine (no leak).
+
+    The orchestrator consumes ``pending_update`` per tick and ``acknowledge_swap``
+    AFTER applying it. If the gate promotes a newer candidate BEFORE the prior
+    pending update was acknowledged, the prior materialised engine becomes
+    unreachable — the loader can only ever look up the freshest ``id(update)``.
+    Without an evict at the publish site, ``_engine_by_update`` retains the stale
+    engine forever (a slow leak: a fresh RSSM held alive across every superseding
+    promotion). The newer publish must pop the prior pending update's engine.
+    """
+    store = _FakeSlotStore(_DIGEST_A)
+    engine_a = object()
+    engine_b = object()
+    engines = iter((engine_a, engine_b))
+
+    def _materialize(digest: str) -> object:
+        return next(engines)
+
+    source = OnDeviceWeightUpdateSource(
+        slot_store=store,
+        materialize=_materialize,
+        check_interval_s=_CHECK_INTERVAL_S,
+    )
+    await source.refresh_once()
+    first = source.pending_update
+    assert first is not None
+    assert source.take_materialized(first) is engine_a
+
+    # A newer candidate is promoted while ``first`` is STILL unacknowledged.
+    store.active_digest = _DIGEST_B
+    surfaced = await source.refresh_once()
+
+    assert surfaced is True
+    second = source.pending_update
+    assert second is not None
+    assert second is not first
+    # The fresh engine is reachable...
+    assert source.take_materialized(second) is engine_b
+    # ...and the superseded engine was evicted (no unbounded retention).
+    assert source.owns(first) is False
+    with pytest.raises(KeyError):
+        source.take_materialized(first)
+    # Only the freshest engine remains cached.
+    assert len(source._engine_by_update) == 1  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_corrupt_supersede_evicts_prior_pending_engine() -> None:
+    """A corrupt newer slot still evicts the prior pending engine + clears it.
+
+    Fail-closed must not leak: when a newer active digest is rejected
+    (``SlotIntegrityError``) it surfaces NO replacement, but the prior
+    unacknowledged engine must still be evicted and the pending slot cleared so a
+    rejected supersede never strands the superseded engine in the cache.
+    """
+    store = _FakeSlotStore(_DIGEST_A)
+    engine_a = object()
+    calls: list[str] = []
+
+    def _materialize(digest: str) -> object:
+        calls.append(digest)
+        if digest == _DIGEST_B:
+            raise SlotIntegrityError("bad newer slot")
+        return engine_a
+
+    metrics = _SpyMetrics()
+    source = OnDeviceWeightUpdateSource(
+        slot_store=store,
+        materialize=_materialize,
+        check_interval_s=_CHECK_INTERVAL_S,
+        metrics=metrics,
+    )
+    await source.refresh_once()
+    first = source.pending_update
+    assert first is not None
+
+    store.active_digest = _DIGEST_B
+    surfaced = await source.refresh_once()
+
+    assert surfaced is False
+    assert calls == [_DIGEST_A, _DIGEST_B]
+    assert metrics.reverts == ["integrity_mismatch"]
+    # The superseded engine is gone and the pending slot is cleared (fail-closed).
+    assert source.owns(first) is False
+    assert source.pending_update is None
+    assert len(source._engine_by_update) == 0  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
 async def test_take_materialized_unknown_update_raises() -> None:
     """A loader lookup for an unknown update raises (never silently returns None)."""
     source, _ = _make_source(active_digest=None)
