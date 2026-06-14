@@ -3035,25 +3035,31 @@ def build_on_device_coordinator(
     sequence-dict batch, and the persisted slot is a refined RSSM ``state_dict``
     that round-trips into a fresh ``build_world_model(cfg)``.
 
-    WS3 PRODUCES + PERSISTS the candidate slot. WS4 adds the safety-regression
-    gate: after each persist the coordinator scores the candidate vs the live
-    baseline via the world-model rollout-return harness and promotes-or-reverts
-    (marking the slot active on pass, incrementing the revert counter on fail).
-    The gate runs over a config-sized policy STAND-IN through the decoupling
-    :class:`PolicyProtocol`; a later WS swaps the live RSSM behind that same seam.
+    The coordinator PRODUCES + PERSISTS the candidate slot, then the WS-E3
+    safety-regression gate scores candidate-RSSM vs baseline-RSSM on a FIXED
+    held-out replay batch via **reconstruction + KL loss** (``train_sequence``;
+    lower-is-better) and promotes-or-reverts: PROMOTE iff ``candidate_loss <=
+    baseline_loss + regression_tolerance`` (marks the slot active), else REVERT
+    (increments the revert counter). The candidate is the persisted slot loaded
+    into a deep-copy of the live RSSM, so the live model is bitwise-unchanged on
+    both revert AND promote (activation is the separate ``enable_hot_swap`` seam).
+    The self-gaming ``score_policy`` rollout-return metric is NOT used by the gate.
 
     Args:
         cfg: Root settings.
         metrics: Optional shared metrics registry, threaded keyword-only so the
-            WS4 revert counter surfaces on ``/metrics``. ``None`` (the default)
+            revert counter surfaces on ``/metrics``. ``None`` (the default)
             keeps the revert path working without recording a metric.
         world_model: Optional live world model (the orchestrator's already-built
             ``build_world_model(cfg)`` result), threaded keyword-only so the gate
-            scores against the REAL model architecture (``RSSM`` or
-            ``DualStreamRSSM`` per ``cfg.model.cfc_hidden_dim``). ``None`` (the
-            default) keeps #134 behaviour but the gate builds its own model via
-            ``build_world_model(cfg)`` rather than the old wrong-arch
-            ``RSSM(cfg.model)`` literal.
+            + refiner act on the REAL model the rover runs. ``None`` (the default)
+            resolves the effective model via ``build_world_model(cfg)`` instead of
+            the old wrong-arch ``RSSM(cfg.model)`` literal. NOTE: ``None`` is NOT
+            unconditionally behaviour-preserving — when the effective engine lacks
+            ``train_sequence`` (e.g. ``DualStreamRSSM`` / ``DualStreamRSSMOnnx``)
+            the capability gate below returns ``None`` and logs
+            ``on_device_refiner_unsupported_engine`` (on-device refinement is
+            only supported for the classic ``RSSM`` engine).
 
     Returns:
         A ``ReplayTriggerCoordinator`` when enabled, else ``None``.
