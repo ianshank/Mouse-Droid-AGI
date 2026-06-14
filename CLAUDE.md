@@ -433,6 +433,50 @@ static-CI → cold-hardware → warm-live. Contracts:
   `orch._metrics` renders the families on live Claude. Operator runbook:
   `docs/runbooks/jetson-full-validation.md`.
 
+## Validation-efficiency surface (latency stats + trend store + phase caching)
+
+Runtime/resource-efficiency tooling layered on top of the existing validation
+harness. Three additive, opt-in contracts — nothing changes the default
+single-shot / full-run behaviour:
+
+- **`src/mousedroid/validation/latency_stats.py`** — pure, deterministic
+  `summarize(samples_ms) -> LatencySummary` (min/mean/p50/p95/p99/max) shared by
+  the `tools/` probes. No I/O, no clock reads, no verdict — the caller gates
+  against its config-supplied target. `llm_latency_probe.py --iterations N`
+  (default 1 = byte-identical legacy single-shot gate; >1 emits
+  `llm_latency_summary` and gates on **p95** to absorb cloud/GPU tail variance).
+  `lidar_telemetry_probe.py` now emits `lidar_frame_interval_summary` (inter-
+  arrival jitter — a high p95/p99 vs p50 means dropped/bunched dashboard frames).
+  The pure `intervals_ms(timestamps_s)` helper (timestamps→inter-arrival gaps)
+  lives here too so the jitter maths is unit-tested, not inlined in the probe.
+  **Import-decoupling contract:** `mousedroid/validation/__init__.py` re-exports
+  the heavy `runtime` sensor helpers (numpy/cv2/pyaudio) **lazily** via :pep:`562`
+  `__getattr__`, so importing the pure modules never drags the sensor stack into
+  the process (locked by `tests/regression/test_validation_import_decoupling.py`).
+  Keep new pure helpers dependency-free; never add an eager `runtime` import to
+  `__init__`.
+- **`src/mousedroid/validation/report_store.py`** — persists each
+  `PreflightReport` to the **existing** harness journal (no parallel store) as a
+  `preflight_report` event, and `detect_regressions(history)` compares the two
+  newest runs for status downgrade / new FAIL / latency creep (gated by BOTH a
+  `slow_ratio` and an absolute `slow_floor_s` so sub-50 ms checks don't false-
+  fire). Wired via `mousedroid.cli.preflight --journal-path PATH` (opt-in record)
+  + `--trend` (print regressions; exit 1 on regression). `recorded_at_ns` is
+  wall-clock `time.time_ns()` — stable across reboots, unlike the journal's
+  monotonic entry stamp. Construct the JSONL config with
+  `HarnessJournalConfig.model_validate({...})` (NOT direct construction — mypy
+  strict treats Field-defaulted args as required without the pydantic plugin).
+- **`scripts/jetson_full_validation.sh` Phase-1 caching** — Phase 1 (static CI)
+  is a pure function of the committed source. `git_clean_sha` echoes the HEAD
+  sha ONLY when the tree under `src/tests/scripts/config/pyproject.toml` is
+  clean; a dirty tree returns empty → forced cache miss → never masks an
+  uncommitted edit. A matching cached sha SKIPs Phase 1 (recorded
+  `PASS "static CI (cached)"`); the cache is written only on a fully-green run.
+  `--no-cache` forces re-run; `--phases 0,1,3` runs an ordered subset (`--phase`
+  kept as the single-phase alias). Cache lives under
+  `<report-root>/.cache/phase1_pass_sha` (gitignored). Hardware (Phase 2) + live
+  (Phase 3) are NEVER cached.
+
 ## Unified dashboard + sensor-fusion summary (full rover bring-up)
 
 The telemetry server serves a single overview page at `/` (→ `/dashboard`)

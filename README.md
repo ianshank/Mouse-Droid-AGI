@@ -90,6 +90,7 @@ See [docs/architecture.md](docs/architecture.md) for full C4 diagrams (Context �
 - **USB-C smoke gate (PR #106):** `python scripts/check_usbc_devices.py --config config/jetson_production.yaml` runs a fast, no-orchestrator probe asserting every `usbc_discovery.required_endpoints` entry resolves under `/dev/serial/by-id/`. The Jetson smoke pipeline runs this as a blocking stage before opening the serial port; `factory.py:_resolve_esp32_serial_via_usbc_discovery` auto-overrides a stale literal `esp32.serial_port` when the live by-id path differs (rover swap). Full operator runbook: [`docs/runbooks/jetson-rover-smoke.md`](docs/runbooks/jetson-rover-smoke.md). C4 component diagram: [`docs/architecture/c4-usbc-smoke.md`](docs/architecture/c4-usbc-smoke.md).
 - **Power-chain probe (PR #106):** `src/mousedroid/diagnostics/power_chain.py:assert_power_chain` runs battery → send_velocity → emergency_stop and asserts the e-stop latency against `ESP32Config.emergency_stop_budget_ms`. Defaults to zero-velocity so an untethered rover does not roll while the smoke runs unattended — override via `MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION=true` only when the rover is on rollers or tethered.
 - **Anthropic Claude LLM gateway + cloud/local failover (PR #107 — now deployed live):** The deliberative mission-translation path (natural language → `GoalVector`) runs **live on the Jetson rover** with cloud Claude (Anthropic Messages API) as the primary NL→`GoalVector` translator and a local Phi-3-mini (`llama_cpp`) off-network fallback, composed by `FallbackLLMGateway`. **Invariant:** this tier sits entirely OUTSIDE the 30 Hz reactive control loop — RSSM → MCTS → ESP32 stays deterministic and LLM-free, so there is no LLM in the E-stop path. Install extras via `pip install -e ".[anthropic,llm]"`, and supply the key via `ANTHROPIC_API_KEY` env var (the SDK reads natively) or `MOUSEDROID_LLM__API_KEY` for `SecretStr` wrapping — never in YAML. The composite re-probes a degraded primary every `LLMConfig.fallback_retry_cooldown_s` (default 30 s) so a transient WAN dropout does not pin the rover to the local model. Verify the path live with the dry-run probe `python scripts/translate_mission.py --mission "patrol left then stop"`, which translates a single NL mission into a `GoalVector` through the real factory (no motors) and prints which tier served. Operator runbook: [`docs/runbooks/jetson-claude-pilot-deploy.md`](docs/runbooks/jetson-claude-pilot-deploy.md). C4 diagram: [`docs/architecture/c4-llm-gateway.md`](docs/architecture/c4-llm-gateway.md).
+- **Sim-first RSSM world-model training (Physical-AI Phase 5 + vision fine-tune):** A MuJoCo (classic) skid-steer physics simulator (`rover.sim.backend: mujoco`) generates episodes that pretrain the RSSM dynamics core; a follow-on phase renders an RGB camera and extracts vision features (the deployed non-learned `MeanPoolExtractor` — no CNN trained) to fine-tune the model with vision ON, transferring the vision-OFF checkpoint via `checkpoint_migration`. Both phases are **opt-in** (`training.rssm_pretrain_enabled` / `training.rssm_vision_finetune_enabled`, default OFF) and run **offline, OUTSIDE the 30 Hz reactive loop** — the blocking torch loop runs in `asyncio.to_thread` so the thermal-pause safety check is never starved. Run via `python -m mousedroid.training.pipeline_orchestrator --config <training.yaml>`. C4 diagram: [`docs/architecture/c4-rssm-sim-pretraining.md`](docs/architecture/c4-rssm-sim-pretraining.md).
 
 ---
 
@@ -203,6 +204,13 @@ python -m mousedroid.cli.preflight                     # text output
 python -m mousedroid.cli.preflight --json              # JSON report
 python -m mousedroid.cli.preflight --checks camera,esp32  # filter to subset
 python -m mousedroid.cli.preflight --mock-hardware     # smoke wiring without devices
+
+# Trend tracking — persist each run to a journal and flag run-over-run
+# regressions (status downgrade / new FAIL / latency creep). Opt-in; exits 1
+# on a detected regression. Sensitivity is operator-tunable (no hardcoded gate).
+python -m mousedroid.cli.preflight --journal-path var/preflight_trend.jsonl
+python -m mousedroid.cli.preflight --journal-path var/preflight_trend.jsonl --trend \
+    --trend-slow-ratio 1.5 --trend-slow-floor-s 0.05
 ```
 
 Both exit `0` when every check is `OK` or `WARN` (the latter is operator-actionable — e.g. CSI ribbon
@@ -226,6 +234,8 @@ bash scripts/jetson_full_smoke_run.sh
 # Full on-device validation (PR #116) — static CI -> cold-hardware -> warm-live,
 # one timestamped report under reports/jetson_full_validation/<UTC>/SUMMARY.md
 bash scripts/jetson_full_validation.sh            # all phases
+bash scripts/jetson_full_validation.sh --phases 0,1,3  # an ordered subset
+bash scripts/jetson_full_validation.sh --no-cache # force re-run cached static CI
 bash scripts/jetson_full_validation.sh --dry-run  # print the plan, run nothing
 bash scripts/jetson_full_validation.sh --help     # env tunables + selectors
 ```
@@ -235,7 +245,15 @@ The full-validation wrapper composes the smoke run together with `ci.sh`, the `p
 the runbook's cold-then-warm discipline (it `docker stop`s the container for exclusive-device
 sensor checks and always restarts it via a `trap`). It tolerates the functionally-dead ESP32
 (serial/motor/power are non-blocking; no motion is armed) and has **no hardcoded values** — every
-port/timeout/namespace is env-overridable. See `docs/runbooks/jetson-full-validation.md`.
+port/timeout/namespace is env-overridable. Phase 1 (static CI) is **cached on the committed
+source SHA** — a clean tree unchanged since the last green run SKIPs it (`--no-cache` forces a
+re-run); hardware/live phases are never cached. See `docs/runbooks/jetson-full-validation.md`.
+
+**Latency-regression probes.** `tools/llm_latency_probe.py --iterations N` and
+`tools/lidar_telemetry_probe.py` emit p50/p95/p99 summaries (gateway round-trip,
+LiDAR→WebSocket frame jitter) via the pure `mousedroid.validation.latency_stats`
+helper — turning single-shot presence checks into tail-latency gates. C4 component
+diagram: [`docs/architecture/c4-validation-efficiency.md`](docs/architecture/c4-validation-efficiency.md).
 
 Runtime overlays may be supplied explicitly or through `MOUSEDROID_CONFIGS` / `MOUSEDROID_JETSON_CONFIGS`, keeping smoke and validation paths aligned with deployed configuration.
 
@@ -344,6 +362,34 @@ curl -fsS http://127.0.0.1:8080/metrics \
 Label values are validated against fixed low-cardinality sets (out-of-set values dropped), and the
 budget threshold comes from `cfg.llm.latency_target_ms` — no hardcoded values. See
 `docs/architecture/c4-llm-gateway.md` (Observability).
+
+**Training experiment logging (MLflow).** The offline GPU pre-training pipeline can log params,
+per-phase + per-step metrics, and artifacts to MLflow. It is wired via Protocol-DI through the
+factory as a NEVER-None `ExperimentLoggerProtocol`: the default `NoOpExperimentLogger` is a
+byte-identical no-op, so the path is unconditional and **defaults OFF**. Opt in per-config:
+
+```yaml
+observability:
+  experiment_logger:
+    backend: mlflow            # "none" (default) | "mlflow"
+    tracking_uri: file:./mlruns
+    experiment_name: mousedroid
+    run_name: my-pipeline      # optional; falls back to "pipeline"
+    log_step_every_n: 10       # throttle per-step metric writes on long runs
+    log_artifacts: true        # resolved-Settings snapshot + per-phase checkpoints
+```
+
+`PipelineOrchestrator` emits a parent run per pipeline + a child run per phase (nested via the
+`mlflow.parentRunId` tag) and consumes `run_name` + `log_artifacts`; `OfflineRLTrainer` (CQL/IQL)
+logs per-step losses and consumes `log_step_every_n` as its throttle (config→trainer wiring in the
+orchestrator's offline-RL phases is follow-up). All protocol methods are total (never raise on
+backend failure), and
+`build_experiment_logger` degrades to NoOp on a missing `[mlflow]` extra **or** a construction
+failure — observability is best-effort, never load-bearing. The CLI entry point
+(`python -m mousedroid.training.pipeline_orchestrator --config <yaml>`) resolves the logger from
+config, so the YAML opt-in takes effect with no code change. Install via `pip install -e ".[mlflow]"`.
+Operator runbook: [`docs/runbooks/mlflow-local-ui.md`](docs/runbooks/mlflow-local-ui.md); C4 diagram:
+[`docs/architecture/c4-experiment-logger.md`](docs/architecture/c4-experiment-logger.md).
 
 ### Unified Dashboard (camera + lidar + sensor-fusion) over WiFi
 

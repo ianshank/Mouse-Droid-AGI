@@ -12,9 +12,18 @@
 # Usage (run on the Jetson host, repo at /opt/mousedroid):
 #   bash scripts/jetson_full_validation.sh                 # all phases
 #   bash scripts/jetson_full_validation.sh --phase 1       # one phase (0-3; phase 4 report always runs)
+#   bash scripts/jetson_full_validation.sh --phases 0,1,3  # a subset, in order
+#   bash scripts/jetson_full_validation.sh --no-cache      # force re-run phase 1 (ignore cache)
 #   bash scripts/jetson_full_validation.sh --pytest-only   # hardware pytest tier only
 #   bash scripts/jetson_full_validation.sh --dry-run       # print the plan, run nothing
 #   bash scripts/jetson_full_validation.sh --help
+#
+# Phase-1 caching: Phase 1 (static CI) is a pure function of the source tree.
+# When the git HEAD is unchanged AND the tree under src/tests/scripts/config/
+# pyproject.toml is clean since the last green Phase 1, it is SKIPPED (recorded
+# PASS "static CI (cached)"). A dirty tree or any source change always re-runs
+# it. Use --no-cache to force a re-run; the cache lives under
+# <report-root>/.cache/ and never affects hardware (Phase 2) or live (Phase 3).
 #
 # Env overrides (all optional; documented defaults shown):
 #   MOUSEDROID_SMOKE_CONTAINER        container name              (mousedroid)
@@ -70,6 +79,9 @@ RUN_DIR="${REPORT_ROOT}/${STAMP}"
 DRY_RUN=0
 PHASE_SEL="all"
 PYTEST_ONLY=0
+NO_CACHE=0
+CACHE_DIR="${REPORT_ROOT}/.cache"
+PHASE1_CACHE_FILE="${CACHE_DIR}/phase1_pass_sha"
 
 PASSES=0
 WARNS=0
@@ -209,7 +221,41 @@ phase0() {
 # --------------------------------------------------------------------------- #
 # Phase 1 — static CI (mock hardware)
 # --------------------------------------------------------------------------- #
+
+# Echo the HEAD sha ONLY when the source tree Phase 1 validates is clean. Echo
+# nothing when git is unavailable or the tree is dirty — an empty fingerprint
+# forces a cache miss, so an uncommitted edit is never masked by a stale green.
+git_clean_sha() {
+    command -v git >/dev/null 2>&1 || return 0
+    git -C "${REPO_DIR}" rev-parse HEAD >/dev/null 2>&1 || return 0
+    if [[ -n "$(git -C "${REPO_DIR}" status --porcelain \
+            -- src tests scripts config pyproject.toml 2>/dev/null)" ]]; then
+        return 0
+    fi
+    git -C "${REPO_DIR}" rev-parse HEAD 2>/dev/null
+}
+
+# Cache-aware wrapper around the static-CI body. Skips the (minutes-long) run
+# when the committed source is byte-identical to the last green Phase 1.
 phase1() {
+    local sha; sha="$(git_clean_sha)"
+    if [[ "${NO_CACHE}" != "1" && "${DRY_RUN}" != "1" && -n "${sha}" \
+            && -f "${PHASE1_CACHE_FILE}" \
+            && "$(cat "${PHASE1_CACHE_FILE}" 2>/dev/null)" == "${sha}" ]]; then
+        record PASS "static CI (cached)" "sha ${sha:0:12} unchanged since last green phase 1"
+        return
+    fi
+    local fails_before=${FAILURES}
+    _phase1_run
+    # Cache only a clean, fully-green run (no new blocking failure during phase 1).
+    if [[ "${DRY_RUN}" != "1" && -n "${sha}" && ${FAILURES} -eq ${fails_before} ]]; then
+        mkdir -p "${CACHE_DIR}"
+        printf '%s\n' "${sha}" >"${PHASE1_CACHE_FILE}"
+        log "phase 1 cached green @ ${sha:0:12}"
+    fi
+}
+
+_phase1_run() {
     log "=== PHASE 1: static CI (mock hardware) ==="
     local logfile="${RUN_DIR}/phase1_ci.log"
     if container_running; then
@@ -448,7 +494,8 @@ while [[ $# -gt 0 ]]; do
         --help|-h) usage; exit 0 ;;
         --dry-run) DRY_RUN=1; shift ;;
         --pytest-only) PYTEST_ONLY=1; shift ;;
-        --phase) PHASE_SEL="${2:-all}"; shift 2 ;;
+        --no-cache) NO_CACHE=1; shift ;;
+        --phase|--phases) PHASE_SEL="${2:-all}"; shift 2 ;;
         *) echo "Unknown argument: $1" >&2; usage; exit 2 ;;
     esac
 done
@@ -461,14 +508,32 @@ if [[ "${PYTEST_ONLY}" == "1" ]]; then
     phase4; exit $?
 fi
 
-case "${PHASE_SEL}" in
-    all) phase0; phase1; phase2; phase3 ;;
-    0) phase0 ;;
-    1) phase1 ;;
-    2) phase2 ;;
-    3) phase3 ;;
-    *) echo "Invalid --phase '${PHASE_SEL}' (use 0-3 or all; phase 4 report+gate always runs last)" >&2; exit 2 ;;
-esac
+run_phase_by_num() {
+    case "$1" in
+        0) phase0 ;;
+        1) phase1 ;;
+        2) phase2 ;;
+        3) phase3 ;;
+    esac
+}
+
+# Resolve the selection into an ordered, validated phase list. ``all`` expands
+# to 0-3; a comma list (``0,1,3``) runs the named phases in ascending order.
+if [[ "${PHASE_SEL}" == "all" ]]; then
+    SELECTED_PHASES="0 1 2 3"
+else
+    SELECTED_PHASES="$(printf '%s\n' "${PHASE_SEL//,/ }" | tr ' ' '\n' | sort -un | tr '\n' ' ')"
+    for p in ${SELECTED_PHASES}; do
+        case "${p}" in
+            0|1|2|3) ;;
+            *) echo "Invalid phase '${p}' in --phases '${PHASE_SEL}' (use 0-3 or all; phase 4 report+gate always runs last)" >&2; exit 2 ;;
+        esac
+    done
+fi
+
+for p in ${SELECTED_PHASES}; do
+    run_phase_by_num "${p}"
+done
 
 phase4
 exit $?

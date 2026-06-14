@@ -275,6 +275,43 @@ async def test_main_returns_2_when_gateway_degraded(
     stub_gateway.stop.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_main_samples_multiple_iterations_and_gates_on_p95(
+    probe: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_goal_vector: Any,
+    stub_cfg: Any,
+) -> None:
+    """``--iterations N`` runs translate_mission N times and gates on p95."""
+    stub_gateway = MagicMock()
+    stub_gateway.is_ready = True
+    stub_gateway.start = AsyncMock()
+    stub_gateway.stop = AsyncMock()
+    stub_gateway.translate_mission = AsyncMock(return_value=stub_goal_vector)
+    stub_gateway._model = MagicMock(n_gpu_layers=-1)
+
+    monkeypatch.setattr(probe, "build_llm_gateway", lambda _cfg, **_kw: stub_gateway)
+    monkeypatch.setattr(probe, "build_injection_filter", lambda _cfg: MagicMock())
+    monkeypatch.setattr(
+        probe,
+        "_tegrastats_snapshot",
+        lambda: {"ram_used_mb": None, "ram_total_mb": None, "raw_line": None},
+    )
+    monkeypatch.setattr(probe, "load_settings", lambda *_paths: stub_cfg)
+
+    args = probe.argparse.Namespace(config=None, mission="turn left slowly", iterations=3)
+    rc = await probe._main(args)
+    assert rc == 0
+    assert stub_gateway.translate_mission.await_count == 3
+
+
+def test_main_cli_rejects_zero_iterations(probe: Any) -> None:
+    """``--iterations 0`` is a usage error (must sample at least once)."""
+    with pytest.raises(SystemExit) as excinfo:
+        probe.main(["--iterations", "0"])
+    assert excinfo.value.code == 2
+
+
 def test_main_cli_returns_3_when_llm_disabled_in_cfg(
     probe: Any,
     monkeypatch: pytest.MonkeyPatch,

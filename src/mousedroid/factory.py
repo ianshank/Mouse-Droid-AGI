@@ -59,6 +59,7 @@ if TYPE_CHECKING:
     from mousedroid.efficiency.tensorrt import TensorRTCompilerProtocol
     from mousedroid.experience.logger import ExperienceLogger
     from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
+    from mousedroid.hardware.camera.feature_extractor import FeatureExtractorProtocol
     from mousedroid.harness.approval.protocol import ApprovalGateProtocol
     from mousedroid.harness.protocol import TaskTrackerProtocol
     from mousedroid.health.monitor import HealthMonitor
@@ -79,11 +80,13 @@ if TYPE_CHECKING:
     from mousedroid.telemetry.log_buffer import LogRingBuffer
     from mousedroid.telemetry.metrics import MetricsRegistry
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
+    from mousedroid.training.observability import ExperimentLoggerProtocol
     from mousedroid.training.replay import ReplayReaderProtocol
     from mousedroid.voice.greeting import Greeter
     from mousedroid.voice.mock_tts import MockTTS
     from mousedroid.voice.tts import PiperTTS
     from mousedroid.world_model.protocol import WorldModelProtocol
+    from mousedroid.world_model.rssm import RSSM
 
 
 _log = get_logger(__name__)
@@ -574,6 +577,102 @@ def build_world_model(cfg: Settings) -> WorldModelProtocol:
     from mousedroid.world_model.rssm import RSSM
 
     return RSSM(cfg.model)
+
+
+def build_rssm_trainable(cfg: Settings) -> RSSM:
+    """Build the concrete trainable RSSM for MuJoCo dynamics pretraining.
+
+    Unlike :func:`build_world_model` (which returns a ``WorldModelProtocol``
+    wrapper for deployment), this returns the concrete ``nn.Module`` so the
+    pretrainer can call ``train_sequence`` + backprop. Vision is disabled
+    (``vision_dim=0`` paired with ``vision_proj_dim=0`` per the schema
+    validator) — the sim has no camera; the dynamics core is what gets
+    pretrained. Operator pretrain knobs from :class:`TrainingConfig` are copied
+    onto the model config so they live in one place (``training:``).
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        A concrete :class:`~mousedroid.world_model.rssm.RSSM` with vision off.
+    """
+    from mousedroid.world_model.rssm import RSSM
+
+    update: dict[str, object] = {
+        "vision_dim": 0,
+        "vision_proj_dim": 0,
+        "kl_beta": cfg.training.kl_beta,
+        "kl_free_nats": cfg.training.rssm_free_nats,
+        "kl_balance_alpha": cfg.training.rssm_kl_balance_alpha,
+    }
+    # Use the rover's full lidar signal when a MuJoCo rover is configured: size the
+    # model's lidar modality to the sim's sector count so train_sequence actually
+    # reconstructs lidar (otherwise it is silently dropped — leaving only motor +
+    # a single min-range scalar). Falls back to the model default when no rover.
+    rover = cfg.rover
+    if rover is not None and rover.sim.backend == "mujoco":
+        update["lidar_dim"] = rover.sim.mujoco.lidar_num_sectors
+        update["lidar_proj_dim"] = cfg.model.lidar_proj_dim
+    model_cfg = cfg.model.model_copy(update=update)
+    return RSSM(model_cfg)
+
+
+def build_rssm_vision_finetune(cfg: Settings, checkpoint: Path) -> RSSM:
+    """Load a vision-OFF pretrained RSSM and migrate it to a vision-ON model.
+
+    Uses :func:`~mousedroid.world_model.checkpoint_migration.load_rssm_with_migration`
+    to transfer the dynamics core (gru/posterior/prior/decoder/reward) verbatim,
+    copy retained-modality fusion columns, and Kaiming-init the new vision
+    columns + ``vision_proj``. Vision dim = ``cfg.camera.feature_dim`` so the
+    model matches the sim ``MeanPoolExtractor`` output; lidar mirrors the rover.
+
+    Args:
+        cfg: Root settings.
+        checkpoint: Path to the vision-OFF pretrained RSSM checkpoint.
+
+    Returns:
+        A vision-ON :class:`~mousedroid.world_model.rssm.RSSM` ready to fine-tune.
+    """
+    import torch
+
+    from mousedroid.world_model.checkpoint_migration import load_rssm_with_migration
+
+    update: dict[str, object] = {
+        "vision_dim": cfg.camera.feature_dim,
+        # Use the configured projection dim directly; the ModelConfig validator
+        # rejects a zero proj_dim paired with a nonzero modality dim, so a
+        # misconfig surfaces explicitly instead of being patched to a literal.
+        "vision_proj_dim": cfg.model.vision_proj_dim,
+        "kl_beta": cfg.training.kl_beta,
+        "kl_free_nats": cfg.training.rssm_free_nats,
+        "kl_balance_alpha": cfg.training.rssm_kl_balance_alpha,
+    }
+    rover = cfg.rover
+    if rover is not None and rover.sim.backend == "mujoco":
+        update["lidar_dim"] = rover.sim.mujoco.lidar_num_sectors
+        update["lidar_proj_dim"] = cfg.model.lidar_proj_dim
+    model_cfg = cfg.model.model_copy(update=update)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return load_rssm_with_migration(checkpoint, model_cfg, device)
+
+
+def build_vision_feature_extractor(cfg: Settings) -> FeatureExtractorProtocol:
+    """Build the sim vision feature extractor for RSSM vision-on fine-tuning.
+
+    Returns the same non-learned :class:`MeanPoolExtractor` the deployed
+    ``mean_pool`` camera path uses (mean-pool → L2), so rendered-sim and real
+    ``vision_features`` share a distribution by construction — no CNN to train.
+    Dims come from :class:`CameraConfig` (invariant #3).
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        A ``FeatureExtractorProtocol`` producing ``cfg.camera.feature_dim`` features.
+    """
+    from mousedroid.hardware.camera.feature_extractor import MeanPoolExtractor
+
+    return MeanPoolExtractor(cfg.camera.feature_dim, l2_normalize=cfg.camera.l2_normalize)
 
 
 def _build_onnx_world_model(cfg: Settings) -> WorldModelProtocol:
@@ -1192,6 +1291,100 @@ def build_metrics_registry(cfg: Settings) -> MetricsRegistry | None:
     from mousedroid.telemetry.metrics import MetricsRegistry
 
     return MetricsRegistry(cfg.metrics)
+
+
+def build_experiment_logger(cfg: Settings) -> ExperimentLoggerProtocol:
+    """Build the shared experiment logger for training pipelines.
+
+    Mirrors :func:`build_metrics_registry`'s shape: returns a NEVER-None
+    protocol type so callers can drop the ``logger is not None`` guard.
+    The NoOp implementation is the default and is byte-identically a no-op,
+    so threading the logger through the orchestrator/trainer is free when
+    observability is disabled.
+
+    Resolution order:
+
+    1. ``cfg.observability is None`` (the pre-feature default) →
+       :class:`NoOpExperimentLogger`.
+    2. ``cfg.observability.experiment_logger.backend == "none"`` →
+       :class:`NoOpExperimentLogger`.
+    3. ``cfg.observability.experiment_logger.backend == "mlflow"`` AND
+       the ``[mlflow]`` extras are installed →
+       :class:`MlflowExperimentLogger`.
+    4. ``cfg.observability.experiment_logger.backend == "mlflow"`` AND
+       ``mlflow-skinny`` is NOT installed →
+       :class:`NoOpExperimentLogger` (with a structured warning, so
+       operators see the misconfiguration without crashing the run).
+
+    ``file:./mlruns`` URIs are pinned to an absolute path at build time so
+    they survive working-dir changes inside the training process.
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        A logger conforming to :class:`ExperimentLoggerProtocol`.
+    """
+    from mousedroid.training.observability import NoOpExperimentLogger
+
+    if cfg.observability is None:
+        return NoOpExperimentLogger()
+    logger_cfg = cfg.observability.experiment_logger
+    if logger_cfg.backend == "none":
+        return NoOpExperimentLogger()
+
+    if logger_cfg.backend == "mlflow":
+        try:
+            from mousedroid.training.observability.mlflow_logger import (
+                MlflowExperimentLogger,
+            )
+
+            tracking_uri = _resolve_tracking_uri(logger_cfg.tracking_uri)
+            return MlflowExperimentLogger(
+                tracking_uri=tracking_uri,
+                experiment_name=logger_cfg.experiment_name,
+                run_name=logger_cfg.run_name,
+            )
+        except ImportError as exc:
+            _log.warning(
+                "experiment_logger_mlflow_extras_missing",
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+            return NoOpExperimentLogger()
+        except Exception as exc:
+            # Construction can also fail on a bad tracking_uri, an unreachable
+            # store, or permission errors. Degrade to NoOp (with a distinct
+            # warning) rather than crashing the whole training run — observability
+            # is best-effort, never load-bearing.
+            _log.warning(
+                "experiment_logger_mlflow_init_failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+            return NoOpExperimentLogger()
+
+    # Exhaustive Literal coverage; reached only on schema additions without a
+    # corresponding factory branch.
+    _log.warning(
+        "experiment_logger_unknown_backend",
+        backend=logger_cfg.backend,
+    )
+    return NoOpExperimentLogger()
+
+
+def _resolve_tracking_uri(raw: str) -> str:
+    """Pin a relative ``file:`` URI to an absolute path.
+
+    Non-file URIs (``http``, ``https``, ``databricks``, ``sqlite``) pass
+    through unchanged. The pin happens at factory time so the resolved
+    path survives chdir() inside trainers.
+    """
+    if not raw.startswith("file:"):
+        return raw
+    path_part = raw[len("file:") :]
+    abs_path = Path(path_part).resolve()
+    return f"file:{abs_path}"
 
 
 def build_weight_update_poller(
@@ -3297,8 +3490,19 @@ def build_rover_env(cfg: Settings) -> RoverEnvProtocol:
         return env
 
     if backend == "mujoco":
-        msg = "MuJoCo rover backend is reserved; see Phase B of the sim-to-real plan."
-        raise NotImplementedError(msg)
+        from mousedroid.sim.mujoco_rover_env import RoverMuJoCoEnv
+
+        mj_env = RoverMuJoCoEnv(
+            cfg.rover,
+            wheel_radius_m=cfg.robot.wheel_radius_m,
+            track_width_m=cfg.robot.track_width_m,
+        )
+        _log.info(
+            "rover_env_mujoco_built",
+            lidar_sectors=cfg.rover.sim.mujoco.lidar_num_sectors,
+            dr_enabled=cfg.domain_randomization.enabled,
+        )
+        return mj_env
 
     msg = f"unknown rover sim backend: {backend!r}"
     raise ValueError(msg)

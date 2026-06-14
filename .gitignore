@@ -32,6 +32,7 @@ coverage.xml
 coverage-branch.json
 htmlcov/
 .pytest_cache/
+.benchmarks/
 .mypy_cache/
 .ruff_cache/
 
@@ -127,9 +128,15 @@ reports/jetson_validate/
 reports/jetson_smoke/*/
 reports/jetson_smoke/**
 
-# Jetson full-validation outputs (timestamped run dirs from jetson_full_validation.sh)
+# Jetson full-validation outputs (timestamped run dirs + the Phase-1 static-CI
+# cache, e.g. reports/jetson_full_validation/.cache/phase1_pass_sha)
 reports/jetson_full_validation/*/
 reports/jetson_full_validation/**
+
+# Harness journal + validation trend-store runtime artefacts (JSONL/LMDB).
+# Default harness journal path is var/harness/journal; the preflight --trend
+# store writes here. Host-only runtime data — never commit.
+var/
 
 # Local run artifacts moved out of repo root
 reports/local_runs/
