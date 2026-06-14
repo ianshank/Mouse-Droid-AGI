@@ -73,4 +73,38 @@ class OnDeviceLearner(Protocol):
         ...
 
 
-__all__ = ["OnDeviceLearner", "OnDeviceUpdateResult"]
+@runtime_checkable
+class RSSMSequenceLearner(Protocol):
+    """SIBLING of :class:`OnDeviceLearner` for the RSSM-refinement path (WS-E2).
+
+    The original :class:`OnDeviceLearner` is Tensor-typed: ``update(batch: Tensor)``
+    assumes a ``forward(tensor)`` policy net. The RSSM has no ``forward()`` — its
+    gradient path is ``train_sequence(batch: dict[str, Tensor], decoders)`` over a
+    ``(B, T, ...)`` sequence dict. This sibling protocol accepts that dict batch so
+    the #134 Tensor path + its green tests are left untouched (additive contract).
+
+    Implementations MUST:
+
+    * deep-copy the base RSSM before any gradient flows (base bitwise-unchanged);
+    * run exactly ``cfg.update_steps`` steps at ``cfg.learning_rate``;
+    * persist ONLY the refined RSSM ``state_dict`` (never the throwaway decoders);
+    * keep the call SYNC and free of blocking I/O (the coordinator offloads it via
+      ``asyncio.to_thread``).
+    """
+
+    def update(self, batch: Mapping[str, Tensor]) -> OnDeviceUpdateResult:
+        """Run a bounded RSSM-refinement cycle on ``batch`` and return the candidate.
+
+        Args:
+            batch: A ``(B, T, ...)`` sequence dict with keys ``motor`` / ``action``
+                / ``valid_mask`` (always) plus the enabled modalities — exactly the
+                shape :meth:`mousedroid.world_model.rssm.RSSM.train_sequence` expects.
+
+        Returns:
+            An :class:`OnDeviceUpdateResult` carrying the refined RSSM state-dict,
+            final train loss, and the number of steps executed.
+        """
+        ...
+
+
+__all__ = ["OnDeviceLearner", "OnDeviceUpdateResult", "RSSMSequenceLearner"]
