@@ -129,7 +129,10 @@ class ReplayTriggerCoordinator:
             batch_size=int(batch.shape[0]),
         )
 
-        slot = self._slot_store.persist(result.candidate_state_dict)
+        # Offload the slot persistence too — it serialises the state dict to
+        # disk and streams a SHA-256 over it, both blocking syscalls that must
+        # not run on the event loop (CodeRabbit review).
+        slot = await asyncio.to_thread(self._slot_store.persist, result.candidate_state_dict)
         _log.info(
             "on_device_candidate_persisted",
             digest=slot.digest,

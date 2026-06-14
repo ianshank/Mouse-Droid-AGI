@@ -31,21 +31,30 @@ _N_SEEDED = 6
 _TRIGGER = 5
 
 
-def _seed_replay_store(experience_path: str, n: int) -> None:
-    """Write ``n`` experience records to an LMDB store at ``experience_path``."""
+async def _seed_replay_store(experience_path: str, n: int) -> None:
+    """Write ``n`` experience records to an LMDB store at ``experience_path``.
+
+    The LMDB writes are blocking disk I/O, so they run on a worker thread via
+    ``asyncio.to_thread`` — these helpers are called from ``asyncio`` tests and
+    must not block the event loop (CodeRabbit review; repo async-IO contract).
+    """
     cfg = Settings.model_validate(
         {
             "mock_hardware": True,
             "experience": {"path": experience_path, "map_size_gb": 0.01},
         }
     )
-    logger = ExperienceLogger(cfg.experience)
-    logger.open()
-    try:
-        for _ in range(n):
-            logger.log(MouseDroidExperienceRecord())
-    finally:
-        logger.close()
+
+    def _write_records() -> None:
+        logger = ExperienceLogger(cfg.experience)
+        logger.open()
+        try:
+            for _ in range(n):
+                logger.log(MouseDroidExperienceRecord())
+        finally:
+            logger.close()
+
+    await asyncio.to_thread(_write_records)
 
 
 def _build_cfg(experience_path: str) -> Settings:
@@ -68,7 +77,7 @@ def _build_cfg(experience_path: str) -> Settings:
 async def test_coordinator_produces_stamped_slot_without_ticking(tmp_path: Path) -> None:
     """The wired coordinator persists a stamped slot; the hot loop never runs."""
     experience_path = str(tmp_path / "experience_root")
-    _seed_replay_store(experience_path, _N_SEEDED)
+    await _seed_replay_store(experience_path, _N_SEEDED)
     cfg = _build_cfg(experience_path)
 
     orchestrator = build_orchestrator(cfg)
@@ -97,7 +106,7 @@ async def test_coordinator_produces_stamped_slot_without_ticking(tmp_path: Path)
 async def test_start_spawns_then_stop_cancels_slow_task(tmp_path: Path) -> None:
     """``start()`` spawns the slow task and ``stop()`` cancels it cleanly."""
     experience_path = str(tmp_path / "experience_root")
-    _seed_replay_store(experience_path, _N_SEEDED)
+    await _seed_replay_store(experience_path, _N_SEEDED)
     cfg = _build_cfg(experience_path)
 
     orchestrator = build_orchestrator(cfg)
@@ -124,7 +133,7 @@ async def test_slow_loop_runs_a_cycle_and_persists(tmp_path: Path) -> None:
     slot under ``<experience.path>/<slot_dir>``.
     """
     experience_path = str(tmp_path / "experience_root")
-    _seed_replay_store(experience_path, _N_SEEDED)
+    await _seed_replay_store(experience_path, _N_SEEDED)
     cfg = _build_cfg(experience_path)
 
     orchestrator = build_orchestrator(cfg)
@@ -154,7 +163,7 @@ async def test_slow_loop_survives_a_failing_cycle(tmp_path: Path) -> None:
     transient replay-store / disk error never kills on-device learning.
     """
     experience_path = str(tmp_path / "experience_root")
-    _seed_replay_store(experience_path, _N_SEEDED)
+    await _seed_replay_store(experience_path, _N_SEEDED)
     cfg = _build_cfg(experience_path)
 
     orchestrator = build_orchestrator(cfg)
@@ -170,15 +179,21 @@ async def test_slow_loop_survives_a_failing_cycle(tmp_path: Path) -> None:
 
     await orchestrator.start()
     try:
+        task = orchestrator._on_device_task
+        assert task is not None
         for _ in range(200):
             if calls:
                 break
             await asyncio.sleep(0.02)
         # Give it a beat to loop again after the failure (proving it survived).
         await asyncio.sleep(0.05)
+        # The slow task is STILL alive after the exception — the broad-except
+        # in _on_device_update_loop swallowed it and kept looping (it did not
+        # die early and only get cleared later by stop()).
+        assert not task.done()
     finally:
         await orchestrator.stop()
 
     assert calls, "the failing cycle never executed"
-    # The task survived the exception (was still running until stop cancelled it).
+    # stop() cancelled + cleared the task.
     assert orchestrator._on_device_task is None
