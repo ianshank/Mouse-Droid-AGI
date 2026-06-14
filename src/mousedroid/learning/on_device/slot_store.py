@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -62,6 +63,10 @@ _TMP_SLOT_NAME: str = f"candidate{_SLOT_SUFFIX}.tmp"
 _ACTIVE_MANIFEST_NAME: str = "active.json"
 # JSON key holding the active candidate's SHA-256 digest.
 _ACTIVE_DIGEST_KEY: str = "active_digest"
+# A valid slot digest is a 64-char lowercase-hex SHA-256 (matches the
+# ``hexdigest()`` shape stamped onto every persisted slot filename). Anything
+# else in the manifest is a corrupt/tampered pointer and must fail safe.
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class SlotIntegrityError(RuntimeError):
@@ -191,9 +196,11 @@ class OnDeviceSlotStore:
         """Return the active (blessed) candidate's digest, or ``None``.
 
         Reads the ``active.json`` manifest written by :meth:`mark_active`.
-        Returns ``None`` when no slot has been blessed (no manifest), or when
-        the manifest is missing/malformed — a corrupt pointer must fail safe to
-        "no active slot" rather than crash the live-policy load path.
+        Returns ``None`` when no slot has been blessed (no manifest), when the
+        manifest is missing/malformed, or when the stored digest is not a
+        64-char lowercase-hex SHA-256 — a corrupt/tampered pointer must fail
+        safe to "no active slot" rather than hand a bogus content-address to
+        the live-policy load path.
 
         Returns:
             The 64-char hex SHA-256 digest of the active slot, or ``None``.
@@ -207,7 +214,10 @@ class OnDeviceSlotStore:
             _log.warning("on_device_slot_active_manifest_corrupt", path=str(manifest))
             return None
         digest = data.get(_ACTIVE_DIGEST_KEY) if isinstance(data, dict) else None
-        return digest if isinstance(digest, str) else None
+        if not isinstance(digest, str) or not _SHA256_HEX_RE.match(digest):
+            _log.warning("on_device_slot_active_digest_malformed", path=str(manifest))
+            return None
+        return digest
 
     @staticmethod
     def _digest_file(path: Path) -> str:

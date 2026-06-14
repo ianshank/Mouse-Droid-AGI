@@ -6,9 +6,10 @@ the factory:
 * with ``on_device_learning.enabled=True`` + a seeded replay store, the
   orchestrator builds a coordinator whose ``gate_runner`` is wired;
 * driving the coordinator produces + persists a candidate slot AND runs the
-  safety gate, which (with the WS4 config-sized stand-in policy — candidate and
-  baseline wrap the same net, so equal scores) PROMOTES: the slot is marked
-  ACTIVE in the slot store;
+  safety gate, which (with the WS4 config-sized stand-in policy + a generous
+  ``regression_tolerance``) PROMOTES: the slot is marked ACTIVE in the slot
+  store. The candidate + baseline adapters wrap SEPARATE stand-in nets (so a
+  candidate weight load never aliases the baseline);
 * a deterministically-degraded candidate (injected via the gate seam) REVERTS:
   the slot is never marked active and the shared metrics registry's revert
   counter increments with reason ``regression_bound``;
@@ -69,10 +70,26 @@ def _build_cfg(experience_path: str) -> Settings:
 
 @pytest.mark.asyncio
 async def test_gate_promotes_stand_in_candidate_end_to_end(tmp_path: Path) -> None:
-    """The wired coordinator produces a slot AND the gate marks it active."""
+    """The wired coordinator produces a slot AND the gate marks it active.
+
+    The candidate + baseline adapters now wrap SEPARATE stand-in nets (so a
+    candidate weight load can never alias into the baseline), so their scores
+    are no longer guaranteed equal. A generous ``regression_tolerance`` makes
+    the PROMOTE deterministic regardless of which random stand-in net scores
+    higher — the assertion under test is the end-to-end promote path
+    (slot persisted -> gate run -> slot marked active), not the gate's bound.
+    """
     experience_path = str(tmp_path / "experience_root")
     _seed_replay_store(experience_path, _N_SEEDED)
     cfg = _build_cfg(experience_path)
+    # Generous tolerance so the separate stand-in nets always clear the bound.
+    cfg = cfg.model_copy(
+        update={
+            "on_device_learning": cfg.on_device_learning.model_copy(
+                update={"regression_tolerance": 1e9}
+            )
+        }
+    )
 
     metrics = build_metrics_registry(cfg)
     coordinator = build_on_device_coordinator(cfg, metrics=metrics)
@@ -81,7 +98,6 @@ async def test_gate_promotes_stand_in_candidate_end_to_end(tmp_path: Path) -> No
     slot = await coordinator.maybe_update()  # type: ignore[attr-defined]
     assert slot is not None
 
-    # The WS4 stand-in (candidate == baseline net) scores equal -> PROMOTE.
     store = OnDeviceSlotStore(experience_cfg=cfg.experience, on_device_cfg=cfg.on_device_learning)
     assert store.load_active() == slot.digest
 
@@ -106,6 +122,43 @@ async def test_hot_loop_untouched_by_gate(tmp_path: Path) -> None:
     await coordinator.maybe_update()
 
     assert orchestrator._tick_count == 0  # type: ignore[attr-defined]
+
+
+def test_gate_runner_uses_separate_module_instances(tmp_path: Path) -> None:
+    """Candidate + baseline adapters wrap DISTINCT ``nn.Module`` instances.
+
+    If both adapters aliased the same net, loading candidate weights would
+    mutate the baseline in place and collapse the regression delta to zero.
+    The two stand-in adapters must be independent objects backed by separate
+    modules so a candidate weight load never bleeds into the baseline.
+    """
+    from mousedroid.factory import _build_on_device_gate_runner
+
+    experience_path = str(tmp_path / "experience_root")
+    cfg = _build_cfg(experience_path)
+    store = OnDeviceSlotStore(experience_cfg=cfg.experience, on_device_cfg=cfg.on_device_learning)
+
+    gate_runner = _build_on_device_gate_runner(cfg, slot_store=store, metrics=None)
+
+    # The closure captures the candidate + baseline adapters; pull them out.
+    adapters = [
+        cell.cell_contents
+        for cell in (gate_runner.__closure__ or ())
+        if hasattr(cell.cell_contents, "_module")
+    ]
+    assert len(adapters) == 2, "expected exactly the candidate + baseline adapters"
+    candidate_adapter, baseline_adapter = adapters
+
+    assert candidate_adapter is not baseline_adapter
+    candidate_net = candidate_adapter._module
+    baseline_net = baseline_adapter._module
+    assert candidate_net is not baseline_net
+
+    # Loading candidate weights must NOT mutate the baseline net.
+    baseline_before = baseline_net.weight.detach().clone()
+    with torch.no_grad():
+        candidate_net.weight.add_(1.0)
+    assert torch.equal(baseline_net.weight, baseline_before)
 
 
 @pytest.mark.asyncio

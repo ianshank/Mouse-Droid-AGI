@@ -166,6 +166,40 @@ def test_load_active_ignores_corrupt_manifest(tmp_path: Path) -> None:
     assert store.load_active() is None
 
 
+def test_load_active_rejects_malformed_digest_shape(tmp_path: Path) -> None:
+    """A digest that is not 64-char lowercase hex reads back as ``None`` + warns.
+
+    A valid-JSON manifest whose ``active_digest`` is the wrong shape (short,
+    uppercase, non-hex, or a non-string type) must fail safe to "no active
+    slot" rather than hand a bogus content-address to the live-policy loader.
+    """
+    import json
+
+    import structlog
+
+    from mousedroid.learning.on_device.slot_store import (
+        _ACTIVE_DIGEST_KEY,
+        _ACTIVE_MANIFEST_NAME,
+    )
+
+    store = _make_store(tmp_path)
+    store.slot_dir.mkdir(parents=True, exist_ok=True)
+    manifest = store.slot_dir / _ACTIVE_MANIFEST_NAME
+
+    for bad in ("deadbeef", "Z" * 64, "ABC123" * 10 + "ABCD", "NOTHEX" + "0" * 58):
+        manifest.write_text(json.dumps({_ACTIVE_DIGEST_KEY: bad}), encoding="utf-8")
+        with structlog.testing.capture_logs() as captured:
+            result = store.load_active()
+        assert result is None, f"expected None for malformed digest {bad!r}"
+        events = [entry.get("event", "") for entry in captured]
+        assert "on_device_slot_active_digest_malformed" in events
+
+    # A correctly-shaped digest still round-trips through the same path.
+    valid = "a" * 64
+    manifest.write_text(json.dumps({_ACTIVE_DIGEST_KEY: valid}), encoding="utf-8")
+    assert store.load_active() == valid
+
+
 def test_persist_overwrites_stale_tmp_file(tmp_path: Path) -> None:
     """A leftover temp blob from an interrupted write never corrupts a persist.
 

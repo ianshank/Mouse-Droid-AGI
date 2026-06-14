@@ -45,9 +45,11 @@ def test_pre_ws4_enabled_yaml_loads_without_scoring_knobs() -> None:
     assert cfg.on_device_learning.n_scoring_rollouts > 0
 
 
-def test_existing_yaml_loads_without_on_device_key() -> None:
+def test_existing_yaml_loads_without_on_device_key(tmp_path: Path) -> None:
     """A config with no on-device key keeps the block ``None`` (pre-WS4)."""
-    cfg = Settings.model_validate({"mock_hardware": True, "experience": {"path": "/tmp/x"}})
+    cfg = Settings.model_validate(
+        {"mock_hardware": True, "experience": {"path": str(tmp_path / "exp")}}
+    )
     assert cfg.on_device_learning is None
 
 

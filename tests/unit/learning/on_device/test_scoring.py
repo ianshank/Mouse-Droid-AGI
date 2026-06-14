@@ -15,6 +15,7 @@ Pins the user-chosen scoring contract:
 
 from __future__ import annotations
 
+import pytest
 import torch
 import torch.nn as nn
 
@@ -130,31 +131,105 @@ def test_horizon_and_n_rollouts_drive_reward_calls() -> None:
     assert calls["n"] == 3 * 2 * len(seed_states)
 
 
+class _RewardIsActionSumWorldModel:
+    """A deterministic stub world model whose reward is the action's sum.
+
+    Satisfies :class:`WorldModelProtocol`'s ``imagine_step`` so the score is a
+    clean, monotone function of the policy's action magnitude — a stronger
+    (larger positive action) policy provably scores STRICTLY higher, with no
+    dependence on random reward-head init. The latent state is carried forward
+    unchanged so the rollout is fully deterministic.
+    """
+
+    def __init__(self, hidden_dim: int, latent_dim: int) -> None:
+        self._hidden_dim = hidden_dim
+        self._latent_dim = latent_dim
+
+    def imagine_step(
+        self, action: torch.Tensor, h: torch.Tensor, z: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        reward = action.sum(dim=-1, keepdim=True)
+        return h, z, reward
+
+
 def test_stronger_policy_scores_higher() -> None:
-    """A policy driving the reward head harder scores strictly higher.
+    """A policy driving the reward head harder scores STRICTLY higher.
 
     Both policies share the SAME world model + seed-states + seed; only the
-    action differs, so any score gap is attributable to the policy.
+    action differs. The stub world model makes the predicted reward a monotone
+    function of the action sum, so a larger positive action provably yields a
+    strictly higher score — a meaningful, deterministic monotonicity assertion.
     """
     wm = _make_world_model()
+    stub = _RewardIsActionSumWorldModel(wm.cfg.hidden_dim, wm.cfg.latent_dim)
     seed_states = _make_seed_states(wm)
 
-    # Bias the reward head so larger action magnitude -> larger predicted reward
-    # by making the imagined latent dynamics deterministic w.r.t. action via a
-    # large-action vs zero-action contrast. We compare a non-trivial action to a
-    # zero action; with a fixed seed the gap is reproducible.
-    weak = _ConstantPolicy(torch.zeros(1, wm.cfg.action_dim))
+    weak = _ConstantPolicy(torch.ones(1, wm.cfg.action_dim))
     strong = _ConstantPolicy(torch.ones(1, wm.cfg.action_dim) * 5.0)
 
     s_weak = score_policy(
-        weak, wm, seed_states, horizon=_HORIZON, n_rollouts=_N_ROLLOUTS, seed=_SEED
+        weak, stub, seed_states, horizon=_HORIZON, n_rollouts=_N_ROLLOUTS, seed=_SEED
     )
     s_strong = score_policy(
-        strong, wm, seed_states, horizon=_HORIZON, n_rollouts=_N_ROLLOUTS, seed=_SEED
+        strong, stub, seed_states, horizon=_HORIZON, n_rollouts=_N_ROLLOUTS, seed=_SEED
     )
 
-    # They must differ (different actions -> different imagined trajectories).
-    assert s_weak != s_strong
+    assert s_strong > s_weak
+
+
+def test_score_restores_global_rng_state() -> None:
+    """``score_policy`` leaves the GLOBAL torch RNG state unchanged.
+
+    The harness seeds the global RNG internally for reproducibility, but it
+    MUST capture + restore the prior global state so callers sharing the
+    process RNG are never silently perturbed.
+    """
+    wm = _make_world_model()
+    seed_states = _make_seed_states(wm)
+    policy = _ConstantPolicy(torch.zeros(1, wm.cfg.action_dim))
+
+    # Establish a known, non-default global RNG state.
+    torch.manual_seed(1234)
+    before = torch.get_rng_state()
+
+    score_policy(policy, wm, seed_states, horizon=_HORIZON, n_rollouts=_N_ROLLOUTS, seed=_SEED)
+
+    after = torch.get_rng_state()
+    assert torch.equal(before, after)
+
+
+def test_score_restores_world_model_train_mode() -> None:
+    """A world model left in ``.train()`` is still in ``.train()`` afterwards."""
+    wm = _make_world_model()
+    wm.train()
+    seed_states = _make_seed_states(wm)
+    policy = _ConstantPolicy(torch.zeros(1, wm.cfg.action_dim))
+
+    assert wm.training is True
+    score_policy(policy, wm, seed_states, horizon=_HORIZON, n_rollouts=_N_ROLLOUTS, seed=_SEED)
+    assert wm.training is True
+
+
+def test_score_restores_state_even_on_exception() -> None:
+    """RNG + train-mode are restored even when a rollout raises."""
+    wm = _make_world_model()
+    wm.train()
+    seed_states = _make_seed_states(wm)
+
+    class _BoomPolicy:
+        def act(self, hidden: torch.Tensor, latent: torch.Tensor) -> torch.Tensor:
+            raise RuntimeError("boom")
+
+    torch.manual_seed(4321)
+    before = torch.get_rng_state()
+
+    with pytest.raises(RuntimeError, match="boom"):
+        score_policy(
+            _BoomPolicy(), wm, seed_states, horizon=_HORIZON, n_rollouts=_N_ROLLOUTS, seed=_SEED
+        )
+
+    assert torch.equal(before, torch.get_rng_state())
+    assert wm.training is True
 
 
 def test_state_dict_policy_adapter_satisfies_protocol() -> None:
@@ -171,6 +246,71 @@ def test_state_dict_policy_adapter_satisfies_protocol() -> None:
     action = adapter.act(h, z)
 
     assert action.shape == (1, action_dim)
+
+
+def test_adapter_rejects_wrong_hidden_dim() -> None:
+    """``act`` raises ``ValueError`` when the hidden width mismatches."""
+    wm = _make_world_model()
+    net = nn.Linear(wm.cfg.hidden_dim + wm.cfg.latent_dim, wm.cfg.action_dim)
+    adapter = StateDictPolicyAdapter(
+        net, hidden_dim=wm.cfg.hidden_dim, latent_dim=wm.cfg.latent_dim
+    )
+
+    bad_hidden = torch.randn(1, wm.cfg.hidden_dim + 1)
+    z = torch.randn(1, wm.cfg.latent_dim)
+    with pytest.raises(ValueError, match="hidden"):
+        adapter.act(bad_hidden, z)
+
+
+def test_adapter_rejects_wrong_latent_dim() -> None:
+    """``act`` raises ``ValueError`` when the latent width mismatches."""
+    wm = _make_world_model()
+    net = nn.Linear(wm.cfg.hidden_dim + wm.cfg.latent_dim, wm.cfg.action_dim)
+    adapter = StateDictPolicyAdapter(
+        net, hidden_dim=wm.cfg.hidden_dim, latent_dim=wm.cfg.latent_dim
+    )
+
+    h = torch.randn(1, wm.cfg.hidden_dim)
+    bad_latent = torch.randn(1, wm.cfg.latent_dim + 1)
+    with pytest.raises(ValueError, match="latent"):
+        adapter.act(h, bad_latent)
+
+
+def test_adapter_rejects_under_wide_module_output() -> None:
+    """``act`` raises when the module output is narrower than ``action_dim``."""
+    wm = _make_world_model()
+    # Module emits fewer columns than the requested action width.
+    net = nn.Linear(wm.cfg.hidden_dim + wm.cfg.latent_dim, wm.cfg.action_dim - 1)
+    adapter = StateDictPolicyAdapter(
+        net,
+        hidden_dim=wm.cfg.hidden_dim,
+        latent_dim=wm.cfg.latent_dim,
+        action_dim=wm.cfg.action_dim,
+    )
+
+    h = torch.randn(1, wm.cfg.hidden_dim)
+    z = torch.randn(1, wm.cfg.latent_dim)
+    with pytest.raises(ValueError, match="action_dim"):
+        adapter.act(h, z)
+
+
+def test_adapter_happy_path_slices_to_action_dim() -> None:
+    """A wider module output is sliced down to ``action_dim`` columns."""
+    wm = _make_world_model()
+    # Module emits MORE columns than action_dim; output is sliced.
+    net = nn.Linear(wm.cfg.hidden_dim + wm.cfg.latent_dim, wm.cfg.action_dim + 2)
+    adapter = StateDictPolicyAdapter(
+        net,
+        hidden_dim=wm.cfg.hidden_dim,
+        latent_dim=wm.cfg.latent_dim,
+        action_dim=wm.cfg.action_dim,
+    )
+
+    h = torch.randn(1, wm.cfg.hidden_dim)
+    z = torch.randn(1, wm.cfg.latent_dim)
+    action = adapter.act(h, z)
+
+    assert action.shape == (1, wm.cfg.action_dim)
 
 
 def test_empty_seed_states_scores_zero() -> None:

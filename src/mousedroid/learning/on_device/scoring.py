@@ -100,10 +100,31 @@ class StateDictPolicyAdapter:
         self._action_dim = action_dim
 
     def act(self, hidden: Tensor, latent: Tensor) -> Tensor:
-        """Map ``[hidden, latent]`` through the wrapped module to an action."""
+        """Map ``[hidden, latent]`` through the wrapped module to an action.
+
+        Raises:
+            ValueError: If ``hidden`` / ``latent`` do not match the configured
+                widths, or the module output has fewer than ``action_dim``
+                columns (a silent under-return would feed the world model a
+                truncated, malformed action).
+        """
+        if hidden.shape[-1] != self._hidden_dim:
+            msg = f"hidden width {hidden.shape[-1]} != expected hidden_dim {self._hidden_dim}"
+            raise ValueError(msg)
+        if latent.shape[-1] != self._latent_dim:
+            msg = f"latent width {latent.shape[-1]} != expected latent_dim {self._latent_dim}"
+            raise ValueError(msg)
+
         features = torch.cat([hidden, latent], dim=-1)
         output: Tensor = self._module(features)
         if self._action_dim is not None:
+            if output.shape[-1] < self._action_dim:
+                msg = (
+                    f"module output width {output.shape[-1]} < requested "
+                    f"action_dim {self._action_dim}; the stand-in net must emit "
+                    "at least action_dim columns"
+                )
+                raise ValueError(msg)
             output = output[..., : self._action_dim]
         return output
 
@@ -128,6 +149,13 @@ def score_policy(
     sampling, and the whole computation runs under ``torch.no_grad()``. Same
     seed + same ``seed_states`` + same policy weights ⇒ identical score.
 
+    Side-effect free: the prior global RNG state is captured and restored in a
+    ``finally`` so a caller sharing the process RNG is never perturbed, and a
+    world model passed in ``.train()`` is left in ``.train()`` afterwards. The
+    return accumulator and every per-step tensor live on the seed-state's
+    device, so a GPU-resident world model (the Jetson iGPU) never triggers a
+    cross-device op.
+
     Args:
         policy: Candidate (or baseline) policy implementing :class:`PolicyProtocol`.
         world_model: REUSED RSSM world model implementing ``imagine_step``.
@@ -144,23 +172,41 @@ def score_policy(
         _log.warning("on_device_score_empty_seed_states")
         return 0.0
 
-    torch.manual_seed(seed)
+    # The accumulator + every per-step tensor must live on the world-model /
+    # seed-state device, not hardcoded CPU. Derive it from the first seed
+    # state's hidden tensor (the world model rolls forward from there).
+    device = seed_states[0][0].device
 
-    if isinstance(world_model, nn.Module):
-        world_model.eval()
+    # Capture global RNG + train-mode state so we can restore them in a
+    # ``finally`` — seeding the global RNG for reproducibility and forcing
+    # ``.eval()`` must NOT leak out of this call. ``wm_module`` holds the
+    # narrowed ``nn.Module`` reference (``None`` for a non-module protocol impl)
+    # so the restore branch can call ``.train()`` without a cross-protocol cast.
+    rng_state = torch.get_rng_state()
+    wm_module = world_model if isinstance(world_model, nn.Module) else None
+    was_training = wm_module.training if wm_module is not None else False
 
     returns: list[float] = []
-    with torch.no_grad():
-        for h0, z0 in seed_states:
-            for _ in range(n_rollouts):
-                h = h0
-                z = z0
-                rollout_return = torch.zeros(1, 1, dtype=torch.float32)
-                for _ in range(horizon):
-                    action = policy.act(h, z)
-                    h, z, predicted_reward = world_model.imagine_step(action, h, z)
-                    rollout_return = rollout_return + predicted_reward
-                returns.append(float(rollout_return.mean().item()))
+    try:
+        torch.manual_seed(seed)
+        if wm_module is not None:
+            wm_module.eval()
+
+        with torch.no_grad():
+            for h0, z0 in seed_states:
+                for _ in range(n_rollouts):
+                    h = h0
+                    z = z0
+                    rollout_return = torch.zeros(1, 1, dtype=torch.float32, device=device)
+                    for _ in range(horizon):
+                        action = policy.act(h, z)
+                        h, z, predicted_reward = world_model.imagine_step(action, h, z)
+                        rollout_return = rollout_return + predicted_reward
+                    returns.append(float(rollout_return.mean().item()))
+    finally:
+        torch.set_rng_state(rng_state)
+        if wm_module is not None and was_training:
+            wm_module.train()
 
     score = sum(returns) / len(returns)
     _log.info(

@@ -3110,14 +3110,20 @@ def _build_on_device_gate_runner(
         for _ in range(n_seed)
     ]
 
-    policy_net = nn.Linear(hidden_dim + latent_dim, action_dim)
+    # Candidate + baseline MUST wrap SEPARATE module instances. Aliasing one
+    # net would mean loading the candidate slot's weights mutates the baseline
+    # in place, collapsing the regression delta to zero. The live-net wiring
+    # (loading the persisted slot into the candidate, the live policy into the
+    # baseline) stays a documented WS5+ seam; here we only ensure the two
+    # stand-in adapters never alias.
+    baseline_net = nn.Linear(hidden_dim + latent_dim, action_dim)
+    candidate_net = nn.Linear(hidden_dim + latent_dim, action_dim)
     baseline_adapter = StateDictPolicyAdapter(
-        policy_net, hidden_dim=hidden_dim, latent_dim=latent_dim, action_dim=action_dim
+        baseline_net, hidden_dim=hidden_dim, latent_dim=latent_dim, action_dim=action_dim
     )
-    # WS5 seam: load the persisted slot's weights here. For WS4 the candidate
-    # adapter wraps the same stand-in net so the end-to-end gate path runs.
+    # WS5 seam: load the persisted slot's weights into ``candidate_net`` here.
     candidate_adapter = StateDictPolicyAdapter(
-        policy_net, hidden_dim=hidden_dim, latent_dim=latent_dim, action_dim=action_dim
+        candidate_net, hidden_dim=hidden_dim, latent_dim=latent_dim, action_dim=action_dim
     )
 
     gate = RegressionGate(

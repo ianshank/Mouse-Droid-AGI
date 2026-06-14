@@ -139,7 +139,7 @@ async def test_slow_loop_runs_a_cycle_and_persists(tmp_path: Path) -> None:
     finally:
         await orchestrator.stop()
 
-    persisted = list(slot_dir.glob("*.pt"))
+    persisted = list(slot_dir.glob("*.pt")) if slot_dir.is_dir() else []
     assert persisted, "slow-cadence loop did not persist a candidate slot"
     # Hot loop was never advanced by the slow-cadence update.
     assert orchestrator._tick_count == 0
