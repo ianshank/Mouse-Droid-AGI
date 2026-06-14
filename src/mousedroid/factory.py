@@ -3004,18 +3004,26 @@ def build_on_device_coordinator(
 
     import torch.nn as nn
 
-    from mousedroid.constants import DEFAULT_VISION_DIM
     from mousedroid.learning.on_device.ewc_online import EWCOnlineLearner
     from mousedroid.learning.on_device.replay_trigger import ReplayTriggerCoordinator
     from mousedroid.learning.on_device.slot_store import OnDeviceSlotStore
     from mousedroid.training.replay.lmdb_reader import LMDBReplayReader
 
-    reader = LMDBReplayReader(cfg.experience)
+    # Mirror the main replay path's reader construction (see build above) so the
+    # on-device trigger honours any ``cfg.training.replay.source_path`` override
+    # and the shared debug-log cadence instead of reading a different store.
+    reader = LMDBReplayReader(
+        cfg.experience,
+        path_override=cfg.training.replay.source_path,
+        debug_log_every_n=cfg.training.replay_mixer.debug_log_every_n,
+    )
     slot_store = OnDeviceSlotStore(experience_cfg=cfg.experience, on_device_cfg=on_device_cfg)
 
-    # Candidate model: a small stand-in sized to the experience vision-feature
-    # dimension. WS5 swaps this for the live policy/world-model network.
-    input_dim = DEFAULT_VISION_DIM
+    # Candidate model: a small stand-in sized to the configured vision-feature
+    # dimension (``cfg.camera.feature_dim`` — the same width the experience
+    # vision features are produced at). WS5 swaps this for the live
+    # policy/world-model network.
+    input_dim = int(cfg.camera.feature_dim)
     candidate_model = nn.Sequential(nn.Linear(input_dim, input_dim))
     learner = EWCOnlineLearner(on_device_cfg, candidate_model)
 

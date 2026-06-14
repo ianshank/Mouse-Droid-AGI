@@ -30,10 +30,32 @@ def test_defaults_are_safe_and_off() -> None:
 
 
 def test_slot_dir_is_not_an_absolute_host_path() -> None:
-    """The default slot_dir must be repo-relative — resolved under experience root."""
+    """The default slot_dir must be experience-root-relative — resolved under it."""
     cfg = OnDeviceLearningConfig()
     assert not cfg.slot_dir.startswith("/")
     assert "/home/jetson" not in cfg.slot_dir
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "/abs/path",  # absolute path escapes the experience root
+        "../escape",  # parent traversal escapes the experience root
+        "",  # empty
+        "   ",  # whitespace-only
+        "nested/../escape",  # parent traversal in a deeper component
+    ],
+)
+def test_slot_dir_rejects_unsafe_values(bad: str) -> None:
+    """Absolute, parent-traversal, and empty/whitespace slot_dir are rejected."""
+    with pytest.raises(ValidationError):
+        OnDeviceLearningConfig(slot_dir=bad)
+
+
+def test_slot_dir_accepts_safe_relative_values() -> None:
+    """A non-empty relative leaf (default + a nested relative path) is accepted."""
+    assert OnDeviceLearningConfig(slot_dir="on_device_slot").slot_dir == "on_device_slot"
+    assert OnDeviceLearningConfig(slot_dir="weights/on_device").slot_dir == "weights/on_device"
 
 
 # --------------------------------------------------------------------------- #

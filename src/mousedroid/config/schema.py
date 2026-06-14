@@ -779,14 +779,47 @@ class OnDeviceLearningConfig(BaseModel):
     slot_dir: str = Field(
         "on_device_slot",
         description=(
-            "Repo-relative leaf for the on-device weight slot. NOT an absolute "
-            "host path: the factory/orchestrator resolves it UNDER the configured "
-            "experience root (``<ExperienceConfig.path>/<slot_dir>``) so any "
-            "operator override of the experience path is inherited for free. "
-            "On-device-updated weights land here, never overwriting the "
+            "Experience-root-relative leaf for the on-device weight slot. NOT an "
+            "absolute host path: the factory/orchestrator resolves it UNDER the "
+            "configured experience root (``<ExperienceConfig.path>/<slot_dir>``) "
+            "so any operator override of the experience path is inherited for "
+            "free. On-device-updated weights land here, never overwriting the "
             "cloud-pulled slot."
         ),
     )
+
+    @field_validator("slot_dir")
+    @classmethod
+    def _validate_slot_dir(cls, v: str) -> str:
+        """Reject slot_dir values that escape the experience root.
+
+        ``slot_dir`` is resolved as ``<ExperienceConfig.path>/<slot_dir>``, so
+        an absolute path, a parent-traversal (``..``) component, or an empty /
+        whitespace-only value would break that containment contract and let
+        on-device weights land outside the configured experience root. Validated
+        at YAML load so a misconfigured deployment fails fast with a clear,
+        operator-actionable message instead of silently writing off-root.
+        """
+        from pathlib import PurePosixPath, PureWindowsPath
+
+        slot = v.strip()
+        # Check absoluteness under BOTH POSIX and Windows semantics so a
+        # ``/abs/path`` (slot is resolved on the Jetson/Linux target) is caught
+        # regardless of the host OS the config is validated on, and ``..``
+        # traversal in either separator style is rejected.
+        posix = PurePosixPath(slot)
+        windows = PureWindowsPath(slot)
+        is_absolute = posix.is_absolute() or windows.is_absolute()
+        has_traversal = ".." in posix.parts or ".." in windows.parts
+        if not slot or is_absolute or has_traversal:
+            msg = (
+                "on_device_learning.slot_dir must be a non-empty relative path "
+                "without parent traversal (resolved under "
+                "ExperienceConfig.path); got " + repr(v)
+            )
+            raise ValueError(msg)
+        return slot
+
     rollout_horizon: int = Field(
         15,
         gt=0,

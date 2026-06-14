@@ -8,6 +8,8 @@ from :mod:`mousedroid.learning.on_device.ewc_online` (mirrors the factory
 import-decoupling norm).
 """
 
+from __future__ import annotations
+
 from mousedroid.learning.on_device.protocol import (
     OnDeviceLearner,
     OnDeviceUpdateResult,

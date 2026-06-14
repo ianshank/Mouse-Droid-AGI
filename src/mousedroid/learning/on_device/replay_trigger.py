@@ -90,7 +90,10 @@ class ReplayTriggerCoordinator:
             The persisted :class:`CandidateSlot` when a cycle fired, else
             ``None`` (below threshold, or an empty batch).
         """
-        new_records = self._count_new_records()
+        # Offload the trigger probe: the wired collaborator may run blocking
+        # LMDB I/O, so it must never execute inline on the event-loop thread
+        # (mirrors the learner-update offload below).
+        new_records = await asyncio.to_thread(self._count_new_records)
         threshold = self._cfg.trigger_min_new_records
         if new_records < threshold:
             _log.debug(
@@ -107,7 +110,9 @@ class ReplayTriggerCoordinator:
             update_steps=self._cfg.update_steps,
         )
 
-        batch = self._load_batch()
+        # Offload the batch materialisation for the same reason — it reads the
+        # replay store off the event loop.
+        batch = await asyncio.to_thread(self._load_batch)
         if batch.shape[0] == 0:
             _log.warning("on_device_trigger_empty_batch", new_records=new_records)
             return None

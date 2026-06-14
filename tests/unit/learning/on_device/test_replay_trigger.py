@@ -111,6 +111,41 @@ def test_torch_update_is_offloaded_off_the_event_loop(tmp_path: Path) -> None:
     asyncio.run(_drive())
 
 
+def test_replay_collaborators_offloaded_off_the_event_loop(tmp_path: Path) -> None:
+    """``count_new_records`` and ``load_batch`` run off the loop thread.
+
+    Both collaborators may perform blocking LMDB I/O (the WS3 factory wiring
+    drives the async reader via a private-loop worker), so they must be invoked
+    through ``asyncio.to_thread`` — never inline on the event loop thread.
+    """
+    cfg = OnDeviceLearningConfig(enabled=True, trigger_min_new_records=1, update_steps=1)
+    observed: dict[str, int] = {}
+
+    async def _drive() -> None:
+        loop_tid = threading.get_ident()
+
+        def _count() -> int:
+            observed["count_tid"] = threading.get_ident()
+            return 1
+
+        def _load() -> torch.Tensor:
+            observed["load_tid"] = threading.get_ident()
+            return _batch_provider()
+
+        coordinator = ReplayTriggerCoordinator(
+            cfg=cfg,
+            learner=_make_learner(cfg),
+            slot_store=_make_store(tmp_path, cfg),
+            count_new_records=_count,
+            load_batch=_load,
+        )
+        await coordinator.maybe_update()
+        assert observed["count_tid"] != loop_tid
+        assert observed["load_tid"] != loop_tid
+
+    asyncio.run(_drive())
+
+
 def test_marker_resets_after_fire(tmp_path: Path) -> None:
     """After firing, the coordinator notifies the consume callback once."""
     cfg = OnDeviceLearningConfig(enabled=True, trigger_min_new_records=3, update_steps=1)
