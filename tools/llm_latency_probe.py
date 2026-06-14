@@ -49,15 +49,15 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from mousedroid.config.loader import load_settings
-from mousedroid.factory import build_injection_filter, build_llm_gateway
-from mousedroid.logging.setup import get_logger
-
 # Shared Jetson-side helper (promoted out of this file during the F-006
 # remote-LLM sprint so jetson_remote_llm_probe can reuse it). Aliased to
 # the prior private name so existing test patches at
 # ``probe._tegrastats_snapshot`` keep working without test changes.
 from tools._jetson_helpers import tegrastats_snapshot as _tegrastats_snapshot
+
+from mousedroid.config.loader import load_settings
+from mousedroid.factory import build_injection_filter, build_llm_gateway
+from mousedroid.logging.setup import get_logger
 
 _log = get_logger("llm_latency_probe")
 
