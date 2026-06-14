@@ -1,0 +1,70 @@
+# =============================================================================
+# MouseDroidAGI — Spec-Driven Harness Gate
+# =============================================================================
+# Enforces HARNESS_SPEC.md: validates features.yaml against features.schema.json,
+# checks dependency-DAG integrity, verifies `implemented_in` resolves to a real
+# git commit, and runs the validation_command of every `done` feature in the
+# selected tier(s). A feature claiming `status: done` whose command does not
+# pass fails the build. See docs/architecture/ADR-012-spec-driven-harness.md.
+#
+#   - validate-fast: every push + PR (fast tier; warn-only on git provenance)
+#   - validate-slow: nightly schedule (fast + slow tiers; --strict-git)
+#
+# The `hardware` tier is intentionally absent — run it on the self-hosted Jetson
+# runner: `python scripts/validate.py --tier hardware`.
+# =============================================================================
+
+name: Spec Harness
+
+on:
+    push:
+    pull_request:
+    schedule:
+        - cron: "0 7 * * *" # nightly: include the slow tier
+
+permissions:
+    contents: read
+
+env:
+    # Validation commands delegate to pytest suites that import the hardware
+    # drivers; mock them so the headless runner never touches real GPIO/serial
+    # (mirrors scripts/ci.sh).
+    MOUSEDROID_MOCK_HARDWARE: "true"
+
+jobs:
+    validate-fast:
+        runs-on: ubuntu-latest
+        steps:
+            # fetch-depth: 0 so `git rev-parse` can resolve implemented_in refs.
+            - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+              with:
+                  fetch-depth: 0
+            - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+              with:
+                  python-version: "3.12"
+                  cache: pip
+            # The seeded validation_commands run real pytest suites, so install
+            # the same extras as the ci.yml test job (not just pyyaml + jsonschema).
+            - name: Install dev toolchain
+              run: pip install -e ".[dev,telemetry,mcp]"
+            - name: Validate harness (fast tier)
+              run: python scripts/validate.py --tier fast
+
+    validate-slow:
+        if: github.event_name == 'schedule'
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+              with:
+                  fetch-depth: 0
+            - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+              with:
+                  python-version: "3.12"
+                  cache: pip
+            - name: Install dev toolchain
+              run: pip install -e ".[dev,telemetry,mcp]"
+            # --strict-git: on main, every `done` feature's implemented_in must
+            # resolve. Post-merge maintenance: replace branch-name refs (F-001,
+            # F-003) with the squash/merge SHA so this stays green.
+            - name: Validate harness (fast + slow tiers, strict git)
+              run: python scripts/validate.py --tier fast,slow --strict-git

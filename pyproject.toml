@@ -167,6 +167,12 @@ dev = [
     # release that wouldn't reflect runtime API.
     "types-cachetools>=5.0,<8",
     "ncps>=0.0.7",
+    # Spec-driven harness (HARNESS_SPEC.md / ADR-012): scripts/validate.py and
+    # tests/regression/test_harness_spec_aqa.py validate features.yaml against
+    # features.schema.json. jsonschema is [dev]-only — the harness is a CI/agent
+    # tool surface, not a runtime dependency of the rover brain.
+    "jsonschema>=4.0",
+    "types-jsonschema>=4.0",
 ]
 
 [project.scripts]

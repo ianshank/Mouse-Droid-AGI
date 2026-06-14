@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "features.yaml",
+  "type": "object",
+  "required": ["features"],
+  "properties": {
+    "features": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "category", "priority", "status", "verification", "depends_on"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^([A-Z]+-)?F-[0-9]{3,}$" },
+          "epic": { "type": "string" },
+          "name": { "type": "string", "minLength": 1 },
+          "description": { "type": "string" },
+          "category": { "enum": ["functional", "non-functional", "infrastructure", "validation"] },
+          "priority": { "enum": ["critical", "high", "medium", "low"] },
+          "status": { "enum": ["todo", "in_progress", "done", "blocked", "deferred"] },
+          "tier": { "enum": ["fast", "slow", "hardware"] },
+          "verification": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+          "validation_command": { "type": ["string", "null"] },
+          "implemented_in": { "type": ["string", "null"] },
+          "depends_on": { "type": "array", "items": { "type": "string" } },
+          "notes": { "type": "string" }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "status": { "const": "done" } } },
+            "then": { "required": ["validation_command", "implemented_in"],
+                      "properties": { "validation_command": { "type": "string", "minLength": 1 } } }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,152 @@
+# Feature catalog — the cognitive anchor of the spec-driven harness.
+# See HARNESS_SPEC.md §5. There is NO `passes` field: a feature is `done` only
+# when its validation_command exits 0 under scripts/validate.py (the Golden Rule).
+#
+# implemented_in must be a RESOLVABLE git ref (validate.py --strict-git checks it):
+#   - pre-existing subsystems → their landing commit SHA on main
+#   - harness-introduced features → the working branch (POST-MERGE: replace with
+#     the squash/merge SHA so the nightly --strict-git job stays green on main).
+features:
+  - id: "F-001"
+    epic: "Harness"
+    name: "Spec-driven harness initialized"
+    description: >-
+      HARNESS_SPEC.md, features.yaml, features.schema.json, validate.py and
+      select_next.py exist and parse. The harness can validate itself.
+    category: "infrastructure"
+    priority: "critical"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "Core harness files present and parseable"
+      - "scripts/validations/F-001.sh exits 0"
+    validation_command: "bash scripts/validations/F-001.sh"
+    implemented_in: "claude/harness-spec-template-g3inh7"
+    depends_on: []
+    notes: "Routed through F-001.sh (not validate.py --check F-001) to avoid the recursive self-reference in the upstream template example."
+
+  - id: "F-002"
+    epic: "Configuration"
+    name: "Config overlays validate against the Pydantic schema"
+    description: >-
+      Every config/*.yaml overlay loads cleanly against src/mousedroid/config/schema.py
+      (the single source of truth). Guards the no-hardcoded-values invariant.
+    category: "infrastructure"
+    priority: "critical"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "scripts/validate_configs.py loads all overlays and exits 0"
+    validation_command: "python scripts/validate_configs.py"
+    implemented_in: "eff85fb43d9f95897b38a1562e1458ae6eca6005"
+    depends_on: ["F-001"]
+    notes: ""
+
+  - id: "F-003"
+    epic: "Harness"
+    name: "Harness self-test (AQA) passes"
+    description: >-
+      features.yaml parses, validates against features.schema.json, the dependency
+      DAG is acyclic with no dangling edges, every referenced validation script
+      exists, and the runner modules import.
+    category: "validation"
+    priority: "high"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "features.yaml validates against features.schema.json"
+      - "DAG has no cycles and no dangling depends_on edges"
+      - "All referenced scripts/validations/*.sh exist"
+    validation_command: "python -m pytest tests/regression/test_harness_spec_aqa.py -q"
+    implemented_in: "claude/harness-spec-template-g3inh7"
+    depends_on: ["F-001"]
+    notes: ""
+
+  - id: "F-004"
+    epic: "Skills"
+    name: "Slash-command + builtin skill docs are hygienic"
+    description: >-
+      Skill-validation regression gate: front-matter present, referenced repo
+      paths exist, no hardcoded host/IP leaks.
+    category: "infrastructure"
+    priority: "high"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "tests/regression/test_skill_commands_aqa.py passes"
+    validation_command: "python -m pytest tests/regression/test_skill_commands_aqa.py -q"
+    implemented_in: "cf191277cb73c93e7133bcd0ce241bc330e37b71"
+    depends_on: ["F-001"]
+    notes: ""
+
+  - id: "F-005"
+    epic: "Deliberative brain"
+    name: "LLM gateway factory dispatch + metrics threading"
+    description: >-
+      build_llm_gateway dispatches on backend, threads fallback_retry_cooldown_s
+      and the keyword-only metrics registry, and preserves byte-identical legacy
+      construction (PR #107/#115 contracts).
+    category: "functional"
+    priority: "high"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "tests/unit/factory/test_build_llm_gateway_dispatch.py passes"
+    validation_command: "python -m pytest tests/unit/factory/test_build_llm_gateway_dispatch.py -q"
+    implemented_in: "1362ef8f04db622a88f63ad9dec1e3ed1cb2b445"
+    depends_on: ["F-001"]
+    notes: ""
+
+  - id: "F-006"
+    epic: "Validation efficiency"
+    name: "Pure validation helpers stay sensor-stack-free"
+    description: >-
+      Importing the pure validation modules never drags numpy/cv2/pyaudio into
+      the process (PEP 562 lazy re-export contract).
+    category: "non-functional"
+    priority: "high"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "tests/regression/test_validation_import_decoupling.py passes"
+    validation_command: "python -m pytest tests/regression/test_validation_import_decoupling.py -q"
+    implemented_in: "5aba102088f250d4cea79401449edd5b4b6a7a0b"
+    depends_on: ["F-001"]
+    notes: ""
+
+  - id: "F-007"
+    epic: "AGI pillars"
+    name: "Ten-pillar validation harness is green"
+    description: >-
+      The async validate_all_pillars dispatcher (factory-builder + pytest-delegation
+      patterns) and its CLI behave correctly under mock hardware.
+    category: "validation"
+    priority: "high"
+    status: "done"
+    tier: "slow"
+    verification:
+      - "tests/unit/validation/test_pillars.py passes"
+      - "tests/integration/test_validate_pillars_dispatch.py passes"
+    validation_command: "python -m pytest tests/unit/validation/test_pillars.py tests/integration/test_validate_pillars_dispatch.py -q"
+    implemented_in: "e92d9900bb751f17e8362eaa25947ef0ab5e1421"
+    depends_on: ["F-001"]
+    notes: "Slow tier — runs nightly, not on every push."
+
+  - id: "F-008"
+    epic: "Rover bring-up"
+    name: "USB-C rover smoke passes on the physical Jetson"
+    description: >-
+      The Wave Rover USB-C wiring is discoverable and the power-chain smoke gate
+      passes on real hardware (PR #106). Hardware-tier — runs only on the
+      self-hosted Jetson runner, never in hosted CI.
+    category: "functional"
+    priority: "critical"
+    status: "todo"
+    tier: "hardware"
+    verification:
+      - "scripts/jetson_smoke_test.sh exits 0 on the rover"
+      - "usbc_endpoint_* / power_chain_probe_complete structlog events present"
+    validation_command: "bash scripts/jetson_smoke_test.sh"
+    implemented_in: null
+    depends_on: ["F-001"]
+    notes: "Cannot reach `done` in hosted CI; verify with `validate.py --tier hardware` on the rover."
