@@ -48,6 +48,12 @@ _SHA256_CHUNK_BYTES: int = 64 * 1024
 # Structured-log event prefix reused by ``verify_sha256`` on load so a slot
 # integrity failure greps under the same ``on_device_slot_*`` family.
 _LOG_EVENT_PREFIX: str = "on_device_slot"
+# Content-addressed slot file extension (torch.save blob). Named once so the
+# final and temp filenames never drift apart.
+_SLOT_SUFFIX: str = ".pt"
+# Temp filename used during the write-then-rename so an interrupted write never
+# leaves a mis-stamped slot behind. Renamed to ``<digest>{_SLOT_SUFFIX}``.
+_TMP_SLOT_NAME: str = f"candidate{_SLOT_SUFFIX}.tmp"
 
 
 class SlotIntegrityError(RuntimeError):
@@ -117,10 +123,10 @@ class OnDeviceSlotStore:
         # Write to a temp name first, digest it, then rename to <digest>.pt so
         # the final filename is content-addressed and an interrupted write
         # never leaves a mis-stamped slot behind.
-        tmp_path = self._slot_dir / "candidate.pt.tmp"
+        tmp_path = self._slot_dir / _TMP_SLOT_NAME
         torch.save(dict(candidate_state_dict), tmp_path)
         digest = self._digest_file(tmp_path)
-        final_path = self._slot_dir / f"{digest}.pt"
+        final_path = self._slot_dir / f"{digest}{_SLOT_SUFFIX}"
         tmp_path.replace(final_path)
 
         _log.info(

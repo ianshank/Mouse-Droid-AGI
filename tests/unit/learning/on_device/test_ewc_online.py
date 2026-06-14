@@ -118,3 +118,97 @@ def test_concrete_satisfies_protocol() -> None:
         _make_model(),
     )
     assert isinstance(learner, OnDeviceLearner)
+
+
+class _TrainModeProbe(nn.Module):
+    """A module recording its ``training`` flag at every forward call.
+
+    Used to prove the candidate optimises in train mode even after the EWC
+    consolidation step (which internally calls ``model.eval()``). A real
+    BN/dropout layer would silently corrupt under eval-mode gradient steps.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.linear = nn.Linear(_INPUT_DIM, _OUTPUT_DIM)
+        self.dropout = nn.Dropout(p=0.5)
+        self.bn = nn.BatchNorm1d(_OUTPUT_DIM)
+        self.training_flags: list[bool] = []
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Record train-mode then apply dropout + batch-norm + linear."""
+        self.training_flags.append(self.training)
+        return self.bn(self.dropout(self.linear(x)))
+
+
+def test_candidate_optimises_in_train_mode_after_consolidate() -> None:
+    """Every optimisation-loop forward on the candidate is in train mode.
+
+    ``EWCAgent.consolidate`` puts the model in eval mode; the learner must
+    restore train mode before the optimisation loop so BN/dropout layers are
+    not silently corrupted.
+    """
+    from typing import Any
+
+    captured: dict[str, _TrainModeProbe] = {}
+    cfg = OnDeviceLearningConfig(enabled=True, update_steps=3, ewc_lambda=1.0)
+
+    probe = _TrainModeProbe()
+    learner = EWCOnlineLearner(cfg, probe)
+    # Patch deepcopy so we can grab the actual candidate the learner optimises.
+    import mousedroid.learning.on_device.ewc_online as mod
+
+    real_deepcopy = mod.copy.deepcopy
+
+    def _capture(obj: Any, memo: Any = None) -> Any:
+        clone = real_deepcopy(obj, memo) if memo is not None else real_deepcopy(obj)
+        if isinstance(clone, _TrainModeProbe):
+            captured["candidate"] = clone
+        return clone
+
+    mod.copy.deepcopy = _capture  # type: ignore[assignment]
+    try:
+        learner.update(_make_batch())
+    finally:
+        mod.copy.deepcopy = real_deepcopy  # type: ignore[assignment]
+
+    candidate = captured["candidate"]
+    # consolidate() forward(s) run in eval mode; the optimisation-loop forwards
+    # (the last ``update_steps`` calls) must all be in train mode.
+    optimisation_flags = candidate.training_flags[-3:]
+    assert optimisation_flags == [True, True, True]
+
+
+def test_custom_task_loss_fn_is_used() -> None:
+    """An injected ``task_loss_fn`` overrides the default stand-in criterion."""
+    calls: list[torch.Tensor] = []
+
+    def _custom_loss(output: torch.Tensor) -> torch.Tensor:
+        calls.append(output)
+        return output.abs().mean()
+
+    cfg = OnDeviceLearningConfig(enabled=True, update_steps=2, ewc_lambda=0.0)
+    learner = EWCOnlineLearner(cfg, _make_model(), task_loss_fn=_custom_loss)
+
+    learner.update(_make_batch())
+
+    assert len(calls) == 2  # called once per step
+
+
+def test_default_task_loss_fn_is_byte_identical() -> None:
+    """Omitting ``task_loss_fn`` reproduces the legacy squared-mean stand-in."""
+    batch = _make_batch()
+    cfg = OnDeviceLearningConfig(enabled=True, update_steps=4, ewc_lambda=0.0)
+
+    default_loss = EWCOnlineLearner(cfg, _make_model()).update(batch).train_loss
+    explicit_loss = (
+        EWCOnlineLearner(
+            cfg,
+            _make_model(),
+            task_loss_fn=lambda out: out.pow(2).mean(),
+        )
+        .update(batch)
+        .train_loss
+    )
+
+    assert default_loss == explicit_loss

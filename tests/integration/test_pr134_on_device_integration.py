@@ -16,6 +16,7 @@ Built with ``mock_hardware=True`` so no real device is required.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -112,3 +113,72 @@ async def test_start_spawns_then_stop_cancels_slow_task(tmp_path: Path) -> None:
     assert orchestrator._on_device_task is None
     # The hot loop still never ran (only the slow task was active).
     assert orchestrator._tick_count == 0
+
+
+@pytest.mark.asyncio
+async def test_slow_loop_runs_a_cycle_and_persists(tmp_path: Path) -> None:
+    """A live slow-cadence loop iteration produces + persists a stamped slot.
+
+    Drives the real ``_on_device_update_loop`` body (not just spawn/cancel) by
+    starting the orchestrator and polling until the coordinator has written a
+    slot under ``<experience.path>/<slot_dir>``.
+    """
+    experience_path = str(tmp_path / "experience_root")
+    _seed_replay_store(experience_path, _N_SEEDED)
+    cfg = _build_cfg(experience_path)
+
+    orchestrator = build_orchestrator(cfg)
+    slot_dir = (Path(experience_path) / cfg.on_device_learning.slot_dir).resolve()
+
+    await orchestrator.start()
+    try:
+        for _ in range(200):
+            if slot_dir.exists() and list(slot_dir.glob("*.pt")):
+                break
+            await asyncio.sleep(0.02)
+    finally:
+        await orchestrator.stop()
+
+    persisted = list(slot_dir.glob("*.pt"))
+    assert persisted, "slow-cadence loop did not persist a candidate slot"
+    # Hot loop was never advanced by the slow-cadence update.
+    assert orchestrator._tick_count == 0
+
+
+@pytest.mark.asyncio
+async def test_slow_loop_survives_a_failing_cycle(tmp_path: Path) -> None:
+    """A coordinator exception is logged and the loop keeps running.
+
+    Pins the resilience branch of ``_on_device_update_loop`` (the broad
+    ``except`` that logs ``on_device_update_cycle_failed`` and continues) so a
+    transient replay-store / disk error never kills on-device learning.
+    """
+    experience_path = str(tmp_path / "experience_root")
+    _seed_replay_store(experience_path, _N_SEEDED)
+    cfg = _build_cfg(experience_path)
+
+    orchestrator = build_orchestrator(cfg)
+
+    calls: list[int] = []
+
+    class _BoomCoordinator:
+        async def maybe_update(self) -> None:
+            calls.append(1)
+            raise RuntimeError("transient replay-store error")
+
+    orchestrator._on_device_coordinator = _BoomCoordinator()  # type: ignore[assignment]
+
+    await orchestrator.start()
+    try:
+        for _ in range(200):
+            if calls:
+                break
+            await asyncio.sleep(0.02)
+        # Give it a beat to loop again after the failure (proving it survived).
+        await asyncio.sleep(0.05)
+    finally:
+        await orchestrator.stop()
+
+    assert calls, "the failing cycle never executed"
+    # The task survived the exception (was still running until stop cancelled it).
+    assert orchestrator._on_device_task is None

@@ -112,3 +112,33 @@ def test_load_raises_on_missing_file(tmp_path: Path) -> None:
 
     with pytest.raises(SlotIntegrityError):
         store.load(slot)
+
+
+def test_slot_dir_property_resolves_under_experience_root(tmp_path: Path) -> None:
+    """The ``slot_dir`` property exposes the resolved ``<root>/<slot_dir>`` path."""
+    root = tmp_path / "experience_root"
+    store = _make_store(tmp_path)
+
+    assert store.slot_dir == (root / "on_device_slot").resolve()
+
+
+def test_persist_overwrites_stale_tmp_file(tmp_path: Path) -> None:
+    """A leftover temp blob from an interrupted write never corrupts a persist.
+
+    The write-then-rename uses a fixed temp name; a stale temp file from a prior
+    crash must be transparently overwritten so the next persist still produces a
+    correctly content-addressed slot.
+    """
+    from mousedroid.learning.on_device.slot_store import _TMP_SLOT_NAME
+
+    store = _make_store(tmp_path)
+    store.slot_dir.mkdir(parents=True, exist_ok=True)
+    stale = store.slot_dir / _TMP_SLOT_NAME
+    stale.write_bytes(b"stale-interrupted-write")
+
+    slot = store.persist(_make_state_dict())
+
+    assert slot.path.is_file()
+    assert not stale.exists()  # renamed away to <digest>.pt
+    loaded = store.load(slot)
+    assert set(loaded) == set(_make_state_dict())
