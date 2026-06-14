@@ -4,7 +4,7 @@
 
 **Goal:** Let the rover update its own policy/world-model weights *between* cloud retraining cycles from fresh on-device experience, gated by a SHA-256 integrity contract and a safety-regression bound that reverts to cloud weights on underperformance.
 
-**Architecture:** A new `learning/on_device/` subsystem wires the existing continual-learning primitives (`learning/ewc.py`, `learning/progressive_net.py`) and the replay buffer (`harness/replay_buffer.py`) into an *online update path* that runs OUTSIDE the 30 Hz reactive loop. On-device-updated weights land in a **separate slot** from cloud-pulled weights (per ADR-010) so the orchestrator can A/B between them; a regression gate on a held-out replay sample is authoritative and reverts to cloud weights (emitting a new Prometheus counter) when the updated policy underperforms.
+**Architecture:** A new `learning/on_device/` subsystem wires the existing continual-learning primitives (`learning/ewc.py`, `learning/progressive.py`) and the replay loop (`training/replay/lmdb_reader.py` + `training/replay/mixer.py` — there is NO `harness/replay_buffer.py`) into an *online update path* that runs OUTSIDE the 30 Hz reactive loop. On-device-updated weights land in a **separate slot** from cloud-pulled weights (per ADR-010) so the orchestrator can A/B between them; a regression gate on a held-out replay sample is authoritative and reverts to cloud weights (emitting a new Prometheus counter) when the updated policy underperforms.
 
 **Tech Stack:** Python 3.10/3.11, PyTorch, Pydantic v2 config, structlog, the existing EWC/PNN + replay + cloud-OTA (C1) machinery. Default-OFF, backwards-compatible.
 
@@ -34,19 +34,19 @@ Tier C closed the *cloud* loop: the rover pulls cloud-retrained weights via the 
 ### WS1 — Config schema + safety counter (foundation)
 **Files:** `src/mousedroid/config/schema.py`, `src/mousedroid/telemetry/metrics.py`, regression + AQA tests.
 
-- [ ] Add `OnDeviceLearningConfig` Pydantic model (Optional on `Settings`, default `None`): `enabled: bool = False`, `trigger_min_new_records: int`, `update_steps: int`, `regression_tolerance: float` (ge=0), `held_out_fraction: float` (0..1), `slot_dir: str` (config-driven path), `ewc_lambda: float`, `learning_rate: float`. Every value config-driven — NO hardcoded thresholds.
+- [ ] Add `OnDeviceLearningConfig` Pydantic model (Optional on `Settings`, default `None`): `enabled: bool = False`, `trigger_min_new_records: int`, `update_steps: int`, `regression_tolerance: float` (ge=0), `held_out_fraction: float` (0..1), `slot_dir: str`, `ewc_lambda: float`, `learning_rate: float`. Every value config-driven — NO hardcoded thresholds. **`slot_dir` is NOT an absolute host path.** Default it to a repo-relative leaf (e.g. `"on_device_slot"`) and have the orchestrator/factory resolve it UNDER the existing configured experience root `cfg.experience.path` (`ExperienceConfig.path` in `src/mousedroid/config/schema.py`) — i.e. the on-device weight slot lives at `<cfg.experience.path>/on_device_slot`. Do NOT hardcode `/home/jetson/...`; that absolute path is already (and only) the operator-overridable default of `ExperienceConfig.path`, so deriving from it inherits any operator override for free.
 - [ ] Add the new Prometheus family `{ns}_on_device_learning_reverted_total{reason}` to `MetricsRegistry` (pure-add, gated, low-cardinality `reason` frozenset: `{regression_bound, integrity_mismatch, exception}`); seed in `generate_metrics_sample()`.
 - [ ] Regression test: existing YAML loads unchanged with the field absent. AQA test: field-hygiene + counter label cardinality. **TDD: failing test → minimal impl → green.**
 
 ### WS2 — On-device update protocol + EWC/PNN online path
-**Files:** `src/mousedroid/learning/on_device/__init__.py`, `protocol.py`, `ewc_online.py`; extend `learning/ewc.py` / `learning/progressive_net.py` with online-update entry points.
+**Files:** `src/mousedroid/learning/on_device/__init__.py`, `protocol.py`, `ewc_online.py`; extend `learning/ewc.py` / `learning/progressive.py` with online-update entry points.
 
 - [ ] Define `OnDeviceLearnerProtocol` (`update(batch) -> UpdateResult`, `snapshot() -> CheckpointRef`, `restore(ref)`). 
-- [ ] Implement an EWC-regularized online updater that consumes replay batches and applies bounded gradient steps with the Fisher penalty (reuse `learning/ewc.py` Fisher machinery — do not reimplement). PNN column path optional behind the same protocol.
+- [ ] Implement an EWC-regularized online updater that consumes replay batches and applies bounded gradient steps with the Fisher penalty (reuse `learning/ewc.py` Fisher machinery — do not reimplement). PNN column path optional behind the same protocol (`learning/progressive.py`).
 - [ ] Unit tests: update produces a finite loss, EWC penalty applied, no NaN/Inf; property test (Hypothesis) over arbitrary batch shapes that the updater never corrupts the base weights in place.
 
 ### WS3 — Replay-triggered update loop (outside hot path)
-**Files:** `src/mousedroid/learning/on_device/trigger.py`; orchestrator slow-cadence seam; reuse `harness/replay_buffer.py`.
+**Files:** `src/mousedroid/learning/on_device/trigger.py`; orchestrator slow-cadence seam; reuse the replay loop (`training/replay/lmdb_reader.py` + `training/replay/mixer.py`).
 
 - [ ] Trigger fires when ≥ `trigger_min_new_records` fresh records accumulate (gated by the Tier-A replay/VLA/VLM telemetry already wired). Runs the updater for `update_steps`, writes to the **on-device slot** (SHA-256 stamped).
 - [ ] Wire at the POST_TICK / slow-cadence seam ONLY (mirror the C2 mission-lifecycle seam ordering). Integration test through `build_orchestrator()` proving the DI graph and that the hot loop is untouched.
@@ -85,4 +85,4 @@ pytest --import-mode=importlib --cov=src/mousedroid --cov-fail-under=85
 
 ## Estimated scope
 
-3–4 sprints (WS1 ~0.5, WS2 ~1, WS3 ~0.5, WS4 ~1, WS5 ~0.5). Sequence WS1→WS2→WS3→WS4→WS5; WS1 unblocks all. Confirm exact module names (`learning/ewc.py`, `learning/progressive_net.py`, `harness/replay_buffer.py`) against the tree at execution time before wiring.
+3–4 sprints (WS1 ~0.5, WS2 ~1, WS3 ~0.5, WS4 ~1, WS5 ~0.5). Sequence WS1→WS2→WS3→WS4→WS5; WS1 unblocks all. Module names verified against the tree (WS0 reconciliation): `learning/ewc.py` ✓, `learning/progressive.py` ✓ (NOT `progressive_net.py`), `training/replay/{lmdb_reader,mixer}.py` ✓ (there is NO `harness/replay_buffer.py`). Re-confirm before wiring if the tree drifts.
