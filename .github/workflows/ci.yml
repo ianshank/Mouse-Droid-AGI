@@ -130,7 +130,12 @@ jobs:
 
             - name: Install dependencies
               run: |
-                  pip install -e ".[dev]"
+                  # telemetry extra brings aiohttp + Pillow so mypy sees the REAL
+                  # types behind the optional-lib annotations in
+                  # telemetry/{auth,server}.py and hardware/display/expressions.py.
+                  # Without them --ignore-missing-imports degrades those to Any and
+                  # strict mode flags untyped-decorator / valid-type errors.
+                  pip install -e ".[dev,telemetry]"
                   pip install typing_extensions>=4.0
 
             - name: Type check

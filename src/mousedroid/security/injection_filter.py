@@ -22,7 +22,7 @@ from mousedroid.logging.setup import get_logger
 _log = get_logger(__name__)
 
 
-class InjectionRejected(ValueError):  # noqa: N818 - read as "rejection event", not a class of errors
+class InjectionRejected(ValueError):  # noqa: N818 — a rejection event, not an error class
     """Raised by :meth:`PromptInjectionFilterProtocol.sanitize` on a hit.
 
     Inherits from :class:`ValueError` so existing call sites that catch

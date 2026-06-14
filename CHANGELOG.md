@@ -8,6 +8,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Skill-command validators + spec/doc synchronization
+
+- **Reusable `.claude/commands` skill validator** (`tools/validate_skill_commands.py`)
+  — library + CLI that lints every slash-command skill for a non-empty
+  front-matter `description`, referenced-path existence, and absence of any
+  hardcoded host/IP. Referenced paths are *discovered* from the body (never
+  enumerated) and format/glob patterns (`{}`, `*`, `$`, `<>`) are excluded so
+  illustrative tokens like `weights/arm/{task}_final.pt` are not false-flagged.
+- **AQA regression pin** (`tests/regression/test_skill_commands_aqa.py`) — locks
+  the skill-command hygiene contract through the shared validator; wired into
+  `scripts/ci.sh` as a fast standalone signal, and `tools/` is now in the
+  script's `ruff check` / `ruff format --check` scope.
+- **Builtin spec/doc pairing validator** (`tests/unit/skills/builtin/test_skill_specs_match_docs.py`)
+  — resolves the long-promised-but-missing test referenced by
+  `src/mousedroid/skills/builtin/__init__.py`. Asserts every builtin `SkillSpec`
+  has a `docs/openclaw_skills/<name>/SKILL.md` whose H1 names the skill, and that
+  no published doc is orphaned.
+
+### Fixed
+
+- **`train-policy` skill drift** — `.claude/commands/train-policy.md` default
+  config argument pointed at the non-existent `configs/hanoi_3disk.yaml`;
+  corrected to the real `config/robot_arm_training.yaml` (consistent with the
+  skill's Key Files list). Caught by the new validator.
+
+### Changed — Spec/doc synchronization to PR #118 + validation surface
+
+- `CLAUDE.md`, `SKILLS.md`, `AGENTS.md`, `agent.md` document the new
+  skill-validation surface and the PR #118 operator Q&A + full backend telemetry
+  path. The `CLAUDE.md` "Test surface mirror" table now lists the existing
+  **property** (`tests/property/`) and **performance** (`tests/performance/`)
+  tiers that were previously undocumented.
+
 ### Added — Physical-AI Phase 5: MuJoCo skid-steer sim → RSSM dynamics pretraining + vision-on fine-tune
 
 Replaces the NumPy kinematic rover sim with a MuJoCo (classic) skid-steer physics

@@ -16,6 +16,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
+from mousedroid.common.imports import module_available
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
@@ -23,14 +24,8 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
-# Try importing torch2trt at module level; concrete classes handle absence.
-_TORCH2TRT_AVAILABLE: bool
-try:
-    import torch2trt as _torch2trt  # noqa: F401
-
-    _TORCH2TRT_AVAILABLE = True
-except ImportError:
-    _TORCH2TRT_AVAILABLE = False
+# Probe torch2trt availability at module level; concrete classes handle absence.
+_TORCH2TRT_AVAILABLE: bool = module_available("torch2trt")
 
 
 @runtime_checkable
@@ -113,7 +108,7 @@ def _trace_model(model: nn.Module, sample_input: Tensor) -> Any:
     Returns:
         Traced model via ``torch.jit.trace``.
     """
-    return torch.jit.trace(model, sample_input)  # type: ignore[no-untyped-call]
+    return torch.jit.trace(model, sample_input)  # type: ignore[no-untyped-call]  # torch.jit is untyped
 
 
 class JetsonTensorRTCompiler:
@@ -293,7 +288,7 @@ class JetsonTensorRTCompiler:
 
         def _load_sync() -> Any:
             try:
-                return torch.jit.load(str(path))  # type: ignore[no-untyped-call]
+                return torch.jit.load(str(path))  # type: ignore[no-untyped-call]  # torch.jit is untyped
             except Exception:
                 # weights_only=False is required to load torch2trt modules.
                 # SECURITY: only load from the local tensorrt_cache_dir which

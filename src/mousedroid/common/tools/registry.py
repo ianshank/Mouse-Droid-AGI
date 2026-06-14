@@ -11,9 +11,11 @@ from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import GCPConfig
+    from mousedroid.harness.approval.protocol import ApprovalGateProtocol
     from mousedroid.llm_gateway.protocol import GoalVector, LLMGatewayProtocol
     from mousedroid.telemetry.metrics import MetricsRegistry
 
+from mousedroid.common.imports import module_available
 from mousedroid.logging.setup import get_logger
 
 _log = get_logger(__name__)
@@ -168,7 +170,7 @@ class ToolRegistry:
             action="tool_dispatch",
             payload={"kwargs_keys": sorted(kwargs.keys())},
         )
-        decision = await gate.decide(request)  # type: ignore[attr-defined]
+        decision = await cast("ApprovalGateProtocol", gate).decide(request)
         if not decision.approved:
             _log.warning(
                 "tool_dispatch_denied",
@@ -458,9 +460,7 @@ async def _lidar_diagnostics() -> dict[str, str]:
     Returns:
         LiDAR diagnostic status including pyserial availability.
     """
-    try:
-        import serial as _serial  # noqa: F401
-    except ImportError:
+    if not module_available("serial"):
         return {"status": "pyserial_not_installed"}
 
     return {"status": "ok", "driver": "FHL-LD19"}

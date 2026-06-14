@@ -501,6 +501,44 @@ block, even in a comment — GitHub evaluates it and an empty one is an
 a schema field the deployed image lacks, bump `deployments/jetson-image.json`
 to a reachable commit that carries it.
 
+### validate-skills
+
+**Trigger:** "validate skills", "skill drift", "did I break a skill?",
+"lint the .claude/commands", "does this skill reference a real path?"
+
+**What it covers:** the two skill families are validated independently —
+neither can silently drift from reality.
+
+- **`.claude/commands/*.md` slash-command skills** are linted for a
+  non-empty front-matter `description`, referenced-path existence
+  (every backtick-wrapped repo path must resolve on disk), and the
+  absence of any hardcoded host/IP. The reusable rule lives in exactly
+  one place — `tools/validate_skill_commands.py` — and is consumed by
+  both the CLI and the AQA test.
+- **Builtin `SkillSpec` ↔ publishable doc pairing** is pinned so every
+  spec in `src/mousedroid/skills/builtin/` has a matching
+  `docs/openclaw_skills/<name>/SKILL.md` (H1 == skill name) and no doc
+  is orphaned.
+
+**Run:**
+
+```bash
+# Fast standalone CLI signal (also wired into scripts/ci.sh):
+"/c/Program Files/Python311/python.exe" tools/validate_skill_commands.py
+
+# The PR gate (AQA regression) + the builtin pairing test:
+"/c/Program Files/Python311/python.exe" -m pytest \
+    tests/regression/test_skill_commands_aqa.py \
+    tests/unit/skills/builtin/test_skill_specs_match_docs.py \
+    --import-mode=importlib -q
+```
+
+**Gotcha:** the validator *discovers* referenced paths from the body —
+it never enumerates skill names or paths — so illustrative patterns with
+format/glob tokens (`weights/arm/{task}_final.pt`, `*`, `$`, `<>`) are
+intentionally skipped. If you mean a literal repo path, write it without
+those metacharacters or the validator will (correctly) not check it.
+
 ---
 
 ## Subagent skills (delegation-facing)

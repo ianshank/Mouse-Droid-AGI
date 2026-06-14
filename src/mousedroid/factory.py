@@ -8,12 +8,13 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from mousedroid.cloud.protocol import (
     ENGINE_TYPE_POLICY,
     ENGINE_TYPE_WORLD_MODEL,
 )
+from mousedroid.common.imports import module_importable
 from mousedroid.comms.protocol import ESP32CommProtocol
 from mousedroid.hardware.protocols import (
     AudioProtocol,
@@ -204,17 +205,30 @@ def build_camera(
 
         return IMX500Camera(cfg.camera, hailo_runtime=hailo_runtime)
 
-    # auto: try picamera2 first, fall back to jetson_csi
-    try:
-        from picamera2 import Picamera2  # noqa: F401
-
+    # auto: prefer picamera2 only when its stack *actually imports* (spec
+    # presence is insufficient — picamera2 can resolve a spec yet fail to
+    # import when its libcamera/native bindings are absent), else fall back
+    # to jetson_csi.
+    if module_importable("picamera2"):
         from mousedroid.hardware.camera.imx500 import IMX500Camera
 
+        _log.info(
+            "camera_backend_resolved",
+            backend="picamera2",
+            driver="IMX500Camera",
+            reason="picamera2_importable",
+        )
         return IMX500Camera(cfg.camera, hailo_runtime=hailo_runtime)
-    except ImportError:
-        from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
 
-        return JetsonCSICamera(cfg.camera, hailo_runtime=hailo_runtime)
+    from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
+
+    _log.info(
+        "camera_backend_resolved",
+        backend="jetson_csi",
+        driver="JetsonCSICamera",
+        reason="picamera2_not_importable",
+    )
+    return JetsonCSICamera(cfg.camera, hailo_runtime=hailo_runtime)
 
 
 def build_distance_sensor(cfg: Settings) -> DistanceSensorProtocol:
@@ -2617,7 +2631,7 @@ def _resolve_approval_callback(
         return _deny
 
     _log.info("approval_callback_resolved", dotted_path=dotted_path)
-    return target  # type: ignore[no-any-return]
+    return cast("Callable[[Any], Awaitable[bool]]", target)
 
 
 def build_approval_gate(cfg: Settings) -> ApprovalGateProtocol:

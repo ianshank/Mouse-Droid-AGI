@@ -29,13 +29,20 @@ echo "=== Python Environment ==="
 "$PYTHON_BIN" -c "import sys,pydantic,pydantic_settings; print(f'python={sys.executable}'); print(f'pydantic={pydantic.__version__}'); print(f'pydantic_settings={pydantic_settings.__version__}')"
 
 echo "=== Lint ==="
-"$PYTHON_BIN" -m ruff check src/ tests/
+"$PYTHON_BIN" -m ruff check src/ tests/ tools/
 
 echo "=== Format Check ==="
 # Mirrors the `Format check` step in .github/workflows/ci.yml. The ruff
 # version is pinned in pyproject.toml's [dev] extra to match CI exactly —
 # bump both in the same change to avoid local/CI lint drift.
-"$PYTHON_BIN" -m ruff format --check src/ tests/
+"$PYTHON_BIN" -m ruff format --check src/ tests/ tools/
+
+echo "=== Skill-Command Validator ==="
+# Fast standalone signal that every .claude/commands skill carries a
+# non-empty description, references only paths that exist, and bakes in no
+# host/IP. The PR gate is tests/regression/test_skill_commands_aqa.py;
+# this is the quick local mirror.
+"$PYTHON_BIN" tools/validate_skill_commands.py
 
 echo "=== Type Check ==="
 "$PYTHON_BIN" -m mypy src/ --strict --ignore-missing-imports

@@ -14,11 +14,12 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 from numpy.typing import NDArray
 
+from mousedroid.common.imports import module_importable
 from mousedroid.config.loader import load_settings
 from mousedroid.factory import build_camera, build_microphone, build_speaker, build_voice_engine
 from mousedroid.logging.setup import get_logger
@@ -35,7 +36,7 @@ _CONFIG_LIST_ENV_VARS = ("MOUSEDROID_CONFIGS", "MOUSEDROID_JETSON_CONFIGS")
 _CONFIG_SINGLE_ENV_VARS = ("MOUSEDROID_CONFIG", "MOUSEDROID_JETSON_CONFIG")
 
 # Named constants for paths and phrases used in validation helpers.
-_ARGUS_SOCKET_PATH: str = "/tmp/argus_socket"  # noqa: S108
+_ARGUS_SOCKET_PATH: str = "/tmp/argus_socket"  # noqa: S108 — fixed NVIDIA Argus socket path, not a temp write
 _DEFAULT_SMOKE_PHRASE: str = "Hello hello! Rocky ready!"
 
 
@@ -293,7 +294,7 @@ def _resolve_raw_frame_capture(
         # so sync drivers still work and the smoke produces a clean
         # signal.
         if asyncio.iscoroutinefunction(capture_raw):
-            return capture_raw  # type: ignore[no-any-return]
+            return cast("Callable[[], Awaitable[NDArray[np.uint8]]]", capture_raw)
 
         async def _via_sync_capture_raw_frame() -> NDArray[np.uint8]:
             return np.asarray(await asyncio.to_thread(capture_raw), dtype=np.uint8)
@@ -445,10 +446,11 @@ async def verify_hailo_accelerator(cfg: Settings) -> HailoDiagnostics:
     device_path_exists = device_path.exists()
     fallback_on_failure = bool(hailo_cfg.fallback_on_failure)
 
-    # SDK importability — does NOT instantiate the runtime yet.
-    try:
-        import hailo_platform  # noqa: F401  # presence check only
-    except ImportError:
+    # SDK importability — does NOT instantiate the runtime yet. Use a real
+    # guarded import (not mere spec presence): hailo_platform ships native
+    # bindings that can resolve a spec yet fail to import on a host without
+    # the driver, which would otherwise mis-report sdk_importable=True.
+    if not module_importable("hailo_platform"):
         return HailoDiagnostics(
             device_path_exists=device_path_exists,
             sdk_importable=False,
@@ -632,8 +634,8 @@ def verify_pcie_ssd_layout(cfg: Settings) -> PcieSsdDiagnostics:
     pcie_devices: tuple[str, ...] = ()
     if shutil.which("lspci"):
         try:
-            result = subprocess.run(  # noqa: S603 - fixed argv list from shutil.which("lspci")
-                ["lspci", "-nn"],  # noqa: S607 - resolved via shutil.which above
+            result = subprocess.run(
+                ["lspci", "-nn"],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -652,8 +654,8 @@ def verify_pcie_ssd_layout(cfg: Settings) -> PcieSsdDiagnostics:
     block_devices: tuple[str, ...] = ()
     if shutil.which("lsblk"):
         try:
-            result = subprocess.run(  # noqa: S603 - fixed argv list from shutil.which("lsblk")
-                ["lsblk", "-d", "-o", "NAME,SIZE,TYPE,TRAN", "-n"],  # noqa: S607
+            result = subprocess.run(
+                ["lsblk", "-d", "-o", "NAME,SIZE,TYPE,TRAN", "-n"],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -684,8 +686,8 @@ def verify_pcie_ssd_layout(cfg: Settings) -> PcieSsdDiagnostics:
     smartctl_health: str | None = None
     if shutil.which("smartctl"):
         try:
-            result = subprocess.run(  # noqa: S603 - args list, no shell
-                ["smartctl", "-H", _nvme_device_for(cfg)],  # noqa: S607
+            result = subprocess.run(
+                ["smartctl", "-H", _nvme_device_for(cfg)],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -737,8 +739,8 @@ def _resolve_pcie_ssd_mount(cfg: Settings) -> Path | None:
 
     if shutil.which("findmnt"):
         try:
-            result = subprocess.run(  # noqa: S603 - args list, no shell
-                ["findmnt", "-no", "TARGET", _nvme_partition_for(cfg)],  # noqa: S607
+            result = subprocess.run(
+                ["findmnt", "-no", "TARGET", _nvme_partition_for(cfg)],
                 capture_output=True,
                 text=True,
                 check=False,

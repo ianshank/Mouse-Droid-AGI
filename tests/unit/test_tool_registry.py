@@ -248,3 +248,30 @@ def test_default_registry_has_lidar_diagnostics() -> None:
     """Verify 'lidar_diagnostics' is registered in the default registry."""
     reg = create_default_registry()
     assert "lidar_diagnostics" in reg.names
+
+
+@pytest.mark.asyncio
+async def test_lidar_diagnostics_reports_ok_when_pyserial_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_lidar_diagnostics`` returns the driver status when pyserial imports."""
+    import sys
+    import types
+
+    from mousedroid.common.tools import registry as registry_mod
+
+    monkeypatch.setitem(sys.modules, "serial", types.ModuleType("serial"))
+    result = await registry_mod._lidar_diagnostics()
+    assert result == {"status": "ok", "driver": "FHL-LD19"}
+
+
+@pytest.mark.asyncio
+async def test_lidar_diagnostics_reports_missing_when_pyserial_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_lidar_diagnostics`` reports a clean status when pyserial is unavailable."""
+    from mousedroid.common.tools import registry as registry_mod
+
+    monkeypatch.setattr(registry_mod, "module_available", lambda name: False)
+    result = await registry_mod._lidar_diagnostics()
+    assert result == {"status": "pyserial_not_installed"}

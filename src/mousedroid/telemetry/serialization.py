@@ -19,7 +19,7 @@ it trivial to unit-test without spinning up a server.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from mousedroid.logging.setup import get_logger
 
@@ -207,11 +207,14 @@ def negotiate(
     chosen: SerializationName
     preferred = hello.get("preferred_serialization")
     if isinstance(preferred, str) and preferred in overlap:
-        chosen = preferred  # type: ignore[assignment]
+        # ``preferred`` is in ``overlap`` ⊆ SUPPORTED_SERIALIZATIONS, so it is a
+        # valid ``SerializationName`` — mypy can't narrow membership in a
+        # str-typed collection.
+        chosen = cast("SerializationName", preferred)
     elif server_serialization in overlap:
         chosen = server_serialization
     else:
-        chosen = overlap[0]  # type: ignore[assignment]
+        chosen = cast("SerializationName", overlap[0])
 
     _log.info(
         "telemetry_ws_negotiation_succeeded",

@@ -64,7 +64,7 @@ class MockTelemetrySource:
         self._lidar_points_per_scan = max(8, lidar_points_per_scan)
         self._lidar_max_range_m = max(0.1, lidar_max_range_m)
         # Non-cryptographic — only used for synthetic dashboard noise.
-        self._rng = random.Random(seed)  # noqa: S311
+        self._rng = random.Random(seed)  # noqa: S311 — deterministic mock telemetry, not security
         self._running = False
         self._task: asyncio.Task[None] | None = None
         self._tick = 0

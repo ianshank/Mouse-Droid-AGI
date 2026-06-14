@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import torch.nn as nn
-import torch.nn.functional as F  # noqa: N812
+import torch.nn.functional as F  # noqa: N812 — canonical PyTorch alias for functional
 from torch import Tensor
 
 from mousedroid.logging.setup import get_logger
@@ -13,7 +13,7 @@ _log = get_logger(__name__)
 
 def _backward(loss: Tensor) -> None:
     """Isolate torch stub gaps around ``Tensor.backward``."""
-    loss.backward()  # type: ignore[no-untyped-call]
+    loss.backward()  # type: ignore[no-untyped-call]  # torch ships no stub for Tensor.backward
 
 
 class KnowledgeDistiller:

@@ -19,13 +19,17 @@ if TYPE_CHECKING:
 
 _jetson_utils: Any
 try:
-    import jetson_utils as _jetson_utils  # type: ignore[no-redef]
+    import jetson_utils as _jetson_utils_mod
+
+    _jetson_utils = _jetson_utils_mod
 except ImportError:  # pragma: no cover
     _jetson_utils = None
 
 _cv2: Any
 try:
-    import cv2 as _cv2  # type: ignore[no-redef,unused-ignore]
+    import cv2 as _cv2_mod
+
+    _cv2 = _cv2_mod
 except ImportError:  # pragma: no cover
     _cv2 = None
 

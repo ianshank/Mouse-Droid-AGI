@@ -95,8 +95,8 @@ class SystemdNotifier:
             # spawn here is intentional; sdnotify is the preferred path and is
             # cached in ``self._notifier``. This fallback runs only when the
             # package is unavailable, so the per-call cost is bounded.
-            subprocess.run(  # noqa: S603
-                ["systemd-notify", f"--pid={os.getpid()}", state],  # noqa: S607
+            subprocess.run(  # noqa: S603 — fixed argv list, no shell, trusted constant program
+                ["systemd-notify", f"--pid={os.getpid()}", state],  # noqa: S607 — systemd-notify on PATH
                 check=False,
                 capture_output=True,
             )

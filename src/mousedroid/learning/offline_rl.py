@@ -8,10 +8,11 @@ conservative (CQL) or implicit (IQL) value estimation.
 from __future__ import annotations
 
 import abc
+from typing import cast
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F  # noqa: N812
+import torch.nn.functional as F  # noqa: N812 — canonical PyTorch alias for functional
 from torch import Tensor
 
 from mousedroid.constants import IQL_EXP_ADVANTAGE_CLAMP_MAX
@@ -23,6 +24,11 @@ from mousedroid.training.observability import (
 )
 
 _log = get_logger(__name__)
+
+
+def _backward(loss: Tensor) -> None:
+    """Isolate torch stub gaps around ``Tensor.backward`` (untyped in torch)."""
+    loss.backward()  # type: ignore[no-untyped-call]  # torch ships no stub for Tensor.backward
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +123,7 @@ class DeterministicPolicy(nn.Module):
         Returns:
             Action tensor in ``[-1, 1]``, shape ``(batch, action_dim)``.
         """
-        return self.net(state)  # type: ignore[no-any-return]
+        return cast(Tensor, self.net(state))
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +315,7 @@ class OfflineRLTrainer(abc.ABC):
         # steps an independent Adam state without touching the actor's PPO
         # optimizer state.
         self.bc_optimizer.zero_grad()
-        scaled.backward()  # type: ignore[no-untyped-call]
+        _backward(scaled)
         self.bc_optimizer.step()
 
         return {"bc_loss": float(bc_loss.item())}
@@ -510,7 +516,7 @@ class CQLTrainer(OfflineRLTrainer):
         q_loss = bellman_loss + self._cql_alpha * cql_loss
 
         self.q_optimizer.zero_grad()
-        q_loss.backward()  # type: ignore[no-untyped-call]
+        _backward(q_loss)
         self.q_optimizer.step()
 
         # --- Policy update ---
@@ -519,7 +525,7 @@ class CQLTrainer(OfflineRLTrainer):
         policy_loss = -q1_pi.mean()
 
         self.policy_optimizer.zero_grad()
-        policy_loss.backward()
+        _backward(policy_loss)
         self.policy_optimizer.step()
 
         # --- Target update ---
@@ -567,7 +573,7 @@ class ValueNetwork(nn.Module):
         Returns:
             Value tensor, shape ``(batch, 1)``.
         """
-        return self.net(state)  # type: ignore[no-any-return]
+        return cast(Tensor, self.net(state))
 
 
 class IQLTrainer(OfflineRLTrainer):
@@ -666,7 +672,7 @@ class IQLTrainer(OfflineRLTrainer):
         value_loss = self._expectile_loss(target_q - v)
 
         self.value_optimizer.zero_grad()
-        value_loss.backward()  # type: ignore[no-untyped-call]
+        _backward(value_loss)
         self.value_optimizer.step()
 
         # --- Q-function update (Bellman with V-targets) ---
@@ -678,7 +684,7 @@ class IQLTrainer(OfflineRLTrainer):
         q_loss = F.mse_loss(q1, target) + F.mse_loss(q2, target)
 
         self.q_optimizer.zero_grad()
-        q_loss.backward()  # type: ignore[no-untyped-call]
+        _backward(q_loss)
         self.q_optimizer.step()
 
         # --- Policy update (advantage-weighted regression) ---
@@ -698,7 +704,7 @@ class IQLTrainer(OfflineRLTrainer):
         policy_loss = (exp_advantage * mse).mean()
 
         self.policy_optimizer.zero_grad()
-        policy_loss.backward()  # type: ignore[no-untyped-call]
+        _backward(policy_loss)
         self.policy_optimizer.step()
 
         # --- Target update ---

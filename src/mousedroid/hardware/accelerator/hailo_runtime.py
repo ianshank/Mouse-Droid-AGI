@@ -34,7 +34,9 @@ _log = get_logger(__name__)
 
 _hailort: Any
 try:
-    import hailo_platform as _hailort  # type: ignore[no-redef]
+    import hailo_platform as _hailo_platform_mod
+
+    _hailort = _hailo_platform_mod
 except ImportError:  # pragma: no cover
     _hailort = None
 

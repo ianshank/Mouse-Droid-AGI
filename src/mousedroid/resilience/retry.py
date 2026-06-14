@@ -105,7 +105,7 @@ def _compute_delay(attempt: int, cfg: RetryConfig) -> float:
         cfg.max_delay_s,
     )
     jitter_frac = cfg.jitter_fraction
-    jitter = random.uniform(0.0, delay * jitter_frac)  # noqa: S311
+    jitter = random.uniform(0.0, delay * jitter_frac)  # noqa: S311 — backoff jitter, not security
     return delay + jitter
 
 

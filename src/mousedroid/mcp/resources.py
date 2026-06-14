@@ -24,6 +24,8 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlsplit
 
+import numpy as np
+
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
@@ -438,11 +440,7 @@ def _episode_to_dict(episode: Any) -> dict[str, Any]:
 
 def _coerce_field(value: Any) -> Any:
     """Coerce a single field, summarising heavy numpy payloads."""
-    try:
-        import numpy as np
-    except ImportError:  # pragma: no cover - numpy is a hard dep
-        np = None  # type: ignore[assignment]
-    if np is not None and isinstance(value, np.ndarray):
+    if isinstance(value, np.ndarray):
         return {
             "ndarray": True,
             "shape": list(value.shape),
