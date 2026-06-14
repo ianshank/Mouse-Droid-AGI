@@ -48,13 +48,21 @@ def _run_script(
     *args: str,
     install_dir: Path,
     overlay_dst: Path,
+    extra_overlays: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Invoke sync_jetson_overlay.sh in a sandboxed env."""
+    """Invoke sync_jetson_overlay.sh in a sandboxed env.
+
+    F-006 remote-LLM sprint added ``extra_overlays``: space-separated
+    ``src:dst`` pairs threaded into MOUSEDROID_EXTRA_OVERLAYS so the new
+    N-pair loop can be exercised alongside the legacy single-pair flow.
+    """
     env = {
         "MOUSEDROID_INSTALL_DIR": str(install_dir),
         "MOUSEDROID_OVERLAY_DST": str(overlay_dst),
         "PATH": "/usr/bin:/bin:/usr/local/bin",
     }
+    if extra_overlays is not None:
+        env["MOUSEDROID_EXTRA_OVERLAYS"] = extra_overlays
     return subprocess.run(
         ["bash", str(_SCRIPT), *args],
         capture_output=True,
@@ -145,3 +153,59 @@ def test_default_mode_warns_when_src_missing(tmp_path: Path) -> None:
     result = _run_script(install_dir=tmp_path / "install", overlay_dst=overlay_dst)
     assert result.returncode == 0
     assert "overlay_sync_source_missing" in result.stderr
+
+
+def test_extra_overlays_syncs_remote_llm_pair_alongside_primary(tmp_path: Path) -> None:
+    """F-006: MOUSEDROID_EXTRA_OVERLAYS pair syncs alongside the primary overlay.
+
+    Operator drops the remote-LLM overlay file into the repo's config/ dir
+    and sets MOUSEDROID_EXTRA_OVERLAYS=src:dst — both files end up at their
+    deployed destinations after one script invocation. Without this support
+    the operator would have to scp the second file manually after every
+    git pull, defeating the purpose of having a sync script.
+    """
+    install_dir, overlay_dst = _setup_sandbox(tmp_path, src_text="platform: prod_v1\n")
+    # Second source: the remote-LLM overlay.
+    second_src = install_dir / "config" / "jetson_production_remote_llm.yaml"
+    second_src.write_text("llm:\n  backend: openai_compatible\n", encoding="utf-8")
+    second_dst = tmp_path / "etc" / "mousedroid" / "jetson_production_remote_llm.yaml"
+    second_dst.parent.mkdir(parents=True, exist_ok=True)
+
+    result = _run_script(
+        install_dir=install_dir,
+        overlay_dst=overlay_dst,
+        extra_overlays=f"{second_src}:{second_dst}",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "pair_index=0" in result.stderr
+    assert "pair_index=1" in result.stderr
+    assert overlay_dst.read_text(encoding="utf-8") == "platform: prod_v1\n"
+    assert second_dst.read_text(encoding="utf-8") == "llm:\n  backend: openai_compatible\n"
+
+
+def test_extra_overlays_unset_preserves_single_pair_behaviour(tmp_path: Path) -> None:
+    """No MOUSEDROID_EXTRA_OVERLAYS → byte-identical to the pre-F-006 single-pair flow.
+
+    Critical backwards-compat regression net: deployments that never set the
+    new env var (every existing one) must see exactly the same log lines
+    and exit-code behaviour as before the N-pair refactor.
+    """
+    install_dir, overlay_dst = _setup_sandbox(tmp_path)
+    overlay_dst.parent.mkdir(parents=True, exist_ok=True)
+    overlay_dst.write_text(
+        (install_dir / "config" / "jetson_production.yaml").read_text("utf-8"),
+        encoding="utf-8",
+    )
+
+    result = _run_script(
+        "--verify",
+        install_dir=install_dir,
+        overlay_dst=overlay_dst,
+        extra_overlays=None,  # explicit None → MOUSEDROID_EXTRA_OVERLAYS unset
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "pair_index=0" in result.stderr
+    # Only one pair processed — no pair_index=1 event.
+    assert "pair_index=1" not in result.stderr

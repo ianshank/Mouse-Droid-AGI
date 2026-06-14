@@ -1,0 +1,56 @@
+# F-006 remote-LLM overlay: route Jetson LLMGateway off-Jetson to a host-PC
+# Ollama instance over the USB-net bridge. Operator-opt-in.
+#
+# Apply AFTER config/jetson_production.yaml (does NOT replace it). The deep-
+# merge in src/mousedroid/config/loader.py:_deep_merge keeps every llm.*
+# field from jetson_production.yaml that isn't redeclared here (n_gpu_layers,
+# n_threads, model_path, etc. remain intact).
+#
+# See docs/operator/JETSON_REMOTE_LLM_SETUP.md for the full setup
+# (Ollama install, host-PC IP discovery, docker.env population, probe usage).
+#
+# Why this exists: PR #102's live-Jetson probe (tools/llm_latency_probe.py)
+# confirmed that Phi-3-mini-q4 (~2.4GB) cannot be GPU-offloaded on the Orin
+# Nano 8GB shared RAM while the orchestrator holds the iGPU heap — cudaMalloc
+# OOM at n_gpu_layers=-1 / =16 / =8. CPU-only baseline takes 269s per
+# translate_mission. SMOKE_REPORT Addendum D documents three resolution
+# paths; this overlay implements path (c) — move the LLM off-Jetson.
+
+llm:
+  backend: "openai_compatible"
+
+  # USB-net bridge default — host PC typically gets 192.168.55.100/24 over
+  # RNDIS. Operator overrides via MOUSEDROID_LLM__BASE_URL in
+  # /etc/mousedroid/docker.env (PR #101's nested-env-strip makes the env
+  # var win over this yaml).
+  base_url: "http://192.168.55.100:11434"
+
+  # Default Ollama model tag. Operator can switch via
+  # MOUSEDROID_LLM__MODEL_NAME — e.g. "qwen2.5:1.5b" for a smaller / faster
+  # model. The probe (tools/jetson_remote_llm_probe.py) lists what the
+  # server actually has loaded via /v1/models so the operator can verify
+  # the configured name is available before flipping the orchestrator.
+  model_name: "phi3:mini"
+
+  # Cold-load tolerance: Ollama pages a 2GB GGUF off NVMe into VRAM in 3-8s
+  # on a typical consumer GPU; the first /v1/chat/completions then blocks
+  # 15-25s while the model warms up. 60s gives the cold-start path headroom.
+  # Steady-state hot inference is 50-200ms, well under this ceiling.
+  # Runbook MUST instruct operators to `ollama run phi3:mini /dev/null`
+  # before first orchestrator start to side-step the cold-load window.
+  request_timeout_s: 60.0
+
+  # Diagnostic ceiling for the llm_inference_slow event. 750ms matches the
+  # local production overlay's 500ms plus HTTP-overhead headroom (USB-net
+  # RTT <1ms, openai_compatible JSON parse ~10-20ms, Ollama hot inference
+  # 50-200ms => budget ~250ms). Looser values (the architect peer-review
+  # caught a previous draft at 2000ms) stop being a useful regression
+  # signal — every call would pass even on a degraded host.
+  latency_target_ms: 750.0
+
+  # api_key MUST be set when Ollama listens on anything other than 127.0.0.1.
+  # Set MOUSEDROID_LLM__API_KEY in /etc/mousedroid/docker.env (never commit
+  # the value). The Tier C2.3 gateway forwards it as Authorization: Bearer
+  # and never logs the secret — verified by the
+  # test_api_key_forwarded_to_cold_ping_as_bearer_but_never_logged
+  # regression test in tests/unit/tools/test_jetson_remote_llm_probe.py.

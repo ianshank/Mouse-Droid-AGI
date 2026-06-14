@@ -853,11 +853,14 @@ def _build_single_llm_gateway(
             passes a ``model_copy`` with ``backend`` (and optionally
             ``model_name``) overridden.
         injection_filter: Optional shared prompt-injection filter. Applied to
-            the ``llama_cpp`` and ``anthropic`` backends (both forward NL
-            commands that warrant local filtering — the GGUF model runs the
-            command verbatim, and ``anthropic`` ships it to a third-party
-            cloud). The ``openai_compatible`` backend skips it, trusting the
-            upstream provider's guardrails.
+            ALL three backends — ``llama_cpp`` (the GGUF model runs the
+            command verbatim), ``anthropic`` (ships NL to a third-party
+            cloud), and ``openai_compatible`` (the f006-remote-llm sprint
+            closed the prior gap where the HTTP path silently discarded the
+            filter, trusting the upstream provider's guardrails — wrong once
+            the operator runbook started teaching mission text via the
+            remote-LLM probe). Each backend sanitises the mission-translation
+            path before egress.
         metrics: Optional shared :class:`MetricsRegistry`. Forwarded to ALL
             three backends so successful translations / queries record
             latency / token / budget metrics regardless of which backend
@@ -878,7 +881,9 @@ def _build_single_llm_gateway(
             model=llm_cfg.model_name,
             enabled=llm_cfg.enabled,
         )
-        return OpenAICompatibleLLMGateway(llm_cfg, metrics=metrics)
+        return OpenAICompatibleLLMGateway(
+            llm_cfg, injection_filter=injection_filter, metrics=metrics
+        )
 
     if llm_cfg.backend == "anthropic":
         from mousedroid.llm_gateway.anthropic_gateway import AnthropicLLMGateway
@@ -951,18 +956,27 @@ def build_llm_gateway(
     no-op (the composite is skipped) — falling back to the same backend
     serves no purpose.
 
-    The ``injection_filter`` is shared with the ``llama_cpp`` and
-    ``anthropic`` backends (and both tiers of the composite); the
-    ``openai_compatible`` backend skips local injection filtering because the
-    upstream provider is expected to enforce its own guardrails.
+    The ``injection_filter`` is now shared across ALL three backends
+    (``llama_cpp``, ``anthropic``, AND ``openai_compatible``) and both tiers
+    of the fallback composite. The f006-remote-llm sprint closed the prior
+    gap where the HTTP (``openai_compatible``) backend silently discarded the
+    filter ("upstream provider expected to enforce its own guardrails") — a
+    documented attack surface once the operator runbook started teaching
+    mission text via the new ``jetson_remote_llm_probe``. The HTTP path now
+    calls ``injection_filter.sanitize(nl)`` inside ``translate_mission``,
+    mirroring ``LLMGateway._sanitize_command`` at
+    ``llm_gateway/gateway.py:148`` so every backend applies the same local
+    rejection envelope before NL leaves the rover.
 
     Args:
         cfg: Root settings.
         injection_filter: Optional shared :class:`PromptInjectionFilterProtocol`.
             When ``None``, each filter-aware gateway constructs its own filter
-            from ``cfg.llm.injection_patterns`` (legacy behaviour); when
+            from ``cfg.llm.injection_patterns`` (legacy behaviour) and the
+            ``openai_compatible`` gateway skips local sanitisation; when
             supplied (the default in :func:`build_orchestrator`), the same
-            filter is reused by the OpenClaw mission dispatcher.
+            filter is reused by all three backends + the OpenClaw mission
+            dispatcher.
         metrics: Optional shared :class:`MetricsRegistry`, forwarded to both
             tiers (every backend records latency/token/budget metrics; the
             composite additionally records the per-tier served counter).
