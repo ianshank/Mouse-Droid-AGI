@@ -6,9 +6,9 @@ returns the correct implementation based on ``Settings``.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from mousedroid.cloud.protocol import (
     ENGINE_TYPE_POLICY,
@@ -37,6 +37,8 @@ from mousedroid.vla.policy import VLAPolicyProtocol
 from mousedroid.voice.protocol import VoiceEngineProtocol
 
 if TYPE_CHECKING:
+    from torch import Tensor
+
     from mousedroid.agents.base import AgentProtocol
     from mousedroid.arm.protocols import (
         ArmControllerProtocol,
@@ -59,11 +61,14 @@ if TYPE_CHECKING:
     from mousedroid.curiosity.protocol import CuriosityProtocol
     from mousedroid.efficiency.tensorrt import TensorRTCompilerProtocol
     from mousedroid.experience.logger import ExperienceLogger
+    from mousedroid.experience.record import MouseDroidExperienceRecord
     from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
     from mousedroid.hardware.camera.feature_extractor import FeatureExtractorProtocol
     from mousedroid.harness.approval.protocol import ApprovalGateProtocol
     from mousedroid.harness.protocol import TaskTrackerProtocol
     from mousedroid.health.monitor import HealthMonitor
+    from mousedroid.learning.on_device.replay_trigger import ReplayTriggerCoordinator
+    from mousedroid.learning.on_device.slot_store import CandidateSlot, OnDeviceSlotStore
     from mousedroid.llm_gateway.mission_parser import MissionParserProtocol
     from mousedroid.mcp.protocol import MCPServerProtocol
     from mousedroid.memory.tier import MemoryTier
@@ -83,6 +88,7 @@ if TYPE_CHECKING:
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
     from mousedroid.training.observability import ExperimentLoggerProtocol
     from mousedroid.training.replay import ReplayReaderProtocol
+    from mousedroid.training.replay.lmdb_reader import LMDBReplayReader
     from mousedroid.voice.greeting import Greeter, GreeterProtocol
     from mousedroid.voice.mock_tts import MockTTS
     from mousedroid.voice.tts import PiperTTS
@@ -91,6 +97,8 @@ if TYPE_CHECKING:
 
 
 _log = get_logger(__name__)
+
+_CoroResult = TypeVar("_CoroResult")
 
 
 def build_esp32_driver(cfg: Settings) -> ESP32CommProtocol:
@@ -2997,6 +3005,258 @@ def build_hook_registry(cfg: Settings, journal: Any) -> Any:
     return registry
 
 
+def build_on_device_coordinator(
+    cfg: Settings, *, metrics: MetricsRegistry | None = None
+) -> object | None:
+    """Build the Phase-6 WS3/WS4 replay-trigger on-device update coordinator.
+
+    Returns ``None`` (so the orchestrator stays byte-identical to pre-WS3)
+    whenever ``cfg.on_device_learning`` is absent or disabled. When enabled,
+    wires the REUSED collaborators: the LMDB replay reader (new-record trigger
+    + batch source), the WS2 :class:`EWCOnlineLearner` over a small candidate
+    model sized to the experience vision-feature dimension, and the SHA-256-
+    stamped :class:`OnDeviceSlotStore` resolved under ``cfg.experience.path``.
+
+    WS3 PRODUCES + PERSISTS the candidate slot. WS4 adds the safety-regression
+    gate: after each persist the coordinator scores the candidate vs the live
+    baseline via the world-model rollout-return harness and promotes-or-reverts
+    (marking the slot active on pass, incrementing the revert counter on fail).
+    The gate runs over a config-sized policy STAND-IN through the decoupling
+    :class:`PolicyProtocol`; WS5 swaps the live policy net behind that same seam.
+
+    Args:
+        cfg: Root settings.
+        metrics: Optional shared metrics registry, threaded keyword-only so the
+            WS4 revert counter surfaces on ``/metrics``. ``None`` (the default)
+            keeps the revert path working without recording a metric.
+
+    Returns:
+        A ``ReplayTriggerCoordinator`` when enabled, else ``None``.
+    """
+    on_device_cfg = cfg.on_device_learning
+    if on_device_cfg is None or not on_device_cfg.enabled:
+        return None
+
+    import torch.nn as nn
+
+    from mousedroid.learning.on_device.ewc_online import EWCOnlineLearner
+    from mousedroid.learning.on_device.replay_trigger import ReplayTriggerCoordinator
+    from mousedroid.learning.on_device.slot_store import OnDeviceSlotStore
+    from mousedroid.training.replay.lmdb_reader import LMDBReplayReader
+
+    # Mirror the main replay path's reader construction (see build above) so the
+    # on-device trigger honours any ``cfg.training.replay.source_path`` override
+    # and the shared debug-log cadence instead of reading a different store.
+    reader = LMDBReplayReader(
+        cfg.experience,
+        path_override=cfg.training.replay.source_path,
+        debug_log_every_n=cfg.training.replay_mixer.debug_log_every_n,
+    )
+    slot_store = OnDeviceSlotStore(experience_cfg=cfg.experience, on_device_cfg=on_device_cfg)
+
+    # Candidate model: a small stand-in sized to the configured vision-feature
+    # dimension (``cfg.camera.feature_dim`` — the same width the experience
+    # vision features are produced at). WS5 swaps this for the live
+    # policy/world-model network.
+    input_dim = int(cfg.camera.feature_dim)
+    candidate_model = nn.Sequential(nn.Linear(input_dim, input_dim))
+    learner = EWCOnlineLearner(on_device_cfg, candidate_model)
+
+    cap = on_device_cfg.trigger_min_new_records
+
+    def _count_new_records() -> int:
+        """Count records currently in the replay store (slow-cadence probe)."""
+        return _count_replay_records(reader, cap)
+
+    def _load_batch() -> Tensor:
+        """Materialise one training batch tensor from replay vision-features."""
+        return _load_replay_batch(reader, input_dim, cap)
+
+    gate_runner = _build_on_device_gate_runner(cfg, slot_store=slot_store, metrics=metrics)
+
+    return ReplayTriggerCoordinator(
+        cfg=on_device_cfg,
+        learner=learner,
+        slot_store=slot_store,
+        count_new_records=_count_new_records,
+        load_batch=_load_batch,
+        gate_runner=gate_runner,
+    )
+
+
+def _build_on_device_gate_runner(
+    cfg: Settings,
+    *,
+    slot_store: OnDeviceSlotStore,
+    metrics: MetricsRegistry | None,
+) -> Callable[[CandidateSlot], None]:
+    """Build the WS4 safety-regression gate-runner closure.
+
+    Constructs the REUSED world model, a deterministic set of seed states (count
+    driven by ``held_out_fraction`` so the gate honours the held-out-slice knob)
+    and a config-sized policy STAND-IN, then returns a closure that scores a
+    persisted candidate slot vs the live baseline and promotes-or-reverts it.
+
+    The candidate vs baseline distinction is the WS5 seam: today both adapters
+    wrap the same stand-in policy net (so the end-to-end gate path runs now), and
+    WS5 will load the persisted slot's weights into the candidate adapter and the
+    live policy into the baseline adapter behind the SAME :class:`PolicyProtocol`.
+
+    Args:
+        cfg: Root settings.
+        slot_store: The slot store whose ``mark_active`` is called on PROMOTE.
+        metrics: Optional revert counter.
+
+    Returns:
+        A ``(CandidateSlot) -> None`` closure invoked by the coordinator after
+        persist (offloaded off the event loop).
+    """
+    import torch
+    import torch.nn as nn
+
+    from mousedroid.learning.on_device.regression_gate import RegressionGate
+    from mousedroid.learning.on_device.scoring import StateDictPolicyAdapter
+    from mousedroid.world_model.rssm import RSSM
+
+    on_device_cfg = cfg.on_device_learning
+    if on_device_cfg is None:
+        # Caller-guarded; explicit check (no assert — stripped under -O).
+        msg = "on_device_learning config required to build the WS4 gate runner"
+        raise ValueError(msg)
+
+    world_model = RSSM(cfg.model)
+    world_model.eval()
+    hidden_dim = cfg.model.hidden_dim
+    latent_dim = cfg.model.latent_dim
+    action_dim = cfg.model.action_dim
+
+    # Deterministic seed states. Their COUNT is driven by ``held_out_fraction``
+    # over the trigger window so the held-out-slice knob is honoured; the exact
+    # latent VALUES come from the fixed ``scoring_seed`` so the score is
+    # reproducible. WS5 sources these by encoding a held-out replay slice through
+    # the world model instead of sampling latents directly.
+    n_seed = max(1, int(on_device_cfg.held_out_fraction * on_device_cfg.trigger_min_new_records))
+    gen = torch.Generator().manual_seed(on_device_cfg.scoring_seed)
+    seed_states = [
+        (
+            torch.randn(1, hidden_dim, generator=gen),
+            torch.randn(1, latent_dim, generator=gen),
+        )
+        for _ in range(n_seed)
+    ]
+
+    # Candidate + baseline MUST wrap SEPARATE module instances. Aliasing one
+    # net would mean loading the candidate slot's weights mutates the baseline
+    # in place, collapsing the regression delta to zero. The live-net wiring
+    # (loading the persisted slot into the candidate, the live policy into the
+    # baseline) stays a documented WS5+ seam; here we only ensure the two
+    # stand-in adapters never alias.
+    baseline_net = nn.Linear(hidden_dim + latent_dim, action_dim)
+    candidate_net = nn.Linear(hidden_dim + latent_dim, action_dim)
+    baseline_adapter = StateDictPolicyAdapter(
+        baseline_net, hidden_dim=hidden_dim, latent_dim=latent_dim, action_dim=action_dim
+    )
+    # WS5 seam: load the persisted slot's weights into ``candidate_net`` here.
+    candidate_adapter = StateDictPolicyAdapter(
+        candidate_net, hidden_dim=hidden_dim, latent_dim=latent_dim, action_dim=action_dim
+    )
+
+    gate = RegressionGate(
+        cfg=on_device_cfg,
+        slot_store=slot_store,
+        metrics=metrics,
+        world_model=world_model,
+        seed_states=seed_states,
+    )
+
+    def _run_gate(slot: CandidateSlot) -> None:
+        gate.evaluate(candidate=candidate_adapter, baseline=baseline_adapter, slot=slot)
+
+    return _run_gate
+
+
+def _run_coro_blocking(coro: Coroutine[Any, Any, _CoroResult]) -> _CoroResult:
+    """Drive ``coro`` to completion on a private loop in a dedicated thread.
+
+    The WS3 coordinator's ``count_new_records`` / ``load_batch`` collaborators
+    are SYNC callables, but the LMDB reader is async. ``asyncio.run`` cannot be
+    called when a loop is already running (the orchestrator drives the
+    coordinator inside the event loop), so we always run the coroutine on a
+    fresh loop in a worker thread. That also keeps the (slow-cadence) blocking
+    LMDB scan off the orchestrator's event-loop thread, preserving the hot-loop
+    isolation contract.
+
+    Args:
+        coro: The coroutine to run to completion.
+
+    Returns:
+        The coroutine's result.
+    """
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _worker() -> _CoroResult:
+        return asyncio.run(coro)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(_worker).result()
+
+
+def _count_replay_records(reader: LMDBReplayReader, cap: int) -> int:
+    """Count up to ``cap`` replay records via the async reader (sync wrapper).
+
+    Args:
+        reader: The LMDB replay reader.
+        cap: Stop counting once this many records are seen.
+
+    Returns:
+        The number of records read (capped at ``cap``).
+    """
+
+    async def _run() -> int:
+        seen = 0
+        async for chunk in reader.stream(chunk_size=cap):
+            seen += len(chunk)
+            if seen >= cap:
+                break
+        return seen
+
+    return _run_coro_blocking(_run())
+
+
+def _load_replay_batch(reader: LMDBReplayReader, input_dim: int, cap: int) -> Tensor:
+    """Build a ``(n, input_dim)`` batch tensor from replay vision-features.
+
+    Args:
+        reader: The LMDB replay reader.
+        input_dim: Target feature width; each record's vision-features vector
+            is resized to this width.
+        cap: Maximum records to draw into the batch.
+
+    Returns:
+        A ``(n, input_dim)`` float32 tensor (empty when the store has no
+        records).
+    """
+    import numpy as np
+    import torch
+
+    async def _run() -> list[MouseDroidExperienceRecord]:
+        rows: list[MouseDroidExperienceRecord] = []
+        async for chunk in reader.stream(chunk_size=cap):
+            rows.extend(chunk)
+            if len(rows) >= cap:
+                break
+        return rows[:cap]
+
+    records = _run_coro_blocking(_run())
+    if not records:
+        return torch.empty(0, input_dim)
+    matrix = np.stack(
+        [np.resize(np.asarray(rec.vision_features, dtype=np.float32), input_dim) for rec in records]
+    )
+    return torch.from_numpy(matrix)
+
+
 def build_orchestrator(cfg: Settings) -> object:
     """Build fully-wired orchestrator.
 
@@ -3263,6 +3523,14 @@ def build_orchestrator(cfg: Settings) -> object:
         metrics=metrics_registry,
     )
 
+    # Phase 6 WS3/WS4 — replay-trigger on-device update coordinator. ``None``
+    # when ``cfg.on_device_learning`` is absent/disabled (orchestrator
+    # byte-identical to pre-WS3); otherwise a slow-cadence background task
+    # producing stamped candidate slots and (WS4) running the safety-regression
+    # gate. The shared metrics registry is threaded so the WS4 revert counter
+    # surfaces on ``/metrics``.
+    on_device_coordinator = build_on_device_coordinator(cfg, metrics=metrics_registry)
+
     orchestrator = MouseDroidOrchestrator(
         world_model=wm,
         agents=[agent],
@@ -3301,6 +3569,7 @@ def build_orchestrator(cfg: Settings) -> object:
         weight_update_loader=weight_update_loader,
         safety_projector=safety_projector,
         mission_lifecycle=mission_lifecycle,
+        on_device_coordinator=cast("ReplayTriggerCoordinator | None", on_device_coordinator),
         greeter=startup_greeter,
     )
     # Bind the deferred orchestrator reference so the OpenClaw mission

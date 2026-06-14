@@ -63,6 +63,13 @@ _LLM_TOKEN_TYPES: frozenset[str] = frozenset({"input", "output"})
 _LLM_SERVED_TIERS: frozenset[str] = frozenset({"primary", "secondary"})
 _LLM_SERVED_OUTCOMES: frozenset[str] = frozenset({"ok", "degraded"})
 
+# Phase-6 on-device-learning revert reasons. Single source of truth for the
+# writer drop-guard and the AQA label-hygiene test, so a free-text mission
+# string can never leak into the counter's cardinality.
+_ON_DEVICE_REVERT_REASONS: frozenset[str] = frozenset(
+    {"regression_bound", "integrity_mismatch", "exception"}
+)
+
 
 def _classify_dropped_observation(value: float) -> str | None:
     """Classify a histogram-observation candidate; return drop reason or ``None``.
@@ -642,6 +649,10 @@ class MetricsRegistry:
         self._llm_gateway_served = _DoubleLabeledCounter()
         self._llm_latency_budget_exceeded = _LabeledCounter()
 
+        # Phase-6 on-device-learning revert counter. Pure-add: omitted from
+        # /metrics until the first revert; gated by cfg.track_on_device_learning.
+        self._on_device_learning_reverted = _LabeledCounter()
+
         # Pre-format metric names from namespace
         self._name_frame_drops = f"{ns}_frame_drops"
         self._name_safety_violations = f"{ns}_safety_violations"
@@ -721,6 +732,9 @@ class MetricsRegistry:
         self._name_llm_gateway_latency = f"{ns}_llm_gateway_latency_ms"
         self._name_llm_gateway_served = f"{ns}_llm_gateway_served"
         self._name_llm_latency_budget_exceeded = f"{ns}_llm_latency_budget_exceeded"
+        # Phase-6 on-device-learning revert counter name. The counter render
+        # helper suffixes ``_total``, so omit it here.
+        self._name_on_device_learning_reverted = f"{ns}_on_device_learning_reverted"
 
         _log.debug("metrics_registry_initialised", namespace=ns)
 
@@ -1096,6 +1110,28 @@ class MetricsRegistry:
         """
         if self._cfg.track_llm_gateway and amount > 0:
             self._llm_latency_budget_exceeded.inc(model, amount)
+
+    def inc_on_device_learning_reverted(self, reason: str, amount: int = 1) -> None:
+        """Increment the Phase-6 on-device-learning revert counter (label: reason).
+
+        Fired when the safety-regression gate reverts an on-device weight update
+        back to the cloud slot. Pure-add and gated by
+        ``cfg.track_on_device_learning``.
+
+        Args:
+            reason: One of ``"regression_bound"`` (held-out score dropped below
+                ``cloud_score - regression_tolerance``), ``"integrity_mismatch"``
+                (SHA-256 checkpoint verification failed), or ``"exception"`` (the
+                update path raised). Out-of-set values are dropped with a DEBUG
+                log so a free-text mission string never leaks cardinality.
+            amount: Increment magnitude (default 1); ``<= 0`` is a no-op.
+        """
+        if not self._cfg.track_on_device_learning or amount <= 0:
+            return
+        if reason not in _ON_DEVICE_REVERT_REASONS:
+            _log.debug("on_device_learning_reverted_dropped_invalid_reason", reason=reason)
+            return
+        self._on_device_learning_reverted.inc(reason, amount)
 
     # ------------------------------------------------------------------
     # PR-A2 — replay / VLA / VLM observability helpers.
@@ -1624,6 +1660,21 @@ class MetricsRegistry:
                         "LLM gateway latency-budget-exceeded events (label: model)",
                         "model",
                         budget_snapshot,
+                    )
+                )
+
+        # Phase-6 on-device-learning revert counter. Pure-add: emitted only
+        # after a revert lands (snapshot non-empty), so default deployments
+        # render byte-identically.
+        if cfg.track_on_device_learning:
+            revert_snapshot = self._on_device_learning_reverted.snapshot()
+            if revert_snapshot:
+                sections.append(
+                    _render_labeled_counter(
+                        self._name_on_device_learning_reverted,
+                        "On-device-learning weight-update reverts (label: reason)",
+                        "reason",
+                        revert_snapshot,
                     )
                 )
 
@@ -2157,5 +2208,12 @@ def generate_metrics_sample() -> str:
     registry.inc_llm_gateway_served("primary", "ok")
     registry.inc_llm_gateway_served("secondary", "degraded")
     registry.inc_llm_latency_budget_exceeded("claude-haiku-4-5")
+
+    # Phase-6 — seed the on-device-learning revert counter (one per reason) so
+    # promtool / Grafana / alert evaluation see non-empty series from the first
+    # scrape.
+    registry.inc_on_device_learning_reverted("regression_bound")
+    registry.inc_on_device_learning_reverted("integrity_mismatch")
+    registry.inc_on_device_learning_reverted("exception")
 
     return registry.render_prometheus()

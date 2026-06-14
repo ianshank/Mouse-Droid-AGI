@@ -705,6 +705,151 @@ class LearningConfig(BaseModel):
     progressive_enabled: bool = Field(False, description="Enable progressive column growth")
 
 
+class OnDeviceLearningConfig(BaseModel):
+    """On-device incremental-learning configuration (Phase 6).
+
+    Lets the rover update its own policy/world-model weights *between* cloud
+    retraining cycles from fresh on-device experience, gated by a
+    safety-regression bound that reverts to cloud weights on underperformance.
+    Default-OFF and backwards-compatible — wired as an ``Optional`` block on
+    ``Settings`` so existing YAML loads byte-identically. Every value is
+    config-driven; ``slot_dir`` is deliberately repo-relative (resolved by the
+    factory/orchestrator under the configured experience root
+    ``ExperienceConfig.path``) so NO absolute host path is hardcoded.
+    """
+
+    enabled: bool = Field(
+        False,
+        description="Master switch for the on-device incremental-learning loop (default-off)",
+    )
+    trigger_min_new_records: int = Field(
+        500,
+        gt=0,
+        description=(
+            "Minimum fresh experience records that must accumulate before an "
+            "on-device update cycle is triggered"
+        ),
+    )
+    check_interval_s: float = Field(
+        300.0,
+        gt=0,
+        description=(
+            "Slow-cadence period (seconds) between replay-trigger checks. The "
+            "on-device update runs on its own background task OUTSIDE the 30 Hz "
+            "hot loop; this is how often the coordinator probes the new-record "
+            "count against ``trigger_min_new_records``. Defaults to 5 min so a "
+            "default-on deployment never busy-polls the replay store."
+        ),
+    )
+    update_steps: int = Field(
+        50,
+        gt=0,
+        description="Number of bounded gradient steps per on-device update cycle",
+    )
+    regression_tolerance: float = Field(
+        0.05,
+        ge=0,
+        description=(
+            "Maximum allowed score drop below the cloud baseline before the "
+            "on-device update is reverted (ge=0 permits a zero-tolerance gate)"
+        ),
+    )
+    held_out_fraction: float = Field(
+        0.1,
+        gt=0,
+        le=1,
+        description=(
+            "Fraction of the replay sample held out to score the updated policy "
+            "against the cloud baseline in the regression gate (0 < f <= 1)"
+        ),
+    )
+    ewc_lambda: float = Field(
+        1.0,
+        ge=0,
+        description=(
+            "EWC Fisher-penalty strength for the bounded online update "
+            "(ge=0 permits an unregularized step)"
+        ),
+    )
+    learning_rate: float = Field(
+        1e-4,
+        gt=0,
+        description="Learning rate for the bounded on-device gradient steps",
+    )
+    slot_dir: str = Field(
+        "on_device_slot",
+        description=(
+            "Experience-root-relative leaf for the on-device weight slot. NOT an "
+            "absolute host path: the factory/orchestrator resolves it UNDER the "
+            "configured experience root (``<ExperienceConfig.path>/<slot_dir>``) "
+            "so any operator override of the experience path is inherited for "
+            "free. On-device-updated weights land here, never overwriting the "
+            "cloud-pulled slot."
+        ),
+    )
+
+    @field_validator("slot_dir")
+    @classmethod
+    def _validate_slot_dir(cls, v: str) -> str:
+        """Reject slot_dir values that escape the experience root.
+
+        ``slot_dir`` is resolved as ``<ExperienceConfig.path>/<slot_dir>``, so
+        an absolute path, a parent-traversal (``..``) component, or an empty /
+        whitespace-only value would break that containment contract and let
+        on-device weights land outside the configured experience root. Validated
+        at YAML load so a misconfigured deployment fails fast with a clear,
+        operator-actionable message instead of silently writing off-root.
+        """
+        from pathlib import PurePosixPath, PureWindowsPath
+
+        slot = v.strip()
+        # Check absoluteness under BOTH POSIX and Windows semantics so a
+        # ``/abs/path`` (slot is resolved on the Jetson/Linux target) is caught
+        # regardless of the host OS the config is validated on, and ``..``
+        # traversal in either separator style is rejected.
+        posix = PurePosixPath(slot)
+        windows = PureWindowsPath(slot)
+        is_absolute = posix.is_absolute() or windows.is_absolute()
+        has_traversal = ".." in posix.parts or ".." in windows.parts
+        if not slot or is_absolute or has_traversal:
+            msg = (
+                "on_device_learning.slot_dir must be a non-empty relative path "
+                "without parent traversal (resolved under "
+                "ExperienceConfig.path); got " + repr(v)
+            )
+            raise ValueError(msg)
+        return slot
+
+    rollout_horizon: int = Field(
+        15,
+        gt=0,
+        description=(
+            "WS4 safety-gate scoring: number of imagined steps H per world-model "
+            "rollout when scoring a candidate policy. The candidate's mean "
+            "predicted return over N rollouts of this horizon is compared against "
+            "the live baseline's. Config-driven so no horizon is hardcoded."
+        ),
+    )
+    n_scoring_rollouts: int = Field(
+        8,
+        gt=0,
+        description=(
+            "WS4 safety-gate scoring: number of imagined rollouts N averaged into "
+            "the scalar rollout-return score. Higher N reduces sampling variance "
+            "of the prior at the cost of more compute on the slow cadence."
+        ),
+    )
+    scoring_seed: int = Field(
+        1234,
+        description=(
+            "WS4 safety-gate scoring: fixed RNG seed making the rollout-return "
+            "score deterministic. Same seed + same seed-states + same weights "
+            "ALWAYS yields the identical score, so the promote/revert decision is "
+            "reproducible. Config-driven so no seed is hardcoded."
+        ),
+    )
+
+
 class LLMConfig(BaseModel):
     """LLM Gateway configuration for NL command interface."""
 
@@ -1534,6 +1679,15 @@ class MetricsConfig(BaseModel):
             "Expose MCP server metrics: request counter, per-tool call "
             "counter (label: tool, result), and request latency histogram. "
             "Emitted only when the MCP server is actually built — safe to "
+            "leave on."
+        ),
+    )
+    track_on_device_learning: bool = Field(
+        True,
+        description=(
+            "Expose the Phase-6 on-device-learning revert counter "
+            "(label: reason). Pure-add: omitted from /metrics until the first "
+            "revert, so default deployments render byte-identically. Safe to "
             "leave on."
         ),
     )
@@ -5004,6 +5158,15 @@ class Settings(BaseSettings):
         ),
     )
     offline_rl: OfflineRLConfig = Field(default_factory=_settings_default_factory(OfflineRLConfig))
+    on_device_learning: OnDeviceLearningConfig | None = Field(
+        None,
+        description=(
+            "Phase-6 on-device incremental-learning block. ``None`` (default) "
+            "disables — existing YAML loads byte-identical. Populate with "
+            "``enabled: true`` to let the rover update its own weights between "
+            "cloud retraining cycles, gated by a safety-regression auto-revert."
+        ),
+    )
     observability: ObservabilityConfig | None = Field(
         None,
         description=(

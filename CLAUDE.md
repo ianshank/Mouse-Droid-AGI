@@ -542,5 +542,50 @@ silently drift:
   registered spec (no orphans). It asserts the H1, **not** YAML front-matter —
   these publishable docs intentionally have none.
 
+## On-device incremental learning (Phase 6 — default-OFF, sim-validated)
+
+The rover can refine its own policy/world-model weights *between* cloud
+retraining cycles from fresh on-device experience — safe by construction and
+default-OFF. The 30 Hz reactive loop stays training-free; the bounded update +
+regression gate run at the slow-cadence / POST_TICK seam OUTSIDE the hot loop,
+all torch work offloaded via `asyncio.to_thread`. Non-negotiable contracts:
+
+- **Default-OFF `Optional`/`None`.** `OnDeviceLearningConfig` is an `Optional`
+  field on `Settings` (default `None`; `enabled: bool = False`). Absent or
+  disabled ⇒ `build_on_device_coordinator` returns `None`, no background task
+  is spawned, and the orchestrator is byte-identical to pre-Phase-6. New fields
+  keep defaults so existing YAML loads unchanged.
+- **Counter is pure-add + gated.** `{ns}_on_device_learning_reverted_total{reason}`
+  (`telemetry/metrics.py`) is gated by `MetricsConfig.track_on_device_learning`
+  (default `True`) and omitted from `/metrics` until the first revert. `reason`
+  is a low-cardinality frozenset `_ON_DEVICE_REVERT_REASONS`
+  (`regression_bound`, `integrity_mismatch`, `exception`) — out-of-set values
+  are dropped with a DEBUG log; seeded in `generate_metrics_sample()`. Keep the
+  `on_device_candidate_reverted` log event name (docs reference it).
+- **`slot_dir` resolved under the experience root + validated.** The candidate
+  slot is `<ExperienceConfig.path>/<slot_dir>/<digest>.pt` — NEVER an absolute
+  host path. A `field_validator` rejects absolute / `..`-traversal / empty
+  `slot_dir` at YAML-load. SHA-256 integrity (ADR-010 / `verify_sha256`) is
+  reused: the digest stamps the filename and is re-verified on load
+  (`integrity_mismatch` on failure). On-device weights NEVER overwrite the
+  cloud-pulled slot.
+- **Hot loop untouched.** The coordinator (`learning/on_device/replay_trigger.py`)
+  offloads the trigger probe, batch load, learner update, AND the gate scoring
+  via `asyncio.to_thread`. The base model is deep-copied before any gradient
+  flows (base bitwise-unchanged); the candidate is a separate object.
+- **World-model rollout-return gate + auto-revert is authoritative.**
+  `RegressionGate.evaluate` (`regression_gate.py`) PROMOTEs iff
+  `candidate_score >= baseline_score - regression_tolerance`, scoring both
+  policies with the SAME fixed seed-states + `scoring_seed` via the
+  deterministic `score_policy` over the reused RSSM (`scoring.py`). PROMOTE
+  marks the slot active; otherwise REVERT + increment the counter. The metrics
+  param to `build_on_device_coordinator` is keyword-only (defaults `None`).
+- **NOT yet enabled on the rover.** Two pre-enablement seams: (a) the
+  learner/gate wrap a config-sized STAND-IN net, not the live policy/world-model
+  net behind `PolicyProtocol`; (b) seed-states are `manual_seed`-sampled, not
+  yet encoded from a held-out replay slice. See
+  `docs/runbooks/jetson-on-device-learning.md` (+ ≥30-day soak-gate framing) and
+  `docs/architecture/c4-on-device-learning.md`.
+
 See `AGENTS.md` (agentic-worker behavioural contract) and `SKILLS.md`
 (capability index keyed by trigger phrase) for additional context.

@@ -8,6 +8,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Phase 6: On-device incremental learning (default-OFF, sim-validated)
+
+Lets the rover refine its own policy/world-model weights *between* cloud
+retraining cycles from fresh on-device experience, **safe by construction**
+(separate weight slot + SHA-256 integrity + a world-model rollout-return
+regression gate with auto-revert) and **observable** (a new Prometheus
+counter). Default-OFF and backwards-compatible — with `cfg.on_device_learning`
+absent/disabled, no coordinator is built and the orchestrator is byte-identical
+to pre-Phase-6.
+
+- **New `learning/on_device/` subsystem** (`protocol.py`, `ewc_online.py`,
+  `slot_store.py`, `replay_trigger.py`, `scoring.py`, `regression_gate.py`).
+  A `ReplayTriggerCoordinator` runs at the slow-cadence / POST_TICK seam —
+  **OUTSIDE the 30 Hz reactive loop**, all torch work offloaded via
+  `asyncio.to_thread`. When `trigger_min_new_records` fresh records accumulate
+  it runs a bounded EWC-regularized `EWCOnlineLearner.update()` (deep-copies
+  the base; base weights stay bitwise-unchanged), persists a SHA-256-stamped
+  *candidate* slot via `OnDeviceSlotStore`, then the `RegressionGate` scores
+  the candidate vs the live baseline by mean imagined rollout return under the
+  reused RSSM world model and **promotes** (marks the slot active) or
+  **reverts** (separate slot, cloud baseline untouched).
+- **`OnDeviceLearningConfig`** (`src/mousedroid/config/schema.py`) — `Optional`
+  on `Settings`, default `None`. All knobs config-driven: `enabled`,
+  `trigger_min_new_records`, `check_interval_s`, `update_steps`,
+  `learning_rate`, `ewc_lambda`, `regression_tolerance`, `held_out_fraction`,
+  `rollout_horizon`, `n_scoring_rollouts`, `scoring_seed`, and a
+  validator-gated experience-root-relative `slot_dir` (rejects absolute / `..`
+  / empty). Slot resolves to `<ExperienceConfig.path>/<slot_dir>/<digest>.pt` —
+  no absolute host path hardcoded (ADR-010 separate-slot + SHA-256 contract
+  reused).
+- **`{ns}_on_device_learning_reverted_total{reason}`** counter
+  (`src/mousedroid/telemetry/metrics.py`) — pure-add, gated by
+  `MetricsConfig.track_on_device_learning` (default `True`), omitted from
+  `/metrics` until the first revert. Low-cardinality `reason` frozenset
+  (`regression_bound`, `integrity_mismatch`, `exception`); seeded in
+  `generate_metrics_sample()`.
+- **Factory + orchestrator wiring** — `build_on_device_coordinator(cfg, *,
+  metrics=…)` (keyword-only metrics; returns `None` when absent/disabled) and
+  `_build_on_device_gate_runner`. The orchestrator spawns the slow-cadence
+  `_on_device_update_loop` only when wired AND enabled; `start()`/`stop()` are
+  byte-identical to pre-Phase-6 otherwise.
+- **Operator runbook** `docs/runbooks/jetson-on-device-learning.md` and **C4
+  diagram** `docs/architecture/c4-on-device-learning.md`. Both document the two
+  pre-enablement seams (the learner/gate currently wrap a config-sized
+  stand-in net, not the live policy/world-model net behind `PolicyProtocol`;
+  seed-states are `manual_seed`-sampled, not yet encoded from a held-out replay
+  slice) and the ≥30-day soak-gate framing. **DO NOT enable on the rover yet** —
+  it is sim-validated only.
+
 ### Added — Skill-command validators + spec/doc synchronization
 
 - **Reusable `.claude/commands` skill validator** (`tools/validate_skill_commands.py`)

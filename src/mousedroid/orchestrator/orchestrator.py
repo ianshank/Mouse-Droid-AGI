@@ -53,6 +53,7 @@ if TYPE_CHECKING:
         TaskTrackerProtocol,
     )
     from mousedroid.health.watchdog import WatchdogProtocol
+    from mousedroid.learning.on_device.replay_trigger import ReplayTriggerCoordinator
     from mousedroid.llm_gateway.mission_parser import MissionParserProtocol
     from mousedroid.llm_gateway.protocol import GoalVector, LLMGatewayProtocol
     from mousedroid.mcp.protocol import MCPServerProtocol
@@ -125,6 +126,7 @@ class MouseDroidOrchestrator:
         weight_update_loader: Callable[[PendingWeightUpdate], object] | None = None,
         safety_projector: SafetyActionProjectorProtocol | None = None,
         mission_lifecycle: MissionLifecycle | None = None,
+        on_device_coordinator: ReplayTriggerCoordinator | None = None,
         greeter: GreeterProtocol | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
@@ -253,6 +255,18 @@ class MouseDroidOrchestrator:
                 two-frame contract is honoured. ``None`` (default, gated
                 by ``cfg.mission.replan_enabled=false``) makes the seam a
                 no-op so existing deployments are byte-identical.
+            on_device_coordinator: Optional Phase-6 WS3
+                :class:`ReplayTriggerCoordinator`. When supplied AND
+                ``cfg.on_device_learning.enabled`` is ``True``, the
+                orchestrator spawns a slow-cadence background task in
+                ``start()`` that checks the fresh-record count and produces +
+                persists a SHA-256-stamped candidate weight slot (the torch
+                update is offloaded via ``asyncio.to_thread``; the 30 Hz hot
+                loop is never touched). ``None`` (default) — or
+                ``cfg.on_device_learning`` absent/disabled — makes the
+                orchestrator byte-identical to pre-WS3 (no extra task spawned).
+                WS3 only PRODUCES the candidate; promotion into the live
+                policy is WS4's safety-gated decision.
             greeter: Optional :class:`GreeterProtocol` (Issue #109). When
                 supplied AND ``cfg.greeting`` is enabled with
                 ``fire_on_startup=True``, the orchestrator fires the
@@ -363,6 +377,15 @@ class MouseDroidOrchestrator:
         # receives the (obs_t, obs_tminus1) pair it expects; the first
         # tick after wiring populates the cache and skips the lifecycle.
         self._mission_lifecycle = mission_lifecycle
+        # Phase 6 WS3 — replay-triggered on-device update coordinator. ``None``
+        # (default) AND/OR ``cfg.on_device_learning`` absent/disabled keeps the
+        # orchestrator byte-identical to pre-WS3: no slow task is spawned in
+        # ``start()`` and ``stop()`` has nothing extra to cancel. When wired AND
+        # enabled, the coordinator runs on its own slow-cadence background task
+        # OUTSIDE the 30 Hz hot loop (torch work offloaded via asyncio.to_thread).
+        self._on_device_coordinator = on_device_coordinator
+        self._on_device_task: asyncio.Task[None] | None = None
+        self._on_device_tasks: set[asyncio.Task[Any]] = set()
         # Issue #109 — one-shot startup greeting. ``None`` (default) or
         # ``cfg.greeting.fire_on_startup=False`` keeps ``start()``
         # byte-identical; the greeting never touches the 30 Hz loop.
@@ -456,6 +479,15 @@ class MouseDroidOrchestrator:
                 self._consolidation_loop(),
                 name=self._consolidation_loop.__name__,
             )
+        # Phase 6 WS3 — spawn the replay-trigger slow task ONLY when the
+        # coordinator is wired AND on-device learning is enabled. Both gates
+        # absent keeps the lifecycle byte-identical to pre-WS3.
+        if self._on_device_coordinator is not None and self._on_device_learning_enabled():
+            self._on_device_task = spawn_tracked(
+                self._on_device_tasks,
+                self._on_device_update_loop(),
+                name=self._on_device_update_loop.__name__,
+            )
         # Harness journal (background writer task). NullJournal is a no-op.
         await self._journal.start()
         # Issue #109 — one-shot MSE-6 greeting, fired here (AFTER the voice
@@ -529,6 +561,10 @@ class MouseDroidOrchestrator:
                     await self._consolidation_task
             self._consolidation_tasks.discard(self._consolidation_task)
             self._consolidation_task = None
+        # Phase 6 WS3 — drain the on-device slow task (no-op when never spawned).
+        if self._on_device_task is not None:
+            await cancel_and_drain(self._on_device_tasks)
+            self._on_device_task = None
         await cancel_and_drain(self._cloud_publish_tasks)
         # Tier C1 / C1.2 — stop every wired OTA poller. Wrapped in
         # try/except so a stuck in-flight download on one poller can't
@@ -1765,6 +1801,38 @@ class MouseDroidOrchestrator:
                     )
             except Exception:
                 _log.warning("consolidation_cycle_failed", exc_info=True)
+
+    def _on_device_learning_enabled(self) -> bool:
+        """Return ``True`` only when the WS1 on-device block is enabled.
+
+        Uses an explicit ``None`` / attribute check (no ``assert``) so the gate
+        survives ``-O`` (PYTHONOPTIMIZE=1, the Jetson Docker default).
+        """
+        on_device_cfg = self._cfg.on_device_learning
+        return on_device_cfg is not None and on_device_cfg.enabled
+
+    async def _on_device_update_loop(self) -> None:
+        """Background slow-cadence loop driving the WS3 update coordinator.
+
+        Runs at ``cfg.on_device_learning.check_interval_s`` OUTSIDE the 30 Hz
+        hot loop. Each tick the coordinator probes the fresh-record count and,
+        when armed, produces + persists a SHA-256-stamped candidate slot — the
+        bounded torch update is offloaded via ``asyncio.to_thread`` inside the
+        coordinator so the event loop is never blocked. Automatically cancelled
+        by ``stop()``. A failed cycle is logged and the loop keeps running so a
+        transient replay-store / disk error never kills on-device learning.
+        """
+        on_device_cfg = self._cfg.on_device_learning
+        if on_device_cfg is None or self._on_device_coordinator is None:
+            return
+        interval = on_device_cfg.check_interval_s
+        _log.info("on_device_update_loop_started", interval_s=interval)
+        while True:
+            await self._clock.sleep(interval)
+            try:
+                await self._on_device_coordinator.maybe_update()
+            except Exception:
+                _log.warning("on_device_update_cycle_failed", exc_info=True)
 
     async def run(self) -> None:
         """Run the main loop at configured control rate.
