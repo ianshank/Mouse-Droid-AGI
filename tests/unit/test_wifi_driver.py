@@ -118,3 +118,30 @@ def test_decode_json_object_non_object_returns_empty_dict():
     assert driver._decode_json_object("[1, 2, 3]", path="/enc") == {}
     assert driver._decode_json_object("42", path="/enc") == {}
     assert driver._decode_json_object('"oops"', path="/enc") == {}
+
+
+def test_decode_json_object_malformed_json_returns_empty_dict():
+    # Truncated frame / HTTP error page / UART noise: a JSONDecodeError must NOT
+    # escape the to_thread wrapper — it degrades to ``{}`` with a structured warn.
+    driver = _make_driver()
+    assert driver._decode_json_object("{not json", path="/enc") == {}
+    assert driver._decode_json_object("<html>500</html>", path="/bat") == {}
+    assert driver._decode_json_object('{"v": 1', path="/bat") == {}  # truncated
+
+
+def test_decode_json_object_malformed_json_logs_warning():
+    # The degraded path emits a structured wifi_esp32_non_json_response event so
+    # the operator can grep for it (mirrors the serial driver contract).
+    driver = _make_driver()
+    with patch("mousedroid.comms.wifi_driver._log") as mock_log:
+        driver._decode_json_object("garbage", path="/enc")
+    mock_log.warning.assert_called_once()
+    assert mock_log.warning.call_args.args[0] == "wifi_esp32_non_json_response"
+
+
+def test_decode_json_object_non_dict_logs_warning():
+    driver = _make_driver()
+    with patch("mousedroid.comms.wifi_driver._log") as mock_log:
+        driver._decode_json_object("[1, 2]", path="/enc")
+    mock_log.warning.assert_called_once()
+    assert mock_log.warning.call_args.args[0] == "wifi_esp32_unexpected_json_shape"
