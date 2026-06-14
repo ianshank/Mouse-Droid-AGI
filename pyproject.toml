@@ -143,7 +143,16 @@ dev = [
     # `ruff format --check src/ tests/` to fail in CI even when it passes
     # locally. Bump both pyproject.toml and ci.yml in the same change.
     "ruff==0.8.0",
-    "mypy>=1.5",
+    # Pinned (same discipline as ruff) to match .github/workflows/ci.yml. mypy
+    # minor releases tighten strict-mode inference — e.g. 2.x flags untyped
+    # aiohttp ``@web.middleware`` decorators and rejects implicit union type
+    # aliases that 1.x accepted — so an unbounded ``>=`` silently breaks the CI
+    # typecheck stage while passing on an older local mypy. Bump here + in CI
+    # together. NOTE: the typecheck job installs ``.[dev,telemetry]`` so PIL +
+    # aiohttp real types are visible to mypy (otherwise those annotations
+    # degrade to ``Any`` under ``--ignore-missing-imports`` and surface
+    # ``valid-type`` / ``untyped-decorator`` errors).
+    "mypy==2.1.0",
     "types-PyYAML>=6.0",
     # PR-105b: close the second pre-existing mypy --strict error.
     # ``src/mousedroid/reward/vlm_progress.py:31`` imports ``cachetools``
