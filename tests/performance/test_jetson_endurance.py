@@ -30,7 +30,7 @@ import asyncio
 import json
 import os
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -77,7 +77,10 @@ def _write_metrics_snapshot(
         _METRICS_DIR.mkdir(parents=True, exist_ok=True)
     except OSError:
         return None
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    # ``timezone.utc`` (not ``datetime.UTC``, which is Python 3.11+) keeps this
+    # importable on the 3.10 CI matrix leg now that the regression tier — which
+    # reloads this module — is CI-gated.
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out = _METRICS_DIR / f"endurance-{stamp}.json"
     payload: dict[str, float | int | bool | str] = {
         "stamp": stamp,
