@@ -124,9 +124,16 @@ sudo bash /opt/mousedroid/scripts/sync_jetson_overlay.sh --verify
 ## 6. Restart the orchestrator with the layered overlay
 
 The orchestrator's `MOUSEDROID_CONFIG` env var only points at the base
-`jetson_production.yaml`. To layer the remote-LLM overlay on top, set
-`MOUSEDROID_CONFIG` to a colon-separated list (the loader honours both
-single-path and multi-path forms via `pathlib`):
+`jetson_production.yaml` (single overlay). To layer the remote-LLM overlay
+on top, use the **comma-separated** `MOUSEDROID_CONFIGS` list var (or the
+`MOUSEDROID_JETSON_CONFIGS` alias) — `resolve_runtime_config_paths()` in
+`src/mousedroid/validation/runtime.py` splits these on `,` and applies the
+overlays left-to-right. The CSV list vars take precedence over the
+single-path `MOUSEDROID_CONFIG` / `MOUSEDROID_JETSON_CONFIG` forms:
+
+```bash
+MOUSEDROID_CONFIGS=/etc/mousedroid/jetson_production.yaml,/etc/mousedroid/jetson_production_remote_llm.yaml
+```
 
 ```bash
 sudo systemctl restart mousedroid-docker.service
@@ -190,7 +197,10 @@ Things this overlay does NOT change for operators who never deploy it:
 - `docker-compose.jetson.yml` `env_file: required: false` (PR #101)
   means first-time bringup still works without `/etc/mousedroid/docker.env`.
 - `sync_jetson_overlay.sh` with `MOUSEDROID_EXTRA_OVERLAYS` unset is
-  byte-identical to the pre-F-006 single-pair flow (regression-tested by
-  `test_extra_overlays_unset_preserves_single_pair_behaviour`).
+  functionally equivalent to the pre-F-006 single-pair flow — same files
+  synced, same exit codes (regression-tested by
+  `test_extra_overlays_unset_preserves_single_pair_behaviour`). The log
+  lines now annotate each pair with `pair_index=0`, so byte-for-byte stderr
+  output differs from the pre-F-006 script.
 - `MOUSEDROID_LLM__*` env vars all default to safe values when unset
   (per `LLMConfig` schema defaults at `src/mousedroid/config/schema.py`).
