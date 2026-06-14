@@ -72,6 +72,7 @@ if TYPE_CHECKING:
     from mousedroid.telemetry.metrics import MetricsRegistry
     from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
     from mousedroid.vla.policy import VLAPolicyProtocol
+    from mousedroid.voice.greeting import GreeterProtocol
     from mousedroid.voice.protocol import VoiceEngineProtocol
     from mousedroid.world_model.protocol import WorldModelProtocol
 
@@ -126,6 +127,7 @@ class MouseDroidOrchestrator:
         safety_projector: SafetyActionProjectorProtocol | None = None,
         mission_lifecycle: MissionLifecycle | None = None,
         on_device_coordinator: ReplayTriggerCoordinator | None = None,
+        greeter: GreeterProtocol | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
 
@@ -265,6 +267,16 @@ class MouseDroidOrchestrator:
                 orchestrator byte-identical to pre-WS3 (no extra task spawned).
                 WS3 only PRODUCES the candidate; promotion into the live
                 policy is WS4's safety-gated decision.
+            greeter: Optional :class:`GreeterProtocol` (Issue #109). When
+                supplied AND ``cfg.greeting`` is enabled with
+                ``fire_on_startup=True``, the orchestrator fires the
+                greeting ONCE during ``start()`` — before entering the
+                30 Hz loop, after the voice engine it shares is started.
+                The call is wrapped in try/except so a greeting failure is
+                logged (``greeting_startup_failed``) and swallowed; it
+                never blocks startup. ``None`` (default) — or the flag
+                left ``False`` — keeps the hot loop byte-identical (the
+                startup greeting is a one-shot OUTSIDE the loop).
         """
         if not agents:
             msg = "At least one agent is required"
@@ -374,6 +386,10 @@ class MouseDroidOrchestrator:
         self._on_device_coordinator = on_device_coordinator
         self._on_device_task: asyncio.Task[None] | None = None
         self._on_device_tasks: set[asyncio.Task[Any]] = set()
+        # Issue #109 — one-shot startup greeting. ``None`` (default) or
+        # ``cfg.greeting.fire_on_startup=False`` keeps ``start()``
+        # byte-identical; the greeting never touches the 30 Hz loop.
+        self._greeter: GreeterProtocol | None = greeter
         self._prev_obs_for_vlm: torch.Tensor | None = None
         # Per-mission monotonic counter used to build collision-free
         # mission IDs in ``process_mission``. Decoupled from ``_tick_count``
@@ -474,8 +490,63 @@ class MouseDroidOrchestrator:
             )
         # Harness journal (background writer task). NullJournal is a no-op.
         await self._journal.start()
+        # Issue #109 — one-shot MSE-6 greeting, fired here (AFTER the voice
+        # engine is started above, BEFORE the 30 Hz loop begins). This is
+        # the only greeting touch-point; the hot loop never sees it.
+        await self._maybe_fire_startup_greeting()
         self._running = True
         _log.info("orchestrator_started")
+
+    async def _maybe_fire_startup_greeting(self) -> None:
+        """Fire the startup greeting once iff configured + wired.
+
+        Gated on ``cfg.greeting`` being a non-None enabled config with
+        ``fire_on_startup=True`` AND a greeter present. Wrapped in
+        try/except so a greeting failure (TTS / speaker hiccup) is logged
+        and swallowed — it must NEVER block orchestrator startup. Runs
+        OUTSIDE the 30 Hz control loop (one-shot at ``start()``), so the
+        hot loop stays byte-identical when the flag is off.
+        """
+        greeting_cfg = self._cfg.greeting
+        if (
+            greeting_cfg is None
+            or not greeting_cfg.enabled
+            or not greeting_cfg.fire_on_startup
+            or self._greeter is None
+        ):
+            return
+        try:
+            # Bound the greeting with a config-driven timeout: a hung TTS engine
+            # or blocked ALSA device must never wedge bring-up, since this runs
+            # before the 30 Hz loop starts. On timeout the greeting is abandoned
+            # and startup proceeds.
+            await asyncio.wait_for(
+                self._greeter.greet(),
+                timeout=greeting_cfg.startup_timeout_s,
+            )
+        except (TimeoutError, asyncio.TimeoutError):
+            # asyncio.TimeoutError is an alias for the builtin TimeoutError on
+            # Python 3.11+, but a DISTINCT exception on 3.10 (a supported CI
+            # leg). Catching both keeps the precise greeting_startup_timeout
+            # event firing on every supported interpreter — matching the
+            # dual-catch pattern in common/tools/registry.py + voice/rocky.py.
+            _log.warning(
+                "greeting_startup_timeout",
+                timeout_s=greeting_cfg.startup_timeout_s,
+            )
+            return
+        except asyncio.CancelledError:
+            # Cooperative cancellation MUST propagate — never swallow it. On
+            # py3.10 CancelledError subclasses Exception, so without this
+            # explicit re-raise the broad ``except Exception`` below would
+            # eat it and leave the caller unable to cancel bring-up. Matches
+            # the LLM gateway/composite cancellation contract.
+            raise
+        except Exception:  # pylint: disable=broad-except
+            # A flaky speaker / TTS must never crash bring-up.
+            _log.warning("greeting_startup_failed", exc_info=True)
+            return
+        _log.info("greeting_startup_complete", name_count=len(greeting_cfg.names))
 
     async def stop(self) -> None:
         """Stop all subsystems gracefully."""
