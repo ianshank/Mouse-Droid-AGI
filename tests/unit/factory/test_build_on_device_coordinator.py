@@ -71,14 +71,14 @@ def test_build_coordinator_returns_coordinator_when_enabled(tmp_path: Path) -> N
 
 
 # --------------------------------------------------------------------------- #
-# WS-E0: thread the LIVE world model into the gate
+# WS-E0/E3: thread the LIVE world model into the gate runner
 # --------------------------------------------------------------------------- #
 def _extract_gate(coordinator: object) -> object:
     """Pull the ``RegressionGate`` the gate-runner closure closes over.
 
-    The gate-runner is a closure over the ``RegressionGate`` instance; the cell
-    index is an implementation detail, so locate the cell holding a gate by its
-    ``_world_model`` attribute rather than a fixed position.
+    The WS-E3 recon-loss gate-runner closes over the ``RegressionGate`` instance
+    (alongside the live baseline RSSM); the cell index is an implementation
+    detail, so locate the cell holding a gate by type rather than position.
     """
     from mousedroid.learning.on_device.regression_gate import RegressionGate
 
@@ -90,42 +90,88 @@ def _extract_gate(coordinator: object) -> object:
     raise AssertionError("gate runner closure does not hold a RegressionGate")
 
 
-def _enabled_cfg(tmp_path: Path) -> Settings:
+def _extract_baseline_world_model(coordinator: object) -> object:
+    """Pull the live baseline RSSM the WS-E3 gate-runner closure scores against.
+
+    The recon-loss gate-runner loads the candidate slot into a deep COPY of the
+    live RSSM and scores it against the live RSSM held in the closure — so the
+    baseline world model lives in a closure cell, not on the gate object.
+    """
+    from mousedroid.world_model.rssm import RSSM
+
+    runner = coordinator._gate_runner  # type: ignore[attr-defined]
+    for cell in runner.__closure__ or ():
+        contents = cell.cell_contents
+        if isinstance(contents, RSSM):
+            return contents
+    raise AssertionError("gate runner closure does not hold a baseline RSSM")
+
+
+def _enabled_cfg(tmp_path: Path, *, tag: str = "root") -> Settings:
     return Settings.model_validate(
         {
             "mock_hardware": True,
-            "experience": {"path": str(tmp_path / "root"), "map_size_gb": 0.01},
-            "on_device_learning": {"enabled": True, "trigger_min_new_records": 5},
+            "experience": {"path": str(tmp_path / tag), "map_size_gb": 0.01},
+            "on_device_learning": {
+                "enabled": True,
+                "trigger_min_new_records": 5,
+                # Small refine geometry so a modest seeded store yields BOTH the
+                # refine window AND a disjoint held-out window (so a real recon-loss
+                # gate — not the no-op fallback — is wired + inspectable).
+                "refine_sequence_length": 3,
+                "refine_batch_episodes": 2,
+            },
         }
     )
+
+
+def _seed_records(cfg: Settings, n: int) -> None:
+    """Seed ``n`` replay records so the gate can build a disjoint held-out batch."""
+    from mousedroid.experience.logger import ExperienceLogger
+    from mousedroid.experience.record import MouseDroidExperienceRecord
+
+    logger = ExperienceLogger(cfg.experience)
+    logger.open()
+    try:
+        for _ in range(n):
+            logger.log(MouseDroidExperienceRecord())
+    finally:
+        logger.close()
 
 
 def test_coordinator_uses_injected_world_model(tmp_path: Path) -> None:
     """When a live world model is injected, the gate scores against THAT model."""
     from mousedroid.factory import build_world_model
+    from mousedroid.learning.on_device.regression_gate import RegressionGate
 
     cfg = _enabled_cfg(tmp_path)
+    _seed_records(cfg, 16)  # refine(6) + disjoint held-out(6), with headroom
     wm = build_world_model(cfg)
 
     coordinator = build_on_device_coordinator(cfg, world_model=wm)
 
     assert coordinator is not None
-    # The gate runner closes over the gate, which holds the injected world model.
-    gate = _extract_gate(coordinator)
-    assert gate._world_model is wm
+    # The gate runner closes over the injected live RSSM as the scoring baseline.
+    assert _extract_baseline_world_model(coordinator) is wm
+    # ...and a real recon-loss RegressionGate is wired.
+    assert isinstance(_extract_gate(coordinator), RegressionGate)
 
 
 def test_coordinator_builds_world_model_when_none(tmp_path: Path) -> None:
     """``world_model=None`` builds a working gate via ``build_world_model(cfg)``."""
+    from mousedroid.world_model.rssm import RSSM
+
     cfg = _enabled_cfg(tmp_path)
+    _seed_records(cfg, 16)
 
     coordinator = build_on_device_coordinator(cfg, world_model=None)
 
     assert coordinator is not None
-    gate = _extract_gate(coordinator)
-    # A real world model conforming to WorldModelProtocol was constructed.
-    assert gate._world_model is not None
-    assert hasattr(gate._world_model, "imagine_step")
+    # A real RSSM (the default config builds a plain RSSM) was constructed and is
+    # the gate-runner's scoring baseline.
+    baseline = _extract_baseline_world_model(coordinator)
+    assert isinstance(baseline, RSSM)
+    assert hasattr(baseline, "train_sequence")
 
 
 def test_gate_does_not_construct_bare_rssm_literal(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
