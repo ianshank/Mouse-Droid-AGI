@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import random
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from mousedroid.common.text_utils import format_names_oxford
 from mousedroid.logging.setup import get_logger
@@ -50,6 +50,21 @@ if TYPE_CHECKING:
 
     from mousedroid.config.schema import GreetingConfig
     from mousedroid.voice.protocol import VoiceEngineProtocol
+
+
+@runtime_checkable
+class GreeterProtocol(Protocol):
+    """Structural type for the one-shot greeting subsystem.
+
+    Lets the orchestrator depend on the greeting capability without
+    importing the concrete :class:`Greeter` (Architecture Invariant 1:
+    protocol-based DI). The factory wires a concrete ``Greeter`` in.
+    """
+
+    async def greet(self, names: Sequence[str] | None = None) -> None:
+        """Play the greeting once. See :meth:`Greeter.greet`."""
+        ...
+
 
 _log = get_logger(__name__)
 
@@ -228,4 +243,4 @@ class Greeter:
         )
 
 
-__all__ = ["Greeter", "format_names_oxford"]
+__all__ = ["Greeter", "GreeterProtocol", "format_names_oxford"]

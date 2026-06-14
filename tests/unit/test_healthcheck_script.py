@@ -163,18 +163,28 @@ def test_float_threshold_compares_with_awk(tmp_path: Path) -> None:
     a fractional ``MOUSEDROID_HEARTBEAT_STALE_S``. POSIX shell ``$((..))``
     can't compare int<float, so the script delegates to awk; this test
     proves that delegation works.
+
+    The age/threshold margin is deliberately WIDE (age ~1s vs a 120.5s
+    fractional threshold). The script derives age from integer epoch
+    seconds (``date +%s`` minus ``stat %Y``), so real time elapsing between
+    backdating the heartbeat here and the script reading its own clock adds
+    1-N integer seconds under CI load. A narrow margin (e.g. 4s vs 4.5s) is
+    timing-flaky: a sub-second scheduling delay tips the integer age across
+    the boundary and the script (correctly) reports stale. A wide margin
+    keeps the awk fractional-comparison path exercised while making the
+    ``fresh`` verdict deterministic regardless of CI load.
     """
     hb = tmp_path / "hb"
     hb.touch()
-    _age(hb, 4.0)
+    _age(hb, 1.0)
     env_file = tmp_path / "env"
     _write_env(
         env_file,
         MOUSEDROID_HEARTBEAT_PATH=str(hb),
-        MOUSEDROID_HEARTBEAT_STALE_S="4.5",
+        MOUSEDROID_HEARTBEAT_STALE_S="120.5",
         MOUSEDROID_START_GRACE_S="60",
         MOUSEDROID_START_GRACE_FILE=str(tmp_path / "start"),
     )
-    # 4 < 4.5 → fresh, exit 0. POSIX ``$((4 < 4.5))`` would error;
-    # the script's awk delegation handles it.
+    # age (~1s, integer) < 120.5 → fresh, exit 0. POSIX ``$((1 < 120.5))``
+    # would error; the script's awk delegation handles the fractional bound.
     assert _run(env_file) == 0
