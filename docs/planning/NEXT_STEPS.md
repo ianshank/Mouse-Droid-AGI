@@ -454,6 +454,17 @@ All 7 phases of the Production Readiness milestone are complete:
 - Add CI test: unauthenticated request returns 401 when token is configured
 - **Effort**: 1 day | **Owner**: security + backend team
 
+### 5.6 Training experiment logging (MLflow) — ✅ LANDED (PR #127)
+- ✅ `ExperimentLoggerProtocol` (NoOp default + MLflow backend) wired via the factory
+  into `PipelineOrchestrator` (parent/child runs) and `OfflineRLTrainer` (CQL/IQL per-step losses)
+- ✅ Config-driven (`observability.experiment_logger`): `run_name`, `log_step_every_n` throttle,
+  `log_artifacts` gating — every field consumed; defaults OFF + byte-identical no-op
+- ✅ Degrades to NoOp on missing `[mlflow]` extra OR construction failure (never crashes a run)
+- Next: optional remote tracking-server overlay (auth + S3/GCS artifact store) for multi-host runs;
+  surface MLflow run-id in the telemetry `/api/v1/health` payload for cross-linking
+- C4: `docs/architecture/c4-experiment-logger.md` | Runbook: `docs/runbooks/mlflow-local-ui.md`
+- **Effort**: shipped | **Owner**: training team
+
 ---
 
 ## Priority 6 — Code Quality & Architecture

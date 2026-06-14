@@ -84,7 +84,8 @@ def _build_new_parts(cfg: ModelConfig) -> list[tuple[str, int]]:
         ``MultimodalEncoder.forward()``'s ``parts`` construction order.
     """
     parts: list[tuple[str, int]] = []
-    parts.append(("vision", cfg.vision_proj_dim))
+    if cfg.vision_dim > 0 and cfg.vision_proj_dim > 0:
+        parts.append(("vision", cfg.vision_proj_dim))
     if cfg.ultrasonic_dim > 0 and cfg.ultrasonic_proj_dim > 0:
         parts.append(("ultrasonic", cfg.ultrasonic_proj_dim))
     parts.append(("motor", cfg.motor_proj_dim))
@@ -156,7 +157,7 @@ def _new_proj_tensors(cfg: ModelConfig, modality: str) -> dict[str, Tensor]:
 
     Args:
         cfg: Target model configuration.
-        modality: One of ``"lidar"``, ``"ultrasonic"``, or ``"audio"``.
+        modality: One of ``"vision"``, ``"lidar"``, ``"ultrasonic"``, or ``"audio"``.
 
     Returns:
         Dict with ``"encoder.<modality>_proj.weight"`` and
@@ -166,6 +167,7 @@ def _new_proj_tensors(cfg: ModelConfig, modality: str) -> dict[str, Tensor]:
         ValueError: If *modality* is not recognised.
     """
     dim_map: dict[str, tuple[int, int]] = {
+        "vision": (cfg.vision_proj_dim, cfg.vision_dim),
         "lidar": (cfg.lidar_proj_dim, cfg.lidar_dim),
         "ultrasonic": (cfg.ultrasonic_proj_dim, cfg.ultrasonic_dim),
         "audio": (cfg.audio_proj_dim, cfg.audio_dim),
@@ -173,9 +175,12 @@ def _new_proj_tensors(cfg: ModelConfig, modality: str) -> dict[str, Tensor]:
     if modality not in dim_map:
         raise ValueError(f"Unknown modality for projection init: {modality!r}")
     out_dim, in_dim = dim_map[modality]
+    if in_dim <= 0:
+        # NOT assert: stripped under PYTHONOPTIMIZE=1 (the Jetson Docker entrypoint).
+        msg = f"Cannot initialise projection from zero-dim input for {modality!r}"
+        raise ValueError(msg)
     w = torch.empty(out_dim, in_dim)
     nn.init.kaiming_uniform_(w, a=_KAIMING_LINEAR_A)
-    assert in_dim > 0, f"Cannot initialise projection from zero-dim input for {modality!r}"
     bound = 1.0 / math.sqrt(in_dim)
     b = torch.empty(out_dim).uniform_(-bound, bound)
     return {

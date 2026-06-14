@@ -41,6 +41,114 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   **property** (`tests/property/`) and **performance** (`tests/performance/`)
   tiers that were previously undocumented.
 
+### Added — Physical-AI Phase 5: MuJoCo skid-steer sim → RSSM dynamics pretraining + vision-on fine-tune
+
+Replaces the NumPy kinematic rover sim with a MuJoCo (classic) skid-steer physics
+simulator and pretrains the RSSM world-model dynamics core on its episodes,
+end-to-end through the training pipeline orchestrator. A follow-on phase renders an
+RGB camera, extracts vision features, and fine-tunes the pretrained (vision-OFF)
+RSSM with vision turned ON. All opt-in and backwards-compatible — existing YAML,
+checkpoints, and the deployed world model are byte-identical.
+
+**MuJoCo skid-steer rover env** (`sim/mujoco_rover_env.py`, `assets/rover/mse6_4wd.xml`)
+
+- `RoverMuJoCoEnv` fills the reserved `rover.sim.backend == "mujoco"` factory slot
+  with the SAME observation-dict contract as `MockRoverEnv` (imu / chassis_pose /
+  wheel_vel / lidar, FL/FR/RL/RR order). IMU from `<accelerometer>`+`<gyro>`;
+  config-driven N-sector `<rangefinder>` lidar spliced into the MJCF at load; a
+  rest-state finite-`qacc` assertion guards the silent-NaN wheel-grounding footgun.
+- Domain-randomization params (`wheel_friction` → `geom_friction`, `chassis_mass_kg`
+  → `body_mass`+inertia, `motor_gain` → `actuator_gainprm`; `wheel_slip` as a
+  documented observation-noise proxy) are now consumed per-episode via
+  `SimEpisodeGenerator` + `DomainRandomizer`.
+
+**RSSM dynamics pretraining** (`world_model/rssm.py`, `world_model/encoder.py`,
+`world_model/latent_utils.py`, `training/rssm_pretrainer.py`)
+
+- `RSSM.train_sequence` — a gradient-enabled rollout reconstructing the RAW
+  per-modality observations (not the encoder's own embedding — avoids
+  representation collapse) with Dreamer-style balanced free-bits KL computed in
+  float32. Reconstruction heads live in a pretraining-only `RawModalityDecoders`
+  module so the deployment RSSM `state_dict` + seeded init stay byte-identical.
+- `MultimodalEncoder` vision branch is now optional (`vision_dim=0`), mirroring the
+  audio/lidar gating; default `vision_dim=256` is byte-identical.
+
+**Vision-on fine-tune** (`factory.build_rssm_vision_finetune`,
+`checkpoint_migration`, `pipeline_orchestrator`)
+
+- Renders RGB via `mujoco.Renderer` → the deployed (non-learned) `MeanPoolExtractor`
+  → 256-d `vision_features` (sim/deploy distributions match by construction — no CNN
+  trained). `build_rssm_vision_finetune` migrates a vision-OFF checkpoint to vision-ON
+  via the existing `checkpoint_migration` machinery (extended to handle the vision
+  modality) — dynamics core copied verbatim, vision fusion columns + `vision_proj`
+  Kaiming-initialised.
+- Opt-in orchestrator phases: `training.rssm_pretrain_enabled` and
+  `training.rssm_vision_finetune_enabled` (both default OFF). The blocking torch loop
+  runs in `asyncio.to_thread` so the thermal-pause safety check is never starved.
+
+**Config** (`config/schema.py`): additive `MujocoSimConfig` (mjcf path, arena, lidar
+sectors/range, render fields, DR defaults) under `rover.sim.mujoco`; `ModelConfig`
+KL knobs; `TrainingConfig` `rssm_*` pretrain/fine-tune knobs — all defaulted so
+pre-feature YAML loads unchanged.
+
+Architecture: [`docs/architecture/c4-rssm-sim-pretraining.md`](docs/architecture/c4-rssm-sim-pretraining.md).
+
+### Added — Validation efficiency: latency percentiles, trend store, phase-1 caching
+
+Runtime/resource-efficiency layer on the existing Jetson validation harness. All
+three surfaces are additive and opt-in — defaults preserve byte-identical legacy
+behaviour.
+
+**Latency-percentile probes** (`src/mousedroid/validation/latency_stats.py`)
+
+- New pure, dependency-free `summarize(samples_ms) -> LatencySummary`
+  (min/mean/p50/p95/p99/max) + `intervals_ms(timestamps_s)` (arrival-timestamp →
+  inter-arrival gaps). No I/O, no clock reads, no verdict — the caller gates
+  against its config-supplied target. `mypy --strict` clean, 100 % covered.
+- `tools/llm_latency_probe.py --iterations N` — `1` (default) is the legacy
+  single-shot gate verbatim; `>1` emits `llm_latency_summary` and gates on **p95**
+  to absorb cloud/GPU tail variance.
+- `tools/lidar_telemetry_probe.py` emits `lidar_frame_interval_summary`
+  (inter-arrival jitter — high p95/p99 vs p50 = dropped/bunched dashboard frames).
+
+**Run-over-run trend store** (`src/mousedroid/validation/report_store.py`)
+
+- Persists each `PreflightReport` to the **existing** harness journal (no parallel
+  store) as a `preflight_report` event; `detect_regressions(history)` compares the
+  two newest runs for status downgrade / new FAIL / latency creep (gated by both a
+  `slow_ratio` and an absolute `slow_floor_s` so sub-50 ms checks don't false-fire).
+  `recorded_at_ns` is wall-clock `time.time_ns()` (stable across reboots).
+- Wired via `mousedroid.cli.preflight --journal-path PATH` (opt-in record) +
+  `--trend` (print regressions; exit 1 on regression) + operator-tunable
+  `--trend-slow-ratio` / `--trend-slow-floor-s` (no hardcoded call site).
+
+**Phase-1 caching** (`scripts/jetson_full_validation.sh`)
+
+- Phase 1 (static CI) is a pure function of the committed source: a clean tree
+  unchanged since the last green run SKIPs it (`PASS "static CI (cached)"`); a
+  dirty tree forces a miss (never masks an uncommitted edit). `--no-cache` forces a
+  re-run; `--phases 0,1,3` runs an ordered subset (`--phase` kept as the
+  single-phase alias). Hardware (Phase 2) + live (Phase 3) are never cached.
+
+**Modularity** (`src/mousedroid/validation/__init__.py`)
+
+- The heavy `runtime` sensor helpers (numpy/cv2/pyaudio) are now re-exported
+  **lazily** via PEP 562 `__getattr__`, so importing the pure `latency_stats` /
+  `report_store` modules no longer drags the sensor stack into the process.
+  Backwards compatible — the re-exported names still resolve on access.
+
+**Tests** — unit (`latency_stats`, `report_store`, lazy `__init__`, CLI flags),
+integration (`report_store` through factory `build_journal` for JSONL **and** LMDB +
+NullJournal default), regression (subprocess import-decoupling guard), smoke (script
+arg surface). Changed source files at 100 % line coverage.
+
+**Docs** — `docs/architecture/c4-validation-efficiency.md` (C4 component diagram),
+CLAUDE.md "Validation-efficiency surface" section, README validation block.
+
+### Added — MLflow experiment logger for training observability
+
+Opt-in training-metrics logging via the `mlflow-skinny` backend, threaded through the factory as a NEVER-None `ExperimentLoggerProtocol` (the `NoOpExperimentLogger` default is a byte-identical no-op, so the wiring is free when OFF). `PipelineOrchestrator` emits a parent run per pipeline + a child run per phase and consumes `run_name` (falls back to `"pipeline"`) and `log_artifacts` (gates the resolved-`Settings` snapshot + per-phase checkpoint uploads); `OfflineRLTrainer` (CQL/IQL) logs per-step losses and consumes `log_step_every_n` (`gt=0`) as its `step % n` throttle — fail-fasting on `< 1` so the modulo can never `ZeroDivisionError` (config→trainer wiring in the orchestrator's offline-RL phases is follow-up). All protocol methods are total (never raise on backend failure), and `build_experiment_logger` degrades to NoOp on a missing `[mlflow]` extra **or** a construction failure (bad `tracking_uri`/store/permissions). Defaults OFF; opt in via YAML or `MOUSEDROID_OBSERVABILITY__EXPERIMENT_LOGGER__BACKEND=mlflow` — the CLI entry point (`python -m mousedroid.training.pipeline_orchestrator --config <yaml>`) resolves the logger from config so the opt-in takes effect with no code change. Runbook: `docs/runbooks/mlflow-local-ui.md`; C4: `docs/architecture/c4-experiment-logger.md`.
+
 ### Added — Full rover bring-up: unified dashboard + sensor-fusion summary
 
 Deploy-and-run-everything bring-up plus a single dashboard showing camera + lidar

@@ -69,6 +69,7 @@ coverage.json
 coverage-branch.json
 htmlcov/
 .pytest_cache/
+.benchmarks/
 .mypy_cache/
 .ruff_cache/
 .hypothesis/
@@ -81,12 +82,15 @@ secrets.yaml
 gcp_credentials/
 *.credentials.json
 
-# Host-only runtime artefacts (LMDB experience, reports, training output)
+# Host-only runtime artefacts (LMDB experience, reports, training output,
+# harness journal + validation trend store, MLflow tracking store)
 *.mdb
 *_experience/
 reports/
 runs/
 checkpoints/
+mlruns/
+var/
 
 # Claude worktrees + agent workspaces
 .claude/

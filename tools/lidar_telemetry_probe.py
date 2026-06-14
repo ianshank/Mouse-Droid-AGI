@@ -32,6 +32,7 @@ from mousedroid.factory import (
     build_telemetry_server,
 )
 from mousedroid.logging.setup import get_logger
+from mousedroid.validation.latency_stats import intervals_ms, summarize
 
 _log = get_logger("lidar_telemetry_probe")
 
@@ -53,9 +54,17 @@ async def _drive_lidar_to_publisher(lidar, publisher, stop_event: asyncio.Event)
     return frames_published
 
 
-async def _consume_lidar_ws(url: str, max_frames: int, timeout_s: float) -> list[dict]:
-    """Connect to the WS endpoint; collect up to ``max_frames`` JSON messages."""
+async def _consume_lidar_ws(
+    url: str, max_frames: int, timeout_s: float
+) -> tuple[list[dict], list[float]]:
+    """Connect to the WS endpoint; collect up to ``max_frames`` JSON messages.
+
+    Returns the parsed frames and a parallel list of monotonic arrival times
+    (seconds) — the caller derives inter-arrival jitter from the latter without
+    re-reading the clock here.
+    """
     frames: list[dict] = []
+    arrivals_s: list[float] = []
     ws_close_timeout = aiohttp.ClientWSTimeout(ws_close=10.0)
     terminal_msg_types = (
         aiohttp.WSMsgType.CLOSE,
@@ -75,9 +84,10 @@ async def _consume_lidar_ws(url: str, max_frames: int, timeout_s: float) -> list
             if msg.type == aiohttp.WSMsgType.TEXT:
                 with contextlib.suppress(json.JSONDecodeError):
                     frames.append(json.loads(msg.data))
+                    arrivals_s.append(time.monotonic())
             elif msg.type in terminal_msg_types:
                 break
-    return frames
+    return frames, arrivals_s
 
 
 async def _main(args: argparse.Namespace) -> int:
@@ -117,7 +127,9 @@ async def _main(args: argparse.Namespace) -> int:
 
     ws_url = f"ws://127.0.0.1:{args.port}{cfg.telemetry.lidar_raw_ws_path}"
     _log.info("connecting_ws", url=ws_url)
-    frames = await _consume_lidar_ws(ws_url, max_frames=args.max_frames, timeout_s=args.duration)
+    frames, arrivals_s = await _consume_lidar_ws(
+        ws_url, max_frames=args.max_frames, timeout_s=args.duration
+    )
 
     stop_event.set()
     published = await producer
@@ -130,6 +142,24 @@ async def _main(args: argparse.Namespace) -> int:
         frames_published_by_publisher=published,
         first_5_n_points=sample_n_points,
     )
+
+    # Inter-frame arrival jitter — needs >=2 arrivals to form one interval.
+    # Surfaces dashboard stutter (a high p95/p99 vs p50 means dropped/bunched
+    # frames) that a raw frame count never reveals.
+    gaps_ms = intervals_ms(arrivals_s)
+    if gaps_ms:
+        summary = summarize(gaps_ms)
+        _log.info(
+            "lidar_frame_interval_summary",
+            intervals=len(gaps_ms),
+            min_ms=summary.min_ms,
+            mean_ms=summary.mean_ms,
+            p50_ms=summary.p50_ms,
+            p95_ms=summary.p95_ms,
+            p99_ms=summary.p99_ms,
+            max_ms=summary.max_ms,
+        )
+
     if not frames:
         return 5
     return 0
