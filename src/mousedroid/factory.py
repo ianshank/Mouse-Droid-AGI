@@ -37,6 +37,7 @@ from mousedroid.vla.policy import VLAPolicyProtocol
 from mousedroid.voice.protocol import VoiceEngineProtocol
 
 if TYPE_CHECKING:
+    import torch
     from torch import Tensor
 
     from mousedroid.agents.base import AgentProtocol
@@ -57,7 +58,13 @@ if TYPE_CHECKING:
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.common.time.protocol import ClockProtocol
     from mousedroid.common.tools.registry import ToolRegistry
-    from mousedroid.config.schema import ESP32Config, LLMConfig, Settings, UltrasonicConfig
+    from mousedroid.config.schema import (
+        ESP32Config,
+        LLMConfig,
+        ModelConfig,
+        Settings,
+        UltrasonicConfig,
+    )
     from mousedroid.curiosity.protocol import CuriosityProtocol
     from mousedroid.efficiency.tensorrt import TensorRTCompilerProtocol
     from mousedroid.experience.logger import ExperienceLogger
@@ -92,6 +99,7 @@ if TYPE_CHECKING:
     from mousedroid.voice.greeting import Greeter, GreeterProtocol
     from mousedroid.voice.mock_tts import MockTTS
     from mousedroid.voice.tts import PiperTTS
+    from mousedroid.world_model.encoder import MultimodalEncoder
     from mousedroid.world_model.protocol import WorldModelProtocol
     from mousedroid.world_model.rssm import RSSM
 
@@ -3016,16 +3024,23 @@ def build_on_device_coordinator(
     Returns ``None`` (so the orchestrator stays byte-identical to pre-WS3)
     whenever ``cfg.on_device_learning`` is absent or disabled. When enabled,
     wires the REUSED collaborators: the LMDB replay reader (new-record trigger
-    + batch source), the WS2 :class:`EWCOnlineLearner` over a small candidate
-    model sized to the experience vision-feature dimension, and the SHA-256-
-    stamped :class:`OnDeviceSlotStore` resolved under ``cfg.experience.path``.
+    + sequence-batch source), the WS-E2 :class:`RSSMRefiner` over the LIVE RSSM
+    world model (deep-copied per update so the base stays bitwise-unchanged), and
+    the SHA-256-stamped :class:`OnDeviceSlotStore` resolved under
+    ``cfg.experience.path``.
+
+    WS-E2 REPLACES the pre-ENABLEMENT ``EWCOnlineLearner``-over-``nn.Linear``
+    stand-in: the learner now refines the rover's ACTUAL learned component (the
+    RSSM dynamics MCTS plans through) via ``train_sequence`` over a ``(B, T, ...)``
+    sequence-dict batch, and the persisted slot is a refined RSSM ``state_dict``
+    that round-trips into a fresh ``build_world_model(cfg)``.
 
     WS3 PRODUCES + PERSISTS the candidate slot. WS4 adds the safety-regression
     gate: after each persist the coordinator scores the candidate vs the live
     baseline via the world-model rollout-return harness and promotes-or-reverts
     (marking the slot active on pass, incrementing the revert counter on fail).
     The gate runs over a config-sized policy STAND-IN through the decoupling
-    :class:`PolicyProtocol`; WS5 swaps the live policy net behind that same seam.
+    :class:`PolicyProtocol`; a later WS swaps the live RSSM behind that same seam.
 
     Args:
         cfg: Root settings.
@@ -3062,12 +3077,27 @@ def build_on_device_coordinator(
         )
         return None
 
-    import torch.nn as nn
+    import torch
 
-    from mousedroid.learning.on_device.ewc_online import EWCOnlineLearner
     from mousedroid.learning.on_device.replay_trigger import ReplayTriggerCoordinator
+    from mousedroid.learning.on_device.rssm_refiner import RSSMRefiner
     from mousedroid.learning.on_device.slot_store import OnDeviceSlotStore
     from mousedroid.training.replay.lmdb_reader import LMDBReplayReader
+    from mousedroid.world_model.rssm import RSSM
+
+    # The capability gate above guarantees ``train_sequence`` — which only the
+    # plain ``RSSM`` exposes (``DualStreamRSSM`` / the ONNX engine do not). Narrow
+    # to the concrete ``RSSM`` so the refiner + sequence-batch builder are
+    # statically typed (``.cfg`` / ``.encoder`` / ``train_sequence``) with no
+    # suppression. A surprise non-RSSM engine that nonetheless carries a
+    # ``train_sequence`` attribute disables refinement rather than crashing.
+    if not isinstance(effective_wm, RSSM):
+        _log.warning(
+            "on_device_refiner_unsupported_engine",
+            engine_type=type(effective_wm).__name__,
+            hint="train_sequence present but engine is not a concrete RSSM; refinement disabled",
+        )
+        return None
 
     # Mirror the main replay path's reader construction (see build above) so the
     # on-device trigger honours any ``cfg.training.replay.source_path`` override
@@ -3079,23 +3109,49 @@ def build_on_device_coordinator(
     )
     slot_store = OnDeviceSlotStore(experience_cfg=cfg.experience, on_device_cfg=on_device_cfg)
 
-    # Candidate model: a small stand-in sized to the configured vision-feature
-    # dimension (``cfg.camera.feature_dim`` — the same width the experience
-    # vision features are produced at). WS5 swaps this for the live
-    # policy/world-model network.
-    input_dim = int(cfg.camera.feature_dim)
-    candidate_model = nn.Sequential(nn.Linear(input_dim, input_dim))
-    learner = EWCOnlineLearner(on_device_cfg, candidate_model)
+    # WS-E2: the learner refines the LIVE RSSM world model (deep-copied per
+    # update so the base is bitwise-unchanged) via ``train_sequence`` — replacing
+    # the pre-ENABLEMENT ``nn.Linear`` stand-in over ``EWCOnlineLearner``. The
+    # refined RSSM ``state_dict`` round-trips into a fresh ``build_world_model``.
+    learner = RSSMRefiner(effective_wm, on_device_cfg)
 
-    cap = on_device_cfg.trigger_min_new_records
+    # The sequence batch is partitioned into ``refine_batch_episodes`` windows of
+    # ``refine_sequence_length`` consecutive steps, so the loader must draw at
+    # least that many records; ``trigger_min_new_records`` is the trigger gate,
+    # not the batch size. Cap the scan at whichever is larger so the batch is
+    # always fillable once the trigger fires.
+    seq_len = on_device_cfg.refine_sequence_length
+    n_episodes = on_device_cfg.refine_batch_episodes
+    needed = n_episodes * seq_len
+    cap = max(on_device_cfg.trigger_min_new_records, needed)
+
+    # Resolve the model's device so the assembled batch lands where the refiner's
+    # candidate (a deep-copy of ``effective_wm``) lives — never a hardcoded CPU.
+    first_param = next(effective_wm.parameters(), None)
+    device = first_param.device if first_param is not None else torch.device("cpu")
+    encoder = effective_wm.encoder
+    model_cfg = effective_wm.cfg
 
     def _count_new_records() -> int:
         """Count records currently in the replay store (slow-cadence probe)."""
         return _count_replay_records(reader, cap)
 
-    def _load_batch() -> Tensor:
-        """Materialise one training batch tensor from replay vision-features."""
-        return _load_replay_batch(reader, input_dim, cap)
+    def _load_batch() -> dict[str, Tensor]:
+        """Materialise one ``(B, T, ...)`` sequence-dict batch from replay.
+
+        Returns an EMPTY dict when the store holds fewer than
+        ``refine_batch_episodes * refine_sequence_length`` records — the
+        coordinator's dict-aware empty-check treats that as a safe skip.
+        """
+        return _load_replay_sequence_batch(
+            reader,
+            model_cfg,
+            encoder,
+            sequence_length=seq_len,
+            n_episodes=n_episodes,
+            cap=cap,
+            device=device,
+        )
 
     gate_runner = _build_on_device_gate_runner(
         cfg, slot_store=slot_store, metrics=metrics, world_model=effective_wm, reader=reader
@@ -3410,6 +3466,76 @@ def _load_replay_batch(reader: LMDBReplayReader, input_dim: int, cap: int) -> Te
         [np.resize(np.asarray(rec.vision_features, dtype=np.float32), input_dim) for rec in records]
     )
     return torch.from_numpy(matrix)
+
+
+def _load_replay_sequence_batch(
+    reader: LMDBReplayReader,
+    model_cfg: ModelConfig,
+    encoder: MultimodalEncoder,
+    *,
+    sequence_length: int,
+    n_episodes: int,
+    cap: int,
+    device: torch.device,
+) -> dict[str, Tensor]:
+    """Build a ``(B, T, ...)`` RSSM sequence batch from replay (WS-E2 path).
+
+    Reads up to ``cap`` records off the event loop (via :func:`_run_coro_blocking`)
+    and assembles them into the sequence-dict batch
+    :meth:`mousedroid.world_model.rssm.RSSM.train_sequence` expects through
+    :func:`mousedroid.learning.on_device.rssm_refiner.build_sequence_batch`.
+
+    Returns an EMPTY dict when the store holds fewer than
+    ``n_episodes * sequence_length`` records — too few to fill even one batch.
+    The coordinator's dict-aware empty-check treats an empty dict as a safe skip
+    (``on_device_trigger_empty_batch``), so a fresh / sparse Jetson never crashes
+    the refiner.
+
+    Args:
+        reader: The LMDB replay reader.
+        model_cfg: The model config supplying per-modality dims.
+        encoder: The live world-model encoder whose ``*_enabled`` flags drive the
+            mask length + assembled modality tensors.
+        sequence_length: Temporal length ``T`` of each window.
+        n_episodes: Batch dimension ``B`` (number of windows).
+        cap: Maximum records to draw from the store.
+        device: Device on which to place every assembled tensor (the refiner's
+            candidate device).
+
+    Returns:
+        A ``(B, T, ...)`` sequence-dict batch, or an empty dict when the store
+        holds too few records to fill one batch.
+    """
+    from mousedroid.learning.on_device.rssm_refiner import build_sequence_batch
+
+    needed = n_episodes * sequence_length
+
+    async def _run() -> list[MouseDroidExperienceRecord]:
+        rows: list[MouseDroidExperienceRecord] = []
+        async for chunk in reader.stream(chunk_size=cap):
+            rows.extend(chunk)
+            if len(rows) >= cap:
+                break
+        return rows[:cap]
+
+    records = _run_coro_blocking(_run())
+    if len(records) < needed:
+        _log.debug(
+            "on_device_replay_sequence_below_batch",
+            have=len(records),
+            needed=needed,
+            n_episodes=n_episodes,
+            sequence_length=sequence_length,
+        )
+        return {}
+    return build_sequence_batch(
+        records,
+        model_cfg,
+        encoder,
+        sequence_length=sequence_length,
+        n_episodes=n_episodes,
+        device=device,
+    )
 
 
 def build_orchestrator(cfg: Settings) -> object:

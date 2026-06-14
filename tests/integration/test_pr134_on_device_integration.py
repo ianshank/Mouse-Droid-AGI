@@ -1,15 +1,25 @@
 """Integration: WS3 on-device update wired through ``build_orchestrator``.
 
-Proves the Phase-6 WS3 slow-cadence path end-to-end via the factory:
+Proves the Phase-6 WS3 slow-cadence path end-to-end via the factory, now over
+the WS-E2 RSSM-refinement learner (the ``EWCOnlineLearner``-over-``nn.Linear``
+stand-in has been replaced by :class:`RSSMRefiner`):
 
 * with ``on_device_learning.enabled=True`` + a seeded replay store under the
   configured experience root, the orchestrator builds a coordinator and
   spawns the slow background task in ``start()``;
 * driving the coordinator produces + persists a SHA-256-stamped candidate slot
-  UNDER ``<experience.path>/<slot_dir>`` (the WS0 de-hardcode realized);
+  UNDER ``<experience.path>/<slot_dir>`` (the WS0 de-hardcode realized). The slot
+  now holds a REFINED RSSM ``state_dict`` (a ``(B, T, ...)`` sequence-dict batch
+  drives ``train_sequence``), which round-trips strictly into a fresh
+  ``build_world_model(cfg)`` with NO ``decode_*`` decoder keys;
 * the produce/persist path does NOT advance the 30 Hz hot loop — ``_tick_count``
   stays 0 (the slow task is fully isolated from ``tick()``);
 * ``stop()`` cancels the slow task cleanly.
+
+The seeded record count + the small ``refine_sequence_length`` /
+``refine_batch_episodes`` are sized so one batch of
+``refine_batch_episodes * refine_sequence_length`` records is always fillable
+once the trigger fires.
 
 Built with ``mock_hardware=True`` so no real device is required.
 """
@@ -24,10 +34,14 @@ import pytest
 from mousedroid.config.schema import Settings
 from mousedroid.experience.logger import ExperienceLogger
 from mousedroid.experience.record import MouseDroidExperienceRecord
-from mousedroid.factory import build_orchestrator
+from mousedroid.factory import build_orchestrator, build_world_model
 from mousedroid.learning.on_device.slot_store import OnDeviceSlotStore
 
-_N_SEEDED = 6
+# Refine batch geometry: 2 episodes x 3 steps = 6 records per batch.
+_REFINE_SEQUENCE_LENGTH = 3
+_REFINE_BATCH_EPISODES = 2
+# Seed comfortably above both the trigger AND one full refine batch.
+_N_SEEDED = 8
 _TRIGGER = 5
 
 
@@ -68,6 +82,8 @@ def _build_cfg(experience_path: str) -> Settings:
                 "trigger_min_new_records": _TRIGGER,
                 "update_steps": 2,
                 "check_interval_s": 0.01,
+                "refine_sequence_length": _REFINE_SEQUENCE_LENGTH,
+                "refine_batch_episodes": _REFINE_BATCH_EPISODES,
             },
         }
     )
@@ -75,7 +91,7 @@ def _build_cfg(experience_path: str) -> Settings:
 
 @pytest.mark.asyncio
 async def test_coordinator_produces_stamped_slot_without_ticking(tmp_path: Path) -> None:
-    """The wired coordinator persists a stamped slot; the hot loop never runs."""
+    """The wired coordinator persists a REFINED RSSM slot; the hot loop never runs."""
     experience_path = str(tmp_path / "experience_root")
     await _seed_replay_store(experience_path, _N_SEEDED)
     cfg = _build_cfg(experience_path)
@@ -97,6 +113,15 @@ async def test_coordinator_produces_stamped_slot_without_ticking(tmp_path: Path)
     store = OnDeviceSlotStore(experience_cfg=cfg.experience, on_device_cfg=cfg.on_device_learning)
     loaded = store.load(slot)
     assert loaded
+
+    # WS-E2: the slot is a REFINED RSSM state_dict — it carries the RSSM's keys
+    # (NOT the throwaway reconstruction decoders) and strict-loads into a fresh
+    # ``build_world_model(cfg)`` of identical dims.
+    assert not any(key.startswith("decode") for key in loaded), "decoder keys leaked into slot"
+    fresh = build_world_model(cfg)
+    result = fresh.load_state_dict(loaded, strict=True)
+    assert result.missing_keys == []
+    assert result.unexpected_keys == []
 
     # The 30 Hz hot loop was NEVER advanced by the on-device update.
     assert orchestrator._tick_count == 0

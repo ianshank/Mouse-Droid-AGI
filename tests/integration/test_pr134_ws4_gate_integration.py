@@ -33,7 +33,11 @@ from mousedroid.learning.on_device.regression_gate import RegressionGate
 from mousedroid.learning.on_device.scoring import PolicyProtocol
 from mousedroid.learning.on_device.slot_store import CandidateSlot, OnDeviceSlotStore
 
-_N_SEEDED = 6
+# Refine batch geometry: 2 episodes x 3 steps = 6 records per batch.
+_REFINE_SEQUENCE_LENGTH = 3
+_REFINE_BATCH_EPISODES = 2
+# Seed comfortably above both the trigger AND one full refine batch.
+_N_SEEDED = 8
 _TRIGGER = 5
 
 
@@ -63,6 +67,8 @@ def _build_cfg(experience_path: str) -> Settings:
                 "rollout_horizon": 4,
                 "n_scoring_rollouts": 2,
                 "scoring_seed": 99,
+                "refine_sequence_length": _REFINE_SEQUENCE_LENGTH,
+                "refine_batch_episodes": _REFINE_BATCH_EPISODES,
             },
         }
     )

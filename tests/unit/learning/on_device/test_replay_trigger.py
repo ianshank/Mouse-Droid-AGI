@@ -9,6 +9,14 @@ Pins the WS3 coordination contract:
   the learner records the thread it ran on and it is NOT the loop thread);
 * a fired cycle persists a stamped candidate slot and resets the new-record
   marker so the next cycle counts from the new baseline.
+
+Plus the WS-E2 generalization: the coordinator is shape-agnostic — it flows a
+``(B, T, ...)`` sequence-DICT batch to an
+:class:`~mousedroid.learning.on_device.protocol.RSSMSequenceLearner` exactly as
+it flows the #134 Tensor batch to an
+:class:`~mousedroid.learning.on_device.protocol.OnDeviceLearner`, with a
+dict-aware empty-check (empty ``{}`` OR a zero-length representative key) and an
+injectable ``batch_is_empty`` override.
 """
 
 from __future__ import annotations
@@ -222,3 +230,135 @@ def test_empty_batch_skips_update(tmp_path: Path) -> None:
     slot = asyncio.run(coordinator.maybe_update())
 
     assert slot is None
+
+
+# --------------------------------------------------------------------------- #
+# WS-E2: the coordinator is shape-agnostic — a (B, T, ...) sequence DICT batch
+# flows through the RSSM-refiner path identically to the #134 Tensor path.
+# --------------------------------------------------------------------------- #
+def _seq_batch(b: int = 2, t: int = 3) -> dict[str, torch.Tensor]:
+    """A minimal (B, T, ...) sequence-dict batch (only the keys the test needs)."""
+    return {
+        "motor": torch.zeros(b, t, 4),
+        "action": torch.zeros(b, t, 3),
+        "valid_mask": torch.zeros(b, t, 4),
+    }
+
+
+class _DictRecordingLearner:
+    """An :class:`RSSMSequenceLearner`-shaped learner recording its batch arg."""
+
+    def __init__(self) -> None:
+        self.seen: list[dict[str, torch.Tensor]] = []
+
+    def update(self, batch: dict[str, torch.Tensor]) -> OnDeviceUpdateResult:
+        self.seen.append(batch)
+        return OnDeviceUpdateResult(
+            candidate_state_dict={"w": torch.zeros(2)}, train_loss=0.5, n_steps=1
+        )
+
+
+def test_dict_batch_flows_through_to_learner(tmp_path: Path) -> None:
+    """A sequence-dict batch is forwarded verbatim to ``learner.update``."""
+    cfg = OnDeviceLearningConfig(enabled=True, trigger_min_new_records=1, update_steps=1)
+    learner = _DictRecordingLearner()
+    batch = _seq_batch()
+
+    coordinator = ReplayTriggerCoordinator(
+        cfg=cfg,
+        learner=learner,
+        slot_store=_make_store(tmp_path, cfg),
+        count_new_records=lambda: 1,
+        load_batch=lambda: batch,
+    )
+
+    slot = asyncio.run(coordinator.maybe_update())
+
+    assert slot is not None
+    assert learner.seen == [batch]
+
+
+def test_empty_dict_batch_skips_update(tmp_path: Path) -> None:
+    """An empty sequence-dict ({}) is treated as an empty batch (safe no-op)."""
+    cfg = OnDeviceLearningConfig(enabled=True, trigger_min_new_records=1, update_steps=1)
+    learner = _DictRecordingLearner()
+
+    coordinator = ReplayTriggerCoordinator(
+        cfg=cfg,
+        learner=learner,
+        slot_store=_make_store(tmp_path, cfg),
+        count_new_records=lambda: 100,
+        load_batch=dict,
+    )
+
+    slot = asyncio.run(coordinator.maybe_update())
+
+    assert slot is None
+    assert learner.seen == []
+
+
+def test_zero_length_dict_batch_skips_update(tmp_path: Path) -> None:
+    """A dict whose representative ``motor`` key has B == 0 is empty (no-op)."""
+    cfg = OnDeviceLearningConfig(enabled=True, trigger_min_new_records=1, update_steps=1)
+    learner = _DictRecordingLearner()
+
+    def _zero_len() -> dict[str, torch.Tensor]:
+        return {"motor": torch.zeros(0, 3, 4), "action": torch.zeros(0, 3, 3)}
+
+    coordinator = ReplayTriggerCoordinator(
+        cfg=cfg,
+        learner=learner,
+        slot_store=_make_store(tmp_path, cfg),
+        count_new_records=lambda: 100,
+        load_batch=_zero_len,
+    )
+
+    slot = asyncio.run(coordinator.maybe_update())
+
+    assert slot is None
+    assert learner.seen == []
+
+
+def test_dict_batch_without_motor_key_uses_first_value_for_size(tmp_path: Path) -> None:
+    """A non-empty dict lacking ``motor`` falls back to its first value's leading dim.
+
+    Exercises the ``_batch_size`` fallback branch (``next(iter(values))``) so a
+    custom sequence-dict that does not key on ``motor`` is still sized — and
+    therefore neither false-empty-skipped nor IndexError'd.
+    """
+    cfg = OnDeviceLearningConfig(enabled=True, trigger_min_new_records=1, update_steps=1)
+    learner = _DictRecordingLearner()
+    batch = {"observation": torch.zeros(2, 3, 4)}
+
+    coordinator = ReplayTriggerCoordinator(
+        cfg=cfg,
+        learner=learner,
+        slot_store=_make_store(tmp_path, cfg),
+        count_new_records=lambda: 1,
+        load_batch=lambda: batch,
+    )
+
+    slot = asyncio.run(coordinator.maybe_update())
+
+    assert slot is not None
+    assert learner.seen == [batch]
+
+
+def test_injected_batch_is_empty_override(tmp_path: Path) -> None:
+    """A custom ``batch_is_empty`` override gates the cycle (here: always empty)."""
+    cfg = OnDeviceLearningConfig(enabled=True, trigger_min_new_records=1, update_steps=1)
+    learner = _DictRecordingLearner()
+
+    coordinator = ReplayTriggerCoordinator(
+        cfg=cfg,
+        learner=learner,
+        slot_store=_make_store(tmp_path, cfg),
+        count_new_records=lambda: 100,
+        load_batch=_seq_batch,
+        batch_is_empty=lambda _batch: True,
+    )
+
+    slot = asyncio.run(coordinator.maybe_update())
+
+    assert slot is None
+    assert learner.seen == []
