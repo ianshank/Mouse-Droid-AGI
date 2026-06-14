@@ -115,6 +115,96 @@ async def test_cold_ping_connection_error_returns_2(
     assert rc == 2
 
 
+def _aiohttp_get_async_ctx_raising_json(*, status: int, exc: BaseException) -> MagicMock:
+    """aiohttp ctx whose response is 200 but ``resp.json()`` raises ``exc``.
+
+    Models the real-world case where the host answers with a 200 but a
+    non-JSON / malformed body (HTML error page from a reverse proxy,
+    truncated stream, a non-Ollama service on the configured port).
+    """
+    resp = MagicMock()
+    resp.status = status
+    resp.json = AsyncMock(side_effect=exc)
+    get_ctx = MagicMock()
+    get_ctx.__aenter__ = AsyncMock(return_value=resp)
+    get_ctx.__aexit__ = AsyncMock(return_value=None)
+    session = MagicMock()
+    session.get = MagicMock(return_value=get_ctx)
+    session_ctx = MagicMock()
+    session_ctx.__aenter__ = AsyncMock(return_value=session)
+    session_ctx.__aexit__ = AsyncMock(return_value=None)
+    return session_ctx
+
+
+@pytest.mark.asyncio
+async def test_cold_ping_non_json_content_type_returns_2(
+    probe: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """200 + ``resp.json()`` raising ContentTypeError → rc=2, no exception escapes.
+
+    Also asserts the structured ``cold_ping_parse`` diagnostic is emitted so
+    an operator can tell a parse failure (host answered, wrong shape) apart
+    from a transport failure (host unreachable).
+    """
+    content_type_error = aiohttp.ContentTypeError(
+        request_info=MagicMock(),
+        history=(),
+        message="Attempt to decode JSON with unexpected mimetype: text/html",
+    )
+    monkeypatch.setattr(
+        probe.aiohttp,
+        "ClientSession",
+        MagicMock(
+            return_value=_aiohttp_get_async_ctx_raising_json(status=200, exc=content_type_error)
+        ),
+    )
+    rc = await probe._cold_ping_models("http://host:11434", None)
+    assert rc == 2
+    # structlog renders to stdout via the console renderer in this process.
+    out = capsys.readouterr().out
+    assert "cold_ping_parse" in out
+    assert "llm_gateway_load_failed" in out
+
+
+@pytest.mark.asyncio
+async def test_cold_ping_malformed_json_body_returns_2(
+    probe: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """200 + ``resp.json()`` raising ValueError (truncated JSON) → rc=2, no raise."""
+    monkeypatch.setattr(
+        probe.aiohttp,
+        "ClientSession",
+        MagicMock(
+            return_value=_aiohttp_get_async_ctx_raising_json(
+                status=200,
+                exc=ValueError("Expecting value: line 1 column 1 (char 0)"),
+            )
+        ),
+    )
+    rc = await probe._cold_ping_models("http://host:11434", None)
+    assert rc == 2
+
+
+@pytest.mark.asyncio
+async def test_cold_ping_non_dict_json_body_returns_2(
+    probe: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """200 + valid JSON that is a bare list (not the {data:[...]} shape) → rc=2."""
+    monkeypatch.setattr(
+        probe.aiohttp,
+        "ClientSession",
+        MagicMock(
+            return_value=_aiohttp_get_async_ctx(status=200, json_body=["phi3:mini"])  # type: ignore[arg-type]
+        ),
+    )
+    rc = await probe._cold_ping_models("http://host:11434", None)
+    assert rc == 2
+
+
 @pytest.mark.asyncio
 async def test_main_returns_0_when_elapsed_under_target(
     probe: Any,

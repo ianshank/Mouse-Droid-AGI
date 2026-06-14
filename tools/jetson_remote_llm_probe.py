@@ -93,8 +93,12 @@ async def _cold_ping_models(base_url: str, api_key: SecretStr | None) -> int:
     list of model IDs the server advertises so the operator can confirm
     the configured model_name is available.
 
-    Never raises — wraps every aiohttp call in try/except so the probe's
-    "exit code, not exception" contract holds.
+    Never raises — wraps both the aiohttp request AND the JSON-body decode
+    (which can raise ``aiohttp.ContentTypeError`` on a non-JSON content-type
+    or ``ValueError`` / ``json.JSONDecodeError`` on a malformed 200 body) in
+    try/except so the probe's "exit code, not exception" contract holds. A
+    valid-JSON-but-wrong-shape payload (non-dict top level) is also mapped to
+    the documented ``2`` parse-error code.
     """
     headers: dict[str, str] = {"Accept": "application/json"}
     if api_key is not None:
@@ -124,7 +128,33 @@ async def _cold_ping_models(base_url: str, api_key: SecretStr | None) -> int:
                     ),
                 )
                 return 2
-            body = await resp.json()
+            try:
+                body = await resp.json()
+            except (aiohttp.ClientError, ValueError) as exc:
+                # ``resp.json()`` raises aiohttp.ContentTypeError (a
+                # ClientError subclass) on a non-JSON content-type, and a
+                # ValueError / json.JSONDecodeError on a 200 whose body is
+                # malformed / truncated JSON. Either way the server answered
+                # but not with the OpenAI /v1/models shape — surface it as
+                # the documented parse-error exit code, never an exception.
+                elapsed_ms = (time.monotonic() - t0) * 1000.0
+                _log.warning(
+                    "llm_gateway_load_failed",
+                    stage="cold_ping_parse",
+                    url=url,
+                    status=resp.status,
+                    elapsed_ms=elapsed_ms,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                    hint=(
+                        "Cold ping got a 200 but the body was not parseable "
+                        "JSON. The host answered but is likely not an "
+                        "OpenAI-compatible /v1/models endpoint (wrong port, "
+                        "a reverse proxy returning HTML, or a non-Ollama "
+                        "service on this base_url)."
+                    ),
+                )
+                return 2
     except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
         elapsed_ms = (time.monotonic() - t0) * 1000.0
         _log.error(
@@ -140,6 +170,24 @@ async def _cold_ping_models(base_url: str, api_key: SecretStr | None) -> int:
                 "from the Jetson host first), Ollama bound to 127.0.0.1 "
                 "only (set OLLAMA_HOST=0.0.0.0:11434), or firewall "
                 "blocking the bridge interface."
+            ),
+        )
+        return 2
+
+    # Defensive: a valid-JSON-but-wrong-shape body (e.g. a bare list or a
+    # JSON string) would make ``body.get`` raise AttributeError. Treat any
+    # non-dict top-level payload as a parse error too.
+    if not isinstance(body, dict):
+        _log.warning(
+            "llm_gateway_load_failed",
+            stage="cold_ping_parse",
+            url=url,
+            elapsed_ms=elapsed_ms,
+            body_type=type(body).__name__,
+            hint=(
+                "Cold ping returned valid JSON but not a JSON object. "
+                "Expected an OpenAI /v1/models response of shape "
+                '{"data": [{"id": ...}, ...]}.'
             ),
         )
         return 2
