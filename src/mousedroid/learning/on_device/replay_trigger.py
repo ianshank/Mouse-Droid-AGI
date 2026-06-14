@@ -53,6 +53,15 @@ class ReplayTriggerCoordinator:
         load_batch: Materialises one training batch tensor for the learner.
         on_consumed: Optional callback invoked with the consumed record count
             AFTER a successful persist so the caller advances its marker.
+        gate_runner: Optional WS4 safety-regression gate callback invoked with
+            the persisted candidate slot AFTER persist (and after ``on_consumed``).
+            It scores the candidate vs the live baseline and promotes-or-reverts
+            (marking the slot active on pass, incrementing the revert counter on
+            fail). When ``None`` (the default, and whenever the gate is disabled)
+            NO scoring runs and the cycle is byte-identical to pre-WS4. The
+            gate's torch scoring is offloaded off the event loop with the same
+            ``asyncio.to_thread`` discipline as the learner update so the 30 Hz
+            hot loop is never blocked.
     """
 
     def __init__(
@@ -64,6 +73,7 @@ class ReplayTriggerCoordinator:
         count_new_records: Callable[[], int],
         load_batch: Callable[[], Tensor],
         on_consumed: Callable[[int], None] | None = None,
+        gate_runner: Callable[[CandidateSlot], None] | None = None,
     ) -> None:
         self._cfg = cfg
         self._learner = learner
@@ -71,6 +81,7 @@ class ReplayTriggerCoordinator:
         self._count_new_records = count_new_records
         self._load_batch = load_batch
         self._on_consumed = on_consumed
+        self._gate_runner = gate_runner
 
     async def maybe_update(self) -> CandidateSlot | None:
         """Run one trigger check; produce + persist a candidate if armed.
@@ -123,6 +134,14 @@ class ReplayTriggerCoordinator:
 
         if self._on_consumed is not None:
             self._on_consumed(new_records)
+
+        # WS4 safety-regression gate: score the candidate vs the live baseline
+        # and promote-or-revert. Offloaded off the event loop (the gate runs the
+        # torch rollout-return scoring) so the 30 Hz reactive loop is untouched.
+        # Default-OFF: with no gate wired this is byte-identical to pre-WS4.
+        if self._gate_runner is not None:
+            await asyncio.to_thread(self._gate_runner, slot)
+
         return slot
 
 

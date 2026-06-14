@@ -129,6 +129,46 @@ def test_marker_resets_after_fire(tmp_path: Path) -> None:
     assert consumed == [7]
 
 
+def test_gate_runner_invoked_with_persisted_slot(tmp_path: Path) -> None:
+    """A wired ``gate_runner`` is called with the persisted slot after persist."""
+    cfg = OnDeviceLearningConfig(enabled=True, trigger_min_new_records=1, update_steps=1)
+    seen: list[str] = []
+
+    def _gate(slot: object) -> None:
+        seen.append(slot.digest)  # type: ignore[attr-defined]
+
+    coordinator = ReplayTriggerCoordinator(
+        cfg=cfg,
+        learner=_make_learner(cfg),
+        slot_store=_make_store(tmp_path, cfg),
+        count_new_records=lambda: 1,
+        load_batch=_batch_provider,
+        gate_runner=_gate,
+    )
+
+    slot = asyncio.run(coordinator.maybe_update())
+
+    assert slot is not None
+    assert seen == [slot.digest]
+
+
+def test_no_gate_runner_is_byte_identical(tmp_path: Path) -> None:
+    """Omitting ``gate_runner`` still persists a slot (pre-WS4 byte-identical)."""
+    cfg = OnDeviceLearningConfig(enabled=True, trigger_min_new_records=1, update_steps=1)
+    coordinator = ReplayTriggerCoordinator(
+        cfg=cfg,
+        learner=_make_learner(cfg),
+        slot_store=_make_store(tmp_path, cfg),
+        count_new_records=lambda: 1,
+        load_batch=_batch_provider,
+    )
+
+    slot = asyncio.run(coordinator.maybe_update())
+
+    assert slot is not None
+    assert slot.path.is_file()
+
+
 def test_empty_batch_skips_update(tmp_path: Path) -> None:
     """A threshold-met trigger with an empty batch is a safe no-op."""
     cfg = OnDeviceLearningConfig(enabled=True, trigger_min_new_records=1, update_steps=1)

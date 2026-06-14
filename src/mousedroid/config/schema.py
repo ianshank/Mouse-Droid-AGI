@@ -787,6 +787,34 @@ class OnDeviceLearningConfig(BaseModel):
             "cloud-pulled slot."
         ),
     )
+    rollout_horizon: int = Field(
+        15,
+        gt=0,
+        description=(
+            "WS4 safety-gate scoring: number of imagined steps H per world-model "
+            "rollout when scoring a candidate policy. The candidate's mean "
+            "predicted return over N rollouts of this horizon is compared against "
+            "the live baseline's. Config-driven so no horizon is hardcoded."
+        ),
+    )
+    n_scoring_rollouts: int = Field(
+        8,
+        gt=0,
+        description=(
+            "WS4 safety-gate scoring: number of imagined rollouts N averaged into "
+            "the scalar rollout-return score. Higher N reduces sampling variance "
+            "of the prior at the cost of more compute on the slow cadence."
+        ),
+    )
+    scoring_seed: int = Field(
+        1234,
+        description=(
+            "WS4 safety-gate scoring: fixed RNG seed making the rollout-return "
+            "score deterministic. Same seed + same seed-states + same weights "
+            "ALWAYS yields the identical score, so the promote/revert decision is "
+            "reproducible. Config-driven so no seed is hardcoded."
+        ),
+    )
 
 
 class LLMConfig(BaseModel):

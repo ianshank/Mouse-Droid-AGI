@@ -122,6 +122,50 @@ def test_slot_dir_property_resolves_under_experience_root(tmp_path: Path) -> Non
     assert store.slot_dir == (root / "on_device_slot").resolve()
 
 
+def test_mark_active_and_load_active_round_trip(tmp_path: Path) -> None:
+    """``mark_active`` writes an active manifest read back by ``load_active``."""
+    store = _make_store(tmp_path)
+    slot = store.persist(_make_state_dict())
+
+    assert store.load_active() is None  # nothing blessed yet
+
+    store.mark_active(slot)
+
+    assert store.load_active() == slot.digest
+
+
+def test_load_active_none_when_no_manifest(tmp_path: Path) -> None:
+    """A store with no active manifest reports ``None`` (no slot blessed)."""
+    store = _make_store(tmp_path)
+    store.persist(_make_state_dict())  # candidate exists but not blessed
+    assert store.load_active() is None
+
+
+def test_mark_active_is_idempotent_and_overwrites(tmp_path: Path) -> None:
+    """A second ``mark_active`` re-points the active manifest to the new slot."""
+    store = _make_store(tmp_path)
+    first = store.persist(_make_state_dict())
+    torch.manual_seed(1)
+    second = store.persist({"layer.weight": torch.randn(2, 2)})
+
+    store.mark_active(first)
+    assert store.load_active() == first.digest
+    store.mark_active(second)
+    assert store.load_active() == second.digest
+
+
+def test_load_active_ignores_corrupt_manifest(tmp_path: Path) -> None:
+    """A non-JSON / malformed active manifest reads back as ``None`` (fail-safe)."""
+    store = _make_store(tmp_path)
+    store.persist(_make_state_dict())
+    store.slot_dir.mkdir(parents=True, exist_ok=True)
+    from mousedroid.learning.on_device.slot_store import _ACTIVE_MANIFEST_NAME
+
+    (store.slot_dir / _ACTIVE_MANIFEST_NAME).write_text("not-json{", encoding="utf-8")
+
+    assert store.load_active() is None
+
+
 def test_persist_overwrites_stale_tmp_file(tmp_path: Path) -> None:
     """A leftover temp blob from an interrupted write never corrupts a persist.
 

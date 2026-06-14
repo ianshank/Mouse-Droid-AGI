@@ -25,6 +25,7 @@ live policy — promotion is WS4's safety-gated decision.
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,6 +55,13 @@ _SLOT_SUFFIX: str = ".pt"
 # Temp filename used during the write-then-rename so an interrupted write never
 # leaves a mis-stamped slot behind. Renamed to ``<digest>{_SLOT_SUFFIX}``.
 _TMP_SLOT_NAME: str = f"candidate{_SLOT_SUFFIX}.tmp"
+# Active-slot pointer manifest. WS4's safety gate writes the blessed candidate's
+# digest here on PROMOTE; the live policy (WS5) reads it to know which slot to
+# hot-swap. A JSON dict (not a bare string) so future fields (e.g. promoted_at,
+# scores) are purely additive. Lives alongside the content-addressed slots.
+_ACTIVE_MANIFEST_NAME: str = "active.json"
+# JSON key holding the active candidate's SHA-256 digest.
+_ACTIVE_DIGEST_KEY: str = "active_digest"
 
 
 class SlotIntegrityError(RuntimeError):
@@ -157,6 +165,50 @@ class OnDeviceSlotStore:
         loaded: dict[str, Tensor] = torch.load(slot.path, weights_only=True)
         return loaded
 
+    def mark_active(self, slot: CandidateSlot) -> None:
+        """Mark ``slot`` as the ACTIVE (blessed) candidate.
+
+        WS4's safety-regression gate calls this on a PROMOTE decision. It writes
+        an ``active.json`` manifest holding the slot's SHA-256 digest so the
+        live policy (WS5) knows which content-addressed slot to hot-swap. The
+        actual swap into the running policy is deliberately NOT done here —
+        promotion only records the pointer; activation is WS5's job.
+
+        The write is atomic (temp + replace) so a crash never leaves a torn
+        manifest, and idempotent (re-pointing simply overwrites).
+
+        Args:
+            slot: The :class:`CandidateSlot` to bless as active.
+        """
+        self._slot_dir.mkdir(parents=True, exist_ok=True)
+        manifest = self._slot_dir / _ACTIVE_MANIFEST_NAME
+        tmp = self._slot_dir / f"{_ACTIVE_MANIFEST_NAME}.tmp"
+        tmp.write_text(json.dumps({_ACTIVE_DIGEST_KEY: slot.digest}), encoding="utf-8")
+        tmp.replace(manifest)
+        _log.info("on_device_slot_marked_active", slot_dir=str(self._slot_dir), digest=slot.digest)
+
+    def load_active(self) -> str | None:
+        """Return the active (blessed) candidate's digest, or ``None``.
+
+        Reads the ``active.json`` manifest written by :meth:`mark_active`.
+        Returns ``None`` when no slot has been blessed (no manifest), or when
+        the manifest is missing/malformed — a corrupt pointer must fail safe to
+        "no active slot" rather than crash the live-policy load path.
+
+        Returns:
+            The 64-char hex SHA-256 digest of the active slot, or ``None``.
+        """
+        manifest = self._slot_dir / _ACTIVE_MANIFEST_NAME
+        if not manifest.is_file():
+            return None
+        try:
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            _log.warning("on_device_slot_active_manifest_corrupt", path=str(manifest))
+            return None
+        digest = data.get(_ACTIVE_DIGEST_KEY) if isinstance(data, dict) else None
+        return digest if isinstance(digest, str) else None
+
     @staticmethod
     def _digest_file(path: Path) -> str:
         """Stream-hash ``path`` with SHA-256 (mirrors the C1 OTA digest)."""
@@ -170,4 +222,8 @@ class OnDeviceSlotStore:
         return hasher.hexdigest()
 
 
-__all__ = ["CandidateSlot", "OnDeviceSlotStore", "SlotIntegrityError"]
+__all__ = [
+    "CandidateSlot",
+    "OnDeviceSlotStore",
+    "SlotIntegrityError",
+]

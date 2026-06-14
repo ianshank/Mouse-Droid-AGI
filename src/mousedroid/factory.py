@@ -68,6 +68,7 @@ if TYPE_CHECKING:
     from mousedroid.harness.protocol import TaskTrackerProtocol
     from mousedroid.health.monitor import HealthMonitor
     from mousedroid.learning.on_device.replay_trigger import ReplayTriggerCoordinator
+    from mousedroid.learning.on_device.slot_store import CandidateSlot, OnDeviceSlotStore
     from mousedroid.llm_gateway.mission_parser import MissionParserProtocol
     from mousedroid.mcp.protocol import MCPServerProtocol
     from mousedroid.memory.tier import MemoryTier
@@ -2969,8 +2970,10 @@ def build_hook_registry(cfg: Settings, journal: Any) -> Any:
     return registry
 
 
-def build_on_device_coordinator(cfg: Settings) -> object | None:
-    """Build the Phase-6 WS3 replay-trigger on-device update coordinator.
+def build_on_device_coordinator(
+    cfg: Settings, *, metrics: MetricsRegistry | None = None
+) -> object | None:
+    """Build the Phase-6 WS3/WS4 replay-trigger on-device update coordinator.
 
     Returns ``None`` (so the orchestrator stays byte-identical to pre-WS3)
     whenever ``cfg.on_device_learning`` is absent or disabled. When enabled,
@@ -2979,12 +2982,18 @@ def build_on_device_coordinator(cfg: Settings) -> object | None:
     model sized to the experience vision-feature dimension, and the SHA-256-
     stamped :class:`OnDeviceSlotStore` resolved under ``cfg.experience.path``.
 
-    WS3 only PRODUCES + PERSISTS the candidate slot. Promotion into the live
-    policy is WS4's safety-gated decision; full factory polish (sharing the
-    live policy/world-model net rather than a config-sized stand-in) is WS5.
+    WS3 PRODUCES + PERSISTS the candidate slot. WS4 adds the safety-regression
+    gate: after each persist the coordinator scores the candidate vs the live
+    baseline via the world-model rollout-return harness and promotes-or-reverts
+    (marking the slot active on pass, incrementing the revert counter on fail).
+    The gate runs over a config-sized policy STAND-IN through the decoupling
+    :class:`PolicyProtocol`; WS5 swaps the live policy net behind that same seam.
 
     Args:
         cfg: Root settings.
+        metrics: Optional shared metrics registry, threaded keyword-only so the
+            WS4 revert counter surfaces on ``/metrics``. ``None`` (the default)
+            keeps the revert path working without recording a metric.
 
     Returns:
         A ``ReplayTriggerCoordinator`` when enabled, else ``None``.
@@ -3020,13 +3029,101 @@ def build_on_device_coordinator(cfg: Settings) -> object | None:
         """Materialise one training batch tensor from replay vision-features."""
         return _load_replay_batch(reader, input_dim, cap)
 
+    gate_runner = _build_on_device_gate_runner(cfg, slot_store=slot_store, metrics=metrics)
+
     return ReplayTriggerCoordinator(
         cfg=on_device_cfg,
         learner=learner,
         slot_store=slot_store,
         count_new_records=_count_new_records,
         load_batch=_load_batch,
+        gate_runner=gate_runner,
     )
+
+
+def _build_on_device_gate_runner(
+    cfg: Settings,
+    *,
+    slot_store: OnDeviceSlotStore,
+    metrics: MetricsRegistry | None,
+) -> Callable[[CandidateSlot], None]:
+    """Build the WS4 safety-regression gate-runner closure.
+
+    Constructs the REUSED world model, a deterministic set of seed states (count
+    driven by ``held_out_fraction`` so the gate honours the held-out-slice knob)
+    and a config-sized policy STAND-IN, then returns a closure that scores a
+    persisted candidate slot vs the live baseline and promotes-or-reverts it.
+
+    The candidate vs baseline distinction is the WS5 seam: today both adapters
+    wrap the same stand-in policy net (so the end-to-end gate path runs now), and
+    WS5 will load the persisted slot's weights into the candidate adapter and the
+    live policy into the baseline adapter behind the SAME :class:`PolicyProtocol`.
+
+    Args:
+        cfg: Root settings.
+        slot_store: The slot store whose ``mark_active`` is called on PROMOTE.
+        metrics: Optional revert counter.
+
+    Returns:
+        A ``(CandidateSlot) -> None`` closure invoked by the coordinator after
+        persist (offloaded off the event loop).
+    """
+    import torch
+    import torch.nn as nn
+
+    from mousedroid.learning.on_device.regression_gate import RegressionGate
+    from mousedroid.learning.on_device.scoring import StateDictPolicyAdapter
+    from mousedroid.world_model.rssm import RSSM
+
+    on_device_cfg = cfg.on_device_learning
+    if on_device_cfg is None:
+        # Caller-guarded; explicit check (no assert — stripped under -O).
+        msg = "on_device_learning config required to build the WS4 gate runner"
+        raise ValueError(msg)
+
+    world_model = RSSM(cfg.model)
+    world_model.eval()
+    hidden_dim = cfg.model.hidden_dim
+    latent_dim = cfg.model.latent_dim
+    action_dim = cfg.model.action_dim
+
+    # Deterministic seed states. Their COUNT is driven by ``held_out_fraction``
+    # over the trigger window so the held-out-slice knob is honoured; the exact
+    # latent VALUES come from the fixed ``scoring_seed`` so the score is
+    # reproducible. WS5 sources these by encoding a held-out replay slice through
+    # the world model instead of sampling latents directly.
+    n_seed = max(1, int(on_device_cfg.held_out_fraction * on_device_cfg.trigger_min_new_records))
+    gen = torch.Generator().manual_seed(on_device_cfg.scoring_seed)
+    seed_states = [
+        (
+            torch.randn(1, hidden_dim, generator=gen),
+            torch.randn(1, latent_dim, generator=gen),
+        )
+        for _ in range(n_seed)
+    ]
+
+    policy_net = nn.Linear(hidden_dim + latent_dim, action_dim)
+    baseline_adapter = StateDictPolicyAdapter(
+        policy_net, hidden_dim=hidden_dim, latent_dim=latent_dim, action_dim=action_dim
+    )
+    # WS5 seam: load the persisted slot's weights here. For WS4 the candidate
+    # adapter wraps the same stand-in net so the end-to-end gate path runs.
+    candidate_adapter = StateDictPolicyAdapter(
+        policy_net, hidden_dim=hidden_dim, latent_dim=latent_dim, action_dim=action_dim
+    )
+
+    gate = RegressionGate(
+        cfg=on_device_cfg,
+        slot_store=slot_store,
+        metrics=metrics,
+        world_model=world_model,
+        seed_states=seed_states,
+    )
+
+    def _run_gate(slot: CandidateSlot) -> None:
+        gate.evaluate(candidate=candidate_adapter, baseline=baseline_adapter, slot=slot)
+
+    return _run_gate
 
 
 def _run_coro_blocking(coro: Coroutine[Any, Any, _CoroResult]) -> _CoroResult:
@@ -3372,11 +3469,13 @@ def build_orchestrator(cfg: Settings) -> object:
         metrics=metrics_registry,
     )
 
-    # Phase 6 WS3 — replay-trigger on-device update coordinator. ``None`` when
-    # ``cfg.on_device_learning`` is absent/disabled (orchestrator byte-identical
-    # to pre-WS3); otherwise a slow-cadence background task producing stamped
-    # candidate slots.
-    on_device_coordinator = build_on_device_coordinator(cfg)
+    # Phase 6 WS3/WS4 — replay-trigger on-device update coordinator. ``None``
+    # when ``cfg.on_device_learning`` is absent/disabled (orchestrator
+    # byte-identical to pre-WS3); otherwise a slow-cadence background task
+    # producing stamped candidate slots and (WS4) running the safety-regression
+    # gate. The shared metrics registry is threaded so the WS4 revert counter
+    # surfaces on ``/metrics``.
+    on_device_coordinator = build_on_device_coordinator(cfg, metrics=metrics_registry)
 
     orchestrator = MouseDroidOrchestrator(
         world_model=wm,
