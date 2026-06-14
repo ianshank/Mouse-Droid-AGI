@@ -50,3 +50,13 @@ def test_glob_and_format_tokens_are_ignored(tmp_path: Path) -> None:
         "---\ndescription: d\n---\nOutput `weights/arm/{task}_{stage}_final.pt`.\n",
     )
     assert referenced_repo_paths(skill.read_text(encoding="utf-8")) == []
+
+
+def test_hardcoded_ipv4_is_flagged(tmp_path: Path) -> None:
+    # An IPv4 literal in the body must be reported as ``hardcoded-host``.
+    skill = _write(
+        tmp_path / "bad.md",
+        "---\ndescription: d\n---\nSSH to the rover at 192.168.1.5 first.\n",
+    )
+    issues = validate_command_skill(skill, repo_root=tmp_path)
+    assert any(i.code == "hardcoded-host" and i.detail == "192.168.1.5" for i in issues)

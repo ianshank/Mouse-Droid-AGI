@@ -3,7 +3,9 @@
 
 The module docstring in ``src/mousedroid/skills/builtin/__init__.py`` promises
 this test exists. It pins that every builtin spec has a publishable SKILL.md
-whose front-matter name matches the spec name, so the two never drift.
+whose leading H1 heading (``# <name>``) matches the spec name, so the two never
+drift. These docs are plain Markdown and intentionally carry no YAML
+front-matter.
 """
 
 from __future__ import annotations
@@ -28,10 +30,16 @@ def test_every_builtin_spec_has_matching_skill_doc(spec: SkillSpec) -> None:
     doc = _DOCS_ROOT / spec.name / "SKILL.md"
     assert doc.is_file(), f"missing publishable doc for builtin skill {spec.name!r}: {doc}"
     text = doc.read_text(encoding="utf-8")
-    # The docs are plain Markdown whose H1 == the skill name (verified:
+    # The docs are plain Markdown whose leading H1 == the skill name (verified:
     # docs/openclaw_skills/mousedroid-navigate/SKILL.md:1 == "# mousedroid-navigate").
     # Do NOT assert YAML front-matter — these docs intentionally have none.
-    assert f"# {spec.name}" in text, f"SKILL.md H1 must name the skill {spec.name!r}"
+    # Match the FIRST non-blank line exactly (an H1), not a substring search:
+    # a substring would false-positive on the name appearing in a code block or
+    # a later heading, and miss a wrong/absent leading H1.
+    first_line = next((ln for ln in text.splitlines() if ln.strip()), "")
+    assert (
+        first_line.strip() == f"# {spec.name}"
+    ), f"SKILL.md leading H1 must be '# {spec.name}', got {first_line.strip()!r}"
 
 
 def test_no_orphan_skill_docs() -> None:

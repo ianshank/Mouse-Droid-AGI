@@ -121,10 +121,16 @@ def test_train_policy_skill_emits_checkpoint(tmp_path: Path) -> None:
     agent = SACAgent(smoke_cfg)
     agent.build(_GymGoalAdapter())
     agent.train(total_timesteps=10)
-    agent.save(str(tmp_path))
+    # ``SACAgent.save`` treats its argument as a *directory*, appends the
+    # ``sac_her_checkpoint`` stem, and SB3 writes ``<stem>.zip``. Save into an
+    # explicit subdir of tmp_path and assert the concrete artifact named by the
+    # returned path — robust, not an rglob guess.
+    save_dir = tmp_path / "weights"
+    returned = agent.save(str(save_dir))
 
-    written = [p for p in tmp_path.rglob("*") if p.is_file()]
-    assert written, "SACAgent.save() wrote no checkpoint file"
+    assert returned.parent == save_dir, "checkpoint not written under the requested directory"
+    artifact = returned.with_suffix(".zip")
+    assert artifact.is_file(), f"SACAgent.save() did not write {artifact}"
 
 
 def test_robot_arm_trainer_milestone1_env_smoke() -> None:

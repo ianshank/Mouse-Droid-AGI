@@ -4,7 +4,10 @@
 Reusable library + CLI. Checks, per skill file:
   * YAML front-matter parses and carries a non-empty ``description``.
   * Every backtick-wrapped repo path it references actually exists.
-  * It contains no hardcoded host/IP (skills must stay environment-agnostic).
+  * It contains no hardcoded IPv4 address (skills must stay environment-
+    agnostic). Detection is deliberately IPv4-literal-only: example URLs and
+    hostnames are legitimate in skill docs, so broadening to hostnames would
+    only add false positives.
 
 Paths are *discovered* from the body, never enumerated here, so the tool keeps
 working as skills evolve. Format/glob tokens ({}, *, $, <>) are excluded so
@@ -27,6 +30,8 @@ import yaml
 _BACKTICK_RE = re.compile(r"`([^`]+)`")
 _PATH_EXT_RE = re.compile(r".+\.(?:py|ya?ml|md|sh|pt|onnx|json|urdf|usd)$")
 _FORBIDDEN_IN_PATH = set("{}*$<> ")
+# IPv4-literal only by design — see module docstring. Hostnames/URLs in skill
+# docs are legitimate, so broadening this would only produce false positives.
 _HARDCODED_HOST_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 
 
