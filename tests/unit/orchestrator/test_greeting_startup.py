@@ -26,6 +26,8 @@ from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from mousedroid.voice.greeting import GreeterProtocol
+
 
 class _FakeGreeter:
     """Records ``greet`` calls without driving audio."""
@@ -44,7 +46,7 @@ class _FakeGreeter:
 def _make_orch(
     *,
     greeting: GreetingConfig | None,
-    greeter: _FakeGreeter | None,
+    greeter: GreeterProtocol | None,
 ) -> MouseDroidOrchestrator:
     cfg = Settings(mock_hardware=True, greeting=greeting)
     return MouseDroidOrchestrator(
@@ -54,7 +56,7 @@ def _make_orch(
         esp32=AsyncMock(),
         sensor_manager=AsyncMock(),
         cfg=cfg,
-        greeter=greeter,  # type: ignore[arg-type]
+        greeter=greeter,
     )
 
 
@@ -144,7 +146,7 @@ async def test_greeting_hang_is_bounded_and_never_blocks_startup() -> None:
         fire_on_startup=True,
         startup_timeout_s=0.01,  # config-driven bound (not a hardcoded literal)
     )
-    orch = _make_orch(greeting=cfg, greeter=_HangingGreeter())  # type: ignore[arg-type]
+    orch = _make_orch(greeting=cfg, greeter=_HangingGreeter())
     with structlog.testing.capture_logs() as logs:
         await orch.start()  # must return promptly, not hang
     events = [e["event"] for e in logs]
