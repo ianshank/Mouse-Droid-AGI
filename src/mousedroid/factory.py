@@ -37,6 +37,7 @@ from mousedroid.vla.policy import VLAPolicyProtocol
 from mousedroid.voice.protocol import VoiceEngineProtocol
 
 if TYPE_CHECKING:
+    import torch
     from torch import Tensor
 
     from mousedroid.agents.base import AgentProtocol
@@ -57,7 +58,13 @@ if TYPE_CHECKING:
     from mousedroid.cognitive.cognitive_core import CognitiveCore
     from mousedroid.common.time.protocol import ClockProtocol
     from mousedroid.common.tools.registry import ToolRegistry
-    from mousedroid.config.schema import ESP32Config, LLMConfig, Settings, UltrasonicConfig
+    from mousedroid.config.schema import (
+        ESP32Config,
+        LLMConfig,
+        ModelConfig,
+        Settings,
+        UltrasonicConfig,
+    )
     from mousedroid.curiosity.protocol import CuriosityProtocol
     from mousedroid.efficiency.tensorrt import TensorRTCompilerProtocol
     from mousedroid.experience.logger import ExperienceLogger
@@ -67,6 +74,7 @@ if TYPE_CHECKING:
     from mousedroid.harness.approval.protocol import ApprovalGateProtocol
     from mousedroid.harness.protocol import TaskTrackerProtocol
     from mousedroid.health.monitor import HealthMonitor
+    from mousedroid.learning.on_device.hot_swap import OnDeviceWeightUpdateSource
     from mousedroid.learning.on_device.replay_trigger import ReplayTriggerCoordinator
     from mousedroid.learning.on_device.slot_store import CandidateSlot, OnDeviceSlotStore
     from mousedroid.llm_gateway.mission_parser import MissionParserProtocol
@@ -92,6 +100,7 @@ if TYPE_CHECKING:
     from mousedroid.voice.greeting import Greeter, GreeterProtocol
     from mousedroid.voice.mock_tts import MockTTS
     from mousedroid.voice.tts import PiperTTS
+    from mousedroid.world_model.encoder import MultimodalEncoder
     from mousedroid.world_model.protocol import WorldModelProtocol
     from mousedroid.world_model.rssm import RSSM
 
@@ -99,6 +108,12 @@ if TYPE_CHECKING:
 _log = get_logger(__name__)
 
 _CoroResult = TypeVar("_CoroResult")
+
+# Content-addressed on-device slot file suffix (mirrors
+# ``slot_store._SLOT_SUFFIX``). Used to reconstruct a ``CandidateSlot`` path from
+# the active digest returned by ``OnDeviceSlotStore.load_active`` (which yields a
+# bare digest string, not a slot) in the WS-E4 hot-swap materialiser.
+_SLOT_PT_SUFFIX: str = ".pt"
 
 
 def build_esp32_driver(cfg: Settings) -> ESP32CommProtocol:
@@ -1594,6 +1609,47 @@ def build_weight_update_loader(
     return None
 
 
+def _compose_weight_update_loader(
+    cloud_loader: Callable[[PendingWeightUpdate], object] | None,
+    on_device_source: OnDeviceWeightUpdateSource,
+) -> Callable[[PendingWeightUpdate], object]:
+    """Compose the WS-E4 hot-loop loader: PURE return for on-device updates.
+
+    The orchestrator invokes ``_weight_update_loader`` SYNCHRONOUSLY inside
+    ``tick()``. For an on-device hot-swap update the engine was already
+    constructed OFF the hot loop (in the source's ``refresh_once``), so the
+    composed loader is a PURE reference return —
+    :meth:`OnDeviceWeightUpdateSource.take_materialized` does NO I/O. Any other
+    (cloud OTA) update is delegated to ``cloud_loader``; when no cloud loader is
+    wired AND the update is not owned by the on-device source, the composed
+    loader raises so the orchestrator's broad-except logs
+    ``cloud_weight_update_swap_failed`` and leaves the live model untouched
+    (fail-closed) rather than swapping in a bogus engine.
+
+    Args:
+        cloud_loader: The Tier C1 cloud OTA loader (or ``None`` when no cloud
+            loader is wired — the default).
+        on_device_source: The WS-E4 source that pre-materialised the engine.
+
+    Returns:
+        The composed ``(PendingWeightUpdate) -> engine`` loader.
+    """
+
+    def _loader(update: PendingWeightUpdate) -> object:
+        if on_device_source.owns(update):
+            # PURE reference return — the engine was built off the hot loop.
+            return on_device_source.take_materialized(update)
+        if cloud_loader is not None:
+            return cloud_loader(update)
+        msg = (
+            "no loader wired for weight update "
+            f"(engine_type={update.engine_type!r}, revision={update.revision!r})"
+        )
+        raise RuntimeError(msg)
+
+    return _loader
+
+
 def build_failure_recorder(
     cfg: Settings,
     metrics: MetricsRegistry | None = None,
@@ -3006,29 +3062,52 @@ def build_hook_registry(cfg: Settings, journal: Any) -> Any:
 
 
 def build_on_device_coordinator(
-    cfg: Settings, *, metrics: MetricsRegistry | None = None
+    cfg: Settings,
+    *,
+    metrics: MetricsRegistry | None = None,
+    world_model: WorldModelProtocol | None = None,
 ) -> object | None:
     """Build the Phase-6 WS3/WS4 replay-trigger on-device update coordinator.
 
     Returns ``None`` (so the orchestrator stays byte-identical to pre-WS3)
     whenever ``cfg.on_device_learning`` is absent or disabled. When enabled,
     wires the REUSED collaborators: the LMDB replay reader (new-record trigger
-    + batch source), the WS2 :class:`EWCOnlineLearner` over a small candidate
-    model sized to the experience vision-feature dimension, and the SHA-256-
-    stamped :class:`OnDeviceSlotStore` resolved under ``cfg.experience.path``.
+    + sequence-batch source), the WS-E2 :class:`RSSMRefiner` over the LIVE RSSM
+    world model (deep-copied per update so the base stays bitwise-unchanged), and
+    the SHA-256-stamped :class:`OnDeviceSlotStore` resolved under
+    ``cfg.experience.path``.
 
-    WS3 PRODUCES + PERSISTS the candidate slot. WS4 adds the safety-regression
-    gate: after each persist the coordinator scores the candidate vs the live
-    baseline via the world-model rollout-return harness and promotes-or-reverts
-    (marking the slot active on pass, incrementing the revert counter on fail).
-    The gate runs over a config-sized policy STAND-IN through the decoupling
-    :class:`PolicyProtocol`; WS5 swaps the live policy net behind that same seam.
+    WS-E2 REPLACES the pre-ENABLEMENT ``EWCOnlineLearner``-over-``nn.Linear``
+    stand-in: the learner now refines the rover's ACTUAL learned component (the
+    RSSM dynamics MCTS plans through) via ``train_sequence`` over a ``(B, T, ...)``
+    sequence-dict batch, and the persisted slot is a refined RSSM ``state_dict``
+    that round-trips into a fresh ``build_world_model(cfg)``.
+
+    The coordinator PRODUCES + PERSISTS the candidate slot, then the WS-E3
+    safety-regression gate scores candidate-RSSM vs baseline-RSSM on a FIXED
+    held-out replay batch via **reconstruction + KL loss** (``train_sequence``;
+    lower-is-better) and promotes-or-reverts: PROMOTE iff ``candidate_loss <=
+    baseline_loss + regression_tolerance`` (marks the slot active), else REVERT
+    (increments the revert counter). The candidate is the persisted slot loaded
+    into a deep-copy of the live RSSM, so the live model is bitwise-unchanged on
+    both revert AND promote (activation is the separate ``enable_hot_swap`` seam).
+    The self-gaming ``score_policy`` rollout-return metric is NOT used by the gate.
 
     Args:
         cfg: Root settings.
         metrics: Optional shared metrics registry, threaded keyword-only so the
-            WS4 revert counter surfaces on ``/metrics``. ``None`` (the default)
+            revert counter surfaces on ``/metrics``. ``None`` (the default)
             keeps the revert path working without recording a metric.
+        world_model: Optional live world model (the orchestrator's already-built
+            ``build_world_model(cfg)`` result), threaded keyword-only so the gate
+            + refiner act on the REAL model the rover runs. ``None`` (the default)
+            resolves the effective model via ``build_world_model(cfg)`` instead of
+            the old wrong-arch ``RSSM(cfg.model)`` literal. NOTE: ``None`` is NOT
+            unconditionally behaviour-preserving — when the effective engine lacks
+            ``train_sequence`` (e.g. ``DualStreamRSSM`` / ``DualStreamRSSMOnnx``)
+            the capability gate below returns ``None`` and logs
+            ``on_device_refiner_unsupported_engine`` (on-device refinement is
+            only supported for the classic ``RSSM`` engine).
 
     Returns:
         A ``ReplayTriggerCoordinator`` when enabled, else ``None``.
@@ -3037,12 +3116,42 @@ def build_on_device_coordinator(
     if on_device_cfg is None or not on_device_cfg.enabled:
         return None
 
-    import torch.nn as nn
+    # Capability gate: on-device refinement requires ``train_sequence`` (present
+    # on ``RSSM`` but NOT on ``DualStreamRSSM`` / ``DualStreamRSSMOnnx``). Resolve
+    # the effective world model ONCE here (the injected instance, else the one
+    # ``build_world_model(cfg)`` constructs) and thread it down to the gate runner
+    # so it is never built twice. When the effective engine lacks the capability,
+    # disable refinement (return ``None``) instead of wiring an unusable refiner.
+    effective_wm = world_model if world_model is not None else build_world_model(cfg)
+    if not hasattr(effective_wm, "train_sequence"):
+        _log.warning(
+            "on_device_refiner_unsupported_engine",
+            engine_type=type(effective_wm).__name__,
+            hint="active world-model engine lacks train_sequence; on-device refinement disabled",
+        )
+        return None
 
-    from mousedroid.learning.on_device.ewc_online import EWCOnlineLearner
+    import torch
+
     from mousedroid.learning.on_device.replay_trigger import ReplayTriggerCoordinator
+    from mousedroid.learning.on_device.rssm_refiner import RSSMRefiner
     from mousedroid.learning.on_device.slot_store import OnDeviceSlotStore
     from mousedroid.training.replay.lmdb_reader import LMDBReplayReader
+    from mousedroid.world_model.rssm import RSSM
+
+    # The capability gate above guarantees ``train_sequence`` — which only the
+    # plain ``RSSM`` exposes (``DualStreamRSSM`` / the ONNX engine do not). Narrow
+    # to the concrete ``RSSM`` so the refiner + sequence-batch builder are
+    # statically typed (``.cfg`` / ``.encoder`` / ``train_sequence``) with no
+    # suppression. A surprise non-RSSM engine that nonetheless carries a
+    # ``train_sequence`` attribute disables refinement rather than crashing.
+    if not isinstance(effective_wm, RSSM):
+        _log.warning(
+            "on_device_refiner_unsupported_engine",
+            engine_type=type(effective_wm).__name__,
+            hint="train_sequence present but engine is not a concrete RSSM; refinement disabled",
+        )
+        return None
 
     # Mirror the main replay path's reader construction (see build above) so the
     # on-device trigger honours any ``cfg.training.replay.source_path`` override
@@ -3054,25 +3163,62 @@ def build_on_device_coordinator(
     )
     slot_store = OnDeviceSlotStore(experience_cfg=cfg.experience, on_device_cfg=on_device_cfg)
 
-    # Candidate model: a small stand-in sized to the configured vision-feature
-    # dimension (``cfg.camera.feature_dim`` — the same width the experience
-    # vision features are produced at). WS5 swaps this for the live
-    # policy/world-model network.
-    input_dim = int(cfg.camera.feature_dim)
-    candidate_model = nn.Sequential(nn.Linear(input_dim, input_dim))
-    learner = EWCOnlineLearner(on_device_cfg, candidate_model)
+    # WS-E2: the learner refines the LIVE RSSM world model (deep-copied per
+    # update so the base is bitwise-unchanged) via ``train_sequence`` — replacing
+    # the pre-ENABLEMENT ``nn.Linear`` stand-in over ``EWCOnlineLearner``. The
+    # refined RSSM ``state_dict`` round-trips into a fresh ``build_world_model``.
+    learner = RSSMRefiner(effective_wm, on_device_cfg)
 
-    cap = on_device_cfg.trigger_min_new_records
+    # The sequence batch is partitioned into ``refine_batch_episodes`` windows of
+    # ``refine_sequence_length`` consecutive steps, so the loader must draw at
+    # least that many records; ``trigger_min_new_records`` is the trigger gate,
+    # not the batch size. Cap the scan at whichever is larger so the batch is
+    # always fillable once the trigger fires.
+    seq_len = on_device_cfg.refine_sequence_length
+    n_episodes = on_device_cfg.refine_batch_episodes
+    needed = n_episodes * seq_len
+    cap = max(on_device_cfg.trigger_min_new_records, needed)
+
+    # Resolve the model's device so the assembled batch lands where the refiner's
+    # candidate (a deep-copy of ``effective_wm``) lives — never a hardcoded CPU.
+    first_param = next(effective_wm.parameters(), None)
+    device = first_param.device if first_param is not None else torch.device("cpu")
+    encoder = effective_wm.encoder
+    model_cfg = effective_wm.cfg
 
     def _count_new_records() -> int:
         """Count records currently in the replay store (slow-cadence probe)."""
         return _count_replay_records(reader, cap)
 
-    def _load_batch() -> Tensor:
-        """Materialise one training batch tensor from replay vision-features."""
-        return _load_replay_batch(reader, input_dim, cap)
+    def _load_batch() -> dict[str, Tensor]:
+        """Materialise one ``(B, T, ...)`` sequence-dict batch from replay.
 
-    gate_runner = _build_on_device_gate_runner(cfg, slot_store=slot_store, metrics=metrics)
+        Returns an EMPTY dict when the store holds fewer than
+        ``refine_batch_episodes * refine_sequence_length`` records — the
+        coordinator's dict-aware empty-check treats that as a safe skip.
+        """
+        return _load_replay_sequence_batch(
+            reader,
+            model_cfg,
+            encoder,
+            sequence_length=seq_len,
+            n_episodes=n_episodes,
+            cap=cap,
+            device=device,
+        )
+
+    gate_runner = _build_on_device_gate_runner(
+        cfg,
+        slot_store=slot_store,
+        metrics=metrics,
+        world_model=effective_wm,
+        reader=reader,
+        model_cfg=model_cfg,
+        encoder=encoder,
+        device=device,
+        refine_sequence_length=seq_len,
+        refine_n_episodes=n_episodes,
+    )
 
     return ReplayTriggerCoordinator(
         cfg=on_device_cfg,
@@ -3084,60 +3230,281 @@ def build_on_device_coordinator(
     )
 
 
+def build_on_device_hot_swap_source(
+    cfg: Settings,
+    *,
+    world_model: WorldModelProtocol | None = None,
+    metrics: MetricsRegistry | None = None,
+) -> OnDeviceWeightUpdateSource | None:
+    """Build the WS-E4 off-loop hot-swap source for a promoted on-device slot.
+
+    Returns ``None`` (so the orchestrator is byte-identical to #134 — NO swap
+    path wired AT ALL) whenever:
+
+    * ``cfg.on_device_learning`` is absent / disabled, OR
+    * ``cfg.on_device_learning.enable_hot_swap`` is ``False`` (the default —
+      promotion via ``mark_active`` stays SEPARATE from activation), OR
+    * the live world-model engine is not a concrete ``RSSM`` (a same-cfg strict
+      ``load_state_dict`` round-trip is only defined for the engine the slot was
+      refined from; ``DualStreamRSSM`` / the ONNX engine cannot accept an RSSM
+      ``state_dict``, mirroring the coordinator's capability gate).
+
+    When enabled, wires a :class:`OnDeviceWeightUpdateSource` whose injected
+    materialiser does the SLOW work OFF the hot loop: it reconstructs the
+    ``CandidateSlot`` from the active digest, ``slot_store.load`` re-verifies the
+    SHA-256 (raising :class:`SlotIntegrityError` on a corrupt slot — fail-closed),
+    builds a fresh engine via :func:`build_world_model`, strict-loads the slot's
+    weights, and places it on the SAME device as the live ``world_model`` (NEVER
+    ``cuda-if-available`` like ``load_rssm_with_migration`` — else the
+    orchestrator's ``zeros_like(self._h)`` reset is a cross-device op). The
+    hot-loop loader then only returns this already-constructed engine.
+
+    Args:
+        cfg: Root settings.
+        world_model: The live world model (the orchestrator's already-built
+            ``build_world_model(cfg)`` result), threaded so the swap engine is
+            materialised on the SAME device + architecture. ``None`` resolves it
+            via ``build_world_model(cfg)`` (used by unit tests).
+        metrics: Optional shared metrics registry, threaded so the off-loop
+            ``integrity_mismatch`` revert counter surfaces on ``/metrics``.
+
+    Returns:
+        An :class:`OnDeviceWeightUpdateSource` when hot-swap is enabled + the
+        engine is a concrete ``RSSM``, else ``None``.
+    """
+    on_device_cfg = cfg.on_device_learning
+    if on_device_cfg is None or not on_device_cfg.enabled or not on_device_cfg.enable_hot_swap:
+        return None
+
+    import torch
+
+    from mousedroid.learning.on_device.hot_swap import OnDeviceWeightUpdateSource
+    from mousedroid.learning.on_device.slot_store import CandidateSlot, OnDeviceSlotStore
+    from mousedroid.world_model.rssm import RSSM
+
+    effective_wm = world_model if world_model is not None else build_world_model(cfg)
+    if not isinstance(effective_wm, RSSM):
+        # A same-cfg strict state_dict round-trip is only defined for the classic
+        # RSSM engine; disable activation rather than wiring an unusable swap.
+        _log.warning(
+            "on_device_hot_swap_unsupported_engine",
+            engine_type=type(effective_wm).__name__,
+            hint="hot-swap activation requires a concrete RSSM engine; disabled",
+        )
+        return None
+
+    slot_store = OnDeviceSlotStore(experience_cfg=cfg.experience, on_device_cfg=on_device_cfg)
+
+    # Resolve the live model's device ONCE so every materialised engine lands
+    # where the live recurrent state lives (device parity contract).
+    first_param = next(effective_wm.parameters(), None)
+    device = first_param.device if first_param is not None else torch.device("cpu")
+
+    def _materialize(digest: str) -> object:
+        """OFF-loop: reconstruct the slot, re-verify, build + device-place the engine.
+
+        Runs inside the source's ``asyncio.to_thread`` so the blocking
+        ``torch.load`` + ``build_world_model`` never touches the event loop.
+        Raises :class:`SlotIntegrityError` (out of ``slot_store.load``) on a
+        corrupt slot so the source fails closed + counts ``integrity_mismatch``.
+        """
+        # load_active() returns a DIGEST STRING — reconstruct the content-
+        # addressed CandidateSlot and load via the store (re-verifies SHA-256).
+        slot = CandidateSlot(path=slot_store.slot_dir / f"{digest}{_SLOT_PT_SUFFIX}", digest=digest)
+        state_dict = slot_store.load(slot)
+        engine = build_world_model(cfg)
+        # Narrow to the concrete ``RSSM`` so ``load_state_dict`` / ``to`` / ``eval``
+        # (nn.Module surface) type-check WITHOUT a suppression. Same engine the
+        # source's capability gate already confirmed for the live model, so this
+        # only differs if ``build_world_model`` is non-deterministic (a real bug).
+        if not isinstance(engine, RSSM):
+            msg = f"hot-swap materialise built a non-RSSM engine: {type(engine).__name__}"
+            raise RuntimeError(msg)
+        # Same-cfg slot ⇒ STRICT load (NOT load_rssm_with_migration, which forces
+        # cuda-if-available + tolerates dim drift). A dim mismatch here is a real
+        # bug that must surface, not be silently migrated.
+        engine.load_state_dict(state_dict, strict=True)
+        engine.to(device)
+        engine.eval()
+        return engine
+
+    _log.info(
+        "on_device_hot_swap_source_wired",
+        check_interval_s=on_device_cfg.check_interval_s,
+        device=str(device),
+    )
+    return OnDeviceWeightUpdateSource(
+        slot_store=slot_store,
+        materialize=_materialize,
+        check_interval_s=on_device_cfg.check_interval_s,
+        metrics=metrics,
+    )
+
+
 def _build_on_device_gate_runner(
     cfg: Settings,
     *,
     slot_store: OnDeviceSlotStore,
     metrics: MetricsRegistry | None,
+    world_model: RSSM,
+    reader: LMDBReplayReader | None = None,
+    model_cfg: ModelConfig,
+    encoder: MultimodalEncoder,
+    device: torch.device,
+    refine_sequence_length: int,
+    refine_n_episodes: int,
 ) -> Callable[[CandidateSlot], None]:
-    """Build the WS4 safety-regression gate-runner closure.
+    """Build the WS-E3 RSSM-vs-RSSM recon-loss safety-gate runner closure.
 
-    Constructs the REUSED world model, a deterministic set of seed states (count
-    driven by ``held_out_fraction`` so the gate honours the held-out-slice knob)
-    and a config-sized policy STAND-IN, then returns a closure that scores a
-    persisted candidate slot vs the live baseline and promotes-or-reverts it.
+    Scores a refined candidate **RSSM** against the live baseline **RSSM** by
+    their held-out reconstruction+KL loss (``score_dynamics``) on a SHARED FIXED
+    held-out ``(B, T, ...)`` batch with SHARED reconstruction heads. This REPLACES
+    the pre-ENABLEMENT path which scored config-sized ``StateDictPolicyAdapter``
+    stand-ins by their imagined return — a metric that SELF-GAMED on reward-head
+    inflation (proven in the WS-E-SPIKE; ``score_policy`` retired from the gate).
 
-    The candidate vs baseline distinction is the WS5 seam: today both adapters
-    wrap the same stand-in policy net (so the end-to-end gate path runs now), and
-    WS5 will load the persisted slot's weights into the candidate adapter and the
-    live policy into the baseline adapter behind the SAME :class:`PolicyProtocol`.
+    The candidate is the persisted slot's refined weights loaded (per evaluation)
+    into a DEEP COPY of the live RSSM; the baseline is the live RSSM's current
+    weights. Loading into a copy keeps the live model bitwise-unchanged — a revert
+    leaves the running brain untouched, a promote only marks the slot active
+    (activation is the separate ``enable_hot_swap`` WS-E4 seam).
+
+    The held-out batch is built ONCE here over a held-out replay slice DISJOINT
+    from the refine batch (the refine batch reads the FIRST
+    ``refine_n_episodes * refine_sequence_length`` records; the held-out window is
+    drawn from the records AFTER it). When the store holds too few records for a
+    disjoint held-out window the gate is a NO-OP (logged) so a fresh/sparse Jetson
+    never crashes — promotion simply waits for more experience.
 
     Args:
         cfg: Root settings.
-        slot_store: The slot store whose ``mark_active`` is called on PROMOTE.
+        slot_store: The slot store whose ``mark_active`` is called on PROMOTE and
+            whose ``load`` deserialises the persisted candidate slot.
         metrics: Optional revert counter.
+        world_model: The live concrete ``RSSM`` baseline (narrowed by the
+            ``build_on_device_coordinator`` capability gate). Deep-copied per
+            evaluation to materialise the candidate so the live model is never
+            mutated.
+        reader: The LMDB replay reader used to source the FIXED held-out batch.
+            ``None`` ⇒ no held-out batch ⇒ the gate runner is a logged no-op.
+        model_cfg: The live model config supplying per-modality dims.
+        encoder: The live world-model encoder whose ``*_enabled`` flags drive the
+            held-out batch's mask length + modality tensors.
+        device: The device the live model lives on (where the batch + decoders +
+            candidate copy are placed).
+        refine_sequence_length: ``T`` of the refine batch windows (so the held-out
+            window is drawn DISJOINT, after the refine window).
+        refine_n_episodes: ``B`` of the refine batch (the refine window spans the
+            first ``refine_n_episodes * refine_sequence_length`` records).
 
     Returns:
         A ``(CandidateSlot) -> None`` closure invoked by the coordinator after
         persist (offloaded off the event loop).
     """
+    import copy
+
     import torch
-    import torch.nn as nn
 
     from mousedroid.learning.on_device.regression_gate import RegressionGate
-    from mousedroid.learning.on_device.scoring import StateDictPolicyAdapter
-    from mousedroid.world_model.rssm import RSSM
+    from mousedroid.learning.on_device.slot_store import SlotIntegrityError
+    from mousedroid.world_model.rssm import RawModalityDecoders
 
     on_device_cfg = cfg.on_device_learning
     if on_device_cfg is None:
         # Caller-guarded; explicit check (no assert — stripped under -O).
-        msg = "on_device_learning config required to build the WS4 gate runner"
+        msg = "on_device_learning config required to build the WS-E3 gate runner"
         raise ValueError(msg)
 
-    world_model = RSSM(cfg.model)
     world_model.eval()
-    hidden_dim = cfg.model.hidden_dim
-    latent_dim = cfg.model.latent_dim
-    action_dim = cfg.model.action_dim
 
-    # Deterministic seed states. Their COUNT is driven by ``held_out_fraction``
-    # over the trigger window so the held-out-slice knob is honoured; the exact
-    # latent VALUES come from the fixed ``scoring_seed`` so the score is
-    # reproducible. WS5 sources these by encoding a held-out replay slice through
-    # the world model instead of sampling latents directly.
-    n_seed = max(1, int(on_device_cfg.held_out_fraction * on_device_cfg.trigger_min_new_records))
-    gen = torch.Generator().manual_seed(on_device_cfg.scoring_seed)
-    seed_states = [
+    # Build the FIXED held-out batch ONCE over a slice DISJOINT from the refine
+    # batch. ``score_dynamics`` correctness depends on a representative, fixed
+    # held-out set, so the gate is scored against the SAME batch every cycle.
+    held_out_batch = _build_held_out_sequence_batch(
+        reader,
+        model_cfg,
+        encoder,
+        sequence_length=refine_sequence_length,
+        n_episodes=refine_n_episodes,
+        refine_offset=refine_n_episodes * refine_sequence_length,
+        device=device,
+    )
+
+    # SHARED reconstruction heads: the SAME instance scores baseline AND candidate
+    # (recon heads are external to the RSSM ``state_dict``; scoring against
+    # different heads is meaningless). Seed the head init so the held-out gate is
+    # reproducible across process restarts.
+    torch.manual_seed(on_device_cfg.scoring_seed)
+    decoders = RawModalityDecoders(model_cfg).to(device)
+
+    if held_out_batch is None:
+        # No disjoint held-out window available (no reader / too few records): the
+        # gate cannot score, so it is a safe no-op. Promotion waits for more
+        # experience rather than scoring against an unrepresentative / empty batch.
+        def _noop_gate(slot: CandidateSlot) -> None:
+            _log.warning(
+                "on_device_gate_skipped_no_held_out_batch",
+                digest=slot.digest,
+                hint="no disjoint held-out replay window available; candidate left unpromoted",
+            )
+
+        return _noop_gate
+
+    gate = RegressionGate(
+        cfg=on_device_cfg,
+        slot_store=slot_store,
+        metrics=metrics,
+        held_out_batch=held_out_batch,
+        decoders=decoders,
+    )
+
+    def _run_gate(slot: CandidateSlot) -> None:
+        # Materialise the candidate by loading the refined slot weights into a
+        # DEEP COPY of the live RSSM — the live baseline stays bitwise-unchanged.
+        # A corrupt slot fails its SHA-256 check on load → count integrity_mismatch
+        # and leave the slot unpromoted (fail-closed; the C1 swap is never reached).
+        try:
+            candidate_state_dict = slot_store.load(slot)
+        except SlotIntegrityError:
+            if metrics is not None:
+                metrics.inc_on_device_learning_reverted("integrity_mismatch")
+            _log.warning("on_device_gate_slot_integrity_mismatch", digest=slot.digest)
+            return
+        candidate = copy.deepcopy(world_model)
+        candidate.load_state_dict(candidate_state_dict, strict=True)
+        candidate.to(device)
+        candidate.eval()
+        gate.evaluate(candidate_world_model=candidate, baseline_world_model=world_model, slot=slot)
+
+    return _run_gate
+
+
+def _build_sampled_seed_states(
+    hidden_dim: int,
+    latent_dim: int,
+    n_seed: int,
+    *,
+    seed: int,
+) -> list[tuple[Tensor, Tensor]]:
+    """Build the #134 ``manual_seed``-sampled seed states (default path).
+
+    Kept byte-identical to the pre-WS-E1 inline implementation: a single
+    ``torch.Generator`` seeded with ``seed`` draws every ``(h, z)`` pair, so the
+    same seed + same dims ALWAYS yield identical seed states.
+
+    Args:
+        hidden_dim: RSSM hidden-state width.
+        latent_dim: RSSM latent width.
+        n_seed: Number of seed states to draw.
+        seed: Fixed generator seed (``scoring_seed``).
+
+    Returns:
+        A list of ``n_seed`` ``(h, z)`` pairs (each ``(1, dim)``) on CPU.
+    """
+    import torch
+
+    gen = torch.Generator().manual_seed(seed)
+    return [
         (
             torch.randn(1, hidden_dim, generator=gen),
             torch.randn(1, latent_dim, generator=gen),
@@ -3145,34 +3512,71 @@ def _build_on_device_gate_runner(
         for _ in range(n_seed)
     ]
 
-    # Candidate + baseline MUST wrap SEPARATE module instances. Aliasing one
-    # net would mean loading the candidate slot's weights mutates the baseline
-    # in place, collapsing the regression delta to zero. The live-net wiring
-    # (loading the persisted slot into the candidate, the live policy into the
-    # baseline) stays a documented WS5+ seam; here we only ensure the two
-    # stand-in adapters never alias.
-    baseline_net = nn.Linear(hidden_dim + latent_dim, action_dim)
-    candidate_net = nn.Linear(hidden_dim + latent_dim, action_dim)
-    baseline_adapter = StateDictPolicyAdapter(
-        baseline_net, hidden_dim=hidden_dim, latent_dim=latent_dim, action_dim=action_dim
-    )
-    # WS5 seam: load the persisted slot's weights into ``candidate_net`` here.
-    candidate_adapter = StateDictPolicyAdapter(
-        candidate_net, hidden_dim=hidden_dim, latent_dim=latent_dim, action_dim=action_dim
-    )
 
-    gate = RegressionGate(
-        cfg=on_device_cfg,
-        slot_store=slot_store,
-        metrics=metrics,
-        world_model=world_model,
-        seed_states=seed_states,
-    )
+def _build_replay_encoded_seed_states(
+    world_model: WorldModelProtocol,
+    *,
+    reader: LMDBReplayReader | None,
+    n_seed: int,
+) -> list[tuple[Tensor, Tensor]]:
+    """Source seed states by encoding a held-out replay slice (WS-E1).
 
-    def _run_gate(slot: CandidateSlot) -> None:
-        gate.evaluate(candidate=candidate_adapter, baseline=baseline_adapter, slot=slot)
+    Loads up to ``n_seed`` records via ``reader`` (off the event loop through
+    :func:`_run_coro_blocking`) and rolls them through the live world model's
+    ``observe_step`` via
+    :func:`~mousedroid.learning.on_device.seed_states.encode_seed_states`. Returns
+    an empty list (so the caller falls back to the sampled path) when no reader is
+    wired or the replay store is empty.
 
-    return _run_gate
+    The world model is guaranteed to be a concrete ``RSSM`` here: the
+    ``build_on_device_coordinator`` capability gate disables the coordinator
+    entirely when the engine lacks ``train_sequence`` (e.g. ``DualStreamRSSM``),
+    so the ``observe_step`` + ``.encoder`` + ``.cfg`` surface is present.
+
+    Args:
+        world_model: The live world model whose encoder + posterior produce the
+            latent states.
+        reader: The LMDB replay reader (or ``None`` ⇒ empty list).
+        n_seed: Maximum number of seed states to encode.
+
+    Returns:
+        A list of up to ``n_seed`` ``(h, z)`` seed-state pairs; empty when the
+        replay slice is empty or no reader is available.
+    """
+    import torch
+
+    from mousedroid.learning.on_device.seed_states import encode_seed_states
+    from mousedroid.world_model.rssm import RSSM
+
+    # The capability gate guarantees a concrete ``RSSM`` (engines without
+    # ``train_sequence`` disable the coordinator). Narrow explicitly so the
+    # ``encode_seed_states`` call is statically typed without a suppression; an
+    # unexpected non-RSSM engine falls back to the sampled path rather than crash.
+    if reader is None or not isinstance(world_model, RSSM):
+        _log.warning(
+            "on_device_seed_states_replay_unavailable",
+            n_seed=n_seed,
+            has_reader=reader is not None,
+            engine_type=type(world_model).__name__,
+        )
+        return []
+
+    async def _run() -> list[MouseDroidExperienceRecord]:
+        rows: list[MouseDroidExperienceRecord] = []
+        async for chunk in reader.stream(chunk_size=n_seed):
+            rows.extend(chunk)
+            if len(rows) >= n_seed:
+                break
+        return rows[:n_seed]
+
+    records = _run_coro_blocking(_run())
+
+    # Resolve the world model's device so the encoded ``(h, z)`` match the model
+    # the gate scores against (never a hardcoded CPU).
+    first_param = next(world_model.parameters(), None)
+    device = first_param.device if first_param is not None else torch.device("cpu")
+
+    return encode_seed_states(world_model, records, n_seed, device=device)
 
 
 def _run_coro_blocking(coro: Coroutine[Any, Any, _CoroResult]) -> _CoroResult:
@@ -3255,6 +3659,147 @@ def _load_replay_batch(reader: LMDBReplayReader, input_dim: int, cap: int) -> Te
         [np.resize(np.asarray(rec.vision_features, dtype=np.float32), input_dim) for rec in records]
     )
     return torch.from_numpy(matrix)
+
+
+def _load_replay_sequence_batch(
+    reader: LMDBReplayReader,
+    model_cfg: ModelConfig,
+    encoder: MultimodalEncoder,
+    *,
+    sequence_length: int,
+    n_episodes: int,
+    cap: int,
+    device: torch.device,
+) -> dict[str, Tensor]:
+    """Build a ``(B, T, ...)`` RSSM sequence batch from replay (WS-E2 path).
+
+    Reads up to ``cap`` records off the event loop (via :func:`_run_coro_blocking`)
+    and assembles them into the sequence-dict batch
+    :meth:`mousedroid.world_model.rssm.RSSM.train_sequence` expects through
+    :func:`mousedroid.learning.on_device.rssm_refiner.build_sequence_batch`.
+
+    Returns an EMPTY dict when the store holds fewer than
+    ``n_episodes * sequence_length`` records — too few to fill even one batch.
+    The coordinator's dict-aware empty-check treats an empty dict as a safe skip
+    (``on_device_trigger_empty_batch``), so a fresh / sparse Jetson never crashes
+    the refiner.
+
+    Args:
+        reader: The LMDB replay reader.
+        model_cfg: The model config supplying per-modality dims.
+        encoder: The live world-model encoder whose ``*_enabled`` flags drive the
+            mask length + assembled modality tensors.
+        sequence_length: Temporal length ``T`` of each window.
+        n_episodes: Batch dimension ``B`` (number of windows).
+        cap: Maximum records to draw from the store.
+        device: Device on which to place every assembled tensor (the refiner's
+            candidate device).
+
+    Returns:
+        A ``(B, T, ...)`` sequence-dict batch, or an empty dict when the store
+        holds too few records to fill one batch.
+    """
+    from mousedroid.learning.on_device.rssm_refiner import build_sequence_batch
+
+    needed = n_episodes * sequence_length
+
+    async def _run() -> list[MouseDroidExperienceRecord]:
+        rows: list[MouseDroidExperienceRecord] = []
+        async for chunk in reader.stream(chunk_size=cap):
+            rows.extend(chunk)
+            if len(rows) >= cap:
+                break
+        return rows[:cap]
+
+    records = _run_coro_blocking(_run())
+    if len(records) < needed:
+        _log.debug(
+            "on_device_replay_sequence_below_batch",
+            have=len(records),
+            needed=needed,
+            n_episodes=n_episodes,
+            sequence_length=sequence_length,
+        )
+        return {}
+    return build_sequence_batch(
+        records,
+        model_cfg,
+        encoder,
+        sequence_length=sequence_length,
+        n_episodes=n_episodes,
+        device=device,
+    )
+
+
+def _build_held_out_sequence_batch(
+    reader: LMDBReplayReader | None,
+    model_cfg: ModelConfig,
+    encoder: MultimodalEncoder,
+    *,
+    sequence_length: int,
+    n_episodes: int,
+    refine_offset: int,
+    device: torch.device,
+) -> dict[str, Tensor] | None:
+    """Build the FIXED WS-E3 gate held-out batch DISJOINT from the refine batch.
+
+    The refine batch consumes the FIRST ``refine_offset``
+    (``= refine_n_episodes * refine_sequence_length``) records. To score the gate
+    on data the refiner did NOT train on, the held-out batch is assembled from the
+    records AFTER that window: this reads up to ``refine_offset + needed`` records
+    and partitions the trailing ``needed`` of them into the held-out ``(B, T, ...)``
+    windows.
+
+    Args:
+        reader: The LMDB replay reader (``None`` ⇒ ``None`` returned).
+        model_cfg: The model config supplying per-modality dims.
+        encoder: The live world-model encoder whose ``*_enabled`` flags drive the
+            mask length + assembled modality tensors.
+        sequence_length: Temporal length ``T`` of each held-out window.
+        n_episodes: Batch dimension ``B`` of the held-out batch.
+        refine_offset: Number of leading records the refine batch consumes; the
+            held-out window starts immediately after these.
+        device: Device on which to place every assembled tensor.
+
+    Returns:
+        A FIXED ``(B, T, ...)`` held-out sequence-dict batch, or ``None`` when no
+        reader is wired or the store holds too few records for a disjoint window.
+    """
+    if reader is None:
+        return None
+
+    from mousedroid.learning.on_device.rssm_refiner import build_sequence_batch
+
+    needed = n_episodes * sequence_length
+    cap = refine_offset + needed
+
+    async def _run() -> list[MouseDroidExperienceRecord]:
+        rows: list[MouseDroidExperienceRecord] = []
+        async for chunk in reader.stream(chunk_size=cap):
+            rows.extend(chunk)
+            if len(rows) >= cap:
+                break
+        return rows[:cap]
+
+    records = _run_coro_blocking(_run())
+    held_out = records[refine_offset : refine_offset + needed]
+    if len(held_out) < needed:
+        _log.warning(
+            "on_device_gate_held_out_below_batch",
+            have=len(held_out),
+            needed=needed,
+            refine_offset=refine_offset,
+            total_records=len(records),
+        )
+        return None
+    return build_sequence_batch(
+        held_out,
+        model_cfg,
+        encoder,
+        sequence_length=sequence_length,
+        n_episodes=n_episodes,
+        device=device,
+    )
 
 
 def build_orchestrator(cfg: Settings) -> object:
@@ -3528,8 +4073,46 @@ def build_orchestrator(cfg: Settings) -> object:
     # byte-identical to pre-WS3); otherwise a slow-cadence background task
     # producing stamped candidate slots and (WS4) running the safety-regression
     # gate. The shared metrics registry is threaded so the WS4 revert counter
-    # surfaces on ``/metrics``.
-    on_device_coordinator = build_on_device_coordinator(cfg, metrics=metrics_registry)
+    # surfaces on ``/metrics``; the already-built live world model ``wm`` is
+    # threaded so the gate scores against the REAL model architecture (Phase-6
+    # ENABLEMENT) instead of a wrong-arch ``RSSM(cfg.model)`` literal.
+    on_device_coordinator = build_on_device_coordinator(
+        cfg, metrics=metrics_registry, world_model=wm
+    )
+
+    # Phase 6 WS-E4 — off-loop hot-swap of a PROMOTED on-device slot. ``None``
+    # (default) when ``cfg.on_device_learning.enable_hot_swap`` is ``False`` — NO
+    # swap path is wired AT ALL, so the orchestrator is byte-identical to #134
+    # (promotion via ``mark_active`` stays SEPARATE from activation). When
+    # enabled, the source watches the active slot on its OWN slow-cadence task,
+    # materialises the device-correct engine OFF the hot loop, and surfaces it as
+    # a ``world_model`` ``PendingWeightUpdate`` so the existing C1 atomic-swap
+    # seam (``_apply_pending_weight_update``) applies it as a PURE reference
+    # assignment. The live ``wm`` is threaded so the swap engine lands on the
+    # SAME device + architecture (device-parity contract).
+    on_device_hot_swap_source = build_on_device_hot_swap_source(
+        cfg, world_model=wm, metrics=metrics_registry
+    )
+    if on_device_hot_swap_source is not None:
+        merged_pollers: dict[str, WeightUpdatePollerProtocol] = dict(weight_update_pollers)
+        if ENGINE_TYPE_WORLD_MODEL in merged_pollers:
+            # A cloud OTA world-model poller and the on-device hot-swap source
+            # both target the ``world_model`` engine slot; they are mutually
+            # exclusive activation paths. The on-device source takes the slot
+            # (the rover production overlay disables cloud OTA, so this only fires
+            # in a misconfigured both-on deployment — logged loudly, never silent).
+            _log.warning(
+                "on_device_hot_swap_supersedes_cloud_world_model_poller",
+                reason="enable_hot_swap=true claims the world_model swap slot",
+            )
+        merged_pollers[ENGINE_TYPE_WORLD_MODEL] = on_device_hot_swap_source
+        weight_update_pollers = merged_pollers
+        # Compose the loader so the hot-loop swap returns the source's PRE-
+        # materialised engine for on-device updates (pure reference return, no
+        # tick I/O) and delegates any cloud update to the cloud loader.
+        weight_update_loader = _compose_weight_update_loader(
+            weight_update_loader, on_device_hot_swap_source
+        )
 
     orchestrator = MouseDroidOrchestrator(
         world_model=wm,
