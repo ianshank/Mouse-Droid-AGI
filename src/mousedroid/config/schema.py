@@ -705,6 +705,79 @@ class LearningConfig(BaseModel):
     progressive_enabled: bool = Field(False, description="Enable progressive column growth")
 
 
+class OnDeviceLearningConfig(BaseModel):
+    """On-device incremental-learning configuration (Phase 6).
+
+    Lets the rover update its own policy/world-model weights *between* cloud
+    retraining cycles from fresh on-device experience, gated by a
+    safety-regression bound that reverts to cloud weights on underperformance.
+    Default-OFF and backwards-compatible — wired as an ``Optional`` block on
+    ``Settings`` so existing YAML loads byte-identically. Every value is
+    config-driven; ``slot_dir`` is deliberately repo-relative (resolved by the
+    factory/orchestrator under the configured experience root
+    ``ExperienceConfig.path``) so NO absolute host path is hardcoded.
+    """
+
+    enabled: bool = Field(
+        False,
+        description="Master switch for the on-device incremental-learning loop (default-off)",
+    )
+    trigger_min_new_records: int = Field(
+        500,
+        gt=0,
+        description=(
+            "Minimum fresh experience records that must accumulate before an "
+            "on-device update cycle is triggered"
+        ),
+    )
+    update_steps: int = Field(
+        50,
+        gt=0,
+        description="Number of bounded gradient steps per on-device update cycle",
+    )
+    regression_tolerance: float = Field(
+        0.05,
+        ge=0,
+        description=(
+            "Maximum allowed score drop below the cloud baseline before the "
+            "on-device update is reverted (ge=0 permits a zero-tolerance gate)"
+        ),
+    )
+    held_out_fraction: float = Field(
+        0.1,
+        gt=0,
+        le=1,
+        description=(
+            "Fraction of the replay sample held out to score the updated policy "
+            "against the cloud baseline in the regression gate (0 < f <= 1)"
+        ),
+    )
+    ewc_lambda: float = Field(
+        1.0,
+        ge=0,
+        description=(
+            "EWC Fisher-penalty strength for the bounded online update "
+            "(ge=0 permits an unregularized step)"
+        ),
+    )
+    learning_rate: float = Field(
+        1e-4,
+        gt=0,
+        description="Learning rate for the bounded on-device gradient steps",
+    )
+    slot_dir: str = Field(
+        "on_device_slot",
+        description=(
+            "Repo-relative leaf for the on-device weight slot. NOT an absolute "
+            "host path: the factory/orchestrator resolves it UNDER the configured "
+            "experience root (``<ExperienceConfig.path>/<slot_dir>``) so any "
+            "operator override of the experience path is inherited for free. "
+            "On-device-updated weights land here, never overwriting the "
+            "cloud-pulled slot."
+        ),
+    )
+
+
 class LLMConfig(BaseModel):
     """LLM Gateway configuration for NL command interface."""
 
@@ -1534,6 +1607,15 @@ class MetricsConfig(BaseModel):
             "Expose MCP server metrics: request counter, per-tool call "
             "counter (label: tool, result), and request latency histogram. "
             "Emitted only when the MCP server is actually built — safe to "
+            "leave on."
+        ),
+    )
+    track_on_device_learning: bool = Field(
+        True,
+        description=(
+            "Expose the Phase-6 on-device-learning revert counter "
+            "(label: reason). Pure-add: omitted from /metrics until the first "
+            "revert, so default deployments render byte-identically. Safe to "
             "leave on."
         ),
     )
@@ -4979,6 +5061,15 @@ class Settings(BaseSettings):
         ),
     )
     offline_rl: OfflineRLConfig = Field(default_factory=_settings_default_factory(OfflineRLConfig))
+    on_device_learning: OnDeviceLearningConfig | None = Field(
+        None,
+        description=(
+            "Phase-6 on-device incremental-learning block. ``None`` (default) "
+            "disables — existing YAML loads byte-identical. Populate with "
+            "``enabled: true`` to let the rover update its own weights between "
+            "cloud retraining cycles, gated by a safety-regression auto-revert."
+        ),
+    )
     observability: ObservabilityConfig | None = Field(
         None,
         description=(
