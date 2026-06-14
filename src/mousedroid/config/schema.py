@@ -4851,6 +4851,18 @@ class GreetingConfig(BaseModel):
             "blocks orchestrator startup."
         ),
     )
+    startup_timeout_s: float = Field(
+        10.0,
+        gt=0,
+        description=(
+            "Issue #109. Upper bound (seconds) on the one-shot startup greeting "
+            "fired in ``start()``. The greeting is wrapped in "
+            "``asyncio.wait_for`` so a hung TTS engine / blocked ALSA device can "
+            "never wedge orchestrator bring-up — on timeout the greeting is "
+            "abandoned (and logged) and the control loop starts anyway. Default "
+            "10.0s keeps pre-#109 YAML loading unchanged."
+        ),
+    )
 
     @model_validator(mode="after")
     def _require_names_when_enabled(self) -> GreetingConfig:

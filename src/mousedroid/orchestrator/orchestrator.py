@@ -484,7 +484,20 @@ class MouseDroidOrchestrator:
         ):
             return
         try:
-            await self._greeter.greet()
+            # Bound the greeting with a config-driven timeout: a hung TTS engine
+            # or blocked ALSA device must never wedge bring-up, since this runs
+            # before the 30 Hz loop starts. On timeout the greeting is abandoned
+            # and startup proceeds.
+            await asyncio.wait_for(
+                self._greeter.greet(),
+                timeout=greeting_cfg.startup_timeout_s,
+            )
+        except TimeoutError:
+            _log.warning(
+                "greeting_startup_timeout",
+                timeout_s=greeting_cfg.startup_timeout_s,
+            )
+            return
         except Exception:  # pylint: disable=broad-except
             # A flaky speaker / TTS must never crash bring-up.
             _log.warning("greeting_startup_failed", exc_info=True)

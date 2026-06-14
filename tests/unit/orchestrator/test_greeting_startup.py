@@ -13,6 +13,7 @@ construction discipline of ``test_orchestrator_face.py``.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
@@ -117,6 +118,37 @@ async def test_greeting_failure_never_blocks_startup() -> None:
     events = [e["event"] for e in logs]
     assert "greeting_startup_failed" in events
     # Startup completed despite the greeting failure.
+    assert orch._running is True
+
+
+@pytest.mark.asyncio
+async def test_greeting_hang_is_bounded_and_never_blocks_startup() -> None:
+    """A hung TTS/ALSA greeting is abandoned at ``startup_timeout_s``.
+
+    Pins the Issue-#109 review fix: ``greet()`` is wrapped in
+    ``asyncio.wait_for`` so an indefinitely-blocking greeting can never wedge
+    the orchestrator before its 30 Hz loop starts. Version-agnostic: the bound
+    surfaces as ``greeting_startup_timeout`` (py3.11+, ``TimeoutError``) or
+    ``greeting_startup_failed`` (py3.10, ``asyncio.TimeoutError``) — either way
+    the greeting did NOT complete and startup proceeded.
+    """
+
+    class _HangingGreeter:
+        async def greet(self, names: Sequence[str] | None = None) -> None:
+            await asyncio.sleep(3600)  # far longer than the configured timeout
+
+    cfg = GreetingConfig(
+        enabled=True,
+        names=["John"],
+        fire_on_startup=True,
+        startup_timeout_s=0.01,  # config-driven bound (not a hardcoded literal)
+    )
+    orch = _make_orch(greeting=cfg, greeter=_HangingGreeter())  # type: ignore[arg-type]
+    with structlog.testing.capture_logs() as logs:
+        await orch.start()  # must return promptly, not hang
+    events = [e["event"] for e in logs]
+    assert "greeting_startup_timeout" in events or "greeting_startup_failed" in events
+    assert "greeting_startup_complete" not in events
     assert orch._running is True
 
 

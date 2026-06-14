@@ -169,6 +169,31 @@ def test_existing_config_without_fire_on_startup_loads_unchanged() -> None:
     assert cfg.names == ["John", "Jordan"]
 
 
+def test_startup_timeout_s_defaults_to_10() -> None:
+    """Issue #109 review fix: the startup greeting is bounded by a config timeout.
+
+    Defaults to 10.0s so pre-review overlays load unchanged and the
+    orchestrator's ``asyncio.wait_for`` bound needs no hardcoded literal — a
+    hung TTS / blocked ALSA device can never wedge bring-up.
+    """
+    cfg = GreetingConfig()
+    assert cfg.startup_timeout_s == 10.0
+
+
+def test_startup_timeout_s_must_be_positive() -> None:
+    """gt=0 — a zero/negative bound would defeat the wait_for guard."""
+    with pytest.raises(ValidationError):
+        GreetingConfig(startup_timeout_s=0.0)
+    with pytest.raises(ValidationError):
+        GreetingConfig(startup_timeout_s=-1.0)
+
+
+def test_existing_config_without_startup_timeout_loads_unchanged() -> None:
+    """Backwards-compat: a pre-review overlay (no startup_timeout_s key) loads."""
+    cfg = GreetingConfig.model_validate({"enabled": True, "names": ["John"]})
+    assert cfg.startup_timeout_s == 10.0
+
+
 def test_settings_greeting_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     """Operators can flip the master switch via env (then YAML supplies names)."""
     # The Pydantic env-prefix only flips scalar fields at Settings level;
