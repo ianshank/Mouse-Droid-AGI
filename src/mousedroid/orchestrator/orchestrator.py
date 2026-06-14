@@ -492,7 +492,12 @@ class MouseDroidOrchestrator:
                 self._greeter.greet(),
                 timeout=greeting_cfg.startup_timeout_s,
             )
-        except TimeoutError:
+        except (TimeoutError, asyncio.TimeoutError):
+            # asyncio.TimeoutError is an alias for the builtin TimeoutError on
+            # Python 3.11+, but a DISTINCT exception on 3.10 (a supported CI
+            # leg). Catching both keeps the precise greeting_startup_timeout
+            # event firing on every supported interpreter — matching the
+            # dual-catch pattern in common/tools/registry.py + voice/rocky.py.
             _log.warning(
                 "greeting_startup_timeout",
                 timeout_s=greeting_cfg.startup_timeout_s,

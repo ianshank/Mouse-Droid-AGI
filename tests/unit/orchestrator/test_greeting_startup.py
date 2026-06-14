@@ -127,10 +127,11 @@ async def test_greeting_hang_is_bounded_and_never_blocks_startup() -> None:
 
     Pins the Issue-#109 review fix: ``greet()`` is wrapped in
     ``asyncio.wait_for`` so an indefinitely-blocking greeting can never wedge
-    the orchestrator before its 30 Hz loop starts. Version-agnostic: the bound
-    surfaces as ``greeting_startup_timeout`` (py3.11+, ``TimeoutError``) or
-    ``greeting_startup_failed`` (py3.10, ``asyncio.TimeoutError``) — either way
-    the greeting did NOT complete and startup proceeded.
+    the orchestrator before its 30 Hz loop starts. The dual-catch
+    ``except (TimeoutError, asyncio.TimeoutError)`` makes the precise
+    ``greeting_startup_timeout`` event fire on EVERY supported interpreter —
+    including py3.10, where ``asyncio.TimeoutError`` is a distinct class
+    (CodeRabbit #3409673687).
     """
 
     class _HangingGreeter:
@@ -147,7 +148,8 @@ async def test_greeting_hang_is_bounded_and_never_blocks_startup() -> None:
     with structlog.testing.capture_logs() as logs:
         await orch.start()  # must return promptly, not hang
     events = [e["event"] for e in logs]
-    assert "greeting_startup_timeout" in events or "greeting_startup_failed" in events
+    assert "greeting_startup_timeout" in events
+    assert "greeting_startup_failed" not in events
     assert "greeting_startup_complete" not in events
     assert orch._running is True
 
