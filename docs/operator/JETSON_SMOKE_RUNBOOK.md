@@ -55,6 +55,20 @@ sudoedit /etc/mousedroid/docker.env   # set MOUSEDROID_TELEMETRY_TOKEN to a real
 docker exec mousedroid env | grep -E "MOUSEDROID_MOCK_HARDWARE|MOUSEDROID_TELEMETRY_TOKEN"
 ```
 
+### Remote LLM (F-006 fix path c)
+
+PR #102's live-Jetson probe confirmed Phi-3-mini-q4 OOMs at any GPU offload
+on the Orin Nano 8GB; CPU-only baseline is 269 s per `translate_mission`.
+The follow-up sprint adds an opt-in path that routes the LLM to a host-PC
+Ollama instance over the USB-net bridge — see
+[JETSON_REMOTE_LLM_SETUP.md](./JETSON_REMOTE_LLM_SETUP.md) for the full
+9-section operator runbook (Ollama install, IP discovery, docker.env
+population, overlay sync, container restart, probe usage, success
+verification, security caveats, and backwards-compat guarantees). The new
+`MOUSEDROID_EXTRA_OVERLAYS` env var threaded into the sync script in this
+sprint is what makes the remote-LLM overlay sync alongside
+`jetson_production.yaml` without a manual `scp`.
+
 ## Step 2 — Pre-flight check (shell + Python)
 
 The existing shell preflight stays as the bash entry point; the new programmatic API is the in-process replacement that the orchestrator + CLI consume.
