@@ -2,8 +2,8 @@
 
 Let the rover refine its own policy/world-model weights **between** cloud
 retraining cycles from fresh on-device experience, gated by a world-model
-rollout-return regression bound that auto-reverts to the cloud baseline on
-underperformance. Plan:
+held-out recon+KL-loss regression bound that auto-reverts to the cloud baseline
+on underperformance. Plan:
 `docs/superpowers/plans/2026-06-13-phase6-on-device-incremental-learning.md`.
 Architecture: `docs/architecture/c4-on-device-learning.md`.
 
@@ -32,12 +32,12 @@ Flow (one slow-cadence cycle, when armed):
    *candidate* (`on_device_candidate_produced`).
 3. The candidate state-dict is persisted to a SHA-256-stamped slot file under
    the experience root (`on_device_candidate_persisted`).
-4. The WS4 `RegressionGate` scores the candidate AND the live baseline with
-   the SAME fixed seed-states + seed through the reused RSSM world model
-   (mean imagined rollout return), then **promotes** (marks the slot active)
-   or **reverts** (increments the revert counter). The live-policy hot-swap
-   itself is a future seam (see below); promotion today only records the
-   active-slot pointer.
+4. The `RegressionGate` scores the candidate AND the live baseline RSSM with
+   the SAME fixed held-out batch + shared decoders + seed via the deterministic
+   `score_dynamics` (held-out recon+KL loss, LOWER is better), then **promotes**
+   (marks the slot active) or **reverts** (increments the revert counter). The
+   live-model hot-swap itself is the `enable_hot_swap`-gated WS-E4 seam (see
+   below); promotion today only records the active-slot pointer.
 
 On-device-updated weights land in a **separate slot** from the cloud-pulled
 weights (per ADR-010) — a revert simply leaves the live policy pointing at
@@ -56,14 +56,12 @@ is hardcoded.
 | `trigger_min_new_records` | `500` | `gt=0` | Minimum fresh experience records that must accumulate before a cycle fires. Also caps the replay scan. |
 | `check_interval_s` | `300.0` | `gt=0` | Slow-cadence period (seconds) between trigger probes. The background task sleeps this long each tick. Defaults to 5 min so a default-on deployment never busy-polls the replay store. |
 | `update_steps` | `50` | `gt=0` | Bounded gradient steps per update cycle. |
-| `regression_tolerance` | `0.05` | `ge=0` | Maximum allowed score drop below the baseline before the candidate is reverted. PROMOTE iff `candidate_score >= baseline_score - regression_tolerance`. `ge=0` permits a zero-tolerance gate. |
-| `held_out_fraction` | `0.1` | `gt=0, le=1` | Fraction of the trigger window used to size the held-out seed-state set scored in the gate. |
+| `regression_tolerance` | `0.05` | `ge=0` | Maximum allowed recon+KL loss INCREASE above the baseline before the candidate is reverted. PROMOTE iff `candidate_loss <= baseline_loss + regression_tolerance` (lower-is-better). `ge=0` permits a zero-tolerance gate. |
+| `held_out_fraction` | `0.1` | `gt=0, le=1` | Fraction of the replay sample reserved for held-out scoring (config seam; the WS-E3 gate currently derives its disjoint held-out window from `refine_sequence_length`/`refine_batch_episodes`). |
 | `ewc_lambda` | `1.0` | `ge=0` | EWC Fisher-penalty strength anchoring the candidate to the base weights. `ge=0` permits an unregularized step (`0.0` skips the EWC anchor entirely). |
 | `learning_rate` | `1e-4` | `gt=0` | Learning rate for the bounded gradient steps. |
 | `slot_dir` | `"on_device_slot"` | relative, no `..` | Experience-root-**relative** leaf for the weight slot. Resolved as `<ExperienceConfig.path>/<slot_dir>` — NOT an absolute host path. A `field_validator` rejects absolute paths, `..` traversal, and empty values at YAML-load time. |
-| `rollout_horizon` | `15` | `gt=0` | WS4 scoring: imagined steps H per world-model rollout. |
-| `n_scoring_rollouts` | `8` | `gt=0` | WS4 scoring: rollouts N averaged into the scalar score. Higher N reduces prior-sampling variance at more compute cost. |
-| `scoring_seed` | `1234` | — | WS4 scoring: fixed RNG seed making the rollout-return score deterministic (same seed + seed-states + weights ⇒ identical score, so the promote/revert decision is reproducible). |
+| `scoring_seed` | `1234` | — | Gate scoring: fixed RNG seed making the held-out recon+KL loss deterministic (same seed + held-out batch + weights ⇒ identical loss, so the promote/revert decision is reproducible). |
 
 ## How to enable
 
@@ -92,8 +90,8 @@ on_device_learning:
   ewc_lambda: 1.0
   learning_rate: 1.0e-4
   slot_dir: on_device_slot
-  rollout_horizon: 15
-  n_scoring_rollouts: 8
+  refine_sequence_length: 16
+  refine_batch_episodes: 4
   scoring_seed: 1234
 ```
 
@@ -121,12 +119,14 @@ them (mirrors the `MOUSEDROID_LLM__*` discipline from
 The gate is **authoritative**: no candidate is promoted without passing the
 held-out regression bound.
 
-- Both the candidate and the live baseline are scored by the SAME
-  deterministic harness (`scoring.score_policy`) on the SAME fixed seed-states
-  + `scoring_seed`, so the decision is reproducible.
-- **PROMOTE** iff `candidate_score >= baseline_score - regression_tolerance`.
-  On promote the slot is marked active (`active.json` pointer); the live
-  policy is never overwritten — the cloud-pulled slot is untouched.
+- Both the candidate and the live baseline RSSM are scored by the SAME
+  deterministic harness (`scoring.score_dynamics` — held-out recon+KL loss,
+  LOWER is better) on the SAME fixed held-out batch + shared decoders +
+  `scoring_seed`, so the decision is reproducible.
+- **PROMOTE** iff `candidate_loss` is finite AND
+  `candidate_loss <= baseline_loss + regression_tolerance`. On promote the slot
+  is marked active (`active.json` pointer); the live model is never overwritten —
+  the cloud-pulled slot is untouched.
 - **REVERT** otherwise: the live policy stays on the cloud baseline and the
   counter increments. Integrity-mismatch (SHA-256 verify failure on slot load)
   maps to the `integrity_mismatch` reason; an update-path exception maps to
@@ -164,7 +164,7 @@ cloud-validated policy, not a fault. A spike in `integrity_mismatch` /
 | `on_device_update_start` / `on_device_update_complete` | The bounded learner update (steps, lr, ewc_lambda, final loss). |
 | `on_device_candidate_produced` | Candidate produced (`n_steps`, `train_loss`, `batch_size`). |
 | `on_device_slot_persisted` / `on_device_candidate_persisted` | Candidate written to its SHA-256-stamped slot (`digest`, `path`). |
-| `on_device_score_computed` | Rollout-return score (per candidate + baseline). |
+| `on_device_dynamics_score_computed` | Held-out recon+KL loss (per candidate + baseline; `loss`, `finite`, `seed`). |
 | `on_device_candidate_promoted` | Gate PASSED — slot marked active (`candidate_score`, `baseline_score`, `delta`, `tolerance`, `digest`). |
 | `on_device_candidate_reverted` | Gate FAILED — reverted (WARN; `reason`, both scores, `delta`). |
 | `on_device_slot_marked_active` | Active-slot pointer written. |
@@ -190,38 +190,38 @@ root (validator-enforced).
 
 ## Pre-enablement seams (DO NOT enable on the rover yet)
 
-This feature is **sim-validated and default-OFF**. Enabling it on the rover
-today is **safe** (the gate + separate slot + SHA-256 integrity make it safe
-by construction) but does **no useful learning** until two seams close. Do
-not flip `enabled: true` on the live rover before these are wired and a soak
-gate has passed.
+This feature is **sim-validated and default-OFF**. The two pre-enablement
+seams below were CLOSED by the WS-E2/E3 ENABLEMENT work (#135): the learner now
+refines the **live RSSM** and the gate scores it on a **held-out replay batch**
+by recon+KL loss. The remaining gate before driving the running model is the
+WS-E4 live-model hot-swap activation (default-OFF `enable_hot_swap`) plus a soak
+gate. Do not flip `enabled: true` (or `enable_hot_swap: true`) on the live rover
+before a soak gate has passed.
 
-### Seam (a) — the learner/gate wrap a config-sized STAND-IN net, not the live net
+### Seam (a) — refine the LIVE net, not a config-sized stand-in — CLOSED (#135)
 
-- The factory (`build_on_device_coordinator` in `src/mousedroid/factory.py`)
-  builds the candidate as a small `nn.Sequential(nn.Linear(input_dim,
-  input_dim))` sized to `cfg.camera.feature_dim` — a **stand-in**, NOT the
-  live policy/world-model network.
-- The WS4 gate-runner (`_build_on_device_gate_runner`) wraps a config-sized
-  `nn.Linear` policy stand-in behind `StateDictPolicyAdapter`, and TODAY both
-  the candidate adapter and the baseline adapter wrap the **same** stand-in
-  net (so the end-to-end gate path runs and is tested, but candidate ==
-  baseline so the score delta is trivially zero).
-- The decoupling seam already exists: `PolicyProtocol` (`scoring.py`).
-  Enabling does useful learning only once the **live policy/world-model net
-  is shared behind `PolicyProtocol`** — the candidate adapter loads the
-  persisted slot's weights and the baseline adapter wraps the live policy.
+- `build_on_device_coordinator` now wires `RSSMRefiner`
+  (`learning/on_device/rssm_refiner.py`) over the **live RSSM world model**
+  (deep-copied per update so the base stays bitwise-unchanged), refining the
+  candidate via `train_sequence` over a `(B, T, ...)` replay sequence batch —
+  the pre-ENABLEMENT `EWCOnlineLearner`-over-`nn.Linear` stand-in is gone.
+- The gate-runner (`_build_on_device_gate_runner`) scores the candidate RSSM vs
+  the live baseline RSSM by held-out recon+KL loss — there is no policy stand-in
+  / adapter layer any more.
 
-### Seam (b) — seed-states are `manual_seed`-sampled, not encoded from real experience
+### Seam (b) — score on real held-out experience — CLOSED (#135)
 
-- The gate's scoring seed-states are sampled directly from a seeded
-  `torch.Generator` (`torch.randn(..., generator=gen)` in
-  `_build_on_device_gate_runner`) — deterministic, but **not** representative
-  of real rover states.
-- Before enablement they must be **encoded from a held-out replay slice**
-  through the world model (the `held_out_fraction` knob already sizes the
-  set), so the regression score reflects performance on real experience the
-  rover actually saw, not random latents.
+- The gate scores against a FIXED held-out `(B, T, ...)` replay batch built over
+  a slice DISJOINT from the refine batch (`_build_held_out_sequence_batch`), so
+  the regression score reflects real experience the rover actually saw — the
+  retired `manual_seed`-sampled seed-state path is gone.
+
+### Remaining seam — live-model hot-swap activation (WS-E4)
+
+- Promotion (`slot_store.mark_active`) stays SEPARATE from activation. Swapping a
+  promoted slot into the running RSSM is the `enable_hot_swap`-gated
+  `build_on_device_hot_swap_source` seam (default-OFF). Keep it off until the
+  soak gate below passes.
 
 ### Soak-gate framing for enabling
 

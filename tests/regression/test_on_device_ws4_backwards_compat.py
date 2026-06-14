@@ -4,9 +4,8 @@ Pins the backwards-compatibility invariants for Phase-6 WS4:
 
 * an orchestrator/coordinator built with ``on_device_learning`` absent or
   disabled wires NO gate (and no coordinator at all) — byte-identical to pre-WS4;
-* the new WS4 config fields (``rollout_horizon``, ``n_scoring_rollouts``,
-  ``scoring_seed``) all have defaults, so a pre-WS4 YAML that enables on-device
-  learning WITHOUT them still loads + validates;
+* the WS4 scoring seed (``scoring_seed``) has a default, so a pre-WS4 YAML that
+  enables on-device learning WITHOUT it still loads + validates;
 * existing YAML configs (no ``on_device_learning`` key) load unchanged;
 * a coordinator built with on-device learning enabled but no slow cadence run
   never marks any slot active (no implicit promotion at build time).
@@ -25,10 +24,8 @@ from mousedroid.learning.on_device.slot_store import OnDeviceSlotStore
 
 
 def test_ws4_fields_have_defaults() -> None:
-    """The WS4 scoring knobs all default so enabling without them validates."""
+    """The WS4 scoring seed defaults so enabling without it validates."""
     cfg = OnDeviceLearningConfig(enabled=True)
-    assert cfg.rollout_horizon > 0
-    assert cfg.n_scoring_rollouts > 0
     assert isinstance(cfg.scoring_seed, int)
 
 
@@ -41,8 +38,7 @@ def test_pre_ws4_enabled_yaml_loads_without_scoring_knobs() -> None:
         }
     )
     assert cfg.on_device_learning is not None
-    assert cfg.on_device_learning.rollout_horizon > 0
-    assert cfg.on_device_learning.n_scoring_rollouts > 0
+    assert isinstance(cfg.on_device_learning.scoring_seed, int)
 
 
 def test_existing_yaml_loads_without_on_device_key(tmp_path: Path) -> None:

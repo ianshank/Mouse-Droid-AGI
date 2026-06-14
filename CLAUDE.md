@@ -573,17 +573,22 @@ all torch work offloaded via `asyncio.to_thread`. Non-negotiable contracts:
   offloads the trigger probe, batch load, learner update, AND the gate scoring
   via `asyncio.to_thread`. The base model is deep-copied before any gradient
   flows (base bitwise-unchanged); the candidate is a separate object.
-- **World-model rollout-return gate + auto-revert is authoritative.**
-  `RegressionGate.evaluate` (`regression_gate.py`) PROMOTEs iff
-  `candidate_score >= baseline_score - regression_tolerance`, scoring both
-  policies with the SAME fixed seed-states + `scoring_seed` via the
-  deterministic `score_policy` over the reused RSSM (`scoring.py`). PROMOTE
-  marks the slot active; otherwise REVERT + increment the counter. The metrics
-  param to `build_on_device_coordinator` is keyword-only (defaults `None`).
-- **NOT yet enabled on the rover.** Two pre-enablement seams: (a) the
-  learner/gate wrap a config-sized STAND-IN net, not the live policy/world-model
-  net behind `PolicyProtocol`; (b) seed-states are `manual_seed`-sampled, not
-  yet encoded from a held-out replay slice. See
+- **RSSM-vs-RSSM recon-loss gate + auto-revert is authoritative (WS-E3).**
+  `RegressionGate.evaluate` (`regression_gate.py`) scores the candidate RSSM and
+  the live baseline RSSM by their held-out **reconstruction+KL loss** on a SHARED
+  FIXED `(B, T, ...)` batch with SHARED decoders + `scoring_seed`, via the
+  deterministic `score_dynamics` (`scoring.py`) — **LOWER IS BETTER**. PROMOTE iff
+  `candidate_loss` is finite AND `candidate_loss <= baseline_loss +
+  regression_tolerance` (marks the slot active); otherwise REVERT + increment the
+  counter. This REPLACED the retired self-gaming imagined-return metric (it summed
+  the model's OWN `reward_head`, so reward-head inflation gamed it — WS-E-SPIKE).
+  The metrics param to `build_on_device_coordinator` is keyword-only (defaults
+  `None`).
+- **WS-E2/E3 refine the LIVE RSSM.** The learner (`RSSMRefiner`,
+  `rssm_refiner.py`) deep-copies the live RSSM and refines the candidate via
+  `train_sequence` over a replay sequence batch; the gate scores that candidate
+  against the live baseline. Activation into the running model is the separate
+  `enable_hot_swap`-gated WS-E4 seam (`build_on_device_hot_swap_source`). See
   `docs/runbooks/jetson-on-device-learning.md` (+ ≥30-day soak-gate framing) and
   `docs/architecture/c4-on-device-learning.md`.
 

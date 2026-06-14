@@ -1,9 +1,9 @@
 # C4 Component — On-Device Incremental Learning (Phase 6)
 
 > The on-device incremental-learning path. Fresh rover experience in the LMDB
-> replay store triggers a **bounded** EWC-regularized update at the
+> replay store triggers a **bounded** RSSM refinement at the
 > slow-cadence / POST_TICK seam, producing a SHA-256-stamped *candidate*
-> weight slot that a world-model rollout-return regression gate either
+> weight slot that a world-model recon+KL-loss regression gate either
 > promotes (marks active) or reverts (increments a Prometheus counter). The
 > 30 Hz reactive control loop (RSSM → MCTS → ESP32) is shown SEPARATELY and is
 > deliberately **untouched** — the only torch work runs on a worker thread via
@@ -30,15 +30,14 @@ flowchart TB
 
     subgraph OnDevice["src/mousedroid/learning/on_device/"]
         Coord["ReplayTriggerCoordinator.maybe_update()\ntrigger >= trigger_min_new_records\nall torch work via asyncio.to_thread"]
-        Learner["EWCOnlineLearner.update(batch)\n• deep-copy base -> candidate\n• update_steps @ learning_rate\n• EWC Fisher penalty (ewc_lambda)\n• base bitwise-UNCHANGED"]
+        Learner["RSSMRefiner.update(batch)\n• deep-copy live RSSM -> candidate\n• update_steps @ learning_rate\n• train_sequence over (B,T,...) batch\n• base bitwise-UNCHANGED"]
         Store["OnDeviceSlotStore\npersist -> <digest>.pt\nmark_active -> active.json\nload re-verifies SHA-256"]
-        Gate["RegressionGate.evaluate()\ncandidate vs baseline\nPROMOTE iff cand >= base - tolerance"]
-        Scorer["score_policy()\nmean imagined rollout return\nseed-states + scoring_seed (deterministic)"]
-        Proto["PolicyProtocol\n@runtime_checkable\nact(hidden, latent) -> action\n(WS5 seam: live net here)"]
+        Gate["RegressionGate.evaluate()\ncandidate RSSM vs baseline RSSM\nPROMOTE iff cand_loss <= base_loss + tolerance"]
+        Scorer["score_dynamics()\nheld-out recon+KL loss (LOWER better)\nheld-out batch + decoders + scoring_seed"]
     end
 
     subgraph WorldModel["src/mousedroid/world_model/ (REUSED)"]
-        RSSM["RSSM / Dreamer\nimagine_step(action, h, z)\n-> (h', z', predicted_reward)"]
+        RSSM["RSSM\ntrain_sequence(batch, decoders)\n-> {loss, recon, kl, ...}"]
     end
 
     subgraph Factory["src/mousedroid/factory.py"]
@@ -47,7 +46,7 @@ flowchart TB
     end
 
     subgraph Config["src/mousedroid/config/schema.py"]
-        Cfg["OnDeviceLearningConfig (Optional, default None)\n• enabled (default False)\n• trigger_min_new_records / check_interval_s\n• update_steps / learning_rate / ewc_lambda\n• regression_tolerance / held_out_fraction\n• rollout_horizon / n_scoring_rollouts / scoring_seed\n• slot_dir (relative, validator-gated)"]
+        Cfg["OnDeviceLearningConfig (Optional, default None)\n• enabled / enable_hot_swap (default False)\n• trigger_min_new_records / check_interval_s\n• update_steps / learning_rate / ewc_lambda\n• regression_tolerance / held_out_fraction\n• refine_sequence_length / refine_batch_episodes / scoring_seed\n• slot_dir (relative, validator-gated)"]
         MetCfg["MetricsConfig.track_on_device_learning (default True)"]
     end
 
@@ -73,8 +72,7 @@ flowchart TB
     %% Gate path
     Coord -- "gate_runner(slot) (to_thread)" --> Gate
     Gate -- "score_fn(candidate)\nscore_fn(baseline)" --> Scorer
-    Scorer -- "policy.act()" --> Proto
-    Scorer -- "imagine_step()" --> RSSM
+    Scorer -- "train_sequence(batch, decoders)" --> RSSM
     Gate -- "PROMOTE -> mark_active" --> Store
     Gate -- "REVERT -> inc(reason)" --> Counter
 
@@ -90,7 +88,7 @@ flowchart TB
 
     class Tick hot
     class Loop slow
-    class Coord,Learner,Store,Gate,Scorer,Proto,BuildCoord,BuildGate internal
+    class Coord,Learner,Store,Gate,Scorer,BuildCoord,BuildGate internal
     class Cfg,MetCfg,Counter config
     class RSSM reused
     class LMDB,Reader,SlotFS,Replay store
@@ -102,21 +100,21 @@ flowchart TB
 |---|---|---|
 | 1. Trigger probe | `count_new_records()` via `asyncio.to_thread`. Below `trigger_min_new_records` ⇒ log `on_device_trigger_below_threshold`, return `None`. | Blocking LMDB scan off the event loop. |
 | 2. Batch load | `load_batch()` via `asyncio.to_thread`. Empty batch ⇒ log `on_device_trigger_empty_batch`, return `None`. | Off the event loop. |
-| 3. Bounded update | `learner.update(batch)` via `asyncio.to_thread`. Deep-copies the base, runs `update_steps`, applies the EWC penalty; base parameters bitwise-unchanged. | Gradient work on a worker thread. |
+| 3. Bounded update | `learner.update(batch)` via `asyncio.to_thread`. Deep-copies the live RSSM, runs `update_steps` of `train_sequence` refinement; base parameters bitwise-unchanged. | Gradient work on a worker thread. |
 | 4. Persist | `slot_store.persist(candidate)` → write-temp-then-rename to `<digest>.pt`. | Cheap I/O on the slow cadence. |
-| 5. Gate | `gate_runner(slot)` via `asyncio.to_thread` — score candidate vs baseline, PROMOTE or REVERT. `None` gate ⇒ byte-identical to pre-WS4. | Torch rollout scoring on a worker thread. |
+| 5. Gate | `gate_runner(slot)` via `asyncio.to_thread` — score candidate RSSM vs baseline RSSM by held-out recon+KL loss, PROMOTE or REVERT. `None` gate ⇒ byte-identical to pre-WS-E3. | Torch recon-loss scoring on a worker thread. |
 
 ## Promote / revert decision — `RegressionGate.evaluate`
 
 | Condition | Outcome |
 |---|---|
-| `candidate_score >= baseline_score - regression_tolerance` | **PROMOTE**: `slot_store.mark_active(slot)` (write `active.json`); log `on_device_candidate_promoted`. Live policy NOT overwritten — only the pointer is recorded. |
+| `candidate_loss` finite AND `candidate_loss <= baseline_loss + regression_tolerance` | **PROMOTE**: `slot_store.mark_active(slot)` (write `active.json`); log `on_device_candidate_promoted`. Live model NOT overwritten — only the pointer is recorded. |
 | otherwise | **REVERT**: do NOT mark active; `metrics.inc_on_device_learning_reverted("regression_bound")`; log `on_device_candidate_reverted` (WARN). |
 | slot SHA-256 verify fails on load | **REVERT** with reason `integrity_mismatch` (`SlotIntegrityError`). |
 | update path raises | slow loop logs `on_device_update_cycle_failed` and keeps running; reason `exception` reserved for the counter. |
 
-Determinism is load-bearing: both scores come from `score_policy` on the SAME
-seed-states + `scoring_seed`, so the decision is reproducible.
+Determinism is load-bearing: both losses come from `score_dynamics` on the SAME
+held-out batch + shared decoders + `scoring_seed`, so the decision is reproducible.
 
 ## Safety + de-hardcode contracts
 
@@ -137,23 +135,24 @@ seed-states + `scoring_seed`, so the decision is reproducible.
 - **Hot loop untouched.** No edge crosses into the `tick()` subgraph; the two
   paths share only the event loop, and all torch work is offloaded off it.
 
-## WS5 pre-enablement seams (NOT yet wired)
+## Enablement status (WS-E2/E3 closed; WS-E4 gated)
 
 These are documented in full in the operator runbook
 (`docs/runbooks/jetson-on-device-learning.md`):
 
-1. **Stand-in net, not the live net.** `build_on_device_coordinator` builds a
-   config-sized `nn.Linear` stand-in candidate, and the gate-runner wraps the
-   same stand-in for BOTH candidate and baseline adapters — so the end-to-end
-   path runs and is tested, but the score delta is trivially zero. The
-   `PolicyProtocol` seam is in place for WS5 to share the live policy net.
-2. **Sampled seed-states.** The gate's seed-states are `manual_seed`-sampled
-   latents, not yet encoded from a held-out replay slice through the world
-   model.
+1. **Refines the LIVE RSSM (CLOSED, #135).** `build_on_device_coordinator` wires
+   `RSSMRefiner` over the live RSSM (deep-copied per update), refining via
+   `train_sequence`; the gate scores candidate RSSM vs baseline RSSM. The
+   pre-ENABLEMENT `nn.Linear` stand-in + policy adapter are gone.
+2. **Scores real held-out experience (CLOSED, #135).** The gate scores against a
+   FIXED held-out replay batch DISJOINT from the refine batch — not
+   `manual_seed`-sampled latents.
+3. **Live-model hot-swap (WS-E4, default-OFF).** Activating a promoted slot into
+   the running RSSM is the `enable_hot_swap`-gated `build_on_device_hot_swap_source`
+   seam — keep it off until a soak gate passes.
 
-Until both close, enabling is *safe* but does no *useful* learning — see the
-runbook's "DO NOT enable on the rover yet" section and the ≥30-day soak-gate
-framing.
+See the runbook's "DO NOT enable on the rover yet" section and the ≥30-day
+soak-gate framing.
 
 ## Related diagrams
 
@@ -161,7 +160,7 @@ framing.
 - `docs/architecture/c4-orchestrator.md` — the 30 Hz sense-plan-act loop that
   the slow-cadence task runs alongside.
 - `docs/architecture/c4-rssm-sim-pretraining.md` — the RSSM world model reused
-  by the rollout-return scorer.
+  by the recon-loss scorer.
 - `docs/architecture/ADR-010-cloud-weight-update-ota.md` — the SHA-256
   integrity + separate-slot contract this feature reuses.
 - `docs/architecture/c4-llm-gateway.md` — the deliberative LLM tier (separate

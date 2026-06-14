@@ -8,8 +8,8 @@ WS-E3 gate — LOCKED"):
   ``train_sequence(batch, decoders)["loss"]`` on a FIXED ``(B, T, ...)`` batch
   under ``model.eval()`` + ``torch.no_grad()`` — **LOWER IS BETTER** (it scores
   the WORLD MODEL's dynamics quality on real data, NOT a policy's imagined
-  return — ``score_policy`` self-games on reward-head inflation and is RETIRED
-  from the gate);
+  return — the retired imagined-return metric self-games on reward-head
+  inflation);
 * the direction INVERTS the pre-ENABLEMENT gate: PROMOTE iff
   ``candidate_loss <= baseline_loss + regression_tolerance``;
 * ``GateDecision.delta`` is ``candidate_loss - baseline_loss`` with the sign
