@@ -79,8 +79,16 @@ def _split_front_matter(text: str) -> tuple[dict[str, object] | None, str]:
 
 
 def validate_command_skill(path: Path, *, repo_root: Path) -> list[SkillCommandIssue]:
-    """Validate one skill file; return a list of issues (empty == valid)."""
-    text = path.read_text(encoding="utf-8")
+    """Validate one skill file; return a list of issues (empty == valid).
+
+    A file that is not valid UTF-8 yields a single ``unreadable`` issue rather
+    than raising ``UnicodeDecodeError`` — one corrupt skill must not abort the
+    whole ``validate_all`` sweep (and the caller gets an actionable signal).
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError) as exc:
+        return [SkillCommandIssue(path, "unreadable", str(exc))]
     issues: list[SkillCommandIssue] = []
 
     meta, body = _split_front_matter(text)

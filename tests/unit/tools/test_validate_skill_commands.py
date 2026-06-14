@@ -86,3 +86,24 @@ def test_validate_all_missing_dir_is_handled(tmp_path: Path) -> None:
     missing = tmp_path / "nope"
     issues = validate_all(missing, repo_root=tmp_path)
     assert [i.code for i in issues] == ["missing-commands-dir"]
+
+
+def test_non_utf8_file_is_reported_not_raised(tmp_path: Path) -> None:
+    # A skill file that is not valid UTF-8 must surface as an ``unreadable``
+    # issue, not crash the sweep with UnicodeDecodeError.
+    bad = tmp_path / "bad.md"
+    bad.write_bytes(b"\xff\xfe not utf-8 \x80\x81")
+    issues = validate_command_skill(bad, repo_root=tmp_path)
+    assert [i.code for i in issues] == ["unreadable"]
+
+
+def test_validate_all_skips_unreadable_without_aborting(tmp_path: Path) -> None:
+    # One corrupt file must not prevent the rest of the dir from validating.
+    _write(
+        tmp_path / "good.md",
+        "---\ndescription: ok\n---\nNo refs here.\n",
+    )
+    (tmp_path / "bad.md").write_bytes(b"\xff\xfe\x80")
+    issues = validate_all(tmp_path, repo_root=tmp_path)
+    codes = [i.code for i in issues]
+    assert codes == ["unreadable"]  # good.md produced zero issues
