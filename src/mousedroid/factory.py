@@ -74,6 +74,7 @@ if TYPE_CHECKING:
     from mousedroid.harness.approval.protocol import ApprovalGateProtocol
     from mousedroid.harness.protocol import TaskTrackerProtocol
     from mousedroid.health.monitor import HealthMonitor
+    from mousedroid.learning.on_device.hot_swap import OnDeviceWeightUpdateSource
     from mousedroid.learning.on_device.replay_trigger import ReplayTriggerCoordinator
     from mousedroid.learning.on_device.slot_store import CandidateSlot, OnDeviceSlotStore
     from mousedroid.llm_gateway.mission_parser import MissionParserProtocol
@@ -107,6 +108,12 @@ if TYPE_CHECKING:
 _log = get_logger(__name__)
 
 _CoroResult = TypeVar("_CoroResult")
+
+# Content-addressed on-device slot file suffix (mirrors
+# ``slot_store._SLOT_SUFFIX``). Used to reconstruct a ``CandidateSlot`` path from
+# the active digest returned by ``OnDeviceSlotStore.load_active`` (which yields a
+# bare digest string, not a slot) in the WS-E4 hot-swap materialiser.
+_SLOT_PT_SUFFIX: str = ".pt"
 
 
 def build_esp32_driver(cfg: Settings) -> ESP32CommProtocol:
@@ -1600,6 +1607,47 @@ def build_weight_update_loader(
     # session reload). Tier C1 ships the seam; the operator pulls the
     # concrete loader through configuration in a follow-up PR.
     return None
+
+
+def _compose_weight_update_loader(
+    cloud_loader: Callable[[PendingWeightUpdate], object] | None,
+    on_device_source: OnDeviceWeightUpdateSource,
+) -> Callable[[PendingWeightUpdate], object]:
+    """Compose the WS-E4 hot-loop loader: PURE return for on-device updates.
+
+    The orchestrator invokes ``_weight_update_loader`` SYNCHRONOUSLY inside
+    ``tick()``. For an on-device hot-swap update the engine was already
+    constructed OFF the hot loop (in the source's ``refresh_once``), so the
+    composed loader is a PURE reference return —
+    :meth:`OnDeviceWeightUpdateSource.take_materialized` does NO I/O. Any other
+    (cloud OTA) update is delegated to ``cloud_loader``; when no cloud loader is
+    wired AND the update is not owned by the on-device source, the composed
+    loader raises so the orchestrator's broad-except logs
+    ``cloud_weight_update_swap_failed`` and leaves the live model untouched
+    (fail-closed) rather than swapping in a bogus engine.
+
+    Args:
+        cloud_loader: The Tier C1 cloud OTA loader (or ``None`` when no cloud
+            loader is wired — the default).
+        on_device_source: The WS-E4 source that pre-materialised the engine.
+
+    Returns:
+        The composed ``(PendingWeightUpdate) -> engine`` loader.
+    """
+
+    def _loader(update: PendingWeightUpdate) -> object:
+        if on_device_source.owns(update):
+            # PURE reference return — the engine was built off the hot loop.
+            return on_device_source.take_materialized(update)
+        if cloud_loader is not None:
+            return cloud_loader(update)
+        msg = (
+            "no loader wired for weight update "
+            f"(engine_type={update.engine_type!r}, revision={update.revision!r})"
+        )
+        raise RuntimeError(msg)
+
+    return _loader
 
 
 def build_failure_recorder(
@@ -3182,6 +3230,117 @@ def build_on_device_coordinator(
     )
 
 
+def build_on_device_hot_swap_source(
+    cfg: Settings,
+    *,
+    world_model: WorldModelProtocol | None = None,
+    metrics: MetricsRegistry | None = None,
+) -> OnDeviceWeightUpdateSource | None:
+    """Build the WS-E4 off-loop hot-swap source for a promoted on-device slot.
+
+    Returns ``None`` (so the orchestrator is byte-identical to #134 — NO swap
+    path wired AT ALL) whenever:
+
+    * ``cfg.on_device_learning`` is absent / disabled, OR
+    * ``cfg.on_device_learning.enable_hot_swap`` is ``False`` (the default —
+      promotion via ``mark_active`` stays SEPARATE from activation), OR
+    * the live world-model engine is not a concrete ``RSSM`` (a same-cfg strict
+      ``load_state_dict`` round-trip is only defined for the engine the slot was
+      refined from; ``DualStreamRSSM`` / the ONNX engine cannot accept an RSSM
+      ``state_dict``, mirroring the coordinator's capability gate).
+
+    When enabled, wires a :class:`OnDeviceWeightUpdateSource` whose injected
+    materialiser does the SLOW work OFF the hot loop: it reconstructs the
+    ``CandidateSlot`` from the active digest, ``slot_store.load`` re-verifies the
+    SHA-256 (raising :class:`SlotIntegrityError` on a corrupt slot — fail-closed),
+    builds a fresh engine via :func:`build_world_model`, strict-loads the slot's
+    weights, and places it on the SAME device as the live ``world_model`` (NEVER
+    ``cuda-if-available`` like ``load_rssm_with_migration`` — else the
+    orchestrator's ``zeros_like(self._h)`` reset is a cross-device op). The
+    hot-loop loader then only returns this already-constructed engine.
+
+    Args:
+        cfg: Root settings.
+        world_model: The live world model (the orchestrator's already-built
+            ``build_world_model(cfg)`` result), threaded so the swap engine is
+            materialised on the SAME device + architecture. ``None`` resolves it
+            via ``build_world_model(cfg)`` (used by unit tests).
+        metrics: Optional shared metrics registry, threaded so the off-loop
+            ``integrity_mismatch`` revert counter surfaces on ``/metrics``.
+
+    Returns:
+        An :class:`OnDeviceWeightUpdateSource` when hot-swap is enabled + the
+        engine is a concrete ``RSSM``, else ``None``.
+    """
+    on_device_cfg = cfg.on_device_learning
+    if on_device_cfg is None or not on_device_cfg.enabled or not on_device_cfg.enable_hot_swap:
+        return None
+
+    import torch
+
+    from mousedroid.learning.on_device.hot_swap import OnDeviceWeightUpdateSource
+    from mousedroid.learning.on_device.slot_store import CandidateSlot, OnDeviceSlotStore
+    from mousedroid.world_model.rssm import RSSM
+
+    effective_wm = world_model if world_model is not None else build_world_model(cfg)
+    if not isinstance(effective_wm, RSSM):
+        # A same-cfg strict state_dict round-trip is only defined for the classic
+        # RSSM engine; disable activation rather than wiring an unusable swap.
+        _log.warning(
+            "on_device_hot_swap_unsupported_engine",
+            engine_type=type(effective_wm).__name__,
+            hint="hot-swap activation requires a concrete RSSM engine; disabled",
+        )
+        return None
+
+    slot_store = OnDeviceSlotStore(experience_cfg=cfg.experience, on_device_cfg=on_device_cfg)
+
+    # Resolve the live model's device ONCE so every materialised engine lands
+    # where the live recurrent state lives (device parity contract).
+    first_param = next(effective_wm.parameters(), None)
+    device = first_param.device if first_param is not None else torch.device("cpu")
+
+    def _materialize(digest: str) -> object:
+        """OFF-loop: reconstruct the slot, re-verify, build + device-place the engine.
+
+        Runs inside the source's ``asyncio.to_thread`` so the blocking
+        ``torch.load`` + ``build_world_model`` never touches the event loop.
+        Raises :class:`SlotIntegrityError` (out of ``slot_store.load``) on a
+        corrupt slot so the source fails closed + counts ``integrity_mismatch``.
+        """
+        # load_active() returns a DIGEST STRING — reconstruct the content-
+        # addressed CandidateSlot and load via the store (re-verifies SHA-256).
+        slot = CandidateSlot(path=slot_store.slot_dir / f"{digest}{_SLOT_PT_SUFFIX}", digest=digest)
+        state_dict = slot_store.load(slot)
+        engine = build_world_model(cfg)
+        # Narrow to the concrete ``RSSM`` so ``load_state_dict`` / ``to`` / ``eval``
+        # (nn.Module surface) type-check WITHOUT a suppression. Same engine the
+        # source's capability gate already confirmed for the live model, so this
+        # only differs if ``build_world_model`` is non-deterministic (a real bug).
+        if not isinstance(engine, RSSM):
+            msg = f"hot-swap materialise built a non-RSSM engine: {type(engine).__name__}"
+            raise RuntimeError(msg)
+        # Same-cfg slot ⇒ STRICT load (NOT load_rssm_with_migration, which forces
+        # cuda-if-available + tolerates dim drift). A dim mismatch here is a real
+        # bug that must surface, not be silently migrated.
+        engine.load_state_dict(state_dict, strict=True)
+        engine.to(device)
+        engine.eval()
+        return engine
+
+    _log.info(
+        "on_device_hot_swap_source_wired",
+        check_interval_s=on_device_cfg.check_interval_s,
+        device=str(device),
+    )
+    return OnDeviceWeightUpdateSource(
+        slot_store=slot_store,
+        materialize=_materialize,
+        check_interval_s=on_device_cfg.check_interval_s,
+        metrics=metrics,
+    )
+
+
 def _build_on_device_gate_runner(
     cfg: Settings,
     *,
@@ -3920,6 +4079,40 @@ def build_orchestrator(cfg: Settings) -> object:
     on_device_coordinator = build_on_device_coordinator(
         cfg, metrics=metrics_registry, world_model=wm
     )
+
+    # Phase 6 WS-E4 — off-loop hot-swap of a PROMOTED on-device slot. ``None``
+    # (default) when ``cfg.on_device_learning.enable_hot_swap`` is ``False`` — NO
+    # swap path is wired AT ALL, so the orchestrator is byte-identical to #134
+    # (promotion via ``mark_active`` stays SEPARATE from activation). When
+    # enabled, the source watches the active slot on its OWN slow-cadence task,
+    # materialises the device-correct engine OFF the hot loop, and surfaces it as
+    # a ``world_model`` ``PendingWeightUpdate`` so the existing C1 atomic-swap
+    # seam (``_apply_pending_weight_update``) applies it as a PURE reference
+    # assignment. The live ``wm`` is threaded so the swap engine lands on the
+    # SAME device + architecture (device-parity contract).
+    on_device_hot_swap_source = build_on_device_hot_swap_source(
+        cfg, world_model=wm, metrics=metrics_registry
+    )
+    if on_device_hot_swap_source is not None:
+        merged_pollers: dict[str, WeightUpdatePollerProtocol] = dict(weight_update_pollers)
+        if ENGINE_TYPE_WORLD_MODEL in merged_pollers:
+            # A cloud OTA world-model poller and the on-device hot-swap source
+            # both target the ``world_model`` engine slot; they are mutually
+            # exclusive activation paths. The on-device source takes the slot
+            # (the rover production overlay disables cloud OTA, so this only fires
+            # in a misconfigured both-on deployment — logged loudly, never silent).
+            _log.warning(
+                "on_device_hot_swap_supersedes_cloud_world_model_poller",
+                reason="enable_hot_swap=true claims the world_model swap slot",
+            )
+        merged_pollers[ENGINE_TYPE_WORLD_MODEL] = on_device_hot_swap_source
+        weight_update_pollers = merged_pollers
+        # Compose the loader so the hot-loop swap returns the source's PRE-
+        # materialised engine for on-device updates (pure reference return, no
+        # tick I/O) and delegates any cloud update to the cloud loader.
+        weight_update_loader = _compose_weight_update_loader(
+            weight_update_loader, on_device_hot_swap_source
+        )
 
     orchestrator = MouseDroidOrchestrator(
         world_model=wm,
