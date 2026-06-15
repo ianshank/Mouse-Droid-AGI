@@ -10,6 +10,7 @@ two drivers from drifting apart again.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from unittest.mock import MagicMock, patch
 
 import structlog.testing
@@ -26,7 +27,7 @@ def _combo_device_list() -> list[dict[str, object]]:
     ]
 
 
-def _mock_pyaudio(devices: list[dict[str, object]]) -> MagicMock:
+def _mock_pyaudio(devices: Sequence[object]) -> MagicMock:
     """Build a mock ``pyaudio`` module whose ``PyAudio()`` enumerates *devices*."""
     pa_instance = MagicMock()
     pa_instance.get_device_count.return_value = len(devices)
@@ -118,6 +119,33 @@ def test_logs_the_supplied_event_on_match() -> None:
     assert len(matches) == 1
     assert matches[0]["index"] == 1
     assert matches[0]["name"] == "USB Audio Device"
+
+
+def test_skips_none_device_info() -> None:
+    """A None device-info row (e.g. mid-enumeration disconnect) is skipped, not crashed on."""
+    devices: list[object] = [
+        None,
+        {"name": "USB Audio Device", "maxInputChannels": 2, "maxOutputChannels": 0},
+    ]
+    mock_pyaudio = _mock_pyaudio(devices)
+
+    with patch.dict("sys.modules", {"pyaudio": mock_pyaudio}):
+        idx = find_pyaudio_device_index("USB", want_input=True, log_event="usb_microphone_found")
+
+    assert idx == 1
+
+
+def test_handles_none_channel_value_as_zero() -> None:
+    """A present-but-None channel count is treated as 0 (no TypeError from int(None))."""
+    devices: list[object] = [
+        {"name": "USB Audio Device", "maxInputChannels": None, "maxOutputChannels": None},
+    ]
+    mock_pyaudio = _mock_pyaudio(devices)
+
+    with patch.dict("sys.modules", {"pyaudio": mock_pyaudio}):
+        idx = find_pyaudio_device_index("USB", want_input=True, log_event="usb_microphone_found")
+
+    assert idx is None
 
 
 def test_terminates_pyaudio_instance() -> None:

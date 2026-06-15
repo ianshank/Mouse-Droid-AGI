@@ -55,8 +55,15 @@ def find_pyaudio_device_index(
     try:
         for i in range(pa.get_device_count()):
             info = pa.get_device_info_by_index(i)
-            name = str(info.get("name", ""))
-            max_channels = int(info.get(channel_field, 0))
+            if info is None:
+                # Defensive: a device can disconnect mid-enumeration (and mocks
+                # may yield sparse rows) — skip rather than crash the discovery.
+                continue
+            name = str(info.get("name") or "")
+            raw_channels = info.get(channel_field)
+            # The channel field is normally an int, but guard against a present
+            # but None value so int(None) can never raise TypeError.
+            max_channels = int(raw_channels) if raw_channels is not None else 0
             if device_name.lower() in name.lower() and max_channels > 0:
                 _log.info(log_event, index=i, name=name)
                 return i
