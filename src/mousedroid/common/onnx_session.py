@@ -93,9 +93,27 @@ def run_session_with_zeros(
     # keep the module-level import graph minimal.
     import numpy as _np
 
+    # Map each input's declared ONNX element type to a NumPy dtype so the
+    # zero-filled warmup feeds match the graph (a model may declare int64 /
+    # bool inputs, not only float — feeding float32 to those raises
+    # InvalidArgument in ONNX Runtime). Unknown / absent types fall back to
+    # float32, preserving the original all-float behaviour for current models.
+    dtype_by_onnx_type: dict[str, Any] = {
+        "tensor(float)": _np.float32,
+        "tensor(double)": _np.float64,
+        "tensor(float16)": _np.float16,
+        "tensor(int64)": _np.int64,
+        "tensor(int32)": _np.int32,
+        "tensor(int16)": _np.int16,
+        "tensor(int8)": _np.int8,
+        "tensor(uint8)": _np.uint8,
+        "tensor(bool)": _np.bool_,
+    }
+
     for inp in session.get_inputs():
         shape = tuple(d if isinstance(d, int) and d > 0 else 1 for d in (inp.shape or []))
-        feeds[inp.name] = _np.zeros(shape, dtype=_np.float32)
+        dtype = dtype_by_onnx_type.get(getattr(inp, "type", ""), _np.float32)
+        feeds[inp.name] = _np.zeros(shape, dtype=dtype)
     session.run(list(output_names), feeds)
 
 

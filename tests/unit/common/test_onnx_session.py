@@ -46,9 +46,12 @@ from mousedroid.common.onnx_session import (
 # Stub ORT session / module (mirrors tests/unit/vla/test_distilled_onnx)
 # ----------------------------------------------------------------------
 class _StubInput:
-    def __init__(self, name: str, shape: tuple[int | str, ...]) -> None:
+    def __init__(
+        self, name: str, shape: tuple[int | str, ...], type_: str = "tensor(float)"
+    ) -> None:
         self.name = name
         self.shape = list(shape)
+        self.type = type_
 
 
 class _StubSession:
@@ -185,6 +188,36 @@ class TestRunSessionWithZeros:
         # Zero-filled.
         assert not feeds["h"].any()
         assert not feeds["z"].any()
+
+    def test_maps_onnx_input_types_to_numpy_dtypes(self) -> None:
+        # A model may declare non-float inputs; each feed's dtype must match the
+        # input's declared ONNX type (feeding float32 to an int64 input raises
+        # InvalidArgument in ONNX Runtime).
+        session = _StubSession(
+            "m.onnx",
+            providers=["CPUExecutionProvider"],
+            inputs=[
+                _StubInput("f", (1, 4), "tensor(float)"),
+                _StubInput("i", (1, 8), "tensor(int64)"),
+                _StubInput("b", (1, 2), "tensor(bool)"),
+            ],
+        )
+        run_session_with_zeros(session, ["action"])
+        feeds = session.run_calls[0]["feeds"]
+        assert feeds["f"].dtype == np.float32
+        assert feeds["i"].dtype == np.int64
+        assert feeds["b"].dtype == np.bool_
+
+    def test_unknown_input_type_falls_back_to_float32(self) -> None:
+        # An unrecognised (or absent) ONNX type defaults to float32 — preserving
+        # the original all-float warmup behaviour for the existing models.
+        session = _StubSession(
+            "m.onnx",
+            providers=["CPUExecutionProvider"],
+            inputs=[_StubInput("x", (1, 4), "tensor(string)")],
+        )
+        run_session_with_zeros(session, ["out"])
+        assert session.run_calls[0]["feeds"]["x"].dtype == np.float32
 
     def test_dynamic_and_nonpositive_dims_collapse_to_one(self) -> None:
         # A symbolic batch dim ("batch") and a 0/negative dim collapse to 1.
