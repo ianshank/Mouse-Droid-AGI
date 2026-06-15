@@ -39,6 +39,24 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
+# Literal warmup event names per supported wrapper prefix. Structured logging
+# requires literal, greppable event strings (never f-string-built), so the
+# per-wrapper ``log_prefix`` selects a fixed (start, pass, complete) triple
+# rather than formatting the event name at the call site. Add an entry here to
+# onboard a new wrapper.
+_WARMUP_LOG_EVENTS: dict[str, tuple[str, str, str]] = {
+    "distilled_vla_onnx": (
+        "distilled_vla_onnx_warmup_start",
+        "distilled_vla_onnx_warmup_pass",
+        "distilled_vla_onnx_warmup_complete",
+    ),
+    "dual_stream_rssm_onnx": (
+        "dual_stream_rssm_onnx_warmup_start",
+        "dual_stream_rssm_onnx_warmup_pass",
+        "dual_stream_rssm_onnx_warmup_complete",
+    ),
+}
+
 
 def resolve_providers(
     requested: tuple[str, ...],
@@ -162,8 +180,13 @@ def warmup_session(
 
     available = tuple(ort.get_available_providers())
     active = resolve_providers(requested_providers, available)
+    try:
+        start_event, pass_event, complete_event = _WARMUP_LOG_EVENTS[log_prefix]
+    except KeyError as exc:
+        msg = f"Unsupported ONNX warmup log_prefix: {log_prefix!r}"
+        raise ValueError(msg) from exc
     _log.info(
-        f"{log_prefix}_warmup_start",
+        start_event,
         requested_providers=list(requested_providers),
         available_providers=list(available),
         active_providers=list(active),
@@ -177,10 +200,10 @@ def warmup_session(
 
     for i in range(warmup_iterations):
         run_session_with_zeros(session, output_names)
-        _log.debug(f"{log_prefix}_warmup_pass", iteration=i + 1)
+        _log.debug(pass_event, iteration=i + 1)
 
     _log.info(
-        f"{log_prefix}_warmup_complete",
+        complete_event,
         active_providers=list(active),
         warmup_iterations=warmup_iterations,
     )

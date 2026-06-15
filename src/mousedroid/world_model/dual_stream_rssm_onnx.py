@@ -14,10 +14,13 @@ is only loaded inside :meth:`warmup`), same provider-fallback logic
 call boundary. The shared session-lifecycle logic (provider resolution,
 the lazy-import warmup, and the zero-filled warmup pass) now lives in the
 neutral :mod:`mousedroid.common.onnx_session` helper module, which both
-wrappers delegate to. That module imports neither ``vla`` nor
-``world_model``, so this runtime stays independent of the VLA module
-(the reason the logic was previously duplicated rather than imported)
-while no longer carrying its own copy.
+wrappers delegate to and which imports neither ``vla`` nor ``world_model``
+-- so the duplicated session-lifecycle copy (kept to avoid a cross-module
+import) is gone. This module does still import the shared
+:data:`~mousedroid.vla.policy.DEFAULT_ORT_PROVIDERS` default from
+``vla.policy`` -- a separate, pre-existing coupling -- so it is not yet
+fully VLA-independent; relocating that constant to a neutral module is a
+follow-up.
 
 What this class does NOT implement: :meth:`imagine_step`. The CfC
 maintains internal state across imagined rollouts which the export

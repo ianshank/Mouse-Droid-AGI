@@ -262,6 +262,22 @@ class TestWarmupSession:
                 log_prefix="distilled_vla_onnx",
             )
 
+    def test_unsupported_log_prefix_raises(
+        self, fake_onnx_file: Path, stub_ort_factory: Any
+    ) -> None:
+        # Warmup event names are looked up from a literal map keyed by the
+        # supported wrapper prefixes; an unregistered prefix fails loudly
+        # rather than emitting an unknown (non-greppable) event name.
+        stub_ort_factory(available=("CPUExecutionProvider",))
+        with pytest.raises(ValueError, match="Unsupported ONNX warmup log_prefix"):
+            warmup_session(
+                fake_onnx_file,
+                ("CPUExecutionProvider",),
+                0,
+                ["action"],
+                log_prefix="not_a_real_wrapper",
+            )
+
     def test_returns_session_and_resolved_providers(
         self, fake_onnx_file: Path, stub_ort_factory: Any
     ) -> None:
