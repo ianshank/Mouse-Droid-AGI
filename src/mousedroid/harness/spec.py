@@ -149,8 +149,10 @@ def git_rev_ok(ref: str | None, *, cwd: str | Path | None = None) -> bool:
     """
     if not ref:
         return False
-    r = subprocess.run(  # noqa: S603 — fixed argv list, no shell, trusted constant program
-        ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],  # noqa: S607
+    # Fixed argv list, no shell, trusted constant program (S603/S607 ignored
+    # for this file in pyproject.toml, matching validation/runtime.py).
+    r = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
         capture_output=True,
         text=True,
         cwd=cwd,
@@ -175,8 +177,9 @@ def run_validation(f: Feature, *, cwd: str | Path | None = None) -> str | None:
     if not cmd:
         return f"{f['id']}: status=done but no validation_command"
     # shell=True is intentional: validation_command is an operator-authored
-    # shell string (HARNESS_SPEC.md §5), not untrusted input.
-    r = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=cwd)  # noqa: S602
+    # shell string (HARNESS_SPEC.md §5), not untrusted input. S602 is ignored
+    # for this file in pyproject.toml.
+    r = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=cwd)
     if r.returncode != 0:
         tail = (r.stdout + r.stderr).strip().splitlines()[-3:]
         return f"{f['id']}: validation_command failed ({r.returncode})\n      " + "\n      ".join(

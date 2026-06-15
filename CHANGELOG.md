@@ -8,6 +8,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Spec-driven development harness (HARNESS_SPEC v2.1, ADR-012)
+
+A schema-validated feature catalog + runner that makes feature completion
+**mechanically checkable** rather than inferred: a feature is `done` only when
+its `validation_command` exits 0 under the runner — there is no hand-set
+`passes` flag to game. Additive to the existing CI; the rover runtime and the
+30 Hz reactive loop are untouched (this is a CI/agent tooling surface).
+
+- **Source of truth + runner.** `features.yaml` (8 seeded features mapping to
+  real, runnable checks), `features.schema.json` (JSON Schema draft 2020-12),
+  `scripts/validate.py` (schema + DAG integrity [dangling edges + cycles] +
+  `git rev-parse` provenance + tier-gated command execution) and
+  `scripts/select_next.py` (DAG-aware next-feature picker). `scripts/init.sh`
+  idempotent baseline bootstrap; `scripts/validations/F-001.sh` non-recursive
+  self-check.
+- **Importable, covered logic.** Enforcement logic lives in the package module
+  `src/mousedroid/harness/spec.py` (pure, `mypy --strict`, side-effect-free,
+  dependency-injectable `runner`/`rev_checker`); the two `scripts/` entry points
+  are thin, CWD-robust CLI shims (identical flags/exit-codes/output). Mirrors
+  the existing `cli/* → validation/*` split, so the harness guarantees fall
+  under the 85% coverage gate (`tests/unit/harness/test_spec.py`, 100% on
+  `spec.py`).
+- **Tier-gated CI.** New `.github/workflows/harness.yml` runs the `fast` tier on
+  every push/PR and `fast,slow` nightly (`fetch-depth: 0`, mock hardware);
+  `scripts/ci.sh` runs the fast tier in the local full-CI loop. The `hardware`
+  tier (`F-008`, USB-C rover smoke) is reserved for the self-hosted Jetson runner.
+- **Tests + docs.** `tests/regression/test_harness_spec_aqa.py` (catalog
+  hygiene), `tests/regression/test_harness_cli_contract.py` (CLI backwards-compat),
+  `tests/unit/harness/test_spec.py`. `HARNESS_SPEC.md`, `progress.md`,
+  `docs/architecture/ADR-012-spec-driven-harness.md`,
+  `docs/architecture/c4-spec-harness.md`. `jsonschema` + `types-jsonschema` added
+  to the `[dev]` extra.
+- **Test-harness robustness.** `tests/unit/scripts/test_check_branch_coverage_base_ref.py`
+  sandbox repos now disable `commit.gpgsign` so the full suite passes on hosts
+  with global commit signing.
+
 ### Added — Phase 6: On-device incremental learning (default-OFF, sim-validated)
 
 Lets the rover refine its own policy/world-model weights *between* cloud

@@ -31,6 +31,13 @@ docs/
 *.md
 !README.md
 
+# Spec-driven harness — CI/agent tooling, never part of the rover runtime image.
+# (HARNESS_SPEC.md / progress.md are already covered by the *.md rule above;
+# the importable src/mousedroid/harness/spec.py stays in the package.)
+features.yaml
+features.schema.json
+scripts/validations/
+
 # Tests (installed separately in dev layer)
 # tests/
 
