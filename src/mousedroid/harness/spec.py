@@ -210,9 +210,10 @@ def run_validation(
         ``None`` on success (exit 0); otherwise an error string carrying the
         exit code and the last few output lines.
     """
+    fid = f.get("id", "<unknown>")
     cmd = f.get("validation_command")
     if not cmd:
-        return f"{f['id']}: no validation_command defined"
+        return f"{fid}: no validation_command defined"
     # shell=True is intentional: validation_command is an operator-authored
     # shell string (HARNESS_SPEC.md §5), not untrusted input. S602 is ignored
     # for this file in pyproject.toml. stderr is merged into stdout so a pytest
@@ -229,12 +230,10 @@ def run_validation(
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        return f"{f['id']}: validation_command timed out after {timeout}s"
+        return f"{fid}: validation_command timed out after {timeout}s"
     if r.returncode != 0:
         tail = r.stdout.strip().splitlines()[-20:]
-        return f"{f['id']}: validation_command failed ({r.returncode})\n      " + "\n      ".join(
-            tail
-        )
+        return f"{fid}: validation_command failed ({r.returncode})\n      " + "\n      ".join(tail)
     return None
 
 

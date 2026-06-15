@@ -172,6 +172,14 @@ def test_run_validation_missing_command() -> None:
     assert "no validation_command" in err
 
 
+def test_run_validation_tolerates_missing_id() -> None:
+    # A direct caller may pass a malformed feature (no id); the error string must
+    # render with a placeholder rather than raising KeyError.
+    err = spec.run_validation({"name": "no id"})
+    assert err is not None
+    assert "no validation_command" in err
+
+
 def test_run_validation_timeout() -> None:
     # A command that sleeps longer than the (tiny) timeout is killed and reported,
     # not left to hang the harness. Driven through the interpreter for portability.
