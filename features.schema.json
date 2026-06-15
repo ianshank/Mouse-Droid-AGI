@@ -29,7 +29,10 @@
           {
             "if": { "properties": { "status": { "const": "done" } } },
             "then": { "required": ["validation_command", "implemented_in"],
-                      "properties": { "validation_command": { "type": "string", "minLength": 1 } } }
+                      "properties": {
+                        "validation_command": { "type": "string", "minLength": 1 },
+                        "implemented_in": { "type": "string", "minLength": 1 }
+                      } }
           }
         ]
       }

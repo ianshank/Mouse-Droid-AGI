@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shlex
 from pathlib import Path
 
+import jsonschema
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -30,7 +32,7 @@ _SPEC = _REPO_ROOT / "HARNESS_SPEC.md"
 
 
 def _load_features() -> list[dict]:
-    return yaml.safe_load(_FEATURES.read_text())["features"]
+    return yaml.safe_load(_FEATURES.read_text(encoding="utf-8"))["features"]
 
 
 def test_core_harness_files_exist() -> None:
@@ -45,8 +47,7 @@ def test_core_harness_files_exist() -> None:
 
 
 def test_features_validate_against_schema() -> None:
-    jsonschema = __import__("jsonschema")
-    schema = json.loads(_SCHEMA.read_text())
+    schema = json.loads(_SCHEMA.read_text(encoding="utf-8"))
     feats = _load_features()
     errors = sorted(
         jsonschema.Draft202012Validator(schema).iter_errors({"features": feats}),
@@ -83,11 +84,16 @@ def test_done_features_have_command_and_provenance() -> None:
 def test_referenced_validation_scripts_exist() -> None:
     for f in _load_features():
         cmd = f.get("validation_command") or ""
-        for token in cmd.split():
-            if token.startswith("scripts/validations/") and token.endswith(".sh"):
-                script = _REPO_ROOT / token
-                assert script.is_file(), f"{f['id']}: missing validation script {token}"
-                assert script.stat().st_size > 0, f"{f['id']}: empty validation script {token}"
+        # validation_command is a shell string, so tokenize the way a shell
+        # would (shlex strips quotes); normalise a leading ./ so spellings like
+        # `bash "./scripts/validations/F-001.sh"` are still existence-checked
+        # instead of silently skipped by a naive str.split().
+        for token in shlex.split(cmd):
+            normalised = token.removeprefix("./")
+            if normalised.startswith("scripts/validations/") and normalised.endswith(".sh"):
+                script = _REPO_ROOT / normalised
+                assert script.is_file(), f"{f['id']}: missing validation script {normalised}"
+                assert script.stat().st_size > 0, f"{f['id']}: empty validation script {normalised}"
 
 
 def test_runner_modules_import_as_files() -> None:

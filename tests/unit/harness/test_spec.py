@@ -116,6 +116,24 @@ def test_check_dag_multi_node_cycle() -> None:
     assert any("cycle" in e for e in spec.check_dag(feats))
 
 
+def test_check_dag_reports_non_mapping_item() -> None:
+    # Malformed catalog (schema validation skipped/unavailable): a non-mapping
+    # entry must be reported, not raise.
+    malformed: list[Any] = ["not-a-feature", _feat("F-001")]
+    errs = spec.check_dag(malformed)
+    assert any("feature[0] is not an object" in e for e in errs)
+
+
+def test_check_dag_reports_missing_id() -> None:
+    errs = spec.check_dag([{"name": "no id"}, {"id": ""}])
+    assert sum("missing valid id" in e for e in errs) == 2
+
+
+def test_check_dag_reports_duplicate_id() -> None:
+    errs = spec.check_dag([_feat("F-001"), _feat("F-001")])
+    assert any("duplicate feature id F-001" in e for e in errs)
+
+
 # --------------------------------------------------------------------------- #
 # git_rev_ok
 # --------------------------------------------------------------------------- #
@@ -136,7 +154,12 @@ def test_run_validation_success() -> None:
 
 
 def test_run_validation_failure_includes_tail() -> None:
-    err = spec.run_validation(_feat("F-001", validation_command="echo boom >&2; exit 3"))
+    # Drive the failure through the current interpreter rather than a bash-only
+    # one-liner so the test is shell-portable (validation_command runs under
+    # cmd.exe on Windows, where `echo ... >&2; exit 3` neither fails nor writes
+    # to stderr). stderr is merged into stdout, so the marker lands in the tail.
+    cmd = f'"{sys.executable}" -c "import sys; sys.stderr.write(\'boom\'); sys.exit(3)"'
+    err = spec.run_validation(_feat("F-001", validation_command=cmd))
     assert err is not None
     assert "F-001" in err
     assert "(3)" in err
@@ -203,12 +226,29 @@ def test_run_features_strict_git_promotes_warning_to_error() -> None:
     assert any("resolvable git ref" in e for e in strict.errors)
 
 
-def test_run_features_schema_missing_lib_warns(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_features_schema_missing_lib_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The harness is an enforced gate: a requested schema check with jsonschema
+    # unavailable is a hard error, never a silently-skipped false-green run.
     monkeypatch.setitem(sys.modules, "jsonschema", None)
     res = spec.run_features(
         [_feat("F-001")], "schema.json", {"fast"}, runner=_ok_runner, rev_checker=_ok_rev
     )
-    assert any("jsonschema not installed" in w for w in res.warnings)
+    assert not res.ok
+    assert any("jsonschema not installed" in e for e in res.errors)
+
+
+def test_run_features_short_circuits_on_dag_errors() -> None:
+    # A structurally invalid catalog must not drive validation_command execution.
+    feats = [_feat("F-001", status="done", tier="fast", depends_on=["F-404"])]
+
+    def _boom_runner(_f: Feature) -> str | None:  # pragma: no cover - must not run
+        raise AssertionError("runner must not execute when the DAG is invalid")
+
+    res = spec.run_features(feats, None, {"fast"}, runner=_boom_runner, rev_checker=_ok_rev)
+    assert not res.ok
+    assert res.ran == 0
+    assert res.skipped == 1
+    assert any("unknown id F-404" in e for e in res.errors)
 
 
 # --------------------------------------------------------------------------- #
@@ -242,7 +282,8 @@ def test_select_next_reports_blocked_with_unmet_deps() -> None:
         _feat("F-001", status="todo"),  # not done -> blocks F-002
         _feat("F-002", status="todo", depends_on=["F-001"]),
     ]
-    # F-001 itself is ready (no deps), so it is selected first.
+    # Only F-002 is passed in, so its F-001 dependency is absent (not done):
+    # select_next must report F-002 as blocked on its unmet dependency.
     sel = spec.select_next([feats[1]])
     assert sel.kind == "blocked"
     assert sel.blocked == [("F-002", ["F-001"])]

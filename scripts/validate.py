@@ -40,7 +40,6 @@ def main() -> int:
     args = ap.parse_args()
 
     feats = spec.load_features(args.features)
-    tiers = {t.strip() for t in args.tier.split(",") if t.strip()}
 
     # Commands and git provenance resolve repo-relative paths regardless of CWD.
     run = functools.partial(spec.run_validation, cwd=_REPO_ROOT)
@@ -54,6 +53,14 @@ def main() -> int:
         err = run(f)
         print(err or f"{args.check}: OK")
         return 1 if err else 0
+
+    tiers = {t.strip() for t in args.tier.split(",") if t.strip()}
+    invalid = sorted(tiers - spec.VALID_TIERS)
+    if invalid:
+        # Fail loudly: a typo like `--tier fasst` must not silently match no
+        # features and exit 0 (which would let a broken build pass in CI).
+        print(f"invalid tier(s) {invalid}; valid tiers are {sorted(spec.VALID_TIERS)}")
+        return 1
 
     result = spec.run_features(
         feats, args.schema, tiers, strict_git=args.strict_git, runner=run, rev_checker=rev

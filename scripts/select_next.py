@@ -31,9 +31,8 @@ def main(argv: list[str] | None = None) -> int:
         if sel.kind == "resume":
             print(f"{f['id']}  {f['name']}  (in_progress — resume)")
         else:
-            print(
-                f"{f['id']}  {f['name']}  (priority={f['priority']}, tier={f.get('tier', 'fast')})"
-            )
+            tier = f.get("tier", spec.DEFAULT_TIER)
+            print(f"{f['id']}  {f['name']}  (priority={f['priority']}, tier={tier})")
         return 0
     if sel.kind == "blocked":
         print("No feature is ready. Unmet dependencies:")

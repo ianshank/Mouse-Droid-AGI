@@ -35,6 +35,11 @@ Feature = dict[str, Any]
 #: Tier assigned to a feature that omits ``tier`` (HARNESS_SPEC.md §5).
 DEFAULT_TIER = "fast"
 
+#: Allowed execution tiers (mirrors the ``tier`` enum in ``features.schema.json``).
+#: The CLI validates ``--tier`` against this so a typo fails loudly instead of
+#: silently matching no features and exiting 0.
+VALID_TIERS: frozenset[str] = frozenset({"fast", "slow", "hardware"})
+
 #: Lower sorts first — ``select_next`` prefers higher-priority ready features.
 PRIORITY: dict[str, int] = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
@@ -55,7 +60,7 @@ def load_features(path: str | Path) -> list[Feature]:
         ValueError: If the document is empty, not a mapping, or its
             ``features`` value is missing or not a list.
     """
-    with open(path) as fh:
+    with open(path, encoding="utf-8") as fh:
         data = yaml.safe_load(fh)
     if not isinstance(data, dict) or "features" not in data:
         raise ValueError(f"{path}: missing top-level 'features' list")
@@ -87,7 +92,7 @@ def check_schema(feats: list[Feature], schema_path: str | Path) -> list[str]:
 
     import jsonschema
 
-    with open(schema_path) as fh:
+    with open(schema_path, encoding="utf-8") as fh:
         schema = json.load(fh)
     validator = jsonschema.Draft202012Validator(schema)
     return [
@@ -103,18 +108,34 @@ def check_dag(feats: list[Feature]) -> list[str]:
         feats: Feature list whose ``depends_on`` edges form the DAG.
 
     Returns:
-        A list of error strings — one per dangling edge and one per detected
-        cycle (empty when the DAG is well-formed).
+        A list of error strings — one per malformed entry, dangling edge, and
+        detected cycle (empty when the DAG is well-formed). Malformed entries
+        (non-mapping items, missing/non-string ``id``, duplicate ``id``) are
+        reported rather than raised, so callers that skip schema validation
+        (e.g. ``jsonschema`` absent) still get a structured result.
     """
-    by_id = {f["id"]: f for f in feats}
     errs: list[str] = []
-    for f in feats:
+    by_id: dict[str, Feature] = {}
+    for i, f in enumerate(feats):
+        if not isinstance(f, dict):
+            errs.append(f"dag: feature[{i}] is not an object")
+            continue
+        fid = f.get("id")
+        if not isinstance(fid, str) or not fid:
+            errs.append(f"dag: feature[{i}] missing valid id")
+            continue
+        if fid in by_id:
+            errs.append(f"dag: duplicate feature id {fid}")
+            continue
+        by_id[fid] = f
+
+    for fid, f in by_id.items():
         for dep in f.get("depends_on", []):
             if dep not in by_id:
-                errs.append(f"dag: {f['id']} depends_on unknown id {dep}")
+                errs.append(f"dag: {fid} depends_on unknown id {dep}")
 
     white, grey, black = 0, 1, 2
-    color = {f["id"]: white for f in feats}
+    color = dict.fromkeys(by_id, white)
 
     def visit(node: str, stack: list[str]) -> None:
         color[node] = grey
@@ -127,9 +148,9 @@ def check_dag(feats: list[Feature]) -> list[str]:
                 visit(dep, [*stack, dep])
         color[node] = black
 
-    for f in feats:
-        if color[f["id"]] == white:
-            visit(f["id"], [f["id"]])
+    for fid in by_id:
+        if color[fid] == white:
+            visit(fid, [fid])
     return errs
 
 
@@ -175,13 +196,17 @@ def run_validation(f: Feature, *, cwd: str | Path | None = None) -> str | None:
     """
     cmd = f.get("validation_command")
     if not cmd:
-        return f"{f['id']}: status=done but no validation_command"
+        return f"{f['id']}: no validation_command defined"
     # shell=True is intentional: validation_command is an operator-authored
     # shell string (HARNESS_SPEC.md §5), not untrusted input. S602 is ignored
-    # for this file in pyproject.toml.
-    r = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=cwd)
+    # for this file in pyproject.toml. stderr is merged into stdout so a pytest
+    # traceback (which a test runner emits to stdout) is never clobbered by a
+    # late stderr warning when the tail is taken.
+    r = subprocess.run(
+        cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=cwd
+    )
     if r.returncode != 0:
-        tail = (r.stdout + r.stderr).strip().splitlines()[-3:]
+        tail = r.stdout.strip().splitlines()[-20:]
         return f"{f['id']}: validation_command failed ({r.returncode})\n      " + "\n      ".join(
             tail
         )
@@ -232,6 +257,17 @@ def run_features(
 
     Returns:
         A :class:`ValidationResult` aggregating errors, warnings, and counts.
+        When schema or DAG checks record errors, the function short-circuits
+        before running any ``validation_command`` (an invalid catalog must not
+        drive command execution); the ``done`` features are reported as
+        ``skipped``.
+
+    Notes:
+        A requested schema check (``schema_path`` is not ``None``) with
+        ``jsonschema`` unavailable is a hard error, not a warning: the harness
+        is an enforced gate and must never report a false-green run by silently
+        skipping structural validation. Pass ``schema_path=None`` to skip the
+        structural check deliberately.
     """
     errors: list[str] = []
     warnings: list[str] = []
@@ -240,8 +276,16 @@ def run_features(
         try:
             errors += check_schema(feats, schema_path)
         except ModuleNotFoundError:
-            warnings.append("jsonschema not installed; skipping structural check")
+            errors.append(
+                "jsonschema not installed; cannot validate structure "
+                "(install the [dev] extra — the harness will not skip the "
+                "structural check silently)"
+            )
     errors += check_dag(feats)
+
+    if errors:
+        done = sum(1 for f in feats if isinstance(f, dict) and f.get("status") == "done")
+        return ValidationResult(errors=errors, warnings=warnings, ran=0, skipped=done, done=done)
 
     ran = skipped = 0
     for f in feats:
