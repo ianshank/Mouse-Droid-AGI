@@ -750,8 +750,10 @@ class OnDeviceLearningConfig(BaseModel):
         0.05,
         ge=0,
         description=(
-            "Maximum allowed score drop below the cloud baseline before the "
-            "on-device update is reverted (ge=0 permits a zero-tolerance gate)"
+            "Maximum allowed held-out recon+KL loss INCREASE above the live "
+            "baseline before the on-device candidate is reverted (LOWER loss is "
+            "better): PROMOTE iff candidate_loss <= baseline_loss + tolerance. "
+            "ge=0 permits a zero-tolerance gate"
         ),
     )
     held_out_fraction: float = Field(
@@ -759,8 +761,11 @@ class OnDeviceLearningConfig(BaseModel):
         gt=0,
         le=1,
         description=(
-            "Fraction of the replay sample held out to score the updated policy "
-            "against the cloud baseline in the regression gate (0 < f <= 1)"
+            "Fraction of the replay sample reserved for held-out scoring "
+            "(0 < f <= 1). CONFIG SEAM, not wired into the WS-E3 recon-loss gate "
+            "— the gate derives its disjoint held-out window from "
+            "refine_sequence_length/refine_batch_episodes; retained for a future "
+            "fraction-based held-out sizing"
         ),
     )
     ewc_lambda: float = Field(

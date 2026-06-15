@@ -29,11 +29,12 @@ flowchart TB
     end
 
     subgraph OnDevice["src/mousedroid/learning/on_device/"]
-        Coord["ReplayTriggerCoordinator.maybe_update()\ntrigger >= trigger_min_new_records\nall torch work via asyncio.to_thread"]
-        Learner["RSSMRefiner.update(batch)\n• deep-copy live RSSM -> candidate\n• update_steps @ learning_rate\n• train_sequence over (B,T,...) batch\n• base bitwise-UNCHANGED"]
+        Coord["ReplayTriggerCoordinator.maybe_update()\ntrigger >= trigger_min_new_records (NEW records,\nnot store size — consumed_offset baseline)\nall torch work via asyncio.to_thread"]
+        Learner["RSSMRefiner.update(batch)\n• deep-copy live RSSM -> candidate\n• update_steps @ learning_rate (lambda=0, no EWC)\n• train_sequence over (B,T,...) batch\n• base bitwise-UNCHANGED"]
         Store["OnDeviceSlotStore\npersist -> <digest>.pt\nmark_active -> active.json\nload re-verifies SHA-256"]
         Gate["RegressionGate.evaluate()\ncandidate RSSM vs baseline RSSM\nPROMOTE iff cand_loss <= base_loss + tolerance"]
         Scorer["score_dynamics()\nheld-out recon+KL loss (LOWER better)\nheld-out batch + decoders + scoring_seed"]
+        HotSwap["OnDeviceWeightUpdateSource (WS-E4)\nenable_hot_swap-gated (default OFF)\nrefresh_once: materialise active slot\nOFF-loop via asyncio.to_thread\ntake_materialized: PURE ref (in tick)"]
     end
 
     subgraph WorldModel["src/mousedroid/world_model/ (REUSED)"]
@@ -43,6 +44,7 @@ flowchart TB
     subgraph Factory["src/mousedroid/factory.py"]
         BuildCoord["build_on_device_coordinator(cfg, *, metrics=None)\nreturns None when absent/disabled"]
         BuildGate["_build_on_device_gate_runner(cfg, *, slot_store, metrics)"]
+        BuildSwap["build_on_device_hot_swap_source(cfg, *, world_model, metrics)\nreturns None unless enable_hot_swap=True"]
     end
 
     subgraph Config["src/mousedroid/config/schema.py"]
@@ -76,7 +78,15 @@ flowchart TB
     Gate -- "PROMOTE -> mark_active" --> Store
     Gate -- "REVERT -> inc(reason)" --> Counter
 
-    %% Hot-loop isolation (NO edge crosses into HotLoop)
+    %% WS-E4 hot-swap activation path (default-OFF; only when enable_hot_swap=True)
+    Cfg -. "enable_hot_swap" .-> BuildSwap
+    BuildSwap -- "if enabled + RSSM" --> HotSwap
+    Store -- "load_active() digest\n+ load() re-verifies SHA-256" --> HotSwap
+    HotSwap -- "corrupt slot -> inc(integrity_mismatch)" --> Counter
+    HotSwap -- "pre-materialised engine\n(take_materialized: PURE ref lookup)" --> Tick
+
+    %% Hot-loop isolation: the ONLY edge into tick() is a pure reference
+    %% assignment (WS-E4); ALL construction/IO happens off-loop in refresh_once.
     Tick -. "shares event loop ONLY;\ntorch work offloaded off it" .- Loop
 
     classDef hot fill:#fee2e2,stroke:#dc2626,color:#000
@@ -88,7 +98,7 @@ flowchart TB
 
     class Tick hot
     class Loop slow
-    class Coord,Learner,Store,Gate,Scorer,BuildCoord,BuildGate internal
+    class Coord,Learner,Store,Gate,Scorer,HotSwap,BuildCoord,BuildGate,BuildSwap internal
     class Cfg,MetCfg,Counter config
     class RSSM reused
     class LMDB,Reader,SlotFS,Replay store
@@ -116,6 +126,36 @@ flowchart TB
 Determinism is load-bearing: both losses come from `score_dynamics` on the SAME
 held-out batch + shared decoders + `scoring_seed`, so the decision is reproducible.
 
+## Trigger arming — new records, not store size
+
+`count_new_records` counts records **beyond** an in-memory `consumed_offset`
+baseline (the count of records a prior fired cycle already drained), NOT the
+absolute store size. The coordinator's `on_consumed` callback advances the
+offset after a successful cycle (`on_device_consumed_offset_advanced`), so the
+trigger **disarms** until fresh experience accumulates past the baseline again.
+Without this, a store already past `trigger_min_new_records` would re-fire the
+refine + gate every cadence on byte-identical stale data. The offset is
+per-process (resets on restart: the first post-restart cycle re-fires once, then
+disarms).
+
+## WS-E4 hot-swap activation (`enable_hot_swap`, default-OFF)
+
+Promotion (`mark_active`) is SEPARATE from activation. `OnDeviceWeightUpdateSource`
+is the activation seam — wired ONLY when `enable_hot_swap=True` (and the engine
+is a concrete `RSSM`); otherwise the factory returns `None` and the orchestrator
+is byte-identical to #134 (no swap path at all).
+
+| Stage | Action | Hot-loop isolation |
+|---|---|---|
+| Off-loop refresh | `refresh_once()` (slow cadence): `load_active()` digest → `slot_store.load()` re-verifies SHA-256 → `build_world_model` + strict `load_state_dict` + device-place. A corrupt slot is **fail-closed** (`SlotIntegrityError` ⇒ `inc("integrity_mismatch")`, no pending update). | `torch.load` + construct via `asyncio.to_thread`. |
+| Supersede / evict | A newer digest evicts the prior unacknowledged pending engine before publishing (and on the corrupt-supersede branch) so `_engine_by_update` never strands an unreachable engine. | Off the event loop. |
+| In-`tick()` swap | The orchestrator's `_weight_update_loader` calls `take_materialized(update)` — a **PURE reference lookup** by `id(update)`, no I/O. | The only in-`tick()` touch; constant-time ref assignment. |
+
+The source conforms to `WeightUpdatePollerProtocol` + an `engine_type`
+(`world_model`) extension, so it slots into `orchestrator._weight_update_pollers`
+and — when wired — **supersedes** the cloud OTA world-model poller for that slot
+(`on_device_hot_swap_supersedes_cloud_world_model_poller`).
+
 ## Safety + de-hardcode contracts
 
 - **Separate slot (ADR-010).** On-device candidates land at
@@ -132,8 +172,13 @@ held-out batch + shared decoders + `scoring_seed`, so the decision is reproducib
   ⇒ no coordinator, no task, byte-identical orchestrator. The revert counter
   is gated by `MetricsConfig.track_on_device_learning` and omitted from
   `/metrics` until the first revert.
-- **Hot loop untouched.** No edge crosses into the `tick()` subgraph; the two
-  paths share only the event loop, and all torch work is offloaded off it.
+- **Hot loop untouched.** The WS-E2/E3 produce → gate path shares only the event
+  loop with `tick()`, and all torch work is offloaded off it. The **single**
+  edge into the `tick()` subgraph is the WS-E4 hot-swap `take_materialized` —
+  and that is a **pure reference assignment** (the engine was already built
+  off-loop in `refresh_once`), so no construction / disk I/O / device-placement
+  ever runs inside `tick()`. With `enable_hot_swap=False` (the default) even that
+  edge does not exist.
 
 ## Enablement status (WS-E2/E3 closed; WS-E4 gated)
 
