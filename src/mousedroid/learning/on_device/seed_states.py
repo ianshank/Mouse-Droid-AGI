@@ -1,26 +1,21 @@
-"""Replay-encoded seed states for the on-device regression gate (Phase 6 WS-E1).
+"""Replay-record observation adapter + validity-mask synthesis (Phase 6).
 
-The WS4 regression gate scores a candidate against a baseline from a FIXED set of
-world-model ``(h, z)`` seed states. #134 produced those by ``manual_seed``-
-sampling latents directly — reproducible but ungrounded in any real trajectory.
-WS-E1 adds an opt-in, replay-GROUNDED source: roll the live world model's
-``observe_step`` from a zero ``(h, z)`` across a held-out slice of recorded
-experience, collecting the posterior ``(h, z)`` at each step as a seed state.
-
-The new path is wired behind ``cfg.on_device_learning.seed_state_source``: the
-default ``"sampled"`` keeps the #134 behaviour byte-identical; ``"replay_encoded"``
-calls :func:`encode_seed_states`.
+These helpers adapt flat replay records into the world-model observation surface
+and are REUSED by the WS-E2 sequence-batch builder
+(:func:`mousedroid.learning.on_device.rssm_refiner.build_sequence_batch`) that
+feeds the recon-loss regression gate.
 
 Two pieces:
 
 * :func:`record_to_observation` — adapt a flat
   :class:`~mousedroid.experience.record.MouseDroidExperienceRecord` (which carries
   only vision / distance / motor / action / reward / surprise) into an object
-  satisfying the FULL :class:`~mousedroid.sensing.protocol.ObservationProtocol`
-  that ``observe_step`` consumes. Audio is an empty array, lidar is ``None`` (the
-  encoder gates both safely), and the ``valid_mask`` is SYNTHESIZED from the live
-  encoder's enabled flags (see :func:`build_valid_mask`).
-* :func:`encode_seed_states` — the deterministic, ``no_grad`` + ``eval`` rollout.
+  satisfying the FULL :class:`~mousedroid.sensing.protocol.ObservationProtocol`.
+  Audio is an empty array, lidar is ``None`` (the encoder gates both safely), and
+  the ``valid_mask`` is SYNTHESIZED from the live encoder's enabled flags (see
+  :func:`build_valid_mask`).
+* :func:`build_valid_mask` — synthesize the per-modality validity mask from the
+  LIVE encoder's enabled flags, length 4 (no lidar) or 5 (with lidar).
 """
 
 from __future__ import annotations
@@ -29,29 +24,23 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
-import torch
 from numpy.typing import NDArray
 
 from mousedroid.constants import SENSOR_SLOT_MAP
-from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
     from mousedroid.experience.record import MouseDroidExperienceRecord
-    from mousedroid.learning.on_device.scoring import SeedState
     from mousedroid.world_model.encoder import MultimodalEncoder
-    from mousedroid.world_model.rssm import RSSM
-
-_log = get_logger(__name__)
 
 
 @dataclass(frozen=True)
 class _RecordObservation:
     """Lightweight :class:`ObservationProtocol` view over an experience record.
 
-    Adapts the flat replay record into the full observation surface
-    ``observe_step`` expects. The record stores no audio / lidar / mask, so audio
-    is an empty array, lidar is ``None`` (the encoder zero-fills both when their
-    modality is enabled), and the mask is synthesized by :func:`build_valid_mask`.
+    Adapts the flat replay record into the full observation surface the encoder
+    expects. The record stores no audio / lidar / mask, so audio is an empty
+    array, lidar is ``None`` (the encoder zero-fills both when their modality is
+    enabled), and the mask is synthesized by :func:`build_valid_mask`.
 
     Attributes mirror :class:`~mousedroid.sensing.protocol.ObservationProtocol`
     exactly so this object passes a ``runtime_checkable`` ``isinstance`` check.
@@ -148,80 +137,4 @@ def record_to_observation(
     )
 
 
-def encode_seed_states(
-    world_model: RSSM,
-    records: list[MouseDroidExperienceRecord],
-    n_seed: int,
-    *,
-    device: torch.device,
-) -> list[SeedState]:
-    """Encode replay-grounded ``(h, z)`` seed states for the regression gate.
-
-    Rolls ``observe_step`` from a zero ``(h, z)`` across ``records`` — the
-    ``prev_action`` fed to step ``t`` is ``records[t-1].action`` (zeros at the
-    first step) — and collects the posterior ``(h, z)`` after each step as a seed
-    state. Returns up to ``n_seed`` states.
-
-    Determinism: ``observe_step`` is ``@torch.no_grad``-decorated and the global
-    RNG state is captured + restored, so the same model weights + same records
-    ALWAYS yield byte-identical seed states. The model is forced into ``eval()``
-    for the rollout and its prior train-mode is restored afterwards. All tensors
-    are placed on ``device``; the base model parameters are never mutated.
-
-    An empty ``records`` slice returns an empty list and emits a structured
-    ``on_device_seed_states_empty_replay`` warning so the caller falls back to the
-    sampled path.
-
-    Args:
-        world_model: The live :class:`RSSM` whose encoder + posterior produce the
-            latent states.
-        records: The held-out replay slice to encode (chronological order).
-        n_seed: Maximum number of seed states to return.
-        device: The device on which to place the rolled ``(h, z)`` tensors.
-
-    Returns:
-        A list of up to ``n_seed`` ``(h, z)`` seed-state pairs (each ``(1, dim)``);
-        empty when ``records`` is empty.
-    """
-    if not records:
-        _log.warning("on_device_seed_states_empty_replay", n_seed=n_seed)
-        return []
-
-    cfg = world_model.cfg
-    rng_state = torch.get_rng_state()
-    was_training = world_model.training
-
-    seed_states: list[SeedState] = []
-    try:
-        world_model.eval()
-        with torch.no_grad():
-            h = torch.zeros(1, cfg.hidden_dim, device=device)
-            z = torch.zeros(1, cfg.latent_dim, device=device)
-            prev_action = torch.zeros(1, cfg.action_dim, device=device)
-            for record in records:
-                mask = build_valid_mask(record, world_model.encoder)
-                observation = record_to_observation(record, valid_mask=mask)
-                h, z, _recon, _surprise = world_model.observe_step(observation, prev_action, h, z)
-                seed_states.append((h, z))
-                if len(seed_states) >= n_seed:
-                    break
-                # The action that PRODUCED the next observation is this record's
-                # action (the next observe_step uses it as prev_action).
-                prev_action = torch.as_tensor(
-                    record.action, dtype=torch.float32, device=device
-                ).unsqueeze(0)
-    finally:
-        torch.set_rng_state(rng_state)
-        if was_training:
-            world_model.train()
-
-    _log.info(
-        "on_device_seed_states_encoded",
-        n_records=len(records),
-        n_seed_states=len(seed_states),
-        device=str(device),
-    )
-    return seed_states
-
-
-__all__ = ["build_valid_mask", "encode_seed_states", "record_to_observation"]
+__all__ = ["build_valid_mask", "record_to_observation"]

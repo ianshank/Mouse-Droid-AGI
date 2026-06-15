@@ -542,13 +542,18 @@ silently drift:
   registered spec (no orphans). It asserts the H1, **not** YAML front-matter —
   these publishable docs intentionally have none.
 
-## On-device incremental learning (Phase 6 — default-OFF, sim-validated)
+## On-device incremental learning (Phase 6 — functional, default-OFF, soak-gated)
 
-The rover can refine its own policy/world-model weights *between* cloud
-retraining cycles from fresh on-device experience — safe by construction and
-default-OFF. The 30 Hz reactive loop stays training-free; the bounded update +
-regression gate run at the slow-cadence / POST_TICK seam OUTSIDE the hot loop,
-all torch work offloaded via `asyncio.to_thread`. Non-negotiable contracts:
+The rover can refine its own **RSSM world model** *between* cloud retraining
+cycles from fresh on-device experience — safe by construction and default-OFF.
+The WS-E2/E3 learning + gate seams are **CLOSED** (#135): the learner refines the
+**live RSSM** (not a config-sized stand-in) and the gate scores it on a **held-out
+replay batch** by recon+KL loss (the `score_policy`/`PolicyProtocol`/seed-states
+diagnostic scaffolding was retired post-WS-E3). The 30 Hz reactive loop stays
+training-free; the bounded refinement + gate run at the slow-cadence / POST_TICK
+seam OUTSIDE the hot loop, all torch work offloaded via `asyncio.to_thread`.
+**Still soak-gated** — keep `enabled`/`enable_hot_swap` off on the live rover
+until a soak gate passes. Non-negotiable contracts:
 
 - **Default-OFF `Optional`/`None`.** `OnDeviceLearningConfig` is an `Optional`
   field on `Settings` (default `None`; `enabled: bool = False`). Absent or
@@ -573,18 +578,55 @@ all torch work offloaded via `asyncio.to_thread`. Non-negotiable contracts:
   offloads the trigger probe, batch load, learner update, AND the gate scoring
   via `asyncio.to_thread`. The base model is deep-copied before any gradient
   flows (base bitwise-unchanged); the candidate is a separate object.
-- **World-model rollout-return gate + auto-revert is authoritative.**
-  `RegressionGate.evaluate` (`regression_gate.py`) PROMOTEs iff
-  `candidate_score >= baseline_score - regression_tolerance`, scoring both
-  policies with the SAME fixed seed-states + `scoring_seed` via the
-  deterministic `score_policy` over the reused RSSM (`scoring.py`). PROMOTE
-  marks the slot active; otherwise REVERT + increment the counter. The metrics
-  param to `build_on_device_coordinator` is keyword-only (defaults `None`).
-- **NOT yet enabled on the rover.** Two pre-enablement seams: (a) the
-  learner/gate wrap a config-sized STAND-IN net, not the live policy/world-model
-  net behind `PolicyProtocol`; (b) seed-states are `manual_seed`-sampled, not
-  yet encoded from a held-out replay slice. See
-  `docs/runbooks/jetson-on-device-learning.md` (+ ≥30-day soak-gate framing) and
+- **RSSM-vs-RSSM recon-loss gate + auto-revert is authoritative (WS-E3).**
+  `RegressionGate.evaluate` (`regression_gate.py`) scores the candidate RSSM and
+  the live baseline RSSM by their held-out **reconstruction+KL loss** on a SHARED
+  FIXED `(B, T, ...)` batch with SHARED decoders + `scoring_seed`, via the
+  deterministic `score_dynamics` (`scoring.py`) — **LOWER IS BETTER**. PROMOTE iff
+  `candidate_loss` is finite AND `candidate_loss <= baseline_loss +
+  regression_tolerance` (marks the slot active); otherwise REVERT + increment the
+  counter. This REPLACED the retired self-gaming imagined-return metric (it summed
+  the model's OWN `reward_head`, so reward-head inflation gamed it — WS-E-SPIKE).
+  The metrics param to `build_on_device_coordinator` is keyword-only (defaults
+  `None`).
+- **WS-E2/E3 refine the LIVE RSSM (λ=0).** The learner (`RSSMRefiner`,
+  `rssm_refiner.py`) deep-copies the live RSSM and refines the candidate via
+  `train_sequence` over a replay sequence batch using an `autograd.grad`
+  manual-SGD loop (`allow_unused=True` is MANDATORY — `reward_head`/`prior`/
+  `observation_decoder` are off the recon/KL graph). **λ=0: no EWC penalty**
+  (`ewc_lambda` accepted but ignored; `held_out_fraction` is a future seam not
+  wired into the gate). The throwaway `RawModalityDecoders` are refined jointly
+  but NEVER persisted — only the refined RSSM `state_dict` round-trips into a
+  fresh `build_world_model`. The gate's held-out batch is built ONCE over a slice
+  DISJOINT from the refine window; too few records ⇒ logged no-op
+  (`on_device_gate_skipped_no_held_out_batch`).
+- **Trigger arms on NEW records, not store size.** `build_on_device_coordinator`
+  keeps an in-memory `consumed_offset`; `count_new_records` counts beyond it and
+  the coordinator's `on_consumed` advances it after a fired cycle, so the trigger
+  DISARMS until fresh experience accumulates (else it re-fires the refine+gate
+  every cadence on stale data). Per-process — resets on restart.
+- **WS-E4 hot-swap is off-loop + default-OFF.** `OnDeviceWeightUpdateSource`
+  (`hot_swap.py`, wired only when `enable_hot_swap=True`) materialises a promoted
+  slot OFF the hot loop (`refresh_once` via `asyncio.to_thread`: re-verify
+  SHA-256 fail-closed → `inc("integrity_mismatch")`; build + device-place); the
+  in-`tick()` `take_materialized` is a PURE ref lookup. A newer digest evicts the
+  prior unacknowledged pending engine (`_evict_pending_engine`) so the cache
+  never strands an unreachable engine. When wired it SUPERSEDES the cloud OTA
+  world-model poller (`on_device_hot_swap_supersedes_cloud_world_model_poller`).
+- **Determinism is load-bearing.** `score_dynamics` + `RSSMRefiner.update`
+  capture/restore the CPU AND CUDA RNG (guarded by device + `cuda.is_available()`);
+  the gate-runner's decoder-init seed is confined to `torch.random.fork_rng`; the
+  refiner builds recon heads on the candidate's device. Same `scoring_seed` +
+  inputs + weights ⇒ byte-identical loss ⇒ reproducible promote/revert.
+- **Grep events** (live RSSM path, NOT the unwired #134 `ewc_online`
+  `on_device_update_*`): `on_device_refine_start`/`_complete`,
+  `on_device_dynamics_score_computed`, `on_device_candidate_promoted`/`_reverted`
+  (keep these names — docs reference them), `on_device_consumed_offset_advanced`,
+  and (hot-swap) `on_device_hot_swap_pending`/`_slot_integrity_mismatch`/
+  `_refresh_failed`/`_supersedes_cloud_world_model_poller`. The full pipeline
+  (promote + revert + `_tick_count==0`) is pinned by
+  `tests/integration/test_on_device_sim_soak.py`. See
+  `docs/runbooks/jetson-on-device-learning.md` (+ soak-gate framing) and
   `docs/architecture/c4-on-device-learning.md`.
 
 See `AGENTS.md` (agentic-worker behavioural contract) and `SKILLS.md`

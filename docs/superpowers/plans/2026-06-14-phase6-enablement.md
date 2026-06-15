@@ -50,6 +50,15 @@ Recon (`2026-06-14` integration map) established, with evidence:
 
 ## WS-E1 — Replay-encoded seed states (medium risk; default-OFF via `seed_state_source`)
 
+> **SUPERSEDED (post-#135 follow-up).** The WS-E3 pivot replaced the seed-state /
+> imagined-return gate with the RSSM-vs-RSSM recon-loss gate, which scores a
+> held-out replay BATCH (not encoded seed-states). The seed-state machinery this
+> section planned — `seed_state_source`, `encode_seed_states`, the factory
+> `_build_sampled_seed_states` / `_build_replay_encoded_seed_states` helpers — was
+> never wired into the live gate and has been REMOVED as vestigial. Only
+> `record_to_observation` + `build_valid_mask` survive (REUSED by
+> `rssm_refiner.build_sequence_batch`).
+
 **Files:** `src/mousedroid/learning/on_device/seed_states.py` (new); `factory.py:_build_on_device_gate_runner` :3138-3146; `tests/unit/learning/on_device/test_seed_states.py`.
 
 - [ ] New `record_to_observation(record: MouseDroidExperienceRecord) -> ObservationProtocol` adapter: expose `vision_features/distance_m/motor_state` from the record; **synthesize `valid_mask`** (1 for stored modalities, 0 for absent vision when `vision_features` empty); return `None`/empty for audio/lidar (encoder gates these: `rssm.py:130,137,156,167`). Pin the mask convention with a test.
@@ -217,7 +226,7 @@ Both core uncertainties resolved with hard numbers (tiny RSSM hidden=8/latent=4/
 - **Direction (INVERTS the current gate):** PROMOTE iff `candidate_loss <= baseline_loss + cfg.regression_tolerance`; else REVERT + `inc_on_device_learning_reverted("regression_bound")`. `regression_gate.py:170` is currently higher-is-better (`>= baseline - tol`) and `GateDecision.delta` sign assumes higher=better → **both must flip** (positive delta = worse for loss).
 - **Determinism:** `torch.manual_seed(scoring_seed)` immediately before EACH `train_sequence` call (reparam noise draws from global RNG); same seed for baseline + candidate.
 - **Shared decoders:** the SAME `RawModalityDecoders(cfg)` instance scores baseline AND candidate (recon heads external to RSSM).
-- **Proof score_policy self-games (RETIRE from gate):** reward-head-inflated degraded model → imagined return +57.8 (looks better) but recon loss byte-identical to baseline; genuinely-degraded model → recon loss 3.35→95.7 (separates). `score_policy` sums the model's OWN `reward_head` → unsafe as a gate signal; keep only as a non-gating diagnostic.
+- **Proof score_policy self-games (RETIRE from gate):** reward-head-inflated degraded model → imagined return +57.8 (looks better) but recon loss byte-identical to baseline; genuinely-degraded model → recon loss 3.35→95.7 (separates). `score_policy` sums the model's OWN `reward_head` → unsafe as a gate signal; keep only as a non-gating diagnostic. *(Post-#135 follow-up: the non-gating `score_policy` diagnostic + its `PolicyProtocol`/`StateDictPolicyAdapter` were also REMOVED as vestigial — the recon-loss `score_dynamics` is the sole scorer.)*
 - **deg edge:** a heavily-corrupted candidate can blow KL to very-large/non-finite → still REVERTs (large > baseline); tests must assert large/non-finite ⇒ revert, not finite-loss.
 
 ### Gate-seam rework required (WS-E3)

@@ -29,9 +29,8 @@ def test_pre_enablement_block_loads_with_new_fields_at_defaults() -> None:
     )
     block = cfg.on_device_learning
     assert block is not None
-    # The four new enablement fields are present at their default values.
+    # The new enablement fields are present at their default values.
     assert block.enable_hot_swap is False
-    assert block.seed_state_source == "sampled"
     assert block.refine_sequence_length == 16
     assert block.refine_batch_episodes == 4
 
@@ -44,7 +43,6 @@ def test_new_fields_round_trip() -> None:
             "on_device_learning": {
                 "enabled": True,
                 "enable_hot_swap": True,
-                "seed_state_source": "replay_encoded",
                 "refine_sequence_length": 32,
                 "refine_batch_episodes": 8,
             },
@@ -52,7 +50,6 @@ def test_new_fields_round_trip() -> None:
     ).on_device_learning
     assert block is not None
     assert block.enable_hot_swap is True
-    assert block.seed_state_source == "replay_encoded"
     assert block.refine_sequence_length == 32
     assert block.refine_batch_episodes == 8
 
@@ -69,7 +66,6 @@ def test_bare_on_device_config_defaults() -> None:
     """An ``OnDeviceLearningConfig()`` carries the new fields at defaults."""
     block = OnDeviceLearningConfig()
     assert block.enable_hot_swap is False
-    assert block.seed_state_source == "sampled"
     assert block.refine_sequence_length == 16
     assert block.refine_batch_episodes == 4
 

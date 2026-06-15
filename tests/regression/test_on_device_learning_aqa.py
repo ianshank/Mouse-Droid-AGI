@@ -29,11 +29,10 @@ def test_config_fields_all_documented() -> None:
 
 
 def test_ws_e0_enablement_fields_present_typed_and_documented() -> None:
-    """The four WS-E0 enablement fields exist, are typed/defaulted, and documented."""
+    """The WS-E0 enablement fields exist, are typed/defaulted, and documented."""
     fields = OnDeviceLearningConfig.model_fields
     for name, expected_default in (
         ("enable_hot_swap", False),
-        ("seed_state_source", "sampled"),
         ("refine_sequence_length", 16),
         ("refine_batch_episodes", 4),
     ):

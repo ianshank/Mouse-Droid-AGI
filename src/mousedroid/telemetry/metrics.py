@@ -1119,11 +1119,12 @@ class MetricsRegistry:
         ``cfg.track_on_device_learning``.
 
         Args:
-            reason: One of ``"regression_bound"`` (held-out score dropped below
-                ``cloud_score - regression_tolerance``), ``"integrity_mismatch"``
-                (SHA-256 checkpoint verification failed), or ``"exception"`` (the
-                update path raised). Out-of-set values are dropped with a DEBUG
-                log so a free-text mission string never leaks cardinality.
+            reason: One of ``"regression_bound"`` (held-out recon+KL loss exceeded
+                ``baseline_loss + regression_tolerance`` — LOWER loss is better),
+                ``"integrity_mismatch"`` (SHA-256 checkpoint verification failed),
+                or ``"exception"`` (the update path raised). Out-of-set values are
+                dropped with a DEBUG log so a free-text mission string never leaks
+                cardinality.
             amount: Increment magnitude (default 1); ``<= 0`` is a no-op.
         """
         if not self._cfg.track_on_device_learning or amount <= 0:
