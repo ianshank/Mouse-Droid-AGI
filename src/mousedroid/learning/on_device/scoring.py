@@ -114,18 +114,18 @@ def score_dynamics(
         )
         raise TypeError(msg)
 
-    # ``torch.manual_seed`` reseeds CPU AND every CUDA generator, and
-    # ``train_sequence``'s reparam ``randn_like`` draws from the CUDA generator
-    # when the model is on CUDA — so on a GPU rover the CUDA RNG must be captured +
-    # restored alongside the CPU RNG, else a caller sharing the process CUDA RNG is
-    # silently perturbed. Guarded by the model's device AND ``cuda.is_available()``
-    # so a CPU-only host never touches the CUDA RNG API (byte-identical CPU path).
-    first_param = next(world_model.parameters(), None)
-    on_cuda = (
-        first_param is not None and first_param.device.type == "cuda" and torch.cuda.is_available()
-    )
+    # ``torch.manual_seed`` reseeds CPU AND every CUDA generator WHENEVER CUDA is
+    # available — regardless of the model's device — and ``train_sequence``'s
+    # reparam ``randn_like`` draws from the CUDA generator when the model is on
+    # CUDA. So on any CUDA host the CUDA RNG must be captured + restored alongside
+    # the CPU RNG, else a caller sharing the process CUDA RNG is silently perturbed
+    # (the manual_seed below touches it even when scoring a CPU model). Keyed on
+    # ``cuda.is_available()`` ALONE — NOT the model's device — so the guard matches
+    # what manual_seed actually mutates; a CPU-only host skips the CUDA RNG API
+    # entirely (byte-identical CPU path) and the scorer never calls
+    # ``world_model.parameters()`` (so a params-less stand-in still scores).
     rng_state = torch.get_rng_state()
-    cuda_rng_state = torch.cuda.get_rng_state_all() if on_cuda else None
+    cuda_rng_state = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
     was_training = world_model.training
     decoder_was_training = decoders.training
 

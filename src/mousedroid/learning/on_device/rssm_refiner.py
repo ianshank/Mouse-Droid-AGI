@@ -241,18 +241,18 @@ class RSSMRefiner:
         # reproducible. The prior RNG + train-mode state are captured + restored so
         # the call is side-effect free for a caller sharing the process RNG.
         #
-        # ``torch.manual_seed`` reseeds CPU AND every CUDA generator, and
+        # ``torch.manual_seed`` reseeds CPU AND every CUDA generator WHENEVER CUDA
+        # is available — regardless of the candidate's device — and
         # ``train_sequence``'s ``randn_like`` reparam noise draws from the CUDA
-        # generator when the candidate is on CUDA — so on a GPU rover the CUDA RNG
+        # generator when the candidate is on CUDA. So on any CUDA host the CUDA RNG
         # must be captured + restored too, else a caller sharing the process CUDA
-        # RNG is silently perturbed. Guarded by ``cuda.is_available()`` AND the
-        # candidate's device so a CPU-only host never touches the CUDA API.
+        # RNG is silently perturbed (the manual_seed below touches it even when
+        # refining a CPU candidate). Keyed on ``cuda.is_available()`` ALONE — NOT
+        # the candidate's device — so the guard matches what manual_seed mutates;
+        # a CPU-only host never touches the CUDA API. (``device`` above is for the
+        # throwaway decoder placement, a separate concern from this RNG guard.)
         rng_state = torch.get_rng_state()
-        cuda_rng_state = (
-            torch.cuda.get_rng_state_all()
-            if device.type == "cuda" and torch.cuda.is_available()
-            else None
-        )
+        cuda_rng_state = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
         was_training = candidate.training
 
         final_loss = 0.0
