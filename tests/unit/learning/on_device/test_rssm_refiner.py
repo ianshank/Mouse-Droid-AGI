@@ -503,3 +503,59 @@ def test_refiner_restores_cpu_rng_state() -> None:
     RSSMRefiner(wm, _ocfg(update_steps=2)).update(batch)
 
     assert torch.equal(before, torch.get_rng_state()), "CPU RNG not restored by refiner"
+
+
+def test_refiner_guards_cuda_rng_capture_when_cuda_unavailable() -> None:
+    """On a CPU-only host, ``RSSMRefiner.update`` never touches the CUDA RNG API.
+
+    The CUDA capture/restore is keyed on ``cuda.is_available()`` ALONE (NOT the
+    candidate's device) because ``torch.manual_seed`` reseeds every CUDA generator
+    whenever CUDA exists — even when refining a CPU candidate. A CPU-only host
+    (``is_available() == False``) must run the refiner WITHOUT calling
+    ``torch.cuda.get_rng_state_all`` / ``set_rng_state_all`` (the structural guard
+    that keeps the CPU-only path CUDA-free). Patching ``is_available`` to ``False``
+    makes the assertion host-independent.
+    """
+    from unittest.mock import patch
+
+    cfg = _model_cfg()
+    wm = _make_rssm(cfg)  # CPU candidate
+    batch = _make_batch(cfg, wm)
+
+    with (
+        patch("torch.cuda.is_available", return_value=False),
+        patch("torch.cuda.get_rng_state_all") as get_all,
+        patch("torch.cuda.set_rng_state_all") as set_all,
+    ):
+        RSSMRefiner(wm, _ocfg(update_steps=2)).update(batch)
+
+    get_all.assert_not_called()
+    set_all.assert_not_called()
+
+
+def test_refiner_captures_cuda_rng_when_available_for_cpu_candidate() -> None:
+    """On a CUDA host, ``RSSMRefiner.update`` captures+restores the CUDA RNG for a CPU candidate.
+
+    ``torch.manual_seed`` reseeds every CUDA generator whenever CUDA is available,
+    REGARDLESS of the candidate's device — so keying the guard on the candidate's
+    device (the old behaviour) would leak the reseed onto a caller's CUDA RNG when
+    refining a CPU candidate on a GPU box. The guard keys on ``is_available()``
+    alone, so the CUDA RNG API IS exercised for a CPU candidate. Patching the
+    capture/restore lets this assert the branch fires without real silicon.
+    """
+    from unittest.mock import patch
+
+    cfg = _model_cfg()
+    wm = _make_rssm(cfg)  # CPU candidate
+    batch = _make_batch(cfg, wm)
+
+    sentinel = ["cuda_rng_state"]
+    with (
+        patch("torch.cuda.is_available", return_value=True),
+        patch("torch.cuda.get_rng_state_all", return_value=sentinel) as get_all,
+        patch("torch.cuda.set_rng_state_all") as set_all,
+    ):
+        RSSMRefiner(wm, _ocfg(update_steps=2)).update(batch)
+
+    get_all.assert_called_once()
+    set_all.assert_called_once_with(sentinel)

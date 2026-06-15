@@ -115,6 +115,15 @@ _CoroResult = TypeVar("_CoroResult")
 # bare digest string, not a slot) in the WS-E4 hot-swap materialiser.
 _SLOT_PT_SUFFIX: str = ".pt"
 
+# Upper bound on the per-yield ``reader.stream(chunk_size=...)`` window used by
+# ``_count_new_replay_records``. The consumed-prefix skip would otherwise pass
+# ``consumed + cap`` as the chunk size, which grows UNBOUNDED as ``consumed``
+# accumulates across fired cycles and decodes the whole prefix into one in-memory
+# chunk → Jetson OOM. Capping the chunk size bounds peak decoded memory per yield;
+# the ``async for`` still iterates every chunk so all records are covered across
+# multiple bounded windows.
+_MAX_REPLAY_COUNT_CHUNK: int = 1000
+
 
 def build_esp32_driver(cfg: Settings) -> ESP32CommProtocol:
     """Build ESP32 communication driver based on config.
@@ -3460,11 +3469,13 @@ def _build_on_device_gate_runner(
     # reproducible across process restarts — but confine the seed to a
     # ``fork_rng`` so it never leaks into the caller's process RNG stream (the
     # build runs at orchestrator construction; an unrestored ``manual_seed`` would
-    # silently shift every subsequent draw). ``manual_seed`` reseeds CPU AND every
-    # CUDA generator, so fork the model's CUDA device too when on GPU; pass an
-    # explicit device list (never ``devices=None``) to avoid the slow all-device
-    # init + its UserWarning on a multi-GPU host.
-    fork_devices = [device.index or 0] if device.type == "cuda" else []
+    # silently shift every subsequent draw). ``manual_seed`` reseeds CPU AND EVERY
+    # CUDA generator whenever CUDA is available — regardless of the model's device —
+    # so the fork must cover ALL CUDA devices, not just the model's, else the
+    # reseed leaks onto the unforked generators. Pass the explicit full device list
+    # (never ``devices=None``) so every CUDA generator is restored without tripping
+    # the ``devices=None`` multi-GPU UserWarning.
+    fork_devices = list(range(torch.cuda.device_count())) if torch.cuda.is_available() else []
     with torch.random.fork_rng(devices=fork_devices):
         torch.manual_seed(on_device_cfg.scoring_seed)
         decoders = RawModalityDecoders(model_cfg).to(device)
@@ -3585,9 +3596,14 @@ def _count_new_replay_records(reader: LMDBReplayReader, *, consumed: int, cap: i
     async def _run() -> int:
         seen = 0  # records observed (including the consumed prefix)
         new = 0  # records strictly AFTER the consumed baseline
-        # Stream in windows large enough to skip the consumed prefix AND fill the
-        # new-record cap in as few passes as possible.
-        async for chunk in reader.stream(chunk_size=consumed + cap):
+        # Stream in BOUNDED windows: ``consumed + cap`` is the ideal single-pass
+        # window, but it grows without limit as ``consumed`` accrues across fired
+        # cycles, so it is capped at ``_MAX_REPLAY_COUNT_CHUNK`` to bound the peak
+        # decoded memory per yield (avoids a Jetson OOM). The ``async for`` iterates
+        # EVERY chunk, so the consumed prefix is still skipped and the new-record
+        # cap is still filled — just across multiple bounded windows instead of one.
+        chunk_size = min(_MAX_REPLAY_COUNT_CHUNK, consumed + cap)
+        async for chunk in reader.stream(chunk_size=chunk_size):
             for _record in chunk:
                 if seen >= consumed:
                     new += 1

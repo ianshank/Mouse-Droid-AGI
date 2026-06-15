@@ -151,7 +151,14 @@ class _DegradingRefiner:
         with torch.no_grad():
             for name, tensor in result.candidate_state_dict.items():
                 if tensor.dtype.is_floating_point:
-                    noise = torch.randn(tensor.shape, generator=gen) * _DEGRADE_NOISE_SCALE
+                    # The CPU ``Generator`` draws the noise on CPU; move it onto the
+                    # candidate tensor's device BEFORE the add so a CUDA candidate
+                    # (GPU box) does not device-mismatch. ``.to(device)`` is a no-op
+                    # on a CPU-only host, so the CPU path stays byte-identical.
+                    noise = (
+                        torch.randn(tensor.shape, generator=gen).to(tensor.device)
+                        * _DEGRADE_NOISE_SCALE
+                    )
                     noised[name] = tensor + noise
                 else:
                     noised[name] = tensor.clone()
