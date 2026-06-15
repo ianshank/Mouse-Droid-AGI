@@ -43,6 +43,14 @@ VALID_TIERS: frozenset[str] = frozenset({"fast", "slow", "hardware"})
 #: Lower sorts first — ``select_next`` prefers higher-priority ready features.
 PRIORITY: dict[str, int] = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
+#: Seconds before a feature's ``validation_command`` is killed. A hung command
+#: (infinite loop, network wait) must not block the whole gate.
+VALIDATION_TIMEOUT_S = 600
+
+#: Seconds before the ``git rev-parse`` provenance probe is abandoned. A local
+#: rev-parse is instant; a slow network mount / lock must not hang the gate.
+GIT_TIMEOUT_S = 15
+
 
 # --------------------------------------------------------------------------- #
 # Loading
@@ -172,16 +180,22 @@ def git_rev_ok(ref: str | None, *, cwd: str | Path | None = None) -> bool:
         return False
     # Fixed argv list, no shell, trusted constant program (S603/S607 ignored
     # for this file in pyproject.toml, matching validation/runtime.py).
-    r = subprocess.run(
-        ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
-        capture_output=True,
-        text=True,
-        cwd=cwd,
-    )
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            timeout=GIT_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return False
     return r.returncode == 0
 
 
-def run_validation(f: Feature, *, cwd: str | Path | None = None) -> str | None:
+def run_validation(
+    f: Feature, *, cwd: str | Path | None = None, timeout: float = VALIDATION_TIMEOUT_S
+) -> str | None:
     """Run a feature's ``validation_command`` and report failure.
 
     Args:
@@ -189,6 +203,8 @@ def run_validation(f: Feature, *, cwd: str | Path | None = None) -> str | None:
         cwd: Working directory for the command (defaults to the process CWD).
             The CLI passes the repo root so repo-relative commands resolve
             regardless of where ``validate.py`` was invoked.
+        timeout: Seconds before the command is killed and reported as timed out
+            (defaults to :data:`VALIDATION_TIMEOUT_S`).
 
     Returns:
         ``None`` on success (exit 0); otherwise an error string carrying the
@@ -202,9 +218,18 @@ def run_validation(f: Feature, *, cwd: str | Path | None = None) -> str | None:
     # for this file in pyproject.toml. stderr is merged into stdout so a pytest
     # traceback (which a test runner emits to stdout) is never clobbered by a
     # late stderr warning when the tail is taken.
-    r = subprocess.run(
-        cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=cwd
-    )
+    try:
+        r = subprocess.run(
+            cmd,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            cwd=cwd,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return f"{f['id']}: validation_command timed out after {timeout}s"
     if r.returncode != 0:
         tail = r.stdout.strip().splitlines()[-20:]
         return f"{f['id']}: validation_command failed ({r.returncode})\n      " + "\n      ".join(
@@ -334,13 +359,21 @@ def select_next(feats: list[Feature]) -> Selection:
     Returns:
         A :class:`Selection` describing what to do next.
     """
-    by_id = {f["id"]: f for f in feats}
+    # Defensive: a malformed entry (no/blank id) is skipped rather than raising,
+    # mirroring check_dag, so select_next is robust on an unvalidated catalog.
+    by_id: dict[str, Feature] = {}
+    for f in feats:
+        fid = f.get("id")
+        if isinstance(fid, str) and fid:
+            by_id[fid] = f
 
     def deps_done(f: Feature) -> bool:
         return all(by_id.get(d, {}).get("status") == "done" for d in f.get("depends_on", []))
 
     def best(candidates: list[Feature]) -> Feature:
-        return sorted(candidates, key=lambda x: (PRIORITY[x["priority"]], x["id"]))[0]
+        return sorted(
+            candidates, key=lambda x: (PRIORITY.get(x.get("priority", "low"), 3), x.get("id", ""))
+        )[0]
 
     inprog = [f for f in feats if f.get("status") == "in_progress"]
     if inprog:
@@ -353,7 +386,10 @@ def select_next(feats: list[Feature]) -> Selection:
     blocked = [f for f in feats if f.get("status") == "todo" and not deps_done(f)]
     if blocked:
         gated = [
-            (f["id"], [d for d in f["depends_on"] if by_id.get(d, {}).get("status") != "done"])
+            (
+                f.get("id", ""),
+                [d for d in f.get("depends_on", []) if by_id.get(d, {}).get("status") != "done"],
+            )
             for f in blocked
         ]
         return Selection("blocked", blocked=gated)

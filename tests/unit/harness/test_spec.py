@@ -172,6 +172,15 @@ def test_run_validation_missing_command() -> None:
     assert "no validation_command" in err
 
 
+def test_run_validation_timeout() -> None:
+    # A command that sleeps longer than the (tiny) timeout is killed and reported,
+    # not left to hang the harness. Driven through the interpreter for portability.
+    cmd = f'"{sys.executable}" -c "import time; time.sleep(5)"'
+    err = spec.run_validation(_feat("F-001", validation_command=cmd), timeout=0.5)
+    assert err is not None
+    assert "timed out" in err
+
+
 # --------------------------------------------------------------------------- #
 # run_features (orchestration, injected runner/rev_checker — no subprocess)
 # --------------------------------------------------------------------------- #
@@ -292,3 +301,9 @@ def test_select_next_reports_blocked_with_unmet_deps() -> None:
 def test_select_next_complete_when_no_todo() -> None:
     sel = spec.select_next([_feat("F-001", status="done", implemented_in="x")])
     assert sel.kind == "complete"
+
+
+def test_select_next_tolerates_malformed() -> None:
+    # A malformed entry (no id) must not raise; the well-formed todo is selected.
+    sel = spec.select_next([{"status": "todo"}, _feat("F-001", status="todo")])
+    assert sel.kind == "ready"
