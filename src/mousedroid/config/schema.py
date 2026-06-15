@@ -750,8 +750,10 @@ class OnDeviceLearningConfig(BaseModel):
         0.05,
         ge=0,
         description=(
-            "Maximum allowed score drop below the cloud baseline before the "
-            "on-device update is reverted (ge=0 permits a zero-tolerance gate)"
+            "Maximum allowed held-out recon+KL loss INCREASE above the live "
+            "baseline before the on-device candidate is reverted (LOWER loss is "
+            "better): PROMOTE iff candidate_loss <= baseline_loss + tolerance. "
+            "ge=0 permits a zero-tolerance gate"
         ),
     )
     held_out_fraction: float = Field(
@@ -759,8 +761,11 @@ class OnDeviceLearningConfig(BaseModel):
         gt=0,
         le=1,
         description=(
-            "Fraction of the replay sample held out to score the updated policy "
-            "against the cloud baseline in the regression gate (0 < f <= 1)"
+            "Fraction of the replay sample reserved for held-out scoring "
+            "(0 < f <= 1). CONFIG SEAM, not wired into the WS-E3 recon-loss gate "
+            "— the gate derives its disjoint held-out window from "
+            "refine_sequence_length/refine_batch_episodes; retained for a future "
+            "fraction-based held-out sizing"
         ),
     )
     ewc_lambda: float = Field(
@@ -820,31 +825,12 @@ class OnDeviceLearningConfig(BaseModel):
             raise ValueError(msg)
         return slot
 
-    rollout_horizon: int = Field(
-        15,
-        gt=0,
-        description=(
-            "WS4 safety-gate scoring: number of imagined steps H per world-model "
-            "rollout when scoring a candidate policy. The candidate's mean "
-            "predicted return over N rollouts of this horizon is compared against "
-            "the live baseline's. Config-driven so no horizon is hardcoded."
-        ),
-    )
-    n_scoring_rollouts: int = Field(
-        8,
-        gt=0,
-        description=(
-            "WS4 safety-gate scoring: number of imagined rollouts N averaged into "
-            "the scalar rollout-return score. Higher N reduces sampling variance "
-            "of the prior at the cost of more compute on the slow cadence."
-        ),
-    )
     scoring_seed: int = Field(
         1234,
         description=(
-            "WS4 safety-gate scoring: fixed RNG seed making the rollout-return "
-            "score deterministic. Same seed + same seed-states + same weights "
-            "ALWAYS yields the identical score, so the promote/revert decision is "
+            "Safety-gate scoring: fixed RNG seed making the held-out recon+KL loss "
+            "score deterministic. Same seed + same held-out batch + same weights "
+            "ALWAYS yields the identical loss, so the promote/revert decision is "
             "reproducible. Config-driven so no seed is hardcoded."
         ),
     )
@@ -858,16 +844,6 @@ class OnDeviceLearningConfig(BaseModel):
             "active without ever being swapped into the running model. Default "
             "``False`` keeps the orchestrator byte-identical to #134 — no swap ever "
             "occurs. Requires ``enabled=True`` (validated below)."
-        ),
-    )
-    seed_state_source: Literal["sampled", "replay_encoded"] = Field(
-        "sampled",
-        description=(
-            "Phase-6 ENABLEMENT: how the regression gate's fixed seed-states are "
-            "produced. ``sampled`` (default) keeps the #134 ``manual_seed`` latent-"
-            "sampling path byte-identical; ``replay_encoded`` grounds the seed-"
-            "states by encoding a held-out replay slice through the live world model "
-            "(WS-E1). Config-driven so the source is never hardcoded."
         ),
     )
     refine_sequence_length: int = Field(

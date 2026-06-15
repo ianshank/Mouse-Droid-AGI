@@ -8,8 +8,8 @@ WS-E3 gate — LOCKED"):
   ``train_sequence(batch, decoders)["loss"]`` on a FIXED ``(B, T, ...)`` batch
   under ``model.eval()`` + ``torch.no_grad()`` — **LOWER IS BETTER** (it scores
   the WORLD MODEL's dynamics quality on real data, NOT a policy's imagined
-  return — ``score_policy`` self-games on reward-head inflation and is RETIRED
-  from the gate);
+  return — the retired imagined-return metric self-games on reward-head
+  inflation);
 * the direction INVERTS the pre-ENABLEMENT gate: PROMOTE iff
   ``candidate_loss <= baseline_loss + regression_tolerance``;
 * ``GateDecision.delta`` is ``candidate_loss - baseline_loss`` with the sign
@@ -195,6 +195,135 @@ def test_score_dynamics_runs_under_no_grad_and_restores_state() -> None:
     assert wm.training is True  # train-mode restored
     for param in wm.parameters():
         assert param.grad is None
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires a CUDA device")
+def test_score_dynamics_restores_cuda_rng_state() -> None:
+    """score_dynamics restores the CUDA RNG (not just CPU) on a GPU model.
+
+    ``torch.manual_seed`` reseeds every CUDA generator and ``train_sequence``'s
+    reparam ``randn_like`` draws from the CUDA generator when the model is on
+    CUDA. Capturing/restoring only the CPU RNG leaves the CUDA RNG perturbed,
+    poisoning any caller sharing the process CUDA RNG. Skipped on a CPU-only host
+    (CI); the structural CUDA-guard branch is asserted by the source-shape test
+    below + the CPU restore test above.
+    """
+    cfg = _model_cfg()
+    torch.manual_seed(0)
+    wm = RSSM(cfg).to("cuda")
+    wm.eval()
+    device = next(wm.parameters()).device
+    batch = build_sequence_batch(
+        _make_records(40), cfg, wm.encoder, sequence_length=4, n_episodes=3, device=device
+    )
+    decoders = RawModalityDecoders(cfg).to(device)
+
+    torch.cuda.manual_seed_all(2024)
+    before = [s.clone() for s in torch.cuda.get_rng_state_all()]
+
+    score_dynamics(wm, batch, decoders, seed=_SEED)
+
+    after = torch.cuda.get_rng_state_all()
+    assert all(
+        torch.equal(b, a) for b, a in zip(before, after, strict=True)
+    ), "score_dynamics perturbed the CUDA RNG (only CPU RNG was restored)"
+
+
+def test_score_dynamics_guards_cuda_rng_capture_when_cuda_unavailable() -> None:
+    """On a CPU-only host, score_dynamics never touches the CUDA RNG API.
+
+    The CUDA capture/restore is guarded by ``cuda.is_available()`` ALONE (NOT the
+    model's device) because ``torch.manual_seed`` reseeds every CUDA generator
+    whenever CUDA exists — even when scoring a CPU model. A CPU-only deployment
+    (``is_available() == False``) must therefore run the scorer WITHOUT calling
+    ``torch.cuda.get_rng_state_all`` / ``set_rng_state_all`` at all (the structural
+    guard that keeps the CPU-only path byte-identical and CUDA-free). Patching
+    ``is_available`` to ``False`` makes this assertion host-independent.
+    """
+    from unittest.mock import patch
+
+    cfg = _model_cfg()
+    wm = _make_rssm(cfg)  # CPU
+    batch = _make_batch(cfg, wm)
+    decoders = RawModalityDecoders(cfg)
+
+    with (
+        patch("torch.cuda.is_available", return_value=False),
+        patch("torch.cuda.get_rng_state_all") as get_all,
+        patch("torch.cuda.set_rng_state_all") as set_all,
+    ):
+        score_dynamics(wm, batch, decoders, seed=_SEED)
+
+    get_all.assert_not_called()
+    set_all.assert_not_called()
+
+
+def test_score_dynamics_captures_cuda_rng_when_available_for_cpu_model() -> None:
+    """On a CUDA host, score_dynamics captures+restores the CUDA RNG even for a CPU model.
+
+    ``torch.manual_seed`` reseeds every CUDA generator whenever CUDA is available,
+    REGARDLESS of the scored model's device — so keying the guard on the model
+    device (the old behaviour) would leak the reseed onto a caller's CUDA RNG when
+    scoring a CPU model on a GPU box. The guard keys on ``is_available()`` alone, so
+    the CUDA RNG API IS exercised for a CPU model. Patching ``is_available`` to
+    ``True`` while leaving the real (or fake) capture/restore lets this assert the
+    branch fires without requiring real silicon for the assertion shape.
+    """
+    from unittest.mock import patch
+
+    cfg = _model_cfg()
+    wm = _make_rssm(cfg)  # CPU model
+    batch = _make_batch(cfg, wm)
+    decoders = RawModalityDecoders(cfg)
+
+    sentinel = ["cuda_rng_state"]
+    with (
+        patch("torch.cuda.is_available", return_value=True),
+        # Stub the real all-CUDA-generators reseed: with is_available forced True,
+        # the real torch.manual_seed would mutate a live CUDA generator on a GPU
+        # host (test-isolation leak) and relies on torch's lazy CUDA-init on a
+        # CPU-only build. manual_seed still seeds the CPU generator; only the CUDA
+        # side effect is neutralised, so this stays a pure structural branch assert.
+        patch("torch.cuda.manual_seed_all", create=True),
+        patch("torch.cuda.get_rng_state_all", return_value=sentinel) as get_all,
+        patch("torch.cuda.set_rng_state_all") as set_all,
+    ):
+        score_dynamics(wm, batch, decoders, seed=_SEED)
+
+    # CPU model, but CUDA available ⇒ the CUDA RNG was captured AND restored with
+    # the captured state (proves the is_available()-keyed guard fired).
+    get_all.assert_called_once()
+    set_all.assert_called_once_with(sentinel)
+
+
+def test_score_dynamics_does_not_call_model_parameters() -> None:
+    """score_dynamics never calls ``world_model.parameters()`` (no model-device probe).
+
+    The CUDA-RNG guard previously keyed on the model's first-parameter device via
+    ``next(world_model.parameters(), None)`` — which both leaked on a GPU host
+    scoring a CPU model AND raised ``AttributeError`` on a params-less mock. The
+    guard now keys on ``cuda.is_available()`` alone, so the scorer must NEVER touch
+    ``parameters()``. Spying on the real ``RSSM.parameters`` asserts zero calls
+    through a full score (the seam that previously crashed a non-``nn.Module`` mock).
+    """
+    cfg = _model_cfg()
+    wm = _make_rssm(cfg)
+    batch = _make_batch(cfg, wm)
+    decoders = RawModalityDecoders(cfg)
+
+    calls = {"n": 0}
+    real_parameters = type(wm).parameters
+
+    def _spy_parameters(self: RSSM, *args: object, **kwargs: object) -> object:
+        calls["n"] += 1
+        return real_parameters(self, *args, **kwargs)
+
+    from unittest.mock import patch
+
+    with patch.object(type(wm), "parameters", _spy_parameters):
+        score_dynamics(wm, batch, decoders, seed=_SEED)
+
+    assert calls["n"] == 0, "score_dynamics must not probe model.parameters() for the RNG guard"
 
 
 def test_score_dynamics_degraded_model_scores_worse() -> None:

@@ -115,6 +115,15 @@ _CoroResult = TypeVar("_CoroResult")
 # bare digest string, not a slot) in the WS-E4 hot-swap materialiser.
 _SLOT_PT_SUFFIX: str = ".pt"
 
+# Upper bound on the per-yield ``reader.stream(chunk_size=...)`` window used by
+# ``_count_new_replay_records``. The consumed-prefix skip would otherwise pass
+# ``consumed + cap`` as the chunk size, which grows UNBOUNDED as ``consumed``
+# accumulates across fired cycles and decodes the whole prefix into one in-memory
+# chunk → Jetson OOM. Capping the chunk size bounds peak decoded memory per yield;
+# the ``async for`` still iterates every chunk so all records are covered across
+# multiple bounded windows.
+_MAX_REPLAY_COUNT_CHUNK: int = 1000
+
 
 def build_esp32_driver(cfg: Settings) -> ESP32CommProtocol:
     """Build ESP32 communication driver based on config.
@@ -3091,7 +3100,7 @@ def build_on_device_coordinator(
     (increments the revert counter). The candidate is the persisted slot loaded
     into a deep-copy of the live RSSM, so the live model is bitwise-unchanged on
     both revert AND promote (activation is the separate ``enable_hot_swap`` seam).
-    The self-gaming ``score_policy`` rollout-return metric is NOT used by the gate.
+    The retired self-gaming imagined-return metric is NOT used by the gate.
 
     Args:
         cfg: Root settings.
@@ -3186,9 +3195,32 @@ def build_on_device_coordinator(
     encoder = effective_wm.encoder
     model_cfg = effective_wm.cfg
 
+    # In-memory consumed offset: the count of replay records already consumed by
+    # a FIRED cycle. The trigger arms on records BEYOND this baseline, never on
+    # the total store size — otherwise a store that has crossed
+    # ``trigger_min_new_records`` would re-fire the refine + gate every cadence on
+    # byte-identical stale data (it never disarms). ``on_consumed`` advances it.
+    # A list cell (not ``nonlocal``) keeps the two closures sharing one mutable
+    # counter without rebinding gymnastics.
+    consumed_offset = [0]
+
     def _count_new_records() -> int:
-        """Count records currently in the replay store (slow-cadence probe)."""
-        return _count_replay_records(reader, cap)
+        """Count NEW replay records since the last consumed baseline (slow probe)."""
+        return _count_new_replay_records(reader, consumed=consumed_offset[0], cap=cap)
+
+    def _advance_consumed(n_new: int) -> None:
+        """Advance the consumed baseline by the NEW records a fired cycle drained.
+
+        Wired as the coordinator's ``on_consumed`` callback so the NEXT cycle
+        counts from the new baseline — the trigger disarms until fresh experience
+        accumulates past it again.
+        """
+        consumed_offset[0] += n_new
+        _log.debug(
+            "on_device_consumed_offset_advanced",
+            consumed_total=consumed_offset[0],
+            advanced_by=n_new,
+        )
 
     def _load_batch() -> dict[str, Tensor]:
         """Materialise one ``(B, T, ...)`` sequence-dict batch from replay.
@@ -3226,6 +3258,7 @@ def build_on_device_coordinator(
         slot_store=slot_store,
         count_new_records=_count_new_records,
         load_batch=_load_batch,
+        on_consumed=_advance_consumed,
         gate_runner=gate_runner,
     )
 
@@ -3359,9 +3392,9 @@ def _build_on_device_gate_runner(
     Scores a refined candidate **RSSM** against the live baseline **RSSM** by
     their held-out reconstruction+KL loss (``score_dynamics``) on a SHARED FIXED
     held-out ``(B, T, ...)`` batch with SHARED reconstruction heads. This REPLACES
-    the pre-ENABLEMENT path which scored config-sized ``StateDictPolicyAdapter``
-    stand-ins by their imagined return — a metric that SELF-GAMED on reward-head
-    inflation (proven in the WS-E-SPIKE; ``score_policy`` retired from the gate).
+    the pre-ENABLEMENT path which scored config-sized policy stand-ins by their
+    imagined return — a metric that SELF-GAMED on reward-head inflation (proven in
+    the WS-E-SPIKE; the imagined-return metric is retired).
 
     The candidate is the persisted slot's refined weights loaded (per evaluation)
     into a DEEP COPY of the live RSSM; the baseline is the live RSSM's current
@@ -3433,9 +3466,19 @@ def _build_on_device_gate_runner(
     # SHARED reconstruction heads: the SAME instance scores baseline AND candidate
     # (recon heads are external to the RSSM ``state_dict``; scoring against
     # different heads is meaningless). Seed the head init so the held-out gate is
-    # reproducible across process restarts.
-    torch.manual_seed(on_device_cfg.scoring_seed)
-    decoders = RawModalityDecoders(model_cfg).to(device)
+    # reproducible across process restarts — but confine the seed to a
+    # ``fork_rng`` so it never leaks into the caller's process RNG stream (the
+    # build runs at orchestrator construction; an unrestored ``manual_seed`` would
+    # silently shift every subsequent draw). ``manual_seed`` reseeds CPU AND EVERY
+    # CUDA generator whenever CUDA is available — regardless of the model's device —
+    # so the fork must cover ALL CUDA devices, not just the model's, else the
+    # reseed leaks onto the unforked generators. Pass the explicit full device list
+    # (never ``devices=None``) so every CUDA generator is restored without tripping
+    # the ``devices=None`` multi-GPU UserWarning.
+    fork_devices = list(range(torch.cuda.device_count())) if torch.cuda.is_available() else []
+    with torch.random.fork_rng(devices=fork_devices):
+        torch.manual_seed(on_device_cfg.scoring_seed)
+        decoders = RawModalityDecoders(model_cfg).to(device)
 
     if held_out_batch is None:
         # No disjoint held-out window available (no reader / too few records): the
@@ -3477,106 +3520,6 @@ def _build_on_device_gate_runner(
         gate.evaluate(candidate_world_model=candidate, baseline_world_model=world_model, slot=slot)
 
     return _run_gate
-
-
-def _build_sampled_seed_states(
-    hidden_dim: int,
-    latent_dim: int,
-    n_seed: int,
-    *,
-    seed: int,
-) -> list[tuple[Tensor, Tensor]]:
-    """Build the #134 ``manual_seed``-sampled seed states (default path).
-
-    Kept byte-identical to the pre-WS-E1 inline implementation: a single
-    ``torch.Generator`` seeded with ``seed`` draws every ``(h, z)`` pair, so the
-    same seed + same dims ALWAYS yield identical seed states.
-
-    Args:
-        hidden_dim: RSSM hidden-state width.
-        latent_dim: RSSM latent width.
-        n_seed: Number of seed states to draw.
-        seed: Fixed generator seed (``scoring_seed``).
-
-    Returns:
-        A list of ``n_seed`` ``(h, z)`` pairs (each ``(1, dim)``) on CPU.
-    """
-    import torch
-
-    gen = torch.Generator().manual_seed(seed)
-    return [
-        (
-            torch.randn(1, hidden_dim, generator=gen),
-            torch.randn(1, latent_dim, generator=gen),
-        )
-        for _ in range(n_seed)
-    ]
-
-
-def _build_replay_encoded_seed_states(
-    world_model: WorldModelProtocol,
-    *,
-    reader: LMDBReplayReader | None,
-    n_seed: int,
-) -> list[tuple[Tensor, Tensor]]:
-    """Source seed states by encoding a held-out replay slice (WS-E1).
-
-    Loads up to ``n_seed`` records via ``reader`` (off the event loop through
-    :func:`_run_coro_blocking`) and rolls them through the live world model's
-    ``observe_step`` via
-    :func:`~mousedroid.learning.on_device.seed_states.encode_seed_states`. Returns
-    an empty list (so the caller falls back to the sampled path) when no reader is
-    wired or the replay store is empty.
-
-    The world model is guaranteed to be a concrete ``RSSM`` here: the
-    ``build_on_device_coordinator`` capability gate disables the coordinator
-    entirely when the engine lacks ``train_sequence`` (e.g. ``DualStreamRSSM``),
-    so the ``observe_step`` + ``.encoder`` + ``.cfg`` surface is present.
-
-    Args:
-        world_model: The live world model whose encoder + posterior produce the
-            latent states.
-        reader: The LMDB replay reader (or ``None`` ⇒ empty list).
-        n_seed: Maximum number of seed states to encode.
-
-    Returns:
-        A list of up to ``n_seed`` ``(h, z)`` seed-state pairs; empty when the
-        replay slice is empty or no reader is available.
-    """
-    import torch
-
-    from mousedroid.learning.on_device.seed_states import encode_seed_states
-    from mousedroid.world_model.rssm import RSSM
-
-    # The capability gate guarantees a concrete ``RSSM`` (engines without
-    # ``train_sequence`` disable the coordinator). Narrow explicitly so the
-    # ``encode_seed_states`` call is statically typed without a suppression; an
-    # unexpected non-RSSM engine falls back to the sampled path rather than crash.
-    if reader is None or not isinstance(world_model, RSSM):
-        _log.warning(
-            "on_device_seed_states_replay_unavailable",
-            n_seed=n_seed,
-            has_reader=reader is not None,
-            engine_type=type(world_model).__name__,
-        )
-        return []
-
-    async def _run() -> list[MouseDroidExperienceRecord]:
-        rows: list[MouseDroidExperienceRecord] = []
-        async for chunk in reader.stream(chunk_size=n_seed):
-            rows.extend(chunk)
-            if len(rows) >= n_seed:
-                break
-        return rows[:n_seed]
-
-    records = _run_coro_blocking(_run())
-
-    # Resolve the world model's device so the encoded ``(h, z)`` match the model
-    # the gate scores against (never a hardcoded CPU).
-    first_param = next(world_model.parameters(), None)
-    device = first_param.device if first_param is not None else torch.device("cpu")
-
-    return encode_seed_states(world_model, records, n_seed, device=device)
 
 
 def _run_coro_blocking(coro: Coroutine[Any, Any, _CoroResult]) -> _CoroResult:
@@ -3624,6 +3567,50 @@ def _count_replay_records(reader: LMDBReplayReader, cap: int) -> int:
             if seen >= cap:
                 break
         return seen
+
+    return _run_coro_blocking(_run())
+
+
+def _count_new_replay_records(reader: LMDBReplayReader, *, consumed: int, cap: int) -> int:
+    """Count replay records BEYOND a consumed baseline (sync wrapper).
+
+    The on-device trigger must arm on NEW experience — records that have arrived
+    since the last fired cycle drained the store — not on the absolute store size.
+    Counting the total re-fires the refine + gate every cadence on already-
+    consumed (stale) data because the count never drops below the threshold.
+
+    Streams chronologically, skips the first ``consumed`` records, and counts up
+    to ``cap`` records after them (so the NEW window is bounded the same way the
+    refine batch scan is). Returns ``0`` once ``consumed`` reaches/exceeds the
+    store size (the trigger is disarmed), never a negative.
+
+    Args:
+        reader: The LMDB replay reader.
+        consumed: Number of leading records already consumed by a prior cycle.
+        cap: Maximum NEW (post-consumed) records to count.
+
+    Returns:
+        The number of records after the consumed baseline, capped at ``cap``.
+    """
+
+    async def _run() -> int:
+        seen = 0  # records observed (including the consumed prefix)
+        new = 0  # records strictly AFTER the consumed baseline
+        # Stream in BOUNDED windows: ``consumed + cap`` is the ideal single-pass
+        # window, but it grows without limit as ``consumed`` accrues across fired
+        # cycles, so it is capped at ``_MAX_REPLAY_COUNT_CHUNK`` to bound the peak
+        # decoded memory per yield (avoids a Jetson OOM). The ``async for`` iterates
+        # EVERY chunk, so the consumed prefix is still skipped and the new-record
+        # cap is still filled — just across multiple bounded windows instead of one.
+        chunk_size = min(_MAX_REPLAY_COUNT_CHUNK, consumed + cap)
+        async for chunk in reader.stream(chunk_size=chunk_size):
+            for _record in chunk:
+                if seen >= consumed:
+                    new += 1
+                    if new >= cap:
+                        return new
+                seen += 1
+        return new
 
     return _run_coro_blocking(_run())
 

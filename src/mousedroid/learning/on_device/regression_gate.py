@@ -21,12 +21,11 @@ model, or must be reverted. The SPIKE-LOCKED WS-E3 contract:
   non-finite candidate loss (a heavily-degraded candidate blows the KL up) is
   correctly ``> baseline`` ⇒ REVERT — the gate never assumes a finite loss.
 
-Why recon-loss and not imagined return: the pre-ENABLEMENT ``score_policy``
+Why recon-loss and not imagined return: the pre-ENABLEMENT imagined-return metric
 summed the model's OWN ``reward_head`` along a prior rollout, so a candidate that
 inflates its (recon-graph-unused) reward head scored HIGHER while its real
 dynamics were unchanged or worse — it SELF-GAMED the gate (proven in the
-WS-E-SPIKE). ``score_policy`` is retired from the gate and kept only as a
-non-gating diagnostic.
+WS-E-SPIKE). That metric is retired entirely; the recon-loss gate replaced it.
 
 Determinism is load-bearing: both losses come from the same deterministic scorer
 on the same fixed inputs, so the decision is reproducible. The scoring call is

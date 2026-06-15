@@ -44,36 +44,56 @@ its `validation_command` exits 0 under the runner — there is no hand-set
   sandbox repos now disable `commit.gpgsign` so the full suite passes on hosts
   with global commit signing.
 
-### Added — Phase 6: On-device incremental learning (default-OFF, sim-validated)
+### Added — Phase 6: On-device incremental learning (functional, default-OFF, sim-validated)
 
-Lets the rover refine its own policy/world-model weights *between* cloud
-retraining cycles from fresh on-device experience, **safe by construction**
-(separate weight slot + SHA-256 integrity + a world-model rollout-return
-regression gate with auto-revert) and **observable** (a new Prometheus
-counter). Default-OFF and backwards-compatible — with `cfg.on_device_learning`
+Lets the rover refine its own **RSSM world model** *between* cloud retraining
+cycles from fresh on-device experience, **safe by construction** (separate
+weight slot + SHA-256 integrity + a held-out **reconstruction+KL-loss**
+regression gate with auto-revert) and **observable** (a new Prometheus counter).
+Default-OFF and backwards-compatible — with `cfg.on_device_learning`
 absent/disabled, no coordinator is built and the orchestrator is byte-identical
-to pre-Phase-6.
+to pre-Phase-6. The 30 Hz reactive loop (RSSM → MCTS → ESP32) stays
+training-free; the bounded refinement + gate run at the slow-cadence seam
+OUTSIDE the hot loop, all torch work offloaded via `asyncio.to_thread`.
 
-- **New `learning/on_device/` subsystem** (`protocol.py`, `ewc_online.py`,
-  `slot_store.py`, `replay_trigger.py`, `scoring.py`, `regression_gate.py`).
-  A `ReplayTriggerCoordinator` runs at the slow-cadence / POST_TICK seam —
-  **OUTSIDE the 30 Hz reactive loop**, all torch work offloaded via
-  `asyncio.to_thread`. When `trigger_min_new_records` fresh records accumulate
-  it runs a bounded EWC-regularized `EWCOnlineLearner.update()` (deep-copies
-  the base; base weights stay bitwise-unchanged), persists a SHA-256-stamped
-  *candidate* slot via `OnDeviceSlotStore`, then the `RegressionGate` scores
-  the candidate vs the live baseline by mean imagined rollout return under the
-  reused RSSM world model and **promotes** (marks the slot active) or
-  **reverts** (separate slot, cloud baseline untouched).
+- **New `learning/on_device/` subsystem** (`protocol.py`, `slot_store.py`,
+  `replay_trigger.py`, `scoring.py`, `regression_gate.py`, `rssm_refiner.py`,
+  `hot_swap.py`). A `ReplayTriggerCoordinator` runs at the slow-cadence /
+  POST_TICK seam. When `trigger_min_new_records` **new** records accumulate
+  (counted beyond an in-memory consumed-offset baseline so the trigger disarms
+  after firing — never re-fires on stale store size), it runs `RSSMRefiner`:
+  deep-copies the **live RSSM** and refines the candidate via `train_sequence`
+  over a `(B, T, …)` replay sequence batch (`update_steps` bounded
+  `autograd.grad` manual-SGD steps; **λ=0**, no EWC penalty; throwaway recon
+  heads never persisted). The base RSSM stays **bitwise-unchanged**. The
+  candidate `state_dict` is persisted to a SHA-256-stamped slot via
+  `OnDeviceSlotStore`, then the `RegressionGate` scores the candidate RSSM vs
+  the live baseline RSSM by their **held-out recon+KL loss** (`score_dynamics`,
+  on a FIXED held-out batch DISJOINT from the refine window, shared decoders +
+  `scoring_seed`) — **LOWER IS BETTER**. PROMOTE iff `candidate_loss` is finite
+  AND `candidate_loss <= baseline_loss + regression_tolerance` (marks the slot
+  active); else REVERT (separate slot, cloud baseline untouched; counter
+  increments).
+- **WS-E4 off-loop hot-swap activation (`hot_swap.py`).**
+  `OnDeviceWeightUpdateSource` surfaces a promoted slot to the orchestrator's C1
+  atomic weight-swap seam — gated by `enable_hot_swap` (default `False`, so
+  promotion via `mark_active` stays SEPARATE from activation and the
+  orchestrator is byte-identical to #134). It materialises the engine
+  **off-loop** (re-verifies SHA-256 fail-closed → `inc("integrity_mismatch")`;
+  builds + device-places via `asyncio.to_thread`); the in-`tick()` loader is a
+  PURE reference lookup, so no construction/I/O ever runs on the hot loop.
 - **`OnDeviceLearningConfig`** (`src/mousedroid/config/schema.py`) — `Optional`
   on `Settings`, default `None`. All knobs config-driven: `enabled`,
-  `trigger_min_new_records`, `check_interval_s`, `update_steps`,
-  `learning_rate`, `ewc_lambda`, `regression_tolerance`, `held_out_fraction`,
-  `rollout_horizon`, `n_scoring_rollouts`, `scoring_seed`, and a
+  `enable_hot_swap`, `trigger_min_new_records`, `check_interval_s`,
+  `update_steps`, `learning_rate`, `regression_tolerance`,
+  `refine_sequence_length`, `refine_batch_episodes`, `scoring_seed`, and a
   validator-gated experience-root-relative `slot_dir` (rejects absolute / `..`
-  / empty). Slot resolves to `<ExperienceConfig.path>/<slot_dir>/<digest>.pt` —
-  no absolute host path hardcoded (ADR-010 separate-slot + SHA-256 contract
-  reused).
+  / empty). `held_out_fraction` + `ewc_lambda` are retained as future seams
+  (the gate derives its disjoint held-out window from the refine geometry;
+  `RSSMRefiner` is λ=0). A `model_validator` rejects `enable_hot_swap=true`
+  while `enabled=false`. Slot resolves to
+  `<ExperienceConfig.path>/<slot_dir>/<digest>.pt` — no absolute host path
+  hardcoded (ADR-010 separate-slot + SHA-256 contract reused).
 - **`{ns}_on_device_learning_reverted_total{reason}`** counter
   (`src/mousedroid/telemetry/metrics.py`) — pure-add, gated by
   `MetricsConfig.track_on_device_learning` (default `True`), omitted from
@@ -81,17 +101,28 @@ to pre-Phase-6.
   (`regression_bound`, `integrity_mismatch`, `exception`); seeded in
   `generate_metrics_sample()`.
 - **Factory + orchestrator wiring** — `build_on_device_coordinator(cfg, *,
-  metrics=…)` (keyword-only metrics; returns `None` when absent/disabled) and
-  `_build_on_device_gate_runner`. The orchestrator spawns the slow-cadence
+  metrics=…, world_model=…)` (keyword-only; returns `None` when
+  absent/disabled OR when the live engine lacks `train_sequence`),
+  `_build_on_device_gate_runner`, and `build_on_device_hot_swap_source` (returns
+  `None` unless `enable_hot_swap`). The orchestrator spawns the slow-cadence
   `_on_device_update_loop` only when wired AND enabled; `start()`/`stop()` are
   byte-identical to pre-Phase-6 otherwise.
+- **Determinism (review-hardening).** `score_dynamics` + `RSSMRefiner.update`
+  capture/restore the CPU **and** CUDA RNG (guarded by device +
+  `cuda.is_available()`) so a caller sharing the process RNG is never perturbed;
+  the gate-runner's decoder-init seed is confined to a `torch.random.fork_rng`;
+  the refiner builds its recon heads on the candidate's device (no cross-device
+  matmul on a GPU rover).
 - **Operator runbook** `docs/runbooks/jetson-on-device-learning.md` and **C4
-  diagram** `docs/architecture/c4-on-device-learning.md`. Both document the two
-  pre-enablement seams (the learner/gate currently wrap a config-sized
-  stand-in net, not the live policy/world-model net behind `PolicyProtocol`;
-  seed-states are `manual_seed`-sampled, not yet encoded from a held-out replay
-  slice) and the ≥30-day soak-gate framing. **DO NOT enable on the rover yet** —
-  it is sim-validated only.
+  diagram** `docs/architecture/c4-on-device-learning.md` — both updated to the
+  WS-E2/E3/E4 reality (recon-loss gate, λ=0 RSSM refinement, off-loop hot-swap,
+  trigger-arming new-records semantics, held-out disjointness caveat, full grep
+  table). A deterministic sim-soak
+  (`tests/integration/test_on_device_sim_soak.py`) drives the **full** pipeline
+  and pins a known-improving PROMOTE + a known-degrading REVERT end-to-end with
+  the 30 Hz hot loop never advanced (`_tick_count == 0`). **DO NOT enable on the
+  rover yet** — functional + sim-validated, but soak-gated (keep `enabled`
+  and `enable_hot_swap` off until a soak gate passes).
 
 ### Added — Skill-command validators + spec/doc synchronization
 

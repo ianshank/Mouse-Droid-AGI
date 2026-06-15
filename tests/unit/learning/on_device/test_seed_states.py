@@ -1,6 +1,7 @@
-"""Unit tests for the WS-E1 replay-encoded seed-state encoder.
+"""Unit tests for the replay-record observation adapter + mask synthesis.
 
-Pins the WS-E1 ENABLEMENT contracts:
+These helpers are REUSED by the WS-E2 sequence-batch builder that feeds the
+recon-loss regression gate. Pins:
 
 * :func:`record_to_observation` produces an object satisfying the FULL
   :class:`~mousedroid.sensing.protocol.ObservationProtocol` (all 8 members) from
@@ -11,13 +12,7 @@ Pins the WS-E1 ENABLEMENT contracts:
   ``world_model.encoder`` enabled flags (NOT a literal): length ==
   the cfg modality count (4 with lidar off, 5 with lidar on), order
   ``[vision, ultrasonic, motor, audio, (lidar)]``, with the vision slot ``0``
-  when ``vision_features`` is empty (or vision is encoder-disabled);
-* :func:`encode_seed_states` rolls ``observe_step`` from a zero ``(h, z)`` across
-  the records (``prev_action`` for step ``t`` = ``records[t-1].action``, zeros at
-  ``t0``), is DETERMINISTIC given fixed records, places tensors on the requested
-  ``device``, runs under ``eval()`` + ``no_grad`` (no grad leak, no train-mode
-  side effect, base model untouched), and falls back to an empty list with a
-  structured warning when given no records.
+  when ``vision_features`` is empty (or vision is encoder-disabled).
 """
 
 from __future__ import annotations
@@ -27,10 +22,7 @@ import torch
 
 from mousedroid.config.schema import ModelConfig
 from mousedroid.experience.record import MouseDroidExperienceRecord
-from mousedroid.learning.on_device.seed_states import (
-    encode_seed_states,
-    record_to_observation,
-)
+from mousedroid.learning.on_device.seed_states import record_to_observation
 from mousedroid.sensing.protocol import ObservationProtocol
 from mousedroid.world_model.rssm import RSSM
 
@@ -195,120 +187,3 @@ def test_mask_audio_and_ultrasonic_slots_for_enabled_encoder() -> None:
     assert mask.shape == (4,)
     assert mask[1] == 1.0  # ultrasonic slot
     assert mask[3] == 1.0  # audio slot
-
-
-# ---------------------------------------------------------------------------
-# encode_seed_states — determinism, device, eval/no_grad, fallback
-# ---------------------------------------------------------------------------
-
-
-def test_encode_seed_states_returns_h_z_pairs() -> None:
-    """Encoding produces ``(h, z)`` seed-state pairs of the right shape."""
-    wm = _make_world_model()
-    records = _make_records(5)
-
-    states = encode_seed_states(wm, records, n_seed=3, device=torch.device("cpu"))
-
-    assert len(states) == 3
-    for h, z in states:
-        assert h.shape == (1, wm.cfg.hidden_dim)
-        assert z.shape == (1, wm.cfg.latent_dim)
-
-
-def test_encode_seed_states_caps_at_n_seed() -> None:
-    """At most ``n_seed`` states are returned even with more records."""
-    wm = _make_world_model()
-    records = _make_records(10)
-
-    states = encode_seed_states(wm, records, n_seed=4, device=torch.device("cpu"))
-
-    assert len(states) == 4
-
-
-def test_encode_seed_states_returns_all_when_fewer_records() -> None:
-    """When records < n_seed, returns one state per record."""
-    wm = _make_world_model()
-    records = _make_records(2)
-
-    states = encode_seed_states(wm, records, n_seed=10, device=torch.device("cpu"))
-
-    assert len(states) == 2
-
-
-def test_encode_seed_states_deterministic() -> None:
-    """Same model + same records -> byte-identical seed states."""
-    wm = _make_world_model()
-    records = _make_records(5)
-
-    a = encode_seed_states(wm, records, n_seed=3, device=torch.device("cpu"))
-    b = encode_seed_states(wm, records, n_seed=3, device=torch.device("cpu"))
-
-    assert len(a) == len(b)
-    for (ha, za), (hb, zb) in zip(a, b, strict=True):
-        assert torch.equal(ha, hb)
-        assert torch.equal(za, zb)
-
-
-def test_encode_seed_states_on_device() -> None:
-    """Returned tensors live on the requested device."""
-    wm = _make_world_model()
-    records = _make_records(3)
-    device = torch.device("cpu")
-
-    states = encode_seed_states(wm, records, n_seed=3, device=device)
-
-    for h, z in states:
-        assert h.device == device
-        assert z.device == device
-
-
-def test_encode_seed_states_no_grad_and_eval_preserved() -> None:
-    """Encoding leaks no autograd graph and restores the model's train mode."""
-    wm = _make_world_model()
-    wm.train()  # deliberately in train mode
-    records = _make_records(3)
-
-    states = encode_seed_states(wm, records, n_seed=3, device=torch.device("cpu"))
-
-    # No grad graph attached to the returned tensors.
-    for h, z in states:
-        assert not h.requires_grad
-        assert not z.requires_grad
-    # Train-mode is restored (no eval() side effect leaks out).
-    assert wm.training is True
-
-
-def test_encode_seed_states_base_model_untouched() -> None:
-    """Encoding never mutates the world-model parameters in place."""
-    wm = _make_world_model()
-    before = {k: v.clone() for k, v in wm.named_parameters()}
-    records = _make_records(4)
-
-    encode_seed_states(wm, records, n_seed=2, device=torch.device("cpu"))
-
-    for k, v in wm.named_parameters():
-        assert torch.equal(before[k], v), f"param {k} mutated"
-
-
-def test_encode_seed_states_empty_returns_fallback_with_warning() -> None:
-    """An empty record slice returns an empty list + a structured warning."""
-    import structlog
-
-    wm = _make_world_model()
-
-    with structlog.testing.capture_logs() as captured:
-        states = encode_seed_states(wm, [], n_seed=3, device=torch.device("cpu"))
-
-    assert states == []
-    events = [entry.get("event", "") for entry in captured]
-    assert "on_device_seed_states_empty_replay" in events
-
-
-def test_encode_seed_states_lidar_encoder_mask_does_not_indexerror() -> None:
-    """A lidar-enabled encoder uses a 5-slot mask without IndexError."""
-    wm = _make_world_model(lidar=True)
-    records = _make_records(3)
-
-    states = encode_seed_states(wm, records, n_seed=2, device=torch.device("cpu"))
-
-    assert len(states) == 2

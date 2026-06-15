@@ -388,3 +388,180 @@ def test_refiner_non_rssm_engine_rejected() -> None:
 
     with pytest.raises((TypeError, ValueError), match="train_sequence"):
         RSSMRefiner(_NoTrainSeq(), _ocfg())  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# WS-E6 review-hardening: decoders-on-candidate-device + CUDA-RNG determinism
+# ---------------------------------------------------------------------------
+
+
+def test_refiner_builds_decoders_on_candidate_device() -> None:
+    """The throwaway decoders are built on the CANDIDATE's device, not bare CPU.
+
+    The candidate is a deep-copy of the base RSSM (so it lives on the base's
+    device). ``train_sequence`` jointly runs the RSSM + the recon heads, so a
+    CPU-initialised ``RawModalityDecoders`` against a CUDA RSSM raises a
+    device-mismatch RuntimeError. The refiner must place the decoders on the
+    candidate's device. Verified structurally on CPU by spying the device the
+    decoders are moved to; the CUDA round-trip below proves the real fix.
+    """
+    cfg = _model_cfg()
+    wm = _make_rssm(cfg)
+    batch = _make_batch(cfg, wm)
+
+    seen_devices: list[torch.device] = []
+    import mousedroid.world_model.rssm as rssm_mod
+
+    real_to = rssm_mod.RawModalityDecoders.to
+
+    def _spy_to(self: object, *args: object, **kwargs: object) -> object:
+        # First positional arg to ``nn.Module.to`` is the device in our call.
+        if args:
+            seen_devices.append(torch.device(args[0]))  # type: ignore[arg-type]
+        return real_to(self, *args, **kwargs)  # type: ignore[arg-type, return-value]
+
+    # patch.object on the specific symbol (NOT module reload — avoids the cv2
+    # eviction footgun) so only this test's decoder construction is observed.
+    from unittest.mock import patch
+
+    with patch.object(rssm_mod.RawModalityDecoders, "to", _spy_to):
+        RSSMRefiner(wm, _ocfg(update_steps=1)).update(batch)
+
+    expected = next(wm.parameters()).device
+    assert seen_devices, "refiner must call decoders.to(<candidate device>)"
+    assert (
+        seen_devices[0] == expected
+    ), f"decoders placed on {seen_devices[0]} but candidate is on {expected}"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires a CUDA device")
+def test_refiner_update_runs_on_cuda_model() -> None:
+    """A CUDA RSSM refines without a device-mismatch error; candidate stays on CUDA.
+
+    Regression for the CPU-initialised-decoders bug: pre-fix this raised
+    ``RuntimeError: Expected all tensors to be on the same device``. Skipped on a
+    CPU-only host (CI); the structural placement is covered above.
+    """
+    cfg = _model_cfg()
+    torch.manual_seed(0)
+    wm = RSSM(cfg).to("cuda")
+    wm.eval()
+    device = next(wm.parameters()).device
+    records = _make_records(40)
+    batch = build_sequence_batch(
+        records, cfg, wm.encoder, sequence_length=4, n_episodes=3, device=device
+    )
+
+    result = RSSMRefiner(wm, _ocfg(update_steps=2)).update(batch)
+
+    assert result.n_steps == 2
+    assert np.isfinite(result.train_loss)
+    # The candidate tensors round-trip on the model's CUDA device.
+    sample = next(iter(result.candidate_state_dict.values()))
+    assert sample.is_cuda
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires a CUDA device")
+def test_refiner_restores_cuda_rng_state() -> None:
+    """``RSSMRefiner.update`` restores the CUDA RNG (not just CPU) on a GPU model.
+
+    ``train_sequence``'s reparameterisation draws ``torch.randn_like`` from the
+    CUDA generator when the model is on CUDA, and ``torch.manual_seed`` reseeds
+    every CUDA generator. Capturing/restoring only the CPU RNG leaves the CUDA
+    RNG perturbed — poisoning any caller sharing the process CUDA RNG. Skipped on
+    a CPU-only host (the guard branch is asserted structurally below).
+    """
+    cfg = _model_cfg()
+    torch.manual_seed(0)
+    wm = RSSM(cfg).to("cuda")
+    wm.eval()
+    device = next(wm.parameters()).device
+    batch = build_sequence_batch(
+        _make_records(40), cfg, wm.encoder, sequence_length=4, n_episodes=3, device=device
+    )
+
+    torch.cuda.manual_seed_all(2024)
+    before = [s.clone() for s in torch.cuda.get_rng_state_all()]
+
+    RSSMRefiner(wm, _ocfg(update_steps=2)).update(batch)
+
+    after = torch.cuda.get_rng_state_all()
+    assert all(
+        torch.equal(b, a) for b, a in zip(before, after, strict=True)
+    ), "RSSMRefiner.update perturbed the CUDA RNG (only CPU RNG was restored)"
+
+
+def test_refiner_restores_cpu_rng_state() -> None:
+    """``RSSMRefiner.update`` leaves the global CPU RNG byte-identical (CPU path)."""
+    cfg = _model_cfg()
+    wm = _make_rssm(cfg)
+    batch = _make_batch(cfg, wm)
+
+    torch.manual_seed(4096)
+    before = torch.get_rng_state().clone()
+
+    RSSMRefiner(wm, _ocfg(update_steps=2)).update(batch)
+
+    assert torch.equal(before, torch.get_rng_state()), "CPU RNG not restored by refiner"
+
+
+def test_refiner_guards_cuda_rng_capture_when_cuda_unavailable() -> None:
+    """On a CPU-only host, ``RSSMRefiner.update`` never touches the CUDA RNG API.
+
+    The CUDA capture/restore is keyed on ``cuda.is_available()`` ALONE (NOT the
+    candidate's device) because ``torch.manual_seed`` reseeds every CUDA generator
+    whenever CUDA exists — even when refining a CPU candidate. A CPU-only host
+    (``is_available() == False``) must run the refiner WITHOUT calling
+    ``torch.cuda.get_rng_state_all`` / ``set_rng_state_all`` (the structural guard
+    that keeps the CPU-only path CUDA-free). Patching ``is_available`` to ``False``
+    makes the assertion host-independent.
+    """
+    from unittest.mock import patch
+
+    cfg = _model_cfg()
+    wm = _make_rssm(cfg)  # CPU candidate
+    batch = _make_batch(cfg, wm)
+
+    with (
+        patch("torch.cuda.is_available", return_value=False),
+        patch("torch.cuda.get_rng_state_all") as get_all,
+        patch("torch.cuda.set_rng_state_all") as set_all,
+    ):
+        RSSMRefiner(wm, _ocfg(update_steps=2)).update(batch)
+
+    get_all.assert_not_called()
+    set_all.assert_not_called()
+
+
+def test_refiner_captures_cuda_rng_when_available_for_cpu_candidate() -> None:
+    """On a CUDA host, ``RSSMRefiner.update`` captures+restores the CUDA RNG for a CPU candidate.
+
+    ``torch.manual_seed`` reseeds every CUDA generator whenever CUDA is available,
+    REGARDLESS of the candidate's device — so keying the guard on the candidate's
+    device (the old behaviour) would leak the reseed onto a caller's CUDA RNG when
+    refining a CPU candidate on a GPU box. The guard keys on ``is_available()``
+    alone, so the CUDA RNG API IS exercised for a CPU candidate. Patching the
+    capture/restore lets this assert the branch fires without real silicon.
+    """
+    from unittest.mock import patch
+
+    cfg = _model_cfg()
+    wm = _make_rssm(cfg)  # CPU candidate
+    batch = _make_batch(cfg, wm)
+
+    sentinel = ["cuda_rng_state"]
+    with (
+        patch("torch.cuda.is_available", return_value=True),
+        # Stub the real all-CUDA-generators reseed: with is_available forced True,
+        # the real torch.manual_seed would mutate a live CUDA generator on a GPU
+        # host (test-isolation leak) and relies on torch's lazy CUDA-init on a
+        # CPU-only build. manual_seed still seeds the CPU generator; only the CUDA
+        # side effect is neutralised, so this stays a pure structural branch assert.
+        patch("torch.cuda.manual_seed_all", create=True),
+        patch("torch.cuda.get_rng_state_all", return_value=sentinel) as get_all,
+        patch("torch.cuda.set_rng_state_all") as set_all,
+    ):
+        RSSMRefiner(wm, _ocfg(update_steps=2)).update(batch)
+
+    get_all.assert_called_once()
+    set_all.assert_called_once_with(sentinel)
