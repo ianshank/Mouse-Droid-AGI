@@ -64,32 +64,12 @@ def test_feature_ids_are_unique() -> None:
 
 
 def test_dag_has_no_dangling_edges_or_cycles() -> None:
-    feats = _load_features()
-    by_id = {f["id"]: f for f in feats}
+    # Single canonical DAG implementation lives in mousedroid.harness.spec
+    # (no duplicated DFS to drift from scripts/validate.py).
+    from mousedroid.harness.spec import check_dag
 
-    dangling = [(f["id"], d) for f in feats for d in f.get("depends_on", []) if d not in by_id]
-    assert not dangling, f"dangling depends_on edges: {dangling}"
-
-    # DFS three-colour cycle detection (mirrors scripts/validate.py).
-    white, grey, black = 0, 1, 2
-    color = {f["id"]: white for f in feats}
-    cycles: list[str] = []
-
-    def visit(node: str, stack: list[str]) -> None:
-        color[node] = grey
-        for dep in by_id[node].get("depends_on", []):
-            if dep not in by_id:
-                continue
-            if color[dep] == grey:
-                cycles.append(" -> ".join([*stack, dep]))
-            elif color[dep] == white:
-                visit(dep, [*stack, dep])
-        color[node] = black
-
-    for f in feats:
-        if color[f["id"]] == white:
-            visit(f["id"], [f["id"]])
-    assert not cycles, f"dependency cycles: {cycles}"
+    errs = check_dag(_load_features())
+    assert errs == [], "DAG integrity errors:\n" + "\n".join(f"  {e}" for e in errs)
 
 
 def test_done_features_have_command_and_provenance() -> None:

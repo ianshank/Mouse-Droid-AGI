@@ -165,6 +165,10 @@ def _make_sandbox_repo(
     _git_checked(["init", "--initial-branch=feature"], repo)
     _git_checked(["config", "user.email", "test@example.invalid"], repo)
     _git_checked(["config", "user.name", "Test"], repo)
+    # Throwaway repos must never sign: a host with global commit.gpgsign=true
+    # (e.g. a managed CI/dev environment with a signing server) would otherwise
+    # make these sandbox `git commit` calls fail with exit 128.
+    _git_checked(["config", "commit.gpgsign", "false"], repo)
     (repo / "seed.txt").write_text("seed\n")
     _git_checked(["add", "seed.txt"], repo)
     _git_checked(["commit", "-m", "seed"], repo)

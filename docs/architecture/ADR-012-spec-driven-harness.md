@@ -4,10 +4,10 @@
 * **Date:** 2026-06-14
 * **Owners:** Ian Cruickshank
 * **Scope:** `HARNESS_SPEC.md`, `features.yaml`, `features.schema.json`,
-  `scripts/validate.py`, `scripts/select_next.py`, `scripts/init.sh`,
-  `scripts/validations/F-001.sh`, `.github/workflows/harness.yml`,
-  `tests/regression/test_harness_spec_aqa.py`, `scripts/ci.sh` (harness stage),
-  `progress.md`.
+  `src/mousedroid/harness/spec.py`, `scripts/validate.py`, `scripts/select_next.py`,
+  `scripts/init.sh`, `scripts/validations/F-001.sh`, `.github/workflows/harness.yml`,
+  `tests/unit/harness/test_spec.py`, `tests/regression/test_harness_spec_aqa.py`,
+  `scripts/ci.sh` (harness stage), `progress.md`.
 
 ## Context
 
@@ -64,6 +64,16 @@ existing CI, not a replacement. Concretely:
 
 ## Consequences
 
+* **Enforcement logic is an importable, covered package module.** The schema /
+  DAG / provenance / tier-gating / selection logic lives in
+  `src/mousedroid/harness/spec.py` (pure, side-effect-free, dependency-injectable
+  `runner`/`rev_checker`); `scripts/validate.py` and `scripts/select_next.py` are
+  thin CLI shims. This mirrors the `cli/* → validation/*` split already used for
+  preflight/pillars, brings the harness guarantees under the 85% coverage gate
+  (`tests/unit/harness/test_spec.py`, 100% on `spec.py`) instead of leaving them
+  untested in `scripts/`, and removes the duplicated cycle-detection DFS the AQA
+  test previously carried. The shims also resolve commands/git against the repo
+  root, so the harness runs correctly from any CWD.
 * A feature claiming `done` whose command does not pass fails CI — false
   "green" is now structurally prevented for catalogued features.
 * `jsonschema` (+ `types-jsonschema`) is added to the `[dev]` extra. The

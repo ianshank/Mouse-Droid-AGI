@@ -143,6 +143,12 @@ Validates structure against the schema, checks DAG integrity (dangling edges + c
 verifies `implemented_in` resolves to a real git commit, and runs the
 `validation_command` of every `done` feature **in the selected tier(s)**.
 
+`scripts/validate.py` and `scripts/select_next.py` are **thin CLI shims** — the
+enforcement logic lives in the importable, unit-tested package module
+`src/mousedroid/harness/spec.py` (mirroring how `cli/preflight.py` wraps
+`validation/preflight.py`). This keeps the harness guarantees under the project's
+85% coverage gate (`tests/unit/harness/test_spec.py`) rather than untested in a script.
+
 ```bash
 python scripts/validate.py --tier fast               # inner loop / every push
 python scripts/validate.py --tier fast,slow          # nightly
