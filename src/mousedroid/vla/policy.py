@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 import structlog
 import torch
 
+from mousedroid.common.onnx_session import resolve_providers, warmup_session
+
 if TYPE_CHECKING:
     from mousedroid.telemetry.metrics import MetricsRegistry
 
@@ -274,23 +276,19 @@ class DistilledVLAOnnx:
     ) -> tuple[str, ...]:
         """Intersect ``requested`` with ``available`` preserving order.
 
-        Always falls back to ``CPUExecutionProvider`` if it is available
-        and the intersection is empty, so warmup never raises on a host
-        that has at least the CPU provider.
+        Thin delegation to :func:`mousedroid.common.onnx_session.resolve_providers`
+        (the neutral, VLA-independent helper); see there for the fallback
+        contract.
         """
-        chosen = tuple(p for p in requested if p in available)
-        if chosen:
-            return chosen
-        if "CPUExecutionProvider" in available:
-            return ("CPUExecutionProvider",)
-        # Pathological case: no providers available — let ORT raise.
-        return ()
+        return resolve_providers(requested, available)
 
     def warmup(self) -> None:
         """Create the ORT session and run dummy inferences.
 
-        This is the only place that imports ``onnxruntime``. Calling
-        :meth:`predict` before :meth:`warmup` will trigger this lazily.
+        Delegates the session lifecycle to the neutral
+        :func:`mousedroid.common.onnx_session.warmup_session` helper —
+        ``onnxruntime`` is imported lazily there. Calling :meth:`predict`
+        before :meth:`warmup` will trigger this lazily.
 
         Raises:
             FileNotFoundError: If ``model_path`` does not exist.
@@ -298,56 +296,13 @@ class DistilledVLAOnnx:
         """
         if self._session is not None:
             return  # already warmed
-        if not self._model_path.is_file():
-            msg = f"ONNX model not found at {self._model_path}"
-            raise FileNotFoundError(msg)
-
-        # Lazy import keeps mousedroid.vla.policy free of onnxruntime.
-        import onnxruntime as ort
-
-        available = tuple(ort.get_available_providers())
-        active = self._resolve_providers(self._requested_providers, available)
-        _log.info(
-            "distilled_vla_onnx_warmup_start",
-            requested_providers=list(self._requested_providers),
-            available_providers=list(available),
-            active_providers=list(active),
-            model_path=str(self._model_path),
+        self._session, self._active_providers = warmup_session(
+            self._model_path,
+            self._requested_providers,
+            self._warmup_iterations,
+            [self._action_output_name],
+            log_prefix="distilled_vla_onnx",
         )
-
-        self._session = ort.InferenceSession(
-            str(self._model_path),
-            providers=list(active),
-        )
-        self._active_providers = active
-
-        for i in range(self._warmup_iterations):
-            self._run_session_with_zeros()
-            _log.debug("distilled_vla_onnx_warmup_pass", iteration=i + 1)
-
-        _log.info(
-            "distilled_vla_onnx_warmup_complete",
-            active_providers=list(active),
-            warmup_iterations=self._warmup_iterations,
-        )
-
-    def _run_session_with_zeros(self) -> None:
-        """Run a single dummy inference using zero-filled inputs.
-
-        Inspects the live session's input metadata so warmup does not
-        require knowing latent shapes a priori — those come from the
-        ONNX graph itself.
-        """
-        assert self._session is not None
-        feeds: dict[str, Any] = {}
-        # numpy is a project dependency (torch -> numpy); import locally
-        # to keep the module-level import graph minimal.
-        import numpy as _np
-
-        for inp in self._session.get_inputs():
-            shape = tuple(d if isinstance(d, int) and d > 0 else 1 for d in (inp.shape or []))
-            feeds[inp.name] = _np.zeros(shape, dtype=_np.float32)
-        self._session.run([self._action_output_name], feeds)
 
     def predict(self, observation: VLAObservation) -> VLAAction:
         """Run a single forward pass of the distilled VLA student.

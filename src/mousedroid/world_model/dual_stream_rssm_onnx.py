@@ -11,7 +11,13 @@ This module mirrors :class:`DistilledVLAOnnx` from
 :mod:`mousedroid.vla.policy` — same lazy-import contract (``onnxruntime``
 is only loaded inside :meth:`warmup`), same provider-fallback logic
 (:meth:`_resolve_providers`), same ``torch.no_grad()`` wrapping at the
-call boundary.
+call boundary. The shared session-lifecycle logic (provider resolution,
+the lazy-import warmup, and the zero-filled warmup pass) now lives in the
+neutral :mod:`mousedroid.common.onnx_session` helper module, which both
+wrappers delegate to. That module imports neither ``vla`` nor
+``world_model``, so this runtime stays independent of the VLA module
+(the reason the logic was previously duplicated rather than imported)
+while no longer carrying its own copy.
 
 What this class does NOT implement: :meth:`imagine_step`. The CfC
 maintains internal state across imagined rollouts which the export
@@ -31,6 +37,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
+from mousedroid.common.onnx_session import resolve_providers, warmup_session
 from mousedroid.config.schema import ModelConfig
 from mousedroid.logging.setup import get_logger
 from mousedroid.sensing.protocol import ObservationProtocol
@@ -149,25 +156,25 @@ class DualStreamRSSMOnnx:
     ) -> tuple[str, ...]:
         """Intersect ``requested`` with ``available`` preserving order.
 
-        Always falls back to ``CPUExecutionProvider`` if the intersection
-        is empty and CPU is available. Identical contract to
-        :meth:`DistilledVLAOnnx._resolve_providers` — kept duplicated
-        rather than imported to keep the runtime independent of the VLA
-        module.
+        Thin delegation to
+        :func:`mousedroid.common.onnx_session.resolve_providers`. The
+        session-lifecycle logic shared with :class:`DistilledVLAOnnx`
+        now lives in the neutral ``common/onnx_session`` module, which
+        imports neither the ``vla`` nor ``world_model`` package — so this
+        runtime stays independent of the VLA module while no longer
+        carrying its own copy of the logic.
         """
-        chosen = tuple(p for p in requested if p in available)
-        if chosen:
-            return chosen
-        if "CPUExecutionProvider" in available:
-            return ("CPUExecutionProvider",)
-        return ()
+        return resolve_providers(requested, available)
 
     def warmup(self) -> None:
         """Create the ORT session and run dummy inferences.
 
         Idempotent — calling :meth:`warmup` after the session exists is
         a no-op. :meth:`observe_step` triggers this lazily on first call
-        so operators don't need to remember the explicit warmup call.
+        so operators don't need to remember the explicit warmup call. The
+        session lifecycle is delegated to the neutral
+        :func:`mousedroid.common.onnx_session.warmup_session` helper,
+        which performs the lazy ``onnxruntime`` import.
 
         Raises:
             FileNotFoundError: If ``model_path`` doesn't exist.
@@ -175,53 +182,13 @@ class DualStreamRSSMOnnx:
         """
         if self._session is not None:
             return
-        if not self._model_path.is_file():
-            msg = f"ONNX model not found at {self._model_path}"
-            raise FileNotFoundError(msg)
-
-        # Lazy import keeps mousedroid.world_model.* free of onnxruntime.
-        import onnxruntime as ort
-
-        available = tuple(ort.get_available_providers())
-        active = self._resolve_providers(self._requested_providers, available)
-        _log.info(
-            "dual_stream_rssm_onnx_warmup_start",
-            requested_providers=list(self._requested_providers),
-            available_providers=list(available),
-            active_providers=list(active),
-            model_path=str(self._model_path),
+        self._session, self._active_providers = warmup_session(
+            self._model_path,
+            self._requested_providers,
+            self._warmup_iterations,
+            self._output_names,
+            log_prefix="dual_stream_rssm_onnx",
         )
-
-        self._session = ort.InferenceSession(
-            str(self._model_path),
-            providers=list(active),
-        )
-        self._active_providers = active
-
-        # Warmup pass — feed zero-filled inputs and discard output.
-        for i in range(self._warmup_iterations):
-            self._run_session_with_zeros()
-            _log.debug("dual_stream_rssm_onnx_warmup_pass", iteration=i + 1)
-
-        _log.info(
-            "dual_stream_rssm_onnx_warmup_complete",
-            active_providers=list(active),
-            warmup_iterations=self._warmup_iterations,
-        )
-
-    def _run_session_with_zeros(self) -> None:
-        """Run a single dummy inference using zero-filled inputs.
-
-        Inspects the live session's input metadata so warmup does not
-        require knowing latent shapes a priori — those come from the
-        ONNX graph itself.
-        """
-        assert self._session is not None
-        feeds: dict[str, np.ndarray[Any, Any]] = {}
-        for inp in self._session.get_inputs():
-            shape = tuple(d if isinstance(d, int) and d > 0 else 1 for d in (inp.shape or []))
-            feeds[inp.name] = np.zeros(shape, dtype=np.float32)
-        self._session.run(self._output_names, feeds)
 
     def observe_step(
         self,
