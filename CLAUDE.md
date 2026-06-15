@@ -614,10 +614,15 @@ until a soak gate passes. Non-negotiable contracts:
   never strands an unreachable engine. When wired it SUPERSEDES the cloud OTA
   world-model poller (`on_device_hot_swap_supersedes_cloud_world_model_poller`).
 - **Determinism is load-bearing.** `score_dynamics` + `RSSMRefiner.update`
-  capture/restore the CPU AND CUDA RNG (guarded by device + `cuda.is_available()`);
-  the gate-runner's decoder-init seed is confined to `torch.random.fork_rng`; the
-  refiner builds recon heads on the candidate's device. Same `scoring_seed` +
-  inputs + weights ⇒ byte-identical loss ⇒ reproducible promote/revert.
+  capture/restore the CPU AND CUDA RNG keyed on `torch.cuda.is_available()` ALONE
+  (NOT the candidate's device — `torch.manual_seed` reseeds EVERY CUDA generator
+  regardless of where the model lives, so a CPU candidate on a GPU host must still
+  restore CUDA RNG or it leaks a reseed into the shared process stream); the
+  gate-runner's decoder-init seed is confined to
+  `torch.random.fork_rng(devices=range(torch.cuda.device_count()))` (forks ALL
+  CUDA generators, not just device 0); the refiner builds recon heads on the
+  candidate's device. Same `scoring_seed` + inputs + weights ⇒ byte-identical loss
+  ⇒ reproducible promote/revert.
 - **Grep events** (live RSSM path, NOT the unwired #134 `ewc_online`
   `on_device_update_*`): `on_device_refine_start`/`_complete`,
   `on_device_dynamics_score_computed`, `on_device_candidate_promoted`/`_reverted`

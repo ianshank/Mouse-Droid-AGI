@@ -22,11 +22,19 @@ from mousedroid.factory import build_on_device_coordinator
 from mousedroid.learning.on_device.replay_trigger import ReplayTriggerCoordinator
 from mousedroid.learning.on_device.slot_store import OnDeviceSlotStore
 
+# Pins the concrete ``OnDeviceLearningConfig.scoring_seed`` default declared in
+# ``config/schema.py``. A backwards-compat regression test asserts the EXACT
+# default (not merely the type) so silent default drift fails CI: changing a
+# config default is a behaviour change (CLAUDE.md config convention). Update BOTH
+# this constant and the schema Field together if the default is ever retuned.
+_EXPECTED_SCORING_SEED_DEFAULT = 1234
+
 
 def test_ws4_fields_have_defaults() -> None:
     """The WS4 scoring seed defaults so enabling without it validates."""
     cfg = OnDeviceLearningConfig(enabled=True)
     assert isinstance(cfg.scoring_seed, int)
+    assert cfg.scoring_seed == _EXPECTED_SCORING_SEED_DEFAULT
 
 
 def test_pre_ws4_enabled_yaml_loads_without_scoring_knobs() -> None:
@@ -39,6 +47,7 @@ def test_pre_ws4_enabled_yaml_loads_without_scoring_knobs() -> None:
     )
     assert cfg.on_device_learning is not None
     assert isinstance(cfg.on_device_learning.scoring_seed, int)
+    assert cfg.on_device_learning.scoring_seed == _EXPECTED_SCORING_SEED_DEFAULT
 
 
 def test_existing_yaml_loads_without_on_device_key(tmp_path: Path) -> None:

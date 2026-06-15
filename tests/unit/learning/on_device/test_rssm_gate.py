@@ -279,6 +279,12 @@ def test_score_dynamics_captures_cuda_rng_when_available_for_cpu_model() -> None
     sentinel = ["cuda_rng_state"]
     with (
         patch("torch.cuda.is_available", return_value=True),
+        # Stub the real all-CUDA-generators reseed: with is_available forced True,
+        # the real torch.manual_seed would mutate a live CUDA generator on a GPU
+        # host (test-isolation leak) and relies on torch's lazy CUDA-init on a
+        # CPU-only build. manual_seed still seeds the CPU generator; only the CUDA
+        # side effect is neutralised, so this stays a pure structural branch assert.
+        patch("torch.cuda.manual_seed_all", create=True),
         patch("torch.cuda.get_rng_state_all", return_value=sentinel) as get_all,
         patch("torch.cuda.set_rng_state_all") as set_all,
     ):
