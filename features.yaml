@@ -21,7 +21,7 @@ features:
       - "Core harness files present and parseable"
       - "scripts/validations/F-001.sh exits 0"
     validation_command: "bash scripts/validations/F-001.sh"
-    implemented_in: "claude/harness-spec-template-g3inh7"
+    implemented_in: "7f375815f53729ab54a271df6ae5835b8d1356d4"
     depends_on: []
     notes: "Routed through F-001.sh (not validate.py --check F-001) to avoid the recursive self-reference in the upstream template example."
 
@@ -58,7 +58,7 @@ features:
       - "DAG has no cycles and no dangling depends_on edges"
       - "All referenced scripts/validations/*.sh exist"
     validation_command: "python -m pytest tests/regression/test_harness_spec_aqa.py -q"
-    implemented_in: "claude/harness-spec-template-g3inh7"
+    implemented_in: "7f375815f53729ab54a271df6ae5835b8d1356d4"
     depends_on: ["F-001"]
     notes: ""
 

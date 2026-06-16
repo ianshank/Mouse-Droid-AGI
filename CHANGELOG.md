@@ -8,6 +8,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — Deploy-hardening: F-013/F-014 closeout + harness provenance + NEXT_STEPS reconcile
+
+A small post-merge closeout after a gap analysis confirmed the bulk of the
+F-006/F-009/F-013/F-014 ops-hardening work had already landed on trunk
+(PR #131, post-#117). This PR closes the genuinely-open remainder; the rover
+runtime and the 30 Hz reactive loop are untouched.
+
+- **Harness post-merge provenance fix.** `features.yaml` features `F-001` and
+  `F-003` repointed their `implemented_in` from the merged-and-deleted working
+  branch `claude/harness-spec-template-g3inh7` (unresolvable on `main`) to the
+  #136 squash-merge SHA `7f375815f53729ab54a271df6ae5835b8d1356d4`, so the
+  nightly `scripts/validate.py --strict-git` job stays green on the default
+  branch (same discipline as `deployments/jetson-image.json`).
+- **`mock_hardware_resolved` boot log (F-014 #4 follow-up).** The orchestrator
+  now emits `_log.info("mock_hardware_resolved", value=self._cfg.mock_hardware)`
+  at the very start of `start()` (right after `orchestrator_starting`), so the
+  *resolved* mock-hardware boolean is visible in container logs at boot —
+  previously it was only reachable via the on-demand `health_check` API
+  response. Pinned by `tests/unit/orchestrator/test_mock_hardware_boot_log.py`.
+- **`docs/planning/NEXT_STEPS.md` reconciled to reality.** F-006
+  (`n_gpu_layers: -1` + `anthropic` Claude-haiku primary), F-009
+  (`tensorrt_compiler_built` INFO + `backend` label), F-013
+  (`scripts/deploy_jetson.sh` deploys `config/*.yaml` — with the noted `cp -n`
+  no-clobber refresh caveat) and F-014 (compose `env_file` + deliberate inline
+  exclusion + this PR's boot log) are marked ✅ RESOLVED; the harness provenance
+  follow-up is marked done. Genuinely-open items (F-010 VLM mock, catalog
+  growth, F-008 rover promotion) are retained.
+
+### Changed — Refactor: dedupe USB-audio device discovery (#139)
+
+- Tech-debt finding D2: `_find_device_index()` was copy-pasted between
+  `hardware/audio/usb_microphone.py` and `usb_speaker.py`, differing only by
+  channel direction and the structlog event name. Extracted
+  `find_pyaudio_device_index(device_name, *, want_input, log_event)` into a new
+  dependency-free `hardware/audio/_device_discovery.py`; both drivers delegate
+  through it (the per-class methods stay as thin shims, so public
+  behaviour/signatures are unchanged). Zero-behaviour-change refactor with
+  defensive parsing for None device-info rows / None channel counts. Pinned by
+  `tests/unit/hardware/audio/test_device_discovery.py`.
+
+### Changed — Refactor: dedupe VLA / world-model ONNX session lifecycle (#140)
+
+- Tech-debt finding D1: `vla/policy.py::DistilledVLAOnnx` and
+  `world_model/dual_stream_rssm_onnx.py::DualStreamRSSMOnnx` copy-pasted a
+  ~50-LOC ONNX-Runtime session-lifecycle block (provider-fallback resolution,
+  lazy `onnxruntime`-import warmup, zero-filled warmup pass). Extracted into a
+  **neutral** `src/mousedroid/common/onnx_session.py` that imports neither `vla`
+  nor `world_model` — removing the copy-paste without creating a cross-module
+  import. Per-wrapper differences are arguments (`log_prefix`, output-names),
+  not branches; warmup feeds now map each input's declared ONNX element type to
+  the matching numpy dtype (float32 fallback). Pinned by
+  `tests/unit/common/test_onnx_session.py`.
+
 ### Added — Spec-driven development harness (HARNESS_SPEC v2.1, ADR-012)
 
 A schema-validated feature catalog + runner that makes feature completion

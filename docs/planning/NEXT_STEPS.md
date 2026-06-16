@@ -1,16 +1,27 @@
 # MouseDroidAGI — Next Steps
 
-> **Last updated**: 2026-05-17 | **Version**: 0.4.1-dev (smoke-stability pass + live-Jetson verification) | **Pre-PR validation**: Ruff clean, mypy strict clean, 4792 tests pass on host + dashboard pipeline live-verified on rover
+> **Last updated**: 2026-06-15 | **Version**: 0.4.2-dev (deploy-hardening F-013/F-014 closeout + post-merge gap reconciliation) | **Pre-PR validation**: Ruff clean, mypy strict clean, harness `validate.py --tier fast --strict-git` green, orchestrator + harness-AQA suites pass on host
+
+> **Reconciliation note (2026-06-15):** a post-merge gap analysis against trunk
+> (`7f375815f53729ab54a271df6ae5835b8d1356d4`, the #136 harness squash) found
+> that most of the 2026-05-17 smoke-report follow-ups (**F-006**, **F-009**,
+> **F-013**, **F-014**) had already landed on trunk after PR #117. The sections
+> below are updated to reflect the shipped reality; only the genuinely-open
+> remainder was implemented in the deploy-hardening PR.
 
 ## Spec-driven harness (ADR-012) — follow-ups
 
 The spec-driven development harness (`HARNESS_SPEC.md`, `features.yaml`,
 `scripts/validate.py`) is now live and CI-gated. Open follow-ups:
 
-- **Post-merge provenance.** `F-001` / `F-003` set `implemented_in` to the working
-  branch `claude/harness-spec-template-g3inh7`. After this PR merges, replace those
-  with the squash/merge SHA so the nightly `--strict-git` job stays green on the
-  default branch (same discipline as `deployments/jetson-image.json`).
+- ✅ **Post-merge provenance — RESOLVED.** `F-001` / `F-003` previously set
+  `implemented_in` to the now-merged-and-deleted working branch
+  `claude/harness-spec-template-g3inh7` (unresolvable on `main`, so the nightly
+  `--strict-git` job would fail). Both are now repointed to the #136 squash-merge
+  SHA `7f375815f53729ab54a271df6ae5835b8d1356d4` ("feat(harness): adopt
+  spec-driven harness (HARNESS_SPEC v2.1) (#136)"). Verified with
+  `python scripts/validate.py --tier fast --strict-git` exiting `0` (same
+  discipline as `deployments/jetson-image.json`).
 - **Grow the catalog.** Seeded with 8 features ("bootstrap + key subsystems"). As
   new features are specced, add them to `features.yaml` with a real
   `validation_command` (prefer a `scripts/validations/F-XXX.sh` script over inline
@@ -29,57 +40,81 @@ The intermediate smoke-test stability sprint (`claude/smoke-test-stability-pass`
 (F-001…F-014 in `SMOKE_REPORT.md`). Most are documented expected states; these are
 the ones that still need action.
 
-### F-006 (HIGH, operator-actionable) — LLM inference too slow for real-time control
+### ✅ F-006 (HIGH, operator-actionable) — LLM inference too slow — RESOLVED
+
+> **Evidence (2026-06-15):** `config/jetson_production.yaml` now ships
+> `llm.n_gpu_layers: -1` (offload all) AND a `backend: "anthropic"` (Claude-haiku)
+> primary tier, so the deliberative path no longer depends on the 0.52 tok/s
+> CPU-bound Phi-3 for its hot translation. The `llm_latency_budget_exceeded`
+> runtime guard / metric also shipped (PR #115 observability — the budget
+> counter increments on the same branch as the `anthropic_gateway_slow` log).
+> The remaining caveat is that the Phi-3 `llama_cpp` *fallback* still runs on
+> CPU (`MOUSEDROID_LLM__N_GPU_LAYERS=0` in `/etc/mousedroid/docker.env`) because
+> the world model owns the shared iGPU — that is the deliberate operator
+> override, not a regression.
+
+Historical context (2026-05-17 smoke report):
 
 - **Symptom:** `translate_mission("turn left slowly")` on the live Jetson took **260 s**
   (Phi-3-mini-q4 at 0.52 tok/s, eval). Orchestrator latency budget is 500 ms.
-- **Root cause:** `jetson_production.yaml` ships `llm.n_gpu_layers: 0` — CUDA KV cache
-  is allocated but matmul stays on CPU.
-- **Fix (no code):** set `llm.n_gpu_layers: -1` (offload all) in
-  `config/jetson_production.yaml` and re-deploy. Validate via `tools/lidar_telemetry_probe`-style
-  one-shot probe that calls `LLMGateway.translate_mission` and asserts elapsed ≤ 500 ms.
-- **Code follow-up:** add a runtime guard in `LLMGateway` that emits a
-  `llm_latency_budget_exceeded` structured log when a single call exceeds
-  `cfg.llm.latency_target_ms`. Operator dashboard then alerts before this regresses
-  silently again.
+- **Root cause:** `jetson_production.yaml` shipped `llm.n_gpu_layers: 0` — CUDA KV cache
+  was allocated but matmul stayed on CPU.
 
-### F-013 + F-014 (HIGH, ops) — Dashboard plumbing fragility
+### ✅ F-013 + F-014 (HIGH, ops) — Dashboard plumbing fragility — RESOLVED
 
-The dashboard data path is correct end-to-end (verified live) but two deployment fragilities
-must be closed in a code follow-up:
+The dashboard data path is correct end-to-end (verified live). Both deployment
+fragilities are now closed on trunk; the four-step follow-up sprint below has
+landed across several PRs (the final boot-log step in the deploy-hardening PR).
 
-- **F-013:** there are **two copies** of `jetson_production.yaml` on each Jetson —
-  `config/jetson_production.yaml` (in-repo, the source of truth) and
-  `/etc/mousedroid/jetson_production.yaml` (operator-deployed, drifts). No sync job
-  closes the gap. The live verification needed an `scp config/jetson_production.yaml
-  jetson:/etc/mousedroid/jetson_production.yaml` step before the dashboard would come up.
-- **F-014:** `docker-compose.jetson.yml:31` substitutes
-  `MOUSEDROID_MOCK_HARDWARE=${VAR:-true}` from the **host shell env at compose-up time**,
-  ignoring the `MOUSEDROID_MOCK_HARDWARE=false` setting inside
-  `/etc/mousedroid/docker.env`. Production thus defaults to mock unless the operator
-  explicitly exports the var.
+- ✅ **F-013 — config deploy: RESOLVED.** `scripts/deploy_jetson.sh` copies
+  `config/*.yaml` into `/etc/mousedroid/` (via `cp -n`) as part of the deploy
+  flow, so a fresh host gets the in-repo configs without a manual `scp` step.
+  **Minor remaining caveat (optional future item):** the `cp -n` no-clobber is
+  *deliberate* — it preserves operator-applied customisations on
+  `/etc/mousedroid/*.yaml` — but it therefore does **not** force-refresh a
+  config that has *drifted* from the repo source. A drift-aware refresh
+  (checksum-compare + opt-in overwrite, or a `--force` flag) is a possible
+  future nicety; do **not** change the `cp -n` default, as that would clobber
+  intentional operator overrides.
+- ✅ **F-014 — compose mock-hardware / token footgun: RESOLVED.**
+  `docker-compose.jetson.yml` now loads per-host overrides via
+  `env_file: /etc/mousedroid/docker.env` (`required: false`) and
+  **deliberately excludes** `MOUSEDROID_MOCK_HARDWARE` / `MOUSEDROID_TELEMETRY_TOKEN`
+  from the inline `environment:` block (see the `# F-014:` comment in the
+  compose file), so the host-shell `:-true` substitution can no longer shadow
+  the `docker.env` value. The token reaches the container from `docker.env`
+  rather than the inline block.
+  **Boot-log follow-up (this PR):** the orchestrator now emits
+  `_log.info("mock_hardware_resolved", value=self._cfg.mock_hardware)` at the
+  very start of `start()` (right after `orchestrator_starting`), so the
+  *resolved* mock-hardware boolean is always visible in container logs at boot
+  — previously it was only reachable via the on-demand `health_check` API.
+  Pinned by `tests/unit/orchestrator/test_mock_hardware_boot_log.py`.
 
-**Proposed code follow-up sprint** (a single PR after this one ships):
+Original four-step follow-up sprint (all now landed):
 
-1. Add `scripts/deploy_config_jetson.sh` that runs `scp config/*.yaml
-   jetson:/etc/mousedroid/` + verifies checksums + restarts the orchestrator. Document
-   in `JETSON_SMOKE_RUNBOOK.md` as the canonical config-refresh path.
-2. Flip the compose default to `:-false` so production deployments default to real
-   hardware. Tests pass `MOUSEDROID_MOCK_HARDWARE=true` explicitly.
-3. Add `MOUSEDROID_TELEMETRY_TOKEN=${MOUSEDROID_TELEMETRY_TOKEN}` to the compose
-   `environment:` block so the token defined in `docker.env` actually reaches the
-   container at startup.
-4. Add a `_log.info("mock_hardware_resolved", value=cfg.mock_hardware)` line at
-   orchestrator boot so the resolved boolean is always visible in container logs.
+1. ✅ `scripts/deploy_jetson.sh` deploys `config/*.yaml` to `/etc/mousedroid/`
+   (the `deploy_config_jetson.sh` proposal was folded into the existing deploy
+   script; see the F-013 caveat above on the `cp -n` no-clobber).
+2. ✅ Compose no longer lets the host-shell `:-true` default win — the
+   `MOUSEDROID_MOCK_HARDWARE` / `MOUSEDROID_TELEMETRY_TOKEN` keys are removed from
+   the inline `environment:` block and sourced from `docker.env` instead.
+3. ✅ `MOUSEDROID_TELEMETRY_TOKEN` now reaches the container via the `docker.env`
+   `env_file`, not a hardcoded compose substitution.
+4. ✅ `_log.info("mock_hardware_resolved", value=cfg.mock_hardware)` added at
+   orchestrator boot (this PR).
 
-### F-009 (INFO, observability) — TensorRT silent mock fallback
+### ✅ F-009 (INFO, observability) — TensorRT silent mock fallback — RESOLVED
 
-`build_tensorrt_compiler` returns `MockTensorRTCompiler` when the `tensorrt` Python
-wheel fails to import, with the choice only logged at DEBUG. On a production Jetson
-this means the operator can't tell from logs whether the real compiler or the mock is
-selected. Promote `tensorrt_compiler_built` to INFO with a `backend` field whose
-value is `real | mock`, and add a one-liner to the operator runbook to pin the real
-class.
+> **Evidence (2026-06-15):** `factory.py::build_tensorrt_compiler` now emits the
+> `tensorrt_compiler_built` event at **INFO** with a `backend` label on **both**
+> the real and mock paths, so an operator can tell from the boot logs which
+> compiler was selected. The DEBUG-only ambiguity is closed.
+
+Historical context (2026-05-17 smoke report): `build_tensorrt_compiler` returned
+`MockTensorRTCompiler` when the `tensorrt` Python wheel failed to import, with the
+choice only logged at DEBUG — so on a production Jetson the operator couldn't tell
+from logs whether the real compiler or the mock was selected.
 
 ### F-010 (MED, Tier C3 sprint) — VLM progress is constant mock
 
