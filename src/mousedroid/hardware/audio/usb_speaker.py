@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from numpy.typing import NDArray
 
+from mousedroid.hardware.audio._device_discovery import find_pyaudio_device_index
 from mousedroid.hardware.audio.constants import INT16_MAX_F
 from mousedroid.logging.setup import get_logger
 from mousedroid.voice.exceptions import SpeakerUnavailableError
@@ -51,20 +52,11 @@ class UsbSpeaker:
         Returns:
             Device index or None if not found.
         """
-        import pyaudio
-
-        pa = pyaudio.PyAudio()
-        try:
-            for i in range(pa.get_device_count()):
-                info = pa.get_device_info_by_index(i)
-                name = str(info.get("name", ""))
-                max_output = int(info.get("maxOutputChannels", 0))
-                if self._cfg.device_name.lower() in name.lower() and max_output > 0:
-                    _log.info("usb_speaker_found", index=i, name=name)
-                    return i
-        finally:
-            pa.terminate()
-        return None
+        return find_pyaudio_device_index(
+            self._cfg.device_name,
+            want_input=False,
+            log_event="usb_speaker_found",
+        )
 
     async def start(self) -> None:
         """Open the PyAudio stream for playback with exponential-backoff retry.

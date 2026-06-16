@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from numpy.typing import NDArray
 
+from mousedroid.hardware.audio._device_discovery import find_pyaudio_device_index
 from mousedroid.hardware.audio.constants import INT16_MAX_F
 from mousedroid.logging.setup import get_logger
 
@@ -47,25 +48,16 @@ class UsbMicrophone:
         )
 
     def _find_device_index(self) -> int | None:
-        """Find the device index matching the configured device name.
+        """Find the input device index matching the configured device name.
 
         Returns:
             Device index or None if not found.
         """
-        import pyaudio
-
-        pa = pyaudio.PyAudio()
-        try:
-            for i in range(pa.get_device_count()):
-                info = pa.get_device_info_by_index(i)
-                name = str(info.get("name", ""))
-                max_input = int(info.get("maxInputChannels", 0))
-                if self._cfg.device_name.lower() in name.lower() and max_input > 0:
-                    _log.info("usb_microphone_found", index=i, name=name)
-                    return i
-        finally:
-            pa.terminate()
-        return None
+        return find_pyaudio_device_index(
+            self._cfg.device_name,
+            want_input=True,
+            log_event="usb_microphone_found",
+        )
 
     async def start(self) -> None:
         """Open the PyAudio stream for capture.
