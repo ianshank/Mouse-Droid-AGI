@@ -70,6 +70,15 @@ echo "=== Performance Tests ==="
 echo "=== Regression Tests ==="
 "$PYTHON_BIN" -m pytest tests/regression/ --import-mode=importlib -v
 
+echo "=== Harness Spec Alignment (fast tier) ==="
+# Spec-driven harness gate (HARNESS_SPEC.md §10 / ADR-012): validates
+# features.yaml against the schema, checks DAG integrity, and runs every
+# `done` feature's fast-tier validation_command. The standalone
+# .github/workflows/harness.yml mirrors this; running it here keeps the
+# harness green in the local full-CI loop too. Warn-only on git provenance
+# (matches the push job); slow/hardware tiers are deferred.
+"$PYTHON_BIN" scripts/validate.py --tier fast
+
 echo "=== E2E Tests ==="
 "$PYTHON_BIN" -m pytest tests/e2e/ --import-mode=importlib -v
 

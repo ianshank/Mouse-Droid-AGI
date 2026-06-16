@@ -2,6 +2,26 @@
 
 > **Last updated**: 2026-05-17 | **Version**: 0.4.1-dev (smoke-stability pass + live-Jetson verification) | **Pre-PR validation**: Ruff clean, mypy strict clean, 4792 tests pass on host + dashboard pipeline live-verified on rover
 
+## Spec-driven harness (ADR-012) — follow-ups
+
+The spec-driven development harness (`HARNESS_SPEC.md`, `features.yaml`,
+`scripts/validate.py`) is now live and CI-gated. Open follow-ups:
+
+- **Post-merge provenance.** `F-001` / `F-003` set `implemented_in` to the working
+  branch `claude/harness-spec-template-g3inh7`. After this PR merges, replace those
+  with the squash/merge SHA so the nightly `--strict-git` job stays green on the
+  default branch (same discipline as `deployments/jetson-image.json`).
+- **Grow the catalog.** Seeded with 8 features ("bootstrap + key subsystems"). As
+  new features are specced, add them to `features.yaml` with a real
+  `validation_command` (prefer a `scripts/validations/F-XXX.sh` script over inline
+  shell) and let `select_next.py` order the work via the DAG.
+- **Promote `F-008` to `done` on the rover.** The USB-C smoke (hardware tier) can
+  only reach `done` via `python scripts/validate.py --tier hardware` on the
+  self-hosted Jetson; wire it into `jetson-nightly.yml` once a runner is attached.
+- **Optional:** consider whether the harness scripts warrant their own coverage
+  scope; today the logic is covered via `src/mousedroid/harness/spec.py` (100%) and
+  the shims are exercised by `tests/regression/test_harness_cli_contract.py`.
+
 ## Smoke-stability sprint findings — operator-actionable follow-ups
 
 The intermediate smoke-test stability sprint (`claude/smoke-test-stability-pass`,

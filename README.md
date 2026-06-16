@@ -319,6 +319,32 @@ The probe binds a non-default port so it doesn't collide with the running orches
 and prints the per-frame `n_points` count for the first frames received. See
 `SMOKE_REPORT.md` Addendum A for the live-Jetson run results.
 
+### Spec-Driven Development Harness
+
+A schema-validated feature catalog makes "done" mechanically checkable: a feature is
+`done` only when its `validation_command` exits 0 under the runner — there is no
+hand-set flag to game. This is an additive CI/agent tooling layer; the rover runtime
+is untouched. See [`HARNESS_SPEC.md`](HARNESS_SPEC.md),
+[`docs/architecture/ADR-012-spec-driven-harness.md`](docs/architecture/ADR-012-spec-driven-harness.md),
+and [`docs/architecture/c4-spec-harness.md`](docs/architecture/c4-spec-harness.md).
+
+```bash
+# Pick the next feature to work on (honours the dependency DAG — don't eyeball features.yaml)
+python scripts/select_next.py
+
+# Validate the catalog + run every `done` feature's command for a tier
+python scripts/validate.py --tier fast            # inner loop / every push
+python scripts/validate.py --tier fast,slow       # nightly
+python scripts/validate.py --check F-005          # a single feature, any tier
+```
+
+The enforcement logic lives in the importable, unit-tested module
+`src/mousedroid/harness/spec.py` (100% covered); `scripts/validate.py` and
+`scripts/select_next.py` are thin CLI shims. CI gates it via
+`.github/workflows/harness.yml` (fast on push/PR, fast+slow nightly) and the fast
+tier also runs in `scripts/ci.sh`. The `hardware` tier runs only on the self-hosted
+Jetson runner.
+
 ### Rocky Voice Engine (Piper TTS)
 
 The Rocky personality voice engine uses [Piper TTS](https://github.com/rhasspy/piper) for local neural synthesis. The Jetson Docker image bakes in the model at build time:
