@@ -21,19 +21,23 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 import structlog
 import torch
 
-from mousedroid.common.onnx_session import resolve_providers, warmup_session
+# ``DEFAULT_ORT_PROVIDERS`` now lives in the neutral ``common.onnx_session``
+# module; the redundant ``as`` alias re-exports it explicitly (for ``mypy
+# --strict``'s no-implicit-reexport) so ``from mousedroid.vla.policy import
+# DEFAULT_ORT_PROVIDERS`` and ``from mousedroid.vla import DEFAULT_ORT_PROVIDERS``
+# keep working for backward compatibility.
+from mousedroid.common.onnx_session import (
+    DEFAULT_ORT_PROVIDERS as DEFAULT_ORT_PROVIDERS,
+)
+from mousedroid.common.onnx_session import (
+    resolve_providers,
+    warmup_session,
+)
 
 if TYPE_CHECKING:
     from mousedroid.telemetry.metrics import MetricsRegistry
 
 _log = structlog.get_logger(__name__)
-
-# Default ORT execution-provider chain. Overridable per-policy via config.
-DEFAULT_ORT_PROVIDERS: tuple[str, ...] = (
-    "TensorrtExecutionProvider",
-    "CUDAExecutionProvider",
-    "CPUExecutionProvider",
-)
 
 
 @dataclass(frozen=True)
