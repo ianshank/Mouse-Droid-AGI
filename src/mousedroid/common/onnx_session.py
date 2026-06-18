@@ -39,6 +39,17 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
+# Default ORT execution-provider chain (TensorRT → CUDA → CPU). Overridable
+# per-policy / per-runtime via config. Lives in this neutral module so both the
+# VLA (:class:`mousedroid.vla.policy.DistilledVLAOnnx`) and world-model
+# (:class:`mousedroid.world_model.dual_stream_rssm_onnx.DualStreamRSSMOnnx`)
+# ONNX wrappers can source it without a cross-package import.
+DEFAULT_ORT_PROVIDERS: tuple[str, ...] = (
+    "TensorrtExecutionProvider",
+    "CUDAExecutionProvider",
+    "CPUExecutionProvider",
+)
+
 # Literal warmup event names per supported wrapper prefix. Structured logging
 # requires literal, greppable event strings (never f-string-built), so the
 # per-wrapper ``log_prefix`` selects a fixed (start, pass, complete) triple

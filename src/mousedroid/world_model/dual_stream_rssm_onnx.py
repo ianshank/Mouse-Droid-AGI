@@ -12,15 +12,14 @@ This module mirrors :class:`DistilledVLAOnnx` from
 is only loaded inside :meth:`warmup`), same provider-fallback logic
 (:meth:`_resolve_providers`), same ``torch.no_grad()`` wrapping at the
 call boundary. The shared session-lifecycle logic (provider resolution,
-the lazy-import warmup, and the zero-filled warmup pass) now lives in the
-neutral :mod:`mousedroid.common.onnx_session` helper module, which both
-wrappers delegate to and which imports neither ``vla`` nor ``world_model``
--- so the duplicated session-lifecycle copy (kept to avoid a cross-module
-import) is gone. This module does still import the shared
-:data:`~mousedroid.vla.policy.DEFAULT_ORT_PROVIDERS` default from
-``vla.policy`` -- a separate, pre-existing coupling -- so it is not yet
-fully VLA-independent; relocating that constant to a neutral module is a
-follow-up.
+the lazy-import warmup, and the zero-filled warmup pass) *and* the
+:data:`~mousedroid.common.onnx_session.DEFAULT_ORT_PROVIDERS` default all
+live in the neutral :mod:`mousedroid.common.onnx_session` helper module,
+which both wrappers delegate to and which imports neither ``vla`` nor
+``world_model``. This module therefore imports nothing from the ``vla``
+package — the runtime is fully VLA-independent (pinned by
+``tests/unit/world_model/test_onnx_vla_decoupling.py``), so a future edit
+that re-introduces a ``world_model -> vla`` import fails loudly.
 
 What this class does NOT implement: :meth:`imagine_step`. The CfC
 maintains internal state across imagined rollouts which the export
@@ -40,11 +39,14 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from mousedroid.common.onnx_session import resolve_providers, warmup_session
+from mousedroid.common.onnx_session import (
+    DEFAULT_ORT_PROVIDERS,
+    resolve_providers,
+    warmup_session,
+)
 from mousedroid.config.schema import ModelConfig
 from mousedroid.logging.setup import get_logger
 from mousedroid.sensing.protocol import ObservationProtocol
-from mousedroid.vla.policy import DEFAULT_ORT_PROVIDERS
 from mousedroid.world_model.observation_packer import pack_observation
 from mousedroid.world_model.onnx_io import (
     OBSERVE_STEP_INPUT_AUDIO,
@@ -81,7 +83,7 @@ class DualStreamRSSMOnnx:
         model_path: Filesystem path to the exported ``.onnx``.
         cfg: ``ModelConfig`` describing dimensions of the model.
         providers: Requested ORT execution-provider chain. ``None``
-            uses :data:`~mousedroid.vla.policy.DEFAULT_ORT_PROVIDERS`.
+            uses :data:`~mousedroid.common.onnx_session.DEFAULT_ORT_PROVIDERS`.
         warmup_iterations: Dummy inferences to run during warmup.
         name: Telemetry name for logging.
         metrics: Optional :class:`MetricsRegistry`. When provided, each
