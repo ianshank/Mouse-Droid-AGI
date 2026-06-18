@@ -419,6 +419,12 @@ class MouseDroidOrchestrator:
     async def start(self) -> None:
         """Start all subsystems."""
         _log.info("orchestrator_starting")
+        # F-014 follow-up: surface the RESOLVED mock-hardware boolean in the
+        # boot log so an operator reading container logs can tell at a glance
+        # whether real or mock drivers were wired. ``health_check`` already
+        # exposes this, but that is an on-demand API response, not a boot
+        # artefact — this is the one boot-time touch-point.
+        _log.info("mock_hardware_resolved", value=self._cfg.mock_hardware)
         if self._hailo_runtime is not None:
             await self._hailo_runtime.start()
         await self._esp32.connect()
