@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import types
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -149,6 +150,7 @@ async def test_fallback_composite_uses_local_when_cloud_unavailable() -> None:
     cfg.llm.backend = "anthropic"
     cfg.llm.model_name = "claude-haiku-4-5"
     cfg.llm.fallback_backend = "llama_cpp"
+    cfg.llm.model_path = Path("/tmp/does_not_exist_for_test.gguf")
 
     gateway = build_llm_gateway(cfg)
     assert isinstance(gateway, FallbackLLMGateway)
