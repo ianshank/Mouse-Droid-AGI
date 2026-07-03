@@ -1,5 +1,7 @@
 ---
 description: Run simulation tests for the robot arm platform
+status: frozen
+unfreeze: "F-008 done on the Jetson + 30-day Phase-3b production soak (see NEXT_STEPS.md)"
 ---
 
 # Simulation Test

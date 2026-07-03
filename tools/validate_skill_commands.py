@@ -54,6 +54,11 @@ _FORBIDDEN_IN_PATH = set("{}*$<> ")
 _IPV4_OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
 _HARDCODED_HOST_RE = re.compile(rf"(?<![\w.])(?:{_IPV4_OCTET}\.){{3}}{_IPV4_OCTET}(?!\.?\d)")
 
+# Optional front-matter lifecycle field. Absent = fine (external skill layouts
+# like .github/skills/ never carry it); present = must be one of these, so a
+# typo like ``status: forzen`` can't silently un-freeze a paused skill.
+_ALLOWED_SKILL_STATUSES = frozenset({"active", "frozen", "deferred"})
+
 
 @dataclass(frozen=True)
 class SkillCommandIssue:
@@ -143,6 +148,18 @@ def validate_command_skill(
         issues.append(
             SkillCommandIssue(path, "missing-description", "front-matter 'description' is empty")
         )
+
+    if "status" in meta:
+        status = str(meta.get("status", "")).strip()
+        if status not in _ALLOWED_SKILL_STATUSES:
+            issues.append(
+                SkillCommandIssue(
+                    path,
+                    "invalid-status",
+                    f"front-matter 'status' {status!r} not in "
+                    f"{sorted(_ALLOWED_SKILL_STATUSES)}",
+                )
+            )
 
     repo_root_resolved = repo_root.resolve()
     for ref in referenced_repo_paths(body):

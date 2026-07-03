@@ -45,6 +45,12 @@ echo "=== Skill Validator (.claude/skills) ==="
 # tests/regression/test_skill_commands_aqa.py; this is the quick local mirror.
 "$PYTHON_BIN" tools/validate_skill_commands.py
 
+echo "=== Doc Hygiene (advisory) ==="
+# WARN-only drift guard for the forward-looking planning doc (F-016). Exits 0
+# unless --strict; the hard post-reconciliation budget is pinned by
+# tests/regression/test_next_steps_reconciled.py in the regression stage.
+"$PYTHON_BIN" tools/doc_hygiene.py NEXT_STEPS.md
+
 echo "=== Type Check ==="
 "$PYTHON_BIN" -m mypy src/ --strict --ignore-missing-imports
 

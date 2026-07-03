@@ -174,3 +174,24 @@ features:
     implemented_in: "claude/review-agents-plan-4qfxev"
     depends_on: ["F-001"]
     notes: "POST-MERGE: replace implemented_in with the squash SHA. Runbook: docs/runbooks/secret-scanning.md."
+
+  - id: "F-016"
+    epic: "Hygiene"
+    name: "Planning docs stay forward-looking (truth reconciliation)"
+    description: >-
+      NEXT_STEPS.md carries only forward-looking items (landed work lives in
+      CHANGELOG.md), the T3/arm contradiction is resolved as pause-at-T2 with
+      an explicit unfreeze condition, the Phase-5 vocabulary collision is
+      disambiguated, frozen skills carry validated status front-matter, and
+      tools/doc_hygiene.py guards against re-drift (WS-1, rev. B).
+    category: "infrastructure"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "tests/unit/tools/test_doc_hygiene.py passes"
+      - "tests/regression/test_next_steps_reconciled.py passes"
+    validation_command: "python -m pytest tests/unit/tools/test_doc_hygiene.py tests/regression/test_next_steps_reconciled.py -q"
+    implemented_in: "claude/review-agents-plan-4qfxev"
+    depends_on: ["F-001"]
+    notes: "POST-MERGE: replace implemented_in with the squash SHA. Advisory guard runs in scripts/ci.sh."

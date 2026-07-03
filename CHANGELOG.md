@@ -8,6 +8,78 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Historical record — reconciled from NEXT_STEPS.md (2026-07-03, F-016)
+
+NEXT_STEPS.md had re-drifted into changelog territory (37 KB, 72 ✅ marks).
+Everything below was already landed and is preserved here verbatim-in-spirit;
+NEXT_STEPS.md now carries forward-looking items only.
+
+- **LLM-gateway observability shipped (PR #115)** — `{ns}_llm_tokens_total`,
+  `{ns}_llm_gateway_latency_ms`, `{ns}_llm_gateway_served_total`,
+  `{ns}_llm_latency_budget_exceeded_total` metric families (config-gated,
+  seeded in `generate_metrics_sample()`).
+- **Training observability T2 (MLflow) shipped** — MLflow logger wired into
+  `PipelineOrchestrator` + `OfflineRLTrainer`; runbook
+  `docs/runbooks/mlflow-local-ui.md`.
+- **Validation-efficiency layer shipped (PR #126)** — latency-percentile probes
+  (`tools/llm_latency_probe.py --iterations N`, `tools/lidar_telemetry_probe.py`
+  p50/p95/p99 via `validation/latency_stats.py`), run-over-run trend store
+  (`validation/report_store.py` + `preflight --journal-path --trend`), Phase-1
+  caching in `jetson_full_validation.sh` (`--phases` / `--no-cache`).
+- **Issue #109 (MSE-6 greeting lifecycle) closed** — `GreetingConfig.fire_on_startup`
+  (default `False`), pr109 integration + hardware test tiers landed. Residual
+  post-gate action: run the hardware-tier greeting test on the live rover before
+  flipping the default.
+- **Jetson config-overlay sync automated** — `scripts/mousedroid-docker.service`
+  runs `scripts/sync_jetson_overlay.sh` as `ExecStartPre` (the former
+  "Deployment Hardening Option 3" proposal, superseded and closed).
+- **Physical-AI Phase 2 — real-episode replay loop** — LMDB async reader
+  (`training/replay/lmdb_reader.py`), ratio-controlled sim/real mixer,
+  `training/replay_real_episodes.py` CLI, `schema_version` skip logic,
+  `OfflineRLConfig.real_supervised_weight` (Phase 2.1: TD3+BC-pattern
+  `bc_update`, byte-identity proven at `weight=0` by
+  `tests/integration/test_phase21_bc_into_offline_rl.py`; golden RSSM loss
+  curve in `tests/regression/test_phase2_rssm_golden.py`), and
+  `factory.build_replay_reader`.
+- **Physical-AI Phase 3a — VLA protocol + MockVLA** — `VLAPolicyProtocol`,
+  `VLAConfig` (default `backend="none"`), `build_vla_policy`,
+  `LoopConfig.policy_selector` (`nav_agent`/`vla`/`auto`), timeout safe-stop +
+  fallback, 43 unit tests.
+- **Physical-AI Phase 3b — DistilledVLAOnnx + HF weights pull** — ORT provider
+  chain (TensorRT→CUDA→CPU), `[vla]` extra, lazy-import isolation test,
+  `weights_manager.download_weights_from_huggingface` reuse, ~30 unit tests.
+  The `[vla]` CI matrix leg was later PROMOTED to required (Tier C3.1).
+- **Physical-AI Phase 4 — VLM-derived dense rewards (VLAC)** —
+  `reward/vlm_progress.py` (`VLMProgressBackend`, `MockVLMProgress`,
+  LRU-cached `VLMProgressHead`), `RewardConfig.weight_vlm_progress` (default
+  `0.0`), Law-1 multiplicative sigmoid gate preserved (Hypothesis property
+  test), `factory.build_reward_model`, `train_constitutional_rl.py` migrated.
+- **Voice engine quality** — config-driven Piper model selection
+  (`voice.personality_to_model_map`), latency benchmark
+  (`scripts/benchmark_voice_latency.py`), phrase-bank navigation/battery/LLM
+  events, per-event intensity thresholds.
+- **Test coverage** — TTS + speaker integration tests
+  (`test_tts_integration.py`, `test_speaker_tts_integration.py`), smoke-harness
+  unit tests (`test_smoke_harness.py`).
+- **Immediate follow-ups closed** — jetson-nightly Ten Pillars workflow
+  (advisory), self-hosted runner install path
+  (`scripts/jetson-runner-install.sh` + service template + runbook), Phase 2
+  replay activated in the production overlay (inert defaults +
+  `debug_log_every_n` triage knob), operator failure-mode playbooks
+  (esp32/gpio/replay/bringup), real-hardware endurance opt-in
+  (`MOUSEDROID_ENDURANCE_FORCE_REAL=1` → `reports/endurance/<utc>.json`),
+  LMDB→training export CLI (`scripts/export_experience_to_training.py`),
+  production-config validation (`scripts/validate_configs.py` +
+  `config-validate` CI job).
+- **PR #107 follow-ups closed** — live cloud round-trip benchmark (PR #111
+  deploy; `latency_target_ms: 5000` on the live overlay), cold-network
+  failover validation (Phi-3-mini CPU tier), cloud token-cost telemetry
+  (superseded by the PR #115 families above).
+- **Reference: last full Jetson smoke snapshot (`20260426T231226Z`)** — all 14
+  stages PASS including ten_pillars 20/20 (camera IMX500 CSI, LiDAR LD19 360°,
+  USB audio both directions, OLED I²C-7, GPIO, ESP32 serial at 1 Mbps — the
+  ESP32 has since failed and is the active top blocker).
+
 ### Added — claude-code-foundry implementation plan + WS-F7a skills-layout migration (#150)
 
 The executable blueprint for the new `ianshank/claude-code-foundry` plugin-
