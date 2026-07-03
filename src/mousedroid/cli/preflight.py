@@ -41,7 +41,8 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Comma-separated check names to run (subset of: camera, "
-            "microphone, speaker, lidar, esp32, config). Default: all."
+            "microphone, speaker, lidar, esp32, config, host_env_keys). "
+            "Default: all."
         ),
     )
     parser.add_argument(

@@ -195,3 +195,24 @@ features:
     implemented_in: "claude/review-agents-plan-4qfxev"
     depends_on: ["F-001"]
     notes: "POST-MERGE: replace implemented_in with the squash SHA. Advisory guard runs in scripts/ci.sh."
+
+  - id: "F-017"
+    epic: "Deployment"
+    name: "Per-host docker.env overrides survive a reflash"
+    description: >-
+      config/docker.env.example enumerates the live LLM host overrides, the
+      WARN-only host_env_keys preflight check flags key-set drift on the
+      deployed env file (names only, never values), and
+      scripts/host_bootstrap.sh seeds/repairs the host surface with dry-run,
+      backup, and rollback safety (WS-3.1, rev. B).
+    category: "infrastructure"
+    priority: "high"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "tests/unit/validation/test_preflight_host_env.py passes"
+      - "tests/regression/test_host_bootstrap_script.py passes"
+    validation_command: "python -m pytest tests/unit/validation/test_preflight_host_env.py tests/unit/validation/test_preflight_real_branches.py tests/regression/test_host_bootstrap_script.py -q"
+    implemented_in: "claude/review-agents-plan-4qfxev"
+    depends_on: ["F-001"]
+    notes: "POST-MERGE: replace implemented_in with the squash SHA. Check is OFF by default (host_env: enabled: false); enable on the Jetson overlay."

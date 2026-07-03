@@ -38,7 +38,7 @@ def test_json_mode_emits_parseable_document(
     captured = capsys.readouterr()
     payload = _extract_json_block(captured.out)
     assert "checks" in payload
-    assert len(payload["checks"]) == 6  # camera/microphone/speaker/lidar/esp32/config
+    assert len(payload["checks"]) == 7  # camera/microphone/speaker/lidar/esp32/config/host_env_keys
 
 
 def test_checks_filter_restricts_dispatch(capsys: pytest.CaptureFixture[str]) -> None:
