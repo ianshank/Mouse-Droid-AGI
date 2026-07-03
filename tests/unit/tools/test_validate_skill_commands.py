@@ -6,9 +6,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from tools.validate_skill_commands import (
+    find_hardcoded_hosts,
     referenced_repo_paths,
     validate_all,
     validate_command_skill,
+    validate_repo,
+    validate_skills,
 )
 
 
@@ -123,3 +126,127 @@ def test_validate_all_skips_unreadable_without_aborting(tmp_path: Path) -> None:
     issues = validate_all(tmp_path, repo_root=tmp_path)
     codes = [i.code for i in issues]
     assert codes == ["unreadable"]  # good.md produced zero issues
+
+
+def test_find_hardcoded_hosts_detects_ipv4_literals() -> None:
+    # Public helper used by doc-hygiene tests beyond the skill sweep
+    # (tests/regression/test_foundry_plan_doc.py) — same single rule.
+    text = "Connect to 10.0.0.7 then fall back to 192.168.4.1.\n"
+    assert find_hardcoded_hosts(text) == ["10.0.0.7", "192.168.4.1"]
+
+
+def test_find_hardcoded_hosts_ignores_hostnames_and_semver() -> None:
+    # Hostnames, URLs, and three-part versions are legitimate doc content;
+    # the IPv4-literal-only rule must not flag them.
+    text = "See https://docs.claude.com and pin numpy 2.5.0 or v0.1.0.\n"
+    assert find_hardcoded_hosts(text) == []
+
+
+def _write_skill(skills_dir: Path, name: str, body: str) -> Path:
+    d = skills_dir / name
+    d.mkdir(parents=True)
+    return _write(d / "SKILL.md", body)
+
+
+def test_validate_skills_valid_nested_layout(tmp_path: Path) -> None:
+    repo = tmp_path
+    (repo / "src").mkdir()
+    _write(repo / "src" / "thing.py", "x = 1\n")
+    skills = repo / ".claude" / "skills"
+    _write_skill(skills, "demo", "---\ndescription: Does a thing\n---\nUses `src/thing.py`.\n")
+    assert validate_skills(skills, repo_root=repo) == []
+
+
+def test_validate_skills_missing_dir_is_handled(tmp_path: Path) -> None:
+    issues = validate_skills(tmp_path / "nope", repo_root=tmp_path)
+    assert [i.code for i in issues] == ["missing-skills-dir"]
+
+
+def test_validate_skills_flags_subdir_without_skill_md(tmp_path: Path) -> None:
+    skills = tmp_path / "skills"
+    (skills / "half-migrated").mkdir(parents=True)
+    issues = validate_skills(skills, repo_root=tmp_path)
+    assert [i.code for i in issues] == ["missing-skill-file"]
+
+
+def test_validate_skills_flags_name_dir_mismatch(tmp_path: Path) -> None:
+    skills = tmp_path / "skills"
+    _write_skill(skills, "real-name", "---\nname: other-name\ndescription: d\n---\nbody\n")
+    issues = validate_skills(skills, repo_root=tmp_path)
+    assert [i.code for i in issues] == ["name-dir-mismatch"]
+
+
+def test_validate_skills_accepts_matching_or_absent_name(tmp_path: Path) -> None:
+    skills = tmp_path / "skills"
+    _write_skill(skills, "named", "---\nname: named\ndescription: d\n---\nbody\n")
+    _write_skill(skills, "unnamed", "---\ndescription: d\n---\nbody\n")
+    assert validate_skills(skills, repo_root=tmp_path) == []
+
+
+def test_validate_repo_sweeps_both_layouts(tmp_path: Path) -> None:
+    # A consumer mid-migration has BOTH layouts; both must be swept.
+    skills = tmp_path / ".claude" / "skills"
+    commands = tmp_path / ".claude" / "commands"
+    commands.mkdir(parents=True)
+    _write_skill(skills, "ok", "---\ndescription: d\n---\nbody\n")
+    _write(commands / "bad.md", "---\nname: x\n---\nbody\n")  # missing description
+    issues = validate_repo(tmp_path)
+    assert [i.code for i in issues] == ["missing-description"]
+
+
+def test_validate_repo_neither_layout_is_an_error(tmp_path: Path) -> None:
+    # No layout at all must be a deterministic failure, not a false "all valid".
+    issues = validate_repo(tmp_path)
+    assert [i.code for i in issues] == ["no-skill-layout"]
+
+
+def test_validate_repo_explicit_dir_is_mandatory(tmp_path: Path) -> None:
+    # Pinning a layout explicitly surfaces its missing-dir issue instead of
+    # silently skipping it.
+    issues = validate_repo(tmp_path, skills_dir=tmp_path / "gone")
+    assert [i.code for i in issues] == ["missing-skills-dir"]
+
+
+def test_validate_repo_explicit_dir_scopes_the_sweep(tmp_path: Path) -> None:
+    # Pinning one layout must NOT auto-discover the other: --commands-dir X
+    # validates only X (the pre-auto-discovery CLI contract). The repo's
+    # default skills dir here contains an invalid skill that would surface if
+    # the sweep leaked beyond the pinned dir.
+    skills = tmp_path / ".claude" / "skills"
+    _write_skill(skills, "leaky", "---\nname: x\n---\nno description\n")
+    commands = tmp_path / "external-commands"
+    commands.mkdir()
+    _write(commands / "ok.md", "---\ndescription: d\n---\nbody\n")
+    assert validate_repo(tmp_path, commands_dir=commands) == []
+
+
+def test_validate_skills_unreadable_short_circuits_name_check(tmp_path: Path) -> None:
+    # A non-UTF-8 SKILL.md yields exactly `unreadable` — never a
+    # name-dir-mismatch verdict derived from replacement-char content.
+    skills = tmp_path / "skills"
+    d = skills / "corrupt"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_bytes(b"---\nname: other\n---\n\xff\xfe\x80")
+    issues = validate_skills(skills, repo_root=tmp_path)
+    assert [i.code for i in issues] == ["unreadable"]
+
+
+def test_bom_prefixed_front_matter_is_parsed(tmp_path: Path) -> None:
+    # An editor-prepended UTF-8 BOM must not make the front-matter fence
+    # invisible (utf-8-sig read).
+    skill = tmp_path / "bom.md"
+    skill.write_bytes(b"\xef\xbb\xbf---\ndescription: d\n---\nbody\n")
+    assert validate_command_skill(skill, repo_root=tmp_path) == []
+
+
+def test_find_hardcoded_hosts_valid_octet_boundaries() -> None:
+    # Valid-octet IPv4 grammar: invalid octets, 4-part version/build strings,
+    # 5-part dotted numbers, v-prefixed tags, and zero-padded octets are NOT
+    # hosts; sentence-final IPs and host-name prefixes ARE.
+    clean = (
+        "999.1.1.1 then 1.20.300.4 then 470.82.01.1 then 10.0.0.7.5 "
+        "then v1.2.3.4 then 192.168.001.5"
+    )
+    assert find_hardcoded_hosts(clean) == []
+    assert find_hardcoded_hosts("SSH to 192.168.4.1.\n") == ["192.168.4.1"]
+    assert find_hardcoded_hosts("resolves 192.168.1.5.example.com today") == ["192.168.1.5"]

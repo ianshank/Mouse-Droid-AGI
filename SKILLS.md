@@ -504,17 +504,19 @@ to a reachable commit that carries it.
 ### validate-skills
 
 **Trigger:** "validate skills", "skill drift", "did I break a skill?",
-"lint the .claude/commands", "does this skill reference a real path?"
+"lint the .claude/skills", "does this skill reference a real path?"
 
 **What it covers:** the two skill families are validated independently —
 neither can silently drift from reality.
 
-- **`.claude/commands/*.md` slash-command skills** are linted for a
+- **`.claude/skills/<name>/SKILL.md` project skills** (migrated from the
+  legacy `.claude/commands/*.md` layout, WS-F7a) are linted for a
   non-empty front-matter `description`, referenced-path existence
-  (every backtick-wrapped repo path must resolve on disk), and the
-  absence of any hardcoded host/IP. The reusable rule lives in exactly
-  one place — `tools/validate_skill_commands.py` — and is consumed by
-  both the CLI and the AQA test.
+  (every backtick-wrapped repo path must resolve on disk), the absence
+  of any hardcoded host/IP, and front-matter `name`/directory agreement.
+  The reusable rule lives in exactly one place —
+  `tools/validate_skill_commands.py` — and is consumed by both the CLI
+  (layout auto-discovery) and the AQA test.
 - **Builtin `SkillSpec` ↔ publishable doc pairing** is pinned so every
   spec in `src/mousedroid/skills/builtin/` has a matching
   `docs/openclaw_skills/<name>/SKILL.md` (H1 == skill name) and no doc

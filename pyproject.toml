@@ -13,7 +13,10 @@ dependencies = [
     "pydantic-settings>=2.7",
     "structlog>=23.0",
     "lmdb>=1.4",
-    "numpy>=1.24,!=2.0.0,!=2.0.1",
+    # <2.5: numpy 2.5.0 (requires-python >=3.12) ships PEP 695 `type` stubs that
+    # mypy rejects under the repo-wide python_version = "3.10" target; lift the
+    # bound once [tool.mypy] targets per-interpreter versions.
+    "numpy>=1.24,!=2.0.0,!=2.0.1,<2.5",
     "pyyaml>=6.0",
     "msgpack>=1.0",
     "networkx>=3.0",
@@ -133,6 +136,13 @@ gcp-simulation = [
 ]
 dev = [
     "pytest>=7.0",
+    # TOML backend for Python 3.10 (stdlib tomllib lands in 3.11). pytest
+    # already pulls tomli in transitively there; declared explicitly because
+    # tests/regression/test_numpy_mypy_target_compat.py imports it directly.
+    'tomli>=2.0 ; python_version < "3.11"',
+    # Same explicit-not-transitive rule: the numpy/mypy-target regression test
+    # imports packaging.specifiers directly (pytest also pulls it in).
+    "packaging>=21.0",
     "pytest-asyncio>=0.21",
     "pytest-cov>=4.0",
     "pytest-timeout>=2.3",

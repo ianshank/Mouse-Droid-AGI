@@ -1,7 +1,7 @@
-"""E2E validation of ``.claude/commands`` skill *outputs*.
+"""E2E validation of ``.claude/skills`` skill *outputs*.
 
-Each test runs the workflow a command-skill documents and asserts on what it
-produces. The three command skills (``sim-test``, ``train-policy``,
+Each test runs the workflow a skill documents and asserts on what it
+produces. The three skills (``sim-test``, ``train-policy``,
 ``robot-arm-trainer``) all target the arm subsystem, so every test here is
 gated on the optional ``[arm]`` extras (``mujoco`` / ``stable_baselines3``):
 CI hosts without those deps SKIP cleanly rather than fail, because robot-arm is
@@ -27,10 +27,13 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 def test_sim_test_skill_runs_arm_suite() -> None:
     """``sim-test`` output is a passing arm test run (smallest documented scope).
 
-    Runs exactly the command ``.claude/commands/sim-test.md`` documents under
+    Runs the scope ``.claude/skills/sim-test/SKILL.md`` documents under
     "Specific category" — ``pytest tests/unit/arm/ -k "env"`` — in a child
-    process. The child inherits ``os.environ`` (so a ``PYTHONPATH`` set by the
-    caller is honoured) and runs from the repo root; no path is hardcoded.
+    process, with harness flags (``-q --import-mode=importlib --no-cov``)
+    substituted for the skill's interactive ``-v``; the target + selector are
+    what the skill promises, the flags are test plumbing. The child inherits
+    ``os.environ`` (so a ``PYTHONPATH`` set by the caller is honoured) and
+    runs from the repo root; no path is hardcoded.
     """
     pytest.importorskip("mujoco")  # arm extras absent -> skip, not fail
     result = subprocess.run(
