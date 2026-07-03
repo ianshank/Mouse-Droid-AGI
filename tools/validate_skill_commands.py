@@ -44,6 +44,18 @@ class SkillCommandIssue:
     detail: str
 
 
+def find_hardcoded_hosts(text: str) -> list[str]:
+    """Return every hardcoded IPv4 literal found in ``text``.
+
+    Deliberately IPv4-literal-only (see module docstring): hostnames and
+    example URLs are legitimate in docs, so broadening the pattern would only
+    add false positives. Public so doc-hygiene tests outside the skill-command
+    sweep (e.g. plan-document regression tests) reuse the exact same rule
+    instead of duplicating the regex.
+    """
+    return _HARDCODED_HOST_RE.findall(text)
+
+
 def referenced_repo_paths(text: str) -> list[str]:
     """Return backtick-wrapped repo-relative file references, excluding patterns.
 
@@ -130,7 +142,7 @@ def validate_command_skill(path: Path, *, repo_root: Path) -> list[SkillCommandI
         if not candidate.exists():
             issues.append(SkillCommandIssue(path, "missing-path", ref))
 
-    for host in _HARDCODED_HOST_RE.findall(body):
+    for host in find_hardcoded_hosts(body):
         issues.append(SkillCommandIssue(path, "hardcoded-host", host))
 
     return issues

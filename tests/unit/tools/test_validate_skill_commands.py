@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tools.validate_skill_commands import (
+    find_hardcoded_hosts,
     referenced_repo_paths,
     validate_all,
     validate_command_skill,
@@ -123,3 +124,17 @@ def test_validate_all_skips_unreadable_without_aborting(tmp_path: Path) -> None:
     issues = validate_all(tmp_path, repo_root=tmp_path)
     codes = [i.code for i in issues]
     assert codes == ["unreadable"]  # good.md produced zero issues
+
+
+def test_find_hardcoded_hosts_detects_ipv4_literals() -> None:
+    # Public helper used by doc-hygiene tests beyond the skill sweep
+    # (tests/regression/test_foundry_plan_doc.py) — same single rule.
+    text = "Connect to 10.0.0.7 then fall back to 192.168.4.1.\n"
+    assert find_hardcoded_hosts(text) == ["10.0.0.7", "192.168.4.1"]
+
+
+def test_find_hardcoded_hosts_ignores_hostnames_and_semver() -> None:
+    # Hostnames, URLs, and three-part versions are legitimate doc content;
+    # the IPv4-literal-only rule must not flag them.
+    text = "See https://docs.claude.com and pin numpy 2.5.0 or v0.1.0.\n"
+    assert find_hardcoded_hosts(text) == []
