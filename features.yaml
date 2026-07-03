@@ -64,10 +64,11 @@ features:
 
   - id: "F-004"
     epic: "Skills"
-    name: "Slash-command + builtin skill docs are hygienic"
+    name: "Project skills + builtin skill docs are hygienic"
     description: >-
-      Skill-validation regression gate: front-matter present, referenced repo
-      paths exist, no hardcoded host/IP leaks.
+      Skill-validation regression gate over .claude/skills/<name>/SKILL.md
+      (migrated from the legacy .claude/commands layout, WS-F7a): front-matter
+      present, referenced repo paths exist, no hardcoded host/IP leaks.
     category: "infrastructure"
     priority: "high"
     status: "done"

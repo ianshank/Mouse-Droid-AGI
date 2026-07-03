@@ -237,3 +237,16 @@ def test_bom_prefixed_front_matter_is_parsed(tmp_path: Path) -> None:
     skill = tmp_path / "bom.md"
     skill.write_bytes(b"\xef\xbb\xbf---\ndescription: d\n---\nbody\n")
     assert validate_command_skill(skill, repo_root=tmp_path) == []
+
+
+def test_find_hardcoded_hosts_valid_octet_boundaries() -> None:
+    # Valid-octet IPv4 grammar: invalid octets, 4-part version/build strings,
+    # 5-part dotted numbers, v-prefixed tags, and zero-padded octets are NOT
+    # hosts; sentence-final IPs and host-name prefixes ARE.
+    clean = (
+        "999.1.1.1 then 1.20.300.4 then 470.82.01.1 then 10.0.0.7.5 "
+        "then v1.2.3.4 then 192.168.001.5"
+    )
+    assert find_hardcoded_hosts(clean) == []
+    assert find_hardcoded_hosts("SSH to 192.168.4.1.\n") == ["192.168.4.1"]
+    assert find_hardcoded_hosts("resolves 192.168.1.5.example.com today") == ["192.168.1.5"]

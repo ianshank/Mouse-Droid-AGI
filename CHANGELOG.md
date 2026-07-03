@@ -8,7 +8,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Changed — Deploy-hardening: F-013/F-014 closeout + harness provenance + NEXT_STEPS reconcile
+### Added — claude-code-foundry implementation plan + WS-F7a skills-layout migration (#150)
+
+The executable blueprint for the new `ianshank/claude-code-foundry` plugin-
+marketplace repo, plus this repo's own consumer-side migration (foundry plan
+WS-F7a) and the validator/test hardening that fell out of reviewing it. No
+`src/` runtime surface changed; the 30 Hz loop is untouched.
+
+- **Foundry plan doc.** `docs/superpowers/plans/2026-07-03-claude-code-foundry.md`
+  — WS-F0..F7b mapped to milestones M0-M4 (the M2 forced-migration exit gates
+  all M3 porting), with every cross-repo/official-docs fact tagged
+  `[AUDIT-1..4]` for verification by the executing session. Contract pinned by
+  `tests/regression/test_foundry_plan_doc.py` (local path references exist, no
+  hardcoded IPs, AUDIT tags registered AND consumed — set derived from the doc).
+- **WS-F7a migration.** `.claude/commands/*.md` → `.claude/skills/<name>/SKILL.md`
+  (`git mv`, history preserved). `tools/validate_skill_commands.py` gained
+  `validate_skills()` (nested sweep; `missing-skills-dir` / `missing-skill-file`
+  / `name-dir-mismatch`) and `validate_repo()` (layout auto-discovery;
+  `no-skill-layout` when neither exists; explicit `--skills-dir`/`--commands-dir`
+  scope the sweep). `validate_all()` and all existing issue codes unchanged.
+  The AQA gate now also pins the legacy dir as deleted.
+- **numpy `<2.5` cap + invariant test.** numpy 2.5.0 (requires-python >=3.12)
+  ships PEP 695 `type`-statement stubs the repo-wide mypy 3.10 target cannot
+  parse — the cap unblocks `typecheck (3.12)`;
+  `tests/regression/test_numpy_mypy_target_compat.py` encodes the invariant
+  (auto-relaxes if the mypy target moves to >=3.12). `tests/_pyproject.py` is
+  the single shared numpy-requirement parser (also consumed by the modernized
+  `tests/unit/test_numpy_pin.py`, now asserting a semantic upper bound).
+- **Review-pass hardening.** Single-read validator (no divergent double
+  decode; unreadable short-circuits the name check), utf-8-sig BOM tolerance,
+  valid-octet IPv4 detection (4-part version strings no longer false-flag;
+  sentence-final IPs still caught), `packaging`/`tomli` declared explicitly in
+  `[dev]`.
 
 A small post-merge closeout after a gap analysis confirmed the bulk of the
 F-006/F-009/F-013/F-014 ops-hardening work had already landed on trunk

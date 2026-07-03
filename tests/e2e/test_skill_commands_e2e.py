@@ -27,10 +27,13 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 def test_sim_test_skill_runs_arm_suite() -> None:
     """``sim-test`` output is a passing arm test run (smallest documented scope).
 
-    Runs exactly the command ``.claude/skills/sim-test/SKILL.md`` documents under
+    Runs the scope ``.claude/skills/sim-test/SKILL.md`` documents under
     "Specific category" — ``pytest tests/unit/arm/ -k "env"`` — in a child
-    process. The child inherits ``os.environ`` (so a ``PYTHONPATH`` set by the
-    caller is honoured) and runs from the repo root; no path is hardcoded.
+    process, with harness flags (``-q --import-mode=importlib --no-cov``)
+    substituted for the skill's interactive ``-v``; the target + selector are
+    what the skill promises, the flags are test plumbing. The child inherits
+    ``os.environ`` (so a ``PYTHONPATH`` set by the caller is honoured) and
+    runs from the repo root; no path is hardcoded.
     """
     pytest.importorskip("mujoco")  # arm extras absent -> skip, not fail
     result = subprocess.run(

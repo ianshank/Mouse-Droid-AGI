@@ -43,7 +43,16 @@ _PATH_EXT_RE = re.compile(r".+\.(?:py|ya?ml|md|sh|pt|onnx|json|urdf|usd)$")
 _FORBIDDEN_IN_PATH = set("{}*$<> ")
 # IPv4-literal only by design — see module docstring. Hostnames/URLs in skill
 # docs are legitimate, so broadening this would only produce false positives.
-_HARDCODED_HOST_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+# Valid-octet grammar (0-255) with boundary guards, so dotted version/build
+# strings never false-flag: 999.1.1.1 (octet >255), 1.20.300.4 / 470.82.01.1
+# (4-part versions; leading-zero octets are not valid IPv4 grammar),
+# 10.0.0.7.5 (5-part), and v1.2.3.4 build tags all pass clean, while
+# sentence-final IPs ("...to 192.168.4.1.") and host prefixes
+# (192.168.1.5.example.com) are still flagged. Accepted tradeoff: a
+# zero-padded IP (192.168.001.5) is no longer flagged — invalid grammar is
+# indistinguishable from a version string at this layer.
+_IPV4_OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
+_HARDCODED_HOST_RE = re.compile(rf"(?<![\w.])(?:{_IPV4_OCTET}\.){{3}}{_IPV4_OCTET}(?!\.?\d)")
 
 
 @dataclass(frozen=True)

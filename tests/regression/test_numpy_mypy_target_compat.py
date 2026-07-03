@@ -18,18 +18,10 @@ this file.
 
 from __future__ import annotations
 
-from pathlib import Path
-
-try:
-    import tomllib
-except ModuleNotFoundError:  # Python 3.10: stdlib tomllib lands in 3.11
-    import tomli as tomllib  # type: ignore[no-redef]
-
-from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_PYPROJECT = _REPO_ROOT / "pyproject.toml"
+from tests._pyproject import load_pyproject, numpy_specifier
+
 # First Python whose grammar accepts PEP 695 `type` statements.
 _PEP695_MIN_TARGET = Version("3.12")
 # Representative releases whose stubs require that grammar: the first one,
@@ -38,23 +30,8 @@ _PEP695_MIN_TARGET = Version("3.12")
 _PEP695_NUMPY_VERSIONS = ("2.5.0", "2.5.1", "2.6.0")
 
 
-def _load_pyproject() -> dict[str, object]:
-    with _PYPROJECT.open("rb") as fh:
-        return tomllib.load(fh)
-
-
-def _numpy_specifier(data: dict[str, object]) -> SpecifierSet:
-    project = data["project"]
-    assert isinstance(project, dict)
-    deps = project["dependencies"]
-    assert isinstance(deps, list)
-    numpy_reqs = [d for d in deps if isinstance(d, str) and d.startswith("numpy")]
-    assert len(numpy_reqs) == 1, f"expected exactly one numpy requirement, got {numpy_reqs}"
-    return SpecifierSet(numpy_reqs[0].removeprefix("numpy"))
-
-
 def test_numpy_constraint_compatible_with_mypy_target() -> None:
-    data = _load_pyproject()
+    data = load_pyproject()
     tool = data.get("tool")
     assert isinstance(tool, dict)
     mypy_cfg = tool.get("mypy")
@@ -64,7 +41,7 @@ def test_numpy_constraint_compatible_with_mypy_target() -> None:
         # Per-interpreter or >=3.12 target parses PEP 695 stubs fine — the
         # invariant imposes no numpy bound.
         return
-    spec = _numpy_specifier(data)
+    spec = numpy_specifier(data)
     admitted = [v for v in _PEP695_NUMPY_VERSIONS if spec.contains(Version(v))]
     assert not admitted, (
         f"[tool.mypy] python_version = {target} cannot parse the PEP 695 "
@@ -78,6 +55,6 @@ def test_numpy_constraint_compatible_with_mypy_target() -> None:
 def test_numpy_specifier_still_admits_supported_range() -> None:
     # The cap must not over-tighten: the floor of the supported range and the
     # last pre-PEP695 minor must both stay installable.
-    spec = _numpy_specifier(_load_pyproject())
+    spec = numpy_specifier()
     for version in ("1.26.4", "2.4.0"):
         assert spec.contains(Version(version)), f"numpy {version} unexpectedly excluded by {spec}"
