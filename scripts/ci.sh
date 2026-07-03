@@ -38,10 +38,11 @@ echo "=== Format Check ==="
 "$PYTHON_BIN" -m ruff format --check src/ tests/ tools/
 
 echo "=== Skill-Command Validator ==="
-# Fast standalone signal that every .claude/commands skill carries a
-# non-empty description, references only paths that exist, and bakes in no
-# host/IP. The PR gate is tests/regression/test_skill_commands_aqa.py;
-# this is the quick local mirror.
+# Fast standalone signal that every .claude/skills/<name>/SKILL.md skill
+# carries a non-empty description, references only paths that exist, and
+# bakes in no host/IP. The CLI auto-discovers the layout (legacy
+# .claude/commands would also be swept if present). The PR gate is
+# tests/regression/test_skill_commands_aqa.py; this is the quick local mirror.
 "$PYTHON_BIN" tools/validate_skill_commands.py
 
 echo "=== Type Check ==="

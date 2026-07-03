@@ -10,6 +10,8 @@ from tools.validate_skill_commands import (
     referenced_repo_paths,
     validate_all,
     validate_command_skill,
+    validate_repo,
+    validate_skills,
 )
 
 
@@ -138,3 +140,68 @@ def test_find_hardcoded_hosts_ignores_hostnames_and_semver() -> None:
     # the IPv4-literal-only rule must not flag them.
     text = "See https://docs.claude.com and pin numpy 2.5.0 or v0.1.0.\n"
     assert find_hardcoded_hosts(text) == []
+
+
+def _write_skill(skills_dir: Path, name: str, body: str) -> Path:
+    d = skills_dir / name
+    d.mkdir(parents=True)
+    return _write(d / "SKILL.md", body)
+
+
+def test_validate_skills_valid_nested_layout(tmp_path: Path) -> None:
+    repo = tmp_path
+    (repo / "src").mkdir()
+    _write(repo / "src" / "thing.py", "x = 1\n")
+    skills = repo / ".claude" / "skills"
+    _write_skill(skills, "demo", "---\ndescription: Does a thing\n---\nUses `src/thing.py`.\n")
+    assert validate_skills(skills, repo_root=repo) == []
+
+
+def test_validate_skills_missing_dir_is_handled(tmp_path: Path) -> None:
+    issues = validate_skills(tmp_path / "nope", repo_root=tmp_path)
+    assert [i.code for i in issues] == ["missing-skills-dir"]
+
+
+def test_validate_skills_flags_subdir_without_skill_md(tmp_path: Path) -> None:
+    skills = tmp_path / "skills"
+    (skills / "half-migrated").mkdir(parents=True)
+    issues = validate_skills(skills, repo_root=tmp_path)
+    assert [i.code for i in issues] == ["missing-skill-file"]
+
+
+def test_validate_skills_flags_name_dir_mismatch(tmp_path: Path) -> None:
+    skills = tmp_path / "skills"
+    _write_skill(skills, "real-name", "---\nname: other-name\ndescription: d\n---\nbody\n")
+    issues = validate_skills(skills, repo_root=tmp_path)
+    assert [i.code for i in issues] == ["name-dir-mismatch"]
+
+
+def test_validate_skills_accepts_matching_or_absent_name(tmp_path: Path) -> None:
+    skills = tmp_path / "skills"
+    _write_skill(skills, "named", "---\nname: named\ndescription: d\n---\nbody\n")
+    _write_skill(skills, "unnamed", "---\ndescription: d\n---\nbody\n")
+    assert validate_skills(skills, repo_root=tmp_path) == []
+
+
+def test_validate_repo_sweeps_both_layouts(tmp_path: Path) -> None:
+    # A consumer mid-migration has BOTH layouts; both must be swept.
+    skills = tmp_path / ".claude" / "skills"
+    commands = tmp_path / ".claude" / "commands"
+    commands.mkdir(parents=True)
+    _write_skill(skills, "ok", "---\ndescription: d\n---\nbody\n")
+    _write(commands / "bad.md", "---\nname: x\n---\nbody\n")  # missing description
+    issues = validate_repo(tmp_path)
+    assert [i.code for i in issues] == ["missing-description"]
+
+
+def test_validate_repo_neither_layout_is_an_error(tmp_path: Path) -> None:
+    # No layout at all must be a deterministic failure, not a false "all valid".
+    issues = validate_repo(tmp_path)
+    assert [i.code for i in issues] == ["no-skill-layout"]
+
+
+def test_validate_repo_explicit_dir_is_mandatory(tmp_path: Path) -> None:
+    # Pinning a layout explicitly surfaces its missing-dir issue instead of
+    # silently skipping it.
+    issues = validate_repo(tmp_path, skills_dir=tmp_path / "gone")
+    assert [i.code for i in issues] == ["missing-skills-dir"]

@@ -1,7 +1,7 @@
-"""E2E validation of ``.claude/commands`` skill *outputs*.
+"""E2E validation of ``.claude/skills`` skill *outputs*.
 
 Each test runs the workflow a command-skill documents and asserts on what it
-produces. The three command skills (``sim-test``, ``train-policy``,
+produces. The three skills (``sim-test``, ``train-policy``,
 ``robot-arm-trainer``) all target the arm subsystem, so every test here is
 gated on the optional ``[arm]`` extras (``mujoco`` / ``stable_baselines3``):
 CI hosts without those deps SKIP cleanly rather than fail, because robot-arm is
@@ -27,7 +27,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 def test_sim_test_skill_runs_arm_suite() -> None:
     """``sim-test`` output is a passing arm test run (smallest documented scope).
 
-    Runs exactly the command ``.claude/commands/sim-test.md`` documents under
+    Runs exactly the command ``.claude/skills/sim-test/SKILL.md`` documents under
     "Specific category" — ``pytest tests/unit/arm/ -k "env"`` — in a child
     process. The child inherits ``os.environ`` (so a ``PYTHONPATH`` set by the
     caller is honoured) and runs from the repo root; no path is hardcoded.

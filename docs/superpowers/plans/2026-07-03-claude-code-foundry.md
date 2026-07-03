@@ -436,10 +436,12 @@ report produced in CI artifacts.
 No foundry dependency — schedulable any time. The three skills are Mouse-Droid-specific and
 stay local (below the 2×-duplication bar unless WS-F0 finds otherwise).
 
-- [ ] Migrate the three command files to the `skills/` layout, preserving frontmatter
-  `description` and body paths.
-- [ ] Update `tools/validate_skill_commands.py` (or its invocation) + the pinning regression
-  test + `scripts/ci.sh` for the new location.
+- [x] Migrate the three command files to the `skills/` layout, preserving frontmatter
+  `description` and body paths. *(Done in PR #150 — `git mv` preserved history.)*
+- [x] Update `tools/validate_skill_commands.py` (or its invocation) + the pinning regression
+  test + `scripts/ci.sh` for the new location. *(Done in PR #150 — validator now sweeps
+  `skills/` + legacy `commands/` layouts with CLI auto-discovery; the AQA gate also pins
+  the legacy dir as deleted.)*
 
 **Acceptance:** `bash scripts/ci.sh` green; `tests/regression/test_skill_commands_aqa.py`
 green against the new layout; slash commands still invocable.

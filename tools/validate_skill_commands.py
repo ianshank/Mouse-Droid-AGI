@@ -1,7 +1,13 @@
 # tools/validate_skill_commands.py
-"""Validate ``.claude/commands/*.md`` skill files.
+"""Validate Claude Code skill files in either supported layout.
 
-Reusable library + CLI. Checks, per skill file:
+Reusable library + CLI. Two layouts are validated with the same per-file rules:
+  * ``.claude/skills/<name>/SKILL.md`` — the current skills layout.
+  * ``.claude/commands/*.md`` — the legacy flat slash-command layout, kept for
+    any consumer mid-migration (``validate_all``); this repo migrated off it
+    (foundry plan WS-F7a).
+
+Checks, per skill file:
   * YAML front-matter parses and carries a non-empty ``description``.
   * Every backtick-wrapped repo path it references actually exists.
   * It contains no hardcoded IPv4 address (skills must stay environment-
@@ -12,6 +18,11 @@ Reusable library + CLI. Checks, per skill file:
 Paths are *discovered* from the body, never enumerated here, so the tool keeps
 working as skills evolve. Format/glob tokens ({}, *, $, <>) are excluded so
 illustrative patterns like ``weights/arm/{task}_final.pt`` are not false flags.
+
+The CLI auto-discovers whichever layout(s) exist under ``<repo-root>/.claude``
+and fails when NEITHER exists (a silent false "all valid" would mask a renamed
+directory). Pass ``--skills-dir`` / ``--commands-dir`` to pin a layout
+explicitly.
 """
 
 from __future__ import annotations
@@ -163,15 +174,91 @@ def validate_all(commands_dir: Path, *, repo_root: Path) -> list[SkillCommandIss
     return issues
 
 
+def validate_skills(skills_dir: Path, *, repo_root: Path) -> list[SkillCommandIssue]:
+    """Validate every ``<name>/SKILL.md`` under ``skills_dir``.
+
+    Same per-file rules as the legacy layout (``validate_command_skill`` is
+    layout-agnostic), plus two structural checks:
+
+    * A skill subdirectory without a ``SKILL.md`` yields ``missing-skill-file``
+      (a half-migrated or typo'd skill must not silently vanish from the sweep).
+    * A front-matter ``name`` that disagrees with its directory name yields
+      ``name-dir-mismatch`` — the directory is what Claude Code namespaces by,
+      so a mismatch means the skill answers to a name nobody invokes. ``name``
+      stays optional; absent means "directory name", which is always consistent.
+
+    A missing/renamed ``skills_dir`` yields a single ``missing-skills-dir``
+    issue, mirroring ``validate_all``'s deterministic-signal contract.
+    """
+    if not skills_dir.is_dir():
+        return [SkillCommandIssue(skills_dir, "missing-skills-dir", str(skills_dir))]
+    issues: list[SkillCommandIssue] = []
+    for sub in sorted(p for p in skills_dir.iterdir() if p.is_dir()):
+        skill_md = sub / "SKILL.md"
+        if not skill_md.is_file():
+            issues.append(SkillCommandIssue(sub, "missing-skill-file", f"{sub.name}/SKILL.md"))
+            continue
+        issues.extend(validate_command_skill(skill_md, repo_root=repo_root))
+        meta, _ = _split_front_matter(skill_md.read_text(encoding="utf-8", errors="replace"))
+        declared = str((meta or {}).get("name", "")).strip()
+        if declared and declared != sub.name:
+            issues.append(
+                SkillCommandIssue(
+                    skill_md, "name-dir-mismatch", f"front-matter name {declared!r} != {sub.name!r}"
+                )
+            )
+    return issues
+
+
+def validate_repo(
+    repo_root: Path,
+    *,
+    skills_dir: Path | None = None,
+    commands_dir: Path | None = None,
+) -> list[SkillCommandIssue]:
+    """Validate every skill layout present under ``repo_root``.
+
+    Default behaviour (both dirs ``None``): sweep whichever of
+    ``.claude/skills/`` and ``.claude/commands/`` exist; if NEITHER exists,
+    return a single ``no-skill-layout`` issue rather than a false "all valid".
+    Passing a dir explicitly makes that layout mandatory (its missing-dir issue
+    surfaces), preserving the strict semantics of the per-layout functions.
+    """
+    explicit = skills_dir is not None or commands_dir is not None
+    resolved_skills = skills_dir or repo_root / ".claude" / "skills"
+    resolved_commands = commands_dir or repo_root / ".claude" / "commands"
+    issues: list[SkillCommandIssue] = []
+    swept = False
+    if skills_dir is not None or resolved_skills.is_dir():
+        issues.extend(validate_skills(resolved_skills, repo_root=repo_root))
+        swept = True
+    if commands_dir is not None or resolved_commands.is_dir():
+        issues.extend(validate_all(resolved_commands, repo_root=repo_root))
+        swept = True
+    if not swept and not explicit:
+        issues.append(
+            SkillCommandIssue(
+                repo_root / ".claude",
+                "no-skill-layout",
+                "neither .claude/skills/ nor .claude/commands/ exists",
+            )
+        )
+    return issues
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
+    parser.add_argument("--skills-dir", type=Path, default=None)
     parser.add_argument("--commands-dir", type=Path, default=None)
     args = parser.parse_args(argv)
     repo_root: Path = args.repo_root.resolve()
-    commands_dir: Path = (args.commands_dir or repo_root / ".claude" / "commands").resolve()
 
-    issues = validate_all(commands_dir, repo_root=repo_root)
+    issues = validate_repo(
+        repo_root,
+        skills_dir=args.skills_dir.resolve() if args.skills_dir else None,
+        commands_dir=args.commands_dir.resolve() if args.commands_dir else None,
+    )
     # print in tools/ is already exempt from T20 via pyproject per-file-ignores
     # (pyproject.toml: "tools/**/*.py" = [..., "T20"]) — no inline noqa needed.
     for i in issues:

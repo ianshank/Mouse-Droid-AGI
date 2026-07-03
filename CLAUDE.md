@@ -525,7 +525,9 @@ mission translation, and answers are served on the unified dashboard.
 Two skill families are now validated, each pinned by its own test so neither can
 silently drift:
 
-- **`.claude/commands/*.md` (slash-command skills)** — `tools/validate_skill_commands.py`
+- **`.claude/skills/<name>/SKILL.md` (project skills; migrated from the legacy
+  `.claude/commands/*.md` layout per foundry plan WS-F7a — the legacy dir stays
+  deleted)** — `tools/validate_skill_commands.py`
   is the reusable library + CLI. Per skill file it asserts the YAML front-matter
   carries a non-empty `description`, every backtick-wrapped repo path it
   references actually exists, and no hardcoded host/IP leaks in. Paths are

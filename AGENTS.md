@@ -285,9 +285,10 @@ over ad-hoc commands:
 
 ## Adding / maintaining a skill (rover-hardening discipline)
 
-When you add or edit a `.claude/commands/*.md` slash-command skill, it must
+When you add or edit a `.claude/skills/<name>/SKILL.md` project skill, it must
 pass the shared validator (`tools/validate_skill_commands.py`, pinned by
-`tests/regression/test_skill_commands_aqa.py`):
+`tests/regression/test_skill_commands_aqa.py`). The legacy `.claude/commands/`
+layout was migrated off (foundry plan WS-F7a) and must stay deleted:
 
 1. **Carry a non-empty `description`** in the YAML front-matter — it is the
    trigger surface and the validator flags an empty one.
