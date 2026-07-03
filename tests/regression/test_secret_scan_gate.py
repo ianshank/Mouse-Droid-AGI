@@ -109,7 +109,12 @@ class TestGitleaksConfig:
     def test_allowlist_covers_documented_placeholders(self) -> None:
         config = tomllib.loads(_GITLEAKS_TOML.read_text(encoding="utf-8"))
         patterns = [re.compile(p) for p in config["allowlist"]["regexes"]]
-        for placeholder in ("sk-ant-...", "sk-ant-xyz", "sk-ant-test"):
+        for placeholder in (
+            "sk-ant-...",
+            "sk-ant-xyz",
+            "sk-ant-test",
+            "test-api-key-abc123",
+        ):
             assert any(
                 p.search(placeholder) for p in patterns
             ), f"documented placeholder {placeholder!r} is not covered by the allowlist regexes"
