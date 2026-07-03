@@ -336,6 +336,32 @@ jobs:
                     --import-mode=importlib
 
     # -------------------------------------------------------------------------
+    # Stage 4c: Advisory secret scan — gitleaks (WS-0.4, F-015)
+    # -------------------------------------------------------------------------
+    # Full-history scan (fetch-depth 0) with the repo allowlist in
+    # .gitleaks.toml — allowlisted by fake-key regex only, never by path.
+    # The image is pinned to an exact patch tag (never "latest"), mirroring
+    # the actionlint docker:// precedent above.
+    #
+    # PROMOTION STATUS: advisory since 2026-07-03 (landed with PR #151).
+    # Stays continue-on-error: true until 7 consecutive green CI runs
+    # accumulate, then drop the flag to make it blocking. Tracked in
+    # .github/advisory_stages.yaml; runbook: docs/runbooks/secret-scanning.md.
+    gitleaks:
+        runs-on: ubuntu-latest
+        needs: lint
+        continue-on-error: true
+        steps:
+            - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+              with:
+                  fetch-depth: 0
+
+            - name: Secret scan (gitleaks, advisory)
+              uses: docker://zricethezav/gitleaks:v8.24.3
+              with:
+                  args: detect --source=. --config=.gitleaks.toml --redact --no-banner --verbose
+
+    # -------------------------------------------------------------------------
     # Stage 5: Security audit
     # -------------------------------------------------------------------------
     security:

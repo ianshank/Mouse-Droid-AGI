@@ -151,3 +151,26 @@ features:
     implemented_in: null
     depends_on: ["F-001"]
     notes: "Cannot reach `done` in hosted CI; verify with `validate.py --tier hardware` on the rover."
+
+  # F-009..F-014 are intentionally SKIPPED: those IDs are already used by the
+  # independent SMOKE_REPORT.md operational-findings namespace (see
+  # HARNESS_SPEC.md "F-number namespaces"). The catalog continues at F-015.
+  - id: "F-015"
+    epic: "Security"
+    name: "Secret-scan gate blocks the next credential leak"
+    description: >-
+      gitleaks scans the full history in CI (advisory until the 7-green-run
+      promotion) and the working tree in scripts/ci.sh, with a regex-only
+      allowlist (.gitleaks.toml) so fake-key placeholders never require
+      path-based waivers (WS-0.4, rev. B).
+    category: "infrastructure"
+    priority: "high"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "tests/regression/test_secret_scan_gate.py passes"
+      - "ci.yml gitleaks job pinned + advisory; .gitleaks.toml regex-only allowlist"
+    validation_command: "python -m pytest tests/regression/test_secret_scan_gate.py -q"
+    implemented_in: "claude/review-agents-plan-4qfxev"
+    depends_on: ["F-001"]
+    notes: "POST-MERGE: replace implemented_in with the squash SHA. Runbook: docs/runbooks/secret-scanning.md."

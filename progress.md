@@ -4,6 +4,13 @@ Reverse chronological (newest on top). Set the date with `date +%F`; never copy 
 literal date. Rotation: keep ~10 sessions; move older entries to
 `progress-archive/YYYY-QN.md`. See HARNESS_SPEC.md §11.
 
+## 2026-07-03 — Session 003
+**Features worked:** F-015 (secret-scan gate, WS-0.4 of the rev. B validation-first plan, PR #151).
+**Status changes:** F-015 → done (branch provenance; swap to squash SHA post-merge).
+**Structural changes:** Added `.gitleaks.toml` (regex-only allowlist), the advisory `gitleaks` CI job (docker-pinned, full-history), a guarded `scripts/ci.sh` secret-scan stage, and `docs/runbooks/secret-scanning.md`.
+**Validation evidence:** `python -m pytest tests/regression/test_secret_scan_gate.py -q` green; `bash scripts/ci.sh` green pre-commit.
+**Next:** Commits 2-7 of the rev. B implementation (F-016..F-020 + bookkeeping).
+
 ## 2026-06-15 — Session 002
 **Features worked:** Harness hardening (no catalog status changes).
 **Status changes:** none.
