@@ -359,7 +359,15 @@ jobs:
             - name: Secret scan (gitleaks, advisory)
               uses: docker://zricethezav/gitleaks:v8.24.3
               with:
-                  args: detect --source=. --config=.gitleaks.toml --redact --no-banner --verbose
+                  # The checkout is owned by the runner uid while the container
+                  # runs as root — git inside the image refuses the workspace
+                  # ("dubious ownership") unless it is marked safe first, so the
+                  # entrypoint chains a safe.directory config before the scan.
+                  entrypoint: sh
+                  args: >-
+                      -c "git config --global --add safe.directory /github/workspace
+                      && gitleaks detect --source=. --config=.gitleaks.toml
+                      --redact --no-banner --verbose"
 
     # -------------------------------------------------------------------------
     # Stage 5: Security audit
