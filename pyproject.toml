@@ -136,6 +136,10 @@ gcp-simulation = [
 ]
 dev = [
     "pytest>=7.0",
+    # TOML backend for Python 3.10 (stdlib tomllib lands in 3.11). pytest
+    # already pulls tomli in transitively there; declared explicitly because
+    # tests/regression/test_numpy_mypy_target_compat.py imports it directly.
+    'tomli>=2.0 ; python_version < "3.11"',
     "pytest-asyncio>=0.21",
     "pytest-cov>=4.0",
     "pytest-timeout>=2.3",

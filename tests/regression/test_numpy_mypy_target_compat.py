@@ -20,7 +20,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10: stdlib tomllib lands in 3.11
+    import tomli as tomllib  # type: ignore[no-redef]
+
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
