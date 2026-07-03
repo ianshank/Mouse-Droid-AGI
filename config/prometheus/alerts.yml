@@ -21,6 +21,10 @@
 #   mousedroid_frame_drops_total      (counter)
 #   mousedroid_ws_client_count        (gauge)
 #   mousedroid_publish_hz             (gauge)
+#   mousedroid_llm_tokens_total                    (counter, labels: model, token_type)
+#   mousedroid_llm_gateway_latency_ms              (histogram)
+#   mousedroid_llm_gateway_served_total            (counter, labels: tier, outcome)
+#   mousedroid_llm_latency_budget_exceeded_total   (counter, label: model)
 
 groups:
   # ------------------------------------------------------------------
@@ -416,3 +420,62 @@ groups:
             "onnx_trt" (PR #92) or run scripts/export_dual_stream_rssm_onnx.py
             to acquire the ONNX artifact.
           config_ref: "operator-tunable threshold (default 33 ms / Jetson 10 ms)"
+
+  # ------------------------------------------------------------------
+  # LLM gateway - cloud/local mission-translation tier (F-019, PR #115
+  # metric families). All rules operate OUTSIDE the 30 Hz loop.
+  # ------------------------------------------------------------------
+  - name: mousedroid_llm_gateway
+    rules:
+      - alert: LLMGatewayLatencyHigh
+        expr: |
+          histogram_quantile(0.95, sum by (instance, le) (rate(mousedroid_llm_gateway_latency_ms_bucket[5m]))) > 5000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM gateway p95 latency above the cloud budget"
+          description: >-
+            p95 mission-translation latency is {{ $value | printf "%.0f" }} ms
+            on {{ $labels.instance }} - above the 5000 ms cloud-pilot budget.
+            Check the WAN uplink or consider the local fallback tier.
+          config_ref: "LLMConfig.latency_target_ms (jetson_claude_pilot overlay = 5000 ms; schema default 500 ms is for local GGUF)"
+
+      - alert: LLMLatencyBudgetExceededSpike
+        expr: sum by (instance, model) (rate(mousedroid_llm_latency_budget_exceeded_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM latency budget exceeded repeatedly (model={{ $labels.model }})"
+          description: >-
+            Budget-exceeded counter for model={{ $labels.model }} is rising at
+            {{ $value | printf "%.3f" }}/s on {{ $labels.instance }} - the
+            metric twin of the anthropic_gateway_slow log event.
+          config_ref: "LLMConfig.latency_target_ms; threshold 0.05/s is an operator-tunable default"
+
+      - alert: LLMGatewayDegradedServing
+        expr: sum by (instance) (rate(mousedroid_llm_gateway_served_total{tier="secondary"}[10m])) > 0.01
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM gateway serving from the local fallback tier"
+          description: >-
+            The composite gateway on {{ $labels.instance }} is answering from
+            the secondary (local GGUF) tier at {{ $value | printf "%.3f" }}/s
+            over 10m - the cloud tier is degraded or the rover is off-network.
+          config_ref: "LLMConfig.fallback_backend / fallback_retry_cooldown_s (composite re-probes the primary)"
+
+      - alert: LLMTokenBurnHigh
+        expr: sum by (instance, model) (rate(mousedroid_llm_tokens_total[30m])) > 2
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "Sustained LLM token burn (model={{ $labels.model }})"
+          description: >-
+            Token throughput for model={{ $labels.model }} has averaged
+            {{ $value | printf "%.1f" }} tokens/s over 30m on
+            {{ $labels.instance }} - worth a look at mission volume / WAN cost.
+          config_ref: "operator-tunable threshold (default 2 tokens/s sustained; no schema field - cost policy, not a runtime limit)"

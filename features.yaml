@@ -239,3 +239,26 @@ features:
     implemented_in: "claude/review-agents-plan-4qfxev"
     depends_on: ["F-001", "F-017"]
     notes: "POST-MERGE: replace implemented_in with the squash SHA. Install the timer via scripts/host_bootstrap.sh --with-trend-timer."
+
+  - id: "F-019"
+    epic: "Observability"
+    name: "LLM-gateway metric families are dashboarded and alerted"
+    description: >-
+      docs/grafana_dashboard.json carries panels for all four PR #115 LLM
+      families (token burn, latency percentiles, served-by-tier, budget
+      exceeded) and config/prometheus/alerts.yml gains the
+      mousedroid_llm_gateway group (latency p95, budget spikes, degraded
+      fallback serving, token burn) - closing the WS-5 observability
+      deferral (rev. B). Every expr resolves against
+      generate_metrics_sample(); every rule carries severity + config_ref.
+    category: "infrastructure"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "tests/unit/test_grafana_dashboard_json.py passes (incl. LLM panel needles)"
+      - "tests/unit/test_prometheus_alerts_yml.py passes"
+    validation_command: "python -m pytest tests/unit/test_grafana_dashboard_json.py tests/unit/test_prometheus_alerts_yml.py -q"
+    implemented_in: "claude/review-agents-plan-4qfxev"
+    depends_on: ["F-001"]
+    notes: "POST-MERGE: replace implemented_in with the squash SHA. Operator action: import the dashboard + load alerts.yml on the monitoring host."

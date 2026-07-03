@@ -1305,6 +1305,192 @@
           "placement": "bottom"
         }
       }
+    },
+    {
+      "id": 23,
+      "title": "LLM Token Usage (rate by model / token_type)",
+      "description": "Per-second token burn of the cloud LLM gateway by model and input/output direction - the operator's WAN cost signal for the mobile rover. Source: mousedroid_llm_tokens_total (PR #115; recorded on SUCCESS only, outside the 30 Hz loop).",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 80
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "sum by (model, token_type) (rate(mousedroid_llm_tokens_total[5m]))",
+          "legendFormat": "{{model}} {{token_type}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cps",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "showLegend": true,
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 24,
+      "title": "LLM Gateway Latency p50 / p95 / p99 (ms)",
+      "description": "Histogram quantiles of mission-translation round-trip latency. Compare p95 against LLMConfig.latency_target_ms (cloud-pilot overlay = 5000 ms; schema default 500 ms is calibrated for local GGUF). Source: mousedroid_llm_gateway_latency_ms histogram.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 88
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (instance, le) (rate(mousedroid_llm_gateway_latency_ms_bucket[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (instance, le) (rate(mousedroid_llm_gateway_latency_ms_bucket[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (instance, le) (rate(mousedroid_llm_gateway_latency_ms_bucket[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "showLegend": true,
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 25,
+      "title": "LLM Gateway Served (rate by tier / outcome)",
+      "description": "Which tier answered mission translations and how: primary = cloud Claude, secondary = local GGUF fallback; outcome degraded means the composite fell back. A sustained secondary rate means the rover is running off-network or the WAN uplink is flapping. Source: mousedroid_llm_gateway_served_total (FallbackLLMGateway).",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 88
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "sum by (tier, outcome) (rate(mousedroid_llm_gateway_served_total[5m]))",
+          "legendFormat": "{{tier}} {{outcome}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cps",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "showLegend": true,
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 26,
+      "title": "LLM Latency Budget Exceeded (rate by model)",
+      "description": "Rate of translations that exceeded LLMConfig.latency_target_ms - the metric twin of the anthropic_gateway_slow log event. A sustained rate on the cloud tier means the budget or the uplink needs attention. Source: mousedroid_llm_latency_budget_exceeded_total.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 96
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "sum by (model) (rate(mousedroid_llm_latency_budget_exceeded_total[5m]))",
+          "legendFormat": "{{model}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cps",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "showLegend": true,
+          "placement": "bottom"
+        }
+      }
     }
   ],
   "refresh": "5s",
