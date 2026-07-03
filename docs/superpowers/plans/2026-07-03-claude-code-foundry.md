@@ -201,7 +201,9 @@ Facts already confirmed against official docs (verified 2026-07-03; re-verify vi
 `[AUDIT-4]`): `skills/` is preferred and `commands/` is the legacy plugin format; a repo
 doubles as a marketplace via root `.claude-plugin/marketplace.json` with plugins in
 subdirectories via the entry's `source` path; consumer settings keys are
-`extraKnownMarketplaces` and `enabledPlugins` with tag/sha pinning supported; installed
+`extraKnownMarketplaces` (tag/sha pinning lives here, on the `source` config — `ref`/sha
+fields) and `enabledPlugins` (maps `plugin-name@marketplace-name` to a boolean — enable/
+disable only, no pinning); installed
 plugin skills namespace as `/plugin-name:skill-name`; the Agent SDK loads plugins via
 `plugins: [{type: "local", path: ...}]` and namespaced skills appear in `slash_commands`;
 plugin hooks merge with user/project hooks automatically on enable.
@@ -351,8 +353,9 @@ shows the namespaced skill; manual local install + invoke works (**M1 exit gate*
   **Publishing the release/tag is a human action — the agent prepares, the maintainer
   publishes (PROHIBITED list).**
 - [ ] Author the migration PR to `ianshank/Agents` `[AUDIT-3]`: delete the vendored
-  quality-gate files; add `extraKnownMarketplaces` + `enabledPlugins` to
-  `.claude/settings.json`, **pinned by sha** for reproducible installs; write
+  quality-gate files; add `extraKnownMarketplaces` (**sha-pinned via its `source`
+  config** for reproducible installs) + `enabledPlugins` (boolean enable by plugin ID) to
+  `.claude/settings.json`; write
   `docs/migration/agents.md` in foundry documenting the steps as the template for later
   consumers. Keep the vendored-copy deletion a **single revert-ready commit** (risk R3).
 - [ ] Drive consumer CI green. If it cannot go green after the WS's iteration budget,
