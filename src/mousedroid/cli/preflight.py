@@ -99,6 +99,16 @@ def _build_parser() -> argparse.ArgumentParser:
             "creep regardless of ratio (default: %(default)s)."
         ),
     )
+    parser.add_argument(
+        "--journal-max-bytes",
+        type=int,
+        default=None,
+        help=(
+            "Rotate the --journal-path file to <path>.1 when it exceeds this "
+            "size BEFORE recording (single generation - caps SD-card growth "
+            "for timer-driven runs). Default: no rotation."
+        ),
+    )
     return parser
 
 
@@ -110,6 +120,7 @@ async def _record_and_trend(
     show_trend: bool,
     slow_ratio: float,
     slow_floor_s: float,
+    journal_max_bytes: int | None = None,
 ) -> bool:
     """Persist ``report`` to a JSONL journal; optionally print regressions.
 
@@ -123,7 +134,11 @@ async def _record_and_trend(
         detect_regressions,
         read_report_history,
         record_report,
+        rotate_journal_if_needed,
     )
+
+    if journal_max_bytes is not None:
+        rotate_journal_if_needed(Path(journal_path), journal_max_bytes)
 
     # model_validate (vs direct construction) lets the other journal tunables
     # (map_size_gb / flush_every_n / queue_max) resolve to their schema defaults
@@ -193,6 +208,7 @@ def main(argv: list[str] | None = None) -> int:
                 show_trend=args.trend,
                 slow_ratio=args.trend_slow_ratio,
                 slow_floor_s=args.trend_slow_floor_s,
+                journal_max_bytes=args.journal_max_bytes,
             ),
         )
 

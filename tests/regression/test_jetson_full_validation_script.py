@@ -94,6 +94,11 @@ def test_namespace_is_config_derived_not_literal() -> None:
         "MOUSEDROID_VALIDATION_PYTEST_TIMEOUT_S",
         "MOUSEDROID_VALIDATION_LIDAR_DURATION_S",
         "MOUSEDROID_VALIDATION_LOG_TAIL",
+        # Trend journal (F-018).
+        "MOUSEDROID_VALIDATION_JOURNAL",
+        "MOUSEDROID_VALIDATION_JOURNAL_MAX_BYTES",
+        "MOUSEDROID_VALIDATION_TREND_SLOW_RATIO",
+        "MOUSEDROID_VALIDATION_TREND_SLOW_FLOOR_S",
     ],
 )
 def test_documented_env_tunables_present(env_var: str) -> None:
@@ -121,3 +126,24 @@ def test_secrets_presence_checked_only() -> None:
     # cases where the secret appears outside a recognised log/echo verb).
     assert "${ANTHROPIC_API_KEY}" not in text
     assert "${MOUSEDROID_TELEMETRY_TOKEN}" not in text
+
+
+class TestTrendThreading:
+    """F-018: Phase-2 preflight appends to the trend journal + summary shim."""
+
+    def test_phase2_preflight_threads_journal_flags(self) -> None:
+        text = _script_text()
+        assert '--journal-path "${TREND_JOURNAL}"' in text
+        assert "--trend" in text
+        assert '--journal-max-bytes "${TREND_JOURNAL_MAX_BYTES}"' in text
+
+    def test_journal_lives_under_report_root_not_run_dir(self) -> None:
+        # A per-run journal would never accumulate the >=2 runs a trend needs.
+        text = _script_text()
+        assert "${REPORT_ROOT}/trend_journal.jsonl" in text
+        assert "${RUN_DIR}/trend_journal" not in text
+
+    def test_summary_uses_renderer_with_bash_fallback(self) -> None:
+        text = _script_text()
+        assert "scripts/render_validation_summary.py" in text
+        assert "write_summary_fallback" in text, "python-less hosts must still get a summary"

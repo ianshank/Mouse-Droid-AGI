@@ -41,6 +41,10 @@
 #   MOUSEDROID_VALIDATION_PYTEST_TIMEOUT_S  per-test timeout (s)        (120)
 #   MOUSEDROID_VALIDATION_LIDAR_DURATION_S  lidar->WS listen window (s) (15)
 #   MOUSEDROID_VALIDATION_LOG_TAIL          docker-logs tail lines      (2000)
+#   MOUSEDROID_VALIDATION_JOURNAL           trend journal (F-018)       (<report-root>/trend_journal.jsonl)
+#   MOUSEDROID_VALIDATION_JOURNAL_MAX_BYTES journal rotation cap        (1048576)
+#   MOUSEDROID_VALIDATION_TREND_SLOW_RATIO  latency-creep ratio         (1.5)
+#   MOUSEDROID_VALIDATION_TREND_SLOW_FLOOR_S latency-creep floor (s)    (0.05)
 #
 # Secrets are NEVER echoed — only presence is checked. No motion is ever armed.
 
@@ -68,6 +72,12 @@ HTTP_TIMEOUT_S="${MOUSEDROID_VALIDATION_HTTP_TIMEOUT_S:-5}"
 PYTEST_TIMEOUT_S="${MOUSEDROID_VALIDATION_PYTEST_TIMEOUT_S:-120}"
 LIDAR_PROBE_DURATION_S="${MOUSEDROID_VALIDATION_LIDAR_DURATION_S:-15}"
 LOG_TAIL_LINES="${MOUSEDROID_VALIDATION_LOG_TAIL:-2000}"
+# Trend journal (F-018) - lives under REPORT_ROOT (NOT the per-run RUN_DIR:
+# a per-run path would never accumulate the >=2 runs a trend needs).
+TREND_JOURNAL="${MOUSEDROID_VALIDATION_JOURNAL:-${REPORT_ROOT}/trend_journal.jsonl}"
+TREND_JOURNAL_MAX_BYTES="${MOUSEDROID_VALIDATION_JOURNAL_MAX_BYTES:-1048576}"
+TREND_SLOW_RATIO="${MOUSEDROID_VALIDATION_TREND_SLOW_RATIO:-1.5}"
+TREND_SLOW_FLOOR_S="${MOUSEDROID_VALIDATION_TREND_SLOW_FLOOR_S:-0.05}"
 # Metric namespace — mirrors the schema field metrics.namespace and its env
 # override MOUSEDROID_METRICS__NAMESPACE (default "mousedroid"), so the /metrics
 # grep tracks an operator-renamed namespace instead of a hardcoded prefix.
@@ -325,7 +335,11 @@ phase2() {
 
     # Real preflight + per-sensor probe (host venv).
     run_step "preflight (real)" yes "${RUN_DIR}/phase2_preflight.log" \
-        "${HOST_PY}" -m mousedroid.cli.preflight --config "${PROD_CONFIG}" --json
+        "${HOST_PY}" -m mousedroid.cli.preflight --config "${PROD_CONFIG}" --json \
+        --journal-path "${TREND_JOURNAL}" --trend \
+        --trend-slow-ratio "${TREND_SLOW_RATIO}" \
+        --trend-slow-floor-s "${TREND_SLOW_FLOOR_S}" \
+        --journal-max-bytes "${TREND_JOURNAL_MAX_BYTES}"
     run_step "verify_sensors (all)" no "${RUN_DIR}/phase2_sensors.log" \
         "${HOST_PY}" scripts/verify_sensors.py --sensor all --json
 
@@ -452,7 +466,8 @@ pytest_only() {
 # --------------------------------------------------------------------------- #
 # Phase 4 — report + gate
 # --------------------------------------------------------------------------- #
-write_summary() {
+write_summary_fallback() {
+    # Python-less fallback: the original inline table (no Trend section).
     local summary="${RUN_DIR}/SUMMARY.md"
     {
         echo "# Jetson full-validation summary"
@@ -471,7 +486,25 @@ write_summary() {
             echo "| ${status} | ${name} | ${note} |"
         done
     } >"${summary}"
-    log "summary written: ${summary}"
+    log "summary written (fallback): ${summary}"
+}
+
+write_summary() {
+    # Preferred path: the tested Python renderer (adds the Trend section
+    # mined from the Phase-2 --trend output). Falls back to the inline
+    # table on any failure so a python-less host still gets a summary.
+    local summary="${RUN_DIR}/SUMMARY.md"
+    local results_file="${RUN_DIR}/results.psv"
+    printf '%s\n' "${RESULTS[@]}" >"${results_file}"
+    if resolve_host_python && "${HOST_PY}" scripts/render_validation_summary.py \
+        --results-file "${results_file}" \
+        --preflight-log "${RUN_DIR}/phase2_preflight.log" \
+        --stamp "${STAMP}" --repo "${REPO_DIR}" --config "${PROD_CONFIG}" \
+        --telemetry-url "${TELEMETRY_URL}" --out "${summary}"; then
+        log "summary written: ${summary}"
+    else
+        write_summary_fallback
+    fi
 }
 
 phase4() {

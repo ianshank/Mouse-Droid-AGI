@@ -25,6 +25,7 @@ Architecture invariants (per CLAUDE.md):
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
@@ -251,6 +252,33 @@ def detect_regressions(
     return RegressionReport(compared=True, regressions=regressions)
 
 
+def rotate_journal_if_needed(path: Path, max_bytes: int) -> bool:
+    """Rotate ``path`` to ``<path>.1`` when it exceeds ``max_bytes`` (F-018).
+
+    Single-generation rotation (a prior ``.1`` is clobbered) — enough to cap
+    growth on the rover's SD card (the ``journalctl --vacuum-size=50M``
+    precedent in ``jetson_disk_cleanup.sh``). Missing or small files are a
+    no-op. Returns True when a rotation happened; the next ``--trend`` run
+    then reports "insufficient history" for one cycle, which is documented
+    and acceptable.
+    """
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return False
+    if size <= max_bytes:
+        return False
+    rotated = path.with_name(path.name + ".1")
+    path.replace(rotated)
+    _log.info(
+        "journal_rotated",
+        path=str(path),
+        size_bytes=size,
+        max_bytes=max_bytes,
+    )
+    return True
+
+
 __all__ = [
     "EVENT_PREFLIGHT_REPORT",
     "CheckSnapshot",
@@ -259,4 +287,5 @@ __all__ = [
     "detect_regressions",
     "read_report_history",
     "record_report",
+    "rotate_journal_if_needed",
 ]

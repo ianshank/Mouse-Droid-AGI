@@ -216,3 +216,26 @@ features:
     implemented_in: "claude/review-agents-plan-4qfxev"
     depends_on: ["F-001"]
     notes: "POST-MERGE: replace implemented_in with the squash SHA. Check is OFF by default (host_env: enabled: false); enable on the Jetson overlay."
+
+  - id: "F-018"
+    epic: "Validation efficiency"
+    name: "Full-validation runs feed the trend journal and surface regressions"
+    description: >-
+      Phase-2 preflight in jetson_full_validation.sh appends to a persistent
+      trend journal (under the report root, rotation-capped), the Phase-4
+      SUMMARY.md is rendered by a tested pure module with a Trend section
+      (bash fallback for python-less hosts), and mousedroid-trend.{service,
+      timer} sample non-exclusive checks hourly between manual runs (WS-4,
+      rev. B). The timer's check subset is regression-pinned so it can never
+      contend with the orchestrator for camera/UART/LiDAR devices.
+    category: "validation"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "tests/unit/validation/test_summary.py passes"
+      - "tests/regression/test_trend_timer_units.py pins the non-exclusive check subset"
+    validation_command: "python -m pytest tests/unit/validation/test_summary.py tests/unit/scripts/test_render_validation_summary.py tests/regression/test_trend_timer_units.py -q"
+    implemented_in: "claude/review-agents-plan-4qfxev"
+    depends_on: ["F-001", "F-017"]
+    notes: "POST-MERGE: replace implemented_in with the squash SHA. Install the timer via scripts/host_bootstrap.sh --with-trend-timer."

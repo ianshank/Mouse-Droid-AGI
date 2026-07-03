@@ -1,0 +1,40 @@
+# mousedroid-trend.service — periodic preflight trend sample (F-018, WS-4.3).
+#
+# CONTRACT — non-exclusive checks ONLY. The orchestrator container owns the
+# camera / LiDAR / ESP32 UART / audio devices while it runs; a timer-driven
+# probe opening those devices would corrupt both readers. The default
+# MOUSEDROID_TREND_CHECKS therefore names only checks that read config and
+# plain files (config, host_env_keys). Do NOT add camera/lidar/esp32/
+# microphone/speaker here — tests/regression/test_trend_timer_units.py pins
+# this. Full device trends come from jetson_full_validation.sh Phase 2,
+# which stops the container first.
+#
+# CONTRACT — separate journal path. Timer runs (2 fast checks) and
+# full-validation runs (all checks) must not share a journal, or the first
+# full run after a timer run would flag a bogus total-elapsed latency-creep
+# regression. The default journal below is timer-only.
+#
+# Install (or use scripts/host_bootstrap.sh --with-trend-timer):
+#   sudo cp scripts/mousedroid-trend.service scripts/mousedroid-trend.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now mousedroid-trend.timer
+[Unit]
+Description=MouseDroid preflight trend sample (non-exclusive checks)
+Documentation=file:///opt/mousedroid/docs/runbooks/jetson-full-validation.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Defaults first; EnvironmentFile (dash = tolerate missing) can override.
+Environment=MOUSEDROID_INSTALL_DIR=/opt/mousedroid
+Environment=MOUSEDROID_CONFIG_DIR=/etc/mousedroid
+Environment=MOUSEDROID_TREND_JOURNAL=/var/lib/mousedroid/trend/preflight.jsonl
+Environment=MOUSEDROID_TREND_JOURNAL_MAX_BYTES=1048576
+Environment=MOUSEDROID_TREND_CHECKS=config,host_env_keys
+EnvironmentFile=-/etc/mousedroid/docker.env
+ExecStartPre=/bin/bash -lc 'mkdir -p "$(dirname "${MOUSEDROID_TREND_JOURNAL}")"'
+ExecStart=/bin/bash -lc 'exec "${MOUSEDROID_INSTALL_DIR}/venv/bin/python" -m mousedroid.cli.preflight --config "${MOUSEDROID_CONFIG_DIR}/jetson_production.yaml" --checks "${MOUSEDROID_TREND_CHECKS}" --journal-path "${MOUSEDROID_TREND_JOURNAL}" --trend --journal-max-bytes "${MOUSEDROID_TREND_JOURNAL_MAX_BYTES}"'
+SyslogIdentifier=mousedroid-trend
+
+[Install]
+WantedBy=multi-user.target

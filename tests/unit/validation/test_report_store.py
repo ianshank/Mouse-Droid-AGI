@@ -207,3 +207,30 @@ async def test_record_and_read_are_safe_on_null_journal() -> None:
     finally:
         await journal.stop()
     assert history == []
+
+
+class TestRotateJournalIfNeeded:
+    def test_missing_file_is_noop(self, tmp_path: Path) -> None:
+        from mousedroid.validation.report_store import rotate_journal_if_needed
+
+        assert rotate_journal_if_needed(tmp_path / "absent.jsonl", 10) is False
+
+    def test_under_cap_is_noop(self, tmp_path: Path) -> None:
+        from mousedroid.validation.report_store import rotate_journal_if_needed
+
+        journal = tmp_path / "trend.jsonl"
+        journal.write_text("small\n", encoding="utf-8")
+        assert rotate_journal_if_needed(journal, 1024) is False
+        assert journal.is_file()
+        assert not (tmp_path / "trend.jsonl.1").exists()
+
+    def test_over_cap_rotates_and_clobbers_prior_generation(self, tmp_path: Path) -> None:
+        from mousedroid.validation.report_store import rotate_journal_if_needed
+
+        journal = tmp_path / "trend.jsonl"
+        rotated = tmp_path / "trend.jsonl.1"
+        rotated.write_text("old generation\n", encoding="utf-8")
+        journal.write_text("x" * 64, encoding="utf-8")
+        assert rotate_journal_if_needed(journal, 16) is True
+        assert not journal.exists(), "the oversized journal must move aside"
+        assert rotated.read_text(encoding="utf-8") == "x" * 64

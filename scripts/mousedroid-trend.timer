@@ -1,0 +1,15 @@
+# mousedroid-trend.timer — cadence for mousedroid-trend.service (F-018).
+#
+# Hourly after a 15-minute boot settle. Change cadence via a drop-in
+# (systemctl edit mousedroid-trend.timer), not by editing this file on the
+# host — host edits are lost on the next host_bootstrap.sh run.
+[Unit]
+Description=Hourly MouseDroid preflight trend sample
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
