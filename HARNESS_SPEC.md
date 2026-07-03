@@ -118,6 +118,23 @@ There is **no `blocks` field** — it is the inverse of `depends_on`; reverse ed
 - Agents may freely change `status`, `implemented_in`, `notes`, and append to `verification`.
 - **Structural changes** (add/remove/rename/re-scope/reorder) are allowed, but each must be logged as a `progress.md` entry with a one-line rationale. Permanent technical decisions also get an ADR (§11).
 
+### F-number namespaces
+
+Two **independent** F-number sequences coexist in this repo and must never be
+conflated:
+
+1. **The harness catalog** (`features.yaml`, this spec) — the only IDs in the
+   dependency DAG, validated by the schema, executed by `validate.py`.
+2. **Operational smoke findings** (`SMOKE_REPORT.md`, echoed in CHANGELOG /
+   older planning docs) — report-local triage IDs from the live-Jetson smoke
+   campaigns, which independently reached `F-014`.
+
+Because the findings sequence already burned `F-009`–`F-014` (e.g. commit
+`3015283` "F-013/F-014 closeout" refers to *findings*, not catalog features),
+**new catalog entries continue from `F-015`** — the catalog deliberately skips
+9–14 rather than shadowing them. When cross-referencing, say "smoke finding
+F-0xx" vs "feature F-0xx".
+
 ---
 
 ## 6. `features.schema.json`
@@ -306,3 +323,4 @@ pytest. Observability: structlog structured events + Prometheus families. ADRs i
 | Version | Change |
 |---------|--------|
 | 2.1 (adopted) | Adopted the v2.1 template into MouseDroidAGI: schema + tier-gated `validate.py` + DAG-aware `select_next.py` + standalone `harness.yml`. Seeded 8 features mapping to real checks. ADRs reuse `docs/architecture/`. `F-001` validated by `scripts/validations/F-001.sh` (avoids the template's recursive `--check`). See ADR-012. |
+| 2.1 + F-namespaces | Declared the two independent F-number sequences (catalog vs SMOKE_REPORT findings); catalog continues from F-015, skipping the finding-burned 9–14. Landed with the rev. B software work streams (F-015..F-020, PR #151). |

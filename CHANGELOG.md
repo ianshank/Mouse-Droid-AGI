@@ -8,6 +8,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — validation-first rev. B software work streams (WS-0.4/1/3.1/4/5/8, F-015..F-020) (#151)
+
+Implements the software-only half of the peer-reviewed validation-first plan
+(`docs/superpowers/plans/2026-07-03-validation-first-rev-b.md`). The hardware
+gate (WS-6, F-008) and human items (key rotation, ESP32 bench repair) remain
+the critical path; none of this blocks them.
+
+- **F-015 — secret-scan gate.** `.gitleaks.toml` (regex-only allowlist, never
+  by path), advisory full-history `gitleaks` CI job (docker-pinned,
+  `safe.directory` fix, promotes after 7 green runs), guarded `ci.sh` stage,
+  `docs/runbooks/secret-scanning.md`. First full scan (585 commits) surfaced
+  exactly one finding — the synthetic telemetry-auth test token, allowlisted.
+- **F-016 — truth reconciliation.** NEXT_STEPS.md 37 KB/72 ✅ → ~12 KB
+  forward-looking (history preserved below), arm arc PAUSED at T2 with an
+  explicit unfreeze condition, Phase-5 vocabulary disambiguated, the three
+  arm/sim skills frozen via validated `status:` front-matter, and
+  `tools/doc_hygiene.py` guarding against re-drift.
+- **F-017 — host-env durability.** `docker.env.example` enumerates the live
+  LLM overrides, the WARN-only `host_env_keys` preflight check flags key-set
+  drift (names only, never values), and `scripts/host_bootstrap.sh` seeds/
+  repairs the host surface (dry-run/backup/rollback). Preflight device-branch
+  tests lifted `validation/preflight.py` to ~99% coverage.
+- **F-018 — validation trend instrumentation.** `jetson_full_validation.sh`
+  Phase-2 preflight feeds the trend journal (rotation-capped via the new
+  `--journal-max-bytes`), SUMMARY.md is rendered by the tested
+  `validation/summary.py` with a Trend section (bash fallback kept), and
+  `mousedroid-trend.{service,timer}` sample non-exclusive checks hourly —
+  the check subset is regression-pinned so the timer can never contend with
+  the orchestrator for devices.
+- **F-019 — LLM observability.** Grafana panels 23-26 for the four PR #115
+  LLM metric families + the `mousedroid_llm_gateway` Prometheus alert group
+  (latency p95, budget spikes, degraded fallback serving, token burn), with
+  repo-wide rule hygiene pinned (severity + config_ref on every rule).
+- **F-020 — redundancy/gap audit.** Findings-only vulture dead-code audit
+  (dated JSON reports, curated allowlist), AST import-graph freeze for the
+  deferred arm platform + parked HC-SR04 driver, and the advisory
+  promotion-lag checker over `.github/advisory_stages.yaml`.
+- **Harness:** catalog IDs continue from F-015 (SMOKE_REPORT findings burned
+  9-14) — declared in HARNESS_SPEC.md "F-number namespaces".
+
 ### Historical record — reconciled from NEXT_STEPS.md (2026-07-03, F-016)
 
 NEXT_STEPS.md had re-drifted into changelog territory (37 KB, 72 ✅ marks).
