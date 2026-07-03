@@ -1,6 +1,6 @@
 """E2E validation of ``.claude/skills`` skill *outputs*.
 
-Each test runs the workflow a command-skill documents and asserts on what it
+Each test runs the workflow a skill documents and asserts on what it
 produces. The three skills (``sim-test``, ``train-policy``,
 ``robot-arm-trainer``) all target the arm subsystem, so every test here is
 gated on the optional ``[arm]`` extras (``mujoco`` / ``stable_baselines3``):

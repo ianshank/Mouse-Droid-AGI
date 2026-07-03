@@ -37,7 +37,7 @@ echo "=== Format Check ==="
 # bump both in the same change to avoid local/CI lint drift.
 "$PYTHON_BIN" -m ruff format --check src/ tests/ tools/
 
-echo "=== Skill-Command Validator ==="
+echo "=== Skill Validator (.claude/skills) ==="
 # Fast standalone signal that every .claude/skills/<name>/SKILL.md skill
 # carries a non-empty description, references only paths that exist, and
 # bakes in no host/IP. The CLI auto-discovers the layout (legacy
