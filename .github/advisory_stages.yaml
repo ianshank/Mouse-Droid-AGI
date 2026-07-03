@@ -1,0 +1,34 @@
+# Tracked advisory CI stages (F-020, WS-8.3).
+#
+# Every job in .github/workflows/*.yml carrying `continue-on-error: true`
+# MUST have an entry here, or scripts/check_advisory_promotions.py WARNs
+# ("untracked advisory stage"). When today - since > promote_after_days the
+# checker WARNs "promotion overdue": either drop continue-on-error (promote
+# to blocking) or extend the window here WITH a recorded reason.
+#
+# since:              date the stage landed advisory (YYYY-MM-DD)
+# promote_after_days: green window before promotion is due
+stages:
+  - job: onnx-world-model-extras
+    workflow: ci.yml
+    since: 2026-05-16
+    promote_after_days: 90
+    reason: >-
+      Landed PR #92 (Tier B2) with a 7-green-run gate; runs only when CI
+      fires, so the calendar window is generous. Tier C-era follow-up owns
+      the promotion.
+  - job: gitleaks
+    workflow: ci.yml
+    since: 2026-07-03
+    promote_after_days: 30
+    reason: >-
+      F-015 secret-scan gate - advisory until 7 consecutive green runs
+      (docs/runbooks/secret-scanning.md), expected well inside 30 days.
+  - job: vulture-audit
+    workflow: ci.yml
+    since: 2026-07-03
+    promote_after_days: 90
+    reason: >-
+      F-020 dead-code audit is findings-only BY DESIGN (Protocol/DI false
+      positives); the promotion decision at window end is "keep advisory
+      forever + record an ADR" vs "strict mode on a curated allowlist".

@@ -5,8 +5,8 @@ literal date. Rotation: keep ~10 sessions; move older entries to
 `progress-archive/YYYY-QN.md`. See HARNESS_SPEC.md §11.
 
 ## 2026-07-03 — Session 003
-**Features worked:** F-015 (secret-scan gate, WS-0.4), F-016 (truth reconciliation, WS-1), F-017 (host-env durability, WS-3.1), F-018 (validation trend instrumentation, WS-4), F-019 (LLM observability, WS-5) — rev. B validation-first plan, PR #151.
-**Status changes:** F-015..F-019 → done (branch provenance; swap to squash SHA post-merge).
+**Features worked:** F-015 (secret-scan gate, WS-0.4), F-016 (truth reconciliation, WS-1), F-017 (host-env durability, WS-3.1), F-018 (validation trend instrumentation, WS-4), F-019 (LLM observability, WS-5), F-020 (redundancy/gap audit, WS-8) — rev. B validation-first plan, PR #151.
+**Status changes:** F-015..F-020 → done (branch provenance; swap to squash SHA post-merge).
 **Structural changes:** F-015 — `.gitleaks.toml` (regex-only allowlist), advisory `gitleaks` CI job (docker-pinned, full-history; first run surfaced + allowlisted the synthetic telemetry-auth test token), guarded `scripts/ci.sh` stage, `docs/runbooks/secret-scanning.md`. F-016 — NEXT_STEPS.md 37 KB/72 ✅ → ~12 KB/4 ✅ (landed work → CHANGELOG "Historical record"; Claude-Code runbook → `docs/runbooks/claude-code-on-jetson.md`), arm arc PAUSED at T2 with unfreeze condition, Phase-5 vocabulary disambiguated across both NEXT_STEPS files, 3 skills frozen via validated `status:` front-matter (`validate_skill_commands.py` gained the `invalid-status` check), `tools/doc_hygiene.py` advisory guard wired into ci.sh.
 **Validation evidence:** `python -m pytest tests/regression/test_secret_scan_gate.py tests/unit/tools/test_doc_hygiene.py tests/regression/test_next_steps_reconciled.py -q` green; `bash scripts/ci.sh` green pre-commit per commit.
 **Next:** Commits 3-7 of the rev. B implementation (F-017..F-020 + bookkeeping).

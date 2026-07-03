@@ -100,6 +100,18 @@ else
     echo "promtool not on PATH - skipping Prometheus rule validation"
 fi
 
+echo "=== Dead-Code Audit (vulture, advisory) ==="
+# Findings-only (F-020): reports to reports/dead_code/, never blocks. Skips
+# cleanly when the optional vulture dep is absent.
+if "$PYTHON_BIN" -c "import vulture" >/dev/null 2>&1; then
+    "$PYTHON_BIN" scripts/dead_code_audit.py
+else
+    echo "vulture not installed - skipping dead-code audit (CI runs it in vulture-audit)"
+fi
+
+echo "=== Advisory Promotion-Lag Check ==="
+"$PYTHON_BIN" scripts/check_advisory_promotions.py
+
 echo "=== Secret Scan (gitleaks, advisory) ==="
 if command -v gitleaks >/dev/null 2>&1; then
     gitleaks detect --source . --config .gitleaks.toml --redact --no-banner \

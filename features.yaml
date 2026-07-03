@@ -262,3 +262,27 @@ features:
     implemented_in: "claude/review-agents-plan-4qfxev"
     depends_on: ["F-001"]
     notes: "POST-MERGE: replace implemented_in with the squash SHA. Operator action: import the dashboard + load alerts.yml on the monitoring host."
+
+  - id: "F-020"
+    epic: "Hygiene"
+    name: "Redundancy and gap audit pipeline is findings-only and self-testing"
+    description: >-
+      scripts/dead_code_audit.py runs vulture in-process (dated JSON report,
+      allowlist for verified-alive Protocol/DI symbols, advisory unless
+      --strict), an AST import-graph freeze pins that no active module gains
+      a module-scope dependency on the deferred arm platform or the parked
+      HC-SR04 driver, and scripts/check_advisory_promotions.py WARNs on
+      advisory CI stages that outlive their tracked promotion window
+      (.github/advisory_stages.yaml) (WS-8, rev. B). Deletion decisions stay
+      with a human - the audit only reports.
+    category: "validation"
+    priority: "medium"
+    status: "done"
+    tier: "slow"
+    verification:
+      - "planted-defect tests prove the audit pipeline finds/suppresses/reports"
+      - "import-graph freeze green on the current tree"
+    validation_command: "python -m pytest tests/regression/test_dead_code_audit.py tests/regression/test_import_graph_freeze.py tests/unit/scripts/test_check_advisory_promotions.py -q"
+    implemented_in: "claude/review-agents-plan-4qfxev"
+    depends_on: ["F-001"]
+    notes: "POST-MERGE: replace implemented_in with the squash SHA. Slow tier - runs nightly; the ci.sh stages are advisory mirrors."
