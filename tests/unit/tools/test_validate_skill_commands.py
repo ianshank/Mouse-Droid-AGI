@@ -205,3 +205,35 @@ def test_validate_repo_explicit_dir_is_mandatory(tmp_path: Path) -> None:
     # silently skipping it.
     issues = validate_repo(tmp_path, skills_dir=tmp_path / "gone")
     assert [i.code for i in issues] == ["missing-skills-dir"]
+
+
+def test_validate_repo_explicit_dir_scopes_the_sweep(tmp_path: Path) -> None:
+    # Pinning one layout must NOT auto-discover the other: --commands-dir X
+    # validates only X (the pre-auto-discovery CLI contract). The repo's
+    # default skills dir here contains an invalid skill that would surface if
+    # the sweep leaked beyond the pinned dir.
+    skills = tmp_path / ".claude" / "skills"
+    _write_skill(skills, "leaky", "---\nname: x\n---\nno description\n")
+    commands = tmp_path / "external-commands"
+    commands.mkdir()
+    _write(commands / "ok.md", "---\ndescription: d\n---\nbody\n")
+    assert validate_repo(tmp_path, commands_dir=commands) == []
+
+
+def test_validate_skills_unreadable_short_circuits_name_check(tmp_path: Path) -> None:
+    # A non-UTF-8 SKILL.md yields exactly `unreadable` — never a
+    # name-dir-mismatch verdict derived from replacement-char content.
+    skills = tmp_path / "skills"
+    d = skills / "corrupt"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_bytes(b"---\nname: other\n---\n\xff\xfe\x80")
+    issues = validate_skills(skills, repo_root=tmp_path)
+    assert [i.code for i in issues] == ["unreadable"]
+
+
+def test_bom_prefixed_front_matter_is_parsed(tmp_path: Path) -> None:
+    # An editor-prepended UTF-8 BOM must not make the front-matter fence
+    # invisible (utf-8-sig read).
+    skill = tmp_path / "bom.md"
+    skill.write_bytes(b"\xef\xbb\xbf---\ndescription: d\n---\nbody\n")
+    assert validate_command_skill(skill, repo_root=tmp_path) == []

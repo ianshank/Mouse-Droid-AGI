@@ -140,6 +140,9 @@ dev = [
     # already pulls tomli in transitively there; declared explicitly because
     # tests/regression/test_numpy_mypy_target_compat.py imports it directly.
     'tomli>=2.0 ; python_version < "3.11"',
+    # Same explicit-not-transitive rule: the numpy/mypy-target regression test
+    # imports packaging.specifiers directly (pytest also pulls it in).
+    "packaging>=21.0",
     "pytest-asyncio>=0.21",
     "pytest-cov>=4.0",
     "pytest-timeout>=2.3",

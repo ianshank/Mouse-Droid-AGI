@@ -32,8 +32,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _PYPROJECT = _REPO_ROOT / "pyproject.toml"
 # First Python whose grammar accepts PEP 695 `type` statements.
 _PEP695_MIN_TARGET = Version("3.12")
-# First numpy release whose stubs require that grammar.
-_FIRST_PEP695_NUMPY = Version("2.5.0")
+# Representative releases whose stubs require that grammar: the first one,
+# a patch, and a later minor — so a point exclusion (!=2.5.0) that would
+# still admit 2.5.1/2.6 cannot satisfy the invariant.
+_PEP695_NUMPY_VERSIONS = ("2.5.0", "2.5.1", "2.6.0")
 
 
 def _load_pyproject() -> dict[str, object]:
@@ -63,12 +65,13 @@ def test_numpy_constraint_compatible_with_mypy_target() -> None:
         # invariant imposes no numpy bound.
         return
     spec = _numpy_specifier(data)
-    assert not spec.contains(_FIRST_PEP695_NUMPY), (
-        f"[tool.mypy] python_version = {target} cannot parse numpy "
-        f">={_FIRST_PEP695_NUMPY} PEP 695 stubs, but the numpy requirement "
-        f"({spec}) admits it — mypy would abort inside numpy/__init__.pyi on "
-        f"any Python >=3.12 environment. Re-add an upper bound or move the "
-        f"mypy target to >=3.12."
+    admitted = [v for v in _PEP695_NUMPY_VERSIONS if spec.contains(Version(v))]
+    assert not admitted, (
+        f"[tool.mypy] python_version = {target} cannot parse the PEP 695 "
+        f"stubs numpy ships from 2.5.0 on, but the numpy requirement ({spec}) "
+        f"admits {admitted} — mypy would abort inside numpy/__init__.pyi on "
+        f"any Python >=3.12 environment. Re-add an upper bound (a point "
+        f"exclusion is not enough) or move the mypy target to >=3.12."
     )
 
 

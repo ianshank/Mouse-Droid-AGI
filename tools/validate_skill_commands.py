@@ -101,17 +101,25 @@ def _split_front_matter(text: str) -> tuple[dict[str, object] | None, str]:
     return (meta if isinstance(meta, dict) else None), parts[2]
 
 
-def validate_command_skill(path: Path, *, repo_root: Path) -> list[SkillCommandIssue]:
+def validate_command_skill(
+    path: Path, *, repo_root: Path, text: str | None = None
+) -> list[SkillCommandIssue]:
     """Validate one skill file; return a list of issues (empty == valid).
 
     A file that is not valid UTF-8 yields a single ``unreadable`` issue rather
     than raising ``UnicodeDecodeError`` — one corrupt skill must not abort the
     whole ``validate_all`` sweep (and the caller gets an actionable signal).
+    ``utf-8-sig`` tolerates an editor-prepended BOM, which would otherwise make
+    ``_split_front_matter`` miss a perfectly valid ``---`` fence.
+
+    ``text`` lets a caller that already read the file (``validate_skills``)
+    skip a second read+parse; omitted, the file is read here (legacy contract).
     """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (UnicodeDecodeError, OSError) as exc:
-        return [SkillCommandIssue(path, "unreadable", str(exc))]
+    if text is None:
+        try:
+            text = path.read_text(encoding="utf-8-sig")
+        except (UnicodeDecodeError, OSError) as exc:
+            return [SkillCommandIssue(path, "unreadable", str(exc))]
     issues: list[SkillCommandIssue] = []
 
     meta, body = _split_front_matter(text)
@@ -198,8 +206,17 @@ def validate_skills(skills_dir: Path, *, repo_root: Path) -> list[SkillCommandIs
         if not skill_md.is_file():
             issues.append(SkillCommandIssue(sub, "missing-skill-file", f"{sub.name}/SKILL.md"))
             continue
-        issues.extend(validate_command_skill(skill_md, repo_root=repo_root))
-        meta, _ = _split_front_matter(skill_md.read_text(encoding="utf-8", errors="replace"))
+        # Single read feeds both the per-file rules and the name check — no
+        # second read whose decoding could diverge from the first. An
+        # unreadable file short-circuits: a name verdict derived from corrupt
+        # bytes would be noise on top of the real signal.
+        try:
+            text = skill_md.read_text(encoding="utf-8-sig")
+        except (UnicodeDecodeError, OSError) as exc:
+            issues.append(SkillCommandIssue(skill_md, "unreadable", str(exc)))
+            continue
+        issues.extend(validate_command_skill(skill_md, repo_root=repo_root, text=text))
+        meta, _ = _split_front_matter(text)
         declared = str((meta or {}).get("name", "")).strip()
         if declared and declared != sub.name:
             issues.append(
@@ -221,29 +238,39 @@ def validate_repo(
     Default behaviour (both dirs ``None``): sweep whichever of
     ``.claude/skills/`` and ``.claude/commands/`` exist; if NEITHER exists,
     return a single ``no-skill-layout`` issue rather than a false "all valid".
-    Passing a dir explicitly makes that layout mandatory (its missing-dir issue
-    surfaces), preserving the strict semantics of the per-layout functions.
+
+    Passing a dir explicitly SCOPES the sweep to exactly the dir(s) passed —
+    a pinned layout is mandatory (its missing-dir issue surfaces) and the
+    other layout is not auto-discovered, preserving the pre-auto-discovery
+    CLI contract that ``--commands-dir X`` validates only ``X``.
     """
-    explicit = skills_dir is not None or commands_dir is not None
-    resolved_skills = skills_dir or repo_root / ".claude" / "skills"
-    resolved_commands = commands_dir or repo_root / ".claude" / "commands"
-    issues: list[SkillCommandIssue] = []
+    if skills_dir is not None or commands_dir is not None:
+        issues: list[SkillCommandIssue] = []
+        if skills_dir is not None:
+            issues.extend(validate_skills(skills_dir, repo_root=repo_root))
+        if commands_dir is not None:
+            issues.extend(validate_all(commands_dir, repo_root=repo_root))
+        return issues
+
+    default_skills = repo_root / ".claude" / "skills"
+    default_commands = repo_root / ".claude" / "commands"
+    discovered: list[SkillCommandIssue] = []
     swept = False
-    if skills_dir is not None or resolved_skills.is_dir():
-        issues.extend(validate_skills(resolved_skills, repo_root=repo_root))
+    if default_skills.is_dir():
+        discovered.extend(validate_skills(default_skills, repo_root=repo_root))
         swept = True
-    if commands_dir is not None or resolved_commands.is_dir():
-        issues.extend(validate_all(resolved_commands, repo_root=repo_root))
+    if default_commands.is_dir():
+        discovered.extend(validate_all(default_commands, repo_root=repo_root))
         swept = True
-    if not swept and not explicit:
-        issues.append(
+    if not swept:
+        discovered.append(
             SkillCommandIssue(
                 repo_root / ".claude",
                 "no-skill-layout",
                 "neither .claude/skills/ nor .claude/commands/ exists",
             )
         )
-    return issues
+    return discovered
 
 
 def main(argv: list[str] | None = None) -> int:
