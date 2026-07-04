@@ -171,9 +171,9 @@ features:
       - "tests/regression/test_secret_scan_gate.py passes"
       - "ci.yml gitleaks job pinned + advisory; .gitleaks.toml regex-only allowlist"
     validation_command: "python -m pytest tests/regression/test_secret_scan_gate.py -q"
-    implemented_in: "claude/review-agents-plan-4qfxev"
+    implemented_in: "a12c95b3855bd51667bace17e6dc150e69b1b4e2"
     depends_on: ["F-001"]
-    notes: "POST-MERGE: replace implemented_in with the squash SHA. Runbook: docs/runbooks/secret-scanning.md."
+    notes: "Runbook: docs/runbooks/secret-scanning.md."
 
   - id: "F-016"
     epic: "Hygiene"
@@ -192,9 +192,9 @@ features:
       - "tests/unit/tools/test_doc_hygiene.py passes"
       - "tests/regression/test_next_steps_reconciled.py passes"
     validation_command: "python -m pytest tests/unit/tools/test_doc_hygiene.py tests/regression/test_next_steps_reconciled.py -q"
-    implemented_in: "claude/review-agents-plan-4qfxev"
+    implemented_in: "a12c95b3855bd51667bace17e6dc150e69b1b4e2"
     depends_on: ["F-001"]
-    notes: "POST-MERGE: replace implemented_in with the squash SHA. Advisory guard runs in scripts/ci.sh."
+    notes: "Advisory guard runs in scripts/ci.sh."
 
   - id: "F-017"
     epic: "Deployment"
@@ -213,9 +213,9 @@ features:
       - "tests/unit/validation/test_preflight_host_env.py passes"
       - "tests/regression/test_host_bootstrap_script.py passes"
     validation_command: "python -m pytest tests/unit/validation/test_preflight_host_env.py tests/unit/validation/test_preflight_real_branches.py tests/regression/test_host_bootstrap_script.py -q"
-    implemented_in: "claude/review-agents-plan-4qfxev"
+    implemented_in: "a12c95b3855bd51667bace17e6dc150e69b1b4e2"
     depends_on: ["F-001"]
-    notes: "POST-MERGE: replace implemented_in with the squash SHA. Check is OFF by default (host_env: enabled: false); enable on the Jetson overlay."
+    notes: "Check is OFF by default (host_env: enabled: false); enable on the Jetson overlay."
 
   - id: "F-018"
     epic: "Validation efficiency"
@@ -236,9 +236,9 @@ features:
       - "tests/unit/validation/test_summary.py passes"
       - "tests/regression/test_trend_timer_units.py pins the non-exclusive check subset"
     validation_command: "python -m pytest tests/unit/validation/test_summary.py tests/unit/scripts/test_render_validation_summary.py tests/regression/test_trend_timer_units.py -q"
-    implemented_in: "claude/review-agents-plan-4qfxev"
+    implemented_in: "a12c95b3855bd51667bace17e6dc150e69b1b4e2"
     depends_on: ["F-001", "F-017"]
-    notes: "POST-MERGE: replace implemented_in with the squash SHA. Install the timer via scripts/host_bootstrap.sh --with-trend-timer."
+    notes: "Install the timer via scripts/host_bootstrap.sh --with-trend-timer."
 
   - id: "F-019"
     epic: "Observability"
@@ -259,9 +259,9 @@ features:
       - "tests/unit/test_grafana_dashboard_json.py passes (incl. LLM panel needles)"
       - "tests/unit/test_prometheus_alerts_yml.py passes"
     validation_command: "python -m pytest tests/unit/test_grafana_dashboard_json.py tests/unit/test_prometheus_alerts_yml.py -q"
-    implemented_in: "claude/review-agents-plan-4qfxev"
+    implemented_in: "a12c95b3855bd51667bace17e6dc150e69b1b4e2"
     depends_on: ["F-001"]
-    notes: "POST-MERGE: replace implemented_in with the squash SHA. Operator action: import the dashboard + load alerts.yml on the monitoring host."
+    notes: "Operator action: import the dashboard + load alerts.yml on the monitoring host."
 
   - id: "F-020"
     epic: "Hygiene"
@@ -283,6 +283,6 @@ features:
       - "planted-defect tests prove the audit pipeline finds/suppresses/reports"
       - "import-graph freeze green on the current tree"
     validation_command: "python -m pytest tests/regression/test_dead_code_audit.py tests/regression/test_import_graph_freeze.py tests/unit/scripts/test_check_advisory_promotions.py -q"
-    implemented_in: "claude/review-agents-plan-4qfxev"
+    implemented_in: "a12c95b3855bd51667bace17e6dc150e69b1b4e2"
     depends_on: ["F-001"]
-    notes: "POST-MERGE: replace implemented_in with the squash SHA. Slow tier - runs nightly; the ci.sh stages are advisory mirrors."
+    notes: "Slow tier - runs nightly; the ci.sh stages are advisory mirrors."
