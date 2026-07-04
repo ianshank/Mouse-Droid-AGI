@@ -88,6 +88,16 @@ schema that is actually deployed. The step-5a fallback commands pin
 `anthropic==0.105.2` (the rover-validated version); the image build itself uses
 the `anthropic>=0.40` lower-bound range in `Dockerfile.jetson` / `pyproject.toml`.
 
+## Host-surface durability (F-017 — supersedes the manual procedure)
+
+The per-host `docker.env` overrides documented below survive a reflash via
+`sudo bash scripts/host_bootstrap.sh` (seeds `docker.env` from
+`config/docker.env.example` only-if-absent; `--force` backs up first;
+`--rollback` restores; `--dry-run` plans). Drift is self-diagnosing: enable
+`host_env.enabled` in the Jetson overlay and the `host_env_keys` preflight
+check WARNs when the deployed env file is missing template keys (names only
+— values never reach a log).
+
 ## Live-deploy findings (first deploy, 2026-06-02) — host-specific reality
 
 Discovered during the first deploy. Items 1, 2, 4, 5 are ongoing host realities;

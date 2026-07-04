@@ -269,3 +269,10 @@ snap-*.jpg
 # %TEMP%), but guard the repo root in case TMPDIR resolves repo-relative on a
 # CI/dev host so a stray detached worktree never gets staged.
 config-compat-*/
+
+# Dead-code audit reports (F-020) - dated JSON artifacts, never committed
+reports/dead_code/
+
+# Endurance snapshots (JSON/PSV artifacts; only the .gitkeep is tracked)
+reports/endurance/*
+!reports/endurance/.gitkeep

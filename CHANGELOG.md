@@ -8,6 +8,129 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — validation-first rev. B software work streams (WS-0.4/1/3.1/4/5/8, F-015..F-020) (#151)
+
+Implements the software-only half of the peer-reviewed validation-first plan
+(`docs/superpowers/plans/2026-07-03-validation-first-rev-b.md`). The hardware
+gate (WS-6, F-008) and human items (key rotation, ESP32 bench repair) remain
+the critical path; none of this blocks them.
+
+- **F-015 — secret-scan gate.** `.gitleaks.toml` (regex-only allowlist, never
+  by path), advisory full-history `gitleaks` CI job (docker-pinned,
+  `safe.directory` fix, promotes after 7 green runs), guarded `ci.sh` stage,
+  `docs/runbooks/secret-scanning.md`. First full scan (585 commits) surfaced
+  exactly one finding — the synthetic telemetry-auth test token, allowlisted.
+- **F-016 — truth reconciliation.** NEXT_STEPS.md 37 KB/72 ✅ → ~12 KB
+  forward-looking (history preserved below), arm arc PAUSED at T2 with an
+  explicit unfreeze condition, Phase-5 vocabulary disambiguated, the three
+  arm/sim skills frozen via validated `status:` front-matter, and
+  `tools/doc_hygiene.py` guarding against re-drift.
+- **F-017 — host-env durability.** `docker.env.example` enumerates the live
+  LLM overrides, the WARN-only `host_env_keys` preflight check flags key-set
+  drift (names only, never values), and `scripts/host_bootstrap.sh` seeds/
+  repairs the host surface (dry-run/backup/rollback). Preflight device-branch
+  tests lifted `validation/preflight.py` to ~99% coverage.
+- **F-018 — validation trend instrumentation.** `jetson_full_validation.sh`
+  Phase-2 preflight feeds the trend journal (rotation-capped via the new
+  `--journal-max-bytes`), SUMMARY.md is rendered by the tested
+  `validation/summary.py` with a Trend section (bash fallback kept), and
+  `mousedroid-trend.{service,timer}` sample non-exclusive checks hourly —
+  the check subset is regression-pinned so the timer can never contend with
+  the orchestrator for devices.
+- **F-019 — LLM observability.** Grafana panels 23-26 for the four PR #115
+  LLM metric families + the `mousedroid_llm_gateway` Prometheus alert group
+  (latency p95, budget spikes, degraded fallback serving, token burn), with
+  repo-wide rule hygiene pinned (severity + config_ref on every rule).
+- **F-020 — redundancy/gap audit.** Findings-only vulture dead-code audit
+  (dated JSON reports, curated allowlist), AST import-graph freeze for the
+  deferred arm platform + parked HC-SR04 driver, and the advisory
+  promotion-lag checker over `.github/advisory_stages.yaml`.
+- **Harness:** catalog IDs continue from F-015 (SMOKE_REPORT findings burned
+  9-14) — declared in HARNESS_SPEC.md "F-number namespaces" and ADR-013.
+- **Gap-analysis remediation (follow-up commits):** malformed
+  `advisory_stages.yaml` degrades to warnings end-to-end (entry AND file
+  level, per Copilot review), `.yaml` workflows covered by the promotion-lag
+  guard, journal rotation is fail-safe (`max_bytes<=0` disables; failed
+  `replace()` → `journal_rotate_failed`), dead constants removed, and the
+  previously untested paths (bootstrap `--rollback`/`--with-trend-timer`
+  dry-runs, the python-less `write_summary_fallback`, audit clean-run +
+  truncation) are executed by tests. Docs reconciled: README doc-map/CI
+  stages/tooling, ADR-013 (+ ADR-012 addendum), C4 validation-efficiency +
+  overview + llm-gateway, both Jetson runbooks, CLAUDE.md, SKILLS.md,
+  `.gitignore`/`.dockerignore`, and a new `test_runbooks_structure.py` pin.
+
+### Historical record — reconciled from NEXT_STEPS.md (2026-07-03, F-016)
+
+NEXT_STEPS.md had re-drifted into changelog territory (37 KB, 72 ✅ marks).
+Everything below was already landed and is preserved here verbatim-in-spirit;
+NEXT_STEPS.md now carries forward-looking items only.
+
+- **LLM-gateway observability shipped (PR #115)** — `{ns}_llm_tokens_total`,
+  `{ns}_llm_gateway_latency_ms`, `{ns}_llm_gateway_served_total`,
+  `{ns}_llm_latency_budget_exceeded_total` metric families (config-gated,
+  seeded in `generate_metrics_sample()`).
+- **Training observability T2 (MLflow) shipped** — MLflow logger wired into
+  `PipelineOrchestrator` + `OfflineRLTrainer`; runbook
+  `docs/runbooks/mlflow-local-ui.md`.
+- **Validation-efficiency layer shipped (PR #126)** — latency-percentile probes
+  (`tools/llm_latency_probe.py --iterations N`, `tools/lidar_telemetry_probe.py`
+  p50/p95/p99 via `validation/latency_stats.py`), run-over-run trend store
+  (`validation/report_store.py` + `preflight --journal-path --trend`), Phase-1
+  caching in `jetson_full_validation.sh` (`--phases` / `--no-cache`).
+- **Issue #109 (MSE-6 greeting lifecycle) closed** — `GreetingConfig.fire_on_startup`
+  (default `False`), pr109 integration + hardware test tiers landed. Residual
+  post-gate action: run the hardware-tier greeting test on the live rover before
+  flipping the default.
+- **Jetson config-overlay sync automated** — `scripts/mousedroid-docker.service`
+  runs `scripts/sync_jetson_overlay.sh` as `ExecStartPre` (the former
+  "Deployment Hardening Option 3" proposal, superseded and closed).
+- **Physical-AI Phase 2 — real-episode replay loop** — LMDB async reader
+  (`training/replay/lmdb_reader.py`), ratio-controlled sim/real mixer,
+  `training/replay_real_episodes.py` CLI, `schema_version` skip logic,
+  `OfflineRLConfig.real_supervised_weight` (Phase 2.1: TD3+BC-pattern
+  `bc_update`, byte-identity proven at `weight=0` by
+  `tests/integration/test_phase21_bc_into_offline_rl.py`; golden RSSM loss
+  curve in `tests/regression/test_phase2_rssm_golden.py`), and
+  `factory.build_replay_reader`.
+- **Physical-AI Phase 3a — VLA protocol + MockVLA** — `VLAPolicyProtocol`,
+  `VLAConfig` (default `backend="none"`), `build_vla_policy`,
+  `LoopConfig.policy_selector` (`nav_agent`/`vla`/`auto`), timeout safe-stop +
+  fallback, 43 unit tests.
+- **Physical-AI Phase 3b — DistilledVLAOnnx + HF weights pull** — ORT provider
+  chain (TensorRT→CUDA→CPU), `[vla]` extra, lazy-import isolation test,
+  `weights_manager.download_weights_from_huggingface` reuse, ~30 unit tests.
+  The `[vla]` CI matrix leg was later PROMOTED to required (Tier C3.1).
+- **Physical-AI Phase 4 — VLM-derived dense rewards (VLAC)** —
+  `reward/vlm_progress.py` (`VLMProgressBackend`, `MockVLMProgress`,
+  LRU-cached `VLMProgressHead`), `RewardConfig.weight_vlm_progress` (default
+  `0.0`), Law-1 multiplicative sigmoid gate preserved (Hypothesis property
+  test), `factory.build_reward_model`, `train_constitutional_rl.py` migrated.
+- **Voice engine quality** — config-driven Piper model selection
+  (`voice.personality_to_model_map`), latency benchmark
+  (`scripts/benchmark_voice_latency.py`), phrase-bank navigation/battery/LLM
+  events, per-event intensity thresholds.
+- **Test coverage** — TTS + speaker integration tests
+  (`test_tts_integration.py`, `test_speaker_tts_integration.py`), smoke-harness
+  unit tests (`test_smoke_harness.py`).
+- **Immediate follow-ups closed** — jetson-nightly Ten Pillars workflow
+  (advisory), self-hosted runner install path
+  (`scripts/jetson-runner-install.sh` + service template + runbook), Phase 2
+  replay activated in the production overlay (inert defaults +
+  `debug_log_every_n` triage knob), operator failure-mode playbooks
+  (esp32/gpio/replay/bringup), real-hardware endurance opt-in
+  (`MOUSEDROID_ENDURANCE_FORCE_REAL=1` → `reports/endurance/<utc>.json`),
+  LMDB→training export CLI (`scripts/export_experience_to_training.py`),
+  production-config validation (`scripts/validate_configs.py` +
+  `config-validate` CI job).
+- **PR #107 follow-ups closed** — live cloud round-trip benchmark (PR #111
+  deploy; `latency_target_ms: 5000` on the live overlay), cold-network
+  failover validation (Phi-3-mini CPU tier), cloud token-cost telemetry
+  (superseded by the PR #115 families above).
+- **Reference: last full Jetson smoke snapshot (`20260426T231226Z`)** — all 14
+  stages PASS including ten_pillars 20/20 (camera IMX500 CSI, LiDAR LD19 360°,
+  USB audio both directions, OLED I²C-7, GPIO, ESP32 serial at 1 Mbps — the
+  ESP32 has since failed and is the active top blocker).
+
 ### Added — claude-code-foundry implementation plan + WS-F7a skills-layout migration (#150)
 
 The executable blueprint for the new `ianshank/claude-code-foundry` plugin-

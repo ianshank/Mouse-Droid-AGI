@@ -94,6 +94,11 @@ def test_namespace_is_config_derived_not_literal() -> None:
         "MOUSEDROID_VALIDATION_PYTEST_TIMEOUT_S",
         "MOUSEDROID_VALIDATION_LIDAR_DURATION_S",
         "MOUSEDROID_VALIDATION_LOG_TAIL",
+        # Trend journal (F-018).
+        "MOUSEDROID_VALIDATION_JOURNAL",
+        "MOUSEDROID_VALIDATION_JOURNAL_MAX_BYTES",
+        "MOUSEDROID_VALIDATION_TREND_SLOW_RATIO",
+        "MOUSEDROID_VALIDATION_TREND_SLOW_FLOOR_S",
     ],
 )
 def test_documented_env_tunables_present(env_var: str) -> None:
@@ -121,3 +126,83 @@ def test_secrets_presence_checked_only() -> None:
     # cases where the secret appears outside a recognised log/echo verb).
     assert "${ANTHROPIC_API_KEY}" not in text
     assert "${MOUSEDROID_TELEMETRY_TOKEN}" not in text
+
+
+class TestTrendThreading:
+    """F-018: Phase-2 preflight appends to the trend journal + summary shim."""
+
+    def test_phase2_preflight_threads_journal_flags(self) -> None:
+        text = _script_text()
+        assert '--journal-path "${TREND_JOURNAL}"' in text
+        assert "--trend" in text
+        assert '--journal-max-bytes "${TREND_JOURNAL_MAX_BYTES}"' in text
+
+    def test_journal_lives_under_report_root_not_run_dir(self) -> None:
+        # A per-run journal would never accumulate the >=2 runs a trend needs.
+        text = _script_text()
+        assert "${REPORT_ROOT}/trend_journal.jsonl" in text
+        assert "${RUN_DIR}/trend_journal" not in text
+
+    def test_summary_uses_renderer_with_bash_fallback(self) -> None:
+        text = _script_text()
+        assert "scripts/render_validation_summary.py" in text
+        assert "write_summary_fallback" in text, "python-less hosts must still get a summary"
+
+
+class TestSummaryFallbackExecution:
+    """Gap-analysis: prove the python-less fallback actually produces SUMMARY.md.
+
+    Extracts the real ``log``/``write_summary_fallback``/``write_summary``
+    function bodies from the script (column-0 ``name() {`` … ``}`` blocks) and
+    runs them in a bash harness where ``resolve_host_python`` fails — the
+    exact "python-less host" condition the fallback exists for.
+    """
+
+    @staticmethod
+    def _extract_function(source: str, name: str) -> str:
+        lines = source.splitlines()
+        start = next(i for i, line in enumerate(lines) if line.startswith(f"{name}() {{"))
+        end = next(i for i in range(start + 1, len(lines)) if lines[i] == "}")
+        return "\n".join(lines[start : end + 1])
+
+    def test_fallback_writes_summary_when_python_unavailable(self, tmp_path: Path) -> None:
+        source = _script_text()
+        # log() is a one-liner delegating to ts(); stub it in the harness and
+        # extract only the two multi-line summary functions under test.
+        functions = "\n\n".join(
+            self._extract_function(source, name)
+            for name in ("write_summary_fallback", "write_summary")
+        )
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        harness = tmp_path / "harness.sh"
+        harness.write_text(
+            "#!/usr/bin/env bash\n"
+            "set -uo pipefail\n"
+            'log() { echo "$*"; }\n'
+            f"{functions}\n"
+            "# python-less host: the renderer path must fail over cleanly.\n"
+            "resolve_host_python() { return 1; }\n"
+            f'RUN_DIR="{run_dir}"\n'
+            'STAMP="20260703T000000Z"\n'
+            'REPO_DIR="/opt/mousedroid"\n'
+            'PROD_CONFIG="config/jetson_production.yaml"\n'
+            'TELEMETRY_URL="http://127.0.0.1:8080"\n'
+            "PASSES=1 WARNS=1 FAILURES=1\n"
+            'RESULTS=("PASS|preflight (real)|" "WARN|serial smoke|dead ESP32"'
+            ' "FAIL|renderer|exit 1|see log")\n'
+            "write_summary\n",
+            encoding="utf-8",
+        )
+        proc = subprocess.run(
+            ["bash", str(harness)], capture_output=True, text=True, cwd=_REPO_ROOT
+        )
+        assert proc.returncode == 0, proc.stderr
+        summary = (run_dir / "SUMMARY.md").read_text(encoding="utf-8")
+        assert "| PASS | preflight (real) |" in summary
+        assert "| WARN | serial smoke | dead ESP32 |" in summary
+        # A |-bearing note must render as ONE escaped row, not extra columns
+        # (mirrors _escape_cell in mousedroid/validation/summary.py).
+        assert "| FAIL | renderer | exit 1\\|see log |" in summary
+        assert "Totals: PASS=1 WARN=1 FAIL=1" in summary
+        assert "fallback" in proc.stdout, "the fallback path must announce itself"

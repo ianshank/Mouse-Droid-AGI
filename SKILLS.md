@@ -377,7 +377,9 @@ validation pass".
   `ci.sh`, `verify_sensors.py`, `jetson_smoke_test.sh`, `translate_mission.py`,
   `lidar_telemetry_probe.py`, the `preflight`/`validate_pillars` CLIs).
 - `docs/runbooks/jetson-full-validation.md` — operator flow, cold-then-warm,
-  validate-around-ESP32, the #115 `/metrics` grep recipe.
+  validate-around-ESP32, the #115 `/metrics` grep recipe, and the F-018 trend
+  surface (Phase-2 journal append, Phase-4 SUMMARY Trend section, hourly
+  `mousedroid-trend.timer` install via `host_bootstrap.sh --with-trend-timer`).
 - `tests/hardware/test_llm_gateway_metrics_live_jetson.py` — the live #115
   metric assertions (Test A live scrape; Test B in-process population).
 

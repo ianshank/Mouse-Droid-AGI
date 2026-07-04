@@ -4942,6 +4942,36 @@ class USBCDiscoveryConfig(BaseModel):
         return self
 
 
+class HostEnvConfig(BaseModel):
+    """Host env-file durability check (F-017, WS-3.1).
+
+    Drives the WARN-only ``host_env_keys`` preflight check: the deployed
+    ``docker.env`` on the rover must carry at least the key set the committed
+    template documents, so per-host overrides (``MOUSEDROID_LLM__ENABLED``,
+    ``MOUSEDROID_LLM__N_GPU_LAYERS``) survive a reflash instead of silently
+    vanishing. Names only — values are never read into a result or log.
+    """
+
+    enabled: bool = Field(
+        False,
+        description=(
+            "Master switch - keeps default YAML inert (the check no-ops OK "
+            "when disabled). Enable on the Jetson production overlay."
+        ),
+    )
+    env_file: Path = Field(
+        default=Path("/etc/mousedroid/docker.env"),
+        description="Deployed per-host env file whose key-set is verified.",
+    )
+    template_file: Path = Field(
+        default=Path("/opt/mousedroid/config/docker.env.example"),
+        description=(
+            "Committed template whose key-set is the required minimum. "
+            "Points at the repo checkout on the rover by default."
+        ),
+    )
+
+
 class GreetingConfig(BaseModel):
     """Operator-tools: MSE-6 spoken greeting subsystem (``scripts/greet_intro.py``).
 
@@ -5315,6 +5345,14 @@ class Settings(BaseSettings):
     openclaw: OpenClawConfig | None = Field(
         None,
         description="OpenClaw integration config (None=disabled, backwards compatible)",
+    )
+
+    # Host env-file durability check (F-017) — WARN-only preflight probe that
+    # the deployed docker.env carries the template's key-set. None=disabled;
+    # existing YAML files load unchanged.
+    host_env: HostEnvConfig | None = Field(
+        None,
+        description="Host env-file key-set check config (None=disabled, backwards compatible)",
     )
 
     @model_validator(mode="before")

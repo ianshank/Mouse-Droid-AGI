@@ -1,4 +1,4 @@
-# C4 Component — Validation Efficiency (latency stats · trend store · phase caching)
+# C4 Component — Validation Efficiency (latency stats · trend store · summary renderer · trend timer · phase caching)
 
 > The runtime/resource-efficiency layer bolted onto the existing Jetson
 > validation harness. It answers three questions the binary, single-shot
@@ -38,7 +38,19 @@ flowchart TB
     end
 
     subgraph CLI["validation CLI — cli/preflight.py"]
-        PreflightCLI["preflight --journal-path PATH\n--trend --trend-slow-ratio --trend-slow-floor-s"]
+        PreflightCLI["preflight --journal-path PATH\n--trend --trend-slow-ratio --trend-slow-floor-s\n--journal-max-bytes (rotation, F-018)"]
+    end
+
+    subgraph Summary["SUMMARY renderer (F-018) — validation/summary.py"]
+        ParseRows["parse_result_rows(RESULTS psv)"]
+        TrendBlock["extract_trend_block(phase2 log)"]
+        Render["render_summary(...) -> SUMMARY.md + Trend section"]
+        Shim["scripts/render_validation_summary.py\n(argparse shim; bash keeps write_summary_fallback)"]
+    end
+
+    subgraph Timer["Continuous sampling (F-018) — systemd"]
+        TrendTimer["mousedroid-trend.timer (hourly)\n-> mousedroid-trend.service (oneshot)"]
+        SafeChecks["MOUSEDROID_TREND_CHECKS=config,host_env_keys\nNON-EXCLUSIVE ONLY (container owns devices)"]
     end
 
     subgraph Journal["Harness journal (reused) — harness/journal/"]
@@ -79,6 +91,10 @@ flowchart TB
     Phases --> Phase1
     GitSha --> Phase1
     Phase1 --> Cache
+
+    Shim --> ParseRows --> Render
+    Shim --> TrendBlock --> Render
+    TrendTimer --> SafeChecks --> PreflightCLI
 ```
 
 ## Key contracts (the non-negotiables)
@@ -91,6 +107,10 @@ flowchart TB
 | **Wall-clock ordering.** `recorded_at_ns = time.time_ns()` in the payload; history sorts on it. | `validation/report_store.py` | Stable across reboots, unlike the journal's monotonic entry stamp (LMDB keys reset per process). |
 | **Dual-gated latency creep.** A slowdown is flagged only when it exceeds BOTH `slow_ratio` AND `slow_floor_s`. | `detect_regressions` | The absolute floor suppresses noise on sub-50 ms checks where a 1.5× jump is meaningless. Both are operator-tunable via CLI (no hardcoded call site). |
 | **Phase-1 cache keyed on clean source SHA.** `git_clean_sha` echoes HEAD only when the tree under `src/tests/scripts/config/pyproject.toml` is clean; a dirty tree forces a miss. Cache written only on a fully-green run. | `scripts/jetson_full_validation.sh` | Static CI is a pure function of committed source. A dirty tree must never be masked by a stale green. Hardware/live phases are never cached. |
+| **Timer runs non-exclusive checks only.** `mousedroid-trend.service` defaults to `--checks config,host_env_keys` and its ExecStart may never name camera/lidar/esp32/microphone/speaker. | `scripts/mousedroid-trend.service` + `tests/regression/test_trend_timer_units.py` | The orchestrator container owns the devices; a concurrent open corrupts both readers. Full device trends come only from Phase 2 (container stopped). |
+| **Separate timer journal.** The timer journals to its own path (default `/var/lib/mousedroid/trend/preflight.jsonl`), never the full-run journal. | `scripts/mousedroid-trend.service` | 2-check timer runs and all-check harness runs have incomparable `total_elapsed_s` — sharing a journal would flag bogus latency-creep regressions. |
+| **Rotation is capped + fail-safe.** `--journal-max-bytes` rotates to `<path>.1` (single generation); `max_bytes<=0` disables rotation; a failed `replace()` degrades to `journal_rotate_failed`, never a crash. | `report_store.rotate_journal_if_needed` | SD-card growth cap (the `journalctl --vacuum-size=50M` precedent) that can never thrash-rotate or take down the timer-driven preflight. |
+| **Summary renderer is pure + fallback-safe.** `validation/summary.py` renders the table + a Trend section (mined from the Phase-2 `--trend` output); the bash `write_summary` falls back to the inline table when the renderer/python is unavailable. | `validation/summary.py`, `scripts/jetson_full_validation.sh` | Python-less hosts still get a SUMMARY.md; the logic under coverage is the tested path, the fallback is executed by a bash-harness regression test. |
 | **Lazy sensor re-exports.** `validation/__init__` re-exports the numpy/cv2/pyaudio `runtime` helpers via PEP 562 `__getattr__`. | `validation/__init__.py` | Importing the pure modules never drags the sensor stack in. Backwards compatible — names still resolve on access. Locked by `tests/regression/test_validation_import_decoupling.py`. |
 
 ## Test surface
@@ -104,6 +124,10 @@ flowchart TB
 | Integration | `tests/integration/test_validation_report_store_integration.py` | Store through factory `build_journal` for JSONL **and** LMDB + NullJournal default. |
 | Regression | `tests/regression/test_validation_import_decoupling.py` | Subprocess guard: pure modules don't import numpy/cv2; lazy re-exports resolve. |
 | Smoke | `tests/smoke/test_jetson_full_validation_sanity.py` | Script arg surface (`--phases`, `--no-cache`, dry-run). |
+| Unit | `tests/unit/validation/test_summary.py` | Row parsing, trend-block mining (exact `RegressionReport.render_text()` shape), Trend-section render + placeholder. |
+| Unit | `tests/unit/scripts/test_render_validation_summary.py` | Shim CLI contract incl. missing/absent-log tolerance. |
+| Regression | `tests/regression/test_trend_timer_units.py` | Non-exclusive `--checks` subset, separate journal path, rotation flags threaded, env-indirected ExecStart. |
+| Regression | `tests/regression/test_jetson_full_validation_script.py` | Journal threading under `REPORT_ROOT`, env tunables documented, `write_summary_fallback` executed for real (python-less harness). |
 
 ## Structured-log events (operator grep recipes)
 
@@ -112,3 +136,6 @@ flowchart TB
 - `preflight_report_recorded` — a run was appended to the trend journal.
 - `trend_run_recorded` / `trend_evaluated` (DEBUG) — CLI trend path.
 - `static CI (cached)` (bash `record PASS`) — phase-1 cache hit.
+- `journal_rotated` / `journal_rotate_failed` — `--journal-max-bytes` rotation fired / degraded (F-018).
+- `validation_summary_rendered` (DEBUG) — SUMMARY.md produced by the Python renderer.
+- `host_env_check_skipped` / `host_env_keys_missing` / `host_env_keys_ok` — the F-017 host-env key-set check (names only, never values).

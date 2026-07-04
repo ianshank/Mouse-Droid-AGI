@@ -151,3 +151,138 @@ features:
     implemented_in: null
     depends_on: ["F-001"]
     notes: "Cannot reach `done` in hosted CI; verify with `validate.py --tier hardware` on the rover."
+
+  # F-009..F-014 are intentionally SKIPPED: those IDs are already used by the
+  # independent SMOKE_REPORT.md operational-findings namespace (see
+  # HARNESS_SPEC.md "F-number namespaces"). The catalog continues at F-015.
+  - id: "F-015"
+    epic: "Security"
+    name: "Secret-scan gate blocks the next credential leak"
+    description: >-
+      gitleaks scans the full history in CI (advisory until the 7-green-run
+      promotion) and the working tree in scripts/ci.sh, with a regex-only
+      allowlist (.gitleaks.toml) so fake-key placeholders never require
+      path-based waivers (WS-0.4, rev. B).
+    category: "infrastructure"
+    priority: "high"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "tests/regression/test_secret_scan_gate.py passes"
+      - "ci.yml gitleaks job pinned + advisory; .gitleaks.toml regex-only allowlist"
+    validation_command: "python -m pytest tests/regression/test_secret_scan_gate.py -q"
+    implemented_in: "claude/review-agents-plan-4qfxev"
+    depends_on: ["F-001"]
+    notes: "POST-MERGE: replace implemented_in with the squash SHA. Runbook: docs/runbooks/secret-scanning.md."
+
+  - id: "F-016"
+    epic: "Hygiene"
+    name: "Planning docs stay forward-looking (truth reconciliation)"
+    description: >-
+      NEXT_STEPS.md carries only forward-looking items (landed work lives in
+      CHANGELOG.md), the T3/arm contradiction is resolved as pause-at-T2 with
+      an explicit unfreeze condition, the Phase-5 vocabulary collision is
+      disambiguated, frozen skills carry validated status front-matter, and
+      tools/doc_hygiene.py guards against re-drift (WS-1, rev. B).
+    category: "infrastructure"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "tests/unit/tools/test_doc_hygiene.py passes"
+      - "tests/regression/test_next_steps_reconciled.py passes"
+    validation_command: "python -m pytest tests/unit/tools/test_doc_hygiene.py tests/regression/test_next_steps_reconciled.py -q"
+    implemented_in: "claude/review-agents-plan-4qfxev"
+    depends_on: ["F-001"]
+    notes: "POST-MERGE: replace implemented_in with the squash SHA. Advisory guard runs in scripts/ci.sh."
+
+  - id: "F-017"
+    epic: "Deployment"
+    name: "Per-host docker.env overrides survive a reflash"
+    description: >-
+      config/docker.env.example enumerates the live LLM host overrides, the
+      WARN-only host_env_keys preflight check flags key-set drift on the
+      deployed env file (names only, never values), and
+      scripts/host_bootstrap.sh seeds/repairs the host surface with dry-run,
+      backup, and rollback safety (WS-3.1, rev. B).
+    category: "infrastructure"
+    priority: "high"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "tests/unit/validation/test_preflight_host_env.py passes"
+      - "tests/regression/test_host_bootstrap_script.py passes"
+    validation_command: "python -m pytest tests/unit/validation/test_preflight_host_env.py tests/unit/validation/test_preflight_real_branches.py tests/regression/test_host_bootstrap_script.py -q"
+    implemented_in: "claude/review-agents-plan-4qfxev"
+    depends_on: ["F-001"]
+    notes: "POST-MERGE: replace implemented_in with the squash SHA. Check is OFF by default (host_env: enabled: false); enable on the Jetson overlay."
+
+  - id: "F-018"
+    epic: "Validation efficiency"
+    name: "Full-validation runs feed the trend journal and surface regressions"
+    description: >-
+      Phase-2 preflight in jetson_full_validation.sh appends to a persistent
+      trend journal (under the report root, rotation-capped), the Phase-4
+      SUMMARY.md is rendered by a tested pure module with a Trend section
+      (bash fallback for python-less hosts), and mousedroid-trend.{service,
+      timer} sample non-exclusive checks hourly between manual runs (WS-4,
+      rev. B). The timer's check subset is regression-pinned so it can never
+      contend with the orchestrator for camera/UART/LiDAR devices.
+    category: "validation"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "tests/unit/validation/test_summary.py passes"
+      - "tests/regression/test_trend_timer_units.py pins the non-exclusive check subset"
+    validation_command: "python -m pytest tests/unit/validation/test_summary.py tests/unit/scripts/test_render_validation_summary.py tests/regression/test_trend_timer_units.py -q"
+    implemented_in: "claude/review-agents-plan-4qfxev"
+    depends_on: ["F-001", "F-017"]
+    notes: "POST-MERGE: replace implemented_in with the squash SHA. Install the timer via scripts/host_bootstrap.sh --with-trend-timer."
+
+  - id: "F-019"
+    epic: "Observability"
+    name: "LLM-gateway metric families are dashboarded and alerted"
+    description: >-
+      docs/grafana_dashboard.json carries panels for all four PR #115 LLM
+      families (token burn, latency percentiles, served-by-tier, budget
+      exceeded) and config/prometheus/alerts.yml gains the
+      mousedroid_llm_gateway group (latency p95, budget spikes, degraded
+      fallback serving, token burn) - closing the WS-5 observability
+      deferral (rev. B). Every expr resolves against
+      generate_metrics_sample(); every rule carries severity + config_ref.
+    category: "infrastructure"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "tests/unit/test_grafana_dashboard_json.py passes (incl. LLM panel needles)"
+      - "tests/unit/test_prometheus_alerts_yml.py passes"
+    validation_command: "python -m pytest tests/unit/test_grafana_dashboard_json.py tests/unit/test_prometheus_alerts_yml.py -q"
+    implemented_in: "claude/review-agents-plan-4qfxev"
+    depends_on: ["F-001"]
+    notes: "POST-MERGE: replace implemented_in with the squash SHA. Operator action: import the dashboard + load alerts.yml on the monitoring host."
+
+  - id: "F-020"
+    epic: "Hygiene"
+    name: "Redundancy and gap audit pipeline is findings-only and self-testing"
+    description: >-
+      scripts/dead_code_audit.py runs vulture in-process (dated JSON report,
+      allowlist for verified-alive Protocol/DI symbols, advisory unless
+      --strict), an AST import-graph freeze pins that no active module gains
+      a module-scope dependency on the deferred arm platform or the parked
+      HC-SR04 driver, and scripts/check_advisory_promotions.py WARNs on
+      advisory CI stages that outlive their tracked promotion window
+      (.github/advisory_stages.yaml) (WS-8, rev. B). Deletion decisions stay
+      with a human - the audit only reports.
+    category: "validation"
+    priority: "medium"
+    status: "done"
+    tier: "slow"
+    verification:
+      - "planted-defect tests prove the audit pipeline finds/suppresses/reports"
+      - "import-graph freeze green on the current tree"
+    validation_command: "python -m pytest tests/regression/test_dead_code_audit.py tests/regression/test_import_graph_freeze.py tests/unit/scripts/test_check_advisory_promotions.py -q"
+    implemented_in: "claude/review-agents-plan-4qfxev"
+    depends_on: ["F-001"]
+    notes: "POST-MERGE: replace implemented_in with the squash SHA. Slow tier - runs nightly; the ci.sh stages are advisory mirrors."

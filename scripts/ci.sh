@@ -45,6 +45,12 @@ echo "=== Skill Validator (.claude/skills) ==="
 # tests/regression/test_skill_commands_aqa.py; this is the quick local mirror.
 "$PYTHON_BIN" tools/validate_skill_commands.py
 
+echo "=== Doc Hygiene (advisory) ==="
+# WARN-only drift guard for the forward-looking planning doc (F-016). Exits 0
+# unless --strict; the hard post-reconciliation budget is pinned by
+# tests/regression/test_next_steps_reconciled.py in the regression stage.
+"$PYTHON_BIN" tools/doc_hygiene.py NEXT_STEPS.md
+
 echo "=== Type Check ==="
 "$PYTHON_BIN" -m mypy src/ --strict --ignore-missing-imports
 
@@ -92,6 +98,26 @@ if command -v promtool >/dev/null 2>&1; then
     promtool check rules config/prometheus/alerts.yml
 else
     echo "promtool not on PATH - skipping Prometheus rule validation"
+fi
+
+echo "=== Dead-Code Audit (vulture, advisory) ==="
+# Findings-only (F-020): reports to reports/dead_code/, never blocks. Skips
+# cleanly when the optional vulture dep is absent.
+if "$PYTHON_BIN" -c "import vulture" >/dev/null 2>&1; then
+    "$PYTHON_BIN" scripts/dead_code_audit.py
+else
+    echo "vulture not installed - skipping dead-code audit (CI runs it in vulture-audit)"
+fi
+
+echo "=== Advisory Promotion-Lag Check ==="
+"$PYTHON_BIN" scripts/check_advisory_promotions.py
+
+echo "=== Secret Scan (gitleaks, advisory) ==="
+if command -v gitleaks >/dev/null 2>&1; then
+    gitleaks detect --source . --config .gitleaks.toml --redact --no-banner \
+        || echo "WARN: gitleaks reported findings (advisory - see .gitleaks.toml header)"
+else
+    echo "gitleaks not on PATH - skipping secret scan (CI runs it in the gitleaks job)"
 fi
 
 echo "=== Health Check ==="

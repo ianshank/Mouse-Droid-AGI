@@ -1,5 +1,7 @@
 ---
 description: Full-cycle robot arm manipulation training — Tower of Hanoi to laundry sorting
+status: frozen
+unfreeze: "F-008 done on the Jetson + 30-day Phase-3b production soak (see NEXT_STEPS.md)"
 ---
 
 # Robot Arm Trainer

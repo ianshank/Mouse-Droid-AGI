@@ -23,6 +23,7 @@ Architecture invariants (per CLAUDE.md):
 
 from __future__ import annotations
 
+import asyncio
 import enum
 import time
 from collections.abc import Awaitable, Callable
@@ -339,6 +340,77 @@ async def _check_config(cfg: Settings) -> PreflightCheckResult:
     )
 
 
+def _parse_env_keys(text: str) -> set[str]:
+    """Extract the key names from dotenv-style text (values are discarded).
+
+    Skips blank lines and ``#`` comments, tolerates a leading ``export``,
+    and splits on the first ``=`` only — the value side is never returned,
+    so callers cannot accidentally log a secret.
+    """
+    keys: set[str] = set()
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key = line.split("=", 1)[0].strip()
+        if key.startswith("export "):
+            key = key[len("export ") :].strip()
+        if key:
+            keys.add(key)
+    return keys
+
+
+async def _check_host_env_keys(cfg: Settings) -> PreflightCheckResult:
+    """WARN when the deployed host env file is missing template keys (F-017).
+
+    Compares key NAMES only — values never enter the result detail or logs.
+    Never returns FAIL: a missing override is operator-actionable drift
+    (rerun ``scripts/host_bootstrap.sh``), not a driver crash.
+    """
+    t0 = time.monotonic()
+    if cfg.mock_hardware:
+        return _ok("host_env_keys", "mock_hardware=true", time.monotonic() - t0)
+    if cfg.host_env is None or not cfg.host_env.enabled:
+        _log.debug("host_env_check_skipped", reason="disabled")
+        return _ok("host_env_keys", "disabled", time.monotonic() - t0)
+
+    try:
+        template_text = await asyncio.to_thread(
+            cfg.host_env.template_file.read_text, encoding="utf-8"
+        )
+        template_keys = _parse_env_keys(template_text)
+    except OSError as exc:
+        return _warn(
+            "host_env_keys",
+            f"template unreadable ({exc.__class__.__name__}) - cannot verify key-set",
+            time.monotonic() - t0,
+        )
+    try:
+        deployed_text = await asyncio.to_thread(cfg.host_env.env_file.read_text, encoding="utf-8")
+        deployed_keys = _parse_env_keys(deployed_text)
+    except OSError as exc:
+        return _warn(
+            "host_env_keys",
+            f"env file unreadable ({exc.__class__.__name__}) - run scripts/host_bootstrap.sh",
+            time.monotonic() - t0,
+        )
+
+    missing = sorted(template_keys - deployed_keys)
+    if missing:
+        _log.warning("host_env_keys_missing", missing=missing)
+        return _warn(
+            "host_env_keys",
+            f"missing keys: {', '.join(missing)} - run scripts/host_bootstrap.sh",
+            time.monotonic() - t0,
+        )
+    _log.debug("host_env_keys_ok", n_keys=len(deployed_keys))
+    return _ok(
+        "host_env_keys",
+        f"{len(deployed_keys)} keys cover the {len(template_keys)}-key template",
+        time.monotonic() - t0,
+    )
+
+
 _CHECK_DISPATCH: dict[str, CheckCallable] = {
     "camera": _check_camera,
     "microphone": _check_microphone,
@@ -346,6 +418,7 @@ _CHECK_DISPATCH: dict[str, CheckCallable] = {
     "lidar": _check_lidar,
     "esp32": _check_esp32,
     "config": _check_config,
+    "host_env_keys": _check_host_env_keys,
 }
 
 

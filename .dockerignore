@@ -103,3 +103,8 @@ var/
 .claude/
 .serena/
 .gemini/
+
+# Repo-hygiene surfaces (PR #151) - belt-and-suspenders: Dockerfile.jetson
+# uses selective COPY so these never enter the image anyway.
+.gitleaks.toml
+.github/advisory_stages.yaml

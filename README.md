@@ -654,7 +654,7 @@ training/             # Offline GPU training pipelines
 └── rssm_dataset.py           # PyTorch Dataset for RSSM sequences
 
 scripts/
-├── ci.sh                    # CI pipeline: lint → type check → test → coverage gate
+├── ci.sh                    # Local CI gate: lint/format → skill validator → doc hygiene → mypy → pillar dispatch → hardcoded-value gate → tests+coverage → performance → regression → harness fast tier → e2e → branch coverage → promtool → dead-code audit → promotion-lag → secret scan → health
 ├── check_branch_coverage.py # Changed-line coverage gate (≥85%) with Pydantic/torch resilience
 ├── preflight_check.sh       # Pre-flight hardware validation (devices, disk, config, weights)
 ├── verify_sensors.py        # Sensor verification script (runtime-aligned camera/lidar/audio checks) --json
@@ -878,7 +878,8 @@ Offline training follows a 4-phase pipeline:
 
 ## Roadmap and Analysis
 
-- [docs/planning/NEXT_STEPS.md](docs/planning/NEXT_STEPS.md) — prioritized roadmap and immediate follow-ups
+- [NEXT_STEPS.md](NEXT_STEPS.md) — **canonical forward-looking priorities** (landed work lives in [CHANGELOG.md](CHANGELOG.md); machine-readable "what's next" is `features.yaml` + `python scripts/select_next.py`)
+- [docs/planning/NEXT_STEPS.md](docs/planning/NEXT_STEPS.md) — legacy v0.3.0-era roadmap (phase numbering annotated as legacy)
 - [docs/planning/IMPLEMENTATION_PLAN.md](docs/planning/IMPLEMENTATION_PLAN.md) — implementation sequencing and dependencies
 - [docs/planning/PLAN.md](docs/planning/PLAN.md) — self-healing resilience plan
 - [docs/analysis/COVERAGE_ANALYSIS.md](docs/analysis/COVERAGE_ANALYSIS.md) — coverage strategy and enforcement notes
@@ -893,7 +894,16 @@ Ian Cruickshank
 
 ## Next Steps / Roadmap
 
-Currently in flight (PR #104 dashboard-stability sprint just landed):
+The live roadmap is [NEXT_STEPS.md](NEXT_STEPS.md) (forward-looking only;
+guarded by `tools/doc_hygiene.py`). Current critical path: ESP32 bench repair
+→ the F-008 hardware gate (`python scripts/select_next.py`). Repo-hygiene
+tooling added with the rev. B work streams (PR #151): secret scanning
+([docs/runbooks/secret-scanning.md](docs/runbooks/secret-scanning.md)),
+findings-only dead-code audit (`scripts/dead_code_audit.py`), validation
+trend journaling + timer (`scripts/mousedroid-trend.timer`), and durable
+host bootstrap (`scripts/host_bootstrap.sh`).
+
+Highlights from the PR #104-era sprint (historical, kept for context):
 
 - **Container rebuild with `nvarguscamerasrc`** — removes the need for
   `camera.v4l2_grayscale_extract`; IMX708 will be debayered + ISP-processed
@@ -916,8 +926,9 @@ Currently in flight (PR #104 dashboard-stability sprint just landed):
 
 Architecture documentation:
 [`docs/architecture/c4-overview.md`](docs/architecture/c4-overview.md) is
-the index. C4 component diagrams exist for the dashboard proxy,
-orchestrator, and arm platform.
+the index — 11 C4 component diagrams (dashboard proxy, orchestrator, arm
+platform, USB-C smoke, LLM gateway, validation efficiency, spec harness,
+on-device learning, experiment logger, RSSM pretraining) plus ADR-004…013.
 
 ## Contributing
 

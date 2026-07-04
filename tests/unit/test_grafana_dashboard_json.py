@@ -159,6 +159,11 @@ class TestPrB2PanelsPresent:
             "VLM Progress Cache",  # cache hit-rate panel
             # Tier C3.1 — world-model observe_step histogram panel
             "World-Model observe_step Latency",
+            # F-019 — LLM-gateway families (PR #115)
+            "LLM Token Usage",
+            "LLM Gateway Latency",
+            "LLM Gateway Served",
+            "LLM Latency Budget",
         ],
     )
     def test_panel_covering_metric_family_exists(

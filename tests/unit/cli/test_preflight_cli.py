@@ -38,7 +38,7 @@ def test_json_mode_emits_parseable_document(
     captured = capsys.readouterr()
     payload = _extract_json_block(captured.out)
     assert "checks" in payload
-    assert len(payload["checks"]) == 6  # camera/microphone/speaker/lidar/esp32/config
+    assert len(payload["checks"]) == 7  # camera/microphone/speaker/lidar/esp32/config/host_env_keys
 
 
 def test_checks_filter_restricts_dispatch(capsys: pytest.CaptureFixture[str]) -> None:
@@ -160,3 +160,30 @@ def test_trend_threshold_flags_are_accepted(
     capsys.readouterr()
     assert main([*args, "--run-id", "b"]) == 0
     assert "Trend:" in capsys.readouterr().out
+
+
+def test_journal_max_bytes_rotates_before_recording(tmp_path: Path) -> None:
+    """--journal-max-bytes rotates an oversized journal, then records fresh."""
+    journal = tmp_path / "trend.jsonl"
+    journal.write_text("x" * 2048, encoding="utf-8")
+    rc = main(
+        [
+            "--mock-hardware",
+            "--journal-path",
+            str(journal),
+            "--journal-max-bytes",
+            "64",
+            "--run-id",
+            "post-rotate",
+        ]
+    )
+    assert rc == 0
+    assert (tmp_path / "trend.jsonl.1").read_text(encoding="utf-8") == "x" * 2048
+    assert journal.is_file(), "a fresh journal must be recorded after rotation"
+
+
+def test_absent_journal_max_bytes_never_rotates(tmp_path: Path) -> None:
+    journal = tmp_path / "trend.jsonl"
+    journal.write_text("y" * 2048, encoding="utf-8")
+    assert main(["--mock-hardware", "--journal-path", str(journal), "--run-id", "r"]) == 0
+    assert not (tmp_path / "trend.jsonl.1").exists()

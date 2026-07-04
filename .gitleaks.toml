@@ -1,0 +1,29 @@
+# gitleaks configuration — secret-scan gate (F-015, WS-0.4).
+#
+# INVARIANT: allowlist by exact fake-key REGEX only, NEVER by path.
+# A path allowlist (e.g. waiving tests/ or docs/) would blind the scanner to a
+# real secret landing in exactly those files — the incident this gate exists to
+# prevent started in documentation. If a scan fires on a new placeholder, add a
+# regex for that placeholder's literal shape here; do not add its file path.
+#
+# Placeholder conventions covered (all deliberately non-key-shaped):
+#   - "sk-ant-..." / "sk-ant-xyz" / "sk-ant-test" — docs + unit-test stand-ins
+#   - "changeme" — config/docker.env.example telemetry-token placeholder
+#   - "test-api-key-abc123" — tests/unit/test_telemetry_auth.py bearer-token
+#     fixture (fires the generic-api-key entropy rule across history)
+#
+# Promotion protocol: the CI job runs advisory (continue-on-error) until 7
+# consecutive green runs, then it is promoted to blocking. See
+# docs/runbooks/secret-scanning.md.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documented fake-key placeholders (regex-only; see header)"
+regexTarget = "match"
+regexes = [
+    '''sk-ant-(\.\.\.|xyz|test)''',
+    '''(?i)telemetry_token=changeme''',
+    '''test-api-key-abc123''',
+]

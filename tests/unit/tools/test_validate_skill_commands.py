@@ -38,6 +38,30 @@ def test_missing_description_is_flagged(tmp_path: Path) -> None:
     assert any(i.code == "missing-description" for i in issues)
 
 
+def test_valid_lifecycle_status_passes(tmp_path: Path) -> None:
+    for status in ("active", "frozen", "deferred"):
+        skill = _write(
+            tmp_path / f"{status}.md",
+            f"---\ndescription: d\nstatus: {status}\n---\nbody\n",
+        )
+        assert validate_command_skill(skill, repo_root=tmp_path) == []
+
+
+def test_unknown_lifecycle_status_is_flagged(tmp_path: Path) -> None:
+    # A typo like ``forzen`` must not silently un-freeze a paused skill.
+    skill = _write(
+        tmp_path / "typo.md",
+        "---\ndescription: d\nstatus: forzen\n---\nbody\n",
+    )
+    issues = validate_command_skill(skill, repo_root=tmp_path)
+    assert any(i.code == "invalid-status" and "forzen" in i.detail for i in issues)
+
+
+def test_absent_status_is_backwards_compatible(tmp_path: Path) -> None:
+    skill = _write(tmp_path / "plain.md", "---\ndescription: d\n---\nbody\n")
+    assert validate_command_skill(skill, repo_root=tmp_path) == []
+
+
 def test_missing_referenced_path_is_flagged(tmp_path: Path) -> None:
     skill = _write(
         tmp_path / "bad.md",

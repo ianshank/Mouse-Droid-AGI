@@ -183,6 +183,9 @@ dev = [
     # tool surface, not a runtime dependency of the rover brain.
     "jsonschema>=4.0",
     "types-jsonschema>=4.0",
+    # Dead-code audit (F-020) - advisory scripts/dead_code_audit.py; the
+    # script + tests skip cleanly when absent.
+    "vulture>=2.0",
 ]
 
 [project.scripts]
