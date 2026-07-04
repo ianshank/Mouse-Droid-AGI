@@ -33,6 +33,11 @@ _DEFAULT_METADATA = ".github/advisory_stages.yaml"
 def find_advisory_jobs(workflows_dir: Path) -> dict[str, str]:
     """Return {job_name: workflow_filename} for continue-on-error jobs."""
     advisory: dict[str, str] = {}
+    # WARN-only contract: a bad --workflows-dir (or pre-checkout cwd) must not
+    # traceback. Empty here means every tracked stage reports as stale
+    # metadata downstream - the loudest safe signal.
+    if not workflows_dir.is_dir():
+        return advisory
     # GitHub Actions honors both extensions; missing .yaml would let a future
     # workflow's advisory job silently escape the promotion-lag guard.
     workflow_paths = sorted([*workflows_dir.glob("*.yml"), *workflows_dir.glob("*.yaml")])
@@ -41,6 +46,8 @@ def find_advisory_jobs(workflows_dir: Path) -> dict[str, str]:
             data = yaml.safe_load(wf_path.read_text(encoding="utf-8"))
         except yaml.YAMLError:
             continue  # actionlint owns workflow syntax; not this checker's job
+        except (OSError, UnicodeDecodeError):
+            continue  # unreadable/undecodable file degrades to "not scanned"
         if not isinstance(data, dict):
             continue
         jobs = data.get("jobs")

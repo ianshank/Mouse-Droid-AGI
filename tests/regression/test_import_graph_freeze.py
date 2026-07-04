@@ -66,8 +66,15 @@ def _module_scope_imports(tree: ast.Module) -> list[str]:
                 imports.append(node.module)
             elif isinstance(node, ast.ClassDef):
                 _walk(node.body)
-            elif isinstance(node, ast.Try | ast.With):
-                _walk(getattr(node, "body", []))
+            elif isinstance(node, ast.Try):
+                # Every branch can carry a module-scope import, not just body.
+                _walk(node.body)
+                for handler in node.handlers:
+                    _walk(handler.body)
+                _walk(node.orelse)
+                _walk(node.finalbody)
+            elif isinstance(node, ast.With):
+                _walk(node.body)
 
     # NOTE: relative imports (level > 0) can only reference the importer's own
     # package, which is always allowed - they are intentionally not resolved.
@@ -112,7 +119,12 @@ def test_no_active_module_imports_parked_ultrasonic_driver(
     violations: list[str] = []
     for path, imports in module_imports.items():
         rel = path.relative_to(_SRC_ROOT)
-        if any(str(rel.parent).startswith(allowed) for allowed in _ULTRASONIC_ALLOWED_DIRS):
+        if any(
+            # Segment-anchored match: "hardware/sensors" must not also admit a
+            # future sibling like "hardware/sensors_experimental".
+            rel.parent.parts[: len(Path(allowed).parts)] == Path(allowed).parts
+            for allowed in _ULTRASONIC_ALLOWED_DIRS
+        ):
             continue
         for name in imports:
             if any(name.startswith(p) for p in _ULTRASONIC_PREFIXES):

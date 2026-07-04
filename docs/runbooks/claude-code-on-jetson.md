@@ -45,13 +45,13 @@ If the Jetson is **fully headless** and you cannot OAuth, supply an
 Anthropic API key directly instead:
 
 ```bash
-# In ~/.bashrc or systemd EnvironmentFile for service-mode use:
-export ANTHROPIC_API_KEY=sk-ant-...   # NEVER commit; this is the SAME
-                                       # key used by the mousedroid LLM
-                                       # gateway (PR #107) — operators
-                                       # can share it between agent +
-                                       # gateway by setting it once in
-                                       # the shell env / docker.env.
+# Keep the key ONLY in /etc/mousedroid/docker.env (chmod 600) — the SAME
+# key the mousedroid LLM gateway (PR #107) reads, so agent + gateway
+# share one managed, revocable copy. NEVER commit it, and don't spread
+# copies into shell profiles like ~/.bashrc — secret sprawl makes
+# rotation/revocation unreliable. For an interactive session:
+set -a; source /etc/mousedroid/docker.env; set +a
+# Service-mode reads the same file via systemd EnvironmentFile=.
 ```
 
 ### Configure for the mousedroid repo

@@ -85,3 +85,28 @@ class TestRenderSummary:
         out = self._render(None)
         assert "## Trend" in out
         assert "no trend data recorded this run" in out
+
+    def test_pipe_in_note_is_escaped_not_column_splitting(self) -> None:
+        # parse_result_rows preserves | in the note (maxsplit=2) — the
+        # renderer must escape it or the markdown table grows bogus columns.
+        rows = parse_result_rows(["FAIL|x|a|b|c"])
+        out = render_summary(
+            rows,
+            stamp="s",
+            repo="r",
+            config="c",
+            telemetry_url="t",
+            trend_block=None,
+        )
+        assert "| FAIL | x | a\\|b\\|c |" in out
+
+    def test_newline_in_note_stays_on_one_row(self) -> None:
+        out = render_summary(
+            [SummaryRow(status="WARN", name="w", note="line1\nline2")],
+            stamp="s",
+            repo="r",
+            config="c",
+            telemetry_url="t",
+            trend_block=None,
+        )
+        assert "| WARN | w | line1 line2 |" in out

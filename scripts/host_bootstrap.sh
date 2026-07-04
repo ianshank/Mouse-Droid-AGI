@@ -94,9 +94,13 @@ elif [[ -f "$ENV_FILE" && "$FORCE" == "1" ]]; then
     run cp -p "$ENV_FILE" "${ENV_FILE}.bak.${stamp}"
     log "overwriting ${ENV_FILE} from template"
     run cp "$TEMPLATE" "$ENV_FILE"
+    # Holds ANTHROPIC_API_KEY once filled in - never leave it umask-wide.
+    # Backups (cp -p) inherit this mode from the tightened original.
+    run chmod 600 "$ENV_FILE"
 else
     log "seeding ${ENV_FILE} from template"
     run cp "$TEMPLATE" "$ENV_FILE"
+    run chmod 600 "$ENV_FILE"
 fi
 
 # --- 2. Install the docker service unit -------------------------------------

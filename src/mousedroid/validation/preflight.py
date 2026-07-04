@@ -23,6 +23,7 @@ Architecture invariants (per CLAUDE.md):
 
 from __future__ import annotations
 
+import asyncio
 import enum
 import time
 from collections.abc import Awaitable, Callable
@@ -374,7 +375,10 @@ async def _check_host_env_keys(cfg: Settings) -> PreflightCheckResult:
         return _ok("host_env_keys", "disabled", time.monotonic() - t0)
 
     try:
-        template_keys = _parse_env_keys(cfg.host_env.template_file.read_text(encoding="utf-8"))
+        template_text = await asyncio.to_thread(
+            cfg.host_env.template_file.read_text, encoding="utf-8"
+        )
+        template_keys = _parse_env_keys(template_text)
     except OSError as exc:
         return _warn(
             "host_env_keys",
@@ -382,7 +386,8 @@ async def _check_host_env_keys(cfg: Settings) -> PreflightCheckResult:
             time.monotonic() - t0,
         )
     try:
-        deployed_keys = _parse_env_keys(cfg.host_env.env_file.read_text(encoding="utf-8"))
+        deployed_text = await asyncio.to_thread(cfg.host_env.env_file.read_text, encoding="utf-8")
+        deployed_keys = _parse_env_keys(deployed_text)
     except OSError as exc:
         return _warn(
             "host_env_keys",

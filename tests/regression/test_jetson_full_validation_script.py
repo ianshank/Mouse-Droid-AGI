@@ -188,8 +188,9 @@ class TestSummaryFallbackExecution:
             'REPO_DIR="/opt/mousedroid"\n'
             'PROD_CONFIG="config/jetson_production.yaml"\n'
             'TELEMETRY_URL="http://127.0.0.1:8080"\n'
-            "PASSES=1 WARNS=1 FAILURES=0\n"
-            'RESULTS=("PASS|preflight (real)|" "WARN|serial smoke|dead ESP32")\n'
+            "PASSES=1 WARNS=1 FAILURES=1\n"
+            'RESULTS=("PASS|preflight (real)|" "WARN|serial smoke|dead ESP32"'
+            ' "FAIL|renderer|exit 1|see log")\n'
             "write_summary\n",
             encoding="utf-8",
         )
@@ -200,5 +201,8 @@ class TestSummaryFallbackExecution:
         summary = (run_dir / "SUMMARY.md").read_text(encoding="utf-8")
         assert "| PASS | preflight (real) |" in summary
         assert "| WARN | serial smoke | dead ESP32 |" in summary
-        assert "Totals: PASS=1 WARN=1 FAIL=0" in summary
+        # A |-bearing note must render as ONE escaped row, not extra columns
+        # (mirrors _escape_cell in mousedroid/validation/summary.py).
+        assert "| FAIL | renderer | exit 1\\|see log |" in summary
+        assert "Totals: PASS=1 WARN=1 FAIL=1" in summary
         assert "fallback" in proc.stdout, "the fallback path must announce itself"

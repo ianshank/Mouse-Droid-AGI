@@ -145,6 +145,24 @@ class TestMalformedMetadata:
         assert "malformed metadata" in warnings[0]
 
 
+class TestUnreadableInputs:
+    """Copilot review: WARN-only tooling must survive bad paths/files."""
+
+    def test_missing_workflows_dir_returns_empty(self, tmp_path: Path) -> None:
+        # py3.10/3.11 Path.glob raises FileNotFoundError on a missing root.
+        assert _checker.find_advisory_jobs(tmp_path / "nope") == {}
+
+    def test_missing_workflows_dir_exits_zero_via_cli(self, tmp_path: Path) -> None:
+        meta = _metadata(tmp_path, job="scanner", since="2026-06-30", window=30)
+        rc = _checker.main(["--workflows-dir", str(tmp_path / "nope"), "--metadata", str(meta)])
+        assert rc == 0  # tracked stage surfaces as stale metadata, not a crash
+
+    def test_undecodable_workflow_file_is_skipped(self, tmp_path: Path) -> None:
+        wf = _workflow(tmp_path, advisory_job="scanner")
+        (wf / "binary.yml").write_bytes(b"\xff\xfe\x00 not utf-8 \x80")
+        assert _checker.find_advisory_jobs(wf) == {"scanner": "ci.yml"}
+
+
 def test_yaml_extension_workflows_are_scanned(tmp_path: Path) -> None:
     """GitHub honors .yaml too - an advisory job there must not escape the guard."""
     wf_dir = tmp_path / "workflows"

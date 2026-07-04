@@ -433,6 +433,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          subsystem: llm_gateway
         annotations:
           summary: "LLM gateway p95 latency above the cloud budget"
           description: >-
@@ -446,6 +447,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          subsystem: llm_gateway
         annotations:
           summary: "LLM latency budget exceeded repeatedly (model={{ $labels.model }})"
           description: >-
@@ -459,6 +461,7 @@ groups:
         for: 10m
         labels:
           severity: warning
+          subsystem: llm_gateway
         annotations:
           summary: "LLM gateway serving from the local fallback tier"
           description: >-
@@ -472,6 +475,7 @@ groups:
         for: 30m
         labels:
           severity: info
+          subsystem: llm_gateway
         annotations:
           summary: "Sustained LLM token burn (model={{ $labels.model }})"
           description: >-

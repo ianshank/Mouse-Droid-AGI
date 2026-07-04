@@ -47,6 +47,13 @@ def run_audit(
     scavenge_paths = [str(p) for p in paths]
     if allowlist is not None and allowlist.is_file():
         scavenge_paths.append(str(allowlist))
+    elif allowlist is not None:
+        # A typo'd --allowlist silently un-suppressing triaged symbols would
+        # only show up as a mysteriously larger findings list - warn loudly.
+        print(
+            f"dead-code audit: allowlist not found, scanning without it: {allowlist}",
+            file=sys.stderr,
+        )
     scanner.scavenge(scavenge_paths)
     return [
         {

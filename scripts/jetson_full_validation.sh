@@ -483,7 +483,10 @@ write_summary_fallback() {
         local row status name note
         for row in "${RESULTS[@]}"; do
             IFS='|' read -r status name note <<< "${row}"
-            echo "| ${status} | ${name} | ${note} |"
+            # read leaves extra |-delimited fields verbatim in note; escape
+            # pipes so a note like "a|b" cannot split the markdown row
+            # (mirrors _escape_cell in mousedroid/validation/summary.py).
+            echo "| ${status} | ${name//|/\\|} | ${note//|/\\|} |"
         done
     } >"${summary}"
     log "summary written (fallback): ${summary}"

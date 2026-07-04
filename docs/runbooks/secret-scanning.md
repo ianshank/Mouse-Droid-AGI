@@ -20,7 +20,8 @@ when the binary is on PATH.
 (waiving `tests/` or `docs/`) blinds the scanner to a real secret landing in
 exactly those files — the original `ANTHROPIC_API_KEY` incident started in
 documentation. Placeholder conventions already covered: `sk-ant-...`,
-`sk-ant-xyz`, `sk-ant-test`, and the `changeme` telemetry-token stand-in.
+`sk-ant-xyz`, `sk-ant-test`, the `changeme` telemetry-token stand-in, and
+`test-api-key-abc123` (the bearer-token test fixture).
 When adding a new placeholder to docs or tests, keep it obviously
 non-key-shaped (short, no base64 tail) and add its literal regex to
 `.gitleaks.toml` if the scan fires.

@@ -52,6 +52,11 @@ class TestSourceContract:
         assert "run mkdir" in src
         assert "run systemctl" in src
 
+    def test_env_file_is_tightened_after_every_copy(self) -> None:
+        # The env file holds ANTHROPIC_API_KEY once filled in — both the seed
+        # and the force-overwrite paths must chmod 600 it (CodeRabbit PR #151).
+        assert _source().count('run chmod 600 "$ENV_FILE"') == 2
+
 
 class TestDryRunSubprocess:
     def test_dry_run_prints_plan_and_writes_nothing(self, tmp_path: Path) -> None:

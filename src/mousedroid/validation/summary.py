@@ -86,6 +86,17 @@ def extract_trend_block(preflight_log_text: str) -> str | None:
     return None
 
 
+def _escape_cell(text: str) -> str:
+    """Escape markdown-table-breaking characters in a free-text cell.
+
+    ``parse_result_rows`` deliberately preserves ``|`` inside the note
+    (maxsplit=2), so a pipe-bearing note is a realistic input — escape it
+    rather than let it split the row into spurious columns. Newlines would
+    end the row entirely, so they collapse to a single space.
+    """
+    return text.replace("|", "\\|").replace("\r", " ").replace("\n", " ")
+
+
 def render_summary(
     rows: list[SummaryRow],
     *,
@@ -112,7 +123,10 @@ def render_summary(
         "| Status | Check | Note |",
         "|--------|-------|------|",
     ]
-    lines.extend(f"| {r.status} | {r.name} | {r.note} |" for r in rows)
+    lines.extend(
+        f"| {_escape_cell(r.status)} | {_escape_cell(r.name)} | {_escape_cell(r.note)} |"
+        for r in rows
+    )
     lines.extend(
         [
             "",

@@ -93,3 +93,10 @@ class TestCli:
 
     def test_flag_overrides_apply(self, healthy_doc: Path) -> None:
         assert main([str(healthy_doc), "--max-bytes", "1", "--strict"]) == 1
+
+    def test_max_done_marks_override_applies(self, done_heavy_doc: Path) -> None:
+        # The doc exceeds the default budget but a raised flag absorbs it —
+        # proves --max-done-marks is honored, not just parsed.
+        raised = _DEFAULT_MAX_DONE_MARKS + 1
+        assert main([str(done_heavy_doc), "--max-done-marks", str(raised), "--strict"]) == 0
+        assert main([str(done_heavy_doc), "--max-done-marks", "0", "--strict"]) == 1
