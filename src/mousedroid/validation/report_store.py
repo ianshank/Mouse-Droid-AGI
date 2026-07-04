@@ -262,6 +262,11 @@ def rotate_journal_if_needed(path: Path, max_bytes: int) -> bool:
     then reports "insufficient history" for one cycle, which is documented
     and acceptable.
     """
+    if max_bytes <= 0:
+        # A zero/negative cap would rotate EVERY non-empty journal on every
+        # run, permanently starving --trend of its >=2-run history. Treat as
+        # "rotation disabled" rather than a foot-gun.
+        return False
     try:
         size = path.stat().st_size
     except OSError:
@@ -269,7 +274,19 @@ def rotate_journal_if_needed(path: Path, max_bytes: int) -> bool:
     if size <= max_bytes:
         return False
     rotated = path.with_name(path.name + ".1")
-    path.replace(rotated)
+    try:
+        path.replace(rotated)
+    except OSError as exc:
+        # Never crash the (timer-driven) preflight over a rotation failure -
+        # an over-cap journal still records; the cap re-tries next run.
+        _log.warning(
+            "journal_rotate_failed",
+            path=str(path),
+            size_bytes=size,
+            max_bytes=max_bytes,
+            error=str(exc),
+        )
+        return False
     _log.info(
         "journal_rotated",
         path=str(path),

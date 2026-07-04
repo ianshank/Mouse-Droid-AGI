@@ -147,3 +147,58 @@ class TestTrendThreading:
         text = _script_text()
         assert "scripts/render_validation_summary.py" in text
         assert "write_summary_fallback" in text, "python-less hosts must still get a summary"
+
+
+class TestSummaryFallbackExecution:
+    """Gap-analysis: prove the python-less fallback actually produces SUMMARY.md.
+
+    Extracts the real ``log``/``write_summary_fallback``/``write_summary``
+    function bodies from the script (column-0 ``name() {`` … ``}`` blocks) and
+    runs them in a bash harness where ``resolve_host_python`` fails — the
+    exact "python-less host" condition the fallback exists for.
+    """
+
+    @staticmethod
+    def _extract_function(source: str, name: str) -> str:
+        lines = source.splitlines()
+        start = next(i for i, line in enumerate(lines) if line.startswith(f"{name}() {{"))
+        end = next(i for i in range(start + 1, len(lines)) if lines[i] == "}")
+        return "\n".join(lines[start : end + 1])
+
+    def test_fallback_writes_summary_when_python_unavailable(self, tmp_path: Path) -> None:
+        source = _script_text()
+        # log() is a one-liner delegating to ts(); stub it in the harness and
+        # extract only the two multi-line summary functions under test.
+        functions = "\n\n".join(
+            self._extract_function(source, name)
+            for name in ("write_summary_fallback", "write_summary")
+        )
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        harness = tmp_path / "harness.sh"
+        harness.write_text(
+            "#!/usr/bin/env bash\n"
+            "set -uo pipefail\n"
+            'log() { echo "$*"; }\n'
+            f"{functions}\n"
+            "# python-less host: the renderer path must fail over cleanly.\n"
+            "resolve_host_python() { return 1; }\n"
+            f'RUN_DIR="{run_dir}"\n'
+            'STAMP="20260703T000000Z"\n'
+            'REPO_DIR="/opt/mousedroid"\n'
+            'PROD_CONFIG="config/jetson_production.yaml"\n'
+            'TELEMETRY_URL="http://127.0.0.1:8080"\n'
+            "PASSES=1 WARNS=1 FAILURES=0\n"
+            'RESULTS=("PASS|preflight (real)|" "WARN|serial smoke|dead ESP32")\n'
+            "write_summary\n",
+            encoding="utf-8",
+        )
+        proc = subprocess.run(
+            ["bash", str(harness)], capture_output=True, text=True, cwd=_REPO_ROOT
+        )
+        assert proc.returncode == 0, proc.stderr
+        summary = (run_dir / "SUMMARY.md").read_text(encoding="utf-8")
+        assert "| PASS | preflight (real) |" in summary
+        assert "| WARN | serial smoke | dead ESP32 |" in summary
+        assert "Totals: PASS=1 WARN=1 FAIL=0" in summary
+        assert "fallback" in proc.stdout, "the fallback path must announce itself"

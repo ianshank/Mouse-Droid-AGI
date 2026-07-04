@@ -98,3 +98,39 @@ def test_strict_mode_gates_on_findings(tmp_path: Path) -> None:
         ]
     )
     assert rc == 1
+
+
+def test_main_clean_package_prints_clean_and_writes_report(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pkg = _clean_package(tmp_path)
+    report_dir = tmp_path / "reports"
+    rc = _audit.main(["--paths", str(pkg), "--allowlist", "", "--report-dir", str(report_dir)])
+    assert rc == 0
+    assert "clean ->" in capsys.readouterr().out
+    reports = list(report_dir.glob("*.json"))
+    assert len(reports) == 1
+    assert json.loads(reports[0].read_text(encoding="utf-8")) == []
+
+
+def test_max_print_truncates_console_but_not_report(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pkg = _package_with_dead_function(tmp_path)
+    rc = _audit.main(
+        [
+            "--paths",
+            str(pkg),
+            "--allowlist",
+            "",
+            "--report-dir",
+            str(tmp_path / "r"),
+            "--max-print",
+            "0",
+        ]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "more in" in out, "truncation notice must point at the full JSON report"
+    payload = json.loads(next((tmp_path / "r").glob("*.json")).read_text(encoding="utf-8"))
+    assert payload, "the JSON report must carry the full finding list"

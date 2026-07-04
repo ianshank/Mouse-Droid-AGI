@@ -103,3 +103,78 @@ def test_python_sees_same_interpreter() -> None:
     # Guard against the suite running under an unexpected interpreter — the
     # subprocess tests above assume a POSIX bash on PATH (matches CI + Jetson).
     assert sys.platform.startswith("linux") or sys.platform == "darwin"
+
+
+class TestDryRunBranches:
+    """The two riskiest paths, executed for real under --dry-run (gap-analysis)."""
+
+    def test_dry_run_rollback_plans_restore_of_newest_backup(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "etc"
+        config_dir.mkdir()
+        (config_dir / "docker.env").write_text("K=v\n", encoding="utf-8")
+        old = config_dir / "docker.env.bak.20260101T000000Z"
+        new = config_dir / "docker.env.bak.20260702T000000Z"
+        old.write_text("old\n", encoding="utf-8")
+        new.write_text("new\n", encoding="utf-8")
+        import os
+
+        os.utime(old, (1, 1))  # newest-backup selection must not depend on name order alone
+        proc = subprocess.run(
+            ["bash", str(_SCRIPT), "--dry-run", "--rollback"],
+            capture_output=True,
+            text=True,
+            env={
+                "PATH": "/usr/bin:/bin",
+                "MOUSEDROID_CONFIG_DIR": str(config_dir),
+                "MOUSEDROID_INSTALL_DIR": str(tmp_path / "opt"),
+            },
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert "rolling back" in proc.stdout
+        assert f"DRY-RUN: cp -p {new}" in proc.stdout, "must restore the NEWEST backup"
+        assert (config_dir / "docker.env").read_text(
+            encoding="utf-8"
+        ) == "K=v\n", "dry-run rollback must not touch the env file"
+
+    def test_rollback_without_backup_fails_loudly(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "etc"
+        config_dir.mkdir()
+        proc = subprocess.run(
+            ["bash", str(_SCRIPT), "--dry-run", "--rollback"],
+            capture_output=True,
+            text=True,
+            env={"PATH": "/usr/bin:/bin", "MOUSEDROID_CONFIG_DIR": str(config_dir)},
+        )
+        assert proc.returncode == 1
+        assert "nothing to roll back" in proc.stdout
+
+    def test_dry_run_with_trend_timer_plans_both_units(self, tmp_path: Path) -> None:
+        install_dir = tmp_path / "opt"
+        (install_dir / "scripts").mkdir(parents=True)
+        (install_dir / "config").mkdir()
+        (install_dir / "config" / "docker.env.example").write_text("K=v\n", encoding="utf-8")
+        for unit in (
+            "mousedroid-docker.service",
+            "mousedroid-trend.service",
+            "mousedroid-trend.timer",
+        ):
+            (install_dir / "scripts" / unit).write_text("[Unit]\n", encoding="utf-8")
+        unit_dir = tmp_path / "systemd"
+        unit_dir.mkdir()
+        proc = subprocess.run(
+            ["bash", str(_SCRIPT), "--dry-run", "--with-trend-timer"],
+            capture_output=True,
+            text=True,
+            env={
+                "PATH": "/usr/bin:/bin",
+                "MOUSEDROID_INSTALL_DIR": str(install_dir),
+                "MOUSEDROID_CONFIG_DIR": str(tmp_path / "etc"),
+                "SYSTEMD_UNIT_DIR": str(unit_dir),
+            },
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert "installing mousedroid-trend.service" in proc.stdout
+        assert "installing mousedroid-trend.timer" in proc.stdout
+        assert "DRY-RUN: systemctl enable --now mousedroid-trend.timer" in proc.stdout
+        assert list(unit_dir.iterdir()) == [], "dry-run must install nothing"
+        assert not (tmp_path / "etc").exists(), "dry-run must not create the config dir"

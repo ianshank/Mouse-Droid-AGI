@@ -401,6 +401,9 @@ jobs:
                   name: dead-code-report
                   path: reports/dead_code/
                   retention-days: 30
+                  # The audit exits 0 without writing when vulture itself
+                  # failed to install - don't fail the upload over it.
+                  if-no-files-found: ignore
 
     # -------------------------------------------------------------------------
     # Stage 5: Security audit

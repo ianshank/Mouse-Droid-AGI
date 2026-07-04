@@ -22,8 +22,6 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-
 # Defaults (single definition point; every one is CLI-overridable).
 _DEFAULT_PATHS = ("src/mousedroid",)
 _DEFAULT_ALLOWLIST = "scripts/vulture_allowlist.py"

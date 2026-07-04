@@ -26,7 +26,6 @@ from pathlib import Path
 
 import yaml
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_WORKFLOWS_DIR = ".github/workflows"
 _DEFAULT_METADATA = ".github/advisory_stages.yaml"
 
@@ -34,7 +33,10 @@ _DEFAULT_METADATA = ".github/advisory_stages.yaml"
 def find_advisory_jobs(workflows_dir: Path) -> dict[str, str]:
     """Return {job_name: workflow_filename} for continue-on-error jobs."""
     advisory: dict[str, str] = {}
-    for wf_path in sorted(workflows_dir.glob("*.yml")):
+    # GitHub Actions honors both extensions; missing .yaml would let a future
+    # workflow's advisory job silently escape the promotion-lag guard.
+    workflow_paths = sorted([*workflows_dir.glob("*.yml"), *workflows_dir.glob("*.yaml")])
+    for wf_path in workflow_paths:
         try:
             data = yaml.safe_load(wf_path.read_text(encoding="utf-8"))
         except yaml.YAMLError:
@@ -51,12 +53,25 @@ def find_advisory_jobs(workflows_dir: Path) -> dict[str, str]:
 
 
 def load_tracked_stages(metadata_path: Path) -> list[dict[str, object]]:
-    """Load the tracked advisory-stage metadata (empty list when absent)."""
+    """Load the tracked advisory-stage metadata (empty list when absent).
+
+    Defensive by contract: this checker is WARN-only infrastructure, so a
+    malformed file (list root, string stage entries, YAML error) degrades to
+    "no tracked stages" — evaluate() then reports every advisory job as
+    untracked, which is the loudest safe signal.
+    """
     if not metadata_path.is_file():
         return []
-    data = yaml.safe_load(metadata_path.read_text(encoding="utf-8")) or {}
+    try:
+        data = yaml.safe_load(metadata_path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError:
+        return []
+    if not isinstance(data, dict):
+        return []
     stages = data.get("stages", [])
-    return stages if isinstance(stages, list) else []
+    if not isinstance(stages, list):
+        return []
+    return [stage for stage in stages if isinstance(stage, dict)]
 
 
 def evaluate(
@@ -78,8 +93,18 @@ def evaluate(
                 "- add one with since + promote_after_days"
             )
             continue
-        since = date.fromisoformat(str(stage.get("since")))
-        window = int(str(stage.get("promote_after_days")))
+        try:
+            since = date.fromisoformat(str(stage.get("since")))
+            window = int(str(stage.get("promote_after_days")))
+        except (ValueError, TypeError):
+            # A hand-edited metadata entry must degrade to a warning, never a
+            # traceback - this checker is itself advisory infrastructure.
+            warnings.append(
+                f"malformed metadata for job '{job_name}': 'since' must be "
+                "YYYY-MM-DD and 'promote_after_days' an integer - fix the "
+                "entry in .github/advisory_stages.yaml"
+            )
+            continue
         age = (today - since).days
         if age > window:
             warnings.append(

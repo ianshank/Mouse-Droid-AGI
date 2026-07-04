@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from mousedroid.config.schema import HarnessJournalConfig
 from mousedroid.harness.journal.jsonl_journal import JSONLJournal
 from mousedroid.harness.journal.protocol import JournalEntry
@@ -234,3 +236,34 @@ class TestRotateJournalIfNeeded:
         assert rotate_journal_if_needed(journal, 16) is True
         assert not journal.exists(), "the oversized journal must move aside"
         assert rotated.read_text(encoding="utf-8") == "x" * 64
+
+
+class TestRotationGuards:
+    """Gap-analysis hardening: rotation must never thrash or crash."""
+
+    def test_zero_or_negative_cap_disables_rotation(self, tmp_path: Path) -> None:
+        from mousedroid.validation.report_store import rotate_journal_if_needed
+
+        journal = tmp_path / "trend.jsonl"
+        journal.write_text("payload\n", encoding="utf-8")
+        assert rotate_journal_if_needed(journal, 0) is False
+        assert rotate_journal_if_needed(journal, -5) is False
+        assert journal.is_file(), "a zero cap must not rotate every run"
+        assert not (tmp_path / "trend.jsonl.1").exists()
+
+    def test_replace_failure_warns_and_returns_false(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mousedroid.validation.report_store import rotate_journal_if_needed
+
+        journal = tmp_path / "trend.jsonl"
+        journal.write_text("x" * 64, encoding="utf-8")
+
+        def _boom(self: Path, target: Path) -> Path:
+            raise OSError("cross-device link")
+
+        monkeypatch.setattr(Path, "replace", _boom)
+        assert (
+            rotate_journal_if_needed(journal, 16) is False
+        ), "a rotation failure must degrade, never crash the timer-driven preflight"
+        assert journal.is_file()

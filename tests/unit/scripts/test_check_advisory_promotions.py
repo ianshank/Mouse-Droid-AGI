@@ -109,3 +109,78 @@ class TestRealRepoState:
             today=_TODAY,
         )
         assert warnings == [], warnings
+
+
+class TestMalformedMetadata:
+    """Hand-edited YAML must degrade to a warning, never a traceback."""
+
+    def test_garbled_since_warns_instead_of_crashing(self, tmp_path: Path) -> None:
+        wf = _workflow(tmp_path, advisory_job="scanner")
+        meta = tmp_path / "advisory_stages.yaml"
+        meta.write_text(
+            "stages:\n  - job: scanner\n    since: not-a-date\n    promote_after_days: 30\n",
+            encoding="utf-8",
+        )
+        warnings = _checker.evaluate(
+            _checker.find_advisory_jobs(wf),
+            _checker.load_tracked_stages(meta),
+            today=_TODAY,
+        )
+        assert len(warnings) == 1
+        assert "malformed metadata for job 'scanner'" in warnings[0]
+
+    def test_missing_window_warns_instead_of_crashing(self, tmp_path: Path) -> None:
+        wf = _workflow(tmp_path, advisory_job="scanner")
+        meta = tmp_path / "advisory_stages.yaml"
+        meta.write_text(
+            "stages:\n  - job: scanner\n    since: 2026-06-30\n",
+            encoding="utf-8",
+        )
+        warnings = _checker.evaluate(
+            _checker.find_advisory_jobs(wf),
+            _checker.load_tracked_stages(meta),
+            today=_TODAY,
+        )
+        assert len(warnings) == 1
+        assert "malformed metadata" in warnings[0]
+
+
+def test_yaml_extension_workflows_are_scanned(tmp_path: Path) -> None:
+    """GitHub honors .yaml too - an advisory job there must not escape the guard."""
+    wf_dir = tmp_path / "workflows"
+    wf_dir.mkdir()
+    (wf_dir / "extra.yaml").write_text(
+        "name: extra\non: push\njobs:\n  sneaky:\n    runs-on: ubuntu-latest\n"
+        "    continue-on-error: true\n",
+        encoding="utf-8",
+    )
+    assert _checker.find_advisory_jobs(wf_dir) == {"sneaky": "extra.yaml"}
+
+
+class TestMalformedMetadataFile:
+    """Copilot review: a malformed FILE (not just entry) must also degrade."""
+
+    def test_list_root_degrades_to_untracked_warnings(self, tmp_path: Path) -> None:
+        wf = _workflow(tmp_path, advisory_job="scanner")
+        meta = tmp_path / "advisory_stages.yaml"
+        meta.write_text("- job: scanner\n", encoding="utf-8")  # list root, no 'stages' map
+        stages = _checker.load_tracked_stages(meta)
+        assert stages == []
+        warnings = _checker.evaluate(_checker.find_advisory_jobs(wf), stages, today=_TODAY)
+        assert len(warnings) == 1
+        assert "untracked advisory stage" in warnings[0]
+
+    def test_string_stage_entries_are_filtered(self, tmp_path: Path) -> None:
+        meta = tmp_path / "advisory_stages.yaml"
+        meta.write_text(
+            "stages:\n  - just-a-string\n  - job: ok\n    since: 2026-06-30\n"
+            "    promote_after_days: 30\n",
+            encoding="utf-8",
+        )
+        stages = _checker.load_tracked_stages(meta)
+        assert [s.get("job") for s in stages] == ["ok"]
+
+    def test_unparseable_yaml_degrades_to_empty(self, tmp_path: Path) -> None:
+        meta = tmp_path / "advisory_stages.yaml"
+        meta.write_text("stages: [unclosed\n", encoding="utf-8")
+        assert _checker.load_tracked_stages(meta) == []
