@@ -473,6 +473,16 @@ single-shot / full-run behaviour:
   monotonic entry stamp. Construct the JSONL config with
   `HarnessJournalConfig.model_validate({...})` (NOT direct construction — mypy
   strict treats Field-defaulted args as required without the pydantic plugin).
+- **F-018 trend closure (PR #151):** the full-validation harness now FEEDS the
+  trend store — Phase-2 preflight appends via `--journal-path/--trend/
+  --journal-max-bytes` (journal under REPORT_ROOT, single-generation rotation,
+  `max_bytes<=0` = disabled, failed replace degrades to `journal_rotate_failed`);
+  Phase-4 SUMMARY.md is rendered by `validation/summary.py` (pure, tested) with a
+  **Trend** section, `scripts/render_validation_summary.py` as the shim and a
+  bash `write_summary_fallback` for python-less hosts; `mousedroid-trend.{service,
+  timer}` samples hourly with a regression-pinned NON-EXCLUSIVE check subset
+  (`config,host_env_keys`) and a SEPARATE journal path — never point the timer at
+  camera/lidar/esp32/audio and never share the full-run journal.
 - **`scripts/jetson_full_validation.sh` Phase-1 caching** — Phase 1 (static CI)
   is a pure function of the committed source. `git_clean_sha` echoes the HEAD
   sha ONLY when the tree under `src/tests/scripts/config/pyproject.toml` is
@@ -543,6 +553,12 @@ silently drift:
   whose H1 (`# <name>`) names the skill, and every published doc maps back to a
   registered spec (no orphans). It asserts the H1, **not** YAML front-matter —
   these publishable docs intentionally have none.
+- **Optional `status:` front-matter lifecycle (PR #151)** — skills may carry
+  `status: active|frozen|deferred` (+ a free-form `unfreeze:` note); the
+  validator flags any OTHER value as `invalid-status` so a typo like `forzen`
+  can't silently un-freeze a paused skill. Absent `status` stays valid
+  (backwards compatible with `.github/skills/` and external layouts). The three
+  arm/sim skills are `frozen` pending the F-008 hardware gate + 30-day soak.
 
 ## On-device incremental learning (Phase 6 — functional, default-OFF, soak-gated)
 

@@ -46,7 +46,18 @@ the critical path; none of this blocks them.
   deferred arm platform + parked HC-SR04 driver, and the advisory
   promotion-lag checker over `.github/advisory_stages.yaml`.
 - **Harness:** catalog IDs continue from F-015 (SMOKE_REPORT findings burned
-  9-14) — declared in HARNESS_SPEC.md "F-number namespaces".
+  9-14) — declared in HARNESS_SPEC.md "F-number namespaces" and ADR-013.
+- **Gap-analysis remediation (follow-up commits):** malformed
+  `advisory_stages.yaml` degrades to warnings end-to-end (entry AND file
+  level, per Copilot review), `.yaml` workflows covered by the promotion-lag
+  guard, journal rotation is fail-safe (`max_bytes<=0` disables; failed
+  `replace()` → `journal_rotate_failed`), dead constants removed, and the
+  previously untested paths (bootstrap `--rollback`/`--with-trend-timer`
+  dry-runs, the python-less `write_summary_fallback`, audit clean-run +
+  truncation) are executed by tests. Docs reconciled: README doc-map/CI
+  stages/tooling, ADR-013 (+ ADR-012 addendum), C4 validation-efficiency +
+  overview + llm-gateway, both Jetson runbooks, CLAUDE.md, SKILLS.md,
+  `.gitignore`/`.dockerignore`, and a new `test_runbooks_structure.py` pin.
 
 ### Historical record — reconciled from NEXT_STEPS.md (2026-07-03, F-016)
 

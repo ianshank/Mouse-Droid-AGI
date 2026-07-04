@@ -1,5 +1,9 @@
 # ADR-012 — Adopt the Spec-Driven Harness (HARNESS_SPEC v2.1)
 
+> **Addendum (2026-07-03):** the catalog has grown past the seeded F-001–F-008;
+> new entries continue from F-015 (F-009–F-014 are burned by the independent
+> SMOKE_REPORT findings namespace) — see ADR-013.
+
 * **Status:** Accepted
 * **Date:** 2026-06-14
 * **Owners:** Ian Cruickshank

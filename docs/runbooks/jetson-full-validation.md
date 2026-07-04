@@ -55,9 +55,9 @@ bash scripts/jetson_full_validation.sh --help
 |-------|-----------|-----------|
 | 0 — preconditions | host check, config present, key/token presence (presence only — never echoed) | yes |
 | 1 — static CI (mock) | `scripts/ci.sh` (ruff/mypy/`--cov-fail-under=85`/e2e/regression/branch-cov) + `preflight --mock-hardware` + `validate_pillars --dry-run` | yes |
-| 2 — cold hardware | `docker stop` → real `preflight` + `verify_sensors --sensor all` + per-stage `jetson_smoke_test.sh` + `pytest -m hardware` + real `validate_pillars` → `docker start` | mixed |
+| 2 — cold hardware | `docker stop` → real `preflight` (appends to the trend journal: `--journal-path … --trend --journal-max-bytes …`, F-018) + `verify_sensors --sensor all` + per-stage `jetson_smoke_test.sh` + `pytest -m hardware` + real `validate_pillars` → `docker start` | mixed |
 | 3 — warm live | `/api/v1/health` → `translate_mission` → live `/metrics` scrape → `lidar_telemetry_probe` → structlog greps | mixed |
-| 4 — report + gate | aggregate counts → `SUMMARY.md`; exit non-zero iff any blocking failure | — |
+| 4 — report + gate | aggregate counts → `SUMMARY.md` (rendered by `scripts/render_validation_summary.py` with a **Trend** section mined from the Phase-2 `--trend` output; inline-bash fallback on python-less hosts); exit non-zero iff any blocking failure | — |
 
 ## Cold-then-warm discipline
 
@@ -117,3 +117,28 @@ pointing at its per-step log. Structured-log evidence captured in
 `power_chain_probe_complete`, `esp32_raw_line`, `anthropic_gateway_*`, and
 `fallback_gateway_started`. For per-stage smoke triage (cable reseating, by-id
 drift, warm-vs-cold), see `jetson-rover-smoke.md`.
+
+## Continuous trend sampling between runs (F-018)
+
+The one-shot trend journal above only grows when an operator runs the full
+harness. For continuous degradation monitoring, install the hourly timer:
+
+```bash
+sudo bash scripts/host_bootstrap.sh --with-trend-timer   # --dry-run first
+journalctl -u mousedroid-trend -f                        # watch samples
+```
+
+Contract (pinned by `tests/regression/test_trend_timer_units.py`):
+
+- The timer runs **non-exclusive checks only** (`config,host_env_keys` via
+  `MOUSEDROID_TREND_CHECKS`) — the orchestrator container owns camera /
+  LiDAR / ESP32 / audio, and a concurrent open corrupts both readers. Full
+  device trends come only from this harness's Phase 2 (which stops the
+  container first).
+- The timer journals to a **separate path**
+  (`/var/lib/mousedroid/trend/preflight.jsonl` by default) so 2-check timer
+  runs never poison the full-run latency trend with bogus elapsed-time
+  comparisons.
+- Journal growth is capped via `--journal-max-bytes` (single-generation
+  rotation to `<path>.1`; the run after a rotation reports "insufficient
+  history" once, by design).
