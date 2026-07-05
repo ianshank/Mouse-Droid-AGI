@@ -247,11 +247,9 @@ ignore = ["D100", "D104", "D107", "D203", "D213", "S101", "ANN401", "TCH", "TC"]
 # NOT add new files here — fix the function instead. File-level (not inline
 # `# noqa`) so the src/ suppression budget (test_suppression_budget.py) stays
 # flat. Current offenders:
-#   telemetry/server.py            _handle_mission_post (20), _broadcast_loop (19)
 #   orchestrator/orchestrator.py   start (19), stop (18)  [lifecycle, not tick]
-# (telemetry/metrics.py::render_prometheus was decomposed into _families_*
-#  helpers and dropped from this list.)
-"src/mousedroid/telemetry/server.py" = ["C901"]
+# (telemetry/metrics.py::render_prometheus and telemetry/server.py's
+#  _handle_mission_post + _broadcast_loop were decomposed and dropped here.)
 "src/mousedroid/orchestrator/orchestrator.py" = ["C901"]
 
 [tool.ruff.lint.mccabe]
