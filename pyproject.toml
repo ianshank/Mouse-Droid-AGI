@@ -240,17 +240,13 @@ ignore = ["D100", "D104", "D107", "D203", "D213", "S101", "ANN401", "TCH", "TC"]
 # the inline rationale. Suppress here (not inline) to keep the src/ noqa budget
 # (tests/regression/test_suppression_budget.py) flat.
 "src/mousedroid/harness/spec.py" = ["S602", "S603", "S607"]
-# --- C901 cyclomatic-complexity baseline (ratchet backlog) ---
-# max-complexity=15 (see [tool.ruff.lint.mccabe]) is enforced repo-wide. The
-# files below carry pre-existing offenders being decomposed incrementally; each
-# entry is REMOVED in the same change that drops its function(s) below 15. Do
-# NOT add new files here — fix the function instead. File-level (not inline
-# `# noqa`) so the src/ suppression budget (test_suppression_budget.py) stays
-# flat. Current offenders:
-#   orchestrator/orchestrator.py   start (19), stop (18)  [lifecycle, not tick]
-# (telemetry/metrics.py::render_prometheus and telemetry/server.py's
-#  _handle_mission_post + _broadcast_loop were decomposed and dropped here.)
-"src/mousedroid/orchestrator/orchestrator.py" = ["C901"]
+# C901 cyclomatic-complexity gate (max-complexity=15, see [tool.ruff.lint.mccabe]
+# below) is enforced across all of src/ with NO baseline: every pre-existing
+# offender (telemetry/metrics.py::render_prometheus, telemetry/server.py's
+# _handle_mission_post + _broadcast_loop, orchestrator/orchestrator.py's
+# start + stop) was decomposed below the ceiling. Do not add a file-level C901
+# ignore here to work around a complex function — decompose it instead. (The
+# only remaining C901 baseline is the scripts/ glob above, for procedural glue.)
 
 [tool.ruff.lint.mccabe]
 # Cyclomatic-complexity ceiling (the refactoring task's "< 15" requirement).
