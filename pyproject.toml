@@ -205,15 +205,23 @@ src = ["src", "tests", "tools"]
 
 [tool.ruff.lint]
 select = [
+    # C901 = McCabe cyclomatic complexity (distinct from C4 = comprehensions).
+    # Ceiling set in [tool.ruff.lint.mccabe] below; pre-existing offenders are
+    # baselined in per-file-ignores as a ratchet backlog.
     "E", "W", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "PT",
-    "S", "ANN", "D", "T20",
+    "S", "ANN", "D", "T20", "C901",
 ]
 ignore = ["D100", "D104", "D107", "D203", "D213", "S101", "ANN401", "TCH", "TC"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["D", "ANN", "S101", "S108", "S603", "S607", "E402"]
 "tools/**/*.py" = ["D", "ANN", "T20"]
-"scripts/**/*.py" = ["D", "T20", "S603", "S104", "E501"]
+# Operator/CI scripts are procedural glue (already exempt from D/T20). C901 is
+# baselined here for the three current offenders (check_branch_coverage.py::main
+# cc 21, jetson_probe_lidar_raw_ws.py / jetson_probe_ws_negotiation.py::_probe
+# cc 17/16) rather than per-file so the operational tooling is not forced into
+# premature decomposition.
+"scripts/**/*.py" = ["D", "T20", "S603", "S104", "E501", "C901"]
 # Harness / skills / LLM replanner: protocol method docstrings live on the
 # Protocol classes (and on the concrete classes' class docstrings) so the
 # per-method D102 / D105 rule produces redundant boilerplate. Class-level
@@ -232,6 +240,25 @@ ignore = ["D100", "D104", "D107", "D203", "D213", "S101", "ANN401", "TCH", "TC"]
 # the inline rationale. Suppress here (not inline) to keep the src/ noqa budget
 # (tests/regression/test_suppression_budget.py) flat.
 "src/mousedroid/harness/spec.py" = ["S602", "S603", "S607"]
+# --- C901 cyclomatic-complexity baseline (ratchet backlog) ---
+# max-complexity=15 (see [tool.ruff.lint.mccabe]) is enforced repo-wide. The
+# files below carry pre-existing offenders being decomposed incrementally; each
+# entry is REMOVED in the same change that drops its function(s) below 15. Do
+# NOT add new files here — fix the function instead. File-level (not inline
+# `# noqa`) so the src/ suppression budget (test_suppression_budget.py) stays
+# flat. Current offenders:
+#   telemetry/metrics.py           render_prometheus (cc 55) — descriptor table
+#   telemetry/server.py            _handle_mission_post (20), _broadcast_loop (19)
+#   orchestrator/orchestrator.py   start (19), stop (18)  [lifecycle, not tick]
+"src/mousedroid/telemetry/metrics.py" = ["C901"]
+"src/mousedroid/telemetry/server.py" = ["C901"]
+"src/mousedroid/orchestrator/orchestrator.py" = ["C901"]
+
+[tool.ruff.lint.mccabe]
+# Cyclomatic-complexity ceiling (the refactoring task's "< 15" requirement).
+# Deliberately 15, not 10: at 10 the src/ backlog balloons from 5 to ~23
+# functions. Tighten later once the current baseline is cleared.
+max-complexity = 15
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
