@@ -889,7 +889,11 @@ class TelemetryServer:
             return 400, {"error": "invalid_command", "reason": "injection_pattern"}
         except ValueError as exc:
             return 400, {"error": "invalid_command", "reason": str(exc)}
-        except TimeoutError:
+        except (TimeoutError, asyncio.TimeoutError):
+            # asyncio.TimeoutError aliases the builtin TimeoutError on 3.11+ but
+            # is a DISTINCT exception on 3.10 (a supported CI leg). Catch both so
+            # a dispatcher timeout maps to 504, not the generic 500 below —
+            # matching the dual-catch in orchestrator._maybe_fire_startup_greeting.
             log.warning("mission_endpoint_timeout")
             return 504, {"error": "timeout"}
         except Exception as exc:  # pylint: disable=broad-except
