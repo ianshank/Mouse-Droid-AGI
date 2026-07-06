@@ -31,6 +31,15 @@
 8. **Test-pyramid discipline.** Every behavioural change lands across the
    matching tiers — see "Test surface mirror" in `CLAUDE.md` and the PR #104
    files as the reference shape.
+9. **Bounded complexity.** Every function stays under `ruff` `C901`
+   (`max-complexity = 15`; ADR-014). When a function trips the gate,
+   **decompose it** into cohesive helpers — do NOT add a file-level `C901`
+   `per-file-ignore` to `src/` (the baseline there is empty and
+   `tests/regression/test_complexity_gate.py` fails if you re-open it). Prefer
+   pure method extraction that preserves behaviour byte-for-byte; if the code
+   emits an externally-observed artefact (metrics text, wire payload), pin it
+   with a golden characterization test first (see
+   `tests/regression/test_render_prometheus_golden.py`).
 
 ## Workflow expectations
 

@@ -8,6 +8,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — enterprise-hardening: C901 complexity gate + offender decomposition (#153)
+
+Focused refactoring pass adding the one quality gate the codebase lacked
+(cyclomatic complexity) and decomposing every function over the ceiling — with
+no behaviour change. Full rationale + rejected alternatives in
+[`docs/architecture/ADR-014-cyclomatic-complexity-gate.md`](docs/architecture/ADR-014-cyclomatic-complexity-gate.md);
+deliverable mapping in `docs/refactor/enterprise-hardening-notes.md`.
+
+- **New gate.** `ruff` `C901` + `[tool.ruff.lint.mccabe] max-complexity = 15`
+  enforced across `src/`/`tests/`/`scripts/`. Only the `scripts/` procedural-glue
+  glob is baselined; the `src/` baseline is **empty**. Pinned by
+  `tests/regression/test_complexity_gate.py`.
+- **`render_prometheus` decomposed** (cc 55, 624 lines → 13 `_families_*`
+  helpers) with **byte-identical** Prometheus exposition, now guaranteed by a new
+  golden characterization test (`tests/regression/test_render_prometheus_golden.py`,
+  60 families). Method extraction chosen over a data-driven table (the 55 emit
+  blocks are heterogeneous).
+- **`telemetry/server.py`** `_handle_mission_post` (cc 20) / `_broadcast_loop`
+  (cc 19) and **`orchestrator.py`** `start` (cc 19) / `stop` (cc 18) decomposed
+  by concern / lifecycle phase. `Orchestrator.tick` (cc 9, the 30 Hz hot loop)
+  deliberately left untouched — its ordering invariants make extraction a
+  correctness risk, not a latency one.
+- **Fix (latent, py3.10):** the mission dispatch handler now catches
+  `asyncio.TimeoutError` alongside the builtin `TimeoutError` so a dispatcher
+  timeout maps to 504 (not 500) on the 3.10 CI leg — matching the existing
+  dual-catch in `_maybe_fire_startup_greeting`.
+- **Test backfill.** Dedicated unit suites for the thinnest modules
+  (`growth`, `meta`, `scaling`, `efficiency`, `logging`), each 96–100 %.
+  Includes a characterization test documenting `MAMLAdapter.meta_step`'s current
+  first-order behaviour (base params unchanged).
+- **No breaking changes** — no public signature, config field, metric name,
+  structlog event, or YAML contract altered; no migration guide needed.
+
 ### Added — validation-first rev. B software work streams (WS-0.4/1/3.1/4/5/8, F-015..F-020) (#151)
 
 Implements the software-only half of the peer-reviewed validation-first plan
