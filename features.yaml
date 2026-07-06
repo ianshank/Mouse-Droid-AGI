@@ -306,6 +306,6 @@ features:
       - "C901 selected + max-complexity=15 pinned in pyproject.toml"
       - "no src/ C901 per-file-ignore; no src function exceeds the ceiling"
     validation_command: "python -m pytest tests/regression/test_complexity_gate.py -q"
-    implemented_in: "claude/enterprise-refactoring-plan-iikhzm"
+    implemented_in: "40a6399045ac520824bf706debed8ed7cdd37200"
     depends_on: ["F-001"]
-    notes: "ADR-014. POST-MERGE: replace implemented_in with the squash SHA."
+    notes: "ADR-014."
