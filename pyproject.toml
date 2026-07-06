@@ -152,7 +152,7 @@ dev = [
     # lines slightly differently, so a wider range here causes
     # `ruff format --check src/ tests/` to fail in CI even when it passes
     # locally. Bump both pyproject.toml and ci.yml in the same change.
-    "ruff==0.8.0",
+    "ruff==0.15.20",
     # Pinned (same discipline as ruff) to match .github/workflows/ci.yml. mypy
     # minor releases tighten strict-mode inference — e.g. 2.x flags untyped
     # aiohttp ``@web.middleware`` decorators and rejects implicit union type
