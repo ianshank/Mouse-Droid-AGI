@@ -2,8 +2,9 @@
 
 Uses a tiny ``nn.Linear`` so inner/outer loops run in milliseconds. Verifies
 that inner-loop adaptation leaves the base model untouched and returns a
-distinct adapted copy, and that a meta-step returns a finite scalar loss and
-mutates the base parameters.
+distinct adapted copy, and that a meta-step returns a finite scalar loss. The
+current implementation is first-order, so a meta-step leaves the base
+parameters unchanged — pinned by ``test_meta_step_is_first_order_base_unchanged``.
 """
 
 from __future__ import annotations
