@@ -17,7 +17,6 @@ parser shim; the behavioural check is a fast (~1-2 s) ruff subprocess.
 
 from __future__ import annotations
 
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -27,24 +26,44 @@ _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
 _PYPROJECT: Final[str] = (_REPO_ROOT / "pyproject.toml").read_text()
 
 
+def _toml_section(name: str) -> str:
+    """Return the body of the ``[name]`` TOML table (up to the next ``[header]``).
+
+    Line-based and dependency-free (no ``tomllib``/``tomli``, so it stays green
+    on the 3.10 CI leg). Header detection uses EXACT equality, so
+    ``[tool.ruff.lint]`` does not collide with its ``.per-file-ignores`` /
+    ``.mccabe`` sub-tables — those terminate the section instead. Array
+    continuation lines and comments never start with ``[`` after stripping, so
+    an inline bracketed token in a comment cannot end the section early.
+    """
+    body: list[str] = []
+    capturing = False
+    for line in _PYPROJECT.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            capturing = stripped == f"[{name}]"
+            continue
+        if capturing:
+            body.append(line)
+    return "\n".join(body)
+
+
 def test_c901_is_selected() -> None:
-    """``C901`` is present in the ruff lint select set."""
-    # Grab the select = [ ... ] block (closing ] is on its own line; an inline
-    # comment inside the block may itself contain a ']', so anchor on "\n]").
-    match = re.search(r"select\s*=\s*\[(.*?)\n\]", _PYPROJECT, re.DOTALL)
-    assert match is not None, "could not locate [tool.ruff.lint] select list"
-    assert '"C901"' in match.group(1), "C901 must stay in the ruff select set"
+    """``C901`` is present in the ruff ``select`` set (and not merely baselined).
+
+    Anchored to the ``[tool.ruff.lint]`` section: ``"C901"`` also appears in the
+    ``scripts/**`` glob under ``[tool.ruff.lint.per-file-ignores]``, so a
+    whole-file check would pass even if ``select`` lost the rule. This one fails
+    correctly in that case.
+    """
+    section = _toml_section("tool.ruff.lint")
+    assert '"C901"' in section, "C901 must stay in the [tool.ruff.lint] select set"
 
 
 def test_mccabe_max_complexity_is_15() -> None:
     """The McCabe ceiling is pinned at 15 (ADR-014's deliberate threshold)."""
-    match = re.search(
-        r"\[tool\.ruff\.lint\.mccabe\].*?max-complexity\s*=\s*(\d+)",
-        _PYPROJECT,
-        re.DOTALL,
-    )
-    assert match is not None, "missing [tool.ruff.lint.mccabe] max-complexity"
-    assert match.group(1) == "15", "max-complexity must stay 15 (see ADR-014)"
+    section = _toml_section("tool.ruff.lint.mccabe")
+    assert "max-complexity = 15" in section, "max-complexity must stay 15 (see ADR-014)"
 
 
 def test_no_src_c901_baseline() -> None:

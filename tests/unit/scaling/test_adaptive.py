@@ -33,7 +33,14 @@ def test_low_threshold_halts_early() -> None:
 
 
 def test_forward_runs_under_no_grad() -> None:
-    """The decorated forward yields a tensor that does not require grad."""
+    """The ``@torch.no_grad()`` forward detaches output even from a grad input.
+
+    The input requires grad AND the module's ``nn.Linear`` params require grad,
+    so without the decorator the output would land on the autograd graph
+    (``requires_grad=True``). Asserting it is ``False`` therefore genuinely
+    guards the decorator — remove ``@torch.no_grad()`` and this fails.
+    """
     module = AdaptiveCompute(input_dim=4, max_steps=3)
-    output, _ = module(torch.randn(1, 4))
+    x = torch.randn(1, 4, requires_grad=True)
+    output, _ = module(x)
     assert not output.requires_grad
