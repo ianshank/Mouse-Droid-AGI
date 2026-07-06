@@ -767,20 +767,10 @@ class TelemetryServer:
                     status=429,
                 )
 
-        try:
-            payload = await request.json()
-        except (json.JSONDecodeError, ValueError):
-            log.warning("mission_endpoint_rejected", reason="invalid_json")
-            return web.json_response({"error": "invalid_json"}, status=400)
-
-        try:
-            req = MissionRequest.model_validate(payload)
-        except ValidationError as exc:
-            log.warning("mission_endpoint_rejected", reason="invalid_body")
-            return web.json_response(
-                {"error": "invalid_body", "details": exc.errors()},
-                status=400,
-            )
+        parsed = await self._parse_mission_request(request, log)
+        if isinstance(parsed, web.Response):
+            return parsed
+        req = parsed
 
         # Idempotency: two-phase dedup so concurrent retries with the
         # same key never start parallel dispatches.
@@ -823,51 +813,9 @@ class TelemetryServer:
         )
 
         try:
-            # ``channel`` is hard-coded here, NOT taken from ``req.channel``,
-            # so a malicious client cannot smuggle a different channel
-            # string past the dispatcher's ``allowed_channels`` gate (the
-            # schema also constrains ``req.channel`` to Literal["rest"] —
-            # this hard-coding is the defence-in-depth layer).
-            status: int
-            body: dict[str, Any]
-            try:
-                result = await self._mission_dispatcher.dispatch(
-                    req.nl_command,
-                    channel="rest",
-                    peer=peer,
-                )
-            except InjectionRejected:
-                status = 400
-                body = {"error": "invalid_command", "reason": "injection_pattern"}
-            except ValueError as exc:
-                status = 400
-                body = {"error": "invalid_command", "reason": str(exc)}
-            except TimeoutError:
-                log.warning("mission_endpoint_timeout")
-                status = 504
-                body = {"error": "timeout"}
-            except Exception as exc:  # pylint: disable=broad-except
-                log.warning("mission_endpoint_failed", error=f"{type(exc).__name__}:{exc}")
-                status = 500
-                body = {"error": "internal_error"}
-            else:
-                body = {
-                    "status": "accepted",
-                    "trace_id": result.trace_id,
-                    "command_hash": result.command_hash,
-                    "latency_ms": round(result.latency_ms, 3),
-                    "goal_vector": {
-                        "vx": result.goal_vector.vx_target,
-                        "vy": result.goal_vector.vy_target,
-                        "omega": result.goal_vector.omega_target,
-                    },
-                }
-                status = 202
-                log.info(
-                    "mission_endpoint_dispatched",
-                    trace_id=result.trace_id,
-                    latency_ms=result.latency_ms,
-                )
+            status, body = await self._dispatch_mission_command(
+                self._mission_dispatcher, req, peer, log
+            )
 
             # Cache only successful 202s; transient 5xx must be
             # retryable with the same key. Client errors (400, 504)
@@ -888,6 +836,87 @@ class TelemetryServer:
                     leader_future.set_exception(
                         RuntimeError("mission leader exited without setting a result")
                     )
+
+    async def _parse_mission_request(
+        self, request: web.Request, log: Any
+    ) -> MissionRequest | web.Response:
+        """Parse and schema-validate the mission POST body.
+
+        Returns the validated :class:`MissionRequest`, or a ready-to-send 400
+        JSON response when the body is not valid JSON or fails validation. The
+        caller distinguishes the two via ``isinstance(..., web.Response)``.
+        """
+        from aiohttp import web
+
+        try:
+            payload = await request.json()
+        except (json.JSONDecodeError, ValueError):
+            log.warning("mission_endpoint_rejected", reason="invalid_json")
+            return web.json_response({"error": "invalid_json"}, status=400)
+
+        try:
+            return MissionRequest.model_validate(payload)
+        except ValidationError as exc:
+            log.warning("mission_endpoint_rejected", reason="invalid_body")
+            return web.json_response(
+                {"error": "invalid_body", "details": exc.errors()},
+                status=400,
+            )
+
+    async def _dispatch_mission_command(
+        self,
+        dispatcher: MissionDispatcherProtocol,
+        req: MissionRequest,
+        peer: str,
+        log: Any,
+    ) -> tuple[int, dict[str, Any]]:
+        """Dispatch a validated NL command, mapping the outcome to (status, body).
+
+        ``channel`` is hard-coded to ``"rest"`` (NOT taken from ``req.channel``)
+        so a client cannot smuggle a different channel past the dispatcher's
+        ``allowed_channels`` gate — defence-in-depth alongside the schema's
+        ``Literal["rest"]`` constraint. The dispatcher is passed in (already
+        non-``None``-checked by the caller) rather than read off ``self`` so no
+        ``-O``-stripped assert is needed to narrow the type.
+        """
+        try:
+            result = await dispatcher.dispatch(
+                req.nl_command,
+                channel="rest",
+                peer=peer,
+            )
+        except InjectionRejected:
+            return 400, {"error": "invalid_command", "reason": "injection_pattern"}
+        except ValueError as exc:
+            return 400, {"error": "invalid_command", "reason": str(exc)}
+        except (TimeoutError, asyncio.TimeoutError):
+            # asyncio.TimeoutError aliases the builtin TimeoutError on 3.11+ but
+            # is a DISTINCT exception on 3.10 (a supported CI leg). Catch both so
+            # a dispatcher timeout maps to 504, not the generic 500 below —
+            # matching the dual-catch in orchestrator._maybe_fire_startup_greeting.
+            log.warning("mission_endpoint_timeout")
+            return 504, {"error": "timeout"}
+        except Exception as exc:  # pylint: disable=broad-except
+            log.warning("mission_endpoint_failed", error=f"{type(exc).__name__}:{exc}")
+            return 500, {"error": "internal_error"}
+
+        body = {
+            "status": "accepted",
+            "trace_id": result.trace_id,
+            "command_hash": result.command_hash,
+            "latency_ms": round(result.latency_ms, 3),
+            "goal_vector": {
+                "vx": result.goal_vector.vx_target,
+                "vy": result.goal_vector.vy_target,
+                "omega": result.goal_vector.omega_target,
+            },
+        }
+        log.info(
+            "mission_endpoint_dispatched",
+            trace_id=result.trace_id,
+            latency_ms=result.latency_ms,
+        )
+        return 202, body
 
     async def _handle_metrics(self, request: web.Request) -> web.Response:
         """GET /metrics — Prometheus text-format metrics scrape endpoint.
@@ -1411,42 +1440,7 @@ class TelemetryServer:
             self._latest_frame = frame
             data = frame.to_dict()
 
-            # Push live telemetry into metrics registry (non-blocking)
-            if self._metrics is not None:
-                self._metrics.set_loop_time_ms(frame.loop_time_ms)
-                self._metrics.set_battery_voltage(frame.battery_voltage)
-                self._metrics.set_ws_client_count(len(self._ws_clients))
-                self._sync_publisher_metrics()
-                health = frame.health
-                if isinstance(health, dict):
-                    gpu_temp = health.get("gpu_temp_c")
-                    if isinstance(gpu_temp, int | float):
-                        self._metrics.set_gpu_temp_celsius(float(gpu_temp))
-                safety = frame.safety
-                if isinstance(safety, dict):
-                    for law in safety.get("violations", []):
-                        self._metrics.inc_safety_violation(str(law))
-                lidar_enabled = (
-                    self._lidar_max_range_m is not None or frame.lidar_sectors is not None
-                )
-                if lidar_enabled:
-                    if frame.lidar_sectors is not None and self._lidar_max_range_m is not None:
-                        self._metrics.set_lidar_sectors(
-                            frame.lidar_sectors,
-                            self._lidar_max_range_m,
-                        )
-                    if frame.lidar_min_dist_m is not None:
-                        self._metrics.set_lidar_min_distance_m(frame.lidar_min_dist_m)
-                    self._metrics.set_lidar_scan_points(frame.lidar_n_points)
-
-            # PR #4: surface per-sensor liveness via the live gauge so
-            # operators can alert on stale sensors directly from Prom.
-            if self._metrics is not None and frame.sensor_liveness:
-                liveness_states = {
-                    sensor: str(payload.get("state", "awaiting"))
-                    for sensor, payload in frame.sensor_liveness.items()
-                }
-                self._metrics.set_sensor_liveness(liveness_states)
+            self._push_frame_metrics(frame)
 
             dead_clients: list[web.WebSocketResponse] = []
             send_tasks = []
@@ -1479,6 +1473,47 @@ class TelemetryServer:
                 if ws in self._ws_clients:
                     self._ws_clients.remove(ws)
                 self._ws_serializations.pop(id(ws), None)
+
+    def _push_frame_metrics(self, frame: TelemetryFrame) -> None:
+        """Push live telemetry from a frame into the metrics registry.
+
+        Non-blocking and a no-op when no registry is wired. Mirrors the
+        per-field guards the broadcast loop previously inlined (health/safety
+        dicts, optional LiDAR fields, per-sensor liveness). A local ``metrics``
+        binding after the ``None`` check keeps the type narrowed cleanly.
+        """
+        metrics = self._metrics
+        if metrics is None:
+            return
+        metrics.set_loop_time_ms(frame.loop_time_ms)
+        metrics.set_battery_voltage(frame.battery_voltage)
+        metrics.set_ws_client_count(len(self._ws_clients))
+        self._sync_publisher_metrics()
+        health = frame.health
+        if isinstance(health, dict):
+            gpu_temp = health.get("gpu_temp_c")
+            if isinstance(gpu_temp, int | float):
+                metrics.set_gpu_temp_celsius(float(gpu_temp))
+        safety = frame.safety
+        if isinstance(safety, dict):
+            for law in safety.get("violations", []):
+                metrics.inc_safety_violation(str(law))
+        lidar_enabled = self._lidar_max_range_m is not None or frame.lidar_sectors is not None
+        if lidar_enabled:
+            if frame.lidar_sectors is not None and self._lidar_max_range_m is not None:
+                metrics.set_lidar_sectors(frame.lidar_sectors, self._lidar_max_range_m)
+            if frame.lidar_min_dist_m is not None:
+                metrics.set_lidar_min_distance_m(frame.lidar_min_dist_m)
+            metrics.set_lidar_scan_points(frame.lidar_n_points)
+
+        # PR #4: surface per-sensor liveness via the live gauge so operators
+        # can alert on stale sensors directly from Prometheus.
+        if frame.sensor_liveness:
+            liveness_states = {
+                sensor: str(payload.get("state", "awaiting"))
+                for sensor, payload in frame.sensor_liveness.items()
+            }
+            metrics.set_sensor_liveness(liveness_states)
 
     async def _lidar_raw_broadcast_loop(self) -> None:
         """Fan-out raw LiDAR scans to ``/ws/v1/lidar/raw`` clients.

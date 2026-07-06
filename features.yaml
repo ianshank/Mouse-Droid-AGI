@@ -286,3 +286,26 @@ features:
     implemented_in: "a12c95b3855bd51667bace17e6dc150e69b1b4e2"
     depends_on: ["F-001"]
     notes: "Slow tier - runs nightly; the ci.sh stages are advisory mirrors."
+
+  - id: "F-021"
+    epic: "Hygiene"
+    name: "Cyclomatic-complexity gate enforced with an empty src baseline"
+    description: >-
+      ruff C901 + [tool.ruff.lint.mccabe] max-complexity = 15 is enforced across
+      src/tests/scripts. Every pre-existing src/ offender (render_prometheus,
+      telemetry server _handle_mission_post / _broadcast_loop, orchestrator
+      start / stop) was decomposed below the ceiling, so the src/ C901 baseline
+      is empty; only the scripts/ procedural-glue glob is baselined. A future
+      change cannot silently drop the gate or re-open a src/ C901 ignore to
+      dodge a decomposition. See ADR-014.
+    category: "validation"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "C901 selected + max-complexity=15 pinned in pyproject.toml"
+      - "no src/ C901 per-file-ignore; no src function exceeds the ceiling"
+    validation_command: "python -m pytest tests/regression/test_complexity_gate.py -q"
+    implemented_in: "claude/enterprise-refactoring-plan-iikhzm"
+    depends_on: ["F-001"]
+    notes: "ADR-014. POST-MERGE: replace implemented_in with the squash SHA."

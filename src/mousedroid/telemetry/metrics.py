@@ -1518,7 +1518,6 @@ class MetricsRegistry:
             separated by a blank line.  The output ends with a trailing
             newline as required by the spec.
         """
-        cfg = self._cfg
         sections: list[list[str]] = []
 
         # Uptime (always emitted — useful for detecting restarts)
@@ -1526,9 +1525,37 @@ class MetricsRegistry:
         sections.append(
             _render_gauge(self._name_uptime, "Seconds since metrics registry start", uptime)
         )
+        sections.extend(self._families_core_loop())
+        sections.extend(self._families_llm_translation())
+        sections.extend(self._families_llm_gateway())
+        sections.extend(self._families_on_device_learning())
+        sections.extend(self._families_lidar())
+        sections.extend(self._families_phase7())
+        sections.extend(self._families_cloud())
+        sections.extend(self._families_mcp())
+        sections.extend(self._families_replay_vla())
+        sections.extend(self._families_cloud_ota())
+        sections.extend(self._families_mission_lifecycle())
+        sections.extend(self._families_subsystem_failures())
 
+        # Telemetry publisher rate (Hz) — always emitted.
+        sections.append(
+            _render_gauge(
+                self._name_publish_hz,
+                "Telemetry publisher rate (Hz)",
+                self._publish_hz.value,
+            )
+        )
+        sections.extend(self._families_streaming())
+
+        return "\n\n".join("\n".join(section) for section in sections) + "\n"
+
+    def _families_core_loop(self) -> list[list[str]]:
+        """Core control-loop, safety, and power metric families."""
+        cfg = self._cfg
+        out: list[list[str]] = []
         if cfg.track_frame_drops:
-            sections.append(
+            out.append(
                 _render_counter(
                     self._name_frame_drops,
                     "Telemetry frames dropped due to backpressure",
@@ -1539,7 +1566,7 @@ class MetricsRegistry:
         if cfg.track_safety_violations:
             violations = self._safety_violations.snapshot()
             if violations:
-                sections.append(
+                out.append(
                     _render_labeled_counter(
                         self._name_safety_violations,
                         "Safety law violations (label: law)",
@@ -1549,7 +1576,7 @@ class MetricsRegistry:
                 )
 
         if cfg.track_loop_time:
-            sections.append(
+            out.append(
                 _render_gauge(
                     self._name_loop_time_ms,
                     "Last control-loop iteration time (milliseconds)",
@@ -1557,7 +1584,7 @@ class MetricsRegistry:
                 )
             )
             buckets, hsum, hcount = self._loop_histogram.snapshot()
-            sections.append(
+            out.append(
                 _render_histogram(
                     self._name_loop_latency,
                     "Control-loop iteration latency histogram (milliseconds)",
@@ -1568,7 +1595,7 @@ class MetricsRegistry:
             )
 
         if cfg.track_battery:
-            sections.append(
+            out.append(
                 _render_gauge(
                     self._name_battery_v,
                     "Battery voltage (volts)",
@@ -1577,7 +1604,7 @@ class MetricsRegistry:
             )
 
         if cfg.track_ws_clients:
-            sections.append(
+            out.append(
                 _render_gauge(
                     self._name_ws_clients,
                     "Number of currently connected WebSocket clients",
@@ -1586,18 +1613,23 @@ class MetricsRegistry:
             )
 
         if cfg.track_gpu_temp:
-            sections.append(
+            out.append(
                 _render_gauge(
                     self._name_gpu_temp_c,
                     "GPU temperature (degrees Celsius)",
                     self._gpu_temp_c.value,
                 )
             )
+        return out
 
+    def _families_llm_translation(self) -> list[list[str]]:
+        """LLM mission-translation result + latency families."""
+        cfg = self._cfg
+        out: list[list[str]] = []
         if cfg.track_llm_translations:
             llm_results = self._llm_translation_results.snapshot()
             if llm_results:
-                sections.append(
+                out.append(
                     _render_labeled_counter(
                         self._name_llm_translation,
                         "LLM translation results (label: result)",
@@ -1606,7 +1638,7 @@ class MetricsRegistry:
                     )
                 )
             llm_buckets, llm_sum, llm_count = self._llm_translation_latency_ms.snapshot()
-            sections.append(
+            out.append(
                 _render_histogram(
                     self._name_llm_translation_latency,
                     "LLM translation latency histogram (milliseconds)",
@@ -1615,14 +1647,19 @@ class MetricsRegistry:
                     llm_count,
                 )
             )
+        return out
 
+    def _families_llm_gateway(self) -> list[list[str]]:
+        """Anthropic-tier LLM-gateway observability families."""
+        cfg = self._cfg
+        out: list[list[str]] = []
         # LLM-gateway observability (Anthropic Claude tier). Pure-add: each
         # family is emitted only after a writer touches it (snapshot non-empty /
         # count > 0), so default deployments produce byte-identical exposition.
         if cfg.track_llm_gateway:
             llm_tokens_snapshot = self._llm_tokens.snapshot()
             if llm_tokens_snapshot:
-                sections.append(
+                out.append(
                     _render_double_labeled_counter(
                         self._name_llm_tokens,
                         "LLM gateway token usage (labels: model, token_type)",
@@ -1633,7 +1670,7 @@ class MetricsRegistry:
                 )
             gw_buckets, gw_sum, gw_count = self._llm_gateway_latency_ms.snapshot()
             if gw_count > 0:
-                sections.append(
+                out.append(
                     _render_histogram(
                         self._name_llm_gateway_latency,
                         "LLM gateway round-trip latency histogram (milliseconds)",
@@ -1644,7 +1681,7 @@ class MetricsRegistry:
                 )
             llm_served_snapshot = self._llm_gateway_served.snapshot()
             if llm_served_snapshot:
-                sections.append(
+                out.append(
                     _render_double_labeled_counter(
                         self._name_llm_gateway_served,
                         "LLM gateway translations served (labels: tier, outcome)",
@@ -1655,7 +1692,7 @@ class MetricsRegistry:
                 )
             budget_snapshot = self._llm_latency_budget_exceeded.snapshot()
             if budget_snapshot:
-                sections.append(
+                out.append(
                     _render_labeled_counter(
                         self._name_llm_latency_budget_exceeded,
                         "LLM gateway latency-budget-exceeded events (label: model)",
@@ -1663,14 +1700,19 @@ class MetricsRegistry:
                         budget_snapshot,
                     )
                 )
+        return out
 
+    def _families_on_device_learning(self) -> list[list[str]]:
+        """Phase-6 on-device-learning revert counter."""
+        cfg = self._cfg
+        out: list[list[str]] = []
         # Phase-6 on-device-learning revert counter. Pure-add: emitted only
         # after a revert lands (snapshot non-empty), so default deployments
         # render byte-identically.
         if cfg.track_on_device_learning:
             revert_snapshot = self._on_device_learning_reverted.snapshot()
             if revert_snapshot:
-                sections.append(
+                out.append(
                     _render_labeled_counter(
                         self._name_on_device_learning_reverted,
                         "On-device-learning weight-update reverts (label: reason)",
@@ -1678,11 +1720,16 @@ class MetricsRegistry:
                         revert_snapshot,
                     )
                 )
+        return out
 
+    def _families_lidar(self) -> list[list[str]]:
+        """LiDAR sector / min-distance / scan-point gauges."""
+        cfg = self._cfg
+        out: list[list[str]] = []
         if cfg.track_lidar:
             sector_snapshot = self._lidar_sector_distance_m.snapshot()
             if sector_snapshot:
-                sections.append(
+                out.append(
                     _render_labeled_gauge(
                         self._name_lidar_sector_distance,
                         "Per-sector LiDAR distance in metres (label: sector)",
@@ -1690,38 +1737,43 @@ class MetricsRegistry:
                         sector_snapshot,
                     )
                 )
-            sections.append(
+            out.append(
                 _render_gauge(
                     self._name_lidar_min_distance,
                     "Minimum LiDAR distance across all sectors (metres)",
                     self._lidar_min_distance_m.value,
                 )
             )
-            sections.append(
+            out.append(
                 _render_gauge(
                     self._name_lidar_scan_points,
                     "Number of raw points in the last LiDAR scan",
                     self._lidar_scan_points.value,
                 )
             )
+        return out
 
+    def _families_phase7(self) -> list[list[str]]:
+        """Phase-7 memory / voice / LLM-latency / curiosity / recovery families."""
+        cfg = self._cfg
+        out: list[list[str]] = []
         # Phase 7 metrics — memory, voice, LLM, curiosity, recovery
         if cfg.track_memory_tier:
-            sections.append(
+            out.append(
                 _render_gauge(
                     self._name_episodic_size,
                     "Episodic replay buffer size",
                     self._episodic_size.value,
                 )
             )
-            sections.append(
+            out.append(
                 _render_gauge(
                     self._name_semantic_size,
                     "Semantic index size",
                     self._semantic_size.value,
                 )
             )
-            sections.append(
+            out.append(
                 _render_gauge(
                     self._name_working_size,
                     "Working memory buffer size",
@@ -1732,7 +1784,7 @@ class MetricsRegistry:
         if cfg.track_voice_events:
             voice_snapshot = self._voice_events.snapshot()
             if voice_snapshot:
-                sections.append(
+                out.append(
                     _render_labeled_counter(
                         self._name_voice_events,
                         "Voice events triggered (label: event_type)",
@@ -1742,14 +1794,14 @@ class MetricsRegistry:
                 )
 
         if cfg.track_llm_latency:
-            sections.append(
+            out.append(
                 _render_gauge(
                     self._name_llm_latency_ms,
                     "Last LLM mission parse latency (milliseconds)",
                     self._llm_latency_ms.value,
                 )
             )
-            sections.append(
+            out.append(
                 _render_counter(
                     self._name_llm_requests,
                     "Total LLM mission parse requests",
@@ -1758,7 +1810,7 @@ class MetricsRegistry:
             )
 
         if cfg.track_curiosity:
-            sections.append(
+            out.append(
                 _render_gauge(
                     self._name_curiosity_reward,
                     "Latest intrinsic curiosity reward",
@@ -1767,25 +1819,30 @@ class MetricsRegistry:
             )
 
         if cfg.track_sensor_recovery:
-            sections.append(
+            out.append(
                 _render_counter(
                     self._name_sensor_recoveries,
                     "Total successful sensor recoveries",
                     self._sensor_recoveries.value,
                 )
             )
-            sections.append(
+            out.append(
                 _render_counter(
                     self._name_sensor_recovery_failures,
                     "Total failed sensor recovery attempts",
                     self._sensor_recovery_failures.value,
                 )
             )
+        return out
 
+    def _families_cloud(self) -> list[list[str]]:
+        """Cloud digital-twin publish / circuit / backlog families."""
+        cfg = self._cfg
+        out: list[list[str]] = []
         if cfg.track_cloud:
             telemetry_counts = self._cloud_telemetry_publish.snapshot()
             if telemetry_counts:
-                sections.append(
+                out.append(
                     _render_labeled_counter(
                         self._name_cloud_telemetry_publish,
                         "Cloud telemetry publish outcomes (label: result)",
@@ -1795,7 +1852,7 @@ class MetricsRegistry:
                 )
             experience_counts = self._cloud_experience_publish.snapshot()
             if experience_counts:
-                sections.append(
+                out.append(
                     _render_labeled_counter(
                         self._name_cloud_experience_publish,
                         "Cloud experience publish outcomes (label: result)",
@@ -1805,7 +1862,7 @@ class MetricsRegistry:
                 )
             tel_buckets, tel_sum, tel_count = self._cloud_telemetry_publish_latency_ms.snapshot()
             if tel_count > 0:
-                sections.append(
+                out.append(
                     _render_histogram(
                         self._name_cloud_telemetry_publish_latency,
                         "Cloud telemetry publish latency (milliseconds)",
@@ -1816,7 +1873,7 @@ class MetricsRegistry:
                 )
             exp_buckets, exp_sum, exp_count = self._cloud_experience_publish_latency_ms.snapshot()
             if exp_count > 0:
-                sections.append(
+                out.append(
                     _render_histogram(
                         self._name_cloud_experience_publish_latency,
                         "Cloud experience publish latency (milliseconds)",
@@ -1827,7 +1884,7 @@ class MetricsRegistry:
                 )
             circuit_snapshot = self._cloud_circuit_state.snapshot()
             if circuit_snapshot:
-                sections.append(
+                out.append(
                     _render_labeled_gauge(
                         self._name_cloud_circuit_state,
                         ("Circuit breaker state (0=closed, 1=half_open, 2=open; label: breaker)"),
@@ -1837,7 +1894,7 @@ class MetricsRegistry:
                 )
             export_counts = self._cloud_experience_export_records.snapshot()
             if export_counts:
-                sections.append(
+                out.append(
                     _render_labeled_counter(
                         self._name_cloud_experience_export_records,
                         "Cloud experience records exported (label: result)",
@@ -1845,23 +1902,28 @@ class MetricsRegistry:
                         export_counts,
                     )
                 )
-            sections.append(
+            out.append(
                 _render_gauge(
                     self._name_cloud_experience_hwm_lag,
                     "Experience records between LMDB HWM and tip",
                     self._cloud_experience_hwm_lag.value,
                 )
             )
-            sections.append(
+            out.append(
                 _render_gauge(
                     self._name_cloud_experience_queue_depth,
                     "Pending experience records awaiting cloud publish",
                     self._cloud_experience_queue_depth.value,
                 )
             )
+        return out
 
+    def _families_mcp(self) -> list[list[str]]:
+        """MCP request / tool-call / latency families."""
+        cfg = self._cfg
+        out: list[list[str]] = []
         if cfg.track_mcp:
-            sections.append(
+            out.append(
                 _render_counter(
                     self._name_mcp_requests,
                     "Total MCP requests received",
@@ -1870,7 +1932,7 @@ class MetricsRegistry:
             )
             tool_call_snapshot = self._mcp_tool_calls.snapshot()
             if tool_call_snapshot:
-                sections.append(
+                out.append(
                     _render_double_labeled_counter(
                         self._name_mcp_tool_calls,
                         "MCP tool call outcomes (labels: tool, result)",
@@ -1881,7 +1943,7 @@ class MetricsRegistry:
                 )
             mcp_buckets, mcp_sum, mcp_count = self._mcp_request_latency_ms.snapshot()
             if mcp_count > 0:
-                sections.append(
+                out.append(
                     _render_histogram(
                         self._name_mcp_request_latency,
                         "MCP request latency histogram (milliseconds)",
@@ -1890,14 +1952,18 @@ class MetricsRegistry:
                         mcp_count,
                     )
                 )
+        return out
 
+    def _families_replay_vla(self) -> list[list[str]]:
+        """Replay / VLA / world-model / VLM observability families."""
+        out: list[list[str]] = []
         # PR-A2 — replay / VLA / VLM observability metrics. Emit conditionally
         # so deployments that never exercise these paths don't ship zero-valued
         # series. The Prometheus exposition spec allows a metric to be absent
         # entirely when no observations exist; promtool tolerates that.
         replay_snapshot = self._replay_records.snapshot()
         if replay_snapshot:
-            sections.append(
+            out.append(
                 _render_labeled_counter(
                     self._name_replay_records,
                     "LMDB replay records read (labels: outcome=ok|schema_mismatch)",
@@ -1907,7 +1973,7 @@ class MetricsRegistry:
             )
         vla_buckets, vla_sum, vla_count = self._vla_inference_seconds.snapshot()
         if vla_count > 0:
-            sections.append(
+            out.append(
                 _render_histogram(
                     self._name_vla_inference_seconds,
                     "VLA policy inference latency histogram (seconds)",
@@ -1918,7 +1984,7 @@ class MetricsRegistry:
             )
         wm_buckets, wm_sum, wm_count = self._world_model_observe_step_seconds.snapshot()
         if wm_count > 0:
-            sections.append(
+            out.append(
                 _render_histogram(
                     self._name_world_model_observe_step_seconds,
                     "DualStreamRSSM.observe_step latency histogram (seconds)",
@@ -1929,7 +1995,7 @@ class MetricsRegistry:
             )
         vla_timeout_snapshot = self._vla_timeouts.snapshot()
         if vla_timeout_snapshot:
-            sections.append(
+            out.append(
                 _render_labeled_counter(
                     self._name_vla_timeouts,
                     "VLA inference timeouts / fallbacks (label: mode)",
@@ -1938,7 +2004,7 @@ class MetricsRegistry:
                 )
             )
         if self._vlm_progress_cache_hits.value > 0:
-            sections.append(
+            out.append(
                 _render_counter(
                     self._name_vlm_progress_cache_hits,
                     "VLM progress-reward cache hits",
@@ -1946,21 +2012,25 @@ class MetricsRegistry:
                 )
             )
         if self._vlm_progress_cache_misses.value > 0:
-            sections.append(
+            out.append(
                 _render_counter(
                     self._name_vlm_progress_cache_misses,
                     "VLM progress-reward cache misses",
                     self._vlm_progress_cache_misses.value,
                 )
             )
+        return out
 
+    def _families_cloud_ota(self) -> list[list[str]]:
+        """Tier-C1 cloud weight-update OTA families."""
+        out: list[list[str]] = []
         # Tier C1 — cloud weight-update OTA metrics. Emitted only after the
         # first observation/increment lands so deployments with the OTA
         # poller disabled (default ``cloud.weight_update.poll_interval_s = 0``)
         # produce byte-identical Prometheus exposition output to pre-C1.
         cwu_downloads = self._cloud_weight_update_downloads.snapshot()
         if cwu_downloads:
-            sections.append(
+            out.append(
                 _render_labeled_counter(
                     self._name_cloud_weight_update_downloads,
                     "OTA weight-update downloads from HF Hub (label: repo_id)",
@@ -1970,7 +2040,7 @@ class MetricsRegistry:
             )
         cwu_mismatches = self._cloud_weight_update_sha256_mismatches.snapshot()
         if cwu_mismatches:
-            sections.append(
+            out.append(
                 _render_labeled_counter(
                     self._name_cloud_weight_update_sha256_mismatches,
                     "OTA weight-update SHA-256 integrity failures (label: repo_id)",
@@ -1980,7 +2050,7 @@ class MetricsRegistry:
             )
         cwu_buckets, cwu_sum, cwu_count = self._cloud_weight_update_download_seconds.snapshot()
         if cwu_count > 0:
-            sections.append(
+            out.append(
                 _render_histogram(
                     self._name_cloud_weight_update_download_seconds,
                     "OTA weight-update download latency histogram (seconds)",
@@ -1991,7 +2061,7 @@ class MetricsRegistry:
             )
         cwu_swaps = self._cloud_weight_update_swaps.snapshot()
         if cwu_swaps:
-            sections.append(
+            out.append(
                 _render_labeled_counter(
                     self._name_cloud_weight_update_swaps,
                     "OTA atomic engine swaps applied by the orchestrator (label: engine_type)",
@@ -1999,13 +2069,17 @@ class MetricsRegistry:
                     cwu_swaps,
                 )
             )
+        return out
 
+    def _families_mission_lifecycle(self) -> list[list[str]]:
+        """Tier-C2 mission-lifecycle + safety-projection families."""
+        out: list[list[str]] = []
         # Tier C2 (C2.3) — mission lifecycle + safety projection.
         # Emit conditionally so deployments that never exercise these
         # paths don't ship zero-valued series (matches the PR-A2 pattern).
         safety_clamps_snapshot = self._safety_action_clamps.snapshot()
         if safety_clamps_snapshot:
-            sections.append(
+            out.append(
                 _render_labeled_counter(
                     self._name_safety_action_clamps,
                     "Safety action clamps applied by the projector (label: reason)",
@@ -2015,7 +2089,7 @@ class MetricsRegistry:
             )
         mission_transitions_snapshot = self._mission_state_transitions.snapshot()
         if mission_transitions_snapshot:
-            sections.append(
+            out.append(
                 _render_double_labeled_counter(
                     self._name_mission_state_transitions,
                     "Mission lifecycle state transitions (labels: from_state, to_state)",
@@ -2026,7 +2100,7 @@ class MetricsRegistry:
             )
         mission_replans_snapshot = self._mission_replans.snapshot()
         if mission_replans_snapshot:
-            sections.append(
+            out.append(
                 _render_labeled_counter(
                     self._name_mission_replans,
                     "Mission replans by outcome (label: outcome)",
@@ -2037,7 +2111,7 @@ class MetricsRegistry:
         # Tier C2.3 — LLM replan call counter (ok/degraded/exception).
         mission_replan_llm_snapshot = self._mission_replan_llm_calls.snapshot()
         if mission_replan_llm_snapshot:
-            sections.append(
+            out.append(
                 _render_labeled_counter(
                     self._name_mission_replan_llm_calls,
                     "LLM-backed replan attempts by outcome (label: outcome)",
@@ -2051,7 +2125,7 @@ class MetricsRegistry:
             mission_count,
         ) = self._mission_active_duration_seconds.snapshot()
         if mission_count > 0:
-            sections.append(
+            out.append(
                 _render_histogram(
                     self._name_mission_active_duration_seconds,
                     "Mission active duration histogram (seconds)",
@@ -2060,11 +2134,15 @@ class MetricsRegistry:
                     mission_count,
                 )
             )
+        return out
 
+    def _families_subsystem_failures(self) -> list[list[str]]:
+        """Subsystem-failure counter (always emitted when non-empty)."""
+        out: list[list[str]] = []
         # Subsystem failures — always emitted regardless of config toggles
         failure_snapshot = self._subsystem_failures.snapshot()
         if failure_snapshot:
-            sections.append(
+            out.append(
                 _render_triple_labeled_counter(
                     self._name_subsystem_failures,
                     "Subsystem failure events (labels: subsystem, reason, level)",
@@ -2074,21 +2152,17 @@ class MetricsRegistry:
                     failure_snapshot,
                 )
             )
+        return out
 
-        sections.append(
-            _render_gauge(
-                self._name_publish_hz,
-                "Telemetry publisher rate (Hz)",
-                self._publish_hz.value,
-            )
-        )
-
+    def _families_streaming(self) -> list[list[str]]:
+        """PR-#4 streaming / dashboard-liveness families."""
+        out: list[list[str]] = []
         # PR #4 — telemetry streaming + dashboard liveness metrics.
         # Emit conditionally so deployments that never touch the new
         # APIs don't produce noisy zero-valued series.
         liveness_snapshot = self._sensor_liveness.snapshot()
         if liveness_snapshot:
-            sections.append(
+            out.append(
                 _render_double_labeled_gauge(
                     self._name_sensor_liveness,
                     "Per-sensor liveness (labels: sensor, state)",
@@ -2099,7 +2173,7 @@ class MetricsRegistry:
             )
         mdns_snapshot = self._mdns_registered.snapshot()
         if mdns_snapshot:
-            sections.append(
+            out.append(
                 _render_labeled_gauge(
                     self._name_mdns_registered,
                     "mDNS service registration indicator (1=registered, 0=failed)",
@@ -2108,7 +2182,7 @@ class MetricsRegistry:
                 )
             )
         if self._bound_port.value > 0:
-            sections.append(
+            out.append(
                 _render_gauge(
                     self._name_bound_port,
                     "Actual TCP port the telemetry server bound to",
@@ -2116,22 +2190,21 @@ class MetricsRegistry:
                 )
             )
         if self._lidar_raw_published.value > 0 or self._lidar_raw_dropped.value > 0:
-            sections.append(
+            out.append(
                 _render_counter(
                     self._name_lidar_raw_published.removesuffix("_total"),
                     "Raw LiDAR scans published to the streaming queue",
                     self._lidar_raw_published.value,
                 )
             )
-            sections.append(
+            out.append(
                 _render_counter(
                     self._name_lidar_raw_dropped.removesuffix("_total"),
                     "Raw LiDAR scans dropped (streaming queue full)",
                     self._lidar_raw_dropped.value,
                 )
             )
-
-        return "\n\n".join("\n".join(section) for section in sections) + "\n"
+        return out
 
 
 def generate_metrics_sample() -> str:

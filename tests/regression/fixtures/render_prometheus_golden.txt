@@ -1,0 +1,365 @@
+# HELP mousedroid_uptime_seconds Seconds since metrics registry start
+# TYPE mousedroid_uptime_seconds gauge
+mousedroid_uptime_seconds <MASKED>
+
+# HELP mousedroid_frame_drops_total Telemetry frames dropped due to backpressure
+# TYPE mousedroid_frame_drops_total counter
+mousedroid_frame_drops_total 3
+
+# HELP mousedroid_safety_violations_total Safety law violations (label: law)
+# TYPE mousedroid_safety_violations_total counter
+mousedroid_safety_violations_total{law="law1"} 1
+
+# HELP mousedroid_loop_time_ms Last control-loop iteration time (milliseconds)
+# TYPE mousedroid_loop_time_ms gauge
+mousedroid_loop_time_ms 15
+
+# HELP mousedroid_loop_latency_ms Control-loop iteration latency histogram (milliseconds)
+# TYPE mousedroid_loop_latency_ms histogram
+mousedroid_loop_latency_ms_bucket{le="1"} 0
+mousedroid_loop_latency_ms_bucket{le="2.5"} 0
+mousedroid_loop_latency_ms_bucket{le="5"} 0
+mousedroid_loop_latency_ms_bucket{le="10"} 0
+mousedroid_loop_latency_ms_bucket{le="20"} 1
+mousedroid_loop_latency_ms_bucket{le="33"} 1
+mousedroid_loop_latency_ms_bucket{le="50"} 1
+mousedroid_loop_latency_ms_bucket{le="100"} 1
+mousedroid_loop_latency_ms_bucket{le="200"} 1
+mousedroid_loop_latency_ms_bucket{le="+Inf"} 1
+mousedroid_loop_latency_ms_sum 15
+mousedroid_loop_latency_ms_count 1
+
+# HELP mousedroid_battery_voltage_v Battery voltage (volts)
+# TYPE mousedroid_battery_voltage_v gauge
+mousedroid_battery_voltage_v 11.8
+
+# HELP mousedroid_ws_client_count Number of currently connected WebSocket clients
+# TYPE mousedroid_ws_client_count gauge
+mousedroid_ws_client_count 2
+
+# HELP mousedroid_gpu_temp_celsius GPU temperature (degrees Celsius)
+# TYPE mousedroid_gpu_temp_celsius gauge
+mousedroid_gpu_temp_celsius 52
+
+# HELP mousedroid_llm_translation_total LLM translation results (label: result)
+# TYPE mousedroid_llm_translation_total counter
+mousedroid_llm_translation_total{result="translated"} 1
+
+# HELP mousedroid_llm_translation_latency_ms LLM translation latency histogram (milliseconds)
+# TYPE mousedroid_llm_translation_latency_ms histogram
+mousedroid_llm_translation_latency_ms_bucket{le="25"} 0
+mousedroid_llm_translation_latency_ms_bucket{le="50"} 1
+mousedroid_llm_translation_latency_ms_bucket{le="100"} 1
+mousedroid_llm_translation_latency_ms_bucket{le="250"} 1
+mousedroid_llm_translation_latency_ms_bucket{le="500"} 1
+mousedroid_llm_translation_latency_ms_bucket{le="1000"} 1
+mousedroid_llm_translation_latency_ms_bucket{le="2000"} 1
+mousedroid_llm_translation_latency_ms_bucket{le="+Inf"} 1
+mousedroid_llm_translation_latency_ms_sum 42
+mousedroid_llm_translation_latency_ms_count 1
+
+# HELP mousedroid_llm_tokens_total LLM gateway token usage (labels: model, token_type)
+# TYPE mousedroid_llm_tokens_total counter
+mousedroid_llm_tokens_total{model="claude-haiku-4-5",token_type="input"} 120
+mousedroid_llm_tokens_total{model="claude-haiku-4-5",token_type="output"} 40
+
+# HELP mousedroid_llm_gateway_latency_ms LLM gateway round-trip latency histogram (milliseconds)
+# TYPE mousedroid_llm_gateway_latency_ms histogram
+mousedroid_llm_gateway_latency_ms_bucket{le="50"} 0
+mousedroid_llm_gateway_latency_ms_bucket{le="100"} 0
+mousedroid_llm_gateway_latency_ms_bucket{le="250"} 1
+mousedroid_llm_gateway_latency_ms_bucket{le="500"} 1
+mousedroid_llm_gateway_latency_ms_bucket{le="1000"} 1
+mousedroid_llm_gateway_latency_ms_bucket{le="2000"} 1
+mousedroid_llm_gateway_latency_ms_bucket{le="5000"} 1
+mousedroid_llm_gateway_latency_ms_bucket{le="10000"} 1
+mousedroid_llm_gateway_latency_ms_bucket{le="+Inf"} 1
+mousedroid_llm_gateway_latency_ms_sum 180
+mousedroid_llm_gateway_latency_ms_count 1
+
+# HELP mousedroid_llm_gateway_served_total LLM gateway translations served (labels: tier, outcome)
+# TYPE mousedroid_llm_gateway_served_total counter
+mousedroid_llm_gateway_served_total{tier="primary",outcome="ok"} 1
+mousedroid_llm_gateway_served_total{tier="secondary",outcome="degraded"} 1
+
+# HELP mousedroid_llm_latency_budget_exceeded_total LLM gateway latency-budget-exceeded events (label: model)
+# TYPE mousedroid_llm_latency_budget_exceeded_total counter
+mousedroid_llm_latency_budget_exceeded_total{model="claude-haiku-4-5"} 1
+
+# HELP mousedroid_on_device_learning_reverted_total On-device-learning weight-update reverts (label: reason)
+# TYPE mousedroid_on_device_learning_reverted_total counter
+mousedroid_on_device_learning_reverted_total{reason="exception"} 1
+mousedroid_on_device_learning_reverted_total{reason="integrity_mismatch"} 1
+mousedroid_on_device_learning_reverted_total{reason="regression_bound"} 1
+
+# HELP mousedroid_lidar_sector_distance_m Per-sector LiDAR distance in metres (label: sector)
+# TYPE mousedroid_lidar_sector_distance_m gauge
+mousedroid_lidar_sector_distance_m{sector="0"} 10.8
+mousedroid_lidar_sector_distance_m{sector="1"} 4.8
+mousedroid_lidar_sector_distance_m{sector="2"} 12
+mousedroid_lidar_sector_distance_m{sector="3"} 12
+mousedroid_lidar_sector_distance_m{sector="4"} 8.4
+mousedroid_lidar_sector_distance_m{sector="5"} 12
+mousedroid_lidar_sector_distance_m{sector="6"} 12
+mousedroid_lidar_sector_distance_m{sector="7"} 2.4
+
+# HELP mousedroid_lidar_min_distance_m Minimum LiDAR distance across all sectors (metres)
+# TYPE mousedroid_lidar_min_distance_m gauge
+mousedroid_lidar_min_distance_m 2.4
+
+# HELP mousedroid_lidar_scan_points Number of raw points in the last LiDAR scan
+# TYPE mousedroid_lidar_scan_points gauge
+mousedroid_lidar_scan_points 456
+
+# HELP mousedroid_memory_episodic_size Episodic replay buffer size
+# TYPE mousedroid_memory_episodic_size gauge
+mousedroid_memory_episodic_size 128
+
+# HELP mousedroid_memory_semantic_size Semantic index size
+# TYPE mousedroid_memory_semantic_size gauge
+mousedroid_memory_semantic_size 64
+
+# HELP mousedroid_memory_working_size Working memory buffer size
+# TYPE mousedroid_memory_working_size gauge
+mousedroid_memory_working_size 16
+
+# HELP mousedroid_voice_events_total Voice events triggered (label: event_type)
+# TYPE mousedroid_voice_events_total counter
+mousedroid_voice_events_total{event_type="wake_word"} 1
+
+# HELP mousedroid_llm_latency_ms Last LLM mission parse latency (milliseconds)
+# TYPE mousedroid_llm_latency_ms gauge
+mousedroid_llm_latency_ms 210
+
+# HELP mousedroid_llm_requests_total Total LLM mission parse requests
+# TYPE mousedroid_llm_requests_total counter
+mousedroid_llm_requests_total 1
+
+# HELP mousedroid_curiosity_intrinsic_reward Latest intrinsic curiosity reward
+# TYPE mousedroid_curiosity_intrinsic_reward gauge
+mousedroid_curiosity_intrinsic_reward 0.37
+
+# HELP mousedroid_sensor_recoveries_total Total successful sensor recoveries
+# TYPE mousedroid_sensor_recoveries_total counter
+mousedroid_sensor_recoveries_total 2
+
+# HELP mousedroid_sensor_recovery_failures_total Total failed sensor recovery attempts
+# TYPE mousedroid_sensor_recovery_failures_total counter
+mousedroid_sensor_recovery_failures_total 1
+
+# HELP mousedroid_cloud_telemetry_publish_total Cloud telemetry publish outcomes (label: result)
+# TYPE mousedroid_cloud_telemetry_publish_total counter
+mousedroid_cloud_telemetry_publish_total{result="ok"} 1
+
+# HELP mousedroid_cloud_experience_publish_total Cloud experience publish outcomes (label: result)
+# TYPE mousedroid_cloud_experience_publish_total counter
+mousedroid_cloud_experience_publish_total{result="ok"} 1
+
+# HELP mousedroid_cloud_telemetry_publish_latency_ms Cloud telemetry publish latency (milliseconds)
+# TYPE mousedroid_cloud_telemetry_publish_latency_ms histogram
+mousedroid_cloud_telemetry_publish_latency_ms_bucket{le="25"} 1
+mousedroid_cloud_telemetry_publish_latency_ms_bucket{le="50"} 1
+mousedroid_cloud_telemetry_publish_latency_ms_bucket{le="100"} 1
+mousedroid_cloud_telemetry_publish_latency_ms_bucket{le="250"} 1
+mousedroid_cloud_telemetry_publish_latency_ms_bucket{le="500"} 1
+mousedroid_cloud_telemetry_publish_latency_ms_bucket{le="1000"} 1
+mousedroid_cloud_telemetry_publish_latency_ms_bucket{le="2000"} 1
+mousedroid_cloud_telemetry_publish_latency_ms_bucket{le="+Inf"} 1
+mousedroid_cloud_telemetry_publish_latency_ms_sum 12
+mousedroid_cloud_telemetry_publish_latency_ms_count 1
+
+# HELP mousedroid_cloud_experience_publish_latency_ms Cloud experience publish latency (milliseconds)
+# TYPE mousedroid_cloud_experience_publish_latency_ms histogram
+mousedroid_cloud_experience_publish_latency_ms_bucket{le="25"} 1
+mousedroid_cloud_experience_publish_latency_ms_bucket{le="50"} 1
+mousedroid_cloud_experience_publish_latency_ms_bucket{le="100"} 1
+mousedroid_cloud_experience_publish_latency_ms_bucket{le="250"} 1
+mousedroid_cloud_experience_publish_latency_ms_bucket{le="500"} 1
+mousedroid_cloud_experience_publish_latency_ms_bucket{le="1000"} 1
+mousedroid_cloud_experience_publish_latency_ms_bucket{le="2000"} 1
+mousedroid_cloud_experience_publish_latency_ms_bucket{le="+Inf"} 1
+mousedroid_cloud_experience_publish_latency_ms_sum 18
+mousedroid_cloud_experience_publish_latency_ms_count 1
+
+# HELP mousedroid_cloud_circuit_state Circuit breaker state (0=closed, 1=half_open, 2=open; label: breaker)
+# TYPE mousedroid_cloud_circuit_state gauge
+mousedroid_cloud_circuit_state{breaker="telemetry"} 0
+
+# HELP mousedroid_cloud_experience_export_records_total Cloud experience records exported (label: result)
+# TYPE mousedroid_cloud_experience_export_records_total counter
+mousedroid_cloud_experience_export_records_total{result="ok"} 5
+
+# HELP mousedroid_cloud_experience_hwm_lag Experience records between LMDB HWM and tip
+# TYPE mousedroid_cloud_experience_hwm_lag gauge
+mousedroid_cloud_experience_hwm_lag 3
+
+# HELP mousedroid_cloud_experience_queue_depth Pending experience records awaiting cloud publish
+# TYPE mousedroid_cloud_experience_queue_depth gauge
+mousedroid_cloud_experience_queue_depth 7
+
+# HELP mousedroid_mcp_requests_total Total MCP requests received
+# TYPE mousedroid_mcp_requests_total counter
+mousedroid_mcp_requests_total 1
+
+# HELP mousedroid_mcp_tool_calls_total MCP tool call outcomes (labels: tool, result)
+# TYPE mousedroid_mcp_tool_calls_total counter
+mousedroid_mcp_tool_calls_total{tool="calibrate",result="ok"} 1
+
+# HELP mousedroid_mcp_request_latency_ms MCP request latency histogram (milliseconds)
+# TYPE mousedroid_mcp_request_latency_ms histogram
+mousedroid_mcp_request_latency_ms_bucket{le="5"} 0
+mousedroid_mcp_request_latency_ms_bucket{le="10"} 1
+mousedroid_mcp_request_latency_ms_bucket{le="25"} 1
+mousedroid_mcp_request_latency_ms_bucket{le="50"} 1
+mousedroid_mcp_request_latency_ms_bucket{le="100"} 1
+mousedroid_mcp_request_latency_ms_bucket{le="250"} 1
+mousedroid_mcp_request_latency_ms_bucket{le="500"} 1
+mousedroid_mcp_request_latency_ms_bucket{le="1000"} 1
+mousedroid_mcp_request_latency_ms_bucket{le="5000"} 1
+mousedroid_mcp_request_latency_ms_bucket{le="+Inf"} 1
+mousedroid_mcp_request_latency_ms_sum 9
+mousedroid_mcp_request_latency_ms_count 1
+
+# HELP mousedroid_replay_records_total LMDB replay records read (labels: outcome=ok|schema_mismatch)
+# TYPE mousedroid_replay_records_total counter
+mousedroid_replay_records_total{outcome="ok"} 1
+mousedroid_replay_records_total{outcome="schema_mismatch"} 1
+
+# HELP mousedroid_vla_inference_seconds VLA policy inference latency histogram (seconds)
+# TYPE mousedroid_vla_inference_seconds histogram
+mousedroid_vla_inference_seconds_bucket{le="0.005"} 0
+mousedroid_vla_inference_seconds_bucket{le="0.01"} 0
+mousedroid_vla_inference_seconds_bucket{le="0.025"} 1
+mousedroid_vla_inference_seconds_bucket{le="0.05"} 1
+mousedroid_vla_inference_seconds_bucket{le="0.1"} 1
+mousedroid_vla_inference_seconds_bucket{le="0.25"} 1
+mousedroid_vla_inference_seconds_bucket{le="0.5"} 1
+mousedroid_vla_inference_seconds_bucket{le="1"} 1
+mousedroid_vla_inference_seconds_bucket{le="2.5"} 1
+mousedroid_vla_inference_seconds_bucket{le="+Inf"} 1
+mousedroid_vla_inference_seconds_sum 0.012
+mousedroid_vla_inference_seconds_count 1
+
+# HELP mousedroid_world_model_observe_step_seconds DualStreamRSSM.observe_step latency histogram (seconds)
+# TYPE mousedroid_world_model_observe_step_seconds histogram
+mousedroid_world_model_observe_step_seconds_bucket{le="0.001"} 0
+mousedroid_world_model_observe_step_seconds_bucket{le="0.0025"} 0
+mousedroid_world_model_observe_step_seconds_bucket{le="0.005"} 0
+mousedroid_world_model_observe_step_seconds_bucket{le="0.01"} 1
+mousedroid_world_model_observe_step_seconds_bucket{le="0.025"} 1
+mousedroid_world_model_observe_step_seconds_bucket{le="0.05"} 1
+mousedroid_world_model_observe_step_seconds_bucket{le="0.1"} 1
+mousedroid_world_model_observe_step_seconds_bucket{le="0.25"} 1
+mousedroid_world_model_observe_step_seconds_bucket{le="+Inf"} 1
+mousedroid_world_model_observe_step_seconds_sum 0.008
+mousedroid_world_model_observe_step_seconds_count 1
+
+# HELP mousedroid_vla_timeouts_total VLA inference timeouts / fallbacks (label: mode)
+# TYPE mousedroid_vla_timeouts_total counter
+mousedroid_vla_timeouts_total{mode="distilled_onnx"} 1
+
+# HELP mousedroid_vlm_progress_cache_hits_total VLM progress-reward cache hits
+# TYPE mousedroid_vlm_progress_cache_hits_total counter
+mousedroid_vlm_progress_cache_hits_total 1
+
+# HELP mousedroid_vlm_progress_cache_misses_total VLM progress-reward cache misses
+# TYPE mousedroid_vlm_progress_cache_misses_total counter
+mousedroid_vlm_progress_cache_misses_total 1
+
+# HELP mousedroid_cloud_weight_update_downloads_total OTA weight-update downloads from HF Hub (label: repo_id)
+# TYPE mousedroid_cloud_weight_update_downloads_total counter
+mousedroid_cloud_weight_update_downloads_total{repo_id="ianshank/mousedroid-policy-v2"} 1
+
+# HELP mousedroid_cloud_weight_update_sha256_mismatches_total OTA weight-update SHA-256 integrity failures (label: repo_id)
+# TYPE mousedroid_cloud_weight_update_sha256_mismatches_total counter
+mousedroid_cloud_weight_update_sha256_mismatches_total{repo_id="ianshank/mousedroid-policy-v2"} 1
+
+# HELP mousedroid_cloud_weight_update_download_seconds OTA weight-update download latency histogram (seconds)
+# TYPE mousedroid_cloud_weight_update_download_seconds histogram
+mousedroid_cloud_weight_update_download_seconds_bucket{le="0.5"} 0
+mousedroid_cloud_weight_update_download_seconds_bucket{le="1"} 0
+mousedroid_cloud_weight_update_download_seconds_bucket{le="2.5"} 1
+mousedroid_cloud_weight_update_download_seconds_bucket{le="5"} 1
+mousedroid_cloud_weight_update_download_seconds_bucket{le="10"} 1
+mousedroid_cloud_weight_update_download_seconds_bucket{le="30"} 1
+mousedroid_cloud_weight_update_download_seconds_bucket{le="60"} 1
+mousedroid_cloud_weight_update_download_seconds_bucket{le="120"} 1
+mousedroid_cloud_weight_update_download_seconds_bucket{le="300"} 1
+mousedroid_cloud_weight_update_download_seconds_bucket{le="+Inf"} 1
+mousedroid_cloud_weight_update_download_seconds_sum 2.5
+mousedroid_cloud_weight_update_download_seconds_count 1
+
+# HELP mousedroid_cloud_weight_update_swaps_total OTA atomic engine swaps applied by the orchestrator (label: engine_type)
+# TYPE mousedroid_cloud_weight_update_swaps_total counter
+mousedroid_cloud_weight_update_swaps_total{engine_type="policy"} 1
+mousedroid_cloud_weight_update_swaps_total{engine_type="world_model"} 1
+
+# HELP mousedroid_safety_action_clamps_total Safety action clamps applied by the projector (label: reason)
+# TYPE mousedroid_safety_action_clamps_total counter
+mousedroid_safety_action_clamps_total{reason="forward_velocity"} 1
+mousedroid_safety_action_clamps_total{reason="human_proximity"} 1
+
+# HELP mousedroid_mission_state_transitions_total Mission lifecycle state transitions (labels: from_state, to_state)
+# TYPE mousedroid_mission_state_transitions_total counter
+mousedroid_mission_state_transitions_total{from_state="pending",to_state="running"} 1
+mousedroid_mission_state_transitions_total{from_state="running",to_state="succeeded"} 1
+
+# HELP mousedroid_mission_replans_total Mission replans by outcome (label: outcome)
+# TYPE mousedroid_mission_replans_total counter
+mousedroid_mission_replans_total{outcome="failed"} 1
+mousedroid_mission_replans_total{outcome="succeeded"} 1
+
+# HELP mousedroid_mission_replan_llm_calls_total LLM-backed replan attempts by outcome (label: outcome)
+# TYPE mousedroid_mission_replan_llm_calls_total counter
+mousedroid_mission_replan_llm_calls_total{outcome="ok"} 1
+
+# HELP mousedroid_mission_active_duration_seconds Mission active duration histogram (seconds)
+# TYPE mousedroid_mission_active_duration_seconds histogram
+mousedroid_mission_active_duration_seconds_bucket{le="1"} 0
+mousedroid_mission_active_duration_seconds_bucket{le="5"} 0
+mousedroid_mission_active_duration_seconds_bucket{le="15"} 0
+mousedroid_mission_active_duration_seconds_bucket{le="30"} 0
+mousedroid_mission_active_duration_seconds_bucket{le="60"} 1
+mousedroid_mission_active_duration_seconds_bucket{le="120"} 1
+mousedroid_mission_active_duration_seconds_bucket{le="300"} 1
+mousedroid_mission_active_duration_seconds_bucket{le="600"} 1
+mousedroid_mission_active_duration_seconds_bucket{le="1800"} 1
+mousedroid_mission_active_duration_seconds_bucket{le="+Inf"} 1
+mousedroid_mission_active_duration_seconds_sum 45
+mousedroid_mission_active_duration_seconds_count 1
+
+# HELP mousedroid_subsystem_failures_total Subsystem failure events (labels: subsystem, reason, level)
+# TYPE mousedroid_subsystem_failures_total counter
+mousedroid_subsystem_failures_total{subsystem="telemetry",reason="bind_exhausted",level="warning"} 1
+mousedroid_subsystem_failures_total{subsystem="voice",reason="device_disconnected",level="error"} 1
+
+# HELP mousedroid_publish_hz Telemetry publisher rate (Hz)
+# TYPE mousedroid_publish_hz gauge
+mousedroid_publish_hz 10
+
+# HELP mousedroid_telemetry_sensor_liveness Per-sensor liveness (labels: sensor, state)
+# TYPE mousedroid_telemetry_sensor_liveness gauge
+mousedroid_telemetry_sensor_liveness{sensor="lidar",state="awaiting"} 0
+mousedroid_telemetry_sensor_liveness{sensor="lidar",state="disabled"} 0
+mousedroid_telemetry_sensor_liveness{sensor="lidar",state="live"} 0
+mousedroid_telemetry_sensor_liveness{sensor="lidar",state="stale"} 1
+mousedroid_telemetry_sensor_liveness{sensor="vision",state="awaiting"} 0
+mousedroid_telemetry_sensor_liveness{sensor="vision",state="disabled"} 0
+mousedroid_telemetry_sensor_liveness{sensor="vision",state="live"} 1
+mousedroid_telemetry_sensor_liveness{sensor="vision",state="stale"} 0
+
+# HELP mousedroid_telemetry_mdns_registered mDNS service registration indicator (1=registered, 0=failed)
+# TYPE mousedroid_telemetry_mdns_registered gauge
+mousedroid_telemetry_mdns_registered{service="mousedroid._http._tcp"} 1
+
+# HELP mousedroid_telemetry_bound_port Actual TCP port the telemetry server bound to
+# TYPE mousedroid_telemetry_bound_port gauge
+mousedroid_telemetry_bound_port 8080
+
+# HELP mousedroid_telemetry_lidar_raw_published_total Raw LiDAR scans published to the streaming queue
+# TYPE mousedroid_telemetry_lidar_raw_published_total counter
+mousedroid_telemetry_lidar_raw_published_total 11
+
+# HELP mousedroid_telemetry_lidar_raw_dropped_total Raw LiDAR scans dropped (streaming queue full)
+# TYPE mousedroid_telemetry_lidar_raw_dropped_total counter
+mousedroid_telemetry_lidar_raw_dropped_total 2

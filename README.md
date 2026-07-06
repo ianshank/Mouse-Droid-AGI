@@ -826,7 +826,7 @@ mypy src/ --strict --ignore-missing-imports
 
 ### CI quality gates
 
-Beyond lint / type / test, two structural gates run in CI:
+Beyond lint / type / test, three structural gates run in CI:
 
 - **`config-compat`** (`.github/workflows/config-compat.yml`) — schema-drift gate
   asserting existing YAML overlays still load against the current Pydantic schema,
@@ -834,6 +834,11 @@ Beyond lint / type / test, two structural gates run in CI:
 - **`actionlint`** (Stage 0 of `.github/workflows/ci.yml`) — workflow-lint gate that
   validates the GitHub Actions workflow files themselves, catching invalid expressions
   that would otherwise silently startup-fail a run and disable a gate.
+- **Cyclomatic-complexity gate** (`ruff` `C901`, `max-complexity = 15`, part of the
+  lint stage) — every function stays under McCabe complexity 15. The `src/` baseline
+  is empty (see [ADR-014](docs/architecture/ADR-014-cyclomatic-complexity-gate.md));
+  `tests/regression/test_complexity_gate.py` pins the config and forbids re-opening a
+  `src/` C901 baseline to dodge a decomposition.
 
 ---
 

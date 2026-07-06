@@ -463,37 +463,8 @@ class MouseDroidOrchestrator:
             await self._face_controller.start()
         if self._experience_logger is not None:
             self._experience_logger.open()
-        if self._cloud_sink is not None:
-            await self._cloud_sink.start()
-        if self._cloud_experience_exporter is not None:
-            await self._cloud_experience_exporter.start()
-        # Tier C1 / C1.2 — start every wired OTA poller as part of the
-        # orchestrator lifecycle. Wrapped in try/except so a poller failure
-        # (HF Hub unreachable at boot, etc.) can't block the orchestrator
-        # from coming up. Each poller's own ``start`` is a no-op when
-        # ``poll_interval_s = 0.0``, so default deployments pay zero cost.
-        # An empty mapping skips the loop entirely. (Copilot 3253293644 /
-        # 3253309972.)
-        for poller in self._weight_update_pollers.values():
-            try:
-                await poller.start()
-            except Exception:  # pylint: disable=broad-except
-                _log.warning("cloud_weight_update_poller_start_failed", exc_info=True)
-        if self._memory_tier is not None:
-            self._consolidation_task = spawn_tracked(
-                self._consolidation_tasks,
-                self._consolidation_loop(),
-                name=self._consolidation_loop.__name__,
-            )
-        # Phase 6 WS3 — spawn the replay-trigger slow task ONLY when the
-        # coordinator is wired AND on-device learning is enabled. Both gates
-        # absent keeps the lifecycle byte-identical to pre-WS3.
-        if self._on_device_coordinator is not None and self._on_device_learning_enabled():
-            self._on_device_task = spawn_tracked(
-                self._on_device_tasks,
-                self._on_device_update_loop(),
-                name=self._on_device_update_loop.__name__,
-            )
+        await self._start_cloud_subsystems()
+        self._spawn_slow_background_tasks()
         # Harness journal (background writer task). NullJournal is a no-op.
         await self._journal.start()
         # Issue #109 — one-shot MSE-6 greeting, fired here (AFTER the voice
@@ -554,38 +525,51 @@ class MouseDroidOrchestrator:
             return
         _log.info("greeting_startup_complete", name_count=len(greeting_cfg.names))
 
+    async def _start_cloud_subsystems(self) -> None:
+        """Start the cloud sink, experience exporter, and OTA weight pollers.
+
+        Each guard is a no-op when the subsystem is unwired. Every poller's
+        ``start`` is wrapped so a boot-time failure (HF Hub unreachable, etc.)
+        can't block the orchestrator from coming up; an empty mapping skips the
+        loop entirely, so default deployments pay zero cost.
+        """
+        if self._cloud_sink is not None:
+            await self._cloud_sink.start()
+        if self._cloud_experience_exporter is not None:
+            await self._cloud_experience_exporter.start()
+        for poller in self._weight_update_pollers.values():
+            try:
+                await poller.start()
+            except Exception:  # pylint: disable=broad-except
+                _log.warning("cloud_weight_update_poller_start_failed", exc_info=True)
+
+    def _spawn_slow_background_tasks(self) -> None:
+        """Spawn the memory-consolidation and on-device-learning slow tasks.
+
+        Both spawns are gated: consolidation only when a memory tier is wired,
+        the on-device replay-trigger task only when the coordinator is wired AND
+        on-device learning is enabled. Both gates absent keeps the lifecycle
+        byte-identical to pre-WS3. Runs OUTSIDE the 30 Hz loop.
+        """
+        if self._memory_tier is not None:
+            self._consolidation_task = spawn_tracked(
+                self._consolidation_tasks,
+                self._consolidation_loop(),
+                name=self._consolidation_loop.__name__,
+            )
+        if self._on_device_coordinator is not None and self._on_device_learning_enabled():
+            self._on_device_task = spawn_tracked(
+                self._on_device_tasks,
+                self._on_device_update_loop(),
+                name=self._on_device_update_loop.__name__,
+            )
+
     async def stop(self) -> None:
         """Stop all subsystems gracefully."""
         _log.info("orchestrator_stopping")
         self._running = False
-        if self._consolidation_task is not None:
-            if self._consolidation_task in self._consolidation_tasks:
-                await cancel_and_drain(self._consolidation_tasks)
-            elif not self._consolidation_task.done():
-                self._consolidation_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await self._consolidation_task
-            self._consolidation_tasks.discard(self._consolidation_task)
-            self._consolidation_task = None
-        # Phase 6 WS3 — drain the on-device slow task (no-op when never spawned).
-        if self._on_device_task is not None:
-            await cancel_and_drain(self._on_device_tasks)
-            self._on_device_task = None
-        await cancel_and_drain(self._cloud_publish_tasks)
-        # Tier C1 / C1.2 — stop every wired OTA poller. Wrapped in
-        # try/except so a stuck in-flight download on one poller can't
-        # block shutdown of the others or of the orchestrator itself.
-        # An empty mapping skips the loop entirely.
-        for poller in self._weight_update_pollers.values():
-            try:
-                await poller.stop()
-            except Exception:  # pylint: disable=broad-except
-                _log.warning("cloud_weight_update_poller_stop_failed", exc_info=True)
-        if self._cloud_experience_exporter is not None:
-            await self._cloud_experience_exporter.close()
-        if self._cloud_sink is not None:
-            await self._cloud_sink.flush()
-            await self._cloud_sink.close()
+        await self._drain_background_tasks()
+        await self._stop_cloud_subsystems()
         if self._experience_logger is not None:
             self._experience_logger.close()
         if self._face_controller is not None:
@@ -615,6 +599,47 @@ class MouseDroidOrchestrator:
         # Drain and stop the harness journal last so terminal events persist.
         await self._journal.stop()
         _log.info("orchestrator_stopped")
+
+    async def _drain_background_tasks(self) -> None:
+        """Cancel + drain the consolidation, on-device, and cloud-publish tasks.
+
+        Each guard is a no-op when the task was never spawned. The consolidation
+        task is drained via its tracking set when present, else cancelled
+        directly; the on-device and cloud-publish task sets drain unconditionally
+        (empty sets are no-ops).
+        """
+        if self._consolidation_task is not None:
+            if self._consolidation_task in self._consolidation_tasks:
+                await cancel_and_drain(self._consolidation_tasks)
+            elif not self._consolidation_task.done():
+                self._consolidation_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._consolidation_task
+            self._consolidation_tasks.discard(self._consolidation_task)
+            self._consolidation_task = None
+        # Phase 6 WS3 — drain the on-device slow task (no-op when never spawned).
+        if self._on_device_task is not None:
+            await cancel_and_drain(self._on_device_tasks)
+            self._on_device_task = None
+        await cancel_and_drain(self._cloud_publish_tasks)
+
+    async def _stop_cloud_subsystems(self) -> None:
+        """Stop the OTA weight pollers, experience exporter, and cloud sink.
+
+        Each poller's ``stop`` is wrapped so a stuck in-flight download can't
+        block shutdown of the others or of the orchestrator; an empty mapping
+        skips the loop. Guards are no-ops when the subsystem is unwired.
+        """
+        for poller in self._weight_update_pollers.values():
+            try:
+                await poller.stop()
+            except Exception:  # pylint: disable=broad-except
+                _log.warning("cloud_weight_update_poller_stop_failed", exc_info=True)
+        if self._cloud_experience_exporter is not None:
+            await self._cloud_experience_exporter.close()
+        if self._cloud_sink is not None:
+            await self._cloud_sink.flush()
+            await self._cloud_sink.close()
 
     async def tick(self) -> None:
         """Execute one sense-plan-act cycle.
