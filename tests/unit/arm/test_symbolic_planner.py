@@ -1,12 +1,25 @@
-"""Tests for symbolic planner."""
+"""Tests for symbolic planner (Protocol backends + recursive fallback)."""
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+import multiprocessing
+import time
+from unittest.mock import patch
+
+import pytest
 
 from mousedroid.arm.planning.pddl_domain import optimal_move_count
-from mousedroid.arm.planning.symbolic_planner import SymbolicPlanner
-from mousedroid.arm.protocols import SymbolicState
+from mousedroid.arm.planning.symbolic_planner import (
+    PlanningError,
+    PyperplanBackend,
+    RecursiveBackend,
+    SymbolicPlanner,
+    make_primary_backend,
+    parse_solution,
+    run_pyperplan_subprocess,
+    solve_hanoi,
+)
+from mousedroid.arm.protocols import PlanStep, SymbolicPlannerBackend, SymbolicState
 from mousedroid.config.schema import ArmPlanningConfig, ArmTaskConfig
 
 
@@ -75,179 +88,248 @@ class TestSymbolicPlannerPlan:
         assert len(steps) > 0
 
 
-class TestPyperplanIntegration:
-    """Test _solve_pddl and _parse_solution against the pyperplan seam.
+def _steps_runner(*ops: str) -> object:
+    """Return a SearchRunner that yields the given operator string reprs."""
 
-    The previous version of these tests patched ``sys.modules["pyperplan"]``
-    to fake a ``pyperplan.solve(...)`` call that never existed. The real
-    pyperplan (>=2.0) exposes ``pyperplan.planner.search_plan`` via a tiny
-    seam (``_import_search_plan``) in the planner module. These tests patch
-    that seam directly, which is both robust to package-layout changes and
-    independent of import order.
-    """
+    def _runner(_domain: str, _problem: str, _timeout_s: float) -> list[str]:
+        return list(ops)
+
+    return _runner
+
+
+class TestPureHelpers:
+    """Module-level pure helpers shared by the backends + planner."""
+
+    def test_parse_solution_parses_actions(self) -> None:
+        steps = parse_solution(["(move disk_1 peg_A peg_C)", "(move disk_2 peg_A peg_B)"])
+        assert [s.action for s in steps] == ["move", "move"]
+        assert steps[0].args == ["disk_1", "peg_A", "peg_C"]
+
+    def test_parse_solution_skips_blank_lines(self) -> None:
+        assert len(parse_solution(["(move disk_1 peg_A peg_C)", "", "   "])) == 1
+
+    def test_solve_hanoi_optimal_counts(self) -> None:
+        for n in (1, 3, 5):
+            assert len(solve_hanoi(n, 3)) == optimal_move_count(n)
+
+
+class TestRecursiveBackend:
+    """RecursiveBackend is total — always returns an optimal plan."""
+
+    def test_returns_optimal_plan(self) -> None:
+        backend = RecursiveBackend(ArmTaskConfig(num_disks=3, num_pegs=3))
+        steps = backend.search("(domain)", "(problem)")
+        assert steps is not None
+        assert len(steps) == optimal_move_count(3)
+
+    def test_conforms_to_protocol(self) -> None:
+        assert isinstance(RecursiveBackend(ArmTaskConfig()), SymbolicPlannerBackend)
+
+
+class TestPyperplanBackendRunnerInjection:
+    """PyperplanBackend delegates to an injected runner (no real subprocess)."""
+
+    def test_parses_runner_operator_strings(self) -> None:
+        backend = PyperplanBackend(
+            ArmPlanningConfig(),
+            runner=_steps_runner("(move disk_1 peg_A peg_C)", "(move disk_2 peg_A peg_B)"),
+        )
+        steps = backend.search("(domain)", "(problem)")
+        assert steps is not None
+        assert [s.args for s in steps] == [
+            ["disk_1", "peg_A", "peg_C"],
+            ["disk_2", "peg_A", "peg_B"],
+        ]
+
+    def test_returns_none_when_runner_returns_none(self) -> None:
+        backend = PyperplanBackend(ArmPlanningConfig(), runner=lambda *_: None)
+        assert backend.search("(domain)", "(problem)") is None
+
+    def test_returns_none_when_runner_raises(self) -> None:
+        def _boom(*_args: object) -> list[str]:
+            raise RuntimeError("runner exploded")
+
+        backend = PyperplanBackend(ArmPlanningConfig(), runner=_boom)
+        assert backend.search("(domain)", "(problem)") is None
+
+    def test_passes_configured_timeout_to_runner(self) -> None:
+        seen: dict[str, float] = {}
+
+        def _runner(_domain: str, _problem: str, timeout_s: float) -> None:
+            seen["timeout"] = timeout_s
+            return None
+
+        backend = PyperplanBackend(ArmPlanningConfig(planning_timeout_s=1.25), runner=_runner)
+        backend.search("(domain)", "(problem)")
+        assert seen["timeout"] == 1.25
+
+    def test_conforms_to_protocol(self) -> None:
+        assert isinstance(PyperplanBackend(ArmPlanningConfig()), SymbolicPlannerBackend)
+
+
+class TestSymbolicPlannerOrchestration:
+    """SymbolicPlanner tries the primary backend, then the guaranteed fallback."""
+
+    def test_uses_primary_when_it_returns_a_plan(self) -> None:
+        primary = PyperplanBackend(
+            ArmPlanningConfig(), runner=_steps_runner("(move d1 peg_A peg_B)")
+        )
+        fallback_calls: list[int] = []
+
+        class _CountingFallback:
+            def search(self, _d: str, _p: str) -> list[PlanStep] | None:
+                fallback_calls.append(1)
+                return solve_hanoi(2, 3)
+
+        planner = SymbolicPlanner(
+            ArmPlanningConfig(),
+            ArmTaskConfig(num_disks=2, num_pegs=3),
+            primary_backend=primary,
+            fallback_backend=_CountingFallback(),
+        )
+        steps = planner.plan(_make_initial_state(), _make_goal_state())
+        assert len(steps) == 1
+        assert fallback_calls == []  # fallback untouched when primary succeeds
+
+    def test_falls_back_when_primary_returns_none(self) -> None:
+        primary = PyperplanBackend(ArmPlanningConfig(), runner=lambda *_: None)
+        planner = SymbolicPlanner(
+            ArmPlanningConfig(),
+            ArmTaskConfig(num_disks=2, num_pegs=3),
+            primary_backend=primary,
+        )
+        steps = planner.plan(_make_initial_state(), _make_goal_state())
+        assert len(steps) == optimal_move_count(2)  # recursive fallback plan
+
+    def test_default_backends_produce_a_plan(self) -> None:
+        """A default planner always returns a plan (pyperplan absent → fallback)."""
+        planner = _make_planner(num_disks=3)
+        steps = planner.plan(_make_initial_state(), _make_goal_state())
+        assert len(steps) > 0
+
+    def test_wraps_backend_exception_in_planning_error(self) -> None:
+        """A non-fallback backend raising is wrapped as PlanningError by plan()."""
+
+        class _RaisingBackend:
+            def search(self, _d: str, _p: str) -> list[PlanStep] | None:
+                raise RuntimeError("catastrophic")
+
+        planner = SymbolicPlanner(
+            ArmPlanningConfig(),
+            ArmTaskConfig(num_disks=2, num_pegs=3),
+            primary_backend=_RaisingBackend(),
+        )
+        with pytest.raises(PlanningError, match="Planning failed"):
+            planner.plan(_make_initial_state(), _make_goal_state())
+
+    def test_planning_error_when_fallback_returns_none(self) -> None:
+        """If even the fallback yields no plan, plan() raises PlanningError."""
+
+        class _NoneBackend:
+            def search(self, _d: str, _p: str) -> list[PlanStep] | None:
+                return None
+
+        planner = SymbolicPlanner(
+            ArmPlanningConfig(),
+            ArmTaskConfig(num_disks=2, num_pegs=3),
+            primary_backend=_NoneBackend(),
+            fallback_backend=_NoneBackend(),
+        )
+        with pytest.raises(PlanningError, match="fallback backend returned no plan"):
+            planner.plan(_make_initial_state(), _make_goal_state())
+
+
+class TestMakePrimaryBackend:
+    """Backend selection from planner_backend (single source of truth)."""
+
+    def test_pyperplan_selected(self) -> None:
+        backend = make_primary_backend(
+            ArmPlanningConfig(planner_backend="pyperplan"), ArmTaskConfig()
+        )
+        assert isinstance(backend, PyperplanBackend)
+
+    def test_recursive_selected(self) -> None:
+        backend = make_primary_backend(
+            ArmPlanningConfig(planner_backend="recursive"), ArmTaskConfig()
+        )
+        assert isinstance(backend, RecursiveBackend)
+
+    def test_fast_downward_falls_through_to_pyperplan(self) -> None:
+        backend = make_primary_backend(
+            ArmPlanningConfig(planner_backend="fast_downward"), ArmTaskConfig()
+        )
+        assert isinstance(backend, PyperplanBackend)
+
+
+class TestRunPyperplanSubprocess:
+    """The default subprocess runner — availability probe + hard interrupt."""
 
     _SEAM = "mousedroid.arm.planning.symbolic_planner._import_search_plan"
 
-    def test_solve_pddl_with_mocked_pyperplan(self) -> None:
-        planner = _make_planner(num_disks=2)
-
-        mock_search_plan = MagicMock(
-            return_value=[
-                "(move disk_1 peg_A peg_C)",
-                "(move disk_2 peg_A peg_B)",
-            ]
-        )
-        with patch(
-            self._SEAM,
-            return_value=(mock_search_plan, MagicMock(), MagicMock()),
-        ):
-            steps = planner._solve_pddl("(domain)", "(problem)")
-
-        assert len(steps) == 2
-        assert steps[0].action == "move"
-        assert steps[0].args == ["disk_1", "peg_A", "peg_C"]
-        assert steps[1].args == ["disk_2", "peg_A", "peg_B"]
-        mock_search_plan.assert_called_once()
-
-    def test_solve_pddl_falls_back_when_pyperplan_returns_none(self) -> None:
-        """When pyperplan returns no solution we fall back to the recursive
-        solver instead of raising — empty :init fixtures are not a failure.
-        """
-        planner = _make_planner(num_disks=2)
-
-        mock_search_plan = MagicMock(return_value=None)
-        with patch(
-            self._SEAM,
-            return_value=(mock_search_plan, MagicMock(), MagicMock()),
-        ):
-            steps = planner._solve_pddl("(domain)", "(problem)")
-
-        # 2 disks ⇒ optimal recursive plan has 2^2 - 1 = 3 moves.
-        assert len(steps) == optimal_move_count(2)
-        mock_search_plan.assert_called_once()
-
-    def test_solve_pddl_falls_back_when_seam_import_fails(self) -> None:
-        """If pyperplan's public surface shifted, fall back gracefully."""
-        planner = _make_planner(num_disks=3)
-        with patch(self._SEAM, side_effect=AttributeError("solve gone")):
-            steps = planner._solve_pddl("(domain)", "(problem)")
-        assert len(steps) == optimal_move_count(3)
-
-    def test_solve_pddl_falls_back_when_pyperplan_not_installed(self) -> None:
-        """``ImportError`` (and its subclass ``ModuleNotFoundError``) route to
-        the recursive solver — this is the most likely failure on a CI host
-        that doesn't ship pyperplan in its base image.
-        """
-        planner = _make_planner(num_disks=4)
+    def test_unavailable_returns_none_without_spawning(self) -> None:
         with patch(self._SEAM, side_effect=ImportError("No module named 'pyperplan'")):
-            steps = planner._solve_pddl("(domain)", "(problem)")
-        assert len(steps) == optimal_move_count(4)
+            assert run_pyperplan_subprocess("(domain)", "(problem)", 1.0) is None
 
-    def test_solve_pddl_falls_back_when_module_not_found(self) -> None:
-        """``ModuleNotFoundError`` is a subclass of ``ImportError``; exercising
-        it explicitly documents the intent and guards against any future
-        refactor that narrows the exception tuple.
+    def test_api_drift_returns_none(self) -> None:
+        with patch(self._SEAM, side_effect=AttributeError("search_plan gone")):
+            assert run_pyperplan_subprocess("(domain)", "(problem)", 1.0) is None
+
+    def test_collect_result_empty_queue_returns_none(self) -> None:
+        """A worker that died without putting a result degrades to the fallback."""
+        import queue as _q
+
+        from mousedroid.arm.planning.symbolic_planner import _collect_pyperplan_result
+
+        class _EmptyQueue:
+            def get(self, timeout: float) -> object:
+                raise _q.Empty
+
+        assert _collect_pyperplan_result(_EmptyQueue(), time.monotonic()) is None
+
+    def test_hard_terminates_on_timeout(self) -> None:
+        """A worker that outlives the budget is terminate()-d, not orphaned.
+
+        Patches the seam with a sleeping search_plan; under the ``fork`` start
+        method the child inherits the patch, so this exercises the real
+        terminate path WITHOUT needing pyperplan installed.
         """
-        planner = _make_planner(num_disks=2)
-        err = ModuleNotFoundError("No module named 'pyperplan.search'")
-        with patch(self._SEAM, side_effect=err):
-            steps = planner._solve_pddl("(domain)", "(problem)")
-        assert len(steps) == optimal_move_count(2)
+        if multiprocessing.get_start_method() != "fork":
+            pytest.skip("hard-interrupt test relies on fork inheriting the patched seam")
 
-    def test_solve_pddl_converts_operator_objects_to_strings(self) -> None:
-        """``search_plan`` returns ``Operator`` objects, not strings — the
-        seam converts each via ``str(op)``. Verifying the end-to-end
-        conversion with a mock that has a custom ``__str__`` confirms the
-        conversion path that the bare-string tests do not exercise.
-        """
+        def _sleepy_search(*_args: object, **_kwargs: object) -> None:
+            time.sleep(30.0)  # far past the timeout; killed before it returns
 
-        class _FakeOperator:
-            """Mimics pyperplan's ``Operator`` __str__: ``(action arg1 arg2 ...)``."""
+        with patch(self._SEAM, return_value=(_sleepy_search, object(), object)):
+            t0 = time.monotonic()
+            result = run_pyperplan_subprocess("(domain)", "(problem)", 0.2)
+            elapsed = time.monotonic() - t0
 
-            def __init__(self, action: str, args: tuple[str, ...]) -> None:
-                self._action = action
-                self._args = args
+        assert result is None
+        assert elapsed < 10.0, "worker was not hard-terminated near the timeout budget"
 
-            def __str__(self) -> str:
-                return f"({self._action} {' '.join(self._args)})"
 
-        planner = _make_planner(num_disks=2)
-        fake_solution = [
-            _FakeOperator("move", ("disk_1", "peg_A", "peg_C")),
-            _FakeOperator("move", ("disk_2", "peg_A", "peg_B")),
-        ]
-        mock_search_plan = MagicMock(return_value=fake_solution)
-        with patch(
-            self._SEAM,
-            return_value=(mock_search_plan, MagicMock(), MagicMock()),
-        ):
-            steps = planner._solve_pddl("(domain)", "(problem)")
+# Valid minimal STRIPS PDDL pyperplan can solve in one step — used to exercise
+# the REAL subprocess end-to-end. Zero-parameter actions still need ``:parameters ()``.
+_TOGGLE_DOMAIN = (
+    "(define (domain toggle) (:requirements :strips) (:predicates (off) (on)) "
+    "(:action flip :parameters () :precondition (off) :effect (and (on) (not (off)))))"
+)
+_TOGGLE_PROBLEM = "(define (problem p) (:domain toggle) (:init (off)) (:goal (on)))"
 
-        assert len(steps) == 2
-        assert steps[0].action == "move"
-        assert steps[0].args == ["disk_1", "peg_A", "peg_C"]
-        assert steps[1].args == ["disk_2", "peg_A", "peg_B"]
 
-    def test_plan_uses_pyperplan_when_available(self) -> None:
-        planner = _make_planner(num_disks=2)
+class TestRealPyperplanSubprocess:
+    """End-to-end subprocess exercise against the real solver (skips w/o pyperplan)."""
 
-        mock_search_plan = MagicMock(return_value=["(move disk_1 peg_A peg_B)"])
-        with patch(
-            self._SEAM,
-            return_value=(mock_search_plan, MagicMock(), MagicMock()),
-        ):
-            steps = planner.plan(_make_initial_state(), _make_goal_state())
+    def test_solvable_problem_returns_operator_strings(self) -> None:
+        pytest.importorskip("pyperplan")
+        result = run_pyperplan_subprocess(_TOGGLE_DOMAIN, _TOGGLE_PROBLEM, 5.0)
+        assert result is not None
+        assert len(result) >= 1
+        assert all(isinstance(line, str) for line in result)
 
-        assert len(steps) == 1
-        mock_search_plan.assert_called_once()
-
-    def test_solve_pddl_falls_back_when_pyperplan_exceeds_timeout(self) -> None:
-        """A pyperplan call that exceeds ``planning_timeout_s`` is interrupted
-        (best-effort) and the recursive solver takes over. This protects the
-        sense-plan-act loop from a malformed PDDL that sends astar into an
-        unbounded search.
-        """
-        # 2-disk config with an aggressive 100ms timeout — easy to trip with
-        # a deliberately-slow mock without slowing the test.
-        planning_cfg = ArmPlanningConfig(planning_timeout_s=0.1)
-        task_cfg = ArmTaskConfig(num_disks=2, num_pegs=3)
-        planner = SymbolicPlanner(planning_cfg, task_cfg)
-
-        def _slow_search(*_args: object, **_kwargs: object) -> None:
-            import time as _time
-
-            _time.sleep(2.0)  # well past the 100ms budget
-            return None  # never reached by the caller — future.result() times out first
-
-        slow_mock = MagicMock(side_effect=_slow_search)
-        with patch(
-            self._SEAM,
-            return_value=(slow_mock, MagicMock(), MagicMock()),
-        ):
-            steps = planner._solve_pddl("(domain)", "(problem)")
-
-        # Recursive fallback produced the plan — caller never sees the hang.
-        assert len(steps) == optimal_move_count(2)
-        slow_mock.assert_called_once()
-
-    def test_plan_falls_back_when_pyperplan_raises(self) -> None:
-        """A pyperplan internal crash (parse error, search blowup, ...) routes
-        to the deterministic recursive solver. Upstream callers see a successful
-        plan rather than a PlanningError — that is the contract the replanner +
-        BDI loop rely on. (Previously this test asserted exception wrapping,
-        but with the recursive fallback in place that contract is obsolete.)
-        """
-        planner = _make_planner(num_disks=2)
-
-        mock_search_plan = MagicMock(side_effect=RuntimeError("solver crash"))
-        with patch(
-            self._SEAM,
-            return_value=(mock_search_plan, MagicMock(), MagicMock()),
-        ):
-            steps = planner.plan(_make_initial_state(), _make_goal_state())
-
-        assert len(steps) == optimal_move_count(2)
-        mock_search_plan.assert_called_once()
+    def test_parse_error_returns_none_gracefully(self) -> None:
+        pytest.importorskip("pyperplan")
+        assert run_pyperplan_subprocess("(not valid pddl", "(nope", 5.0) is None
 
 
 class TestParseSolution:

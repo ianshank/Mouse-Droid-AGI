@@ -24,6 +24,7 @@ from mousedroid.factory import (
     build_arm_environment,
     build_arm_perception,
     build_arm_planner,
+    build_symbolic_planner_backend,
 )
 
 
@@ -68,6 +69,23 @@ class TestBuildArmPlanner:
         cfg = Settings(mock_hardware=True, arm_task=ArmTaskConfig())
         with pytest.raises(ValueError, match="arm_planning and arm_task"):
             build_arm_planner(cfg)
+
+    def test_backend_factory_selects_pyperplan(self) -> None:
+        from mousedroid.arm.planning.symbolic_planner import PyperplanBackend
+
+        cfg = _arm_settings(arm_planning=ArmPlanningConfig(planner_backend="pyperplan"))
+        assert isinstance(build_symbolic_planner_backend(cfg), PyperplanBackend)
+
+    def test_backend_factory_selects_recursive(self) -> None:
+        from mousedroid.arm.planning.symbolic_planner import RecursiveBackend
+
+        cfg = _arm_settings(arm_planning=ArmPlanningConfig(planner_backend="recursive"))
+        assert isinstance(build_symbolic_planner_backend(cfg), RecursiveBackend)
+
+    def test_backend_factory_missing_config_raises(self) -> None:
+        cfg = Settings(mock_hardware=True)
+        with pytest.raises(ValueError, match="arm_planning and arm_task"):
+            build_symbolic_planner_backend(cfg)
 
 
 class TestBuildArmEnvironment:

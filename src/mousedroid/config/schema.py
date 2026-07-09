@@ -3505,9 +3505,17 @@ class ArmPlanningConfig(BaseModel):
         Path("planning/pddl/hanoi_domain.pddl"),
         description="PDDL domain file path",
     )
-    planner_backend: Literal["pyperplan", "fast_downward"] = Field(
+    planner_backend: Literal["pyperplan", "fast_downward", "recursive"] = Field(
         "pyperplan",
-        description="PDDL solver backend",
+        description=(
+            "Primary symbolic-planning backend. ``pyperplan`` solves the "
+            "generated PDDL via Pyperplan in a hard-interruptible subprocess; "
+            "``fast_downward`` is not yet wired and transparently uses the "
+            "Pyperplan backend; ``recursive`` forces the deterministic "
+            "guaranteed-optimal Tower-of-Hanoi solver as the primary. The "
+            "recursive solver is ALWAYS the fallback regardless of this value, "
+            "so a planner never returns without a plan."
+        ),
     )
     llm_replanner_enabled: bool = Field(
         False,

@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — F-003: Protocol-based symbolic-planner backends + hard-interruptible pyperplan
+
+Closed the F-003-FOLLOWUP TODO in `arm/planning/symbolic_planner.py`. The
+pyperplan/recursive seam is now a `@runtime_checkable SymbolicPlannerBackend`
+Protocol with concrete `PyperplanBackend` / `RecursiveBackend` classes selected
+from `arm.planning.planner_backend` via `factory.build_symbolic_planner_backend`
+(mirrored by the module-level `make_primary_backend`). The `planner_backend`
+Literal gains a `recursive` member (backwards-compatible — default stays
+`pyperplan`, legacy values preserved) that forces the deterministic solver as
+primary; the recursive backend is always the guaranteed fallback so a planner
+never returns without a plan. Pyperplan now runs inside a **hard-interruptible
+`multiprocessing.Process`** — a pathological astar search on malformed PDDL is
+`terminate()`-d on timeout rather than orphaning a thread as the previous
+`ThreadPoolExecutor` did. Search execution is behind an injectable runner so the
+parse + fallback logic is unit-tested in-process, with a `pytest.importorskip`
+integration test exercising the real subprocess end-to-end and a fork-based
+hard-terminate test. Public API (`SymbolicPlanner(planning_cfg, task_cfg)`,
+`plan`/`replan`, `_solve_recursive`/`_parse_solution`) is unchanged.
+
 ### Changed — enterprise-hardening: C901 complexity gate + offender decomposition (#153)
 
 Focused refactoring pass adding the one quality gate the codebase lacked

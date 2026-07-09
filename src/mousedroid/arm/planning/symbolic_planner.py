@@ -1,27 +1,27 @@
-"""Symbolic planner with Pyperplan + recursive fallback.
+"""Symbolic planner with pluggable Protocol backends + recursive fallback.
 
-Primary path: invoke Pyperplan via ``pyperplan.planner.search_plan`` to solve
-the generated PDDL problem. When Pyperplan is unavailable, its API has shifted,
-its PDDL parser rejects the generated problem, or it returns no solution, the
-planner falls back to a deterministic recursive Tower-of-Hanoi solver that is
-guaranteed to produce the optimal ``2^n - 1`` move plan. Upstream callers
-(replanner, BDI loop) see a successful plan in every reachable case.
+Layer-1 planning is decomposed into ``@runtime_checkable`` backends
+(:class:`~mousedroid.arm.protocols.SymbolicPlannerBackend`):
 
-TODO(F-003-FOLLOWUP): replace the ``_import_search_plan`` seam with a
-``@runtime_checkable Protocol`` (e.g. ``SymbolicPlannerBackend``) plus concrete
-``PyperplanBackend`` / ``RecursiveBackend`` classes, selected by
-``cfg.arm.planning.planner_backend`` (the existing
-``Literal["pyperplan", "fast_downward"]`` field in
-``ArmPlanningConfig``) via the project's standard factory. The same PR
-should also replace the per-call ``ThreadPoolExecutor`` timeout below with
-a ``multiprocessing.Process``-based hard interrupt so a pathological
-pyperplan run can be ``terminate()``'d rather than orphaned. See
-``smoke-reports/smoke_report.json`` entry ``F-003-FOLLOWUP`` for context.
+* :class:`PyperplanBackend` — solves the generated PDDL via
+  ``pyperplan.planner.search_plan`` **in a hard-interruptible subprocess** so a
+  pathological astar search on malformed PDDL can be ``terminate()``-d rather
+  than orphaned. Returns ``None`` (→ fallback) when pyperplan is unavailable,
+  its API has drifted, the search times out, it raises, or it finds no plan.
+* :class:`RecursiveBackend` — a deterministic Tower-of-Hanoi solver guaranteed
+  to emit the optimal ``2^n - 1`` move plan. Total: never returns ``None``.
+
+:class:`SymbolicPlanner` selects a *primary* backend from
+``cfg.arm.planning.planner_backend`` (via :func:`make_primary_backend`, mirrored
+by ``factory.build_symbolic_planner_backend``) and always keeps a
+:class:`RecursiveBackend` as the guaranteed *fallback*, so upstream callers
+(replanner, BDI loop) see a valid plan in every reachable case.
 """
 
 from __future__ import annotations
 
-import concurrent.futures
+import multiprocessing
+import queue as _queue
 import tempfile
 import time
 from collections.abc import Callable
@@ -33,36 +33,38 @@ from mousedroid.arm.protocols import PlanStep, SymbolicState
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
+    from mousedroid.arm.protocols import SymbolicPlannerBackend
     from mousedroid.config.schema import ArmPlanningConfig, ArmTaskConfig
 
 _log = get_logger(__name__)
+
+# A search runner turns a (domain, problem, timeout_s) triple into a list of
+# pyperplan operator string reprs, or ``None`` when it could not produce a plan
+# (unavailable / timeout / error / no solution). Injected into
+# :class:`PyperplanBackend` so tests exercise the parse + fallback logic
+# in-process without spawning a real subprocess.
+SearchRunner = Callable[[str, str, float], "list[str] | None"]
 
 
 def _import_search_plan() -> tuple[Callable[..., Any], Callable[..., Any], type[Any]]:
     """Resolve pyperplan's ``search_plan`` + a default search + heuristic.
 
-    Extracted as a module-level helper so tests can patch this single seam
+    Extracted as a module-level helper so it can be patched as a single seam
     (``mousedroid.arm.planning.symbolic_planner._import_search_plan``) instead
-    of trying to monkey-patch the pyperplan package via ``sys.modules``. The
-    earlier code called ``pyperplan.solve(...)`` which never existed on the
-    installed pyperplan (>=2.0) — the real entry point is
-    ``pyperplan.planner.search_plan``.
-
-    TODO(F-003-FOLLOWUP): once the Protocol-based backend lands this helper
-    becomes the body of ``PyperplanBackend.import_engine()``.
+    of monkey-patching the pyperplan package via ``sys.modules``. Doubles as the
+    cheap in-process *availability probe*: :func:`run_pyperplan_subprocess`
+    calls it before spawning a worker so a host without pyperplan never pays the
+    process-spawn cost.
 
     Returns:
         Tuple of (search_plan callable, default search callable, default heuristic class).
 
     Raises:
         ImportError: pyperplan or one of its submodules is not installed.
-            (Note: ``ModuleNotFoundError`` is a subclass of ``ImportError`` and
-            is caught by the same handler.)
+            (``ModuleNotFoundError`` is a subclass and is caught by the same
+            handler.)
         AttributeError: pyperplan is installed but the public API has shifted
             (e.g. older or vendor-patched build without ``search_plan``).
-
-    Callers should treat either exception as a signal to fall back to the
-    recursive Hanoi solver — no semantic difference between them here.
     """
     from pyperplan.heuristics.blind import BlindHeuristic
     from pyperplan.planner import search_plan
@@ -72,33 +74,306 @@ def _import_search_plan() -> tuple[Callable[..., Any], Callable[..., Any], type[
 
 
 class PlanningError(Exception):
-    """Raised when neither pyperplan nor the recursive fallback can plan."""
+    """Raised when neither the primary backend nor the fallback can plan."""
 
 
+# --------------------------------------------------------------------------- #
+# Pure helpers (no I/O, no config) — shared by the backends + planner.
+# --------------------------------------------------------------------------- #
+def parse_solution(solution: list[str]) -> list[PlanStep]:
+    """Parse pyperplan operator string reprs into :class:`PlanStep` objects.
+
+    Args:
+        solution: Operator reprs of the form ``"(move disk_1 peg_A peg_C)"``.
+
+    Returns:
+        Parsed plan steps (empty/whitespace lines skipped).
+    """
+    steps: list[PlanStep] = []
+    for raw in solution:
+        line = raw.strip().strip("()")
+        parts = line.split()
+        if parts:
+            steps.append(PlanStep(action=parts[0], args=parts[1:]))
+    return steps
+
+
+def solve_hanoi(num_disks: int, num_pegs: int) -> list[PlanStep]:
+    """Deterministic optimal Tower-of-Hanoi solver.
+
+    Args:
+        num_disks: Number of disks ``n``; produces exactly ``2^n - 1`` moves.
+        num_pegs: Number of pegs (first is source, last is target).
+
+    Returns:
+        Optimal ordered move sequence.
+    """
+    pegs = [f"peg_{chr(65 + i)}" for i in range(num_pegs)]
+    disks = [f"disk_{i + 1}" for i in range(num_disks)]
+    steps: list[PlanStep] = []
+
+    def hanoi(num: int, source: str, target: str, auxiliary: str) -> None:
+        if num == 0:
+            return
+        hanoi(num - 1, source, auxiliary, target)
+        steps.append(PlanStep(action="move", args=[disks[num - 1], source, target]))
+        hanoi(num - 1, auxiliary, target, source)
+
+    hanoi(num_disks, pegs[0], pegs[-1], pegs[1])
+    _log.info("recursive_solve_complete", num_steps=len(steps))
+    return steps
+
+
+# --------------------------------------------------------------------------- #
+# Pyperplan subprocess execution (hard-interruptible).
+# --------------------------------------------------------------------------- #
+def _pyperplan_worker(  # pragma: no cover - runs in child process, untraceable by coverage
+    domain_path: str, problem_path: str, result_queue: Any
+) -> None:
+    """Subprocess entry point: run pyperplan and push a picklable result.
+
+    Runs in a separate process so a runaway astar search can be
+    ``terminate()``-d by the parent. Only picklable data crosses the boundary:
+    the result is ``("ok", list[str] | None)`` or ``("error", message)`` —
+    never a live pyperplan object. Coverage.py cannot trace across the
+    fork/spawn boundary; exercised by ``TestRealPyperplanSubprocess``.
+
+    Args:
+        domain_path: Path to the written PDDL domain file.
+        problem_path: Path to the written PDDL problem file.
+        result_queue: Multiprocessing queue the parent reads once.
+    """
+    try:
+        search_plan, astar_search, heuristic_class = _import_search_plan()
+        solution = search_plan(domain_path, problem_path, astar_search, heuristic_class)
+        if solution is None:
+            result_queue.put(("ok", None))
+        else:
+            result_queue.put(("ok", [str(op) for op in solution]))
+    except BaseException as exc:
+        result_queue.put(("error", f"{type(exc).__name__}: {exc}"))
+
+
+def run_pyperplan_subprocess(
+    domain_pddl: str, problem_pddl: str, timeout_s: float
+) -> list[str] | None:
+    """Default :data:`SearchRunner`: solve PDDL in a hard-interruptible subprocess.
+
+    Probes pyperplan availability in-process first (cheap, no spawn), then runs
+    ``search_plan`` in a worker process joined with ``timeout_s``. On timeout the
+    worker is ``terminate()``-d so it cannot orphan; the caller is released to
+    the fallback backend.
+
+    Args:
+        domain_pddl: Generated PDDL domain definition.
+        problem_pddl: Generated PDDL problem definition.
+        timeout_s: Hard wall-clock budget for the search.
+
+    Returns:
+        Operator string reprs, or ``None`` on unavailable / timeout / error /
+        no-solution (every one routes the caller to the fallback).
+    """
+    try:
+        _import_search_plan()
+    except (ImportError, AttributeError) as exc:
+        _log.warning(
+            "pyperplan_unavailable",
+            reason=str(exc),
+            exception_class=type(exc).__name__,
+            fallback="recursive_solver",
+        )
+        return None
+
+    ctx = multiprocessing.get_context()
+    result_queue: Any = ctx.Queue()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        domain_path = Path(tmpdir) / "domain.pddl"
+        problem_path = Path(tmpdir) / "problem.pddl"
+        domain_path.write_text(domain_pddl)
+        problem_path.write_text(problem_pddl)
+
+        _log.debug(
+            "pyperplan_search_start",
+            domain_bytes=len(domain_pddl),
+            problem_bytes=len(problem_pddl),
+            timeout_s=timeout_s,
+        )
+        t_start = time.monotonic()
+        proc = ctx.Process(
+            target=_pyperplan_worker,
+            args=(str(domain_path), str(problem_path), result_queue),
+            name="pyperplan-search",
+        )
+        proc.start()
+        proc.join(timeout_s)
+
+        if proc.is_alive():
+            proc.terminate()
+            proc.join()
+            _log.warning(
+                "pyperplan_search_timeout",
+                timeout_s=timeout_s,
+                elapsed_s=round(time.monotonic() - t_start, 4),
+                fallback="recursive_solver",
+                note="worker hard-terminated",
+            )
+            return None
+
+        return _collect_pyperplan_result(result_queue, t_start)
+
+
+def _collect_pyperplan_result(result_queue: Any, t_start: float) -> list[str] | None:
+    """Drain the worker's single result, mapping every non-plan outcome to ``None``.
+
+    Args:
+        result_queue: The queue the worker put its result on.
+        t_start: ``time.monotonic()`` start stamp for elapsed logging.
+
+    Returns:
+        Operator string reprs, or ``None`` (error / no-solution / empty queue).
+    """
+    elapsed = round(time.monotonic() - t_start, 4)
+    try:
+        status, payload = result_queue.get(timeout=1.0)
+    except _queue.Empty:
+        _log.warning("pyperplan_search_no_result", elapsed_s=elapsed, fallback="recursive_solver")
+        return None
+
+    if status == "error":
+        _log.warning(
+            "pyperplan_search_error",
+            error=payload,
+            elapsed_s=elapsed,
+            fallback="recursive_solver",
+        )
+        return None
+    if payload is None:
+        _log.info("pyperplan_no_solution", elapsed_s=elapsed, fallback="recursive_solver")
+        return None
+
+    _log.info("pyperplan_search_done", num_actions=len(payload), elapsed_s=elapsed)
+    return list(payload)
+
+
+# --------------------------------------------------------------------------- #
+# Backends.
+# --------------------------------------------------------------------------- #
+class PyperplanBackend:
+    """PDDL backend that delegates to pyperplan via an injectable runner.
+
+    Args:
+        planning_cfg: Planning config (supplies ``planning_timeout_s``).
+        runner: Search runner; defaults to :func:`run_pyperplan_subprocess`.
+            Tests inject an in-process fake to exercise parse + fallback without
+            spawning a subprocess.
+    """
+
+    def __init__(
+        self, planning_cfg: ArmPlanningConfig, *, runner: SearchRunner = run_pyperplan_subprocess
+    ) -> None:
+        self._cfg = planning_cfg
+        self._runner = runner
+
+    def search(self, domain_pddl: str, problem_pddl: str) -> list[PlanStep] | None:
+        """Solve via the runner; ``None`` on any failure (caller falls back)."""
+        timeout_s = float(getattr(self._cfg, "planning_timeout_s", 5.0))
+        try:
+            raw = self._runner(domain_pddl, problem_pddl, timeout_s)
+        except Exception as exc:
+            _log.warning(
+                "pyperplan_runner_error",
+                error=str(exc),
+                exception_class=type(exc).__name__,
+                fallback="recursive_solver",
+            )
+            return None
+        if raw is None:
+            return None
+        return parse_solution(raw)
+
+
+class RecursiveBackend:
+    """Deterministic Tower-of-Hanoi backend (total — never returns ``None``).
+
+    Args:
+        task_cfg: Task config supplying ``num_disks`` / ``num_pegs``.
+    """
+
+    def __init__(self, task_cfg: ArmTaskConfig) -> None:
+        self._task_cfg = task_cfg
+
+    def search(self, domain_pddl: str, problem_pddl: str) -> list[PlanStep] | None:
+        """Return the optimal recursive plan (ignores the PDDL text by design)."""
+        return solve_hanoi(self._task_cfg.num_disks, self._task_cfg.num_pegs)
+
+
+def make_primary_backend(
+    planning_cfg: ArmPlanningConfig, task_cfg: ArmTaskConfig
+) -> SymbolicPlannerBackend:
+    """Select the primary backend from ``planning_cfg.planner_backend``.
+
+    ``fast_downward`` is not yet wired and transparently uses the Pyperplan
+    backend (preserving pre-refactor behaviour, where the field only selected
+    pyperplan-then-recursive). Single source of truth for both the
+    :class:`SymbolicPlanner` default and ``factory.build_symbolic_planner_backend``.
+
+    Args:
+        planning_cfg: Planning config with the backend selector.
+        task_cfg: Task config (needed by the recursive backend).
+
+    Returns:
+        A backend conforming to :class:`SymbolicPlannerBackend`.
+    """
+    backend = planning_cfg.planner_backend
+    if backend == "recursive":
+        return RecursiveBackend(task_cfg)
+    if backend == "fast_downward":
+        _log.warning(
+            "planner_backend_not_implemented",
+            requested=backend,
+            using="pyperplan",
+        )
+    return PyperplanBackend(planning_cfg)
+
+
+# --------------------------------------------------------------------------- #
+# Planner (orchestrates primary + guaranteed fallback).
+# --------------------------------------------------------------------------- #
 class SymbolicPlanner:
-    """PDDL-based symbolic planner for Tower of Hanoi.
+    """PDDL-based symbolic planner: primary backend with a guaranteed fallback.
 
-    Attempts to solve PDDL problems via Pyperplan (``search_plan`` + astar +
-    blind heuristic). Falls back to a guaranteed-optimal recursive solver
-    whenever Pyperplan is missing, its API has drifted, its parser rejects the
-    generated problem, or it cannot find a plan. The fallback path is the
-    common production case until the PDDL generator emits whitespace-correct
-    output (tracked as F-005 in ``smoke-reports/smoke_report.json``).
+    Attempts the primary backend selected by ``planning_cfg.planner_backend``;
+    when it returns ``None`` (unavailable / timeout / error / no solution) the
+    :class:`RecursiveBackend` fallback produces a guaranteed-optimal plan, so
+    upstream callers always receive a valid plan.
 
     Args:
         planning_cfg: Planning configuration (backend, timeout).
         task_cfg: Task configuration (num_disks, num_pegs).
+        primary_backend: Optional injected primary backend (defaults to
+            :func:`make_primary_backend`).
+        fallback_backend: Optional injected fallback (defaults to
+            :class:`RecursiveBackend`).
     """
 
-    def __init__(self, planning_cfg: ArmPlanningConfig, task_cfg: ArmTaskConfig) -> None:
-        """Initialise symbolic planner.
-
-        Args:
-            planning_cfg: Planning config with backend and timeout.
-            task_cfg: Task config with disk/peg counts.
-        """
+    def __init__(
+        self,
+        planning_cfg: ArmPlanningConfig,
+        task_cfg: ArmTaskConfig,
+        *,
+        primary_backend: SymbolicPlannerBackend | None = None,
+        fallback_backend: SymbolicPlannerBackend | None = None,
+    ) -> None:
         self._planning_cfg = planning_cfg
         self._task_cfg = task_cfg
+        self._primary: SymbolicPlannerBackend = (
+            primary_backend
+            if primary_backend is not None
+            else make_primary_backend(planning_cfg, task_cfg)
+        )
+        self._fallback: SymbolicPlannerBackend = (
+            fallback_backend if fallback_backend is not None else RecursiveBackend(task_cfg)
+        )
         _log.info(
             "symbolic_planner_init",
             backend=planning_cfg.planner_backend,
@@ -110,7 +385,7 @@ class SymbolicPlanner:
         initial_state: SymbolicState,
         goal_state: SymbolicState,
     ) -> list[PlanStep]:
-        """Generate optimal plan from initial to goal state.
+        """Generate a plan from initial to goal state.
 
         Args:
             initial_state: Current symbolic state.
@@ -120,20 +395,20 @@ class SymbolicPlanner:
             Ordered list of plan steps.
 
         Raises:
-            PlanningError: If no valid plan can be found.
+            PlanningError: If planning fails catastrophically (e.g. the PDDL
+                generator raises) or no backend produced a plan.
         """
         domain_str = generate_domain()
         problem_str = generate_problem(self._task_cfg, initial_state)
-
         _log.info("planning_start", backend=self._planning_cfg.planner_backend)
-
         try:
-            steps = self._solve_pddl(domain_str, problem_str)
+            steps = self._solve(domain_str, problem_str)
+        except PlanningError:
+            raise
         except Exception as exc:
             msg = f"Planning failed: {exc}"
             _log.error("planning_failed", error=str(exc))
             raise PlanningError(msg) from exc
-
         _log.info("planning_complete", num_steps=len(steps))
         return steps
 
@@ -143,7 +418,7 @@ class SymbolicPlanner:
         goal_state: SymbolicState,
         error: str,
     ) -> list[PlanStep]:
-        """Generate recovery plan after execution failure.
+        """Generate a recovery plan after execution failure.
 
         Args:
             current_state: Current (possibly unexpected) symbolic state.
@@ -159,196 +434,36 @@ class SymbolicPlanner:
         _log.warning("replanning", error=error)
         return self.plan(current_state, goal_state)
 
-    def _solve_pddl(self, domain_str: str, problem_str: str) -> list[PlanStep]:
-        """Solve PDDL problem using Pyperplan.
-
-        Falls back to the recursive Hanoi solver when pyperplan is missing,
-        its public API has shifted, or it returns no solution (e.g. empty
-        ``:init`` from test fixtures). The fallback guarantees an optimal
-        ``2^n - 1`` plan for the configured disk count.
+    def _solve(self, domain_str: str, problem_str: str) -> list[PlanStep]:
+        """Try the primary backend, then the guaranteed fallback.
 
         Args:
             domain_str: PDDL domain definition.
             problem_str: PDDL problem definition.
 
         Returns:
-            List of plan steps — either parsed from pyperplan output or
-            produced by the recursive solver.
+            Plan steps from the primary backend, or the fallback when the
+            primary returns ``None``.
+
+        Raises:
+            PlanningError: If even the fallback returns ``None`` (should not
+                happen with the recursive fallback).
         """
-        # ImportError covers ModuleNotFoundError (subclass) — single handler
-        # routes both to the recursive fallback. AttributeError fires when the
-        # package is present but missing the expected submodule attributes.
-        try:
-            search_plan, astar_search, heuristic_class = _import_search_plan()
-        except (ImportError, AttributeError) as exc:
-            _log.warning(
-                "pyperplan_unavailable",
-                reason=str(exc),
-                exception_class=type(exc).__name__,
-                fallback="recursive_solver",
-            )
-            return self._solve_recursive()
-
-        search_name = getattr(astar_search, "__name__", "unknown_search")
-        heuristic_name = getattr(heuristic_class, "__name__", "unknown_heuristic")
-        # Best-effort timeout from config — pyperplan's search_plan is a
-        # synchronous Python call with NO native cancellation hook, so we
-        # wrap it in a per-call single-worker thread executor and bail out
-        # when the configured budget elapses. On timeout the caller is
-        # released to the recursive fallback IMMEDIATELY, but the orphan
-        # worker thread continues to natural completion (or process exit).
-        #
-        # Per-call vs shared pool tradeoff (Copilot review #2 on PR #68):
-        # a shared module-level pool with a bounded `max_workers` would
-        # cap orphan-thread count, BUT once those workers are all stuck
-        # on prior unbounded searches, NEW submissions queue behind them
-        # and `future.result(timeout=...)` fires after the configured
-        # window with the task still un-started — strictly worse than the
-        # current per-call behaviour, where every call gets its own
-        # worker. The honest fix for repeated-timeout pathologies is a
-        # subprocess-based hard interrupt (signal-driven kill); that is
-        # tracked as F-003-FOLLOWUP alongside the Protocol-based backend
-        # refactor. For the normal case (transient timeout from one
-        # malformed PDDL, then traffic continues), the per-call pool
-        # accumulates one orphan that drains on its own — bounded and
-        # acceptable.
-        timeout_s = float(getattr(self._planning_cfg, "planning_timeout_s", 5.0))
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            domain_path = Path(tmpdir) / "domain.pddl"
-            problem_path = Path(tmpdir) / "problem.pddl"
-            domain_path.write_text(domain_str)
-            problem_path.write_text(problem_str)
-
-            _log.debug(
-                "pyperplan_search_start",
-                search=search_name,
-                heuristic=heuristic_name,
-                domain_bytes=len(domain_str),
-                problem_bytes=len(problem_str),
-                timeout_s=timeout_s,
-            )
-
-            # Any pyperplan internal failure (ParseError, search failure,
-            # heuristic init error, ...) AND a timeout both route to the
-            # recursive solver — the upstream callers (replanner, BDI
-            # loop) only need *a* valid plan, and the recursive solver is
-            # guaranteed optimal for Hanoi. The narrow path lives entirely
-            # inside this method so the outer `plan()` catch still wraps
-            # truly catastrophic failures (e.g. domain generator bugs)
-            # into PlanningError.
-            t_start = time.monotonic()
-            # NOTE: we deliberately do NOT use ThreadPoolExecutor as a context
-            # manager — its __exit__ calls shutdown(wait=True) by default,
-            # which would block until the orphan search_plan thread finishes,
-            # defeating the whole purpose of the timeout. Instead we
-            # explicitly shutdown(wait=False, cancel_futures=True) on every
-            # exit path so a runaway pyperplan thread is left to terminate
-            # on its own (or on process teardown).
-            pool = concurrent.futures.ThreadPoolExecutor(
-                max_workers=1,
-                thread_name_prefix="pyperplan",
-            )
-            future = pool.submit(
-                search_plan,
-                str(domain_path),
-                str(problem_path),
-                astar_search,
-                heuristic_class,
-            )
-            try:
-                solution = future.result(timeout=timeout_s)
-            except concurrent.futures.TimeoutError:
-                elapsed = time.monotonic() - t_start
-                _log.warning(
-                    "pyperplan_search_timeout",
-                    timeout_s=timeout_s,
-                    elapsed_s=round(elapsed, 4),
-                    search=search_name,
-                    heuristic=heuristic_name,
-                    fallback="recursive_solver",
-                    note="orphan worker continues until natural completion or process exit",
-                )
-                return self._solve_recursive()
-            except Exception as exc:
-                elapsed = time.monotonic() - t_start
-                _log.warning(
-                    "pyperplan_search_error",
-                    error=str(exc),
-                    exception_class=type(exc).__name__,
-                    elapsed_s=round(elapsed, 4),
-                    search=search_name,
-                    heuristic=heuristic_name,
-                    fallback="recursive_solver",
-                )
-                return self._solve_recursive()
-            finally:
-                # Non-blocking shutdown — happy path is a no-op (worker
-                # has already returned); timeout/error paths leave the
-                # orphan thread to terminate naturally. Keeping a single
-                # finally-clause means every exit path is symmetric and
-                # auditable.
-                pool.shutdown(wait=False, cancel_futures=True)
-            elapsed = time.monotonic() - t_start
-
-            if solution is None:
-                _log.info(
-                    "pyperplan_no_solution",
-                    elapsed_s=round(elapsed, 4),
-                    search=search_name,
-                    heuristic=heuristic_name,
-                    fallback="recursive_solver",
-                )
-                return self._solve_recursive()
-
-            steps = self._parse_solution([str(op) for op in solution])
-            _log.info(
-                "pyperplan_search_done",
-                num_actions=len(steps),
-                elapsed_s=round(elapsed, 4),
-                search=search_name,
-                heuristic=heuristic_name,
-            )
+        steps = self._primary.search(domain_str, problem_str)
+        if steps is not None:
             return steps
-
-    def _parse_solution(self, solution: list[str]) -> list[PlanStep]:
-        """Parse Pyperplan solution into PlanStep objects.
-
-        Args:
-            solution: Raw solution lines from Pyperplan.
-
-        Returns:
-            Parsed plan steps.
-        """
-        steps: list[PlanStep] = []
-        for line in solution:
-            line = line.strip().strip("()")
-            parts = line.split()
-            if parts:
-                action = parts[0]
-                args = parts[1:]
-                steps.append(PlanStep(action=action, args=args))
+        _log.info("planner_primary_no_plan", fallback="recursive_solver")
+        steps = self._fallback.search(domain_str, problem_str)
+        if steps is None:
+            msg = "fallback backend returned no plan"
+            raise PlanningError(msg)
         return steps
+
+    # -- Backwards-compatible thin delegators (kept for existing call sites) --
+    def _parse_solution(self, solution: list[str]) -> list[PlanStep]:
+        """Delegate to the module-level :func:`parse_solution`."""
+        return parse_solution(solution)
 
     def _solve_recursive(self) -> list[PlanStep]:
-        """Fallback: solve Tower of Hanoi recursively (guaranteed optimal).
-
-        Returns:
-            Optimal move sequence with exactly 2^n - 1 moves.
-        """
-        n = self._task_cfg.num_disks
-        pegs = [f"peg_{chr(65 + i)}" for i in range(self._task_cfg.num_pegs)]
-        disks = [f"disk_{i + 1}" for i in range(n)]
-
-        steps: list[PlanStep] = []
-
-        def hanoi(num: int, source: str, target: str, auxiliary: str) -> None:
-            if num == 0:
-                return
-            hanoi(num - 1, source, auxiliary, target)
-            steps.append(PlanStep(action="move", args=[disks[num - 1], source, target]))
-            hanoi(num - 1, auxiliary, target, source)
-
-        hanoi(n, pegs[0], pegs[-1], pegs[1])
-        _log.info("recursive_solve_complete", num_steps=len(steps))
-        return steps
+        """Delegate to the module-level :func:`solve_hanoi` for this task."""
+        return solve_hanoi(self._task_cfg.num_disks, self._task_cfg.num_pegs)
