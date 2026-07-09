@@ -24,8 +24,13 @@ never returns without a plan. Pyperplan now runs inside a **hard-interruptible
 `ThreadPoolExecutor` did. Search execution is behind an injectable runner so the
 parse + fallback logic is unit-tested in-process, with a `pytest.importorskip`
 integration test exercising the real subprocess end-to-end and a fork-based
-hard-terminate test. Public API (`SymbolicPlanner(planning_cfg, task_cfg)`,
-`plan`/`replan`, `_solve_recursive`/`_parse_solution`) is unchanged.
+hard-terminate test. The runner drains the result queue **before** joining the
+worker — the `multiprocessing.Queue` feeder-thread contract blocks a child on
+exit until the parent reads a large item, so a join-before-get would deadlock on
+a large plan and silently discard it; a fork-based ~400 KB-payload test pins the
+no-deadlock contract. Public API (`SymbolicPlanner(planning_cfg, task_cfg)`,
+`plan`/`replan`, `_solve_recursive`/`_parse_solution`) is unchanged. Architecture:
+[`docs/architecture/c4-symbolic-planner.md`](docs/architecture/c4-symbolic-planner.md).
 
 ### Changed — enterprise-hardening: C901 complexity gate + offender decomposition (#153)
 

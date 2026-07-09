@@ -205,11 +205,16 @@ def run_pyperplan_subprocess(
             name="pyperplan-search",
         )
         proc.start()
-        proc.join(timeout_s)
-
-        if proc.is_alive():
+        # Drain the queue BEFORE joining, using the timeout as the budget. A
+        # child putting a result larger than the OS pipe buffer blocks on exit
+        # until the parent reads it (the ``multiprocessing.Queue`` feeder-thread
+        # contract); a ``join(timeout)``-before-``get`` would then deadlock on a
+        # large plan and time out even though a solution was found. Draining
+        # first makes the child exit cleanly, and a genuine runaway search still
+        # trips the ``get`` timeout below (empty → hard-terminate).
+        result = _collect_pyperplan_result(result_queue, t_start, timeout_s)
+        if result is None and proc.is_alive():
             proc.terminate()
-            proc.join()
             _log.warning(
                 "pyperplan_search_timeout",
                 timeout_s=timeout_s,
@@ -217,26 +222,33 @@ def run_pyperplan_subprocess(
                 fallback="recursive_solver",
                 note="worker hard-terminated",
             )
-            return None
+        proc.join()
+        return result
 
-        return _collect_pyperplan_result(result_queue, t_start)
 
-
-def _collect_pyperplan_result(result_queue: Any, t_start: float) -> list[str] | None:
+def _collect_pyperplan_result(
+    result_queue: Any, t_start: float, timeout: float
+) -> list[str] | None:
     """Drain the worker's single result, mapping every non-plan outcome to ``None``.
 
     Args:
         result_queue: The queue the worker put its result on.
         t_start: ``time.monotonic()`` start stamp for elapsed logging.
+        timeout: Seconds to wait for the worker's result (the planning budget) —
+            an expiry means the search is still running (caller hard-terminates)
+            or the worker died without a result.
 
     Returns:
         Operator string reprs, or ``None`` (error / no-solution / empty queue).
     """
     elapsed = round(time.monotonic() - t_start, 4)
     try:
-        status, payload = result_queue.get(timeout=1.0)
+        status, payload = result_queue.get(timeout=timeout)
     except _queue.Empty:
-        _log.warning("pyperplan_search_no_result", elapsed_s=elapsed, fallback="recursive_solver")
+        # No result within the budget — the worker is still running (timeout) or
+        # died without putting (crash). The caller inspects ``proc.is_alive()``
+        # to emit the actionable ``pyperplan_search_timeout`` warning + kill.
+        _log.debug("pyperplan_result_not_ready", elapsed_s=elapsed)
         return None
 
     if status == "error":

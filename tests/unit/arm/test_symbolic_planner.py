@@ -284,7 +284,7 @@ class TestRunPyperplanSubprocess:
             def get(self, timeout: float) -> object:
                 raise _q.Empty
 
-        assert _collect_pyperplan_result(_EmptyQueue(), time.monotonic()) is None
+        assert _collect_pyperplan_result(_EmptyQueue(), time.monotonic(), 1.0) is None
 
     def test_hard_terminates_on_timeout(self) -> None:
         """A worker that outlives the budget is terminate()-d, not orphaned.
@@ -306,6 +306,28 @@ class TestRunPyperplanSubprocess:
 
         assert result is None
         assert elapsed < 10.0, "worker was not hard-terminated near the timeout budget"
+
+    def test_large_result_does_not_deadlock(self) -> None:
+        """A result larger than the OS pipe buffer must not deadlock the join.
+
+        A ``multiprocessing.Queue`` child blocks on exit until the parent drains
+        a large item; a join-before-get would deadlock and time out even though a
+        plan was found. Draining first (with the timeout budget) fixes it. The
+        ~400 KB payload here comfortably exceeds the ~64 KB pipe buffer.
+        """
+        if multiprocessing.get_start_method() != "fork":
+            pytest.skip("fork start method required to inherit the patched seam")
+
+        big_plan = [f"(move disk_{i} peg_A peg_C)" for i in range(15000)]
+
+        def _big_search(*_args: object, **_kwargs: object) -> list[str]:
+            return big_plan
+
+        with patch(self._SEAM, return_value=(_big_search, object(), object)):
+            result = run_pyperplan_subprocess("(domain)", "(problem)", 10.0)
+
+        assert result is not None
+        assert len(result) == len(big_plan)
 
 
 # Valid minimal STRIPS PDDL pyperplan can solve in one step — used to exercise
