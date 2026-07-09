@@ -3,7 +3,9 @@
 > Companion to `CLAUDE.md`. `CLAUDE.md` is the *project* surface — what
 > MouseDroidAGI is + how its code is laid out. `AGENTS.md` is the *worker*
 > surface — what an agent (Claude Code, a subagent, an MCP client) MUST do
-> when touching this repo.
+> when touching this repo. Both are subordinate to `docs/CHARTER.md`, the
+> project constitution — scope (§3) and invariants (§4) live there; surface
+> anything that would violate them rather than implementing it unilaterally.
 
 ## Top-level invariants (never weaken these)
 

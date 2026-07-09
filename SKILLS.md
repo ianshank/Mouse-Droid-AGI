@@ -2,7 +2,8 @@
 
 > Maps high-level capability to the *files an agent should read* + *commands
 > an agent should run* to exercise that capability. Companion to
-> `AGENTS.md` (rules) and `CLAUDE.md` (project facts).
+> `AGENTS.md` (rules) and `CLAUDE.md` (project facts); all three are
+> subordinate to `docs/CHARTER.md` (the project constitution).
 
 Skills are organised by **trigger**: when you see the trigger, invoke the
 skill. If no project-local skill matches, fall back to the
