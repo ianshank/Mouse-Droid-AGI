@@ -43,9 +43,10 @@ gracefully when a sensor, radio, or uplink is absent rather than crash-looping.
 
 ## 3. Scope
 
-**In scope:** The 10-pillar cognitive stack (`orchestrator/`, `world_model/`,
-`cognitive/`, `memory/`, `learning/`, `meta/`, `curiosity/`, `growth/`,
-`reward/`, `scaling/`, `safety/`), the `arm/` four-layer hierarchical-reasoning
+**In scope:** The `orchestrator/` 30 Hz sense-plan-act loop, the 10-pillar
+cognitive stack (`world_model/`, `cognitive/`, `memory/`, `learning/`, `meta/`,
+`curiosity/`, `growth/`, `reward/`, `scaling/`, `safety/`), the `arm/`
+four-layer hierarchical-reasoning
 platform (perception → symbolic planning → world modelling → motor control), the
 sensing / comms / telemetry / resilience infrastructure, the unified
 camera+lidar+fusion dashboard, and the validation / smoke / preflight harness.
