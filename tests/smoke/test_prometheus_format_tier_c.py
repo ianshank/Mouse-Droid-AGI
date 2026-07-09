@@ -229,3 +229,35 @@ def test_c2_mission_replans_has_outcome_labels() -> None:
     sample = generate_metrics_sample()
     assert 'outcome="succeeded"' in sample
     assert 'outcome="failed"' in sample
+
+
+# ---------------------------------------------------------------------------
+# Voice-degradation families — speaker degradation + TTS synthesis failures.
+# Same promtool lockstep contract as the Tier C families above: declared here
+# AND seeded in generate_metrics_sample().
+# ---------------------------------------------------------------------------
+_VOICE_DEGRADATION_COUNTER_FAMILIES: tuple[str, ...] = (
+    f"{_NS}_voice_speaker_degraded_total",
+    f"{_NS}_voice_tts_synthesize_failures_total",
+)
+
+
+def test_voice_degradation_metrics_present_in_sample() -> None:
+    """Both voice-degradation counters must appear in the rendered sample."""
+    sample = generate_metrics_sample()
+    for family in _VOICE_DEGRADATION_COUNTER_FAMILIES:
+        assert family in sample, f"missing voice-degradation counter: {family}"
+
+
+def test_voice_speaker_degraded_has_all_subsystem_labels() -> None:
+    """The speaker-degradation counter must surface every subsystem label."""
+    sample = generate_metrics_sample()
+    for subsystem in ("usb_speaker", "rocky_fallback"):
+        assert f'subsystem="{subsystem}"' in sample, f"missing subsystem label: {subsystem}"
+
+
+def test_voice_tts_failures_has_all_api_labels() -> None:
+    """The TTS-failure counter must surface every resolved-API label."""
+    sample = generate_metrics_sample()
+    for api in ("synthesize", "synthesize_wav", "synthesize_wav_file"):
+        assert f'api="{api}"' in sample, f"missing api label: {api}"

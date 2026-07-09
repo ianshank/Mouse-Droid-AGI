@@ -92,6 +92,17 @@ mousedroid_on_device_learning_reverted_total{reason="exception"} 1
 mousedroid_on_device_learning_reverted_total{reason="integrity_mismatch"} 1
 mousedroid_on_device_learning_reverted_total{reason="regression_bound"} 1
 
+# HELP mousedroid_voice_speaker_degraded_total Voice speaker degradations (label: subsystem)
+# TYPE mousedroid_voice_speaker_degraded_total counter
+mousedroid_voice_speaker_degraded_total{subsystem="rocky_fallback"} 1
+mousedroid_voice_speaker_degraded_total{subsystem="usb_speaker"} 1
+
+# HELP mousedroid_voice_tts_synthesize_failures_total Voice TTS synthesis failures (label: api)
+# TYPE mousedroid_voice_tts_synthesize_failures_total counter
+mousedroid_voice_tts_synthesize_failures_total{api="synthesize"} 1
+mousedroid_voice_tts_synthesize_failures_total{api="synthesize_wav"} 1
+mousedroid_voice_tts_synthesize_failures_total{api="synthesize_wav_file"} 1
+
 # HELP mousedroid_lidar_sector_distance_m Per-sector LiDAR distance in metres (label: sector)
 # TYPE mousedroid_lidar_sector_distance_m gauge
 mousedroid_lidar_sector_distance_m{sector="0"} 10.8

@@ -17,6 +17,7 @@ from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import VoiceConfig
+    from mousedroid.telemetry.metrics import MetricsRegistry
 
 _log = get_logger(__name__)
 
@@ -84,13 +85,18 @@ class PiperTTS:
     in ``_synthesize_sync`` never re-inspects the object on every call.
     """
 
-    def __init__(self, cfg: VoiceConfig) -> None:
+    def __init__(self, cfg: VoiceConfig, *, metrics: MetricsRegistry | None = None) -> None:
         """Initialise TTS from voice config.
 
         Args:
             cfg: Voice engine configuration.
+            metrics: Optional shared :class:`MetricsRegistry`. When provided,
+                synthesis failures increment ``voice_tts_synthesize_failures_total``
+                (label: api). ``None`` (default) is a no-op so unit tests and
+                offline contexts work without telemetry wiring.
         """
         self._cfg = cfg
+        self._metrics = metrics
         self._voice: _PiperVoiceLike | None = None
         self._use_wav_api: bool = False
         # piper 1.x ``synthesize_wav(text, wav_file)`` vs ``synthesize_wav(text)``
@@ -110,6 +116,19 @@ class PiperTTS:
         if not self._use_wav_api:
             return "synthesize"
         return "synthesize_wav(text,wav_file)" if self._wav_needs_file else "synthesize_wav(text)"
+
+    @property
+    def _api_metric_label(self) -> str:
+        """Low-cardinality label for the resolved synthesis API (for metrics).
+
+        Mirrors :attr:`_api_label` but returns one of the fixed tokens the
+        ``voice_tts_synthesize_failures_total`` counter accepts
+        (``_VOICE_TTS_APIS``), keeping the free-form log label out of the
+        Prometheus time-series cardinality.
+        """
+        if not self._use_wav_api:
+            return "synthesize"
+        return "synthesize_wav_file" if self._wav_needs_file else "synthesize_wav"
 
     def start(self) -> None:
         """Load the piper voice model and detect the API generation."""
@@ -246,8 +265,8 @@ class PiperTTS:
                 exc_msg=str(exc),
                 consecutive_failures=self._consecutive_failures,
             )
-            # TODO: wire voice_tts_synthesize_failures_total Prometheus counter
-            # once feat/observability-primitive lands (PR #2).
+            if self._metrics is not None:
+                self._metrics.inc_voice_tts_synthesize_failures(self._api_metric_label)
             return np.zeros(self._cfg.tts_sample_rate, dtype=np.float32)
 
         wav_buffer.seek(0)

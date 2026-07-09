@@ -20,7 +20,8 @@ import pytest
 import structlog
 import structlog.testing
 
-from mousedroid.config.schema import VoiceConfig
+from mousedroid.config.schema import MetricsConfig, VoiceConfig
+from mousedroid.telemetry.metrics import MetricsRegistry
 from mousedroid.voice.tts import PiperTTS
 
 
@@ -253,6 +254,36 @@ class TestFailureTracking:
 
         tts._synthesize_sync("succeed")
         assert tts._consecutive_failures == 0
+
+    def test_failure_increments_prometheus_counter(self) -> None:
+        """A synthesis failure increments voice_tts_synthesize_failures_total (label: api)."""
+        cfg = _make_cfg(tts_failure_threshold=2)
+        metrics = MetricsRegistry(MetricsConfig())
+        tts = PiperTTS(cfg, metrics=metrics)
+
+        mock_voice = MagicMock()
+        mock_voice.synthesize_wav.side_effect = RuntimeError("boom")
+        tts._voice = mock_voice
+        tts._use_wav_api = True
+        tts._wav_needs_file = True  # → api label "synthesize_wav_file"
+
+        tts._synthesize_sync("a")
+
+        out = metrics.render_prometheus()
+        assert 'mousedroid_voice_tts_synthesize_failures_total{api="synthesize_wav_file"} 1' in out
+
+    def test_failure_without_metrics_is_noop(self) -> None:
+        """A failure with no injected registry never raises (metrics is None no-op)."""
+        cfg = _make_cfg(tts_failure_threshold=2)
+        tts = PiperTTS(cfg)  # metrics defaults to None
+
+        mock_voice = MagicMock()
+        mock_voice.synthesize_wav.side_effect = RuntimeError("boom")
+        tts._voice = mock_voice
+        tts._use_wav_api = True
+
+        result = tts._synthesize_sync("a")
+        assert isinstance(result, np.ndarray)
 
 
 class TestVoiceNoneGuards:
