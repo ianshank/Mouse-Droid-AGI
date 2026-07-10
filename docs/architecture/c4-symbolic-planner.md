@@ -52,11 +52,11 @@ flowchart TB
 
 ## Non-negotiable contracts
 
-- **Protocol DI (invariant #1).** Backends conform to
+- **Protocol DI.** Backends conform to
   `SymbolicPlannerBackend` (`search(domain, problem) -> list[PlanStep] | None`).
   `None` means "this backend could not plan — fall back". `RecursiveBackend` is
   total (never `None`), so `SymbolicPlanner` always returns a plan.
-- **Config-selected, schema-driven (invariant #3).** The primary backend comes
+- **Config-selected, schema-driven.** The primary backend comes
   from `ArmPlanningConfig.planner_backend` via `make_primary_backend` (mirrored
   by `factory.build_symbolic_planner_backend`). `recursive` was **added** to the
   Literal; `pyperplan` (default) and `fast_downward` are preserved — existing
@@ -76,7 +76,7 @@ flowchart TB
   runner=run_pyperplan_subprocess)` — the default spawns the subprocess; tests
   inject an in-process fake so parse + fallback logic is exercised without a
   child process. Keyword-only with a default sentinel (pinned by AQA).
-- **Structured logging only (invariant #4).** Grep events:
+- **Structured logging only.** Grep events:
   `symbolic_planner_init`, `planning_start`/`_complete`/`_failed`,
   `planner_primary_no_plan`, `pyperplan_unavailable`, `pyperplan_search_start`,
   `pyperplan_search_timeout`, `pyperplan_search_error`, `pyperplan_no_solution`,

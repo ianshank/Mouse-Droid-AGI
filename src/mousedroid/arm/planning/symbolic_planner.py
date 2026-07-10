@@ -99,15 +99,29 @@ def parse_solution(solution: list[str]) -> list[PlanStep]:
 
 
 def solve_hanoi(num_disks: int, num_pegs: int) -> list[PlanStep]:
-    """Deterministic optimal Tower-of-Hanoi solver.
+    """Deterministic Tower-of-Hanoi solver (classic single-auxiliary recursion).
+
+    Uses the source, the target, and one auxiliary peg. The move sequence is
+    **optimal** (exactly ``2^n - 1`` moves) for the standard 3-peg tower; with
+    more than 3 pegs it still returns a *valid* plan but ignores the extra pegs
+    (it is not Frame-Stewart optimal). The tower is undefined for fewer than 3
+    pegs — a 2-peg tower cannot move a stack of 2+ disks without violating the
+    size rule — so that case fails loud rather than emitting invalid moves.
 
     Args:
-        num_disks: Number of disks ``n``; produces exactly ``2^n - 1`` moves.
-        num_pegs: Number of pegs (first is source, last is target).
+        num_disks: Number of disks ``n``; produces ``2^n - 1`` moves (3-peg).
+        num_pegs: Number of pegs (must be ``>= 3``); first is source, last is
+            target.
 
     Returns:
-        Optimal ordered move sequence.
+        Ordered move sequence.
+
+    Raises:
+        ValueError: If ``num_pegs < 3``.
     """
+    if num_pegs < 3:
+        msg = f"Tower of Hanoi requires at least 3 pegs, got {num_pegs}"
+        raise ValueError(msg)
     pegs = [f"peg_{chr(65 + i)}" for i in range(num_pegs)]
     disks = [f"disk_{i + 1}" for i in range(num_disks)]
     steps: list[PlanStep] = []
@@ -205,25 +219,54 @@ def run_pyperplan_subprocess(
             name="pyperplan-search",
         )
         proc.start()
-        # Drain the queue BEFORE joining, using the timeout as the budget. A
-        # child putting a result larger than the OS pipe buffer blocks on exit
-        # until the parent reads it (the ``multiprocessing.Queue`` feeder-thread
-        # contract); a ``join(timeout)``-before-``get`` would then deadlock on a
-        # large plan and time out even though a solution was found. Draining
-        # first makes the child exit cleanly, and a genuine runaway search still
-        # trips the ``get`` timeout below (empty → hard-terminate).
-        result = _collect_pyperplan_result(result_queue, t_start, timeout_s)
-        if result is None and proc.is_alive():
-            proc.terminate()
-            _log.warning(
-                "pyperplan_search_timeout",
-                timeout_s=timeout_s,
-                elapsed_s=round(time.monotonic() - t_start, 4),
-                fallback="recursive_solver",
-                note="worker hard-terminated",
-            )
+        try:
+            # Drain the queue BEFORE joining, using the timeout as the budget. A
+            # child putting a result larger than the OS pipe buffer blocks on
+            # exit until the parent reads it (the ``multiprocessing.Queue``
+            # feeder-thread contract); a ``join(timeout)``-before-``get`` would
+            # then deadlock on a large plan and time out even though a solution
+            # was found. Draining first makes the child exit cleanly, and a
+            # genuine runaway search still trips the ``get`` timeout below
+            # (empty → the worker is hard-terminated in the reap below).
+            result = _collect_pyperplan_result(result_queue, t_start, timeout_s)
+            if result is None and proc.is_alive():
+                _log.warning(
+                    "pyperplan_search_timeout",
+                    timeout_s=timeout_s,
+                    elapsed_s=round(time.monotonic() - t_start, 4),
+                    fallback="recursive_solver",
+                    note="worker hard-terminated",
+                )
+            return result
+        finally:
+            # Reap the worker (bounded, with SIGKILL escalation) and release the
+            # process + queue handles so the many plan()/replan() calls over a
+            # mission never leak file descriptors or a lingering feeder thread.
+            _reap_process(proc)
+            result_queue.close()
+            result_queue.join_thread()
+
+
+def _reap_process(proc: Any, grace_s: float = 5.0) -> None:
+    """Reap a worker process (SIGTERM → bounded wait → SIGKILL) + release its handle.
+
+    A plain ``join()`` can block forever if the worker ignores SIGTERM — a
+    dependency that installs a signal handler, or a thread stuck in a C
+    extension. Terminate, wait a bounded grace period, then hard-``kill()`` so
+    the parent never hangs the planner. ``close()`` releases the process handle
+    (an open FD) once the worker is dead.
+
+    Args:
+        proc: The worker process.
+        grace_s: Seconds to wait after SIGTERM before escalating to SIGKILL.
+    """
+    if proc.is_alive():
+        proc.terminate()
+    proc.join(grace_s)
+    if proc.is_alive():  # pragma: no cover - a worker ignoring SIGTERM is not reproducible in-test
+        proc.kill()
         proc.join()
-        return result
+    proc.close()
 
 
 def _collect_pyperplan_result(

@@ -112,6 +112,16 @@ class TestPureHelpers:
         for n in (1, 3, 5):
             assert len(solve_hanoi(n, 3)) == optimal_move_count(n)
 
+    def test_solve_hanoi_more_than_three_pegs_stays_valid(self) -> None:
+        """With >3 pegs the plan is still valid (no self-moves), if not optimal."""
+        for step in solve_hanoi(3, 5):
+            assert step.args[1] != step.args[2]  # source != target
+
+    def test_solve_hanoi_rejects_fewer_than_three_pegs(self) -> None:
+        """A 2-peg tower is unsolvable for 2+ disks — fail loud, not bad moves."""
+        with pytest.raises(ValueError, match="at least 3 pegs"):
+            solve_hanoi(3, 2)
+
 
 class TestRecursiveBackend:
     """RecursiveBackend is total — always returns an optimal plan."""
@@ -124,6 +134,15 @@ class TestRecursiveBackend:
 
     def test_conforms_to_protocol(self) -> None:
         assert isinstance(RecursiveBackend(ArmTaskConfig()), SymbolicPlannerBackend)
+
+    def test_rejects_unsolvable_two_peg_config(self) -> None:
+        # peg_positions length must match num_pegs (config validator).
+        task = ArmTaskConfig(
+            num_disks=3, num_pegs=2, peg_positions=[[0.2, 0.0, 0.0], [0.3, 0.0, 0.0]]
+        )
+        backend = RecursiveBackend(task)
+        with pytest.raises(ValueError, match="at least 3 pegs"):
+            backend.search("(domain)", "(problem)")
 
 
 class TestPyperplanBackendRunnerInjection:
@@ -286,6 +305,23 @@ class TestRunPyperplanSubprocess:
 
         assert _collect_pyperplan_result(_EmptyQueue(), time.monotonic(), 1.0) is None
 
+    def test_collect_result_maps_worker_outcomes(self) -> None:
+        """Error / no-solution → None; a plan payload → the operator list."""
+        from mousedroid.arm.planning.symbolic_planner import _collect_pyperplan_result
+
+        class _Queue:
+            def __init__(self, item: object) -> None:
+                self._item = item
+
+            def get(self, timeout: float) -> object:
+                return self._item
+
+        assert _collect_pyperplan_result(_Queue(("error", "boom")), time.monotonic(), 1.0) is None
+        assert _collect_pyperplan_result(_Queue(("ok", None)), time.monotonic(), 1.0) is None
+        assert _collect_pyperplan_result(
+            _Queue(("ok", ["(move d1 peg_A peg_C)"])), time.monotonic(), 1.0
+        ) == ["(move d1 peg_A peg_C)"]
+
     def test_hard_terminates_on_timeout(self) -> None:
         """A worker that outlives the budget is terminate()-d, not orphaned.
 
@@ -328,6 +364,23 @@ class TestRunPyperplanSubprocess:
 
         assert result is not None
         assert len(result) == len(big_plan)
+
+    def test_repeated_calls_release_resources(self) -> None:
+        """Many plan()/replan() calls must not leak the process/queue handles.
+
+        Exercises the cleanup ``finally`` across iterations; a leaked FD or
+        un-joined feeder thread would eventually raise here.
+        """
+        if multiprocessing.get_start_method() != "fork":
+            pytest.skip("fork start method required to inherit the patched seam")
+
+        def _search(*_args: object, **_kwargs: object) -> list[str]:
+            return ["(move disk_1 peg_A peg_C)"]
+
+        with patch(self._SEAM, return_value=(_search, object(), object)):
+            for _ in range(6):
+                result = run_pyperplan_subprocess("(domain)", "(problem)", 5.0)
+                assert result == ["(move disk_1 peg_A peg_C)"]
 
 
 # Valid minimal STRIPS PDDL pyperplan can solve in one step — used to exercise
