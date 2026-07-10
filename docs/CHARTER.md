@@ -80,9 +80,10 @@ value. PR numbers and dates are confirmed against git history.
   natural-language commands to `api.anthropic.com`. `LLMConfig.backend` is a
   `Literal["llama_cpp", "openai_compatible", "anthropic"]` defaulting to
   `"llama_cpp"` (byte-identical legacy behaviour); `"anthropic"` opts in. Every
-  command is sanitised by `RegexInjectionFilter.sanitize()`
-  (`src/mousedroid/security/injection_filter.py`) **before** egress — the only
-  place rover NL leaves the device. The off-network fallback
+  command is passed through the configured prompt-injection filter (the
+  `RegexInjectionFilter` implementation of `PromptInjectionFilterProtocol`,
+  `src/mousedroid/security/injection_filter.py`) — its `sanitize()` runs
+  **before** egress — the only place rover NL leaves the device. The off-network fallback
   (`LLMConfig.fallback_backend`) is `Literal["none", "llama_cpp",
   "openai_compatible"]` (default `"none"`): `"anthropic"` is deliberately absent,
   so cloud-to-cloud failover is rejected at YAML-parse time and off-network
