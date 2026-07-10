@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
@@ -194,7 +194,9 @@ def apply_visual_randomization(
     np.clip(work, 0.0, 1.0, out=work)
 
     if is_uint8:
-        return (work * _UINT8_MAX_F).astype(np.uint8)
+        # ``cast`` because numpy's astype on the (Any-typed) product returns
+        # Any under mypy 2.2.0's stricter [no-any-return] check.
+        return cast("NDArray[np.generic]", (work * _UINT8_MAX_F).astype(np.uint8))
     return work.astype(frame.dtype, copy=False)
 
 
@@ -241,7 +243,11 @@ def apply_feature_noise(
     if noise_std == 0.0:
         return features
     noise = rng.standard_normal(features.shape, dtype=np.float32) * np.float32(noise_std)
-    return (features.astype(np.float32, copy=False) + noise).astype(features.dtype, copy=False)
+    # ``cast`` because numpy's astype returns Any under mypy 2.2.0's [no-any-return].
+    return cast(
+        "NDArray[np.generic]",
+        (features.astype(np.float32, copy=False) + noise).astype(features.dtype, copy=False),
+    )
 
 
 __all__ = [

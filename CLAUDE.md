@@ -4,6 +4,8 @@
 
 MouseDroidAGI is a Star Wars MSE-6 autonomous navigation system and hierarchical robot arm training platform running on NVIDIA Jetson Orin Nano. It implements the 10 Pillars of the Ideal Neural Network as a cohesive agentic system.
 
+> **Governance:** `docs/CHARTER.md` is the project constitution (vision, scope, invariants, roadmap) and sits above this document. When a change touches scope or an invariant, defer to the charter.
+
 ## Architecture Invariants
 
 These invariants are **non-negotiable** across all modules:
