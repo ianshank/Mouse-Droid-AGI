@@ -55,7 +55,8 @@ flowchart TB
 - **Protocol DI.** Backends conform to
   `SymbolicPlannerBackend` (`search(domain, problem) -> list[PlanStep] | None`).
   `None` means "this backend could not plan — fall back". `RecursiveBackend` is
-  total (never `None`), so `SymbolicPlanner` always returns a plan.
+  total for valid inputs (never `None`), so `SymbolicPlanner` returns a plan for
+  any valid (>= 3-peg) Tower-of-Hanoi configuration.
 - **Config-selected, schema-driven.** The primary backend comes
   from `ArmPlanningConfig.planner_backend` via `make_primary_backend` (mirrored
   by `factory.build_symbolic_planner_backend`). `recursive` was **added** to the

@@ -134,7 +134,6 @@ def solve_hanoi(num_disks: int, num_pegs: int) -> list[PlanStep]:
         hanoi(num - 1, auxiliary, target, source)
 
     hanoi(num_disks, pegs[0], pegs[-1], pegs[1])
-    _log.info("recursive_solve_complete", num_steps=len(steps))
     return steps
 
 
@@ -164,7 +163,7 @@ def _pyperplan_worker(  # pragma: no cover - runs in child process, untraceable 
             result_queue.put(("ok", None))
         else:
             result_queue.put(("ok", [str(op) for op in solution]))
-    except BaseException as exc:
+    except Exception as exc:  # NOT BaseException — let KeyboardInterrupt/SystemExit kill the child
         result_queue.put(("error", f"{type(exc).__name__}: {exc}"))
 
 
@@ -348,7 +347,11 @@ class PyperplanBackend:
 
 
 class RecursiveBackend:
-    """Deterministic Tower-of-Hanoi backend (total — never returns ``None``).
+    """Deterministic Tower-of-Hanoi backend.
+
+    Total for valid inputs — never returns ``None`` — but raises ``ValueError``
+    for an unsolvable ``num_pegs < 3`` config (surfaced as ``PlanningError`` by
+    :class:`SymbolicPlanner`).
 
     Args:
         task_cfg: Task config supplying ``num_disks`` / ``num_pegs``.
@@ -359,7 +362,9 @@ class RecursiveBackend:
 
     def search(self, domain_pddl: str, problem_pddl: str) -> list[PlanStep] | None:
         """Return the optimal recursive plan (ignores the PDDL text by design)."""
-        return solve_hanoi(self._task_cfg.num_disks, self._task_cfg.num_pegs)
+        steps = solve_hanoi(self._task_cfg.num_disks, self._task_cfg.num_pegs)
+        _log.info("recursive_solve_complete", num_steps=len(steps))
+        return steps
 
 
 def make_primary_backend(

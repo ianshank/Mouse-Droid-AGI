@@ -3514,7 +3514,8 @@ class ArmPlanningConfig(BaseModel):
             "Pyperplan backend; ``recursive`` forces the deterministic "
             "guaranteed-optimal Tower-of-Hanoi solver as the primary. The "
             "recursive solver is ALWAYS the fallback regardless of this value, "
-            "so a planner never returns without a plan."
+            "so a planner returns a plan for any valid (>= 3-peg) Tower-of-"
+            "Hanoi configuration."
         ),
     )
     llm_replanner_enabled: bool = Field(

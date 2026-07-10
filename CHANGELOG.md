@@ -18,7 +18,7 @@ from `arm.planning.planner_backend` via `factory.build_symbolic_planner_backend`
 Literal gains a `recursive` member (backwards-compatible — default stays
 `pyperplan`, legacy values preserved) that forces the deterministic solver as
 primary; the recursive backend is always the guaranteed fallback so a planner
-never returns without a plan. Pyperplan now runs inside a **hard-interruptible
+returns a plan for any valid (>= 3-peg) Tower-of-Hanoi configuration. Pyperplan now runs inside a **hard-interruptible
 `multiprocessing.Process`** — a pathological astar search on malformed PDDL is
 `terminate()`-d on timeout rather than orphaning a thread as the previous
 `ThreadPoolExecutor` did. Search execution is behind an injectable runner so the
