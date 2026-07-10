@@ -393,11 +393,16 @@ def build_face_controller(
     return FaceController(driver, cfg.face_display)
 
 
-def build_speaker(cfg: Settings) -> SpeakerProtocol | None:
+def build_speaker(
+    cfg: Settings, *, metrics: MetricsRegistry | None = None
+) -> SpeakerProtocol | None:
     """Build USB speaker driver based on config.
 
     Args:
         cfg: Root settings.
+        metrics: Optional shared metrics registry, threaded keyword-only so the
+            USB speaker's retry-exhaustion path surfaces
+            ``voice_speaker_degraded_total`` on ``/metrics``.
 
     Returns:
         Speaker driver conforming to ``SpeakerProtocol``, or None if disabled.
@@ -419,7 +424,7 @@ def build_speaker(cfg: Settings) -> SpeakerProtocol | None:
         sample_rate=cfg.speaker.sample_rate,
         device_name=cfg.speaker.device_name,
     )
-    return UsbSpeaker(cfg.speaker)
+    return UsbSpeaker(cfg.speaker, metrics=metrics)
 
 
 def build_greeter(
@@ -531,6 +536,8 @@ def build_voice_engine(
     speaker: SpeakerProtocol | None = None,
     failure_recorder: FailureRecorder | None = None,
     clock: ClockProtocol | None = None,
+    *,
+    metrics: MetricsRegistry | None = None,
 ) -> VoiceEngineProtocol | None:
     """Build Rocky voice engine based on config.
 
@@ -546,6 +553,10 @@ def build_voice_engine(
             :class:`RealClock` (production); tests inject
             :class:`MockClock` so cooldown / token-bucket logic is
             deterministic without wall-clock waits.
+        metrics: Optional shared metrics registry, threaded keyword-only into
+            the speaker, TTS, and engine so speaker degradations and TTS
+            synthesis failures surface the ``voice_speaker_degraded_total`` /
+            ``voice_tts_synthesize_failures_total`` counters on ``/metrics``.
 
     Returns:
         Voice engine conforming to ``VoiceEngineProtocol``, or None if disabled.
@@ -555,7 +566,7 @@ def build_voice_engine(
         return None
 
     if speaker is None:
-        speaker = build_speaker(cfg)
+        speaker = build_speaker(cfg, metrics=metrics)
     if speaker is None:
         _log.warning("voice_engine_disabled_no_speaker")
         return None
@@ -569,7 +580,7 @@ def build_voice_engine(
         else:
             from mousedroid.voice.tts import PiperTTS
 
-            tts = PiperTTS(cfg.voice)
+            tts = PiperTTS(cfg.voice, metrics=metrics)
     except Exception:
         _log.warning("voice_engine_tts_init_failed", exc_info=True)
         return None
@@ -591,6 +602,7 @@ def build_voice_engine(
         tts,
         failure_recorder=failure_recorder,
         clock=clock,
+        metrics=metrics,
     )
     _log.info(
         "voice_engine_built",
@@ -3958,8 +3970,8 @@ def build_orchestrator(cfg: Settings) -> object:
     # buffers so it can expose them as resources. Memory tier is wired
     # below; when present and enabled, the server gets a non-None
     # ``memory_tier``.
-    speaker = build_speaker(cfg)
-    voice_engine = build_voice_engine(cfg, speaker=speaker)
+    speaker = build_speaker(cfg, metrics=metrics_registry)
+    voice_engine = build_voice_engine(cfg, speaker=speaker, metrics=metrics_registry)
 
     # Issue #109 — one-shot startup greeter (None unless cfg.greeting is
     # enabled). Reuses the orchestrator's own voice engine so a single

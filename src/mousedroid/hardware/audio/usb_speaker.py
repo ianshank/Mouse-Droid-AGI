@@ -18,6 +18,7 @@ from mousedroid.voice.exceptions import SpeakerUnavailableError
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import SpeakerConfig
+    from mousedroid.telemetry.metrics import MetricsRegistry
 
 _log = get_logger(__name__)
 
@@ -29,13 +30,18 @@ class UsbSpeaker:
     Auto-detects the device by name if ``device_index`` is not specified.
     """
 
-    def __init__(self, cfg: SpeakerConfig) -> None:
+    def __init__(self, cfg: SpeakerConfig, *, metrics: MetricsRegistry | None = None) -> None:
         """Initialise USB speaker from config.
 
         Args:
             cfg: Speaker configuration.
+            metrics: Optional shared :class:`MetricsRegistry`. When provided,
+                exhausting all reconnect retries increments
+                ``voice_speaker_degraded_total`` (label:
+                ``subsystem="usb_speaker"``). ``None`` (default) is a no-op.
         """
         self._cfg = cfg
+        self._metrics = metrics
         self._pa: Any = None
         self._stream: Any = None
         _log.info(
@@ -135,8 +141,8 @@ class UsbSpeaker:
             device_name=self._cfg.device_name,
             error=str(last_exc),
         )
-        # TODO: wire voice_speaker_degraded_total Prometheus counter once
-        # feat/observability-primitive lands (PR #2).
+        if self._metrics is not None:
+            self._metrics.inc_voice_speaker_degraded("usb_speaker")
         msg = (
             f"USB speaker '{self._cfg.device_name}' unavailable after "
             f"{self._cfg.reconnect_max_attempts} attempts: {last_exc}"

@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from mousedroid.config.schema import VoiceConfig
     from mousedroid.hardware.protocols import SpeakerProtocol
     from mousedroid.telemetry.failure_recorder import FailureRecorder
+    from mousedroid.telemetry.metrics import MetricsRegistry
     from mousedroid.voice.mock_tts import MockTTS
     from mousedroid.voice.tts import PiperTTS
 
@@ -156,6 +157,7 @@ class RockyVoiceEngine:
         tts: PiperTTS | MockTTS,
         failure_recorder: FailureRecorder | None = None,
         clock: ClockProtocol | None = None,
+        metrics: MetricsRegistry | None = None,
     ) -> None:
         """Initialise the Rocky voice engine.
 
@@ -167,6 +169,10 @@ class RockyVoiceEngine:
                 report dropped events (rate-limit or cooldown). Defaults to
                 :class:`NullFailureRecorder` (no-op) so unit tests and
                 offline contexts work without telemetry wiring.
+            metrics: Optional shared :class:`MetricsRegistry`. When provided, a
+                downgrade to a MockSpeaker increments
+                ``voice_speaker_degraded_total`` (label:
+                ``subsystem="rocky_fallback"``). ``None`` (default) is a no-op.
             clock: Optional :class:`ClockProtocol` for cooldown and
                 rate-limit time. Defaults to :class:`RealClock`
                 (production); inject :class:`MockClock` in tests to
@@ -185,6 +191,7 @@ class RockyVoiceEngine:
             _cfg_attr if isinstance(_cfg_attr, SpeakerConfig) else SpeakerConfig.model_validate({})
         )
         self._failure_recorder: FailureRecorder = failure_recorder or NullFailureRecorder()
+        self._metrics = metrics
         self._clock: ClockProtocol = clock if clock is not None else RealClock()
         self._queue: asyncio.PriorityQueue[SpeechRequest] = asyncio.PriorityQueue(
             maxsize=cfg.queue_size,
@@ -420,8 +427,8 @@ class RockyVoiceEngine:
                 reason=str(exc),
                 fallback="MockSpeaker",
             )
-            # TODO: wire voice_speaker_degraded_total Prometheus counter once
-            # feat/observability-primitive lands (PR #2).
+            if self._metrics is not None:
+                self._metrics.inc_voice_speaker_degraded("rocky_fallback")
         self._tts.start()
         self._running = True
         self._worker_task = asyncio.create_task(self._worker())

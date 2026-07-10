@@ -72,6 +72,13 @@ def build_maximal_registry() -> MetricsRegistry:
     registry.inc_on_device_learning_reverted("integrity_mismatch")
     registry.inc_on_device_learning_reverted("exception")
 
+    # Voice degradation (speaker + TTS).
+    registry.inc_voice_speaker_degraded("usb_speaker")
+    registry.inc_voice_speaker_degraded("rocky_fallback")
+    registry.inc_voice_tts_synthesize_failures("synthesize")
+    registry.inc_voice_tts_synthesize_failures("synthesize_wav")
+    registry.inc_voice_tts_synthesize_failures("synthesize_wav_file")
+
     # LiDAR sector gauges.
     registry.set_lidar_sectors([0.9, 0.4, 1.0, 1.0, 0.7, 1.0, 1.0, 0.2], max_range_m=12.0)
     registry.set_lidar_min_distance_m(2.4)

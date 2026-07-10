@@ -1726,6 +1726,18 @@ class MetricsConfig(BaseModel):
             "leave on."
         ),
     )
+    track_voice_degradation: bool = Field(
+        True,
+        description=(
+            "Expose the voice-subsystem degradation counters: "
+            "``voice_speaker_degraded_total`` (label: subsystem — the USB "
+            "speaker exhausted its reconnect retries or the engine fell back "
+            "to a MockSpeaker) and ``voice_tts_synthesize_failures_total`` "
+            "(label: api — a Piper synthesis call raised). Pure-add: each "
+            "family is omitted from /metrics until its first increment, so "
+            "default deployments render byte-identically. Safe to leave on."
+        ),
+    )
     loop_latency_buckets_ms: tuple[float, ...] = Field(
         (1.0, 2.5, 5.0, 10.0, 20.0, 33.0, 50.0, 100.0, 200.0, float("inf")),
         description="Histogram bucket boundaries for control-loop latency (ms)",

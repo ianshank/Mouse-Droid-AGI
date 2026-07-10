@@ -32,6 +32,23 @@ no-deadlock contract. Public API (`SymbolicPlanner(planning_cfg, task_cfg)`,
 `plan`/`replan`, `_solve_recursive`/`_parse_solution`) is unchanged. Architecture:
 [`docs/architecture/c4-symbolic-planner.md`](docs/architecture/c4-symbolic-planner.md).
 
+### Added — voice-subsystem degradation metrics
+
+Closed the three tracked `voice_speaker_degraded_total` /
+`voice_tts_synthesize_failures_total` TODOs (in `voice/rocky.py`, `voice/tts.py`,
+`hardware/audio/usb_speaker.py`) by wiring two config-gated, pure-add Prometheus
+counter families. `voice_speaker_degraded_total{subsystem}` fires when the USB
+speaker exhausts its reconnect retries (`usb_speaker`) or the engine downgrades
+to a MockSpeaker (`rocky_fallback`); `voice_tts_synthesize_failures_total{api}`
+fires when a Piper synthesis call raises. Both are gated by the new
+`MetricsConfig.track_voice_degradation` flag (default `True`), guard their labels
+against module-level frozensets (out-of-set values dropped with a DEBUG log), and
+are **omitted from `/metrics` until first increment** so default deployments
+render byte-identically. The shared `MetricsRegistry` is threaded keyword-only
+through `build_speaker` / `build_voice_engine` into the voice classes (a `None`
+registry is a no-op). Covered across unit, wiring, AQA, promtool-smoke, and the
+render golden (now 62 families) tiers.
+
 ### Changed — enterprise-hardening: C901 complexity gate + offender decomposition (#153)
 
 Focused refactoring pass adding the one quality gate the codebase lacked

@@ -70,6 +70,16 @@ _ON_DEVICE_REVERT_REASONS: frozenset[str] = frozenset(
     {"regression_bound", "integrity_mismatch", "exception"}
 )
 
+# Voice-degradation label value sets. Same drop-guard + AQA-pinning role as the
+# LLM/on-device sets above, so a driver-forwarded string can never open a new
+# time series.
+#   * subsystem — which voice component degraded: the USB speaker exhausted its
+#     reconnect retries (``usb_speaker``) or the engine downgraded to a
+#     MockSpeaker (``rocky_fallback``).
+#   * api — the resolved Piper synthesis API whose call raised.
+_VOICE_SPEAKER_DEGRADED_SUBSYSTEMS: frozenset[str] = frozenset({"usb_speaker", "rocky_fallback"})
+_VOICE_TTS_APIS: frozenset[str] = frozenset({"synthesize", "synthesize_wav", "synthesize_wav_file"})
+
 
 def _classify_dropped_observation(value: float) -> str | None:
     """Classify a histogram-observation candidate; return drop reason or ``None``.
@@ -653,6 +663,11 @@ class MetricsRegistry:
         # /metrics until the first revert; gated by cfg.track_on_device_learning.
         self._on_device_learning_reverted = _LabeledCounter()
 
+        # Voice-degradation counters. Pure-add: each omitted from /metrics until
+        # its first increment; both gated by cfg.track_voice_degradation.
+        self._voice_speaker_degraded = _LabeledCounter()
+        self._voice_tts_synthesize_failures = _LabeledCounter()
+
         # Pre-format metric names from namespace
         self._name_frame_drops = f"{ns}_frame_drops"
         self._name_safety_violations = f"{ns}_safety_violations"
@@ -735,6 +750,9 @@ class MetricsRegistry:
         # Phase-6 on-device-learning revert counter name. The counter render
         # helper suffixes ``_total``, so omit it here.
         self._name_on_device_learning_reverted = f"{ns}_on_device_learning_reverted"
+        # Voice-degradation counter names (render helper suffixes ``_total``).
+        self._name_voice_speaker_degraded = f"{ns}_voice_speaker_degraded"
+        self._name_voice_tts_synthesize_failures = f"{ns}_voice_tts_synthesize_failures"
 
         _log.debug("metrics_registry_initialised", namespace=ns)
 
@@ -1134,6 +1152,51 @@ class MetricsRegistry:
             return
         self._on_device_learning_reverted.inc(reason, amount)
 
+    def inc_voice_speaker_degraded(self, subsystem: str, amount: int = 1) -> None:
+        """Increment the voice speaker-degradation counter (label: subsystem).
+
+        Fired when a speaker path degrades: the USB speaker exhausts its
+        reconnect retries, or the voice engine downgrades to a MockSpeaker so
+        the orchestrator keeps running silently. Pure-add and gated by
+        ``cfg.track_voice_degradation``.
+
+        Args:
+            subsystem: One of ``"usb_speaker"`` (the ``UsbSpeaker`` driver gave
+                up after ``reconnect_max_attempts``) or ``"rocky_fallback"``
+                (``RockyVoiceEngine`` caught ``SpeakerUnavailableError`` and
+                swapped in a MockSpeaker). Out-of-set values are dropped with a
+                DEBUG log so a driver string never leaks cardinality.
+            amount: Increment magnitude (default 1); ``<= 0`` is a no-op.
+        """
+        if not self._cfg.track_voice_degradation or amount <= 0:
+            return
+        if subsystem not in _VOICE_SPEAKER_DEGRADED_SUBSYSTEMS:
+            _log.debug("voice_speaker_degraded_dropped_invalid_subsystem", subsystem=subsystem)
+            return
+        self._voice_speaker_degraded.inc(subsystem, amount)
+
+    def inc_voice_tts_synthesize_failures(self, api: str, amount: int = 1) -> None:
+        """Increment the TTS synthesis-failure counter (label: api).
+
+        Fired when a Piper synthesis call raises and the engine returns silence.
+        Pure-add and gated by ``cfg.track_voice_degradation``.
+
+        Args:
+            api: The resolved synthesis API — one of ``"synthesize"`` (legacy
+                raw path), ``"synthesize_wav"`` (piper ``synthesize_wav(text)``),
+                or ``"synthesize_wav_file"`` (piper
+                ``synthesize_wav(text, wav_file)``). Out-of-set values are
+                dropped with a DEBUG log so a runtime string never leaks
+                cardinality.
+            amount: Increment magnitude (default 1); ``<= 0`` is a no-op.
+        """
+        if not self._cfg.track_voice_degradation or amount <= 0:
+            return
+        if api not in _VOICE_TTS_APIS:
+            _log.debug("voice_tts_synthesize_failures_dropped_invalid_api", api=api)
+            return
+        self._voice_tts_synthesize_failures.inc(api, amount)
+
     # ------------------------------------------------------------------
     # PR-A2 — replay / VLA / VLM observability helpers.
     #
@@ -1529,6 +1592,7 @@ class MetricsRegistry:
         sections.extend(self._families_llm_translation())
         sections.extend(self._families_llm_gateway())
         sections.extend(self._families_on_device_learning())
+        sections.extend(self._families_voice_degradation())
         sections.extend(self._families_lidar())
         sections.extend(self._families_phase7())
         sections.extend(self._families_cloud())
@@ -1718,6 +1782,35 @@ class MetricsRegistry:
                         "On-device-learning weight-update reverts (label: reason)",
                         "reason",
                         revert_snapshot,
+                    )
+                )
+        return out
+
+    def _families_voice_degradation(self) -> list[list[str]]:
+        """Voice speaker-degradation + TTS synthesis-failure counters."""
+        cfg = self._cfg
+        out: list[list[str]] = []
+        # Both families are pure-add: emitted only after the first increment
+        # (snapshot non-empty), so default deployments render byte-identically.
+        if cfg.track_voice_degradation:
+            speaker_snapshot = self._voice_speaker_degraded.snapshot()
+            if speaker_snapshot:
+                out.append(
+                    _render_labeled_counter(
+                        self._name_voice_speaker_degraded,
+                        "Voice speaker degradations (label: subsystem)",
+                        "subsystem",
+                        speaker_snapshot,
+                    )
+                )
+            tts_snapshot = self._voice_tts_synthesize_failures.snapshot()
+            if tts_snapshot:
+                out.append(
+                    _render_labeled_counter(
+                        self._name_voice_tts_synthesize_failures,
+                        "Voice TTS synthesis failures (label: api)",
+                        "api",
+                        tts_snapshot,
                     )
                 )
         return out
@@ -2289,5 +2382,14 @@ def generate_metrics_sample() -> str:
     registry.inc_on_device_learning_reverted("regression_bound")
     registry.inc_on_device_learning_reverted("integrity_mismatch")
     registry.inc_on_device_learning_reverted("exception")
+
+    # Voice-degradation counters — seed one series per valid label value so
+    # promtool / Grafana / alert evaluation see non-empty series from the first
+    # scrape.
+    registry.inc_voice_speaker_degraded("usb_speaker")
+    registry.inc_voice_speaker_degraded("rocky_fallback")
+    registry.inc_voice_tts_synthesize_failures("synthesize")
+    registry.inc_voice_tts_synthesize_failures("synthesize_wav")
+    registry.inc_voice_tts_synthesize_failures("synthesize_wav_file")
 
     return registry.render_prometheus()
