@@ -241,6 +241,32 @@ class ArmPlannerProtocol(Protocol):
 
 
 @runtime_checkable
+class SymbolicPlannerBackend(Protocol):
+    """Interface for a single symbolic-planning backend (Layer 1 internal).
+
+    A backend turns a generated PDDL domain/problem pair into an ordered plan.
+    Returning ``None`` signals "this backend could not produce a plan" (engine
+    unavailable, timeout, internal error, or no solution) so the orchestrating
+    :class:`~mousedroid.arm.planning.symbolic_planner.SymbolicPlanner` can defer
+    to its fallback backend. A backend that is total (e.g. the recursive
+    Tower-of-Hanoi solver) never returns ``None``.
+    """
+
+    def search(self, domain_pddl: str, problem_pddl: str) -> list[PlanStep] | None:
+        """Attempt to solve the PDDL problem.
+
+        Args:
+            domain_pddl: Generated PDDL domain definition.
+            problem_pddl: Generated PDDL problem definition.
+
+        Returns:
+            An ordered list of plan steps, or ``None`` if this backend could not
+            produce a plan (caller should fall back).
+        """
+        ...
+
+
+@runtime_checkable
 class ArmControllerProtocol(Protocol):
     """Interface for low-level motor control (Layer 3)."""
 

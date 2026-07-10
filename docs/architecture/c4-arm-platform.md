@@ -21,7 +21,7 @@ Container_Boundary(arm, "Arm platform (when cfg.platform = robot_arm)") {
     }
 
     Component_Boundary(planning, "Layer 1 — Symbolic Planning") {
-        Component(pddl, "PDDLPlanner", "Pyperplan", "Solver — Tower of Hanoi optimal\n(2^n - 1 moves)")
+        Component(pddl, "SymbolicPlanner", "Protocol backends", "Pyperplan (hard-interruptible subprocess)\nor Recursive, config-selected;\nRecursive is the guaranteed fallback (2^n - 1). F-003")
         Component(mcts, "MCTSReplanner", "PUCT", "Coverage of failure recovery")
         Component(llm, "LLMReplanner", "rules + LLM", "Laundry-style replanning")
     }
@@ -62,6 +62,13 @@ Rel(d435, camera_hw, "USB 3.0", "if not mock")
 Rel(sac, mujoco, "training rollouts", "training-only")
 Rel(rssm_arm, mujoco, "imagination", "training-only")
 ```
+
+> **Layer 1 planner backends (F-003):** `SymbolicPlanner` selects a primary
+> backend from `ArmPlanningConfig.planner_backend` (`pyperplan` | `fast_downward`
+> | `recursive`) via `factory.build_symbolic_planner_backend`, and always keeps a
+> `RecursiveBackend` fallback. Pyperplan runs in a hard-interruptible
+> `multiprocessing.Process`. See
+> [`docs/architecture/c4-symbolic-planner.md`](c4-symbolic-planner.md).
 
 ## Curriculum flow
 

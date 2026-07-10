@@ -47,6 +47,7 @@ if TYPE_CHECKING:
         ArmEnvironmentProtocol,
         ArmPerceptionProtocol,
         ArmPlannerProtocol,
+        SymbolicPlannerBackend,
     )
     from mousedroid.cloud.protocol import (
         CloudExperienceExporterProtocol,
@@ -4195,6 +4196,31 @@ def build_arm_driver(cfg: Settings) -> ArmDriverProtocol:
     return SoArm100Driver(cfg.arm)
 
 
+def build_symbolic_planner_backend(cfg: Settings) -> SymbolicPlannerBackend:
+    """Build the primary symbolic-planning backend selected by config.
+
+    Standard-factory entry point for the ``planner_backend`` selection promised
+    by the ``SymbolicPlanner`` refactor; delegates to the single-source-of-truth
+    :func:`~mousedroid.arm.planning.symbolic_planner.make_primary_backend`.
+
+    Args:
+        cfg: Root settings (must have arm_planning and arm_task populated).
+
+    Returns:
+        Backend conforming to ``SymbolicPlannerBackend``.
+
+    Raises:
+        ValueError: If arm planning or task config is not populated.
+    """
+    if cfg.arm_planning is None or cfg.arm_task is None:
+        msg = "arm_planning and arm_task configs required for arm planner backend"
+        raise ValueError(msg)
+
+    from mousedroid.arm.planning.symbolic_planner import make_primary_backend
+
+    return make_primary_backend(cfg.arm_planning, cfg.arm_task)
+
+
 def build_arm_planner(cfg: Settings) -> ArmPlannerProtocol:
     """Build symbolic planner for arm manipulation tasks.
 
@@ -4214,7 +4240,11 @@ def build_arm_planner(cfg: Settings) -> ArmPlannerProtocol:
     from mousedroid.arm.planning.symbolic_planner import SymbolicPlanner
 
     _log.info("arm_planner_built", backend=cfg.arm_planning.planner_backend)
-    return SymbolicPlanner(cfg.arm_planning, cfg.arm_task)
+    return SymbolicPlanner(
+        cfg.arm_planning,
+        cfg.arm_task,
+        primary_backend=build_symbolic_planner_backend(cfg),
+    )
 
 
 def build_arm_environment(cfg: Settings) -> ArmEnvironmentProtocol:

@@ -162,7 +162,7 @@ dev = [
     # aiohttp real types are visible to mypy (otherwise those annotations
     # degrade to ``Any`` under ``--ignore-missing-imports`` and surface
     # ``valid-type`` / ``untyped-decorator`` errors).
-    "mypy==2.1.0",
+    "mypy==2.2.0",
     "types-PyYAML>=6.0",
     # PR-105b: close the second pre-existing mypy --strict error.
     # ``src/mousedroid/reward/vlm_progress.py:31`` imports ``cachetools``

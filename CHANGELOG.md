@@ -8,6 +8,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — F-003: Protocol-based symbolic-planner backends + hard-interruptible pyperplan
+
+Closed the F-003-FOLLOWUP TODO in `arm/planning/symbolic_planner.py`. The
+pyperplan/recursive seam is now a `@runtime_checkable SymbolicPlannerBackend`
+Protocol with concrete `PyperplanBackend` / `RecursiveBackend` classes selected
+from `arm.planning.planner_backend` via `factory.build_symbolic_planner_backend`
+(mirrored by the module-level `make_primary_backend`). The `planner_backend`
+Literal gains a `recursive` member (backwards-compatible — default stays
+`pyperplan`, legacy values preserved) that forces the deterministic solver as
+primary; the recursive backend is always the guaranteed fallback so a planner
+returns a plan for any valid (>= 3-peg) Tower-of-Hanoi configuration. Pyperplan now runs inside a **hard-interruptible
+`multiprocessing.Process`** — a pathological astar search on malformed PDDL is
+`terminate()`-d on timeout rather than orphaning a thread as the previous
+`ThreadPoolExecutor` did. Search execution is behind an injectable runner so the
+parse + fallback logic is unit-tested in-process, with a `pytest.importorskip`
+integration test exercising the real subprocess end-to-end and a fork-based
+hard-terminate test. The runner drains the result queue **before** joining the
+worker — the `multiprocessing.Queue` feeder-thread contract blocks a child on
+exit until the parent reads a large item, so a join-before-get would deadlock on
+a large plan and silently discard it; a fork-based ~400 KB-payload test pins the
+no-deadlock contract. Public API (`SymbolicPlanner(planning_cfg, task_cfg)`,
+`plan`/`replan`, `_solve_recursive`/`_parse_solution`) is unchanged. Architecture:
+[`docs/architecture/c4-symbolic-planner.md`](docs/architecture/c4-symbolic-planner.md).
+
 ### Added — voice-subsystem degradation metrics
 
 Closed the three tracked `voice_speaker_degraded_total` /
