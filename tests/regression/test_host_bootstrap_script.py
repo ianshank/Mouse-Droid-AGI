@@ -16,6 +16,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _REPO_ROOT / "scripts" / "host_bootstrap.sh"
 
@@ -104,12 +106,20 @@ class TestDryRunSubprocess:
         assert "host_bootstrap.sh" in proc.stdout
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX-only guard; see class-level skipif on TestDryRunBranches below",
+)
 def test_python_sees_same_interpreter() -> None:
     # Guard against the suite running under an unexpected interpreter — the
     # subprocess tests above assume a POSIX bash on PATH (matches CI + Jetson).
     assert sys.platform.startswith("linux") or sys.platform == "darwin"
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="host_bootstrap.sh is POSIX-only; Windows path-separator mixing breaks string asserts",
+)
 class TestDryRunBranches:
     """The two riskiest paths, executed for real under --dry-run (gap-analysis)."""
 

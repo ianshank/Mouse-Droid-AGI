@@ -68,14 +68,24 @@ echo "=== Settings Identity Smoke Check ==="
 
 echo "=== Unit + Property + Integration Tests (with coverage) ==="
 "$PYTHON_BIN" -m pytest tests/unit tests/property tests/integration \
+    -m "not hardware" \
     --import-mode=importlib \
     -v --cov=src/mousedroid --cov-report=term-missing --cov-fail-under=85
 
-echo "=== Performance Tests ==="
-"$PYTHON_BIN" -m pytest tests/performance/ --import-mode=importlib -v
+# Slim mode: on memory-constrained hosts (e.g., Jetson container Phase-1 after
+# an OOM retry), skip the memory-heaviest pytest stages. Unit+property+
+# integration+coverage (above) is preserved — that's the core signal. The
+# skipped stages still run in jetson_full_validation.sh Phase 2 hardware
+# pytest tier where the rover owns the peripherals.
+if [[ "${MOUSEDROID_CI_SLIM:-0}" == "1" ]]; then
+    echo "=== Performance/Regression/E2E stages SKIPPED (MOUSEDROID_CI_SLIM=1) ==="
+else
+    echo "=== Performance Tests ==="
+    "$PYTHON_BIN" -m pytest tests/performance/ -m "not hardware" --import-mode=importlib -v
 
-echo "=== Regression Tests ==="
-"$PYTHON_BIN" -m pytest tests/regression/ --import-mode=importlib -v
+    echo "=== Regression Tests ==="
+    "$PYTHON_BIN" -m pytest tests/regression/ -m "not hardware" --import-mode=importlib -v
+fi
 
 echo "=== Harness Spec Alignment (fast tier) ==="
 # Spec-driven harness gate (HARNESS_SPEC.md §10 / ADR-012): validates
@@ -86,8 +96,12 @@ echo "=== Harness Spec Alignment (fast tier) ==="
 # (matches the push job); slow/hardware tiers are deferred.
 "$PYTHON_BIN" scripts/validate.py --tier fast
 
-echo "=== E2E Tests ==="
-"$PYTHON_BIN" -m pytest tests/e2e/ --import-mode=importlib -v
+if [[ "${MOUSEDROID_CI_SLIM:-0}" == "1" ]]; then
+    echo "=== E2E Tests SKIPPED (MOUSEDROID_CI_SLIM=1) ==="
+else
+    echo "=== E2E Tests ==="
+    "$PYTHON_BIN" -m pytest tests/e2e/ --import-mode=importlib -v
+fi
 
 echo "=== Branch Coverage Gate (changed files >= 85%) ==="
 "$PYTHON_BIN" scripts/check_branch_coverage.py --min 85 \

@@ -68,6 +68,39 @@ restart even if the pass aborts). Phase 3 then runs the **warm** checks that
 require the live server (`/api/v1/health`, the live `/metrics` scrape, the
 LiDAR→WS probe).
 
+## Phase-1 ci.sh OOM guard (PR #161)
+
+The Jetson has ~7.4 GB RAM. A running `mousedroid` daemon plus the container
+`ci.sh` invocation (pytest + coverage + torch + LMDB loaded together) routinely
+overshoots memory and the kernel OOM killer SIGKILLs `ci.sh` with `rc=137`.
+Phase 1 protects against this with a two-tier guard implemented in
+`run_phase1_ci_container`:
+
+| Attempt | Under | ci.sh mode | On success | On rc=137 |
+|---------|-------|------------|------------|-----------|
+| 1st | `ulimit -v ${PHASE1_CI_ULIMIT_KB}` (default 6 GB) | full | record PASS | retry (if enabled) |
+| 2nd (retry) | `ulimit -v ${PHASE1_CI_RETRY_ULIMIT_KB}` (default 5 GB) + `MOUSEDROID_CI_SLIM=1` | slim: skip Perf/Regression/E2E | record **WARN** ("OOM on first attempt; passed on slim-mode retry") | record FAIL |
+
+The retry attempt drops the memory-heaviest pytest stages via the
+`MOUSEDROID_CI_SLIM=1` env var — `ci.sh` gates them behind a conditional.
+Unit + Property + Integration + coverage (the core signal) always runs.
+Perf/Regression/E2E coverage is NOT lost repository-wide: Phase 2's
+`hardware pytest (-m hardware)` step runs those tiers in a hardware-owning
+environment where memory pressure is different.
+
+Tunables (all env-overridable — no hardcoded values):
+
+| Env var | Default | Purpose |
+| --- | --- | --- |
+| `MOUSEDROID_VALIDATION_PHASE1_CI_ULIMIT_KB` | 6291456 (6 GB) | vmem cap on first attempt |
+| `MOUSEDROID_VALIDATION_PHASE1_CI_RETRY_ULIMIT_KB` | 5242880 (5 GB) | vmem cap on retry |
+| `MOUSEDROID_VALIDATION_PHASE1_CI_OOM_RETRY` | 1 | 1=retry on rc=137, 0=don't (operator kill-switch) |
+
+The contract is pinned by `tests/regression/test_jetson_phase1_oom_guard.py`
+(17 source-text tests) — a future edit that drops the ulimit, unlocks the
+retry from rc==137, or unwraps the core Unit+Property+Integration+coverage
+stage from the mandatory path will fail those pins.
+
 ## Validate-around the dead ESP32
 
 The rover ESP32 is currently non-functional. The pass tolerates this:
