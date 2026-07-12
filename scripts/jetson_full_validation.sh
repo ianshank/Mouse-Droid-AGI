@@ -45,6 +45,9 @@
 #   MOUSEDROID_VALIDATION_JOURNAL_MAX_BYTES journal rotation cap        (1048576)
 #   MOUSEDROID_VALIDATION_TREND_SLOW_RATIO  latency-creep ratio         (1.5)
 #   MOUSEDROID_VALIDATION_TREND_SLOW_FLOOR_S latency-creep floor (s)    (0.05)
+#   MOUSEDROID_VALIDATION_PHASE1_CI_ULIMIT_KB    Phase-1 ci.sh vmem cap (KB) (6291456 = 6 GB)
+#   MOUSEDROID_VALIDATION_PHASE1_CI_RETRY_ULIMIT_KB Phase-1 retry vmem cap  (5242880 = 5 GB)
+#   MOUSEDROID_VALIDATION_PHASE1_CI_OOM_RETRY    retry ci.sh in slim mode on rc=137 (1)
 #
 # Secrets are NEVER echoed — only presence is checked. No motion is ever armed.
 
@@ -78,6 +81,16 @@ TREND_JOURNAL="${MOUSEDROID_VALIDATION_JOURNAL:-${REPORT_ROOT}/trend_journal.jso
 TREND_JOURNAL_MAX_BYTES="${MOUSEDROID_VALIDATION_JOURNAL_MAX_BYTES:-1048576}"
 TREND_SLOW_RATIO="${MOUSEDROID_VALIDATION_TREND_SLOW_RATIO:-1.5}"
 TREND_SLOW_FLOOR_S="${MOUSEDROID_VALIDATION_TREND_SLOW_FLOOR_S:-0.05}"
+# Phase-1 ci.sh OOM guard. Jetson has ~7.4 GB RAM; a running mousedroid
+# daemon + container ci.sh + pytest + coverage + torch + LMDB routinely
+# overshoots and gets SIGKILL'd (rc=137). ULIMIT_KB caps the first attempt's
+# vmem so Python can raise MemoryError before the OOM killer fires; on 137
+# we retry once with a tighter cap + MOUSEDROID_CI_SLIM=1 so ci.sh skips
+# the memory-heaviest pytest stages (Perf/Regression/E2E — those still run
+# in Phase 2 hardware pytest tier where the rover owns the peripherals).
+PHASE1_CI_ULIMIT_KB="${MOUSEDROID_VALIDATION_PHASE1_CI_ULIMIT_KB:-6291456}"
+PHASE1_CI_RETRY_ULIMIT_KB="${MOUSEDROID_VALIDATION_PHASE1_CI_RETRY_ULIMIT_KB:-5242880}"
+PHASE1_CI_OOM_RETRY="${MOUSEDROID_VALIDATION_PHASE1_CI_OOM_RETRY:-1}"
 # Metric namespace — mirrors the schema field metrics.namespace and its env
 # override MOUSEDROID_METRICS__NAMESPACE (default "mousedroid"), so the /metrics
 # grep tracks an operator-renamed namespace instead of a hardcoded prefix.
@@ -169,6 +182,38 @@ run_step() {
         return 0
     fi
     record FAIL "${name}" "exit=${rc} (see ${logfile##*/})"
+    return "${rc}"
+}
+
+# Phase-1 ci.sh with OOM guard. Wraps ci.sh under `ulimit -v ${limit_kb}` so
+# Python raises MemoryError instead of being SIGKILL'd. On rc=137 (SIGKILL —
+# OOM killer beat ulimit to it), retry once with a tighter cap AND
+# MOUSEDROID_CI_SLIM=1 so ci.sh skips Perf/Regression/E2E stages. Returns the
+# final rc; the caller (`run_step`) records PASS/FAIL as usual.
+run_phase1_ci_container() {
+    local logfile="$1"
+    log "--- static CI (ci.sh, container) — first attempt, ulimit -v ${PHASE1_CI_ULIMIT_KB} KB ---"
+    local rc=0
+    docker exec -e MOUSEDROID_MOCK_HARDWARE=true "${CONTAINER}" \
+        bash -lc "ulimit -v ${PHASE1_CI_ULIMIT_KB} && cd /opt/mousedroid && bash scripts/ci.sh" \
+        >"${logfile}" 2>&1 || rc=$?
+    if [[ ${rc} -eq 0 ]]; then
+        record PASS "static CI (ci.sh, container)"
+        return 0
+    fi
+    if [[ ${rc} -eq 137 && "${PHASE1_CI_OOM_RETRY}" == "1" ]]; then
+        log "--- ci.sh SIGKILL'd (rc=137) — OOM detected; retrying in slim mode (ulimit -v ${PHASE1_CI_RETRY_ULIMIT_KB} KB, MOUSEDROID_CI_SLIM=1) ---"
+        echo "=== OOM RETRY (first attempt was SIGKILL'd) ===" >>"${logfile}"
+        rc=0
+        docker exec -e MOUSEDROID_MOCK_HARDWARE=true -e MOUSEDROID_CI_SLIM=1 "${CONTAINER}" \
+            bash -lc "ulimit -v ${PHASE1_CI_RETRY_ULIMIT_KB} && cd /opt/mousedroid && bash scripts/ci.sh" \
+            >>"${logfile}" 2>&1 || rc=$?
+        if [[ ${rc} -eq 0 ]]; then
+            record WARN "static CI (ci.sh, container)" "OOM on first attempt; passed on slim-mode retry"
+            return 0
+        fi
+    fi
+    record FAIL "static CI (ci.sh, container)" "exit=${rc} (see ${logfile##*/})"
     return "${rc}"
 }
 
@@ -270,10 +315,16 @@ _phase1_run() {
     local logfile="${RUN_DIR}/phase1_ci.log"
     if container_running; then
         # Container branch: run all three checks via docker exec so coverage
-        # matches the host branch (ci.sh + preflight + pillars).
-        run_step "static CI (ci.sh, container)" yes "${logfile}" \
-            docker exec -e MOUSEDROID_MOCK_HARDWARE=true "${CONTAINER}" \
-            bash -lc "cd /opt/mousedroid && bash scripts/ci.sh"
+        # matches the host branch (ci.sh + preflight + pillars). ci.sh runs
+        # under an OOM-guard wrapper — the Jetson's 7.4 GB RAM plus a live
+        # mousedroid daemon leaves too little headroom for full pytest +
+        # coverage + torch + LMDB; wrapper retries in slim mode on rc=137.
+        if [[ "${DRY_RUN}" == "1" ]]; then
+            log "DRY-RUN would run [static CI (ci.sh, container)]: docker exec ... ci.sh (with OOM guard)"
+            record PASS "static CI (ci.sh, container)" "dry-run"
+        else
+            run_phase1_ci_container "${logfile}" || return "$?"
+        fi
         run_step "preflight (mock)" yes "${RUN_DIR}/phase1_preflight.log" \
             docker exec "${CONTAINER}" python3 -m mousedroid.cli.preflight --mock-hardware --json
         run_step "pillars (dry-run)" yes "${RUN_DIR}/phase1_pillars.log" \
