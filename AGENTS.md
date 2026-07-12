@@ -287,12 +287,21 @@ over ad-hoc commands:
 3. **Validate-around dead hardware.** Steps that depend on broken hardware (the
    ESP32 today) are non-blocking WARNs, not FAILs; gate motion behind BOTH
    `MOUSEDROID_SMOKE_ALLOW_MOTION` and `MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION`.
-4. **No hardcoded values in scripts either.** Ports, timeouts, retries, and the
-   metric namespace are env-overridable (`MOUSEDROID_VALIDATION_*`,
+4. **No hardcoded values in scripts either.** Ports, timeouts, retries, memory
+   caps, and the metric namespace are env-overridable (`MOUSEDROID_VALIDATION_*`,
    `MOUSEDROID_METRICS__NAMESPACE`). Secrets are presence-checked only — never
    echoed.
 5. **No `assert` in inline shell-python** that runs under the Jetson
    `PYTHONOPTIMIZE=1` entrypoint — use explicit `if … raise RuntimeError(...)`.
+6. **Phase-1 ci.sh is memory-guarded (PR #161).** The wrapper's
+   `run_phase1_ci_container` applies `ulimit -v` before invoking ci.sh and
+   retries once in slim mode (`MOUSEDROID_CI_SLIM=1`) on rc=137. When adding
+   a pytest stage to `scripts/ci.sh`, decide whether it belongs inside the
+   `MOUSEDROID_CI_SLIM` conditional — memory-heavy stages skip in slim mode;
+   the core Unit+Property+Integration+coverage signal must NEVER be gated.
+   Any test marked `@pytest.mark.hardware` MUST also be filtered out of the
+   container ci.sh path (already gated via `-m "not hardware"` on the
+   unit/property/integration, performance, and regression stages).
 
 ## Adding / maintaining a skill (rover-hardening discipline)
 

@@ -8,6 +8,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Phase-1 ci.sh OOM guard with ulimit + slim-mode retry (PR #161)
+
+Rover Phase-1 `docker exec ... bash scripts/ci.sh` was routinely SIGKILL'd
+(rc=137) by the kernel OOM killer on the Jetson (7.4 GB total; ci.sh + pytest
++ coverage + torch + LMDB overshoots container memory). `scripts/jetson_full_validation.sh`
+now wraps the container invocation in a two-tier guard: (1) first attempt runs
+under `ulimit -v ${PHASE1_CI_ULIMIT_KB}` (default 6 GB) so Python raises
+`MemoryError` before the OOM killer wins; (2) on rc=137, retries once with
+`ulimit -v ${PHASE1_CI_RETRY_ULIMIT_KB}` (default 5 GB) + `MOUSEDROID_CI_SLIM=1`
+which makes ci.sh skip its Performance / Regression / E2E stages (the memory-
+heaviest ones — coverage on Unit+Property+Integration is preserved as the core
+signal). Records `WARN "static CI (ci.sh, container)" "OOM on first attempt;
+passed on slim-mode retry"` so the operator sees the degradation; keeps `FAIL`
+semantics when the retry also fails. `MOUSEDROID_VALIDATION_PHASE1_CI_OOM_RETRY=0`
+is the operator kill-switch (opt out of auto-retry). All tunables are
+env-overridable — no hardcoded values. Perf/Regression/E2E coverage isn't lost:
+`jetson_full_validation.sh` Phase 2 has a dedicated `pytest -m hardware` tier
+that runs in a hardware-owning environment. Contract pinned by
+`tests/regression/test_jetson_phase1_oom_guard.py` (17 source-text pins mirroring
+`TestSourceContract`). Backwards-compatible: `MOUSEDROID_CI_SLIM=0` (default)
+preserves byte-identical pre-feature behaviour.
+
+### Fixed — Windows-portability skip + hardware-marker gate on `scripts/ci.sh` (PR #160)
+
+Two failures surfaced by the 2026-07-12 trunk-sync validation run:
+`tests/regression/test_host_bootstrap_script.py::TestDryRunBranches` and the
+module-level `test_python_sees_same_interpreter` assert on `sys.platform in
+('linux', 'darwin')` and do string comparisons on POSIX paths — noise on
+Windows dev boxes, not signal. Both are now `@pytest.mark.skipif(sys.platform
+== "win32")`-gated; Linux/darwin CI still runs them unchanged. Additionally,
+`scripts/ci.sh` unit + performance + regression pytest stages did not filter
+`-m "not hardware"`, so `@pytest.mark.hardware`-marked tests (like
+`test_build_distance_sensor_real_hardware`) collected and ran on the Jetson
+container Phase-1 path, colliding with the running mousedroid service's GPIO
+ownership (`[Errno 16] Device or resource busy`). Filter added to all three
+stages; hardware coverage still runs in `jetson_full_validation.sh` Phase 2's
+dedicated hardware pytest tier where the rover owns the peripherals.
+
 ### Changed — F-003: Protocol-based symbolic-planner backends + hard-interruptible pyperplan
 
 Closed the F-003-FOLLOWUP TODO in `arm/planning/symbolic_planner.py`. The

@@ -133,6 +133,12 @@ reports/jetson_smoke/**
 reports/jetson_full_validation/*/
 reports/jetson_full_validation/**
 
+# Trunk-sync + local + Jetson E2E validation outputs (per-run stamped dirs from
+# the operator's local `docs/superpowers/plans/2026-07-11-trunk-sync-local-and-
+# jetson-e2e-validation.md` workflow). Local-only artefacts — never checked in.
+reports/trunk_sync/*/
+reports/trunk_sync/**
+
 # Harness journal + validation trend-store runtime artefacts (JSONL/LMDB).
 # Default harness journal path is var/harness/journal; the preflight --trend
 # store writes here. Host-only runtime data — never commit.
