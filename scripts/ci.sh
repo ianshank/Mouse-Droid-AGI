@@ -68,14 +68,15 @@ echo "=== Settings Identity Smoke Check ==="
 
 echo "=== Unit + Property + Integration Tests (with coverage) ==="
 "$PYTHON_BIN" -m pytest tests/unit tests/property tests/integration \
+    -m "not hardware" \
     --import-mode=importlib \
     -v --cov=src/mousedroid --cov-report=term-missing --cov-fail-under=85
 
 echo "=== Performance Tests ==="
-"$PYTHON_BIN" -m pytest tests/performance/ --import-mode=importlib -v
+"$PYTHON_BIN" -m pytest tests/performance/ -m "not hardware" --import-mode=importlib -v
 
 echo "=== Regression Tests ==="
-"$PYTHON_BIN" -m pytest tests/regression/ --import-mode=importlib -v
+"$PYTHON_BIN" -m pytest tests/regression/ -m "not hardware" --import-mode=importlib -v
 
 echo "=== Harness Spec Alignment (fast tier) ==="
 # Spec-driven harness gate (HARNESS_SPEC.md §10 / ADR-012): validates
