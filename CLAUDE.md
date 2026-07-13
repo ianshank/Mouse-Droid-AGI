@@ -432,6 +432,29 @@ static-CI → cold-hardware → warm-live. Contracts:
   (`MOUSEDROID_METRICS__NAMESPACE`, mirroring the schema field). Secrets
   (`ANTHROPIC_API_KEY`, `MOUSEDROID_TELEMETRY_TOKEN`) are **presence-checked
   only — never echoed**.
+- **Phase-1 ci.sh OOM guard (PR #161).** Jetson has 7.4 GB RAM; a running
+  mousedroid daemon plus container ci.sh + pytest + coverage + torch + LMDB
+  routinely SIGKILL'd (rc=137). `run_phase1_ci_container` in the wrapper
+  applies `ulimit -v ${PHASE1_CI_ULIMIT_KB}` (default 6 GB) so Python raises
+  MemoryError first; on rc=137 it retries once under
+  `${PHASE1_CI_RETRY_ULIMIT_KB}` (default 5 GB) + `MOUSEDROID_CI_SLIM=1`,
+  which makes ci.sh skip Performance / Regression / E2E stages (memory-
+  heaviest). Records **WARN** on retry-success (never silent PASS). Retry is
+  gated by `${PHASE1_CI_OOM_RETRY}` (default 1) so operators can opt out.
+  Perf/Regression/E2E coverage is NOT lost — `jetson_full_validation.sh`
+  Phase 2 already runs `pytest -m hardware` in a dedicated tier that owns
+  the peripherals. Contract pinned by
+  `tests/regression/test_jetson_phase1_oom_guard.py` (17 source-text pins);
+  a future edit that removes the ulimit, unlocks the retry to non-137 rcs,
+  or unwraps the Unit+Property+Integration+coverage core signal from the
+  mandatory path will fail those tests.
+- **`scripts/ci.sh` hardware-marker filter (PR #160).** The unit + property +
+  integration, performance, and regression pytest stages all pass `-m "not
+  hardware"` so `@pytest.mark.hardware`-marked tests (like
+  `test_build_distance_sensor_real_hardware` which opens real GPIO) do NOT
+  collect on hosts that don't own the peripherals — critical when the rover's
+  `mousedroid` service is holding the GPIO line during Phase-1 container ci.sh.
+  Hardware coverage still runs in Phase 2's `pytest -m hardware` tier.
 - **Live `/metrics` population is proven in-process, not over HTTP.**
   `config/jetson_production.yaml` has no `openclaw:` block, so
   `POST /api/v1/mission` is unregistered — nothing drives the gateway over the

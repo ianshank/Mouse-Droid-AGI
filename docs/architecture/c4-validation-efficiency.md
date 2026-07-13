@@ -1,15 +1,30 @@
-# C4 Component — Validation Efficiency (latency stats · trend store · summary renderer · trend timer · phase caching)
+# C4 Component — Validation Efficiency (latency stats · trend store · summary renderer · trend timer · phase caching · Phase-1 OOM guard)
 
 > The runtime/resource-efficiency layer bolted onto the existing Jetson
-> validation harness. It answers three questions the binary, single-shot
+> validation harness. It answers four questions the binary, single-shot
 > harness could not: *how slow is the tail?* (latency percentiles), *is the
-> rover degrading over time?* (run-over-run trend store), and *can we skip work
-> that hasn't changed?* (phase-1 caching). All three are additive and opt-in —
-> defaults preserve byte-identical legacy behaviour.
+> rover degrading over time?* (run-over-run trend store), *can we skip work
+> that hasn't changed?* (phase-1 caching), and *how do we survive constrained
+> memory on the Jetson?* (Phase-1 OOM guard — PR #161). All are additive and
+> opt-in — defaults preserve byte-identical legacy behaviour.
 >
 > Companion to `docs/architecture/c4-usbc-smoke.md` (the smoke gate that runs
 > just before this), `docs/architecture/c4-overview.md` (Levels 1–2), and
 > `docs/runbooks/jetson-full-validation.md` (operator workflow).
+
+## Phase-1 OOM guard (PR #161) — resource-efficiency companion
+
+The Jetson has ~7.4 GB RAM; a running mousedroid daemon plus the container
+`ci.sh` invocation (pytest + coverage + torch + LMDB) routinely SIGKILL'd with
+`rc=137`. The wrapper's `run_phase1_ci_container` guards against this with a
+two-tier strategy that ties directly into the efficiency-layer's contract:
+*surface degradation as WARN, never as silent PASS or unhandled FAIL*.
+
+- **First attempt:** `docker exec ... bash -lc "ulimit -v ${PHASE1_CI_ULIMIT_KB} && bash scripts/ci.sh"` (default 6 GB). ulimit lets Python raise `MemoryError` before the OOM killer wins, so failures are diagnosable rather than a bare 137.
+- **Retry (on rc=137, gated by `${PHASE1_CI_OOM_RETRY}`):** tighter vmem cap (`${PHASE1_CI_RETRY_ULIMIT_KB}`, default 5 GB) AND `MOUSEDROID_CI_SLIM=1`. `ci.sh` gates its Perf/Regression/E2E stages behind that env var; slim retry runs Unit+Property+Integration+coverage (the core signal — never gated) and skips the memory-heaviest tiers. Perf/Regression/E2E coverage isn't lost repository-wide — Phase 2's `pytest -m hardware` step catches those tiers in a hardware-owning environment.
+- **Verdict:** PASS on first-attempt success; **WARN** on retry-success (`"OOM on first attempt; passed on slim-mode retry"`); FAIL when the retry also fails.
+
+Contracts (17 source-text pins in `tests/regression/test_jetson_phase1_oom_guard.py`) enforce: env-overridable tunables with defaults, ulimit applied BEFORE ci.sh, retry gated on `rc==137` only, operator kill-switch, WARN on retry-success, and Unit+Property+Integration+coverage always in the mandatory path (never inside the SLIM conditional). Tunable env vars: `MOUSEDROID_VALIDATION_PHASE1_CI_ULIMIT_KB`, `_RETRY_ULIMIT_KB`, `_OOM_RETRY` — all documented in the `jetson_full_validation.sh` header alongside the existing `MOUSEDROID_VALIDATION_*` family.
 
 ## Component Diagram
 
