@@ -110,8 +110,12 @@ class LLMGateway:
             _log.warning("llm_gateway_degraded_no_llama_cpp")
             self._degraded = True
             return
-        except OSError:
-            _log.warning("llm_gateway_degraded_model_not_found", path=str(self._cfg.model_path))
+        except (OSError, ValueError) as exc:
+            _log.warning(
+                "llm_gateway_degraded_model_error",
+                error=str(exc),
+                path=str(self._cfg.model_path),
+            )
             self._degraded = True
             return
         _log.info("llm_gateway_started", model=str(self._cfg.model_path))
