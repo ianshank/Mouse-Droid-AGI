@@ -100,7 +100,7 @@ if [[ "${MOUSEDROID_CI_SLIM:-0}" == "1" ]]; then
     echo "=== E2E Tests SKIPPED (MOUSEDROID_CI_SLIM=1) ==="
 else
     echo "=== E2E Tests ==="
-    "$PYTHON_BIN" -m pytest tests/e2e/ --import-mode=importlib -v
+    "$PYTHON_BIN" -m pytest tests/e2e/ -m "not hardware" --import-mode=importlib -v
 fi
 
 echo "=== Branch Coverage Gate (changed files >= 85%) ==="
