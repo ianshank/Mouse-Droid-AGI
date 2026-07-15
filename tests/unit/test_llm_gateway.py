@@ -202,6 +202,19 @@ async def test_start_degrades_on_missing_model_file(gateway: LLMGateway):
     assert gateway._model is None
 
 
+async def test_start_degrades_on_model_value_error(gateway: LLMGateway):
+    """start() enters degraded mode when llama-cpp raises ValueError.
+
+    llama-cpp-python raises ``ValueError`` (not ``OSError``) on an invalid or
+    corrupt GGUF file, so ``start()`` must catch it and degrade rather than
+    propagate — otherwise the gateway crashes instead of failing over.
+    """
+    with patch.object(gateway, "_load_model", side_effect=ValueError("invalid gguf")):
+        await gateway.start()  # Should NOT raise
+    assert gateway._degraded is True
+    assert gateway._model is None
+
+
 def test_load_model_passes_n_batch() -> None:
     """_load_model forwards n_batch to llama-cpp."""
     cfg = GatewayConfig(
