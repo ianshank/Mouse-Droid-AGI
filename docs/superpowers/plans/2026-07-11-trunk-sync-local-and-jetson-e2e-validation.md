@@ -222,7 +222,7 @@ Expected: `Successfully installed pip-... wheel-... setuptools-...`.
 - [ ] **Step 2: Install the mousedroid package in editable mode + `[dev]` extra**
 
 ```bash
-"$PY" -m pip install -e ".[dev]" 2>&1 | tee -a "$REPORT_ROOT/$STAMP/local/deps.log" | tail -20
+"$PY" -m pip install -e ".[dev,telemetry,mcp]" 2>&1 | tee -a "$REPORT_ROOT/$STAMP/local/deps.log" | tail -20
 ```
 
 Expected: `Successfully installed mousedroid-... ruff-0.8.0 mypy-... pytest-...`. If `ruff` resolves to any version other than `0.8.0`, **STOP** — pyproject drift needs a separate fix and the CI compare will be invalid.
