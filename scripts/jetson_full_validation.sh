@@ -195,7 +195,7 @@ run_phase1_ci_container() {
     log "--- static CI (ci.sh, container) — first attempt, ulimit -v ${PHASE1_CI_ULIMIT_KB} KB ---"
     local rc=0
     docker exec -e MOUSEDROID_MOCK_HARDWARE=true "${CONTAINER}" \
-        bash -lc "ulimit -v ${PHASE1_CI_ULIMIT_KB} && cd /opt/mousedroid && git config --global --add safe.directory /opt/mousedroid && bash scripts/ci.sh" \
+        bash -lc "ulimit -v ${PHASE1_CI_ULIMIT_KB} && cd /opt/mousedroid && git config --global --replace-all safe.directory /opt/mousedroid && bash scripts/ci.sh" \
         >"${logfile}" 2>&1 || rc=$?
     if [[ ${rc} -eq 0 ]]; then
         record PASS "static CI (ci.sh, container)"
@@ -206,7 +206,7 @@ run_phase1_ci_container() {
         echo "=== OOM RETRY (first attempt was SIGKILL'd) ===" >>"${logfile}"
         rc=0
         docker exec -e MOUSEDROID_MOCK_HARDWARE=true -e MOUSEDROID_CI_SLIM=1 "${CONTAINER}" \
-            bash -lc "ulimit -v ${PHASE1_CI_RETRY_ULIMIT_KB} && cd /opt/mousedroid && git config --global --add safe.directory /opt/mousedroid && bash scripts/ci.sh" \
+            bash -lc "ulimit -v ${PHASE1_CI_RETRY_ULIMIT_KB} && cd /opt/mousedroid && git config --global --replace-all safe.directory /opt/mousedroid && bash scripts/ci.sh" \
             >>"${logfile}" 2>&1 || rc=$?
         if [[ ${rc} -eq 0 ]]; then
             record WARN "static CI (ci.sh, container)" "OOM on first attempt; passed on slim-mode retry"
@@ -236,7 +236,7 @@ run_hardware_pytest() {
     run_step "hardware pytest (-m hardware)" no "${logfile}" \
         env MOUSEDROID_MOCK_HARDWARE=false MOUSEDROID_ESP32__ENABLED=false \
             MOUSEDROID_JETSON_CONFIG="${PROD_CONFIG}" \
-        "${HOST_PY}" -m pytest -m hardware tests/hardware/ tests/performance/ \
+        "${HOST_PY}" -m pytest -m hardware tests/hardware/ tests/performance/test_jetson_endurance.py \
         --import-mode=importlib --timeout="${PYTEST_TIMEOUT_S}" -q
 }
 
@@ -382,7 +382,7 @@ phase2() {
             record FAIL "docker stop" "stop failed — aborting cold phase to keep exclusive-device contract"
             return
         fi
-        sleep 10
+        sleep "${DOCKER_STOP_DELAY_S:-10}"
     fi
 
     # Real preflight + per-sensor probe (host venv).

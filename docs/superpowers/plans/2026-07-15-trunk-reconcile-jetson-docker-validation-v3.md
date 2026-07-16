@@ -87,10 +87,11 @@ Two decoupled tracks. Tasks are numbered by concern, not strict run order.
 
 **Conventions for every Part-1 task**
 
-- Run in **Git Bash** at the repo root `C:\Users\iansh\OneDrive\Documents\Gronk-Droid-Jetson-Nano` (= `/c/Users/iansh/OneDrive/Documents/Gronk-Droid-Jetson-Nano`). The primary tree is on branch `refactor/onnx-default-providers-common` and MUST stay dirty and untouched until Task W7.
+- Run in **Git Bash** at the repo root (`$REPO_ROOT` — default `/c/Users/iansh/OneDrive/Documents/Gronk-Droid-Jetson-Nano`). The primary tree is on branch `refactor/onnx-default-providers-common` and MUST stay dirty and untouched until Task W7.
 - Session setup (re-run at the top of any resumed session):
 
 ```bash
+export REPO_ROOT="${REPO_ROOT:-/c/Users/iansh/OneDrive/Documents/Gronk-Droid-Jetson-Nano}"
 export TRUNK_REF=origin/claude/markdown-implementation-plan-aVJ2l
 export TRUNK_SHORT=claude/markdown-implementation-plan-aVJ2l
 export WORKTREE_DIR="$HOME/mousedroid-trunk-sync"        # sibling of the primary tree, NOT inside it
@@ -329,7 +330,7 @@ Expected: PR-A opens against trunk.
 
 ```bash
 cd "$WORKTREE_DIR"
-git switch "$TRUNK_SHA" --detach 2>/dev/null; git switch -c fix/jetson-full-validation-hardening
+git switch "$TRUNK_SHA" --detach && git rev-parse HEAD && git switch -c fix/jetson-full-validation-hardening
 ```
 
 - [ ] **Step 2: Apply ONLY the `jetson_full_validation.sh` hunks (the `ci.sh` hunk is verified already-upstream — DROP it)**
@@ -416,7 +417,7 @@ Expected: PR-B opens.
 
 ```bash
 cd "$WORKTREE_DIR"
-git switch "$TRUNK_SHA" --detach 2>/dev/null; git switch -c chore/types-mypy22-and-test-isolation
+git switch "$TRUNK_SHA" --detach && git rev-parse HEAD && git switch -c chore/types-mypy22-and-test-isolation
 ```
 
 - [ ] **Step 2: Establish the mypy 2.2.0 baseline WITHOUT the type-ignore hunks**
@@ -543,7 +544,7 @@ Expected: `ruff 0.8.0` and `mypy 2.2.0` (if ruff differs, pyproject drift — ST
 
 ```bash
 export MOUSEDROID_PYTHON="$PY"; export MOUSEDROID_MOCK_HARDWARE=true; export PYTHONNOUSERSITE=1
-set +e; bash scripts/ci.sh 2>&1 | tee "$REPORT_ROOT/$STAMP/local/ci.log"; CI_RC=$?; set -e
+set +e; bash scripts/ci.sh 2>&1 | tee "$REPORT_ROOT/$STAMP/local/ci.log"; CI_RC=${PIPESTATUS[0]}; set -e
 echo "local_ci_rc=$CI_RC" | tee -a "$REPORT_ROOT/$STAMP/env.log"
 awk '/^=== / {s=$0} END {print "last_stage=" s}' "$REPORT_ROOT/$STAMP/local/ci.log" | tee -a "$REPORT_ROOT/$STAMP/env.log"
 ```
@@ -605,7 +606,7 @@ Expected: a self-contained catalog. This is the workstation-side deliverable.
 ```bash
 JOURNAL="$REPORT_ROOT/harness_journal.jsonl"
 "$PY" -m mousedroid.cli.preflight --journal-path "$JOURNAL" 2>&1 | tail -5
-set +e; "$PY" -m mousedroid.cli.preflight --journal-path "$JOURNAL" --trend 2>&1 | tee "$REPORT_ROOT/$STAMP/local/preflight_trend.log"; echo "preflight_trend_rc=$?" | tee -a "$REPORT_ROOT/$STAMP/env.log"; set -e
+set +e; "$PY" -m mousedroid.cli.preflight --journal-path "$JOURNAL" --trend 2>&1 | tee "$REPORT_ROOT/$STAMP/local/preflight_trend.log"; TREND_RC=${PIPESTATUS[0]}; echo "preflight_trend_rc=$TREND_RC" | tee -a "$REPORT_ROOT/$STAMP/env.log"; set -e
 ```
 
 Expected: rc=0. On the first run (<2 journal entries) rc=0 means `baseline (first run)`, not PASS.
@@ -692,6 +693,14 @@ Expected: branch gone locally and remotely (its ONNX work already merged as PR #
 export TRUNK=claude/markdown-implementation-plan-aVJ2l
 export RUN_TAG=20260715
 export WORK_ROOT="$HOME/mousedroid-trunk-sync-reports"
+# Minimum ancestor SHA: trunk tip that carries #160 + #161 (OOM-guard + hardware gate)
+export DEPLOY_BASELINE_SHA="${DEPLOY_BASELINE_SHA:-21463c3}"
+# Health-check tunables (override for slower/faster hardware)
+export HEALTH_POLL_RETRIES="${HEALTH_POLL_RETRIES:-40}"
+export HEALTH_POLL_INTERVAL_S="${HEALTH_POLL_INTERVAL_S:-5}"
+export HEALTH_HTTP_RETRIES="${HEALTH_HTTP_RETRIES:-10}"
+export HEALTH_HTTP_INTERVAL_S="${HEALTH_HTTP_INTERVAL_S:-3}"
+export HEALTH_HTTP_TIMEOUT_S="${HEALTH_HTTP_TIMEOUT_S:-5}"
 mkdir -p "$WORK_ROOT/$RUN_TAG"
 touch "$WORK_ROOT/$RUN_TAG/env.log"
 ```
@@ -751,7 +760,7 @@ Expected: an email or `IDENTITY_UNSET` (Step 5 carries inline `-c` identity flag
 - [ ] **Step 5: Branch + commit everything**
 
 ```bash
-ssh jetson 'cd /opt/mousedroid && git switch -c rover/wip-20260715 && git add -A && git -c user.name="Rover Operator" -c user.email="ianshank@gmail.com" commit -m "wip: rover-local state as of 2026-07-15 (pre trunk-sync checkpoint; CSI camera + hardware-test WIP)"'
+ssh jetson 'cd /opt/mousedroid && git switch -c rover/wip-20260715 && git add -A && git -c user.name="Rover Operator" -c user.email="operator@example.com" commit -m "wip: rover-local state as of 2026-07-15 (pre trunk-sync checkpoint; CSI camera + hardware-test WIP)"'
 ```
 
 Expected: `Switched to a new branch 'rover/wip-20260715'` then a commit summary listing ~9–11 files, 764+ insertions.
@@ -796,7 +805,7 @@ Expected: fetch summary ending `... origin/claude/markdown-implementation-plan-a
 **Contingency (rover can't auth to GitHub) — bundle from the workstation:**
 
 ```bash
-cd /c/Users/iansh/OneDrive/Documents/Gronk-Droid-Jetson-Nano
+cd "$REPO_ROOT"
 git fetch origin "$TRUNK"
 git bundle create "$WORK_ROOT/$RUN_TAG/trunk.bundle" "origin/$TRUNK"
 scp "$WORK_ROOT/$RUN_TAG/trunk.bundle" jetson:/tmp/trunk.bundle
@@ -808,10 +817,10 @@ ssh jetson "git -C /opt/mousedroid fetch /tmp/trunk.bundle refs/remotes/origin/$
 ```bash
 DEPLOY_SHA=$(ssh jetson "git -C /opt/mousedroid rev-parse origin/$TRUNK")
 echo "DEPLOY_SHA=$DEPLOY_SHA" | tee -a "$WORK_ROOT/$RUN_TAG/env.log"
-ssh jetson "git -C /opt/mousedroid merge-base --is-ancestor 21463c3 $DEPLOY_SHA && echo ancestry_ok"
+ssh jetson "git -C /opt/mousedroid merge-base --is-ancestor $DEPLOY_BASELINE_SHA $DEPLOY_SHA && echo ancestry_ok"
 ```
 
-Expected: `ancestry_ok` (trunk tip is at or ahead of `21463c3`, which already carries #160 + #161). If the salvage PRs have merged by now, they're simply included — but the deploy does **not** wait for them.
+Expected: `ancestry_ok` (trunk tip is at or ahead of `$DEPLOY_BASELINE_SHA`, which already carries #160 + #161). If the salvage PRs have merged by now, they're simply included — but the deploy does **not** wait for them.
 
 - [ ] **Step 3: Detached checkout (rover-local branches untouched)**
 
@@ -982,10 +991,10 @@ Expected: PR opens; config-compat gate re-validates `config/*.yaml` against the 
 - Consumes: recreated/rebuilt container (J4).
 - Produces: healthy-gate between deploy and validation; failure triggers Task J7.
 
-- [ ] **Step 1: Docker healthcheck poll (bounded — 40 × 5 s ≈ 200 s ceiling)**
+- [ ] **Step 1: Docker healthcheck poll (bounded — `$HEALTH_POLL_RETRIES` × `$HEALTH_POLL_INTERVAL_S` s ceiling)**
 
 ```bash
-ssh jetson 'for i in $(seq 1 40); do s=$(docker inspect mousedroid --format "{{.State.Health.Status}}" 2>/dev/null || echo missing); echo "poll $i: $s"; [ "$s" = "healthy" ] && exit 0; sleep 5; done; echo HEALTH_TIMEOUT; exit 1'
+ssh jetson "for i in \$(seq 1 $HEALTH_POLL_RETRIES); do s=\$(docker inspect mousedroid --format '{{.State.Health.Status}}' 2>/dev/null || echo missing); echo \"poll \$i: \$s\"; [ \"\$s\" = \"healthy\" ] && exit 0; sleep $HEALTH_POLL_INTERVAL_S; done; echo HEALTH_TIMEOUT; exit 1"
 ```
 
 Expected: a few `starting` polls then `healthy`, exit 0. `HEALTH_TIMEOUT` → Task J7.
@@ -993,7 +1002,7 @@ Expected: a few `starting` polls then `healthy`, exit 0. `HEALTH_TIMEOUT` → Ta
 - [ ] **Step 2: API health endpoint with retries**
 
 ```bash
-ssh jetson 'for i in $(seq 1 10); do curl -fsS -m 5 http://127.0.0.1:8080/api/v1/health && echo && exit 0; sleep 3; done; echo HEALTH_HTTP_TIMEOUT; exit 1'
+ssh jetson "for i in \$(seq 1 $HEALTH_HTTP_RETRIES); do curl -fsS -m $HEALTH_HTTP_TIMEOUT_S http://127.0.0.1:8080/api/v1/health && echo && exit 0; sleep $HEALTH_HTTP_INTERVAL_S; done; echo HEALTH_HTTP_TIMEOUT; exit 1"
 ```
 
 Expected: JSON health payload, exit 0.
@@ -1069,7 +1078,7 @@ Expected: `SUMMARY.md` present locally with the PASS/WARN/FAIL matrix.
 `preflight --journal-path --trend` always RE-RUNS the checks before trending (`src/mousedroid/cli/preflight.py:178-196`), and the warm container holds the CSI camera/lidar exclusively — so record in a brief cold window mirroring Phase 2's exact real-preflight env. **Use this identical env+config for every future trend record — apples-to-apples is what makes the trend gate meaningful.**
 
 ```bash
-ssh jetson 'cd /opt/mousedroid && docker stop mousedroid && JOURNAL=reports/jetson_full_validation/harness_journal.jsonl; env MOUSEDROID_MICROPHONE__ENABLED=false MOUSEDROID_ESP32__ENABLED=false venv/bin/python -m mousedroid.cli.preflight --config config/jetson_production.yaml --journal-path "$JOURNAL" --trend; rc=$?; docker start mousedroid; echo trend_rc=$rc; wc -l "$JOURNAL"'
+ssh jetson 'set -e; trap '\''docker start mousedroid >/dev/null 2>&1 || true'\'' EXIT; cd /opt/mousedroid; docker stop mousedroid; JOURNAL=reports/jetson_full_validation/harness_journal.jsonl; set +e; env MOUSEDROID_MICROPHONE__ENABLED=false MOUSEDROID_ESP32__ENABLED=false venv/bin/python -m mousedroid.cli.preflight --config config/jetson_production.yaml --journal-path "$JOURNAL" --trend; rc=$?; set -e; echo trend_rc=$rc; wc -l "$JOURNAL"; exit "$rc"'
 ```
 
 Expected: preflight report, trend report, `trend_rc=0`, container restarted. **First-run semantics:** if `wc -l` shows < 2 journal entries, `trend_rc=0` means "no baseline available", NOT PASS — record the verdict as `baseline (first run)`. `trend_rc=1` = preflight FAIL or a real regression (status downgrade / new FAIL / latency creep past both slow-ratio and floor) → triage before Task J8.
@@ -1100,6 +1109,7 @@ Expected: `Container mousedroid Removed`. Monitoring stack (separate compose fil
 
 ```bash
 set -a; source "$WORK_ROOT/$RUN_TAG/env.log"; set +a
+ssh jetson 'git -C /opt/mousedroid restore -- scripts/jetson_full_validation.sh'
 ssh jetson "git -C /opt/mousedroid checkout rover/wip-20260715 && git -C /opt/mousedroid rev-parse HEAD" | grep -x "$ROLLBACK_SHA" && echo ROLLBACK_CHECKOUT_OK
 ```
 

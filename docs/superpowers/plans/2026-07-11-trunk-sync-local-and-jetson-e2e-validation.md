@@ -81,7 +81,8 @@ export JETSON_HOST="${JETSON_HOST:-jetson}"                # SSH alias from ~/.s
 export REMOTE_USER="${REMOTE_USER:-ian}"                    # matches project memory
 export VENV_DIR="${VENV_DIR:-$WORKTREE_DIR/.venv}"
 export STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-export REPORT_ROOT="${REPORT_ROOT:-$WORKTREE_DIR/reports/trunk_sync}"
+export REPORT_ROOT="${REPORT_ROOT:-${HOME}/mousedroid-trunk-sync-reports}"
+export SSH_CONNECT_TIMEOUT="${SSH_CONNECT_TIMEOUT:-10}"
 export MOUSEDROID_JETSON_CONFIG="${MOUSEDROID_JETSON_CONFIG:-config/jetson_production.yaml}"
 export MOUSEDROID_METRICS__NAMESPACE="${MOUSEDROID_METRICS__NAMESPACE:-mousedroid}"
 mkdir -p "$REPORT_ROOT/$STAMP/local" "$REPORT_ROOT/$STAMP/jetson"
@@ -97,6 +98,7 @@ Expected: `$REPORT_ROOT/$STAMP/{local,jetson}` exist. No files touched inside th
   echo "=== primary tree branch ==="; git -C "$PWD" rev-parse --abbrev-ref HEAD
   echo "=== dirty files ==="; git -C "$PWD" status --porcelain
 } > "$REPORT_ROOT/$STAMP/primary_tree_before.log"
+git -C "$PWD" status --porcelain | sort > "$REPORT_ROOT/$STAMP/primary_tree_porcelain.log"
 ```
 
 Expected: file lists 12 `M` entries + 4 `??` entries (matches session-start git status). If it doesn't, **STOP** and reconcile — the user may have committed work mid-flight.
@@ -115,7 +117,7 @@ Expected: git ≥ 2.20 (worktree requirement), python3 ≥ 3.10 (pyproject floor
 - [ ] **Step 4: Verify Jetson reachability (no source sync yet)**
 
 ```bash
-ssh -o ConnectTimeout=10 -o BatchMode=yes "${JETSON_HOST}" 'uname -a; docker ps --format "{{.Names}}\t{{.Status}}"; free -m | head -2' \
+ssh -o ConnectTimeout="${SSH_CONNECT_TIMEOUT}" -o BatchMode=yes "${JETSON_HOST}" 'uname -a; docker ps --format "{{.Names}}\t{{.Status}}"; free -m | head -2' \
   | tee "$REPORT_ROOT/$STAMP/jetson_preflight.log"
 ```
 
@@ -180,7 +182,7 @@ Expected: `Preparing worktree (detached HEAD ...)`. `HEAD is now at 8c29245 feat
   echo "=== worktree state ==="; git -C "$WORKTREE_DIR" status --porcelain
   echo "=== worktree HEAD ==="; git -C "$WORKTREE_DIR" rev-parse HEAD
 } > "$REPORT_ROOT/$STAMP/worktree_verify.log"
-diff "$REPORT_ROOT/$STAMP/primary_tree_before.log" \
+diff "$REPORT_ROOT/$STAMP/primary_tree_porcelain.log" \
      <(git -C "$PWD" status --porcelain | sort) \
   && echo "primary tree UNCHANGED — good"
 ```
@@ -230,7 +232,7 @@ Expected: `Successfully installed mousedroid-... ruff-0.8.0 mypy-... pytest-...`
 - [ ] **Step 3: Verify the editable-install actually points at the worktree (not the primary tree)**
 
 ```bash
-"$PY" -c "import mousedroid, pathlib, sys; p = pathlib.Path(mousedroid.__file__).resolve(); assert str(p).startswith('$WORKTREE_DIR'), f'editable import escaped worktree: {p}'; print(f'mousedroid imports from: {p}')" \
+"$PY" -c "import mousedroid, pathlib, sys; p = pathlib.Path(mousedroid.__file__).resolve(); sys.exit(f'editable import escaped worktree: {p}') if not str(p).startswith('$WORKTREE_DIR') else print(f'mousedroid imports from: {p}')" \
   | tee -a "$REPORT_ROOT/$STAMP/local/deps.log"
 ```
 
@@ -375,7 +377,7 @@ export MOUSEDROID_MOCK_HARDWARE=true    # ci.sh sets this too — belt-and-brace
 export PYTHONNOUSERSITE=1
 set +e
 bash scripts/ci.sh 2>&1 | tee "$REPORT_ROOT/$STAMP/local/ci.log"
-CI_RC=$?
+CI_RC=${PIPESTATUS[0]}
 set -e
 echo "local_ci_rc=$CI_RC" | tee -a "$REPORT_ROOT/$STAMP/env.log"
 ```
@@ -593,7 +595,7 @@ Expected: `preflight_report` event appended; exit 0 (OK/DEGRADED) or 1 (FAIL). R
 set +e
 "$PY" -m mousedroid.cli.preflight --journal-path "$JOURNAL" --trend 2>&1 \
   | tee "$REPORT_ROOT/$STAMP/local/preflight_trend.log"
-TREND_RC=$?
+TREND_RC=${PIPESTATUS[0]}
 set -e
 echo "preflight_trend_rc=$TREND_RC" | tee -a "$REPORT_ROOT/$STAMP/env.log"
 ```
@@ -654,7 +656,7 @@ Announce: `Using superpowers:verification-before-completion.` Do NOT claim green
   echo "## Next action"
   # If ALL zero → green. Otherwise link findings.md and stop for triage.
   FAIL=0
-  for k in ruff_check_rc mypy_rc local_ci_rc jfv_rc preflight_trend_rc; do
+  for k in ruff_check_rc ruff_format_rc mypy_rc local_ci_rc jfv_rc preflight_trend_rc; do
     v=$(grep "^${k}=" $REPORT_ROOT/$STAMP/env.log | cut -d= -f2)
     [ "$v" != "0" ] && FAIL=1
   done
@@ -672,8 +674,8 @@ Expected: matrix rendered, next-action line correct.
 - [ ] **Step 3: Confirm the primary tree still matches its Task-1 snapshot (the untouched-tree guarantee)**
 
 ```bash
-diff "$REPORT_ROOT/$STAMP/primary_tree_before.log" \
-     <(git -C "$OLDPWD" status --porcelain) \
+diff "$REPORT_ROOT/$STAMP/primary_tree_porcelain.log" \
+     <(git -C "$OLDPWD" status --porcelain | sort) \
   && echo "primary tree UNCHANGED — good" | tee -a "$REPORT_ROOT/$STAMP/env.log"
 ```
 
