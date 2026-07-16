@@ -34,6 +34,7 @@ def mock_cfg() -> Settings:
 
     return Settings(
         mock_hardware=True,
+        llm={"enabled": False},  # type: ignore[arg-type]
     )
 
 
@@ -44,6 +45,7 @@ def mock_cfg_with_telemetry() -> Settings:
 
     return Settings(
         mock_hardware=True,
+        llm={"enabled": False},  # type: ignore[arg-type]
         telemetry={"enabled": True, "publish_hz": 10.0},  # type: ignore[arg-type]
     )
 

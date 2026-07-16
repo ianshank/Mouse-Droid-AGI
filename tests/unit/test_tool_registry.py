@@ -128,10 +128,16 @@ async def test_dispatch_diagnose_cloud_disabled_without_config() -> None:
 
 @pytest.mark.asyncio
 async def test_dispatch_diagnose_cloud_missing_dependency() -> None:
+    from unittest.mock import patch
+
     reg = create_default_registry(
         gcp_cfg=GCPConfig(project_id="proj", robot_id="bot"),
     )
-    result = await reg.dispatch("diagnose_cloud")
+    with patch(
+        "mousedroid.cloud._auth.resolve_credentials",
+        side_effect=RuntimeError("no ADC"),
+    ):
+        result = await reg.dispatch("diagnose_cloud")
     assert result["status"] in {"missing_dependency", "credentials_error"}
 
 
