@@ -39,6 +39,7 @@ def _write_yaml(tmp_path: Path, name: str, body: str) -> Path:
 
 def test_partial_overlay_preserves_unrelated_fields_in_same_section(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A partial ``llm.*`` overlay must NOT nuke unrelated ``llm.*`` fields.
 
@@ -48,6 +49,7 @@ def test_partial_overlay_preserves_unrelated_fields_in_same_section(
     which sets the full ``llm`` block including ``llm.n_gpu_layers: -1``.
     The merged ``llm.n_gpu_layers`` MUST come from the first overlay.
     """
+    monkeypatch.delenv("MOUSEDROID_LLM__N_GPU_LAYERS", raising=False)
     overlay_a = _write_yaml(
         tmp_path,
         "overlay_a.yaml",
