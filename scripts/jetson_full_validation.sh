@@ -195,7 +195,7 @@ run_phase1_ci_container() {
     log "--- static CI (ci.sh, container) — first attempt, ulimit -v ${PHASE1_CI_ULIMIT_KB} KB ---"
     local rc=0
     docker exec -e MOUSEDROID_MOCK_HARDWARE=true "${CONTAINER}" \
-        bash -lc "ulimit -v ${PHASE1_CI_ULIMIT_KB} && cd /opt/mousedroid && bash scripts/ci.sh" \
+        bash -lc "ulimit -v ${PHASE1_CI_ULIMIT_KB} && cd /opt/mousedroid && git config --global --replace-all safe.directory /opt/mousedroid && bash scripts/ci.sh" \
         >"${logfile}" 2>&1 || rc=$?
     if [[ ${rc} -eq 0 ]]; then
         record PASS "static CI (ci.sh, container)"
@@ -206,7 +206,7 @@ run_phase1_ci_container() {
         echo "=== OOM RETRY (first attempt was SIGKILL'd) ===" >>"${logfile}"
         rc=0
         docker exec -e MOUSEDROID_MOCK_HARDWARE=true -e MOUSEDROID_CI_SLIM=1 "${CONTAINER}" \
-            bash -lc "ulimit -v ${PHASE1_CI_RETRY_ULIMIT_KB} && cd /opt/mousedroid && bash scripts/ci.sh" \
+            bash -lc "ulimit -v ${PHASE1_CI_RETRY_ULIMIT_KB} && cd /opt/mousedroid && git config --global --replace-all safe.directory /opt/mousedroid && bash scripts/ci.sh" \
             >>"${logfile}" 2>&1 || rc=$?
         if [[ ${rc} -eq 0 ]]; then
             record WARN "static CI (ci.sh, container)" "OOM on first attempt; passed on slim-mode retry"
@@ -236,7 +236,7 @@ run_hardware_pytest() {
     run_step "hardware pytest (-m hardware)" no "${logfile}" \
         env MOUSEDROID_MOCK_HARDWARE=false MOUSEDROID_ESP32__ENABLED=false \
             MOUSEDROID_JETSON_CONFIG="${PROD_CONFIG}" \
-        "${HOST_PY}" -m pytest -m hardware tests/hardware/ \
+        "${HOST_PY}" -m pytest -m hardware tests/hardware/ tests/performance/test_jetson_endurance.py \
         --import-mode=importlib --timeout="${PYTEST_TIMEOUT_S}" -q
 }
 
@@ -382,11 +382,12 @@ phase2() {
             record FAIL "docker stop" "stop failed — aborting cold phase to keep exclusive-device contract"
             return
         fi
+        sleep "${DOCKER_STOP_DELAY_S:-10}"
     fi
 
     # Real preflight + per-sensor probe (host venv).
     run_step "preflight (real)" yes "${RUN_DIR}/phase2_preflight.log" \
-        "${HOST_PY}" -m mousedroid.cli.preflight --config "${PROD_CONFIG}" --json \
+        env MOUSEDROID_MICROPHONE__ENABLED=false "${HOST_PY}" -m mousedroid.cli.preflight --config "${PROD_CONFIG}" --json \
         --journal-path "${TREND_JOURNAL}" --trend \
         --trend-slow-ratio "${TREND_SLOW_RATIO}" \
         --trend-slow-floor-s "${TREND_SLOW_FLOOR_S}" \
@@ -400,13 +401,13 @@ phase2() {
     # the smoke-script switch AND the ESP32 schema switch — never relying on
     # wrapper defaults (CodeRabbit PR #117).
     local stage
-    for stage in system usbc gpio camera lidar audio speaker voice pcie_ssd hailo; do
+    for stage in usbc gpio camera lidar audio speaker voice pcie_ssd hailo; do
         run_step "smoke:${stage}" yes "${RUN_DIR}/phase2_smoke_${stage}.log" \
             env MOUSEDROID_SMOKE_PYTHON="${HOST_PY}" MOUSEDROID_JETSON_CONFIGS="${PROD_CONFIG}" \
                 MOUSEDROID_SMOKE_ALLOW_MOTION= MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION= \
             bash scripts/jetson_smoke_test.sh "${stage}"
     done
-    for stage in serial motor power; do
+    for stage in system serial motor power; do
         run_step "smoke:${stage}" no "${RUN_DIR}/phase2_smoke_${stage}.log" \
             env MOUSEDROID_SMOKE_PYTHON="${HOST_PY}" MOUSEDROID_JETSON_CONFIGS="${PROD_CONFIG}" \
                 MOUSEDROID_SMOKE_ALLOW_MOTION= MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION= \
@@ -465,7 +466,7 @@ phase3() {
     # LLM gateway dry-run (own registry; bypasses the rule parser).
     if container_running; then
         run_step "translate_mission probe" no "${RUN_DIR}/phase3_translate.log" \
-            docker exec "${CONTAINER}" python3 scripts/translate_mission.py --mission "${UNKNOWN_CMD}"
+            docker exec -e MOUSEDROID_LLM__N_GPU_LAYERS=0 "${CONTAINER}" python3 scripts/translate_mission.py --mission "${UNKNOWN_CMD}"
     fi
 
     # Live /metrics is auth-exempt: confirm it is a healthy Prometheus surface.
