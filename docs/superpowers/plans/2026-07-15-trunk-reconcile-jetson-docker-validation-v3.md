@@ -87,11 +87,11 @@ Two decoupled tracks. Tasks are numbered by concern, not strict run order.
 
 **Conventions for every Part-1 task**
 
-- Run in **Git Bash** at the repo root (`$REPO_ROOT` — default `/c/Users/iansh/OneDrive/Documents/Gronk-Droid-Jetson-Nano`). The primary tree is on branch `refactor/onnx-default-providers-common` and MUST stay dirty and untouched until Task W7.
+- Run in **Git Bash** at the repo root (`$REPO_ROOT` — set in session setup below). The primary tree is on branch `refactor/onnx-default-providers-common` and MUST stay dirty and untouched until Task W7.
 - Session setup (re-run at the top of any resumed session):
 
 ```bash
-export REPO_ROOT="${REPO_ROOT:-/c/Users/iansh/OneDrive/Documents/Gronk-Droid-Jetson-Nano}"
+export REPO_ROOT="${REPO_ROOT:-/c/path/to/Gronk-Droid-Jetson-Nano}"  # override to your actual repo root
 export TRUNK_REF=origin/claude/markdown-implementation-plan-aVJ2l
 export TRUNK_SHORT=claude/markdown-implementation-plan-aVJ2l
 export WORKTREE_DIR="$HOME/mousedroid-trunk-sync"        # sibling of the primary tree, NOT inside it
