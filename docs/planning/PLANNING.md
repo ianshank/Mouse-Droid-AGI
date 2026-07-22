@@ -1,4 +1,4 @@
-# MouseDroidAGI — Project Plan: L4T Container Deployment
+# MouseDroid — Project Plan: L4T Container Deployment
 
 > **Date**: 2026-03-11
 > **Author**: Antigravity Agent
@@ -12,7 +12,7 @@
 
 ## Goals
 
-Containerize MouseDroidAGI using NVIDIA's L4T PyTorch container to enable **GPU-accelerated PyTorch** on the Jetson Orin Nano, replacing the current CPU-only venv deployment.
+Containerize MouseDroid using NVIDIA's L4T PyTorch container to enable **GPU-accelerated PyTorch** on the Jetson Orin Nano, replacing the current CPU-only venv deployment.
 
 ---
 

@@ -1,4 +1,4 @@
-# MouseDroidAGI — Implementation Plan: Next Steps
+# MouseDroid — Implementation Plan: Next Steps
 
 > **Date**: 2026-05-16 (Tier C merged) — last updated; originally 2026-03-19
 > **Author**: System Architect Agent
@@ -66,7 +66,7 @@ Phase status post-Tier-C:
 
 ## Context
 
-MouseDroidAGI is a Star Wars MSE-6 droid replica running on NVIDIA Jetson Orin Nano with:
+MouseDroid is a Star Wars MSE-6 droid replica running on NVIDIA Jetson Orin Nano with:
 
 - **173 Python source files** across **30+ modules** (up from 121 at plan creation)
 - **1299+ tests** at **85%+ branch coverage** (85% gate enforced)

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "mousedroid"
 version = "0.3.0"
-description = "MouseDroidAGI — Star Wars MSE-6 Agentic World Model on Jetson Orin Nano"
+description = "MouseDroid — Star Wars MSE-6 Agentic World Model on Jetson Orin Nano"
 requires-python = ">=3.10"
 dependencies = [
     "torch>=2.1",

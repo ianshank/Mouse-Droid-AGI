@@ -14,7 +14,7 @@ from mousedroid.logging.setup import configure_logging, get_logger
 
 def cli_entry() -> None:  # pragma: no cover
     """CLI entry point for mousedroid command."""
-    parser = argparse.ArgumentParser(description="MouseDroid AGI — MSE-6 Autonomous Navigation")
+    parser = argparse.ArgumentParser(description="MouseDroid — MSE-6 Autonomous Navigation")
     parser.add_argument(
         "--config",
         type=Path,

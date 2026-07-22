@@ -1,5 +1,5 @@
 # =============================================================================
-# MouseDroidAGI — CI/CD Pipeline
+# MouseDroid — CI/CD Pipeline
 # =============================================================================
 # 6-stage quality gate: Lint → Typecheck → Test → Prometheus → Security → Docker
 # Runs on: push to main, pull requests

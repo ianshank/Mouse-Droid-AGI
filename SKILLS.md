@@ -1,4 +1,4 @@
-# SKILLS.md — Skill index for MouseDroidAGI
+# SKILLS.md — Skill index for MouseDroid
 
 > Maps high-level capability to the *files an agent should read* + *commands
 > an agent should run* to exercise that capability. Companion to

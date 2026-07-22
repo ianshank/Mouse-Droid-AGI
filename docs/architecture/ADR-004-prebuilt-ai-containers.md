@@ -6,7 +6,7 @@ Multi-Stage Pre-built Container Substrates for LLM Dependencies
 
 ## Context
 
-Deploying MouseDroidAGI on the Jetson Orin Nano (8GB) encounters insurmountable memory failures (Linux OOM killer) when compiling `llama-cpp-python` from source. Limiting compilation threads/jobs and configuring 16GB NVMe swap did not resolve the peak memory usage during NVIDIA CUDA kernel (`cicc` / `ptxas`) linking. The Jetpack 6 / CUDA 12.6 stack requires contiguous compilation memory that surpasses device limits. Furthermore, network constraints (DNS dropping) make retrieving pure wheels from Jetson AI lab unreliable during container builds.
+Deploying MouseDroid on the Jetson Orin Nano (8GB) encounters insurmountable memory failures (Linux OOM killer) when compiling `llama-cpp-python` from source. Limiting compilation threads/jobs and configuring 16GB NVMe swap did not resolve the peak memory usage during NVIDIA CUDA kernel (`cicc` / `ptxas`) linking. The Jetpack 6 / CUDA 12.6 stack requires contiguous compilation memory that surpasses device limits. Furthermore, network constraints (DNS dropping) make retrieving pure wheels from Jetson AI lab unreliable during container builds.
 
 ## Decision
 
@@ -19,7 +19,7 @@ Instead of building `llama-cpp-python`, we define a `builder` stage using `dusty
 ```mermaid
 graph TD
     A[dustynv/llama_cpp:r36.4.0] -->|Extract Pre-compiled Wheel| B(Docker Multi-Stage Cache)
-    C[dustynv/l4t-pytorch:r36.4.0] -->|Base Platform| D[MouseDroidAGI Image]
+    C[dustynv/l4t-pytorch:r36.4.0] -->|Base Platform| D[MouseDroid Image]
     B -->|Install binary without compilation| D
     D -->|Deploy| E[Jetson Orin Nano 8GB]
     

@@ -1,6 +1,6 @@
 # Experience Curator
 
-You are the **Experience Curator** for MouseDroidAGI.
+You are the **Experience Curator** for MouseDroid.
 
 ## Responsibilities
 - LMDB storage, schema versioning, serialization

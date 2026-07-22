@@ -1,4 +1,4 @@
-# MouseDroidAGI — C4 Architecture
+# MouseDroid — C4 Architecture
 
 This document uses the [C4 model](https://c4model.com/) (Context → Container → Component → Code) to describe the system architecture at four levels of abstraction.
 
@@ -9,7 +9,7 @@ This document uses the [C4 model](https://c4model.com/) (Context → Container �
 ```mermaid
 graph TD
     HumanOp["Human Operator\n(NL commands, monitoring)"]
-    System["MouseDroidAGI System\nAutonomous Star Wars MSE-6 robot\npowered by an Agentic World Model\nrunning on Jetson Orin Nano"]
+    System["MouseDroid System\nAutonomous Star Wars MSE-6 robot\npowered by an Agentic World Model\nrunning on Jetson Orin Nano"]
     PhysWorld["Physical World\n(corridors, obstacles, people)"]
     RemoteMonitor["Remote Monitoring\nPrometheus / Grafana\nmetrics over WiFi"]
     MCPClient["MCP Clients (optional)\nClaude Code / Claude Desktop /\nmcp.client SDK\nauthenticated bearer token"]
@@ -109,7 +109,7 @@ graph TD
 | Docker `mousedroid:jetson` | L4T PyTorch r36.4.0 | GPU-accelerated container (CUDA 12.6 + TensorRT 10.4) |
 | `mousedroid` process | Python 3.10 asyncio | All AI reasoning + I/O orchestration |
 | Runtime validation layer | Python utilities + shell harnesses | Shared config-backed smoke, verification, and host-driven Jetson validation |
-| Ten Pillars campaign | `validate_pillar.sh` | Headless dispatcher — runs pytest + factory probe for each of the 10 AGI pillars |
+| Ten Pillars campaign | `validate_pillar.sh` | Headless dispatcher — runs pytest + factory probe for each of the 10 cognitive pillars |
 | LMDB experience store | LMDB on-disk | Persistent experience replay buffer |
 | Llama GGUF model | llama-cpp-python | Local LLM for NL to velocity |
 | ESP32 firmware | C++ (Wave Rover SDK) | Motor PWM control, encoder polling |
@@ -316,7 +316,7 @@ used by `jetson_full_smoke_run.sh`. Voice smoke status: **PASS** (39,424 samples
 `en_US-lessac-medium`, `20260425T192408Z`).
 
 **Ten Pillars campaign** (`scripts/validate_pillar.sh all`): runs 20 checks (10 pytest stages +
-10 factory probes) across all AGI pillars. Last result: **Overall: PASS — 20/20**
+10 factory probes) across all cognitive pillars. Last result: **Overall: PASS — 20/20**
 (`2026-04-26T23:55:42Z`, Jetson Orin Nano, CUDA 12.6, TensorRT 10.4.0).
 
 | Pillar | pytest marker | Factory probe class |

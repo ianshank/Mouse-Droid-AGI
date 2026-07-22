@@ -1,8 +1,8 @@
-# MouseDroidAGI — Claude Code Project Instructions
+# MouseDroid — Claude Code Project Instructions
 
 ## Overview
 
-MouseDroidAGI is a Star Wars MSE-6 autonomous navigation system and hierarchical robot arm training platform running on NVIDIA Jetson Orin Nano. It implements the 10 Pillars of the Ideal Neural Network as a cohesive agentic system.
+MouseDroid is a Star Wars MSE-6 autonomous-navigation system running on an NVIDIA Jetson Orin Nano (with a parked hierarchical robot-arm training platform) — an edge-AI / robotics engineering project, not a claim of general intelligence. Its cognitive stack is organised around a "10 Pillars of the Ideal Neural Network" research framing used as an engineering compass: every pillar is real, unit-tested code, and the honest axis is integration — seven pillars (world model, cognitive, memory, continual learning, reward, safety, curiosity) are wired into the 30 Hz runtime loop, while three (meta, growth, scaling) are implemented and tested but not yet wired in.
 
 > **Governance:** `docs/CHARTER.md` is the project constitution (vision, scope, invariants, roadmap) and sits above this document. When a change touches scope or an invariant, defer to the charter.
 
@@ -150,7 +150,7 @@ bash scripts/ci.sh
 When adding hardware probes or pillar checks, follow the established split:
 
 - **`src/mousedroid/validation/preflight.py`** — async `run_preflight(cfg)` for hardware probes. Add a check by writing an `async _check_<name>(cfg) -> PreflightCheckResult` and registering it in `_CHECK_DISPATCH`. The dispatcher catches per-check exceptions and records them as `FAIL` so a single misbehaving driver never crashes the operator runbook.
-- **`src/mousedroid/validation/pillars.py`** — async `validate_all_pillars(cfg)` over the 10 AGI pillars. Two patterns:
+- **`src/mousedroid/validation/pillars.py`** — async `validate_all_pillars(cfg)` over the 10 cognitive pillars. Two patterns:
   - **Pattern A (factory builder)**: when a `build_<pillar>` factory exists, instantiate + smoke-assert. **Use explicit `if x is None: return _fail(...)` instead of `assert x is not None`** — assert is stripped under `-O` (PYTHONOPTIMIZE=1, the default Jetson Docker entrypoint).
   - **Pattern B (pytest delegation)**: when no factory builder exists yet, delegate to the pillar's existing unit-test module via in-process `pytest.main`. Paths in `_PYTEST_DELEGATION_PATHS` are repo-relative and resolved against module-level `_REPO_ROOT = Path(__file__).resolve().parents[3]` so the dispatcher works regardless of caller CWD.
 - **`src/mousedroid/cli/{preflight,validate_pillars}.py`** — argparse wrappers over the async APIs. CLI exit-code contract: `0` on `OK` or `DEGRADED` (WARN-only); `1` only on `FAIL`. Don't return `1` on `DEGRADED` — CI uses these codes as the canonical "is the dispatcher broken?" signal.

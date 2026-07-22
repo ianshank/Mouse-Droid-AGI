@@ -8,7 +8,7 @@
 
 ## User Story
 
-**As a** MouseDroidAGI developer,
+**As a** MouseDroid developer,
 **I want** to run the MouseDroid application inside an NVIDIA L4T PyTorch container,
 **So that** I get GPU-accelerated PyTorch (CUDA) on the Jetson Orin Nano without building torch from source.
 

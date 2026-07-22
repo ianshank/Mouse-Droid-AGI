@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# MouseDroidAGI — Jetson Container Test Runner
+# MouseDroid — Jetson Container Test Runner
 # =============================================================================
 # Runs the test suite inside the Docker container with GPU access.
 #

@@ -1,4 +1,4 @@
-# Systemd unit template for the MouseDroidAGI Jetson self-hosted runner.
+# Systemd unit template for the MouseDroid Jetson self-hosted runner.
 #
 # Installed by `scripts/jetson-runner-install.sh`. The placeholders below
 # (@RUNNER_USER@, @RUNNER_INSTALL_DIR@) are substituted via `sed -i` at install

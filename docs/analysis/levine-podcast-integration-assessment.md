@@ -1,7 +1,7 @@
-# Levine Podcast #108: Realistic Integration Assessment for MouseDroidAGI
+# Levine Podcast #108: Realistic Integration Assessment for MouseDroid
 
 Analysis of Lex Fridman Podcast #108 (Sergey Levine, UC Berkeley RAIL Lab, July 2020)
-against the MouseDroidAGI project — what's actually applicable vs. aspirational.
+against the MouseDroid project — what's actually applicable vs. aspirational.
 
 ---
 

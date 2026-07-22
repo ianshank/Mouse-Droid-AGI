@@ -1,5 +1,5 @@
 # =============================================================================
-# MouseDroidAGI — Cloud Training Container (Tier C1)
+# MouseDroid — Cloud Training Container (Tier C1)
 # =============================================================================
 # Base: pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime (x86_64)
 # Target: Vertex AI custom training jobs (NVIDIA T4 / L4 / A100 GPUs)
@@ -29,7 +29,7 @@
 FROM pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime
 
 LABEL maintainer="Ian Cruickshank"
-LABEL description="MouseDroidAGI cloud training — Vertex AI offline RL (HF Hub upload deferred to follow-up PR)"
+LABEL description="MouseDroid cloud training — Vertex AI offline RL (HF Hub upload deferred to follow-up PR)"
 LABEL version="0.3.0"
 LABEL tier="C1"
 

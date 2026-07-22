@@ -1,4 +1,4 @@
-# MouseDroidAGI — Next Steps
+# MouseDroid — Next Steps
 
 > **Last updated**: 2026-06-15 | **Version**: 0.4.2-dev (deploy-hardening F-013/F-014 closeout + post-merge gap reconciliation) | **Pre-PR validation**: Ruff clean, mypy strict clean, harness `validate.py --tier fast --strict-git` green, orchestrator + harness-AQA suites pass on host
 

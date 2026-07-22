@@ -1,5 +1,5 @@
 # =============================================================================
-# MouseDroidAGI — Jetson Nightly Validation
+# MouseDroid — Jetson Nightly Validation
 # =============================================================================
 # Runs the Ten Pillars validation campaign (`scripts/validate_pillar.sh all`)
 # on a self-hosted Jetson Orin Nano runner every night and on-demand, then

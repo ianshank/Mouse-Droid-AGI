@@ -1,5 +1,5 @@
 # =============================================================================
-# MouseDroidAGI — Docker Build Ignore
+# MouseDroid — Docker Build Ignore
 # =============================================================================
 # Excludes unnecessary files from the Docker build context for faster builds.
 

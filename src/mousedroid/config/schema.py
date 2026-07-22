@@ -4811,7 +4811,7 @@ class OpenClawConfig(BaseModel):
     """OpenClaw integration — multi-channel NL control plane.
 
     OpenClaw runs on a dedicated Mac mini host and dispatches NL commands
-    into MouseDroidAGI either via the REST ``POST /api/v1/mission``
+    into MouseDroid either via the REST ``POST /api/v1/mission``
     endpoint or via the MCP server (cross-host SSE / streamable_http).
     Both channels enforce the same prompt-injection envelope, the same
     rate-limit token bucket, and (for actuation skills) the same safety

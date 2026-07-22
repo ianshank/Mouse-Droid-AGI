@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# MouseDroidAGI - Pre-Flight Validation
+# MouseDroid - Pre-Flight Validation
 # =============================================================================
 # Checks that all required hardware, configs, and models are present before
 # starting the MouseDroid container or service.

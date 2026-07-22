@@ -59,6 +59,12 @@ weights/
 *.gguf
 *.bin
 
+# CAD / 3D-printing assets (large binaries — hosted as a GitHub Release asset; see docs/3D_printing_files/README.md)
+*.stl
+*.FCStd
+docs/3D_printing_files/*
+!docs/3D_printing_files/README.md
+
 # OS
 .DS_Store
 Thumbs.db

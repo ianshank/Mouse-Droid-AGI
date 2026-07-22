@@ -4,7 +4,7 @@
 
 As an Edge AI Developer,
 I want to use pre-compiled container images for memory-intensive dependencies (like `llama-cpp-python`),
-So that I can deploy the MouseDroidAGI platform on memory-constrained devices (8GB Jetson Orin Nano) without triggering Out-Of-Memory (OOM) failures during CUDA compilation.
+So that I can deploy the MouseDroid platform on memory-constrained devices (8GB Jetson Orin Nano) without triggering Out-Of-Memory (OOM) failures during CUDA compilation.
 
 ## 2. Background and Context
 

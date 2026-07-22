@@ -1,5 +1,5 @@
 # =============================================================================
-# MouseDroidAGI -- PyPI Release Pipeline
+# MouseDroid -- PyPI Release Pipeline
 # =============================================================================
 # Triggers on version tag push (v*.*.*).
 # Runs quality gates (lint, typecheck, test) matching CI patterns, then builds

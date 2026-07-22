@@ -1,4 +1,4 @@
-# MouseDroidAGI — Next Steps
+# MouseDroid — Next Steps
 
 Forward-looking priorities only. Landed work moves to `CHANGELOG.md` (see the
 "Historical record" section there); the machine-readable source of "what's

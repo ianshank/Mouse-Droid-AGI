@@ -1,5 +1,5 @@
 [Unit]
-Description=MouseDroid AGI — MSE-6 Autonomous Navigation
+Description=MouseDroid — MSE-6 Autonomous Navigation
 After=network.target
 
 [Service]

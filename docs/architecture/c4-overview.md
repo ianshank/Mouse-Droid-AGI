@@ -1,6 +1,6 @@
-# C4 Architecture — MouseDroidAGI
+# C4 Architecture — MouseDroid
 
-> Four-level C4 model for the MouseDroidAGI codebase. Diagrams use Mermaid;
+> Four-level C4 model for the MouseDroid codebase. Diagrams use Mermaid;
 > render on GitHub or via VS Code's Markdown preview.
 >
 > - **Level 1 (Context):** systems, people, external dependencies.
@@ -19,12 +19,12 @@
 
 ```mermaid
 C4Context
-title MouseDroidAGI — System Context
+title MouseDroid — System Context
 
 Person(operator, "Operator", "Solo developer — pushes code, opens dashboard,\nteaches the rover via voice + mission YAML.")
 Person(passenger, "Passenger / Observer", "Reads camera + LiDAR through the dashboard.")
 
-System(mousedroid, "MouseDroidAGI", "Star Wars MSE-6 autonomous navigation\n+ hierarchical robot-arm training platform.")
+System(mousedroid, "MouseDroid", "Star Wars MSE-6 autonomous navigation\n+ hierarchical robot-arm training platform.")
 
 System_Ext(jetson, "NVIDIA Jetson Orin Nano", "Edge inference + sensor I/O.\nRuns the dockerised orchestrator.")
 System_Ext(esp32, "ESP32 motor controller", "Wave Rover differential drive\n+ encoder feedback over serial.")
@@ -58,7 +58,7 @@ Rel(mousedroid, anthropic, "NL mission translation\n(HTTPS, post sanitize, OUT o
 
 ```mermaid
 C4Container
-title MouseDroidAGI — Container Diagram
+title MouseDroid — Container Diagram
 
 Person(operator, "Operator", "Solo developer")
 
