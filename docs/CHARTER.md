@@ -23,9 +23,9 @@ Orin Nano — an edge-AI / robotics engineering project, not a product and not a
 intelligence. The cognitive stack is organised around a "10 Pillars of the Ideal Neural
 Network" research framing used as an engineering compass: every pillar is real, unit-tested
 code, and the honest axis is integration — seven pillars (world model, cognitive architecture,
-memory, continual learning, reward, safety, curiosity) are wired into the 30 Hz runtime loop,
-while three (meta-learning, growth/distillation, scaling) are implemented and tested but not yet
-wired in (§5). The same reusable cognitive core also underpins a parked `robot_arm` manipulation
+memory, continual learning, reward, safety, curiosity) are wired into the 30 Hz runtime loop
+(curiosity via the memory subsystem), while three (meta-learning, growth/distillation, scaling)
+are implemented and tested but not yet wired in (§5). The same reusable cognitive core also underpins a parked `robot_arm` manipulation
 platform, selected by config rather than by forking the code.
 
 ## 2. Mission

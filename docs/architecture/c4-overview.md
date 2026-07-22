@@ -24,7 +24,7 @@ title MouseDroid — System Context
 Person(operator, "Operator", "Solo developer — pushes code, opens dashboard,\nteaches the rover via voice + mission YAML.")
 Person(passenger, "Passenger / Observer", "Reads camera + LiDAR through the dashboard.")
 
-System(mousedroid, "MouseDroid", "Star Wars MSE-6 autonomous navigation\n+ hierarchical robot-arm training platform.")
+System(mousedroid, "MouseDroid", "Star Wars MSE-6 autonomous navigation.\nParked: hierarchical robot-arm training platform.")
 
 System_Ext(jetson, "NVIDIA Jetson Orin Nano", "Edge inference + sensor I/O.\nRuns the dockerised orchestrator.")
 System_Ext(esp32, "ESP32 motor controller", "Wave Rover differential drive\n+ encoder feedback over serial.")

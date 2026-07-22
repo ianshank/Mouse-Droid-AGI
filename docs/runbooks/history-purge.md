@@ -28,16 +28,20 @@ recoverable in history until this purge).
 The purge deletes the only copies left in history. Before running it:
 
 1. **`bdi_annotations.npz` → Hugging Face dataset.** It's a *generated* artifact, so it can also be
-   regenerated (`bash scripts/fetch_data.sh`), but mirror it for a fast path:
+   regenerated (`bash scripts/fetch_data.sh`), but mirror it for a fast path. Discover the newest
+   commit that still carries the blob rather than pinning a SHA that history may rewrite:
    ```bash
-   # extract the blob from pre-purge history (works from any full clone)
-   git show 032942b50ab71abf285282a4de7333193f208c38:training/data/bdi_annotations.npz > bdi_annotations.npz
+   npz="training/data/bdi_annotations.npz"
+   c="$(git rev-list -n1 --all -- "$npz")"   # newest commit still holding it
+   git show "$c:$npz" > bdi_annotations.npz
    huggingface-cli upload ianshank/mouse-droid-bdi-annotations bdi_annotations.npz \
      bdi_annotations.npz --repo-type dataset
    ```
-2. **STL/FCStd → GitHub Release `hardware-v6`.** Extract each from history (or a pre-purge
-   checkout) and attach them to the release:
+2. **STL/FCStd → GitHub Release `hardware-v6`.** Restore the CAD files from the last commit that
+   still had them (they were `git rm`-ed at the tip in Phase A), then attach them:
    ```bash
+   c="$(git rev-list -n1 --all -- docs/3D_printing_files/mse6_v6_complete.stl)"
+   git checkout "$c" -- docs/3D_printing_files/   # restores STL + FCStd into the worktree
    gh release create hardware-v6 --title "MSE-6 CAD v6" --notes "Chassis STL + FreeCAD sources"
    gh release upload hardware-v6 docs/3D_printing_files/*.stl docs/3D_printing_files/*.FCStd
    ```

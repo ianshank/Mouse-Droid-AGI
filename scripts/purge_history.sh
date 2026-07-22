@@ -25,10 +25,11 @@
 #
 # Env overrides (no hardcoded values):
 #   ORIGIN_URL     remote to clone/push   (default: origin of the current repo)
-#   DEFAULT_BRANCH branch to rewrite      (default: claude/markdown-implementation-plan-aVJ2l)
+#   DEFAULT_BRANCH branch to rewrite      (default: the remote's auto-detected default branch)
 #   PINNED_SHA     deployed SHA to re-pin (default: read from deployments/jetson-image.json)
 #   IMAGE_JSON     re-pin target file     (default: deployments/jetson-image.json)
 #   WORKDIR        scratch dir            (default: mktemp -d)
+#   DEBUG          set to 1 to xtrace every command (or pass --verbose)
 # =============================================================================
 set -euo pipefail
 
@@ -37,8 +38,9 @@ for a in "$@"; do
   case "$a" in
     --push) PUSH=1 ;;
     --dry-run) PUSH=0 ;;
+    -v | --verbose) set -x ;;
     -h | --help)
-      sed -n '2,37p' "$0"
+      sed -n '2,38p' "$0"
       exit 0
       ;;
     *)
@@ -47,6 +49,10 @@ for a in "$@"; do
       ;;
   esac
 done
+
+# Debugging: DEBUG=1 (env) or --verbose turns on an xtrace of every command —
+# valuable when triaging a failed rewrite on the operator's machine.
+if [ "${DEBUG:-0}" = "1" ]; then set -x; fi
 
 command -v git >/dev/null || {
   echo "git not found" >&2
@@ -59,11 +65,23 @@ fi
 
 SRC_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ORIGIN_URL="${ORIGIN_URL:-$(git -C "${SRC_REPO}" remote get-url origin)}"
-DEFAULT_BRANCH="${DEFAULT_BRANCH:-claude/markdown-implementation-plan-aVJ2l}"
 IMAGE_JSON="${IMAGE_JSON:-deployments/jetson-image.json}"
 WORKDIR="${WORKDIR:-$(mktemp -d)}"
-PATHS=(training/data/bdi_annotations.npz docs/3D_printing_files)
 CLONE="${WORKDIR}/mouse-droid"
+
+# Purge the generated data blob + the CAD *binaries* only — NOT the whole
+# docs/3D_printing_files/ dir, which also holds the pointer README the reframe adds.
+PURGE_DISPLAY="training/data/bdi_annotations.npz docs/3D_printing_files/*.{stl,FCStd}"
+
+# Branch to rewrite: discover the remote's real default (no hardcoded one-off
+# branch name); an explicit DEFAULT_BRANCH env always wins. Falls back to the
+# fresh clone's checked-out HEAD after cloning if this can't resolve it.
+DEFAULT_BRANCH="${DEFAULT_BRANCH:-}"
+if [ -z "${DEFAULT_BRANCH}" ]; then
+  DEFAULT_BRANCH="$(
+    git -C "${SRC_REPO}" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##'
+  )"
+fi
 
 # Default PINNED_SHA from the deployment record unless the operator overrode it.
 if [ -z "${PINNED_SHA:-}" ]; then
@@ -73,8 +91,8 @@ fi
 
 echo "=== history purge ==="
 echo "  origin:        ${ORIGIN_URL}"
-echo "  branch:        ${DEFAULT_BRANCH}"
-echo "  paths to drop: ${PATHS[*]}"
+echo "  branch:        ${DEFAULT_BRANCH:-<auto-detect from clone>}"
+echo "  paths to drop: ${PURGE_DISPLAY}"
 echo "  re-pin SHA:    ${PINNED_SHA}"
 echo "  workdir:       ${CLONE}"
 echo "  mode:          $([ "${PUSH}" = 1 ] && echo 'EXECUTE + FORCE-PUSH' || echo 'DRY RUN (no push)')"
@@ -84,10 +102,18 @@ echo "[1/5] Fresh clone (all refs)"
 git clone --no-local "${ORIGIN_URL}" "${CLONE}"
 cd "${CLONE}"
 
-echo "[2/5] filter-repo: dropping the blobs from ALL history"
-FR_ARGS=()
-for p in "${PATHS[@]}"; do FR_ARGS+=(--path "${p}"); done
-git filter-repo --force "${FR_ARGS[@]}" --invert-paths
+# git clone checks out the remote's default branch; use it if not resolved above.
+if [ -z "${DEFAULT_BRANCH}" ]; then
+  DEFAULT_BRANCH="$(git symbolic-ref --short HEAD)"
+  echo "      resolved default branch from clone: ${DEFAULT_BRANCH}"
+fi
+
+echo "[2/5] filter-repo: dropping the data blob + CAD binaries from ALL history"
+# Glob the CAD *binaries* rather than the whole dir so the pointer README.md survives.
+git filter-repo --force --invert-paths \
+  --path training/data/bdi_annotations.npz \
+  --path-glob 'docs/3D_printing_files/*.stl' \
+  --path-glob 'docs/3D_printing_files/*.FCStd'
 
 echo "[3/5] Re-pin ${IMAGE_JSON} to the commit-map image of ${PINNED_SHA} (NOT HEAD)"
 MAP=".git/filter-repo/commit-map"

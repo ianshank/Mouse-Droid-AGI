@@ -2,7 +2,7 @@
 
 ## Overview
 
-MouseDroid is a Star Wars MSE-6 autonomous-navigation system running on an NVIDIA Jetson Orin Nano (with a parked hierarchical robot-arm training platform) — an edge-AI / robotics engineering project, not a claim of general intelligence. Its cognitive stack is organised around a "10 Pillars of the Ideal Neural Network" research framing used as an engineering compass: every pillar is real, unit-tested code, and the honest axis is integration — seven pillars (world model, cognitive, memory, continual learning, reward, safety, curiosity) are wired into the 30 Hz runtime loop, while three (meta, growth, scaling) are implemented and tested but not yet wired in.
+MouseDroid is a Star Wars MSE-6 autonomous-navigation system running on an NVIDIA Jetson Orin Nano (with a parked hierarchical robot-arm training platform) — an edge-AI / robotics engineering project, not a claim of general intelligence. Its cognitive stack is organised around a "10 Pillars of the Ideal Neural Network" research framing used as an engineering compass: every pillar is real, unit-tested code, and the honest axis is integration — seven pillars (world model, cognitive, memory, continual learning, reward, safety, curiosity) are wired into the 30 Hz runtime loop (curiosity via the memory subsystem), while three (meta, growth, scaling) are implemented and tested but not yet wired in.
 
 > **Governance:** `docs/CHARTER.md` is the project constitution (vision, scope, invariants, roadmap) and sits above this document. When a change touches scope or an invariant, defer to the charter.
 

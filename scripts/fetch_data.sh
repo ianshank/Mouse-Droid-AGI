@@ -10,12 +10,14 @@
 # Usage:
 #   bash scripts/fetch_data.sh              # regenerate via the pretraining pipeline (default)
 #   bash scripts/fetch_data.sh --from-hf    # download from the HF dataset mirror
+#   bash scripts/fetch_data.sh --verbose    # xtrace every command (or DEBUG=1)
 #   bash scripts/fetch_data.sh --help
 #
 # Environment overrides (no hardcoded values):
 #   CONFIG      Config YAML for regeneration      (default: config/mock_hardware.yaml)
 #   HF_DATASET  HF dataset repo id for --from-hf  (default: ianshank/mouse-droid-bdi-annotations)
-#   DATA_DIR    Output directory                  (default: training/data)
+#   DATA_DIR    HF download dir (--from-hf only)  (default: training/data)
+#   DEBUG       Set to 1 to xtrace every command  (default: 0)
 # =============================================================================
 set -euo pipefail
 
@@ -28,8 +30,9 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --from-hf) MODE="hf" ;;
     --regenerate) MODE="regenerate" ;;
+    -v | --verbose) set -x ;;
     -h | --help)
-      sed -n '2,20p' "$0"
+      sed -n '2,21p' "$0"
       exit 0
       ;;
     *)
@@ -40,18 +43,32 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+# Debugging: DEBUG=1 (env) or --verbose turns on an xtrace of every command.
+if [ "${DEBUG:-0}" = "1" ]; then set -x; fi
+
 # Resolve to the repo root so relative paths work from any CWD.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
-TARGET="${DATA_DIR}/bdi_annotations.npz"
+# Resolve the artefact path per mode. Regeneration writes to the config's
+# ``training.data_dir`` (NOT the DATA_DIR override, which only governs the HF
+# download location), so read it back from CONFIG to check the real output path.
+if [ "${MODE}" = "hf" ]; then
+  TARGET="${DATA_DIR%/}/bdi_annotations.npz"
+else
+  REGEN_DIR="$(
+    python -c "from pathlib import Path; from mousedroid.config.loader import load_settings; print(load_settings(Path('${CONFIG}')).training.data_dir)" \
+      2>/dev/null || echo "training/data"
+  )"
+  TARGET="${REGEN_DIR%/}/bdi_annotations.npz"
+fi
 
 if [ -f "${TARGET}" ]; then
   echo "[fetch_data] ${TARGET} already present — nothing to do (delete it to force a refresh)."
   exit 0
 fi
 
-mkdir -p "${DATA_DIR}"
+mkdir -p "$(dirname "${TARGET}")"
 
 if [ "${MODE}" = "hf" ]; then
   echo "[fetch_data] Downloading ${HF_DATASET} -> ${TARGET}"
@@ -79,7 +96,7 @@ PY
   fi
 else
   echo "[fetch_data] Regenerating annotations via the pretraining pipeline (phase 0)"
-  echo "[fetch_data]   config: ${CONFIG}"
+  echo "[fetch_data]   config: ${CONFIG} -> ${TARGET}"
   python -m training.run_pipeline --config "${CONFIG}" --phases 0
 fi
 

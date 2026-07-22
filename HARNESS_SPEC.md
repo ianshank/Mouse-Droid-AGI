@@ -34,9 +34,11 @@ project:
 
 ## 2. Executive Intent (The Seed)
 
-MouseDroid is a Star Wars MSE-6 autonomous navigation system and hierarchical
-robot-arm training platform on a Jetson Orin Nano, implementing the 10 Pillars of the
-Ideal Neural Network as a cohesive agentic system. "Shipped and valuable" means the
+MouseDroid is a Star Wars MSE-6 autonomous-navigation system on a Jetson Orin Nano (with a
+parked hierarchical robot-arm training platform). Its cognitive stack follows a "10 Pillars of
+the Ideal Neural Network" research framing used as an engineering compass — seven pillars are
+wired into the runtime loop, three are implemented but not yet wired in — not a claim of general
+intelligence. "Shipped and valuable" means the
 rover senses, plans, and acts on a deterministic 30 Hz reactive loop, with a
 deliberative cloud/local LLM brain translating natural language into goals *outside* the
 hot loop, all under a constitutional safety monitor — and that every claim of "done" is
