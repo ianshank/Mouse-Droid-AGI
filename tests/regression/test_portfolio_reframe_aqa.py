@@ -23,7 +23,11 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -31,12 +35,21 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _HEADLINE_DOCS = ("README.md", "docs/CHARTER.md", "CLAUDE.md")
 _AGI_WORD = re.compile(r"\bAGI\b")
 
-_NPZ = _REPO_ROOT / "training" / "data" / "bdi_annotations.npz"
 _CAD_DIR = _REPO_ROOT / "docs" / "3D_printing_files"
 _JETSON_IMAGE = _REPO_ROOT / "deployments" / "jetson-image.json"
 _FETCH = _REPO_ROOT / "scripts" / "fetch_data.sh"
 _PURGE = _REPO_ROOT / "scripts" / "purge_history.sh"
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_GIT = shutil.which("git")
+
+# Large binaries that must stay OUT of git. The contract is "not *tracked*", not
+# "absent from disk" — a contributor who runs scripts/fetch_data.sh (or downloads
+# CAD) legitimately materialises these gitignored files in the working tree.
+_UNTRACKED_BLOB_PATHSPECS = (
+    "training/data/bdi_annotations.npz",
+    "docs/3D_printing_files/*.stl",
+    "docs/3D_printing_files/*.FCStd",
+)
 
 # Modules the original ask mis-labelled "stub"; they are implemented + unit-tested.
 _WORKING_MODULES = ("curiosity", "meta", "growth", "scaling")
@@ -52,10 +65,24 @@ _FORWARD_DOCS = (
 
 
 def _read(rel: str) -> str:
+    """Read a repo-relative text file as UTF-8."""
     return (_REPO_ROOT / rel).read_text(encoding="utf-8")
 
 
+def _git_tracked(*pathspecs: str) -> list[str]:
+    """Return the git-tracked files matching ``pathspecs`` (empty when none are tracked)."""
+    result = subprocess.run(
+        ["git", "ls-files", "--", *pathspecs],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
 def test_headline_docs_drop_agi_framing() -> None:
+    """The headline docs carry no MouseDroidAGI token or bare 'AGI' overclaim."""
     for rel in _HEADLINE_DOCS:
         text = _read(rel)
         assert "MouseDroidAGI" not in text, f"{rel} still carries the MouseDroidAGI brand token"
@@ -63,6 +90,7 @@ def test_headline_docs_drop_agi_framing() -> None:
 
 
 def test_package_name_is_unchanged() -> None:
+    """The rename stays docs-only: the ``mousedroid`` package name is unchanged."""
     # The rename is brand/docs only — the import surface must not move.
     pyproject = _read("pyproject.toml")
     assert re.search(
@@ -71,6 +99,7 @@ def test_package_name_is_unchanged() -> None:
 
 
 def test_pillar_table_uses_integration_axis_not_stub_labels() -> None:
+    """The pillar table splits on runtime-integration and never labels working modules stubs."""
     readme = _read("README.md")
     # The honest tiers must both be present ...
     assert "Wired into the runtime loop" in readme, "README lost the runtime-integrated pillar tier"
@@ -87,14 +116,17 @@ def test_pillar_table_uses_integration_axis_not_stub_labels() -> None:
 
 
 def test_large_blobs_untracked_with_pointers() -> None:
-    assert (
-        not _NPZ.exists()
-    ), "bdi_annotations.npz is back in the tree — keep it out (regeneratable)"
+    """The large blobs are untracked by git while the pointer READMEs stay tracked."""
+    if _GIT is None:
+        pytest.skip("git not available — cannot verify tracking status")
+    # Assert the blobs are not *tracked* (robust to a locally-regenerated .npz or
+    # downloaded CAD, which are gitignored but may be present on disk).
+    tracked = _git_tracked(*_UNTRACKED_BLOB_PATHSPECS)
+    assert not tracked, f"large binaries are tracked in git (should be purged): {tracked}"
+    # The pointer READMEs, by contrast, MUST be tracked + present on disk.
     assert (
         _CAD_DIR.is_dir()
     ), "docs/3D_printing_files/ directory vanished (pointer README lives here)"
-    stray = sorted(p.name for p in _CAD_DIR.glob("*") if p.suffix in {".stl", ".FCStd"})
-    assert not stray, f"CAD binaries back under docs/3D_printing_files/: {stray}"
     assert (_CAD_DIR / "README.md").is_file(), "docs/3D_printing_files/README.md pointer is missing"
     assert (
         _REPO_ROOT / "training" / "data" / "README.md"
@@ -102,12 +134,14 @@ def test_large_blobs_untracked_with_pointers() -> None:
 
 
 def test_gitignore_covers_cad_and_data() -> None:
+    """`.gitignore` keeps ignoring the CAD binaries and the generated .npz."""
     gitignore = _read(".gitignore")
     for pattern in ("*.stl", "*.FCStd", "docs/3D_printing_files/*", "training/data/*.npz"):
         assert pattern in gitignore, f".gitignore no longer ignores '{pattern}'"
 
 
 def test_jetson_image_sha_stays_a_reachable_hash() -> None:
+    """The deploy-record SHA stays a full 40-hex hash (never blank/short/garbage)."""
     # Phase A must not mutate the deploy pin; Phase B re-pins it to a rewritten,
     # still-40-hex, reachable SHA. Either way it is never blank/short/garbage.
     record = json.loads(_JETSON_IMAGE.read_text(encoding="utf-8"))
@@ -116,6 +150,7 @@ def test_jetson_image_sha_stays_a_reachable_hash() -> None:
 
 
 def test_fetch_data_is_regeneration_first() -> None:
+    """fetch_data.sh regenerates via the pipeline by default, HF as an opt-in fast path."""
     fetch = _read("scripts/fetch_data.sh")
     assert _FETCH.exists()
     # Regeneration is the authoritative path; the HF mirror is an opt-in fast path.
@@ -126,6 +161,7 @@ def test_fetch_data_is_regeneration_first() -> None:
 
 
 def test_purge_script_is_safe_and_repin_aware() -> None:
+    """purge_history.sh keeps its opt-in push, commit-map re-pin, and CAD-glob contracts."""
     purge = _read("scripts/purge_history.sh")
     assert _PURGE.exists()
     assert "git filter-repo" in purge, "purge_history.sh lost the filter-repo call"
@@ -146,6 +182,7 @@ def test_purge_script_is_safe_and_repin_aware() -> None:
 
 
 def test_forward_docs_drop_cohesive_agentic_overclaim() -> None:
+    """No forward-facing doc re-asserts the removed 'cohesive agentic system' overclaim."""
     # The reframe replaced "cohesive agentic system" with the wired/not-wired split
     # everywhere a reviewer sees it; none of these surfaces may re-assert it.
     for rel in _FORWARD_DOCS:
@@ -155,11 +192,13 @@ def test_forward_docs_drop_cohesive_agentic_overclaim() -> None:
 
 
 def test_new_scripts_are_fail_fast() -> None:
+    """Both new shell scripts run under ``set -euo pipefail``."""
     for rel in ("scripts/fetch_data.sh", "scripts/purge_history.sh"):
         assert "set -euo pipefail" in _read(rel), f"{rel} must be fail-fast (set -euo pipefail)"
 
 
 def test_curiosity_is_factory_wired() -> None:
+    """The factory defines and calls build_curiosity_module (backs the 'wired' claim)."""
     # Backs README's claim that curiosity is runtime-integrated (not a stub):
     # the factory both defines and calls the builder.
     factory = _read("src/mousedroid/factory.py")

@@ -109,7 +109,7 @@ graph TD
 | Docker `mousedroid:jetson` | L4T PyTorch r36.4.0 | GPU-accelerated container (CUDA 12.6 + TensorRT 10.4) |
 | `mousedroid` process | Python 3.10 asyncio | All AI reasoning + I/O orchestration |
 | Runtime validation layer | Python utilities + shell harnesses | Shared config-backed smoke, verification, and host-driven Jetson validation |
-| Ten Pillars campaign | `validate_pillar.sh` | Headless dispatcher — runs pytest + factory probe for each of the 10 cognitive pillars |
+| Ten Pillars campaign | `validate_pillar.sh` | Headless dispatcher — runs pytest + a live runtime probe (factory builder or direct constructor) for each of the 10 cognitive pillars |
 | LMDB experience store | LMDB on-disk | Persistent experience replay buffer |
 | Llama GGUF model | llama-cpp-python | Local LLM for NL to velocity |
 | ESP32 firmware | C++ (Wave Rover SDK) | Motor PWM control, encoder polling |
@@ -316,11 +316,12 @@ used by `jetson_full_smoke_run.sh`. Voice smoke status: **PASS** (39,424 samples
 `en_US-lessac-medium`, `20260425T192408Z`).
 
 **Ten Pillars campaign** (`scripts/validate_pillar.sh all`): runs 20 checks (10 pytest stages +
-10 factory probes) across all cognitive pillars. Last result: **Overall: PASS — 20/20**
+10 live runtime probes — factory builder or direct constructor per pillar) across all cognitive
+pillars. Last result: **Overall: PASS — 20/20**
 (`2026-04-26T23:55:42Z`, Jetson Orin Nano, CUDA 12.6, TensorRT 10.4.0).
 
-| Pillar | pytest marker | Factory probe class |
-| ------ | ------------- | ------------------- |
+| Pillar | pytest marker | Runtime probe (factory builder or direct constructor) |
+| ------ | ------------- | ----------------------------------------------------- |
 | world_model | `unit/world_model/` | `build_world_model(cfg)` |
 | cognitive | `unit/cognitive/` | `build_cognitive_core(cfg)` |
 | memory | `unit/memory/` | `build_memory_tier(cfg)` |

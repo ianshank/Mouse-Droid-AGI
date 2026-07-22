@@ -301,9 +301,9 @@ Runtime overlays may be supplied explicitly or through `MOUSEDROID_CONFIGS` / `M
 
 ### Ten Pillars Validation
 
-The pillar-validation campaign verifies every cognitive pillar end-to-end on the Jetson — the
-pytest test suite plus, for the pillars that expose a factory builder, a live in-container probe
-(the remaining pillars validate via in-process pytest delegation):
+The pillar-validation campaign (`validate_pillar.sh`) runs, for each of the 10 cognitive pillars,
+its headless pytest set plus a live in-container runtime probe (a factory builder or a direct
+constructor — see the probe table below):
 
 ```bash
 # Run the full campaign (all 10 pillars, ~10 min on Jetson)
@@ -322,7 +322,7 @@ and the full SUMMARY.md produced by `scripts/jetson_full_smoke_run.sh` appends t
 `## Ten Pillars Validation` section.
 
 **Latest campaign result** (`2026-04-26T23:55:42Z`): **Overall: PASS — 20/20 checks green**
-(10 pytest stages + 10 factory probes; Jetson Orin Nano, CUDA 12.6, TensorRT 10.4.0).
+(10 pytest stages + 10 live runtime probes; Jetson Orin Nano, CUDA 12.6, TensorRT 10.4.0).
 
 See [docs/planning/TEN_PILLARS_VALIDATION.md](docs/planning/TEN_PILLARS_VALIDATION.md) for the
 full operator validation plan, per-pillar pass criteria, and telemetry requirements.

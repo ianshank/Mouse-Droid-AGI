@@ -56,9 +56,17 @@ cd "${REPO_ROOT}"
 if [ "${MODE}" = "hf" ]; then
   TARGET="${DATA_DIR%/}/bdi_annotations.npz"
 else
-  REGEN_DIR="$(
-    python -c "from pathlib import Path; from mousedroid.config.loader import load_settings; print(load_settings(Path('${CONFIG}')).training.data_dir)" \
-      2>/dev/null || echo "training/data"
+  # Pass CONFIG as an argv value (never interpolated into Python source — a crafted
+  # path could otherwise break out of the string literal), and let a load/import
+  # error propagate under `set -e` rather than masking it with a wrong-path fallback.
+  REGEN_DIR="$(python - "${CONFIG}" <<'PY'
+import sys
+from pathlib import Path
+
+from mousedroid.config.loader import load_settings
+
+print(load_settings(Path(sys.argv[1])).training.data_dir)
+PY
   )"
   TARGET="${REGEN_DIR%/}/bdi_annotations.npz"
 fi
