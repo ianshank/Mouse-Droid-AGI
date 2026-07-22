@@ -677,5 +677,35 @@ until a soak gate passes. Non-negotiable contracts:
   `docs/runbooks/jetson-on-device-learning.md` (+ soak-gate framing) and
   `docs/architecture/c4-on-device-learning.md`.
 
+## Portfolio reframe + large-artifact handling (PR #167)
+
+The project is framed as an **edge-AI / robotics portfolio** ("MouseDroid"), not a claim of
+general intelligence. The
+cognitive-stack tables (README / `docs/CHARTER.md`) are split on the **runtime-integration** axis,
+not implemented-vs-stub: seven pillars are wired into the 30 Hz loop (`world_model`, `cognitive`,
+`learning`, `memory`, `reward`, `safety`, `curiosity` — the last via the memory subsystem), three
+are implemented + unit-tested but not yet wired (`meta`, `growth`, `scaling`), and `arm/` is
+parked. Non-negotiable contracts, pinned by `tests/regression/test_portfolio_reframe_aqa.py`:
+
+- **Brand is docs-only.** The rename is a case-sensitive whole-token sweep of the legacy brand
+  token to `MouseDroid`; it never touches the `mousedroid` package, `MOUSEDROID_*` env prefixes, or
+  config keys, and
+  it excludes dated/append-only history (`CHANGELOG.md`, `progress.md`, `docs/superpowers/plans/*`).
+  No forward-facing doc may re-assert the old general-intelligence "cohesive-agentic" framing (the
+  regression AQA greps for the literal phrase, so describe it hyphenated as here).
+- **Large binaries are untracked, not deleted.** `training/data/bdi_annotations.npz` (generated) and
+  `docs/3D_printing_files/*.stl|*.FCStd` are gitignored + `.dockerignore`d with pointer READMEs.
+  `scripts/fetch_data.sh` is **regeneration-first** (`python -m training.run_pipeline --config <cfg>
+  --phases 0`; `--from-hf` is an opt-in HF-dataset mirror) and resolves the output dir from the
+  config's `training.data_dir` — passing `CONFIG` as `sys.argv` (NEVER interpolated into Python
+  source) and letting a load error propagate rather than masking it with a wrong-path fallback.
+- **History purge is operator-run + complete.** `scripts/purge_history.sh` (runbook:
+  `docs/runbooks/history-purge.md`; C4: `docs/architecture/c4-artifact-storage.md`) does a
+  `git clone --mirror` (rewrites ALL refs — a blob reachable from any un-rewritten branch defeats the
+  purge), `git filter-repo` globbing the CAD *binaries* so the pointer README survives, a commit-map
+  re-pin of `deployments/jetson-image.json` (NOT HEAD — preserves the `config-compat` gate's schema),
+  a config-compat verify in a worktree, then `git push --force --all`/`--tags`. Dry-run by default;
+  `--push` is the opt-in gate. Default branch is resolved from the TARGET remote (`ORIGIN_URL`).
+
 See `AGENTS.md` (agentic-worker behavioural contract) and `SKILLS.md`
 (capability index keyed by trigger phrase) for additional context.

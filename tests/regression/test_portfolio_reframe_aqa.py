@@ -140,6 +140,16 @@ def test_gitignore_covers_cad_and_data() -> None:
         assert pattern in gitignore, f".gitignore no longer ignores '{pattern}'"
 
 
+def test_dockerignore_and_c4_reflect_artifact_handling() -> None:
+    """The Docker build context excludes the generated artefacts and the C4 doc exists."""
+    dockerignore = _read(".dockerignore")
+    for pattern in ("training/data/*.npz", "docs/3D_printing_files/"):
+        assert pattern in dockerignore, f".dockerignore no longer excludes '{pattern}'"
+    assert (
+        _REPO_ROOT / "docs" / "architecture" / "c4-artifact-storage.md"
+    ).is_file(), "the artifact-storage C4 doc referenced by CLAUDE.md / CHANGELOG is missing"
+
+
 def test_jetson_image_sha_stays_a_reachable_hash() -> None:
     """The deploy-record SHA stays a full 40-hex hash (never blank/short/garbage)."""
     # Phase A must not mutate the deploy pin; Phase B re-pins it to a rewritten,

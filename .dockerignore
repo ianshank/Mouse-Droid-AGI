@@ -52,8 +52,14 @@ Thumbs.db
 /tmp/
 *.log
 
-# 3D printing files
+# 3D printing files (large CAD binaries — distributed as a GitHub Release; see the pointer README)
 docs/3D_printing_files/
+*.stl
+*.FCStd
+
+# Generated training artefacts (large binaries — regenerated via scripts/fetch_data.sh)
+training/data/*.npz
+training/data/*.pt
 
 # Weights (large model files -- download at runtime)
 weights/

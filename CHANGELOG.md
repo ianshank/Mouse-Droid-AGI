@@ -8,6 +8,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — Reframed as the "MouseDroid" edge-robotics portfolio; large blobs untracked (PR #167)
+
+Rebranded every forward-facing surface `MouseDroidAGI` → `MouseDroid` (case-sensitive
+whole-token sweep — the `mousedroid` package and `MOUSEDROID_*` env prefixes are unchanged;
+dated/append-only history is left intact) and dropped the "10 Pillars … cohesive agentic
+system" AGI headline for an honest **edge-AI / robotics portfolio** framing. The README now
+leads with a hardware-demo slot and splits the cognitive-stack table on the
+**runtime-integration** axis — seven pillars wired into the 30 Hz loop (incl. `curiosity`, via
+the memory subsystem), three implemented-but-not-yet-wired (`meta` / `growth` / `scaling`), the
+`arm/` platform parked. Mirrored into `docs/CHARTER.md`, `CLAUDE.md`, `HARNESS_SPEC.md`, and
+`docs/architecture/*`.
+
+Stopped tracking the 25.8 MB generated `training/data/bdi_annotations.npz` and the ~6.5 MB
+`docs/3D_printing_files/` CAD binaries (both gitignored + `.dockerignore`d, with pointer
+READMEs). `scripts/fetch_data.sh` regenerates the `.npz` via the pipeline (HF mirror as an
+opt-in fast path, `CONFIG` passed as argv — never interpolated into Python source);
+`scripts/purge_history.sh` (+ `docs/runbooks/history-purge.md`, `docs/architecture/c4-artifact-storage.md`)
+is the operator-run, dry-run-default `git filter-repo` history purge — a `--mirror` clone that
+rewrites **all** refs, globs the CAD *binaries* so the pointer README survives, re-pins
+`deployments/jetson-image.json` to the commit-map image of the deployed SHA (so the
+`config-compat` gate survives the rewrite), and `git push --force --all`/`--tags`. Pinned by the
+new regression AQA `tests/regression/test_portfolio_reframe_aqa.py`.
+
 ### Added — Phase-1 ci.sh OOM guard with ulimit + slim-mode retry (PR #161)
 
 Rover Phase-1 `docker exec ... bash scripts/ci.sh` was routinely SIGKILL'd
