@@ -1,5 +1,5 @@
 # =============================================================================
-# MouseDroidAGI — Docker Compose systemd service
+# MouseDroid — Docker Compose systemd service
 # =============================================================================
 # Manages the mousedroid container lifecycle via docker compose.
 #
@@ -14,7 +14,7 @@
 # =============================================================================
 
 [Unit]
-Description=MouseDroid AGI — Docker Container Runtime
+Description=MouseDroid — Docker Container Runtime
 Documentation=https://github.com/ianshank/Mouse-Droid-Jetson-Nano
 After=docker.service network-online.target
 Requires=docker.service

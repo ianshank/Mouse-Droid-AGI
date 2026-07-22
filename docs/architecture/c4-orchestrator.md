@@ -1,6 +1,6 @@
 # C4 Component — Orchestrator (30 Hz sense-plan-act)
 
-> The heart of MouseDroidAGI: an asyncio 30 Hz loop that wires sensors →
+> The heart of MouseDroid: an asyncio 30 Hz loop that wires sensors →
 > world-model → planner → motor commands. Every module is reached
 > through a `@runtime_checkable Protocol`, instantiated by
 > `src/mousedroid/factory.py`.

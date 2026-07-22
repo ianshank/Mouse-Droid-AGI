@@ -1,5 +1,5 @@
 # =============================================================================
-# MouseDroidAGI — Jetson Docker Compose (GPU + Hardware Passthrough)
+# MouseDroid — Jetson Docker Compose (GPU + Hardware Passthrough)
 # =============================================================================
 # Usage:
 #   docker compose -f docker-compose.jetson.yml up -d

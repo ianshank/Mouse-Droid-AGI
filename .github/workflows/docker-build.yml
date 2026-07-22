@@ -1,5 +1,5 @@
 # =============================================================================
-# MouseDroidAGI — Docker Build Validation
+# MouseDroid — Docker Build Validation
 # =============================================================================
 # Validates Dockerfile.jetson and docker-compose.jetson.yml on changes.
 # Build-check only — no push to any registry.

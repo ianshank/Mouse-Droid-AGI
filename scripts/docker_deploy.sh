@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# MouseDroidAGI — Docker Deploy Script for Jetson
+# MouseDroid — Docker Deploy Script for Jetson
 # =============================================================================
 # Idempotent deployment: pull image, build container, deploy config, start.
 # Optionally installs and enables the systemd service for container management.
@@ -141,7 +141,7 @@ fi
 # ---------------------------------------------------------------------------
 # Pre-flight checks
 # ---------------------------------------------------------------------------
-info "=== MouseDroidAGI Docker Deployment ==="
+info "=== MouseDroid Docker Deployment ==="
 info "  Install dir:  ${INSTALL_DIR}"
 info "  Config dir:   ${CONFIG_DIR}"
 info "  Compose file: ${COMPOSE_FILE}"

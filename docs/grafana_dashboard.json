@@ -25,7 +25,7 @@
       }
     ]
   },
-  "description": "Real-time monitoring of MouseDroidAGI navigation system health and performance on Jetson Orin Nano.",
+  "description": "Real-time monitoring of MouseDroid navigation system health and performance on Jetson Orin Nano.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -1529,7 +1529,7 @@
     ]
   },
   "timezone": "browser",
-  "title": "MouseDroidAGI -- System Overview",
+  "title": "MouseDroid -- System Overview",
   "uid": "mousedroid-overview",
   "version": 3
 }

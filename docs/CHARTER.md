@@ -1,4 +1,4 @@
-# Project Charter — MouseDroidAGI
+# Project Charter — MouseDroid
 
 > This charter is the project **constitution**. It sits *above* the day-to-day
 > guidance surfaces and states what the project is for, what is in and out of
@@ -18,12 +18,15 @@
 
 ## 1. Vision
 
-A Star Wars MSE-6 ("mouse droid") autonomous-navigation system and hierarchical
-robot-arm training platform running on an NVIDIA Jetson Orin Nano, implementing
-the 10 Pillars of the Ideal Neural Network as one cohesive agentic system. The
-same reusable cognitive core (world model, safety, reward, memory, curiosity,
-continual learning) drives both the `mouse_droid` rover and the `robot_arm`
-manipulation platform, selected by config, never by forking the code.
+A Star Wars MSE-6 ("mouse droid") autonomous-navigation system running on an NVIDIA Jetson
+Orin Nano — an edge-AI / robotics engineering project, not a product and not a claim of general
+intelligence. The cognitive stack is organised around a "10 Pillars of the Ideal Neural
+Network" research framing used as an engineering compass: every pillar is real, unit-tested
+code, and the honest axis is integration — seven pillars (world model, cognitive architecture,
+memory, continual learning, reward, safety, curiosity) are wired into the 30 Hz runtime loop
+(curiosity via the memory subsystem), while three (meta-learning, growth/distillation, scaling)
+are implemented and tested but not yet wired in (§5). The same reusable cognitive core also underpins a parked `robot_arm` manipulation
+platform, selected by config rather than by forking the code.
 
 ## 2. Mission
 
@@ -43,13 +46,13 @@ gracefully when a sensor, radio, or uplink is absent rather than crash-looping.
 
 ## 3. Scope
 
-**In scope:** The `orchestrator/` 30 Hz sense-plan-act loop, the 10-pillar
-cognitive stack (`world_model/`, `cognitive/`, `memory/`, `learning/`, `meta/`,
-`curiosity/`, `growth/`, `reward/`, `scaling/`, `safety/`), the `arm/`
-four-layer hierarchical-reasoning
-platform (perception → symbolic planning → world modelling → motor control), the
-sensing / comms / telemetry / resilience infrastructure, the unified
-camera+lidar+fusion dashboard, and the validation / smoke / preflight harness.
+**In scope:** The `orchestrator/` 30 Hz sense-plan-act loop; the cognitive stack — seven pillars
+wired into the runtime (`world_model/`, `cognitive/`, `memory/`, `learning/`, `reward/`,
+`safety/`, `curiosity/`) plus three implemented-but-not-yet-wired modules (`meta/`, `growth/`,
+`scaling/`; §5); the parked `arm/` four-layer hierarchical-reasoning platform (perception →
+symbolic planning → world modelling → motor control); the sensing / comms / telemetry /
+resilience infrastructure, the unified camera+lidar+fusion dashboard, and the validation / smoke /
+preflight harness.
 
 **Out of scope:**
 
@@ -171,6 +174,11 @@ is authoritative). Statuses reflect the roadmap docs at time of ratification.
 - **M6 — On-Device Incremental Learning (Phase 6)** 🔜 ACTIVE — between-cloud-cycle
   RSSM refinement on a gated, integrity-checked weight slot with auto-revert;
   functional, default-OFF, and soak-gated (§3 carve-out).
+- **Cognitive-pillar integration** 🔬 — `meta/` (MAML + in-context adaptation), `growth/`
+  (knowledge distillation), and `scaling/` (MoE + adaptive compute) are implemented and
+  unit-tested (`tests/unit/{meta,growth,scaling}/`) but not yet instantiated by `factory.py` /
+  the orchestrator. They are promoted into the 30 Hz runtime loop only when a concrete need and a
+  gate exist — not before. (`curiosity/` completed this path and is already wired.)
 
 ## 6. How Agents Use This Document
 

@@ -1,4 +1,4 @@
-# SKILLS.md — Skill index for MouseDroidAGI
+# SKILLS.md — Skill index for MouseDroid
 
 > Maps high-level capability to the *files an agent should read* + *commands
 > an agent should run* to exercise that capability. Companion to
@@ -12,6 +12,34 @@ skill. If no project-local skill matches, fall back to the
 ---
 
 ## Operational skills (operator-facing)
+
+### large-artifact-handling
+
+**Trigger:** "the clone is huge / bloated", "regenerate `bdi_annotations.npz`",
+"get the CAD / STL files", "purge the big files from git history", "why is
+`.git` so large".
+
+**Read:**
+- `training/data/README.md` + `docs/3D_printing_files/README.md` — where the blobs live now
+- `scripts/fetch_data.sh` — regenerate the `.npz` (or `--from-hf` mirror)
+- `scripts/purge_history.sh` + `docs/runbooks/history-purge.md` — the operator-run history purge
+- `docs/architecture/c4-artifact-storage.md` — C4 diagram
+
+**Run:**
+```bash
+# Regenerate the training annotations (default), or pull the HF mirror
+bash scripts/fetch_data.sh
+bash scripts/fetch_data.sh --from-hf
+
+# History purge — DRY RUN first (clone -> purge -> verify; NO push), then --push
+bash scripts/purge_history.sh
+bash scripts/purge_history.sh --push
+```
+
+**Guardrails:** the purge is destructive + irreversible (rewrites every commit
+SHA). Preserve the blobs externally first (HF dataset + `hardware-v6` Release),
+and never commit the demo video or a regenerated `.npz` — they are gitignored
+for a reason. Contracts pinned by `tests/regression/test_portfolio_reframe_aqa.py`.
 
 ### dashboard-proxy
 

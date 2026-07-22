@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# MouseDroidAGI — Monitoring Stack Deployment Helper
+# MouseDroid — Monitoring Stack Deployment Helper
 # =============================================================================
 # Brings up the compose-based Prometheus / Grafana / Loki stack on the Jetson,
 # optionally configures secure Prometheus bearer-token scraping, and verifies

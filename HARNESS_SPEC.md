@@ -1,4 +1,4 @@
-# HARNESS_SPEC.md — MouseDroidAGI
+# HARNESS_SPEC.md — MouseDroid
 
 **Spec-Driven Development & Validation harness — Harness Engineering v2.1**
 
@@ -18,7 +18,7 @@ game.
 
 ```yaml
 project:
-  name: "MouseDroidAGI"
+  name: "MouseDroid"
   slug: "mousedroid"
   version: "0.3.0"
   status: "active"          # planning | active | validated | archived
@@ -34,9 +34,11 @@ project:
 
 ## 2. Executive Intent (The Seed)
 
-MouseDroidAGI is a Star Wars MSE-6 autonomous navigation system and hierarchical
-robot-arm training platform on a Jetson Orin Nano, implementing the 10 Pillars of the
-Ideal Neural Network as a cohesive agentic system. "Shipped and valuable" means the
+MouseDroid is a Star Wars MSE-6 autonomous-navigation system on a Jetson Orin Nano (with a
+parked hierarchical robot-arm training platform). Its cognitive stack follows a "10 Pillars of
+the Ideal Neural Network" research framing used as an engineering compass — seven pillars are
+wired into the runtime loop, three are implemented but not yet wired in — not a claim of general
+intelligence. "Shipped and valuable" means the
 rover senses, plans, and acts on a deterministic 30 Hz reactive loop, with a
 deliberative cloud/local LLM brain translating natural language into goals *outside* the
 hot loop, all under a constitutional safety monitor — and that every claim of "done" is
@@ -322,5 +324,5 @@ pytest. Observability: structlog structured events + Prometheus families. ADRs i
 
 | Version | Change |
 |---------|--------|
-| 2.1 (adopted) | Adopted the v2.1 template into MouseDroidAGI: schema + tier-gated `validate.py` + DAG-aware `select_next.py` + standalone `harness.yml`. Seeded 8 features mapping to real checks. ADRs reuse `docs/architecture/`. `F-001` validated by `scripts/validations/F-001.sh` (avoids the template's recursive `--check`). See ADR-012. |
+| 2.1 (adopted) | Adopted the v2.1 template into MouseDroid: schema + tier-gated `validate.py` + DAG-aware `select_next.py` + standalone `harness.yml`. Seeded 8 features mapping to real checks. ADRs reuse `docs/architecture/`. `F-001` validated by `scripts/validations/F-001.sh` (avoids the template's recursive `--check`). See ADR-012. |
 | 2.1 + F-namespaces | Declared the two independent F-number sequences (catalog vs SMOKE_REPORT findings); catalog continues from F-015, skipping the finding-burned 9–14. Landed with the rev. B software work streams (F-015..F-020, PR #151). |

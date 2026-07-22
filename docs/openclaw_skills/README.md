@@ -1,7 +1,7 @@
-# OpenClaw Skills for MouseDroidAGI
+# OpenClaw Skills for MouseDroid
 
 This directory documents the four publishable OpenClaw skills that ship
-with MouseDroidAGI. Each subdirectory contains a `SKILL.md` operators
+with MouseDroid. Each subdirectory contains a `SKILL.md` operators
 copy into `~/.openclaw/workspace/skills/` on the **dedicated Mac mini
 host** that runs the OpenClaw agent runtime.
 
@@ -10,7 +10,7 @@ host** that runs the OpenClaw agent runtime.
 ```
 +---------------------------+               +---------------------------+
 |  Mac mini (OpenClaw host) |  Tailscale    |   Jetson Orin Nano        |
-|  - OpenClaw daemon        | <-----------> |   - MouseDroidAGI         |
+|  - OpenClaw daemon        | <-----------> |   - MouseDroid         |
 |  - SKILL.md packages      |   tailnet     |     (Docker container)    |
 |  - SOUL.md persona        |               |   - Telemetry :8080       |
 +---------------------------+               |   - MCP :8765             |

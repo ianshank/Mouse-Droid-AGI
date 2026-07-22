@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-MouseDroidAGI runs a 30 Hz sense-plan-act loop on a Jetson Orin Nano where
+MouseDroid runs a 30 Hz sense-plan-act loop on a Jetson Orin Nano where
 a single GPU time-slices 7+ concurrent inference workloads: YOLO detection,
 feature extraction, RSSM world modeling, MCTS rollouts, SAC policy inference,
 LLM replanning, and arm 6-DoF pose estimation.

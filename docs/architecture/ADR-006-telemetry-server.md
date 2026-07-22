@@ -6,7 +6,7 @@ WiFi/Ethernet Telemetry Server Using aiohttp REST + WebSocket
 
 ## Context
 
-MouseDroidAGI runs as a headless system on a Jetson Orin Nano without a connected display. Developers and operators need a way to:
+MouseDroid runs as a headless system on a Jetson Orin Nano without a connected display. Developers and operators need a way to:
 
 1. Inspect the real-time sensor frame (camera features, sonar, encoder, battery) from a laptop on the same network.
 2. Monitor hardware health (GPU temperature, CPU load, battery voltage) without SSH.

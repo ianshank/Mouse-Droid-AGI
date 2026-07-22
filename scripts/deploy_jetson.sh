@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# MouseDroidAGI — Jetson Orin Nano Deployment
+# MouseDroid — Jetson Orin Nano Deployment
 # =============================================================================
 # Idempotent deployment script supporting both bare-metal (venv) and
 # Docker container modes.

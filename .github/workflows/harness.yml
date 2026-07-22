@@ -1,5 +1,5 @@
 # =============================================================================
-# MouseDroidAGI — Spec-Driven Harness Gate
+# MouseDroid — Spec-Driven Harness Gate
 # =============================================================================
 # Enforces HARNESS_SPEC.md: validates features.yaml against features.schema.json,
 # checks dependency-DAG integrity, verifies `implemented_in` resolves to a real

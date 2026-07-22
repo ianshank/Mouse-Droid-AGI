@@ -1,4 +1,4 @@
-# ADR: L4T Container Deployment for MouseDroidAGI
+# ADR: L4T Container Deployment for MouseDroid
 
 > **ADR ID**: ADR-l4t-container
 > **Date**: 2026-03-11
@@ -9,7 +9,7 @@
 
 ## Context
 
-MouseDroidAGI requires GPU-accelerated PyTorch (CUDA) on the Jetson Orin Nano for real-time RSSM inference and MCTS planning at 30 Hz. The current venv-based deployment can only run PyTorch in CPU mode because:
+MouseDroid requires GPU-accelerated PyTorch (CUDA) on the Jetson Orin Nano for real-time RSSM inference and MCTS planning at 30 Hz. The current venv-based deployment can only run PyTorch in CPU mode because:
 
 1. PyPI and all NVIDIA pip indexes serve CPU-only `aarch64` wheels
 2. Building PyTorch from source takes 4-6 hours and is fragile
@@ -19,7 +19,7 @@ MouseDroidAGI requires GPU-accelerated PyTorch (CUDA) on the Jetson Orin Nano fo
 
 ## Decision
 
-Adopt **NVIDIA L4T PyTorch container** (`nvcr.io/nvidia/l4t-pytorch:r36.4.0-pth2.5-py3`) as the runtime for MouseDroidAGI on the Jetson. The project code is volume-mounted into the container (not baked in), enabling rapid iteration.
+Adopt **NVIDIA L4T PyTorch container** (`nvcr.io/nvidia/l4t-pytorch:r36.4.0-pth2.5-py3`) as the runtime for MouseDroid on the Jetson. The project code is volume-mounted into the container (not baked in), enabling rapid iteration.
 
 ---
 

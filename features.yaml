@@ -116,7 +116,7 @@ features:
     notes: ""
 
   - id: "F-007"
-    epic: "AGI pillars"
+    epic: "Cognitive pillars"
     name: "Ten-pillar validation harness is green"
     description: >-
       The async validate_all_pillars dispatcher (factory-builder + pytest-delegation

@@ -1,5 +1,5 @@
 # =============================================================================
-# MouseDroidAGI -- CPU-only Development Image
+# MouseDroid -- CPU-only Development Image
 # =============================================================================
 # For CI runners and contributors without Jetson hardware.
 # Includes full dev toolchain (pytest, ruff, mypy, hypothesis).
@@ -13,7 +13,7 @@
 FROM python:3.11-slim
 
 LABEL maintainer="Ian Cruickshank"
-LABEL description="MouseDroidAGI -- CPU-only dev/CI image (no Jetson hardware)"
+LABEL description="MouseDroid -- CPU-only dev/CI image (no Jetson hardware)"
 LABEL version="0.3.0"
 
 ENV DEBIAN_FRONTEND=noninteractive

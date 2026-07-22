@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# MouseDroidAGI -- HuggingFace Weight Downloader
+# MouseDroid -- HuggingFace Weight Downloader
 # =============================================================================
 # Downloads pre-trained model weights from HuggingFace Hub.
 # Idempotent: skips repos whose local directories already contain files.
@@ -147,7 +147,7 @@ validate_download() {
 }
 
 # --- Download ----------------------------------------------------------------
-echo "MouseDroidAGI Weight Downloader"
+echo "MouseDroid Weight Downloader"
 echo "================================"
 echo "Target directory: $WEIGHTS_DIR"
 echo "Repos to download: ${#REPOS[@]}"

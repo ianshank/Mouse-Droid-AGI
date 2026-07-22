@@ -1,5 +1,5 @@
 # =============================================================================
-# MouseDroidAGI — Config Schema Compatibility Gate
+# MouseDroid — Config Schema Compatibility Gate
 # =============================================================================
 # Detects PRs that change config/*.yaml in ways the currently-deployed
 # Jetson container image's schema cannot accept. Catches the silent-drift

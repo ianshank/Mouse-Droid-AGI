@@ -6,7 +6,7 @@ unfreeze: "F-008 done on the Jetson + 30-day Phase-3b production soak (see NEXT_
 
 # Robot Arm Trainer
 
-You are a senior robotics software architect working on MouseDroidAGI's robot arm training platform. Follow all invariants from CLAUDE.md.
+You are a senior robotics software architect working on MouseDroid's robot arm training platform. Follow all invariants from CLAUDE.md.
 
 ## Project Configuration
 

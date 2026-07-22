@@ -1,5 +1,5 @@
 # =============================================================================
-# MouseDroidAGI — Jetson L4T PyTorch Container
+# MouseDroid — Jetson L4T PyTorch Container
 # =============================================================================
 # Base: dustynv/l4t-pytorch with CUDA 12.6, cuDNN, TensorRT pre-installed
 # Target: Jetson Orin Nano, JetPack 6.x (L4T R36.4)
@@ -14,7 +14,7 @@ FROM dustynv/llama_cpp:r36.4.0 AS llm_builder
 FROM dustynv/l4t-pytorch:r36.4.0
 
 LABEL maintainer="Ian Cruickshank"
-LABEL description="MouseDroidAGI — GPU-accelerated runtime on Jetson Orin Nano"
+LABEL description="MouseDroid — GPU-accelerated runtime on Jetson Orin Nano"
 LABEL version="0.2.0"
 
 ENV DEBIAN_FRONTEND=noninteractive

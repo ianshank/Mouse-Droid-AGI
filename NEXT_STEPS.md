@@ -1,4 +1,4 @@
-# MouseDroidAGI — Next Steps
+# MouseDroid — Next Steps
 
 Forward-looking priorities only. Landed work moves to `CHANGELOG.md` (see the
 "Historical record" section there); the machine-readable source of "what's
@@ -58,6 +58,15 @@ The legacy v0.3.0 execution-plan phase numbering lives only in
 8. **[Hygiene — P2] Review the dead-code audit report** (`scripts/dead_code_audit.py`,
    **F-020**) after each significant merge; promote the advisory `gitleaks` /
    `vulture-audit` CI stages when `scripts/check_advisory_promotions.py` flags them due.
+9. **[Portfolio — P2] Record the 60-second hardware demo clip** (droid navigating +
+   avoiding obstacles on the Jetson) and drop it into the README `## ▶ Demo` slot — hosted as
+   a `hardware-v6`-style GitHub Release asset or external link, **never** committed (that
+   re-creates the bloat the reframe just removed). This clip is the headline portfolio artifact.
+10. **[Portfolio — P2] Run the git-history purge** once the reframe PR (#167) merges:
+    preserve the blobs first (`bdi_annotations.npz` → HF dataset, CAD → `hardware-v6` Release),
+    then `bash scripts/purge_history.sh` (dry-run) → `--push`. Shrinks `.git` ~28 MB → ~2 MB.
+    Destructive + irreversible — see `docs/runbooks/history-purge.md`. Also rename the GitHub
+    repo slug `Mouse-Droid-AGI` → `mouse-droid` (Settings; URLs auto-redirect).
 
 ---
 

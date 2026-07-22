@@ -1,4 +1,4 @@
-# Promtail configuration -- MouseDroidAGI log collection
+# Promtail configuration -- MouseDroid log collection
 #
 # Collects logs from two sources on the Jetson Orin Nano:
 # 1. systemd journal (mousedroid.service unit)

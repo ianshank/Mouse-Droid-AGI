@@ -1,8 +1,8 @@
-# MouseDroidAGI — Claude Code Project Instructions
+# MouseDroid — Claude Code Project Instructions
 
 ## Overview
 
-MouseDroidAGI is a Star Wars MSE-6 autonomous navigation system and hierarchical robot arm training platform running on NVIDIA Jetson Orin Nano. It implements the 10 Pillars of the Ideal Neural Network as a cohesive agentic system.
+MouseDroid is a Star Wars MSE-6 autonomous-navigation system running on an NVIDIA Jetson Orin Nano (with a parked hierarchical robot-arm training platform) — an edge-AI / robotics engineering project, not a claim of general intelligence. Its cognitive stack is organised around a "10 Pillars of the Ideal Neural Network" research framing used as an engineering compass: every pillar is real, unit-tested code, and the honest axis is integration — seven pillars (world model, cognitive, memory, continual learning, reward, safety, curiosity) are wired into the 30 Hz runtime loop (curiosity via the memory subsystem), while three (meta, growth, scaling) are implemented and tested but not yet wired in.
 
 > **Governance:** `docs/CHARTER.md` is the project constitution (vision, scope, invariants, roadmap) and sits above this document. When a change touches scope or an invariant, defer to the charter.
 
@@ -150,7 +150,7 @@ bash scripts/ci.sh
 When adding hardware probes or pillar checks, follow the established split:
 
 - **`src/mousedroid/validation/preflight.py`** — async `run_preflight(cfg)` for hardware probes. Add a check by writing an `async _check_<name>(cfg) -> PreflightCheckResult` and registering it in `_CHECK_DISPATCH`. The dispatcher catches per-check exceptions and records them as `FAIL` so a single misbehaving driver never crashes the operator runbook.
-- **`src/mousedroid/validation/pillars.py`** — async `validate_all_pillars(cfg)` over the 10 AGI pillars. Two patterns:
+- **`src/mousedroid/validation/pillars.py`** — async `validate_all_pillars(cfg)` over the 10 cognitive pillars. Two patterns:
   - **Pattern A (factory builder)**: when a `build_<pillar>` factory exists, instantiate + smoke-assert. **Use explicit `if x is None: return _fail(...)` instead of `assert x is not None`** — assert is stripped under `-O` (PYTHONOPTIMIZE=1, the default Jetson Docker entrypoint).
   - **Pattern B (pytest delegation)**: when no factory builder exists yet, delegate to the pillar's existing unit-test module via in-process `pytest.main`. Paths in `_PYTEST_DELEGATION_PATHS` are repo-relative and resolved against module-level `_REPO_ROOT = Path(__file__).resolve().parents[3]` so the dispatcher works regardless of caller CWD.
 - **`src/mousedroid/cli/{preflight,validate_pillars}.py`** — argparse wrappers over the async APIs. CLI exit-code contract: `0` on `OK` or `DEGRADED` (WARN-only); `1` only on `FAIL`. Don't return `1` on `DEGRADED` — CI uses these codes as the canonical "is the dispatcher broken?" signal.
@@ -676,6 +676,36 @@ until a soak gate passes. Non-negotiable contracts:
   `tests/integration/test_on_device_sim_soak.py`. See
   `docs/runbooks/jetson-on-device-learning.md` (+ soak-gate framing) and
   `docs/architecture/c4-on-device-learning.md`.
+
+## Portfolio reframe + large-artifact handling (PR #167)
+
+The project is framed as an **edge-AI / robotics portfolio** ("MouseDroid"), not a claim of
+general intelligence. The
+cognitive-stack tables (README / `docs/CHARTER.md`) are split on the **runtime-integration** axis,
+not implemented-vs-stub: seven pillars are wired into the 30 Hz loop (`world_model`, `cognitive`,
+`learning`, `memory`, `reward`, `safety`, `curiosity` — the last via the memory subsystem), three
+are implemented + unit-tested but not yet wired (`meta`, `growth`, `scaling`), and `arm/` is
+parked. Non-negotiable contracts, pinned by `tests/regression/test_portfolio_reframe_aqa.py`:
+
+- **Brand is docs-only.** The rename is a case-sensitive whole-token sweep of the legacy brand
+  token to `MouseDroid`; it never touches the `mousedroid` package, `MOUSEDROID_*` env prefixes, or
+  config keys, and
+  it excludes dated/append-only history (`CHANGELOG.md`, `progress.md`, `docs/superpowers/plans/*`).
+  No forward-facing doc may re-assert the old general-intelligence "cohesive-agentic" framing (the
+  regression AQA greps for the literal phrase, so describe it hyphenated as here).
+- **Large binaries are untracked, not deleted.** `training/data/bdi_annotations.npz` (generated) and
+  `docs/3D_printing_files/*.stl|*.FCStd` are gitignored + `.dockerignore`d with pointer READMEs.
+  `scripts/fetch_data.sh` is **regeneration-first** (`python -m training.run_pipeline --config <cfg>
+  --phases 0`; `--from-hf` is an opt-in HF-dataset mirror) and resolves the output dir from the
+  config's `training.data_dir` — passing `CONFIG` as `sys.argv` (NEVER interpolated into Python
+  source) and letting a load error propagate rather than masking it with a wrong-path fallback.
+- **History purge is operator-run + complete.** `scripts/purge_history.sh` (runbook:
+  `docs/runbooks/history-purge.md`; C4: `docs/architecture/c4-artifact-storage.md`) does a
+  `git clone --mirror` (rewrites ALL refs — a blob reachable from any un-rewritten branch defeats the
+  purge), `git filter-repo` globbing the CAD *binaries* so the pointer README survives, a commit-map
+  re-pin of `deployments/jetson-image.json` (NOT HEAD — preserves the `config-compat` gate's schema),
+  a config-compat verify in a worktree, then `git push --force --all`/`--tags`. Dry-run by default;
+  `--push` is the opt-in gate. Default branch is resolved from the TARGET remote (`ORIGIN_URL`).
 
 See `AGENTS.md` (agentic-worker behavioural contract) and `SKILLS.md`
 (capability index keyed by trigger phrase) for additional context.

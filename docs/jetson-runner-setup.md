@@ -1,6 +1,6 @@
 # Jetson Self-Hosted Runner Setup
 
-Operator runbook for registering the MouseDroidAGI Jetson Orin Nano as a
+Operator runbook for registering the MouseDroid Jetson Orin Nano as a
 GitHub Actions self-hosted runner so the
 [`.github/workflows/jetson-nightly.yml`](../.github/workflows/jetson-nightly.yml)
 workflow (PR #62) can actually run the Ten Pillars campaign on real

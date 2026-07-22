@@ -1,7 +1,7 @@
 # MouseDroid MCP — Operator Guide
 
 This document shows external Model Context Protocol (MCP) clients how to
-connect to a running MouseDroidAGI instance.
+connect to a running MouseDroid instance.
 
 The MCP server is **disabled by default**. Two settings need to flip:
 

@@ -1,6 +1,8 @@
-# MouseDroidAGI
+# MouseDroid
 
-**A Star Wars MSE-6 "Mouse Droid" autonomous navigation system powered by an Agentic World Model on NVIDIA Jetson Orin Nano.**
+**An autonomous Star Wars MSE-6 "mouse droid" — real-time navigation and obstacle avoidance on an NVIDIA Jetson Orin Nano.**
+
+*A hands-on edge-AI / robotics portfolio project.* A physical MSE-6 replica that senses, plans, and drives itself on constrained edge hardware, built around a config-driven 30 Hz sense–plan–act loop (RSSM latent dynamics → MCTS planning → ESP32 motor control), with a cloud/local LLM brain for natural-language missions running *outside* the real-time loop.
 
 [![Tests](https://img.shields.io/badge/tests-pre--PR%20validated-brightgreen)](tests/)
 [![Coverage](https://img.shields.io/badge/coverage-branch%20gate%2085%25-brightgreen)](scripts/check_branch_coverage.py)
@@ -13,9 +15,21 @@
 
 ---
 
+## ▶ Demo
+
+> **[ TODO — drop the 60-second clip here: the droid navigating and avoiding obstacles live on the Jetson. ]**
+>
+> This clip is the headline artifact — the first thing a reviewer should see. Host it as a
+> **GitHub Release asset** or an external link (never commit the video into the repo, or it
+> re-creates the exact history bloat this project just removed — see
+> [`docs/runbooks/history-purge.md`](docs/runbooks/history-purge.md)), then embed the
+> `user-images.githubusercontent.com/…/clip.mp4` URL right here so it renders inline.
+
+---
+
 ## Overview
 
-MouseDroidAGI implements the **10 Pillars of the Ideal Neural Network** as a cohesive agentic system that enables a physical MSE-6 droid replica to navigate autonomously, avoid obstacles, follow natural language commands, and continuously improve from experience.
+MouseDroid is a physical MSE-6 droid replica that navigates autonomously, avoids obstacles, follows natural-language commands, and improves from experience — all on an NVIDIA Jetson Orin Nano.
 
 The robot is built on a Wave Rover mecanum-wheel chassis, controlled by an ESP32 microcontroller, and powered by a ribbon-connected Raspberry Pi AI Camera (IMX500), USB LiDAR, and USB audio. All high-level reasoning runs on a Jetson Orin Nano.
 
@@ -25,20 +39,44 @@ The Jetson validation path is aligned with the runtime path: smoke scripts, remo
 
 Planning and architecture docs now live under `docs/planning/` and `docs/analysis/` to keep the repo root focused on runtime code and deployment assets.
 
-### The 10 Pillars
+### Cognitive stack
 
-| Pillar | Module | Description |
-| ------ | ------ | ----------- |
-| 1. World Model | `world_model/` + `training/domain_randomization` | Dual-Stream CfC/GRU RSSM latent dynamics + MCTS planning, with per-episode sim-to-real domain randomization driving RSSM pretraining (Phase 1, Physical AI roadmap) |
-| 2. Cognitive Architecture | `cognitive/` | Dual-cadence BDI + metacognitive loop |
-| 3. Memory Systems | `memory/` | Working, episodic, semantic, consolidation |
-| 4. Continual Learning | `learning/` | EWC + progressive neural networks |
-| 5. Meta-Learning | `meta/` | MAML + in-context adaptation |
-| 6. Curiosity & Exploration | `curiosity/` | ICM intrinsic curiosity |
-| 7. Growth & Distillation | `growth/` | Knowledge distillation to smaller models |
-| 8. Reward Modelling | `reward/` | Constitutional multi-objective reward |
-| 9. Scaling | `scaling/` | Mixture-of-Experts + adaptive compute |
-| 10. Safety & Alignment | `safety/` | Constitutional RL + runtime safety monitor |
+> **Design framing.** The cognitive stack is organised around a "10 Pillars of the Ideal
+> Neural Network" research framing — an engineering compass, not a claim of general
+> intelligence. Every module below is real, unit-tested code; the honest distinction is **what
+> is wired into the running droid versus what is implemented but not yet in the loop.** (LOC
+> figures are approximate non-test source lines — a rough maturity proxy, not a quality metric.)
+
+#### Wired into the runtime loop
+
+Built by `factory.py` and driven by the 30 Hz sense-plan-act orchestrator.
+
+| Pillar | Module | What it does |
+| ------ | ------ | ------------ |
+| World Model | `world_model/` (+ `training/domain_randomization`) | Dual-Stream CfC/GRU RSSM latent dynamics + MCTS planning; per-episode sim-to-real domain randomization drives RSSM pretraining (~2.6k LOC) |
+| Cognitive Architecture | `cognitive/` | Dual-cadence BDI + metacognitive loop (~1.2k LOC) |
+| Continual Learning | `learning/` | EWC + progressive neural networks (~3.0k LOC) |
+| Memory Systems | `memory/` | Working, episodic, semantic, consolidation (~0.6k LOC) |
+| Reward Modelling | `reward/` | Constitutional multi-objective reward (~0.6k LOC) |
+| Safety & Alignment | `safety/` | Constitutional RL + runtime safety monitor — joint limits, E-stop (~0.9k LOC) |
+| Curiosity & Exploration | `curiosity/` | ICM intrinsic reward + novelty decay; wired via `build_curiosity_module` when memory is enabled (~0.3k LOC) |
+
+#### Implemented and unit-tested — not yet wired into the loop
+
+Complete, tested modules (`tests/unit/{meta,growth,scaling}/`) that exist as library code but are
+not yet instantiated by the factory / orchestrator. The engineering is done; the integration is not.
+
+| Pillar | Module | What it does |
+| ------ | ------ | ------------ |
+| Meta-Learning | `meta/` | MAML inner/outer loop + in-context adaptation (~0.2k LOC) |
+| Growth & Distillation | `growth/` | KL+CE knowledge distillation to smaller models (~0.1k LOC) |
+| Scaling | `scaling/` | Sparse top-k Mixture-of-Experts + adaptive-compute halting (~0.2k LOC) |
+
+#### Parked
+
+| Platform | Module | Status |
+| -------- | ------ | ------ |
+| Robot-Arm Platform | `arm/` | Four-layer hierarchical manipulation (Tower of Hanoi → laundry sorting); implemented + tested, but outside the active delivery scope |
 
 ---
 
@@ -263,8 +301,9 @@ Runtime overlays may be supplied explicitly or through `MOUSEDROID_CONFIGS` / `M
 
 ### Ten Pillars Validation
 
-The Ten Pillars campaign verifies every AGI pillar end-to-end on the Jetson — both the pytest test
-suite and a live factory-backed in-container probe for each pillar:
+The pillar-validation campaign (`validate_pillar.sh`) runs, for each of the 10 cognitive pillars,
+its headless pytest set plus a live in-container runtime probe (a factory builder or a direct
+constructor — see the probe table below):
 
 ```bash
 # Run the full campaign (all 10 pillars, ~10 min on Jetson)
@@ -283,7 +322,7 @@ and the full SUMMARY.md produced by `scripts/jetson_full_smoke_run.sh` appends t
 `## Ten Pillars Validation` section.
 
 **Latest campaign result** (`2026-04-26T23:55:42Z`): **Overall: PASS — 20/20 checks green**
-(10 pytest stages + 10 factory probes; Jetson Orin Nano, CUDA 12.6, TensorRT 10.4.0).
+(10 pytest stages + 10 live runtime probes; Jetson Orin Nano, CUDA 12.6, TensorRT 10.4.0).
 
 See [docs/planning/TEN_PILLARS_VALIDATION.md](docs/planning/TEN_PILLARS_VALIDATION.md) for the
 full operator validation plan, per-pillar pass criteria, and telemetry requirements.
