@@ -75,7 +75,7 @@ if TYPE_CHECKING:
     from mousedroid.vla.policy import VLAPolicyProtocol
     from mousedroid.voice.greeting import GreeterProtocol
     from mousedroid.voice.protocol import VoiceEngineProtocol
-    from mousedroid.world_model.protocol import WorldModelProtocol
+    from mousedroid.world_model.protocol import LatentContextProtocol, WorldModelProtocol
 
 _log = get_logger(__name__)
 
@@ -129,6 +129,7 @@ class MouseDroidOrchestrator:
         mission_lifecycle: MissionLifecycle | None = None,
         on_device_coordinator: ReplayTriggerCoordinator | None = None,
         growth_coordinator: GrowthDistillationCoordinator | None = None,
+        latent_context: LatentContextProtocol | None = None,
         greeter: GreeterProtocol | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
@@ -280,6 +281,17 @@ class MouseDroidOrchestrator:
                 the orchestrator byte-identical to pre-feature (no extra task).
                 Distillation only PRODUCES a student slot; deploying it is a
                 separate soak-gated operator decision.
+            latent_context: Optional :class:`LatentContextProtocol` (F-023,
+                ADR-015). When supplied (factory gates on
+                ``cfg.world_model_memory.enabled``), the tick's
+                ``_update_world_model`` stores the RAW validated ``(h, z)``
+                and blends the attention-retrieved context into the carried
+                state — a pure deterministic ``no_grad`` tensor op. Unhealthy
+                (non-finite) ticks skip both calls so today's NaN
+                self-healing is preserved. ``None`` (default) keeps the tick
+                path byte-identical to pre-feature. The memory resets with
+                the OTA weight-swap seam and re-arms its sink at mission
+                boundaries (``recapture_on_mission``).
             greeter: Optional :class:`GreeterProtocol` (Issue #109). When
                 supplied AND ``cfg.greeting`` is enabled with
                 ``fire_on_startup=True``, the orchestrator fires the
@@ -433,6 +445,11 @@ class MouseDroidOrchestrator:
         self._latent_buffer: deque[tuple[torch.Tensor, torch.Tensor]] = deque(
             maxlen=cfg.model.latent_recovery_buffer_size
         )
+        # F-023 bounded-context latent memory. ``None`` (default) keeps the
+        # tick path byte-identical to pre-feature; the recovery buffer above
+        # keeps holding RAW (pre-blend) states so NaN recovery restores the
+        # unblended state.
+        self._latent_context = latent_context
 
     async def start(self) -> None:
         """Start all subsystems."""
@@ -803,6 +820,7 @@ class MouseDroidOrchestrator:
                 self._mission_dispatcher.clear_mission_completed()
             await self._maybe_export_memory(mission_completed=mission_completed)
             self._maybe_reset_curiosity(mission_completed=mission_completed)
+            self._maybe_rearm_latent_sink(mission_completed=mission_completed)
 
             _log.debug(
                 "tick_complete",
@@ -877,6 +895,28 @@ class MouseDroidOrchestrator:
             return
         self._curiosity_module.reset_episode()
         _log.info("curiosity_episode_reset", tick=self._tick_count)
+
+    def _maybe_rearm_latent_sink(self, *, mission_completed: bool) -> None:
+        """Re-arm the bounded-context sink at mission boundaries (F-023).
+
+        Makes the sink a per-mission anchor rather than a stale boot
+        snapshot. Only the sink re-captures; the ring and EMA summary are
+        retained. Gated by ``world_model_memory.recapture_on_mission``
+        (explicit ``None`` checks — no asserts; ``-O``-safe).
+
+        Args:
+            mission_completed: Snapshot of the dispatcher's
+                ``mission_just_completed`` latch from the tick's
+                centralised read.
+        """
+        if not mission_completed:
+            return
+        if self._latent_context is None:
+            return
+        memory_cfg = self._cfg.world_model_memory
+        if memory_cfg is None or not memory_cfg.recapture_on_mission:
+            return
+        self._latent_context.rearm_sink()
 
     async def process_mission(self, nl_command: str) -> GoalVector:
         """Process a natural language mission command.
@@ -1108,6 +1148,11 @@ class MouseDroidOrchestrator:
             self._z = torch.zeros_like(self._z)
             self._prev_action = torch.zeros_like(self._prev_action)
             self._latent_buffer.clear()
+            if self._latent_context is not None:
+                # A sink frozen under the pre-swap weights is stale under the
+                # new weights: clear every store AND re-arm sink warmup so a
+                # fresh anchor is captured post-swap (ADR-015).
+                self._latent_context.reset()
 
         if self._metrics is not None:
             self._metrics.inc_cloud_weight_update_swap(update.engine_type)
@@ -1125,6 +1170,12 @@ class MouseDroidOrchestrator:
     def _update_world_model(self, observation: ObservationProtocol) -> None:
         """Run world model observation step to update latent state.
 
+        When the F-023 bounded-context memory is wired, healthy ticks store
+        the RAW validated state and then blend the retrieved context into the
+        carried ``(h, z)``. Unhealthy ticks (NaN detected — recovered or not)
+        skip both calls so a transient NaN can never poison the memory's
+        EMA/sink and today's self-healing path is preserved.
+
         Args:
             observation: Current sensor observation bundle.
         """
@@ -1135,13 +1186,16 @@ class MouseDroidOrchestrator:
                 self._h,
                 self._z,
             )
-        self._h, self._z = self._validate_latent(self._h, self._z)
+        self._h, self._z, healthy = self._validate_latent(self._h, self._z)
+        if self._latent_context is not None and healthy:
+            self._latent_context.observe(self._h, self._z)
+            self._h, self._z = self._latent_context.contextualize(self._h, self._z)
 
     def _validate_latent(
         self,
         h: torch.Tensor,
         z: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, bool]:
         """Check latent state for NaN / saturation; recover from buffer on NaN.
 
         Performance: three independent scalars (NaN-in-h, NaN-in-z,
@@ -1155,8 +1209,12 @@ class MouseDroidOrchestrator:
             z: Latent state tensor from ``observe_step``.
 
         Returns:
-            ``(h, z)`` — possibly replaced by the last known-good values when
-            NaN is detected and the recovery buffer is non-empty.
+            ``(h, z, healthy)`` — the state (possibly replaced by the last
+            known-good values when NaN is detected and the recovery buffer is
+            non-empty) and a ``healthy`` flag that is ``False`` on any
+            NaN tick (recovered or unrecoverable). Downstream consumers that
+            must never ingest a NaN-tick state (the F-023 bounded-context
+            memory) gate on the flag.
         """
         # Single GPU→CPU sync covering all three diagnostics. ``stack``
         # forces consistent dtype/device so ``.tolist()`` returns Python
@@ -1182,9 +1240,9 @@ class MouseDroidOrchestrator:
             if self._latent_buffer:
                 h_last, z_last = self._latent_buffer[-1]
                 _log.info("world_model_latent_recovered", tick=self._tick_count)
-                return h_last.clone(), z_last.clone()
+                return h_last.clone(), z_last.clone(), False
             _log.critical("world_model_latent_unrecoverable", tick=self._tick_count)
-            return h, z
+            return h, z, False
 
         if h_norm > self._cfg.model.latent_norm_threshold:
             self._failure_recorder.record(
@@ -1196,7 +1254,7 @@ class MouseDroidOrchestrator:
             _log.warning("world_model_latent_saturated", h_norm=h_norm)
 
         self._latent_buffer.append((h.clone(), z.clone()))
-        return h, z
+        return h, z, True
 
     def _select_action(
         self,

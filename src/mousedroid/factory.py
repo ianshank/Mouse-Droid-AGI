@@ -103,7 +103,7 @@ if TYPE_CHECKING:
     from mousedroid.voice.mock_tts import MockTTS
     from mousedroid.voice.tts import PiperTTS
     from mousedroid.world_model.encoder import MultimodalEncoder
-    from mousedroid.world_model.protocol import WorldModelProtocol
+    from mousedroid.world_model.protocol import LatentContextProtocol, WorldModelProtocol
     from mousedroid.world_model.rssm import RSSM
 
 
@@ -672,6 +672,39 @@ def build_world_model(cfg: Settings) -> WorldModelProtocol:
     from mousedroid.world_model.rssm import RSSM
 
     return RSSM(cfg.model)
+
+
+def build_latent_context(cfg: Settings) -> LatentContextProtocol | None:
+    """Build the bounded-context latent memory (F-023), or ``None`` when off.
+
+    Returns ``None`` when the ``world_model_memory`` block is absent OR
+    ``enabled=False`` — the orchestrator tick path stays byte-identical to
+    pre-feature. The memory is engine-agnostic: it operates on the
+    orchestrator-carried ``(h, z)`` tensors, so ``h_dim`` is the combined
+    ``hidden_dim + cfc_hidden_dim`` (matching the orchestrator's carried
+    state for the dual-stream engine).
+
+    Args:
+        cfg: Root settings.
+
+    Returns:
+        A :class:`LatentContextProtocol` implementation, or ``None``.
+    """
+    memory_cfg = cfg.world_model_memory
+    if memory_cfg is None or not memory_cfg.enabled:
+        return None
+    from mousedroid.world_model.bounded_context import BoundedContextMemory
+
+    h_dim = cfg.model.hidden_dim + cfg.model.cfc_hidden_dim
+    context = BoundedContextMemory(memory_cfg, h_dim=h_dim, z_dim=cfg.model.latent_dim)
+    _log.info(
+        "latent_context_enabled",
+        h_dim=h_dim,
+        z_dim=cfg.model.latent_dim,
+        recent_size=memory_cfg.recent_size,
+        blend_weight=memory_cfg.blend_weight,
+    )
+    return context
 
 
 def build_rssm_trainable(cfg: Settings) -> RSSM:
@@ -4335,6 +4368,7 @@ def build_orchestrator(cfg: Settings) -> object:
         mission_lifecycle=mission_lifecycle,
         on_device_coordinator=cast("ReplayTriggerCoordinator | None", on_device_coordinator),
         growth_coordinator=cast("GrowthDistillationCoordinator | None", growth_coordinator),
+        latent_context=build_latent_context(cfg),
         greeter=startup_greeter,
     )
     # Bind the deferred orchestrator reference so the OpenClaw mission
