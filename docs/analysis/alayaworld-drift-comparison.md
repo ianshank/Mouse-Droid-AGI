@@ -36,28 +36,48 @@ port is explicitly deferred (ADR-015).
 
 ## Results — in-container synthetic run (WS5)
 
-> To be filled by WS5 with the seeded run:
-> `python scripts/compare_drift.py --episodes 8 --seq-len 48 --steps 60 --memory both --out reports/drift_comparison.json`
+Run (2026-07-23, container CPU, seed 42):
+`python scripts/compare_drift.py --episodes 8 --seq-len 48 --steps 60 --context-steps 8 --horizon 24 --seed 42 --memory both --out reports/drift_comparison.json`
+(60 steps/arm; 25 of the augmented arm's batches drew the corrupted objective.)
 
 | metric | baseline | augmented | delta (baseline − augmented; + = augmented better) |
 |---|---|---|---|
-| mean range MSE (headline) | TBD | TBD | TBD |
-| final range MSE | TBD | TBD | TBD |
-| mean motor MSE | TBD | TBD | TBD |
-| mean latent_h MSE | TBD | TBD | TBD |
-| mean latent_z MSE | TBD | TBD | TBD |
-| mean motor_corrected MSE | — | TBD | — |
+| mean range MSE (headline) | 0.277645 | 0.273921 | **+0.003724 (~1.3%)** |
+| final range MSE | 0.346944 | 0.354418 | −0.007474 |
+| mean motor MSE | 0.083096 | 0.084898 | −0.001802 |
+| mean latent_h MSE | 0.030423 | 0.030871 | −0.000448 |
+| mean latent_z MSE | 1.766881 | 1.774075 | −0.007194 |
+| mean motor_corrected MSE | — | 0.206431 | — |
 
-**Verdict:** TBD (improvement / documented negative result).
+**Verdict: mixed / near-null at this budget — documented honestly, not
+overclaimed.** The augmented arm shows a small (~1.3%) improvement on the
+mean headline (range) channel but is marginally worse on the final-step
+headline and on the secondary channels. At 60 optimisation steps on synthetic
+dynamics this is within run-to-run objective noise, so the honest reading is
+**inconclusive-leaning-neutral**: the corrupted-history objective neither
+demonstrably reduces nor demonstrably worsens drift at this scale. Notably,
+the `motor_corrected` channel (residual head applied) is WORSE than the raw
+decoded motor at this training budget — the evaluation-only head needs far
+more corrupted batches than 25 to learn a useful residual. The decisive
+comparison is the operator re-run against real replay data at a real training
+budget (below); per the change's validation clause, a documented negative
+result remains an acceptable outcome.
 
 ### Memory ablation (optional extra — not an R2 requirement)
 
 RSSM-latent ablation at the warmup seam (B=1; distinct from the deployed
-DualStream combined latent):
+DualStream combined latent). With default `sink_warmup_ticks=30` ≥
+`context_steps=8` the sink is never captured (the script warns), so this
+measures the ring/EMA contribution only:
 
 | metric | memory off | memory on |
 |---|---|---|
-| mean headline MSE | TBD | TBD |
+| mean headline (range) MSE | 1.750252 | 1.751312 |
+| mean latent_h MSE | 0.046967 | 0.046964 |
+
+Effectively neutral on an untrained model over a short warmup — expected: the
+memory's value proposition is long-horizon anchoring on a trained model, which
+this micro-ablation does not exercise.
 
 ## Results — on-rover real replay (operator follow-up)
 

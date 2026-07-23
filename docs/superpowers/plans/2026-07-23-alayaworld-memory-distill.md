@@ -28,36 +28,36 @@ training never exposes the model to its own drifted rollouts.
 ## Workstream / task breakdown
 
 ### WS1 — spec artifacts + config skeleton (`docs(spec): … [F-023]`)
-- [ ] OpenSpec archive (`openspec/project.md`, `changes/<id>/{proposal,tasks,design}.md`, spec deltas)
-- [ ] Design spec, this plan, ADR-015, `docs/related-work.md`
-- [ ] `WorldModelMemoryConfig` (Settings-level) + `DriftTrainingConfig` (`training.drift`)
-- [ ] `features.yaml` F-023; NEXT_STEPS/progress entries
-- [ ] `tests/regression/test_alayaworld_memory_distill_backwards_compat.py`
+- [x] OpenSpec archive (`openspec/project.md`, `changes/<id>/{proposal,tasks,design}.md`, spec deltas)
+- [x] Design spec, this plan, ADR-015, `docs/related-work.md`
+- [x] `WorldModelMemoryConfig` (Settings-level) + `DriftTrainingConfig` (`training.drift`)
+- [x] `features.yaml` F-023; NEXT_STEPS/progress entries
+- [x] `tests/regression/test_alayaworld_memory_distill_backwards_compat.py`
 **Files:** `src/mousedroid/config/schema.py`, `features.yaml`, docs above.
 
 ### WS2 — bounded-context latent memory (`feat(world-model): … [F-023]`)
-- [ ] `LatentContextProtocol` in `world_model/protocol.py`; `BoundedContextMemory` in `world_model/bounded_context.py`
-- [ ] `build_latent_context` in `factory.py`; orchestrator wiring (`healthy` flag, observe→blend, OTA `reset()`, mission `rearm_sink()`)
-- [ ] Tests: unit (boundedness/cold-start/NaN/identity/determinism/lifecycle), factory, orchestrator tick (incl. S1b sink-incorporation + disabled-path trajectory equality), perf, AQA regression
+- [x] `LatentContextProtocol` in `world_model/protocol.py`; `BoundedContextMemory` in `world_model/bounded_context.py`
+- [x] `build_latent_context` in `factory.py`; orchestrator wiring (`healthy` flag, observe→blend, OTA `reset()`, mission `rearm_sink()`)
+- [x] Tests: unit (boundedness/cold-start/NaN/identity/determinism/lifecycle), factory, orchestrator tick (incl. S1b sink-incorporation + disabled-path trajectory equality), perf, AQA regression
 **Files:** `src/mousedroid/world_model/{bounded_context.py,protocol.py,__init__.py}`, `src/mousedroid/factory.py`, `src/mousedroid/orchestrator/orchestrator.py`, `tests/…`.
 
 ### WS3 — drift training + metric (`feat(training): … [F-023]`)
-- [ ] `rssm.py`: `_posterior_step` refactor, `train_sequence_corrupted`, `DriftCorrectionHead`
-- [ ] `training/drift_metrics.py` (`measure_drift`), `training/drift_reduction.py` (`train_pair_and_compare`)
-- [ ] `rssm_pretrainer.py` optional `drift=` param; `scripts/compare_drift.py`; analysis-doc template
-- [ ] Tests: k=0 equality + RNG pins, drift metrics determinism/honesty, pair-compare, script integration; golden suites + on-device suite re-run
+- [x] `rssm.py`: `_posterior_step` refactor, `train_sequence_corrupted`, `DriftCorrectionHead`
+- [x] `training/drift_metrics.py` (`measure_drift`), `training/drift_reduction.py` (`train_pair_and_compare`)
+- [x] `rssm_pretrainer.py` optional `drift=` param; `scripts/compare_drift.py`; analysis-doc template
+- [x] Tests: k=0 equality + RNG pins, drift metrics determinism/honesty, pair-compare, script integration; golden suites + on-device suite re-run
 **Files:** `src/mousedroid/world_model/rssm.py`, `src/mousedroid/training/{drift_metrics.py,drift_reduction.py,rssm_pretrainer.py}`, `scripts/compare_drift.py`, `docs/analysis/alayaworld-drift-comparison.md`, `tests/…`.
 
 ### WS4 — distillation spike (`feat(spike): … [F-023]`)
-- [ ] `scripts/spike_step_distillation.py` (prior-mean k-step teacher, jump student, `KnowledgeDistiller` regression objective, latency + agreement eval)
-- [ ] Spike report template (primitive vs consumer ceiling; Jetson pending); `docs/runbooks/jetson-alayaworld-spike.md`
-- [ ] `tests/integration/test_spike_step_distillation.py`
+- [x] `scripts/spike_step_distillation.py` (prior-mean k-step teacher, jump student, `KnowledgeDistiller` regression objective, latency + agreement eval)
+- [x] Spike report template (primitive vs consumer ceiling; Jetson pending); `docs/runbooks/jetson-alayaworld-spike.md`
+- [x] `tests/integration/test_spike_step_distillation.py`
 **Files:** as listed.
 
 ### WS5 — results + closure (`docs(feature): … [F-023]`)
-- [ ] Run `compare_drift.py` + spike script (scaled-down, seeded) in-container; fill both analysis docs (negative result documented if so)
-- [ ] CLAUDE.md section (AQA-safe wording), NEXT_STEPS/progress/CHANGELOG, F-023 finalization, design-spec review section, openspec `tasks.md` ticks
-- [ ] Full CI gate; push; draft PR
+- [x] Run `compare_drift.py` + spike script (scaled-down, seeded) in-container; fill both analysis docs (negative result documented if so)
+- [x] CLAUDE.md section (AQA-safe wording), NEXT_STEPS/progress/CHANGELOG, F-023 finalization, design-spec review section, openspec `tasks.md` ticks
+- [x] Full CI gate; push; draft PR
 **Files:** `CLAUDE.md`, `NEXT_STEPS.md`, `progress.md`, `CHANGELOG.md`, `features.yaml`, analysis docs.
 
 ## Operator follow-ups (prepared, not executed here)

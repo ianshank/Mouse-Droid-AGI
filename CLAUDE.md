@@ -736,6 +736,77 @@ Non-negotiable contracts (pinned by `tests/unit/growth/*`,
   are dropped with a DEBUG log. The `metrics` param to `build_growth_coordinator`
   is keyword-only (defaults `None`; byte-identical legacy construction).
 
+## AlayaWorld-adapted bounded-context memory + drift training (F-023, default-OFF)
+
+Two AlayaWorld ideas (arXiv:2607.18367, cited as characterized in the change
+request — see `docs/related-work.md` for the adaptation-not-adoption record)
+are wired as default-OFF, fully additive surfaces; the video-diffusion
+architecture was NOT adopted, and no iWorld-Bench-equivalent evaluation is
+claimed. Change archive: `openspec/changes/mouse-droid-alayaworld-memory-distill/`
+(documentation-only; repo-native artifacts authoritative). Design:
+`docs/superpowers/specs/2026-07-23-alayaworld-memory-distill-design.md` + ADR-015.
+Non-negotiable contracts (pinned by `tests/regression/test_alayaworld_memory_distill_{aqa,backwards_compat}.py`):
+
+- **Bounded-context latent memory is default-OFF + identity-when-disabled.**
+  `WorldModelMemoryConfig` is Optional/None on `Settings`
+  (`world_model_memory`, `enabled=False`); `build_latent_context` returns
+  `None` when absent/disabled and the tick path is byte-identical
+  (trajectory-pinned). When enabled, `BoundedContextMemory`
+  (`world_model/bounded_context.py`, `LatentContextProtocol` in
+  `world_model/protocol.py`) blends a per-mission sink anchor + recent ring
+  (`deque(maxlen=recent_size)`) + EMA long-summary into the carried `(h, z)`
+  at the observe seam — pure deterministic `no_grad` tensor ops, constant
+  `recent_size + 2` footprint. **NaN contract:** `_validate_latent` returns a
+  `healthy` flag; unhealthy ticks NEVER touch the memory (today's NaN
+  self-healing is preserved); `observe()` drops non-finite inputs; the blend
+  output is isfinite-guarded to identity. **Cold start:** an uncaptured sink /
+  never-folded EMA are EXCLUDED from the key set; empty key set ⇒ exact
+  identity (never blend toward zero). **Sink lifecycle:** the OTA weight-swap
+  branch calls `reset()` (clears all stores AND re-arms warmup — a fresh sink
+  captures under new weights, ADR-010 coupling); the mission-completed seam
+  calls `rearm_sink()` when `recapture_on_mission=True`. The blend budget is
+  owned by `tests/performance/test_latent_context_latency.py` (the
+  observe-step budget test does NOT cover this seam). Grep events:
+  `bounded_context_init`/`_sink_captured`/`_sink_rearmed`/`_reset`,
+  `latent_context_blend` (rate-limited debug), `latent_context_enabled`.
+- **Drift training runs on the RSSM feasibility vehicle — the DualStream port
+  is explicitly deferred.** `RSSM.train_sequence_corrupted` rolls a random
+  open-loop prior prefix (the model's own drifted imagination, `no_grad`,
+  prefix length from a PRIVATE `torch.Generator` — `generator=None`
+  constructs one; the global RNG is NEVER consumed for it) then trains the
+  posterior suffix via the shared `_posterior_recon_step` helper.
+  **k=0 contract:** forced prefix 0 with no residual head is
+  allclose-identical to `train_sequence` (golden suites + the equality test
+  pin the helper refactor; RSSM `state_dict` keys unchanged). The
+  `DriftCorrectionHead` is external + evaluation-only (trained via the
+  SEPARATE `residual_loss` key — never folded into `loss`; consumed by
+  `measure_drift`'s `motor_corrected` channel; NEVER deployed).
+  `DriftTrainingConfig` nests as `training.drift` (Optional/None,
+  `enabled=False` gates only the `RSSMPretrainer` integration — byte-identical
+  None-path).
+- **The drift metric is honesty-constrained.**
+  `training/drift_metrics.py::measure_drift` (NOT in `validation/` — that
+  package stays torch-free) reports per-modality open-loop MSE with **range
+  as the headline channel** (the only environment-coupled replay signal; this
+  robot has NO pose channel, so "pose error" is substituted and declared),
+  zero-filled channels excluded, `valid_mask` threaded, latent divergence vs
+  the posterior twin, `score_dynamics` RNG discipline (same seed ⇒
+  byte-identical report). `scripts/compare_drift.py` is the CI-safe seeded
+  synthetic harness (mujoco opt-in; `--memory both` is an optional ablation
+  on the RSSM latent at the warmup seam, B=1); a documented negative result
+  is an acceptable outcome — the script reports, it does not gate by default.
+- **Distillation stays a scripts-only spike.**
+  `scripts/spike_step_distillation.py` (non-binding) distils a deterministic
+  prior-MEAN k-step teacher (γ-discounted return matching
+  `MCTSPlanner._rollout`) into a jump student via the growth-pillar
+  `KnowledgeDistiller(objective="regression")`. The report separates
+  primitive-level speedup from the **~1.25-1.6× MCTS consumer-level ceiling**
+  (rollouts are ~40% of `plan()`'s ~500-650 imagine calls; expansion needs
+  intermediate states) and keeps the Jetson criterion pending the operator
+  run (`docs/runbooks/jetson-alayaworld-spike.md`). Go/no-go:
+  `docs/analysis/alayaworld-distillation-spike.md`; adoption (if ever) is a
+  NEW F-number and a separate soak-gated decision.
+
 ## Portfolio reframe + large-artifact handling (PR #167)
 
 The project is framed as an **edge-AI / robotics portfolio** ("MouseDroid"), not a claim of

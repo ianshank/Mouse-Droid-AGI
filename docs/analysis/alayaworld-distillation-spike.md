@@ -40,17 +40,16 @@ out of scope for this spike.
 
 ## Results — in-container CPU run (WS5)
 
-> Filled by WS5:
-> `python scripts/spike_step_distillation.py --k 2,4,8 --distill-steps 200 --trials 200 --seed 42 --out reports/spike_step_distillation.json`
-> Note: run on a RANDOM-INIT RSSM (methodology + latency are architecture
-> properties; accuracy numbers sharpen with a trained checkpoint via
-> `--checkpoint`).
+Run (2026-07-23, container CPU, seed 42, RANDOM-INIT RSSM):
+`python scripts/spike_step_distillation.py --k 2,4,8 --distill-steps 200 --trials 200 --seed 42 --out reports/spike_step_distillation.json`
+(Latency is an architecture property and transfers approximately; accuracy
+numbers understate a trained-checkpoint teacher — see the Jetson procedure.)
 
 | k | action agreement | held-out MSE (hz / return) | primitive p95 (ms) | student p95 (ms) | primitive speedup (p95) |
 |---|---|---|---|---|---|
-| 2 | TBD | TBD | TBD | TBD | TBD |
-| 4 | TBD | TBD | TBD | TBD | TBD |
-| 8 | TBD | TBD | TBD | TBD | TBD |
+| 2 | 0.422 | 0.00309 / 0.00451 | 0.399 | 0.055 | 7.29× |
+| 4 | 0.609 | 0.00122 / 0.01274 | 0.766 | 0.058 | 13.17× |
+| 8 | 0.422 | 0.00047 / 0.01418 | 1.883 | 0.060 | 31.54× |
 
 ## Results — Jetson Orin Nano (operator run — PENDING)
 
@@ -75,15 +74,25 @@ Decision rubric (all three required for GO):
    (e.g. long-horizon imagination for the deliberative tier) with its own
    budget case.
 
-**Recommendation:** TBD — one of:
-- **ADOPT** (criteria met on Jetson; open a follow-up F-number for the
-  production integration, which remains a separate soak-gated decision),
-- **DEFER** (primitive case proven but consumer case not yet justified —
-  revisit when a long-horizon imagination consumer lands), or
-- **REJECT** (accuracy or Jetson latency fails; document numbers and close).
+**Recommendation (provisional): DEFER** — pending the Jetson +
+trained-checkpoint run. Rationale from the container-CPU numbers:
 
-**Provisional (container-CPU) reading:** TBD by WS5 — expected shape from the
-smoke run: large primitive speedups (5-15×) but sub-0.90 agreement at small
-distill budgets on a random-init model, i.e. the latency story is promising
-and the accuracy story is the open question for the Jetson + trained-checkpoint
-run.
+- **Latency criterion: provisionally strong.** Primitive p95 speedups of
+  7.3× (k=2) to 31.5× (k=8) far exceed the ≥3× bar, and the speedup scales
+  with k exactly as the one-forward architecture predicts. This is expected
+  to transfer approximately to the Jetson (architecture-relative), but the
+  absolute on-device numbers remain the gate.
+- **Accuracy criterion: NOT met.** Action agreement peaks at 0.609 (k=4) —
+  well under the 0.90 bar. Two caveats keep this from being a REJECT: the
+  teacher is a random-init RSSM (near-flat reward surfaces make the argmax
+  grid nearly a coin toss across similar candidates), and 200 distill steps
+  on a 128-wide student is a deliberately small budget. The Jetson run must
+  use a trained checkpoint before this criterion is judged.
+- **Consumer case: unresolved.** Even with a perfect student, the MCTS
+  end-to-end ceiling is ~1.25-1.6×; no alternative consumer (e.g. deliberative
+  long-horizon imagination) currently exists on the roadmap with a budget
+  case. This alone justifies DEFER over ADOPT regardless of accuracy.
+
+**Final call** (ADOPT / DEFER / REJECT) is made after the operator fills the
+Jetson section above; any adoption would be a NEW F-number and a separate
+soak-gated decision.

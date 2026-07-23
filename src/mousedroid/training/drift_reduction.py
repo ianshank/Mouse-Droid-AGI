@@ -140,7 +140,7 @@ def train_pair_and_compare(
         torch.manual_seed(step_seed)
         opt_baseline.zero_grad()
         out_b = baseline.train_sequence(batch, baseline_decoders)
-        out_b["loss"].backward()  # type: ignore[no-untyped-call]  # torch stub gap
+        torch.autograd.backward(out_b["loss"])
         opt_baseline.step()
         baseline_loss = float(out_b["loss"].detach())
 
@@ -161,7 +161,7 @@ def train_pair_and_compare(
         else:
             out_a = augmented.train_sequence(batch, augmented_decoders)
             total = out_a["loss"]
-        total.backward()  # type: ignore[no-untyped-call]  # torch stub gap
+        torch.autograd.backward(total)
         opt_augmented.step()
         augmented_loss = float(out_a["loss"].detach())
 
