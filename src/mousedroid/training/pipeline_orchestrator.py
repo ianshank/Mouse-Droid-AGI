@@ -390,6 +390,9 @@ class PipelineOrchestrator:
                 grad_clip=tcfg.rssm_grad_clip,
                 amp=self._config.amp_enabled,
                 device=device,
+                # F-023: the block is default-None/disabled, in which case the
+                # pretrainer path is byte-identical to pre-feature.
+                drift=tcfg.drift,
             )
             return trainer.train([batch], epochs=epochs, checkpoint_path=checkpoint)
 
