@@ -11,6 +11,10 @@ from torch import Tensor
 class GrowthProtocol(Protocol):
     """Interface for knowledge distillation / growth methods."""
 
-    def distill_step(self, x: Tensor, hard_labels: Tensor) -> Tensor:
-        """One distillation training step. Returns loss."""
+    def distill_step(self, x: Tensor, hard_labels: Tensor | None = None) -> Tensor:
+        """One distillation training step. Returns loss.
+
+        ``hard_labels`` is required for classification-objective distillers and
+        optional for regression-objective ones (``None`` = soft term only).
+        """
         ...

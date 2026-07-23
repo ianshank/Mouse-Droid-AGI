@@ -2,7 +2,7 @@
 
 ## Overview
 
-MouseDroid is a Star Wars MSE-6 autonomous-navigation system running on an NVIDIA Jetson Orin Nano (with a parked hierarchical robot-arm training platform) — an edge-AI / robotics engineering project, not a claim of general intelligence. Its cognitive stack is organised around a "10 Pillars of the Ideal Neural Network" research framing used as an engineering compass: every pillar is real, unit-tested code, and the honest axis is integration — seven pillars (world model, cognitive, memory, continual learning, reward, safety, curiosity) are wired into the 30 Hz runtime loop (curiosity via the memory subsystem), while three (meta, growth, scaling) are implemented and tested but not yet wired in.
+MouseDroid is a Star Wars MSE-6 autonomous-navigation system running on an NVIDIA Jetson Orin Nano (with a parked hierarchical robot-arm training platform) — an edge-AI / robotics engineering project, not a claim of general intelligence. Its cognitive stack is organised around a "10 Pillars of the Ideal Neural Network" research framing used as an engineering compass: every pillar is real, unit-tested code, and the honest axis is integration — seven pillars (world model, cognitive, memory, continual learning, reward, safety, curiosity) are wired into the 30 Hz runtime loop (curiosity via the memory subsystem), while three (meta, growth, scaling) are implemented and tested but not yet wired into the 30 Hz loop — growth additionally carries a default-OFF, soak-gated *off-loop* distillation seam (VLA teacher → compact student; see "Growth-pillar VLA distillation wiring" below), while meta and scaling remain unwired.
 
 > **Governance:** `docs/CHARTER.md` is the project constitution (vision, scope, invariants, roadmap) and sits above this document. When a change touches scope or an invariant, defer to the charter.
 
@@ -676,6 +676,65 @@ until a soak gate passes. Non-negotiable contracts:
   `tests/integration/test_on_device_sim_soak.py`. See
   `docs/runbooks/jetson-on-device-learning.md` (+ soak-gate framing) and
   `docs/architecture/c4-on-device-learning.md`.
+
+## Growth-pillar VLA distillation wiring (default-OFF, soak-gated)
+
+The `growth` pillar (knowledge distillation) is now wired into the runtime as a
+**default-OFF, off-loop** background operation, mirroring the Phase-6 on-device
+learning template. It distils the wired VLA teacher policy into a compact student
+*between* cloud retraining cycles; the 30 Hz reactive loop stays distillation-free.
+Non-negotiable contracts (pinned by `tests/unit/growth/*`,
+`tests/unit/factory/test_build_growth_coordinator.py`,
+`tests/regression/test_growth_distillation_aqa.py`, and
+`tests/regression/test_growth_backwards_compat.py`):
+
+- **Default-OFF `Optional`/`None`.** `GrowthConfig` is an `Optional` field on
+  `Settings` (default `None`; `enabled: bool = False`). Absent/disabled ⇒
+  `build_growth_coordinator` returns `None`, no background task spawns, and the
+  orchestrator is byte-identical to pre-feature. New fields keep defaults so
+  existing YAML loads unchanged. `build_growth_coordinator` also returns `None`
+  when **no VLA teacher is wired** (`vla.backend == "none"`) — there is nothing
+  to distil. Log: `growth_disabled_no_vla_teacher`.
+- **Regression objective is backwards-compatible.** `KnowledgeDistiller` gained
+  `objective: Literal["classification", "regression"] = "classification"`. The
+  classification path (KL + CE over class logits, `hard_labels` required) is
+  byte-identical. `"regression"` swaps both terms for MSE and accepts
+  `hard_labels=None` (pure teacher-matching self-distillation) — this is how the
+  continuous VLA action policy is distilled. NEVER remove the classification
+  default or make `hard_labels` mandatory again.
+- **Teacher is a paramless adapter.** `VLATeacherModule` wraps the
+  `VLAPolicyProtocol` as an `nn.Module` with **no registered parameters**, so the
+  distiller's teacher-freeze loop is a no-op and the student optimizer only ever
+  touches the student. The student (`StudentVLAPolicy`) dims come from
+  `cfg.model` (`hidden_dim`→h, `latent_dim`→z, `action_dim`); the compact hidden
+  width is `growth.student_hidden_dim`. No dims are hardcoded.
+- **Real on-policy data, no stand-in.** The factory's latent sampler rolls the
+  **live world model** (`imagine_step`) under the **live VLA teacher** to generate
+  real `(h, z)` batches — never a config-sized stand-in. The new-record trigger
+  reuses the LMDB replay signal (`_count_new_replay_records` + an in-memory
+  `consumed_offset`) so distillation arms only as fresh experience accumulates and
+  disarms after a fired cycle. Log: `growth_consumed_offset_advanced`.
+- **Hot loop untouched; off-loop task.** The coordinator (`growth/coordinator.py`)
+  offloads the trigger probe, the whole bounded distillation epoch, and the slot
+  persistence via `asyncio.to_thread`. It runs on a dedicated slow-cadence task
+  (`_growth_distill_loop` at `cfg.growth.check_interval_s`), spawned in
+  `start()` / drained in `stop()` exactly like `_on_device_update_loop`. The
+  enable predicate `_growth_enabled()` uses an explicit `None` check (no `assert`,
+  `-O`-safe). Grep events: `growth_distill_start`/`_complete`/`_skipped_no_batch`,
+  `growth_distill_loop_started`, `growth_distill_cycle_failed`.
+- **Persist, never hot-swap.** The distilled student is persisted to a SHA-256
+  slot (`GrowthSlotStore`, reusing `verify_sha256`) under
+  `<ExperienceConfig.path>/<growth.slot_dir>` (a `field_validator` rejects
+  absolute / `..`-traversal / empty `slot_dir`). It is **never** hot-swapped into
+  the live policy — deployment stays a soak-gated operator decision. Keep
+  `enabled` off on the live rover until a soak gate passes.
+- **Counter is pure-add + gated.** `{ns}_growth_distillations_total{outcome}`
+  (`telemetry/metrics.py`) is gated by `MetricsConfig.track_growth_distillation`
+  (default `True`), omitted from `/metrics` until the first cycle, and seeded in
+  `generate_metrics_sample()`. `outcome` is the low-cardinality frozenset
+  `_GROWTH_DISTILL_OUTCOMES` (`completed`, `skipped_no_batch`) — out-of-set values
+  are dropped with a DEBUG log. The `metrics` param to `build_growth_coordinator`
+  is keyword-only (defaults `None`; byte-identical legacy construction).
 
 ## Portfolio reframe + large-artifact handling (PR #167)
 

@@ -70,6 +70,11 @@ _ON_DEVICE_REVERT_REASONS: frozenset[str] = frozenset(
     {"regression_bound", "integrity_mismatch", "exception"}
 )
 
+# Growth-pillar distillation outcome label values. Same drop-guard + AQA-pinning
+# role as the on-device set above, so a free-text string can never open a new
+# time series on the growth counter.
+_GROWTH_DISTILL_OUTCOMES: frozenset[str] = frozenset({"completed", "skipped_no_batch"})
+
 # Voice-degradation label value sets. Same drop-guard + AQA-pinning role as the
 # LLM/on-device sets above, so a driver-forwarded string can never open a new
 # time series.
@@ -663,6 +668,10 @@ class MetricsRegistry:
         # /metrics until the first revert; gated by cfg.track_on_device_learning.
         self._on_device_learning_reverted = _LabeledCounter()
 
+        # Growth-pillar distillation counter. Pure-add: omitted from /metrics
+        # until the first cycle; gated by cfg.track_growth_distillation.
+        self._growth_distillation = _LabeledCounter()
+
         # Voice-degradation counters. Pure-add: each omitted from /metrics until
         # its first increment; both gated by cfg.track_voice_degradation.
         self._voice_speaker_degraded = _LabeledCounter()
@@ -750,6 +759,8 @@ class MetricsRegistry:
         # Phase-6 on-device-learning revert counter name. The counter render
         # helper suffixes ``_total``, so omit it here.
         self._name_on_device_learning_reverted = f"{ns}_on_device_learning_reverted"
+        # Growth-pillar distillation counter name (render helper suffixes ``_total``).
+        self._name_growth_distillation = f"{ns}_growth_distillations"
         # Voice-degradation counter names (render helper suffixes ``_total``).
         self._name_voice_speaker_degraded = f"{ns}_voice_speaker_degraded"
         self._name_voice_tts_synthesize_failures = f"{ns}_voice_tts_synthesize_failures"
@@ -1151,6 +1162,26 @@ class MetricsRegistry:
             _log.debug("on_device_learning_reverted_dropped_invalid_reason", reason=reason)
             return
         self._on_device_learning_reverted.inc(reason, amount)
+
+    def inc_growth_distilled(self, outcome: str, amount: int = 1) -> None:
+        """Increment the growth-pillar distillation counter (label: outcome).
+
+        Fired once per slow-cadence distillation cycle. Pure-add and gated by
+        ``cfg.track_growth_distillation``.
+
+        Args:
+            outcome: One of ``"completed"`` (a distilled student was persisted) or
+                ``"skipped_no_batch"`` (the trigger armed but no latent batch was
+                available). Out-of-set values are dropped with a DEBUG log so a
+                free-text string never leaks cardinality.
+            amount: Increment magnitude (default 1); ``<= 0`` is a no-op.
+        """
+        if not self._cfg.track_growth_distillation or amount <= 0:
+            return
+        if outcome not in _GROWTH_DISTILL_OUTCOMES:
+            _log.debug("growth_distilled_dropped_invalid_outcome", outcome=outcome)
+            return
+        self._growth_distillation.inc(outcome, amount)
 
     def inc_voice_speaker_degraded(self, subsystem: str, amount: int = 1) -> None:
         """Increment the voice speaker-degradation counter (label: subsystem).
@@ -1592,6 +1623,7 @@ class MetricsRegistry:
         sections.extend(self._families_llm_translation())
         sections.extend(self._families_llm_gateway())
         sections.extend(self._families_on_device_learning())
+        sections.extend(self._families_growth_distillation())
         sections.extend(self._families_voice_degradation())
         sections.extend(self._families_lidar())
         sections.extend(self._families_phase7())
@@ -1782,6 +1814,23 @@ class MetricsRegistry:
                         "On-device-learning weight-update reverts (label: reason)",
                         "reason",
                         revert_snapshot,
+                    )
+                )
+        return out
+
+    def _families_growth_distillation(self) -> list[list[str]]:
+        """Growth-pillar distillation counter (label: outcome). Pure-add."""
+        out: list[list[str]] = []
+        cfg = self._cfg
+        if cfg.track_growth_distillation:
+            distill_snapshot = self._growth_distillation.snapshot()
+            if distill_snapshot:
+                out.append(
+                    _render_labeled_counter(
+                        self._name_growth_distillation,
+                        "Growth-pillar VLA distillation cycles (label: outcome)",
+                        "outcome",
+                        distill_snapshot,
                     )
                 )
         return out
@@ -2382,6 +2431,12 @@ def generate_metrics_sample() -> str:
     registry.inc_on_device_learning_reverted("regression_bound")
     registry.inc_on_device_learning_reverted("integrity_mismatch")
     registry.inc_on_device_learning_reverted("exception")
+
+    # Growth-pillar distillation counter — seed one series per valid outcome so
+    # promtool / Grafana / alert evaluation see non-empty series from the first
+    # scrape.
+    registry.inc_growth_distilled("completed")
+    registry.inc_growth_distilled("skipped_no_batch")
 
     # Voice-degradation counters — seed one series per valid label value so
     # promtool / Grafana / alert evaluation see non-empty series from the first

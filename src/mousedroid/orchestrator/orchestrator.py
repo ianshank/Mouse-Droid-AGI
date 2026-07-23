@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from mousedroid.config.schema import Settings
     from mousedroid.curiosity.protocol import CuriosityProtocol
     from mousedroid.experience.logger import ExperienceLogger
+    from mousedroid.growth.coordinator import GrowthDistillationCoordinator
     from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
     from mousedroid.harness.journal.protocol import JournalProtocol
     from mousedroid.harness.protocol import (
@@ -127,6 +128,7 @@ class MouseDroidOrchestrator:
         safety_projector: SafetyActionProjectorProtocol | None = None,
         mission_lifecycle: MissionLifecycle | None = None,
         on_device_coordinator: ReplayTriggerCoordinator | None = None,
+        growth_coordinator: GrowthDistillationCoordinator | None = None,
         greeter: GreeterProtocol | None = None,
     ) -> None:
         """Initialise orchestrator with all components.
@@ -267,6 +269,17 @@ class MouseDroidOrchestrator:
                 orchestrator byte-identical to pre-WS3 (no extra task spawned).
                 WS3 only PRODUCES the candidate; promotion into the live
                 policy is WS4's safety-gated decision.
+            growth_coordinator: Optional growth-pillar
+                :class:`GrowthDistillationCoordinator`. When supplied AND
+                ``cfg.growth.enabled`` is ``True``, the orchestrator spawns a
+                slow-cadence background task in ``start()`` that distils the VLA
+                teacher into a compact student and persists a SHA-256-stamped
+                slot (all torch work is offloaded via ``asyncio.to_thread``; the
+                30 Hz hot loop is never touched). ``None`` (default) — or
+                ``cfg.growth`` absent/disabled, or no VLA teacher wired — makes
+                the orchestrator byte-identical to pre-feature (no extra task).
+                Distillation only PRODUCES a student slot; deploying it is a
+                separate soak-gated operator decision.
             greeter: Optional :class:`GreeterProtocol` (Issue #109). When
                 supplied AND ``cfg.greeting`` is enabled with
                 ``fire_on_startup=True``, the orchestrator fires the
@@ -386,6 +399,11 @@ class MouseDroidOrchestrator:
         self._on_device_coordinator = on_device_coordinator
         self._on_device_task: asyncio.Task[None] | None = None
         self._on_device_tasks: set[asyncio.Task[Any]] = set()
+        # Growth pillar — slow-cadence VLA distillation background task (None when
+        # cfg.growth is absent/disabled OR no VLA teacher wired).
+        self._growth_coordinator = growth_coordinator
+        self._growth_task: asyncio.Task[None] | None = None
+        self._growth_tasks: set[asyncio.Task[Any]] = set()
         # Issue #109 — one-shot startup greeting. ``None`` (default) or
         # ``cfg.greeting.fire_on_startup=False`` keeps ``start()``
         # byte-identical; the greeting never touches the 30 Hz loop.
@@ -563,6 +581,12 @@ class MouseDroidOrchestrator:
                 self._on_device_update_loop(),
                 name=self._on_device_update_loop.__name__,
             )
+        if self._growth_coordinator is not None and self._growth_enabled():
+            self._growth_task = spawn_tracked(
+                self._growth_tasks,
+                self._growth_distill_loop(),
+                name=self._growth_distill_loop.__name__,
+            )
 
     async def stop(self) -> None:
         """Stop all subsystems gracefully."""
@@ -621,6 +645,10 @@ class MouseDroidOrchestrator:
         if self._on_device_task is not None:
             await cancel_and_drain(self._on_device_tasks)
             self._on_device_task = None
+        # Growth pillar — drain the distillation slow task (no-op when never spawned).
+        if self._growth_task is not None:
+            await cancel_and_drain(self._growth_tasks)
+            self._growth_task = None
         await cancel_and_drain(self._cloud_publish_tasks)
 
     async def _stop_cloud_subsystems(self) -> None:
@@ -1864,6 +1892,38 @@ class MouseDroidOrchestrator:
                 await self._on_device_coordinator.maybe_update()
             except Exception:
                 _log.warning("on_device_update_cycle_failed", exc_info=True)
+
+    def _growth_enabled(self) -> bool:
+        """Return ``True`` only when the growth-distillation block is enabled.
+
+        Explicit ``None`` / attribute check (no ``assert``) so the gate survives
+        ``-O`` (PYTHONOPTIMIZE=1, the Jetson Docker default).
+        """
+        growth_cfg = self._cfg.growth
+        return growth_cfg is not None and growth_cfg.enabled
+
+    async def _growth_distill_loop(self) -> None:
+        """Background slow-cadence loop driving the growth-distillation coordinator.
+
+        Runs at ``cfg.growth.check_interval_s`` OUTSIDE the 30 Hz hot loop. Each
+        tick the coordinator probes the fresh-record count and, when armed,
+        distils the VLA teacher into the compact student and persists a
+        SHA-256-stamped slot — all torch work is offloaded via ``asyncio.to_thread``
+        inside the coordinator so the event loop is never blocked. Automatically
+        cancelled by ``stop()``. A failed cycle is logged and the loop keeps
+        running so a transient error never kills distillation.
+        """
+        growth_cfg = self._cfg.growth
+        if growth_cfg is None or self._growth_coordinator is None:
+            return
+        interval = growth_cfg.check_interval_s
+        _log.info("growth_distill_loop_started", interval_s=interval)
+        while True:
+            await self._clock.sleep(interval)
+            try:
+                await self._growth_coordinator.maybe_distill()
+            except Exception:
+                _log.warning("growth_distill_cycle_failed", exc_info=True)
 
     async def run(self) -> None:
         """Run the main loop at configured control rate.

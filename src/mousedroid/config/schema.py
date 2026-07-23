@@ -885,6 +885,122 @@ class OnDeviceLearningConfig(BaseModel):
         return self
 
 
+class GrowthConfig(BaseModel):
+    """Growth-pillar knowledge-distillation configuration.
+
+    Distils the wired VLA teacher policy into a compact student *between* cloud
+    retraining cycles, on a slow-cadence background task OUTSIDE the 30 Hz hot
+    loop. Default-OFF and backwards-compatible — wired as an ``Optional`` block on
+    ``Settings`` so existing YAML loads byte-identically. Every value is
+    config-driven; ``slot_dir`` is deliberately repo-relative (resolved by the
+    factory under the configured experience root ``ExperienceConfig.path``) so NO
+    absolute host path is hardcoded. The distilled student is PERSISTED to a
+    SHA-256 slot, never hot-swapped into the live policy — deployment stays a
+    soak-gated operator decision.
+    """
+
+    enabled: bool = Field(
+        False,
+        description="Master switch for the growth-pillar distillation loop (default-off)",
+    )
+    trigger_min_new_records: int = Field(
+        500,
+        gt=0,
+        description=(
+            "Minimum fresh experience records that must accumulate before a "
+            "distillation cycle is triggered"
+        ),
+    )
+    check_interval_s: float = Field(
+        300.0,
+        gt=0,
+        description=(
+            "Slow-cadence period (seconds) between distillation-trigger checks. The "
+            "distillation runs on its own background task OUTSIDE the 30 Hz hot "
+            "loop; this is how often the coordinator probes the new-record count "
+            "against ``trigger_min_new_records``. Defaults to 5 min so a default-on "
+            "deployment never busy-polls."
+        ),
+    )
+    distill_steps: int = Field(
+        50,
+        gt=0,
+        description="Number of bounded distillation gradient steps per cycle",
+    )
+    batch_size: int = Field(
+        32,
+        gt=0,
+        description="Latent-minibatch size sampled per distillation step",
+    )
+    temperature: float = Field(
+        2.0,
+        gt=0,
+        description=(
+            "Softmax temperature (classification-objective distillers only; ignored "
+            "by the regression objective used for the continuous VLA action policy)"
+        ),
+    )
+    alpha: float = Field(
+        1.0,
+        ge=0,
+        le=1,
+        description=(
+            "Weight of the soft (teacher-matching) loss vs the hard-target loss. "
+            "Default 1.0 = pure teacher-matching self-distillation (no ground-truth "
+            "action labels), which is how the VLA policy is distilled."
+        ),
+    )
+    learning_rate: float = Field(
+        1e-4,
+        gt=0,
+        description="Learning rate for the bounded distillation gradient steps",
+    )
+    student_hidden_dim: int = Field(
+        64,
+        gt=0,
+        description=(
+            "Hidden-layer width of the compact student MLP. Keep it small — "
+            "compression is the point of the growth pillar."
+        ),
+    )
+    slot_dir: str = Field(
+        "growth_slot",
+        description=(
+            "Experience-root-relative leaf for the distilled-student weight slot. "
+            "NOT an absolute host path: the factory resolves it UNDER the configured "
+            "experience root (``<ExperienceConfig.path>/<slot_dir>``) so any operator "
+            "override of the experience path is inherited for free. Distilled "
+            "students land here, never overwriting the cloud-pulled slot."
+        ),
+    )
+
+    @field_validator("slot_dir")
+    @classmethod
+    def _validate_slot_dir(cls, v: str) -> str:
+        """Reject slot_dir values that escape the experience root.
+
+        Mirrors ``OnDeviceLearningConfig._validate_slot_dir``: ``slot_dir`` is
+        resolved as ``<ExperienceConfig.path>/<slot_dir>``, so an absolute path, a
+        parent-traversal (``..``) component, or an empty / whitespace-only value
+        would break that containment contract. Validated at YAML load so a
+        misconfigured deployment fails fast.
+        """
+        from pathlib import PurePosixPath, PureWindowsPath
+
+        slot = v.strip()
+        posix = PurePosixPath(slot)
+        windows = PureWindowsPath(slot)
+        is_absolute = posix.is_absolute() or windows.is_absolute()
+        has_traversal = ".." in posix.parts or ".." in windows.parts
+        if not slot or is_absolute or has_traversal:
+            msg = (
+                "growth.slot_dir must be a non-empty relative path without parent "
+                "traversal (resolved under ExperienceConfig.path); got " + repr(v)
+            )
+            raise ValueError(msg)
+        return slot
+
+
 class LLMConfig(BaseModel):
     """LLM Gateway configuration for NL command interface."""
 
@@ -1724,6 +1840,14 @@ class MetricsConfig(BaseModel):
             "(label: reason). Pure-add: omitted from /metrics until the first "
             "revert, so default deployments render byte-identically. Safe to "
             "leave on."
+        ),
+    )
+    track_growth_distillation: bool = Field(
+        True,
+        description=(
+            "Expose the growth-pillar distillation counter (label: outcome). "
+            "Pure-add: omitted from /metrics until the first distillation cycle, "
+            "so default deployments render byte-identically. Safe to leave on."
         ),
     )
     track_voice_degradation: bool = Field(
@@ -5251,6 +5375,16 @@ class Settings(BaseSettings):
             "disables — existing YAML loads byte-identical. Populate with "
             "``enabled: true`` to let the rover update its own weights between "
             "cloud retraining cycles, gated by a safety-regression auto-revert."
+        ),
+    )
+    growth: GrowthConfig | None = Field(
+        None,
+        description=(
+            "Growth-pillar knowledge-distillation block. ``None`` (default) "
+            "disables — existing YAML loads byte-identical. Populate with "
+            "``enabled: true`` to distil the wired VLA teacher policy into a "
+            "compact student on a slow-cadence background task; the distilled "
+            "student is persisted to a SHA-256 slot, never hot-swapped."
         ),
     )
     observability: ObservabilityConfig | None = Field(
