@@ -165,6 +165,11 @@ def measure_drift(
             f"the training internals); got {type(world_model).__name__}"
         )
         raise TypeError(msg)
+    # Device-agnostic: harmonise the batch to the MODEL's device (``.to`` is a
+    # no-op reference return when already matching), so a CUDA model scores a
+    # CPU-built batch (and vice versa) without caller-side plumbing.
+    model_device = next(world_model.parameters()).device
+    batch = {key: value.to(model_device) for key, value in batch.items()}
     motor = batch["motor"]
     b, t, _ = motor.shape
     if t < context_steps + horizon:

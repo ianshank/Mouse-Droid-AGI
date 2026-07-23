@@ -54,7 +54,9 @@ def test_tiny_run_writes_stable_finite_report(spike: ModuleType, tmp_path: Path)
     rc = spike.main([*_TINY_ARGS, "--out", str(out)])
     assert rc == 0
     report = json.loads(out.read_text())
-    assert report["environment"].startswith("container-cpu")
+    # Device-agnostic: "container-cpu" here, "container-cuda" on a GPU host.
+    assert report["environment"].startswith("container-")
+    assert report["device"] in ("cpu", "cuda", "cuda:0")
     assert report["consumer_ceiling"]["end_to_end_ceiling"] == "~1.25-1.6x"
     (row,) = report["results"]
     assert row["k"] == 2

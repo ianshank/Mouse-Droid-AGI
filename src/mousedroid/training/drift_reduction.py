@@ -60,12 +60,27 @@ class DriftComparisonResult:
         return self.baseline.mean(channel) - self.augmented.mean(channel)
 
 
-def _seeded_model_pair(model_cfg: ModelConfig, seed: int) -> tuple[RSSM, RawModalityDecoders]:
-    """Build an (RSSM, decoders) pair from a pinned seed."""
+def _resolve_device(device: torch.device | str | None) -> torch.device:
+    """``None`` → CUDA when available, else CPU (device-agnostic default)."""
+    if device is not None:
+        return torch.device(device)
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def _seeded_model_pair(
+    model_cfg: ModelConfig, seed: int, device: torch.device | None = None
+) -> tuple[RSSM, RawModalityDecoders]:
+    """Build an (RSSM, decoders) pair from a pinned seed.
+
+    Parameters are initialised from the seeded GLOBAL RNG on CPU and then
+    moved, so the initial weights are byte-identical regardless of the target
+    device.
+    """
+    resolved = _resolve_device(device)
     torch.manual_seed(seed)
-    model = RSSM(model_cfg)
+    model = RSSM(model_cfg).to(resolved)
     torch.manual_seed(seed)
-    decoders = RawModalityDecoders(model_cfg)
+    decoders = RawModalityDecoders(model_cfg).to(resolved)
     return model, decoders
 
 
@@ -77,6 +92,7 @@ def train_pair_and_compare(
     *,
     steps: int,
     learning_rate: float,
+    device: torch.device | str | None = None,
 ) -> DriftComparisonResult:
     """Train baseline + augmented arms and measure both on held-out data.
 
@@ -93,6 +109,12 @@ def train_pair_and_compare(
             ``factory._build_held_out_sequence_batch`` pattern).
         steps: Optimisation steps per arm.
         learning_rate: Adam learning rate for both arms.
+        device: Target device for both arms and all batches. ``None``
+            (default) resolves device-agnostically: CUDA when available, else
+            CPU. Seeded inits happen on CPU before the move, so initial
+            weights are device-independent; ``torch.manual_seed`` reseeds the
+            CUDA generators too, so the per-step parity discipline holds on
+            either device.
 
     Returns:
         A :class:`DriftComparisonResult` (negative results included, never
@@ -108,13 +130,17 @@ def train_pair_and_compare(
         msg = f"steps must be positive; got {steps}"
         raise ValueError(msg)
     seed = drift_cfg.seed
+    resolved_device = _resolve_device(device)
+    train_batches = [
+        {key: value.to(resolved_device) for key, value in batch.items()} for batch in train_batches
+    ]
 
-    baseline, baseline_decoders = _seeded_model_pair(model_cfg, seed)
-    augmented, augmented_decoders = _seeded_model_pair(model_cfg, seed)
+    baseline, baseline_decoders = _seeded_model_pair(model_cfg, seed, resolved_device)
+    augmented, augmented_decoders = _seeded_model_pair(model_cfg, seed, resolved_device)
     head: DriftCorrectionHead | None = None
     if drift_cfg.residual_head:
         torch.manual_seed(seed)
-        head = DriftCorrectionHead(model_cfg)
+        head = DriftCorrectionHead(model_cfg).to(resolved_device)
 
     opt_baseline = torch.optim.Adam(
         list(baseline.parameters()) + list(baseline_decoders.parameters()),

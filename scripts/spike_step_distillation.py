@@ -103,9 +103,7 @@ class KStepJumpStudent(nn.Module):
         super().__init__()
         in_dim = cfg.hidden_dim + cfg.latent_dim + k * cfg.action_dim
         out_dim = cfg.hidden_dim + cfg.latent_dim + 1
-        self.net = nn.Sequential(
-            nn.Linear(in_dim, hidden), nn.ReLU(), nn.Linear(hidden, out_dim)
-        )
+        self.net = nn.Sequential(nn.Linear(in_dim, hidden), nn.ReLU(), nn.Linear(hidden, out_dim))
 
     def forward(self, x: Tensor) -> Tensor:
         out: Tensor = self.net(x)
@@ -126,8 +124,20 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--checkpoint", default=None, help="Optional trained RSSM checkpoint (migrated)"
     )
+    parser.add_argument(
+        "--device",
+        choices=("auto", "cpu", "cuda"),
+        default="auto",
+        help="Target device (auto = cuda when available, else cpu)",
+    )
     parser.add_argument("--out", default="reports/spike_step_distillation.json")
     return parser.parse_args(argv)
+
+
+def _sync(device: torch.device) -> None:
+    """Synchronise CUDA before reading the wall clock (honest GPU latency)."""
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
 
 
 def _model_cfg(cfg: Settings) -> ModelConfig:
@@ -145,25 +155,29 @@ def _build_model(cfg: Settings, mcfg: ModelConfig, checkpoint: str | None) -> RS
 
 
 @torch.no_grad()
-def _roll_states(model: RSSM, *, n: int, gen: torch.Generator) -> tuple[Tensor, Tensor]:
-    """On-distribution (h, z) pairs: prior rollout from zeros under random actions."""
+def _roll_states(
+    model: RSSM, *, n: int, gen: torch.Generator, device: torch.device
+) -> tuple[Tensor, Tensor]:
+    """On-distribution (h, z) pairs: prior rollout from zeros under random actions.
+
+    Random draws come from the CPU ``gen`` (device-independent determinism)
+    and are moved to ``device`` before use.
+    """
     cfg = model.cfg
-    h = torch.zeros(n, cfg.hidden_dim)
-    z = torch.zeros(n, cfg.latent_dim)
+    h = torch.zeros(n, cfg.hidden_dim, device=device)
+    z = torch.zeros(n, cfg.latent_dim, device=device)
     warmup = 10  # hardcoded-ok: spike-only mixing steps to leave the zero state
     for _ in range(warmup):
-        action = torch.tanh(torch.randn(n, cfg.action_dim, generator=gen))
+        action = torch.tanh(torch.randn(n, cfg.action_dim, generator=gen)).to(device)
         h = model.gru(torch.cat([z, action], dim=-1), h)
         prior_mean, prior_logvar = model.prior(h).chunk(2, dim=-1)
-        eps = torch.randn(prior_mean.shape, generator=gen)
+        eps = torch.randn(prior_mean.shape, generator=gen).to(device)
         z = prior_mean + torch.exp(0.5 * prior_logvar) * eps
     return h, z
 
 
-def _inputs(
-    h: Tensor, z: Tensor, *, k: int, a_dim: int, gen: torch.Generator
-) -> Tensor:
-    actions = torch.tanh(torch.randn(h.shape[0], k * a_dim, generator=gen))
+def _inputs(h: Tensor, z: Tensor, *, k: int, a_dim: int, gen: torch.Generator) -> Tensor:
+    actions = torch.tanh(torch.randn(h.shape[0], k * a_dim, generator=gen)).to(h.device)
     return torch.cat([h, z, actions], dim=-1)
 
 
@@ -183,7 +197,7 @@ def _action_grid_agreement(
     n = h.shape[0]
     ret_idx = -1  # return is the last output column
     for i in range(n):
-        cand_actions = torch.tanh(torch.randn(n_candidates, k * a_dim, generator=gen))
+        cand_actions = torch.tanh(torch.randn(n_candidates, k * a_dim, generator=gen)).to(h.device)
         hi = h[i : i + 1].expand(n_candidates, -1)
         zi = z[i : i + 1].expand(n_candidates, -1)
         x = torch.cat([hi, zi, cand_actions], dim=-1)
@@ -196,32 +210,36 @@ def _action_grid_agreement(
 
 
 def _time_primitive(
-    model: RSSM, *, k: int, trials: int, gen: torch.Generator
+    model: RSSM, *, k: int, trials: int, gen: torch.Generator, device: torch.device
 ) -> list[float]:
     """Wall time of k sequential (stochastic) imagine_step calls — the deployed leg."""
     cfg = model.cfg
     samples_ms: list[float] = []
-    h = torch.zeros(1, cfg.hidden_dim)
-    z = torch.zeros(1, cfg.latent_dim)
-    action = torch.tanh(torch.randn(1, cfg.action_dim, generator=gen))
+    h = torch.zeros(1, cfg.hidden_dim, device=device)
+    z = torch.zeros(1, cfg.latent_dim, device=device)
+    action = torch.tanh(torch.randn(1, cfg.action_dim, generator=gen)).to(device)
     for _ in range(trials):
+        _sync(device)
         start = time.perf_counter()
         hh, zz = h, z
         for _ in range(k):
             hh, zz, _reward = model.imagine_step(action, hh, zz)
+        _sync(device)
         samples_ms.append((time.perf_counter() - start) * 1000.0)
     return samples_ms
 
 
 def _time_student(
-    student: KStepJumpStudent, x: Tensor, *, trials: int
+    student: KStepJumpStudent, x: Tensor, *, trials: int, device: torch.device
 ) -> list[float]:
     samples_ms: list[float] = []
     single = x[:1]
     with torch.no_grad():
         for _ in range(trials):
+            _sync(device)
             start = time.perf_counter()
             student(single)
+            _sync(device)
             samples_ms.append((time.perf_counter() - start) * 1000.0)
     return samples_ms
 
@@ -232,25 +250,26 @@ def _run_for_k(
     mcfg: ModelConfig,
     args: argparse.Namespace,
     k: int,
+    device: torch.device,
 ) -> dict[str, object]:
     gen = torch.Generator(device="cpu")
     gen.manual_seed(args.seed + k)
     torch.manual_seed(args.seed + k)
     gamma = cfg.mcts.gamma
     teacher = KStepTeacherAdapter(model, k=k, gamma=gamma)
-    student = KStepJumpStudent(mcfg, k=k, hidden=args.student_hidden)
+    student = KStepJumpStudent(mcfg, k=k, hidden=args.student_hidden).to(device)
     distiller = KnowledgeDistiller(
         teacher, student, temperature=1.0, alpha=1.0, lr=args.lr, objective="regression"
     )
 
-    h, z = _roll_states(model, n=args.n_states, gen=gen)
+    h, z = _roll_states(model, n=args.n_states, gen=gen, device=device)
     losses: list[float] = []
     for _ in range(args.distill_steps):
         idx = torch.randint(0, args.n_states, (args.batch_size,), generator=gen)
         x = _inputs(h[idx], z[idx], k=k, a_dim=mcfg.action_dim, gen=gen)
         losses.append(float(distiller.distill_step(x).detach()))
 
-    h_eval, z_eval = _roll_states(model, n=64, gen=gen)
+    h_eval, z_eval = _roll_states(model, n=64, gen=gen, device=device)
     x_eval = _inputs(h_eval, z_eval, k=k, a_dim=mcfg.action_dim, gen=gen)
     student.eval()
     with torch.no_grad():
@@ -271,8 +290,8 @@ def _run_for_k(
         n_candidates=cfg.mcts.n_action_candidates,
         gen=gen,
     )
-    primitive = summarize(_time_primitive(model, k=k, trials=args.trials, gen=gen))
-    student_lat = summarize(_time_student(student, x_eval, trials=args.trials))
+    primitive = summarize(_time_primitive(model, k=k, trials=args.trials, gen=gen, device=device))
+    student_lat = summarize(_time_student(student, x_eval, trials=args.trials, device=device))
     speedup_p50 = primitive.p50_ms / max(student_lat.p50_ms, 1e-9)
     speedup_p95 = primitive.p95_ms / max(student_lat.p95_ms, 1e-9)
     return {
@@ -300,11 +319,15 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     cfg = load_settings(Path(args.config))
     mcfg = _model_cfg(cfg)
-    model = _build_model(cfg, mcfg, args.checkpoint)
+    if args.device == "auto":
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        device = torch.device(args.device)
+    model = _build_model(cfg, mcfg, args.checkpoint).to(device)
     model.eval()
 
     ks = [int(v) for v in str(args.k).split(",") if v.strip()]
-    results = [_run_for_k(model, cfg, mcfg, args, k) for k in ks]
+    results = [_run_for_k(model, cfg, mcfg, args, k, device) for k in ks]
 
     print("\n| k | agreement | primitive p95 (ms) | student p95 (ms) | speedup p95 |")
     print("|---|---|---|---|---|")
@@ -335,7 +358,8 @@ def main(argv: list[str] | None = None) -> int:
             "rollout_share": _ROLLOUT_SHARE,
             "end_to_end_ceiling": _CONSUMER_CEILING,
         },
-        "environment": "container-cpu (Jetson measurement pending operator run)",
+        "device": str(device),
+        "environment": (f"container-{device.type} (Jetson measurement pending operator run)"),
     }
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)

@@ -40,6 +40,12 @@ deploys a model.
    report), and lower `--distill-steps`/`--trials` if the rover is thermally
    constrained.
 
+   The harness is device-agnostic: `--device auto` (default) picks CUDA on
+   the Jetson's iGPU, else CPU. Since the world model owns the shared iGPU in
+   production, record BOTH legs — `--device cuda` (deployment-realistic) and
+   `--device cpu` (contention-free floor) — into separate `--out` files.
+   Latency timing is CUDA-synchronized, so GPU numbers are honest wall times.
+
 3. Copy the printed markdown table (and the JSON under `reports/`) into the
    **Jetson** section of `docs/analysis/alayaworld-distillation-spike.md`.
 

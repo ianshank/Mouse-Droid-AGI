@@ -196,3 +196,16 @@ class TestLatentContextHook:
             latent_context=self._memory(),
         )
         assert off.per_step_mse["latent_h"] != on.per_step_mse["latent_h"]
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA-only harmonization path")
+def test_cuda_model_scores_cpu_batch() -> None:
+    """measure_drift harmonises a CPU-built batch to the model's device."""
+    model, decoders = _model_pair()
+    model = model.cuda()
+    decoders = decoders.cuda()
+    batch = _batch(model.cfg)  # CPU tensors
+    report = measure_drift(
+        model, batch, decoders, context_steps=_CONTEXT, horizon=_HORIZON, seed=42
+    )
+    assert all(v >= 0.0 for curve in report.per_step_mse.values() for v in curve)

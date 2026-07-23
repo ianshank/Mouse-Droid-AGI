@@ -79,6 +79,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="off",
         help="Optional bounded-context memory ablation at the warmup seam",
     )
+    parser.add_argument(
+        "--device",
+        choices=("auto", "cpu", "cuda"),
+        default="auto",
+        help="Target device for both arms (auto = cuda when available, else cpu)",
+    )
     parser.add_argument("--out", default="reports/drift_comparison.json")
     parser.add_argument(
         "--gate-max-regression",
@@ -142,11 +148,9 @@ def _synthetic_batch(
         )
         m[:, -1] = (m[:, -1] - 0.0005).clamp(min=0.0)  # slow battery drain
         # Range is coupled to forward velocity — the environment-shaped signal.
-        r = (
-            r
-            - 0.05 * m[:, :1]
-            + 0.01 * torch.randn(b, r.shape[-1], generator=generator)
-        ).clamp(0.1, 4.0)
+        r = (r - 0.05 * m[:, :1] + 0.01 * torch.randn(b, r.shape[-1], generator=generator)).clamp(
+            0.1, 4.0
+        )
         action[:, step] = a
         motor[:, step] = m
         ultra[:, step] = r
@@ -205,6 +209,7 @@ def _memory_ablation(
     mcfg: ModelConfig,
     drift_cfg: DriftTrainingConfig,
     single_episode_batch: dict[str, Tensor],
+    device: torch.device | None,
 ) -> dict[str, object]:
     """Memory-off vs memory-on drift on a FRESH seeded model pair (B=1).
 
@@ -215,19 +220,15 @@ def _memory_ablation(
     from mousedroid.training.drift_reduction import _seeded_model_pair
     from mousedroid.world_model.bounded_context import BoundedContextMemory
 
-    memory_cfg = cfg.world_model_memory or WorldModelMemoryConfig.model_validate(
-        {"enabled": True}
-    )
+    memory_cfg = cfg.world_model_memory or WorldModelMemoryConfig.model_validate({"enabled": True})
     if memory_cfg.sink_warmup_ticks >= drift_cfg.eval_context_steps:
         print(
             f"WARNING: sink_warmup_ticks ({memory_cfg.sink_warmup_ticks}) >= "
             f"context_steps ({drift_cfg.eval_context_steps}) — the sink is never "
             "captured during warmup, so this ablation measures the ring/EMA only."
         )
-    model, decoders = _seeded_model_pair(mcfg, drift_cfg.seed)
-    context = BoundedContextMemory(
-        memory_cfg, h_dim=mcfg.hidden_dim, z_dim=mcfg.latent_dim
-    )
+    model, decoders = _seeded_model_pair(mcfg, drift_cfg.seed, device)
+    context = BoundedContextMemory(memory_cfg, h_dim=mcfg.hidden_dim, z_dim=mcfg.latent_dim)
     off = measure_drift(
         model,
         single_episode_batch,
@@ -292,14 +293,12 @@ def main(argv: list[str] | None = None) -> int:
         train_batches = _mujoco_batches(
             cfg, episodes=args.episodes, seq_len=args.seq_len, n_batches=args.train_batches
         )
-        held_out = _mujoco_batches(
-            cfg, episodes=args.episodes, seq_len=args.seq_len, n_batches=1
-        )[0]
+        held_out = _mujoco_batches(cfg, episodes=args.episodes, seq_len=args.seq_len, n_batches=1)[
+            0
+        ]
     else:
         train_batches = [
-            _synthetic_batch(
-                mcfg, episodes=args.episodes, seq_len=args.seq_len, generator=gen
-            )
+            _synthetic_batch(mcfg, episodes=args.episodes, seq_len=args.seq_len, generator=gen)
             for _ in range(args.train_batches)
         ]
         # Held-out draws AFTER the train batches from the same stream — disjoint
@@ -308,6 +307,7 @@ def main(argv: list[str] | None = None) -> int:
             mcfg, episodes=args.episodes, seq_len=args.seq_len, generator=gen
         )
 
+    device = None if args.device == "auto" else torch.device(args.device)
     result = train_pair_and_compare(
         mcfg,
         drift_cfg,
@@ -315,6 +315,7 @@ def main(argv: list[str] | None = None) -> int:
         held_out,
         steps=args.steps,
         learning_rate=args.lr,
+        device=device,
     )
     _print_table(result)
 
@@ -332,7 +333,7 @@ def main(argv: list[str] | None = None) -> int:
     }
     if args.memory in ("on", "both"):
         single = _synthetic_batch(mcfg, episodes=1, seq_len=args.seq_len, generator=gen)
-        report["memory_ablation"] = _memory_ablation(cfg, mcfg, drift_cfg, single)
+        report["memory_ablation"] = _memory_ablation(cfg, mcfg, drift_cfg, single, device)
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)

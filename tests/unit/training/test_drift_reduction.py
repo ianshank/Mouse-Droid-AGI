@@ -15,7 +15,7 @@ import torch
 
 from mousedroid.config.schema import DriftTrainingConfig, ModelConfig
 from mousedroid.constants import SENSOR_SLOT_MAP
-from mousedroid.training.drift_reduction import train_pair_and_compare
+from mousedroid.training.drift_reduction import _resolve_device, train_pair_and_compare
 from mousedroid.training.rssm_pretrainer import RSSMPretrainer
 from mousedroid.training.sim_episode_generator import EpisodeBatch
 from mousedroid.world_model.rssm import RSSM
@@ -160,3 +160,43 @@ class TestPretrainerDriftSeam:
             "drift",
         )
         assert history_none != history_drift
+
+
+class TestDeviceAgnostic:
+    def test_default_device_resolves_to_available_hardware(self) -> None:
+        expected = "cuda" if torch.cuda.is_available() else "cpu"
+        assert _resolve_device(None).type == expected
+
+    def test_explicit_cpu_passthrough(self) -> None:
+        assert _resolve_device("cpu").type == "cpu"
+        assert _resolve_device(torch.device("cpu")).type == "cpu"
+
+    def test_cpu_batches_train_on_explicit_cpu(self) -> None:
+        """Explicit device= threads end-to-end (CPU host executes the cpu leg)."""
+        mcfg = _tiny_cfg()
+        result = train_pair_and_compare(
+            mcfg,
+            _drift_cfg(corruption_prob=0.0, residual_head=False),
+            [_batch(mcfg, seed=0)],
+            _batch(mcfg, seed=9),
+            steps=2,
+            learning_rate=1e-3,
+            device="cpu",
+        )
+        assert result.steps == 2
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA-only pair run")
+    def test_cuda_pair_run_produces_finite_reports(self) -> None:
+        mcfg = _tiny_cfg()
+        result = train_pair_and_compare(
+            mcfg,
+            _drift_cfg(corruption_prob=1.0),
+            [_batch(mcfg, seed=0)],  # CPU batches, moved internally
+            _batch(mcfg, seed=9),
+            steps=2,
+            learning_rate=1e-3,
+            device="cuda",
+        )
+        channel = result.baseline.headline_channel
+        assert result.baseline.mean(channel) >= 0.0
+        assert result.augmented.mean(channel) >= 0.0

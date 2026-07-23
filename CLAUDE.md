@@ -795,6 +795,13 @@ Non-negotiable contracts (pinned by `tests/regression/test_alayaworld_memory_dis
   synthetic harness (mujoco opt-in; `--memory both` is an optional ablation
   on the RSSM latent at the warmup seam, B=1); a documented negative result
   is an acceptable outcome — the script reports, it does not gate by default.
+  **Device-agnostic:** `measure_drift` harmonises the batch to the model's
+  device; `train_pair_and_compare(device=None)` resolves CUDA-when-available
+  (seeded inits happen on CPU pre-move, so initial weights are
+  device-independent); both scripts take `--device auto|cpu|cuda` and the
+  spike's latency timing is CUDA-synchronized; the memory's `contextualize`
+  harmonises stored keys to the query device (no-op on the steady-state
+  same-device hot path).
 - **Distillation stays a scripts-only spike.**
   `scripts/spike_step_distillation.py` (non-binding) distils a deterministic
   prior-MEAN k-step teacher (γ-discounted return matching

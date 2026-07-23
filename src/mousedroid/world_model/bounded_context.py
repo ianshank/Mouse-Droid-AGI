@@ -123,6 +123,13 @@ class BoundedContextMemory:
         Exact identity when ``blend_weight == 0`` or no store is populated.
         The blended output is isfinite-guarded with fallback to the identity.
 
+        Device-agnostic: stored keys follow the device they were observed on
+        and are harmonised to the QUERY's device here (``Tensor.to`` is a
+        no-op reference return when devices already match, so the steady-state
+        hot path pays nothing). This keeps the blend working across a
+        CPU↔CUDA engine swap where stale entries could otherwise
+        cross-device-crash the matmul.
+
         Args:
             h: Hidden state, shape ``(1, h_dim)``.
             z: Stochastic latent, shape ``(1, z_dim)``.
@@ -141,7 +148,7 @@ class BoundedContextMemory:
         if not keys_list:
             return h, z
         hz = torch.cat([h, z], dim=-1).reshape(-1)
-        keys = torch.stack(keys_list)  # (n, dim)
+        keys = torch.stack([key.to(hz.device) for key in keys_list])  # (n, dim)
         scale = float(self._dim) ** 0.5
         weights = torch.softmax((keys @ hz) / scale, dim=0)  # (n,)
         context = weights @ keys  # (dim,)

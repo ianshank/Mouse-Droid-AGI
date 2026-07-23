@@ -194,3 +194,17 @@ class TestDeterminism:
 def test_protocol_conformance() -> None:
     mem = _mem()
     assert isinstance(mem, LatentContextProtocol)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA-only cross-device path")
+def test_cross_device_keys_harmonized_to_query_device() -> None:
+    """CPU-observed keys must blend cleanly with a CUDA query (and vice versa)."""
+    mem = _mem(sink_warmup_ticks=0, blend_weight=0.3)
+    for i in range(4):
+        mem.observe(*_state(i))  # CPU keys
+    h = torch.randn(1, _H_DIM, device="cuda")
+    z = torch.randn(1, _Z_DIM, device="cuda")
+    h_out, z_out = mem.contextualize(h, z)
+    assert h_out.device.type == "cuda"
+    assert z_out.device.type == "cuda"
+    assert bool(torch.isfinite(h_out).all())
