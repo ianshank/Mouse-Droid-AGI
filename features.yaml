@@ -309,3 +309,41 @@ features:
     implemented_in: "40a6399045ac520824bf706debed8ed7cdd37200"
     depends_on: ["F-001"]
     notes: "ADR-014."
+
+  - id: "F-022"
+    epic: "Cognitive Integration"
+    name: "Growth pillar wired as off-loop VLA distillation (default-OFF, soak-gated)"
+    description: >-
+      The growth pillar (knowledge distillation) is wired into the runtime as a
+      default-OFF, off-loop background coordinator that distils the live VLA
+      teacher policy into a compact StudentVLAPolicy over real on-policy (h, z)
+      latents rolled from the live world model. KnowledgeDistiller gained a
+      backwards-compatible regression (MSE) objective; the distilled student is
+      persisted to a SHA-256 slot (GrowthSlotStore) and NEVER hot-swapped -
+      deployment stays a soak-gated operator decision. GrowthConfig is
+      Optional/None on Settings (enabled=False); build_growth_coordinator returns
+      None when the block is absent/disabled OR no VLA teacher is wired. A gated
+      pure-add {ns}_growth_distillations_total{outcome} counter surfaces on
+      /metrics, omitted until the first cycle. Moves one of the three
+      previously-unwired pillars (meta, growth, scaling) onto a runtime seam.
+    category: "functional"
+    priority: "medium"
+    status: "in_progress"
+    tier: "fast"
+    verification:
+      - "regression + classification distiller objectives both proven (classification byte-identical)"
+      - "factory returns None when disabled / no-VLA; non-None + real distill cycle when enabled"
+      - "default YAML loads unchanged; /metrics byte-identical until first cycle"
+    validation_command: >-
+      python -m pytest tests/unit/growth/
+      tests/unit/factory/test_build_growth_coordinator.py
+      tests/unit/orchestrator/test_growth_distill_loop.py
+      tests/unit/telemetry/test_growth_metrics.py
+      tests/regression/test_growth_distillation_aqa.py
+      tests/regression/test_growth_backwards_compat.py -q
+    implemented_in: null
+    depends_on: ["F-001"]
+    notes: >-
+      Default-OFF + soak-gated: keep growth.enabled off on the live rover until a
+      soak gate passes. Distils the Phase-3 VLA policy. implemented_in pins to the
+      squash SHA post-merge (per the F-015..F-021 convention).

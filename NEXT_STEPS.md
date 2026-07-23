@@ -145,6 +145,12 @@ is landed — runbook: `docs/runbooks/mlflow-local-ui.md`.
 - **Scripted WAN-drop failover drill** — capture the operator drill asserting
   `fallback_primary_to_secondary` + `fallback_primary_retry_attempt` once the
   ESP32 is repaired and a full end-to-end mission can run.
+- **[Cognitive integration — F-022] Soak-gate the growth pillar before enabling it.**
+  The `growth` pillar (VLA knowledge distillation) is now wired as a default-OFF,
+  off-loop coordinator (distilled student persisted to a SHA-256 slot, never
+  hot-swapped). Keep `growth.enabled` off on the live rover until a soak gate
+  passes (mirror the Phase-6 on-device-learning discipline). Next-in-arc: wire the
+  two remaining unwired pillars (`meta`, `scaling`) once growth has soaked.
 
 ---
 
