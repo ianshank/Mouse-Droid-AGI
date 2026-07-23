@@ -8,6 +8,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — AlayaWorld-adapted bounded-context memory, drift training + distillation spike (F-023)
+
+Adapted two ideas from the AlayaWorld technical report (arXiv:2607.18367, cited as
+characterized in the requesting OpenSpec change — see the new `docs/related-work.md`
+for the adaptation-not-adoption record; the video-diffusion architecture was NOT
+adopted and no iWorld-Bench-equivalent evaluation is claimed) as default-OFF, fully
+additive surfaces, plus a non-binding distillation feasibility spike:
+
+- **Bounded-context latent memory** (`world_model/bounded_context.py`,
+  `world_model_memory` Optional/None block): per-mission sink anchor + recent ring +
+  EMA long-summary (constant `recent_size + 2` footprint) blended into the carried
+  `(h, z)` at the orchestrator observe seam. Identity when disabled (trajectory-pinned);
+  NaN contract (`_validate_latent` `healthy` flag — unhealthy ticks never touch the
+  memory); cold-start key-set exclusion (never blend toward zero); sink re-arms on OTA
+  swap and at mission boundaries; dedicated blend-latency perf budget.
+- **Corrupted-history drift training** (RSSM feasibility vehicle; DualStream port
+  deferred — ADR-015): `RSSM.train_sequence_corrupted` (open-loop prior prefix from a
+  private generator + posterior recovery suffix via a shared per-step helper; forced
+  k=0 allclose-identical to `train_sequence`; state_dict keys unchanged), the
+  evaluation-only `DriftCorrectionHead` (separate `residual_loss` key, consumed by the
+  drift metric, never deployed), `training.drift` config nested under `TrainingConfig`,
+  `RSSMPretrainer` opt-in seam, `training/drift_metrics.py::measure_drift`
+  (deterministic; range-headline per-modality curves + latent divergence; no pose
+  channel exists — substitution declared) and `scripts/compare_drift.py`
+  (seeded synthetic; mujoco opt-in). First in-container comparison recorded a
+  **mixed/near-null result** at a 60-step budget — documented honestly in
+  `docs/analysis/alayaworld-drift-comparison.md`; the real-replay operator re-run is
+  the decisive one.
+- **Distillation spike** (`scripts/spike_step_distillation.py`, scripts-only,
+  non-binding): deterministic prior-MEAN k-step teacher → jump student via the
+  growth-pillar `KnowledgeDistiller(objective="regression")`. Container-CPU numbers:
+  7.3–31.5× primitive p95 speedup, agreement ≤0.609 (random-init teacher).
+  **Provisional recommendation: DEFER**, pending the Jetson + trained-checkpoint run
+  (`docs/runbooks/jetson-alayaworld-spike.md`); the report separates primitive-level
+  speedup from the ~1.25-1.6× MCTS consumer ceiling.
+
+Spec/docs: OpenSpec archive under `openspec/` (documentation-only; repo-native
+artifacts authoritative), design spec + plan under `docs/superpowers/`, ADR-015,
+`features.yaml` F-023, `docs/related-work.md`, CLAUDE.md section, regression pair
+`test_alayaworld_memory_distill_{aqa,backwards_compat}.py`.
+
 ### Changed — Reframed as the "MouseDroid" edge-robotics portfolio; large blobs untracked (PR #167)
 
 Rebranded every forward-facing surface `MouseDroidAGI` → `MouseDroid` (case-sensitive

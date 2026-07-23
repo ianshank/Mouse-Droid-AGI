@@ -1,0 +1,81 @@
+{
+  "spike": "alayaworld-step-distillation (F-023, non-binding)",
+  "seed": 42,
+  "checkpoint": null,
+  "distill_steps": 200,
+  "student_hidden": 128,
+  "results": [
+    {
+      "k": 2,
+      "distill_loss_first": 0.024712620303034782,
+      "distill_loss_last": 0.0018220962956547737,
+      "eval_mse": {
+        "hz": 0.003088366938754916,
+        "return": 0.004513991065323353
+      },
+      "action_agreement": 0.421875,
+      "primitive_latency_ms": {
+        "p50": 0.2739804995144368,
+        "p95": 0.3991708997546082,
+        "p99": 0.49249960057750264
+      },
+      "student_latency_ms": {
+        "p50": 0.03263600001446321,
+        "p95": 0.054728199256714925,
+        "p99": 0.08562416971471973
+      },
+      "primitive_speedup_p50": 8.395039201894155,
+      "primitive_speedup_p95": 7.29369694555831
+    },
+    {
+      "k": 4,
+      "distill_loss_first": 0.018815690651535988,
+      "distill_loss_last": 0.0007393991108983755,
+      "eval_mse": {
+        "hz": 0.0012233084999024868,
+        "return": 0.012741459533572197
+      },
+      "action_agreement": 0.609375,
+      "primitive_latency_ms": {
+        "p50": 0.5322244996932568,
+        "p95": 0.7663562496873054,
+        "p99": 0.8178237097581583
+      },
+      "student_latency_ms": {
+        "p50": 0.0324160000673146,
+        "p95": 0.05818525000904624,
+        "p99": 0.07577540002785094
+      },
+      "primitive_speedup_p50": 16.41857411735091,
+      "primitive_speedup_p95": 13.170971157950815
+    },
+    {
+      "k": 8,
+      "distill_loss_first": 0.018855638802051544,
+      "distill_loss_last": 0.000268731004325673,
+      "eval_mse": {
+        "hz": 0.00047215359518304467,
+        "return": 0.01418379321694374
+      },
+      "action_agreement": 0.421875,
+      "primitive_latency_ms": {
+        "p50": 1.1364874994796992,
+        "p95": 1.8833600994184938,
+        "p99": 3.335331180078355
+      },
+      "student_latency_ms": {
+        "p50": 0.03229100002499763,
+        "p95": 0.05972259978079814,
+        "p99": 0.09766671021679937
+      },
+      "primitive_speedup_p50": 35.19517817967555,
+      "primitive_speedup_p95": 31.535132534937418
+    }
+  ],
+  "consumer_ceiling": {
+    "plan_imagine_calls_estimate": "500-650",
+    "rollout_share": "~40%",
+    "end_to_end_ceiling": "~1.25-1.6x"
+  },
+  "environment": "container-cpu (Jetson measurement pending operator run)"
+}

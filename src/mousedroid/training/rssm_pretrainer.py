@@ -13,7 +13,8 @@ from mousedroid.logging.setup import get_logger
 from mousedroid.training.sim_episode_generator import EpisodeBatch
 
 if TYPE_CHECKING:
-    from mousedroid.world_model.rssm import RSSM
+    from mousedroid.config.schema import DriftTrainingConfig
+    from mousedroid.world_model.rssm import RSSM, DriftCorrectionHead
 
 _log = get_logger(__name__)
 
@@ -35,6 +36,7 @@ class RSSMPretrainer:
         grad_clip: float,
         amp: bool,
         device: torch.device,
+        drift: DriftTrainingConfig | None = None,
     ) -> None:
         """Initialise the pretrainer.
 
@@ -44,8 +46,15 @@ class RSSMPretrainer:
             grad_clip: Global grad-norm clip.
             amp: Enable mixed precision (only honoured on CUDA).
             device: Target device for the model + batches.
+            drift: Optional F-023 corrupted-history training block
+                (``training.drift``). ``None`` (default) or ``enabled=False``
+                keeps the loop byte-identical to pre-feature. When enabled,
+                each batch flips a seeded coin (``corruption_prob``) between
+                the standard ``train_sequence`` and
+                ``train_sequence_corrupted``; the optional evaluation-only
+                ``DriftCorrectionHead`` trains via its SEPARATE loss key.
         """
-        from mousedroid.world_model.rssm import RawModalityDecoders
+        from mousedroid.world_model.rssm import DriftCorrectionHead, RawModalityDecoders
 
         self._model = model.to(device)
         # Pretraining reconstruction heads live here (not on the RSSM) so the
@@ -61,6 +70,41 @@ class RSSMPretrainer:
         # submodule directly — runtime-valid AND mypy-clean, so no suppression.
         self._scaler = GradScaler(enabled=self._amp)
         self._device = device
+        # F-023 corrupted-history seam — everything below stays None on the
+        # legacy path so pre-feature construction is byte-identical.
+        self._drift = drift if drift is not None and drift.enabled else None
+        self._drift_head: DriftCorrectionHead | None = None
+        self._drift_gen: torch.Generator | None = None
+        if self._drift is not None:
+            if self._drift.residual_head:
+                self._drift_head = DriftCorrectionHead(model.cfg).to(device)
+                self._opt.add_param_group({"params": list(self._drift_head.parameters())})
+            self._drift_gen = torch.Generator(device="cpu")
+            self._drift_gen.manual_seed(self._drift.seed)
+            _log.info(
+                "rssm_pretrain_drift_enabled",
+                corruption_prob=self._drift.corruption_prob,
+                max_prefix_frac=self._drift.max_prefix_frac,
+                residual_head=self._drift.residual_head,
+            )
+
+    def _forward_batch(self, tensors: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        """Standard or (seeded-coin) corrupted forward for one batch."""
+        if self._drift is None or self._drift_gen is None:
+            return self._model.train_sequence(tensors, self._decoders)
+        corrupt = bool(
+            torch.rand(1, generator=self._drift_gen).item() < self._drift.corruption_prob
+        )
+        if not corrupt:
+            return self._model.train_sequence(tensors, self._decoders)
+        return self._model.train_sequence_corrupted(
+            tensors,
+            self._decoders,
+            max_prefix_frac=self._drift.max_prefix_frac,
+            recovery_weight=self._drift.recovery_weight,
+            residual_head=self._drift_head,
+            generator=self._drift_gen,
+        )
 
     def _to_device(self, batch: EpisodeBatch) -> dict[str, torch.Tensor]:
         return {
@@ -98,17 +142,25 @@ class RSSMPretrainer:
                 tensors = self._to_device(batch)
                 self._opt.zero_grad()
                 with torch.autocast(device_type=self._device.type, enabled=self._amp):
-                    out = self._model.train_sequence(tensors, self._decoders)
+                    out = self._forward_batch(tensors)
                 loss = out["loss"]
-                scaled = self._scaler.scale(loss)
+                # The residual head's loss lives under a SEPARATE key (never
+                # folded into ``loss`` — the k=0 equality contract); it joins
+                # the backward pass only, so logging/history stay comparable.
+                residual = out.get("residual_loss")
+                backward_target = loss if residual is None else loss + residual
+                scaled = self._scaler.scale(backward_target)
                 scaled.backward()  # type: ignore[no-untyped-call]  # torch stub gap
                 self._scaler.unscale_(self._opt)
-                # Clip ALL optimizer-managed params (model + decoders), not just
-                # the model — otherwise decoder grads can explode unchecked.
-                torch.nn.utils.clip_grad_norm_(
-                    chain(self._model.parameters(), self._decoders.parameters()),
-                    self._grad_clip,
+                # Clip ALL optimizer-managed params (model + decoders + the
+                # optional drift head), not just the model — otherwise their
+                # grads can explode unchecked.
+                clip_params = chain(
+                    self._model.parameters(),
+                    self._decoders.parameters(),
+                    self._drift_head.parameters() if self._drift_head is not None else [],
                 )
+                torch.nn.utils.clip_grad_norm_(clip_params, self._grad_clip)
                 self._scaler.step(self._opt)
                 self._scaler.update()
                 epoch_loss += float(loss.detach())

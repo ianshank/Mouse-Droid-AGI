@@ -2,6 +2,7 @@
 
 import importlib.util
 
+from mousedroid.world_model.bounded_context import BoundedContextMemory
 from mousedroid.world_model.checkpoint_migration import (
     StateDict,
     load_rssm_with_migration,
@@ -9,12 +10,18 @@ from mousedroid.world_model.checkpoint_migration import (
 )
 from mousedroid.world_model.encoder import MultimodalEncoder
 from mousedroid.world_model.mcts import MCTSPlanner
-from mousedroid.world_model.protocol import SafetyTraceProtocol, WorldModelProtocol
+from mousedroid.world_model.protocol import (
+    LatentContextProtocol,
+    SafetyTraceProtocol,
+    WorldModelProtocol,
+)
 from mousedroid.world_model.rssm import RSSM
 from mousedroid.world_model.stream_fusion import StreamFusion
 
 __all__ = [
     "RSSM",
+    "BoundedContextMemory",
+    "LatentContextProtocol",
     "MCTSPlanner",
     "MultimodalEncoder",
     "SafetyTraceProtocol",

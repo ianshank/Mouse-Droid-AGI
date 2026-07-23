@@ -347,3 +347,50 @@ features:
       Default-OFF + soak-gated: keep growth.enabled off on the live rover until a
       soak gate passes. Distils the Phase-3 VLA policy. implemented_in pins to the
       squash SHA post-merge (per the F-015..F-021 convention).
+
+  - id: "F-023"
+    epic: "Cognitive Integration"
+    name: "AlayaWorld-adapted bounded-context memory + drift-reduction training (default-OFF)"
+    description: >-
+      Adapts two AlayaWorld ideas (arXiv:2607.18367) to the RSSM latent world
+      model - NOT the paper's video-diffusion architecture. (1) A bounded-context
+      latent memory (per-mission sink anchor + recent ring + EMA long-summary,
+      constant-size storage) blended into the orchestrator-carried (h, z) at the
+      observe seam; WorldModelMemoryConfig is Optional/None on Settings
+      (enabled=False), build_latent_context returns None when absent/disabled and
+      the tick path is byte-identical. (2) Corrupted-history drift-reduction
+      training: RSSM.train_sequence_corrupted rolls a random open-loop prior
+      prefix (the model's own drifted imagination) then trains the posterior
+      suffix to recover; measure_drift + scripts/compare_drift.py provide the
+      deterministic baseline-vs-augmented comparison (documented negative result
+      acceptable). A scripts-only k-step imagination distillation spike
+      (non-binding) produces a written go/no-go. RSSM is the feasibility vehicle;
+      the DualStreamRSSM port is explicitly deferred (ADR-015).
+    category: "functional"
+    priority: "medium"
+    status: "in_progress"
+    tier: "fast"
+    verification:
+      - "memory footprint constant over long rollouts; disabled path byte-identical; sink incorporated into predictions (S1b test)"
+      - "train_sequence_corrupted k=0 allclose-identical to train_sequence; RSSM state_dict keys unchanged; golden suites green"
+      - "compare_drift.py produces a deterministic seeded baseline-vs-augmented report; spike report carries go/no-go + consumer-ceiling framing"
+    validation_command: >-
+      python -m pytest tests/unit/world_model/test_bounded_context.py
+      tests/unit/world_model/test_train_sequence_corrupted.py
+      tests/unit/training/test_drift_metrics.py
+      tests/unit/training/test_drift_reduction.py
+      tests/unit/factory/test_build_latent_context.py
+      tests/unit/orchestrator/test_latent_context_tick.py
+      tests/integration/test_compare_drift_script.py
+      tests/integration/test_spike_step_distillation.py
+      tests/regression/test_alayaworld_memory_distill_aqa.py
+      tests/regression/test_alayaworld_memory_distill_backwards_compat.py -q
+    implemented_in: null
+    depends_on: ["F-001"]
+    notes: >-
+      OpenSpec change mouse-droid-alayaworld-memory-distill (archived under
+      openspec/changes/; repo-native artifacts authoritative). Default-OFF:
+      keep world_model_memory.enabled off on the live rover until a soak gate
+      passes. Jetson spike run + on-rover drift eval are prepared via
+      docs/runbooks/jetson-alayaworld-spike.md, not executed. implemented_in
+      pins to the squash SHA post-merge (per the F-015..F-021 convention).

@@ -231,10 +231,13 @@ class TestLatentValidation:
         orch._latent_buffer.append((h_good.clone(), z_good.clone()))
 
         h_nan = torch.full_like(h_good, float("nan"))
-        h_out, z_out = orch._validate_latent(h_nan, z_good)
+        h_out, z_out, healthy = orch._validate_latent(h_nan, z_good)
 
         assert not torch.isnan(h_out).any()
         assert torch.allclose(z_out, z_good)
+        # A recovered NaN tick is still unhealthy — the F-023 memory must
+        # not ingest it.
+        assert healthy is False
 
     def test_valid_latent_accumulates_buffer(self) -> None:
         """Valid latent state is appended to the recovery buffer."""
@@ -259,10 +262,11 @@ class TestLatentValidation:
         h_sat = torch.full((1, cfg.model.hidden_dim + cfg.model.cfc_hidden_dim), big)
         z_ok = torch.zeros(1, cfg.model.latent_dim)
 
-        h_out, _z_out = orch._validate_latent(h_sat, z_ok)
+        h_out, _z_out, healthy = orch._validate_latent(h_sat, z_ok)
 
         assert ("world_model", "latent_saturated") in spy.calls
         assert torch.allclose(h_out, h_sat)  # saturation does NOT clamp
+        assert healthy is True  # saturated is a warning, not a NaN tick
 
 
 # ---------------------------------------------------------------------------
