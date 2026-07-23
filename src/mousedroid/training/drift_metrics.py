@@ -93,27 +93,6 @@ def _masked_mse(pred: Tensor, target: Tensor, mask_col: Tensor) -> float:
     return float((per_sample * mask_col).sum() / denom)
 
 
-def _posterior_warmup_step(
-    model: RSSM,
-    batch: Mapping[str, Tensor],
-    step: int,
-    h: Tensor,
-    z: Tensor,
-) -> tuple[Tensor, Tensor]:
-    """One posterior step on ground-truth observations (no loss)."""
-    motor = batch["motor"]
-    mask = batch["valid_mask"]
-    actions = batch["action"]
-    ultra = batch["ultrasonic"][:, step] if model.encoder.ultrasonic_enabled else None
-    lidar = batch["lidar"][:, step] if model.encoder.lidar_enabled else None
-    vision = batch["vision"][:, step] if model.encoder.vision_enabled else None
-    obs_embed = model.encoder(vision, ultra, motor[:, step], mask[:, step], lidar=lidar)
-    h = model.gru(torch.cat([z, actions[:, step]], dim=-1), h)
-    post_params = model.posterior(torch.cat([h, obs_embed], dim=-1))
-    z, _, _ = model._sample_gaussian(post_params)
-    return h, z
-
-
 def measure_drift(
     world_model: WorldModelProtocol,
     batch: Mapping[str, Tensor],
@@ -154,8 +133,9 @@ def measure_drift(
 
     Raises:
         TypeError: If ``world_model`` is not a concrete ``RSSM``.
-        ValueError: If the batch is shorter than ``context_steps + horizon``,
-            or ``latent_context`` is supplied with a batch of size > 1.
+        ValueError: If ``context_steps`` / ``horizon`` are not positive, the
+            batch is shorter than ``context_steps + horizon``, or
+            ``latent_context`` is supplied with a batch of size > 1.
     """
     from mousedroid.world_model.rssm import RSSM
 
@@ -165,6 +145,9 @@ def measure_drift(
             f"the training internals); got {type(world_model).__name__}"
         )
         raise TypeError(msg)
+    if context_steps <= 0 or horizon <= 0:
+        msg = f"context_steps and horizon must be positive; got {context_steps}, {horizon}"
+        raise ValueError(msg)
     # Device-agnostic: harmonise the batch to the MODEL's device (``.to`` is a
     # no-op reference return when already matching), so a CUDA model scores a
     # CPU-built batch (and vice versa) without caller-side plumbing.
@@ -244,7 +227,7 @@ def _rollout_and_score(
     h = torch.zeros(b, cfg.hidden_dim, device=device)
     z = torch.zeros(b, cfg.latent_dim, device=device)
     for step in range(context_steps):
-        h, z = _posterior_warmup_step(model, batch, step, h, z)
+        h, z = model.posterior_step(batch, step, h, z)
         if latent_context is not None:
             latent_context.observe(h, z)
             h, z = latent_context.contextualize(h, z)
@@ -267,7 +250,7 @@ def _rollout_and_score(
         z_roll, _, _ = model._sample_gaussian(model.prior(h_roll))
         hz_roll = torch.cat([h_roll, z_roll], dim=-1)
         # Posterior twin: the observation-anchored reference trajectory.
-        h_post, z_post = _posterior_warmup_step(model, batch, step, h_post, z_post)
+        h_post, z_post = model.posterior_step(batch, step, h_post, z_post)
 
         motor_mask = mask[:, step, motor_slot]
         decoded_motor = decoders.decode_motor(hz_roll)

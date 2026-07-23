@@ -78,6 +78,22 @@ class BoundedContextMemory:
             sink_warmup_ticks=cfg.sink_warmup_ticks,
         )
 
+    def _validate_state_shape(self, h: Tensor, z: Tensor) -> None:
+        """Reject anything but a single ``(1, h_dim)`` / ``(1, z_dim)`` state.
+
+        The memory operates on the ONE carried recurrent state — a ``(B, dim)``
+        input with ``B > 1`` would be silently flattened into the ring and
+        clipped back to the first row on retrieval (silent corruption). Fail
+        loudly instead, matching the ``h_dim <= 0`` guard in ``__init__``.
+        """
+        if h.ndim != 2 or h.shape != (1, self._h_dim) or z.shape != (1, self._z_dim):
+            msg = (
+                "bounded-context memory operates on a single carried state; "
+                f"expected h=(1, {self._h_dim}) z=(1, {self._z_dim}), "
+                f"got h={tuple(h.shape)} z={tuple(z.shape)}"
+            )
+            raise ValueError(msg)
+
     @torch.no_grad()
     def observe(self, h: Tensor, z: Tensor) -> None:
         """Store a validated latent state.
@@ -88,15 +104,29 @@ class BoundedContextMemory:
         orchestrator already skips unhealthy ticks; this guards direct
         callers such as evaluation harnesses).
 
+        Device-agnostic on the WRITE path too: the incoming state is homed to
+        the store's device (that of the first-observed entry), so an
+        engine/device change mid-stream folds cleanly instead of raising a
+        device-mismatch. In production a device change goes through the OTA
+        swap seam, which ``reset()``s the stores first.
+
         Args:
             h: Hidden state, shape ``(1, h_dim)``.
             z: Stochastic latent, shape ``(1, z_dim)``.
+
+        Raises:
+            ValueError: If the state is not a single ``(1, dim)`` row.
         """
+        self._validate_state_shape(h, z)
         hz = torch.cat([h, z], dim=-1).detach()
         if not bool(torch.isfinite(hz).all()):
             _log.warning("bounded_context_nonfinite_dropped", observe_count=self._observe_count)
             return
         flat = hz.reshape(-1).clone()
+        # Home to the store's device (the first entry sets it) so the EMA fold
+        # and the retrieval matmul never cross-device-crash.
+        if self._ring:
+            flat = flat.to(self._ring[0].device)
         if self._sink is None and self._ticks_since_arm >= self._cfg.sink_warmup_ticks:
             self._sink = flat.clone()
             _log.info(
@@ -114,7 +144,7 @@ class BoundedContextMemory:
                 self._long = flat.clone()
             else:
                 alpha = self._cfg.long_ema_alpha
-                self._long = (1.0 - alpha) * self._long + alpha * flat
+                self._long = (1.0 - alpha) * self._long + alpha * flat.to(self._long.device)
 
     @torch.no_grad()
     def contextualize(self, h: Tensor, z: Tensor) -> tuple[Tensor, Tensor]:
@@ -136,7 +166,11 @@ class BoundedContextMemory:
 
         Returns:
             ``(h', z')`` with the same shapes as the inputs.
+
+        Raises:
+            ValueError: If the state is not a single ``(1, dim)`` row.
         """
+        self._validate_state_shape(h, z)
         if self._cfg.blend_weight == 0.0:
             return h, z
         keys_list: list[Tensor] = []

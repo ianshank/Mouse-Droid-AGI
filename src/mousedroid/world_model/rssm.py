@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import cast
 
 import torch
@@ -219,6 +220,40 @@ class RSSM(nn.Module):
 
         predicted_reward: Tensor = self.reward_head(torch.cat([new_h, new_z], dim=-1))
         return new_h, new_z, predicted_reward
+
+    @torch.no_grad()
+    def posterior_step(
+        self, batch: Mapping[str, Tensor], step: int, h: Tensor, z: Tensor
+    ) -> tuple[Tensor, Tensor]:
+        """One posterior update on ground-truth observations — no loss, no grad.
+
+        The observation-anchored counterpart of :meth:`imagine_step`, exposed so
+        evaluation harnesses (e.g. drift measurement) do NOT re-implement the
+        encoder modality-slicing + GRU/posterior sequence against private
+        internals. Encoder modality gating mirrors :meth:`train_sequence`'s
+        per-step core.
+
+        Args:
+            batch: ``(B, T, ...)`` batch with ``motor`` / ``valid_mask`` /
+                ``action`` (always) and ``ultrasonic`` / ``lidar`` / ``vision``
+                when enabled.
+            step: Time index into the batch.
+            h: Hidden state entering this step.
+            z: Latent sample entering this step.
+
+        Returns:
+            ``(new_h, new_z)`` after the posterior update.
+        """
+        motor = batch["motor"]
+        ultra = batch["ultrasonic"][:, step] if self.encoder.ultrasonic_enabled else None
+        lidar = batch["lidar"][:, step] if self.encoder.lidar_enabled else None
+        vision = batch["vision"][:, step] if self.encoder.vision_enabled else None
+        obs_embed = self.encoder(
+            vision, ultra, motor[:, step], batch["valid_mask"][:, step], lidar=lidar
+        )
+        new_h: Tensor = self.gru(torch.cat([z, batch["action"][:, step]], dim=-1), h)
+        new_z, _, _ = self._sample_gaussian(self.posterior(torch.cat([new_h, obs_embed], dim=-1)))
+        return new_h, new_z
 
     def train_sequence(
         self, batch: dict[str, Tensor], decoders: RawModalityDecoders
@@ -453,7 +488,16 @@ class RSSM(nn.Module):
         motor = batch["motor"]
         b, t, _ = motor.shape
         device = motor.device
-        gen = generator if generator is not None else torch.Generator(device="cpu")
+        if generator is not None:
+            gen = generator
+        else:
+            # Seed the private generator from the CURRENT global seed rather
+            # than leaving it unseeded — this keeps the prefix-length draw
+            # reproducible across runs (tied to the caller's ``manual_seed``)
+            # WITHOUT consuming the global RNG stream (which would break the
+            # k=0 equality contract with ``train_sequence``).
+            gen = torch.Generator(device="cpu")
+            gen.manual_seed(torch.initial_seed())
         max_k = min(int(max_prefix_frac * t), t - 1)
         k = int(torch.randint(0, max_k + 1, (1,), generator=gen).item())
 

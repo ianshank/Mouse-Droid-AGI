@@ -22,6 +22,7 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
+from mousedroid.common.torch_device import resolve_device
 from mousedroid.config.schema import DriftTrainingConfig, ModelConfig
 from mousedroid.logging.setup import get_logger
 from mousedroid.training.drift_metrics import DriftReport, measure_drift
@@ -60,23 +61,25 @@ class DriftComparisonResult:
         return self.baseline.mean(channel) - self.augmented.mean(channel)
 
 
-def _resolve_device(device: torch.device | str | None) -> torch.device:
-    """``None`` → CUDA when available, else CPU (device-agnostic default)."""
-    if device is not None:
-        return torch.device(device)
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-
-def _seeded_model_pair(
-    model_cfg: ModelConfig, seed: int, device: torch.device | None = None
+def seeded_model_pair(
+    model_cfg: ModelConfig, seed: int, device: torch.device | str | None = None
 ) -> tuple[RSSM, RawModalityDecoders]:
     """Build an (RSSM, decoders) pair from a pinned seed.
 
-    Parameters are initialised from the seeded GLOBAL RNG on CPU and then
-    moved, so the initial weights are byte-identical regardless of the target
-    device.
+    Public so callers (e.g. ``scripts/compare_drift.py``'s memory ablation) can
+    reuse the exact seeded-init discipline instead of re-deriving it. Parameters
+    are initialised from the seeded GLOBAL RNG on CPU and then moved, so the
+    initial weights are byte-identical regardless of the target device.
+
+    Args:
+        model_cfg: Model dims.
+        seed: Seed pinned before both the RSSM and decoder inits.
+        device: Target device (``None`` → :func:`resolve_device` default).
+
+    Returns:
+        ``(model, decoders)`` on the resolved device.
     """
-    resolved = _resolve_device(device)
+    resolved = resolve_device(device)
     torch.manual_seed(seed)
     model = RSSM(model_cfg).to(resolved)
     torch.manual_seed(seed)
@@ -130,13 +133,13 @@ def train_pair_and_compare(
         msg = f"steps must be positive; got {steps}"
         raise ValueError(msg)
     seed = drift_cfg.seed
-    resolved_device = _resolve_device(device)
+    resolved_device = resolve_device(device)
     train_batches = [
         {key: value.to(resolved_device) for key, value in batch.items()} for batch in train_batches
     ]
 
-    baseline, baseline_decoders = _seeded_model_pair(model_cfg, seed, resolved_device)
-    augmented, augmented_decoders = _seeded_model_pair(model_cfg, seed, resolved_device)
+    baseline, baseline_decoders = seeded_model_pair(model_cfg, seed, resolved_device)
+    augmented, augmented_decoders = seeded_model_pair(model_cfg, seed, resolved_device)
     head: DriftCorrectionHead | None = None
     if drift_cfg.residual_head:
         torch.manual_seed(seed)
@@ -229,4 +232,4 @@ def train_pair_and_compare(
     return result
 
 
-__all__ = ["DriftComparisonResult", "train_pair_and_compare"]
+__all__ = ["DriftComparisonResult", "seeded_model_pair", "train_pair_and_compare"]

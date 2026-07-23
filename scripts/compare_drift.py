@@ -35,14 +35,33 @@ from torch import Tensor
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from mousedroid.common.torch_device import resolve_device
 from mousedroid.config.loader import load_settings
 from mousedroid.config.schema import DriftTrainingConfig, ModelConfig, Settings
 from mousedroid.constants import SENSOR_SLOT_MAP
 from mousedroid.training.drift_metrics import DriftReport, measure_drift
 from mousedroid.training.drift_reduction import (
     DriftComparisonResult,
+    seeded_model_pair,
     train_pair_and_compare,
 )
+
+# Synthetic random-walk dynamics coefficients (hardcoded-ok: this is the CI
+# stand-in data generator, NOT a production threshold — the real harness runs
+# on replay/mujoco episodes). Named so the toy dynamics are legible and tunable
+# in one place rather than as scattered inline literals.
+_ACTION_AR_KEEP = 0.7  # AR(1) retention on the previous action
+_ACTION_AR_NEW = 0.3  # weight on fresh noise
+_MOTOR_INERTIA = 0.85  # velocity carry-over
+_MOTOR_ACTION_GAIN = 0.15  # action → velocity coupling
+_MOTOR_NOISE = 0.02  # velocity process noise
+_BATTERY_DRAIN = 0.0005  # per-step battery decay
+_RANGE_VEL_COUPLING = 0.05  # forward-velocity → range change (environment shape)
+_RANGE_NOISE = 0.01  # range process noise
+_RANGE_MIN = 0.1  # range clamp floor (metres)
+_RANGE_MAX = 4.0  # range clamp ceiling (metres)
+_RANGE_INIT_LOW = 1.0  # initial range uniform lower bound
+_RANGE_INIT_SPAN = 2.0  # initial range uniform span
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -136,21 +155,25 @@ def _synthetic_batch(
     a = torch.zeros(b, mcfg.action_dim)
     m = torch.zeros(b, mcfg.motor_state_dim)
     m[:, -1] = 1.0  # battery starts full
-    r = torch.rand(b, ultra.shape[-1], generator=generator) * 2.0 + 1.0
+    r = torch.rand(b, ultra.shape[-1], generator=generator) * _RANGE_INIT_SPAN + _RANGE_INIT_LOW
     for step in range(t):
-        a = 0.7 * a + 0.3 * torch.randn(b, mcfg.action_dim, generator=generator)
+        a = _ACTION_AR_KEEP * a + _ACTION_AR_NEW * torch.randn(
+            b, mcfg.action_dim, generator=generator
+        )
         vel_dims = min(mcfg.action_dim, mcfg.motor_state_dim - 1)
         m = m.clone()
         m[:, :vel_dims] = (
-            0.85 * m[:, :vel_dims]
-            + 0.15 * a[:, :vel_dims]
-            + 0.02 * torch.randn(b, vel_dims, generator=generator)
+            _MOTOR_INERTIA * m[:, :vel_dims]
+            + _MOTOR_ACTION_GAIN * a[:, :vel_dims]
+            + _MOTOR_NOISE * torch.randn(b, vel_dims, generator=generator)
         )
-        m[:, -1] = (m[:, -1] - 0.0005).clamp(min=0.0)  # slow battery drain
+        m[:, -1] = (m[:, -1] - _BATTERY_DRAIN).clamp(min=0.0)  # slow battery drain
         # Range is coupled to forward velocity — the environment-shaped signal.
-        r = (r - 0.05 * m[:, :1] + 0.01 * torch.randn(b, r.shape[-1], generator=generator)).clamp(
-            0.1, 4.0
-        )
+        r = (
+            r
+            - _RANGE_VEL_COUPLING * m[:, :1]
+            + _RANGE_NOISE * torch.randn(b, r.shape[-1], generator=generator)
+        ).clamp(_RANGE_MIN, _RANGE_MAX)
         action[:, step] = a
         motor[:, step] = m
         ultra[:, step] = r
@@ -217,7 +240,6 @@ def _memory_ablation(
     only — mirroring the deployment observe seam.
     """
     from mousedroid.config.schema import WorldModelMemoryConfig
-    from mousedroid.training.drift_reduction import _seeded_model_pair
     from mousedroid.world_model.bounded_context import BoundedContextMemory
 
     memory_cfg = cfg.world_model_memory or WorldModelMemoryConfig.model_validate({"enabled": True})
@@ -227,7 +249,7 @@ def _memory_ablation(
             f"context_steps ({drift_cfg.eval_context_steps}) — the sink is never "
             "captured during warmup, so this ablation measures the ring/EMA only."
         )
-    model, decoders = _seeded_model_pair(mcfg, drift_cfg.seed, device)
+    model, decoders = seeded_model_pair(mcfg, drift_cfg.seed, device)
     context = BoundedContextMemory(memory_cfg, h_dim=mcfg.hidden_dim, z_dim=mcfg.latent_dim)
     off = measure_drift(
         model,
@@ -307,7 +329,7 @@ def main(argv: list[str] | None = None) -> int:
             mcfg, episodes=args.episodes, seq_len=args.seq_len, generator=gen
         )
 
-    device = None if args.device == "auto" else torch.device(args.device)
+    device = resolve_device(args.device)
     result = train_pair_and_compare(
         mcfg,
         drift_cfg,
