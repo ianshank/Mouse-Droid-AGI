@@ -1001,6 +1001,78 @@ class GrowthConfig(BaseModel):
         return slot
 
 
+class WorldModelMemoryConfig(BaseModel):
+    """Bounded-context latent memory for the world model (F-023, default-OFF).
+
+    Adapts the AlayaWorld sink-frame + compressed-history pattern to the rover's
+    recurrent latent state: a persistent per-mission "sink" anchor plus a
+    compressed rolling history (recent ring + one EMA long-summary vector) with
+    a constant-size storage footprint, blended into the orchestrator-carried
+    ``(h, z)`` at the observe seam. Default-OFF and backwards-compatible —
+    wired as an ``Optional`` block on ``Settings`` so existing YAML loads
+    byte-identically; when absent/disabled the factory returns ``None`` and the
+    tick path is unchanged. The blend is a pure deterministic ``no_grad``
+    tensor op (hot-loop invariant: no training, no sampling).
+    """
+
+    enabled: bool = Field(
+        False,
+        description="Master switch for the bounded-context latent memory (default-off)",
+    )
+    recent_size: int = Field(
+        16,
+        gt=0,
+        description=(
+            "Capacity of the recent-history ring (deque maxlen). Total memory "
+            "footprint is recent_size + 2 vectors (ring + sink + EMA summary), "
+            "constant with respect to rollout length."
+        ),
+    )
+    stride: int = Field(
+        8,
+        gt=0,
+        description=(
+            "Fold the EMA long-summary (and emit the rate-limited "
+            "latent_context_blend debug event) every N validated ticks"
+        ),
+    )
+    long_ema_alpha: float = Field(
+        0.05,
+        gt=0,
+        le=1,
+        description=(
+            "EMA weight for the long-term summary fold: " "long = (1 - alpha) * long + alpha * hz"
+        ),
+    )
+    blend_weight: float = Field(
+        0.1,
+        ge=0,
+        le=1,
+        description=(
+            "Lambda for the context blend h' = (1 - lambda) * h + lambda * c_h. "
+            "0 disables blending (memory still observes; contextualize is the "
+            "identity), letting operators A/B the retrieval without motion impact."
+        ),
+    )
+    sink_warmup_ticks: int = Field(
+        30,
+        ge=0,
+        description=(
+            "Validated ticks to wait before freezing the sink anchor (0 = capture "
+            "on the first validated tick). At 30 Hz the default captures ~1 s "
+            "after boot / mission start so transient startup latents are skipped."
+        ),
+    )
+    recapture_on_mission: bool = Field(
+        True,
+        description=(
+            "Re-arm sink capture at the mission-completed seam so the sink is a "
+            "per-mission anchor rather than a stale boot snapshot. The ring and "
+            "EMA summary are retained across missions; only the sink re-captures."
+        ),
+    )
+
+
 class LLMConfig(BaseModel):
     """LLM Gateway configuration for NL command interface."""
 
@@ -4053,6 +4125,88 @@ class ReplayMixerConfig(BaseModel):
     )
 
 
+class DriftTrainingConfig(BaseModel):
+    """Corrupted-history drift-reduction training knobs (F-023, default-OFF).
+
+    Adapts the AlayaWorld corrupted-history training idea to the RSSM: a random
+    prefix of each training sequence is rolled OPEN-LOOP under the model's own
+    prior (its self-generated, drifted imagination) and the posterior suffix is
+    trained to recover toward ground truth. Nested under ``TrainingConfig`` (the
+    ``training.replay`` precedent) because this is a training-time surface only —
+    the 30 Hz loop never reads it. ``enabled`` gates the production-pretraining
+    integration (``RSSMPretrainer``); the offline comparison harness
+    ``scripts/compare_drift.py`` is deliberately flag-independent. Applies to the
+    concrete ``RSSM`` feasibility vehicle only (the sole ``train_sequence``
+    engine); the ``DualStreamRSSM`` port is explicitly deferred (ADR-015).
+    """
+
+    enabled: bool = Field(
+        False,
+        description=(
+            "Opt-in: apply corrupted-history augmentation in the RSSM pretraining "
+            "path. The offline compare_drift.py harness ignores this flag."
+        ),
+    )
+    corruption_prob: float = Field(
+        0.5,
+        ge=0,
+        le=1,
+        description=(
+            "Per-batch probability of using the corrupted-history objective "
+            "instead of the standard train_sequence path (0 = never, reproduces "
+            "the baseline exactly)"
+        ),
+    )
+    max_prefix_frac: float = Field(
+        0.5,
+        gt=0,
+        le=1,
+        description=(
+            "Upper bound on the open-loop prefix length as a fraction of the "
+            "sequence length; the prefix k is drawn uniformly from "
+            "[0, floor(max_prefix_frac * T)]"
+        ),
+    )
+    recovery_weight: float = Field(
+        1.0,
+        ge=0,
+        description=(
+            "Multiplier on the post-boundary reconstruction loss (the recovery "
+            "steps immediately after the corrupted prefix). 1.0 = uniform "
+            "weighting, provably inert at prefix length 0."
+        ),
+    )
+    residual_head: bool = Field(
+        True,
+        description=(
+            "Train the evaluation-only DriftCorrectionHead alongside the "
+            "corrupted objective. The head predicts correction residuals toward "
+            "ground truth and is consumed by measure_drift; it is NEVER deployed "
+            "on the rover and adds no parameters to the RSSM state_dict."
+        ),
+    )
+    eval_context_steps: int = Field(
+        8,
+        gt=0,
+        description=(
+            "Posterior warmup steps on ground truth before the open-loop drift "
+            "rollout in measure_drift"
+        ),
+    )
+    eval_horizon: int = Field(
+        24,
+        gt=0,
+        description="Open-loop prior rollout steps scored by measure_drift",
+    )
+    seed: int = Field(
+        42,
+        description=(
+            "Seed for the drift comparison harness (paired model inits, corrupted "
+            "prefix draws, and the deterministic measure_drift scoring)"
+        ),
+    )
+
+
 class TrainingConfig(BaseModel):
     """Offline training configuration."""
 
@@ -4135,6 +4289,15 @@ class TrainingConfig(BaseModel):
     )
     replay: TrainingReplayConfig = Field(
         default_factory=_settings_default_factory(TrainingReplayConfig)
+    )
+    drift: DriftTrainingConfig | None = Field(
+        None,
+        description=(
+            "Corrupted-history drift-reduction training block (F-023). ``None`` "
+            "(default) disables — existing YAML loads byte-identical. Populate "
+            "with ``enabled: true`` to apply the corrupted-prefix objective in "
+            "the RSSM pretraining path."
+        ),
     )
     replay_mixer: ReplayMixerConfig = Field(
         default_factory=_settings_default_factory(ReplayMixerConfig),
@@ -5393,6 +5556,16 @@ class Settings(BaseSettings):
             "Top-level observability config (experiment logger). None (default) "
             "preserves byte-identical pre-feature behavior. Set to enable "
             "MLflow-backed metric logging for training runs."
+        ),
+    )
+    world_model_memory: WorldModelMemoryConfig | None = Field(
+        None,
+        description=(
+            "Bounded-context latent memory block (F-023). ``None`` (default) "
+            "disables — existing YAML loads byte-identical and the tick path is "
+            "unchanged. Populate with ``enabled: true`` to blend a persistent "
+            "sink anchor + compressed rolling history into the carried (h, z) "
+            "at the observe seam."
         ),
     )
     ppo: PPOConfig = Field(default_factory=_settings_default_factory(PPOConfig))

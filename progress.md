@@ -4,6 +4,13 @@ Reverse chronological (newest on top). Set the date with `date +%F`; never copy 
 literal date. Rotation: keep ~10 sessions; move older entries to
 `progress-archive/YYYY-QN.md`. See HARNESS_SPEC.md §11.
 
+## 2026-07-23 — Session 004
+**Features worked:** F-023 (AlayaWorld-adapted bounded-context memory + drift-reduction training + distillation spike) — OpenSpec change `mouse-droid-alayaworld-memory-distill`, branch `claude/mouse-droid-alayaworld-adapt-dt07mp`.
+**Status changes:** F-023 introduced as `in_progress` (implemented_in pins to the squash SHA post-merge).
+**Structural changes:** WS1 — OpenSpec archive (`openspec/project.md` + `changes/<id>/` with proposal/tasks/design + two ADDED-requirement spec deltas carrying the declared deviations), design spec (3-agent adversarial peer review incorporated), plan, ADR-015, new `docs/related-work.md` (adaptation-not-adoption + no-equivalence disclaimer), `WorldModelMemoryConfig` (Settings-level, default-OFF) + `DriftTrainingConfig` (`training.drift`, default-OFF). WS2 — `world_model/bounded_context.py` (sink + ring + EMA, NaN contract, cold-start identity, mission/OTA sink lifecycle), `build_latent_context`, orchestrator observe-seam wiring behind a `healthy` flag from `_validate_latent`. WS3 — `_posterior_step` refactor + `train_sequence_corrupted` (k=0 allclose contract, private prefix Generator) + eval-only `DriftCorrectionHead`, `training/drift_metrics.py` (range-headline per-modality open-loop drift + latent divergence), `training/drift_reduction.py`, `scripts/compare_drift.py`. WS4 — `scripts/spike_step_distillation.py` (deterministic prior-mean k-step teacher, discounted return, primitive-vs-consumer-ceiling framing), Jetson spike runbook. WS5 — in-container seeded comparison + spike numbers into `docs/analysis/`.
+**Validation evidence:** F-023 validation_command (10 new test files) green; RSSM golden suites + on-device suite green (train_sequence refactor behavior-pinned); ruff + mypy --strict + full `scripts/ci.sh`-equivalent green pre-push.
+**Next:** operator Jetson spike run per `docs/runbooks/jetson-alayaworld-spike.md`; real-replay drift re-run; keep `world_model_memory.enabled` off pending soak.
+
 ## 2026-07-03 — Session 003
 **Features worked:** F-015 (secret-scan gate, WS-0.4), F-016 (truth reconciliation, WS-1), F-017 (host-env durability, WS-3.1), F-018 (validation trend instrumentation, WS-4), F-019 (LLM observability, WS-5), F-020 (redundancy/gap audit, WS-8) — rev. B validation-first plan, PR #151.
 **Status changes:** F-015..F-020 → done (branch provenance; swap to squash SHA post-merge).

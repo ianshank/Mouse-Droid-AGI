@@ -58,6 +58,15 @@ The legacy v0.3.0 execution-plan phase numbering lives only in
 8. **[Hygiene — P2] Review the dead-code audit report** (`scripts/dead_code_audit.py`,
    **F-020**) after each significant merge; promote the advisory `gitleaks` /
    `vulture-audit` CI stages when `scripts/check_advisory_promotions.py` flags them due.
+9. **[World model — P2] F-023 operator follow-ups (AlayaWorld adaptation).** The
+   bounded-context latent memory + corrupted-history drift training landed default-OFF
+   (`world_model_memory` / `training.drift` blocks; ADR-015). Remaining operator actions:
+   (a) run the distillation spike on the Jetson per
+   `docs/runbooks/jetson-alayaworld-spike.md` and paste the numbers into
+   `docs/analysis/alayaworld-distillation-spike.md` for the final go/no-go; (b) re-run
+   `scripts/compare_drift.py` against real replay data once the rover accumulates enough
+   records; (c) keep `world_model_memory.enabled` OFF on the live rover until a soak gate
+   passes.
 9. **[Portfolio — P2] Record the 60-second hardware demo clip** (droid navigating +
    avoiding obstacles on the Jetson) and drop it into the README `## ▶ Demo` slot — hosted as
    a `hardware-v6`-style GitHub Release asset or external link, **never** committed (that
