@@ -47,6 +47,7 @@ from torch import Tensor
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from mousedroid.common.torch_device import resolve_device
 from mousedroid.config.loader import load_settings
 from mousedroid.config.schema import ModelConfig, Settings
 from mousedroid.growth.distillation import KnowledgeDistiller
@@ -319,10 +320,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     cfg = load_settings(Path(args.config))
     mcfg = _model_cfg(cfg)
-    if args.device == "auto":
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    else:
-        device = torch.device(args.device)
+    device = resolve_device(args.device)
     model = _build_model(cfg, mcfg, args.checkpoint).to(device)
     model.eval()
 

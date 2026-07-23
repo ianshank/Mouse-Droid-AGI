@@ -13,46 +13,24 @@ from pathlib import Path
 import pytest
 import torch
 
+from mousedroid.common.torch_device import resolve_device
 from mousedroid.config.schema import DriftTrainingConfig, ModelConfig
-from mousedroid.constants import SENSOR_SLOT_MAP
-from mousedroid.training.drift_reduction import _resolve_device, train_pair_and_compare
+from mousedroid.training.drift_reduction import train_pair_and_compare
 from mousedroid.training.rssm_pretrainer import RSSMPretrainer
 from mousedroid.training.sim_episode_generator import EpisodeBatch
 from mousedroid.world_model.rssm import RSSM
+from tests.unit._rssm_drift_helpers import seq_batch, tiny_rssm_cfg
 
 _B = 2
 _T = 16
 
 
 def _tiny_cfg() -> ModelConfig:
-    return ModelConfig.model_validate(
-        {
-            "vision_dim": 0,
-            "vision_proj_dim": 0,
-            "ultrasonic_dim": 1,
-            "motor_state_dim": 4,
-            "hidden_dim": 16,
-            "latent_dim": 8,
-            "action_dim": 3,
-            "obs_dim": 16,
-            "ultrasonic_proj_dim": 4,
-            "motor_proj_dim": 8,
-        }
-    )
+    return tiny_rssm_cfg()
 
 
 def _batch(mcfg: ModelConfig, seed: int = 0) -> dict[str, torch.Tensor]:
-    gen = torch.Generator().manual_seed(seed)
-    n_slots = len(SENSOR_SLOT_MAP)
-    valid = torch.zeros(_B, _T, n_slots)
-    valid[..., SENSOR_SLOT_MAP["motor"]] = 1.0
-    valid[..., SENSOR_SLOT_MAP["ultrasonic"]] = 1.0
-    return {
-        "motor": torch.randn(_B, _T, mcfg.motor_state_dim, generator=gen),
-        "ultrasonic": torch.randn(_B, _T, mcfg.ultrasonic_dim, generator=gen),
-        "valid_mask": valid,
-        "action": torch.randn(_B, _T, mcfg.action_dim, generator=gen),
-    }
+    return seq_batch(mcfg, episodes=_B, seq_len=_T, seed=seed)
 
 
 def _drift_cfg(**overrides: object) -> DriftTrainingConfig:
@@ -165,11 +143,11 @@ class TestPretrainerDriftSeam:
 class TestDeviceAgnostic:
     def test_default_device_resolves_to_available_hardware(self) -> None:
         expected = "cuda" if torch.cuda.is_available() else "cpu"
-        assert _resolve_device(None).type == expected
+        assert resolve_device(None).type == expected
 
     def test_explicit_cpu_passthrough(self) -> None:
-        assert _resolve_device("cpu").type == "cpu"
-        assert _resolve_device(torch.device("cpu")).type == "cpu"
+        assert resolve_device("cpu").type == "cpu"
+        assert resolve_device(torch.device("cpu")).type == "cpu"
 
     def test_cpu_batches_train_on_explicit_cpu(self) -> None:
         """Explicit device= threads end-to-end (CPU host executes the cpu leg)."""
