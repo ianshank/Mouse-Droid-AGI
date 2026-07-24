@@ -1,5 +1,8 @@
 # C4 Architecture — MouseDroid
 
+> **This is the canonical C4 diagram index.** For a single-page prose walkthrough of every level, see
+> [`../architecture.md`](../architecture.md). Full documentation index: [`../README.md`](../README.md).
+>
 > Four-level C4 model for the MouseDroid codebase. Diagrams use Mermaid;
 > render on GitHub or via VS Code's Markdown preview.
 >

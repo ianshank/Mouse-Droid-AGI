@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-05-16
-**Sprint:** Tier B Track B2 (`docs/planning/sprint_plan_tier_b.md`)
+**Sprint:** Tier B Track B2 (working sprint plan; not retained in the repo)
 
 > **Note on numbering:** the original Tier B sprint plan referred to this
 > as "ADR-007". That number was already assigned to the Hailo-8 accelerator
@@ -176,7 +176,7 @@ remains in `CfCWrapper`.
 
 ## References
 
-- Tier B sprint plan: [`docs/planning/sprint_plan_tier_b.md`](../planning/sprint_plan_tier_b.md)
+- Tier B sprint plan — a working planning doc that was not retained in the repo (historical reference).
   (Track B2, Stories 0–7)
 - CfC spike report: [`tools/spikes/CFC_ONNX_SPIKE_REPORT.md`](../../tools/spikes/CFC_ONNX_SPIKE_REPORT.md)
 - VLA precedent: [`src/mousedroid/vla/policy.py`](../../src/mousedroid/vla/policy.py)
