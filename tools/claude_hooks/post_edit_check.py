@@ -12,8 +12,8 @@ configs written for a newer tool set.
 
 from __future__ import annotations
 
+import importlib.util
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -27,8 +27,29 @@ from tools.claude_hooks.paths import resolve_repo_root, to_repo_relative
 _logger = get_logger(__name__)
 
 
+def _checker_base_argv(name: str) -> list[str] | None:
+    """Return the interpreter-anchored base argv for checker ``name``.
+
+    Invokes the checker as ``sys.executable -m <name>`` rather than the first
+    binary on ``PATH``. This is the repository's stated convention (AGENTS.md:
+    *"Invoke the linter as ``python -m ruff`` … never bare ``ruff``"*) and it is
+    what `scripts/ci.sh` does, so an edit-time check reports the same findings
+    as the local gate instead of whatever stray global install shadows it.
+
+    Args:
+        name: Checker module name.
+
+    Returns:
+        The base argv, or ``None`` when the module is not importable in this
+        interpreter (the checker is then skipped, never guessed at).
+    """
+    if importlib.util.find_spec(name) is None:
+        return None
+    return [sys.executable, "-m", name]
+
+
 def _checker_argv(name: str, cfg: WorkforceConfig, target: Path) -> list[str] | None:
-    """Build the argv for checker ``name``, or ``None`` when unavailable.
+    """Build the full argv for checker ``name``, or ``None`` when unavailable.
 
     Args:
         name: Checker name from ``post_edit.checks``.
@@ -38,17 +59,13 @@ def _checker_argv(name: str, cfg: WorkforceConfig, target: Path) -> list[str] | 
     Returns:
         The argv list, or ``None`` when the checker is unknown or not installed.
     """
-    if name == "ruff":
-        executable = shutil.which("ruff")
-        if executable is None:
-            return None
-        return [executable, *cfg.post_edit.ruff_args, str(target)]
-    if name == "mypy":
-        executable = shutil.which("mypy")
-        if executable is None:
-            return None
-        return [executable, *cfg.post_edit.mypy_args, str(target)]
-    return None
+    extra_args = {"ruff": cfg.post_edit.ruff_args, "mypy": cfg.post_edit.mypy_args}.get(name)
+    if extra_args is None:
+        return None
+    base = _checker_base_argv(name)
+    if base is None:
+        return None
+    return [*base, *extra_args, str(target)]
 
 
 def run_checks(
@@ -78,7 +95,7 @@ def run_checks(
         if debug_enabled():
             _logger.debug("post_edit_invoking", checker=name, argv=argv)
         try:
-            # S603: argv[0] comes from shutil.which and args are list elements
+            # S603: argv[0] is sys.executable and every arg is a list element
             # (no shell), so the call carries no injection surface.
             completed = subprocess.run(  # noqa: S603
                 argv,

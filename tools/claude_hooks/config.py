@@ -89,6 +89,20 @@ class SecretScanConfig(BaseModel):
     #: would blow the hook's latency budget without adding signal.
     max_bytes: int = Field(default=1_000_000, gt=0)
 
+    @field_validator("config_file")
+    @classmethod
+    def _reject_absolute(cls, value: str) -> str:
+        """Keep the allowlist path repo-relative.
+
+        It is joined onto the repo root before being handed to the scanner, so
+        an absolute or ``..``-traversing value would point the scan's config at
+        an arbitrary file. Mirrors the guard on
+        :attr:`FreezeConfig.features_file`.
+        """
+        if Path(value).is_absolute() or ".." in Path(value).parts:
+            raise ValueError("must be a repo-relative path without '..' traversal")
+        return value
+
 
 class PostEditConfig(BaseModel):
     """Advisory post-edit check settings (report-only by platform contract)."""

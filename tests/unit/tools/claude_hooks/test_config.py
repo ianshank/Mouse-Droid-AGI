@@ -162,3 +162,23 @@ def test_wrong_type_is_rejected(tmp_path: Path) -> None:
     _write_config(tmp_path, "freeze:\n    frozen_paths: not-a-list\n")
     with pytest.raises(ConfigError):
         load_config(repo_root=tmp_path)
+
+
+@pytest.mark.parametrize(
+    "config_file",
+    ["/etc/passwd", "../../etc/passwd", "a/../../outside.toml"],
+)
+def test_non_relative_secret_scan_config_is_rejected(tmp_path: Path, config_file: str) -> None:
+    """The allowlist path is joined onto the repo root before the scan runs.
+
+    An absolute or traversing value would point the scanner's config at an
+    arbitrary file, so it gets the same guard as freeze.features_file.
+    """
+    _write_config(tmp_path, f"secret_scan:\n    config_file: '{config_file}'\n")
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+def test_relative_secret_scan_config_is_accepted(tmp_path: Path) -> None:
+    _write_config(tmp_path, "secret_scan:\n    config_file: custom/.gitleaks.toml\n")
+    assert load_config(repo_root=tmp_path).secret_scan.config_file == "custom/.gitleaks.toml"

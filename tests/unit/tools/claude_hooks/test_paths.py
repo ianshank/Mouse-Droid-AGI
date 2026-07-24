@@ -172,3 +172,36 @@ def test_glob_special_regex_characters_are_escaped() -> None:
     # A '+' in the path must be a literal, not a regex quantifier.
     assert glob_to_regex("src/a+b/*.py").match("src/a+b/x.py")
     assert not glob_to_regex("src/a+b/*.py").match("src/aab/x.py")
+
+
+def test_nested_pyproject_does_not_shadow_the_real_root(tmp_path: Path) -> None:
+    """A vendored subproject's lone pyproject.toml must not win.
+
+    The marker walk starts at the deepest directory, so an ancestor-major scan
+    would return the subproject. Marker groups are therefore applied
+    group-major: every ancestor is tested against the strong groups before the
+    bare-pyproject fallback is considered.
+    """
+    repo = _make_repo(tmp_path)
+    vendored = repo / "third_party" / "vendored"
+    vendored.mkdir(parents=True)
+    (vendored / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+
+    assert resolve_repo_root(start=vendored, env={}) == repo.resolve()
+
+
+def test_bare_pyproject_still_resolves_when_no_strong_marker_exists(tmp_path: Path) -> None:
+    """Fallback survives for a checkout without .git (e.g. a tarball export)."""
+    root = tmp_path / "exported"
+    nested = root / "pkg"
+    nested.mkdir(parents=True)
+    (root / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+
+    assert resolve_repo_root(start=nested, env={}) == root.resolve()
+
+
+def test_submodule_with_its_own_git_is_treated_as_its_own_root(tmp_path: Path) -> None:
+    """A nested dir carrying BOTH strong markers is a real repo in its own right."""
+    outer = _make_repo(tmp_path)
+    inner = _make_repo(outer / "vendor" / "sub")
+    assert resolve_repo_root(start=inner, env={}) == inner.resolve()

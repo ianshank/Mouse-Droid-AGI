@@ -15,9 +15,15 @@ from pathlib import Path
 #: Environment variable Claude Code exports for hook commands.
 PROJECT_DIR_ENV = "CLAUDE_PROJECT_DIR"
 
-#: Markers identifying a repository root. A directory must contain *all* of the
-#: entries in at least one group to qualify, so a nested package directory that
-#: happens to hold a ``pyproject.toml`` is not mistaken for the root.
+#: Markers identifying a repository root, strongest first. A directory must
+#: contain *all* entries in a group to qualify.
+#:
+#: Group order is significant and is applied group-major (every ancestor is
+#: tested against the strongest group before the next group is tried). Walking
+#: ancestor-major instead would let a vendored subproject's lone
+#: ``pyproject.toml`` shadow the real root, because the walk starts at the
+#: deepest directory — the bare-``pyproject.toml`` group is a last-resort
+#: fallback for checkouts without ``.git`` (a tarball export), not a peer.
 _ROOT_MARKER_GROUPS: tuple[tuple[str, ...], ...] = (
     ("pyproject.toml", ".git"),
     ("pyproject.toml", "features.yaml"),
@@ -54,8 +60,12 @@ def resolve_repo_root(start: Path | None = None, *, env: dict[str, str] | None =
 
     origin = (Path(__file__).resolve().parent if start is None else Path(start)).resolve()
     search_base = origin if origin.is_dir() else origin.parent
-    for directory in (search_base, *search_base.parents):
-        for group in _ROOT_MARKER_GROUPS:
+    candidates = (search_base, *search_base.parents)
+    # Group-major: exhaust every ancestor against a stronger marker group before
+    # falling back to a weaker one, so a nested `pyproject.toml` cannot shadow
+    # the real root.
+    for group in _ROOT_MARKER_GROUPS:
+        for directory in candidates:
             if all((directory / marker).exists() for marker in group):
                 return directory
     return search_base
@@ -69,9 +79,17 @@ def to_repo_relative(path: str | Path, repo_root: Path) -> str | None:
         repo_root: The repository root to relativise against.
 
     Returns:
-        The POSIX-style relative path, or ``None`` when ``path`` resolves
-        outside ``repo_root``. Symlinks are resolved without requiring the
-        target to exist, so a pending (not-yet-written) file still resolves.
+        The POSIX-style relative path, or ``None`` when ``path`` lies outside
+        ``repo_root``.
+
+    Note:
+        Normalisation is **lexical** (:func:`os.path.normpath`), not
+        filesystem-resolving: ``Path.resolve()`` is deliberately avoided so a
+        pending, not-yet-written edit target still maps to a repo-relative
+        path. The tradeoff is that a symlink pointing outside the repository is
+        not detected here — the freeze gate is an edit-time guardrail against
+        mistakes, not a sandbox against a determined bypass (an operator who
+        can plant a symlink can also set the override env var).
     """
     candidate = Path(path).expanduser()
     if not candidate.is_absolute():

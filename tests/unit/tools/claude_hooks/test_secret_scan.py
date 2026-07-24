@@ -277,3 +277,27 @@ def test_main_allows_on_environment_error(monkeypatch: pytest.MonkeyPatch) -> No
     code = secret_scan.main(stdin=io.StringIO(json.dumps(_payload("x"))), stdout=stdout, env={})
     assert code == 0
     assert stdout.getvalue() == ""
+
+
+def test_unpaired_surrogates_do_not_crash_the_scan(tmp_path: Path, scanner_path: Path) -> None:
+    """A tool buffer can carry unpaired surrogates.
+
+    A strict encode would raise out of the hook, which reads as a crashed hook
+    and silently skips the scan for that edit — the gate must stay live.
+    """
+    _stub_scanner(tmp_path, exit_code=0)
+    payload = _payload("lone surrogate: \ud800 tail")
+    allowed, reason = secret_scan.evaluate(
+        payload, _config(command="stub-scanner"), repo_root=tmp_path
+    )
+    assert allowed is True
+    assert reason == ""
+
+
+def test_surrogate_content_still_reports_a_finding(tmp_path: Path, scanner_path: Path) -> None:
+    """Robust encoding must not turn a real finding into a false negative."""
+    _stub_scanner(tmp_path, exit_code=1, message="rule: generic-api-key")
+    allowed, _ = secret_scan.evaluate(
+        _payload("key = 'x' \ud800"), _config(command="stub-scanner"), repo_root=tmp_path
+    )
+    assert allowed is False

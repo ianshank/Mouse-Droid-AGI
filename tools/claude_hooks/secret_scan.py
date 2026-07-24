@@ -103,7 +103,12 @@ def scan_content(
     config_path = repo_root / cfg.secret_scan.config_file
     with tempfile.TemporaryDirectory(prefix="workforce-secret-scan-") as tmpdir:
         probe = Path(tmpdir) / f"pending{_suffix_for(target)}"
-        probe.write_text(content, encoding="utf-8")
+        # errors="replace": a tool buffer can carry unpaired surrogates, and a
+        # strict encode would raise out of the hook — which reads as a crashed
+        # hook and silently skips the scan for that edit. Substituting the
+        # replacement char keeps the gate live; it cannot manufacture a false
+        # negative, because a real credential is ASCII-safe and encodes intact.
+        probe.write_text(content, encoding="utf-8", errors="replace")
 
         argv = [
             executable,

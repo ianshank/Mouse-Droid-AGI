@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import io
 import json
-import os
-import stat
 import sys
 from pathlib import Path
 from typing import Any
@@ -31,22 +29,31 @@ def _repo(tmp_path: Path) -> Path:
 
 
 def _stub_checker(tmp_path: Path, name: str, *, exit_code: int, message: str = "") -> Path:
-    script = tmp_path / "bin" / name
+    """Create a stub checker script and route `name` to it via _checker_base_argv."""
+    script = tmp_path / "stubs" / f"{name}.py"
     script.parent.mkdir(parents=True, exist_ok=True)
     script.write_text(
-        f"#!{sys.executable}\nimport sys\nprint({message!r})\nsys.exit({exit_code})\n",
+        f"import sys\nprint({message!r})\nsys.exit({exit_code})\n",
         encoding="utf-8",
     )
-    script.chmod(script.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    _STUBS[name] = [sys.executable, str(script)]
     return script
+
+
+#: name -> base argv, populated by _stub_checker and consulted by the fixture.
+_STUBS: dict[str, list[str]] = {}
 
 
 @pytest.fixture
 def stub_bin(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    bindir = tmp_path / "bin"
-    bindir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
-    return bindir
+    """Route checker resolution to per-test stubs instead of the real modules."""
+    _STUBS.clear()
+
+    def _fake_base_argv(name: str) -> list[str] | None:
+        return _STUBS.get(name)
+
+    monkeypatch.setattr(post_edit_check, "_checker_base_argv", _fake_base_argv)
+    return tmp_path / "stubs"
 
 
 # ---------------------------------------------------------------------------
@@ -86,17 +93,34 @@ def test_uninstalled_checker_is_skipped(tmp_path: Path, monkeypatch: pytest.Monk
     repo = _repo(tmp_path)
     target = repo / "a.py"
     target.write_text("x = 1\n", encoding="utf-8")
-    monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
+    monkeypatch.setattr(post_edit_check, "_checker_base_argv", lambda _name: None)
     assert post_edit_check.run_checks(target, _config(checks=["ruff"]), repo_root=repo) == []
+
+
+def test_checkers_run_through_the_current_interpreter() -> None:
+    """Repo convention (AGENTS.md): `python -m ruff`, never a bare PATH binary.
+
+    A stray global ruff would report different findings than the pinned one the
+    local gate and CI use.
+    """
+    base = post_edit_check._checker_base_argv("ruff")
+    assert base is not None, "ruff should be importable in the dev environment"
+    assert base[0] == sys.executable
+    assert base[1] == "-m"
+
+
+def test_unimportable_checker_resolves_to_none() -> None:
+    assert post_edit_check._checker_base_argv("definitely_not_a_module_xyz") is None
 
 
 def test_checker_timeout_is_survived(tmp_path: Path, stub_bin: Path) -> None:
     repo = _repo(tmp_path)
     target = repo / "a.py"
     target.write_text("x = 1\n", encoding="utf-8")
-    slow = tmp_path / "bin" / "ruff"
-    slow.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(5)\n", encoding="utf-8")
-    slow.chmod(slow.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    slow = tmp_path / "stubs" / "slow.py"
+    slow.parent.mkdir(parents=True, exist_ok=True)
+    slow.write_text("import time\ntime.sleep(5)\n", encoding="utf-8")
+    _STUBS["ruff"] = [sys.executable, str(slow)]
     findings = post_edit_check.run_checks(
         target, _config(checks=["ruff"], timeout_s=0.25), repo_root=repo
     )
