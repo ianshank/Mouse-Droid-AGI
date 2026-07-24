@@ -116,6 +116,20 @@ class TestCiSh:
     def test_settings_identity_gate_present(self, content: str) -> None:
         assert "check_settings_identity.py" in content
 
+    def test_workforce_config_stage_present(self, content: str) -> None:
+        assert "tools.claude_hooks.config" in content
+
+    def test_workforce_hook_typecheck_present(self, content: str) -> None:
+        # Governance code is held to --strict from day one, scoped to the hook
+        # package because tools/ as a whole is not yet strict-clean.
+        assert "mypy tools/claude_hooks/" in content
+
+    def test_workforce_hook_coverage_stage_present(self, content: str) -> None:
+        # The repo-wide gate measures src/mousedroid only; without this separate
+        # invocation the hook package would ship unmeasured.
+        assert "--cov=tools/claude_hooks" in content
+        assert "--cov-branch" in content
+
 
 class TestDeployJetsonSh:
     @pytest.fixture

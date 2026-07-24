@@ -252,7 +252,10 @@ pytest tests/ -n auto                                          # fast parallel
 pytest tests/unit/ tests/integration/ tests/regression/        # by category
 ```
 
-The enforced gate is **85% branch coverage** (`scripts/check_branch_coverage.py`). Beyond lint/type/test, CI runs `config-compat` (schema-drift), `actionlint` (workflow lint), and a cyclomatic-complexity gate (`ruff C901`, max 15; [ADR-014](docs/architecture/ADR-014-cyclomatic-complexity-gate.md)). Full strategy: [`docs/testing.md`](docs/testing.md).
+The enforced gate is **85% line coverage** (`--cov-fail-under=85` repo-wide, plus
+`scripts/check_branch_coverage.py` for changed files). Branch coverage is measured and
+reported for `tools/claude_hooks/` only, where it is advisory until a baseline exists —
+so it is deliberately not claimed as enforced here. Beyond lint/type/test, CI runs `config-compat` (schema-drift), `actionlint` (workflow lint), and a cyclomatic-complexity gate (`ruff C901`, max 15; [ADR-014](docs/architecture/ADR-014-cyclomatic-complexity-gate.md)). Full strategy: [`docs/testing.md`](docs/testing.md).
 
 ```bash
 ruff check src/ tests/ && ruff format --check src/ tests/

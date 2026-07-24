@@ -13,11 +13,24 @@ original draft, the reversal is called out inline.
   skills/                # existing three (byte-untouched) + five new
 .mcp.json                # project-scope MCP servers (checked in, secretless)
 tools/claude_hooks/      # tested Python hook implementations + Pydantic config
+  config.py              #   WorkforceConfig (Pydantic v2, extra="forbid")
+  paths.py               #   repo-root resolution + separator-respecting globs
+  logging_setup.py       #   stderr-only structured logging (structlog or fallback)
+  hookio.py              #   hook stdin/stdout protocol
+  portability.py         #   absolute-path rule for the AQA sweep
+  secret_scan.py         #   PreToolUse  (blocking)
+  freeze_gate.py         #   PreToolUse  (blocking)
+  post_edit_check.py     #   PostToolUse (report-only)
 tests/regression/test_claude_workforce_aqa.py
-tests/unit/tools/        # hook + config unit tests (existing directory)
+tests/unit/tools/claude_hooks/   # one test module per hook module
 docs/claude/surfaces/    # cross-cutting surface docs + index (D-8)
+docs/runbooks/claude-workforce-hooks.md
 docs/runbooks/worktrees.md
 ```
+
+The four primitives (`paths`, `logging_setup`, `hookio`, `portability`) exist so
+the three hooks carry policy only: each is independently unit-tested and reused
+by the AQA gate, rather than re-implemented per hook.
 
 **No `.claude/commands/`** — reversal of the original D-1/T-4.4. The directory is
 gate-pinned deleted (`test_skill_commands_aqa.py::test_legacy_commands_dir_stays_deleted`,
@@ -42,7 +55,7 @@ freeze:
   override_env: MOUSEDROID_WORKFORCE_ALLOW_FROZEN
 secret_scan:
   command: gitleaks               # resolved via shutil.which at runtime
-  config: .gitleaks.toml          # the repo's regex-only allowlist
+  config_file: .gitleaks.toml     # the repo's regex-only allowlist
   timeout_s: 20
   strict: false                   # absent binary: warn+allow; true flips to deny
 coverage:
@@ -71,30 +84,42 @@ nobody "fixes" the wrong thing.
 
 | Hook | Event / matcher | Behavior |
 |---|---|---|
-| `secret_scan.py` | PreToolUse, `Edit\|Write` | Reads the pending `tool_input.content` / `tool_input.new_string` from stdin JSON, scans it with the configured scanner (`gitleaks` + `.gitleaks.toml` — the same regex-only allowlist as CI, honored by regex, never by path). Findings → deny. Scanner binary absent → **warn+allow** by default (mirrors the shipped advisory posture); `secret_scan.strict: true` flips to deny. Closes WS-0.4's never-shipped edit-time gap |
-| `freeze_gate.py` | PreToolUse, `Edit\|Write` | Loads `freeze.features_file`, reads the `freeze.feature_key` entry. Target path matching `freeze.frozen_paths` is **denied while status ≠ `done`**, with the rev-B preemption rule quoted ("hardware readiness preempts all in-flight software streams"). `freeze.override_env` set → permitted-but-logged (the RUN-MOTION consent pattern). F-008 flipping to `done` self-disables the gate with zero code change. Catalog missing/unreadable/malformed → **fail-closed** (a broken governance input is itself a red flag) |
-| `post_edit_check.py` | PostToolUse, `Edit\|Write` | `ruff check` + `mypy` on the touched file; report-only. Platform constraint, not a choice: PostToolUse fires after execution and cannot block |
+| `secret_scan.py` | PreToolUse, `Write\|Edit\|MultiEdit\|NotebookEdit` | Reads the pending `tool_input.content` / `tool_input.new_string` from stdin JSON, scans it with the configured scanner (`gitleaks` + `.gitleaks.toml` — the same regex-only allowlist as CI, honored by regex, never by path). Findings → deny. Scanner binary absent → **warn+allow** by default (mirrors the shipped advisory posture); `secret_scan.strict: true` flips to deny. Closes WS-0.4's never-shipped edit-time gap |
+| `freeze_gate.py` | PreToolUse, `Write\|Edit\|MultiEdit\|NotebookEdit` | Loads `freeze.features_file`, reads the `freeze.feature_key` entry. Target path matching `freeze.frozen_paths` is **denied while status ≠ `done`**, with the rev-B preemption rule quoted ("hardware readiness preempts all in-flight software streams"). `freeze.override_env` set → permitted-but-logged (the RUN-MOTION consent pattern). F-008 flipping to `done` self-disables the gate with zero code change. Catalog missing/unreadable/malformed → **fail-closed** (a broken governance input is itself a red flag) |
+| `post_edit_check.py` | PostToolUse, `Write\|Edit\|MultiEdit` | `ruff check` + `mypy` on the touched file; report-only. Platform constraint, not a choice: PostToolUse fires after execution and cannot block |
 
-Deny mechanics per platform docs: exit code 2 with stderr, or JSON
-`hookSpecificOutput.permissionDecision: "deny"` with a reason. Hook commands use
-`$CLAUDE_PROJECT_DIR` paths and per-hook `timeout`. Hooks **merge additively** across
-user/project scopes, so adding this first project `hooks` block cannot shadow anyone's
-personal hooks.
+Deny mechanics per platform docs: JSON `hookSpecificOutput.permissionDecision:
+"deny"` carrying a reason. **Allow is silent** — emitting an explicit `allow` would
+suppress the user's normal permission prompt, so a hook with no objection exits 0
+writing nothing to stdout. Hooks **merge additively** across user/project scopes, so
+adding this first project `hooks` block cannot shadow anyone's personal hooks.
+
+Hook commands are `cd "$CLAUDE_PROJECT_DIR" && python3 -m tools.claude_hooks.<module>`,
+with a per-hook `timeout`. Both halves are load-bearing and were verified by hand:
+running the module *file* by path leaves the repository root off `sys.path`, so the
+package import fails with `ModuleNotFoundError` on every edit. The AQA test pins the
+invocation shape so a future "simplification" back to a bare path fails loudly.
+
+All hook logging goes to **stderr** (`logging_setup.py`), because stdout is the
+decision channel — a stray log line there would corrupt the payload. The module binds
+its own structlog logger via `wrap_logger` rather than `structlog.configure()`, so
+importing a hook never mutates the process-global structlog config the test suite pins.
 
 Implementation hygiene: `tools/**` per-file-ignores are `["D", "ANN", "T20"]` — the `S`
 family still applies, so subprocess calls use `shutil.which`-resolved absolute executables
 and list args (S603/S607-clean), no shell. All three hooks are ordinary Python modules with
-unit tests under `tests/unit/tools/` (temp-dir fixtures; fake `features.yaml` states:
-todo / in_progress / done / missing-key / malformed; at least one integration-marked test
-runs the real scanner when present).
+unit tests under `tests/unit/tools/claude_hooks/` (temp-dir fixtures; fake
+`features.yaml` states: todo / in_progress / done / missing-key / malformed). The scanner
+and the post-edit checkers are driven through synthesised stub executables rather than the
+real binaries, so the exit-code contracts are covered deterministically on any host.
 
 Exit-code contract:
 
-| Code | Meaning |
-|---|---|
-| 0 | allow (or report-only complete) |
-| 2 | deny, reason on stderr |
-| other | hook error — fail-closed for `freeze_gate`, fail-open-with-warning for `secret_scan` (per `strict`) |
+| Exit | stdout | Meaning |
+|---|---|---|
+| 0 | *(empty)* | allow — no objection; the normal permission flow proceeds |
+| 0 | deny payload | deny, with `permissionDecisionReason` carried in the JSON |
+| non-zero | — | hook crashed (e.g. dependencies absent). Claude Code reports it and continues, so a broken hook never wedges the session; CI is the backstop |
 
 ## D-4. Subagent roster
 
@@ -163,7 +188,7 @@ path must exist):
   format, registry-row + F-number reservation, repo-native validation checklist.
 - `coverage-gate` (active) — runs the dedicated `--cov=tools/claude_hooks` invocation
   (line gate from `coverage.tools_line_min`) plus the advisory branch report; owns the
-  README.md:255 truth-fix and emits the PR delta table.
+  README coverage-claim truth-fix and emits the PR delta table.
 - `evidence-commit` (active) — places commit-safe artifacts under
   `reports/<surface>/<date>/`, links them from `features.yaml` notes; for
   gitignored-by-policy families it records the declared local-only chain instead; refuses

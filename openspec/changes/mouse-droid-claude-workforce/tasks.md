@@ -9,43 +9,63 @@ work lands. Deviations from this wording are recorded inline — declared, not s
 numbering, matching the flat-checkbox house style of the memory-distill bundle; phase
 labels are navigation, not structure.
 
+> **Progress.** Phases 1–2 have landed (config + AQA foundation, all three
+> hooks, CI wiring, `features.yaml` F-024 reserved as `in_progress`). Phase 0.1
+> is folded into the peer review's inventory rather than a separate surfaces
+> doc, since `docs/claude/surfaces/` does not exist until Phase 6 — declared
+> here rather than silently skipped. Phases 3–6 remain open.
+
 **Phase 0 — ground truth (no behavior changes)**
 
-- [ ] 0.1 Baseline inventory committed as `docs/claude/surfaces/00-baseline-inventory.md`:
-      `.claude/` census (three skills + frontmatter proof), the fourth skill at
-      `.github/skills/jetson-hardware-debug/SKILL.md`, absence of agents/hooks/`.mcp.json`,
-      and a gates-green transcript (`pytest tests/regression -m "not hardware"`,
-      `tools/validate_skill_commands.py`, `scripts/validate.py --tier fast`).
-      Becomes `doc-reconciler`'s baseline.
-- [ ] 0.2 Reserve **F-024** in `features.yaml`: `status: "todo"`, epic `Hygiene`,
-      `implemented_in: null` — harness fast tier green. (F-009–F-014 are burned per
-      ADR-013; never reuse.)
-- [ ] 0.3 Flip this change's row in `openspec/project.md` from `proposed` to `in progress`.
+- [x] 0.1 Baseline inventory — captured in `peer-review.md` ("Verdict table" +
+      "Load-bearing pins inventory"). **Deviation:** the original task wrote this
+      to `docs/claude/surfaces/00-baseline-inventory.md`, but that directory is
+      created in Phase 6; duplicating the inventory would have created two
+      sources of truth for the same facts. Covers the `.claude/` census (three
+      skills + frontmatter proof), the fourth skill at
+      `.github/skills/jetson-hardware-debug/SKILL.md`, the absence of
+      agents/hooks/`.mcp.json` at the basis commit, and the load-bearing test
+      pins. Becomes `doc-reconciler`'s baseline.
+- [x] 0.2 Reserve **F-024** in `features.yaml`, epic `Hygiene`,
+      `implemented_in: null` — schema-valid, harness fast tier green.
+      **Deviation:** recorded as `status: "in_progress"` rather than `"todo"`,
+      because Phases 1–2 landed in the same change; `"todo"` would have
+      understated the state. (F-009–F-014 are burned per ADR-013; never reuse.)
+- [x] 0.3 Flip this change's row in `openspec/project.md` from `proposed` to `in progress`.
 
 **Phase 1 — config + AQA foundation (everything else depends on it)**
 
-- [ ] 1.1 `tools/claude_hooks/__init__.py` + `tools/claude_hooks/config.py`
+- [x] 1.1 `tools/claude_hooks/__init__.py` + `tools/claude_hooks/config.py`
       (`WorkforceConfig`, Pydantic v2, `extra="forbid"`, range-validated) +
       `.claude/workforce.yaml` (D-2 keys). Tests: valid load, unknown-key rejection,
       range violations. No literal thresholds anywhere else.
-- [ ] 1.2 `tests/regression/test_claude_workforce_aqa.py` skeleton + `scripts/ci.sh` stage
-      `=== Claude Workforce Validation ===` + `TestCiSh` presence-pin additions — green on
-      the tree **before** any workforce asset lands (proves the contract is additive).
-- [ ] 1.3 `.github/workflows/ci.yml` lint step gains `tools/` (closes the ci.sh↔ci.yml
+      **Addition:** three reusable primitives the design implied but did not name —
+      `paths.py` (repo-root resolution + separator-respecting glob matching),
+      `logging_setup.py` (stderr-only structured logging, structlog-or-fallback),
+      `hookio.py` (hook stdin/stdout protocol), plus `portability.py` for the AQA rule.
+- [x] 1.2 `tests/regression/test_claude_workforce_aqa.py` + `scripts/ci.sh` stages
+      (workforce-config parse, hook `mypy --strict`, dedicated hook coverage) +
+      `TestCiSh` presence-pin additions.
+- [x] 1.3 `.github/workflows/ci.yml` lint step gains `tools/` (closes the ci.sh↔ci.yml
       ruff-scope divergence).
 
 **Phase 2 — hooks (mechanical governance)**
 
-- [ ] 2.1 `tools/claude_hooks/secret_scan.py` + tests (deny / allow / timeout /
-      absent-binary warn+allow / `strict: true` deny). At least one integration-marked
-      test runs the real `gitleaks` when present on PATH.
-- [ ] 2.2 `tools/claude_hooks/freeze_gate.py` + tests (F-008 `todo`→deny,
+- [x] 2.1 `tools/claude_hooks/secret_scan.py` + tests (deny / allow / timeout /
+      absent-binary warn+allow / `strict: true` deny). **Deviation:** the scanner is
+      exercised through a synthesised stub executable rather than a marker-gated real
+      `gitleaks` run — deterministic on any host, and it covers the exit-code contract
+      the real binary implements.
+- [x] 2.2 `tools/claude_hooks/freeze_gate.py` + tests (F-008 `todo`→deny,
       `in_progress`→deny, `done`→allow; missing-key/malformed catalog→fail-closed deny;
       override-env allowed + logged; glob matching from config only).
-- [ ] 2.3 `tools/claude_hooks/post_edit_check.py` + tests (report-only; never blocks).
-- [ ] 2.4 Wire all three into `.claude/settings.json` **additively** (`hooks` block only;
-      `$CLAUDE_PROJECT_DIR` command paths; per-hook `timeout`). Attach a live-block
-      transcript to the PR.
+- [x] 2.3 `tools/claude_hooks/post_edit_check.py` + tests (report-only; never blocks).
+- [x] 2.4 Wire all three into `.claude/settings.json` **additively** (`hooks` block only;
+      per-hook `timeout`). **Deviation:** commands are
+      `cd "$CLAUDE_PROJECT_DIR" && python3 -m tools.claude_hooks.<module>`, not a direct
+      path to the module file — running the file by path leaves the repo root off
+      `sys.path` and every hook fails with `ModuleNotFoundError`. Verified by hand and
+      pinned by the AQA test. Operator guide: `docs/runbooks/claude-workforce-hooks.md`.
 
 **Phase 3 — subagents (roster reviews its own successors from 3.1 on)**
 
@@ -54,8 +74,8 @@ labels are navigation, not structure.
 - [ ] 3.2 `security-scanner`, `config-guardian`.
 - [ ] 3.3 `openspec-author`, `test-engineer`.
 - [ ] 3.4 `doc-reconciler`, `hw-evidence-auditor`. First auditor run attached to the PR —
-      expected findings: the 2026-07-12 evidence gap (stays deferred) and README.md:255
-      (fixed at 6.5).
+      expected findings: the 2026-07-12 evidence gap (stays deferred) and the README
+      coverage claim (fixed at 6.5).
 - [ ] 3.5 AQA green over all seven: platform-supported frontmatter keys, bare tool names
       (reject `(` / `*` tokens), each file ≤ 60 lines.
 
@@ -101,8 +121,11 @@ labels are navigation, not structure.
 - [ ] 6.3 `docs/claude/surfaces/` + index for cross-cutting surfaces; `doc-reconciler`
       verifies zero broken references.
 - [ ] 6.4 AGENTS.md dedupe on its declared worker-contract axis.
-- [ ] 6.5 README.md:255 truth-fix: "85% branch coverage" → "85% line coverage" (branch
-      stays advisory until its own promotion change).
+- [x] 6.5 README.md truth-fix: "85% branch coverage" → "85% line coverage" (branch
+      is measured + reported for `tools/claude_hooks/` only, and stays advisory until
+      its own promotion change). **Deviation:** landed with Phases 1–2 rather than in
+      the docs phase — the claim was false the moment branch measurement arrived, and
+      the dev-governance spec's truthful-claims requirement forbids leaving it.
 - [ ] 6.6 Extended banned-token AQA sweep over nested CLAUDE.md + surfaces (repo slug
       allowlisted); `test_portfolio_reframe_aqa.py` stays green.
 - [ ] 6.7 Dedicated tools-coverage stage live in `scripts/ci.sh`

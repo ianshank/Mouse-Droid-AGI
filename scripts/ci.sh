@@ -45,6 +45,15 @@ echo "=== Skill Validator (.claude/skills) ==="
 # tests/regression/test_skill_commands_aqa.py; this is the quick local mirror.
 "$PYTHON_BIN" tools/validate_skill_commands.py
 
+echo "=== Claude Workforce Config (.claude/workforce.yaml) ==="
+# Fast standalone signal that the workforce config parses and validates against
+# WorkforceConfig (extra="forbid"), so a typo like `frozen_path` can't silently
+# disable the freeze gate. The PR gate is
+# tests/regression/test_claude_workforce_aqa.py; this is the quick local mirror.
+"$PYTHON_BIN" -c "from tools.claude_hooks.config import load_config; \
+c = load_config(); print(f'workforce config OK: freeze={c.freeze.feature_key} \
+frozen_paths={len(c.freeze.frozen_paths)}')"
+
 echo "=== Doc Hygiene (advisory) ==="
 # WARN-only drift guard for the forward-looking planning doc (F-016). Exits 0
 # unless --strict; the hard post-reconciliation budget is pinned by
@@ -53,6 +62,14 @@ echo "=== Doc Hygiene (advisory) ==="
 
 echo "=== Type Check ==="
 "$PYTHON_BIN" -m mypy src/ --strict --ignore-missing-imports
+
+echo "=== Type Check (workforce hooks) ==="
+# tools/ as a whole is not yet --strict clean, so this is scoped to the hook
+# package: new governance code is held to the same bar as src/ from day one.
+# --explicit-package-bases + MYPYPATH resolve tools.claude_hooks unambiguously
+# (tools/ is a namespace package with no __init__.py).
+MYPYPATH=. "$PYTHON_BIN" -m mypy tools/claude_hooks/ --strict --ignore-missing-imports \
+    --explicit-package-bases
 
 echo "=== Pillar Validation Dispatch (--dry-run) ==="
 # Proves the validate_all_pillars CLI + dispatch table are importable
@@ -102,6 +119,21 @@ else
     echo "=== E2E Tests ==="
     "$PYTHON_BIN" -m pytest tests/e2e/ -m "not hardware" --import-mode=importlib -v
 fi
+
+echo "=== Workforce Hook Coverage (line gate + advisory branch) ==="
+# The repository-wide gate measures src/mousedroid only and cannot see tools/,
+# so governance code needs its own invocation or it would ship untested. The
+# line threshold mirrors coverage.tools_line_min in .claude/workforce.yaml;
+# --cov-branch reports branch coverage, which is advisory until a baseline
+# exists (never claim a metric that isn't enforced).
+WORKFORCE_COV_MIN="$("$PYTHON_BIN" -c "from tools.claude_hooks.config import load_config; \
+print(load_config().coverage.tools_line_min)")"
+"$PYTHON_BIN" -m pytest tests/unit/tools/claude_hooks \
+    -m "not hardware" \
+    --import-mode=importlib \
+    -q -o addopts="" \
+    --cov=tools/claude_hooks --cov-branch --cov-report=term-missing \
+    --cov-fail-under="$WORKFORCE_COV_MIN"
 
 echo "=== Branch Coverage Gate (changed files >= 85%) ==="
 "$PYTHON_BIN" scripts/check_branch_coverage.py --min 85 \

@@ -8,10 +8,9 @@
 
 - **change_id**: `mouse-droid-claude-workforce`
 - **project**: MouseDroid (repository `ianshank/Mouse-Droid-AGI`)
-- **status**: proposed
-- **feature_id**: F-024 (expected — next free per ADR-013 F-number namespaces; F-009–F-014
-  are permanently burned; reserved in `features.yaml` at task 0.2, never hardcoded before
-  then)
+- **status**: in progress (Phases 1–2 landed on `claude/workforce-modernization-review-5tf7y3`; Phases 3–6 open — see `tasks.md`)
+- **feature_id**: F-024 (next free per ADR-013 F-number namespaces; F-009–F-014 are
+  permanently burned). Reserved in `features.yaml` as `in_progress`.
 - **epic**: `Hygiene` (existing epic, used 3×; `features.schema.json` leaves `epic`
   unconstrained, so this is conventional reuse over minting a 13th one-off)
 - **owner**: TBD
@@ -38,9 +37,11 @@ the evidence; the draft this replaces got several of these wrong):
    streams" and the three skills' F-008 unfreeze condition are enforced only by plan text
    plus one substring regression test; nothing blocks a capability edit at edit time while
    F-008 (`status: "todo"`, the catalog's only todo) is open.
-5. **Branch coverage is claimed but not measured.** No `branch =` key, no `--cov-branch`
-   anywhere; `scripts/check_branch_coverage.py` gates changed-line coverage despite its
-   name — and README.md:255 falsely claims "85% branch coverage" today.
+5. **Branch coverage was claimed but not measured.** At the basis commit there was no
+   `branch =` key and no `--cov-branch` anywhere; `scripts/check_branch_coverage.py`
+   gates changed-**line** coverage despite its name, and the README claimed "85% branch
+   coverage". *(Closed: branch coverage is now measured and reported for
+   `tools/claude_hooks/`, and the README states the metric it actually enforces.)*
 6. **A fourth skill sits outside the validated layout.** `.github/skills/jetson-hardware-debug/SKILL.md`
    (381 lines) is never swept by `tools/validate_skill_commands.py` and carries two
    hardcoded IPv4 literals that would fail its `hardcoded-host` rule.
@@ -84,9 +85,8 @@ the evidence; the draft this replaces got several of these wrong):
 - **RESTRUCTURE** CLAUDE.md docs-last (hybrid: trimmed root core + nested per-directory
   CLAUDE.md files + `docs/claude/surfaces/` index) and dedupe AGENTS.md on its declared
   worker-contract axis.
-- **FIX** README.md:255 (branch-coverage falsehood → "85% line" until branch measurement
-  lands); **FIX** the ci.yml ruff scope to include `tools/` (closing the ci.sh↔ci.yml
-  divergence).
+- **FIX** the README branch-coverage claim → the metric actually enforced; **FIX** the
+  ci.yml ruff scope to include `tools/` (closing the ci.sh↔ci.yml divergence).
 - **NO** capability code. **NO** `.claude/commands/` (gate-pinned deleted). **NO** new
   lifecycle statuses. **NO** new GitHub Actions job.
 
@@ -106,8 +106,8 @@ the evidence; the draft this replaces got several of these wrong):
 - **Affected specs**: `claude-workforce` (new), `dev-governance` (new).
 - **Affected code** (at implementation, per `tasks.md`): `.claude/**` (additive),
   `tools/claude_hooks/**` (new), `.mcp.json` (new), `tests/regression/test_claude_workforce_aqa.py`
-  (new), `tests/unit/tools/**` (new tests), `scripts/ci.sh` (+ `TestCiSh` pin additions),
-  `.github/workflows/ci.yml` (one ruff-scope line), `CLAUDE.md`/`AGENTS.md`/`README.md:255`,
+  (new), `tests/unit/tools/claude_hooks/**` (new tests), `scripts/ci.sh` (+ `TestCiSh` pins),
+  `.github/workflows/ci.yml` (one ruff-scope line), `CLAUDE.md`/`AGENTS.md`/`README.md`,
   nested `CLAUDE.md` files, `docs/claude/**` (new), `docs/runbooks/worktrees.md` (new),
   `features.yaml` (F-024 row), `openspec/project.md` (registry row). This bundle itself is
   docs-only.

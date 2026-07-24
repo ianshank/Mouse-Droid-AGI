@@ -8,6 +8,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Claude workforce governance: config-driven, tested edit-time hooks (F-024)
+
+Mechanised the `.claude/` governance the spec bundle below specifies (Phases 1–2;
+the subagent roster, new skills, `.mcp.json` and the docs restructure remain open):
+
+- **Single config source.** `.claude/workforce.yaml` validated by
+  `tools/claude_hooks/config.py::WorkforceConfig` (Pydantic v2, `extra="forbid"`,
+  range-validated). Every threshold, gate key, glob and budget lives there; a typo
+  like `frozen_path` fails at load instead of silently disabling a gate, and a
+  missing file falls back to schema defaults so the tooling stays backwards
+  compatible.
+- **Three hooks** under `tools/claude_hooks/`, wired additively into
+  `.claude/settings.json` (hook blocks merge across scopes, so personal hooks are
+  not shadowed): `secret_scan` (PreToolUse — scans pending content with the repo's
+  own `gitleaks` + `.gitleaks.toml` regex-only allowlist *before* the write, closing
+  the edit-time gap the advisory CI job leaves; warn-and-allow when the scanner is
+  absent, `strict` to deny), `freeze_gate` (PreToolUse — denies edits to configured
+  capability globs while `F-008` is not `done`, quoting the "hardware readiness
+  preempts all in-flight software streams" rule; self-disables when the feature
+  lands; governance failures fail closed, environment failures fail open; override
+  env is honoured and logged), and `post_edit_check` (PostToolUse — advisory
+  `ruff`/`mypy` on the touched file; report-only, since PostToolUse cannot block).
+- **Four reusable primitives** so the hooks carry policy only: `paths` (repo-root
+  resolution + glob matching whose `*` does not cross a separator, unlike
+  `fnmatch`), `logging_setup` (structured logging to **stderr** — stdout is the hook
+  decision channel — via a locally-bound structlog logger that never mutates global
+  config, with a dependency-free fallback), `hookio` (payload probing across tool
+  shapes; **allow is silent**, because an explicit allow would bypass the
+  permission prompt), and `portability` (absolute-path rule).
+- **Gates.** New `tests/regression/test_claude_workforce_aqa.py` (the PR gate,
+  reusing `validate_skill_commands`'s host/IP rule) plus three `scripts/ci.sh`
+  stages: workforce-config parse, `mypy --strict` over the hook package, and a
+  dedicated `--cov=tools/claude_hooks --cov-branch` invocation — the repo-wide gate
+  measures `src/mousedroid` only and could not see `tools/`. `.github/workflows/ci.yml`
+  now lints `tools/`, closing a ci.sh↔ci.yml divergence `tools/README.md` already
+  claimed was closed. 200 new tests; hook package at ~98% line coverage.
+- Operator runbook: `docs/runbooks/claude-workforce-hooks.md`.
+
 ### Added — Claude workforce modernization spec bundle (peer-reviewed rev. B, proposed)
 
 Imported the `mouse-droid-claude-workforce` OpenSpec change bundle as **rev. B** — a
