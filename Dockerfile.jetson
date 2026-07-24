@@ -15,7 +15,7 @@ FROM dustynv/l4t-pytorch:r36.4.0
 
 LABEL maintainer="Ian Cruickshank"
 LABEL description="MouseDroid — GPU-accelerated runtime on Jetson Orin Nano"
-LABEL version="0.2.0"
+LABEL version="0.3.0"
 
 ENV DEBIAN_FRONTEND=noninteractive
 

@@ -7,6 +7,22 @@ name = "mousedroid"
 version = "0.3.0"
 description = "MouseDroid — Star Wars MSE-6 Agentic World Model on Jetson Orin Nano"
 requires-python = ">=3.10"
+authors = [{ name = "Ian Cruickshank", email = "ianshank@gmail.com" }]
+license = "MIT"
+license-files = ["LICENSE"]
+readme = "README.md"
+# NOTE (PEP 639): the SPDX `license = "MIT"` expression replaces the legacy
+# `License :: OSI Approved :: MIT License` classifier — modern hatchling rejects
+# declaring both, so the classifier list below intentionally omits it.
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "torch>=2.1",
     "pydantic>=2.7",
@@ -190,6 +206,13 @@ dev = [
 
 [project.scripts]
 mousedroid = "mousedroid.main:cli_entry"
+
+[project.urls]
+Homepage = "https://github.com/ianshank/mouse-droid-agi"
+Repository = "https://github.com/ianshank/mouse-droid-agi"
+Documentation = "https://github.com/ianshank/mouse-droid-agi/blob/main/docs/README.md"
+Changelog = "https://github.com/ianshank/mouse-droid-agi/blob/main/CHANGELOG.md"
+Issues = "https://github.com/ianshank/mouse-droid-agi/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mousedroid"]
