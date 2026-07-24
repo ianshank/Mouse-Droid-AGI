@@ -488,6 +488,13 @@ shape.
 ALLOW_PYTEST_COLLECTION_SKIP=1 \
     "/c/Program Files/Python311/python.exe" scripts/check_branch_coverage.py \
         --min 85 --tests tests/unit/<your-test>.py
+
+# If you touched .claude/ or tools/claude_hooks/ (workforce governance, F-024):
+"/c/Program Files/Python311/python.exe" -m pytest \
+    tests/regression/test_claude_workforce_aqa.py tests/unit/tools/claude_hooks \
+    --import-mode=importlib -q
+MYPYPATH=. "/c/Program Files/Python311/python.exe" -m mypy tools/claude_hooks/ \
+    --strict --ignore-missing-imports --explicit-package-bases
 ```
 
 Then delegate to subagents in parallel:
@@ -571,6 +578,51 @@ it never enumerates skill names or paths — so illustrative patterns with
 format/glob tokens (`weights/arm/{task}_final.pt`, `*`, `$`, `<>`) are
 intentionally skipped. If you mean a literal repo path, write it without
 those metacharacters or the validator will (correctly) not check it.
+
+---
+
+### workforce-hooks
+
+**Trigger:** "why was my edit blocked?", "freeze gate", "capability freeze",
+"secret scan blocked my write", "workforce config", "hook denied",
+"MOUSEDROID_WORKFORCE_ALLOW_FROZEN"
+
+**What it covers:** the edit-time governance that runs *inside* a Claude Code
+session (F-024) — an edit-time secret scan and a capability freeze gate (both
+can block), plus advisory post-edit `ruff`/`mypy`. Everything tunable lives in
+`.claude/workforce.yaml`, validated by `WorkforceConfig` with `extra="forbid"`,
+so a misspelled key fails loudly instead of silently disabling a gate.
+
+- **Blocked by the freeze gate?** The path matched `freeze.frozen_paths` while
+  F-008 is not `done` — the same "hardware readiness preempts all in-flight
+  software streams" rule the three frozen skills carry. It self-disables when
+  F-008 lands.
+- **Blocked by the secret scan?** Add the placeholder's literal **regex** to
+  `.gitleaks.toml`; never allowlist by path.
+- **Nothing happening at all?** The hooks need the repo's deps installed
+  (`pip install -e .`) and shell out via `python3`.
+
+**Run:**
+
+```bash
+# Drive a hook by hand with a synthetic payload (empty stdout == allow):
+echo '{"tool_name":"Write","tool_input":{"file_path":"src/mousedroid/arm/x.py"}}' \
+    | python3 -m tools.claude_hooks.freeze_gate
+
+# Verbose diagnostics (logs go to stderr — stdout is the decision channel):
+MOUSEDROID_WORKFORCE_DEBUG=1 python3 -m tools.claude_hooks.secret_scan
+
+# Gates:
+python3 -m pytest tests/regression/test_claude_workforce_aqa.py \
+    tests/unit/tools/claude_hooks --import-mode=importlib -q
+```
+
+**Gotcha:** hook commands must be
+`cd "$CLAUDE_PROJECT_DIR" && python3 -m tools.claude_hooks.<module>`. Running the
+module file by path leaves the repo root off `sys.path`, so every hook dies with
+`ModuleNotFoundError` — and a PreToolUse crash is a non-blocking warning, so the
+gates would be silently inactive rather than obviously broken. Details:
+`docs/runbooks/claude-workforce-hooks.md`.
 
 ---
 

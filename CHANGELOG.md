@@ -44,6 +44,22 @@ the subagent roster, new skills, `.mcp.json` and the docs restructure remain ope
   measures `src/mousedroid` only and could not see `tools/`. `.github/workflows/ci.yml`
   now lints `tools/`, closing a ci.sh↔ci.yml divergence `tools/README.md` already
   claimed was closed. 200 new tests; hook package at ~98% line coverage.
+- **`.gitignore` fix — the config was not shipping.** `.gitignore` excluded all of
+  `.claude/`, so `workforce.yaml` was untracked: green locally, absent in CI and in
+  every clone. Git does not descend into an excluded directory, so the rule is now
+  `.claude/*` plus explicit `!` negations for the shared assets (`settings.json`,
+  `workforce.yaml`, `skills/`, `agents/`); personal state stays ignored. Pinned by
+  `test_shared_claude_assets_are_git_tracked`.
+- **Truthful coverage claims.** README, `docs/testing.md`, `tests/README.md` and the
+  PR template each claimed an enforced "85% **branch** coverage" that was measured
+  nowhere. Corrected to line coverage; branch coverage is measured for
+  `tools/claude_hooks/` only and reported as advisory.
+- Docs reconciled: `docs/architecture/c4-claude-workforce.md` (new) + three
+  `c4-overview.md` tables, CLAUDE.md (new F-024 surface; the stale "CI Pipeline
+  (5 stages)" heading corrected against the real 14-job `ci.yml`), AGENTS.md,
+  SKILLS.md, `agent.md`, HARNESS_SPEC.md, `docs/CHARTER.md`, `docs/development.md`,
+  `docs/README.md`, `tools/README.md`, NEXT_STEPS.md, and ADR-012's conflicting
+  stage count. `.dockerignore` excludes `tools/claude_hooks/` (no runtime role).
 - Operator runbook: `docs/runbooks/claude-workforce-hooks.md`.
 
 ### Added — Claude workforce modernization spec bundle (peer-reviewed rev. B, proposed)

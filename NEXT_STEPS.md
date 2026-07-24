@@ -130,6 +130,16 @@ is landed — runbook: `docs/runbooks/mlflow-local-ui.md`.
    GPIO, ESP32, replay-loop, or full-rover-bringup failures discovered during
    the next hardware validation pass.
 
+5. **Finish the Claude workforce bundle (F-024).** Phases 1–2 landed (config,
+   three hooks, AQA gate, CI stages). Still open, tracked in
+   `openspec/changes/mouse-droid-claude-workforce/tasks.md`: the subagent roster
+   (`.claude/agents/`), five new skills, a secretless `.mcp.json` including the
+   repo's own MCP server per `docs/MCP_OPERATOR_GUIDE.md`, and the CLAUDE.md
+   restructure. Also open: promote the `gitleaks` CI job from advisory to
+   blocking once the 7-green-run tracker clears, and decide whether repo-wide
+   branch coverage should be measured (today only `tools/claude_hooks/` is, and
+   advisory).
+
 ### Pending follow-up (deferred to a separate PR)
 
 - **Resilience wrappers for camera + voice + LLM gateway** — drop the three
@@ -206,6 +216,8 @@ perform remotely. Sequenced follow-ups:
 - Claude Code on the Jetson (install, service mode, hardening, when NOT to
   use it): `docs/runbooks/claude-code-on-jetson.md`
 - Secret scanning + allowlist policy: `docs/runbooks/secret-scanning.md`
+- Workforce hooks (edit-time secret scan, capability freeze gate, overrides,
+  debugging): `docs/runbooks/claude-workforce-hooks.md`
 - Full bring-up (probe-first motors): `docs/runbooks/jetson-full-bringup.md`
 - Full validation (cold/warm phases, trend journal): `docs/runbooks/jetson-full-validation.md`
 

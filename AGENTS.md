@@ -331,3 +331,33 @@ layout was migrated off (foundry plan WS-F7a) and must stay deleted:
    `tests/unit/skills/builtin/test_skill_specs_match_docs.py`, which also
    rejects orphaned docs.
    Inside pytest, plain `assert` is fine.
+6. **New shared `.claude/` assets need a `.gitignore` negation.** `.gitignore`
+   excludes `.claude/*`, so anything you add there is untracked by default: it
+   works on your machine and is simply absent in CI and in every clone. Add
+   `!.claude/<your-asset>` and confirm with `git ls-files .claude/`. Pinned by
+   `tests/regression/test_claude_workforce_aqa.py::test_shared_claude_assets_are_git_tracked`.
+
+## Working under the workforce hooks (F-024)
+
+Two PreToolUse hooks can **block** your Write/Edit; a third reports after the
+fact. They are configured entirely by `.claude/workforce.yaml` — change
+behaviour there, not in hook source. Full guide:
+`docs/runbooks/claude-workforce-hooks.md`.
+
+- **Capability freeze gate.** Edits matching `freeze.frozen_paths` (today
+  `src/mousedroid/arm/**`) are denied while F-008 is not `done`, enforcing
+  "hardware readiness preempts all in-flight software streams". This is the
+  same condition the three frozen skills carry. If you have a reviewed reason
+  to proceed, set `MOUSEDROID_WORKFORCE_ALLOW_FROZEN=1` — the override is
+  honoured and **logged**; do not make it a habit, and say so in the PR.
+- **Edit-time secret scan.** Pending content is scanned with the repo's own
+  `gitleaks` + `.gitleaks.toml` before it reaches disk. If it fires on a
+  legitimate placeholder, add that placeholder's literal **regex** to
+  `.gitleaks.toml` — never allowlist by path (the incident this gate exists to
+  prevent started in documentation).
+- **Post-edit checks** run `ruff`/`mypy` on the file you touched and print
+  findings to stderr. They cannot block (PostToolUse fires after the write), so
+  treat them as a fast signal, not a gate.
+- **Debugging a hook:** `MOUSEDROID_WORKFORCE_DEBUG=1` raises the log level.
+  Hook logs go to stderr by design — stdout is the decision channel, and a
+  stray line there would corrupt the payload.

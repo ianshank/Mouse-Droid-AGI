@@ -20,7 +20,7 @@ mode in that mode of work is **completeness-by-presence**: an agent infers a
 feature is "done" because code exists, marks it complete, and the claim drifts
 from reality with nothing to catch it. The project already has strong runtime
 invariants (Protocol DI, factory wiring, no hardcoded values, `mypy --strict`,
-85% coverage) enforced by `scripts/ci.sh` and the 6-stage `ci.yml`, but it had
+85% coverage) enforced by `scripts/ci.sh` and the multi-job `ci.yml`, but it had
 **no machine-checked source of truth for *what is supposed to exist and whether
 it actually works*** — only prose plans under `docs/planning/` and `docs/superpowers/`.
 

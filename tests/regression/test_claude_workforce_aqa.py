@@ -25,6 +25,7 @@ Contracts pinned here:
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -79,6 +80,37 @@ def test_workforce_config_is_present_and_valid() -> None:
     ).is_file(), f"{DEFAULT_CONFIG_RELPATH} is missing — workforce thresholds must have a home"
     cfg = _config()
     assert cfg.freeze.frozen_paths, "freeze.frozen_paths is empty — the gate would never fire"
+
+
+def _git_tracked(*pathspecs: str) -> list[str]:
+    """Return the git-tracked files matching ``pathspecs``."""
+    result = subprocess.run(
+        ["git", "ls-files", "--", *pathspecs],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+@pytest.mark.parametrize(
+    "relpath",
+    [DEFAULT_CONFIG_RELPATH, ".claude/settings.json"],
+)
+def test_shared_claude_assets_are_git_tracked(relpath: str) -> None:
+    """Shared `.claude/` assets must actually ship, not just exist locally.
+
+    `.gitignore` excludes `.claude/*` for session state, so a new shared asset
+    is untracked by default: it works on the author's machine and is simply
+    absent everywhere else. That is not hypothetical — the workforce config hit
+    exactly this and was caught only by CI. The negation entries in `.gitignore`
+    are what make these files shippable, and this test is what keeps them so.
+    """
+    assert _git_tracked(relpath), (
+        f"{relpath} is not tracked by git — it exists locally but will be absent "
+        f"in CI and in every clone. Add a '!{relpath}' negation to .gitignore."
+    )
 
 
 def test_freeze_gate_targets_a_real_feature_catalog() -> None:

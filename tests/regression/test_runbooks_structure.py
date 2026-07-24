@@ -20,6 +20,7 @@ _RUNBOOKS_DIR = Path(__file__).resolve().parents[2] / "docs" / "runbooks"
 # (mousedroid-trend.service Documentation=, NEXT_STEPS, C4 docs) use these names.
 _PINNED_RUNBOOKS = (
     "claude-code-on-jetson.md",
+    "claude-workforce-hooks.md",
     "jetson-claude-pilot-deploy.md",
     "jetson-full-bringup.md",
     "jetson-full-validation.md",
