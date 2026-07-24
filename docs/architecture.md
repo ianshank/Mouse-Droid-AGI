@@ -1,5 +1,11 @@
 # MouseDroid — C4 Architecture
 
+> **Which architecture doc?** This file is the single-page **prose walkthrough** (Levels 1–4 with every
+> sub-component diagram inline). [`architecture/c4-overview.md`](architecture/c4-overview.md) is the
+> **canonical diagram index** that routes to the per-area component diagrams (`c4-*.md`). The two currently
+> repeat the Level 1 (System Context) and Level 2 (Container) Mermaid diagrams — when you edit either, update
+> both (or fold the shared diagrams into `c4-overview.md` and link to them here).
+
 This document uses the [C4 model](https://c4model.com/) (Context → Container → Component → Code) to describe the system architecture at four levels of abstraction.
 
 ---

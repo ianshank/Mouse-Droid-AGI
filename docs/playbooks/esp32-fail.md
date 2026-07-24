@@ -78,7 +78,7 @@ USB-to-UART bridge at 1 Mbps).
 
 ## Cross-Reference
 
-- [`src/mousedroid/comms/esp32_driver.py`](../../src/mousedroid/comms/esp32_driver.py) — raw driver.
+- [`src/mousedroid/comms/serial_driver.py`](../../src/mousedroid/comms/serial_driver.py) — raw serial driver.
 - [`src/mousedroid/resilience/resilient_driver.py`](../../src/mousedroid/resilience/resilient_driver.py) — circuit breaker + retry wrapper.
 - [`src/mousedroid/resilience/circuit_breaker.py`](../../src/mousedroid/resilience/circuit_breaker.py) — state machine.
 - [`config/jetson_production.yaml`](../../config/jetson_production.yaml) — `esp32:`, `circuit_breaker:`, `retry:` sections.
