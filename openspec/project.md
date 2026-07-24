@@ -22,3 +22,4 @@ authoritative counterparts.
 | change-id | status | F-number | authoritative artifacts |
 |---|---|---|---|
 | `mouse-droid-alayaworld-memory-distill` | in progress | F-023 | `docs/superpowers/specs/2026-07-23-alayaworld-memory-distill-design.md`, `docs/superpowers/plans/2026-07-23-alayaworld-memory-distill.md`, `docs/architecture/ADR-015-bounded-context-latent-memory.md` |
+| `mouse-droid-claude-workforce` | proposed | F-024 (expected; reserved at task 0.2) | `openspec/changes/mouse-droid-claude-workforce/peer-review.md`, `docs/superpowers/plans/2026-07-03-claude-code-foundry.md` (WS-F7b coexistence), `features.yaml` (F-024 on reservation) |

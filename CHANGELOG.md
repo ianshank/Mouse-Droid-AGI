@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Claude workforce modernization spec bundle (peer-reviewed rev. B, proposed)
+
+Imported the `mouse-droid-claude-workforce` OpenSpec change bundle as **rev. B** — a
+peer-reviewed rewrite of a user-supplied draft. The review
+(`openspec/changes/mouse-droid-claude-workforce/peer-review.md`, 14 evidence-cited
+verdicts) found the draft's central skills-asymmetry premise inverted (all three skills
+were already frozen, PR #151), two mechanisms that would fail existing regression gates
+(an out-of-vocabulary lifecycle status; resurrecting `.claude/commands/`), and stale
+enforcement claims (the gitleaks CI gate shipped as F-015; coverage/mypy/lint scopes
+exclude `tools/`). The corrected bundle specs a default-safe Claude Code workforce —
+seven subagents, three config-driven hooks (edit-time gitleaks scan; an F-008-keyed
+freeze gate enforcing the rev-B preemption rule, fail-closed on a broken catalog;
+post-edit report-only checks), five new skills, a secretless `.mcp.json` including the
+repo's own MCP server per `docs/MCP_OPERATOR_GUIDE.md`, a worktree-per-change flow, and
+a docs-last CLAUDE.md restructure via nested auto-loaded CLAUDE.md files — validated by
+the house AQA-regression pattern (no new CI job). Spec-only import: `status: proposed`,
+F-024 expected; no capability code and no `.claude/` changes yet. Registry row added to
+`openspec/project.md`.
+
 ### Added — AlayaWorld-adapted bounded-context memory, drift training + distillation spike (F-023)
 
 Adapted two ideas from the AlayaWorld technical report (arXiv:2607.18367, cited as
