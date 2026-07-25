@@ -204,7 +204,7 @@ class HuggingFaceWeightUpdatePoller:
                 await self.poll_once()
             except asyncio.CancelledError:
                 raise
-            except Exception:  # pylint: disable=broad-except
+            except Exception:
                 _log.warning(
                     "cloud_weight_update_poll_cycle_failed",
                     repo_id=self._repo_id,

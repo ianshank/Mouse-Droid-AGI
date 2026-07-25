@@ -159,7 +159,7 @@ class OnDeviceWeightUpdateSource:
                 await self.refresh_once()
             except asyncio.CancelledError:
                 raise
-            except Exception:  # pylint: disable=broad-except
+            except Exception:
                 _log.warning("on_device_hot_swap_refresh_failed", exc_info=True)
             try:
                 await asyncio.wait_for(self._stop_event.wait(), timeout=self._check_interval_s)

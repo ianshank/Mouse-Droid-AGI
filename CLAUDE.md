@@ -96,8 +96,9 @@ workforce section below), `.claude/` (Claude Code assets: `settings.json`,
 
 ## CI Pipeline
 
-`.github/workflows/ci.yml` is authoritative (14 jobs, matrixed over Python
-3.10/3.11/3.12). The load-bearing chain:
+`.github/workflows/ci.yml` is authoritative (count the jobs there — a number
+restated here drifts; core jobs are matrixed over Python 3.10/3.11/3.12).
+The load-bearing chain:
 
 0. **actionlint**: pinned workflow lint — guards the `${{ }}`-in-`run:` startup-failure trap
 1. **Lint**: `ruff check` + `ruff format --check` over `src/ tests/ tools/`, plus `ruff check scripts/`

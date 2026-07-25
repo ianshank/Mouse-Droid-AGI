@@ -101,6 +101,9 @@ else
     "$PYTHON_BIN" -m pytest tests/performance/ -m "not hardware" --import-mode=importlib -v
 
     echo "=== Regression Tests ==="
+    # Deliberately no "not slow" filter (unlike GitHub CI's regression step):
+    # the slow-marked mypy-clean regression (test_pr105b_mypy_clean.py) runs
+    # here so the local full-CI loop keeps that signal.
     "$PYTHON_BIN" -m pytest tests/regression/ -m "not hardware" --import-mode=importlib -v
 fi
 

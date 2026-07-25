@@ -1,7 +1,9 @@
 # =============================================================================
 # MouseDroid — CI/CD Pipeline
 # =============================================================================
-# 6-stage quality gate: Lint → Typecheck → Test → Prometheus → Security → Docker
+# Staged quality gate: Lint → Typecheck → Test → Prometheus → Security → Docker
+# (plus config/USB-C/extras/advisory jobs — count the jobs below rather than
+# trusting a number here; this header once drifted to "6-stage" at 13 jobs).
 # Runs on: push to main, pull requests
 # Matrix: Python 3.10 + 3.11 + 3.12
 # =============================================================================
@@ -160,9 +162,14 @@ jobs:
             - name: Install dependencies
               run: pip install -e ".[dev,telemetry,mcp]"
 
+            # -m "not hardware" mirrors scripts/ci.sh (PR #160 rationale): tests
+            # marked hardware open real GPIO/serial devices and must not collect
+            # on a runner that does not own the peripherals.
             - name: Run tests with coverage
               run: |
                   pytest tests/unit tests/property tests/integration \
+                    -m "not hardware" \
+                    --import-mode=importlib \
                     -v --tb=short \
                     --cov=src/mousedroid \
                     --cov-report=term-missing \
@@ -179,6 +186,7 @@ jobs:
               run: |
                   pytest tests/regression tests/e2e \
                     -m "not hardware and not slow" \
+                    --import-mode=importlib \
                     -v --tb=short --no-cov
 
             - name: Upload coverage

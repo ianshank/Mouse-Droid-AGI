@@ -183,7 +183,7 @@ async def read_report_history(journal: JournalProtocol) -> list[StoredReport]:
             continue
         try:
             history.append(StoredReport.model_validate(entry.payload))
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:
             _log.warning(
                 "preflight_report_parse_failed",
                 error=f"{type(exc).__name__}: {exc}",
