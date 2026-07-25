@@ -49,11 +49,19 @@ MOUSEDROID_SMOKE_ALLOW_MOTION=1 \
 # then `… motor`, then `… power`
 ```
 
-- **ESP32 RESPONDS:** leave `MOUSEDROID_ESP32__ENABLED` unset (default `True`) → live
-  `SerialESP32Driver`. Real motors are in play; `test_send_velocity_moves_encoders` should PASS.
-- **ESP32 DEAD (probe fails / circuit-breaks):** set `MOUSEDROID_ESP32__ENABLED=false` in
-  `docker.env` → `MockESP32Driver`. **Required** so the container comes up; motors stay
-  blocked-on-repair. Triage with the `rover-firmware-diagnosis` skill + grep the structlog:
+> **Default posture (F-008):** `config/jetson_production.yaml` ships `esp32.enabled: false`
+> (dead-board safe default — the schema default stays `True` for all other overlays). The
+> probe below decides whether to *lift* that default via the env override; env beats YAML,
+> so going live never needs a commit.
+
+- **ESP32 RESPONDS:** set `MOUSEDROID_ESP32__ENABLED=true` in `docker.env` (uncomment the
+  prepared slot from `config/docker.env.example`) → live `SerialESP32Driver`. Real motors
+  are in play; `test_send_velocity_moves_encoders` should PASS.
+- **ESP32 DEAD (probe fails / circuit-breaks):** leave `MOUSEDROID_ESP32__ENABLED` unset —
+  the production overlay's `enabled: false` resolves `MockESP32Driver` and the container
+  comes up; motors stay blocked-on-repair. (A stale `MOUSEDROID_ESP32__ENABLED=true` in
+  `docker.env` would override the safe YAML default — audit for it.) Triage with the
+  `rover-firmware-diagnosis` skill + grep the structlog:
   `esp32_raw_line`, `esp32_serial_port_overridden`, `power_chain_probe_complete`, `usbc_endpoint_*`.
 
 > The two motion gates are distinct: `MOUSEDROID_SMOKE_ALLOW_MOTION=1` arms the **bash** motor stage;
