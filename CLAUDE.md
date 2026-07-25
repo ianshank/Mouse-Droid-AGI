@@ -75,6 +75,12 @@ workforce section below), `.claude/` (Claude Code assets: `settings.json`,
 
 - **Framework**: pytest with `pytest-asyncio`, `pytest-cov`, `hypothesis`
 - **Coverage gate**: 85% **line** minimum over `src/mousedroid` (`--cov-fail-under=85`).
+  The threshold literal is repeated in ci.sh / ci.yml / release.yml and pinned equal to
+  pyproject `fail_under` by `tests/regression/test_coverage_gate_single_source.py`.
+  Suppression ratchets: inline noqa/type-ignore budgets (`test_suppression_budget.py`,
+  which also budgets `src/`-targeting ruff per-file-ignores) and the mypy
+  `disallow_subclassing_any` override list (`test_mypy_override_budget.py`) —
+  all ratchet-down-only.
   Branch coverage is NOT measured repo-wide — `scripts/check_branch_coverage.py` gates
   changed *lines* despite its name. A second, additive gate covers
   `tools/claude_hooks/` (`--cov=tools/claude_hooks --cov-branch`, threshold from
@@ -103,19 +109,23 @@ The load-bearing chain:
 0. **actionlint**: pinned workflow lint — guards the `${{ }}`-in-`run:` startup-failure trap
 1. **Lint**: `ruff check` + `ruff format --check` over `src/ tests/ tools/`, plus `ruff check scripts/`
 2. **Type check**: `mypy --strict src/` (depends on lint)
-3. **Test + Coverage**: `pytest --cov=src/mousedroid --cov-fail-under=85`, then regression + e2e
-4. **Security**: `pip-audit` + `gitleaks` (both advisory; see `.github/advisory_stages.yaml`)
+3. **Test + Coverage**: `pytest --cov=src/mousedroid --cov-fail-under=85`, then regression + e2e,
+   then the smoke tier (sub-10-s; previously ran in no CI path)
+4. **Security**: `pip-audit --strict --skip-editable` + `gitleaks` (both advisory via
+   `continue-on-error`; see `.github/advisory_stages.yaml`)
 5. **Docker**: validate `Dockerfile.jetson` + `docker-compose.jetson.yml` (depends on test + typecheck)
 
 Plus `config-validate`, `usbc-config-gate`, `prometheus-check`, `vla-extras`,
-`onnx-world-model-extras`, and `vulture-audit`. Separate workflows: `harness.yml`
-(spec harness), `config-compat.yml` (schema drift), `jetson-nightly.yml`.
+`onnx-world-model-extras`, `vulture-audit`, `performance` (advisory — Jetson-calibrated
+latency budgets are noisy on shared runners), and `local-gates` (the deterministic
+`scripts/ci.sh`-only gates: settings identity, `mypy --strict tools/claude_hooks/`,
+skill validator, doc hygiene, workforce hook coverage). Separate workflows:
+`harness.yml` (spec harness), `config-compat.yml` (schema drift), `jetson-nightly.yml`.
 
-`bash scripts/ci.sh` is the local superset — it runs the above plus the skill
-validator, workforce-config parse, `mypy --strict tools/claude_hooks/`, the
-hardcoded-value gate, the pillar dispatch, the workforce hook-coverage stage, and
-the health check. **Count changes when jobs are added — do not restate a number
-without checking `ci.yml`.**
+`bash scripts/ci.sh` is the local superset — it additionally runs the
+hardcoded-value gate and branch-coverage gate (both need a git diff base, so they
+are local-only by design), the pillar dispatch, and the health check. **Count
+changes when jobs are added — do not restate a number without checking `ci.yml`.**
 
 ## Robot Arm Platform (Hierarchical Reasoning Architecture)
 
