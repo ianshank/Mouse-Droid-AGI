@@ -530,8 +530,15 @@ jobs:
                   python-version: "3.11"
                   cache: pip
 
+            # setuptools is upgraded first: it is the RUNNER's pre-installed
+            # build tooling (the project builds with hatchling, not
+            # setuptools), and the stale runner copy was the audit's first
+            # real finding (PYSEC-2026-3447) once the job was un-swallowed.
+            # Auditing it would report the runner image, not this project.
             - name: Install dependencies
-              run: pip install -e "." pip-audit
+              run: |
+                  pip install --upgrade pip setuptools
+                  pip install -e "." pip-audit
 
             # No --strict: the editable-installed mousedroid package is not on
             # PyPI, and --strict escalates even the --skip-editable skip itself
