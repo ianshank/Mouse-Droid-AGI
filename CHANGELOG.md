@@ -15,6 +15,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Jetson Deployment Runbook.** Published 19-step deployment runbook (`docs/planning/JETSON_DEPLOY_RUNBOOK.md`) mapping the complete deployment procedure from pre-connect to container startup, health checks, Prometheus metrics, and security audits.
 - **Lint & Format Cleanup.** Resolved 7 pre-existing `ruff` lint findings and reformatted 81 files to maintain clean repository standards.
 
+### Fixed — Test Suite on Windows WSL/Git-Bash & Orchestrator Observability
+
+- **Windows Test Compatability.** Modified `tests/unit/test_jetson_smoke_orchestrator.py` to unconditionally skip on Windows rather than failing abruptly due to `bash.EXE` RPC errors in the WSL compatibility environment. Tests remain fully active on Linux/Jetson CI.
+- **Watchdog Defensive Logging.** Added explicit stdout and stderr capture and debug-level logging to `SystemdNotifier` when the `systemd-notify` subprocess fallback fails. This ensures future cross-platform execution issues are easier to triage.
+
 ### Added — Claude workforce governance: config-driven, tested edit-time hooks (F-024)
 
 Mechanised the `.claude/` governance the spec bundle below specifies (Phases 1–2;
