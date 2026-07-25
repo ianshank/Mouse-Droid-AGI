@@ -231,7 +231,16 @@ jobs:
             - name: Install dependencies
               run: pip install -e ".[dev,telemetry,mcp]"
 
+            # The instrumentation-overhead budget (1.15x) is calibrated for
+            # dedicated hardware; shared runners measured 1.17x-1.26x from
+            # contention alone on every observed run, which would leave this
+            # job perma-red and erode its signal. The test's own documented
+            # env knob relaxes the budget on slower/shared hosts — 2.0x still
+            # catches real instrumentation regressions (the failure mode is
+            # order-of-magnitude, not percent-level).
             - name: Run performance tier (advisory)
+              env:
+                  MOUSEDROID_INSTRUMENTATION_OVERHEAD_BUDGET: "2.0"
               run: |
                   pytest tests/performance \
                     -m "not hardware" \
