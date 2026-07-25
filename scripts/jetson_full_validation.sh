@@ -48,6 +48,12 @@
 #   MOUSEDROID_VALIDATION_PHASE1_CI_ULIMIT_KB    Phase-1 ci.sh vmem cap (KB) (6291456 = 6 GB)
 #   MOUSEDROID_VALIDATION_PHASE1_CI_RETRY_ULIMIT_KB Phase-1 retry vmem cap  (5242880 = 5 GB)
 #   MOUSEDROID_VALIDATION_PHASE1_CI_OOM_RETRY    retry ci.sh in slim mode on rc=137 (1)
+#   MOUSEDROID_VALIDATION_PILLARS_STRICT_SKIPS   pass --strict-skips to the Phase-2
+#                                                real pillar run so an environment
+#                                                skip (pytest missing from the host
+#                                                venv) FAILS instead of reading as
+#                                                a 10/10 pass; config-disabled
+#                                                skips still pass (1)
 #
 # Secrets are NEVER echoed — only presence is checked. No motion is ever armed.
 
@@ -91,6 +97,13 @@ TREND_SLOW_FLOOR_S="${MOUSEDROID_VALIDATION_TREND_SLOW_FLOOR_S:-0.05}"
 PHASE1_CI_ULIMIT_KB="${MOUSEDROID_VALIDATION_PHASE1_CI_ULIMIT_KB:-6291456}"
 PHASE1_CI_RETRY_ULIMIT_KB="${MOUSEDROID_VALIDATION_PHASE1_CI_RETRY_ULIMIT_KB:-5242880}"
 PHASE1_CI_OOM_RETRY="${MOUSEDROID_VALIDATION_PHASE1_CI_OOM_RETRY:-1}"
+# Strict pillar-skip gate for the Phase-2 real pillar run. When 1 (default)
+# the CLI gets --strict-skips: a skip_reason=environment result (Pattern-B
+# pytest missing from the host venv) exits 1 instead of masquerading as a
+# 10/10 pillar pass. Config-disabled skips (memory/curiosity off in the prod
+# overlay) still pass. Phase-1's --dry-run step NEVER gets the flag (the CLI
+# rejects the combination). Set 0 to restore the legacy lenient behaviour.
+PILLARS_STRICT_SKIPS="${MOUSEDROID_VALIDATION_PILLARS_STRICT_SKIPS:-1}"
 # Metric namespace — mirrors the schema field metrics.namespace and its env
 # override MOUSEDROID_METRICS__NAMESPACE (default "mousedroid"), so the /metrics
 # grep tracks an operator-renamed namespace instead of a hardcoded prefix.
@@ -194,7 +207,10 @@ run_phase1_ci_container() {
     local logfile="$1"
     log "--- static CI (ci.sh, container) — first attempt, ulimit -v ${PHASE1_CI_ULIMIT_KB} KB ---"
     local rc=0
-    docker exec -e MOUSEDROID_MOCK_HARDWARE=true "${CONTAINER}" \
+    # PYTHONOPTIMIZE=0: the image ships PYTHONOPTIMIZE=1 (runtime contract),
+    # but the pytest suite has only ever run with assert semantics intact —
+    # keep the historical test posture inside the container CI run.
+    docker exec -e MOUSEDROID_MOCK_HARDWARE=true -e PYTHONOPTIMIZE=0 "${CONTAINER}" \
         bash -lc "ulimit -v ${PHASE1_CI_ULIMIT_KB} && cd /opt/mousedroid && git config --global --replace-all safe.directory /opt/mousedroid && bash scripts/ci.sh" \
         >"${logfile}" 2>&1 || rc=$?
     if [[ ${rc} -eq 0 ]]; then
@@ -205,7 +221,7 @@ run_phase1_ci_container() {
         log "--- ci.sh SIGKILL'd (rc=137) — OOM detected; retrying in slim mode (ulimit -v ${PHASE1_CI_RETRY_ULIMIT_KB} KB, MOUSEDROID_CI_SLIM=1) ---"
         echo "=== OOM RETRY (first attempt was SIGKILL'd) ===" >>"${logfile}"
         rc=0
-        docker exec -e MOUSEDROID_MOCK_HARDWARE=true -e MOUSEDROID_CI_SLIM=1 "${CONTAINER}" \
+        docker exec -e MOUSEDROID_MOCK_HARDWARE=true -e MOUSEDROID_CI_SLIM=1 -e PYTHONOPTIMIZE=0 "${CONTAINER}" \
             bash -lc "ulimit -v ${PHASE1_CI_RETRY_ULIMIT_KB} && cd /opt/mousedroid && git config --global --replace-all safe.directory /opt/mousedroid && bash scripts/ci.sh" \
             >>"${logfile}" 2>&1 || rc=$?
         if [[ ${rc} -eq 0 ]]; then
@@ -418,9 +434,14 @@ phase2() {
     # orch._metrics) populates and asserts the #115 families HERE.
     run_hardware_pytest "${RUN_DIR}/phase2_pytest.log"
 
-    # Real pillar validation (10 pillars).
+    # Real pillar validation (10 pillars). Strict-skips (default on) turns a
+    # pytest-less host venv from a silent 4-pillar skip into a FAIL.
+    local pillar_args=(--config "${PROD_CONFIG}" --json)
+    if [[ "${PILLARS_STRICT_SKIPS}" == "1" ]]; then
+        pillar_args+=(--strict-skips)
+    fi
     run_step "pillars (real)" yes "${RUN_DIR}/phase2_pillars.log" \
-        "${HOST_PY}" -m mousedroid.cli.validate_pillars --config "${PROD_CONFIG}" --json
+        "${HOST_PY}" -m mousedroid.cli.validate_pillars "${pillar_args[@]}"
 
     if [[ "${DRY_RUN}" != "1" && "${CONTAINER_WAS_RUNNING}" == "1" ]]; then
         log "restarting container ${CONTAINER}"
