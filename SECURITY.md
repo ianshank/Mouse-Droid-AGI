@@ -25,11 +25,16 @@ time for a fix before any public disclosure.
 
 ## Scope & Existing Tooling
 
-Secret hygiene and dependency posture are enforced in CI:
+Secret hygiene and dependency posture are checked in CI:
 
 - **Secret scanning** — `.gitleaks.toml` + [`docs/runbooks/secret-scanning.md`](docs/runbooks/secret-scanning.md)
-- **Dependency audit** — the `pip-audit` job in `.github/workflows/ci.yml`
-- **Advisory-stage tracking** — `.github/advisory_stages.yaml`
+  (the `gitleaks` job — currently **advisory** via `continue-on-error` pending its green-run promotion window)
+- **Dependency audit** — the `security` job (`pip-audit --skip-editable`) in
+  `.github/workflows/ci.yml` — currently **advisory** via `continue-on-error`
+  pending triage of open findings; a real vulnerability turns the job red
+  without blocking the merge
+- **Advisory-stage tracking** — `.github/advisory_stages.yaml` (each advisory
+  job carries a promotion clock enforced by `scripts/check_advisory_promotions.py`)
 
 Secrets are never committed; per-host runtime secrets live only in
 `/etc/mousedroid/docker.env` (documented, without live values, in

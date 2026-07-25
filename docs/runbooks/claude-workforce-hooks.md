@@ -145,4 +145,6 @@ pytest tests/unit/tools/claude_hooks -q -o addopts="" \
 pytest tests/regression/test_claude_workforce_aqa.py -q
 ```
 
-All of these also run in `bash scripts/ci.sh`.
+All of these also run in `bash scripts/ci.sh`, and in GitHub CI: the hooks
+mypy, workforce coverage, and skill-validator commands via the `local-gates`
+job, the AQA regression via the `test` job's regression step.

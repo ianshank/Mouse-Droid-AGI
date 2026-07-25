@@ -57,7 +57,9 @@ The legacy v0.3.0 execution-plan phase numbering lives only in
    `config/prometheus/alerts.yml` on the monitoring host before the next endurance run.
 8. **[Hygiene — P2] Review the dead-code audit report** (`scripts/dead_code_audit.py`,
    **F-020**) after each significant merge; promote the advisory `gitleaks` /
-   `vulture-audit` CI stages when `scripts/check_advisory_promotions.py` flags them due.
+   `vulture-audit` / `performance` / `security` CI stages when
+   `scripts/check_advisory_promotions.py` flags them due (all tracked in
+   `.github/advisory_stages.yaml`).
 9. **[World model — P2] F-023 operator follow-ups (AlayaWorld adaptation).** The
    bounded-context latent memory + corrupted-history drift training landed default-OFF
    (`world_model_memory` / `training.drift` blocks; ADR-015). Remaining operator actions:
@@ -136,7 +138,9 @@ is landed — runbook: `docs/runbooks/mlflow-local-ui.md`.
    (`.claude/agents/`), five new skills, a secretless `.mcp.json` including the
    repo's own MCP server per `docs/MCP_OPERATOR_GUIDE.md`, and the CLAUDE.md
    restructure. Also open: promote the `gitleaks` CI job from advisory to
-   blocking once the 7-green-run tracker clears, and decide whether repo-wide
+   blocking once the 7-green-run tracker clears (the `performance` and
+   `security` jobs added by the code-hygiene sprint carry their own windows
+   in `.github/advisory_stages.yaml`), and decide whether repo-wide
    branch coverage should be measured (today only `tools/claude_hooks/` is, and
    advisory).
 

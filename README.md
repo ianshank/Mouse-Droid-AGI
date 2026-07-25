@@ -255,10 +255,10 @@ pytest tests/unit/ tests/integration/ tests/regression/        # by category
 The enforced gate is **85% line coverage** (`--cov-fail-under=85` repo-wide, plus
 `scripts/check_branch_coverage.py` for changed files). Branch coverage is measured and
 reported for `tools/claude_hooks/` only, where it is advisory until a baseline exists —
-so it is deliberately not claimed as enforced here. Beyond lint/type/test, CI runs `config-compat` (schema-drift), `actionlint` (workflow lint), and a cyclomatic-complexity gate (`ruff C901`, max 15; [ADR-014](docs/architecture/ADR-014-cyclomatic-complexity-gate.md)). Full strategy: [`docs/testing.md`](docs/testing.md).
+so it is deliberately not claimed as enforced here. Beyond lint/type/test, CI runs the sub-10-second smoke tier, `config-compat` (schema-drift), `actionlint` (workflow lint), a cyclomatic-complexity gate (`ruff C901`, max 15; [ADR-014](docs/architecture/ADR-014-cyclomatic-complexity-gate.md)), the `local-gates` job (settings identity, workforce-hooks mypy + coverage, skill validator, doc hygiene), and an advisory performance tier (`.github/advisory_stages.yaml`). Full strategy: [`docs/testing.md`](docs/testing.md).
 
 ```bash
-ruff check src/ tests/ && ruff format --check src/ tests/
+ruff check src/ tests/ tools/ && ruff format --check src/ tests/ tools/ && ruff check scripts/
 mypy src/ --strict --ignore-missing-imports
 ```
 

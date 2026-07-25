@@ -95,10 +95,10 @@ workforce section below), `.claude/` (Claude Code assets: `settings.json`,
 
 - **Linter**: `ruff==0.8.0` — version pinned in `pyproject.toml [dev]` to match `.github/workflows/ci.yml`. Line length 100, Google docstrings, comprehensive rule set.
 - **Type checker**: `mypy --strict` with `ignore_missing_imports`
-- **Format**: `ruff format` (CI runs `ruff format --check src/ tests/`; same in `bash scripts/ci.sh` post-PR #62)
+- **Format**: `ruff format` (CI runs `ruff format --check src/ tests/ tools/`; same in `bash scripts/ci.sh` post-PR #62)
 - **Docstrings**: Google convention, required on all public functions/classes
 - **Imports**: `from __future__ import annotations` in every module
-- **Pytest invocation**: always pass `--import-mode=importlib` (matches `scripts/ci.sh`); `pytest tests/` works at root because of the auto-loaded `tests/conftest.py`
+- **Pytest invocation**: `--import-mode=importlib` lives in `[tool.pytest.ini_options] addopts`, so plain `pytest` inherits it; CI invocations still pass it explicitly (keep the two in sync). `pytest tests/` works at root because of the auto-loaded `tests/conftest.py`
 
 ## CI Pipeline
 
@@ -668,7 +668,7 @@ guide: `docs/runbooks/claude-workforce-hooks.md`):
   is exactly how `workforce.yaml` first failed to ship. Pinned by
   `test_shared_claude_assets_are_git_tracked`.
 - **Coverage needed its own invocation.** The repo gate measures `src/mousedroid`
-  only, so `scripts/ci.sh` runs a dedicated
+  only, so `scripts/ci.sh` AND the `local-gates` CI job run a dedicated
   `--cov=tools/claude_hooks --cov-branch` stage (line threshold from
   `coverage.tools_line_min`; branch reported, advisory). `mypy --strict` covers
   the hook package too, via `--explicit-package-bases` + `MYPYPATH=.` (`tools/`

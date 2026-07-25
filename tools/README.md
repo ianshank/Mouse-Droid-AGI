@@ -20,9 +20,10 @@ silently omitted it.
 
 `tools/claude_hooks/` additionally carries `mypy --strict` and a dedicated
 coverage gate (`--cov=tools/claude_hooks --cov-branch`, threshold read from
-`coverage.tools_line_min`), because the repository-wide coverage gate measures
-`src/mousedroid` only and cannot see this directory. Neither applies to the rest
-of `tools/` yet.
+`coverage.tools_line_min`), running in both `scripts/ci.sh` and the
+`local-gates` job in `.github/workflows/ci.yml`, because the repository-wide
+coverage gate measures `src/mousedroid` only and cannot see this directory.
+Neither applies to the rest of `tools/` yet.
 
 **Import discipline:** `claude_hooks/` must never import `mousedroid` — a hook
 runs on every Write/Edit, and pulling in the runtime package would put
