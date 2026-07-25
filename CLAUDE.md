@@ -111,7 +111,7 @@ The load-bearing chain:
 2. **Type check**: `mypy --strict src/` (depends on lint)
 3. **Test + Coverage**: `pytest --cov=src/mousedroid --cov-fail-under=85`, then regression + e2e,
    then the smoke tier (sub-10-s; previously ran in no CI path)
-4. **Security**: `pip-audit --strict --skip-editable` + `gitleaks` (both advisory via
+4. **Security**: `pip-audit --skip-editable` + `gitleaks` (both advisory via
    `continue-on-error`; see `.github/advisory_stages.yaml`)
 5. **Docker**: validate `Dockerfile.jetson` + `docker-compose.jetson.yml` (depends on test + typecheck)
 
