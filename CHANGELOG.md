@@ -8,6 +8,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Jetson deploy prep: truthful deploy surface + campaign plan
+
+Repo-side prep for a full on-device deployment and validation campaign. Each
+item closes a gap where the deployment surface did not describe reality:
+
+- **`PYTHONOPTIMIZE=1` is now actually set** (`ENV` in `Dockerfile.jetson`).
+  A dozen documents and several `-O`-hardening code contracts asserted it as
+  "the Jetson Docker default", but no image ever set it. Both in-container
+  `ci.sh` invocations in `scripts/jetson_full_validation.sh` pass
+  `-e PYTHONOPTIMIZE=0` so the pytest suite keeps `assert` semantics.
+- **ESP32 safe-by-default on the production overlay** (`esp32.enabled: false`).
+  The rover's motor controller is dead (F-008); with the schema default of
+  `True` the container crash-looped (`orchestrator.start()` → `connect()`
+  retry-then-raise). The schema default is unchanged; the repair lever is
+  `MOUSEDROID_ESP32__ENABLED=true` in `/etc/mousedroid/docker.env`.
+- **Strict pillar-skip gate.** `PillarResult.skip_reason` (additive:
+  `config_disabled` / `dry_run` / `environment`) plus `--strict-skips` on
+  `mousedroid.cli.validate_pillars`, wired into the Phase-2 pillar run via
+  `MOUSEDROID_VALIDATION_PILLARS_STRICT_SKIPS` (default 1). A runtime without
+  pytest silently SKIPped four Pattern-B pillars and still reported a clean
+  pass; config-disabled skips (`memory`, `curiosity`) correctly still pass.
+  `ARG INSTALL_DEV_TOOLS` now defaults `true`, agreeing with compose.
+- **`mousedroid-docker.service` could not start.** `Type=notify` +
+  `WatchdogSec=30` against a `docker compose up` ExecStart (compose never
+  calls `sd_notify`), and a fatal `ExecStartPre=… docker compose pull` against
+  a local-only image. Now `Type=exec`, no watchdog, non-fatal pull.
+- **Secret-template hygiene.** `MOUSEDROID_TELEMETRY_TOKEN=changeme` replaced
+  with an empty value + `openssl rand -hex 32` recipe. The key stays
+  *uncommented*: `_parse_env_keys` skips `#` lines, so commenting it would
+  disable the `host_env_keys` drift check and drop it from
+  `host_bootstrap.sh` seeding.
+- **Docs.** Config-resolution matrix (four launchers, four `Settings`) and the
+  strict-skips contract in the full-validation runbook; probe-first ESP32 flow
+  rewritten in the bring-up runbook; image-pin authority clarified in the
+  Claude-pilot deploy runbook (the record, not the prose, is authoritative);
+  `scripts/mousedroid.service` annotated as the legacy bare-metal path.
+  Closed the stale `set -e` item in `NEXT_STEPS.md` — already landed at
+  `scripts/jetson_full_smoke_run.sh:27`.
+- **Campaign plan** at
+  `docs/superpowers/plans/2026-07-25-jetson-deploy-and-validation-campaign.md`
+  (WS-A repo prep, WS-B operator deploy, WS-C gated validation campaign with a
+  component-coverage appendix).
+
 ### Fixed — Code-hygiene sprint: cancellation correctness, honest gates, orphan purge (PR #178)
 
 Peer-reviewed hygiene sweep in phase-ordered commits (correctness → gate
