@@ -382,7 +382,7 @@ class HuggingFaceWeightUpdatePoller:
                 return result
             except asyncio.CancelledError:
                 raise
-            except (asyncio.TimeoutError, Exception) as exc:  # pylint: disable=broad-except
+            except Exception as exc:
                 last_exc = exc
                 if attempt + 1 >= attempts:
                     break

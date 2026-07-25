@@ -548,10 +548,11 @@ class MouseDroidOrchestrator:
             )
             return
         except asyncio.CancelledError:
-            # Cooperative cancellation MUST propagate — never swallow it. On
-            # py3.10 CancelledError subclasses Exception, so without this
-            # explicit re-raise the broad ``except Exception`` below would
-            # eat it and leave the caller unable to cancel bring-up. Matches
+            # Cooperative cancellation MUST propagate — never swallow it.
+            # ``CancelledError`` subclasses ``BaseException`` (not
+            # ``Exception``) on every supported interpreter, so the broad
+            # ``except Exception`` below would not eat it — this explicit
+            # re-raise is defensive documentation of the contract. Matches
             # the LLM gateway/composite cancellation contract.
             raise
         except Exception:  # pylint: disable=broad-except

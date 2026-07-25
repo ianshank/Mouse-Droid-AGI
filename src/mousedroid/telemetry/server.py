@@ -792,7 +792,12 @@ class TelemetryServer:
             log.info("mission_endpoint_dedup_hit", idempotency_key=key, kind="inflight")
             try:
                 leader_status, leader_body = await self._mission_inflight[key]
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
+                # Cooperative cancellation of THIS follower request must
+                # propagate — swallowing it here would convert a server
+                # shutdown into a bogus 500 for the client.
+                raise
+            except Exception:
                 # Leader exited abnormally; surface a 500 so the
                 # follower can retry instead of seeing a stale
                 # in-flight future.

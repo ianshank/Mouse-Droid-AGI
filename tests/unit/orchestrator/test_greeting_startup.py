@@ -160,8 +160,9 @@ async def test_greeting_hang_is_bounded_and_never_blocks_startup() -> None:
 async def test_startup_greeting_propagates_cancellation() -> None:
     """Cooperative cancellation during the greeting is never swallowed.
 
-    On py3.10 ``asyncio.CancelledError`` subclasses ``Exception``, so the
-    broad failure-swallowing ``except`` must explicitly re-raise it
+    ``asyncio.CancelledError`` subclasses ``BaseException`` (not
+    ``Exception``) on every supported interpreter, and the greeting path
+    keeps an explicit defensive re-raise so cancellation always propagates
     (Copilot #3409950174) — otherwise a caller can't cancel bring-up. The
     greeting MUST NOT be reported as a mere ``greeting_startup_failed``.
     """

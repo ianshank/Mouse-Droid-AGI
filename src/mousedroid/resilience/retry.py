@@ -86,7 +86,15 @@ async def retry_async(
 
             await asyncio.sleep(delay)
 
-    assert last_exc is not None
+    if last_exc is None:
+        # Unreachable when max_attempts >= 1, but ``assert`` is stripped
+        # under -O (PYTHONOPTIMIZE=1 is the Jetson Docker default), so the
+        # guard must be a real branch or a None would masquerade as the
+        # final-attempt exception.
+        raise RetryExhaustedError(
+            cfg.max_attempts,
+            RuntimeError("retry loop exhausted without capturing an exception"),
+        )
     raise RetryExhaustedError(cfg.max_attempts, last_exc)
 
 

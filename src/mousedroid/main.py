@@ -62,7 +62,10 @@ async def _health_check(cfg: Settings) -> None:  # pragma: no cover
     from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator
 
     orch_obj = build_orchestrator(cfg)
-    assert isinstance(orch_obj, MouseDroidOrchestrator)
+    if not isinstance(orch_obj, MouseDroidOrchestrator):
+        # Explicit check, not ``assert`` — asserts are stripped under -O
+        # (PYTHONOPTIMIZE=1 is the Jetson Docker default).
+        raise TypeError(f"build_orchestrator returned {type(orch_obj).__name__}")
     result = await orch_obj.health_check()
     log = get_logger(__name__)
     log.info("health_check_result", **{k: str(v) for k, v in result.items()})
@@ -83,7 +86,10 @@ async def _run(cfg: Settings) -> None:  # pragma: no cover
     from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator
 
     orch_obj = build_orchestrator(cfg)
-    assert isinstance(orch_obj, MouseDroidOrchestrator)
+    if not isinstance(orch_obj, MouseDroidOrchestrator):
+        # Explicit check, not ``assert`` — asserts are stripped under -O
+        # (PYTHONOPTIMIZE=1 is the Jetson Docker default).
+        raise TypeError(f"build_orchestrator returned {type(orch_obj).__name__}")
     await orch_obj.start()
     try:
         await orch_obj.run()
