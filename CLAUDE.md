@@ -54,6 +54,11 @@ src/mousedroid/
   common/tools/       # Tool registry for runtime operations
 ```
 
+Outside the package: `tools/claude_hooks/` (edit-time governance hooks — see the
+workforce section below), `.claude/` (Claude Code assets: `settings.json`,
+`workforce.yaml`, `skills/`), `scripts/` (CI + operator entry points),
+`config/` (YAML overlays), `tests/` (the tier mirror), `docs/`, `openspec/`.
+
 ## Configuration System
 
 - **Schema**: `src/mousedroid/config/schema.py` — Pydantic v2 `BaseSettings` with nested models
@@ -61,13 +66,21 @@ src/mousedroid/
 - **Environment variables**: Prefix `MOUSEDROID_`, nested delimiter `__` (e.g., `MOUSEDROID_ARM__DOF=6`)
 - **Platform selection**: `platform: mouse_droid` or `platform: robot_arm` in YAML
 - **Adding new config**: Create a Pydantic `BaseModel` subclass, add as `Optional` field with `None` default to `Settings`
+- **Second config root (dev tooling only)**: `.claude/workforce.yaml` →
+  `tools/claude_hooks/config.py::WorkforceConfig` (`extra="forbid"`). It governs
+  edit-time hooks, never the robot runtime, and is deliberately separate from
+  `Settings` so a hook never imports the `mousedroid` package.
 
 ## Testing
 
 - **Framework**: pytest with `pytest-asyncio`, `pytest-cov`, `hypothesis`
-- **Coverage gate**: 85% minimum (`--cov-fail-under=85`)
+- **Coverage gate**: 85% **line** minimum over `src/mousedroid` (`--cov-fail-under=85`).
+  Branch coverage is NOT measured repo-wide — `scripts/check_branch_coverage.py` gates
+  changed *lines* despite its name. A second, additive gate covers
+  `tools/claude_hooks/` (`--cov=tools/claude_hooks --cov-branch`, threshold from
+  `coverage.tools_line_min`); the repo-wide gate cannot see `tools/`.
 - **Markers**: `@pytest.mark.slow`, `@pytest.mark.hardware`, `@pytest.mark.smoke`
-- **Test structure**: `tests/unit/`, `tests/integration/`, `tests/property/`, `tests/regression/`, `tests/e2e/`, `tests/hardware/`
+- **Test structure**: `tests/unit/`, `tests/integration/`, `tests/property/`, `tests/regression/`, `tests/e2e/`, `tests/hardware/`, `tests/performance/`, `tests/smoke/`
 - **Fixtures**: Global `conftest.py` auto-mocks hardware env. Unit `conftest.py` resets structlog.
 - **Optional deps**: Use `pytest.importorskip("mujoco")` for modules requiring arm dependencies
 - **Run**: `pytest tests/` or `pytest tests/unit/arm/ -v` for arm-specific tests
@@ -81,13 +94,27 @@ src/mousedroid/
 - **Imports**: `from __future__ import annotations` in every module
 - **Pytest invocation**: always pass `--import-mode=importlib` (matches `scripts/ci.sh`); `pytest tests/` works at root because of the auto-loaded `tests/conftest.py`
 
-## CI Pipeline (5 stages)
+## CI Pipeline
 
-1. **Lint**: `ruff check` + `ruff format --check` (Python 3.10 + 3.11)
-2. **Type check**: `mypy --strict` (depends on lint)
-3. **Test + Coverage**: `pytest --cov --cov-fail-under=85` (depends on lint)
-4. **Security**: `pip-audit --strict` (advisory)
-5. **Docker**: Validate `Dockerfile.jetson` + `docker-compose.jetson.yml` (depends on test + typecheck)
+`.github/workflows/ci.yml` is authoritative (14 jobs, matrixed over Python
+3.10/3.11/3.12). The load-bearing chain:
+
+0. **actionlint**: pinned workflow lint — guards the `${{ }}`-in-`run:` startup-failure trap
+1. **Lint**: `ruff check` + `ruff format --check` over `src/ tests/ tools/`, plus `ruff check scripts/`
+2. **Type check**: `mypy --strict src/` (depends on lint)
+3. **Test + Coverage**: `pytest --cov=src/mousedroid --cov-fail-under=85`, then regression + e2e
+4. **Security**: `pip-audit` + `gitleaks` (both advisory; see `.github/advisory_stages.yaml`)
+5. **Docker**: validate `Dockerfile.jetson` + `docker-compose.jetson.yml` (depends on test + typecheck)
+
+Plus `config-validate`, `usbc-config-gate`, `prometheus-check`, `vla-extras`,
+`onnx-world-model-extras`, and `vulture-audit`. Separate workflows: `harness.yml`
+(spec harness), `config-compat.yml` (schema drift), `jetson-nightly.yml`.
+
+`bash scripts/ci.sh` is the local superset — it runs the above plus the skill
+validator, workforce-config parse, `mypy --strict tools/claude_hooks/`, the
+hardcoded-value gate, the pillar dispatch, the workforce hook-coverage stage, and
+the health check. **Count changes when jobs are added — do not restate a number
+without checking `ci.yml`.**
 
 ## Robot Arm Platform (Hierarchical Reasoning Architecture)
 
@@ -135,11 +162,15 @@ pytest tests/ -v
 # Run arm-specific tests
 pytest tests/unit/arm/ -v
 
-# Lint + format check
-ruff check src/ tests/ && ruff format --check src/ tests/
+# Lint + format check (tools/ is in scope — ci.yml and ci.sh both lint it)
+ruff check src/ tests/ tools/ && ruff format --check src/ tests/ tools/
 
-# Type check
+# Type check (src, then the workforce hook package)
 mypy --strict src/mousedroid/
+MYPYPATH=. mypy tools/claude_hooks/ --strict --ignore-missing-imports --explicit-package-bases
+
+# Workforce hook tests + their dedicated coverage gate
+pytest tests/unit/tools/claude_hooks tests/regression/test_claude_workforce_aqa.py -q
 
 # Full local CI
 bash scripts/ci.sh
@@ -584,6 +615,57 @@ silently drift:
   can't silently un-freeze a paused skill. Absent `status` stays valid
   (backwards compatible with `.github/skills/` and external layouts). The three
   arm/sim skills are `frozen` pending the F-008 hardware gate + 30-day soak.
+
+## Claude Code workforce governance (F-024 — edit-time hooks, config-driven)
+
+Governance that was prose is now mechanical. Three hooks under
+`tools/claude_hooks/` run inside a Claude Code session; the `.claude/` surface is
+gated by `tests/regression/test_claude_workforce_aqa.py`. Non-negotiable
+contracts (architecture: `docs/architecture/c4-claude-workforce.md`; operator
+guide: `docs/runbooks/claude-workforce-hooks.md`):
+
+- **Single config source.** `.claude/workforce.yaml` validated by
+  `tools/claude_hooks/config.py::WorkforceConfig` (Pydantic v2, `extra="forbid"`,
+  range-validated). Every threshold, glob and gate key lives there — a typo like
+  `frozen_path` becomes a load error instead of a silently disabled gate. Every
+  field has a default, so a missing file still loads (backwards compatible).
+- **`stdout` is the decision channel.** Claude Code parses hook stdout as JSON,
+  so **all** hook logging goes to **stderr** (`logging_setup.py`). That module
+  binds its logger with `structlog.wrap_logger`, never `structlog.configure()`,
+  so importing a hook cannot mutate the process-global structlog config the unit
+  conftest pins. **Allow is silent** — emitting an explicit `allow` would bypass
+  the user's permission prompt, so "no objection" writes nothing and exits 0.
+- **Hook commands are `cd "$CLAUDE_PROJECT_DIR" && python3 -m tools.claude_hooks.<mod>`.**
+  Running the module *file* by path leaves the repo root off `sys.path` and every
+  hook dies with `ModuleNotFoundError`. Pinned by the AQA test.
+- **Split failure posture.** A *governance* failure (missing/malformed
+  `features.yaml`, absent gate feature) **denies** — the gate cannot prove the
+  freeze lifted. An *environment* failure (scanner absent, internal error)
+  **allows** with a warning — bricking every edit is worse than a missed gate.
+  `secret_scan.strict: true` moves the scanner-absent case to deny.
+- **The freeze gate self-disables.** It denies edits matching
+  `freeze.frozen_paths` while `freeze.feature_key` (F-008) is not `done`, quoting
+  the rev-B preemption rule. When F-008 lands, the freeze lifts with no code
+  change. `MOUSEDROID_WORKFORCE_ALLOW_FROZEN` overrides, and is always logged.
+- **Never import `mousedroid` from `tools/claude_hooks/`.** A hook runs on every
+  Write/Edit; the runtime package would put torch/faiss/lmdb on the edit path.
+  Pinned by `test_hook_package_has_no_runtime_package_import`.
+- **Shared `.claude/` assets must be git-tracked.** `.gitignore` excludes
+  `.claude/*` (note: `.claude/*`, not `.claude/` — git will not descend into an
+  excluded directory, so negations under a bare `.claude/` are unreachable). New
+  shared assets need a `!` negation or they work locally and vanish in CI — this
+  is exactly how `workforce.yaml` first failed to ship. Pinned by
+  `test_shared_claude_assets_are_git_tracked`.
+- **Coverage needed its own invocation.** The repo gate measures `src/mousedroid`
+  only, so `scripts/ci.sh` runs a dedicated
+  `--cov=tools/claude_hooks --cov-branch` stage (line threshold from
+  `coverage.tools_line_min`; branch reported, advisory). `mypy --strict` covers
+  the hook package too, via `--explicit-package-bases` + `MYPYPATH=.` (`tools/`
+  is a namespace package with no `__init__.py`).
+
+Grep events: `freeze_gate_denied` / `_self_disabled` / `_override_used` /
+`_catalog_unusable`, `secret_scan_denied` / `_unavailable`,
+`post_edit_check_findings`. Debug with `MOUSEDROID_WORKFORCE_DEBUG=1`.
 
 ## On-device incremental learning (Phase 6 — functional, default-OFF, soak-gated)
 

@@ -1,0 +1,314 @@
+# tests/regression/test_claude_workforce_aqa.py
+"""AQA: Claude Code workforce asset contracts.
+
+The PR gate for everything under ``.claude/`` plus the hook package. Implemented
+as a regression test rather than a new GitHub Actions job, matching the pattern
+``test_skill_commands_aqa.py`` established: the regression tier already runs
+across the Python matrix, so a new workflow would buy nothing and add a startup
+surface to keep green.
+
+Reuses the host/IP rule from :mod:`tools.validate_skill_commands` (the
+``test_foundry_plan_doc.py`` precedent) so the policy lives in exactly one place.
+
+Contracts pinned here:
+
+* every workforce threshold lives in ``.claude/workforce.yaml`` and validates;
+* workforce assets stay portable (no absolute paths, no host/IP literals);
+* subagent frontmatter uses only platform-supported keys, with **bare** tool
+  names — permission patterns like ``Bash(git diff*)`` are silently ignored by
+  the platform, so they must fail here instead;
+* wired hook commands point at files that exist;
+* the legacy ``.claude/commands/`` layout stays deleted;
+* pre-existing settings survive the hooks block being added.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+from pathlib import Path
+from typing import Any
+
+import pytest
+import yaml
+from tools.claude_hooks.config import DEFAULT_CONFIG_RELPATH, WorkforceConfig, load_config
+from tools.claude_hooks.portability import find_absolute_paths
+from tools.validate_skill_commands import find_hardcoded_hosts
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_CLAUDE_DIR = _REPO_ROOT / ".claude"
+_SETTINGS = _CLAUDE_DIR / "settings.json"
+_LEGACY_COMMANDS = _CLAUDE_DIR / "commands"
+_HOOK_PACKAGE = _REPO_ROOT / "tools" / "claude_hooks"
+
+# Text assets that must satisfy the portability rule. Discovered, never
+# enumerated, so a new asset is covered the moment it lands.
+_TEXT_SUFFIXES = frozenset({".md", ".yaml", ".yml", ".json"})
+
+
+def _config() -> WorkforceConfig:
+    return load_config(repo_root=_REPO_ROOT)
+
+
+def _claude_text_assets() -> list[Path]:
+    if not _CLAUDE_DIR.is_dir():
+        return []
+    return sorted(p for p in _CLAUDE_DIR.rglob("*") if p.is_file() and p.suffix in _TEXT_SUFFIXES)
+
+
+def _parse_frontmatter(path: Path) -> dict[str, Any]:
+    """Return the YAML front-matter mapping of ``path`` (empty when absent)."""
+    text = path.read_text(encoding="utf-8-sig")
+    if not text.startswith("---"):
+        return {}
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        return {}
+    parsed = yaml.safe_load(parts[1])
+    return parsed if isinstance(parsed, dict) else {}
+
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+
+def test_workforce_config_is_present_and_valid() -> None:
+    """The checked-in config must satisfy its own schema."""
+    assert (
+        _REPO_ROOT / DEFAULT_CONFIG_RELPATH
+    ).is_file(), f"{DEFAULT_CONFIG_RELPATH} is missing — workforce thresholds must have a home"
+    cfg = _config()
+    assert cfg.freeze.frozen_paths, "freeze.frozen_paths is empty — the gate would never fire"
+
+
+def _git_tracked(*pathspecs: str) -> list[str]:
+    """Return the git-tracked files matching ``pathspecs``."""
+    result = subprocess.run(
+        ["git", "ls-files", "--", *pathspecs],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+@pytest.mark.parametrize(
+    "relpath",
+    [DEFAULT_CONFIG_RELPATH, ".claude/settings.json"],
+)
+def test_shared_claude_assets_are_git_tracked(relpath: str) -> None:
+    """Shared `.claude/` assets must actually ship, not just exist locally.
+
+    `.gitignore` excludes `.claude/*` for session state, so a new shared asset
+    is untracked by default: it works on the author's machine and is simply
+    absent everywhere else. That is not hypothetical — the workforce config hit
+    exactly this and was caught only by CI. The negation entries in `.gitignore`
+    are what make these files shippable, and this test is what keeps them so.
+    """
+    assert _git_tracked(relpath), (
+        f"{relpath} is not tracked by git — it exists locally but will be absent "
+        f"in CI and in every clone. Add a '!{relpath}' negation to .gitignore."
+    )
+
+
+def test_freeze_gate_targets_a_real_feature_catalog() -> None:
+    """The configured catalog exists and actually declares the gate feature."""
+    cfg = _config()
+    catalog = _REPO_ROOT / cfg.freeze.features_file
+    assert catalog.is_file(), f"freeze.features_file {cfg.freeze.features_file} does not exist"
+    parsed = yaml.safe_load(catalog.read_text(encoding="utf-8"))
+    features = parsed.get("features") if isinstance(parsed, dict) else parsed
+    ids = {str(entry.get("id", "")) for entry in features if isinstance(entry, dict)}
+    assert (
+        cfg.freeze.feature_key in ids
+    ), f"freeze.feature_key {cfg.freeze.feature_key} is not in {cfg.freeze.features_file}"
+
+
+def test_coverage_source_directory_exists() -> None:
+    """The dedicated coverage invocation must point at a real package."""
+    cfg = _config()
+    assert (_REPO_ROOT / cfg.coverage.tools_source).is_dir()
+
+
+# ---------------------------------------------------------------------------
+# Portability (invariant I-3)
+# ---------------------------------------------------------------------------
+
+
+def test_claude_assets_carry_no_absolute_paths() -> None:
+    offenders: list[str] = []
+    for asset in _claude_text_assets():
+        found = find_absolute_paths(asset.read_text(encoding="utf-8"))
+        offenders.extend(f"{asset.relative_to(_REPO_ROOT)}: {hit}" for hit in found)
+    assert not offenders, f"absolute paths under .claude/ break portability: {offenders}"
+
+
+def test_claude_assets_carry_no_hardcoded_hosts() -> None:
+    offenders: list[str] = []
+    for asset in _claude_text_assets():
+        found = find_hardcoded_hosts(asset.read_text(encoding="utf-8"))
+        offenders.extend(f"{asset.relative_to(_REPO_ROOT)}: {hit}" for hit in found)
+    assert not offenders, f"hardcoded host/IP under .claude/: {offenders}"
+
+
+# ---------------------------------------------------------------------------
+# Subagent frontmatter contract
+# ---------------------------------------------------------------------------
+
+
+def _agent_files() -> list[Path]:
+    agents_dir = _REPO_ROOT / _config().agents.directory
+    return sorted(agents_dir.glob("*.md")) if agents_dir.is_dir() else []
+
+
+def test_agent_files_declare_required_frontmatter() -> None:
+    cfg = _config()
+    for agent in _agent_files():
+        meta = _parse_frontmatter(agent)
+        missing = [key for key in cfg.agents.required_frontmatter_keys if not meta.get(key)]
+        assert not missing, f"{agent.name} is missing frontmatter keys {missing}"
+
+
+def test_agent_files_use_only_supported_frontmatter_keys() -> None:
+    cfg = _config()
+    allowed = set(cfg.agents.allowed_frontmatter_keys)
+    for agent in _agent_files():
+        unknown = sorted(set(_parse_frontmatter(agent)) - allowed)
+        assert (
+            not unknown
+        ), f"{agent.name} declares frontmatter keys the platform ignores: {unknown}"
+
+
+def test_agent_tools_are_bare_names_not_permission_patterns() -> None:
+    """Agent frontmatter accepts bare tool names only.
+
+    A ``Bash(git diff*)``-style entry looks like it restricts the agent but is
+    not honoured in agent frontmatter, so it must fail loudly here.
+    """
+    cfg = _config()
+    for agent in _agent_files():
+        tools = _parse_frontmatter(agent).get("tools", "")
+        rendered = ", ".join(tools) if isinstance(tools, list) else str(tools)
+        offenders = [char for char in cfg.agents.forbidden_tool_chars if char in rendered]
+        assert not offenders, (
+            f"{agent.name} uses permission-pattern syntax {offenders} in 'tools'; "
+            "agent frontmatter supports bare tool names only"
+        )
+
+
+def test_agent_files_stay_within_line_budget() -> None:
+    cfg = _config()
+    for agent in _agent_files():
+        lines = len(agent.read_text(encoding="utf-8").splitlines())
+        assert (
+            lines <= cfg.agents.max_lines
+        ), f"{agent.name} is {lines} lines (budget {cfg.agents.max_lines})"
+
+
+# ---------------------------------------------------------------------------
+# settings.json wiring
+# ---------------------------------------------------------------------------
+
+
+def test_settings_json_is_valid() -> None:
+    assert _SETTINGS.is_file()
+    data = json.loads(_SETTINGS.read_text(encoding="utf-8"))
+    assert isinstance(data, dict)
+
+
+def test_settings_permissions_are_preserved() -> None:
+    """Adding hooks must not disturb the pre-existing permission allowlist."""
+    data = json.loads(_SETTINGS.read_text(encoding="utf-8"))
+    allow = data.get("permissions", {}).get("allow", [])
+    assert isinstance(allow, list)
+    assert allow, "permissions.allow was emptied — the hooks block must be additive"
+
+
+def _hook_commands() -> list[str]:
+    data = json.loads(_SETTINGS.read_text(encoding="utf-8"))
+    commands: list[str] = []
+    hooks = data.get("hooks", {})
+    if not isinstance(hooks, dict):
+        return commands
+    for entries in hooks.values():
+        for entry in entries if isinstance(entries, list) else []:
+            for handler in entry.get("hooks", []) if isinstance(entry, dict) else []:
+                command = handler.get("command") if isinstance(handler, dict) else None
+                if isinstance(command, str):
+                    commands.append(command)
+    return commands
+
+
+def _module_target(command: str) -> Path | None:
+    """Return the file a ``python -m pkg.mod`` hook command resolves to."""
+    tokens = command.split()
+    if "-m" not in tokens:
+        return None
+    spec = tokens[tokens.index("-m") + 1]
+    return _REPO_ROOT / Path(*spec.split(".")).with_suffix(".py")
+
+
+def test_wired_hook_commands_reference_existing_modules() -> None:
+    """Every wired hook must resolve to a real file.
+
+    A hook command pointing at a missing module fails on *every* edit, so this
+    is the highest-value assertion in the file.
+    """
+    for command in _hook_commands():
+        target = _module_target(command)
+        assert target is not None, f"hook command is not a 'python -m' invocation: {command}"
+        assert target.is_file(), f"hook module not found: {target.relative_to(_REPO_ROOT)}"
+
+
+def test_wired_hook_commands_run_from_the_project_directory() -> None:
+    """Hook commands stay portable and importable.
+
+    ``python -m tools.claude_hooks.<mod>`` needs the repository root on
+    ``sys.path``; running the module file by path does not provide that, so the
+    command must ``cd`` to ``$CLAUDE_PROJECT_DIR`` first.
+    """
+    for command in _hook_commands():
+        assert (
+            "$CLAUDE_PROJECT_DIR" in command
+        ), f"hook command must resolve via $CLAUDE_PROJECT_DIR, got: {command}"
+        assert " -m " in command, (
+            "hook must use 'python -m package.module' so the repo root is importable; "
+            f"got: {command}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Layout invariants
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_commands_dir_stays_deleted() -> None:
+    """The migrated-away layout must not return (foundry plan WS-F7a)."""
+    assert not _LEGACY_COMMANDS.exists(), (
+        ".claude/commands/ has been resurrected — add skills under "
+        ".claude/skills/<name>/SKILL.md instead"
+    )
+
+
+@pytest.mark.parametrize(
+    "module",
+    ["config", "freeze_gate", "hookio", "logging_setup", "paths", "portability", "secret_scan"],
+)
+def test_hook_package_modules_are_present(module: str) -> None:
+    assert (_HOOK_PACKAGE / f"{module}.py").is_file()
+
+
+def test_hook_package_has_no_runtime_package_import() -> None:
+    """Hooks must never import the robot runtime.
+
+    A hook runs on every Write/Edit; importing ``mousedroid`` would drag torch,
+    faiss and lmdb into that path and make edits crawl.
+    """
+    offenders: list[str] = []
+    for module in sorted(_HOOK_PACKAGE.glob("*.py")):
+        text = module.read_text(encoding="utf-8")
+        if "import mousedroid" in text or "from mousedroid" in text:
+            offenders.append(module.name)
+    assert not offenders, f"hook modules import the runtime package: {offenders}"

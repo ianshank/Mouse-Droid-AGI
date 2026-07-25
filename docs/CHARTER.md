@@ -142,9 +142,14 @@ These hold across every module and may not be weakened by any change. Invariants
 **Quality gates are non-negotiable.** Linting (`ruff==0.8.0`), formatting
 (`ruff format --check`), strict type-checking (`mypy --strict`), bounded
 cyclomatic complexity (`ruff` `C901`, `max-complexity = 15`; ADR-014), and the
-85% coverage floor (`--cov-fail-under=85`) stay green. The authoritative pipeline
-is `.github/workflows/ci.yml` — actionlint → lint → typecheck → test+coverage →
-prometheus/security → docker, across Python 3.10 / 3.11 / 3.12. Decompose a
+85% **line** coverage floor (`--cov-fail-under=85`, scoped to `src/mousedroid`)
+stay green. The authoritative pipeline is `.github/workflows/ci.yml` — actionlint →
+lint → typecheck → test+coverage → prometheus/security → docker, across Python
+3.10 / 3.11 / 3.12; lint covers `src/ tests/ tools/ scripts/`. Developer tooling
+under `tools/claude_hooks/` carries its own `mypy --strict` and coverage gates,
+because the repo-wide coverage gate is scoped to `src/mousedroid` and cannot see
+it. Branch coverage is measured only there, and reported rather than enforced —
+the project does not claim a metric it does not gate. Decompose a
 function that trips the complexity gate; do not re-open a `src/` per-file ignore.
 
 ## 5. Long-term Roadmap

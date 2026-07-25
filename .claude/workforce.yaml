@@ -1,0 +1,109 @@
+# Claude Code workforce configuration.
+#
+# Single source of truth for every threshold, gate key, path glob and budget the
+# workforce tooling consumes (hooks in tools/claude_hooks/, the AQA regression
+# test, and the workforce skills). Schema + defaults:
+# tools/claude_hooks/config.py::WorkforceConfig — validated with extra="forbid",
+# so an unknown or misspelled key fails loudly instead of silently disabling a
+# gate.
+#
+# Every field is optional: deleting this file falls back to the schema defaults.
+
+# Capability freeze gate. Denies edits to frozen_paths until feature_key reaches
+# done_status in features_file, mechanising "hardware readiness preempts all
+# in-flight software streams". Self-disables when the feature completes.
+freeze:
+    enabled: true
+    feature_key: F-008
+    features_file: features.yaml
+    done_status: done
+    # The arm platform is parked behind the same condition as the three frozen
+    # skills (F-008 on the Jetson + the production soak). Add a glob here to
+    # extend the freeze; no code change is required.
+    frozen_paths:
+        - src/mousedroid/arm/**
+    override_env: MOUSEDROID_WORKFORCE_ALLOW_FROZEN
+
+# Edit-time secret scan. Reuses the repository's existing scanner and its
+# regex-only allowlist so there is exactly one secret policy.
+secret_scan:
+    enabled: true
+    command: gitleaks
+    config_file: .gitleaks.toml
+    timeout_s: 20.0
+    # false = warn and allow when the scanner is missing (mirrors the advisory
+    # CI job); true = deny. Flip to true once gitleaks is a required local tool.
+    strict: false
+    extra_args: []
+    max_bytes: 1000000
+
+# Advisory post-edit checks. Report-only: PostToolUse fires after the write and
+# cannot block. Add or remove a checker here rather than in code.
+post_edit:
+    enabled: true
+    checks:
+        - ruff
+        - mypy
+    timeout_s: 60.0
+    suffixes:
+        - .py
+    ruff_args:
+        - check
+        - --no-fix
+    mypy_args:
+        - --ignore-missing-imports
+        - --follow-imports=silent
+
+# Coverage budgets for the workforce tooling itself. The repository-wide gate
+# measures src/mousedroid only and cannot see tools/, so this drives a separate,
+# additive invocation in scripts/ci.sh.
+coverage:
+    tools_line_min: 85
+    # Reported, never blocking, until a baseline exists.
+    tools_branch_min_advisory: 0
+    tools_source: tools/claude_hooks
+
+# Documentation budgets for the docs-consolidation phase.
+docs:
+    core_max_lines: 250
+    surfaces_dir: docs/claude/surfaces
+
+# Worktree-per-change naming.
+worktree:
+    prefix: mdcw-
+
+# Evidence-audit policy. local_only_declared lists report families the
+# repository deliberately gitignores; a claim backed by one of those plus a
+# CHANGELOG or plan-doc reference is a declared local-only evidence chain.
+evidence:
+    tracked_roots:
+        - reports
+        - smoke-reports
+    stale_after_days: 90
+    local_only_declared:
+        - reports/trunk_sync
+        - reports/jetson_full_validation
+        - reports/jetson_smoke
+        - reports/dead_code
+        - reports/local_runs
+        - reports/endurance
+
+# Subagent asset contract enforced by tests/regression/test_claude_workforce_aqa.py.
+agents:
+    directory: .claude/agents
+    max_lines: 60
+    required_frontmatter_keys:
+        - name
+        - description
+        - tools
+    allowed_frontmatter_keys:
+        - name
+        - description
+        - tools
+        - model
+    # Claude Code accepts bare tool names only in agent frontmatter; these
+    # characters signal an unsupported permission-pattern declaration.
+    forbidden_tool_chars:
+        - "("
+        - ")"
+        - "*"

@@ -8,6 +8,79 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Claude workforce governance: config-driven, tested edit-time hooks (F-024)
+
+Mechanised the `.claude/` governance the spec bundle below specifies (Phases 1–2;
+the subagent roster, new skills, `.mcp.json` and the docs restructure remain open):
+
+- **Single config source.** `.claude/workforce.yaml` validated by
+  `tools/claude_hooks/config.py::WorkforceConfig` (Pydantic v2, `extra="forbid"`,
+  range-validated). Every threshold, gate key, glob and budget lives there; a typo
+  like `frozen_path` fails at load instead of silently disabling a gate, and a
+  missing file falls back to schema defaults so the tooling stays backwards
+  compatible.
+- **Three hooks** under `tools/claude_hooks/`, wired additively into
+  `.claude/settings.json` (hook blocks merge across scopes, so personal hooks are
+  not shadowed): `secret_scan` (PreToolUse — scans pending content with the repo's
+  own `gitleaks` + `.gitleaks.toml` regex-only allowlist *before* the write, closing
+  the edit-time gap the advisory CI job leaves; warn-and-allow when the scanner is
+  absent, `strict` to deny), `freeze_gate` (PreToolUse — denies edits to configured
+  capability globs while `F-008` is not `done`, quoting the "hardware readiness
+  preempts all in-flight software streams" rule; self-disables when the feature
+  lands; governance failures fail closed, environment failures fail open; override
+  env is honoured and logged), and `post_edit_check` (PostToolUse — advisory
+  `ruff`/`mypy` on the touched file; report-only, since PostToolUse cannot block).
+- **Four reusable primitives** so the hooks carry policy only: `paths` (repo-root
+  resolution + glob matching whose `*` does not cross a separator, unlike
+  `fnmatch`), `logging_setup` (structured logging to **stderr** — stdout is the hook
+  decision channel — via a locally-bound structlog logger that never mutates global
+  config, with a dependency-free fallback), `hookio` (payload probing across tool
+  shapes; **allow is silent**, because an explicit allow would bypass the
+  permission prompt), and `portability` (absolute-path rule).
+- **Gates.** New `tests/regression/test_claude_workforce_aqa.py` (the PR gate,
+  reusing `validate_skill_commands`'s host/IP rule) plus three `scripts/ci.sh`
+  stages: workforce-config parse, `mypy --strict` over the hook package, and a
+  dedicated `--cov=tools/claude_hooks --cov-branch` invocation — the repo-wide gate
+  measures `src/mousedroid` only and could not see `tools/`. `.github/workflows/ci.yml`
+  now lints `tools/`, closing a ci.sh↔ci.yml divergence `tools/README.md` already
+  claimed was closed. 200 new tests; hook package at ~98% line coverage.
+- **`.gitignore` fix — the config was not shipping.** `.gitignore` excluded all of
+  `.claude/`, so `workforce.yaml` was untracked: green locally, absent in CI and in
+  every clone. Git does not descend into an excluded directory, so the rule is now
+  `.claude/*` plus explicit `!` negations for the shared assets (`settings.json`,
+  `workforce.yaml`, `skills/`, `agents/`); personal state stays ignored. Pinned by
+  `test_shared_claude_assets_are_git_tracked`.
+- **Truthful coverage claims.** README, `docs/testing.md`, `tests/README.md` and the
+  PR template each claimed an enforced "85% **branch** coverage" that was measured
+  nowhere. Corrected to line coverage; branch coverage is measured for
+  `tools/claude_hooks/` only and reported as advisory.
+- Docs reconciled: `docs/architecture/c4-claude-workforce.md` (new) + three
+  `c4-overview.md` tables, CLAUDE.md (new F-024 surface; the stale "CI Pipeline
+  (5 stages)" heading corrected against the real 14-job `ci.yml`), AGENTS.md,
+  SKILLS.md, `agent.md`, HARNESS_SPEC.md, `docs/CHARTER.md`, `docs/development.md`,
+  `docs/README.md`, `tools/README.md`, NEXT_STEPS.md, and ADR-012's conflicting
+  stage count. `.dockerignore` excludes `tools/claude_hooks/` (no runtime role).
+- Operator runbook: `docs/runbooks/claude-workforce-hooks.md`.
+
+### Added — Claude workforce modernization spec bundle (peer-reviewed rev. B, proposed)
+
+Imported the `mouse-droid-claude-workforce` OpenSpec change bundle as **rev. B** — a
+peer-reviewed rewrite of a user-supplied draft. The review
+(`openspec/changes/mouse-droid-claude-workforce/peer-review.md`, 14 evidence-cited
+verdicts) found the draft's central skills-asymmetry premise inverted (all three skills
+were already frozen, PR #151), two mechanisms that would fail existing regression gates
+(an out-of-vocabulary lifecycle status; resurrecting `.claude/commands/`), and stale
+enforcement claims (the gitleaks CI gate shipped as F-015; coverage/mypy/lint scopes
+exclude `tools/`). The corrected bundle specs a default-safe Claude Code workforce —
+seven subagents, three config-driven hooks (edit-time gitleaks scan; an F-008-keyed
+freeze gate enforcing the rev-B preemption rule, fail-closed on a broken catalog;
+post-edit report-only checks), five new skills, a secretless `.mcp.json` including the
+repo's own MCP server per `docs/MCP_OPERATOR_GUIDE.md`, a worktree-per-change flow, and
+a docs-last CLAUDE.md restructure via nested auto-loaded CLAUDE.md files — validated by
+the house AQA-regression pattern (no new CI job). Spec-only import: `status: proposed`,
+F-024 expected; no capability code and no `.claude/` changes yet. Registry row added to
+`openspec/project.md`.
+
 ### Added — AlayaWorld-adapted bounded-context memory, drift training + distillation spike (F-023)
 
 Adapted two ideas from the AlayaWorld technical report (arXiv:2607.18367, cited as

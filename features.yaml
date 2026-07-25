@@ -394,3 +394,36 @@ features:
       passes. Jetson spike run + on-rover drift eval are prepared via
       docs/runbooks/jetson-alayaworld-spike.md, not executed. implemented_in
       pins to the squash SHA post-merge (per the F-015..F-021 convention).
+
+  - id: "F-024"
+    epic: "Hygiene"
+    name: "Claude Code workforce governance is mechanical, not prose"
+    description: >-
+      The .claude/ surface gains config-driven, tested governance: a Pydantic
+      workforce config (.claude/workforce.yaml, extra=forbid) as the single
+      source for every threshold, glob and gate key; three hooks under
+      tools/claude_hooks/ (edit-time secret scan reusing .gitleaks.toml, a
+      capability freeze gate keyed off F-008 that self-disables when it lands,
+      and advisory post-edit checks); and an AQA regression gate over the
+      workforce assets. Hooks never import the mousedroid runtime, so an edit
+      never pays the torch/faiss import cost.
+    category: "infrastructure"
+    priority: "medium"
+    status: "in_progress"
+    tier: "fast"
+    verification:
+      - "tests/regression/test_claude_workforce_aqa.py passes"
+      - "tools/claude_hooks unit tests pass at or above coverage.tools_line_min with branch coverage reported"
+      - "freeze gate denies a frozen-path edit while F-008 is not done, and self-disables when it is"
+    validation_command: >-
+      python -m pytest tests/regression/test_claude_workforce_aqa.py
+      tests/unit/tools/claude_hooks -q
+    implemented_in: null
+    depends_on: ["F-001"]
+    notes: >-
+      OpenSpec change mouse-droid-claude-workforce (archived under
+      openspec/changes/; repo-native artifacts authoritative), rewritten from a
+      draft after the peer review in that bundle. Remaining phases (subagent
+      roster, new skills, .mcp.json, docs restructure) are tracked in the
+      bundle's tasks.md. implemented_in pins to the squash SHA post-merge (per
+      the F-015..F-021 convention).

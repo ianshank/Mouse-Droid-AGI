@@ -123,6 +123,7 @@ Each subsystem owns a Component diagram in its own file:
 | LLM gateway + cloud/local failover (PR #107) | [`c4-llm-gateway.md`](./c4-llm-gateway.md) | `tests/unit/llm_gateway/test_anthropic_gateway.py`, `tests/unit/llm_gateway/test_fallback_gateway.py`, `tests/unit/config/test_llm_config_anthropic_fallback.py`, `tests/unit/factory/test_build_llm_gateway_dispatch.py`, `tests/integration/test_anthropic_gateway_wiring.py` |
 | Validation efficiency: latency stats · trend store · summary renderer · trend timer · phase caching (PR #126 + F-018) | [`c4-validation-efficiency.md`](./c4-validation-efficiency.md) | `tests/unit/validation/test_latency_stats.py`, `tests/unit/validation/test_report_store.py`, `tests/unit/validation/test_summary.py`, `tests/unit/scripts/test_render_validation_summary.py`, `tests/regression/test_trend_timer_units.py`, `tests/unit/validation/test_init_lazy_exports.py`, `tests/unit/cli/test_preflight_cli.py`, `tests/integration/test_validation_report_store_integration.py`, `tests/regression/test_validation_import_decoupling.py`, `tests/smoke/test_jetson_full_validation_sanity.py` |
 | Spec-driven harness: feature DAG + validate.py runner (ADR-012) | [`c4-spec-harness.md`](./c4-spec-harness.md) | `tests/unit/harness/test_spec.py`, `tests/regression/test_harness_spec_aqa.py`, `tests/regression/test_harness_cli_contract.py` |
+| Claude Code workforce governance: edit-time secret scan · capability freeze gate · post-edit checks (F-024) | [`c4-claude-workforce.md`](./c4-claude-workforce.md) | `tests/unit/tools/claude_hooks/*`, `tests/regression/test_claude_workforce_aqa.py` |
 
 The component-level diagrams are the right entry point when you need to
 understand *which protocol object talks to which* — they map every
@@ -139,6 +140,7 @@ implementations.
 | Deliberative LLM Gateway | `src/mousedroid/llm_gateway/` (composite: `fallback_gateway.py`) |
 | Telemetry Server | `src/mousedroid/telemetry/` |
 | Dashboard Proxy | `tools/dashboard_proxy.py` |
+| Claude workforce hooks + config | `tools/claude_hooks/`, `.claude/workforce.yaml`, `.claude/settings.json` |
 | Factory wiring | `src/mousedroid/factory.py` |
 | Configuration schema | `src/mousedroid/config/schema.py` |
 | Hardware protocols | `src/mousedroid/hardware/protocols.py`, `src/mousedroid/comms/protocol.py` |
@@ -156,6 +158,7 @@ guard rails that keep config + workflows from drifting away from it:
 |---------|-------|-------|
 | Deployed image record | `deployments/jetson-image.json` | Source-of-truth SHA for what the rover runs. The PR #107 LLM tier (anthropic SDK + `LLMConfig`) is baked here; the rover bind-mounts editable source over it but the baked SDK survives `--force-recreate`. Bump this whenever the image is rebuilt or the tracked source SHA changes. |
 | `config-compat` schema-drift gate | `.github/workflows/config-compat.yml`, `scripts/check_config_compat.py` | On any `config/*.yaml` (or `deployments/*.json`) change, worktrees out the deployed SHA and validates the changed YAML against *that* schema — catches the "yaml-only PR merges, rover crash-loops with `Extra inputs are not permitted`" class. |
+| Edit-time workforce hooks (F-024) | `.claude/settings.json` hooks block, `tools/claude_hooks/` | PreToolUse secret scan + capability freeze gate (blocking), PostToolUse checks (advisory). Config: `.claude/workforce.yaml`. See [`c4-claude-workforce.md`](./c4-claude-workforce.md) |
 | `actionlint` workflow lint | `.github/workflows/ci.yml` (Stage 0) | Lints every workflow file so an invalid workflow (e.g. an empty `${{ }}` expression) can't silently startup-fail and disable a gate — the exact failure that killed `config-compat` repo-wide before PR #113. |
 
 The deliberative LLM tier is deployed via this image record; per-host

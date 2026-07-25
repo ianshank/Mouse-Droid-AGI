@@ -114,3 +114,8 @@ var/
 # uses selective COPY so these never enter the image anyway.
 .gitleaks.toml
 .github/advisory_stages.yaml
+
+# Claude Code workforce governance (F-024) - edit-time developer tooling with no
+# runtime role. Keeping it out of the build context also keeps the image free of
+# a second, non-runtime pydantic/yaml consumer.
+tools/claude_hooks/

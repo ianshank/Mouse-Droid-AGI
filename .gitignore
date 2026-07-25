@@ -1,5 +1,16 @@
-# Claude Code
-.claude/
+# Claude Code — session/local state is ignored, shared team assets are tracked.
+# Use `.claude/*` (not `.claude/`): git does not descend into an excluded
+# directory, so a bare `.claude/` makes the negations below unreachable. That is
+# how `.claude/workforce.yaml` silently failed to ship — the governance config
+# existed locally and was absent in CI (caught by
+# tests/unit/tools/claude_hooks/test_config.py::test_repo_config_file_is_valid).
+.claude/*
+!.claude/settings.json
+!.claude/workforce.yaml
+!.claude/skills/
+!.claude/agents/
+# Personal overrides and session state stay untracked regardless of the above.
+.claude/settings.local.json
 
 # Python
 __pycache__/

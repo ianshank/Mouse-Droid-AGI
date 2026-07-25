@@ -240,7 +240,7 @@ Prefer `select_next.py` / `features.yaml` lookups over raw grep. Summarize older
 
 | Level | Purpose | When | Example tools |
 |-------|---------|------|---------------|
-| Lint / Syntax | Mechanical errors | Every edit | ruff, mypy |
+| Lint / Syntax | Mechanical errors | Every edit | ruff, mypy; edit-time hooks (`tools/claude_hooks/`) enforce the secret scan + capability freeze in-session |
 | Unit | Isolated logic | Implementation | pytest |
 | Integration | Component interaction | Cross-feature | factory wiring tests |
 | E2E / Domain | Real-world flow | **Before `done`** | orchestrator e2e, hardware-in-the-loop |
@@ -297,7 +297,12 @@ Non-negotiable rules, mechanically checked where possible (see CLAUDE.md for the
 - Protocol-based DI; concrete types only in `src/mousedroid/factory.py` — enforced by review + factory tests.
 - No raw `print()` in `src/mousedroid` production paths — structlog; ruff scope.
 - No hardcoded values — `scripts/check_no_hardcoded_values.py` (AST gate) + config validation (`F-002`).
-- `mypy --strict` passes; 85% coverage gate — `scripts/ci.sh`.
+- `mypy --strict` passes; 85% line coverage gate over `src/mousedroid` — `scripts/ci.sh`.
+  `tools/claude_hooks/` carries its own `mypy --strict` + coverage stages (the repo-wide
+  gate cannot see `tools/`).
+- Capability freeze respected — `tools/claude_hooks/freeze_gate.py` denies edits to
+  `freeze.frozen_paths` while the gate feature (F-008) is not `done`; it self-disables
+  when the feature lands.
 - Config backwards compatibility — `config-compat` gate + `F-002`.
 
 ---

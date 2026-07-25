@@ -39,6 +39,8 @@ Jetson smoke docs of overlapping scope, kept for now — see the note below.)
 - [runbooks/jetson-claude-pilot-deploy.md](runbooks/jetson-claude-pilot-deploy.md) — cloud/local LLM pilot deploy.
 - [runbooks/jetson-on-device-learning.md](runbooks/jetson-on-device-learning.md) — on-device incremental learning.
 - [runbooks/jetson-alayaworld-spike.md](runbooks/jetson-alayaworld-spike.md) — AlayaWorld distillation spike.
+- [runbooks/claude-workforce-hooks.md](runbooks/claude-workforce-hooks.md) — edit-time governance hooks
+  (secret scan, capability freeze gate, post-edit checks): configuration, overrides, debugging.
 - [runbooks/claude-code-on-jetson.md](runbooks/claude-code-on-jetson.md) · [runbooks/mlflow-local-ui.md](runbooks/mlflow-local-ui.md)
   · [runbooks/secret-scanning.md](runbooks/secret-scanning.md) · [runbooks/history-purge.md](runbooks/history-purge.md).
 
