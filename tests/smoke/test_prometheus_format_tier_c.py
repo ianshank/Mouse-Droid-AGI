@@ -147,9 +147,9 @@ def test_c1_cloud_metrics_seeded_in_generate_metrics_sample() -> None:
         total = f"{family}_total"
         assert total in sample, f"generate_metrics_sample() missing C1 counter: {total}"
     for family in _C1_HISTOGRAM_FAMILIES:
-        assert (
-            f"{family}_bucket" in sample
-        ), f"generate_metrics_sample() missing C1 histogram: {family}"
+        assert f"{family}_bucket" in sample, (
+            f"generate_metrics_sample() missing C1 histogram: {family}"
+        )
 
 
 def test_c1_help_and_type_paired() -> None:

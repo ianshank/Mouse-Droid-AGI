@@ -115,9 +115,9 @@ class TestGitleaksConfig:
             "sk-ant-test",
             "test-api-key-abc123",
         ):
-            assert any(
-                p.search(placeholder) for p in patterns
-            ), f"documented placeholder {placeholder!r} is not covered by the allowlist regexes"
+            assert any(p.search(placeholder) for p in patterns), (
+                f"documented placeholder {placeholder!r} is not covered by the allowlist regexes"
+            )
 
 
 class TestLocalCiStage:

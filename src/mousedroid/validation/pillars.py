@@ -92,8 +92,7 @@ class PillarReport(BaseModel):
         lines = [f"Pillars: overall={self.overall_status.value}"]
         for r in self.results:
             lines.append(
-                f"  [{r.status.value:8}] {r.name:14} "
-                f"({r.elapsed_s * 1000.0:.1f} ms) — {r.detail}",
+                f"  [{r.status.value:8}] {r.name:14} ({r.elapsed_s * 1000.0:.1f} ms) — {r.detail}",
             )
         lines.append(
             f"Total: {self.total_elapsed_s:.2f}s across {len(self.results)} pillars",

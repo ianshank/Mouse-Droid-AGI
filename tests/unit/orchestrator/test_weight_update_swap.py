@@ -251,9 +251,9 @@ async def test_tick_path_world_model_swap_preserves_zeroed_prev_action():
     # bug that breaks the flag will fail here even if direct-call tests pass.
     assert torch.all(orch._h == 0), "h not zeroed after world-model swap on tick path"
     assert torch.all(orch._z == 0), "z not zeroed after world-model swap on tick path"
-    assert torch.all(
-        orch._prev_action == 0
-    ), "prev_action not zeroed after world-model swap on tick path (Copilot 3253293621)"
+    assert torch.all(orch._prev_action == 0), (
+        "prev_action not zeroed after world-model swap on tick path (Copilot 3253293621)"
+    )
     assert len(orch._latent_buffer) == 0, "latent_buffer not cleared on tick path"
 
 

@@ -157,8 +157,7 @@ class RegressionGate:
         decoders = self._decoders
         if held_out_batch is None or decoders is None:
             msg = (
-                "RegressionGate needs both held_out_batch and decoders when no "
-                "score_fn is injected"
+                "RegressionGate needs both held_out_batch and decoders when no score_fn is injected"
             )
             raise ValueError(msg)
         seed = self._cfg.scoring_seed

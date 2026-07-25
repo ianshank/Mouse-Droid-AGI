@@ -99,12 +99,12 @@ def test_writer_side_instrumentation_smoke(tmp_path: Path) -> None:
     ns = MetricsConfig().namespace
 
     # Assert each reliably-fired PR-A2 family appears.
-    assert (
-        f"{ns}_replay_records_total" in text
-    ), f"replay_records_total missing from /metrics output:\n{text[:500]}..."
-    assert (
-        f"{ns}_vla_inference_seconds_count" in text
-    ), f"vla_inference_seconds_count missing from /metrics output:\n{text[:500]}..."
-    assert (
-        f"{ns}_vlm_progress_cache_misses_total" in text
-    ), f"vlm_progress_cache_misses_total missing from /metrics output:\n{text[:500]}..."
+    assert f"{ns}_replay_records_total" in text, (
+        f"replay_records_total missing from /metrics output:\n{text[:500]}..."
+    )
+    assert f"{ns}_vla_inference_seconds_count" in text, (
+        f"vla_inference_seconds_count missing from /metrics output:\n{text[:500]}..."
+    )
+    assert f"{ns}_vlm_progress_cache_misses_total" in text, (
+        f"vlm_progress_cache_misses_total missing from /metrics output:\n{text[:500]}..."
+    )

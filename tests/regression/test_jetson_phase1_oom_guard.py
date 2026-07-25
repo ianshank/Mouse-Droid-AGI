@@ -35,9 +35,9 @@ class TestOomGuardEnvVars:
 
     def test_ulimit_kb_default_is_env_overridable(self) -> None:
         # First-attempt vmem cap. Default must expand cleanly under `${VAR:-N}`.
-        assert (
-            'PHASE1_CI_ULIMIT_KB="${MOUSEDROID_VALIDATION_PHASE1_CI_ULIMIT_KB:-' in _jfv()
-        ), "PHASE1_CI_ULIMIT_KB must be env-overridable with a default"
+        assert 'PHASE1_CI_ULIMIT_KB="${MOUSEDROID_VALIDATION_PHASE1_CI_ULIMIT_KB:-' in _jfv(), (
+            "PHASE1_CI_ULIMIT_KB must be env-overridable with a default"
+        )
 
     def test_retry_ulimit_kb_default_is_env_overridable(self) -> None:
         assert (
@@ -46,9 +46,9 @@ class TestOomGuardEnvVars:
         ), "PHASE1_CI_RETRY_ULIMIT_KB must be env-overridable with a default"
 
     def test_oom_retry_is_env_overridable(self) -> None:
-        assert (
-            'PHASE1_CI_OOM_RETRY="${MOUSEDROID_VALIDATION_PHASE1_CI_OOM_RETRY:-' in _jfv()
-        ), "PHASE1_CI_OOM_RETRY must be env-overridable (operator kill-switch)"
+        assert 'PHASE1_CI_OOM_RETRY="${MOUSEDROID_VALIDATION_PHASE1_CI_OOM_RETRY:-' in _jfv(), (
+            "PHASE1_CI_OOM_RETRY must be env-overridable (operator kill-switch)"
+        )
 
     def test_env_vars_documented_in_header(self) -> None:
         # The header lists every operator-facing tunable; new ones must join.
@@ -85,9 +85,9 @@ class TestOomGuardWrapper:
         # PHASE1_CI_OOM_RETRY=0 must skip the retry (no auto-retry loop the
         # operator can't turn off).
         src = _jfv()
-        assert (
-            '"${PHASE1_CI_OOM_RETRY}" == "1"' in src
-        ), "retry must be gated behind the env kill-switch"
+        assert '"${PHASE1_CI_OOM_RETRY}" == "1"' in src, (
+            "retry must be gated behind the env kill-switch"
+        )
 
     def test_wrapper_retry_sets_slim_mode(self) -> None:
         # The retry attempt MUST inject MOUSEDROID_CI_SLIM=1 so ci.sh skips
@@ -103,9 +103,9 @@ class TestOomGuardWrapper:
         # Successful retry MUST record WARN (not silent PASS) so the operator
         # sees the OOM-driven degradation in the summary.
         src = _jfv()
-        assert (
-            'record WARN "static CI (ci.sh, container)"' in src
-        ), "retry success must WARN, not silently PASS"
+        assert 'record WARN "static CI (ci.sh, container)"' in src, (
+            "retry success must WARN, not silently PASS"
+        )
 
 
 class TestCiShSlimModeContract:
@@ -118,9 +118,9 @@ class TestCiShSlimModeContract:
         assert perf_idx != -1, "Performance stage marker must exist"
         # Look backwards ~200 chars for the slim conditional.
         context_before = src[max(0, perf_idx - 300) : perf_idx]
-        assert (
-            "MOUSEDROID_CI_SLIM" in context_before
-        ), "Performance stage must be inside a MOUSEDROID_CI_SLIM conditional"
+        assert "MOUSEDROID_CI_SLIM" in context_before, (
+            "Performance stage must be inside a MOUSEDROID_CI_SLIM conditional"
+        )
 
     def test_slim_gates_regression_stage(self) -> None:
         src = _ci()
@@ -139,9 +139,9 @@ class TestCiShSlimModeContract:
     def test_slim_off_is_default_backwards_compatible(self) -> None:
         # `${MOUSEDROID_CI_SLIM:-0}` — default MUST be "0" (off) so an operator
         # who has never heard of slim mode gets pre-feature behavior.
-        assert (
-            "${MOUSEDROID_CI_SLIM:-0}" in _ci()
-        ), "MOUSEDROID_CI_SLIM must default to 0 (backwards-compatible)"
+        assert "${MOUSEDROID_CI_SLIM:-0}" in _ci(), (
+            "MOUSEDROID_CI_SLIM must default to 0 (backwards-compatible)"
+        )
 
     def test_slim_does_not_skip_unit_property_integration(self) -> None:
         # The core signal (Unit+Property+Integration+coverage) MUST run in both
@@ -154,9 +154,9 @@ class TestCiShSlimModeContract:
         assert "pytest tests/unit tests/property tests/integration" in block
         # And the enclosing context must NOT be an `if MOUSEDROID_CI_SLIM` block.
         context_before = src[max(0, unit_idx - 200) : unit_idx]
-        assert (
-            'if [[ "${MOUSEDROID_CI_SLIM' not in context_before
-        ), "Unit+Property+Integration must run in both modes"
+        assert 'if [[ "${MOUSEDROID_CI_SLIM' not in context_before, (
+            "Unit+Property+Integration must run in both modes"
+        )
 
 
 class TestCiShSyntax:

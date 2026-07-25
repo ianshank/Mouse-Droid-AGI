@@ -102,7 +102,7 @@ workforce section below), `.claude/` (Claude Code assets: `settings.json`,
 0. **actionlint**: pinned workflow lint — guards the `${{ }}`-in-`run:` startup-failure trap
 1. **Lint**: `ruff check` + `ruff format --check` over `src/ tests/ tools/`, plus `ruff check scripts/`
 2. **Type check**: `mypy --strict src/` (depends on lint)
-3. **Test + Coverage**: `pytest --cov=src/mousedroid --cov-fail-under=85`, then regression + e2e
+3. **Test + Coverage**: `pytest --cov=src/mousedroid --cov-fail-under=93`, then regression + e2e
 4. **Security**: `pip-audit` + `gitleaks` (both advisory; see `.github/advisory_stages.yaml`)
 5. **Docker**: validate `Dockerfile.jetson` + `docker-compose.jetson.yml` (depends on test + typecheck)
 

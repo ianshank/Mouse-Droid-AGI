@@ -88,8 +88,8 @@ def test_deployment_record_required_keys_and_full_sha() -> None:
     record = json.loads(_DEPLOY_RECORD.read_text(encoding="utf-8"))
     for key in ("sha", "platform", "image_tag"):
         assert key in record, f"deployment record missing required key: {key}"
-    assert _FULL_SHA_RE.match(
-        record["sha"]
-    ), f"sha must be a full 40-char lowercase hex commit: {record['sha']!r}"
+    assert _FULL_SHA_RE.match(record["sha"]), (
+        f"sha must be a full 40-char lowercase hex commit: {record['sha']!r}"
+    )
     assert record["platform"] == "jetson"
     assert record["image_tag"] == "mousedroid:jetson"

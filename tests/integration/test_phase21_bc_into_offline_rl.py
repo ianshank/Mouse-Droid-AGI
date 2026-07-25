@@ -135,9 +135,9 @@ class TestBcByteIdentityAtZeroWeight:
         assert run_a.keys() == run_b.keys()
         for key, tensor_a in run_a.items():
             tensor_b = run_b[key]
-            assert torch.equal(
-                tensor_a, tensor_b
-            ), f"determinism broken at weight=0 for layer {key}"
+            assert torch.equal(tensor_a, tensor_b), (
+                f"determinism broken at weight=0 for layer {key}"
+            )
 
 
 class TestBcActiveAtPositiveWeight:
@@ -204,9 +204,9 @@ class TestBcActiveAtPositiveWeight:
 
         # The Phase 2.1 activation log must have fired (structlog → stdout).
         # Single-shot at trainer setup when ``real_supervised_weight > 0``.
-        assert (
-            "offline_rl_bc_active" in captured.out
-        ), f"activation log missing from stdout:\n{captured.out!r}"
+        assert "offline_rl_bc_active" in captured.out, (
+            f"activation log missing from stdout:\n{captured.out!r}"
+        )
 
 
 class TestBcOnIQL:

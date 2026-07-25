@@ -138,7 +138,7 @@ async def test_poll_once_returns_false_on_empty_manifest(tmp_path):
         target_dir.mkdir(parents=True, exist_ok=True)
         target = target_dir / filename
         # Empty manifest — the failure mode Gemini #2 flagged.
-        target.write_text("" if filename == "sha256.txt" else "")
+        target.write_text("")
         return str(target)
 
     class _FakeApi:

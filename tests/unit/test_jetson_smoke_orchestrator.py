@@ -363,9 +363,9 @@ def test_memory_check_logs_warn_when_falling_back_to_memfree(tmp_path: Path) -> 
             "MOUSEDROID_SMOKE_MEMINFO_PATH": str(meminfo),
         },
     )
-    assert (
-        "WARN: MemAvailable not present" in result.stderr
-    ), "MemFree fallback must emit a WARN to stderr"
+    assert "WARN: MemAvailable not present" in result.stderr, (
+        "MemFree fallback must emit a WARN to stderr"
+    )
     assert "PASS: memory check" in result.stdout
 
 

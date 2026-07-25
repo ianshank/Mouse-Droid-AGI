@@ -219,22 +219,22 @@ async def test_endurance_30hz_loop(runtime_settings) -> None:
 
     # GPU temperature
     if gpu_temps:
-        assert (
-            max_gpu_temp < gpu_critical_temp
-        ), f"GPU temp {max_gpu_temp:.1f}°C exceeds critical {gpu_critical_temp}°C"
+        assert max_gpu_temp < gpu_critical_temp, (
+            f"GPU temp {max_gpu_temp:.1f}°C exceeds critical {gpu_critical_temp}°C"
+        )
 
     # Memory stability (allow 10% growth)
     if rss_start_mb > 0 and rss_end_mb > 0:
         growth_pct = (rss_end_mb - rss_start_mb) / rss_start_mb * 100
-        assert (
-            growth_pct < 10.0
-        ), f"RSS grew {growth_pct:.1f}% ({rss_start_mb:.0f}MB → {rss_end_mb:.0f}MB)"
+        assert growth_pct < 10.0, (
+            f"RSS grew {growth_pct:.1f}% ({rss_start_mb:.0f}MB → {rss_end_mb:.0f}MB)"
+        )
 
     # Error count
     error_rate = error_count / len(loop_times_ms) * 100
-    assert (
-        error_rate < 1.0
-    ), f"Error rate {error_rate:.2f}% ({error_count}/{len(loop_times_ms)} ticks)"
+    assert error_rate < 1.0, (
+        f"Error rate {error_rate:.2f}% ({error_count}/{len(loop_times_ms)} ticks)"
+    )
 
 
 # ---------------------------------------------------------------------------

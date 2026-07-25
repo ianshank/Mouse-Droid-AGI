@@ -48,9 +48,9 @@ def captured_logs() -> list[dict[str, Any]]:
 def _find_tensorrt_event(events: list[dict[str, Any]]) -> dict[str, Any]:
     """Pluck the single ``tensorrt_compiler_built`` event out of the captured list."""
     matches = [e for e in events if e.get("event") == "tensorrt_compiler_built"]
-    assert (
-        len(matches) == 1
-    ), f"expected exactly one tensorrt_compiler_built event, got {len(matches)}: {events!r}"
+    assert len(matches) == 1, (
+        f"expected exactly one tensorrt_compiler_built event, got {len(matches)}: {events!r}"
+    )
     return matches[0]
 
 

@@ -51,11 +51,7 @@ def test_legacy_yaml_predating_both_features_loads_unchanged(tmp_path: Path) -> 
     """A pre-#107/#108 overlay validates with both new blocks at safe defaults."""
     legacy = tmp_path / "legacy.yaml"
     legacy.write_text(
-        "platform: mouse_droid\n"
-        "mock_hardware: true\n"
-        "llm:\n"
-        "  enabled: true\n"
-        "  max_tokens: 256\n",
+        "platform: mouse_droid\nmock_hardware: true\nllm:\n  enabled: true\n  max_tokens: 256\n",
     )
     settings = load_settings(legacy)
     # Pre-existing llm field preserved.

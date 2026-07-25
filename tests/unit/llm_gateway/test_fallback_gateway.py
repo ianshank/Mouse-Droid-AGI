@@ -334,9 +334,9 @@ async def test_start_runs_children_concurrently_not_sequentially() -> None:
     assert primary.started
     assert secondary.started
     # <= 90ms means the two 50ms starts overlapped; sequential would be ≥100ms.
-    assert (
-        elapsed < 0.09
-    ), f"concurrent start should overlap; sequential ~100ms, got {elapsed * 1000:.1f}ms"
+    assert elapsed < 0.09, (
+        f"concurrent start should overlap; sequential ~100ms, got {elapsed * 1000:.1f}ms"
+    )
 
 
 @pytest.mark.asyncio

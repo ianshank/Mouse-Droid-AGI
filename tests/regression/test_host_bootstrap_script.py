@@ -147,9 +147,9 @@ class TestDryRunBranches:
         assert proc.returncode == 0, proc.stderr
         assert "rolling back" in proc.stdout
         assert f"DRY-RUN: cp -p {new}" in proc.stdout, "must restore the NEWEST backup"
-        assert (config_dir / "docker.env").read_text(
-            encoding="utf-8"
-        ) == "K=v\n", "dry-run rollback must not touch the env file"
+        assert (config_dir / "docker.env").read_text(encoding="utf-8") == "K=v\n", (
+            "dry-run rollback must not touch the env file"
+        )
 
     def test_rollback_without_backup_fails_loudly(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "etc"

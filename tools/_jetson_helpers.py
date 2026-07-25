@@ -64,7 +64,7 @@ def tegrastats_snapshot(timeout_s: float = 2.0) -> dict[str, int | str | None]:
         # S603/S607: fixed argv list, no shell, executable resolved via PATH
         # (the shutil.which check above guarantees presence). Operator-side
         # diagnostic tool — not exposed to untrusted input.
-        result = subprocess.run(  # noqa: S603
+        result = subprocess.run(
             ["tegrastats", "--interval", "100", "--count", "1"],  # noqa: S607
             capture_output=True,
             text=True,

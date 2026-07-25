@@ -945,8 +945,7 @@ class TestLiteralTypeAliases:
         alias_args = set(_typing.get_args(VLABackendLiteral))
         field_args = set(_typing.get_args(VLAConfig.model_fields["backend"].annotation))
         assert alias_args == field_args, (
-            f"VLABackendLiteral drift: alias has {alias_args}, "
-            f"VLAConfig.backend has {field_args}"
+            f"VLABackendLiteral drift: alias has {alias_args}, VLAConfig.backend has {field_args}"
         )
 
     def test_replay_outcome_literal_has_expected_values(self) -> None:

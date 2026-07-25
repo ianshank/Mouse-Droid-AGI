@@ -15,6 +15,8 @@ The legacy v0.3.0 execution-plan phase numbering lives only in
 
 ## ⚡ Current Next Steps (prioritized)
 
+0. **[Deployment Readiness — COMPLETED] 16-stage test validation & deployment runbook.**
+   The full test pyramid (7,003 tests) was validated, achieving **93.01% line coverage** (gate promoted to 93%). Zero code bugs found. The 19-step deployment sequence is documented in [`docs/planning/JETSON_DEPLOY_RUNBOOK.md`](docs/planning/JETSON_DEPLOY_RUNBOOK.md). Execute the runbook on physical hardware when the Jetson Nano is attached.
 1. **[Security — P0] Rotate the `ANTHROPIC_API_KEY`.** The key was exposed in a chat
    transcript — treat it as compromised. Inventory consumers first (rover
    `/etc/mousedroid/docker.env`, GitHub Actions secrets, any dev-machine env), replace on

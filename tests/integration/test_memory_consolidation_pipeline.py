@@ -161,18 +161,18 @@ def test_100_episode_consolidation_pipeline_cosine_similarity() -> None:
         record = MouseDroidExperienceRecord(vision_features=vec)
         tier.episodic.push(record, priority=1.0)
 
-    assert (
-        len(tier.episodic) == TOTAL_EPISODES
-    ), f"Expected {TOTAL_EPISODES} episodic entries, got {len(tier.episodic)}"
+    assert len(tier.episodic) == TOTAL_EPISODES, (
+        f"Expected {TOTAL_EPISODES} episodic entries, got {len(tier.episodic)}"
+    )
     assert tier.semantic.size == 0, "Semantic index should be empty before consolidation"
 
     # --- Step 3: Run consolidation ---
     consolidated = tier.consolidation.consolidate()
 
     assert consolidated > 0, "Consolidation should have processed at least one experience"
-    assert (
-        tier.semantic.size == consolidated
-    ), f"Semantic index size {tier.semantic.size} should match consolidated count {consolidated}"
+    assert tier.semantic.size == consolidated, (
+        f"Semantic index size {tier.semantic.size} should match consolidated count {consolidated}"
+    )
     assert tier.semantic.size > 0, "Semantic index should be non-empty after consolidation"
 
     # --- Step 4 & 5: Query each centroid, verify cosine similarity > threshold ---
@@ -245,9 +245,9 @@ def test_consolidation_count_matches_semantic_size() -> None:
     count = tier.consolidation.consolidate()
     size_after = tier.semantic.size
 
-    assert (
-        size_after - size_before == count
-    ), f"consolidate() returned {count} but semantic index grew by {size_after - size_before}"
+    assert size_after - size_before == count, (
+        f"consolidate() returned {count} but semantic index grew by {size_after - size_before}"
+    )
 
 
 def test_multiple_consolidation_cycles_accumulate() -> None:
@@ -270,9 +270,9 @@ def test_multiple_consolidation_cycles_accumulate() -> None:
     assert sizes[-1] > 0, "After 5 consolidation cycles, semantic index should be non-empty"
     # Size must be monotonically non-decreasing
     for i in range(1, len(sizes)):
-        assert (
-            sizes[i] >= sizes[i - 1]
-        ), f"Semantic index shrank from {sizes[i - 1]} to {sizes[i]} at cycle {i}"
+        assert sizes[i] >= sizes[i - 1], (
+            f"Semantic index shrank from {sizes[i - 1]} to {sizes[i]} at cycle {i}"
+        )
 
 
 def test_semantic_retrieval_returns_expected_keys_after_consolidation() -> None:
@@ -293,7 +293,7 @@ def test_semantic_retrieval_returns_expected_keys_after_consolidation() -> None:
 
     assert len(results) > 0
     for key, dist in results:
-        assert key.startswith(
-            "consolidation_"
-        ), f"Expected key starting with 'consolidation_', got '{key}'"
+        assert key.startswith("consolidation_"), (
+            f"Expected key starting with 'consolidation_', got '{key}'"
+        )
         assert dist >= 0.0, f"L2 distance must be non-negative, got {dist}"

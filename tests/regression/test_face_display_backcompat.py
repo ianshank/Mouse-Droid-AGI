@@ -60,9 +60,9 @@ def test_yaml_loads_without_face_display(filename: str) -> None:
         pytest.skip(f"{filename} not present in this checkout")
     data = yaml.safe_load(path.read_text())
     s = Settings.model_validate(data)
-    assert (
-        s.face_display is None
-    ), f"{filename}: expected face_display=None (not opted in), got {s.face_display!r}"
+    assert s.face_display is None, (
+        f"{filename}: expected face_display=None (not opted in), got {s.face_display!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -187,9 +187,9 @@ def test_yaml_loads_with_face_display_enabled(filename: str) -> None:
         pytest.skip(f"{filename} not present in this checkout")
     data = yaml.safe_load(path.read_text())
     s = Settings.model_validate(data)
-    assert (
-        s.face_display is not None
-    ), f"{filename}: expected face_display to be set (enabled in config), got None"
-    assert (
-        s.face_display.enabled is True
-    ), f"{filename}: expected face_display.enabled=True, got {s.face_display.enabled!r}"
+    assert s.face_display is not None, (
+        f"{filename}: expected face_display to be set (enabled in config), got None"
+    )
+    assert s.face_display.enabled is True, (
+        f"{filename}: expected face_display.enabled=True, got {s.face_display.enabled!r}"
+    )

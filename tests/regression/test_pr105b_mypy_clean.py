@@ -96,5 +96,5 @@ def test_targeted_files_mypy_strict_clean() -> None:
         f"--- stderr ---\n{result.stderr}"
     )
     assert "Success: no issues found" in result.stdout, (
-        f"mypy returned 0 but the success marker is missing.\n" f"--- stdout ---\n{result.stdout}"
+        f"mypy returned 0 but the success marker is missing.\n--- stdout ---\n{result.stdout}"
     )

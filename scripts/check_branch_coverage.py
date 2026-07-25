@@ -160,7 +160,7 @@ def _first_valid_base_ref(base_ref: str | None) -> str | None:
             return candidate
     if candidates:
         print(
-            f"{_SCRIPT_TAG} no candidate base ref resolved; " f"tried: {', '.join(candidates)}",
+            f"{_SCRIPT_TAG} no candidate base ref resolved; tried: {', '.join(candidates)}",
             file=sys.stderr,
         )
     return None
@@ -404,7 +404,7 @@ def _load_coverage(json_out: Path) -> dict[str, dict[str, object]]:
 def main() -> int:
     """Run branch-level changed-file coverage check and enforce minimum percentage."""
     parser = argparse.ArgumentParser(description="Check coverage for changed branch files.")
-    parser.add_argument("--min", type=float, default=85.0, dest="min_cov")
+    parser.add_argument("--min", type=float, default=93.0, dest="min_cov")
     parser.add_argument(
         "--tests",
         nargs="+",

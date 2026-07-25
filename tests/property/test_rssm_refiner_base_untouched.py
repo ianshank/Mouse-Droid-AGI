@@ -104,6 +104,6 @@ def test_base_rssm_unchanged_after_refine(
     # ...and the candidate must be a SEPARATE object (not the base's tensors).
     base_params = dict(base.named_parameters())
     for name in before:
-        assert (
-            result.candidate_state_dict[name].data_ptr() != base_params[name].data_ptr()
-        ), f"candidate shares storage with base for {name!r}"
+        assert result.candidate_state_dict[name].data_ptr() != base_params[name].data_ptr(), (
+            f"candidate shares storage with base for {name!r}"
+        )

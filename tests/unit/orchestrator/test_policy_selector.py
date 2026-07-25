@@ -258,9 +258,9 @@ class TestVlaTimeoutMetric:
         )
         orch._select_action(_ctx(), _make_observation(cfg), 0.0)
 
-        assert metrics.timeout_calls == [
-            "mock"
-        ], f"expected one timeout call with mode='mock', got {metrics.timeout_calls!r}"
+        assert metrics.timeout_calls == ["mock"], (
+            f"expected one timeout call with mode='mock', got {metrics.timeout_calls!r}"
+        )
 
     def test_happy_path_does_not_emit_timeout_counter(self) -> None:
         """Fast VLA inference (under budget) must NOT call inc_vla_timeout."""

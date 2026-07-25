@@ -363,9 +363,9 @@ def test_count_new_replay_records_bounds_chunk_size() -> None:
     _count_new_replay_records(spy, consumed=_MAX_REPLAY_COUNT_CHUNK * 3, cap=8)  # type: ignore[arg-type]
 
     assert spy.chunk_sizes, "reader.stream was never called"
-    assert all(
-        cs <= _MAX_REPLAY_COUNT_CHUNK for cs in spy.chunk_sizes
-    ), f"chunk_size exceeded the OOM cap: {spy.chunk_sizes}"
+    assert all(cs <= _MAX_REPLAY_COUNT_CHUNK for cs in spy.chunk_sizes), (
+        f"chunk_size exceeded the OOM cap: {spy.chunk_sizes}"
+    )
     assert spy.chunk_sizes[0] == _MAX_REPLAY_COUNT_CHUNK
 
 

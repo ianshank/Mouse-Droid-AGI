@@ -164,7 +164,7 @@ def test_build_raises_value_error_when_reward_block_missing(monkeypatch):
     """``build()`` rejects ``cfg.rover.reward is None`` even with isaaclab present."""
     monkeypatch.setattr(rover_env_module, "_isaaclab_available", lambda: True)
     env = _make_env(with_reward=False)
-    with pytest.raises(ValueError, match="cfg.rover.reward"):
+    with pytest.raises(ValueError, match=r"cfg\.rover\.reward"):
         env.build()
 
 

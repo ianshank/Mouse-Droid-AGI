@@ -1041,7 +1041,7 @@ class WorldModelMemoryConfig(BaseModel):
         gt=0,
         le=1,
         description=(
-            "EMA weight for the long-term summary fold: " "long = (1 - alpha) * long + alpha * hz"
+            "EMA weight for the long-term summary fold: long = (1 - alpha) * long + alpha * hz"
         ),
     )
     blend_weight: float = Field(

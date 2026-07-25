@@ -58,9 +58,9 @@ def test_structured_playbook_has_required_sections(path: Path) -> None:
 @pytest.mark.parametrize("name", _NEW_PLAYBOOKS_PINNED)
 def test_pinned_playbook_present(name: str) -> None:
     """Pin existence of the structured playbooks so future PRs can't drop them."""
-    assert (
-        _PLAYBOOKS_DIR / f"{name}.md"
-    ).is_file(), f"{name}.md missing — Phase 4 / Phase 11 deliverable"
+    assert (_PLAYBOOKS_DIR / f"{name}.md").is_file(), (
+        f"{name}.md missing — Phase 4 / Phase 11 deliverable"
+    )
 
 
 def test_playbooks_directory_not_empty() -> None:

@@ -28,9 +28,7 @@ def _module_path(module: ModuleType) -> Path | None:
 def _schema_alias_modules() -> list[str]:
     alias_suffix = ".mousedroid.config.schema"
     return sorted(
-        name
-        for name in sys.modules
-        if name.endswith(alias_suffix) and name != CANONICAL_MODULE
+        name for name in sys.modules if name.endswith(alias_suffix) and name != CANONICAL_MODULE
     )
 
 

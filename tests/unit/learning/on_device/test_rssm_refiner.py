@@ -296,9 +296,9 @@ def test_refiner_allow_unused_none_grad_guard() -> None:
 
     # reward_head is unused in train_sequence's loss graph → None grad → unchanged.
     for name in ("reward_head.weight", "reward_head.bias"):
-        assert torch.equal(
-            result.candidate_state_dict[name], before[name]
-        ), f"unused param {name!r} should be untouched (None-grad guard)"
+        assert torch.equal(result.candidate_state_dict[name], before[name]), (
+            f"unused param {name!r} should be untouched (None-grad guard)"
+        )
     # ...but a used param (the GRU) must have moved.
     moved = any(
         not torch.equal(result.candidate_state_dict[n], before[n])
@@ -336,9 +336,9 @@ def test_refiner_deterministic_given_fixed_seed_and_batch() -> None:
     res_b = RSSMRefiner(wm_b, _ocfg(update_steps=3)).update(batch)
 
     for name in res_a.candidate_state_dict:
-        assert torch.equal(
-            res_a.candidate_state_dict[name], res_b.candidate_state_dict[name]
-        ), f"non-deterministic refine on {name!r}"
+        assert torch.equal(res_a.candidate_state_dict[name], res_b.candidate_state_dict[name]), (
+            f"non-deterministic refine on {name!r}"
+        )
     assert res_a.train_loss == res_b.train_loss
 
 
@@ -429,9 +429,9 @@ def test_refiner_builds_decoders_on_candidate_device() -> None:
 
     expected = next(wm.parameters()).device
     assert seen_devices, "refiner must call decoders.to(<candidate device>)"
-    assert (
-        seen_devices[0] == expected
-    ), f"decoders placed on {seen_devices[0]} but candidate is on {expected}"
+    assert seen_devices[0] == expected, (
+        f"decoders placed on {seen_devices[0]} but candidate is on {expected}"
+    )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires a CUDA device")
@@ -486,9 +486,9 @@ def test_refiner_restores_cuda_rng_state() -> None:
     RSSMRefiner(wm, _ocfg(update_steps=2)).update(batch)
 
     after = torch.cuda.get_rng_state_all()
-    assert all(
-        torch.equal(b, a) for b, a in zip(before, after, strict=True)
-    ), "RSSMRefiner.update perturbed the CUDA RNG (only CPU RNG was restored)"
+    assert all(torch.equal(b, a) for b, a in zip(before, after, strict=True)), (
+        "RSSMRefiner.update perturbed the CUDA RNG (only CPU RNG was restored)"
+    )
 
 
 def test_refiner_restores_cpu_rng_state() -> None:

@@ -61,9 +61,9 @@ async def test_start_logs_resolved_mock_hardware_true() -> None:
     orch = _make_orch(mock_hardware=True)
     with structlog.testing.capture_logs() as logs:
         await orch.start()
-    assert _resolved_values(logs) == [
-        True
-    ], "start() must log the resolved mock_hardware boolean exactly once"
+    assert _resolved_values(logs) == [True], (
+        "start() must log the resolved mock_hardware boolean exactly once"
+    )
     assert orch._running is True
 
 

@@ -165,9 +165,9 @@ class TestMixerFallbackWhenUnavailable:
         # Training must still complete on the single LMDB.
         assert "error" not in stats
         # The fallback warning must have fired (structlog → stdout).
-        assert (
-            "offline_rl_mixer_requested_but_unavailable" in captured.out
-        ), f"fallback warning missing from stdout:\n{captured.out!r}"
+        assert "offline_rl_mixer_requested_but_unavailable" in captured.out, (
+            f"fallback warning missing from stdout:\n{captured.out!r}"
+        )
 
     def test_falls_back_when_source_path_is_identical(self, tmp_path: Path) -> None:
         """If source_path == experience.path, fall back to single-LMDB path."""
@@ -214,6 +214,6 @@ class TestMixerActiveWithDistinctRealStore:
         assert np.isfinite(bc_loss)
 
         # The mixer-active info log must have fired (single-shot at startup).
-        assert (
-            "offline_rl_mixer_active" in captured.out
-        ), f"offline_rl_mixer_active log missing from stdout:\n{captured.out!r}"
+        assert "offline_rl_mixer_active" in captured.out, (
+            f"offline_rl_mixer_active log missing from stdout:\n{captured.out!r}"
+        )

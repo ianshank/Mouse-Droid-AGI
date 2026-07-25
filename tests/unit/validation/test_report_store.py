@@ -263,7 +263,7 @@ class TestRotationGuards:
             raise OSError("cross-device link")
 
         monkeypatch.setattr(Path, "replace", _boom)
-        assert (
-            rotate_journal_if_needed(journal, 16) is False
-        ), "a rotation failure must degrade, never crash the timer-driven preflight"
+        assert rotate_journal_if_needed(journal, 16) is False, (
+            "a rotation failure must degrade, never crash the timer-driven preflight"
+        )
         assert journal.is_file()
