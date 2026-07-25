@@ -48,7 +48,7 @@ for a reason. Contracts pinned by `tests/regression/test_portfolio_reframe_aqa.p
 
 **Read:**
 - `tools/dashboard_proxy.py` — the proxy itself
-- `launch_dashboard.ps1` — Windows / PowerShell launcher
+- `scripts/launch_dashboard.ps1` — Windows / PowerShell launcher
 - `config/dev_dashboard.yaml.example` — overlay template
 - `docs/architecture/c4-dashboard-proxy.md` — C4 diagrams
 
