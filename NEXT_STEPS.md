@@ -152,10 +152,6 @@ is landed — runbook: `docs/runbooks/mlflow-local-ui.md`.
   `cfg.resilience.<driver>.enabled` flag, defaults `False`). ESP32 and
   LiDAR are already wrapped (`src/mousedroid/resilience/`); these three
   are the residual gap.
-- **`set -e` on `scripts/jetson_full_smoke_run.sh`** (review-agent low finding) —
-  the wrapper currently uses `set -uo pipefail` but not `-e`; inner stage
-  logic tracks `OVERALL_FAIL` correctly so this is intentional, but
-  top-level scripting errors silently continue. Align with `jetson_smoke_test.sh`.
 - **importlib helper consolidation** — partially closed by
   `tests/_script_loader.py`; sweep the remaining inline
   `spec_from_file_location` call sites onto it.

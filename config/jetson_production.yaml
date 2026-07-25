@@ -20,6 +20,14 @@ retry:
   base_delay_s: 0.05
 
 esp32:
+  # Safe-by-default while the ESP32 is functionally dead (F-008 blocker):
+  # a dead board with enabled=true makes orchestrator.start() -> connect()
+  # retry-then-raise and the container crash-loops. The factory resolves
+  # MockESP32Driver instead (resilience wrapper retained). After a bench
+  # repair passes the probe-first bring-up (docs/runbooks/jetson-full-bringup.md),
+  # flip via MOUSEDROID_ESP32__ENABLED=true in /etc/mousedroid/docker.env —
+  # env overrides YAML, so no commit is needed at bring-up time.
+  enabled: false
   serial_port: "/dev/serial/by-id/usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_cc0ff02aab6cef119a38a4adc169b110-if00-port0"
   serial_baud: 1000000
 

@@ -167,3 +167,55 @@ def test_service_file_has_required_sections(service_text: str) -> None:
 def test_restart_policy_is_on_failure(service_text: str) -> None:
     """Restart=on-failure is the expected restart policy."""
     assert "Restart=on-failure" in service_text
+
+
+# ---------------------------------------------------------------------------
+# Service type / watchdog: `docker compose up` does not sd_notify
+# ---------------------------------------------------------------------------
+
+
+def test_service_type_is_not_notify(service_text: str) -> None:
+    """Type=notify must NOT be used — ExecStart is `docker compose up`.
+
+    Compose never calls ``sd_notify(READY=1)``, so systemd waits for a
+    readiness message that never arrives and fails the start on timeout.
+    """
+    directives = [ln.strip() for ln in service_text.splitlines() if ln.strip().startswith("Type=")]
+    assert directives, "no Type= directive found in the unit"
+    for directive in directives:
+        assert directive != "Type=notify", (
+            "Type=notify is invalid for a `docker compose up` ExecStart "
+            "(compose does not sd_notify); use Type=exec"
+        )
+
+
+def test_no_watchdog_sec_directive(service_text: str) -> None:
+    """WatchdogSec must be absent — it requires sd_notify keepalives.
+
+    Container liveness is owned by the image HEALTHCHECK -> heartbeat-file
+    chain, not by a systemd watchdog the compose process can never feed.
+    """
+    offending = [
+        ln.strip() for ln in service_text.splitlines() if ln.strip().startswith("WatchdogSec=")
+    ]
+    assert not offending, f"WatchdogSec is meaningless without sd_notify; found: {offending!r}"
+
+
+def test_compose_pull_exec_start_pre_is_nonfatal(service_text: str) -> None:
+    """The `docker compose pull` ExecStartPre must use the non-fatal dash form.
+
+    The image is built locally on the rover (compose ``build:``, no registry),
+    so ``pull`` always errors. Without ``ExecStartPre=-`` that error aborts
+    every service start.
+    """
+    pull_lines = [
+        ln.strip()
+        for ln in service_text.splitlines()
+        if "ExecStartPre" in ln and "docker compose" in ln and " pull" in ln
+    ]
+    assert pull_lines, "no `docker compose ... pull` ExecStartPre line found"
+    for line in pull_lines:
+        assert line.startswith("ExecStartPre=-"), (
+            "compose-pull ExecStartPre must be non-fatal (ExecStartPre=-) because "
+            f"the image is local-only, got: {line!r}"
+        )

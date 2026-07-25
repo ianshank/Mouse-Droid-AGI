@@ -1,3 +1,19 @@
+# =============================================================================
+# LEGACY bare-metal launcher (venv, no container).
+# =============================================================================
+# The canonical production path is the Docker spine:
+#   docker-compose.jetson.yml -> /etc/mousedroid/jetson_production.yaml
+#   (managed by scripts/mousedroid-docker.service)
+# This unit runs the venv install against jetson_sdcard_64gb.yaml instead, so
+# it resolves a DIFFERENT Settings than the container. See the "Config
+# resolution matrix" in docs/runbooks/jetson-full-validation.md before using
+# it. Kept for bare-metal hosts; not exercised by the validation campaign.
+#
+# Unlike mousedroid-docker.service, Type=notify is CORRECT here: ExecStart is
+# `python -m mousedroid.main`, and build_watchdog() returns SystemdNotifier
+# when NOTIFY_SOCKET is set, so the process really does sd_notify.
+# =============================================================================
+
 [Unit]
 Description=MouseDroid — MSE-6 Autonomous Navigation
 After=network.target

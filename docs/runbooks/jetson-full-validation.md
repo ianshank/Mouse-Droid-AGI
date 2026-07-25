@@ -101,10 +101,70 @@ The contract is pinned by `tests/regression/test_jetson_phase1_oom_guard.py`
 retry from rc==137, or unwraps the core Unit+Property+Integration+coverage
 stage from the mandatory path will fail those pins.
 
+Both in-container `ci.sh` invocations also pass `-e PYTHONOPTIMIZE=0`. The
+image now ships `PYTHONOPTIMIZE=1` (the documented Jetson runtime contract),
+but the pytest suite has only ever run with `assert` semantics intact — the
+override keeps the test posture unchanged while the runtime gets `-O`.
+
+## Strict pillar-skip gate
+
+The Phase-2 real pillar run passes `--strict-skips` by default, so a pillar
+that SKIPs because the **runtime cannot exercise it** fails the campaign
+instead of reading as a 10/10 pass:
+
+| Env var | Default | Purpose |
+| --- | --- | --- |
+| `MOUSEDROID_VALIDATION_PILLARS_STRICT_SKIPS` | 1 | 1=pass `--strict-skips`, 0=legacy lenient |
+
+`PillarResult.skip_reason` discriminates the three skip classes:
+
+- `environment` — Pattern-B delegation found no `pytest` in the runtime
+  (`continual`, `meta`, `scaling`, `growth` silently unexercised). **Fails**
+  under strict mode; the fix is `pip install -e ".[dev]"` in the host venv.
+- `config_disabled` — the subsystem is deliberately off in cfg (`memory` and
+  `curiosity` on the production overlay, which has no `memory:` block).
+  **Passes** — a legitimate skip, not a gap.
+- `dry_run` — the dispatcher never ran the check. `--strict-skips` is rejected
+  with `--dry-run` (argparse error), so Phase 1's dry-run step never gets it.
+
+Without the flag the CLI keeps its original contract: exit 0 on OK/DEGRADED,
+1 only on FAIL.
+
+## Config resolution matrix
+
+Four launchers resolve four different `Settings`. The **compose path is
+canonical for production**; know which one you are validating:
+
+| Launcher | Config it loads | Notes |
+|----------|-----------------|-------|
+| `docker-compose.jetson.yml` (+ `mousedroid-docker.service`) | `/etc/mousedroid/jetson_production.yaml` | **Canonical production.** Synced from the repo by `scripts/sync_jetson_overlay.sh`. |
+| `scripts/jetson_full_validation.sh` | repo `config/jetson_production.yaml` (override: `MOUSEDROID_JETSON_CONFIG`) | Same bytes as the canonical file **only after** an overlay sync — treat "overlay is current" as a Phase-0 precondition. |
+| `.github/workflows/jetson-nightly.yml` | `/etc/mousedroid/default.yaml,/etc/mousedroid/jetson_production.yaml` | Two-overlay **stack** (deep-merged), not the prod file alone. |
+| `scripts/mousedroid.service` | `/etc/mousedroid/jetson_sdcard_64gb.yaml` | **Legacy bare-metal venv path**, superseded by the Docker spine. Not exercised by this campaign. |
+
+Env vars beat YAML in all four (`MOUSEDROID_*` with `__` nesting), which is why
+per-host overrides live in `/etc/mousedroid/docker.env` and never in a commit.
+
 ## Validate-around the dead ESP32
 
 The rover ESP32 is currently non-functional. The pass tolerates this:
 
+- `config/jetson_production.yaml` ships **`esp32.enabled: false`** so the
+  container cannot crash-loop on a dead board (`orchestrator.start()` →
+  `connect()` retries then raises). The schema default stays `True`; only this
+  overlay is safe-by-default. After a bench repair, lift it with
+  `MOUSEDROID_ESP32__ENABLED=true` in `/etc/mousedroid/docker.env` — see the
+  probe-first flow in `docs/runbooks/jetson-full-bringup.md`.
+- **Preflight's `esp32` check is construction-only** — it never opens the serial
+  port, so with the driver mocked it reports a vacuous OK. Do **not** read that
+  line as ESP32 health; the real probe is `assert_power_chain` (post-F-008).
+- The board must still **enumerate on USB**: `smoke:usbc` is blocking and
+  `usbc_discovery` declares `rover_esp32` as `required: true`, and compose maps
+  `${MOUSEDROID_ESP32_DEV:-/dev/ttyUSB0}` as a device. The CP2102N bridge is
+  bus-powered and enumerates independently of ESP32 firmware health, so this
+  normally holds. If the bridge itself drops off the bus, flip the endpoint's
+  `required` and fix **both** `MOUSEDROID_ESP32_DEV` and `MOUSEDROID_LIDAR_DEV`
+  (losing one CP210x renumbers `/dev/ttyUSB*`; by-id paths are unaffected).
 - The hardware pytest tier and any orchestrator boot run with
   `MOUSEDROID_ESP32__ENABLED=false` → `MockESP32Driver` (resilience wrapper
   intact), so the loop ticks without the drivetrain.
