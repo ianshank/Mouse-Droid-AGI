@@ -50,3 +50,30 @@ def test_multiple_matches_are_returned_in_order() -> None:
     assert len(found) == 2
     assert found[0].startswith("/home/")
     assert found[1].startswith("/var/")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "scratch at /tmp/out.json",
+        "wrote /tmp/claude-0/session/file.md",
+        "macOS path /private/var/folders/xy/T/thing",
+        "/private/tmp/scratch.txt",
+    ],
+)
+def test_scratch_paths_are_flagged(text: str) -> None:
+    """A scratch path is precisely the local-machine artefact this rule exists for."""
+    assert find_absolute_paths(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["#!/usr/bin/env python3", "run `/usr/bin/env bash`", "/bin/sh is the shell"],
+)
+def test_standard_shebangs_are_not_flagged(text: str) -> None:
+    """The rule targets machine-specific paths, not every absolute path.
+
+    `#!/usr/bin/env python3` is portable and appears legitimately in docs;
+    flagging it would train contributors to ignore the rule.
+    """
+    assert find_absolute_paths(text) == []

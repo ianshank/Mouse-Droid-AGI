@@ -306,3 +306,24 @@ def test_main_tolerates_empty_stdin(tmp_path: Path) -> None:
         == 0
     )
     assert stdout.getvalue() == ""
+
+
+@pytest.mark.parametrize("value", ["0", "false", "no", "off", "maybe"])
+def test_falsy_override_does_not_open_the_gate(tmp_path: Path, value: str) -> None:
+    """A safety gate must not open on the value written to keep it shut.
+
+    A presence check would treat MOUSEDROID_WORKFORCE_ALLOW_FROZEN=0 as "override
+    on", which inverts operator intent.
+    """
+    repo = _repo(tmp_path, status="todo")
+    env = {"MOUSEDROID_WORKFORCE_ALLOW_FROZEN": value}
+    allowed, reason = _evaluate(repo, _payload(str(repo / _FROZEN_FILE)), env=env)
+    assert allowed is False
+    assert "hardware readiness preempts" in reason
+
+
+@pytest.mark.parametrize("value", ["1", "true", "YES", "on"])
+def test_truthy_override_opens_the_gate(tmp_path: Path, value: str) -> None:
+    repo = _repo(tmp_path, status="todo")
+    env = {"MOUSEDROID_WORKFORCE_ALLOW_FROZEN": value}
+    assert _evaluate(repo, _payload(str(repo / _FROZEN_FILE)), env=env)[0] is True

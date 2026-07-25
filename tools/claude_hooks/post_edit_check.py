@@ -5,9 +5,15 @@ cannot block. Its value is latency: surfacing a lint or type error at edit time
 rather than at the end of a long CI run.
 
 The checker set is config-driven (``post_edit.checks``), so adding or removing a
-checker is a configuration edit rather than a code change. Unknown names are
-skipped with a warning instead of raising, keeping forward-compatibility with
-configs written for a newer tool set.
+checker is a configuration edit rather than a code change. Nothing here raises:
+
+* an **unknown** checker name is a configuration mistake that will never work,
+  so it is skipped and logged at WARNING (``post_edit_checker_unknown``);
+* a **known but uninstalled** checker is an environment condition, so it is
+  skipped at DEBUG (``post_edit_checker_unavailable``) — this hook runs on every
+  edit, and warning each time mypy is absent would be pure noise.
+
+Both keep forward-compatibility with configs written for a newer tool set.
 """
 
 from __future__ import annotations
@@ -16,6 +22,7 @@ import importlib.util
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import IO, Any
 
@@ -25,6 +32,13 @@ from tools.claude_hooks.logging_setup import debug_enabled, get_logger
 from tools.claude_hooks.paths import resolve_repo_root, to_repo_relative
 
 _logger = get_logger(__name__)
+
+#: Supported checkers -> the config accessor for their extra arguments. A name
+#: absent from this mapping is a configuration error, not a missing install.
+_KNOWN_CHECKERS: dict[str, Callable[[WorkforceConfig], list[str]]] = {
+    "ruff": lambda cfg: cfg.post_edit.ruff_args,
+    "mypy": lambda cfg: cfg.post_edit.mypy_args,
+}
 
 
 def _checker_base_argv(name: str) -> list[str] | None:
@@ -59,13 +73,14 @@ def _checker_argv(name: str, cfg: WorkforceConfig, target: Path) -> list[str] | 
     Returns:
         The argv list, or ``None`` when the checker is unknown or not installed.
     """
-    extra_args = {"ruff": cfg.post_edit.ruff_args, "mypy": cfg.post_edit.mypy_args}.get(name)
+    extra_args = _KNOWN_CHECKERS.get(name)
     if extra_args is None:
+        # Unknown name: a config mistake, surfaced by the caller at WARNING.
         return None
     base = _checker_base_argv(name)
     if base is None:
         return None
-    return [*base, *extra_args, str(target)]
+    return [*base, *extra_args(cfg), str(target)]
 
 
 def run_checks(
@@ -90,7 +105,11 @@ def run_checks(
     for name in cfg.post_edit.checks:
         argv = _checker_argv(name, cfg, target)
         if argv is None:
-            _logger.debug("post_edit_checker_unavailable", checker=name)
+            if name not in _KNOWN_CHECKERS:
+                # Config names a checker this hook cannot ever run.
+                _logger.warning("post_edit_checker_unknown", checker=name)
+            else:
+                _logger.debug("post_edit_checker_unavailable", checker=name)
             continue
         if debug_enabled():
             _logger.debug("post_edit_invoking", checker=name, argv=argv)

@@ -29,6 +29,7 @@ from typing import IO, Any
 import yaml
 from tools.claude_hooks import hookio
 from tools.claude_hooks.config import ConfigError, WorkforceConfig, load_config
+from tools.claude_hooks.envflags import env_flag
 from tools.claude_hooks.logging_setup import get_logger
 from tools.claude_hooks.paths import path_matches_any, resolve_repo_root, to_repo_relative
 
@@ -54,8 +55,13 @@ UNKNOWN_TEMPLATE = (
 
 
 def _override_active(cfg: WorkforceConfig, env: dict[str, str]) -> bool:
-    """Return whether the configured override environment variable is set."""
-    return bool(env.get(cfg.freeze.override_env, "").strip())
+    """Return whether the configured override is switched on.
+
+    Truthiness, not presence: this opens a safety gate, so ``...=0`` and
+    ``...=false`` must keep it shut. A presence check would open the freeze on
+    exactly the value an operator writes to keep it closed.
+    """
+    return env_flag(env, cfg.freeze.override_env)
 
 
 def read_feature_status(features_path: Path, feature_key: str) -> tuple[str | None, str | None]:

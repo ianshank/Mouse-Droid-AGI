@@ -23,11 +23,14 @@ import sys
 import time
 from typing import Any, Protocol
 
+from tools.claude_hooks.envflags import is_truthy
+
 #: Set to a truthy value to raise hook logging to DEBUG level.
 DEBUG_ENV = "MOUSEDROID_WORKFORCE_DEBUG"
 
-#: Values accepted as "on" for :data:`DEBUG_ENV`.
-_TRUTHY = frozenset({"1", "true", "yes", "on", "debug"})
+#: Extra token accepted for :data:`DEBUG_ENV` beyond the shared truthy set, so
+#: ``MOUSEDROID_WORKFORCE_DEBUG=debug`` reads naturally.
+_DEBUG_ALIASES = frozenset({"debug"})
 
 _LEVEL_ORDER = {"debug": 10, "info": 20, "warning": 30, "error": 40}
 
@@ -62,7 +65,8 @@ def debug_enabled(env: dict[str, str] | None = None) -> bool:
         ``True`` when the debug environment variable is set to a truthy value.
     """
     environ = os.environ if env is None else env
-    return environ.get(DEBUG_ENV, "").strip().lower() in _TRUTHY
+    raw = environ.get(DEBUG_ENV, "")
+    return is_truthy(raw) or raw.strip().lower() in _DEBUG_ALIASES
 
 
 class _FallbackLogger:

@@ -16,7 +16,28 @@ from __future__ import annotations
 import re
 
 #: Directory names that begin a machine-specific absolute POSIX path.
-_ABSOLUTE_ROOTS = ("home", "Users", "root", "var", "opt", "mnt", "media", "srv", "etc")
+#:
+#: ``tmp`` and ``private`` are included because a scratch path (``/tmp/out.json``,
+#: macOS's ``/private/var/...``) is exactly the kind of local-machine artefact
+#: that should never be baked into a portable asset.
+#:
+#: ``usr`` and ``bin`` are deliberately **excluded**: ``#!/usr/bin/env python3``
+#: is a standard, portable shebang that appears legitimately in documentation
+#: code blocks, and flagging it would train contributors to ignore this rule.
+#: The rule targets *machine-specific* paths, not every absolute path.
+_ABSOLUTE_ROOTS = (
+    "home",
+    "Users",
+    "root",
+    "var",
+    "opt",
+    "mnt",
+    "media",
+    "srv",
+    "etc",
+    "tmp",
+    "private",
+)
 
 #: POSIX absolute paths under a machine-specific root, not preceded by a scheme
 #: separator (so ``https://example.com/etc/x`` is not flagged).
