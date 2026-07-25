@@ -32,3 +32,24 @@ stages:
       F-020 dead-code audit is findings-only BY DESIGN (Protocol/DI false
       positives); the promotion decision at window end is "keep advisory
       forever + record an ADR" vs "strict mode on a curated allowlist".
+  - job: performance
+    workflow: ci.yml
+    since: 2026-07-25
+    promote_after_days: 90
+    reason: >-
+      Code-hygiene sprint: tests/performance previously ran in NO GitHub CI
+      path. Latency budgets calibrated for the Jetson are noisy on shared
+      runners (observed 1.17x vs a 1.15x budget from contention alone), so
+      the tier lands advisory. Promotion decision at window end: make
+      blocking if consistently green, or keep advisory + record the runner
+      variance in an ADR.
+  - job: security
+    workflow: ci.yml
+    since: 2026-07-25
+    promote_after_days: 60
+    reason: >-
+      pip-audit was previously soft-failed via `|| echo ::warning::`, which
+      hid it from this tracker entirely. Converted to continue-on-error so
+      the promotion clock exists. Promotion requires triaging the current
+      vulnerability findings (upstream-dependent) rather than a green
+      window alone.

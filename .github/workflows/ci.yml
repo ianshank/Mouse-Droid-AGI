@@ -189,12 +189,97 @@ jobs:
                     --import-mode=importlib \
                     -v --tb=short --no-cov
 
+            # The smoke tier is sub-10-seconds by construction (import + parse
+            # sanity) and previously ran in NO CI path at all — a whole tier
+            # could rot invisibly. Cheap enough to gate on.
+            - name: Run smoke tier
+              run: |
+                  pytest tests/smoke \
+                    -m "not hardware and not slow" \
+                    --import-mode=importlib \
+                    -v --tb=short --no-cov
+
             - name: Upload coverage
               if: matrix.python-version == '3.11'
               uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
               with:
                   name: coverage-report
                   path: .coverage
+
+    # -------------------------------------------------------------------------
+    # Stage 3b: Performance tier (ADVISORY — shared-runner timing is noisy)
+    # -------------------------------------------------------------------------
+    # tests/performance asserts latency/throughput budgets that are meaningful
+    # on the Jetson but flaky on shared GitHub runners (a 1.15x overhead budget
+    # was observed failing at 1.17x purely from runner contention). Advisory
+    # per the house pattern: land continue-on-error, promote after a green
+    # window. Tracked in .github/advisory_stages.yaml.
+    performance:
+        runs-on: ubuntu-latest
+        needs: lint
+        continue-on-error: true
+        strategy:
+            matrix:
+                python-version: ["3.11"]
+        steps:
+            - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+            - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+              with:
+                  python-version: ${{ matrix.python-version }}
+                  cache: pip
+
+            - name: Install dependencies
+              run: pip install -e ".[dev,telemetry,mcp]"
+
+            - name: Run performance tier (advisory)
+              run: |
+                  pytest tests/performance \
+                    -m "not hardware" \
+                    --import-mode=importlib \
+                    -v --tb=short --no-cov
+
+    # -------------------------------------------------------------------------
+    # Stage 3c: Local-only gate parity (deterministic scripts/ci.sh stages)
+    # -------------------------------------------------------------------------
+    # These gates previously ran ONLY in `bash scripts/ci.sh` — a GitHub-CI-only
+    # contributor bypassed all of them. This job runs the deterministic,
+    # dependency-light subset. Still local-only by design (need a git diff base
+    # or heavy deps): check_no_hardcoded_values.py, check_branch_coverage.py,
+    # the pillar dispatch dry-run, and the --health-check.
+    local-gates:
+        runs-on: ubuntu-latest
+        needs: lint
+        steps:
+            - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+            - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+              with:
+                  python-version: "3.11"
+                  cache: pip
+
+            - name: Install dependencies
+              run: pip install -e ".[dev,telemetry,mcp]"
+
+            - name: Settings identity smoke check
+              run: python scripts/check_settings_identity.py
+
+            - name: Type check (workforce hooks)
+              run: MYPYPATH=. mypy tools/claude_hooks/ --strict --ignore-missing-imports --explicit-package-bases
+
+            - name: Skill validator (.claude/skills)
+              run: python tools/validate_skill_commands.py
+
+            - name: Doc hygiene (advisory, exits 0 unless --strict)
+              run: python tools/doc_hygiene.py NEXT_STEPS.md
+
+            - name: Workforce hook coverage (line gate + advisory branch)
+              run: |
+                  WORKFORCE_COV_MIN="$(python -c "from tools.claude_hooks.config import load_config; print(load_config().coverage.tools_line_min)")"
+                  pytest tests/unit/tools/claude_hooks \
+                    -m "not hardware" \
+                    --import-mode=importlib \
+                    -q -o addopts="" \
+                    --cov=tools/claude_hooks --cov-branch --cov-report=term-missing \
+                    --cov-fail-under="$WORKFORCE_COV_MIN"
 
     # -------------------------------------------------------------------------
     # Stage 4: Prometheus metrics validation
@@ -263,9 +348,13 @@ jobs:
               if: steps.promtool.outputs.available == 'true'
               run: ./promtool check rules config/prometheus/alerts.yml
 
+            # ::warning:: (not a plain echo) so a silently-degraded job is
+            # visible in the run summary — this job has no continue-on-error,
+            # and without the annotation a promtool download failure made it
+            # an invisible no-op that still showed green.
             - name: Skip notice
               if: steps.promtool.outputs.available != 'true'
-              run: echo "promtool not available — skipping Prometheus metrics validation"
+              run: echo "::warning::promtool not available — Prometheus metrics validation was SKIPPED, not passed"
 
     # -------------------------------------------------------------------------
     # Stage 4b: VLA extras smoke — PROMOTED to required (Tier C3.1)
@@ -426,9 +515,14 @@ jobs:
     # -------------------------------------------------------------------------
     # Stage 5: Security audit
     # -------------------------------------------------------------------------
+    # Advisory via continue-on-error (tracked in .github/advisory_stages.yaml)
+    # rather than the previous `|| echo ::warning::` swallow, which made the
+    # job invisible to scripts/check_advisory_promotions.py — an advisory
+    # stage with no promotion clock is a permanent soft gate.
     security:
         runs-on: ubuntu-latest
         needs: lint
+        continue-on-error: true
         steps:
             - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
             - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -439,8 +533,8 @@ jobs:
             - name: Install dependencies
               run: pip install -e "." pip-audit
 
-            - name: Security audit (advisory)
-              run: pip-audit --strict 2>&1 || echo "::warning::pip-audit found vulnerabilities (non-blocking)"
+            - name: Security audit (advisory via continue-on-error)
+              run: pip-audit --strict
 
     # -------------------------------------------------------------------------
     # Stage 6: Docker build (Jetson — aarch64, build check only on x86)

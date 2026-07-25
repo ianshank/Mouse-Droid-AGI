@@ -89,6 +89,13 @@ echo "=== Unit + Property + Integration Tests (with coverage) ==="
     --import-mode=importlib \
     -v --cov=src/mousedroid --cov-report=term-missing --cov-fail-under=85
 
+echo "=== Smoke Tests ==="
+# Sub-10-second import/parse sanity tier. Deliberately OUTSIDE the
+# MOUSEDROID_CI_SLIM skip below: it is cheap enough for memory-constrained
+# hosts and was previously invisible to every CI path.
+"$PYTHON_BIN" -m pytest tests/smoke -m "not hardware and not slow" \
+    --import-mode=importlib --no-cov -v
+
 # Slim mode: on memory-constrained hosts (e.g., Jetson container Phase-1 after
 # an OOM retry), skip the memory-heaviest pytest stages. Unit+property+
 # integration+coverage (above) is preserved — that's the core signal. The
