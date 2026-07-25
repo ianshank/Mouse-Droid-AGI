@@ -548,13 +548,14 @@ class MouseDroidOrchestrator:
             )
             return
         except asyncio.CancelledError:
-            # Cooperative cancellation MUST propagate — never swallow it. On
-            # py3.10 CancelledError subclasses Exception, so without this
-            # explicit re-raise the broad ``except Exception`` below would
-            # eat it and leave the caller unable to cancel bring-up. Matches
+            # Cooperative cancellation MUST propagate — never swallow it.
+            # ``CancelledError`` subclasses ``BaseException`` (not
+            # ``Exception``) on every supported interpreter, so the broad
+            # ``except Exception`` below would not eat it — this explicit
+            # re-raise is defensive documentation of the contract. Matches
             # the LLM gateway/composite cancellation contract.
             raise
-        except Exception:  # pylint: disable=broad-except
+        except Exception:
             # A flaky speaker / TTS must never crash bring-up.
             _log.warning("greeting_startup_failed", exc_info=True)
             return
@@ -575,7 +576,7 @@ class MouseDroidOrchestrator:
         for poller in self._weight_update_pollers.values():
             try:
                 await poller.start()
-            except Exception:  # pylint: disable=broad-except
+            except Exception:
                 _log.warning("cloud_weight_update_poller_start_failed", exc_info=True)
 
     def _spawn_slow_background_tasks(self) -> None:
@@ -678,7 +679,7 @@ class MouseDroidOrchestrator:
         for poller in self._weight_update_pollers.values():
             try:
                 await poller.stop()
-            except Exception:  # pylint: disable=broad-except
+            except Exception:
                 _log.warning("cloud_weight_update_poller_stop_failed", exc_info=True)
         if self._cloud_experience_exporter is not None:
             await self._cloud_experience_exporter.close()
@@ -873,7 +874,7 @@ class MouseDroidOrchestrator:
         try:
             _log.info("memory_export_started", path_known=True)
             await self._memory_exporter.export(episodic)
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:
             _log.warning(
                 "memory_export_hook_failed",
                 error=f"{type(exc).__name__}:{exc}",
@@ -1103,7 +1104,7 @@ class MouseDroidOrchestrator:
 
         try:
             new_engine = self._weight_update_loader(update)
-        except Exception:  # pylint: disable=broad-except
+        except Exception:
             _log.error(
                 "cloud_weight_update_swap_failed",
                 repo_id=update.repo_id,
@@ -1530,7 +1531,7 @@ class MouseDroidOrchestrator:
                 )
 
             return self._normalize_cognitive_action(action_np)
-        except Exception as e:  # pylint: disable=broad-except
+        except Exception as e:
             # Surface the exception type so dashboards can distinguish
             # the failure mode (Gemini review).
             self._failure_recorder.record(
@@ -1767,7 +1768,7 @@ class MouseDroidOrchestrator:
                 is_emergency=safety_ctx.is_emergency,
                 is_idle=is_idle,
             )
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:
             _log.warning(
                 "face_controller_update_failed",
                 exc_type=type(exc).__name__,

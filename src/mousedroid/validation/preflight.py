@@ -448,7 +448,7 @@ async def run_preflight(
     for name, fn in selected:
         try:
             result = await fn(cfg)
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:
             _log.warning(
                 "preflight_check_exception",
                 check=name,

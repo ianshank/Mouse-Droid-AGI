@@ -270,7 +270,7 @@ class MCPToolBridge:
         if is_actuation:
             try:
                 ctx_safety = self._safety_monitor.evaluate(self._observation(), 0.0)
-            except Exception as exc:  # pylint: disable=broad-except
+            except Exception as exc:
                 return self._finish(
                     start, name, "error", error=f"safety_monitor_error:{exc}", log=log
                 )
@@ -298,7 +298,7 @@ class MCPToolBridge:
             return self._finish(
                 start, name, "timeout", error="handler exceeded request_timeout_s", log=log
             )
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:
             return self._finish(start, name, "error", error=f"{type(exc).__name__}:{exc}", log=log)
 
         return self._finish(start, name, "ok", payload=_coerce_payload(payload), log=log)

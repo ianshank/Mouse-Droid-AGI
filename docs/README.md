@@ -59,11 +59,10 @@ Failure-recovery **playbooks** live in [playbooks/](playbooks/) (camera, LiDAR, 
 
 ## Product & planning
 
-- **PRDs** — [prd/](prd/) (GPU pretraining, L4T container, prebuilt LLM container).
 - **Planning** — [planning/](planning/) and [superpowers/](superpowers/) (dated design plans + specs).
   The root [`NEXT_STEPS.md`](../NEXT_STEPS.md) is the **canonical** forward roadmap; `planning/NEXT_STEPS.md`
   is a legacy v0.3.0-era snapshot.
-- **Analysis** — [analysis/](analysis/) (coverage, test-suite, validation checklists, spikes).
+- **Analysis** — [analysis/](analysis/) (coverage, test-suite, spikes).
 
 ## Skills
 

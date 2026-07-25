@@ -1,11 +1,19 @@
 """Regression: cap inline type:ignore / noqa debt in src/.
 
 Update the budgets DOWN as the purge lands; never up without justification.
+
+Also budgets the ``[tool.ruff.lint.per-file-ignores]`` entries whose glob
+targets ``src/`` — pyproject.toml documents that at least one suppression
+(harness/spec.py S602) was moved to a file-level ignore precisely "to keep
+the src/ noqa budget flat", so file-level waivers must count toward a budget
+too or the inline budgets under-report real suppression debt.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+
+from tests._pyproject import load_pyproject
 
 _SRC = Path(__file__).resolve().parents[2] / "src" / "mousedroid"
 # Budgets = the MEASURED post-purge residual of load-bearing suppressions
@@ -50,3 +58,46 @@ def test_type_ignore_within_budget() -> None:
 
 def test_noqa_within_budget() -> None:
     assert _count("noqa") <= _MAX_NOQA
+
+
+# The measured post-hygiene-sprint set of file-level ruff waivers targeting
+# src/, as (glob-pattern, rule) pairs. Each is justified inline in
+# pyproject.toml. Ratchet-down-only: removing an entry here is free; adding
+# one requires the same documented-reason bar as raising the inline budgets.
+_ALLOWED_SRC_PER_FILE_IGNORES = frozenset(
+    {
+        ("src/mousedroid/harness/**/*.py", "D102"),
+        ("src/mousedroid/harness/**/*.py", "D105"),
+        ("src/mousedroid/skills/**/*.py", "D102"),
+        ("src/mousedroid/skills/**/*.py", "D105"),
+        ("src/mousedroid/arm/planning/llm_replanners/**/*.py", "D102"),
+        ("src/mousedroid/validation/runtime.py", "S603"),
+        ("src/mousedroid/validation/runtime.py", "S607"),
+        ("src/mousedroid/harness/spec.py", "S602"),
+        ("src/mousedroid/harness/spec.py", "S603"),
+        ("src/mousedroid/harness/spec.py", "S607"),
+    }
+)
+
+
+def test_src_per_file_ignores_within_budget() -> None:
+    """No new file-level ruff waiver may target src/ without updating this pin.
+
+    Closes the documented budget bypass: a file-level ignore is invisible to
+    the inline noqa counter above, so it gets its own ratchet. Tier-wide
+    ``tests/**`` / ``scripts/**`` / ``tools/**`` waivers are deliberately out
+    of scope — they cover generated/procedural code, not the runtime package.
+    """
+    ruff_lint = load_pyproject()["tool"]["ruff"]["lint"]  # type: ignore[index]
+    per_file = ruff_lint.get("per-file-ignores", {})
+    actual = {
+        (pattern, rule)
+        for pattern, rules in per_file.items()
+        if pattern.startswith("src/")
+        for rule in rules
+    }
+    new_waivers = actual - _ALLOWED_SRC_PER_FILE_IGNORES
+    assert not new_waivers, (
+        "New file-level ruff waivers target src/ — either remove them or "
+        f"update _ALLOWED_SRC_PER_FILE_IGNORES with a documented reason: {sorted(new_waivers)}"
+    )

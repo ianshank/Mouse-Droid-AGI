@@ -288,7 +288,7 @@ async def _diagnose_cloud(gcp_cfg: GCPConfig | None = None) -> dict[str, object]
             "project_id": effective_project,
             "error": str(exc),
         }
-    except Exception as exc:  # pylint: disable=broad-except
+    except Exception as exc:
         _log.warning(
             "tool_diagnose_cloud_publish_failed",
             topic=topic_path,
@@ -387,7 +387,7 @@ async def _translate_nl_mission(
             "mission": mission_text,
             "error": str(exc),
         }
-    except Exception as exc:  # pylint: disable=broad-except
+    except Exception as exc:
         latency_ms = (time.monotonic() - start_time) * 1000.0
         _record_llm_metrics(metrics_registry, "error", latency_ms)
         _log.warning("tool_translate_nl_mission_failed", error=str(exc))
@@ -425,33 +425,35 @@ async def _mic_diagnostics() -> dict[str, str]:
         Microphone diagnostic status.
     """
     try:
-        import pyaudio  # pragma: no cover
+        import pyaudio
     except ImportError:
         return {"status": "pyaudio_not_installed"}
 
+    # Everything below needs a live pyaudio + real audio hardware, which the
+    # CI environment never has — exclude the block once, not line-by-line.
     pa = None  # pragma: no cover
     try:  # pragma: no cover
-        pa = pyaudio.PyAudio()  # pragma: no cover
-        device_count = pa.get_device_count()  # pragma: no cover
-        input_devices = []  # pragma: no cover
-        for i in range(device_count):  # pragma: no cover
-            info = pa.get_device_info_by_index(i)  # pragma: no cover
-            if int(info.get("maxInputChannels", 0)) > 0:  # pragma: no cover
-                input_devices.append(str(info.get("name", f"device_{i}")))  # pragma: no cover
-        return {  # pragma: no cover
+        pa = pyaudio.PyAudio()
+        device_count = pa.get_device_count()
+        input_devices = []
+        for i in range(device_count):
+            info = pa.get_device_info_by_index(i)
+            if int(info.get("maxInputChannels", 0)) > 0:
+                input_devices.append(str(info.get("name", f"device_{i}")))
+        return {
             "status": "ok",
             "device_count": str(device_count),
             "input_devices": ", ".join(input_devices) or "none",
         }
     except Exception:  # pragma: no cover
-        _log.warning("mic_diagnostics_error", exc_info=True)  # pragma: no cover
-        return {"status": "error"}  # pragma: no cover
+        _log.warning("mic_diagnostics_error", exc_info=True)
+        return {"status": "error"}
     finally:  # pragma: no cover
-        if pa is not None:  # pragma: no cover
-            try:  # pragma: no cover
-                pa.terminate()  # pragma: no cover
-            except Exception:  # pragma: no cover
-                _log.debug("mic_diagnostics_terminate_failed", exc_info=True)  # pragma: no cover
+        if pa is not None:
+            try:
+                pa.terminate()
+            except Exception:
+                _log.debug("mic_diagnostics_terminate_failed", exc_info=True)
 
 
 async def _lidar_diagnostics() -> dict[str, str]:

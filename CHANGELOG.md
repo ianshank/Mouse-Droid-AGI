@@ -8,6 +8,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Code-hygiene sprint: cancellation correctness, honest gates, orphan purge (PR #178)
+
+Peer-reviewed hygiene sweep in phase-ordered commits (correctness → gate
+integrity → CI wiring → cleanup → ratchets):
+
+- **Async-cancellation bug**: the telemetry mission-dedup follower path caught
+  `(asyncio.CancelledError, Exception)` together, converting cooperative
+  cancellation into a 500. Root cause was a false comment (already propagated
+  into a test docstring) claiming py3.10 `CancelledError` subclasses
+  `Exception` — it has been `BaseException` since Python 3.8. Fixed both; a new
+  source-text ratchet (`tests/regression/test_cancellation_hygiene_aqa.py`)
+  forbids the pattern recurring.
+- **`-O` safety**: `retry.py`'s exhaustion-path `assert` and `main.py`'s
+  `assert isinstance` entrypoint checks replaced with real branches
+  (`PYTHONOPTIMIZE=1` — the Jetson Docker default — strips asserts).
+- **Honest coverage gate**: the unanchored `"pass"` / `"\.\.\."` coverage
+  `exclude_lines` regexes excluded every line *containing* those substrings;
+  anchored (measured impact 93.57% → 93.48%, gate untouched at 85). 20
+  line-level pragmas on one function collapsed to 4 clause-level ones.
+- **CI truth**: `tests/smoke` (152 tests) ran in NO CI path — now in the test
+  job + ci.sh; `tests/performance` added as a tracked advisory job; new
+  `local-gates` job runs the deterministic ci.sh-only gates in GitHub CI;
+  `pip-audit --strict` un-swallowed (it had been failing on the editable local
+  package every run, masked by `|| echo`) and tracked in
+  `advisory_stages.yaml`; `--import-mode=importlib` single-sourced via pytest
+  `addopts`; `-m "not hardware"` added to the ci.yml test job; a dead
+  documented `-m slow` gate claim corrected; runbook inventory pin completed
+  (9→11).
+- **Orphan purge** (every deletion re-verified by fresh grep): 7 zero-reference
+  scripts, the self-referential 4-file monitoring stack, `config/jetson_setup.yaml`,
+  `docs/prd/` (3), 2 orphaned analysis docs; `launch_dashboard.ps1` moved to
+  `scripts/`; a tracked file matching a `.gitignore` rule untracked. 34 inert
+  `pylint: disable` comments removed (pylint is not in the toolchain).
+- **New ratchets** (all ratchet-down-only): mypy `disallow_subclassing_any`
+  override-list budget, `src/`-targeting ruff per-file-ignores budget (closing
+  the documented inline-budget bypass), and a coverage-threshold single-source
+  assertion across pyproject/ci.sh/ci.yml/release.yml.
+
 ### Added — Claude workforce governance: config-driven, tested edit-time hooks (F-024)
 
 Mechanised the `.claude/` governance the spec bundle below specifies (Phases 1–2;

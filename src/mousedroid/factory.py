@@ -4027,13 +4027,13 @@ def build_orchestrator(cfg: Settings) -> object:
     camera: VisionProtocol | None = None
     try:
         camera = build_camera(cfg, hailo_runtime=hailo_runtime)
-    except Exception as exc:  # pylint: disable=broad-except
+    except Exception as exc:
         _log.warning("camera_init_failed_degrading", error=str(exc))
 
     distance: DistanceSensorProtocol | None = None
     try:
         distance = build_distance_sensor(cfg)
-    except Exception as exc:  # pylint: disable=broad-except
+    except Exception as exc:
         _log.warning("distance_sensor_init_failed_degrading", error=str(exc))
 
     microphone = build_microphone(cfg)
@@ -4041,7 +4041,7 @@ def build_orchestrator(cfg: Settings) -> object:
     lidar_driver: LidarProtocol | None = None
     try:
         lidar_driver = build_lidar(cfg)
-    except Exception as exc:  # pylint: disable=broad-except
+    except Exception as exc:
         _log.warning("lidar_init_failed_degrading", error=str(exc))
 
     sensor_manager = build_sensor_manager(
@@ -4057,7 +4057,7 @@ def build_orchestrator(cfg: Settings) -> object:
     if cfg.cognitive.enabled:
         try:
             cognitive_core = build_cognitive_core(cfg)
-        except Exception as e:  # pylint: disable=broad-except
+        except Exception as e:
             if cfg.cognitive.fallback_to_mcts:
                 _log.warning(
                     "cognitive_core_init_failed_falling_back_to_mcts",

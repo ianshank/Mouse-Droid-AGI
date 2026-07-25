@@ -129,7 +129,7 @@ class SkillDelegator:
         # not accept.
         try:
             self._tracker.submit(spec)
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:
             _log.warning(
                 "skill_delegate_tracker_submit_failed",
                 skill=skill_name,
@@ -155,7 +155,7 @@ class SkillDelegator:
         )
         try:
             result = await sub_agent.invoke(spec, parent_ctx)
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:
             await self._append(
                 "delegate_failed",
                 spec.id,

@@ -214,7 +214,7 @@ def _download_file_with_retry(
                 attempt=attempt + 1,
             )
             return True
-        except Exception as e:  # pylint: disable=broad-except
+        except Exception as e:
             if attempt < max_retries - 1:
                 wait_time = backoff_base**attempt
                 _log.debug(

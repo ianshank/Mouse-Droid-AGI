@@ -139,7 +139,7 @@ class LLMBackedSubAgent:
 
             try:
                 output = await self._gateway.translate_mission(spec.goal)
-            except Exception as exc:  # pylint: disable=broad-except
+            except Exception as exc:
                 latency_ms = (time.monotonic() - start) * 1000.0
                 await self._journal(
                     "failed",

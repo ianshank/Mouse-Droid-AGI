@@ -350,7 +350,7 @@ async def validate_all_pillars(
             continue
         try:
             result = await fn(cfg)
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:
             _log.warning(
                 "pillar_check_exception",
                 pillar=name,

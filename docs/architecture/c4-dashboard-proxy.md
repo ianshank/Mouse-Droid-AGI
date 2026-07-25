@@ -97,7 +97,7 @@ sequenceDiagram
 | `PROXY_HOST` env | (default `127.0.0.1`) | bind host |
 
 CLI args ALWAYS win over env vars. The token is also looked up in the
-`launch_dashboard.ps1` wrapper from the operator's `~/.config/mousedroid/`
+`scripts/launch_dashboard.ps1` wrapper from the operator's `~/.config/mousedroid/`
 overlay if present.
 
 ## Security boundaries

@@ -84,9 +84,15 @@ jobs:
             - name: Install dependencies
               run: pip install -e ".[dev,telemetry]"
 
+            # Mirrors the coverage invocation in ci.yml's `test` job — keep the
+            # two in sync (flags AND the MINIMUM_COVERAGE env, which must match
+            # [tool.coverage.report] fail_under in pyproject.toml; pinned by
+            # tests/regression/test_coverage_gate_single_source.py).
             - name: Run tests with coverage
               run: |
                   pytest tests/unit tests/property tests/integration \
+                    -m "not hardware" \
+                    --import-mode=importlib \
                     -v --tb=short \
                     --cov=src/mousedroid \
                     --cov-report=term-missing \

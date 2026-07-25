@@ -56,7 +56,8 @@ post_edit:
 
 # Coverage budgets for the workforce tooling itself. The repository-wide gate
 # measures src/mousedroid only and cannot see tools/, so this drives a separate,
-# additive invocation in scripts/ci.sh.
+# additive invocation in scripts/ci.sh AND the local-gates job in ci.yml
+# (both read tools_line_min from here).
 coverage:
     tools_line_min: 85
     # Reported, never blocking, until a baseline exists.

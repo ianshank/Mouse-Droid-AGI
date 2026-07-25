@@ -68,7 +68,7 @@ class LLMGatewayMissionReplanner:
         prompt = self._build_prompt(goal_text=goal_text, last_progress=last_progress)
         try:
             goal = await self._gateway.translate_mission(prompt)
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:
             _log.warning(
                 "mission_replan_llm_exception",
                 mission_id=mission_id,
