@@ -21,9 +21,18 @@ Requires=docker.service
 Wants=network-online.target
 
 [Service]
-Type=notify
+# Type=exec (NOT notify): ExecStart is `docker compose up`, which never calls
+# sd_notify(READY=1) — under Type=notify systemd waits for a readiness message
+# that can never arrive and fails the start on timeout. WatchdogSec is likewise
+# meaningless without sd_notify; container liveness is owned by the image's
+# HEALTHCHECK -> heartbeat-file chain (scripts/mousedroid_healthcheck.sh).
+#
+# Note the liveness split: docker-compose.jetson.yml sets
+# `restart: unless-stopped`, so Docker restarts a crashed container on its own
+# and `up --abort-on-container-exit` may never fire. Pre-existing behaviour,
+# documented here so the two restart owners aren't mistaken for one.
+Type=exec
 User=root
-WatchdogSec=30
 
 # Working directory — override MOUSEDROID_INSTALL_DIR in docker.env to relocate
 WorkingDirectory=/opt/mousedroid
@@ -46,7 +55,10 @@ ExecStartPre=-/bin/bash -lc 'exec "${MOUSEDROID_INSTALL_DIR}/scripts/sync_jetson
 ExecStartPre=/bin/bash -lc 'exec "${MOUSEDROID_INSTALL_DIR}/scripts/preflight_check.sh"'
 
 # Compose file path — default set above, overridable via COMPOSE_FILE in docker.env
-ExecStartPre=/usr/bin/docker compose -f ${COMPOSE_FILE} pull --quiet
+# Non-fatal dash prefix: the mousedroid:jetson image is built locally on the
+# rover (compose `build:`, no registry), so `pull` always errors — without the
+# dash that error aborts every service start.
+ExecStartPre=-/usr/bin/docker compose -f ${COMPOSE_FILE} pull --quiet
 ExecStart=/usr/bin/docker compose -f ${COMPOSE_FILE} up --abort-on-container-exit
 ExecStop=/usr/bin/docker compose -f ${COMPOSE_FILE} down --timeout 30
 
