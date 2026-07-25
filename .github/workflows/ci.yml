@@ -533,8 +533,12 @@ jobs:
             - name: Install dependencies
               run: pip install -e "." pip-audit
 
+            # --skip-editable: the editable-installed mousedroid package is not
+            # on PyPI, and --strict treats "could not audit" as fatal — the job
+            # failed on that (not on real findings) every run; the old
+            # `|| echo` swallow just hid it. Dependencies are still audited.
             - name: Security audit (advisory via continue-on-error)
-              run: pip-audit --strict
+              run: pip-audit --strict --skip-editable
 
     # -------------------------------------------------------------------------
     # Stage 6: Docker build (Jetson — aarch64, build check only on x86)
