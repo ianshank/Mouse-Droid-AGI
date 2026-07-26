@@ -33,6 +33,7 @@ esp32:
 
 jetson:
   tensorrt_enabled: true
+  tensorrt_cache_dir: "/mnt/ssd/mousedroid_tensorrt_cache"
   gpu_memory_fraction: 0.7
   power_mode: "15W"
   dla_enabled: false
