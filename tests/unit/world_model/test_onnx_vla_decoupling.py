@@ -61,6 +61,6 @@ def test_dual_stream_rssm_onnx_does_not_import_vla() -> None:
         check=False,
         env=env,
     )
-    assert (
-        result.returncode == 0
-    ), f"vla-decoupling check failed:\nstdout={result.stdout}\nstderr={result.stderr}"
+    assert result.returncode == 0, (
+        f"vla-decoupling check failed:\nstdout={result.stdout}\nstderr={result.stderr}"
+    )

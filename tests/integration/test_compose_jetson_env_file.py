@@ -72,9 +72,9 @@ def test_compose_declares_env_file_directive() -> None:
             return "/etc/mousedroid/docker.env" in str(entry.get("path", ""))
         return False
 
-    assert any(
-        _matches(p) for p in env_files
-    ), f"env_file must include /etc/mousedroid/docker.env; got {env_files!r}"
+    assert any(_matches(p) for p in env_files), (
+        f"env_file must include /etc/mousedroid/docker.env; got {env_files!r}"
+    )
 
 
 def test_compose_env_file_marked_required_false() -> None:
@@ -98,9 +98,9 @@ def test_compose_env_file_marked_required_false() -> None:
         None,
     )
     assert docker_env is not None, "long-form env_file entry for docker.env must exist"
-    assert (
-        docker_env.get("required") is False
-    ), f"docker.env entry must declare ``required: false``; got {docker_env!r}"
+    assert docker_env.get("required") is False, (
+        f"docker.env entry must declare ``required: false``; got {docker_env!r}"
+    )
 
 
 def test_mock_hardware_is_supplied_by_env_file_not_inline() -> None:
@@ -153,9 +153,9 @@ def test_env_jetson_example_is_checked_in_and_documents_token() -> None:
     template = _REPO_ROOT / "config" / ".env.jetson.example"
     assert template.exists(), "config/.env.jetson.example must be checked in"
     text = template.read_text(encoding="utf-8")
-    assert (
-        "MOUSEDROID_TELEMETRY_TOKEN" in text
-    ), "template must document the telemetry token setting"
-    assert (
-        "MOUSEDROID_MOCK_HARDWARE=false" in text
-    ), "template must show the production-default (real hardware) value"
+    assert "MOUSEDROID_TELEMETRY_TOKEN" in text, (
+        "template must document the telemetry token setting"
+    )
+    assert "MOUSEDROID_MOCK_HARDWARE=false" in text, (
+        "template must show the production-default (real hardware) value"
+    )

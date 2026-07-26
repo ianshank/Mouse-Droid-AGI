@@ -91,9 +91,9 @@ async def test_tier_c_features_coexist_on_single_tick() -> None:
     await orch.tick()
     await orch.tick()
 
-    assert (
-        lifecycle.tick.await_count == 1
-    ), "lifecycle.tick must fire once at POST_TICK on the second tick"
+    assert lifecycle.tick.await_count == 1, (
+        "lifecycle.tick must fire once at POST_TICK on the second tick"
+    )
     assert len(policy_p.ack_calls) == 1, "policy poller must swap + ack on tick 1"
     assert len(wm_p.ack_calls) == 0, "wm poller had no pending update — must not swap"
 

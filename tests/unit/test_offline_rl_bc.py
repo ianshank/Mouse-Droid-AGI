@@ -124,9 +124,9 @@ def test_bc_update_steps_only_bc_optimizer_when_dedicated() -> None:
         prior = policy_state_before[param]
         for key in ("exp_avg", "exp_avg_sq"):
             if key in state and key in prior:
-                assert torch.equal(
-                    state[key], prior[key]
-                ), f"policy_optimizer.{key} mutated by BC step despite bc_lr set"
+                assert torch.equal(state[key], prior[key]), (
+                    f"policy_optimizer.{key} mutated by BC step despite bc_lr set"
+                )
 
 
 def test_legacy_checkpoint_loads_without_bc_state(tmp_path: object) -> None:

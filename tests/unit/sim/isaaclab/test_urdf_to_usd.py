@@ -74,12 +74,12 @@ class TestConvertScriptLoadability:
         module = _load_convert_module()
         args = module._parse_args([])
         # Compare path components (OS-agnostic — handles Windows \ vs Linux /).
-        assert (
-            Path(args.urdf) == _URDF_DEFAULT_RELATIVE
-        ), f"--urdf default drifted from {_URDF_DEFAULT_RELATIVE}: got {args.urdf}"
-        assert (
-            Path(args.output) == _USD_DEFAULT_RELATIVE
-        ), f"--output default drifted from {_USD_DEFAULT_RELATIVE}: got {args.output}"
+        assert Path(args.urdf) == _URDF_DEFAULT_RELATIVE, (
+            f"--urdf default drifted from {_URDF_DEFAULT_RELATIVE}: got {args.urdf}"
+        )
+        assert Path(args.output) == _USD_DEFAULT_RELATIVE, (
+            f"--output default drifted from {_USD_DEFAULT_RELATIVE}: got {args.output}"
+        )
 
     def test_default_conversion_params_preserve_sensor_frames(self) -> None:
         """Defaults must NOT merge fixed joints — sensor frames would dissolve.

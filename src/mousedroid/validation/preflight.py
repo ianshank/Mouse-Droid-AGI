@@ -83,8 +83,7 @@ class PreflightReport(BaseModel):
         lines = [f"Preflight: overall={self.overall_status.value}"]
         for c in self.checks:
             lines.append(
-                f"  [{c.status.value:5}] {c.name:12} "
-                f"({c.elapsed_s * 1000.0:.1f} ms) — {c.detail}",
+                f"  [{c.status.value:5}] {c.name:12} ({c.elapsed_s * 1000.0:.1f} ms) — {c.detail}",
             )
         lines.append(
             f"Total: {self.total_elapsed_s:.2f}s across {len(self.checks)} checks",

@@ -208,13 +208,12 @@ class TestRunExport:
             torch_np = torch_outputs[idx].detach().cpu().numpy()
             onnx_out = ort_outputs[idx]
             assert torch_np.shape == onnx_out.shape, (
-                f"shape mismatch at output[{idx}]: "
-                f"torch={torch_np.shape}, onnx={onnx_out.shape}"
+                f"shape mismatch at output[{idx}]: torch={torch_np.shape}, onnx={onnx_out.shape}"
             )
             max_abs_diff = float(np.abs(torch_np - onnx_out).max())
-            assert (
-                max_abs_diff < 1e-4
-            ), f"output[{idx}] max_abs_diff={max_abs_diff:.6f} exceeds 1e-4"
+            assert max_abs_diff < 1e-4, (
+                f"output[{idx}] max_abs_diff={max_abs_diff:.6f} exceeds 1e-4"
+            )
 
         # new_z (index 1) — shape must still match even though the sample diverges.
         assert torch_outputs[1].detach().cpu().numpy().shape == ort_outputs[1].shape

@@ -188,9 +188,9 @@ class TestMultipleCaptureCycles:
 
         for i in range(100):
             features = await cam.capture_features()
-            assert features.shape == (
-                camera_cfg.feature_dim,
-            ), f"Capture {i} returned wrong shape: {features.shape}"
+            assert features.shape == (camera_cfg.feature_dim,), (
+                f"Capture {i} returned wrong shape: {features.shape}"
+            )
 
         await cam.stop()
 

@@ -41,31 +41,11 @@ _BASH_AVAILABLE = pytest.mark.skipif(
 )
 
 
-# ``jetson_smoke_test.sh`` resolves Python via (in order):
-#   1. ``MOUSEDROID_SMOKE_PYTHON`` env var
-#   2. ``/opt/mousedroid/venv/bin/python`` (Jetson install path)
-#   3. ``python3`` on PATH
-# On Windows-Git-Bash without a ``python3`` shim AND without
-# ``MOUSEDROID_SMOKE_PYTHON`` set, the script bails before reaching the
-# assertion under test with ``ERROR: No Python runtime found for
-# jetson_smoke_test.sh``. Skip the whole module cleanly in that case so
-# the failures don't pollute the CI signal — the tests still RUN on
-# Linux / Jetson hosts where ``python3`` is on PATH, or on any host
-# where the operator points ``MOUSEDROID_SMOKE_PYTHON`` at a real
-# Python interpreter.
-_PYTHON_REACHABLE_FROM_BASH = (
-    os.environ.get("MOUSEDROID_SMOKE_PYTHON") is not None
-    or shutil.which("python3") is not None
-    or Path("/opt/mousedroid/venv/bin/python").exists()
-)
 pytestmark = pytest.mark.skipif(
-    sys.platform == "win32" and not _PYTHON_REACHABLE_FROM_BASH,
+    sys.platform == "win32",
     reason=(
-        "jetson_smoke_test.sh requires ``python3`` reachable from the bash "
-        "subprocess; on Windows-Git-Bash without a ``python3`` shim the "
-        "script bails before any assertion runs. Set "
-        "MOUSEDROID_SMOKE_PYTHON to bypass on hosts where Python is "
-        "reachable under a different name."
+        "jetson_smoke_test.sh requires Linux bash. On Windows, WSL bash.EXE "
+        "can fail with RPC errors (e.g. 0x8007072c)."
     ),
 )
 
@@ -363,9 +343,9 @@ def test_memory_check_logs_warn_when_falling_back_to_memfree(tmp_path: Path) -> 
             "MOUSEDROID_SMOKE_MEMINFO_PATH": str(meminfo),
         },
     )
-    assert (
-        "WARN: MemAvailable not present" in result.stderr
-    ), "MemFree fallback must emit a WARN to stderr"
+    assert "WARN: MemAvailable not present" in result.stderr, (
+        "MemFree fallback must emit a WARN to stderr"
+    )
     assert "PASS: memory check" in result.stdout
 
 

@@ -423,6 +423,6 @@ def test_module_is_neutral_and_lazy() -> None:
         check=False,
         env=env,
     )
-    assert (
-        result.returncode == 0
-    ), f"neutrality check failed:\nstdout={result.stdout}\nstderr={result.stderr}"
+    assert result.returncode == 0, (
+        f"neutrality check failed:\nstdout={result.stdout}\nstderr={result.stderr}"
+    )

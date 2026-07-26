@@ -193,7 +193,7 @@ def test_body_velocity_mode_maps_to_wheel_setpoints() -> None:
     env = _track(RoverMuJoCoEnv(cfg, wheel_radius_m=_WHEEL_RADIUS_M, track_width_m=_TRACK_WIDTH_M))
     env.reset(seed=0)
     # action = [vx, omega]; finite + advances without error
-    obs, reward, _t, _tr, info = env.step(np.asarray([0.2, 0.3], dtype=np.float32))
+    obs, reward, _t, _tr, _info = env.step(np.asarray([0.2, 0.3], dtype=np.float32))
     assert np.isfinite(reward)
     assert np.isfinite(obs["chassis_pose"]).all()
 

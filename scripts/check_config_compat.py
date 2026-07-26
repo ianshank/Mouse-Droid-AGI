@@ -74,8 +74,7 @@ def load_deployment(deployments_dir: Path, platform: str) -> DeployedImage:
     path = deployments_dir / DEPLOYMENT_FILE_TEMPLATE.format(platform=platform)
     if not path.is_file():
         sys.stderr.write(
-            f"error: {path} not found. Bootstrap a deployment record before "
-            f"enabling this gate.\n",
+            f"error: {path} not found. Bootstrap a deployment record before enabling this gate.\n",
         )
         raise SystemExit(2)
     try:

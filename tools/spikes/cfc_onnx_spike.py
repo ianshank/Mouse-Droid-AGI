@@ -132,8 +132,7 @@ def main() -> int:
     example_x = torch.zeros(_BATCH_SIZE, args.input_dim, dtype=torch.float32)
     example_h = cfc_raw.initial_state(batch_size=_BATCH_SIZE, device=torch.device("cpu"))
     print(
-        f"      example_x.shape={tuple(example_x.shape)}, "
-        f"example_h.shape={tuple(example_h.shape)}"
+        f"      example_x.shape={tuple(example_x.shape)}, example_h.shape={tuple(example_h.shape)}"
     )
 
     # Step 2: Capture the torch reference output (before export, since
@@ -184,9 +183,7 @@ def main() -> int:
 
     torch_out_np = torch_out.detach().cpu().numpy()
     if torch_out_np.shape != onnx_out_np.shape:
-        print(
-            f"      [FAIL] Shape mismatch: torch={torch_out_np.shape}, " f"onnx={onnx_out_np.shape}"
-        )
+        print(f"      [FAIL] Shape mismatch: torch={torch_out_np.shape}, onnx={onnx_out_np.shape}")
         return 2
 
     max_abs_diff = float(abs(torch_out_np - onnx_out_np).max())

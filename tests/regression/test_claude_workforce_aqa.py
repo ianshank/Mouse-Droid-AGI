@@ -25,6 +25,7 @@ Contracts pinned here:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -41,7 +42,7 @@ _SETTINGS = _CLAUDE_DIR / "settings.json"
 _LEGACY_COMMANDS = _CLAUDE_DIR / "commands"
 _HOOK_PACKAGE = _REPO_ROOT / "tools" / "claude_hooks"
 
-# Text assets that must satisfy the portability rule. Discovered, never
+# All files that contain text which must stay portable. The tuple structure is
 # enumerated, so a new asset is covered the moment it lands.
 _TEXT_SUFFIXES = frozenset({".md", ".yaml", ".yml", ".json"})
 
@@ -53,7 +54,16 @@ def _config() -> WorkforceConfig:
 def _claude_text_assets() -> list[Path]:
     if not _CLAUDE_DIR.is_dir():
         return []
-    return sorted(p for p in _CLAUDE_DIR.rglob("*") if p.is_file() and p.suffix in _TEXT_SUFFIXES)
+
+    def _is_valid_asset(path: Path) -> bool:
+        return path.suffix in _TEXT_SUFFIXES and ".local." not in path.name
+
+    assets: list[Path] = []
+    for root, dirs, files in os.walk(_CLAUDE_DIR):
+        if "worktrees" in dirs:
+            dirs.remove("worktrees")
+        assets.extend(Path(root) / f for f in files if _is_valid_asset(Path(root) / f))
+    return sorted(assets)
 
 
 def _parse_frontmatter(path: Path) -> dict[str, Any]:
@@ -75,9 +85,9 @@ def _parse_frontmatter(path: Path) -> dict[str, Any]:
 
 def test_workforce_config_is_present_and_valid() -> None:
     """The checked-in config must satisfy its own schema."""
-    assert (
-        _REPO_ROOT / DEFAULT_CONFIG_RELPATH
-    ).is_file(), f"{DEFAULT_CONFIG_RELPATH} is missing — workforce thresholds must have a home"
+    assert (_REPO_ROOT / DEFAULT_CONFIG_RELPATH).is_file(), (
+        f"{DEFAULT_CONFIG_RELPATH} is missing — workforce thresholds must have a home"
+    )
     cfg = _config()
     assert cfg.freeze.frozen_paths, "freeze.frozen_paths is empty — the gate would never fire"
 
@@ -121,9 +131,9 @@ def test_freeze_gate_targets_a_real_feature_catalog() -> None:
     parsed = yaml.safe_load(catalog.read_text(encoding="utf-8"))
     features = parsed.get("features") if isinstance(parsed, dict) else parsed
     ids = {str(entry.get("id", "")) for entry in features if isinstance(entry, dict)}
-    assert (
-        cfg.freeze.feature_key in ids
-    ), f"freeze.feature_key {cfg.freeze.feature_key} is not in {cfg.freeze.features_file}"
+    assert cfg.freeze.feature_key in ids, (
+        f"freeze.feature_key {cfg.freeze.feature_key} is not in {cfg.freeze.features_file}"
+    )
 
 
 def test_coverage_source_directory_exists() -> None:
@@ -176,9 +186,9 @@ def test_agent_files_use_only_supported_frontmatter_keys() -> None:
     allowed = set(cfg.agents.allowed_frontmatter_keys)
     for agent in _agent_files():
         unknown = sorted(set(_parse_frontmatter(agent)) - allowed)
-        assert (
-            not unknown
-        ), f"{agent.name} declares frontmatter keys the platform ignores: {unknown}"
+        assert not unknown, (
+            f"{agent.name} declares frontmatter keys the platform ignores: {unknown}"
+        )
 
 
 def test_agent_tools_are_bare_names_not_permission_patterns() -> None:
@@ -202,9 +212,9 @@ def test_agent_files_stay_within_line_budget() -> None:
     cfg = _config()
     for agent in _agent_files():
         lines = len(agent.read_text(encoding="utf-8").splitlines())
-        assert (
-            lines <= cfg.agents.max_lines
-        ), f"{agent.name} is {lines} lines (budget {cfg.agents.max_lines})"
+        assert lines <= cfg.agents.max_lines, (
+            f"{agent.name} is {lines} lines (budget {cfg.agents.max_lines})"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -270,9 +280,9 @@ def test_wired_hook_commands_run_from_the_project_directory() -> None:
     command must ``cd`` to ``$CLAUDE_PROJECT_DIR`` first.
     """
     for command in _hook_commands():
-        assert (
-            "$CLAUDE_PROJECT_DIR" in command
-        ), f"hook command must resolve via $CLAUDE_PROJECT_DIR, got: {command}"
+        assert "$CLAUDE_PROJECT_DIR" in command, (
+            f"hook command must resolve via $CLAUDE_PROJECT_DIR, got: {command}"
+        )
         assert " -m " in command, (
             "hook must use 'python -m package.module' so the repo root is importable; "
             f"got: {command}"

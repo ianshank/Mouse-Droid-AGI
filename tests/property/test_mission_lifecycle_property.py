@@ -65,9 +65,9 @@ async def _walk_transitions(scores: list[float]) -> None:
     for s in scores:
         vlm.score_value = s
         result = await lc.tick(obs, obs)
-        assert (
-            result.state in _VALID_TRANSITIONS[prev_state]
-        ), f"Illegal transition {prev_state} -> {result.state} at score={s}"
+        assert result.state in _VALID_TRANSITIONS[prev_state], (
+            f"Illegal transition {prev_state} -> {result.state} at score={s}"
+        )
         prev_state = result.state
 
 
@@ -144,9 +144,9 @@ async def _walk_with_replanner(scores: list[float], ready_schedule: list[bool]) 
             # Subsequent ticks must NOT leave the terminal state.
             for _ in range(3):
                 next_result = await lc.tick(obs, obs)
-                assert (
-                    next_result.state == terminal
-                ), f"Terminal state {terminal} leaked to {next_result.state}"
+                assert next_result.state == terminal, (
+                    f"Terminal state {terminal} leaked to {next_result.state}"
+                )
             return
 
 

@@ -139,6 +139,6 @@ async def test_greet_honours_inter_chirp_delay() -> None:
 
     # The inter-chirp delay branch must fire with the EXACT config value —
     # deterministic, no wall-clock dependency.
-    assert any(
-        call.args == (delay_s,) for call in sleep_spy.await_args_list
-    ), f"inter-chirp delay {delay_s}s not awaited: {sleep_spy.await_args_list}"
+    assert any(call.args == (delay_s,) for call in sleep_spy.await_args_list), (
+        f"inter-chirp delay {delay_s}s not awaited: {sleep_spy.await_args_list}"
+    )

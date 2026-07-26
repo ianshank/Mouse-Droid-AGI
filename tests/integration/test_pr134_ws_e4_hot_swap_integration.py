@@ -218,7 +218,7 @@ def test_materialiser_device_parity(tmp_path: Path) -> None:
     """The materialised engine lands on the SAME device as the live world model."""
     experience_path = str(tmp_path / "experience_root")
     cfg = _build_cfg(experience_path, enable_hot_swap=True)
-    store, digest = _persist_active_slot(cfg)
+    _store, digest = _persist_active_slot(cfg)
 
     wm = build_world_model(cfg)
     assert isinstance(wm, RSSM)

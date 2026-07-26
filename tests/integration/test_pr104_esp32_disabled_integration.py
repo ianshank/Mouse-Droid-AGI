@@ -85,9 +85,9 @@ def test_disabled_with_real_hardware_mode_uses_mock_inner_driver() -> None:
     driver = build_esp32_driver(cfg)
     # ResilientESP32Driver wraps an `_inner` driver — verify it's the mock.
     inner = getattr(driver, "_inner", None) or getattr(driver, "_driver", None)
-    assert isinstance(
-        inner, MockESP32Driver
-    ), f"Expected MockESP32Driver when esp32.enabled=False, got {type(inner).__name__}"
+    assert isinstance(inner, MockESP32Driver), (
+        f"Expected MockESP32Driver when esp32.enabled=False, got {type(inner).__name__}"
+    )
 
 
 def test_disabled_with_mock_hardware_still_uses_mock_inner_driver() -> None:

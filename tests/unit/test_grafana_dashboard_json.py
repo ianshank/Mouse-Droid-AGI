@@ -172,4 +172,4 @@ class TestPrB2PanelsPresent:
         """Each PR-A2 / Tier-C metric family must have at least one panel title that
         references it (substring match — title format is operator-tunable)."""
         matches = [t for t in panel_titles if needle.lower() in t.lower()]
-        assert matches, f"No panel title contains {needle!r}. " f"Existing titles: {panel_titles}"
+        assert matches, f"No panel title contains {needle!r}. Existing titles: {panel_titles}"

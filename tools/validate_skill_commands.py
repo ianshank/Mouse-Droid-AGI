@@ -156,8 +156,7 @@ def validate_command_skill(
                 SkillCommandIssue(
                     path,
                     "invalid-status",
-                    f"front-matter 'status' {status!r} not in "
-                    f"{sorted(_ALLOWED_SKILL_STATUSES)}",
+                    f"front-matter 'status' {status!r} not in {sorted(_ALLOWED_SKILL_STATUSES)}",
                 )
             )
 

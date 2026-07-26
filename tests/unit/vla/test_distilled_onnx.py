@@ -253,7 +253,7 @@ class TestImportGraphIsolation:
             env=env,
         )
         assert result.returncode == 0, (
-            f"isolation check failed:\nstdout={result.stdout}\n" f"stderr={result.stderr}"
+            f"isolation check failed:\nstdout={result.stdout}\nstderr={result.stderr}"
         )
 
 

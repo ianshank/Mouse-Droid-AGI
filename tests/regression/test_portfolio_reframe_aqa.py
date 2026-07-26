@@ -93,9 +93,9 @@ def test_package_name_is_unchanged() -> None:
     """The rename stays docs-only: the ``mousedroid`` package name is unchanged."""
     # The rename is brand/docs only — the import surface must not move.
     pyproject = _read("pyproject.toml")
-    assert re.search(
-        r'(?m)^name\s*=\s*"mousedroid"', pyproject
-    ), "pyproject [project] name drifted off 'mousedroid' — the rename must stay docs-only"
+    assert re.search(r'(?m)^name\s*=\s*"mousedroid"', pyproject), (
+        "pyproject [project] name drifted off 'mousedroid' — the rename must stay docs-only"
+    )
 
 
 def test_pillar_table_uses_integration_axis_not_stub_labels() -> None:
@@ -107,9 +107,9 @@ def test_pillar_table_uses_integration_axis_not_stub_labels() -> None:
     # ... and the working modules must never be re-branded scaffolding/stubs.
     assert "🔬 Scaffolding" not in readme, "README re-introduced a 'Scaffolding' stub label"
     for module in _WORKING_MODULES:
-        assert (
-            f"`{module}/` | 🔬" not in readme
-        ), f"README labels {module}/ a stub — it is implemented"
+        assert f"`{module}/` | 🔬" not in readme, (
+            f"README labels {module}/ a stub — it is implemented"
+        )
     # curiosity is factory-wired; it belongs in the integrated tier, not the roadmap.
     wired_section = readme.split("not yet wired", 1)[0]
     assert "`curiosity/`" in wired_section, "curiosity/ must sit in the runtime-integrated tier"
@@ -124,13 +124,13 @@ def test_large_blobs_untracked_with_pointers() -> None:
     tracked = _git_tracked(*_UNTRACKED_BLOB_PATHSPECS)
     assert not tracked, f"large binaries are tracked in git (should be purged): {tracked}"
     # The pointer READMEs, by contrast, MUST be tracked + present on disk.
-    assert (
-        _CAD_DIR.is_dir()
-    ), "docs/3D_printing_files/ directory vanished (pointer README lives here)"
+    assert _CAD_DIR.is_dir(), (
+        "docs/3D_printing_files/ directory vanished (pointer README lives here)"
+    )
     assert (_CAD_DIR / "README.md").is_file(), "docs/3D_printing_files/README.md pointer is missing"
-    assert (
-        _REPO_ROOT / "training" / "data" / "README.md"
-    ).is_file(), "training/data/README.md pointer is missing"
+    assert (_REPO_ROOT / "training" / "data" / "README.md").is_file(), (
+        "training/data/README.md pointer is missing"
+    )
 
 
 def test_gitignore_covers_cad_and_data() -> None:
@@ -145,9 +145,9 @@ def test_dockerignore_and_c4_reflect_artifact_handling() -> None:
     dockerignore = _read(".dockerignore")
     for pattern in ("training/data/*.npz", "docs/3D_printing_files/"):
         assert pattern in dockerignore, f".dockerignore no longer excludes '{pattern}'"
-    assert (
-        _REPO_ROOT / "docs" / "architecture" / "c4-artifact-storage.md"
-    ).is_file(), "the artifact-storage C4 doc referenced by CLAUDE.md / CHANGELOG is missing"
+    assert (_REPO_ROOT / "docs" / "architecture" / "c4-artifact-storage.md").is_file(), (
+        "the artifact-storage C4 doc referenced by CLAUDE.md / CHANGELOG is missing"
+    )
 
 
 def test_jetson_image_sha_stays_a_reachable_hash() -> None:
@@ -183,12 +183,12 @@ def test_purge_script_is_safe_and_repin_aware() -> None:
     assert "--push" in purge, "purge_history.sh lost its opt-in --push gate"
     # Purge CAD *binaries* by glob, never the whole dir — that would also delete the
     # pointer README the Phase A contract keeps in place.
-    assert (
-        "docs/3D_printing_files/*.stl" in purge
-    ), "purge must target CAD blobs by glob, not the dir"
-    assert (
-        "docs/3D_printing_files/*.FCStd" in purge
-    ), "purge must target CAD blobs by glob, not the dir"
+    assert "docs/3D_printing_files/*.stl" in purge, (
+        "purge must target CAD blobs by glob, not the dir"
+    )
+    assert "docs/3D_printing_files/*.FCStd" in purge, (
+        "purge must target CAD blobs by glob, not the dir"
+    )
 
 
 def test_forward_docs_drop_cohesive_agentic_overclaim() -> None:
@@ -196,9 +196,9 @@ def test_forward_docs_drop_cohesive_agentic_overclaim() -> None:
     # The reframe replaced "cohesive agentic system" with the wired/not-wired split
     # everywhere a reviewer sees it; none of these surfaces may re-assert it.
     for rel in _FORWARD_DOCS:
-        assert "cohesive agentic system" not in _read(
-            rel
-        ), f"{rel} re-introduced the 'cohesive agentic system' overclaim"
+        assert "cohesive agentic system" not in _read(rel), (
+            f"{rel} re-introduced the 'cohesive agentic system' overclaim"
+        )
 
 
 def test_new_scripts_are_fail_fast() -> None:
@@ -213,6 +213,6 @@ def test_curiosity_is_factory_wired() -> None:
     # the factory both defines and calls the builder.
     factory = _read("src/mousedroid/factory.py")
     assert "def build_curiosity_module" in factory, "curiosity factory builder vanished"
-    assert (
-        factory.count("build_curiosity_module") >= 2
-    ), "build_curiosity_module is defined but never called — curiosity is no longer wired"
+    assert factory.count("build_curiosity_module") >= 2, (
+        "build_curiosity_module is defined but never called — curiosity is no longer wired"
+    )

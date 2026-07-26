@@ -224,9 +224,9 @@ def test_score_dynamics_restores_cuda_rng_state() -> None:
     score_dynamics(wm, batch, decoders, seed=_SEED)
 
     after = torch.cuda.get_rng_state_all()
-    assert all(
-        torch.equal(b, a) for b, a in zip(before, after, strict=True)
-    ), "score_dynamics perturbed the CUDA RNG (only CPU RNG was restored)"
+    assert all(torch.equal(b, a) for b, a in zip(before, after, strict=True)), (
+        "score_dynamics perturbed the CUDA RNG (only CPU RNG was restored)"
+    )
 
 
 def test_score_dynamics_guards_cuda_rng_capture_when_cuda_unavailable() -> None:

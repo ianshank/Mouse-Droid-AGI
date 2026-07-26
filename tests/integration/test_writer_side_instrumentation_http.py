@@ -178,18 +178,18 @@ async def test_metrics_endpoint_surfaces_pr_a2_families(
     ns = MetricsConfig().namespace
 
     if metrics_present:
-        assert (
-            f'{ns}_replay_records_total{{outcome="ok"}}' in body
-        ), f"replay_records_total missing from /metrics scrape:\n{body[:1500]}..."
-        assert (
-            f"{ns}_vla_inference_seconds_count" in body
-        ), f"vla_inference_seconds_count missing from /metrics scrape:\n{body[:1500]}..."
-        assert (
-            f"{ns}_vlm_progress_cache_hits_total" in body
-        ), f"vlm_progress_cache_hits_total missing from /metrics scrape:\n{body[:1500]}..."
-        assert (
-            f"{ns}_vlm_progress_cache_misses_total" in body
-        ), f"vlm_progress_cache_misses_total missing from /metrics scrape:\n{body[:1500]}..."
+        assert f'{ns}_replay_records_total{{outcome="ok"}}' in body, (
+            f"replay_records_total missing from /metrics scrape:\n{body[:1500]}..."
+        )
+        assert f"{ns}_vla_inference_seconds_count" in body, (
+            f"vla_inference_seconds_count missing from /metrics scrape:\n{body[:1500]}..."
+        )
+        assert f"{ns}_vlm_progress_cache_hits_total" in body, (
+            f"vlm_progress_cache_hits_total missing from /metrics scrape:\n{body[:1500]}..."
+        )
+        assert f"{ns}_vlm_progress_cache_misses_total" in body, (
+            f"vlm_progress_cache_misses_total missing from /metrics scrape:\n{body[:1500]}..."
+        )
     else:
         # Default path: families are conditionally rendered (PR-A2
         # design) and must not appear when never observed.

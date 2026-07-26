@@ -37,9 +37,9 @@ def test_every_builtin_spec_has_matching_skill_doc(spec: SkillSpec) -> None:
     # a substring would false-positive on the name appearing in a code block or
     # a later heading, and miss a wrong/absent leading H1.
     first_line = next((ln for ln in text.splitlines() if ln.strip()), "")
-    assert (
-        first_line.strip() == f"# {spec.name}"
-    ), f"SKILL.md leading H1 must be '# {spec.name}', got {first_line.strip()!r}"
+    assert first_line.strip() == f"# {spec.name}", (
+        f"SKILL.md leading H1 must be '# {spec.name}', got {first_line.strip()!r}"
+    )
 
 
 def test_no_orphan_skill_docs() -> None:

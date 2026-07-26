@@ -38,7 +38,7 @@ def test_greeting_disabled_with_empty_names_is_valid() -> None:
 
 def test_greeting_enabled_requires_names() -> None:
     """enabled=True with no names is a config error at parse time."""
-    with pytest.raises(ValidationError, match="greeting.names"):
+    with pytest.raises(ValidationError, match=r"greeting\.names"):
         GreetingConfig(enabled=True, names=[])
 
 

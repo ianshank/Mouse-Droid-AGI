@@ -167,8 +167,7 @@ def _render_markdown(samples: list[Any], *, replay_size: int, entry_truncate_cha
         "",
         "# Episodic Replay Snapshot",
         "",
-        "This file is a **snapshot**, not durable storage. See "
-        "`docs/openclaw_skills/README.md`.",
+        "This file is a **snapshot**, not durable storage. See `docs/openclaw_skills/README.md`.",
         "",
         "## Recent experiences",
         "",

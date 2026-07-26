@@ -55,9 +55,9 @@ def test_all_ten_pillars_have_case_entry(script_text: str) -> None:
     """Every pillar in EXPECTED_PILLARS must appear as a case branch."""
     for pillar in EXPECTED_PILLARS:
         pattern = rf"^\s+{re.escape(pillar)}\)"
-        assert re.search(
-            pattern, script_text, re.MULTILINE
-        ), f"Pillar '{pillar}' has no case branch in {_SCRIPT}"
+        assert re.search(pattern, script_text, re.MULTILINE), (
+            f"Pillar '{pillar}' has no case branch in {_SCRIPT}"
+        )
 
 
 def test_all_pillars_listed_in_usage_help(script_text: str) -> None:
@@ -102,26 +102,26 @@ def test_non_blocking_pillars_default_no(script_text: str) -> None:
 
 def test_summary_writes_ten_pillars_log(script_text: str) -> None:
     """The script must write a ten_pillars.log (Markdown table) to REPORT_DIR."""
-    assert (
-        "ten_pillars.log" in script_text
-    ), f"{_SCRIPT} does not write ten_pillars.log; SUMMARY.md integration will break"
+    assert "ten_pillars.log" in script_text, (
+        f"{_SCRIPT} does not write ten_pillars.log; SUMMARY.md integration will break"
+    )
 
 
 def test_summary_table_has_three_columns(script_text: str) -> None:
     """The Markdown table header must define Pillar, Status, and Note columns."""
-    assert (
-        "| Pillar | Status | Note |" in script_text
-    ), f"{_SCRIPT} summary table header does not match expected format"
+    assert "| Pillar | Status | Note |" in script_text, (
+        f"{_SCRIPT} summary table header does not match expected format"
+    )
 
 
 def test_overall_pass_fail_line_present(script_text: str) -> None:
     """The summary must include an 'Overall: PASS' / 'Overall: FAIL' line."""
-    assert (
-        "Overall: PASS" in script_text
-    ), f"{_SCRIPT} does not emit 'Overall: PASS' line in summary"
-    assert (
-        "Overall: FAIL" in script_text
-    ), f"{_SCRIPT} does not emit 'Overall: FAIL' line in summary"
+    assert "Overall: PASS" in script_text, (
+        f"{_SCRIPT} does not emit 'Overall: PASS' line in summary"
+    )
+    assert "Overall: FAIL" in script_text, (
+        f"{_SCRIPT} does not emit 'Overall: FAIL' line in summary"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -131,9 +131,9 @@ def test_overall_pass_fail_line_present(script_text: str) -> None:
 
 def test_fallback_shim_created_when_env_var_absent(script_text: str) -> None:
     """When MOUSEDROID_SMOKE_PYTHON is unset the script must create its own shim."""
-    assert (
-        "python3-in-container" in script_text
-    ), f"{_SCRIPT} does not create a python3-in-container shim fallback"
+    assert "python3-in-container" in script_text, (
+        f"{_SCRIPT} does not create a python3-in-container shim fallback"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +151,6 @@ def test_full_smoke_run_appends_ten_pillars_table() -> None:
         "jetson_full_smoke_run.sh does not reference ten_pillars.log; "
         "Ten Pillars results will not appear in SUMMARY.md"
     )
-    assert (
-        "Ten Pillars Validation" in text
-    ), "jetson_full_smoke_run.sh SUMMARY section missing 'Ten Pillars Validation' heading"
+    assert "Ten Pillars Validation" in text, (
+        "jetson_full_smoke_run.sh SUMMARY section missing 'Ten Pillars Validation' heading"
+    )

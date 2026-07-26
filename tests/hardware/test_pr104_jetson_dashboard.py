@@ -114,9 +114,9 @@ async def test_jetson_csi_capture_raw_jpeg_produces_jpeg(
         )
         jpeg = await cam.capture_raw_jpeg()
         assert jpeg is not None, "Live JetsonCSI returned None — camera not warm?"
-        assert jpeg.startswith(
-            b"\xff\xd8\xff"
-        ), "Bytes returned from capture_raw_jpeg() are not a JPEG."
+        assert jpeg.startswith(b"\xff\xd8\xff"), (
+            "Bytes returned from capture_raw_jpeg() are not a JPEG."
+        )
         im = Image.open(BytesIO(jpeg))
         im.verify()
         im2 = Image.open(BytesIO(jpeg))

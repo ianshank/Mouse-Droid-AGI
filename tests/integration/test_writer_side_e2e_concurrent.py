@@ -130,14 +130,14 @@ def test_three_subsystems_concurrent_emission(tmp_path: Path) -> None:
 
     # Replay reader emitted exactly N "ok" outcomes (count must be exact
     # — concurrent writes to the same labeled counter must not lose any).
-    assert (
-        f'{ns}_replay_records_total{{outcome="ok"}} {_REPLAY_RECORDS}' in text
-    ), f"replay ok count off — rendered output:\n{text[:1500]}..."
+    assert f'{ns}_replay_records_total{{outcome="ok"}} {_REPLAY_RECORDS}' in text, (
+        f"replay ok count off — rendered output:\n{text[:1500]}..."
+    )
 
     # VLA histogram saw exactly _VLA_CALLS observations.
-    assert (
-        f"{ns}_vla_inference_seconds_count {_VLA_CALLS}" in text
-    ), f"vla inference count off — rendered output:\n{text[:1500]}..."
+    assert f"{ns}_vla_inference_seconds_count {_VLA_CALLS}" in text, (
+        f"vla inference count off — rendered output:\n{text[:1500]}..."
+    )
 
     # VLM cache emitted hits + misses summing to _VLM_CALLS. Exact hit/miss
     # split depends on the alternation + LRU eviction order; only the sum
