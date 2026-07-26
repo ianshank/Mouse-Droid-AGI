@@ -27,6 +27,7 @@
 #
 # Env overrides (all optional; documented defaults shown):
 #   MOUSEDROID_SMOKE_CONTAINER        container name              (mousedroid)
+#   MOUSEDROID_COMPOSE_FILE           compose file               (docker-compose.jetson.yml)
 #   MOUSEDROID_VALIDATION_REPORT_ROOT report root                (<repo>/reports/jetson_full_validation)
 #   MOUSEDROID_TELEMETRY_URL          live telemetry base URL    (http://127.0.0.1:8080)
 #   MOUSEDROID_JETSON_CONFIG          production overlay         (config/jetson_production.yaml)
@@ -64,6 +65,7 @@ REPO_DIR="$(dirname "${SCRIPT_DIR}")"
 cd "${REPO_DIR}"
 
 CONTAINER="${MOUSEDROID_SMOKE_CONTAINER:-mousedroid}"
+COMPOSE_FILE="${MOUSEDROID_COMPOSE_FILE:-docker-compose.jetson.yml}"
 REPORT_ROOT="${MOUSEDROID_VALIDATION_REPORT_ROOT:-${REPO_DIR}/reports/jetson_full_validation}"
 TELEMETRY_URL="${MOUSEDROID_TELEMETRY_URL:-http://127.0.0.1:8080}"
 TELEMETRY_URL="${TELEMETRY_URL%/}"
@@ -371,8 +373,11 @@ restart_container_on_exit() {
     local rc=$?
     if [[ "${CONTAINER_STOPPED_FOR_PHASE2}" == "1" ]]; then
         log "trap: restarting container ${CONTAINER} after cold-phase exit (rc=${rc})"
-        docker start "${CONTAINER}" >/dev/null 2>&1 \
-            || log "trap: docker start failed — rover brain may be down"
+        # Full compose recreation — bare 'docker start' leaves camera V4L2
+        # devices in a bad state after Phase 2 cold probes, causing the
+        # container to hang on camera init and never bind the telemetry port.
+        docker compose -f "${COMPOSE_FILE}" up -d "${CONTAINER}" >/dev/null 2>&1 \
+            || log "trap: docker compose up failed — rover brain may be down"
         CONTAINER_STOPPED_FOR_PHASE2=0
     fi
 }
@@ -445,7 +450,11 @@ phase2() {
 
     if [[ "${DRY_RUN}" != "1" && "${CONTAINER_WAS_RUNNING}" == "1" ]]; then
         log "restarting container ${CONTAINER}"
-        docker start "${CONTAINER}" >/dev/null 2>&1 || record WARN "docker start" "restart failed"
+        # Full compose recreation — bare 'docker start' leaves camera V4L2
+        # devices in a bad state after cold probes.  A fresh 'up' releases
+        # all device handles cleanly and lets the container reach healthy.
+        docker compose -f "${COMPOSE_FILE}" up -d "${CONTAINER}" >/dev/null 2>&1 \
+            || record WARN "docker compose up" "restart failed"
         CONTAINER_STOPPED_FOR_PHASE2=0
         trap - EXIT
     fi

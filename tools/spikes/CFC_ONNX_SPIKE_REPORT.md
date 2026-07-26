@@ -45,6 +45,7 @@ This happens because torch's ONNX tracer sees the keyword-only `dt` parameter as
 ```python
 class _CfCExportShim(nn.Module):
     """Narrows CfCWrapper API to (x, h) -> new_h for ONNX tracing."""
+
     def __init__(self, cfc: CfCWrapper) -> None:
         super().__init__()
         self._cfc = cfc
