@@ -35,7 +35,7 @@
 #   VENV_DIR                          host venv dir              (/opt/mousedroid/venv)
 #   ANTHROPIC_API_KEY                 cloud Claude key           (unset -> local fallback; presence only checked)
 #   MOUSEDROID_TELEMETRY_TOKEN        telemetry bearer token     (unset -> authed checks skip; presence only checked)
-#   MOUSEDROID_VALIDATION_HEALTH_RETRIES    warm health-poll attempts  (30)
+#   MOUSEDROID_VALIDATION_HEALTH_RETRIES    warm health-poll attempts  (60)
 #   MOUSEDROID_VALIDATION_HEALTH_INTERVAL_S health-poll interval (s)    (1)
 #   MOUSEDROID_VALIDATION_HTTP_TIMEOUT_S    curl per-request timeout(s) (5)
 #   MOUSEDROID_VALIDATION_PYTEST_TIMEOUT_S  per-test timeout (s)        (120)
@@ -75,7 +75,7 @@ VENV_DIR="${VENV_DIR:-/opt/mousedroid/venv}"
 # Tunables — all env-overridable so a flaky uplink / slow boot / long cloud
 # round-trip can be accommodated without editing the script (no hardcoded
 # values). Defaults suit a healthy bench rover.
-HEALTH_RETRIES="${MOUSEDROID_VALIDATION_HEALTH_RETRIES:-30}"
+HEALTH_RETRIES="${MOUSEDROID_VALIDATION_HEALTH_RETRIES:-60}"
 HEALTH_INTERVAL_S="${MOUSEDROID_VALIDATION_HEALTH_INTERVAL_S:-1}"
 HTTP_TIMEOUT_S="${MOUSEDROID_VALIDATION_HTTP_TIMEOUT_S:-5}"
 PYTEST_TIMEOUT_S="${MOUSEDROID_VALIDATION_PYTEST_TIMEOUT_S:-120}"

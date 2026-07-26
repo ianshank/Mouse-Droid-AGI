@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import AsyncMock
+import contextlib
 
 import pytest
 
@@ -59,10 +58,8 @@ async def test_sensor_failure_recovery(user_journey_settings) -> None:
         #    (b) let it bubble up without incrementing tick_count.
         #    Either way, the system must not crash permanently.
         tick_before_failure = orch._tick_count
-        try:
+        with contextlib.suppress(RuntimeError):
             await orch.tick()
-        except RuntimeError:
-            pass  # Expected — orchestrator lets sensor errors propagate
 
         # 4. Sensor recovers
         orch._sensor_manager.read_all = original_read

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import json
+import pytest
 from pydantic import SecretStr
+
 from mousedroid.config.schema import Settings
 
 
@@ -32,7 +33,6 @@ def test_exception_messages_do_not_leak_secrets(mock_settings: Settings) -> None
     """Test that exception messages don't leak secrets."""
     cfg = mock_settings.model_copy(deep=True)
     cfg.llm.api_key = SecretStr("secret-key-12345")
-    try:
+    with pytest.raises(ValueError, match="Invalid config") as exc_info:
         raise ValueError(f"Invalid config: {cfg.llm}")
-    except ValueError as e:
-        assert "secret-key-12345" not in str(e)
+    assert "secret-key-12345" not in str(exc_info.value)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -34,10 +33,8 @@ async def test_sensor_dropout_degraded_mode(functional_orchestrator):
         if orch._sensor_manager:
             orch._sensor_manager.read_all = AsyncMock(side_effect=Exception("Sensor disconnected"))
 
-        try:
+        with pytest.raises(Exception, match="Sensor disconnected"):
             await orch.tick()
-        except Exception as e:
-            assert "Sensor disconnected" in str(e)
         # Expecting graceful handling of sensor failure
     finally:
         await orch.stop()
@@ -58,10 +55,8 @@ async def test_recovery_from_sensor_dropout(functional_orchestrator):
         if orch._sensor_manager:
             orch._sensor_manager.read_all = AsyncMock(side_effect=Exception("Sensor disconnected"))
 
-        try:
+        with pytest.raises(Exception, match="Sensor disconnected"):
             await orch.tick()
-        except Exception as e:
-            assert "Sensor disconnected" in str(e)
 
         # Recovery
         if orch._sensor_manager and original_read:

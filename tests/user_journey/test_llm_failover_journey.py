@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock
 
 import pytest
 
-from mousedroid.config.schema import MissionConfig
 from mousedroid.factory import build_orchestrator
 
 
@@ -62,7 +60,7 @@ async def test_llm_failover_journey(user_journey_settings) -> None:
         # 3. System handles the failure gracefully — process_mission catches
         #    the error internally and returns a neutral GoalVector rather than
         #    propagating the exception.
-        result = await orch.process_mission("go to the target")
+        await orch.process_mission("go to the target")
         assert call_count > 0, "translate_mission should have been called"
 
         # 4. The gateway should be in a degraded state after the failure.

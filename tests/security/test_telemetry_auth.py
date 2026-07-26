@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import make_mocked_request
 
-from mousedroid.config.schema import Settings, TelemetryConfig
+from mousedroid.config.schema import TelemetryConfig
 from mousedroid.telemetry.server import TelemetryServer
 
 

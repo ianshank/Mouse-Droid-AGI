@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
+from pydantic import ValidationError
 
 from mousedroid.config.schema import Settings
 
@@ -21,7 +20,8 @@ def test_config_safely_loads_shell_metacharacters(env_with_shell_chars: None) ->
 
     # Check that they are literal strings
     assert settings.telemetry.host == "$(echo inject) & whoami"
-    # Even if dangerous, Pydantic parses them as literals. The main issue is if they are used in os.system or similar.
+    # Even if dangerous, Pydantic parses them as literals.
+    # The main issue is if they are used in os.system or similar.
     # We assert the literal value is kept.
     assert settings.llm.system_prompt == "normal prompt; rm -rf /"
 
@@ -31,5 +31,5 @@ def test_config_rejects_command_injection_in_restricted_fields(
 ) -> None:
     """Some fields like ports should reject non-integers, thus preventing injection."""
     monkeypatch.setenv("MOUSEDROID_TELEMETRY__PORT", "8080; reboot")
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         Settings()
