@@ -42,7 +42,7 @@ class MAMLAdapter:
         self._model = model
         self._inner_lr = inner_lr
         self._inner_steps = inner_steps
-        self._meta_optimizer = torch.optim.Adam(model.parameters(), lr=outer_lr)
+        self._meta_optimizer = torch.optim.Adam(model.parameters(), lr=outer_lr)  # type: ignore[attr-defined]
 
         _log.info(
             "maml_init",
@@ -66,7 +66,7 @@ class MAMLAdapter:
             Adapted model copy (original is unchanged).
         """
         adapted = copy.deepcopy(self._model)
-        opt = torch.optim.SGD(adapted.parameters(), lr=self._inner_lr)
+        opt = torch.optim.SGD(adapted.parameters(), lr=self._inner_lr)  # type: ignore[attr-defined]
 
         for _ in range(self._inner_steps):
             total_loss = torch.tensor(0.0)

@@ -60,7 +60,7 @@ class RSSMPretrainer:
         # Pretraining reconstruction heads live here (not on the RSSM) so the
         # deployment model stays byte-identical. They train jointly with the RSSM.
         self._decoders = RawModalityDecoders(model.cfg).to(device)
-        self._opt = torch.optim.Adam(
+        self._opt = torch.optim.Adam(  # type: ignore[attr-defined]
             list(model.parameters()) + list(self._decoders.parameters()), lr=lr
         )
         self._grad_clip = grad_clip

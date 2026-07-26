@@ -77,14 +77,21 @@ class JetsonCSICamera:
             )
         except TimeoutError:
             _log.warning(
-                "jetson_csi_start_timeout",
+                "jetson_csi_start_timeout_degraded",
                 timeout_s=start_timeout_s,
                 device_path=self._cfg.device_path,
             )
-            raise RuntimeError(
-                f"Camera start timed out after {start_timeout_s}s — "
-                f"V4L2 device {self._cfg.device_path} may be in a bad state"
-            ) from None
+            # Non-fatal: camera remains None (degraded). The orchestrator
+            # can continue startup and bind the telemetry server. Capture
+            # calls will fail individually rather than blocking everything.
+            return
+        except Exception:
+            _log.warning(
+                "jetson_csi_start_failed_degraded",
+                device_path=self._cfg.device_path,
+                exc_info=True,
+            )
+            return
         _log.info(
             "jetson_csi_started",
             backend=self._backend,
