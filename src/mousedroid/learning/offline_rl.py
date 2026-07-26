@@ -13,6 +13,7 @@ from typing import cast
 import torch
 import torch.nn as nn
 import torch.nn.functional as F  # noqa: N812 — canonical PyTorch alias for functional
+import torch.optim
 from torch import Tensor
 
 from mousedroid.constants import IQL_EXP_ADVANTAGE_CLAMP_MAX

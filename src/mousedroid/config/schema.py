@@ -230,6 +230,17 @@ class CameraConfig(BaseModel):
             "white-balanced and the workaround can be retired."
         ),
     )
+    start_timeout_s: float = Field(
+        15.0,
+        gt=0,
+        description=(
+            "Maximum time (seconds) to wait for the camera capture pipeline "
+            "to initialise. Covers jetson_utils, GStreamer, and V4L2 fallback "
+            "paths. If the timeout fires the camera driver raises RuntimeError "
+            "so the orchestrator can continue with the camera degraded rather "
+            "than blocking the entire startup sequence."
+        ),
+    )
 
 
 class CircuitBreakerConfig(BaseModel):

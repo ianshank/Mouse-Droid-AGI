@@ -239,3 +239,20 @@ def test_default_plus_production_overlay_stack_loads() -> None:
     # does not declare at all (model, mcts, memory, …) keep their base values.
     assert stacked.model.latent_dim == base_only.model.latent_dim
     assert stacked.mcts.n_simulations_base == base_only.mcts.n_simulations_base
+
+
+# ---------------------------------------------------------------------------
+# Camera start timeout default (V4L2 indefinite-hang guard)
+# ---------------------------------------------------------------------------
+def test_camera_start_timeout_default_is_15s() -> None:
+    """``camera.start_timeout_s`` must default to 15.0.
+
+    Without a finite timeout the V4L2 ``VideoCapture.open()`` call can
+    block indefinitely when the device file is in a bad state (e.g. after
+    Phase 2 cold probes release the camera).  The timeout lets the
+    orchestrator fail-fast on camera and continue startup so the telemetry
+    server binds and health checks pass.
+    """
+    from mousedroid.config.schema import CameraConfig
+
+    assert CameraConfig().start_timeout_s == 15.0

@@ -69,7 +69,22 @@ class JetsonCSICamera:
                 "install jetson-inference or opencv-python with GStreamer/V4L2 support"
             )
             raise RuntimeError(msg)
-        await asyncio.to_thread(self._start_camera)
+        start_timeout_s: float = self._cfg.start_timeout_s
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(self._start_camera),
+                timeout=start_timeout_s,
+            )
+        except TimeoutError:
+            _log.warning(
+                "jetson_csi_start_timeout",
+                timeout_s=start_timeout_s,
+                device_path=self._cfg.device_path,
+            )
+            raise RuntimeError(
+                f"Camera start timed out after {start_timeout_s}s — "
+                f"V4L2 device {self._cfg.device_path} may be in a bad state"
+            ) from None
         _log.info(
             "jetson_csi_started",
             backend=self._backend,
