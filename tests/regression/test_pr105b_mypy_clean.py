@@ -9,9 +9,11 @@ or the ``cachetools`` missing-stub error and CI's broader ``mypy --strict``
 job wouldn't flag it specifically — operators would have to bisect.
 
 The test is :pyattr:`pytest.mark.slow` because a cold ``mypy --strict``
-run typically takes 30-60 s on this codebase. The default test sweep
-(``pytest -m "not slow"``) skips it; CI's ``typecheck`` job runs it via
-``pytest -m slow tests/regression/test_pr105b_mypy_clean.py``.
+run typically takes 30-60 s on this codebase. It runs in the LOCAL
+``bash scripts/ci.sh`` regression stage (which does not filter ``slow``);
+GitHub CI's regression step filters ``-m "not hardware and not slow"``
+and so skips it — the broader ``typecheck`` job (``mypy src/ --strict``)
+is the CI-side signal for the same class of regression.
 """
 
 from __future__ import annotations

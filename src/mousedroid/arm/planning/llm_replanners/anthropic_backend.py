@@ -112,7 +112,7 @@ class AnthropicReplanner:
                     messages=[{"role": "user", "content": prompt}],
                     timeout=self._cfg.request_timeout_s,
                 )
-            except Exception as exc:  # pylint: disable=broad-except
+            except Exception as exc:
                 last_exc = exc
                 _log.warning(
                     "anthropic_replanner_request_failed",
@@ -167,7 +167,7 @@ class AnthropicReplanner:
                     messages=[{"role": "user", "content": prompt}],
                     timeout=self._cfg.request_timeout_s,
                 )
-            except Exception as exc:  # pylint: disable=broad-except
+            except Exception as exc:
                 last_exc = exc
                 _log.warning(
                     "anthropic_replanner_async_request_failed",

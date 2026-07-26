@@ -301,7 +301,9 @@ over ad-hoc commands:
    the core Unit+Property+Integration+coverage signal must NEVER be gated.
    Any test marked `@pytest.mark.hardware` MUST also be filtered out of the
    container ci.sh path (already gated via `-m "not hardware"` on the
-   unit/property/integration, performance, and regression stages).
+   unit/property/integration, smoke, performance, and regression stages —
+   the smoke stage sits deliberately OUTSIDE the SLIM conditional because
+   it is sub-10-seconds).
 
 ## Adding / maintaining a skill (rover-hardening discipline)
 

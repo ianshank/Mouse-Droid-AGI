@@ -129,3 +129,84 @@ def test_cli_exits_0_when_overall_status_is_degraded(
     assert rc == 0
     captured = capsys.readouterr()
     assert "degraded" in captured.out.lower()
+
+
+# ---------------------------------------------------------------------------
+# --strict-skips — opt-in gate on skip_reason="environment"
+# ---------------------------------------------------------------------------
+
+
+def _patch_report_with_skip(
+    monkeypatch: pytest.MonkeyPatch,
+    skip_reason: str,
+) -> None:
+    """Patch the CLI's validate_all_pillars to return one SKIPPED pillar."""
+    from mousedroid.cli import validate_pillars as _cli
+    from mousedroid.validation.pillars import (
+        PillarReport,
+        PillarResult,
+        PillarStatus,
+    )
+
+    report = PillarReport(
+        results=[
+            PillarResult(
+                name="growth",
+                status=PillarStatus.SKIPPED,
+                detail=f"synthetic {skip_reason} skip",
+                elapsed_s=0.0,
+                skip_reason=skip_reason,  # type: ignore[arg-type]
+            ),
+        ],
+    )
+
+    async def _fake_validate(*_args: object, **_kwargs: object) -> PillarReport:
+        return report
+
+    monkeypatch.setattr(_cli, "validate_all_pillars", _fake_validate)
+
+
+def test_strict_skips_fails_on_environment_skip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An `environment` skip (pytest absent) exits 1 under --strict-skips.
+
+    This is the lean-runtime guard: Pattern-B pillars silently SKIP when the
+    runtime has no pytest, which would otherwise render as a clean pass.
+    """
+    from mousedroid.cli import validate_pillars as _cli
+
+    _patch_report_with_skip(monkeypatch, "environment")
+    assert _cli.main(["--strict-skips"]) == 1
+
+
+def test_strict_skips_passes_on_config_disabled_skip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A `config_disabled` skip is legitimate and still exits 0 under strict mode.
+
+    ``memory`` and ``curiosity`` SKIP this way on the production overlay
+    (no ``memory:`` block → ``MemoryConfig.enabled`` defaults False), so a
+    blanket "fail on any SKIP" would false-fail every campaign run.
+    """
+    from mousedroid.cli import validate_pillars as _cli
+
+    _patch_report_with_skip(monkeypatch, "config_disabled")
+    assert _cli.main(["--strict-skips"]) == 0
+
+
+def test_environment_skip_without_flag_keeps_legacy_exit_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without --strict-skips the documented contract is unchanged (0 on skip)."""
+    from mousedroid.cli import validate_pillars as _cli
+
+    _patch_report_with_skip(monkeypatch, "environment")
+    assert _cli.main([]) == 0
+
+
+def test_strict_skips_rejects_dry_run_combination() -> None:
+    """--strict-skips with --dry-run is a usage error (argparse exit code 2).
+
+    Dry-run marks every pillar SKIPPED by design, so strict mode over it is
+    contradictory — refuse loudly rather than pass vacuously.
+    """
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--strict-skips", "--dry-run"])
+    assert excinfo.value.code == 2

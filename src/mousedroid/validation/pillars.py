@@ -36,7 +36,7 @@ import importlib.util
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
 
@@ -63,6 +63,17 @@ class PillarStatus(str, enum.Enum):
     DEGRADED = "degraded"  # aggregate-only
 
 
+# Machine-readable discriminator for SKIPPED results. Additive (default
+# ``None``) so pre-existing consumers of the JSON payload are unaffected.
+# ``config_disabled`` — the pillar's subsystem is deliberately off in cfg
+#     (e.g. memory/curiosity on the production overlay): a legitimate skip.
+# ``dry_run`` — the dispatcher never invoked the check.
+# ``environment`` — the runtime cannot execute the check (Pattern-B pytest
+#     missing): the pillar is UNEXERCISED, not disabled. `--strict-skips`
+#     fails only on this reason.
+SkipReason = Literal["config_disabled", "dry_run", "environment"]
+
+
 class PillarResult(BaseModel):
     """One pillar's outcome — typed for JSON export."""
 
@@ -70,6 +81,10 @@ class PillarResult(BaseModel):
     status: PillarStatus
     detail: str = Field(default="", description="Human-readable diagnostic.")
     elapsed_s: float = Field(default=0.0, ge=0.0)
+    skip_reason: SkipReason | None = Field(
+        default=None,
+        description="Why a SKIPPED result skipped; None for non-skip statuses.",
+    )
 
 
 class PillarReport(BaseModel):
@@ -137,12 +152,13 @@ def _fail(name: str, detail: str, elapsed_s: float) -> PillarResult:
     )
 
 
-def _skipped(name: str, detail: str) -> PillarResult:
+def _skipped(name: str, detail: str, reason: SkipReason) -> PillarResult:
     return PillarResult(
         name=name,
         status=PillarStatus.SKIPPED,
         detail=detail,
         elapsed_s=0.0,
+        skip_reason=reason,
     )
 
 
@@ -177,7 +193,11 @@ async def _check_memory(cfg: Settings) -> PillarResult:
 
     tier = build_memory_tier(cfg)
     if tier is None:
-        return _skipped("memory", "build_memory_tier returned None (memory disabled in cfg)")
+        return _skipped(
+            "memory",
+            "build_memory_tier returned None (memory disabled in cfg)",
+            "config_disabled",
+        )
     return _ok("memory", f"tier={type(tier).__name__}", time.monotonic() - t0)
 
 
@@ -207,7 +227,17 @@ async def _check_curiosity(cfg: Settings) -> PillarResult:
 
     module = build_curiosity_module(cfg)
     if module is None:
-        return _skipped("curiosity", "build_curiosity_module returned None (disabled in cfg)")
+        # The factory returns None BOTH when memory is disabled in cfg AND
+        # when the ICM constructor raised (it logs curiosity_module_build_failed
+        # and swallows) — the detail must not claim "disabled" unconditionally.
+        return _skipped(
+            "curiosity",
+            (
+                "build_curiosity_module returned None (memory disabled in cfg, "
+                "or the build failed — grep curiosity_module_build_failed)"
+            ),
+            "config_disabled",
+        )
     return _ok("curiosity", f"module={type(module).__name__}", time.monotonic() - t0)
 
 
@@ -247,6 +277,7 @@ def _run_pytest_delegated(pillar: str, test_paths: tuple[str, ...]) -> PillarRes
                 "delegation requires the dev extra; install with "
                 '`pip install -e ".[dev]"` to enable).'
             ),
+            "environment",
         )
 
     import pytest
@@ -345,11 +376,11 @@ async def validate_all_pillars(
     results: list[PillarResult] = []
     for name, fn in selected:
         if dry_run:
-            results.append(_skipped(name, "dry-run"))
+            results.append(_skipped(name, "dry-run", "dry_run"))
             continue
         try:
             result = await fn(cfg)
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:
             _log.warning(
                 "pillar_check_exception",
                 pillar=name,
@@ -378,5 +409,6 @@ __all__ = [
     "PillarReport",
     "PillarResult",
     "PillarStatus",
+    "SkipReason",
     "validate_all_pillars",
 ]

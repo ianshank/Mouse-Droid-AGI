@@ -1,7 +1,9 @@
 # =============================================================================
 # MouseDroid — CI/CD Pipeline
 # =============================================================================
-# 6-stage quality gate: Lint → Typecheck → Test → Prometheus → Security → Docker
+# Staged quality gate: Lint → Typecheck → Test → Prometheus → Security → Docker
+# (plus config/USB-C/extras/advisory jobs — count the jobs below rather than
+# trusting a number here; this header once drifted to "6-stage" at 13 jobs).
 # Runs on: push to main, pull requests
 # Matrix: Python 3.10 + 3.11 + 3.12
 # =============================================================================
@@ -160,9 +162,14 @@ jobs:
             - name: Install dependencies
               run: pip install -e ".[dev,telemetry,mcp]"
 
+            # -m "not hardware" mirrors scripts/ci.sh (PR #160 rationale): tests
+            # marked hardware open real GPIO/serial devices and must not collect
+            # on a runner that does not own the peripherals.
             - name: Run tests with coverage
               run: |
                   pytest tests/unit tests/property tests/integration \
+                    -m "not hardware" \
+                    --import-mode=importlib \
                     -v --tb=short \
                     --cov=src/mousedroid \
                     --cov-report=term-missing \
@@ -179,6 +186,17 @@ jobs:
               run: |
                   pytest tests/regression tests/e2e \
                     -m "not hardware and not slow" \
+                    --import-mode=importlib \
+                    -v --tb=short --no-cov
+
+            # The smoke tier is sub-10-seconds by construction (import + parse
+            # sanity) and previously ran in NO CI path at all — a whole tier
+            # could rot invisibly. Cheap enough to gate on.
+            - name: Run smoke tier
+              run: |
+                  pytest tests/smoke \
+                    -m "not hardware and not slow" \
+                    --import-mode=importlib \
                     -v --tb=short --no-cov
 
             - name: Upload coverage
@@ -187,6 +205,90 @@ jobs:
               with:
                   name: coverage-report
                   path: .coverage
+
+    # -------------------------------------------------------------------------
+    # Stage 3b: Performance tier (ADVISORY — shared-runner timing is noisy)
+    # -------------------------------------------------------------------------
+    # tests/performance asserts latency/throughput budgets that are meaningful
+    # on the Jetson but flaky on shared GitHub runners (a 1.15x overhead budget
+    # was observed failing at 1.17x purely from runner contention). Advisory
+    # per the house pattern: land continue-on-error, promote after a green
+    # window. Tracked in .github/advisory_stages.yaml.
+    performance:
+        runs-on: ubuntu-latest
+        needs: lint
+        continue-on-error: true
+        strategy:
+            matrix:
+                python-version: ["3.11"]
+        steps:
+            - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+            - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+              with:
+                  python-version: ${{ matrix.python-version }}
+                  cache: pip
+
+            - name: Install dependencies
+              run: pip install -e ".[dev,telemetry,mcp]"
+
+            # The instrumentation-overhead budget (1.15x) is calibrated for
+            # dedicated hardware; shared runners measured 1.17x-1.26x from
+            # contention alone on every observed run, which would leave this
+            # job perma-red and erode its signal. The test's own documented
+            # env knob relaxes the budget on slower/shared hosts — 2.0x still
+            # catches real instrumentation regressions (the failure mode is
+            # order-of-magnitude, not percent-level).
+            - name: Run performance tier (advisory)
+              env:
+                  MOUSEDROID_INSTRUMENTATION_OVERHEAD_BUDGET: "2.0"
+              run: |
+                  pytest tests/performance \
+                    -m "not hardware" \
+                    --import-mode=importlib \
+                    -v --tb=short --no-cov
+
+    # -------------------------------------------------------------------------
+    # Stage 3c: Local-only gate parity (deterministic scripts/ci.sh stages)
+    # -------------------------------------------------------------------------
+    # These gates previously ran ONLY in `bash scripts/ci.sh` — a GitHub-CI-only
+    # contributor bypassed all of them. This job runs the deterministic,
+    # dependency-light subset. Still local-only by design (need a git diff base
+    # or heavy deps): check_no_hardcoded_values.py, check_branch_coverage.py,
+    # the pillar dispatch dry-run, and the --health-check.
+    local-gates:
+        runs-on: ubuntu-latest
+        needs: lint
+        steps:
+            - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+            - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+              with:
+                  python-version: "3.11"
+                  cache: pip
+
+            - name: Install dependencies
+              run: pip install -e ".[dev,telemetry,mcp]"
+
+            - name: Settings identity smoke check
+              run: python scripts/check_settings_identity.py
+
+            - name: Type check (workforce hooks)
+              run: MYPYPATH=. mypy tools/claude_hooks/ --strict --ignore-missing-imports --explicit-package-bases
+
+            - name: Skill validator (.claude/skills)
+              run: python tools/validate_skill_commands.py
+
+            - name: Doc hygiene (advisory, exits 0 unless --strict)
+              run: python tools/doc_hygiene.py NEXT_STEPS.md
+
+            - name: Workforce hook coverage (line gate + advisory branch)
+              run: |
+                  WORKFORCE_COV_MIN="$(python -c "from tools.claude_hooks.config import load_config; print(load_config().coverage.tools_line_min)")"
+                  pytest tests/unit/tools/claude_hooks \
+                    -m "not hardware" \
+                    --import-mode=importlib \
+                    -q -o addopts="" \
+                    --cov=tools/claude_hooks --cov-branch --cov-report=term-missing \
+                    --cov-fail-under="$WORKFORCE_COV_MIN"
 
     # -------------------------------------------------------------------------
     # Stage 4: Prometheus metrics validation
@@ -255,9 +357,13 @@ jobs:
               if: steps.promtool.outputs.available == 'true'
               run: ./promtool check rules config/prometheus/alerts.yml
 
+            # ::warning:: (not a plain echo) so a silently-degraded job is
+            # visible in the run summary — this job has no continue-on-error,
+            # and without the annotation a promtool download failure made it
+            # an invisible no-op that still showed green.
             - name: Skip notice
               if: steps.promtool.outputs.available != 'true'
-              run: echo "promtool not available — skipping Prometheus metrics validation"
+              run: echo "::warning::promtool not available — Prometheus metrics validation was SKIPPED, not passed"
 
     # -------------------------------------------------------------------------
     # Stage 4b: VLA extras smoke — PROMOTED to required (Tier C3.1)
@@ -418,9 +524,14 @@ jobs:
     # -------------------------------------------------------------------------
     # Stage 5: Security audit
     # -------------------------------------------------------------------------
+    # Advisory via continue-on-error (tracked in .github/advisory_stages.yaml)
+    # rather than the previous `|| echo ::warning::` swallow, which made the
+    # job invisible to scripts/check_advisory_promotions.py — an advisory
+    # stage with no promotion clock is a permanent soft gate.
     security:
         runs-on: ubuntu-latest
         needs: lint
+        continue-on-error: true
         steps:
             - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
             - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -428,11 +539,25 @@ jobs:
                   python-version: "3.11"
                   cache: pip
 
+            # setuptools is upgraded first: it is the RUNNER's pre-installed
+            # build tooling (the project builds with hatchling, not
+            # setuptools), and the stale runner copy was the audit's first
+            # real finding (PYSEC-2026-3447) once the job was un-swallowed.
+            # Auditing it would report the runner image, not this project.
             - name: Install dependencies
-              run: pip install -e "." pip-audit
+              run: |
+                  pip install --upgrade pip setuptools
+                  pip install -e "." pip-audit
 
-            - name: Security audit (advisory)
-              run: pip-audit --strict 2>&1 || echo "::warning::pip-audit found vulnerabilities (non-blocking)"
+            # No --strict: the editable-installed mousedroid package is not on
+            # PyPI, and --strict escalates even the --skip-editable skip itself
+            # to a fatal error ("distribution marked as editable") — the job
+            # failed on that (not on real findings) every run; the old
+            # `|| echo` swallow just hid it. Without --strict, the local
+            # package warns while real dependency vulnerabilities still exit
+            # non-zero and trip this advisory job.
+            - name: Security audit (advisory via continue-on-error)
+              run: pip-audit --skip-editable
 
     # -------------------------------------------------------------------------
     # Stage 6: Docker build (Jetson — aarch64, build check only on x86)

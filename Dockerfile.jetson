@@ -84,9 +84,11 @@ RUN pip install --no-cache-dir "smbus2>=0.4" "luma.oled>=3.12" "Pillow>=10.0" 2>
 
 # ---------------------------------------------------------------------------
 # Stage 3: Dev tools (pytest, ruff, mypy, coverage)
-# Set INSTALL_DEV_TOOLS=true to include; skipped in production by default.
+# Default TRUE, matching docker-compose.jetson.yml's build-arg default — this
+# rover is a validation platform (Pattern-B pillar checks + in-container ci.sh
+# need pytest). Pass INSTALL_DEV_TOOLS=false explicitly for a lean image.
 # ---------------------------------------------------------------------------
-ARG INSTALL_DEV_TOOLS=false
+ARG INSTALL_DEV_TOOLS=true
 RUN if [ "$INSTALL_DEV_TOOLS" = "true" ]; then \
     pip install --no-cache-dir \
         "pytest>=7.0" \
@@ -160,6 +162,13 @@ RUN pip install --no-cache-dir \
 # ---------------------------------------------------------------------------
 # Runtime configuration
 # ---------------------------------------------------------------------------
+# PYTHONOPTIMIZE=1 is the documented Jetson runtime contract (CLAUDE.md /
+# AGENTS.md): the codebase is hardened for -O (explicit `is None` checks,
+# raise-not-assert in validation paths). This ENV makes the image match the
+# docs. Operator-overridable (`-e PYTHONOPTIMIZE=0`) for debugging; the
+# jetson_full_validation.sh in-container ci.sh step overrides it to 0 so the
+# pytest suite keeps assert semantics.
+ENV PYTHONOPTIMIZE=1
 ENV MOUSEDROID_CONFIG=/etc/mousedroid/default.yaml
 ENV MOUSEDROID_MOCK_HARDWARE=false
 ENV CUDA_HOME=/usr/local/cuda

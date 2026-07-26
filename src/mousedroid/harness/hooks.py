@@ -89,7 +89,7 @@ class HookRegistry:
         for spec in bucket:
             try:
                 await spec.handler(ctx)
-            except Exception as exc:  # pylint: disable=broad-except
+            except Exception as exc:
                 if spec.error_policy == "raise":
                     _log.error(
                         "hook_failed_raise",

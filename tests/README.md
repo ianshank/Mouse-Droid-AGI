@@ -10,8 +10,8 @@ Tiered pytest suites (see [`../docs/testing.md`](../docs/testing.md) for the ful
 | Regression | `regression/` | AQA / backwards-compat / golden |
 | E2E | `e2e/` | Full request path |
 | Hardware | `hardware/` | `@pytest.mark.hardware`, rover-only |
-| Performance | `performance/` | Latency / throughput budgets |
-| Smoke | `smoke/` | Sub-second import / parse |
+| Performance | `performance/` | Latency / throughput budgets (advisory CI job — shared runners are noisy) |
+| Smoke | `smoke/` | Sub-second import / parse (gated in the `test` CI job + `scripts/ci.sh`) |
 
 Gate: **85% line coverage** over `src/mousedroid` (`--cov-fail-under=85`), plus a
 changed-file line gate (`scripts/check_branch_coverage.py` — its name refers to the git

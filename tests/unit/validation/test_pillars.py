@@ -160,3 +160,43 @@ def test_pattern_b_pillar_skips_gracefully_when_pytest_absent() -> None:
 
     assert result.status == PillarStatus.SKIPPED
     assert "pytest not installed" in result.detail
+    # The reason must be machine-readable so --strict-skips can fail on it
+    # WITHOUT false-failing legitimate config-disabled skips.
+    assert result.skip_reason == "environment"
+
+
+@pytest.mark.asyncio
+async def test_dry_run_skips_are_tagged_dry_run() -> None:
+    """Dry-run skips carry ``skip_reason="dry_run"`` — never "environment"."""
+    cfg = Settings(mock_hardware=True)
+    report = await validate_all_pillars(cfg, dry_run=True)
+    assert {r.skip_reason for r in report.results} == {"dry_run"}
+
+
+@pytest.mark.asyncio
+async def test_config_disabled_pillars_are_tagged_config_disabled() -> None:
+    """``memory``/``curiosity`` SKIP as ``config_disabled`` when memory is off.
+
+    This is the production-overlay shape (no ``memory:`` block →
+    ``MemoryConfig.enabled`` defaults False). Strict mode must treat these as
+    legitimate passes, so the reason must NOT be "environment".
+    """
+    cfg = Settings(mock_hardware=True)
+    assert cfg.memory.enabled is False, "precondition: memory disabled by default"
+    report = await validate_all_pillars(
+        cfg,
+        pillar_names={"memory", "curiosity"},
+        dry_run=False,
+    )
+    assert {r.name for r in report.results} == {"memory", "curiosity"}
+    for result in report.results:
+        assert result.status == PillarStatus.SKIPPED
+        assert result.skip_reason == "config_disabled"
+
+
+def test_non_skip_results_have_no_skip_reason() -> None:
+    """OK/FAIL results leave ``skip_reason`` as None (additive-field default)."""
+    ok = PillarResult(name="safety", status=PillarStatus.OK, detail="x", elapsed_s=0.0)
+    fail = PillarResult(name="safety", status=PillarStatus.FAIL, detail="x", elapsed_s=0.0)
+    assert ok.skip_reason is None
+    assert fail.skip_reason is None

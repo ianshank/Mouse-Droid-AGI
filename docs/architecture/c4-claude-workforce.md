@@ -156,10 +156,11 @@ follows the precedent set by `tests/regression/test_skill_commands_aqa.py`.
 **Coverage needed its own invocation.** The repository gate measures
 `src/mousedroid` only (`[tool.coverage.run] source`), so `tools/` code would
 have shipped with zero measured coverage in either direction. `scripts/ci.sh`
-runs a dedicated `--cov=tools/claude_hooks --cov-branch` stage whose line
-threshold is read from `coverage.tools_line_min` — branch coverage is reported
-but advisory, because no baseline exists and the repository does not claim
-metrics it does not enforce.
+and the `local-gates` job in `ci.yml` run a dedicated
+`--cov=tools/claude_hooks --cov-branch` stage whose line threshold is read
+from `coverage.tools_line_min` — branch coverage is reported but advisory,
+because no baseline exists and the repository does not claim metrics it does
+not enforce.
 
 ## Related
 

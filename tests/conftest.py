@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from collections.abc import Generator
 from typing import TYPE_CHECKING, Any
@@ -21,9 +20,9 @@ def _mock_hardware_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def mock_settings() -> Settings:
+def mock_settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
     """Create a Settings instance with mock hardware enabled."""
-    os.environ["MOUSEDROID_MOCK_HARDWARE"] = "true"
+    monkeypatch.setenv("MOUSEDROID_MOCK_HARDWARE", "true")
     from mousedroid.config.schema import Settings
 
     return Settings(mock_hardware=True)

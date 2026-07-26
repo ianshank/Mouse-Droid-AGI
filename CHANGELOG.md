@@ -8,17 +8,86 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added — Full Test Validation Suite, 93% Coverage Threshold & Jetson Deployment Runbook
+### Fixed — Jetson deploy prep: truthful deploy surface + campaign plan
 
-- **16-Stage Parallel Test Validation.** Executed the full test pyramid across unit, integration, property, regression, performance, smoke, and workforce hook tiers (7,003 total test items executed, 93.01% line coverage achieved across `src/mousedroid`). Confirmed zero code bugs.
-- **Coverage Gate Promotion.** Bumped minimum repo-wide test coverage threshold from 85% to 93% in `pyproject.toml`, `scripts/check_branch_coverage.py`, and `README.md`.
-- **Jetson Deployment Runbook.** Published 19-step deployment runbook (`docs/planning/JETSON_DEPLOY_RUNBOOK.md`) mapping the complete deployment procedure from pre-connect to container startup, health checks, Prometheus metrics, and security audits.
-- **Lint & Format Cleanup.** Resolved 7 pre-existing `ruff` lint findings and reformatted 81 files to maintain clean repository standards.
+Repo-side prep for a full on-device deployment and validation campaign. Each
+item closes a gap where the deployment surface did not describe reality:
 
-### Fixed — Test Suite on Windows WSL/Git-Bash & Orchestrator Observability
+- **`PYTHONOPTIMIZE=1` is now actually set** (`ENV` in `Dockerfile.jetson`).
+  A dozen documents and several `-O`-hardening code contracts asserted it as
+  "the Jetson Docker default", but no image ever set it. Both in-container
+  `ci.sh` invocations in `scripts/jetson_full_validation.sh` pass
+  `-e PYTHONOPTIMIZE=0` so the pytest suite keeps `assert` semantics.
+- **ESP32 safe-by-default on the production overlay** (`esp32.enabled: false`).
+  The rover's motor controller is dead (F-008); with the schema default of
+  `True` the container crash-looped (`orchestrator.start()` → `connect()`
+  retry-then-raise). The schema default is unchanged; the repair lever is
+  `MOUSEDROID_ESP32__ENABLED=true` in `/etc/mousedroid/docker.env`.
+- **Strict pillar-skip gate.** `PillarResult.skip_reason` (additive:
+  `config_disabled` / `dry_run` / `environment`) plus `--strict-skips` on
+  `mousedroid.cli.validate_pillars`, wired into the Phase-2 pillar run via
+  `MOUSEDROID_VALIDATION_PILLARS_STRICT_SKIPS` (default 1). A runtime without
+  pytest silently SKIPped four Pattern-B pillars and still reported a clean
+  pass; config-disabled skips (`memory`, `curiosity`) correctly still pass.
+  `ARG INSTALL_DEV_TOOLS` now defaults `true`, agreeing with compose.
+- **`mousedroid-docker.service` could not start.** `Type=notify` +
+  `WatchdogSec=30` against a `docker compose up` ExecStart (compose never
+  calls `sd_notify`), and a fatal `ExecStartPre=… docker compose pull` against
+  a local-only image. Now `Type=exec`, no watchdog, non-fatal pull.
+- **Secret-template hygiene.** `MOUSEDROID_TELEMETRY_TOKEN=changeme` replaced
+  with an empty value + `openssl rand -hex 32` recipe. The key stays
+  *uncommented*: `_parse_env_keys` skips `#` lines, so commenting it would
+  disable the `host_env_keys` drift check and drop it from
+  `host_bootstrap.sh` seeding.
+- **Docs.** Config-resolution matrix (four launchers, four `Settings`) and the
+  strict-skips contract in the full-validation runbook; probe-first ESP32 flow
+  rewritten in the bring-up runbook; image-pin authority clarified in the
+  Claude-pilot deploy runbook (the record, not the prose, is authoritative);
+  `scripts/mousedroid.service` annotated as the legacy bare-metal path.
+  Closed the stale `set -e` item in `NEXT_STEPS.md` — already landed at
+  `scripts/jetson_full_smoke_run.sh:27`.
+- **Campaign plan** at
+  `docs/superpowers/plans/2026-07-25-jetson-deploy-and-validation-campaign.md`
+  (WS-A repo prep, WS-B operator deploy, WS-C gated validation campaign with a
+  component-coverage appendix).
 
-- **Windows Test Compatability.** Modified `tests/unit/test_jetson_smoke_orchestrator.py` to unconditionally skip on Windows rather than failing abruptly due to `bash.EXE` RPC errors in the WSL compatibility environment. Tests remain fully active on Linux/Jetson CI.
-- **Watchdog Defensive Logging.** Added explicit stdout and stderr capture and debug-level logging to `SystemdNotifier` when the `systemd-notify` subprocess fallback fails. This ensures future cross-platform execution issues are easier to triage.
+### Fixed — Code-hygiene sprint: cancellation correctness, honest gates, orphan purge (PR #178)
+
+Peer-reviewed hygiene sweep in phase-ordered commits (correctness → gate
+integrity → CI wiring → cleanup → ratchets):
+
+- **Async-cancellation bug**: the telemetry mission-dedup follower path caught
+  `(asyncio.CancelledError, Exception)` together, converting cooperative
+  cancellation into a 500. Root cause was a false comment (already propagated
+  into a test docstring) claiming py3.10 `CancelledError` subclasses
+  `Exception` — it has been `BaseException` since Python 3.8. Fixed both; a new
+  source-text ratchet (`tests/regression/test_cancellation_hygiene_aqa.py`)
+  forbids the pattern recurring.
+- **`-O` safety**: `retry.py`'s exhaustion-path `assert` and `main.py`'s
+  `assert isinstance` entrypoint checks replaced with real branches
+  (`PYTHONOPTIMIZE=1` — the Jetson Docker default — strips asserts).
+- **Honest coverage gate**: the unanchored `"pass"` / `"\.\.\."` coverage
+  `exclude_lines` regexes excluded every line *containing* those substrings;
+  anchored (measured impact 93.57% → 93.48%, gate untouched at 85). 20
+  line-level pragmas on one function collapsed to 4 clause-level ones.
+- **CI truth**: `tests/smoke` (152 tests) ran in NO CI path — now in the test
+  job + ci.sh; `tests/performance` added as a tracked advisory job; new
+  `local-gates` job runs the deterministic ci.sh-only gates in GitHub CI;
+  `pip-audit --strict` un-swallowed (it had been failing on the editable local
+  package every run, masked by `|| echo`) and tracked in
+  `advisory_stages.yaml`; `--import-mode=importlib` single-sourced via pytest
+  `addopts`; `-m "not hardware"` added to the ci.yml test job; a dead
+  documented `-m slow` gate claim corrected; runbook inventory pin completed
+  (9→11).
+- **Orphan purge** (every deletion re-verified by fresh grep): 7 zero-reference
+  scripts, the self-referential 4-file monitoring stack, `config/jetson_setup.yaml`,
+  `docs/prd/` (3), 2 orphaned analysis docs; `launch_dashboard.ps1` moved to
+  `scripts/`; a tracked file matching a `.gitignore` rule untracked. 34 inert
+  `pylint: disable` comments removed (pylint is not in the toolchain).
+- **New ratchets** (all ratchet-down-only): mypy `disallow_subclassing_any`
+  override-list budget, `src/`-targeting ruff per-file-ignores budget (closing
+  the documented inline-budget bypass), and a coverage-threshold single-source
+  assertion across pyproject/ci.sh/ci.yml/release.yml.
 
 ### Added — Claude workforce governance: config-driven, tested edit-time hooks (F-024)
 

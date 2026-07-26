@@ -60,7 +60,7 @@ class AsyncCallbackApprovalGate:
                 reason=f"callback timeout after {self._timeout_s}s ({self._on_timeout})",
                 decided_by=self.name,
             )
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:
             _log.warning(
                 "approval_callback_error",
                 request_id=request.id,

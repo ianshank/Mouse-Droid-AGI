@@ -412,7 +412,7 @@ class MemoryResourceProvider:
             return {"count": 0, "episodes": []}
         try:
             samples: Iterable[Any] = episodic.sample(n)
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:
             _log.warning("mcp_memory_sample_failed", error=str(exc))
             return {"count": 0, "episodes": []}
         episodes = [

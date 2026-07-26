@@ -5,8 +5,14 @@ fallback to the rover. Design: `docs/superpowers/specs/2026-06-02-jetson-claude-
 
 ## Current deployed image (PR #111)
 
-As of PR #111 the rover image `mousedroid:jetson` is rebuilt from `9c31968`
-(recorded in `deployments/jetson-image.json`) and **bakes both** the PR #107
+> **`deployments/jetson-image.json` is authoritative for the deployed SHA — this
+> narrative is not.** The record was re-pinned after #111 (the original
+> `9c31968` was a squash-source commit that became unreachable when its branch
+> was deleted, which killed the `config-compat` gate repo-wide). Always read the
+> current `sha` out of that file; never re-pin it to a feature-branch commit.
+
+As of PR #111 the rover image `mousedroid:jetson` is rebuilt from the SHA
+recorded in `deployments/jetson-image.json` and **bakes both** the PR #107
 LLMConfig schema **and** the `anthropic` SDK (Dockerfile `Stage 4b`). Consequently
 the cloud tier survives `docker compose up -d --force-recreate` with **no manual
 hot-install** — the recommended deploy path below is a plain recreate. The
@@ -124,7 +130,7 @@ kept here only as a fallback note.
    deployed image lacked `anthropic`, so `docker compose up -d --force-recreate`
    wiped the writable-layer install and the cloud primary degraded until a
    `reinstall + restart`. The #111 image **bakes** the SDK
-   (`deployments/jetson-image.json` @ 9c31968), so recreate is now safe and the
+   (see the SHA in `deployments/jetson-image.json`), so recreate is now safe and the
    cloud tier persists. If you ever run an image WITHOUT the baked SDK, recover via
    the step-5a fallback (`pip install "anthropic==0.105.2"` then `restart`, NOT
    recreate). Confirm both tiers via `fallback_gateway_started`:

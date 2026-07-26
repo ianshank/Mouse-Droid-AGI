@@ -67,7 +67,7 @@ harness converts "I think this works" into "the command exits 0."
 
 **Non-goals / Out of Scope:**
 
-- This harness does not replace `scripts/ci.sh` or the 6-stage `ci.yml`; it is an
+- This harness does not replace `scripts/ci.sh` or the multi-job `ci.yml`; it is an
   additional spec-alignment gate layered on top.
 - Multi-agent parallel development (opt-in only — see §9 Concurrency).
 
@@ -297,9 +297,10 @@ Non-negotiable rules, mechanically checked where possible (see CLAUDE.md for the
 - Protocol-based DI; concrete types only in `src/mousedroid/factory.py` — enforced by review + factory tests.
 - No raw `print()` in `src/mousedroid` production paths — structlog; ruff scope.
 - No hardcoded values — `scripts/check_no_hardcoded_values.py` (AST gate) + config validation (`F-002`).
-- `mypy --strict` passes; 85% line coverage gate over `src/mousedroid` — `scripts/ci.sh`.
-  `tools/claude_hooks/` carries its own `mypy --strict` + coverage stages (the repo-wide
-  gate cannot see `tools/`).
+- `mypy --strict` passes; 85% line coverage gate over `src/mousedroid` — `scripts/ci.sh`
+  and the `test` job in `ci.yml`. `tools/claude_hooks/` carries its own `mypy --strict` +
+  coverage stages in `scripts/ci.sh` and the `local-gates` CI job (the repo-wide gate
+  cannot see `tools/`).
 - Capability freeze respected — `tools/claude_hooks/freeze_gate.py` denies edits to
   `freeze.frozen_paths` while the gate feature (F-008) is not `done`; it self-disables
   when the feature lands.

@@ -343,7 +343,11 @@ markers = [
     "smoke: marks smoke tests for end-to-end telemetry stack validation",
     "pillar: marks tests as part of the Ten-Pillars validation campaign (nightly regression net)",
 ]
-addopts = "-v --tb=short"
+# --import-mode=importlib is load-bearing: several test basenames exist in
+# both tests/unit/ and a tier subdirectory (e.g. test_profiler.py), which the
+# default prepend import mode cannot disambiguate. CI invocations also pass
+# the flag explicitly; keep the two in sync.
+addopts = "-v --tb=short --import-mode=importlib"
 
 [tool.coverage.run]
 source = ["src/mousedroid"]
@@ -364,6 +368,6 @@ exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",
     "if __name__ == .__main__.",
-    "pass",
-    "\\.\\.\\.",
+    "^\\s*pass\\s*$",
+    "^\\s*\\.\\.\\.\\s*$",
 ]

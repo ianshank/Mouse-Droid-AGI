@@ -792,7 +792,12 @@ class TelemetryServer:
             log.info("mission_endpoint_dedup_hit", idempotency_key=key, kind="inflight")
             try:
                 leader_status, leader_body = await self._mission_inflight[key]
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
+                # Cooperative cancellation of THIS follower request must
+                # propagate — swallowing it here would convert a server
+                # shutdown into a bogus 500 for the client.
+                raise
+            except Exception:
                 # Leader exited abnormally; surface a 500 so the
                 # follower can retry instead of seeing a stale
                 # in-flight future.
@@ -896,7 +901,7 @@ class TelemetryServer:
             # matching the dual-catch in orchestrator._maybe_fire_startup_greeting.
             log.warning("mission_endpoint_timeout")
             return 504, {"error": "timeout"}
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:
             log.warning("mission_endpoint_failed", error=f"{type(exc).__name__}:{exc}")
             return 500, {"error": "internal_error"}
 
@@ -1051,7 +1056,7 @@ class TelemetryServer:
             return web.Response(status=404, text="raw_frame_source_unavailable")
         try:
             jpeg = await self._raw_frame_source.capture_raw_jpeg()
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:
             _log.warning("raw_frame_capture_failed", error=str(exc))
             return web.Response(status=503, text="capture_failed")
         if jpeg is None:
@@ -1092,7 +1097,7 @@ class TelemetryServer:
             while self._running:
                 try:
                     jpeg = await self._raw_frame_source.capture_raw_jpeg()
-                except Exception as exc:  # pylint: disable=broad-except
+                except Exception as exc:
                     _log.warning("raw_frame_capture_failed", error=str(exc))
                     await asyncio.sleep(self._raw_frame_interval_s)
                     continue
