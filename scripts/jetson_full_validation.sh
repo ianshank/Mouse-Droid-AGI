@@ -212,7 +212,7 @@ run_phase1_ci_container() {
     # PYTHONOPTIMIZE=0: the image ships PYTHONOPTIMIZE=1 (runtime contract),
     # but the pytest suite has only ever run with assert semantics intact —
     # keep the historical test posture inside the container CI run.
-    docker exec -e MOUSEDROID_MOCK_HARDWARE=true -e PYTHONOPTIMIZE=0 "${CONTAINER}" \
+    docker exec -e MOUSEDROID_MOCK_HARDWARE=true -e MOUSEDROID_CI_SLIM="${MOUSEDROID_CI_SLIM:-0}" -e PYTHONOPTIMIZE=0 "${CONTAINER}" \
         bash -lc "ulimit -v ${PHASE1_CI_ULIMIT_KB} && cd /opt/mousedroid && git config --global --replace-all safe.directory /opt/mousedroid && bash scripts/ci.sh" \
         >"${logfile}" 2>&1 || rc=$?
     if [[ ${rc} -eq 0 ]]; then
