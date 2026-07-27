@@ -219,8 +219,8 @@ run_phase1_ci_container() {
         record PASS "static CI (ci.sh, container)"
         return 0
     fi
-    if [[ ${rc} -eq 137 && "${PHASE1_CI_OOM_RETRY}" == "1" ]]; then
-        log "--- ci.sh SIGKILL'd (rc=137) — OOM detected; retrying in slim mode (ulimit -v ${PHASE1_CI_RETRY_ULIMIT_KB} KB, MOUSEDROID_CI_SLIM=1) ---"
+    if [[ (${rc} -eq 137 || ${rc} -eq 139) && "${PHASE1_CI_OOM_RETRY}" == "1" ]]; then
+        log "--- ci.sh SIGKILL'd/SIGSEGV'd (rc=${rc}) — OOM detected; retrying in slim mode (ulimit -v ${PHASE1_CI_RETRY_ULIMIT_KB} KB, MOUSEDROID_CI_SLIM=1) ---"
         echo "=== OOM RETRY (first attempt was SIGKILL'd) ===" >>"${logfile}"
         rc=0
         docker exec -e MOUSEDROID_MOCK_HARDWARE=true -e MOUSEDROID_CI_SLIM=1 -e PYTHONOPTIMIZE=0 "${CONTAINER}" \
