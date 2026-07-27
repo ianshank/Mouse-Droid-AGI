@@ -91,7 +91,9 @@ def balanced_free_bits_kl(
     def _kl(pm: Tensor, plv: Tensor, qm: Tensor, qlv: Tensor) -> Tensor:
         pm, plv = pm.float(), plv.float().clamp(-logvar_clamp, logvar_clamp)
         qm, qlv = qm.float(), qlv.float().clamp(-logvar_clamp, logvar_clamp)
-        return 0.5 * (qlv - plv + (plv.exp() + (pm - qm) ** 2) / qlv.exp() - 1.0)  # hardcoded-ok
+        return 0.5 * (
+            qlv - plv + (plv.exp() + (pm - qm) ** 2) / qlv.exp() - 1.0
+        )  # hardcoded-ok  # type: ignore[no-any-return,unused-ignore]
 
     kl_lhs = _kl(post_mean.detach(), post_logvar.detach(), prior_mean, prior_logvar)
     kl_rhs = _kl(post_mean, post_logvar, prior_mean.detach(), prior_logvar.detach())

@@ -264,7 +264,7 @@ class JetsonTensorRTCompiler:
         def _save_sync() -> None:
             path.parent.mkdir(parents=True, exist_ok=True)
             if isinstance(compiled, torch.jit.ScriptModule):
-                torch.jit.save(compiled, str(path))
+                torch.jit.save(compiled, str(path))  # type: ignore[no-untyped-call,unused-ignore]
             else:
                 torch.save(compiled, str(path))
 

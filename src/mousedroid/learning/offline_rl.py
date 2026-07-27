@@ -193,15 +193,15 @@ class OfflineRLTrainer(abc.ABC):
             self._device,
         )
 
-        self.q_optimizer = torch.optim.Adam(self.q_network.parameters(), lr=lr)
-        self.policy_optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr)
+        self.q_optimizer = torch.optim.Adam(self.q_network.parameters(), lr=lr)  # type: ignore[attr-defined,unused-ignore]
+        self.policy_optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr)  # type: ignore[attr-defined,unused-ignore]
         # Phase 2.1: when ``bc_lr`` is None we alias the policy optimizer so
         # ``bc_optimizer is policy_optimizer`` and any BC step is byte-identical
         # to stepping the policy optimizer directly. When set, we build a
         # dedicated Adam over the same parameters so the BC and actor steps
         # can run at independent learning rates.
-        self.bc_optimizer: torch.optim.Optimizer = (
-            torch.optim.Adam(self.policy.parameters(), lr=bc_lr)
+        self.bc_optimizer: torch.optim.Optimizer = (  # type: ignore[name-defined,unused-ignore]
+            torch.optim.Adam(self.policy.parameters(), lr=bc_lr)  # type: ignore[attr-defined,unused-ignore]
             if bc_lr is not None
             else self.policy_optimizer
         )
@@ -634,7 +634,7 @@ class IQLTrainer(OfflineRLTrainer):
         self._beta = beta
 
         self.value_network = ValueNetwork(state_dim, hidden_dim).to(self._device)
-        self.value_optimizer = torch.optim.Adam(
+        self.value_optimizer = torch.optim.Adam(  # type: ignore[attr-defined,unused-ignore]
             self.value_network.parameters(),
             lr=lr,
         )
