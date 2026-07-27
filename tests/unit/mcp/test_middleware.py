@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import pytest
+pytest.importorskip("starlette")
+
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from starlette.applications import Starlette
