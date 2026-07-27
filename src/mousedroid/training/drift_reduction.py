@@ -145,14 +145,14 @@ def train_pair_and_compare(
         torch.manual_seed(seed)
         head = DriftCorrectionHead(model_cfg).to(resolved_device)
 
-    opt_baseline = torch.optim.Adam(  # type: ignore[attr-defined]
+    opt_baseline = torch.optim.Adam(
         list(baseline.parameters()) + list(baseline_decoders.parameters()),
         lr=learning_rate,
     )
     augmented_params = list(augmented.parameters()) + list(augmented_decoders.parameters())
     if head is not None:
         augmented_params += list(head.parameters())
-    opt_augmented = torch.optim.Adam(augmented_params, lr=learning_rate)  # type: ignore[attr-defined]
+    opt_augmented = torch.optim.Adam(augmented_params, lr=learning_rate)
 
     flip_gen = torch.Generator(device="cpu")
     flip_gen.manual_seed(seed)

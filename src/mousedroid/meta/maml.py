@@ -16,7 +16,7 @@ _log = get_logger(__name__)
 
 def _backward(loss: Tensor) -> None:
     """Isolate torch stub gaps around ``Tensor.backward``."""
-    loss.backward()  # type: ignore[no-untyped-call]  # torch ships no stub for Tensor.backward
+    loss.backward()  # type: ignore[no-untyped-call]
 
 
 class MAMLAdapter:
@@ -42,7 +42,7 @@ class MAMLAdapter:
         self._model = model
         self._inner_lr = inner_lr
         self._inner_steps = inner_steps
-        self._meta_optimizer = torch.optim.Adam(model.parameters(), lr=outer_lr)  # type: ignore[attr-defined]
+        self._meta_optimizer = torch.optim.Adam(model.parameters(), lr=outer_lr)
 
         _log.info(
             "maml_init",
@@ -66,7 +66,7 @@ class MAMLAdapter:
             Adapted model copy (original is unchanged).
         """
         adapted = copy.deepcopy(self._model)
-        opt = torch.optim.SGD(adapted.parameters(), lr=self._inner_lr)  # type: ignore[attr-defined]
+        opt = torch.optim.SGD(adapted.parameters(), lr=self._inner_lr)
 
         for _ in range(self._inner_steps):
             total_loss = torch.tensor(0.0)

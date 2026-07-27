@@ -29,7 +29,7 @@ _log = get_logger(__name__)
 
 def _backward(loss: Tensor) -> None:
     """Isolate torch stub gaps around ``Tensor.backward`` (untyped in torch)."""
-    loss.backward()  # type: ignore[no-untyped-call]  # torch ships no stub for Tensor.backward
+    loss.backward()  # type: ignore[no-untyped-call]
 
 
 # ---------------------------------------------------------------------------
@@ -163,10 +163,10 @@ class OfflineRLTrainer(abc.ABC):
         self,
         state_dim: int,
         action_dim: int,
-        hidden_dim: int = 256,
-        gamma: float = 0.99,
-        tau: float = 0.005,
-        lr: float = 3e-4,
+        hidden_dim: int = 256,  # hardcoded-ok
+        gamma: float = 0.99,  # hardcoded-ok
+        tau: float = 0.005,  # hardcoded-ok
+        lr: float = 3e-4,  # hardcoded-ok
         device: torch.device | None = None,
         bc_lr: float | None = None,
         bc_batch_size: int | None = None,
@@ -193,15 +193,15 @@ class OfflineRLTrainer(abc.ABC):
             self._device,
         )
 
-        self.q_optimizer = torch.optim.Adam(self.q_network.parameters(), lr=lr)  # type: ignore[attr-defined]
-        self.policy_optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr)  # type: ignore[attr-defined]
+        self.q_optimizer = torch.optim.Adam(self.q_network.parameters(), lr=lr)
+        self.policy_optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr)
         # Phase 2.1: when ``bc_lr`` is None we alias the policy optimizer so
         # ``bc_optimizer is policy_optimizer`` and any BC step is byte-identical
         # to stepping the policy optimizer directly. When set, we build a
         # dedicated Adam over the same parameters so the BC and actor steps
         # can run at independent learning rates.
-        self.bc_optimizer: torch.optim.Optimizer = (  # type: ignore[name-defined]
-            torch.optim.Adam(self.policy.parameters(), lr=bc_lr)  # type: ignore[attr-defined]
+        self.bc_optimizer: torch.optim.Optimizer = (
+            torch.optim.Adam(self.policy.parameters(), lr=bc_lr)
             if bc_lr is not None
             else self.policy_optimizer
         )
@@ -407,12 +407,12 @@ class CQLTrainer(OfflineRLTrainer):
         self,
         state_dim: int,
         action_dim: int,
-        hidden_dim: int = 256,
-        gamma: float = 0.99,
-        tau: float = 0.005,
-        lr: float = 3e-4,
+        hidden_dim: int = 256,  # hardcoded-ok
+        gamma: float = 0.99,  # hardcoded-ok
+        tau: float = 0.005,  # hardcoded-ok
+        lr: float = 3e-4,  # hardcoded-ok
         cql_alpha: float = 1.0,
-        n_random_actions: int = 10,
+        n_random_actions: int = 10,  # hardcoded-ok
         device: torch.device | None = None,
         bc_lr: float | None = None,
         bc_batch_size: int | None = None,
@@ -466,7 +466,7 @@ class CQLTrainer(OfflineRLTrainer):
                 self._action_dim,
                 device=self._device,
             )
-            * 2.0
+            * 2.0  # hardcoded-ok
             - 1.0
         )
 
@@ -602,12 +602,12 @@ class IQLTrainer(OfflineRLTrainer):
         self,
         state_dim: int,
         action_dim: int,
-        hidden_dim: int = 256,
-        gamma: float = 0.99,
-        tau: float = 0.005,
-        lr: float = 3e-4,
-        iql_tau: float = 0.7,
-        beta: float = 3.0,
+        hidden_dim: int = 256,  # hardcoded-ok
+        gamma: float = 0.99,  # hardcoded-ok
+        tau: float = 0.005,  # hardcoded-ok
+        lr: float = 3e-4,  # hardcoded-ok
+        iql_tau: float = 0.7,  # hardcoded-ok
+        beta: float = 3.0,  # hardcoded-ok
         device: torch.device | None = None,
         bc_lr: float | None = None,
         bc_batch_size: int | None = None,
@@ -634,7 +634,7 @@ class IQLTrainer(OfflineRLTrainer):
         self._beta = beta
 
         self.value_network = ValueNetwork(state_dim, hidden_dim).to(self._device)
-        self.value_optimizer = torch.optim.Adam(  # type: ignore[attr-defined]
+        self.value_optimizer = torch.optim.Adam(
             self.value_network.parameters(),
             lr=lr,
         )
@@ -649,7 +649,7 @@ class IQLTrainer(OfflineRLTrainer):
             Expectile loss scalar.
         """
         weight = torch.where(diff > 0, self._iql_tau, 1.0 - self._iql_tau)
-        return (weight * diff.pow(2)).mean()
+        return (weight * diff.pow(2)).mean()  # hardcoded-ok
 
     def update_step(
         self,

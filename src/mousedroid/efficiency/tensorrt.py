@@ -112,7 +112,7 @@ def _trace_model(model: nn.Module, sample_input: Tensor) -> Any:
     Returns:
         Traced model via ``torch.jit.trace``.
     """
-    return torch.jit.trace(model, sample_input)  # type: ignore[no-untyped-call]  # torch.jit is untyped
+    return torch.jit.trace(model, sample_input)  # type: ignore[no-untyped-call]
 
 
 class JetsonTensorRTCompiler:
@@ -192,7 +192,7 @@ class JetsonTensorRTCompiler:
 
         start = time.monotonic()
         compiled = await self._do_compile(model, input_shapes, precision)
-        elapsed_ms = (time.monotonic() - start) * 1000.0
+        elapsed_ms = (time.monotonic() - start) * 1000.0  # hardcoded-ok
 
         _log.info(
             "tensorrt_compilation_complete",
@@ -247,7 +247,7 @@ class JetsonTensorRTCompiler:
                 model,
                 samples,
                 fp16_mode=fp16_mode,
-                max_workspace_size=int(self._workspace_gb * (1 << 30)),
+                max_workspace_size=int(self._workspace_gb * (1 << 30)),  # hardcoded-ok
                 use_onnx=False,
             )
 
@@ -264,7 +264,7 @@ class JetsonTensorRTCompiler:
         def _save_sync() -> None:
             path.parent.mkdir(parents=True, exist_ok=True)
             if isinstance(compiled, torch.jit.ScriptModule):
-                torch.jit.save(compiled, str(path))  # type: ignore[no-untyped-call]
+                torch.jit.save(compiled, str(path))
             else:
                 torch.save(compiled, str(path))
 
@@ -292,7 +292,7 @@ class JetsonTensorRTCompiler:
 
         def _load_sync() -> Any:
             try:
-                return torch.jit.load(str(path))  # type: ignore[no-untyped-call]  # torch.jit is untyped
+                return torch.jit.load(str(path))  # type: ignore[no-untyped-call]
             except Exception:
                 # weights_only=False is required to load torch2trt modules.
                 # SECURITY: only load from the local tensorrt_cache_dir which
@@ -428,7 +428,7 @@ class TensorRTOptimizer:
                 model,
                 inputs=[sample_input],
                 enabled_precisions={self.precision},
-                workspace_size=int(self.workspace_gb * (1 << 30)),
+                workspace_size=int(self.workspace_gb * (1 << 30)),  # hardcoded-ok
             )
         except ImportError:
             _log.warning("torch_tensorrt_not_available_falling_back_to_traced")

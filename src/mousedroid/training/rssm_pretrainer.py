@@ -60,7 +60,7 @@ class RSSMPretrainer:
         # Pretraining reconstruction heads live here (not on the RSSM) so the
         # deployment model stays byte-identical. They train jointly with the RSSM.
         self._decoders = RawModalityDecoders(model.cfg).to(device)
-        self._opt = torch.optim.Adam(  # type: ignore[attr-defined]
+        self._opt = torch.optim.Adam(
             list(model.parameters()) + list(self._decoders.parameters()), lr=lr
         )
         self._grad_clip = grad_clip
@@ -150,7 +150,7 @@ class RSSMPretrainer:
                 residual = out.get("residual_loss")
                 backward_target = loss if residual is None else loss + residual
                 scaled = self._scaler.scale(backward_target)
-                scaled.backward()  # type: ignore[no-untyped-call]  # torch stub gap
+                scaled.backward()  # type: ignore[no-untyped-call]
                 self._scaler.unscale_(self._opt)
                 # Clip ALL optimizer-managed params (model + decoders + the
                 # optional drift head), not just the model — otherwise their
