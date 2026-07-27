@@ -84,10 +84,13 @@ echo "=== Settings Identity Smoke Check ==="
 "$PYTHON_BIN" scripts/check_settings_identity.py
 
 echo "=== Unit + Property + Integration Tests (with coverage) ==="
-"$PYTHON_BIN" -m pytest tests/unit tests/property tests/integration \
-    -m "not hardware" \
-    --import-mode=importlib \
-    -v --cov=src/mousedroid --cov-report=term-missing --cov-fail-under=85
+if [[ "${MOUSEDROID_CI_SLIM:-0}" == "1" ]]; then
+    COV_ARGS=("--no-cov")
+else
+    COV_ARGS=("--cov=src/mousedroid" "--cov-report=term-missing" "--cov-fail-under=85")
+fi
+"$PYTHON_BIN" -m pytest tests/unit tests/property tests/integration -m "not hardware" \
+    --import-mode=importlib -v "${COV_ARGS[@]}"
 
 echo "=== Smoke Tests ==="
 # Sub-10-second import/parse sanity tier. Deliberately OUTSIDE the
