@@ -165,9 +165,9 @@ class TestCiShSyntax:
     def test_ci_sh_parses(self) -> None:
         import subprocess
 
-        subprocess.run(["bash", "-n", str(_CI)], check=True)
+        subprocess.run(["bash", "-n", _CI.relative_to(_REPO_ROOT).as_posix()], check=True)
 
     def test_jetson_full_validation_sh_parses(self) -> None:
         import subprocess
 
-        subprocess.run(["bash", "-n", str(_JFV)], check=True)
+        subprocess.run(["bash", "-n", _JFV.relative_to(_REPO_ROOT).as_posix()], check=True)

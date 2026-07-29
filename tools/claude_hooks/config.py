@@ -62,7 +62,7 @@ class FreezeConfig(BaseModel):
     @classmethod
     def _reject_absolute(cls, value: str) -> str:
         """Keep the catalog path repo-relative (invariant I-3, portability)."""
-        if Path(value).is_absolute() or ".." in Path(value).parts:
+        if Path(value).is_absolute() or value.startswith("/") or ".." in Path(value).parts:
             raise ValueError("must be a repo-relative path without '..' traversal")
         return value
 
@@ -99,7 +99,7 @@ class SecretScanConfig(BaseModel):
         an arbitrary file. Mirrors the guard on
         :attr:`FreezeConfig.features_file`.
         """
-        if Path(value).is_absolute() or ".." in Path(value).parts:
+        if Path(value).is_absolute() or value.startswith("/") or ".." in Path(value).parts:
             raise ValueError("must be a repo-relative path without '..' traversal")
         return value
 

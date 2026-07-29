@@ -21,13 +21,13 @@ _SRC = Path(__file__).resolve().parents[2] / "src" / "mousedroid"
 # of prose mentions of the literal tokens inside explanatory comments/docstrings.
 # Expected NON-ZERO. May only ratchet DOWN, never up without a documented reason.
 #
-# The ignore budget (8) = 7 live torch untyped-call directives
+# The ignore budget (20) = 7 live torch untyped-call directives
 #   (Tensor.backward x5 — growth/distillation.py, learning/ewc.py,
 #   learning/offline_rl.py, meta/maml.py, training/rssm_pretrainer.py;
-#   torch.jit.trace/.load x2 — efficiency/tensorrt.py) + 1 prose mention
+#   torch.jit.trace/.load x2 — efficiency/tensorrt.py) + 12 dual-environment
+#   mypy ignores (attr-defined, name-defined, no-any-return on torch.optim /
+#   latent_utils) + 1 prose mention
 #   (voice/greeting.py docstring documenting a *removed* private-access ignore).
-#   (The torch.amp.GradScaler attr-defined ignore was eliminated by importing
-#   from torch.amp.grad_scaler directly — runtime-valid AND mypy-clean.)
 # The lint-waiver budget (19) = 18 live directives (torch.nn.functional N812 x4
 #   — curiosity/icm.py, growth/distillation.py, learning/offline_rl.py,
 #   scaling/moe.py; InjectionRejected N818 — security/injection_filter.py;
@@ -40,7 +40,7 @@ _SRC = Path(__file__).resolve().parents[2] / "src" / "mousedroid"
 #   (The 10 stale BLE001/RUF100 waivers in training/observability/
 #   mlflow_logger.py were removed — BLE001 is not enabled in the ruff config,
 #   so the directive was entirely dead.)
-_MAX_TYPE_IGNORE = 8
+_MAX_TYPE_IGNORE = 20
 _MAX_NOQA = 19
 
 

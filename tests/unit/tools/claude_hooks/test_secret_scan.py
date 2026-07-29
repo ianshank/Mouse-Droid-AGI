@@ -20,6 +20,9 @@ import pytest
 from tools.claude_hooks import secret_scan
 from tools.claude_hooks.config import WorkforceConfig
 
+_WIN32_REASON = "edit-time secret scan hook tests are POSIX-only"
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason=_WIN32_REASON)
+
 
 def _config(**overrides: Any) -> WorkforceConfig:
     return WorkforceConfig.model_validate({"secret_scan": overrides})

@@ -102,7 +102,7 @@ class TestCiSh:
         assert "pytest tests/e2e/" in content
 
     def test_coverage_gate_present(self, content: str) -> None:
-        assert "--cov-fail-under=85" in content
+        assert "--cov-fail-under=93" in content
 
     def test_mock_hardware_env_set(self, content: str) -> None:
         assert "MOUSEDROID_MOCK_HARDWARE=true" in content

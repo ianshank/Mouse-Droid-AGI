@@ -150,7 +150,8 @@ def test_git_rev_ok_rejects_bad_refs(ref: str | None) -> None:
 # run_validation
 # --------------------------------------------------------------------------- #
 def test_run_validation_success() -> None:
-    assert spec.run_validation(_feat("F-001", validation_command="true")) is None
+    cmd = f'"{sys.executable}" -c "pass"'
+    assert spec.run_validation(_feat("F-001", validation_command=cmd)) is None
 
 
 def test_run_validation_failure_includes_tail() -> None:

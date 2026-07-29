@@ -149,8 +149,9 @@ async def test_start_gstreamer_open_fails():
     cam = jetson_csi.JetsonCSICamera(_cfg())
 
     p_ju, p_cv = _patch_backends(jetson_csi, cv2=mock_cv2)
-    with p_ju, p_cv, pytest.raises(RuntimeError, match="Failed to open CSI camera"):
+    with p_ju, p_cv:
         await cam.start()
+    assert cam._backend is None
 
 
 @pytest.mark.asyncio

@@ -28,7 +28,7 @@ def _source() -> str:
 
 class TestSourceContract:
     def test_script_parses(self) -> None:
-        subprocess.run(["bash", "-n", str(_SCRIPT)], check=True)
+        subprocess.run(["bash", "-n", _SCRIPT.relative_to(_REPO_ROOT).as_posix()], check=True)
 
     def test_strict_mode_enabled(self) -> None:
         assert "set -euo pipefail" in _source()
@@ -60,6 +60,7 @@ class TestSourceContract:
         assert _source().count('run chmod 600 "$ENV_FILE"') == 2
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only host_bootstrap.sh execution")
 class TestDryRunSubprocess:
     def test_dry_run_prints_plan_and_writes_nothing(self, tmp_path: Path) -> None:
         install_dir = tmp_path / "opt"

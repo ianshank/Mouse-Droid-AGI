@@ -23,7 +23,7 @@ permissions:
 
 env:
     MOUSEDROID_MOCK_HARDWARE: "true"
-    MINIMUM_COVERAGE: "85"
+    MINIMUM_COVERAGE: "93"
 
 jobs:
     # -------------------------------------------------------------------------

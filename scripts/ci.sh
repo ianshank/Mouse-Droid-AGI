@@ -84,10 +84,10 @@ echo "=== Settings Identity Smoke Check ==="
 "$PYTHON_BIN" scripts/check_settings_identity.py
 
 echo "=== Unit + Property + Integration Tests (with coverage) ==="
-if [[ "${MOUSEDROID_CI_SLIM:-0}" == "1" ]]; then
+if [[ "${MOUSEDROID_CI_SLIM}" == "1" ]]; then
     COV_ARGS=("--no-cov")
 else
-    COV_ARGS=("--cov=src/mousedroid" "--cov-report=term-missing" "--cov-fail-under=85")
+    COV_ARGS=("--cov=src/mousedroid" "--cov-report=term-missing" "--cov-fail-under=93")
 fi
 "$PYTHON_BIN" -m pytest tests/unit tests/property tests/integration -m "not hardware" \
     --import-mode=importlib -v "${COV_ARGS[@]}"
@@ -149,7 +149,7 @@ print(load_config().coverage.tools_line_min)")"
     --cov-fail-under="$WORKFORCE_COV_MIN"
 
 echo "=== Branch Coverage Gate (changed files >= 85%) ==="
-"$PYTHON_BIN" scripts/check_branch_coverage.py --min 85 \
+"$PYTHON_BIN" scripts/check_branch_coverage.py --min 93 \
     --tests tests/unit tests/property tests/integration
 
 echo "=== Prometheus Rules Validation (promtool) ==="

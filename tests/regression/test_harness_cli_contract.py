@@ -13,6 +13,7 @@ invoked from a foreign CWD to pin the repo-root resolution.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import textwrap
@@ -28,9 +29,10 @@ _SCHEMA = _REPO_ROOT / "features.schema.json"
 
 def _write_catalog(tmp_path: Path) -> Path:
     catalog = tmp_path / "features.yaml"
+    cmd = json.dumps(f'"{sys.executable}" -c pass')
     catalog.write_text(
         textwrap.dedent(
-            """\
+            f"""\
             features:
               - id: "F-001"
                 name: "synthetic done"
@@ -39,7 +41,7 @@ def _write_catalog(tmp_path: Path) -> Path:
                 status: "done"
                 tier: "fast"
                 verification: ["always true"]
-                validation_command: "true"
+                validation_command: {cmd}
                 implemented_in: "HEAD"
                 depends_on: []
               - id: "F-002"
@@ -80,7 +82,9 @@ def test_validate_passes_with_ok_summary(tmp_path: Path) -> None:
 
 def test_validate_fails_when_command_fails(tmp_path: Path) -> None:
     catalog = _write_catalog(tmp_path)
-    catalog.write_text(catalog.read_text().replace('"true"', '"false"'))
+    fail_cmd = json.dumps(f'"{sys.executable}" -c "import sys; sys.exit(1)"')
+    pass_cmd = json.dumps(f'"{sys.executable}" -c pass')
+    catalog.write_text(catalog.read_text().replace(pass_cmd, fail_cmd))
     r = _run(
         [str(_VALIDATE), "--features", str(catalog), "--schema", str(_SCHEMA), "--tier", "fast"],
         cwd=tmp_path,

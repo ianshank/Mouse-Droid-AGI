@@ -19,10 +19,12 @@ _SCRIPT = _REPO_ROOT / "scripts" / "jetson-runner-install.sh"
 _SERVICE = _REPO_ROOT / "scripts" / "github-actions-runner.service.template"
 _DOC = _REPO_ROOT / "docs" / "jetson-runner-setup.md"
 
+import sys
+
 _BASH = shutil.which("bash")
 _BASH_AVAILABLE = pytest.mark.skipif(
-    _BASH is None,
-    reason="bash unavailable on this host",
+    _BASH is None or sys.platform == "win32",
+    reason="bash execution is POSIX-only",
 )
 
 

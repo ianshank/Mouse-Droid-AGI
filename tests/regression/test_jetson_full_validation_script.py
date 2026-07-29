@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -37,10 +38,11 @@ def test_deliverable_files_exist() -> None:
 def test_script_parses_clean() -> None:
     """`bash -n` parse check (skips where bash is unavailable, e.g. some CI)."""
     bash = shutil.which("bash")
-    if bash is None:
-        pytest.skip("bash not on PATH")
+    if bash is None or sys.platform == "win32":
+        pytest.skip("bash -n test runs on Linux/POSIX hosts")
     result = subprocess.run(
-        [bash, "-n", str(_SCRIPT)],
+        [bash, "-n", _SCRIPT.relative_to(_REPO_ROOT).as_posix()],
+        cwd=_REPO_ROOT,
         capture_output=True,
         text=True,
         check=False,
@@ -149,6 +151,7 @@ class TestTrendThreading:
         assert "write_summary_fallback" in text, "python-less hosts must still get a summary"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="bash execution test runs on Linux/POSIX hosts")
 class TestSummaryFallbackExecution:
     """Gap-analysis: prove the python-less fallback actually produces SUMMARY.md.
 

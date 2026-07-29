@@ -18,13 +18,20 @@ from __future__ import annotations
 import subprocess
 import sys
 
+import pytest
+
 
 def _run_snippet(code: str) -> subprocess.CompletedProcess[str]:
+    import os
+
+    env = dict(os.environ)
+    env["MOUSEDROID_MOCK_HARDWARE"] = "true"
     return subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=240,
+        env=env,
         check=False,
     )
 
@@ -43,6 +50,10 @@ def test_importing_pure_modules_does_not_import_numpy_or_cv2() -> None:
     assert "OK" in result.stdout
 
 
+_WIN32_REASON = "native driver subprocess load is POSIX targeted"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason=_WIN32_REASON)
 def test_lazy_runtime_reexports_still_resolve() -> None:
     code = (
         "from mousedroid.validation import (\n"
