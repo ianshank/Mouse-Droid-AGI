@@ -93,7 +93,7 @@ workforce section below), `.claude/` (Claude Code assets: `settings.json`,
 
 ## Code Style
 
-- **Linter**: `ruff==0.8.0` — version pinned in `pyproject.toml [dev]` to match `.github/workflows/ci.yml`. Line length 100, Google docstrings, comprehensive rule set.
+- **Linter**: `ruff==0.16.0` — version pinned in `pyproject.toml [dev]` to match `.github/workflows/ci.yml`. Both literals must move together: a skew makes CI lint disagree with `bash scripts/ci.sh` (this is exactly how `S603` in `tools/_jetson_helpers.py` went red repo-wide). Line length 100, Google docstrings, comprehensive rule set.
 - **Type checker**: `mypy --strict` with `ignore_missing_imports`
 - **Format**: `ruff format` (CI runs `ruff format --check src/ tests/ tools/`; same in `bash scripts/ci.sh` post-PR #62)
 - **Docstrings**: Google convention, required on all public functions/classes

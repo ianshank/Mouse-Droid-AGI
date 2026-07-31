@@ -38,15 +38,15 @@ def test_ci_sh_matches_pyproject_fail_under() -> None:
 
     cov_flags = re.findall(r"--cov-fail-under=(\d+)", text)
     assert cov_flags, "ci.sh no longer passes --cov-fail-under — update this test"
-    assert all(
-        int(v) == gate for v in cov_flags
-    ), f"ci.sh --cov-fail-under {cov_flags} != pyproject fail_under {gate}"
+    assert all(int(v) == gate for v in cov_flags), (
+        f"ci.sh --cov-fail-under {cov_flags} != pyproject fail_under {gate}"
+    )
 
     min_flags = re.findall(r"check_branch_coverage\.py --min (\d+)", text)
     assert min_flags, "ci.sh no longer runs check_branch_coverage.py --min — update this test"
-    assert all(
-        int(v) == gate for v in min_flags
-    ), f"ci.sh check_branch_coverage --min {min_flags} != pyproject fail_under {gate}"
+    assert all(int(v) == gate for v in min_flags), (
+        f"ci.sh check_branch_coverage --min {min_flags} != pyproject fail_under {gate}"
+    )
 
 
 def test_workflow_envs_match_pyproject_fail_under() -> None:
@@ -55,6 +55,6 @@ def test_workflow_envs_match_pyproject_fail_under() -> None:
         text = (_REPO_ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8")
         envs = re.findall(r"MINIMUM_COVERAGE:\s*\"(\d+)\"", text)
         assert envs, f"{workflow} no longer declares MINIMUM_COVERAGE — update this test"
-        assert all(
-            int(v) == gate for v in envs
-        ), f"{workflow} MINIMUM_COVERAGE {envs} != pyproject fail_under {gate}"
+        assert all(int(v) == gate for v in envs), (
+            f"{workflow} MINIMUM_COVERAGE {envs} != pyproject fail_under {gate}"
+        )

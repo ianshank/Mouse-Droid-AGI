@@ -39,7 +39,7 @@ jobs:
                   cache: pip
 
             - name: Install ruff
-              run: pip install "ruff>=0.4"
+              run: pip install "ruff==0.16.0"
 
             - name: Lint check
               run: ruff check src/ tests/

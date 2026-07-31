@@ -22,8 +22,8 @@ MOUSEDROID_MOCK_HARDWARE=true mousedroid
 
 ## Quality gates (CI — `.github/workflows/ci.yml`; advisory stages tracked in `.github/advisory_stages.yaml`)
 
-- **Lint / format:** `ruff==0.8.0` (`ruff check` + `ruff format --check` on `src/`, `tests/`, `tools/`; plus `ruff check scripts/`)
-- **Types:** `mypy==2.2.0` `--strict`
+- **Lint / format:** `ruff==0.16.0` (`ruff check` + `ruff format --check` on `src/`, `tests/`, `tools/`; plus `ruff check scripts/`)
+- **Types:** `mypy==2.3.0` `--strict`
 - **Tests:** `pytest` with **≥85% line coverage** over `src/mousedroid`
   (`--cov-fail-under=85`), plus regression + e2e + smoke tiers; locally,
   `scripts/check_branch_coverage.py --min 85` additionally gates changed
