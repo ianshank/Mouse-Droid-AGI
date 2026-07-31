@@ -310,7 +310,7 @@ Non-negotiable rules, mechanically checked where possible (see CLAUDE.md for the
 
 ## 14. Tooling, Observability & Environment
 
-Runtime: Python ≥3.10, `pip`. Toolchain: ruff 0.8.0 (pinned), mypy 2.1.0 (pinned),
+Runtime: Python ≥3.10, `pip`. Toolchain: ruff 0.16.0 (pinned), mypy 2.3.0 (pinned),
 pytest. Observability: structlog structured events + Prometheus families. ADRs in
 `docs/architecture/`. **`scripts/init.sh`** is idempotent and fast: `pip install -e
 ".[dev]"`, then a `validate.py --tier fast` health check ending in `baseline ready`.

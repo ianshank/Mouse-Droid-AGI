@@ -487,7 +487,7 @@ shape.
     -m "not hardware" --import-mode=importlib --timeout=180 -q
 ALLOW_PYTEST_COLLECTION_SKIP=1 \
     "/c/Program Files/Python311/python.exe" scripts/check_branch_coverage.py \
-        --min 85 --tests tests/unit/<your-test>.py
+        --min 90 --tests tests/unit/<your-test>.py
 
 # If you touched .claude/ or tools/claude_hooks/ (workforce governance, F-024):
 "/c/Program Files/Python311/python.exe" -m pytest \

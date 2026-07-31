@@ -11,6 +11,12 @@
 #   - "changeme" — config/docker.env.example telemetry-token placeholder
 #   - "test-api-key-abc123" — tests/unit/test_telemetry_auth.py bearer-token
 #     fixture (fires the generic-api-key entropy rule across history)
+#   - "valid-key-123" — the same bearer-token fixture under its earlier name,
+#     tests/security/test_telemetry_auth.py. That path does not exist at HEAD:
+#     the blob survives only in commit 51afcb1c, which is an ancestor of no
+#     branch but is still retained server-side and therefore still reached by
+#     the full-history scan (fetch-depth: 0). No edit at HEAD can clear it, so
+#     a regex waiver is the only remedy short of a history purge.
 #
 # Promotion protocol: the CI job runs advisory (continue-on-error) until 7
 # consecutive green runs, then it is promoted to blocking. See
@@ -26,4 +32,5 @@ regexes = [
     '''sk-ant-(\.\.\.|xyz|test)''',
     '''(?i)telemetry_token=changeme''',
     '''test-api-key-abc123''',
+    '''valid-key-123''',
 ]

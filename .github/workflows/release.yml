@@ -23,7 +23,7 @@ permissions:
 
 env:
     MOUSEDROID_MOCK_HARDWARE: "true"
-    MINIMUM_COVERAGE: "85"
+    MINIMUM_COVERAGE: "90"
 
 jobs:
     # -------------------------------------------------------------------------
@@ -39,7 +39,7 @@ jobs:
                   cache: pip
 
             - name: Install ruff
-              run: pip install "ruff>=0.4"
+              run: pip install "ruff==0.16.0"
 
             - name: Lint check
               run: ruff check src/ tests/
@@ -69,7 +69,7 @@ jobs:
               run: mypy src/ --strict --ignore-missing-imports
 
     # -------------------------------------------------------------------------
-    # Stage 3: Test + Coverage (85% gate)
+    # Stage 3: Test + Coverage (90% gate)
     # -------------------------------------------------------------------------
     test:
         runs-on: ubuntu-latest

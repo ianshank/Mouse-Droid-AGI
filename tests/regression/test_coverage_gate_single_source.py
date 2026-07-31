@@ -1,4 +1,4 @@
-"""Regression: the 85% coverage threshold has one source of truth.
+"""Regression: the 90% coverage threshold has one source of truth.
 
 The repo-wide line-coverage gate is declared in ``[tool.coverage.report]
 fail_under`` (pyproject.toml) but re-stated as a literal in four other
@@ -11,8 +11,8 @@ silently fork the gate:
 - ``.github/workflows/release.yml`` — ``MINIMUM_COVERAGE: "<N>"`` env
 
 ``.claude/workforce.yaml``'s ``coverage.tools_line_min`` is a DIFFERENT gate
-(tools/claude_hooks, its own invocation) that only coincidentally reads 85 —
-it is deliberately NOT asserted equal here.
+(tools/claude_hooks, its own invocation) and is deliberately NOT asserted
+equal here — it tracks its own threshold and may lag this one.
 """
 
 from __future__ import annotations
@@ -38,15 +38,15 @@ def test_ci_sh_matches_pyproject_fail_under() -> None:
 
     cov_flags = re.findall(r"--cov-fail-under=(\d+)", text)
     assert cov_flags, "ci.sh no longer passes --cov-fail-under — update this test"
-    assert all(
-        int(v) == gate for v in cov_flags
-    ), f"ci.sh --cov-fail-under {cov_flags} != pyproject fail_under {gate}"
+    assert all(int(v) == gate for v in cov_flags), (
+        f"ci.sh --cov-fail-under {cov_flags} != pyproject fail_under {gate}"
+    )
 
     min_flags = re.findall(r"check_branch_coverage\.py --min (\d+)", text)
     assert min_flags, "ci.sh no longer runs check_branch_coverage.py --min — update this test"
-    assert all(
-        int(v) == gate for v in min_flags
-    ), f"ci.sh check_branch_coverage --min {min_flags} != pyproject fail_under {gate}"
+    assert all(int(v) == gate for v in min_flags), (
+        f"ci.sh check_branch_coverage --min {min_flags} != pyproject fail_under {gate}"
+    )
 
 
 def test_workflow_envs_match_pyproject_fail_under() -> None:
@@ -55,6 +55,6 @@ def test_workflow_envs_match_pyproject_fail_under() -> None:
         text = (_REPO_ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8")
         envs = re.findall(r"MINIMUM_COVERAGE:\s*\"(\d+)\"", text)
         assert envs, f"{workflow} no longer declares MINIMUM_COVERAGE — update this test"
-        assert all(
-            int(v) == gate for v in envs
-        ), f"{workflow} MINIMUM_COVERAGE {envs} != pyproject fail_under {gate}"
+        assert all(int(v) == gate for v in envs), (
+            f"{workflow} MINIMUM_COVERAGE {envs} != pyproject fail_under {gate}"
+        )

@@ -139,10 +139,10 @@ These hold across every module and may not be weakened by any change. Invariants
     gitignored `*.env`); `config/docker.env.example` documents the secret surface
     (including the `ANTHROPIC_API_KEY` slot) without holding live values.
 
-**Quality gates are non-negotiable.** Linting (`ruff==0.8.0`), formatting
+**Quality gates are non-negotiable.** Linting (`ruff==0.16.0`), formatting
 (`ruff format --check`), strict type-checking (`mypy --strict`), bounded
 cyclomatic complexity (`ruff` `C901`, `max-complexity = 15`; ADR-014), and the
-85% **line** coverage floor (`--cov-fail-under=85`, scoped to `src/mousedroid`)
+90% **line** coverage floor (`--cov-fail-under=90`, scoped to `src/mousedroid`)
 stay green. The authoritative pipeline is `.github/workflows/ci.yml` — count the jobs there
 rather than trusting an enumeration here (the load-bearing chain is actionlint →
 lint → typecheck → test+coverage+regression+e2e+smoke → docker, plus config

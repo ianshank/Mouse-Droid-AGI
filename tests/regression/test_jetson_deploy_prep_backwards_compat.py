@@ -113,9 +113,9 @@ def test_container_ci_steps_override_pythonoptimize_to_zero() -> None:
     ]
     assert ci_exec_lines, "no in-container ci.sh docker-exec line found"
     for line in ci_exec_lines:
-        assert (
-            "-e PYTHONOPTIMIZE=0" in line
-        ), f"in-container CI exec must neutralise -O for pytest, got: {line.strip()!r}"
+        assert "-e PYTHONOPTIMIZE=0" in line, (
+            f"in-container CI exec must neutralise -O for pytest, got: {line.strip()!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -157,12 +157,12 @@ def test_dockerfile_and_compose_dev_tools_defaults_agree() -> None:
 def test_validation_script_exposes_strict_skips_knob() -> None:
     """The strict-skips gate must be env-overridable and default to on."""
     text = _read(_VALIDATION_SCRIPT)
-    assert (
-        'PILLARS_STRICT_SKIPS="${MOUSEDROID_VALIDATION_PILLARS_STRICT_SKIPS:-1}"' in text
-    ), "strict-skips must be a documented env-overridable knob defaulting to 1"
-    assert (
-        "MOUSEDROID_VALIDATION_PILLARS_STRICT_SKIPS" in text.split("set -uo pipefail")[0]
-    ), "the knob must be documented in the script header env-override catalog"
+    assert 'PILLARS_STRICT_SKIPS="${MOUSEDROID_VALIDATION_PILLARS_STRICT_SKIPS:-1}"' in text, (
+        "strict-skips must be a documented env-overridable knob defaulting to 1"
+    )
+    assert "MOUSEDROID_VALIDATION_PILLARS_STRICT_SKIPS" in text.split("set -uo pipefail")[0], (
+        "the knob must be documented in the script header env-override catalog"
+    )
     assert "--strict-skips" in text, "Phase-2 pillar step must be able to pass --strict-skips"
 
 
@@ -175,9 +175,9 @@ def test_phase1_dry_run_pillars_never_get_strict_skips() -> None:
     text = _read(_VALIDATION_SCRIPT)
     for line in text.splitlines():
         if "--dry-run" in line and "validate_pillars" in line:
-            assert (
-                "--strict-skips" not in line
-            ), f"dry-run pillar step must not pass --strict-skips: {line.strip()!r}"
+            assert "--strict-skips" not in line, (
+                f"dry-run pillar step must not pass --strict-skips: {line.strip()!r}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -201,9 +201,9 @@ def test_telemetry_token_key_is_parseable_from_env_template() -> None:
 def test_env_template_ships_no_placeholder_token_value() -> None:
     """The template must not ship a usable-looking default token."""
     text = _read(_ENV_EXAMPLE)
-    assert (
-        "MOUSEDROID_TELEMETRY_TOKEN=changeme" not in text
-    ), "a placeholder token invites deploying it verbatim; ship an empty value"
+    assert "MOUSEDROID_TELEMETRY_TOKEN=changeme" not in text, (
+        "a placeholder token invites deploying it verbatim; ship an empty value"
+    )
 
 
 def test_env_template_documents_esp32_repair_slot() -> None:

@@ -13,7 +13,7 @@ Tiered pytest suites (see [`../docs/testing.md`](../docs/testing.md) for the ful
 | Performance | `performance/` | Latency / throughput budgets (advisory CI job — shared runners are noisy) |
 | Smoke | `smoke/` | Sub-second import / parse (gated in the `test` CI job + `scripts/ci.sh`) |
 
-Gate: **85% line coverage** over `src/mousedroid` (`--cov-fail-under=85`), plus a
+Gate: **90% line coverage** over `src/mousedroid` (`--cov-fail-under=90`), plus a
 changed-file line gate (`scripts/check_branch_coverage.py` — its name refers to the git
 branch, not branch coverage). `tools/claude_hooks/` carries its own coverage stage with
 branch measurement reported advisory; see [`../docs/testing.md`](../docs/testing.md).
