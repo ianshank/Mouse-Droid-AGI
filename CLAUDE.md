@@ -74,7 +74,7 @@ workforce section below), `.claude/` (Claude Code assets: `settings.json`,
 ## Testing
 
 - **Framework**: pytest with `pytest-asyncio`, `pytest-cov`, `hypothesis`
-- **Coverage gate**: 85% **line** minimum over `src/mousedroid` (`--cov-fail-under=85`).
+- **Coverage gate**: 90% **line** minimum over `src/mousedroid` (`--cov-fail-under=90`).
   The threshold literal is repeated in ci.sh / ci.yml / release.yml and pinned equal to
   pyproject `fail_under` by `tests/regression/test_coverage_gate_single_source.py`.
   Suppression ratchets: inline noqa/type-ignore budgets (`test_suppression_budget.py`,
@@ -109,7 +109,7 @@ The load-bearing chain:
 0. **actionlint**: pinned workflow lint — guards the `${{ }}`-in-`run:` startup-failure trap
 1. **Lint**: `ruff check` + `ruff format --check` over `src/ tests/ tools/`, plus `ruff check scripts/`
 2. **Type check**: `mypy --strict src/` (depends on lint)
-3. **Test + Coverage**: `pytest --cov=src/mousedroid --cov-fail-under=85`, then regression + e2e,
+3. **Test + Coverage**: `pytest --cov=src/mousedroid --cov-fail-under=90`, then regression + e2e,
    then the smoke tier (sub-10-s; previously ran in no CI path)
 4. **Security**: `pip-audit --skip-editable` + `gitleaks` (both advisory via
    `continue-on-error`; see `.github/advisory_stages.yaml`)

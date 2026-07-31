@@ -87,7 +87,7 @@ echo "=== Unit + Property + Integration Tests (with coverage) ==="
 "$PYTHON_BIN" -m pytest tests/unit tests/property tests/integration \
     -m "not hardware" \
     --import-mode=importlib \
-    -v --cov=src/mousedroid --cov-report=term-missing --cov-fail-under=85
+    -v --cov=src/mousedroid --cov-report=term-missing --cov-fail-under=90
 
 echo "=== Smoke Tests ==="
 # Sub-10-second import/parse sanity tier. Deliberately OUTSIDE the
@@ -145,8 +145,8 @@ print(load_config().coverage.tools_line_min)")"
     --cov=tools/claude_hooks --cov-branch --cov-report=term-missing \
     --cov-fail-under="$WORKFORCE_COV_MIN"
 
-echo "=== Branch Coverage Gate (changed files >= 85%) ==="
-"$PYTHON_BIN" scripts/check_branch_coverage.py --min 85 \
+echo "=== Branch Coverage Gate (changed files >= 90%) ==="
+"$PYTHON_BIN" scripts/check_branch_coverage.py --min 90 \
     --tests tests/unit tests/property tests/integration
 
 echo "=== Prometheus Rules Validation (promtool) ==="

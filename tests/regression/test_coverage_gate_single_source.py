@@ -1,4 +1,4 @@
-"""Regression: the 85% coverage threshold has one source of truth.
+"""Regression: the 90% coverage threshold has one source of truth.
 
 The repo-wide line-coverage gate is declared in ``[tool.coverage.report]
 fail_under`` (pyproject.toml) but re-stated as a literal in four other
@@ -11,8 +11,8 @@ silently fork the gate:
 - ``.github/workflows/release.yml`` — ``MINIMUM_COVERAGE: "<N>"`` env
 
 ``.claude/workforce.yaml``'s ``coverage.tools_line_min`` is a DIFFERENT gate
-(tools/claude_hooks, its own invocation) that only coincidentally reads 85 —
-it is deliberately NOT asserted equal here.
+(tools/claude_hooks, its own invocation) and is deliberately NOT asserted
+equal here — it tracks its own threshold and may lag this one.
 """
 
 from __future__ import annotations

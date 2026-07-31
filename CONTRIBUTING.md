@@ -24,9 +24,9 @@ MOUSEDROID_MOCK_HARDWARE=true mousedroid
 
 - **Lint / format:** `ruff==0.16.0` (`ruff check` + `ruff format --check` on `src/`, `tests/`, `tools/`; plus `ruff check scripts/`)
 - **Types:** `mypy==2.3.0` `--strict`
-- **Tests:** `pytest` with **≥85% line coverage** over `src/mousedroid`
-  (`--cov-fail-under=85`), plus regression + e2e + smoke tiers; locally,
-  `scripts/check_branch_coverage.py --min 85` additionally gates changed
+- **Tests:** `pytest` with **≥90% line coverage** over `src/mousedroid`
+  (`--cov-fail-under=90`), plus regression + e2e + smoke tiers; locally,
+  `scripts/check_branch_coverage.py --min 90` additionally gates changed
   *lines* (git branch — not branch coverage, despite the name)
 - **Performance tier:** advisory CI job (shared-runner latency is noisy; budgets are Jetson-calibrated)
 - **Complexity:** `ruff C901`, `max-complexity = 15` (ADR-014)

@@ -6,7 +6,7 @@ Python files under src/mousedroid from git status, runs pytest with coverage,
 and fails if any changed source file falls below --min coverage.
 
 Example:
-    python scripts/check_branch_coverage.py --min 85 \
+    python scripts/check_branch_coverage.py --min 90 \
         --tests tests/unit tests/property tests/integration
 """
 
