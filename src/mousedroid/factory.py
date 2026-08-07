@@ -170,6 +170,16 @@ def build_esp32_driver(cfg: Settings) -> ESP32CommProtocol:
 
     from mousedroid.resilience.resilient_driver import ResilientESP32Driver
 
+    # F-025: surface the selected firmware command set at build time so a
+    # smoke-log grep shows which protocol the wire will carry (the
+    # ``*_built``-with-discriminator house pattern).
+    _log.info(
+        "esp32_driver_built",
+        driver=type(inner).__name__,
+        command_set=cfg.esp32.command_set,
+        protocol=cfg.esp32.protocol,
+        enabled=cfg.esp32.enabled,
+    )
     return ResilientESP32Driver(inner, cfg.retry, cfg.circuit_breaker)
 
 

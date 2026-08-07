@@ -125,3 +125,39 @@ def test_override_preserves_unrelated_esp32_fields(fake_by_id: Path) -> None:
     out = _resolve_esp32_serial_via_usbc_discovery(cfg)
     assert out.serial_port == str(live)
     assert out.serial_baud == 230400  # preserved
+
+
+def test_override_preserves_f025_command_set_fields(fake_by_id: Path) -> None:
+    """The discovery model_copy rides the F-025 selector fields through.
+
+    A rover-swap by-id override must never silently reset the firmware
+    command set (or its heartbeat / chassis knobs) back to defaults —
+    that would flip a stock-firmware rover onto the legacy protocol,
+    whose motion commands stock firmware parses as zeros.
+    """
+    live = fake_by_id / "usb-Silicon_Labs_CP2102N_Y-if00-port0"
+    live.touch()
+    usbc = USBCDiscoveryConfig(
+        enabled=True,
+        by_id_root=fake_by_id,
+        required_endpoints=[
+            USBCEndpointSpec(name="rover_esp32", by_id_glob="*CP2102N*-if00-port0"),
+        ],
+    )
+    cfg = _make_settings(serial_port="/dev/stale", usbc=usbc)
+    cfg = cfg.model_copy(
+        update={
+            "esp32": cfg.esp32.model_copy(
+                update={
+                    "command_set": "waveshare_stock",
+                    "heartbeat_window_multiple": 5.0,
+                    "chassis_has_wheel_encoders": False,
+                }
+            )
+        },
+    )
+    out = _resolve_esp32_serial_via_usbc_discovery(cfg)
+    assert out.serial_port == str(live)
+    assert out.command_set == "waveshare_stock"  # preserved
+    assert out.heartbeat_window_multiple == 5.0  # preserved
+    assert out.chassis_has_wheel_encoders is False  # preserved

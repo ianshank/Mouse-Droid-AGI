@@ -543,3 +543,54 @@ def test_build_lidar_feature_extractor_disabled():
 
     cfg = Settings(mock_hardware=True)  # lidar=None by default
     assert build_lidar_feature_extractor(cfg) is None
+
+
+# ---------------------------------------------------------------------------
+# F-025 — command-set threading through build_esp32_driver
+# ---------------------------------------------------------------------------
+
+
+def test_build_esp32_default_command_set_resolves_legacy_codec() -> None:
+    """Default selector: the built driver carries the legacy codec.
+
+    Asserts the default value inline first (the dispatch-test idiom) so a
+    silent selector-default drift fails here, not on the rover.
+    """
+    cfg = _real_settings(esp32={"protocol": "serial"})
+    assert cfg.esp32.command_set == "legacy"
+
+    from mousedroid.comms.command_set import LEGACY_CODEC
+    from mousedroid.factory import build_esp32_driver
+
+    driver = build_esp32_driver(cfg)
+    assert driver.inner._codec is LEGACY_CODEC
+
+
+def test_build_esp32_stock_command_set_resolves_stock_codec() -> None:
+    cfg = _real_settings(esp32={"protocol": "serial", "command_set": "waveshare_stock"})
+
+    from mousedroid.comms.command_set import WAVESHARE_STOCK_CODEC
+    from mousedroid.factory import build_esp32_driver
+
+    driver = build_esp32_driver(cfg)
+    assert driver.inner._codec is WAVESHARE_STOCK_CODEC
+    # The after-validator also derived the stock baud (no explicit pin).
+    assert driver.inner._baud == 115200
+
+
+@pytest.mark.parametrize("command_set", ["legacy", "waveshare_stock"])
+def test_build_esp32_mock_and_disabled_win_over_command_set(command_set: str) -> None:
+    """The mock/disabled guard runs BEFORE codec-bearing driver selection.
+
+    Mirrors the enabled-vs-protocol conditional-ordering pin: whatever the
+    selector says, a disabled ESP32 must produce the mock driver (which
+    builds no command dicts at all), so a bench without the board never
+    opens a serial port regardless of firmware flavour.
+    """
+    cfg = _real_settings(esp32={"protocol": "serial", "enabled": False, "command_set": command_set})
+
+    from mousedroid.comms.mock_driver import MockESP32Driver
+    from mousedroid.factory import build_esp32_driver
+
+    driver = build_esp32_driver(cfg)
+    assert isinstance(driver.inner, MockESP32Driver)
