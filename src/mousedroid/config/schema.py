@@ -11,7 +11,7 @@ import copy
 import enum
 import sys
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 if sys.version_info >= (3, 11):
     from enum import StrEnum
@@ -60,6 +60,18 @@ operationally impossible (the disabled backend cannot run inference, so
 it cannot fire a timeout or emit a latency sample). Narrowing at the
 call site prevents accidental cardinality growth from spurious
 ``{mode="none"}`` series."""
+
+ESP32CommandSetLiteral = Literal["legacy", "waveshare_stock"]
+"""ESP32 firmware command-set identifier. Source of truth:
+:class:`ESP32Config.command_set`.
+
+``"legacy"`` (the default) speaks the pre-F-025 private JSON protocol —
+byte-identical to every deployment that predates the selector.
+``"waveshare_stock"`` speaks the stock Waveshare ``General_Driver``
+command set (``ugv_base_general``): ``CMD_ROS_CTRL`` velocity, a
+``CMD_HEART_BEAT_SET`` chassis failsafe armed at connect, and battery /
+wheel telemetry read from the ``FEEDBACK_BASE_INFO`` frame. The codec
+dispatch lives in :mod:`mousedroid.comms.command_set`."""
 
 ReplayOutcomeLiteral = Literal["ok", "schema_mismatch"]
 """LMDB replay-record deserialization outcome. Drives the
@@ -382,6 +394,15 @@ class DomainRandomizationConfig(BaseModel):
     feature_noise_std: RangeF = Field(default_factory=lambda: RangeF(low=0.0, high=0.02))
 
 
+WAVESHARE_STOCK_BAUD: Final[int] = 115200
+"""UART baud of stock Waveshare ``General_Driver`` firmware.
+
+Confirmed against the vendor host driver (``ugv_rpi/base_ctrl.py`` opens
+115200). Lives here — not in :mod:`mousedroid.comms.command_set` — because
+its only consumer is the :class:`ESP32Config` after-validator below, and a
+config→comms import would invert the layering."""
+
+
 class ESP32Config(BaseModel):
     """ESP32 communication configuration for Wave Rover motor control."""
 
@@ -403,6 +424,59 @@ class ESP32Config(BaseModel):
     protocol: Literal["serial", "wifi"] = Field(
         "serial",
         description="Communication protocol: serial (UART) or wifi (HTTP)",
+    )
+    # F-025 — stock-Waveshare firmware command-set selector.
+    command_set: ESP32CommandSetLiteral = Field(
+        "legacy",
+        description=(
+            "Firmware command-set dispatch. Default ``legacy`` preserves "
+            "byte-identical pre-F-025 behaviour — the private "
+            '``{"T":1,"vx","vy","omega"}`` protocol. ``waveshare_stock`` '
+            "speaks the stock ``General_Driver`` firmware "
+            "(``waveshareteam/ugv_base_general``): ``CMD_ROS_CTRL`` "
+            '``{"T":13,"X","Z"}`` velocity in physical units, a '
+            "``CMD_HEART_BEAT_SET`` chassis failsafe armed at connect, and "
+            "battery voltage read from the ``FEEDBACK_BASE_INFO`` frame "
+            'instead of the legacy ``{"T":2}`` poll (which stock firmware '
+            "interprets as a motor-PID WRITE). Consumed by "
+            "``mousedroid.comms.command_set.resolve_command_codec``."
+        ),
+    )
+    heartbeat_enabled: bool = Field(
+        True,
+        description=(
+            "Arm the chassis-side heartbeat failsafe (``CMD_HEART_BEAT_SET``) "
+            "at connect when ``command_set='waveshare_stock'``. With the "
+            "failsafe armed, the firmware halts the motors on its own when no "
+            "command arrives within the heartbeat window — the software "
+            "watchdog restarts the *container*, but only this stops the "
+            "*wheels* after a wedged Jetson or dropped USB link. No-op under "
+            "the legacy command set (that firmware has no heartbeat command)."
+        ),
+    )
+    heartbeat_window_multiple: float = Field(
+        3.0,
+        gt=0,
+        description=(
+            "Chassis heartbeat window expressed as a multiple of the "
+            "``keepalive_hz`` command period: window_ms = 1000 / keepalive_hz "
+            "* multiple (default 10 Hz * 3.0 = 300 ms). Small enough that a "
+            "hung host halts the wheels quickly; large enough that the 30 Hz "
+            "control loop (~33 ms period) never trips it."
+        ),
+    )
+    chassis_has_wheel_encoders: bool = Field(
+        True,
+        description=(
+            "Whether the drive motors carry wheel encoders. The WAVE ROVER "
+            "chassis ships encoder-less (vendor audit R3) — its stock "
+            "firmware reports commanded speed, not measured speed, so the "
+            "hardware smoke test's encoder-velocity-fraction assertion is "
+            "unsatisfiable there. When ``False`` the motion-quality criterion "
+            "re-scopes to 'command accepted + e-stop within budget'. Default "
+            "``True`` preserves the historical assertion for chassis that do "
+            "have encoders."
+        ),
     )
     serial_port: str = Field("/dev/ttyUSB0", description="Serial port path")
     serial_baud: int = Field(
@@ -493,6 +567,35 @@ class ESP32Config(BaseModel):
             'string carries at least the JSON-framing bytes ``{"T": ...}``.'
         ),
     )
+
+    @model_validator(mode="after")
+    def _apply_command_set_coupling(self) -> Self:
+        """Couple transport settings to the stock command set (F-025).
+
+        Two rules, both inert under the default ``legacy`` selector:
+
+        * ``waveshare_stock`` requires ``protocol='serial'`` — stock
+          ``General_Driver`` firmware exposes no HTTP ``/cmd`` API, so a
+          wifi pairing could only ever silently no-op. Reject at load time.
+        * Stock firmware runs its UART at 115 200; the legacy schema default
+          is 1 000 000, at which a live stock board reads as line noise
+          (vendor audit R2 — this is how a healthy board can be diagnosed
+          dead). When the operator has NOT explicitly pinned ``serial_baud``
+          (YAML / env / kwarg — detected via ``model_fields_set``), derive
+          the stock baud. An explicit pin always wins.
+
+        Plain assignment is safe here: the model is not frozen and
+        ``validate_assignment`` is off, so this does not re-enter validation.
+        """
+        if self.command_set == "waveshare_stock":
+            if self.protocol == "wifi":
+                raise ValueError(
+                    "command_set='waveshare_stock' requires protocol='serial'; "
+                    "stock General_Driver firmware exposes no HTTP /cmd API"
+                )
+            if "serial_baud" not in self.model_fields_set:
+                self.serial_baud = WAVESHARE_STOCK_BAUD
+        return self
 
 
 class ExperienceConfig(BaseModel):
