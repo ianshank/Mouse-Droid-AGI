@@ -107,12 +107,13 @@ restated here drifts; core jobs are matrixed over Python 3.10/3.11/3.12).
 The load-bearing chain:
 
 0. **actionlint**: pinned workflow lint — guards the `${{ }}`-in-`run:` startup-failure trap
+   (runs in parallel with lint — nothing `needs:` it, so it flags rather than gates)
 1. **Lint**: `ruff check` + `ruff format --check` over `src/ tests/ tools/`, plus `ruff check scripts/`
 2. **Type check**: `mypy --strict src/` (depends on lint)
 3. **Test + Coverage**: `pytest --cov=src/mousedroid --cov-fail-under=90`, then regression + e2e,
    then the smoke tier (sub-10-s; previously ran in no CI path)
-4. **Security**: `pip-audit --skip-editable` + `gitleaks` (both advisory via
-   `continue-on-error`; see `.github/advisory_stages.yaml`)
+4. **Security**: `pip-audit --skip-editable` (advisory via `continue-on-error`; see
+   `.github/advisory_stages.yaml`) + `gitleaks` (blocking — promoted 2026-08-07)
 5. **Docker**: validate `Dockerfile.jetson` + `docker-compose.jetson.yml` (depends on test + typecheck)
 
 Plus `config-validate`, `usbc-config-gate`, `prometheus-check`, `vla-extras`,

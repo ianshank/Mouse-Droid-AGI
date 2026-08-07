@@ -442,21 +442,20 @@ jobs:
                     --import-mode=importlib
 
     # -------------------------------------------------------------------------
-    # Stage 4c: Advisory secret scan — gitleaks (WS-0.4, F-015)
+    # Stage 4c: Secret scan — gitleaks (WS-0.4, F-015) — BLOCKING
     # -------------------------------------------------------------------------
     # Full-history scan (fetch-depth 0) with the repo allowlist in
     # .gitleaks.toml — allowlisted by fake-key regex only, never by path.
     # The image is pinned to an exact patch tag (never "latest"), mirroring
     # the actionlint docker:// precedent above.
     #
-    # PROMOTION STATUS: advisory since 2026-07-03 (landed with PR #151).
-    # Stays continue-on-error: true until 7 consecutive green CI runs
-    # accumulate, then drop the flag to make it blocking. Tracked in
-    # .github/advisory_stages.yaml; runbook: docs/runbooks/secret-scanning.md.
+    # PROMOTION STATUS: promoted advisory → blocking 2026-08-07 after 34 days
+    # advisory (window was 30d; check_advisory_promotions.py flagged it
+    # overdue) with the job green across recent runs, including runs where
+    # other jobs failed. Runbook: docs/runbooks/secret-scanning.md.
     gitleaks:
         runs-on: ubuntu-latest
         needs: lint
-        continue-on-error: true
         # Third-party tooling over a full checkout: least privilege, and no
         # persisted GITHUB_TOKEN on disk for later steps to read.
         permissions:
@@ -467,7 +466,7 @@ jobs:
                   fetch-depth: 0
                   persist-credentials: false
 
-            - name: Secret scan (gitleaks, advisory)
+            - name: Secret scan (gitleaks, blocking)
               uses: docker://zricethezav/gitleaks:v8.24.3
               with:
                   # The checkout is owned by the runner uid while the container

@@ -17,13 +17,9 @@ stages:
       Landed PR #92 (Tier B2) with a 7-green-run gate; runs only when CI
       fires, so the calendar window is generous. Tier C-era follow-up owns
       the promotion.
-  - job: gitleaks
-    workflow: ci.yml
-    since: 2026-07-03
-    promote_after_days: 30
-    reason: >-
-      F-015 secret-scan gate - advisory until 7 consecutive green runs
-      (docs/runbooks/secret-scanning.md), expected well inside 30 days.
+  # gitleaks: promoted advisory -> blocking 2026-08-07 (34 days advisory,
+  # green across recent runs incl. runs where other jobs failed) - entry
+  # removed because the tracker only covers jobs carrying continue-on-error.
   - job: vulture-audit
     workflow: ci.yml
     since: 2026-07-03
