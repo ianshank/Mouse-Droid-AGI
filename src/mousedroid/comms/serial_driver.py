@@ -18,6 +18,8 @@ from mousedroid.comms.base_driver import BaseESP32Driver
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from mousedroid.config.schema import ESP32Config
 
 try:
@@ -75,6 +77,9 @@ class SerialESP32Driver(BaseESP32Driver):
         self._consecutive_timeouts = 0
         self._is_degraded = False
         _log.info("serial_esp32_connected", port=self._port, baud=self._baud)
+        # F-025: codec connect-time commands (chassis heartbeat under
+        # waveshare_stock; empty under legacy — zero extra writes).
+        await self._arm_command_set()
 
     def _open_serial(self) -> Any:  # pragma: no cover
         """Open the serial port (blocking)."""
@@ -100,18 +105,18 @@ class SerialESP32Driver(BaseESP32Driver):
     # Transport implementation
     # ------------------------------------------------------------------
 
-    async def _send_command(self, cmd: dict[str, int]) -> None:
+    async def _send_command(self, cmd: Mapping[str, float]) -> None:
         """Write a JSON command to the serial port.
 
         Args:
-            cmd: Command dictionary to serialise and send.
+            cmd: Command payload to serialise and send.
         """
         await self._send_json(cmd)
 
     async def _query_data(
         self,
         resource: str,
-        cmd: dict[str, int] | None = None,
+        cmd: Mapping[str, float] | None = None,
     ) -> dict[str, Any]:
         """Send an optional command then read one JSON line from serial.
 
@@ -196,13 +201,13 @@ class SerialESP32Driver(BaseESP32Driver):
     # Low-level serial helpers
     # ------------------------------------------------------------------
 
-    async def _send_json(self, data: dict[str, Any]) -> None:
+    async def _send_json(self, data: Mapping[str, Any]) -> None:
         """Serialise and send JSON over serial.
 
         Args:
-            data: Dictionary to send as JSON.
+            data: Payload mapping to send as JSON.
         """
-        payload = json.dumps(data).encode() + b"\n"
+        payload = json.dumps(dict(data)).encode() + b"\n"
         await asyncio.to_thread(self._write_bytes, payload)
 
     def _write_bytes(self, payload: bytes) -> None:  # pragma: no cover

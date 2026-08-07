@@ -3,6 +3,13 @@
 Both ``SerialESP32Driver`` and ``WiFiESP32Driver`` inherit this base to share
 the high-level command/response logic.  Subclasses only implement the
 transport layer (serial I/O vs HTTP).
+
+Command building and response parsing are delegated to the command-set
+codec selected by ``cfg.command_set`` (F-025 —
+:mod:`mousedroid.comms.command_set`), so this class stays firmware-agnostic:
+the default ``legacy`` codec reproduces the historical private protocol
+byte-for-byte, while ``waveshare_stock`` speaks stock ``General_Driver``
+firmware.
 """
 
 from __future__ import annotations
@@ -10,15 +17,13 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
-from mousedroid.comms._utils import (
-    ESP32_CMD_TYPE_BATTERY,
-    ESP32_CMD_TYPE_STOP,
-    build_velocity_cmd,
-    parse_encoder_reading,
-)
+from mousedroid.comms.command_set import heartbeat_window_ms, resolve_command_codec
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from mousedroid.comms.command_set import ESP32CommandCodec
     from mousedroid.comms.protocol import EncoderReading
     from mousedroid.config.schema import ESP32Config
 
@@ -31,7 +36,8 @@ class BaseESP32Driver(ABC):
     Subclasses provide transport-specific ``connect``, ``disconnect``,
     ``_send_command``, and ``_query_data`` implementations.  All high-level
     protocol methods (``send_velocity``, ``read_encoders``,
-    ``get_battery_voltage``, ``emergency_stop``) are implemented here.
+    ``get_battery_voltage``, ``emergency_stop``) are implemented here and
+    delegate command shapes to the resolved command-set codec.
     """
 
     def __init__(self, cfg: ESP32Config) -> None:
@@ -44,6 +50,14 @@ class BaseESP32Driver(ABC):
         self._timeout: float = cfg.command_timeout_s
         self._connected: bool = False
         self._last_velocity: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        # F-025: codec resolved once from cfg.command_set — "legacy" default
+        # reproduces the pre-selector protocol byte-for-byte.
+        self._codec: ESP32CommandCodec = resolve_command_codec(cfg)
+        # Once-per-connection latch for the lateral-velocity warning. Lives
+        # on the driver (codecs are stateless shared singletons) and is
+        # re-armed by _arm_command_set() on every successful connect, so
+        # resilience-wrapper reconnects surface the warning again.
+        self._lateral_warn_emitted: bool = False
 
     # ------------------------------------------------------------------
     # Abstract transport interface — implemented by each subclass
@@ -58,18 +72,20 @@ class BaseESP32Driver(ABC):
         """Close the transport connection to the ESP32."""
 
     @abstractmethod
-    async def _send_command(self, cmd: dict[str, int]) -> None:
+    async def _send_command(self, cmd: Mapping[str, float]) -> None:
         """Send a fire-and-forget command to the ESP32.
 
         Args:
-            cmd: Command dictionary (e.g. ``{"T": 0}`` for stop).
+            cmd: Command payload (e.g. ``{"T": 0}`` for the legacy stop).
+                Read-only mapping so codecs may return ``dict[str, int]``
+                (legacy PWM) or ``dict[str, float]`` (stock physical units).
         """
 
     @abstractmethod
     async def _query_data(
         self,
         resource: str,
-        cmd: dict[str, int] | None = None,
+        cmd: Mapping[str, float] | None = None,
     ) -> dict[str, Any]:
         """Fetch JSON data from the ESP32.
 
@@ -90,26 +106,28 @@ class BaseESP32Driver(ABC):
     # ------------------------------------------------------------------
 
     async def send_velocity(self, vx: float, vy: float, omega: float) -> None:
-        """Send velocity command as PWM values.
+        """Send a velocity command via the selected command-set codec.
 
-        Converts physical velocity setpoints to the integer PWM range and
-        dispatches the command via the transport layer. Emits the uniform
-        ``command_dispatch`` INFO event (via :func:`log_command_dispatch`)
-        so operators grepping smoke logs see one consistent record shape
-        regardless of which transport (serial / wifi / mock / resilient
-        wrapper) fielded the call. The original per-call DEBUG event
-        ``esp32_velocity_sent`` is retained for backwards compatibility
-        with existing log-greps.
+        Under the ``legacy`` codec this is the historical PWM-scaled dict;
+        under ``waveshare_stock`` it is ``CMD_ROS_CTRL`` in physical units.
+        Emits the uniform ``command_dispatch`` DEBUG event (via
+        :func:`log_command_dispatch`) so operators grepping smoke logs see
+        one consistent record shape regardless of which transport (serial /
+        wifi / mock / resilient wrapper) fielded the call. The original
+        per-call DEBUG event ``esp32_velocity_sent`` is retained for
+        backwards compatibility with existing log-greps.
 
         Args:
             vx: Forward velocity in m/s.
             vy: Lateral velocity in m/s.
             omega: Angular velocity in rad/s.
         """
-        cmd = build_velocity_cmd(vx, vy, omega, self._cfg)
+        if vy != 0.0 and not self._codec.supports_lateral:
+            self._warn_lateral_unsupported(vy)
+        cmd = self._codec.build_velocity(vx, vy, omega, self._cfg)
         await self._send_command(cmd)
         self._last_velocity = (vx, vy, omega)
-        # Uniform INFO-level dispatch event for smoke-triage greps.
+        # Uniform DEBUG-level dispatch event for smoke-triage greps.
         # Uses the concrete subclass name so the resilient wrapper still
         # surfaces the *inner* transport in ``driver=`` for traceability.
         log_command_dispatch(
@@ -124,26 +142,78 @@ class BaseESP32Driver(ABC):
     async def read_encoders(self) -> EncoderReading:
         """Read encoder data from ESP32.
 
+        The codec supplies both the optional poll command (stock firmware
+        must be polled with ``CMD_BASE_FEEDBACK``; legacy sends nothing)
+        and the response parser.
+
         Returns:
             ``EncoderReading`` parsed from the ESP32 response.
         """
-        data = await self._query_data("encoders")
-        return parse_encoder_reading(data)
+        data = await self._query_data("encoders", self._codec.encoder_query())
+        return self._codec.parse_encoders(data)
 
     async def get_battery_voltage(self) -> float:
-        """Query battery voltage from ESP32 ADC.
+        """Query battery voltage from the ESP32.
+
+        Under ``legacy`` this sends the historical ``{"T":2}`` poll; under
+        ``waveshare_stock`` it polls ``CMD_BASE_FEEDBACK`` (a read — the
+        legacy poll is stock ``CMD_SET_MOTOR_PID``, a motor-controller
+        write) and parses the ``FEEDBACK_BASE_INFO`` frame.
 
         Returns:
-            Battery voltage in volts.
+            Battery voltage in volts (0.0 on timeout / unparseable frame).
         """
-        data = await self._query_data("battery", {"T": ESP32_CMD_TYPE_BATTERY})
-        return float(data.get("v", 0.0))
+        data = await self._query_data("battery", self._codec.battery_query())
+        return self._codec.parse_battery(data)
 
     async def emergency_stop(self) -> None:
-        """Send emergency stop command and zero stored velocity."""
-        await self._send_command({"T": ESP32_CMD_TYPE_STOP})
+        """Send the strongest stop the firmware understands; zero velocity."""
+        await self._send_command(self._codec.build_stop())
         self._last_velocity = (0.0, 0.0, 0.0)
         _log.warning("esp32_emergency_stop")
+
+    # ------------------------------------------------------------------
+    # Command-set arming (called by transports at the end of connect())
+    # ------------------------------------------------------------------
+
+    async def _arm_command_set(self) -> None:
+        """Send the codec's connect-time commands and reset warn latches.
+
+        Under ``waveshare_stock`` this arms the chassis heartbeat failsafe
+        (``CMD_HEART_BEAT_SET``) so the firmware halts the motors on its own
+        if the host wedges; under ``legacy`` the command list is empty and
+        the connect sequence is byte-identical to pre-F-025. Also re-arms
+        the once-per-connection lateral warning so a reconnect surfaces it
+        again.
+        """
+        self._lateral_warn_emitted = False
+        commands = self._codec.connect_commands(self._cfg)
+        for cmd in commands:
+            await self._send_command(cmd)
+        if commands:
+            _log.info(
+                "esp32_heartbeat_armed",
+                command_set=self._cfg.command_set,
+                window_ms=heartbeat_window_ms(self._cfg),
+            )
+
+    def _warn_lateral_unsupported(self, vy: float) -> None:
+        """Surface a dropped lateral setpoint — WARNING once, DEBUG after.
+
+        ``send_velocity`` runs on the 30 Hz control path, so only the first
+        occurrence per connection logs at WARNING (the
+        :func:`log_command_dispatch` rate rationale); subsequent drops leave
+        a DEBUG breadcrumb for smoke triage.
+        """
+        if self._lateral_warn_emitted:
+            _log.debug("esp32_lateral_velocity_unsupported", vy=vy)
+            return
+        self._lateral_warn_emitted = True
+        _log.warning(
+            "esp32_lateral_velocity_unsupported",
+            vy=vy,
+            command_set=self._cfg.command_set,
+        )
 
 
 def log_command_dispatch(*, driver_name: str, vx: float, vy: float, omega: float) -> None:
