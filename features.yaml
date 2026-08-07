@@ -427,3 +427,73 @@ features:
       roster, new skills, .mcp.json, docs restructure) are tracked in the
       bundle's tasks.md. implemented_in pins to the squash SHA post-merge (per
       the F-015..F-021 convention).
+
+  - id: "F-025"
+    epic: "Rover bring-up"
+    name: "ESP32 driver speaks stock Waveshare firmware protocol"
+    description: >-
+      Retarget the ESP32 comms drivers at the stock Waveshare General_Driver
+      command set (waveshareteam/ugv_base_general). The private
+      {"T":1,"vx","vy","omega"} protocol has no firmware implementing it
+      (firmware/ was never committed; scripts/flash_esp32.sh references a
+      nonexistent binary), so on stock firmware motion commands parse as zeros,
+      the {"T":2} battery poll is CMD_SET_MOTOR_PID (a write fired by
+      assert_power_chain immediately before motion), and the e-stop command is
+      unhandled. Scope: CMD_ROS_CTRL {"T":13,"X","Z"} velocity mapping (named
+      constants sourced from json_cmd.h), chassis heartbeat failsafe
+      (CMD_HEART_BEAT_SET at connect, window keyed to keepalive_hz), battery
+      voltage from FEEDBACK_BASE_INFO (re-enables the 18650 undervoltage
+      cutoff), 115200 default baud, and the encoder-less smoke re-scope
+      (command ACKed + e-stop within budget replaces the unsatisfiable
+      encoder-velocity criterion - audit R3). Backwards compatible via a
+      protocol-selector config field so existing YAML loads unchanged.
+    category: "functional"
+    priority: "critical"
+    status: "todo"
+    tier: "fast"
+    verification:
+      - "unit tests pin the stock command dicts (T=13 velocity, T=136 heartbeat, feedback voltage parse)"
+      - "legacy protocol path stays byte-identical when the selector keeps its default"
+      - "power_chain probe no longer emits a PID-write on the battery step under the stock selector"
+    validation_command: >-
+      python -m pytest tests/unit/test_comms_utils.py
+      tests/unit/test_base_driver.py -q
+    implemented_in: null
+    depends_on: ["F-001"]
+    notes: >-
+      Findings R1/R2/R3/R5/R6 of docs/analysis/rover-jetson-integration-gaps.md,
+      severities re-verified in
+      docs/analysis/next-steps-peer-review-2026-08-07.md. Pure software - does
+      not wait on the F-008 bench work; F-008's live-rover verification runs on
+      top of this retarget.
+
+  - id: "F-026"
+    epic: "Hygiene"
+    name: "Declared governance budgets have consumers"
+    description: >-
+      Two config knobs parse but enforce nothing: JetsonConfig.power_mode
+      (Literal 15W/7W) is read nowhere outside schema/config and cannot express
+      JetPack 6.2's 25W/MAXN_SUPER modes while jetson_system_setup.sh hardcodes
+      nvpmodel -m 0 (audit J1); tools/claude_hooks DocsConfig.core_max_lines
+      (250) has no hook consumer while CLAUDE.md stands at 941 lines. Wire each
+      knob to a real consumer or delete it, and add an AQA test asserting every
+      declared budget/mode field has at least one consumer outside schema
+      parsing so the class of defect cannot recur silently.
+    category: "infrastructure"
+    priority: "medium"
+    status: "todo"
+    tier: "fast"
+    verification:
+      - "grep finds a non-schema consumer for every surviving budget/mode field"
+      - "new AQA test fails when a budget field loses its last consumer"
+    validation_command: >-
+      python -m pytest tests/regression -k "budget or governance" -q
+    implemented_in: null
+    depends_on: ["F-001"]
+    notes: >-
+      Class-level finding from
+      docs/analysis/next-steps-peer-review-2026-08-07.md section 3. The
+      DocsConfig half overlaps the F-024 docs-consolidation phase - closing
+      F-024 phase 6 satisfies it for core_max_lines; power_mode needs its own
+      wire-or-delete decision verified on-device (nvpmodel -q indices are
+      per-module and per-JetPack).
