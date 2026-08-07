@@ -312,6 +312,62 @@ canonical structlog grep recipes (`usbc_endpoint_*`,
 `esp32_raw_line`). The C4 component diagram for the smoke gate is at
 `docs/architecture/c4-usbc-smoke.md`.
 
+## ESP32 firmware command-set codec (F-025 — stock-Waveshare retarget)
+
+The private ESP32 JSON protocol has **no firmware behind it** (`firmware/` was
+never committed); any board attached post-repair runs stock Waveshare
+`General_Driver` firmware. The comms layer therefore dispatches every
+command-build/response-parse through a codec seam. Non-negotiable contracts
+(pinned by `tests/unit/test_comms_utils.py` + `tests/unit/test_base_driver.py`
+— F-025's `validation_command` — plus `tests/regression/test_f025_{aqa,
+backwards_compat}.py`):
+
+- **`ESP32Config.command_set: Literal["legacy", "waveshare_stock"]`** — single
+  dispatch key (public alias `ESP32CommandSetLiteral`). `legacy` (default)
+  preserves byte-identical pre-F-025 wire bytes — golden JSON strings are
+  pinned. It is a SEPARATE field, never a widened `protocol`: the factory's
+  serial/else ladder would silently route a third `protocol` value to WiFi.
+  Codecs (`mousedroid/comms/command_set.py`) are **stateless singletons**;
+  per-connection state (the lateral-warn latch) lives on the driver and is
+  re-armed by `_arm_command_set()` on every connect.
+- **The stock battery step is a READ.** Legacy `{"T":2}` is stock
+  `CMD_SET_MOTOR_PID` — a motor-controller WRITE that `assert_power_chain`
+  fired immediately before commanding motion. `WaveshareStockCodec` polls
+  `CMD_BASE_FEEDBACK` (T=130) and parses the **T-gated** `FEEDBACK_BASE_INFO`
+  (T=1001) frame (`"v"` volts, `"L"`/`"R"` wheel speeds); stock frames stream
+  with no per-command ACKs, so a non-1001 frame parses to the legacy
+  silent-zero with a DEBUG breadcrumb. **Stock encoder reads MUST poll** —
+  serial `_query_data` only writes when given a command; an un-polled stock
+  read returns zeros forever (the legacy codec returns `None`, preserving the
+  historical no-write read).
+- **Heartbeat failsafe armed at connect.** `CMD_HEART_BEAT_SET`
+  (`{"T":136,"cmd":<ms>}`) with window = `1000/keepalive_hz *
+  heartbeat_window_multiple` (default 300 ms — `keepalive_hz`'s first real
+  consumer; the derivation is pinned). The software watchdog restarts the
+  *container*; only this stops the *wheels* after a wedged host. Stock defines
+  NO e-stop command — stop is `{"T":13,"X":0,"Z":0}`. NOTE: the 300 ms window
+  is shorter than `smoke_test_settle_s` (0.5 s) — anything that holds motion
+  across the window must re-send at `keepalive_hz` (see
+  `test_motor_smoke._settle_with_keepalive`).
+- **Baud coupling defers to the operator.** The schema default stays
+  1_000_000; selecting `waveshare_stock` derives 115200 ONLY when
+  `serial_baud` is not in `model_fields_set` (an explicit YAML/env/kwarg pin
+  always wins). stock+`wifi` is REJECTED at YAML-load (stock firmware has no
+  HTTP `/cmd` API). **No `config/*.yaml` overlay opts in yet** — the
+  `config-compat` gate validates overlay edits against the deployed image's
+  schema, so the live-rover lever is `MOUSEDROID_ESP32__COMMAND_SET=
+  waveshare_stock` until `deployments/jetson-image.json` is re-pinned.
+- **Encoder-less smoke re-scope.** `chassis_has_wheel_encoders: bool = True`;
+  when `False` (WAVE ROVER — audit R3) the motion-quality criterion becomes
+  "command accepted + e-stop within budget" instead of the unsatisfiable
+  encoder-velocity fraction. Payload typing is `Mapping[str, float]`
+  (covariant) — NEVER widen back to `dict[str, float]`; `dict` invariance
+  breaks `mypy --strict` against the legacy codec's int dicts.
+- **Grep events:** `esp32_driver_built` (factory, `command_set=`
+  discriminator), `esp32_heartbeat_armed` (INFO, `window_ms=`),
+  `esp32_lateral_velocity_unsupported` (WARN once per connection, DEBUG
+  after — 30 Hz path), `esp32_stock_frame_mismatch` (DEBUG).
+
 ## LLM gateway + cloud/local failover (PR #107 — Tier C-rover deliberative brain)
 
 The deliberative mission-translation path now supports cloud Claude as

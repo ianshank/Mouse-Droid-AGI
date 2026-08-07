@@ -8,6 +8,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — F-025: ESP32 driver speaks stock Waveshare firmware (command-set codec seam)
+
+The private ESP32 JSON protocol never had firmware behind it — `firmware/` was
+never committed, and stock `General_Driver` firmware reads the legacy motion
+command as zeros while the legacy battery poll (`{"T":2}`) is stock
+`CMD_SET_MOTOR_PID`: a motor-controller **write** fired immediately before
+commanding motion. The comms layer now dispatches every command-build and
+response-parse through a codec seam, default-`legacy` and byte-identical:
+
+- **`ESP32Config.command_set` selector** (`legacy` default | `waveshare_stock`)
+  + `heartbeat_enabled` / `heartbeat_window_multiple` /
+  `chassis_has_wheel_encoders`, all defaulted (invariant #9). The
+  after-validator derives the stock 115 200 baud only when `serial_baud` is
+  not explicitly pinned, and rejects stock+`wifi` at YAML-load (stock
+  firmware has no HTTP `/cmd` API).
+- **`mousedroid/comms/command_set.py`** — `ESP32CommandCodec` Protocol with
+  stateless singletons: `LegacyCommandCodec` (pure `_utils` delegation;
+  golden wire-JSON strings pinned) and `WaveshareStockCodec` (vendor keys
+  verified against `json_cmd.h` + `ugv_advance.h`: `CMD_ROS_CTRL`
+  `{"T":13,"X","Z"}` clamped physical units; stop = zero-velocity T=13 —
+  stock defines no e-stop command; battery/encoders polled via
+  `CMD_BASE_FEEDBACK` T=130 and parsed from the T-gated
+  `FEEDBACK_BASE_INFO` 1001 frame; `CMD_HEART_BEAT_SET` chassis failsafe
+  armed at connect, window = `1000/keepalive_hz * multiple` —
+  `keepalive_hz`'s first real consumer).
+- **Driver delegation** — `BaseESP32Driver` resolves its codec from config
+  (no constructor change); transports call `_arm_command_set()` at connect
+  (zero extra writes under legacy — pinned); payloads widened to covariant
+  `Mapping[str, float]`; `vy` on a lateral-less codec logs
+  `esp32_lateral_velocity_unsupported` WARN-once-per-connection.
+- **Encoder-less smoke re-scope (audit R3)** — with
+  `chassis_has_wheel_encoders: false` the unsatisfiable encoder-velocity
+  criterion becomes "command accepted + e-stop within budget"; under stock
+  the settle window re-sends at `keepalive_hz` (the 300 ms heartbeat window
+  is shorter than the 0.5 s settle). `jetson_smoke_test.sh`'s serial probe
+  follows the selector (stock probes with a read that elicits a reply).
+- **Gates:** stock/legacy pins in the two `validation_command` files +
+  `test_f025_{backwards_compat,aqa}.py`, `test_f025_sanity.py` (Literal
+  YAML round-trip), property invariants (clamping/no-quantisation/window
+  monotonicity), factory dispatch + USB-C `model_copy` preservation pins,
+  resilience-layer command-set-agnosticism pin.
+- **Docs reconciled:** CLAUDE.md F-025 contract block,
+  `docs/runbooks/jetson-rover-smoke.md` (selector/baud triage rows; the
+  "no response on a presumed-live board" row now points at the
+  command-set/baud mismatch before declaring boards dead),
+  `docs/architecture/c4-usbc-smoke.md` node, `config/docker.env.example`
+  env lever. No `config/*.yaml` overlay opts in (config-compat gate);
+  `MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock` is the live-rover lever.
+
 ### Fixed — Jetson deploy prep: truthful deploy surface + campaign plan
 
 Repo-side prep for a full on-device deployment and validation campaign. Each

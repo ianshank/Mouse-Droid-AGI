@@ -52,19 +52,19 @@ _log = get_logger(__name__)
 # Stock Waveshare General_Driver command constants (json_cmd.h)
 # ---------------------------------------------------------------------------
 
-WAVESHARE_CMD_ROS_CTRL: Final[int] = 13
+WAVESHARE_CMD_ROS_CTRL: Final[int] = 13  # hardcoded-ok: vendor protocol constant (json_cmd.h)
 """``CMD_ROS_CTRL`` — velocity in physical units: ``{"T":13,"X":<m/s>,"Z":<rad/s>}``."""
 
-WAVESHARE_CMD_BASE_FEEDBACK: Final[int] = 130
+WAVESHARE_CMD_BASE_FEEDBACK: Final[int] = 130  # hardcoded-ok: vendor protocol constant
 """``CMD_BASE_FEEDBACK`` — polls one ``FEEDBACK_BASE_INFO`` frame."""
 
-WAVESHARE_CMD_HEART_BEAT_SET: Final[int] = 136
+WAVESHARE_CMD_HEART_BEAT_SET: Final[int] = 136  # hardcoded-ok: vendor protocol constant
 """``CMD_HEART_BEAT_SET`` — arms the chassis failsafe: ``{"T":136,"cmd":<window ms>}``."""
 
-WAVESHARE_FEEDBACK_BASE_INFO: Final[int] = 1001
+WAVESHARE_FEEDBACK_BASE_INFO: Final[int] = 1001  # hardcoded-ok: vendor protocol constant
 """``FEEDBACK_BASE_INFO`` — the telemetry frame carrying ``L``/``R``/``v``."""
 
-_MS_PER_SECOND: Final[float] = 1000.0
+_MS_PER_SECOND: Final[float] = 1000.0  # hardcoded-ok: unit conversion, not a tunable
 """Milliseconds per second — heartbeat-window derivation factor."""
 
 

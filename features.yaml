@@ -449,7 +449,7 @@ features:
       protocol-selector config field so existing YAML loads unchanged.
     category: "functional"
     priority: "critical"
-    status: "todo"
+    status: "done"
     tier: "fast"
     verification:
       - "unit tests pin the stock command dicts (T=13 velocity, T=136 heartbeat, feedback voltage parse)"
@@ -458,7 +458,7 @@ features:
     validation_command: >-
       python -m pytest tests/unit/test_comms_utils.py
       tests/unit/test_base_driver.py -q
-    implemented_in: null
+    implemented_in: "claude/project-next-steps-p92so0"
     depends_on: ["F-001"]
     notes: >-
       Findings R1/R2/R3/R5/R6 of docs/analysis/rover-jetson-integration-gaps.md,
