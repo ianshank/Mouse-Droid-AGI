@@ -455,9 +455,14 @@ features:
       - "unit tests pin the stock command dicts (T=13 velocity, T=136 heartbeat, feedback voltage parse)"
       - "legacy protocol path stays byte-identical when the selector keeps its default"
       - "power_chain probe no longer emits a PID-write on the battery step under the stock selector"
+      - "selecting stock derives 115200 baud through the REAL load_settings over both shipped overlays"
+      - "an unreadable frame parses to None, never a fabricated 0.0 that reads as a flat pack"
+      - "the derived heartbeat window is strictly positive and never undercuts the driver's blocking budgets"
     validation_command: >-
       python -m pytest tests/unit/test_comms_utils.py
-      tests/unit/test_base_driver.py -q
+      tests/unit/test_base_driver.py
+      tests/regression/test_f025_backwards_compat.py
+      tests/regression/test_f025_aqa.py -q
     implemented_in: "claude/project-next-steps-p92so0"
     depends_on: ["F-001"]
     notes: >-
