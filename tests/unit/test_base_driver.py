@@ -337,6 +337,30 @@ class TestStockCommandSetDelegation:
         driver.query_responses["battery"] = {"T": 1003, "v": 11.6}
         assert await driver.get_battery_voltage() == 0.0
 
+    async def test_unavailable_battery_warns_once_then_debugs(self) -> None:
+        """The 30 Hz path must not emit a WARNING per tick.
+
+        A missing reading is persistent, not transient: at 30 Hz an
+        unconditional WARNING would bury every other line in the log, which is
+        precisely when an operator most needs to read it. The latch is re-armed
+        per connection by ``_arm_command_set``, so a reconnect still warns.
+        """
+        driver = _make_stock_stub()
+        driver.query_responses["battery"] = {"T": 1003, "v": 11.6}
+
+        assert driver._battery_warn_emitted is False
+        assert await driver.get_battery_voltage() == 0.0
+        assert driver._battery_warn_emitted is True
+        # Second and third reads take the DEBUG branch; the value contract is
+        # unchanged and nothing raises.
+        assert await driver.get_battery_voltage() == 0.0
+        assert await driver.get_battery_voltage() == 0.0
+        assert driver._battery_warn_emitted is True
+
+        # A fresh connection re-arms the latch so the next fault warns again.
+        await driver.connect()
+        assert driver._battery_warn_emitted is False
+
     async def test_connect_arms_heartbeat(self) -> None:
         """CMD_HEART_BEAT_SET goes out once per connect.
 

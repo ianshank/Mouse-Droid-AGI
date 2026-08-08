@@ -17,14 +17,19 @@ mapping cut-offs, etc.).
 from __future__ import annotations
 
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeAlias
 
 if TYPE_CHECKING:
     from PIL.Image import Image as PILImage
     from PIL.ImageDraw import ImageDraw as PILImageDraw
     from PIL.ImageFont import FreeTypeFont, ImageFont
 
-    PILFont = ImageFont | FreeTypeFont
+    # The explicit ``TypeAlias`` matters when Pillow is NOT installed: mypy then
+    # resolves both operands to ``Any``, the union collapses to a plain variable,
+    # and every annotation below fails with "not valid as a type". Pillow ships
+    # in the ``[telemetry]`` extra, so a bare ``pip install -e ".[dev]"`` hits
+    # exactly that — three errors that look like defects and are not.
+    PILFont: TypeAlias = ImageFont | FreeTypeFont
 
 # --- Artwork geometry constants (pixel-art parameters, not runtime tunables) -
 DEFAULT_HALF_DIVISOR: int = 2  # used to halve dimensions when centring

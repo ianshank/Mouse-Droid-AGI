@@ -89,6 +89,23 @@ def test_indirect_pillow_modules_carry_a_gate(relative_path: str) -> None:
     )
 
 
+def test_pil_font_union_is_an_explicit_type_alias() -> None:
+    """``PILFont`` must be annotated ``TypeAlias``, not left as a bare union.
+
+    With Pillow absent, mypy resolves both operands to ``Any``, the union
+    collapses to a plain variable, and every annotation using it fails with
+    "not valid as a type" — three ``mypy --strict`` errors that look like
+    defects in the change under review and are not.
+    """
+    source = (
+        _TESTS_ROOT.parent / "src" / "mousedroid" / "hardware" / "display" / "expressions.py"
+    ).read_text()
+    assert "PILFont: TypeAlias = " in source, (
+        "PILFont lost its explicit TypeAlias annotation — mypy --strict will "
+        "report three phantom errors on any checkout without the [telemetry] extra"
+    )
+
+
 def test_pillow_degrade_is_logged_not_silent() -> None:
     """``_encode_camera_frame_jpeg`` leaves a breadcrumb when Pillow is absent.
 

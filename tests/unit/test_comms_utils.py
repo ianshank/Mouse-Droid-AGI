@@ -398,6 +398,11 @@ class TestWaveshareStockTelemetry:
         assert WAVESHARE_STOCK_CODEC.parse_battery({"T": "junk", "v": 9.9}) is None
         # A well-formed 1001 frame missing the voltage key is also "no reading".
         assert WAVESHARE_STOCK_CODEC.parse_battery({"T": 1001, "L": 0.0}) is None
+        # ...as is one whose voltage is present but not a number. UART noise
+        # and firmware churn both produce this, and `float()` raising out of
+        # the parse would take down the whole sensor gather.
+        assert WAVESHARE_STOCK_CODEC.parse_battery({"T": 1001, "v": "n/a"}) is None
+        assert WAVESHARE_STOCK_CODEC.parse_battery({"T": 1001, "v": [11.4]}) is None
 
     def test_encoder_parse_maps_l_r_wheel_speeds(self) -> None:
         from mousedroid.comms.command_set import (
