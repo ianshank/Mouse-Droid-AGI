@@ -7,6 +7,11 @@ import hashlib
 import numpy as np
 import pytest
 
+# Pillow ships in the ``[telemetry]`` extra, not the bare ``[dev]`` one. Without
+# this gate the module raises ImportError on a ``pip install -e ".[dev]"``
+# checkout and the whole file errors instead of skipping.
+pytest.importorskip("PIL", reason="Pillow (mousedroid[telemetry]) renders the face framebuffer")
+
 from mousedroid.hardware.display.expressions import (
     Expression,
     render_expression,

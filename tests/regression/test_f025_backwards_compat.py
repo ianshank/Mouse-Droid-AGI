@@ -130,3 +130,80 @@ def test_field_coexistence_no_cross_reset() -> None:
     assert cfg.command_set == "legacy"
     assert cfg.heartbeat_enabled is True
     assert cfg.serial_baud == 1_000_000
+
+
+# ---------------------------------------------------------------------------
+# D1 regression — the operator path that shipped broken.
+#
+# Every test above constructs ESP32Config/Settings directly, where
+# ``serial_baud`` genuinely IS unset. That is precisely why the original
+# derivation bug survived review: the real loader merges the shipped YAML
+# (which pins serial_baud) and passes it to Settings(**merged), so the field
+# is always "set". These cases exercise ``load_settings`` — the only path an
+# operator ever takes.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("overlay", ["default.yaml", "jetson_production.yaml"])
+def test_env_lever_derives_stock_baud_through_the_real_loader(
+    monkeypatch: pytest.MonkeyPatch, overlay: str
+) -> None:
+    """``MOUSEDROID_ESP32__COMMAND_SET`` + a shipped overlay yields 115200.
+
+    Regression for the blocking F-025 defect: the runbook instructs the
+    operator to retry a presumed-dead board with this exact env lever. If
+    the derivation does not fire, the port opens at the legacy 1 Mbaud,
+    stock firmware reads as line noise, and a healthy board is declared
+    dead — the failure F-025 exists to prevent.
+    """
+    from mousedroid.config.loader import load_settings
+
+    path = _REPO_ROOT / "config" / overlay
+    if not path.exists():  # pragma: no cover - repo layout guard
+        return
+    monkeypatch.setenv("MOUSEDROID_ESP32__COMMAND_SET", "waveshare_stock")
+    cfg = load_settings(path)
+    assert cfg.esp32.command_set == "waveshare_stock"
+    assert cfg.esp32.serial_baud == WAVESHARE_STOCK_BAUD
+
+
+@pytest.mark.parametrize("overlay", ["default.yaml", "jetson_production.yaml"])
+def test_shipped_overlays_keep_legacy_baud_without_the_env_lever(overlay: str) -> None:
+    """The derivation is opt-in: an untouched load still gets 1 Mbaud."""
+    from mousedroid.config.loader import load_settings
+
+    path = _REPO_ROOT / "config" / overlay
+    if not path.exists():  # pragma: no cover - repo layout guard
+        return
+    cfg = load_settings(path)
+    assert cfg.esp32.command_set == "legacy"
+    assert cfg.esp32.serial_baud == 1_000_000
+
+
+def test_explicit_non_default_baud_survives_the_env_lever(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A deliberate pin beats the derivation even through the loader."""
+    from mousedroid.config.loader import load_settings
+
+    path = _REPO_ROOT / "config" / "default.yaml"
+    if not path.exists():  # pragma: no cover - repo layout guard
+        return
+    monkeypatch.setenv("MOUSEDROID_ESP32__COMMAND_SET", "waveshare_stock")
+    monkeypatch.setenv("MOUSEDROID_ESP32__SERIAL_BAUD", "921600")
+    cfg = load_settings(path)
+    assert cfg.esp32.serial_baud == 921600
+
+
+def test_battery_implausibility_floor_defaults_on_and_backwards_compatible() -> None:
+    """The new safety field defaults to a value that only screens 0-ish reads.
+
+    A real 3S pack never reads below 1 V while the Jetson is running, so the
+    default cannot mask a genuine low-battery condition; it only reclassifies
+    the comms layer's "no reading" sentinel. 0 restores pre-F-025 behaviour.
+    """
+    from mousedroid.config.schema import SafetyConfig
+
+    cfg = SafetyConfig()
+    assert cfg.battery_implausible_below_v == 1.0
+    assert cfg.battery_implausible_below_v < cfg.battery_critical_v

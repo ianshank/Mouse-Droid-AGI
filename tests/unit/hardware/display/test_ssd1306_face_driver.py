@@ -18,6 +18,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
+# The driver renders through ``expressions`` -> Pillow, which ships in the
+# ``[telemetry]`` extra rather than the bare ``[dev]`` one.
+pytest.importorskip("PIL", reason="Pillow (mousedroid[telemetry]) renders the face framebuffer")
+
 from mousedroid.config.schema import FaceDisplayConfig
 from mousedroid.hardware.display.expressions import Expression
 from mousedroid.hardware.protocols import FaceDisplayProtocol

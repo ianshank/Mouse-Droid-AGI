@@ -157,6 +157,7 @@ async def test_camera_jpeg_round_trips_through_proxy_with_token(
         # Payload surface: the proxied JPEG is a real one — i.e. starts with
         # the JPEG SOI marker and decodes back to the configured resolution.
         assert body.startswith(b"\xff\xd8\xff"), "Proxied bytes are not JPEG"
+        pytest.importorskip("PIL", reason="Pillow (mousedroid[telemetry]) decodes the JPEG")
         from io import BytesIO
 
         from PIL import Image

@@ -89,11 +89,15 @@ async def test_velocity_roundtrip_clamps_and_dispatches(
                 assert reading.left_velocity_mps >= target_vx * min_fraction
                 assert reading.right_velocity_mps >= target_vx * min_fraction
             else:
-                # Encoder-less re-scope: the send path completed without
-                # raising and the driver is still connected — the chassis
-                # cannot prove measured speed (audit R3), so it must not
-                # be asked to.
-                assert driver.inner._connected is True
+                # Encoder-less re-scope (audit R3): the chassis cannot prove
+                # measured speed, so assert what it CAN prove — the command
+                # round-trip still works after motion was requested, checked
+                # through the public protocol rather than a private flag.
+                # (`driver.inner._connected` is set once in connect() and
+                # never cleared, so asserting it could not fail.)
+                post_motion = await driver.read_encoders()
+                assert isinstance(post_motion.timestamp, float)
+                await driver.send_velocity(0.0, 0.0, 0.0)
     finally:
         await driver.emergency_stop()
         await driver.disconnect()
@@ -102,16 +106,20 @@ async def test_velocity_roundtrip_clamps_and_dispatches(
 async def _settle_with_keepalive(
     driver: ESP32CommProtocol, jetson_settings: Settings, target_vx: float
 ) -> None:
-    """Sleep out the settle window, re-sending under an armed heartbeat.
+    """Sleep out the settle window, re-sending if the failsafe could fire.
 
-    Pure helper so the keepalive maths stays testable: the re-send period
-    is ``1 / keepalive_hz`` — ``keepalive_hz``'s second consumer, and the
-    semantic the field was named for.
+    The decision is computed from the ACTUAL derived window rather than an
+    assumption about it: re-send only when the settle would outlast the
+    chassis heartbeat. With the shipped defaults the window (3000 ms)
+    comfortably exceeds ``smoke_test_settle_s`` (500 ms), so this is a plain
+    sleep; a hand-tightened window automatically re-enables the keepalive.
     """
+    from mousedroid.comms.command_set import heartbeat_window_ms
+
     esp32_cfg = jetson_settings.esp32
     settle_s = esp32_cfg.smoke_test_settle_s
     heartbeat_armed = esp32_cfg.command_set == "waveshare_stock" and esp32_cfg.heartbeat_enabled
-    if not heartbeat_armed:
+    if not heartbeat_armed or settle_s * 1000.0 < heartbeat_window_ms(esp32_cfg):
         await asyncio.sleep(settle_s)
         return
     period_s = 1.0 / esp32_cfg.keepalive_hz

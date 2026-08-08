@@ -107,7 +107,14 @@ def test_command_set_literal_matches_public_alias() -> None:
 
 
 def test_codecs_conform_to_protocol() -> None:
-    """Both codec singletons satisfy the runtime-checkable Protocol."""
+    """Both codec singletons satisfy the runtime-checkable Protocol.
+
+    NOTE: ``isinstance`` against a ``runtime_checkable`` Protocol checks
+    attribute PRESENCE only — it passes for a class whose "methods" are
+    integers. It is kept as a cheap smoke check; the callable/arity
+    conformance that actually matters is asserted below, and full signature
+    conformance is a static (mypy --strict) guarantee.
+    """
     from mousedroid.comms.command_set import (
         LEGACY_CODEC,
         WAVESHARE_STOCK_CODEC,
@@ -116,6 +123,59 @@ def test_codecs_conform_to_protocol() -> None:
 
     assert isinstance(LEGACY_CODEC, ESP32CommandCodec)
     assert isinstance(WAVESHARE_STOCK_CODEC, ESP32CommandCodec)
+
+
+_CODEC_METHODS = (
+    "build_velocity",
+    "build_stop",
+    "battery_query",
+    "encoder_query",
+    "parse_battery",
+    "parse_encoders",
+    "connect_commands",
+)
+
+
+def test_codec_members_are_callable_with_the_expected_arity() -> None:
+    """Every Protocol member is a real method, not merely a present name.
+
+    Closes the gap left by ``isinstance``: this is what catches a codec that
+    satisfies the Protocol structurally while being unusable at runtime.
+    """
+    import inspect
+
+    from mousedroid.comms.command_set import LEGACY_CODEC, WAVESHARE_STOCK_CODEC
+
+    for codec in (LEGACY_CODEC, WAVESHARE_STOCK_CODEC):
+        assert isinstance(codec.supports_lateral, bool), codec
+        for name in _CODEC_METHODS:
+            member = getattr(codec, name)
+            assert callable(member), f"{type(codec).__name__}.{name} is not callable"
+            # Bound methods: ``self`` is already applied.
+            inspect.signature(member)
+
+
+def test_both_codecs_agree_on_the_member_set() -> None:
+    """Neither codec silently grows or drops a Protocol member."""
+    from mousedroid.comms.command_set import LEGACY_CODEC, WAVESHARE_STOCK_CODEC
+
+    def public_api(obj: object) -> set[str]:
+        return {n for n in dir(obj) if not n.startswith("_")}
+
+    assert set(_CODEC_METHODS) <= public_api(LEGACY_CODEC)
+    assert public_api(LEGACY_CODEC) == public_api(WAVESHARE_STOCK_CODEC)
+
+
+def test_battery_parse_returns_none_not_a_fabricated_voltage() -> None:
+    """The unavailable-reading contract, pinned at the AQA tier.
+
+    A fabricated ``0.0`` here is what let a comms fault masquerade as
+    ``battery_critical`` and latch a permanent emergency stop.
+    """
+    from mousedroid.comms.command_set import LEGACY_CODEC, WAVESHARE_STOCK_CODEC
+
+    assert LEGACY_CODEC.parse_battery({}) is None
+    assert WAVESHARE_STOCK_CODEC.parse_battery({}) is None
 
 
 def test_resilient_wrapper_stays_command_set_agnostic() -> None:

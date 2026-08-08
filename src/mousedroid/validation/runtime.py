@@ -356,7 +356,10 @@ async def _encode_camera_frame_jpeg(
          covers backends that only produce raw frames.
       3. ``None`` when Pillow is unavailable (defensive — Pillow is a
          project dep, but operators running with the bare ``[dev]`` extras
-         in CI would land here).
+         in CI would land here). That degrade emits
+         ``camera_jpeg_encode_skipped_no_pillow`` at WARNING so
+         ``--save-frame`` producing no file is diagnosable from the log
+         rather than looking like a dead camera.
     """
     capture_jpeg = getattr(camera, "capture_raw_jpeg", None)
     if callable(capture_jpeg):
@@ -368,6 +371,11 @@ async def _encode_camera_frame_jpeg(
 
         from PIL import Image
     except ImportError:
+        _log.warning(
+            "camera_jpeg_encode_skipped_no_pillow",
+            hint='install the Pillow extra: pip install -e ".[dev,telemetry,mcp]"',
+            frame_shape=tuple(fallback_rgb.shape),
+        )
         return None
 
     quality = _snapshot_jpeg_quality(camera)

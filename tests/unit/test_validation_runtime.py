@@ -216,6 +216,9 @@ async def test_capture_camera_frame_captures_multiple_frames_and_saves_jpeg(
     tmp_path: Path,
 ) -> None:
     """``--save-frame`` + ``--frames N`` round-trip — Task 1 acceptance regression."""
+    # The snapshot leg encodes through Pillow, which ships in ``[telemetry]``;
+    # without it ``_encode_jpeg`` degrades to ``None`` and ``saved_to`` is unset.
+    pytest.importorskip("PIL", reason="Pillow (mousedroid[telemetry]) encodes the snapshot JPEG")
 
     class JpegStubCamera:
         """Stub exposing ``capture_raw_frame`` so the JPEG fallback (Pillow encode) fires."""
@@ -1150,6 +1153,7 @@ async def test_capture_camera_frame_honours_snapshot_jpeg_quality(
     tmp_path: Path,
 ) -> None:
     """``cfg.camera.snapshot_jpeg_quality`` flows through to Pillow's encoder."""
+    pytest.importorskip("PIL", reason="Pillow (mousedroid[telemetry]) encodes the snapshot JPEG")
 
     class _StubCamera:
         _backend = "qualstub"
