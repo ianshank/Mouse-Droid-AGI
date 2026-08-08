@@ -54,8 +54,11 @@ The legacy v0.3.0 execution-plan phase numbering lives only in
    `FEEDBACK_BASE_INFO`, derived 115 200 baud, encoder-less smoke re-scope
    (audit R1/R2/R3/R5/R6). Default-`legacy`, so nothing changes until an operator
    selects it. Architecture: `docs/architecture/c4-esp32-command-set.md`.
-   Merged as `f884abe` (PR #185); `implemented_in` is pinned to that SHA, so the
-   nightly `--strict-git` harness job resolves it after the working branch is
+   Merged as PR #185, squash commit
+   `f884abe62d2a502476cfe6a32996b2a57055ca9c` — quoted in full to match the
+   `implemented_in` value in `features.yaml`, so the two can be compared by eye
+   and neither can go ambiguous as the history grows. The nightly
+   `--strict-git` harness job resolves that ref after the working branch is
    deleted. **Remaining operator action:** the live-rover lever is
    `MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock` in `/etc/mousedroid/docker.env` —
    no `config/*.yaml` overlay opts in, because the `config-compat` gate validates
