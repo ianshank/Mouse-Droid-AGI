@@ -399,14 +399,24 @@ if not serial_port.exists():
 # silently ignored, reading a live board as dead). SMOKE_SERIAL_PROBE_JSON
 # overrides both for bench experiments.
 probe_env = os.environ.get("SMOKE_SERIAL_PROBE_JSON", "")
-if probe_env:
-    probe = json.loads(probe_env)
-elif cfg.esp32.command_set == "waveshare_stock":
-    from mousedroid.comms.command_set import WAVESHARE_CMD_BASE_FEEDBACK
+try:
+    if probe_env:
+        # Parsed inside the guard: a malformed override must surface as a
+        # FAIL: line (the bash wrapper greps for those prefixes), never as an
+        # unhandled traceback that breaks the harness output contract.
+        probe = json.loads(probe_env)
+    elif cfg.esp32.command_set == "waveshare_stock":
+        from mousedroid.comms.command_set import WAVESHARE_CMD_BASE_FEEDBACK
 
-    probe = {"T": WAVESHARE_CMD_BASE_FEEDBACK}
-else:
-    probe = {"T": 0}
+        probe = {"T": WAVESHARE_CMD_BASE_FEEDBACK}
+    else:
+        probe = {"T": 0}
+except ValueError as exc:
+    print(f"FAIL:SMOKE_SERIAL_PROBE_JSON is not valid JSON: {exc}")
+    sys.exit(0)
+if not isinstance(probe, dict):
+    print(f"FAIL:SMOKE_SERIAL_PROBE_JSON must be a JSON object, got {type(probe).__name__}")
+    sys.exit(0)
 
 try:
     ser = serial.Serial(str(serial_port), baud_rate, timeout=2)

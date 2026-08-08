@@ -29,6 +29,7 @@ firmware defines NO dedicated e-stop command, so stop is
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 from mousedroid.comms._utils import (
@@ -67,23 +68,78 @@ WAVESHARE_FEEDBACK_BASE_INFO: Final[int] = 1001  # hardcoded-ok: vendor protocol
 _MS_PER_SECOND: Final[float] = 1000.0  # hardcoded-ok: unit conversion, not a tunable
 """Milliseconds per second — heartbeat-window derivation factor."""
 
+MIN_HEARTBEAT_WINDOW_MS: Final[int] = 1  # hardcoded-ok: smallest window the wire can express
+"""Floor for the derived heartbeat window.
 
-def heartbeat_window_ms(cfg: ESP32Config) -> int:
-    """Derive the chassis heartbeat window from the keepalive cadence.
+A window of ``0`` is NOT "arm the failsafe as tightly as possible" — stock
+firmware reads ``{"T":136,"cmd":0}`` as *disable the heartbeat*. Without this
+floor a config typo (``keepalive_hz`` >= 6000 rounds the derivation to zero)
+silently disarms the very failsafe the feature exists to provide, while
+``heartbeat_enabled`` still reads ``True`` and the driver still logs
+``esp32_heartbeat_armed``. Clamping keeps the invariant honest: *enabled means
+actually armed*. Operators who want the failsafe off set
+``heartbeat_enabled=False`` — the one explicit way to express that."""
 
-    ``window_ms = 1000 / keepalive_hz * heartbeat_window_multiple`` — e.g.
-    the defaults (10 Hz, 3.0x) yield 300 ms: a hung host halts the wheels
-    within a third of a second, while the 30 Hz control loop (~33 ms
-    period) never comes near tripping it.
+
+def worst_case_command_gap_s(cfg: ESP32Config) -> float:
+    """Longest gap between commands the driver considers normal-but-slow.
+
+    Three configured budgets can each stall the command stream, and the
+    heartbeat must out-wait the largest of them or the firmware halts the
+    wheels during ordinary operation:
+
+    * ``1 / keepalive_hz`` — the nominal command cadence.
+    * ``command_timeout_s`` — one timed-out read blocks for this long.
+    * ``degraded_poll_interval_s`` — degraded mode *deliberately* throttles
+      to one probe per interval to cut serial traffic.
+
+    Deriving from the max keeps the failsafe self-consistent: an operator who
+    tightens the timeouts automatically tightens the window, with no second
+    number to remember and nothing hardcoded against a sibling field.
 
     Args:
-        cfg: ESP32 configuration supplying ``keepalive_hz`` and
-            ``heartbeat_window_multiple``.
+        cfg: ESP32 configuration supplying the three budgets.
 
     Returns:
-        Window length in whole milliseconds (firmware takes an int).
+        Worst-case gap in seconds.
     """
-    return round(_MS_PER_SECOND / cfg.keepalive_hz * cfg.heartbeat_window_multiple)
+    return max(
+        1.0 / cfg.keepalive_hz,
+        cfg.command_timeout_s,
+        cfg.degraded_poll_interval_s,
+    )
+
+
+def heartbeat_window_ms(cfg: ESP32Config) -> int:
+    """Derive the chassis heartbeat window from the driver's own budgets.
+
+    ``window_ms = ceil(worst_case_command_gap_s * 1000 *
+    heartbeat_window_multiple)``, floored at
+    :data:`MIN_HEARTBEAT_WINDOW_MS`. With the shipped defaults the worst case
+    is ``degraded_poll_interval_s`` (1.0 s), so the window is 3000 ms: a hung
+    host halts the wheels within three seconds, while neither a timed-out
+    read (500 ms) nor a degraded-mode probe cycle (1000 ms) can trip it.
+
+    Earlier revisions derived from ``keepalive_hz`` alone, which yielded a
+    300 ms window — shorter than *two* of the driver's own blocking budgets,
+    so the failsafe would fire during conditions the host considers normal.
+    ``ESP32Config`` still warns if a hand-tuned multiple reintroduces that.
+
+    ``ceil`` rather than ``round``: banker's rounding would turn a 0.5 ms
+    window into 0 (i.e. *disabled* — see :data:`MIN_HEARTBEAT_WINDOW_MS`) and
+    a 2.5 ms window into 2. Rounding up never disarms anything.
+
+    Args:
+        cfg: ESP32 configuration supplying the budgets and the multiple.
+
+    Returns:
+        Window length in whole milliseconds (firmware takes an int), never
+        below :data:`MIN_HEARTBEAT_WINDOW_MS`.
+    """
+    derived = math.ceil(
+        worst_case_command_gap_s(cfg) * _MS_PER_SECOND * cfg.heartbeat_window_multiple
+    )
+    return max(MIN_HEARTBEAT_WINDOW_MS, derived)
 
 
 @runtime_checkable
@@ -118,8 +174,13 @@ class ESP32CommandCodec(Protocol):
         """Command to elicit an encoder/telemetry frame, or ``None``."""
         ...
 
-    def parse_battery(self, data: Mapping[str, Any]) -> float:
-        """Extract battery volts from a response frame (0.0 on miss)."""
+    def parse_battery(self, data: Mapping[str, Any]) -> float | None:
+        """Extract battery volts, or ``None`` when the frame carries none.
+
+        ``None`` means *no reading available* (timeout, degraded-mode skip,
+        wrong frame type) — semantically distinct from a genuine low
+        voltage, which the safety layer must not confuse for a flat pack.
+        """
         ...
 
     def parse_encoders(self, data: Mapping[str, Any]) -> EncoderReading:
@@ -160,9 +221,21 @@ class LegacyCommandCodec:
         """Legacy encoder reads send nothing — the firmware pushes frames."""
         return None
 
-    def parse_battery(self, data: Mapping[str, Any]) -> float:
-        """Read key ``"v"``, defaulting 0.0 — the historical contract."""
-        return float(data.get("v", 0.0))
+    def parse_battery(self, data: Mapping[str, Any]) -> float | None:
+        """Read key ``"v"``; ``None`` when the frame carries no voltage.
+
+        Legacy firmware answers the ``{"T":2}`` poll with a ``"v"`` key, so a
+        frame without one is a non-answer rather than a zero-volt rover.
+        Returning ``None`` (instead of the historical fabricated ``0.0``)
+        lets the driver distinguish "no telemetry" from "flat pack".
+        """
+        raw = data.get("v")
+        if raw is None:
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return None
 
     def parse_encoders(self, data: Mapping[str, Any]) -> EncoderReading:
         """Delegate to :func:`parse_encoder_reading` (keys ``lv``/``rv``/…)."""
@@ -218,11 +291,23 @@ class WaveshareStockCodec:
         """Stock frames must be polled; nothing is pushed unsolicited."""
         return {"T": WAVESHARE_CMD_BASE_FEEDBACK}
 
-    def parse_battery(self, data: Mapping[str, Any]) -> float:
-        """Voltage key ``"v"`` from a T-gated ``FEEDBACK_BASE_INFO`` frame."""
+    def parse_battery(self, data: Mapping[str, Any]) -> float | None:
+        """Voltage key ``"v"`` from a T-gated ``FEEDBACK_BASE_INFO`` frame.
+
+        Returns ``None`` for an empty payload (timeout / degraded-mode skip)
+        or any non-1001 frame — stock firmware streams several frame types
+        with no per-command ACKs, so reading a wrong-typed frame is routine
+        and must not be reported as a zero-volt battery.
+        """
         if not self._is_base_info(data):
-            return 0.0
-        return float(data.get("v", 0.0))
+            return None
+        raw = data.get("v")
+        if raw is None:
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return None
 
     def parse_encoders(self, data: Mapping[str, Any]) -> EncoderReading:
         """Map ``L``/``R`` wheel speeds; odometry/heading stay zero.
@@ -278,6 +363,23 @@ LEGACY_CODEC: Final[LegacyCommandCodec] = LegacyCommandCodec()
 
 WAVESHARE_STOCK_CODEC: Final[WaveshareStockCodec] = WaveshareStockCodec()
 """Shared stateless stock-Waveshare codec instance."""
+
+
+def command_set_supports_lateral(cfg: ESP32Config) -> bool:
+    """Whether the configured command set can execute a lateral velocity.
+
+    Lets callers outside :mod:`mousedroid.comms` (notably the orchestrator's
+    action seam) ask the question without reaching through the driver into
+    private codec state, and keeps the answer owned by the codec rather than
+    duplicated as a ``command_set == ...`` literal at each call site.
+
+    Args:
+        cfg: ESP32 configuration carrying the ``command_set`` selector.
+
+    Returns:
+        ``True`` when the command set has a lateral axis.
+    """
+    return resolve_command_codec(cfg).supports_lateral
 
 
 def resolve_command_codec(cfg: ESP32Config) -> ESP32CommandCodec:

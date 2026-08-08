@@ -54,7 +54,9 @@ class TestGitleaksCiJob:
         jobs = _load_ci_jobs()
         assert "gitleaks" in jobs, "gitleaks job missing from ci.yml"
         job = jobs["gitleaks"]
-        assert "continue-on-error" not in job, (
+        # Assert the SEMANTIC contract, not the YAML shape: an explicit
+        # `continue-on-error: false` is still blocking and must pass.
+        assert job.get("continue-on-error") is not True, (
             "gitleaks was promoted advisory -> blocking 2026-08-07 "
             "(docs/runbooks/secret-scanning.md) - re-demoting it to advisory "
             "requires a recorded decision, not a workflow edit"

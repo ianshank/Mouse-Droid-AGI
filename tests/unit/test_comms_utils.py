@@ -262,7 +262,19 @@ class TestLegacyCodecByteIdentity:
         from mousedroid.comms.command_set import LEGACY_CODEC
 
         assert LEGACY_CODEC.parse_battery({"v": 11.7}) == pytest.approx(11.7)
-        assert LEGACY_CODEC.parse_battery({}) == 0.0
+
+    def test_battery_parse_returns_none_when_absent(self) -> None:
+        """A frame with no ``v`` is a non-answer, not a zero-volt rover.
+
+        The historical contract fabricated ``0.0``, which the safety monitor
+        then read as a critically flat pack — a comms fault latching a
+        permanent emergency stop. ``None`` keeps the two cases distinct.
+        """
+        from mousedroid.comms.command_set import LEGACY_CODEC
+
+        assert LEGACY_CODEC.parse_battery({}) is None
+        assert LEGACY_CODEC.parse_battery({"other": 1}) is None
+        assert LEGACY_CODEC.parse_battery({"v": "junk"}) is None
 
     def test_encoder_parse_delegates_to_utils(self) -> None:
         from mousedroid.comms.command_set import LEGACY_CODEC
@@ -373,12 +385,19 @@ class TestWaveshareStockTelemetry:
         assert WAVESHARE_FEEDBACK_BASE_INFO == 1001
 
     def test_battery_parse_rejects_wrong_frame_type(self) -> None:
-        """A stale / non-1001 frame parses to the legacy silent-zero."""
+        """A stale / non-1001 frame yields ``None`` — no reading, not 0 V.
+
+        Stock firmware streams several frame types with no per-command ACKs,
+        so reading a wrong-typed frame is routine; reporting it as zero volts
+        would trip ``battery_critical`` and latch an emergency stop.
+        """
         from mousedroid.comms.command_set import WAVESHARE_STOCK_CODEC
 
-        assert WAVESHARE_STOCK_CODEC.parse_battery({"T": 1003, "v": 11.4}) == 0.0
-        assert WAVESHARE_STOCK_CODEC.parse_battery({}) == 0.0
-        assert WAVESHARE_STOCK_CODEC.parse_battery({"T": "junk", "v": 9.9}) == 0.0
+        assert WAVESHARE_STOCK_CODEC.parse_battery({"T": 1003, "v": 11.4}) is None
+        assert WAVESHARE_STOCK_CODEC.parse_battery({}) is None
+        assert WAVESHARE_STOCK_CODEC.parse_battery({"T": "junk", "v": 9.9}) is None
+        # A well-formed 1001 frame missing the voltage key is also "no reading".
+        assert WAVESHARE_STOCK_CODEC.parse_battery({"T": 1001, "L": 0.0}) is None
 
     def test_encoder_parse_maps_l_r_wheel_speeds(self) -> None:
         from mousedroid.comms.command_set import (
@@ -403,7 +422,8 @@ class TestWaveshareStockTelemetry:
 
 
 class TestWaveshareStockHeartbeat:
-    """CMD_HEART_BEAT_SET armed at connect; window derived from keepalive_hz."""
+    """CMD_HEART_BEAT_SET armed at connect; window derived from the driver's
+    own worst-case command gap (not ``keepalive_hz`` alone)."""
 
     def test_connect_arms_t136_with_derived_window(self) -> None:
         from mousedroid.comms.command_set import (
@@ -412,21 +432,83 @@ class TestWaveshareStockHeartbeat:
             heartbeat_window_ms,
         )
 
-        cfg = _stock_cfg(keepalive_hz=10.0, heartbeat_window_multiple=3.0)
+        cfg = _stock_cfg()
         cmds = WAVESHARE_STOCK_CODEC.connect_commands(cfg)
-        assert cmds == [{"T": WAVESHARE_CMD_HEART_BEAT_SET, "cmd": 300}]
+        # Shipped defaults: worst-case gap is degraded_poll_interval_s (1.0 s)
+        # x multiple 3.0 = 3000 ms.
+        assert cmds == [{"T": WAVESHARE_CMD_HEART_BEAT_SET, "cmd": 3000}]
         assert WAVESHARE_CMD_HEART_BEAT_SET == 136
-        assert heartbeat_window_ms(cfg) == 300
+        assert heartbeat_window_ms(cfg) == 3000
 
-    def test_window_derivation_is_keepalive_hz_consumer(self) -> None:
-        """window_ms = 1000/keepalive_hz * multiple — keepalive_hz's first
-        real consumer; pin the maths so a refactor to a literal fails."""
+    def test_window_derives_from_worst_case_gap_not_keepalive_alone(self) -> None:
+        """The window must out-wait every blocking budget the driver has.
+
+        Deriving from ``keepalive_hz`` alone yielded 300 ms — shorter than
+        both ``command_timeout_s`` (500 ms) and ``degraded_poll_interval_s``
+        (1000 ms), so the chassis failsafe would halt the wheels during
+        conditions the host considers normal-but-slow.
+        """
+        from mousedroid.comms.command_set import heartbeat_window_ms, worst_case_command_gap_s
+
+        cfg = _stock_cfg()
+        assert worst_case_command_gap_s(cfg) == cfg.degraded_poll_interval_s
+        window_ms = heartbeat_window_ms(cfg)
+        assert window_ms > cfg.command_timeout_s * 1000
+        assert window_ms > cfg.degraded_poll_interval_s * 1000
+
+    def test_window_tracks_whichever_budget_dominates(self) -> None:
+        """Each budget takes over the derivation when it becomes the largest."""
+        from mousedroid.comms.command_set import heartbeat_window_ms, worst_case_command_gap_s
+
+        # command_timeout dominates
+        a = _stock_cfg(command_timeout_s=2.0, degraded_poll_interval_s=0.5, keepalive_hz=10.0)
+        assert worst_case_command_gap_s(a) == 2.0
+        assert heartbeat_window_ms(a) == 6000
+        # keepalive period dominates (very slow cadence)
+        b = _stock_cfg(keepalive_hz=0.2, command_timeout_s=0.1, degraded_poll_interval_s=0.1)
+        assert worst_case_command_gap_s(b) == 5.0
+        assert heartbeat_window_ms(b) == 15000
+
+    def test_tightening_timeouts_tightens_the_window(self) -> None:
+        """Dynamic coupling: no second number for the operator to remember."""
         from mousedroid.comms.command_set import heartbeat_window_ms
 
-        assert heartbeat_window_ms(_stock_cfg(keepalive_hz=20.0)) == 150
-        assert (
-            heartbeat_window_ms(_stock_cfg(keepalive_hz=10.0, heartbeat_window_multiple=5.0)) == 500
+        loose = heartbeat_window_ms(_stock_cfg())
+        tight = heartbeat_window_ms(_stock_cfg(command_timeout_s=0.1, degraded_poll_interval_s=0.2))
+        assert tight < loose
+        assert tight == 600
+
+    def test_window_never_rounds_to_zero(self) -> None:
+        """A zero window means *disabled* on stock firmware, not *tightest*.
+
+        ``keepalive_hz`` has no upper bound, so an extreme value (or a tiny
+        multiple) could round the derivation to 0 and silently disarm the
+        failsafe while ``heartbeat_enabled`` still reads True. The floor
+        keeps "enabled" honest.
+        """
+        from mousedroid.comms.command_set import MIN_HEARTBEAT_WINDOW_MS, heartbeat_window_ms
+
+        extreme = _stock_cfg(
+            keepalive_hz=100000.0,
+            command_timeout_s=1e-6,
+            degraded_poll_interval_s=1e-6,
+            heartbeat_window_multiple=1e-6,
         )
+        assert heartbeat_window_ms(extreme) == MIN_HEARTBEAT_WINDOW_MS
+        assert MIN_HEARTBEAT_WINDOW_MS > 0
+
+    def test_window_rounds_up_never_down(self) -> None:
+        """``ceil``, not banker's rounding — rounding up never disarms."""
+        from mousedroid.comms.command_set import heartbeat_window_ms
+
+        # gap 0.1 s * 0.0205 -> 2.05 ms; round() would give 2, ceil gives 3.
+        cfg = _stock_cfg(
+            keepalive_hz=10.0,
+            command_timeout_s=0.001,
+            degraded_poll_interval_s=0.001,
+            heartbeat_window_multiple=0.0205,
+        )
+        assert heartbeat_window_ms(cfg) == 3
 
     def test_heartbeat_disabled_sends_nothing(self) -> None:
         from mousedroid.comms.command_set import WAVESHARE_STOCK_CODEC

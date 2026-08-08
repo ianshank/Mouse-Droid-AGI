@@ -10,6 +10,7 @@ the orchestrator loop.  Any successful read restores the original timeout.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from typing import TYPE_CHECKING, Any
@@ -66,6 +67,11 @@ class SerialESP32Driver(BaseESP32Driver):
         self._is_degraded: bool = False
         self._last_probe_time: float = 0.0
         self._degraded_poll_interval: float = cfg.degraded_poll_interval_s
+        # Serialises the send-then-read pair in ``_query_data`` (see there).
+        # Created lazily-safe here: the driver is constructed inside the
+        # running loop by the factory, and asyncio.Lock() no longer binds a
+        # loop at construction time on the supported Python versions.
+        self._io_lock: asyncio.Lock = asyncio.Lock()
 
     async def connect(self) -> None:
         """Open serial connection to ESP32."""
@@ -79,7 +85,26 @@ class SerialESP32Driver(BaseESP32Driver):
         _log.info("serial_esp32_connected", port=self._port, baud=self._baud)
         # F-025: codec connect-time commands (chassis heartbeat under
         # waveshare_stock; empty under legacy — zero extra writes).
-        await self._arm_command_set()
+        #
+        # Rollback on failure is mandatory: this is the first I/O between
+        # opening the port and returning, so an exception here would leave a
+        # live handle behind. ResilientESP32Driver retries connect(), and each
+        # retry re-runs _open_serial() — without the close we would leak one
+        # fd per attempt AND advertise _connected=True with the failsafe
+        # unarmed. Close first, then re-raise so the retry starts clean.
+        try:
+            await self._arm_command_set()
+        except Exception:
+            _log.warning(
+                "serial_esp32_arm_failed_rolling_back",
+                port=self._port,
+                command_set=self._cfg.command_set,
+            )
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(self._close_serial)
+            self._serial = None
+            self._connected = False
+            raise
 
     def _open_serial(self) -> Any:  # pragma: no cover
         """Open the serial port (blocking)."""
@@ -131,15 +156,23 @@ class SerialESP32Driver(BaseESP32Driver):
         Returns:
             Parsed JSON response dictionary.
         """
-        if self.should_skip_read():
-            # In degraded mode, throttle actual reads to the configured
-            # poll interval so we reduce serial traffic instead of busy-
-            # polling with a short timeout. Skip both the transmit and the
-            # read so we do not queue unread responses in the serial buffer.
-            return {}
-        if cmd is not None:
-            await self._send_json(cmd)
-        return await self._read_json()
+        # The send-then-read pair MUST be atomic. ``SensorManager`` gathers
+        # read_encoders() and get_battery_voltage() concurrently, and each
+        # leg yields control at its ``asyncio.to_thread`` boundary — without
+        # this lock two ``readline()`` calls run in different OS threads on
+        # the same pyserial handle (not thread-safe: a single line can be
+        # split between them), replies can pair with the wrong request, and
+        # the degraded-mode counters below are mutated from both tasks.
+        async with self._io_lock:
+            if self.should_skip_read():
+                # In degraded mode, throttle actual reads to the configured
+                # poll interval so we reduce serial traffic instead of busy-
+                # polling with a short timeout. Skip both the transmit and the
+                # read so we do not queue unread responses in the serial buffer.
+                return {}
+            if cmd is not None:
+                await self._send_json(cmd)
+            return await self._read_json()
 
     # ------------------------------------------------------------------
     # Adaptive timeout

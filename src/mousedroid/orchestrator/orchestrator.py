@@ -22,6 +22,7 @@ from mousedroid.cloud.protocol import (
 from mousedroid.common.actions import normalize_action_numpy
 from mousedroid.common.async_utils import cancel_and_drain, spawn_tracked
 from mousedroid.common.time.protocol import ClockProtocol, RealClock
+from mousedroid.comms.command_set import command_set_supports_lateral
 from mousedroid.constants import (
     DEFAULT_BATTERY_VOLTAGE,
     MILLISECONDS_PER_SECOND,
@@ -323,6 +324,9 @@ class MouseDroidOrchestrator:
         self._llm_gateway = llm_gateway
         self._mission_parser = mission_parser
         self._watchdog = watchdog
+        # F-025: resolved once (the tick path runs at 30 Hz). Owned by the
+        # codec so the "which axes exist" answer lives in exactly one place.
+        self._supports_lateral: bool = command_set_supports_lateral(cfg.esp32)
         self._cloud_sink = cloud_sink
         self._cloud_experience_exporter = cloud_experience_exporter
         self._tool_registry = tool_registry
@@ -774,6 +778,10 @@ class MouseDroidOrchestrator:
             ctx.proposed_action = action
             await self._hook_registry.run_phase(HookPhase.PRE_ACTION, ctx)
 
+            # Restrict to axes the chassis can actually execute BEFORE the
+            # action is sent, recorded and logged, so executed_action and the
+            # experience log describe the motion that really happened.
+            action = self._project_action_to_executable_axes(action)
             await self._execute_action(action)
             ctx.executed_action = action
             await self._hook_registry.run_phase(HookPhase.POST_ACTION, ctx)
@@ -1561,11 +1569,42 @@ class MouseDroidOrchestrator:
         """
         return normalize_action_numpy(action_np, int(self._cfg.model.action_dim))
 
+    def _project_action_to_executable_axes(self, action: torch.Tensor) -> torch.Tensor:
+        """Zero action components the configured chassis cannot execute.
+
+        A skid-steer command set (``waveshare_stock``) has no lateral axis, so
+        the driver drops ``vy``. Zeroing it HERE — before the action is
+        executed, stored as ``ctx.executed_action`` and written to the
+        experience log — keeps the recorded action equal to the action the
+        wheels actually performed. Without this the world model and any
+        replay-trained policy are fit on a physically inert ``action[1]``,
+        and the discrepancy is invisible downstream because an encoder-less
+        chassis reports no lateral motion to contradict it.
+
+        Returns the tensor unchanged (no copy) when every axis is
+        executable, so the default legacy path is allocation-identical.
+
+        Args:
+            action: Normalised action tensor with values in ``[-1, 1]``.
+
+        Returns:
+            The action restricted to executable axes.
+        """
+        if self._supports_lateral or action.shape[0] <= 1:
+            return action
+        if float(action[1]) == 0.0:
+            return action
+        projected = action.clone()
+        projected[1] = 0.0
+        return projected
+
     async def _execute_action(self, action: torch.Tensor) -> None:
         """Scale and send action to ESP32 motors.
 
         Args:
-            action: Action tensor with values in [-1, 1].
+            action: Action tensor with values in [-1, 1]; assumed already
+                restricted to executable axes by
+                :meth:`_project_action_to_executable_axes`.
         """
         max_v = self._cfg.esp32.max_velocity_mps
         max_omega = self._cfg.esp32.max_omega_rads

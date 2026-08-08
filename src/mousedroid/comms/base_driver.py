@@ -58,6 +58,9 @@ class BaseESP32Driver(ABC):
         # re-armed by _arm_command_set() on every successful connect, so
         # resilience-wrapper reconnects surface the warning again.
         self._lateral_warn_emitted: bool = False
+        # Same once-per-connection latch discipline for the battery-unavailable
+        # warning; re-armed by _arm_command_set() on every connect.
+        self._battery_warn_emitted: bool = False
 
     # ------------------------------------------------------------------
     # Abstract transport interface — implemented by each subclass
@@ -160,11 +163,38 @@ class BaseESP32Driver(ABC):
         legacy poll is stock ``CMD_SET_MOTOR_PID``, a motor-controller
         write) and parses the ``FEEDBACK_BASE_INFO`` frame.
 
+        Returns ``0.0`` when no reading is available, preserving the
+        ``ESP32CommProtocol`` signature and every existing caller. That
+        sentinel is genuinely ambiguous — a powered rover cannot read zero
+        volts — so it is ALSO surfaced as a WARNING (once per connection,
+        DEBUG thereafter since reads run at sensor cadence). The safety
+        layer must not treat it as a flat pack; see
+        ``SafetyConfig.battery_implausible_below_v``.
+
         Returns:
-            Battery voltage in volts (0.0 on timeout / unparseable frame).
+            Battery voltage in volts, or ``0.0`` when unavailable.
         """
         data = await self._query_data("battery", self._codec.battery_query())
-        return self._codec.parse_battery(data)
+        voltage = self._codec.parse_battery(data)
+        if voltage is None:
+            self._warn_battery_unavailable()
+            return 0.0
+        return voltage
+
+    def _warn_battery_unavailable(self) -> None:
+        """Surface a missing battery reading — WARNING once, DEBUG after."""
+        if self._battery_warn_emitted:
+            _log.debug("esp32_battery_reading_unavailable")
+            return
+        self._battery_warn_emitted = True
+        _log.warning(
+            "esp32_battery_reading_unavailable",
+            command_set=self._cfg.command_set,
+            hint=(
+                "no voltage in the response frame — check the command set / "
+                "baud match the firmware before suspecting the pack"
+            ),
+        )
 
     async def emergency_stop(self) -> None:
         """Send the strongest stop the firmware understands; zero velocity."""
@@ -187,6 +217,7 @@ class BaseESP32Driver(ABC):
         again.
         """
         self._lateral_warn_emitted = False
+        self._battery_warn_emitted = False
         commands = self._codec.connect_commands(self._cfg)
         for cmd in commands:
             await self._send_command(cmd)

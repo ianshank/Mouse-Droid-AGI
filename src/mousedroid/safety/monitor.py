@@ -72,8 +72,24 @@ class MouseDroidSafetyMonitor:
         battery_voltage: float = float(observation.motor_state[MOTOR_STATE_BATTERY_INDEX])
         battery_warn_v = self._cfg.battery_warn_v
         battery_critical_v = self._cfg.battery_critical_v
+        implausible_below_v = self._cfg.battery_implausible_below_v
 
-        if battery_critical_v > 0 and battery_voltage < battery_critical_v:
+        if implausible_below_v > 0 and battery_voltage < implausible_below_v:
+            # Missing telemetry, NOT a flat pack. The comms layer reports an
+            # unavailable reading as 0.0 V to keep the protocol signature
+            # (see BaseESP32Driver.get_battery_voltage); treating that as
+            # `battery_critical` would latch a permanent emergency stop on
+            # every tick and send the operator to swap a healthy battery.
+            _log.warning(
+                "battery_reading_implausible",
+                voltage=battery_voltage,
+                threshold=implausible_below_v,
+                hint=(
+                    "treating as missing telemetry, not a flat pack — check "
+                    "esp32_battery_reading_unavailable / command-set + baud"
+                ),
+            )
+        elif battery_critical_v > 0 and battery_voltage < battery_critical_v:
             _log.error(
                 "battery_critical",
                 voltage=battery_voltage,

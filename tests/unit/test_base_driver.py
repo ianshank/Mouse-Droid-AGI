@@ -7,6 +7,7 @@ Uses a minimal in-memory ``StubESP32Driver`` to exercise the inherited
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 import pytest
@@ -31,7 +32,7 @@ class StubESP32Driver(BaseESP32Driver):
 
     def __init__(self, cfg: ESP32Config) -> None:
         super().__init__(cfg)
-        self.commands_sent: list[dict[str, int]] = []
+        self.commands_sent: list[dict[str, float]] = []
         self.query_responses: dict[str, dict[str, Any]] = {}
         self.connect_called = False
         self.disconnect_called = False
@@ -44,13 +45,13 @@ class StubESP32Driver(BaseESP32Driver):
         self._connected = False
         self.disconnect_called = True
 
-    async def _send_command(self, cmd: dict[str, int]) -> None:
-        self.commands_sent.append(cmd)
+    async def _send_command(self, cmd: Mapping[str, float]) -> None:
+        self.commands_sent.append(dict(cmd))
 
     async def _query_data(
         self,
         resource: str,
-        cmd: dict[str, int] | None = None,
+        cmd: Mapping[str, float] | None = None,
     ) -> dict[str, Any]:
         return self.query_responses.get(resource, {})
 
@@ -256,7 +257,10 @@ class RecordingStubDriver(StubESP32Driver):
 
     def __init__(self, cfg: ESP32Config) -> None:
         super().__init__(cfg)
-        self.query_commands: list[dict[str, Any] | None] = []
+        # Mapping[str, float], not dict[str, int]: the stock codec builds
+        # float-valued payloads ({"X": 0.25}), and the base class's payload
+        # type is deliberately covariant so both codecs satisfy it.
+        self.query_commands: list[dict[str, float] | None] = []
 
     async def connect(self) -> None:
         await super().connect()
@@ -265,7 +269,7 @@ class RecordingStubDriver(StubESP32Driver):
     async def _query_data(
         self,
         resource: str,
-        cmd: dict[str, int] | None = None,
+        cmd: Mapping[str, float] | None = None,
     ) -> dict[str, Any]:
         self.query_commands.append(dict(cmd) if cmd is not None else None)
         return self.query_responses.get(resource, {})
@@ -334,11 +338,15 @@ class TestStockCommandSetDelegation:
         assert await driver.get_battery_voltage() == 0.0
 
     async def test_connect_arms_heartbeat(self) -> None:
-        """CMD_HEART_BEAT_SET goes out once per connect, window from
-        keepalive_hz (10 Hz * 3.0 -> 300 ms with the schema defaults)."""
+        """CMD_HEART_BEAT_SET goes out once per connect.
+
+        The window is derived from the driver's worst-case command gap —
+        with the shipped defaults that is ``degraded_poll_interval_s``
+        (1.0 s) x multiple 3.0 = 3000 ms.
+        """
         driver = _make_stock_stub()
         await driver.connect()
-        assert driver.commands_sent == [{"T": 136, "cmd": 300}]
+        assert driver.commands_sent == [{"T": 136, "cmd": 3000}]
 
     async def test_connect_heartbeat_disabled_sends_nothing(self) -> None:
         driver = _make_stock_stub(heartbeat_enabled=False)

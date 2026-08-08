@@ -458,11 +458,17 @@ class ESP32Config(BaseModel):
         3.0,
         gt=0,
         description=(
-            "Chassis heartbeat window expressed as a multiple of the "
-            "``keepalive_hz`` command period: window_ms = 1000 / keepalive_hz "
-            "* multiple (default 10 Hz * 3.0 = 300 ms). Small enough that a "
-            "hung host halts the wheels quickly; large enough that the 30 Hz "
-            "control loop (~33 ms period) never trips it."
+            "Chassis heartbeat window expressed as a multiple of the driver's "
+            "worst-case command gap — the largest of 1/keepalive_hz, "
+            "command_timeout_s and degraded_poll_interval_s (see "
+            "``mousedroid.comms.command_set.heartbeat_window_ms``). With the "
+            "shipped defaults that gap is 1.0 s, so the window is 3000 ms: a "
+            "hung host halts the wheels within three seconds, while neither a "
+            "timed-out read nor a degraded-mode probe cycle can trip it. "
+            "Deriving from the max (rather than keepalive_hz alone) means "
+            "tightening a timeout automatically tightens the failsafe. Values "
+            "below 1.0 put the window inside a legitimate blocking budget and "
+            "are warned about at load time."
         ),
     )
     chassis_has_wheel_encoders: bool = Field(
@@ -572,7 +578,7 @@ class ESP32Config(BaseModel):
     def _apply_command_set_coupling(self) -> Self:
         """Couple transport settings to the stock command set (F-025).
 
-        Two rules, both inert under the default ``legacy`` selector:
+        Both rules are inert under the default ``legacy`` selector:
 
         * ``waveshare_stock`` requires ``protocol='serial'`` — stock
           ``General_Driver`` firmware exposes no HTTP ``/cmd`` API, so a
@@ -580,22 +586,86 @@ class ESP32Config(BaseModel):
         * Stock firmware runs its UART at 115 200; the legacy schema default
           is 1 000 000, at which a live stock board reads as line noise
           (vendor audit R2 — this is how a healthy board can be diagnosed
-          dead). When the operator has NOT explicitly pinned ``serial_baud``
-          (YAML / env / kwarg — detected via ``model_fields_set``), derive
-          the stock baud. An explicit pin always wins.
+          dead), so the stock baud is derived.
+
+        **Why "still at the schema default" and not "unset"**: an earlier
+        revision keyed the derivation off ``"serial_baud" not in
+        model_fields_set``, which is dead on every real deployment — the
+        shipped overlays pin ``serial_baud: 1000000`` and the loader passes
+        the merged YAML straight into ``Settings(**merged)``, so the key is
+        always "set". The operator would follow the runbook, get 1 Mbaud
+        against stock firmware, and mis-diagnose a healthy board as dead —
+        the exact failure F-025 exists to prevent. Keying off the *effective
+        value* instead means a config that merely restates the legacy
+        default still derives, while a deliberate non-default pin (e.g.
+        921600) always wins.
 
         Plain assignment is safe here: the model is not frozen and
         ``validate_assignment`` is off, so this does not re-enter validation.
         """
-        if self.command_set == "waveshare_stock":
-            if self.protocol == "wifi":
-                raise ValueError(
-                    "command_set='waveshare_stock' requires protocol='serial'; "
-                    "stock General_Driver firmware exposes no HTTP /cmd API"
-                )
-            if "serial_baud" not in self.model_fields_set:
-                self.serial_baud = WAVESHARE_STOCK_BAUD
+        if self.command_set != "waveshare_stock":
+            return self
+        if self.protocol == "wifi":
+            raise ValueError(
+                "command_set='waveshare_stock' requires protocol='serial'; "
+                "stock General_Driver firmware exposes no HTTP /cmd API"
+            )
+        legacy_default = type(self).model_fields["serial_baud"].default
+        if self.serial_baud == legacy_default:
+            self.serial_baud = WAVESHARE_STOCK_BAUD
+            # Local import — avoid circular-import risk during settings build
+            # (matches the world-model validator's pattern below).
+            from mousedroid.logging.setup import get_logger
+
+            get_logger(__name__).info(
+                "esp32_stock_baud_derived",
+                from_baud=legacy_default,
+                to_baud=WAVESHARE_STOCK_BAUD,
+                hint="pin esp32.serial_baud to a non-default value to override",
+            )
+        self._warn_heartbeat_window_shorter_than_blocking_budgets()
         return self
+
+    def _warn_heartbeat_window_shorter_than_blocking_budgets(self) -> None:
+        """Warn when the chassis failsafe can fire during normal operation.
+
+        The heartbeat window is derived from ``keepalive_hz``, but the driver
+        has its own blocking budgets that stall the command stream for longer:
+        a single timed-out read burns ``command_timeout_s``, and degraded mode
+        deliberately throttles to one probe per ``degraded_poll_interval_s``.
+        When either exceeds the window, the firmware halts the wheels during
+        conditions the host considers normal-but-slow — the failsafe working
+        exactly as designed against a mis-tuned window.
+
+        This warns rather than raises: the right value is deployment-specific
+        (a bench rover on rollers may genuinely want a tight window), and
+        refusing to boot over a tuning question would be worse than a loud,
+        greppable warning naming the offending field.
+        """
+        if not self.heartbeat_enabled:
+            return
+        # Local import — see the baud-derivation branch above.
+        from mousedroid.comms.command_set import heartbeat_window_ms
+        from mousedroid.logging.setup import get_logger
+
+        window_ms = heartbeat_window_ms(self)
+        budgets = {
+            "command_timeout_s": self.command_timeout_s,
+            "degraded_poll_interval_s": self.degraded_poll_interval_s,
+        }
+        offenders = {
+            name: seconds for name, seconds in budgets.items() if seconds * 1000.0 > window_ms
+        }
+        if offenders:
+            get_logger(__name__).warning(
+                "esp32_heartbeat_window_below_blocking_budget",
+                window_ms=window_ms,
+                offenders_ms={name: seconds * 1000.0 for name, seconds in offenders.items()},
+                hint=(
+                    "raise esp32.heartbeat_window_multiple (or lower the offending "
+                    "timeout) so the chassis failsafe cannot fire mid-operation"
+                ),
+            )
 
 
 class ExperienceConfig(BaseModel):
@@ -2768,6 +2838,22 @@ class SafetyConfig(BaseModel):
         9.5,
         ge=0,
         description="Battery critical voltage (V); 0 disables",
+    )
+    battery_implausible_below_v: float = Field(
+        1.0,
+        ge=0,
+        description=(
+            "Readings strictly below this are treated as MISSING TELEMETRY, "
+            "not a flat pack — a rover whose Jetson is powered enough to run "
+            "this code cannot genuinely read ~0 V, so such a value means the "
+            "comms layer had nothing to report (timeout, degraded-mode skip, "
+            "or a firmware/command-set mismatch returning an unparseable "
+            "frame). Without this floor a comms fault masquerades as "
+            "``battery_critical`` on every tick and latches a permanent "
+            "emergency stop, while the operator is pointed at the battery. "
+            "Set to 0 to disable the plausibility check and restore the "
+            "pre-F-025 behaviour of trusting every reading."
+        ),
     )
     default_battery_v: float = Field(
         12.6,
