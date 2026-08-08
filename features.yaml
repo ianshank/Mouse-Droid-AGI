@@ -463,7 +463,7 @@ features:
       tests/unit/test_base_driver.py
       tests/regression/test_f025_backwards_compat.py
       tests/regression/test_f025_aqa.py -q
-    implemented_in: "claude/project-next-steps-p92so0"
+    implemented_in: "f884abe62d2a502476cfe6a32996b2a57055ca9c"
     depends_on: ["F-001"]
     notes: >-
       Findings R1/R2/R3/R5/R6 of docs/analysis/rover-jetson-integration-gaps.md,
