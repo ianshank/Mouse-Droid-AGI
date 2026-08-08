@@ -54,14 +54,16 @@ The legacy v0.3.0 execution-plan phase numbering lives only in
    `FEEDBACK_BASE_INFO`, derived 115 200 baud, encoder-less smoke re-scope
    (audit R1/R2/R3/R5/R6). Default-`legacy`, so nothing changes until an operator
    selects it. Architecture: `docs/architecture/c4-esp32-command-set.md`.
-   **Remaining operator actions:** (a) the live-rover lever is
+   Merged as PR #185, squash commit
+   `f884abe62d2a502476cfe6a32996b2a57055ca9c` — quoted in full to match the
+   `implemented_in` value in `features.yaml`, so the two can be compared by eye
+   and neither can go ambiguous as the history grows. The nightly
+   `--strict-git` harness job resolves that ref after the working branch is
+   deleted. **Remaining operator action:** the live-rover lever is
    `MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock` in `/etc/mousedroid/docker.env` —
    no `config/*.yaml` overlay opts in, because the `config-compat` gate validates
    overlay edits against the deployed image's schema, so this stays an env override
-   until `deployments/jetson-image.json` is re-pinned; (b) after the PR merges,
-   replace F-025's branch-name `implemented_in` in `features.yaml` with the merge SHA
-   or the nightly `--strict-git` harness job goes red the next morning
-   (`.claude/skills/feature-closeout/SKILL.md` has the detector).
+   until `deployments/jetson-image.json` is re-pinned.
 4. **[Ops hygiene — P1] Re-point the rover's `/opt/mousedroid` source** to trunk
    (`claude/markdown-implementation-plan-aVJ2l`). Blocked by pre-existing root-ownership drift
    in the bind-mount (the container writes files as root), so a targeted
