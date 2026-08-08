@@ -46,19 +46,20 @@ The legacy v0.3.0 execution-plan phase numbering lives only in
    isolate a dead CP2102N USB bridge from a dead ESP32. Then the sequenced bench plan
    under **PR #106 follow-ups** below. Gate for **F-008**. Time-box unchanged: 2 bench
    sessions, then repair-vs-replace.
-3. **[Software blocker — P0] Retarget the ESP32 driver at stock Waveshare firmware
-   (F-025).** The private `{"T":1,"vx","vy","omega"}` protocol has no firmware that
-   implements it — `firmware/` was never committed and `scripts/flash_esp32.sh`
-   references a nonexistent binary — so any attached board (repaired or replacement)
-   runs stock firmware where our motion commands parse as zeros (silent no-op), the
-   battery poll `{"T":2}` is `CMD_SET_MOTOR_PID` (a write, fired by `assert_power_chain`
-   immediately before motion), and the e-stop command is unhandled. Retarget to
-   `CMD_ROS_CTRL` `{"T":13,"X","Z"}`, arm the chassis heartbeat failsafe
-   (`CMD_HEART_BEAT_SET` at connect — today a wedged Jetson leaves the last velocity
-   executing indefinitely), source voltage from `FEEDBACK_BASE_INFO` (re-enables the
-   3S-18650 undervoltage cutoff zeroed in `jetson_production.yaml`), default baud
-   115 200, and re-scope the encoder smoke assertion for the encoder-less chassis
-   (audit R1/R2/R3/R5/R6). Pure software — does not wait on the bench.
+3. **[Software blocker — LANDED] ESP32 driver retargeted at stock Waveshare firmware
+   (F-025).** The codec seam shipped: `CMD_ROS_CTRL` `{"T":13,"X","Z"}` velocity,
+   `CMD_HEART_BEAT_SET` chassis failsafe armed at connect, voltage from
+   `FEEDBACK_BASE_INFO`, derived 115 200 baud, encoder-less smoke re-scope
+   (audit R1/R2/R3/R5/R6). Default-`legacy`, so nothing changes until an operator
+   selects it. Architecture: `docs/architecture/c4-esp32-command-set.md`.
+   **Remaining operator actions:** (a) the live-rover lever is
+   `MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock` in `/etc/mousedroid/docker.env` —
+   no `config/*.yaml` overlay opts in, because the `config-compat` gate validates
+   overlay edits against the deployed image's schema, so this stays an env override
+   until `deployments/jetson-image.json` is re-pinned; (b) after the PR merges,
+   replace F-025's branch-name `implemented_in` in `features.yaml` with the merge SHA
+   or the nightly `--strict-git` harness job goes red the next morning
+   (`.claude/skills/feature-closeout/SKILL.md` has the detector).
 4. **[Ops hygiene — P1] Re-point the rover's `/opt/mousedroid` source** to trunk
    (`claude/markdown-implementation-plan-aVJ2l`). Blocked by pre-existing root-ownership drift
    in the bind-mount (the container writes files as root), so a targeted
@@ -105,9 +106,12 @@ The legacy v0.3.0 execution-plan phase numbering lives only in
     941 lines. Wire-or-delete each, and add an AQA test asserting every declared
     budget/mode field has a consumer outside schema parsing.
 12. **[Docs — P2] Reconcile hardware docs with the chassis (audit R9).** WAVE ROVER is
-    4WD skid-steer, not mecanum (the `vy` term in `send_velocity` is physically inert);
-    the production camera is IMX708 over CSI (not the IMX500 AI Camera the README/BOM
-    and `CameraConfig` docstring describe); power is a 3S 18650 UPS module, not a LiPo
+    4WD skid-steer, not mecanum. *Partly closed by F-025:* the README overview + BOM no
+    longer claim mecanum, the inert `vy` term is now zeroed at the execution seam so
+    logged experience matches what the chassis can do, and the encoder-less fact is a
+    config contract (`chassis_has_wheel_encoders`) rather than an assumption. Still open:
+    the production camera is IMX708 over CSI (not the IMX500 AI Camera the README/BOM and
+    `CameraConfig` docstring describe); power is a 3S 18650 UPS module, not a LiPo
     (different charging discipline and failure mode).
 13. **[World model — P2] F-023 operator follow-ups (AlayaWorld adaptation).** The
     bounded-context latent memory + corrupted-history drift training landed default-OFF

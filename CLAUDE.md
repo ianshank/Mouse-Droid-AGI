@@ -341,18 +341,44 @@ backwards_compat}.py`):
   read returns zeros forever (the legacy codec returns `None`, preserving the
   historical no-write read).
 - **Heartbeat failsafe armed at connect.** `CMD_HEART_BEAT_SET`
-  (`{"T":136,"cmd":<ms>}`) with window = `1000/keepalive_hz *
-  heartbeat_window_multiple` (default 300 ms — `keepalive_hz`'s first real
-  consumer; the derivation is pinned). The software watchdog restarts the
-  *container*; only this stops the *wheels* after a wedged host. Stock defines
-  NO e-stop command — stop is `{"T":13,"X":0,"Z":0}`. NOTE: the 300 ms window
-  is shorter than `smoke_test_settle_s` (0.5 s) — anything that holds motion
-  across the window must re-send at `keepalive_hz` (see
-  `test_motor_smoke._settle_with_keepalive`).
+  (`{"T":136,"cmd":<ms>}`). The software watchdog restarts the *container*;
+  only this stops the *wheels* after a wedged host. Stock defines NO e-stop
+  command — stop is `{"T":13,"X":0,"Z":0}`. The window is
+  `ceil(worst_case_command_gap_s(cfg) * heartbeat_window_multiple)`, floored at
+  `MIN_HEARTBEAT_WINDOW_MS`, where the gap is
+  `max(1/keepalive_hz, command_timeout_s, degraded_poll_interval_s)` — the
+  driver's OWN blocking budgets. Do NOT reduce this to `1000/keepalive_hz`: a
+  tick is explicitly permitted to overrun that, so the firmware would halt the
+  wheels mid-motion with the host none the wiser. The floor exists because
+  `keepalive_hz` has no upper bound and a rounded-to-zero window is the
+  firmware's "disable failsafe" value. The after-validator emits
+  `esp32_heartbeat_window_below_blocking_budget` (WARNING) if a hand-tightened
+  window still undercuts a budget. With the shipped defaults the window is
+  3000 ms, comfortably above `smoke_test_settle_s` (0.5 s); anything that holds
+  motion across a hand-tightened window must re-send at `keepalive_hz` (see
+  `test_motor_smoke._settle_with_keepalive`, which computes the decision from
+  the actual derived window rather than assuming it).
+- **Battery parse returns `float | None`, never a fabricated 0.0.** A
+  fabricated zero is indistinguishable from a flat pack: `0.0 <
+  battery_critical_v` made `safety/monitor.py` latch a PERMANENT emergency stop
+  on what was really a comms fault, with a runbook row that said "charge the
+  pack". Three layers: the codec returns `None` for a frame it cannot read; the
+  driver reports `0.0` and logs `esp32_battery_reading_unavailable`
+  (WARNING-once per connection, DEBUG after — re-armed by `_arm_command_set()`);
+  `SafetyConfig.battery_implausible_below_v` (default 1.0, `ge=0`) screens the
+  reading as MISSING **before** the `battery_critical` branch runs. Setting the
+  floor to 0 restores the pre-fix behaviour exactly.
 - **Baud coupling defers to the operator.** The schema default stays
-  1_000_000; selecting `waveshare_stock` derives 115200 ONLY when
-  `serial_baud` is not in `model_fields_set` (an explicit YAML/env/kwarg pin
-  always wins). stock+`wifi` is REJECTED at YAML-load (stock firmware has no
+  1_000_000; selecting `waveshare_stock` derives 115200 ONLY when `serial_baud`
+  still holds the SCHEMA DEFAULT (an explicit non-default YAML/env/kwarg pin
+  always wins, and the override fires the INFO `esp32_stock_baud_derived`).
+  Do NOT key this on `model_fields_set`: `loader.py` does `Settings(**merged)`
+  and BOTH shipped overlays pin `serial_baud: 1000000`, so the key is always
+  present and the derivation was dead on every real deployment — stock firmware
+  at 1 Mbaud reads as line noise, which is exactly the "board is dead"
+  misdiagnosis F-025 exists to prevent. Pinned by a regression test that drives
+  the REAL `load_settings(Path(...))`, not a direct `ESP32Config` construction.
+  stock+`wifi` is REJECTED at YAML-load (stock firmware has no
   HTTP `/cmd` API). **No `config/*.yaml` overlay opts in yet** — the
   `config-compat` gate validates overlay edits against the deployed image's
   schema, so the live-rover lever is `MOUSEDROID_ESP32__COMMAND_SET=
@@ -363,10 +389,31 @@ backwards_compat}.py`):
   encoder-velocity fraction. Payload typing is `Mapping[str, float]`
   (covariant) — NEVER widen back to `dict[str, float]`; `dict` invariance
   breaks `mypy --strict` against the legacy codec's int dicts.
+- **Connect is atomic; reads are serialised.** `_arm_command_set()` is the
+  first thing that ever did I/O between opening the port and returning from
+  `connect()`, so a raise there left `_serial` OPEN and `_connected=True` while
+  `ResilientESP32Driver` retried — leaking an fd per attempt. The serial
+  `connect()` now closes the port, clears state and re-raises
+  (`serial_esp32_arm_failed_rolling_back`). Separately, `sensing/manager.py`
+  GATHERS `read_encoders` + `get_battery_voltage`, and under stock both poll
+  `{"T":130}` — two `readline()` calls in different threads on one pyserial
+  handle (not thread-safe) can pair a reply with the wrong request, so
+  `_query_data` is guarded by a per-driver `asyncio.Lock`.
+- **Logged experience equals executed action.** Stock has no lateral axis, so
+  the orchestrator projects the action onto the executable axes
+  (`_project_action_to_executable_axes`, gated by
+  `command_set_supports_lateral(cfg)`) BEFORE `_execute_action`. Without this
+  the world model is fit on a physically inert `action[1]`.
 - **Grep events:** `esp32_driver_built` (factory, `command_set=`
-  discriminator), `esp32_heartbeat_armed` (INFO, `window_ms=`),
+  discriminator), `esp32_stock_baud_derived` (INFO, `from_baud`/`to_baud`),
+  `esp32_heartbeat_window_below_blocking_budget` (WARNING),
+  `esp32_heartbeat_armed` (INFO, `window_ms=`),
   `esp32_lateral_velocity_unsupported` (WARN once per connection, DEBUG
-  after — 30 Hz path), `esp32_stock_frame_mismatch` (DEBUG).
+  after — 30 Hz path), `esp32_battery_reading_unavailable` (WARN once, DEBUG
+  after), `battery_reading_implausible` (WARNING, safety monitor),
+  `esp32_stock_frame_mismatch` (DEBUG),
+  `serial_esp32_arm_failed_rolling_back` (WARNING). C4 diagram:
+  `docs/architecture/c4-esp32-command-set.md`.
 
 ## LLM gateway + cloud/local failover (PR #107 — Tier C-rover deliberative brain)
 

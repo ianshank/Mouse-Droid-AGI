@@ -21,7 +21,7 @@
 
 MouseDroid is a physical MSE-6 droid replica that navigates autonomously, avoids obstacles, follows natural-language commands, and improves from experience — all on an NVIDIA Jetson Orin Nano.
 
-The robot is built on a Wave Rover mecanum-wheel chassis, controlled by an ESP32 microcontroller, and powered by a ribbon-connected Raspberry Pi AI Camera (IMX500), USB LiDAR, and USB audio. All high-level reasoning runs on a Jetson Orin Nano.
+The robot is built on a Waveshare Wave Rover chassis, controlled by an ESP32 microcontroller, and powered by a ribbon-connected Raspberry Pi AI Camera (IMX500), USB LiDAR, and USB audio. All high-level reasoning runs on a Jetson Orin Nano. The chassis is driven over two axes — linear and angular — with no lateral axis and no wheel encoders; both facts are config contracts (`esp32.command_set`, `esp32.chassis_has_wheel_encoders`) rather than assumptions baked into the drivers.
 
 The current production baseline is camera + LiDAR + USB audio + ESP32 on Jetson. The HC-SR04 ultrasonic path and the robot-arm platform remain parked outside the active delivery scope.
 
@@ -267,10 +267,16 @@ mypy src/ --strict --ignore-missing-imports
 ## Deployment
 
 ```bash
-sudo bash scripts/flash_esp32.sh /dev/ttyUSB0 <path-to-firmware>.bin  # flash ESP32
 sudo bash scripts/deploy_jetson.sh                                    # deploy to Jetson
 cp scripts/mousedroid.service /etc/systemd/system/ && systemctl enable --now mousedroid
 ```
+
+**No firmware flash is required.** The ESP32 runs stock Waveshare
+`General_Driver` firmware and the host speaks its command set directly
+(`esp32.command_set: waveshare_stock`). This repo ships no ESP32 firmware —
+`scripts/flash_esp32.sh` is a bring-your-own-binary helper, not a build step,
+and flashing is only relevant if you deliberately replace the vendor firmware.
+See [`docs/architecture/c4-esp32-command-set.md`](docs/architecture/c4-esp32-command-set.md).
 
 Full bring-up (probe-first ESP32, systemd/Docker service, watchdog): [`docs/deployment.md`](docs/deployment.md), [`docs/runbooks/jetson-full-bringup.md`](docs/runbooks/jetson-full-bringup.md), and 19-step deployment runbook: [`docs/planning/JETSON_DEPLOY_RUNBOOK.md`](docs/planning/JETSON_DEPLOY_RUNBOOK.md).
 
@@ -300,7 +306,7 @@ MIT License — see [LICENSE](LICENSE) for details.
 | --------- | ---- | ----- |
 | SBC | NVIDIA Jetson Orin Nano 8GB | Primary compute |
 | Storage | Samsung NVMe 500 GB SSD | Docker data + swap |
-| Chassis | Waveshare Wave Rover | Mecanum wheel, ESP32 onboard |
+| Chassis | Waveshare Wave Rover | ESP32 onboard, stock `General_Driver` firmware; no wheel encoders, no lateral axis |
 | Camera | Jetson CSI / Raspberry Pi AI Camera (IMX500) | Onboard ML inference |
 | LiDAR | FHL-LD19 360 2D | UART /dev/ttyUSB1, 230400 baud |
 | Audio | Wonrabai USB Sound Card | Combo mic + 8 5W speaker |

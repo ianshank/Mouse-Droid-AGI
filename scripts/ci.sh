@@ -168,10 +168,14 @@ fi
 echo "=== Advisory Promotion-Lag Check ==="
 "$PYTHON_BIN" scripts/check_advisory_promotions.py
 
-echo "=== Secret Scan (gitleaks, advisory) ==="
+echo "=== Secret Scan (gitleaks, blocking) ==="
+# Mirrors the BLOCKING `gitleaks` job in .github/workflows/ci.yml (promoted
+# advisory -> blocking 2026-08-07; see docs/runbooks/secret-scanning.md). This
+# stage previously swallowed findings with `|| echo WARN`, so a local full-CI
+# run went green on exactly the diff the PR then failed on. Findings now fail
+# here for the same reason they fail there.
 if command -v gitleaks >/dev/null 2>&1; then
-    gitleaks detect --source . --config .gitleaks.toml --redact --no-banner \
-        || echo "WARN: gitleaks reported findings (advisory - see .gitleaks.toml header)"
+    gitleaks detect --source . --config .gitleaks.toml --redact --no-banner
 else
     echo "gitleaks not on PATH - skipping secret scan (CI runs it in the gitleaks job)"
 fi

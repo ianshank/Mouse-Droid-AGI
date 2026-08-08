@@ -52,6 +52,14 @@
   context-recovery surface across sessions.
 - Check `docs/architecture/` for C4 diagrams describing the area you're
   changing.
+- **Install the extras CI installs**, not a bare `[dev]`:
+  `make install` (i.e. `pip install -e ".[dev,telemetry,mcp]"`, matching
+  `.github/workflows/ci.yml`). A `[dev]`-only environment lacks Pillow and
+  the MCP SDK and produces dozens of test failures plus several `mypy`
+  errors that do not exist on CI and are not defects in your change —
+  a full session has been lost to chasing them. `make help` lists the rest
+  of the wrappers; the ordered ladder and its failure-triage table live in
+  `.claude/skills/gate-ladder/SKILL.md`.
 - If you're an agent acting on behalf of the user, prefer `TaskCreate` /
   `TaskUpdate` for any multi-step work — the user reviews progress via
   that surface.
@@ -89,6 +97,12 @@
   change.
 - Update `docs/architecture/` if you changed an interface boundary, added
   a new external dependency, or moved a responsibility between modules.
+- If the change closes an `F-nnn`, follow
+  `.claude/skills/feature-closeout/SKILL.md` — in particular, `implemented_in`
+  must end up a hex commit SHA. A branch name resolves while the branch lives
+  and stops resolving once it is deleted post-merge, so the debt surfaces in
+  the nightly `--strict-git` harness job the morning after, far from the change
+  that caused it.
 - Mark your tasks complete; surface follow-ups via `TaskCreate`.
 
 ## Hardware-mode discipline
