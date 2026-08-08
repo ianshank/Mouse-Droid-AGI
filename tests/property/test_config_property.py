@@ -183,8 +183,15 @@ def test_legacy_codec_pwm_bounded_and_sign_preserving(vx: float, vy: float, omeg
 )
 @settings(max_examples=20, suppress_health_check=[HealthCheck.too_slow])
 def test_heartbeat_window_positive_int_and_monotone(keepalive_hz: float, multiple: float) -> None:
-    """The derived heartbeat window is a positive int, monotone in the multiple."""
-    from mousedroid.comms.command_set import heartbeat_window_ms
+    """The derived heartbeat window is a positive int, monotone in the multiple.
+
+    Strictly positive is the load-bearing half: ``{"T":136,"cmd":0}`` is the
+    firmware's *disable-failsafe* value, so a window that rounds to zero would
+    silently disarm the only thing that stops the wheels after a wedged host —
+    while the driver still logged ``esp32_heartbeat_armed``. ``keepalive_hz``
+    has no upper bound, so this is reachable from config alone.
+    """
+    from mousedroid.comms.command_set import MIN_HEARTBEAT_WINDOW_MS, heartbeat_window_ms
 
     cfg = ESP32Config.model_validate(
         {
@@ -195,7 +202,7 @@ def test_heartbeat_window_positive_int_and_monotone(keepalive_hz: float, multipl
     )
     window = heartbeat_window_ms(cfg)
     assert isinstance(window, int)
-    assert window >= 0
+    assert window >= MIN_HEARTBEAT_WINDOW_MS > 0
     bigger = ESP32Config.model_validate(
         {
             "command_set": "waveshare_stock",
