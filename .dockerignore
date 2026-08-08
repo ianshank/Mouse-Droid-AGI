@@ -115,6 +115,9 @@ var/
 .gitleaks.toml
 .github/advisory_stages.yaml
 
+# Developer entry points - thin wrappers over scripts/ with no runtime role.
+Makefile
+
 # Claude Code workforce governance (F-024) - edit-time developer tooling with no
 # runtime role. Keeping it out of the build context also keeps the image free of
 # a second, non-runtime pydantic/yaml consumer.

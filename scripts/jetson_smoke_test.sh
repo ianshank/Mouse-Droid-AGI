@@ -372,6 +372,7 @@ test_serial() {
     local serial_script
     serial_script=$(cat <<'PYEOF'
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -392,10 +393,35 @@ if not serial_port.exists():
     print(f"FAIL:Serial port {serial_port} not found")
     sys.exit(0)
 
+# Probe payload follows the configured command set (F-025): legacy keeps the
+# historical {"T": 0}; waveshare_stock probes with CMD_BASE_FEEDBACK — a READ
+# that elicits a FEEDBACK_BASE_INFO reply (an unknown command would be
+# silently ignored, reading a live board as dead). SMOKE_SERIAL_PROBE_JSON
+# overrides both for bench experiments.
+probe_env = os.environ.get("SMOKE_SERIAL_PROBE_JSON", "")
+try:
+    if probe_env:
+        # Parsed inside the guard: a malformed override must surface as a
+        # FAIL: line (the bash wrapper greps for those prefixes), never as an
+        # unhandled traceback that breaks the harness output contract.
+        probe = json.loads(probe_env)
+    elif cfg.esp32.command_set == "waveshare_stock":
+        from mousedroid.comms.command_set import WAVESHARE_CMD_BASE_FEEDBACK
+
+        probe = {"T": WAVESHARE_CMD_BASE_FEEDBACK}
+    else:
+        probe = {"T": 0}
+except ValueError as exc:
+    print(f"FAIL:SMOKE_SERIAL_PROBE_JSON is not valid JSON: {exc}")
+    sys.exit(0)
+if not isinstance(probe, dict):
+    print(f"FAIL:SMOKE_SERIAL_PROBE_JSON must be a JSON object, got {type(probe).__name__}")
+    sys.exit(0)
+
 try:
     ser = serial.Serial(str(serial_port), baud_rate, timeout=2)
     time.sleep(0.1)  # Allow port to stabilise
-    cmd = json.dumps({"T": 0}) + "\n"
+    cmd = json.dumps(probe) + "\n"
     ser.write(cmd.encode())
     ser.flush()
     response = ser.readline().decode().strip()

@@ -183,8 +183,11 @@ to `pytest`) and runs `--tier fast`; the nightly job adds `--tier fast,slow`.
 
 - The push job runs **without `--strict-git`** (warn-only) — feature-branch refs are
   brittle pre-merge. The **nightly** job uses `--strict-git`. **Post-merge maintenance:**
-  replace any branch-name `implemented_in` (currently `F-001`, `F-003`) with the
-  squash/merge SHA so the nightly strict-git job stays green on `main`.
+  replace any branch-name `implemented_in` with the squash/merge SHA so the nightly
+  strict-git job stays green on `main`. Do not restate which features are currently
+  affected here — that list goes stale between merges. Enumerate it instead with the
+  detector in `.claude/skills/feature-closeout/SKILL.md`, which flags every `done`
+  feature whose `implemented_in` is not a hex SHA.
 - The harness CI installs the full dev toolchain rather than only `pyyaml jsonschema`,
   because the seeded validation commands run real pytest suites.
 - The `hardware` tier is intentionally absent from hosted CI — run it on the self-hosted

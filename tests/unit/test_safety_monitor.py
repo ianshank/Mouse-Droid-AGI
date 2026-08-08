@@ -286,3 +286,43 @@ def test_lidar_features_none_no_emergency():
     ctx = m.evaluate(obs, loop_time_ms=10.0)
     assert ctx.is_emergency is False
     assert ctx.lidar_clearance_ok is True
+
+
+# ---------------------------------------------------------------------------
+# F-025 / D4 — a missing battery reading must not latch an emergency stop.
+# ---------------------------------------------------------------------------
+
+
+def test_missing_battery_reading_is_not_a_critical_battery():
+    """0.0 V means "no telemetry", not "flat pack".
+
+    The comms layer reports an unavailable reading as 0.0 V to keep the
+    ``ESP32CommProtocol`` signature. Before the plausibility floor that value
+    satisfied ``0.0 < battery_critical_v`` on EVERY tick, latching a
+    permanent emergency stop from a transient comms fault — while the smoke
+    runbook pointed the operator at the battery.
+    """
+    m = _make_monitor(battery_critical_v=9.5, battery_implausible_below_v=1.0)
+    ctx = m.evaluate(_make_obs(battery_v=0.0), loop_time_ms=10.0)
+    assert ctx.is_emergency is False
+
+
+def test_genuinely_flat_pack_still_triggers_emergency():
+    """The floor must not mask a real low-voltage condition."""
+    m = _make_monitor(battery_critical_v=9.5, battery_implausible_below_v=1.0)
+    ctx = m.evaluate(_make_obs(battery_v=9.0), loop_time_ms=10.0)
+    assert ctx.is_emergency is True
+
+
+def test_reading_just_above_the_floor_is_trusted():
+    """Only sub-floor values are reclassified; 1.5 V is a real (dire) read."""
+    m = _make_monitor(battery_critical_v=9.5, battery_implausible_below_v=1.0)
+    ctx = m.evaluate(_make_obs(battery_v=1.5), loop_time_ms=10.0)
+    assert ctx.is_emergency is True
+
+
+def test_floor_of_zero_restores_pre_f025_behaviour():
+    """Backwards-compatible escape hatch: 0 disables the plausibility check."""
+    m = _make_monitor(battery_critical_v=9.5, battery_implausible_below_v=0.0)
+    ctx = m.evaluate(_make_obs(battery_v=0.0), loop_time_ms=10.0)
+    assert ctx.is_emergency is True

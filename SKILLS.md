@@ -472,9 +472,72 @@ shape.
    (rover-only, `@pytest.mark.hardware`).
 6. Update `docs/architecture/` if you added a new external boundary.
 
+### test-tier-mirror
+
+> Project skill: `.claude/skills/test-tier-mirror/SKILL.md` — invoke it,
+> don't paraphrase it.
+
+**Trigger:** "where should this test go?", "which tier?", "is this tested at
+the right level?", "add coverage for X".
+
+**Read:**
+- `.claude/skills/test-tier-mirror/SKILL.md` — the nine-tier table, the
+  tier-selection heuristics, skip-gate conventions
+- `tests/integration/test_f025_integration.py` — reference shape for
+  "the mock bypasses the code under test, so fake at the transport boundary"
+- `tests/regression/test_optional_extra_import_gates.py` — the gate that
+  enforces `pytest.importorskip` for optional extras
+
+**Guardrails:** a test that cannot fail reads as coverage and is worse than no
+test. Three patterns to avoid — asserting a flag that is set once and never
+cleared, `isinstance` against a `runtime_checkable` Protocol (presence only),
+and pinning YAML key-absence instead of the value. Under `PYTHONOPTIMIZE=1`
+(the Jetson entrypoint) `assert` is stripped — use explicit
+`if not ...: raise` in `src/` and in inline shell one-liners.
+
+### feature-closeout
+
+> Project skill: `.claude/skills/feature-closeout/SKILL.md`.
+
+**Trigger:** "mark F-nnn done", "close out the feature", "is F-nnn actually
+closed?", "the nightly harness went red on implemented_in".
+
+**Read:**
+- `.claude/skills/feature-closeout/SKILL.md` — the full chain + a detector
+  script for the whole catalog
+- `features.yaml` — the catalog; `scripts/validate.py` — the gate
+
+**Run:**
+```bash
+python scripts/validate.py --check F-025          # one feature, any tier
+python scripts/validate.py --tier fast            # what every push runs
+python scripts/validate.py --tier fast,slow --strict-git   # what nightly runs
+```
+
+**Guardrails:** `implemented_in` must be a hex commit SHA on every `done`
+feature. A branch name resolves while the branch is alive and stops resolving
+the moment it is deleted post-merge — reddening the nightly `--strict-git` job
+the morning after, far from the change that caused it. Land the code, then
+amend `features.yaml` with the real SHA; never leave a placeholder.
+
 ### run-pre-pr-validation
 
+> The ordered local ladder lives in `.claude/skills/gate-ladder/SKILL.md`
+> (invoke it for the full sequence + failure-triage table). This section
+> keeps the Windows-interpreter form and the subagent delegation step.
+
 **Trigger:** "I'm about to push a PR", "is this ready to merge?"
+
+**Install first — this is step 0, not a footnote:**
+
+```bash
+pip install -e ".[dev,telemetry,mcp]"
+```
+
+matching `.github/workflows/ci.yml`'s `test` job. A bare `[dev]` environment
+lacks Pillow (`[telemetry]`) and the MCP SDK (`[mcp]`) and produces dozens of
+failures plus several `mypy` errors that do not exist on CI and are not
+defects in your change.
 
 **Process:**
 

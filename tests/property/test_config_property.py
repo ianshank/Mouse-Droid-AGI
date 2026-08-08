@@ -135,3 +135,79 @@ def test_circuit_breaker_config_valid(
         half_open_max_calls=half_open_max_calls,
     )
     assert cfg.failure_threshold > 0
+
+
+# ---------------------------------------------------------------------------
+# F-025 — command-set codec invariants over the input space
+# ---------------------------------------------------------------------------
+
+_any_velocity = st.floats(min_value=-1e6, max_value=1e6, allow_nan=False, allow_infinity=False)
+
+
+@given(vx=_any_velocity, vy=_any_velocity, omega=_any_velocity)
+@settings(max_examples=20, suppress_health_check=[HealthCheck.too_slow])
+def test_stock_codec_velocity_clamped_physical_no_quantisation(
+    vx: float, vy: float, omega: float
+) -> None:
+    """Stock X/Z are exact clamped physical values — never PWM-quantised."""
+    from mousedroid.comms._utils import clamp
+    from mousedroid.comms.command_set import WAVESHARE_STOCK_CODEC
+
+    cfg = ESP32Config.model_validate({"command_set": "waveshare_stock"})
+    cmd = WAVESHARE_STOCK_CODEC.build_velocity(vx, vy, omega, cfg)
+    assert set(cmd) == {"T", "X", "Z"}
+    assert abs(cmd["X"]) <= cfg.max_velocity_mps
+    assert abs(cmd["Z"]) <= cfg.max_omega_rads
+    assert cmd["X"] == clamp(vx, -cfg.max_velocity_mps, cfg.max_velocity_mps)
+    assert cmd["Z"] == clamp(omega, -cfg.max_omega_rads, cfg.max_omega_rads)
+
+
+@given(vx=_any_velocity, vy=_any_velocity, omega=_any_velocity)
+@settings(max_examples=20, suppress_health_check=[HealthCheck.too_slow])
+def test_legacy_codec_pwm_bounded_and_sign_preserving(vx: float, vy: float, omega: float) -> None:
+    """Legacy PWM stays within ±MAX_PWM and never flips sign."""
+    from mousedroid.comms._utils import MAX_PWM
+    from mousedroid.comms.command_set import LEGACY_CODEC
+
+    cfg = ESP32Config()
+    cmd = LEGACY_CODEC.build_velocity(vx, vy, omega, cfg)
+    for axis, physical in (("vx", vx), ("vy", vy), ("omega", omega)):
+        assert abs(cmd[axis]) <= MAX_PWM
+        if cmd[axis] != 0:
+            assert (cmd[axis] > 0) == (physical > 0)
+
+
+@given(
+    keepalive_hz=st.floats(min_value=0.1, max_value=1000.0, allow_nan=False, allow_infinity=False),
+    multiple=st.floats(min_value=0.1, max_value=100.0, allow_nan=False, allow_infinity=False),
+)
+@settings(max_examples=20, suppress_health_check=[HealthCheck.too_slow])
+def test_heartbeat_window_positive_int_and_monotone(keepalive_hz: float, multiple: float) -> None:
+    """The derived heartbeat window is a positive int, monotone in the multiple.
+
+    Strictly positive is the load-bearing half: ``{"T":136,"cmd":0}`` is the
+    firmware's *disable-failsafe* value, so a window that rounds to zero would
+    silently disarm the only thing that stops the wheels after a wedged host —
+    while the driver still logged ``esp32_heartbeat_armed``. ``keepalive_hz``
+    has no upper bound, so this is reachable from config alone.
+    """
+    from mousedroid.comms.command_set import MIN_HEARTBEAT_WINDOW_MS, heartbeat_window_ms
+
+    cfg = ESP32Config.model_validate(
+        {
+            "command_set": "waveshare_stock",
+            "keepalive_hz": keepalive_hz,
+            "heartbeat_window_multiple": multiple,
+        }
+    )
+    window = heartbeat_window_ms(cfg)
+    assert isinstance(window, int)
+    assert window >= MIN_HEARTBEAT_WINDOW_MS > 0
+    bigger = ESP32Config.model_validate(
+        {
+            "command_set": "waveshare_stock",
+            "keepalive_hz": keepalive_hz,
+            "heartbeat_window_multiple": multiple * 2.0,
+        }
+    )
+    assert heartbeat_window_ms(bigger) >= window

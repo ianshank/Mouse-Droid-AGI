@@ -92,7 +92,34 @@ MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION=true \
 
 The actual setpoint comes from `ESP32Config.smoke_test_velocity_mps`
 (setting `0.0` permanently locks the smoke harness to zero-motion); the
-assertion window from `smoke_test_min_velocity_fraction`.
+assertion window from `smoke_test_min_velocity_fraction` — **only when
+`chassis_has_wheel_encoders: true`**. The WAVE ROVER ships encoder-less
+(vendor audit R3), so with the flag `false` the motion criterion re-scopes
+to "command accepted + e-stop within budget".
+
+### Firmware command set (F-025)
+
+`ESP32Config.command_set` selects the wire protocol: `legacy` (default,
+the historical private JSON) or `waveshare_stock` (stock `General_Driver`
+firmware — `CMD_ROS_CTRL` velocity, `CMD_HEART_BEAT_SET` failsafe armed at
+connect, telemetry from `FEEDBACK_BASE_INFO`). Until
+`deployments/jetson-image.json` is re-pinned, opt in via env only:
+
+```bash
+MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock bash scripts/jetson_smoke_test.sh serial
+```
+
+Selecting stock also derives `serial_baud=115200`, so the command set is
+the only lever you need to set. The derivation is suppressed **only** by a
+*non-default* baud pin; an explicit pin that happens to equal the schema
+default still derives 115200, which matters because both shipped overlays
+pin exactly that value. Keying the rule on "is it pinned at all" instead
+would leave the rover at the legacy 1 Mbaud, where stock firmware reads as
+line noise — which is how a live board gets diagnosed dead (audit R2).
+
+The serial probe follows the selector (stock probes with `{"T":130}`, a
+read that elicits a reply); `SMOKE_SERIAL_PROBE_JSON` overrides it for
+bench experiments.
 
 ## Triage matrix
 
@@ -100,9 +127,10 @@ assertion window from `smoke_test_min_velocity_fraction`.
 |-------------------------|-------------|
 | `usbc` FAIL | `ls /dev/serial/by-id/` — confirm both CP2102N (rover) and CP2102 (lidar) cables are seated and not held by another process. |
 | `serial` FAIL after `usbc` PASS | Container may be holding the port. Restart with `docker compose -f docker-compose.jetson.yml restart mousedroid`. |
-| `motor` FAIL `encoder loopback inactive` | Rover power; motor/encoder wiring; rover firmware version. Re-run with `MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION=true` only after lifting the rover off the ground. |
+| `motor` FAIL `encoder loopback inactive` | First: is `chassis_has_wheel_encoders` right for this chassis? The WAVE ROVER is encoder-less — the loopback criterion is unsatisfiable there (audit R3; set the flag `false`). On an encoder-bearing chassis: rover power; motor/encoder wiring; rover firmware version. Re-run with `MOUSEDROID_ESP32__SMOKE_TEST_ALLOW_MOTION=true` only after lifting the rover off the ground. |
+| `serial` WARN no response on a presumed-live board | Command-set/baud mismatch (audit R1/R2): stock firmware ignores legacy commands and runs 115 200 baud. Retry with `MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock` before declaring the board dead. |
 | `power` FAIL on e-stop latency | `ESP32Config.emergency_stop_budget_ms` may need re-tuning OR the UART is congested — check `command_dispatch` log volume in `power.log`. |
-| `power` FAIL on battery voltage | Charge the pack or raise the rail; threshold is `safety.battery_critical_v`. |
+| `power` FAIL on battery voltage | **Check whether the reading is real before touching the pack.** Grep the stage log for `esp32_battery_reading_unavailable` (WARN-once per connection) and `battery_reading_implausible`: either means no valid voltage came back and the number is not a measurement — chase a command-set/baud mismatch (row above), not the battery. Only when a plausible reading is present does the pack matter: charge it or raise the rail; threshold is `safety.battery_critical_v`, and the "is this even a reading" floor is `safety.battery_implausible_below_v`. |
 | `lidar` FAIL | `udevadm info /dev/serial/by-id/usb-Silicon_Labs_CP2102_*` to confirm the LD19 sits on the lidar bridge, not the rover bridge. |
 | `e2e` FAIL with camera reason | See `verify_sensors.py`'s `_diagnose_camera_host` output — surfaced in `e2e.log`. |
 | `voice` FAIL | `SUMMARY.md` emits a "Rocky voice prerequisites" remediation section listing the specific Piper / model-path / device issue. |

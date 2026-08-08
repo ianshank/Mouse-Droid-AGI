@@ -8,6 +8,155 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — F-025: ESP32 driver speaks stock Waveshare firmware (command-set codec seam)
+
+The private ESP32 JSON protocol never had firmware behind it — `firmware/` was
+never committed, and stock `General_Driver` firmware reads the legacy motion
+command as zeros while the legacy battery poll (`{"T":2}`) is stock
+`CMD_SET_MOTOR_PID`: a motor-controller **write** fired immediately before
+commanding motion. The comms layer now dispatches every command-build and
+response-parse through a codec seam, default-`legacy` and byte-identical:
+
+- **`ESP32Config.command_set` selector** (`legacy` default | `waveshare_stock`)
+  + `heartbeat_enabled` / `heartbeat_window_multiple` /
+  `chassis_has_wheel_encoders`, all defaulted (invariant #9). The
+  after-validator derives the stock 115 200 baud only when `serial_baud` is
+  not explicitly pinned, and rejects stock+`wifi` at YAML-load (stock
+  firmware has no HTTP `/cmd` API).
+- **`mousedroid/comms/command_set.py`** — `ESP32CommandCodec` Protocol with
+  stateless singletons: `LegacyCommandCodec` (pure `_utils` delegation;
+  golden wire-JSON strings pinned) and `WaveshareStockCodec` (vendor keys
+  verified against `json_cmd.h` + `ugv_advance.h`: `CMD_ROS_CTRL`
+  `{"T":13,"X","Z"}` clamped physical units; stop = zero-velocity T=13 —
+  stock defines no e-stop command; battery/encoders polled via
+  `CMD_BASE_FEEDBACK` T=130 and parsed from the T-gated
+  `FEEDBACK_BASE_INFO` 1001 frame; `CMD_HEART_BEAT_SET` chassis failsafe
+  armed at connect, window = `1000/keepalive_hz * multiple` —
+  `keepalive_hz`'s first real consumer).
+- **Driver delegation** — `BaseESP32Driver` resolves its codec from config
+  (no constructor change); transports call `_arm_command_set()` at connect
+  (zero extra writes under legacy — pinned); payloads widened to covariant
+  `Mapping[str, float]`; `vy` on a lateral-less codec logs
+  `esp32_lateral_velocity_unsupported` WARN-once-per-connection.
+- **Encoder-less smoke re-scope (audit R3)** — with
+  `chassis_has_wheel_encoders: false` the unsatisfiable encoder-velocity
+  criterion becomes "command accepted + e-stop within budget"; under stock
+  the settle window re-sends at `keepalive_hz` (the 300 ms heartbeat window
+  is shorter than the 0.5 s settle). `jetson_smoke_test.sh`'s serial probe
+  follows the selector (stock probes with a read that elicits a reply).
+- **Gates:** stock/legacy pins in the two `validation_command` files +
+  `test_f025_{backwards_compat,aqa}.py`, `test_f025_sanity.py` (Literal
+  YAML round-trip), property invariants (clamping/no-quantisation/window
+  monotonicity), factory dispatch + USB-C `model_copy` preservation pins,
+  resilience-layer command-set-agnosticism pin.
+- **Docs reconciled:** CLAUDE.md F-025 contract block,
+  `docs/runbooks/jetson-rover-smoke.md` (selector/baud triage rows; the
+  "no response on a presumed-live board" row now points at the
+  command-set/baud mismatch before declaring boards dead),
+  `docs/architecture/c4-usbc-smoke.md` node, `config/docker.env.example`
+  env lever. No `config/*.yaml` overlay opts in (config-compat gate);
+  `MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock` is the live-rover lever.
+
+### Fixed — F-025 hardening: the baud derivation was dead, plus four safety defects
+
+An adversarial self-review of the F-025 diff (three parallel review passes plus
+Copilot) found fifteen defects. The blocking one silently defeated the feature's
+entire purpose; four more were safety-relevant. All confirmed with executed
+evidence before being fixed:
+
+- **The stock baud derivation never fired on a real deployment.** It keyed on
+  `"serial_baud" not in model_fields_set`, but `loader.py` does
+  `Settings(**merged)` and *both* shipped overlays pin `serial_baud: 1000000`,
+  so the key was always present. Following the runbook's own advice ("retry with
+  `MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock` before declaring the board
+  dead") opened the port at 1 Mbaud and reproduced the exact "board is dead"
+  misdiagnosis F-025 exists to prevent. The condition now keys on the *effective
+  value vs the schema default* — read off `model_fields["serial_baud"].default`,
+  never a literal — so a YAML pinning the legacy default still derives 115 200
+  while a deliberate non-default pin wins. Fires an INFO
+  `esp32_stock_baud_derived`. No F-025 test went through `load_settings()`; the
+  regression now does.
+- **Battery: `parse_battery` returns `float | None`.** A fabricated `0.0` on an
+  unreadable frame is indistinguishable from a flat pack, and `0.0 <
+  battery_critical_v` latched a **permanent** emergency stop on what was really a
+  comms fault — with a runbook row that said "charge the pack". Fixed at three
+  layers: codec returns `None`, driver logs
+  `esp32_battery_reading_unavailable` (WARN-once per connection) and reports
+  `0.0`, and the new `SafetyConfig.battery_implausible_below_v` (default 1.0,
+  `ge=0`) screens the reading as *missing* before the critical branch. A floor of
+  0 restores the previous behaviour exactly.
+- **Heartbeat window is derived from the driver's own budgets.** The old
+  `1000/keepalive_hz * multiple` gave 300 ms — shorter than `tick_timeout_s`
+  (1000 ms), `command_timeout_s` (500 ms) and `degraded_poll_interval_s`
+  (1000 ms), so a tick that was *explicitly permitted* to overrun would have the
+  firmware halt the wheels mid-motion with the host none the wiser. Now
+  `ceil(worst_case_command_gap_s(cfg) * multiple)` (3000 ms on defaults), floored
+  at `MIN_HEARTBEAT_WINDOW_MS` because `keepalive_hz` has no upper bound and a
+  rounded-to-zero window is the firmware's *disable-failsafe* value. A
+  hand-tightened window that still undercuts a budget emits
+  `esp32_heartbeat_window_below_blocking_budget`.
+- **Connect is atomic; reads are serialised.** `_arm_command_set()` raising left
+  the port open and `_connected=True` while the resilience wrapper retried,
+  leaking an fd per attempt; `connect()` now closes, clears and re-raises. And
+  `sensing/manager.py` gathers `read_encoders` + `get_battery_voltage`, which
+  under stock both poll `{"T":130}` — two `readline()`s in different threads on
+  one pyserial handle could pair a reply with the wrong request, so `_query_data`
+  is guarded by a per-driver `asyncio.Lock`.
+- **Logged experience equals executed action.** Stock has no lateral axis, so the
+  orchestrator projects the action onto the executable axes before dispatch;
+  previously the full unmodified action was logged and the world model was fit on
+  a physically inert `action[1]`.
+- **Weak tests replaced.** `assert driver.inner._connected is True` could not
+  fail (set once in `connect()`, never cleared) and `isinstance` against a
+  `runtime_checkable` Protocol checks attribute *presence* only. Both now assert
+  through the public protocol / real callable arity. Plus Copilot's four: the
+  smoke script's `json.loads` moved inside its `try` so a malformed probe reply
+  emits `FAIL:` per the harness contract, and the secret-scan pin asserts
+  `is not True` rather than key-absence.
+- **New `tests/integration/test_f025_integration.py`.** The tier was missing and
+  stock had *zero* non-hardware integration coverage: `jetson_production.yaml`
+  ships `esp32.enabled: false`, so a factory build returns `MockESP32Driver`,
+  which never touches a codec. The new file builds the real `SerialESP32Driver`
+  through the factory over a fake serial port.
+
+### Fixed — repo hygiene: optional-extra import gates + local/CI gate parity
+
+- **Pillow imports in tests are gated.** Five test modules reached Pillow (the
+  `[telemetry]` extra) with no `pytest.importorskip`, so a
+  `pip install -e ".[dev]"` checkout produced 31 failures and 3 `mypy` errors
+  that look like real defects and are not — CI stayed green only because the
+  `test` job happens to install `[dev,telemetry,mcp]`. The rest of the suite uses
+  `importorskip` for exactly this in 170 places.
+  `tests/regression/test_optional_extra_import_gates.py` now keeps it mechanical
+  (it found the fifth offender). `validation/runtime.py`'s silent
+  `except ImportError: return None` also emits
+  `camera_jpeg_encode_skipped_no_pillow` with the install hint, so
+  `--save-frame` writing no file is diagnosable instead of looking like a dead
+  camera.
+- **`scripts/ci.sh`'s gitleaks stage is blocking**, matching the CI job promoted
+  advisory → blocking on 2026-08-07. It previously swallowed findings with
+  `|| echo WARN`, so a local full-CI run went green on exactly the diff the PR
+  then failed on.
+
+### Added — developer entry points: `Makefile` + three project skills
+
+- **`Makefile`** — thin, discoverable wrappers over existing tooling
+  (`make help` lists them). Nothing reimplements a gate: `scripts/ci.sh` stays
+  the authoritative local superset and each target is a single delegation.
+  `make install` uses the extras CI uses, which is the step that prevents the
+  phantom-failure class above.
+- **`.claude/skills/feature-closeout/`** — the `features.yaml` →
+  `scripts/validate.py` → narrative-docs chain, including the `implemented_in`
+  SHA pin deferred in six consecutive sessions. Ships a detector for the whole
+  catalog: a branch-name ref resolves while the branch lives and stops resolving
+  once it is deleted post-merge, reddening the nightly `--strict-git` job far
+  from the change that caused it.
+- **`.claude/skills/gate-ladder/`** — the pre-push order from `scripts/ci.sh`
+  with a failure-triage table, led by the correct local install.
+- **`.claude/skills/test-tier-mirror/`** — the nine-tier table, tier-selection
+  heuristics ("does it go through `factory.py`?", "would a mock make it
+  vacuous?"), skip-gate conventions, and the cannot-fail assertion patterns.
+
 ### Fixed — Jetson deploy prep: truthful deploy surface + campaign plan
 
 Repo-side prep for a full on-device deployment and validation campaign. Each

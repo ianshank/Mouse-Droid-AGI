@@ -116,6 +116,9 @@ async def test_camera_jpeg_round_trips_through_proxy_with_token(
     2. The bytes returned to the client are the same JPEG MockCamera produced.
     3. The response Content-Type survives the proxy unchanged.
     """
+    # The WHOLE chain needs Pillow: MockCamera._capture_procedural_jpeg
+    # degrades to None without it and the endpoint answers 503 by design.
+    pytest.importorskip("PIL", reason="Pillow (mousedroid[telemetry]) encodes the JPEG")
     monkeypatch.setattr(
         sys,
         "argv",
@@ -157,6 +160,7 @@ async def test_camera_jpeg_round_trips_through_proxy_with_token(
         # Payload surface: the proxied JPEG is a real one — i.e. starts with
         # the JPEG SOI marker and decodes back to the configured resolution.
         assert body.startswith(b"\xff\xd8\xff"), "Proxied bytes are not JPEG"
+        pytest.importorskip("PIL", reason="Pillow (mousedroid[telemetry]) decodes the JPEG")
         from io import BytesIO
 
         from PIL import Image
@@ -183,6 +187,7 @@ async def test_no_token_configured_means_no_auth_injection_to_upstream(
     Matches the Grafana / Prometheus deployment mode where the dashboard
     has its own auth and would reject a Bearer header.
     """
+    pytest.importorskip("PIL", reason="Pillow (mousedroid[telemetry]) encodes the JPEG")
     monkeypatch.setattr(
         sys,
         "argv",

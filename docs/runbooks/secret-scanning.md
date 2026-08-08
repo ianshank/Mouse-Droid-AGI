@@ -10,8 +10,8 @@ when the binary is on PATH.
 
 | Surface | Mode | Scope |
 |---------|------|-------|
-| CI job `gitleaks` | advisory (`continue-on-error: true`) | **full history** (`fetch-depth: 0`) |
-| `scripts/ci.sh` stage | advisory, skipped if binary absent | working tree |
+| CI job `gitleaks` | **blocking** (promoted 2026-08-07) | **full history** (`fetch-depth: 0`) |
+| `scripts/ci.sh` stage | **blocking** when the binary is present; skipped (loudly) when absent | working tree |
 | Local pre-commit hook (below) | blocking for the committer | staged files |
 
 ## Allowlist policy — the one rule
@@ -28,11 +28,14 @@ non-key-shaped (short, no base64 tail) and add its literal regex to
 
 ## Promotion protocol
 
-The CI job is advisory since 2026-07-03. After **7 consecutive green runs**,
-drop `continue-on-error: true` to make it blocking (the
-`onnx-world-model-extras` promotion pattern). The stage is tracked in
-`.github/advisory_stages.yaml` and `scripts/check_advisory_promotions.py`
-warns when the promotion is overdue.
+**Promoted advisory → blocking 2026-08-07.** The job ran advisory from
+2026-07-03; `scripts/check_advisory_promotions.py` flagged it overdue at 34
+days against its 30-day window, with the job green across recent runs
+(including runs where unrelated jobs failed). `continue-on-error: true` was
+dropped and the `.github/advisory_stages.yaml` entry retired (the tracker
+covers only jobs carrying the flag). Re-demoting to advisory requires
+re-adding both, with a dated reason —
+`tests/regression/test_secret_scan_gate.py` pins the blocking state.
 
 ## Local pre-commit hook (recommended)
 

@@ -417,6 +417,7 @@ def test_frame_to_rgb_2d_luma_frame_cloned_to_rgb_without_crash():
 @pytest.mark.asyncio
 async def test_capture_raw_jpeg_round_trips_through_pillow():
     """Full capture_raw_jpeg → real Pillow-encoded JPEG bytes."""
+    pytest.importorskip("PIL", reason="Pillow (mousedroid[telemetry]) encodes the JPEG")
     from io import BytesIO
 
     from PIL import Image
@@ -493,6 +494,7 @@ async def test_capture_raw_jpeg_returns_none_when_pillow_rejects_frame(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Defensive: Image.fromarray raising TypeError → return None (no 500)."""
+    pytest.importorskip("PIL", reason="Pillow (mousedroid[telemetry]) encodes the JPEG")
     from PIL import Image
 
     from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera

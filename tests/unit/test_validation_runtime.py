@@ -216,6 +216,9 @@ async def test_capture_camera_frame_captures_multiple_frames_and_saves_jpeg(
     tmp_path: Path,
 ) -> None:
     """``--save-frame`` + ``--frames N`` round-trip — Task 1 acceptance regression."""
+    # The snapshot leg encodes through Pillow, which ships in ``[telemetry]``;
+    # without it ``_encode_jpeg`` degrades to ``None`` and ``saved_to`` is unset.
+    pytest.importorskip("PIL", reason="Pillow (mousedroid[telemetry]) encodes the snapshot JPEG")
 
     class JpegStubCamera:
         """Stub exposing ``capture_raw_frame`` so the JPEG fallback (Pillow encode) fires."""
@@ -1150,6 +1153,7 @@ async def test_capture_camera_frame_honours_snapshot_jpeg_quality(
     tmp_path: Path,
 ) -> None:
     """``cfg.camera.snapshot_jpeg_quality`` flows through to Pillow's encoder."""
+    pytest.importorskip("PIL", reason="Pillow (mousedroid[telemetry]) encodes the snapshot JPEG")
 
     class _StubCamera:
         _backend = "qualstub"
@@ -1211,3 +1215,43 @@ def test_discover_hef_role_fields_falls_back_when_model_fields_absent() -> None:
 
     roles = dict(runtime._discover_hef_role_fields(_StubHailoCfg()))
     assert roles == {"yolo": "yolo_hef_path", "feature_extractor": "feature_extractor_hef_path"}
+
+
+async def test_encode_camera_frame_jpeg_logs_when_pillow_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing Pillow extra leaves a breadcrumb instead of degrading silently.
+
+    ``--save-frame`` then writes no file, which reads as a dead camera unless
+    the log says otherwise. The import is inline (not module-level), so the
+    absence is simulated by making ``PIL`` unimportable for the duration.
+    """
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _no_pillow(name: str, *args: object, **kwargs: object) -> object:
+        if name == "PIL" or name.startswith("PIL."):
+            msg = "simulated missing Pillow extra"
+            raise ImportError(msg)
+        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(builtins, "__import__", _no_pillow)
+
+    events: list[tuple[str, dict[str, object]]] = []
+
+    class _RecordingLog:
+        def warning(self, event: str, **kw: object) -> None:
+            events.append((event, kw))
+
+    monkeypatch.setattr(runtime, "_log", _RecordingLog())
+
+    frame = np.zeros((4, 6, 3), dtype=np.uint8)
+    # A camera with no ``capture_raw_jpeg`` forces the Pillow fallback leg.
+    result = await runtime._encode_camera_frame_jpeg(object(), frame)
+
+    assert result is None
+    assert [e for e, _ in events] == ["camera_jpeg_encode_skipped_no_pillow"]
+    # The log must carry the fix, not just the symptom.
+    assert "telemetry" in str(events[0][1]["hint"])
+    assert events[0][1]["frame_shape"] == (4, 6, 3)

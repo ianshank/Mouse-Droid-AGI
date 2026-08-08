@@ -14,6 +14,8 @@ from mousedroid.comms.base_driver import BaseESP32Driver
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from mousedroid.config.schema import ESP32Config
 
 _log = get_logger(__name__)
@@ -41,6 +43,10 @@ class WiFiESP32Driver(BaseESP32Driver):
         """Mark connection as established (HTTP is stateless)."""
         self._connected = True
         _log.info("wifi_esp32_connected", base_url=self._base_url)
+        # F-025: no-op under legacy (empty command list); the stock command
+        # set cannot reach this transport (schema validator rejects
+        # command_set='waveshare_stock' + protocol='wifi' at load time).
+        await self._arm_command_set()
 
     async def disconnect(self) -> None:
         """Mark connection as closed."""
@@ -51,18 +57,18 @@ class WiFiESP32Driver(BaseESP32Driver):
     # Transport implementation
     # ------------------------------------------------------------------
 
-    async def _send_command(self, cmd: dict[str, int]) -> None:
+    async def _send_command(self, cmd: Mapping[str, float]) -> None:
         """POST a JSON command to the ESP32 ``/cmd`` endpoint.
 
         Args:
-            cmd: Command dictionary to serialise and POST.
+            cmd: Command payload to serialise and POST.
         """
         await self._post_json("/cmd", cmd)
 
     async def _query_data(
         self,
         resource: str,
-        cmd: dict[str, int] | None = None,
+        cmd: Mapping[str, float] | None = None,
     ) -> dict[str, Any]:
         """GET JSON data from an ESP32 endpoint.
 
@@ -83,30 +89,32 @@ class WiFiESP32Driver(BaseESP32Driver):
     # Low-level HTTP helpers
     # ------------------------------------------------------------------
 
-    async def _post_json(self, path: str, data: dict[str, Any]) -> dict[str, Any]:
+    async def _post_json(self, path: str, data: Mapping[str, Any]) -> dict[str, Any]:
         """HTTP POST JSON to ESP32.
 
         Args:
             path: URL path.
-            data: Dictionary to send as JSON body.
+            data: Payload mapping to send as JSON body.
 
         Returns:
             Parsed JSON response.
         """
         return await asyncio.to_thread(self._blocking_post, path, data)
 
-    def _blocking_post(self, path: str, data: dict[str, Any]) -> dict[str, Any]:  # pragma: no cover
+    def _blocking_post(
+        self, path: str, data: Mapping[str, Any]
+    ) -> dict[str, Any]:  # pragma: no cover
         """Perform blocking HTTP POST.
 
         Args:
             path: URL path.
-            data: Dictionary to send as JSON body.
+            data: Payload mapping to send as JSON body.
 
         Returns:
             Parsed JSON response.
         """
         url = f"{self._base_url}{path}"
-        payload = json.dumps(data).encode()
+        payload = json.dumps(dict(data)).encode()
         req = urllib.request.Request(  # noqa: S310 — scheme is a fixed http:// literal (see _base_url)
             url,
             data=payload,

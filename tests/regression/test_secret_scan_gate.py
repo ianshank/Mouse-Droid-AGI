@@ -2,8 +2,8 @@
 
 Binary-free assertions over the three gate surfaces:
 
-* the ``gitleaks`` CI job in ``.github/workflows/ci.yml`` (advisory,
-  full-history, image pinned to an exact patch tag),
+* the ``gitleaks`` CI job in ``.github/workflows/ci.yml`` (blocking since the
+  2026-08-07 promotion, full-history, image pinned to an exact patch tag),
 * the ``.gitleaks.toml`` allowlist (regex-only — a ``paths`` allowlist would
   blind the scanner to real secrets landing in waived files),
 * the advisory ``scripts/ci.sh`` stage (guarded so a missing binary skips
@@ -48,15 +48,18 @@ def _load_ci_jobs() -> dict:
 
 
 class TestGitleaksCiJob:
-    """The CI job exists, is advisory, scans full history, pins its image."""
+    """The CI job exists, is blocking, scans full history, pins its image."""
 
-    def test_job_exists_and_is_advisory(self) -> None:
+    def test_job_exists_and_is_blocking(self) -> None:
         jobs = _load_ci_jobs()
         assert "gitleaks" in jobs, "gitleaks job missing from ci.yml"
         job = jobs["gitleaks"]
-        assert job.get("continue-on-error") is True, (
-            "gitleaks must stay advisory (continue-on-error: true) until the "
-            "7-green-run promotion documented in docs/runbooks/secret-scanning.md"
+        # Assert the SEMANTIC contract, not the YAML shape: an explicit
+        # `continue-on-error: false` is still blocking and must pass.
+        assert job.get("continue-on-error") is not True, (
+            "gitleaks was promoted advisory -> blocking 2026-08-07 "
+            "(docs/runbooks/secret-scanning.md) - re-demoting it to advisory "
+            "requires a recorded decision, not a workflow edit"
         )
         assert job.get("needs") == "lint"
 

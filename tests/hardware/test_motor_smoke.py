@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 if TYPE_CHECKING:
+    from mousedroid.comms.protocol import ESP32CommProtocol
     from mousedroid.config.schema import Settings
 
 pytestmark = pytest.mark.hardware
@@ -49,21 +50,33 @@ async def test_velocity_roundtrip_clamps_and_dispatches(
 
     When the operator explicitly opts in (e.g. rover on rollers),
     ``smoke_test_allow_motion=True`` lets the test drive the motors at
-    ``smoke_test_velocity_mps`` and assert the encoder reflects the
-    setpoint within ``smoke_test_min_velocity_fraction``.
+    ``smoke_test_velocity_mps``. The motion-quality criterion then depends
+    on the chassis (F-025 / audit R3): with wheel encoders
+    (``chassis_has_wheel_encoders=True``) the encoder must reflect the
+    setpoint within ``smoke_test_min_velocity_fraction``; on an
+    encoder-less chassis (WAVE ROVER) that assertion is unsatisfiable —
+    the re-scoped criterion is "command accepted (send path raised
+    nothing) + e-stop within budget" (the budget half lives in
+    ``test_emergency_stop_latency_within_budget``).
+
+    Under ``command_set='waveshare_stock'`` with the chassis heartbeat
+    armed, the settle window re-sends the velocity at ``keepalive_hz``
+    only when the derived heartbeat window is shorter than
+    ``smoke_test_settle_s``. With the shipped defaults the window is
+    3000 ms against a 500 ms settle, so a single send suffices; a
+    hand-tightened window re-enables the keepalive automatically. (The
+    300 ms figure belongs to the superseded ``keepalive_hz``-only
+    derivation — see ``heartbeat_window_ms``.)
     """
     from mousedroid.factory import build_esp32_driver
 
     driver = build_esp32_driver(jetson_settings)
     await driver.connect()
     try:
-        target_vx = (
-            jetson_settings.esp32.smoke_test_velocity_mps
-            if jetson_settings.esp32.smoke_test_allow_motion
-            else 0.0
-        )
+        esp32_cfg = jetson_settings.esp32
+        target_vx = esp32_cfg.smoke_test_velocity_mps if esp32_cfg.smoke_test_allow_motion else 0.0
         await driver.send_velocity(target_vx, 0.0, 0.0)
-        await asyncio.sleep(jetson_settings.esp32.smoke_test_settle_s)
+        await _settle_with_keepalive(driver, jetson_settings, target_vx)
         reading = await driver.read_encoders()
         # Structural assertion: every encoder field is well-typed.
         assert isinstance(reading.left_velocity_mps, float)
@@ -73,13 +86,52 @@ async def test_velocity_roundtrip_clamps_and_dispatches(
         assert isinstance(reading.heading_rad, float)
         assert isinstance(reading.timestamp, float)
         # Motion-quality assertion only when motion was actually requested.
-        if jetson_settings.esp32.smoke_test_allow_motion and not jetson_settings.mock_hardware:
-            min_fraction = jetson_settings.esp32.smoke_test_min_velocity_fraction
-            assert reading.left_velocity_mps >= target_vx * min_fraction
-            assert reading.right_velocity_mps >= target_vx * min_fraction
+        if esp32_cfg.smoke_test_allow_motion and not jetson_settings.mock_hardware:
+            if esp32_cfg.chassis_has_wheel_encoders:
+                min_fraction = esp32_cfg.smoke_test_min_velocity_fraction
+                assert reading.left_velocity_mps >= target_vx * min_fraction
+                assert reading.right_velocity_mps >= target_vx * min_fraction
+            else:
+                # Encoder-less re-scope (audit R3): the chassis cannot prove
+                # measured speed, so assert what it CAN prove — the command
+                # round-trip still works after motion was requested, checked
+                # through the public protocol rather than a private flag.
+                # (`driver.inner._connected` is set once in connect() and
+                # never cleared, so asserting it could not fail.)
+                post_motion = await driver.read_encoders()
+                assert isinstance(post_motion.timestamp, float)
+                await driver.send_velocity(0.0, 0.0, 0.0)
     finally:
         await driver.emergency_stop()
         await driver.disconnect()
+
+
+async def _settle_with_keepalive(
+    driver: ESP32CommProtocol, jetson_settings: Settings, target_vx: float
+) -> None:
+    """Sleep out the settle window, re-sending if the failsafe could fire.
+
+    The decision is computed from the ACTUAL derived window rather than an
+    assumption about it: re-send only when the settle would outlast the
+    chassis heartbeat. With the shipped defaults the window (3000 ms)
+    comfortably exceeds ``smoke_test_settle_s`` (500 ms), so this is a plain
+    sleep; a hand-tightened window automatically re-enables the keepalive.
+    """
+    from mousedroid.comms.command_set import heartbeat_window_ms
+
+    esp32_cfg = jetson_settings.esp32
+    settle_s = esp32_cfg.smoke_test_settle_s
+    heartbeat_armed = esp32_cfg.command_set == "waveshare_stock" and esp32_cfg.heartbeat_enabled
+    if not heartbeat_armed or settle_s * 1000.0 < heartbeat_window_ms(esp32_cfg):
+        await asyncio.sleep(settle_s)
+        return
+    period_s = 1.0 / esp32_cfg.keepalive_hz
+    remaining = settle_s
+    while remaining > 0:
+        await asyncio.sleep(min(period_s, remaining))
+        remaining -= period_s
+        if remaining > 0:
+            await driver.send_velocity(target_vx, 0.0, 0.0)
 
 
 async def test_emergency_stop_latency_within_budget(jetson_settings: Settings) -> None:
