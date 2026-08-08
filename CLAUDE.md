@@ -106,8 +106,9 @@ workforce section below), `.claude/` (Claude Code assets: `settings.json`,
 restated here drifts; core jobs are matrixed over Python 3.10/3.11/3.12).
 The load-bearing chain:
 
-0. **actionlint**: pinned workflow lint — guards the `${{ }}`-in-`run:` startup-failure trap
-   (runs in parallel with lint — nothing `needs:` it, so it flags rather than gates)
+0. **actionlint**: pinned workflow lint — guards the `${{ }}`-in-`run:` startup-failure trap.
+   **Blocking**: it carries no `continue-on-error`, so a finding fails the run. It runs in
+   parallel with lint (nothing `needs:` it), which affects *ordering*, not whether it gates
 1. **Lint**: `ruff check` + `ruff format --check` over `src/ tests/ tools/`, plus `ruff check scripts/`
 2. **Type check**: `mypy --strict src/` (depends on lint)
 3. **Test + Coverage**: `pytest --cov=src/mousedroid --cov-fail-under=90`, then regression + e2e,
@@ -335,8 +336,14 @@ backwards_compat}.py`):
   fired immediately before commanding motion. `WaveshareStockCodec` polls
   `CMD_BASE_FEEDBACK` (T=130) and parses the **T-gated** `FEEDBACK_BASE_INFO`
   (T=1001) frame (`"v"` volts, `"L"`/`"R"` wheel speeds); stock frames stream
-  with no per-command ACKs, so a non-1001 frame parses to the legacy
-  silent-zero with a DEBUG breadcrumb. **Stock encoder reads MUST poll** —
+  with no per-command ACKs, so a non-1001 frame is routine, not an error. The
+  two parses degrade DIFFERENTLY and deliberately: `parse_battery` returns
+  `None` ("no reading" — see the battery contract below), while
+  `parse_encoders` returns an empty `EncoderReading`. Both emit an
+  `esp32_stock_frame_mismatch` DEBUG breadcrumb. Every numeric field goes
+  through `_coerce_float`, because `_is_base_info` gates only the `T` key —
+  a well-typed 1001 frame carrying a junk `"L"` would otherwise raise out of
+  the codec and crash the 30 Hz sensor read. **Stock encoder reads MUST poll** —
   serial `_query_data` only writes when given a command; an un-polled stock
   read returns zeros forever (the legacy codec returns `None`, preserving the
   historical no-write read).

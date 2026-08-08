@@ -109,12 +109,17 @@ connect, telemetry from `FEEDBACK_BASE_INFO`). Until
 MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock bash scripts/jetson_smoke_test.sh serial
 ```
 
-Selecting stock also derives `serial_baud=115200` unless explicitly
-pinned — stock firmware at the legacy 1 Mbaud reads as line noise, which
-is exactly how a live board gets diagnosed dead (audit R2). The serial
-probe follows the selector (stock probes with `{"T":130}`, a read that
-elicits a reply); `SMOKE_SERIAL_PROBE_JSON` overrides it for bench
-experiments.
+Selecting stock also derives `serial_baud=115200`, so the command set is
+the only lever you need to set. The derivation is suppressed **only** by a
+*non-default* baud pin; an explicit pin that happens to equal the schema
+default still derives 115200, which matters because both shipped overlays
+pin exactly that value. Keying the rule on "is it pinned at all" instead
+would leave the rover at the legacy 1 Mbaud, where stock firmware reads as
+line noise — which is how a live board gets diagnosed dead (audit R2).
+
+The serial probe follows the selector (stock probes with `{"T":130}`, a
+read that elicits a reply); `SMOKE_SERIAL_PROBE_JSON` overrides it for
+bench experiments.
 
 ## Triage matrix
 

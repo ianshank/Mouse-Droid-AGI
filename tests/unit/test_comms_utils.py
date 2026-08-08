@@ -425,6 +425,28 @@ class TestWaveshareStockTelemetry:
         assert reading.left_velocity_mps == 0.0
         assert reading.right_velocity_mps == 0.0
 
+    def test_encoder_parse_survives_malformed_wheel_speeds(self) -> None:
+        """UART noise in ``L``/``R`` must not raise out of the 30 Hz read.
+
+        ``_is_base_info`` gates only the ``T`` key, so a well-typed 1001
+        frame can still carry junk in a wheel-speed field. An unguarded
+        ``float()`` there propagates out of the codec, through
+        ``_query_data``, and crashes the sensor gather.
+        """
+        from mousedroid.comms.command_set import WAVESHARE_STOCK_CODEC
+
+        reading = WAVESHARE_STOCK_CODEC.parse_encoders({"T": 1001, "L": "n/a", "R": [0.1]})
+        assert reading.left_velocity_mps == 0.0
+        assert reading.right_velocity_mps == 0.0
+
+    def test_encoder_parse_keeps_a_good_axis_when_the_other_is_junk(self) -> None:
+        """A per-field fallback, not an all-or-nothing frame rejection."""
+        from mousedroid.comms.command_set import WAVESHARE_STOCK_CODEC
+
+        reading = WAVESHARE_STOCK_CODEC.parse_encoders({"T": 1001, "L": 0.3, "R": None})
+        assert reading.left_velocity_mps == pytest.approx(0.3)
+        assert reading.right_velocity_mps == 0.0
+
 
 class TestWaveshareStockHeartbeat:
     """CMD_HEART_BEAT_SET armed at connect; window derived from the driver's

@@ -80,7 +80,7 @@ def test_shipped_overlays_load_unchanged(overlay: str) -> None:
     """Every shipped config overlay still validates against the new schema."""
     path = _REPO_ROOT / "config" / overlay
     if not path.exists():  # pragma: no cover - repo layout guard
-        return
+        pytest.skip(f"shipped overlay is missing: {path}")
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):  # pragma: no cover - comment-only overlay
         return
@@ -160,7 +160,7 @@ def test_env_lever_derives_stock_baud_through_the_real_loader(
 
     path = _REPO_ROOT / "config" / overlay
     if not path.exists():  # pragma: no cover - repo layout guard
-        return
+        pytest.skip(f"shipped overlay is missing: {path}")
     monkeypatch.setenv("MOUSEDROID_ESP32__COMMAND_SET", "waveshare_stock")
     cfg = load_settings(path)
     assert cfg.esp32.command_set == "waveshare_stock"
@@ -174,7 +174,7 @@ def test_shipped_overlays_keep_legacy_baud_without_the_env_lever(overlay: str) -
 
     path = _REPO_ROOT / "config" / overlay
     if not path.exists():  # pragma: no cover - repo layout guard
-        return
+        pytest.skip(f"shipped overlay is missing: {path}")
     cfg = load_settings(path)
     assert cfg.esp32.command_set == "legacy"
     assert cfg.esp32.serial_baud == 1_000_000
@@ -188,7 +188,7 @@ def test_explicit_non_default_baud_survives_the_env_lever(
 
     path = _REPO_ROOT / "config" / "default.yaml"
     if not path.exists():  # pragma: no cover - repo layout guard
-        return
+        pytest.skip(f"shipped overlay is missing: {path}")
     monkeypatch.setenv("MOUSEDROID_ESP32__COMMAND_SET", "waveshare_stock")
     monkeypatch.setenv("MOUSEDROID_ESP32__SERIAL_BAUD", "921600")
     cfg = load_settings(path)

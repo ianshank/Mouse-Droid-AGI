@@ -73,7 +73,7 @@ and plan to come back.
 ### 4. Run the harness gates
 
 ```bash
-python scripts/validate.py --check F-025      # the single feature, any tier
+python scripts/validate.py --check "$ARGUMENTS"   # the single feature, any tier
 python scripts/validate.py --tier fast        # the whole fast tier
 python scripts/validate.py --tier fast,slow --strict-git   # what nightly runs
 ```
@@ -101,10 +101,16 @@ independently:
 ### 6. Verify nothing else moved
 
 ```bash
-git diff --stat -- config/
+git diff --stat HEAD -- config/                    # tracked, staged or not
+git status --short --untracked-files=all -- config/  # brand-new overlays
 ```
 
-Must be empty unless the change genuinely edits an overlay. The `config-compat`
+`git diff --stat -- config/` alone is not enough: it reports only *unstaged*
+changes to *tracked* files, so it comes back clean once you have staged the
+edit, and it never sees a newly created overlay at all — the two cases most
+likely to be in flight when you run this check.
+
+Both must be empty unless the change genuinely edits an overlay. The `config-compat`
 workflow validates every changed `config/*.yaml` against the schema of the
 commit pinned in `deployments/jetson-image.json` — i.e. the schema the deployed
 rover image actually has — so an overlay edit that uses a brand-new field fails
@@ -116,5 +122,5 @@ that gate even though it is correct on trunk.
 - `python scripts/validate.py --tier fast` passes
 - `python scripts/validate.py --tier fast,slow --strict-git` passes
 - `CHANGELOG.md`, `progress.md`, `NEXT_STEPS.md` reflect the change
-- `git diff --stat -- config/` is empty, or the overlay edit is deliberate and
-  schema-compatible with the pinned image
+- both `config/` checks in step 6 come back empty, or the overlay edit is
+  deliberate and schema-compatible with the pinned image

@@ -15,8 +15,12 @@ whether the failure is yours.
 ## Step 0 — install the right extras first
 
 ```bash
-pip install -e ".[dev,telemetry,mcp]"
+make install     # = <resolved-python> -m pip install -e ".[dev,telemetry,mcp]"
 ```
+
+Prefer the `make` target over a bare `pip`: it resolves the interpreter the
+same way `scripts/ci.sh` does (`MOUSEDROID_PYTHON`, then the project venv,
+then PATH), so the extras land in the environment the gates actually use.
 
 This is not optional and it is not the same as `pip install -e ".[dev]"`.
 
@@ -33,10 +37,14 @@ full signal including the stages this file summarises.
 ## Rung 1 — lint and format (seconds)
 
 ```bash
-ruff check src/ tests/ tools/
-ruff format --check src/ tests/ tools/
-ruff check scripts/
+make lint format
+# i.e. <resolved-python> -m ruff check src/ tests/ tools/ && ruff check scripts/
+#      <resolved-python> -m ruff format --check src/ tests/ tools/
 ```
+
+Invoke ruff through the resolved interpreter (`python -m ruff`), never bare
+`ruff` — a stray global install drifts from the pinned version and produces
+phantom pass/fail deltas.
 
 `ruff` is version-pinned in `pyproject.toml` to match the workflow. A version
 skew makes local lint disagree with CI in both directions — bump both literals
@@ -48,9 +56,16 @@ format-gated.
 ## Rung 2 — types (tens of seconds)
 
 ```bash
-mypy --strict src/mousedroid/
-MYPYPATH=. mypy tools/claude_hooks/ --strict --ignore-missing-imports --explicit-package-bases
+make typecheck
+# i.e. the authoritative CI invocations, verbatim:
+#   mypy src/ --strict --ignore-missing-imports
+#   MYPYPATH=. mypy tools/claude_hooks/ --strict --ignore-missing-imports \
+#       --explicit-package-bases
 ```
+
+Use CI's exact scope (`src/`, not `src/mousedroid/`) and its exact flags. A
+narrower scope or a missing `--ignore-missing-imports` makes local results
+disagree with the PR in both directions.
 
 The second invocation exists because `tools/` is a namespace package with no
 `__init__.py`; `--explicit-package-bases` plus `MYPYPATH=.` is what makes

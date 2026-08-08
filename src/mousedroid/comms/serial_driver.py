@@ -94,7 +94,13 @@ class SerialESP32Driver(BaseESP32Driver):
         # unarmed. Close first, then re-raise so the retry starts clean.
         try:
             await self._arm_command_set()
-        except Exception:
+        except BaseException:
+            # BaseException, not Exception: _arm_command_set yields at the
+            # asyncio.to_thread boundary inside _send_command, and
+            # orchestrator.start() awaits connect(). A CancelledError raised
+            # in that window derives from BaseException, so an `except
+            # Exception` here would skip the rollback and leak exactly the
+            # open handle (with _connected=True) this block exists to prevent.
             _log.warning(
                 "serial_esp32_arm_failed_rolling_back",
                 port=self._port,

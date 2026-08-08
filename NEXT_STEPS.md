@@ -39,9 +39,11 @@ The legacy v0.3.0 execution-plan phase numbering lives only in
 2. **[Hardware blocker — P0] ESP32 diagnosis + repair — diagnostics before spend.** The
    board is presumed dead (UART, ROM bootloader, WiFi AP), but that diagnosis was taken
    at 1 Mbaud over USB-C only. Audit R2/R7 give two near-zero-cost retests that can flip
-   the repair-vs-replace decision: (a) retest at stock baud
-   (`MOUSEDROID_ESP32__SERIAL_BAUD=115200` — stock firmware runs 115 200, so 1 Mbaud
-   reads a live board as line noise); (b) probe the ESP32 `U0TX`/`U0RX` directly on the
+   the repair-vs-replace decision: (a) retest with the stock command set
+   (`MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock`, which derives 115 200 baud —
+   at the legacy 1 Mbaud stock firmware reads as line noise, and legacy commands
+   at *any* baud are silently ignored, so both halves have to change together);
+   (b) probe the ESP32 `U0TX`/`U0RX` directly on the
    driver board's 40-pin header (pins 10/8 → Jetson `/dev/ttyTHS1`, two jumper wires) to
    isolate a dead CP2102N USB bridge from a dead ESP32. Then the sequenced bench plan
    under **PR #106 follow-ups** below. Gate for **F-008**. Time-box unchanged: 2 bench
@@ -110,9 +112,10 @@ The legacy v0.3.0 execution-plan phase numbering lives only in
     longer claim mecanum, the inert `vy` term is now zeroed at the execution seam so
     logged experience matches what the chassis can do, and the encoder-less fact is a
     config contract (`chassis_has_wheel_encoders`) rather than an assumption. Still open:
-    the production camera is IMX708 over CSI (not the IMX500 AI Camera the README/BOM and
-    `CameraConfig` docstring describe); power is a 3S 18650 UPS module, not a LiPo
-    (different charging discipline and failure mode).
+    the `CameraConfig` docstring still describes the IMX500 AI Camera rather than the
+    IMX708 the rover actually ships with (the README overview + BOM are now
+    corrected); power is a 3S 18650 UPS module, not a LiPo (different charging
+    discipline and failure mode).
 13. **[World model — P2] F-023 operator follow-ups (AlayaWorld adaptation).** The
     bounded-context latent memory + corrupted-history drift training landed default-OFF
     (`world_model_memory` / `training.drift` blocks; ADR-015). Remaining operator actions:
@@ -237,9 +240,11 @@ perform remotely. Sequencing re-baselined 2026-08-07 against the vendor
 audit (R2/R7 first — they cost minutes and can flip the decision):
 
 0. **Cheap retests before any spend (audit R2/R7)** — (a) rerun the serial
-   probe at stock baud (`MOUSEDROID_ESP32__SERIAL_BAUD=115200`; the original
-   diagnosis ran at 1 Mbaud, at which a live stock board is indistinguishable
-   from a dead one); (b) jumper the driver board's 40-pin `U0TX`/`U0RX`
+   probe with the stock command set (`MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock`,
+   which derives 115 200 baud and switches the probe to `{"T":130}`, a read that
+   elicits a reply; the original diagnosis ran at 1 Mbaud sending legacy commands,
+   under which a live stock board is indistinguishable from a dead one);
+   (b) jumper the driver board's 40-pin `U0TX`/`U0RX`
    (pins 10/8) to the Jetson header → `/dev/ttyTHS1` and probe there. A reply
    on either path means the fault is the CP2102N bridge / USB-C port, not the
    ESP32 — which changes repair-vs-replace. Silence on both corroborates a
@@ -263,9 +268,12 @@ audit (R2/R7 first — they cost minutes and can flip the decision):
    end-to-end with all stages blocking; confirm `power` stage
    `estop_latency_ms` lands well under
    `ESP32Config.emergency_stop_budget_ms` and the motor stage passes under
-   its **F-025 re-scoped criterion (command ACKed + e-stop within budget)**
-   — the chassis is encoder-less (audit R3), so the previous non-zero
-   encoder-velocity criterion was unsatisfiable and has been retired. Then
+   its **F-025 re-scoped criterion (command dispatched without error +
+   e-stop within budget)** — the chassis is encoder-less (audit R3), so the
+   previous non-zero encoder-velocity criterion was unsatisfiable and has
+   been retired. Note there is no per-command ACK to wait on: stock
+   `General_Driver` firmware streams frames unsolicited and acknowledges
+   nothing, so a clean send plus the e-stop budget is the whole observable. Then
    `scripts/validate.py --tier hardware` flips **F-008** to `done`.
 4. **Decoupled merge posture** — the PR #106 *code* is merged and verified;
    the live-rover *motion* validation is the hardware-blocked operational

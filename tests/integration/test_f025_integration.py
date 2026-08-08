@@ -17,6 +17,7 @@ config validator all participate.
 from __future__ import annotations
 
 import json
+import time
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -28,6 +29,11 @@ if TYPE_CHECKING:
 
 _ULTRASONIC_CFG = {"trigger_pin": 17, "echo_pin": 27}
 
+#: Held inside the fake port's ``readline`` so two gathered reads genuinely
+#: overlap when unserialised. Large enough to dwarf event-loop scheduling
+#: jitter, small enough to keep the integration tier fast.
+_READ_OVERLAP_DELAY_S = 0.05
+
 
 class FakeSerialPort:
     """Minimal in-memory stand-in for a ``pyserial`` handle.
@@ -37,19 +43,40 @@ class FakeSerialPort:
     which a firmware-protocol mismatch actually manifests.
     """
 
-    def __init__(self, responses: list[str] | None = None) -> None:
+    def __init__(self, responses: list[str] | None = None, *, read_delay_s: float = 0.0) -> None:
         self.written: list[str] = []
         self._responses: list[str] = list(responses or [])
         self.closed = False
         self.timeout: float = 0.0
+        # Concurrency witness: pyserial handles are not thread-safe, so two
+        # overlapping readline() calls are the defect the driver's _io_lock
+        # exists to prevent.
+        #
+        # ``read_delay_s`` is what makes the witness meaningful. Without it
+        # the fake returns so fast that each gathered task finishes its
+        # to_thread hop before the next one starts, so the overlap never
+        # occurs and the assertion below holds *whether or not the lock is
+        # there* — a test that cannot fail. A delay wider than the scheduling
+        # gap forces a genuine window, and a real port's read latency is
+        # exactly what opens that window in production.
+        self._read_delay_s = read_delay_s
+        self.in_readline = 0
+        self.max_concurrent_readline = 0
 
     def write(self, payload: bytes) -> None:
         self.written.append(payload.decode().strip())
 
     def readline(self) -> bytes:
-        if not self._responses:
-            return b""
-        return (self._responses.pop(0) + "\n").encode()
+        self.in_readline += 1
+        self.max_concurrent_readline = max(self.max_concurrent_readline, self.in_readline)
+        try:
+            if self._read_delay_s:
+                time.sleep(self._read_delay_s)
+            if not self._responses:
+                return b""
+            return (self._responses.pop(0) + "\n").encode()
+        finally:
+            self.in_readline -= 1
 
     def close(self) -> None:
         self.closed = True
@@ -72,7 +99,11 @@ def _settings(**esp32_overrides: Any) -> Settings:
 
 
 def _build_with_fake_port(
-    monkeypatch: pytest.MonkeyPatch, cfg: Settings, responses: list[str] | None = None
+    monkeypatch: pytest.MonkeyPatch,
+    cfg: Settings,
+    responses: list[str] | None = None,
+    *,
+    read_delay_s: float = 0.0,
 ) -> tuple[Any, FakeSerialPort]:
     """Build the real driver through the factory over a fake serial port.
 
@@ -85,7 +116,7 @@ def _build_with_fake_port(
     from mousedroid.comms.serial_driver import SerialESP32Driver
     from mousedroid.factory import build_esp32_driver
 
-    port = FakeSerialPort(responses)
+    port = FakeSerialPort(responses, read_delay_s=read_delay_s)
     # The driver refuses to connect when pyserial is absent; the fake port
     # supplies the behaviour under test, so only the presence check matters.
     monkeypatch.setattr(serial_driver_mod, "_serial_mod", object(), raising=False)
@@ -223,15 +254,24 @@ class TestConcurrentReadsAreSerialised:
 
         Without the lock, two ``readline()`` calls run in different threads
         on one handle and a reply can pair with the wrong request.
+
+        The frames are deliberately DISTINGUISHABLE. With identical frames
+        every assertion below is satisfied even by a mis-paired reply, so the
+        test would pass with the lock removed — coverage in name only.
         """
         import asyncio
 
         cfg = _settings(command_set="waveshare_stock")
         frames = [
             json.dumps({"T": 1001, "L": 0.4, "R": 0.4, "v": 12.0}),
-            json.dumps({"T": 1001, "L": 0.4, "R": 0.4, "v": 12.0}),
+            json.dumps({"T": 1001, "L": 0.9, "R": 0.9, "v": 7.5}),
         ]
-        driver, port = _build_with_fake_port(monkeypatch, cfg, responses=frames)
+        # The delay is load-bearing: it holds the first readline() open long
+        # enough for the second gathered task to reach its own, which is the
+        # only way an unlocked driver can be caught overlapping.
+        driver, port = _build_with_fake_port(
+            monkeypatch, cfg, responses=frames, read_delay_s=_READ_OVERLAP_DELAY_S
+        )
         await driver.connect()
         port.written.clear()
 
@@ -242,5 +282,10 @@ class TestConcurrentReadsAreSerialised:
 
         # Both legs polled, both got a well-formed answer.
         assert [c["T"] for c in port.written_commands] == [130, 130]
+        # No two readline() calls overlapped — the lock held each
+        # send-then-read pair atomic across the gathered tasks.
+        assert port.max_concurrent_readline == 1
+        # Each leg consumed exactly one frame, in gather order: the encoder
+        # read got the first, the battery read the second.
         assert encoders.left_velocity_mps == pytest.approx(0.4)
-        assert voltage == pytest.approx(12.0)
+        assert voltage == pytest.approx(7.5)

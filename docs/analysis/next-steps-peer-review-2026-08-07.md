@@ -106,8 +106,9 @@ past its own deadline. The companion change promotes it.
 
 - Two items were numbered 9 (F-023 follow-ups and the demo clip).
 - `CLAUDE.md` frames `actionlint` as "CI Stage 0" guarding the chain; in `ci.yml` it
-  has no dependents (`needs: null` everywhere else points at `lint`) — it runs in
-  parallel and does not gate. 15 jobs total, 5 advisory.
+  has no dependents (`needs: null` everywhere else points at `lint`), so it runs in
+  parallel rather than ahead of the chain. It *does* gate, though: it carries no
+  `continue-on-error`, so a finding fails the run. 15 jobs total, 5 advisory.
 
 ---
 

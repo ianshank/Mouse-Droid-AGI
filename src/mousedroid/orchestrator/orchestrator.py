@@ -771,17 +771,24 @@ class MouseDroidOrchestrator:
             # helper (preserving device + dtype) and MUST NOT be overwritten
             # with the pre-swap action — overwriting would void the
             # ``reset_state_on_swap`` invariant documented in ADR-010.
+            # Restrict to axes the chassis can actually execute BEFORE the
+            # action is recorded as ``_prev_action``, sent, and logged, so the
+            # world model, curiosity, ``executed_action`` and the experience
+            # log all describe the motion that really happened. Projecting
+            # only at the dispatch seam would still feed the unprojected
+            # lateral to ``observe_step`` on the next tick.
+            executable = self._project_action_to_executable_axes(action)
             swap_reset = self._apply_pending_weight_update()
             if not swap_reset:
-                self._prev_action = action.unsqueeze(0) if action.dim() == 1 else action
+                self._prev_action = executable.unsqueeze(0) if executable.dim() == 1 else executable
 
+            # PRE_ACTION hooks see the raw proposal — a safety hook inspecting
+            # what the policy WANTED must not be shown a value the projection
+            # already zeroed.
             ctx.proposed_action = action
             await self._hook_registry.run_phase(HookPhase.PRE_ACTION, ctx)
 
-            # Restrict to axes the chassis can actually execute BEFORE the
-            # action is sent, recorded and logged, so executed_action and the
-            # experience log describe the motion that really happened.
-            action = self._project_action_to_executable_axes(action)
+            action = executable
             await self._execute_action(action)
             ctx.executed_action = action
             await self._hook_registry.run_phase(HookPhase.POST_ACTION, ctx)

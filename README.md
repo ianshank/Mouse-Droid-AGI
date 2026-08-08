@@ -21,7 +21,7 @@
 
 MouseDroid is a physical MSE-6 droid replica that navigates autonomously, avoids obstacles, follows natural-language commands, and improves from experience — all on an NVIDIA Jetson Orin Nano.
 
-The robot is built on a Waveshare Wave Rover chassis, controlled by an ESP32 microcontroller, and powered by a ribbon-connected Raspberry Pi AI Camera (IMX500), USB LiDAR, and USB audio. All high-level reasoning runs on a Jetson Orin Nano. The chassis is driven over two axes — linear and angular — with no lateral axis and no wheel encoders; both facts are config contracts (`esp32.command_set`, `esp32.chassis_has_wheel_encoders`) rather than assumptions baked into the drivers.
+The robot is built on a Waveshare Wave Rover chassis, controlled by an ESP32 microcontroller, and powered by a ribbon-connected CSI camera (IMX708 in the production build), USB LiDAR, and USB audio. All high-level reasoning runs on a Jetson Orin Nano. The chassis is driven over two axes — linear and angular — with no lateral axis and no wheel encoders; both facts are config contracts (`esp32.command_set`, `esp32.chassis_has_wheel_encoders`) rather than assumptions baked into the drivers.
 
 The current production baseline is camera + LiDAR + USB audio + ESP32 on Jetson. The HC-SR04 ultrasonic path and the robot-arm platform remain parked outside the active delivery scope.
 
@@ -307,7 +307,7 @@ MIT License — see [LICENSE](LICENSE) for details.
 | SBC | NVIDIA Jetson Orin Nano 8GB | Primary compute |
 | Storage | Samsung NVMe 500 GB SSD | Docker data + swap |
 | Chassis | Waveshare Wave Rover | ESP32 onboard, stock `General_Driver` firmware; no wheel encoders, no lateral axis |
-| Camera | Jetson CSI / Raspberry Pi AI Camera (IMX500) | Onboard ML inference |
+| Camera | IMX708 over Jetson CSI | Production build. The IMX500 AI Camera (onboard ML inference) is supported by the same `jetson_csi` backend but is not what the rover ships with. |
 | LiDAR | FHL-LD19 360 2D | UART /dev/ttyUSB1, 230400 baud |
 | Audio | Wonrabai USB Sound Card | Combo mic + 8 5W speaker |
 | Battery | 3S LiPo 11.1V | Min cutoff 9.5V |

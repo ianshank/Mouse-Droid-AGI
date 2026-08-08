@@ -81,6 +81,34 @@ actually armed*. Operators who want the failsafe off set
 ``heartbeat_enabled=False`` — the one explicit way to express that."""
 
 
+def _coerce_float(raw: Any) -> float | None:
+    """Coerce a wire value to ``float``; ``None`` when it is absent or junk.
+
+    Every numeric field arriving from the ESP32 crosses this helper. UART
+    noise, a brown-out mid-frame and firmware churn all produce well-formed
+    JSON carrying a non-numeric value, and a bare ``float()`` on that raises
+    out of the codec, up through ``_query_data`` and into the 30 Hz sensor
+    read — turning a recoverable comms glitch into a crashed tick.
+
+    Callers choose their own fallback because the two consumers differ:
+    a missing battery reading is ``None`` (semantically "no telemetry",
+    which the safety layer screens), while a missing wheel speed is ``0.0``
+    (the encoder-less chassis reports zero regardless).
+
+    Args:
+        raw: The value as parsed from the response frame.
+
+    Returns:
+        The coerced float, or ``None`` when absent or uncoercible.
+    """
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def worst_case_command_gap_s(cfg: ESP32Config) -> float:
     """Longest gap between commands the driver considers normal-but-slow.
 
@@ -229,13 +257,7 @@ class LegacyCommandCodec:
         Returning ``None`` (instead of the historical fabricated ``0.0``)
         lets the driver distinguish "no telemetry" from "flat pack".
         """
-        raw = data.get("v")
-        if raw is None:
-            return None
-        try:
-            return float(raw)
-        except (TypeError, ValueError):
-            return None
+        return _coerce_float(data.get("v"))
 
     def parse_encoders(self, data: Mapping[str, Any]) -> EncoderReading:
         """Delegate to :func:`parse_encoder_reading` (keys ``lv``/``rv``/…)."""
@@ -301,13 +323,7 @@ class WaveshareStockCodec:
         """
         if not self._is_base_info(data):
             return None
-        raw = data.get("v")
-        if raw is None:
-            return None
-        try:
-            return float(raw)
-        except (TypeError, ValueError):
-            return None
+        return _coerce_float(data.get("v"))
 
     def parse_encoders(self, data: Mapping[str, Any]) -> EncoderReading:
         """Map ``L``/``R`` wheel speeds; odometry/heading stay zero.
@@ -316,14 +332,21 @@ class WaveshareStockCodec:
         the chassis has no odometry source. IMU-derived heading (keys
         ``r``/``p``/``y`` in the same frame) is deliberately NOT consumed
         here; that is the audit-R4 sensing feature, not a comms concern.
+
+        ``_is_base_info`` gates only the ``T`` key, so a well-typed 1001
+        frame can still carry a malformed wheel speed. Both fields go
+        through :func:`_coerce_float` for that reason — a raise here would
+        propagate out of the 30 Hz sensor read.
         """
         from mousedroid.comms.protocol import EncoderReading  # deferred: circular at import
 
         if not self._is_base_info(data):
             return EncoderReading()
+        left = _coerce_float(data.get("L"))
+        right = _coerce_float(data.get("R"))
         return EncoderReading(
-            left_velocity_mps=float(data.get("L", 0.0)),
-            right_velocity_mps=float(data.get("R", 0.0)),
+            left_velocity_mps=0.0 if left is None else left,
+            right_velocity_mps=0.0 if right is None else right,
         )
 
     def connect_commands(self, cfg: ESP32Config) -> list[Mapping[str, float]]:

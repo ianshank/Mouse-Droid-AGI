@@ -168,16 +168,25 @@ fi
 echo "=== Advisory Promotion-Lag Check ==="
 "$PYTHON_BIN" scripts/check_advisory_promotions.py
 
-echo "=== Secret Scan (gitleaks, blocking) ==="
 # Mirrors the BLOCKING `gitleaks` job in .github/workflows/ci.yml (promoted
 # advisory -> blocking 2026-08-07; see docs/runbooks/secret-scanning.md). This
 # stage previously swallowed findings with `|| echo WARN`, so a local full-CI
 # run went green on exactly the diff the PR then failed on. Findings now fail
 # here for the same reason they fail there.
+#
+# The binary is NOT a project dependency (`make install` cannot supply it), so
+# a fresh checkout legitimately lacks it. Rather than hard-fail the whole local
+# loop on a missing third-party tool -- the pattern promtool and vulture also
+# use below -- the stage announces which of the two things it actually did, so
+# a skip can never read as a pass. CI remains authoritative: it runs gitleaks
+# in a pinned container over the full history, which no local run reproduces.
 if command -v gitleaks >/dev/null 2>&1; then
+    echo "=== Secret Scan (gitleaks, blocking) ==="
     gitleaks detect --source . --config .gitleaks.toml --redact --no-banner
 else
-    echo "gitleaks not on PATH - skipping secret scan (CI runs it in the gitleaks job)"
+    echo "=== Secret Scan SKIPPED - gitleaks not on PATH ==="
+    echo "    This stage is BLOCKING in CI and did NOT run here. Install"
+    echo "    gitleaks to reproduce it locally; see docs/runbooks/secret-scanning.md."
 fi
 
 echo "=== Health Check ==="

@@ -38,6 +38,10 @@ class MouseDroidSafetyMonitor:
     def __init__(self, cfg: SafetyConfig) -> None:
         self._cfg = cfg
         self._last_valid_timestamps: dict[int, float] = {}
+        # Latch for the implausible-battery WARNING: a comms fault persists,
+        # and this runs on every 30 Hz evaluation. Warn once per episode,
+        # DEBUG thereafter; cleared by the next plausible reading.
+        self._battery_missing_warned = False
 
     # -- SafetyMonitorProtocol ---------------------------------------------
 
@@ -80,7 +84,16 @@ class MouseDroidSafetyMonitor:
             # (see BaseESP32Driver.get_battery_voltage); treating that as
             # `battery_critical` would latch a permanent emergency stop on
             # every tick and send the operator to swap a healthy battery.
-            _log.warning(
+            #
+            # A comms fault persists, so this branch is entered on EVERY
+            # evaluation — at 30 Hz an unconditional WARNING buries the rest
+            # of the log precisely when an operator is reading it. Warn once
+            # per episode, DEBUG thereafter; the latch clears below when a
+            # plausible reading returns, so a second fault warns again.
+            # Mirrors BaseESP32Driver._warn_battery_unavailable.
+            log_missing = _log.debug if self._battery_missing_warned else _log.warning
+            self._battery_missing_warned = True
+            log_missing(
                 "battery_reading_implausible",
                 voltage=battery_voltage,
                 threshold=implausible_below_v,
@@ -89,19 +102,23 @@ class MouseDroidSafetyMonitor:
                     "esp32_battery_reading_unavailable / command-set + baud"
                 ),
             )
-        elif battery_critical_v > 0 and battery_voltage < battery_critical_v:
-            _log.error(
-                "battery_critical",
-                voltage=battery_voltage,
-                threshold=battery_critical_v,
-            )
-            is_emergency = True
-        elif battery_warn_v > 0 and battery_voltage < battery_warn_v:
-            _log.warning(
-                "battery_low",
-                voltage=battery_voltage,
-                threshold=battery_warn_v,
-            )
+        else:
+            # A plausible reading ends the episode, so the next fault warns
+            # again rather than being swallowed by a stale latch.
+            self._battery_missing_warned = False
+            if battery_critical_v > 0 and battery_voltage < battery_critical_v:
+                _log.error(
+                    "battery_critical",
+                    voltage=battery_voltage,
+                    threshold=battery_critical_v,
+                )
+                is_emergency = True
+            elif battery_warn_v > 0 and battery_voltage < battery_warn_v:
+                _log.warning(
+                    "battery_low",
+                    voltage=battery_voltage,
+                    threshold=battery_warn_v,
+                )
 
         # -- Sensor staleness ----------------------------------------------
         current_time = observation.timestamp

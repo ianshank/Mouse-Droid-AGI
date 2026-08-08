@@ -60,10 +60,13 @@ async def test_velocity_roundtrip_clamps_and_dispatches(
     ``test_emergency_stop_latency_within_budget``).
 
     Under ``command_set='waveshare_stock'`` with the chassis heartbeat
-    armed, the settle window re-sends the velocity at ``keepalive_hz`` —
-    the default heartbeat window (300 ms) is shorter than
-    ``smoke_test_settle_s`` (0.5 s), so a single send would be halted by
-    the failsafe mid-settle.
+    armed, the settle window re-sends the velocity at ``keepalive_hz``
+    only when the derived heartbeat window is shorter than
+    ``smoke_test_settle_s``. With the shipped defaults the window is
+    3000 ms against a 500 ms settle, so a single send suffices; a
+    hand-tightened window re-enables the keepalive automatically. (The
+    300 ms figure belongs to the superseded ``keepalive_hz``-only
+    derivation — see ``heartbeat_window_ms``.)
     """
     from mousedroid.factory import build_esp32_driver
 

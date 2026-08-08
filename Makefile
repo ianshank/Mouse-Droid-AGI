@@ -9,8 +9,20 @@
 # The ordered ladder, its rationale, and the failure-triage table live in
 # `.claude/skills/gate-ladder/SKILL.md`.
 
-# Resolve Python the same way scripts/ci.sh does, and let a caller override.
-PYTHON ?= $(shell command -v python3 2>/dev/null || command -v python 2>/dev/null)
+# Resolve Python exactly as scripts/ci.sh does, in the same order: an explicit
+# MOUSEDROID_PYTHON wins, then the project venv (Windows layout first, matching
+# ci.sh), then whatever is on PATH. Diverging here would let `make lint` and
+# `bash scripts/ci.sh` run different interpreters — and therefore different
+# pinned ruff/mypy versions — on the same checkout.
+PYTHON ?= $(shell \
+	if [ -n "$$MOUSEDROID_PYTHON" ]; then echo "$$MOUSEDROID_PYTHON"; \
+	elif [ -x ./.venv/Scripts/python.exe ]; then echo ./.venv/Scripts/python.exe; \
+	elif [ -x ./.venv/bin/python ]; then echo ./.venv/bin/python; \
+	else command -v python3 2>/dev/null || command -v python 2>/dev/null; fi)
+
+ifeq ($(strip $(PYTHON)),)
+$(error No Python interpreter found. Set MOUSEDROID_PYTHON or install Python.)
+endif
 
 # Directories linted / formatted by CI. Kept as variables so a target and the
 # workflow cannot disagree about scope by accident.
@@ -36,7 +48,7 @@ format: ## ruff format --check (CI runs the same scope)
 	$(PYTHON) -m ruff format --check $(LINT_DIRS)
 
 typecheck: ## mypy --strict over src/ and the workforce hook package
-	$(PYTHON) -m mypy --strict src/mousedroid/
+	$(PYTHON) -m mypy src/ --strict --ignore-missing-imports
 	MYPYPATH=. $(PYTHON) -m mypy tools/claude_hooks/ --strict \
 		--ignore-missing-imports --explicit-package-bases
 
@@ -74,7 +86,11 @@ hooks: ## Workforce hook tests under their own coverage gate
 	$(PYTHON) -m pytest tests/unit/tools/claude_hooks -o addopts="" \
 		--cov=tools/claude_hooks --cov-branch --cov-report=term-missing -q
 
-gates: lint format typecheck skills validate ## Every non-pytest gate, fail-fast
+# Deliberately excludes branch-coverage: that target runs the full unit +
+# property + integration suite to collect coverage (~4 min), which defeats the
+# point of a fast fail-first bundle. Run `make branch-coverage` separately, or
+# `make ci` for the authoritative superset.
+gates: lint format typecheck skills validate ## Fast gates only, fail-fast (no test suite)
 
 ci: ## The authoritative local superset (scripts/ci.sh)
 	bash scripts/ci.sh

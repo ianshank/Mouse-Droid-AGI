@@ -11,7 +11,7 @@ when the binary is on PATH.
 | Surface | Mode | Scope |
 |---------|------|-------|
 | CI job `gitleaks` | **blocking** (promoted 2026-08-07) | **full history** (`fetch-depth: 0`) |
-| `scripts/ci.sh` stage | advisory, skipped if binary absent | working tree |
+| `scripts/ci.sh` stage | **blocking** when the binary is present; skipped (loudly) when absent | working tree |
 | Local pre-commit hook (below) | blocking for the committer | staged files |
 
 ## Allowlist policy — the one rule
