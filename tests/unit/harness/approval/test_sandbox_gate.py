@@ -131,9 +131,7 @@ async def test_sandbox_gate_bounded_eviction() -> None:
     assert len(gate._skill_counts) == 2
 
     # Adding a 3rd evicts the oldest (t1)
-    req = ApprovalRequest(
-        action="skill_delegate", payload={}, skill_name="say", task_id="t3"
-    )
+    req = ApprovalRequest(action="skill_delegate", payload={}, skill_name="say", task_id="t3")
     await gate.decide(req)
 
     assert len(gate._skill_counts) == 2
@@ -152,16 +150,12 @@ async def test_sandbox_gate_custom_actuation_skill_names() -> None:
     gate._has_openshell = False
 
     # "move" is no longer in the actuation set
-    req_move = ApprovalRequest(
-        action="skill_delegate", payload={}, skill_name="move"
-    )
+    req_move = ApprovalRequest(action="skill_delegate", payload={}, skill_name="move")
     decision = await gate.decide(req_move)
     assert decision.approved
 
     # "fire_laser" IS in the custom set
-    req_laser = ApprovalRequest(
-        action="skill_delegate", payload={}, skill_name="fire_laser"
-    )
+    req_laser = ApprovalRequest(action="skill_delegate", payload={}, skill_name="fire_laser")
     decision = await gate.decide(req_laser)
     assert not decision.approved
     assert decision.reason == "actuation_disabled"

@@ -212,11 +212,11 @@ mousedroid_cloud_experience_queue_depth 7
 # TYPE mousedroid_mcp_requests_total counter
 mousedroid_mcp_requests_total 1
 
-# HELP mousedroid_mcp_tool_calls_total MCP tool call outcomes (labels: tool, result)
-# TYPE mousedroid_mcp_tool_calls_total counter
-mousedroid_mcp_tool_calls_total{tool="calibrate",result="ok"} 1
+# HELP mousedroid_mcp_tool_calls_total_total MCP tool call outcomes (labels: tool, result)
+# TYPE mousedroid_mcp_tool_calls_total_total counter
+mousedroid_mcp_tool_calls_total_total{tool="calibrate",result="ok"} 1
 
-# HELP mousedroid_mcp_request_latency_ms MCP request latency histogram (milliseconds)
+# HELP mousedroid_mcp_request_latency_ms MCP request end-to-end latency in milliseconds
 # TYPE mousedroid_mcp_request_latency_ms histogram
 mousedroid_mcp_request_latency_ms_bucket{le="5"} 0
 mousedroid_mcp_request_latency_ms_bucket{le="10"} 1
@@ -230,6 +230,21 @@ mousedroid_mcp_request_latency_ms_bucket{le="5000"} 1
 mousedroid_mcp_request_latency_ms_bucket{le="+Inf"} 1
 mousedroid_mcp_request_latency_ms_sum 9
 mousedroid_mcp_request_latency_ms_count 1
+
+# HELP mousedroid_mcp_memory_query_latency_ms MCP memory query latency for OpenClaw in milliseconds
+# TYPE mousedroid_mcp_memory_query_latency_ms histogram
+mousedroid_mcp_memory_query_latency_ms_bucket{le="5"} 0
+mousedroid_mcp_memory_query_latency_ms_bucket{le="10"} 0
+mousedroid_mcp_memory_query_latency_ms_bucket{le="25"} 1
+mousedroid_mcp_memory_query_latency_ms_bucket{le="50"} 1
+mousedroid_mcp_memory_query_latency_ms_bucket{le="100"} 1
+mousedroid_mcp_memory_query_latency_ms_bucket{le="150"} 1
+mousedroid_mcp_memory_query_latency_ms_bucket{le="250"} 1
+mousedroid_mcp_memory_query_latency_ms_bucket{le="500"} 1
+mousedroid_mcp_memory_query_latency_ms_bucket{le="1000"} 1
+mousedroid_mcp_memory_query_latency_ms_bucket{le="+Inf"} 1
+mousedroid_mcp_memory_query_latency_ms_sum 15
+mousedroid_mcp_memory_query_latency_ms_count 1
 
 # HELP mousedroid_replay_records_total LMDB replay records read (labels: outcome=ok|schema_mismatch)
 # TYPE mousedroid_replay_records_total counter

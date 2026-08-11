@@ -15,9 +15,7 @@ from mousedroid.security.openshell import (
     write_policy_to_disk,
 )
 
-_SUBPROCESS_PATCH = (
-    "mousedroid.security.openshell.asyncio.create_subprocess_exec"
-)
+_SUBPROCESS_PATCH = "mousedroid.security.openshell.asyncio.create_subprocess_exec"
 
 # ------------------------------------------------------------------
 # generate_openshell_policy
@@ -103,9 +101,7 @@ async def test_invoke_openshell_sandbox_success() -> None:
     mock_proc.returncode = 0
     mock_proc.communicate = AsyncMock(return_value=(b"ok", b""))
 
-    with patch(
-        _SUBPROCESS_PATCH, return_value=mock_proc
-    ) as mock_exec:
+    with patch(_SUBPROCESS_PATCH, return_value=mock_proc) as mock_exec:
         rc = await invoke_openshell_sandbox(
             Path("/tmp/policy.json"), ["echo", "hi"], log_only=False
         )
@@ -125,12 +121,8 @@ async def test_invoke_openshell_sandbox_audit_mode() -> None:
     mock_proc.returncode = 0
     mock_proc.communicate = AsyncMock(return_value=(b"", b""))
 
-    with patch(
-        _SUBPROCESS_PATCH, return_value=mock_proc
-    ) as mock_exec:
-        await invoke_openshell_sandbox(
-            Path("/tmp/policy.json"), ["echo", "test"], log_only=True
-        )
+    with patch(_SUBPROCESS_PATCH, return_value=mock_proc) as mock_exec:
+        await invoke_openshell_sandbox(Path("/tmp/policy.json"), ["echo", "test"], log_only=True)
 
     call_args = mock_exec.call_args[0]
     assert "--audit" in call_args
@@ -143,12 +135,8 @@ async def test_invoke_openshell_sandbox_failure() -> None:
     mock_proc.returncode = 1
     mock_proc.communicate = AsyncMock(return_value=(b"", b"error details"))
 
-    with patch(
-        _SUBPROCESS_PATCH, return_value=mock_proc
-    ):
-        rc = await invoke_openshell_sandbox(
-            Path("/tmp/policy.json"), ["bad_cmd"]
-        )
+    with patch(_SUBPROCESS_PATCH, return_value=mock_proc):
+        rc = await invoke_openshell_sandbox(Path("/tmp/policy.json"), ["bad_cmd"])
 
     assert rc == 1
 
@@ -160,8 +148,6 @@ async def test_invoke_openshell_sandbox_binary_missing() -> None:
         "mousedroid.security.openshell.asyncio.create_subprocess_exec",
         side_effect=FileNotFoundError("openshell not found"),
     ):
-        rc = await invoke_openshell_sandbox(
-            Path("/tmp/policy.json"), ["echo", "test"]
-        )
+        rc = await invoke_openshell_sandbox(Path("/tmp/policy.json"), ["echo", "test"])
 
     assert rc == 127

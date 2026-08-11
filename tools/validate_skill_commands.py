@@ -281,7 +281,7 @@ def validate_repo(
     default_commands = repo_root / ".claude" / "commands"
     discovered: list[SkillCommandIssue] = []
     swept = False
-    
+
     for default_skills in default_skill_dirs:
         if default_skills.is_dir():
             discovered.extend(validate_skills(default_skills, repo_root=repo_root))

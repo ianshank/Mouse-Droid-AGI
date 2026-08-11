@@ -48,7 +48,7 @@ def test_render_prometheus_family_count() -> None:
     """Guards the fixture itself against silent truncation (62 populated families)."""
     golden = _GOLDEN_PATH.read_text()
     help_lines = [line for line in golden.splitlines() if line.startswith("# HELP")]
-    assert len(help_lines) == 62
+    assert len(help_lines) == 63
 
 
 # The 22 families a fresh (unpopulated) default-config registry emits: the

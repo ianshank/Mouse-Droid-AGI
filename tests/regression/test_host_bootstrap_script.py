@@ -27,6 +27,7 @@ def _source() -> str:
 
 
 class TestSourceContract:
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX bash execution test")
     def test_script_parses(self) -> None:
         subprocess.run(["bash", "-n", str(_SCRIPT)], check=True)
 
@@ -60,6 +61,7 @@ class TestSourceContract:
         assert _source().count('run chmod 600 "$ENV_FILE"') == 2
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX bash execution test")
 class TestDryRunSubprocess:
     def test_dry_run_prints_plan_and_writes_nothing(self, tmp_path: Path) -> None:
         install_dir = tmp_path / "opt"

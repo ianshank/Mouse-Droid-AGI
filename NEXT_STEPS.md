@@ -18,16 +18,7 @@ The legacy v0.3.0 execution-plan phase numbering lives only in
 
 ## ⚡ Current Next Steps (prioritized)
 
-0. **[Deployment Readiness — COMPLETED] 16-stage test validation & deployment runbook.**
-   The full test pyramid (7,003 tests) was validated with **93.01% measured line
-   coverage** and zero code bugs found. The 19-step deployment sequence is documented in
-   [`docs/planning/JETSON_DEPLOY_RUNBOOK.md`](docs/planning/JETSON_DEPLOY_RUNBOOK.md);
-   execute it on physical hardware when the Jetson is attached. *Gate-history
-   correction (2026-08-07 peer review):* the enforced gate was never promoted to 93 —
-   pre-#182 the repo carried two disagreeing literals (CI enforcing 85 while pyproject
-   claimed 93); PR #182 unified every gate literal at **90**, pinned by
-   `tests/regression/test_coverage_gate_single_source.py`. 93.01% stands as a
-   measurement, not a gate.
+
 1. **[Security — P0] Rotate the `ANTHROPIC_API_KEY`.** The key was exposed in a chat
    transcript — treat it as compromised. Inventory consumers first (rover
    `/etc/mousedroid/docker.env`, GitHub Actions secrets, any dev-machine env), replace on
