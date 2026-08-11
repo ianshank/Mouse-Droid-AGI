@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -34,6 +35,7 @@ def test_deliverable_files_exist() -> None:
     assert _LIVE_TEST.is_file(), f"missing live-metrics test: {_LIVE_TEST}"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX bash execution test")
 def test_script_parses_clean() -> None:
     """`bash -n` parse check (skips where bash is unavailable, e.g. some CI)."""
     bash = shutil.which("bash")
@@ -149,6 +151,7 @@ class TestTrendThreading:
         assert "write_summary_fallback" in text, "python-less hosts must still get a summary"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX bash execution test")
 class TestSummaryFallbackExecution:
     """Gap-analysis: prove the python-less fallback actually produces SUMMARY.md.
 

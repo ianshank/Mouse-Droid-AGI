@@ -507,6 +507,12 @@ phase3() {
             record WARN "#115 families not yet populated on live /metrics" \
                 "expected — no HTTP mission ingress on prod (openclaw disabled); see Phase-2 Test B"
         fi
+        if grep -q "${NAMESPACE}_mcp_memory_query_latency_ms" "${metrics_log}"; then
+            record PASS "MCP memory latency metric visible on /metrics"
+        else
+            record WARN "MCP memory latency metric not yet populated on live /metrics" \
+                "expected — no memory queries issued on prod startup"
+        fi
     else
         record FAIL "live /metrics scrape" "GET ${TELEMETRY_URL}/metrics failed"
     fi

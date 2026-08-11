@@ -47,6 +47,23 @@ from pathlib import Path
 
 DEPLOYMENT_FILE_TEMPLATE = "{platform}-image.json"
 REQUIRED_KEYS = ("sha", "platform", "image_tag")
+# Marker shared with ``scripts/validate_configs.py``: files carrying this
+# comment in their first 5 lines are NOT Settings overlays and must be
+# excluded from schema-compatibility checking.
+SKIP_MARKER = "# config-validator: skip"
+_SKIP_SCAN_LINES = 5
+
+
+def _has_skip_marker(path: Path) -> bool:
+    """Return *True* when *path* carries the skip marker in its header."""
+    try:
+        with path.open(encoding="utf-8") as fh:
+            for _, line in zip(range(_SKIP_SCAN_LINES), fh, strict=False):
+                if SKIP_MARKER in line:
+                    return True
+    except OSError:
+        pass
+    return False
 
 
 @dataclass(frozen=True)
@@ -152,7 +169,10 @@ def changed_yaml_files(base_ref: str, paths: list[Path] | None) -> list[Path]:
         return [
             p
             for p in paths
-            if p.suffix in {".yaml", ".yml"} and p.is_file() and "config" in p.parts
+            if p.suffix in {".yaml", ".yml"}
+            and p.is_file()
+            and "config" in p.parts
+            and not _has_skip_marker(p)
         ]
     result = subprocess.run(
         ["git", "diff", "--name-only", "--diff-filter=AM", base_ref, "HEAD", "--", "config/"],  # noqa: S607
@@ -163,7 +183,9 @@ def changed_yaml_files(base_ref: str, paths: list[Path] | None) -> list[Path]:
     return [
         Path(line)
         for line in result.stdout.splitlines()
-        if line.endswith((".yaml", ".yml")) and Path(line).is_file()
+        if line.endswith((".yaml", ".yml"))
+        and Path(line).is_file()
+        and not _has_skip_marker(Path(line))
     ]
 
 

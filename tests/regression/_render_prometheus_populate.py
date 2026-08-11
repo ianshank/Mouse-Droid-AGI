@@ -56,6 +56,7 @@ def build_maximal_registry() -> MetricsRegistry:
     registry.inc_safety_violation("law1")
 
     # LLM mission translation.
+    registry.observe_mcp_memory_query_latency_ms(15.0)
     registry.inc_llm_translation("translated")
     registry.observe_llm_translation_latency_ms(42.0)
 

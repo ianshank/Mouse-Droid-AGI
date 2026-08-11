@@ -39,7 +39,7 @@ def _write_catalog(tmp_path: Path) -> Path:
                 status: "done"
                 tier: "fast"
                 verification: ["always true"]
-                validation_command: "true"
+                validation_command: "python -c \\"import sys; sys.exit(0)\\""
                 implemented_in: "HEAD"
                 depends_on: []
               - id: "F-002"
@@ -80,7 +80,7 @@ def test_validate_passes_with_ok_summary(tmp_path: Path) -> None:
 
 def test_validate_fails_when_command_fails(tmp_path: Path) -> None:
     catalog = _write_catalog(tmp_path)
-    catalog.write_text(catalog.read_text().replace('"true"', '"false"'))
+    catalog.write_text(catalog.read_text().replace("sys.exit(0)", "sys.exit(1)"))
     r = _run(
         [str(_VALIDATE), "--features", str(catalog), "--schema", str(_SCHEMA), "--tier", "fast"],
         cwd=tmp_path,

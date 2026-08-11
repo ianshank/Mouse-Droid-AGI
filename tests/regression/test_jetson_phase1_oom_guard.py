@@ -159,6 +159,12 @@ class TestCiShSlimModeContract:
         )
 
 
+import sys
+
+import pytest
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX bash execution test")
 class TestCiShSyntax:
     """A stray edit that breaks bash syntax would crash Phase-1 on the rover."""
 

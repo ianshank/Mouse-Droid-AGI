@@ -1,0 +1,5 @@
+# config-validator: skip
+# Hardware baselines configuration for NemoClaw/OpenShell integration (F-027)
+# This is NOT a Settings overlay — it is loaded independently as BaselinesConfig.
+
+max_memory_query_latency_ms: 150.0

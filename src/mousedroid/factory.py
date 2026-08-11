@@ -2862,13 +2862,22 @@ def build_approval_gate(cfg: Settings) -> ApprovalGateProtocol:
     else:  # "policy" — caller is expected to supply patterns; default to auto
         inner = AutoApproveGate()
 
-    if not approval.require_approval_tool_patterns and not approval.require_approval_skill_patterns:
-        return inner
-    return PolicyApprovalGate(
-        inner,
-        tool_patterns=tuple(approval.require_approval_tool_patterns),
-        skill_patterns=tuple(approval.require_approval_skill_patterns),
-    )
+    if approval.require_approval_tool_patterns or approval.require_approval_skill_patterns:
+        inner = PolicyApprovalGate(
+            inner,
+            tool_patterns=tuple(approval.require_approval_tool_patterns),
+            skill_patterns=tuple(approval.require_approval_skill_patterns),
+        )
+
+    if cfg.openclaw is not None and cfg.openclaw.enabled:
+        from mousedroid.harness.approval.openclaw_gate import OpenClawSafetyGate
+        from mousedroid.harness.approval.sandbox_gate import SandboxPolicyGate
+
+        filter_impl = build_injection_filter(cfg)
+        inner = OpenClawSafetyGate(inner, filter_impl, cfg.openclaw)
+        inner = SandboxPolicyGate(inner, cfg.openclaw.policy)
+
+    return inner
 
 
 def build_skill_loaders(cfg: Settings) -> tuple[Any, ...]:
@@ -4128,10 +4137,15 @@ def build_orchestrator(cfg: Settings) -> object:
     # OpenClaw mission dispatcher (None when openclaw is disabled). The
     # deferred orchestrator ref is bound just before returning the
     # orchestrator at the end of this function.
+    from mousedroid.factory import build_approval_gate
     from mousedroid.orchestrator.mission_dispatcher import build_mission_dispatcher
 
+    approval_gate = build_approval_gate(cfg)
+
     mission_dispatcher, deferred_orchestrator_ref = build_mission_dispatcher(
-        cfg.openclaw, injection_filter=injection_filter
+        cfg.openclaw,
+        approval_gate=approval_gate,
+        injection_filter=injection_filter,
     )
 
     telemetry_server = build_telemetry_server(

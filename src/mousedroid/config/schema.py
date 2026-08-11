@@ -2078,6 +2078,12 @@ class MetricsConfig(BaseModel):
             "leave on."
         ),
     )
+    track_openclaw_memory: bool = Field(
+        True,
+        description=(
+            "Expose MCP memory query latency histogram for OpenClaw integration. Safe to leave on."
+        ),
+    )
     track_on_device_learning: bool = Field(
         True,
         description=(
@@ -2129,6 +2135,10 @@ class MetricsConfig(BaseModel):
         (5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 5000.0, float("inf")),
         description="Histogram bucket boundaries for MCP request latency (ms)",
     )
+    mcp_memory_query_latency_buckets_ms: tuple[float, ...] = Field(
+        (5.0, 10.0, 25.0, 50.0, 100.0, 150.0, 250.0, 500.0, 1000.0, float("inf")),
+        description="Histogram bucket boundaries for MCP memory query latency (ms)",
+    )
     vla_inference_seconds_buckets: tuple[float, ...] = Field(
         (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, float("inf")),
         description=(
@@ -2170,6 +2180,7 @@ class MetricsConfig(BaseModel):
         "llm_latency_buckets_ms",
         "llm_gateway_latency_buckets_ms",
         "mcp_latency_buckets_ms",
+        "mcp_memory_query_latency_buckets_ms",
         "vla_inference_seconds_buckets",
         "world_model_observe_step_seconds_buckets",
         "cloud_weight_update_download_seconds_buckets",
@@ -5283,6 +5294,45 @@ class LLMReplannerConfig(BaseModel):
     )
 
 
+class OpenClawMemoryConfig(BaseModel):
+    """Memory parameters for OpenClaw/MCP integration."""
+
+    episodic_limit: int = Field(50, description="Max episodic events to return per cursor query.")
+    semantic_limit: int = Field(10, description="Max semantic memories to retrieve per query.")
+
+
+class OpenClawPolicyConfig(BaseModel):
+    """Policy constraints for OpenClaw sandbox enforcement."""
+
+    openshell_policy_path: Path | None = Field(
+        None,
+        description="Path to the openshell policy constraints file. If None, static limits apply.",
+    )
+    max_skills_per_mission: int = Field(
+        5,
+        ge=1,
+        description="Static limit on skill invocations per mission if openshell is missing.",
+    )
+    allow_actuation: bool = Field(
+        True, description="Static limit on whether physical actuation is permitted."
+    )
+    actuation_skill_names: tuple[str, ...] = Field(
+        ("move", "arm", "drive", "actuate"),
+        description=(
+            "Skill names treated as actuation (blocked when allow_actuation is False). "
+            "Operators extend this list via YAML for custom actuator skills."
+        ),
+    )
+    max_tracked_missions: int = Field(
+        1000,
+        ge=1,
+        description=(
+            "Maximum number of concurrent mission task IDs tracked in the "
+            "in-memory skill-count dict. Oldest entries are evicted when full."
+        ),
+    )
+
+
 class OpenClawConfig(BaseModel):
     """OpenClaw integration — multi-channel NL control plane.
 
@@ -5316,6 +5366,14 @@ class OpenClawConfig(BaseModel):
     allowed_channels: tuple[Literal["rest", "mcp"], ...] = Field(
         ("rest", "mcp"),
         description="Channels the dispatcher accepts; others are refused.",
+    )
+    memory: OpenClawMemoryConfig = Field(
+        default_factory=OpenClawMemoryConfig,
+        description="Memory access limits for the MCP memory resource.",
+    )
+    policy: OpenClawPolicyConfig = Field(
+        default_factory=OpenClawPolicyConfig,
+        description="Sandbox and policy configuration.",
     )
     dm_pairing_required: bool = Field(
         True,
@@ -5613,6 +5671,19 @@ class GreetingConfig(BaseModel):
         return self
 
 
+class BaselinesConfig(BaseModel):
+    """Hardware baselines configuration for NemoClaw/OpenShell integration (F-027)."""
+
+    max_memory_query_latency_ms: float = Field(
+        150.0,
+        gt=0,
+        description=(
+            "Maximum allowed latency (ms) for memory queries "
+            "(episodic/semantic) before triggering a degradation warning."
+        ),
+    )
+
+
 class Settings(BaseSettings):
     """Root configuration — single source of truth for all settings.
 
@@ -5870,6 +5941,12 @@ class Settings(BaseSettings):
     host_env: HostEnvConfig | None = Field(
         None,
         description="Host env-file key-set check config (None=disabled, backwards compatible)",
+    )
+
+    # Baselines for hardware constraints (F-027)
+    baselines: BaselinesConfig | None = Field(
+        None,
+        description="Hardware constraints baseline config (None=disabled, backwards compatible)",
     )
 
     @model_validator(mode="before")

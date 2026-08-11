@@ -23,6 +23,7 @@ flowchart TB
 
     subgraph Ingress["NL ingress"]
         OpenClaw["OpenClaw MissionDispatcher\nREST + MCP envelope"]
+        ApprovalGates["ApprovalGateProtocol\n(OpenClawSafetyGate + SandboxPolicyGate LRU)\nEvaluates safety policy"]
         Orchestrator["MouseDroidOrchestrator\nprocess_mission(nl)"]
     end
 

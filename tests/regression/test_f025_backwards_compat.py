@@ -81,7 +81,11 @@ def test_shipped_overlays_load_unchanged(overlay: str) -> None:
     path = _REPO_ROOT / "config" / overlay
     if not path.exists():  # pragma: no cover - repo layout guard
         pytest.skip(f"shipped overlay is missing: {path}")
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    text = path.read_text(encoding="utf-8")
+    # Skip non-Settings YAML files that carry the validator skip marker
+    if "# config-validator: skip" in text:
+        pytest.skip(f"{overlay} carries skip marker (not a Settings overlay)")
+    raw = yaml.safe_load(text)
     if not isinstance(raw, dict):  # pragma: no cover - comment-only overlay
         return
     cfg = Settings.model_validate({**raw, "mock_hardware": True})

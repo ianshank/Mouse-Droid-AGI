@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — F-027: NemoClaw Integration (OpenClaw Safety Gateway)
+
+The OpenClaw mission dispatcher now evaluates safety policies before executing missions, preventing unsafe behaviors in sandbox environments and production.
+- **Approval Gate Protocol:** Implemented `ApprovalGateProtocol` with `SandboxPolicyGate` and `OpenClawSafetyGate`.
+- **LRU Sandbox Policy:** `SandboxPolicyGate` uses an LRU cache (configured via `OpenClawPolicyConfig.max_mission_history`) to track and evict mission states cleanly.
+- **Strict Provenance:** Fully integrated into the factory layer, regression tests, and `c4-llm-gateway.md` architecture.
+- **Shared Agent Workspaces:** Added `.agents` directory exclusion patterns to `.gitignore` and `.dockerignore`, and updated `tools/validate_skill_commands.py` to support shared `.agents/skills` assets.
+
 ### Added — F-025: ESP32 driver speaks stock Waveshare firmware (command-set codec seam)
 
 The private ESP32 JSON protocol never had firmware behind it — `firmware/` was

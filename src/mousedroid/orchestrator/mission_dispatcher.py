@@ -26,10 +26,10 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from structlog.contextvars import bind_contextvars, unbind_contextvars
 
+from mousedroid.harness.approval.protocol import ApprovalGateProtocol, ApprovalRequest
 from mousedroid.llm_gateway.protocol import GoalVector
 from mousedroid.logging.setup import get_logger
 from mousedroid.security.injection_filter import (
-    InjectionRejected,
     PromptInjectionFilterProtocol,
 )
 
@@ -176,6 +176,7 @@ class OrchestratorMissionDispatcher:
         self,
         orchestrator: _OrchestratorProcessMissionLike,
         *,
+        approval_gate: ApprovalGateProtocol,
         injection_filter: PromptInjectionFilterProtocol,
         cfg: OpenClawConfig,
     ) -> None:
@@ -184,13 +185,14 @@ class OrchestratorMissionDispatcher:
         Args:
             orchestrator: Object exposing
                 ``async process_mission(nl_command) -> GoalVector``.
+            approval_gate: The shared policy gate.
             injection_filter: Shared prompt-injection filter.
-            cfg: OpenClaw config (allowed_channels, max_command_len).
+            cfg: OpenClaw config.
         """
         self._orchestrator = orchestrator
+        self._approval = approval_gate
         self._filter = injection_filter
         self._cfg = cfg
-        self._allowed = frozenset(cfg.allowed_channels)
         self._mission_completed = False
 
     @property
@@ -213,15 +215,6 @@ class OrchestratorMissionDispatcher:
         trace_id = uuid.uuid4().hex[:_TRACE_ID_PREFIX]
         bind_contextvars(trace_id=trace_id, channel=channel)
         try:
-            if channel not in self._allowed:
-                _log.warning(
-                    "mission_dispatched_rejected",
-                    reason="channel_not_allowed",
-                    peer=peer,
-                    allowed=sorted(self._allowed),
-                )
-                msg = f"channel {channel!r} not in allowed_channels"
-                raise ValueError(msg)
             if not nl_command or not nl_command.strip():
                 _log.warning(
                     "mission_dispatched_rejected",
@@ -230,26 +223,18 @@ class OrchestratorMissionDispatcher:
                 )
                 msg = "nl_command must be non-empty"
                 raise ValueError(msg)
-            if len(nl_command) > self._cfg.max_command_len:
-                _log.warning(
-                    "mission_dispatched_rejected",
-                    reason="command_too_long",
-                    peer=peer,
-                    length=len(nl_command),
-                    limit=self._cfg.max_command_len,
-                )
-                msg = f"nl_command exceeds max_command_len ({self._cfg.max_command_len})"
-                raise ValueError(msg)
-            try:
-                sanitised = self._filter.sanitize(nl_command)
-            except InjectionRejected:
-                _log.warning(
-                    "mission_dispatched_rejected",
-                    reason="injection_pattern",
-                    peer=peer,
-                )
-                raise
 
+            decision = await self._approval.decide(
+                ApprovalRequest(
+                    action="mission_dispatch",
+                    payload={"nl_command": nl_command, "channel": channel, "peer": peer},
+                )
+            )
+            if not decision.approved:
+                msg = f"mission rejected: {decision.reason}"
+                raise ValueError(msg)
+
+            sanitised = self._filter.sanitize(nl_command)
             command_hash = hashlib.sha256(sanitised.encode("utf-8")).hexdigest()[
                 :_COMMAND_HASH_PREFIX
             ]
@@ -282,6 +267,7 @@ class OrchestratorMissionDispatcher:
 def build_mission_dispatcher(
     cfg: OpenClawConfig | None,
     *,
+    approval_gate: ApprovalGateProtocol,
     injection_filter: PromptInjectionFilterProtocol,
 ) -> tuple[MissionDispatcherProtocol | None, DeferredOrchestratorRef | None]:
     """Build the dispatcher and its forward-reference shim.
@@ -300,6 +286,7 @@ def build_mission_dispatcher(
     deferred = DeferredOrchestratorRef()
     dispatcher = OrchestratorMissionDispatcher(
         deferred,
+        approval_gate=approval_gate,
         injection_filter=injection_filter,
         cfg=cfg,
     )

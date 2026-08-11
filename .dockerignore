@@ -109,6 +109,7 @@ var/
 .claude/
 .serena/
 .gemini/
+.agents/
 
 # Repo-hygiene surfaces (PR #151) - belt-and-suspenders: Dockerfile.jetson
 # uses selective COPY so these never enter the image anyway.
