@@ -83,6 +83,13 @@ def load_settings(
     else:
         _log.debug("config_no_default_yaml", path=str(default_path))
 
+    baselines_path = base_dir / "baselines.yaml"
+    if baselines_path.exists():
+        baselines_data = load_yaml(baselines_path)
+        # Put the baselines data under the 'baselines' key in the merged config
+        _deep_merge(merged, {"baselines": baselines_data})
+        _log.debug("config_baselines_loaded", path=str(baselines_path))
+
     for overlay_path in overlay_paths:
         overlay_data = load_yaml(overlay_path)
         _deep_merge(merged, overlay_data)

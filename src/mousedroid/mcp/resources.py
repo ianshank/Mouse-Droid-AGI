@@ -20,7 +20,6 @@ import asyncio
 import re
 import time
 from collections import deque
-from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlsplit
 
@@ -347,6 +346,7 @@ class MemoryResourceProvider:
     """Exposes recent episodic memory snapshots (when memory tier is enabled)."""
 
     URI_EPISODES_RECENT = "mousedroid://memory/episodes/recent"
+    URI_SEMANTIC = "mousedroid://memory/semantic"
 
     def __init__(
         self,
@@ -375,9 +375,9 @@ class MemoryResourceProvider:
 
     def list_uris(self) -> list[str]:
         """Return the resource URIs this provider serves."""
-        return [self.URI_EPISODES_RECENT] if self.enabled else []
+        return [self.URI_EPISODES_RECENT, self.URI_SEMANTIC] if self.enabled else []
 
-    def read(self, path: str, query: dict[str, str]) -> dict[str, Any]:
+    async def read(self, path: str, query: dict[str, str]) -> dict[str, Any]:
         """Serve a recent-episodes snapshot.
 
         Args:
@@ -398,9 +398,13 @@ class MemoryResourceProvider:
         if not self.enabled or self._memory_tier is None:
             msg = "memory resource disabled"
             raise PermissionError(msg)
-        if path != "/memory/episodes/recent":
+        if path not in ("/memory/episodes/recent", "/memory/semantic"):
             msg = f"unknown memory resource path: {path!r}"
             raise KeyError(msg)
+
+        if path == "/memory/semantic":
+            return await self._read_semantic(query)
+
         n_str = query.get("n", str(self._cfg.resources.recent_frames_max))
         try:
             n = int(n_str)
@@ -410,15 +414,53 @@ class MemoryResourceProvider:
         episodic = getattr(self._memory_tier, "episodic", None)
         if episodic is None:
             return {"count": 0, "episodes": []}
+
+        cursor_str = query.get("cursor")
+        cursor = int(cursor_str) if cursor_str else None
+
         try:
-            samples: Iterable[Any] = episodic.sample(n)
+            samples, next_cursor = episodic.cursor_query(cursor, n)
         except Exception as exc:
             _log.warning("mcp_memory_sample_failed", error=str(exc))
             return {"count": 0, "episodes": []}
+
         episodes = [
             redact_value(_episode_to_dict(s), key_pattern=self._key_pattern) for s in samples
         ]
-        return {"count": len(episodes), "episodes": episodes}
+        return {"count": len(episodes), "episodes": episodes, "next_cursor": next_cursor}
+
+    async def _read_semantic(self, query: dict[str, str]) -> dict[str, Any]:
+        semantic = getattr(self._memory_tier, "semantic", None)
+        if semantic is None:
+            return {"count": 0, "results": []}
+
+        q_str = query.get("q")
+        if not q_str:
+            return {"count": 0, "results": [], "error": "missing 'q' parameter"}
+
+        try:
+            import numpy as np
+
+            q_vec = np.array([float(x) for x in q_str.split(",")], dtype=np.float32)
+        except ValueError:
+            return {"count": 0, "results": [], "error": "invalid 'q' vector format"}
+
+        k_str = query.get("k", "1")
+        try:
+            k = int(k_str)
+        except ValueError:
+            k = 1
+
+        import asyncio
+
+        try:
+            results = await asyncio.to_thread(semantic.retrieve, q_vec, k)
+        except Exception as exc:
+            _log.warning("mcp_memory_semantic_retrieve_failed", error=str(exc))
+            return {"count": 0, "results": []}
+
+        formatted = [{"key": key, "distance": dist} for key, dist in results]
+        return {"count": len(formatted), "results": formatted}
 
 
 def _episode_to_dict(episode: Any) -> dict[str, Any]:

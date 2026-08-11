@@ -496,9 +496,35 @@ features:
     implemented_in: null
     depends_on: ["F-001"]
     notes: >-
-      Class-level finding from
-      docs/analysis/next-steps-peer-review-2026-08-07.md section 3. The
       DocsConfig half overlaps the F-024 docs-consolidation phase - closing
       F-024 phase 6 satisfies it for core_max_lines; power_mode needs its own
       wire-or-delete decision verified on-device (nvpmodel -q indices are
       per-module and per-JetPack).
+
+  - id: "F-027"
+    epic: "Agentic-Integration"
+    name: "NemoClaw Sandbox and OpenClaw MCP Integration"
+    description: >-
+      Integrates the NemoClaw sandbox (OpenShell) and Model Context Protocol (MCP)
+      into the MouseDroid ecosystem. Establishes a secure, observable, and strictly
+      governed agentic operations layer. Features include dual memory paths
+      (episodic/semantic over MCP), transport-parity gating across REST/MCP channels,
+      and policy-driven execution isolated by OpenShell. Config-gated (default False)
+      to ensure backward compatibility.
+    category: "functional"
+    priority: "medium"
+    status: "in_progress"
+    tier: "fast"
+    verification:
+      - "MCP resources expose cursor-based episodic memory and semantic index"
+      - "ApprovalGateProtocol yields identical decisions for REST and MCP invocations"
+      - "OpenShell policy drift from SkillSpec.tool_names fails generation"
+      - "baselines.yaml limits are enforced during live queries"
+      - "OpenClawConfig.enabled=False renders the system byte-identical to prior behavior"
+    validation_command: >-
+      python -m pytest tests/unit/mcp/ tests/unit/memory/ tests/unit/orchestrator/ -q
+    implemented_in: null
+    depends_on: ["F-001"]
+    notes: >-
+      OpenSpec change mouse-droid-nemoclaw-integration (archived under
+      openspec/changes/; repo-native artifacts authoritative).

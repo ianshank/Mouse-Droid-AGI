@@ -277,13 +277,16 @@ def validate_repo(
             issues.extend(validate_all(commands_dir, repo_root=repo_root))
         return issues
 
-    default_skills = repo_root / ".claude" / "skills"
+    default_skill_dirs = [repo_root / ".claude" / "skills", repo_root / ".agents" / "skills"]
     default_commands = repo_root / ".claude" / "commands"
     discovered: list[SkillCommandIssue] = []
     swept = False
-    if default_skills.is_dir():
-        discovered.extend(validate_skills(default_skills, repo_root=repo_root))
-        swept = True
+    
+    for default_skills in default_skill_dirs:
+        if default_skills.is_dir():
+            discovered.extend(validate_skills(default_skills, repo_root=repo_root))
+            swept = True
+
     if default_commands.is_dir():
         discovered.extend(validate_all(default_commands, repo_root=repo_root))
         swept = True
@@ -292,7 +295,7 @@ def validate_repo(
             SkillCommandIssue(
                 repo_root / ".claude",
                 "no-skill-layout",
-                "neither .claude/skills/ nor .claude/commands/ exists",
+                "neither .claude/skills/, .agents/skills/, nor .claude/commands/ exists",
             )
         )
     return discovered

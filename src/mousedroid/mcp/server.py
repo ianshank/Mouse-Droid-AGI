@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from typing import TYPE_CHECKING, Any
 
 from mousedroid.common.async_utils import cancel_and_drain, spawn_tracked
@@ -306,7 +307,21 @@ class MouseDroidMCPServer:
             return self._config_provider.read(path, query)
         if path.startswith("/memory"):
             log.info("mcp_resource_read", provider="memory")
-            return self._memory.read(path, query)
+            t0 = time.monotonic()
+            try:
+                return await self._memory.read(path, query)
+            finally:
+                latency_ms = (time.monotonic() - t0) * 1000.0
+                if self._metrics:
+                    self._metrics.observe_mcp_memory_query_latency_ms(latency_ms)
+                if self._root_cfg.baselines is not None:
+                    limit = self._root_cfg.baselines.max_memory_query_latency_ms
+                    if latency_ms > limit:
+                        _log.warning(
+                            "mcp_memory_query_latency_degraded",
+                            latency_ms=latency_ms,
+                            limit_ms=limit,
+                        )
         msg = f"no MCP provider handles resource: {uri!r}"
         raise KeyError(msg)
 

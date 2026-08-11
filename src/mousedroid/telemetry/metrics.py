@@ -597,6 +597,9 @@ class MetricsRegistry:
         self._mcp_request_latency_ms = _Histogram(
             self._prepare_bucket_boundaries(cfg.mcp_latency_buckets_ms)
         )
+        self._mcp_memory_query_latency_ms = _Histogram(
+            self._prepare_bucket_boundaries(cfg.mcp_memory_query_latency_buckets_ms)
+        )
 
         # PR-A2 — Phase 2 replay / Phase 3 VLA / Phase 4 VLM observability.
         # All four metric families are pure-add: their internal state is
@@ -711,8 +714,9 @@ class MetricsRegistry:
 
         # MCP metric names — all derived from namespace
         self._name_mcp_requests = f"{ns}_mcp_requests"
-        self._name_mcp_tool_calls = f"{ns}_mcp_tool_calls"
+        self._name_mcp_tool_calls = f"{ns}_mcp_tool_calls_total"
         self._name_mcp_request_latency = f"{ns}_mcp_request_latency_ms"
+        self._name_mcp_memory_query_latency = f"{ns}_mcp_memory_query_latency_ms"
 
         # Cloud Digital Twin metric names — all derived from namespace
         self._name_cloud_telemetry_publish = f"{ns}_cloud_telemetry_publish"
@@ -1065,6 +1069,11 @@ class MetricsRegistry:
         """Record total MCP request latency in milliseconds."""
         if self._cfg.track_mcp:
             self._mcp_request_latency_ms.observe(value)
+
+    def observe_mcp_memory_query_latency_ms(self, value: float) -> None:
+        """Record memory query latency in milliseconds."""
+        if self._cfg.track_openclaw_memory:
+            self._mcp_memory_query_latency_ms.observe(value)
 
     # ------------------------------------------------------------------
     # LLM-gateway observability (Anthropic Claude tier). All gated by
@@ -2088,10 +2097,23 @@ class MetricsRegistry:
                 out.append(
                     _render_histogram(
                         self._name_mcp_request_latency,
-                        "MCP request latency histogram (milliseconds)",
+                        "MCP request end-to-end latency in milliseconds",
                         mcp_buckets,
                         mcp_sum,
                         mcp_count,
+                    )
+                )
+
+        if cfg.track_openclaw_memory:
+            mq_buckets, mq_sum, mq_count = self._mcp_memory_query_latency_ms.snapshot()
+            if mq_count > 0:
+                out.append(
+                    _render_histogram(
+                        self._name_mcp_memory_query_latency,
+                        "MCP memory query latency for OpenClaw in milliseconds",
+                        mq_buckets,
+                        mq_sum,
+                        mq_count,
                     )
                 )
         return out

@@ -12,6 +12,11 @@
 # Personal overrides and session state stay untracked regardless of the above.
 .claude/settings.local.json
 
+# Agentic shared assets (skills/agents) are tracked; session/state is ignored.
+.agents/*
+!.agents/skills/
+!.agents/agents/
+
 # Python
 __pycache__/
 .hypothesis/

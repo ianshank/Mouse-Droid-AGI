@@ -26,8 +26,9 @@ class EpisodicReplay:
 
     def __init__(self, cfg: MemoryConfig, seed: int | None = None) -> None:
         self._capacity = cfg.episodic_capacity
-        self._buffer: deque[tuple[Any, float]] = deque(maxlen=cfg.episodic_capacity)
+        self._buffer: deque[tuple[Any, float, int]] = deque(maxlen=cfg.episodic_capacity)
         self._rng = np.random.default_rng(seed)
+        self._seq_counter = 0
 
         _log.info("episodic_replay_init", capacity=cfg.episodic_capacity, seed=seed)
 
@@ -41,7 +42,8 @@ class EpisodicReplay:
         safe_priority = float(np.clip(priority, 0.0, None))
         if not np.isfinite(safe_priority):
             safe_priority = 1.0
-        self._buffer.append((experience, safe_priority))
+        self._buffer.append((experience, safe_priority, self._seq_counter))
+        self._seq_counter += 1
 
     def sample(self, batch_size: int) -> list[Any]:
         """Sample a batch of experiences weighted by priority.
@@ -57,7 +59,7 @@ class EpisodicReplay:
 
         n = min(batch_size, len(self._buffer))
         priorities: NDArray[np.float64] = np.array(
-            [p for _, p in self._buffer],
+            [p for _, p, _ in self._buffer],
             dtype=np.float64,
         )
 
@@ -76,6 +78,40 @@ class EpisodicReplay:
 
         indices = self._rng.choice(len(self._buffer), size=n, replace=False, p=probabilities)
         return [self._buffer[int(i)][0] for i in indices]
+
+    def cursor_query(self, cursor: int | None, limit: int) -> tuple[list[Any], int | None]:
+        """Fetch items sequentially using a cursor (sequence ID).
+
+        Iterates from newest to oldest. If a cursor is provided, returns
+        items strictly OLDER than the cursor.
+
+        Args:
+            cursor: Sequence ID to fetch items older than, or None for newest.
+            limit: Maximum items to return.
+
+        Returns:
+            Tuple of (experiences, next_cursor). next_cursor is the sequence
+            ID of the last item returned, or None if no more items.
+        """
+        if not self._buffer:
+            return [], None
+
+        results = []
+        next_cursor = None
+
+        # Iterate reverse (newest first)
+        for i in range(len(self._buffer) - 1, -1, -1):
+            exp, _, seq = self._buffer[i]
+            if cursor is not None and seq >= cursor:
+                continue
+
+            results.append(exp)
+            next_cursor = seq
+
+            if len(results) >= limit:
+                break
+
+        return results, next_cursor
 
     def __len__(self) -> int:
         """Current buffer size."""
