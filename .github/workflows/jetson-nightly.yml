@@ -34,6 +34,13 @@ on:
                 default: "all"
                 type: string
 
+# Least privilege. This workflow only reads the repo and uploads artifacts.
+# It matters more here than on the hosted runners: the job executes on a
+# long-lived self-hosted Jetson with a persistent physical footprint, so an
+# over-broad token has a correspondingly larger blast radius.
+permissions:
+    contents: read
+
 # Allow only one concurrent nightly run per branch. A queued run is cancelled
 # in favour of the newer one to avoid double-booking the single Jetson runner.
 concurrency:
