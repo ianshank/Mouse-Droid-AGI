@@ -192,4 +192,21 @@ fi
 echo "=== Health Check ==="
 MOUSEDROID_MOCK_HARDWARE=true "$PYTHON_BIN" -m mousedroid.main --health-check
 
-echo "=== All checks passed ==="
+# This script is NOT a full superset of .github/workflows/ci.yml. Several CI
+# jobs have no local equivalent here, and an undisclosed gap is how a green
+# local run comes to read as "the PR will pass" when it will not. Same
+# reasoning as the gitleaks/promtool/vulture skip notices above: a stage that
+# did not run must never be silently indistinguishable from one that passed.
+echo "=== CI jobs NOT reproduced locally ==="
+echo "    actionlint      - workflow lint; run the pinned container instead:"
+echo "                      docker run --rm -v \"\$PWD:/repo\" -w /repo rhysd/actionlint:1.7.12 -color"
+echo "    config-validate - scripts/validate_configs.py"
+echo "    security        - pip-audit --skip-editable (advisory in CI)"
+echo "    docker          - Dockerfile.jetson / docker-compose.jetson.yml validation"
+echo "    prometheus      - only 'promtool check rules' runs here; CI also"
+echo "                      validates the generated metrics-sample format"
+echo "    performance     - runs here WITHOUT CI's"
+echo "                      MOUSEDROID_INSTRUMENTATION_OVERHEAD_BUDGET=2.0, so"
+echo "                      the local budget is stricter than the gate"
+
+echo "=== All checks passed (see the not-reproduced list above) ==="
