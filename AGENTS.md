@@ -83,7 +83,7 @@
   put a literal `${{ ... }}` token inside a `run:` block, even in a
   comment; GitHub evaluates it and an empty one bricks the whole workflow.
 - Invoke the linter as `python -m ruff` (the pinned interpreter resolves
-  the pinned `ruff==0.16.0`), never bare `ruff` — a stray global install
+  the pinned `ruff==0.16.2`), never bare `ruff` — a stray global install
   drifts from the CI version and produces phantom pass/fail deltas.
 - Don't update `.git/config`. Don't `git push --force` on `main` or any
   shared branch.
