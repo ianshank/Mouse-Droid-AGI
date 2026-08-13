@@ -19,6 +19,8 @@ from mousedroid.config.schema import (
     OpenClawConfig,
     Settings,
 )
+from mousedroid.harness.approval.auto import AutoApproveGate
+from mousedroid.harness.approval.openclaw_gate import OpenClawSafetyGate
 from mousedroid.memory.episodic import EpisodicReplay
 from mousedroid.memory.exporter import MarkdownReplayExporter
 from mousedroid.orchestrator.mission_dispatcher import (
@@ -39,10 +41,15 @@ def _replay() -> EpisodicReplay:
 def _dispatcher() -> OrchestratorMissionDispatcher:
     deferred = DeferredOrchestratorRef()
     deferred.bind(MagicMock())  # never actually called in these tests
+    cfg = OpenClawConfig(enabled=True, export_every_n_ticks=5)
     return OrchestratorMissionDispatcher(
         deferred,
         injection_filter=RegexInjectionFilter([], max_len=64),
-        cfg=OpenClawConfig(enabled=True, export_every_n_ticks=5),
+        cfg=cfg,
+        # Mirrors factory.py's wiring (OpenClawSafetyGate over an "auto" inner gate).
+        approval_gate=OpenClawSafetyGate(
+            AutoApproveGate(), RegexInjectionFilter([], max_len=64), cfg
+        ),
     )
 
 

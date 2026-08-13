@@ -31,6 +31,7 @@ from mousedroid.constants import (
     WS_HELLO_MAX_BYTES,
 )
 from mousedroid.logging.setup import get_logger
+from mousedroid.orchestrator.mission_dispatcher import GATE_REJECTION_PREFIX
 from mousedroid.security.injection_filter import InjectionRejected
 from mousedroid.telemetry.network import (
     get_default_ip,
@@ -891,9 +892,16 @@ class TelemetryServer:
                 peer=peer,
             )
         except InjectionRejected:
+            # Still reachable when a filter rejects directly. OpenClawSafetyGate
+            # converts injection hits into a rejected ApprovalDecision instead,
+            # which arrives via the ValueError branch below.
             return 400, {"error": "invalid_command", "reason": "injection_pattern"}
         except ValueError as exc:
-            return 400, {"error": "invalid_command", "reason": str(exc)}
+            # dispatch() re-raises gate rejections as "<prefix><slug>". Strip the
+            # prefix so the body keeps exposing the stable machine-readable slug
+            # rather than leaking dispatcher-internal phrasing to the client.
+            reason = str(exc).removeprefix(GATE_REJECTION_PREFIX)
+            return 400, {"error": "invalid_command", "reason": reason}
         except (TimeoutError, asyncio.TimeoutError):
             # asyncio.TimeoutError aliases the builtin TimeoutError on 3.11+ but
             # is a DISTINCT exception on 3.10 (a supported CI leg). Catch both so
