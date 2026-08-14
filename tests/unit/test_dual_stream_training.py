@@ -106,12 +106,12 @@ def _import_compute_cfc_loss_weight():  # type: ignore[return]
         A callable with signature ``(step: int, cfg: DualStreamTrainingConfig) -> float``.
 
     Raises:
-        pytest.skip.Exception: If the training module has not been created yet.
+        pytest.skip.Exception: If the module's optional dependencies are absent.
     """
     try:
         import training.train_dual_stream_rssm as _mod
     except ImportError as exc:
-        pytest.skip(f"training.train_dual_stream_rssm not yet available: {exc}")
+        pytest.skip(f"training.train_dual_stream_rssm not importable: {exc}")
 
     # Prefer the public name specified in the task contract
     if hasattr(_mod, "compute_cfc_loss_weight"):
@@ -144,14 +144,14 @@ def _import_checkpoint_state():  # type: ignore[return]
         The DualStreamCheckpointState class.
 
     Raises:
-        pytest.skip.Exception: If the training module has not been created yet.
+        pytest.skip.Exception: If the module's optional dependencies are absent.
     """
     try:
         from training.train_dual_stream_rssm import DualStreamCheckpointState
 
         return DualStreamCheckpointState
     except ImportError as exc:
-        pytest.skip(f"training.train_dual_stream_rssm not yet available: {exc}")
+        pytest.skip(f"training.train_dual_stream_rssm not importable: {exc}")
 
 
 # ---------------------------------------------------------------------------

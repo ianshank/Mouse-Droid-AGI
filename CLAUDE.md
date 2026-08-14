@@ -93,7 +93,7 @@ workforce section below), `.claude/` (Claude Code assets: `settings.json`,
 
 ## Code Style
 
-- **Linter**: `ruff==0.16.0` — version pinned in `pyproject.toml [dev]` to match `.github/workflows/ci.yml`. Both literals must move together: a skew makes CI lint disagree with `bash scripts/ci.sh` (this is exactly how `S603` in `tools/_jetson_helpers.py` went red repo-wide). Line length 100, Google docstrings, comprehensive rule set.
+- **Linter**: `ruff==0.16.2` — pinned in `pyproject.toml [dev]` and, because their lint jobs `pip install` ruff standalone rather than via the dev extra, restated in BOTH `.github/workflows/ci.yml` and `.github/workflows/release.yml`. All three literals must move together: a skew makes CI lint disagree with `bash scripts/ci.sh` (this is exactly how `S603` in `tools/_jetson_helpers.py` went red repo-wide). `tests/regression/test_ruff_version_single_source.py` now enforces the agreement. Line length 100, Google docstrings, comprehensive rule set.
 - **Type checker**: `mypy --strict` with `ignore_missing_imports`
 - **Format**: `ruff format` (CI runs `ruff format --check src/ tests/ tools/`; same in `bash scripts/ci.sh` post-PR #62)
 - **Docstrings**: Google convention, required on all public functions/classes
@@ -122,12 +122,17 @@ Plus `config-validate`, `usbc-config-gate`, `prometheus-check`, `vla-extras`,
 latency budgets are noisy on shared runners), and `local-gates` (the deterministic
 `scripts/ci.sh`-only gates: settings identity, `mypy --strict tools/claude_hooks/`,
 skill validator, doc hygiene, workforce hook coverage). Separate workflows:
-`harness.yml` (spec harness), `config-compat.yml` (schema drift), `jetson-nightly.yml`.
+`harness.yml` (spec harness), `config-compat.yml` (schema drift), `jetson-nightly.yml`,
+and `release.yml` (tag-triggered `v*.*.*`: lint, typecheck, test, build, publish to
+PyPI via OIDC trusted publishing — note its lint job carries its OWN `ruff==` literal).
 
-`bash scripts/ci.sh` is the local superset — it additionally runs the
+`bash scripts/ci.sh` is the local **near**-superset, not a full one. It adds the
 hardcoded-value gate and branch-coverage gate (both need a git diff base, so they
-are local-only by design), the pillar dispatch, and the health check. **Count
-changes when jobs are added — do not restate a number without checking `ci.yml`.**
+are local-only by design), the pillar dispatch, and the health check — but it does
+NOT reproduce `actionlint`, `config-validate`, `security`/`pip-audit`, or `docker`,
+and it covers `prometheus-check` and `performance` only partially. The script prints
+that list at the end of every run; trust that over this paragraph. **Count changes
+when jobs are added — do not restate a number without checking `ci.yml`.**
 
 ## Robot Arm Platform (Hierarchical Reasoning Architecture)
 

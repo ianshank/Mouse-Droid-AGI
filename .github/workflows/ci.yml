@@ -27,6 +27,14 @@ on:
     pull_request:
         branches: [main, "feature/**", "claude/**", "refactor/**", "fix/**", "feat/**"]
 
+# Least privilege by default. No job here writes to the repo, opens a PR, or
+# publishes an artifact needing more than read access; the two jobs that
+# already declared this explicitly (gitleaks, vulture-audit) keep their
+# job-level block as documentation. Any future job needing more must widen
+# scope at the job level, never here.
+permissions:
+    contents: read
+
 env:
     MOUSEDROID_MOCK_HARDWARE: "true"
     MINIMUM_COVERAGE: "90"
@@ -65,7 +73,7 @@ jobs:
                   cache: pip
 
             - name: Install ruff
-              run: pip install "ruff==0.16.0"
+              run: pip install "ruff==0.16.2"
 
             - name: Lint check
               run: ruff check src/ tests/ tools/
@@ -599,3 +607,20 @@ jobs:
 
             - name: Syntax check docker-compose
               run: docker compose -f docker-compose.jetson.yml config --quiet
+
+            - name: Check Dockerfile best practices
+              # Ported from the former docker-build.yml, which triggered only on
+              # a ``main`` branch that does not exist in this repo and therefore
+              # never ran. Keeping the check here means it actually executes.
+              run: |
+                  # Verify no latest tags in FROM statements
+                  if grep -E '^FROM\s+\S+:latest' Dockerfile.jetson; then
+                      echo "ERROR: Dockerfile uses :latest tag — pin to a specific version"
+                      exit 1
+                  fi
+                  # Verify HEALTHCHECK is present
+                  if ! grep -q '^HEALTHCHECK' Dockerfile.jetson; then
+                      echo "ERROR: Dockerfile missing HEALTHCHECK instruction"
+                      exit 1
+                  fi
+                  echo "Dockerfile best practices check passed"

@@ -139,7 +139,7 @@ These hold across every module and may not be weakened by any change. Invariants
     gitignored `*.env`); `config/docker.env.example` documents the secret surface
     (including the `ANTHROPIC_API_KEY` slot) without holding live values.
 
-**Quality gates are non-negotiable.** Linting (`ruff==0.16.0`), formatting
+**Quality gates are non-negotiable.** Linting (`ruff==0.16.2`), formatting
 (`ruff format --check`), strict type-checking (`mypy --strict`), bounded
 cyclomatic complexity (`ruff` `C901`, `max-complexity = 15`; ADR-014), and the
 90% **line** coverage floor (`--cov-fail-under=90`, scoped to `src/mousedroid`)

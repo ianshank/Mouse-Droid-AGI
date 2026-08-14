@@ -8,6 +8,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — CI/CD hygiene: pin reachability, dead workflow, ruff single-source
+
+Repo-hygiene pass over the CI surface. Four defects, each verified before the fix
+rather than taken from a report:
+
+- **`deployments/jetson-image.json` reachability.** The pinned deployed-image SHA
+  is not an ancestor of the default branch; it was reachable only from six stale
+  feature/chore branches. The `config-compat` gate still worked (its checkout uses
+  `fetch-depth: 0`, which fetches all branches), so this was a latent trap rather
+  than a live outage — but routine branch cleanup would have orphaned the commit
+  and killed the gate repo-wide. Now kept reachable by the annotated tag
+  `deployments/jetson-image-032942b`. Deliberately NOT re-pinned to a newer trunk
+  commit: the pin means "the schema the deployed rover image actually has", so
+  moving it forward would silently change what the gate validates against.
+- **`docker-build.yml` removed.** It triggered only on `branches: [main]`, and this
+  repo has no `main` branch, so it never ran. It also duplicated `ci.yml`'s docker
+  job while lacking that job's `InvalidBaseImagePlatform` tolerance, so it would
+  have failed every run on the amd64 runner had it ever fired. Its one unique
+  contribution — the Dockerfile best-practices check (`:latest` FROM rejection,
+  `HEALTHCHECK` requirement) — moved into `ci.yml`'s docker job, where it now
+  actually executes.
+- **ruff pin had three sources of truth.** `pyproject.toml`'s dev extra plus a
+  standalone `pip install "ruff==..."` in both `ci.yml` and `release.yml`, with
+  nothing asserting agreement — the same skew that once took `S603` red repo-wide.
+  Adds `tests/regression/test_ruff_version_single_source.py` (mirrors
+  `test_coverage_gate_single_source.py`) and lands the pending 0.16.2 bump across
+  all three literals at once.
+- **`scripts/ci.sh` is not the "local superset" `CLAUDE.md` claimed.** It does not
+  reproduce `actionlint`, `config-validate`, `security`/`pip-audit` or `docker`,
+  and covers `prometheus-check`/`performance` only partially. The script now prints
+  that list at the end of every run and qualifies its own "All checks passed" line,
+  following the same reasoning as its existing gitleaks/promtool/vulture skip
+  notices: a stage that did not run must never read as one that passed.
+
+Also adds least-privilege `permissions: contents: read` to `ci.yml` and
+`jetson-nightly.yml` (the latter runs on a self-hosted Jetson), aligns
+`harness.yml`'s `actions/setup-python` to the v6.2.0 SHA used everywhere else, and
+corrects a stale "not yet available" test-skip message for a module that now exists.
+
 ### Added — F-027: NemoClaw Integration (OpenClaw Safety Gateway)
 
 The OpenClaw mission dispatcher now evaluates safety policies before executing missions, preventing unsafe behaviors in sandbox environments and production.
