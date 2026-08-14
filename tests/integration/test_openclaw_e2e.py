@@ -26,6 +26,8 @@ from mousedroid.config.schema import (
     OpenClawConfig,
     TelemetryConfig,
 )
+from mousedroid.harness.approval.auto import AutoApproveGate
+from mousedroid.harness.approval.openclaw_gate import OpenClawSafetyGate
 from mousedroid.llm_gateway.protocol import GoalVector
 from mousedroid.memory.episodic import EpisodicReplay
 from mousedroid.memory.exporter import MarkdownReplayExporter
@@ -80,6 +82,8 @@ async def test_openclaw_rest_dispatch_drives_memory_export(tmp_path: Path) -> No
         deferred,
         injection_filter=_filter(),
         cfg=openclaw_cfg,
+        # Mirrors factory.py's wiring (OpenClawSafetyGate over an "auto" inner gate).
+        approval_gate=OpenClawSafetyGate(AutoApproveGate(), _filter(), openclaw_cfg),
     )
 
     queue: asyncio.Queue[TelemetryFrame] = asyncio.Queue(maxsize=8)

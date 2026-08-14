@@ -199,7 +199,7 @@ class TestMemoryResource:
             }
         )
         episodic = MagicMock()
-        episodic.sample.return_value = [{"step": 1}, {"step": 2}]
+        episodic.cursor_query.return_value = ([{"step": 1}, {"step": 2}], None)
         tier = MagicMock(episodic=episodic)
         s = MouseDroidMCPServer(
             cfg=cfg,

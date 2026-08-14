@@ -27,6 +27,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from mousedroid.config.schema import OpenClawConfig, TelemetryConfig
+from mousedroid.harness.approval.auto import AutoApproveGate
 from mousedroid.llm_gateway.protocol import GoalVector
 from mousedroid.mcp.middleware import (
     BearerAuthMiddleware,
@@ -70,21 +71,27 @@ def _filter() -> RegexInjectionFilter:
 
 
 def test_build_mission_dispatcher_returns_none_pair_when_cfg_none() -> None:
-    dispatcher, deferred = build_mission_dispatcher(None, injection_filter=_filter())
+    dispatcher, deferred = build_mission_dispatcher(
+        None, injection_filter=_filter(), approval_gate=AutoApproveGate()
+    )
     assert dispatcher is None
     assert deferred is None
 
 
 def test_build_mission_dispatcher_returns_none_pair_when_disabled() -> None:
     cfg = OpenClawConfig(enabled=False)
-    dispatcher, deferred = build_mission_dispatcher(cfg, injection_filter=_filter())
+    dispatcher, deferred = build_mission_dispatcher(
+        cfg, injection_filter=_filter(), approval_gate=AutoApproveGate()
+    )
     assert dispatcher is None
     assert deferred is None
 
 
 def test_build_mission_dispatcher_returns_wired_pair_when_enabled() -> None:
     cfg = OpenClawConfig(enabled=True)
-    dispatcher, deferred = build_mission_dispatcher(cfg, injection_filter=_filter())
+    dispatcher, deferred = build_mission_dispatcher(
+        cfg, injection_filter=_filter(), approval_gate=AutoApproveGate()
+    )
     assert isinstance(dispatcher, OrchestratorMissionDispatcher)
     assert isinstance(deferred, DeferredOrchestratorRef)
     # Late binding: dispatcher uses ``deferred`` for ``process_mission``.
