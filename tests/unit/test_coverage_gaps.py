@@ -186,9 +186,11 @@ def test_episodic_memory_non_finite_priorities():
         mem.push(np.zeros(8, dtype=np.float32), priority=1.0)
 
     # Force all priorities to NaN to hit the non-finite fallback branch
+    # Buffer entries are (experience, priority, seq) — preserve seq, which the
+    # sampler relies on for stable ordering.
     for i in range(len(mem._buffer)):
-        exp, _ = mem._buffer[i]
-        mem._buffer[i] = (exp, float("nan"))
+        exp, _, seq = mem._buffer[i]
+        mem._buffer[i] = (exp, float("nan"), seq)
 
     # Should not raise, uses uniform sampling fallback
     samples = mem.sample(batch_size=2)

@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from mousedroid.config.schema import OpenClawConfig, TelemetryAuthConfig, TelemetryConfig
+from mousedroid.harness.approval.auto import AutoApproveGate
+from mousedroid.harness.approval.openclaw_gate import OpenClawSafetyGate
 from mousedroid.llm_gateway.protocol import GoalVector
 from mousedroid.orchestrator.mission_dispatcher import (
     DeferredOrchestratorRef,
@@ -49,10 +51,15 @@ def _make_dispatcher(
     orch = orch or _StubOrchestrator()
     deferred = DeferredOrchestratorRef()
     deferred.bind(orch)
+    resolved_cfg = cfg or OpenClawConfig(enabled=True)
+    # Mirrors factory.py's wiring. The allowed_channels / max_command_len /
+    # injection rejections these tests assert on are enforced by
+    # OpenClawSafetyGate, not by dispatch() itself.
     dispatcher = OrchestratorMissionDispatcher(
         deferred,
         injection_filter=_filter(),
-        cfg=cfg or OpenClawConfig(enabled=True),
+        cfg=resolved_cfg,
+        approval_gate=OpenClawSafetyGate(AutoApproveGate(), _filter(), resolved_cfg),
     )
     return dispatcher, orch
 
@@ -412,10 +419,14 @@ async def test_concurrent_idempotency_dispatches_only_once() -> None:
 
     deferred = DeferredOrchestratorRef()
     deferred.bind(_SlowOrch())
+    concurrency_cfg = OpenClawConfig(enabled=True)
     dispatcher = OrchestratorMissionDispatcher(
         deferred,
         injection_filter=RegexInjectionFilter([], max_len=64),
-        cfg=OpenClawConfig(enabled=True),
+        cfg=concurrency_cfg,
+        approval_gate=OpenClawSafetyGate(
+            AutoApproveGate(), RegexInjectionFilter([], max_len=64), concurrency_cfg
+        ),
     )
     queue: asyncio.Queue[TelemetryFrame] = asyncio.Queue(maxsize=4)
     health = AsyncMock()

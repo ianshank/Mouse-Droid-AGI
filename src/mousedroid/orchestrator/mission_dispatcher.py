@@ -48,6 +48,13 @@ _COMMAND_HASH_PREFIX = 12
 # within a session while staying short enough to grep across telemetry.
 _TRACE_ID_PREFIX = 16
 
+#: Prefix ``dispatch`` puts on a gate rejection before re-raising it as a
+#: ``ValueError``. Callers that surface the rejection to a client strip this
+#: so the stable machine-readable slug (``injection_pattern``,
+#: ``command_too_long``, ``channel_not_allowed``) is what reaches the wire —
+#: exported rather than duplicated as a literal at each call site.
+GATE_REJECTION_PREFIX = "mission rejected: "
+
 
 @runtime_checkable
 class MissionDispatcherProtocol(Protocol):
@@ -231,7 +238,7 @@ class OrchestratorMissionDispatcher:
                 )
             )
             if not decision.approved:
-                msg = f"mission rejected: {decision.reason}"
+                msg = f"{GATE_REJECTION_PREFIX}{decision.reason}"
                 raise ValueError(msg)
 
             sanitised = self._filter.sanitize(nl_command)

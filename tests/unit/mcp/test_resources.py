@@ -180,45 +180,48 @@ class TestConfigResourceProvider:
 
 
 class TestMemoryResourceProvider:
-    def test_disabled_without_memory_tier(self, mcp_cfg: MCPConfig, redact_pattern) -> None:
+    async def test_disabled_without_memory_tier(self, mcp_cfg: MCPConfig, redact_pattern) -> None:
         p = MemoryResourceProvider(mcp_cfg, memory_tier=None, key_pattern=redact_pattern)
         assert p.enabled is False
         with pytest.raises(PermissionError):
-            p.read("/memory/episodes/recent", {})
+            await p.read("/memory/episodes/recent", {})
 
-    def test_returns_redacted_episodes(self, redact_pattern) -> None:
+    async def test_returns_redacted_episodes(self, redact_pattern) -> None:
         cfg = MCPConfig.model_validate({"enabled": True, "resources": {"memory_enabled": True}})
         episodic = MagicMock()
-        episodic.sample.return_value = [
-            {"action": "left", "api_key": "leak"},
-            {"action": "right", "ok": 1},
-        ]
+        episodic.cursor_query.return_value = (
+            [
+                {"action": "left", "api_key": "leak"},
+                {"action": "right", "ok": 1},
+            ],
+            None,
+        )
         tier = MagicMock(episodic=episodic)
         p = MemoryResourceProvider(cfg, memory_tier=tier, key_pattern=redact_pattern)
-        out = p.read("/memory/episodes/recent", {"n": "2"})
+        out = await p.read("/memory/episodes/recent", {"n": "2"})
         assert out["count"] == 2
         assert out["episodes"][0]["api_key"] == REDACTED
 
-    def test_summarises_ndarray_payloads(self, redact_pattern) -> None:
+    async def test_summarises_ndarray_payloads(self, redact_pattern) -> None:
         import numpy as np
 
         cfg = MCPConfig.model_validate({"enabled": True, "resources": {"memory_enabled": True}})
         episodic = MagicMock()
-        episodic.sample.return_value = [{"image": np.zeros((4, 4), dtype=np.uint8)}]
+        episodic.cursor_query.return_value = ([{"image": np.zeros((4, 4), dtype=np.uint8)}], None)
         tier = MagicMock(episodic=episodic)
         p = MemoryResourceProvider(cfg, memory_tier=tier, key_pattern=redact_pattern)
-        out = p.read("/memory/episodes/recent", {"n": "1"})
+        out = await p.read("/memory/episodes/recent", {"n": "1"})
         ep = out["episodes"][0]
         assert ep["image"]["ndarray"] is True
         assert ep["image"]["shape"] == [4, 4]
         assert ep["image"]["dtype"] == "uint8"
 
-    def test_unknown_path_raises(self, mcp_cfg: MCPConfig, redact_pattern) -> None:
+    async def test_unknown_path_raises(self, mcp_cfg: MCPConfig, redact_pattern) -> None:
         cfg = MCPConfig.model_validate({"enabled": True, "resources": {"memory_enabled": True}})
         tier = MagicMock(episodic=MagicMock())
         p = MemoryResourceProvider(cfg, memory_tier=tier, key_pattern=redact_pattern)
         with pytest.raises(KeyError):
-            p.read("/memory/does_not_exist", {})
+            await p.read("/memory/does_not_exist", {})
 
 
 class TestResourcesConfigDefaults:
@@ -315,16 +318,16 @@ class TestEdgeCases:
         with pytest.raises(KeyError):
             p.read("/config/something_else", {})
 
-    def test_memory_unknown_path(self, redact_pattern) -> None:
+    async def test_memory_unknown_path(self, redact_pattern) -> None:
         cfg = MCPConfig.model_validate({"enabled": True, "resources": {"memory_enabled": True}})
         from mousedroid.mcp.resources import MemoryResourceProvider
 
         tier = MagicMock(episodic=MagicMock())
         p = MemoryResourceProvider(cfg, memory_tier=tier, key_pattern=redact_pattern)
         with pytest.raises(KeyError):
-            p.read("/memory/unknown", {})
+            await p.read("/memory/unknown", {})
 
-    def test_memory_no_episodic_attr(self, redact_pattern) -> None:
+    async def test_memory_no_episodic_attr(self, redact_pattern) -> None:
         cfg = MCPConfig.model_validate({"enabled": True, "resources": {"memory_enabled": True}})
         from mousedroid.mcp.resources import MemoryResourceProvider
 
@@ -333,29 +336,29 @@ class TestEdgeCases:
             pass
 
         p = MemoryResourceProvider(cfg, memory_tier=_BareTier(), key_pattern=redact_pattern)
-        out = p.read("/memory/episodes/recent", {"n": "5"})
+        out = await p.read("/memory/episodes/recent", {"n": "5"})
         assert out == {"count": 0, "episodes": []}
 
-    def test_memory_sample_exception_returns_empty(self, redact_pattern) -> None:
+    async def test_memory_sample_exception_returns_empty(self, redact_pattern) -> None:
         cfg = MCPConfig.model_validate({"enabled": True, "resources": {"memory_enabled": True}})
         from mousedroid.mcp.resources import MemoryResourceProvider
 
         episodic = MagicMock()
-        episodic.sample.side_effect = RuntimeError("buffer corrupt")
+        episodic.cursor_query.side_effect = RuntimeError("buffer corrupt")
         tier = MagicMock(episodic=episodic)
         p = MemoryResourceProvider(cfg, memory_tier=tier, key_pattern=redact_pattern)
-        out = p.read("/memory/episodes/recent", {"n": "5"})
+        out = await p.read("/memory/episodes/recent", {"n": "5"})
         assert out == {"count": 0, "episodes": []}
 
-    def test_memory_invalid_n_falls_back(self, redact_pattern) -> None:
+    async def test_memory_invalid_n_falls_back(self, redact_pattern) -> None:
         cfg = MCPConfig.model_validate({"enabled": True, "resources": {"memory_enabled": True}})
         from mousedroid.mcp.resources import MemoryResourceProvider
 
         episodic = MagicMock()
-        episodic.sample.return_value = [{"action": "up"}]
+        episodic.cursor_query.return_value = ([{"action": "up"}], None)
         tier = MagicMock(episodic=episodic)
         p = MemoryResourceProvider(cfg, memory_tier=tier, key_pattern=redact_pattern)
-        out = p.read("/memory/episodes/recent", {"n": "bad"})
+        out = await p.read("/memory/episodes/recent", {"n": "bad"})
         assert out["count"] == 1
 
     def test_telemetry_latest_with_empty_buffer(self, mcp_cfg: MCPConfig) -> None:
