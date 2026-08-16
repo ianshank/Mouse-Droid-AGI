@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator
 
 
 class TelemetryAuthConfig(BaseModel):
@@ -152,7 +152,7 @@ class TelemetryConfig(BaseModel):
         "json",
         description="WebSocket serialization format",
     )
-    api_key: str | None = Field(None, description="Optional API key (None=disabled)")
+    api_key: SecretStr | None = Field(None, description="Optional API key (None=disabled)")
     mdns_enabled: bool = Field(True, description="Enable mDNS/Zeroconf discovery")
     mdns_service_name: str = Field(
         "MouseDroid Telemetry",

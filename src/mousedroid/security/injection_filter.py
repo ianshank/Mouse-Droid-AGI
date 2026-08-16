@@ -51,6 +51,15 @@ class RegexInjectionFilter:
     constructor logs a structured warning and falls back to the
     "patterns-disabled" state. Length truncation still applies so the
     filter is never byte-identical to a no-op.
+
+    Capability caveat: this is a literal-pattern denylist, not a semantic
+    classifier — it does not normalize whitespace runs, paraphrasing, or
+    unicode confusables/homoglyphs before matching, so it is best-effort
+    against a motivated adversary, not a complete defense. Blast radius is
+    bounded elsewhere: parsed mission output is still clamped by
+    ``LLMConfig.max_vx_norm_mps``/``max_vy_norm_mps``/``max_omega_norm_rads``
+    regardless of what the LLM returns, and the operator Q&A channel's own
+    system prompt states it cannot perform actions.
     """
 
     def __init__(self, patterns: Iterable[str], *, max_len: int) -> None:

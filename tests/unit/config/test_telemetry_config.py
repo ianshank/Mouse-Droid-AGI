@@ -43,7 +43,8 @@ def test_telemetry_config_custom_values():
     assert cfg.port == 9090
     assert cfg.publish_hz == 5.0
     assert cfg.serialization == "msgpack"
-    assert cfg.api_key == "secret123"
+    assert cfg.api_key is not None
+    assert cfg.api_key.get_secret_value() == "secret123"
     assert cfg.preferred_interface == "eth0"
 
 
