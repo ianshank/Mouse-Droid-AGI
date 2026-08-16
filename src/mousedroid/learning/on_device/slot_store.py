@@ -24,7 +24,6 @@ live policy — promotion is WS4's safety-gated decision.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from collections.abc import Mapping
@@ -35,6 +34,7 @@ from typing import TYPE_CHECKING
 import torch
 from torch import Tensor
 
+from mousedroid.common.hashing import digest_file_sha256
 from mousedroid.logging.setup import get_logger
 from mousedroid.utils.weights_manager import verify_sha256
 
@@ -43,10 +43,6 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
-# Chunk size for the SHA-256 stamp digest. Mirrors the C1 OTA helper's
-# 64 KiB streaming read so a multi-MB checkpoint never loads fully into RAM
-# just to be hashed.
-_SHA256_CHUNK_BYTES: int = 64 * 1024
 # Structured-log event prefix reused by ``verify_sha256`` on load so a slot
 # integrity failure greps under the same ``on_device_slot_*`` family.
 _LOG_EVENT_PREFIX: str = "on_device_slot"
@@ -138,7 +134,7 @@ class OnDeviceSlotStore:
         # never leaves a mis-stamped slot behind.
         tmp_path = self._slot_dir / _TMP_SLOT_NAME
         torch.save(dict(candidate_state_dict), tmp_path)
-        digest = self._digest_file(tmp_path)
+        digest = digest_file_sha256(tmp_path)
         final_path = self._slot_dir / f"{digest}{_SLOT_SUFFIX}"
         tmp_path.replace(final_path)
 
@@ -218,18 +214,6 @@ class OnDeviceSlotStore:
             _log.warning("on_device_slot_active_digest_malformed", path=str(manifest))
             return None
         return digest
-
-    @staticmethod
-    def _digest_file(path: Path) -> str:
-        """Stream-hash ``path`` with SHA-256 (mirrors the C1 OTA digest)."""
-        hasher = hashlib.sha256()
-        with path.open("rb") as fh:
-            while True:
-                chunk = fh.read(_SHA256_CHUNK_BYTES)
-                if not chunk:
-                    break
-                hasher.update(chunk)
-        return hasher.hexdigest()
 
 
 __all__ = [

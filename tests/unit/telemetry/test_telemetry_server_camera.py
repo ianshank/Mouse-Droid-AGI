@@ -10,6 +10,7 @@ import asyncio
 import pytest
 
 from mousedroid.config.schema import TelemetryConfig
+from tests.unit.telemetry.conftest import _make_health_monitor
 
 aiohttp = pytest.importorskip("aiohttp")
 from unittest.mock import AsyncMock
@@ -18,12 +19,6 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from mousedroid.telemetry.server import TelemetryServer
-
-
-def _make_health_monitor() -> AsyncMock:
-    monitor = AsyncMock()
-    monitor.check_health = AsyncMock(return_value={"status": "ok"})
-    return monitor
 
 
 def _make_raw_frame_source(jpeg: bytes | None = b"\xff\xd8\xff\xd9") -> AsyncMock:

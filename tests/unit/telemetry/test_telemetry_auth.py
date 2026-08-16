@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from functools import partial
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -27,6 +28,7 @@ import pytest
 from mousedroid.config.schema import MetricsConfig, TelemetryAuthConfig, TelemetryConfig
 from mousedroid.telemetry.metrics import MetricsRegistry
 from mousedroid.telemetry.protocol import TelemetryFrame
+from tests.unit.telemetry.conftest import _make_health_monitor as _make_health_monitor_base
 
 aiohttp = pytest.importorskip("aiohttp")
 
@@ -45,12 +47,7 @@ _WRONG_KEY = "wrong-key"
 # ---------------------------------------------------------------------------
 
 
-def _make_health_monitor() -> AsyncMock:
-    monitor = AsyncMock()
-    monitor.check_health = AsyncMock(
-        return_value={"status": "ok", "gpu_temp_c": 40.0, "gpu_load_pct": 10.0}
-    )
-    return monitor
+_make_health_monitor = partial(_make_health_monitor_base, gpu_temp_c=40.0, gpu_load_pct=10.0)
 
 
 def _make_server(

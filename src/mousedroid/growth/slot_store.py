@@ -15,7 +15,6 @@ directory is the repo-relative ``GrowthConfig.slot_dir`` leaf resolved under
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +23,7 @@ from typing import TYPE_CHECKING
 import torch
 from torch import Tensor
 
+from mousedroid.common.hashing import digest_file_sha256
 from mousedroid.logging.setup import get_logger
 from mousedroid.utils.weights_manager import verify_sha256
 
@@ -32,9 +32,6 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
-# Mirror the on-device store's 64 KiB streaming chunk so a multi-MB checkpoint
-# is never fully resident just to be hashed.
-_SHA256_CHUNK_BYTES: int = 64 * 1024
 _LOG_EVENT_PREFIX: str = "growth_slot"
 _SLOT_SUFFIX: str = ".pt"
 _TMP_SLOT_NAME: str = f"student{_SLOT_SUFFIX}.tmp"
@@ -100,7 +97,7 @@ class GrowthSlotStore:
         self._slot_dir.mkdir(parents=True, exist_ok=True)
         tmp_path = self._slot_dir / _TMP_SLOT_NAME
         torch.save(dict(student_state_dict), tmp_path)
-        digest = self._digest_file(tmp_path)
+        digest = digest_file_sha256(tmp_path)
         final_path = self._slot_dir / f"{digest}{_SLOT_SUFFIX}"
         tmp_path.replace(final_path)
         _log.info(
@@ -123,18 +120,6 @@ class GrowthSlotStore:
             raise GrowthSlotIntegrityError(msg)
         loaded: dict[str, Tensor] = torch.load(slot.path, weights_only=True)
         return loaded
-
-    @staticmethod
-    def _digest_file(path: Path) -> str:
-        """Stream-hash ``path`` with SHA-256 (mirrors the C1 OTA digest)."""
-        hasher = hashlib.sha256()
-        with path.open("rb") as fh:
-            while True:
-                chunk = fh.read(_SHA256_CHUNK_BYTES)
-                if not chunk:
-                    break
-                hasher.update(chunk)
-        return hasher.hexdigest()
 
 
 __all__ = [

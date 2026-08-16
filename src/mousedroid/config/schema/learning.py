@@ -14,6 +14,46 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from mousedroid.config.schema._primitives import Self
 
 
+def _validate_relative_slot_dir(v: str, *, config_name: str) -> str:
+    """Reject a ``slot_dir`` value that would escape the experience root.
+
+    Shared by ``OnDeviceLearningConfig.slot_dir`` and ``GrowthConfig.slot_dir``:
+    both are resolved as ``<ExperienceConfig.path>/<slot_dir>``, so an absolute
+    path, a parent-traversal (``..``) component, or an empty / whitespace-only
+    value would break that containment contract and let candidate weights land
+    outside the configured experience root. Validated at YAML load so a
+    misconfigured deployment fails fast with a clear, operator-actionable
+    message instead of silently writing off-root.
+
+    Args:
+        v: The raw ``slot_dir`` field value.
+        config_name: The owning config's dotted name (e.g. ``"on_device_learning"``),
+            used only to make the error message point at the right YAML key.
+
+    Returns:
+        The stripped, validated relative path.
+    """
+    from pathlib import PurePosixPath, PureWindowsPath
+
+    slot = v.strip()
+    # Check absoluteness under BOTH POSIX and Windows semantics so a
+    # ``/abs/path`` (slot is resolved on the Jetson/Linux target) is caught
+    # regardless of the host OS the config is validated on, and ``..``
+    # traversal in either separator style is rejected.
+    posix = PurePosixPath(slot)
+    windows = PureWindowsPath(slot)
+    is_absolute = posix.is_absolute() or windows.is_absolute()
+    has_traversal = ".." in posix.parts or ".." in windows.parts
+    if not slot or is_absolute or has_traversal:
+        msg = (
+            f"{config_name}.slot_dir must be a non-empty relative path "
+            "without parent traversal (resolved under "
+            "ExperienceConfig.path); got " + repr(v)
+        )
+        raise ValueError(msg)
+    return slot
+
+
 class LearningConfig(BaseModel):
     """Continual learning configuration (Pillar 3)."""
 
@@ -123,34 +163,8 @@ class OnDeviceLearningConfig(BaseModel):
     @field_validator("slot_dir")
     @classmethod
     def _validate_slot_dir(cls, v: str) -> str:
-        """Reject slot_dir values that escape the experience root.
-
-        ``slot_dir`` is resolved as ``<ExperienceConfig.path>/<slot_dir>``, so
-        an absolute path, a parent-traversal (``..``) component, or an empty /
-        whitespace-only value would break that containment contract and let
-        on-device weights land outside the configured experience root. Validated
-        at YAML load so a misconfigured deployment fails fast with a clear,
-        operator-actionable message instead of silently writing off-root.
-        """
-        from pathlib import PurePosixPath, PureWindowsPath
-
-        slot = v.strip()
-        # Check absoluteness under BOTH POSIX and Windows semantics so a
-        # ``/abs/path`` (slot is resolved on the Jetson/Linux target) is caught
-        # regardless of the host OS the config is validated on, and ``..``
-        # traversal in either separator style is rejected.
-        posix = PurePosixPath(slot)
-        windows = PureWindowsPath(slot)
-        is_absolute = posix.is_absolute() or windows.is_absolute()
-        has_traversal = ".." in posix.parts or ".." in windows.parts
-        if not slot or is_absolute or has_traversal:
-            msg = (
-                "on_device_learning.slot_dir must be a non-empty relative path "
-                "without parent traversal (resolved under "
-                "ExperienceConfig.path); got " + repr(v)
-            )
-            raise ValueError(msg)
-        return slot
+        """Reject slot_dir values that escape the experience root."""
+        return _validate_relative_slot_dir(v, config_name="on_device_learning")
 
     scoring_seed: int = Field(
         1234,
@@ -306,26 +320,10 @@ class GrowthConfig(BaseModel):
     def _validate_slot_dir(cls, v: str) -> str:
         """Reject slot_dir values that escape the experience root.
 
-        Mirrors ``OnDeviceLearningConfig._validate_slot_dir``: ``slot_dir`` is
-        resolved as ``<ExperienceConfig.path>/<slot_dir>``, so an absolute path, a
-        parent-traversal (``..``) component, or an empty / whitespace-only value
-        would break that containment contract. Validated at YAML load so a
-        misconfigured deployment fails fast.
+        Mirrors ``OnDeviceLearningConfig._validate_slot_dir`` via the shared
+        ``_validate_relative_slot_dir`` helper.
         """
-        from pathlib import PurePosixPath, PureWindowsPath
-
-        slot = v.strip()
-        posix = PurePosixPath(slot)
-        windows = PureWindowsPath(slot)
-        is_absolute = posix.is_absolute() or windows.is_absolute()
-        has_traversal = ".." in posix.parts or ".." in windows.parts
-        if not slot or is_absolute or has_traversal:
-            msg = (
-                "growth.slot_dir must be a non-empty relative path without parent "
-                "traversal (resolved under ExperienceConfig.path); got " + repr(v)
-            )
-            raise ValueError(msg)
-        return slot
+        return _validate_relative_slot_dir(v, config_name="growth")
 
 
 class OfflineRLConfig(BaseModel):
