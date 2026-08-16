@@ -219,9 +219,11 @@ def test_factory_build_camera_picamera2_backend():
     )
     from mousedroid.factory import build_camera
     from mousedroid.hardware.camera.imx500 import IMX500Camera
+    from mousedroid.resilience.resilient_camera import ResilientCamera
 
     camera = build_camera(cfg)
-    assert isinstance(camera, IMX500Camera)
+    assert isinstance(camera, ResilientCamera)
+    assert isinstance(camera.inner, IMX500Camera)
 
 
 # ---------------------------------------------------------------------------

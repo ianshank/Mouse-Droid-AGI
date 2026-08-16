@@ -227,6 +227,10 @@ def build_camera(
     camera constructor so that ``build_feature_extractor`` can select
     the :class:`HailoFeatureExtractor` backend at construction time.
 
+    Real (non-mock) backends are wrapped with circuit breaker + retry,
+    mirroring ``build_esp32_driver``/``build_lidar`` — the camera capture
+    path talks to real hardware over CSI/USB and can transiently fail.
+
     Args:
         cfg: Root settings.
         hailo_runtime: Optional Hailo-8 runtime for accelerated feature extraction.
@@ -239,21 +243,20 @@ def build_camera(
 
         return MockCamera(cfg.camera)
 
+    inner: VisionProtocol
     if cfg.camera.backend == "jetson_csi":
         from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
 
-        return JetsonCSICamera(cfg.camera, hailo_runtime=hailo_runtime)
-
-    if cfg.camera.backend == "picamera2":
+        inner = JetsonCSICamera(cfg.camera, hailo_runtime=hailo_runtime)
+    elif cfg.camera.backend == "picamera2":
         from mousedroid.hardware.camera.imx500 import IMX500Camera
 
-        return IMX500Camera(cfg.camera, hailo_runtime=hailo_runtime)
-
+        inner = IMX500Camera(cfg.camera, hailo_runtime=hailo_runtime)
     # auto: prefer picamera2 only when its stack *actually imports* (spec
     # presence is insufficient — picamera2 can resolve a spec yet fail to
     # import when its libcamera/native bindings are absent), else fall back
     # to jetson_csi.
-    if module_importable("picamera2"):
+    elif module_importable("picamera2"):
         from mousedroid.hardware.camera.imx500 import IMX500Camera
 
         _log.info(
@@ -262,17 +265,21 @@ def build_camera(
             driver="IMX500Camera",
             reason="picamera2_importable",
         )
-        return IMX500Camera(cfg.camera, hailo_runtime=hailo_runtime)
+        inner = IMX500Camera(cfg.camera, hailo_runtime=hailo_runtime)
+    else:
+        from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
 
-    from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
+        _log.info(
+            "camera_backend_resolved",
+            backend="jetson_csi",
+            driver="JetsonCSICamera",
+            reason="picamera2_not_importable",
+        )
+        inner = JetsonCSICamera(cfg.camera, hailo_runtime=hailo_runtime)
 
-    _log.info(
-        "camera_backend_resolved",
-        backend="jetson_csi",
-        driver="JetsonCSICamera",
-        reason="picamera2_not_importable",
-    )
-    return JetsonCSICamera(cfg.camera, hailo_runtime=hailo_runtime)
+    from mousedroid.resilience.resilient_camera import ResilientCamera
+
+    return ResilientCamera(inner, cfg.retry, cfg.circuit_breaker)
 
 
 def build_distance_sensor(cfg: Settings) -> DistanceSensorProtocol:

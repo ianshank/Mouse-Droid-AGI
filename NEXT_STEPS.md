@@ -170,6 +170,27 @@ is landed — runbook: `docs/runbooks/mlflow-local-ui.md`.
 
 ## Open engineering follow-ups
 
+0a. **[Hygiene — needs a dedicated pass] First-ever vulture dead-code audit run: 447
+    findings, dominated by Protocol/DI false positives.** `scripts/dead_code_audit.py`
+    (F-020) had been CI-wired but never actually run + triaged —
+    `scripts/vulture_allowlist.py` was empty. Ran it 2026-08-16 at the default 60%
+    confidence, output in `reports/dead_code/2026-08-16.json` (gitignored). 2
+    spot-checked findings were confirmed Protocol/DI false positives (methods
+    implementing `@runtime_checkable Protocol` interfaces vulture can't trace
+    through protocol-typed call sites). At this volume, needs a dedicated triage
+    pass batched by module, not a rubber-stamp allowlist add or blind deletion.
+
+0. **[Dependency — diagnosed blocker] `mlflow-skinny` 3.x breaks the file-store tracking
+   default.** Open dependabot PR #145 proposes widening `mlflow-skinny` from `<3,>=2.22` to
+   `<4,>=2.22`. No CI job installs the `[mlflow]` extra, so its "green" status never actually
+   exercised mlflow. Manually installed `mlflow-skinny==3.15.1` (2026-08-16) and ran the
+   mlflow-touching test surface: **29 failed, 17 errored** (of ~74) — mlflow 3.x hard-rejects
+   the local filesystem tracking backend by default, which `MlflowExperimentLogger`
+   (`src/mousedroid/training/observability/mlflow_logger.py`) relies on via its default
+   tracking URI. Needs a real decision before merging: set `MLFLOW_ALLOW_FILE_STORE=true` in
+   the training entrypoints/CI, or migrate the default tracking URI to a database backend
+   (`sqlite:///mlflow.db`). PR left open pending that decision.
+
 1. Run `scripts/benchmark_voice_latency.py` on Jetson for the production personalities
    (`rocky`, `scout`, `friendly`) and capture median / P95 latency before any further voice changes.
 2. Install `promtool` on the Windows validation host so the Prometheus rule stage in
@@ -196,21 +217,9 @@ is landed — runbook: `docs/runbooks/mlflow-local-ui.md`.
 
 ### Pending follow-up (deferred to a separate PR)
 
-- **Resilience wrappers for camera + voice + LLM gateway** — drop the three
-  remaining bare driver constructions in `factory.py` behind the existing
-  `CircuitBreaker` + `retry_async` machinery (per-driver opt-in via a new
-  `cfg.resilience.<driver>.enabled` flag, defaults `False`). ESP32 and
-  LiDAR are already wrapped (`src/mousedroid/resilience/`); these three
-  are the residual gap.
 - **importlib helper consolidation** — partially closed by
   `tests/_script_loader.py`; sweep the remaining inline
   `spec_from_file_location` call sites onto it.
-- **SHA-pin GitHub action references** (CodeRabbit PR #106 finding 4) —
-  best done as a single sweep with Dependabot configured to auto-bump the SHAs.
-- **`llm_gateway/__init__.py` lazy-import hardening** (PR #107 round-3 Low
-  finding) — the package eager-imports `AnthropicLLMGateway` +
-  `FallbackLLMGateway`; per CLAUDE.md invariant 1 these should leave the
-  package surface or move under `TYPE_CHECKING`.
 - **Scripted WAN-drop failover drill** — capture the operator drill asserting
   `fallback_primary_to_secondary` + `fallback_primary_retry_attempt` once the
   ESP32 is repaired and a full end-to-end mission can run.
