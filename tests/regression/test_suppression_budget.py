@@ -34,7 +34,7 @@ _SRC = Path(__file__).resolve().parents[2] / "src" / "mousedroid"
 #   non-crypto random S311 x3 — resilience/retry.py, voice/rocky.py,
 #   telemetry/mock_source.py; fixed-http urllib S310 x4 — comms/wifi_driver.py;
 #   Pydantic Field default paths S108/S104 x3 — config/schema.py;
-#   Argus socket S108 — validation/runtime.py; watchdog systemd-notify
+#   Argus socket S108 — validation/runtime/_shared.py; watchdog systemd-notify
 #   S603/S607 — health/watchdog.py) + 1 prose mention
 #   (common/imports.py docstring).
 #   (The 10 stale BLE001/RUF100 waivers in training/observability/
@@ -71,8 +71,8 @@ _ALLOWED_SRC_PER_FILE_IGNORES = frozenset(
         ("src/mousedroid/skills/**/*.py", "D102"),
         ("src/mousedroid/skills/**/*.py", "D105"),
         ("src/mousedroid/arm/planning/llm_replanners/**/*.py", "D102"),
-        ("src/mousedroid/validation/runtime.py", "S603"),
-        ("src/mousedroid/validation/runtime.py", "S607"),
+        ("src/mousedroid/validation/runtime/_storage.py", "S603"),
+        ("src/mousedroid/validation/runtime/_storage.py", "S607"),
         ("src/mousedroid/harness/spec.py", "S602"),
         ("src/mousedroid/harness/spec.py", "S603"),
         ("src/mousedroid/harness/spec.py", "S607"),

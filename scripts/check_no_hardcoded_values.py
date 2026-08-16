@@ -26,9 +26,13 @@ from typing import Any
 
 TARGET_PREFIX = ("src", "mousedroid")
 ALLOWED_FILES = {
-    "src/mousedroid/config/schema.py",
     "src/mousedroid/constants.py",
 }
+# Directory-prefix exemption: every module in the config/schema/ package is,
+# like the pre-split config/schema.py it replaced, literally where runtime
+# defaults are declared as Pydantic Field() literals — the intentional
+# purpose of the package, not a hardcoded-value defect.
+ALLOWED_DIR_PREFIXES = ("src/mousedroid/config/schema/",)
 ALLOWED_NUMERIC_VALUES = {0.0, 1.0, -1.0}
 HUNK_PREFIX = "@@ "
 SAFE_NUMERIC_CALLS = {
@@ -422,7 +426,7 @@ def main(argv: list[str] | None = None) -> int:
 
     findings: list[tuple[str, int, str, list[str]]] = []
     for file_path in changed_files:
-        if file_path in ALLOWED_FILES:
+        if file_path in ALLOWED_FILES or file_path.startswith(ALLOWED_DIR_PREFIXES):
             continue
 
         try:

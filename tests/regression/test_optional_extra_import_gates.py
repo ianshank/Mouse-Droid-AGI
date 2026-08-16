@@ -165,7 +165,7 @@ def test_pillow_degrade_is_logged_not_silent() -> None:
     file and the operator diagnoses a dead camera instead of a missing extra.
     """
     runtime_src = (
-        _TESTS_ROOT.parent / "src" / "mousedroid" / "validation" / "runtime.py"
+        _TESTS_ROOT.parent / "src" / "mousedroid" / "validation" / "runtime" / "_camera.py"
     ).read_text()
     assert "camera_jpeg_encode_skipped_no_pillow" in runtime_src
 
