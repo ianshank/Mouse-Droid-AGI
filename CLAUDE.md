@@ -12,7 +12,7 @@ These invariants are **non-negotiable** across all modules:
 
 1. **Protocol-based DI**: All interfaces are `@runtime_checkable Protocol`. Concrete types are only imported inside factory functions.
 2. **Factory pattern**: `src/mousedroid/factory.py` is the single wiring point. All `build_*()` functions return protocol types.
-3. **No hardcoded values**: Every threshold, dimension, pin number, path, and tunable parameter comes from Pydantic config (`src/mousedroid/config/schema.py`) loaded from YAML (`config/*.yaml`).
+3. **No hardcoded values**: Every threshold, dimension, pin number, path, and tunable parameter comes from Pydantic config (`src/mousedroid/config/schema/`) loaded from YAML (`config/*.yaml`).
 4. **Structured logging**: Use `structlog` everywhere via `from mousedroid.logging.setup import get_logger`. Never use `print()`.
 5. **Asyncio everywhere**: No threading. All I/O-bound operations are `async`.
 6. **Type safety**: `mypy --strict` must pass. All public functions have type annotations.
@@ -24,7 +24,7 @@ These invariants are **non-negotiable** across all modules:
 
 ```
 src/mousedroid/
-  config/schema.py    # Pydantic v2 root Settings — single source of truth
+  config/schema/      # Pydantic v2 root Settings package — single source of truth
   factory.py          # DI wiring — only place that imports concrete types
   orchestrator/       # 30 Hz sense-plan-act loop
   world_model/        # RSSM latent dynamics + MCTS planning
@@ -61,7 +61,7 @@ workforce section below), `.claude/` (Claude Code assets: `settings.json`,
 
 ## Configuration System
 
-- **Schema**: `src/mousedroid/config/schema.py` — Pydantic v2 `BaseSettings` with nested models
+- **Schema**: `src/mousedroid/config/schema/` — Pydantic v2 `BaseSettings` with nested models, split into a 17-file package by domain (`root.py` holds `Settings`)
 - **YAML configs**: `config/` directory — `default.yaml` (mouse droid), `robot_arm_default.yaml` (arm platform)
 - **Environment variables**: Prefix `MOUSEDROID_`, nested delimiter `__` (e.g., `MOUSEDROID_ARM__DOF=6`)
 - **Platform selection**: `platform: mouse_droid` or `platform: robot_arm` in YAML
@@ -275,7 +275,7 @@ The Wave Rover USB-C wiring must be discoverable and stable across rover
 swaps. Three non-negotiable contracts encode this:
 
 - **`USBCDiscoveryConfig.enabled: bool = False`** — master switch lives in
-  `src/mousedroid/config/schema.py`. Defaults `False` so pre-PR YAML files
+  `src/mousedroid/config/schema/`. Defaults `False` so pre-PR YAML files
   load unchanged. Flip to `True` only on the Jetson production overlay,
   where `required_endpoints` declares the named cables the rover expects.
   When `enabled=True` with an empty list, `_require_endpoints_when_enabled`
@@ -502,7 +502,7 @@ The PR #107 gateway is now LIVE on the Jetson rover. Deploying it surfaced
 deployment + CI-gate invariants an agent MUST respect:
 
 - **`deployments/jetson-image.json` must point to a REACHABLE trunk
-  commit** whose `config/schema.py` the deployed image actually has. The
+  commit** whose `config/schema/` package the deployed image actually has. The
   `config-compat` CI gate (`.github/workflows/config-compat.yml`) does
   `git worktree` against this `sha` and validates every changed
   `config/*.yaml` against that historical schema. NEVER pin a squash-source
@@ -565,7 +565,7 @@ The cloud Claude tier now exports four config-gated Prometheus families
   knows which tier answered).
 - **Label-cardinality guard.** `inc_llm_tokens` / `inc_llm_gateway_served`
   validate against module-level frozensets (`_LLM_TOKEN_TYPES` /
-  `_LLM_SERVED_TIERS` / `_LLM_SERVED_OUTCOMES` in `telemetry/metrics.py`) and
+  `_LLM_SERVED_TIERS` / `_LLM_SERVED_OUTCOMES` in `telemetry/metrics/`) and
   **drop** out-of-set values with a DEBUG log — never label by mission text.
 - **`generate_metrics_sample()` seeds all four** (promtool contract).
 - **`_extract_token_usage` is defensive:** OUTER
@@ -819,7 +819,7 @@ until a soak gate passes. Non-negotiable contracts:
   is spawned, and the orchestrator is byte-identical to pre-Phase-6. New fields
   keep defaults so existing YAML loads unchanged.
 - **Counter is pure-add + gated.** `{ns}_on_device_learning_reverted_total{reason}`
-  (`telemetry/metrics.py`) is gated by `MetricsConfig.track_on_device_learning`
+  (`telemetry/metrics/`) is gated by `MetricsConfig.track_on_device_learning`
   (default `True`) and omitted from `/metrics` until the first revert. `reason`
   is a low-cardinality frozenset `_ON_DEVICE_REVERT_REASONS`
   (`regression_bound`, `integrity_mismatch`, `exception`) — out-of-set values
@@ -944,7 +944,7 @@ Non-negotiable contracts (pinned by `tests/unit/growth/*`,
   the live policy — deployment stays a soak-gated operator decision. Keep
   `enabled` off on the live rover until a soak gate passes.
 - **Counter is pure-add + gated.** `{ns}_growth_distillations_total{outcome}`
-  (`telemetry/metrics.py`) is gated by `MetricsConfig.track_growth_distillation`
+  (`telemetry/metrics/`) is gated by `MetricsConfig.track_growth_distillation`
   (default `True`), omitted from `/metrics` until the first cycle, and seeded in
   `generate_metrics_sample()`. `outcome` is the low-cardinality frozenset
   `_GROWTH_DISTILL_OUTCOMES` (`completed`, `skipped_no_batch`) — out-of-set values

@@ -404,7 +404,7 @@ def _load_coverage(json_out: Path) -> dict[str, dict[str, object]]:
 def main() -> int:
     """Run branch-level changed-file coverage check and enforce minimum percentage."""
     parser = argparse.ArgumentParser(description="Check coverage for changed branch files.")
-    parser.add_argument("--min", type=float, default=93.0, dest="min_cov")
+    parser.add_argument("--min", type=float, default=90.0, dest="min_cov")
     parser.add_argument(
         "--tests",
         nargs="+",

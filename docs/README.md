@@ -23,7 +23,7 @@ for the `docs/` tree.
 
 - [glossary.md](glossary.md) — MSE-6, RSSM, MCTS, BDI, and other terms.
 - [api-reference.md](api-reference.md) — telemetry REST/WebSocket surface + MCP tools.
-- [testing.md](testing.md) — pytest tiers, the 85% coverage gate, the spec harness.
+- [testing.md](testing.md) — pytest tiers, the 90% coverage gate, the spec harness.
 - [deployment.md](deployment.md) — flash/deploy/service, NVMe setup, probe-first bring-up.
 - [development.md](development.md) — developer environment and local loop.
 - [training.md](training.md) — the offline GPU training pipeline.

@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
-title: "MouseDroid — MSE-6 Agentic World Model on Jetson Orin Nano"
+title: "MouseDroid — MSE-6 Autonomous Navigation System on Jetson Orin Nano"
 abstract: "An edge-AI / robotics portfolio project: an autonomous Star Wars MSE-6 mouse droid with a config-driven 30 Hz sense-plan-act loop (RSSM latent dynamics, MCTS planning, ESP32 motor control) on an NVIDIA Jetson Orin Nano."
 type: software
 authors:

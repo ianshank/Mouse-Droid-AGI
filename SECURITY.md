@@ -28,7 +28,7 @@ time for a fix before any public disclosure.
 Secret hygiene and dependency posture are checked in CI:
 
 - **Secret scanning** — `.gitleaks.toml` + [`docs/runbooks/secret-scanning.md`](docs/runbooks/secret-scanning.md)
-  (the `gitleaks` job — currently **advisory** via `continue-on-error` pending its green-run promotion window)
+  (the `gitleaks` job — **blocking** since 2026-08-07, promoted from advisory after its green-run window)
 - **Dependency audit** — the `security` job (`pip-audit --skip-editable`) in
   `.github/workflows/ci.yml` — currently **advisory** via `continue-on-error`
   pending triage of open findings; a real vulnerability turns the job red

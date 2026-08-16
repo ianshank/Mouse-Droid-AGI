@@ -1,4 +1,4 @@
-"""MouseDroid — Star Wars MSE-6 Agentic World Model on Jetson Orin Nano."""
+"""MouseDroid — Star Wars MSE-6 Autonomous Navigation System on Jetson Orin Nano."""
 
 from __future__ import annotations
 

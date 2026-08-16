@@ -143,7 +143,7 @@ implementations.
 | Dashboard Proxy | `tools/dashboard_proxy.py` |
 | Claude workforce hooks + config | `tools/claude_hooks/`, `.claude/workforce.yaml`, `.claude/settings.json` |
 | Factory wiring | `src/mousedroid/factory.py` |
-| Configuration schema | `src/mousedroid/config/schema.py` |
+| Configuration schema | `src/mousedroid/config/schema/` |
 | Hardware protocols | `src/mousedroid/hardware/protocols.py`, `src/mousedroid/comms/protocol.py` |
 | ESP32 firmware | (out of repo — vendored Wave Rover bootloader) |
 | Hailo NPU runtime | `src/mousedroid/hardware/accelerators/hailo_runtime.py` |

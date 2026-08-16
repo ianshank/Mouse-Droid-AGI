@@ -11,5 +11,5 @@ Pydantic-validated YAML. `default.yaml` holds all defaults; platform overlays la
 - `*.example` — env-file / config templates (never commit real secrets; see `docker.env.example`)
 - `prometheus/`, `grafana/`, `loki/` — monitoring-stack configs
 
-The schema is `src/mousedroid/config/schema.py`. **New config fields MUST carry a default** so existing YAML
+The schema is `src/mousedroid/config/schema/`. **New config fields MUST carry a default** so existing YAML
 loads unchanged (enforced by the `config-compat` CI gate).

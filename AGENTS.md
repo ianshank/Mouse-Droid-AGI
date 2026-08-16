@@ -14,7 +14,7 @@
    `@runtime_checkable Protocol` interfaces. Never `from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera`
    in business logic — call `factory.build_camera(cfg)`.
 2. **Schema-driven configuration.** Every threshold, dimension, pin number,
-   path, and tunable parameter comes from `src/mousedroid/config/schema.py`
+   path, and tunable parameter comes from `src/mousedroid/config/schema/`
    loaded from YAML in `config/`. Operators flip behaviour by editing YAML
    or setting `MOUSEDROID_*__*` env vars — never by editing source.
 3. **Structured logging only.** `from mousedroid.logging.setup import get_logger`,
@@ -234,7 +234,7 @@ the factory:
    backend — the rover sends operator NL commands to a third-party
    service, so `RegexInjectionFilter.sanitize()` MUST fire BEFORE the
    API call.
-6. Extend `LLMConfig.backend` Literal in `src/mousedroid/config/schema.py`
+6. Extend `LLMConfig.backend` Literal in `src/mousedroid/config/schema/`
    with the new backend name; do NOT touch `fallback_backend` Literal
    unless the new backend is local (only local backends are valid as
    failover targets — cloud-to-cloud failover defeats the off-network

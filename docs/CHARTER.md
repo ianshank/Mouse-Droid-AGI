@@ -86,7 +86,11 @@ value. PR numbers and dates are confirmed against git history.
   command is passed through the configured prompt-injection filter (the
   `RegexInjectionFilter` implementation of `PromptInjectionFilterProtocol`,
   `src/mousedroid/security/injection_filter.py`) — its `sanitize()` runs
-  **before** egress — the only place rover NL leaves the device. The off-network fallback
+  **before** egress — the only place rover NL leaves the device. The filter is a
+  literal-pattern denylist, best-effort against a motivated adversary rather than
+  a complete defense (see the class docstring); actuation blast radius stays
+  bounded downstream by config-clamped velocity limits regardless of filter
+  outcome. The off-network fallback
   (`LLMConfig.fallback_backend`) is `Literal["none", "llama_cpp",
   "openai_compatible"]` (default `"none"`): `"anthropic"` is deliberately absent,
   so cloud-to-cloud failover is rejected at YAML-parse time and off-network
@@ -114,7 +118,7 @@ These hold across every module and may not be weakened by any change. Invariants
 2. **Factory single wiring point.** `src/mousedroid/factory.py` is the only place
    concrete types are wired; every `build_*()` returns a protocol type.
 3. **No hardcoded values.** Every threshold, dimension, pin, path, and tunable
-   comes from Pydantic config (`src/mousedroid/config/schema.py`) loaded from YAML
+   comes from Pydantic config (`src/mousedroid/config/schema/`) loaded from YAML
    in `config/`. Operators change behaviour via YAML or `MOUSEDROID_*__*` env
    vars, never by editing source.
 4. **Structured logging only.** `structlog` via

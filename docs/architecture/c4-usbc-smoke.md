@@ -54,7 +54,7 @@ flowchart TB
         PowerChain["power_chain.py\nassert_power_chain(driver, cfg, allow_motion)\n-> PowerChainResult"]
     end
 
-    subgraph Config["src/mousedroid/config/schema.py"]
+    subgraph Config["src/mousedroid/config/schema/"]
         UsbcCfg["USBCDiscoveryConfig\nenabled / by_id_root /\nrequired_endpoints"]
         EsP32Cfg["ESP32Config\nserial_port / serial_baud /\ncommand_set (legacy | waveshare_stock) /\nsmoke_test_velocity_mps (ge=0) /\nemergency_stop_budget_ms"]
         SettingsRoot["Settings.usbc_discovery: Optional\n(None default → backwards compat)"]

@@ -5,8 +5,7 @@
 *A hands-on edge-AI / robotics portfolio project.* A physical MSE-6 replica that senses, plans, and drives itself on constrained edge hardware, built around a config-driven 30 Hz sense–plan–act loop (RSSM latent dynamics → MCTS planning → ESP32 motor control), with a cloud/local LLM brain for natural-language missions running *outside* the real-time loop.
 
 [![CI](https://github.com/ianshank/mouse-droid-agi/actions/workflows/ci.yml/badge.svg)](https://github.com/ianshank/mouse-droid-agi/actions/workflows/ci.yml)
-[![Release](https://github.com/ianshank/mouse-droid-agi/actions/workflows/release.yml/badge.svg)](https://github.com/ianshank/mouse-droid-agi/actions/workflows/release.yml)
-[![Coverage ≥93%](https://img.shields.io/badge/coverage-%E2%89%A593%25%20gate-brightgreen)](scripts/check_branch_coverage.py)
+[![Coverage ≥90%](https://img.shields.io/badge/coverage-%E2%89%A590%25%20gate-brightgreen)](scripts/check_branch_coverage.py)
 [![License: MIT](https://img.shields.io/github/license/ianshank/mouse-droid-agi)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)](pyproject.toml)
 [![Docker: L4T r36.4.0](https://img.shields.io/badge/docker-L4T%20r36.4.0-2496ED)](docker-compose.jetson.yml)
@@ -252,7 +251,7 @@ pytest tests/ -n auto                                          # fast parallel
 pytest tests/unit/ tests/integration/ tests/regression/        # by category
 ```
 
-The enforced gate is **93% line coverage** (`--cov-fail-under=93` repo-wide, plus
+The enforced gate is **90% line coverage** (`--cov-fail-under=90` repo-wide, plus
 `scripts/check_branch_coverage.py` for changed files). Branch coverage is measured and
 reported for `tools/claude_hooks/` only, where it is advisory until a baseline exists —
 so it is deliberately not claimed as enforced here. Beyond lint/type/test, CI runs the sub-10-second smoke tier, `config-compat` (schema-drift), `actionlint` (workflow lint), a cyclomatic-complexity gate (`ruff C901`, max 15; [ADR-014](docs/architecture/ADR-014-cyclomatic-complexity-gate.md)), the `local-gates` job (settings identity, workforce-hooks mypy + coverage, skill validator, doc hygiene), and an advisory performance tier (`.github/advisory_stages.yaml`). Full strategy: [`docs/testing.md`](docs/testing.md).

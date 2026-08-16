@@ -115,6 +115,19 @@ labels are navigation, not structure.
 
 **Phase 6 — docs consolidation (LAST, so it documents reality)**
 
+> **Coordination note (2026-08-16, tech-debt pass, mirrors the F-026 overlap
+> precedent):** a mechanical sweep fixed stale single-file path references
+> left by the same-day `config/schema/`/`telemetry/metrics/`/
+> `telemetry/server/`/`validation/runtime/` package splits across CLAUDE.md
+> (8 refs), CHARTER.md, AGENTS.md, SKILLS.md, 5 C4 diagrams, `config/agent.md`,
+> `config/README.md`, `features.yaml`, a runbook, `docs/api-reference.md`,
+> `docs/architecture.md`, and `docs/operator/JETSON_REMOTE_LLM_SETUP.md` —
+> plus a `SECURITY.md` gitleaks-staleness fix and a `docs/planning/PLAN.md`
+> staleness banner. None of this satisfies 6.1-6.4 (still open, still needed
+> for the line-budget trim and structural reorganization) — it only removes
+> path drift so `doc-reconciler`'s first run (3.4) doesn't re-flag
+> already-fixed spots as new findings.
+
 - [ ] 6.1 Root CLAUDE.md trim to `docs.core_max_lines`: evergreen sections + corrected
       CI-pipeline section + orchestration directive (I-6) + freeze rule + surface map.
 - [ ] 6.2 Nested per-directory CLAUDE.md files for subsystem-scoped surface contracts.

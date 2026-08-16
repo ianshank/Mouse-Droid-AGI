@@ -17,7 +17,7 @@
 
 ```mermaid
 flowchart TB
-    subgraph Config["src/mousedroid/config/schema.py"]
+    subgraph Config["src/mousedroid/config/schema/"]
         Cfg["ESP32Config\ncommand_set: legacy | waveshare_stock\nheartbeat_enabled / heartbeat_window_multiple\nchassis_has_wheel_encoders\nserial_baud / keepalive_hz / command_timeout_s"]
         Coupling["_apply_command_set_coupling (after-validator)\n• stock + protocol=wifi -> REJECT at YAML-load\n• serial_baud still at the SCHEMA DEFAULT -> derive 115200\n  (an explicit non-default pin always wins)\n• WARN when the derived heartbeat window is shorter\n  than the driver's own blocking budgets"]
         Safety["SafetyConfig\nbattery_implausible_below_v (ge=0)\nscreens a missing reading from a flat pack"]
