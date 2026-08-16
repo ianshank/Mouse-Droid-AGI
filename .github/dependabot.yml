@@ -14,3 +14,13 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    ignore:
+      # mcp 2.0 is a breaking major this codebase has not migrated to yet —
+      # see the pin-rationale comment on the `mcp` extra in pyproject.toml.
+      # Confirmed 2026-08-16: a dependabot PR widening the bound to <3 fails
+      # CI (tests/unit/mcp/test_transport.py, Tool.inputSchema renamed to
+      # input_schema on mcp>=2.0). Lifting this bound is a deliberate
+      # migration, not a routine bump — remove this ignore rule when that
+      # migration lands.
+      - dependency-name: "mcp"
+        update-types: ["version-update:semver-major"]
