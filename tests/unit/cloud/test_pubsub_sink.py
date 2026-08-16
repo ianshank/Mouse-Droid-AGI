@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import structlog.testing
 
 from mousedroid.config.schema import (
     CircuitBreakerConfig,
@@ -40,13 +41,20 @@ def test_sink_init_without_start() -> None:
 
 @pytest.mark.asyncio
 async def test_publish_telemetry_noop_before_start() -> None:
-    """publish_telemetry should be a no-op before start() is called."""
+    """publish_telemetry should be a no-op before start() is called.
+
+    "No-op" means the internal _publish call is skipped entirely, not just
+    "does not raise" — a bug that swallowed a publish attempt behind a
+    try/except would pass a pure not-raise check.
+    """
     from mousedroid.cloud.pubsub_sink import CloudTelemetrySink
 
     cfg = _make_gcp_cfg()
     sink = CloudTelemetrySink(cfg)
-    # Should not raise
+    assert sink._publisher is None
+    sink._publish = AsyncMock()  # type: ignore[method-assign]
     await sink.publish_telemetry({"test": "data"})
+    sink._publish.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -56,31 +64,36 @@ async def test_publish_experience_noop_before_start() -> None:
 
     cfg = _make_gcp_cfg()
     sink = CloudTelemetrySink(cfg)
+    assert sink._publisher is None
+    sink._publish = AsyncMock()  # type: ignore[method-assign]
 
     record = MagicMock()
     record.serialize.return_value = b"test"
     record.schema_version = 1
     await sink.publish_experience(record)
+    sink._publish.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_close_noop_before_start() -> None:
-    """close() should be safe to call before start()."""
+    """close() should be safe to call before start(), leaving state untouched."""
     from mousedroid.cloud.pubsub_sink import CloudTelemetrySink
 
     cfg = _make_gcp_cfg()
     sink = CloudTelemetrySink(cfg)
     await sink.close()
+    assert sink._publisher is None
 
 
 @pytest.mark.asyncio
 async def test_flush_noop_before_start() -> None:
-    """flush() should be safe to call before start()."""
+    """flush() should be safe to call before start(), leaving state untouched."""
     from mousedroid.cloud.pubsub_sink import CloudTelemetrySink
 
     cfg = _make_gcp_cfg()
     sink = CloudTelemetrySink(cfg)
     await sink.flush()
+    assert sink._publisher is None
 
 
 def test_sink_conforms_to_protocol() -> None:
@@ -174,8 +187,10 @@ async def test_publish_circuit_open_silently_drops() -> None:
     sink._cb = MagicMock()
     sink._cb.call = raise_circuit_open
 
-    # Should not raise
+    # Should not raise, AND the message must actually be dropped, not just
+    # swallow an exception raised after a real publish attempt.
     await sink.publish_telemetry({"test": "data"})
+    sink._publisher.publish.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -194,8 +209,14 @@ async def test_publish_generic_exception_caught() -> None:
     sink._cb = MagicMock()
     sink._cb.call = raise_error
 
-    # Should not raise
-    await sink.publish_telemetry({"test": "data"})
+    with structlog.testing.capture_logs() as logs:
+        await sink.publish_telemetry({"test": "data"})
+
+    failure_logs = [entry for entry in logs if entry["event"] == "cloud_pubsub_publish_failed"]
+    assert len(failure_logs) == 1
+    assert failure_logs[0]["log_level"] == "warning"
+    assert failure_logs[0]["topic"] == "projects/test/topics/telemetry"
+    assert failure_logs[0]["category"] == "telemetry"
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,7 @@ conservative (CQL) or implicit (IQL) value estimation.
 from __future__ import annotations
 
 import abc
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import torch
 import torch.nn as nn
@@ -17,11 +17,9 @@ from torch import Tensor
 
 from mousedroid.constants import IQL_EXP_ADVANTAGE_CLAMP_MAX
 from mousedroid.logging.setup import get_logger
-from mousedroid.training.observability import (
-    ExperimentLoggerProtocol,
-    NoOpExperimentLogger,
-    PhaseContext,
-)
+
+if TYPE_CHECKING:
+    from mousedroid.training.observability import ExperimentLoggerProtocol, PhaseContext
 
 _log = get_logger(__name__)
 
@@ -204,9 +202,11 @@ class OfflineRLTrainer(abc.ABC):
             if bc_lr is not None
             else self.policy_optimizer
         )
-        self._experiment_logger: ExperimentLoggerProtocol = (
-            experiment_logger or NoOpExperimentLogger()
-        )
+        if experiment_logger is None:
+            from mousedroid.training.observability import NoOpExperimentLogger
+
+            experiment_logger = NoOpExperimentLogger()
+        self._experiment_logger: ExperimentLoggerProtocol = experiment_logger
         self._log_phase = log_phase
         if log_step_every_n < 1:
             # Guard the modulo throttle: 0 would ZeroDivisionError, negatives are

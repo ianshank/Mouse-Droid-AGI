@@ -4198,7 +4198,9 @@ def build_orchestrator(cfg: Settings) -> object:
     # below; when present and enabled, the server gets a non-None
     # ``memory_tier``.
     speaker = build_speaker(cfg, metrics=metrics_registry)
-    voice_engine = build_voice_engine(cfg, speaker=speaker, metrics=metrics_registry)
+    voice_engine = build_voice_engine(
+        cfg, speaker=speaker, failure_recorder=failure_recorder, metrics=metrics_registry
+    )
 
     # Issue #109 — one-shot startup greeter (None unless cfg.greeting is
     # enabled). Reuses the orchestrator's own voice engine so a single
