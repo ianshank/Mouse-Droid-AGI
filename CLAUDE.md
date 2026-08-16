@@ -121,14 +121,20 @@ Plus `config-validate`, `usbc-config-gate`, `prometheus-check`, `vla-extras`,
 `onnx-world-model-extras`, `vulture-audit`, `performance` (advisory — Jetson-calibrated
 latency budgets are noisy on shared runners), and `local-gates` (the deterministic
 `scripts/ci.sh`-only gates: settings identity, `mypy --strict tools/claude_hooks/`,
-skill validator, doc hygiene, workforce hook coverage). Separate workflows:
+skill validator, the subsystem-boundary gate (`scripts/check_subsystem_boundaries.py`
+— full-tree, unconditional; flags module-level cross-subsystem concrete-class
+imports per invariant 1, exempting DTOs/enums/exceptions/Protocols by dynamic
+introspection plus a small reviewed allowlist), doc hygiene, workforce hook
+coverage, plus the hardcoded-value gate — PR-only, since it needs a resolvable
+base ref that `fetch-depth: 0` supplies on `pull_request` events but not on plain
+`push`). Separate workflows:
 `harness.yml` (spec harness), `config-compat.yml` (schema drift), `jetson-nightly.yml`,
 and `release.yml` (tag-triggered `v*.*.*`: lint, typecheck, test, build, publish to
 PyPI via OIDC trusted publishing — note its lint job carries its OWN `ruff==` literal).
 
 `bash scripts/ci.sh` is the local **near**-superset, not a full one. It adds the
-hardcoded-value gate and branch-coverage gate (both need a git diff base, so they
-are local-only by design), the pillar dispatch, and the health check — but it does
+branch-coverage gate (needs a git diff base, so it stays local-only by design),
+the pillar dispatch, and the health check — but it does
 NOT reproduce `actionlint`, `config-validate`, `security`/`pip-audit`, or `docker`,
 and it covers `prometheus-check` and `performance` only partially. The script prints
 that list at the end of every run; trust that over this paragraph. **Count changes

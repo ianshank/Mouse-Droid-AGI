@@ -260,14 +260,18 @@ jobs:
     # -------------------------------------------------------------------------
     # These gates previously ran ONLY in `bash scripts/ci.sh` — a GitHub-CI-only
     # contributor bypassed all of them. This job runs the deterministic,
-    # dependency-light subset. Still local-only by design (need a git diff base
-    # or heavy deps): check_no_hardcoded_values.py, check_branch_coverage.py,
-    # the pillar dispatch dry-run, and the --health-check.
+    # dependency-light subset. Still local-only by design (need heavy deps):
+    # check_branch_coverage.py, the pillar dispatch dry-run, and the
+    # --health-check. check_no_hardcoded_values.py graduated to a real CI step
+    # below — it needs a git diff base, which `fetch-depth: 0` plus the
+    # pull_request-only guard now supplies.
     local-gates:
         runs-on: ubuntu-latest
         needs: lint
         steps:
             - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+              with:
+                  fetch-depth: 0
             - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
               with:
                   python-version: "3.11"
@@ -285,6 +289,9 @@ jobs:
             - name: Skill validator (.claude/skills)
               run: python tools/validate_skill_commands.py
 
+            - name: Subsystem boundary gate (Protocol-based DI, full tree)
+              run: python scripts/check_subsystem_boundaries.py
+
             - name: Doc hygiene (advisory, exits 0 unless --strict)
               run: python tools/doc_hygiene.py NEXT_STEPS.md
 
@@ -297,6 +304,16 @@ jobs:
                     -q -o addopts="" \
                     --cov=tools/claude_hooks --cov-branch --cov-report=term-missing \
                     --cov-fail-under="$WORKFORCE_COV_MIN"
+
+            # PR-only: needs a resolvable base ref (GITHUB_BASE_REF, set by
+            # GitHub Actions on pull_request events) to diff against. On push
+            # events there is no PR base to diff, so the step is skipped
+            # rather than hard-failing — see check_no_hardcoded_values.py's
+            # own CI=true/no-base-ref exit(2) guard, which this trigger
+            # condition exists specifically to never hit.
+            - name: Hardcoded-value gate (changed src/mousedroid lines)
+              if: github.event_name == 'pull_request'
+              run: python scripts/check_no_hardcoded_values.py
 
     # -------------------------------------------------------------------------
     # Stage 4: Prometheus metrics validation

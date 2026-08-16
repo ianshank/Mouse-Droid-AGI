@@ -80,6 +80,9 @@ echo "=== Pillar Validation Dispatch (--dry-run) ==="
 echo "=== Hardcoded Value Gate (changed lines) ==="
 "$PYTHON_BIN" scripts/check_no_hardcoded_values.py
 
+echo "=== Subsystem Boundary Gate (Protocol-based DI, full tree) ==="
+"$PYTHON_BIN" scripts/check_subsystem_boundaries.py
+
 echo "=== Settings Identity Smoke Check ==="
 "$PYTHON_BIN" scripts/check_settings_identity.py
 
