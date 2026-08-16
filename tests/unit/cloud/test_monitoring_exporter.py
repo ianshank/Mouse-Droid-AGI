@@ -7,6 +7,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+import structlog.testing
 
 from mousedroid.config.schema import (
     CircuitBreakerConfig,
@@ -81,25 +82,35 @@ def test_exporter_interval_from_config() -> None:
 
 @pytest.mark.asyncio
 async def test_export_once_noop_before_start() -> None:
-    """export_once should be a no-op before start() is called."""
+    """export_once should be a no-op before start() is called.
+
+    "No-op" means _write_metrics is never reached, not just "does not
+    raise" — the early-return on ``self._client is None`` is what this
+    verifies.
+    """
     from mousedroid.cloud.monitoring_exporter import CloudMetricsExporter
 
     cfg = _make_gcp_cfg()
     registry = MagicMock()
     exporter = CloudMetricsExporter(cfg, registry)
-    # Should not raise
-    await exporter.export_once()
+    assert exporter._client is None
+    with patch.object(exporter, "_write_metrics") as mock_write:
+        await exporter.export_once()
+        mock_write.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_stop_noop_before_start() -> None:
-    """stop() should be safe to call before start()."""
+    """stop() should be safe to call before start(), leaving state untouched."""
     from mousedroid.cloud.monitoring_exporter import CloudMetricsExporter
 
     cfg = _make_gcp_cfg()
     registry = MagicMock()
     exporter = CloudMetricsExporter(cfg, registry)
     await exporter.stop()
+    assert exporter._running is False
+    assert exporter._task is None
+    assert exporter._client is None
 
 
 def test_parse_gauge_metrics_basic() -> None:
@@ -234,9 +245,16 @@ async def test_export_once_handles_write_error() -> None:
     exporter = CloudMetricsExporter(cfg, registry)
     exporter._client = MagicMock()
 
-    with patch.object(exporter, "_write_metrics", side_effect=RuntimeError("boom")):
-        # Should not raise
+    with (
+        patch.object(exporter, "_write_metrics", side_effect=RuntimeError("boom")),
+        structlog.testing.capture_logs() as logs,
+    ):
         await exporter.export_once()
+
+    failure_logs = [entry for entry in logs if entry["event"] == "cloud_metrics_export_failed"]
+    assert len(failure_logs) == 1
+    assert failure_logs[0]["log_level"] == "warning"
+    assert failure_logs[0]["transient"] is False
 
 
 @pytest.mark.asyncio

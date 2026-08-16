@@ -36,6 +36,20 @@ def test_build_orchestrator_creates_all_components() -> None:
     assert orch is not None
 
 
+def test_build_orchestrator_threads_shared_failure_recorder_to_voice_engine() -> None:
+    """The orchestrator's shared failure_recorder must also reach its voice engine.
+
+    Regression test: build_orchestrator built one shared failure_recorder and
+    passed it to the orchestrator itself, but its build_voice_engine call
+    omitted the kwarg entirely, so the voice engine always fell back to its
+    own NullFailureRecorder in production regardless of what was configured.
+    """
+    cfg = Settings(mock_hardware=True, voice={"enabled": True}, speaker={"enabled": True})
+    orch = build_orchestrator(cfg)
+    assert orch._voice_engine is not None
+    assert orch._voice_engine._failure_recorder is orch._failure_recorder
+
+
 def test_build_esp32_driver_mock() -> None:
     cfg = _mock_settings()
     driver = build_esp32_driver(cfg)

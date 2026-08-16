@@ -179,7 +179,7 @@ def git_rev_ok(ref: str | None, *, cwd: str | Path | None = None) -> bool:
     if not ref:
         return False
     # Fixed argv list, no shell, trusted constant program (S603/S607 ignored
-    # for this file in pyproject.toml, matching validation/runtime.py).
+    # for this file in pyproject.toml, matching validation/runtime/_storage.py).
     try:
         r = subprocess.run(
             ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],

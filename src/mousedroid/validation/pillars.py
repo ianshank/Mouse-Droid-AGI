@@ -123,12 +123,12 @@ PillarCheckCallable = Callable[["Settings"], Awaitable[PillarResult]]
 # Centralised here (not inline) so a future test-path move only touches
 # one place.
 _PYTEST_DELEGATION_PATHS: dict[str, tuple[str, ...]] = {
-    "continual": ("tests/unit/test_ewc.py", "tests/unit/test_progressive.py"),
+    "continual": ("tests/unit/learning/test_ewc.py", "tests/unit/learning/test_progressive.py"),
     "meta": ("tests/unit/test_maml.py",),
     "scaling": (
         "tests/unit/test_moe.py",
-        "tests/unit/test_adaptive_compute.py",
-        "tests/unit/test_batch_tuner.py",
+        "tests/unit/scaling/test_adaptive_compute.py",
+        "tests/unit/training/test_batch_tuner.py",
     ),
     "growth": ("tests/unit/test_distillation.py",),
 }

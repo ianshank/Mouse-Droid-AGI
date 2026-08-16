@@ -20,7 +20,7 @@ from tests._pyproject import load_pyproject
 # The measured override list at ratchet time (code-hygiene sprint).
 _ALLOWED_SUBCLASS_ANY_MODULES = frozenset(
     {
-        "mousedroid.config.schema",
+        "mousedroid.config.schema.root",
         "mousedroid.llm_gateway.config",
         "mousedroid.world_model.encoder",
         "mousedroid.world_model.rssm",

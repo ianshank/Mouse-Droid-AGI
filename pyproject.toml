@@ -267,8 +267,10 @@ ignore = ["D100", "D104", "D107", "D203", "D213", "S101", "ANN401", "TCH", "TC"]
 # Hardware-diagnostics module shells out to fixed, PATH-resolved system tools
 # (lspci / lsblk / smartctl / findmnt), each guarded by ``shutil.which`` with a
 # constant argv list and no shell — S603 (untrusted input) and S607 (partial
-# path) are structurally inapplicable here.
-"src/mousedroid/validation/runtime.py" = ["S603", "S607"]
+# path) are structurally inapplicable here. Lives in the PCIe/SSD domain
+# submodule of the validation.runtime package (split from the former flat
+# validation/runtime.py).
+"src/mousedroid/validation/runtime/_storage.py" = ["S603", "S607"]
 # Spec-driven harness runner (ADR-012): git_rev_ok shells out to a fixed
 # `git rev-parse` argv (S603/S607) and run_validation executes the operator-
 # authored validation_command via the shell (S602). Both are by design — see
@@ -305,7 +307,7 @@ plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
 module = [
-    "mousedroid.config.schema",
+    "mousedroid.config.schema.root",
     "mousedroid.llm_gateway.config",
     "mousedroid.world_model.encoder",
     "mousedroid.world_model.rssm",
@@ -336,7 +338,7 @@ disallow_subclassing_any = false
 [[tool.mypy.overrides]]
 # pydantic-settings BaseSettings + Field(default_factory=...) produces
 # false-positive arg-type errors with mypy strict mode.
-module = ["mousedroid.config.schema"]
+module = ["mousedroid.config.schema.root"]
 disable_error_code = ["arg-type"]
 
 [[tool.mypy.overrides]]

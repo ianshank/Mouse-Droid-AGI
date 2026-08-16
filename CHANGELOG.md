@@ -8,6 +8,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — Code hygiene & modularity: 4 module splits, 3 real bugs, 2 new CI gates
+
+A peer-reviewed audit (5 independent research agents extending the original
+findings, then 10 adversarial review passes that refuted or corrected 7 of
+the 10 claims stress-tested) drove this pass. Full details in each commit;
+summary:
+
+- **Split 4 oversized modules into domain-grouped packages**, public import
+  surface fully preserved (verified via `dir()` diff against each pre-split
+  API): `config/schema.py` (6,029 lines, 101 flat Pydantic models) into ~16
+  domain modules; `telemetry/metrics.py` (one 1,896-line, 83-method
+  `MetricsRegistry`) into `primitives.py` + one mixin per metric family;
+  `telemetry/server.py` into `MissionRequest` (independently imported
+  elsewhere) plus lifecycle/REST/WS mixins; `validation/runtime.py` into
+  hardware-domain modules (camera/hailo/storage/audio/lidar).
+  `factory.py` and `orchestrator.py` stay out of scope — the former is
+  named as "the single wiring point" by an architecture invariant, the
+  latter is the live 30Hz control loop; both need a conscious decision, not
+  a mechanical split.
+- **Fixed 3 real bugs** the audit surfaced: `learning/offline_rl.py` imported
+  a concrete class across a subsystem boundary at module scope (fixed by
+  mirroring `training/pipeline_orchestrator.py`'s existing `TYPE_CHECKING` +
+  deferred-import pattern); `factory.py`'s shared `failure_recorder` was
+  never threaded through `build_voice_engine`, so the voice engine silently
+  used its own no-op recorder in production regardless of configuration;
+  three test files had 26 assertion-free tests relying on "does not raise"
+  despite each test's own docstring promising specific, unverified behavior
+  (mutation-tested 3 of the fixes to confirm they'd catch a real regression).
+- **Two new CI gates**: `check_no_hardcoded_values.py` (invariant 3's
+  enforcement) never ran in GitHub Actions at all — only locally via
+  `scripts/ci.sh` — now runs on every PR with the `fetch-depth: 0` checkout
+  it needs to resolve a diff base; and a new full-tree
+  `check_subsystem_boundaries.py` mechanically enforces invariant 1
+  (Protocol-based DI) going forward, exempting DTOs/enums/exceptions/
+  Protocols by dynamic introspection rather than a hand-maintained list.
+- **Re-mirrored 170 misplaced unit tests** (41% of `tests/unit/`) into the
+  subpackage directories matching what they actually test.
+
 ### Fixed — CI/CD hygiene: pin reachability, dead workflow, ruff single-source
 
 Repo-hygiene pass over the CI surface. Four defects, each verified before the fix

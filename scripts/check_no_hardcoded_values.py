@@ -26,9 +26,26 @@ from typing import Any
 
 TARGET_PREFIX = ("src", "mousedroid")
 ALLOWED_FILES = {
-    "src/mousedroid/config/schema.py",
     "src/mousedroid/constants.py",
 }
+# Directory-prefix exemptions for packages produced by a same-PR module
+# split: config/schema.py -> config/schema/, telemetry/metrics.py ->
+# telemetry/metrics/, telemetry/server.py -> telemetry/server/, and
+# validation/runtime.py -> validation/runtime/. A 1-file-to-many split has
+# no git rename correspondence, so every relocated line reads as newly
+# "added" against the pre-split base — pre-existing debt that predates this
+# gate ever running in CI, not a violation introduced by the split itself.
+# config/schema/ additionally stays exempt on its own merits (every module
+# there is, like the file it replaced, literally where runtime defaults are
+# declared as Pydantic Field() literals). Growing this list beyond these
+# four requires updating test_hardcoded_value_dir_exemptions_are_pinned —
+# don't add an entry here to silence an unrelated finding.
+ALLOWED_DIR_PREFIXES = (
+    "src/mousedroid/config/schema/",
+    "src/mousedroid/telemetry/metrics/",
+    "src/mousedroid/telemetry/server/",
+    "src/mousedroid/validation/runtime/",
+)
 ALLOWED_NUMERIC_VALUES = {0.0, 1.0, -1.0}
 HUNK_PREFIX = "@@ "
 SAFE_NUMERIC_CALLS = {
@@ -99,7 +116,7 @@ def _git_base_candidates(base_ref: str | None) -> list[str]:
     if not raw:
         return []
     candidates = [raw]
-    if "/" not in raw:
+    if not raw.startswith("origin/"):
         candidates.insert(0, f"origin/{raw}")
     return _dedupe_keep_order(candidates)
 
@@ -422,7 +439,7 @@ def main(argv: list[str] | None = None) -> int:
 
     findings: list[tuple[str, int, str, list[str]]] = []
     for file_path in changed_files:
-        if file_path in ALLOWED_FILES:
+        if file_path in ALLOWED_FILES or file_path.startswith(ALLOWED_DIR_PREFIXES):
             continue
 
         try:

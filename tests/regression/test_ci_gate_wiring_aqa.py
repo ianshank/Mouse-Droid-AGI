@@ -11,7 +11,8 @@ Pinned contracts:
 * the ``performance`` job stays advisory with the shared-runner-calibrated
   instrumentation-overhead budget;
 * the ``local-gates`` job keeps running the deterministic scripts/ci.sh-only
-  gates in GitHub CI;
+  gates in GitHub CI, including the hardcoded-value gate (PR-only, full
+  fetch depth — it needs a resolvable base ref);
 * the ``security`` job is honestly advisory (``continue-on-error``, no shell
   ``||`` swallow) and skips only the editable local package;
 * every ``continue-on-error`` job in ci.yml has an
@@ -98,7 +99,7 @@ class TestPerformanceJob:
 class TestLocalGatesJob:
     """The deterministic scripts/ci.sh-only gates keep running in GitHub CI."""
 
-    def test_all_five_gates_present(self) -> None:
+    def test_all_seven_gates_present(self) -> None:
         run_text = _job_run_text(_load_ci_jobs()["local-gates"])
         for needle in (
             "check_settings_identity.py",
@@ -106,8 +107,34 @@ class TestLocalGatesJob:
             "validate_skill_commands.py",
             "doc_hygiene.py",
             "--cov=tools/claude_hooks",
+            "check_no_hardcoded_values.py",
+            "check_subsystem_boundaries.py",
         ):
             assert needle in run_text, f"local-gates job lost the {needle} gate"
+
+    def test_hardcoded_value_gate_is_pull_request_only_with_full_history(self) -> None:
+        """The gate needs a git diff base — PR-only trigger + full fetch supply one.
+
+        Regression guard for the exact gap the gate's own hard-fail exists to
+        catch: on a push event there is no PR base ref to diff against, so
+        the step must stay conditioned on pull_request (never run unguarded),
+        and the job's checkout must fetch full history so the base branch is
+        locally resolvable.
+        """
+        job = _load_ci_jobs()["local-gates"]
+        checkout_step = next(s for s in job["steps"] if "checkout" in str(s.get("uses", "")))
+        assert checkout_step.get("with", {}).get("fetch-depth") == 0, (
+            "local-gates must fetch full history or the hardcoded-value gate's "
+            "base-ref resolution silently loses coverage on shallow checkouts"
+        )
+        gate_step = next(
+            s for s in job["steps"] if "check_no_hardcoded_values.py" in str(s.get("run", ""))
+        )
+        assert gate_step.get("if") == "github.event_name == 'pull_request'", (
+            "without this guard, a push event (no PR base ref) hits the "
+            "script's own CI=true/no-base-ref exit(2) and the job goes red "
+            "for a reason unrelated to any actual hardcoded value"
+        )
 
 
 class TestSecurityJob:

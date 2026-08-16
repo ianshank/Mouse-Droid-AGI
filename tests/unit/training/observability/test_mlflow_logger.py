@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import structlog.testing
 
 pytest.importorskip("mlflow")  # skip module entirely if extras missing
 from mlflow import MlflowClient
@@ -124,16 +125,23 @@ def test_end_run_rejects_invalid_status_with_warning(
 def test_log_metric_before_start_run_is_safe(tracking_uri: str) -> None:
     """Calling log_metric without start_run is a silent no-op + warning."""
     logger = _build_logger(tracking_uri)
-    logger.log_metric("loss", 0.5)  # must not raise
+    with structlog.testing.capture_logs() as logs:
+        logger.log_metric("loss", 0.5)  # must not raise
+    warn_logs = [e for e in logs if e["event"] == "mlflow_logger_log_metric_without_run"]
+    assert len(warn_logs) == 1
+    assert warn_logs[0]["log_level"] == "warning"
+    assert warn_logs[0]["key"] == "loss"
 
 
-def test_end_phase_after_end_run_is_safe(tracking_uri: str) -> None:
+def test_end_phase_after_end_run_is_safe(tracking_uri: str, client: MlflowClient) -> None:
     """End-of-life ordering robustness — a stale ctx never crashes the trainer."""
     logger = _build_logger(tracking_uri)
     logger.start_run(run_name="x")
     ctx = logger.start_phase(phase="p")
     logger.end_run()  # parent terminates first (unusual but possible on KeyboardInterrupt)
     logger.end_phase(ctx)  # must not raise
+    # The child run itself must still be genuinely terminated, not just "didn't crash".
+    assert client.get_run(ctx.run_id).info.status == "FINISHED"
 
 
 # ---------------------------------------------------------------------------
@@ -189,21 +197,37 @@ def test_resolve_experiment_reraises_genuine_failure(
 def test_log_params_before_start_run_is_safe(tracking_uri: str) -> None:
     """log_params without an active run is a silent no-op + warning, never raises."""
     logger = _build_logger(tracking_uri)
-    logger.log_params({"a": 1, "b": "two"})  # must not raise
+    with structlog.testing.capture_logs() as logs:
+        logger.log_params({"a": 1, "b": "two"})  # must not raise
+    warn_logs = [e for e in logs if e["event"] == "mlflow_logger_log_params_without_run"]
+    assert len(warn_logs) == 1
+    assert warn_logs[0]["log_level"] == "warning"
 
 
 def test_log_artifact_before_start_run_is_safe(tracking_uri: str) -> None:
     """log_artifact without an active run is a silent no-op + warning."""
     logger = _build_logger(tracking_uri)
-    logger.log_artifact("/nonexistent/path/file.txt")  # must not raise
+    with structlog.testing.capture_logs() as logs:
+        logger.log_artifact("/nonexistent/path/file.txt")  # must not raise
+    warn_logs = [e for e in logs if e["event"] == "mlflow_logger_log_artifact_without_run"]
+    assert len(warn_logs) == 1
+    assert warn_logs[0]["log_level"] == "warning"
+    assert warn_logs[0]["path"] == "/nonexistent/path/file.txt"
 
 
-def test_log_artifact_missing_file_is_safe(tracking_uri: str) -> None:
+def test_log_artifact_missing_file_is_safe(tracking_uri: str, client: MlflowClient) -> None:
     """log_artifact with a non-existent file path logs a warning and returns."""
     logger = _build_logger(tracking_uri)
-    logger.start_run(run_name="artifact-miss")
-    logger.log_artifact("/path/does/not/exist.txt")  # must not raise
+    run_id = logger.start_run(run_name="artifact-miss")
+    with structlog.testing.capture_logs() as logs:
+        logger.log_artifact("/path/does/not/exist.txt")  # must not raise
     logger.end_run()
+    warn_logs = [e for e in logs if e["event"] == "mlflow_logger_artifact_missing"]
+    assert len(warn_logs) == 1
+    assert warn_logs[0]["log_level"] == "warning"
+    assert warn_logs[0]["path"] == "/path/does/not/exist.txt"
+    # "and returns" — no upload was ever attempted against the real backend.
+    assert client.list_artifacts(run_id) == []
 
 
 def test_log_artifact_uploads_real_file(
@@ -223,8 +247,14 @@ def test_log_artifact_uploads_real_file(
 
 def test_end_run_without_start_is_safe(tracking_uri: str) -> None:
     """end_run with no active run is a silent no-op."""
+    from unittest.mock import patch
+
     logger = _build_logger(tracking_uri)
-    logger.end_run()  # must not raise
+    with patch.object(logger._client, "set_terminated") as mock_terminated:
+        logger.end_run()  # must not raise
+    # "no-op" means the backend is never touched, not just "did not raise".
+    mock_terminated.assert_not_called()
+    assert logger._active_run_id is None
 
 
 def test_start_phase_without_parent_returns_empty_ctx(tracking_uri: str) -> None:
@@ -237,9 +267,13 @@ def test_start_phase_without_parent_returns_empty_ctx(tracking_uri: str) -> None
 
 def test_log_phase_metric_with_empty_ctx_is_safe(tracking_uri: str) -> None:
     """log_phase_metric with an empty-id ctx is a silent no-op."""
+    from unittest.mock import patch
+
     logger = _build_logger(tracking_uri)
     ctx = PhaseContext(run_id="", phase="x")
-    logger.log_phase_metric(ctx, "loss", 0.5)  # must not raise
+    with patch.object(logger._client, "log_metric") as mock_log_metric:
+        logger.log_phase_metric(ctx, "loss", 0.5)  # must not raise
+    mock_log_metric.assert_not_called()
 
 
 def test_log_phase_metric_skips_nan(tracking_uri: str, client: MlflowClient) -> None:
@@ -257,9 +291,13 @@ def test_log_phase_metric_skips_nan(tracking_uri: str, client: MlflowClient) -> 
 
 def test_log_phase_artifact_with_empty_ctx_is_safe(tracking_uri: str) -> None:
     """log_phase_artifact with an empty-id ctx is a silent no-op."""
+    from unittest.mock import patch
+
     logger = _build_logger(tracking_uri)
     ctx = PhaseContext(run_id="", phase="x")
-    logger.log_phase_artifact(ctx, "/nonexistent/file.txt")  # must not raise
+    with patch.object(logger._client, "log_artifact") as mock_log_artifact:
+        logger.log_phase_artifact(ctx, "/nonexistent/file.txt")  # must not raise
+    mock_log_artifact.assert_not_called()
 
 
 def test_log_phase_artifact_missing_file_is_safe(tracking_uri: str) -> None:
@@ -267,9 +305,14 @@ def test_log_phase_artifact_missing_file_is_safe(tracking_uri: str) -> None:
     logger = _build_logger(tracking_uri)
     logger.start_run(run_name="pa-miss")
     ctx = logger.start_phase(phase="miss-ph")
-    logger.log_phase_artifact(ctx, "/no/such/file.bin")  # must not raise
+    with structlog.testing.capture_logs() as logs:
+        logger.log_phase_artifact(ctx, "/no/such/file.bin")  # must not raise
     logger.end_phase(ctx)
     logger.end_run()
+    warn_logs = [e for e in logs if e["event"] == "mlflow_logger_phase_artifact_missing"]
+    assert len(warn_logs) == 1
+    assert warn_logs[0]["log_level"] == "warning"
+    assert warn_logs[0]["path"] == "/no/such/file.bin"
 
 
 def test_log_phase_artifact_uploads_real_file(
@@ -314,9 +357,13 @@ def test_start_phase_with_params_logs_them(tracking_uri: str, client: MlflowClie
 
 def test_end_phase_with_empty_ctx_is_safe(tracking_uri: str) -> None:
     """end_phase with an empty-id ctx (from a failed start_phase) is a no-op."""
+    from unittest.mock import patch
+
     logger = _build_logger(tracking_uri)
     ctx = PhaseContext(run_id="", phase="orphan")
-    logger.end_phase(ctx)  # must not raise
+    with patch.object(logger._client, "set_terminated") as mock_terminated:
+        logger.end_phase(ctx)  # must not raise
+    mock_terminated.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -342,9 +389,17 @@ def test_log_params_backend_failure_is_safe(tracking_uri: str) -> None:
 
     logger = _build_logger(tracking_uri)
     logger.start_run(run_name="x")
-    with patch.object(logger._client, "log_param", side_effect=RuntimeError("net")):
+    with (
+        patch.object(logger._client, "log_param", side_effect=RuntimeError("net")),
+        structlog.testing.capture_logs() as logs,
+    ):
         logger.log_params({"k": "v"})  # must not raise
     logger.end_run()
+    failure_logs = [e for e in logs if e["event"] == "mlflow_logger_log_param_failed"]
+    assert len(failure_logs) == 1
+    assert failure_logs[0]["log_level"] == "warning"
+    assert failure_logs[0]["key"] == "k"
+    assert failure_logs[0]["error_type"] == "RuntimeError"
 
 
 def test_log_metric_backend_failure_is_safe(tracking_uri: str) -> None:
@@ -353,9 +408,17 @@ def test_log_metric_backend_failure_is_safe(tracking_uri: str) -> None:
 
     logger = _build_logger(tracking_uri)
     logger.start_run(run_name="x")
-    with patch.object(logger._client, "log_metric", side_effect=RuntimeError("net")):
+    with (
+        patch.object(logger._client, "log_metric", side_effect=RuntimeError("net")),
+        structlog.testing.capture_logs() as logs,
+    ):
         logger.log_metric("loss", 0.5)  # must not raise
     logger.end_run()
+    failure_logs = [e for e in logs if e["event"] == "mlflow_logger_log_metric_failed"]
+    assert len(failure_logs) == 1
+    assert failure_logs[0]["log_level"] == "warning"
+    assert failure_logs[0]["key"] == "loss"
+    assert failure_logs[0]["error_type"] == "RuntimeError"
 
 
 def test_log_artifact_backend_failure_is_safe(tracking_uri: str, tmp_path: Path) -> None:
@@ -366,9 +429,17 @@ def test_log_artifact_backend_failure_is_safe(tracking_uri: str, tmp_path: Path)
     artifact.write_text("x")
     logger = _build_logger(tracking_uri)
     logger.start_run(run_name="x")
-    with patch.object(logger._client, "log_artifact", side_effect=RuntimeError("disk")):
+    with (
+        patch.object(logger._client, "log_artifact", side_effect=RuntimeError("disk")),
+        structlog.testing.capture_logs() as logs,
+    ):
         logger.log_artifact(str(artifact))  # must not raise
     logger.end_run()
+    failure_logs = [e for e in logs if e["event"] == "mlflow_logger_log_artifact_failed"]
+    assert len(failure_logs) == 1
+    assert failure_logs[0]["log_level"] == "warning"
+    assert failure_logs[0]["path"] == str(artifact)
+    assert failure_logs[0]["error_type"] == "RuntimeError"
 
 
 def test_end_run_backend_failure_still_clears_active_run(tracking_uri: str) -> None:
@@ -415,10 +486,19 @@ def test_log_phase_metric_backend_failure_is_safe(tracking_uri: str) -> None:
     logger = _build_logger(tracking_uri)
     logger.start_run(run_name="x")
     ctx = logger.start_phase(phase="rssm")
-    with patch.object(logger._client, "log_metric", side_effect=RuntimeError("net")):
+    with (
+        patch.object(logger._client, "log_metric", side_effect=RuntimeError("net")),
+        structlog.testing.capture_logs() as logs,
+    ):
         logger.log_phase_metric(ctx, "loss", 0.5)  # must not raise
     logger.end_phase(ctx)
     logger.end_run()
+    failure_logs = [e for e in logs if e["event"] == "mlflow_logger_log_phase_metric_failed"]
+    assert len(failure_logs) == 1
+    assert failure_logs[0]["log_level"] == "warning"
+    assert failure_logs[0]["phase"] == "rssm"
+    assert failure_logs[0]["key"] == "loss"
+    assert failure_logs[0]["error_type"] == "RuntimeError"
 
 
 def test_log_phase_artifact_backend_failure_is_safe(tracking_uri: str, tmp_path: Path) -> None:
@@ -430,10 +510,18 @@ def test_log_phase_artifact_backend_failure_is_safe(tracking_uri: str, tmp_path:
     logger = _build_logger(tracking_uri)
     logger.start_run(run_name="x")
     ctx = logger.start_phase(phase="rssm")
-    with patch.object(logger._client, "log_artifact", side_effect=RuntimeError("disk")):
+    with (
+        patch.object(logger._client, "log_artifact", side_effect=RuntimeError("disk")),
+        structlog.testing.capture_logs() as logs,
+    ):
         logger.log_phase_artifact(ctx, str(artifact))  # must not raise
     logger.end_phase(ctx)
     logger.end_run()
+    failure_logs = [e for e in logs if e["event"] == "mlflow_logger_log_phase_artifact_failed"]
+    assert len(failure_logs) == 1
+    assert failure_logs[0]["log_level"] == "warning"
+    assert failure_logs[0]["phase"] == "rssm"
+    assert failure_logs[0]["error_type"] == "RuntimeError"
 
 
 def test_end_phase_backend_failure_is_safe(tracking_uri: str) -> None:
@@ -443,6 +531,14 @@ def test_end_phase_backend_failure_is_safe(tracking_uri: str) -> None:
     logger = _build_logger(tracking_uri)
     logger.start_run(run_name="x")
     ctx = logger.start_phase(phase="rssm")
-    with patch.object(logger._client, "set_terminated", side_effect=RuntimeError("term")):
+    with (
+        patch.object(logger._client, "set_terminated", side_effect=RuntimeError("term")),
+        structlog.testing.capture_logs() as logs,
+    ):
         logger.end_phase(ctx)  # must not raise
     logger.end_run()
+    failure_logs = [e for e in logs if e["event"] == "mlflow_logger_end_phase_failed"]
+    assert len(failure_logs) == 1
+    assert failure_logs[0]["log_level"] == "warning"
+    assert failure_logs[0]["phase"] == "rssm"
+    assert failure_logs[0]["error_type"] == "RuntimeError"
