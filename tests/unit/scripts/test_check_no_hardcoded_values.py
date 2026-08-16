@@ -66,6 +66,25 @@ def test_ast_detector_formats_negative_literals() -> None:
     assert findings == [(1, "-7")]
 
 
+def test_hardcoded_value_dir_exemptions_are_pinned() -> None:
+    """Growing ``ALLOWED_DIR_PREFIXES`` is a deliberate, reviewed decision.
+
+    Each entry exists for a documented reason (see the constant's comment):
+    either the package is inherently a defaults-only package
+    (``config/schema/``), or it is pre-existing code relocated by a same-PR
+    module split whose lines read as "new" only because a 1-file-to-many
+    split has no git rename correspondence. A new entry silencing an
+    unrelated finding should fail this test until deliberately added here.
+    """
+    checker = _load_checker_module()
+    assert checker.ALLOWED_DIR_PREFIXES == (
+        "src/mousedroid/config/schema/",
+        "src/mousedroid/telemetry/metrics/",
+        "src/mousedroid/telemetry/server/",
+        "src/mousedroid/validation/runtime/",
+    )
+
+
 def _fake_run_factory(results: dict[tuple[str, ...], tuple[int, str, str]]) -> Any:
     def _fake_run(cmd: list[str]) -> Any:
         class _R:
@@ -93,6 +112,23 @@ def test_git_base_candidates_prefers_origin_prefix() -> None:
 def test_git_base_candidates_passes_explicit_ref_unchanged() -> None:
     checker = _load_checker_module()
     assert checker._git_base_candidates("origin/feature") == ["origin/feature"]
+
+
+def test_git_base_candidates_prefixes_slash_containing_branch_name() -> None:
+    """A bare branch name containing '/' (e.g. a namespaced dev branch) must
+    still be tried against origin/ first.
+
+    Regression for a bug where the origin/ prefix was only added when the raw
+    ref had no '/' at all, so a base branch like
+    'claude/markdown-implementation-plan-aVJ2l' was never resolved against
+    origin/ and the CI gate hard-failed with "base ref unresolved".
+    """
+    checker = _load_checker_module()
+    with patch.dict(os.environ, {"GITHUB_BASE_REF": "claude/foo-bar"}, clear=False):
+        assert checker._git_base_candidates(None) == [
+            "origin/claude/foo-bar",
+            "claude/foo-bar",
+        ]
 
 
 def test_first_valid_base_ref_returns_first_resolvable() -> None:

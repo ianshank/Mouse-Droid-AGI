@@ -120,7 +120,7 @@ jobs:
               run: pip install -e ".[dev]"
 
             - name: USB-C discovery wiring assertion (jetson_production overlay)
-              run: pytest tests/unit/test_jetson_production_overlay.py -q --no-cov
+              run: pytest tests/unit/config/test_jetson_production_overlay.py -q --no-cov
 
     # -------------------------------------------------------------------------
     # Stage 2: Type check (mypy --strict)
