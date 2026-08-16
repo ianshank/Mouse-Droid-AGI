@@ -1525,56 +1525,6 @@ def _resolve_tracking_uri(raw: str) -> str:
     return f"file:{abs_path}"
 
 
-def build_weight_update_poller(
-    cfg: Settings,
-    *,
-    metrics: MetricsRegistry | None = None,
-) -> WeightUpdatePollerProtocol | None:
-    """Build the optional Tier C1 OTA weight-update poller (legacy single-engine shim).
-
-    Deprecated: prefer :func:`build_weight_update_pollers` (Tier C1.2)
-    which returns a ``Mapping[str, WeightUpdatePollerProtocol]`` keyed by
-    ``engine_type`` and supports a second world-model poller alongside
-    the policy poller. Retained for backwards compatibility with external
-    callers for one minor-version window.
-
-    Returns ``None`` (poller disabled) when
-    ``cfg.cloud.weight_update.poll_interval_s <= 0.0`` — the default — so
-    deployments without OTA configured produce byte-identical pre-Tier-C1
-    behavior. Always builds a single ``policy`` poller when polling is
-    enabled; world-model OTA is now reachable via the plural
-    :func:`build_weight_update_pollers` factory + the
-    ``cfg.cloud.weight_update.world_model_enabled`` schema flag (Tier
-    C1.2). New callers should migrate.
-
-    Args:
-        cfg: Root settings.
-        metrics: Shared metrics registry; forwarded to the poller for
-            download / mismatch / latency observability.
-
-    Returns:
-        A :class:`WeightUpdatePollerProtocol` implementation or ``None``.
-    """
-    if cfg.cloud.weight_update.poll_interval_s <= 0.0:
-        return None
-
-    from mousedroid.cloud.weight_update_poller import HuggingFaceWeightUpdatePoller
-
-    poller = HuggingFaceWeightUpdatePoller(
-        cfg.cloud.weight_update,
-        repo_id=cfg.cloud.weight_update.policy_repo_id,
-        filename=cfg.cloud.weight_update.policy_filename,
-        engine_type=ENGINE_TYPE_POLICY,
-        metrics=metrics,
-    )
-    _log.info(
-        "weight_update_poller_built",
-        repo_id=cfg.cloud.weight_update.policy_repo_id,
-        poll_interval_s=cfg.cloud.weight_update.poll_interval_s,
-    )
-    return poller
-
-
 def build_weight_update_pollers(
     cfg: Settings,
     *,

@@ -86,22 +86,3 @@ def test_factory_returns_empty_when_polling_disabled(tmp_path: Path) -> None:
     assert cfg.cloud.weight_update.poll_interval_s == 0.0
     pollers = build_weight_update_pollers(cfg)
     assert pollers == {}
-
-
-def test_legacy_singular_factory_does_not_use_subdirs(tmp_path: Path) -> None:
-    """``build_weight_update_poller`` (deprecated singular) keeps legacy layout.
-
-    The legacy factory only builds one poller, so there's no manifest
-    collision to fix — preserving the legacy cache-dir layout avoids
-    moving operator weight files on a back-compat upgrade.
-    """
-    from mousedroid.factory import build_weight_update_poller
-
-    cfg = Settings(mock_hardware=True)
-    cfg.cloud.weight_update.cache_dir = str(tmp_path / "legacy")
-    cfg.cloud.weight_update.poll_interval_s = 30.0
-
-    poller = build_weight_update_poller(cfg)
-    assert poller is not None
-    # No engine subdir — exact legacy ``cache_dir`` path.
-    assert poller._cache_dir == (tmp_path / "legacy").resolve()  # type: ignore[attr-defined]

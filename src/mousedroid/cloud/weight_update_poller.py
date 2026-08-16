@@ -40,10 +40,11 @@ class HuggingFaceWeightUpdatePoller:
     """Background poller that fetches latest HF Hub revisions and verifies SHA-256.
 
     One instance polls one ``(repo_id, filename)`` pair tagged with one
-    ``engine_type`` (``"policy"`` or ``"world_model"``). C1 wires a single
-    policy poller via :func:`mousedroid.factory.build_weight_update_poller`;
-    extending to a world-model poller is a documented C1.x follow-up that
-    requires adding orchestrator support for an additional poller slot.
+    ``engine_type`` (``"policy"`` or ``"world_model"``). Wired via
+    :func:`mousedroid.factory.build_weight_update_pollers` (Tier C1.2),
+    which returns a ``Mapping[str, WeightUpdatePollerProtocol]`` keyed by
+    ``engine_type`` and supports a policy poller plus an optional
+    world-model poller.
 
     Conforms to :class:`WeightUpdatePollerProtocol` structurally.
     """

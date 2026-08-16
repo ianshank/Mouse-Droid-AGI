@@ -303,18 +303,9 @@ class _WebSocketHandlersMixin(_TelemetryServerState):
             await resp.close(code=WS_CLOSE_LOG_BUFFER_DISABLED, message=b"log_buffer_disabled")
             return resp
 
-        # Enforce API key for WebSocket log streaming if configured.
-        config = getattr(self, "_config", None)
-        api_key = getattr(config, "api_key", None) if config is not None else None
-        if api_key:
-            supplied_key = request.headers.get("X-Telemetry-Api-Key") or request.query.get(
-                "api_key"
-            )
-            if supplied_key != api_key:
-                raise web.HTTPUnauthorized(
-                    text="Invalid or missing API key for log stream WebSocket"
-                )
-
+        # Auth is enforced centrally by the middleware stack built in
+        # _lifecycle.py (bearer or legacy X-API-Key) before any handler runs;
+        # this route needs no additional per-handler check.
         ws = web.WebSocketResponse()
         await ws.prepare(request)
 
