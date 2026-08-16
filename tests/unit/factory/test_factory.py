@@ -444,6 +444,24 @@ def test_build_voice_engine_with_provided_speaker():
     assert isinstance(engine, RockyVoiceEngine)
 
 
+def test_build_voice_engine_propagates_failure_recorder():
+    """build_voice_engine threads its failure_recorder kwarg into the engine.
+
+    Regression test for the factory-level wiring gap fixed alongside this
+    test: build_orchestrator built a shared failure_recorder but never
+    passed it to build_voice_engine, so RockyVoiceEngine silently fell
+    back to its own NullFailureRecorder in production.
+    """
+    from mousedroid.factory import build_voice_engine
+    from mousedroid.telemetry.failure_recorder import NullFailureRecorder
+
+    cfg = Settings(mock_hardware=True, voice={"enabled": True}, speaker={"enabled": True})
+    real_recorder = MagicMock(spec=NullFailureRecorder)
+    engine = build_voice_engine(cfg, failure_recorder=real_recorder)
+    assert engine is not None
+    assert engine._failure_recorder is real_recorder
+
+
 def test_build_voice_engine_sample_rate_mismatch():
     """build_voice_engine returns None when sample rates differ."""
     from mousedroid.factory import build_voice_engine

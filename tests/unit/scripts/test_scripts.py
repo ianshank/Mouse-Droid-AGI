@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 # Repo root relative to this test file
-_REPO = Path(__file__).parent.parent.parent
+_REPO = Path(__file__).parent.parent.parent.parent
 _SCRIPTS = _REPO / "scripts"
 _TRAINING = _REPO / "training"
 

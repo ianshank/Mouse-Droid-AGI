@@ -18,7 +18,7 @@ import yaml
 
 from mousedroid.telemetry.metrics import generate_metrics_sample
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 _ALERTS = _REPO_ROOT / "config" / "prometheus" / "alerts.yml"
 
 _LLM_GROUP = "mousedroid_llm_gateway"

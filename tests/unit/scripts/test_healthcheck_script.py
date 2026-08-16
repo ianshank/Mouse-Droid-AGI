@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "mousedroid_healthcheck.sh"
+_SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "mousedroid_healthcheck.sh"
 
 pytestmark = pytest.mark.skipif(
     os.name == "nt" or shutil.which("sh") is None or not _SCRIPT.exists(),

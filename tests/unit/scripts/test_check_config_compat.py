@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "check_config_compat.py"
+_SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "check_config_compat.py"
 _spec = importlib.util.spec_from_file_location("check_config_compat", _SCRIPT)
 assert _spec is not None
 assert _spec.loader is not None

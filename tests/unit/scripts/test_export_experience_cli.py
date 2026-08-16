@@ -22,7 +22,7 @@ from mousedroid.experience.record import MouseDroidExperienceRecord
 
 # Import the CLI module via its filesystem path so the test exercises the
 # same script the operator runs.
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 _SCRIPT = _REPO_ROOT / "scripts" / "export_experience_to_training.py"
 sys.path.insert(0, str(_SCRIPT.parent))
 import export_experience_to_training as exporter

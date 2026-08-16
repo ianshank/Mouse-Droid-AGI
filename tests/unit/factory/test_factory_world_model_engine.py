@@ -66,7 +66,7 @@ def _make_cfg(
 def _load_export_module() -> Any:
     """Import ``scripts/export_dual_stream_rssm_onnx.py`` as a module."""
     script_path = (
-        Path(__file__).resolve().parents[2] / "scripts" / "export_dual_stream_rssm_onnx.py"
+        Path(__file__).resolve().parents[3] / "scripts" / "export_dual_stream_rssm_onnx.py"
     )
     spec = importlib.util.spec_from_file_location("export_dual_stream_rssm_onnx", script_path)
     assert spec is not None

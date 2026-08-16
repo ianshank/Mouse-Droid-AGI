@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 
 def _load_checker_module() -> ModuleType:
-    repo_root = Path(__file__).resolve().parent.parent.parent
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent
     script_path = repo_root / "scripts" / "check_no_hardcoded_values.py"
 
     spec = importlib.util.spec_from_file_location("check_no_hardcoded_values", script_path)
