@@ -1947,7 +1947,8 @@ class MouseDroidOrchestrator:
         self,
         *,
         interval: float,
-        cycle_label: str,
+        started_event: str,
+        failed_event: str,
         cycle_fn: Callable[[], Awaitable[object]],
         should_continue: Callable[[], bool] | None = None,
     ) -> None:
@@ -1965,9 +1966,14 @@ class MouseDroidOrchestrator:
 
         Args:
             interval: Seconds between cycles, read from the caller's config.
-            cycle_label: Prefix for the ``{cycle_label}_loop_started`` /
-                ``{cycle_label}_cycle_failed`` log events — preserves each
-                loop's existing event names exactly.
+            started_event: Literal event name logged once at entry. Passed as a
+                plain string, never f-string-built here — AGENTS.md invariant 3
+                ("no f-string log messages") applies to a shared helper exactly
+                as much as to a single call site; each caller supplies its own
+                literal (e.g. ``"on_device_update_loop_started"``), so grepping
+                the CALL SITE for the exact event name still works.
+            failed_event: Literal event name logged on a failed cycle, same
+                literal-per-caller discipline as ``started_event``.
             cycle_fn: The awaitable cycle body to run each wake-up.
             should_continue: Optional per-iteration continuation check, evaluated
                 after each sleep and before ``cycle_fn``. ``None`` (the default)
@@ -1976,7 +1982,7 @@ class MouseDroidOrchestrator:
                 ``_consolidation_loop`` passes one to preserve its ``break`` on a
                 cleared memory tier.
         """
-        _log.info(f"{cycle_label}_loop_started", interval_s=interval)
+        _log.info(started_event, interval_s=interval)
         while True:
             await self._clock.sleep(interval)
             if should_continue is not None and not should_continue():
@@ -1984,7 +1990,7 @@ class MouseDroidOrchestrator:
             try:
                 await cycle_fn()
             except Exception:
-                _log.warning(f"{cycle_label}_cycle_failed", exc_info=True)
+                _log.warning(failed_event, exc_info=True)
 
     async def _consolidation_loop(self) -> None:
         """Background loop that consolidates episodic memory into semantic index.
@@ -2008,7 +2014,8 @@ class MouseDroidOrchestrator:
 
         await self._run_slow_cadence_loop(
             interval=interval,
-            cycle_label="consolidation",
+            started_event="consolidation_loop_started",
+            failed_event="consolidation_cycle_failed",
             cycle_fn=_cycle,
             should_continue=lambda: self._memory_tier is not None,
         )
@@ -2039,7 +2046,8 @@ class MouseDroidOrchestrator:
         coordinator = self._on_device_coordinator
         await self._run_slow_cadence_loop(
             interval=on_device_cfg.check_interval_s,
-            cycle_label="on_device_update",
+            started_event="on_device_update_loop_started",
+            failed_event="on_device_update_cycle_failed",
             cycle_fn=coordinator.maybe_update,
         )
 
@@ -2069,7 +2077,8 @@ class MouseDroidOrchestrator:
         coordinator = self._growth_coordinator
         await self._run_slow_cadence_loop(
             interval=growth_cfg.check_interval_s,
-            cycle_label="growth_distill",
+            started_event="growth_distill_loop_started",
+            failed_event="growth_distill_cycle_failed",
             cycle_fn=coordinator.maybe_distill,
         )
 

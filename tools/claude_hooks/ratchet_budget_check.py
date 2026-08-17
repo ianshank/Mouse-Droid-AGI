@@ -90,7 +90,11 @@ def main(
         _logger.debug("ratchet_budget_check_out_of_scope", rel_path=rel_path)
         return hookio.EXIT_OK
 
-    warnings = check_all_budgets(repo_root, cfg.ratchet_budgets.items)
+    try:
+        warnings = check_all_budgets(repo_root, cfg.ratchet_budgets.items)
+    except Exception as exc:  # Advisory hook: an unreadable file must not fail the turn.
+        _logger.error("ratchet_budget_check_scan_error", error=str(exc))
+        return hookio.EXIT_OK
     for warning in warnings:
         report_stream.write(f"[ratchet-budget] {warning}\n")
     if warnings:

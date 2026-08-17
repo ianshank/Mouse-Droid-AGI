@@ -27,7 +27,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from tools.claude_hooks.config import RatchetBudgetItem, load_config
+from tools.claude_hooks.config import ConfigError, RatchetBudgetItem, load_config
 
 
 def count_marker_occurrences(repo_root: Path, scope_glob: str, marker: str) -> int:
@@ -112,7 +112,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     repo_root: Path = args.repo_root.resolve()
 
-    cfg = load_config(repo_root=repo_root)
+    try:
+        cfg = load_config(repo_root=repo_root)
+    except ConfigError as exc:
+        # Advisory tool: a broken workforce config must degrade to a WARN like
+        # any other finding, not crash the script out from under --strict's
+        # documented "exit 0 unless --strict" contract.
+        print(f"WARN: could not load workforce config ({exc}) - ratchet budgets not checked")
+        return 1 if args.strict else 0
+
     warnings = (
         check_all_budgets(repo_root, cfg.ratchet_budgets.items)
         if cfg.ratchet_budgets.enabled

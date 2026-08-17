@@ -187,3 +187,28 @@ class TestCli:
             encoding="utf-8",
         )
         assert main(["--repo-root", str(repo), "--strict"]) == 1
+
+    def test_broken_config_degrades_to_advisory_warn_not_a_crash(
+        self, repo: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """load_config() raising ConfigError must not crash the CLI.
+
+        The module docstring promises "always exits 0 unless --strict" — an
+        invalid workforce.yaml (unknown key, extra="forbid") is exactly the
+        kind of environment problem this advisory tool must survive, same as
+        any other finding.
+        """
+        (repo / ".claude").mkdir()
+        (repo / ".claude" / "workforce.yaml").write_text(
+            "ratchet_budgets:\n    unknown_key: 1\n", encoding="utf-8"
+        )
+        rc = main(["--repo-root", str(repo)])
+        assert rc == 0
+        assert "WARN: could not load workforce config" in capsys.readouterr().out
+
+    def test_broken_config_under_strict_exits_one(self, repo: Path) -> None:
+        (repo / ".claude").mkdir()
+        (repo / ".claude" / "workforce.yaml").write_text(
+            "ratchet_budgets:\n    unknown_key: 1\n", encoding="utf-8"
+        )
+        assert main(["--repo-root", str(repo), "--strict"]) == 1

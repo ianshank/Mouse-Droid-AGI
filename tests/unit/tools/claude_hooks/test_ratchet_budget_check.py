@@ -127,6 +127,25 @@ def test_main_survives_invalid_config(tmp_path: Path) -> None:
     assert _main(repo, {"tool_input": {"file_path": str(target)}}, io.StringIO()) == 0
 
 
+def test_main_survives_scan_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An exception raised while scanning (unreadable file, glob failure, ...)
+    must degrade to EXIT_OK, matching this hook's "nothing here raises"
+    contract — mirrors the config-load-error guard above but for the scan
+    step itself, which runs after the config is already known-good."""
+    repo = _repo(tmp_path)
+    _write_workforce_config(repo, _SMALL_BUDGET)
+    target = _write_source(repo, "src/mousedroid/a.py", occurrences=1)
+
+    def _boom(*_args: object, **_kwargs: object) -> list[str]:
+        raise OSError("simulated unreadable file during scan")
+
+    monkeypatch.setattr(ratchet_budget_check, "check_all_budgets", _boom)
+    stderr = io.StringIO()
+    code = _main(repo, {"tool_input": {"file_path": str(target)}}, stderr)
+    assert code == 0
+    assert stderr.getvalue() == ""
+
+
 def test_main_accepts_relative_target(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _write_workforce_config(repo, _SMALL_BUDGET)
