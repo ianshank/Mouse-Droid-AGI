@@ -9,8 +9,9 @@
 # Placeholder conventions covered (all deliberately non-key-shaped):
 #   - "sk-ant-..." / "sk-ant-xyz" / "sk-ant-test" — docs + unit-test stand-ins
 #   - "changeme" — config/docker.env.example telemetry-token placeholder
-#   - "test-api-key-abc123" — tests/unit/test_telemetry_auth.py bearer-token
-#     fixture (fires the generic-api-key entropy rule across history)
+#   - "test-api-key-abc123" — tests/unit/telemetry/test_telemetry_auth.py
+#     bearer-token fixture (fires the generic-api-key entropy rule across
+#     history)
 #   - "valid-key-123" — the same bearer-token fixture under its earlier name,
 #     tests/security/test_telemetry_auth.py. That path does not exist at HEAD:
 #     the blob survives only in commit 51afcb1c, which is an ancestor of no

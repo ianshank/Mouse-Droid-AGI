@@ -468,8 +468,22 @@ shape.
    shaped to match the real driver's output).
 4. Add a `build_<driver>(cfg, ...)` builder in `factory.py`. Honour
    `mock_hardware` AND any per-subsystem `enabled: bool`.
+4a. If the driver talks to real hardware and can transiently fail (serial,
+    USB, CSI/I2C), wrap the real backend in a `ResilientX` class under
+    `src/mousedroid/resilience/` — `CircuitBreaker` + `retry_async` around
+    the same Protocol the driver implements, reusing the existing top-level
+    `cfg.retry`/`cfg.circuit_breaker` config (no new config field). The mock
+    branch stays unwrapped. This is an established, repeated pattern —
+    `ResilientESP32Driver` → `ResilientLidarDriver` → `ResilientCamera`, each
+    docstring naming the prior one as its template — not a one-off;
+    `resilient_camera.py` is the cleanest reference shape (it additionally
+    shows how to transparently delegate an optional, non-Protocol driver
+    capability via `cast()` rather than `getattr()`, so a new suppression
+    isn't needed).
 5. Tests: unit (mock-driven), integration (factory wiring), hardware
-   (rover-only, `@pytest.mark.hardware`).
+   (rover-only, `@pytest.mark.hardware`). If 4a applies, also add a
+   dedicated `tests/unit/resilience/test_resilient_<driver>.py` mirroring
+   `test_resilient_camera.py`.
 6. Update `docs/architecture/` if you added a new external boundary.
 
 ### test-tier-mirror
