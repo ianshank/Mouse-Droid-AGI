@@ -42,8 +42,9 @@ def apply_aliases(
         if legacy_key not in target:
             continue
         legacy_value = target.pop(legacy_key)
-        if canonical_key not in target:
-            target[canonical_key] = legacy_value
+        if canonical_key in target:
+            continue
+        target[canonical_key] = legacy_value
         _log.debug("config_alias_applied", legacy_key=legacy_key, canonical_key=canonical_key)
 
 

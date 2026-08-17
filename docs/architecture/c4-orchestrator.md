@@ -71,15 +71,17 @@ flowchart LR
     MockESP --> RES[ResilientESP32Driver]
     SerialESP --> RES
     WiFiESP --> RES
+    F -->|mock_hardware=True| MC[MockCamera]
     F -->|backend=jetson_csi| JC[JetsonCSICamera]
-    F -->|backend=mock| MC[MockCamera]
-    F -->|backend=imx500| IMX[IMX500Camera]
+    F -->|backend=picamera2 / auto| IMX[IMX500Camera]
+    JC --> RESCAM[ResilientCamera]
+    IMX --> RESCAM
     JC -.->|capture_raw_jpeg| RFS[RawFrameSourceProtocol]
     MC -.->|capture_raw_jpeg| RFS
+    RESCAM -.->|delegates when inner supports it| RFS
     RES --> Orch[Orchestrator]
-    JC --> Orch
+    RESCAM --> Orch
     MC --> Orch
-    IMX --> Orch
 ```
 
 Three branches matter for PR #104:
@@ -90,7 +92,13 @@ Three branches matter for PR #104:
 3. `mock_hardware=False AND esp32.enabled=True` → real Serial/WiFi driver
    (legacy + still default).
 
-The `ResilientESP32Driver` wrap is preserved in all three branches.
+The `ResilientESP32Driver` wrap is preserved in all three branches. The same
+retry + circuit-breaker pattern now covers real camera backends too: only
+`mock_hardware=True` returns the bare `MockCamera`; `JetsonCSICamera` and
+`IMX500Camera` are both wrapped in `ResilientCamera`
+(`src/mousedroid/resilience/resilient_camera.py`), which transparently
+delegates the optional `RawFrameSourceProtocol.capture_raw_jpeg` capability
+only when the wrapped driver actually implements it.
 
 ## Lifecycle
 

@@ -246,6 +246,43 @@ class TestWebSocketAuthentication:
             assert ws.closed
 
 
+class TestLogStreamAuthentication:
+    """The /api/v1/logs/stream WS route enforces the same central middleware.
+
+    A per-handler auth check on this route was removed as dead code (it read
+    self._config, which never existed — only self._cfg does — so the branch
+    could never fire). These tests prove the removal was safe: the shared
+    middleware, registered on the same app/router as every other route,
+    covers this endpoint identically to /ws.
+    """
+
+    async def test_log_stream_rejected_without_key(self) -> None:
+        _, app = _make_server()
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/api/v1/logs/stream")
+            assert resp.status == 401
+
+    async def test_log_stream_rejected_wrong_key(self) -> None:
+        _, app = _make_server()
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/api/v1/logs/stream", headers={"X-API-Key": _WRONG_KEY})
+            assert resp.status == 401
+
+    async def test_log_stream_no_auth_when_key_disabled(self) -> None:
+        """A plain GET (no Upgrade header) passes middleware when api_key=None.
+
+        The route itself then closes immediately with WS_CLOSE_LOG_BUFFER_DISABLED
+        since this server has no log_buffer configured — that's the handler's
+        own concern, not auth's; reaching that code path at all proves auth
+        did not reject the request.
+        """
+        server, app = _make_server(api_key=None)
+        server._running = True
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/api/v1/logs/stream")
+            assert resp.status != 401
+
+
 # ---------------------------------------------------------------------------
 # /metrics endpoint authentication
 # ---------------------------------------------------------------------------

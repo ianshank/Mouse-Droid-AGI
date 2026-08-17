@@ -170,25 +170,30 @@ is landed — runbook: `docs/runbooks/mlflow-local-ui.md`.
 
 ## Open engineering follow-ups
 
+0b. **[Architecture — needs a decision] 3 of 5 GCP cloud components are unwired.**
+    `CloudLoggingSink`/`CloudMetricsExporter`/`CloudFirestoreSync` have no
+    `build_cloud_*()` factory, zero runtime callers — same shape as unwired
+    `meta`/`growth`/`scaling` (`docs/architecture.md` Level 3d corrected).
+    Needs a wire-or-defer call.
+
 0a. **[Hygiene — needs a dedicated pass] First-ever vulture dead-code audit run: 447
-    findings, dominated by Protocol/DI false positives.** `scripts/dead_code_audit.py`
-    (F-020) had been CI-wired but never actually run + triaged —
-    `scripts/vulture_allowlist.py` was empty. Ran it 2026-08-16 at the default 60%
-    confidence, output in `reports/dead_code/2026-08-16.json` (gitignored). 2
-    spot-checked findings were confirmed Protocol/DI false positives (methods
-    implementing `@runtime_checkable Protocol` interfaces vulture can't trace
-    through protocol-typed call sites). At this volume, needs a dedicated triage
-    pass batched by module, not a rubber-stamp allowlist add or blind deletion.
+    findings.** `scripts/dead_code_audit.py` (F-020) had been CI-wired but never
+    actually run + triaged — `scripts/vulture_allowlist.py` was empty. Ran it
+    2026-08-16 at the default 60% confidence, output in
+    `reports/dead_code/2026-08-16.json`. 2 spot-checked findings
+    were confirmed Protocol/DI false positives (vulture can't trace
+    protocol-typed call sites). At this volume, needs a dedicated triage pass
+    batched by module, not a rubber-stamp allowlist add or blind deletion.
 
 0. **[Dependency — diagnosed blocker] `mlflow-skinny` 3.x breaks the file-store tracking
    default.** Open dependabot PR #145 proposes widening `mlflow-skinny` from `<3,>=2.22` to
    `<4,>=2.22`. No CI job installs the `[mlflow]` extra, so its "green" status never actually
-   exercised mlflow. Manually installed `mlflow-skinny==3.15.1` (2026-08-16) and ran the
-   mlflow-touching test surface: **29 failed, 17 errored** (of ~74) — mlflow 3.x hard-rejects
-   the local filesystem tracking backend by default, which `MlflowExperimentLogger`
+   exercised mlflow. Manually ran the mlflow-touching test surface against 3.15.1:
+   **29 failed, 17 errored** (of ~74) — mlflow 3.x hard-rejects the local filesystem
+   tracking backend by default, which `MlflowExperimentLogger`
    (`src/mousedroid/training/observability/mlflow_logger.py`) relies on via its default
-   tracking URI. Needs a real decision before merging: set `MLFLOW_ALLOW_FILE_STORE=true` in
-   the training entrypoints/CI, or migrate the default tracking URI to a database backend
+   tracking URI. Needs a decision before merging: set `MLFLOW_ALLOW_FILE_STORE=true` in
+   the training entrypoints/CI, or migrate to a database tracking URI
    (`sqlite:///mlflow.db`). PR left open pending that decision.
 
 1. Run `scripts/benchmark_voice_latency.py` on Jetson for the production personalities
@@ -208,9 +213,7 @@ is landed — runbook: `docs/runbooks/mlflow-local-ui.md`.
    (`.claude/agents/`), five new skills, a secretless `.mcp.json` including the
    repo's own MCP server per `docs/MCP_OPERATOR_GUIDE.md`, and the CLAUDE.md
    restructure (which also makes `DocsConfig.core_max_lines` real — see item 11
-   above). The `gitleaks` job was promoted advisory → blocking 2026-08-07 (34
-   days advisory, green across recent runs including failing ones); the
-   `performance` / `security` jobs keep their own windows in
+   above). `performance` / `security` keep their own advisory windows in
    `.github/advisory_stages.yaml`. Still open: decide whether repo-wide branch
    coverage should be measured (today only `tools/claude_hooks/` is, and
    advisory).

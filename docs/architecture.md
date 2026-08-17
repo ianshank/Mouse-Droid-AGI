@@ -433,6 +433,14 @@ Cloud features are **fully optional** — the droid operates identically with `g
 All cloud calls are protected by `CircuitBreaker` + `retry_async` patterns so cloud failures
 never block the 30 Hz control loop.
 
+**Wiring status, verified against `factory.py` — not all five components below are equally
+live.** Only `CloudTelemetrySink` and `CloudExperienceExporter` have `build_cloud_*()` factory
+functions and are threaded into `MouseDroidOrchestrator`'s constructor. `CloudLoggingSink`,
+`CloudMetricsExporter`, and `CloudFirestoreSync` are fully implemented with real unit tests but
+have **no factory builder and zero runtime callers** — structurally the same
+implemented-but-not-wired state as the `meta`/`growth`/`scaling` cognitive pillars described
+elsewhere in this document, just undocumented as such until now. Tracked in `NEXT_STEPS.md`.
+
 ```mermaid
 graph TD
     subgraph Jetson["Jetson Orin Nano"]
@@ -443,11 +451,11 @@ graph TD
     end
 
     subgraph CloudModule["cloud/ module (optional)"]
-        PubSubSink["CloudTelemetrySink\npubsub_sink.py\nmsgpack + CircuitBreaker"]
-        GCSExporter["CloudExperienceExporter\nexperience_exporter.py\nLMDB → GCS shards\nhigh-water mark cursor"]
-        LogSink["CloudLoggingSink\nlogging_sink.py\nstructlog processor"]
-        MonExporter["CloudMetricsExporter\nmonitoring_exporter.py\ngauge → TimeSeries"]
-        FireSync["CloudFirestoreSync\nfirestore_sync.py\nepisodic → Firestore"]
+        PubSubSink["CloudTelemetrySink\npubsub_sink.py\nmsgpack + CircuitBreaker\nWIRED"]
+        GCSExporter["CloudExperienceExporter\nexperience_exporter.py\nLMDB → GCS shards\nhigh-water mark cursor\nWIRED"]
+        LogSink["CloudLoggingSink\nlogging_sink.py\nstructlog processor\nNOT WIRED — no factory builder"]
+        MonExporter["CloudMetricsExporter\nmonitoring_exporter.py\ngauge → TimeSeries\nNOT WIRED — no factory builder"]
+        FireSync["CloudFirestoreSync\nfirestore_sync.py\nepisodic → Firestore\nNOT WIRED — no factory builder"]
         Auth["_auth.py\nADC / service account"]
     end
 
@@ -465,7 +473,6 @@ graph TD
     Orchestrator --> GCSExporter
     ExperienceDB --> GCSExporter
     TelemetryPub --> PubSubSink
-    MetricsReg --> MonExporter
 
     PubSubSink --> PubSub
     GCSExporter --> GCS
@@ -482,17 +489,18 @@ graph TD
     FireSync --> Auth
 ```
 
-**GCP config hierarchy:** `Settings.gcp: GCPConfig | None = None`. When `None`, all
-`build_cloud_*()` factory functions return `None` and the orchestrator skips cloud calls.
+**GCP config hierarchy:** `Settings.gcp: GCPConfig | None = None`. When `None`, both real
+`build_cloud_*()` factory functions (`build_cloud_telemetry_sink`,
+`build_cloud_experience_exporter`) return `None` and the orchestrator skips cloud calls.
 
-| Component | File | GCP Service | Resilience |
-| --------- | ---- | ----------- | ---------- |
-| Telemetry sink | `cloud/pubsub_sink.py` | Pub/Sub | CircuitBreaker (60s recovery) |
-| Experience exporter | `cloud/experience_exporter.py` | Cloud Storage | CircuitBreaker + HWM cursor |
-| Logging sink | `cloud/logging_sink.py` | Cloud Logging | Fire-and-forget (silent drop) |
-| Metrics exporter | `cloud/monitoring_exporter.py` | Cloud Monitoring | Async executor |
-| Firestore sync | `cloud/firestore_sync.py` | Firestore | Per-entry exception handling |
-| Auth | `cloud/_auth.py` | ADC / SA key | Fail-fast at startup |
+| Component | File | GCP Service | Resilience | Wired? |
+| --------- | ---- | ----------- | ---------- | ------ |
+| Telemetry sink | `cloud/pubsub_sink.py` | Pub/Sub | CircuitBreaker (60s recovery) | Yes — `build_cloud_telemetry_sink` |
+| Experience exporter | `cloud/experience_exporter.py` | Cloud Storage | CircuitBreaker + HWM cursor | Yes — `build_cloud_experience_exporter` |
+| Logging sink | `cloud/logging_sink.py` | Cloud Logging | Fire-and-forget (silent drop) | **No** — no factory builder exists |
+| Metrics exporter | `cloud/monitoring_exporter.py` | Cloud Monitoring | Async executor | **No** — no factory builder exists |
+| Firestore sync | `cloud/firestore_sync.py` | Firestore | Per-entry exception handling | **No** — no factory builder exists |
+| Auth | `cloud/_auth.py` | ADC / SA key | Fail-fast at startup | Shared by both wired components |
 
 ---
 
@@ -783,8 +791,6 @@ classDiagram
         +build_lidar_feature_extractor(cfg) LidarFeatureExtractor
         +build_cloud_telemetry_sink(cfg) CloudTelemetrySinkProtocol
         +build_cloud_experience_exporter(cfg) CloudExperienceExporterProtocol
-        +build_cloud_metrics_exporter(cfg) CloudMetricsExporterProtocol
-        +build_cloud_logging_sink(cfg) CloudLoggingSinkProtocol
     }
 
     ESP32CommProtocol <|.. MockESP32Driver : implements

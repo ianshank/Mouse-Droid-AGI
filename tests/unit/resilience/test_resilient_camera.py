@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from numpy.typing import NDArray
+from structlog.testing import capture_logs
 
 from mousedroid.config.schema import CameraConfig, CircuitBreakerConfig, RetryConfig
 from mousedroid.hardware.camera.mock_camera import MockCamera
@@ -77,14 +78,52 @@ def test_circuit_state_initial(resilient: ResilientCamera) -> None:
     assert resilient.circuit_state == "CLOSED"
 
 
-async def test_start_delegates(resilient: ResilientCamera) -> None:
-    """start() delegates to inner driver without raising."""
-    await resilient.start()
+async def test_start_delegates(
+    retry_cfg: RetryConfig,
+    cb_cfg: CircuitBreakerConfig,
+    camera_cfg: CameraConfig,
+) -> None:
+    """start() actually invokes the inner driver's start(), not a no-op."""
+
+    class StateTrackingCamera(MockCamera):
+        """MockCamera that records whether start()/stop() were really called."""
+
+        started = False
+
+        async def start(self) -> None:
+            self.started = True
+            await super().start()
+
+    inner = StateTrackingCamera(camera_cfg)
+    driver = ResilientCamera(inner, retry_cfg, cb_cfg)
+
+    await driver.start()
+
+    assert inner.started
 
 
-async def test_stop_best_effort(resilient: ResilientCamera) -> None:
-    """stop() delegates to inner driver."""
-    await resilient.stop()
+async def test_stop_best_effort(
+    retry_cfg: RetryConfig,
+    cb_cfg: CircuitBreakerConfig,
+    camera_cfg: CameraConfig,
+) -> None:
+    """stop() actually invokes the inner driver's stop(), not a no-op."""
+
+    class StateTrackingCamera(MockCamera):
+        """MockCamera that records whether start()/stop() were really called."""
+
+        stopped = False
+
+        async def stop(self) -> None:
+            self.stopped = True
+            await super().stop()
+
+    inner = StateTrackingCamera(camera_cfg)
+    driver = ResilientCamera(inner, retry_cfg, cb_cfg)
+
+    await driver.stop()
+
+    assert inner.stopped
 
 
 async def test_capture_features_delegates(resilient: ResilientCamera) -> None:
@@ -101,10 +140,13 @@ async def test_raw_frame_source_protocol_when_inner_supports_it(
 
 
 async def test_capture_raw_jpeg_delegates(resilient: ResilientCamera) -> None:
-    """capture_raw_jpeg delegates to the inner driver's implementation."""
+    """capture_raw_jpeg delegates to the inner driver's real JPEG encoder."""
     pytest.importorskip("PIL")
     result = await resilient.capture_raw_jpeg()  # type: ignore[attr-defined]
-    assert result is None or isinstance(result, bytes)
+    assert result is not None
+    # JPEG SOI (start-of-image) marker — proves this is real encoded output
+    # from the inner driver, not just "some bytes or None".
+    assert result.startswith(b"\xff\xd8\xff")
 
 
 async def test_raw_frame_source_protocol_absent_when_inner_lacks_it(
@@ -308,7 +350,7 @@ async def test_stop_best_effort_on_failure(
     cb_cfg: CircuitBreakerConfig,
     camera_cfg: CameraConfig,
 ) -> None:
-    """stop() does not raise even when inner driver's stop fails."""
+    """stop() does not raise even when inner driver's stop fails, and logs it."""
 
     class FailingStopCamera(MockCamera):
         """MockCamera whose stop() raises."""
@@ -318,5 +360,9 @@ async def test_stop_best_effort_on_failure(
 
     inner = FailingStopCamera(camera_cfg)
     driver = ResilientCamera(inner, retry_cfg, cb_cfg)
-    # stop() should not propagate the exception.
-    await driver.stop()
+
+    with capture_logs() as logs:
+        # stop() should not propagate the exception.
+        await driver.stop()
+
+    assert any(entry["event"] == "resilient_camera_stop_error" for entry in logs)

@@ -48,6 +48,18 @@ def test_telemetry_config_custom_values():
     assert cfg.preferred_interface == "eth0"
 
 
+def test_telemetry_config_api_key_masked_in_repr():
+    """SecretStr must mask the key wherever the config is logged/dumped.
+
+    This is the entire reason api_key is SecretStr rather than str — an
+    unredacted repr() would defeat it (e.g. via the settings-dump MLflow
+    artifact in training/pipeline_orchestrator.py). Mirrors the equivalent
+    LLMConfig.api_key masking test.
+    """
+    cfg = TelemetryConfig(api_key="secret123")
+    assert "secret123" not in repr(cfg)
+
+
 def test_telemetry_config_port_validation():
     import pytest
 

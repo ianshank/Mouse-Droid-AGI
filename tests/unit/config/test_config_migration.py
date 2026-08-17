@@ -60,6 +60,20 @@ def test_apply_aliases_does_not_log_when_legacy_key_absent() -> None:
     assert logs == []
 
 
+def test_apply_aliases_does_not_log_when_canonical_already_present() -> None:
+    """A discarded legacy value (canonical already set) must not log 'applied'.
+
+    The legacy key is still popped, but nothing was actually applied — the
+    canonical value silently wins. Logging `config_alias_applied` here would
+    be a false positive an operator grepping logs to confirm a migration
+    took effect could be misled by.
+    """
+    target = {"legacy_hz": 30.0, "perception_hz": 10.0}
+    with capture_logs() as logs:
+        apply_aliases(target, {"legacy_hz": "perception_hz"})
+    assert logs == []
+
+
 def test_apply_transforms_logs_config_alias_applied_on_successful_transform() -> None:
     target = {"legacy_ms": 500.0}
     with capture_logs() as logs:
