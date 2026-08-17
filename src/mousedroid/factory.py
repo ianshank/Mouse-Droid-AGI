@@ -3093,6 +3093,46 @@ def build_hook_registry(cfg: Settings, journal: Any) -> Any:
     return registry
 
 
+def _make_consumed_offset_advancer(
+    consumed_offset: list[int], *, log_event: str
+) -> Callable[[int], None]:
+    """Build an ``on_consumed`` callback advancing a shared consumed-offset cell.
+
+    Both slow-cadence coordinator builders (on-device learning, growth
+    distillation) use an identical in-memory "consumed beyond this baseline"
+    trigger-disarm pattern, differing only in which structured-log event name
+    they emit — preserved here via ``log_event`` so neither
+    ``on_device_consumed_offset_advanced`` nor ``growth_consumed_offset_advanced``
+    (both referenced by CLAUDE.md / operator grep runbooks) changes.
+    """
+
+    def _advance_consumed(n_new: int) -> None:
+        consumed_offset[0] += n_new
+        _log.debug(log_event, consumed_total=consumed_offset[0], advanced_by=n_new)
+
+    return _advance_consumed
+
+
+def _build_shared_replay_reader(cfg: Settings) -> LMDBReplayReader:
+    """Construct the replay reader shared by both slow-cadence coordinators.
+
+    Byte-identical across ``build_on_device_coordinator`` and
+    ``build_growth_coordinator`` — both honour any
+    ``cfg.training.replay.source_path`` override and the shared debug-log
+    cadence. Deliberately NOT reused by the main replay-reader builder
+    (~line 1393), which additionally threads ``metrics=metrics``: a third
+    caller needing a parameter only it uses would repeat the exact "leaky
+    kwargs" asymmetry ADR-014 already rejected for a similar merge.
+    """
+    from mousedroid.training.replay.lmdb_reader import LMDBReplayReader
+
+    return LMDBReplayReader(
+        cfg.experience,
+        path_override=cfg.training.replay.source_path,
+        debug_log_every_n=cfg.training.replay_mixer.debug_log_every_n,
+    )
+
+
 def build_on_device_coordinator(
     cfg: Settings,
     *,
@@ -3168,7 +3208,6 @@ def build_on_device_coordinator(
     from mousedroid.learning.on_device.replay_trigger import ReplayTriggerCoordinator
     from mousedroid.learning.on_device.rssm_refiner import RSSMRefiner
     from mousedroid.learning.on_device.slot_store import OnDeviceSlotStore
-    from mousedroid.training.replay.lmdb_reader import LMDBReplayReader
     from mousedroid.world_model.rssm import RSSM
 
     # The capability gate above guarantees ``train_sequence`` — which only the
@@ -3188,11 +3227,7 @@ def build_on_device_coordinator(
     # Mirror the main replay path's reader construction (see build above) so the
     # on-device trigger honours any ``cfg.training.replay.source_path`` override
     # and the shared debug-log cadence instead of reading a different store.
-    reader = LMDBReplayReader(
-        cfg.experience,
-        path_override=cfg.training.replay.source_path,
-        debug_log_every_n=cfg.training.replay_mixer.debug_log_every_n,
-    )
+    reader = _build_shared_replay_reader(cfg)
     slot_store = OnDeviceSlotStore(experience_cfg=cfg.experience, on_device_cfg=on_device_cfg)
 
     # WS-E2: the learner refines the LIVE RSSM world model (deep-copied per
@@ -3231,19 +3266,12 @@ def build_on_device_coordinator(
         """Count NEW replay records since the last consumed baseline (slow probe)."""
         return _count_new_replay_records(reader, consumed=consumed_offset[0], cap=cap)
 
-    def _advance_consumed(n_new: int) -> None:
-        """Advance the consumed baseline by the NEW records a fired cycle drained.
-
-        Wired as the coordinator's ``on_consumed`` callback so the NEXT cycle
-        counts from the new baseline — the trigger disarms until fresh experience
-        accumulates past it again.
-        """
-        consumed_offset[0] += n_new
-        _log.debug(
-            "on_device_consumed_offset_advanced",
-            consumed_total=consumed_offset[0],
-            advanced_by=n_new,
-        )
+    # Wired as the coordinator's ``on_consumed`` callback so the NEXT cycle
+    # counts from the new baseline — the trigger disarms until fresh experience
+    # accumulates past it again.
+    _advance_consumed = _make_consumed_offset_advancer(
+        consumed_offset, log_event="on_device_consumed_offset_advanced"
+    )
 
     def _load_batch() -> dict[str, Tensor]:
         """Materialise one ``(B, T, ...)`` sequence-dict batch from replay.
@@ -3376,7 +3404,6 @@ def build_growth_coordinator(
     from mousedroid.growth.distillation import KnowledgeDistiller
     from mousedroid.growth.slot_store import GrowthSlotStore
     from mousedroid.growth.student import StudentVLAPolicy, VLATeacherModule
-    from mousedroid.training.replay.lmdb_reader import LMDBReplayReader
 
     effective_wm = world_model if world_model is not None else build_world_model(cfg)
 
@@ -3412,11 +3439,7 @@ def build_growth_coordinator(
 
     # Reuse the main replay path's reader so the growth trigger honours any
     # ``source_path`` override and shares the debug-log cadence.
-    reader = LMDBReplayReader(
-        cfg.experience,
-        path_override=cfg.training.replay.source_path,
-        debug_log_every_n=cfg.training.replay_mixer.debug_log_every_n,
-    )
+    reader = _build_shared_replay_reader(cfg)
     cap = growth_cfg.trigger_min_new_records
     # In-memory consumed offset (see build_on_device_coordinator): the trigger
     # arms on records BEYOND the last fired baseline so it disarms until fresh
@@ -3426,13 +3449,9 @@ def build_growth_coordinator(
     def _count_new_records() -> int:
         return _count_new_replay_records(reader, consumed=consumed_offset[0], cap=cap)
 
-    def _advance_consumed(n_new: int) -> None:
-        consumed_offset[0] += n_new
-        _log.debug(
-            "growth_consumed_offset_advanced",
-            consumed_total=consumed_offset[0],
-            advanced_by=n_new,
-        )
+    _advance_consumed = _make_consumed_offset_advancer(
+        consumed_offset, log_event="growth_consumed_offset_advanced"
+    )
 
     sample_batch = _make_growth_latent_sampler(
         effective_wm,
