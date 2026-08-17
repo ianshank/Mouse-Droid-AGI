@@ -295,6 +295,9 @@ jobs:
             - name: Doc hygiene (advisory, exits 0 unless --strict)
               run: python tools/doc_hygiene.py NEXT_STEPS.md
 
+            - name: Ratchet budgets (advisory early warning, exits 0 unless --strict)
+              run: python -m tools.ratchet_budgets
+
             - name: Workforce hook coverage (line gate + advisory branch)
               run: |
                   WORKFORCE_COV_MIN="$(python -c "from tools.claude_hooks.config import load_config; print(load_config().coverage.tools_line_min)")"

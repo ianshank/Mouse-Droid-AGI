@@ -60,6 +60,16 @@ echo "=== Doc Hygiene (advisory) ==="
 # tests/regression/test_next_steps_reconciled.py in the regression stage.
 "$PYTHON_BIN" tools/doc_hygiene.py NEXT_STEPS.md
 
+echo "=== Ratchet Budgets (advisory early warning) ==="
+# WARN-only early-warning signal for this repo's ratchet-down-only budgets
+# (noqa/type:ignore/# hardcoded-ok). Exits 0 unless --strict; the hard
+# ceilings are pinned by test_suppression_budget.py and
+# test_hardcoded_value_marker_budget.py in the regression stage. Invoked as
+# -m (not a direct script path, unlike doc_hygiene.py) because it imports
+# tools.claude_hooks.config, which needs the repo root importable as a
+# package on sys.path.
+"$PYTHON_BIN" -m tools.ratchet_budgets
+
 echo "=== Type Check ==="
 "$PYTHON_BIN" -m mypy src/ --strict --ignore-missing-imports
 

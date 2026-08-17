@@ -37,6 +37,12 @@ def test_missing_file_yields_defaults(tmp_path: Path) -> None:
     assert cfg.freeze.feature_key == "F-008"
     assert cfg.coverage.tools_line_min == 85
     assert cfg.secret_scan.strict is False
+    assert cfg.ratchet_budgets.enabled is True
+    assert {item.name for item in cfg.ratchet_budgets.items} == {
+        "noqa",
+        "type_ignore",
+        "hardcoded_ok",
+    }
 
 
 def test_empty_file_yields_defaults(tmp_path: Path) -> None:
@@ -182,3 +188,90 @@ def test_non_relative_secret_scan_config_is_rejected(tmp_path: Path, config_file
 def test_relative_secret_scan_config_is_accepted(tmp_path: Path) -> None:
     _write_config(tmp_path, "secret_scan:\n    config_file: custom/.gitleaks.toml\n")
     assert load_config(repo_root=tmp_path).secret_scan.config_file == "custom/.gitleaks.toml"
+
+
+# ---------------------------------------------------------------------------
+# ratchet_budgets
+# ---------------------------------------------------------------------------
+
+
+def test_partial_ratchet_budgets_override_keeps_other_defaults(tmp_path: Path) -> None:
+    _write_config(tmp_path, "ratchet_budgets:\n    enabled: false\n")
+    cfg = load_config(repo_root=tmp_path)
+    assert cfg.ratchet_budgets.enabled is False
+    # Untouched: the default three-item budget list survives.
+    assert len(cfg.ratchet_budgets.items) == 3
+
+
+def test_ratchet_budgets_items_round_trip(tmp_path: Path) -> None:
+    _write_config(
+        tmp_path,
+        "ratchet_budgets:\n"
+        "    items:\n"
+        "        - name: custom\n"
+        "          marker: '# custom-marker'\n"
+        "          ceiling: 3\n",
+    )
+    cfg = load_config(repo_root=tmp_path)
+    assert len(cfg.ratchet_budgets.items) == 1
+    item = cfg.ratchet_budgets.items[0]
+    assert item.name == "custom"
+    assert item.ceiling == 3
+    assert item.warn_threshold is None
+    # scope_glob keeps its own default when the override omits it.
+    assert item.scope_glob == "src/mousedroid/**/*.py"
+
+
+def test_ratchet_budget_item_warn_threshold_above_ceiling_is_rejected(tmp_path: Path) -> None:
+    _write_config(
+        tmp_path,
+        "ratchet_budgets:\n"
+        "    items:\n"
+        "        - name: custom\n"
+        "          marker: x\n"
+        "          ceiling: 3\n"
+        "          warn_threshold: 5\n",
+    )
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "ratchet_budgets:\n"
+        "    items:\n"
+        "        - name: ''\n"
+        "          marker: x\n"
+        "          ceiling: 1\n",
+        "ratchet_budgets:\n"
+        "    items:\n"
+        "        - name: x\n"
+        "          marker: '  '\n"
+        "          ceiling: 1\n",
+    ],
+)
+def test_ratchet_budget_item_blank_identifiers_are_rejected(tmp_path: Path, body: str) -> None:
+    _write_config(tmp_path, body)
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+def test_ratchet_budget_item_negative_ceiling_is_rejected(tmp_path: Path) -> None:
+    _write_config(
+        tmp_path,
+        "ratchet_budgets:\n"
+        "    items:\n"
+        "        - name: x\n"
+        "          marker: x\n"
+        "          ceiling: -1\n",
+    )
+    with pytest.raises(ConfigError):
+        load_config(repo_root=tmp_path)
+
+
+def test_ratchet_budgets_unknown_key_is_rejected(tmp_path: Path) -> None:
+    _write_config(tmp_path, "ratchet_budgets:\n    max_items: 5\n")
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(repo_root=tmp_path)
+    assert "max_items" in str(excinfo.value)

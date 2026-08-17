@@ -17,7 +17,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-_SRC = Path(__file__).resolve().parents[2] / "src" / "mousedroid"
+from tools.claude_hooks.config import load_config
+from tools.ratchet_budgets import count_marker_occurrences
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_SRC = _REPO_ROOT / "src" / "mousedroid"
+_SCOPE_GLOB = "src/mousedroid/**/*.py"
 # Budget = the measured count at the time this ratchet was added: 23
 # occurrences across config/migration.py, training/domain_randomization.py,
 # training/replay/mixer.py, validation/{latency_stats,report_store,summary}.py,
@@ -32,16 +37,14 @@ _SRC = Path(__file__).resolve().parents[2] / "src" / "mousedroid"
 # first time, exactly like the ALLOWED_DIR_PREFIXES module-split exemptions
 # above it in check_no_hardcoded_values.py. A single 3-line helper doesn't
 # warrant a new directory-prefix exemption, so it's marked instead.
-_MAX_HARDCODED_OK = 24
-
-
-def _count_hardcoded_ok() -> int:
-    return sum(
-        line.count("# hardcoded-ok")
-        for p in _SRC.rglob("*.py")
-        for line in p.read_text(encoding="utf-8").splitlines()
-    )
+#
+# The ceiling itself now lives in .claude/workforce.yaml
+# (ratchet_budgets.items, name="hardcoded_ok") — see the sibling pattern in
+# test_suppression_budget.py.
 
 
 def test_hardcoded_ok_marker_within_budget() -> None:
-    assert _count_hardcoded_ok() <= _MAX_HARDCODED_OK
+    items = {item.name: item for item in load_config(repo_root=_REPO_ROOT).ratchet_budgets.items}
+    ceiling = items["hardcoded_ok"].ceiling
+    count = count_marker_occurrences(_REPO_ROOT, _SCOPE_GLOB, "# hardcoded-ok")
+    assert count <= ceiling

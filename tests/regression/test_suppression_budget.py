@@ -13,9 +13,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tools.claude_hooks.config import load_config
+from tools.ratchet_budgets import count_marker_occurrences
+
 from tests._pyproject import load_pyproject
 
-_SRC = Path(__file__).resolve().parents[2] / "src" / "mousedroid"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_SRC = _REPO_ROOT / "src" / "mousedroid"
+_SCOPE_GLOB = "src/mousedroid/**/*.py"
 # Budgets = the MEASURED post-purge residual of load-bearing suppressions
 # (untyped 3rd-party boundaries, Pydantic A00x field shadows) PLUS the handful
 # of prose mentions of the literal tokens inside explanatory comments/docstrings.
@@ -40,24 +45,27 @@ _SRC = Path(__file__).resolve().parents[2] / "src" / "mousedroid"
 #   (The 10 stale BLE001/RUF100 waivers in training/observability/
 #   mlflow_logger.py were removed — BLE001 is not enabled in the ruff config,
 #   so the directive was entirely dead.)
-_MAX_TYPE_IGNORE = 8
-_MAX_NOQA = 19
+#
+# The ceilings themselves now live in .claude/workforce.yaml
+# (ratchet_budgets.items), read here via tools.claude_hooks.config.load_config
+# so this hard-fail gate and the ratchet_budget_check hook's early warning can
+# never drift apart on what the ceiling actually is. Counting logic is the
+# same relocated (not changed) tools.ratchet_budgets.count_marker_occurrences.
 
 
-def _count(token: str) -> int:
-    return sum(
-        line.count(token)
-        for p in _SRC.rglob("*.py")
-        for line in p.read_text(encoding="utf-8").splitlines()
-    )
+def _ceiling(name: str) -> int:
+    items = {item.name: item for item in load_config(repo_root=_REPO_ROOT).ratchet_budgets.items}
+    return items[name].ceiling
 
 
 def test_type_ignore_within_budget() -> None:
-    assert _count("type: ignore") <= _MAX_TYPE_IGNORE
+    count = count_marker_occurrences(_REPO_ROOT, _SCOPE_GLOB, "type: ignore")
+    assert count <= _ceiling("type_ignore")
 
 
 def test_noqa_within_budget() -> None:
-    assert _count("noqa") <= _MAX_NOQA
+    count = count_marker_occurrences(_REPO_ROOT, _SCOPE_GLOB, "noqa")
+    assert count <= _ceiling("noqa")
 
 
 # The measured post-hygiene-sprint set of file-level ruff waivers targeting

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from tools.claude_hooks.paths import resolve_repo_root
 
 #: Repo-relative location of the workforce config file.
@@ -191,6 +191,72 @@ class AgentsConfig(BaseModel):
     forbidden_tool_chars: list[str] = Field(default_factory=lambda: ["(", ")", "*"])
 
 
+class RatchetBudgetItem(BaseModel):
+    """A single ratchet-down-only numeric budget tracked for early warning.
+
+    ``marker`` is the literal substring counted per source line — mirrors the
+    inline ``line.count(marker)`` logic the hard-fail regression tests already
+    use (named ``marker``, not ``token``: a keyword argument literally spelled
+    ``token=`` trips ruff's S106 hardcoded-credential heuristic on every
+    construction site, including this class's own defaults below). ``ceiling``
+    is that same hard-fail threshold; ``warn_threshold``, when set, fires a
+    WARN once the count crosses it, *before* the budget goes red, so drift is
+    visible at edit time instead of only at PR time.
+    """
+
+    model_config = _STRICT
+
+    name: str
+    marker: str
+    scope_glob: str = "src/mousedroid/**/*.py"
+    ceiling: int = Field(ge=0)
+    warn_threshold: int | None = Field(default=None, ge=0)
+
+    @field_validator("name", "marker")
+    @classmethod
+    def _reject_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be empty or whitespace-only")
+        return value
+
+    @model_validator(mode="after")
+    def _warn_threshold_within_ceiling(self) -> RatchetBudgetItem:
+        """A warn threshold above the ceiling could never fire before the
+        hard-fail gate does, defeating the point of an early warning."""
+        if self.warn_threshold is not None and self.warn_threshold > self.ceiling:
+            raise ValueError(
+                f"warn_threshold ({self.warn_threshold}) must not exceed ceiling ({self.ceiling})"
+            )
+        return self
+
+
+class RatchetBudgetsConfig(BaseModel):
+    """Ratchet-down-only numeric budgets tracked for early-warning drift.
+
+    Defaults reproduce today's hard-fail-only regression budgets
+    (``tests/regression/test_suppression_budget.py``,
+    ``test_hardcoded_value_marker_budget.py``) exactly — wiring this config in
+    is behavior-neutral until a consumer reads from it. Explicitly out of
+    scope: ``_ALLOWED_SRC_PER_FILE_IGNORES``, a set-membership pin with no
+    "approaching the ceiling" state to warn about in advance.
+    """
+
+    model_config = _STRICT
+
+    enabled: bool = True
+    items: list[RatchetBudgetItem] = Field(
+        default_factory=lambda: [
+            RatchetBudgetItem(name="noqa", marker="noqa", ceiling=19, warn_threshold=17),
+            RatchetBudgetItem(
+                name="type_ignore", marker="type: ignore", ceiling=8, warn_threshold=7
+            ),
+            RatchetBudgetItem(
+                name="hardcoded_ok", marker="# hardcoded-ok", ceiling=24, warn_threshold=22
+            ),
+        ]
+    )
+
+
 class WorkforceConfig(BaseModel):
     """Root workforce configuration."""
 
@@ -204,6 +270,7 @@ class WorkforceConfig(BaseModel):
     worktree: WorktreeConfig = Field(default_factory=WorktreeConfig)
     evidence: EvidenceConfig = Field(default_factory=EvidenceConfig)
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
+    ratchet_budgets: RatchetBudgetsConfig = Field(default_factory=RatchetBudgetsConfig)
 
 
 def load_config(
