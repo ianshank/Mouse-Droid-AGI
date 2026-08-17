@@ -29,7 +29,7 @@ features:
     epic: "Configuration"
     name: "Config overlays validate against the Pydantic schema"
     description: >-
-      Every config/*.yaml overlay loads cleanly against src/mousedroid/config/schema.py
+      Every config/*.yaml overlay loads cleanly against src/mousedroid/config/schema/
       (the single source of truth). Guards the no-hardcoded-values invariant.
     category: "infrastructure"
     priority: "critical"

@@ -16,7 +16,7 @@ bash scripts/ci.sh                                     # the full local gate
 
 ## Gates
 
-- **85% line coverage** — `--cov-fail-under=85` over `src/mousedroid` repo-wide, plus
+- **90% line coverage** — `--cov-fail-under=90` over `src/mousedroid` repo-wide, plus
   `scripts/check_branch_coverage.py` for changed files. Both measure **lines**: coverage.py
   runs with `branch` unset, and the script's name refers to the *git* branch, not branch
   coverage. Do not describe this gate as branch coverage.

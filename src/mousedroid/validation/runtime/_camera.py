@@ -128,7 +128,8 @@ async def capture_camera_frame(
             last_frame = np.asarray(await capture_raw(), dtype=np.uint8)
             per_frame_ms.append((time.monotonic() - frame_start) * 1000.0)
 
-        backend_name = str(getattr(camera, "_backend", camera.__class__.__name__))
+        unwrapped = _unwrap_camera(camera)
+        backend_name = str(getattr(unwrapped, "_backend", unwrapped.__class__.__name__))
 
         saved_to: str | None = None
         if save_path is not None and last_frame is not None:
@@ -148,6 +149,21 @@ async def capture_camera_frame(
         return diagnostics, backend_name
     finally:
         await camera.stop()
+
+
+def _unwrap_camera(camera: object) -> object:
+    """Reach through ``ResilientCamera`` to the concrete driver.
+
+    ``_backend``/``_cfg`` are driver implementation details outside any
+    Protocol — the resilience wrapper only re-exports the
+    ``VisionProtocol``/``RawFrameSourceProtocol`` surface (plus the
+    ``capture_raw_frame`` convention), so introspection unwraps one level
+    via the wrapper's public ``inner`` property to keep working against a
+    wrapped camera. Drivers built without wrapping (e.g. ``mock_hardware``)
+    have no ``inner`` attribute and pass through unchanged.
+    """
+    inner = getattr(camera, "inner", None)
+    return inner if inner is not None else camera
 
 
 def _resolve_raw_frame_capture(
@@ -281,7 +297,7 @@ def _snapshot_jpeg_quality(camera: object) -> int:
     bump quality to 100 for lossless visual inspection or drop to 70 for
     smaller snapshot files in disk-pressed deployments.
     """
-    cfg_obj = getattr(camera, "_cfg", None)
+    cfg_obj = getattr(_unwrap_camera(camera), "_cfg", None)
     if cfg_obj is not None:
         value = getattr(cfg_obj, "snapshot_jpeg_quality", None)
         if isinstance(value, int):

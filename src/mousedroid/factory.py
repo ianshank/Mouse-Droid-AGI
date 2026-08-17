@@ -227,6 +227,10 @@ def build_camera(
     camera constructor so that ``build_feature_extractor`` can select
     the :class:`HailoFeatureExtractor` backend at construction time.
 
+    Real (non-mock) backends are wrapped with circuit breaker + retry,
+    mirroring ``build_esp32_driver``/``build_lidar`` — the camera capture
+    path talks to real hardware over CSI/USB and can transiently fail.
+
     Args:
         cfg: Root settings.
         hailo_runtime: Optional Hailo-8 runtime for accelerated feature extraction.
@@ -239,21 +243,20 @@ def build_camera(
 
         return MockCamera(cfg.camera)
 
+    inner: VisionProtocol
     if cfg.camera.backend == "jetson_csi":
         from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
 
-        return JetsonCSICamera(cfg.camera, hailo_runtime=hailo_runtime)
-
-    if cfg.camera.backend == "picamera2":
+        inner = JetsonCSICamera(cfg.camera, hailo_runtime=hailo_runtime)
+    elif cfg.camera.backend == "picamera2":
         from mousedroid.hardware.camera.imx500 import IMX500Camera
 
-        return IMX500Camera(cfg.camera, hailo_runtime=hailo_runtime)
-
+        inner = IMX500Camera(cfg.camera, hailo_runtime=hailo_runtime)
     # auto: prefer picamera2 only when its stack *actually imports* (spec
     # presence is insufficient — picamera2 can resolve a spec yet fail to
     # import when its libcamera/native bindings are absent), else fall back
     # to jetson_csi.
-    if module_importable("picamera2"):
+    elif module_importable("picamera2"):
         from mousedroid.hardware.camera.imx500 import IMX500Camera
 
         _log.info(
@@ -262,17 +265,21 @@ def build_camera(
             driver="IMX500Camera",
             reason="picamera2_importable",
         )
-        return IMX500Camera(cfg.camera, hailo_runtime=hailo_runtime)
+        inner = IMX500Camera(cfg.camera, hailo_runtime=hailo_runtime)
+    else:
+        from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
 
-    from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
+        _log.info(
+            "camera_backend_resolved",
+            backend="jetson_csi",
+            driver="JetsonCSICamera",
+            reason="picamera2_not_importable",
+        )
+        inner = JetsonCSICamera(cfg.camera, hailo_runtime=hailo_runtime)
 
-    _log.info(
-        "camera_backend_resolved",
-        backend="jetson_csi",
-        driver="JetsonCSICamera",
-        reason="picamera2_not_importable",
-    )
-    return JetsonCSICamera(cfg.camera, hailo_runtime=hailo_runtime)
+    from mousedroid.resilience.resilient_camera import ResilientCamera
+
+    return ResilientCamera(inner, cfg.retry, cfg.circuit_breaker)
 
 
 def build_distance_sensor(cfg: Settings) -> DistanceSensorProtocol:
@@ -1523,56 +1530,6 @@ def _resolve_tracking_uri(raw: str) -> str:
     path_part = raw[len("file:") :]
     abs_path = Path(path_part).resolve()
     return f"file:{abs_path}"
-
-
-def build_weight_update_poller(
-    cfg: Settings,
-    *,
-    metrics: MetricsRegistry | None = None,
-) -> WeightUpdatePollerProtocol | None:
-    """Build the optional Tier C1 OTA weight-update poller (legacy single-engine shim).
-
-    Deprecated: prefer :func:`build_weight_update_pollers` (Tier C1.2)
-    which returns a ``Mapping[str, WeightUpdatePollerProtocol]`` keyed by
-    ``engine_type`` and supports a second world-model poller alongside
-    the policy poller. Retained for backwards compatibility with external
-    callers for one minor-version window.
-
-    Returns ``None`` (poller disabled) when
-    ``cfg.cloud.weight_update.poll_interval_s <= 0.0`` — the default — so
-    deployments without OTA configured produce byte-identical pre-Tier-C1
-    behavior. Always builds a single ``policy`` poller when polling is
-    enabled; world-model OTA is now reachable via the plural
-    :func:`build_weight_update_pollers` factory + the
-    ``cfg.cloud.weight_update.world_model_enabled`` schema flag (Tier
-    C1.2). New callers should migrate.
-
-    Args:
-        cfg: Root settings.
-        metrics: Shared metrics registry; forwarded to the poller for
-            download / mismatch / latency observability.
-
-    Returns:
-        A :class:`WeightUpdatePollerProtocol` implementation or ``None``.
-    """
-    if cfg.cloud.weight_update.poll_interval_s <= 0.0:
-        return None
-
-    from mousedroid.cloud.weight_update_poller import HuggingFaceWeightUpdatePoller
-
-    poller = HuggingFaceWeightUpdatePoller(
-        cfg.cloud.weight_update,
-        repo_id=cfg.cloud.weight_update.policy_repo_id,
-        filename=cfg.cloud.weight_update.policy_filename,
-        engine_type=ENGINE_TYPE_POLICY,
-        metrics=metrics,
-    )
-    _log.info(
-        "weight_update_poller_built",
-        repo_id=cfg.cloud.weight_update.policy_repo_id,
-        poll_interval_s=cfg.cloud.weight_update.poll_interval_s,
-    )
-    return poller
 
 
 def build_weight_update_pollers(

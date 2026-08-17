@@ -101,11 +101,13 @@ def test_build_distance_sensor_real_hardware():
 def test_build_camera_real_hardware_jetson_csi():
     cfg = _real_settings(camera={"backend": "jetson_csi"})
     from mousedroid.factory import build_camera
+    from mousedroid.resilience.resilient_camera import ResilientCamera
 
     camera = build_camera(cfg)
     from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
 
-    assert isinstance(camera, JetsonCSICamera)
+    assert isinstance(camera, ResilientCamera)
+    assert isinstance(camera.inner, JetsonCSICamera)
 
 
 def test_build_camera_real_hardware_auto_fallback(monkeypatch):
@@ -116,9 +118,11 @@ def test_build_camera_real_hardware_auto_fallback(monkeypatch):
     cfg = _real_settings()
     from mousedroid.factory import build_camera
     from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera
+    from mousedroid.resilience.resilient_camera import ResilientCamera
 
     camera = build_camera(cfg)
-    assert isinstance(camera, JetsonCSICamera)
+    assert isinstance(camera, ResilientCamera)
+    assert isinstance(camera.inner, JetsonCSICamera)
 
 
 def test_build_camera_real_hardware_auto_picamera2(monkeypatch):
@@ -132,9 +136,11 @@ def test_build_camera_real_hardware_auto_picamera2(monkeypatch):
     cfg = _real_settings()
     from mousedroid.factory import build_camera
     from mousedroid.hardware.camera.imx500 import IMX500Camera
+    from mousedroid.resilience.resilient_camera import ResilientCamera
 
     camera = build_camera(cfg)
-    assert isinstance(camera, IMX500Camera)
+    assert isinstance(camera, ResilientCamera)
+    assert isinstance(camera.inner, IMX500Camera)
 
 
 def test_build_cognitive_core_with_random_init():

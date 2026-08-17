@@ -470,7 +470,7 @@ class _LifecycleMixin(_TelemetryServerState):
                 origin=self._openclaw_cfg.mac_mini_origin,
                 source="openclaw.mac_mini_origin",
             )
-        api_key = self._cfg.api_key
+        api_key = self._cfg.api_key.get_secret_value() if self._cfg.api_key is not None else None
         auth_cfg = self._cfg.auth
 
         # Use the new CORS middleware from auth module

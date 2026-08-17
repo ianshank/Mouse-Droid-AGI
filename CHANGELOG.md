@@ -8,6 +8,87 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — Tech-debt / code-quality audit: docs accuracy, security hardening, dead-code removal, resilience-wrapper gap closed
+
+A self-reflective SQE/SWE/architect audit across seven axes (tech debt,
+CI/CD health, hardcoded values, backwards-compatible/reusable code,
+dead/redundant code, manageability, enterprise organization), peer-reviewed
+and re-verified before execution. Landed in eight tiers, each independently
+gated by `mypy --strict`, `ruff check`/`ruff format --check`, and the
+relevant test tier:
+
+- **Portfolio/external-visibility fixes** (Tier 0): completed the PR #167
+  brand reframe on the surfaces it missed — `CITATION.cff`,
+  `pyproject.toml`, `src/mousedroid/__init__.py`, `docs/architecture.md`,
+  and the GitHub repo "About" field; corrected three conflicting stale
+  coverage numbers (93%/85%) to the real, enforced 90% floor; dropped the
+  permanently-gray "Release to PyPI" badge (no tag has ever been cut)
+  rather than cutting an unreviewed real release.
+- **Documentation & CI-governance accuracy** (Tier 1): fixed ~40 stale
+  single-file references across 15 docs (including the charter) left after
+  the same-day `config/schema.py` / `telemetry/metrics.py` /
+  `telemetry/server.py` / `validation/runtime.py` package splits;
+  corrected `SECURITY.md`'s stale "advisory" gitleaks description
+  (promoted to blocking 2026-08-07); extended the overdue
+  `onnx-world-model-extras` advisory-promotion window with a dated reason.
+  Also verified already-resolved and struck from `NEXT_STEPS.md`: SHA-pinning
+  GitHub Action references (all five workflow files already consistently
+  pin `actions/checkout`/`actions/setup-python` by SHA with a version
+  comment) and `llm_gateway/__init__.py` lazy-import hardening (the
+  module's own docstring already documents that
+  `AnthropicLLMGateway`/`FallbackLLMGateway` are intentionally not
+  re-exported, per invariant 1).
+- **Security hygiene** (Tier 2): `TelemetryConfig.api_key` is now
+  `SecretStr` (was a plain `str` reachable through an unredacted MLflow
+  settings-dump artifact); removed a dead, misleadingly auth-shaped
+  `getattr(self, "_config", None)` check in the telemetry WS handler;
+  added an honest capability caveat to `RegexInjectionFilter`'s docstring
+  and the charter's cloud-egress section (it's a denylist, not a
+  classifier).
+- **Dependency-PR hygiene** (Tier 3): closed dependabot PR #184 (`mcp` v2,
+  confirmed CI-red exactly as the pin-rationale comment predicted) with an
+  explanation and added a `dependabot.yml` ignore rule for `mcp` major
+  bumps; merged #169/#168 (Action SHA bumps, independently re-verified
+  clean); manually verified #145 (`mlflow-skinny` <4) rather than trusting
+  its green status — 29 failed/17 errored of ~74 mlflow-touching tests
+  against mlflow 3.x's file-store-tracking rejection, left open with the
+  diagnosis posted (see `NEXT_STEPS.md` item 0).
+- **Dead/redundant code** (Tier 4): removed `TensorRTOptimizer` (zero
+  production callers), the deprecated singular
+  `factory.build_weight_update_poller`, and `EWCOnlineLearner` (superseded
+  by `RSSMRefiner`) — porting, not deleting, `test_replay_trigger.py`'s
+  Protocol-stand-in usage so the live `ReplayTriggerCoordinator`'s test
+  coverage wasn't silently thinned; ran the first-ever vulture dead-code
+  audit (447 findings, logged in `NEXT_STEPS.md` item 0a for a dedicated
+  future triage pass).
+- **Mechanical duplication trims** (Tier 5): centralized `_make_gcp_cfg` /
+  `_make_health_monitor` test-fixture builders into `conftest.py` modules;
+  extracted `_validate_relative_slot_dir` (`config/schema/learning.py`)
+  and `digest_file_sha256` (`common/hashing.py`, new) out of the growth /
+  on-device-learning slot stores; added a `config_alias_applied` debug
+  breadcrumb to `config/migration.py`.
+- **USB-C test-tier-mirror gap** (Tier 6): added
+  `tests/regression/test_pr106_{aqa,backwards_compat}.py`, pinning PR
+  #106's `USBCDiscoveryConfig.enabled` gate, the
+  `_resolve_esp32_serial_via_usbc_discovery` override chain, and the
+  boot-race guard — closing the one PR without an AQA/backwards-compat
+  pair.
+- **Resilience-wrapper gap** (Tier 7): `build_camera`'s real (non-mock)
+  backends are now wrapped in a new `ResilientCamera`
+  (`src/mousedroid/resilience/resilient_camera.py`), mirroring
+  `ResilientLidarDriver` — mock unwrapped, real backends get
+  `CircuitBreaker` + `retry_async`. Both the optional
+  `RawFrameSourceProtocol.capture_raw_jpeg` and the non-Protocol
+  `capture_raw_frame` convention (`IMX500Camera`/`JetsonCSICamera`)
+  delegate transparently, so `validation/runtime/_camera.py`'s diagnostic
+  probe and the telemetry dashboard's `isinstance` duck-typing both keep
+  working unchanged. Voice (`UsbSpeaker`) and the LLM gateway already have
+  their own bespoke resilience (exponential backoff; `FallbackLLMGateway`
+  cooldown failover) and were confirmed not to need the generic wrapper —
+  the original framing assumed a per-driver opt-in flag that, on
+  inspection, doesn't exist anywhere in the codebase; ESP32/LiDAR wrap
+  unconditionally via the shared top-level `cfg.retry`/`cfg.circuit_breaker`.
+
 ### Changed — Code hygiene & modularity: 4 module splits, 3 real bugs, 2 new CI gates
 
 A peer-reviewed audit (5 independent research agents extending the original

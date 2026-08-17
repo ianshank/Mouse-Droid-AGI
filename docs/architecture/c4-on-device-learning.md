@@ -47,12 +47,12 @@ flowchart TB
         BuildSwap["build_on_device_hot_swap_source(cfg, *, world_model, metrics)\nreturns None unless enable_hot_swap=True"]
     end
 
-    subgraph Config["src/mousedroid/config/schema.py"]
+    subgraph Config["src/mousedroid/config/schema/"]
         Cfg["OnDeviceLearningConfig (Optional, default None)\n• enabled / enable_hot_swap (default False)\n• trigger_min_new_records / check_interval_s\n• update_steps / learning_rate / ewc_lambda\n• regression_tolerance / held_out_fraction\n• refine_sequence_length / refine_batch_episodes / scoring_seed\n• slot_dir (relative, validator-gated)"]
         MetCfg["MetricsConfig.track_on_device_learning (default True)"]
     end
 
-    subgraph Metrics["src/mousedroid/telemetry/metrics.py"]
+    subgraph Metrics["src/mousedroid/telemetry/metrics/"]
         Counter["{ns}_on_device_learning_reverted_total{reason}\nreason in {regression_bound,\n  integrity_mismatch, exception}\n(pure-add, omitted until first write)"]
     end
 

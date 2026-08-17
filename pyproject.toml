@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "mousedroid"
 version = "0.3.0"
-description = "MouseDroid — Star Wars MSE-6 Agentic World Model on Jetson Orin Nano"
+description = "MouseDroid — Star Wars MSE-6 Autonomous Navigation System on Jetson Orin Nano"
 requires-python = ">=3.10"
 authors = [{ name = "Ian Cruickshank", email = "ianshank@gmail.com" }]
 license = "MIT"

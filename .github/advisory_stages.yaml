@@ -12,11 +12,18 @@ stages:
   - job: onnx-world-model-extras
     workflow: ci.yml
     since: 2026-05-16
-    promote_after_days: 90
+    promote_after_days: 180
     reason: >-
-      Landed PR #92 (Tier B2) with a 7-green-run gate; runs only when CI
-      fires, so the calendar window is generous. Tier C-era follow-up owns
-      the promotion.
+      Landed PR #92 (Tier B2) with a 7-consecutive-green-run gate (not a
+      calendar-day gate — see the promotion-status comment directly above
+      the job in ci.yml, which itself needs a fresh count). Extended
+      2026-08-16 after check_advisory_promotions.py flagged the original
+      90-day window overdue: the real bar is the green-run count, and this
+      pass could not cheaply re-derive the current streak from the Actions
+      API without deep pagination. Next touch: count actual consecutive
+      green runs for this specific job and either promote to blocking (drop
+      continue-on-error, remove this entry) or re-extend with a verified
+      count.
   # gitleaks: promoted advisory -> blocking 2026-08-07 (34 days advisory,
   # green across recent runs incl. runs where other jobs failed) - entry
   # removed because the tracker only covers jobs carrying continue-on-error.

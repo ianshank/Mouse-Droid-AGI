@@ -127,7 +127,7 @@ The orchestrator's `MOUSEDROID_CONFIG` env var only points at the base
 `jetson_production.yaml` (single overlay). To layer the remote-LLM overlay
 on top, use the **comma-separated** `MOUSEDROID_CONFIGS` list var (or the
 `MOUSEDROID_JETSON_CONFIGS` alias) — `resolve_runtime_config_paths()` in
-`src/mousedroid/validation/runtime.py` splits these on `,` and applies the
+`src/mousedroid/validation/runtime/` splits these on `,` and applies the
 overlays left-to-right. The CSV list vars take precedence over the
 single-path `MOUSEDROID_CONFIG` / `MOUSEDROID_JETSON_CONFIG` forms:
 
@@ -203,4 +203,4 @@ Things this overlay does NOT change for operators who never deploy it:
   lines now annotate each pair with `pair_index=0`, so byte-for-byte stderr
   output differs from the pre-F-006 script.
 - `MOUSEDROID_LLM__*` env vars all default to safe values when unset
-  (per `LLMConfig` schema defaults at `src/mousedroid/config/schema.py`).
+  (per `LLMConfig` schema defaults at `src/mousedroid/config/schema/`).

@@ -1,6 +1,6 @@
 # API Reference
 
-The telemetry server (`src/mousedroid/telemetry/server.py`) exposes a config-driven aiohttp REST + WebSocket
+The telemetry server (`src/mousedroid/telemetry/server/`) exposes a config-driven aiohttp REST + WebSocket
 surface. Paths derive from config (`api_prefix`, `ws_path`, `lidar_raw_ws_path`, metrics path) — the tables
 below show the defaults. Auth is a bearer token when a telemetry token is configured; `/metrics` and the
 dashboard pages follow the server's own auth policy.

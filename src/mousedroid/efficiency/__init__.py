@@ -6,7 +6,6 @@ from mousedroid.efficiency.tensorrt import (
     JetsonTensorRTCompiler,
     MockTensorRTCompiler,
     TensorRTCompilerProtocol,
-    TensorRTOptimizer,
 )
 
 __all__ = [
@@ -15,5 +14,4 @@ __all__ = [
     "MockTensorRTCompiler",
     "PowerProfiler",
     "TensorRTCompilerProtocol",
-    "TensorRTOptimizer",
 ]

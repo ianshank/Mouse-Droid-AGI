@@ -1,5 +1,11 @@
 # Self-Healing Core Resilience — Implementation Plan
 
+> **Status: Historical — implemented.** Phases 1-3 (circuit breaker, retry,
+> resilient ESP32 driver wrapper) and Phase 4 (sensor staleness detection)
+> described below have landed in `src/mousedroid/resilience/` and
+> `safety/monitor.py`. Retained as a design record; do not treat the gap
+> table below as current — see the two `[RESOLVED]` annotations.
+
 ## Scope: Core Resilience First
 Circuit Breaker + Retry + Resilient ESP32 Driver Wrapper + Sensor Staleness Detection
 
@@ -11,8 +17,8 @@ Circuit Breaker + Retry + Resilient ESP32 Driver Wrapper + Sensor Staleness Dete
 |---|---|
 | `CircuitBreakerConfig` in schema.py (failure_threshold, recovery_timeout_s, half_open_max_calls) | No circuit breaker implementation — config is defined but unused |
 | `RetryConfig` in schema.py (max_attempts, base_delay_s, max_delay_s, exponential_base) | No retry implementation — config is defined but unused |
-| `SafetyConfig.sensor_stale_s = 0.5` | Never checked — safety monitor ignores sensor timestamps entirely |
-| `_MAX_LOOP_TIME_MS = 200.0` hardcoded in safety/monitor.py | Should come from `SafetyConfig` |
+| `SafetyConfig.sensor_stale_s = 0.5` | `[RESOLVED]` Now checked at `safety/monitor.py:131` |
+| `_MAX_LOOP_TIME_MS = 200.0` hardcoded in safety/monitor.py | `[RESOLVED]` Symbol no longer exists; now sourced from `SafetyConfig` |
 | `BaseESP32Driver` has no retry/CB | Errors propagate raw to orchestrator's `_sense()` try/except |
 | `ObservationProtocol.timestamp` exists | But per-sensor timestamps don't exist — only bundle-level timestamp |
 | Factory builds raw drivers | No resilient wrapper option |

@@ -62,7 +62,7 @@ the cloud baseline.
 
 ## The `on_device_learning:` config block
 
-Defined by `OnDeviceLearningConfig` in `src/mousedroid/config/schema.py`,
+Defined by `OnDeviceLearningConfig` in `src/mousedroid/config/schema/`,
 wired as an `Optional` field on `Settings` (default `None` ⇒ disabled ⇒
 existing YAML loads byte-identically). Every value is config-driven; nothing
 is hardcoded.

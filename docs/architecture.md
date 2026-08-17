@@ -15,7 +15,7 @@ This document uses the [C4 model](https://c4model.com/) (Context → Container �
 ```mermaid
 graph TD
     HumanOp["Human Operator\n(NL commands, monitoring)"]
-    System["MouseDroid System\nAutonomous Star Wars MSE-6 robot\npowered by an Agentic World Model\nrunning on Jetson Orin Nano"]
+    System["MouseDroid System\nAutonomous Star Wars MSE-6 robot\nconfig-driven 30Hz sense-plan-act loop\nrunning on Jetson Orin Nano"]
     PhysWorld["Physical World\n(corridors, obstacles, people)"]
     RemoteMonitor["Remote Monitoring\nPrometheus / Grafana\nmetrics over WiFi"]
     MCPClient["MCP Clients (optional)\nClaude Code / Claude Desktop /\nmcp.client SDK\nauthenticated bearer token"]
@@ -60,7 +60,7 @@ graph TD
             end
         end
         subgraph OpsLayer["Validation / Operations Layer"]
-            RuntimeValidation["Runtime Validation\nvalidation/runtime.py\nshared overlay resolution + factory-backed checks"]
+            RuntimeValidation["Runtime Validation\nvalidation/runtime/\nshared overlay resolution + factory-backed checks"]
             SmokeHarness["Smoke Harness\njetson_validate.sh + jetson_smoke_test.sh + verify_sensors.py"]
         end
         subgraph HWLayer["Hardware Interface Layer"]
@@ -154,8 +154,8 @@ graph TD
     LLM["LLM Gateway optional\nNL to GoalVector\nLocal Llama GGUF"]
 
     TelemetryPub2["Telemetry Publisher\ntelemetry/publisher.py\nasync queue bridge"]
-    MetricsReg2["Metrics Registry\ntelemetry/metrics.py\nPrometheus text rendering"]
-    TelemetryServer2["Telemetry Server\ntelemetry/server.py\nREST /api/v1/* + WebSocket /ws"]
+    MetricsReg2["Metrics Registry\ntelemetry/metrics/\nPrometheus text rendering"]
+    TelemetryServer2["Telemetry Server\ntelemetry/server/\nREST /api/v1/* + WebSocket /ws"]
 
     CLI --> Factory
     Factory --> Orchestrator
@@ -284,7 +284,7 @@ graph TD
     JetsonSmoke["scripts/jetson_smoke_test.sh\nhost-side smoke harness"]
     VerifySensors["scripts/verify_sensors.py\nJSON and human-readable sensor checks"]
     TenPillars["scripts/validate_pillar.sh\nTen Pillars campaign dispatcher\npytest + factory probe × 10\nwrites ten_pillars.log"]
-    RuntimeValidation["validation/runtime.py\nresolve_runtime_config_paths()\nload_runtime_settings()\ncapture_* helpers\nplay_rocky_voice_phrase()"]
+    RuntimeValidation["validation/runtime/\nresolve_runtime_config_paths()\nload_runtime_settings()\ncapture_* helpers\nplay_rocky_voice_phrase()"]
     SettingsLoader["config.loader.load_settings\nYAML + env overlay resolution"]
     Factory["factory.py\nprotocol-based DI"]
     Camera["JetsonCSICamera\nJetson / GStreamer / V4L2 fallback"]
@@ -364,7 +364,7 @@ graph TD
     CheckConfig["_check_config"]
     PatternA["Pattern A — factory smoke\nsafety/world_model/memory/cognitive/reward/curiosity\nexplicit if x is None: return _fail(...)"]
     PatternB["Pattern B — pytest delegation\ncontinual/meta/scaling/growth\npaths resolved against _REPO_ROOT"]
-    RuntimeHelpers["validation/runtime.py\nresolve_runtime_config_paths()\ncapture_camera_frame() / collect_lidar_diagnostics()"]
+    RuntimeHelpers["validation/runtime/\nresolve_runtime_config_paths()\ncapture_camera_frame() / collect_lidar_diagnostics()"]
     FactoryLayer["factory.py — protocol-based DI"]
     TelemetryServer["TelemetryServer (aiohttp)\n/api/v1/health + /ws/v1/lidar/raw"]
 
@@ -433,6 +433,14 @@ Cloud features are **fully optional** — the droid operates identically with `g
 All cloud calls are protected by `CircuitBreaker` + `retry_async` patterns so cloud failures
 never block the 30 Hz control loop.
 
+**Wiring status, verified against `factory.py` — not all five components below are equally
+live.** Only `CloudTelemetrySink` and `CloudExperienceExporter` have `build_cloud_*()` factory
+functions and are threaded into `MouseDroidOrchestrator`'s constructor. `CloudLoggingSink`,
+`CloudMetricsExporter`, and `CloudFirestoreSync` are fully implemented with real unit tests but
+have **no factory builder and zero runtime callers** — structurally the same
+implemented-but-not-wired state as the `meta`/`growth`/`scaling` cognitive pillars described
+elsewhere in this document, just undocumented as such until now. Tracked in `NEXT_STEPS.md`.
+
 ```mermaid
 graph TD
     subgraph Jetson["Jetson Orin Nano"]
@@ -443,11 +451,11 @@ graph TD
     end
 
     subgraph CloudModule["cloud/ module (optional)"]
-        PubSubSink["CloudTelemetrySink\npubsub_sink.py\nmsgpack + CircuitBreaker"]
-        GCSExporter["CloudExperienceExporter\nexperience_exporter.py\nLMDB → GCS shards\nhigh-water mark cursor"]
-        LogSink["CloudLoggingSink\nlogging_sink.py\nstructlog processor"]
-        MonExporter["CloudMetricsExporter\nmonitoring_exporter.py\ngauge → TimeSeries"]
-        FireSync["CloudFirestoreSync\nfirestore_sync.py\nepisodic → Firestore"]
+        PubSubSink["CloudTelemetrySink\npubsub_sink.py\nmsgpack + CircuitBreaker\nWIRED"]
+        GCSExporter["CloudExperienceExporter\nexperience_exporter.py\nLMDB → GCS shards\nhigh-water mark cursor\nWIRED"]
+        LogSink["CloudLoggingSink\nlogging_sink.py\nstructlog processor\nNOT WIRED — no factory builder"]
+        MonExporter["CloudMetricsExporter\nmonitoring_exporter.py\ngauge → TimeSeries\nNOT WIRED — no factory builder"]
+        FireSync["CloudFirestoreSync\nfirestore_sync.py\nepisodic → Firestore\nNOT WIRED — no factory builder"]
         Auth["_auth.py\nADC / service account"]
     end
 
@@ -465,7 +473,6 @@ graph TD
     Orchestrator --> GCSExporter
     ExperienceDB --> GCSExporter
     TelemetryPub --> PubSubSink
-    MetricsReg --> MonExporter
 
     PubSubSink --> PubSub
     GCSExporter --> GCS
@@ -482,17 +489,18 @@ graph TD
     FireSync --> Auth
 ```
 
-**GCP config hierarchy:** `Settings.gcp: GCPConfig | None = None`. When `None`, all
-`build_cloud_*()` factory functions return `None` and the orchestrator skips cloud calls.
+**GCP config hierarchy:** `Settings.gcp: GCPConfig | None = None`. When `None`, both real
+`build_cloud_*()` factory functions (`build_cloud_telemetry_sink`,
+`build_cloud_experience_exporter`) return `None` and the orchestrator skips cloud calls.
 
-| Component | File | GCP Service | Resilience |
-| --------- | ---- | ----------- | ---------- |
-| Telemetry sink | `cloud/pubsub_sink.py` | Pub/Sub | CircuitBreaker (60s recovery) |
-| Experience exporter | `cloud/experience_exporter.py` | Cloud Storage | CircuitBreaker + HWM cursor |
-| Logging sink | `cloud/logging_sink.py` | Cloud Logging | Fire-and-forget (silent drop) |
-| Metrics exporter | `cloud/monitoring_exporter.py` | Cloud Monitoring | Async executor |
-| Firestore sync | `cloud/firestore_sync.py` | Firestore | Per-entry exception handling |
-| Auth | `cloud/_auth.py` | ADC / SA key | Fail-fast at startup |
+| Component | File | GCP Service | Resilience | Wired? |
+| --------- | ---- | ----------- | ---------- | ------ |
+| Telemetry sink | `cloud/pubsub_sink.py` | Pub/Sub | CircuitBreaker (60s recovery) | Yes — `build_cloud_telemetry_sink` |
+| Experience exporter | `cloud/experience_exporter.py` | Cloud Storage | CircuitBreaker + HWM cursor | Yes — `build_cloud_experience_exporter` |
+| Logging sink | `cloud/logging_sink.py` | Cloud Logging | Fire-and-forget (silent drop) | **No** — no factory builder exists |
+| Metrics exporter | `cloud/monitoring_exporter.py` | Cloud Monitoring | Async executor | **No** — no factory builder exists |
+| Firestore sync | `cloud/firestore_sync.py` | Firestore | Per-entry exception handling | **No** — no factory builder exists |
+| Auth | `cloud/_auth.py` | ADC / SA key | Fail-fast at startup | Shared by both wired components |
 
 ---
 
@@ -553,9 +561,9 @@ graph TD
         SafetyMon["SafetyMonitorProtocol\nsafety/monitor.py"]
         Pub["TelemetryPublisherProtocol\ntelemetry/publisher.py"]
         LogBuf["LogRingBuffer\ntelemetry/log_buffer.py"]
-        Settings["Settings\nconfig/schema.py\nMCPConfig + MCPResourcesConfig"]
+        Settings["Settings\nconfig/schema/\nMCPConfig + MCPResourcesConfig"]
         Mem["MemoryTier\nmemory/tier.py"]
-        Metrics["MetricsRegistry\ntelemetry/metrics.py\n+ mcp_requests_total /\n  mcp_tool_calls_total{tool,result} /\n  mcp_request_latency_ms"]
+        Metrics["MetricsRegistry\ntelemetry/metrics/\n+ mcp_requests_total /\n  mcp_tool_calls_total{tool,result} /\n  mcp_request_latency_ms"]
         Resilience["CircuitBreaker / spawn_tracked /\ncancel_and_drain"]
     end
 
@@ -783,8 +791,6 @@ classDiagram
         +build_lidar_feature_extractor(cfg) LidarFeatureExtractor
         +build_cloud_telemetry_sink(cfg) CloudTelemetrySinkProtocol
         +build_cloud_experience_exporter(cfg) CloudExperienceExporterProtocol
-        +build_cloud_metrics_exporter(cfg) CloudMetricsExporterProtocol
-        +build_cloud_logging_sink(cfg) CloudLoggingSinkProtocol
     }
 
     ESP32CommProtocol <|.. MockESP32Driver : implements

@@ -9,6 +9,10 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, MutableMapping
 from typing import Any
 
+from mousedroid.logging.setup import get_logger
+
+_log = get_logger(__name__)
+
 SectionAliasMap = Mapping[str, Mapping[str, str]]
 TransformAlias = tuple[str, Callable[[Any], Any]]
 SectionTransformMap = Mapping[str, Mapping[str, TransformAlias]]
@@ -38,8 +42,10 @@ def apply_aliases(
         if legacy_key not in target:
             continue
         legacy_value = target.pop(legacy_key)
-        if canonical_key not in target:
-            target[canonical_key] = legacy_value
+        if canonical_key in target:
+            continue
+        target[canonical_key] = legacy_value
+        _log.debug("config_alias_applied", legacy_key=legacy_key, canonical_key=canonical_key)
 
 
 def apply_transforms(
@@ -64,6 +70,7 @@ def apply_transforms(
             target[canonical_key] = transform(legacy_value)
         except (TypeError, ValueError, ZeroDivisionError):
             continue
+        _log.debug("config_alias_applied", legacy_key=legacy_key, canonical_key=canonical_key)
 
 
 def migrate_section_aliases(

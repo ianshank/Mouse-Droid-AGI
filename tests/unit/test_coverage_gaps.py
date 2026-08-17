@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -14,25 +14,6 @@ from mousedroid.config.schema import (
     SafetyConfig,
     Settings,
 )
-
-# ---------------------------------------------------------------------------
-# TensorRT optimizer — line 49-55 (enabled=True branch)
-# ---------------------------------------------------------------------------
-
-
-def test_tensorrt_optimizer_enabled():
-    cfg = JetsonConfig(tensorrt_enabled=True, precision="fp16", workspace_gb=1.0, dla_enabled=False)
-    from mousedroid.efficiency.tensorrt import TensorRTOptimizer
-
-    opt = TensorRTOptimizer(cfg)
-    model = torch.nn.Linear(10, 3)
-    sample = torch.randn(1, 10)
-
-    with patch.object(opt, "_compile", return_value=model) as mock_compile:
-        result = opt.optimize(model, sample)
-        mock_compile.assert_called_once_with(model, sample)
-        assert result is model
-
 
 # ---------------------------------------------------------------------------
 # Health monitor — line 102 (_read_sysfs with real file)
@@ -238,9 +219,11 @@ def test_factory_build_camera_picamera2_backend():
     )
     from mousedroid.factory import build_camera
     from mousedroid.hardware.camera.imx500 import IMX500Camera
+    from mousedroid.resilience.resilient_camera import ResilientCamera
 
     camera = build_camera(cfg)
-    assert isinstance(camera, IMX500Camera)
+    assert isinstance(camera, ResilientCamera)
+    assert isinstance(camera.inner, IMX500Camera)
 
 
 # ---------------------------------------------------------------------------

@@ -72,7 +72,7 @@ one view", "access the rover from my phone", "what's the `/dashboard` page".
 **Read:**
 - `src/mousedroid/telemetry/static/dashboard.html` — the unified page (single
   `/ws` feed → camera MJPEG + lidar polar + fusion panel + status).
-- `src/mousedroid/telemetry/server.py` — `_handle_root` (`/`→302) +
+- `src/mousedroid/telemetry/server/` — `_handle_root` (`/`→302) +
   `_handle_dashboard_page` (`/dashboard`).
 - `src/mousedroid/telemetry/frame_builder.py` — `_build_fused_summary` (the
   `fused` field; handles the length-4 / length-5 `valid_mask`).
@@ -100,7 +100,7 @@ The fusion panel reads `TelemetryFrame.fused` (`n_valid`/`n_modalities`/
 **Read:**
 - `src/mousedroid/hardware/camera/jetson_csi.py` — focus on
   `capture_raw_jpeg` + `_frame_to_rgb_for_snapshot`
-- `src/mousedroid/config/schema.py` — `CameraConfig.v4l2_grayscale_extract`
+- `src/mousedroid/config/schema/` — `CameraConfig.v4l2_grayscale_extract`
   field docstring (background on the IMX708 Bayer-misinterpretation)
 - `tests/unit/test_jetson_csi.py` — the test surface that pins the per-
   backend colour-conversion paths.
@@ -122,7 +122,7 @@ MOUSEDROID_MOCK_HARDWARE=true python scripts/verify_sensors.py \
 
 **Read:**
 - `src/mousedroid/factory.py:90-127` — the `build_esp32_driver` branch.
-- `src/mousedroid/config/schema.py` — `ESP32Config.enabled` docstring.
+- `src/mousedroid/config/schema/` — `ESP32Config.enabled` docstring.
 - `tests/integration/test_pr104_esp32_disabled_integration.py` —
   reference tests.
 
@@ -159,7 +159,7 @@ python -m mousedroid.cli.validate_pillars --config config/default.yaml
 **Read:**
 - `src/mousedroid/diagnostics/usbc.py` — pure helper:
   `enumerate_usbc_devices` + `resolve_endpoint`.
-- `src/mousedroid/config/schema.py` — `USBCDiscoveryConfig`,
+- `src/mousedroid/config/schema/` — `USBCDiscoveryConfig`,
   `USBCEndpointSpec`, and the `Settings.usbc_discovery` field.
 - `src/mousedroid/factory.py:_resolve_esp32_serial_via_usbc_discovery` —
   two-condition override (only fires when discovery enabled AND literal
@@ -190,7 +190,7 @@ bash scripts/jetson_full_smoke_run.sh
 **Read:**
 - `src/mousedroid/diagnostics/power_chain.py` — `assert_power_chain`
   three-step probe (battery → send_velocity → emergency_stop timing).
-- `src/mousedroid/config/schema.py` — `ESP32Config.smoke_test_velocity_mps`
+- `src/mousedroid/config/schema/` — `ESP32Config.smoke_test_velocity_mps`
   (`ge=0`, so `0.0` permanently locks to zero-motion) +
   `emergency_stop_budget_ms`.
 - `tests/hardware/test_power_chain_smoke.py` — `@pytest.mark.hardware`-
@@ -255,7 +255,7 @@ Tier C deliberative brain".
 - `src/mousedroid/llm_gateway/fallback_gateway.py` — primary/secondary
   composite (cooldown-based primary retry, concurrent start, safe stop
   fan-out, secondary unexpected-exception guard).
-- `src/mousedroid/config/schema.py` — `LLMConfig.backend`,
+- `src/mousedroid/config/schema/` — `LLMConfig.backend`,
   `fallback_backend`, `fallback_model_name`,
   `fallback_retry_cooldown_s`, `api_key` (`SecretStr`).
 - `src/mousedroid/factory.py:_build_single_llm_gateway` +
@@ -359,12 +359,12 @@ metrics", "the `anthropic_gateway_slow` warning has no counter", "is the
 gateway on `/metrics`?", "cloud-vs-local served split".
 
 **Read:**
-- `src/mousedroid/telemetry/metrics.py` — `inc_llm_tokens`,
+- `src/mousedroid/telemetry/metrics/` — `inc_llm_tokens`,
   `observe_llm_gateway_latency_ms`, `inc_llm_gateway_served`,
   `inc_llm_latency_budget_exceeded`; the `_LLM_TOKEN_TYPES` /
   `_LLM_SERVED_TIERS` / `_LLM_SERVED_OUTCOMES` cardinality frozensets; the
   `if cfg.track_llm_gateway` + `if count > 0` render guards.
-- `src/mousedroid/config/schema.py` — `MetricsConfig.track_llm_gateway` +
+- `src/mousedroid/config/schema/` — `MetricsConfig.track_llm_gateway` +
   `llm_gateway_latency_buckets_ms` (registered in the single
   histogram-bucket `@field_validator`).
 - `src/mousedroid/llm_gateway/anthropic_gateway.py` — success-path records
@@ -439,7 +439,7 @@ presence-checked only.
 **Process:**
 
 1. Add the `Field(default=..., ge=..., le=..., description=...)` to the
-   appropriate Pydantic model in `src/mousedroid/config/schema.py`.
+   appropriate Pydantic model in `src/mousedroid/config/schema/`.
 2. The `description` MUST be ≥ 20 chars + explain *why* the operator
    would change it.
 3. Default MUST preserve legacy behaviour (an existing YAML without the
@@ -468,8 +468,22 @@ shape.
    shaped to match the real driver's output).
 4. Add a `build_<driver>(cfg, ...)` builder in `factory.py`. Honour
    `mock_hardware` AND any per-subsystem `enabled: bool`.
+4a. If the driver talks to real hardware and can transiently fail (serial,
+    USB, CSI/I2C), wrap the real backend in a `ResilientX` class under
+    `src/mousedroid/resilience/` — `CircuitBreaker` + `retry_async` around
+    the same Protocol the driver implements, reusing the existing top-level
+    `cfg.retry`/`cfg.circuit_breaker` config (no new config field). The mock
+    branch stays unwrapped. This is an established, repeated pattern —
+    `ResilientESP32Driver` → `ResilientLidarDriver` → `ResilientCamera`, each
+    docstring naming the prior one as its template — not a one-off;
+    `resilient_camera.py` is the cleanest reference shape (it additionally
+    shows how to transparently delegate an optional, non-Protocol driver
+    capability via `cast()` rather than `getattr()`, so a new suppression
+    isn't needed).
 5. Tests: unit (mock-driven), integration (factory wiring), hardware
-   (rover-only, `@pytest.mark.hardware`).
+   (rover-only, `@pytest.mark.hardware`). If 4a applies, also add a
+   dedicated `tests/unit/resilience/test_resilient_<driver>.py` mirroring
+   `test_resilient_camera.py`.
 6. Update `docs/architecture/` if you added a new external boundary.
 
 ### test-tier-mirror

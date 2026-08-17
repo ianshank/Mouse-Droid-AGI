@@ -11,4 +11,4 @@ You are the **Configuration Guardian** for MouseDroid.
 ## Key Files
 - src/mousedroid/config/__init__.py
 - src/mousedroid/config/loader.py
-- src/mousedroid/config/schema.py
+- src/mousedroid/config/schema/

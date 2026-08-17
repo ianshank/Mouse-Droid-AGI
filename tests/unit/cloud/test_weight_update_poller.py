@@ -348,27 +348,13 @@ async def test_poller_start_is_no_op_when_disabled(tmp_path, capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_factory_build_weight_update_poller_returns_none_when_disabled():
-    """Default ``poll_interval_s = 0.0`` => factory returns ``None``."""
+def test_factory_build_weight_update_loader_returns_none_when_disabled():
+    """Default ``poll_interval_s = 0.0`` => loader factory returns ``None``."""
     from mousedroid.config.schema import Settings
-    from mousedroid.factory import build_weight_update_loader, build_weight_update_poller
+    from mousedroid.factory import build_weight_update_loader
 
     cfg = Settings(mock_hardware=True)
-    assert build_weight_update_poller(cfg) is None
     assert build_weight_update_loader(cfg) is None
-
-
-def test_factory_build_weight_update_poller_returns_instance_when_enabled():
-    """Flipping ``poll_interval_s`` returns a configured poller."""
-    from mousedroid.cloud.protocol import WeightUpdatePollerProtocol
-    from mousedroid.config.schema import Settings
-    from mousedroid.factory import build_weight_update_poller
-
-    cfg = Settings(mock_hardware=True)
-    cfg.cloud.weight_update.poll_interval_s = 30.0
-    poller = build_weight_update_poller(cfg)
-    assert poller is not None
-    assert isinstance(poller, WeightUpdatePollerProtocol)
 
 
 def test_factory_build_weight_update_loader_returns_none_when_enabled_but_no_concrete_loader():

@@ -44,7 +44,7 @@ sequenceDiagram
     participant Br as Browser
     participant Px as Dashboard Proxy
     participant Tx as Telemetry Server (Jetson)
-    participant Cam as JetsonCSICamera
+    participant Cam as ResilientCamera(JetsonCSICamera)
 
     Br->>Px: GET /camera/frame.jpg
     Note over Px: _client_headers()<br/>strips Host, Connection, etc.<br/>injects Authorization: Bearer <token>

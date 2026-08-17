@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from functools import partial
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,6 +15,7 @@ import pytest
 from mousedroid.config.schema import MetricsConfig, TelemetryConfig
 from mousedroid.telemetry.metrics import MetricsRegistry
 from mousedroid.telemetry.protocol import TelemetryFrame
+from tests.unit.telemetry.conftest import _make_health_monitor as _make_health_monitor_base
 
 # Guard: skip all tests if aiohttp is not installed
 aiohttp = pytest.importorskip("aiohttp")
@@ -51,12 +53,7 @@ _STUB_IFACES = [NetworkInterface(name="eth0", ip="10.0.0.1", interface_type="eth
 _STUB_IP = "10.0.0.1"
 
 
-def _make_health_monitor() -> AsyncMock:
-    monitor = AsyncMock()
-    monitor.check_health = AsyncMock(
-        return_value={"status": "ok", "gpu_temp_c": 45.0, "gpu_load_pct": 30.0}
-    )
-    return monitor
+_make_health_monitor = partial(_make_health_monitor_base, gpu_temp_c=45.0, gpu_load_pct=30.0)
 
 
 def _make_server(

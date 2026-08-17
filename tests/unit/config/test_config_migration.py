@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from structlog.testing import capture_logs
 
 from mousedroid.config.migration import (
     apply_aliases,
@@ -37,6 +38,59 @@ def test_apply_aliases_keeps_existing_canonical_value() -> None:
     target = {"legacy_hz": 30.0, "perception_hz": 10.0}
     apply_aliases(target, {"legacy_hz": "perception_hz"})
     assert target == {"perception_hz": 10.0}
+
+
+def test_apply_aliases_logs_config_alias_applied_on_legacy_key() -> None:
+    """A fired legacy-key alias emits a `config_alias_applied` debug breadcrumb."""
+    target = {"legacy_hz": 30.0}
+    with capture_logs() as logs:
+        apply_aliases(target, {"legacy_hz": "perception_hz"})
+    assert any(
+        entry["event"] == "config_alias_applied"
+        and entry["legacy_key"] == "legacy_hz"
+        and entry["canonical_key"] == "perception_hz"
+        for entry in logs
+    )
+
+
+def test_apply_aliases_does_not_log_when_legacy_key_absent() -> None:
+    target = {"perception_hz": 10.0}
+    with capture_logs() as logs:
+        apply_aliases(target, {"legacy_hz": "perception_hz"})
+    assert logs == []
+
+
+def test_apply_aliases_does_not_log_when_canonical_already_present() -> None:
+    """A discarded legacy value (canonical already set) must not log 'applied'.
+
+    The legacy key is still popped, but nothing was actually applied — the
+    canonical value silently wins. Logging `config_alias_applied` here would
+    be a false positive an operator grepping logs to confirm a migration
+    took effect could be misled by.
+    """
+    target = {"legacy_hz": 30.0, "perception_hz": 10.0}
+    with capture_logs() as logs:
+        apply_aliases(target, {"legacy_hz": "perception_hz"})
+    assert logs == []
+
+
+def test_apply_transforms_logs_config_alias_applied_on_successful_transform() -> None:
+    target = {"legacy_ms": 500.0}
+    with capture_logs() as logs:
+        apply_transforms(target, {"legacy_ms": ("canonical_s", milliseconds_to_seconds)})
+    assert any(
+        entry["event"] == "config_alias_applied"
+        and entry["legacy_key"] == "legacy_ms"
+        and entry["canonical_key"] == "canonical_s"
+        for entry in logs
+    )
+
+
+def test_apply_transforms_does_not_log_on_failed_transform() -> None:
+    target = {"legacy_ms": "not-a-number"}
+    with capture_logs() as logs:
+        apply_transforms(target, {"legacy_ms": ("canonical_s", milliseconds_to_seconds)})
+    assert logs == []
 
 
 def test_apply_aliases_skips_missing_legacy_key() -> None:

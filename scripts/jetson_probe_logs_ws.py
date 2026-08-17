@@ -12,10 +12,14 @@ log surface is dead.
 Exit code 0 on PASS, non-zero on FAIL.
 
 Environment:
-    MOUSEDROID_TELEMETRY_HOST   default: 127.0.0.1
-    MOUSEDROID_TELEMETRY_PORT   default: 8080
-    MOUSEDROID_TELEMETRY_TOKEN  bearer token (optional)
-    MOUSEDROID_PROBE_TIMEOUT_S  read budget, default 15
+    MOUSEDROID_TELEMETRY_HOST     default: 127.0.0.1
+    MOUSEDROID_TELEMETRY_PORT     default: 8080
+    MOUSEDROID_TELEMETRY_TOKEN    bearer token (optional)
+    MOUSEDROID_TELEMETRY_API_KEY  legacy X-API-Key auth (optional; ignored
+                                  when a bearer token is also set — the
+                                  server's auth middleware prioritizes
+                                  bearer auth whenever it's enabled)
+    MOUSEDROID_PROBE_TIMEOUT_S    read budget, default 15
 """
 
 from __future__ import annotations
@@ -49,7 +53,12 @@ def _auth_headers() -> dict[str, str]:
         headers["Authorization"] = f"Bearer {token}"
     api_key = os.environ.get("MOUSEDROID_TELEMETRY_API_KEY", "").strip()
     if api_key:
-        headers["X-Telemetry-Api-Key"] = api_key
+        # Must match the server's legacy auth middleware
+        # (telemetry/server/_lifecycle.py::_build_middlewares), which only
+        # ever recognizes X-API-Key / ?api_key=. A prior X-Telemetry-Api-Key
+        # header here never matched that contract, so this path silently
+        # never authenticated.
+        headers["X-API-Key"] = api_key
     return headers
 
 

@@ -1195,6 +1195,101 @@ async def test_capture_camera_frame_honours_snapshot_jpeg_quality(
     assert high_size > low_size
 
 
+@pytest.mark.asyncio
+async def test_capture_camera_frame_backend_name_unwraps_resilient_camera(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``backend_name``/``capture_raw_frame`` resolve through a ResilientCamera wrap.
+
+    ``build_camera`` wraps real (non-mock) backends in ``ResilientCamera``
+    (Tier 7). ``_backend`` and ``capture_raw_frame`` are non-Protocol driver
+    conventions the wrapper doesn't own directly — this pins that the
+    diagnostic path still reports the real backend name and still captures
+    a frame, not ``"ResilientCamera"`` / a ``RuntimeError``.
+    """
+    from mousedroid.config.schema import CircuitBreakerConfig, RetryConfig
+    from mousedroid.resilience.resilient_camera import ResilientCamera
+
+    class _SyncDriverCamera:
+        _backend = "sync_stub"
+
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+        async def capture_raw_frame(self) -> np.ndarray:
+            return np.full((6, 9, 3), 7, dtype=np.uint8)
+
+    wrapped = ResilientCamera(_SyncDriverCamera(), RetryConfig(), CircuitBreakerConfig())
+    monkeypatch.setattr(runtime, "build_camera", lambda cfg: wrapped)
+
+    diagnostics, backend_name = await runtime.capture_camera_frame(
+        Settings(mock_hardware=True),
+    )
+
+    assert backend_name == "sync_stub"
+    assert diagnostics.frame is not None
+    assert diagnostics.frame.shape == (6, 9, 3)
+    assert int(diagnostics.frame[0, 0, 0]) == 7
+
+
+@pytest.mark.asyncio
+async def test_capture_camera_frame_snapshot_jpeg_quality_unwraps_resilient_camera(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """``snapshot_jpeg_quality`` still flows through a ResilientCamera wrap."""
+    pytest.importorskip("PIL", reason="Pillow (mousedroid[telemetry]) encodes the snapshot JPEG")
+
+    from mousedroid.config.schema import CircuitBreakerConfig, RetryConfig
+    from mousedroid.resilience.resilient_camera import ResilientCamera
+
+    class _StubCamera:
+        _backend = "qualstub"
+
+        def __init__(self, cfg_camera: object) -> None:
+            self._cfg = cfg_camera
+
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+        async def capture_raw_frame(self) -> np.ndarray:
+            return (
+                (np.indices((40, 40)).sum(axis=0).astype(np.uint8) * 4)
+                .reshape(40, 40, 1)
+                .repeat(3, axis=2)
+            )
+
+    cfg_high = Settings(mock_hardware=True, camera={"snapshot_jpeg_quality": 95})
+    wrapped_high = ResilientCamera(
+        _StubCamera(cfg_high.camera), RetryConfig(), CircuitBreakerConfig()
+    )
+    monkeypatch.setattr(runtime, "build_camera", lambda _cfg: wrapped_high)
+
+    high_path = tmp_path / "high.jpg"
+    diag_high, _ = await runtime.capture_camera_frame(cfg_high, save_path=high_path)
+    assert diag_high.saved_to is not None
+    high_size = high_path.stat().st_size
+
+    cfg_low = Settings(mock_hardware=True, camera={"snapshot_jpeg_quality": 10})
+    wrapped_low = ResilientCamera(
+        _StubCamera(cfg_low.camera), RetryConfig(), CircuitBreakerConfig()
+    )
+    monkeypatch.setattr(runtime, "build_camera", lambda _cfg: wrapped_low)
+
+    low_path = tmp_path / "low.jpg"
+    await runtime.capture_camera_frame(cfg_low, save_path=low_path)
+    low_size = low_path.stat().st_size
+
+    # Higher quality produces a larger JPEG for the same pixel data.
+    assert high_size > low_size
+
+
 def test_discover_hef_role_fields_from_schema() -> None:
     """``_discover_hef_role_fields`` enumerates every ``*_hef_path`` schema field."""
     from mousedroid.config.schema import HailoConfig

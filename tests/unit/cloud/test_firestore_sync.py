@@ -7,27 +7,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from mousedroid.config.schema import (
-    CircuitBreakerConfig,
-    GCPConfig,
-    GCPFirestoreConfig,
-    RetryConfig,
-)
-
-
-def _make_gcp_cfg(**overrides: Any) -> GCPConfig:
-    """Create a GCPConfig with test defaults."""
-    return GCPConfig(
-        project_id="test-project",
-        robot_id="droid-test",
-        circuit_breaker=CircuitBreakerConfig(
-            failure_threshold=2,
-            recovery_timeout_s=1.0,
-            half_open_max_calls=1,
-        ),
-        retry=RetryConfig(max_attempts=1, base_delay_s=0.01),
-        **overrides,
-    )
+from mousedroid.config.schema import GCPFirestoreConfig
+from tests.unit.cloud.conftest import _make_gcp_cfg
 
 
 def _make_mock_episodic(entries: list[tuple[Any, float]] | None = None) -> MagicMock:

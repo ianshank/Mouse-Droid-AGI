@@ -26,11 +26,9 @@ import threading
 from pathlib import Path
 
 import torch
-import torch.nn as nn
 
 from mousedroid.config.schema import ExperienceConfig, OnDeviceLearningConfig
-from mousedroid.learning.on_device.ewc_online import EWCOnlineLearner
-from mousedroid.learning.on_device.protocol import OnDeviceUpdateResult
+from mousedroid.learning.on_device.protocol import OnDeviceLearner, OnDeviceUpdateResult
 from mousedroid.learning.on_device.replay_trigger import ReplayTriggerCoordinator
 from mousedroid.learning.on_device.slot_store import OnDeviceSlotStore
 
@@ -42,10 +40,28 @@ def _make_store(tmp_path: Path, on_device: OnDeviceLearningConfig) -> OnDeviceSl
     return OnDeviceSlotStore(experience_cfg=experience, on_device_cfg=on_device)
 
 
-def _make_learner(cfg: OnDeviceLearningConfig) -> EWCOnlineLearner:
-    torch.manual_seed(0)
-    model = nn.Sequential(nn.Linear(_INPUT_DIM, 3))
-    return EWCOnlineLearner(cfg, model)
+class _StubOnDeviceLearner:
+    """Minimal :class:`OnDeviceLearner`-conforming stand-in for coordinator tests.
+
+    These tests exercise ``ReplayTriggerCoordinator``'s trigger/threading/
+    persistence behavior, not learner internals, so a fixed-output stub
+    (mirroring ``_ThreadRecordingLearner`` below) is sufficient — no real
+    gradient computation needed.
+    """
+
+    def __init__(self, cfg: OnDeviceLearningConfig) -> None:
+        self._cfg = cfg
+
+    def update(self, batch: torch.Tensor) -> OnDeviceUpdateResult:
+        return OnDeviceUpdateResult(
+            candidate_state_dict={"w": torch.zeros(2)},
+            train_loss=0.0,
+            n_steps=self._cfg.update_steps,
+        )
+
+
+def _make_learner(cfg: OnDeviceLearningConfig) -> OnDeviceLearner:
+    return _StubOnDeviceLearner(cfg)
 
 
 def _batch_provider(n: int = 8) -> torch.Tensor:

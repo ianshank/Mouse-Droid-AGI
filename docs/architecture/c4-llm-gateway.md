@@ -46,7 +46,7 @@ flowchart TB
         OAI["OpenAICompatibleLLMGateway\naiohttp client"]
     end
 
-    subgraph Config["src/mousedroid/config/schema.py"]
+    subgraph Config["src/mousedroid/config/schema/"]
         LLMCfg["LLMConfig\n• backend (Literal)\n• fallback_backend (Literal, LOCAL only)\n• fallback_model_name (Optional)\n• fallback_retry_cooldown_s (gt=0)\n• api_key (SecretStr)\n• model_name / model_path / ..."]
     end
 
