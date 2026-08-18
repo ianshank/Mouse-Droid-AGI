@@ -18,7 +18,6 @@ The legacy v0.3.0 execution-plan phase numbering lives only in
 
 ## ⚡ Current Next Steps (prioritized)
 
-
 1. **[Security — P0] Rotate the `ANTHROPIC_API_KEY`.** The key was exposed in a chat
    transcript — treat it as compromised. Inventory consumers first (rover
    `/etc/mousedroid/docker.env`, GitHub Actions secrets, any dev-machine env), replace on
@@ -40,21 +39,10 @@ The legacy v0.3.0 execution-plan phase numbering lives only in
    under **PR #106 follow-ups** below. Gate for **F-008**. Time-box unchanged: 2 bench
    sessions, then repair-vs-replace.
 3. **[Software blocker — LANDED] ESP32 driver retargeted at stock Waveshare firmware
-   (F-025).** The codec seam shipped: `CMD_ROS_CTRL` `{"T":13,"X","Z"}` velocity,
-   `CMD_HEART_BEAT_SET` chassis failsafe armed at connect, voltage from
-   `FEEDBACK_BASE_INFO`, derived 115 200 baud, encoder-less smoke re-scope
-   (audit R1/R2/R3/R5/R6). Default-`legacy`, so nothing changes until an operator
-   selects it. Architecture: `docs/architecture/c4-esp32-command-set.md`.
-   Merged as PR #185, squash commit
-   `f884abe62d2a502476cfe6a32996b2a57055ca9c` — quoted in full to match the
-   `implemented_in` value in `features.yaml`, so the two can be compared by eye
-   and neither can go ambiguous as the history grows. The nightly
-   `--strict-git` harness job resolves that ref after the working branch is
-   deleted. **Remaining operator action:** the live-rover lever is
-   `MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock` in `/etc/mousedroid/docker.env` —
-   no `config/*.yaml` overlay opts in, because the `config-compat` gate validates
-   overlay edits against the deployed image's schema, so this stays an env override
-   until `deployments/jetson-image.json` is re-pinned.
+   (F-025).** Landed as PR #185 (`f884abe`); full details in CHANGELOG.md.
+   **Remaining operator action:** flip
+   `MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock` in `/etc/mousedroid/docker.env`
+   after `deployments/jetson-image.json` is re-pinned.
 4. **[Ops hygiene — P1] Re-point the rover's `/opt/mousedroid` source** to trunk
    (`claude/markdown-implementation-plan-aVJ2l`). Blocked by pre-existing root-ownership drift
    in the bind-mount (the container writes files as root), so a targeted
