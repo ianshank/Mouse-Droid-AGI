@@ -29,16 +29,37 @@ def _payload(content: str, path: str = "src/a.py") -> dict[str, Any]:
     return {"tool_name": "Write", "tool_input": {"file_path": path, "content": content}}
 
 
+def _make_stub(bindir: Path, name: str, body: str) -> Path:
+    """Create a cross-platform executable stub in *bindir*.
+
+    On Unix: a shebang script (chmod +x).  On Windows: a ``.cmd`` batch file
+    wrapping the same Python one-liner so ``shutil.which`` resolves it.
+    """
+    bindir.mkdir(parents=True, exist_ok=True)
+    if sys.platform == "win32":
+        script = bindir / f"{name}.cmd"
+        # Body is a Python expression string; wrap it in a batch file.
+        script.write_text(
+            f'@"{sys.executable}" -c "{body}" %*\n',
+            encoding="utf-8",
+        )
+    else:
+        script = bindir / name
+        script.write_text(
+            f"#!{sys.executable}\n{body}\n",
+            encoding="utf-8",
+        )
+        script.chmod(script.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    return script
+
+
 def _stub_scanner(tmp_path: Path, *, exit_code: int, message: str = "") -> Path:
     """Create an executable stub standing in for the scanner binary."""
-    script = tmp_path / "bin" / "stub-scanner"
-    script.parent.mkdir(parents=True, exist_ok=True)
-    script.write_text(
-        f"#!{sys.executable}\nimport sys\nprint({message!r})\nsys.exit({exit_code})\n",
-        encoding="utf-8",
+    bindir = tmp_path / "bin"
+    return _make_stub(
+        bindir, "stub-scanner",
+        f"import sys; print({message!r}); sys.exit({exit_code})",
     )
-    script.chmod(script.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-    return script
 
 
 @pytest.fixture
@@ -89,12 +110,7 @@ def test_unexpected_exit_code_is_unavailable(tmp_path: Path, scanner_path: Path)
 
 
 def test_timeout_is_unavailable(tmp_path: Path, scanner_path: Path) -> None:
-    slow = tmp_path / "bin" / "slow-scanner"
-    slow.write_text(
-        f"#!{sys.executable}\nimport time\ntime.sleep(5)\n",
-        encoding="utf-8",
-    )
-    slow.chmod(slow.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    _make_stub(tmp_path / "bin", "slow-scanner", "import time; time.sleep(5)")
     outcome = secret_scan.scan_content(
         "x = 1",
         _config(command="slow-scanner", timeout_s=0.25),
@@ -106,12 +122,10 @@ def test_timeout_is_unavailable(tmp_path: Path, scanner_path: Path) -> None:
 
 def test_allowlist_config_is_passed_when_present(tmp_path: Path, scanner_path: Path) -> None:
     # The stub echoes its argv so we can assert --config was forwarded.
-    script = tmp_path / "bin" / "argv-scanner"
-    script.write_text(
-        f"#!{sys.executable}\nimport sys\nprint(' '.join(sys.argv))\nsys.exit(1)\n",
-        encoding="utf-8",
+    _make_stub(
+        tmp_path / "bin", "argv-scanner",
+        "import sys; print(' '.join(sys.argv)); sys.exit(1)",
     )
-    script.chmod(script.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
     (tmp_path / ".gitleaks.toml").write_text("[extend]\n", encoding="utf-8")
     outcome = secret_scan.scan_content("x", _config(command="argv-scanner"), repo_root=tmp_path)
     assert "--config" in outcome.detail
@@ -119,12 +133,10 @@ def test_allowlist_config_is_passed_when_present(tmp_path: Path, scanner_path: P
 
 
 def test_extra_args_are_forwarded(tmp_path: Path, scanner_path: Path) -> None:
-    script = tmp_path / "bin" / "argv2-scanner"
-    script.write_text(
-        f"#!{sys.executable}\nimport sys\nprint(' '.join(sys.argv))\nsys.exit(1)\n",
-        encoding="utf-8",
+    _make_stub(
+        tmp_path / "bin", "argv2-scanner",
+        "import sys; print(' '.join(sys.argv)); sys.exit(1)",
     )
-    script.chmod(script.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
     outcome = secret_scan.scan_content(
         "x",
         _config(command="argv2-scanner", extra_args=["--verbose"]),
@@ -140,12 +152,10 @@ def test_extra_args_are_forwarded(tmp_path: Path, scanner_path: Path) -> None:
 def test_temp_file_suffix_mirrors_target(
     tmp_path: Path, scanner_path: Path, target: str | None, expected_suffix: str
 ) -> None:
-    script = tmp_path / "bin" / "suffix-scanner"
-    script.write_text(
-        f"#!{sys.executable}\nimport sys\nprint(' '.join(sys.argv))\nsys.exit(1)\n",
-        encoding="utf-8",
+    _make_stub(
+        tmp_path / "bin", "suffix-scanner",
+        "import sys; print(' '.join(sys.argv)); sys.exit(1)",
     )
-    script.chmod(script.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
     outcome = secret_scan.scan_content(
         "x", _config(command="suffix-scanner"), repo_root=tmp_path, target=target
     )
