@@ -51,6 +51,9 @@ _TINY_ARGS = [
 
 def test_tiny_run_writes_stable_finite_report(spike: ModuleType, tmp_path: Path) -> None:
     out = tmp_path / "spike.json"
+    # Snapshot sys.modules BEFORE main() — prior tests may have imported mujoco
+    # via pytest.importorskip. The contract is no NEW import, not none ever.
+    pre_modules = frozenset(sys.modules)
     rc = spike.main([*_TINY_ARGS, "--out", str(out)])
     assert rc == 0
     report = json.loads(out.read_text())
@@ -67,7 +70,10 @@ def test_tiny_run_writes_stable_finite_report(spike: ModuleType, tmp_path: Path)
     for family in ("primitive_latency_ms", "student_latency_ms"):
         for pct in ("p50", "p95", "p99"):
             assert row[family][pct] > 0.0
-    assert "mujoco" not in sys.modules
+    new_modules = frozenset(sys.modules) - pre_modules
+    assert "mujoco" not in new_modules, (
+        "spike distillation imported mujoco — should stay lazy"
+    )
 
 
 def test_deterministic_accuracy_across_runs(spike: ModuleType, tmp_path: Path) -> None:

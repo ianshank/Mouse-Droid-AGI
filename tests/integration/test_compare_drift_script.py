@@ -51,6 +51,10 @@ _TINY_ARGS = [
 
 def test_report_only_run_writes_finite_json(compare_drift: ModuleType, tmp_path: Path) -> None:
     out = tmp_path / "drift.json"
+    # Snapshot sys.modules BEFORE main() — prior tests (e.g. test_sim_episode_generator)
+    # may have already imported mujoco via pytest.importorskip. The contract is that the
+    # synthetic drift path does not ADD a mujoco import, not that no prior test loaded it.
+    pre_modules = frozenset(sys.modules)
     rc = compare_drift.main([*_TINY_ARGS, "--memory", "both", "--out", str(out)])
     assert rc == 0
     report = json.loads(out.read_text())
@@ -61,8 +65,11 @@ def test_report_only_run_writes_finite_json(compare_drift: ModuleType, tmp_path:
             assert math.isfinite(value)
     ablation = report["memory_ablation"]
     assert math.isfinite(ablation["memory_on"]["means"]["latent_h"])
-    # The default synthetic path must never import mujoco.
-    assert "mujoco" not in sys.modules
+    # The default synthetic path must never import mujoco itself.
+    new_modules = frozenset(sys.modules) - pre_modules
+    assert "mujoco" not in new_modules, (
+        "synthetic drift path imported mujoco — should stay lazy"
+    )
 
 
 def test_gate_max_regression_can_fail(compare_drift: ModuleType, tmp_path: Path) -> None:
