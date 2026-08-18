@@ -8,6 +8,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Skills/hooks build-out: regression-pair-scaffold skill, ratchet-budget early warning, slow-cadence loop dedup
+
+Three "identify, don't implement yet" recommendations from the tech-debt
+audit below, built out on their own follow-on branch after that PR merged:
+
+- **`regression-pair-scaffold` skill** (`.claude/skills/regression-pair-scaffold/SKILL.md`):
+  scaffolds the paired `tests/regression/test_<name>_aqa.py` +
+  `test_<name>_backwards_compat.py` files this repo requires per config
+  field/validator/Protocol implementation — hand-written ~36 times already,
+  documented in ~12 places in `CLAUDE.md`, with no skill generating it until
+  now. Cross-linked from `add-schema-field` in `SKILLS.md`.
+- **Ratchet-budget early-warning mechanism**: this repo's `noqa`,
+  `type: ignore`, and `# hardcoded-ok` marker budgets are hard-fail-only with
+  zero advance signal. `tools/claude_hooks/config.py` gained
+  `RatchetBudgetItem`/`RatchetBudgetsConfig` (ceiling + an earlier
+  `warn_threshold`); `tools/ratchet_budgets.py` is the shared pure counting
+  logic behind both a new PostToolUse hook
+  (`tools/claude_hooks/ratchet_budget_check.py`) and the existing hard-fail
+  regression tests (re-pointed to read from the new module — behavior-
+  preserving, same counts and ceilings as before); wired into
+  `scripts/ci.sh` + the `local-gates` CI job.
+- **Shared slow-cadence loop extraction**: `_on_device_update_loop`,
+  `_growth_distill_loop`, and `_consolidation_loop` in
+  `orchestrator/orchestrator.py` were structurally identical modulo names —
+  extracted into a shared `_run_slow_cadence_loop` helper, each call site
+  keeping its own pre-loop guard clause unchanged. `factory.py` gained two
+  small shared helpers (`_make_consumed_offset_advancer`,
+  `_build_shared_replay_reader`) for a byte-identical duplication between
+  `build_on_device_coordinator` and `build_growth_coordinator`. Verified via
+  a new golden characterization test on the structured-log event stream,
+  captured pre-refactor and re-confirmed byte-for-byte identical after.
+  `GrowthDistillationCoordinator`/`ReplayTriggerCoordinator` deliberately
+  stay unmerged — their produce-step shape, empty-check timing, and
+  constructor collaborators genuinely diverge (see ADR-014's precedent for
+  declining a similar merge).
+
 ### Changed — Tech-debt / code-quality audit: docs accuracy, security hardening, dead-code removal, resilience-wrapper gap closed
 
 A self-reflective SQE/SWE/architect audit across seven axes (tech debt,

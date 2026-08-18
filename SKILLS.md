@@ -446,7 +446,9 @@ presence-checked only.
    field must load identically).
 4. Add a regression test in `tests/regression/` pinning the default.
 5. Add an AQA test in `tests/regression/test_pr*_aqa.py` confirming the
-   description + default + range are reachable via `FieldInfo`.
+   description + default + range are reachable via `FieldInfo`. For the
+   full paired shape (AQA + backwards-compat, not just the AQA half), see
+   `regression-pair-scaffold` below.
 6. If the field gates a code branch, add an integration test in
    `tests/integration/` exercising the wiring through `factory.py`.
 
@@ -508,6 +510,31 @@ cleared, `isinstance` against a `runtime_checkable` Protocol (presence only),
 and pinning YAML key-absence instead of the value. Under `PYTHONOPTIMIZE=1`
 (the Jetson entrypoint) `assert` is stripped — use explicit
 `if not ...: raise` in `src/` and in inline shell one-liners.
+
+### regression-pair-scaffold
+
+> Project skill: `.claude/skills/regression-pair-scaffold/SKILL.md` — invoke
+> it, don't paraphrase it. Complements `test-tier-mirror`: that skill answers
+> *where* a test goes, this one answers *what shape* the AQA +
+> backwards-compat pair takes once you know it belongs in `tests/regression/`.
+
+**Trigger:** "add a regression test for this field", "does this feature have
+its AQA/backwards-compat pair yet?", after `add-schema-field` or
+`add-hardware-driver` says a config field or driver needs an AQA test.
+
+**Read:**
+- `.claude/skills/regression-pair-scaffold/SKILL.md` — the two literal file
+  skeletons (angle-bracket placeholders), naming discipline, and the
+  loader-path-vs-direct-construction call
+- `tests/regression/test_pr106_aqa.py` +
+  `tests/regression/test_pr106_backwards_compat.py` — a real, current example
+  pair safe to read verbatim
+
+**Guardrails:** check field hygiene on `model_fields` (`FieldInfo`), never via
+instantiation. Name the backwards-compat file `_backwards_compat.py` in full
+— several existing files drifted to `_backcompat.py`/`_compat.py`; don't
+extend that. Confirm both files actually go red against a temporary revert of
+the change before trusting them green.
 
 ### feature-closeout
 

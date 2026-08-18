@@ -99,13 +99,14 @@ class TestPerformanceJob:
 class TestLocalGatesJob:
     """The deterministic scripts/ci.sh-only gates keep running in GitHub CI."""
 
-    def test_all_seven_gates_present(self) -> None:
+    def test_all_eight_gates_present(self) -> None:
         run_text = _job_run_text(_load_ci_jobs()["local-gates"])
         for needle in (
             "check_settings_identity.py",
             "mypy tools/claude_hooks",
             "validate_skill_commands.py",
             "doc_hygiene.py",
+            "tools.ratchet_budgets",
             "--cov=tools/claude_hooks",
             "check_no_hardcoded_values.py",
             "check_subsystem_boundaries.py",

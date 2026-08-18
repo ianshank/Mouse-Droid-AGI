@@ -44,6 +44,11 @@
             "type": "command",
             "command": "cd \"$CLAUDE_PROJECT_DIR\" && python3 -m tools.claude_hooks.post_edit_check",
             "timeout": 90
+          },
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && python3 -m tools.claude_hooks.ratchet_budget_check",
+            "timeout": 30
           }
         ]
       }

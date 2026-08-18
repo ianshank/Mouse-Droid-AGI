@@ -89,6 +89,30 @@ evidence:
         - reports/local_runs
         - reports/endurance
 
+# Ratchet-down-only numeric budgets, tracked for early-warning drift ahead of
+# the hard-fail regression tests (test_suppression_budget.py,
+# test_hardcoded_value_marker_budget.py, which read their ceilings from here).
+# warn_threshold fires a WARN before ceiling does, so a budget entering the
+# danger zone is visible at edit time, not only when a PR goes red.
+ratchet_budgets:
+    enabled: true
+    items:
+        - name: noqa
+          marker: noqa
+          scope_glob: "src/mousedroid/**/*.py"
+          ceiling: 19
+          warn_threshold: 17
+        - name: type_ignore
+          marker: "type: ignore"
+          scope_glob: "src/mousedroid/**/*.py"
+          ceiling: 8
+          warn_threshold: 7
+        - name: hardcoded_ok
+          marker: "# hardcoded-ok"
+          scope_glob: "src/mousedroid/**/*.py"
+          ceiling: 24
+          warn_threshold: 22
+
 # Subagent asset contract enforced by tests/regression/test_claude_workforce_aqa.py.
 agents:
     directory: .claude/agents

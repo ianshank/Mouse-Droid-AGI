@@ -33,7 +33,7 @@ from mousedroid.logging.setup import get_logger
 from mousedroid.telemetry.frame_builder import build_telemetry_frame
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Awaitable, Callable, Mapping
 
     from mousedroid.agents.base import AgentProtocol
     from mousedroid.cloud.protocol import (
@@ -1943,6 +1943,55 @@ class MouseDroidOrchestrator:
 
         return scores
 
+    async def _run_slow_cadence_loop(
+        self,
+        *,
+        interval: float,
+        started_event: str,
+        failed_event: str,
+        cycle_fn: Callable[[], Awaitable[object]],
+        should_continue: Callable[[], bool] | None = None,
+    ) -> None:
+        """Shared body for the off-loop slow-cadence background loops.
+
+        ``_on_device_update_loop``, ``_growth_distill_loop``, and
+        ``_consolidation_loop`` were structurally identical modulo names: log a
+        start event, then forever sleep-wake-run-a-cycle, logging (not raising)
+        on a failed cycle so a transient error never kills the background task.
+        Each caller keeps its OWN pre-loop guard clause (coordinator-absent /
+        config-absent) so the loop body here is entered only once the caller has
+        already decided to run — tests assert those guards return immediately
+        without ever reaching a real ``clock.sleep``, which folding the guard in
+        here would break.
+
+        Args:
+            interval: Seconds between cycles, read from the caller's config.
+            started_event: Literal event name logged once at entry. Passed as a
+                plain string, never f-string-built here — AGENTS.md invariant 3
+                ("no f-string log messages") applies to a shared helper exactly
+                as much as to a single call site; each caller supplies its own
+                literal (e.g. ``"on_device_update_loop_started"``), so grepping
+                the CALL SITE for the exact event name still works.
+            failed_event: Literal event name logged on a failed cycle, same
+                literal-per-caller discipline as ``started_event``.
+            cycle_fn: The awaitable cycle body to run each wake-up.
+            should_continue: Optional per-iteration continuation check, evaluated
+                after each sleep and before ``cycle_fn``. ``None`` (the default)
+                means "run forever" — matches ``_on_device_update_loop`` and
+                ``_growth_distill_loop``, which have no in-loop exit condition.
+                ``_consolidation_loop`` passes one to preserve its ``break`` on a
+                cleared memory tier.
+        """
+        _log.info(started_event, interval_s=interval)
+        while True:
+            await self._clock.sleep(interval)
+            if should_continue is not None and not should_continue():
+                break
+            try:
+                await cycle_fn()
+            except Exception:
+                _log.warning(failed_event, exc_info=True)
+
     async def _consolidation_loop(self) -> None:
         """Background loop that consolidates episodic memory into semantic index.
 
@@ -1950,21 +1999,26 @@ class MouseDroidOrchestrator:
         Automatically cancelled by ``stop()``.
         """
         interval = self._cfg.memory.consolidation_interval_s
-        _log.info("consolidation_loop_started", interval_s=interval)
-        while True:
-            await self._clock.sleep(interval)
-            if self._memory_tier is None:
-                break
-            try:
-                count = await asyncio.to_thread(self._memory_tier.consolidation.consolidate)
-                if count > 0:
-                    _log.debug(
-                        "consolidation_cycle_complete",
-                        records_consolidated=count,
-                        semantic_size=self._memory_tier.semantic.size,
-                    )
-            except Exception:
-                _log.warning("consolidation_cycle_failed", exc_info=True)
+
+        async def _cycle() -> None:
+            memory_tier = self._memory_tier
+            if memory_tier is None:  # pragma: no cover - should_continue already guards this
+                return
+            count = await asyncio.to_thread(memory_tier.consolidation.consolidate)
+            if count > 0:
+                _log.debug(
+                    "consolidation_cycle_complete",
+                    records_consolidated=count,
+                    semantic_size=memory_tier.semantic.size,
+                )
+
+        await self._run_slow_cadence_loop(
+            interval=interval,
+            started_event="consolidation_loop_started",
+            failed_event="consolidation_cycle_failed",
+            cycle_fn=_cycle,
+            should_continue=lambda: self._memory_tier is not None,
+        )
 
     def _on_device_learning_enabled(self) -> bool:
         """Return ``True`` only when the WS1 on-device block is enabled.
@@ -1989,14 +2043,13 @@ class MouseDroidOrchestrator:
         on_device_cfg = self._cfg.on_device_learning
         if on_device_cfg is None or self._on_device_coordinator is None:
             return
-        interval = on_device_cfg.check_interval_s
-        _log.info("on_device_update_loop_started", interval_s=interval)
-        while True:
-            await self._clock.sleep(interval)
-            try:
-                await self._on_device_coordinator.maybe_update()
-            except Exception:
-                _log.warning("on_device_update_cycle_failed", exc_info=True)
+        coordinator = self._on_device_coordinator
+        await self._run_slow_cadence_loop(
+            interval=on_device_cfg.check_interval_s,
+            started_event="on_device_update_loop_started",
+            failed_event="on_device_update_cycle_failed",
+            cycle_fn=coordinator.maybe_update,
+        )
 
     def _growth_enabled(self) -> bool:
         """Return ``True`` only when the growth-distillation block is enabled.
@@ -2021,14 +2074,13 @@ class MouseDroidOrchestrator:
         growth_cfg = self._cfg.growth
         if growth_cfg is None or self._growth_coordinator is None:
             return
-        interval = growth_cfg.check_interval_s
-        _log.info("growth_distill_loop_started", interval_s=interval)
-        while True:
-            await self._clock.sleep(interval)
-            try:
-                await self._growth_coordinator.maybe_distill()
-            except Exception:
-                _log.warning("growth_distill_cycle_failed", exc_info=True)
+        coordinator = self._growth_coordinator
+        await self._run_slow_cadence_loop(
+            interval=growth_cfg.check_interval_s,
+            started_event="growth_distill_loop_started",
+            failed_event="growth_distill_cycle_failed",
+            cycle_fn=coordinator.maybe_distill,
+        )
 
     async def run(self) -> None:
         """Run the main loop at configured control rate.
