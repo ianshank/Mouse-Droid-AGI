@@ -178,6 +178,15 @@ When delegating to a subagent (security-auditor, code-quality, code-reviewer):
   that imports `cv2` (or any heavy native ext)? Stop. The reload evicts
   the real `cv2` from the import cache and poisons every later test in the
   same `pytest tests/` process. Use `patch.object` on the specific symbol.
+- About to use `Path(value).is_absolute()` to validate a Unix-style path
+  against directory traversal? On Windows, `/etc/foo` is NOT absolute
+  (it lacks a drive letter). Use `PurePosixPath(value).is_absolute()`
+  alongside `Path.is_absolute()` — see `tools/claude_hooks/config.py`.
+- About to create a test-harness stub script with a Unix shebang
+  (`#!`)? On Windows, shebang scripts are not executable via PATH lookup.
+  Use `_make_stub()` from
+  `tests/unit/tools/claude_hooks/test_secret_scan.py` which creates
+  `.cmd` wrappers on Windows and shebang scripts on Unix.
 
 If any of these apply, the PR will bounce on review — fix before
 pushing.

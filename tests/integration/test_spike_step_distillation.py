@@ -71,9 +71,7 @@ def test_tiny_run_writes_stable_finite_report(spike: ModuleType, tmp_path: Path)
         for pct in ("p50", "p95", "p99"):
             assert row[family][pct] > 0.0
     new_modules = frozenset(sys.modules) - pre_modules
-    assert "mujoco" not in new_modules, (
-        "spike distillation imported mujoco — should stay lazy"
-    )
+    assert "mujoco" not in new_modules, "spike distillation imported mujoco — should stay lazy"
 
 
 def test_deterministic_accuracy_across_runs(spike: ModuleType, tmp_path: Path) -> None:

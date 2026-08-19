@@ -162,9 +162,27 @@ from `coverage.tools_line_min` — branch coverage is reported but advisory,
 because no baseline exists and the repository does not claim metrics it does
 not enforce.
 
+**Cross-platform path validation.** `Path.is_absolute()` is
+platform-dependent: `/etc/features.yaml` is absolute on Unix but not on
+Windows (no drive letter). The security validators in `FreezeConfig` and
+`SecretScanConfig` therefore check *both* `Path(value).is_absolute()` and
+`PurePosixPath(value).is_absolute()`, catching Unix-style absolute paths
+regardless of the host OS. The AQA gate
+(`tests/regression/test_cross_platform_portability_aqa.py`) pins this
+invariant.
+
+**Cross-platform test stubs.** The stub-scanner tests create tiny
+executables to stand in for `gitleaks`. On Unix these are shebang scripts;
+on Windows, `shutil.which` requires a `.cmd`/`.exe` extension.
+`_make_stub(bindir, name, body)` in `test_secret_scan.py` abstracts the
+difference, writing `.cmd` batch wrappers on Windows and `#!` shebang
+scripts on Unix. The AQA gate verifies the helper exists and branches on
+`sys.platform`.
+
 ## Related
 
 - `docs/runbooks/claude-workforce-hooks.md` — operator guide, debugging, overrides
 - `docs/runbooks/secret-scanning.md` — the CI-side gitleaks gate (F-015)
 - `docs/architecture/ADR-013-f-number-namespaces.md` — F-number allocation
 - `openspec/changes/mouse-droid-claude-workforce/` — the change bundle and its peer review
+- `tests/regression/test_cross_platform_portability_aqa.py` — portability invariant pins

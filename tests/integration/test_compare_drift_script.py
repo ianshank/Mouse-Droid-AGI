@@ -67,9 +67,7 @@ def test_report_only_run_writes_finite_json(compare_drift: ModuleType, tmp_path:
     assert math.isfinite(ablation["memory_on"]["means"]["latent_h"])
     # The default synthetic path must never import mujoco itself.
     new_modules = frozenset(sys.modules) - pre_modules
-    assert "mujoco" not in new_modules, (
-        "synthetic drift path imported mujoco — should stay lazy"
-    )
+    assert "mujoco" not in new_modules, "synthetic drift path imported mujoco — should stay lazy"
 
 
 def test_gate_max_regression_can_fail(compare_drift: ModuleType, tmp_path: Path) -> None:

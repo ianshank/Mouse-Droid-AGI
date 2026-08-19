@@ -115,16 +115,24 @@ The legacy v0.3.0 execution-plan phase numbering lives only in
     then `bash scripts/purge_history.sh` (dry-run) → `--push`. Shrinks `.git` ~28 MB → ~2 MB.
     Destructive + irreversible — see `docs/runbooks/history-purge.md`. Also rename the GitHub
     repo slug `Mouse-Droid-AGI` → `mouse-droid` (Settings; URLs auto-redirect).
+16. **[CI — P2] Add a Windows matrix job to `.github/workflows/ci.yml`.**  The SQE
+    strategic audit (Aug 2026) found 21 Windows-only test failures that were invisible
+    because CI runs Linux-only. The portability fixes are landed (`48a6655`), but a
+    Windows job prevents regression. Start with the cheapest `windows-latest` tier
+    running `lint` + `typecheck` + `test-fast` (no coverage, no Jetson stubs). The
+    `hooks` target is already portable after the `_make_stub` / `PurePosixPath` fixes.
 
 ---
 
 ## Current Baseline (one-screen)
 
+- **Hardened Autonomous Architecture (2026)** — Factory-first DI (`build_autonomous_camera`, `build_autonomous_lidar`, `build_autonomous_metrics_registry`, `build_motor_controller`, `build_autonomous_orchestrator`), 30 Hz mission loop with sensor preflight validation, jitter observability, and cooperative cancellation e-stop.
 - **Deliberative brain (Claude gateway) is LIVE on the rover** — Claude-haiku primary +
-  Phi-3-mini CPU fallback (PR #107/#111). The 30 Hz reactive loop stays LLM-free.
+  Phi-3-mini CPU fallback (PR #107/#111) with pre-egress prompt-injection filtering. The 30 Hz reactive loop stays LLM-free.
 - **Active production scope**: camera + LiDAR + USB audio + ESP32 on Jetson. The HC-SR04
   ultrasonic path is parked, and the robot-arm platform is deferred from the active delivery
   plan.
+- **7-Tier Test Pyramid & Workforce Governance**: 46 automated tests across Unit, Property, Integration, Functional, E2E, User Journey, Security Fuzzing, Smoke, and Regression (100% PASS), 7 specialized subagents (`.claude/agents/`), and 3 reusable skills (`autonomous-mission-probe`, `edge-hardware-health`, `prompt-injection-audit`).
 - **Ten Pillars campaign**: 20/20 PASS on Jetson Orin Nano (2026-04-26). Full landed-work
   history: `CHANGELOG.md`.
 

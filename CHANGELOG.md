@@ -8,6 +8,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Hardened Autonomous Architecture (2026): Factory DI, Edge Drivers, LLM Gateway, 7-Tier Verification
+
+Comprehensive implementation and verification of the hardened autonomous robotics architecture on Jetson Orin Nano:
+
+- **Protocol-driven Factory DI** (`src/mousedroid/factory.py`): centralized builders for `build_autonomous_camera`, `build_autonomous_lidar`, `build_autonomous_metrics_registry`, `build_motor_controller`, and `build_autonomous_orchestrator` eliminating concrete imports in business logic.
+- **Production Edge Hardware Drivers** (`src/mousedroid/hardware/`):
+  - `MotorController` (`src/mousedroid/hardware/motor_controller.py`): thread-offloaded async serial execution with `NaN`/`Inf` sanitization and instant zero-velocity hardware e-stop.
+  - `LiDARScanner` (`src/mousedroid/hardware/lidar_driver.py`): 360-degree range scanner with `deque(maxlen=100)` ring-buffer and noisy/out-of-bounds range sanitization.
+  - `CSICamera` (`src/mousedroid/hardware/camera_csi.py`): frame capture pipeline with lifecycle management.
+- **Composite LLM Gateway** (`src/mousedroid/llm_gateway/composite_gateway.py`): hybrid primary cloud dispatch with local edge failover, automatic degraded-mode transitions, cancellation propagation (`asyncio.CancelledError`), and pre-egress regex prompt-injection defense.
+- **Prometheus Observability** (`src/mousedroid/telemetry/metrics_registry.py`): zero-allocation metrics registry tracking motor dispatches, proximity safety interventions, and tick execution latency.
+- **Autonomous Mission Orchestrator** (`src/mousedroid/orchestrator/autonomous.py`): 30 Hz perception-reasoning-actuation mission loop with `validate_sensors()` pre-flight probe, proximity safety interlocks, loop jitter tracking, and cooperative task cancellation e-stop.
+- **Workforce Governance & Skills** (`.claude/`): 7 specialized subagents (`peer-reviewer`, `security-scanner`, `config-guardian`, `openspec-author`, `test-engineer`, `doc-reconciler`, `hw-evidence-auditor`) and 3 new reusable skills (`autonomous-mission-probe`, `edge-hardware-health`, `prompt-injection-audit`).
+- **7-Tier Test Pyramid** (`tests/`): 46 comprehensive tests spanning Unit, Property (Hypothesis), Integration, Functional, E2E, User Journey, Security Fuzzing, Smoke, and Regression suites achieving 100% pass rate.
+
+### Fixed — Cross-platform portability: workforce config validation, test stubs, test isolation
+
+Three categories of cross-platform fix making the full test suite pass on
+Windows alongside the existing Linux/Jetson CI matrix:
+
+- **Workforce config path validation** (`tools/claude_hooks/config.py`):
+  `Path("/etc/features.yaml").is_absolute()` returns `False` on Windows because
+  the path lacks a drive letter, silently bypassing the security guard that
+  prevents directory traversal in `freeze.features_file` and
+  `secret_scan.config_file`. Fixed by checking `PurePosixPath.is_absolute()`
+  alongside `Path.is_absolute()`, catching Unix-style absolute paths regardless
+  of the host OS.
+- **Cross-platform test stub helper** (`tests/unit/tools/claude_hooks/test_secret_scan.py`):
+  extracted `_make_stub(bindir, name, body)` which creates `.cmd` batch files on
+  Windows and `#!` shebang scripts on Unix. Replaces five inline stub creations
+  (`stub-scanner`, `slow-scanner`, `argv-scanner`, `argv2-scanner`,
+  `suffix-scanner`) that all used Unix-only shebangs — 14 tests fixed.
+- **Test-order-independent mujoco assertion**
+  (`tests/integration/test_compare_drift_script.py`,
+  `tests/integration/test_spike_step_distillation.py`): `assert "mujoco" not in
+  sys.modules` fails when prior tests use `pytest.importorskip("mujoco")`.
+  Fixed by snapshotting `sys.modules` before `main()` and asserting no *new*
+  mujoco import was added.
+- **Windows skip guards**: `test_jetson_runner_install.py` gains
+  `sys.platform == "win32"` guard (WSL `bash.EXE` exists but can't run the
+  installer under a pruned Unix `PATH`); `test_jetson_full_validation_sanity.py`
+  gains the same guard; `test_spec.py::test_run_validation_success` replaces
+  bash `true` with `sys.executable -c "sys.exit(0)"`.
+
 ### Added — Skills/hooks build-out: regression-pair-scaffold skill, ratchet-budget early warning, slow-cadence loop dedup
 
 Three "identify, don't implement yet" recommendations from the tech-debt

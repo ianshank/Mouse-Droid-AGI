@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "mousedroid": {
+      "command": "python",
+      "args": [
+        "-m",
+        "mousedroid",
+        "--config",
+        "config/default.yaml"
+      ],
+      "env": {
+        "MOUSEDROID_MOCK_HARDWARE": "true",
+        "MOUSEDROID_MCP__ENABLED": "true",
+        "MOUSEDROID_MCP__BIND_TRANSPORT": "true",
+        "MOUSEDROID_MCP__TRANSPORT": "stdio"
+      }
+    }
+  }
+}

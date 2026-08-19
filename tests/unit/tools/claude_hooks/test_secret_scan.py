@@ -57,7 +57,8 @@ def _stub_scanner(tmp_path: Path, *, exit_code: int, message: str = "") -> Path:
     """Create an executable stub standing in for the scanner binary."""
     bindir = tmp_path / "bin"
     return _make_stub(
-        bindir, "stub-scanner",
+        bindir,
+        "stub-scanner",
         f"import sys; print({message!r}); sys.exit({exit_code})",
     )
 
@@ -123,7 +124,8 @@ def test_timeout_is_unavailable(tmp_path: Path, scanner_path: Path) -> None:
 def test_allowlist_config_is_passed_when_present(tmp_path: Path, scanner_path: Path) -> None:
     # The stub echoes its argv so we can assert --config was forwarded.
     _make_stub(
-        tmp_path / "bin", "argv-scanner",
+        tmp_path / "bin",
+        "argv-scanner",
         "import sys; print(' '.join(sys.argv)); sys.exit(1)",
     )
     (tmp_path / ".gitleaks.toml").write_text("[extend]\n", encoding="utf-8")
@@ -134,7 +136,8 @@ def test_allowlist_config_is_passed_when_present(tmp_path: Path, scanner_path: P
 
 def test_extra_args_are_forwarded(tmp_path: Path, scanner_path: Path) -> None:
     _make_stub(
-        tmp_path / "bin", "argv2-scanner",
+        tmp_path / "bin",
+        "argv2-scanner",
         "import sys; print(' '.join(sys.argv)); sys.exit(1)",
     )
     outcome = secret_scan.scan_content(
@@ -153,7 +156,8 @@ def test_temp_file_suffix_mirrors_target(
     tmp_path: Path, scanner_path: Path, target: str | None, expected_suffix: str
 ) -> None:
     _make_stub(
-        tmp_path / "bin", "suffix-scanner",
+        tmp_path / "bin",
+        "suffix-scanner",
         "import sys; print(' '.join(sys.argv)); sys.exit(1)",
     )
     outcome = secret_scan.scan_content(

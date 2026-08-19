@@ -137,11 +137,15 @@ async def test_jsonl_writer_task_recovers_after_stop_start(
 # ---------------------------------------------------------------------------
 
 
+from tests import TEST_EXPERIENCE_MAP_SIZE_GB
+
+
 @pytest.fixture
 def lmdb_cfg(tmp_path: Path) -> HarnessJournalConfig:
     return HarnessJournalConfig(
         backend="lmdb",
         path=tmp_path / "journal_lmdb",
+        map_size_gb=TEST_EXPERIENCE_MAP_SIZE_GB,
         queue_max=8,
         flush_every_n=1,
     )

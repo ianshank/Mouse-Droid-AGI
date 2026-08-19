@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from collections.abc import Generator
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import Settings
@@ -17,6 +20,8 @@ if TYPE_CHECKING:
 def _mock_hardware_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ensure mock hardware is enabled for all tests."""
     monkeypatch.setenv("MOUSEDROID_MOCK_HARDWARE", "true")
+    monkeypatch.setenv("MLFLOW_ALLOW_FILE_STORE", "true")
+
 
 
 @pytest.fixture
