@@ -157,20 +157,23 @@ def test_systemd_notifier_ready_on_init_false() -> None:
 
 def test_build_notifier_returns_none_when_sdnotify_missing() -> None:
     """_build_notifier() returns None when sdnotify is not installed."""
-    # Force sdnotify out of sys.modules so ImportError path executes
+    # Force sdnotify out of sys.modules so ImportError path executes.
+    # Track presence separately: sys.modules may legitimately hold None
+    # (import-blocked marker), which pop(..., None) alone cannot distinguish.
     import sys
 
+    had_key = "sdnotify" in sys.modules
     orig = sys.modules.pop("sdnotify", None)
 
     try:
         result = SystemdNotifier._build_notifier()
         assert result is None
     finally:
-        # Restore previous state
-        if orig is not None:
-            sys.modules["sdnotify"] = orig
-        elif "sdnotify" in sys.modules:
-            del sys.modules["sdnotify"]
+        # Restore the exact previous state
+        if had_key:
+            sys.modules["sdnotify"] = orig  # type: ignore[assignment]
+        else:
+            sys.modules.pop("sdnotify", None)
 
 
 def test_file_heartbeat_path_configurable(tmp_path: Path) -> None:

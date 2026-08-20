@@ -543,6 +543,7 @@ def test_end_phase_backend_failure_is_safe(tracking_uri: str) -> None:
     assert failure_logs[0]["phase"] == "rssm"
     assert failure_logs[0]["error_type"] == "RuntimeError"
 
+
 # ---- mlflow 3.x file-store compat guard (Sprint 3 / F-026) ----------------
 
 
@@ -553,5 +554,3 @@ def test_mlflow_allow_file_store_set_on_import() -> None:
     # The module has already been imported (top of this file), so the
     # setdefault has already fired.
     assert os.environ.get("MLFLOW_ALLOW_FILE_STORE") == "true"
-
-

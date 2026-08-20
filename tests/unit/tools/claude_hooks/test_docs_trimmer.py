@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from tools.claude_hooks.docs_trimmer import check_claude_md_lines, main
 
 
@@ -50,17 +51,39 @@ def test_check_claude_md_lines_missing_file(tmp_path: Path) -> None:
 
 def test_main_cli_success(tmp_path: Path) -> None:
     """main() returns 0 when check passes."""
-    with patch(
-        "tools.claude_hooks.docs_trimmer.check_claude_md_lines",
-        return_value=(True, 100, 250),
+    (tmp_path / "CLAUDE.md").write_text("Line 1\n", encoding="utf-8")
+    with (
+        patch("tools.claude_hooks.docs_trimmer.resolve_repo_root", return_value=tmp_path),
+        patch(
+            "tools.claude_hooks.docs_trimmer.check_claude_md_lines",
+            return_value=(True, 100, 250),
+        ),
     ):
         assert main() == 0
 
 
-def test_main_cli_failure(tmp_path: Path) -> None:
-    """main() returns 1 and writes error message to stderr when check fails."""
-    with patch(
-        "tools.claude_hooks.docs_trimmer.check_claude_md_lines",
-        return_value=(False, 300, 250),
+def test_main_cli_failure(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """main() returns 1 and writes over-budget message to stderr when check fails."""
+    (tmp_path / "CLAUDE.md").write_text("Line 1\n", encoding="utf-8")
+    with (
+        patch("tools.claude_hooks.docs_trimmer.resolve_repo_root", return_value=tmp_path),
+        patch(
+            "tools.claude_hooks.docs_trimmer.check_claude_md_lines",
+            return_value=(False, 300, 250),
+        ),
     ):
         assert main() == 1
+    assert "exceeding" in capsys.readouterr().err
+
+
+def test_main_cli_missing_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """main() reports a distinct not-found error when CLAUDE.md is absent."""
+    with (
+        patch("tools.claude_hooks.docs_trimmer.resolve_repo_root", return_value=tmp_path),
+        patch("tools.claude_hooks.docs_trimmer.check_claude_md_lines") as mock_check,
+    ):
+        assert main() == 1
+    mock_check.assert_not_called()
+    err = capsys.readouterr().err
+    assert "not found" in err
+    assert "exceeding" not in err

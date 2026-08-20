@@ -114,10 +114,12 @@ git push -u origin <change-id>
 
 ### Step 5: Teardown and Cleanup
 
-Once the PR is merged into the default branch, remove the worktree checkout and delete the local tracking branch:
+Once the PR is merged into the default branch, return to the primary repository
+checkout (whatever directory it lives in on your host), then remove the worktree
+and delete the local tracking branch:
 
 ```bash
-cd ../Gronk-Droid-Jetson-Nano
+cd <path-to-primary-repo-root>
 git worktree remove ../mdcw-<change-id>
 git branch -d <change-id>
 ```
