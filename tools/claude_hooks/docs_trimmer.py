@@ -60,7 +60,17 @@ def check_claude_md_lines(repo_root: Path | None = None) -> tuple[bool, int, int
 
 def main() -> int:
     """CLI entry point for CI and pre-commit checks."""
-    is_valid, current_lines, max_lines = check_claude_md_lines()
+    root = resolve_repo_root()
+    claude_md = root / "CLAUDE.md"
+    if not claude_md.is_file():
+        print(
+            f"ERROR: Root CLAUDE.md not found at {claude_md}. "
+            f"The core instructions file is required (DocsConfig.core_max_lines gate).",
+            file=sys.stderr,
+        )
+        return 1
+
+    is_valid, current_lines, max_lines = check_claude_md_lines(repo_root=root)
     if not is_valid:
         print(
             f"ERROR: Root CLAUDE.md has {current_lines} lines, exceeding the "

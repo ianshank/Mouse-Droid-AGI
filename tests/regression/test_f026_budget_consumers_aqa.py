@@ -40,11 +40,14 @@ _BUDGET_CONSUMERS: list[tuple[str, list[str]]] = [
             "tools/claude_hooks/docs_trimmer.py",
         ],
     ),
-    # Workforce coverage thresholds — already consumed by the coverage-gate skill
+    # Workforce coverage threshold — consumed by the dedicated tools coverage
+    # gate in scripts/ci.sh (reads load_config().coverage.tools_line_min).
+    # NOTE: the schema module (tools/claude_hooks/config.py) does NOT count
+    # as a consumer — declaring a field is not reading it.
     (
         "CoverageConfig.tools_line_min",
         [
-            "tools/claude_hooks/config.py",
+            "scripts/ci.sh",
         ],
     ),
 ]
@@ -53,6 +56,14 @@ _BUDGET_CONSUMERS: list[tuple[str, list[str]]] = [
 def _file_exists(rel_path: str) -> bool:
     """Check if a consumer file exists on disk."""
     return (_REPO / rel_path).exists()
+
+
+def _reads_field(rel_path: str, field_name: str) -> bool:
+    """Check that a consumer file's text actually references the budget field."""
+    path = _REPO / rel_path
+    if not path.is_file():
+        return False
+    return field_name in path.read_text(encoding="utf-8", errors="replace")
 
 
 class TestBudgetConsumers:
@@ -68,7 +79,7 @@ class TestBudgetConsumers:
         field_dotpath: str,
         consumer_paths: list[str],
     ) -> None:
-        """Assert that at least one consumer module exists for each budget field."""
+        """Assert at least one consumer exists AND references each budget field."""
         if not consumer_paths:
             pytest.fail(
                 f"Budget field {field_dotpath!r} has no declared consumer. "
@@ -81,6 +92,20 @@ class TestBudgetConsumers:
             pytest.fail(
                 f"Budget field {field_dotpath!r} declares consumers "
                 f"{consumer_paths!r} but none exist on disk."
+            )
+
+        # Existence is not consumption: at least one consumer must actually
+        # reference the field by name, so a consumer that silently drops the
+        # read (or is hollowed out) fails this gate.
+        field_name = field_dotpath.rsplit(".", 1)[-1]
+        reading = [p for p in existing if _reads_field(p, field_name)]
+
+        if not reading:
+            pytest.fail(
+                f"Budget field {field_dotpath!r} declares consumers "
+                f"{existing!r} but none of them reference {field_name!r}. "
+                f"The field is declared yet enforced nowhere — the exact "
+                f"defect class F-026 exists to prevent."
             )
 
     def test_budget_registry_is_non_empty(self) -> None:
