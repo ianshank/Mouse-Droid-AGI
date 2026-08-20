@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 from unittest.mock import patch
 
@@ -99,11 +100,9 @@ async def test_read_gpu_temp_value_error() -> None:
     assert temp == 0.0
 
 
-def test_read_sysfs_returns_content(tmp_path: pytest.TempPathFactory) -> None:
+def test_read_sysfs_returns_content(tmp_path: Path) -> None:
     """_read_sysfs reads file contents as a string."""
-    from pathlib import Path
-
-    sysfs_file = Path(tmp_path) / "test_sysfs"  # type: ignore[arg-type]
+    sysfs_file = tmp_path / "test_sysfs"
     sysfs_file.write_text("42000\n")
     result = HealthMonitor._read_sysfs(str(sysfs_file))
     assert result == "42000\n"
@@ -133,11 +132,10 @@ async def test_check_health_default_power_mode() -> None:
     assert result.get("power_mode") == "15W"
 
 
-def test_read_sysfs_handles_utf8_and_special_chars(tmp_path: pytest.TempPathFactory) -> None:
-    """_read_sysfs must safely read utf-8 encoded text with replacement on error."""
-    from pathlib import Path
-
-    sysfs_file = Path(tmp_path) / "test_sysfs_utf8"  # type: ignore[arg-type]
-    sysfs_file.write_bytes(b"52000\n")
+def test_read_sysfs_handles_invalid_utf8(tmp_path: Path) -> None:
+    """_read_sysfs must not raise on undecodable bytes — errors="replace" applies."""
+    sysfs_file = tmp_path / "test_sysfs_utf8"
+    sysfs_file.write_bytes(b"52000\xff\n")
     result = HealthMonitor._read_sysfs(str(sysfs_file))
-    assert result == "52000\n"
+    assert result.startswith("52000")
+    assert "�" in result  # the invalid byte decodes to the replacement char

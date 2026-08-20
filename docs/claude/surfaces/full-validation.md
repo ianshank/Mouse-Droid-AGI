@@ -10,7 +10,7 @@ bash scripts/jetson_full_validation.sh
 
 ## Validation Discipline
 
-1. **Composition Over Reimplication**: The script composes existing tooling (`ci.sh`,
+1. **Composition Over Reimplementation**: The script composes existing tooling (`ci.sh`,
    `verify_sensors.py`, `jetson_smoke_test.sh`, `translate_mission.py`, `lidar_telemetry_probe.py`,
    `validate_pillars`).
 2. **Cold-Then-Warm Execution**:
