@@ -160,16 +160,15 @@ def test_build_notifier_returns_none_when_sdnotify_missing() -> None:
     # Force sdnotify out of sys.modules so ImportError path executes
     import sys
 
-    _missing = object()  # sentinel to detect "not in sys.modules"
-    orig = sys.modules.pop("sdnotify", _missing)  # type: ignore[arg-type]
+    orig = sys.modules.pop("sdnotify", None)
 
     try:
         result = SystemdNotifier._build_notifier()
         assert result is None
     finally:
         # Restore previous state
-        if orig is not _missing:
-            sys.modules["sdnotify"] = orig  # type: ignore[assignment]
+        if orig is not None:
+            sys.modules["sdnotify"] = orig
         elif "sdnotify" in sys.modules:
             del sys.modules["sdnotify"]
 

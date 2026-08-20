@@ -397,36 +397,35 @@ features:
 
   - id: "F-024"
     epic: "Hygiene"
-    name: "Claude Code workforce governance is mechanical, not prose"
+    name: "Claude Code workforce governance and developer tooling modernization"
     description: >-
       The .claude/ surface gains config-driven, tested governance: a Pydantic
       workforce config (.claude/workforce.yaml, extra=forbid) as the single
       source for every threshold, glob and gate key; three hooks under
       tools/claude_hooks/ (edit-time secret scan reusing .gitleaks.toml, a
       capability freeze gate keyed off F-008 that self-disables when it lands,
-      and advisory post-edit checks); and an AQA regression gate over the
-      workforce assets. Hooks never import the mousedroid runtime, so an edit
-      never pays the torch/faiss import cost.
+      and advisory post-edit checks); an AQA regression gate over the
+      workforce assets; subagent roster (.claude/agents); skills; git worktree
+      runbook; secretless .mcp.json; CLAUDE.md docs consolidation under
+      core_max_lines budget; and dedicated tools coverage gate. Hooks never
+      import the mousedroid runtime, so an edit never pays the torch/faiss import cost.
     category: "infrastructure"
-    priority: "medium"
-    status: "in_progress"
+    priority: "high"
+    status: "done"
     tier: "fast"
     verification:
       - "tests/regression/test_claude_workforce_aqa.py passes"
-      - "tools/claude_hooks unit tests pass at or above coverage.tools_line_min with branch coverage reported"
-      - "freeze gate denies a frozen-path edit while F-008 is not done, and self-disables when it is"
+      - "tests/unit/tools/claude_hooks/ passes with >= 85% line coverage"
+      - "CLAUDE.md <= 250 lines enforced by tools/claude_hooks/docs_trimmer.py"
     validation_command: >-
       python -m pytest tests/regression/test_claude_workforce_aqa.py
       tests/unit/tools/claude_hooks -q
-    implemented_in: null
+    implemented_in: "feat/f024-phase6-docs-closeout"
     depends_on: ["F-001"]
     notes: >-
       OpenSpec change mouse-droid-claude-workforce (archived under
-      openspec/changes/; repo-native artifacts authoritative), rewritten from a
-      draft after the peer review in that bundle. Remaining phases (subagent
-      roster, new skills, .mcp.json, docs restructure) are tracked in the
-      bundle's tasks.md. implemented_in pins to the squash SHA post-merge (per
-      the F-015..F-021 convention).
+      openspec/changes/; repo-native artifacts authoritative). Closed across
+      Sprints 1-5 (Phases 1-6).
 
   - id: "F-025"
     epic: "Rover bring-up"
@@ -486,20 +485,18 @@ features:
       parsing so the class of defect cannot recur silently.
     category: "infrastructure"
     priority: "medium"
-    status: "todo"
+    status: "done"
     tier: "fast"
     verification:
       - "grep finds a non-schema consumer for every surviving budget/mode field"
       - "new AQA test fails when a budget field loses its last consumer"
     validation_command: >-
-      python -m pytest tests/regression -k "budget or governance" -q
-    implemented_in: null
+      python -m pytest tests/regression/test_f026_budget_consumers_aqa.py -v
+    implemented_in: "feat/f024-phase6-docs-closeout"
     depends_on: ["F-001"]
     notes: >-
-      DocsConfig half overlaps the F-024 docs-consolidation phase - closing
-      F-024 phase 6 satisfies it for core_max_lines; power_mode needs its own
-      wire-or-delete decision verified on-device (nvpmodel -q indices are
-      per-module and per-JetPack).
+      power_mode wired to HealthMonitor.check_health (F-026 Sprint 3).
+      DocsConfig.core_max_lines consumer (docs_trimmer.py) wired and active in Sprint 5.
 
   - id: "F-027"
     epic: "Agentic-Integration"

@@ -54,6 +54,10 @@ echo "=== Claude Workforce Config (.claude/workforce.yaml) ==="
 c = load_config(); print(f'workforce config OK: freeze={c.freeze.feature_key} \
 frozen_paths={len(c.freeze.frozen_paths)}')"
 
+echo "=== Docs Core Max Lines Check (DocsConfig.core_max_lines) ==="
+# Enforces that root CLAUDE.md stays under budget (F-026 / F-024 Phase 6).
+"$PYTHON_BIN" -m tools.claude_hooks.docs_trimmer
+
 echo "=== Doc Hygiene (advisory) ==="
 # WARN-only drift guard for the forward-looking planning doc (F-016). Exits 0
 # unless --strict; the hard post-reconciliation budget is pinned by

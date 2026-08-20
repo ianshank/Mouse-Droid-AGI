@@ -45,10 +45,10 @@ from external MCP clients and to harden it for field operation.
 
 ## P1 — Operator UI
 
-- [ ] Ship a minimal connection recipe for **Claude Desktop**: a JSON snippet
+- [x] Ship a minimal connection recipe for **Claude Desktop**: a JSON snippet
       for `mcp.servers.mousedroid` pointing at `python -m mousedroid` with the
       stdio transport. Include in `docs/MCP_OPERATOR_GUIDE.md`.
-- [ ] Same for **Claude Code** (`.mcp.json` template).
+- [x] Same for **Claude Code** (`.mcp.json` template).
 
 ## P1 — Telemetry / dashboards
 

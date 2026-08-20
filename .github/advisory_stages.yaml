@@ -56,3 +56,12 @@ stages:
       the promotion clock exists. Promotion requires triaging the current
       vulnerability findings (upstream-dependent) rather than a green
       window alone.
+  - job: test-windows
+    workflow: ci.yml
+    since: 2026-08-20
+    promote_after_days: 30
+    reason: >-
+      Windows cross-platform gate gates the 21 cross-platform fixes already
+      landed and prevents regressions on the primary dev environment. Short
+      promotion window — the fixes are well-tested locally; 30 consecutive
+      green days in CI before promoting to blocking.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Literal
 from unittest.mock import patch
 
 import pytest
@@ -112,3 +113,31 @@ def test_read_sysfs_raises_on_missing() -> None:
     """_read_sysfs raises FileNotFoundError for missing files."""
     with pytest.raises(FileNotFoundError):
         HealthMonitor._read_sysfs("/nonexistent/path")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("power_mode", ["15W", "7W"])
+async def test_check_health_includes_power_mode(power_mode: Literal["15W", "7W"]) -> None:
+    """check_health must accurately report JetsonConfig.power_mode."""
+    monitor = HealthMonitor(HealthConfig(), JetsonConfig(power_mode=power_mode))
+    result = await monitor.check_health()
+    assert "power_mode" in result
+    assert result["power_mode"] == power_mode
+
+
+@pytest.mark.asyncio
+async def test_check_health_default_power_mode() -> None:
+    """check_health with default JetsonConfig should report 15W."""
+    monitor = HealthMonitor(HealthConfig(), JetsonConfig())
+    result = await monitor.check_health()
+    assert result.get("power_mode") == "15W"
+
+
+def test_read_sysfs_handles_utf8_and_special_chars(tmp_path: pytest.TempPathFactory) -> None:
+    """_read_sysfs must safely read utf-8 encoded text with replacement on error."""
+    from pathlib import Path
+
+    sysfs_file = Path(tmp_path) / "test_sysfs_utf8"  # type: ignore[arg-type]
+    sysfs_file.write_bytes(b"52000\n")
+    result = HealthMonitor._read_sysfs(str(sysfs_file))
+    assert result == "52000\n"

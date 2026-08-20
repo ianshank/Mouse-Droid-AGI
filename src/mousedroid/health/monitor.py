@@ -87,6 +87,7 @@ class HealthMonitor:
             "status": status,
             "gpu_temp_c": gpu_temp,
             "gpu_load_pct": gpu_load,
+            "power_mode": self._jetson_cfg.power_mode,
         }
 
     @staticmethod
@@ -99,5 +100,5 @@ class HealthMonitor:
         Returns:
             File contents as string.
         """
-        with open(path) as fh:
+        with open(path, encoding="utf-8", errors="replace") as fh:
             return fh.read()
