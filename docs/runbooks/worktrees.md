@@ -108,7 +108,7 @@ git commit -m "feat(<scope>): <description>
 
 <rationale>
 
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+Co-Authored-By: <agent-or-co-author> <email>"
 git push -u origin <change-id>
 ```
 
