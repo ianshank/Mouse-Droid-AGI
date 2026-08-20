@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Sprint 5: Docs Consolidation & F-024 Closeout (Phase 6)
+
+Documentation consolidation, line-budget enforcement, and feature closeout:
+
+- **Root `CLAUDE.md` Consolidation**: Trimmed root instructions to 94 lines (budget `<= 250` lines
+  defined in `.claude/workforce.yaml`), keeping evergreen invariants, 12-job CI pipeline,
+  collaboration directive (I-6), freeze rule, and surface index.
+- **Subsystem-Scoped Surface Contracts**: Scaffolded 8 nested per-directory `CLAUDE.md` files
+  (`orchestrator/`, `llm_gateway/`, `hardware/`, `telemetry/`, `learning/`, `growth/`,
+  `world_model/`, `arm/`).
+- **Cross-Cutting Operational Surfaces**: Created `docs/claude/surfaces/` with `ci-gates.md`,
+  `full-validation.md`, `usbc-smoke.md`, `mcp-evaluation.md`, and index `README.md`.
+- **Docs Trimmer Tool & F-026 Consumer**: Created `tools/claude_hooks/docs_trimmer.py` as the active
+  consumer for `DocsConfig.core_max_lines`. Resolved xfail in `tests/regression/test_f026_budget_consumers_aqa.py`
+  (all 9 budget consumer tests passing).
+- **F-024 Feature Closeout**: Closed F-024 in `features.yaml` (`status: "done"`, `implemented_in` set)
+  and marked `mouse-droid-claude-workforce` as `implemented` in `openspec/project.md` and `tasks.md`.
+
 ### Added — Sprint 4: MCP Configuration + Git Worktree Isolation (F-024 Phase 5)
 
 Workforce integration for Model Context Protocol (MCP) and multi-agent development isolation:

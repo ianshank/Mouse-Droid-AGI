@@ -49,7 +49,7 @@ class CloudLoggingSink:
 
     async def start(self) -> None:
         """Initialise the Cloud Logging client."""
-        from google.cloud import logging as cloud_logging
+        import google.cloud.logging as cloud_logging
 
         from mousedroid.cloud._auth import resolve_credentials
 

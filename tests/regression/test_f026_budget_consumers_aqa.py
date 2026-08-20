@@ -35,13 +35,8 @@ _BUDGET_CONSUMERS: list[tuple[str, list[str]]] = [
     (
         "DocsConfig.core_max_lines",
         [
-            # Consumer: Sprint 5 will wire a CLAUDE.md trimmer that reads
-            # this field. Until then, the AQA test is pinned with the
-            # planned consumer path so it documents the intent and fails
-            # visibly if the path drifts.
-            # NOTE: this entry is currently EXPECTED to be absent on disk
-            # until Sprint 5 lands. The test is marked xfail for this
-            # specific entry only.
+            # Consumer: tools/claude_hooks/docs_trimmer.py checks that root
+            # CLAUDE.md does not exceed core_max_lines (F-026 / F-024 Phase 6).
             "tools/claude_hooks/docs_trimmer.py",
         ],
     ),
@@ -81,14 +76,6 @@ class TestBudgetConsumers:
             )
 
         existing = [p for p in consumer_paths if _file_exists(p)]
-
-        # DocsConfig.core_max_lines consumer is planned for Sprint 5 —
-        # xfail until the trimmer lands.
-        if field_dotpath == "DocsConfig.core_max_lines" and not existing:
-            pytest.xfail(
-                "DocsConfig.core_max_lines consumer (docs_trimmer.py) "
-                "not yet wired — Sprint 5 deliverable."
-            )
 
         if not existing:
             pytest.fail(

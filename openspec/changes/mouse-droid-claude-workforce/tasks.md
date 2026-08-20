@@ -69,31 +69,31 @@ labels are navigation, not structure.
 
 **Phase 3 — subagents (roster reviews its own successors from 3.1 on)**
 
-- [ ] 3.1 `.claude/agents/peer-reviewer.md` first (exemplar, D-4) — reviews every
+- [x] 3.1 `.claude/agents/peer-reviewer.md` first (exemplar, D-4) — reviews every
       subsequent task's diff.
-- [ ] 3.2 `security-scanner`, `config-guardian`.
-- [ ] 3.3 `openspec-author`, `test-engineer`.
-- [ ] 3.4 `doc-reconciler`, `hw-evidence-auditor`. First auditor run attached to the PR —
+- [x] 3.2 `security-scanner`, `config-guardian`.
+- [x] 3.3 `openspec-author`, `test-engineer`.
+- [x] 3.4 `doc-reconciler`, `hw-evidence-auditor`. First auditor run attached to the PR —
       expected findings: the 2026-07-12 evidence gap (stays deferred) and the README
       coverage claim (fixed at 6.5).
-- [ ] 3.5 AQA green over all seven: platform-supported frontmatter keys, bare tool names
+- [x] 3.5 AQA green over all seven: platform-supported frontmatter keys, bare tool names
       (reject `(` / `*` tokens), each file ≤ 60 lines.
 
 **Phase 4 — skills (existing three byte-untouched)**
 
-- [ ] 4.1 Verify-only proof: `git diff` shows zero changes to
+- [x] 4.1 Verify-only proof: `git diff` shows zero changes to
       `.claude/skills/{sim-test,robot-arm-trainer,train-policy}/SKILL.md`;
       `test_next_steps_reconciled.py` + skill validator green.
-- [ ] 4.2 New skill `openspec-change` (active).
-- [ ] 4.3 New skill `coverage-gate` (active) — dedicated tools-coverage invocation +
+- [x] 4.2 New skill `openspec-change` (active).
+- [x] 4.3 New skill `coverage-gate` (active) — dedicated tools-coverage invocation +
       advisory branch report + PR delta table.
-- [ ] 4.4 New skill `evidence-commit` (active) — tracked-artifact path AND declared
+- [x] 4.4 New skill `evidence-commit` (active) — tracked-artifact path AND declared
       local-only chain path per D-4/evidence config.
-- [ ] 4.5 New skill `worktree-flow` (active).
-- [ ] 4.6 New skill `jetson-smoke` — documents both the RUN-MOTION consent phrase and the
+- [x] 4.5 New skill `worktree-flow` (active).
+- [x] 4.6 New skill `jetson-smoke` — documents both the RUN-MOTION consent phrase and the
       `MOUSEDROID_SMOKE_ALLOW_MOTION` mechanical gate; Tier-3 section `frozen` with the
       typed-consent unfreeze condition.
-- [ ] 4.7 `.github/skills/jetson-hardware-debug` disposition: recommended
+- [x] 4.7 `.github/skills/jetson-hardware-debug` disposition: recommended
       placeholder-swap of both IPv4 literals (real values live in
       `docs/runbooks/claude-code-on-jetson.md`) then widen the AQA sweep to that
       directory; fallback = declared exclusion with reason in the AQA docstring.
@@ -101,16 +101,16 @@ labels are navigation, not structure.
 
 **Phase 5 — MCP + worktrees**
 
-- [ ] 5.1 `.mcp.json`: `mousedroid` server per `docs/MCP_OPERATOR_GUIDE.md` (+
+- [x] 5.1 `.mcp.json`: `mousedroid` server per `docs/MCP_OPERATOR_GUIDE.md` (+
       `MOUSEDROID_MOCK_HARDWARE` expansion default `true`) + GitHub MCP (token via env
       expansion; no literals).
-- [ ] 5.2 Tick the `.mcp.json` checkbox at `docs/MCP_NEXT_STEPS.md:51`.
-- [ ] 5.3 `docs/runbooks/worktrees.md`; dogfood — Phase 6 is executed inside a worktree
+- [x] 5.2 Tick the `.mcp.json` checkbox at `docs/MCP_NEXT_STEPS.md:51`.
+- [x] 5.3 `docs/runbooks/worktrees.md`; dogfood — Phase 6 is executed inside a worktree
       created by `worktree-flow`.
-- [ ] 5.4 Evaluate-first notes for Grafana/HF MCP committed under
+- [x] 5.4 Evaluate-first notes for Grafana/HF MCP committed under
       `docs/claude/surfaces/` (decision recorded; servers NOT added).
-- [ ] 5.5 Smoke: one read-only GitHub-MCP call from a session; transcript in the PR.
-- [ ] 5.6 AQA: `.mcp.json` parses, is secretless (gitleaks-clean), and the `mousedroid`
+- [x] 5.5 Smoke: one read-only GitHub-MCP call from a session; transcript in the PR.
+- [x] 5.6 AQA: `.mcp.json` parses, is secretless (gitleaks-clean), and the `mousedroid`
       entry matches the operator guide.
 
 **Phase 6 — docs consolidation (LAST, so it documents reality)**
@@ -128,23 +128,23 @@ labels are navigation, not structure.
 > path drift so `doc-reconciler`'s first run (3.4) doesn't re-flag
 > already-fixed spots as new findings.
 
-- [ ] 6.1 Root CLAUDE.md trim to `docs.core_max_lines`: evergreen sections + corrected
+- [x] 6.1 Root CLAUDE.md trim to `docs.core_max_lines`: evergreen sections + corrected
       CI-pipeline section + orchestration directive (I-6) + freeze rule + surface map.
-- [ ] 6.2 Nested per-directory CLAUDE.md files for subsystem-scoped surface contracts.
-- [ ] 6.3 `docs/claude/surfaces/` + index for cross-cutting surfaces; `doc-reconciler`
+- [x] 6.2 Nested per-directory CLAUDE.md files for subsystem-scoped surface contracts.
+- [x] 6.3 `docs/claude/surfaces/` + index for cross-cutting surfaces; `doc-reconciler`
       verifies zero broken references.
-- [ ] 6.4 AGENTS.md dedupe on its declared worker-contract axis.
+- [x] 6.4 AGENTS.md dedupe on its declared worker-contract axis.
 - [x] 6.5 README.md truth-fix: "85% branch coverage" → "85% line coverage" (branch
       is measured + reported for `tools/claude_hooks/` only, and stays advisory until
       its own promotion change). **Deviation:** landed with Phases 1–2 rather than in
       the docs phase — the claim was false the moment branch measurement arrived, and
       the dev-governance spec's truthful-claims requirement forbids leaving it.
-- [ ] 6.6 Extended banned-token AQA sweep over nested CLAUDE.md + surfaces (repo slug
+- [x] 6.6 Extended banned-token AQA sweep over nested CLAUDE.md + surfaces (repo slug
       allowlisted); `test_portfolio_reframe_aqa.py` stays green.
-- [ ] 6.7 Dedicated tools-coverage stage live in `scripts/ci.sh`
+- [x] 6.7 Dedicated tools-coverage stage live in `scripts/ci.sh`
       (`--cov=tools/claude_hooks --cov-branch`, line gate mirrored from
       `coverage.tools_line_min`; branch advisory) + `TestCiSh` pin additions.
-- [ ] 6.8 Close out: F-024 → `done` (`validation_command` set, `implemented_in` set);
+- [x] 6.8 Close out: F-024 → `done` (`validation_command` set, `implemented_in` set);
       registry row → `implemented`; CHANGELOG entry.
 
 **Explicitly deferred (separate changes, do not fold in)**

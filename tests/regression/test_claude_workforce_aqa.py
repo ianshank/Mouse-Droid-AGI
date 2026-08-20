@@ -342,7 +342,16 @@ def test_legacy_commands_dir_stays_deleted() -> None:
 
 @pytest.mark.parametrize(
     "module",
-    ["config", "freeze_gate", "hookio", "logging_setup", "paths", "portability", "secret_scan"],
+    [
+        "config",
+        "docs_trimmer",
+        "freeze_gate",
+        "hookio",
+        "logging_setup",
+        "paths",
+        "portability",
+        "secret_scan",
+    ],
 )
 def test_hook_package_modules_are_present(module: str) -> None:
     assert (_HOOK_PACKAGE / f"{module}.py").is_file()
