@@ -601,3 +601,49 @@ class HostEnvConfig(BaseModel):
             "Points at the repo checkout on the rover by default."
         ),
     )
+
+
+class MotorLimitsConfig(BaseModel):
+    """Physical safety limits for rover drive motors."""
+
+    max_linear_velocity: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=3.0,
+        description="Maximum permissible linear velocity limit in metres per second.",
+    )
+    max_angular_velocity: float = Field(
+        default=1.5,
+        ge=0.0,
+        le=4.0,
+        description="Maximum permissible angular velocity limit in radians per second.",
+    )
+    watchdog_timeout_s: float = Field(
+        default=0.5,
+        ge=0.1,
+        le=2.0,
+        description="Watchdog emergency stop timeout in seconds when no heartbeat is received.",
+    )
+
+
+class MotorControllerConfig(BaseModel):
+    """Configuration for generic async motor controller drivers."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Enable motor controller driver subsystem.",
+    )
+    serial_port: str = Field(
+        default="/dev/ttyUSB0",
+        description="Default fallback serial port for motor controller UART.",
+    )
+    baudrate: int = Field(
+        default=115200,
+        ge=9600,
+        le=921600,
+        description="Serial baudrate for controller communication.",
+    )
+    limits: MotorLimitsConfig = Field(
+        default_factory=MotorLimitsConfig,
+        description="Physical safety velocity limits and watchdog timeout settings.",
+    )

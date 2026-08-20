@@ -32,6 +32,10 @@ def _run(args: list[str], report_root: Path) -> subprocess.CompletedProcess[str]
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="bash unavailable")
+@pytest.mark.skipif(
+    __import__("sys").platform == "win32",
+    reason="jetson_full_validation.sh requires Unix PATH semantics",
+)
 class TestArgSurface:
     def test_help_exits_zero(self, tmp_path: Path) -> None:
         result = _run(["--help"], tmp_path)

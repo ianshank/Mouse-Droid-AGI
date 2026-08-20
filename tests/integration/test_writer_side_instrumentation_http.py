@@ -109,8 +109,9 @@ async def _drive_subsystems(registry: MetricsRegistry, tmp_path: Path) -> None:
     # 1. Replay reader
     from mousedroid.training.replay.lmdb_reader import LMDBReplayReader
 
-    _populate_replay(tmp_path, n=3)
-    reader = LMDBReplayReader(_experience_cfg(tmp_path), metrics=registry)
+    replay_path = tmp_path / "replay_active"
+    _populate_replay(replay_path, n=3)
+    reader = LMDBReplayReader(_experience_cfg(replay_path), metrics=registry)
     async for _chunk in reader.stream(chunk_size=10):
         pass
 
@@ -161,8 +162,9 @@ async def test_metrics_endpoint_surfaces_pr_a2_families(
             from mousedroid.training.replay.lmdb_reader import LMDBReplayReader
             from mousedroid.vla.policy import MockVLA, VLAObservation
 
-            _populate_replay(tmp_path, n=2)
-            reader = LMDBReplayReader(_experience_cfg(tmp_path))  # no metrics
+            replay_path = tmp_path / "replay_default"
+            _populate_replay(replay_path, n=2)
+            reader = LMDBReplayReader(_experience_cfg(replay_path))  # no metrics
             async for _chunk in reader.stream(chunk_size=10):
                 pass
             MockVLA(action_dim=3).predict(VLAObservation(h=torch.zeros(1, 4), z=torch.zeros(1, 4)))

@@ -16,6 +16,10 @@
 .agents/*
 !.agents/skills/
 !.agents/agents/
+.gemini/
+.gemini_scratch/
+.serena/
+
 
 # Python
 __pycache__/

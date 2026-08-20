@@ -65,6 +65,7 @@ from mousedroid.config.schema.hardware import (
     HostEnvConfig,
     JetsonConfig,
     LidarConfig,
+    MotorControllerConfig,
     UltrasonicConfig,
     USBCDiscoveryConfig,
 )
@@ -205,6 +206,10 @@ class Settings(BaseSettings):
     surprise: SurpriseConfig = Field(default_factory=_settings_default_factory(SurpriseConfig))
     safety: SafetyConfig = Field(default_factory=_settings_default_factory(SafetyConfig))
     esp32: ESP32Config = Field(default_factory=_settings_default_factory(ESP32Config))
+    motor: MotorControllerConfig = Field(
+        default_factory=_settings_default_factory(MotorControllerConfig),
+        description="Async motor controller driver configuration.",
+    )
     ultrasonic: UltrasonicConfig | None = Field(
         None,
         description="Required if mock_hardware=false",

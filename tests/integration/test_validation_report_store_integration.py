@@ -25,11 +25,14 @@ from mousedroid.validation.report_store import (
     read_report_history,
     record_report,
 )
+from tests import TEST_EXPERIENCE_MAP_SIZE_GB
 
 
 def _settings_with_journal(backend: str, path: Path) -> Settings:
     """Build Settings whose harness journal uses ``backend`` at ``path``."""
-    journal_cfg = HarnessJournalConfig.model_validate({"backend": backend, "path": path})
+    journal_cfg = HarnessJournalConfig.model_validate(
+        {"backend": backend, "path": path, "map_size_gb": TEST_EXPERIENCE_MAP_SIZE_GB}
+    )
     return Settings(harness=HarnessConfig(journal=journal_cfg))
 
 

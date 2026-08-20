@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -21,8 +22,8 @@ _DOC = _REPO_ROOT / "docs" / "jetson-runner-setup.md"
 
 _BASH = shutil.which("bash")
 _BASH_AVAILABLE = pytest.mark.skipif(
-    _BASH is None,
-    reason="bash unavailable on this host",
+    _BASH is None or sys.platform == "win32",
+    reason="bash unavailable or Windows (WSL bash lacks Unix PATH semantics)",
 )
 
 

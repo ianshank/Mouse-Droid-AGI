@@ -91,9 +91,9 @@ graph TD
     Telemetry -- "REST / WebSocket" --> Monitoring
 ```
 
-Full C4 diagrams (Context → Container → Component → Code) live in [`docs/architecture/c4-overview.md`](docs/architecture/c4-overview.md).
+Full C4 diagrams (Context → Container → Component → Code) live in [`docs/architecture/c4-overview.md`](docs/architecture/c4-overview.md) and the comprehensive [Hardened Autonomous Architecture Guide](docs/architecture/autonomous-hardened-architecture.md).
 
-**Runtime / validation alignment.** `src/mousedroid/validation/runtime.py` centralises config-overlay resolution and factory-backed checks for camera, mic, speaker, and LiDAR; the smoke and validate scripts reuse that same layer. The USB-C smoke gate, the cloud/local LLM gateway, and the sim-first RSSM pretraining path all sit **outside** the 30 Hz reactive loop — RSSM → MCTS → ESP32 stays deterministic and LLM-free. See [`docs/runbooks/jetson-rover-smoke.md`](docs/runbooks/jetson-rover-smoke.md), [`docs/architecture/c4-usbc-smoke.md`](docs/architecture/c4-usbc-smoke.md), and [`docs/architecture/c4-llm-gateway.md`](docs/architecture/c4-llm-gateway.md).
+**Runtime / validation alignment.** `src/mousedroid/validation/runtime.py` centralises config-overlay resolution and factory-backed checks for camera, mic, speaker, and LiDAR; the smoke and validate scripts reuse that same layer. The USB-C smoke gate, the cloud/local LLM gateway with pre-egress prompt-injection filtering, and the sim-first RSSM pretraining path all sit **outside** the 30 Hz reactive loop — sense-plan-act stays deterministic and LLM-free. See [`docs/runbooks/jetson-rover-smoke.md`](docs/runbooks/jetson-rover-smoke.md), [`docs/architecture/c4-usbc-smoke.md`](docs/architecture/c4-usbc-smoke.md), and [`docs/architecture/c4-llm-gateway.md`](docs/architecture/c4-llm-gateway.md).
 
 ---
 

@@ -150,7 +150,10 @@ def test_git_rev_ok_rejects_bad_refs(ref: str | None) -> None:
 # run_validation
 # --------------------------------------------------------------------------- #
 def test_run_validation_success() -> None:
-    assert spec.run_validation(_feat("F-001", validation_command="true")) is None
+    # Use the current interpreter for portability — bash `true` does not exist
+    # on Windows cmd.exe (PR #160 pattern).
+    cmd = f'"{sys.executable}" -c "import sys; sys.exit(0)"'
+    assert spec.run_validation(_feat("F-001", validation_command=cmd)) is None
 
 
 def test_run_validation_failure_includes_tail() -> None:

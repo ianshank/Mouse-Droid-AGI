@@ -252,3 +252,67 @@ IQL_EXP_ADVANTAGE_CLAMP_MAX: float = 100.0
 
 EMA_DEFAULT_ALPHA: float = 0.1
 """Default exponential moving average smoothing factor."""
+
+# ---------------------------------------------------------------------------
+# Hardware and Autonomous Loop defaults
+# ---------------------------------------------------------------------------
+
+DEFAULT_CAMERA_WIDTH: int = 640
+"""Default CSI camera capture resolution width in pixels."""
+
+DEFAULT_CAMERA_HEIGHT: int = 480
+"""Default CSI camera capture resolution height in pixels."""
+
+DEFAULT_MOTOR_BAUDRATE: int = 115200
+"""Default serial communication baudrate for motor controller."""
+
+DEFAULT_MOTOR_MAX_ANGULAR_VELOCITY: float = 2.0
+"""Default maximum rotational velocity in radians/sec."""
+
+DEFAULT_LIDAR_SAMPLES_PER_REV: int = 360
+"""Number of angular range samples per complete 360-degree scan."""
+
+DEFAULT_LIDAR_BUFFER_SIZE: int = 100
+"""Default capacity for LiDAR scan ring buffer."""
+
+DEFAULT_LLM_MAX_COMMAND_LEN: int = 512
+"""Maximum character length for incoming natural language mission commands."""
+
+DEFAULT_CONTROL_LOOP_INTERVAL_S: float = 0.033
+"""Default orchestrator loop execution interval in seconds (30 Hz)."""
+
+MOCK_CAMERA_PIXEL_WHITE: int = 255
+"""Default grayscale pixel value for synthetic mock camera frames."""
+
+MOCK_ASYNC_YIELD_S: float = 0.001
+"""Non-blocking coroutine yield duration for mock device operations."""
+
+MOCK_DISPATCH_YIELD_S: float = 0.01
+"""Simulated dispatch latency for mock LLM gateway calls."""
+
+MOCK_GOAL_FORWARD_LINEAR: float = 0.5
+"""Default forward linear velocity for mock mission translation."""
+
+MOCK_GOAL_FORWARD_CONFIDENCE: float = 0.85
+"""Confidence score for default forward mock mission translation."""
+
+MOCK_GOAL_FAST_LINEAR: float = 0.8
+"""Linear velocity for high-speed mock mission translation."""
+
+MOCK_GOAL_FAST_CONFIDENCE: float = 0.95
+"""Confidence score for high-speed mock mission translation."""
+
+MOCK_GOAL_TURN_LINEAR: float = 0.3
+"""Linear velocity component during mock turning maneuvers."""
+
+MOCK_GOAL_TURN_ANGULAR: float = 0.6
+"""Angular velocity component for left mock turns (negated for right)."""
+
+MOCK_GOAL_TURN_CONFIDENCE: float = 0.9
+"""Confidence score for mock turning maneuvers."""
+
+MOCK_GOAL_REVERSE_LINEAR: float = -0.4
+"""Reverse linear velocity for mock reverse maneuvers."""
+
+MOCK_GOAL_REVERSE_CONFIDENCE: float = 0.9
+"""Confidence score for mock reverse maneuvers."""
