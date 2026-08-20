@@ -25,7 +25,6 @@ from mousedroid.interfaces.protocols import (
     PromptInjectionFilterProtocol,
 )
 from mousedroid.logging.setup import get_logger
-from mousedroid.security.injection_filter import RegexInjectionFilter
 
 _log = get_logger("mousedroid.llm_gateway.composite")
 
@@ -55,10 +54,15 @@ class CompositeLLMGateway(LLMGatewayProtocol):
                 r"disable.*(brake|emergency)",
             ]
         )
-        self._filter = injection_filter or RegexInjectionFilter(
-            patterns=patterns,
-            max_len=getattr(self._cfg, "max_command_len", DEFAULT_LLM_MAX_COMMAND_LEN),
-        )
+        if injection_filter is not None:
+            self._filter = injection_filter
+        else:
+            from mousedroid.security.injection_filter import RegexInjectionFilter
+
+            self._filter = RegexInjectionFilter(
+                patterns=patterns,
+                max_len=getattr(self._cfg, "max_command_len", DEFAULT_LLM_MAX_COMMAND_LEN),
+            )
         _log.info(
             "composite_llm_gateway_initialized",
             primary=self._cfg.primary_backend

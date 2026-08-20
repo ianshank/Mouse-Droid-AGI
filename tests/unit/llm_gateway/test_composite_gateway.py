@@ -89,3 +89,18 @@ async def test_composite_gateway_prompt_injection_rejection() -> None:
     goal = await gw.translate_mission(adversarial_cmd)
     assert goal.is_safe is False
     assert goal.arm_action == "e_stop"
+
+
+@pytest.mark.asyncio
+async def test_composite_gateway_custom_injection_filter() -> None:
+    """Verify custom injection filter injection into CompositeLLMGateway."""
+    from mousedroid.security.injection_filter import RegexInjectionFilter
+
+    cfg = LLMConfig()
+    custom_filter = RegexInjectionFilter(patterns=[r"forbidden_action"], max_len=1000)
+    gw = CompositeLLMGateway(cfg=cfg, mock_mode=True, injection_filter=custom_filter)
+    assert gw._filter is custom_filter
+
+    goal = await gw.translate_mission("execute forbidden_action now")
+    assert goal.is_safe is False
+    assert goal.arm_action == "e_stop"
