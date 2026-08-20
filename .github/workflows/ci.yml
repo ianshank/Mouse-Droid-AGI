@@ -38,6 +38,9 @@ permissions:
 env:
     MOUSEDROID_MOCK_HARDWARE: "true"
     MINIMUM_COVERAGE: "90"
+    # mlflow 3.x rejects the file-store backend by default; the project's
+    # tests and training entrypoints use file:./mlruns.
+    MLFLOW_ALLOW_FILE_STORE: "true"
 
 jobs:
     # -------------------------------------------------------------------------
@@ -254,6 +257,49 @@ jobs:
                     -m "not hardware" \
                     --import-mode=importlib \
                     -v --tb=short --no-cov
+
+    # -------------------------------------------------------------------------
+    # Stage 3b-win: Windows cross-platform gate (ADVISORY)
+    # -------------------------------------------------------------------------
+    # The primary development environment is Windows. 21 cross-platform fixes
+    # have already landed; this job gates regressions. Advisory via
+    # continue-on-error until a green window is observed. Python 3.11 only
+    # (matching the Jetson deployment target). Coverage runs on Linux only.
+    # Tracked in .github/advisory_stages.yaml.
+    test-windows:
+        runs-on: windows-latest
+        needs: lint
+        continue-on-error: true
+        strategy:
+            matrix:
+                python-version: ["3.11"]
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+            - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+              with:
+                  python-version: ${{ matrix.python-version }}
+                  cache: pip
+
+            - name: Install dependencies
+              run: pip install -e ".[dev,telemetry,mcp]"
+
+            - name: Lint check (Windows)
+              run: |
+                  pip install "ruff==0.16.2"
+                  ruff check src/ tests/ tools/
+                  ruff format --check src/ tests/ tools/
+
+            - name: Type check (Windows)
+              run: |
+                  pip install typing_extensions>=4.0
+                  mypy src/ --strict --ignore-missing-imports
+
+            - name: Run fast test subset (Windows, no coverage)
+              run: >
+                  pytest tests/unit tests/smoke tests/regression
+                  -m "not hardware and not slow"
+                  --import-mode=importlib
+                  -v --tb=short --no-cov
 
     # -------------------------------------------------------------------------
     # Stage 3c: Local-only gate parity (deterministic scripts/ci.sh stages)

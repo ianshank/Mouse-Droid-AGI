@@ -217,6 +217,44 @@ def test_agent_files_stay_within_line_budget() -> None:
         )
 
 
+# The complete roster per D-4 in the workforce design.
+_EXPECTED_AGENTS = frozenset({
+    "peer-reviewer",
+    "security-scanner",
+    "config-guardian",
+    "openspec-author",
+    "test-engineer",
+    "doc-reconciler",
+    "hw-evidence-auditor",
+})
+
+
+def test_complete_agent_roster_is_present() -> None:
+    """All seven D-4 agents must exist — a missing agent is a gap in governance."""
+    present = {agent.stem for agent in _agent_files()}
+    missing = _EXPECTED_AGENTS - present
+    assert not missing, f"agent roster is incomplete — missing: {sorted(missing)}"
+
+
+def test_agent_name_matches_filename() -> None:
+    """The frontmatter name must match the file stem for discoverability."""
+    for agent in _agent_files():
+        meta = _parse_frontmatter(agent)
+        name = meta.get("name", "")
+        assert name == agent.stem, (
+            f"{agent.name}: frontmatter name '{name}' does not match stem '{agent.stem}'"
+        )
+
+
+def test_agent_files_are_git_tracked() -> None:
+    """Agents must ship — untracked files are invisible in CI and clones."""
+    for agent in _agent_files():
+        relpath = str(agent.relative_to(_REPO_ROOT)).replace("\\", "/")
+        assert _git_tracked(relpath), (
+            f"{relpath} is not tracked by git — add a .gitignore negation"
+        )
+
+
 # ---------------------------------------------------------------------------
 # settings.json wiring
 # ---------------------------------------------------------------------------

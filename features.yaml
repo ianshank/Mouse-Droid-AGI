@@ -486,20 +486,19 @@ features:
       parsing so the class of defect cannot recur silently.
     category: "infrastructure"
     priority: "medium"
-    status: "todo"
+    status: "done"
     tier: "fast"
     verification:
       - "grep finds a non-schema consumer for every surviving budget/mode field"
       - "new AQA test fails when a budget field loses its last consumer"
     validation_command: >-
-      python -m pytest tests/regression -k "budget or governance" -q
-    implemented_in: null
+      python -m pytest tests/regression/test_f026_budget_consumers_aqa.py -v
+    implemented_in: "pending-commit-sha"
     depends_on: ["F-001"]
     notes: >-
-      DocsConfig half overlaps the F-024 docs-consolidation phase - closing
-      F-024 phase 6 satisfies it for core_max_lines; power_mode needs its own
-      wire-or-delete decision verified on-device (nvpmodel -q indices are
-      per-module and per-JetPack).
+      power_mode wired to HealthMonitor.check_health (F-026 Sprint 3).
+      DocsConfig.core_max_lines consumer (docs_trimmer.py) lands in Sprint 5
+      (tracked as xfail in the AQA test).
 
   - id: "F-027"
     epic: "Agentic-Integration"

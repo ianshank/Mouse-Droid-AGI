@@ -23,6 +23,7 @@ CLAUDE.md invariants honored:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, cast
 
@@ -33,6 +34,12 @@ from mousedroid.training.observability.protocol import (
 )
 
 _log = get_logger(__name__)
+
+# mlflow 3.x rejects the local file-store backend unless this env var is
+# set.  ``setdefault`` is idempotent — it never overwrites an operator's
+# explicit choice.  Setting it unconditionally is harmless: mlflow ignores
+# the flag for non-file backends (http://, sqlite, etc.).
+os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
 
 _VALID_STATUSES: frozenset[str] = frozenset({"FINISHED", "FAILED", "KILLED"})
 _PARENT_RUN_TAG = "mlflow.parentRunId"

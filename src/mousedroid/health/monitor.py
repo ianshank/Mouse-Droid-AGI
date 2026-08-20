@@ -87,6 +87,7 @@ class HealthMonitor:
             "status": status,
             "gpu_temp_c": gpu_temp,
             "gpu_load_pct": gpu_load,
+            "power_mode": self._jetson_cfg.power_mode,
         }
 
     @staticmethod

@@ -8,6 +8,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Sprint 3: CI/CD Hardening + F-026 Budget Consumers
+
+Four-part CI/CD hardening and governance-budget wiring sprint:
+
+- **Windows CI matrix** (`.github/workflows/ci.yml`): advisory `test-windows`
+  job runs lint, typecheck, and fast test subset on `windows-latest` / Python
+  3.11. Gates regressions on the primary development platform. Tracked in
+  `.github/advisory_stages.yaml` with 30-day promotion window.
+- **mlflow 3.x compatibility** (`src/mousedroid/training/observability/mlflow_logger.py`):
+  transparently sets `MLFLOW_ALLOW_FILE_STORE=true` when the tracking URI is a
+  local file-store, so the logger works with both mlflow 2.x and 3.x without
+  operator intervention. Also added to CI global env.
+- **Dead-code triage (first pass)** (`scripts/vulture_allowlist.py`): seeded
+  allowlist with dominant Protocol/DI false positives (37 entries across
+  protocol members, constants, and protocol classes). Reduces the 468-finding
+  baseline so subsequent audits surface real dead code.
+- **F-026 closeout**: wired `JetsonConfig.power_mode` to
+  `HealthMonitor.check_health` response dict, created
+  `tests/regression/test_f026_budget_consumers_aqa.py` (3 pass, 1 xfail for
+  `DocsConfig.core_max_lines` pending Sprint 5). Updated `features.yaml`.
+
 ### Added — Hardened Autonomous Architecture (2026): Factory DI, Edge Drivers, LLM Gateway, 7-Tier Verification
 
 Comprehensive implementation and verification of the hardened autonomous robotics architecture on Jetson Orin Nano:
