@@ -8,18 +8,22 @@ argument-hint: "Specify task: connect, deploy, verify-sensors, smoke-test, or de
 
 Debug and verify MouseDroid hardware on NVIDIA Jetson Orin Nano. Covers SSH connection, config overlay sync, Docker deployment, sensor verification, smoke testing, and common failure recovery.
 
+> **Environment variables:** Commands below use `${JETSON_USB_IP}` (USB-C)
+> and `${JETSON_ETH_IP}` (Ethernet). Set these from your network, or see
+> `docs/runbooks/claude-code-on-jetson.md` for the real values.
+
 ## Connection & Access
 
 ### SSH to Jetson
 
 **Over USB-C (fastest, <1ms latency):**
 ```bash
-ssh -i ~/.ssh/id_ed25519 ian@192.168.55.1
+ssh -i ~/.ssh/id_ed25519 ian@
 ```
 
 **Over Ethernet:**
 ```bash
-ssh -i ~/.ssh/id_ed25519 ian@192.168.4.29
+ssh -i ~/.ssh/id_ed25519 ian@
 ssh -i ~/.ssh/id_ed25519 ian@mousedroid.local
 ```
 
@@ -28,7 +32,7 @@ ssh -i ~/.ssh/id_ed25519 ian@mousedroid.local
 ### Verify SSH Access & Basic System Health
 
 ```bash
-ssh ian@192.168.55.1 "uname -a && nvidia-smi && docker ps"
+ssh ian@ "uname -a && nvidia-smi && docker ps"
 ```
 
 Expected: Jetson Linux kernel, NVIDIA GPU visible, `mousedroid` container running.
@@ -42,7 +46,7 @@ Before deploying code or config changes to Jetson:
 1. **Config is synced in repo** — all YAML overlays committed
 2. **No CRLF line endings** — after any file transfer from Windows, run:
    ```bash
-   ssh ian@192.168.55.1 "find /opt/mousedroid -name '*.py' -o -name '*.yaml' | xargs sed -i 's/\r$//'"
+   ssh ian@ "find /opt/mousedroid -name '*.py' -o -name '*.yaml' | xargs sed -i 's/\r$//'"
    ```
 3. **Local changes on Jetson are committed or backed up** — repo on Jetson may have uncommitted edits
 4. **Docker image is built** — `docker-compose build` on Jetson or rebuild locally and push
@@ -64,22 +68,22 @@ Before deploying code or config changes to Jetson:
 
 2. SSH to Jetson and pull latest:
    ```bash
-   ssh ian@192.168.55.1 "cd /opt/mousedroid && git pull"
+   ssh ian@ "cd /opt/mousedroid && git pull"
    ```
 
 3. Sync config overlay to `/etc/mousedroid/`:
    ```bash
-   ssh ian@192.168.55.1 "sudo cp /opt/mousedroid/config/jetson_production.yaml /etc/mousedroid/jetson_production.yaml"
+   ssh ian@ "sudo cp /opt/mousedroid/config/jetson_production.yaml /etc/mousedroid/jetson_production.yaml"
    ```
 
 4. Restart the `mousedroid` container:
    ```bash
-   ssh ian@192.168.55.1 "cd /opt/mousedroid && docker compose -f docker-compose.jetson.yml restart mousedroid"
+   ssh ian@ "cd /opt/mousedroid && docker compose -f docker-compose.jetson.yml restart mousedroid"
    ```
 
 5. Verify container is healthy:
    ```bash
-   ssh ian@192.168.55.1 "docker logs mousedroid | tail -20"
+   ssh ian@ "docker logs mousedroid | tail -20"
    ```
 
 ### Scenario: Full Jetson Docker Build & Deploy
@@ -88,17 +92,17 @@ If code changes require a Docker rebuild:
 
 1. On Jetson, rebuild the image:
    ```bash
-   ssh ian@192.168.55.1 "cd /opt/mousedroid && docker compose -f docker-compose.jetson.yml build --no-cache mousedroid"
+   ssh ian@ "cd /opt/mousedroid && docker compose -f docker-compose.jetson.yml build --no-cache mousedroid"
    ```
 
 2. Restart:
    ```bash
-   ssh ian@192.168.55.1 "docker compose -f docker-compose.jetson.yml restart mousedroid"
+   ssh ian@ "docker compose -f docker-compose.jetson.yml restart mousedroid"
    ```
 
 3. Check logs for build errors:
    ```bash
-   ssh ian@192.168.55.1 "docker logs mousedroid | head -50"
+   ssh ian@ "docker logs mousedroid | head -50"
    ```
 
 ---
@@ -194,7 +198,7 @@ bash scripts/jetson_smoke_test.sh e2e           # 5-second E2E runtime
 
 **Fix:** Run pinmux correction on Jetson:
 ```bash
-ssh ian@192.168.55.1 "sudo busybox devmem 0x243D020 w 0x5"
+ssh ian@ "sudo busybox devmem 0x243D020 w 0x5"
 ```
 
 **Verify:**
@@ -212,12 +216,12 @@ docker exec -w /opt/mousedroid mousedroid python3 scripts/verify_sensors.py --se
 
 1. Check libargus is running:
    ```bash
-   ssh ian@192.168.55.1 "ps aux | grep argus"
+   ssh ian@ "ps aux | grep argus"
    ```
 
 2. Verify camera is visible to Jetson:
    ```bash
-   ssh ian@192.168.55.1 "ls -la /dev/video*"
+   ssh ian@ "ls -la /dev/video*"
    ```
 
 3. Check container has privileged access in `docker-compose.jetson.yml`:
@@ -227,7 +231,7 @@ docker exec -w /opt/mousedroid mousedroid python3 scripts/verify_sensors.py --se
 
 4. Reseat the ribbon cable and restart the container:
    ```bash
-   ssh ian@192.168.55.1 "docker restart mousedroid"
+   ssh ian@ "docker restart mousedroid"
    ```
 
 ### LiDAR (LD19) Not Detected
@@ -240,12 +244,12 @@ docker exec -w /opt/mousedroid mousedroid python3 scripts/verify_sensors.py --se
 
 1. Verify USB device is present:
    ```bash
-   ssh ian@192.168.55.1 "lsusb | grep -i 'qinheng\|ch340'"
+   ssh ian@ "lsusb | grep -i 'qinheng\|ch340'"
    ```
 
 2. Check device node exists:
    ```bash
-   ssh ian@192.168.55.1 "ls -la /dev/ttyUSB*"
+   ssh ian@ "ls -la /dev/ttyUSB*"
    ```
 
 3. Verify container has `/dev/ttyUSB0` mounted in `docker-compose.jetson.yml`:
@@ -258,7 +262,7 @@ docker exec -w /opt/mousedroid mousedroid python3 scripts/verify_sensors.py --se
 
 5. Restart container:
    ```bash
-   ssh ian@192.168.55.1 "docker restart mousedroid"
+   ssh ian@ "docker restart mousedroid"
    ```
 
 ### Speaker Not Playing Audio
@@ -271,7 +275,7 @@ docker exec -w /opt/mousedroid mousedroid python3 scripts/verify_sensors.py --se
 
 1. Check USB audio device is detected:
    ```bash
-   ssh ian@192.168.55.1 "arecord -l && aplay -l"
+   ssh ian@ "arecord -l && aplay -l"
    ```
 
 2. Verify PyAudio is installed in container:
@@ -281,7 +285,7 @@ docker exec -w /opt/mousedroid mousedroid python3 scripts/verify_sensors.py --se
 
 3. Check speaker is not muted:
    ```bash
-   ssh ian@192.168.55.1 "amixer sset Master unmute && amixer sset Master 80%"
+   ssh ian@ "amixer sset Master unmute && amixer sset Master 80%"
    ```
 
 4. Verify container has audio device mounted in `docker-compose.jetson.yml`:
@@ -300,7 +304,7 @@ docker exec -w /opt/mousedroid mousedroid python3 scripts/verify_sensors.py --se
 
 1. Check USB-to-serial device:
    ```bash
-   ssh ian@192.168.55.1 "lsusb | grep CH340"
+   ssh ian@ "lsusb | grep CH340"
    ```
 
 2. Verify correct `/dev/ttyUSB*` in config:
@@ -312,7 +316,7 @@ docker exec -w /opt/mousedroid mousedroid python3 scripts/verify_sensors.py --se
 
 3. Reset ESP32:
    ```bash
-   ssh ian@192.168.55.1 "docker exec mousedroid python3 -c 'import serial; s=serial.Serial(\"/dev/ttyUSB0\", 115200); s.reset_input_buffer()'"
+   ssh ian@ "docker exec mousedroid python3 -c 'import serial; s=serial.Serial(\"/dev/ttyUSB0\", 115200); s.reset_input_buffer()'"
    ```
 
 ---
@@ -348,13 +352,13 @@ docker exec -w /opt/mousedroid mousedroid python3 scripts/verify_sensors.py --se
 ### Tail Container Logs
 
 ```bash
-ssh ian@192.168.55.1 "docker logs -f mousedroid"
+ssh ian@ "docker logs -f mousedroid"
 ```
 
 ### View Structured Logs (JSON)
 
 ```bash
-ssh ian@192.168.55.1 "docker logs mousedroid 2>&1 | grep 'event='"
+ssh ian@ "docker logs mousedroid 2>&1 | grep 'event='"
 ```
 
 ### Run Pytest Hardware Suite Inside Docker
