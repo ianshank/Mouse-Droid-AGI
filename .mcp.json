@@ -9,10 +9,20 @@
         "config/default.yaml"
       ],
       "env": {
-        "MOUSEDROID_MOCK_HARDWARE": "true",
+        "MOUSEDROID_MOCK_HARDWARE": "${MOUSEDROID_MOCK_HARDWARE:-true}",
         "MOUSEDROID_MCP__ENABLED": "true",
         "MOUSEDROID_MCP__BIND_TRANSPORT": "true",
         "MOUSEDROID_MCP__TRANSPORT": "stdio"
+      }
+    },
+    "github": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN:-${GITHUB_TOKEN:-}}"
       }
     }
   }

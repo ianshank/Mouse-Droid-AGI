@@ -360,3 +360,90 @@ def test_hook_package_has_no_runtime_package_import() -> None:
         if "import mousedroid" in text or "from mousedroid" in text:
             offenders.append(module.name)
     assert not offenders, f"hook modules import the runtime package: {offenders}"
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: MCP Configuration & Worktree Runbooks (F-024)
+# ---------------------------------------------------------------------------
+
+_MCP_JSON = _REPO_ROOT / ".mcp.json"
+_WORKTREES_RUNBOOK = _REPO_ROOT / "docs" / "runbooks" / "worktrees.md"
+_MCP_EVALUATION_DOC = _REPO_ROOT / "docs" / "claude" / "surfaces" / "mcp-evaluation.md"
+_MCP_NEXT_STEPS = _REPO_ROOT / "docs" / "MCP_NEXT_STEPS.md"
+
+
+def test_mcp_json_is_valid_json() -> None:
+    """The checked-in .mcp.json must parse as valid JSON."""
+    assert _MCP_JSON.is_file(), ".mcp.json is missing from repository root"
+    data = json.loads(_MCP_JSON.read_text(encoding="utf-8"))
+    assert isinstance(data, dict)
+    assert "mcpServers" in data
+    assert isinstance(data["mcpServers"], dict)
+
+
+def test_mcp_json_is_secretless() -> None:
+    """.mcp.json must not contain hardcoded secret literals (only ${VAR} expansions)."""
+    text = _MCP_JSON.read_text(encoding="utf-8")
+    assert "ghp_" not in text, "Hardcoded GitHub token found in .mcp.json"
+    assert "github_pat_" not in text, "Hardcoded GitHub PAT found in .mcp.json"
+    data = json.loads(text)
+    for server_name, server_cfg in data.get("mcpServers", {}).items():
+        env = server_cfg.get("env", {})
+        for k, v in env.items():
+            if "TOKEN" in k or "SECRET" in k or "KEY" in k:
+                val_str = str(v)
+                assert val_str.startswith("${"), (
+                    f"Credential key {k} in server {server_name} is not an env var expansion: {v}"
+                )
+                assert val_str.endswith("}"), (
+                    f"Credential key {k} in server {server_name} is not an env var expansion: {v}"
+                )
+
+
+def test_mcp_json_mousedroid_server_matches_operator_guide() -> None:
+    """The mousedroid server stanza in .mcp.json must match docs/MCP_OPERATOR_GUIDE.md."""
+    data = json.loads(_MCP_JSON.read_text(encoding="utf-8"))
+    mousedroid = data.get("mcpServers", {}).get("mousedroid")
+    assert mousedroid is not None, "mousedroid server is missing from .mcp.json"
+    assert mousedroid.get("command") == "python"
+    assert mousedroid.get("args") == ["-m", "mousedroid", "--config", "config/default.yaml"]
+    env = mousedroid.get("env", {})
+    assert env.get("MOUSEDROID_MCP__ENABLED") == "true"
+    assert env.get("MOUSEDROID_MCP__BIND_TRANSPORT") == "true"
+    assert env.get("MOUSEDROID_MCP__TRANSPORT") == "stdio"
+    assert "MOUSEDROID_MOCK_HARDWARE" in env
+
+
+def test_mcp_json_github_server_configured() -> None:
+    """The github server stanza in .mcp.json must be present and secretless."""
+    data = json.loads(_MCP_JSON.read_text(encoding="utf-8"))
+    github = data.get("mcpServers", {}).get("github")
+    assert github is not None, "github server is missing from .mcp.json"
+    assert github.get("command") == "npx"
+    assert "@modelcontextprotocol/server-github" in github.get("args", [])
+
+
+def test_worktree_runbook_is_present_and_structured() -> None:
+    """docs/runbooks/worktrees.md must exist and document lifecycle & guardrails."""
+    assert _WORKTREES_RUNBOOK.is_file(), "docs/runbooks/worktrees.md is missing"
+    content = _WORKTREES_RUNBOOK.read_text(encoding="utf-8")
+    assert "git worktree list" in content
+    assert "git worktree add" in content
+    assert "git worktree remove" in content
+    assert "mdcw-" in content
+
+
+def test_mcp_evaluation_surface_doc_is_present() -> None:
+    """docs/claude/surfaces/mcp-evaluation.md must exist and record evaluate-first decisions."""
+    assert _MCP_EVALUATION_DOC.is_file(), "docs/claude/surfaces/mcp-evaluation.md is missing"
+    content = _MCP_EVALUATION_DOC.read_text(encoding="utf-8")
+    assert "grafana" in content.lower()
+    assert "huggingface" in content.lower()
+    assert "mousedroid" in content.lower()
+    assert "github" in content.lower()
+
+
+def test_mcp_next_steps_checkbox_ticked() -> None:
+    """docs/MCP_NEXT_STEPS.md must have the Claude Code .mcp.json checkbox ticked."""
+    content = _MCP_NEXT_STEPS.read_text(encoding="utf-8")
+    assert "- [x] Same for **Claude Code** (`.mcp.json` template)." in content

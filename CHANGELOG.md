@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Sprint 4: MCP Configuration + Git Worktree Isolation (F-024 Phase 5)
+
+Workforce integration for Model Context Protocol (MCP) and multi-agent development isolation:
+
+- **Secretless `.mcp.json`**: Checked-in project-scope configuration declaring
+  both `mousedroid` (in-tree robot server via `stdio` transport, defaulting to
+  `MOUSEDROID_MOCK_HARDWARE: "${MOUSEDROID_MOCK_HARDWARE:-true}"` for workstation
+  safety) and `github` MCP server (using `${GITHUB_PERSONAL_ACCESS_TOKEN:-${GITHUB_TOKEN:-}}`
+  expansion, zero literal secrets). Closes open tracking item at `docs/MCP_NEXT_STEPS.md:51`.
+- **Worktree Runbook** (`docs/runbooks/worktrees.md`): Comprehensive operator and agent
+  guide for parallel session isolation using the `mdcw-` naming convention (`.claude/workforce.yaml`),
+  covering creation, audit, execution, teardown, Docker build exclusion, and hook context resolution.
+- **MCP Evaluate-First Surface** (`docs/claude/surfaces/mcp-evaluation.md`): Recorded
+  architectural evaluation and rationale for deferring Grafana and Hugging Face MCP servers
+  until downstream capability stream triggers are reached.
+- **Workforce AQA Phase 5 Gates** (`tests/regression/test_claude_workforce_aqa.py`): 7 new
+  regression tests asserting JSON validity, secretlessness, operator-guide schema parity,
+  runbook structure, and tracking checkbox state (34/34 workforce AQA suite green).
+
 ### Added — Sprint 3: CI/CD Hardening + F-026 Budget Consumers
 
 Four-part CI/CD hardening and governance-budget wiring sprint:
