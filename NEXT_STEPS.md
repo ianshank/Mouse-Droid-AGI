@@ -19,148 +19,68 @@ The legacy v0.3.0 execution-plan phase numbering lives only in
 ## ⚡ Current Next Steps (prioritized)
 
 1. **[Security — P0] Rotate the `ANTHROPIC_API_KEY`.** The key was exposed in a chat
-   transcript — treat it as compromised. Inventory consumers first (rover
-   `/etc/mousedroid/docker.env`, GitHub Actions secrets, any dev-machine env), replace on
-   the Jetson, restart the container (`sudo systemctl restart mousedroid-docker`), confirm
-   the cloud tier authenticates (`tools/llm_latency_probe.py --iterations 3`), revoke the
-   old key, and record the rotation date + verification here. The software half of this
-   item (secret-scan gate) is **F-015** (`done`): gitleaks CI job (now **blocking**,
-   promoted 2026-08-07) + `.gitleaks.toml` + `docs/runbooks/secret-scanning.md`.
-2. **[Hardware blocker — P0] ESP32 diagnosis + repair — diagnostics before spend.** The
-   board is presumed dead (UART, ROM bootloader, WiFi AP), but that diagnosis was taken
-   at 1 Mbaud over USB-C only. Audit R2/R7 give two near-zero-cost retests that can flip
-   the repair-vs-replace decision: (a) retest with the stock command set
-   (`MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock`, which derives 115 200 baud —
-   at the legacy 1 Mbaud stock firmware reads as line noise, and legacy commands
-   at *any* baud are silently ignored, so both halves have to change together);
-   (b) probe the ESP32 `U0TX`/`U0RX` directly on the
-   driver board's 40-pin header (pins 10/8 → Jetson `/dev/ttyTHS1`, two jumper wires) to
-   isolate a dead CP2102N USB bridge from a dead ESP32. Then the sequenced bench plan
-   under **PR #106 follow-ups** below. Gate for **F-008**. Time-box unchanged: 2 bench
-   sessions, then repair-vs-replace.
-3. **[Software blocker — LANDED] ESP32 driver retargeted at stock Waveshare firmware
-   (F-025).** Landed as PR #185 (`f884abe`); full details in CHANGELOG.md.
-   **Remaining operator action:** flip
-   `MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock` in `/etc/mousedroid/docker.env`
-   after `deployments/jetson-image.json` is re-pinned.
-4. **[Ops hygiene — P1] Re-point the rover's `/opt/mousedroid` source** to trunk
-   (`claude/markdown-implementation-plan-aVJ2l`). Blocked by pre-existing root-ownership drift
-   in the bind-mount (the container writes files as root), so a targeted
-   `sudo chown ian:ian` of the tracked files is required first before the checkout will succeed.
-5. **[Durability — P1] Make the per-host `docker.env` overrides durable.** Software half is
-   **F-017** (`done`): `config/docker.env.example` now enumerates
-   `MOUSEDROID_LLM__ENABLED` / `MOUSEDROID_LLM__N_GPU_LAYERS`, the `host_env_keys` preflight
-   check WARNs on key drift, and `scripts/host_bootstrap.sh` (dry-run/backup/rollback-safe)
-   installs the template + units. Remaining operator action: run
-   `scripts/host_bootstrap.sh` on the rover after the next reflash and enable
-   `host_env.enabled` in the Jetson overlay.
-6. **[Bring-up — P1] Full rover bring-up + unified dashboard.** Run
-   `docs/runbooks/jetson-full-bringup.md` on the rover. **Real motors are probe-first** —
-   the ESP32 is probed before bring-up and motors only go live if it responds; otherwise
-   `MOUSEDROID_ESP32__ENABLED=false` keeps the container from crash-looping. ESP32 physical
-   repair (item 2) + the F-025 retarget (item 3) gate actual motion.
-7. **[Sensing — P1, post-retarget] Wire the onboard IMU + magnetometer (audit R4).** The
-   driver board's QMI8658 + AK09918 are completely unconsumed — zero references across
-   `sensing/`, `hardware/`, `comms/`. Wiring them (parse `FEEDBACK_BASE_INFO` once per
-   slow-cadence tick; `imu` as a 6th fusion modality behind a default-OFF `Optional`
-   config block, per house pattern) closes tip-over detection (the sim trains a
-   top-heavy COM but hardware has no roll signal), the only heading source on an
-   encoder-less chassis, and a real motor-channel observation for the fusion mask.
-8. **[Validation — P2] Run the consolidated on-device validation pass (PR #116).** Execute
-   `bash scripts/jetson_full_validation.sh` on the rover — now with trend journaling
-   (**F-018**): Phase-2 preflight appends to the trend journal and the Phase-4 SUMMARY
-   carries a Trend section. **Optional unblock for HTTP-driven `/metrics` population:**
-   add an `openclaw:` block with `enabled: true` to a validation overlay (the prod config has
-   none, so `POST /api/v1/mission` is unregistered and Test C skips).
-9. **[Observability — P2] Wire the Grafana dashboard + alerts into the rover's Prometheus.**
-   The panels + alert rules for the LLM-gateway families are landed (**F-019**); the operator
-   action is importing `docs/grafana_dashboard.json` and loading
-   `config/prometheus/alerts.yml` on the monitoring host before the next endurance run.
-10. **[Hygiene — P2] Review the dead-code audit report** (`scripts/dead_code_audit.py`,
-    **F-020**) after each significant merge; promote the remaining advisory
-    `vulture-audit` / `performance` / `security` / `onnx-world-model-extras` CI stages
-    when `scripts/check_advisory_promotions.py` flags them due (tracked in
-    `.github/advisory_stages.yaml`; `onnx-world-model-extras` window ends 2026-08-14).
-11. **[Hygiene — P2] Declared budgets need consumers (F-026).** Two governance knobs
-    parse but enforce nothing: `JetsonConfig.power_mode` is read nowhere outside
-    schema/config (and cannot express JetPack 6.2's 25W/MAXN_SUPER — audit J1;
-    `jetson_system_setup.sh` hardcodes `nvpmodel -m 0`), and
-    `DocsConfig.core_max_lines: 250` has no hook consumer while `CLAUDE.md` stands at
-    941 lines. Wire-or-delete each, and add an AQA test asserting every declared
-    budget/mode field has a consumer outside schema parsing.
-12. **[Docs — P2] Reconcile hardware docs with the chassis (audit R9).** WAVE ROVER is
-    4WD skid-steer, not mecanum. *Partly closed by F-025:* the README overview + BOM no
-    longer claim mecanum, the inert `vy` term is now zeroed at the execution seam so
-    logged experience matches what the chassis can do, and the encoder-less fact is a
-    config contract (`chassis_has_wheel_encoders`) rather than an assumption. Still open:
-    the `CameraConfig` docstring still describes the IMX500 AI Camera rather than the
-    IMX708 the rover actually ships with (the README overview + BOM are now
-    corrected); power is a 3S 18650 UPS module, not a LiPo (different charging
-    discipline and failure mode).
-13. **[World model — P2] F-023 operator follow-ups (AlayaWorld adaptation).** The
-    bounded-context latent memory + corrupted-history drift training landed default-OFF
-    (`world_model_memory` / `training.drift` blocks; ADR-015). Remaining operator actions:
-    (a) run the distillation spike on the Jetson per
-    `docs/runbooks/jetson-alayaworld-spike.md` and paste the numbers into
-    `docs/analysis/alayaworld-distillation-spike.md` for the final go/no-go; (b) re-run
-    `scripts/compare_drift.py` against real replay data once the rover accumulates enough
-    records; (c) keep `world_model_memory.enabled` OFF on the live rover until a soak gate
-    passes.
-14. **[Portfolio — P2] Record the 60-second hardware demo clip** (droid navigating +
-    avoiding obstacles on the Jetson) and drop it into the README `## ▶ Demo` slot — hosted as
-    a `hardware-v6`-style GitHub Release asset or external link, **never** committed (that
-    re-creates the bloat the reframe just removed). This clip is the headline portfolio artifact.
-15. **[Portfolio — P2] Run the git-history purge** once the reframe PR (#167) merges:
-    preserve the blobs first (`bdi_annotations.npz` → HF dataset, CAD → `hardware-v6` Release),
-    then `bash scripts/purge_history.sh` (dry-run) → `--push`. Shrinks `.git` ~28 MB → ~2 MB.
-    Destructive + irreversible — see `docs/runbooks/history-purge.md`. Also rename the GitHub
-    repo slug `Mouse-Droid-AGI` → `mouse-droid` (Settings; URLs auto-redirect).
-16. **[CI — P2] Add a Windows matrix job to `.github/workflows/ci.yml`.**  The SQE
-    strategic audit (Aug 2026) found 21 Windows-only test failures that were invisible
-    because CI runs Linux-only. The portability fixes are landed (`48a6655`), but a
-    Windows job prevents regression. Start with the cheapest `windows-latest` tier
-    running `lint` + `typecheck` + `test-fast` (no coverage, no Jetson stubs). The
-    `hooks` target is already portable after the `_make_stub` / `PurePosixPath` fixes.
+   transcript — treat it as compromised. Inventory consumers (rover `/etc/mousedroid/docker.env`,
+   GitHub Actions secrets, dev env), replace on Jetson, restart container, confirm cloud auth
+   (`tools/llm_latency_probe.py --iterations 3`), revoke old key. The software half (secret-scan gate)
+   is **F-015** (`done`): gitleaks CI job + `.gitleaks.toml` + `docs/runbooks/secret-scanning.md`.
+2. **[Hardware blocker — P0] ESP32 diagnosis + repair — diagnostics before spend.** Re-test:
+   (a) stock command set (`MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock`, 115 200 baud);
+   (b) probe ESP32 `U0TX`/`U0RX` directly on driver board's 40-pin header (pins 10/8 → `/dev/ttyTHS1`)
+   to isolate CP2102N bridge from ESP32. Gate for **F-008**. Time-box: 2 bench sessions.
+3. **[Software blocker — LANDED] ESP32 driver retargeted at stock Waveshare firmware (F-025).**
+   Landed as PR #185 (`f884abe`). Operator action: flip `MOUSEDROID_ESP32__COMMAND_SET=waveshare_stock`
+   in `/etc/mousedroid/docker.env` after `deployments/jetson-image.json` is re-pinned.
+4. **[Ops hygiene — P1] Re-point the rover's `/opt/mousedroid` source** to trunk. Targeted `sudo chown ian:ian`
+   on tracked files to resolve bind-mount root-ownership drift before checkout.
+5. **[Durability — P1] Make per-host `docker.env` overrides durable.** **F-017** (`done`):
+   `config/docker.env.example`, `host_env_keys` preflight check, and `scripts/host_bootstrap.sh`.
+   Run bootstrap on rover after reflash and enable `host_env.enabled` in Jetson overlay.
+6. **[Bring-up — P1] Full rover bring-up + unified dashboard.** Run `docs/runbooks/jetson-full-bringup.md`.
+   Motors are probe-first; `MOUSEDROID_ESP32__ENABLED=false` prevents crash-looping if unpowered.
+7. **[Sensing — P1, post-retarget] Wire onboard IMU + magnetometer (audit R4).** Consume QMI8658 +
+   AK09918 via `FEEDBACK_BASE_INFO` as a 6th fusion modality behind default-OFF `Optional` config block.
+8. **[Validation — P2] Run consolidated on-device validation pass (PR #116).** Execute
+   `bash scripts/jetson_full_validation.sh` on rover with trend journaling (**F-018**).
+9. **[Observability — P2] Wire Grafana dashboard + alerts into rover Prometheus.** Panels + alert
+   rules landed (**F-019**); import `docs/grafana_dashboard.json` and load `config/prometheus/alerts.yml`.
+10. **[Hygiene — P2] Review dead-code audit report** (`scripts/dead_code_audit.py`, **F-020**) and promote
+    advisory CI stages when due (`.github/advisory_stages.yaml`).
+11. **[Hygiene — P2] Declared budgets need consumers (F-026).** Ensure `JetsonConfig.power_mode` and
+    `DocsConfig.core_max_lines` have active consumers with AQA regression tests.
+12. **[Docs — P2] Reconcile hardware docs with chassis (audit R9).** WAVE ROVER is 4WD skid-steer;
+    chassis is encoder-less, camera is IMX708, power is 3S 18650 UPS.
+13. **[World model — P2] F-023 operator follow-ups (AlayaWorld adaptation).** Distillation spike per
+    `docs/runbooks/jetson-alayaworld-spike.md` and `scripts/compare_drift.py`.
+14. **[Portfolio — P2] Record 60-second hardware demo clip** on Jetson and link in README (host as release asset).
+15. **[Portfolio — P2] Git-history purge** post-reframe PR (#167): run `scripts/purge_history.sh` and rename slug to `mouse-droid`.
+16. **[CI — P2] Add Windows matrix job to CI.** SQE audit resolved 21 Windows issues (`48a6655`); add `windows-latest` tier for lint, typecheck, and test-fast.
 
 ---
 
 ## Current Baseline (one-screen)
 
-- **Hardened Autonomous Architecture (2026)** — Factory-first DI (`build_autonomous_camera`, `build_autonomous_lidar`, `build_autonomous_metrics_registry`, `build_motor_controller`, `build_autonomous_orchestrator`), 30 Hz mission loop with sensor preflight validation, jitter observability, and cooperative cancellation e-stop.
-- **Deliberative brain (Claude gateway) is LIVE on the rover** — Claude-haiku primary +
-  Phi-3-mini CPU fallback (PR #107/#111) with pre-egress prompt-injection filtering. The 30 Hz reactive loop stays LLM-free.
-- **Active production scope**: camera + LiDAR + USB audio + ESP32 on Jetson. The HC-SR04
-  ultrasonic path is parked, and the robot-arm platform is deferred from the active delivery
-  plan.
-- **7-Tier Test Pyramid & Workforce Governance**: 46 automated tests across Unit, Property, Integration, Functional, E2E, User Journey, Security Fuzzing, Smoke, and Regression (100% PASS), 7 specialized subagents (`.claude/agents/`), and 3 reusable skills (`autonomous-mission-probe`, `edge-hardware-health`, `prompt-injection-audit`).
-- **Ten Pillars campaign**: 20/20 PASS on Jetson Orin Nano (2026-04-26). Full landed-work
-  history: `CHANGELOG.md`.
+- **Hardened Autonomous Architecture (2026)** — Factory-first DI (`build_autonomous_camera`, `build_autonomous_lidar`, `build_autonomous_metrics_registry`, `build_motor_controller`, `build_autonomous_orchestrator`), 30 Hz loop with sensor preflight, jitter observability, and cancellation e-stop.
+- **Deliberative brain (Claude gateway) LIVE on rover** — Claude-haiku primary + Phi-3-mini fallback (PR #107/#111) with pre-egress prompt-injection filtering.
+- **Active production scope**: camera + LiDAR + USB audio + ESP32 on Jetson.
+- **7-Tier Test Pyramid & Workforce Governance**: 56 automated tests across Unit, Property, Integration, Functional, E2E, User Journey, Security Fuzzing, Smoke, Regression (100% PASS), 7 specialized subagents (`.claude/agents/`), and 3 reusable skills.
+- **Ten Pillars campaign**: 20/20 PASS on Jetson Orin Nano (2026-04-26). Landed-work history in `CHANGELOG.md`.
 
 ---
 
 ## P0 — Physical AI Roadmap (Phases 2 → 6)
 
-Dependency direction is strictly **Phase 1 → 2 → 3 → 4**; Phases 5 and 6 are
-deferred until Phase 3b has been in production for ≥30 days (clock anchored to
-the deployed SHA's continuous uptime — it restarts on redeploy).
+Dependency direction is strictly **Phase 1 → 2 → 3 → 4**; Phases 5 and 6 are deferred until Phase 3b has soaked ≥30 days.
 
 - **Phase 1 — domain randomization** ✅ landed (see CHANGELOG).
-- **Phase 2 — real-episode replay loop** ✅ landed incl. Phase 2.1 BC injection
-  (byte-identity at `weight=0` proven).
+- **Phase 2 — real-episode replay loop** ✅ landed incl. Phase 2.1 BC injection.
 - **Phase 3a/3b — VLA protocol + DistilledVLAOnnx** ✅ landed.
-- **Phase 4 — VLM-derived dense rewards (VLAC)** ✅ landed (Law-1 gate preserved).
-- **Phase 5 (stretch) — real physics simulator** — notes-only until the Phase-3b
-  30-day production soak completes.
-- **Phase 6 (stretch) — real-time co-training** — LoRA-style on-device fine-tuning;
-  builds on Phases 2 + 3.
+- **Phase 4 — VLM-derived dense rewards (VLAC)** ✅ landed.
+- **Phase 5 (stretch) — real physics simulator** — deferred until Phase-3b 30-day soak completes.
+- **Phase 6 (stretch) — real-time co-training** — LoRA-style on-device fine-tuning; builds on Phases 2 + 3.
 
 ### Training arc (T-numbers)
 
-**Arm training arc PAUSED at T2.** Unfreeze condition: **F-008** (rover hardware
-gate) reaches `done` on the Jetson AND Phase 3b has soaked in production ≥30
-days. Until then T3+ (`train_arm.py` SAC+HER) and the arm skills stay frozen
-(`.claude/skills/*` carry `status: frozen`). T2 (MLflow training observability)
-is landed — runbook: `docs/runbooks/mlflow-local-ui.md`.
+**Arm training arc PAUSED at T2.** Unfreeze condition: **F-008** (rover hardware gate) reaches `done` on Jetson AND Phase 3b has soaked ≥30 days. Until then T3+ and arm skills stay frozen. T2 (MLflow training observability) is landed (`docs/runbooks/mlflow-local-ui.md`).
 
 ---
 

@@ -23,7 +23,6 @@ def _mock_hardware_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MLFLOW_ALLOW_FILE_STORE", "true")
 
 
-
 @pytest.fixture
 def mock_settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
     """Create a Settings instance with mock hardware enabled."""
