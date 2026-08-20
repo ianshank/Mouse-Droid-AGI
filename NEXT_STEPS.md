@@ -45,15 +45,18 @@ The legacy v0.3.0 execution-plan phase numbering lives only in
    rules landed (**F-019**); import `docs/grafana_dashboard.json` and load `config/prometheus/alerts.yml`.
 10. **[Hygiene — P2] Review dead-code audit report** (`scripts/dead_code_audit.py`, **F-020**) and promote
     advisory CI stages when due (`.github/advisory_stages.yaml`).
-11. **[Hygiene — P2] Declared budgets need consumers (F-026).** Ensure `JetsonConfig.power_mode` and
-    `DocsConfig.core_max_lines` have active consumers with AQA regression tests.
-12. **[Docs — P2] Reconcile hardware docs with chassis (audit R9).** WAVE ROVER is 4WD skid-steer;
+11. **[Hygiene — LANDED] Declared budgets need consumers (F-026).** Landed in Sprint 3 (`a2677ad`):
+    `JetsonConfig.power_mode` wired to `HealthMonitor.check_health` response; `test_f026_budget_consumers_aqa.py` active.
+12. **[Workforce — LANDED] Secretless .mcp.json & Worktree Runbooks (F-024 Phase 5).** Landed in Sprint 4 (`f1b5f5a`):
+    `.mcp.json` (mousedroid + github), `docs/runbooks/worktrees.md`, `mcp-audit` skill, and Phase 5 AQA tests.
+13. **[CI — LANDED] Add Windows matrix job to CI.** Landed in Sprint 3 (`a2677ad`): `test-windows` advisory stage
+    in `.github/workflows/ci.yml` and `.github/advisory_stages.yaml`.
+14. **[Docs — P2] Reconcile hardware docs with chassis (audit R9).** WAVE ROVER is 4WD skid-steer;
     chassis is encoder-less, camera is IMX708, power is 3S 18650 UPS.
-13. **[World model — P2] F-023 operator follow-ups (AlayaWorld adaptation).** Distillation spike per
+15. **[World model — P2] F-023 operator follow-ups (AlayaWorld adaptation).** Distillation spike per
     `docs/runbooks/jetson-alayaworld-spike.md` and `scripts/compare_drift.py`.
-14. **[Portfolio — P2] Record 60-second hardware demo clip** on Jetson and link in README (host as release asset).
-15. **[Portfolio — P2] Git-history purge** post-reframe PR (#167): run `scripts/purge_history.sh` and rename slug to `mouse-droid`.
-16. **[CI — P2] Add Windows matrix job to CI.** SQE audit resolved 21 Windows issues (`48a6655`); add `windows-latest` tier for lint, typecheck, and test-fast.
+16. **[Portfolio — P2] Record 60-second hardware demo clip** on Jetson and link in README (host as release asset).
+17. **[Portfolio — P2] Git-history purge** post-reframe PR (#167): run `scripts/purge_history.sh` and rename slug to `mouse-droid`.
 
 ---
 

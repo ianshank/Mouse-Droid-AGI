@@ -100,5 +100,5 @@ class HealthMonitor:
         Returns:
             File contents as string.
         """
-        with open(path) as fh:
+        with open(path, encoding="utf-8", errors="replace") as fh:
             return fh.read()

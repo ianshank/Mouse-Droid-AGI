@@ -182,6 +182,7 @@ scripts on Unix. The AQA gate verifies the helper exists and branches on
 ## Related
 
 - `docs/runbooks/claude-workforce-hooks.md` — operator guide, debugging, overrides
+- `docs/runbooks/worktrees.md` — git worktrees for parallel agent isolation (D-6)
 - `docs/runbooks/secret-scanning.md` — the CI-side gitleaks gate (F-015)
 - `docs/architecture/ADR-013-f-number-namespaces.md` — F-number allocation
 - `openspec/changes/mouse-droid-claude-workforce/` — the change bundle and its peer review
