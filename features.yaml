@@ -420,7 +420,7 @@ features:
     validation_command: >-
       python -m pytest tests/regression/test_claude_workforce_aqa.py
       tests/unit/tools/claude_hooks -q
-    implemented_in: "feat/f024-phase6-docs-closeout"
+    implemented_in: "6e89033b96f98ede6c77077345fd31b330ae16c9"
     depends_on: ["F-001"]
     notes: >-
       OpenSpec change mouse-droid-claude-workforce (archived under
@@ -492,7 +492,7 @@ features:
       - "new AQA test fails when a budget field loses its last consumer"
     validation_command: >-
       python -m pytest tests/regression/test_f026_budget_consumers_aqa.py -v
-    implemented_in: "feat/f024-phase6-docs-closeout"
+    implemented_in: "6e89033b96f98ede6c77077345fd31b330ae16c9"
     depends_on: ["F-001"]
     notes: >-
       power_mode wired to HealthMonitor.check_health (F-026 Sprint 3).
