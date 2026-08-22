@@ -19,6 +19,8 @@ Pinned contracts:
   ``.github/advisory_stages.yaml`` entry (mirrors
   ``scripts/check_advisory_promotions.py`` as a PR-time signal);
 * scripts/ci.sh runs the smoke stage OUTSIDE the ``MOUSEDROID_CI_SLIM`` skip;
+* the functional / user-journey / security tiers run in the blocking ``test``
+  job and in ci.sh, and never in the advisory ``security`` job (F-028);
 * pytest ``addopts`` keeps ``--import-mode=importlib`` (duplicate test
   basenames make prepend mode fragile).
 """
@@ -197,6 +199,58 @@ class TestCiShSmokeStage:
         assert smoke_at < slim_at, (
             "the smoke stage must run BEFORE (outside) the SLIM-gated block — "
             "it is cheap enough for memory-constrained hosts"
+        )
+
+
+_ORPHAN_TIERS = ("tests/functional", "tests/user_journey", "tests/security")
+
+
+class TestOrphanTierWiring:
+    """F-028: the functional / user-journey / security tiers reach a CI path.
+
+    All three ran in ZERO CI paths -- absent from ci.sh, ci.yml and every
+    Makefile target -- so they could rot invisibly, exactly as the smoke tier
+    did before PR #178. ``tests/security/`` is the only coverage of the
+    pre-egress ``RegexInjectionFilter`` that docs/CHARTER.md names as the
+    control making the cloud-LLM egress carve-out acceptable.
+    """
+
+    def test_all_three_tiers_run_in_the_test_job(self) -> None:
+        run_text = _job_run_text(_load_ci_jobs()["test"])
+        for tier in _ORPHAN_TIERS:
+            assert f"pytest {tier}" in run_text or f" {tier}" in run_text, (
+                f"{tier} must run in the blocking `test` job — it previously "
+                "ran in no CI path at all (F-028)"
+            )
+
+    def test_tiers_are_not_in_the_advisory_security_job(self) -> None:
+        """The `security` job is continue-on-error and would swallow failures."""
+        security = _load_ci_jobs()["security"]
+        assert security.get("continue-on-error") is True, (
+            "precondition changed: the security job is no longer advisory, so "
+            "this guard needs rethinking rather than deleting"
+        )
+        run_text = _job_run_text(security)
+        assert "tests/security" not in run_text, (
+            "tests/security must NOT run in the advisory `security` job — "
+            "continue-on-error would swallow every failure and recreate the "
+            "orphan-tier problem wearing a disguise"
+        )
+
+    def test_ci_sh_runs_all_three_tiers(self) -> None:
+        text = _CI_SH.read_text(encoding="utf-8")
+        for tier in _ORPHAN_TIERS:
+            assert tier in text, f"ci.sh lost the {tier} stage (F-028)"
+
+    def test_orphan_tier_stage_precedes_slim_gate(self) -> None:
+        text = _CI_SH.read_text(encoding="utf-8")
+        stage_at = text.find("pytest tests/functional")
+        assert stage_at != -1, "ci.sh lost its functional/user-journey/security stage"
+        slim_at = text.find("MOUSEDROID_CI_SLIM:-0")
+        assert slim_at != -1, "ci.sh lost the MOUSEDROID_CI_SLIM gate"
+        assert stage_at < slim_at, (
+            "the three tiers run in ~2.5s total — keep them OUTSIDE the "
+            "SLIM-gated block, same rationale as the smoke stage"
         )
 
 

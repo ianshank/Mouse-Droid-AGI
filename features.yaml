@@ -328,7 +328,7 @@ features:
       previously-unwired pillars (meta, growth, scaling) onto a runtime seam.
     category: "functional"
     priority: "medium"
-    status: "in_progress"
+    status: "done"
     tier: "fast"
     verification:
       - "regression + classification distiller objectives both proven (classification byte-identical)"
@@ -341,7 +341,7 @@ features:
       tests/unit/telemetry/test_growth_metrics.py
       tests/regression/test_growth_distillation_aqa.py
       tests/regression/test_growth_backwards_compat.py -q
-    implemented_in: null
+    implemented_in: "27b52338d6ddb2f6c882518f0fa78bd50a593101"
     depends_on: ["F-001"]
     notes: >-
       Default-OFF + soak-gated: keep growth.enabled off on the live rover until a
@@ -368,7 +368,7 @@ features:
       the DualStreamRSSM port is explicitly deferred (ADR-015).
     category: "functional"
     priority: "medium"
-    status: "in_progress"
+    status: "done"
     tier: "fast"
     verification:
       - "memory footprint constant over long rollouts; disabled path byte-identical; sink incorporated into predictions (S1b test)"
@@ -385,7 +385,7 @@ features:
       tests/integration/test_spike_step_distillation.py
       tests/regression/test_alayaworld_memory_distill_aqa.py
       tests/regression/test_alayaworld_memory_distill_backwards_compat.py -q
-    implemented_in: null
+    implemented_in: "e730a0a3fd14f66f1d39520abc67f5d153e3ddc4"
     depends_on: ["F-001"]
     notes: >-
       OpenSpec change mouse-droid-alayaworld-memory-distill (archived under
@@ -510,7 +510,7 @@ features:
       to ensure backward compatibility.
     category: "functional"
     priority: "medium"
-    status: "in_progress"
+    status: "done"
     tier: "fast"
     verification:
       - "MCP resources expose cursor-based episodic memory and semantic index"
@@ -520,8 +520,41 @@ features:
       - "OpenClawConfig.enabled=False renders the system byte-identical to prior behavior"
     validation_command: >-
       python -m pytest tests/unit/mcp/ tests/unit/memory/ tests/unit/orchestrator/ -q
-    implemented_in: null
+    implemented_in: "cb2d7246890c5246cf9f8ab721338b0e63d97c7f"
     depends_on: ["F-001"]
     notes: >-
       OpenSpec change mouse-droid-nemoclaw-integration (archived under
       openspec/changes/; repo-native artifacts authoritative).
+
+  - id: "F-028"
+    epic: "Quality Gates"
+    name: "Functional, user-journey and security test tiers reach a CI path"
+    description: >-
+      Three test tiers - tests/functional/, tests/user_journey/ and
+      tests/security/ - ran in ZERO CI paths: absent from scripts/ci.sh, from
+      .github/workflows/ci.yml and from every Makefile target, so they executed
+      only under a bare `pytest` and could rot invisibly. This is the same
+      failure mode the smoke tier had before PR #178. tests/security/ holds the
+      only coverage of the pre-egress RegexInjectionFilter that docs/CHARTER.md
+      names as the control making the cloud-LLM egress carve-out (#107)
+      acceptable, so the gap was governance-relevant, not merely hygiene. All
+      three tiers are wired into the blocking `test` job and into ci.sh, outside
+      the MOUSEDROID_CI_SLIM skip (the whole set runs in ~2.5s), and pinned by
+      TestOrphanTierWiring so the wiring cannot silently regress. They are
+      deliberately NOT placed in the ci.yml job named `security`, which is
+      continue-on-error and would swallow every failure.
+    category: "validation"
+    priority: "high"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "all three tiers appear in the blocking ci.yml `test` job and in scripts/ci.sh"
+      - "tests/security does NOT appear in the advisory continue-on-error `security` job"
+      - "the ci.sh stage precedes the MOUSEDROID_CI_SLIM gate (runs outside the slim skip)"
+      - "TestOrphanTierWiring fails when the wiring is removed (verified by reverting)"
+    validation_command: "bash scripts/validations/F-028.sh"
+    implemented_in: "175606b052bac2b613144ffca10c6a4982a7def8"
+    depends_on: ["F-001"]
+    notes: >-
+      implemented_in is pinned to the branch-point commit and must be re-pinned
+      to the squash SHA post-merge, per the F-015..F-021 convention.

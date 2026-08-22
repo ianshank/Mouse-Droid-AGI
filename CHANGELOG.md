@@ -8,6 +8,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Sprint 6: CI Tier Completeness & F-022/023/027 Closeout
+
+- **F-028 — three test tiers reached zero CI paths.** `tests/functional/`,
+  `tests/user_journey/` and `tests/security/` were absent from `scripts/ci.sh`,
+  `.github/workflows/ci.yml` and every Makefile target, so they ran only under a
+  bare `pytest` and could rot invisibly — the same failure mode the smoke tier had
+  before PR #178. `tests/security/` holds the only coverage of the pre-egress
+  `RegexInjectionFilter` that `docs/CHARTER.md` §3 names as the control making the
+  cloud-LLM egress carve-out acceptable. All three are now wired into the blocking
+  `test` job and into `ci.sh` outside the `MOUSEDROID_CI_SLIM` gate (~2.5s total),
+  and pinned by `TestOrphanTierWiring`. Deliberately NOT placed in the `ci.yml` job
+  named `security`, which is `continue-on-error` and would swallow every failure.
+- **F-022, F-023, F-027 closed out** — `in_progress` → `done` with hex
+  `implemented_in` pinned to `27b5233`, `e730a0a` and `cb2d724`. Their operator
+  halves (growth soak gate, AlayaWorld Jetson spike) remain open in `NEXT_STEPS.md`.
+- **`openspec/project.md` gained a `landed` column** — the `openspec-change` skill
+  requires a landing SHA and the registry had nowhere to record one.
+- **Fixed a brittle regression pin**: `test_alayaworld_memory_distill_backwards_compat.py`
+  asserted `f023["status"] == "in_progress"`, a lifecycle snapshot masquerading as a
+  schema property, which failed the moment F-023 closed. Replaced with the durable
+  invariant (status in-vocabulary; a `done` entry carries a 40-hex `implemented_in`).
+
 ### Added — Sprint 5: Docs Consolidation & F-024 Closeout (Phase 6)
 
 Documentation consolidation, line-budget enforcement, and feature closeout:
