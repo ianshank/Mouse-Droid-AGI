@@ -210,6 +210,18 @@ jobs:
                     --import-mode=importlib \
                     -v --tb=short --no-cov
 
+            # Functional / user-journey / security tiers ran in NO CI path at
+            # all until F-028 -- the same rot the smoke tier suffered before
+            # PR #178. These go in `test` (blocking), NOT the advisory
+            # `security` job: that job is continue-on-error and would swallow
+            # every failure.
+            - name: Run functional + user-journey + security tiers
+              run: |
+                  pytest tests/functional tests/user_journey tests/security \
+                    -m "not hardware and not slow" \
+                    --import-mode=importlib \
+                    -v --tb=short --no-cov
+
             - name: Upload coverage
               if: matrix.python-version == '3.11'
               uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

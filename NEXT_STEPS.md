@@ -53,7 +53,7 @@ The legacy v0.3.0 execution-plan phase numbering lives only in
     in `.github/workflows/ci.yml` and `.github/advisory_stages.yaml`.
 14. **[Docs — P2] Reconcile hardware docs with chassis (audit R9).** WAVE ROVER is 4WD skid-steer;
     chassis is encoder-less, camera is IMX708, power is 3S 18650 UPS.
-15. **[World model — P2] F-023 operator follow-ups (AlayaWorld adaptation).** Distillation spike per
+15. **[World model — P2] F-023 operator follow-ups (AlayaWorld adaptation).** Catalog entry is now `done` (`e730a0a`); this is the remaining *operator* half — Distillation spike per
     `docs/runbooks/jetson-alayaworld-spike.md` and `scripts/compare_drift.py`.
 16. **[Portfolio — P2] Record 60-second hardware demo clip** on Jetson and link in README (host as release asset).
 17. **[Portfolio — P2] Git-history purge** post-reframe PR (#167): run `scripts/purge_history.sh` and rename slug to `mouse-droid`.
@@ -145,7 +145,7 @@ Dependency direction is strictly **Phase 1 → 2 → 3 → 4**; Phases 5 and 6 a
 - **Scripted WAN-drop failover drill** — capture the operator drill asserting
   `fallback_primary_to_secondary` + `fallback_primary_retry_attempt` once the
   ESP32 is repaired and a full end-to-end mission can run.
-- **[Cognitive integration — F-022] Soak-gate the growth pillar before enabling it.**
+- **[Cognitive integration — F-022] Soak-gate the growth pillar before enabling it.** Catalog entry is now `done` (`27b5233`); the soak gate below is the operator half.
   The `growth` pillar (VLA knowledge distillation) is now wired as a default-OFF,
   off-loop coordinator (distilled student persisted to a SHA-256 slot, never
   hot-swapped). Keep `growth.enabled` off on the live rover until a soak gate

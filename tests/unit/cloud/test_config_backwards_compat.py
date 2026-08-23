@@ -31,8 +31,13 @@ def test_settings_with_gcp_project_id() -> None:
     assert s.gcp.pubsub.experience_topic == "mousedroid-experience"
     assert s.gcp.storage.bucket == "mousedroid-experience"
     assert s.gcp.storage.compression == "gzip"
-    assert s.gcp.logging.enabled is True
-    assert s.gcp.monitoring.enabled is True
+    # F-029: every off-device egress channel is opt-in. This assertion used to
+    # read True/True/False -- which is exactly the hazard that change removed: a
+    # block declaring only project_id silently enabled two egress channels the
+    # operator never named. Pinned in depth by
+    # tests/regression/test_gcp_egress_defaults_aqa.py.
+    assert s.gcp.logging.enabled is False
+    assert s.gcp.monitoring.enabled is False
     assert s.gcp.firestore.enabled is False
     assert s.gcp.training is None
     assert s.gcp.simulation is None

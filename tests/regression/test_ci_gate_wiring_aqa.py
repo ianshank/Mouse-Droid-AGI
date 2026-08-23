@@ -19,12 +19,24 @@ Pinned contracts:
   ``.github/advisory_stages.yaml`` entry (mirrors
   ``scripts/check_advisory_promotions.py`` as a PR-time signal);
 * scripts/ci.sh runs the smoke stage OUTSIDE the ``MOUSEDROID_CI_SLIM`` skip;
+* the functional / user-journey / security tiers run in the blocking ``test``
+  job and in ci.sh, and never in the advisory ``security`` job (F-028);
+* those three tiers use the SAME pytest marker expression in all three places
+  that run them (ci.yml, ci.sh, scripts/validations/F-028.sh), so local, CI,
+  and the feature's own validation command cannot silently run different
+  test sets;
+* EVERY discovered tests/<tier>/ reaches a CI path or carries a documented
+  exemption -- generic, so the next orphaned tier cannot slip through;
+* no live doc claims ``tests/security/`` is the ONLY coverage of the
+  pre-egress injection filter -- it is not, and F-028's own proposal and
+  peer-review both said so, the latter marking it CONFIRMED;
 * pytest ``addopts`` keeps ``--import-mode=importlib`` (duplicate test
   basenames make prepend mode fragile).
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
@@ -35,6 +47,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CI_YML = _REPO_ROOT / ".github" / "workflows" / "ci.yml"
 _CI_SH = _REPO_ROOT / "scripts" / "ci.sh"
 _ADVISORY_STAGES = _REPO_ROOT / ".github" / "advisory_stages.yaml"
+_F028_VALIDATION = _REPO_ROOT / "scripts" / "validations" / "F-028.sh"
 
 
 def _load_ci_jobs() -> dict:
@@ -46,9 +59,140 @@ def _load_ci_jobs() -> dict:
     return jobs
 
 
+def _strip_comments(text: str) -> str:
+    """Drop whole-line ``#`` comments, keeping ``#`` inside a command.
+
+    Asserting a tier name against raw text is satisfiable by a *comment* --
+    including the explanatory comments this repo writes above each stage.
+    Deleting the pytest line while keeping the comment would leave the pin
+    green, which is precisely the un-pinned-wiring failure this module exists
+    to prevent.
+
+    This applies to ``ci.yml`` as much as to the shell scripts: ``yaml``
+    parses a ``run:`` block as a **literal scalar**, so every ``#`` line inside
+    it survives ``safe_load`` verbatim. An earlier revision asserted the
+    opposite in a comment and left the ci.yml-side pins comment-satisfiable --
+    the same defect, fixed on one side only.
+    """
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+
+
+def _shell_commands(path: Path) -> str:
+    """A shell script's text with comment lines stripped."""
+    return _strip_comments(path.read_text(encoding="utf-8"))
+
+
+def _ci_sh_commands() -> str:
+    """scripts/ci.sh, comment-stripped (see :func:`_strip_comments`)."""
+    return _shell_commands(_CI_SH)
+
+
+def _logical_lines(text: str) -> list[str]:
+    """Join backslash-continued shell lines into one logical command each.
+
+    The orphan-tier invocation spans four physical lines everywhere it appears,
+    so a per-line regex would never see the command and its ``-m`` expression
+    together.
+
+    Only an ODD number of trailing backslashes continues a line: ``foo\\``
+    ends a command with a literal backslash. Treating that as a continuation
+    would splice an unrelated command onto the front of the next one, and the
+    marker regex takes the first match on the joined line.
+    """
+    commands: list[str] = []
+    buffer = ""
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        trailing_backslashes = len(line) - len(line.rstrip("\\"))
+        if trailing_backslashes % 2 == 1:
+            buffer += line[:-1].strip() + " "
+            continue
+        commands.append((buffer + line.strip()).strip())
+        buffer = ""
+    if buffer:
+        commands.append(buffer.strip())
+    return commands
+
+
+_ORPHAN_TIER_INVOCATION = "pytest tests/functional"
+# ``-m`` followed by a *quoted* argument. ``python -m pytest`` is unquoted, so
+# it cannot be mistaken for the marker expression.
+_MARKER_EXPR = re.compile(r'-m\s+"([^"]*)"')
+
+
+def _orphan_tier_markers(text: str, *, site: str) -> list[str]:
+    """Every marker expression guarding an orphan-tier run in this text.
+
+    A list, not the first match: one file can invoke the tiers more than once,
+    and returning only the first would make *intra*-site drift invisible --
+    the same instance-not-class mistake this module keeps correcting.
+
+    Empty when the text does not run the tiers. Raises when it runs them with
+    no ``-m`` filter, since that would collect hardware-marked tests.
+    """
+    markers: list[str] = []
+    for command in _logical_lines(text):
+        if _ORPHAN_TIER_INVOCATION not in command:
+            continue
+        match = _MARKER_EXPR.search(command)
+        assert match is not None, (
+            f"{site} runs the orphan tiers with no -m marker expression, so "
+            f"hardware-marked tests would collect there: {command}"
+        )
+        markers.append(match.group(1))
+    return markers
+
+
+# Sites that must be found, whatever else discovery turns up. Their absence is
+# a wiring regression, not a naming change, so it fails loudly rather than
+# shrinking the comparison set to whatever happens to still match.
+_REQUIRED_MARKER_SITES = frozenset(
+    {".github/workflows/ci.yml", "scripts/ci.sh", "scripts/validations/F-028.sh"}
+)
+
+
+def _discover_marker_sites() -> dict[str, list[str]]:
+    """Every place in the repo that runs the orphan tiers, and its markers.
+
+    Discovered rather than listed. A hardcoded roster of three was exactly the
+    bug: `make behaviour` is a fourth site, and it agreed only by luck. A fifth
+    added tomorrow is covered here without editing this file.
+
+    Values are lists so a file invoking the tiers twice contributes both
+    markers -- ci.yml in particular is collected across *every* job, not just
+    the first one found.
+    """
+    sites: dict[str, list[str]] = {}
+
+    ci_yml_markers: list[str] = []
+    for job_name, job in _load_ci_jobs().items():
+        ci_yml_markers.extend(
+            _orphan_tier_markers(_job_run_text(job), site=f"ci.yml job {job_name}")
+        )
+    if ci_yml_markers:
+        sites[".github/workflows/ci.yml"] = ci_yml_markers
+
+    candidates = [_CI_SH, _REPO_ROOT / "Makefile"]
+    candidates.extend(sorted((_REPO_ROOT / "scripts" / "validations").glob("*.sh")))
+    for path in candidates:
+        if not path.is_file():
+            continue
+        rel = path.relative_to(_REPO_ROOT).as_posix()
+        markers = _orphan_tier_markers(_shell_commands(path), site=rel)
+        if markers:
+            sites[rel] = markers
+    return sites
+
+
 def _job_run_text(job: dict) -> str:
-    """Concatenate every run: block of a job for substring pins."""
-    return "\n".join(str(step.get("run", "")) for step in job.get("steps", []))
+    """Concatenate every run: block of a job, comment-stripped.
+
+    Comment-stripped because ``yaml`` keeps ``#`` lines inside a ``run:``
+    block scalar verbatim, so a substring pin over the raw text is satisfiable
+    by a commented-out invocation -- and the negative pins below would go
+    falsely red on a comment that merely *names* a tier.
+    """
+    return _strip_comments("\n".join(str(step.get("run", "")) for step in job.get("steps", [])))
 
 
 class TestTestJobTiers:
@@ -197,6 +341,280 @@ class TestCiShSmokeStage:
         assert smoke_at < slim_at, (
             "the smoke stage must run BEFORE (outside) the SLIM-gated block — "
             "it is cheap enough for memory-constrained hosts"
+        )
+
+
+_ORPHAN_TIERS = ("tests/functional", "tests/user_journey", "tests/security")
+
+# Tiers deliberately absent from hosted CI, each with the reason. Same posture
+# as _ALLOWED_CROSS_SUBSYSTEM_IMPORTS in scripts/check_subsystem_boundaries.py:
+# a ratchet, not a bypass valve. Adding an entry is a reviewable policy
+# decision; it is not a way to silence the gate.
+_CI_EXEMPT_TIERS: dict[str, str] = {
+    "hardware": (
+        "rover-only: opens real GPIO / serial / CSI devices, so it must not "
+        "collect on shared runners. Runs on the self-hosted Jetson via "
+        "scripts/jetson_full_validation.sh; .github/workflows/harness.yml "
+        "documents the deliberate omission."
+    ),
+}
+
+
+def _discover_test_tiers() -> set[str]:
+    """Every tests/<tier>/ directory that actually holds tests.
+
+    Discovered rather than listed, so a tier added tomorrow is covered without
+    editing this file. That is the whole point: F-028 fixed three orphaned
+    tiers, but a hardcoded roster would let the *next* orphan slip through
+    exactly the same way.
+    """
+    tests_root = _REPO_ROOT / "tests"
+    return {
+        d.name
+        for d in tests_root.iterdir()
+        if d.is_dir() and d.name != "__pycache__" and any(d.rglob("test_*.py"))
+    }
+
+
+class TestEveryTierReachesCi:
+    """No test tier may run in zero CI paths -- generically, not by roster."""
+
+    def test_every_tier_is_wired_or_explicitly_exempt(self) -> None:
+        ci_sh = _ci_sh_commands()
+        # yaml.safe_load drops comments, so the joined run: text is already
+        # comment-free -- unlike the raw ci.yml source.
+        ci_yml = "\n".join(_job_run_text(job) for job in _load_ci_jobs().values())
+        orphans = sorted(
+            tier
+            for tier in _discover_test_tiers()
+            if tier not in _CI_EXEMPT_TIERS
+            and f"tests/{tier}" not in ci_sh
+            and f"tests/{tier}" not in ci_yml
+        )
+        assert not orphans, (
+            f"test tier(s) {orphans} run in ZERO CI paths. Either wire them into "
+            "scripts/ci.sh and the blocking `test` job, or add an entry to "
+            "_CI_EXEMPT_TIERS with a documented reason. A tier nobody runs rots "
+            "invisibly -- that is what F-028 existed to fix."
+        )
+
+    def test_exemptions_are_not_stale(self) -> None:
+        """An exemption for a tier that no longer exists is dead policy."""
+        discovered = _discover_test_tiers()
+        stale = sorted(t for t in _CI_EXEMPT_TIERS if t not in discovered)
+        assert not stale, (
+            f"_CI_EXEMPT_TIERS names tier(s) {stale} that no longer exist -- "
+            "drop the entry rather than leaving a rule nobody can trip"
+        )
+
+    def test_every_exemption_carries_a_reason(self) -> None:
+        """A bare exemption is indistinguishable from an oversight."""
+        for tier, reason in _CI_EXEMPT_TIERS.items():
+            assert reason.strip(), f"exemption for {tier!r} has no documented reason"
+
+
+class TestOrphanTierWiring:
+    """F-028: the functional / user-journey / security tiers reach a CI path.
+
+    All three ran in ZERO CI paths -- absent from ci.sh and ci.yml -- so they
+    could rot invisibly, exactly as the smoke tier did before PR #178.
+
+    Scope note: this closes a *wiring* gap, not a coverage hole. The
+    ``RegexInjectionFilter`` unit coverage in
+    ``tests/unit/security/test_injection_filter.py`` (11 tests) already ran in
+    the coverage-gated ``test`` job; ``tests/security/`` adds the pre-egress
+    path through the gateway seam on top of it.
+    """
+
+    def test_all_three_tiers_run_in_the_test_job(self) -> None:
+        run_text = _job_run_text(_load_ci_jobs()["test"])
+        for tier in _ORPHAN_TIERS:
+            assert tier in run_text, (
+                f"{tier} must run in the blocking `test` job — it previously "
+                "ran in no CI path at all (F-028)"
+            )
+
+    def test_tiers_are_not_in_the_advisory_security_job(self) -> None:
+        """The `security` job is continue-on-error and would swallow failures."""
+        security = _load_ci_jobs()["security"]
+        assert security.get("continue-on-error") is True, (
+            "precondition changed: the security job is no longer advisory, so "
+            "this guard needs rethinking rather than deleting"
+        )
+        run_text = _job_run_text(security)
+        assert "tests/security" not in run_text, (
+            "tests/security must NOT run in the advisory `security` job — "
+            "continue-on-error would swallow every failure and recreate the "
+            "orphan-tier problem wearing a disguise"
+        )
+
+    def test_ci_sh_runs_all_three_tiers(self) -> None:
+        commands = _ci_sh_commands()
+        for tier in _ORPHAN_TIERS:
+            assert tier in commands, (
+                f"ci.sh lost the {tier} stage (F-028) — note this checks the "
+                "comment-stripped command text, so an explanatory comment "
+                "naming the tier does not satisfy it"
+            )
+
+    def test_orphan_tier_stage_precedes_slim_gate(self) -> None:
+        text = _ci_sh_commands()
+        stage_at = text.find("pytest tests/functional")
+        assert stage_at != -1, "ci.sh lost its functional/user-journey/security stage"
+        slim_at = text.find("MOUSEDROID_CI_SLIM:-0")
+        assert slim_at != -1, "ci.sh lost the MOUSEDROID_CI_SLIM gate"
+        assert stage_at < slim_at, (
+            "the three tiers run in ~2.5s total — keep them OUTSIDE the "
+            "SLIM-gated block, same rationale as the smoke stage"
+        )
+
+
+class TestOrphanTierMarkerParity:
+    """Every site that runs the orphan tiers uses the SAME marker expression.
+
+    Four run them today -- CI (``ci.yml``), the local superset (``ci.sh``),
+    F-028's own ``validation_command`` (``scripts/validations/F-028.sh``), and
+    the ``make behaviour`` target. They drifted the moment the first was fixed
+    in isolation: ci.yml said ``not hardware and not slow`` while ci.sh and
+    F-028.sh said ``not hardware``, so a green local run and a green validation
+    command asserted a *different test set* than CI gated on.
+
+    Latent while no ``slow`` marks live in those tiers -- and a trap the moment
+    one does. Sites are **discovered**, not listed: an earlier cut named the
+    three from the review finding and missed ``make behaviour``, which agreed
+    only by luck. Naming them would repeat the mistake this class exists to
+    correct -- fixing the instances, not the class.
+    """
+
+    def test_the_known_wiring_sites_are_all_discovered(self) -> None:
+        """Discovery must not silently shrink to whatever still matches.
+
+        If `ci.sh` stops running the tiers, the parity assertion below would
+        pass vacuously over the survivors -- measured: reverting ci.sh and
+        ci.yml to the pre-F-028 base leaves parity and the hardware filter
+        both green over the two remaining sites, and only this assertion red.
+        Pin the floor separately.
+        """
+        missing = sorted(_REQUIRED_MARKER_SITES - set(_discover_marker_sites()))
+        assert not missing, f"these no longer run the orphan tiers at all: {missing}"
+
+    def test_marker_expression_is_identical_across_every_site(self) -> None:
+        markers = _discover_marker_sites()
+        distinct = {m for site_markers in markers.values() for m in site_markers}
+        assert len(distinct) == 1, (
+            "the orphan tiers run under different pytest marker expressions "
+            f"depending on who invokes them: {markers}. Local runs and F-028's "
+            "validation command must gate on exactly what CI gates on, or "
+            "'it passes locally' stops meaning anything."
+        )
+
+    def test_marker_still_excludes_hardware_marked_tests(self) -> None:
+        """Parity alone is satisfiable by deleting the filter everywhere.
+
+        Pin the safety property too: ``hardware``-marked tests open real
+        GPIO / serial / CSI devices and must never collect on a shared runner.
+        """
+        for site, site_markers in _discover_marker_sites().items():
+            for marker in site_markers:
+                assert "not hardware" in marker, (
+                    f"{site} no longer excludes hardware-marked tests from the "
+                    f"orphan tiers (marker={marker!r})"
+                )
+
+
+_INJECTION_FILTER_UNIT_TESTS = (
+    _REPO_ROOT / "tests" / "unit" / "security" / "test_injection_filter.py"
+)
+
+# Whitespace-normalised so a claim wrapped across lines is still caught. A
+# line-oriented grep missed the copy in proposal.md for exactly that reason,
+# which is how a sweep that reported "corrected everywhere" left two behind.
+_ONLY_COVERAGE_CLAIM = re.compile(
+    r"only\s+(?:known\s+)?cover(?:age|s)?[^.]{0,120}?"
+    r"(?:pre-egress|injection|RegexInjectionFilter)"
+    r"|(?:pre-egress|injection|RegexInjectionFilter)[^.]{0,120}?only\s+cover",
+    re.IGNORECASE,
+)
+
+# What redeems a mention of the claim. A doc may state it, quote it, or refute
+# it -- it may not leave it bare, because bare is how it reads as current
+# truth. Naming the unit-test file, saying "unit coverage", or marking the
+# claim REFUTED / false all discharge it.
+#
+# Framed this way rather than as a phrase blacklist with an exemption list:
+# a verdict table SHOULD be able to quote the claim it refutes, and a proposal
+# SHOULD be able to state the narrow version ("only coverage through the
+# gateway seam"). Both are fine; neither is fine unqualified.
+_CLAIM_QUALIFIERS = (
+    "test_injection_filter",
+    "unit coverage",
+    "refuted",
+    "was false",
+)
+# Normalised characters after the match in which a qualifier must appear.
+_QUALIFIER_WINDOW = 400
+
+_DOC_GLOBS = ("*.md", "docs/**/*.md", "openspec/**/*.md", ".claude/**/*.md", "src/**/*.md")
+
+
+def _tracked_docs() -> list[Path]:
+    """Every prose surface a future engineer might read as current truth."""
+    seen: dict[str, Path] = {}
+    for pattern in _DOC_GLOBS:
+        for path in _REPO_ROOT.glob(pattern):
+            if path.is_file():
+                seen[path.relative_to(_REPO_ROOT).as_posix()] = path
+    return [seen[k] for k in sorted(seen)]
+
+
+class TestOrphanTierNarrativeAccuracy:
+    """No doc may claim tests/security is the ONLY coverage of the filter.
+
+    F-028's own proposal and peer-review said exactly that, and the
+    peer-review marked it **CONFIRMED** -- a governance record asserting a
+    falsehood as verified. It survived one sweep that reported "corrected
+    everywhere", because that sweep fixed the places it remembered rather than
+    the places that had it.
+
+    The claim is checkable against the tree, so this pins the doc to the tree
+    rather than blacklisting a phrase: while unit coverage of the filter
+    exists, no live doc may say the security tier is the only coverage. What
+    ``tests/security/`` uniquely exercises is the **gateway seam** -- a wiring
+    gap, not a coverage hole, and the difference is the whole justification
+    for F-028's scope.
+    """
+
+    def test_unit_coverage_of_the_injection_filter_exists(self) -> None:
+        """The tree fact the claim contradicts. If this ever stops being true,
+        the sibling assertion below is measuring nothing."""
+        assert _INJECTION_FILTER_UNIT_TESTS.is_file(), (
+            f"{_INJECTION_FILTER_UNIT_TESTS} is gone -- either restore it or "
+            "revisit the narrative pinned below, which depends on it existing"
+        )
+        body = _INJECTION_FILTER_UNIT_TESTS.read_text(encoding="utf-8")
+        assert body.count("def test_") >= 2, (
+            "the injection filter's unit coverage is what makes 'the security "
+            "tier is the only coverage' false; it must actually hold tests"
+        )
+
+    def test_no_live_doc_states_the_claim_unqualified(self) -> None:
+        offenders: list[str] = []
+        for path in _tracked_docs():
+            normalised = " ".join(path.read_text(encoding="utf-8").split())
+            for match in _ONLY_COVERAGE_CLAIM.finditer(normalised):
+                window = normalised[match.start() : match.end() + _QUALIFIER_WINDOW].lower()
+                if not any(q in window for q in _CLAIM_QUALIFIERS):
+                    offenders.append(
+                        f"{path.relative_to(_REPO_ROOT).as_posix()}: "
+                        f"...{normalised[match.start() : match.end()]}..."
+                    )
+        assert not offenders, (
+            "these state, unqualified, that tests/security is the only coverage "
+            "of the pre-egress injection filter:\n  " + "\n  ".join(offenders) + "\n"
+            "It is not: tests/unit/security/test_injection_filter.py already ran "
+            "in the coverage-gated `test` job. Either narrow the claim to the "
+            "gateway seam (true, and what F-028 actually fixed) or mark it "
+            "refuted -- but do not leave it reading as current truth."
         )
 
 

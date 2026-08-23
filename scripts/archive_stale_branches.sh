@@ -19,11 +19,18 @@
 #      via a normal diff, so it gets human triage, not bulk deletion).
 #   2. dependabot/** -- open dependency PRs.
 #   3. archive/** -- already archived.
-#   4. THE PIN CARRIERS: whichever branches currently keep the
-#      deployments/jetson-image.json SHA reachable. The config-compat CI gate
-#      worktrees that commit out; if the last branch containing it is deleted
-#      it becomes unreachable and the gate dies repo-wide. Once that SHA is
-#      reachable from a tag, this protection lifts on its own.
+#   4. THE PIN CARRIERS: whichever branches currently keep a gate-critical SHA
+#      reachable. Two sources, both derived:
+#        a. deployments/jetson-image.json -- the config-compat CI gate worktrees
+#           that commit out; if the last branch containing it is deleted the
+#           gate dies repo-wide.
+#        b. features.yaml -- every `implemented_in` pin, which the nightly
+#           `validate.py --strict-git` resolves. A feature closed out on a
+#           branch and then squash-merged leaves its pin on a commit that
+#           exists nowhere else, so deleting the branch breaks provenance for
+#           that feature. Sourcing only (a) was a real gap: the same failure,
+#           one file over.
+#      Once a SHA is reachable from a REMOTE tag, its protection lifts on its own.
 #
 # Usage:
 #   bash scripts/archive_stale_branches.sh           # DRY RUN (default): print the plan
@@ -81,19 +88,35 @@ echo "default branch: $default_branch"
 new_root=$(git rev-list --max-parents=0 "$REMOTE/$default_branch" | tail -1)
 echo "default-branch root: $new_root"
 
-# Branches that alone keep the deployed-image schema SHA reachable.
-pinned_sha=""
+# Every SHA a gate needs to stay reachable, collected from both pin files.
+pinned_shas=""
 if [ -f deployments/jetson-image.json ]; then
-    pinned_sha=$(python3 -c 'import json;print(json.load(open("deployments/jetson-image.json"))["sha"])')
+    pinned_shas=$(python3 -c 'import json;print(json.load(open("deployments/jetson-image.json"))["sha"])')
 fi
+if [ -f features.yaml ]; then
+    # Extracted with sed rather than a YAML parse so this script keeps working
+    # in a bare environment with no PyYAML -- a protection that silently stops
+    # applying because an import failed is worse than no protection, since it
+    # still prints a plan that looks complete. Verified to match a yaml.safe_load
+    # of the same file exactly. Every pin is collected, not just `done` ones:
+    # over-protecting a branch only skips a deletion, while under-protecting
+    # loses a commit permanently.
+    feature_pins=$(sed -n 's/.*implemented_in:[[:space:]]*"\?\([0-9a-f]\{40\}\)"\?.*/\1/p' features.yaml |
+        sort -u | tr '\n' ' ')
+    pinned_shas="$pinned_shas $feature_pins"
+fi
+
+# Only a tag that exists ON THE REMOTE protects a pin. A purely local tag must
+# NOT count: it makes the pin look safe here while the remote would still lose
+# the commit on deletion. So intersect the local "tags containing this commit"
+# set with the tag names the remote actually publishes. Fetched once, outside
+# the loop.
+remote_tags=$(git ls-remote --tags "$REMOTE" 2>/dev/null |
+    sed 's|.*refs/tags/||; s|\^{}$||' | sort -u || true)
+
 pin_carriers=""
-if [ -n "$pinned_sha" ] && git cat-file -e "$pinned_sha" 2>/dev/null; then
-    # Only a tag that exists ON THE REMOTE protects the pin. A purely local tag
-    # must NOT count: it makes the pin look safe here while the remote would
-    # still lose the commit on deletion. So intersect the local "tags containing
-    # this commit" set with the tag names the remote actually publishes.
-    remote_tags=$(git ls-remote --tags "$REMOTE" 2>/dev/null |
-        sed 's|.*refs/tags/||; s|\^{}$||' | sort -u || true)
+for pinned_sha in $pinned_shas; do
+    git cat-file -e "$pinned_sha" 2>/dev/null || continue
     protecting_tag=""
     for t in $(git tag --contains "$pinned_sha" 2>/dev/null || true); do
         if printf '%s\n' "$remote_tags" | grep -qxF "$t"; then
@@ -102,13 +125,14 @@ if [ -n "$pinned_sha" ] && git cat-file -e "$pinned_sha" 2>/dev/null; then
         fi
     done
     if [ -z "$protecting_tag" ]; then
-        pin_carriers=$(git branch -r --contains "$pinned_sha" --format='%(refname:short)' |
+        carriers=$(git branch -r --contains "$pinned_sha" --format='%(refname:short)' |
             sed "s|^$REMOTE/||" | tr '\n' ' ')
+        pin_carriers="$pin_carriers $carriers"
         echo "pin $pinned_sha is NOT reachable from any REMOTE tag -- protecting its carriers"
     else
         echo "pin $pinned_sha is reachable from remote tag '$protecting_tag' -- carriers not needed"
     fi
-fi
+done
 
 archive=""
 skipped=0
@@ -119,7 +143,7 @@ for b in $(git branch -r --format='%(refname:short)' | sed "s|^$REMOTE/||" | gre
     case " $KEEP_EXTRA " in *" $b "*) continue ;; esac
     case " $pin_carriers " in
         *" $b "*)
-            echo "  PROTECTED (holds the config-compat pin): $b"
+            echo "  PROTECTED (holds a gate-critical pin): $b"
             skipped=$((skipped + 1))
             continue
             ;;

@@ -8,6 +8,115 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — Sprint 6: CI Tier Completeness, Egress Gating & F-022/023/027 Closeout
+
+- **F-028 — three test tiers reached zero CI paths.** `tests/functional/`,
+  `tests/user_journey/` and `tests/security/` were absent from `scripts/ci.sh`,
+  `.github/workflows/ci.yml` and every Makefile target, so they ran only under a
+  bare `pytest` and could rot invisibly — the same failure mode the smoke tier had
+  before PR #178. `tests/security/` exercises the pre-egress path through the
+  gateway seam for the `RegexInjectionFilter` that `docs/CHARTER.md` §3 names as
+  the control making the cloud-LLM egress carve-out acceptable — the filter's own
+  unit coverage already ran, so this closes a wiring gap. All three are now wired into the blocking
+  `test` job and into `ci.sh` outside the `MOUSEDROID_CI_SLIM` gate (~2.5s total),
+  and pinned by `TestOrphanTierWiring`. Deliberately NOT placed in the `ci.yml` job
+  named `security`, which is `continue-on-error` and would swallow every failure.
+- **F-029 — GCP off-device egress channels now default OFF.** `GCPLoggingConfig.enabled`
+  and `GCPMonitoringConfig.enabled` defaulted `True` while `GCPFirestoreConfig.enabled`
+  defaulted `False`; that asymmetry meant an operator adding a minimal `gcp:` block for one
+  reason silently enabled two egress channels they never named. Both now default `False`.
+  Behaviour changes for no shipped config — `config/gcp_digital_twin.yaml` sets all three
+  explicitly, now pinned against both the parsed model and the raw YAML. Gates F-032.
+  Peer review found the first cut half-done: `GCPPubSubConfig` and `GCPStorageConfig` had
+  no `enabled` field at all, and `build_cloud_telemetry_sink` / `build_cloud_experience_exporter`
+  gated on `cfg.gcp is None` alone — so a partial block still built a live Pub/Sub sink and
+  GCS exporter. Those two are the channels that were actually wired. Both now gated, with a
+  structured `cloud_*_disabled` log so a disabled sink is not a silent `None`.
+- **Generic CI tier gate.** `TestEveryTierReachesCi` discovers `tests/*/` rather than
+  checking a hardcoded roster, so the *next* orphaned tier cannot slip through the way
+  these three did. `_CI_EXEMPT_TIERS` carries `hardware` with a documented reason.
+- **Catalog-wide hex-SHA gate.** `implemented_in` on a `done` feature must be a full
+  40-character SHA — a rule `HARNESS_SPEC.md` and the `openspec-change` skill both stated
+  but nothing enforced.
+- **`make behaviour`** runs the functional / user-journey / security tiers locally.
+- **F-022, F-023, F-027 closed out** — `in_progress` → `done` with hex
+  `implemented_in` pinned to `27b5233`, `e730a0a` and `cb2d724`. Their operator
+  halves (growth soak gate, AlayaWorld Jetson spike) remain open in `NEXT_STEPS.md`.
+- **`openspec/project.md` gained a `landed` column** — the `openspec-change` skill
+  requires a landing SHA and the registry had nowhere to record one.
+- **Fixed a brittle regression pin**: `test_alayaworld_memory_distill_backwards_compat.py`
+  asserted `f023["status"] == "in_progress"`, a lifecycle snapshot masquerading as a
+  schema property, which failed the moment F-023 closed. Replaced with the durable
+  invariant (status in-vocabulary; a `done` entry carries a 40-hex `implemented_in`).
+- **`scripts/prove_pin_fails.sh` corrupted same-named paths.** It keyed its snapshot on
+  `$(basename)`, so two `--paths` entries sharing a filename collided: the second
+  overwrote the first and restore wrote b's bytes over a — data loss in a tool whose
+  whole purpose is safe restore. Snapshots now mirror the sanitized relative path, and
+  `tests/unit/scripts/test_prove_pin_fails.py` drives the real script against a synthetic
+  git repo to prove both files come back intact.
+- **Marker parity across every site that runs the orphan tiers.** `ci.sh` and
+  `scripts/validations/F-028.sh` filtered `not hardware` while `ci.yml` filtered
+  `not hardware and not slow`, so a green local run and a green validation command
+  asserted a different test set than CI gated on. Aligned and pinned by
+  `TestOrphanTierMarkerParity`, which also requires each site to keep excluding
+  `hardware` — parity alone is satisfiable by deleting the filter everywhere.
+  Sites are **discovered**, not listed: the first cut named the three from the
+  review finding and missed a fourth, `make behaviour`, which agreed only by luck.
+  A separate assertion pins that the known sites are still found, so parity cannot
+  pass vacuously over whatever survives — measured: reverting `ci.sh` and `ci.yml`
+  to the pre-F-028 base turns 5 of 20 assertions red, and the two parity assertions
+  are *not* among them.
+- **Comment-stripping extended to `ci.yml`.** `yaml` parses a `run:` block as a literal
+  scalar, so `#` lines survive `safe_load`; the ci.yml-side wiring pins were therefore
+  satisfiable by a commented-out invocation, and the negative pin could go falsely red
+  on a comment merely naming a tier. This was the `ci.sh` defect fixed one round earlier,
+  left standing on the other side and then re-asserted as safe on a false premise.
+- **`scripts/prove_pin_fails.sh` hardened after review.** Three further defects, each
+  reproduced: a directory in `--paths` silently failed to snapshot (`cp` without `-r`),
+  the revert ran anyway, and the tool exited 0 reporting success over a corrupted tree —
+  directories are now refused before anything is touched; the `INT`/`TERM` handler
+  `return`ed instead of `exit`ing, so an interrupted run resumed and reported exit 3
+  ("restore failed") for a tree that was fine; and *any* non-zero pytest status counted
+  as proof the pin fired, so a collection or usage error at the base ref could pose as a
+  load-bearing pin — only pytest's `TESTS_FAILED` now qualifies.
+- **A backwards-compat test that asserted nothing.** `test_twin_overlay_still_builds_its_cloud_components`
+  called both cloud builders with no assertion, so it could only fail if one raised. Both
+  legitimately return `None` when the optional `[gcp]` extra is absent, making a
+  return-value assertion untestable; it now asserts on the `cloud_*_disabled` structured
+  events instead, with a converse test pinning that a gate which blocks stays diagnosable.
+- **The "only coverage" claim survived in the governance records.** A prior round
+  corrected it in the code comments, `ci.sh`, the CHANGELOG and `progress.md` and
+  reported "corrected everywhere" — but F-028's own `proposal.md` and `peer-review.md`
+  still carried it, the latter marking it **CONFIRMED** in a verdict table. A governance
+  record asserting a falsehood as verified is worse than an uncorrected comment, because
+  it is what the next engineer reads as settled. Both corrected, and
+  `TestOrphanTierNarrativeAccuracy` now pins the class: any doc mentioning the claim must
+  qualify it (name the unit-test file, say "unit coverage") or mark it refuted — a bare
+  statement reads as current truth. Proven by restoring the original wording (2 red).
+  `mouse-droid-cloud-egress-default-off/peer-review.md` had the mirror-image defect: an
+  appendix listing `pubsub`/`storage` as unaudited when this very change audits them.
+- **`scripts/archive_stale_branches.sh` protected one pin and ignored fifteen.** Its
+  safety net — never delete the last branch keeping a gate-critical commit reachable —
+  read exactly one SHA, from `deployments/jetson-image.json`. Every `implemented_in` pin
+  in `features.yaml` had none, so a feature closed out on a branch and then squash-merged
+  would lose its provenance commit to the next cleanup, and the nightly
+  `validate.py --strict-git` would start failing for a feature nobody touched. The header
+  already described the right mechanism ("whichever branches currently keep the SHA
+  reachable… protection lifts on its own once tag-reachable"); it just sourced one SHA
+  instead of the set. Now collects both files. Measured on the live repo: the plan moves
+  from 67 branches to delete / 10 protected → **35 / 51** — the 32 difference are sole
+  carriers of `implemented_in` SHAs that the old logic would have destroyed. Cleanup is
+  therefore now correctly contingent on the annotated-tag ritual, which is what lifts the
+  protection. Extracted with `sed` rather than a YAML parse so it keeps working with no
+  PyYAML — a protection that silently stops applying on an ImportError still prints a plan
+  that looks complete. `tests/unit/scripts/test_archive_stale_branches.py` drives the real
+  script in dry-run against a synthetic repo with a local bare remote; 2 of its 3 cases go
+  red against the deploy-pin-only version.
+- **Corrected an overclaiming docstring.** The catalog-wide hex-SHA gate said it checks a
+  *resolvable* SHA; it checks format. `175606b0…` — well-formed, resolvable, and naming the
+  branch point that contained neither change — shipped past it earlier in this same sprint.
+  Resolvability stays with `validate.py --strict-git` in the nightly, which has a full clone.
+
 ### Added — Sprint 5: Docs Consolidation & F-024 Closeout (Phase 6)
 
 Documentation consolidation, line-budget enforcement, and feature closeout:

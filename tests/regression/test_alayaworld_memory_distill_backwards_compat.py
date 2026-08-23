@@ -13,6 +13,7 @@ schema.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import jsonschema
@@ -134,5 +135,13 @@ def test_f023_catalog_entry_validates_against_harness_schema() -> None:
     ids = [f["id"] for f in catalog["features"]]
     assert "F-023" in ids
     f023 = next(f for f in catalog["features"] if f["id"] == "F-023")
-    assert f023["status"] == "in_progress"
     assert f023["depends_on"] == ["F-001"]
+    # Status is a lifecycle value, not a schema property -- pinning a literal
+    # here made this test fail the moment F-023 closed out. Pin the durable
+    # invariant instead: the status is in-vocabulary, and a `done` entry
+    # carries a resolvable hex `implemented_in` (never a branch name -- see
+    # .claude/skills/openspec-change/SKILL.md and HARNESS_SPEC.md).
+    assert f023["status"] in {"todo", "in_progress", "done", "blocked", "deferred"}
+    if f023["status"] == "done":
+        assert re.fullmatch(r"[0-9a-f]{40}", f023["implemented_in"] or "")
+        assert f023["validation_command"].strip()

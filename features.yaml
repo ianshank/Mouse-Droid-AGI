@@ -328,7 +328,7 @@ features:
       previously-unwired pillars (meta, growth, scaling) onto a runtime seam.
     category: "functional"
     priority: "medium"
-    status: "in_progress"
+    status: "done"
     tier: "fast"
     verification:
       - "regression + classification distiller objectives both proven (classification byte-identical)"
@@ -341,7 +341,7 @@ features:
       tests/unit/telemetry/test_growth_metrics.py
       tests/regression/test_growth_distillation_aqa.py
       tests/regression/test_growth_backwards_compat.py -q
-    implemented_in: null
+    implemented_in: "27b52338d6ddb2f6c882518f0fa78bd50a593101"
     depends_on: ["F-001"]
     notes: >-
       Default-OFF + soak-gated: keep growth.enabled off on the live rover until a
@@ -368,7 +368,7 @@ features:
       the DualStreamRSSM port is explicitly deferred (ADR-015).
     category: "functional"
     priority: "medium"
-    status: "in_progress"
+    status: "done"
     tier: "fast"
     verification:
       - "memory footprint constant over long rollouts; disabled path byte-identical; sink incorporated into predictions (S1b test)"
@@ -385,7 +385,7 @@ features:
       tests/integration/test_spike_step_distillation.py
       tests/regression/test_alayaworld_memory_distill_aqa.py
       tests/regression/test_alayaworld_memory_distill_backwards_compat.py -q
-    implemented_in: null
+    implemented_in: "e730a0a3fd14f66f1d39520abc67f5d153e3ddc4"
     depends_on: ["F-001"]
     notes: >-
       OpenSpec change mouse-droid-alayaworld-memory-distill (archived under
@@ -510,7 +510,7 @@ features:
       to ensure backward compatibility.
     category: "functional"
     priority: "medium"
-    status: "in_progress"
+    status: "done"
     tier: "fast"
     verification:
       - "MCP resources expose cursor-based episodic memory and semantic index"
@@ -520,8 +520,80 @@ features:
       - "OpenClawConfig.enabled=False renders the system byte-identical to prior behavior"
     validation_command: >-
       python -m pytest tests/unit/mcp/ tests/unit/memory/ tests/unit/orchestrator/ -q
-    implemented_in: null
+    implemented_in: "cb2d7246890c5246cf9f8ab721338b0e63d97c7f"
     depends_on: ["F-001"]
     notes: >-
       OpenSpec change mouse-droid-nemoclaw-integration (archived under
       openspec/changes/; repo-native artifacts authoritative).
+
+  - id: "F-028"
+    epic: "Quality Gates"
+    name: "Functional, user-journey and security test tiers reach a CI path"
+    description: >-
+      Three test tiers - tests/functional/, tests/user_journey/ and
+      tests/security/ - ran in ZERO CI paths: absent from scripts/ci.sh, from
+      .github/workflows/ci.yml and from every Makefile target, so they executed
+      only under a bare `pytest` and could rot invisibly. This is the same
+      failure mode the smoke tier had before PR #178. tests/security/ holds the
+      pre-egress path through the gateway seam for the RegexInjectionFilter
+      that docs/CHARTER.md names as the control making the cloud-LLM egress
+      carve-out (#107) acceptable. (The filter's unit coverage in
+      tests/unit/security/test_injection_filter.py already ran - this closes a
+      wiring gap, not a coverage hole.) All
+      three tiers are wired into the blocking `test` job and into ci.sh, outside
+      the MOUSEDROID_CI_SLIM skip (the whole set runs in ~2.5s), and pinned by
+      TestOrphanTierWiring so the wiring cannot silently regress. They are
+      deliberately NOT placed in the ci.yml job named `security`, which is
+      continue-on-error and would swallow every failure.
+    category: "validation"
+    priority: "high"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "all three tiers appear in the blocking ci.yml `test` job and in scripts/ci.sh"
+      - "tests/security does NOT appear in the advisory continue-on-error `security` job"
+      - "the ci.sh stage precedes the MOUSEDROID_CI_SLIM gate (runs outside the slim skip)"
+      - "TestOrphanTierWiring fails when the wiring is removed (verified by reverting)"
+    validation_command: "bash scripts/validations/F-028.sh"
+    implemented_in: "df928d9699df99983287f768bb35131ff9418eb0"
+    depends_on: ["F-001"]
+    notes: >-
+      implemented_in pins the commit on this branch that actually contains the
+      change; re-pin to the squash SHA post-merge (F-015..F-020 pin a12c95b,
+      their real landing commit - never a branch point, which would claim
+      provenance for a commit where the feature does not exist).
+
+  - id: "F-029"
+    epic: "Quality Gates"
+    name: "GCP off-device egress channels default OFF"
+    description: >-
+      GCPLoggingConfig.enabled and GCPMonitoringConfig.enabled defaulted True
+      while GCPFirestoreConfig.enabled defaulted False, and GCPPubSubConfig /
+      GCPStorageConfig had no enabled field at all - the latter two being the
+      ones actually wired, since build_cloud_telemetry_sink and
+      build_cloud_experience_exporter gated on `cfg.gcp is None` alone. Settings.gcp is Optional
+      and defaults None, so nothing egressed on a stock config - but an operator
+      adding a minimal `gcp:` block for one reason (Firestore, storage) silently
+      enabled TWO off-device egress channels they never named. Both now default
+      False, so every GCP egress channel is opt-in. CHARTER §6 requires new
+      capabilities be additive and opt-in, never a silent behaviour change; this
+      also removes the trap ahead of wiring the cloud components (F-032), which
+      must not land while a default-ON egress path exists.
+    category: "non-functional"
+    priority: "high"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "logging / monitoring / firestore / pubsub / storage all default enabled=False"
+      - "a partial gcp: block (project_id only) opens no egress channel"
+      - "build_cloud_telemetry_sink and build_cloud_experience_exporter both return None for a partial block"
+      - "explicit enabled=true still works — the default is a default, not a pin"
+      - "config/gcp_digital_twin.yaml resolves to the same effective state (it sets all three explicitly)"
+    validation_command: "bash scripts/validations/F-029.sh"
+    implemented_in: "5c2f044c4c0f4ebc2fd401e070e54802889d25fd"
+    depends_on: ["F-001"]
+    notes: >-
+      Gates F-032 (cloud component wiring) - that bundle must not land while a
+      default-ON egress path exists. implemented_in pins the commit on this
+      branch that actually contains the change; re-pin to the squash SHA
+      post-merge.

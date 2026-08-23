@@ -11,12 +11,14 @@ gcp:
   robot_id: "droid-001"
 
   pubsub:
+    enabled: true
     telemetry_topic: "mousedroid-telemetry"
     experience_topic: "mousedroid-experience"
     batch_max_messages: 100
     batch_max_latency_s: 1.0
 
   storage:
+    enabled: true
     bucket: "mousedroid-experience"
     prefix: "experience/v1"
     upload_batch_size: 1000
