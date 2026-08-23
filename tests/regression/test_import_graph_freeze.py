@@ -1,8 +1,9 @@
-"""Import-graph freeze for parked/deferred subsystems (F-020, WS-8.2).
+"""Import-graph freeze for parked/deferred subsystems (F-020, WS-8.2, F-031).
 
-The arm platform is deferred and the HC-SR04 ultrasonic driver is parked
-(NEXT_STEPS.md "Deferred / Out Of Scope"). This test pins that no *active*
-production module grows a **module-top-level** dependency on them.
+The arm platform is deferred, the HC-SR04 ultrasonic driver is parked
+(NEXT_STEPS.md "Deferred / Out Of Scope"), and `AutonomousOrchestrator` is kept off
+the production path per ADR-016 (F-031). This test pins that no *active* production
+module grows a **module-top-level** dependency on any of them.
 
 Granularity matters: ``factory.py`` legitimately imports arm modules lazily
 inside config-gated functions and under ``if TYPE_CHECKING:`` — both are the
@@ -30,6 +31,15 @@ _ULTRASONIC_PREFIXES = (
 # The ultrasonic *drivers* may be referenced by the factory (lazy, config-
 # gated) and by their own package; the arm package references itself.
 _ULTRASONIC_ALLOWED_DIRS = ("hardware/sensors",)
+
+# ADR-016 / F-031: AutonomousOrchestrator stays off the production path. No
+# directory-level exemption here (unlike arm/ and hardware/sensors/ above):
+# autonomous.py shares a directory with the PRODUCTION orchestrator.py, so a
+# directory allowlist would also license orchestrator.py to import it. Only
+# the file itself is exempt; factory.py::build_autonomous_orchestrator's sole
+# reference is function-scoped and so is never visited by this walker at all.
+_AUTONOMOUS_ORCHESTRATOR_MODULE = "mousedroid.orchestrator.autonomous"
+_AUTONOMOUS_ORCHESTRATOR_SELF_FILE = Path("orchestrator/autonomous.py")
 
 
 def _iter_module_files() -> list[Path]:
@@ -132,4 +142,29 @@ def test_no_active_module_imports_parked_ultrasonic_driver(
     assert not violations, (
         "parked HC-SR04 driver imported at module scope outside its package "
         f"(factory access must stay lazy/config-gated): {violations}"
+    )
+
+
+def test_no_active_module_imports_autonomous_orchestrator_at_module_scope(
+    module_imports: dict[Path, list[str]],
+) -> None:
+    """F-031 / ADR-016: AutonomousOrchestrator is parked, off the production path.
+
+    factory.py::build_autonomous_orchestrator is the sole, function-scoped
+    (lazy) importer, already excluded by the walker's function-body skip.
+    """
+    violations: list[str] = []
+    for path, imports in module_imports.items():
+        rel = path.relative_to(_SRC_ROOT)
+        if rel == _AUTONOMOUS_ORCHESTRATOR_SELF_FILE:
+            continue  # the module may reference itself
+        for name in imports:
+            if name == _AUTONOMOUS_ORCHESTRATOR_MODULE or name.startswith(
+                _AUTONOMOUS_ORCHESTRATOR_MODULE + "."
+            ):
+                violations.append(f"{rel}: module-scope import of {name}")
+    assert not violations, (
+        "AutonomousOrchestrator is parked off the production path (ADR-016) -- "
+        f"module-scope import found where only a lazy, function-scoped import "
+        f"is allowed: {violations}"
     )

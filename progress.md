@@ -4,6 +4,51 @@ Reverse chronological (newest on top). Set the date with `date +%F`; never copy 
 literal date. Rotation: keep ~10 sessions; move older entries to
 `progress-archive/YYYY-QN.md`. See HARNESS_SPEC.md §11.
 
+## 2026-08-23 — Session 012
+
+**Context.** PR #202 (F-030 doc reconciliation) merged. A stale planning document's
+first listed task — re-pinning F-028/F-029's `implemented_in` to PR #201's squash SHA —
+turned out to already be done (commit `74a4c11`, landed ahead of this session). Fresh
+exploration against the real merged tree (not the stale plan) found F-030 itself still
+`status: "in_progress"` despite its own PR having merged, and F-031 through F-036 all
+fully unstarted. A revised plan (F-030 closeout + F-031/F-032/F-034/F-035/F-036,
+excluding F-033/Phase 0 as hardware-blocked, per operator scope decision) was drafted,
+then put through a four-agent adversarial peer review (architect/product, SQE/test-
+pyramid, config/schema, security) before any implementation began — the architect pass
+returned a formal REQUEST_CHANGES verdict with real, concentrated gaps in the F-032
+design (a null-dependency crash path on two new builders, confirmed independently by
+three of the four reviewers; a `main.py` lifecycle change that would crash rover boot
+on an optional telemetry-channel failure; F-032's proposed tests being entirely
+regression-tier, which CI runs `--no-cov`, so none of it would count toward the
+coverage gate). All confirmed findings folded into a revised plan before execution.
+
+**PR #203 — F-030/F-028/F-029 catalog closeout, merged.** `features.yaml`'s F-030 →
+`done`, pinned to `14b2b34` (PR #202's squash). `openspec/project.md`'s three stale
+registry rows (F-028, F-029, F-030) corrected to `implemented` with real short-SHAs.
+Bookkeeping only, per `feature-closeout`'s own definition of done — no new tests. `make
+gates`-equivalent clean, `validate.py --tier fast,slow --strict-git` OK (the pin's own
+load-bearing check). Merged by the operator directly.
+
+**F-031 `mouse-droid-autonomous-orchestrator-disposition` — in progress.**
+`docs/architecture/ADR-016-autonomous-orchestrator-disposition.md` records why
+`AutonomousOrchestrator` stays off the production path: `execute_mission_step` calls
+the LLM gateway unconditionally inside a loop defaulting to 30 Hz
+(`DEFAULT_CONTROL_LOOP_INTERVAL_S = 0.033`), and it has zero safety-monitor machinery (0
+vs. 8 grep matches against `orchestrator.py`) — both confirmed directly against source,
+not assumed. `tests/regression/test_import_graph_freeze.py` gains a third
+parked-subsystem case, file-level rather than directory-level like its two siblings
+(`autonomous.py` shares a directory with the production `orchestrator.py`, so a
+directory exemption would also license `orchestrator.py` to import it) — proven red by
+injecting a throwaway module-scope import into `orchestrator.py` first (correctly named
+the offending file), restored byte-identical, confirmed green. `orchestrator/CLAUDE.md`'s
+"once F-031 lands" forward reference now resolves to a real, Accepted ADR. New skill
+`.claude/skills/charter-carveout/SKILL.md` — a decision procedure for whether a change
+needs a ratified `docs/CHARTER.md` §3 carve-out, with an explicit "if in doubt, escalate"
+default bias and a requirement that a "no carve-out needed" conclusion be stated with
+reasoning rather than left implicit (per the security review's finding that the
+mirror-image failure — silently skipping a needed carve-out — is more dangerous than
+self-authorizing one, since it leaves no diff for a reviewer to catch).
+
 ## 2026-08-23 — Session 011
 **Features worked:** F-030 (doc reconciliation, new — introduced `in_progress`); cross-cutting hygiene sweep riding the same branch/PR (no F-number, same precedent as Session 006's PR #178 sprint).
 **Status changes:** F-030 introduced `in_progress`, `implemented_in: null` (pins to the squash SHA on closeout, per convention). No other catalog status changes.

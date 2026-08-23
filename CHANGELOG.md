@@ -8,6 +8,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — F-031: AutonomousOrchestrator production-path disposition
+
+- **`docs/architecture/ADR-016-autonomous-orchestrator-disposition.md`** records why
+  `AutonomousOrchestrator` (`src/mousedroid/orchestrator/autonomous.py`) is deliberately
+  kept off the production path: `execute_mission_step` calls the LLM gateway
+  unconditionally inside a loop defaulting to 30 Hz (`DEFAULT_CONTROL_LOOP_INTERVAL_S =
+  0.033`), and the class has zero safety-monitor machinery (0 matches for
+  `SafetyMonitor|ThreeLaws|safety_projector|sensor_stale|max_loop_time` against 8 in the
+  production `orchestrator.py`) — both in direct conflict with `docs/CHARTER.md` §3 and
+  invariant 10's hot-loop-purity requirement.
+- **`tests/regression/test_import_graph_freeze.py`** gains a third parked-subsystem case,
+  `test_no_active_module_imports_autonomous_orchestrator_at_module_scope`. Unlike the
+  existing two cases (`arm/`, the HC-SR04 ultrasonic driver), the exemption is
+  file-level, not directory-level — `autonomous.py` shares a directory with the
+  production `orchestrator.py`, and a directory exemption there would also license
+  `orchestrator.py` to import it. Proven: injecting a throwaway module-scope import of
+  `AutonomousOrchestrator` into `orchestrator.py` turns the new test red and correctly
+  names `orchestrator/orchestrator.py`; restored byte-identical, confirmed green.
+- `src/mousedroid/orchestrator/CLAUDE.md`'s "see `docs/architecture/adr/` for the
+  disposition ADR once F-031 lands" forward reference now resolves to the real file.
+- Full openspec bundle at `openspec/changes/mouse-droid-autonomous-orchestrator-disposition/`.
+
+### Fixed — F-030/F-028/F-029 catalog closeout (PR #203)
+
+- **`features.yaml`'s F-030 entry was still `status: "in_progress"`, `implemented_in:
+  null` after its own PR (#202) had already merged** — the `feature-closeout` skill's
+  catalog step was never run. `openspec/project.md`'s registry table was stale the same
+  way for F-028, F-029, and F-030 (all three still read "in progress / unmerged" though
+  F-028/F-029 already showed `done` in `features.yaml`). Fixed all three in one pass;
+  caught while starting the F-031 work below, since restarting the branch fresh
+  surfaced the stale catalog state directly.
+
 ### Fixed — Second Copilot pass on PR #202: the coverage-floor pin's own exemption
 
 - **`test_no_live_doc_claims_a_stale_src_coverage_floor` skipped an entire line whenever it
