@@ -511,6 +511,26 @@ and pinning YAML key-absence instead of the value. Under `PYTHONOPTIMIZE=1`
 (the Jetson entrypoint) `assert` is stripped — use explicit
 `if not ...: raise` in `src/` and in inline shell one-liners.
 
+### prove-pin-fails
+
+> Project skill: `.claude/skills/prove-pin-fails/SKILL.md` — invoke it, don't
+> paraphrase it. Completes `regression-pair-scaffold`: that skill answers *what
+> shape* the pair takes, this one answers *whether the pair actually works*.
+
+**Trigger:** before merging any new AQA / backwards-compat test, any CI-wiring
+pin, or any golden-file pin; after tightening an assertion in response to review.
+
+**Read:**
+- `.claude/skills/prove-pin-fails/SKILL.md` — when to run it and how to read a
+  `PROVE-PIN FAIL`, with the three assertion shapes that produce one
+- `scripts/prove_pin_fails.sh` — the mechanism: snapshot, revert from a ref,
+  require red, restore, require green
+
+**Why it exists:** a test that cannot fail is decoration that reads like safety,
+and it is worse than no test because it retires the question. Two pins written
+in this repo shipped green while asserting nothing — one matched a comment added
+in its own commit, one asserted a description length that already passed.
+
 ### regression-pair-scaffold
 
 > Project skill: `.claude/skills/regression-pair-scaffold/SKILL.md` — invoke
