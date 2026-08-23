@@ -555,13 +555,18 @@ features:
       - "the ci.sh stage precedes the MOUSEDROID_CI_SLIM gate (runs outside the slim skip)"
       - "TestOrphanTierWiring fails when the wiring is removed (verified by reverting)"
     validation_command: "bash scripts/validations/F-028.sh"
-    implemented_in: "df928d9699df99983287f768bb35131ff9418eb0"
+    implemented_in: "9bd3dc7549b09c973e8ff5ce1a737e1076cdc5d2"
     depends_on: ["F-001"]
     notes: >-
-      implemented_in pins the commit on this branch that actually contains the
-      change; re-pin to the squash SHA post-merge (F-015..F-020 pin a12c95b,
-      their real landing commit - never a branch point, which would claim
-      provenance for a commit where the feature does not exist).
+      implemented_in pins PR #201's squash merge, the commit this feature
+      actually landed in - the catalog convention (F-015..F-020 pin a12c95b,
+      PR #151's squash; F-021 pins 40a6399, PR #153's). It previously pinned
+      the branch commit df928d9, which the squash did not preserve, leaving it
+      reachable only from the feature branch. The harness resolves this field
+      with git rev-parse (harness/spec.py), an EXISTENCE check - so it passed
+      while that branch lived and would have started failing --strict-git the
+      moment it was deleted. Never a branch point either, which would claim
+      provenance for a commit where the feature does not exist.
 
   - id: "F-029"
     epic: "Quality Gates"
@@ -590,10 +595,11 @@ features:
       - "explicit enabled=true still works — the default is a default, not a pin"
       - "config/gcp_digital_twin.yaml resolves to the same effective state (it sets all three explicitly)"
     validation_command: "bash scripts/validations/F-029.sh"
-    implemented_in: "5c2f044c4c0f4ebc2fd401e070e54802889d25fd"
+    implemented_in: "9bd3dc7549b09c973e8ff5ce1a737e1076cdc5d2"
     depends_on: ["F-001"]
     notes: >-
       Gates F-032 (cloud component wiring) - that bundle must not land while a
-      default-ON egress path exists. implemented_in pins the commit on this
-      branch that actually contains the change; re-pin to the squash SHA
-      post-merge.
+      default-ON egress path exists. implemented_in pins PR #201's squash
+      merge, the commit this feature actually landed in. It previously pinned
+      the branch commit 5c2f044, which the squash did not preserve, leaving it
+      reachable only from the feature branch.

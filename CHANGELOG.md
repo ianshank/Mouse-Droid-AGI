@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Post-merge provenance re-pin (F-028, F-029)
+
+- **PR #201 merged as squash `9bd3dc7`, orphaning two `implemented_in` pins.** F-028 pinned
+  `df928d9` and F-029 pinned `5c2f044`; the squash preserved neither, leaving both reachable
+  only from the feature branch. The harness resolves this field with `git rev-parse` — an
+  existence check — so both passed while that branch lived and would have failed
+  `validate.py --strict-git` once it was deleted. GitHub's delete-branch-on-merge removed that
+  branch at merge time, so both were already unresolvable in a fresh clone — measured: zero
+  remaining remote branches contain either SHA. Re-pinned to the squash commit, which is the
+  catalog convention. F-022/F-023/F-027 were checked individually and needed no change.
+- **Named a gap this exposes.** `scripts/archive_stale_branches.sh`'s pin-carrier protection
+  covers the *cleanup* path only; delete-branch-on-merge bypasses it entirely. The annotated-tag
+  ritual (F-035) must therefore run **before** merge, or the setting must be off for pin-carrying
+  branches — a guard over one of two deletion paths is not the total protection it reads as.
+
 ### Changed — Sprint 6: CI Tier Completeness, Egress Gating & F-022/023/027 Closeout
 
 - **F-028 — three test tiers reached zero CI paths.** `tests/functional/`,

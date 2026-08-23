@@ -4,6 +4,41 @@ Reverse chronological (newest on top). Set the date with `date +%F`; never copy 
 literal date. Rotation: keep ~10 sessions; move older entries to
 `progress-archive/YYYY-QN.md`. See HARNESS_SPEC.md §11.
 
+## 2026-08-23 — Session 010
+**Features worked:** F-028, F-029 (post-merge `implemented_in` re-pin only — no behavioural change).
+**Status changes:** none. Both were already `done`; only their provenance pins move.
+**Why:** PR #201 merged as **squash `9bd3dc7`**, so none of its 11 branch commits reached the
+integration branch. F-028 pinned `df928d9` and F-029 pinned `5c2f044`, which the squash did not
+preserve — leaving both reachable only from `claude/jetson-rover-e2e-next-steps-00jwqk`. The
+harness resolves `implemented_in` with `git rev-parse` (`src/mousedroid/harness/spec.py:185`), an
+**existence** check, so both passed while that branch lived and would have started failing
+`validate.py --strict-git` the moment it was deleted (`scripts/validate.py:37` documents
+unresolved refs as *errors*, `:71` turns errors into `VALIDATION FAILED`). Re-pinned to the squash
+— which is the catalog convention: F-015..F-020 pin `a12c95b` (PR #151's squash), F-021 pins
+`40a6399` (PR #153's).
+**Verified rather than assumed:** F-022 (`27b5233`), F-023 (`e730a0a`) and F-027 (`cb2d724`) were
+checked individually and *are* ancestors of the merged base — no action needed. Five older pins
+(F-002/004/005/006/007) are not on the integration branch but exist on 32/3/6 other remote
+branches respectively, so `rev-parse` resolves them; they are covered by the pin-carrier
+protection rather than at risk. The `[warn] not a resolvable git ref` lines seen earlier in this
+repo were a shallow-clone artifact and disappear once the base is fetched.
+**A correction, and a gap the round-5 fix does NOT close.** I first wrote that
+`scripts/archive_stale_branches.sh` — generalised in `3dc067c` to protect `features.yaml` pin
+carriers — had saved these pins. It did not. GitHub's **delete-branch-on-merge** removed
+`claude/jetson-rover-e2e-next-steps-00jwqk` at merge time, and that path never runs the archive
+script. Measured after the fact: `df928d9` and `5c2f044` are contained by **zero** remaining
+remote branches, so a fresh clone cannot resolve either and `--strict-git` was already failing for
+both features by the time this was noticed. This re-pin is a repair, not a precaution.
+The archive-script generalisation remains correct and still protects the *cleanup* path — but the
+protection is not universal, and believing it was is the same error as the original "the script
+protects pin carriers" note it replaced. **Consequence for F-035:** the annotated-tag ritual must
+run **before** merge, or delete-branch-on-merge must be disabled for pin-carrying branches.
+Protection that only covers one of two deletion paths is a partial guard described as a total one.
+**Next:** F-030 (doc reconciliation). Its target list was re-verified at `9bd3dc7` — see the handoff
+plan; note the CI job count is **16**, not 12, six of the twelve job names in CLAUDE.md do not
+exist, and the real safety class is `MouseDroidSafetyMonitor` (an earlier correction said
+`SafetyMonitor`, which is also wrong).
+
 ## 2026-08-22 — Session 009
 **Features worked:** F-022, F-023, F-027 (closeout: in_progress → done); F-028 (new — CI tier completeness).
 **Status changes:** F-022 → done (`implemented_in` = `27b52338d6ddb2f6c882518f0fa78bd50a593101`, PR #172); F-023 → done (`e730a0a3fd14f66f1d39520abc67f5d153e3ddc4`, PR #173); F-027 → done (`cb2d7246890c5246cf9f8ab721338b0e63d97c7f`, PR #187); F-028 → done (`df928d9…`) and F-029 → done (`5c2f044…`) — pinned to the commits that actually contain the work. An earlier cut pinned both to the branch-point `175606b0…`, which contains neither, citing an "F-015..F-021 branch-point convention" that does not exist. The real convention is the opposite: F-015..F-020 pin `a12c95b` (PR #151's squash merge) and F-021 pins `40a6399` (PR #153's) — the commit each feature actually landed in. Both claims corrected in `6f459a5`. Consequence for this PR: `df928d9`/`5c2f044` are branch commits that a squash merge will not preserve, so they need re-pinning to the squash SHA post-merge — which is the convention, not an exception to it.
