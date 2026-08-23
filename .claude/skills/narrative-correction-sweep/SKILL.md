@@ -13,8 +13,10 @@ in the copies you didn't.
 ## Why this exists
 
 Round 4 of the F-028/F-029 review found `tests/security/` described as "the
-only coverage" of the pre-egress injection filter in three places — after an
-earlier round had already fixed that exact claim and reported it corrected.
+only coverage" of the pre-egress injection filter in three places — refuted
+(`tests/unit/security/test_injection_filter.py` already carried 11 tests of
+unit coverage for that same filter) after an earlier round had already
+fixed that exact claim and reported it corrected.
 The fix landed in the files that round remembered, not the files that had
 it: `proposal.md` and `peer-review.md` still asserted it, and the
 peer-review's own verdict table marked it **CONFIRMED** — a governance
