@@ -634,7 +634,7 @@ features:
       .claude/skills/ directories were entirely absent from SKILLS.md.
     category: "non-functional"
     priority: "high"
-    status: "in_progress"
+    status: "done"
     tier: "fast"
     verification:
       - "every live doc stating the CI job count states 16, not 12"
@@ -643,7 +643,7 @@ features:
       - "every real .claude/skills/ directory is mentioned somewhere in SKILLS.md"
       - "every real .claude/agents/ file is named in SKILLS.md's Subagent skills table"
     validation_command: "bash scripts/validations/F-030.sh"
-    implemented_in: null
+    implemented_in: "14b2b34abb57bcad679a05602cb1ae2dc25f37fa"
     depends_on: ["F-028"]
     notes: >-
       Depends on F-028 landing so the job-count claim is checked against the
