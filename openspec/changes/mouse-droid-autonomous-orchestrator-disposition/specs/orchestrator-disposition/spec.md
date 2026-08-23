@@ -25,6 +25,21 @@ carry a module-scope import of it.
 - **THEN** `test_no_active_module_imports_autonomous_orchestrator_at_module_scope`
   fails and names `orchestrator/orchestrator.py` as the offending file
 
+### Requirement: production entrypoints SHALL NOT call the autonomous-orchestrator builder
+
+Import-scope freezing alone does not enforce ADR-016's actual Decision: a
+production entrypoint could call `factory.py::build_autonomous_orchestrator`
+(a public function) directly without ever importing
+`mousedroid.orchestrator.autonomous` at module scope itself. `main.py`'s
+`_run` and `_health_check` SHALL route exclusively through
+`factory.py::build_orchestrator`.
+
+#### Scenario: main.py never references the autonomous builder
+
+- **GIVEN** `src/mousedroid/main.py`'s source
+- **WHEN** `test_no_production_entrypoint_calls_the_autonomous_orchestrator_builder` reads it
+- **THEN** the string `build_autonomous_orchestrator` does not appear anywhere in it
+
 ### Requirement: the disposition SHALL be recorded in an accepted ADR
 
 The reasoning for keeping `AutonomousOrchestrator` off the production path —

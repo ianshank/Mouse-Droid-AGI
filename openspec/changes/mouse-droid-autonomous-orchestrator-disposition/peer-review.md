@@ -39,6 +39,22 @@ directly against the tree rather than trusting the design draft.
 3. `orchestrator/CLAUDE.md`'s forward reference resolves to the real ADR
    filename, not a "once F-031 lands" placeholder.
 
+## Copilot review round on PR #204 — all confirmed real, all fixed
+
+Seven distinct findings across a review summary and two individually-posted
+comments; every one verified against source before accepting (see
+`tasks.md` Phase 4 for the fix-and-prove detail on each):
+
+| Finding | Verdict |
+|---|---|
+| `_module_scope_imports` skips relative imports entirely | **CONFIRMED** — `from .autonomous import AutonomousOrchestrator` in `orchestrator.py` resolves to exactly the forbidden module but was unrecorded |
+| `_module_scope_imports` only records bare `node.module` | **CONFIRMED** — `from mousedroid.orchestrator import autonomous` recorded only `"mousedroid.orchestrator"`, missing the submodule alias |
+| The import pin doesn't enforce ADR-016's call-site claim | **CONFIRMED** — `main.py` could call `build_autonomous_orchestrator` directly with zero import-scope footprint outside `autonomous.py` |
+| `F-031.sh` couples diagnosis to unrelated pins | **CONFIRMED** — ran the whole shared file, including pre-existing `arm`/HC-SR04 cases |
+| `F-031.sh` doesn't check the ADR is `Accepted` or the CLAUDE.md reference resolves | **CONFIRMED** — only checked file existence, despite `features.yaml`'s `verification:` list claiming both |
+| `charter-carveout` mandates `asyncio.to_thread` for LLM work | **CONFIRMED** — `anthropic_gateway.py` is verified async-native (`AsyncAnthropic`, no blocking calls) |
+| `proposal.md`'s status field spelling | **CONFIRMED** — used the `features.yaml` enum form, not the openspec house format's spaced convention |
+
 ## Appendix — related, not folded in
 
 The review that produced this change's design also caught that F-030 itself

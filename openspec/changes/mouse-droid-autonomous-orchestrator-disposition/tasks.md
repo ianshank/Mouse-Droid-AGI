@@ -32,6 +32,58 @@ Task ordering is binding: each task lands green before the next starts.
 - [x] 3.2 `scripts/validations/F-031.sh`.
 - [x] 3.3 Register in `openspec/project.md`.
 
+**Phase 4 — Copilot review round on PR #204, all confirmed real**
+
+- [x] 4.1 `_module_scope_imports` had two blind spots, both verified by reading
+      its exact AST-walking logic before fixing: (a) it skipped ALL relative
+      imports (`node.level == 0` filter) on the assumption "relative imports
+      can only reach the importer's own package, which is always allowed" —
+      true for `arm/`/`hardware/sensors/` (directory-exempted) but false here,
+      since `autonomous.py` shares a directory with the restricted
+      `orchestrator.py`; (b) it only recorded bare `node.module` for
+      `ImportFrom`, missing `from mousedroid.orchestrator import autonomous`
+      (the submodule imported as a name). Fixed by resolving relative imports
+      via each file's own containing-package path and additionally recording
+      `f"{module}.{alias}"` per alias — additive and safe for the two existing
+      cases, whose exemption is directory-based and applied before any
+      per-import check runs.
+- [x] 4.2 Proved both fixes: injected `from .autonomous import
+      AutonomousOrchestrator` into `orchestrator.py` (relative form) and
+      separately `from mousedroid.orchestrator import autonomous`
+      (parent-import-submodule form); both turned the test red with the
+      correct offending file named; both restored byte-identical, confirmed
+      green.
+- [x] 4.3 The import-scope pin alone doesn't enforce ADR-016's actual Decision
+      ("main.py routes exclusively through `build_orchestrator`") — a
+      production entrypoint could call `factory.py::build_autonomous_orchestrator`
+      (a public function) directly without importing `autonomous.py` at
+      module scope anywhere. Added
+      `test_no_production_entrypoint_calls_the_autonomous_orchestrator_builder`,
+      a direct source-level check on `main.py`. Proved: injected an import of
+      `build_autonomous_orchestrator` into `main.py`, confirmed red, restored,
+      confirmed green.
+- [x] 4.4 `scripts/validations/F-031.sh` ran the whole shared
+      `test_import_graph_freeze.py` file, coupling its diagnosis to the
+      unrelated pre-existing `arm`/HC-SR04 cases. Narrowed to the two
+      F-031-owned test nodes by name.
+- [x] 4.5 `features.yaml`'s F-031 `verification:` list claimed the ADR must be
+      `Accepted` and the CLAUDE.md reference must resolve, but the script only
+      checked file existence — a `Proposed` ADR or a stale reference would
+      still pass. Added both checks explicitly; proved each by temporarily
+      corrupting the ADR's status line and separately the CLAUDE.md
+      reference, confirming red, restoring, confirming green.
+- [x] 4.6 `charter-carveout/SKILL.md`'s decision procedure mandated
+      `asyncio.to_thread` specifically for off-loop LLM dispatch — verified
+      wrong by reading `anthropic_gateway.py` directly (module docstring:
+      "Asyncio-only — uses `anthropic.AsyncAnthropic`. No blocking calls";
+      the actual call is `await self._client.messages.create(...)`, native
+      async I/O, never `to_thread`). Rephrased to describe the hot-loop
+      boundary without prescribing one specific dispatch mechanism.
+- [x] 4.7 `proposal.md`'s `status: in_progress` used the `features.yaml` enum
+      spelling rather than the openspec house format's spaced convention
+      (`status: in progress`, confirmed against
+      `mouse-droid-doc-reconciliation/proposal.md:5`). Corrected.
+
 ## Explicitly deferred (separate changes, do not fold in)
 
 - Making `AutonomousOrchestrator` production-eligible (off-loop LLM dispatch,

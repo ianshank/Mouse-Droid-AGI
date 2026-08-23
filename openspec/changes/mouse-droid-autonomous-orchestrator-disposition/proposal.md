@@ -2,7 +2,7 @@
 
 - change_id: mouse-droid-autonomous-orchestrator-disposition
 - project: mouse-droid
-- status: in_progress
+- status: in progress
 - feature_id: F-031
 - epic: Quality Gates
 - owner: ianshank

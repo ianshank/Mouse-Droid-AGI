@@ -49,6 +49,33 @@ reasoning rather than left implicit (per the security review's finding that the
 mirror-image failure — silently skipping a needed carve-out — is more dangerous than
 self-authorizing one, since it leaves no diff for a reviewer to catch).
 
+**Copilot review round on PR #204 (F-031), 7 findings, all confirmed real before
+fixing.** Two were genuine gaps in the new pin's own AST-walking logic, verified by
+reading it directly: it skipped ALL relative imports (`from .autonomous import X`) on
+an inherited assumption ("relative imports can only reach the importer's own package,
+which is always allowed") that's false the moment a frozen module shares a directory
+with an active one — exactly `autonomous.py`'s relationship to `orchestrator.py`; and
+it only recorded bare `node.module` for `ImportFrom`, missing the `from
+mousedroid.orchestrator import autonomous` form. Fixed by resolving relative imports
+against each file's own package and recording `module.alias` combinations too —
+which pushed `_module_scope_imports` over the C901 complexity gate (18 > 15) as
+nested closures, since ruff counts nested-function branches against the outer
+function; fixed by hoisting the helpers to module level. Both blind spots proven:
+injected each exact form into `orchestrator.py`, both caught with the file correctly
+named, both restored byte-identical. A third, sharper finding: the import-scope pin
+never actually enforced ADR-016's stated Decision ("main.py routes exclusively
+through build_orchestrator") — a production entrypoint could call the public
+`build_autonomous_orchestrator` directly with zero import-scope footprint outside
+`autonomous.py` itself. Added a direct source-level check on `main.py`, proven the
+same way. Also real: `F-031.sh` ran the whole shared test file (misdiagnosing an
+unrelated `arm`/HC-SR04 regression as an AutonomousOrchestrator failure) and claimed
+to check the ADR's `Accepted` status and the CLAUDE.md cross-reference while only
+checking file existence — both fixed and proven red/green against injected
+corruption. Smallest two: `charter-carveout`'s decision procedure mandated
+`asyncio.to_thread` specifically for LLM dispatch, verified wrong by reading
+`anthropic_gateway.py` (genuinely async-native, no blocking calls); and
+`proposal.md`'s `status:` field used the wrong house-format spelling.
+
 ## 2026-08-23 — Session 011
 **Features worked:** F-030 (doc reconciliation, new — introduced `in_progress`); cross-cutting hygiene sweep riding the same branch/PR (no F-number, same precedent as Session 006's PR #178 sprint).
 **Status changes:** F-030 introduced `in_progress`, `implemented_in: null` (pins to the squash SHA on closeout, per convention). No other catalog status changes.

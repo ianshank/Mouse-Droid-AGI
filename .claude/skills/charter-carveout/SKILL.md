@@ -26,7 +26,9 @@ Ask, of the change under consideration:
    simulated or logged one) **without** an explicit, human-gated
    authorization path — i.e. does the default posture stop being no-motion?
 2. Does it place LLM inference or training work **inside** the 30 Hz hot
-   loop, rather than off-loop via `asyncio.to_thread` at a slow-cadence seam?
+   loop, rather than dispatched off-loop at a slow-cadence seam — native
+   async I/O for I/O-bound work (e.g. an LLM gateway's API call), or
+   `asyncio.to_thread` for blocking/CPU-bound work (e.g. a torch operation)?
 3. Does it change runtime behaviour by editing source, rather than through a
    YAML field or `MOUSEDROID_*__*` environment variable that defaults to the
    pre-existing, safe behaviour?

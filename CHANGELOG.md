@@ -8,6 +8,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Copilot review round on PR #204, F-031's own pin had two real gaps
+
+- **`_module_scope_imports`' relative-import and submodule-alias blind spots.** The
+  walker skipped ALL relative imports (`from .autonomous import X`) on the assumption
+  "relative imports can only reach the importer's own package, which is always
+  allowed" — true for `arm/`/`hardware/sensors/` (directory-exempted) but false for
+  `autonomous.py`, which shares a directory with the restricted `orchestrator.py`.
+  It also only recorded bare `node.module` for `ImportFrom`, missing `from
+  mousedroid.orchestrator import autonomous` (the submodule imported as a name).
+  Fixed by resolving relative imports against each file's own containing package and
+  recording `module.alias` combinations too — hoisted into module-level helper
+  functions (`_import_from_targets`, `_walk_module_scope`) rather than nested
+  closures, since ruff's C901 counts nested-closure branches against the outer
+  function (18 > 15 with the fix as nested closures; clean once hoisted). Proven:
+  both blind-spot forms injected into `orchestrator.py`, both turned the pin red
+  naming the correct offender, both restored byte-identical.
+- **The import-scope pin alone didn't enforce ADR-016's actual Decision.** A
+  production entrypoint could call `factory.py::build_autonomous_orchestrator`
+  directly without ever importing `autonomous.py` at module scope anywhere — the
+  pin would stay green while the ADR's stated claim ("main.py routes exclusively
+  through build_orchestrator") was violated. Added
+  `test_no_production_entrypoint_calls_the_autonomous_orchestrator_builder`, a
+  direct source check on `main.py`; proven red by injecting the exact reference,
+  restored, confirmed green.
+- **`scripts/validations/F-031.sh` ran the whole shared test file**, coupling its
+  diagnosis to the unrelated pre-existing `arm`/HC-SR04 pins — an unrelated
+  regression in either would have printed a misleading "F-031 FAIL:
+  AutonomousOrchestrator..." message. Narrowed to the two F-031-owned test nodes.
+- **The same script claimed to check the ADR is `Accepted` and that `orchestrator/
+  CLAUDE.md`'s reference resolves, but only checked file existence.** A `Proposed`
+  ADR or a stale reference would still have passed. Added both checks explicitly;
+  proven red against each corrupted case, restored.
+- **`charter-carveout/SKILL.md` mandated `asyncio.to_thread` specifically for
+  off-loop LLM dispatch** — verified wrong by reading `anthropic_gateway.py`
+  directly (genuinely async-native: `AsyncAnthropic`, `await
+  client.messages.create(...)`, no blocking calls). Rephrased to describe the
+  hot-loop boundary without prescribing one specific dispatch mechanism.
+- `openspec/changes/mouse-droid-autonomous-orchestrator-disposition/proposal.md`'s
+  `status: in_progress` corrected to the openspec house format's spaced convention
+  (`status: in progress`), matching `mouse-droid-doc-reconciliation/proposal.md`.
+
 ### Added — F-031: AutonomousOrchestrator production-path disposition
 
 - **`docs/architecture/ADR-016-autonomous-orchestrator-disposition.md`** records why
