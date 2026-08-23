@@ -48,6 +48,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   asserted `f023["status"] == "in_progress"`, a lifecycle snapshot masquerading as a
   schema property, which failed the moment F-023 closed. Replaced with the durable
   invariant (status in-vocabulary; a `done` entry carries a 40-hex `implemented_in`).
+- **`scripts/prove_pin_fails.sh` corrupted same-named paths.** It keyed its snapshot on
+  `$(basename)`, so two `--paths` entries sharing a filename collided: the second
+  overwrote the first and restore wrote b's bytes over a — data loss in a tool whose
+  whole purpose is safe restore. Snapshots now mirror the sanitized relative path, and
+  `tests/unit/scripts/test_prove_pin_fails.py` drives the real script against a synthetic
+  git repo to prove both files come back intact.
+- **Marker parity across the three sites that run the orphan tiers.** `ci.sh` and
+  `scripts/validations/F-028.sh` filtered `not hardware` while `ci.yml` filtered
+  `not hardware and not slow`, so a green local run and a green validation command
+  asserted a different test set than CI gated on. Aligned and pinned by
+  `TestOrphanTierMarkerParity`, which also requires each site to keep excluding
+  `hardware` — parity alone is satisfiable by deleting the filter everywhere.
+- **A backwards-compat test that asserted nothing.** `test_twin_overlay_still_builds_its_cloud_components`
+  called both cloud builders with no assertion, so it could only fail if one raised. Both
+  legitimately return `None` when the optional `[gcp]` extra is absent, making a
+  return-value assertion untestable; it now asserts on the `cloud_*_disabled` structured
+  events instead, with a converse test pinning that a gate which blocks stays diagnosable.
+- **Corrected an overclaiming docstring.** The catalog-wide hex-SHA gate said it checks a
+  *resolvable* SHA; it checks format. `175606b0…` — well-formed, resolvable, and naming the
+  branch point that contained neither change — shipped past it earlier in this same sprint.
+  Resolvability stays with `validate.py --strict-git` in the nightly, which has a full clone.
 
 ### Added — Sprint 5: Docs Consolidation & F-024 Closeout (Phase 6)
 
