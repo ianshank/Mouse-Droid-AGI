@@ -98,8 +98,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `origin/origin`: a stray `fatal:` line in dry-run output, and under `--push`, `git tag -f
   archive/origin origin/origin` fails at **exit 128** before any real branch is touched — this
   script's entire reason for existing (bulk cleanup of ~88 stale branches) unusable on any standard
-  fresh clone. Fixed at both call sites (the pin-carrier-detection loop and the main enumeration
-  loop) via a shared `_remote_branches()` helper filtering both `HEAD` and the bare `$REMOTE` token.
+  fresh clone. Fixed at both call sites — the pin-carrier-detection loop's own inline pipeline, and
+  the main enumeration loop via the new `_remote_branches()` helper — both filtering `HEAD` and the
+  bare `$REMOTE` token the same way. (Correction: an earlier draft of this entry said a "shared
+  `_remote_branches()` helper" covered both sites; the pin-carrier loop applies the identical filter
+  inline, it does not call the helper — caught by a Copilot review comment on this same PR.)
 - **This bug was introduced by this same plan's own round-5 fix to this file** (commit `3dc067c`,
   which generalised pin-carrier protection to `features.yaml`) and shipped unnoticed because the
   test fixture used to develop that fix happens not to trigger it (the pinned commit in that fixture
