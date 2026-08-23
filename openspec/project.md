@@ -21,6 +21,7 @@ authoritative counterparts.
 
 | change-id | status | F-number | landed | authoritative artifacts |
 |---|---|---|---|---|
+| `mouse-droid-doc-reconciliation` | in progress | F-030 | _unmerged (PR #202)_ | `tests/regression/test_doc_reconciliation_aqa.py`, `tests/regression/test_ci_gate_wiring_aqa.py` (`TestOrphanTierNarrativeAccuracy` + `_tracked_docs`), `tests/regression/test_claude_workforce_aqa.py` (`test_every_skill_directory_is_mentioned_in_the_index`, `test_every_agent_is_listed_in_the_subagent_skills_table`), `scripts/validations/F-030.sh`, `features.yaml` (F-030), `SKILLS.md`, `AGENTS.md` |
 | `mouse-droid-alayaworld-memory-distill` | implemented | F-023 | `e730a0a` | `docs/superpowers/specs/2026-07-23-alayaworld-memory-distill-design.md`, `docs/superpowers/plans/2026-07-23-alayaworld-memory-distill.md`, `docs/architecture/ADR-015-bounded-context-latent-memory.md` |
 | `mouse-droid-cloud-egress-default-off` | in progress | F-029 | _unmerged (PR #201)_ | `openspec/changes/mouse-droid-cloud-egress-default-off/peer-review.md`, `tests/regression/test_gcp_egress_defaults_aqa.py`, `scripts/validations/F-029.sh`, `features.yaml` (F-029) |
 | `mouse-droid-ci-tier-completeness` | in progress | F-028 | _unmerged (PR #201)_ | `openspec/changes/mouse-droid-ci-tier-completeness/peer-review.md`, `tests/regression/test_ci_gate_wiring_aqa.py`, `scripts/validations/F-028.sh`, `features.yaml` (F-028) |

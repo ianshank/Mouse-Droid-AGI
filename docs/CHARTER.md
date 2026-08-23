@@ -24,8 +24,10 @@ intelligence. The cognitive stack is organised around a "10 Pillars of the Ideal
 Network" research framing used as an engineering compass: every pillar is real, unit-tested
 code, and the honest axis is integration — seven pillars (world model, cognitive architecture,
 memory, continual learning, reward, safety, curiosity) are wired into the 30 Hz runtime loop
-(curiosity via the memory subsystem), while three (meta-learning, growth/distillation, scaling)
-are implemented and tested but not yet wired in (§5). The same reusable cognitive core also underpins a parked `robot_arm` manipulation
+(curiosity via the memory subsystem); growth/distillation is factory-instantiated and
+metrics-wired but default-OFF pending a soak decision, the same posture as M6 (§5); meta-learning
+and scaling are implemented and tested but not yet wired in at all (§5). The same reusable
+cognitive core also underpins a parked `robot_arm` manipulation
 platform, selected by config rather than by forking the code.
 
 ## 2. Mission
@@ -48,8 +50,9 @@ gracefully when a sensor, radio, or uplink is absent rather than crash-looping.
 
 **In scope:** The `orchestrator/` 30 Hz sense-plan-act loop; the cognitive stack — seven pillars
 wired into the runtime (`world_model/`, `cognitive/`, `memory/`, `learning/`, `reward/`,
-`safety/`, `curiosity/`) plus three implemented-but-not-yet-wired modules (`meta/`, `growth/`,
-`scaling/`; §5); the parked `arm/` four-layer hierarchical-reasoning platform (perception →
+`safety/`, `curiosity/`) plus `growth/` (factory-instantiated, default-OFF pending a soak
+decision) and two implemented-but-not-yet-wired modules (`meta/`, `scaling/`; §5); the parked
+`arm/` four-layer hierarchical-reasoning platform (perception →
 symbolic planning → world modelling → motor control); the sensing / comms / telemetry /
 resilience infrastructure, the unified camera+lidar+fusion dashboard, and the validation / smoke /
 preflight harness.
@@ -186,10 +189,13 @@ is authoritative). Statuses reflect the roadmap docs at time of ratification.
 - **M6 — On-Device Incremental Learning (Phase 6)** 🔜 ACTIVE — between-cloud-cycle
   RSSM refinement on a gated, integrity-checked weight slot with auto-revert;
   functional, default-OFF, and soak-gated (§3 carve-out).
-- **Cognitive-pillar integration** 🔬 — `meta/` (MAML + in-context adaptation), `growth/`
-  (knowledge distillation), and `scaling/` (MoE + adaptive compute) are implemented and
-  unit-tested (`tests/unit/{meta,growth,scaling}/`) but not yet instantiated by `factory.py` /
-  the orchestrator. They are promoted into the 30 Hz runtime loop only when a concrete need and a
+- **Cognitive-pillar integration** 🔬 — `meta/` (MAML + in-context adaptation) and
+  `scaling/` (MoE + adaptive compute) are implemented and unit-tested
+  (`tests/unit/{meta,scaling}/`) but not yet instantiated by `factory.py` / the orchestrator.
+  `growth/` (knowledge distillation) is instantiated — `factory.py::build_growth_coordinator`
+  is called and wired to the shared metrics registry — behind `Settings.growth: GrowthConfig
+  | None`, default-OFF and byte-identical to pre-feature when absent, the same posture as M6.
+  `meta/`/`scaling/` are promoted into the 30 Hz runtime loop only when a concrete need and a
   gate exist — not before. (`curiosity/` completed this path and is already wired.)
 
 ## 6. How Agents Use This Document

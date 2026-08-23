@@ -102,6 +102,18 @@ class ExperienceConfig(BaseModel):
             "to point at the data partition."
         ),
     )
+    ssd_mount_override_env_var: str = Field(
+        "MOUSEDROID_SSD_MOUNT",
+        description=(
+            "Env var name whose value, if set and an existing path, short-circuits "
+            "the findmnt-based SSD mount resolution in "
+            "``mousedroid.validation.runtime._storage``. Named via a schema field, "
+            "matching every other env-var-name lever in this codebase "
+            "(``MCPConfig.auth_token_env_var``, ``*.api_key_env_var``), so the "
+            "override point stays schema-discoverable rather than a bare "
+            "``os.environ.get`` literal."
+        ),
+    )
     diagnostics_subprocess_timeout_s: float = Field(
         10.0,
         gt=0,

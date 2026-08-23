@@ -72,13 +72,13 @@ The legacy v0.3.0 execution-plan phase numbering lives only in
 
 ## P0 — Physical AI Roadmap (Phases 2 → 6)
 
-Dependency direction is strictly **Phase 1 → 2 → 3 → 4**; Phases 5 and 6 are deferred until Phase 3b has soaked ≥30 days.
+Dependency direction is strictly **Phase 1 → 2 → 3 → 4**; Phase 6 is deferred until Phase 3b has soaked ≥30 days (Phase 5 has landed -- see below).
 
 - **Phase 1 — domain randomization** ✅ landed (see CHANGELOG).
 - **Phase 2 — real-episode replay loop** ✅ landed incl. Phase 2.1 BC injection.
 - **Phase 3a/3b — VLA protocol + DistilledVLAOnnx** ✅ landed.
 - **Phase 4 — VLM-derived dense rewards (VLAC)** ✅ landed.
-- **Phase 5 (stretch) — real physics simulator** — deferred until Phase-3b 30-day soak completes.
+- **Phase 5 — real physics simulator** ✅ landed — `src/mousedroid/sim/mujoco_rover_env.py`'s `RoverMuJoCoEnv` (MuJoCo skid-steer, `RoverEnvProtocol`-conformant, RSSM pretrained on its episodes) replaced the NumPy kinematic sim. Matches `docs/CHARTER.md` §5's M5 ✅. This entry previously called it deferred-stretch, written before the simulator landed and not updated after — the "deferred until 30-day soak" framing described the T3+ arm-training unfreeze gate below, not Phase 5 itself.
 - **Phase 6 (stretch) — real-time co-training** — LoRA-style on-device fine-tuning; builds on Phases 2 + 3.
 
 ### Training arc (T-numbers)
@@ -92,7 +92,8 @@ Dependency direction is strictly **Phase 1 → 2 → 3 → 4**; Phases 5 and 6 a
 0b. **[Architecture — needs a decision] 3 of 5 GCP cloud components are unwired.**
     `CloudLoggingSink`/`CloudMetricsExporter`/`CloudFirestoreSync` have no
     `build_cloud_*()` factory, zero runtime callers — same shape as unwired
-    `meta`/`growth`/`scaling` (`docs/architecture.md` Level 3d corrected).
+    `meta`/`scaling` (`docs/architecture.md` Level 3d corrected; `growth` has
+    since gained a factory builder and is no longer part of this comparison).
     Needs a wire-or-defer call.
 
 0a. **[Hygiene — needs a dedicated pass] First-ever vulture dead-code audit run: 447

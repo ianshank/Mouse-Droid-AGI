@@ -13,6 +13,15 @@ commit the moment the branch was cleaned up -- and the nightly
 These tests drive the real script in its default DRY-RUN mode against a
 synthetic repo with a local bare remote. Nothing is deleted.
 
+Also covers a second, independently-discovered bug in the same call sites:
+``git branch -r --format='%(refname:short)'`` renders a configured
+``refs/remotes/<remote>/HEAD`` symref as the BARE remote name ("origin"), not
+"origin/HEAD" -- a real git behaviour any plain ``git clone`` produces, which
+slips past a ``grep -v '^HEAD$'`` filter and reaches ``$REMOTE/$b`` as the
+unresolvable "origin/origin", fatal under ``--push``. The ``repo_pair`` fixture
+above happens not to trigger it (the pinned commit lives off the branch
+``origin/HEAD`` resolves to); ``repo_with_stale_orphan_branch`` below does.
+
 Skipped on Windows: the script is bash, and the fixture needs git.
 """
 
@@ -190,4 +199,289 @@ class TestFeaturePinProtection:
         assert f"PROTECTED (holds a gate-critical pin): {_PINNED_BRANCH}" not in output, (
             "once the SHA is reachable from a REMOTE tag the carrier no longer "
             "needs protecting:\n" + output
+        )
+
+
+_STALE_BRANCH = "truly-unrelated-history"
+
+
+@pytest.fixture
+def repo_with_stale_orphan_branch(tmp_path: Path) -> tuple[Path, Path]:
+    """A clone with ``origin/HEAD`` configured, plus one genuinely stale branch.
+
+    ``origin/HEAD`` is left for a plain ``git clone`` to set, the same way a
+    real fresh clone would -- not hand-crafted -- so this fixture proves the
+    bug against the actual condition, not a synthetic stand-in for it.
+
+    The stale branch shares NO ancestry with ``main`` (built via
+    ``checkout --orphan``), matching the script's own header comment about 74
+    of the repo's real stale branches predating a history rewrite, where
+    ``git branch --merged`` is structurally meaningless.
+
+    Returns ``(clone, origin_bare_repo)``.
+    """
+    origin = tmp_path / "origin.git"
+    subprocess.run(
+        ["git", "init", "--bare", "-q", "--initial-branch=main", str(origin)],
+        check=True,
+        capture_output=True,
+        timeout=60,
+    )
+
+    work = tmp_path / "work"
+    work.mkdir()
+    _git(work, "init", "-q", "--initial-branch=main")
+    (work / "README.md").write_text("seed\n", encoding="utf-8")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-q", "-m", "seed")
+    _git(work, "remote", "add", "origin", str(origin))
+    _git(work, "push", "-q", "-u", "origin", "main")
+
+    _git(work, "checkout", "-q", "--orphan", _STALE_BRANCH)
+    _git(work, "rm", "-rf", "-q", ".")
+    (work / "unrelated.txt").write_text("no shared history with main\n", encoding="utf-8")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-q", "-m", "unrelated root")
+    _git(work, "push", "-q", "-u", "origin", _STALE_BRANCH)
+    _git(work, "checkout", "-q", "main")
+
+    clone = tmp_path / "clone"
+    subprocess.run(
+        ["git", "clone", "-q", str(origin), str(clone)],
+        check=True,
+        capture_output=True,
+        timeout=60,
+    )
+    shutil.copytree(_SCRIPT.parent, clone / "scripts", dirs_exist_ok=True)
+    return clone, origin
+
+
+def _assert_origin_head_is_configured(clone: Path) -> None:
+    """Guard the fixture's own premise before trusting the tests below.
+
+    If a future git version or clone flag stops setting this symref, these
+    tests would pass vacuously -- for the same reason the pin-carrier tests
+    above lift protection once a remote tag exists, not because the
+    underlying bug is fixed.
+    """
+    result = subprocess.run(
+        ["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
+        cwd=clone,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    premise_failure = (
+        "fixture premise violated: refs/remotes/origin/HEAD is not set the way "
+        f"a plain `git clone` sets it (got {result.stdout!r}, rc={result.returncode}); "
+        "the origin/HEAD regression tests would pass vacuously.\n"
+        f"stderr: {result.stderr}"
+    )
+    assert result.returncode == 0, premise_failure
+    assert result.stdout.strip() == "refs/remotes/origin/main", premise_failure
+
+
+def _lists_bare_origin_as_branch(output: str) -> bool:
+    """True if a printed branch line's first field is the bare "origin" token.
+
+    Checking the first whitespace-separated field (rather than a substring or
+    a date-shaped regex) is what makes this robust to the buggy line's second
+    field being garbled or empty -- the date lookup for a non-existent
+    "origin/origin" ref fails too, so the line the bug produces does not
+    reliably contain a well-formed date to anchor a regex on.
+    """
+    return any(line.split()[:1] == ["origin"] for line in output.splitlines())
+
+
+def _run_script(clone: Path, *extra_args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(clone / "scripts" / _SCRIPT.name), *extra_args],
+        cwd=clone,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+
+
+class TestOriginHeadSymrefHandling:
+    """``git branch -r --format`` renders a configured origin/HEAD as "origin".
+
+    Independently discovered while verifying the pin-protection fix above: a
+    script modified in the same round that added ``features.yaml`` pin
+    sourcing shipped this bug unnoticed, because the fixture used to develop
+    that fix happens not to trigger it. Reproduced end-to-end (dry-run stray
+    ``fatal:`` line, then ``--push`` exit 128 on ``git tag -f archive/origin
+    origin/origin``) in disposable local fixtures before this permanent test
+    was written; see the comment above ``_remote_branches()`` in the script.
+    """
+
+    def test_fixture_actually_configures_origin_head(
+        self, repo_with_stale_orphan_branch: tuple[Path, Path]
+    ) -> None:
+        """Guard the premise: a plain `git clone` sets this symref.
+
+        If this fails, every other test in this class passes vacuously.
+        """
+        clone, _origin = repo_with_stale_orphan_branch
+        _assert_origin_head_is_configured(clone)
+
+    def test_dry_run_does_not_list_the_bare_remote_name_as_a_branch(
+        self, repo_with_stale_orphan_branch: tuple[Path, Path]
+    ) -> None:
+        clone, _origin = repo_with_stale_orphan_branch
+        _assert_origin_head_is_configured(clone)
+        result = _run_script(clone)
+        combined = result.stdout + result.stderr
+        assert result.returncode == 0, f"dry run must exit 0:\n{combined}"
+        assert "fatal:" not in combined, (
+            "the bare 'origin' token from the HEAD symref reached a ref "
+            f"resolution as 'origin/origin':\n{combined}"
+        )
+        assert not _lists_bare_origin_as_branch(result.stdout), (
+            "'origin' (the HEAD symref, not a real branch) was listed as a "
+            f"stale branch to archive:\n{result.stdout}"
+        )
+        assert _STALE_BRANCH in result.stdout, (
+            f"the genuinely stale orphan branch should still be listed:\n{result.stdout}"
+        )
+
+    def test_push_completes_and_never_touches_the_bare_remote_name(
+        self, repo_with_stale_orphan_branch: tuple[Path, Path]
+    ) -> None:
+        """The end-to-end proof: --push must actually archive and delete.
+
+        Pre-fix this exits 128 on `git tag -f archive/origin origin/origin`
+        before any real branch is touched -- the tool's entire reason for
+        existing (bulk cleanup of genuinely stale branches).
+        """
+        clone, origin = repo_with_stale_orphan_branch
+        _assert_origin_head_is_configured(clone)
+        result = _run_script(clone, "--push")
+        combined = result.stdout + result.stderr
+        assert result.returncode == 0, (
+            f"--push must exit 0 against a clone with origin/HEAD configured "
+            f"(rc={result.returncode}):\n{combined}"
+        )
+        assert "fatal:" not in combined, combined
+        assert "archive/origin" not in combined, (
+            f"the bare remote-name token must never be archived as a branch:\n{combined}"
+        )
+
+        tags = subprocess.run(
+            ["git", "ls-remote", "--tags", str(origin)],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        ).stdout
+        assert f"refs/tags/archive/{_STALE_BRANCH}" in tags, (
+            f"the genuinely stale branch should have been archived as a tag:\n{tags}"
+        )
+        assert "archive/origin" not in tags, tags
+
+        heads = subprocess.run(
+            ["git", "ls-remote", "--heads", str(origin)],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        ).stdout
+        assert _STALE_BRANCH not in heads, (
+            f"the genuinely stale branch should have been deleted after archiving:\n{heads}"
+        )
+        assert "refs/heads/main" in heads, "the default branch must never be deleted"
+
+
+@pytest.fixture
+def repo_with_orphaned_pin(tmp_path: Path) -> tuple[Path, str]:
+    """A clone where a pinned SHA exists locally but has ZERO remote carriers.
+
+    Built by pushing the pin commit on its own branch, then deleting that
+    branch on the remote and running ``git fetch --prune`` locally -- the
+    commit OBJECT survives (unreferenced objects are not immediately
+    garbage-collected), but ``git branch -r --contains`` and
+    ``git tag --contains`` both return nothing for it. This is the realistic
+    trigger for the class of bug fixed alongside it: an already-orphaned pin
+    is exactly the scenario ``pin-reachability-audit`` exists to catch, not a
+    contrived edge case.
+
+    Returns ``(clone, pinned_sha)``.
+    """
+    origin = tmp_path / "origin.git"
+    subprocess.run(
+        ["git", "init", "--bare", "-q", "--initial-branch=main", str(origin)],
+        check=True,
+        capture_output=True,
+        timeout=60,
+    )
+
+    work = tmp_path / "work"
+    work.mkdir()
+    _git(work, "init", "-q", "--initial-branch=main")
+    (work / "README.md").write_text("seed\n", encoding="utf-8")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-q", "-m", "seed")
+    _git(work, "remote", "add", "origin", str(origin))
+    _git(work, "push", "-q", "-u", "origin", "main")
+
+    _git(work, "checkout", "-q", "-b", "soon-to-be-deleted")
+    (work / "shipped.txt").write_text("the feature\n", encoding="utf-8")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-q", "-m", "the commit a feature pins")
+    pinned_sha = _git(work, "rev-parse", "HEAD")
+    _git(work, "push", "-q", "-u", "origin", "soon-to-be-deleted")
+
+    _git(work, "checkout", "-q", "main")
+    (work / "features.yaml").write_text(_FEATURES_TEMPLATE.format(sha=pinned_sha), encoding="utf-8")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-q", "-m", "pin the feature")
+    _git(work, "push", "-q", "origin", "main")
+
+    clone = tmp_path / "clone"
+    subprocess.run(
+        ["git", "clone", "-q", str(origin), str(clone)],
+        check=True,
+        capture_output=True,
+        timeout=60,
+    )
+    # The clone has fetched the pin commit (it exists locally) while it was
+    # still on a real branch. Deleting that branch and pruning removes every
+    # remote-tracking ref to it -- but not the object itself.
+    _git(clone, "push", "-q", "origin", "--delete", "soon-to-be-deleted")
+    _git(clone, "fetch", "-q", "--prune", "origin")
+
+    shutil.copytree(_SCRIPT.parent, clone / "scripts", dirs_exist_ok=True)
+    return clone, pinned_sha
+
+
+class TestOrphanedPinDoesNotAbortTheScript:
+    """A pin with zero surviving carriers must not crash the whole run.
+
+    Under ``set -euo pipefail``, ``grep -Fvx -e "HEAD" -e "$REMOTE"`` exits 1
+    when every input line is filtered out (including on completely empty
+    input) -- and that pipe's exit status feeds a plain variable assignment
+    (``carriers=$(... | grep ...)``), which DOES abort the script under
+    ``set -e``, unlike a superficially similar ``for w in $(... | grep ...)``
+    (word-splitting a command substitution is exempt from ``errexit`` --
+    verified empirically; a variable assignment is not). An already-orphaned
+    pin -- reachable from no remote branch and no remote tag -- produces
+    exactly this all-filtered-out condition, and is a normal outcome this
+    loop must process past, not a reason to abort before checking the
+    remaining pins or reporting anything useful.
+    """
+
+    def test_dry_run_completes_and_reports_the_orphaned_pin(
+        self, repo_with_orphaned_pin: tuple[Path, str]
+    ) -> None:
+        clone, pinned_sha = repo_with_orphaned_pin
+        result = _run_script(clone)
+        combined = result.stdout + result.stderr
+        assert result.returncode == 0, (
+            f"dry run must not abort just because a pin has zero surviving "
+            f"carriers (rc={result.returncode}):\n{combined}"
+        )
+        assert f"pin {pinned_sha} is NOT reachable from any REMOTE tag" in result.stdout, (
+            f"the script should still report on the orphaned pin, not exit silently:\n{combined}"
         )

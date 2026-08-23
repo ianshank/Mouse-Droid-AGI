@@ -9,6 +9,15 @@ Skills are organised by **trigger**: when you see the trigger, invoke the
 skill. If no project-local skill matches, fall back to the
 `plugin:superpowers:*` family or the Anthropic skill index.
 
+**Two shapes of entry below.** Most `###` entries in this file are a
+*documented procedure* — files to read, commands to run — with no dedicated
+`.claude/skills/<name>/` directory; that is deliberate (a skill used once is
+a worse artifact than a well-documented procedure). A smaller set additionally
+ships a real skill directory, invocable as `/<name>`. The **Workforce skills**
+section lists every directory under `.claude/skills/` not already covered by
+an `###` entry above it, so this file stays a true index of what actually
+exists to invoke, not just what is documented.
+
 ---
 
 ## Operational skills (operator-facing)
@@ -750,17 +759,56 @@ gates would be silently inactive rather than obviously broken. Details:
 
 ---
 
+## Workforce skills (invocable, not covered above)
+
+Real `.claude/skills/<name>/SKILL.md` directories whose capability is not
+already indexed by an `###` entry above — each is invocable as `/<name>`.
+Four skills already have full `###` entries above (`test-tier-mirror`,
+`prove-pin-fails`, `regression-pair-scaffold`, `feature-closeout`) and are not
+repeated here.
+
+| Skill | Status | Use when |
+|-------|--------|----------|
+| `autonomous-mission-probe` | active | Validating the `AutonomousOrchestrator` 30 Hz loop, safety interlocks, or Prometheus telemetry |
+| `coverage-gate` | active | Running the dedicated `tools/claude_hooks` coverage gate and reporting the delta |
+| `edge-hardware-health` | active | Auditing USB-C dynamic discovery, LiDAR scan buffers, CSI camera frames, or motor controller health |
+| `evidence-commit` | active | Committing evidence artifacts to `reports/` and linking them from `features.yaml` |
+| `gate-ladder` | active | Running the pre-push gate ladder in `scripts/ci.sh` order with the correct extras installed |
+| `jetson-smoke` | active | Tiered Jetson smoke testing with operator consent gates for live actuation |
+| `mcp-audit` | active | Auditing MCP server configuration, secretless expansion, or worktree state |
+| `narrative-correction-sweep` | active | Correcting a false claim across every live prose surface via a whole-file, whitespace-normalized `git ls-files` sweep, proven against the original wording |
+| `openspec-change` | active | Authoring or maintaining an OpenSpec change bundle in the house format |
+| `pin-reachability-audit` | active | Checking a `done` feature's `implemented_in` SHA is reachable from a surviving remote branch/tag, not just resolvable locally |
+| `prompt-injection-audit` | active | Fuzzing natural-language mission inputs against the pre-egress injection filter |
+| `worktree-flow` | active | Managing git worktrees for parallel agent isolation (D-6 convention) |
+| `robot-arm-trainer` | **frozen** | Full-cycle robot arm manipulation training — blocked by F-008 (see the Capability Freeze Rule) |
+| `sim-test` | **frozen** | Simulation tests for the robot arm platform — same freeze |
+| `train-policy` | **frozen** | Training an RL policy for the robot arm platform — same freeze |
+
+The three `frozen` skills are parked behind `F-008` reaching `done`
+(`.claude/workforce.yaml`'s `freeze` block); do not invoke them until then
+without the documented `MOUSEDROID_WORKFORCE_ALLOW_FROZEN=1` override.
+
+---
+
 ## Subagent skills (delegation-facing)
 
-| Skill | Subagent | Use when |
-|-------|----------|----------|
-| Security audit | `security-auditor` | Before any PR that touches auth, networking, or shells out |
-| Code quality | `code-quality` | Before any PR — runs ruff + mypy + branch-coverage gates |
-| Code review | `feature-dev:code-reviewer` | Independent second-opinion on a diff |
-| ML review | `ai-ml-toolkit:ml-engineer` | Training-loop changes, model deployment, A/B tests |
-| Architecture | `feature-dev:code-architect` | Designing a new feature with multi-file scope |
-| Test engineering | `testing-suite:test-engineer` | When the test pyramid needs a structural change |
-| Documentation | `documentation-generator:technical-writer` | README rewrites, ADRs, user guides |
+The repository's 7 subagents live in `.claude/agents/` and are pinned by
+`test_claude_workforce_aqa.py::test_complete_agent_roster_is_present` (a
+*subset* check — see its docstring; an 8th agent would ship ungoverned by
+that pin alone). This table previously named 7 subagents from a
+plugin-namespaced convention (`security-auditor`, `feature-dev:code-reviewer`,
+etc.) that do not exist in this repository — corrected to the real roster:
+
+| Agent | Use when |
+|-------|----------|
+| `config-guardian` | Any change touching `config/schema/` or a threshold/dimension/path — hunts hardcoded values and schema-bypass patterns |
+| `doc-reconciler` | Any interface boundary or module-map change — detects drift between CLAUDE.md/AGENTS.md/README and the codebase |
+| `hw-evidence-auditor` | Before closing any hardware-related feature — audits `reports/`/`smoke-reports/` for staleness |
+| `openspec-author` | Scaffolding or authoring an OpenSpec change bundle; reserving an F-number per ADR-013 |
+| `peer-reviewer` | Any diff > 50 lines, any plan/spec document, before any PR is opened — adversarial, cite-by-symbol review |
+| `security-scanner` | Any change touching config, credentials, API egress, or `.gitleaks.toml` |
+| `test-engineer` | Any behavioural change — enforces the 7-tier test pyramid and coverage delta |
 
 When dispatching, ALWAYS:
 

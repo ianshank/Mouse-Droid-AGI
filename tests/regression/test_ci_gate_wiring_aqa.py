@@ -37,6 +37,7 @@ Pinned contracts:
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -554,17 +555,28 @@ _CLAIM_QUALIFIERS = (
 # Normalised characters after the match in which a qualifier must appear.
 _QUALIFIER_WINDOW = 400
 
-_DOC_GLOBS = ("*.md", "docs/**/*.md", "openspec/**/*.md", ".claude/**/*.md", "src/**/*.md")
-
 
 def _tracked_docs() -> list[Path]:
-    """Every prose surface a future engineer might read as current truth."""
-    seen: dict[str, Path] = {}
-    for pattern in _DOC_GLOBS:
-        for path in _REPO_ROOT.glob(pattern):
-            if path.is_file():
-                seen[path.relative_to(_REPO_ROOT).as_posix()] = path
-    return [seen[k] for k in sorted(seen)]
+    """Every prose surface a future engineer might read as current truth.
+
+    Sourced from ``git ls-files`` rather than a directory-prefix glob list.
+    The prior version (``*.md``, ``docs/**/*.md``, ``openspec/**/*.md``,
+    ``.claude/**/*.md``, ``src/**/*.md``) missed 15 tracked docs outright --
+    including ``tests/agent.md``, an agent-facing instructions file this same
+    doc-reconciliation sprint corrected a stale coverage-floor claim in, so
+    the gap was not hypothetical. A hardcoded directory roster is exactly the
+    pattern ``TestOrphanTierWiring`` below exists to replace with discovery
+    for CI tiers; the doc inventory had the identical shape of gap.
+    """
+    result = subprocess.run(
+        ["git", "ls-files", "--", "*.md"],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    relpaths = sorted(line for line in result.stdout.splitlines() if line.strip())
+    return [_REPO_ROOT / relpath for relpath in relpaths]
 
 
 class TestOrphanTierNarrativeAccuracy:

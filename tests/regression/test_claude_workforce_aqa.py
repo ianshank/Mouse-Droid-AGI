@@ -256,6 +256,85 @@ def test_agent_files_are_git_tracked() -> None:
 
 
 # ---------------------------------------------------------------------------
+# SKILLS.md index accuracy — F-030
+# ---------------------------------------------------------------------------
+#
+# SKILLS.md documents two shapes of entry: a plain "###" procedure (files to
+# read, commands to run, no dedicated skill directory required — deliberate,
+# not drift), and a real ".claude/skills/<name>/" directory invocable as
+# "/<name>". The class of bug this session kept re-finding is a real,
+# invocable capability that the index never mentions — 12 of 17 skill
+# directories were absent from SKILLS.md entirely before this fix, and the
+# "Subagent skills" table named seven subagents that do not exist in this
+# repository. Both are now pinned by DISCOVERY (glob the real directories,
+# not a hardcoded roster) so the next skill or agent added without an index
+# entry fails loudly rather than rotting invisibly the same way.
+
+_SKILLS_DIR = _REPO_ROOT / ".claude" / "skills"
+_SKILLS_MD = _REPO_ROOT / "SKILLS.md"
+
+
+def _skill_directories() -> list[str]:
+    """Every real, invocable skill under .claude/skills/, by directory name."""
+    if not _SKILLS_DIR.is_dir():
+        return []
+    return sorted(d.name for d in _SKILLS_DIR.iterdir() if d.is_dir())
+
+
+def test_every_skill_directory_is_mentioned_in_the_index() -> None:
+    """A real skill absent from SKILLS.md is invisible to any agent using the
+
+    index as documented ("Discovery" section: "grep this file"). This does not
+    require a full ### entry — appearing anywhere (e.g. the Workforce skills
+    table) is sufficient; only total absence is the failure mode this pins.
+    """
+    directories = _skill_directories()
+    # A positive control: if .claude/skills/ ever went missing or empty, the
+    # assertion below would pass vacuously over zero skills -- which is not
+    # the same claim as "every skill is indexed", and is exactly the failure
+    # mode a pin exists to rule out, not fall into.
+    assert directories, (
+        f"{_SKILLS_DIR} is missing or has no skill directories -- the "
+        "membership check below cannot mean anything over an empty set"
+    )
+    text = _SKILLS_MD.read_text(encoding="utf-8")
+    missing = sorted(name for name in directories if name not in text)
+    assert not missing, (
+        f"skill director{'y is' if len(missing) == 1 else 'ies are'} not mentioned "
+        f"anywhere in SKILLS.md: {missing} — a real, invocable skill the index "
+        "does not know about"
+    )
+
+
+def test_every_agent_is_listed_in_the_subagent_skills_table() -> None:
+    """The Subagent skills table must name real agents, not a stale roster.
+
+    Verified defect this corrects: the table previously listed seven
+    plugin-namespaced subagent names (``security-auditor``,
+    ``feature-dev:code-reviewer``, ...) matching none of the seven real
+    ``.claude/agents/`` files.
+    """
+    agents = _agent_files()
+    # Same positive control as the skills index above: an empty agent roster
+    # would make the membership check below pass over nothing.
+    assert agents, (
+        f"{_REPO_ROOT / _config().agents.directory} is missing or has no agent "
+        "files -- the membership check below cannot mean anything over an "
+        "empty set"
+    )
+    text = _SKILLS_MD.read_text(encoding="utf-8")
+    table_start = text.find("## Subagent skills")
+    assert table_start != -1, "SKILLS.md lost its Subagent skills section"
+    # Bounded to the NEXT level-two heading, not end-of-file -- otherwise an
+    # agent name mentioned anywhere later in SKILLS.md (in a different
+    # section) would satisfy this check even if the table itself omits it.
+    table_end = text.find("\n## ", table_start + len("## Subagent skills"))
+    table_text = text[table_start : table_end if table_end != -1 else None]
+    missing = sorted(agent.stem for agent in agents if f"`{agent.stem}`" not in table_text)
+    assert not missing, f"agents missing from the Subagent skills table: {missing}"
+
+
+# ---------------------------------------------------------------------------
 # settings.json wiring
 # ---------------------------------------------------------------------------
 

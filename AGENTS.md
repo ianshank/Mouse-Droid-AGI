@@ -125,7 +125,7 @@ sprinkle `try/except` around the driver calls.
 
 ## Subagent dispatch
 
-When delegating to a subagent (security-auditor, code-quality, code-reviewer):
+When delegating to a subagent (`peer-reviewer`, `test-engineer`, `config-guardian`, or any of the other five in `.claude/agents/`):
 
 - The subagent does NOT inherit your conversation context. Brief it like a
   smart colleague who just walked in: include file paths, the worktree
@@ -359,7 +359,11 @@ layout was migrated off (foundry plan WS-F7a) and must stay deleted:
 6. **New shared `.claude/` assets need a `.gitignore` negation.** `.gitignore`
    excludes `.claude/*`, so anything you add there is untracked by default: it
    works on your machine and is simply absent in CI and in every clone. Add
-   `!.claude/<your-asset>` and confirm with `git ls-files .claude/`. Pinned by
+   `!.claude/<your-asset>` and confirm with `git ls-files .claude/`. Exception:
+   `.claude/skills/` and `.claude/agents/` already carry directory-level
+   negations (`!.claude/skills/`, `!.claude/agents/`), which cascade to new
+   files added inside them — a new skill or agent file needs no additional
+   line. This rule is about genuinely new top-level asset categories. Pinned by
    `tests/regression/test_claude_workforce_aqa.py::test_shared_claude_assets_are_git_tracked`.
 
 ## Working under the workforce hooks (F-024)

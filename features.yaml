@@ -555,13 +555,18 @@ features:
       - "the ci.sh stage precedes the MOUSEDROID_CI_SLIM gate (runs outside the slim skip)"
       - "TestOrphanTierWiring fails when the wiring is removed (verified by reverting)"
     validation_command: "bash scripts/validations/F-028.sh"
-    implemented_in: "df928d9699df99983287f768bb35131ff9418eb0"
+    implemented_in: "9bd3dc7549b09c973e8ff5ce1a737e1076cdc5d2"
     depends_on: ["F-001"]
     notes: >-
-      implemented_in pins the commit on this branch that actually contains the
-      change; re-pin to the squash SHA post-merge (F-015..F-020 pin a12c95b,
-      their real landing commit - never a branch point, which would claim
-      provenance for a commit where the feature does not exist).
+      implemented_in pins PR #201's squash merge, the commit this feature
+      actually landed in - the catalog convention (F-015..F-020 pin a12c95b,
+      PR #151's squash; F-021 pins 40a6399, PR #153's). It previously pinned
+      the branch commit df928d9, which the squash did not preserve, leaving it
+      reachable only from the feature branch. The harness resolves this field
+      with git rev-parse (harness/spec.py), an EXISTENCE check - so it passed
+      while that branch lived and would have started failing --strict-git the
+      moment it was deleted. Never a branch point either, which would claim
+      provenance for a commit where the feature does not exist.
 
   - id: "F-029"
     epic: "Quality Gates"
@@ -590,10 +595,69 @@ features:
       - "explicit enabled=true still works — the default is a default, not a pin"
       - "config/gcp_digital_twin.yaml resolves to the same effective state (it sets all three explicitly)"
     validation_command: "bash scripts/validations/F-029.sh"
-    implemented_in: "5c2f044c4c0f4ebc2fd401e070e54802889d25fd"
+    implemented_in: "9bd3dc7549b09c973e8ff5ce1a737e1076cdc5d2"
     depends_on: ["F-001"]
     notes: >-
       Gates F-032 (cloud component wiring) - that bundle must not land while a
-      default-ON egress path exists. implemented_in pins the commit on this
-      branch that actually contains the change; re-pin to the squash SHA
-      post-merge.
+      default-ON egress path exists. implemented_in pins PR #201's squash
+      merge, the commit this feature actually landed in. It previously pinned
+      the branch commit 5c2f044, which the squash did not preserve, leaving it
+      reachable only from the feature branch.
+
+  - id: "F-030"
+    epic: "Quality Gates"
+    name: "Documentation reconciliation across live governance surfaces"
+    description: >-
+      Six verified drifts between live doc surfaces and the actual tree, plus
+      two catalog-wide pins so the same drift class cannot re-open silently.
+      CLAUDE.md / docs/claude/surfaces/ci-gates.md / docs/claude/surfaces/README.md
+      claimed a "12-job" CI pipeline naming six jobs that do not exist
+      (secret-scan, skills, test-fast, validate, regression, package) while
+      ci.yml defines 16 real jobs. orchestrator/CLAUDE.md referenced
+      RobotOrchestrator, state.py, factory.py:_build_orchestrator, and
+      ConstitutionalSafetyMonitor -- none exist in any .py file; the real
+      symbols are MouseDroidOrchestrator, AutonomousOrchestrator (zero
+      production callers), and MouseDroidSafetyMonitor. HARNESS_SPEC.md,
+      tests/agent.md, and docs/architecture/c4-spec-harness.md stated an 85%
+      coverage floor for src/mousedroid; the real gate is 90% (85% is correct
+      only for the separate tools/claude_hooks gate). docs/CHARTER.md claimed
+      growth/ was "not yet instantiated by factory.py"; build_growth_coordinator
+      is called at factory.py:4308, default-OFF and metrics-wired, same posture
+      as M6 -- meta/ and scaling/ genuinely have no builder, so only growth/
+      needed correcting. Root NEXT_STEPS.md called Phase 5 (the MuJoCo physics
+      simulator) a deferred stretch goal; docs/CHARTER.md's M5 already marks it
+      done, and src/mousedroid/sim/mujoco_rover_env.py confirms a real,
+      RoverEnvProtocol-conformant implementation. SKILLS.md's Subagent skills
+      table and AGENTS.md both named seven subagents from a plugin-namespaced
+      convention (security-auditor, feature-dev:code-reviewer, ...) matching
+      none of the seven real .claude/agents/ files, and 12 of 17 real
+      .claude/skills/ directories were entirely absent from SKILLS.md.
+    category: "non-functional"
+    priority: "high"
+    status: "in_progress"
+    tier: "fast"
+    verification:
+      - "every live doc stating the CI job count states 16, not 12"
+      - "no live doc states a src/mousedroid coverage floor of 85% (it is 90%)"
+      - "orchestrator/CLAUDE.md names only symbols that exist in src/"
+      - "every real .claude/skills/ directory is mentioned somewhere in SKILLS.md"
+      - "every real .claude/agents/ file is named in SKILLS.md's Subagent skills table"
+    validation_command: "bash scripts/validations/F-030.sh"
+    implemented_in: null
+    depends_on: ["F-028"]
+    notes: >-
+      Depends on F-028 landing so the job-count claim is checked against the
+      final ci.yml, not an intermediate state. implemented_in pins to done on
+      closeout, per the established convention (a commit on this branch that
+      actually contains the change, re-pinned to the squash SHA post-merge if
+      this lands squashed). The sixth original drift -- docs/CHARTER.md's
+      growth/ claim matching factory.py:build_growth_coordinator -- was
+      manually verified and corrected but is deliberately NOT listed above:
+      scripts/validations/F-030.sh does not execute an automated check for
+      it. A sentence-scoped sweep across the five files that claim recurred
+      in was attempted and produced false positives on legitimate text (a
+      README.md code-fence listing, a genuine pre-existing NEXT_STEPS.md
+      sentence); see openspec/changes/mouse-droid-doc-reconciliation/tasks.md
+      "Explicitly deferred" for the full account. Caught by CodeRabbit on
+      PR #202, which correctly flagged that listing it under `verification`
+      here would claim the validator checks something it does not.

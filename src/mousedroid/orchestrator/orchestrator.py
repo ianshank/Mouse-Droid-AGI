@@ -1644,6 +1644,7 @@ class MouseDroidOrchestrator:
                 safety_ctx,
                 loop_time_ms,
                 self._tick_count,
+                vision_feature_max_samples=self._cfg.telemetry.vision_feature_max_samples,
                 liveness_tracker=self._liveness_tracker,
                 now_s=self._clock.monotonic(),
             )

@@ -664,6 +664,33 @@ def test_verify_pcie_ssd_layout_uses_env_mount_override(
     assert result.total_gb > 0  # shutil.disk_usage on a real path returns >0
 
 
+def test_ssd_mount_override_env_var_name_is_schema_configurable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The env var NAME itself is a schema field, not a bare string literal.
+
+    Regression target: ``_resolve_pcie_ssd_mount`` previously read
+    ``os.environ.get("MOUSEDROID_SSD_MOUNT", ...)`` directly, the only env-var
+    name in this codebase not sourced from a Pydantic field (every sibling
+    lever -- ``MCPConfig.auth_token_env_var``, the various ``api_key_env_var``
+    fields -- is schema-discoverable). An operator renaming
+    ``ExperienceConfig.ssd_mount_override_env_var`` must change which env var
+    is actually read, not just the field's own default string.
+    """
+    custom_mount = tmp_path / "renamed_mount"
+    custom_mount.mkdir()
+    monkeypatch.delenv("MOUSEDROID_SSD_MOUNT", raising=False)
+    monkeypatch.setenv("CUSTOM_SSD_ENV_VAR", str(custom_mount))
+    monkeypatch.setattr("shutil.which", lambda cmd: None)
+
+    cfg = Settings(mock_hardware=True)
+    cfg.experience.ssd_mount_override_env_var = "CUSTOM_SSD_ENV_VAR"
+    result = runtime.verify_pcie_ssd_layout(cfg)
+
+    assert result.mount_target == custom_mount
+
+
 def test_verify_pcie_ssd_layout_skips_mount_when_no_resolution_path_works(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

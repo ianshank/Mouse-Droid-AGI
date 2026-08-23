@@ -8,6 +8,237 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Second Copilot pass on PR #202: the coverage-floor pin's own exemption
+
+- **`test_no_live_doc_claims_a_stale_src_coverage_floor` skipped an entire line whenever it
+  contained `"claude_hooks"`, exempting the legitimate `src/mousedroid` claim right along with
+  the `tools/claude_hooks` one on any line stating both** — and two of the three target files
+  do exactly that (`HARNESS_SPEC.md:303`, `tests/agent.md:6`). Verified live: a corrupted
+  `88%` in place of the real `90%` on `HARNESS_SPEC.md:303` passed silently under the prior
+  logic and is now caught. Redesigned the exemption to be per-match rather than per-line: a
+  claim is only exempt when its own value equals the tools_hooks gate's real floor
+  (`tools.claude_hooks.config.load_config().coverage.tools_line_min`) **and** the line names
+  that gate — any other value on the same line, correct or wrong, is still checked against
+  `_real_src_coverage_floor()`. Proven with a temporary, restored mutation of the real file:
+  the old test logic passed against the corrupted line, the new logic fails on it.
+
+### Fixed — Copilot + CodeRabbit follow-up round on PR #202
+
+- **A third, independent bug in `archive_stale_branches.sh`'s pin-carrier loop** (Copilot):
+  under `set -euo pipefail`, `carriers=$(... | grep -Fvx -e "HEAD" -e "$REMOTE" | tr ...)`
+  aborts the ENTIRE script (exit 1, no further output) the moment a pin's carrier branches
+  are all filtered out -- including the realistic case of an already-orphaned pin (reachable
+  from no remote branch or tag), which is a normal outcome this loop must process past, not
+  a crash condition. Root-caused empirically: a command substitution feeding a plain variable
+  assignment IS subject to `errexit` on the pipe's exit status, while a superficially similar
+  `for w in $(...)` is not (word-splitting a command substitution is exempt) -- verified with
+  two minimal reproductions before touching the real script. Fixed with `|| true` at both
+  `grep -Fvx` call sites (the assignment one where it was load-bearing, and defensively in
+  `_remote_branches()` itself, whose only current caller is exempt but a future assignment-
+  context caller would not be). New `TestOrphanedPinDoesNotAbortTheScript` builds a fixture
+  where a pin's SHA is locally present but has zero remote carriers (pushed, then the branch
+  deleted and pruned -- the object survives, the refs don't) and proves the dry run now
+  completes and reports on the pin instead of dying silently. Proven red against the
+  pre-fix script first (exit 1, no pin report at all).
+- **`_skill_directories()`/`_agent_files()` returning `[]` let their membership pins pass
+  vacuously** (Copilot) if `.claude/skills/` or `.claude/agents/` ever went missing or empty
+  — `test_every_skill_directory_is_mentioned_in_the_index` and
+  `test_every_agent_is_listed_in_the_subagent_skills_table` would report "nothing missing"
+  over zero real entries. Added a positive-control assertion to both, matching the
+  `_INJECTION_FILTER_UNIT_TESTS.is_file()` guard already used elsewhere in this repo's own
+  test suite for exactly this failure shape.
+- **`features.yaml`'s F-030 entry still listed the `growth/`-wiring claim under
+  `verification:`** (CodeRabbit follow-up, caught after re-reading the actual files rather
+  than repeating its prior comment) even though `scripts/validations/F-030.sh` deliberately
+  does not check it. Removed the bullet; the `notes:` field now explains why, pointing at the
+  openspec bundle's "Explicitly deferred" account rather than leaving the catalog claiming a
+  check that does not run.
+
+### Fixed — CodeRabbit review round on PR #202 (10 findings, all verified, 9 fixed, 1 honestly deferred)
+
+- **`F-030 does not execute all declared governance checks` (Major).** Added
+  `test_orchestrator_claude_md_names_only_real_symbols` to `test_doc_reconciliation_aqa.py`,
+  closing the gap for the orchestrator-symbol half of this finding: it asserts the four real
+  symbols `orchestrator/CLAUDE.md` names actually resolve (`class`/`def` grep against their
+  claimed source files) and that the two historical phantom symbols never come back. Proven
+  red against the pre-fix doc content first. The `growth/`-wiring-claim half of this finding
+  was attempted and **not** shipped: a sentence-scoped sweep across the four live target
+  files produced two false positives on its first real run against the tree (a `README.md`
+  code-fence file listing swallowed into one giant "sentence"; a legitimate pre-existing
+  `NEXT_STEPS.md` sentence from Session 009 using none of the pin's qualifier phrases) — full
+  account in the F-030 bundle's `tasks.md` "Explicitly deferred" section, not silently
+  dropped from either that file or this one.
+- **`grep -e "$REMOTE"` in `archive_stale_branches.sh` treated the remote name as a regex,
+  not a literal string** — a remote containing a metacharacter (e.g. `upstream.fork`) could
+  match and wrongly exclude an unrelated branch. Added `-F` at both filter sites.
+- **`test_ci_gate_wiring_aqa.py`'s `_tracked_docs()` used `check=False`** on its `git
+  ls-files` call, so a failed git invocation silently returned an empty doc list and the
+  whole narrative-accuracy sweep passed vacuously over nothing. Changed to `check=True`.
+- **`test_every_agent_is_listed_in_the_subagent_skills_table`'s `table_text` slice ran to
+  end-of-file** instead of stopping at the next `## ` heading, so an agent name mentioned
+  anywhere later in `SKILLS.md` — not just inside the Subagent skills table — could satisfy
+  the check. Bounded to the next heading.
+- **`test_no_live_doc_claims_a_stale_src_coverage_floor` searched for the literal string
+  `"85%"`** rather than comparing an extracted claim against the real floor, so a future
+  change to `pyproject.toml`'s `fail_under` that some doc missed would go uncaught. Redesigned
+  to extract every `"<N>% coverage"` claim and compare `N` against `_real_src_coverage_floor()`
+  directly — the same discipline the CI-job-count pin already used. Tuned against
+  `docs/architecture/c4-spec-harness.md`'s unrelated `"100% on spec.py"` claim (a different,
+  legitimate, per-file metric) before trusting the new regex, per this bundle's own
+  `narrative-correction-sweep` discipline.
+- **`README.md` described `growth/` distillation as "KL+CE"** — `factory.py`'s
+  `build_growth_coordinator` passes `objective="regression"` to `KnowledgeDistiller`, whose
+  own docstring confirms `"classification"` (KL+CE) is the *default*, not what's wired.
+  Corrected to describe the actually-wired regression (MSE) objective.
+- **`NEXT_STEPS.md`'s roadmap-intro sentence still said "Phases 5 and 6 are deferred"** one
+  paragraph above the already-corrected Phase 5 entry saying "✅ landed" — the identical
+  instance-not-class miss this sprint kept finding elsewhere, this time caught by the bot
+  instead of the sweep. Corrected to name only Phase 6.
+- **`.claude/skills/pin-reachability-audit/SKILL.md`'s all-features audit read local
+  `origin/*` refs and tags without fetching first**, so a stale clone could report a deleted
+  carrier as present or a new remote carrier as absent. Added `git fetch --prune --tags
+  origin --quiet` before the python block.
+- **The F-030 bundle's `tasks.md` quality-gate fence had no language tag** (markdownlint
+  MD040) **and claimed a gate no early task could satisfy** — `bash
+  scripts/validations/F-030.sh` didn't exist until task 4.2, so tasks 1.1–4.1 could not
+  literally have run it. Fence tagged `shell`; gate description scoped to say so.
+
+### Fixed — `archive_stale_branches.sh` origin/HEAD symref bug
+
+- **`git branch -r --format='%(refname:short)'` renders a configured `refs/remotes/<remote>/HEAD`
+  symref as the BARE remote name (e.g. `origin`), not `origin/HEAD`.** A real git behaviour, not
+  repo-specific — reproduced on a plain, fresh `git clone`. The script's existing `grep -v '^HEAD$'`
+  filter does not catch this rendering, so the bare token reached `$REMOTE/$b` as the unresolvable
+  `origin/origin`: a stray `fatal:` line in dry-run output, and under `--push`, `git tag -f
+  archive/origin origin/origin` fails at **exit 128** before any real branch is touched — this
+  script's entire reason for existing (bulk cleanup of ~88 stale branches) unusable on any standard
+  fresh clone. Fixed at both call sites — the pin-carrier-detection loop's own inline pipeline, and
+  the main enumeration loop via the new `_remote_branches()` helper — both filtering `HEAD` and the
+  bare `$REMOTE` token the same way. (Correction: an earlier draft of this entry said a "shared
+  `_remote_branches()` helper" covered both sites; the pin-carrier loop applies the identical filter
+  inline, it does not call the helper — caught by a Copilot review comment on this same PR.)
+- **This bug was introduced by this same plan's own round-5 fix to this file** (commit `3dc067c`,
+  which generalised pin-carrier protection to `features.yaml`) and shipped unnoticed because the
+  test fixture used to develop that fix happens not to trigger it (the pinned commit in that fixture
+  lives off the branch `origin/HEAD` resolves to). Caught only when a delegated test-engineer
+  subagent's adversarial audit surfaced it; independently reproduced end-to-end in three disposable
+  local git fixtures (never against the real GitHub remote) before trusting the finding — the same
+  "verify a claim before building a narrative on it" discipline this plan's history keeps citing.
+  New `TestOriginHeadSymrefHandling` in `tests/unit/scripts/test_archive_stale_branches.py` (a
+  dedicated `repo_with_stale_orphan_branch` fixture that lets a plain `git clone` set `origin/HEAD`
+  itself, rather than hand-crafting the symref) proves the fix end-to-end: dry-run no longer emits
+  `fatal:` or lists the bare `origin` token as a stale branch, and `--push` actually archives-as-tag
+  and deletes a genuinely stale orphan-history branch while leaving `origin`/`main` untouched.
+  Proven red against the pre-fix script first (2 of 3 new tests failed exactly as predicted: the
+  stray `fatal:` and the exit-128 death), then restored — the same instance-vs-class pattern this
+  session keeps finding: a fix applied at one call site left an identical defect live at a second.
+
+### Changed — Sprint 7: F-030 Doc Reconciliation & Workforce Hygiene Sweep
+
+- **F-030 — six verified doc drifts between live governance surfaces and the actual tree, fixed.**
+  `CLAUDE.md` / `docs/claude/surfaces/ci-gates.md` / `docs/claude/surfaces/README.md` claimed a
+  "12-job" CI pipeline naming six jobs that do not exist (`secret-scan`, `skills`, `test-fast`,
+  `validate`, `regression`, `package`); corrected to the real 16-job breakdown sourced from
+  `ci.yml`'s own `# Stage N` comments. `src/mousedroid/orchestrator/CLAUDE.md` — the module map
+  anyone reads before touching the orchestrator — named `RobotOrchestrator`, `state.py`,
+  `factory.py:_build_orchestrator` and `ConstitutionalSafetyMonitor`; grep confirmed **none exist in
+  any `.py` file**. Rewritten to document the real symbols: `orchestrator.py::MouseDroidOrchestrator`,
+  `autonomous.py::AutonomousOrchestrator` (explicitly noted as having zero production callers), and
+  `safety/monitor.py::MouseDroidSafetyMonitor`. `HARNESS_SPEC.md` (3 sites), `tests/agent.md`, and
+  `docs/architecture/c4-spec-harness.md` stated an 85% coverage floor for `src/mousedroid`; the real
+  gate is 90% (`pyproject.toml`'s `fail_under`) — 85% is correct only for the separate
+  `tools/claude_hooks/` gate, now stated as such rather than conflated. `docs/CHARTER.md` §5 claimed
+  `growth/` was "not yet instantiated"; `build_growth_coordinator` **is** called at `factory.py:4308`
+  (default-OFF, metrics-wired, same posture as M6) — split the sentence rather than overcorrecting,
+  since `meta/`/`scaling/` genuinely have no factory builder and stayed correctly described. Root
+  `NEXT_STEPS.md` corrected a stale "Phase 5 deferred" claim to "landed", citing the real
+  `sim/mujoco_rover_env.py::RoverMuJoCoEnv`.
+- **The `growth/`-unwired claim fixed above turned out to be live in four more places** — a
+  first-hand instance of the exact "fix one instance, not the class" pattern this whole plan keeps
+  finding. `docs/CHARTER.md` §1 and §3 each independently listed `growth/` alongside `meta/`/`scaling/`
+  as "not yet wired", contradicting the already-corrected §5 text in the same file. `README.md`'s
+  cognitive-stack table had it in the "not yet wired" bucket outright. `docs/architecture.md`'s
+  Level 3d GCP-wiring section cited it as a same-shape precedent for three genuinely-unwired cloud
+  components. `NEXT_STEPS.md` item 0b repeated that same citation, even though a *later* item in the
+  identical file already correctly said "the `growth` pillar... is now wired". Found by applying the
+  new `narrative-correction-sweep` procedure to this session's own prior fix rather than assuming one
+  correction generalized. README.md gained a third cognitive-stack bucket
+  ("Factory-instantiated, default-OFF pending a soak decision") to hold `growth/` accurately, rather
+  than folding it into either the fully-wired or fully-unwired table.
+- **SKILLS.md/AGENTS.md reconciled, and two catalog-wide pins added so the drift class cannot
+  re-open silently.** SKILLS.md's `## Subagent skills` table named 7 fictional agent names;
+  rewritten to the real 7 `.claude/agents/` names. A new `## Workforce skills` section documents
+  every real `.claude/skills/` directory not already covered elsewhere (the two-shape convention —
+  documented procedure vs. invocable directory — is deliberate design, not drift; the real gap was
+  the opposite direction, real skills missing from the index). New
+  `test_every_skill_directory_is_mentioned_in_the_index()` and
+  `test_every_agent_is_listed_in_the_subagent_skills_table()` in `test_claude_workforce_aqa.py`,
+  both proven to fail against the original defects before being restored. New
+  `tests/regression/test_doc_reconciliation_aqa.py` pins the CI job count and coverage-floor numeric
+  claims against their source of truth — both of its own regexes produced false positives against
+  legitimate text on first write (a true "5 jobs run *(advisory)*" claim; the sprint's own correctly
+  qualified 85%-for-`tools/claude_hooks` text) and were tightened before being trusted, itself an
+  instance of the discipline the new `narrative-correction-sweep` skill (below) documents. New
+  `scripts/validations/F-030.sh`.
+- **`_DOC_GLOBS` had the identical shape of gap it was reconciling doc claims against.**
+  `test_ci_gate_wiring_aqa.py`'s doc-narrative-accuracy sweep sourced its file list from a 5-pattern
+  directory-prefix roster (`*.md`, `docs/**/*.md`, `openspec/**/*.md`, `.claude/**/*.md`,
+  `src/**/*.md`) that silently missed **15 git-tracked `.md` files** — including `tests/agent.md`,
+  one of this same sprint's own drift-fix targets, so the gap was not hypothetical. Replaced with a
+  `git ls-files -- "*.md"`-sourced `_tracked_docs()`: no directory list to maintain, cannot drift
+  behind a new subsystem doc the way a hardcoded prefix list can.
+- **New skill `narrative-correction-sweep`.** Documents the whole-file, whitespace-normalized,
+  `git ls-files`-sourced sweep procedure this exact sprint used twice — once correcting a stale
+  "only coverage" claim that survived an earlier sweep reporting "corrected everywhere", once
+  finding the `_DOC_GLOBS` gap above. Recommended for adoption by a delegated audit; implemented as
+  a real `.claude/skills/` directory since it is cheap, purely additive documentation with zero
+  execution risk, unlike the two hook candidates deferred below.
+- **Three hardcoded-value fixes from a delegated config-guardian audit.** (1)
+  `orchestrator._publish_telemetry` never threaded `Settings.telemetry.vision_feature_max_samples`
+  into `build_telemetry_frame(...)` — a previously dead config field; now wired, with a new test
+  proving the cap is honoured (proven red pre-fix: an 8-element mock array passed through uncapped
+  against an `assert 8 == 3`). (2) `validation/runtime/_storage.py::_resolve_pcie_ssd_mount` read a
+  hardcoded env var name (`MOUSEDROID_SSD_MOUNT`); now sourced from a new schema field
+  `ExperienceConfig.ssd_mount_override_env_var` (same default, backwards-compatible — all 44
+  pre-existing tests pass unchanged), with a new test proving the env var *name* itself is
+  schema-configurable. (3) `comms/_utils.py`'s `MAX_PWM` and the three `ESP32_CMD_TYPE_*` constants
+  gained `# hardcoded-ok` markers matching `command_set.py`'s existing treatment of the same class of
+  vendor-protocol/hardware-range constant; `.claude/workforce.yaml`'s `hardcoded_ok` ratchet ceiling
+  raised 24→28 (ceiling ratchets move only down except with a recorded reason — this one is marker-
+  treatment consistency, not new suppressions, and the real count was verified at exactly 28).
+- **Explicitly deferred, not fixed, with rationale recorded in the F-030 openspec bundle's
+  `tasks.md`:** mock Hailo-8 output shapes (`hailo_runtime.py::MockHailoRuntime.DEFAULT_OUTPUT_SHAPES`)
+  staying class constants rather than moving to `HailoConfig` schema — already overridable via
+  constructor injection, and the values are intrinsic to a specific YOLO architecture's output
+  shape, not an operational tunable. (A first-draft rationale here claimed `hardware/` was an
+  exempt prefix in `check_no_hardcoded_values.py`; the openspec-author agent that wrote the F-030
+  bundle checked `ALLOWED_DIR_PREFIXES` directly and found no such exemption exists — corrected to
+  the real reason: the file is untouched by any diff in this sprint, so the changed-lines-only
+  scanner never reaches these lines today, not that the directory is exempt.)
+  `prove_pin_fails.sh`'s `--paths`/`--tests` unquoted word-splitting on glob characters and
+  space-containing parametrized pytest IDs — a dev/CI-only tool with 10 passing tests already
+  (`tests/unit/scripts/test_prove_pin_fails.py`, corrected from an earlier "6" here), narrow
+  edge cases, clear-error
+  rather than silent-wrong failure mode; a `post_edit` shellcheck hook and a `regression_pin_reminder`
+  hook — `shellcheck` is not installed in this dev container and is not wired into CI at all today
+  (verified: zero matches beyond inline disable-comments across `ci.yml`/`ci.sh`/the `Makefile`), and
+  either hook needs new `tools/claude_hooks/` test coverage under the dedicated `make hooks` gate.
+
+### Fixed — Post-merge provenance re-pin (F-028, F-029)
+
+- **PR #201 merged as squash `9bd3dc7`, orphaning two `implemented_in` pins.** F-028 pinned
+  `df928d9` and F-029 pinned `5c2f044`; the squash preserved neither, leaving both reachable
+  only from the feature branch. The harness resolves this field with `git rev-parse` — an
+  existence check — so both passed while that branch lived and would have failed
+  `validate.py --strict-git` once it was deleted. GitHub's delete-branch-on-merge removed that
+  branch at merge time, so both were already unresolvable in a fresh clone — measured: zero
+  remaining remote branches contain either SHA. Re-pinned to the squash commit, which is the
+  catalog convention. F-022/F-023/F-027 were checked individually and needed no change.
+- **Named a gap this exposes.** `scripts/archive_stale_branches.sh`'s pin-carrier protection
+  covers the *cleanup* path only; delete-branch-on-merge bypasses it entirely. The annotated-tag
+  ritual (F-035) must therefore run **before** merge, or the setting must be off for pin-carrying
+  branches — a guard over one of two deletion paths is not the total protection it reads as.
+
 ### Changed — Sprint 6: CI Tier Completeness, Egress Gating & F-022/023/027 Closeout
 
 - **F-028 — three test tiers reached zero CI paths.** `tests/functional/`,

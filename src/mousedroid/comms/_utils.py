@@ -16,16 +16,16 @@ _log = get_logger(__name__)
 # ESP32 protocol constants (shared between serial and WiFi drivers)
 # ---------------------------------------------------------------------------
 
-MAX_PWM: int = 255
+MAX_PWM: int = 255  # hardcoded-ok: 8-bit PWM range, not a tunable
 """Maximum PWM value for motor control (8-bit range)."""
 
-ESP32_CMD_TYPE_VELOCITY: int = 1
+ESP32_CMD_TYPE_VELOCITY: int = 1  # hardcoded-ok: vendor protocol constant
 """ESP32 JSON command type for velocity control."""
 
-ESP32_CMD_TYPE_STOP: int = 0
+ESP32_CMD_TYPE_STOP: int = 0  # hardcoded-ok: vendor protocol constant
 """ESP32 JSON command type for emergency stop."""
 
-ESP32_CMD_TYPE_BATTERY: int = 2
+ESP32_CMD_TYPE_BATTERY: int = 2  # hardcoded-ok: vendor protocol constant
 """ESP32 JSON command type for battery voltage query."""
 
 
