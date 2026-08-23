@@ -770,6 +770,7 @@ repeated here.
 | Skill | Status | Use when |
 |-------|--------|----------|
 | `autonomous-mission-probe` | active | Validating the `AutonomousOrchestrator` 30 Hz loop, safety interlocks, or Prometheus telemetry |
+| `charter-carveout` | active | Deciding whether a change needs a ratified `docs/CHARTER.md` Section 3 carve-out, and shaping one in the house format |
 | `coverage-gate` | active | Running the dedicated `tools/claude_hooks` coverage gate and reporting the delta |
 | `edge-hardware-health` | active | Auditing USB-C dynamic discovery, LiDAR scan buffers, CSI camera frames, or motor controller health |
 | `evidence-commit` | active | Committing evidence artifacts to `reports/` and linking them from `features.yaml` |

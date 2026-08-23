@@ -21,8 +21,9 @@
 - `orchestrator.py::MouseDroidOrchestrator` — main sense-plan-act execution loop (the
   production entrypoint; `factory.py::build_orchestrator` wires it).
 - `autonomous.py::AutonomousOrchestrator` — an alternate loop with **zero production
-  callers** (see `docs/architecture/adr/` for the disposition ADR once F-031 lands); do not
-  confuse it with the production path above.
+  callers**, deliberately parked off the production path per
+  `docs/architecture/ADR-016-autonomous-orchestrator-disposition.md`; do not confuse it
+  with the production path above.
 - `mission_dispatcher.py`, `mission_lifecycle.py`, `llm_replanner.py`, `face_controller.py` —
   supporting collaborators, not the loop itself.
 - `factory.py::build_orchestrator` (`:4016`) — factory builder wiring `MouseDroidOrchestrator`.
