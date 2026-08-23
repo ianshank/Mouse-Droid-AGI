@@ -47,8 +47,9 @@ def _make_orch(
     liveness_tracker: Any | None = None,
     mock_telemetry_source: Any | None = None,
     last_lidar_scan: Any | None = None,
+    cfg: Settings | None = None,
 ) -> MouseDroidOrchestrator:
-    cfg = Settings(mock_hardware=True)
+    cfg = cfg if cfg is not None else Settings(mock_hardware=True)
     world_model = MagicMock()
     combined = cfg.model.hidden_dim + cfg.model.cfc_hidden_dim
     world_model.observe_step.return_value = (
@@ -104,6 +105,34 @@ async def test_publish_telemetry_threads_liveness_tracker() -> None:
     published = publisher.publish.call_args.args[0]
     assert "lidar" in published.sensor_liveness
     assert published.sensor_liveness["lidar"]["state"] == "live"
+
+
+@pytest.mark.asyncio
+async def test_publish_telemetry_honours_configured_vision_feature_max_samples() -> None:
+    """The orchestrator threads TelemetryConfig.vision_feature_max_samples through.
+
+    Regression target: ``build_telemetry_frame``'s ``vision_feature_max_samples``
+    kwarg has a real, validated ``Field`` on ``TelemetryConfig`` and is threaded
+    all the way through -- but the orchestrator's own call site never passed it,
+    so the field silently had zero effect on the running system. This test
+    fails (published frame carries all 8 samples, not 3) against that call site.
+    """
+    publisher = MagicMock()
+    publisher.publish = AsyncMock()
+    publisher.publish_lidar_raw = AsyncMock()
+
+    cfg = Settings(mock_hardware=True)
+    cfg.telemetry.vision_feature_max_samples = 3
+
+    orch = _make_orch(publisher=publisher, cfg=cfg)
+    await orch._publish_telemetry(
+        _make_observation(),  # 8-element vision_features -- exceeds the cap
+        SafetyContext(is_emergency=False),
+        loop_time_ms=20.0,
+    )
+    published = publisher.publish.call_args.args[0]
+    assert published.vision_features is not None
+    assert len(published.vision_features) == 3
 
 
 @pytest.mark.asyncio

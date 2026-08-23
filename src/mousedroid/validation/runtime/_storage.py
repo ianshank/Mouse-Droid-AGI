@@ -163,7 +163,7 @@ def _resolve_pcie_ssd_mount(cfg: Settings) -> Path | None:
     a FALSE PASS on the "is the LMDB actually on the SSD?" check, which
     is the entire reason this smoke exists.
     """
-    env_mount = os.environ.get("MOUSEDROID_SSD_MOUNT", "").strip()
+    env_mount = os.environ.get(cfg.experience.ssd_mount_override_env_var, "").strip()
     if env_mount:
         candidate = Path(env_mount)
         if candidate.exists():

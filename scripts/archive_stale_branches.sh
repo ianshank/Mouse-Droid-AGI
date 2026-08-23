@@ -126,7 +126,7 @@ for pinned_sha in $pinned_shas; do
     done
     if [ -z "$protecting_tag" ]; then
         carriers=$(git branch -r --contains "$pinned_sha" --format='%(refname:short)' |
-            sed "s|^$REMOTE/||" | tr '\n' ' ')
+            sed "s|^$REMOTE/||" | grep -vx -e "HEAD" -e "$REMOTE" | tr '\n' ' ')
         pin_carriers="$pin_carriers $carriers"
         echo "pin $pinned_sha is NOT reachable from any REMOTE tag -- protecting its carriers"
     else
@@ -134,9 +134,26 @@ for pinned_sha in $pinned_shas; do
     fi
 done
 
+# Every real remote branch name, with $REMOTE/ stripped -- excluding BOTH
+# renderings of the origin/HEAD symref that `git branch -r --format=` can
+# produce. `grep -v '^HEAD$'` alone is not enough: when refs/remotes/<remote>/HEAD
+# is configured (the normal state after any plain `git clone`), git renders it
+# via `%(refname:short)` as the BARE remote name ("origin"), not "origin/HEAD" --
+# a documented git quirk, not a repo-specific one. Reproduced empirically: a
+# throwaway clone with `--push` walked straight into
+# `fatal: Failed to resolve 'origin/origin' as a valid ref` and died at exit
+# 128 before deleting anything -- this script's entire purpose, unusable on
+# any standard fresh clone. This clone happened not to have origin/HEAD set,
+# which is why the bug shipped unnoticed in the round that "fixed" this file.
+_remote_branches() {
+    git branch -r --format='%(refname:short)' |
+        sed "s|^$REMOTE/||" |
+        grep -vx -e "HEAD" -e "$REMOTE"
+}
+
 archive=""
 skipped=0
-for b in $(git branch -r --format='%(refname:short)' | sed "s|^$REMOTE/||" | grep -v '^HEAD$'); do
+for b in $(_remote_branches); do
     case "$b" in
         "$default_branch" | dependabot/* | "$ARCHIVE_NS"/*) continue ;;
     esac
