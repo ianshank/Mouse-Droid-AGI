@@ -19,11 +19,16 @@ only under a bare `pytest` invocation nobody runs. A whole tier could rot
 invisibly — precisely the failure mode the smoke tier suffered before PR #178,
 recorded in `tests/regression/test_ci_gate_wiring_aqa.py`.
 
-This is governance-relevant, not merely hygiene. `tests/security/` holds the only
-coverage of the pre-egress `RegexInjectionFilter`
-(`src/mousedroid/security/injection_filter.py`), which `docs/CHARTER.md` §3 names
-as the control that makes the cloud-LLM egress carve-out acceptable — "the only
-place rover NL leaves the device". Its tests were unenforced.
+This is governance-relevant, not merely hygiene — but the risk is a **wiring**
+gap, not a coverage hole, and the distinction matters. `tests/security/` holds
+the only coverage of the pre-egress `RegexInjectionFilter`
+(`src/mousedroid/security/injection_filter.py`) **through the gateway seam**;
+the filter's own unit coverage lives in
+`tests/unit/security/test_injection_filter.py` (11 tests) and already ran in the
+coverage-gated `test` job. `docs/CHARTER.md` §3 names that filter as the control
+making the cloud-LLM egress carve-out acceptable — "the only place rover NL
+leaves the device" — so leaving the composite-path tests unenforced meant the
+governance evidence for a ratified carve-out ran nowhere.
 
 ## What Changes
 

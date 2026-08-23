@@ -27,6 +27,9 @@ Pinned contracts:
   test sets;
 * EVERY discovered tests/<tier>/ reaches a CI path or carries a documented
   exemption -- generic, so the next orphaned tier cannot slip through;
+* no live doc claims ``tests/security/`` is the ONLY coverage of the
+  pre-egress injection filter -- it is not, and F-028's own proposal and
+  peer-review both said so, the latter marking it CONFIRMED;
 * pytest ``addopts`` keeps ``--import-mode=importlib`` (duplicate test
   basenames make prepend mode fragile).
 """
@@ -517,6 +520,102 @@ class TestOrphanTierMarkerParity:
                     f"{site} no longer excludes hardware-marked tests from the "
                     f"orphan tiers (marker={marker!r})"
                 )
+
+
+_INJECTION_FILTER_UNIT_TESTS = (
+    _REPO_ROOT / "tests" / "unit" / "security" / "test_injection_filter.py"
+)
+
+# Whitespace-normalised so a claim wrapped across lines is still caught. A
+# line-oriented grep missed the copy in proposal.md for exactly that reason,
+# which is how a sweep that reported "corrected everywhere" left two behind.
+_ONLY_COVERAGE_CLAIM = re.compile(
+    r"only\s+(?:known\s+)?cover(?:age|s)?[^.]{0,120}?"
+    r"(?:pre-egress|injection|RegexInjectionFilter)"
+    r"|(?:pre-egress|injection|RegexInjectionFilter)[^.]{0,120}?only\s+cover",
+    re.IGNORECASE,
+)
+
+# What redeems a mention of the claim. A doc may state it, quote it, or refute
+# it -- it may not leave it bare, because bare is how it reads as current
+# truth. Naming the unit-test file, saying "unit coverage", or marking the
+# claim REFUTED / false all discharge it.
+#
+# Framed this way rather than as a phrase blacklist with an exemption list:
+# a verdict table SHOULD be able to quote the claim it refutes, and a proposal
+# SHOULD be able to state the narrow version ("only coverage through the
+# gateway seam"). Both are fine; neither is fine unqualified.
+_CLAIM_QUALIFIERS = (
+    "test_injection_filter",
+    "unit coverage",
+    "refuted",
+    "was false",
+)
+# Normalised characters after the match in which a qualifier must appear.
+_QUALIFIER_WINDOW = 400
+
+_DOC_GLOBS = ("*.md", "docs/**/*.md", "openspec/**/*.md", ".claude/**/*.md", "src/**/*.md")
+
+
+def _tracked_docs() -> list[Path]:
+    """Every prose surface a future engineer might read as current truth."""
+    seen: dict[str, Path] = {}
+    for pattern in _DOC_GLOBS:
+        for path in _REPO_ROOT.glob(pattern):
+            if path.is_file():
+                seen[path.relative_to(_REPO_ROOT).as_posix()] = path
+    return [seen[k] for k in sorted(seen)]
+
+
+class TestOrphanTierNarrativeAccuracy:
+    """No doc may claim tests/security is the ONLY coverage of the filter.
+
+    F-028's own proposal and peer-review said exactly that, and the
+    peer-review marked it **CONFIRMED** -- a governance record asserting a
+    falsehood as verified. It survived one sweep that reported "corrected
+    everywhere", because that sweep fixed the places it remembered rather than
+    the places that had it.
+
+    The claim is checkable against the tree, so this pins the doc to the tree
+    rather than blacklisting a phrase: while unit coverage of the filter
+    exists, no live doc may say the security tier is the only coverage. What
+    ``tests/security/`` uniquely exercises is the **gateway seam** -- a wiring
+    gap, not a coverage hole, and the difference is the whole justification
+    for F-028's scope.
+    """
+
+    def test_unit_coverage_of_the_injection_filter_exists(self) -> None:
+        """The tree fact the claim contradicts. If this ever stops being true,
+        the sibling assertion below is measuring nothing."""
+        assert _INJECTION_FILTER_UNIT_TESTS.is_file(), (
+            f"{_INJECTION_FILTER_UNIT_TESTS} is gone -- either restore it or "
+            "revisit the narrative pinned below, which depends on it existing"
+        )
+        body = _INJECTION_FILTER_UNIT_TESTS.read_text(encoding="utf-8")
+        assert body.count("def test_") >= 2, (
+            "the injection filter's unit coverage is what makes 'the security "
+            "tier is the only coverage' false; it must actually hold tests"
+        )
+
+    def test_no_live_doc_states_the_claim_unqualified(self) -> None:
+        offenders: list[str] = []
+        for path in _tracked_docs():
+            normalised = " ".join(path.read_text(encoding="utf-8").split())
+            for match in _ONLY_COVERAGE_CLAIM.finditer(normalised):
+                window = normalised[match.start() : match.end() + _QUALIFIER_WINDOW].lower()
+                if not any(q in window for q in _CLAIM_QUALIFIERS):
+                    offenders.append(
+                        f"{path.relative_to(_REPO_ROOT).as_posix()}: "
+                        f"...{normalised[match.start() : match.end()]}..."
+                    )
+        assert not offenders, (
+            "these state, unqualified, that tests/security is the only coverage "
+            "of the pre-egress injection filter:\n  " + "\n  ".join(offenders) + "\n"
+            "It is not: tests/unit/security/test_injection_filter.py already ran "
+            "in the coverage-gated `test` job. Either narrow the claim to the "
+            "gateway seam (true, and what F-028 actually fixed) or mark it "
+            "refuted -- but do not leave it reading as current truth."
+        )
 
 
 def test_pytest_addopts_keeps_importlib_mode() -> None:

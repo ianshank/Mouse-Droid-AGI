@@ -36,6 +36,14 @@
 
 ## Appendix — open follow-up
 
-The other `gcp_cloud.py` sub-configs (pubsub, storage, training, simulation)
-were not audited for the same default-ON asymmetry. Recorded in `tasks.md`
-under "Explicitly deferred" rather than silently widened into this change.
+`gcp_cloud.py`'s `training` and `simulation` sub-configs were not audited for the
+same default-ON asymmetry. Recorded in `tasks.md` under "Explicitly deferred"
+rather than silently widened into this change.
+
+`pubsub` and `storage` **were** audited, in this change — an earlier revision of
+this appendix listed them as deferred alongside `training`/`simulation`, which was
+already false when written. Review found those two are the channels the factory
+actually wires and that neither carried an `enabled` field at all, so this change
+gave them one and gated `build_cloud_telemetry_sink` /
+`build_cloud_experience_exporter` on it. Deferring the audit of the *wired*
+channels while gating the unwired ones would have been the wrong half.

@@ -5,7 +5,7 @@
 | Claim | Verdict |
 |---|---|
 | The three tiers run in zero CI paths | **CONFIRMED** — 0 references across `scripts/ci.sh`, `.github/workflows/ci.yml`, `Makefile` |
-| `tests/security/` is the only coverage of the pre-egress filter | **CONFIRMED** — two files, both in that tier |
+| `tests/security/` is the only coverage of the pre-egress filter | **REFUTED** — the claim as written is false and this row originally marked it CONFIRMED. `tests/unit/security/test_injection_filter.py` holds 11 tests that already ran in the coverage-gated `test` job. What `tests/security/` uniquely covers is the **gateway seam** — the filter applied on the composite egress path. A wiring gap, not a coverage hole. |
 | The tiers still pass | **CONFIRMED** — 17 passed in 2.44 s on a `[dev,telemetry,mcp]` install |
 | The `security` job would swallow failures | **CONFIRMED** — `continue-on-error: true`, pinned advisory by the same AQA module |
 | The new pin can fail | **CONFIRMED** — wiring removed → 3 of 4 assertions red; restored clean |

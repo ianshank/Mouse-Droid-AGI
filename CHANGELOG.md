@@ -84,6 +84,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   legitimately return `None` when the optional `[gcp]` extra is absent, making a
   return-value assertion untestable; it now asserts on the `cloud_*_disabled` structured
   events instead, with a converse test pinning that a gate which blocks stays diagnosable.
+- **The "only coverage" claim survived in the governance records.** A prior round
+  corrected it in the code comments, `ci.sh`, the CHANGELOG and `progress.md` and
+  reported "corrected everywhere" — but F-028's own `proposal.md` and `peer-review.md`
+  still carried it, the latter marking it **CONFIRMED** in a verdict table. A governance
+  record asserting a falsehood as verified is worse than an uncorrected comment, because
+  it is what the next engineer reads as settled. Both corrected, and
+  `TestOrphanTierNarrativeAccuracy` now pins the class: any doc mentioning the claim must
+  qualify it (name the unit-test file, say "unit coverage") or mark it refuted — a bare
+  statement reads as current truth. Proven by restoring the original wording (2 red).
+  `mouse-droid-cloud-egress-default-off/peer-review.md` had the mirror-image defect: an
+  appendix listing `pubsub`/`storage` as unaudited when this very change audits them.
 - **Corrected an overclaiming docstring.** The catalog-wide hex-SHA gate said it checks a
   *resolvable* SHA; it checks format. `175606b0…` — well-formed, resolvable, and naming the
   branch point that contained neither change — shipped past it earlier in this same sprint.
