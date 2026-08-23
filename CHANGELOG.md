@@ -95,6 +95,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   statement reads as current truth. Proven by restoring the original wording (2 red).
   `mouse-droid-cloud-egress-default-off/peer-review.md` had the mirror-image defect: an
   appendix listing `pubsub`/`storage` as unaudited when this very change audits them.
+- **`scripts/archive_stale_branches.sh` protected one pin and ignored fifteen.** Its
+  safety net — never delete the last branch keeping a gate-critical commit reachable —
+  read exactly one SHA, from `deployments/jetson-image.json`. Every `implemented_in` pin
+  in `features.yaml` had none, so a feature closed out on a branch and then squash-merged
+  would lose its provenance commit to the next cleanup, and the nightly
+  `validate.py --strict-git` would start failing for a feature nobody touched. The header
+  already described the right mechanism ("whichever branches currently keep the SHA
+  reachable… protection lifts on its own once tag-reachable"); it just sourced one SHA
+  instead of the set. Now collects both files. Measured on the live repo: the plan moves
+  from 67 branches to delete / 10 protected → **35 / 51** — the 32 difference are sole
+  carriers of `implemented_in` SHAs that the old logic would have destroyed. Cleanup is
+  therefore now correctly contingent on the annotated-tag ritual, which is what lifts the
+  protection. Extracted with `sed` rather than a YAML parse so it keeps working with no
+  PyYAML — a protection that silently stops applying on an ImportError still prints a plan
+  that looks complete. `tests/unit/scripts/test_archive_stale_branches.py` drives the real
+  script in dry-run against a synthetic repo with a local bare remote; 2 of its 3 cases go
+  red against the deploy-pin-only version.
 - **Corrected an overclaiming docstring.** The catalog-wide hex-SHA gate said it checks a
   *resolvable* SHA; it checks format. `175606b0…` — well-formed, resolvable, and naming the
   branch point that contained neither change — shipped past it earlier in this same sprint.
