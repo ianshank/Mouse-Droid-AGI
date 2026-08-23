@@ -54,12 +54,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   whole purpose is safe restore. Snapshots now mirror the sanitized relative path, and
   `tests/unit/scripts/test_prove_pin_fails.py` drives the real script against a synthetic
   git repo to prove both files come back intact.
-- **Marker parity across the three sites that run the orphan tiers.** `ci.sh` and
+- **Marker parity across every site that runs the orphan tiers.** `ci.sh` and
   `scripts/validations/F-028.sh` filtered `not hardware` while `ci.yml` filtered
   `not hardware and not slow`, so a green local run and a green validation command
   asserted a different test set than CI gated on. Aligned and pinned by
   `TestOrphanTierMarkerParity`, which also requires each site to keep excluding
   `hardware` — parity alone is satisfiable by deleting the filter everywhere.
+  Sites are **discovered**, not listed: the first cut named the three from the
+  review finding and missed a fourth, `make behaviour`, which agreed only by luck.
+  A separate assertion pins that the known sites are still found, so parity cannot
+  pass vacuously over whatever survives.
 - **A backwards-compat test that asserted nothing.** `test_twin_overlay_still_builds_its_cloud_components`
   called both cloud builders with no assertion, so it could only fail if one raised. Both
   legitimately return `None` when the optional `[gcp]` extra is absent, making a

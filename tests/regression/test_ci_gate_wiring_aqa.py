@@ -104,8 +104,12 @@ _ORPHAN_TIER_INVOCATION = "pytest tests/functional"
 _MARKER_EXPR = re.compile(r'-m\s+"([^"]*)"')
 
 
-def _orphan_tier_marker(text: str, *, site: str) -> str:
-    """Extract the pytest marker expression guarding the orphan-tier run."""
+def _orphan_tier_marker(text: str, *, site: str) -> str | None:
+    """The pytest marker expression guarding this text's orphan-tier run.
+
+    ``None`` when the text does not run the tiers at all. Raises when it runs
+    them with no ``-m`` filter, since that would collect hardware-marked tests.
+    """
     for command in _logical_lines(text):
         if _ORPHAN_TIER_INVOCATION not in command:
             continue
@@ -115,7 +119,42 @@ def _orphan_tier_marker(text: str, *, site: str) -> str:
             f"hardware-marked tests would collect there: {command}"
         )
         return match.group(1)
-    raise AssertionError(f"{site} no longer runs the orphan tiers at all")
+    return None
+
+
+# Sites that must be found, whatever else discovery turns up. Their absence is
+# a wiring regression, not a naming change, so it fails loudly rather than
+# shrinking the comparison set to whatever happens to still match.
+_REQUIRED_MARKER_SITES = frozenset(
+    {".github/workflows/ci.yml", "scripts/ci.sh", "scripts/validations/F-028.sh"}
+)
+
+
+def _discover_marker_sites() -> dict[str, str]:
+    """Every place in the repo that runs the orphan tiers, and its marker.
+
+    Discovered rather than listed. A hardcoded roster of three was exactly the
+    bug: `make behaviour` is a fourth site, and it agreed only by luck. A fifth
+    added tomorrow is covered here without editing this file.
+    """
+    sites: dict[str, str] = {}
+
+    for job_name, job in _load_ci_jobs().items():
+        # yaml.safe_load already dropped comments from the run: blocks.
+        marker = _orphan_tier_marker(_job_run_text(job), site=f"ci.yml job {job_name}")
+        if marker is not None:
+            sites[".github/workflows/ci.yml"] = marker
+
+    candidates = [_CI_SH, _REPO_ROOT / "Makefile"]
+    candidates.extend(sorted((_REPO_ROOT / "scripts" / "validations").glob("*.sh")))
+    for path in candidates:
+        if not path.is_file():
+            continue
+        rel = path.relative_to(_REPO_ROOT).as_posix()
+        marker = _orphan_tier_marker(_shell_commands(path), site=rel)
+        if marker is not None:
+            sites[rel] = marker
+    return sites
 
 
 def _job_run_text(job: dict) -> str:
@@ -398,34 +437,33 @@ class TestOrphanTierWiring:
 
 
 class TestOrphanTierMarkerParity:
-    """All three sites that run the orphan tiers use the SAME marker expression.
+    """Every site that runs the orphan tiers uses the SAME marker expression.
 
-    Three places run these tiers -- CI (``ci.yml``), the local superset
-    (``ci.sh``), and F-028's own ``validation_command``
-    (``scripts/validations/F-028.sh``). They drifted the moment the first was
-    fixed in isolation: ci.yml said ``not hardware and not slow`` while the
-    other two said ``not hardware``, so a green local run and a green
-    validation command asserted a *different test set* than CI gated on.
+    Four run them today -- CI (``ci.yml``), the local superset (``ci.sh``),
+    F-028's own ``validation_command`` (``scripts/validations/F-028.sh``), and
+    the ``make behaviour`` target. They drifted the moment the first was fixed
+    in isolation: ci.yml said ``not hardware and not slow`` while ci.sh and
+    F-028.sh said ``not hardware``, so a green local run and a green validation
+    command asserted a *different test set* than CI gated on.
 
     Latent while no ``slow`` marks live in those tiers -- and a trap the moment
-    one does. Aligning the three without pinning them would repeat the mistake
-    this class exists to correct: fixing the instances, not the class.
+    one does. Sites are **discovered**, not listed: an earlier cut named the
+    three from the review finding and missed ``make behaviour``, which agreed
+    only by luck. Naming them would repeat the mistake this class exists to
+    correct -- fixing the instances, not the class.
     """
 
-    def _markers(self) -> dict[str, str]:
-        """The orphan-tier marker expression at each of the three sites."""
-        return {
-            ".github/workflows/ci.yml": _orphan_tier_marker(
-                _job_run_text(_load_ci_jobs()["test"]), site=".github/workflows/ci.yml"
-            ),
-            "scripts/ci.sh": _orphan_tier_marker(_ci_sh_commands(), site="scripts/ci.sh"),
-            "scripts/validations/F-028.sh": _orphan_tier_marker(
-                _shell_commands(_F028_VALIDATION), site="scripts/validations/F-028.sh"
-            ),
-        }
+    def test_the_known_wiring_sites_are_all_discovered(self) -> None:
+        """Discovery must not silently shrink to whatever still matches.
 
-    def test_marker_expression_is_identical_across_all_three_sites(self) -> None:
-        markers = self._markers()
+        If `ci.sh` stops running the tiers, the parity assertion below would
+        pass vacuously over the survivors. Pin the floor separately.
+        """
+        missing = sorted(_REQUIRED_MARKER_SITES - set(_discover_marker_sites()))
+        assert not missing, f"these no longer run the orphan tiers at all: {missing}"
+
+    def test_marker_expression_is_identical_across_every_site(self) -> None:
+        markers = _discover_marker_sites()
         assert len(set(markers.values())) == 1, (
             "the orphan tiers run under different pytest marker expressions "
             f"depending on who invokes them: {markers}. Local runs and F-028's "
@@ -439,7 +477,7 @@ class TestOrphanTierMarkerParity:
         Pin the safety property too: ``hardware``-marked tests open real
         GPIO / serial / CSI devices and must never collect on a shared runner.
         """
-        for site, marker in self._markers().items():
+        for site, marker in _discover_marker_sites().items():
             assert "not hardware" in marker, (
                 f"{site} no longer excludes hardware-marked tests from the "
                 f"orphan tiers (marker={marker!r})"
