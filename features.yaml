@@ -671,23 +671,35 @@ features:
       path: its execute_mission_step calls the LLM gateway unconditionally inside
       a loop defaulting to 30 Hz, and it has no safety-monitor machinery -- both
       in direct conflict with docs/CHARTER.md Section 3 and invariant 10's
-      hot-loop-purity requirement. A regression test in
-      tests/regression/test_import_graph_freeze.py pins that no production
-      module grows a module-scope import of it going forward, closing the gap
-      an earlier "see docs/architecture/adr/ once F-031 lands" forward
-      reference in orchestrator/CLAUDE.md previously left open.
+      hot-loop-purity requirement. Two regression tests in
+      tests/regression/test_import_graph_freeze.py pin the disposition: one that
+      no production module grows a module-scope import of it (relative-import
+      and submodule-alias forms included, after a Copilot review found the
+      first version missed both), and one that no production entrypoint calls
+      factory.py::build_autonomous_orchestrator directly -- the narrower,
+      Copilot-caught gap that the import check alone left the ADR's actual
+      Decision unenforced. Closes the gap an earlier "see
+      docs/architecture/adr/ once F-031 lands" forward reference in
+      orchestrator/CLAUDE.md previously left open.
     category: "non-functional"
     priority: "medium"
-    status: "in_progress"
+    status: "done"
     tier: "fast"
     verification:
       - "docs/architecture/ADR-016-autonomous-orchestrator-disposition.md exists and is Accepted"
-      - "no active production module imports mousedroid.orchestrator.autonomous at module scope"
+      - "no active production module imports mousedroid.orchestrator.autonomous at module scope, including relative and submodule-alias import forms"
+      - "no production entrypoint calls factory.py::build_autonomous_orchestrator"
       - "orchestrator/CLAUDE.md's forward reference resolves to a real ADR filename"
     validation_command: "bash scripts/validations/F-031.sh"
-    implemented_in: null
+    implemented_in: "5d40ee45ecb485eaffdec366fd1da238bbc7aa62"
     depends_on: []
     notes: >-
       No dependency on F-030 or anything else in this program -- pure docs plus
-      one regression-test extension, zero runtime src/ code. implemented_in
-      pins to the merge SHA on closeout, per the established convention.
+      test-file extensions, zero runtime src/ code. implemented_in pins to the
+      merge SHA (PR #204's squash) per the established convention. A Copilot
+      review round found real gaps in the pin itself (relative-import and
+      submodule-alias blind spots in the AST walker; the import check alone
+      not enforcing the ADR's call-site claim; scripts/validations/F-031.sh
+      checking only file existence where features.yaml's own verification:
+      list claimed more) -- all fixed and proven before this closeout, see
+      the openspec bundle's peer-review.md for the full verdict table.

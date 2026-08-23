@@ -84,12 +84,18 @@ Task ordering is binding: each task lands green before the next starts.
       (`status: in progress`, confirmed against
       `mouse-droid-doc-reconciliation/proposal.md:5`). Corrected.
 
+**Phase 5 — Closeout**
+
+- [x] 5.1 `features.yaml` flipped to `status: "done"`,
+      `implemented_in: "5d40ee45ecb485eaffdec366fd1da238bbc7aa62"` (PR #204's
+      merge SHA), matching the established convention — F-030's own closeout,
+      which this change's Phase 4 review caught as a prior gap, is the reason
+      this step is a dedicated task rather than assumed.
+- [x] 5.2 `openspec/project.md` row updated to `implemented`.
+- [x] 5.3 `proposal.md`'s `status:` updated to `implemented`.
+
 ## Explicitly deferred (separate changes, do not fold in)
 
 - Making `AutonomousOrchestrator` production-eligible (off-loop LLM dispatch,
   a real safety monitor) — out of scope by design; would need its own ADR
   superseding ADR-016, not a follow-up to this change.
-- `features.yaml`'s `implemented_in` pin — set to `null` while this lands on
-  the working branch; pinned to the real merge SHA in a follow-up closeout
-  commit once the PR is known, per the established convention (see F-030's
-  own closeout, which this change's own review caught as a prior gap).
