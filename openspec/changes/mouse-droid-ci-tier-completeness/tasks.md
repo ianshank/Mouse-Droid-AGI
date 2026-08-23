@@ -23,9 +23,15 @@ Deviations from task wording are recorded inline — declared, not silent.
 - [x] 2.2 Pin negatively that `tests/security` never appears in the advisory `security` job.
 - [x] 2.3 Prove the pin fails: remove the wiring from both files, confirm red, restore.
 - [x] 2.4 Add `TestOrphanTierMarkerParity`: the pytest marker expression is identical
-      across all three sites that run these tiers (`ci.yml`, `ci.sh`,
-      `scripts/validations/F-028.sh`), and still excludes `hardware` at each — parity
-      alone would be satisfiable by deleting the filter everywhere.
+      across every site that runs these tiers, and still excludes `hardware` at each —
+      parity alone would be satisfiable by deleting the filter everywhere. Sites are
+      **discovered** (every `ci.yml` job, `ci.sh`, the `Makefile`, every
+      `scripts/validations/*.sh`), because a listed roster of three missed a fourth,
+      `make behaviour`, which agreed only by luck.
+- [x] 2.5 Comment-strip `ci.yml` run blocks as well as the shell scripts. `yaml` parses
+      `run:` as a literal scalar, so `#` lines survive `safe_load` and the ci.yml-side
+      pins were satisfiable by a commented-out invocation — the same defect fixed on the
+      `ci.sh` side in 2.3, left standing on the other.
 
 **Phase 3 — Catalog**
 

@@ -56,39 +56,52 @@ def _load_ci_jobs() -> dict:
     return jobs
 
 
-def _shell_commands(path: Path) -> str:
-    """A shell script's text with comment lines stripped.
+def _strip_comments(text: str) -> str:
+    """Drop whole-line ``#`` comments, keeping ``#`` inside a command.
 
-    Asserting a tier name against the raw file text is satisfiable by a
-    *comment* -- including the explanatory comments this repo writes above each
-    stage. Deleting the pytest line while keeping the comment would leave the
-    pin green, which is precisely the un-pinned-wiring failure this module
-    exists to prevent.
+    Asserting a tier name against raw text is satisfiable by a *comment* --
+    including the explanatory comments this repo writes above each stage.
+    Deleting the pytest line while keeping the comment would leave the pin
+    green, which is precisely the un-pinned-wiring failure this module exists
+    to prevent.
+
+    This applies to ``ci.yml`` as much as to the shell scripts: ``yaml``
+    parses a ``run:`` block as a **literal scalar**, so every ``#`` line inside
+    it survives ``safe_load`` verbatim. An earlier revision asserted the
+    opposite in a comment and left the ci.yml-side pins comment-satisfiable --
+    the same defect, fixed on one side only.
     """
-    return "\n".join(
-        line
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if not line.lstrip().startswith("#")
-    )
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+
+
+def _shell_commands(path: Path) -> str:
+    """A shell script's text with comment lines stripped."""
+    return _strip_comments(path.read_text(encoding="utf-8"))
 
 
 def _ci_sh_commands() -> str:
-    """scripts/ci.sh, comment-stripped (see :func:`_shell_commands`)."""
+    """scripts/ci.sh, comment-stripped (see :func:`_strip_comments`)."""
     return _shell_commands(_CI_SH)
 
 
 def _logical_lines(text: str) -> list[str]:
     """Join backslash-continued shell lines into one logical command each.
 
-    The orphan-tier invocation spans four physical lines in every one of the
-    three places that run it, so a per-line regex would never see the command
-    and its ``-m`` expression together.
+    The orphan-tier invocation spans four physical lines everywhere it appears,
+    so a per-line regex would never see the command and its ``-m`` expression
+    together.
+
+    Only an ODD number of trailing backslashes continues a line: ``foo\\``
+    ends a command with a literal backslash. Treating that as a continuation
+    would splice an unrelated command onto the front of the next one, and the
+    marker regex takes the first match on the joined line.
     """
     commands: list[str] = []
     buffer = ""
     for raw in text.splitlines():
         line = raw.rstrip()
-        if line.endswith("\\"):
+        trailing_backslashes = len(line) - len(line.rstrip("\\"))
+        if trailing_backslashes % 2 == 1:
             buffer += line[:-1].strip() + " "
             continue
         commands.append((buffer + line.strip()).strip())
@@ -104,12 +117,17 @@ _ORPHAN_TIER_INVOCATION = "pytest tests/functional"
 _MARKER_EXPR = re.compile(r'-m\s+"([^"]*)"')
 
 
-def _orphan_tier_marker(text: str, *, site: str) -> str | None:
-    """The pytest marker expression guarding this text's orphan-tier run.
+def _orphan_tier_markers(text: str, *, site: str) -> list[str]:
+    """Every marker expression guarding an orphan-tier run in this text.
 
-    ``None`` when the text does not run the tiers at all. Raises when it runs
-    them with no ``-m`` filter, since that would collect hardware-marked tests.
+    A list, not the first match: one file can invoke the tiers more than once,
+    and returning only the first would make *intra*-site drift invisible --
+    the same instance-not-class mistake this module keeps correcting.
+
+    Empty when the text does not run the tiers. Raises when it runs them with
+    no ``-m`` filter, since that would collect hardware-marked tests.
     """
+    markers: list[str] = []
     for command in _logical_lines(text):
         if _ORPHAN_TIER_INVOCATION not in command:
             continue
@@ -118,8 +136,8 @@ def _orphan_tier_marker(text: str, *, site: str) -> str | None:
             f"{site} runs the orphan tiers with no -m marker expression, so "
             f"hardware-marked tests would collect there: {command}"
         )
-        return match.group(1)
-    return None
+        markers.append(match.group(1))
+    return markers
 
 
 # Sites that must be found, whatever else discovery turns up. Their absence is
@@ -130,20 +148,26 @@ _REQUIRED_MARKER_SITES = frozenset(
 )
 
 
-def _discover_marker_sites() -> dict[str, str]:
-    """Every place in the repo that runs the orphan tiers, and its marker.
+def _discover_marker_sites() -> dict[str, list[str]]:
+    """Every place in the repo that runs the orphan tiers, and its markers.
 
     Discovered rather than listed. A hardcoded roster of three was exactly the
     bug: `make behaviour` is a fourth site, and it agreed only by luck. A fifth
     added tomorrow is covered here without editing this file.
-    """
-    sites: dict[str, str] = {}
 
+    Values are lists so a file invoking the tiers twice contributes both
+    markers -- ci.yml in particular is collected across *every* job, not just
+    the first one found.
+    """
+    sites: dict[str, list[str]] = {}
+
+    ci_yml_markers: list[str] = []
     for job_name, job in _load_ci_jobs().items():
-        # yaml.safe_load already dropped comments from the run: blocks.
-        marker = _orphan_tier_marker(_job_run_text(job), site=f"ci.yml job {job_name}")
-        if marker is not None:
-            sites[".github/workflows/ci.yml"] = marker
+        ci_yml_markers.extend(
+            _orphan_tier_markers(_job_run_text(job), site=f"ci.yml job {job_name}")
+        )
+    if ci_yml_markers:
+        sites[".github/workflows/ci.yml"] = ci_yml_markers
 
     candidates = [_CI_SH, _REPO_ROOT / "Makefile"]
     candidates.extend(sorted((_REPO_ROOT / "scripts" / "validations").glob("*.sh")))
@@ -151,15 +175,21 @@ def _discover_marker_sites() -> dict[str, str]:
         if not path.is_file():
             continue
         rel = path.relative_to(_REPO_ROOT).as_posix()
-        marker = _orphan_tier_marker(_shell_commands(path), site=rel)
-        if marker is not None:
-            sites[rel] = marker
+        markers = _orphan_tier_markers(_shell_commands(path), site=rel)
+        if markers:
+            sites[rel] = markers
     return sites
 
 
 def _job_run_text(job: dict) -> str:
-    """Concatenate every run: block of a job for substring pins."""
-    return "\n".join(str(step.get("run", "")) for step in job.get("steps", []))
+    """Concatenate every run: block of a job, comment-stripped.
+
+    Comment-stripped because ``yaml`` keeps ``#`` lines inside a ``run:``
+    block scalar verbatim, so a substring pin over the raw text is satisfiable
+    by a commented-out invocation -- and the negative pins below would go
+    falsely red on a comment that merely *names* a tier.
+    """
+    return _strip_comments("\n".join(str(step.get("run", "")) for step in job.get("steps", [])))
 
 
 class TestTestJobTiers:
@@ -457,14 +487,18 @@ class TestOrphanTierMarkerParity:
         """Discovery must not silently shrink to whatever still matches.
 
         If `ci.sh` stops running the tiers, the parity assertion below would
-        pass vacuously over the survivors. Pin the floor separately.
+        pass vacuously over the survivors -- measured: reverting ci.sh and
+        ci.yml to the pre-F-028 base leaves parity and the hardware filter
+        both green over the two remaining sites, and only this assertion red.
+        Pin the floor separately.
         """
         missing = sorted(_REQUIRED_MARKER_SITES - set(_discover_marker_sites()))
         assert not missing, f"these no longer run the orphan tiers at all: {missing}"
 
     def test_marker_expression_is_identical_across_every_site(self) -> None:
         markers = _discover_marker_sites()
-        assert len(set(markers.values())) == 1, (
+        distinct = {m for site_markers in markers.values() for m in site_markers}
+        assert len(distinct) == 1, (
             "the orphan tiers run under different pytest marker expressions "
             f"depending on who invokes them: {markers}. Local runs and F-028's "
             "validation command must gate on exactly what CI gates on, or "
@@ -477,11 +511,12 @@ class TestOrphanTierMarkerParity:
         Pin the safety property too: ``hardware``-marked tests open real
         GPIO / serial / CSI devices and must never collect on a shared runner.
         """
-        for site, marker in _discover_marker_sites().items():
-            assert "not hardware" in marker, (
-                f"{site} no longer excludes hardware-marked tests from the "
-                f"orphan tiers (marker={marker!r})"
-            )
+        for site, site_markers in _discover_marker_sites().items():
+            for marker in site_markers:
+                assert "not hardware" in marker, (
+                    f"{site} no longer excludes hardware-marked tests from the "
+                    f"orphan tiers (marker={marker!r})"
+                )
 
 
 def test_pytest_addopts_keeps_importlib_mode() -> None:

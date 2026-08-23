@@ -63,7 +63,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Sites are **discovered**, not listed: the first cut named the three from the
   review finding and missed a fourth, `make behaviour`, which agreed only by luck.
   A separate assertion pins that the known sites are still found, so parity cannot
-  pass vacuously over whatever survives.
+  pass vacuously over whatever survives — measured: reverting `ci.sh` and `ci.yml`
+  to the pre-F-028 base turns 5 of 20 assertions red, and the two parity assertions
+  are *not* among them.
+- **Comment-stripping extended to `ci.yml`.** `yaml` parses a `run:` block as a literal
+  scalar, so `#` lines survive `safe_load`; the ci.yml-side wiring pins were therefore
+  satisfiable by a commented-out invocation, and the negative pin could go falsely red
+  on a comment merely naming a tier. This was the `ci.sh` defect fixed one round earlier,
+  left standing on the other side and then re-asserted as safe on a false premise.
+- **`scripts/prove_pin_fails.sh` hardened after review.** Three further defects, each
+  reproduced: a directory in `--paths` silently failed to snapshot (`cp` without `-r`),
+  the revert ran anyway, and the tool exited 0 reporting success over a corrupted tree —
+  directories are now refused before anything is touched; the `INT`/`TERM` handler
+  `return`ed instead of `exit`ing, so an interrupted run resumed and reported exit 3
+  ("restore failed") for a tree that was fine; and *any* non-zero pytest status counted
+  as proof the pin fired, so a collection or usage error at the base ref could pose as a
+  load-bearing pin — only pytest's `TESTS_FAILED` now qualifies.
 - **A backwards-compat test that asserted nothing.** `test_twin_overlay_still_builds_its_cloud_components`
   called both cloud builders with no assertion, so it could only fail if one raised. Both
   legitimately return `None` when the optional `[gcp]` extra is absent, making a

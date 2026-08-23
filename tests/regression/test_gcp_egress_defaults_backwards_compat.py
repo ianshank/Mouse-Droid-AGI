@@ -63,6 +63,25 @@ _DISABLED_EVENTS = frozenset(
     {"cloud_telemetry_sink_disabled", "cloud_experience_exporter_disabled"}
 )
 
+# Each builder logs exactly ONE of these before returning: the gate blocked, the
+# optional extra is missing, or the component was built. Their total absence
+# therefore means the observation channel is dead, not that the gate stayed
+# open -- and an absence assertion over an empty list is vacuous.
+#
+# Not hypothetical. ``structlog`` caches bound loggers
+# (``cache_logger_on_first_use=True``), so a suite that calls
+# ``configure_logging`` twice leaves this module's logger writing to the first
+# processor chain while ``capture_logs`` mutates the second; measured, the
+# events print to stdout while ``logs`` stays ``[]``. Configuring at level
+# WARNING does the same, since the filtering wrapper short-circuits
+# ``_log.info`` before any processor runs.
+_OUTCOME_EVENTS = _DISABLED_EVENTS | {
+    "cloud_pubsub_not_available",
+    "cloud_storage_not_available",
+    "cloud_telemetry_sink_built",
+    "cloud_experience_exporter_built",
+}
+
 
 def test_twin_overlay_still_builds_its_cloud_components() -> None:
     """The one overlay that wants cloud egress is not blocked by the new gate.
@@ -77,6 +96,11 @@ def test_twin_overlay_still_builds_its_cloud_components() -> None:
     earlier version of this test did, asserts nothing at all: it can only fail
     if a builder raises. The ``*_disabled`` events distinguish the two paths
     exactly, so their ABSENCE is the claim: the enabled gate did not block.
+
+    An absence assertion is only as good as the channel it reads, so the
+    positive control below runs first. Without it this test passes whenever
+    ``capture_logs`` intercepts nothing -- see ``_OUTCOME_EVENTS`` for the two
+    reachable states where that happens.
     """
     import structlog
 
@@ -93,7 +117,17 @@ def test_twin_overlay_still_builds_its_cloud_components() -> None:
         for builder in (build_cloud_telemetry_sink, build_cloud_experience_exporter):
             builder(settings)
 
-    blocked = sorted({entry["event"] for entry in logs if entry["event"] in _DISABLED_EVENTS})
+    # Positive control FIRST: prove the channel is live before reading anything
+    # into its silence.
+    observed = [entry["event"] for entry in logs if entry["event"] in _OUTCOME_EVENTS]
+    assert len(observed) == 2, (
+        "expected one outcome event per builder; got "
+        f"{observed}. An empty or short list means capture_logs intercepted "
+        "nothing, which would make the assertion below pass with the gate "
+        "arbitrarily broken."
+    )
+
+    blocked = sorted(set(observed) & _DISABLED_EVENTS)
     assert blocked == [], (
         "the twin overlay opts in explicitly, so the F-029 enabled gate must "
         f"not block its builders; got {blocked}"

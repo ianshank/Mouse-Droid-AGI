@@ -9,9 +9,11 @@
 # (see tests/regression/test_ci_gate_wiring_aqa.py).
 #
 # TestOrphanTierMarkerParity is part of half (2), not an extra: this very
-# script is one of the three sites whose marker expression must agree, so a
+# script is one of the sites whose marker expression must agree, so a
 # validation command that skipped it could pass while asserting a different
-# test set than CI gates on.
+# test set than CI gates on. That class DISCOVERS the sites rather than listing
+# them -- a listed roster of three missed `make behaviour`, which agreed by
+# luck -- so adding a new runner needs no edit here.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."   # repo root, regardless of caller CWD
