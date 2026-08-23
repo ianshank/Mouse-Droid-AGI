@@ -109,18 +109,30 @@ def test_no_live_doc_claims_a_stale_src_coverage_floor() -> None:
     specific value ("85%") this test was first written against -- pinning a
     literal stale number only catches this one historical drift (85 -> 90),
     not the next one, whichever direction it goes.
+
+    The tools_hooks exemption is scoped to the SPECIFIC claimed value, not the
+    whole line: HARNESS_SPEC.md:303 and tests/agent.md:6 both state the real
+    90% src/mousedroid claim and the 85% tools_hooks claim on the same line.
+    An earlier version of this test skipped any line containing "claude_hooks"
+    at all, which -- caught by a Copilot review comment on this same PR --
+    exempted the legitimate 90% claim right along with the 85% one, on
+    exactly the two lines this test exists to check.
     """
+    from tools.claude_hooks.config import load_config
+
     real_floor = _real_src_coverage_floor()
+    tools_hooks_floor = load_config().coverage.tools_line_min
     offenders = []
     for doc in _SRC_COVERAGE_DOCS:
         for lineno, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), start=1):
-            if _TOOLS_HOOKS_QUALIFIER in line:
-                continue
             for match in _COVERAGE_CLAIM.finditer(line):
                 claimed = int(match.group(1))
-                if claimed != real_floor:
-                    relpath = doc.relative_to(_REPO_ROOT)
-                    offenders.append(f"{relpath}:{lineno} claims {claimed}%, real is {real_floor}%")
+                if claimed == real_floor:
+                    continue
+                if claimed == tools_hooks_floor and _TOOLS_HOOKS_QUALIFIER in line:
+                    continue
+                relpath = doc.relative_to(_REPO_ROOT)
+                offenders.append(f"{relpath}:{lineno} claims {claimed}%, real is {real_floor}%")
     assert not offenders, (
         "these lines state a src/mousedroid coverage floor that does not "
         f"match pyproject.toml's real fail_under ({real_floor}%): {offenders}"

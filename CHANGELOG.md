@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Second Copilot pass on PR #202: the coverage-floor pin's own exemption
+
+- **`test_no_live_doc_claims_a_stale_src_coverage_floor` skipped an entire line whenever it
+  contained `"claude_hooks"`, exempting the legitimate `src/mousedroid` claim right along with
+  the `tools/claude_hooks` one on any line stating both** — and two of the three target files
+  do exactly that (`HARNESS_SPEC.md:303`, `tests/agent.md:6`). Verified live: a corrupted
+  `88%` in place of the real `90%` on `HARNESS_SPEC.md:303` passed silently under the prior
+  logic and is now caught. Redesigned the exemption to be per-match rather than per-line: a
+  claim is only exempt when its own value equals the tools_hooks gate's real floor
+  (`tools.claude_hooks.config.load_config().coverage.tools_line_min`) **and** the line names
+  that gate — any other value on the same line, correct or wrong, is still checked against
+  `_real_src_coverage_floor()`. Proven with a temporary, restored mutation of the real file:
+  the old test logic passed against the corrupted line, the new logic fails on it.
+
 ### Fixed — Copilot + CodeRabbit follow-up round on PR #202
 
 - **A third, independent bug in `archive_stale_branches.sh`'s pin-carrier loop** (Copilot):
