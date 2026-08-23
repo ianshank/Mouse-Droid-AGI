@@ -558,3 +558,33 @@ features:
     notes: >-
       implemented_in is pinned to the branch-point commit and must be re-pinned
       to the squash SHA post-merge, per the F-015..F-021 convention.
+
+  - id: "F-029"
+    epic: "Quality Gates"
+    name: "GCP off-device egress channels default OFF"
+    description: >-
+      GCPLoggingConfig.enabled and GCPMonitoringConfig.enabled defaulted True
+      while GCPFirestoreConfig.enabled defaulted False. Settings.gcp is Optional
+      and defaults None, so nothing egressed on a stock config - but an operator
+      adding a minimal `gcp:` block for one reason (Firestore, storage) silently
+      enabled TWO off-device egress channels they never named. Both now default
+      False, so every GCP egress channel is opt-in. CHARTER §6 requires new
+      capabilities be additive and opt-in, never a silent behaviour change; this
+      also removes the trap ahead of wiring the cloud components (F-032), which
+      must not land while a default-ON egress path exists.
+    category: "non-functional"
+    priority: "high"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "GCPLoggingConfig / GCPMonitoringConfig / GCPFirestoreConfig all default enabled=False"
+      - "a partial gcp: block (project_id only) opens no egress channel"
+      - "explicit enabled=true still works — the default is a default, not a pin"
+      - "config/gcp_digital_twin.yaml resolves to the same effective state (it sets all three explicitly)"
+    validation_command: "bash scripts/validations/F-029.sh"
+    implemented_in: "175606b052bac2b613144ffca10c6a4982a7def8"
+    depends_on: ["F-001"]
+    notes: >-
+      Gates F-032 (cloud component wiring) - that bundle must not land while a
+      default-ON egress path exists. implemented_in is pinned to the branch-point
+      commit and must be re-pinned to the squash SHA post-merge.

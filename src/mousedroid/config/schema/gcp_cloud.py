@@ -84,7 +84,15 @@ class GCPStorageConfig(BaseModel):
 class GCPLoggingConfig(BaseModel):
     """Google Cloud Logging sink configuration."""
 
-    enabled: bool = Field(True, description="Forward structlog events to Cloud Logging")
+    enabled: bool = Field(
+        False,
+        description=(
+            "Forward structlog events off-device to Cloud Logging. Defaults "
+            "False so that adding a ``gcp:`` block for an unrelated reason "
+            "(Firestore, storage) never silently opens a log-egress channel "
+            "the operator did not name."
+        ),
+    )
     log_name: str = Field("mousedroid", description="Cloud Logging log name")
     min_level: str = Field("INFO", description="Minimum log level to forward to cloud")
 
@@ -92,7 +100,15 @@ class GCPLoggingConfig(BaseModel):
 class GCPMonitoringConfig(BaseModel):
     """Google Cloud Monitoring configuration for metrics export."""
 
-    enabled: bool = Field(True, description="Export metrics to Cloud Monitoring")
+    enabled: bool = Field(
+        False,
+        description=(
+            "Export metrics off-device to Cloud Monitoring. Defaults False "
+            "so that adding a ``gcp:`` block for an unrelated reason never "
+            "silently opens a metrics-egress channel the operator did not "
+            "name."
+        ),
+    )
     export_interval_s: float = Field(
         60.0,
         gt=0,

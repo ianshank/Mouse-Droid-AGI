@@ -20,6 +20,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `test` job and into `ci.sh` outside the `MOUSEDROID_CI_SLIM` gate (~2.5s total),
   and pinned by `TestOrphanTierWiring`. Deliberately NOT placed in the `ci.yml` job
   named `security`, which is `continue-on-error` and would swallow every failure.
+- **F-029 — GCP off-device egress channels now default OFF.** `GCPLoggingConfig.enabled`
+  and `GCPMonitoringConfig.enabled` defaulted `True` while `GCPFirestoreConfig.enabled`
+  defaulted `False`; that asymmetry meant an operator adding a minimal `gcp:` block for one
+  reason silently enabled two egress channels they never named. Both now default `False`.
+  Behaviour changes for no shipped config — `config/gcp_digital_twin.yaml` sets all three
+  explicitly, now pinned against both the parsed model and the raw YAML. Gates F-032.
 - **F-022, F-023, F-027 closed out** — `in_progress` → `done` with hex
   `implemented_in` pinned to `27b5233`, `e730a0a` and `cb2d724`. Their operator
   halves (growth soak gate, AlayaWorld Jetson spike) remain open in `NEXT_STEPS.md`.
