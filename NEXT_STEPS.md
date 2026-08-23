@@ -72,7 +72,7 @@ The legacy v0.3.0 execution-plan phase numbering lives only in
 
 ## P0 — Physical AI Roadmap (Phases 2 → 6)
 
-Dependency direction is strictly **Phase 1 → 2 → 3 → 4**; Phases 5 and 6 are deferred until Phase 3b has soaked ≥30 days.
+Dependency direction is strictly **Phase 1 → 2 → 3 → 4**; Phase 6 is deferred until Phase 3b has soaked ≥30 days (Phase 5 has landed -- see below).
 
 - **Phase 1 — domain randomization** ✅ landed (see CHANGELOG).
 - **Phase 2 — real-episode replay loop** ✅ landed incl. Phase 2.1 BC injection.

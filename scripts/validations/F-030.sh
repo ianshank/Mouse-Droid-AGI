@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # F-030 -- Documentation reconciliation: no live surface states a checkable
-# falsehood about the CI job count, coverage floors, orchestrator symbols, the
-# SKILLS.md skill/agent index, or the growth-pillar wiring claim.
+# falsehood about the CI job count, coverage floors, orchestrator symbols, or
+# the SKILLS.md skill/agent index. NOT covered here: the growth-pillar wiring
+# claim -- a sentence-scoped sweep for that specific claim was attempted and
+# abandoned as too fragile (false positives on legitimate text); see this
+# feature's openspec bundle tasks.md "Explicitly deferred" section. A doc
+# claiming a check this script does not actually run is the exact defect
+# class this comment itself once had -- keep this list matching the pytest
+# targets below, not the other way around.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."   # repo root, regardless of caller CWD
@@ -22,4 +28,4 @@ if ! "$PY_BIN" -m pytest \
   exit 1
 fi
 
-echo "F-030 OK: CI job count, coverage floors, and the skills/agents index all match the tree"
+echo "F-030 OK: CI job count, coverage floors, orchestrator symbols, and the skills/agents index all match the tree"

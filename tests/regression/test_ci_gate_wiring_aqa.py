@@ -573,7 +573,7 @@ def _tracked_docs() -> list[Path]:
         cwd=_REPO_ROOT,
         capture_output=True,
         text=True,
-        check=False,
+        check=True,
     )
     relpaths = sorted(line for line in result.stdout.splitlines() if line.strip())
     return [_REPO_ROOT / relpath for relpath in relpaths]

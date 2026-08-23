@@ -58,7 +58,7 @@ Wired by `factory.py` (the builder is called, metrics-registered) but gated behi
 
 | Pillar | Module | What it does |
 | ------ | ------ | ------------ |
-| Growth & Distillation | `growth/` | KL+CE knowledge distillation to smaller models (~0.1k LOC); `factory.py::build_growth_coordinator` |
+| Growth & Distillation | `growth/` | Regression-objective (MSE) knowledge distillation to a compact student policy (~0.1k LOC); `factory.py::build_growth_coordinator`. `KnowledgeDistiller` also supports a legacy KL+CE `"classification"` objective, but the wired call site passes `objective="regression"`. |
 
 #### Implemented and unit-tested — not yet wired into the loop
 

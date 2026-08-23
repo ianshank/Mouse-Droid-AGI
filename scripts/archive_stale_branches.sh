@@ -126,7 +126,7 @@ for pinned_sha in $pinned_shas; do
     done
     if [ -z "$protecting_tag" ]; then
         carriers=$(git branch -r --contains "$pinned_sha" --format='%(refname:short)' |
-            sed "s|^$REMOTE/||" | grep -vx -e "HEAD" -e "$REMOTE" | tr '\n' ' ')
+            sed "s|^$REMOTE/||" | grep -Fvx -e "HEAD" -e "$REMOTE" | tr '\n' ' ')
         pin_carriers="$pin_carriers $carriers"
         echo "pin $pinned_sha is NOT reachable from any REMOTE tag -- protecting its carriers"
     else
@@ -145,10 +145,13 @@ done
 # 128 before deleting anything -- this script's entire purpose, unusable on
 # any standard fresh clone. This clone happened not to have origin/HEAD set,
 # which is why the bug shipped unnoticed in the round that "fixed" this file.
+# `-F` matters too: without it, $REMOTE is a regex, not a literal string, so a
+# remote name containing a metacharacter (e.g. "upstream.fork") would match
+# and wrongly exclude an unrelated branch differing only at that position.
 _remote_branches() {
     git branch -r --format='%(refname:short)' |
         sed "s|^$REMOTE/||" |
-        grep -vx -e "HEAD" -e "$REMOTE"
+        grep -Fvx -e "HEAD" -e "$REMOTE"
 }
 
 archive=""

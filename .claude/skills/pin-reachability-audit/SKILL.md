@@ -64,6 +64,8 @@ For every `done` feature at once, reuse the exact carrier-detection logic
 deciding what *not* to delete):
 
 ```bash
+git fetch --prune --tags origin --quiet
+
 python - <<'PY'
 import subprocess, yaml
 

@@ -1,12 +1,16 @@
 # Tasks — Documentation reconciliation across live governance surfaces
 
-Quality gate for every task below, run before it is ticked:
+Quality gate, run before a task is ticked:
 
-```
+```shell
 python -m ruff check src/ tests/ tools/ && python -m ruff format --check src/ tests/ tools/
 python -m mypy src/ --strict --ignore-missing-imports
-bash scripts/validations/F-030.sh
 ```
+
+`bash scripts/validations/F-030.sh` joins this gate from task 4.2 onward, once
+the script it runs exists — tasks 1.1 through 4.1 land against the first two
+commands only, since the script that would be the third cannot run before it
+is written.
 
 Task ordering is binding: each task lands green before the next starts.
 Deviations from task wording are recorded inline — declared, not silent.
@@ -93,6 +97,28 @@ Deviations from task wording are recorded inline — declared, not silent.
       in `NEXT_STEPS.md` item 0b. All five corrected together; `README.md` gained a third
       table bucket ("Factory-instantiated, default-OFF pending a soak decision") rather than
       forcing `growth/` into either the fully-wired or the not-yet-wired bucket. See D-6.
+- [x] 3.6 CodeRabbit review round on PR #202 (10 findings, all verified against the tree
+      before fixing): added `test_orchestrator_claude_md_names_only_real_symbols` to close
+      the "F-030 does not execute all declared governance checks" gap for the orchestrator-
+      symbol half of that finding (the `growth/`-claim half is recorded under "Explicitly
+      deferred" below, not silently dropped); fixed `check=False` → `check=True` in
+      `_tracked_docs()` (a failed `git ls-files` was silently reading as "no docs found",
+      making the whole sweep vacuously pass); bounded `test_every_agent_is_listed_in_the_-
+      subagent_skills_table`'s `table_text` slice to the next `## ` heading instead of
+      end-of-file; replaced `test_no_live_doc_claims_a_stale_src_coverage_floor`'s hardcoded
+      `85%` search with a claim extracted and compared against `_real_src_coverage_floor()`
+      directly, matching `_TOTAL_JOB_COUNT`'s existing discipline; `README.md`'s Growth &
+      Distillation description corrected from "KL+CE" to the actually-wired regression
+      (MSE) objective (`factory.py::build_growth_coordinator` passes
+      `objective="regression"`); `NEXT_STEPS.md`'s roadmap intro still said "Phases 5 and 6
+      are deferred" one paragraph above the already-corrected Phase 5 entry -- the same
+      instance-not-class miss task 3.5 corrects elsewhere in this bundle, found by a bot
+      instead of the sweep this time; `scripts/archive_stale_branches.sh`'s `grep -vx`
+      matched `$REMOTE` as a regex, not a fixed string (`-F` added at both sites, plus a
+      one-line comment); `.claude/skills/pin-reachability-audit/SKILL.md`'s all-features
+      audit read local refs without fetching first; `tasks.md`'s own quality-gate fence had
+      no language tag and claimed a gate no early task could satisfy (`bash
+      scripts/validations/F-030.sh` did not exist until task 4.2 -- fixed to say so).
 
 **Phase 4 — Catalog and validate**
 
@@ -106,6 +132,30 @@ Deviations from task wording are recorded inline — declared, not silent.
 
 ## Explicitly deferred (separate changes, do not fold in)
 
+- **A sentence-scoped regression pin for the `growth/`-wiring claim (CodeRabbit finding,
+  PR #202) was attempted and abandoned.** The first three F-030 pins (CI job count,
+  coverage floor, orchestrator symbols) each protect a claim with one consistent, checkable
+  shape. The `growth/`-wiring claim does not: across the five files this bundle corrected it
+  in, the same idea was phrased five different ways ("not yet instantiated", "not yet
+  wired", "implemented-but-not-wired", "unwired", enumerated three-item lists) at distances
+  from 20 to over 300 characters from the word `growth`. A sentence-scoped sweep (splitting
+  each of the four live target files on `.` boundaries, matching the established
+  `_ONLY_COVERAGE_CLAIM`/`_CLAIM_QUALIFIERS` idiom) was written and tested directly against
+  the tree before being trusted, per this same bundle's own `narrative-correction-sweep`
+  discipline -- and it produced two false positives on the first real run: a `README.md`
+  code-fence file-tree listing swallowed into one giant "sentence" by the period-boundary
+  splitter, and a legitimate, pre-existing `NEXT_STEPS.md` sentence (from Session 009's
+  F-022 closeout, predating this bundle) that correctly describes `growth/` as wired but
+  uses none of the pin's qualifier phrases. Both are real engineering problems with the
+  sweep, not tuning-away edge cases. Deferred rather than shipped fragile: a pin that
+  false-positives on legitimate text erodes trust in every pin beside it, and a pin tuned
+  just enough to silence today's false positives without a principled fix is liable to
+  misfire on the next legitimate rewrite. `test_orchestrator_claude_md_names_only_real_symbols`
+  in `tests/regression/test_doc_reconciliation_aqa.py` ships instead, covering the tractable
+  half of the same CodeRabbit finding (orchestrator-symbol existence). Revisit if a future
+  editor has a cleaner mechanism -- e.g. requiring new prose about `growth/` wiring to link
+  to `docs/CHARTER.md` §5 as the single source of truth, checked by presence of the link
+  rather than by parsing the claim's own words.
 - **Mock Hailo-8 output shapes are not schema-driven.**
   `src/mousedroid/hardware/accelerator/hailo_runtime.py::MockHailoRuntime.DEFAULT_OUTPUT_SHAPES`
   (class-level constants `{"yolo": (25200, 85), "feature_extractor": (256,)}`) are not

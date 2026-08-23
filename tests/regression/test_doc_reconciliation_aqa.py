@@ -1,16 +1,20 @@
-"""AQA: F-030 doc-reconciliation numeric claims stay tied to the source of truth.
+"""AQA: F-030 doc-reconciliation claims stay tied to the source of truth.
 
 A doc fix without a pin re-drifts -- the repeated lesson of this repo's own
 history (the smoke tier ran in zero CI paths for months before
 ``test_ci_gate_wiring_aqa.py`` existed; "tests/security is the only coverage of
 the pre-egress filter" was corrected five times before it was pinned). This
-file exists so the two numeric claims fixed in F-030 -- the CI job count and
-the coverage-gate percentage -- are asserted against the tree they describe,
-not just corrected once in prose.
+file exists so the claims fixed in F-030 -- the CI job count, the
+coverage-gate percentage, and ``orchestrator/CLAUDE.md``'s symbol names -- are
+asserted against the tree they describe, not just corrected once in prose.
 
-Deliberately narrow: this pins NUMBERS, not the doc prose itself
-(``TestOrphanTierNarrativeAccuracy`` in ``test_ci_gate_wiring_aqa.py`` already
-owns the "no live doc states a false claim unqualified" pattern for prose).
+Deliberately narrow on prose: this file pins NUMBERS and specific SYMBOL NAMES,
+not free-form claim text (``TestOrphanTierNarrativeAccuracy`` in
+``test_ci_gate_wiring_aqa.py`` owns the "no live doc states a false claim
+unqualified" pattern for that). One claim from F-030's original scope is
+deliberately NOT pinned here: see "growth/-wiring claim" in this bundle's
+``tasks.md`` "Explicitly deferred" section for why a sentence-scoped sweep for
+that specific claim was attempted and abandoned as too fragile.
 """
 
 from __future__ import annotations
@@ -39,8 +43,6 @@ _SRC_COVERAGE_DOCS = (
     _REPO_ROOT / "tests" / "agent.md",
     _REPO_ROOT / "docs" / "architecture" / "c4-spec-harness.md",
 )
-
-_STALE_COVERAGE = re.compile(r"85\s*%")
 
 
 def _real_ci_job_count() -> int:
@@ -84,32 +86,44 @@ def test_ci_job_count_docs_match_the_real_workflow() -> None:
     assert not offenders, "\n".join(offenders)
 
 
-# A qualifying phrase near "85%" that means the mention is legitimately about
-# the SEPARATE tools/claude_hooks gate, not a stale src/mousedroid claim.
+# A qualifying phrase near a coverage claim that means the mention is
+# legitimately about the SEPARATE tools/claude_hooks gate, not the
+# src/mousedroid one.
 _TOOLS_HOOKS_QUALIFIER = "claude_hooks"
+
+# Any "<N>% coverage" (optionally "<N>% line coverage") phrase -- NOT anchored
+# to a specific stale value, so a future change to the real floor that some
+# doc misses is still caught, the same discipline _TOTAL_JOB_COUNT already
+# applies to the CI job count. A bare "<N>%" is deliberately not enough: this
+# repo also states unrelated per-file claims like "100% on spec.py"
+# (docs/architecture/c4-spec-harness.md), which names no "coverage" word next
+# to the percentage and must not be read as a src/mousedroid floor claim.
+_COVERAGE_CLAIM = re.compile(r"(\d{1,3})\s*%\s*(?:line\s+)?coverage")
 
 
 def test_no_live_doc_claims_a_stale_src_coverage_floor() -> None:
-    """No live surface may state 85% for the src/mousedroid gate -- it is 90%.
+    """No live surface may state a src/mousedroid coverage floor but the real one.
 
-    85% is the CORRECT floor for tools/claude_hooks (a separate, narrower
-    gate, pinned below) -- so this checks each LINE containing "85%", not the
-    whole file, and only flags a line that does not also qualify itself as
-    being about tools/claude_hooks.
+    Extracts every "<N>% coverage" claim and compares it against
+    _real_src_coverage_floor() directly, rather than searching for the one
+    specific value ("85%") this test was first written against -- pinning a
+    literal stale number only catches this one historical drift (85 -> 90),
+    not the next one, whichever direction it goes.
     """
     real_floor = _real_src_coverage_floor()
-    assert real_floor != 85, (
-        "pyproject.toml's src/mousedroid fail_under is now 85 -- if that is "
-        "intentional, this test (and its docs) needs updating, not deleting"
-    )
     offenders = []
     for doc in _SRC_COVERAGE_DOCS:
         for lineno, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), start=1):
-            if _STALE_COVERAGE.search(line) and _TOOLS_HOOKS_QUALIFIER not in line:
-                offenders.append(f"{doc.relative_to(_REPO_ROOT)}:{lineno}")
+            if _TOOLS_HOOKS_QUALIFIER in line:
+                continue
+            for match in _COVERAGE_CLAIM.finditer(line):
+                claimed = int(match.group(1))
+                if claimed != real_floor:
+                    relpath = doc.relative_to(_REPO_ROOT)
+                    offenders.append(f"{relpath}:{lineno} claims {claimed}%, real is {real_floor}%")
     assert not offenders, (
-        f"these lines still say 85% unqualified, where they mean the "
-        f"src/mousedroid gate (now {real_floor}%): {offenders}"
+        "these lines state a src/mousedroid coverage floor that does not "
+        f"match pyproject.toml's real fail_under ({real_floor}%): {offenders}"
     )
 
 
@@ -124,3 +138,69 @@ def test_tools_claude_hooks_coverage_floor_is_still_85() -> None:
     from tools.claude_hooks.config import load_config
 
     assert load_config().coverage.tools_line_min == 85
+
+
+_ORCHESTRATOR_CLAUDE_MD = _REPO_ROOT / "src" / "mousedroid" / "orchestrator" / "CLAUDE.md"
+
+# The four symbols this doc must name and their real homes. A small, explicit
+# map is the right shape here (unlike a hardcoded skills/agents roster) --
+# this doc discusses a specific, stable set of core orchestrator symbols, not
+# an open-ended, organically-growing collection.
+_ORCHESTRATOR_REAL_SYMBOLS = {
+    "MouseDroidOrchestrator": (
+        _REPO_ROOT / "src" / "mousedroid" / "orchestrator" / "orchestrator.py",
+        "class MouseDroidOrchestrator",
+    ),
+    "AutonomousOrchestrator": (
+        _REPO_ROOT / "src" / "mousedroid" / "orchestrator" / "autonomous.py",
+        "class AutonomousOrchestrator",
+    ),
+    "MouseDroidSafetyMonitor": (
+        _REPO_ROOT / "src" / "mousedroid" / "safety" / "monitor.py",
+        "class MouseDroidSafetyMonitor",
+    ),
+    "build_orchestrator": (
+        _REPO_ROOT / "src" / "mousedroid" / "factory.py",
+        "def build_orchestrator",
+    ),
+}
+
+# Regression target: this doc used to name these four symbols, none of which
+# exist in any .py file in the tree.
+_ORCHESTRATOR_PHANTOM_SYMBOLS = (
+    "RobotOrchestrator",
+    "ConstitutionalSafetyMonitor",
+)
+
+
+def test_orchestrator_claude_md_names_only_real_symbols() -> None:
+    """orchestrator/CLAUDE.md -- the module map read before touching the
+    orchestrator -- must never regress to naming symbols that don't exist.
+    """
+    text = _ORCHESTRATOR_CLAUDE_MD.read_text(encoding="utf-8")
+
+    present_phantoms = [s for s in _ORCHESTRATOR_PHANTOM_SYMBOLS if s in text]
+    assert not present_phantoms, (
+        f"orchestrator/CLAUDE.md names {present_phantoms}, which exist in no "
+        ".py file in the tree -- this doc is read before touching the "
+        "orchestrator, so a phantom symbol here steers the next edit wrong"
+    )
+
+    missing_from_doc = []
+    missing_from_source = []
+    for symbol, (path, definition) in _ORCHESTRATOR_REAL_SYMBOLS.items():
+        if symbol not in text:
+            missing_from_doc.append(symbol)
+            continue
+        if definition not in path.read_text(encoding="utf-8"):
+            missing_from_source.append(f"{symbol} (expected {definition!r} in {path})")
+
+    assert not missing_from_doc, (
+        f"orchestrator/CLAUDE.md no longer names {missing_from_doc} -- if "
+        "these were renamed or removed, update this list, not just the doc"
+    )
+    assert not missing_from_source, (
+        f"orchestrator/CLAUDE.md names symbols that no longer resolve: "
+        f"{missing_from_source} -- either they moved (update the map above) "
+        "or the doc is drifting again"
+    )

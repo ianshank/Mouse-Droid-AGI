@@ -122,10 +122,18 @@ catalog-wide pins rather than six one-off edits.
   `test_every_skill_directory_is_mentioned_in_the_index` and
   `test_every_agent_is_listed_in_the_subagent_skills_table`, both discovery-based (glob the
   real directories/files) rather than a hardcoded expected-list.
-- New `tests/regression/test_doc_reconciliation_aqa.py`: pins the CI-job-count and
-  coverage-floor numeric claims against their source of truth
+- New `tests/regression/test_doc_reconciliation_aqa.py`: pins the CI-job-count,
+  coverage-floor, and orchestrator-symbol claims against their source of truth
   (`.github/workflows/ci.yml`'s parsed `jobs:` mapping, `pyproject.toml`'s `fail_under`,
-  `tools/claude_hooks/config.py`'s `tools_line_min`) rather than against prose alone.
+  `tools/claude_hooks/config.py`'s `tools_line_min`, and the four real
+  `orchestrator`/`safety`/`factory` symbols `src/mousedroid/orchestrator/CLAUDE.md` names)
+  rather than against prose alone. The coverage-floor check compares an extracted claim
+  against `_real_src_coverage_floor()` directly rather than searching for the one stale
+  value ("85%") it was first written against, so a future floor change some doc misses is
+  still caught. The sixth original drift (the `growth/`-wiring claim) is **not** pinned
+  here -- a sentence-scoped sweep was attempted and produced false positives on legitimate
+  text; see `tasks.md`'s "Explicitly deferred" section for the full account, not silently
+  omitted from this description.
 - New `scripts/validations/F-030.sh`, the feature's `validation_command`.
 - Riding the same sprint: `tests/regression/test_ci_gate_wiring_aqa.py`'s `_DOC_GLOBS` (a
   5-pattern directory roster that silently missed 15 git-tracked `.md` files, including

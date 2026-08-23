@@ -308,7 +308,11 @@ def test_every_agent_is_listed_in_the_subagent_skills_table() -> None:
     text = _SKILLS_MD.read_text(encoding="utf-8")
     table_start = text.find("## Subagent skills")
     assert table_start != -1, "SKILLS.md lost its Subagent skills section"
-    table_text = text[table_start:]
+    # Bounded to the NEXT level-two heading, not end-of-file -- otherwise an
+    # agent name mentioned anywhere later in SKILLS.md (in a different
+    # section) would satisfy this check even if the table itself omits it.
+    table_end = text.find("\n## ", table_start + len("## Subagent skills"))
+    table_text = text[table_start : table_end if table_end != -1 else None]
     missing = sorted(agent.stem for agent in _agent_files() if f"`{agent.stem}`" not in table_text)
     assert not missing, f"agents missing from the Subagent skills table: {missing}"
 

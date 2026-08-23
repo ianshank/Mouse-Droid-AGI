@@ -8,6 +8,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — CodeRabbit review round on PR #202 (10 findings, all verified, 9 fixed, 1 honestly deferred)
+
+- **`F-030 does not execute all declared governance checks` (Major).** Added
+  `test_orchestrator_claude_md_names_only_real_symbols` to `test_doc_reconciliation_aqa.py`,
+  closing the gap for the orchestrator-symbol half of this finding: it asserts the four real
+  symbols `orchestrator/CLAUDE.md` names actually resolve (`class`/`def` grep against their
+  claimed source files) and that the two historical phantom symbols never come back. Proven
+  red against the pre-fix doc content first. The `growth/`-wiring-claim half of this finding
+  was attempted and **not** shipped: a sentence-scoped sweep across the four live target
+  files produced two false positives on its first real run against the tree (a `README.md`
+  code-fence file listing swallowed into one giant "sentence"; a legitimate pre-existing
+  `NEXT_STEPS.md` sentence from Session 009 using none of the pin's qualifier phrases) — full
+  account in the F-030 bundle's `tasks.md` "Explicitly deferred" section, not silently
+  dropped from either that file or this one.
+- **`grep -e "$REMOTE"` in `archive_stale_branches.sh` treated the remote name as a regex,
+  not a literal string** — a remote containing a metacharacter (e.g. `upstream.fork`) could
+  match and wrongly exclude an unrelated branch. Added `-F` at both filter sites.
+- **`test_ci_gate_wiring_aqa.py`'s `_tracked_docs()` used `check=False`** on its `git
+  ls-files` call, so a failed git invocation silently returned an empty doc list and the
+  whole narrative-accuracy sweep passed vacuously over nothing. Changed to `check=True`.
+- **`test_every_agent_is_listed_in_the_subagent_skills_table`'s `table_text` slice ran to
+  end-of-file** instead of stopping at the next `## ` heading, so an agent name mentioned
+  anywhere later in `SKILLS.md` — not just inside the Subagent skills table — could satisfy
+  the check. Bounded to the next heading.
+- **`test_no_live_doc_claims_a_stale_src_coverage_floor` searched for the literal string
+  `"85%"`** rather than comparing an extracted claim against the real floor, so a future
+  change to `pyproject.toml`'s `fail_under` that some doc missed would go uncaught. Redesigned
+  to extract every `"<N>% coverage"` claim and compare `N` against `_real_src_coverage_floor()`
+  directly — the same discipline the CI-job-count pin already used. Tuned against
+  `docs/architecture/c4-spec-harness.md`'s unrelated `"100% on spec.py"` claim (a different,
+  legitimate, per-file metric) before trusting the new regex, per this bundle's own
+  `narrative-correction-sweep` discipline.
+- **`README.md` described `growth/` distillation as "KL+CE"** — `factory.py`'s
+  `build_growth_coordinator` passes `objective="regression"` to `KnowledgeDistiller`, whose
+  own docstring confirms `"classification"` (KL+CE) is the *default*, not what's wired.
+  Corrected to describe the actually-wired regression (MSE) objective.
+- **`NEXT_STEPS.md`'s roadmap-intro sentence still said "Phases 5 and 6 are deferred"** one
+  paragraph above the already-corrected Phase 5 entry saying "✅ landed" — the identical
+  instance-not-class miss this sprint kept finding elsewhere, this time caught by the bot
+  instead of the sweep. Corrected to name only Phase 6.
+- **`.claude/skills/pin-reachability-audit/SKILL.md`'s all-features audit read local
+  `origin/*` refs and tags without fetching first**, so a stale clone could report a deleted
+  carrier as present or a new remote carrier as absent. Added `git fetch --prune --tags
+  origin --quiet` before the python block.
+- **The F-030 bundle's `tasks.md` quality-gate fence had no language tag** (markdownlint
+  MD040) **and claimed a gate no early task could satisfy** — `bash
+  scripts/validations/F-030.sh` didn't exist until task 4.2, so tasks 1.1–4.1 could not
+  literally have run it. Fence tagged `shell`; gate description scoped to say so.
+
 ### Fixed — `archive_stale_branches.sh` origin/HEAD symref bug
 
 - **`git branch -r --format='%(refname:short)'` renders a configured `refs/remotes/<remote>/HEAD`
