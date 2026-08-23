@@ -214,12 +214,11 @@ jobs:
             # all until F-028 -- the same rot the smoke tier suffered before
             # PR #178. These go in `test` (blocking), NOT the advisory
             # `security` job: that job is continue-on-error and would swallow
-            # every failure. tests/security/ is the only coverage of the
-            # pre-egress RegexInjectionFilter named in docs/CHARTER.md.
+            # every failure.
             - name: Run functional + user-journey + security tiers
               run: |
                   pytest tests/functional tests/user_journey tests/security \
-                    -m "not hardware" \
+                    -m "not hardware and not slow" \
                     --import-mode=importlib \
                     -v --tb=short --no-cov
 

@@ -21,6 +21,8 @@ Pinned contracts:
 * scripts/ci.sh runs the smoke stage OUTSIDE the ``MOUSEDROID_CI_SLIM`` skip;
 * the functional / user-journey / security tiers run in the blocking ``test``
   job and in ci.sh, and never in the advisory ``security`` job (F-028);
+* EVERY discovered tests/<tier>/ reaches a CI path or carries a documented
+  exemption -- generic, so the next orphaned tier cannot slip through;
 * pytest ``addopts`` keeps ``--import-mode=importlib`` (duplicate test
   basenames make prepend mode fragile).
 """
@@ -46,6 +48,22 @@ def _load_ci_jobs() -> dict:
     jobs = data.get("jobs")
     assert isinstance(jobs, dict), "ci.yml has no jobs mapping"
     return jobs
+
+
+def _ci_sh_commands() -> str:
+    """scripts/ci.sh with comment lines stripped.
+
+    Asserting a tier name against the raw file text is satisfiable by a
+    *comment* -- including the explanatory comments this repo writes above each
+    stage. Deleting the pytest line while keeping the comment would leave the
+    pin green, which is precisely the un-pinned-wiring failure this module
+    exists to prevent.
+    """
+    return "\n".join(
+        line
+        for line in _CI_SH.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#")
+    )
 
 
 def _job_run_text(job: dict) -> str:
@@ -204,21 +222,90 @@ class TestCiShSmokeStage:
 
 _ORPHAN_TIERS = ("tests/functional", "tests/user_journey", "tests/security")
 
+# Tiers deliberately absent from hosted CI, each with the reason. Same posture
+# as _ALLOWED_CROSS_SUBSYSTEM_IMPORTS in scripts/check_subsystem_boundaries.py:
+# a ratchet, not a bypass valve. Adding an entry is a reviewable policy
+# decision; it is not a way to silence the gate.
+_CI_EXEMPT_TIERS: dict[str, str] = {
+    "hardware": (
+        "rover-only: opens real GPIO / serial / CSI devices, so it must not "
+        "collect on shared runners. Runs on the self-hosted Jetson via "
+        "scripts/jetson_full_validation.sh; .github/workflows/harness.yml "
+        "documents the deliberate omission."
+    ),
+}
+
+
+def _discover_test_tiers() -> set[str]:
+    """Every tests/<tier>/ directory that actually holds tests.
+
+    Discovered rather than listed, so a tier added tomorrow is covered without
+    editing this file. That is the whole point: F-028 fixed three orphaned
+    tiers, but a hardcoded roster would let the *next* orphan slip through
+    exactly the same way.
+    """
+    tests_root = _REPO_ROOT / "tests"
+    return {
+        d.name
+        for d in tests_root.iterdir()
+        if d.is_dir() and d.name != "__pycache__" and any(d.rglob("test_*.py"))
+    }
+
+
+class TestEveryTierReachesCi:
+    """No test tier may run in zero CI paths -- generically, not by roster."""
+
+    def test_every_tier_is_wired_or_explicitly_exempt(self) -> None:
+        ci_sh = _ci_sh_commands()
+        # yaml.safe_load drops comments, so the joined run: text is already
+        # comment-free -- unlike the raw ci.yml source.
+        ci_yml = "\n".join(_job_run_text(job) for job in _load_ci_jobs().values())
+        orphans = sorted(
+            tier
+            for tier in _discover_test_tiers()
+            if tier not in _CI_EXEMPT_TIERS
+            and f"tests/{tier}" not in ci_sh
+            and f"tests/{tier}" not in ci_yml
+        )
+        assert not orphans, (
+            f"test tier(s) {orphans} run in ZERO CI paths. Either wire them into "
+            "scripts/ci.sh and the blocking `test` job, or add an entry to "
+            "_CI_EXEMPT_TIERS with a documented reason. A tier nobody runs rots "
+            "invisibly -- that is what F-028 existed to fix."
+        )
+
+    def test_exemptions_are_not_stale(self) -> None:
+        """An exemption for a tier that no longer exists is dead policy."""
+        discovered = _discover_test_tiers()
+        stale = sorted(t for t in _CI_EXEMPT_TIERS if t not in discovered)
+        assert not stale, (
+            f"_CI_EXEMPT_TIERS names tier(s) {stale} that no longer exist -- "
+            "drop the entry rather than leaving a rule nobody can trip"
+        )
+
+    def test_every_exemption_carries_a_reason(self) -> None:
+        """A bare exemption is indistinguishable from an oversight."""
+        for tier, reason in _CI_EXEMPT_TIERS.items():
+            assert reason.strip(), f"exemption for {tier!r} has no documented reason"
+
 
 class TestOrphanTierWiring:
     """F-028: the functional / user-journey / security tiers reach a CI path.
 
-    All three ran in ZERO CI paths -- absent from ci.sh, ci.yml and every
-    Makefile target -- so they could rot invisibly, exactly as the smoke tier
-    did before PR #178. ``tests/security/`` is the only coverage of the
-    pre-egress ``RegexInjectionFilter`` that docs/CHARTER.md names as the
-    control making the cloud-LLM egress carve-out acceptable.
+    All three ran in ZERO CI paths -- absent from ci.sh and ci.yml -- so they
+    could rot invisibly, exactly as the smoke tier did before PR #178.
+
+    Scope note: this closes a *wiring* gap, not a coverage hole. The
+    ``RegexInjectionFilter`` unit coverage in
+    ``tests/unit/security/test_injection_filter.py`` (11 tests) already ran in
+    the coverage-gated ``test`` job; ``tests/security/`` adds the pre-egress
+    path through the gateway seam on top of it.
     """
 
     def test_all_three_tiers_run_in_the_test_job(self) -> None:
         run_text = _job_run_text(_load_ci_jobs()["test"])
         for tier in _ORPHAN_TIERS:
-            assert f"pytest {tier}" in run_text or f" {tier}" in run_text, (
+            assert tier in run_text, (
                 f"{tier} must run in the blocking `test` job — it previously "
                 "ran in no CI path at all (F-028)"
             )
@@ -238,12 +325,16 @@ class TestOrphanTierWiring:
         )
 
     def test_ci_sh_runs_all_three_tiers(self) -> None:
-        text = _CI_SH.read_text(encoding="utf-8")
+        commands = _ci_sh_commands()
         for tier in _ORPHAN_TIERS:
-            assert tier in text, f"ci.sh lost the {tier} stage (F-028)"
+            assert tier in commands, (
+                f"ci.sh lost the {tier} stage (F-028) — note this checks the "
+                "comment-stripped command text, so an explanatory comment "
+                "naming the tier does not satisfy it"
+            )
 
     def test_orphan_tier_stage_precedes_slim_gate(self) -> None:
-        text = _CI_SH.read_text(encoding="utf-8")
+        text = _ci_sh_commands()
         stage_at = text.find("pytest tests/functional")
         assert stage_at != -1, "ci.sh lost its functional/user-journey/security stage"
         slim_at = text.find("MOUSEDROID_CI_SLIM:-0")

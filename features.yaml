@@ -535,9 +535,11 @@ features:
       .github/workflows/ci.yml and from every Makefile target, so they executed
       only under a bare `pytest` and could rot invisibly. This is the same
       failure mode the smoke tier had before PR #178. tests/security/ holds the
-      only coverage of the pre-egress RegexInjectionFilter that docs/CHARTER.md
-      names as the control making the cloud-LLM egress carve-out (#107)
-      acceptable, so the gap was governance-relevant, not merely hygiene. All
+      pre-egress path through the gateway seam for the RegexInjectionFilter
+      that docs/CHARTER.md names as the control making the cloud-LLM egress
+      carve-out (#107) acceptable. (The filter's unit coverage in
+      tests/unit/security/test_injection_filter.py already ran - this closes a
+      wiring gap, not a coverage hole.) All
       three tiers are wired into the blocking `test` job and into ci.sh, outside
       the MOUSEDROID_CI_SLIM skip (the whole set runs in ~2.5s), and pinned by
       TestOrphanTierWiring so the wiring cannot silently regress. They are
@@ -553,18 +555,23 @@ features:
       - "the ci.sh stage precedes the MOUSEDROID_CI_SLIM gate (runs outside the slim skip)"
       - "TestOrphanTierWiring fails when the wiring is removed (verified by reverting)"
     validation_command: "bash scripts/validations/F-028.sh"
-    implemented_in: "175606b052bac2b613144ffca10c6a4982a7def8"
+    implemented_in: "df928d9699df99983287f768bb35131ff9418eb0"
     depends_on: ["F-001"]
     notes: >-
-      implemented_in is pinned to the branch-point commit and must be re-pinned
-      to the squash SHA post-merge, per the F-015..F-021 convention.
+      implemented_in pins the commit on this branch that actually contains the
+      change; re-pin to the squash SHA post-merge (F-015..F-020 pin a12c95b,
+      their real landing commit - never a branch point, which would claim
+      provenance for a commit where the feature does not exist).
 
   - id: "F-029"
     epic: "Quality Gates"
     name: "GCP off-device egress channels default OFF"
     description: >-
       GCPLoggingConfig.enabled and GCPMonitoringConfig.enabled defaulted True
-      while GCPFirestoreConfig.enabled defaulted False. Settings.gcp is Optional
+      while GCPFirestoreConfig.enabled defaulted False, and GCPPubSubConfig /
+      GCPStorageConfig had no enabled field at all - the latter two being the
+      ones actually wired, since build_cloud_telemetry_sink and
+      build_cloud_experience_exporter gated on `cfg.gcp is None` alone. Settings.gcp is Optional
       and defaults None, so nothing egressed on a stock config - but an operator
       adding a minimal `gcp:` block for one reason (Firestore, storage) silently
       enabled TWO off-device egress channels they never named. Both now default
@@ -577,14 +584,16 @@ features:
     status: "done"
     tier: "fast"
     verification:
-      - "GCPLoggingConfig / GCPMonitoringConfig / GCPFirestoreConfig all default enabled=False"
+      - "logging / monitoring / firestore / pubsub / storage all default enabled=False"
       - "a partial gcp: block (project_id only) opens no egress channel"
+      - "build_cloud_telemetry_sink and build_cloud_experience_exporter both return None for a partial block"
       - "explicit enabled=true still works — the default is a default, not a pin"
       - "config/gcp_digital_twin.yaml resolves to the same effective state (it sets all three explicitly)"
     validation_command: "bash scripts/validations/F-029.sh"
-    implemented_in: "175606b052bac2b613144ffca10c6a4982a7def8"
+    implemented_in: "5c2f044c4c0f4ebc2fd401e070e54802889d25fd"
     depends_on: ["F-001"]
     notes: >-
       Gates F-032 (cloud component wiring) - that bundle must not land while a
-      default-ON egress path exists. implemented_in is pinned to the branch-point
-      commit and must be re-pinned to the squash SHA post-merge.
+      default-ON egress path exists. implemented_in pins the commit on this
+      branch that actually contains the change; re-pin to the squash SHA
+      post-merge.

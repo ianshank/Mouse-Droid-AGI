@@ -20,6 +20,15 @@ from mousedroid.config.schema.misc import CircuitBreakerConfig, RetryConfig
 class GCPPubSubConfig(BaseModel):
     """Google Cloud Pub/Sub configuration for telemetry and experience export."""
 
+    enabled: bool = Field(
+        False,
+        description=(
+            "Publish telemetry and experience frames off-device to Cloud "
+            "Pub/Sub. Defaults False so that adding a ``gcp:`` block for an "
+            "unrelated reason never silently opens a publish channel the "
+            "operator did not name."
+        ),
+    )
     telemetry_topic: str = Field(
         "mousedroid-telemetry",
         description="Pub/Sub topic for telemetry frames",
@@ -57,6 +66,14 @@ class GCPPubSubConfig(BaseModel):
 class GCPStorageConfig(BaseModel):
     """Google Cloud Storage configuration for experience archival."""
 
+    enabled: bool = Field(
+        False,
+        description=(
+            "Upload experience shards off-device to Cloud Storage. Defaults "
+            "False so that adding a ``gcp:`` block for an unrelated reason "
+            "never silently opens an upload channel the operator did not name."
+        ),
+    )
     bucket: str = Field(
         "mousedroid-experience",
         description="GCS bucket name for experience shards",

@@ -115,9 +115,10 @@ echo "=== Smoke Tests ==="
 
 echo "=== Functional + User-Journey + Security Tiers ==="
 # Three tiers that ran in NO CI path at all until F-028 -- the same failure
-# mode the smoke tier had before PR #178. tests/security/ holds the only
-# coverage of the pre-egress RegexInjectionFilter, which docs/CHARTER.md
-# names as the control making the cloud-LLM egress carve-out acceptable.
+# mode the smoke tier had before PR #178. tests/security/ exercises the
+# pre-egress RegexInjectionFilter through the gateway seam; the filter's unit
+# coverage lives in tests/unit/security/test_injection_filter.py and already
+# ran, so this closes a wiring gap, not a coverage hole.
 # Deliberately OUTSIDE the MOUSEDROID_CI_SLIM skip below: the whole set runs
 # in ~2.5s, so there is no memory-pressure case for dropping it.
 "$PYTHON_BIN" -m pytest tests/functional tests/user_journey tests/security \

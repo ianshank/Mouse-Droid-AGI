@@ -4696,6 +4696,12 @@ def build_cloud_telemetry_sink(
     """
     if cfg.gcp is None:
         return None
+    if not cfg.gcp.pubsub.enabled:
+        # Explicit log: a silent None here is indistinguishable from "gcp not
+        # configured at all", which is the first thing an operator checks when
+        # telemetry stops arriving.
+        _log.info("cloud_telemetry_sink_disabled", reason="gcp.pubsub.enabled=false")
+        return None
     try:
         from mousedroid.cloud.pubsub_sink import CloudTelemetrySink
     except ImportError:
@@ -4725,6 +4731,9 @@ def build_cloud_experience_exporter(
         Cloud experience exporter or None.
     """
     if cfg.gcp is None:
+        return None
+    if not cfg.gcp.storage.enabled:
+        _log.info("cloud_experience_exporter_disabled", reason="gcp.storage.enabled=false")
         return None
     try:
         from mousedroid.cloud.experience_exporter import CloudExperienceExporter

@@ -20,7 +20,7 @@ from mousedroid.llm_gateway.composite_gateway import CompositeLLMGateway
 @pytest.mark.asyncio
 async def test_default_adversarial_payloads_rejected(fuzzed_payload: str) -> None:
     """Verify that default prompt-injection patterns are rejected pre-egress."""
-    cfg = LLMConfig(enable_injection_filter=True)
+    cfg = LLMConfig()
     gateway = CompositeLLMGateway(cfg=cfg, mock_mode=True)
 
     goal = await gateway.translate_mission(fuzzed_payload)
@@ -48,7 +48,7 @@ async def test_custom_adversarial_patterns_rejected(custom_payload: str) -> None
         r"disable.*emergency",
         r"format flash",
     ]
-    cfg = LLMConfig(enable_injection_filter=True, injection_patterns=custom_patterns)
+    cfg = LLMConfig(injection_patterns=custom_patterns)
     gateway = CompositeLLMGateway(cfg=cfg, mock_mode=True)
 
     goal = await gateway.translate_mission(custom_payload)
@@ -72,7 +72,7 @@ async def test_custom_adversarial_patterns_rejected(custom_payload: str) -> None
 @pytest.mark.asyncio
 async def test_legitimate_commands_pass_cleanly(legitimate_command: str) -> None:
     """Verify that standard robot navigation commands pass without false positives."""
-    cfg = LLMConfig(enable_injection_filter=True)
+    cfg = LLMConfig()
     gateway = CompositeLLMGateway(cfg=cfg, mock_mode=True)
 
     goal = await gateway.translate_mission(legitimate_command)

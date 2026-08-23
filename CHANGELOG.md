@@ -8,15 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added — Sprint 6: CI Tier Completeness & F-022/023/027 Closeout
+### Changed — Sprint 6: CI Tier Completeness, Egress Gating & F-022/023/027 Closeout
 
 - **F-028 — three test tiers reached zero CI paths.** `tests/functional/`,
   `tests/user_journey/` and `tests/security/` were absent from `scripts/ci.sh`,
   `.github/workflows/ci.yml` and every Makefile target, so they ran only under a
   bare `pytest` and could rot invisibly — the same failure mode the smoke tier had
-  before PR #178. `tests/security/` holds the only coverage of the pre-egress
-  `RegexInjectionFilter` that `docs/CHARTER.md` §3 names as the control making the
-  cloud-LLM egress carve-out acceptable. All three are now wired into the blocking
+  before PR #178. `tests/security/` exercises the pre-egress path through the
+  gateway seam for the `RegexInjectionFilter` that `docs/CHARTER.md` §3 names as
+  the control making the cloud-LLM egress carve-out acceptable — the filter's own
+  unit coverage already ran, so this closes a wiring gap. All three are now wired into the blocking
   `test` job and into `ci.sh` outside the `MOUSEDROID_CI_SLIM` gate (~2.5s total),
   and pinned by `TestOrphanTierWiring`. Deliberately NOT placed in the `ci.yml` job
   named `security`, which is `continue-on-error` and would swallow every failure.
@@ -26,6 +27,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   reason silently enabled two egress channels they never named. Both now default `False`.
   Behaviour changes for no shipped config — `config/gcp_digital_twin.yaml` sets all three
   explicitly, now pinned against both the parsed model and the raw YAML. Gates F-032.
+  Peer review found the first cut half-done: `GCPPubSubConfig` and `GCPStorageConfig` had
+  no `enabled` field at all, and `build_cloud_telemetry_sink` / `build_cloud_experience_exporter`
+  gated on `cfg.gcp is None` alone — so a partial block still built a live Pub/Sub sink and
+  GCS exporter. Those two are the channels that were actually wired. Both now gated, with a
+  structured `cloud_*_disabled` log so a disabled sink is not a silent `None`.
+- **Generic CI tier gate.** `TestEveryTierReachesCi` discovers `tests/*/` rather than
+  checking a hardcoded roster, so the *next* orphaned tier cannot slip through the way
+  these three did. `_CI_EXEMPT_TIERS` carries `hardware` with a documented reason.
+- **Catalog-wide hex-SHA gate.** `implemented_in` on a `done` feature must be a full
+  40-character SHA — a rule `HARNESS_SPEC.md` and the `openspec-change` skill both stated
+  but nothing enforced.
+- **`make behaviour`** runs the functional / user-journey / security tiers locally.
 - **F-022, F-023, F-027 closed out** — `in_progress` → `done` with hex
   `implemented_in` pinned to `27b5233`, `e730a0a` and `cb2d724`. Their operator
   halves (growth soak gate, AlayaWorld Jetson spike) remain open in `NEXT_STEPS.md`.

@@ -31,7 +31,7 @@ COV_MIN   := 90
 
 .DEFAULT_GOAL := help
 .PHONY: help install lint format typecheck test test-fast smoke regression \
-        coverage branch-coverage validate skills hooks gates ci clean
+        behaviour coverage branch-coverage validate skills hooks gates ci clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -67,6 +67,10 @@ smoke: ## Sub-10s import/parse sanity tier
 
 regression: ## Regression + AQA tier
 	$(PYTHON) -m pytest tests/regression/ -m "not hardware" --import-mode=importlib -q
+
+behaviour: ## Functional + user-journey + security tiers (~2.5s, F-028)
+	$(PYTHON) -m pytest tests/functional tests/user_journey tests/security \
+		-m "not hardware and not slow" --import-mode=importlib --no-cov -q
 
 coverage: test ## Alias for the coverage-gated test run
 
