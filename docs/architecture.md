@@ -438,8 +438,10 @@ live.** Only `CloudTelemetrySink` and `CloudExperienceExporter` have `build_clou
 functions and are threaded into `MouseDroidOrchestrator`'s constructor. `CloudLoggingSink`,
 `CloudMetricsExporter`, and `CloudFirestoreSync` are fully implemented with real unit tests but
 have **no factory builder and zero runtime callers** — structurally the same
-implemented-but-not-wired state as the `meta`/`growth`/`scaling` cognitive pillars described
-elsewhere in this document, just undocumented as such until now. Tracked in `NEXT_STEPS.md`.
+implemented-but-not-wired state as the `meta`/`scaling` cognitive pillars described elsewhere in
+this document (`growth` has since gained a factory builder, `build_growth_coordinator`, and is
+excluded from this comparison for that reason), just undocumented as such until now. Tracked in
+`NEXT_STEPS.md`.
 
 ```mermaid
 graph TD

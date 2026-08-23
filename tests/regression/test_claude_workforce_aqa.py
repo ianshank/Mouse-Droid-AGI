@@ -256,6 +256,64 @@ def test_agent_files_are_git_tracked() -> None:
 
 
 # ---------------------------------------------------------------------------
+# SKILLS.md index accuracy — F-030
+# ---------------------------------------------------------------------------
+#
+# SKILLS.md documents two shapes of entry: a plain "###" procedure (files to
+# read, commands to run, no dedicated skill directory required — deliberate,
+# not drift), and a real ".claude/skills/<name>/" directory invocable as
+# "/<name>". The class of bug this session kept re-finding is a real,
+# invocable capability that the index never mentions — 12 of 17 skill
+# directories were absent from SKILLS.md entirely before this fix, and the
+# "Subagent skills" table named seven subagents that do not exist in this
+# repository. Both are now pinned by DISCOVERY (glob the real directories,
+# not a hardcoded roster) so the next skill or agent added without an index
+# entry fails loudly rather than rotting invisibly the same way.
+
+_SKILLS_DIR = _REPO_ROOT / ".claude" / "skills"
+_SKILLS_MD = _REPO_ROOT / "SKILLS.md"
+
+
+def _skill_directories() -> list[str]:
+    """Every real, invocable skill under .claude/skills/, by directory name."""
+    if not _SKILLS_DIR.is_dir():
+        return []
+    return sorted(d.name for d in _SKILLS_DIR.iterdir() if d.is_dir())
+
+
+def test_every_skill_directory_is_mentioned_in_the_index() -> None:
+    """A real skill absent from SKILLS.md is invisible to any agent using the
+
+    index as documented ("Discovery" section: "grep this file"). This does not
+    require a full ### entry — appearing anywhere (e.g. the Workforce skills
+    table) is sufficient; only total absence is the failure mode this pins.
+    """
+    text = _SKILLS_MD.read_text(encoding="utf-8")
+    missing = sorted(name for name in _skill_directories() if name not in text)
+    assert not missing, (
+        f"skill director{'y is' if len(missing) == 1 else 'ies are'} not mentioned "
+        f"anywhere in SKILLS.md: {missing} — a real, invocable skill the index "
+        "does not know about"
+    )
+
+
+def test_every_agent_is_listed_in_the_subagent_skills_table() -> None:
+    """The Subagent skills table must name real agents, not a stale roster.
+
+    Verified defect this corrects: the table previously listed seven
+    plugin-namespaced subagent names (``security-auditor``,
+    ``feature-dev:code-reviewer``, ...) matching none of the seven real
+    ``.claude/agents/`` files.
+    """
+    text = _SKILLS_MD.read_text(encoding="utf-8")
+    table_start = text.find("## Subagent skills")
+    assert table_start != -1, "SKILLS.md lost its Subagent skills section"
+    table_text = text[table_start:]
+    missing = sorted(agent.stem for agent in _agent_files() if f"`{agent.stem}`" not in table_text)
+    assert not missing, f"agents missing from the Subagent skills table: {missing}"
+
+
+# ---------------------------------------------------------------------------
 # settings.json wiring
 # ---------------------------------------------------------------------------
 

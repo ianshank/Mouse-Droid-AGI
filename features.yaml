@@ -603,3 +603,52 @@ features:
       merge, the commit this feature actually landed in. It previously pinned
       the branch commit 5c2f044, which the squash did not preserve, leaving it
       reachable only from the feature branch.
+
+  - id: "F-030"
+    epic: "Quality Gates"
+    name: "Documentation reconciliation across live governance surfaces"
+    description: >-
+      Six verified drifts between live doc surfaces and the actual tree, plus
+      two catalog-wide pins so the same drift class cannot re-open silently.
+      CLAUDE.md / docs/claude/surfaces/ci-gates.md / docs/claude/surfaces/README.md
+      claimed a "12-job" CI pipeline naming six jobs that do not exist
+      (secret-scan, skills, test-fast, validate, regression, package) while
+      ci.yml defines 16 real jobs. orchestrator/CLAUDE.md referenced
+      RobotOrchestrator, state.py, factory.py:_build_orchestrator, and
+      ConstitutionalSafetyMonitor -- none exist in any .py file; the real
+      symbols are MouseDroidOrchestrator, AutonomousOrchestrator (zero
+      production callers), and MouseDroidSafetyMonitor. HARNESS_SPEC.md,
+      tests/agent.md, and docs/architecture/c4-spec-harness.md stated an 85%
+      coverage floor for src/mousedroid; the real gate is 90% (85% is correct
+      only for the separate tools/claude_hooks gate). docs/CHARTER.md claimed
+      growth/ was "not yet instantiated by factory.py"; build_growth_coordinator
+      is called at factory.py:4308, default-OFF and metrics-wired, same posture
+      as M6 -- meta/ and scaling/ genuinely have no builder, so only growth/
+      needed correcting. Root NEXT_STEPS.md called Phase 5 (the MuJoCo physics
+      simulator) a deferred stretch goal; docs/CHARTER.md's M5 already marks it
+      done, and src/mousedroid/sim/mujoco_rover_env.py confirms a real,
+      RoverEnvProtocol-conformant implementation. SKILLS.md's Subagent skills
+      table and AGENTS.md both named seven subagents from a plugin-namespaced
+      convention (security-auditor, feature-dev:code-reviewer, ...) matching
+      none of the seven real .claude/agents/ files, and 12 of 17 real
+      .claude/skills/ directories were entirely absent from SKILLS.md.
+    category: "non-functional"
+    priority: "high"
+    status: "in_progress"
+    tier: "fast"
+    verification:
+      - "every live doc stating the CI job count states 16, not 12"
+      - "no live doc states a src/mousedroid coverage floor of 85% (it is 90%)"
+      - "orchestrator/CLAUDE.md names only symbols that exist in src/"
+      - "docs/CHARTER.md's growth/ claim matches factory.py:build_growth_coordinator"
+      - "every real .claude/skills/ directory is mentioned somewhere in SKILLS.md"
+      - "every real .claude/agents/ file is named in SKILLS.md's Subagent skills table"
+    validation_command: "bash scripts/validations/F-030.sh"
+    implemented_in: null
+    depends_on: ["F-028"]
+    notes: >-
+      Depends on F-028 landing so the job-count claim is checked against the
+      final ci.yml, not an intermediate state. implemented_in pins to done on
+      closeout, per the established convention (a commit on this branch that
+      actually contains the change, re-pinned to the squash SHA post-merge if
+      this lands squashed).

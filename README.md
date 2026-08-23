@@ -50,15 +50,24 @@ Built by `factory.py` and driven by the 30 Hz sense-plan-act orchestrator.
 | Safety & Alignment | `safety/` | Constitutional RL + runtime safety monitor — joint limits, E-stop (~0.9k LOC) |
 | Curiosity & Exploration | `curiosity/` | ICM intrinsic reward + novelty decay; wired via `build_curiosity_module` when memory is enabled (~0.3k LOC) |
 
+#### Factory-instantiated, default-OFF pending a soak decision
+
+Wired by `factory.py` (the builder is called, metrics-registered) but gated behind an
+`Optional` config block that defaults `None` — same posture as on-device incremental learning
+(M6). Byte-identical to pre-feature behaviour when the config block is absent.
+
+| Pillar | Module | What it does |
+| ------ | ------ | ------------ |
+| Growth & Distillation | `growth/` | KL+CE knowledge distillation to smaller models (~0.1k LOC); `factory.py::build_growth_coordinator` |
+
 #### Implemented and unit-tested — not yet wired into the loop
 
-Complete, tested modules (`tests/unit/{meta,growth,scaling}/`) that exist as library code but are
+Complete, tested modules (`tests/unit/{meta,scaling}/`) that exist as library code but are
 not yet instantiated by the factory / orchestrator. The engineering is done; the integration is not.
 
 | Pillar | Module | What it does |
 | ------ | ------ | ------------ |
 | Meta-Learning | `meta/` | MAML inner/outer loop + in-context adaptation (~0.2k LOC) |
-| Growth & Distillation | `growth/` | KL+CE knowledge distillation to smaller models (~0.1k LOC) |
 | Scaling | `scaling/` | Sparse top-k Mixture-of-Experts + adaptive-compute halting (~0.2k LOC) |
 
 #### Parked

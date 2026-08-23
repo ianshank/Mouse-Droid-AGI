@@ -42,15 +42,24 @@
 - **Subsystem Toggles (`enabled: bool`)**: Fine-grained dev escape hatches (e.g. `esp32.enabled`,
   `lidar.enabled`). If code needs to behave differently when hardware is missing, use a schema toggle.
 
-## CI/CD Pipeline (12 Jobs)
+## CI/CD Pipeline (16 Jobs)
 
-Authoritative pipeline in `.github/workflows/ci.yml`:
+Authoritative pipeline in `.github/workflows/ci.yml` — job names and stage numbers are the
+file's own comments (`grep "# Stage" .github/workflows/ci.yml`), not a separate taxonomy:
 
-- **Stage 0 (Fast Fail)**: `actionlint`, `lint` (ruff), `secret-scan` (gitleaks), `skills`.
-- **Stage 1 (Strict Types & Fast Tests)**: `typecheck` (mypy --strict), `test-fast`, `validate`.
-- **Stage 2 (Coverage & Matrix)**: `test` (Python 3.10/3.11/3.12, cov >= 90%), `test-windows` (advisory), `local-gates` (tools cov).
-- **Stage 3 (Regression & AQA)**: `regression` (`tests/regression/`).
-- **Stage 4 (Release Packaging)**: `package`.
+- **Stage 0-2 (Fast Fail)**: `actionlint`, `lint` (ruff, matrixed 3.10-3.12),
+  `config-validate` (Pydantic vs. `config/*.yaml`), `usbc-config-gate`, `typecheck`
+  (mypy --strict, matrixed).
+- **Stage 3 (Test + Coverage)**: `test` (matrixed, full suite incl. regression/e2e/smoke,
+  cov >= 90%), `performance` *(advisory)*, `test-windows` *(advisory)*, `local-gates`
+  (`tools/claude_hooks` cov + deterministic `scripts/ci.sh`-only gates).
+- **Stage 4-4d**: `prometheus-check`, `vla-extras`, `onnx-world-model-extras`
+  *(advisory)*, `gitleaks` (blocking since 2026-08-07), `vulture-audit` *(advisory)*.
+- **Stage 5-6**: `security` (pip-audit) *(advisory)*, `docker` (needs `test` + `typecheck`).
+
+5 jobs run *(advisory)* — `continue-on-error: true`, tracked in `.github/advisory_stages.yaml`
+with a promotion window. There is no separate `skills`/`secret-scan`/`test-fast`/`validate`/
+`regression`/`package` job — those checks are steps inside the jobs above.
 
 Run locally: `make gates` (fast lint/typecheck/validate), `make test` (coverage), or `bash scripts/ci.sh` (superset).
 
@@ -71,7 +80,7 @@ Detailed operational guidelines and subsystem contracts live in partitioned surf
 
 ### Cross-Cutting Operational Surfaces
 
-- [CI Gates & Quality Ladders](file:///docs/claude/surfaces/ci-gates.md) — 12-job CI matrix, advisory promotion ladder.
+- [CI Gates & Quality Ladders](file:///docs/claude/surfaces/ci-gates.md) — 16-job CI matrix, advisory promotion ladder.
 - [On-Device Full Validation](file:///docs/claude/surfaces/full-validation.md) — Cold-then-warm validation methodology and commands.
 - [USB-C Discovery Protocol](file:///docs/claude/surfaces/usbc-smoke.md) — Dynamic endpoint resolution and hardware enumeration.
 - [MCP Evaluation Notes](file:///docs/claude/surfaces/mcp-evaluation.md) — Model Context Protocol evaluate-first decisions.

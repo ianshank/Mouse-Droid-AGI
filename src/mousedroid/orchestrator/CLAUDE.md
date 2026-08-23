@@ -7,17 +7,29 @@
 
 1. **Strict 33.3 ms Cadence**: The main loop ticks at 30 Hz. I/O-bound tasks run concurrently
    via `asyncio.gather` / `asyncio.create_task`. Blocking calls go through `asyncio.to_thread`.
-2. **Emergency Stop (E-Stop)**: An e-stop signal halts motor execution immediately and tears down
-   the active mission task. Cooperative task cancellation (`asyncio.CancelledError`) must always
-   propagate.
+2. **Emergency Stop (E-Stop)**: `self._esp32.emergency_stop()` halts motor execution
+   immediately. Cooperative task cancellation (`asyncio.CancelledError`, a `BaseException`
+   subclass — never caught by a bare `except Exception`) must always propagate.
 3. **Telemetry Server & Shared Registry**: Handed a single `MetricsRegistry` from `factory.py`
    via keyword-only argument `metrics: MetricsRegistry | None = None`.
-4. **Safety Filter Projection**: Motor commands pass through the runtime safety filter
-   (`ConstitutionalSafetyMonitor`) before serial dispatch to the ESP32 driver.
+4. **Safety Filter Projection**: Every action passes through `self._safety_monitor.evaluate(...)`
+   (`SafetyMonitorProtocol`) before `_maybe_project_action` and serial dispatch to the ESP32
+   driver.
 
 ## Key Files & Entry Points
 
-- `orchestrator.py` — Main `RobotOrchestrator` execution loop.
-- `state.py` — Sense-plan-act state container.
-- `factory.py:_build_orchestrator` — Factory builder wiring all subsystems.
-- `tests/unit/orchestrator/` — Subsystem unit tests.
+- `orchestrator.py::MouseDroidOrchestrator` — main sense-plan-act execution loop (the
+  production entrypoint; `factory.py::build_orchestrator` wires it).
+- `autonomous.py::AutonomousOrchestrator` — an alternate loop with **zero production
+  callers** (see `docs/architecture/adr/` for the disposition ADR once F-031 lands); do not
+  confuse it with the production path above.
+- `mission_dispatcher.py`, `mission_lifecycle.py`, `llm_replanner.py`, `face_controller.py` —
+  supporting collaborators, not the loop itself.
+- `factory.py::build_orchestrator` (`:4016`) — factory builder wiring `MouseDroidOrchestrator`.
+- `../safety/monitor.py::MouseDroidSafetyMonitor` — the concrete safety monitor
+  (`SafetyMonitorProtocol` is the interface application code is typed against).
+- `tests/unit/orchestrator/` — subsystem unit tests.
+
+There is no `state.py` in this directory and no `_build_orchestrator` (private) helper — the
+public `build_orchestrator` above is the sole factory entry point, per invariant 1
+(factory-first DI).

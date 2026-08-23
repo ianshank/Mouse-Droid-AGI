@@ -63,7 +63,7 @@ harness converts "I think this works" into "the command exits 0."
 - `python scripts/validate.py --tier fast,slow` exits 0 (hardware tier proven on the rover).
 - This spec + ADRs (`docs/architecture/`) + runbooks (`docs/runbooks/`) are current and agent-legible.
 - Observability covers all critical paths (structlog events + Prometheus families).
-- The existing CLAUDE.md architecture invariants (Protocol DI, factory wiring, no hardcoded values, structlog, asyncio, `mypy --strict`, 85% coverage) hold.
+- The existing CLAUDE.md architecture invariants (Protocol DI, factory wiring, no hardcoded values, structlog, asyncio, `mypy --strict`, 90% coverage on `src/mousedroid`) hold.
 
 **Non-goals / Out of Scope:**
 
@@ -166,7 +166,7 @@ verifies `implemented_in` resolves to a real git commit, and runs the
 enforcement logic lives in the importable, unit-tested package module
 `src/mousedroid/harness/spec.py` (mirroring how `cli/preflight.py` wraps
 `validation/preflight.py`). This keeps the harness guarantees under the project's
-85% coverage gate (`tests/unit/harness/test_spec.py`) rather than untested in a script.
+90% coverage gate on `src/mousedroid` (`tests/unit/harness/test_spec.py`) rather than untested in a script.
 
 ```bash
 python scripts/validate.py --tier fast               # inner loop / every push
@@ -300,7 +300,7 @@ Non-negotiable rules, mechanically checked where possible (see CLAUDE.md for the
 - Protocol-based DI; concrete types only in `src/mousedroid/factory.py` — enforced by review + factory tests.
 - No raw `print()` in `src/mousedroid` production paths — structlog; ruff scope.
 - No hardcoded values — `scripts/check_no_hardcoded_values.py` (AST gate) + config validation (`F-002`).
-- `mypy --strict` passes; 85% line coverage gate over `src/mousedroid` — `scripts/ci.sh`
+- `mypy --strict` passes; 90% line coverage gate over `src/mousedroid` (85% for `tools/claude_hooks/`, a separate gate) — `scripts/ci.sh`
   and the `test` job in `ci.yml`. `tools/claude_hooks/` carries its own `mypy --strict` +
   coverage stages in `scripts/ci.sh` and the `local-gates` CI job (the repo-wide gate
   cannot see `tools/`).
