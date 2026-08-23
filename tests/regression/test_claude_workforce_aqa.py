@@ -288,8 +288,17 @@ def test_every_skill_directory_is_mentioned_in_the_index() -> None:
     require a full ### entry — appearing anywhere (e.g. the Workforce skills
     table) is sufficient; only total absence is the failure mode this pins.
     """
+    directories = _skill_directories()
+    # A positive control: if .claude/skills/ ever went missing or empty, the
+    # assertion below would pass vacuously over zero skills -- which is not
+    # the same claim as "every skill is indexed", and is exactly the failure
+    # mode a pin exists to rule out, not fall into.
+    assert directories, (
+        f"{_SKILLS_DIR} is missing or has no skill directories -- the "
+        "membership check below cannot mean anything over an empty set"
+    )
     text = _SKILLS_MD.read_text(encoding="utf-8")
-    missing = sorted(name for name in _skill_directories() if name not in text)
+    missing = sorted(name for name in directories if name not in text)
     assert not missing, (
         f"skill director{'y is' if len(missing) == 1 else 'ies are'} not mentioned "
         f"anywhere in SKILLS.md: {missing} — a real, invocable skill the index "
@@ -305,6 +314,14 @@ def test_every_agent_is_listed_in_the_subagent_skills_table() -> None:
     ``feature-dev:code-reviewer``, ...) matching none of the seven real
     ``.claude/agents/`` files.
     """
+    agents = _agent_files()
+    # Same positive control as the skills index above: an empty agent roster
+    # would make the membership check below pass over nothing.
+    assert agents, (
+        f"{_REPO_ROOT / _config().agents.directory} is missing or has no agent "
+        "files -- the membership check below cannot mean anything over an "
+        "empty set"
+    )
     text = _SKILLS_MD.read_text(encoding="utf-8")
     table_start = text.find("## Subagent skills")
     assert table_start != -1, "SKILLS.md lost its Subagent skills section"
@@ -313,7 +330,7 @@ def test_every_agent_is_listed_in_the_subagent_skills_table() -> None:
     # section) would satisfy this check even if the table itself omits it.
     table_end = text.find("\n## ", table_start + len("## Subagent skills"))
     table_text = text[table_start : table_end if table_end != -1 else None]
-    missing = sorted(agent.stem for agent in _agent_files() if f"`{agent.stem}`" not in table_text)
+    missing = sorted(agent.stem for agent in agents if f"`{agent.stem}`" not in table_text)
     assert not missing, f"agents missing from the Subagent skills table: {missing}"
 
 

@@ -392,3 +392,96 @@ class TestOriginHeadSymrefHandling:
             f"the genuinely stale branch should have been deleted after archiving:\n{heads}"
         )
         assert "refs/heads/main" in heads, "the default branch must never be deleted"
+
+
+@pytest.fixture
+def repo_with_orphaned_pin(tmp_path: Path) -> tuple[Path, str]:
+    """A clone where a pinned SHA exists locally but has ZERO remote carriers.
+
+    Built by pushing the pin commit on its own branch, then deleting that
+    branch on the remote and running ``git fetch --prune`` locally -- the
+    commit OBJECT survives (unreferenced objects are not immediately
+    garbage-collected), but ``git branch -r --contains`` and
+    ``git tag --contains`` both return nothing for it. This is the realistic
+    trigger for the class of bug fixed alongside it: an already-orphaned pin
+    is exactly the scenario ``pin-reachability-audit`` exists to catch, not a
+    contrived edge case.
+
+    Returns ``(clone, pinned_sha)``.
+    """
+    origin = tmp_path / "origin.git"
+    subprocess.run(
+        ["git", "init", "--bare", "-q", "--initial-branch=main", str(origin)],
+        check=True,
+        capture_output=True,
+        timeout=60,
+    )
+
+    work = tmp_path / "work"
+    work.mkdir()
+    _git(work, "init", "-q", "--initial-branch=main")
+    (work / "README.md").write_text("seed\n", encoding="utf-8")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-q", "-m", "seed")
+    _git(work, "remote", "add", "origin", str(origin))
+    _git(work, "push", "-q", "-u", "origin", "main")
+
+    _git(work, "checkout", "-q", "-b", "soon-to-be-deleted")
+    (work / "shipped.txt").write_text("the feature\n", encoding="utf-8")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-q", "-m", "the commit a feature pins")
+    pinned_sha = _git(work, "rev-parse", "HEAD")
+    _git(work, "push", "-q", "-u", "origin", "soon-to-be-deleted")
+
+    _git(work, "checkout", "-q", "main")
+    (work / "features.yaml").write_text(_FEATURES_TEMPLATE.format(sha=pinned_sha), encoding="utf-8")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-q", "-m", "pin the feature")
+    _git(work, "push", "-q", "origin", "main")
+
+    clone = tmp_path / "clone"
+    subprocess.run(
+        ["git", "clone", "-q", str(origin), str(clone)],
+        check=True,
+        capture_output=True,
+        timeout=60,
+    )
+    # The clone has fetched the pin commit (it exists locally) while it was
+    # still on a real branch. Deleting that branch and pruning removes every
+    # remote-tracking ref to it -- but not the object itself.
+    _git(clone, "push", "-q", "origin", "--delete", "soon-to-be-deleted")
+    _git(clone, "fetch", "-q", "--prune", "origin")
+
+    shutil.copytree(_SCRIPT.parent, clone / "scripts", dirs_exist_ok=True)
+    return clone, pinned_sha
+
+
+class TestOrphanedPinDoesNotAbortTheScript:
+    """A pin with zero surviving carriers must not crash the whole run.
+
+    Under ``set -euo pipefail``, ``grep -Fvx -e "HEAD" -e "$REMOTE"`` exits 1
+    when every input line is filtered out (including on completely empty
+    input) -- and that pipe's exit status feeds a plain variable assignment
+    (``carriers=$(... | grep ...)``), which DOES abort the script under
+    ``set -e``, unlike a superficially similar ``for w in $(... | grep ...)``
+    (word-splitting a command substitution is exempt from ``errexit`` --
+    verified empirically; a variable assignment is not). An already-orphaned
+    pin -- reachable from no remote branch and no remote tag -- produces
+    exactly this all-filtered-out condition, and is a normal outcome this
+    loop must process past, not a reason to abort before checking the
+    remaining pins or reporting anything useful.
+    """
+
+    def test_dry_run_completes_and_reports_the_orphaned_pin(
+        self, repo_with_orphaned_pin: tuple[Path, str]
+    ) -> None:
+        clone, pinned_sha = repo_with_orphaned_pin
+        result = _run_script(clone)
+        combined = result.stdout + result.stderr
+        assert result.returncode == 0, (
+            f"dry run must not abort just because a pin has zero surviving "
+            f"carriers (rc={result.returncode}):\n{combined}"
+        )
+        assert f"pin {pinned_sha} is NOT reachable from any REMOTE tag" in result.stdout, (
+            f"the script should still report on the orphaned pin, not exit silently:\n{combined}"
+        )

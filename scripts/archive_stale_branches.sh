@@ -125,8 +125,18 @@ for pinned_sha in $pinned_shas; do
         fi
     done
     if [ -z "$protecting_tag" ]; then
+        # `|| true` on the grep: under `set -euo pipefail`, a pipe whose every
+        # line gets filtered out (grep exits 1 -- "no matches", not an error)
+        # aborts the WHOLE SCRIPT here, because this pipe's exit status feeds
+        # a variable assignment -- verified empirically: `x=$(... | grep -v
+        # everything)` under `set -e` exits nonzero and nothing after it runs,
+        # even though the equivalent `for w in $(... | grep -v everything)`
+        # does not (word-splitting a command substitution is exempt from
+        # `errexit`; an assignment is not). A pin with zero surviving carrier
+        # branches is a normal outcome this loop must keep processing past,
+        # not a reason to abort before the remaining pins are even checked.
         carriers=$(git branch -r --contains "$pinned_sha" --format='%(refname:short)' |
-            sed "s|^$REMOTE/||" | grep -Fvx -e "HEAD" -e "$REMOTE" | tr '\n' ' ')
+            sed "s|^$REMOTE/||" | { grep -Fvx -e "HEAD" -e "$REMOTE" || true; } | tr '\n' ' ')
         pin_carriers="$pin_carriers $carriers"
         echo "pin $pinned_sha is NOT reachable from any REMOTE tag -- protecting its carriers"
     else
@@ -149,9 +159,16 @@ done
 # remote name containing a metacharacter (e.g. "upstream.fork") would match
 # and wrongly exclude an unrelated branch differing only at that position.
 _remote_branches() {
+    # `|| true` defensively, matching the carriers= pipe above: the sole
+    # current caller is `for b in $(_remote_branches)`, which word-splits a
+    # command substitution and so is NOT itself vulnerable to grep's exit-1
+    # aborting the script under `set -e` (verified empirically) -- but a
+    # future `x=$(_remote_branches)` caller would be, silently, the same way
+    # the carriers= site was. Guarding the function itself is the fix that
+    # survives a new call site, not just the call sites known today.
     git branch -r --format='%(refname:short)' |
         sed "s|^$REMOTE/||" |
-        grep -Fvx -e "HEAD" -e "$REMOTE"
+        { grep -Fvx -e "HEAD" -e "$REMOTE" || true; }
 }
 
 archive=""

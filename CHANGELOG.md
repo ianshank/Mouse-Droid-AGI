@@ -8,6 +8,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Copilot + CodeRabbit follow-up round on PR #202
+
+- **A third, independent bug in `archive_stale_branches.sh`'s pin-carrier loop** (Copilot):
+  under `set -euo pipefail`, `carriers=$(... | grep -Fvx -e "HEAD" -e "$REMOTE" | tr ...)`
+  aborts the ENTIRE script (exit 1, no further output) the moment a pin's carrier branches
+  are all filtered out -- including the realistic case of an already-orphaned pin (reachable
+  from no remote branch or tag), which is a normal outcome this loop must process past, not
+  a crash condition. Root-caused empirically: a command substitution feeding a plain variable
+  assignment IS subject to `errexit` on the pipe's exit status, while a superficially similar
+  `for w in $(...)` is not (word-splitting a command substitution is exempt) -- verified with
+  two minimal reproductions before touching the real script. Fixed with `|| true` at both
+  `grep -Fvx` call sites (the assignment one where it was load-bearing, and defensively in
+  `_remote_branches()` itself, whose only current caller is exempt but a future assignment-
+  context caller would not be). New `TestOrphanedPinDoesNotAbortTheScript` builds a fixture
+  where a pin's SHA is locally present but has zero remote carriers (pushed, then the branch
+  deleted and pruned -- the object survives, the refs don't) and proves the dry run now
+  completes and reports on the pin instead of dying silently. Proven red against the
+  pre-fix script first (exit 1, no pin report at all).
+- **`_skill_directories()`/`_agent_files()` returning `[]` let their membership pins pass
+  vacuously** (Copilot) if `.claude/skills/` or `.claude/agents/` ever went missing or empty
+  — `test_every_skill_directory_is_mentioned_in_the_index` and
+  `test_every_agent_is_listed_in_the_subagent_skills_table` would report "nothing missing"
+  over zero real entries. Added a positive-control assertion to both, matching the
+  `_INJECTION_FILTER_UNIT_TESTS.is_file()` guard already used elsewhere in this repo's own
+  test suite for exactly this failure shape.
+- **`features.yaml`'s F-030 entry still listed the `growth/`-wiring claim under
+  `verification:`** (CodeRabbit follow-up, caught after re-reading the actual files rather
+  than repeating its prior comment) even though `scripts/validations/F-030.sh` deliberately
+  does not check it. Removed the bullet; the `notes:` field now explains why, pointing at the
+  openspec bundle's "Explicitly deferred" account rather than leaving the catalog claiming a
+  check that does not run.
+
 ### Fixed — CodeRabbit review round on PR #202 (10 findings, all verified, 9 fixed, 1 honestly deferred)
 
 - **`F-030 does not execute all declared governance checks` (Major).** Added

@@ -640,7 +640,6 @@ features:
       - "every live doc stating the CI job count states 16, not 12"
       - "no live doc states a src/mousedroid coverage floor of 85% (it is 90%)"
       - "orchestrator/CLAUDE.md names only symbols that exist in src/"
-      - "docs/CHARTER.md's growth/ claim matches factory.py:build_growth_coordinator"
       - "every real .claude/skills/ directory is mentioned somewhere in SKILLS.md"
       - "every real .claude/agents/ file is named in SKILLS.md's Subagent skills table"
     validation_command: "bash scripts/validations/F-030.sh"
@@ -651,4 +650,14 @@ features:
       final ci.yml, not an intermediate state. implemented_in pins to done on
       closeout, per the established convention (a commit on this branch that
       actually contains the change, re-pinned to the squash SHA post-merge if
-      this lands squashed).
+      this lands squashed). The sixth original drift -- docs/CHARTER.md's
+      growth/ claim matching factory.py:build_growth_coordinator -- was
+      manually verified and corrected but is deliberately NOT listed above:
+      scripts/validations/F-030.sh does not execute an automated check for
+      it. A sentence-scoped sweep across the five files that claim recurred
+      in was attempted and produced false positives on legitimate text (a
+      README.md code-fence listing, a genuine pre-existing NEXT_STEPS.md
+      sentence); see openspec/changes/mouse-droid-doc-reconciliation/tasks.md
+      "Explicitly deferred" for the full account. Caught by CodeRabbit on
+      PR #202, which correctly flagged that listing it under `verification`
+      here would claim the validator checks something it does not.
