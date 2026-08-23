@@ -21,6 +21,10 @@ Pinned contracts:
 * scripts/ci.sh runs the smoke stage OUTSIDE the ``MOUSEDROID_CI_SLIM`` skip;
 * the functional / user-journey / security tiers run in the blocking ``test``
   job and in ci.sh, and never in the advisory ``security`` job (F-028);
+* those three tiers use the SAME pytest marker expression in all three places
+  that run them (ci.yml, ci.sh, scripts/validations/F-028.sh), so local, CI,
+  and the feature's own validation command cannot silently run different
+  test sets;
 * EVERY discovered tests/<tier>/ reaches a CI path or carries a documented
   exemption -- generic, so the next orphaned tier cannot slip through;
 * pytest ``addopts`` keeps ``--import-mode=importlib`` (duplicate test
@@ -29,6 +33,7 @@ Pinned contracts:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
@@ -39,6 +44,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CI_YML = _REPO_ROOT / ".github" / "workflows" / "ci.yml"
 _CI_SH = _REPO_ROOT / "scripts" / "ci.sh"
 _ADVISORY_STAGES = _REPO_ROOT / ".github" / "advisory_stages.yaml"
+_F028_VALIDATION = _REPO_ROOT / "scripts" / "validations" / "F-028.sh"
 
 
 def _load_ci_jobs() -> dict:
@@ -50,8 +56,8 @@ def _load_ci_jobs() -> dict:
     return jobs
 
 
-def _ci_sh_commands() -> str:
-    """scripts/ci.sh with comment lines stripped.
+def _shell_commands(path: Path) -> str:
+    """A shell script's text with comment lines stripped.
 
     Asserting a tier name against the raw file text is satisfiable by a
     *comment* -- including the explanatory comments this repo writes above each
@@ -61,9 +67,55 @@ def _ci_sh_commands() -> str:
     """
     return "\n".join(
         line
-        for line in _CI_SH.read_text(encoding="utf-8").splitlines()
+        for line in path.read_text(encoding="utf-8").splitlines()
         if not line.lstrip().startswith("#")
     )
+
+
+def _ci_sh_commands() -> str:
+    """scripts/ci.sh, comment-stripped (see :func:`_shell_commands`)."""
+    return _shell_commands(_CI_SH)
+
+
+def _logical_lines(text: str) -> list[str]:
+    """Join backslash-continued shell lines into one logical command each.
+
+    The orphan-tier invocation spans four physical lines in every one of the
+    three places that run it, so a per-line regex would never see the command
+    and its ``-m`` expression together.
+    """
+    commands: list[str] = []
+    buffer = ""
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if line.endswith("\\"):
+            buffer += line[:-1].strip() + " "
+            continue
+        commands.append((buffer + line.strip()).strip())
+        buffer = ""
+    if buffer:
+        commands.append(buffer.strip())
+    return commands
+
+
+_ORPHAN_TIER_INVOCATION = "pytest tests/functional"
+# ``-m`` followed by a *quoted* argument. ``python -m pytest`` is unquoted, so
+# it cannot be mistaken for the marker expression.
+_MARKER_EXPR = re.compile(r'-m\s+"([^"]*)"')
+
+
+def _orphan_tier_marker(text: str, *, site: str) -> str:
+    """Extract the pytest marker expression guarding the orphan-tier run."""
+    for command in _logical_lines(text):
+        if _ORPHAN_TIER_INVOCATION not in command:
+            continue
+        match = _MARKER_EXPR.search(command)
+        assert match is not None, (
+            f"{site} runs the orphan tiers with no -m marker expression, so "
+            f"hardware-marked tests would collect there: {command}"
+        )
+        return match.group(1)
+    raise AssertionError(f"{site} no longer runs the orphan tiers at all")
 
 
 def _job_run_text(job: dict) -> str:
@@ -343,6 +395,55 @@ class TestOrphanTierWiring:
             "the three tiers run in ~2.5s total — keep them OUTSIDE the "
             "SLIM-gated block, same rationale as the smoke stage"
         )
+
+
+class TestOrphanTierMarkerParity:
+    """All three sites that run the orphan tiers use the SAME marker expression.
+
+    Three places run these tiers -- CI (``ci.yml``), the local superset
+    (``ci.sh``), and F-028's own ``validation_command``
+    (``scripts/validations/F-028.sh``). They drifted the moment the first was
+    fixed in isolation: ci.yml said ``not hardware and not slow`` while the
+    other two said ``not hardware``, so a green local run and a green
+    validation command asserted a *different test set* than CI gated on.
+
+    Latent while no ``slow`` marks live in those tiers -- and a trap the moment
+    one does. Aligning the three without pinning them would repeat the mistake
+    this class exists to correct: fixing the instances, not the class.
+    """
+
+    def _markers(self) -> dict[str, str]:
+        """The orphan-tier marker expression at each of the three sites."""
+        return {
+            ".github/workflows/ci.yml": _orphan_tier_marker(
+                _job_run_text(_load_ci_jobs()["test"]), site=".github/workflows/ci.yml"
+            ),
+            "scripts/ci.sh": _orphan_tier_marker(_ci_sh_commands(), site="scripts/ci.sh"),
+            "scripts/validations/F-028.sh": _orphan_tier_marker(
+                _shell_commands(_F028_VALIDATION), site="scripts/validations/F-028.sh"
+            ),
+        }
+
+    def test_marker_expression_is_identical_across_all_three_sites(self) -> None:
+        markers = self._markers()
+        assert len(set(markers.values())) == 1, (
+            "the orphan tiers run under different pytest marker expressions "
+            f"depending on who invokes them: {markers}. Local runs and F-028's "
+            "validation command must gate on exactly what CI gates on, or "
+            "'it passes locally' stops meaning anything."
+        )
+
+    def test_marker_still_excludes_hardware_marked_tests(self) -> None:
+        """Parity alone is satisfiable by deleting the filter everywhere.
+
+        Pin the safety property too: ``hardware``-marked tests open real
+        GPIO / serial / CSI devices and must never collect on a shared runner.
+        """
+        for site, marker in self._markers().items():
+            assert "not hardware" in marker, (
+                f"{site} no longer excludes hardware-marked tests from the "
+                f"orphan tiers (marker={marker!r})"
+            )
 
 
 def test_pytest_addopts_keeps_importlib_mode() -> None:

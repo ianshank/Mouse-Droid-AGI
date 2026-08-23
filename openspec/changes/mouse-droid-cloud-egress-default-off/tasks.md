@@ -29,6 +29,20 @@ Deviations from task wording are recorded inline — declared, not silent.
 - [x] 3.2 `scripts/validations/F-029.sh`.
 - [x] 3.3 Register in `openspec/project.md`.
 
+**Phase 4 — Prove the pins mechanically**
+
+- [x] 4.1 Run `scripts/prove_pin_fails.sh` over the pair rather than asserting the
+      manual revert in 2.3 was done:
+      `bash scripts/prove_pin_fails.sh --from <base-ref>`
+      `--paths "src/mousedroid/config/schema/gcp_cloud.py"`
+      `--tests "tests/regression/test_gcp_egress_defaults_aqa.py`
+      `tests/regression/test_gcp_egress_defaults_backwards_compat.py"`.
+- [x] 4.2 Assert the *builder* gate through its structured log, not by calling the
+      builders and checking nothing. `build_cloud_*` legitimately returns `None`
+      when the optional `[gcp]` extra is absent, so a return-value assertion is
+      untestable without it; the absence of `cloud_*_disabled` events pins exactly
+      the claim, and a converse test pins that a blocking gate stays diagnosable.
+
 ## Explicitly deferred (separate changes, do not fold in)
 
 - Wiring `CloudLoggingSink` / `CloudMetricsExporter` / `CloudFirestoreSync` — that
@@ -36,5 +50,9 @@ Deviations from task wording are recorded inline — declared, not silent.
 - Authoring a CHARTER §3 carve-out for cloud egress — the operator elected to
   treat it as covered by the existing "sensing / comms / telemetry" scope line.
   The deviation belongs in F-032's `notes:` field.
-- Auditing the remaining `gcp_cloud.py` sub-configs (pubsub, storage, training,
-  simulation) for the same default-ON asymmetry.
+- Auditing `gcp_cloud.py`'s `training` and `simulation` sub-configs for the same
+  default-ON asymmetry. The `pubsub` and `storage` audit is **no longer deferred** —
+  peer review found those two are the channels the factory actually wires, and that
+  neither carried an `enabled` field at all, so this change gave them one and gated
+  their builders. Deferring the audit of the wired channels while gating the unwired
+  ones would have been the wrong half.

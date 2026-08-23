@@ -64,12 +64,34 @@ if ! git diff --quiet -- ${PATHS} || ! git diff --cached --quiet -- ${PATHS}; th
 fi
 
 SNAPSHOT="$(mktemp -d)"
+
+# Map a --paths entry to its slot under $SNAPSHOT, mirroring the source tree.
+#
+# Keying on $(basename) instead would COLLIDE for two entries sharing a
+# filename ("a/config.py b/config.py"): the second snapshot overwrites the
+# first, and restore then writes b's content over a. That is silent data loss
+# in a tool whose entire purpose is safe restore. Mirroring the relative path
+# is collision-free by construction.
+#
+# Leading "./" and "/" are stripped so an absolute path lands inside the
+# snapshot rather than at the filesystem root, and ".." segments are
+# neutralised so no argument can write outside $SNAPSHOT.
+snap_path() {
+    local rel="$1"
+    rel="${rel#./}"
+    while [[ "${rel}" == /* ]]; do rel="${rel#/}"; done
+    rel="${rel//..\//__up__/}"
+    printf '%s/%s' "${SNAPSHOT}" "${rel}"
+}
+
 restore() {
     local rc=$?
+    local snap
     # shellcheck disable=SC2086
     for f in ${PATHS}; do
-        if [[ -f "${SNAPSHOT}/$(basename "$f")" ]]; then
-            cp "${SNAPSHOT}/$(basename "$f")" "$f" || { echo "PROVE-PIN: RESTORE FAILED for $f" >&2; exit 3; }
+        snap="$(snap_path "$f")"
+        if [[ -f "${snap}" ]]; then
+            cp "${snap}" "$f" || { echo "PROVE-PIN: RESTORE FAILED for $f" >&2; exit 3; }
         fi
     done
     # `git checkout <ref> -- <paths>` updates the INDEX as well as the working
@@ -84,7 +106,11 @@ restore() {
 trap restore EXIT INT TERM
 
 # shellcheck disable=SC2086
-for f in ${PATHS}; do cp "$f" "${SNAPSHOT}/$(basename "$f")"; done
+for f in ${PATHS}; do
+    dest="$(snap_path "$f")"
+    mkdir -p "$(dirname "${dest}")"
+    cp "$f" "${dest}"
+done
 
 echo "=== Reverting ${PATHS} to ${FROM_REF} ==="
 # shellcheck disable=SC2086
@@ -111,7 +137,7 @@ fi
 
 echo "=== Pin failed as required (rc=${reverted_rc}); restoring ==="
 # shellcheck disable=SC2086
-for f in ${PATHS}; do cp "${SNAPSHOT}/$(basename "$f")" "$f"; done
+for f in ${PATHS}; do cp "$(snap_path "$f")" "$f"; done
 
 echo "=== Re-running against restored source (expecting PASS) ==="
 # shellcheck disable=SC2086

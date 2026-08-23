@@ -22,12 +22,30 @@ Deviations from task wording are recorded inline — declared, not silent.
 - [x] 2.1 Add `TestOrphanTierWiring` to `tests/regression/test_ci_gate_wiring_aqa.py`.
 - [x] 2.2 Pin negatively that `tests/security` never appears in the advisory `security` job.
 - [x] 2.3 Prove the pin fails: remove the wiring from both files, confirm red, restore.
+- [x] 2.4 Add `TestOrphanTierMarkerParity`: the pytest marker expression is identical
+      across all three sites that run these tiers (`ci.yml`, `ci.sh`,
+      `scripts/validations/F-028.sh`), and still excludes `hardware` at each — parity
+      alone would be satisfiable by deleting the filter everywhere.
 
 **Phase 3 — Catalog**
 
 - [x] 3.1 Add the F-028 entry to `features.yaml` and validate against `features.schema.json`.
 - [x] 3.2 Write `scripts/validations/F-028.sh` and confirm it exits 0.
 - [x] 3.3 Register the change in `openspec/project.md`.
+
+**Phase 4 — Prove the pins mechanically**
+
+- [x] 4.1 Run `scripts/prove_pin_fails.sh` over this bundle's pins rather than
+      asserting the manual revert was done:
+      `bash scripts/prove_pin_fails.sh --from <base-ref>`
+      `--paths "scripts/ci.sh .github/workflows/ci.yml"`
+      `--tests "tests/regression/test_ci_gate_wiring_aqa.py"`.
+- [x] 4.2 Note any pin the tool cannot cover and why. Two here:
+      `scripts/validations/F-028.sh` does not exist at the base ref (nothing to
+      revert to), and a catalog-wide invariant gate — one asserting a rule over
+      every entry rather than protecting one change — is green against a clean
+      baseline by construction, so the tool reports it as toothless. Prove those
+      by injecting a violation instead.
 
 ## Explicitly deferred (separate changes, do not fold in)
 

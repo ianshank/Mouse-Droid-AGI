@@ -4,9 +4,14 @@
 # Two halves, because "the tests pass" and "the tests run in CI" are different
 # claims and F-028 is about the second: (1) the three tiers actually pass, and
 # (2) the wiring that makes them run is pinned. Half (2) is delegated to the
-# TestOrphanTierWiring AQA class rather than re-implemented here — un-pinned
-# wiring is exactly how the smoke tier silently ran in zero CI paths for months
+# AQA classes rather than re-implemented here -- un-pinned wiring is exactly
+# how the smoke tier silently ran in zero CI paths for months
 # (see tests/regression/test_ci_gate_wiring_aqa.py).
+#
+# TestOrphanTierMarkerParity is part of half (2), not an extra: this very
+# script is one of the three sites whose marker expression must agree, so a
+# validation command that skipped it could pass while asserting a different
+# test set than CI gates on.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."   # repo root, regardless of caller CWD
@@ -21,13 +26,14 @@ fi
 # Explicit `if ! ...` rather than `assert` — the Jetson Docker entrypoint sets
 # PYTHONOPTIMIZE=1, which strips Python asserts (CLAUDE.md).
 if ! "$PY_BIN" -m pytest tests/functional tests/user_journey tests/security \
-      -m "not hardware" --import-mode=importlib --no-cov -q; then
+      -m "not hardware and not slow" --import-mode=importlib --no-cov -q; then
   echo "F-028 FAIL: the functional/user-journey/security tiers do not pass" >&2
   exit 1
 fi
 
 if ! "$PY_BIN" -m pytest \
       tests/regression/test_ci_gate_wiring_aqa.py::TestOrphanTierWiring \
+      tests/regression/test_ci_gate_wiring_aqa.py::TestOrphanTierMarkerParity \
       --import-mode=importlib --no-cov -q; then
   echo "F-028 FAIL: the CI wiring for those tiers is not pinned" >&2
   exit 1

@@ -55,26 +55,79 @@ def test_twin_overlay_sets_the_flags_explicitly_rather_than_by_default() -> None
     assert data["gcp"]["storage"]["enabled"] is True
 
 
+# The gate's own structured events. A blocked builder emits one of these; a
+# builder that returns None for want of the optional [gcp] extra does not.
+# That distinction is the whole reason the events exist, and it is what lets
+# this file assert "not blocked by the gate" without installing google-cloud-*.
+_DISABLED_EVENTS = frozenset(
+    {"cloud_telemetry_sink_disabled", "cloud_experience_exporter_disabled"}
+)
+
+
 def test_twin_overlay_still_builds_its_cloud_components() -> None:
-    """The one overlay that wants cloud egress still gets it after the gating.
+    """The one overlay that wants cloud egress is not blocked by the new gate.
 
     Without this, "default to False" could pass every other assertion while
     quietly breaking the only consumer that actually wants these channels.
+
+    Asserted through the structured log rather than the return value on
+    purpose. Both builders legitimately return ``None`` when the optional
+    ``[gcp]`` extra is absent, so a ``is not None`` assertion would be red on
+    every install that lacks it -- and simply *calling* the builders, as an
+    earlier version of this test did, asserts nothing at all: it can only fail
+    if a builder raises. The ``*_disabled`` events distinguish the two paths
+    exactly, so their ABSENCE is the claim: the enabled gate did not block.
     """
+    import structlog
+
     from mousedroid.config.schema.root import Settings
     from mousedroid.factory import build_cloud_experience_exporter, build_cloud_telemetry_sink
 
     data = yaml.safe_load(_TWIN_OVERLAY.read_text(encoding="utf-8"))
     settings = Settings(mock_hardware=True, **data)
-    # Returns None only if the google-cloud packages are absent (optional
-    # [gcp] extra); the gate itself must not be the reason.
     assert settings.gcp is not None
     assert settings.gcp.pubsub.enabled is True
     assert settings.gcp.storage.enabled is True
-    for builder in (build_cloud_telemetry_sink, build_cloud_experience_exporter):
-        # Either a real component, or None from the ImportError path -- never
-        # None because the enabled gate blocked it.
-        builder(settings)
+
+    with structlog.testing.capture_logs() as logs:
+        for builder in (build_cloud_telemetry_sink, build_cloud_experience_exporter):
+            builder(settings)
+
+    blocked = sorted({entry["event"] for entry in logs if entry["event"] in _DISABLED_EVENTS})
+    assert blocked == [], (
+        "the twin overlay opts in explicitly, so the F-029 enabled gate must "
+        f"not block its builders; got {blocked}"
+    )
+
+
+def test_disabled_gate_emits_its_diagnostic_event() -> None:
+    """The converse: when the gate DOES block, it says so.
+
+    This is what makes the assertion above load-bearing. Without it, deleting
+    both ``_log.info`` calls from factory.py would leave the sibling test green
+    while the gate became silent -- and a silent ``None`` is indistinguishable
+    from "gcp was never configured", which is the first thing an operator
+    checks when telemetry stops arriving.
+    """
+    import structlog
+
+    from mousedroid.config.schema.root import Settings
+    from mousedroid.factory import build_cloud_experience_exporter, build_cloud_telemetry_sink
+
+    data = yaml.safe_load(_TWIN_OVERLAY.read_text(encoding="utf-8"))
+    data["gcp"]["pubsub"]["enabled"] = False
+    data["gcp"]["storage"]["enabled"] = False
+    settings = Settings(mock_hardware=True, **data)
+
+    with structlog.testing.capture_logs() as logs:
+        assert build_cloud_telemetry_sink(settings) is None
+        assert build_cloud_experience_exporter(settings) is None
+
+    emitted = {entry["event"] for entry in logs}
+    assert emitted >= _DISABLED_EVENTS, (
+        "a gate that blocks silently is undiagnosable; expected "
+        f"{sorted(_DISABLED_EVENTS)}, got {sorted(emitted)}"
+    )
 
 
 def test_env_lever_can_re_enable_egress(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -55,6 +55,28 @@ causes, in the order they show up:
 - **Asserting the vacuous half of a scenario.** "Nothing egresses by default"
   is true before and after when the parent block defaults to `None`; the claim
   worth pinning is what happens when someone adds a partial block.
+- **Calling something and asserting nothing.** A loop that invokes each builder
+  with no assertion can only fail if one raises. This hides well behind a
+  comment stating the claim the code never checks. When the return value is
+  legitimately ambiguous — a builder returns `None` both when a gate blocks it
+  *and* when an optional extra is missing — assert on the **structured log
+  event** that distinguishes the two, not on the return.
+
+## When it does not apply
+
+Two shapes report `PROVE-PIN FAIL` while being perfectly good tests. Recognise
+them rather than weakening the test to satisfy the tool:
+
+- **Catalog-wide invariant gates.** A test asserting a rule over *every* entry
+  ("every done feature pins a 40-hex SHA") is green against a clean baseline by
+  construction — that is what a clean baseline means. Prove these by injecting a
+  violation, not by reverting.
+- **Paths that do not exist at the base ref.** A new `scripts/validations/F-0NN.sh`
+  cannot be reverted to something that was never there; `git checkout` fails and
+  the tool exits `2`. Pass only the paths that existed before the change.
+
+The tool also cannot prove its own tests: reverting `scripts/prove_pin_fails.sh`
+mid-run would replace the script executing the proof.
 
 ## Cautions
 

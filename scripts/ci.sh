@@ -122,7 +122,7 @@ echo "=== Functional + User-Journey + Security Tiers ==="
 # Deliberately OUTSIDE the MOUSEDROID_CI_SLIM skip below: the whole set runs
 # in ~2.5s, so there is no memory-pressure case for dropping it.
 "$PYTHON_BIN" -m pytest tests/functional tests/user_journey tests/security \
-    -m "not hardware" \
+    -m "not hardware and not slow" \
     --import-mode=importlib --no-cov -v
 
 # Slim mode: on memory-constrained hosts (e.g., Jetson container Phase-1 after

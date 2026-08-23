@@ -88,7 +88,7 @@ def test_done_features_have_command_and_provenance() -> None:
 
 
 def test_done_features_pin_a_hex_sha_not_a_branch_name() -> None:
-    """`implemented_in` on a done feature must be a resolvable commit SHA.
+    """`implemented_in` on a done feature is SHAPED like a full commit SHA.
 
     HARNESS_SPEC.md and .claude/skills/openspec-change/SKILL.md both state the
     rule ("a hex commit SHA, never a branch name"), and feature-closeout calls a
@@ -96,6 +96,20 @@ def test_done_features_pin_a_hex_sha_not_a_branch_name() -> None:
     catalog-wide. A branch name satisfies the truthiness check above, then goes
     unresolvable the moment the branch is deleted, silently breaking the
     nightly `validate.py --tier fast,slow --strict-git` run.
+
+    Scope, stated plainly because it is easy to over-read: this is a FORMAT
+    check and nothing more. It does not verify that the SHA resolves, that it
+    is an ancestor of any branch, or that it contains the work the feature
+    claims. `175606b052bac2b613144ffca10c6a4982a7def8` -- a resolvable,
+    well-formed SHA naming the *branch point*, which contained neither
+    change -- shipped past this very assertion earlier in F-028/F-029's own
+    history. Read it as "not a branch name", never as provenance.
+
+    Resolvability is deliberately left to `validate.py --strict-git` in the
+    nightly, which runs against a full clone. Asserting it here would be flaky
+    locally and vacuous in CI: this repo is routinely shallow-cloned, so
+    `git cat-file` on an older SHA fails for want of history rather than for
+    want of a correct pin.
     """
     offenders = [
         f"{f['id']}: implemented_in={f.get('implemented_in')!r}"
