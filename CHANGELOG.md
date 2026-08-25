@@ -8,6 +8,82 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — F-032: GCP observability wiring (logging, monitoring, Firestore)
+
+- **Three already-implemented, already-unit-tested cloud components are now
+  constructed and threaded into production**: `CloudLoggingSink`,
+  `CloudMetricsExporter`, `CloudFirestoreSync` — mirroring the gap
+  `build_cloud_telemetry_sink`/`build_cloud_experience_exporter` already closed for
+  Pub/Sub and GCS. New `factory.py` builders `build_cloud_logging_sink`,
+  `build_cloud_metrics_exporter`, `build_cloud_firestore_sync` follow that same
+  idiom plus a fifth step the two precedents never needed: an explicit
+  null-collaborator guard, since `CloudMetricsExporter`/`CloudFirestoreSync`'s
+  `registry`/`episodic` constructor params are non-Optional while
+  `build_metrics_registry`/`build_memory_tier` can each independently return
+  `None` — an unvalidated but legal config (`gcp.firestore.enabled=true` +
+  default `memory.enabled=false`) would otherwise crash `build_orchestrator()`.
+- **New `CloudFirestoreSyncProtocol`** in `cloud/protocol.py`, matching
+  `CloudFirestoreSync`'s `start`/`sync_once`/`close` shape.
+  **`CloudLoggingSinkProtocol` widened** from a bare `__call__` to also declare
+  `start`/`close` — `main.py` drives that lifecycle directly, so the protocol
+  needed to describe it (caught by `mypy --strict`, not by review).
+- **`MouseDroidOrchestrator` gained `cloud_metrics_exporter`/`cloud_firestore_sync`
+  constructor params**, wired into `_start_cloud_subsystems`/
+  `_stop_cloud_subsystems` in LIFO order — `cloud_metrics_exporter` exposes
+  `.stop()`, not `.close()`, the one asymmetry among the four cloud collaborators.
+- **`CloudLoggingSink`'s lifecycle deliberately stays outside the orchestrator.**
+  `configure_logging()` runs synchronously in `main.py::cli_entry()` before
+  `build_orchestrator()` is ever called, so folding the sink into the orchestrator
+  would create two disconnected instances. `main.py` now builds it once and
+  threads the same instance into `configure_logging()` (whose `cloud_logging_sink`
+  parameter and processor-chain insertion already existed and were already
+  tested) and into new keyword params on `_run()`/`_health_check()`, with
+  `start()`/`close()` independently wrapped in `try/except Exception` in both —
+  `_health_check()` previously had no `try`/`finally` at all, so it gained one
+  specifically to guarantee `close()` runs even through its existing
+  `sys.exit(1)` branch.
+- **No CHARTER.md §3 carve-out needed** — all three components are read-side data
+  egress with zero LLM/training work and zero motion, and every new path is
+  gated behind a schema field defaulting `False` (F-029 is the compensating
+  control this depends on, per that change's own `design.md` D-5). Reasoning
+  recorded in `features.yaml`'s F-032 `notes:` field per
+  `.claude/skills/charter-carveout/SKILL.md`.
+- **Known, accepted risk — not fixed in this PR by operator decision**:
+  `CloudLoggingSink.__call__` (pre-existing code this bundle wires into
+  production for the first time, not touched here) makes a blocking synchronous
+  network call (`Logger.log_struct(...)`, bypassing the SDK's
+  `BackgroundThreadTransport`) reachable from the 30 Hz hot loop once an
+  operator sets `gcp.logging.enabled: true`, and forwards `event_dict` content
+  with only a primitive-type filter, no allow/deny list. Both dormant by
+  default; found by a 6-agent adversarial review round (security-scanner,
+  test-engineer, peer-reviewer, config-guardian, doc-reconciler,
+  openspec-author). Fixing `CloudLoggingSink`'s I/O model is out of this
+  bundle's own file scope — surfaced and documented (`features.yaml`'s F-032
+  `notes:`) rather than fixed unilaterally, per CHARTER §6. Deferred to a
+  future, not-yet-numbered change.
+- New tests: `tests/unit/factory/test_factory_cloud_observability.py` (14 cases —
+  disabled-by-default, both null-collaborator guards, simulated-`ImportError` via
+  `monkeypatch.setitem(sys.modules, ...)`, enabled-path construction, per builder),
+  `tests/unit/orchestrator/test_cloud_subsystems_wiring.py` (5 cases — start/stop
+  wiring + start- and stop-order for all four cloud collaborators — no prior
+  test exercised `_start_cloud_subsystems`/`_stop_cloud_subsystems` at all, not
+  even for the two pre-existing components),
+  `tests/integration/test_factory_integration.py` (+1 case —
+  `build_orchestrator()` end-to-end with GCP enabled, proving the two new
+  collaborators reach the orchestrator through the real factory composition
+  path, not just their own builders or the orchestrator constructor called
+  directly), `tests/unit/test_main.py` (11
+  cases, incl. a synchronous `cli_entry()` test proving one sink instance
+  reaches both `configure_logging()` — with a live forwarded event — and
+  `_run()`/`_health_check()` — genuinely new test territory; `main.py` is
+  `# pragma: no cover` and excluded from the coverage
+  gate). Extended `test_gcp_egress_defaults_aqa.py`/
+  `test_gcp_egress_defaults_backwards_compat.py` (F-029) for the partial-block and
+  twin-overlay scenarios against the three new builders. Protocol-conformance
+  tests for `CloudFirestoreSyncProtocol`/`CloudLoggingSinkProtocol` follow
+  `test_f025_aqa.py`'s isinstance-plus-arity pattern, not the bare-`isinstance()`
+  anti-pattern already flagged by `test-tier-mirror/SKILL.md`.
+
 ### Fixed — Copilot review round on PR #204, F-031's own pin had two real gaps
 
 - **`_module_scope_imports`' relative-import and submodule-alias blind spots.** The

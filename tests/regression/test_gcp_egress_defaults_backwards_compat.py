@@ -164,6 +164,55 @@ def test_disabled_gate_emits_its_diagnostic_event() -> None:
     )
 
 
+def test_twin_overlay_now_also_builds_its_logging_and_monitoring_sinks() -> None:
+    """F-032 wires two more builders onto flags this overlay already opted into.
+
+    ``config/gcp_digital_twin.yaml`` set ``logging.enabled``/``monitoring.enabled``
+    to ``True`` well before F-032 existed — those flags were validated but
+    silently unread. This is the twin-overlay pin for the two new builders that
+    now read them, in the same positive-control-first shape as
+    ``test_twin_overlay_still_builds_its_cloud_components`` above. Firestore is
+    deliberately excluded: the overlay sets ``firestore.enabled: false``
+    explicitly, so it is out of scope for a "did opting in keep working" pin.
+    """
+    import structlog
+
+    from mousedroid.factory import build_cloud_logging_sink, build_cloud_metrics_exporter
+
+    data = yaml.safe_load(_TWIN_OVERLAY.read_text(encoding="utf-8"))
+    settings = Settings(mock_hardware=True, **data)
+    assert settings.gcp is not None
+    assert settings.gcp.logging.enabled is True
+    assert settings.gcp.monitoring.enabled is True
+
+    outcome_events = {
+        "cloud_logging_sink_disabled",
+        "cloud_logging_not_available",
+        "cloud_logging_sink_built",
+        "cloud_metrics_exporter_disabled",
+        "cloud_monitoring_not_available",
+        "cloud_metrics_exporter_built",
+    }
+    disabled_events = {"cloud_logging_sink_disabled", "cloud_metrics_exporter_disabled"}
+
+    with structlog.testing.capture_logs() as logs:
+        build_cloud_logging_sink(settings)
+        build_cloud_metrics_exporter(settings, metrics_registry=object())
+
+    observed = [entry["event"] for entry in logs if entry["event"] in outcome_events]
+    assert len(observed) == 2, (
+        "expected one outcome event per builder; got "
+        f"{observed}. An empty or short list means capture_logs intercepted "
+        "nothing, which would make the assertion below pass with the gate "
+        "arbitrarily broken."
+    )
+    blocked = sorted(set(observed) & disabled_events)
+    assert blocked == [], (
+        "the twin overlay opts in explicitly, so neither builder's `.enabled` "
+        f"gate should block it; got {blocked}"
+    )
+
+
 def test_env_lever_can_re_enable_egress(monkeypatch: pytest.MonkeyPatch) -> None:
     """The MOUSEDROID_ env lever still reaches the flag through 3-level nesting.
 

@@ -31,6 +31,39 @@ def test_firestore_sync_init() -> None:
     assert sync._running is False
 
 
+def test_firestore_sync_conforms_to_protocol() -> None:
+    """CloudFirestoreSync should satisfy CloudFirestoreSyncProtocol.
+
+    NOTE: ``isinstance`` against a ``runtime_checkable`` Protocol checks
+    attribute PRESENCE only -- it passes for a class whose "methods" are
+    integers. Kept as a cheap smoke check; the callable/arity conformance
+    that actually matters is asserted below, and full signature conformance
+    is a static (mypy --strict) guarantee.
+    """
+    from mousedroid.cloud.firestore_sync import CloudFirestoreSync
+    from mousedroid.cloud.protocol import CloudFirestoreSyncProtocol
+
+    cfg = _make_gcp_cfg()
+    episodic = _make_mock_episodic()
+    sync = CloudFirestoreSync(cfg, episodic)
+    assert isinstance(sync, CloudFirestoreSyncProtocol)
+
+
+def test_firestore_sync_members_are_callable_with_the_expected_arity() -> None:
+    """Every Protocol member is a real method, not merely a present name."""
+    import inspect
+
+    from mousedroid.cloud.firestore_sync import CloudFirestoreSync
+
+    cfg = _make_gcp_cfg()
+    episodic = _make_mock_episodic()
+    sync = CloudFirestoreSync(cfg, episodic)
+    for name in ("start", "sync_once", "close"):
+        member = getattr(sync, name)
+        assert callable(member), f"CloudFirestoreSync.{name} is not callable"
+        inspect.signature(member)
+
+
 @pytest.mark.asyncio
 async def test_sync_once_no_collection_returns_zero() -> None:
     """sync_once should return 0 when collection_ref is None (before start)."""

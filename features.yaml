@@ -703,3 +703,114 @@ features:
       checking only file existence where features.yaml's own verification:
       list claimed more) -- all fixed and proven before this closeout, see
       the openspec bundle's peer-review.md for the full verdict table.
+
+  - id: "F-032"
+    epic: "GCP Digital Twin"
+    name: "GCP observability wiring — logging, monitoring, Firestore sync"
+    description: >-
+      Wires three already-implemented, already-unit-tested cloud components
+      into the production path: CloudLoggingSink (structlog -> Cloud
+      Logging), CloudMetricsExporter (MetricsRegistry -> Cloud Monitoring),
+      and CloudFirestoreSync (episodic memory -> Firestore). All three
+      existed fully built and tested but were never constructed by
+      factory.py or threaded through orchestrator.py/main.py, mirroring the
+      gap build_cloud_telemetry_sink/build_cloud_experience_exporter closed
+      for Pub/Sub and GCS. New factory.py builders
+      (build_cloud_logging_sink, build_cloud_metrics_exporter,
+      build_cloud_firestore_sync) follow the existing two-builder idiom
+      (cfg.gcp is None guard, per-block .enabled guard, function-scoped
+      try/except ImportError, construct, log, return) plus a fifth step the
+      two precedent builders never needed: an explicit null-collaborator
+      guard, since CloudMetricsExporter.__init__'s registry and
+      CloudFirestoreSync.__init__'s episodic are both non-Optional while
+      build_metrics_registry/build_memory_tier can each independently
+      return None -- an unvalidated but legal config combination
+      (e.g. gcp.firestore.enabled=true + the default memory.enabled=false)
+      would otherwise crash build_orchestrator() outright. A new
+      CloudFirestoreSyncProtocol was authored in cloud/protocol.py matching
+      CloudFirestoreSync's start/sync_once/close shape;
+      CloudLoggingSinkProtocol was widened to also declare start/close
+      (previously only __call__), since main.py drives that lifecycle
+      directly rather than through the orchestrator.
+      MouseDroidOrchestrator gained cloud_metrics_exporter/
+      cloud_firestore_sync constructor params with LIFO-ordered lifecycle
+      wiring in _start_cloud_subsystems/_stop_cloud_subsystems --
+      cloud_metrics_exporter exposes stop(), not close(), unlike its three
+      siblings. CloudLoggingSink's lifecycle deliberately stays OUTSIDE the
+      orchestrator: configure_logging() runs synchronously in
+      main.py::cli_entry() before build_orchestrator() is ever called, so
+      folding it into the orchestrator would create two disconnected
+      instances. main.py now builds it once in cli_entry(), threads the
+      same instance into configure_logging(cloud_logging_sink=...) (whose
+      processor-chain insertion was already implemented and tested) and
+      into new keyword params on _run()/_health_check() (default None),
+      with start()/close() independently wrapped in try/except Exception in
+      both functions -- _health_check() previously had no try/finally at
+      all, so it gained one specifically to guarantee the close-on-exit
+      path runs even through its existing sys.exit(1) branch. This keeps an
+      unreachable Cloud Logging backend from blocking rover boot, mirroring
+      the existing OTA weight-update poller's boot-resilience pattern one
+      function away in orchestrator.py.
+    category: "functional"
+    priority: "medium"
+    status: "in_progress"
+    tier: "fast"
+    verification:
+      - "build_cloud_logging_sink/build_cloud_metrics_exporter/build_cloud_firestore_sync each return None when cfg.gcp is None, when their .enabled flag is false, and (the latter two) when their required collaborator is None"
+      - "each new builder returns None and logs a warning when its google-cloud-* import fails, rather than raising"
+      - "MouseDroidOrchestrator starts/stops cloud_metrics_exporter and cloud_firestore_sync only when wired, in LIFO order relative to cloud_sink/cloud_experience_exporter, and calls .stop() (not .close()) on cloud_metrics_exporter"
+      - "main.py's _run and _health_check both complete without touching cloud_logging_sink when it is None (the default), and both close it even when the guarded body raises or calls sys.exit"
+      - "configure_logging(cloud_logging_sink=...) actually forwards a live log event, not just object identity"
+    validation_command: "bash scripts/validations/F-032.sh"
+    implemented_in: null
+    depends_on: ["F-029"]
+    notes: >-
+      No dependency on F-030/F-031 -- disjoint files (factory.py,
+      orchestrator/orchestrator.py, main.py, cloud/protocol.py) from both.
+      implemented_in stays null until the dedicated closeout PR, per the
+      F-030/F-031 convention of a separate bookkeeping-only PR after merge
+      rather than self-pinning a branch-local SHA that dies on branch
+      deletion. No CHARTER.md Section 3 carve-out needed, per
+      .claude/skills/charter-carveout/SKILL.md's three-question procedure:
+      (1) zero actuator/motion involvement -- all three components are
+      read-side data egress (log/metric/episode forwarding), never a motor
+      command; (2) zero LLM inference or training work, in or out of the
+      hot loop -- CloudLoggingSink/CloudMetricsExporter/CloudFirestoreSync
+      forward already-computed telemetry, they don't compute anything; (3)
+      every new egress path is gated behind a schema field
+      (gcp.logging.enabled / gcp.monitoring.enabled / gcp.firestore.enabled)
+      that defaults False -- F-029 is the compensating control this
+      depends on (recorded in depends_on above), per that change's own
+      design.md D-5, so a bare `gcp:` block added for an unrelated reason
+      still egresses nothing. Same exempt shape as the pre-existing
+      build_cloud_telemetry_sink / build_cloud_experience_exporter
+      precedent this bundle extends.
+
+      Known, accepted risk in CloudLoggingSink (a pre-existing class this
+      bundle wires into production for the first time, not new code added
+      here): CloudLoggingSink.__call__ (cloud/logging_sink.py) calls
+      google.cloud.logging's Logger.log_struct(...) synchronously -- not
+      through the SDK's BackgroundThreadTransport, which only applies to
+      the stdlib-logging.Handler integration this class doesn't use. Since
+      the sink is installed as a global structlog processor and the
+      orchestrator's tick() hot path logs through structlog too, an
+      operator who sets gcp.logging.enabled=true could have a hot-loop log
+      call (e.g. an emergency-stop event) block on outbound network I/O --
+      touching CHARTER Section 4 invariants 1 (33.3ms cadence) and 10
+      (hot-loop purity), reachable for the first time because nothing
+      previously constructed CloudLoggingSink in production. The same
+      __call__ also forwards event_dict content with only a primitive-type
+      filter, no allow/deny list -- mission-command text already logged
+      elsewhere in the tree (llm_gateway/mission_parser.py,
+      orchestrator.py) would reach Cloud Logging verbatim once enabled.
+      Both risks are dormant today: gcp.logging.enabled defaults False, so
+      they activate only if an operator explicitly opts in. Surfaced to
+      the operator directly (three independent review agents plus a
+      self-directed pass found this during F-032's review) rather than
+      fixed unilaterally, per CHARTER Section 6 ("escalate, don't
+      unilaterally implement") -- redesigning CloudLoggingSink's I/O model
+      is outside this bundle's own file scope (cloud/protocol.py,
+      factory.py, orchestrator.py, main.py) and needs its own design/test
+      cycle. Operator decision: ship F-032 as scoped, document the risk
+      (this note), fix CloudLoggingSink in a separate future change --
+      not yet assigned an F-number.

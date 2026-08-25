@@ -50,6 +50,34 @@ def test_build_orchestrator_threads_shared_failure_recorder_to_voice_engine() ->
     assert orch._voice_engine._failure_recorder is orch._failure_recorder
 
 
+def test_build_orchestrator_threads_gcp_observability_collaborators() -> None:
+    """F-032: the two new cloud collaborators reach the orchestrator via the
+    full build_orchestrator() composition path, not just their own builder
+    functions tested in isolation (tests/unit/factory/
+    test_factory_cloud_observability.py) or the orchestrator constructor
+    called directly with hand-built fakes (tests/unit/orchestrator/
+    test_cloud_subsystems_wiring.py). Both existing precedent builders
+    (build_cloud_telemetry_sink/build_cloud_experience_exporter) have this
+    same integration-tier gap; this closes it for the two new ones per the
+    plan's own explicit requirement.
+    """
+    from mousedroid.cloud.firestore_sync import CloudFirestoreSync
+    from mousedroid.cloud.monitoring_exporter import CloudMetricsExporter
+
+    cfg = Settings(
+        mock_hardware=True,
+        gcp={
+            "project_id": "test-project",
+            "monitoring": {"enabled": True},
+            "firestore": {"enabled": True},
+        },
+        memory={"enabled": True},
+    )
+    orch = build_orchestrator(cfg)
+    assert isinstance(orch._cloud_metrics_exporter, CloudMetricsExporter)
+    assert isinstance(orch._cloud_firestore_sync, CloudFirestoreSync)
+
+
 def test_build_esp32_driver_mock() -> None:
     cfg = _mock_settings()
     driver = build_esp32_driver(cfg)

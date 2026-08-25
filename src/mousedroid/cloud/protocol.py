@@ -215,7 +215,18 @@ class CloudExperienceExporterProtocol(Protocol):
 
 @runtime_checkable
 class CloudLoggingSinkProtocol(Protocol):
-    """structlog processor that forwards log events to Cloud Logging."""
+    """structlog processor that forwards log events to Cloud Logging.
+
+    Unlike the other cloud protocols, this instance's ``start``/``close``
+    lifecycle is driven by ``main.py`` directly (not the orchestrator) —
+    ``configure_logging()`` runs synchronously before ``build_orchestrator()``
+    is ever called, so the sink must be built and threaded through
+    ``configure_logging()`` and ``main.py``'s own entry points instead.
+    """
+
+    async def start(self) -> None:
+        """Initialise the Cloud Logging client."""
+        ...
 
     def __call__(
         self,
@@ -235,6 +246,10 @@ class CloudLoggingSinkProtocol(Protocol):
         """
         ...
 
+    async def close(self) -> None:
+        """Release Cloud Logging resources."""
+        ...
+
 
 @runtime_checkable
 class CloudMetricsExporterProtocol(Protocol):
@@ -250,4 +265,25 @@ class CloudMetricsExporterProtocol(Protocol):
 
     async def stop(self) -> None:
         """Stop the periodic export background task and release resources."""
+        ...
+
+
+@runtime_checkable
+class CloudFirestoreSyncProtocol(Protocol):
+    """Periodically syncs episodic memory entries to Cloud Firestore."""
+
+    async def start(self) -> None:
+        """Initialise the Firestore client and start the sync loop."""
+        ...
+
+    async def sync_once(self) -> int:
+        """Run a single sync cycle.
+
+        Returns:
+            Number of episodes synced.
+        """
+        ...
+
+    async def close(self) -> None:
+        """Stop the sync loop and release resources."""
         ...

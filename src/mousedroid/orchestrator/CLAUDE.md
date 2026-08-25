@@ -26,7 +26,7 @@
   with the production path above.
 - `mission_dispatcher.py`, `mission_lifecycle.py`, `llm_replanner.py`, `face_controller.py` —
   supporting collaborators, not the loop itself.
-- `factory.py::build_orchestrator` (`:4016`) — factory builder wiring `MouseDroidOrchestrator`.
+- `factory.py::build_orchestrator` (`:4020`) — factory builder wiring `MouseDroidOrchestrator`.
 - `../safety/monitor.py::MouseDroidSafetyMonitor` — the concrete safety monitor
   (`SafetyMonitorProtocol` is the interface application code is typed against).
 - `tests/unit/orchestrator/` — subsystem unit tests.
