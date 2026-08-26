@@ -89,13 +89,6 @@ Dependency direction is strictly **Phase 1 → 2 → 3 → 4**; Phase 6 is defer
 
 ## Open engineering follow-ups
 
-0b. **[Architecture — needs a decision] 3 of 5 GCP cloud components are unwired.**
-    `CloudLoggingSink`/`CloudMetricsExporter`/`CloudFirestoreSync` have no
-    `build_cloud_*()` factory, zero runtime callers — same shape as unwired
-    `meta`/`scaling` (`docs/architecture.md` Level 3d corrected; `growth` has
-    since gained a factory builder and is no longer part of this comparison).
-    Needs a wire-or-defer call.
-
 0a. **[Hygiene — needs a dedicated pass] First-ever vulture dead-code audit run: 447
     findings.** `scripts/dead_code_audit.py` (F-020) had been CI-wired but never
     actually run + triaged — `scripts/vulture_allowlist.py` was empty. Ran it

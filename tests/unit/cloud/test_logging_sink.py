@@ -48,13 +48,42 @@ def test_logging_sink_min_level_filtering() -> None:
 
 
 def test_logging_sink_conforms_to_protocol() -> None:
-    """CloudLoggingSink should satisfy CloudLoggingSinkProtocol."""
+    """CloudLoggingSink should satisfy CloudLoggingSinkProtocol.
+
+    NOTE: ``isinstance`` against a ``runtime_checkable`` Protocol checks
+    attribute PRESENCE only -- it passes for a class whose "methods" are
+    integers. Kept as a cheap smoke check; the callable/arity conformance
+    that actually matters is asserted below, and full signature conformance
+    is a static (mypy --strict) guarantee.
+    """
     from mousedroid.cloud.logging_sink import CloudLoggingSink
     from mousedroid.cloud.protocol import CloudLoggingSinkProtocol
 
     cfg = _make_gcp_cfg()
     sink = CloudLoggingSink(cfg)
     assert isinstance(sink, CloudLoggingSinkProtocol)
+
+
+def test_logging_sink_members_are_callable_with_the_expected_arity() -> None:
+    """Every Protocol member is a real method, not merely a present name.
+
+    Closes the gap ``isinstance`` leaves open -- this is what would catch a
+    sink that satisfies the Protocol structurally while being unusable at
+    runtime. ``CloudLoggingSinkProtocol`` covers ``start``/``__call__``/
+    ``close`` -- widened from a bare ``__call__`` so main.py can drive the
+    sink's lifecycle directly (see design.md D-5 in the F-032 openspec
+    bundle).
+    """
+    import inspect
+
+    from mousedroid.cloud.logging_sink import CloudLoggingSink
+
+    cfg = _make_gcp_cfg()
+    sink = CloudLoggingSink(cfg)
+    for name in ("start", "__call__", "close"):
+        member = getattr(sink, name)
+        assert callable(member), f"CloudLoggingSink.{name} is not callable"
+        inspect.signature(member)
 
 
 def test_logging_sink_preserves_event_dict() -> None:

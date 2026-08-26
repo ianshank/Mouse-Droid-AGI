@@ -433,15 +433,18 @@ Cloud features are **fully optional** — the droid operates identically with `g
 All cloud calls are protected by `CircuitBreaker` + `retry_async` patterns so cloud failures
 never block the 30 Hz control loop.
 
-**Wiring status, verified against `factory.py` — not all five components below are equally
-live.** Only `CloudTelemetrySink` and `CloudExperienceExporter` have `build_cloud_*()` factory
-functions and are threaded into `MouseDroidOrchestrator`'s constructor. `CloudLoggingSink`,
-`CloudMetricsExporter`, and `CloudFirestoreSync` are fully implemented with real unit tests but
-have **no factory builder and zero runtime callers** — structurally the same
+**Wiring status, verified against `factory.py` — all five components below are now wired
+(F-032).** `CloudTelemetrySink` and `CloudExperienceExporter` have had `build_cloud_*()` factory
+functions threaded into `MouseDroidOrchestrator`'s constructor since before F-032.
+`CloudLoggingSink`, `CloudMetricsExporter`, and `CloudFirestoreSync` were fully implemented with
+real unit tests but had no factory builder and zero runtime callers — structurally the same
 implemented-but-not-wired state as the `meta`/`scaling` cognitive pillars described elsewhere in
 this document (`growth` has since gained a factory builder, `build_growth_coordinator`, and is
-excluded from this comparison for that reason), just undocumented as such until now. Tracked in
-`NEXT_STEPS.md`.
+excluded from this comparison for that reason) — until F-032 added `build_cloud_logging_sink`,
+`build_cloud_metrics_exporter`, and `build_cloud_firestore_sync`. `CloudMetricsExporter`/
+`CloudFirestoreSync` are threaded into the orchestrator constructor the same way as the first two;
+`CloudLoggingSink`'s lifecycle is driven by `main.py` instead, since `configure_logging()` runs
+before `build_orchestrator()` is ever called.
 
 ```mermaid
 graph TD
@@ -455,9 +458,9 @@ graph TD
     subgraph CloudModule["cloud/ module (optional)"]
         PubSubSink["CloudTelemetrySink\npubsub_sink.py\nmsgpack + CircuitBreaker\nWIRED"]
         GCSExporter["CloudExperienceExporter\nexperience_exporter.py\nLMDB → GCS shards\nhigh-water mark cursor\nWIRED"]
-        LogSink["CloudLoggingSink\nlogging_sink.py\nstructlog processor\nNOT WIRED — no factory builder"]
-        MonExporter["CloudMetricsExporter\nmonitoring_exporter.py\ngauge → TimeSeries\nNOT WIRED — no factory builder"]
-        FireSync["CloudFirestoreSync\nfirestore_sync.py\nepisodic → Firestore\nNOT WIRED — no factory builder"]
+        LogSink["CloudLoggingSink\nlogging_sink.py\nstructlog processor\nWIRED"]
+        MonExporter["CloudMetricsExporter\nmonitoring_exporter.py\ngauge → TimeSeries\nWIRED"]
+        FireSync["CloudFirestoreSync\nfirestore_sync.py\nepisodic → Firestore\nWIRED"]
         Auth["_auth.py\nADC / service account"]
     end
 
@@ -491,18 +494,19 @@ graph TD
     FireSync --> Auth
 ```
 
-**GCP config hierarchy:** `Settings.gcp: GCPConfig | None = None`. When `None`, both real
-`build_cloud_*()` factory functions (`build_cloud_telemetry_sink`,
-`build_cloud_experience_exporter`) return `None` and the orchestrator skips cloud calls.
+**GCP config hierarchy:** `Settings.gcp: GCPConfig | None = None`. When `None`, all five real
+`build_cloud_*()` factory functions (`build_cloud_telemetry_sink`, `build_cloud_experience_exporter`,
+`build_cloud_logging_sink`, `build_cloud_metrics_exporter`, `build_cloud_firestore_sync`) return
+`None` and the orchestrator (or, for the logging sink, `main.py`) skips cloud calls.
 
 | Component | File | GCP Service | Resilience | Wired? |
 | --------- | ---- | ----------- | ---------- | ------ |
 | Telemetry sink | `cloud/pubsub_sink.py` | Pub/Sub | CircuitBreaker (60s recovery) | Yes — `build_cloud_telemetry_sink` |
 | Experience exporter | `cloud/experience_exporter.py` | Cloud Storage | CircuitBreaker + HWM cursor | Yes — `build_cloud_experience_exporter` |
-| Logging sink | `cloud/logging_sink.py` | Cloud Logging | Fire-and-forget (silent drop) | **No** — no factory builder exists |
-| Metrics exporter | `cloud/monitoring_exporter.py` | Cloud Monitoring | Async executor | **No** — no factory builder exists |
-| Firestore sync | `cloud/firestore_sync.py` | Firestore | Per-entry exception handling | **No** — no factory builder exists |
-| Auth | `cloud/_auth.py` | ADC / SA key | Fail-fast at startup | Shared by both wired components |
+| Logging sink | `cloud/logging_sink.py` | Cloud Logging | Fire-and-forget (silent drop) | Yes — `build_cloud_logging_sink` |
+| Metrics exporter | `cloud/monitoring_exporter.py` | Cloud Monitoring | Async executor | Yes — `build_cloud_metrics_exporter` |
+| Firestore sync | `cloud/firestore_sync.py` | Firestore | Per-entry exception handling | Yes — `build_cloud_firestore_sync` |
+| Auth | `cloud/_auth.py` | ADC / SA key | Fail-fast at startup | Shared by all five wired components |
 
 ---
 

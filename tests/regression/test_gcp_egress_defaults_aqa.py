@@ -27,7 +27,13 @@ from mousedroid.config.schema.gcp_cloud import (
     GCPStorageConfig,
 )
 from mousedroid.config.schema.root import Settings
-from mousedroid.factory import build_cloud_experience_exporter, build_cloud_telemetry_sink
+from mousedroid.factory import (
+    build_cloud_experience_exporter,
+    build_cloud_firestore_sync,
+    build_cloud_logging_sink,
+    build_cloud_metrics_exporter,
+    build_cloud_telemetry_sink,
+)
 
 # The repo convention for a description that actually explains itself; mirrors
 # _MIN_DESCRIPTION_CHARS in tests/regression/test_f025_aqa.py.
@@ -91,6 +97,14 @@ def test_partial_gcp_block_builds_no_egress_component() -> None:
     settings = Settings(mock_hardware=True, gcp={"project_id": "some-project"})
     assert build_cloud_telemetry_sink(settings) is None
     assert build_cloud_experience_exporter(settings) is None
+    # F-032's three builders read the same partial block. Their required
+    # collaborators are passed as real (non-None) fakes here so that only the
+    # `.enabled` gate — not the separate null-collaborator guard — is under
+    # test; that guard has its own dedicated coverage in
+    # tests/unit/factory/test_factory_cloud_observability.py.
+    assert build_cloud_logging_sink(settings) is None
+    assert build_cloud_metrics_exporter(settings, metrics_registry=object()) is None
+    assert build_cloud_firestore_sync(settings, episodic=object()) is None
 
 
 def test_explicit_opt_in_still_works() -> None:

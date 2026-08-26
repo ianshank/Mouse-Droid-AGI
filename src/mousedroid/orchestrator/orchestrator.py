@@ -38,6 +38,8 @@ if TYPE_CHECKING:
     from mousedroid.agents.base import AgentProtocol
     from mousedroid.cloud.protocol import (
         CloudExperienceExporterProtocol,
+        CloudFirestoreSyncProtocol,
+        CloudMetricsExporterProtocol,
         CloudTelemetrySinkProtocol,
         PendingWeightUpdate,
         WeightUpdatePollerProtocol,
@@ -108,6 +110,8 @@ class MouseDroidOrchestrator:
         watchdog: WatchdogProtocol | None = None,
         cloud_sink: CloudTelemetrySinkProtocol | None = None,
         cloud_experience_exporter: CloudExperienceExporterProtocol | None = None,
+        cloud_metrics_exporter: CloudMetricsExporterProtocol | None = None,
+        cloud_firestore_sync: CloudFirestoreSyncProtocol | None = None,
         tool_registry: Any | None = None,
         face_controller: FaceController | None = None,
         mcp_server: MCPServerProtocol | None = None,
@@ -155,6 +159,8 @@ class MouseDroidOrchestrator:
             watchdog: Optional watchdog notifier for liveness signalling.
             cloud_sink: Optional GCP Pub/Sub telemetry sink for cloud streaming.
             cloud_experience_exporter: Optional GCS experience batch exporter.
+            cloud_metrics_exporter: Optional Cloud Monitoring metrics exporter.
+            cloud_firestore_sync: Optional Firestore episodic-memory sync.
             tool_registry: Optional tool registry for runtime tool dispatch.
             face_controller: Optional MSE-6 face-display controller. When
                 supplied, the orchestrator drives it from the BDI affect
@@ -329,6 +335,8 @@ class MouseDroidOrchestrator:
         self._supports_lateral: bool = command_set_supports_lateral(cfg.esp32)
         self._cloud_sink = cloud_sink
         self._cloud_experience_exporter = cloud_experience_exporter
+        self._cloud_metrics_exporter = cloud_metrics_exporter
+        self._cloud_firestore_sync = cloud_firestore_sync
         self._tool_registry = tool_registry
         self._face_controller = face_controller
         self._mcp_server = mcp_server
@@ -566,7 +574,7 @@ class MouseDroidOrchestrator:
         _log.info("greeting_startup_complete", name_count=len(greeting_cfg.names))
 
     async def _start_cloud_subsystems(self) -> None:
-        """Start the cloud sink, experience exporter, and OTA weight pollers.
+        """Start the cloud sink, exporters, Firestore sync, and OTA weight pollers.
 
         Each guard is a no-op when the subsystem is unwired. Every poller's
         ``start`` is wrapped so a boot-time failure (HF Hub unreachable, etc.)
@@ -577,6 +585,10 @@ class MouseDroidOrchestrator:
             await self._cloud_sink.start()
         if self._cloud_experience_exporter is not None:
             await self._cloud_experience_exporter.start()
+        if self._cloud_metrics_exporter is not None:
+            await self._cloud_metrics_exporter.start()
+        if self._cloud_firestore_sync is not None:
+            await self._cloud_firestore_sync.start()
         for poller in self._weight_update_pollers.values():
             try:
                 await poller.start()
@@ -674,17 +686,24 @@ class MouseDroidOrchestrator:
         await cancel_and_drain(self._cloud_publish_tasks)
 
     async def _stop_cloud_subsystems(self) -> None:
-        """Stop the OTA weight pollers, experience exporter, and cloud sink.
+        """Stop the OTA weight pollers, Firestore sync, exporters, and cloud sink.
 
         Each poller's ``stop`` is wrapped so a stuck in-flight download can't
         block shutdown of the others or of the orchestrator; an empty mapping
-        skips the loop. Guards are no-ops when the subsystem is unwired.
+        skips the loop. Guards are no-ops when the subsystem is unwired. Order
+        is the reverse of ``_start_cloud_subsystems`` (LIFO teardown). Note
+        ``cloud_metrics_exporter`` exposes ``stop()``, not ``close()`` —
+        matching :class:`CloudMetricsExporterProtocol`'s teardown method name.
         """
         for poller in self._weight_update_pollers.values():
             try:
                 await poller.stop()
             except Exception:
                 _log.warning("cloud_weight_update_poller_stop_failed", exc_info=True)
+        if self._cloud_firestore_sync is not None:
+            await self._cloud_firestore_sync.close()
+        if self._cloud_metrics_exporter is not None:
+            await self._cloud_metrics_exporter.stop()
         if self._cloud_experience_exporter is not None:
             await self._cloud_experience_exporter.close()
         if self._cloud_sink is not None:
