@@ -753,16 +753,17 @@ features:
       function away in orchestrator.py.
     category: "functional"
     priority: "medium"
-    status: "in_progress"
+    status: "done"
     tier: "fast"
     verification:
       - "build_cloud_logging_sink/build_cloud_metrics_exporter/build_cloud_firestore_sync each return None when cfg.gcp is None, when their .enabled flag is false, and (the latter two) when their required collaborator is None"
-      - "each new builder returns None and logs a warning when its google-cloud-* import fails, rather than raising"
+      - "each new builder returns None and logs a warning when its underlying google-cloud-* SDK is genuinely absent (module_available(...) probe), or when the lightweight wrapper import fails"
       - "MouseDroidOrchestrator starts/stops cloud_metrics_exporter and cloud_firestore_sync only when wired, in LIFO order relative to cloud_sink/cloud_experience_exporter, and calls .stop() (not .close()) on cloud_metrics_exporter"
       - "main.py's _run and _health_check both complete without touching cloud_logging_sink when it is None (the default), and both close it even when the guarded body raises or calls sys.exit"
       - "configure_logging(cloud_logging_sink=...) actually forwards a live log event, not just object identity"
+      - "a start-time failure in any of the four _start_cloud_subsystems collaborators (unreachable backend, missing SDK) logs a warning and does not prevent orchestrator startup"
     validation_command: "bash scripts/validations/F-032.sh"
-    implemented_in: null
+    implemented_in: "69b9aa05096d469be7b79c57ea93ca90d76f637a"
     depends_on: ["F-029"]
     notes: >-
       No dependency on F-030/F-031 -- disjoint files (factory.py,
@@ -859,3 +860,15 @@ features:
       _FakeLoggingSink now mirrors the real CloudLoggingSink's _started
       gate so its cli_entry() test proves a live-forwarded event rather
       than one fired before start() was ever awaited.
+
+      Closeout: the hotfix merged as PR #208 (69b9aa0), CI green (49/49
+      checks) with zero unresolved review threads (one Copilot finding
+      about the new try/except wrappers swallowing asyncio.CancelledError
+      was investigated and confirmed a false positive -- CancelledError is
+      a BaseException subclass since Python 3.8, not caught by except
+      Exception, matching this file's own orchestrator/CLAUDE.md invariant
+      and the pre-existing OTA-poller pattern the new wrappers mirror).
+      implemented_in now pins 69b9aa0 rather than 94aa8d3 (PR #206's own
+      merge) since that commit alone shipped the boot-crash bug this
+      hotfix fixed -- 69b9aa0 is the first commit where F-032 is both
+      wired AND correctly degrades when the [gcp] extra is absent.
