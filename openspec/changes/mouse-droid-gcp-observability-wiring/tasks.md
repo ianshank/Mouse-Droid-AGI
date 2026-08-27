@@ -112,6 +112,43 @@ Task ordering is binding: each task lands green before the next starts.
 - [x] 3.2 `scripts/validations/F-032.sh`.
 - [x] 3.3 Register in `openspec/project.md`.
 
+**Phase 4 — Post-merge hotfix (fresh branch restart from the #206 merge commit,
+not a reopen — see design.md D-7)**
+
+- [x] 4.1 `factory.py`: all five `build_cloud_*` builders gained a genuine
+      `module_available("google.cloud.<x>")` probe before their existing
+      `except ImportError` wrapper-import guard, so a genuinely-missing
+      `[gcp]` SDK degrades gracefully instead of the `except ImportError`
+      silently never firing.
+- [x] 4.2 `orchestrator.py::_start_cloud_subsystems`: all four cloud
+      collaborators' `.start()` calls wrapped in `try/except Exception:
+      _log.warning(...)`, matching the pre-existing OTA-poller pattern in
+      the same method.
+- [x] 4.3 `orchestrator.py::__init__`: added `*,` before `tool_registry`,
+      closing a pre-existing (not F-032-introduced) keyword-only-argument
+      gap. Confirmed zero exploitation via an AST sweep of every call site.
+- [x] 4.4 Same commit as 4.1: `pytest.importorskip` guards added to the one
+      integration test and three factory-unit "enabled path" tests that
+      previously passed only because of the bug fixed in 4.1; the three
+      `_none_when_module_not_importable` tests pinned
+      `module_available` to `True` so they keep isolating the
+      wrapper-`ImportError` branch specifically.
+- [x] 4.5 `docs/architecture.md`: fixed the third stale `classDiagram`
+      (`class Factory` block) the pre-merge doc-reconciler pass missed;
+      qualified the Level 3d intro's blanket CircuitBreaker claim to match
+      the per-component Resilience table.
+- [x] 4.6 `test_logging_sink.py`/`test_firestore_sync.py`: arity-check
+      tests now assert the actual parameter count instead of discarding
+      `inspect.signature(member)`'s result.
+- [x] 4.7 `tests/unit/test_main.py`: `_FakeLoggingSink` now mirrors the
+      real `CloudLoggingSink`'s `_started` gate; its `cli_entry()` test
+      proves a live-forwarded event (logged from inside the mocked
+      orchestrator's `run()`) rather than one fired before `start()` was
+      ever awaited.
+- [x] 4.8 `features.yaml`'s F-032 `notes:` field extended with the hotfix
+      record (this repo's convention: `implemented_in` still stays `null`
+      until the dedicated closeout PR).
+
 ## Explicitly deferred (separate change, do not fold in)
 
 - `[gcp]` extras installed in zero CI jobs (same-shaped gap as F-034 fixes

@@ -814,3 +814,48 @@ features:
       cycle. Operator decision: ship F-032 as scoped, document the risk
       (this note), fix CloudLoggingSink in a separate future change --
       not yet assigned an F-number.
+
+      Post-merge hotfix (this PR): the first F-032 PR (#206) was merged by
+      the operator before a Copilot review round could be acted on, so the
+      findings landed as a fresh hotfix on a restarted branch rather than a
+      reopened PR, per this repo's own merged-branch convention. Two real,
+      confirmed bugs, both traced to the same root cause: none of
+      cloud/logging_sink.py, cloud/monitoring_exporter.py,
+      cloud/firestore_sync.py (nor the two pre-existing siblings,
+      cloud/pubsub_sink.py, cloud/experience_exporter.py) imports
+      google.cloud.* at module scope -- every one defers that import into
+      its own start() method -- so every builder's `except ImportError`
+      around the lightweight mousedroid.cloud.<x> wrapper import never
+      fired for a genuinely-missing SDK, and _start_cloud_subsystems's four
+      cloud-collaborator .start() calls were unwrapped. An operator
+      enabling gcp.monitoring.enabled/gcp.firestore.enabled (or, latently,
+      the two pre-existing pubsub/storage toggles) without installing the
+      [gcp] extra got a rover that failed to boot entirely, not a graceful
+      degrade. Fixed in all five builders uniformly (not just the three new
+      ones) via a genuine mousedroid.common.imports.module_available(...)
+      probe against each builder's actual google.cloud.* submodule, plus
+      wrapping all four _start_cloud_subsystems .start() calls in
+      try/except Exception -- matching the pre-existing OTA-poller
+      boot-resilience pattern three lines below. Fixing SDK-detection
+      correctly flips tests/integration/test_factory_integration.py's GCP
+      wiring test and three tests/unit/factory/test_factory_cloud_observability.py
+      "enabled" cases to see None in this repo's own [gcp]-less CI, so all
+      four gained pytest.importorskip guards in this same commit -- shipped
+      together, never as a follow-up, since there is no intermediate state
+      where both the fix and the unguarded tests are individually correct.
+      Also in this hotfix: MouseDroidOrchestrator.__init__ gained a bare
+      `*,` immediately before tool_registry, making the whole optional-param
+      tail keyword-only (zero existing call sites were exploiting the gap,
+      confirmed via an AST sweep of every call site in the tree -- latent
+      hardening, not a live-bug fix); a third stale docs/architecture.md
+      classDiagram (the `class Factory` block) gained the three missing
+      builders; the Level 3d intro's blanket "protected by CircuitBreaker"
+      claim was qualified to match the per-component Resilience table a few
+      lines below (only the two pre-existing components use the real
+      CircuitBreaker class); the two arity-check tests
+      (test_logging_sink.py, test_firestore_sync.py) now actually assert
+      parameter counts instead of calling inspect.signature() and
+      discarding the result; and tests/unit/test_main.py's
+      _FakeLoggingSink now mirrors the real CloudLoggingSink's _started
+      gate so its cli_entry() test proves a live-forwarded event rather
+      than one fired before start() was ever awaited.

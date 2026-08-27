@@ -430,8 +430,17 @@ dashboard remains reachable when the orchestrator runs in mock mode (e.g. during
 ## Level 3d — Component Diagram: GCP Digital Twin (Optional)
 
 Cloud features are **fully optional** — the droid operates identically with `gcp: null` in config.
-All cloud calls are protected by `CircuitBreaker` + `retry_async` patterns so cloud failures
-never block the 30 Hz control loop.
+Resilience is **not uniform across the five components** — see the "Resilience" column in the
+wiring table below. `CloudTelemetrySink` and `CloudExperienceExporter` are protected by the real
+`mousedroid.resilience.circuit_breaker.CircuitBreaker` class + `retry_async` patterns.
+`CloudMetricsExporter` and `CloudFirestoreSync` instead use a local transient-exception tuple with
+a log-and-continue pattern — not `CircuitBreaker` itself, despite the similar intent.
+`CloudLoggingSink` is the outlier: a *startup*-time failure (unreachable Cloud Logging backend
+when `.start()`/`.close()` run) is wrapped and logged rather than blocking boot, but its
+`__call__` forwards each qualifying log event **synchronously** with no circuit breaker or
+offload — reachable from inside `tick()`'s hot path via structlog once
+`gcp.logging.enabled=true`. This is an accepted, explicitly documented risk (not fixed by
+F-032, which only wires the component up) — see `features.yaml`'s F-032 `notes:` field.
 
 **Wiring status, verified against `factory.py` — all five components below are now wired
 (F-032).** `CloudTelemetrySink` and `CloudExperienceExporter` have had `build_cloud_*()` factory
@@ -797,6 +806,9 @@ classDiagram
         +build_lidar_feature_extractor(cfg) LidarFeatureExtractor
         +build_cloud_telemetry_sink(cfg) CloudTelemetrySinkProtocol
         +build_cloud_experience_exporter(cfg) CloudExperienceExporterProtocol
+        +build_cloud_logging_sink(cfg) CloudLoggingSinkProtocol
+        +build_cloud_metrics_exporter(cfg) CloudMetricsExporterProtocol
+        +build_cloud_firestore_sync(cfg) CloudFirestoreSyncProtocol
     }
 
     ESP32CommProtocol <|.. MockESP32Driver : implements

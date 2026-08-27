@@ -50,7 +50,13 @@ def test_firestore_sync_conforms_to_protocol() -> None:
 
 
 def test_firestore_sync_members_are_callable_with_the_expected_arity() -> None:
-    """Every Protocol member is a real method, not merely a present name."""
+    """Every Protocol member is a real method, not merely a present name.
+
+    Asserts the actual parameter count (not just that ``inspect.signature``
+    doesn't raise) -- a bare call proves nothing on its own, since
+    ``inspect.signature`` succeeds for almost any callable regardless of
+    arity.
+    """
     import inspect
 
     from mousedroid.cloud.firestore_sync import CloudFirestoreSync
@@ -58,10 +64,13 @@ def test_firestore_sync_members_are_callable_with_the_expected_arity() -> None:
     cfg = _make_gcp_cfg()
     episodic = _make_mock_episodic()
     sync = CloudFirestoreSync(cfg, episodic)
+    # Bound methods: inspect.signature excludes `self`. All three Protocol
+    # members take no arguments beyond it.
     for name in ("start", "sync_once", "close"):
         member = getattr(sync, name)
         assert callable(member), f"CloudFirestoreSync.{name} is not callable"
-        inspect.signature(member)
+        actual_count = len(inspect.signature(member).parameters)
+        assert actual_count == 0, f"CloudFirestoreSync.{name} expected 0 params, got {actual_count}"
 
 
 @pytest.mark.asyncio

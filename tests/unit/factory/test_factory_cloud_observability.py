@@ -4,18 +4,28 @@ Covers ``build_cloud_logging_sink``, ``build_cloud_metrics_exporter``, and
 ``build_cloud_firestore_sync`` — the disabled-by-default path, the two
 null-collaborator guards (``metrics_registry``/``episodic`` can each
 independently be ``None`` even when their ``gcp.*.enabled`` flag is
-``True``), and the simulated-``ImportError`` degrade path.
+``True``), the SDK-availability guard, and the simulated-``ImportError``
+degrade path.
 
 Construction of the three concrete classes is plain attribute assignment —
 none imports ``google.cloud.*`` until ``.start()`` runs (confirmed by
 reading ``cloud/logging_sink.py``, ``cloud/monitoring_exporter.py``,
-``cloud/firestore_sync.py`` directly) — so the "enabled" happy-path tests
-below need no SDK mocking at all. The ``except ImportError`` branch in every
-builder guards the lightweight ``mousedroid.cloud.<x>`` wrapper module
-import, not the heavy SDK import, and is not exercised by ordinary CI (no
-job installs the ``[gcp]`` extra) — proven here via
-``monkeypatch.setitem(sys.modules, "mousedroid.cloud.<x>", None)``, which
-forces the next import of that exact module name to raise ``ImportError``.
+``cloud/firestore_sync.py`` directly). Each builder now probes the real SDK
+up front via ``mousedroid.common.imports.module_available`` (a post-merge
+hotfix — see ``openspec/changes/mouse-droid-gcp-observability-wiring/``'s
+Copilot-findings addendum) rather than relying solely on the ``except
+ImportError`` around the lightweight wrapper import, which never fired for a
+genuinely-missing SDK. Because this repo's own CI installs no ``[gcp]``
+extra in any job, the three "enabled" happy-path tests below need
+``pytest.importorskip`` — they exercise real GCP SDK behaviour and must
+skip, not fail, when the SDK genuinely isn't installed. The
+"none_when_module_not_importable" tests isolate the *wrapper* ``ImportError``
+branch specifically, so they pin ``module_available`` to ``True`` before
+simulating the wrapper import failure via
+``monkeypatch.setitem(sys.modules, "mousedroid.cloud.<x>", None)`` — without
+that pin, the earlier SDK-availability guard would return ``None`` first for
+an unrelated reason (the SDK genuinely absent) and the test would no longer
+prove what it claims to.
 """
 
 from __future__ import annotations
@@ -60,6 +70,7 @@ def test_logging_sink_none_when_disabled_by_default() -> None:
 
 
 def test_logging_sink_built_when_enabled() -> None:
+    pytest.importorskip("google.cloud.logging")
     settings = _settings(logging={"enabled": True})
     sink = build_cloud_logging_sink(settings)
     assert isinstance(sink, CloudLoggingSink)
@@ -68,6 +79,7 @@ def test_logging_sink_built_when_enabled() -> None:
 def test_logging_sink_none_when_module_not_importable() -> None:
     settings = _settings(logging={"enabled": True})
     with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("mousedroid.factory.module_available", lambda name: True)
         mp.setitem(sys.modules, "mousedroid.cloud.logging_sink", None)
         assert build_cloud_logging_sink(settings) is None
 
@@ -101,6 +113,7 @@ def test_metrics_exporter_none_when_registry_missing() -> None:
 
 
 def test_metrics_exporter_built_when_enabled_and_registry_present() -> None:
+    pytest.importorskip("google.cloud.monitoring_v3")
     settings = _settings(monitoring={"enabled": True})
     exporter = build_cloud_metrics_exporter(settings, metrics_registry=MagicMock())
     assert isinstance(exporter, CloudMetricsExporter)
@@ -109,6 +122,7 @@ def test_metrics_exporter_built_when_enabled_and_registry_present() -> None:
 def test_metrics_exporter_none_when_module_not_importable() -> None:
     settings = _settings(monitoring={"enabled": True})
     with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("mousedroid.factory.module_available", lambda name: True)
         mp.setitem(sys.modules, "mousedroid.cloud.monitoring_exporter", None)
         assert build_cloud_metrics_exporter(settings, metrics_registry=MagicMock()) is None
 
@@ -143,6 +157,7 @@ def test_firestore_sync_none_when_episodic_missing() -> None:
 
 
 def test_firestore_sync_built_when_enabled_and_episodic_present() -> None:
+    pytest.importorskip("google.cloud.firestore")
     settings = _settings(firestore={"enabled": True})
     sync = build_cloud_firestore_sync(settings, episodic=MagicMock())
     assert isinstance(sync, CloudFirestoreSync)
@@ -151,5 +166,6 @@ def test_firestore_sync_built_when_enabled_and_episodic_present() -> None:
 def test_firestore_sync_none_when_module_not_importable() -> None:
     settings = _settings(firestore={"enabled": True})
     with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("mousedroid.factory.module_available", lambda name: True)
         mp.setitem(sys.modules, "mousedroid.cloud.firestore_sync", None)
         assert build_cloud_firestore_sync(settings, episodic=MagicMock()) is None
