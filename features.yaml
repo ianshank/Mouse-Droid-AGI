@@ -768,7 +768,7 @@ features:
     notes: >-
       No dependency on F-030/F-031 -- disjoint files (factory.py,
       orchestrator/orchestrator.py, main.py, cloud/protocol.py) from both.
-      implemented_in stays null until the dedicated closeout PR, per the
+      implemented_in was pinned in this dedicated closeout PR, per the
       F-030/F-031 convention of a separate bookkeeping-only PR after merge
       rather than self-pinning a branch-local SHA that dies on branch
       deletion. No CHARTER.md Section 3 carve-out needed, per
