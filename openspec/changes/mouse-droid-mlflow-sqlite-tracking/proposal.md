@@ -12,7 +12,7 @@
 
 ## Why
 
-`ExperimentLoggerConfig.tracking_uri` (`config/schema/telemetry.py`) defaults
+`ExperimentLoggerConfig.tracking_uri` (`src/mousedroid/config/schema/telemetry.py`) defaults
 to the legacy `file:./mlruns` URI. mlflow 3.x hard-rejects the plain
 file-store backend without an explicit `MLFLOW_ALLOW_FILE_STORE=true`
 opt-in — already set unconditionally in `mlflow_logger.py` since PR #198
@@ -35,7 +35,7 @@ further (e.g. removing the escape hatch entirely).
 
 ## What Changes
 
-- `config/schema/telemetry.py`: `ExperimentLoggerConfig.tracking_uri`'s
+- `src/mousedroid/config/schema/telemetry.py`: `ExperimentLoggerConfig.tracking_uri`'s
   default → `sqlite:///mlflow.db`. Both its own docstring and
   `backend`'s neighbouring docstring (which cited the old default) updated.
 - `pyproject.toml`: the `[mlflow]` extra gains `sqlalchemy>=2.0,<3` and
@@ -62,10 +62,32 @@ further (e.g. removing the escape hatch entirely).
   "Open dependabot PR #145" framing was independently stale too (#145
   merged 2026-08-17, three days before the diagnosis commit still called
   it "open").
-- `_resolve_tracking_uri` (`factory.py`) is unchanged: it already passed
-  non-`file:` URIs (including `sqlite:`) through unchanged, so the new
-  default needed no code change there — only new test coverage proving
-  the previously-untested-but-unaffected behaviour for the new default.
+- `_resolve_tracking_uri` (`src/mousedroid/factory.py`) **now pins relative
+  `sqlite:///` paths as well as `file:` ones**, and matches schemes
+  case-insensitively (RFC 3986; mlflow lowercases via `urlparse`, so a
+  configured `FILE:`/`SQLITE:` still selects the local store downstream and
+  would otherwise silently skip the pin). An earlier revision of this bundle
+  left the function untouched and framed that as a win; review showed the
+  new default was then the one config where the function's own stated
+  chdir-survival contract did not apply. See `design.md` D-4 for the precise
+  — and deliberately narrow — scope of what pinning does and does not buy.
+- New `tracking_uri` field validator rejecting two values that pass as
+  ordinary strings but make the logger a silent black hole: empty/whitespace
+  (mlflow falls back to its ambient default) and `sqlite://` with two
+  slashes (SQLAlchemy's in-memory DB — every run discarded at exit, no
+  error). `sqlite:///:memory:` remains allowed as the explicit spelling.
+- New structured event `experiment_logger_tracking_uri_resolved` (emitted
+  before construction so it survives an init failure), plus the configured
+  URI added to `experiment_logger_mlflow_extras_missing` and
+  `experiment_logger_mlflow_init_failed` — the underlying store errors name
+  no path, so "no runs visible" was previously undiagnosable from logs.
+- New `tests/integration/test_mlflow_sqlite_backend.py`, wired into
+  `mlflow-extras`: opens a **real** SQLite store through the factory and
+  round-trips runs/params/metrics/nested-phase runs. Without it the job
+  installed `sqlalchemy`/`alembic` and never exercised them — every other
+  mlflow test drives a `file:` URI — so a drift in either would have left
+  the job green, defeating its stated purpose.
+- `.dockerignore` given the same `mlflow.db*` entries as `.gitignore`.
 
 ## Impact
 
@@ -77,15 +99,25 @@ at all, so every shipped deployment resolves `Settings.observability` to
 margin than F-029's twin-overlay case, which had one shipped overlay to
 account for explicitly.
 
-**Residual risk, named rather than hidden:** an operator who sets
-`backend: mlflow` with no explicit `tracking_uri` override, on a host that
-happens to have `mlflow-skinny` pinned in the 2.x range specifically (not
-this repo's own bound, which already covers 2.x-4.x), would see a real
-tracking-backend change. This exact combination was already broken under
-mlflow 3.x before this change (per the diagnosed-but-then-independently-
-resolved blocker), so the tradeoff is asymmetric in this fix's favour — but
-it is a genuine, if narrow, behaviour change worth naming rather than
-presenting this as purely inert.
+**Residual risk — corrected during review, having first been understated.**
+The original wording scoped impact to operators pinning `mlflow-skinny` in
+the 2.x range, and asserted that combination was already broken anyway. A
+review pass showed both halves were wrong: this bundle's own verification
+(88/88 green on mlflow 3.15.2 against `file:./mlruns`, thanks to the
+pre-existing `MLFLOW_ALLOW_FILE_STORE` default in `mlflow_logger.py`) proves
+the file backend works on 3.x.
+
+The real blast radius is **any operator opting in via
+`MOUSEDROID_OBSERVABILITY__EXPERIMENT_LOGGER__BACKEND=mlflow`** — the env
+path `docs/runbooks/mlflow-local-ui.md` documents. That variable alone
+materializes the whole `observability.experiment_logger` block from schema
+defaults, so on upgrade such an operator moves to the sqlite store and their
+existing `mlruns/` history stops appearing in the UI. No data is lost, the
+runbook now carries an "Upgrading from the file backend" section, and no
+*file*-configured deployment is affected (no shipped overlay sets
+`backend: mlflow`) — but the behaviour is real, and
+`test_env_var_optin_materializes_the_new_sqlite_default` pins it so the
+rosier "fully inert" claim cannot drift back.
 
 No CHARTER.md §3 carve-out needed: this is training-side (offline,
 GPU-host) instrumentation, entirely outside the 30 Hz control loop, gated

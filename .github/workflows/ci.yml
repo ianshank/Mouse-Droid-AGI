@@ -555,12 +555,19 @@ jobs:
             - name: Install dependencies (dev + mlflow extras)
               run: pip install -e ".[dev,mlflow]"
 
+            - name: Show resolved mlflow stack versions
+              # A resolution drift (mlflow/sqlalchemy/alembic) is the most
+              # likely cause of this job going red; without this the failing
+              # log shows no versions to diff against the last green run.
+              run: pip list 2>/dev/null | grep -Ei 'mlflow|sqlalchemy|alembic'
+
             - name: Run mlflow-touching test suite
               run: |
                   pytest tests/unit/training/observability/test_mlflow_logger.py \
                          tests/unit/factory/test_factory_observability.py \
                          tests/integration/test_offline_rl_observability.py \
                          tests/integration/test_pipeline_orchestrator_observability.py \
+                         tests/integration/test_mlflow_sqlite_backend.py \
                     -v --tb=short \
                     -m "not slow" \
                     --no-cov \

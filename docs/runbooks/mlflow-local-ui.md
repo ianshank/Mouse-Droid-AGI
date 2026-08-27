@@ -73,17 +73,47 @@ named after the pipeline (parent) and each phase (child, nested via the
 
 ## Enabling on the rover
 
-In `config/<overlay>.yaml` (`tracking_uri` is optional — this is already
-the schema default, shown explicitly here for clarity):
+In `config/<overlay>.yaml`. Setting `tracking_uri` to an **absolute** path is
+recommended even though the relative default works: the default is resolved
+against whatever directory the training process was launched from, so
+launching from two different directories quietly produces two separate
+databases. An absolute URI makes the store location independent of how the
+process was started.
 
 ```yaml
 observability:
   experiment_logger:
     backend: mlflow
-    tracking_uri: sqlite:////opt/mousedroid/mlflow.db  # note: 4 slashes for an absolute path
+    # POSIX absolute path: 4 slashes total (scheme's 3 + the path's leading /).
+    # On Windows use 3 and let the drive letter follow: sqlite:///C:/mousedroid/mlflow.db
+    tracking_uri: sqlite:////opt/mousedroid/mlflow.db
     experiment_name: mousedroid-jetson
     log_step_every_n: 10  # every 10th update_step (long runs)
 ```
+
+To confirm which database a run actually went to, grep the startup logs for
+`experiment_logger_tracking_uri_resolved` — it reports both the configured
+URI and the absolute one it resolved to.
+
+### Upgrading from the file backend
+
+The default changed from `file:./mlruns` to `sqlite:///mlflow.db`. If you
+enable mlflow via config file you are unaffected (no shipped overlay sets
+`backend: mlflow`), but if you opt in via the environment variable below,
+the new default takes effect on upgrade and **runs recorded before the
+upgrade stay in `mlruns/` and stop appearing in the UI**. They are not lost.
+Either keep using them by pinning the old backend explicitly:
+
+```yaml
+observability:
+  experiment_logger:
+    backend: mlflow
+    tracking_uri: file:./mlruns   # legacy directory store, still fully supported
+```
+
+...or view them side by side by pointing a second UI at the old directory:
+`mlflow ui --backend-store-uri file:./mlruns --port 5001`. MLflow provides no
+in-place file-store→SQLite migration, so there is no one-shot conversion step.
 
 Or via env:
 

@@ -50,20 +50,47 @@ legacy `file:` backend, still dependent on the env-var escape hatch this
 bundle is trying to retire. A schema-default change is the only form of
 this fix where "do nothing extra" resolves to the safer state.
 
-## D-4. Why `_resolve_tracking_uri` needed no code change
+## D-4. Why `_resolve_tracking_uri` was widened to cover `sqlite:///`
 
-`factory.py::_resolve_tracking_uri` only resolves `file:`-prefixed URIs to
-an absolute path (so a trainer's `chdir()` doesn't strand a relative path);
-every other scheme — `http:`, `https:`, `databricks:`, and `sqlite:` —
-already passed through unchanged, confirmed by reading the function
-directly before assuming otherwise. The new default therefore needed new
-*test* coverage (`tests/unit/factory/test_factory_observability.py` pins
-the sqlite/http passthrough alongside the pre-existing file-resolution
-behaviour — moved there from an earlier draft of the regression AQA file
-during review, since these are behavioural pins, not schema-property ones;
-see `tasks.md` 3.1a) but zero production code changes to this function — a
-Type B pin for previously-untested-but-unchanged behaviour, per this
-repo's own proof taxonomy.
+**This section reverses an earlier revision of this bundle**, which left the
+function untouched and presented that as a win. It was not: the function's
+own docstring promises the pin exists "so the resolved path survives
+`chdir()` inside trainers", and the new default — a *relative*
+`sqlite:///mlflow.db` — was then the one configuration where that contract
+did not apply. Shipping the retired default as the only pinned one, and the
+new default as unpinned, was backwards.
+
+The function now pins both local-store schemes and matches scheme prefixes
+case-insensitively (RFC 3986 makes schemes case-insensitive and mlflow
+lowercases via `urlparse`, so a configured `FILE:`/`SQLITE:` still selects
+the local store downstream — matching case-sensitively would silently skip
+the pin for exactly those URIs). In-memory sqlite URIs (`sqlite://`,
+`sqlite:///:memory:`) and remote URIs are excluded: they carry no filesystem
+path, and resolving `:memory:` would corrupt it into a bogus relative file.
+
+**Scope, stated precisely because the obvious stronger claim is false and
+was verified false rather than assumed.** Pinning does *not* make the
+default CWD-independent:
+
+- Two processes launched from different directories still get two different
+  databases — each pins against its own CWD. Verified with two subprocesses.
+- An in-process `chdir()` is invisible either way, because mlflow caches its
+  store per URI *string* per process. Verified directly: after a `chdir`, a
+  freshly-constructed client still resolved to the original database.
+
+What pinning genuinely buys is that the effective path is **absolute and
+therefore reportable** — which is exactly what the new
+`experiment_logger_tracking_uri_resolved` event uses to tell an operator
+which database a given run landed in. Without it, two processes writing to
+two different databases both log the identical relative string. The
+operator-facing cure for the split itself is an absolute `tracking_uri`,
+which `docs/runbooks/mlflow-local-ui.md` now recommends explicitly.
+
+This distinction was not academic: the first version of the accompanying
+test asserted the false stronger claim ("a chdir cannot strand it") and
+**passed with the fix reverted** — a tautology caught only by running the
+revert. It was rewritten to assert the narrow, true property, and re-proven
+red without the pin.
 
 ## D-5. Why `NEXT_STEPS.md` item 0 was removed, not reworded, and how that was verified
 

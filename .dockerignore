@@ -103,6 +103,14 @@ reports/
 runs/
 checkpoints/
 mlruns/
+# F-034: sqlite is now the default MLflow tracking backend (mlruns/ above
+# covers the legacy file: backend). Mirrors the .gitignore entries, incl.
+# SQLite's WAL-mode sidecars, so a developer's local training DB never
+# enters the build context.
+mlflow.db
+mlflow.db-wal
+mlflow.db-shm
+mlflow.db-journal
 var/
 
 # Claude worktrees + agent workspaces

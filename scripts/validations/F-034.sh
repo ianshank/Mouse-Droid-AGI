@@ -25,8 +25,10 @@ fi
 if ! "$PY_BIN" -m pytest \
       tests/regression/test_f034_mlflow_sqlite_aqa.py \
       tests/regression/test_f034_mlflow_sqlite_backwards_compat.py \
-      "tests/unit/factory/test_factory_observability.py::test_resolve_tracking_uri_passes_sqlite_uris_through_unchanged" \
-      "tests/unit/factory/test_factory_observability.py::test_resolve_tracking_uri_passes_http_and_absolute_sqlite_uris_through" \
+      "tests/unit/factory/test_factory_observability.py::test_resolve_tracking_uri_pins_the_relative_sqlite_default" \
+      "tests/unit/factory/test_factory_observability.py::test_resolve_tracking_uri_is_idempotent" \
+      "tests/unit/factory/test_factory_observability.py::test_resolve_tracking_uri_leaves_remote_and_in_memory_uris_alone" \
+      "tests/unit/factory/test_factory_observability.py::test_resolve_tracking_uri_matches_schemes_case_insensitively" \
       "tests/unit/factory/test_factory_observability.py::test_resolve_tracking_uri_still_resolves_file_uris_to_absolute_path" \
       --import-mode=importlib --no-cov -q; then
   echo "F-034 FAIL: mlflow sqlite tracking default is broken or a shipped config is affected" >&2

@@ -37,11 +37,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`_resolve_tracking_uri` (`factory.py`) needed no code change** — it
   already passed non-`file:` URIs (including `sqlite:`) through unchanged;
   only new test coverage was needed for the newly-default scheme.
-- **Residual risk, named rather than hidden**: an operator with
-  `backend: mlflow`, no explicit `tracking_uri`, and `mlflow-skinny` pinned
-  specifically in the 2.x range would see a real tracking-backend change.
-  This exact combination was already broken under mlflow 3.x before this
-  fix, so the tradeoff is asymmetric in the fix's favour.
+- **Residual risk, named rather than hidden — corrected during review, having
+  first been understated**: the initial writeup scoped impact to operators
+  pinning `mlflow-skinny` in the 2.x range, and claimed that combination was
+  already broken anyway. A review pass showed both halves were wrong: this
+  bundle's *own* finding (88/88 green on mlflow 3.15.2 against `file:./mlruns`,
+  via the pre-existing `MLFLOW_ALLOW_FILE_STORE` default) proves the file
+  backend works fine on 3.x. The real blast radius is **any operator who opts
+  in via `MOUSEDROID_OBSERVABILITY__EXPERIMENT_LOGGER__BACKEND=mlflow`** (the
+  env path `docs/runbooks/mlflow-local-ui.md` documents): that env var alone
+  materializes the whole config block from defaults, so on upgrade they move
+  to the sqlite store and their existing `mlruns/` history stops appearing in
+  the UI. Nothing is lost — the runbook now carries an "Upgrading from the
+  file backend" section — and no *file*-configured deployment is affected,
+  but the behaviour is real and is now pinned by
+  `test_env_var_optin_materializes_the_new_sqlite_default` so the rosier claim
+  cannot drift back.
+- **`_resolve_tracking_uri` now pins relative `sqlite:///` paths too**, not
+  just `file:` ones, so both local-store schemes share one contract. Scope
+  stated precisely, because the obvious stronger claim is false and was
+  verified false rather than assumed: pinning does **not** make the default
+  CWD-independent (two processes launched from different directories still
+  get two databases, each pinned to its own CWD), and mlflow caches its store
+  per URI string so an in-process `chdir()` is invisible either way. What it
+  buys is that the effective path is absolute and therefore *reportable* —
+  which is what the new `experiment_logger_tracking_uri_resolved` event uses
+  to tell an operator which database a run landed in. An early version of the
+  accompanying test asserted the false stronger claim and passed with the fix
+  reverted; it was rewritten to assert only what goes red without it.
+- **Logging/debuggability**: added
+  `experiment_logger_tracking_uri_resolved` (emitted before construction, so
+  it survives an init failure) and added the configured URI to both
+  `experiment_logger_mlflow_extras_missing` and
+  `experiment_logger_mlflow_init_failed`. The underlying store errors
+  ("unable to open database file", "file is not a database") name no path, so
+  before this an operator seeing "no runs visible" had nothing to go on.
+- **New `tracking_uri` validator** rejecting two values that validated as
+  ordinary strings but made the logger a silent black hole: empty/whitespace
+  (falls back to mlflow's ambient default) and `sqlite://` with two slashes
+  (SQLAlchemy's in-memory DB — every run discarded at process exit, no error).
+  `sqlite:///:memory:` stays allowed as the explicit, unambiguous spelling.
+- **New integration tests** (`tests/integration/test_mlflow_sqlite_backend.py`)
+  that open a **real** SQLite store through the factory and round-trip runs,
+  params, metrics, and nested phase runs — wired into `mlflow-extras`. Without
+  these the job installed `sqlalchemy`/`alembic` and never touched them, so a
+  drift in either would have left it green; every other mlflow test drives a
+  `file:` URI. The job also now prints resolved mlflow/sqlalchemy/alembic
+  versions, so a resolution-drift failure is diagnosable from its own log.
+- `.dockerignore` given the same `mlflow.db*` entries as `.gitignore`, and the
+  backwards-compat config scan widened from `config/*.yaml` to also cover
+  `*.yml`, config subdirectories, and `*.example` templates (17 → 27 files).
 - `docs/architecture/c4-experiment-logger.md` and
   `docs/runbooks/mlflow-local-ui.md` updated for the new default —
   including a genuine (not cosmetic) fix to the runbook's

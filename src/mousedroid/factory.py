@@ -1478,8 +1478,12 @@ def build_experiment_logger(cfg: Settings) -> ExperimentLoggerProtocol:
        :class:`NoOpExperimentLogger` (with a structured warning, so
        operators see the misconfiguration without crashing the run).
 
-    ``file:./mlruns`` URIs are pinned to an absolute path at build time so
-    they survive working-dir changes inside the training process.
+    Relative local-store URIs — both ``file:`` and the default ``sqlite:///``
+    — are pinned to an absolute path at build time by
+    :func:`_resolve_tracking_uri` (see there for the precise, narrower-than-
+    obvious guarantee that provides). The resolved URI is logged as
+    ``experiment_logger_tracking_uri_resolved`` before construction, so a
+    later store failure can be traced to a concrete path.
 
     Args:
         cfg: Root settings.
@@ -1502,6 +1506,16 @@ def build_experiment_logger(cfg: Settings) -> ExperimentLoggerProtocol:
             )
 
             tracking_uri = _resolve_tracking_uri(logger_cfg.tracking_uri)
+            # Emitted BEFORE construction so it survives an init failure: the
+            # store's own errors ("unable to open database file", "file is not
+            # a database") name no path, so without this an operator seeing
+            # "no runs visible" cannot tell where the backend actually points.
+            _log.info(
+                "experiment_logger_tracking_uri_resolved",
+                configured_uri=logger_cfg.tracking_uri,
+                resolved_uri=tracking_uri,
+                experiment_name=logger_cfg.experiment_name,
+            )
             return MlflowExperimentLogger(
                 tracking_uri=tracking_uri,
                 experiment_name=logger_cfg.experiment_name,
@@ -1510,6 +1524,7 @@ def build_experiment_logger(cfg: Settings) -> ExperimentLoggerProtocol:
         except ImportError as exc:
             _log.warning(
                 "experiment_logger_mlflow_extras_missing",
+                configured_uri=logger_cfg.tracking_uri,
                 error_type=type(exc).__name__,
                 error=str(exc),
             )
@@ -1518,9 +1533,11 @@ def build_experiment_logger(cfg: Settings) -> ExperimentLoggerProtocol:
             # Construction can also fail on a bad tracking_uri, an unreachable
             # store, or permission errors. Degrade to NoOp (with a distinct
             # warning) rather than crashing the whole training run — observability
-            # is best-effort, never load-bearing.
+            # is best-effort, never load-bearing. The URI is included because the
+            # underlying store exceptions do not carry it.
             _log.warning(
                 "experiment_logger_mlflow_init_failed",
+                configured_uri=logger_cfg.tracking_uri,
                 error_type=type(exc).__name__,
                 error=str(exc),
             )
@@ -1535,18 +1552,65 @@ def build_experiment_logger(cfg: Settings) -> ExperimentLoggerProtocol:
     return NoOpExperimentLogger()
 
 
-def _resolve_tracking_uri(raw: str) -> str:
-    """Pin a relative ``file:`` URI to an absolute path.
+# Local-filesystem tracking-URI schemes whose path component is pinned to an
+# absolute path at factory time. Each maps its scheme prefix to the prefix the
+# resolved URI is rebuilt with. ``file:`` keeps its single colon; ``sqlite:///``
+# consumes the leading slash of a POSIX absolute path (yielding the canonical
+# four-slash form) and sits directly before a Windows drive letter — both are
+# the shapes SQLAlchemy expects, so one f-string covers both platforms.
+_PINNED_URI_SCHEMES: tuple[tuple[str, str], ...] = (
+    ("file:", "file:"),
+    ("sqlite:///", "sqlite:///"),
+)
 
-    Non-file URIs (``http``, ``https``, ``databricks``, ``sqlite``) pass
-    through unchanged. The pin happens at factory time so the resolved
-    path survives chdir() inside trainers.
+# sqlite URIs naming an in-memory database carry no filesystem path, so
+# resolving them would corrupt the URI into a bogus relative-file path.
+_IN_MEMORY_SQLITE_PATHS: frozenset[str] = frozenset({"", ":memory:"})
+
+
+def _resolve_tracking_uri(raw: str) -> str:
+    """Pin a relative local-filesystem tracking URI to an absolute path.
+
+    Covers both local backends: ``file:`` (the legacy directory-tree store)
+    and ``sqlite:///`` (the default, see ``ExperimentLoggerConfig``).
+
+    What the pin does and does not guarantee, stated precisely because the
+    obvious stronger claim is false (both halves verified directly, not
+    assumed): it does **not** make a relative URI working-directory
+    independent — a process launched from a different directory still pins
+    against its own CWD, and mlflow caches its store per URI string per
+    process so an in-process ``chdir()`` is invisible either way. What it
+    guarantees is that the *effective* path is absolute and therefore
+    reportable, which is what ``experiment_logger_tracking_uri_resolved``
+    logs so an operator can tell which database a run actually reached. The
+    operator-facing cure for a split across launch directories is an
+    absolute ``tracking_uri``; see ``docs/runbooks/mlflow-local-ui.md``.
+
+    Remote URIs (``http``, ``https``, ``databricks``) and in-memory sqlite
+    URIs (``sqlite://``, ``sqlite:///:memory:``) pass through unchanged, as
+    does any URI whose path is already absolute.
+
+    Scheme matching is case-insensitive: URI schemes are case-insensitive
+    per RFC 3986 and mlflow lowercases them via ``urlparse`` before
+    dispatching, so a configured ``FILE:./mlruns`` still selects the file
+    store downstream — matching case-sensitively here would silently skip
+    the pin for exactly those URIs.
+
+    Args:
+        raw: Tracking URI exactly as configured.
+
+    Returns:
+        The URI with a relative local path pinned absolute, else ``raw``.
     """
-    if not raw.startswith("file:"):
-        return raw
-    path_part = raw[len("file:") :]
-    abs_path = Path(path_part).resolve()
-    return f"file:{abs_path}"
+    lowered = raw.lower()
+    for scheme, rebuilt_prefix in _PINNED_URI_SCHEMES:
+        if not lowered.startswith(scheme):
+            continue
+        path_part = raw[len(scheme) :]
+        if scheme.startswith("sqlite") and path_part in _IN_MEMORY_SQLITE_PATHS:
+            return raw
+        return f"{rebuilt_prefix}{Path(path_part).resolve()}"
+    return raw
 
 
 def build_weight_update_pollers(

@@ -16,7 +16,9 @@ Both are Type A (revert-provable via ``scripts/prove_pin_fails.sh``).
 
 from __future__ import annotations
 
+import pytest
 from packaging.requirements import Requirement
+from pydantic import ValidationError
 
 from mousedroid.config.schema.telemetry import ExperimentLoggerConfig
 from tests._pyproject import load_pyproject
@@ -51,3 +53,38 @@ def test_mlflow_extra_includes_sqlite_tracking_store_deps() -> None:
     assert "mlflow-skinny" in names
     assert "sqlalchemy" in names
     assert "alembic" in names
+
+
+@pytest.mark.parametrize("blackhole", ["", "   ", "sqlite://", "SQLITE://"])
+def test_tracking_uri_rejects_silently_discarding_values(blackhole: str) -> None:
+    """Values that make the logger a silent black hole fail validation.
+
+    Both of these validate as ordinary non-empty strings but discard every
+    metric without ever raising, which is worse than failing loudly:
+    whitespace-only falls back to mlflow's ambient default (so runs land
+    somewhere unconfigured), and ``sqlite://`` (two slashes) is SQLAlchemy's
+    in-memory database (so runs vanish at process exit). ``SQLITE://``
+    covers the case-insensitive spelling.
+    """
+    with pytest.raises(ValidationError):
+        ExperimentLoggerConfig(tracking_uri=blackhole)
+
+
+@pytest.mark.parametrize(
+    "legitimate",
+    [
+        "sqlite:///mlflow.db",
+        "sqlite:///:memory:",
+        "sqlite:////opt/mousedroid/mlflow.db",
+        "file:./mlruns",
+        "http://host:5000",
+    ],
+)
+def test_tracking_uri_accepts_every_legitimate_backend_form(legitimate: str) -> None:
+    """The validator rejects only the black-hole values, never a real backend.
+
+    ``sqlite:///:memory:`` is deliberately allowed: it is the explicit,
+    unambiguous way to request an in-memory store, unlike ``sqlite://``
+    which is nearly always a typo for ``sqlite:///``.
+    """
+    assert ExperimentLoggerConfig(tracking_uri=legitimate).tracking_uri == legitimate

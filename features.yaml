@@ -902,8 +902,11 @@ features:
     verification:
       - "ExperimentLoggerConfig().tracking_uri defaults to sqlite:///mlflow.db, not file:./mlruns"
       - "the [mlflow] extra's parsed requirement names include mlflow-skinny, sqlalchemy, and alembic"
-      - "_resolve_tracking_uri passes sqlite:/// and http:// URIs through unchanged and still resolves file: URIs to an absolute path"
-      - "no config/*.yaml overlay references observability/experiment_logger at all, so every shipped config is unaffected by the default flip"
+      - "_resolve_tracking_uri pins relative file: AND sqlite:/// paths to absolute, is idempotent, matches schemes case-insensitively, and leaves remote and in-memory (sqlite://, sqlite:///:memory:) URIs unchanged"
+      - "tracking_uri rejects the two silently-discarding values at schema validation: empty/whitespace, and sqlite:// (two-slash SQLAlchemy in-memory); sqlite:///:memory: stays allowed as the explicit spelling"
+      - "no config/** file (yaml, yml, subdirectories, and .example templates) references observability/experiment_logger, so no shipped config FILE is affected by the default flip"
+      - "the documented env-var opt-in (MOUSEDROID_OBSERVABILITY__EXPERIMENT_LOGGER__BACKEND=mlflow) DOES materialize the new sqlite default -- pinned deliberately, since it is the change's real blast radius rather than something to gloss"
+      - "a real SQLite store round-trips runs, params, metrics, and nested phase runs through build_experiment_logger, so the mlflow-extras job actually exercises the sqlalchemy/alembic it installs"
       - "the full mlflow-touching test surface (unit/factory/integration) passes with the [mlflow] extra installed against a real mlflow 3.x install"
     validation_command: "bash scripts/validations/F-034.sh"
     implemented_in: null
@@ -969,3 +972,38 @@ features:
       dropped, per CHARTER Section 6 -- deferred to a separate,
       not-yet-numbered future change if an operator ever needs a
       credentialed tracking_uri in practice.
+
+      Six-agent review round (peer-review, config, logging, tests, docs,
+      automation) returned REQUEST_CHANGES; full record in the bundle's
+      peer-review.md. Three findings reversed earlier decisions in this
+      same bundle, so they are recorded here rather than only in the
+      commit log: (1) an earlier revision left _resolve_tracking_uri
+      untouched and framed that as a win -- it made the new default the
+      ONLY unpinned local store, contradicting the function's own
+      chdir-survival contract; sqlite:/// is now pinned like file:.
+      (2) The first test for that pin asserted "a chdir cannot strand
+      the database" and PASSED WITH THE FIX REVERTED -- a tautology,
+      caught only by running the revert. mlflow caches its store per URI
+      string per process, and two processes launched from different
+      directories split regardless, both verified directly; the pin's
+      real benefit is that the effective path is absolute and therefore
+      reportable via the new experiment_logger_tracking_uri_resolved
+      event. The test was rewritten to assert only what goes red without
+      the pin. (3) The residual-risk statement understated the blast
+      radius: it named mlflow-skinny 2.x pins, but this bundle's own
+      88/88-green verification proves the file backend works on 3.x, and
+      the real affected population is anyone using the documented env-var
+      opt-in, which materializes the whole config block from defaults.
+      Corrected in proposal.md and CHANGELOG.md and pinned by a test.
+
+      Also fixed during that round: the mlflow-extras job installed
+      sqlalchemy/alembic without ever opening a sqlite store (every other
+      mlflow test drives a file: URI), closed by
+      tests/integration/test_mlflow_sqlite_backend.py; a pre-existing
+      cross-test pollution where test_backend_mlflow_degrades_to_noop_
+      when_extras_missing used a raw sys.modules.pop and evicted the
+      wrapper module, permanently corrupting mlflow for any later test
+      that opened a real store; a tracking_uri validator for two
+      silently-discarding values; .dockerignore missing the mlflow.db*
+      entries .gitignore got; and the runbook's POSIX-only "4 slashes"
+      sqlite guidance plus a missing file-backend migration section.

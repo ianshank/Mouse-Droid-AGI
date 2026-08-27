@@ -12,7 +12,7 @@ Task ordering is binding: each task lands green before the next starts.
 
 **Phase 1 — Core default flip**
 
-- [x] 1.1 `config/schema/telemetry.py`: `ExperimentLoggerConfig.tracking_uri`
+- [x] 1.1 `src/mousedroid/config/schema/telemetry.py`: `ExperimentLoggerConfig.tracking_uri`
       default → `sqlite:///mlflow.db`; `backend`'s and `tracking_uri`'s own
       docstrings updated to match.
 - [x] 1.2 `pyproject.toml`: `[mlflow]` extra gains `sqlalchemy>=2.0,<3` and
@@ -91,6 +91,34 @@ Task ordering is binding: each task lands green before the next starts.
       `implemented_in: null` until the dedicated closeout PR).
 - [x] 5.2 `scripts/validations/F-034.sh`.
 - [x] 5.3 Register in `openspec/project.md`.
+
+**Phase 6 — Post-review hardening (6-agent audit: peer-review, config,
+logging, tests, docs, automation)**
+
+- [x] 6.1 `_resolve_tracking_uri` widened to pin relative `sqlite:///`
+      paths and match schemes case-insensitively — reverses this bundle's
+      earlier "no code change needed" framing, which had left the new
+      default as the only unpinned local store. See `design.md` D-4 for the
+      deliberately narrow scope of what this does and does not fix.
+- [x] 6.2 `tests/integration/test_mlflow_sqlite_backend.py` — opens a real
+      SQLite store through the factory; wired into `mlflow-extras`, which
+      previously installed `sqlalchemy`/`alembic` and never exercised them.
+      The first draft of its CWD test passed with the fix reverted; it was
+      rewritten to assert only what actually goes red.
+- [x] 6.3 `tracking_uri` field validator rejecting empty/whitespace and
+      `sqlite://` (two-slash in-memory) — both previously validated as
+      ordinary strings while silently discarding every run.
+- [x] 6.4 Logging: added `experiment_logger_tracking_uri_resolved` and the
+      configured URI to both mlflow failure events, so a store failure names
+      a path.
+- [x] 6.5 Backwards-compat scan widened (`*.yml`, subdirectories,
+      `*.example` — 17 → 27 files) and the env-var opt-in path pinned by
+      `test_env_var_optin_materializes_the_new_sqlite_default`; the residual-
+      risk statement in `proposal.md` and `CHANGELOG.md` corrected, having
+      first understated who this change affects.
+- [x] 6.6 `.dockerignore` given the `mlflow.db*` entries `.gitignore` got;
+      runbook's Windows sqlite slash count corrected and an "Upgrading from
+      the file backend" migration section added.
 
 ## Explicitly deferred (separate change, do not fold in)
 

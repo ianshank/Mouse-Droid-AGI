@@ -505,8 +505,10 @@ class ExperimentLoggerConfig(BaseModel):
     via :func:`mousedroid.factory.build_experiment_logger`. Defaults to OFF
     (``backend="none"``) so a YAML predating this feature loads unchanged
     (CLAUDE.md invariant #9). Selecting ``backend="mlflow"`` requires the
-    ``mousedroid[mlflow]`` extras (``mlflow-skinny``); a missing dep
-    degrades gracefully to the NoOp logger with a structured warning.
+    ``mousedroid[mlflow]`` extras (``mlflow-skinny`` plus ``sqlalchemy`` and
+    ``alembic``, which mlflow's default sqlite tracking store needs even
+    with the skinny client); a missing dep degrades gracefully to the NoOp
+    logger with a structured warning.
     """
 
     backend: Literal["none", "mlflow"] = Field(
@@ -520,19 +522,60 @@ class ExperimentLoggerConfig(BaseModel):
     )
     tracking_uri: str = Field(
         "sqlite:///mlflow.db",
+        min_length=1,
         description=(
             "MLflow tracking URI. ``sqlite:///mlflow.db`` (default) writes "
-            "to a local SQLite database relative to the factory's "
-            "resolution time — mlflow's own recommended local backend, and "
-            "required since mlflow 3.x rejects the plain file-store backend "
-            "outright without an explicit opt-in. Set to a ``file:`` URI to "
-            "use the legacy directory-tree store, or ``http://host:port`` "
-            "for a remote tracking server. Non-``file:`` URIs (including "
-            "``sqlite:``) pass through the factory's path-pinning step "
-            "unchanged; only ``file:`` URIs are resolved to an absolute "
-            "path."
+            "to a local SQLite database — mlflow's own recommended local "
+            "backend, and required since mlflow 3.x rejects the plain "
+            "file-store backend outright without an explicit opt-in. Set to "
+            "a ``file:`` URI to use the legacy directory-tree store, or "
+            "``http://host:port`` for a remote tracking server. Both local "
+            "schemes (``file:`` and ``sqlite:///``) have a relative path "
+            "pinned to an absolute one at factory resolution time, so the "
+            "effective location is reported in the "
+            "``experiment_logger_tracking_uri_resolved`` log event; remote "
+            "and in-memory sqlite URIs pass through unchanged. A relative "
+            "path is still resolved against whichever directory the process "
+            "was launched from — set an absolute URI to make the store "
+            "location independent of that."
         ),
     )
+
+    @field_validator("tracking_uri")
+    @classmethod
+    def _reject_blank_or_in_memory_tracking_uri(cls, value: str) -> str:
+        """Reject URIs that silently discard every metric written to them.
+
+        Two values validate as plain non-empty strings but make the logger
+        a silent black hole rather than failing loudly, which is worse than
+        either working or crashing:
+
+        * whitespace-only / empty — mlflow falls back to its own ambient
+          default (or ``MLFLOW_TRACKING_URI``), so runs land somewhere the
+          operator never configured.
+        * ``sqlite://`` (two slashes) — SQLAlchemy's in-memory database.
+          Every run is written to RAM and discarded at process exit, with
+          no error at any point.
+
+        ``sqlite:///:memory:`` is deliberately still allowed: it is the
+        explicit, unambiguous way to ask for an in-memory store (tests do),
+        whereas ``sqlite://`` is nearly always a typo for ``sqlite:///``.
+        """
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError(
+                "tracking_uri must not be empty or whitespace-only; use an "
+                "explicit URI such as 'sqlite:///mlflow.db' (the default)"
+            )
+        if stripped.lower() == "sqlite://":
+            raise ValueError(
+                "tracking_uri 'sqlite://' is SQLAlchemy's in-memory database — "
+                "every logged run would be silently discarded at process exit. "
+                "Use 'sqlite:///mlflow.db' (three slashes, a real file) or, if "
+                "an in-memory store is genuinely intended, 'sqlite:///:memory:'"
+            )
+        return stripped
+
     experiment_name: str = Field(
         "mousedroid",
         min_length=1,
