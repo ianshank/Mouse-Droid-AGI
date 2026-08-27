@@ -65,3 +65,13 @@ stages:
       landed and prevents regressions on the primary dev environment. Short
       promotion window — the fixes are well-tested locally; 30 consecutive
       green days in CI before promoting to blocking.
+  - job: mlflow-extras
+    workflow: ci.yml
+    since: 2026-08-27
+    promote_after_days: 180
+    reason: >-
+      F-034 (mlflow sqlite tracking default). Mirrors onnx-world-model-extras'
+      own 7-consecutive-green-run gate (not a calendar-day gate) rather than
+      a fixed promotion date — the real bar is the green-run count. First
+      job to ever install the [mlflow] extra in any CI path, so starts
+      advisory the same way onnx-world-model-extras did for [onnx_world_model].

@@ -4,7 +4,7 @@
 
 ## Operational Surfaces
 
-- [CI Gates & Quality Ladders](file:///docs/claude/surfaces/ci-gates.md) — 16-job CI pipeline, advisory stages, promotion ladder.
+- [CI Gates & Quality Ladders](file:///docs/claude/surfaces/ci-gates.md) — 17-job CI pipeline, advisory stages, promotion ladder.
 - [On-Device Full Validation](file:///docs/claude/surfaces/full-validation.md) — Cold-then-warm validation methodology and commands.
 - [USB-C Discovery Protocol](file:///docs/claude/surfaces/usbc-smoke.md) — Dynamic endpoint resolution and hardware enumeration.
 - [MCP Evaluation Notes](file:///docs/claude/surfaces/mcp-evaluation.md) — Model Context Protocol evaluate-first decisions.

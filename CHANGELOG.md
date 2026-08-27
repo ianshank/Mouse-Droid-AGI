@@ -8,6 +8,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — F-034: MLflow sqlite tracking default
+
+- **`ExperimentLoggerConfig.tracking_uri` now defaults to
+  `sqlite:///mlflow.db`** instead of the legacy `file:./mlruns` — mlflow's
+  own recommended local backend, and the fix `NEXT_STEPS.md` item 0
+  originally proposed as one of two options. The `[mlflow]` extra gains
+  `sqlalchemy>=2.0,<3` and `alembic>=1.13,<2`, confirmed necessary by direct
+  test: `mlflow-skinny` alone raises
+  `UnsupportedModelRegistryStoreURIException` for any `sqlite:///` URI
+  without them.
+- **Verified empirically before implementing, not trusted from the stale
+  diagnosis**: the acute mlflow-3.x file-store-rejection blocker
+  `NEXT_STEPS.md` item 0 diagnosed (29 failed / 17 errored against mlflow
+  3.15.1) does not reproduce on the current tree — PR #198 already added
+  `MLFLOW_ALLOW_FILE_STORE=true` unconditionally to `mlflow_logger.py`
+  three days after the diagnosis-motivating dependency bump, and nobody
+  updated the doc. Re-ran the full 88-test mlflow-touching surface against
+  mlflow 3.15.2 with the old default: 88/88 passed. This bundle is
+  therefore a completion of mlflow's recommended fix, not an emergency
+  unblock — named explicitly rather than overstating the urgency.
+- **New advisory `mlflow-extras` CI job** (`.github/workflows/ci.yml`,
+  mirrors `onnx-world-model-extras`'s shape) — the first job to ever
+  install the `[mlflow]` extra in any CI path; tracked in
+  `.github/advisory_stages.yaml`. `CLAUDE.md` and
+  `docs/claude/surfaces/ci-gates.md` job counts updated (16→17 total,
+  5→6 advisory) in the same commit.
+- **`_resolve_tracking_uri` (`factory.py`) needed no code change** — it
+  already passed non-`file:` URIs (including `sqlite:`) through unchanged;
+  only new test coverage was needed for the newly-default scheme.
+- **Residual risk, named rather than hidden**: an operator with
+  `backend: mlflow`, no explicit `tracking_uri`, and `mlflow-skinny` pinned
+  specifically in the 2.x range would see a real tracking-backend change.
+  This exact combination was already broken under mlflow 3.x before this
+  fix, so the tradeoff is asymmetric in the fix's favour.
+- `docs/architecture/c4-experiment-logger.md` and
+  `docs/runbooks/mlflow-local-ui.md` updated for the new default —
+  including a genuine (not cosmetic) fix to the runbook's
+  "Common pitfalls" concurrent-writer guidance, since sqlite's concurrency
+  story is materially better than the file backend's, and its closing
+  "Required extras" paragraph, which incorrectly claimed "no ...
+  SQLAlchemy" before this bundle added it as a dependency.
+- `NEXT_STEPS.md` item 0 removed (resolved) rather than reworded — its
+  "Open dependabot PR #145 proposes..." framing was independently stale
+  too (PR #145 merged 2026-08-17, three days before the diagnosis commit
+  still called it open).
+- New tests: `tests/regression/test_f034_mlflow_sqlite_aqa.py` (Type A
+  default-value + extras pins, proven via manual revert/red/restore/green;
+  Type B `_resolve_tracking_uri` passthrough pins),
+  `tests/regression/test_f034_mlflow_sqlite_backwards_compat.py` (Type C:
+  every shipped `config/*.yaml` scanned for any `observability:`/
+  `experiment_logger:` reference — none found, a stronger safety margin
+  than F-029's twin-overlay precedent).
+
 ### Added — F-032: GCP observability wiring (logging, monitoring, Firestore)
 
 - **Three already-implemented, already-unit-tested cloud components are now

@@ -27,7 +27,7 @@ Container_Boundary(train, "Training pipeline (offline, GPU host)") {
     Component(trainer, "OfflineRLTrainer (CQL/IQL)", "torch", "Per-step loss metrics; throttles on step % log_step_every_n == 0")
 }
 
-ComponentDb(store, "MLflow tracking store", "file:./mlruns (or remote)", "Runs, metrics, params, artifacts")
+ComponentDb(store, "MLflow tracking store", "sqlite:///mlflow.db (or remote)", "Runs, metrics, params, artifacts")
 Component(cfg, "ObservabilityConfig.experiment_logger", "Pydantic", "backend/tracking_uri/experiment_name/run_name/log_step_every_n/log_artifacts")
 
 Rel(cfg, factory, "resolves")
@@ -78,8 +78,8 @@ Rel(mlflow, store, "writes runs/metrics/artifacts")
 # Opt in (YAML overlay) — defaults are OFF
 observability:
   experiment_logger:
-    backend: mlflow            # "none" (default) | "mlflow"
-    tracking_uri: file:./mlruns
+    backend: mlflow                  # "none" (default) | "mlflow"
+    tracking_uri: sqlite:///mlflow.db  # default; mlflow's own recommended local backend
     experiment_name: mousedroid
     run_name: my-pipeline      # optional; falls back to "pipeline"
     log_step_every_n: 10       # throttle per-step writes on long runs

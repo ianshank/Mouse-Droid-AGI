@@ -515,16 +515,22 @@ class ExperimentLoggerConfig(BaseModel):
             "Experiment-logger backend. ``none`` (default) selects the NoOp "
             "logger — byte-identical to pre-feature behavior. ``mlflow`` "
             "selects the MlflowClient-backed logger writing to "
-            "``tracking_uri`` (default ``file:./mlruns``)."
+            "``tracking_uri`` (default ``sqlite:///mlflow.db``)."
         ),
     )
     tracking_uri: str = Field(
-        "file:./mlruns",
+        "sqlite:///mlflow.db",
         description=(
-            "MLflow tracking URI. ``file:./mlruns`` (default) writes to a "
-            "local directory relative to the factory's resolution time (the "
-            "factory pins this to an absolute path to avoid CWD surprises). "
-            "Set to ``http://host:port`` to use a remote tracking server."
+            "MLflow tracking URI. ``sqlite:///mlflow.db`` (default) writes "
+            "to a local SQLite database relative to the factory's "
+            "resolution time — mlflow's own recommended local backend, and "
+            "required since mlflow 3.x rejects the plain file-store backend "
+            "outright without an explicit opt-in. Set to a ``file:`` URI to "
+            "use the legacy directory-tree store, or ``http://host:port`` "
+            "for a remote tracking server. Non-``file:`` URIs (including "
+            "``sqlite:``) pass through the factory's path-pinning step "
+            "unchanged; only ``file:`` URIs are resolved to an absolute "
+            "path."
         ),
     )
     experiment_name: str = Field(

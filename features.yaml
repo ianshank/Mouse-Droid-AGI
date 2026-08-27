@@ -872,3 +872,78 @@ features:
       merge) since that commit alone shipped the boot-crash bug this
       hotfix fixed -- 69b9aa0 is the first commit where F-032 is both
       wired AND correctly degrades when the [gcp] extra is absent.
+
+  - id: "F-034"
+    epic: "Training Observability"
+    name: "MLflow sqlite tracking default"
+    description: >-
+      Flips ExperimentLoggerConfig.tracking_uri's default from the legacy
+      file-store URI (file:./mlruns) to sqlite:///mlflow.db, mlflow's own
+      recommended local backend. mlflow 3.x hard-rejects the plain
+      file-store backend without an explicit MLFLOW_ALLOW_FILE_STORE=true
+      opt-in (already set unconditionally in mlflow_logger.py since PR
+      #198); the sqlite default removes the dependency on that env-var
+      workaround going forward and matches mlflow's documented production
+      guidance. Adds sqlalchemy>=2.0,<3 and alembic>=1.13,<2 to the
+      [mlflow] extra -- mlflow-skinny alone raises
+      UnsupportedModelRegistryStoreURIException for any sqlite:/// URI
+      without them, confirmed by constructing a real MlflowClient against
+      one with only mlflow-skinny installed. Adds a new advisory
+      mlflow-extras CI job (mirrors onnx-world-model-extras' shape) since
+      no prior CI job installed the [mlflow] extra at all -- its "green"
+      status never actually exercised mlflow. _resolve_tracking_uri
+      (factory.py) is unchanged: it only resolves file: URIs to an
+      absolute path, so sqlite:/// URIs already passed through unchanged
+      before this feature landed.
+    category: "functional"
+    priority: "medium"
+    status: "in_progress"
+    tier: "fast"
+    verification:
+      - "ExperimentLoggerConfig().tracking_uri defaults to sqlite:///mlflow.db, not file:./mlruns"
+      - "the [mlflow] extra's parsed requirement names include mlflow-skinny, sqlalchemy, and alembic"
+      - "_resolve_tracking_uri passes sqlite:/// and http:// URIs through unchanged and still resolves file: URIs to an absolute path"
+      - "no config/*.yaml overlay references observability/experiment_logger at all, so every shipped config is unaffected by the default flip"
+      - "the full mlflow-touching test surface (unit/factory/integration) passes with the [mlflow] extra installed against a real mlflow 3.x install"
+    validation_command: "bash scripts/validations/F-034.sh"
+    implemented_in: null
+    depends_on: []
+    notes: >-
+      No dependency on F-028 through F-032 -- disjoint files
+      (config/schema/telemetry.py, pyproject.toml, .github/workflows/ci.yml,
+      docs/architecture/c4-experiment-logger.md,
+      docs/runbooks/mlflow-local-ui.md) from all of them. implemented_in
+      stays null until the dedicated closeout PR, per the F-030/F-031/F-032
+      convention of a separate bookkeeping-only PR after merge.
+
+      Verified empirically before implementing, not trusted from
+      NEXT_STEPS.md item 0's own diagnosis (written 2026-08-20, predating
+      this change): installed mlflow 3.15.2 + the current tree's
+      MLFLOW_ALLOW_FILE_STORE=true workaround and ran the full
+      mlflow-touching test surface (88 tests across
+      tests/unit/training/observability/test_mlflow_logger.py,
+      tests/unit/factory/test_factory_observability.py,
+      tests/integration/test_offline_rl_observability.py,
+      tests/integration/test_pipeline_orchestrator_observability.py,
+      tests/regression/test_runbooks_structure.py,
+      tests/regression/test_observability_backwards_compat.py,
+      tests/regression/test_optional_extra_import_gates.py) against the
+      OLD file:./mlruns default -- all 88 passed, not the 29-failed/
+      17-errored NEXT_STEPS.md diagnosed. Root cause: PR #198 (three days
+      after the diagnosis-motivating PR #145) already added
+      os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true") to
+      mlflow_logger.py, which resolved the acute hard-rejection blocker
+      without anyone updating NEXT_STEPS.md item 0 to say so. This change
+      is therefore reframed from "unblock a currently-broken path" to
+      "complete the fix mlflow's own docs recommend, removing the
+      dependency on an env-var workaround for a rejection future mlflow
+      versions could tighten further" -- still worth doing, but not the
+      urgent fix NEXT_STEPS.md's stale wording implied. Confirmed via a
+      second empirical test that sqlite:/// tracking genuinely fails
+      without sqlalchemy+alembic (UnsupportedModelRegistryStoreURIException)
+      and genuinely works once they're installed (full run lifecycle:
+      create_experiment/create_run/log_metric/set_terminated all succeeded).
+      NEXT_STEPS.md item 0 removed (resolved), not merely reworded -- its
+      "Open dependabot PR #145" framing was independently already stale
+      too (verified via git log: #145 merged 2026-08-17, three days before
+      the diagnosis commit that still called it "open").

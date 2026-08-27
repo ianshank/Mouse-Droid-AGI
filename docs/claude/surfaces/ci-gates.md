@@ -4,7 +4,7 @@
 > Stage numbers below are the file's own comments (`grep "# Stage" .github/workflows/ci.yml`);
 > this doc mirrors them rather than defining a separate taxonomy that can drift from the source.
 
-## Pipeline Structure (16 Jobs)
+## Pipeline Structure (17 Jobs)
 
 1. **Stage 0** — `actionlint`: workflow YAML syntax and expression checks.
 2. **Stage 1** — `lint`: `ruff check` + `ruff format --check` over `src/`, `tests/`, `tools/`,
@@ -28,12 +28,14 @@
     (graceful skip if unavailable).
 11. **Stage 4b** — `vla-extras`: VLA-only test suite (blocking, Tier C3.1).
 12. **Stage 4b** *(advisory)* — `onnx-world-model-extras`: world-model ONNX test suite (Tier B2).
-13. **Stage 4c** — `gitleaks`: repository secret scan — blocking since 2026-08-07 (34 days
+13. **Stage 4b2** *(advisory)* — `mlflow-extras`: mlflow-touching test suite with the
+    `[mlflow]` extra installed (F-034) — the first job to ever install it in CI.
+14. **Stage 4c** — `gitleaks`: repository secret scan — blocking since 2026-08-07 (34 days
     advisory beforehand, tracked promotion).
-14. **Stage 4d** *(advisory)* — `vulture-audit`: dead-code audit (findings-only by design —
+15. **Stage 4d** *(advisory)* — `vulture-audit`: dead-code audit (findings-only by design —
     Protocol/DI false positives).
-15. **Stage 5** *(advisory)* — `security`: `pip-audit`.
-16. **Stage 6** — `docker`: Dockerfile + docker-compose validation (needs `test` + `typecheck`).
+16. **Stage 5** *(advisory)* — `security`: `pip-audit`.
+17. **Stage 6** — `docker`: Dockerfile + docker-compose validation (needs `test` + `typecheck`).
 
 There is no separate `skills`, `secret-scan`, `test-fast`, `validate`, `regression`, or
 `package` job name — those checks run as steps inside the jobs above (e.g. the skill
@@ -41,13 +43,15 @@ validator is a `local-gates` step, not its own job).
 
 ## Advisory Stages & Promotion Ladder
 
-5 jobs carry `continue-on-error: true` and are tracked in `.github/advisory_stages.yaml`
+6 jobs carry `continue-on-error: true` and are tracked in `.github/advisory_stages.yaml`
 with a `promote_after_days` window — `scripts/check_advisory_promotions.py` warns when a
 job is untracked or its window has lapsed:
 
 - `performance` — since 2026-07-25, 90-day window.
 - `test-windows` — since 2026-08-20, 30-day window.
 - `onnx-world-model-extras` — since 2026-05-16, 180-day window (extended once).
+- `mlflow-extras` — since 2026-08-27, 180-day window (mirrors onnx-world-model-extras'
+  green-run-count gate).
 - `vulture-audit` — since 2026-07-03, 90-day window.
 - `security` — since 2026-07-25, 60-day window.
 
