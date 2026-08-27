@@ -57,11 +57,13 @@ an absolute path (so a trainer's `chdir()` doesn't strand a relative path);
 every other scheme — `http:`, `https:`, `databricks:`, and `sqlite:` —
 already passed through unchanged, confirmed by reading the function
 directly before assuming otherwise. The new default therefore needed new
-*test* coverage (this bundle's `test_f034_mlflow_sqlite_aqa.py` pins the
-sqlite/http passthrough alongside the pre-existing file-resolution
-behaviour) but zero production code changes to this function — a Type B pin
-for previously-untested-but-unchanged behaviour, per this repo's own proof
-taxonomy.
+*test* coverage (`tests/unit/factory/test_factory_observability.py` pins
+the sqlite/http passthrough alongside the pre-existing file-resolution
+behaviour — moved there from an earlier draft of the regression AQA file
+during review, since these are behavioural pins, not schema-property ones;
+see `tasks.md` 3.1a) but zero production code changes to this function — a
+Type B pin for previously-untested-but-unchanged behaviour, per this
+repo's own proof taxonomy.
 
 ## D-5. Why `NEXT_STEPS.md` item 0 was removed, not reworded, and how that was verified
 

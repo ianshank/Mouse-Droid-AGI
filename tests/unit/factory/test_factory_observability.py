@@ -9,7 +9,7 @@ from mousedroid.config.schema import (
     ObservabilityConfig,
     Settings,
 )
-from mousedroid.factory import build_experiment_logger
+from mousedroid.factory import _resolve_tracking_uri, build_experiment_logger
 from mousedroid.training.observability import (
     ExperimentLoggerProtocol,
     NoOpExperimentLogger,
@@ -125,3 +125,49 @@ def test_relative_file_uri_is_resolved_to_absolute(tmp_path: object) -> None:
         assert "./mlruns" not in logger._tracking_uri
     finally:
         os.chdir(saved_cwd)
+
+
+# ---------------------------------------------------------------------------
+# _resolve_tracking_uri directly (F-034) -- pure function, zero mlflow
+# dependency, so these need no pytest.importorskip and always run. Kept
+# separate from test_relative_file_uri_is_resolved_to_absolute above, which
+# proves the same file: resolution but through the full
+# build_experiment_logger -> MlflowExperimentLogger path; these prove the
+# resolver's own contract in isolation, cheaply, for every URI scheme it
+# must handle. Moved here from tests/regression/test_f034_mlflow_sqlite_aqa.py
+# per test-tier-mirror/SKILL.md: AQA is for schema properties, not behaviour.
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_tracking_uri_passes_sqlite_uris_through_unchanged() -> None:
+    """The mlflow sqlite default's scheme is not mistaken for a file: URI.
+
+    ``_resolve_tracking_uri`` only resolves ``file:`` URIs to an absolute
+    path (so they survive a trainer's ``chdir()``); every other scheme,
+    including the schema default, must pass through byte-identical.
+    """
+    assert _resolve_tracking_uri("sqlite:///mlflow.db") == "sqlite:///mlflow.db"
+
+
+def test_resolve_tracking_uri_passes_http_and_absolute_sqlite_uris_through() -> None:
+    """Belt-and-braces: remote and absolute-path URI schemes are also inert."""
+    assert _resolve_tracking_uri("http://host:5000") == "http://host:5000"
+    assert _resolve_tracking_uri("sqlite:////opt/mousedroid/mlflow.db") == (
+        "sqlite:////opt/mousedroid/mlflow.db"
+    )
+
+
+def test_resolve_tracking_uri_still_resolves_file_uris_to_absolute_path() -> None:
+    """Unchanged behaviour check: the file: URI resolution path still works.
+
+    Proves the sqlite-default change did not accidentally touch this
+    function's pre-existing behaviour for operators who explicitly opt
+    back into the legacy file-store backend. Complements
+    test_relative_file_uri_is_resolved_to_absolute above (which proves the
+    same thing through the full factory+construction path) with a direct,
+    dependency-free check of the resolver itself.
+    """
+    resolved = _resolve_tracking_uri("file:./mlruns")
+    assert resolved.startswith("file:")
+    assert resolved.endswith("/mlruns")
+    assert "./mlruns" not in resolved  # relative segment must be gone

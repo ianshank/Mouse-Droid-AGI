@@ -49,8 +49,19 @@ Task ordering is binding: each task lands green before the next starts.
       restore/green (schema default reverted to `file:./mlruns` and
       `pyproject.toml`'s extra reverted to `mlflow-skinny` only; both
       independently confirmed to fail their respective pin, then restored
-      byte-identical). Type B pins (`_resolve_tracking_uri` passthrough
-      for `sqlite:`/`http:`, still-correct `file:` resolution).
+      byte-identical).
+- [x] 3.1a *(added during review)* Type B pins (`_resolve_tracking_uri`
+      passthrough for `sqlite:`/`http:`, still-correct `file:` resolution)
+      moved to `tests/unit/factory/test_factory_observability.py` — a
+      test-engineer review round caught these as behavioural, not
+      schema-property, pins, per `.claude/skills/test-tier-mirror/SKILL.md`'s
+      own placement rule ("AQA is for schema properties, not behaviour").
+      Placed directly (bypassing `build_experiment_logger`/mlflow
+      construction) so they need no `pytest.importorskip("mlflow")` and
+      always run, complementing the existing
+      `test_relative_file_uri_is_resolved_to_absolute` (which proves the
+      same `file:` resolution through the full factory path) rather than
+      duplicating it.
 - [x] 3.2 `tests/regression/test_f034_mlflow_sqlite_backwards_compat.py` —
       Type C: every `config/*.yaml` overlay scanned for any
       `observability:`/`experiment_logger:` reference at all (none found),
