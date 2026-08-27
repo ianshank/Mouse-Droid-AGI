@@ -84,6 +84,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `test_f025_aqa.py`'s isinstance-plus-arity pattern, not the bare-`isinstance()`
   anti-pattern already flagged by `test-tier-mirror/SKILL.md`.
 
+### Fixed — Copilot review round on PR #206, F-032's own boot-crash gap
+
+- **A genuinely-missing `[gcp]` SDK crashed the rover at boot instead of
+  degrading gracefully.** PR #206 (the F-032 PR above) merged before a
+  Copilot review round landing while it was open could be acted on;
+  remediation shipped as this fresh hotfix rather than a reopened PR. Root
+  cause: none of `cloud/logging_sink.py`, `cloud/monitoring_exporter.py`,
+  `cloud/firestore_sync.py` — nor the two pre-existing siblings,
+  `cloud/pubsub_sink.py`, `cloud/experience_exporter.py` — imports
+  `google.cloud.*` at module scope; every one defers that import into its
+  own `start()` method, so every builder's `except ImportError` around the
+  lightweight wrapper-module import never fired for a genuinely-missing
+  SDK, and `_start_cloud_subsystems`'s four `.start()` calls were
+  unwrapped. An operator enabling `gcp.monitoring.enabled`/
+  `gcp.firestore.enabled` (or, latently, `gcp.pubsub.enabled`/
+  `gcp.storage.enabled`) without installing the `[gcp]` extra got a rover
+  that failed to boot entirely. Fixed in all five builders uniformly (not
+  just the three F-032 added) via a genuine
+  `mousedroid.common.imports.module_available(...)` probe against each
+  builder's actual `google.cloud.*` submodule, plus wrapping all four
+  `_start_cloud_subsystems` `.start()` calls in `try/except Exception`,
+  matching the pre-existing OTA-poller pattern in the same method. See
+  `design.md` D-7 in the F-032 openspec bundle for the full writeup,
+  including the test-fidelity consequence (four tests that previously
+  passed only because of this bug gained `pytest.importorskip` guards in
+  this same commit).
+- **`MouseDroidOrchestrator.__init__` gained a bare `*,`** immediately
+  before `tool_registry`, closing a pre-existing keyword-only-argument gap
+  (F-032's two new params happened to land in the already-exposed region;
+  confirmed zero exploitation via an AST sweep of every call site in the
+  tree).
+- Minor: a third stale `docs/architecture.md` diagram the pre-merge
+  doc-reconciler pass missed, an overclaiming CircuitBreaker sentence, two
+  arity-check tests that discarded their own `inspect.signature()` result,
+  and a `cli_entry()` test fake that recorded events before the real
+  `CloudLoggingSink` would have.
+
 ### Fixed — Copilot review round on PR #204, F-031's own pin had two real gaps
 
 - **`_module_scope_imports`' relative-import and submodule-alias blind spots.** The

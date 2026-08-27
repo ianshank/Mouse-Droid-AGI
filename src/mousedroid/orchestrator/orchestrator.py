@@ -112,6 +112,7 @@ class MouseDroidOrchestrator:
         cloud_experience_exporter: CloudExperienceExporterProtocol | None = None,
         cloud_metrics_exporter: CloudMetricsExporterProtocol | None = None,
         cloud_firestore_sync: CloudFirestoreSyncProtocol | None = None,
+        *,
         tool_registry: Any | None = None,
         face_controller: FaceController | None = None,
         mcp_server: MCPServerProtocol | None = None,
@@ -576,19 +577,34 @@ class MouseDroidOrchestrator:
     async def _start_cloud_subsystems(self) -> None:
         """Start the cloud sink, exporters, Firestore sync, and OTA weight pollers.
 
-        Each guard is a no-op when the subsystem is unwired. Every poller's
-        ``start`` is wrapped so a boot-time failure (HF Hub unreachable, etc.)
-        can't block the orchestrator from coming up; an empty mapping skips the
-        loop entirely, so default deployments pay zero cost.
+        Each guard is a no-op when the subsystem is unwired. Every cloud
+        collaborator's ``start()`` — like every poller's ``start()`` — is
+        wrapped so a boot-time failure (an unreachable GCP backend, a missing
+        ``google-cloud-*`` SDK the collaborator's own deferred import only
+        discovers here, HF Hub unreachable, etc.) can't block the orchestrator
+        from coming up; an empty poller mapping skips that loop entirely, so
+        default deployments pay zero cost.
         """
         if self._cloud_sink is not None:
-            await self._cloud_sink.start()
+            try:
+                await self._cloud_sink.start()
+            except Exception:
+                _log.warning("cloud_sink_start_failed", exc_info=True)
         if self._cloud_experience_exporter is not None:
-            await self._cloud_experience_exporter.start()
+            try:
+                await self._cloud_experience_exporter.start()
+            except Exception:
+                _log.warning("cloud_experience_exporter_start_failed", exc_info=True)
         if self._cloud_metrics_exporter is not None:
-            await self._cloud_metrics_exporter.start()
+            try:
+                await self._cloud_metrics_exporter.start()
+            except Exception:
+                _log.warning("cloud_metrics_exporter_start_failed", exc_info=True)
         if self._cloud_firestore_sync is not None:
-            await self._cloud_firestore_sync.start()
+            try:
+                await self._cloud_firestore_sync.start()
+            except Exception:
+                _log.warning("cloud_firestore_sync_start_failed", exc_info=True)
         for poller in self._weight_update_pollers.values():
             try:
                 await poller.start()

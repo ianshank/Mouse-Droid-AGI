@@ -72,7 +72,10 @@ def test_logging_sink_members_are_callable_with_the_expected_arity() -> None:
     runtime. ``CloudLoggingSinkProtocol`` covers ``start``/``__call__``/
     ``close`` -- widened from a bare ``__call__`` so main.py can drive the
     sink's lifecycle directly (see design.md D-5 in the F-032 openspec
-    bundle).
+    bundle). Asserts the actual parameter count (not just that
+    ``inspect.signature`` doesn't raise) -- a bare call proves nothing on its
+    own, since ``inspect.signature`` succeeds for almost any callable
+    regardless of arity.
     """
     import inspect
 
@@ -80,10 +83,15 @@ def test_logging_sink_members_are_callable_with_the_expected_arity() -> None:
 
     cfg = _make_gcp_cfg()
     sink = CloudLoggingSink(cfg)
-    for name in ("start", "__call__", "close"):
+    # Bound methods: inspect.signature excludes `self`.
+    expected_param_counts = {"start": 0, "__call__": 3, "close": 0}
+    for name, expected_count in expected_param_counts.items():
         member = getattr(sink, name)
         assert callable(member), f"CloudLoggingSink.{name} is not callable"
-        inspect.signature(member)
+        actual_count = len(inspect.signature(member).parameters)
+        assert actual_count == expected_count, (
+            f"CloudLoggingSink.{name} expected {expected_count} params, got {actual_count}"
+        )
 
 
 def test_logging_sink_preserves_event_dict() -> None:

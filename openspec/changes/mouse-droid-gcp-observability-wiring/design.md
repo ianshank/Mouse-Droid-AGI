@@ -131,3 +131,89 @@ the reverse of their start order (pollers → experience_exporter → sink) —
 the two new components are inserted into the stop sequence maintaining that
 same reversal: pollers → `cloud_firestore_sync` → `cloud_metrics_exporter` →
 `cloud_experience_exporter` → `cloud_sink`.
+
+## D-7. Post-merge hotfix — genuine SDK-availability detection
+
+**Context:** the first PR for this bundle (#206) was merged by the operator
+before a Copilot review round landing while it was still open could be
+acted on. Per this repo's own convention for a merged designated branch,
+remediation shipped as a fresh hotfix on a restarted branch, not a reopened
+PR. Every finding below was independently re-verified against the actual
+merged source before being accepted, then re-verified again by a dedicated
+review agent that pulled the real GitHub review rather than trusting any
+paraphrase.
+
+**The bug:** none of `cloud/logging_sink.py`, `cloud/monitoring_exporter.py`,
+`cloud/firestore_sync.py` — nor the two pre-existing siblings,
+`cloud/pubsub_sink.py`, `cloud/experience_exporter.py` — imports
+`google.cloud.*` at module scope; every one defers that import into its own
+`start()` method. So every builder's `except ImportError` around the
+lightweight `mousedroid.cloud.<x>` wrapper import (D-2's precedent idiom)
+never fired for a genuinely-missing SDK: `from mousedroid.cloud.monitoring_exporter
+import CloudMetricsExporter` succeeds regardless of whether
+`google-cloud-monitoring` is installed, since that import touches only the
+wrapper module, not the SDK. Combined with `_start_cloud_subsystems`'s four
+`.start()` calls being unwrapped (D-6 documents the LIFO *order*; none of
+the four was exception-safe), an operator enabling
+`gcp.monitoring.enabled`/`gcp.firestore.enabled` — or, latently, the two
+pre-existing `gcp.pubsub.enabled`/`gcp.storage.enabled` toggles — without
+installing the `[gcp]` extra got a rover that failed to boot entirely, not
+the graceful degrade every `cloud_*_not_available` log event implies.
+
+**The fix, deliberately widened to all five builders, not just the three
+new ones** (an independent review agent's scope correction — a fix
+touching only two of `_start_cloud_subsystems`'s four identical calls, or
+only three of five builders sharing one `except ImportError` idiom, would
+leave an inconsistent half-fixed contract sitting in the same method/idiom
+this hotfix already touches):
+
+- Each of `build_cloud_telemetry_sink`, `build_cloud_experience_exporter`,
+  `build_cloud_logging_sink`, `build_cloud_metrics_exporter`,
+  `build_cloud_firestore_sync` now calls
+  `mousedroid.common.imports.module_available("google.cloud.<x>")` — a
+  spec-only probe (no import side effect, consistent with these classes'
+  own deliberately-deferred-import design) against the *actual* SDK
+  submodule each concrete class's `start()` will need, before attempting
+  the wrapper import. A spec-only check (not `module_importable`, which
+  performs a real import) was chosen specifically because these builders
+  never eagerly import the SDK today — probing with a real import at build
+  time would change that property as a side effect of a detection fix.
+- All four `_start_cloud_subsystems` `.start()` calls — `cloud_sink`,
+  `cloud_experience_exporter`, `cloud_metrics_exporter`,
+  `cloud_firestore_sync` — are now each wrapped in their own
+  `try/except Exception: _log.warning(...)`, matching the pre-existing
+  OTA-poller pattern three lines below in the same method.
+
+**Test consequence, shipped in the same commit as the fix above (not a
+follow-up — there is no intermediate state where both the fix and the old
+tests are simultaneously correct):** this repo's CI installs no `[gcp]`
+extra in any job, so `tests/integration/test_factory_integration.py::
+test_build_orchestrator_threads_gcp_observability_collaborators` and three
+"enabled path" cases in `tests/unit/factory/test_factory_cloud_observability.py`
+previously passed only because the detection bug existed. Fixing detection
+correctly flips all four to see `None`; each gained a
+`pytest.importorskip("google.cloud.<x>")` guard so they skip cleanly in
+this repo's own CI instead of failing. The three `_none_when_module_not_importable`
+tests in the same factory file additionally gained a
+`monkeypatch.setattr("mousedroid.factory.module_available", lambda name: True)`
+line so they keep isolating the *wrapper*-`ImportError` branch specifically
+— without it, the new, earlier SDK-availability guard would return `None`
+first for an unrelated reason (the SDK genuinely absent in CI) and the test
+would silently stop proving what it claims to.
+
+**Also in this hotfix, unrelated to the boot-crash bug but confirmed
+real during the same Copilot review round:** `MouseDroidOrchestrator.__init__`
+gained a bare `*,` immediately before `tool_registry`, closing a
+keyword-only-argument gap that predates F-032 (every param from `cognitive_core`
+onward was already positionally callable) — F-032's own two new params just
+happened to land in the exposed region. Confirmed zero exploitation via an
+AST sweep of every `MouseDroidOrchestrator(` call site in the tree (all
+45+ pass pure keyword arguments), so this is latent hardening, not a live-bug
+fix. Three documentation/test-quality nits also landed: a third stale
+`docs/architecture.md` `classDiagram` (the `class Factory` block) that the
+pre-merge doc-reconciler pass missed; the Level 3d intro's blanket
+"protected by CircuitBreaker" claim, now qualified to match the
+already-accurate per-component Resilience table a few lines below; and the
+`test_logging_sink.py`/`test_firestore_sync.py` arity-check tests, which
+called `inspect.signature(member)` and discarded the result — now assert
+the actual parameter count.

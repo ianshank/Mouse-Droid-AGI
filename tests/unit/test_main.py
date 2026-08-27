@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from mousedroid.config.schema import Settings
+from mousedroid.logging.setup import get_logger
 from mousedroid.main import _health_check, _run, cli_entry
 
 
@@ -200,23 +201,33 @@ async def test_health_check_survives_sink_close_failure() -> None:
 
 
 class _FakeLoggingSink:
-    """Protocol-conforming fake -- records every event it forwards.
+    """Protocol-conforming fake -- records events forwarded while "live".
 
     Used (rather than the real ``CloudLoggingSink``, which reaches for
     ``google.cloud.logging.Client``) to prove two things through
     ``cli_entry()``'s own real, unmocked code path: the *same* instance
     reaches both ``configure_logging()`` and ``_run()``/``_health_check()``,
     and a live log event actually forwards through it -- not just object
-    identity.
+    identity. Mirrors the real ``CloudLoggingSink.__call__``'s ``_started``
+    gate (events before ``start()`` -- or after ``close()`` -- are dropped),
+    so this fake doesn't prove more than the real class actually guarantees.
     """
 
     def __init__(self) -> None:
-        self.start = AsyncMock()
-        self.close = AsyncMock()
+        self._started = False
+        self.start = AsyncMock(side_effect=self._mark_started)
+        self.close = AsyncMock(side_effect=self._mark_stopped)
         self.events: list[dict[str, Any]] = []
 
+    async def _mark_started(self) -> None:
+        self._started = True
+
+    async def _mark_stopped(self) -> None:
+        self._started = False
+
     def __call__(self, logger: Any, method_name: str, event_dict: dict[str, Any]) -> dict[str, Any]:
-        self.events.append(dict(event_dict))
+        if self._started:
+            self.events.append(dict(event_dict))
         return event_dict
 
 
@@ -233,6 +244,18 @@ def test_cli_entry_threads_one_sink_instance_into_configure_logging_and_run(
     fake_sink = _FakeLoggingSink()
     fake_orch = _FakeOrchestrator()
 
+    async def _log_while_running() -> None:
+        # Fires from inside orch_obj.run(), i.e. strictly after _run() has
+        # awaited cloud_logging_sink.start() and strictly before its outer
+        # finally awaits cloud_logging_sink.close() -- the one point in
+        # cli_entry()'s reachable flow where the sink is genuinely "live"
+        # per its own _started gate. Proves the sink forwards a real event
+        # while live, not just that the same instance reaches both call
+        # sites.
+        get_logger(__name__).info("orchestrator_run_started")
+
+    fake_orch.run = AsyncMock(side_effect=_log_while_running)
+
     with (
         patch("mousedroid.main.load_settings", return_value=_settings()),
         patch("mousedroid.factory.build_cloud_logging_sink", return_value=fake_sink),
@@ -241,12 +264,16 @@ def test_cli_entry_threads_one_sink_instance_into_configure_logging_and_run(
     ):
         cli_entry()
 
-    # Reached configure_logging() and forwarded a real, live log event --
-    # not just object identity (configure_logging's own event-forwarding
+    # Reached configure_logging() -- wired the same instance into the
+    # structlog processor chain (configure_logging's own event-forwarding
     # correctness is separately covered by tests/unit/logging/test_setup.py;
-    # this proves cli_entry()'s wiring reaches it end-to-end).
+    # this proves cli_entry()'s wiring reaches it end-to-end). The
+    # pre-start "mousedroid_starting" log fires before _run() awaits
+    # cloud_logging_sink.start(), so the real class would silently drop it
+    # too -- correctly absent here since the fake mirrors that _started gate.
     events = [e["event"] for e in fake_sink.events]
-    assert "mousedroid_starting" in events
+    assert "mousedroid_starting" not in events
+    assert "orchestrator_run_started" in events
 
     # Reached _run() -- the same instance's lifecycle was driven.
     fake_sink.start.assert_called_once()

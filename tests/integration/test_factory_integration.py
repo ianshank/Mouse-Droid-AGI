@@ -60,7 +60,15 @@ def test_build_orchestrator_threads_gcp_observability_collaborators() -> None:
     (build_cloud_telemetry_sink/build_cloud_experience_exporter) have this
     same integration-tier gap; this closes it for the two new ones per the
     plan's own explicit requirement.
+
+    Requires both real SDKs: a post-merge hotfix made every cloud builder
+    genuinely probe google.cloud.* availability up front (see the
+    F-032 openspec bundle's Copilot-findings addendum) rather than only
+    guarding the lightweight wrapper import, so this repo's own CI (which
+    installs no [gcp] extra in any job) must skip rather than fail here.
     """
+    pytest.importorskip("google.cloud.monitoring_v3")
+    pytest.importorskip("google.cloud.firestore")
     from mousedroid.cloud.firestore_sync import CloudFirestoreSync
     from mousedroid.cloud.monitoring_exporter import CloudMetricsExporter
 

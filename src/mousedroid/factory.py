@@ -14,7 +14,7 @@ from mousedroid.cloud.protocol import (
     ENGINE_TYPE_POLICY,
     ENGINE_TYPE_WORLD_MODEL,
 )
-from mousedroid.common.imports import module_importable
+from mousedroid.common.imports import module_available, module_importable
 from mousedroid.comms.protocol import ESP32CommProtocol
 from mousedroid.constants import (
     DEFAULT_CAMERA_HEIGHT,
@@ -4713,6 +4713,16 @@ def build_cloud_telemetry_sink(
         # telemetry stops arriving.
         _log.info("cloud_telemetry_sink_disabled", reason="gcp.pubsub.enabled=false")
         return None
+    if not module_available("google.cloud.pubsub_v1"):
+        # google-cloud-pubsub is only in the optional [gcp] extra; the SDK
+        # import itself is deferred into CloudTelemetrySink.start(), so this
+        # spec-only probe is what actually detects a missing install (the
+        # except ImportError below never fires for that case on its own).
+        _log.warning(
+            "cloud_pubsub_not_available",
+            hint="Install via: pip install 'mousedroid[gcp]'",
+        )
+        return None
     try:
         from mousedroid.cloud.pubsub_sink import CloudTelemetrySink
     except ImportError:
@@ -4745,6 +4755,15 @@ def build_cloud_experience_exporter(
         return None
     if not cfg.gcp.storage.enabled:
         _log.info("cloud_experience_exporter_disabled", reason="gcp.storage.enabled=false")
+        return None
+    if not module_available("google.cloud.storage"):
+        # google-cloud-storage is only in the optional [gcp] extra; the SDK
+        # import itself is deferred into CloudExperienceExporter.start(), so
+        # this spec-only probe is what actually detects a missing install.
+        _log.warning(
+            "cloud_storage_not_available",
+            hint="Install via: pip install 'mousedroid[gcp]'",
+        )
         return None
     try:
         from mousedroid.cloud.experience_exporter import CloudExperienceExporter
@@ -4783,6 +4802,15 @@ def build_cloud_logging_sink(cfg: Settings) -> CloudLoggingSinkProtocol | None:
         return None
     if not cfg.gcp.logging.enabled:
         _log.info("cloud_logging_sink_disabled", reason="gcp.logging.enabled=false")
+        return None
+    if not module_available("google.cloud.logging"):
+        # google-cloud-logging is only in the optional [gcp] extra; the SDK
+        # import itself is deferred into CloudLoggingSink.start(), so this
+        # spec-only probe is what actually detects a missing install.
+        _log.warning(
+            "cloud_logging_not_available",
+            hint="Install via: pip install 'mousedroid[gcp]'",
+        )
         return None
     try:
         from mousedroid.cloud.logging_sink import CloudLoggingSink
@@ -4828,6 +4856,15 @@ def build_cloud_metrics_exporter(
     if metrics_registry is None:
         _log.info("cloud_metrics_exporter_disabled", reason="metrics_registry_not_available")
         return None
+    if not module_available("google.cloud.monitoring_v3"):
+        # google-cloud-monitoring is only in the optional [gcp] extra; the SDK
+        # import itself is deferred into CloudMetricsExporter.start(), so this
+        # spec-only probe is what actually detects a missing install.
+        _log.warning(
+            "cloud_monitoring_not_available",
+            hint="Install via: pip install 'mousedroid[gcp]'",
+        )
+        return None
     try:
         from mousedroid.cloud.monitoring_exporter import CloudMetricsExporter
     except ImportError:
@@ -4871,6 +4908,15 @@ def build_cloud_firestore_sync(
         return None
     if episodic is None:
         _log.info("cloud_firestore_sync_disabled", reason="episodic_memory_not_available")
+        return None
+    if not module_available("google.cloud.firestore"):
+        # google-cloud-firestore is only in the optional [gcp] extra; the SDK
+        # import itself is deferred into CloudFirestoreSync.start(), so this
+        # spec-only probe is what actually detects a missing install.
+        _log.warning(
+            "cloud_firestore_not_available",
+            hint="Install via: pip install 'mousedroid[gcp]'",
+        )
         return None
     try:
         from mousedroid.cloud.firestore_sync import CloudFirestoreSync
