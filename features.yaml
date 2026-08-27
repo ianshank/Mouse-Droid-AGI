@@ -947,3 +947,25 @@ features:
       "Open dependabot PR #145" framing was independently already stale
       too (verified via git log: #145 merged 2026-08-17, three days before
       the diagnosis commit that still called it "open").
+
+      Known, accepted, pre-existing gap surfaced by security-scanner
+      during this bundle's review round (not introduced by this bundle --
+      neither the field's type nor the log line it flags are touched
+      here): ExperimentLoggerConfig.tracking_uri stays a plain str, not
+      SecretStr, unlike the sibling TelemetryConfig.api_key field in the
+      same module. MlflowExperimentLogger.__init__ logs it raw via
+      mlflow_logger_initialised. The schema default this bundle ships
+      (sqlite:///mlflow.db) carries no credentials, so this is dormant
+      today -- but the field's own docstring already documents remote
+      http://host:port URIs, and this bundle's own framing points further
+      toward database-backed stores generally, which can carry embedded
+      credentials (e.g. postgresql://user:pass@host/db) if an operator
+      overlay ever sets one. Not fixed here: SecretStr would need
+      .get_secret_value() threaded through _resolve_tracking_uri and
+      MlflowExperimentLogger.__init__, a real API-shape change outside
+      this bundle's stated scope (a default-value flip + CI job + docs),
+      not a proportionate widening of the one field/docstring already
+      being touched. Surfaced rather than silently fixed or silently
+      dropped, per CHARTER Section 6 -- deferred to a separate,
+      not-yet-numbered future change if an operator ever needs a
+      credentialed tracking_uri in practice.

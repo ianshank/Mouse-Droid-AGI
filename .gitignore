@@ -107,6 +107,13 @@ checkpoints/
 runs/
 wandb/
 mlruns/
+# F-034: sqlite is now the default mlflow tracking backend (mlruns/ above
+# covers the legacy file: backend). Covers SQLite's WAL-mode sidecar files
+# too (-wal/-shm/-journal), not just the main .db file.
+mlflow.db
+mlflow.db-wal
+mlflow.db-shm
+mlflow.db-journal
 training/data/sequences.pt
 training/data/*.pt
 training/data/*.npz

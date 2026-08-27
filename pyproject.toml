@@ -88,7 +88,12 @@ mlflow = [
     # The default tracking_uri (ExperimentLoggerConfig.tracking_uri) is a
     # sqlite:/// URI; mlflow's sqlite tracking store needs these two —
     # mlflow-skinny alone raises UnsupportedModelRegistryStoreURIException
-    # for any sqlite:/// URI without them.
+    # for any sqlite:/// URI without them. Upper-bounded at each package's
+    # next major, same discipline as this file's other extras (cf. `mcp`'s
+    # `<2`, `isaaclab`'s `<0.30`) — a 2.x/1.x break here degrades gracefully
+    # anyway (build_experiment_logger falls back to NoOp on ImportError or
+    # construction failure), but an unbounded range would still risk a
+    # silent behavior change on the next major release of either.
     "sqlalchemy>=2.0,<3",
     "alembic>=1.13,<2",
 ]
