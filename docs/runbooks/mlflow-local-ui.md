@@ -1,10 +1,11 @@
 # MLflow Local UI — Operator Runbook
 
 The MLflow experiment logger writes to a local SQLite database at
-`<repo>/mlflow.db` by default (or whatever
-`cfg.observability.experiment_logger.tracking_uri` points to — see
-"Enabling on the rover" below for the legacy file-backend alternative).
-This runbook covers viewing the data.
+`mlflow.db`, relative to the process's working directory, by default (or
+whatever `cfg.observability.experiment_logger.tracking_uri` points to —
+see "Enabling on the rover" below for the legacy file-backend alternative
+and "Common pitfalls" for the CWD caveat). This runbook covers viewing the
+data.
 
 ## Prerequisites
 
