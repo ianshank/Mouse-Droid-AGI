@@ -9,10 +9,14 @@ This runbook covers viewing the data.
 ## Prerequisites
 
 Install the local-viewer extras (different from the rover-side `[mlflow]`
-extras — the viewer needs the full `mlflow` package for the UI server):
+extras — the viewer needs the full `mlflow` package for the UI server).
+Match the rover's own `mlflow-skinny` upper bound (`pyproject.toml`'s
+`[mlflow]` extra) rather than pinning the viewer independently: the sqlite
+backend is schema-versioned via Alembic migrations, so a viewer *older*
+than the client that wrote the database can fail to open it.
 
 ```bash
-pip install "mlflow>=2.22,<3"
+pip install "mlflow>=2.22,<4"
 ```
 
 ## Viewing runs
