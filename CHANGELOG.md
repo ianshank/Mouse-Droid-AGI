@@ -34,9 +34,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `.github/advisory_stages.yaml`. `CLAUDE.md` and
   `docs/claude/surfaces/ci-gates.md` job counts updated (16→17 total,
   5→6 advisory) in the same commit.
-- **`_resolve_tracking_uri` (`factory.py`) needed no code change** — it
-  already passed non-`file:` URIs (including `sqlite:`) through unchanged;
-  only new test coverage was needed for the newly-default scheme.
+- **`_resolve_tracking_uri` (`factory.py`) was initially reported as needing no
+  code change** — it already passed non-`file:` URIs (including `sqlite:`)
+  through unchanged, so the first revision of this entry called that a win and
+  added test coverage only. Review reversed it: passing the *new default*
+  through unchanged is precisely the case the resolver exists to handle. See
+  the `_resolve_tracking_uri` bullet below for what actually shipped.
 - **Residual risk, named rather than hidden — corrected during review, having
   first been understated**: the initial writeup scoped impact to operators
   pinning `mlflow-skinny` in the 2.x range, and claimed that combination was
