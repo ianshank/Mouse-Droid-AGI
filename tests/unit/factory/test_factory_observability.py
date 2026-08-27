@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from mousedroid.config.schema import (
@@ -169,5 +171,10 @@ def test_resolve_tracking_uri_still_resolves_file_uris_to_absolute_path() -> Non
     """
     resolved = _resolve_tracking_uri("file:./mlruns")
     assert resolved.startswith("file:")
-    assert resolved.endswith("/mlruns")
-    assert "./mlruns" not in resolved  # relative segment must be gone
+    # Path(...).name/.is_absolute() rather than string suffix/substring
+    # checks -- Path.resolve() renders with the OS-native separator, so a
+    # raw `resolved.endswith("/mlruns")` check is forward-slash-only and
+    # fails on Windows, where the resolved path uses backslashes.
+    resolved_path = Path(resolved.removeprefix("file:"))
+    assert resolved_path.name == "mlruns"
+    assert resolved_path.is_absolute()
