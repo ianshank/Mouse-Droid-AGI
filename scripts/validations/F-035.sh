@@ -45,7 +45,34 @@ import json
 import re
 import sys
 
-sha = json.load(open("deployments/jetson-image.json"))["sha"]
+# Every failure mode gets its own one-line diagnostic. An unguarded
+# json.load would surface a raw traceback that the outer shell then wraps in
+# a generic "F-035 FAIL", which is a poor thing to read off a Jetson console
+# when the actual problem is one malformed character in a JSON file.
+PATH = "deployments/jetson-image.json"
+try:
+    with open(PATH, encoding="utf-8") as fh:
+        payload = json.load(fh)
+except FileNotFoundError:
+    print(f"{PATH} is missing", file=sys.stderr)
+    sys.exit(1)
+except json.JSONDecodeError as exc:
+    print(f"{PATH} is not valid JSON: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+if not isinstance(payload, dict):
+    print(f"{PATH} top level is {type(payload).__name__}, expected an object", file=sys.stderr)
+    sys.exit(1)
+if "sha" not in payload:
+    print(f'{PATH} has no "sha" key', file=sys.stderr)
+    sys.exit(1)
+
+sha = payload["sha"]
+if not isinstance(sha, str):
+    # repin_tags.sh turns this value into a tag name; a non-string would
+    # reach git as whatever python's str() made of it.
+    print(f'{PATH} ["sha"] is {type(sha).__name__}, expected a string', file=sys.stderr)
+    sys.exit(1)
 if not re.fullmatch(r"[0-9a-f]{40}", sha):
     print(f"deploy pin is not a 40-char lowercase hex SHA: {sha!r}", file=sys.stderr)
     sys.exit(1)

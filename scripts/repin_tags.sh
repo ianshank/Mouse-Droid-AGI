@@ -54,7 +54,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --push) PUSH=1 ;;
         --help | -h)
-            sed -n '2,46p' "$0"
+            sed -n '2,45p' "$0"
             exit 0
             ;;
         *)
