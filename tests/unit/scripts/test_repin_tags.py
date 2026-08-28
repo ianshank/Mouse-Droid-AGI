@@ -25,6 +25,25 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SCRIPTS = _REPO_ROOT / "scripts"
 _SCRIPT_NAME = "repin_tags.sh"
 _SIBLING_NAME = "archive_stale_branches.sh"
+_SCRIPT = _SCRIPTS / _SCRIPT_NAME
+_SIBLING = _SCRIPTS / _SIBLING_NAME
+
+# Byte-for-byte the guard test_archive_stale_branches.py uses, and for the same
+# reason. `os.name == "nt"` is NOT redundant with the shutil.which("bash")
+# check: on the GitHub Windows runner `bash` resolves to the WSL shim, so
+# which() finds it and every invocation then prints "Windows Subsystem for
+# Linux has no installed distributions" and exits 1. Omitting this marker is
+# what turned all 13 tests here red on test-windows while they passed on
+# Linux -- the sibling had the guard, this file did not.
+pytestmark = pytest.mark.skipif(
+    os.name == "nt"
+    or shutil.which("bash") is None
+    or shutil.which("git") is None
+    or not _SCRIPT.exists()
+    or not _SIBLING.exists(),
+    reason="bash + git + scripts/repin_tags.sh + scripts/archive_stale_branches.sh required",
+)
+
 _PINNED_BRANCH = "carries-the-pin"
 
 _FEATURES_TEMPLATE = """\
