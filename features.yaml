@@ -873,6 +873,50 @@ features:
       hotfix fixed -- 69b9aa0 is the first commit where F-032 is both
       wired AND correctly degrades when the [gcp] extra is absent.
 
+  - id: "F-035"
+    epic: "Deploy hygiene"
+    name: "Gate-critical SHAs are tag-protected, not branch-protected"
+    description: >-
+      Adds scripts/repin_tags.sh, the mirror image of
+      scripts/archive_stale_branches.sh: where that script REFUSES to delete a
+      branch while it is the last thing keeping a pinned SHA reachable, this
+      one removes the need for that refusal by tagging the SHA directly. Two
+      pin families, both derived rather than hardcoded --
+      deployments/jetson-image.json's deploy pin (tag prefix DEPLOY_NS) and
+      every features.yaml implemented_in pin (namespace FEATURE_NS) -- named
+      by full 40-char SHA so one tag covers features that share a pin
+      (F-028/F-029 do). Dry-run by default; --push is an explicit operator
+      action. Also corrects deployments/jetson-image.json's own notes, which
+      asserted the SHA was "kept reachable by the annotated tag ... NOT by any
+      branch" while zero tags existed on the remote and the SHA was in fact
+      reachable only from stale feature branches.
+    category: "infrastructure"
+    priority: "medium"
+    status: "in_progress"
+    tier: "fast"
+    verification:
+      - "a dry run names every tag it would create and leaves both the remote and the local tag list untouched"
+      - "--push creates ANNOTATED tags (not lightweight) on the remote for both pin families, named by full 40-char SHA"
+      - "a re-run is idempotent: both pins report as already covered and no second tag is created"
+      - "a SHA already reachable from a differently-named REMOTE tag counts as covered -- coverage is reachability, not naming"
+      - "a deploy pin that is not 40 lowercase hex chars is rejected by the FORMAT check specifically, with a nonzero exit and no remote mutation -- asserted on the format-check message, because these values also fail the later resolve check and a bare nonzero-exit assertion passed with the format check deleted"
+      - "a deploy pin naming a branch is rejected even though git cat-file resolves it -- the case format validation exists for, which a reachability check alone silently mis-tags"
+      - "a well-formed but unresolvable pin exits nonzero rather than reporting a partial plan as success"
+      - "REMOTE env override selects a different remote and leaves origin untouched"
+      - "cross-script: after repin_tags.sh --push, archive_stale_branches.sh reports the same pin as 'carriers not needed' instead of protecting its branch"
+    validation_command: "bash scripts/validations/F-035.sh"
+    implemented_in: null
+    depends_on: []
+    notes: >-
+      Ships with the deploy-repin skill (the F-036 half that backtick-references
+      scripts/repin_tags.sh, so the two must land together or the skill-command
+      validator fails on a dead path reference). No dependency on F-034: disjoint
+      files. A real --push run is an operator action requiring separate explicit
+      confirmation -- this feature covers building and dry-running the script
+      only, so the tags it would create do not exist yet. implemented_in stays
+      null until the dedicated closeout PR, per the F-030/F-031/F-032/F-034
+      convention.
+
   - id: "F-034"
     epic: "Training Observability"
     name: "MLflow sqlite tracking default"
