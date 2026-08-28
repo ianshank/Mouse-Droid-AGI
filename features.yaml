@@ -892,7 +892,7 @@ features:
       reachable only from stale feature branches.
     category: "infrastructure"
     priority: "medium"
-    status: "in_progress"
+    status: "done"
     tier: "fast"
     verification:
       - "a dry run names every tag it would create and leaves both the remote and the local tag list untouched"
@@ -905,7 +905,7 @@ features:
       - "REMOTE env override selects a different remote and leaves origin untouched"
       - "cross-script: after repin_tags.sh --push, archive_stale_branches.sh reports the same pin as 'carriers not needed' instead of protecting its branch"
     validation_command: "bash scripts/validations/F-035.sh"
-    implemented_in: null
+    implemented_in: "24e34542b9ad98af03a020a005e916220dd28075"
     depends_on: []
     notes: >-
       Ships with the deploy-repin skill (the F-036 half that backtick-references
