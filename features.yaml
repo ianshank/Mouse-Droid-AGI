@@ -892,9 +892,12 @@ features:
       mlflow-extras CI job (mirrors onnx-world-model-extras' shape) since
       no prior CI job installed the [mlflow] extra at all -- its "green"
       status never actually exercised mlflow. _resolve_tracking_uri
-      (factory.py) is unchanged: it only resolves file: URIs to an
-      absolute path, so sqlite:/// URIs already passed through unchanged
-      before this feature landed.
+      (factory.py) is widened to pin relative sqlite:/// paths as well as
+      file: ones, so the new default is not left as the only unpinned local
+      store; in-memory sqlite and remote URIs still pass through unchanged.
+      Every log site carrying a tracking_uri redacts its userinfo component
+      first (mousedroid.logging.redaction), because the field is a plain str
+      and a remote store may be spelled http://user:password@host.
     category: "functional"
     priority: "medium"
     status: "in_progress"
@@ -912,12 +915,15 @@ features:
     implemented_in: null
     depends_on: []
     notes: >-
-      No dependency on F-028 through F-032 -- disjoint files
-      (config/schema/telemetry.py, pyproject.toml, .github/workflows/ci.yml,
-      docs/architecture/c4-experiment-logger.md,
-      docs/runbooks/mlflow-local-ui.md) from all of them. implemented_in
-      stays null until the dedicated closeout PR, per the F-030/F-031/F-032
-      convention of a separate bookkeeping-only PR after merge.
+      No dependency on F-028 through F-032. The one file shared with any of
+      them is src/mousedroid/factory.py, which F-032 also touched, but the
+      overlap is textually disjoint: F-032 added the build_cloud_* builders,
+      F-034 touches only build_experiment_logger and _resolve_tracking_uri.
+      (An earlier revision of this note claimed the file sets were entirely
+      disjoint; that stopped being true when the hardening round widened
+      _resolve_tracking_uri.) implemented_in stays null until the dedicated
+      closeout PR, per the F-030/F-031/F-032 convention of a separate
+      bookkeeping-only PR after merge.
 
       Verified empirically before implementing, not trusted from
       NEXT_STEPS.md item 0's own diagnosis (written 2026-08-20, predating

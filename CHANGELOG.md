@@ -105,9 +105,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   default-value + extras pins, proven via manual revert/red/restore/green;
   Type B `_resolve_tracking_uri` passthrough pins),
   `tests/regression/test_f034_mlflow_sqlite_backwards_compat.py` (Type C:
-  every shipped `config/*.yaml` scanned for any `observability:`/
-  `experiment_logger:` reference — none found, a stronger safety margin
-  than F-029's twin-overlay precedent).
+  every shipped config file — `*.yaml`/`*.yml`, config subdirectories, and
+  `*.example` templates, 27 in all — scanned for any `observability:`/
+  `experiment_logger:` reference; none found, a stronger safety margin than
+  F-029's twin-overlay precedent).
+- **Security fix — a credentialed `tracking_uri` no longer reaches the
+  logs.** Found by an adversarial review pass and **introduced by this
+  bundle's own hardening round**, so it is named as a regression rather than
+  filed under pre-existing debt. `tracking_uri` is a plain `str`, not a
+  `SecretStr`; a remote store is legitimately spelled
+  `http://user:password@host:5000` (the field's own description advertises
+  `http://host:port`); and the structlog processor chain contains no
+  redaction step, so anything handed to a log call is emitted verbatim to
+  stdout, the telemetry ring buffer, and — where enabled — Cloud Logging.
+  The round added **three** new emission sites, **two of them on failure
+  paths** where the URI had previously never been logged at all: precisely
+  the moment an operator copies a line into a ticket. New helper
+  `mousedroid.logging.redaction.redact_uri_credentials` masks the whole
+  `userinfo` component (not just `parsed.password` — a token is conventionally
+  passed as `https://<token>@host`, which a password-only mask would leak)
+  and is applied at all four sites, including the pre-existing
+  `mlflow_logger_initialised` one, so no half-fixed site is left behind.
+  Scheme, host, port and path are preserved, so the resolved-path reporting
+  the events exist for is untouched and the local default is byte-identical.
+  Proven by revert: without the fix,
+  `tests/integration/test_experiment_logger_redaction.py` fails with the
+  password in cleartext in the captured events.
 
 ### Added — F-032: GCP observability wiring (logging, monitoring, Firestore)
 

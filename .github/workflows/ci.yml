@@ -559,7 +559,7 @@ jobs:
               # A resolution drift (mlflow/sqlalchemy/alembic) is the most
               # likely cause of this job going red; without this the failing
               # log shows no versions to diff against the last green run.
-              run: pip list 2>/dev/null | grep -Ei 'mlflow|sqlalchemy|alembic'
+              run: pip list 2>/dev/null | grep -Ei 'mlflow|sqlalchemy|alembic' || true
 
             - name: Run mlflow-touching test suite
               run: |

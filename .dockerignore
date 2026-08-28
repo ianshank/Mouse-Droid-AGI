@@ -103,14 +103,23 @@ reports/
 runs/
 checkpoints/
 mlruns/
-# F-034: sqlite is now the default MLflow tracking backend (mlruns/ above
-# covers the legacy file: backend). Mirrors the .gitignore entries, incl.
-# SQLite's WAL-mode sidecars, so a developer's local training DB never
-# enters the build context.
-mlflow.db
-mlflow.db-wal
-mlflow.db-shm
-mlflow.db-journal
+# F-034: sqlite is now the default MLflow tracking backend. Mirrors the
+# .gitignore entries, incl. SQLite's WAL-mode sidecars, so a developer's
+# local training DB never enters the build context.
+#
+# Do NOT drop mlruns/ above as "legacy" — mlflow's SQLAlchemy store keeps
+# its ARTIFACT root at ./mlruns even under a sqlite database, so it stays
+# an active output path (verified against a real mlflow 3.x run).
+#
+# ``**/`` prefix, unlike .gitignore: Docker matches each pattern against
+# the context-relative path with filepath.Match, so a bare ``mlflow.db``
+# would cover only the context root. .gitignore's leading-slash-free
+# patterns already match at any depth, hence the two files differing here
+# rather than staying byte-identical.
+**/mlflow.db
+**/mlflow.db-wal
+**/mlflow.db-shm
+**/mlflow.db-journal
 var/
 
 # Claude worktrees + agent workspaces

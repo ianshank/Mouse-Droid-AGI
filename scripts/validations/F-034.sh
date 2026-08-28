@@ -9,11 +9,11 @@ if ! command -v "$PY_BIN" >/dev/null 2>&1; then
   PY_BIN="python3"
 fi
 
-# The two dedicated F-034 regression files run in full, plus the three
+# The two dedicated F-034 regression files run in full, plus the five
 # _resolve_tracking_uri node IDs in test_factory_observability.py (moved
 # there from an earlier draft of the AQA file per
 # .claude/skills/test-tier-mirror/SKILL.md -- AQA is for schema properties,
-# not behaviour). None of these five need the [mlflow] extra -- tracking_uri
+# not behaviour). None of these seven need the [mlflow] extra -- tracking_uri
 # is a plain schema default pin and _resolve_tracking_uri's passthrough
 # behavior needs no real mlflow client (see
 # tests/unit/training/observability/test_mlflow_logger.py /

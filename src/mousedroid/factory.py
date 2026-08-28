@@ -39,6 +39,7 @@ from mousedroid.interfaces.protocols import (
     MotorControllerProtocol,
 )
 from mousedroid.llm_gateway.protocol import LLMGatewayProtocol
+from mousedroid.logging.redaction import redact_uri_credentials, redact_uris_in_text
 from mousedroid.logging.setup import get_logger
 from mousedroid.safety.projector_protocol import SafetyActionProjectorProtocol
 from mousedroid.safety.protocol import SafetyMonitorProtocol
@@ -1510,10 +1511,17 @@ def build_experiment_logger(cfg: Settings) -> ExperimentLoggerProtocol:
             # store's own errors ("unable to open database file", "file is not
             # a database") name no path, so without this an operator seeing
             # "no runs visible" cannot tell where the backend actually points.
+            #
+            # Redacted because tracking_uri is a plain str (not SecretStr) and
+            # a remote store is legitimately spelled with inline credentials --
+            # ``http://user:password@host:5000``. Redaction masks only the
+            # userinfo component, so the scheme/host/path this event exists to
+            # report survive intact; the local sqlite/file default is
+            # byte-identical to its input.
             _log.info(
                 "experiment_logger_tracking_uri_resolved",
-                configured_uri=logger_cfg.tracking_uri,
-                resolved_uri=tracking_uri,
+                configured_uri=redact_uri_credentials(logger_cfg.tracking_uri),
+                resolved_uri=redact_uri_credentials(tracking_uri),
                 experiment_name=logger_cfg.experiment_name,
             )
             return MlflowExperimentLogger(
@@ -1524,9 +1532,12 @@ def build_experiment_logger(cfg: Settings) -> ExperimentLoggerProtocol:
         except ImportError as exc:
             _log.warning(
                 "experiment_logger_mlflow_extras_missing",
-                configured_uri=logger_cfg.tracking_uri,
+                configured_uri=redact_uri_credentials(logger_cfg.tracking_uri),
                 error_type=type(exc).__name__,
-                error=str(exc),
+                # Redacted too, not just the URI field: mlflow's
+                # UnsupportedModelRegistryStoreURIException quotes the
+                # offending tracking URI back verbatim, password included.
+                error=redact_uris_in_text(str(exc)),
             )
             return NoOpExperimentLogger()
         except Exception as exc:
@@ -1537,9 +1548,10 @@ def build_experiment_logger(cfg: Settings) -> ExperimentLoggerProtocol:
             # underlying store exceptions do not carry it.
             _log.warning(
                 "experiment_logger_mlflow_init_failed",
-                configured_uri=logger_cfg.tracking_uri,
+                configured_uri=redact_uri_credentials(logger_cfg.tracking_uri),
                 error_type=type(exc).__name__,
-                error=str(exc),
+                # See the sibling branch: store exceptions echo the URI.
+                error=redact_uris_in_text(str(exc)),
             )
             return NoOpExperimentLogger()
 

@@ -46,7 +46,9 @@ def test_backend_mlflow_returns_mlflow_logger_when_extras_present(tmp_path: obje
     pytest.importorskip("mlflow")
     cfg = _settings_with_logger(
         backend="mlflow",
-        tracking_uri=f"file:{tmp_path}/mlruns",
+        # Path join, not a hardcoded "/": tmp_path is a WindowsPath under
+        # test-windows and an f-string slash would produce a mixed separator.
+        tracking_uri=f"file:{Path(tmp_path) / 'mlruns'}",
         experiment_name="test",
     )
     logger = build_experiment_logger(cfg)
@@ -117,31 +119,31 @@ def test_backend_mlflow_degrades_to_noop_on_construction_failure(
     assert isinstance(logger, NoOpExperimentLogger)
 
 
-def test_relative_file_uri_is_resolved_to_absolute(tmp_path: object) -> None:
-    """A ``file:./mlruns`` URI is pinned to an absolute path before construction."""
+def test_relative_file_uri_is_resolved_to_absolute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``file:./mlruns`` URI is pinned to an absolute path before construction.
+
+    ``monkeypatch.chdir`` rather than ``os.chdir`` + try/finally: pytest
+    restores the directory during its own teardown, which also survives the
+    body being interrupted rather than merely raising. Matches the idiom in
+    tests/integration/test_mlflow_sqlite_backend.py.
+    """
     pytest.importorskip("mlflow")
-    monkey_cwd = str(tmp_path)
-    import os
+    monkeypatch.chdir(tmp_path)
+    cfg = _settings_with_logger(
+        backend="mlflow",
+        tracking_uri="file:./mlruns",
+        experiment_name="abs",
+    )
+    logger = build_experiment_logger(cfg)
+    from mousedroid.training.observability.mlflow_logger import MlflowExperimentLogger
 
-    saved_cwd = os.getcwd()
-    try:
-        os.chdir(monkey_cwd)
-        cfg = _settings_with_logger(
-            backend="mlflow",
-            tracking_uri="file:./mlruns",
-            experiment_name="abs",
-        )
-        logger = build_experiment_logger(cfg)
-        from mousedroid.training.observability.mlflow_logger import MlflowExperimentLogger
-
-        assert isinstance(logger, MlflowExperimentLogger)
-        # Internal attribute access is fine in tests; the contract is "absolute".
-        assert logger._tracking_uri.startswith("file:")
-        assert "mlruns" in logger._tracking_uri
-        # Crucially, the URI does NOT contain a relative ``./``.
-        assert "./mlruns" not in logger._tracking_uri
-    finally:
-        os.chdir(saved_cwd)
+    assert isinstance(logger, MlflowExperimentLogger)
+    # Internal attribute access is fine in tests; the contract is "absolute".
+    assert logger._tracking_uri.startswith("file:")
+    assert Path(logger._tracking_uri[len("file:") :]).is_absolute()
+    assert Path(logger._tracking_uri[len("file:") :]).name == "mlruns"
 
 
 # ---------------------------------------------------------------------------
@@ -189,9 +191,18 @@ def test_resolve_tracking_uri_is_idempotent() -> None:
     Guards the rebuild step: ``sqlite:///`` + an absolute POSIX path yields
     the canonical four-slash form, which must not gain a fifth slash on a
     second pass.
+
+    Asserts the pinned *shape* as well as idempotence. ``f(f(x)) == f(x)``
+    alone is trivially true of the identity function, so on its own it
+    passed with the pin reverted -- it verified nothing the docstring
+    claimed. The absolute-path assertion is what actually goes red.
     """
-    for raw in ("sqlite:///mlflow.db", "file:./mlruns"):
+    for raw, scheme in (("sqlite:///mlflow.db", "sqlite:///"), ("file:./mlruns", "file:")):
         once = _resolve_tracking_uri(raw)
+        assert once != raw, f"{raw} was not pinned at all"
+        assert Path(once[len(scheme) :]).is_absolute(), (
+            f"{raw} resolved to {once}, whose path component is not absolute"
+        )
         assert _resolve_tracking_uri(once) == once
 
 
@@ -206,6 +217,12 @@ def test_resolve_tracking_uri_leaves_remote_and_in_memory_uris_alone() -> None:
         "https://host:5000",
         "databricks",
         "sqlite://",
+        # The empty-path form -- the "" member of _IN_MEMORY_SQLITE_PATHS,
+        # which was otherwise unreachable from any test. The schema now
+        # rejects this URI, so config can no longer deliver it here, but
+        # _resolve_tracking_uri is called with raw strings in tests and its
+        # own contract must still hold.
+        "sqlite:///",
         "sqlite:///:memory:",
     ):
         assert _resolve_tracking_uri(inert) == inert
