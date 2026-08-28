@@ -8,6 +8,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — F-035: gate-critical SHAs are tag-protected, not branch-protected
+
+- **`scripts/repin_tags.sh`** creates the annotated tags that keep pinned SHAs
+  reachable. It is the remedy half of a trio whose other two parts already
+  existed: `.claude/skills/pin-reachability-audit/` *diagnoses* an unprotected
+  pin, `scripts/archive_stale_branches.sh` *defers* the problem by refusing to
+  delete the carrier branch, and nothing *fixed* it. Dry-run by default.
+- **The claim this corrects was false in every clause.**
+  `deployments/jetson-image.json` asserted its SHA was "kept reachable by the
+  annotated tag `deployments/jetson-image-032942b`, NOT by any branch."
+  Verified directly: `git ls-remote --tags origin` returns **zero tags** (that
+  tag has never existed), the SHA is **not** an ancestor of the default
+  branch, and `git branch -r --contains` returns **10 stale feature
+  branches** — precisely the set `archive_stale_branches.sh` exists to delete.
+  The file now states what is actually true, and how to make the original
+  sentence true. A documented protection that does not exist is worse than a
+  known gap, because nobody goes looking.
+- **Format validation is load-bearing, not defensive boilerplate.** Pin values
+  flow from file contents into tag names and git arguments, and the JSON
+  extraction has no format guarantee — python prints whatever the value is.
+  `git cat-file -e` is not a substitute: it resolves branch names, `HEAD` and
+  `main~3`, so a deploy pin of `"main"` would be tagged *as though it were the
+  pinned commit*, protecting the wrong object while the real pin stays
+  exposed. Every extracted value is re-validated against 40 lowercase hex
+  characters first; an unresolvable pin exits nonzero rather than reporting a
+  partial plan as success.
+- **A test-quality correction worth recording.** The first version of the
+  format-rejection tests asserted only a nonzero exit. Reverting the format
+  check to `return 0` left **5 of 6 security tests green** — those values also
+  fail the later resolve check, so the tests were pinning a different check
+  than the one they named. Tightened to assert the format-check message
+  specifically; 5 of 5 now go red without it.
+- Ships with `.claude/skills/deploy-repin/SKILL.md` (the F-036 half), which
+  backtick-references the script and so must land in the same change or
+  `validate_skill_commands.py` fails on a dead path reference.
+- **No tags are created by this change.** `--push` writes to a shared remote
+  and annotated tags are not meant to be deleted, so it is an operator action
+  needing separate per-run confirmation. The 19 tags the dry run currently
+  plans (1 deploy pin + 18 feature pins) do not exist yet.
+
 ### Added — F-034: MLflow sqlite tracking default
 
 - **`ExperimentLoggerConfig.tracking_uri` now defaults to
