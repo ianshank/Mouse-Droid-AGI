@@ -42,7 +42,7 @@
 - **Subsystem Toggles (`enabled: bool`)**: Fine-grained dev escape hatches (e.g. `esp32.enabled`,
   `lidar.enabled`). If code needs to behave differently when hardware is missing, use a schema toggle.
 
-## CI/CD Pipeline (16 Jobs)
+## CI/CD Pipeline (17 Jobs)
 
 Authoritative pipeline in `.github/workflows/ci.yml` — job names and stage numbers are the
 file's own comments (`grep "# Stage" .github/workflows/ci.yml`), not a separate taxonomy:
@@ -54,10 +54,11 @@ file's own comments (`grep "# Stage" .github/workflows/ci.yml`), not a separate 
   cov >= 90%), `performance` *(advisory)*, `test-windows` *(advisory)*, `local-gates`
   (`tools/claude_hooks` cov + deterministic `scripts/ci.sh`-only gates).
 - **Stage 4-4d**: `prometheus-check`, `vla-extras`, `onnx-world-model-extras`
-  *(advisory)*, `gitleaks` (blocking since 2026-08-07), `vulture-audit` *(advisory)*.
+  *(advisory)*, `mlflow-extras` *(advisory)*, `gitleaks` (blocking since 2026-08-07),
+  `vulture-audit` *(advisory)*.
 - **Stage 5-6**: `security` (pip-audit) *(advisory)*, `docker` (needs `test` + `typecheck`).
 
-5 jobs run *(advisory)* — `continue-on-error: true`, tracked in `.github/advisory_stages.yaml`
+6 jobs run *(advisory)* — `continue-on-error: true`, tracked in `.github/advisory_stages.yaml`
 with a promotion window. There is no separate `skills`/`secret-scan`/`test-fast`/`validate`/
 `regression`/`package` job — those checks are steps inside the jobs above.
 
@@ -80,7 +81,7 @@ Detailed operational guidelines and subsystem contracts live in partitioned surf
 
 ### Cross-Cutting Operational Surfaces
 
-- [CI Gates & Quality Ladders](file:///docs/claude/surfaces/ci-gates.md) — 16-job CI matrix, advisory promotion ladder.
+- [CI Gates & Quality Ladders](file:///docs/claude/surfaces/ci-gates.md) — 17-job CI matrix, advisory promotion ladder.
 - [On-Device Full Validation](file:///docs/claude/surfaces/full-validation.md) — Cold-then-warm validation methodology and commands.
 - [USB-C Discovery Protocol](file:///docs/claude/surfaces/usbc-smoke.md) — Dynamic endpoint resolution and hardware enumeration.
 - [MCP Evaluation Notes](file:///docs/claude/surfaces/mcp-evaluation.md) — Model Context Protocol evaluate-first decisions.

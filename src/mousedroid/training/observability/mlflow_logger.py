@@ -15,8 +15,9 @@ to :class:`NoOpExperimentLogger` in that case.
 
 CLAUDE.md invariants honored:
 * Protocol-DI (#1): conforms structurally to :class:`ExperimentLoggerProtocol`.
-* No hardcoded values (#3): every knob comes from ``ExperimentLoggerConfig``.
-* Structured logging (#4): all branches emit ``mlflow_logger_*`` events.
+* Schema-driven config / no hardcoded values (#2): every knob comes from
+  ``ExperimentLoggerConfig``.
+* Structured logging (#3): all branches emit ``mlflow_logger_*`` events.
 * Never raises on backend failure: catches ``Exception`` at every write
   boundary and degrades to a warning log + return (mirrors the LLM gateways).
 """
@@ -27,6 +28,7 @@ import os
 from pathlib import Path
 from typing import Any, cast
 
+from mousedroid.logging.redaction import redact_uri_credentials
 from mousedroid.logging.setup import get_logger
 from mousedroid.training.observability.protocol import (
     PhaseContext,
@@ -87,7 +89,11 @@ class MlflowExperimentLogger:
         self._active_run_id: str | None = None
         _log.info(
             "mlflow_logger_initialised",
-            tracking_uri=tracking_uri,
+            # Redacted for the same reason as the factory's own URI events: a
+            # remote store may be spelled ``http://user:password@host:5000``
+            # and this is a plain str, not a SecretStr. ``self._tracking_uri``
+            # keeps the real value -- only what reaches the log is masked.
+            tracking_uri=redact_uri_credentials(tracking_uri),
             experiment_name=experiment_name,
             experiment_id=self._experiment_id,
         )

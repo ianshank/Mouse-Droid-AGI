@@ -98,17 +98,6 @@ Dependency direction is strictly **Phase 1 → 2 → 3 → 4**; Phase 6 is defer
     protocol-typed call sites). At this volume, needs a dedicated triage pass
     batched by module, not a rubber-stamp allowlist add or blind deletion.
 
-0. **[Dependency — diagnosed blocker] `mlflow-skinny` 3.x breaks the file-store tracking
-   default.** Open dependabot PR #145 proposes widening `mlflow-skinny` from `<3,>=2.22` to
-   `<4,>=2.22`. No CI job installs the `[mlflow]` extra, so its "green" status never actually
-   exercised mlflow. Manually ran the mlflow-touching test surface against 3.15.1:
-   **29 failed, 17 errored** (of ~74) — mlflow 3.x hard-rejects the local filesystem
-   tracking backend by default, which `MlflowExperimentLogger`
-   (`src/mousedroid/training/observability/mlflow_logger.py`) relies on via its default
-   tracking URI. Needs a decision before merging: set `MLFLOW_ALLOW_FILE_STORE=true` in
-   the training entrypoints/CI, or migrate to a database tracking URI
-   (`sqlite:///mlflow.db`). PR left open pending that decision.
-
 1. Run `scripts/benchmark_voice_latency.py` on Jetson for the production personalities
    (`rocky`, `scout`, `friendly`) and capture median / P95 latency before any further voice changes.
 2. Install `promtool` on the Windows validation host so the Prometheus rule stage in

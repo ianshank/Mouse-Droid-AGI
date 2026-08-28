@@ -14,7 +14,7 @@ title Training Experiment Logger — Component Diagram
 
 Container_Boundary(train, "Training pipeline (offline, GPU host)") {
 
-    Component(factory, "build_experiment_logger", "factory.py", "Resolves NoOp vs MLflow from cfg.observability; NEVER-None; degrades to NoOp on ImportError OR construction failure")
+    Component(factory, "build_experiment_logger", "factory.py", "Resolves NoOp vs MLflow from cfg.observability; NEVER-None; degrades to NoOp on ImportError OR construction failure; pins relative file:/sqlite:/// URIs absolute via _resolve_tracking_uri and logs the redacted result")
 
     Component_Boundary(obs, "training/observability/") {
         Component(proto, "ExperimentLoggerProtocol", "@runtime_checkable", "start_run/log_params/log_metric/log_artifact/end_run + start_phase/log_phase_metric/log_phase_artifact/end_phase; all total (never raise on backend failure)")
@@ -27,8 +27,8 @@ Container_Boundary(train, "Training pipeline (offline, GPU host)") {
     Component(trainer, "OfflineRLTrainer (CQL/IQL)", "torch", "Per-step loss metrics; throttles on step % log_step_every_n == 0")
 }
 
-ComponentDb(store, "MLflow tracking store", "file:./mlruns (or remote)", "Runs, metrics, params, artifacts")
-Component(cfg, "ObservabilityConfig.experiment_logger", "Pydantic", "backend/tracking_uri/experiment_name/run_name/log_step_every_n/log_artifacts")
+ComponentDb(store, "MLflow tracking store", "sqlite:///mlflow.db (or remote)", "Runs, metrics, params, artifacts")
+Component(cfg, "ObservabilityConfig.experiment_logger", "Pydantic", "backend/tracking_uri/experiment_name/run_name/log_step_every_n/log_artifacts; tracking_uri validator rejects blank and sqlite:// (silent-discard values)")
 
 Rel(cfg, factory, "resolves")
 Rel(factory, noop, "default / backend=none / mlflow extra missing / init failed")
@@ -43,15 +43,27 @@ Rel(mlflow, store, "writes runs/metrics/artifacts")
 
 ## Key contracts
 
-- **Backwards-compat (invariant #9).** `Settings.observability` defaults `None`;
+- **Backwards-compat (invariant #6).** `Settings.observability` defaults `None`;
   `ExperimentLoggerConfig.backend` defaults `"none"`. Pre-feature YAML loads
   unchanged and resolves to `NoOpExperimentLogger` — pinned by
-  `tests/regression/test_observability_backwards_compat.py`.
-- **Protocol-DI (invariant #1/#2).** The orchestrator + trainers import only
+  `tests/regression/test_observability_backwards_compat.py` and, for the
+  F-034 `tracking_uri` default flip specifically (including the env-var
+  opt-in that materialises it),
+  `tests/regression/test_f034_mlflow_sqlite_backwards_compat.py`.
+- **Credentials never reach a log event.** `tracking_uri` is a plain `str`,
+  not a `SecretStr`, and a remote store may legitimately be spelled
+  `http://user:password@host:5000`. There is no redaction processor in the
+  structlog chain, so every site logging a tracking URI masks the userinfo
+  component first via `mousedroid.logging.redaction.redact_uri_credentials`.
+  Scheme, host, port and path survive; the secret does not. Pinned by
+  `tests/integration/test_experiment_logger_redaction.py` (which asserts over
+  the whole event stream, so a new log site cannot silently reintroduce the
+  leak) and `tests/unit/logging/test_redaction.py`.
+- **Protocol-DI (invariant #1).** The orchestrator + trainers import only
   `ExperimentLoggerProtocol`; concrete loggers are imported solely inside
   `build_experiment_logger`. The factory returns a NEVER-None protocol type, so
   callers drop the `logger is not None` guard.
-- **No hardcoded values (invariant #3).** `tracking_uri`, `experiment_name`,
+- **No hardcoded values (invariant #2).** `tracking_uri`, `experiment_name`,
   `run_name`, `log_step_every_n`, and `log_artifacts` all come from
   `ObservabilityConfig.experiment_logger`. Each is consumed by its owning
   component: the orchestrator wires `run_name` + `log_artifacts`;
@@ -78,8 +90,8 @@ Rel(mlflow, store, "writes runs/metrics/artifacts")
 # Opt in (YAML overlay) — defaults are OFF
 observability:
   experiment_logger:
-    backend: mlflow            # "none" (default) | "mlflow"
-    tracking_uri: file:./mlruns
+    backend: mlflow                  # "none" (default) | "mlflow"
+    tracking_uri: sqlite:///mlflow.db  # default; mlflow's own recommended local backend
     experiment_name: mousedroid
     run_name: my-pipeline      # optional; falls back to "pipeline"
     log_step_every_n: 10       # throttle per-step writes on long runs
@@ -94,9 +106,18 @@ python -m mousedroid.training.pipeline_orchestrator --config <training.yaml>
 # async_main -> build_experiment_logger(settings) -> PipelineOrchestrator(experiment_logger=...)
 ```
 
-**Operator triage** — structlog events to grep when runs do not appear:
-`mlflow_logger_initialised` (backend up), `experiment_logger_mlflow_extras_missing`
-/ `experiment_logger_mlflow_init_failed` (degraded to NoOp — check the `[mlflow]`
-extra and `tracking_uri`), and `mlflow_logger_*_failed` (per-call backend
-warnings; the run is never crashed). Operator runbook (local UI, pitfalls,
-SSH-tunnel guidance): `docs/runbooks/mlflow-local-ui.md`.
+**Operator triage** — structlog events to grep when runs do not appear, in
+the order worth checking:
+`experiment_logger_tracking_uri_resolved` **first** — the only event naming
+the effective store path (`configured_uri` + `resolved_uri`), and emitted
+*before* construction so it survives an init failure; then
+`mlflow_logger_initialised` (backend up),
+`experiment_logger_mlflow_extras_missing` /
+`experiment_logger_mlflow_init_failed` (degraded to NoOp — check the
+`[mlflow]` extra and `tracking_uri`; both now carry `configured_uri` too),
+and `mlflow_logger_*_failed` (per-call backend warnings; the run is never
+crashed). Every URI in these events has its credentials redacted
+(`mousedroid.logging.redaction`), so a `user:password@host` remote store
+shows as `***@host` — the host and path stay readable, the secret does not
+reach the log. Operator runbook (local UI, pitfalls, SSH-tunnel guidance):
+`docs/runbooks/mlflow-local-ui.md`.

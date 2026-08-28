@@ -107,6 +107,18 @@ checkpoints/
 runs/
 wandb/
 mlruns/
+# F-034: sqlite is now the default mlflow tracking backend. Covers SQLite's
+# WAL-mode sidecar files too (-wal/-shm/-journal), not just the main .db.
+#
+# Do NOT drop mlruns/ above as "legacy" — verified against a real mlflow
+# 3.x run: the SQLAlchemy store keeps its ARTIFACT root at ./mlruns even
+# when the database is sqlite and absolute. mlruns/ is therefore still an
+# active output path (settings snapshots, per-phase checkpoints), not a
+# leftover from the file: backend.
+mlflow.db
+mlflow.db-wal
+mlflow.db-shm
+mlflow.db-journal
 training/data/sequences.pt
 training/data/*.pt
 training/data/*.npz

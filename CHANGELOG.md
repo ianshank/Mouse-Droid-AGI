@@ -8,6 +8,130 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — F-034: MLflow sqlite tracking default
+
+- **`ExperimentLoggerConfig.tracking_uri` now defaults to
+  `sqlite:///mlflow.db`** instead of the legacy `file:./mlruns` — mlflow's
+  own recommended local backend, and the fix `NEXT_STEPS.md` item 0
+  originally proposed as one of two options. The `[mlflow]` extra gains
+  `sqlalchemy>=2.0,<3` and `alembic>=1.13,<2`, confirmed necessary by direct
+  test: `mlflow-skinny` alone raises
+  `UnsupportedModelRegistryStoreURIException` for any `sqlite:///` URI
+  without them.
+- **Verified empirically before implementing, not trusted from the stale
+  diagnosis**: the acute mlflow-3.x file-store-rejection blocker
+  `NEXT_STEPS.md` item 0 diagnosed (29 failed / 17 errored against mlflow
+  3.15.1) does not reproduce on the current tree — PR #198 already added
+  `MLFLOW_ALLOW_FILE_STORE=true` unconditionally to `mlflow_logger.py`
+  three days after the diagnosis-motivating dependency bump, and nobody
+  updated the doc. Re-ran the full 88-test mlflow-touching surface against
+  mlflow 3.15.2 with the old default: 88/88 passed. This bundle is
+  therefore a completion of mlflow's recommended fix, not an emergency
+  unblock — named explicitly rather than overstating the urgency.
+- **New advisory `mlflow-extras` CI job** (`.github/workflows/ci.yml`,
+  mirrors `onnx-world-model-extras`'s shape) — the first job to ever
+  install the `[mlflow]` extra in any CI path; tracked in
+  `.github/advisory_stages.yaml`. `CLAUDE.md` and
+  `docs/claude/surfaces/ci-gates.md` job counts updated (16→17 total,
+  5→6 advisory) in the same commit.
+- **`_resolve_tracking_uri` (`factory.py`) was initially reported as needing no
+  code change** — it already passed non-`file:` URIs (including `sqlite:`)
+  through unchanged, so the first revision of this entry called that a win and
+  added test coverage only. Review reversed it: passing the *new default*
+  through unchanged is precisely the case the resolver exists to handle. See
+  the `_resolve_tracking_uri` bullet below for what actually shipped.
+- **Residual risk, named rather than hidden — corrected during review, having
+  first been understated**: the initial writeup scoped impact to operators
+  pinning `mlflow-skinny` in the 2.x range, and claimed that combination was
+  already broken anyway. A review pass showed both halves were wrong: this
+  bundle's *own* finding (88/88 green on mlflow 3.15.2 against `file:./mlruns`,
+  via the pre-existing `MLFLOW_ALLOW_FILE_STORE` default) proves the file
+  backend works fine on 3.x. The real blast radius is **any operator who opts
+  in via `MOUSEDROID_OBSERVABILITY__EXPERIMENT_LOGGER__BACKEND=mlflow`** (the
+  env path `docs/runbooks/mlflow-local-ui.md` documents): that env var alone
+  materializes the whole config block from defaults, so on upgrade they move
+  to the sqlite store and their existing `mlruns/` history stops appearing in
+  the UI. Nothing is lost — the runbook now carries an "Upgrading from the
+  file backend" section — and no *file*-configured deployment is affected,
+  but the behaviour is real and is now pinned by
+  `test_env_var_optin_materializes_the_new_sqlite_default` so the rosier claim
+  cannot drift back.
+- **`_resolve_tracking_uri` now pins relative `sqlite:///` paths too**, not
+  just `file:` ones, so both local-store schemes share one contract. Scope
+  stated precisely, because the obvious stronger claim is false and was
+  verified false rather than assumed: pinning does **not** make the default
+  CWD-independent (two processes launched from different directories still
+  get two databases, each pinned to its own CWD), and mlflow caches its store
+  per URI string so an in-process `chdir()` is invisible either way. What it
+  buys is that the effective path is absolute and therefore *reportable* —
+  which is what the new `experiment_logger_tracking_uri_resolved` event uses
+  to tell an operator which database a run landed in. An early version of the
+  accompanying test asserted the false stronger claim and passed with the fix
+  reverted; it was rewritten to assert only what goes red without it.
+- **Logging/debuggability**: added
+  `experiment_logger_tracking_uri_resolved` (emitted before construction, so
+  it survives an init failure) and added the configured URI to both
+  `experiment_logger_mlflow_extras_missing` and
+  `experiment_logger_mlflow_init_failed`. The underlying store errors
+  ("unable to open database file", "file is not a database") name no path, so
+  before this an operator seeing "no runs visible" had nothing to go on.
+- **New `tracking_uri` validator** rejecting two values that validated as
+  ordinary strings but made the logger a silent black hole: empty/whitespace
+  (falls back to mlflow's ambient default) and `sqlite://` with two slashes
+  (SQLAlchemy's in-memory DB — every run discarded at process exit, no error).
+  `sqlite:///:memory:` stays allowed as the explicit, unambiguous spelling.
+- **New integration tests** (`tests/integration/test_mlflow_sqlite_backend.py`)
+  that open a **real** SQLite store through the factory and round-trip runs,
+  params, metrics, and nested phase runs — wired into `mlflow-extras`. Without
+  these the job installed `sqlalchemy`/`alembic` and never touched them, so a
+  drift in either would have left it green; every other mlflow test drives a
+  `file:` URI. The job also now prints resolved mlflow/sqlalchemy/alembic
+  versions, so a resolution-drift failure is diagnosable from its own log.
+- `.dockerignore` given the same `mlflow.db*` entries as `.gitignore`, and the
+  backwards-compat config scan widened from `config/*.yaml` to also cover
+  `*.yml`, config subdirectories, and `*.example` templates (17 → 27 files).
+- `docs/architecture/c4-experiment-logger.md` and
+  `docs/runbooks/mlflow-local-ui.md` updated for the new default —
+  including a genuine (not cosmetic) fix to the runbook's
+  "Common pitfalls" concurrent-writer guidance, since sqlite's concurrency
+  story is materially better than the file backend's, and its closing
+  "Required extras" paragraph, which incorrectly claimed "no ...
+  SQLAlchemy" before this bundle added it as a dependency.
+- `NEXT_STEPS.md` item 0 removed (resolved) rather than reworded — its
+  "Open dependabot PR #145 proposes..." framing was independently stale
+  too (PR #145 merged 2026-08-17, three days before the diagnosis commit
+  still called it open).
+- New tests: `tests/regression/test_f034_mlflow_sqlite_aqa.py` (Type A
+  default-value + extras pins, proven via manual revert/red/restore/green;
+  Type B `_resolve_tracking_uri` passthrough pins),
+  `tests/regression/test_f034_mlflow_sqlite_backwards_compat.py` (Type C:
+  every shipped config file — `*.yaml`/`*.yml`, config subdirectories, and
+  `*.example` templates, 27 in all — scanned for any `observability:`/
+  `experiment_logger:` reference; none found, a stronger safety margin than
+  F-029's twin-overlay precedent).
+- **Security fix — a credentialed `tracking_uri` no longer reaches the
+  logs.** Found by an adversarial review pass and **introduced by this
+  bundle's own hardening round**, so it is named as a regression rather than
+  filed under pre-existing debt. `tracking_uri` is a plain `str`, not a
+  `SecretStr`; a remote store is legitimately spelled
+  `http://user:password@host:5000` (the field's own description advertises
+  `http://host:port`); and the structlog processor chain contains no
+  redaction step, so anything handed to a log call is emitted verbatim to
+  stdout, the telemetry ring buffer, and — where enabled — Cloud Logging.
+  The round added **three** new emission sites, **two of them on failure
+  paths** where the URI had previously never been logged at all: precisely
+  the moment an operator copies a line into a ticket. New helper
+  `mousedroid.logging.redaction.redact_uri_credentials` masks the whole
+  `userinfo` component (not just `parsed.password` — a token is conventionally
+  passed as `https://<token>@host`, which a password-only mask would leak)
+  and is applied at all four sites, including the pre-existing
+  `mlflow_logger_initialised` one, so no half-fixed site is left behind.
+  Scheme, host, port and path are preserved, so the resolved-path reporting
+  the events exist for is untouched and the local default is byte-identical.
+  Proven by revert: without the fix,
+  `tests/integration/test_experiment_logger_redaction.py` fails with the
+  password in cleartext in the captured events.
+
 ### Added — F-032: GCP observability wiring (logging, monitoring, Firestore)
 
 - **Three already-implemented, already-unit-tested cloud components are now
