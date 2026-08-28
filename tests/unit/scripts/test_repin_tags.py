@@ -60,7 +60,34 @@ def _git(cwd: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def _run(clone: Path, *args: str, script: str = _SCRIPT_NAME) -> subprocess.CompletedProcess[str]:
+# The script creates ANNOTATED tags, and git refuses to write a tag object
+# without a tagger identity ("Committer identity unknown"). ``_git`` supplies
+# one via ``-c`` for the calls the test makes itself, but the script runs git
+# in its own subprocess, so it needs the identity through the environment.
+#
+# Without this the suite passes on any developer machine with a global
+# user.name and fails on a bare CI runner, which is exactly what happened:
+# green locally, "fatal: empty ident name" on the GitHub runner. Reproduced
+# with `HOME=<empty> GIT_CONFIG_GLOBAL=/dev/null` -- 4 tests red.
+#
+# Fixed here rather than in the script on purpose: needing an identity to
+# write a tag object is correct git behaviour, and a real operator running
+# --push has one configured. Having the script inject an identity would forge
+# the tagger.
+_GIT_IDENTITY = {
+    "GIT_AUTHOR_NAME": "repin test",
+    "GIT_AUTHOR_EMAIL": "test@example.invalid",
+    "GIT_COMMITTER_NAME": "repin test",
+    "GIT_COMMITTER_EMAIL": "test@example.invalid",
+}
+
+
+def _run(
+    clone: Path,
+    *args: str,
+    script: str = _SCRIPT_NAME,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     """Invoke a script inside ``clone``; never raises on nonzero exit."""
     return subprocess.run(
         ["bash", str(clone / "scripts" / script), *args],
@@ -68,6 +95,7 @@ def _run(clone: Path, *args: str, script: str = _SCRIPT_NAME) -> subprocess.Comp
         capture_output=True,
         text=True,
         timeout=120,
+        env={**os.environ, **_GIT_IDENTITY, **(env or {})},
     )
 
 
@@ -326,14 +354,7 @@ def test_remote_env_override_is_honoured(repo: tuple[Path, str], tmp_path: Path)
     _git(clone, "remote", "add", "upstream", str(second))
     _git(clone, "push", "-q", "upstream", "main")
 
-    result = subprocess.run(
-        ["bash", str(clone / "scripts" / _SCRIPT_NAME), "--push"],
-        cwd=clone,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        env={**os.environ, "REMOTE": "upstream"},
-    )
+    result = _run(clone, "--push", env={"REMOTE": "upstream"})
 
     assert result.returncode == 0, result.stderr
     upstream_tags = _git(clone, "ls-remote", "--tags", "upstream")
