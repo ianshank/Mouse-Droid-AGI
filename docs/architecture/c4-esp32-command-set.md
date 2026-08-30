@@ -37,7 +37,7 @@ flowchart TB
     end
 
     subgraph Consumers["Consumers"]
-        Factory["factory.py::build_esp32_driver\nlogs esp32_driver_built(command_set=...)"]
+        Factory["factory/hardware.py::build_esp32_driver\nlogs esp32_driver_built(command_set=...)"]
         Resil["ResilientESP32Driver\nwraps ESP32CommProtocol OPAQUELY\n(never imports the codec seam — pinned)"]
         Sensing["sensing/manager.py\ngathers read_encoders + get_battery_voltage"]
         Orch["orchestrator.tick()\n_project_action_to_executable_axes()\nzeroes vy when the codec has no lateral axis,\nso logged experience == executed action"]

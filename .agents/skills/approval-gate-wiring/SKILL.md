@@ -12,7 +12,7 @@ description: >
 
 Use this skill when:
 - Adding a new approval gate (safety, policy, rate-limit, etc.)
-- Modifying the decorator-chain composition in `factory.py`
+- Modifying the decorator-chain composition in `src/mousedroid/factory/mcp_harness.py`
 - Extending `ApprovalGateProtocol` with a new enforcement layer
 
 ## Architecture
@@ -74,7 +74,7 @@ Add the new class name to `__all__`.
 
 ### 4. Wire in Factory
 
-File: `src/mousedroid/factory.py` — `build_approval_gate()` function
+File: `src/mousedroid/factory/mcp_harness.py` — `build_approval_gate()` function
 
 Wrap the new gate around the existing chain:
 

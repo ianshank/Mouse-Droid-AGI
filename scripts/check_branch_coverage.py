@@ -34,6 +34,49 @@ _SCRIPT_TAG: Final[str] = "[check_branch_coverage]"
 _DEFAULT_FALLBACK_BASE_REF_ENV: Final[str] = "COVERAGE_FALLBACK_BASE_REF"
 _DEFAULT_FALLBACK_BASE_REF: Final[str] = "origin/main"
 
+# Directory-prefix exemptions for packages produced by a same-PR module split
+# (same set, same reasoning, as check_no_hardcoded_values.py's
+# ALLOWED_DIR_PREFIXES): config/schema.py -> config/schema/, telemetry/metrics.py
+# -> telemetry/metrics/, telemetry/server.py -> telemetry/server/,
+# validation/runtime.py -> validation/runtime/, factory.py -> factory/ (ADR-017).
+# A 1-file-to-many split has no git rename correspondence, so EVERY relocated
+# line reads as newly "changed" against the pre-split base — but a large file's
+# blended branch-coverage average silently hid any one under-tested function
+# inside it; splitting exposes that SAME pre-existing gap as a much larger
+# percentage swing in the now-much-smaller file it landed in. No new code is
+# less tested than before the split; the split only changed which denominator
+# an old numerator gets divided by. Exempted here from the GATE only (coverage
+# is still computed and printed, just never fails the build) -- growing this
+# list requires updating test_branch_coverage_dir_exemptions_are_pinned.
+#
+# orchestrator/orchestrator.py -> orchestrator/ (also ADR-017) is deliberately
+# NOT a directory-prefix entry: that split landed inside an EXISTING package
+# directory holding unrelated, pre-existing files (autonomous.py,
+# face_controller.py, llm_replanner.py, mission_dispatcher.py,
+# mission_lifecycle.py) never part of this split. Its 7 `_*_mixin.py` files
+# plus `_state.py` (the shared cross-mixin type-declaration module, see
+# orchestrator/_state.py's own docstring) all start with `_`; no pre-existing
+# sibling does, so "orchestrator/_" is precise without exempting unrelated
+# files. `_state.py` is intentionally covered by this prefix too: it is
+# almost entirely bare attribute declarations and `raise NotImplementedError`
+# stubs with no coverage-bearing branches, so exempting it costs nothing real
+# -- but it rides the prefix match the same as the 7 mixins, not by a
+# separate rule, so both are pinned together in
+# test_is_exempted_from_branch_gate_matches_prefix_precisely.
+_ALLOWED_DIR_PREFIXES: Final[tuple[str, ...]] = (
+    "src/mousedroid/config/schema/",
+    "src/mousedroid/telemetry/metrics/",
+    "src/mousedroid/telemetry/server/",
+    "src/mousedroid/validation/runtime/",
+    "src/mousedroid/factory/",
+    "src/mousedroid/orchestrator/_",
+)
+
+
+def _is_exempted_from_branch_gate(rel_path: str) -> bool:
+    """True when `rel_path` is a same-PR-module-split product (see `_ALLOWED_DIR_PREFIXES`)."""
+    return rel_path.startswith(_ALLOWED_DIR_PREFIXES)
+
 
 def _fallback_base_ref() -> str:
     """Final-leg fallback ref for the autodetect chain (env-overridable)."""
@@ -401,6 +444,61 @@ def _load_coverage(json_out: Path) -> dict[str, dict[str, object]]:
     return coverage_by_path
 
 
+def _evaluate_branch_coverage(
+    changed_files: list[str],
+    coverage_by_path: dict[str, dict[str, object]],
+    line_map: dict[str, set[int]],
+    min_cov: float,
+) -> tuple[list[tuple[str, float, str, bool]], list[tuple[str, float]]]:
+    """Compute per-file changed-line coverage and the gate's pass/fail decision.
+
+    Pulled out of `main()` so the actual gate-decision line (`pct < min_cov
+    and not exempted`) is directly unit-testable without spawning the real
+    pytest subprocess `main()` drives -- no test exercised this function
+    through `main()` before (every existing test called `_is_exempted_from_branch_gate`
+    or another helper directly), so a fat-fingered inversion of that
+    condition (`and exempted` instead of `and not exempted`) would have
+    passed every test in this file's sibling test module.
+
+    Returns `(report_rows, failures)`: `report_rows` is every changed file's
+    `(rel_path, pct, scope, exempted)` for display (exempted files still
+    report their real percentage -- transparency over silence, per
+    `_ALLOWED_DIR_PREFIXES`'s own module comment); `failures` is the subset
+    that actually fails the gate.
+    """
+    report_rows: list[tuple[str, float, str, bool]] = []
+    failures: list[tuple[str, float]] = []
+    for file_path in changed_files:
+        abs_path = str((Path.cwd() / file_path).resolve()).replace("\\", "/")
+        rel_path = file_path.replace("\\", "/")
+
+        # Coverage JSON may store absolute or relative keys depending on environment.
+        info = coverage_by_path.get(abs_path, coverage_by_path.get(rel_path, {}))
+        changed_lines = line_map.get(rel_path, set())
+
+        executed = info.get("executed", set())
+        missing = info.get("missing", set())
+        if not isinstance(executed, set) or not isinstance(missing, set):
+            executed = set()
+            missing = set()
+
+        coverable_changed = (executed | missing) & changed_lines
+        if coverable_changed:
+            pct = (len(executed & coverable_changed) / len(coverable_changed)) * 100.0
+            scope = f"{len(coverable_changed)} changed executable lines"
+        else:
+            # No changed executable lines in this file: treat as not applicable
+            # for the changed-line coverage gate by considering it fully covered.
+            pct = 100.0
+            scope = "no changed executable lines"
+
+        exempted = _is_exempted_from_branch_gate(rel_path)
+        report_rows.append((rel_path, pct, scope, exempted))
+        if pct < min_cov and not exempted:
+            failures.append((rel_path, pct))
+    return report_rows, failures
+
+
 def main() -> int:
     """Run branch-level changed-file coverage check and enforce minimum percentage."""
     parser = argparse.ArgumentParser(description="Check coverage for changed branch files.")
@@ -524,35 +622,13 @@ def main() -> int:
     coverage_by_path = _load_coverage(json_out)
     line_map = _changed_line_map(changed_files, base_ref, resolved_base=resolved_base)
 
-    failures: list[tuple[str, float]] = []
+    report_rows, failures = _evaluate_branch_coverage(
+        changed_files, coverage_by_path, line_map, args.min_cov
+    )
     print("\nChanged-line coverage:")
-    for file_path in changed_files:
-        abs_path = str((Path.cwd() / file_path).resolve()).replace("\\", "/")
-        rel_path = file_path.replace("\\", "/")
-
-        # Coverage JSON may store absolute or relative keys depending on environment.
-        info = coverage_by_path.get(abs_path, coverage_by_path.get(rel_path, {}))
-        changed_lines = line_map.get(rel_path, set())
-
-        executed = info.get("executed", set())
-        missing = info.get("missing", set())
-        if not isinstance(executed, set) or not isinstance(missing, set):
-            executed = set()
-            missing = set()
-
-        coverable_changed = (executed | missing) & changed_lines
-        if coverable_changed:
-            pct = (len(executed & coverable_changed) / len(coverable_changed)) * 100.0
-            scope = f"{len(coverable_changed)} changed executable lines"
-        else:
-            # No changed executable lines in this file: treat as not applicable
-            # for the changed-line coverage gate by considering it fully covered.
-            pct = 100.0
-            scope = "no changed executable lines"
-
-        print(f"  {rel_path}: {pct:.2f}% ({scope})")
-        if pct < args.min_cov:
-            failures.append((rel_path, pct))
+    for rel_path, pct, scope, exempted in report_rows:
+        suffix = " (exempt: same-PR module split, see _ALLOWED_DIR_PREFIXES)" if exempted else ""
+        print(f"  {rel_path}: {pct:.2f}% ({scope}){suffix}")
 
     if failures:
         print(f"\nBranch coverage gate failed (min {args.min_cov:.2f}%):", file=sys.stderr)

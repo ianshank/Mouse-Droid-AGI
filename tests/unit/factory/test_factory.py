@@ -272,8 +272,14 @@ def test_build_orchestrator_cognitive_fallback_on_failure():
         cognitive={"enabled": True, "auto_download": False, "fallback_to_mcts": True},
     )
 
+    # Patched where build_orchestrator actually looks it up
+    # (mousedroid.factory.orchestrator), not the facade re-export -- the
+    # mechanical rewiring rule (ADR-017) binds this as a module-level
+    # `from mousedroid.factory.cognitive import build_cognitive_core` inside
+    # factory/orchestrator.py, so the facade-level name is a separate,
+    # already-diverged reference by the time this test runs.
     with patch(
-        "mousedroid.factory.build_cognitive_core",
+        "mousedroid.factory.orchestrator.build_cognitive_core",
         side_effect=RuntimeError("cognitive init failed"),
     ):
         orch = build_orchestrator(cfg)
@@ -293,9 +299,11 @@ def test_build_orchestrator_cognitive_no_fallback_raises():
         cognitive={"enabled": True, "auto_download": False, "fallback_to_mcts": False},
     )
 
+    # See test_build_orchestrator_cognitive_fallback_on_failure above for why
+    # this patches mousedroid.factory.orchestrator, not the facade re-export.
     with (
         patch(
-            "mousedroid.factory.build_cognitive_core",
+            "mousedroid.factory.orchestrator.build_cognitive_core",
             side_effect=RuntimeError("cognitive init failed"),
         ),
         pytest.raises(RuntimeError, match="cognitive init failed"),

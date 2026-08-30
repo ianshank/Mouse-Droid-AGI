@@ -160,7 +160,7 @@ claude "summarize the mission of this repository in 3 bullets"
 
 # Confirm it can read structured project context:
 claude "what does build_llm_gateway return when fallback_backend='none'?"
-# expect: a reference to factory.py + the "return primary" branch.
+# expect: a reference to factory/llm_gateway.py + the "return primary" branch.
 ```
 
 ### When to NOT use Claude Code on the Jetson

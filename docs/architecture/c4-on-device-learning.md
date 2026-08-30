@@ -41,7 +41,7 @@ flowchart TB
         RSSM["RSSM\ntrain_sequence(batch, decoders)\n-> {loss, recon, kl, ...}"]
     end
 
-    subgraph Factory["src/mousedroid/factory.py"]
+    subgraph Factory["src/mousedroid/factory/on_device_learning.py"]
         BuildCoord["build_on_device_coordinator(cfg, *, metrics=None)\nreturns None when absent/disabled"]
         BuildGate["_build_on_device_gate_runner(cfg, *, slot_store, metrics)"]
         BuildSwap["build_on_device_hot_swap_source(cfg, *, world_model, metrics)\nreturns None unless enable_hot_swap=True"]

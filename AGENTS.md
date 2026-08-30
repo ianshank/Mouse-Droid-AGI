@@ -10,7 +10,7 @@
 ## Top-level invariants (never weaken these)
 
 1. **Factory-first DI.** Concrete types are imported INSIDE
-   `src/mousedroid/factory.py` builders only. Application code typed against
+   `src/mousedroid/factory/` builders only. Application code typed against
    `@runtime_checkable Protocol` interfaces. Never `from mousedroid.hardware.camera.jetson_csi import JetsonCSICamera`
    in business logic — call `factory.build_camera(cfg)`.
 2. **Schema-driven configuration.** Every threshold, dimension, pin number,
@@ -202,7 +202,7 @@ path:
    `config/jetson_production.yaml`.
 2. If a driver needs to override its literal `serial_port` based on this
    endpoint (as `esp32` does), add a sibling helper to
-   `factory.py:_resolve_esp32_serial_via_usbc_discovery` following the
+   `factory/hardware.py:_resolve_esp32_serial_via_usbc_discovery` following the
    same two-condition contract (only override when discovery is enabled
    AND the literal does not exist on disk).
 3. Add a unit test under `tests/unit/diagnostics/test_usbc.py` covering
@@ -248,7 +248,7 @@ the factory:
    unless the new backend is local (only local backends are valid as
    failover targets — cloud-to-cloud failover defeats the off-network
    autonomy invariant).
-7. Wire dispatch in `_build_single_llm_gateway` in `factory.py`. Log
+7. Wire dispatch in `_build_single_llm_gateway` in `factory/llm_gateway.py`. Log
    the `llm_gateway_built` event with `backend=<name>` for triage.
 8. Add unit tests under `tests/unit/llm_gateway/test_<name>_gateway.py`
    (PR #107's `test_anthropic_gateway.py` is the reference shape:

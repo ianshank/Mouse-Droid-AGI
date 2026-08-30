@@ -128,7 +128,7 @@ Each subsystem owns a Component diagram in its own file:
 
 The component-level diagrams are the right entry point when you need to
 understand *which protocol object talks to which* — they map every
-`build_*` factory in `src/mousedroid/factory.py` to its protocol +
+`build_*` factory in `src/mousedroid/factory/` to its protocol +
 implementations.
 
 ---
@@ -142,7 +142,7 @@ implementations.
 | Telemetry Server | `src/mousedroid/telemetry/` |
 | Dashboard Proxy | `tools/dashboard_proxy.py` |
 | Claude workforce hooks + config | `tools/claude_hooks/`, `.claude/workforce.yaml`, `.claude/settings.json` |
-| Factory wiring | `src/mousedroid/factory.py` |
+| Factory wiring | `src/mousedroid/factory/` |
 | Configuration schema | `src/mousedroid/config/schema/` |
 | Hardware protocols | `src/mousedroid/hardware/protocols.py`, `src/mousedroid/comms/protocol.py` |
 | ESP32 firmware | (out of repo — vendored Wave Rover bootloader) |

@@ -5,7 +5,7 @@ The arm platform is deferred, the HC-SR04 ultrasonic driver is parked
 the production path per ADR-016 (F-031). This test pins that no *active* production
 module grows a **module-top-level** dependency on any of them.
 
-Granularity matters: ``factory.py`` legitimately imports arm modules lazily
+Granularity matters: ``factory/`` legitimately imports arm modules lazily
 inside config-gated functions and under ``if TYPE_CHECKING:`` — both are the
 documented DI pattern and MUST pass. Only unconditional module-scope imports
 (which would execute on every ``import mousedroid.<x>``) are frozen out, so
@@ -17,9 +17,9 @@ imports are always safe" assumption misses.
 
 For AutonomousOrchestrator specifically, import-scope freezing alone is not
 enough to enforce ADR-016's actual claim: a production entrypoint could call
-``factory.py::build_autonomous_orchestrator`` (a public function) directly
-without ever importing ``mousedroid.orchestrator.autonomous`` at module
-scope itself. ``test_no_production_entrypoint_calls_the_autonomous_orchestrator_builder``
+``factory/autonomous.py::build_autonomous_orchestrator`` (a public function)
+directly without ever importing ``mousedroid.orchestrator.autonomous`` at
+module scope itself. ``test_no_production_entrypoint_calls_the_autonomous_orchestrator_builder``
 pins that call-site claim separately.
 """
 
@@ -46,8 +46,8 @@ _ULTRASONIC_ALLOWED_DIRS = ("hardware/sensors",)
 # directory-level exemption here (unlike arm/ and hardware/sensors/ above):
 # autonomous.py shares a directory with the PRODUCTION orchestrator.py, so a
 # directory allowlist would also license orchestrator.py to import it. Only
-# the file itself is exempt; factory.py::build_autonomous_orchestrator's sole
-# reference is function-scoped and so is never visited by this walker at all.
+# the file itself is exempt; factory/autonomous.py::build_autonomous_orchestrator's
+# sole reference is function-scoped and so is never visited by this walker at all.
 _AUTONOMOUS_ORCHESTRATOR_MODULE = "mousedroid.orchestrator.autonomous"
 _AUTONOMOUS_ORCHESTRATOR_SELF_FILE = Path("orchestrator/autonomous.py")
 _AUTONOMOUS_ORCHESTRATOR_BUILDER = "build_autonomous_orchestrator"
@@ -216,8 +216,9 @@ def test_no_active_module_imports_autonomous_orchestrator_at_module_scope(
 ) -> None:
     """F-031 / ADR-016: AutonomousOrchestrator is parked, off the production path.
 
-    factory.py::build_autonomous_orchestrator is the sole, function-scoped
-    (lazy) importer, already excluded by the walker's function-body skip.
+    factory/autonomous.py::build_autonomous_orchestrator is the sole,
+    function-scoped (lazy) importer, already excluded by the walker's
+    function-body skip.
     """
     violations: list[str] = []
     for path, imports in module_imports.items():
@@ -239,15 +240,16 @@ def test_no_active_module_imports_autonomous_orchestrator_at_module_scope(
 def test_no_production_entrypoint_calls_the_autonomous_orchestrator_builder() -> None:
     """F-031 / ADR-016, narrower than the import-scope pin above.
 
-    ``factory.py::build_autonomous_orchestrator`` is a public function --
-    nothing stops a production entrypoint from calling it directly
-    (``from mousedroid.factory import build_autonomous_orchestrator``)
+    ``factory/autonomous.py::build_autonomous_orchestrator`` is a public
+    function -- nothing stops a production entrypoint from calling it
+    directly (``from mousedroid.factory import build_autonomous_orchestrator``)
     without ever importing ``mousedroid.orchestrator.autonomous`` itself at
     module scope anywhere outside ``autonomous.py``. That would leave the
     sibling import-graph test green while violating ADR-016's actual
     Decision: "main.py's _run and _health_check continue to route
-    exclusively through factory.py::build_orchestrator". This test pins
-    that claim directly rather than relying on the import check to imply it.
+    exclusively through factory/orchestrator.py::build_orchestrator". This
+    test pins that claim directly rather than relying on the import check
+    to imply it.
     """
     main_source = _MAIN_PY.read_text(encoding="utf-8")
     assert _AUTONOMOUS_ORCHESTRATOR_BUILDER not in main_source, (

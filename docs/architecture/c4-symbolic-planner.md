@@ -18,7 +18,7 @@ flowchart TB
         Cfg["ArmPlanningConfig\n• planner_backend: pyperplan | fast_downward | recursive\n• planning_timeout_s"]
     end
 
-    subgraph Factory["Wiring (src/mousedroid/factory.py)"]
+    subgraph Factory["Wiring (src/mousedroid/factory/arm.py)"]
         FBackend["build_symbolic_planner_backend(cfg)"]
         FPlanner["build_arm_planner(cfg)"]
     end

@@ -10,7 +10,7 @@ Workflow for probing the autonomous mission orchestration loop on simulated or e
 ## Target Paths
 
 - Orchestrator: `src/mousedroid/orchestrator/autonomous.py`
-- Factory Builder: `src/mousedroid/factory.py`
+- Factory Builder: `src/mousedroid/factory/autonomous.py`
 - Interface Contracts: `src/mousedroid/interfaces/protocols.py`
 
 ## Execution Steps

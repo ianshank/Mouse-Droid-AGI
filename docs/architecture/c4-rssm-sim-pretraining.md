@@ -37,7 +37,7 @@ Container_Boundary(train, "Offline training (PipelineOrchestrator rssm phase)") 
     Component(pre, "RSSMPretrainer", "Adam + AMP", "Optimizer loop over EpisodeBatch; writes checkpoint")
 }
 
-Component(factory, "factory.py", "DI", "build_rover_env / build_rssm_trainable / build_rssm_vision_finetune / build_vision_feature_extractor")
+Component(factory, "factory/world_model.py", "DI", "build_rover_env / build_rssm_trainable / build_rssm_vision_finetune / build_vision_feature_extractor")
 ComponentDb(ckpt, "Checkpoints", "weights_dir", "rssm_pretrained.pt / rssm_vision_finetuned.pt")
 
 Rel(factory, env, "builds (backend=mujoco)")

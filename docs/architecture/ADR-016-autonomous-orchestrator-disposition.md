@@ -10,10 +10,10 @@
 `src/mousedroid/orchestrator/autonomous.py::AutonomousOrchestrator` is a second,
 independent sense-plan-act implementation alongside the production
 `orchestrator.py::MouseDroidOrchestrator`. It has zero production call sites —
-`factory.py::build_autonomous_orchestrator` is never invoked from `main.py`'s `_run`
+`factory/autonomous.py::build_autonomous_orchestrator` is never invoked from `main.py`'s `_run`
 or `_health_check`, only from test code and a documentation skill — but nothing in
 the tree previously recorded *why* it is parked, which is itself a hazard: the next
-engineer reading `factory.py` and finding a fully-formed, apparently-usable builder
+engineer reading `factory/autonomous.py` and finding a fully-formed, apparently-usable builder
 has no signal not to wire it up.
 
 Two properties of `AutonomousOrchestrator`, as implemented today, put it in direct
@@ -32,8 +32,10 @@ conflict with this project's own constitution:
    `AutonomousOrchestrator`'s hot loop is neither.
 2. **It has no safety-monitor machinery.** A repo-wide search for
    `SafetyMonitor|ThreeLaws|safety_projector|sensor_stale|max_loop_time` returns zero
-   matches in `autonomous.py` and eight in `orchestrator.py`
-   (`SafetyMonitorProtocol` at construction, `safety_projector` gating actuation).
+   matches in `autonomous.py` and eight across the production
+   `MouseDroidOrchestrator` class (`orchestrator.py` plus its `_*_mixin.py`
+   files post-ADR-017 decomposition; `SafetyMonitorProtocol` at construction,
+   `safety_projector` gating actuation in `_action_mixin.py`).
    `AutonomousOrchestrator`'s only interlock is a bare proximity check
    (`min(scan) < min_range_m`) plus a `self._safety_latched` bool — no monitor
    evaluates every action before dispatch the way invariant 4 of
@@ -48,8 +50,8 @@ grows a module-scope dependency on it going forward.
 
 We will keep `AutonomousOrchestrator` off the production path. `main.py`'s `_run` and
 `_health_check` continue to route exclusively through
-`factory.py::build_orchestrator` → `MouseDroidOrchestrator`.
-`factory.py::build_autonomous_orchestrator` remains an explicit, opt-in builder whose
+`factory/orchestrator.py::build_orchestrator` → `MouseDroidOrchestrator`.
+`factory/autonomous.py::build_autonomous_orchestrator` remains an explicit, opt-in builder whose
 only reference to `mousedroid.orchestrator.autonomous` is a function-scoped (lazy)
 import — never a module-top-level one. A regression test enforces this: no file other
 than `autonomous.py` itself may carry a module-scope import of
@@ -59,7 +61,7 @@ than `autonomous.py` itself may carry a module-scope import of
 
 **Positive.** A charter-violating component is decisively and legibly kept off the
 production path, with the reasoning recorded once rather than re-derived by every
-future reader of `factory.py`. The disposition is now enforced by a regression pin,
+future reader of `factory/`. The disposition is now enforced by a regression pin,
 not resting on convention alone — a future refactor that accidentally promotes it to a
 module-scope import fails CI immediately. `orchestrator/CLAUDE.md`'s forward reference
 ("see `docs/architecture/adr/` for the disposition ADR once F-031 lands") now resolves

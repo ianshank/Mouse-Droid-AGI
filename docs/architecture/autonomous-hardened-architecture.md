@@ -11,7 +11,7 @@ graph TD
         HW_CAM["CSI Camera Driver<br/>(Async Frame Capture)"]
     end
 
-    subgraph "Factory Dependency Injection (factory.py)"
+    subgraph "Factory Dependency Injection (factory/)"
         F_DI["Centralized Factory DI Builders<br/>(Zero Concrete Imports in Logic)"]
     end
 
@@ -43,7 +43,7 @@ graph TD
 
 1. **Protocol-First Dependency Injection**:
    - Interfaces declared as `@runtime_checkable Protocol` in `src/mousedroid/interfaces/protocols.py`.
-   - Concrete implementations imported solely within `src/mousedroid/factory.py`.
+   - Concrete implementations imported solely within `src/mousedroid/factory/`.
    - Zero concrete driver imports in application business logic.
 
 2. **Schema-Driven Configuration**:

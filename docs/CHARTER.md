@@ -118,7 +118,7 @@ These hold across every module and may not be weakened by any change. Invariants
 1. **Protocol-based DI.** All interfaces are `@runtime_checkable Protocol`.
    Concrete types are imported only inside factory builders — never in business
    logic.
-2. **Factory single wiring point.** `src/mousedroid/factory.py` is the only place
+2. **Factory single wiring point.** `src/mousedroid/factory/` is the only place
    concrete types are wired; every `build_*()` returns a protocol type.
 3. **No hardcoded values.** Every threshold, dimension, pin, path, and tunable
    comes from Pydantic config (`src/mousedroid/config/schema/`) loaded from YAML
@@ -191,8 +191,8 @@ is authoritative). Statuses reflect the roadmap docs at time of ratification.
   functional, default-OFF, and soak-gated (§3 carve-out).
 - **Cognitive-pillar integration** 🔬 — `meta/` (MAML + in-context adaptation) and
   `scaling/` (MoE + adaptive compute) are implemented and unit-tested
-  (`tests/unit/{meta,scaling}/`) but not yet instantiated by `factory.py` / the orchestrator.
-  `growth/` (knowledge distillation) is instantiated — `factory.py::build_growth_coordinator`
+  (`tests/unit/{meta,scaling}/`) but not yet instantiated by `factory/` / the orchestrator.
+  `growth/` (knowledge distillation) is instantiated — `factory.growth::build_growth_coordinator`
   is called and wired to the shared metrics registry — behind `Settings.growth: GrowthConfig
   | None`, default-OFF and byte-identical to pre-feature when absent, the same posture as M6.
   `meta/`/`scaling/` are promoted into the 30 Hz runtime loop only when a concrete need and a

@@ -36,7 +36,7 @@ MOUSEDROID_MOCK_HARDWARE=true mousedroid
 ## Architecture invariants (docs/CHARTER.md §4 — hold across every module)
 
 1. Protocol-based DI — interfaces are `@runtime_checkable Protocol`; concrete types are imported only in factory builders.
-2. `src/mousedroid/factory.py` is the single wiring point; every `build_*()` returns a protocol type.
+2. `src/mousedroid/factory/` is the single wiring point; every `build_*()` returns a protocol type.
 3. No hardcoded values — every threshold/dimension/pin/path comes from Pydantic config (YAML or `MOUSEDROID_*__*` env), never source edits.
 4. Structured logging only — `structlog` via `mousedroid.logging.setup.get_logger`; no `print()`.
 5. Asyncio everywhere — blocking work goes through `asyncio.to_thread`.

@@ -255,12 +255,19 @@ select = [
     # Ceiling set in [tool.ruff.lint.mccabe] below; pre-existing offenders are
     # baselined in per-file-ignores as a ratchet backlog.
     "E", "W", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "PT",
-    "S", "ANN", "D", "T20", "C901",
+    "S", "ANN", "D", "T20", "C901", "NPY",
 ]
 ignore = ["D100", "D104", "D107", "D203", "D213", "S101", "ANN401", "TCH", "TC"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["D", "ANN", "S101", "S108", "S603", "S607", "E402"]
+# NPY002 (legacy np.random.* global-RNG calls) baselined for tests/ only: a
+# repo-wide sweep found 50 pre-existing hits, all confined to test-fixture
+# mock-data generation (zero in src/mousedroid) -- production code is
+# already clean, so the rule stays LIVE and enforced there. Fixing the 50
+# test call sites requires a real design decision (a shared np.random.Generator
+# fixture vs. a per-file module-level instance), not a mechanical rewrite --
+# tracked as follow-up, not baselined silently: see NEXT_STEPS.md.
+"tests/**/*.py" = ["D", "ANN", "S101", "S108", "S603", "S607", "E402", "NPY002"]
 "tools/**/*.py" = ["D", "ANN", "T20"]
 # Operator/CI scripts are procedural glue (already exempt from D/T20). C901 is
 # baselined here for the three current offenders (check_branch_coverage.py::main

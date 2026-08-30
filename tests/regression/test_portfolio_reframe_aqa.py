@@ -211,8 +211,11 @@ def test_curiosity_is_factory_wired() -> None:
     """The factory defines and calls build_curiosity_module (backs the 'wired' claim)."""
     # Backs README's claim that curiosity is runtime-integrated (not a stub):
     # the factory both defines and calls the builder.
-    factory = _read("src/mousedroid/factory.py")
-    assert "def build_curiosity_module" in factory, "curiosity factory builder vanished"
-    assert factory.count("build_curiosity_module") >= 2, (
+    # After factory.py was decomposed into a package, check the memory_curiosity module
+    # for the definition and orchestrator.py for the call.
+    memory_curiosity = _read("src/mousedroid/factory/memory_curiosity.py")
+    orchestrator = _read("src/mousedroid/factory/orchestrator.py")
+    assert "def build_curiosity_module" in memory_curiosity, "curiosity factory builder vanished"
+    assert "build_curiosity_module" in orchestrator, (
         "build_curiosity_module is defined but never called — curiosity is no longer wired"
     )

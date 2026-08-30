@@ -424,3 +424,122 @@ def test_resolved_base_threaded_through_avoids_double_print(
     _ = mod._changed_source_files(None, resolved_base=resolved)  # type: ignore[attr-defined]
     second_log = capsys.readouterr().err
     assert "resolved base ref:" not in second_log
+
+
+def test_branch_coverage_dir_exemptions_are_pinned() -> None:
+    """Growing ``_ALLOWED_DIR_PREFIXES`` is a deliberate, reviewed decision.
+
+    Mirrors ``test_hardcoded_value_dir_exemptions_are_pinned`` in
+    ``tests/unit/scripts/test_check_no_hardcoded_values.py`` (same
+    reasoning: a same-PR 1-file-to-many module split has no git rename
+    correspondence, so every relocated line reads as newly "changed"
+    against the pre-split base — here that meant a large file's blended
+    branch-coverage average no longer hides an under-tested function once
+    it lands in its own much-smaller file). A new entry silencing an
+    unrelated finding should fail this test until deliberately added here.
+    """
+    mod = _load_coverage_script_module()
+    assert mod._ALLOWED_DIR_PREFIXES == (  # type: ignore[attr-defined]
+        "src/mousedroid/config/schema/",
+        "src/mousedroid/telemetry/metrics/",
+        "src/mousedroid/telemetry/server/",
+        "src/mousedroid/validation/runtime/",
+        "src/mousedroid/factory/",
+        "src/mousedroid/orchestrator/_",
+    )
+
+
+def test_is_exempted_from_branch_gate_matches_prefix_precisely() -> None:
+    """`_is_exempted_from_branch_gate` matches the split's own files, not siblings.
+
+    `main()` uses this predicate to let an exempted path's real (possibly
+    low) percentage still print while skipping it from `failures` --
+    transparency over silence, unlike a bare path exclusion that would
+    drop the file from the report entirely. This test only pins the
+    predicate itself; ``factory/health.py`` and
+    ``orchestrator/_lifecycle_mixin.py`` are exactly the two files
+    ``check_branch_coverage.py --min 90`` flagged below threshold when
+    this exemption was added (ADR-017), confirming the predicate covers
+    the real gate failures it exists for. ``orchestrator/_state.py`` is
+    pinned too even though it never flagged a gate failure on its own
+    (it has almost no coverage-bearing lines) -- it matches the
+    ``"orchestrator/_"`` prefix exactly like the 7 mixins and was found,
+    during review, riding that exemption undocumented; pinning it here
+    makes the coverage this file's edits are deliberately not asserted
+    against instead of an accidental byproduct.
+    """
+    mod = _load_coverage_script_module()
+    assert mod._is_exempted_from_branch_gate(  # type: ignore[attr-defined]
+        "src/mousedroid/factory/health.py"
+    )
+    assert mod._is_exempted_from_branch_gate(  # type: ignore[attr-defined]
+        "src/mousedroid/orchestrator/_lifecycle_mixin.py"
+    )
+    assert mod._is_exempted_from_branch_gate(  # type: ignore[attr-defined]
+        "src/mousedroid/orchestrator/_state.py"
+    )
+    assert not mod._is_exempted_from_branch_gate(  # type: ignore[attr-defined]
+        "src/mousedroid/orchestrator/autonomous.py"
+    )
+    assert not mod._is_exempted_from_branch_gate(  # type: ignore[attr-defined]
+        "src/mousedroid/orchestrator/orchestrator.py"
+    )
+    assert not mod._is_exempted_from_branch_gate("src/mousedroid/safety/monitor.py")  # type: ignore[attr-defined]
+
+
+def test_evaluate_branch_coverage_exempts_low_coverage_only_for_split_files() -> None:
+    """Exercises the actual gate DECISION, not just the exemption predicate.
+
+    Every other test in this module (including the one above) calls
+    ``_is_exempted_from_branch_gate`` directly -- the INPUT to the decision,
+    never the decision itself. Before this test, nothing drove
+    ``pct < min_cov and not exempted`` end to end: a fat-fingered inversion
+    of that condition (``and exempted`` instead of ``and not exempted``,
+    which would make exempted files fail and non-exempted files always
+    pass regardless of coverage) would have passed every existing test in
+    this file. Two synthetic changed files at the same low percentage --
+    one under an exempted prefix, one not -- make the correct behavior
+    ("only the non-exempted one fails") the only way to pass.
+    """
+    mod = _load_coverage_script_module()
+    changed_files = [
+        "src/mousedroid/factory/health.py",  # exempted prefix, 50% covered
+        "src/mousedroid/safety/monitor.py",  # not exempted, also 50% covered
+    ]
+    # Both files: lines 1-2 changed, only line 1 executed -> 50% each.
+    coverage_by_path = {
+        "src/mousedroid/factory/health.py": {"executed": {1}, "missing": {2}},
+        "src/mousedroid/safety/monitor.py": {"executed": {1}, "missing": {2}},
+    }
+    line_map = {
+        "src/mousedroid/factory/health.py": {1, 2},
+        "src/mousedroid/safety/monitor.py": {1, 2},
+    }
+
+    report_rows, failures = mod._evaluate_branch_coverage(  # type: ignore[attr-defined]
+        changed_files, coverage_by_path, line_map, 90.0
+    )
+
+    failed_paths = {rel_path for rel_path, _pct in failures}
+    assert failed_paths == {"src/mousedroid/safety/monitor.py"}, (
+        "the exempted file at 50% must not fail the gate and the "
+        f"non-exempted file at 50% must: got failures={failures!r}"
+    )
+    # The exempted file's real (low) percentage must still be reported --
+    # transparency over silence is the whole point of this exemption shape.
+    reported = {rel_path: (pct, exempted) for rel_path, pct, _scope, exempted in report_rows}
+    assert reported["src/mousedroid/factory/health.py"] == (50.0, True)
+    assert reported["src/mousedroid/safety/monitor.py"] == (50.0, False)
+
+
+def test_evaluate_branch_coverage_passes_when_above_threshold() -> None:
+    """A non-exempted file at or above `min_cov` must never fail, exempted or not."""
+    mod = _load_coverage_script_module()
+    changed_files = ["src/mousedroid/safety/monitor.py"]
+    coverage_by_path = {"src/mousedroid/safety/monitor.py": {"executed": {1, 2}, "missing": set()}}
+    line_map = {"src/mousedroid/safety/monitor.py": {1, 2}}
+
+    _report_rows, failures = mod._evaluate_branch_coverage(  # type: ignore[attr-defined]
+        changed_files, coverage_by_path, line_map, 90.0
+    )
+    assert failures == []
