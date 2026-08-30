@@ -65,16 +65,23 @@ The legacy v0.3.0 execution-plan phase numbering lives only in
     before a mechanical rewrite — not urgent (mock-data determinism only, zero production risk).
 19. **[Hygiene — P3] `check_branch_coverage.py`'s `_ALLOWED_DIR_PREFIXES` exemption is unbounded,
     not time-boxed to the split that motivated it (ADR-017; ditto `check_no_hardcoded_values.py`'s
-    sibling `ALLOWED_DIR_PREFIXES`).** Flagged by independent adversarial peer review: the exemption
-    is a permanent, unconditional prefix match, so any *future* under-tested branch newly added
-    inside `factory/` or `orchestrator/_*` — not just the pre-existing dilution these prefixes were
-    added to hide — is silently exempt from the 90% branch-coverage gate forever, with no per-file
-    allowlist or expiry. `factory/_replay_batch_helpers.py`, `on_device_learning.py`, and
-    `mcp_harness.py` in particular carry real algorithmic logic, not just DI wiring, so this is not
-    a low-stakes corner. Needs a design decision, not a mechanical fix: e.g. re-baseline each
-    exempted file's true coverage periodically and drop it from the prefix list once independently
-    verified at/above threshold, or replace the directory-prefix match with a per-file allowlist
-    pinned to the specific pre-existing gap it excuses.
+    sibling `ALLOWED_DIR_PREFIXES`).** Flagged independently three times — an adversarial peer
+    review, then GitHub Copilot's automated PR review on both files separately — so treat this as
+    confirmed, not speculative, the next time it's picked up. The exemption is a permanent,
+    unconditional prefix match, so any *future* under-tested branch newly added inside `factory/`
+    or `orchestrator/_*` — not just the pre-existing dilution these prefixes were added to hide —
+    is silently exempt from the 90% branch-coverage gate forever, with no per-file allowlist or
+    expiry. `factory/_replay_batch_helpers.py`, `on_device_learning.py`, and `mcp_harness.py` in
+    particular carry real algorithmic logic, not just DI wiring, so this is not a low-stakes corner.
+    Needs a design decision, not a mechanical fix — Copilot's own suggested remedies (either is
+    reasonable, pick one deliberately rather than defaulting): (a) time-box the exemption so it only
+    applies to a diff whose base ref still contains the legacy monolith being deleted, rather than
+    matching unconditionally forever, or (b) replace the six directory-prefix entries (four from
+    the earlier `4646d80` splits, two from ADR-017) with an explicit, enumerated file/line allowlist
+    frozen at the time each split landed, so a file added to `factory/` next month is gated
+    normally instead of riding the prefix match for free. Whichever is chosen, this now needs to
+    cover all six existing prefix entries consistently, not just the two ADR-017 added — a partial,
+    inconsistent fix (explicit list for two, prefix match for four) would be its own confusion.
 20. **[Testing — P3] Two structural test gaps found by an edge-case audit of the ADR-017 mixin split,
     both currently latent (no live trigger today).** (a) `tests/unit/factory/test_facade_completeness.py`'s
     `_public_top_level_defs` only walks `ast.Module.body` (true top-level), so a public `def`/`class`

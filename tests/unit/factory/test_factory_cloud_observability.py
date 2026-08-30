@@ -79,7 +79,7 @@ def test_logging_sink_built_when_enabled() -> None:
 def test_logging_sink_none_when_module_not_importable() -> None:
     settings = _settings(logging={"enabled": True})
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr("mousedroid.factory.module_available", lambda name: True)
+        mp.setattr("mousedroid.factory.cloud.module_available", lambda name: True)
         mp.setitem(sys.modules, "mousedroid.cloud.logging_sink", None)
         assert build_cloud_logging_sink(settings) is None
 
@@ -122,7 +122,7 @@ def test_metrics_exporter_built_when_enabled_and_registry_present() -> None:
 def test_metrics_exporter_none_when_module_not_importable() -> None:
     settings = _settings(monitoring={"enabled": True})
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr("mousedroid.factory.module_available", lambda name: True)
+        mp.setattr("mousedroid.factory.cloud.module_available", lambda name: True)
         mp.setitem(sys.modules, "mousedroid.cloud.monitoring_exporter", None)
         assert build_cloud_metrics_exporter(settings, metrics_registry=MagicMock()) is None
 
@@ -166,6 +166,6 @@ def test_firestore_sync_built_when_enabled_and_episodic_present() -> None:
 def test_firestore_sync_none_when_module_not_importable() -> None:
     settings = _settings(firestore={"enabled": True})
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr("mousedroid.factory.module_available", lambda name: True)
+        mp.setattr("mousedroid.factory.cloud.module_available", lambda name: True)
         mp.setitem(sys.modules, "mousedroid.cloud.firestore_sync", None)
         assert build_cloud_firestore_sync(settings, episodic=MagicMock()) is None

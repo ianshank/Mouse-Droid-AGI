@@ -16,8 +16,10 @@ That works well when the overlap between mixins is small. Here it is not:
 collectively touch nearly every one of them, so per-mixin duplication
 would mean re-declaring most of this file's contents seven times with no
 single source of truth. Instead every mixin inherits from `_OrchestratorState`
-(a pure type-declaration class -- no `__init__`, no runtime behavior,
-never instantiated on its own) alongside its real base. Python's MRO
+(a pure type-declaration class -- no `__init__`, no production
+implementations -- only fail-loud `raise NotImplementedError` stubs a real
+mixin must override -- never instantiated on its own) alongside its real
+base. Python's MRO
 handles the resulting diamond (all 7 mixins -> `_OrchestratorState` ->
 `object`) the same way it already handles `MouseDroidOrchestrator`
 inheriting from all 7 mixins -- consistent C3 linearization, not a
@@ -82,7 +84,17 @@ if TYPE_CHECKING:
 
 
 class _OrchestratorState:
-    """Bare type declarations only. Never instantiated; never given behavior.
+    """Bare type declarations plus fail-loud stubs. Never instantiated.
+
+    Never given a production implementation -- do not "clean up" a stub's
+    `raise NotImplementedError` body into a silent no-op. Every real mixin
+    implementation wins over its stub today (this class sits last in the
+    MRO, right before `object`), so the raise never executes in production;
+    it exists as a runtime backstop for the one case
+    `tests/regression/test_orchestrator_mixin_surface.py::test_every_state_stub_is_overridden_somewhere_reachable`
+    cannot catch by static inspection alone -- a caller reaching this stub
+    despite that test staying green (e.g. a method removed and the test
+    itself skipped or deleted in the same change).
 
     One block per constructor argument/derived attribute in
     `orchestrator.py::MouseDroidOrchestrator.__init__`, grouped by category

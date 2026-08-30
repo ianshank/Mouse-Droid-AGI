@@ -1,7 +1,8 @@
 """Facade-completeness regression for the `factory/` package (ADR-017).
 
-`src/mousedroid/factory.py` (5,140 lines) was split into a 19-file
-`src/mousedroid/factory/` package; `factory/__init__.py` is a pure
+`src/mousedroid/factory.py` (5,140 lines) was split into a 19-submodule
+`src/mousedroid/factory/` package plus its `__init__.py` facade (20 files
+total); `factory/__init__.py` is a pure
 re-export facade whose job is to make every builder defined in any
 submodule reachable as `mousedroid.factory.<name>`, exactly as it was
 reachable on the pre-split flat module. A missed re-export is easy to
@@ -76,19 +77,30 @@ def _submodule_files() -> list[Path]:
 
 
 def test_every_public_builder_is_reexported_by_the_facade() -> None:
-    """Every public top-level def in a `factory/*.py` submodule is on `mousedroid.factory`.
+    """Every public top-level def in a `factory/*.py` submodule is on `mousedroid.factory`
+    AND listed in `__all__`.
 
     Forward-looking: this is what actually catches a future missed
     re-export, unlike a one-time diff against the deleted flat file.
+    Checks both halves of the facade's advertised contract, not just
+    `hasattr` reachability -- a builder can be imported into
+    `factory/__init__.py`'s namespace (so `mousedroid.factory.build_x`
+    resolves) while still missing from `__all__` (so
+    `from mousedroid.factory import *` silently omits it). Neither this
+    test's own reachability check alone, nor
+    `test_every_all_entry_actually_resolves_on_the_module` (which only
+    checks the opposite direction: every *listed* `__all__` entry
+    resolves), would catch that on its own.
     """
     missing: list[str] = []
     for path in _submodule_files():
         for name in _public_top_level_defs(path):
-            if not hasattr(_factory_module, name):
+            if not hasattr(_factory_module, name) or name not in _factory_module.__all__:
                 missing.append(f"{path.name}::{name}")
     assert not missing, (
-        "public symbol(s) defined in a factory/ submodule but not re-exported "
-        f"from factory/__init__.py -- add the missing import: {missing}"
+        "public symbol(s) defined in a factory/ submodule but not fully "
+        "re-exported (either missing the import, or imported but absent "
+        f"from __all__) from factory/__init__.py: {missing}"
     )
 
 

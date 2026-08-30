@@ -28,7 +28,7 @@ flowchart TB
     end
 
     subgraph Filter["Shared cross-cutting"]
-        InjFilter["RegexInjectionFilter\nbuild_llm_injection_filter()\nSAME instance threaded into both\nOpenClaw + LLM gateway"]
+        InjFilter["RegexInjectionFilter\nbuild_injection_filter()\nSAME instance threaded into both\nOpenClaw + LLM gateway"]
     end
 
     subgraph Factory["src/mousedroid/factory/llm_gateway.py"]
