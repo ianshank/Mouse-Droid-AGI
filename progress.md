@@ -178,6 +178,24 @@ ADR-017/CHANGELOG updated with regression 7; the one behavior change this decomp
 was not fully "verbatim" about (`dir(mousedroid.factory)` gaining 19 submodule names) is
 now stated explicitly rather than left implicit in the "no behavior changed" claim.
 
+**Fourth round — GitHub Copilot's automated PR review.** Landed on PR #214 with 3
+distinct findings. Confirmed real and fixed: two pre-existing `assert` statements in
+`_action_mixin.py` (moved verbatim from the pre-split file, present since before any
+decomposition work) violated CLAUDE.md's standing "no `assert` in
+`PYTHONOPTIMIZE=1` runtime paths" rule — converted to `if X is None: raise
+RuntimeError(...)` (the house pattern already used in `voice/tts.py`), with two new
+tests confirming the raise propagates from `_try_vla_action` but is caught by
+`_try_cognitive_action`'s own `except Exception` and surfaces as a recorded failure
+event instead. Verified false: Copilot's claim that `except Exception` swallows
+`asyncio.CancelledError` "on supported Python versions" — empirically confirmed
+`CancelledError` inherits from `BaseException`, not `Exception`, since Python 3.8
+(this repo requires >=3.10), matching what `orchestrator/CLAUDE.md` already
+documents as an invariant; a reply is queued, blocked on the same GitHub auth
+failure. Confirmed real but out of scope: a hardcoded epsilon fallback in
+`_voice_face_mixin.py` (also pre-existing, verbatim-moved) that may mask a real
+config inconsistency — queued as a separate follow-up task rather than widening
+this decomposition PR beyond its zero-behavior-change scope.
+
 ## 2026-08-23 — Session 012
 
 **Context.** PR #202 (F-030 doc reconciliation) merged. A stale planning document's
