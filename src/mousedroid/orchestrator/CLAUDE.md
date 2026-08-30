@@ -19,7 +19,16 @@
 ## Key Files & Entry Points
 
 - `orchestrator.py::MouseDroidOrchestrator` — main sense-plan-act execution loop (the
-  production entrypoint; `factory/orchestrator.py::build_orchestrator` wires it).
+  production entrypoint; `factory/orchestrator.py::build_orchestrator` wires it). Contains
+  `__init__` and `tick()` only; implementation is composition via seven mixins (see below).
+- `_lifecycle_mixin.py` — startup, shutdown, background task management, health checks.
+- `_mission_mixin.py` — natural language mission acceptance and lifecycle coordination.
+- `_world_model_state_mixin.py` — latent state validation, NaN recovery, OTA weight updates.
+- `_action_mixin.py` — action selection, VLA/cognitive dispatch, safety projection.
+- `_telemetry_experience_mixin.py` — frame publishing, experience logging, curiosity scoring.
+- `_voice_face_mixin.py` — voice output and facial expression control.
+- `_background_cadence_mixin.py` — sensor recovery, memory consolidation, on-device learning,
+  growth distillation loops.
 - `autonomous.py::AutonomousOrchestrator` — an alternate loop with **zero production
   callers**, deliberately parked off the production path per
   `docs/architecture/ADR-016-autonomous-orchestrator-disposition.md`; do not confuse it

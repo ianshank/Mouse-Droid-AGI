@@ -121,7 +121,7 @@ swap.
 - Plan: Tier C1 stories C1.1–C1.7 in
   `~/.claude/plans/please-create-a-comprehensive-sunny-hennessy.md`.
 - Implementation: `src/mousedroid/cloud/weight_update_poller.py`,
-  `src/mousedroid/orchestrator/orchestrator.py::_apply_pending_weight_update`,
+  `src/mousedroid/orchestrator/_world_model_state_mixin.py::_apply_pending_weight_update`,
   `src/mousedroid/utils/weights_manager.py::verify_sha256`,
   `src/mousedroid/telemetry/metrics.py` (4 new families).
 - Tests: `tests/unit/cloud/test_weight_update_poller.py`,
