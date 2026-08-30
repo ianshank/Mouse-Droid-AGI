@@ -150,6 +150,34 @@ precedent). Two findings tracked rather than fixed immediately (design
 decisions, not bugs): the coverage exemption's unbounded future scope, and two
 property-testing candidates — both recorded in `NEXT_STEPS.md` items 19–20.
 
+**Third round — the one CI itself caught.** PR #214 (created for this branch once
+GitHub auth allowed it) failed `test (3.10)` twice on the same commit with
+`AttributeError: module 'mousedroid.factory' has no attribute 'orchestrator'`.
+Root-caused by building a local Python 3.10 venv and reproducing CI's exact test
+command (GitHub API access stayed blocked throughout — see below): `factory/__init__.py`
+explicitly `del`eted each submodule name from its own namespace right after use, purely
+to match the pre-split flat module's `dir()` output, a goal no test pinned.
+`mock.patch("mousedroid.factory.orchestrator.build_cognitive_core", ...)` — regression
+3's own correct fix from round one — resolves that dotted path via a fallback plain
+`import mousedroid.factory.orchestrator` when the attribute is missing; once the
+submodule is cached in `sys.modules`, that fallback is a no-op and does not restore a
+deleted parent attribute **on Python 3.10**, confirmed to work fine on 3.11+ (a genuine
+interpreter behavior difference, reproduced in a single fresh process with zero other
+tests run first — never a test-order or flakiness question). Every earlier validation
+round in this session ran under Python 3.11 only, so nothing before real multi-version
+CI could have caught this. Fixed by removing the `del` (and the now-redundant bulk
+import that existed solely to feed it) — submodules now stay visible as facade
+attributes, matching ordinary Python package behavior; confirmed via the full CI-matching
+test command re-run end-to-end under both 3.10 and 3.11. New
+`test_every_submodule_stays_accessible_as_a_facade_attribute` pins the fix on every
+Python version, not just 3.10 — proven against a synthetic revert of the fix before
+trusting it. GitHub MCP auth ("Bad credentials") blocked every tool call for the entire
+session, including reading the actual failed-check logs; the PR itself was created
+externally ("from the Claude Code UI") since `create_pull_request` also failed.
+ADR-017/CHANGELOG updated with regression 7; the one behavior change this decomposition
+was not fully "verbatim" about (`dir(mousedroid.factory)` gaining 19 submodule names) is
+now stated explicitly rather than left implicit in the "no behavior changed" claim.
+
 ## 2026-08-23 — Session 012
 
 **Context.** PR #202 (F-030 doc reconciliation) merged. A stale planning document's

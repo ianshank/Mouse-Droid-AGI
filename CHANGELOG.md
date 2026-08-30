@@ -16,10 +16,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   total)**, acyclic 3-layer structure
   (leaf domain modules → two on-device/growth/mcp modules that import only leaves →
   `factory/orchestrator.py::build_orchestrator`). `factory/__init__.py` is a pure
-  re-export facade whose `__all__` (plus 12 directly-tested private names) matches the
-  pre-split module's `dir()` output exactly — `from mousedroid import factory` /
+  re-export facade whose `__all__` (plus 12 directly-tested private names) matches
+  the pre-split module's public surface — `from mousedroid import factory` /
   `from mousedroid.factory import build_x` is unchanged. Extraction only; every
-  function moved verbatim, zero logic reshaping.
+  function moved verbatim, zero logic reshaping, with one deliberate exception (see
+  regression 7 below): `dir(mousedroid.factory)` now additionally lists the 19
+  submodule names, which the flat module never had — nothing that resolved before
+  stops resolving.
 - **`src/mousedroid/orchestrator/orchestrator.py` (2,191 lines, 44 methods on
   `MouseDroidOrchestrator`) split into 7 mixin files** (`_lifecycle_mixin.py`,
   `_mission_mixin.py`, `_world_model_state_mixin.py`, `_action_mixin.py`,
@@ -35,8 +38,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   required (`CLAUDE.md`, `AGENTS.md`, `SKILLS.md`, `HARNESS_SPEC.md`,
   `docs/CHARTER.md`, `README.md`, `docs/architecture.md`, C4 diagrams, ADR-010,
   ADR-016).
-- **Six confirmed regressions found by this change's own follow-up audit and a
-  subsequent independent adversarial peer review, all fixed**:
+- **Seven confirmed regressions found across this change's own follow-up audit, a
+  subsequent independent adversarial peer review, and real CI, all fixed**:
   1. `scripts/check_subsystem_boundaries.py::_discover_subsystems()` was never updated
      to exclude the new `factory/` directory from subsystem-boundary scanning, so the
      gate was failing on `RegexInjectionFilter` module-level imports (the DI composition
@@ -86,6 +89,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
      checked only "is every real symbol re-exported," never the inverse "does every
      `__all__` entry actually resolve." Both entries removed; the missing inverse
      direction is now `test_every_all_entry_actually_resolves_on_the_module`.
+  7. `factory/__init__.py` explicitly `del`eted each submodule name (`arm`,
+     `orchestrator`, `telemetry`, ...) from its own namespace right after using it,
+     purely to match the pre-split flat module's `dir()` output — a goal no test
+     pinned. `unittest.mock.patch("mousedroid.factory.orchestrator.build_cognitive_core", ...)`
+     (regression 3's own fix) resolves that dotted path via a fallback plain
+     `import mousedroid.factory.orchestrator` when the attribute is missing — a
+     no-op once the submodule is already cached in `sys.modules`, so it does not
+     restore a deleted parent attribute **on Python 3.10** (confirmed: it does on
+     3.11+, a genuine interpreter behavior difference, reproduced in a single fresh
+     process with zero other tests run first). CI's `test (3.10)` matrix leg failed
+     twice on the same commit with `AttributeError: module 'mousedroid.factory' has
+     no attribute 'orchestrator'` — the first regression in this list CI itself
+     caught rather than a local audit, and the first that needed the full Python
+     version matrix to surface (every earlier validation round ran under 3.11 only).
+     Fixed by removing the `del` (and the now-redundant bulk import that existed
+     solely to feed it); new `test_every_submodule_stays_accessible_as_a_facade_attribute`
+     pins it on every Python version.
 - **`src/mousedroid/orchestrator/_state.py` (new)**: a shared `_OrchestratorState`
   type-declaration class every mixin inherits from, so mypy --strict can resolve
   cross-mixin `self._foo` attribute/method access without per-call

@@ -1,6 +1,6 @@
 ---
 name: module-split-consistency-sweep
-description: After splitting a flat "god" file into a package, or a god class into mixins, run the 7-check sweep that catches what the split itself doesn't fail loudly on — MRO-shadowed dead code, wrong mock.patch targets, wholesale-copied dead imports, dangling re-exports, stale doc references, and gate dilution. Use before merging any module-split PR.
+description: After splitting a flat "god" file into a package, or a god class into mixins, run the 8-check sweep that catches what the split itself doesn't fail loudly on — MRO-shadowed dead code, wrong mock.patch targets, wholesale-copied dead imports, dangling re-exports, Python-version-dependent facade breakage, stale doc references, and gate dilution. Use before merging any module-split PR.
 status: active
 ---
 
@@ -16,10 +16,10 @@ miss are silent by construction: they pass CI and still ship a defect.
 
 The `factory.py` → `factory/` (19 submodules + facade, 20 files total) and
 `src/mousedroid/orchestrator/orchestrator.py` → 7-mixin decomposition
-(ADR-017) hit six confirmed regressions across two audit rounds — this
-session's own follow-up sweep, then a separate independent adversarial peer
-review of that sweep's own commit — none of them a logic mistake in the
-moved code itself:
+(ADR-017) hit seven confirmed regressions across three rounds — this
+session's own follow-up sweep, a separate independent adversarial peer
+review of that sweep's own commit, and finally real multi-version CI — none
+of them a logic mistake in the moved code itself:
 
 1. **MRO-shadowed dead code.** An earlier truncation pass cut
    `orchestrator.py` after the wrong line, leaving 7 lifecycle methods
@@ -66,12 +66,28 @@ moved code itself:
    first round's own fix commit is what found it — the first round's own
    `mypy --strict`-clean / full-suite-green claim was true and still missed
    it, because neither tool checks this relationship.
+7. **Facade submodule-visibility broke `mock.patch` on one Python version, not
+   the one anybody developed under.** `src/mousedroid/factory/__init__.py` explicitly
+   `del`eted each submodule name (`arm`, `orchestrator`, ...) from its own
+   namespace right after using it, purely so `dir(mousedroid.factory)` would
+   match the pre-split flat module's `dir()` output — a goal no test pinned.
+   Several tests correctly patch `mousedroid.factory.orchestrator.build_cognitive_core`
+   (incident 2's own fix), and `mock.patch`'s dotted-path resolver falls back
+   to a plain `import mousedroid.factory.orchestrator` when the attribute is
+   missing — a no-op once the submodule is cached in `sys.modules`, so it does
+   *not* restore the deleted attribute on Python 3.10 (confirmed: it does on
+   3.11+ — a genuine interpreter difference, reproduced in a single fresh
+   process with zero other tests run first, so never a test-order question).
+   CI's `test (3.10)` matrix leg failed twice on the same commit; every local
+   validation round in this session — full test suite, `mypy --strict`, two
+   rounds of adversarial review — ran under Python 3.11 only, so nothing
+   short of the real version matrix could have caught it.
 
 Each of these is invisible to "did the tests pass" and needs its own check.
 
 ## The procedure
 
-Run all seven after the mechanical split, before opening the PR:
+Run all eight after the mechanical split, before opening the PR:
 
 1. **Subsystem-boundary carve-out check.**
    `python scripts/check_subsystem_boundaries.py` — if the new package is a
@@ -146,6 +162,23 @@ Run all seven after the mechanical split, before opening the PR:
    declaration (see
    `tests/regression/test_orchestrator_mixin_surface.py::test_every_state_stub_is_overridden_somewhere_reachable`).
 
+8. **Facade submodule-visibility check — and run it under every Python
+   version `requires-python` claims to support, not just the one you're
+   developing under.** If the flat-file → package split's `__init__.py`
+   does anything to hide submodule names from `dir()` for cosmetic parity
+   with the pre-split module (an explicit `del` after import, most likely),
+   don't — remove the cleanup instead of trying to make it version-safe.
+   Pin it with a test that asserts every real submodule stays `hasattr`-true
+   on the facade (see
+   `tests/unit/factory/test_facade_completeness.py::test_every_submodule_stays_accessible_as_a_facade_attribute`)
+   — this test fails identically on every Python version, unlike the bug it
+   guards against, which is invisible under 3.11+ and only reproduces under
+   3.10. If you cannot run the project's oldest supported interpreter
+   locally, do not skip this step and hope CI's version matrix catches it
+   silently — write the `hasattr` pin regardless, since it is what actually
+   makes the fix durable, not the specific interpreter you happened to test
+   it under.
+
 ## Guardrails
 
 - **A truncation-based extraction (`head -n`, a line-range copy) must cut at
@@ -164,19 +197,22 @@ Run all seven after the mechanical split, before opening the PR:
   keep the real percentage visible even when the failure is suppressed. If
   you can't point at the specific pre-split evidence that a flagged line was
   already uncovered, don't exempt it — fix it or leave the gate red.
-- **Steps 1-7 are cheap to skip and expensive to skip silently.** All six
+- **Steps 1-8 are cheap to skip and expensive to skip silently.** All seven
   regressions above passed the existing CI ladder before being found — one
   of them (incident 6) passed it *twice*, on two separate commits, because
-  the fix for one blind spot didn't happen to close the other. Budget time
-  for this sweep as part of the split, not as optional polish after, and
-  don't treat a clean `mypy --strict` / full-suite run as proof a fix is
-  complete when the whole point of this sweep is the class of bug those
-  tools don't catch.
+  the fix for one blind spot didn't happen to close the other, and incident
+  7 passed every local check in this whole session because every one of
+  them ran under a single Python version. Budget time for this sweep as
+  part of the split, not as optional polish after, and don't treat a clean
+  `mypy --strict` / full-suite run under whichever interpreter you happen
+  to be using as proof a fix is complete — the whole point of this sweep is
+  the class of bug those tools, and that one interpreter, don't catch.
 
 ## When to run it
 
 - After any flat-file → package split (a `config/schema/`-shaped change).
 - After any class → mixin-composition split (an `orchestrator.py`-shaped
   change).
-- Before opening the PR — not after review flags one of these six
-  regression classes by hand.
+- Before opening the PR — not after review flags one of these seven
+  regression classes by hand, and not after CI's version matrix flags the
+  eighth.

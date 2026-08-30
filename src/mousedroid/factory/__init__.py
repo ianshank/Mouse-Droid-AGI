@@ -28,29 +28,6 @@ from mousedroid.constants import (
     DEFAULT_LIDAR_MAX_RANGE_M,
     DEFAULT_MOTOR_BAUDRATE,
 )
-
-# Import submodules explicitly so they can be deleted from the namespace
-from mousedroid.factory import (
-    _replay_batch_helpers,
-    arm,
-    autonomous,
-    cloud,
-    cognitive,
-    growth,
-    hardware,
-    health,
-    learning,
-    llm_gateway,
-    mcp_harness,
-    memory_curiosity,
-    mission,
-    on_device_learning,
-    orchestrator,
-    safety,
-    telemetry,
-    voice,
-    world_model,
-)
 from mousedroid.factory._replay_batch_helpers import (
     _MAX_REPLAY_COUNT_CHUNK as _MAX_REPLAY_COUNT_CHUNK,
 )
@@ -284,12 +261,25 @@ from mousedroid.voice.protocol import VoiceEngineProtocol
 # E402 ("module level import not at top of file") fires on them.
 _log = get_logger(__name__)
 
-# Hide submodule names from dir() to match pre-split flat module's dir() output.
-# Python's import mechanism exposes submodules automatically; we delete them here
-# to maintain Invariant #1's pre/post decomposition dir() equivalence.
-del arm, autonomous, cloud, cognitive, growth, hardware, health, learning
-del llm_gateway, mcp_harness, memory_curiosity, mission, on_device_learning
-del orchestrator, safety, telemetry, voice, world_model, _replay_batch_helpers
+# Submodule names (arm, orchestrator, telemetry, ...) are deliberately left
+# visible as attributes of this package -- NOT deleted after use. An earlier
+# version of this file deleted them to match the pre-split flat module's
+# dir() output exactly (no test ever pinned that goal; it was a one-time
+# manual dir()-diff check during the original decomposition). That created a
+# real, version-dependent bug: `del name` here removes the attribute from
+# `mousedroid.factory.__dict__` (this file's own namespace IS that dict), and
+# once a submodule is cached in sys.modules, a later plain `import
+# mousedroid.factory.<name>` -- including the one unittest.mock.patch's
+# dotted-path fallback performs internally -- does not restore the deleted
+# attribute on Python 3.10 (confirmed: it does on 3.11+, a real interpreter
+# behavior difference, not a flake). Several real tests correctly patch
+# `mousedroid.factory.orchestrator.build_cognitive_core` rather than the
+# facade re-export, per "patch where it's used, not where it's defined" --
+# those calls raised `AttributeError: module 'mousedroid.factory' has no
+# attribute 'orchestrator'` on Python 3.10 CI as a direct result of the
+# delete. Every submodule that would have been deleted is imported again
+# just below anyway (each with specific names), so nothing is lost by
+# leaving the plain submodule reference in place too.
 
 __all__ = [
     "DEFAULT_CAMERA_HEIGHT",

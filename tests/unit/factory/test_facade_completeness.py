@@ -162,3 +162,35 @@ def test_every_all_entry_actually_resolves_on_the_module() -> None:
         f"__all__ entry/entries do not resolve on mousedroid.factory: {dangling} -- "
         "`from mousedroid.factory import *` raises AttributeError for these"
     )
+
+
+def test_every_submodule_stays_accessible_as_a_facade_attribute() -> None:
+    """Every real `factory/*.py` submodule must resolve as `mousedroid.factory.<name>`.
+
+    An earlier version of `factory/__init__.py` explicitly `del`eted each
+    submodule name (`arm`, `orchestrator`, ...) from its own namespace right
+    after using it, purely to match the pre-split flat module's `dir()`
+    output. No test pinned that goal, and it produced a real, version-
+    dependent bug: several tests correctly patch
+    `mousedroid.factory.orchestrator.build_cognitive_core` rather than the
+    facade re-export (see `test_factory.py`, "patch where it's used, not
+    where it's defined"). `unittest.mock.patch`'s dotted-path resolver falls
+    back to a plain `import mousedroid.factory.orchestrator` when the
+    attribute is missing -- but once a submodule is already cached in
+    `sys.modules`, that fallback re-import is a no-op and does NOT restore
+    the deleted attribute on Python 3.10 (confirmed: it does on 3.11+, a
+    real interpreter behavior difference). The patch raised
+    `AttributeError: module 'mousedroid.factory' has no attribute
+    'orchestrator'` on Python 3.10 CI as a direct result -- reproducible in
+    a single fresh process with zero other tests run first, so it was never
+    a matter of test order. This test pins the fix (leave submodules
+    visible) in a way that fails on every Python version, not just 3.10.
+    """
+    missing = sorted(
+        path.stem for path in _submodule_files() if not hasattr(_factory_module, path.stem)
+    )
+    assert not missing, (
+        f"submodule(s) not accessible as mousedroid.factory.<name>: {missing} -- "
+        "a mock.patch('mousedroid.factory.<name>.<symbol>') target for any of these "
+        "can silently break depending on Python version (see this test's docstring)"
+    )

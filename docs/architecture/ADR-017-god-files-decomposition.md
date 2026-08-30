@@ -200,11 +200,12 @@ the four 4646d80 packages exactly:
   touching, say, curiosity scoring now shows a ~240-line file instead of a 2,191-line
   one. `factory/`'s layering makes "what does building X depend on" answerable by
   filename instead of a grep through 5,140 lines.
-* **Six confirmed regressions were caught and fixed across two audit rounds** —
+* **Seven confirmed regressions were caught and fixed across three rounds** —
   the first four plus the coverage-gate dilution (regression 5) by this change's own
   follow-up audit, the sixth by a subsequent independent adversarial peer review of
-  that audit's own commit — none of them by CI. Recorded here so each gap and its
-  fix stay traceable together:
+  that audit's own commit, the seventh by real multi-version CI (the one regression
+  in this list CI itself caught, not a local audit). Recorded here so each gap and
+  its fix stay traceable together:
   1. `_discover_subsystems()`'s `factory` carve-out (Decision item 5) was specified by
      the original split plan but not actually applied when `factory.py` first became
      `factory/` — `scripts/check_subsystem_boundaries.py` was failing on
@@ -251,27 +252,55 @@ the four 4646d80 packages exactly:
      re-exported), never the inverse (every `__all__` entry actually resolves). Both
      entries removed; the missing inverse direction is now
      `test_every_all_entry_actually_resolves_on_the_module`.
-* Six characterization/regression tests close the failure modes a verbatim move
-  can't self-detect, four of them added only after the peer review and a companion
-  edge-case audit found the first three weren't enough: a `factory/__init__.py`
-  facade completeness check in both directions (forward-looking — walks every
-  submodule and asserts every public def is re-exported, rather than a one-time
-  snapshot diff — plus the inverse `__all__`-resolves check from regression 6
-  above); four `MouseDroidOrchestrator` class-surface checks — pinning the method
-  list, no two mixins sharing a name, the concrete class defining nothing beyond
-  `__init__`/`tick` (the check regression 2 above was missing, added after it was
-  found), and every `_state.py` stub having a real implementor somewhere reachable
-  (the inverse of the no-two-mixins check, closing the same class of silent-MRO-
-  fallback risk regression 2 exposed, for stubs instead of duplicate methods); and
-  an exact attribute-schema equality test between `_OrchestratorState`'s
-  declarations and a real instance's `vars()`, catching both a missing declaration
-  and a stale one no `__init__` attribute still backs. See
-  `.claude/skills/module-split-consistency-sweep/SKILL.md` for the general
-  checklist these six regressions were distilled into, and `NEXT_STEPS.md` items 19
-  and 20 for the follow-up findings from both audit rounds that were tracked rather
-  than fixed immediately (the coverage exemption's unbounded scope, two latent
-  structural test gaps, and two property-testing candidates).
-* No behavior changed: every function/method moved verbatim, no logic reshaping. No
-  breaking changes → no migration guide required. Downstream import paths
-  (`from mousedroid import factory`, `from mousedroid.orchestrator.orchestrator import
-  MouseDroidOrchestrator`) are unchanged.
+  7. `factory/__init__.py` explicitly `del`eted each submodule name (`arm`,
+     `orchestrator`, `telemetry`, ...) from its own namespace right after using it,
+     purely to match the pre-split flat module's `dir()` output — a goal no test
+     pinned. Several tests correctly patch `mousedroid.factory.orchestrator.build_cognitive_core`
+     rather than the facade re-export (Decision item 1's "patch where it's used, not
+     where it's defined" rule), and `unittest.mock.patch`'s dotted-path resolver
+     falls back to a plain `import mousedroid.factory.orchestrator` when the
+     attribute is missing. That fallback is a no-op once the submodule is already
+     cached in `sys.modules` — it does not restore a deleted parent attribute on
+     Python 3.10 (confirmed: it does on Python 3.11+, a genuine interpreter
+     behavior difference, reproduced in a single fresh process with zero other
+     tests run first, so never a matter of test order or flakiness). CI's
+     `test (3.10)` matrix leg failed with `AttributeError: module 'mousedroid.factory'
+     has no attribute 'orchestrator'` on two consecutive runs of the same commit —
+     the first regression in this list actually caught by CI rather than a local
+     audit round, and the first that depended on the full Python version matrix to
+     surface at all (every earlier round validated only under 3.11). Fixed by
+     removing the `del` (and the now-redundant bulk import that existed solely to
+     feed it) — submodules stay visible as facade attributes, matching ordinary
+     Python package behavior. New
+     `test_every_submodule_stays_accessible_as_a_facade_attribute` pins this on
+     every Python version, not just 3.10.
+* Seven characterization/regression tests close the failure modes a verbatim move
+  can't self-detect, five of them added only after the peer review, a companion
+  edge-case audit, and real CI found the first three weren't enough: a
+  `factory/__init__.py` facade completeness check in both directions (forward-looking
+  — walks every submodule and asserts every public def is re-exported, rather than a
+  one-time snapshot diff — plus the inverse `__all__`-resolves check from regression 6
+  and the submodule-accessibility check from regression 7, both above); four
+  `MouseDroidOrchestrator` class-surface checks — pinning the method list, no two
+  mixins sharing a name, the concrete class defining nothing beyond `__init__`/`tick`
+  (the check regression 2 above was missing, added after it was found), and every
+  `_state.py` stub having a real implementor somewhere reachable (the inverse of the
+  no-two-mixins check, closing the same class of silent-MRO-fallback risk regression 2
+  exposed, for stubs instead of duplicate methods); and an exact attribute-schema
+  equality test between `_OrchestratorState`'s declarations and a real instance's
+  `vars()`, catching both a missing declaration and a stale one no `__init__`
+  attribute still backs. See `.claude/skills/module-split-consistency-sweep/SKILL.md`
+  for the general checklist these seven regressions were distilled into, and
+  `NEXT_STEPS.md` items 19 and 20 for the follow-up findings from the first two audit
+  rounds that were tracked rather than fixed immediately (the coverage exemption's
+  unbounded scope, two latent structural test gaps, and two property-testing
+  candidates).
+* Almost no behavior changed: every function/method moved verbatim, no logic
+  reshaping, and downstream import paths (`from mousedroid import factory`,
+  `from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator`) are
+  unchanged — so no migration guide is required. The one deliberate exception is
+  regression 7's fix: `dir(mousedroid.factory)` now additionally includes the 19
+  submodule names (`arm`, `orchestrator`, ...), which the pre-split flat module's
+  `dir()` never had. This is a strict widening (nothing that resolved before stops
+  resolving) and matches how every ordinary Python package behaves; no test depended
+  on their absence.
