@@ -130,7 +130,7 @@ MOUSEDROID_MOCK_HARDWARE=true python scripts/verify_sensors.py \
 "no ESP32 plugged in", "running camera + LiDAR without motors".
 
 **Read:**
-- `src/mousedroid/factory.py:90-127` — the `build_esp32_driver` branch.
+- `src/mousedroid/factory/hardware.py` — the `build_esp32_driver` function.
 - `src/mousedroid/config/schema/` — `ESP32Config.enabled` docstring.
 - `tests/integration/test_pr104_esp32_disabled_integration.py` —
   reference tests.
@@ -170,7 +170,7 @@ python -m mousedroid.cli.validate_pillars --config config/default.yaml
   `enumerate_usbc_devices` + `resolve_endpoint`.
 - `src/mousedroid/config/schema/` — `USBCDiscoveryConfig`,
   `USBCEndpointSpec`, and the `Settings.usbc_discovery` field.
-- `src/mousedroid/factory.py:_resolve_esp32_serial_via_usbc_discovery` —
+- `src/mousedroid/factory/hardware.py:_resolve_esp32_serial_via_usbc_discovery` —
   two-condition override (only fires when discovery enabled AND literal
   path missing).
 - `scripts/check_usbc_devices.py` — standalone operator probe.
@@ -267,7 +267,7 @@ Tier C deliberative brain".
 - `src/mousedroid/config/schema/` — `LLMConfig.backend`,
   `fallback_backend`, `fallback_model_name`,
   `fallback_retry_cooldown_s`, `api_key` (`SecretStr`).
-- `src/mousedroid/factory.py:_build_single_llm_gateway` +
+- `src/mousedroid/factory/llm_gateway.py:_build_single_llm_gateway` +
   `build_llm_gateway` — dispatch + composite wrap.
 - `config/jetson_claude_pilot.yaml` — canonical anthropic-primary +
   llama_cpp-fallback overlay.
@@ -343,7 +343,7 @@ filter doesn't fire".
 - `src/mousedroid/llm_gateway/anthropic_gateway.py:translate_mission`
   — call to `self._injection_filter.sanitize(nl_command)` MUST appear
   BEFORE `client.messages.create`; commit the order, not the proximity.
-- `src/mousedroid/factory.py:build_llm_injection_filter` — the shared
+- `src/mousedroid/factory/llm_gateway.py:build_injection_filter` — the shared
   filter instance threaded into both the gateway and the OpenClaw
   mission dispatcher so REST + MCP + LLM ingress share one envelope.
 - `LLMConfig.injection_patterns` + `LLMConfig.max_command_len` — the
@@ -459,7 +459,7 @@ presence-checked only.
    full paired shape (AQA + backwards-compat, not just the AQA half), see
    `regression-pair-scaffold` below.
 6. If the field gates a code branch, add an integration test in
-   `tests/integration/` exercising the wiring through `factory.py`.
+   `tests/integration/` exercising the wiring through `factory/`.
 
 Reference: PR #104 added 3 fields this way — see commit `1b7a12e` for the
 shape.
@@ -477,7 +477,7 @@ shape.
 3. Implement a `MockX` mirror — same protocol, no real I/O. Mock must
    produce sensible synthetic data (`np.random.default_rng(seed).normal()`
    shaped to match the real driver's output).
-4. Add a `build_<driver>(cfg, ...)` builder in `factory.py`. Honour
+4. Add a `build_<driver>(cfg, ...)` builder in `factory/`. Honour
    `mock_hardware` AND any per-subsystem `enabled: bool`.
 4a. If the driver talks to real hardware and can transiently fail (serial,
     USB, CSI/I2C), wrap the real backend in a `ResilientX` class under

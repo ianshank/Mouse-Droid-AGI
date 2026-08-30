@@ -297,7 +297,7 @@ superseded in place.
 
 Non-negotiable rules, mechanically checked where possible (see CLAUDE.md for the full set):
 
-- Protocol-based DI; concrete types only in `src/mousedroid/factory.py` — enforced by review + factory tests.
+- Protocol-based DI; concrete types only in `src/mousedroid/factory/` — enforced by review + factory tests.
 - No raw `print()` in `src/mousedroid` production paths — structlog; ruff scope.
 - No hardcoded values — `scripts/check_no_hardcoded_values.py` (AST gate) + config validation (`F-002`).
 - `mypy --strict` passes; 90% line coverage gate over `src/mousedroid` (85% for `tools/claude_hooks/`, a separate gate) — `scripts/ci.sh`

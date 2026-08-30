@@ -10,7 +10,7 @@
 2. **Emergency Stop (E-Stop)**: `self._esp32.emergency_stop()` halts motor execution
    immediately. Cooperative task cancellation (`asyncio.CancelledError`, a `BaseException`
    subclass — never caught by a bare `except Exception`) must always propagate.
-3. **Telemetry Server & Shared Registry**: Handed a single `MetricsRegistry` from `factory.py`
+3. **Telemetry Server & Shared Registry**: Handed a single `MetricsRegistry` from `factory/`
    via keyword-only argument `metrics: MetricsRegistry | None = None`.
 4. **Safety Filter Projection**: Every action passes through `self._safety_monitor.evaluate(...)`
    (`SafetyMonitorProtocol`) before `_maybe_project_action` and serial dispatch to the ESP32
@@ -19,14 +19,14 @@
 ## Key Files & Entry Points
 
 - `orchestrator.py::MouseDroidOrchestrator` — main sense-plan-act execution loop (the
-  production entrypoint; `factory.py::build_orchestrator` wires it).
+  production entrypoint; `factory/orchestrator.py::build_orchestrator` wires it).
 - `autonomous.py::AutonomousOrchestrator` — an alternate loop with **zero production
   callers**, deliberately parked off the production path per
   `docs/architecture/ADR-016-autonomous-orchestrator-disposition.md`; do not confuse it
   with the production path above.
 - `mission_dispatcher.py`, `mission_lifecycle.py`, `llm_replanner.py`, `face_controller.py` —
   supporting collaborators, not the loop itself.
-- `factory.py::build_orchestrator` (`:4020`) — factory builder wiring `MouseDroidOrchestrator`.
+- `factory/orchestrator.py::build_orchestrator` — factory builder wiring `MouseDroidOrchestrator`.
 - `../safety/monitor.py::MouseDroidSafetyMonitor` — the concrete safety monitor
   (`SafetyMonitorProtocol` is the interface application code is typed against).
 - `tests/unit/orchestrator/` — subsystem unit tests.

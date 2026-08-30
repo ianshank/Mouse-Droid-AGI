@@ -6,7 +6,7 @@
 
 ## Architectural Invariants (Never Weaken These)
 
-1. **Factory-First DI**: Concrete types are imported *inside* `src/mousedroid/factory.py` only.
+1. **Factory-First DI**: Concrete types are imported *inside* `src/mousedroid/factory/` only.
    Application code is typed against `@runtime_checkable Protocol` interfaces.
 2. **Schema-Driven Configuration**: Every threshold, dimension, pin, path, and tunable parameter
    comes from Pydantic schemas in `src/mousedroid/config/schema/` loaded from YAML in `config/`.

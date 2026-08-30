@@ -1,8 +1,8 @@
 """PR #105b B.5 — regression guard: ``mypy --strict`` stays clean on touched files.
 
 This test subprocess-runs ``mypy --strict --no-incremental`` against the
-exact two source files PR #105b closed errors on
-(``src/mousedroid/factory.py`` + ``src/mousedroid/reward/vlm_progress.py``)
+exact source files PR #105b closed errors on
+(``src/mousedroid/factory/`` package + ``src/mousedroid/reward/vlm_progress.py``)
 and asserts the report is ``Success: no issues found``. Without this guard
 a future PR could re-introduce either the ``PolicyApprovalGate`` type hole
 or the ``cachetools`` missing-stub error and CI's broader ``mypy --strict``
@@ -44,7 +44,7 @@ _MYPY_TIMEOUT_S: Final[int] = int(os.environ.get("MYPY_TIMEOUT_S", "300"))
 # job catches those; this guard catches re-regression of the PR-98 +
 # PR-105b debt specifically.
 _TARGET_FILES: Final[tuple[str, ...]] = (
-    "src/mousedroid/factory.py",
+    "src/mousedroid/factory",
     "src/mousedroid/reward/vlm_progress.py",
 )
 
@@ -60,7 +60,7 @@ def test_targeted_files_mypy_strict_clean() -> None:
 
     This is a guard against silent re-introduction of:
 
-    * ``factory.py:2216-2261`` — the ``PolicyApprovalGate(inner, ...)``
+    * ``factory/`` — the ``PolicyApprovalGate(inner, ...)``
       argument-type hole (originally PR-98, closed in PR-105b via
       ``inner: ApprovalGateProtocol`` annotation tightening).
     * ``reward/vlm_progress.py:31`` — the ``cachetools`` missing-stub
@@ -74,7 +74,7 @@ def test_targeted_files_mypy_strict_clean() -> None:
 
     # Timeout sourced from ``_MYPY_TIMEOUT_S`` (env-overridable; see
     # module docstring). Sized for a cold ``mypy --strict`` run on this
-    # codebase's import graph — factory.py transitively pulls in the
+    # codebase's import graph — factory/ package transitively pulls in the
     # world_model + arm + harness trees, which dominates wall time.
     # S603 noqa not required: tests/** has a broad subprocess-call waiver
     # in pyproject.toml's per-file-ignores.

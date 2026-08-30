@@ -172,7 +172,7 @@ _ORCHESTRATOR_REAL_SYMBOLS = {
         "class MouseDroidSafetyMonitor",
     ),
     "build_orchestrator": (
-        _REPO_ROOT / "src" / "mousedroid" / "factory.py",
+        _REPO_ROOT / "src" / "mousedroid" / "factory" / "orchestrator.py",
         "def build_orchestrator",
     ),
 }
