@@ -127,7 +127,12 @@ class _ActionMixin(_OrchestratorState):
             The VLA action tensor on success, otherwise ``None``.
         """
         del observation  # forwarded via VLAObservation below
-        assert self._vla_policy is not None  # narrowed by caller
+        if self._vla_policy is None:
+            raise RuntimeError(
+                "_try_vla_action called without a VLA policy wired — caller "
+                "must check self._vla_policy is not None before invoking this "
+                "method"
+            )
 
         from mousedroid.vla.policy import VLAObservation
 
@@ -240,7 +245,12 @@ class _ActionMixin(_OrchestratorState):
                 "curiosity": self._compute_curiosity_scores(),
             }
             cognitive_core = self._cognitive_core
-            assert cognitive_core is not None
+            if cognitive_core is None:
+                raise RuntimeError(
+                    "_try_cognitive_action called without a cognitive core "
+                    "wired — caller must check self._cognitive_core is not "
+                    "None before invoking this method"
+                )
             action_np, violations = cognitive_core.tick_fast(obs_dict)
             if violations:
                 _log.info(

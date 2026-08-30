@@ -545,3 +545,37 @@ async def test_voice_observe_uses_config_battery_threshold():
     ctx_ok = SafetyContext(battery_voltage=threshold + 0.1)
     await orch._voice_observe(obs, ctx_ok)
     orch._voice_engine.speak.assert_not_awaited()
+
+
+async def test_try_vla_action_raises_when_no_policy_wired():
+    """_try_vla_action's None-guard raises (not assert) so it survives PYTHONOPTIMIZE=1.
+
+    Callers only ever reach this method after their own `self._vla_policy is
+    not None` check (see `_select_action`), so this path is unreachable in
+    practice -- but it must fail loudly if that precondition is ever broken,
+    which a stripped `assert` under `PYTHONOPTIMIZE=1` would not do (CLAUDE.md:
+    "Never use `assert` in runtime code paths running under `PYTHONOPTIMIZE=1`").
+    """
+    orch = _make_orchestrator()
+    assert orch._vla_policy is None
+    obs = _make_observation(orch._cfg)
+    with pytest.raises(RuntimeError, match="_try_vla_action called without a VLA policy"):
+        await orch._try_vla_action(obs)
+
+
+async def test_try_cognitive_action_returns_none_when_no_core_wired():
+    """_try_cognitive_action's None-guard raises (not assert), same reasoning as above --
+    but the whole method body is wrapped in `except Exception` (by design, so no
+    cognitive-core failure can crash the tick loop), so the raise is caught internally
+    and surfaces as a graceful `None` return (falls back to MCTS), not a propagated
+    exception. Confirm it still fails loudly enough to be observed: recorded as a
+    failure event, not silently swallowed with no signal at all.
+    """
+    orch = _make_orchestrator()
+    assert orch._cognitive_core is None
+    orch._failure_recorder = MagicMock()
+    obs = _make_observation(orch._cfg)
+    result = orch._try_cognitive_action(obs, loop_time_ms=0.0)
+    assert result is None
+    orch._failure_recorder.record.assert_called_once()
+    assert orch._failure_recorder.record.call_args.args[1] == "cognitive_core_exception"
