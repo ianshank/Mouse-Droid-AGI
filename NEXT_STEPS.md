@@ -57,6 +57,38 @@ The legacy v0.3.0 execution-plan phase numbering lives only in
     `docs/runbooks/jetson-alayaworld-spike.md` and `scripts/compare_drift.py`.
 16. **[Portfolio — P2] Record 60-second hardware demo clip** on Jetson and link in README (host as release asset).
 17. **[Portfolio — P2] Git-history purge** post-reframe PR (#167): run `scripts/purge_history.sh` and rename slug to `mouse-droid`.
+18. **[Hygiene — P3] Migrate 50 test-fixture `np.random.*` legacy-RNG call sites off global state.**
+    `ruff`'s `NPY` ruleset is now enabled repo-wide (`pyproject.toml`); a sweep found `src/mousedroid`
+    already clean, but 50 pre-existing `NPY002` hits live in `tests/{unit,integration,smoke,regression}`
+    mock-data fixtures, currently baselined via a `tests/**/*.py` per-file-ignore. Needs a design
+    decision (a shared `np.random.Generator` pytest fixture vs. a per-file module-level instance)
+    before a mechanical rewrite — not urgent (mock-data determinism only, zero production risk).
+19. **[Hygiene — P3] `check_branch_coverage.py`'s `_ALLOWED_DIR_PREFIXES` exemption is unbounded,
+    not time-boxed to the split that motivated it (ADR-017; ditto `check_no_hardcoded_values.py`'s
+    sibling `ALLOWED_DIR_PREFIXES`).** Flagged by independent adversarial peer review: the exemption
+    is a permanent, unconditional prefix match, so any *future* under-tested branch newly added
+    inside `factory/` or `orchestrator/_*` — not just the pre-existing dilution these prefixes were
+    added to hide — is silently exempt from the 90% branch-coverage gate forever, with no per-file
+    allowlist or expiry. `factory/_replay_batch_helpers.py`, `on_device_learning.py`, and
+    `mcp_harness.py` in particular carry real algorithmic logic, not just DI wiring, so this is not
+    a low-stakes corner. Needs a design decision, not a mechanical fix: e.g. re-baseline each
+    exempted file's true coverage periodically and drop it from the prefix list once independently
+    verified at/above threshold, or replace the directory-prefix match with a per-file allowlist
+    pinned to the specific pre-existing gap it excuses.
+20. **[Testing — P3] Two structural test gaps found by an edge-case audit of the ADR-017 mixin split,
+    both currently latent (no live trigger today).** (a) `tests/unit/factory/test_facade_completeness.py`'s
+    `_public_top_level_defs` only walks `ast.Module.body` (true top-level), so a public `def`/`class`
+    nested inside a module-level `if`/`try` block — the optional-dependency pattern CLAUDE.md itself
+    anticipates for `arm`/`mujoco` extras — would be invisible to the facade-completeness check;
+    confirmed no `factory/*.py` submodule uses that pattern today. (b) Two property-testing
+    candidates neither currently covered: sweep which subset of `MouseDroidOrchestrator.__init__`'s
+    ~35 optional/defaulted kwargs is populated vs. left at default and assert the resulting instance's
+    attribute set still matches `_OrchestratorState.__annotations__` exactly (stronger than the single
+    fixed-args unit test added this session, since a future conditionally-assigned attribute could
+    dodge one fixed example); and an exhaustive `Path.glob`-based invariant that every real file
+    matched by `check_branch_coverage.py`'s `_ALLOWED_DIR_PREFIXES` is on an explicit per-prefix
+    allowlist, catching a future underscore-prefixed file riding an exemption nobody reviewed for it
+    (see item 19).
 
 ---
 

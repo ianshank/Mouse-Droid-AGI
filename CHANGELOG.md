@@ -10,8 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed — God-files decomposition: `factory.py` + `orchestrator/orchestrator.py`
 
-- **`src/mousedroid/factory.py` (5,140 lines, ~99 `build_*`/`_build_*` functions)
-  split into a 19-file `src/mousedroid/factory/` package**, acyclic 3-layer structure
+- **`src/mousedroid/factory.py` (5,140 lines, 99 top-level functions — 86 of them
+  `build_*`/`_build_*`, the rest non-`build_` helpers) split into a 19-submodule
+  `src/mousedroid/factory/` package plus its `__init__.py` facade (20 files
+  total)**, acyclic 3-layer structure
   (leaf domain modules → two on-device/growth/mcp modules that import only leaves →
   `factory/orchestrator.py::build_orchestrator`). `factory/__init__.py` is a pure
   re-export facade whose `__all__` (plus 12 directly-tested private names) matches the
@@ -33,7 +35,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   required (`CLAUDE.md`, `AGENTS.md`, `SKILLS.md`, `HARNESS_SPEC.md`,
   `docs/CHARTER.md`, `README.md`, `docs/architecture.md`, C4 diagrams, ADR-010,
   ADR-016).
-- **Five confirmed regressions found by this change's own follow-up audit, all fixed**:
+- **Six confirmed regressions found by this change's own follow-up audit and a
+  subsequent independent adversarial peer review, all fixed**:
   1. `scripts/check_subsystem_boundaries.py::_discover_subsystems()` was never updated
      to exclude the new `factory/` directory from subsystem-boundary scanning, so the
      gate was failing on `RegexInjectionFilter` module-level imports (the DI composition
@@ -55,11 +58,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
      build_cognitive_core`, a separate reference the facade-level patch never touches
      ("patch where it's used, not where it's defined"). Fixed to patch
      `mousedroid.factory.orchestrator.build_cognitive_core`.
-  4. `factory/__init__.py`'s `__all__` listed all 23 private re-exports (deviating from
+  4. `factory/__init__.py`'s `__all__` listed all 27 private re-exports (deviating from
      the documented `config/schema/__init__.py` precedent of keeping them import-able
-     but out of `__all__`) and carried a fully dead `TYPE_CHECKING` block (~40 names
-     used by no code in the file — every function that once needed them moved to its
-     own submodule during the split). Both fixed; `ruff`/`mypy --strict` clean.
+     but out of `__all__`) and carried a fully dead `TYPE_CHECKING` block (68 names
+     across 48 import statements, used by no code in the file — every function that
+     once needed them moved to its own submodule during the split). Both fixed;
+     `ruff`/`mypy --strict` clean.
   5. `scripts/check_branch_coverage.py --min 90` newly failed 9 files (`factory/cloud.py`
      45.83%, `factory/health.py` 53.57%, `factory/world_model.py` 60.95%, and 6 more) —
      not new debt, but a mechanical consequence of the split itself: a large file's
@@ -71,6 +75,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
      established for exactly this class of problem, applied only to the gate check
      (coverage still computed and printed, never silently hidden) — see ADR-017
      Decision 6 and the new `test_branch_coverage_dir_exemptions_are_pinned` test.
+  6. Fixing regression #4 above (removing the dead `TYPE_CHECKING` block) left two
+     `__all__` entries — `"TYPE_CHECKING"` and `"TypeVar"` — with nothing bound behind
+     them, since both names were previously only reachable through that block.
+     `from mousedroid.factory import *` raised `AttributeError` at import time; neither
+     `ruff --select F822` nor `mypy --strict` catches an `__all__` entry with no
+     backing name for a plain module (confirmed empirically — both passed clean with
+     the bug present). Found by an independent adversarial peer review of this same
+     audit commit, which also noted `tests/unit/factory/test_facade_completeness.py`
+     checked only "is every real symbol re-exported," never the inverse "does every
+     `__all__` entry actually resolve." Both entries removed; the missing inverse
+     direction is now `test_every_all_entry_actually_resolves_on_the_module`.
 - **`src/mousedroid/orchestrator/_state.py` (new)**: a shared `_OrchestratorState`
   type-declaration class every mixin inherits from, so mypy --strict can resolve
   cross-mixin `self._foo` attribute/method access without per-call

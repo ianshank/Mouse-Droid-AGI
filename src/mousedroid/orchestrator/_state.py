@@ -85,9 +85,14 @@ class _OrchestratorState:
     """Bare type declarations only. Never instantiated; never given behavior.
 
     One block per constructor argument/derived attribute in
-    `orchestrator.py::MouseDroidOrchestrator.__init__`, in the same order
-    they're assigned there. Keep this file's declarations in sync with
-    `__init__` in the same PR that changes either.
+    `orchestrator.py::MouseDroidOrchestrator.__init__`, grouped by category
+    (constructor passthroughs, then derived/resolved-from-default attributes,
+    then latent state) rather than strictly mirroring `__init__`'s own
+    assignment order -- `_supports_lateral`, for instance, is assigned
+    between two passthroughs in `__init__` but declared with the other
+    derived attributes here, because it groups better than a positional
+    match would. Keep this file's declarations in sync with `__init__` in
+    the same PR that changes either.
     """
 
     # Constructor passthroughs (identical to their __init__ parameter type)
@@ -166,13 +171,27 @@ class _OrchestratorState:
     # type-only redeclaration, not a second source of truth for behavior
     # (mypy does not re-check the body against this signature beyond the
     # normal override-compatibility rules).
-    async def tick(self) -> None: ...
+    #
+    # Every stub raises NotImplementedError, including the ``-> None``
+    # ones (mypy accepts an unconditional raise against any return type).
+    # `_OrchestratorState` sits last in the MRO, right before `object`, so
+    # today a real mixin's implementation always wins and these bodies
+    # never execute. A silent ``...`` body would still be true if a mixin
+    # method were ever accidentally deleted or renamed: the call would
+    # fall through to this stub and no-op instead of raising, which for a
+    # safety-critical 30 Hz control loop is a worse failure mode than a
+    # loud crash -- so every stub here fails loudly, on purpose.
+    async def tick(self) -> None:
+        raise NotImplementedError
 
     def _compute_curiosity_scores(self) -> dict[str, float]:
         raise NotImplementedError
 
-    async def _consolidation_loop(self) -> None: ...
-    async def _growth_distill_loop(self) -> None: ...
+    async def _consolidation_loop(self) -> None:
+        raise NotImplementedError
+
+    async def _growth_distill_loop(self) -> None:
+        raise NotImplementedError
 
     def _growth_enabled(self) -> bool:
         raise NotImplementedError
@@ -180,14 +199,16 @@ class _OrchestratorState:
     def _on_device_learning_enabled(self) -> bool:
         raise NotImplementedError
 
-    async def _on_device_update_loop(self) -> None: ...
+    async def _on_device_update_loop(self) -> None:
+        raise NotImplementedError
 
     def _validate_latent(
         self, h: torch.Tensor, z: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, bool]:
         raise NotImplementedError
 
-    async def _voice_lifecycle(self, event: str) -> None: ...
+    async def _voice_lifecycle(self, event: str) -> None:
+        raise NotImplementedError
 
     async def _try_sensor_recovery(self, safety_ctx: SafetyContext) -> bool:
         raise NotImplementedError

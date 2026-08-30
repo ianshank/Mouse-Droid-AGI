@@ -137,3 +137,28 @@ def test_documented_private_reexports_are_excluded_from_all() -> None:
     assert not exported_in_all, (
         f"private re-export(s) unexpectedly listed in __all__: {exported_in_all}"
     )
+
+
+def test_every_all_entry_actually_resolves_on_the_module() -> None:
+    """The inverse of the completeness check above: `__all__` must not overclaim.
+
+    `test_every_public_builder_is_reexported_by_the_facade` only checks that
+    every real submodule symbol made it INTO `__all__`; it says nothing about
+    whether every NAME LISTED in `__all__` actually resolves. Those are
+    different failure modes -- an `__all__` entry can go dangling on its own
+    (e.g. from a leftover string literal after the import backing it was
+    removed) with no missing-re-export symptom at all. Neither `mypy --strict`
+    nor `ruff --select F822` catches this for a plain `__init__.py` module
+    (confirmed empirically), and `from mousedroid.factory import *` -- the
+    one thing `__all__` actually controls -- raises `AttributeError` at
+    import time for anyone who does it. Historically confirmed non-vacuous:
+    a `TYPE_CHECKING`/`TypeVar` cleanup once left exactly these two names
+    stringly-referenced in `__all__` with nothing behind them.
+    """
+    dangling = sorted(
+        name for name in _factory_module.__all__ if not hasattr(_factory_module, name)
+    )
+    assert not dangling, (
+        f"__all__ entry/entries do not resolve on mousedroid.factory: {dangling} -- "
+        "`from mousedroid.factory import *` raises AttributeError for these"
+    )

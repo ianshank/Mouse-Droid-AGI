@@ -16,10 +16,13 @@ the only thing that would catch it.
 
 from __future__ import annotations
 
+import inspect
+
 from mousedroid.orchestrator._action_mixin import _ActionMixin
 from mousedroid.orchestrator._background_cadence_mixin import _BackgroundCadenceMixin
 from mousedroid.orchestrator._lifecycle_mixin import _LifecycleMixin
 from mousedroid.orchestrator._mission_mixin import _MissionMixin
+from mousedroid.orchestrator._state import _OrchestratorState
 from mousedroid.orchestrator._telemetry_experience_mixin import _TelemetryExperienceMixin
 from mousedroid.orchestrator._voice_face_mixin import _VoiceFaceMixin
 from mousedroid.orchestrator._world_model_state_mixin import _WorldModelStateMixin
@@ -88,9 +91,20 @@ _ALL_MIXINS = (
 )
 
 
+# The only two dunders Python auto-injects into every class's own __dict__
+# regardless of what the class body declares (confirmed empirically against
+# every real mixin here: each one's own vars() is exactly its real methods
+# plus these two, nothing more). Excluding only these two -- not every name
+# starting with "__" -- means a *real* dunder a mixin defines on purpose
+# (__repr__, __eq__, __enter__, ...) stays visible to the collision check
+# below instead of silently bypassing it the way a blanket "__" prefix
+# filter would.
+_ALWAYS_PRESENT_DUNDERS = frozenset({"__module__", "__doc__"})
+
+
 def _own_methods(cls: type) -> set[str]:
     """Names defined directly on `cls.__dict__`, not inherited."""
-    return {name for name in vars(cls) if not name.startswith("__")}
+    return {name for name in vars(cls) if name not in _ALWAYS_PRESENT_DUNDERS}
 
 
 def test_orchestrator_class_surface_matches_pinned_snapshot() -> None:
@@ -176,4 +190,49 @@ def test_every_mixin_method_is_reachable_on_the_concrete_class() -> None:
     assert not unreachable, (
         f"mixin method(s) not reachable on MouseDroidOrchestrator: {unreachable} "
         "-- is the mixin missing from the class's base-class tuple?"
+    )
+
+
+def _state_stub_method_names() -> set[str]:
+    """The cross-mixin method stubs `_OrchestratorState` declares for typing only.
+
+    Filters to real function objects so the 61 bare attribute annotations
+    (which never appear as `vars()` entries -- only in `__annotations__`) and
+    the handful of dunders Python auto-injects onto `_OrchestratorState`
+    itself (`__dict__`, `__weakref__`; it is the diamond's base, unlike the
+    mixins, which inherit those from it) are both excluded without needing a
+    hand-maintained list -- forward-looking the same way the checks above
+    derive their expectations from real source instead of a frozen roster.
+    """
+    return {name for name, value in vars(_OrchestratorState).items() if inspect.isfunction(value)}
+
+
+def test_every_state_stub_is_overridden_somewhere_reachable() -> None:
+    """Every `_OrchestratorState` stub must have a real implementor, not just a type.
+
+    `_OrchestratorState` sits last in the MRO (diamond base, right before
+    `object`), so today every real mixin implementation wins over its stub.
+    But every stub now raises `NotImplementedError` (never a silent `...`
+    no-op -- see `_state.py`'s own comment), specifically so that IF a
+    future rename or deletion ever left one un-overridden, the failure would
+    be loud at runtime. This test makes the same class of drift loud at
+    review time instead of runtime: it fails the moment a stub's real
+    implementor disappears, rather than waiting for that code path to
+    execute in production and raise. Complements
+    `test_no_two_mixins_define_the_same_method_name` (at most one mixin
+    implementor) with the missing other half (at least one implementor,
+    counting the concrete class too -- `tick` is intentionally only ever
+    defined there, per ADR-014).
+    """
+    implementors: dict[str, type] = dict.fromkeys(
+        _own_methods(MouseDroidOrchestrator), MouseDroidOrchestrator
+    )
+    for mixin in _ALL_MIXINS:
+        for name in _own_methods(mixin):
+            implementors.setdefault(name, mixin)
+    unimplemented = sorted(_state_stub_method_names() - implementors.keys())
+    assert not unimplemented, (
+        f"_state.py declares stub(s) {unimplemented} that neither the concrete "
+        "class nor any mixin defines directly -- any caller would resolve to "
+        "_OrchestratorState's own `raise NotImplementedError` stub."
     )
