@@ -11,15 +11,18 @@ import torch
 
 from mousedroid.cloud.protocol import ENGINE_TYPE_POLICY, ENGINE_TYPE_WORLD_MODEL
 from mousedroid.logging.setup import get_logger
+from mousedroid.orchestrator._state import _OrchestratorState
 
 if TYPE_CHECKING:
     from mousedroid.cloud.protocol import PendingWeightUpdate, WeightUpdatePollerProtocol
     from mousedroid.sensing.protocol import ObservationProtocol
+    from mousedroid.vla.policy import VLAPolicyProtocol
+    from mousedroid.world_model.protocol import WorldModelProtocol
 
 _log = get_logger(__name__)
 
 
-class _WorldModelStateMixin:
+class _WorldModelStateMixin(_OrchestratorState):
     """World model state management for the orchestrator."""
 
     def _update_world_model(self, observation: ObservationProtocol) -> None:
@@ -35,16 +38,16 @@ class _WorldModelStateMixin:
             observation: Current sensor observation bundle.
         """
         with torch.no_grad():
-            self._h, self._z, _, _ = self._world_model.observe_step(  # type: ignore[attr-defined]
+            self._h, self._z, _, _ = self._world_model.observe_step(
                 observation,
-                self._prev_action,  # type: ignore[attr-defined]
-                self._h,  # type: ignore[attr-defined]
-                self._z,  # type: ignore[attr-defined]
+                self._prev_action,
+                self._h,
+                self._z,
             )
-        self._h, self._z, healthy = self._validate_latent(self._h, self._z)  # type: ignore[attr-defined]
-        if self._latent_context is not None and healthy:  # type: ignore[attr-defined]
-            self._latent_context.observe(self._h, self._z)  # type: ignore[attr-defined]
-            self._h, self._z = self._latent_context.contextualize(self._h, self._z)  # type: ignore[attr-defined]
+        self._h, self._z, healthy = self._validate_latent(self._h, self._z)
+        if self._latent_context is not None and healthy:
+            self._latent_context.observe(self._h, self._z)
+            self._h, self._z = self._latent_context.contextualize(self._h, self._z)
 
     def _validate_latent(
         self,
@@ -85,22 +88,22 @@ class _WorldModelStateMixin:
         has_nan = bool(nan_h_float) or bool(nan_z_float)
 
         if has_nan:
-            self._failure_recorder.record(  # type: ignore[attr-defined]
+            self._failure_recorder.record(
                 "world_model",
                 "latent_nan",
                 level="critical",
-                extra={"tick": self._tick_count},  # type: ignore[attr-defined]
+                extra={"tick": self._tick_count},
             )
-            _log.critical("world_model_latent_nan", tick=self._tick_count)  # type: ignore[attr-defined]
-            if self._latent_buffer:  # type: ignore[attr-defined]
-                h_last, z_last = self._latent_buffer[-1]  # type: ignore[attr-defined]
-                _log.info("world_model_latent_recovered", tick=self._tick_count)  # type: ignore[attr-defined]
+            _log.critical("world_model_latent_nan", tick=self._tick_count)
+            if self._latent_buffer:
+                h_last, z_last = self._latent_buffer[-1]
+                _log.info("world_model_latent_recovered", tick=self._tick_count)
                 return h_last.clone(), z_last.clone(), False
-            _log.critical("world_model_latent_unrecoverable", tick=self._tick_count)  # type: ignore[attr-defined]
+            _log.critical("world_model_latent_unrecoverable", tick=self._tick_count)
             return h, z, False
 
-        if h_norm > self._cfg.model.latent_norm_threshold:  # type: ignore[attr-defined]
-            self._failure_recorder.record(  # type: ignore[attr-defined]
+        if h_norm > self._cfg.model.latent_norm_threshold:
+            self._failure_recorder.record(
                 "world_model",
                 "latent_saturated",
                 level="warning",
@@ -108,7 +111,7 @@ class _WorldModelStateMixin:
             )
             _log.warning("world_model_latent_saturated", h_norm=h_norm)
 
-        self._latent_buffer.append((h.clone(), z.clone()))  # type: ignore[attr-defined]
+        self._latent_buffer.append((h.clone(), z.clone()))
         return h, z, True
 
     def _maybe_rearm_latent_sink(self, *, mission_completed: bool) -> None:
@@ -126,12 +129,12 @@ class _WorldModelStateMixin:
         """
         if not mission_completed:
             return
-        if self._latent_context is None:  # type: ignore[attr-defined]
+        if self._latent_context is None:
             return
-        memory_cfg = self._cfg.world_model_memory  # type: ignore[attr-defined]
+        memory_cfg = self._cfg.world_model_memory
         if memory_cfg is None or not memory_cfg.recapture_on_mission:
             return
-        self._latent_context.rearm_sink()  # type: ignore[attr-defined]
+        self._latent_context.rearm_sink()
 
     def _apply_pending_weight_update(self) -> bool:
         """Atomically swap policy / world-model if any poller has a verified update.
@@ -166,10 +169,10 @@ class _WorldModelStateMixin:
             ``False`` for any other code path (empty mapping, no pendings,
             policy-only swap, loader failure, dead-letter, etc.).
         """
-        if not self._weight_update_pollers:  # type: ignore[attr-defined]
+        if not self._weight_update_pollers:
             return False
         any_reset = False
-        for poller in self._weight_update_pollers.values():  # type: ignore[attr-defined]
+        for poller in self._weight_update_pollers.values():
             update = poller.pending_update
             if update is None:
                 continue
@@ -217,7 +220,7 @@ class _WorldModelStateMixin:
             the no-loader branch, the loader-exception branch, a policy swap,
             and the unknown-engine-type dead-letter branch.
         """
-        if self._weight_update_loader is None:  # type: ignore[attr-defined]
+        if self._weight_update_loader is None:
             # Acknowledge-and-warn-once: without ack the same pending update
             # would re-fire ``cloud_weight_update_swap_skipped_no_loader``
             # at 30 Hz forever (one log line per tick). Ack clears the slot
@@ -234,7 +237,7 @@ class _WorldModelStateMixin:
             return False
 
         try:
-            new_engine = self._weight_update_loader(update)  # type: ignore[attr-defined]
+            new_engine = self._weight_update_loader(update)
         except Exception:
             _log.error(
                 "cloud_weight_update_swap_failed",
@@ -253,10 +256,10 @@ class _WorldModelStateMixin:
         # no concurrent reader observes a half-swapped state.
         reset_recurrent_state = False
         if update.engine_type == ENGINE_TYPE_WORLD_MODEL:
-            self._world_model = cast("WorldModelProtocol", new_engine)  # type: ignore[attr-defined]
-            reset_recurrent_state = self._cfg.cloud.weight_update.reset_state_on_swap  # type: ignore[attr-defined]
+            self._world_model = cast("WorldModelProtocol", new_engine)
+            reset_recurrent_state = self._cfg.cloud.weight_update.reset_state_on_swap
         elif update.engine_type == ENGINE_TYPE_POLICY:
-            self._vla_policy = cast("VLAPolicyProtocol", new_engine)  # type: ignore[attr-defined]
+            self._vla_policy = cast("VLAPolicyProtocol", new_engine)
         else:
             # Unknown engine type — acknowledge + dead-letter so the same
             # bad pending update doesn't stick around firing this warning
@@ -276,17 +279,17 @@ class _WorldModelStateMixin:
             # device would silently move state back to CPU and break the
             # next ``observe_step`` with a device-mismatch error.
             # (Copilot 3253293626 / 3253309982.)
-            self._h = torch.zeros_like(self._h)  # type: ignore[attr-defined]
-            self._z = torch.zeros_like(self._z)  # type: ignore[attr-defined]
-            self._prev_action = torch.zeros_like(self._prev_action)  # type: ignore[attr-defined]
-            self._latent_buffer.clear()  # type: ignore[attr-defined]
-            if self._latent_context is not None:  # type: ignore[attr-defined]
+            self._h = torch.zeros_like(self._h)
+            self._z = torch.zeros_like(self._z)
+            self._prev_action = torch.zeros_like(self._prev_action)
+            self._latent_buffer.clear()
+            if self._latent_context is not None:
                 # A sink frozen under the pre-swap weights is stale under the
                 # new weights: clear every store AND re-arm sink warmup so a
                 # fresh anchor is captured post-swap (ADR-015).
-                self._latent_context.reset()  # type: ignore[attr-defined]
+                self._latent_context.reset()
 
-        if self._metrics is not None:  # type: ignore[attr-defined]
+        if self._metrics is not None:
             self._metrics.inc_cloud_weight_update_swap(update.engine_type)
 
         _log.info(

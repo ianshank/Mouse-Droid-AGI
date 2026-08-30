@@ -44,7 +44,7 @@ flowchart TB
         Pillars["validation/pillars.py\n_PILLAR_DISPATCH\n+ _PYTEST_DELEGATION_PATHS"]
     end
 
-    subgraph Factory["src/mousedroid/factory.py"]
+    subgraph Factory["src/mousedroid/factory/hardware.py"]
         BuildEsp32["build_esp32_driver(cfg)"]
         Resolver["_resolve_esp32_serial_via_usbc_discovery(cfg)"]
     end
@@ -126,7 +126,7 @@ flowchart TB
 ## Resolution chain — `ESP32Config.serial_port`
 
 Walked by `_resolve_esp32_serial_via_usbc_discovery` in
-`src/mousedroid/factory.py`. Falls through each guard; the first
+`src/mousedroid/factory/hardware.py`. Falls through each guard; the first
 condition that holds wins.
 
 | # | Condition | Outcome |

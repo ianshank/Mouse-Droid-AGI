@@ -12,7 +12,7 @@
 - **Three Laws** — Asimov's laws encoded as hard safety constraints (`safety/three_laws.py`).
 - **Pillar** — one of the "10 Pillars" cognitive modules; each is *wired*, *not-yet-wired*, or *parked*.
 - **Overlay** — a YAML file layered over `config/default.yaml`.
-- **Factory** — `src/mousedroid/factory.py`, the single DI wiring point that returns protocol types.
+- **Factory** — `src/mousedroid/factory/`, the single DI wiring point that returns protocol types.
 - **L4T** — Linux for Tegra; NVIDIA's Jetson base OS / container lineage.
 - **ADR / C4** — Architecture Decision Record / the C4 architecture-diagram model.
 - **Off-loop** — runs outside the deterministic 30 Hz reactive control loop (LLM translation, learning).

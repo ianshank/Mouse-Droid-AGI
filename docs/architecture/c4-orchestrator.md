@@ -3,7 +3,10 @@
 > The heart of MouseDroid: an asyncio 30 Hz loop that wires sensors →
 > world-model → planner → motor commands. Every module is reached
 > through a `@runtime_checkable Protocol`, instantiated by
-> `src/mousedroid/factory.py`.
+> `src/mousedroid/factory/` (see `factory/orchestrator.py::build_orchestrator`).
+> `MouseDroidOrchestrator` itself is composed from `orchestrator.py`
+> (`__init__` + `tick()` only) plus seven `_*_mixin.py` sibling files —
+> the diagrams below describe behavior, not file layout.
 
 ## Component Diagram
 

@@ -31,7 +31,7 @@ flowchart TB
         InjFilter["RegexInjectionFilter\nbuild_llm_injection_filter()\nSAME instance threaded into both\nOpenClaw + LLM gateway"]
     end
 
-    subgraph Factory["src/mousedroid/factory.py"]
+    subgraph Factory["src/mousedroid/factory/llm_gateway.py"]
         BuildLLM["build_llm_gateway(cfg)"]
         BuildSingle["_build_single_llm_gateway(llm_cfg,\n  injection_filter=...)"]
     end

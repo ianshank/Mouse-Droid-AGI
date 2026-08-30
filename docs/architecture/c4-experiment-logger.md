@@ -14,7 +14,7 @@ title Training Experiment Logger — Component Diagram
 
 Container_Boundary(train, "Training pipeline (offline, GPU host)") {
 
-    Component(factory, "build_experiment_logger", "factory.py", "Resolves NoOp vs MLflow from cfg.observability; NEVER-None; degrades to NoOp on ImportError OR construction failure; pins relative file:/sqlite:/// URIs absolute via _resolve_tracking_uri and logs the redacted result")
+    Component(factory, "build_experiment_logger", "factory/telemetry.py", "Resolves NoOp vs MLflow from cfg.observability; NEVER-None; degrades to NoOp on ImportError OR construction failure; pins relative file:/sqlite:/// URIs absolute via _resolve_tracking_uri and logs the redacted result")
 
     Component_Boundary(obs, "training/observability/") {
         Component(proto, "ExperimentLoggerProtocol", "@runtime_checkable", "start_run/log_params/log_metric/log_artifact/end_run + start_phase/log_phase_metric/log_phase_artifact/end_phase; all total (never raise on backend failure)")

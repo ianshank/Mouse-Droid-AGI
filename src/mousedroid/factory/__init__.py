@@ -13,7 +13,7 @@ from __future__ import annotations
 # Runtime imports (visible in dir())
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import Any, cast
 
 from mousedroid.cloud.protocol import (
     ENGINE_TYPE_POLICY,
@@ -27,6 +27,232 @@ from mousedroid.constants import (
     DEFAULT_LIDAR_BUFFER_SIZE,
     DEFAULT_LIDAR_MAX_RANGE_M,
     DEFAULT_MOTOR_BAUDRATE,
+)
+
+# Import submodules explicitly so they can be deleted from the namespace
+from mousedroid.factory import (
+    _replay_batch_helpers,
+    arm,
+    autonomous,
+    cloud,
+    cognitive,
+    growth,
+    hardware,
+    health,
+    learning,
+    llm_gateway,
+    mcp_harness,
+    memory_curiosity,
+    mission,
+    on_device_learning,
+    orchestrator,
+    safety,
+    telemetry,
+    voice,
+    world_model,
+)
+from mousedroid.factory._replay_batch_helpers import (
+    _MAX_REPLAY_COUNT_CHUNK as _MAX_REPLAY_COUNT_CHUNK,
+)
+from mousedroid.factory._replay_batch_helpers import (
+    _build_held_out_sequence_batch as _build_held_out_sequence_batch,
+)
+from mousedroid.factory._replay_batch_helpers import (
+    _build_shared_replay_reader as _build_shared_replay_reader,
+)
+from mousedroid.factory._replay_batch_helpers import (
+    _CoroResult as _CoroResult,
+)
+from mousedroid.factory._replay_batch_helpers import (
+    _count_new_replay_records as _count_new_replay_records,
+)
+from mousedroid.factory._replay_batch_helpers import (
+    _count_replay_records as _count_replay_records,
+)
+from mousedroid.factory._replay_batch_helpers import (
+    _load_replay_batch as _load_replay_batch,
+)
+from mousedroid.factory._replay_batch_helpers import (
+    _load_replay_sequence_batch as _load_replay_sequence_batch,
+)
+from mousedroid.factory._replay_batch_helpers import (
+    _make_consumed_offset_advancer as _make_consumed_offset_advancer,
+)
+from mousedroid.factory._replay_batch_helpers import (
+    _run_coro_blocking as _run_coro_blocking,
+)
+from mousedroid.factory.arm import (
+    build_arm_controller,
+    build_arm_driver,
+    build_arm_environment,
+    build_arm_perception,
+    build_arm_planner,
+    build_llm_replanner,
+    build_symbolic_planner_backend,
+)
+from mousedroid.factory.autonomous import (
+    build_autonomous_camera,
+    build_autonomous_lidar,
+    build_autonomous_metrics_registry,
+    build_autonomous_orchestrator,
+    build_motor_controller,
+)
+from mousedroid.factory.cloud import (
+    build_cloud_experience_exporter,
+    build_cloud_firestore_sync,
+    build_cloud_logging_sink,
+    build_cloud_metrics_exporter,
+    build_cloud_telemetry_sink,
+)
+from mousedroid.factory.cognitive import (
+    _resolve_bdi_weights as _resolve_bdi_weights,
+)
+from mousedroid.factory.cognitive import (
+    build_agent,
+    build_cognitive_core,
+)
+from mousedroid.factory.growth import (
+    _make_growth_latent_sampler as _make_growth_latent_sampler,
+)
+from mousedroid.factory.growth import (
+    build_growth_coordinator,
+)
+from mousedroid.factory.hardware import (
+    _resolve_esp32_serial_via_usbc_discovery as _resolve_esp32_serial_via_usbc_discovery,
+)
+
+# No TYPE_CHECKING block: this facade re-exports runtime symbols only. The
+# old flat factory.py needed one because build_orchestrator (and friends)
+# lived here and used these types in their own signatures; every one of
+# those functions has since moved to its own submodule (factory/orchestrator.py
+# etc.), which imports the types it actually annotates with locally. None of
+# this __init__.py's own code (imports, __all__, a docstring) uses any of
+# them, so re-declaring the same TYPE_CHECKING block here was dead weight
+# left over from the split -- confirmed by both mypy --strict (passes
+# without it) and a grep for real usage (none).
+# Import all factory builders from submodules
+from mousedroid.factory.hardware import (
+    build_audio_feature_extractor,
+    build_camera,
+    build_distance_sensor,
+    build_esp32_driver,
+    build_face_display,
+    build_hailo_runtime,
+    build_lidar,
+    build_lidar_feature_extractor,
+    build_microphone,
+    build_sensor_manager,
+    build_tensorrt_compiler,
+)
+from mousedroid.factory.health import (
+    build_health_monitor,
+    build_watchdog,
+)
+from mousedroid.factory.learning import (
+    _build_distilled_onnx_vla as _build_distilled_onnx_vla,
+)
+from mousedroid.factory.learning import (
+    build_replay_reader,
+    build_reward_model,
+    build_vla_policy,
+)
+from mousedroid.factory.llm_gateway import (
+    _build_single_llm_gateway as _build_single_llm_gateway,
+)
+from mousedroid.factory.llm_gateway import (
+    build_injection_filter,
+    build_llm_gateway,
+)
+from mousedroid.factory.mcp_harness import (
+    _build_sub_agent_factory as _build_sub_agent_factory,
+)
+from mousedroid.factory.mcp_harness import (
+    _resolve_approval_callback as _resolve_approval_callback,
+)
+from mousedroid.factory.mcp_harness import (
+    build_approval_gate,
+    build_builtin_skills,
+    build_hook_registry,
+    build_journal,
+    build_mcp_server,
+    build_memory_exporter,
+    build_skill_delegator,
+    build_skill_loaders,
+    build_skill_registry,
+    build_task_tracker,
+)
+from mousedroid.factory.memory_curiosity import (
+    build_curiosity_module,
+    build_experience_logger,
+    build_memory_tier,
+)
+from mousedroid.factory.mission import (
+    build_mission_lifecycle,
+    build_mission_parser,
+    build_mission_replanner,
+    build_vlm_progress,
+)
+from mousedroid.factory.on_device_learning import (
+    _SLOT_PT_SUFFIX as _SLOT_PT_SUFFIX,
+)
+from mousedroid.factory.on_device_learning import (
+    _build_on_device_gate_runner as _build_on_device_gate_runner,
+)
+from mousedroid.factory.on_device_learning import (
+    build_on_device_coordinator,
+    build_on_device_hot_swap_source,
+)
+from mousedroid.factory.orchestrator import (
+    build_orchestrator,
+)
+from mousedroid.factory.safety import (
+    build_safety_monitor,
+    build_safety_projector,
+)
+from mousedroid.factory.telemetry import (
+    _IN_MEMORY_SQLITE_PATHS as _IN_MEMORY_SQLITE_PATHS,
+)
+from mousedroid.factory.telemetry import (
+    _PINNED_URI_SCHEMES as _PINNED_URI_SCHEMES,
+)
+from mousedroid.factory.telemetry import (
+    _compose_weight_update_loader as _compose_weight_update_loader,
+)
+from mousedroid.factory.telemetry import (
+    _resolve_tracking_uri as _resolve_tracking_uri,
+)
+from mousedroid.factory.telemetry import (
+    build_experiment_logger,
+    build_failure_recorder,
+    build_metrics_registry,
+    build_mock_telemetry_source,
+    build_telemetry_publisher,
+    build_telemetry_server,
+    build_weight_update_loader,
+    build_weight_update_pollers,
+)
+from mousedroid.factory.voice import (
+    _build_orchestrator_greeter as _build_orchestrator_greeter,
+)
+from mousedroid.factory.voice import (
+    build_face_controller,
+    build_greeter,
+    build_speaker,
+    build_voice_engine,
+)
+from mousedroid.factory.world_model import (
+    _build_onnx_world_model as _build_onnx_world_model,
+)
+from mousedroid.factory.world_model import (
+    _resolve_world_model_onnx_path as _resolve_world_model_onnx_path,
+)
+from mousedroid.factory.world_model import (
+    build_latent_context,
+    build_rover_env,
+    build_rssm_trainable,
+    build_rssm_vision_finetune,
+    build_vision_feature_extractor,
+    build_world_model,
 )
 from mousedroid.hardware.protocols import (
     AudioProtocol,
@@ -54,254 +280,9 @@ from mousedroid.security.injection_filter import (
 )
 from mousedroid.voice.protocol import VoiceEngineProtocol
 
-if TYPE_CHECKING:
-    import torch
-    from torch import Tensor
-
-    from mousedroid.agents.base import AgentProtocol
-    from mousedroid.arm.protocols import (
-        ArmControllerProtocol,
-        ArmDriverProtocol,
-        ArmEnvironmentProtocol,
-        ArmPerceptionProtocol,
-        ArmPlannerProtocol,
-        SymbolicPlannerBackend,
-    )
-    from mousedroid.cloud.protocol import (
-        CloudExperienceExporterProtocol,
-        CloudFirestoreSyncProtocol,
-        CloudLoggingSinkProtocol,
-        CloudMetricsExporterProtocol,
-        CloudTelemetrySinkProtocol,
-        PendingWeightUpdate,
-        WeightUpdatePollerProtocol,
-    )
-    from mousedroid.cognitive.bdi_model import NeuralBDI
-    from mousedroid.cognitive.cognitive_core import CognitiveCore
-    from mousedroid.common.time.protocol import ClockProtocol
-    from mousedroid.common.tools.registry import ToolRegistry
-    from mousedroid.config.schema import (
-        ESP32Config,
-        LLMConfig,
-        ModelConfig,
-        Settings,
-        UltrasonicConfig,
-    )
-    from mousedroid.curiosity.protocol import CuriosityProtocol
-    from mousedroid.efficiency.tensorrt import TensorRTCompilerProtocol
-    from mousedroid.experience.logger import ExperienceLogger
-    from mousedroid.experience.record import MouseDroidExperienceRecord
-    from mousedroid.growth.coordinator import GrowthDistillationCoordinator
-    from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
-    from mousedroid.hardware.camera.feature_extractor import FeatureExtractorProtocol
-    from mousedroid.harness.approval.protocol import ApprovalGateProtocol
-    from mousedroid.harness.protocol import TaskTrackerProtocol
-    from mousedroid.health.monitor import HealthMonitor
-    from mousedroid.learning.on_device.hot_swap import OnDeviceWeightUpdateSource
-    from mousedroid.learning.on_device.replay_trigger import ReplayTriggerCoordinator
-    from mousedroid.learning.on_device.slot_store import CandidateSlot, OnDeviceSlotStore
-    from mousedroid.llm_gateway.mission_parser import MissionParserProtocol
-    from mousedroid.mcp.protocol import MCPServerProtocol
-    from mousedroid.memory.episodic import EpisodicReplay
-    from mousedroid.memory.tier import MemoryTier
-    from mousedroid.orchestrator.face_controller import FaceController
-    from mousedroid.orchestrator.mission_dispatcher import MissionDispatcherProtocol
-    from mousedroid.orchestrator.mission_lifecycle import (
-        MissionLifecycle,
-        MissionReplannerProtocol,
-    )
-    from mousedroid.reward.protocol import RewardModelProtocol
-    from mousedroid.reward.vlm_progress import VLMProgressHead
-    from mousedroid.sensing.manager import SensorManager
-    from mousedroid.sim.protocols import RoverEnvProtocol
-    from mousedroid.telemetry.failure_recorder import FailureRecorder
-    from mousedroid.telemetry.log_buffer import LogRingBuffer
-    from mousedroid.telemetry.metrics import MetricsRegistry
-    from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
-    from mousedroid.training.observability import ExperimentLoggerProtocol
-    from mousedroid.training.replay import ReplayReaderProtocol
-    from mousedroid.training.replay.lmdb_reader import LMDBReplayReader
-    from mousedroid.vla.policy import VLAPolicyProtocol
-    from mousedroid.voice.greeting import Greeter, GreeterProtocol
-    from mousedroid.voice.mock_tts import MockTTS
-    from mousedroid.voice.tts import PiperTTS
-    from mousedroid.world_model.encoder import MultimodalEncoder
-    from mousedroid.world_model.protocol import LatentContextProtocol, WorldModelProtocol
-    from mousedroid.world_model.rssm import RSSM
-
-# Module-level constants and logger
+# Module-level logger, defined only after every builder import above so no
+# E402 ("module level import not at top of file") fires on them.
 _log = get_logger(__name__)
-
-_CoroResult = TypeVar("_CoroResult")
-
-_SLOT_PT_SUFFIX: str = ".pt"
-
-_MAX_REPLAY_COUNT_CHUNK: int = 1000
-
-# Import all factory builders from submodules
-from mousedroid.factory.hardware import (
-    build_esp32_driver,
-    _resolve_esp32_serial_via_usbc_discovery,
-    build_camera,
-    build_distance_sensor,
-    build_microphone,
-    build_face_display,
-    build_sensor_manager,
-    build_audio_feature_extractor,
-    build_lidar,
-    build_lidar_feature_extractor,
-    build_tensorrt_compiler,
-    build_hailo_runtime,
-)
-from mousedroid.factory.voice import (
-    build_face_controller,
-    build_speaker,
-    build_greeter,
-    _build_orchestrator_greeter,
-    build_voice_engine,
-)
-from mousedroid.factory.world_model import (
-    build_world_model,
-    build_latent_context,
-    build_rssm_trainable,
-    build_rssm_vision_finetune,
-    build_vision_feature_extractor,
-    _build_onnx_world_model,
-    _resolve_world_model_onnx_path,
-    build_rover_env,
-)
-from mousedroid.factory.llm_gateway import (
-    build_injection_filter,
-    _build_single_llm_gateway,
-    build_llm_gateway,
-)
-from mousedroid.factory.learning import (
-    build_vla_policy,
-    _build_distilled_onnx_vla,
-    build_reward_model,
-    build_replay_reader,
-)
-from mousedroid.factory.mission import (
-    build_mission_parser,
-    build_vlm_progress,
-    build_mission_replanner,
-    build_mission_lifecycle,
-)
-from mousedroid.factory.telemetry import (
-    _PINNED_URI_SCHEMES,
-    _IN_MEMORY_SQLITE_PATHS,
-    build_metrics_registry,
-    build_experiment_logger,
-    _resolve_tracking_uri,
-    build_weight_update_pollers,
-    build_weight_update_loader,
-    _compose_weight_update_loader,
-    build_failure_recorder,
-    build_telemetry_publisher,
-    build_telemetry_server,
-    build_mock_telemetry_source,
-)
-from mousedroid.factory.safety import (
-    build_safety_monitor,
-    build_safety_projector,
-)
-from mousedroid.factory.health import (
-    build_health_monitor,
-    build_watchdog,
-)
-from mousedroid.factory.cognitive import (
-    build_agent,
-    _resolve_bdi_weights,
-    build_cognitive_core,
-)
-from mousedroid.factory.memory_curiosity import (
-    build_memory_tier,
-    build_experience_logger,
-    build_curiosity_module,
-)
-from mousedroid.factory.cloud import (
-    build_cloud_telemetry_sink,
-    build_cloud_experience_exporter,
-    build_cloud_logging_sink,
-    build_cloud_metrics_exporter,
-    build_cloud_firestore_sync,
-)
-from mousedroid.factory.arm import (
-    build_arm_driver,
-    build_symbolic_planner_backend,
-    build_arm_planner,
-    build_arm_environment,
-    build_arm_controller,
-    build_arm_perception,
-    build_llm_replanner,
-)
-from mousedroid.factory.autonomous import (
-    build_autonomous_metrics_registry,
-    build_motor_controller,
-    build_autonomous_camera,
-    build_autonomous_lidar,
-    build_autonomous_orchestrator,
-)
-from mousedroid.factory._replay_batch_helpers import (
-    _make_consumed_offset_advancer,
-    _build_shared_replay_reader,
-    _run_coro_blocking,
-    _count_replay_records,
-    _count_new_replay_records,
-    _load_replay_batch,
-    _load_replay_sequence_batch,
-    _build_held_out_sequence_batch,
-    _MAX_REPLAY_COUNT_CHUNK as _MAX_REPLAY_COUNT_CHUNK,
-)
-from mousedroid.factory.on_device_learning import (
-    build_on_device_coordinator,
-    build_on_device_hot_swap_source,
-    _build_on_device_gate_runner,
-)
-from mousedroid.factory.growth import (
-    _make_growth_latent_sampler,
-    build_growth_coordinator,
-)
-from mousedroid.factory.mcp_harness import (
-    build_mcp_server,
-    build_task_tracker,
-    build_journal,
-    _resolve_approval_callback,
-    build_approval_gate,
-    build_skill_loaders,
-    build_memory_exporter,
-    build_builtin_skills,
-    build_skill_registry,
-    _build_sub_agent_factory,
-    build_skill_delegator,
-    build_hook_registry,
-)
-from mousedroid.factory.orchestrator import (
-    build_orchestrator,
-)
-
-# Import submodules explicitly so they can be deleted from the namespace
-from mousedroid.factory import (
-    arm,
-    autonomous,
-    cloud,
-    cognitive,
-    growth,
-    hardware,
-    health,
-    learning,
-    llm_gateway,
-    mcp_harness,
-    memory_curiosity,
-    mission,
-    on_device_learning,
-    orchestrator,
-    safety,
-    telemetry,
-    voice,
-    world_model,
-    _replay_batch_helpers,
-)
 
 # Hide submodule names from dir() to match pre-split flat module's dir() output.
 # Python's import mechanism exposes submodules automatically; we delete them here
@@ -311,10 +292,6 @@ del llm_gateway, mcp_harness, memory_curiosity, mission, on_device_learning
 del orchestrator, safety, telemetry, voice, world_model, _replay_batch_helpers
 
 __all__ = [
-    "Any",
-    "Awaitable",
-    "Callable",
-    "Coroutine",
     "DEFAULT_CAMERA_HEIGHT",
     "DEFAULT_CAMERA_WIDTH",
     "DEFAULT_LIDAR_BUFFER_SIZE",
@@ -322,24 +299,32 @@ __all__ = [
     "DEFAULT_MOTOR_BAUDRATE",
     "ENGINE_TYPE_POLICY",
     "ENGINE_TYPE_WORLD_MODEL",
+    "TYPE_CHECKING",
+    "Any",
+    "AudioProtocol",
+    "Awaitable",
+    "Callable",
+    "CameraProtocol",
+    "Coroutine",
+    "DistanceSensorProtocol",
     "ESP32CommProtocol",
+    "FaceDisplayProtocol",
     "LLMGatewayProtocol",
     "LiDARProtocol",
     "LidarProtocol",
     "Mapping",
+    "MetricsRegistryProtocol",
+    "MotorControllerProtocol",
     "Path",
     "PromptInjectionFilterProtocol",
     "RegexInjectionFilter",
     "SafetyActionProjectorProtocol",
     "SafetyMonitorProtocol",
+    "SpeakerProtocol",
     "TypeVar",
-    "TYPE_CHECKING",
     "VisionProtocol",
+    "VoiceEngineProtocol",
     "WatchdogProtocol",
-    "_log",
-    "_CoroResult",
-    "_SLOT_PT_SUFFIX",
-    "_MAX_REPLAY_COUNT_CHUNK",
     "build_agent",
     "build_approval_gate",
     "build_arm_controller",
@@ -424,35 +409,11 @@ __all__ = [
     "module_importable",
     "redact_uri_credentials",
     "redact_uris_in_text",
-    "_PINNED_URI_SCHEMES",
-    "_IN_MEMORY_SQLITE_PATHS",
-    "AudioProtocol",
-    "CameraProtocol",
-    "DistanceSensorProtocol",
-    "FaceDisplayProtocol",
-    "MetricsRegistryProtocol",
-    "MotorControllerProtocol",
-    "SpeakerProtocol",
-    "VoiceEngineProtocol",
-    "_build_distilled_onnx_vla",
-    "_build_held_out_sequence_batch",
-    "_build_on_device_gate_runner",
-    "_build_onnx_world_model",
-    "_build_orchestrator_greeter",
-    "_build_shared_replay_reader",
-    "_build_single_llm_gateway",
-    "_build_sub_agent_factory",
-    "_compose_weight_update_loader",
-    "_count_new_replay_records",
-    "_count_replay_records",
-    "_load_replay_batch",
-    "_load_replay_sequence_batch",
-    "_make_consumed_offset_advancer",
-    "_make_growth_latent_sampler",
-    "_resolve_approval_callback",
-    "_resolve_bdi_weights",
-    "_resolve_esp32_serial_via_usbc_discovery",
-    "_resolve_tracking_uri",
-    "_resolve_world_model_onnx_path",
-    "_run_coro_blocking",
 ]
+
+# Private names re-exported above (visible in dir(), importable directly)
+# but deliberately excluded from __all__ — same convention as
+# config/schema/__init__.py's _WORLD_MODEL_DEFAULT_REPO_ID: present for a
+# real test or internal cross-module call site to import by name, but not
+# advertised as part of the wildcard-import / public API surface. See
+# ADR-017 for the full list of which private names real tests depend on.

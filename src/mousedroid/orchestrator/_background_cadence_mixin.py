@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from mousedroid.logging.setup import get_logger
+from mousedroid.orchestrator._state import _OrchestratorState
 
 if TYPE_CHECKING:
     from mousedroid.safety.context import SafetyContext
@@ -17,7 +18,7 @@ if TYPE_CHECKING:
 _log = get_logger(__name__)
 
 
-class _BackgroundCadenceMixin:
+class _BackgroundCadenceMixin(_OrchestratorState):
     """Background cadence loops for the orchestrator."""
 
     async def _try_sensor_recovery(self, safety_ctx: SafetyContext) -> bool:
@@ -32,21 +33,21 @@ class _BackgroundCadenceMixin:
         Returns:
             True if a recovery was attempted, False otherwise.
         """
-        max_attempts = self._cfg.safety.sensor_recovery_attempts  # type: ignore[attr-defined]
+        max_attempts = self._cfg.safety.sensor_recovery_attempts
         if max_attempts <= 0:
             return False
-        if safety_ctx.valid_sensor_count >= self._cfg.safety.min_valid_sensors:  # type: ignore[attr-defined]
+        if safety_ctx.valid_sensor_count >= self._cfg.safety.min_valid_sensors:
             return False
 
         _log.warning(
             "sensor_recovery_starting",
             valid_sensors=safety_ctx.valid_sensor_count,
-            required=self._cfg.safety.min_valid_sensors,  # type: ignore[attr-defined]
+            required=self._cfg.safety.min_valid_sensors,
             max_attempts=max_attempts,
         )
 
         for attempt in range(max_attempts):
-            recovered = await self._sensor_manager.recovery_attempt()  # type: ignore[attr-defined]
+            recovered = await self._sensor_manager.recovery_attempt()
             if recovered > 0:
                 _log.info(
                     "sensor_recovery_success",
@@ -55,7 +56,7 @@ class _BackgroundCadenceMixin:
                 )
                 return True
             if attempt < max_attempts - 1:
-                await self._clock.sleep(self._cfg.safety.sensor_recovery_delay_s)  # type: ignore[attr-defined]
+                await self._clock.sleep(self._cfg.safety.sensor_recovery_delay_s)
 
         _log.error("sensor_recovery_exhausted", attempts=max_attempts)
         return False
@@ -101,7 +102,7 @@ class _BackgroundCadenceMixin:
         """
         _log.info(started_event, interval_s=interval)
         while True:
-            await self._clock.sleep(interval)  # type: ignore[attr-defined]
+            await self._clock.sleep(interval)
             if should_continue is not None and not should_continue():
                 break
             try:
@@ -115,10 +116,10 @@ class _BackgroundCadenceMixin:
         Runs at the interval specified by ``cfg.memory.consolidation_interval_s``.
         Automatically cancelled by ``stop()``.
         """
-        interval = self._cfg.memory.consolidation_interval_s  # type: ignore[attr-defined]
+        interval = self._cfg.memory.consolidation_interval_s
 
         async def _cycle() -> None:
-            memory_tier = self._memory_tier  # type: ignore[attr-defined]
+            memory_tier = self._memory_tier
             if memory_tier is None:  # pragma: no cover - should_continue already guards this
                 return
             count = await asyncio.to_thread(memory_tier.consolidation.consolidate)
@@ -134,7 +135,7 @@ class _BackgroundCadenceMixin:
             started_event="consolidation_loop_started",
             failed_event="consolidation_cycle_failed",
             cycle_fn=_cycle,
-            should_continue=lambda: self._memory_tier is not None,  # type: ignore[attr-defined]
+            should_continue=lambda: self._memory_tier is not None,
         )
 
     def _on_device_learning_enabled(self) -> bool:
@@ -143,7 +144,7 @@ class _BackgroundCadenceMixin:
         Uses an explicit ``None`` / attribute check (no ``assert``) so the gate
         survives ``-O`` (PYTHONOPTIMIZE=1, the Jetson Docker default).
         """
-        on_device_cfg = self._cfg.on_device_learning  # type: ignore[attr-defined]
+        on_device_cfg = self._cfg.on_device_learning
         return on_device_cfg is not None and on_device_cfg.enabled
 
     async def _on_device_update_loop(self) -> None:
@@ -157,10 +158,10 @@ class _BackgroundCadenceMixin:
         by ``stop()``. A failed cycle is logged and the loop keeps running so a
         transient replay-store / disk error never kills on-device learning.
         """
-        on_device_cfg = self._cfg.on_device_learning  # type: ignore[attr-defined]
-        if on_device_cfg is None or self._on_device_coordinator is None:  # type: ignore[attr-defined]
+        on_device_cfg = self._cfg.on_device_learning
+        if on_device_cfg is None or self._on_device_coordinator is None:
             return
-        coordinator = self._on_device_coordinator  # type: ignore[attr-defined]
+        coordinator = self._on_device_coordinator
         await self._run_slow_cadence_loop(
             interval=on_device_cfg.check_interval_s,
             started_event="on_device_update_loop_started",
@@ -174,7 +175,7 @@ class _BackgroundCadenceMixin:
         Explicit ``None`` / attribute check (no ``assert``) so the gate survives
         ``-O`` (PYTHONOPTIMIZE=1, the Jetson Docker default).
         """
-        growth_cfg = self._cfg.growth  # type: ignore[attr-defined]
+        growth_cfg = self._cfg.growth
         return growth_cfg is not None and growth_cfg.enabled
 
     async def _growth_distill_loop(self) -> None:
@@ -188,10 +189,10 @@ class _BackgroundCadenceMixin:
         cancelled by ``stop()``. A failed cycle is logged and the loop keeps
         running so a transient error never kills distillation.
         """
-        growth_cfg = self._cfg.growth  # type: ignore[attr-defined]
-        if growth_cfg is None or self._growth_coordinator is None:  # type: ignore[attr-defined]
+        growth_cfg = self._cfg.growth
+        if growth_cfg is None or self._growth_coordinator is None:
             return
-        coordinator = self._growth_coordinator  # type: ignore[attr-defined]
+        coordinator = self._growth_coordinator
         await self._run_slow_cadence_loop(
             interval=growth_cfg.check_interval_s,
             started_event="growth_distill_loop_started",

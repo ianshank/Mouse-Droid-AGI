@@ -14,6 +14,7 @@ from numpy.typing import NDArray
 from mousedroid.common.actions import normalize_action_numpy
 from mousedroid.constants import DEFAULT_BATTERY_VOLTAGE, MOTOR_STATE_BATTERY_INDEX
 from mousedroid.logging.setup import get_logger
+from mousedroid.orchestrator._state import _OrchestratorState
 
 if TYPE_CHECKING:
     from mousedroid.safety.context import SafetyContext
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 _log = get_logger(__name__)
 
 
-class _ActionMixin:
+class _ActionMixin(_OrchestratorState):
     """Action selection and execution for the orchestrator."""
 
     def _select_action(
@@ -41,7 +42,7 @@ class _ActionMixin:
         Returns:
             Action tensor.
         """
-        if self._cognitive_core is not None:  # type: ignore[attr-defined]
+        if self._cognitive_core is not None:
             action = self._try_cognitive_action(observation, loop_time_ms)
             if action is not None:
                 return action
@@ -50,18 +51,18 @@ class _ActionMixin:
         # short-circuits this and preserves byte-identical pre-Phase-3a
         # behavior. Only active when the orchestrator was wired with a
         # VLA policy AND the config selects it.
-        selector = self._cfg.loop.policy_selector  # type: ignore[attr-defined]
-        if selector != "nav_agent" and self._vla_policy is not None:  # type: ignore[attr-defined]
+        selector = self._cfg.loop.policy_selector
+        if selector != "nav_agent" and self._vla_policy is not None:
             vla_action = self._try_vla_action(observation)
             if vla_action is not None:
                 return vla_action
             # Fallthrough to nav_agent below in 'auto' mode, or to a
             # zero-action safe stop in strict 'vla' mode.
-            if selector == "vla" and not self._cfg.vla.fallback_on_timeout:  # type: ignore[attr-defined]
+            if selector == "vla" and not self._cfg.vla.fallback_on_timeout:
                 _log.warning("vla_timeout_safe_stop", selector=selector)
-                return torch.zeros(int(self._cfg.model.action_dim), dtype=torch.float32)  # type: ignore[attr-defined]
+                return torch.zeros(int(self._cfg.model.action_dim), dtype=torch.float32)
 
-        return self._agents[0].act(self._h, self._z, safety_ctx)  # type: ignore[attr-defined]
+        return self._agents[0].act(self._h, self._z, safety_ctx)
 
     def _maybe_project_action(
         self,
@@ -90,7 +91,7 @@ class _ActionMixin:
             Either the original ``action`` (when no projector is wired)
             or a clamped copy with the same shape and dtype.
         """
-        if self._safety_projector is None:  # type: ignore[attr-defined]
+        if self._safety_projector is None:
             return action
 
         was_unbatched = action.dim() == 1
@@ -99,7 +100,7 @@ class _ActionMixin:
         # ``project()`` is typed to return ``NDArray[np.float32]`` and the
         # implementation guarantees that dtype, so no defensive
         # ``np.asarray(..., dtype=np.float32)`` cast is required here.
-        projected_np = self._safety_projector.project(action_np, safety_ctx)  # type: ignore[attr-defined]
+        projected_np = self._safety_projector.project(action_np, safety_ctx)
         projected = torch.from_numpy(projected_np).to(flat.device)
         if not was_unbatched:
             projected = projected.unsqueeze(0)
@@ -126,39 +127,39 @@ class _ActionMixin:
             The VLA action tensor on success, otherwise ``None``.
         """
         del observation  # forwarded via VLAObservation below
-        assert self._vla_policy is not None  # narrowed by caller  # type: ignore[attr-defined]
+        assert self._vla_policy is not None  # narrowed by caller
 
         from mousedroid.vla.policy import VLAObservation
 
-        budget = self._cfg.loop.inference_timeout_s  # type: ignore[attr-defined]
+        budget = self._cfg.loop.inference_timeout_s
         if budget is None:
-            budget = 1.0 / float(self._cfg.loop.control_hz)  # type: ignore[attr-defined]
+            budget = 1.0 / float(self._cfg.loop.control_hz)
 
-        start = self._clock.monotonic()  # type: ignore[attr-defined]
+        start = self._clock.monotonic()
         try:
             with torch.no_grad():
-                result = self._vla_policy.predict(VLAObservation(h=self._h, z=self._z))  # type: ignore[attr-defined]
+                result = self._vla_policy.predict(VLAObservation(h=self._h, z=self._z))
         except Exception as exc:  # never let VLA crash the loop
             # Surface the exception type so dashboards can distinguish
             # CUDA-OOM from logic errors at a glance (Gemini review).
-            self._failure_recorder.record(  # type: ignore[attr-defined]
+            self._failure_recorder.record(
                 "orchestrator",
                 "vla_exception",
                 level="warning",
                 extra={"error": type(exc).__name__},
             )
-            _log.warning("vla_predict_failed", policy=self._vla_policy.name, exc_info=True)  # type: ignore[attr-defined]
+            _log.warning("vla_predict_failed", policy=self._vla_policy.name, exc_info=True)
             return None
 
-        elapsed = self._clock.monotonic() - start  # type: ignore[attr-defined]
+        elapsed = self._clock.monotonic() - start
         if elapsed > budget:
-            self._failure_recorder.record(  # type: ignore[attr-defined]
+            self._failure_recorder.record(
                 "orchestrator",
                 "vla_timeout",
                 level="warning",
                 extra={"elapsed_s": round(elapsed, 4), "budget_s": round(budget, 4)},
             )
-            if self._metrics is not None:  # type: ignore[attr-defined]
+            if self._metrics is not None:
                 # Cast is safe: the policy_selector gate at the caller
                 # guarantees ``self._vla_policy is not None``, which means
                 # ``cfg.vla.backend != "none"``. The runtime value belongs
@@ -166,22 +167,22 @@ class _ActionMixin:
                 # can't see the upstream gate so we cast explicitly.
                 from mousedroid.config.schema import VLAActiveBackendLiteral
 
-                self._metrics.inc_vla_timeout(cast(VLAActiveBackendLiteral, self._cfg.vla.backend))  # type: ignore[attr-defined]
+                self._metrics.inc_vla_timeout(cast(VLAActiveBackendLiteral, self._cfg.vla.backend))
             _log.warning(
                 "vla_inference_timeout",
-                policy=self._vla_policy.name,  # type: ignore[attr-defined]
+                policy=self._vla_policy.name,
                 elapsed_s=elapsed,
                 budget_s=budget,
-                mode=self._cfg.vla.backend,  # type: ignore[attr-defined]
+                mode=self._cfg.vla.backend,
             )
             return None
 
-        action_dim = int(self._cfg.model.action_dim)  # type: ignore[attr-defined]
+        action_dim = int(self._cfg.model.action_dim)
         if result.action.shape != (action_dim,):
             # Record the full tensor shape (stringified for Prometheus
             # label-friendliness) so dashboards distinguish 0-D outputs
             # from rank-2 outputs like ``(1, action_dim)``.
-            self._failure_recorder.record(  # type: ignore[attr-defined]
+            self._failure_recorder.record(
                 "orchestrator",
                 "vla_wrong_shape",
                 level="warning",
@@ -192,7 +193,7 @@ class _ActionMixin:
             )
             _log.warning(
                 "vla_action_shape_mismatch",
-                policy=self._vla_policy.name,  # type: ignore[attr-defined]
+                policy=self._vla_policy.name,
                 expected=(action_dim,),
                 got=tuple(result.action.shape),
             )
@@ -220,8 +221,8 @@ class _ActionMixin:
                 if observation.motor_state.size > MOTOR_STATE_BATTERY_INDEX
                 else DEFAULT_BATTERY_VOLTAGE
             )
-            belief_dim = int(self._cfg.model.belief_dim)  # type: ignore[attr-defined]
-            bdi_state_vec = self._h.numpy().flatten().astype(np.float32, copy=False)  # type: ignore[attr-defined]
+            belief_dim = int(self._cfg.model.belief_dim)
+            bdi_state_vec = self._h.numpy().flatten().astype(np.float32, copy=False)
             state_vec: NDArray[np.float32] = bdi_state_vec
             if state_vec.size < belief_dim:
                 state_vec = np.pad(state_vec, (0, belief_dim - state_vec.size))
@@ -234,11 +235,11 @@ class _ActionMixin:
                 "bdi_state": bdi_state_vec,
                 "battery_v": battery_v,
                 "obstacle_dist_m": float(observation.distance_m),
-                "mcts_sims": int(self._cfg.mcts.n_simulations_base),  # type: ignore[attr-defined]
+                "mcts_sims": int(self._cfg.mcts.n_simulations_base),
                 "loop_time_ms": loop_time_ms,
-                "curiosity": self._compute_curiosity_scores(),  # type: ignore[attr-defined]
+                "curiosity": self._compute_curiosity_scores(),
             }
-            cognitive_core = self._cognitive_core  # type: ignore[attr-defined]
+            cognitive_core = self._cognitive_core
             assert cognitive_core is not None
             action_np, violations = cognitive_core.tick_fast(obs_dict)
             if violations:
@@ -252,7 +253,7 @@ class _ActionMixin:
         except Exception as e:
             # Surface the exception type so dashboards can distinguish
             # the failure mode (Gemini review).
-            self._failure_recorder.record(  # type: ignore[attr-defined]
+            self._failure_recorder.record(
                 "orchestrator",
                 "cognitive_core_exception",
                 level="warning",
@@ -277,7 +278,7 @@ class _ActionMixin:
         Returns:
             Normalized 1-D torch tensor with correct dimensions.
         """
-        return normalize_action_numpy(action_np, int(self._cfg.model.action_dim))  # type: ignore[attr-defined]
+        return normalize_action_numpy(action_np, int(self._cfg.model.action_dim))
 
     def _project_action_to_executable_axes(self, action: torch.Tensor) -> torch.Tensor:
         """Zero action components the configured chassis cannot execute.
@@ -300,7 +301,7 @@ class _ActionMixin:
         Returns:
             The action restricted to executable axes.
         """
-        if self._supports_lateral or action.shape[0] <= 1:  # type: ignore[attr-defined]
+        if self._supports_lateral or action.shape[0] <= 1:
             return action
         if float(action[1]) == 0.0:
             return action
@@ -316,9 +317,9 @@ class _ActionMixin:
                 restricted to executable axes by
                 :meth:`_project_action_to_executable_axes`.
         """
-        max_v = self._cfg.esp32.max_velocity_mps  # type: ignore[attr-defined]
-        max_omega = self._cfg.esp32.max_omega_rads  # type: ignore[attr-defined]
+        max_v = self._cfg.esp32.max_velocity_mps
+        max_omega = self._cfg.esp32.max_omega_rads
         vx = float(action[0]) * max_v
         vy = float(action[1]) * max_v if action.shape[0] > 1 else 0.0
         omega = float(action[2]) * max_omega if action.shape[0] > 2 else 0.0
-        await self._esp32.send_velocity(vx, vy, omega)  # type: ignore[attr-defined]
+        await self._esp32.send_velocity(vx, vy, omega)

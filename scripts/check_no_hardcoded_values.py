@@ -27,24 +27,42 @@ from typing import Any
 TARGET_PREFIX = ("src", "mousedroid")
 ALLOWED_FILES = {
     "src/mousedroid/constants.py",
+    # Post-ADR-017-split slim orchestrator.py (__init__ + tick() only) --
+    # see ALLOWED_DIR_PREFIXES for why its 7 sibling _*_mixin.py files are
+    # a directory-prefix entry instead of individually listed here.
+    "src/mousedroid/orchestrator/orchestrator.py",
 }
 # Directory-prefix exemptions for packages produced by a same-PR module
 # split: config/schema.py -> config/schema/, telemetry/metrics.py ->
-# telemetry/metrics/, telemetry/server.py -> telemetry/server/, and
-# validation/runtime.py -> validation/runtime/. A 1-file-to-many split has
-# no git rename correspondence, so every relocated line reads as newly
-# "added" against the pre-split base — pre-existing debt that predates this
-# gate ever running in CI, not a violation introduced by the split itself.
-# config/schema/ additionally stays exempt on its own merits (every module
-# there is, like the file it replaced, literally where runtime defaults are
-# declared as Pydantic Field() literals). Growing this list beyond these
-# four requires updating test_hardcoded_value_dir_exemptions_are_pinned —
-# don't add an entry here to silence an unrelated finding.
+# telemetry/metrics/, telemetry/server.py -> telemetry/server/,
+# validation/runtime.py -> validation/runtime/, and factory.py -> factory/
+# (ADR-017). A 1-file-to-many split has no git rename correspondence, so
+# every relocated line reads as newly "added" against the pre-split base —
+# pre-existing debt that predates this gate ever running in CI, not a
+# violation introduced by the split itself. config/schema/ additionally
+# stays exempt on its own merits (every module there is, like the file it
+# replaced, literally where runtime defaults are declared as Pydantic
+# Field() literals). Growing this list beyond these five requires updating
+# test_hardcoded_value_dir_exemptions_are_pinned — don't add an entry here
+# to silence an unrelated finding.
+#
+# orchestrator/orchestrator.py -> orchestrator/ (also ADR-017) is NOT a
+# bare directory-prefix entry here: unlike the five splits above, that
+# split landed inside an EXISTING package directory that also holds
+# unrelated, pre-existing files (autonomous.py, face_controller.py,
+# llm_replanner.py, mission_dispatcher.py, mission_lifecycle.py) never
+# part of this split — a directory prefix would exempt those too. Every
+# `_*_mixin.py` this split produced starts with `_`, and no pre-existing
+# sibling does, so the mixins are covered precisely by the
+# "src/mousedroid/orchestrator/_" prefix below instead; orchestrator.py
+# itself (post-split, __init__ + tick() only) is covered by ALLOWED_FILES.
 ALLOWED_DIR_PREFIXES = (
     "src/mousedroid/config/schema/",
     "src/mousedroid/telemetry/metrics/",
     "src/mousedroid/telemetry/server/",
     "src/mousedroid/validation/runtime/",
+    "src/mousedroid/factory/",
+    "src/mousedroid/orchestrator/_",
 )
 ALLOWED_NUMERIC_VALUES = {0.0, 1.0, -1.0}
 HUNK_PREFIX = "@@ "

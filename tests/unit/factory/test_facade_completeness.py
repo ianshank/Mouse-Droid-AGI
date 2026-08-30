@@ -1,0 +1,139 @@
+"""Facade-completeness regression for the `factory/` package (ADR-017).
+
+`src/mousedroid/factory.py` (5,140 lines) was split into a 19-file
+`src/mousedroid/factory/` package; `factory/__init__.py` is a pure
+re-export facade whose job is to make every builder defined in any
+submodule reachable as `mousedroid.factory.<name>`, exactly as it was
+reachable on the pre-split flat module. A missed re-export is easy to
+introduce silently (add a new `build_*` to a submodule, forget the
+`__init__.py` import) and easy to miss in review, because the failure
+mode is a downstream `ImportError` in an unrelated caller, not a loud
+signal at the point of the missing edit.
+
+This is a *structural*, forward-looking check (not a one-time snapshot
+diffed against the deleted flat file): it walks every `factory/*.py`
+submodule via `ast`, collects every top-level function/class definition
+whose name does not start with `_` (the facade's public contract), and
+asserts each one is reachable from `mousedroid.factory` as the identical
+object. A second, explicit assertion pins the 12 private names real
+tests import directly (`tests/unit/factory/test_build_orchestrator_greeter.py`,
+`tests/unit/factory/test_factory.py`, `tests/unit/factory/test_factory_observability.py`,
+`tests/unit/factory/test_factory_esp32_discovery.py`,
+`tests/regression/test_pr106_backwards_compat.py`,
+`tests/unit/factory/test_build_on_device_coordinator.py`,
+`tests/unit/factory/test_compose_weight_update_loader.py`,
+`tests/integration/test_on_device_sim_soak.py`,
+`tests/integration/test_pr134_ws4_gate_integration.py`) so a future
+rename or removal of any one of them fails loudly here first.
+"""
+
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+import mousedroid.factory as _factory_module
+
+_FACTORY_DIR = Path(__file__).resolve().parents[3] / "src" / "mousedroid" / "factory"
+
+# The 12 private symbols documented in ADR-017 / the decomposition plan as
+# re-exported outside `__all__` because a real test imports them directly by
+# name — mirrors config/schema/__init__.py's `_WORLD_MODEL_DEFAULT_REPO_ID`
+# pattern. Pinned explicitly because private names are excluded from the
+# auto-discovered public-surface check below by design.
+_DOCUMENTED_PRIVATE_REEXPORTS = frozenset(
+    {
+        "_MAX_REPLAY_COUNT_CHUNK",
+        "_count_new_replay_records",
+        "_count_replay_records",
+        "_load_replay_batch",
+        "_load_replay_sequence_batch",
+        "_build_held_out_sequence_batch",
+        "_build_on_device_gate_runner",
+        "_compose_weight_update_loader",
+        "_build_orchestrator_greeter",
+        "_resolve_bdi_weights",
+        "_resolve_tracking_uri",
+        "_resolve_esp32_serial_via_usbc_discovery",
+    }
+)
+
+
+def _public_top_level_defs(path: Path) -> dict[str, ast.AST]:
+    """Every module-scope function/class def in `path` not starting with `_`."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    defs: dict[str, ast.AST] = {}
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) and (
+            not node.name.startswith("_")
+        ):
+            defs[node.name] = node
+    return defs
+
+
+def _submodule_files() -> list[Path]:
+    return sorted(p for p in _FACTORY_DIR.glob("*.py") if p.name != "__init__.py")
+
+
+def test_every_public_builder_is_reexported_by_the_facade() -> None:
+    """Every public top-level def in a `factory/*.py` submodule is on `mousedroid.factory`.
+
+    Forward-looking: this is what actually catches a future missed
+    re-export, unlike a one-time diff against the deleted flat file.
+    """
+    missing: list[str] = []
+    for path in _submodule_files():
+        for name in _public_top_level_defs(path):
+            if not hasattr(_factory_module, name):
+                missing.append(f"{path.name}::{name}")
+    assert not missing, (
+        "public symbol(s) defined in a factory/ submodule but not re-exported "
+        f"from factory/__init__.py -- add the missing import: {missing}"
+    )
+
+
+def test_reexported_builders_are_the_same_object_not_a_shadow_copy() -> None:
+    """`mousedroid.factory.<name>` must be an identity re-export, not a redefinition.
+
+    Guards against someone "fixing" a missing re-export by pasting a
+    duplicate function body into `__init__.py` instead of importing it --
+    that would pass the completeness check above while silently forking
+    behavior between the two copies.
+    """
+    mismatched: list[str] = []
+    for path in _submodule_files():
+        module_name = f"mousedroid.factory.{path.stem}"
+        import importlib
+
+        submodule = importlib.import_module(module_name)
+        for name in _public_top_level_defs(path):
+            facade_obj = getattr(_factory_module, name, None)
+            submodule_obj = getattr(submodule, name, None)
+            if facade_obj is not None and facade_obj is not submodule_obj:
+                mismatched.append(f"{path.name}::{name}")
+    assert not mismatched, f"facade re-export is not identity-equal to source: {mismatched}"
+
+
+def test_documented_private_reexports_are_all_present() -> None:
+    """The 12 private names real tests import directly must stay importable."""
+    missing = [
+        name for name in sorted(_DOCUMENTED_PRIVATE_REEXPORTS) if not hasattr(_factory_module, name)
+    ]
+    assert not missing, (
+        f"documented private re-export(s) missing from factory/__init__.py: {missing} "
+        "-- a real test imports these by name (see module docstring)"
+    )
+
+
+def test_documented_private_reexports_are_excluded_from_all() -> None:
+    """The 12 private names are re-exported but never advertised in `__all__`.
+
+    Matches config/schema/__init__.py's established convention: present
+    for direct import, excluded from the public `__all__` surface.
+    """
+    exported_in_all = sorted(
+        name for name in _DOCUMENTED_PRIVATE_REEXPORTS if name in _factory_module.__all__
+    )
+    assert not exported_in_all, (
+        f"private re-export(s) unexpectedly listed in __all__: {exported_in_all}"
+    )

@@ -52,15 +52,25 @@ _SRC = _REPO_ROOT / "src" / "mousedroid"
 def _discover_subsystems() -> frozenset[str]:
     """Every direct src/mousedroid/ subdirectory containing at least one .py file.
 
-    Files directly at src/mousedroid/ root (factory.py, constants.py,
-    main.py, __main__.py, __init__.py) are the designated composition
-    root / package surface and are exempt by construction — this only
-    walks subsystem *subdirectories*, never the root itself.
+    Files directly at src/mousedroid/ root (constants.py, main.py,
+    __main__.py, __init__.py) are the designated package surface and are
+    exempt by construction — this only walks subsystem *subdirectories*,
+    never the root itself.
+
+    ``factory/`` is the Factory-First DI composition root (CLAUDE.md
+    invariant 1): it is *expected* to import concrete types from every
+    other subsystem at module scope (that is its entire purpose), so it is
+    excluded here the same way root-level ``factory.py`` was exempt by
+    construction before the god-file split into a package. Without this
+    carve-out every `build_*` module-level concrete import (e.g.
+    ``RegexInjectionFilter`` in ``factory/__init__.py`` /
+    ``factory/llm_gateway.py``) would trip as a false-positive
+    cross-subsystem violation.
     """
     return frozenset(
         p.name
         for p in _SRC.iterdir()
-        if p.is_dir() and p.name != "__pycache__" and any(p.rglob("*.py"))
+        if p.is_dir() and p.name not in {"__pycache__", "factory"} and any(p.rglob("*.py"))
     )
 
 

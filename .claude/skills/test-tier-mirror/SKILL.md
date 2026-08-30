@@ -34,7 +34,7 @@ in `scripts/ci.sh`.
 
 Two questions settle most cases.
 
-**Does it go through `factory.py`?** If yes it is at least integration. The
+**Does it go through `factory/`?** If yes it is at least integration. The
 factory is the single wiring point, so "does the config actually reach the
 driver" is only answerable above the unit tier. A unit test that constructs the
 concrete type directly proves the type works, not that the system builds it.

@@ -11,6 +11,7 @@ import numpy as np
 import torch
 
 from mousedroid.logging.setup import get_logger
+from mousedroid.orchestrator._state import _OrchestratorState
 
 if TYPE_CHECKING:
     from mousedroid.safety.context import SafetyContext
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
 _log = get_logger(__name__)
 
 
-class _VoiceFaceMixin:
+class _VoiceFaceMixin(_OrchestratorState):
     """Voice and face control for the orchestrator."""
 
     async def _voice_lifecycle(self, event: str) -> None:
@@ -28,10 +29,10 @@ class _VoiceFaceMixin:
         Args:
             event: Lifecycle event name (e.g. ``"startup"``, ``"shutdown"``).
         """
-        if self._voice_engine is None:  # type: ignore[attr-defined]
+        if self._voice_engine is None:
             return
         try:
-            await self._voice_engine.speak(event, {"valence": 1.0})  # type: ignore[attr-defined]
+            await self._voice_engine.speak(event, {"valence": 1.0})
         except Exception:
             _log.warning("voice_lifecycle_failed", voice_event=event, exc_info=True)
 
@@ -53,7 +54,7 @@ class _VoiceFaceMixin:
             observation: Current sensor observation for context.
             **extra_context: Additional key-value context for the voice engine.
         """
-        if self._voice_engine is None:  # type: ignore[attr-defined]
+        if self._voice_engine is None:
             return
         context = {"distance_m": float(observation.distance_m)}
 
@@ -69,7 +70,7 @@ class _VoiceFaceMixin:
 
         context.update(extra_context)
         try:
-            await self._voice_engine.speak(event, context)  # type: ignore[attr-defined]
+            await self._voice_engine.speak(event, context)
         except Exception:
             _log.warning("voice_event_failed", voice_event=event, exc_info=True)
 
@@ -86,18 +87,18 @@ class _VoiceFaceMixin:
             observation: Current sensor observation.
             safety_ctx: Current safety context.
         """
-        if self._voice_engine is None:  # type: ignore[attr-defined]
+        if self._voice_engine is None:
             return
 
         if not safety_ctx.forward_clearance_ok:
             await self._voice_event("obstacle_detected", observation)
-        elif safety_ctx.battery_voltage < self._cfg.safety.battery_warn_v:  # type: ignore[attr-defined]
+        elif safety_ctx.battery_voltage < self._cfg.safety.battery_warn_v:
             await self._voice_event(
                 "low_battery",
                 observation,
                 battery_v=safety_ctx.battery_voltage,
             )
-        elif safety_ctx.gpu_temp_c >= self._cfg.safety.gpu_warn_temp_c:  # type: ignore[attr-defined]
+        elif safety_ctx.gpu_temp_c >= self._cfg.safety.gpu_warn_temp_c:
             await self._voice_event(
                 "error",
                 observation,
@@ -122,11 +123,11 @@ class _VoiceFaceMixin:
             action: Most recent commanded action, or ``None`` in the
                 emergency path.
         """
-        if self._face_controller is None:  # type: ignore[attr-defined]
+        if self._face_controller is None:
             return
 
-        if self._cognitive_core is not None:  # type: ignore[attr-defined]
-            valence, arousal = self._cognitive_core.get_latest_affect()  # type: ignore[attr-defined]
+        if self._cognitive_core is not None:
+            valence, arousal = self._cognitive_core.get_latest_affect()
         else:
             valence, arousal = 0.0, 0.0
 
@@ -137,11 +138,11 @@ class _VoiceFaceMixin:
         elif action is None:
             is_idle = True
         else:
-            epsilon = self._cfg.face_display.idle_action_epsilon if self._cfg.face_display else 1e-3  # type: ignore[attr-defined]
+            epsilon = self._cfg.face_display.idle_action_epsilon if self._cfg.face_display else 1e-3
             is_idle = bool(action.abs().max().item() < epsilon)
 
         try:
-            await self._face_controller.update(  # type: ignore[attr-defined]
+            await self._face_controller.update(
                 valence=valence,
                 arousal=arousal,
                 is_emergency=safety_ctx.is_emergency,

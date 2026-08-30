@@ -82,6 +82,8 @@ def test_hardcoded_value_dir_exemptions_are_pinned() -> None:
         "src/mousedroid/telemetry/metrics/",
         "src/mousedroid/telemetry/server/",
         "src/mousedroid/validation/runtime/",
+        "src/mousedroid/factory/",
+        "src/mousedroid/orchestrator/_",
     )
 
 

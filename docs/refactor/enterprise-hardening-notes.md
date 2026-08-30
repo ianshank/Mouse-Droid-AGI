@@ -63,5 +63,7 @@ python -m pytest tests/unit tests/property tests/integration \
 * **MAML left first-order.** `meta_step` does not propagate gradients to the base
   model; a second-order fix is a behaviour change out of scope here and is
   characterized by a test instead.
-* **Large-file splits (`factory.py`, `schema.py`) not attempted** — chosen scope
-  excluded them to avoid large low-value diffs.
+* **Large-file splits (`factory.py`, `schema.py`) not attempted in this pass** —
+  chosen scope excluded them to avoid large low-value diffs. Both were later
+  split: `schema.py` in commit `4646d80` (PR #191), `factory.py` in the
+  god-files decomposition (see ADR-017).

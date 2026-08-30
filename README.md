@@ -38,7 +38,7 @@ Planning and architecture docs live under `docs/planning/` and `docs/analysis/` 
 
 #### Wired into the runtime loop
 
-Built by `factory.py` and driven by the 30 Hz sense-plan-act orchestrator.
+Built by `factory/` and driven by the 30 Hz sense-plan-act orchestrator.
 
 | Pillar | Module | What it does |
 | ------ | ------ | ------------ |
@@ -52,13 +52,13 @@ Built by `factory.py` and driven by the 30 Hz sense-plan-act orchestrator.
 
 #### Factory-instantiated, default-OFF pending a soak decision
 
-Wired by `factory.py` (the builder is called, metrics-registered) but gated behind an
+Wired by `factory/` (the builder is called, metrics-registered) but gated behind an
 `Optional` config block that defaults `None` — same posture as on-device incremental learning
 (M6). Byte-identical to pre-feature behaviour when the config block is absent.
 
 | Pillar | Module | What it does |
 | ------ | ------ | ------------ |
-| Growth & Distillation | `growth/` | Regression-objective (MSE) knowledge distillation to a compact student policy (~0.1k LOC); `factory.py::build_growth_coordinator`. `KnowledgeDistiller` also supports a legacy KL+CE `"classification"` objective, but the wired call site passes `objective="regression"`. |
+| Growth & Distillation | `growth/` | Regression-objective (MSE) knowledge distillation to a compact student policy (~0.1k LOC); `factory/growth.py::build_growth_coordinator`. `KnowledgeDistiller` also supports a legacy KL+CE `"classification"` objective, but the wired call site passes `objective="regression"`. |
 
 #### Implemented and unit-tested — not yet wired into the loop
 
@@ -179,7 +179,7 @@ src/mousedroid/
 ├── diagnostics/    # Power-chain + USB-C smoke diagnostics
 ├── efficiency/     # TensorRT compilation, runtime profiler
 ├── experience/     # LMDB experience logger + record format
-├── factory.py      # Dependency-injection wiring (only place concrete types are imported)
+├── factory/        # Dependency-injection wiring (only place concrete types are imported)
 ├── growth/         # Knowledge distillation (VLA teacher → compact student)
 ├── hardware/       # Camera, LiDAR, audio, motor, OLED-display drivers + protocols
 ├── harness/        # Agent harness — task tracker, hooks, journal, skills, HITL, replanner
@@ -216,7 +216,7 @@ Supporting trees: `config/` (YAML overlays + `prometheus/`, `grafana/`, `loki/`)
 
 ## Design Principles
 
-- **Protocol-based DI** — components are `@runtime_checkable Protocol` interfaces; `factory.py` is the only place concrete types are imported.
+- **Protocol-based DI** — components are `@runtime_checkable Protocol` interfaces; `factory/` is the only place concrete types are imported.
 - **Asyncio throughout** — all I/O is async; blocking calls run via `asyncio.to_thread()`. No threading primitives.
 - **Structured logging** — `structlog` everywhere (JSON in production, coloured console in dev). Never `print()`.
 - **Zero hardcoded values** — every pin, port, dimension, and threshold comes from the Pydantic schema.

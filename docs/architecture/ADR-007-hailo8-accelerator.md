@@ -52,7 +52,7 @@ exclusively for reasoning.
 3. **INT8 on Hailo / FP16 on GPU** — quantization happens offline during HEF
    compilation on x86, not at runtime on the Jetson.
 4. **Protocol-based DI** — zero regression path. All Hailo types implement
-   existing protocols and are wired via `factory.py`.
+   existing protocols and are wired via `factory/hardware.py`.
 
 ## Consequences
 

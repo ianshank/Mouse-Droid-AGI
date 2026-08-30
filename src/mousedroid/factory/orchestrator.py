@@ -1,175 +1,60 @@
-"""Factory builder — composes the production MouseDroidOrchestrator from every other domain builder."""
+"""Factory builder — composes MouseDroidOrchestrator from every other domain builder."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
-from mousedroid.logging.setup import get_logger
-from pathlib import Path
-from typing import cast
-import numpy as np
+from typing import TYPE_CHECKING, cast
+
+from mousedroid.cloud.protocol import ENGINE_TYPE_WORLD_MODEL
+from mousedroid.factory.llm_gateway import build_injection_filter
+from mousedroid.factory.mission import build_vlm_progress
+from mousedroid.factory.telemetry import (
+    _compose_weight_update_loader,
+    build_mock_telemetry_source,
+)
+from mousedroid.factory.voice import _build_orchestrator_greeter
 from mousedroid.hardware.protocols import (
     DistanceSensorProtocol,
     LidarProtocol,
     VisionProtocol,
 )
-from mousedroid.cloud.protocol import ENGINE_TYPE_WORLD_MODEL
 from mousedroid.llm_gateway.protocol import LLMGatewayProtocol
-
-from mousedroid.factory.telemetry import (
-    build_mock_telemetry_source,
-    _compose_weight_update_loader,
-)
-from mousedroid.factory.llm_gateway import build_injection_filter
-from mousedroid.factory.voice import _build_orchestrator_greeter
-from mousedroid.factory.mission import build_vlm_progress
+from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
-    import torch
-    from torch import Tensor
-
-    from mousedroid.agents.base import AgentProtocol
-    from mousedroid.arm.protocols import (
-        ArmControllerProtocol,
-        ArmDriverProtocol,
-        ArmEnvironmentProtocol,
-        ArmPerceptionProtocol,
-        ArmPlannerProtocol,
-        SymbolicPlannerBackend,
-    )
     from mousedroid.cloud.protocol import (
-        CloudExperienceExporterProtocol,
-        CloudFirestoreSyncProtocol,
-        CloudLoggingSinkProtocol,
-        CloudMetricsExporterProtocol,
-        CloudTelemetrySinkProtocol,
-        PendingWeightUpdate,
         WeightUpdatePollerProtocol,
     )
-    from mousedroid.cognitive.bdi_model import NeuralBDI
     from mousedroid.cognitive.cognitive_core import CognitiveCore
-    from mousedroid.common.time.protocol import ClockProtocol
-    from mousedroid.common.tools.registry import ToolRegistry
     from mousedroid.config.schema import (
-        ESP32Config,
-        LLMConfig,
-        ModelConfig,
         Settings,
-        UltrasonicConfig,
     )
-    from mousedroid.curiosity.protocol import CuriosityProtocol
-    from mousedroid.efficiency.tensorrt import TensorRTCompilerProtocol
-    from mousedroid.experience.logger import ExperienceLogger
-    from mousedroid.experience.record import MouseDroidExperienceRecord
     from mousedroid.growth.coordinator import GrowthDistillationCoordinator
-    from mousedroid.hardware.accelerator.hailo_runtime import HailoRuntimeProtocol
-    from mousedroid.hardware.camera.feature_extractor import FeatureExtractorProtocol
-    from mousedroid.harness.approval.protocol import ApprovalGateProtocol
-    from mousedroid.harness.protocol import TaskTrackerProtocol
-    from mousedroid.health.monitor import HealthMonitor
-    from mousedroid.learning.on_device.hot_swap import OnDeviceWeightUpdateSource
     from mousedroid.learning.on_device.replay_trigger import ReplayTriggerCoordinator
-    from mousedroid.learning.on_device.slot_store import CandidateSlot, OnDeviceSlotStore
     from mousedroid.llm_gateway.mission_parser import MissionParserProtocol
-    from mousedroid.mcp.protocol import MCPServerProtocol
-    from mousedroid.memory.episodic import EpisodicReplay
-    from mousedroid.memory.tier import MemoryTier
-    from mousedroid.orchestrator.face_controller import FaceController
-    from mousedroid.orchestrator.mission_dispatcher import MissionDispatcherProtocol
-    from mousedroid.orchestrator.mission_lifecycle import (
-        MissionLifecycle,
-        MissionReplannerProtocol,
-    )
-    from mousedroid.reward.protocol import RewardModelProtocol
-    from mousedroid.reward.vlm_progress import VLMProgressHead
-    from mousedroid.sensing.manager import SensorManager
-    from mousedroid.sim.protocols import RoverEnvProtocol
-    from mousedroid.telemetry.failure_recorder import FailureRecorder
-    from mousedroid.telemetry.log_buffer import LogRingBuffer
-    from mousedroid.telemetry.metrics import MetricsRegistry
-    from mousedroid.telemetry.protocol import TelemetryPublisherProtocol, TelemetryServerProtocol
-    from mousedroid.training.observability import ExperimentLoggerProtocol
-    from mousedroid.training.replay import ReplayReaderProtocol
-    from mousedroid.training.replay.lmdb_reader import LMDBReplayReader
     from mousedroid.vla.policy import VLAPolicyProtocol
-    from mousedroid.voice.greeting import Greeter, GreeterProtocol
-    from mousedroid.voice.mock_tts import MockTTS
-    from mousedroid.voice.tts import PiperTTS
-    from mousedroid.world_model.encoder import MultimodalEncoder
-    from mousedroid.world_model.protocol import LatentContextProtocol, WorldModelProtocol
-    from mousedroid.world_model.rssm import RSSM
 
+from mousedroid.factory.cloud import (
+    build_cloud_experience_exporter,
+    build_cloud_firestore_sync,
+    build_cloud_metrics_exporter,
+    build_cloud_telemetry_sink,
+)
+from mousedroid.factory.cognitive import build_agent, build_cognitive_core
+from mousedroid.factory.growth import build_growth_coordinator
 from mousedroid.factory.hardware import (
-    build_audio_feature_extractor,
     build_camera,
     build_distance_sensor,
     build_esp32_driver,
     build_face_display,
     build_hailo_runtime,
     build_lidar,
-    build_lidar_feature_extractor,
     build_microphone,
     build_sensor_manager,
-    build_tensorrt_compiler,
 )
-from mousedroid.factory.voice import (
-    build_face_controller,
-    build_greeter,
-    build_speaker,
-    build_voice_engine,
-)
-from mousedroid.factory.world_model import (
-    build_latent_context,
-    build_rover_env,
-    build_vision_feature_extractor,
-    build_world_model,
-)
-from mousedroid.factory.llm_gateway import build_llm_gateway
-from mousedroid.factory.learning import build_replay_reader, build_reward_model, build_vla_policy
-from mousedroid.factory.mission import (
-    build_mission_lifecycle,
-    build_mission_parser,
-    build_mission_replanner,
-)
-from mousedroid.factory.telemetry import (
-    build_experiment_logger,
-    build_failure_recorder,
-    build_metrics_registry,
-    build_telemetry_publisher,
-    build_telemetry_server,
-    build_weight_update_loader,
-    build_weight_update_pollers,
-)
-from mousedroid.factory.safety import build_safety_monitor, build_safety_projector
 from mousedroid.factory.health import build_health_monitor, build_watchdog
-from mousedroid.factory.cognitive import build_agent, build_cognitive_core
-from mousedroid.factory.memory_curiosity import (
-    build_curiosity_module,
-    build_experience_logger,
-    build_memory_tier,
-)
-from mousedroid.factory.cloud import (
-    build_cloud_experience_exporter,
-    build_cloud_firestore_sync,
-    build_cloud_logging_sink,
-    build_cloud_metrics_exporter,
-    build_cloud_telemetry_sink,
-)
-from mousedroid.factory.arm import (
-    build_arm_controller,
-    build_arm_driver,
-    build_arm_environment,
-    build_arm_perception,
-    build_arm_planner,
-    build_symbolic_planner_backend,
-)
-from mousedroid.factory.on_device_learning import (
-    build_on_device_coordinator,
-    build_on_device_hot_swap_source,
-)
-from mousedroid.factory.growth import build_growth_coordinator
+from mousedroid.factory.learning import build_vla_policy
+from mousedroid.factory.llm_gateway import build_llm_gateway
 from mousedroid.factory.mcp_harness import (
-    build_approval_gate,
-    build_builtin_skills,
     build_hook_registry,
     build_journal,
     build_mcp_server,
@@ -178,6 +63,38 @@ from mousedroid.factory.mcp_harness import (
     build_skill_loaders,
     build_skill_registry,
     build_task_tracker,
+)
+from mousedroid.factory.memory_curiosity import (
+    build_curiosity_module,
+    build_experience_logger,
+    build_memory_tier,
+)
+from mousedroid.factory.mission import (
+    build_mission_lifecycle,
+    build_mission_parser,
+    build_mission_replanner,
+)
+from mousedroid.factory.on_device_learning import (
+    build_on_device_coordinator,
+    build_on_device_hot_swap_source,
+)
+from mousedroid.factory.safety import build_safety_monitor, build_safety_projector
+from mousedroid.factory.telemetry import (
+    build_failure_recorder,
+    build_metrics_registry,
+    build_telemetry_publisher,
+    build_telemetry_server,
+    build_weight_update_loader,
+    build_weight_update_pollers,
+)
+from mousedroid.factory.voice import (
+    build_face_controller,
+    build_speaker,
+    build_voice_engine,
+)
+from mousedroid.factory.world_model import (
+    build_latent_context,
+    build_world_model,
 )
 
 _log = get_logger(__name__)

@@ -21,6 +21,10 @@
 - `orchestrator.py::MouseDroidOrchestrator` — main sense-plan-act execution loop (the
   production entrypoint; `factory/orchestrator.py::build_orchestrator` wires it). Contains
   `__init__` and `tick()` only; implementation is composition via seven mixins (see below).
+- `_state.py::_OrchestratorState` — bare type-only attribute/method declarations every
+  mixin inherits from (in addition to `object`), so mypy --strict can resolve cross-mixin
+  `self._foo` access without per-call `# type: ignore[attr-defined]`. Never instantiated;
+  never given behavior. Keep it in sync with `__init__` in the same PR that changes either.
 - `_lifecycle_mixin.py` — startup, shutdown, background task management, health checks.
 - `_mission_mixin.py` — natural language mission acceptance and lifecycle coordination.
 - `_world_model_state_mixin.py` — latent state validation, NaN recovery, OTA weight updates.

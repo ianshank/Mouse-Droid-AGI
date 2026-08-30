@@ -184,5 +184,5 @@ remains in `CfCWrapper`.
 - Export tooling: [`scripts/export_dual_stream_rssm_onnx.py`](../../scripts/export_dual_stream_rssm_onnx.py)
 - Runtime class: [`src/mousedroid/world_model/dual_stream_rssm_onnx.py`](../../src/mousedroid/world_model/dual_stream_rssm_onnx.py)
 - Factory dispatch: `build_world_model` in
-  [`src/mousedroid/factory.py`](../../src/mousedroid/factory.py)
+  [`src/mousedroid/factory/world_model.py`](../../src/mousedroid/factory/world_model.py)
 - Performance budget: [`tests/performance/test_observe_step_budget.py`](../../tests/performance/test_observe_step_budget.py)

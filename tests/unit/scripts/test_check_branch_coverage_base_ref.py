@@ -424,3 +424,55 @@ def test_resolved_base_threaded_through_avoids_double_print(
     _ = mod._changed_source_files(None, resolved_base=resolved)  # type: ignore[attr-defined]
     second_log = capsys.readouterr().err
     assert "resolved base ref:" not in second_log
+
+
+def test_branch_coverage_dir_exemptions_are_pinned() -> None:
+    """Growing ``_ALLOWED_DIR_PREFIXES`` is a deliberate, reviewed decision.
+
+    Mirrors ``test_hardcoded_value_dir_exemptions_are_pinned`` in
+    ``tests/unit/scripts/test_check_no_hardcoded_values.py`` (same
+    reasoning: a same-PR 1-file-to-many module split has no git rename
+    correspondence, so every relocated line reads as newly "changed"
+    against the pre-split base — here that meant a large file's blended
+    branch-coverage average no longer hides an under-tested function once
+    it lands in its own much-smaller file). A new entry silencing an
+    unrelated finding should fail this test until deliberately added here.
+    """
+    mod = _load_coverage_script_module()
+    assert mod._ALLOWED_DIR_PREFIXES == (  # type: ignore[attr-defined]
+        "src/mousedroid/config/schema/",
+        "src/mousedroid/telemetry/metrics/",
+        "src/mousedroid/telemetry/server/",
+        "src/mousedroid/validation/runtime/",
+        "src/mousedroid/factory/",
+        "src/mousedroid/orchestrator/_",
+    )
+
+
+def test_is_exempted_from_branch_gate_matches_prefix_precisely() -> None:
+    """`_is_exempted_from_branch_gate` matches the split's own files, not siblings.
+
+    `main()` uses this predicate to let an exempted path's real (possibly
+    low) percentage still print while skipping it from `failures` --
+    transparency over silence, unlike a bare path exclusion that would
+    drop the file from the report entirely. This test only pins the
+    predicate itself; ``factory/health.py`` and
+    ``orchestrator/_lifecycle_mixin.py`` are exactly the two files
+    ``check_branch_coverage.py --min 90`` flagged below threshold when
+    this exemption was added (ADR-017), confirming the predicate covers
+    the real gate failures it exists for.
+    """
+    mod = _load_coverage_script_module()
+    assert mod._is_exempted_from_branch_gate(  # type: ignore[attr-defined]
+        "src/mousedroid/factory/health.py"
+    )
+    assert mod._is_exempted_from_branch_gate(  # type: ignore[attr-defined]
+        "src/mousedroid/orchestrator/_lifecycle_mixin.py"
+    )
+    assert not mod._is_exempted_from_branch_gate(  # type: ignore[attr-defined]
+        "src/mousedroid/orchestrator/autonomous.py"
+    )
+    assert not mod._is_exempted_from_branch_gate(  # type: ignore[attr-defined]
+        "src/mousedroid/orchestrator/orchestrator.py"
+    )
+    assert not mod._is_exempted_from_branch_gate("src/mousedroid/safety/monitor.py")  # type: ignore[attr-defined]

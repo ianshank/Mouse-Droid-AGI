@@ -4,6 +4,97 @@ Reverse chronological (newest on top). Set the date with `date +%F`; never copy 
 literal date. Rotation: keep ~10 sessions; move older entries to
 `progress-archive/YYYY-QN.md`. See HARNESS_SPEC.md §11.
 
+## 2026-08-30 — Session 013
+
+**Context.** Continuation of the god-files decomposition (`factory.py` → `factory/`
+19-file package, `orchestrator/orchestrator.py` → 7 mixins) plus a full-repo
+consistency sweep: regression/AQA suite, C4 architecture, ADRs, CHANGELOG, all
+companion docs, and pre-PR validation gates (lint/mypy/tests/hardcoded-values/
+subsystem-boundaries/secret-scan), following CLAUDE.md's Collaboration Directive
+(delegate deep audits to specialized subagents, run them in parallel).
+
+**Four confirmed regressions found and fixed, none by CI — all by this session's own
+follow-up audit:**
+
+1. `scripts/check_subsystem_boundaries.py::_discover_subsystems()` was never updated
+   to exclude the new `factory/` directory (the plan called for this; it silently
+   didn't land). The gate was failing on `RegexInjectionFilter` module-level imports
+   in `factory/__init__.py`/`factory/llm_gateway.py` — the DI composition root is
+   *expected* to import concrete types from every subsystem, not a violation. Fixed
+   with the carve-out + reasoning in the function's own docstring.
+2. **The most significant finding**: `orchestrator.py` still directly defined 7
+   methods (`start`/`_maybe_fire_startup_greeting`/`_start_cloud_subsystems`/
+   `_spawn_slow_background_tasks`/`stop`/`_drain_background_tasks`/
+   `_stop_cloud_subsystems`) duplicating `_lifecycle_mixin.py`'s versions verbatim —
+   an artifact of the prior session's `head -n 889` truncation cutting after these
+   methods' *physical* position in the old file rather than surgically removing only
+   non-`__init__`/`tick` methods. Python's MRO always checks the concrete class's own
+   `__dict__` first, so the duplicates silently won and `_LifecycleMixin`'s copies
+   were unreachable dead code — confirmed via coverage (23% on that file, exactly the
+   shadowed bodies) by the test-engineer subagent, which also flagged that the new
+   class-surface regression test didn't catch it (it only compared mixins against
+   each other, never against the concrete class). Fixed both: removed the 7
+   duplicates, and added `test_concrete_class_defines_only_init_and_tick` so this
+   exact failure mode can't recur silently.
+3. `tests/unit/factory/test_factory.py`'s two cognitive-fallback tests patched
+   `mousedroid.factory.build_cognitive_core` expecting to intercept
+   `build_orchestrator`'s internal call — but `factory/orchestrator.py` binds that
+   name via its own module-level import, a separate reference the facade-level patch
+   never touches ("patch where it's used, not where it's defined" — exactly the risk
+   the original decomposition plan warned about but its own grep audit missed for
+   this one function). Fixed to patch `mousedroid.factory.orchestrator.build_cognitive_core`.
+4. `factory/__init__.py` had all 23 private re-exports listed in `__all__` (deviating
+   from the documented `config/schema/__init__.py` precedent) plus a fully dead
+   `TYPE_CHECKING` block (~40 names — every consumer function moved to its own
+   submodule during the split, so nothing in this file needed them any more). Both
+   fixed; this surfaced a much bigger, separate, genuinely pre-existing defect: every
+   one of the 18 other `factory/*.py` submodules had the *same* wholesale-copied,
+   mostly-unused `TYPE_CHECKING` block (1223 total `F401` errors repo-wide, 100%
+   confined to `factory/`). Fixed via `ruff check --fix` + manual docstring rewraps,
+   verified via `mypy --strict` (zero regressions — nothing genuinely needed was
+   removed) and the full test suite.
+
+**Design decision beyond the original plan**: `src/mousedroid/orchestrator/_state.py`
+— a shared `_OrchestratorState` type-declaration class every mixin now inherits from,
+so mypy --strict resolves cross-mixin `self._foo` access without per-call
+`# type: ignore[attr-defined]`. A first pass without it needed 244 new suppressions
+(repo-wide count 8 → 252, would have forced raising `.claude/workforce.yaml`'s
+`ratchet_budgets.type_ignore` ceiling); this design keeps the count at the original 8.
+See ADR-017 Decision 3 for why a single shared class was chosen over the smaller
+`telemetry/metrics/_registry_*.py` precedent's per-mixin declarations.
+
+**Operator error, caught and recovered cleanly.** Mid-session, a verification command
+(`git checkout <base-branch> -- .` to compare against pre-split state) was run without
+checking `git status`/stashing first, silently reverting every tracked file that
+differed from the base branch and that this session hadn't itself touched (9 files:
+`AGENTS.md`, `CLAUDE.md`, `HARNESS_SPEC.md`, `SKILLS.md`, `docs/CHARTER.md`,
+`ADR-010`, and 3 regression test files) — files newly created this session or already
+under this session's own edits were unaffected (git checkout only overwrites paths
+that exist in the target ref). `git reset --hard` was correctly blocked by the auto
+mode classifier; recovered via targeted `git checkout HEAD -- <path>` per affected
+file after diffing each against `git show HEAD:<path>` to confirm exactly which 9
+needed it, then verified with the full test suite. Lesson already in this file's own
+prior sessions' pattern (git status before anything that touches working-tree state)
+— reinforced, not new.
+
+**Full-repo doc sweep**: 22 stale `factory.py`-file-path references found by the
+doc-reconciler subagent and fixed across `docs/architecture/*.md` (8 C4 diagrams, 2
+ADRs), `CONTRIBUTING.md`, `docs/glossary.md`, `src/mousedroid/hardware/CLAUDE.md`,
+`docs/runbooks/`, `docs/claude/surfaces/`, and 3 `SKILL.md` files — plus a
+`docs/refactor/enterprise-hardening-notes.md` line that was factually backwards (both
+named files *have* since been split). New `docs/architecture/ADR-017-*.md` records the
+full decomposition (layering, rejected alternatives, the `_state.py` design, and both
+confirmed regressions) per ADR-014's template.
+
+**Post-review evidence**: `ruff check`/`ruff format --check` clean across
+`src/ tests/ tools/ scripts/`; `mypy --strict` clean across 412 `src/` files +
+`tools/claude_hooks/`; full `tests/unit tests/property tests/integration` (not
+hardware) — 6213 passed, 60 skipped, 93.47% coverage; `tests/regression/` — 1304
+passed, 12 skipped; smoke (161 passed) + behaviour (17 passed) tiers green;
+`check_subsystem_boundaries.py`/`check_no_hardcoded_values.py`/
+`check_settings_identity.py`/`validate_skill_commands.py`/`validate.py --tier fast`
+all pass; `make hooks` 98.39% coverage.
+
 ## 2026-08-23 — Session 012
 
 **Context.** PR #202 (F-030 doc reconciliation) merged. A stale planning document's

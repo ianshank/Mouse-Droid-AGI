@@ -5,7 +5,7 @@
 
 ## Invariants & Hardware Rules
 
-1. **Factory DI Only**: Hardware drivers are imported solely in `src/mousedroid/factory.py`.
+1. **Factory DI Only**: Hardware drivers are imported solely in `src/mousedroid/factory/hardware.py`.
    Business logic depends only on `@runtime_checkable Protocol` types.
 2. **Two-Level Hardware Gates**:
    - `Settings.mock_hardware: bool` (env `MOUSEDROID_MOCK_HARDWARE`) — Global mock toggle.

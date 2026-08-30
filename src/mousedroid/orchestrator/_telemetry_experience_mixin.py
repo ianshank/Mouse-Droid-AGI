@@ -12,6 +12,7 @@ import torch
 
 from mousedroid.common.async_utils import spawn_tracked
 from mousedroid.logging.setup import get_logger
+from mousedroid.orchestrator._state import _OrchestratorState
 
 if TYPE_CHECKING:
     from mousedroid.safety.context import SafetyContext
@@ -20,7 +21,7 @@ if TYPE_CHECKING:
 _log = get_logger(__name__)
 
 
-class _TelemetryExperienceMixin:
+class _TelemetryExperienceMixin(_OrchestratorState):
     """Telemetry publishing and experience logging for the orchestrator."""
 
     async def _publish_telemetry(
@@ -38,7 +39,7 @@ class _TelemetryExperienceMixin:
             safety_ctx: Current safety context.
             loop_time_ms: Control loop iteration time (ms).
         """
-        if self._telemetry_publisher is None and self._cloud_sink is None:  # type: ignore[attr-defined]
+        if self._telemetry_publisher is None and self._cloud_sink is None:
             return
 
         try:
@@ -48,18 +49,18 @@ class _TelemetryExperienceMixin:
                 observation,
                 safety_ctx,
                 loop_time_ms,
-                self._tick_count,  # type: ignore[attr-defined]
-                vision_feature_max_samples=self._cfg.telemetry.vision_feature_max_samples,  # type: ignore[attr-defined]
-                liveness_tracker=self._liveness_tracker,  # type: ignore[attr-defined]
-                now_s=self._clock.monotonic(),  # type: ignore[attr-defined]
+                self._tick_count,
+                vision_feature_max_samples=self._cfg.telemetry.vision_feature_max_samples,
+                liveness_tracker=self._liveness_tracker,
+                now_s=self._clock.monotonic(),
             )
-            if self._telemetry_publisher is not None:  # type: ignore[attr-defined]
+            if self._telemetry_publisher is not None:
                 await self._telemetry_publisher.publish(frame)
                 # PR #4: also publish the latest raw LiDAR scan to the
                 # streaming channel when both the publisher and the
                 # sensor manager expose them.
                 await self._publish_raw_lidar()
-            if self._cloud_sink is not None:  # type: ignore[attr-defined]
+            if self._cloud_sink is not None:
                 await self._cloud_sink.publish_telemetry(frame.to_dict())
         except Exception:
             _log.debug("telemetry_publish_failed", exc_info=True)
@@ -77,10 +78,10 @@ class _TelemetryExperienceMixin:
         Exceptions are swallowed and logged at DEBUG so a publisher
         backpressure event never crashes the 30 Hz control loop.
         """
-        publish_raw = getattr(self._telemetry_publisher, "publish_lidar_raw", None)  # type: ignore[attr-defined]
+        publish_raw = getattr(self._telemetry_publisher, "publish_lidar_raw", None)
         if publish_raw is None:
             return
-        scan_source = getattr(self._sensor_manager, "last_lidar_scan", None)  # type: ignore[attr-defined]
+        scan_source = getattr(self._sensor_manager, "last_lidar_scan", None)
         if scan_source is None:
             return
         try:
@@ -110,7 +111,7 @@ class _TelemetryExperienceMixin:
             observation: Current sensor observation.
             action: Action tensor just executed.
         """
-        if self._memory_tier is None and self._experience_logger is None:  # type: ignore[attr-defined]
+        if self._memory_tier is None and self._experience_logger is None:
             return
 
         from mousedroid.experience.record import MouseDroidExperienceRecord
@@ -125,29 +126,29 @@ class _TelemetryExperienceMixin:
 
         # Compute intrinsic reward for surprise-based prioritization
         surprise = 0.0
-        if self._curiosity_module is not None:  # type: ignore[attr-defined]
+        if self._curiosity_module is not None:
             with torch.no_grad():
-                s = self._h.flatten().unsqueeze(0)  # type: ignore[attr-defined]
+                s = self._h.flatten().unsqueeze(0)
                 a = action.unsqueeze(0) if action.dim() == 1 else action
-                s_next = self._z.flatten().unsqueeze(0)  # type: ignore[attr-defined]
-                intrinsic = self._curiosity_module.intrinsic_reward(s, a, s_next)  # type: ignore[attr-defined]
+                s_next = self._z.flatten().unsqueeze(0)
+                intrinsic = self._curiosity_module.intrinsic_reward(s, a, s_next)
                 surprise = float(intrinsic.item())
         record.surprise = surprise
 
-        if self._memory_tier is not None:  # type: ignore[attr-defined]
-            min_priority = self._cfg.memory.min_episodic_priority  # type: ignore[attr-defined]
-            self._memory_tier.episodic.push(record, priority=max(surprise, min_priority))  # type: ignore[attr-defined]
-            latent = self._h.detach().clone()  # type: ignore[attr-defined]
-            self._memory_tier.working.push(latent)  # type: ignore[attr-defined]
+        if self._memory_tier is not None:
+            min_priority = self._cfg.memory.min_episodic_priority
+            self._memory_tier.episodic.push(record, priority=max(surprise, min_priority))
+            latent = self._h.detach().clone()
+            self._memory_tier.working.push(latent)
 
-        if self._experience_logger is not None:  # type: ignore[attr-defined]
+        if self._experience_logger is not None:
             record.reward = surprise
-            self._experience_logger.log(record)  # type: ignore[attr-defined]
+            self._experience_logger.log(record)
 
-        if self._cloud_sink is not None:  # type: ignore[attr-defined]
+        if self._cloud_sink is not None:
             spawn_tracked(
-                self._cloud_publish_tasks,  # type: ignore[attr-defined]
-                self._cloud_sink.publish_experience(record),  # type: ignore[attr-defined]
+                self._cloud_publish_tasks,
+                self._cloud_sink.publish_experience(record),
                 name="cloud_publish_experience",
             )
 
@@ -159,18 +160,18 @@ class _TelemetryExperienceMixin:
         """
         scores: dict[str, float] = {"intrinsic": 0.0, "epistemic": 0.0}
 
-        if self._curiosity_module is not None:  # type: ignore[attr-defined]
+        if self._curiosity_module is not None:
             with torch.no_grad():
-                s = self._h.flatten().unsqueeze(0)  # type: ignore[attr-defined]
-                a = self._prev_action  # type: ignore[attr-defined]
-                s_next = self._z.flatten().unsqueeze(0)  # type: ignore[attr-defined]
-                intrinsic = self._curiosity_module.intrinsic_reward(s, a, s_next)  # type: ignore[attr-defined]
+                s = self._h.flatten().unsqueeze(0)
+                a = self._prev_action
+                s_next = self._z.flatten().unsqueeze(0)
+                intrinsic = self._curiosity_module.intrinsic_reward(s, a, s_next)
                 scores["intrinsic"] = float(intrinsic.item())
 
-        if self._memory_tier is not None and self._memory_tier.semantic.size > 0:  # type: ignore[attr-defined]
-            query = self._h.detach().cpu().numpy().flatten().astype(np.float32)  # type: ignore[attr-defined]
-            k = self._cfg.memory.semantic_retrieve_k  # type: ignore[attr-defined]
-            results = self._memory_tier.semantic.retrieve(query, k=k)  # type: ignore[attr-defined]
+        if self._memory_tier is not None and self._memory_tier.semantic.size > 0:
+            query = self._h.detach().cpu().numpy().flatten().astype(np.float32)
+            k = self._cfg.memory.semantic_retrieve_k
+            results = self._memory_tier.semantic.retrieve(query, k=k)
             if results:
                 _, distance = results[0]
                 scores["epistemic"] = float(distance)
@@ -203,18 +204,18 @@ class _TelemetryExperienceMixin:
         """
         if not mission_completed:
             return
-        if self._memory_exporter is None or self._memory_tier is None:  # type: ignore[attr-defined]
+        if self._memory_exporter is None or self._memory_tier is None:
             return
-        if self._memory_export_every_n <= 0:  # type: ignore[attr-defined]
+        if self._memory_export_every_n <= 0:
             return
-        if self._tick_count % self._memory_export_every_n != 0:  # type: ignore[attr-defined]
+        if self._tick_count % self._memory_export_every_n != 0:
             return
-        episodic = getattr(self._memory_tier, "episodic", None)  # type: ignore[attr-defined]
+        episodic = getattr(self._memory_tier, "episodic", None)
         if episodic is None:
             return
         try:
             _log.info("memory_export_started", path_known=True)
-            await self._memory_exporter.export(episodic)  # type: ignore[attr-defined]
+            await self._memory_exporter.export(episodic)
         except Exception as exc:
             _log.warning(
                 "memory_export_hook_failed",
@@ -233,7 +234,7 @@ class _TelemetryExperienceMixin:
         """
         if not mission_completed:
             return
-        if self._curiosity_module is None:  # type: ignore[attr-defined]
+        if self._curiosity_module is None:
             return
-        self._curiosity_module.reset_episode()  # type: ignore[attr-defined]
-        _log.info("curiosity_episode_reset", tick=self._tick_count)  # type: ignore[attr-defined]
+        self._curiosity_module.reset_episode()
+        _log.info("curiosity_episode_reset", tick=self._tick_count)

@@ -134,7 +134,7 @@ graph TD
 ```mermaid
 graph TD
     CLI["CLI Entry\nmain.py"]
-    Factory["Factory\nfactory.py\nOnly file that imports concrete types"]
+    Factory["Factory\nfactory/\nOnly package that imports concrete types"]
     Orchestrator["Orchestrator\norchestrator/\nconfig-driven tick cadence\nsense - plan - act"]
     SensorMgr["Sensor Manager\nsensing/\nCamera - LiDAR - Audio - ESP32 encoders"]
     SafetyMon["Safety Monitor\nsafety/\nClearance - Battery - Sensor staleness"]
@@ -286,7 +286,7 @@ graph TD
     TenPillars["scripts/validate_pillar.sh\nTen Pillars campaign dispatcher\npytest + factory probe × 10\nwrites ten_pillars.log"]
     RuntimeValidation["validation/runtime/\nresolve_runtime_config_paths()\nload_runtime_settings()\ncapture_* helpers\nplay_rocky_voice_phrase()"]
     SettingsLoader["config.loader.load_settings\nYAML + env overlay resolution"]
-    Factory["factory.py\nprotocol-based DI"]
+    Factory["factory/\nprotocol-based DI"]
     Camera["JetsonCSICamera\nJetson / GStreamer / V4L2 fallback"]
     Microphone["Microphone / Speaker"]
     Lidar["LD19 driver\nconfig-driven coverage + timeout"]
@@ -365,7 +365,7 @@ graph TD
     PatternA["Pattern A — factory smoke\nsafety/world_model/memory/cognitive/reward/curiosity\nexplicit if x is None: return _fail(...)"]
     PatternB["Pattern B — pytest delegation\ncontinual/meta/scaling/growth\npaths resolved against _REPO_ROOT"]
     RuntimeHelpers["validation/runtime/\nresolve_runtime_config_paths()\ncapture_camera_frame() / collect_lidar_diagnostics()"]
-    FactoryLayer["factory.py — protocol-based DI"]
+    FactoryLayer["factory/ — protocol-based DI"]
     TelemetryServer["TelemetryServer (aiohttp)\n/api/v1/health + /ws/v1/lidar/raw"]
 
     OperatorCLI --> RunPreflight
@@ -442,7 +442,7 @@ offload — reachable from inside `tick()`'s hot path via structlog once
 `gcp.logging.enabled=true`. This is an accepted, explicitly documented risk (not fixed by
 F-032, which only wires the component up) — see `features.yaml`'s F-032 `notes:` field.
 
-**Wiring status, verified against `factory.py` — all five components below are now wired
+**Wiring status, verified against `factory/` — all five components below are now wired
 (F-032).** `CloudTelemetrySink` and `CloudExperienceExporter` have had `build_cloud_*()` factory
 functions threaded into `MouseDroidOrchestrator`'s constructor since before F-032.
 `CloudLoggingSink`, `CloudMetricsExporter`, and `CloudFirestoreSync` were fully implemented with
@@ -531,7 +531,7 @@ graph TD
     SettingsBefore["Settings model_validator(before)\nmigrate_legacy_fields()"]
     Migration["config/migration.py\napply_aliases()\nmigrate_section_*()\nmigrate_group_sections()"]
     SettingsAfter["Pydantic validation\ncanonical Settings object"]
-    App["factory.py + orchestrator runtime"]
+    App["factory/ + orchestrator runtime"]
 
     CI["scripts/ci.sh"]
     Identity["check_settings_identity.py\ncanonical import identity guard"]
@@ -758,7 +758,7 @@ class ESP32CommProtocol(Protocol):
     async def emergency_stop(self) -> None: ...
     async def disconnect(self) -> None: ...
 
-# src/mousedroid/factory.py
+# src/mousedroid/factory/hardware.py
 def build_esp32_driver(cfg: Settings) -> ESP32CommProtocol:
     inner: ESP32CommProtocol
     if cfg.mock_hardware:
