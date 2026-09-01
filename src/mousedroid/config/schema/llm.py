@@ -11,12 +11,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import ConfigDict, Field, SecretStr
 
-from mousedroid.config.schema._primitives import VLABackendLiteral
+from mousedroid.config.schema._primitives import StrictBaseModel, VLABackendLiteral
 
 
-class LLMConfig(BaseModel):
+class LLMConfig(StrictBaseModel):
     """LLM Gateway configuration for NL command interface."""
 
     enabled: bool = Field(True, description="Enable LLM gateway")
@@ -200,7 +200,7 @@ class LLMConfig(BaseModel):
     )
 
 
-class VLAConfig(BaseModel):
+class VLAConfig(StrictBaseModel):
     """Vision-Language-Action policy configuration (Phase 3a).
 
     Default ``backend = "none"`` keeps the VLA branch fully disabled so
@@ -213,7 +213,7 @@ class VLAConfig(BaseModel):
     # ``model_filename`` / ``model_repo_id`` etc. clash with pydantic's
     # default protected ``model_`` namespace; opt out so the warnings do
     # not fire under tests / CI.
-    model_config = {"protected_namespaces": ()}
+    model_config = ConfigDict(protected_namespaces=())
 
     backend: VLABackendLiteral = Field(
         "none",
@@ -300,7 +300,7 @@ class VLAConfig(BaseModel):
     )
 
 
-class MissionParserConfig(BaseModel):
+class MissionParserConfig(StrictBaseModel):
     """NL mission parser configuration for speed and confidence mappings."""
 
     speed_map: dict[str, float] = Field(
@@ -339,7 +339,7 @@ class MissionParserConfig(BaseModel):
     )
 
 
-class MissionReplannerConfig(BaseModel):
+class MissionReplannerConfig(StrictBaseModel):
     """Tier C2.3 — LLM-backed mission replanner adapter configuration.
 
     Tunables for ``LLMGatewayMissionReplanner`` (built by
@@ -372,7 +372,7 @@ class MissionReplannerConfig(BaseModel):
     )
 
 
-class MissionConfig(BaseModel):
+class MissionConfig(StrictBaseModel):
     """Mission lifecycle state-machine configuration (Tier C2 / C2.2 / C2.3).
 
     Drives the ``MissionLifecycle`` state machine that wraps
@@ -467,7 +467,7 @@ class MissionConfig(BaseModel):
     )
 
 
-class LLMReplannerConfig(BaseModel):
+class LLMReplannerConfig(StrictBaseModel):
     """Configuration for the LLM-backed arm replanner.
 
     Disabled by default; when enabled, ``backend`` selects the concrete

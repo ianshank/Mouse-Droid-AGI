@@ -54,7 +54,7 @@ def test_factory_builders_real_hardware_branches() -> None:
     cfg = Settings(
         mock_hardware=False,
         motor=MotorControllerConfig(enabled=True, serial_port="/dev/ttyUSB0"),
-        lidar=LidarConfig(enabled=True, device_path="/dev/ttyUSB1"),
+        lidar=LidarConfig(enabled=True, serial_port="/dev/ttyUSB1"),
         usbc_discovery=USBCDiscoveryConfig(
             enabled=True,
             required_endpoints=[
@@ -86,21 +86,30 @@ def test_factory_builders_disabled_and_no_resolver() -> None:
     cfg_disabled = Settings(
         mock_hardware=False,
         motor=MotorControllerConfig(enabled=False),
-        lidar=LidarConfig(enabled=True, device_path="/dev/ttyUSB1"),
+        lidar=LidarConfig(enabled=True, serial_port="/dev/ttyUSB1"),
     )
     mock_motor = build_motor_controller(cfg_disabled)
     assert isinstance(mock_motor, MotorControllerProtocol)
 
+    # Distinctive, non-default ports: the resolver-override branch above
+    # already proves the resolver path threads ``._port`` through; this
+    # branch must independently prove the *configured* serial_port is what
+    # gets used when no resolver is present — a value equal to the old
+    # broken getattr fallback (or the schema default) would let a
+    # regression to the wrong-field-name bug (factory/autonomous.py) pass
+    # silently, since both happened to equal "/dev/ttyUSB1".
     cfg_no_resolver = Settings(
         mock_hardware=False,
-        motor=MotorControllerConfig(enabled=True, serial_port="/dev/ttyUSB0"),
-        lidar=LidarConfig(enabled=True, device_path="/dev/ttyUSB1"),
+        motor=MotorControllerConfig(enabled=True, serial_port="/dev/ttyACM3"),
+        lidar=LidarConfig(enabled=True, serial_port="/dev/ttyACM7"),
     )
     motor_no_res = build_motor_controller(cfg_no_resolver, resolver=None)
     assert isinstance(motor_no_res, MotorControllerProtocol)
+    assert motor_no_res._port == "/dev/ttyACM3"
 
     lidar_no_res = build_autonomous_lidar(cfg_no_resolver, resolver=None)
     assert isinstance(lidar_no_res, LiDARProtocol)
+    assert lidar_no_res._port == "/dev/ttyACM7"
 
 
 @pytest.mark.asyncio

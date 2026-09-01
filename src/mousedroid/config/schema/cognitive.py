@@ -8,10 +8,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from mousedroid.config.schema._primitives import StrictBaseModel
 
 
-class CognitiveConfig(BaseModel):
+class CognitiveConfig(StrictBaseModel):
     """Cognitive core configuration (Pillar 2 — dual-cadence BDI + constitutional RL)."""
 
     enabled: bool = Field(
@@ -53,7 +55,7 @@ class CognitiveConfig(BaseModel):
     )
 
 
-class MetacognitiveConfig(BaseModel):
+class MetacognitiveConfig(StrictBaseModel):
     """Metacognitive loop configuration (self-monitoring capabilities)."""
 
     n_capabilities: int = Field(
@@ -68,7 +70,7 @@ class MetacognitiveConfig(BaseModel):
     )
 
 
-class CuriosityConfig(BaseModel):
+class CuriosityConfig(StrictBaseModel):
     """Curiosity-driven exploration configuration (Pillar 8)."""
 
     intrinsic_reward_scale: float = Field(
@@ -100,7 +102,7 @@ class CuriosityConfig(BaseModel):
     )
 
 
-class MemoryConfig(BaseModel):
+class MemoryConfig(StrictBaseModel):
     """Layered memory system configuration (Pillar 4)."""
 
     enabled: bool = Field(False, description="Enable memory tier (episodic, semantic, working)")
@@ -125,7 +127,7 @@ class MemoryConfig(BaseModel):
     )
 
 
-class SurpriseConfig(BaseModel):
+class SurpriseConfig(StrictBaseModel):
     """Surprise / anomaly detection configuration."""
 
     ema_alpha: float = Field(0.1, gt=0, le=1, description="EMA smoothing factor")

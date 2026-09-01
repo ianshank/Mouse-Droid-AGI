@@ -11,13 +11,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 
-from mousedroid.config.schema._primitives import _settings_default_factory
+from mousedroid.config.schema._primitives import StrictBaseModel, _settings_default_factory
 from mousedroid.config.schema.misc import CircuitBreakerConfig, RetryConfig
 
 
-class GCPPubSubConfig(BaseModel):
+class GCPPubSubConfig(StrictBaseModel):
     """Google Cloud Pub/Sub configuration for telemetry and experience export."""
 
     enabled: bool = Field(
@@ -63,7 +63,7 @@ class GCPPubSubConfig(BaseModel):
     )
 
 
-class GCPStorageConfig(BaseModel):
+class GCPStorageConfig(StrictBaseModel):
     """Google Cloud Storage configuration for experience archival."""
 
     enabled: bool = Field(
@@ -98,7 +98,7 @@ class GCPStorageConfig(BaseModel):
     )
 
 
-class GCPLoggingConfig(BaseModel):
+class GCPLoggingConfig(StrictBaseModel):
     """Google Cloud Logging sink configuration."""
 
     enabled: bool = Field(
@@ -114,7 +114,7 @@ class GCPLoggingConfig(BaseModel):
     min_level: str = Field("INFO", description="Minimum log level to forward to cloud")
 
 
-class GCPMonitoringConfig(BaseModel):
+class GCPMonitoringConfig(StrictBaseModel):
     """Google Cloud Monitoring configuration for metrics export."""
 
     enabled: bool = Field(
@@ -137,7 +137,7 @@ class GCPMonitoringConfig(BaseModel):
     )
 
 
-class GCPFirestoreConfig(BaseModel):
+class GCPFirestoreConfig(StrictBaseModel):
     """Firestore configuration for episodic memory synchronisation."""
 
     enabled: bool = Field(False, description="Sync episodic memory to Firestore")
@@ -157,7 +157,7 @@ class GCPFirestoreConfig(BaseModel):
     )
 
 
-class GCPTrainingConfig(BaseModel):
+class GCPTrainingConfig(StrictBaseModel):
     """Vertex AI cloud training pipeline configuration."""
 
     training_bucket: str = Field(
@@ -197,7 +197,7 @@ class GCPTrainingConfig(BaseModel):
     )
 
 
-class GCPSimulationConfig(BaseModel):
+class GCPSimulationConfig(StrictBaseModel):
     """GKE parallel simulation configuration for safety validation."""
 
     gke_cluster: str = Field(
@@ -225,7 +225,7 @@ class GCPSimulationConfig(BaseModel):
     )
 
 
-class GCPConfig(BaseModel):
+class GCPConfig(StrictBaseModel):
     """GCP Digital Twin umbrella configuration.
 
     When ``None`` in ``Settings``, all GCP features are disabled and the droid
@@ -339,7 +339,7 @@ class GCPConfig(BaseModel):
 _WORLD_MODEL_DEFAULT_REPO_ID: str = "ianshank/mousedroid-dual-stream-rssm"
 
 
-class WeightUpdatePollConfig(BaseModel):
+class WeightUpdatePollConfig(StrictBaseModel):
     """Configuration for the HuggingFace Hub OTA weight-update poller.
 
     Default ``poll_interval_s = 0.0`` disables the poller entirely so
@@ -500,7 +500,7 @@ class WeightUpdatePollConfig(BaseModel):
         return self
 
 
-class CloudConfig(BaseModel):
+class CloudConfig(StrictBaseModel):
     """Tier C1 cloud retraining loop umbrella configuration.
 
     Owns the OTA weight-update poller block. Orthogonal to :class:`GCPConfig`

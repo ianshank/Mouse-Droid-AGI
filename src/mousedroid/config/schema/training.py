@@ -9,12 +9,12 @@ history drift-reduction knobs, and the top-level ``TrainingConfig``.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
-from mousedroid.config.schema._primitives import _settings_default_factory
+from mousedroid.config.schema._primitives import StrictBaseModel, _settings_default_factory
 
 
-class GPUConfig(BaseModel):
+class GPUConfig(StrictBaseModel):
     """GPU training configuration for Jetson Orin Nano."""
 
     device: str | None = Field(
@@ -38,7 +38,7 @@ class GPUConfig(BaseModel):
     )
 
 
-class TrainingPipelineConfig(BaseModel):
+class TrainingPipelineConfig(StrictBaseModel):
     """GPU pre-training pipeline orchestrator configuration (ADR-005)."""
 
     phases: list[str] = Field(
@@ -87,7 +87,7 @@ class TrainingPipelineConfig(BaseModel):
     )
 
 
-class TrainingGenerationConfig(BaseModel):
+class TrainingGenerationConfig(StrictBaseModel):
     """Synthetic data generation settings for Phase 0."""
 
     log_every_n_episodes: int = Field(
@@ -97,7 +97,7 @@ class TrainingGenerationConfig(BaseModel):
     )
 
 
-class TrainingAnnotationConfig(BaseModel):
+class TrainingAnnotationConfig(StrictBaseModel):
     """Annotation collection and heuristic labeling settings for Phase 0b."""
 
     n_episodes: int = Field(500, gt=0, description="Annotation collection episode count")
@@ -164,7 +164,7 @@ class TrainingAnnotationConfig(BaseModel):
     )
 
 
-class TrainingWarmstartConfig(BaseModel):
+class TrainingWarmstartConfig(StrictBaseModel):
     """Warm-start statistics and UCB tuning settings for Phase 2."""
 
     latent_stats_max_episodes: int = Field(
@@ -184,7 +184,7 @@ class TrainingWarmstartConfig(BaseModel):
     )
 
 
-class TrainingConstitutionalConfig(BaseModel):
+class TrainingConstitutionalConfig(StrictBaseModel):
     """Constitutional RL rollout logging and validation context settings."""
 
     log_every_n_episodes: int = Field(
@@ -209,7 +209,7 @@ class TrainingConstitutionalConfig(BaseModel):
     )
 
 
-class TrainingReplayConfig(BaseModel):
+class TrainingReplayConfig(StrictBaseModel):
     """Replay-ingestion settings for RSSM and activation training flows."""
 
     enabled: bool = Field(
@@ -245,7 +245,7 @@ class TrainingReplayConfig(BaseModel):
     )
 
 
-class ReplayMixerConfig(BaseModel):
+class ReplayMixerConfig(StrictBaseModel):
     """Phase 2 sim/real episode mixer configuration.
 
     Mirrors :class:`mousedroid.training.replay.mixer.MixerConfig` so YAML can
@@ -295,7 +295,7 @@ class ReplayMixerConfig(BaseModel):
     )
 
 
-class DriftTrainingConfig(BaseModel):
+class DriftTrainingConfig(StrictBaseModel):
     """Corrupted-history drift-reduction training knobs (F-023, default-OFF).
 
     Adapts the AlayaWorld corrupted-history training idea to the RSSM: a random
@@ -377,7 +377,7 @@ class DriftTrainingConfig(BaseModel):
     )
 
 
-class TrainingConfig(BaseModel):
+class TrainingConfig(StrictBaseModel):
     """Offline training configuration."""
 
     batch_size: int = Field(32, gt=0, description="Training batch size")

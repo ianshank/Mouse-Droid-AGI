@@ -13,7 +13,6 @@ from mousedroid.constants import (
     DEFAULT_CAMERA_WIDTH,
     DEFAULT_LIDAR_BUFFER_SIZE,
     DEFAULT_LIDAR_MAX_RANGE_M,
-    DEFAULT_MOTOR_BAUDRATE,
 )
 from mousedroid.interfaces.protocols import (
     CameraProtocol,
@@ -62,17 +61,17 @@ def build_motor_controller(
     """
     from mousedroid.hardware.motor_controller import MockMotorController, MotorController
 
-    if cfg.mock_hardware or not getattr(cfg.motor, "enabled", True):
+    if cfg.mock_hardware or not cfg.motor.enabled:
         _log.info("building_mock_motor_controller")
         return MockMotorController(metrics=metrics)
 
-    port = getattr(cfg.motor, "serial_port", "/dev/ttyUSB0")
+    port = cfg.motor.serial_port
     if resolver and cfg.usbc_discovery and cfg.usbc_discovery.enabled:
         resolved = getattr(resolver, "resolve_endpoint", lambda name: None)("esp32")
         if resolved:
             port = resolved
 
-    baud = getattr(cfg.motor, "baudrate", DEFAULT_MOTOR_BAUDRATE)
+    baud = cfg.motor.baudrate
     _log.info("building_real_motor_controller", port=port, baud=baud)
     return MotorController(cfg=cfg.motor, port=port, metrics=metrics)
 
@@ -116,7 +115,7 @@ def build_autonomous_lidar(
         _log.info("building_mock_lidar")
         return MockLiDAR(default_distance=DEFAULT_LIDAR_MAX_RANGE_M)
 
-    port = getattr(cfg.lidar, "device_path", "/dev/ttyUSB1") if cfg.lidar else "/dev/ttyUSB1"
+    port = cfg.lidar.serial_port if cfg.lidar else "/dev/ttyUSB1"
     if resolver and cfg.usbc_discovery and cfg.usbc_discovery.enabled:
         resolved = getattr(resolver, "resolve_endpoint", lambda name: None)("lidar")
         if resolved:

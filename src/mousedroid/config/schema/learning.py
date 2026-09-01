@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 
-from mousedroid.config.schema._primitives import Self
+from mousedroid.config.schema._primitives import Self, StrictBaseModel
 
 
 def _validate_relative_slot_dir(v: str, *, config_name: str) -> str:
@@ -54,7 +54,7 @@ def _validate_relative_slot_dir(v: str, *, config_name: str) -> str:
     return slot
 
 
-class LearningConfig(BaseModel):
+class LearningConfig(StrictBaseModel):
     """Continual learning configuration (Pillar 3)."""
 
     ewc_lambda: float = Field(5000.0, gt=0, description="EWC regularization strength")
@@ -72,7 +72,7 @@ class LearningConfig(BaseModel):
     progressive_enabled: bool = Field(False, description="Enable progressive column growth")
 
 
-class OnDeviceLearningConfig(BaseModel):
+class OnDeviceLearningConfig(StrictBaseModel):
     """On-device incremental-learning configuration (Phase 6).
 
     Lets the rover update its own policy/world-model weights *between* cloud
@@ -226,7 +226,7 @@ class OnDeviceLearningConfig(BaseModel):
         return self
 
 
-class GrowthConfig(BaseModel):
+class GrowthConfig(StrictBaseModel):
     """Growth-pillar knowledge-distillation configuration.
 
     Distils the wired VLA teacher policy into a compact student *between* cloud
@@ -326,7 +326,7 @@ class GrowthConfig(BaseModel):
         return _validate_relative_slot_dir(v, config_name="growth")
 
 
-class OfflineRLConfig(BaseModel):
+class OfflineRLConfig(StrictBaseModel):
     """Offline RL training configuration (CQL / IQL)."""
 
     algorithm: Literal["cql", "iql"] = Field("cql", description="Offline RL algorithm")

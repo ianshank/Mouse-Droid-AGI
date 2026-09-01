@@ -188,6 +188,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="MOUSEDROID_",
         env_nested_delimiter="__",
+        extra="forbid",
     )
 
     platform: PlatformType = Field(
@@ -524,4 +525,41 @@ class Settings(BaseSettings):
                 msg = f"safety.action_min[{idx}] must be < safety.action_max[{idx}]"
                 raise ValueError(msg)
 
+        return self
+
+    @model_validator(mode="after")
+    def openclaw_requires_telemetry_auth(self) -> Self:
+        """Refuse to enable OpenClaw's actuation endpoint without telemetry auth.
+
+        ``POST /api/v1/mission`` dispatches real ``GoalVector`` actuation
+        commands once ``openclaw.enabled=True`` wires it up
+        (``telemetry/server/_lifecycle.py``). That route is gated purely on
+        ``openclaw.enabled`` today, independent of ``telemetry.auth`` — so
+        without either bearer-token auth (``telemetry.auth.auth_enabled``) or
+        the legacy X-API-Key (``telemetry.api_key``) configured, the endpoint
+        is reachable unauthenticated to anyone who can reach the telemetry
+        server. Mirrors the same class of guard MCP's ``bind_external``
+        already enforces via ``_require_token_for_remote``
+        (``config/schema/harness_mcp.py``).
+
+        Returns:
+            The validated config instance.
+
+        Raises:
+            ValueError: If OpenClaw is enabled but neither telemetry auth
+                mechanism is configured.
+        """
+        if self.openclaw is None or not self.openclaw.enabled:
+            return self
+        auth_cfg = self.telemetry.auth
+        bearer_auth_enabled = auth_cfg is not None and auth_cfg.auth_enabled
+        legacy_api_key_set = self.telemetry.api_key is not None
+        if not bearer_auth_enabled and not legacy_api_key_set:
+            msg = (
+                "openclaw.enabled=true requires telemetry auth to be configured "
+                "(telemetry.auth.auth_enabled=true or telemetry.api_key set) — "
+                "the mission-dispatch endpoint must never be reachable "
+                "unauthenticated"
+            )
+            raise ValueError(msg)
         return self

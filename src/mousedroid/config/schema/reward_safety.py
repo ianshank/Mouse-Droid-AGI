@@ -7,12 +7,12 @@ enforcement.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
-from mousedroid.config.schema._primitives import _settings_default_factory
+from mousedroid.config.schema._primitives import StrictBaseModel, _settings_default_factory
 
 
-class VLMProgressConfig(BaseModel):
+class VLMProgressConfig(StrictBaseModel):
     """VLM-derived dense progress reward configuration (Phase 4).
 
     The VLM progress head produces a scalar in ``[0, 1]`` that estimates how
@@ -46,7 +46,7 @@ class VLMProgressConfig(BaseModel):
     )
 
 
-class RewardConfig(BaseModel):
+class RewardConfig(StrictBaseModel):
     """Multi-objective reward configuration (Pillar 6)."""
 
     weight_truthfulness: float = Field(0.4, ge=0, le=1, description="Truth reward weight")
@@ -65,7 +65,7 @@ class RewardConfig(BaseModel):
     )
 
 
-class SafetyProjectorConfig(BaseModel):
+class SafetyProjectorConfig(StrictBaseModel):
     """Geometric safety action projector configuration (Tier C2 / C2.1).
 
     Geometric constraint projection is the right fit for continuous action
@@ -131,7 +131,7 @@ class SafetyProjectorConfig(BaseModel):
     )
 
 
-class SafetyConfig(BaseModel):
+class SafetyConfig(StrictBaseModel):
     """Safety monitor thresholds."""
 
     min_forward_clearance_m: float = Field(0.20, gt=0, description="Min obstacle clearance (m)")
@@ -218,7 +218,7 @@ class SafetyConfig(BaseModel):
     )
 
 
-class ThreeLawsConfig(BaseModel):
+class ThreeLawsConfig(StrictBaseModel):
     """Three Laws of Robotics configuration.
 
     Enforces Asimov's Three Laws with hierarchical priority:

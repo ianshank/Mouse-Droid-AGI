@@ -197,13 +197,13 @@ def _nvme_partition_for(cfg: Settings) -> str:
     """Return the NVMe partition path to feed ``findmnt``.
 
     Schema-driven via ``cfg.experience.nvme_partition`` (added in the
-    PR #104 hardening pass); falls back to the canonical first-partition
-    string for tests that build minimal ``Settings`` instances without
-    overriding the new field.
+    PR #104 hardening pass; defaults to the canonical first-partition
+    string, so a ``Settings`` instance that doesn't override it still
+    gets a sensible value from the schema itself).
     """
-    return str(getattr(cfg.experience, "nvme_partition", "/dev/nvme0n1p1"))
+    return cfg.experience.nvme_partition
 
 
 def _nvme_device_for(cfg: Settings) -> str:
     """Return the NVMe block device path to feed ``smartctl``."""
-    return str(getattr(cfg.experience, "nvme_device", "/dev/nvme0n1"))
+    return cfg.experience.nvme_device

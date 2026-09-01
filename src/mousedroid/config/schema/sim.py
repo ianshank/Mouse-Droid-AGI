@@ -9,10 +9,12 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from mousedroid.config.schema._primitives import StrictBaseModel
 
 
-class RoverInertialConfig(BaseModel):
+class RoverInertialConfig(StrictBaseModel):
     """Mass-property overrides for the MSE-6 shell + 4WD chassis URDF.
 
     Used by the Isaac Lab env stub (and future MuJoCo backend) to update
@@ -34,7 +36,7 @@ class RoverInertialConfig(BaseModel):
     wheel_mass_kg: float = Field(0.06, gt=0, description="Per-wheel mass (kg)")
 
 
-class MujocoSimConfig(BaseModel):
+class MujocoSimConfig(StrictBaseModel):
     """MuJoCo backend parameters (consumed only when ``rover.sim.backend == 'mujoco'``).
 
     Every physics knob is config-driven (invariant #3). ``wheel_slip_default``
@@ -92,7 +94,7 @@ class MujocoSimConfig(BaseModel):
     )
 
 
-class RoverSimConfig(BaseModel):
+class RoverSimConfig(StrictBaseModel):
     """Simulation backend selection and physics timing for rover training."""
 
     backend: Literal["isaac_lab", "mujoco", "mock"] = Field(
@@ -136,7 +138,7 @@ _ROVER_ACTION_DIM_BY_MODE: dict[str, int] = {
 }
 
 
-class RoverActionConfig(BaseModel):
+class RoverActionConfig(StrictBaseModel):
     """Action space configuration for the rover policy."""
 
     mode: Literal["differential", "body_velocity"] = Field(
@@ -165,7 +167,7 @@ class RoverActionConfig(BaseModel):
         return _ROVER_ACTION_DIM_BY_MODE[self.mode]
 
 
-class RoverObservationConfig(BaseModel):
+class RoverObservationConfig(StrictBaseModel):
     """Observation-space toggles for the rover env."""
 
     include_imu: bool = Field(True, description="6-D linear-accel + ang-vel vector")
@@ -197,7 +199,7 @@ class RoverObservationConfig(BaseModel):
         return tuple(keys)
 
 
-class RoverTaskConfig(BaseModel):
+class RoverTaskConfig(StrictBaseModel):
     """Placeholder goal-reach task parameters for the Phase A mock env.
 
     The mock env's reward is a placeholder ``-||pose - goal_xy_m||`` that
@@ -218,7 +220,7 @@ class RoverTaskConfig(BaseModel):
     )
 
 
-class RoverRewardConfig(BaseModel):
+class RoverRewardConfig(StrictBaseModel):
     """Reward weights for the Isaac Lab rover env (Tier C4 — Phase B baseline).
 
     Implements the design documented in ADR-009 (Isaac Lab Phase B). The
@@ -256,7 +258,7 @@ class RoverRewardConfig(BaseModel):
     )
 
 
-class RoverConfig(BaseModel):
+class RoverConfig(StrictBaseModel):
     """Top-level rover sim-to-real configuration (None preserves legacy).
 
     Optional on the root :class:`Settings`. When ``None``, existing YAML

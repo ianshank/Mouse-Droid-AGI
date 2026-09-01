@@ -11,13 +11,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import Field, model_validator
 
-from mousedroid.config.schema._primitives import Self
+from mousedroid.config.schema._primitives import Self, StrictBaseModel
 from mousedroid.config.schema.llm import LLMReplannerConfig
 
 
-class ArmConfig(BaseModel):
+class ArmConfig(StrictBaseModel):
     """Robot arm hardware configuration (SO-ARM100, myCobot, UR5e)."""
 
     urdf_path: Path = Field(
@@ -48,7 +48,7 @@ class ArmConfig(BaseModel):
         return self
 
 
-class ArmSimConfig(BaseModel):
+class ArmSimConfig(StrictBaseModel):
     """MuJoCo simulation configuration for robot arm training."""
 
     scene_path: Path = Field(
@@ -67,7 +67,7 @@ class ArmSimConfig(BaseModel):
     camera_pose_noise_deg: float = Field(10.0, ge=0, description="Camera pose noise (degrees)")
 
 
-class ArmPerceptionConfig(BaseModel):
+class ArmPerceptionConfig(StrictBaseModel):
     """Perception stack configuration for robot arm platform."""
 
     depth_camera_type: Literal["realsense_d435i", "oak_d", "zed2i", "mock"] = Field(
@@ -128,7 +128,7 @@ class ArmPerceptionConfig(BaseModel):
     default_principal_y: float = Field(240.0, gt=0, description="Default principal point Y (px)")
 
 
-class ArmPlanningConfig(BaseModel):
+class ArmPlanningConfig(StrictBaseModel):
     """Symbolic planning configuration for robot arm tasks."""
 
     pddl_domain_path: Path = Field(
@@ -163,7 +163,7 @@ class ArmPlanningConfig(BaseModel):
     )
 
 
-class ArmTrainingConfig(BaseModel):
+class ArmTrainingConfig(StrictBaseModel):
     """RL training configuration for robot arm policies."""
 
     algorithm: Literal["sac", "ppo", "sac_her"] = Field(
@@ -199,7 +199,7 @@ class ArmTrainingConfig(BaseModel):
     )
 
 
-class ArmCurriculumConfig(BaseModel):
+class ArmCurriculumConfig(StrictBaseModel):
     """Curriculum learning configuration for progressive task difficulty."""
 
     enabled: bool = Field(True, description="Enable curriculum learning")
@@ -216,7 +216,7 @@ class ArmCurriculumConfig(BaseModel):
     warm_start: bool = Field(True, description="Warm-start from previous stage weights")
 
 
-class ArmTaskConfig(BaseModel):
+class ArmTaskConfig(StrictBaseModel):
     """Task-specific configuration for robot arm manipulation tasks."""
 
     task_type: Literal["tower_of_hanoi", "laundry_sorting", "pick_place"] = Field(
@@ -255,7 +255,7 @@ class ArmTaskConfig(BaseModel):
         return self
 
 
-class PPOConfig(BaseModel):
+class PPOConfig(StrictBaseModel):
     """Proximal Policy Optimization configuration for constitutional RL."""
 
     clip_epsilon: float = Field(0.2, gt=0, le=1, description="PPO clipping epsilon")

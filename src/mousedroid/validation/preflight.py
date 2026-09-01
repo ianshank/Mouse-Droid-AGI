@@ -290,7 +290,16 @@ async def _check_lidar(cfg: Settings) -> PreflightCheckResult:
         return _fail("lidar", "no scan points captured", time.monotonic() - t0)
 
     worst_coverage = min(d.validation_coverage_deg for d in diagnostics)
-    min_coverage = getattr(cfg.lidar, "min_scan_coverage_deg", 0.0)
+    # cfg.lidar is expected non-None here: collect_lidar_diagnostics returns
+    # [] when cfg.lidar is None, and the empty-diagnostics check above already
+    # returns _fail() in that case. Guard explicitly (not via `assert`, which
+    # is stripped under PYTHONOPTIMIZE=1) rather than let a future change to
+    # that invariant surface as an AttributeError on None.
+    if cfg.lidar is None:
+        return _fail(
+            "lidar", "no lidar config despite non-empty diagnostics", time.monotonic() - t0
+        )
+    min_coverage = cfg.lidar.min_scan_coverage_deg
     if worst_coverage < min_coverage:
         return _warn(
             "lidar",
