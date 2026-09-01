@@ -31,6 +31,7 @@ from mousedroid.config.schema import (
     MemoryConfig,
     Settings,
 )
+from mousedroid.constants import DEFAULT_AUDIO_CHUNK_SIZE, DEFAULT_BATTERY_VOLTAGE
 from mousedroid.learning.ewc import EWCAgent
 from mousedroid.memory.episodic import EpisodicReplay
 from mousedroid.orchestrator.orchestrator import MouseDroidOrchestrator
@@ -41,9 +42,6 @@ from mousedroid.world_model.mcts import MCTSPlanner
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
-
-DEFAULT_BATTERY_VOLTAGE = 12.0
-DEFAULT_AUDIO_CHUNK_SIZE = 1024
 
 
 def _make_observation(cfg: Settings) -> MouseDroidObservationBundle:
