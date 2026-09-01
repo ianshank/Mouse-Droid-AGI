@@ -154,7 +154,16 @@ class TelemetryConfig(StrictBaseModel):
         "json",
         description="WebSocket serialization format",
     )
-    api_key: SecretStr | None = Field(None, description="Optional API key (None=disabled)")
+    api_key: SecretStr | None = Field(
+        None,
+        min_length=1,
+        description=(
+            "Optional API key (None=disabled). An empty string is rejected rather "
+            "than silently accepted as a real key — the legacy X-API-Key middleware "
+            "(telemetry/server/_lifecycle.py) would otherwise treat an empty "
+            "configured key as matching an unauthenticated request's empty header."
+        ),
+    )
     mdns_enabled: bool = Field(True, description="Enable mDNS/Zeroconf discovery")
     mdns_service_name: str = Field(
         "MouseDroid Telemetry",
