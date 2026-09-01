@@ -241,20 +241,25 @@ class OpenAICompatibleLLMGateway:
         ``cfg.query_max_tokens`` so the response is prose rather than the JSON
         GoalVector. Runs OUTSIDE the 30 Hz control loop — operator Q&A only.
 
-        Unlike :meth:`translate_mission` (which now sanitises NL mission
-        text through the injected prompt-injection filter before egress),
-        the operator Q&A path applies no local injection filter — it
-        carries free-text questions, not actuation commands, and mirrors
-        the local llama-cpp gateway which likewise only sanitises the
-        mission-translation path.
+        Applies the prompt-injection filter (when one was injected) BEFORE
+        the query leaves the rover, exactly like :meth:`translate_mission`
+        and mirroring the local llama-cpp gateway's ``_sanitize_command``
+        (``gateway.py:204``), which sanitises both paths — free-text
+        operator questions can smuggle an injection payload to a cloud
+        backend just as easily as mission text can. Backwards-compat: when
+        no filter was injected the raw ``query`` is sent through unchanged.
+        On any sanitiser exception the gateway short-circuits to ``""``
+        WITHOUT touching the upstream LLM (a misbehaving filter must never
+        DoS the host).
 
         Args:
             query: Natural language question. Must be non-empty.
 
         Returns:
             The model's free-text answer, or ``""`` on any failure path
-            (not started / network error / non-200 / malformed body) — the
-            neutral result mirroring the all-zero GoalVector.
+            (not started / network error / non-200 / malformed body /
+            sanitiser failure) — the neutral result mirroring the all-zero
+            GoalVector.
 
         Raises:
             ValueError: If ``query`` is empty.
@@ -262,6 +267,15 @@ class OpenAICompatibleLLMGateway:
         if not query.strip():
             msg = "query must be non-empty"
             raise ValueError(msg)
+        if self._injection_filter is not None:
+            try:
+                query = self._injection_filter.sanitize(query)
+            except Exception as exc:  # boundary catch — never crash orchestrator
+                _log.warning(
+                    "llm_gateway_http_sanitize_failed",
+                    error=f"{type(exc).__name__}:{exc}",
+                )
+                return ""
         content = await self._chat_completion(
             self._cfg.query_system_prompt, query, self._cfg.query_max_tokens
         )
