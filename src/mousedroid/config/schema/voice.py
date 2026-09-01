@@ -8,12 +8,12 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 
-from mousedroid.config.schema._primitives import Self
+from mousedroid.config.schema._primitives import Self, StrictBaseModel
 
 
-class MicrophoneConfig(BaseModel):
+class MicrophoneConfig(StrictBaseModel):
     """USB microphone configuration."""
 
     enabled: bool = Field(True, description="Enable audio capture from this microphone")
@@ -28,7 +28,7 @@ class MicrophoneConfig(BaseModel):
     hop_length: int = Field(256, gt=0, description="Hop length for mel spectrogram")
 
 
-class SpeakerConfig(BaseModel):
+class SpeakerConfig(StrictBaseModel):
     """USB speaker output configuration."""
 
     enabled: bool = Field(True, description="Enable audio playback through this speaker")
@@ -65,7 +65,7 @@ class SpeakerConfig(BaseModel):
     )
 
 
-class VoiceConfig(BaseModel):
+class VoiceConfig(StrictBaseModel):
     """Rocky voice engine configuration."""
 
     enabled: bool = Field(False, description="Enable Rocky voice output")
@@ -238,7 +238,7 @@ class VoiceConfig(BaseModel):
         return mapped if mapped is not None else self.tts_model_path
 
 
-class FaceDisplayConfig(BaseModel):
+class FaceDisplayConfig(StrictBaseModel):
     """SSD1306 OLED face-display configuration.
 
     All thresholds consumed by the affect→expression mapping and the blink

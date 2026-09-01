@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import Field, model_validator
 
-from mousedroid.config.schema._primitives import Self
+from mousedroid.config.schema._primitives import Self, StrictBaseModel
 from mousedroid.constants import (
     DEFAULT_UCB_CANDIDATES as DEFAULT_UCB_CANDIDATES,
 )
@@ -20,7 +20,7 @@ from mousedroid.constants import (
 )
 
 
-class WorldModelConfig(BaseModel):
+class WorldModelConfig(StrictBaseModel):
     """World-model runtime engine selector (Tier B2).
 
     Drives :func:`mousedroid.factory.build_world_model` dispatch. The
@@ -81,7 +81,7 @@ class WorldModelConfig(BaseModel):
     )
 
 
-class WorldModelMemoryConfig(BaseModel):
+class WorldModelMemoryConfig(StrictBaseModel):
     """Bounded-context latent memory for the world model (F-023, default-OFF).
 
     Adapts the AlayaWorld sink-frame + compressed-history pattern to the rover's
@@ -153,7 +153,7 @@ class WorldModelMemoryConfig(BaseModel):
     )
 
 
-class ModelConfig(BaseModel):
+class ModelConfig(StrictBaseModel):
     """Neural network model dimensions."""
 
     vision_dim: int = Field(256, ge=0, description="Vision feature input dim (0=disabled)")
@@ -252,7 +252,7 @@ class ModelConfig(BaseModel):
         return self
 
 
-class MCTSConfig(BaseModel):
+class MCTSConfig(StrictBaseModel):
     """Monte Carlo Tree Search configuration."""
 
     n_simulations_base: int = Field(50, gt=0, description="Base MCTS simulations")
@@ -272,7 +272,7 @@ class MCTSConfig(BaseModel):
     )
 
 
-class DualStreamTrainingConfig(BaseModel):
+class DualStreamTrainingConfig(StrictBaseModel):
     """Dual-stream RSSM training configuration."""
 
     gru_lr: float = Field(3e-4, gt=0, description="GRU stream learning rate")

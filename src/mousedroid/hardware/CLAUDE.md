@@ -20,7 +20,7 @@
 
 ## Key Files
 
-- `camera/` — CSI and USB camera drivers (`jetson_csi.py`, `opencv_camera.py`).
-- `lidar/` — RPLiDAR serial driver.
-- `ultrasonic/` — Ultrasonic distance sensor driver.
+- `camera/` — CSI and USB camera drivers (`jetson_csi.py`, `imx500.py`, `mock_camera.py`).
+- `lidar/` — FHL-LD19 LiDAR serial driver (`ld19_driver.py`, `ld19_protocol.py`, `mock_lidar.py`).
+- `sensors/` — Ultrasonic (HC-SR04) distance sensor driver (`ultrasonic.py`, `mock_ultrasonic.py`).
 - `tests/unit/hardware/` & `tests/hardware/` — Unit and live hardware verification.

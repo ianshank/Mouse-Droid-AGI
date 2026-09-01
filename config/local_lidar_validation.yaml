@@ -19,7 +19,6 @@ telemetry:
   port: 8080
   api_key: null         # no auth for local validation
   publish_hz: 10.0
-  ws_enabled: true
   force_real_server: true  # use the real aiohttp server even in mock mode
 
 metrics:

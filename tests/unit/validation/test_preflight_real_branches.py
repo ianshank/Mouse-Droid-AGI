@@ -16,7 +16,7 @@ import pytest
 import mousedroid.factory as factory
 import mousedroid.validation.preflight as preflight
 import mousedroid.validation.runtime as runtime
-from mousedroid.config.schema import Settings
+from mousedroid.config.schema import LidarConfig, Settings
 from mousedroid.validation.preflight import (
     PreflightStatus,
     _check_camera,
@@ -135,18 +135,42 @@ class TestLidarRealBranch:
     async def test_low_coverage_warns(
         self, real_cfg: Settings, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        floor = getattr(real_cfg.lidar, "min_scan_coverage_deg", 0.0)
-        if floor <= 0.0:
-            pytest.skip("config has no positive coverage floor to undershoot")
+        # Production guarantees cfg.lidar is non-None by the time _check_lidar
+        # reaches the min_scan_coverage_deg read (collect_lidar_diagnostics
+        # returns [] and _check_lidar fails before that point otherwise) —
+        # match that invariant here instead of leaving cfg.lidar at its
+        # fixture default of None, which previously made this branch always
+        # skip (floor silently defaulted to 0.0 and never triggered a WARN).
+        real_cfg.lidar = LidarConfig()
+        floor = real_cfg.lidar.min_scan_coverage_deg
         result = await self._run(real_cfg, monkeypatch, [_diag(100, floor / 2)])
         assert result.status is PreflightStatus.WARN
 
     async def test_healthy_scan_ok(
         self, real_cfg: Settings, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        real_cfg.lidar = LidarConfig()
         result = await self._run(real_cfg, monkeypatch, [_diag(450, 360.0), _diag(440, 359.0)])
         assert result.status is PreflightStatus.OK
         assert "scans=2" in result.detail
+
+    async def test_none_lidar_config_despite_nonempty_diagnostics_fails_loudly(
+        self, real_cfg: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Covers the defensive `cfg.lidar is None` guard directly.
+
+        Not reachable in production (the caller chain already guarantees
+        ``cfg.lidar`` is non-``None`` whenever diagnostics come back
+        non-empty), but the monkeypatched ``collect_lidar_diagnostics`` in
+        this test class bypasses that guarantee entirely — exactly the gap
+        that made the equivalent ``getattr(..., 0.0)`` fallback invisible
+        before. ``real_cfg.lidar`` is left at its fixture default (``None``)
+        on purpose.
+        """
+        assert real_cfg.lidar is None
+        result = await self._run(real_cfg, monkeypatch, [_diag(450, 360.0)])
+        assert result.status is PreflightStatus.FAIL
+        assert "no lidar config" in result.detail
 
 
 class TestEsp32RealBranch:

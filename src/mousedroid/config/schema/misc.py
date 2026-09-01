@@ -10,12 +10,12 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 
-from mousedroid.config.schema._primitives import RangeF
+from mousedroid.config.schema._primitives import RangeF, StrictBaseModel
 
 
-class DomainRandomizationConfig(BaseModel):
+class DomainRandomizationConfig(StrictBaseModel):
     """Per-episode randomization for sim-to-real RSSM pretraining (Phase 1).
 
     All ranges are configurable so production / mock / mission-specific YAMLs
@@ -69,7 +69,7 @@ class DomainRandomizationConfig(BaseModel):
     feature_noise_std: RangeF = Field(default_factory=lambda: RangeF(low=0.0, high=0.02))
 
 
-class ExperienceConfig(BaseModel):
+class ExperienceConfig(StrictBaseModel):
     """LMDB experience storage configuration."""
 
     path: str = Field("/home/jetson/mousedroid_experience", description="LMDB storage path")
@@ -126,7 +126,7 @@ class ExperienceConfig(BaseModel):
     )
 
 
-class CircuitBreakerConfig(BaseModel):
+class CircuitBreakerConfig(StrictBaseModel):
     """Circuit breaker configuration for fault tolerance."""
 
     failure_threshold: int = Field(5, gt=0, description="Failures before opening circuit")
@@ -134,7 +134,7 @@ class CircuitBreakerConfig(BaseModel):
     half_open_max_calls: int = Field(3, gt=0, description="Max calls in half-open state")
 
 
-class RetryConfig(BaseModel):
+class RetryConfig(StrictBaseModel):
     """Retry policy configuration."""
 
     max_attempts: int = Field(3, gt=0, description="Maximum retry attempts")
@@ -149,7 +149,7 @@ class RetryConfig(BaseModel):
     )
 
 
-class RobotConfig(BaseModel):
+class RobotConfig(StrictBaseModel):
     """Physical robot chassis parameters (Wave Rover)."""
 
     wheel_base_m: float = Field(0.20, gt=0, description="Wheelbase length (m)")
@@ -162,14 +162,14 @@ class RobotConfig(BaseModel):
     )
 
 
-class LoggingConfig(BaseModel):
+class LoggingConfig(StrictBaseModel):
     """Structured logging configuration."""
 
     level: str = Field("INFO", description="Log level")
     format: Literal["json", "console"] = Field("json", description="Output format")
 
 
-class LoopConfig(BaseModel):
+class LoopConfig(StrictBaseModel):
     """Main loop timing configuration."""
 
     perception_hz: float = Field(30.0, gt=0, description="Vision capture rate (Hz)")
@@ -271,7 +271,7 @@ class LoopConfig(BaseModel):
     )
 
 
-class GreetingConfig(BaseModel):
+class GreetingConfig(StrictBaseModel):
     """Operator-tools: MSE-6 spoken greeting subsystem (``scripts/greet_intro.py``).
 
     Drives a one-shot named greeting through the existing
@@ -415,7 +415,7 @@ class GreetingConfig(BaseModel):
         return self
 
 
-class BaselinesConfig(BaseModel):
+class BaselinesConfig(StrictBaseModel):
     """Hardware baselines configuration for NemoClaw/OpenShell integration (F-027)."""
 
     max_memory_query_latency_ms: float = Field(

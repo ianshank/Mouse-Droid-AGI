@@ -18,5 +18,5 @@
 
 - `rssm.py` — Recurrent State Space Model transition and observation dynamics.
 - `mcts.py` — Latent MCTS planner.
-- `onnx_engine.py` — ONNX Runtime / TensorRT execution wrapper.
+- `onnx_io.py`, `dual_stream_rssm_onnx.py` — ONNX Runtime / TensorRT export and execution wrapper.
 - `tests/unit/world_model/` — Subsystem unit tests.

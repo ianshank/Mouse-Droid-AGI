@@ -73,7 +73,7 @@ def load_runtime_settings(config_paths: Sequence[Path | str] | None = None) -> S
 
 def _subprocess_timeout_s(cfg: Settings) -> float:
     """Return the per-subprocess timeout (seconds) for the verify_* probes."""
-    return float(getattr(cfg.experience, "diagnostics_subprocess_timeout_s", 10.0))
+    return cfg.experience.diagnostics_subprocess_timeout_s
 
 
 def _collect_configured_runtime_paths(cfg: Settings) -> dict[str, str]:

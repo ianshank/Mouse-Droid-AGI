@@ -10,12 +10,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Final, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import Field, model_validator
 
-from mousedroid.config.schema._primitives import ESP32CommandSetLiteral, Self
+from mousedroid.config.schema._primitives import ESP32CommandSetLiteral, Self, StrictBaseModel
 
 
-class CameraConfig(BaseModel):
+class CameraConfig(StrictBaseModel):
     """Raspberry Pi AI Camera (IMX500) configuration."""
 
     resolution_width: int = Field(640, gt=0, description="Capture width (px)")
@@ -93,7 +93,7 @@ its only consumer is the :class:`ESP32Config` after-validator below, and a
 config→comms import would invert the layering."""
 
 
-class ESP32Config(BaseModel):
+class ESP32Config(StrictBaseModel):
     """ESP32 communication configuration for Wave Rover motor control."""
 
     enabled: bool = Field(
@@ -358,7 +358,7 @@ class ESP32Config(BaseModel):
             )
 
 
-class LidarConfig(BaseModel):
+class LidarConfig(StrictBaseModel):
     """FHL-LD19 2D LiDAR configuration."""
 
     enabled: bool = Field(True, description="Enable LiDAR sensor")
@@ -414,7 +414,7 @@ class LidarConfig(BaseModel):
         return self
 
 
-class UltrasonicConfig(BaseModel):
+class UltrasonicConfig(StrictBaseModel):
     """HC-SR04 ultrasonic distance sensor configuration."""
 
     trigger_pin: int = Field(..., description="GPIO trigger pin (BCM numbering)")
@@ -433,7 +433,7 @@ class UltrasonicConfig(BaseModel):
         return self
 
 
-class HailoConfig(BaseModel):
+class HailoConfig(StrictBaseModel):
     """Hailo-8 neural accelerator configuration.
 
     The Hailo-8 is a 26 TOPS INT8 M.2 accelerator that offloads perception
@@ -484,7 +484,7 @@ class HailoConfig(BaseModel):
     )
 
 
-class JetsonConfig(BaseModel):
+class JetsonConfig(StrictBaseModel):
     """Nvidia Jetson Orin Nano hardware configuration."""
 
     tensorrt_enabled: bool = Field(True, description="Enable TensorRT optimization")
@@ -515,7 +515,7 @@ class JetsonConfig(BaseModel):
     )
 
 
-class HealthConfig(BaseModel):
+class HealthConfig(StrictBaseModel):
     """Health monitoring configuration."""
 
     check_interval_s: float = Field(5.0, gt=0, description="Health check interval (s)")
@@ -524,7 +524,7 @@ class HealthConfig(BaseModel):
     memory_warn_pct: float = Field(85.0, gt=0, le=100, description="Memory warning threshold (%)")
 
 
-class USBCEndpointSpec(BaseModel):
+class USBCEndpointSpec(StrictBaseModel):
     """A single USB-C endpoint the smoke gate expects to find under by-id."""
 
     name: str = Field(..., min_length=1, description="Logical role, e.g. rover_esp32")
@@ -539,7 +539,7 @@ class USBCEndpointSpec(BaseModel):
     )
 
 
-class USBCDiscoveryConfig(BaseModel):
+class USBCDiscoveryConfig(StrictBaseModel):
     """Config-driven enumeration of USB-C endpoints required for smoke."""
 
     enabled: bool = Field(
@@ -573,7 +573,7 @@ class USBCDiscoveryConfig(BaseModel):
         return self
 
 
-class HostEnvConfig(BaseModel):
+class HostEnvConfig(StrictBaseModel):
     """Host env-file durability check (F-017, WS-3.1).
 
     Drives the WARN-only ``host_env_keys`` preflight check: the deployed
@@ -603,7 +603,7 @@ class HostEnvConfig(BaseModel):
     )
 
 
-class MotorLimitsConfig(BaseModel):
+class MotorLimitsConfig(StrictBaseModel):
     """Physical safety limits for rover drive motors."""
 
     max_linear_velocity: float = Field(
@@ -626,7 +626,7 @@ class MotorLimitsConfig(BaseModel):
     )
 
 
-class MotorControllerConfig(BaseModel):
+class MotorControllerConfig(StrictBaseModel):
     """Configuration for generic async motor controller drivers."""
 
     enabled: bool = Field(

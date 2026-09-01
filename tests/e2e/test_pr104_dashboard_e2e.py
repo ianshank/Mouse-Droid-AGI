@@ -239,7 +239,9 @@ def test_dashboard_settings_overlay_loads_clean() -> None:
     cfg = Settings.model_validate(
         {
             "mock_hardware": False,
-            "ultrasonic": {"enabled": True, "trigger_pin": 23, "echo_pin": 24},
+            # UltrasonicConfig has no "enabled" field — presence of
+            # cfg.ultrasonic (non-None) is what wires it in.
+            "ultrasonic": {"trigger_pin": 23, "echo_pin": 24},
             "esp32": {"enabled": False},
             "camera": {
                 "resolution_width": 640,

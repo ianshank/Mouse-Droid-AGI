@@ -19,7 +19,11 @@
 
 ## Key Files
 
-- `server.py` — REST and WebSocket server.
-- `prometheus.py` — Prometheus text format renderer.
-- `metrics.py` — In-memory lock-free `MetricsRegistry`.
+- `server/` — REST and WebSocket server (`_lifecycle.py`, `_rest_handlers.py`,
+  `_ws_handlers.py`, `_state.py`, `_models.py`, `_protocol.py` — split from a
+  monolithic `server.py` per ADR-017).
+- `metrics/` — In-memory lock-free `MetricsRegistry` and the Prometheus text
+  format renderer (`registry.py`, `primitives.py`, plus one
+  `_registry_<area>.py` mixin per metric family — split from a monolithic
+  `metrics.py` per the same ADR).
 - `tests/unit/telemetry/` & `tests/e2e/test_telemetry_server.py` — Test suites.

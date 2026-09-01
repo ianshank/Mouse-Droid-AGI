@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hmac
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -503,7 +504,7 @@ class _LifecycleMixin(_TelemetryServerState):
                 else:
                     key = request.headers.get("X-API-Key", "")
 
-                if key != api_key:
+                if not hmac.compare_digest(key, api_key):
                     raise web.HTTPUnauthorized(text="Invalid or missing API key")
 
                 resp: web.StreamResponse = await handler(request)

@@ -17,5 +17,6 @@
 
 - `ewc.py` — Elastic Weight Consolidation regularization.
 - `progressive.py` — Progressive neural network column adapter.
-- `replay.py` — Bounded replay buffer.
+- `offline_rl.py` — CQL/IQL offline-RL trainers.
+- `on_device/` — On-device incremental learning (bounded replay, seed states, RSSM refinement).
 - `tests/unit/learning/` — Unit tests for continual learning modules.

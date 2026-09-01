@@ -8,10 +8,12 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator
+
+from mousedroid.config.schema._primitives import StrictBaseModel
 
 
-class TelemetryAuthConfig(BaseModel):
+class TelemetryAuthConfig(StrictBaseModel):
     """Bearer token authentication configuration for the telemetry server.
 
     When enabled, requires a valid ``Authorization: Bearer <token>`` header
@@ -74,7 +76,7 @@ class TelemetryAuthConfig(BaseModel):
         return paths
 
 
-class TelemetryConfig(BaseModel):
+class TelemetryConfig(StrictBaseModel):
     """WiFi/Ethernet telemetry server configuration for remote monitoring.
 
     When enabled, exposes REST and WebSocket endpoints for real-time
@@ -282,7 +284,7 @@ class TelemetryConfig(BaseModel):
     )
 
 
-class MetricsConfig(BaseModel):
+class MetricsConfig(StrictBaseModel):
     """Prometheus-compatible metrics export configuration.
 
     Controls metrics endpoint enablement, naming, and scrape path.  All
@@ -507,7 +509,7 @@ class MetricsConfig(BaseModel):
 _EPHEMERAL_SQLITE_URIS: frozenset[str] = frozenset({"sqlite://", "sqlite:///"})
 
 
-class ExperimentLoggerConfig(BaseModel):
+class ExperimentLoggerConfig(StrictBaseModel):
     """Experiment-logger configuration for training runs (per-step + per-phase metrics).
 
     Wired into :class:`PipelineOrchestrator` and :class:`OfflineRLTrainer`
@@ -637,7 +639,7 @@ class ExperimentLoggerConfig(BaseModel):
     )
 
 
-class ObservabilityConfig(BaseModel):
+class ObservabilityConfig(StrictBaseModel):
     """Top-level observability configuration for the training stack.
 
     Currently contains the experiment-logger sub-config; future fields

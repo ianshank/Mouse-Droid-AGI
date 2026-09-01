@@ -86,13 +86,7 @@ class AutonomousOrchestrator:
 
             # 2. Safety Interlock: Proximity Obstacle Check
             min_distance_threshold = (
-                getattr(
-                    self._cfg.lidar,
-                    "min_range_m",
-                    getattr(self._cfg.lidar, "min_distance_m", DEFAULT_LIDAR_MIN_RANGE_M),
-                )
-                if self._cfg.lidar
-                else DEFAULT_LIDAR_MIN_RANGE_M
+                self._cfg.lidar.min_range_m if self._cfg.lidar else DEFAULT_LIDAR_MIN_RANGE_M
             )
             min_obstacle_dist = min(scan) if scan else float("inf")
 

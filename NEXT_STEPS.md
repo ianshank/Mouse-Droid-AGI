@@ -82,6 +82,11 @@ The legacy v0.3.0 execution-plan phase numbering lives only in
     normally instead of riding the prefix match for free. Whichever is chosen, this now needs to
     cover all six existing prefix entries consistently, not just the two ADR-017 added — a partial,
     inconsistent fix (explicit list for two, prefix match for four) would be its own confusion.
+    **Scope, measured directly (2026-09-01):** the six prefixes total ~21,538 of ~71,319 lines in
+    `src/mousedroid` — **≈30% of the entire codebase**, permanently exempt from the *changed-line*
+    branch-coverage gate (the separate repo-wide `make test --cov-fail-under=90` aggregate gate is
+    unaffected). Not "30% of the codebase is untested" — it is "30% of the codebase can add an
+    untested branch on a future diff without the gate noticing."
 20. **[Testing — P3] Two structural test gaps found by an edge-case audit of the ADR-017 mixin split,
     both currently latent (no live trigger today).** (a) `tests/unit/factory/test_facade_completeness.py`'s
     `_public_top_level_defs` only walks `ast.Module.body` (true top-level), so a public `def`/`class`
@@ -96,16 +101,20 @@ The legacy v0.3.0 execution-plan phase numbering lives only in
     matched by `check_branch_coverage.py`'s `_ALLOWED_DIR_PREFIXES` is on an explicit per-prefix
     allowlist, catching a future underscore-prefixed file riding an exemption nobody reviewed for it
     (see item 19).
-
----
-
-## Current Baseline (one-screen)
-
-- **Hardened Autonomous Architecture (2026)** — Factory-first DI (`build_autonomous_camera`, `build_autonomous_lidar`, `build_autonomous_metrics_registry`, `build_motor_controller`, `build_autonomous_orchestrator`), 30 Hz loop with sensor preflight, jitter observability, and cancellation e-stop.
-- **Deliberative brain (Claude gateway) LIVE on rover** — Claude-haiku primary + Phi-3-mini fallback (PR #107/#111) with pre-egress prompt-injection filtering.
-- **Active production scope**: camera + LiDAR + USB audio + ESP32 on Jetson.
-- **7-Tier Test Pyramid & Workforce Governance**: 56 automated tests across Unit, Property, Integration, Functional, E2E, User Journey, Security Fuzzing, Smoke, Regression (100% PASS), 7 specialized subagents (`.claude/agents/`), and 3 reusable skills.
-- **Ten Pillars campaign**: 20/20 PASS on Jetson Orin Nano (2026-04-26). Landed-work history in `CHANGELOG.md`.
+21. **[Testing — P2] `tests/functional/` + `tests/user_journey/` (blocking CI tiers since F-028)
+    exercise the parked `AutonomousOrchestrator`, not production `MouseDroidOrchestrator` — needs a
+    design decision, not a mechanical fix.** Both call `factory.build_autonomous_orchestrator`
+    (`orchestrator/autonomous.py::AutonomousOrchestrator`, zero production callers per
+    `ADR-016-autonomous-orchestrator-disposition.md`; `main.py` uses `build_orchestrator` →
+    `MouseDroidOrchestrator`). So the tiers meant to prove "a real operator mission works end to end"
+    currently prove that for a shelved code path. Pick one: (a) add equivalent coverage against
+    `MouseDroidOrchestrator` and keep these as explicitly-labelled parked-path tests, or (b) retire
+    them when `AutonomousOrchestrator` is finally deleted. `tests/security/`'s 2 files are correctly
+    narrow (secret handling covered at unit/regression tier elsewhere) — not a hidden gap; their
+    adversarial-bypass depth is the separate, already-tracked item below.
+22. **[Docs — P4, blocked by F-008] `arm/CLAUDE.md` still cites `mock_arm.py`** (real:
+    `hardware/mock_arm_driver.py`); found during the same sweep that fixed 7 sibling `CLAUDE.md`
+    files, but `freeze_gate.py` blocks `arm/**` writes while F-008 is `todo` — revisit once it lands.
 
 ---
 

@@ -10,6 +10,7 @@ passthrough.
 
 from __future__ import annotations
 
+import hmac
 import os
 from typing import TYPE_CHECKING, Any
 
@@ -88,7 +89,7 @@ def build_bearer_auth_middleware(
             # WebSocket clients and browser navigations may pass token as query param.
             supplied_token = request.query.get("token", "")
 
-        if not token or supplied_token != token:
+        if not token or not hmac.compare_digest(supplied_token, token):
             reason = "missing_token" if not supplied_token else "wrong_token"
             _log.warning(
                 "telemetry_auth_rejected",

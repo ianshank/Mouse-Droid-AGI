@@ -1,6 +1,6 @@
 ---
 name: test-tier-mirror
-description: Place new tests in the right tier of the nine-tier mirror, with the correct filename, skip gate, and marker for that tier
+description: Place new tests in the right tier of the twelve-tier mirror, with the correct filename, skip gate, and marker for that tier
 status: active
 ---
 
@@ -13,7 +13,7 @@ run it.
 Use this whenever a change adds behaviour that needs coverage, and when a review
 asks "is this tested at the right level?".
 
-## The nine tiers
+## The twelve tiers
 
 | Tier | Directory | Add a test here when |
 |---|---|---|
@@ -26,9 +26,16 @@ asks "is this tested at the right level?".
 | Performance | `tests/performance/` | a latency or throughput budget |
 | Sanity | `tests/smoke/` (`*_sanity.py`) | sub-second import + parse smoke |
 | Hardware | `tests/hardware/` | needs the real rover; `@pytest.mark.hardware` |
+| Functional | `tests/functional/` | a multi-step operator workflow through the real factory-built stack, no UI |
+| User Journey | `tests/user_journey/` | an end-to-end scenario narrated from the operator's point of view |
+| Security | `tests/security/` | an adversarial input / injection / auth-bypass attempt |
 
 Property and Performance are part of the mirror, not optional extras — both run
-in `scripts/ci.sh`.
+in `scripts/ci.sh`. Functional, User Journey, and Security ran in no CI path at
+all until F-028 closed that gap (`.github/workflows/ci.yml`'s `test` job, the
+"Run functional + user-journey + security tiers" step) — they're blocking, not
+advisory, and gated by directory alone (no dedicated pytest marker, unlike
+`hardware`).
 
 ## Choosing the tier
 

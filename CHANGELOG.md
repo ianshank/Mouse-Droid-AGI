@@ -1652,6 +1652,31 @@ the critical path; none of this blocks them.
   overview + llm-gateway, both Jetson runbooks, CLAUDE.md, SKILLS.md,
   `.gitignore`/`.dockerignore`, and a new `test_runbooks_structure.py` pin.
 
+### Historical record — reconciled from NEXT_STEPS.md (2026-09-01, tech-debt audit)
+
+NEXT_STEPS.md's "Current Baseline (one-screen)" section had drifted back into
+changelog territory — entirely landed content, violating the file's own
+"forward-looking priorities only" rule (line 3). Preserved here
+verbatim-in-spirit; NEXT_STEPS.md now carries forward-looking items only.
+
+- **Hardened Autonomous Architecture** — Factory-first DI
+  (`build_autonomous_camera`, `build_autonomous_lidar`,
+  `build_autonomous_metrics_registry`, `build_motor_controller`,
+  `build_autonomous_orchestrator`), 30 Hz loop with sensor preflight, jitter
+  observability, and cancellation e-stop.
+- **Deliberative brain (Claude gateway) LIVE on rover** — Claude-haiku primary
+  + Phi-3-mini fallback (PR #107/#111) with pre-egress prompt-injection
+  filtering.
+- **Active production scope**: camera + LiDAR + USB audio + ESP32 on Jetson.
+- **Test-pyramid discipline in place** — Unit, Property, Integration,
+  Functional, E2E, User Journey, Security, Smoke, Regression tiers, 7
+  specialized subagents (`.claude/agents/`), and reusable skills. (The
+  snapshot's own "7-Tier" / "56 tests" figures were already stale by the time
+  this record was reconciled — see `.claude/skills/test-tier-mirror/SKILL.md`
+  for the current, authoritative tier count and routing rules rather than a
+  point-in-time total here.)
+- **Ten Pillars campaign**: 20/20 PASS on Jetson Orin Nano (2026-04-26).
+
 ### Historical record — reconciled from NEXT_STEPS.md (2026-07-03, F-016)
 
 NEXT_STEPS.md had re-drifted into changelog territory (37 KB, 72 ✅ marks).

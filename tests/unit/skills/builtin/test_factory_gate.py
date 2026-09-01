@@ -9,9 +9,15 @@ from mousedroid.factory import build_builtin_skills, build_skill_registry
 
 
 def _settings(*, openclaw: OpenClawConfig | None) -> Settings:
-    return Settings.model_validate(
-        {"mock_hardware": True, "openclaw": openclaw.model_dump() if openclaw else None}
-    )
+    # openclaw.enabled=true requires telemetry auth (Settings.openclaw_requires_telemetry_auth);
+    # the legacy X-API-Key satisfies that guard without changing test intent.
+    data: dict[str, object] = {
+        "mock_hardware": True,
+        "openclaw": openclaw.model_dump() if openclaw else None,
+    }
+    if openclaw is not None and openclaw.enabled:
+        data["telemetry"] = {"api_key": "test-key"}
+    return Settings.model_validate(data)
 
 
 def test_returns_empty_tuple_when_openclaw_disabled() -> None:
@@ -82,6 +88,7 @@ def test_build_injection_filter_uses_openclaw_cap_when_enabled() -> None:
         {
             "mock_hardware": True,
             "openclaw": {"enabled": True, "max_command_len": 128},
+            "telemetry": {"api_key": "test-key"},
         }
     )
     f = build_injection_filter(s)
@@ -122,6 +129,7 @@ def test_build_memory_exporter_threads_config_knobs(tmp_path: Path) -> None:
                 "export_max_entries": 4,
                 "export_entry_truncate_chars": 16,
             },
+            "telemetry": {"api_key": "test-key"},
         }
     )
     exporter = build_memory_exporter(cfg)

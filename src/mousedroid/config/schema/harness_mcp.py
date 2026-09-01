@@ -10,13 +10,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 
-from mousedroid.config.schema._primitives import Self, _settings_default_factory
+from mousedroid.config.schema._primitives import Self, StrictBaseModel, _settings_default_factory
 from mousedroid.config.schema.misc import CircuitBreakerConfig
 
 
-class MCPResourcesConfig(BaseModel):
+class MCPResourcesConfig(StrictBaseModel):
     """Read-only MCP resource exposure toggles and bounds.
 
     All limits are config-driven so dashboards and clients can request
@@ -60,7 +60,7 @@ class MCPResourcesConfig(BaseModel):
     )
 
 
-class MCPConfig(BaseModel):
+class MCPConfig(StrictBaseModel):
     """Model Context Protocol server configuration.
 
     The MCP server is fully optional and disabled by default. When
@@ -270,7 +270,7 @@ class MCPConfig(BaseModel):
         return self
 
 
-class HarnessTrackerConfig(BaseModel):
+class HarnessTrackerConfig(StrictBaseModel):
     """Task-tracker configuration for the agent harness.
 
     The tracker persists in-memory state of submitted tasks and their
@@ -300,7 +300,7 @@ class HarnessTrackerConfig(BaseModel):
     )
 
 
-class HarnessJournalConfig(BaseModel):
+class HarnessJournalConfig(StrictBaseModel):
     """Persistent agent ledger backend selection and tunables."""
 
     backend: Literal["null", "jsonl", "lmdb"] = Field(
@@ -328,7 +328,7 @@ class HarnessJournalConfig(BaseModel):
     )
 
 
-class HarnessHooksConfig(BaseModel):
+class HarnessHooksConfig(StrictBaseModel):
     """Tick-loop middleware configuration."""
 
     enabled_hooks: list[str] = Field(
@@ -349,7 +349,7 @@ class HarnessHooksConfig(BaseModel):
     )
 
 
-class HarnessApprovalConfig(BaseModel):
+class HarnessApprovalConfig(StrictBaseModel):
     """Human-in-the-loop / policy approval configuration."""
 
     gate: Literal["auto", "cli", "callback", "policy"] = Field(
@@ -379,7 +379,7 @@ class HarnessApprovalConfig(BaseModel):
     )
 
 
-class SkillsConfig(BaseModel):
+class SkillsConfig(StrictBaseModel):
     """Sub-agent / skill registry configuration."""
 
     enabled: bool = Field(
@@ -404,7 +404,7 @@ class SkillsConfig(BaseModel):
     )
 
 
-class HarnessConfig(BaseModel):
+class HarnessConfig(StrictBaseModel):
     """Top-level agent-harness configuration.
 
     Bundles task tracker, hook registry, journal, approval gate, and skills
@@ -429,14 +429,14 @@ class HarnessConfig(BaseModel):
     )
 
 
-class OpenClawMemoryConfig(BaseModel):
+class OpenClawMemoryConfig(StrictBaseModel):
     """Memory parameters for OpenClaw/MCP integration."""
 
     episodic_limit: int = Field(50, description="Max episodic events to return per cursor query.")
     semantic_limit: int = Field(10, description="Max semantic memories to retrieve per query.")
 
 
-class OpenClawPolicyConfig(BaseModel):
+class OpenClawPolicyConfig(StrictBaseModel):
     """Policy constraints for OpenClaw sandbox enforcement."""
 
     openshell_policy_path: Path | None = Field(
@@ -468,7 +468,7 @@ class OpenClawPolicyConfig(BaseModel):
     )
 
 
-class OpenClawConfig(BaseModel):
+class OpenClawConfig(StrictBaseModel):
     """OpenClaw integration — multi-channel NL control plane.
 
     OpenClaw runs on a dedicated Mac mini host and dispatches NL commands

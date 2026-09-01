@@ -47,9 +47,12 @@ def _settings_with_esp32_disabled(*, mock_hardware: bool, protocol: str = "seria
             # also requires at least one distance sensor wired in — we declare
             # the ultrasonic so the validator's invariant is satisfied without
             # affecting any code path under test (the factory only consults
-            # ``cfg.esp32.enabled`` here).
+            # ``cfg.esp32.enabled`` here). UltrasonicConfig has no ``enabled``
+            # field of its own — presence of ``cfg.ultrasonic`` (non-None) is
+            # what "wires it in"; ``trigger_pin``/``echo_pin`` are its only
+            # required fields.
             "mock_hardware": mock_hardware,
-            "ultrasonic": {"enabled": True, "trigger_pin": 23, "echo_pin": 24},
+            "ultrasonic": {"trigger_pin": 23, "echo_pin": 24},
             "esp32": {
                 "enabled": False,
                 "protocol": protocol,

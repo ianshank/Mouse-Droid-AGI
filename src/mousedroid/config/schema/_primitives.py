@@ -24,7 +24,7 @@ else:
         """Backport of enum.StrEnum for Python 3.10."""
 
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ---------------------------------------------------------------------------
 # Public Literal type aliases — single source of truth for label values used
@@ -87,7 +87,28 @@ class PlatformType(StrEnum):
     ROBOT_ARM = "robot_arm"
 
 
-class RangeF(BaseModel):
+class StrictBaseModel(BaseModel):
+    """Base for every config schema model — rejects unknown fields.
+
+    Pydantic v2 defaults to ``extra="ignore"``, so a misspelled or stale
+    field name in a constructor call (``LidarConfig(device_path=...)`` when
+    the real field is ``serial_port``) is silently dropped instead of
+    raising — at both runtime and in tests. This is a single audit-confirmed
+    root cause: a test built a config with a wrong kwarg, Pydantic silently
+    ignored it, and the resulting default masked a real bug in
+    ``factory/autonomous.py`` for months. Every domain config model in this
+    package should subclass this instead of ``BaseModel`` directly.
+
+    A subclass needing looser behaviour may still override
+    ``model_config`` for a specific key (Pydantic v2 merges parent and
+    child ``model_config`` dicts rather than replacing them wholesale), but
+    that should be a deliberate, reviewed exception — not the default.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class RangeF(StrictBaseModel):
     """Inclusive ``[low, high]`` range for a randomly sampled float parameter."""
 
     low: float = Field(description="Inclusive lower bound")
