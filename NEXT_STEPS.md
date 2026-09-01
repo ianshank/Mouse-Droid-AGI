@@ -109,9 +109,9 @@ The legacy v0.3.0 execution-plan phase numbering lives only in
     `MouseDroidOrchestrator`). So the tiers meant to prove "a real operator mission works end to end"
     currently prove that for a shelved code path. Pick one: (a) add equivalent coverage against
     `MouseDroidOrchestrator` and keep these as explicitly-labelled parked-path tests, or (b) retire
-    them when `AutonomousOrchestrator` is finally deleted. `tests/security/`'s 2 files are correctly
-    narrow (secret handling covered at unit/regression tier elsewhere) — not a hidden gap; their
-    adversarial-bypass depth is the separate, already-tracked item below.
+    them when `AutonomousOrchestrator` is finally deleted. `tests/security/`'s 3 files are correctly
+    scoped (secret handling covered at unit/regression tier elsewhere) — not a hidden gap;
+    adversarial-bypass depth already landed in this branch (`test_injection_filter_adversarial_bypass.py`).
 22. **[Docs — P4, blocked by F-008] `arm/CLAUDE.md` still cites `mock_arm.py`** (real:
     `hardware/mock_arm_driver.py`); found during the same sweep that fixed 7 sibling `CLAUDE.md`
     files, but `freeze_gate.py` blocks `arm/**` writes while F-008 is `todo` — revisit once it lands.

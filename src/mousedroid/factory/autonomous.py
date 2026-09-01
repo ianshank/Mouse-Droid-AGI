@@ -9,8 +9,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from mousedroid.constants import (
-    DEFAULT_CAMERA_HEIGHT,
-    DEFAULT_CAMERA_WIDTH,
     DEFAULT_LIDAR_BUFFER_SIZE,
     DEFAULT_LIDAR_MAX_RANGE_M,
 )
@@ -89,8 +87,8 @@ def build_autonomous_camera(cfg: Settings) -> CameraProtocol:
 
     if cfg.mock_hardware:
         _log.info("building_mock_camera")
-        width = getattr(cfg.camera, "resolution_width", DEFAULT_CAMERA_WIDTH)
-        height = getattr(cfg.camera, "resolution_height", DEFAULT_CAMERA_HEIGHT)
+        width = cfg.camera.resolution_width
+        height = cfg.camera.resolution_height
         return MockCamera(width=width, height=height)
     return CSICamera(cfg=cfg.camera)
 

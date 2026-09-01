@@ -8,6 +8,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Config schema hardening, security fixes, regression pins (2026-09-01 tech-debt audit)
+
+- **`StrictBaseModel` (`extra="forbid"`) enforced across every `config/schema/*.py` class
+  and root `Settings`** (`config/schema/_primitives.py`). Pydantic v2 previously defaulted
+  to silently dropping unknown fields, which is what let `factory/autonomous.py`'s
+  `getattr(cfg.lidar, "device_path", "/dev/ttyUSB1")` go unnoticed — `LidarConfig` has no
+  `device_path` field (only `serial_port`), so an operator-configured port was silently
+  discarded on the parked `AutonomousOrchestrator` path. Fixed directly, along with 6
+  sibling no-op `getattr` fallbacks it surfaced, plus two further previously-invisible
+  bugs the same change caught: a dead `telemetry.ws_enabled` field in
+  `config/local_lidar_validation.yaml` and a bogus `ultrasonic.enabled` kwarg in two
+  integration/e2e test files.
+- **Security**: `llm_gateway/openai_compatible.py`'s `answer_query()` now sanitizes
+  operator text via the injection filter before cloud egress (it previously skipped this
+  entirely, contradicting its own docstring and `llm_gateway/CLAUDE.md` invariant 6).
+  Added `Settings.openclaw_requires_telemetry_auth` — `openclaw.enabled=true` now requires
+  real telemetry auth (bearer token or a non-empty legacy API key; an empty-string
+  `TelemetryConfig.api_key` is now rejected at the field, closing a fail-open gap that
+  predated this change). Hardened the two bearer/API-key comparisons to
+  `hmac.compare_digest`. Added adversarial injection-filter tests
+  (`tests/security/test_injection_filter_adversarial_bypass.py`) pinning the filter's
+  real, honestly-documented bypass boundary instead of re-testing canonical phrases.
+- **New regression pins**: `tests/regression/test_constants_schema_parity_aqa.py`
+  (`constants.py`'s schema-mirroring defaults vs. the live schema — already caught one
+  real drift), `test_openclaw_auth_coupling_aqa.py`, and
+  `test_experience_storage_config_backwards_compat.py`.
+- **Docs**: fixed 7 stale subsystem `CLAUDE.md` file references, `docs/CHARTER.md`'s
+  `NEXT_STEPS.md` pointer, and `.claude/skills/test-tier-mirror/SKILL.md`'s tier-routing
+  table (it omitted 3 tiers CI runs as blocking). Moved `NEXT_STEPS.md`'s stale landed-work
+  section into this file's historical record.
+
 ### Changed — God-files decomposition: `factory.py` + `orchestrator/orchestrator.py`
 
 - **`src/mousedroid/factory.py` (5,140 lines, 99 top-level functions — 86 of them

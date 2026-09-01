@@ -16,6 +16,11 @@ Rules:
 1. Every threshold, dimension, pin number, path, and tunable parameter must come
    from Pydantic config (src/mousedroid/config/schema/) loaded from YAML in
    config/. Flag any inline numeric or string literal that should be config.
+   Also flag `getattr(cfg_obj, "field", default)` on a known Pydantic model —
+   it silently masks a typo'd or renamed field instead of raising; use direct
+   attribute access (every schema class now subclasses `StrictBaseModel`,
+   `extra="forbid"`, so a wrong field name in a *constructor* call already
+   raises — but a wrong field name in a `getattr` read never will).
 2. New config fields MUST carry Field(default=..., description=...). The default
    must preserve byte-identical behaviour with existing YAML (invariant 9).
 3. Verify the regression suite: each new field needs a paired test in
