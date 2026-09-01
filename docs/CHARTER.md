@@ -208,7 +208,8 @@ is authoritative). Statuses reflect the roadmap docs at time of ratification.
   pause and check" discipline in `AGENTS.md`. New capabilities are additive and
   opt-in (default-OFF), never silent behaviour changes.
 - **Track day-to-day work elsewhere.** Living to-dos and finding-IDs belong in
-  `docs/planning/NEXT_STEPS.md`; multi-step agent work is tracked via
+  the repo-root `NEXT_STEPS.md` (`docs/planning/NEXT_STEPS.md` is a retained
+  point-in-time snapshot, not current); multi-step agent work is tracked via
   `TaskCreate` / `TaskUpdate`. The charter changes rarely and only by ratification.
 - **Follow the subordinate surfaces for detail:** `AGENTS.md` for the worker
   rules and extension playbooks, `SKILLS.md` for the capability-to-command index,

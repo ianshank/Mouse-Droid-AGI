@@ -24,5 +24,6 @@
 
 - `composite_gateway.py` — Multi-backend gateway with automatic fallback.
 - `anthropic_gateway.py` / `mock_gateway.py` — Concrete gateway backends.
-- `prompt_injection.py` — Pre-egress prompt sanitizer.
+- `../security/injection_filter.py` — Pre-egress prompt sanitizer (`RegexInjectionFilter`,
+  implementing `PromptInjectionFilterProtocol`).
 - `tests/unit/llm_gateway/` — Unit tests using `sdk=` test seams.

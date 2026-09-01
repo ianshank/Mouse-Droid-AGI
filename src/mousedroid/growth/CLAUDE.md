@@ -14,5 +14,5 @@
 ## Key Files
 
 - `distillation.py` — Teacher-student knowledge distillation pipeline.
-- `compression.py` — Pruning and quantization adapters.
+- `coordinator.py`, `slot_store.py`, `student.py` — Distillation slot lifecycle and student model store.
 - `tests/unit/growth/` — Unit tests for distillation logic.
