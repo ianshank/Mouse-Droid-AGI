@@ -44,9 +44,7 @@ def test_openclaw_enabled_with_auth_disabled_is_rejected() -> None:
         Settings(
             mock_hardware=True,
             openclaw=OpenClawConfig(enabled=True),
-            telemetry=TelemetryConfig(
-                enabled=True, auth=TelemetryAuthConfig(auth_enabled=False)
-            ),
+            telemetry=TelemetryConfig(enabled=True, auth=TelemetryAuthConfig(auth_enabled=False)),
         )
 
 
@@ -54,9 +52,7 @@ def test_openclaw_enabled_with_bearer_auth_is_accepted() -> None:
     s = Settings(
         mock_hardware=True,
         openclaw=OpenClawConfig(enabled=True),
-        telemetry=TelemetryConfig(
-            enabled=True, auth=TelemetryAuthConfig(auth_enabled=True)
-        ),
+        telemetry=TelemetryConfig(enabled=True, auth=TelemetryAuthConfig(auth_enabled=True)),
     )
     assert s.openclaw is not None
     assert s.openclaw.enabled is True
