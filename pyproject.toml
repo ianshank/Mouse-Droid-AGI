@@ -191,7 +191,7 @@ dev = [
     # locally. Both workflows `pip install` ruff standalone rather than via
     # this extra, so all THREE literals must move in the same change;
     # tests/regression/test_ruff_version_single_source.py enforces it.
-    "ruff==0.16.2",
+    "ruff==0.16.5",
     # Pinned (same discipline as ruff) to match .github/workflows/ci.yml. mypy
     # minor releases tighten strict-mode inference — e.g. 2.x flags untyped
     # aiohttp ``@web.middleware`` decorators and rejects implicit union type
