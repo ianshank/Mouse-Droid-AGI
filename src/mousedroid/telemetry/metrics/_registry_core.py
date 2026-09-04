@@ -19,21 +19,26 @@ import time
 from typing import TYPE_CHECKING
 
 from mousedroid.telemetry.metrics.primitives import (
+    _TICK_PHASES,
     _Counter,
     _Gauge,
     _Histogram,
     _LabeledCounter,
+    _LabeledHistogram,
+    _log,
     _prepare_bucket_boundaries,
     _render_counter,
     _render_gauge,
     _render_histogram,
     _render_labeled_counter,
+    _render_labeled_histogram,
     _render_triple_labeled_counter,
     _TripleLabeledCounter,
 )
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import MetricsConfig
+    from mousedroid.config.schema._primitives import TickPhaseLiteral
 
 
 class _CoreMetricsMixin:
@@ -80,6 +85,10 @@ class _CoreMetricsMixin:
         # ``_prepare_bucket_boundaries`` helper (sort ascending + guarantee
         # the trailing ``+Inf`` sentinel Prometheus semantics require).
         self._loop_histogram = _Histogram(_prepare_bucket_boundaries(cfg.loop_latency_buckets_ms))
+        self._tick_phase_ms = _LabeledHistogram(
+            _prepare_bucket_boundaries(cfg.tick_phase_buckets_ms)
+        )
+        self._tick_overruns = _Counter()
         llm_buckets = _prepare_bucket_boundaries(cfg.llm_latency_buckets_ms)
         self._llm_translation_latency_ms = _Histogram(llm_buckets)
 
@@ -88,6 +97,8 @@ class _CoreMetricsMixin:
         self._name_safety_violations = f"{ns}_safety_violations"
         self._name_loop_time_ms = f"{ns}_loop_time_ms"
         self._name_loop_latency = f"{ns}_loop_latency_ms"
+        self._name_tick_phase_ms = f"{ns}_tick_phase_ms"
+        self._name_tick_overruns = f"{ns}_tick_overruns"
         self._name_battery_v = f"{ns}_battery_voltage_v"
         self._name_ws_clients = f"{ns}_ws_client_count"
         self._name_gpu_temp_c = f"{ns}_gpu_temp_celsius"
@@ -120,6 +131,45 @@ class _CoreMetricsMixin:
         if self._cfg.track_loop_time:
             self._loop_time_ms.set(value)
             self._loop_histogram.observe(value)
+
+    def observe_tick_phase_ms(self, phase: TickPhaseLiteral, value: float) -> None:
+        """Record how long one phase of the sense-plan-act tick took.
+
+        Called from the orchestrator on EVERY tick, bypassing the telemetry
+        frame path — that path is throttled to ``telemetry.publish_hz`` (10 Hz)
+        while the loop runs at ``loop.control_hz`` (30 Hz), so routing metrics
+        through it would silently sample two ticks in three away.
+
+        ``phase`` is typed to ``TickPhaseLiteral`` so mypy rejects a typo at
+        the call site; the ``_TICK_PHASES`` check below is the runtime half,
+        for anything that reaches here dynamically. Together they bound the
+        family at 8 label values.
+
+        Args:
+            phase: Which tick phase this measurement covers.
+            value: Elapsed wall time for that phase, in milliseconds.
+        """
+        if not self._cfg.track_tick_phases:
+            return
+        if phase not in _TICK_PHASES:
+            _log.debug("tick_phase_ms_dropped_invalid_phase", phase=phase)
+            return
+        self._tick_phase_ms.observe(phase, value)
+
+    def inc_tick_overrun(self, amount: int = 1) -> None:
+        """Count a tick that exceeded its soft budget.
+
+        Distinct from the loop-overrun emergency stop: this is the graded
+        signal for a loop degrading from 30 Hz toward 5 Hz, a band that sits
+        below ``safety.max_loop_time_ms`` and therefore trips nothing.
+
+        Args:
+            amount: Number of overruns to add; non-positive values are ignored
+                so a counter can never move backwards.
+        """
+        if not self._cfg.track_tick_phases or amount <= 0:
+            return
+        self._tick_overruns.inc(amount)
 
     def set_battery_voltage(self, value: float) -> None:
         """Set the latest battery voltage in volts."""
@@ -231,6 +281,30 @@ class _CoreMetricsMixin:
                     hcount,
                 )
             )
+
+        if cfg.track_tick_phases:
+            # Gated on having observations, not just on the toggle: a registry
+            # that has never seen a tick must render byte-identically to
+            # before these families existed, or every dashboard and scrape
+            # config pinning the family set breaks on upgrade.
+            phase_snapshots = self._tick_phase_ms.snapshot()
+            if phase_snapshots:
+                out.append(
+                    _render_labeled_histogram(
+                        self._name_tick_phase_ms,
+                        "Per-phase sense-plan-act tick latency (milliseconds)",
+                        "phase",
+                        phase_snapshots,
+                    )
+                )
+            if self._tick_overruns.value:
+                out.append(
+                    _render_counter(
+                        self._name_tick_overruns,
+                        "Ticks that exceeded the soft per-tick budget",
+                        self._tick_overruns.value,
+                    )
+                )
 
         if cfg.track_battery:
             out.append(

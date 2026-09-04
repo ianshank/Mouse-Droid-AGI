@@ -63,6 +63,15 @@ _GROWTH_DISTILL_OUTCOMES: frozenset[str] = frozenset({"completed", "skipped_no_b
 #   * api — the resolved Piper synthesis API whose call raised.
 _VOICE_SPEAKER_DEGRADED_SUBSYSTEMS: frozenset[str] = frozenset({"usb_speaker", "rocky_fallback"})
 _VOICE_TTS_APIS: frozenset[str] = frozenset({"synthesize", "synthesize_wav", "synthesize_wav_file"})
+#: Runtime drop-guard for ``mousedroid_tick_phase_ms{phase}``. Mirrors
+#: :data:`mousedroid.config.schema._primitives.TickPhaseLiteral`, which is the
+#: compile-time half of the same guard — mypy rejects a mistyped phase at the
+#: call site, and this rejects anything that reaches the registry dynamically.
+#: A regression test asserts the two sets never diverge. Together they cap the
+#: family at 8 label values, so cardinality cannot grow by accident.
+_TICK_PHASES: frozenset[str] = frozenset(
+    {"sense", "safety", "world_model", "plan", "act", "learn", "telemetry", "post"}
+)
 
 
 def _classify_dropped_observation(value: float) -> str | None:
@@ -337,6 +346,60 @@ class _Histogram:
             return result, self._sum, self._count
 
 
+class _LabeledHistogram:
+    """Thread-safe Prometheus Histogram partitioned by a single label value.
+
+    One independent bucket set per label value, materialised on first
+    observation so a label that never fires contributes no series. Used for
+    ``mousedroid_tick_phase_ms{phase}``, where the label domain is the fixed
+    eight-phase set in :data:`_TICK_PHASES` — callers must drop unknown values
+    *before* calling :meth:`observe`, which is what keeps cardinality bounded
+    at ``len(domain) x len(buckets)`` rather than unbounded.
+
+    Deliberately not a generalisation of :class:`_Histogram`: that class is on
+    the hot path for every unlabelled latency metric and gains nothing from a
+    per-observation dict lookup.
+    """
+
+    __slots__ = ("_buckets", "_counts", "_lock", "_sums", "_thresholds")
+
+    def __init__(self, buckets: tuple[float, ...]) -> None:
+        self._thresholds: tuple[float, ...] = buckets
+        self._buckets: dict[str, list[int]] = {}
+        self._sums: dict[str, float] = {}
+        self._counts: dict[str, int] = {}
+        self._lock = threading.Lock()
+
+    def observe(self, label: str, value: float) -> None:
+        """Record *value* against *label*, creating its bucket set on demand."""
+        with self._lock:
+            counters = self._buckets.get(label)
+            if counters is None:
+                counters = [0] * len(self._thresholds)
+                self._buckets[label] = counters
+                self._sums[label] = 0.0
+                self._counts[label] = 0
+            self._sums[label] += value
+            self._counts[label] += 1
+            for i, threshold in enumerate(self._thresholds):
+                if value <= threshold:
+                    counters[i] += 1
+                    break
+
+    def snapshot(self) -> dict[str, tuple[list[tuple[float, int]], float, int]]:
+        """Return ``{label: ([(le, cumulative)…], sum, count)}`` under the lock."""
+        with self._lock:
+            out: dict[str, tuple[list[tuple[float, int]], float, int]] = {}
+            for label, counters in self._buckets.items():
+                cumulative = 0
+                rows: list[tuple[float, int]] = []
+                for threshold, bucket_count in zip(self._thresholds, counters, strict=True):
+                    cumulative += bucket_count
+                    rows.append((threshold, cumulative))
+                out[label] = (rows, self._sums[label], self._counts[label])
+            return out
+
+
 def _fmt_float(value: float) -> str:
     """Format a float for Prometheus text output with 6 significant digits."""
     if value == float("inf"):
@@ -485,4 +548,31 @@ def _render_histogram(
         lines.append(f'{name}_bucket{{le="{_fmt_float(le)}"}} {count}')
     lines.append(f"{name}_sum {_fmt_float(total_sum)}")
     lines.append(f"{name}_count {total_count}")
+    return lines
+
+
+def _render_labeled_histogram(
+    name: str,
+    help_text: str,
+    label_name: str,
+    snapshots: dict[str, tuple[list[tuple[float, int]], float, int]],
+) -> list[str]:
+    """Render a single-label histogram family.
+
+    Label ordering matches ``_render_double_labeled_gauge``: the partitioning
+    label first, then ``le``. Label values are sorted so the exposition output
+    is deterministic across scrapes, which is what lets the golden-render
+    regression fixture be a byte comparison.
+    """
+    lines = [
+        f"# HELP {name} {_escape_help_text(help_text)}",
+        f"# TYPE {name} histogram",
+    ]
+    for label_value in sorted(snapshots):
+        buckets, total_sum, total_count = snapshots[label_value]
+        escaped = _escape_label_value(label_value)
+        for le, count in buckets:
+            lines.append(f'{name}_bucket{{{label_name}="{escaped}",le="{_fmt_float(le)}"}} {count}')
+        lines.append(f'{name}_sum{{{label_name}="{escaped}"}} {_fmt_float(total_sum)}')
+        lines.append(f'{name}_count{{{label_name}="{escaped}"}} {total_count}')
     return lines
