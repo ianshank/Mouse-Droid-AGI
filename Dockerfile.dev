@@ -36,8 +36,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ---------------------------------------------------------------------------
 WORKDIR /app
 
-# Copy project metadata first for better layer caching
-COPY pyproject.toml ./
+# Copy project metadata first for better layer caching.
+# README.md is load-bearing, not documentation: pyproject.toml declares
+# `readme = "README.md"`, which hatchling resolves during build_wheel, so
+# without it the very next `pip install -e .` fails metadata generation.
+# Verified by building this exact context with and without it. (LICENSE is
+# not strictly required — hatchling tolerates a `license-files` glob that
+# matches nothing — but is copied so the built wheel carries it.)
+# This broke in #175 (2026-07-24) when `readme =` was added, and stayed
+# invisible because the CI docker job runs `docker build --check` — a
+# Dockerfile linter that never executes a RUN layer. docker/Dockerfile.cloud
+# already carried this COPY; the other two did not.
+COPY pyproject.toml README.md LICENSE ./
 COPY src/ ./src/
 
 # Install package with dev extras (CPU-only, no hardware/jetson/arm extras)

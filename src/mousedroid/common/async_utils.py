@@ -16,14 +16,35 @@ that needs fire-and-forget semantics with bounded memory.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 from collections.abc import Coroutine
-from typing import Any, TypeVar
+from typing import Any, Final, TypeVar
 
 from mousedroid.logging.setup import get_logger
 
 _log = get_logger(__name__)
 
 _TaskResult = TypeVar("_TaskResult")
+
+#: Every exception type a timed-out wait can raise, for use in ``except``.
+#:
+#: ``asyncio.TimeoutError`` and ``concurrent.futures.TimeoutError`` only became
+#: aliases of the builtin ``TimeoutError`` in Python 3.11.  On the 3.10 floor
+#: this project still supports — and which the Jetson rover image ships
+#: (``dustynv/l4t-pytorch:r36.4.0`` provides ``python3.10``) — all three are
+#: *distinct* classes, and the builtin is an ``OSError`` subclass.  So on 3.10 a
+#: bare ``except TimeoutError`` catches neither an ``asyncio.wait_for`` timeout
+#: nor a ``Future.result(timeout)`` timeout, and the handler is dead code.
+#:
+#: Catching this tuple is correct on every supported interpreter; on 3.11+ the
+#: three names denote one class and the duplicates are harmless.  Use this
+#: instead of writing any single name, so the 3.10 divergence cannot be
+#: reintroduced one call site at a time.
+TIMEOUT_ERRORS: Final[tuple[type[BaseException], ...]] = (
+    TimeoutError,
+    asyncio.TimeoutError,
+    concurrent.futures.TimeoutError,
+)
 
 
 def spawn_tracked(
@@ -109,6 +130,6 @@ async def cancel_and_drain(tasks: set[asyncio.Task[Any]], *, timeout_s: float = 
             asyncio.gather(*pending, return_exceptions=True),
             timeout=timeout_s,
         )
-    except TimeoutError:
+    except TIMEOUT_ERRORS:
         _log.warning("cancel_and_drain_timeout", pending=len(pending), timeout_s=timeout_s)
     return len(pending)

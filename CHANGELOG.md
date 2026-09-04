@@ -8,6 +8,108 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Emergency-stop path, tick instrumentation, CI wiring (2026-09-04 standards audit)
+
+- **The loop-overrun interlock was measuring the wrong interval**
+  (`orchestrator/orchestrator.py`). `tick()` computed `loop_time_ms` immediately after
+  `sensor_manager.read_all()` and never recomputed it, then fed that value to
+  `safety_monitor.evaluate`, `mousedroid_loop_time_ms` and `mousedroid_loop_latency_ms`.
+  World-model update, planning, actuation and telemetry all run *after* the measurement,
+  so the phases most likely to blow the 33.3 ms budget were invisible to the emergency
+  stop and to both metric surfaces. A tick costing 305 ms reported 5.0 ms. The monitor now
+  receives the previous tick's measured total, latched in a `finally` so it is recorded on
+  every exit path including the emergency branch's early return.
+- **Loop-time metrics sampled two ticks in three away.** They were written only from the
+  telemetry frame path, throttled to `telemetry.publish_hz` (10 Hz) against
+  `loop.control_hz` (30 Hz). The orchestrator now writes the registry directly on every
+  tick, and the duplicate writer in `telemetry/server/_ws_handlers.py` was removed — left
+  in, it double-observed the histogram and skewed every quantile.
+- **New `mousedroid_tick_phase_ms{phase}` histogram** over the eight tiling tick phases,
+  plus `mousedroid_tick_overruns_total` for soft-budget overruns — the graded signal for a
+  loop degrading from 30 Hz toward 5 Hz, a band that sits below `max_loop_time_ms` and so
+  trips nothing. Both are pure-add: absent from `/metrics` until first observed.
+- **Serial writes could overlap an in-flight read** (`comms/serial_driver.py`).
+  `_send_command` — the path behind `send_velocity` and `emergency_stop` — took no lock, so
+  a write could land between `_query_data`'s send and its read and have its ACK consumed as
+  the query's reply. Taking the lock on both paths is necessary but not sufficient:
+  cancelling a coroutine parked on an executor future releases it while the OS thread keeps
+  running. Every blocking serial call now routes through a per-driver single-worker
+  executor, which orders the write behind the in-flight read.
+- **`read_all` orphaned up to four sensor reads per tick timeout** (`sensing/manager.py`).
+  Five tasks were created then awaited sequentially; `Task.cancel()` reaches only the task
+  currently awaited. Orphans mutated degraded-mode counters and `_cached_motor_state` out of
+  order into the next tick. Joined with `asyncio.gather`.
+- **Shutdown could skip the final emergency stop on Python 3.10**
+  (`common/async_utils.py`, `orchestrator/_lifecycle_mixin.py`). `cancel_and_drain` caught a
+  bare `TimeoutError`, which on the 3.10 floor the rover image ships is a distinct class
+  from both `asyncio.TimeoutError` and `concurrent.futures.TimeoutError`. The new
+  `TIMEOUT_ERRORS` tuple covers all three, and `stop()` now halts the actuators in a
+  `finally` rather than ~20 statements downstream of the drain.
+- **`SafetyConfig` had 59 fields and no cross-field validators.** Added ordering rules
+  (`gpu_warn < gpu_critical`; battery `implausible < critical < warn`, honouring each
+  field's `0 disables` semantics) and BCM bounds plus a distinct-pins rule on
+  `UltrasonicConfig` (`0/0` remains the documented "unwired" sentinel).
+- **`OpenClawConfig.require_actuation_ack` was documented as half of a two-of-two actuation
+  gate and read by no code** (`mcp/tool_bridge.py`). Now enforced in both the visibility
+  filter and the dispatch path; vacuously satisfied when OpenClaw is unwired — that is
+  `openclaw is None` **or** `openclaw.enabled` false, the same condition
+  `factory/mcp_harness.py`, `factory/llm_gateway.py` and `telemetry/server/_lifecycle.py`
+  already use. Keying the gate on presence alone would have let a disabled block's
+  `require_actuation_ack: false` silently withdraw actuation from a deployment that never
+  opted in.
+- **Arming the interlock required sane defaults, not just a YAML override**
+  (`config/schema/reward_safety.py`). `max_loop_time_ms` was inert while the monitor
+  received the ~1 ms sensor-read segment, so no config had ever needed a guard in front of
+  it. `loop_overrun_warmup_ticks` and `loop_overrun_consecutive_ticks` first shipped in
+  this same changeset at `0`/`1`, described as preserving pre-feature behaviour — which was
+  circular: pre-feature behaviour was an interlock that never fired, and holding the
+  comparison fixed while its input grows by three orders of magnitude is the *largest*
+  behaviour change available, not the smallest. `tests/integration/test_e2e_5sec_run.py`
+  demonstrated it: `loop_overrun loop_time_ms=1339.9 max_ms=200.0 streak=1`, an emergency
+  stop for one slow MCTS plan. The guards now default to `warmup=30` / `consecutive=3` in
+  the schema rather than in shipped YAML, because `Settings()` built in code — every test
+  fixture and any embedder that does not read `config/` — never passes through the loader.
+  Warm-up counts *ticks*, not wall time (a 20 s engine build is one or two very long
+  ticks), so 30 covers initialisation while arming the interlock within ~1 s of
+  steady-state running at 30 Hz, and a sustained overrun still trips in ~100 ms.
+- **`connect()` rollback could be interrupted halfway** (`comms/serial_driver.py`). The
+  rollback contains an `await`, and `contextlib.suppress(Exception)` cannot hold a
+  `CancelledError` — a `BaseException`. A cancellation landing there skipped the state
+  reset and executor shutdown, leaving `_connected=True` over an untracked live handle:
+  precisely the leak the block exists to prevent, through a narrower window, and reachable
+  because `orchestrator.start()` awaits `connect()`. Driver state is now cleared
+  synchronously before the await and the close is shielded. The handle is snapshotted
+  rather than closed via `_close_serial`, which would race the `_serial = None` reset since
+  that helper dereferences `self._serial` when it runs, not when it is submitted.
+- **`loop_budget_exceeded` logged the wrong tick.** `_tick_count` is already incremented by
+  the time the `finally` runs on the success and emergency paths but not on the error path,
+  so one event carried two numbering conventions. It now takes the tick index snapshotted
+  at the top of `tick()`.
+- **`_mark_phase` read the clock even with metrics disabled**, against telemetry invariant
+  3's byte-identical-legacy-path rule. It now returns the incoming mark unchanged.
+- **Emergency ticks were treated as failures for metric purposes**
+  (`orchestrator/orchestrator.py`). The `ok` flag guarding publication answers "did this
+  tick raise", not "was the rover healthy", but the emergency branch returned without
+  setting it — so loop-latency observations and the phase breakdown stopped for exactly as
+  long as the emergency persisted, which is when they matter most. The branch now marks its
+  `post` phase and reports success, keeping the phase brackets tiling on every exit path.
+
+### Changed — CI and packaging (2026-09-04 standards audit)
+
+- `timeout-minutes` on all 26 jobs across 5 workflows (previously zero of `ci.yml`'s 17,
+  against a 360-minute default); `concurrency` groups on ci/harness/config-compat;
+  `push.branches` narrowed so a PR no longer runs the whole matrix twice.
+- The `security` job now installs `.[dev,telemetry,mcp]` — it was auditing 43 of ~100
+  packages and missing every network-facing one (`aiohttp`, `cryptography`, `pyjwt`,
+  `starlette`).
+- The `docker` job now performs a real `docker build` of `Dockerfile.dev`. `docker build
+  --check` is a Dockerfile linter and never executes a `RUN` layer, which is why a missing
+  `COPY README.md` broke both image builds from 2026-07-24 under a green job.
+- Branch coverage enabled (`branch = true`), measured at 91.92% against the 90% gate;
+  `--strict-markers`; `cache-dependency-path: pyproject.toml`; `fail-fast: false` on the
+  version matrices. Removed the dead `force-include` block and excluded 22
+  `CLAUDE.md`/`agent.md` files from the published wheel.
+
 ### Fixed — Config schema hardening, security fixes, regression pins (2026-09-01 tech-debt audit)
 
 - **`StrictBaseModel` (`extra="forbid"`) enforced across every `config/schema/*.py` class

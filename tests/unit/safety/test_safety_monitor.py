@@ -7,9 +7,20 @@ from mousedroid.safety.context import SafetyContext
 from mousedroid.safety.monitor import MouseDroidSafetyMonitor
 from mousedroid.sensing.bundle import MouseDroidObservationBundle
 
+#: Loop-overrun guards that the shipped defaults now switch on: a 30-tick
+#: warm-up and a 3-tick debounce (see ``SafetyConfig``). Tests in this module
+#: exercise the *threshold comparison* — "does 300 ms beat a 200 ms ceiling" —
+#: not the boot guards that sit in front of it, so they arm the interlock
+#: immediately and let the dedicated suite in ``test_loop_overrun_debounce.py``
+#: own the warm-up and debounce behaviour.
+_ARMED_IMMEDIATELY: dict[str, int] = {
+    "loop_overrun_warmup_ticks": 0,
+    "loop_overrun_consecutive_ticks": 1,
+}
+
 
 def _make_monitor(**overrides) -> MouseDroidSafetyMonitor:
-    return MouseDroidSafetyMonitor(SafetyConfig(**overrides))
+    return MouseDroidSafetyMonitor(SafetyConfig(**{**_ARMED_IMMEDIATELY, **overrides}))
 
 
 def _make_obs(

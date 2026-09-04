@@ -17,10 +17,20 @@
 name: Spec Harness
 
 on:
+    # Both triggers were previously unfiltered, so every push to every branch
+    # fired this workflow twice — once for the push and once for the PR. Same
+    # split as ci.yml: `push` on the trunk only, `pull_request` for the branch
+    # patterns work actually lands on.
     push:
+        branches: [main]
     pull_request:
+        branches: [main, "feature/**", "claude/**", "refactor/**", "fix/**", "feat/**"]
     schedule:
         - cron: "0 7 * * *" # nightly: include the slow tier
+
+concurrency:
+    group: harness-${{ github.ref }}
+    cancel-in-progress: true
 
 permissions:
     contents: read
@@ -37,6 +47,7 @@ jobs:
         # gating here keeps the scheduled run from executing the fast tier twice.
         if: github.event_name != 'schedule'
         runs-on: ubuntu-latest
+        timeout-minutes: 20
         steps:
             # fetch-depth: 0 so `git rev-parse` can resolve implemented_in refs.
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -47,6 +58,7 @@ jobs:
               with:
                   python-version: "3.12"
                   cache: pip
+                  cache-dependency-path: pyproject.toml
             # The seeded validation_commands run real pytest suites, so install
             # the same extras as the ci.yml test job (not just pyyaml + jsonschema).
             - name: Install dev toolchain
@@ -57,6 +69,7 @@ jobs:
     validate-slow:
         if: github.event_name == 'schedule'
         runs-on: ubuntu-latest
+        timeout-minutes: 20
         steps:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
               with:
@@ -66,6 +79,7 @@ jobs:
               with:
                   python-version: "3.12"
                   cache: pip
+                  cache-dependency-path: pyproject.toml
             - name: Install dev toolchain
               run: pip install -e ".[dev,telemetry,mcp]"
             # --strict-git: on main, every `done` feature's implemented_in must

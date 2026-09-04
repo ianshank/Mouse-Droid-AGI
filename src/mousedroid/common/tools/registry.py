@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from mousedroid.llm_gateway.protocol import GoalVector, LLMGatewayProtocol
     from mousedroid.telemetry.metrics import MetricsRegistry
 
+from mousedroid.common.async_utils import TIMEOUT_ERRORS
 from mousedroid.common.imports import module_available
 from mousedroid.logging.setup import get_logger
 
@@ -280,7 +281,7 @@ async def _diagnose_cloud(gcp_cfg: GCPConfig | None = None) -> dict[str, object]
             source_id=gcp_cfg.robot_id,
         )
         await loop.run_in_executor(None, future.result, gcp_cfg.pubsub.publish_timeout_s)
-    except TimeoutError as exc:
+    except TIMEOUT_ERRORS as exc:
         _log.warning("tool_diagnose_cloud_publish_timeout", topic=topic_path, error=str(exc))
         return {
             "status": "publish_timeout",
@@ -375,10 +376,10 @@ async def _translate_nl_mission(
             "mission": mission_text,
             "error": str(exc),
         }
-    except (TimeoutError, asyncio.TimeoutError) as exc:
-        # asyncio.TimeoutError is an alias for TimeoutError on Python 3.11+,
-        # but some third-party async libraries still raise the asyncio variant
-        # (or subclass it), so listing both keeps the timeout path robust.
+    except TIMEOUT_ERRORS as exc:
+        # See TIMEOUT_ERRORS: the asyncio/concurrent.futures/builtin timeout
+        # types are distinct classes on the 3.10 floor, so the shared tuple is
+        # the only spelling that is correct on every supported interpreter.
         latency_ms = (time.monotonic() - start_time) * 1000.0
         _record_llm_metrics(metrics_registry, "timeout", latency_ms)
         _log.warning("tool_translate_nl_mission_timeout", error=str(exc))

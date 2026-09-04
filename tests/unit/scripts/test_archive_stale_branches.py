@@ -364,7 +364,23 @@ class TestOriginHeadSymrefHandling:
             f"--push must exit 0 against a clone with origin/HEAD configured "
             f"(rc={result.returncode}):\n{combined}"
         )
-        assert "fatal:" not in combined, combined
+        # Scope this to the failure it exists to catch — `git tag -f
+        # archive/origin origin/origin` aborting the run — rather than any
+        # line containing "fatal:". git emits non-fatal diagnostics on that
+        # stream: with `push.negotiate=true` set (a legitimate performance
+        # setting, and the default in some managed environments) every push
+        # prints "fatal: --negotiate-only needs one or more
+        # --negotiation-tip=*" followed by "warning: push negotiation failed;
+        # proceeding anyway with push" — and then succeeds. Matching the bare
+        # substring made this test fail on developer machines while CI stayed
+        # green, which is a false negative about the very tool it guards.
+        # The return-code assertion above already covers "the run aborted".
+        fatal_lines = [
+            line
+            for line in combined.splitlines()
+            if line.startswith("fatal:") and "negotiat" not in line
+        ]
+        assert not fatal_lines, f"unexpected fatal git error(s): {fatal_lines}\n{combined}"
         assert "archive/origin" not in combined, (
             f"the bare remote-name token must never be archived as a branch:\n{combined}"
         )

@@ -163,6 +163,8 @@ class _OrchestratorState:
     _mission_seq: int
     _running: bool
     _tick_count: int
+    _last_tick_ms: float
+    _tick_phase_timing_enabled: bool
     _consolidation_task: asyncio.Task[Any] | None
     _consolidation_tasks: set[asyncio.Task[Any]]
     _cloud_publish_tasks: set[asyncio.Task[Any]]

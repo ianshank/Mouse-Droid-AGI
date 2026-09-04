@@ -194,11 +194,32 @@ class _LifecycleMixin(_OrchestratorState):
             )
 
     async def stop(self) -> None:
-        """Stop all subsystems gracefully."""
+        """Stop all subsystems gracefully.
+
+        Actuator teardown (:meth:`_halt_actuators`) runs in a ``finally`` so a
+        failure anywhere in software shutdown cannot leave the motors running.
+        Before this structure the emergency stop sat ~20 statements downstream
+        of ``_drain_background_tasks``, so any raise in between — a drain
+        timeout, a wedged voice engine, a telemetry server that would not
+        close — skipped it and left the last commanded velocity latched.
+        """
         _log.info("orchestrator_stopping")
         self._running = False
-        await self._drain_background_tasks()
-        await self._stop_cloud_subsystems()
+        try:
+            await self._drain_background_tasks()
+            await self._stop_cloud_subsystems()
+            await self._stop_software_subsystems()
+        finally:
+            await self._halt_actuators()
+            await self._stop_residual_subsystems()
+        _log.info("orchestrator_stopped")
+
+    async def _stop_software_subsystems(self) -> None:
+        """Stop the non-actuator subsystems in reverse-start (LIFO) order.
+
+        Every guard is a no-op when the subsystem was never wired. Raising here
+        is acceptable — :meth:`stop`'s ``finally`` still halts the actuators.
+        """
         if self._experience_logger is not None:
             self._experience_logger.close()
         if self._face_controller is not None:
@@ -220,14 +241,43 @@ class _LifecycleMixin(_OrchestratorState):
             await self._cognitive_core.stop()
         if self._llm_gateway is not None:
             await self._llm_gateway.stop()
-        await self._esp32.emergency_stop()
-        await self._sensor_manager.stop()
-        await self._esp32.disconnect()
+
+    async def _halt_actuators(self) -> None:
+        """Halt the motors and release the sensor/actuator transports.
+
+        Safety-critical and best-effort: each step is attempted even if an
+        earlier one raised, because a failure to stop the sensor manager must
+        not prevent the serial port from being closed (and vice versa). The
+        emergency stop is issued first and its failure is logged at ``error``.
+        """
+        try:
+            await self._esp32.emergency_stop()
+        except Exception:
+            _log.error("shutdown_emergency_stop_failed", exc_info=True)
+        try:
+            await self._sensor_manager.stop()
+        except Exception:
+            _log.warning("shutdown_sensor_manager_stop_failed", exc_info=True)
+        try:
+            await self._esp32.disconnect()
+        except Exception:
+            _log.warning("shutdown_esp32_disconnect_failed", exc_info=True)
+
+    async def _stop_residual_subsystems(self) -> None:
+        """Stop the accelerator runtime and drain the harness journal.
+
+        Runs after :meth:`_halt_actuators` so terminal journal events persist
+        last. Best-effort for the same reason as the actuator teardown.
+        """
         if self._hailo_runtime is not None:
-            await self._hailo_runtime.stop()
-        # Drain and stop the harness journal last so terminal events persist.
-        await self._journal.stop()
-        _log.info("orchestrator_stopped")
+            try:
+                await self._hailo_runtime.stop()
+            except Exception:
+                _log.warning("shutdown_hailo_runtime_stop_failed", exc_info=True)
+        try:
+            await self._journal.stop()
+        except Exception:
+            _log.warning("shutdown_journal_stop_failed", exc_info=True)
 
     async def _drain_background_tasks(self) -> None:
         """Cancel + drain the consolidation, on-device, and cloud-publish tasks.

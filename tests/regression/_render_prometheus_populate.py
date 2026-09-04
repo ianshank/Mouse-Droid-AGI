@@ -147,4 +147,12 @@ def build_maximal_registry() -> MetricsRegistry:
     registry.inc_lidar_raw_published(11)
     registry.inc_lidar_raw_dropped(2)
 
+    # Tick instrumentation — every phase, so the golden fixture pins the full
+    # label set and a dropped/renamed phase shows up as a diff.
+    for phase_index, phase in enumerate(
+        ("sense", "safety", "world_model", "plan", "act", "learn", "telemetry", "post")
+    ):
+        registry.observe_tick_phase_ms(phase, 1.0 + phase_index)
+    registry.inc_tick_overrun()
+
     return registry

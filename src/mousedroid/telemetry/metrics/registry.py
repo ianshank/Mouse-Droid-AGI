@@ -168,6 +168,7 @@ def generate_metrics_sample() -> str:
         Prometheus text exposition format string with all metric families.
     """
     from mousedroid.config.schema import MetricsConfig
+    from mousedroid.config.schema._primitives import TickPhaseLiteral
 
     cfg = MetricsConfig.model_validate({})
     registry = MetricsRegistry(cfg)
@@ -187,6 +188,24 @@ def generate_metrics_sample() -> str:
     registry.set_lidar_scan_points(456)
     registry.inc_subsystem_failure("voice", "device_disconnected", "error")
     registry.inc_subsystem_failure("telemetry", "bind_exhausted", "warning")
+    # Per-phase tick latency: seed every phase so promtool sees the full label
+    # set, not just whichever one a sample tick happened to record. The tuple
+    # is annotated rather than inferred — a bare tuple widens to ``str`` and
+    # mypy then (correctly) rejects the call, which is the compile-time half
+    # of the label guard doing its job.
+    phases: tuple[TickPhaseLiteral, ...] = (
+        "sense",
+        "safety",
+        "world_model",
+        "plan",
+        "act",
+        "learn",
+        "telemetry",
+        "post",
+    )
+    for phase_index, phase in enumerate(phases):
+        registry.observe_tick_phase_ms(phase, 1.0 + phase_index)
+    registry.inc_tick_overrun()
 
     # PR-A2 — exercise the new replay / VLA / VLM observability metrics so
     # ``promtool check metrics`` sees them in the CI rendered output.

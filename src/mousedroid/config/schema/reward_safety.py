@@ -7,9 +7,15 @@ enforcement.
 
 from __future__ import annotations
 
-from pydantic import Field
+from itertools import pairwise
 
-from mousedroid.config.schema._primitives import StrictBaseModel, _settings_default_factory
+from pydantic import Field, model_validator
+
+from mousedroid.config.schema._primitives import (
+    Self,
+    StrictBaseModel,
+    _settings_default_factory,
+)
 
 
 class VLMProgressConfig(StrictBaseModel):
@@ -138,6 +144,61 @@ class SafetyConfig(StrictBaseModel):
     max_velocity_mps: float = Field(0.5, gt=0, description="Max allowed velocity (m/s)")
     sensor_stale_s: float = Field(0.5, gt=0, description="Sensor staleness threshold (s)")
     max_loop_time_ms: float = Field(200.0, gt=0, description="Max loop time before emergency (ms)")
+    max_loop_time_factor: float | None = Field(
+        None,
+        gt=1.0,
+        description=(
+            "Multiplier on the control period (1 / loop.control_hz) used to "
+            "DERIVE max_loop_time_ms. When set, Settings' root validator "
+            "overwrites max_loop_time_ms with factor / control_hz * 1000, so "
+            "the overrun threshold tracks the tick rate instead of drifting "
+            "when control_hz changes. None (default) keeps the literal "
+            "max_loop_time_ms, so every existing YAML resolves identically. "
+            "The shipped 30 Hz loop with the historical 200 ms threshold "
+            "corresponds to factor=6.0 — that 6x relationship was previously "
+            "undocumented folklore rather than a stated rule."
+        ),
+    )
+    loop_overrun_consecutive_ticks: int = Field(
+        3,
+        ge=1,
+        description=(
+            "Consecutive ticks whose measured duration must exceed "
+            "max_loop_time_ms before the monitor raises an emergency stop. "
+            "An isolated GC pause or page fault is not a control-loop "
+            "failure, and max_loop_time_ms only became a live ceiling once "
+            "the monitor started receiving real tick durations: comparing a "
+            "single sample against it emergency-stops on one slow MCTS plan. "
+            "3 still trips in ~100 ms of sustained overrun at 30 Hz. Set 1 "
+            "for the strictest single-sample trip."
+        ),
+    )
+    loop_overrun_warmup_ticks: int = Field(
+        30,
+        ge=0,
+        description=(
+            "Ticks from loop start during which a loop overrun is logged and "
+            "counted but never raises an emergency stop. Covers lazy CUDA "
+            "context creation and TensorRT/ONNX kernel warm-up and a first "
+            "MuJoCo compile, where a slow first tick is expected rather than "
+            "a fault. This counts TICKS, not wall time -- a 20 s engine build "
+            "is one or two very long ticks, not 600 of them -- so 30 covers "
+            "any plausible initialisation while arming the interlock within "
+            "~1 s of steady-state running at 30 Hz. Set 0 to arm immediately."
+        ),
+    )
+    loop_soft_budget_factor: float = Field(
+        1.0,
+        gt=0,
+        description=(
+            "Multiplier on the control period defining the SOFT per-tick "
+            "budget. Exceeding it increments mousedroid_tick_overruns_total "
+            "and logs loop_budget_exceeded; it never raises an emergency "
+            "stop. This is the signal that catches a loop degrading from "
+            "30 Hz toward 5 Hz — a band that sits below max_loop_time_ms and "
+            "so trips nothing today."
+        ),
+    )
     min_valid_sensors: int = Field(2, ge=0, description="Min valid sensors for operation")
     gpu_warn_temp_c: float = Field(75.0, gt=0, description="GPU warning temperature (C)")
     gpu_critical_temp_c: float = Field(90.0, gt=0, description="GPU critical temperature (C)")
@@ -216,6 +277,49 @@ class SafetyConfig(StrictBaseModel):
             "entirely when disabled."
         ),
     )
+
+    @model_validator(mode="after")
+    def thresholds_ordered(self) -> Self:
+        """Reject threshold sets that are individually valid but jointly absurd.
+
+        Every field here carries its own bound, so a swapped pair passes field
+        validation and only misbehaves at runtime: with ``gpu_warn_temp_c``
+        above ``gpu_critical_temp_c`` the monitor warns at the higher
+        temperature and criticals at the lower one, and the operator is given
+        no signal that the config is inverted.
+
+        Battery thresholds honour their documented ``0 disables`` semantics —
+        a disabled threshold is skipped rather than forced into the ordering,
+        so existing YAML that switches one off keeps loading unchanged.
+        """
+        if self.gpu_warn_temp_c >= self.gpu_critical_temp_c:
+            msg = (
+                f"gpu_warn_temp_c ({self.gpu_warn_temp_c}) must be below "
+                f"gpu_critical_temp_c ({self.gpu_critical_temp_c})"
+            )
+            raise ValueError(msg)
+
+        # Ascending severity: implausible-floor < critical < warn. Compare only
+        # adjacent *enabled* pairs (0 disables), so switching one threshold off
+        # never makes the remaining two unsatisfiable.
+        enabled = [
+            (name, value)
+            for name, value in (
+                ("battery_implausible_below_v", self.battery_implausible_below_v),
+                ("battery_critical_v", self.battery_critical_v),
+                ("battery_warn_v", self.battery_warn_v),
+            )
+            if value > 0
+        ]
+        for (lower_name, lower), (upper_name, upper) in pairwise(enabled):
+            if lower >= upper:
+                msg = (
+                    f"{lower_name} ({lower}) must be below {upper_name} ({upper}); "
+                    "battery thresholds ascend implausible < critical < warn "
+                    "(set a threshold to 0 to disable it)"
+                )
+                raise ValueError(msg)
+        return self
 
 
 class ThreeLawsConfig(StrictBaseModel):

@@ -13,13 +13,14 @@ import asyncio
 import contextlib
 import json
 import time
-from typing import TYPE_CHECKING, Any
+from concurrent.futures import ThreadPoolExecutor
+from typing import TYPE_CHECKING, Any, Final, TypeVar
 
 from mousedroid.comms.base_driver import BaseESP32Driver
 from mousedroid.logging.setup import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
 
     from mousedroid.config.schema import ESP32Config
 
@@ -30,11 +31,29 @@ except ImportError:  # pragma: no cover
 
 _log = get_logger(__name__)
 
+_IoResult = TypeVar("_IoResult")
+
+#: Worker count for the per-driver serial I/O executor.
+#:
+#: Deliberately **not** a config field: this is not a tuning knob, it is the
+#: mechanism that serialises access to a single non-thread-safe pyserial
+#: handle. Raising it reintroduces exactly the interleaving the executor
+#: exists to prevent, so it must not be reachable from YAML or an env var.
+_SERIAL_IO_WORKERS: Final[int] = 1
+
+#: Thread-name prefix for the serial I/O worker, so a stack dump or ``py-spy``
+#: capture attributes a blocked ``readline()`` to this driver rather than to an
+#: anonymous ``asyncio_N`` thread from the shared default executor.
+_SERIAL_IO_THREAD_PREFIX: Final[str] = "mousedroid-serial"
+
 
 class SerialESP32Driver(BaseESP32Driver):
     """ESP32 driver using serial UART, implementing ``ESP32CommProtocol``.
 
-    All blocking serial I/O is delegated to ``asyncio.to_thread``.
+    All blocking serial I/O is delegated to a per-driver single-worker
+    executor via ``_run_io`` (never ``asyncio.to_thread``), so operations
+    against the non-thread-safe pyserial handle stay ordered even when the
+    awaiting coroutine is cancelled.
     High-level protocol methods (``send_velocity``, ``read_encoders``,
     ``get_battery_voltage``, ``emergency_stop``) are inherited from
     ``BaseESP32Driver``.
@@ -72,13 +91,78 @@ class SerialESP32Driver(BaseESP32Driver):
         # running loop by the factory, and asyncio.Lock() no longer binds a
         # loop at construction time on the supported Python versions.
         self._io_lock: asyncio.Lock = asyncio.Lock()
+        # Single-worker executor owning every blocking call against
+        # ``self._serial``.  See ``_run_io`` for why this is not the default
+        # executor and why it is load-bearing alongside ``_io_lock``.
+        # Constructed lazily so a driver that is never connected (mock-mode
+        # wiring, unit tests) never spawns a thread.
+        self._io_executor: ThreadPoolExecutor | None = None
+
+    async def _run_io(self, fn: Callable[..., _IoResult], *args: Any) -> _IoResult:
+        """Run one blocking serial operation on this driver's single I/O thread.
+
+        Replaces ``asyncio.to_thread`` for every call that touches
+        ``self._serial``.  Two properties matter, and neither is available from
+        the default executor:
+
+        1. **Ordering that survives cancellation.**  ``_io_lock`` gives mutual
+           exclusion between coroutines, but cancelling a task parked on an
+           executor future releases the ``async with`` *immediately* while the
+           OS thread keeps running — so a lock alone lets an ``emergency_stop``
+           write reach the port while a ``readline()`` still owns it.  With a
+           single worker the write is *queued behind* the in-flight read
+           instead, because a cancelled future does not cancel already-
+           submitted work.
+        2. **Isolation from unrelated blocking work.**  The default executor is
+           shared with every other ``asyncio.to_thread`` call in the process;
+           a saturated pool would delay motor I/O behind unrelated jobs.
+
+        ``_io_lock`` is still required for *atomicity*: ``_query_data`` submits
+        two operations (send, then read) and a foreign write submitted between
+        them would be correctly ordered yet still pair the wrong reply with the
+        request.  The lock closes that window; the executor closes the
+        cancellation window.  Both are load-bearing.
+
+        Args:
+            fn: Blocking callable to execute on the I/O thread.
+            *args: Positional arguments forwarded to *fn*.
+
+        Returns:
+            Whatever *fn* returns.
+        """
+        if self._io_executor is None:
+            self._io_executor = ThreadPoolExecutor(
+                max_workers=_SERIAL_IO_WORKERS,
+                thread_name_prefix=f"{_SERIAL_IO_THREAD_PREFIX}-{self._port}",
+            )
+            _log.debug(
+                "serial_io_executor_started",
+                port=self._port,
+                max_workers=_SERIAL_IO_WORKERS,
+            )
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self._io_executor, fn, *args)
+
+    def _shutdown_io_executor(self) -> None:
+        """Release the serial I/O thread, if one was ever started.
+
+        ``wait=False`` so shutdown never blocks the event loop: any operation
+        still in flight owns a handle that ``_close_serial`` has already
+        released, and the worker exits once it returns.
+        """
+        executor = self._io_executor
+        if executor is None:
+            return
+        self._io_executor = None
+        executor.shutdown(wait=False)
+        _log.debug("serial_io_executor_stopped", port=self._port)
 
     async def connect(self) -> None:
         """Open serial connection to ESP32."""
         if _serial_mod is None:
             msg = "pyserial is not installed — install mousedroid[hardware]"
             raise RuntimeError(msg)
-        self._serial = await asyncio.to_thread(self._open_serial)
+        self._serial = await self._run_io(self._open_serial)
         self._connected = True
         self._consecutive_timeouts = 0
         self._is_degraded = False
@@ -96,7 +180,7 @@ class SerialESP32Driver(BaseESP32Driver):
             await self._arm_command_set()
         except BaseException:
             # BaseException, not Exception: _arm_command_set yields at the
-            # asyncio.to_thread boundary inside _send_command, and
+            # executor boundary inside _send_command, and
             # orchestrator.start() awaits connect(). A CancelledError raised
             # in that window derives from BaseException, so an `except
             # Exception` here would skip the rollback and leak exactly the
@@ -106,10 +190,30 @@ class SerialESP32Driver(BaseESP32Driver):
                 port=self._port,
                 command_set=self._cfg.command_set,
             )
-            with contextlib.suppress(Exception):
-                await asyncio.to_thread(self._close_serial)
-            self._serial = None
+            # Clear driver state SYNCHRONOUSLY, before the next await. The
+            # rollback itself has an await in it, and `contextlib.suppress(
+            # Exception)` cannot hold a CancelledError delivered there — it is
+            # a BaseException. Resetting after that await meant a cancellation
+            # landing mid-rollback skipped the reset and the executor shutdown
+            # entirely, leaving `_connected=True` over a live handle: the exact
+            # leak this block exists to prevent, just through a narrower window.
+            #
+            # The handle is snapshotted rather than closed via `_close_serial`
+            # so the worker thread never races the `self._serial = None` above
+            # (that helper dereferences `self._serial` when it runs, not when
+            # it is submitted).
+            handle, self._serial = self._serial, None
             self._connected = False
+            try:
+                if handle is not None:
+                    # shield() so the close still completes on the I/O thread
+                    # when this coroutine is cancelled at the await. It stays
+                    # routed through _run_io so it queues behind any read
+                    # _arm_command_set left in flight.
+                    with contextlib.suppress(Exception):
+                        await asyncio.shield(self._run_io(handle.close))
+            finally:
+                self._shutdown_io_executor()
             raise
 
     def _open_serial(self) -> Any:  # pragma: no cover
@@ -121,10 +225,17 @@ class SerialESP32Driver(BaseESP32Driver):
         )
 
     async def disconnect(self) -> None:
-        """Close serial connection to ESP32."""
+        """Close serial connection to ESP32.
+
+        The close is submitted through :meth:`_run_io` so it queues behind any
+        in-flight read rather than pulling the handle out from under a
+        ``readline()`` running on the I/O thread.  The executor is released
+        afterwards; a later :meth:`connect` transparently starts a new one.
+        """
         if self._serial is not None:
-            await asyncio.to_thread(self._close_serial)
+            await self._run_io(self._close_serial)
         self._connected = False
+        self._shutdown_io_executor()
         _log.info("serial_esp32_disconnected")
 
     def _close_serial(self) -> None:  # pragma: no cover
@@ -139,10 +250,21 @@ class SerialESP32Driver(BaseESP32Driver):
     async def _send_command(self, cmd: Mapping[str, float]) -> None:
         """Write a JSON command to the serial port.
 
+        Takes ``_io_lock`` for the same reason :meth:`_query_data` does. This
+        path was previously unlocked, which meant a ``send_velocity`` or
+        ``emergency_stop`` write could land *between* a query's send and its
+        read — the reply-mispairing hazard the query's own comment describes,
+        reached from the one direction the lock did not cover. Every caller of
+        this method (``send_velocity``, ``emergency_stop``, ``_arm_command_set``
+        in :class:`BaseESP32Driver`) is a plain write with no reply to consume,
+        so holding the lock for a single submit adds no latency beyond waiting
+        out an in-flight query.
+
         Args:
             cmd: Command payload to serialise and send.
         """
-        await self._send_json(cmd)
+        async with self._io_lock:
+            await self._send_json(cmd)
 
     async def _query_data(
         self,
@@ -164,11 +286,16 @@ class SerialESP32Driver(BaseESP32Driver):
         """
         # The send-then-read pair MUST be atomic. ``SensorManager`` gathers
         # read_encoders() and get_battery_voltage() concurrently, and each
-        # leg yields control at its ``asyncio.to_thread`` boundary — without
-        # this lock two ``readline()`` calls run in different OS threads on
-        # the same pyserial handle (not thread-safe: a single line can be
-        # split between them), replies can pair with the wrong request, and
-        # the degraded-mode counters below are mutated from both tasks.
+        # leg yields control at its executor boundary — without this lock two
+        # ``readline()`` calls interleave on the same pyserial handle, replies
+        # pair with the wrong request, and the degraded-mode counters below are
+        # mutated from both tasks. ``_send_command`` holds the same lock, so a
+        # velocity or emergency-stop write can no longer split this pair.
+        #
+        # The lock alone is not sufficient: cancelling a task parked on the
+        # executor future releases this ``async with`` while the OS thread is
+        # still inside ``readline()``. Ordering across that window is provided
+        # by the single-worker executor in ``_run_io`` — see its docstring.
         async with self._io_lock:
             if self.should_skip_read():
                 # In degraded mode, throttle actual reads to the configured
@@ -247,7 +374,7 @@ class SerialESP32Driver(BaseESP32Driver):
             data: Payload mapping to send as JSON.
         """
         payload = json.dumps(dict(data)).encode() + b"\n"
-        await asyncio.to_thread(self._write_bytes, payload)
+        await self._run_io(self._write_bytes, payload)
 
     def _write_bytes(self, payload: bytes) -> None:  # pragma: no cover
         """Write raw bytes to serial port (blocking).
@@ -271,7 +398,7 @@ class SerialESP32Driver(BaseESP32Driver):
             Parsed JSON dictionary.
         """
         self._last_probe_time = time.monotonic()
-        raw = await asyncio.to_thread(self._read_line)
+        raw = await self._run_io(self._read_line)
         if not raw:
             self._record_timeout()
             return {}
@@ -305,7 +432,7 @@ class SerialESP32Driver(BaseESP32Driver):
 
         Uses ``errors="replace"`` so a garbled byte from firmware churn,
         UART noise, or a partial flash never raises ``UnicodeDecodeError``
-        out of the ``asyncio.to_thread`` wrapper. The replacement char
+        out of the ``_run_io`` executor wrapper. The replacement char
         survives into the downstream ``json.loads`` which then emits the
         existing ``esp32_non_json_response`` warning path.
 

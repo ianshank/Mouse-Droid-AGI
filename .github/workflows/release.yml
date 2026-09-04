@@ -31,12 +31,14 @@ jobs:
     # -------------------------------------------------------------------------
     lint:
         runs-on: ubuntu-latest
+        timeout-minutes: 10
         steps:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
             - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
               with:
                   python-version: "3.11"
                   cache: pip
+                  cache-dependency-path: pyproject.toml
 
             - name: Install ruff
               run: pip install "ruff==0.16.2"
@@ -52,6 +54,7 @@ jobs:
     # -------------------------------------------------------------------------
     typecheck:
         runs-on: ubuntu-latest
+        timeout-minutes: 20
         needs: lint
         steps:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -59,6 +62,7 @@ jobs:
               with:
                   python-version: "3.11"
                   cache: pip
+                  cache-dependency-path: pyproject.toml
 
             - name: Install dependencies
               run: |
@@ -73,6 +77,7 @@ jobs:
     # -------------------------------------------------------------------------
     test:
         runs-on: ubuntu-latest
+        timeout-minutes: 30
         needs: lint
         steps:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -80,6 +85,7 @@ jobs:
               with:
                   python-version: "3.11"
                   cache: pip
+                  cache-dependency-path: pyproject.toml
 
             - name: Install dependencies
               run: pip install -e ".[dev,telemetry]"
@@ -104,6 +110,7 @@ jobs:
     # -------------------------------------------------------------------------
     build:
         runs-on: ubuntu-latest
+        timeout-minutes: 20
         needs: [typecheck, test]
         steps:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -111,6 +118,7 @@ jobs:
               with:
                   python-version: "3.11"
                   cache: pip
+                  cache-dependency-path: pyproject.toml
 
             - name: Install build tools
               run: pip install build
@@ -149,6 +157,7 @@ jobs:
     # -------------------------------------------------------------------------
     publish:
         runs-on: ubuntu-latest
+        timeout-minutes: 20
         needs: build
         environment: pypi
         permissions:

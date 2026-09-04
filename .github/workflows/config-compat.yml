@@ -21,12 +21,17 @@ on:
             - "scripts/check_config_compat.py"
             - ".github/workflows/config-compat.yml"
 
+concurrency:
+    group: config-compat-${{ github.ref }}
+    cancel-in-progress: true
+
 permissions:
     contents: read
 
 jobs:
     config-compat:
         runs-on: ubuntu-latest
+        timeout-minutes: 20
         strategy:
             fail-fast: false
             matrix:
@@ -46,6 +51,7 @@ jobs:
               with:
                   python-version: "3.11"
                   cache: pip
+                  cache-dependency-path: pyproject.toml
 
             - name: Install runtime deps (for schema loading)
               run: |

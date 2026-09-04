@@ -78,9 +78,11 @@ class MCPToolBridge:
 
         Args:
             cfg: MCP-specific configuration.
-            root_cfg: Root settings; only used to source the fallback
+            root_cfg: Root settings. Sources the fallback
                 :class:`CircuitBreakerConfig` when
-                :attr:`MCPConfig.circuit_breaker` is ``None``.
+                :attr:`MCPConfig.circuit_breaker` is ``None``, and the
+                :attr:`OpenClawConfig.require_actuation_ack` half of the
+                actuation gate (see :attr:`_actuation_permitted`).
             tool_registry: The shared registry returned by
                 :func:`~mousedroid.common.tools.registry.create_default_registry`.
             safety_monitor: Live monitor consulted before any actuation
@@ -93,6 +95,7 @@ class MCPToolBridge:
                 is conservative but still correct (gate is still called).
         """
         self._cfg = cfg
+        self._root_cfg = root_cfg
         self._registry = tool_registry
         self._safety_monitor = safety_monitor
         self._metrics = metrics
@@ -118,6 +121,36 @@ class MCPToolBridge:
     # List helpers
     # ------------------------------------------------------------------
 
+    @property
+    def _actuation_permitted(self) -> bool:
+        """Whether actuation tools may be listed or dispatched at all.
+
+        Implements the two-of-two gate that
+        :attr:`OpenClawConfig.require_actuation_ack` documents: an actuation
+        tool needs *both* that flag and
+        :attr:`MCPConfig.expose_actuation_tools`. Until now only the second was
+        enforced, so an operator who set ``expose_actuation_tools: true``
+        believing a second interlock was fastened had exactly one.
+
+        The second gate only applies when OpenClaw is actually wired, and the
+        test for that is ``openclaw is not None AND openclaw.enabled`` — the
+        same condition used by ``factory/mcp_harness.py``,
+        ``factory/llm_gateway.py`` and ``telemetry/server/_lifecycle.py``.
+        A config carrying an ``openclaw:`` block with ``enabled: false`` has no
+        OpenClaw control plane running, so ``require_actuation_ack`` describes
+        a subsystem that is not there and must not decide anything: consulting
+        it would let an unrelated value silently disable actuation for a
+        deployment that never opted in — an invariant-6 break. With OpenClaw
+        unwired (absent *or* disabled) the second gate is vacuously satisfied
+        and behaviour is byte-identical to before this check existed.
+        """
+        if not self._cfg.expose_actuation_tools:
+            return False
+        openclaw = self._root_cfg.openclaw
+        if openclaw is None or not openclaw.enabled:
+            return True
+        return openclaw.require_actuation_ack
+
     def visible_tool_names(self) -> list[str]:
         """Return the deduplicated, ordered list of tools exposed via MCP.
 
@@ -126,19 +159,22 @@ class MCPToolBridge:
         * Name appears in :attr:`MCPConfig.tools_denylist`.
         * :attr:`MCPConfig.tools_allowlist` is non-None and the name is
           missing from it.
-        * Tool is in :attr:`MCPConfig.actuation_tools` and
-          :attr:`MCPConfig.expose_actuation_tools` is False.
+        * Tool is in :attr:`MCPConfig.actuation_tools` and actuation is not
+          permitted — see :attr:`_actuation_permitted`, which requires both
+          :attr:`MCPConfig.expose_actuation_tools` and
+          :attr:`OpenClawConfig.require_actuation_ack`.
         * Allow-list references an unknown name (silently dropped).
         """
         registry_names = list(self._registry.names)
         allowed = set(self._cfg.tools_allowlist) if self._cfg.tools_allowlist is not None else None
+        actuation_permitted = self._actuation_permitted
         out: list[str] = []
         for name in registry_names:
             if name in self._denylist:
                 continue
             if allowed is not None and name not in allowed:
                 continue
-            if name in self._actuation and not self._cfg.expose_actuation_tools:
+            if name in self._actuation and not actuation_permitted:
                 continue
             out.append(name)
         return out
@@ -236,9 +272,11 @@ class MCPToolBridge:
         if allowed is not None and name not in allowed:
             return self._finish(start, name, "denied", error="tool not in allowlist", log=log)
 
-        # 3. Actuation gate: tool exists in actuation set but actuation is off.
+        # 3. Actuation gate: tool is in the actuation set but actuation is not
+        #    permitted. Two-of-two per OpenClawConfig.require_actuation_ack —
+        #    see _actuation_permitted.
         is_actuation = name in self._actuation
-        if is_actuation and not self._cfg.expose_actuation_tools:
+        if is_actuation and not self._actuation_permitted:
             return self._finish(
                 start,
                 name,

@@ -69,6 +69,31 @@ ReplayOutcomeLiteral = Literal["ok", "schema_mismatch"]
 record was skipped because its ``SCHEMA_VERSION`` differed from the
 runtime constant in :mod:`mousedroid.experience.record`."""
 
+TickPhaseLiteral = Literal[
+    "sense",
+    "safety",
+    "world_model",
+    "plan",
+    "act",
+    "learn",
+    "telemetry",
+    "post",
+]
+"""One phase of the orchestrator's sense-plan-act tick. Drives the
+``mousedroid_tick_phase_ms{phase}`` histogram labels.
+
+The phases tile the tick contiguously, so ``sum(phases)`` approximates the
+whole-tick duration and an operator can find a regression by subtraction
+rather than by guessing. They are *diagnostics only* — no phase timing has
+emergency-stop authority, because phases do not sum exactly: every ``await``
+hands control to the event loop, so scheduler delay lands between brackets
+and every phase can be within budget while the tick as a whole overruns.
+
+Typing the writer's parameter to this alias makes mypy reject a mistyped
+phase at the call site; :data:`mousedroid.telemetry.metrics.primitives`
+mirrors the same set as a runtime drop-guard for anything that reaches the
+registry dynamically. A regression test asserts the two never diverge."""
+
 
 def _settings_default_factory(factory: Any) -> Any:
     """Return nested settings factories unchanged.
