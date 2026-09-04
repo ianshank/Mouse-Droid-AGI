@@ -13,6 +13,26 @@ safety:
   battery_critical_v: 0.0
   battery_warn_v: 0.0
   max_loop_time_ms: 200.0
+  # The monitor now receives each tick's real measured total instead of the
+  # sensor-read segment, so this 200 ms ceiling is armed for the first time.
+  # Two guards keep that from turning every boot into an emergency stop, and
+  # neither widens the threshold itself:
+  #
+  #   warm-up  — `tensorrt_enabled: true` above means the first inference pays
+  #     TensorRT engine load plus lazy CUDA context creation. This counts
+  #     TICKS, not wall time: a 20 s engine build is one or two very long
+  #     ticks, not 600 of them, so 30 ticks covers any plausible
+  #     initialisation while still arming the interlock within ~1 s of
+  #     steady-state running (30 ticks / 30 Hz).
+  #   debounce — a single GC pause or page fault is not a control-loop
+  #     failure. Requiring 3 consecutive over-budget ticks still trips in
+  #     ~100 ms on a genuine sustained overrun.
+  #
+  # Schema defaults stay 0 / 1 (pre-feature semantics) so every other overlay
+  # resolves unchanged; these are overrides for this rig only. Retune here
+  # once bring-up produces real first-tick numbers.
+  loop_overrun_warmup_ticks: 30
+  loop_overrun_consecutive_ticks: 3
 
 # Fast-fail retry: no multi-second backoff in the 30 Hz loop
 retry:

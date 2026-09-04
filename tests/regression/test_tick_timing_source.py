@@ -179,6 +179,64 @@ async def test_per_phase_timings_are_recorded_every_tick() -> None:
 
 
 @pytest.mark.asyncio
+async def test_an_emergency_tick_still_reaches_prometheus() -> None:
+    """An emergency tick completed; it just took a shorter route.
+
+    ``tick()``'s ``ok`` flag answers "did this tick raise", not "was the rover
+    healthy". Treating the emergency early-return as a failure suppressed the
+    loop-latency observation for every tick the emergency persisted — so the
+    loop-timing signal went dark for exactly as long as the condition lasted,
+    which is when an operator most needs it. Red before the fix: count 0.
+    """
+    cfg = Settings(mock_hardware=True)
+    clock = MockClock(start=0.0)
+    registry = MetricsRegistry(cfg.metrics)
+    orch = _make_orchestrator(cfg, clock, metrics=registry)
+    # High valid_sensor_count keeps `_try_sensor_recovery` out of the picture:
+    # this test is about the e-stop branch's metric handling, not recovery.
+    orch._safety_monitor.evaluate.return_value = SafetyContext(
+        is_emergency=True, valid_sensor_count=4
+    )
+
+    for _ in range(3):
+        await orch.tick()
+
+    rendered = registry.render_prometheus()
+    assert "mousedroid_loop_latency_ms_count 3" in rendered, (
+        "every emergency tick must still be observed. Found:\n"
+        + "\n".join(line for line in rendered.splitlines() if "loop_latency" in line)
+    )
+
+
+@pytest.mark.asyncio
+async def test_emergency_tick_phases_still_tile() -> None:
+    """``_mark_phase`` promises the brackets tile; the e-stop path must too.
+
+    The emergency branch does real work after ``world_model`` — e-stop, voice,
+    face, telemetry, lifecycle, hooks. Returning without a final mark left that
+    tail in no phase bucket at all, so ``sum(phases) < total`` on precisely the
+    ticks worth breaking down.
+    """
+    cfg = Settings(mock_hardware=True)
+    clock = MockClock(start=0.0)
+    registry = MetricsRegistry(cfg.metrics)
+    orch = _make_orchestrator(cfg, clock, metrics=registry)
+    orch._safety_monitor.evaluate.return_value = SafetyContext(
+        is_emergency=True, valid_sensor_count=4
+    )
+
+    await orch.tick()
+
+    rendered = registry.render_prometheus()
+    for phase in ("sense", "safety", "world_model", "post"):
+        assert f'mousedroid_tick_phase_ms_count{{phase="{phase}"}} 1' in rendered, (
+            f"the emergency path runs phase {phase!r}; it must record it"
+        )
+    # Phases the emergency branch genuinely skips must NOT be fabricated.
+    assert 'mousedroid_tick_phase_ms_count{phase="act"}' not in rendered
+
+
+@pytest.mark.asyncio
 async def test_a_tick_that_raises_still_latches_its_duration() -> None:
     """The `finally` must record even when the tick blows up.
 

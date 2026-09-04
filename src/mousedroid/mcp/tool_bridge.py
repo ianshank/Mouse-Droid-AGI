@@ -132,15 +132,22 @@ class MCPToolBridge:
         enforced, so an operator who set ``expose_actuation_tools: true``
         believing a second interlock was fastened had exactly one.
 
-        When ``Settings.openclaw`` is ``None`` the OpenClaw subsystem — which
-        is what declares actuation-capable skills — is not wired, so the second
-        gate is vacuously satisfied and behaviour is byte-identical to before
-        this check existed.
+        The second gate only applies when OpenClaw is actually wired, and the
+        test for that is ``openclaw is not None AND openclaw.enabled`` — the
+        same condition used by ``factory/mcp_harness.py``,
+        ``factory/llm_gateway.py`` and ``telemetry/server/_lifecycle.py``.
+        A config carrying an ``openclaw:`` block with ``enabled: false`` has no
+        OpenClaw control plane running, so ``require_actuation_ack`` describes
+        a subsystem that is not there and must not decide anything: consulting
+        it would let an unrelated value silently disable actuation for a
+        deployment that never opted in — an invariant-6 break. With OpenClaw
+        unwired (absent *or* disabled) the second gate is vacuously satisfied
+        and behaviour is byte-identical to before this check existed.
         """
         if not self._cfg.expose_actuation_tools:
             return False
         openclaw = self._root_cfg.openclaw
-        if openclaw is None:
+        if openclaw is None or not openclaw.enabled:
             return True
         return openclaw.require_actuation_ack
 

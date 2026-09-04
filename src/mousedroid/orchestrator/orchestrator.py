@@ -550,6 +550,24 @@ class MouseDroidOrchestrator(
                     # deployments are byte-identical.
                     await self._maybe_tick_mission_lifecycle(observation)
                     await self._hook_registry.run_phase(HookPhase.POST_TICK, ctx)
+                    # An emergency tick RAN TO COMPLETION — it just took a
+                    # shorter route. Its duration is a real control-loop
+                    # latency sample and must reach Prometheus, or the loop
+                    # timing goes dark for exactly as long as the emergency
+                    # condition persists, which is when it is most needed.
+                    # ``ok`` answers "did this tick raise", not "was the rover
+                    # healthy"; the error and cancellation paths below are the
+                    # ones telemetry invariant 5 excludes.
+                    #
+                    # ``post`` closes the last open bracket so the phases tile
+                    # here as they do on the full path. On THIS path it spans a
+                    # wider slice — PRE_TICK hooks, any sensor recovery and
+                    # re-evaluation, the e-stop write, voice, face, telemetry,
+                    # lifecycle, POST_TICK hooks. ``act`` stays deliberately
+                    # unrecorded: it means "execute the selected action", and
+                    # an emergency stop is the override, not a selection.
+                    self._mark_phase("post", mark)
+                    ok = True
                     return
 
             action = self._select_action(safety_ctx, observation, prev_tick_ms)

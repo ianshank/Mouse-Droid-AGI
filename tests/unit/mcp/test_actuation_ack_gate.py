@@ -28,22 +28,30 @@ from mousedroid.safety.context import SafetyContext
 _ACTUATION_TOOL = "calibrate_ultrasonic"
 
 
-def _make_bridge(*, expose: bool, require_ack: bool | None) -> MCPToolBridge:
+def _make_bridge(
+    *, expose: bool, require_ack: bool | None, openclaw_enabled: bool = True
+) -> MCPToolBridge:
     """Build a bridge with both halves of the actuation gate set explicitly.
 
     ``require_ack=None`` models ``Settings.openclaw is None`` — the OpenClaw
     subsystem unwired, which is the posture of every shipped overlay.
+    ``openclaw_enabled=False`` models the other way to be unwired: a config
+    that carries an ``openclaw:`` block but never turned the subsystem on.
     """
     overrides: dict[str, object] = {
         "mock_hardware": True,
         "mcp": {"enabled": True, "expose_actuation_tools": expose},
     }
     if require_ack is not None:
-        # Settings rejects openclaw.enabled=true without telemetry auth (the
-        # mission-dispatch endpoint must never be reachable unauthenticated),
-        # so satisfy that pre-existing cross-field rule here.
-        overrides["openclaw"] = {"enabled": True, "require_actuation_ack": require_ack}
-        overrides["telemetry"] = {"auth": {"auth_enabled": True}}
+        overrides["openclaw"] = {
+            "enabled": openclaw_enabled,
+            "require_actuation_ack": require_ack,
+        }
+        if openclaw_enabled:
+            # Settings rejects openclaw.enabled=true without telemetry auth
+            # (the mission-dispatch endpoint must never be reachable
+            # unauthenticated), so satisfy that pre-existing cross-field rule.
+            overrides["telemetry"] = {"auth": {"auth_enabled": True}}
     root_cfg = Settings.model_validate(overrides)
 
     async def _ok() -> dict[str, str]:
@@ -127,3 +135,34 @@ class TestBackwardsCompatibility:
     async def test_openclaw_absent_permits_dispatch_when_exposed(self) -> None:
         status = await _call(_make_bridge(expose=True, require_ack=None))
         assert status != "actuation_disabled"
+
+
+class TestOpenClawPresentButDisabled:
+    """``enabled: false`` is unwired too, and must not gate anything.
+
+    ``factory/mcp_harness.py``, ``factory/llm_gateway.py`` and
+    ``telemetry/server/_lifecycle.py`` all wire OpenClaw on
+    ``openclaw is not None AND openclaw.enabled``. A gate keyed on presence
+    alone disagrees with all three: a deployment that wrote an ``openclaw:``
+    block, left ``enabled: false``, and set ``require_actuation_ack: false``
+    would silently lose actuation it previously had — an invariant-6 break,
+    and one no shipped overlay exercises because none carries the block.
+    """
+
+    def test_disabled_openclaw_leaves_the_expose_flag_in_sole_control(self) -> None:
+        bridge = _make_bridge(expose=True, require_ack=False, openclaw_enabled=False)
+        assert _ACTUATION_TOOL in bridge.visible_tool_names(), (
+            "require_actuation_ack must not be consulted while the OpenClaw "
+            "control plane is switched off — that flag describes a subsystem "
+            "that is not running."
+        )
+
+    @pytest.mark.asyncio
+    async def test_disabled_openclaw_permits_dispatch_when_exposed(self) -> None:
+        status = await _call(_make_bridge(expose=True, require_ack=False, openclaw_enabled=False))
+        assert status != "actuation_disabled"
+
+    def test_expose_false_still_hides_when_openclaw_disabled(self) -> None:
+        """Unwiring OpenClaw must not accidentally *grant* actuation either."""
+        bridge = _make_bridge(expose=False, require_ack=True, openclaw_enabled=False)
+        assert _ACTUATION_TOOL not in bridge.visible_tool_names()

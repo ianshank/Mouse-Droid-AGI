@@ -51,8 +51,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `UltrasonicConfig` (`0/0` remains the documented "unwired" sentinel).
 - **`OpenClawConfig.require_actuation_ack` was documented as half of a two-of-two actuation
   gate and read by no code** (`mcp/tool_bridge.py`). Now enforced in both the visibility
-  filter and the dispatch path; vacuously satisfied when `Settings.openclaw is None`, which
-  is every shipped overlay.
+  filter and the dispatch path; vacuously satisfied when OpenClaw is unwired — that is
+  `openclaw is None` **or** `openclaw.enabled` false, the same condition
+  `factory/mcp_harness.py`, `factory/llm_gateway.py` and `telemetry/server/_lifecycle.py`
+  already use. Keying the gate on presence alone would have let a disabled block's
+  `require_actuation_ack: false` silently withdraw actuation from a deployment that never
+  opted in.
+- **Arming the interlock needed a boot warm-up** (`config/default.yaml`,
+  `config/jetson_production.yaml`). `max_loop_time_ms` was inert while the monitor received
+  the sensor-read segment, so no overlay had ever needed one. Feeding it a real tick
+  duration arms a 200 ms ceiling against a first tick that pays lazy CUDA context creation
+  and TensorRT engine load — an emergency stop at every boot, for a non-fault, on all 16
+  shipped overlays. `loop_overrun_warmup_ticks: 30` in the base config counts *ticks*, not
+  wall time (a 20 s engine build is one or two very long ticks), so it covers
+  initialisation while arming the interlock within ~1 s of steady-state running at 30 Hz;
+  steady-state trip behaviour is unchanged. `jetson_production.yaml` adds
+  `loop_overrun_consecutive_ticks: 3` for that rig's GC and thermal noise. Schema defaults
+  stay `0`/`1` — pre-feature semantics — so third-party YAML resolves exactly as before.
+- **Emergency ticks were treated as failures for metric purposes**
+  (`orchestrator/orchestrator.py`). The `ok` flag guarding publication answers "did this
+  tick raise", not "was the rover healthy", but the emergency branch returned without
+  setting it — so loop-latency observations and the phase breakdown stopped for exactly as
+  long as the emergency persisted, which is when they matter most. The branch now marks its
+  `post` phase and reports success, keeping the phase brackets tiling on every exit path.
 
 ### Changed — CI and packaging (2026-09-04 standards audit)
 
