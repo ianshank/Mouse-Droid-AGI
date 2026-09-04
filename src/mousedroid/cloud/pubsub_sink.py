@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 import msgpack
 
 from mousedroid.cloud._auth import resolve_credentials
+from mousedroid.common.async_utils import TIMEOUT_ERRORS
 from mousedroid.experience.protocol import ExperienceProtocol
 from mousedroid.logging.setup import get_logger
 from mousedroid.resilience.circuit_breaker import (
@@ -209,7 +210,7 @@ class CloudTelemetrySink:
         except CircuitOpenError:
             _log.debug("cloud_pubsub_circuit_open", topic=topic)
             result = _RESULT_CIRCUIT_OPEN
-        except TimeoutError:
+        except TIMEOUT_ERRORS:
             _log.warning("cloud_pubsub_publish_timeout", topic=topic)
             result = _RESULT_TIMEOUT
         except Exception:

@@ -246,18 +246,34 @@ class SensorManager:
         t0 = time.monotonic()
         timestamp = t0
 
-        # Kick off all reads concurrently.
-        vision_task = asyncio.create_task(self._safe_vision_read())
-        distance_task = asyncio.create_task(self._safe_distance_read())
-        motor_task = asyncio.create_task(self._safe_motor_read())
-        audio_task = asyncio.create_task(self._safe_audio_read())
-        lidar_task = asyncio.create_task(self._safe_lidar_read())
-
-        vision_result, vision_ok = await vision_task
-        distance_result, distance_ok = await distance_task
-        motor_result, motor_ok = await motor_task
-        audio_result, audio_ok = await audio_task
-        lidar_result, lidar_ok = await lidar_task
+        # Kick off all reads concurrently and join them with a single
+        # ``gather``. Awaiting the five tasks *sequentially* would leave the
+        # not-yet-awaited ones running detached when this coroutine is
+        # cancelled: ``Task.cancel()`` propagates only to the task currently
+        # parked in ``_fut_waiter``, so a tick timeout
+        # (``asyncio.wait_for(self.tick(), tick_timeout_s)`` in
+        # ``_lifecycle_mixin.run``) orphaned up to four reads per timeout.
+        # Orphans then mutate this manager's degraded-mode counters and
+        # ``_cached_motor_state`` out of order — a read from tick N could
+        # overwrite fresher state during tick N+1 — and kept the ESP32 serial
+        # handle busy past the point where ``run()`` writes its emergency-stop
+        # frame. ``gather`` cancels every child, so nothing survives the tick
+        # that spawned it. The ``_safe_*_read`` helpers already trap their own
+        # exceptions and return ``(result, ok)``, so ``return_exceptions`` is
+        # unnecessary and result ordering is positional.
+        (
+            (vision_result, vision_ok),
+            (distance_result, distance_ok),
+            (motor_result, motor_ok),
+            (audio_result, audio_ok),
+            (lidar_result, lidar_ok),
+        ) = await asyncio.gather(
+            self._safe_vision_read(),
+            self._safe_distance_read(),
+            self._safe_motor_read(),
+            self._safe_audio_read(),
+            self._safe_lidar_read(),
+        )
 
         # Build validity mask: vision=0, ultrasonic=1, motor=2, audio=3,
         # lidar=4 (only when lidar is configured).
