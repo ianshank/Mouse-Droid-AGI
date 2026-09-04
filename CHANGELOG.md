@@ -8,6 +8,68 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Emergency-stop path, tick instrumentation, CI wiring (2026-09-04 standards audit)
+
+- **The loop-overrun interlock was measuring the wrong interval**
+  (`orchestrator/orchestrator.py`). `tick()` computed `loop_time_ms` immediately after
+  `sensor_manager.read_all()` and never recomputed it, then fed that value to
+  `safety_monitor.evaluate`, `mousedroid_loop_time_ms` and `mousedroid_loop_latency_ms`.
+  World-model update, planning, actuation and telemetry all run *after* the measurement,
+  so the phases most likely to blow the 33.3 ms budget were invisible to the emergency
+  stop and to both metric surfaces. A tick costing 305 ms reported 5.0 ms. The monitor now
+  receives the previous tick's measured total, latched in a `finally` so it is recorded on
+  every exit path including the emergency branch's early return.
+- **Loop-time metrics sampled two ticks in three away.** They were written only from the
+  telemetry frame path, throttled to `telemetry.publish_hz` (10 Hz) against
+  `loop.control_hz` (30 Hz). The orchestrator now writes the registry directly on every
+  tick, and the duplicate writer in `telemetry/server/_ws_handlers.py` was removed — left
+  in, it double-observed the histogram and skewed every quantile.
+- **New `mousedroid_tick_phase_ms{phase}` histogram** over the eight tiling tick phases,
+  plus `mousedroid_tick_overruns_total` for soft-budget overruns — the graded signal for a
+  loop degrading from 30 Hz toward 5 Hz, a band that sits below `max_loop_time_ms` and so
+  trips nothing. Both are pure-add: absent from `/metrics` until first observed.
+- **Serial writes could overlap an in-flight read** (`comms/serial_driver.py`).
+  `_send_command` — the path behind `send_velocity` and `emergency_stop` — took no lock, so
+  a write could land between `_query_data`'s send and its read and have its ACK consumed as
+  the query's reply. Taking the lock on both paths is necessary but not sufficient:
+  cancelling a coroutine parked on an executor future releases it while the OS thread keeps
+  running. Every blocking serial call now routes through a per-driver single-worker
+  executor, which orders the write behind the in-flight read.
+- **`read_all` orphaned up to four sensor reads per tick timeout** (`sensing/manager.py`).
+  Five tasks were created then awaited sequentially; `Task.cancel()` reaches only the task
+  currently awaited. Orphans mutated degraded-mode counters and `_cached_motor_state` out of
+  order into the next tick. Joined with `asyncio.gather`.
+- **Shutdown could skip the final emergency stop on Python 3.10**
+  (`common/async_utils.py`, `orchestrator/_lifecycle_mixin.py`). `cancel_and_drain` caught a
+  bare `TimeoutError`, which on the 3.10 floor the rover image ships is a distinct class
+  from both `asyncio.TimeoutError` and `concurrent.futures.TimeoutError`. The new
+  `TIMEOUT_ERRORS` tuple covers all three, and `stop()` now halts the actuators in a
+  `finally` rather than ~20 statements downstream of the drain.
+- **`SafetyConfig` had 59 fields and no cross-field validators.** Added ordering rules
+  (`gpu_warn < gpu_critical`; battery `implausible < critical < warn`, honouring each
+  field's `0 disables` semantics) and BCM bounds plus a distinct-pins rule on
+  `UltrasonicConfig` (`0/0` remains the documented "unwired" sentinel).
+- **`OpenClawConfig.require_actuation_ack` was documented as half of a two-of-two actuation
+  gate and read by no code** (`mcp/tool_bridge.py`). Now enforced in both the visibility
+  filter and the dispatch path; vacuously satisfied when `Settings.openclaw is None`, which
+  is every shipped overlay.
+
+### Changed — CI and packaging (2026-09-04 standards audit)
+
+- `timeout-minutes` on all 26 jobs across 5 workflows (previously zero of `ci.yml`'s 17,
+  against a 360-minute default); `concurrency` groups on ci/harness/config-compat;
+  `push.branches` narrowed so a PR no longer runs the whole matrix twice.
+- The `security` job now installs `.[dev,telemetry,mcp]` — it was auditing 43 of ~100
+  packages and missing every network-facing one (`aiohttp`, `cryptography`, `pyjwt`,
+  `starlette`).
+- The `docker` job now performs a real `docker build` of `Dockerfile.dev`. `docker build
+  --check` is a Dockerfile linter and never executes a `RUN` layer, which is why a missing
+  `COPY README.md` broke both image builds from 2026-07-24 under a green job.
+- Branch coverage enabled (`branch = true`), measured at 91.92% against the 90% gate;
+  `--strict-markers`; `cache-dependency-path: pyproject.toml`; `fail-fast: false` on the
+  version matrices. Removed the dead `force-include` block and excluded 22
+  `CLAUDE.md`/`agent.md` files from the published wheel.
+
 ### Fixed — Config schema hardening, security fixes, regression pins (2026-09-01 tech-debt audit)
 
 - **`StrictBaseModel` (`extra="forbid"`) enforced across every `config/schema/*.py` class
