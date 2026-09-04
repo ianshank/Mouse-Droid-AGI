@@ -45,14 +45,23 @@ class _TelemetryExperienceMixin(_OrchestratorState):
             since: Monotonic timestamp the phase started at.
 
         Returns:
-            The monotonic timestamp taken now, for the next phase to start from.
+            The monotonic timestamp taken now, for the next phase to start
+            from — or ``since`` unchanged when phase timing is off, since
+            nothing consumes the mark in that case and the brackets tile
+            vacuously.
         """
+        if self._metrics is None or not self._tick_phase_timing_enabled:
+            # Eight `monotonic()` reads per tick is not a lot, but telemetry
+            # invariant 3 says a `None` registry keeps the legacy path
+            # byte-identical, and doing measurable work purely to discard it
+            # is not that. The mark is only ever consumed by the next
+            # `_mark_phase`, so returning `since` is sound.
+            return since
         now = self._clock.monotonic()
-        if self._metrics is not None and self._tick_phase_timing_enabled:
-            self._metrics.observe_tick_phase_ms(phase, (now - since) * MILLISECONDS_PER_SECOND)
+        self._metrics.observe_tick_phase_ms(phase, (now - since) * MILLISECONDS_PER_SECOND)
         return now
 
-    def _finish_tick_timing(self, loop_start: float, *, ok: bool) -> None:
+    def _finish_tick_timing(self, loop_start: float, *, ok: bool, tick_index: int) -> None:
         """Latch this tick's true duration and, on success, publish it.
 
         Called from ``tick()``'s ``finally`` so the duration is recorded even
@@ -67,6 +76,13 @@ class _TelemetryExperienceMixin(_OrchestratorState):
         Args:
             loop_start: Monotonic timestamp captured at the top of ``tick()``.
             ok: Whether the tick completed without raising.
+            tick_index: Index of the tick being measured, snapshotted at the
+                top of ``tick()``. Passed in rather than read from
+                ``self._tick_count`` because that counter is already
+                incremented by the time this runs on the success and
+                emergency paths but not on the error path — reading it here
+                would label the same event with two different conventions
+                and be off by one on the two that matter most.
         """
         self._last_tick_ms = (self._clock.monotonic() - loop_start) * MILLISECONDS_PER_SECOND
         if not ok or self._metrics is None:
@@ -83,7 +99,7 @@ class _TelemetryExperienceMixin(_OrchestratorState):
                 "loop_budget_exceeded",
                 loop_time_ms=self._last_tick_ms,
                 budget_ms=budget_ms,
-                tick=self._tick_count,
+                tick=tick_index,
             )
 
     async def _publish_telemetry(

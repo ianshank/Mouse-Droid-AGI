@@ -160,25 +160,31 @@ class SafetyConfig(StrictBaseModel):
         ),
     )
     loop_overrun_consecutive_ticks: int = Field(
-        1,
+        3,
         ge=1,
         description=(
             "Consecutive ticks whose measured duration must exceed "
             "max_loop_time_ms before the monitor raises an emergency stop. "
-            "1 (default) preserves the pre-feature single-sample trip. Raise "
-            "it to debounce isolated GC or page-fault spikes on a loaded "
-            "Jetson without widening the threshold itself."
+            "An isolated GC pause or page fault is not a control-loop "
+            "failure, and max_loop_time_ms only became a live ceiling once "
+            "the monitor started receiving real tick durations: comparing a "
+            "single sample against it emergency-stops on one slow MCTS plan. "
+            "3 still trips in ~100 ms of sustained overrun at 30 Hz. Set 1 "
+            "for the strictest single-sample trip."
         ),
     )
     loop_overrun_warmup_ticks: int = Field(
-        0,
+        30,
         ge=0,
         description=(
             "Ticks from loop start during which a loop overrun is logged and "
             "counted but never raises an emergency stop. Covers lazy CUDA "
-            "context creation and TensorRT/ONNX kernel warm-up, where a slow "
-            "first tick is expected rather than a fault. 0 (default) "
-            "preserves pre-feature behaviour."
+            "context creation and TensorRT/ONNX kernel warm-up and a first "
+            "MuJoCo compile, where a slow first tick is expected rather than "
+            "a fault. This counts TICKS, not wall time -- a 20 s engine build "
+            "is one or two very long ticks, not 600 of them -- so 30 covers "
+            "any plausible initialisation while arming the interlock within "
+            "~1 s of steady-state running at 30 Hz. Set 0 to arm immediately."
         ),
     )
     loop_soft_budget_factor: float = Field(

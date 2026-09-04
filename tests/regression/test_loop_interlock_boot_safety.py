@@ -122,18 +122,33 @@ def test_the_interlock_is_still_armed_once_warmup_is_over(overlay: Path) -> None
     )
 
 
-class TestSchemaDefaultsUnchanged:
-    """Invariant 6: the *schema* defaults must still be pre-feature semantics.
+class TestSchemaDefaultsCarryTheGuards:
+    """The guards live in ``Field(default=...)``, not only in shipped YAML.
 
-    The warm-up lives in shipped YAML, not in ``Field(default=...)``. A
-    third-party config that never mentions these keys must resolve exactly as
-    it did before this feature existed.
+    A ``Settings()`` built in code -- which is what every test fixture and
+    every embedder that does not read ``config/`` does -- must be boot-safe
+    too. Putting the warm-up solely in ``config/default.yaml`` left
+    ``tests/integration/test_e2e_5sec_run.py`` emergency-stopping on a slow
+    MCTS plan, because it constructs ``Settings(mock_hardware=True)`` directly
+    and never goes through the loader.
     """
 
-    def test_bare_safety_config_still_trips_on_the_first_overrun(self) -> None:
+    def test_a_bare_config_survives_a_cold_first_tick(self) -> None:
         cfg = SafetyConfig()
-        assert cfg.loop_overrun_warmup_ticks == 0
-        assert cfg.loop_overrun_consecutive_ticks == 1
+        monitor = MouseDroidSafetyMonitor(cfg)
+        cold_ms = cfg.max_loop_time_ms * _COLD_START_FACTOR
+        assert monitor.evaluate(_observation(), cold_ms, tick_index=0).is_emergency is False
+
+    def test_a_bare_config_still_trips_on_a_sustained_overrun(self) -> None:
+        cfg = SafetyConfig()
         monitor = MouseDroidSafetyMonitor(cfg)
         over_budget_ms = cfg.max_loop_time_ms * _COLD_START_FACTOR
-        assert monitor.evaluate(_observation(), over_budget_ms, tick_index=0).is_emergency is True
+        tick = 0
+        for _ in range(cfg.loop_overrun_warmup_ticks):
+            monitor.evaluate(_observation(), 0.0, tick_index=tick)
+            tick += 1
+        tripped = False
+        for _ in range(cfg.loop_overrun_consecutive_ticks):
+            tripped = monitor.evaluate(_observation(), over_budget_ms, tick_index=tick).is_emergency
+            tick += 1
+        assert tripped is True

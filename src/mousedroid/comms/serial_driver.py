@@ -190,11 +190,30 @@ class SerialESP32Driver(BaseESP32Driver):
                 port=self._port,
                 command_set=self._cfg.command_set,
             )
-            with contextlib.suppress(Exception):
-                await self._run_io(self._close_serial)
-            self._serial = None
+            # Clear driver state SYNCHRONOUSLY, before the next await. The
+            # rollback itself has an await in it, and `contextlib.suppress(
+            # Exception)` cannot hold a CancelledError delivered there — it is
+            # a BaseException. Resetting after that await meant a cancellation
+            # landing mid-rollback skipped the reset and the executor shutdown
+            # entirely, leaving `_connected=True` over a live handle: the exact
+            # leak this block exists to prevent, just through a narrower window.
+            #
+            # The handle is snapshotted rather than closed via `_close_serial`
+            # so the worker thread never races the `self._serial = None` above
+            # (that helper dereferences `self._serial` when it runs, not when
+            # it is submitted).
+            handle, self._serial = self._serial, None
             self._connected = False
-            self._shutdown_io_executor()
+            try:
+                if handle is not None:
+                    # shield() so the close still completes on the I/O thread
+                    # when this coroutine is cancelled at the await. It stays
+                    # routed through _run_io so it queues behind any read
+                    # _arm_command_set left in flight.
+                    with contextlib.suppress(Exception):
+                        await asyncio.shield(self._run_io(handle.close))
+            finally:
+                self._shutdown_io_executor()
             raise
 
     def _open_serial(self) -> Any:  # pragma: no cover

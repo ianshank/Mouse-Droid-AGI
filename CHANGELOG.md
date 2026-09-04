@@ -57,17 +57,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   already use. Keying the gate on presence alone would have let a disabled block's
   `require_actuation_ack: false` silently withdraw actuation from a deployment that never
   opted in.
-- **Arming the interlock needed a boot warm-up** (`config/default.yaml`,
-  `config/jetson_production.yaml`). `max_loop_time_ms` was inert while the monitor received
-  the sensor-read segment, so no overlay had ever needed one. Feeding it a real tick
-  duration arms a 200 ms ceiling against a first tick that pays lazy CUDA context creation
-  and TensorRT engine load — an emergency stop at every boot, for a non-fault, on all 16
-  shipped overlays. `loop_overrun_warmup_ticks: 30` in the base config counts *ticks*, not
-  wall time (a 20 s engine build is one or two very long ticks), so it covers
-  initialisation while arming the interlock within ~1 s of steady-state running at 30 Hz;
-  steady-state trip behaviour is unchanged. `jetson_production.yaml` adds
-  `loop_overrun_consecutive_ticks: 3` for that rig's GC and thermal noise. Schema defaults
-  stay `0`/`1` — pre-feature semantics — so third-party YAML resolves exactly as before.
+- **Arming the interlock required sane defaults, not just a YAML override**
+  (`config/schema/reward_safety.py`). `max_loop_time_ms` was inert while the monitor
+  received the ~1 ms sensor-read segment, so no config had ever needed a guard in front of
+  it. `loop_overrun_warmup_ticks` and `loop_overrun_consecutive_ticks` first shipped in
+  this same changeset at `0`/`1`, described as preserving pre-feature behaviour — which was
+  circular: pre-feature behaviour was an interlock that never fired, and holding the
+  comparison fixed while its input grows by three orders of magnitude is the *largest*
+  behaviour change available, not the smallest. `tests/integration/test_e2e_5sec_run.py`
+  demonstrated it: `loop_overrun loop_time_ms=1339.9 max_ms=200.0 streak=1`, an emergency
+  stop for one slow MCTS plan. The guards now default to `warmup=30` / `consecutive=3` in
+  the schema rather than in shipped YAML, because `Settings()` built in code — every test
+  fixture and any embedder that does not read `config/` — never passes through the loader.
+  Warm-up counts *ticks*, not wall time (a 20 s engine build is one or two very long
+  ticks), so 30 covers initialisation while arming the interlock within ~1 s of
+  steady-state running at 30 Hz, and a sustained overrun still trips in ~100 ms.
+- **`connect()` rollback could be interrupted halfway** (`comms/serial_driver.py`). The
+  rollback contains an `await`, and `contextlib.suppress(Exception)` cannot hold a
+  `CancelledError` — a `BaseException`. A cancellation landing there skipped the state
+  reset and executor shutdown, leaving `_connected=True` over an untracked live handle:
+  precisely the leak the block exists to prevent, through a narrower window, and reachable
+  because `orchestrator.start()` awaits `connect()`. Driver state is now cleared
+  synchronously before the await and the close is shielded. The handle is snapshotted
+  rather than closed via `_close_serial`, which would race the `_serial = None` reset since
+  that helper dereferences `self._serial` when it runs, not when it is submitted.
+- **`loop_budget_exceeded` logged the wrong tick.** `_tick_count` is already incremented by
+  the time the `finally` runs on the success and emergency paths but not on the error path,
+  so one event carried two numbering conventions. It now takes the tick index snapshotted
+  at the top of `tick()`.
+- **`_mark_phase` read the clock even with metrics disabled**, against telemetry invariant
+  3's byte-identical-legacy-path rule. It now returns the incoming mark unchanged.
 - **Emergency ticks were treated as failures for metric purposes**
   (`orchestrator/orchestrator.py`). The `ok` flag guarding publication answers "did this
   tick raise", not "was the rover healthy", but the emergency branch returned without

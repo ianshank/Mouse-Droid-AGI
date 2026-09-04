@@ -41,12 +41,53 @@ def _emergencies(monitor: MouseDroidSafetyMonitor, ticks: int, ms: float) -> lis
     return [monitor.evaluate(_observation(), ms, tick_index=i).is_emergency for i in range(ticks)]
 
 
-class TestDefaultsPreserveHistoricalBehaviour:
-    """At shipped defaults the monitor must behave exactly as it always did."""
+def _armed(*, warmup: int = 0, consecutive: int = 1) -> SafetyConfig:
+    """A config with both boot guards set explicitly, armed from tick zero.
 
-    def test_single_overrun_trips_immediately(self) -> None:
+    The shipped defaults carry a warm-up window and an overrun debounce (see
+    :class:`TestShippedDefaults`). A test exercising ONE of those mechanisms
+    must pin the other rather than inherit it, or it ends up asserting against
+    a default that is itself under test — and silently changes meaning the
+    next time the default is retuned.
+    """
+    return SafetyConfig(
+        loop_overrun_warmup_ticks=warmup,
+        loop_overrun_consecutive_ticks=consecutive,
+    )
+
+
+class TestShippedDefaults:
+    """At shipped defaults the interlock must be armed but not hair-trigger.
+
+    Both halves matter. Defaults that never trip are a disabled safety check;
+    defaults that trip on one sample emergency-stop the rover for a single
+    slow MCTS plan, which ``tests/integration/test_e2e_5sec_run.py`` shows is
+    an ordinary event on a loaded machine (1.3 s ticks against a 200 ms
+    ceiling).
+    """
+
+    def test_a_single_overrun_does_not_trip(self) -> None:
+        """One slow tick is a spike, not a control-loop failure."""
         monitor = MouseDroidSafetyMonitor(SafetyConfig())
-        assert monitor.evaluate(_observation(), _OVER_BUDGET_MS).is_emergency is True
+        assert monitor.evaluate(_observation(), _OVER_BUDGET_MS, tick_index=0).is_emergency is False
+
+    def test_a_sustained_overrun_still_trips(self) -> None:
+        """The anti-cheat half: the interlock must not be off by default."""
+        cfg = SafetyConfig()
+        monitor = MouseDroidSafetyMonitor(cfg)
+        # Spend the warm-up grace with healthy ticks, then sustain an overrun.
+        for tick in range(cfg.loop_overrun_warmup_ticks):
+            monitor.evaluate(_observation(), _IN_BUDGET_MS, tick_index=tick)
+        start = cfg.loop_overrun_warmup_ticks
+        tripped = [
+            monitor.evaluate(_observation(), _OVER_BUDGET_MS, tick_index=start + i).is_emergency
+            for i in range(cfg.loop_overrun_consecutive_ticks)
+        ]
+        assert tripped[-1] is True, (
+            f"{cfg.loop_overrun_consecutive_ticks} consecutive ticks at "
+            f"{_OVER_BUDGET_MS} ms against a {cfg.max_loop_time_ms} ms ceiling "
+            "must emergency-stop; defaults that cannot trip are a disabled check"
+        )
 
     def test_in_budget_tick_does_not_trip(self) -> None:
         monitor = MouseDroidSafetyMonitor(SafetyConfig())
@@ -54,20 +95,23 @@ class TestDefaultsPreserveHistoricalBehaviour:
 
     def test_tick_index_is_optional(self) -> None:
         """Callers that predate the debounce must keep working unchanged."""
-        monitor = MouseDroidSafetyMonitor(SafetyConfig())
-        assert monitor.evaluate(_observation(), _OVER_BUDGET_MS).is_emergency is True
+        monitor = MouseDroidSafetyMonitor(SafetyConfig(loop_overrun_warmup_ticks=0))
+        # No tick_index => every call counts, which is the pre-debounce
+        # semantic; the streak still has to reach the configured length.
+        results = [monitor.evaluate(_observation(), _OVER_BUDGET_MS).is_emergency for _ in range(3)]
+        assert results[-1] is True
 
 
 class TestDebounce:
     """``loop_overrun_consecutive_ticks`` requires a sustained overrun."""
 
     def test_trips_only_on_the_nth_consecutive_overrun(self) -> None:
-        monitor = MouseDroidSafetyMonitor(SafetyConfig(loop_overrun_consecutive_ticks=3))
+        monitor = MouseDroidSafetyMonitor(_armed(consecutive=3))
         assert _emergencies(monitor, 4, _OVER_BUDGET_MS) == [False, False, True, True]
 
     def test_an_in_budget_tick_resets_the_streak(self) -> None:
         """A recovered loop must not carry its old streak into the next spike."""
-        monitor = MouseDroidSafetyMonitor(SafetyConfig(loop_overrun_consecutive_ticks=3))
+        monitor = MouseDroidSafetyMonitor(_armed(consecutive=3))
         assert monitor.evaluate(_observation(), _OVER_BUDGET_MS, tick_index=0).is_emergency is False
         assert monitor.evaluate(_observation(), _OVER_BUDGET_MS, tick_index=1).is_emergency is False
         assert monitor.evaluate(_observation(), _IN_BUDGET_MS, tick_index=2).is_emergency is False
@@ -81,11 +125,17 @@ class TestWarmupGrace:
     """``loop_overrun_warmup_ticks`` covers first-inference cost."""
 
     def test_overruns_inside_the_window_do_not_trip(self) -> None:
-        monitor = MouseDroidSafetyMonitor(SafetyConfig(loop_overrun_warmup_ticks=2))
+        monitor = MouseDroidSafetyMonitor(_armed(warmup=2))
         assert _emergencies(monitor, 4, _OVER_BUDGET_MS) == [False, False, True, True]
 
-    def test_zero_warmup_is_the_default_and_trips_on_tick_zero(self) -> None:
-        monitor = MouseDroidSafetyMonitor(SafetyConfig())
+    def test_zero_warmup_trips_on_tick_zero(self) -> None:
+        """``warmup=0`` must arm the interlock from the very first tick.
+
+        Not the shipped default any more — see :class:`TestShippedDefaults` —
+        but it stays a supported setting for a rig with no lazy inference
+        cost, so the zero case still needs a pin.
+        """
+        monitor = MouseDroidSafetyMonitor(_armed(warmup=0, consecutive=1))
         assert monitor.evaluate(_observation(), _OVER_BUDGET_MS, tick_index=0).is_emergency is True
 
 
@@ -98,7 +148,7 @@ class TestRecoveryPathDedupe:
         Without the dedupe a `consecutive_ticks=3` debounce would trip after
         two real ticks, silently halving the operator's configured fuse.
         """
-        monitor = MouseDroidSafetyMonitor(SafetyConfig(loop_overrun_consecutive_ticks=3))
+        monitor = MouseDroidSafetyMonitor(_armed(consecutive=3))
         results = [
             monitor.evaluate(_observation(), _OVER_BUDGET_MS, tick_index=0).is_emergency
             for _ in range(5)
@@ -110,12 +160,12 @@ class TestRecoveryPathDedupe:
         )
 
     def test_distinct_tick_indices_do_advance(self) -> None:
-        monitor = MouseDroidSafetyMonitor(SafetyConfig(loop_overrun_consecutive_ticks=3))
+        monitor = MouseDroidSafetyMonitor(_armed(consecutive=3))
         assert _emergencies(monitor, 3, _OVER_BUDGET_MS)[-1] is True
 
     def test_none_tick_index_counts_every_call(self) -> None:
         """``None`` means 'caller does not track ticks' — today's semantics."""
-        monitor = MouseDroidSafetyMonitor(SafetyConfig(loop_overrun_consecutive_ticks=2))
+        monitor = MouseDroidSafetyMonitor(_armed(consecutive=2))
         assert monitor.evaluate(_observation(), _OVER_BUDGET_MS).is_emergency is False
         assert monitor.evaluate(_observation(), _OVER_BUDGET_MS).is_emergency is True
 

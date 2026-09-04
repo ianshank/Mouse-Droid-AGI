@@ -36,10 +36,18 @@ class TestDefaultsPreservePreFeatureBehaviour:
         cfg = SafetyConfig()
         # None => use the literal max_loop_time_ms, no derivation.
         assert cfg.max_loop_time_factor is None
-        # 1 => trip on a single overrunning tick, as the monitor always did.
-        assert cfg.loop_overrun_consecutive_ticks == 1
-        # 0 => no warm-up grace, as the monitor always had none.
-        assert cfg.loop_overrun_warmup_ticks == 0
+        # The debounce and warm-up are the exception to this class's rule, and
+        # deliberately so. "Pre-feature behaviour" for these two is not
+        # `consecutive=1, warmup=0` -- it is an interlock that never fired at
+        # all, because the monitor was handed the ~1 ms sensor-read segment
+        # rather than the tick total. Holding the comparison logic fixed while
+        # the input grows by three orders of magnitude is not preservation: it
+        # turns a dormant check into one that e-stops on a single slow MCTS
+        # plan (demonstrated by tests/integration/test_e2e_5sec_run.py, which
+        # sees 1.3 s ticks on a loaded runner). These defaults are the values
+        # that keep the *system* behaving sanely once the interlock is armed.
+        assert cfg.loop_overrun_consecutive_ticks == 3
+        assert cfg.loop_overrun_warmup_ticks == 30
         # 1.0 => soft budget equals the control period exactly.
         assert cfg.loop_soft_budget_factor == 1.0
         # Untouched by the additions.

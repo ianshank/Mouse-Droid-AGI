@@ -680,4 +680,4 @@ class MouseDroidOrchestrator(
             # is chronically slow because it keeps failing must not stay
             # invisible to the next tick's interlock just because it never
             # reached the end of the method.
-            self._finish_tick_timing(loop_start, ok=ok)
+            self._finish_tick_timing(loop_start, ok=ok, tick_index=ctx.tick_index)

@@ -48,23 +48,6 @@ safety:
   gpu_critical_temp_c: 90.0
   battery_warn_v: 10.5
   battery_critical_v: 9.5
-  # The safety monitor now receives each tick's real measured total rather
-  # than the sensor-read segment, so max_loop_time_ms is armed for the first
-  # time. Any deployment with lazily initialised inference (CUDA context
-  # creation, TensorRT/ONNX engine load, first MuJoCo compile) pays that cost
-  # inside its first tick and would emergency-stop at every boot.
-  #
-  # This counts TICKS, not wall time — a 20 s engine build is one or two very
-  # long ticks, not 600 of them — so 30 covers any plausible initialisation
-  # while arming the interlock within ~1 s of steady-state running at 30 Hz.
-  # It is deliberately warm-up only: steady-state trip behaviour is unchanged,
-  # so this does not widen the threshold or debounce genuine overruns. Rigs
-  # that also need debouncing set loop_overrun_consecutive_ticks in their own
-  # overlay (see jetson_production.yaml).
-  #
-  # The schema default stays 0 so existing YAML resolves exactly as before;
-  # this is the shipped base config making the interlock usable on hardware.
-  loop_overrun_warmup_ticks: 30
 
 esp32:
   protocol: serial
