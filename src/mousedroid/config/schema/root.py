@@ -105,6 +105,7 @@ from mousedroid.config.schema.world_model import (
     WorldModelConfig,
     WorldModelMemoryConfig,
 )
+from mousedroid.constants import MILLISECONDS_PER_SECOND
 
 _TOP_LEVEL_SECTION_ALIASES: dict[str, str] = {
     "arm_hardware": "arm",
@@ -525,6 +526,29 @@ class Settings(BaseSettings):
                 msg = f"safety.action_min[{idx}] must be < safety.action_max[{idx}]"
                 raise ValueError(msg)
 
+        return self
+
+    @model_validator(mode="after")
+    def derive_max_loop_time_from_control_hz(self) -> Self:
+        """Derive ``safety.max_loop_time_ms`` from ``loop.control_hz`` when asked.
+
+        ``SafetyConfig`` and ``LoopConfig`` are siblings, and the factory hands
+        the monitor only ``cfg.safety``, so the relationship between the tick
+        rate and the overrun threshold cannot live on either model alone. It
+        belongs here, next to :meth:`action_bounds_match_action_dim`, which
+        already populates a safety field from a model field.
+
+        Opt-in: ``max_loop_time_factor`` defaults to ``None``, in which case the
+        literal ``max_loop_time_ms`` is used unchanged and every existing YAML
+        resolves byte-identically (CLAUDE.md invariant 6). Setting it replaces
+        the previously-undocumented 6x relationship between the 30 Hz period
+        and the 200 ms threshold with a named, described, validated rule that
+        tracks ``control_hz`` instead of silently drifting from it.
+        """
+        factor = self.safety.max_loop_time_factor
+        if factor is None:
+            return self
+        self.safety.max_loop_time_ms = factor / self.loop.control_hz * MILLISECONDS_PER_SECOND
         return self
 
     @model_validator(mode="after")

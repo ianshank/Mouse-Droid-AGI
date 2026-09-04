@@ -144,6 +144,55 @@ class SafetyConfig(StrictBaseModel):
     max_velocity_mps: float = Field(0.5, gt=0, description="Max allowed velocity (m/s)")
     sensor_stale_s: float = Field(0.5, gt=0, description="Sensor staleness threshold (s)")
     max_loop_time_ms: float = Field(200.0, gt=0, description="Max loop time before emergency (ms)")
+    max_loop_time_factor: float | None = Field(
+        None,
+        gt=1.0,
+        description=(
+            "Multiplier on the control period (1 / loop.control_hz) used to "
+            "DERIVE max_loop_time_ms. When set, Settings' root validator "
+            "overwrites max_loop_time_ms with factor / control_hz * 1000, so "
+            "the overrun threshold tracks the tick rate instead of drifting "
+            "when control_hz changes. None (default) keeps the literal "
+            "max_loop_time_ms, so every existing YAML resolves identically. "
+            "The shipped 30 Hz loop with the historical 200 ms threshold "
+            "corresponds to factor=6.0 — that 6x relationship was previously "
+            "undocumented folklore rather than a stated rule."
+        ),
+    )
+    loop_overrun_consecutive_ticks: int = Field(
+        1,
+        ge=1,
+        description=(
+            "Consecutive ticks whose measured duration must exceed "
+            "max_loop_time_ms before the monitor raises an emergency stop. "
+            "1 (default) preserves the pre-feature single-sample trip. Raise "
+            "it to debounce isolated GC or page-fault spikes on a loaded "
+            "Jetson without widening the threshold itself."
+        ),
+    )
+    loop_overrun_warmup_ticks: int = Field(
+        0,
+        ge=0,
+        description=(
+            "Ticks from loop start during which a loop overrun is logged and "
+            "counted but never raises an emergency stop. Covers lazy CUDA "
+            "context creation and TensorRT/ONNX kernel warm-up, where a slow "
+            "first tick is expected rather than a fault. 0 (default) "
+            "preserves pre-feature behaviour."
+        ),
+    )
+    loop_soft_budget_factor: float = Field(
+        1.0,
+        gt=0,
+        description=(
+            "Multiplier on the control period defining the SOFT per-tick "
+            "budget. Exceeding it increments mousedroid_tick_overruns_total "
+            "and logs loop_budget_exceeded; it never raises an emergency "
+            "stop. This is the signal that catches a loop degrading from "
+            "30 Hz toward 5 Hz — a band that sits below max_loop_time_ms and "
+            "so trips nothing today."
+        ),
+    )
     min_valid_sensors: int = Field(2, ge=0, description="Min valid sensors for operation")
     gpu_warn_temp_c: float = Field(75.0, gt=0, description="GPU warning temperature (C)")
     gpu_critical_temp_c: float = Field(90.0, gt=0, description="GPU critical temperature (C)")

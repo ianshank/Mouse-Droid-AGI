@@ -403,6 +403,27 @@ class MetricsConfig(StrictBaseModel):
         (1.0, 2.5, 5.0, 10.0, 20.0, 33.0, 50.0, 100.0, 200.0, float("inf")),
         description="Histogram bucket boundaries for control-loop latency (ms)",
     )
+    track_tick_phases: bool = Field(
+        True,
+        description=(
+            "Expose mousedroid_tick_phase_ms (label: phase) and "
+            "mousedroid_tick_overruns_total. Pure-add: both families are "
+            "omitted from /metrics until the first observation, so a default "
+            "deployment renders byte-identically. Turning this off costs the "
+            "only per-stage breakdown of the 30 Hz tick, so leave it on unless "
+            "profiling shows the eight extra monotonic() reads matter."
+        ),
+    )
+    tick_phase_buckets_ms: tuple[float, ...] = Field(
+        (0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 16.7, 33.3, 50.0, float("inf")),
+        description=(
+            "Histogram bucket boundaries for per-phase tick latency (ms). "
+            "Straddles the 33.3 ms 30 Hz budget deliberately — 16.7 is the "
+            "half-period, 33.3 the period itself, 50.0 above it — so "
+            'le="33.3" reads directly as the fraction of that phase inside '
+            "budget, with no interpolation."
+        ),
+    )
     llm_latency_buckets_ms: tuple[float, ...] = Field(
         (25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, float("inf")),
         description="Histogram bucket boundaries for LLM translation latency (ms)",
@@ -463,6 +484,7 @@ class MetricsConfig(StrictBaseModel):
 
     @field_validator(
         "loop_latency_buckets_ms",
+        "tick_phase_buckets_ms",
         "llm_latency_buckets_ms",
         "llm_gateway_latency_buckets_ms",
         "mcp_latency_buckets_ms",
