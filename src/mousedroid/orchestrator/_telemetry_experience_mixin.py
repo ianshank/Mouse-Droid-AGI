@@ -11,10 +11,12 @@ import numpy as np
 import torch
 
 from mousedroid.common.async_utils import spawn_tracked
+from mousedroid.constants import MILLISECONDS_PER_SECOND
 from mousedroid.logging.setup import get_logger
 from mousedroid.orchestrator._state import _OrchestratorState
 
 if TYPE_CHECKING:
+    from mousedroid.config.schema._primitives import TickPhaseLiteral
     from mousedroid.safety.context import SafetyContext
     from mousedroid.sensing.protocol import ObservationProtocol
 
@@ -23,6 +25,66 @@ _log = get_logger(__name__)
 
 class _TelemetryExperienceMixin(_OrchestratorState):
     """Telemetry publishing and experience logging for the orchestrator."""
+
+    def _mark_phase(self, phase: TickPhaseLiteral, since: float) -> float:
+        """Record elapsed time for one tick phase and return the new mark.
+
+        Returns the boundary rather than taking a context manager so the
+        brackets tile by construction — each call's return value is the next
+        bracket's start, which makes it impossible to leave a gap or overlap
+        between phases. It also adds no branches to ``tick()``, which matters:
+        ``tick`` is measured by the C901 gate.
+
+        Writes the registry directly rather than routing through the telemetry
+        frame. The frame path is throttled to ``telemetry.publish_hz`` (10 Hz)
+        while the loop runs at ``loop.control_hz`` (30 Hz), so going through it
+        would silently discard two ticks in three.
+
+        Args:
+            phase: Which phase the interval that just ended belongs to.
+            since: Monotonic timestamp the phase started at.
+
+        Returns:
+            The monotonic timestamp taken now, for the next phase to start from.
+        """
+        now = self._clock.monotonic()
+        if self._metrics is not None and self._tick_phase_timing_enabled:
+            self._metrics.observe_tick_phase_ms(phase, (now - since) * MILLISECONDS_PER_SECOND)
+        return now
+
+    def _finish_tick_timing(self, loop_start: float, *, ok: bool) -> None:
+        """Latch this tick's true duration and, on success, publish it.
+
+        Called from ``tick()``'s ``finally`` so the duration is recorded even
+        when the tick raised or returned early on the emergency branch. That
+        matters: a chronically failing slow tick must not be invisible to the
+        interlock simply because it never reached the end of the method.
+
+        The measurement is only *published* on the success path, per telemetry
+        invariant 5 — a cancelled tick's partial duration is not a control-loop
+        latency sample, and ``run()`` already logs and e-stops that case.
+
+        Args:
+            loop_start: Monotonic timestamp captured at the top of ``tick()``.
+            ok: Whether the tick completed without raising.
+        """
+        self._last_tick_ms = (self._clock.monotonic() - loop_start) * MILLISECONDS_PER_SECOND
+        if not ok or self._metrics is None:
+            return
+        self._metrics.set_loop_time_ms(self._last_tick_ms)
+        budget_ms = (
+            self._cfg.safety.loop_soft_budget_factor
+            / self._cfg.loop.control_hz
+            * MILLISECONDS_PER_SECOND
+        )
+        if self._last_tick_ms > budget_ms:
+            self._metrics.inc_tick_overrun()
+            _log.warning(
+                "loop_budget_exceeded",
+                loop_time_ms=self._last_tick_ms,
+                budget_ms=budget_ms,
+                tick=self._tick_count,
+            )
 
     async def _publish_telemetry(
         self,

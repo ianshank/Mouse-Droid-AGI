@@ -397,7 +397,13 @@ class _WebSocketHandlersMixin(_TelemetryServerState):
         metrics = self._metrics
         if metrics is None:
             return
-        metrics.set_loop_time_ms(frame.loop_time_ms)
+        # NOTE: loop time is deliberately NOT written here. The orchestrator
+        # is now its sole writer, recording the true tick duration on every
+        # tick (`_finish_tick_timing`). Writing it again per published frame
+        # would double-observe `_loop_histogram` -- once per tick plus once per
+        # frame -- inflating `_count` and skewing every histogram_quantile.
+        # When no orchestrator is running (mock telemetry source, replay) the
+        # gauge stays at 0, which is honest: there is no control loop to time.
         metrics.set_battery_voltage(frame.battery_voltage)
         metrics.set_ws_client_count(len(self._ws_clients))
         self._sync_publisher_metrics()

@@ -15,7 +15,6 @@ import torch
 from mousedroid.cloud.protocol import ENGINE_TYPE_POLICY
 from mousedroid.common.time.protocol import ClockProtocol, RealClock
 from mousedroid.comms.command_set import command_set_supports_lateral
-from mousedroid.constants import MILLISECONDS_PER_SECOND
 from mousedroid.harness.protocol import HookPhase, TickContext
 from mousedroid.logging.setup import get_logger
 from mousedroid.orchestrator._action_mixin import _ActionMixin
@@ -455,6 +454,13 @@ class MouseDroidOrchestrator(
         # Latent state (combined_dim = hidden_dim + cfc_hidden_dim for dual-stream)
         _combined_hidden_dim = cfg.model.hidden_dim + cfg.model.cfc_hidden_dim
         self._h = torch.zeros(1, _combined_hidden_dim)
+        # Previous tick's measured total duration, fed to this tick's safety
+        # evaluation and metrics. 0.0 on tick 0 so the first evaluation cannot
+        # trip -- there is no previous tick to have overrun.
+        self._last_tick_ms: float = 0.0
+        # Resolved once: `_mark_phase` runs 8x per tick at 30 Hz, so this
+        # avoids a config attribute walk 240 times a second.
+        self._tick_phase_timing_enabled: bool = cfg.metrics.track_tick_phases
         self._z = torch.zeros(1, cfg.model.latent_dim)
         self._prev_action = torch.zeros(1, cfg.model.action_dim)
         # Rolling buffer of (h, z) tuples for latent NaN recovery.
@@ -482,17 +488,30 @@ class MouseDroidOrchestrator(
             timestamp_s=loop_start,
             prev_action=self._prev_action,
         )
+        # The safety interlock and the Prometheus gauge are fed the PREVIOUS
+        # tick's *total* duration. A tick cannot know its own total until it
+        # ends, and the value this code used to pass -- the sensor-read segment
+        # measured before planning, actuation and telemetry ran -- made the
+        # loop-overrun e-stop and `mousedroid_loop_time_ms` blind to the phases
+        # most likely to blow the budget. Tick 0 sees 0.0 and is structurally
+        # incapable of tripping, which is correct: there is no previous tick.
+        prev_tick_ms = self._last_tick_ms
+        ok = False
         try:
             observation = await self._sensor_manager.read_all()
-            loop_time_ms = (self._clock.monotonic() - loop_start) * MILLISECONDS_PER_SECOND
+            mark = self._mark_phase("sense", loop_start)
 
-            safety_ctx = self._safety_monitor.evaluate(observation, loop_time_ms)
+            safety_ctx = self._safety_monitor.evaluate(
+                observation, prev_tick_ms, tick_index=self._tick_count
+            )
+            mark = self._mark_phase("safety", mark)
 
             self._update_world_model(observation)
+            mark = self._mark_phase("world_model", mark)
 
             ctx.observation = observation
             ctx.safety_ctx = safety_ctx
-            ctx.loop_time_ms = loop_time_ms
+            ctx.loop_time_ms = prev_tick_ms
             if self._task_tracker is not None:
                 ctx.active_tasks = tuple(s.id for s in self._task_tracker.active())
             await self._hook_registry.run_phase(HookPhase.PRE_TICK, ctx)
@@ -500,13 +519,18 @@ class MouseDroidOrchestrator(
             if safety_ctx.is_emergency:
                 # Attempt sensor recovery before emergency stop if sensors degraded
                 if await self._try_sensor_recovery(safety_ctx):
-                    # Re-read after recovery — sensors may have come back
+                    # Re-read after recovery — sensors may have come back.
+                    # Reuse prev_tick_ms: re-reading sensors inside THIS tick
+                    # cannot change how long the PREVIOUS tick took, and the
+                    # same tick_index keeps the overrun streak from counting
+                    # this tick twice.
                     observation = await self._sensor_manager.read_all()
-                    loop_time_ms = (self._clock.monotonic() - loop_start) * MILLISECONDS_PER_SECOND
-                    safety_ctx = self._safety_monitor.evaluate(observation, loop_time_ms)
+                    safety_ctx = self._safety_monitor.evaluate(
+                        observation, prev_tick_ms, tick_index=self._tick_count
+                    )
                     ctx.observation = observation
                     ctx.safety_ctx = safety_ctx
-                    ctx.loop_time_ms = loop_time_ms
+                    ctx.loop_time_ms = prev_tick_ms
 
                 if safety_ctx.is_emergency:
                     await self._esp32.emergency_stop()
@@ -514,7 +538,7 @@ class MouseDroidOrchestrator(
                     await self._update_face(safety_ctx=safety_ctx, action=None)
                     _log.warning("emergency_stop_triggered")
                     self._tick_count += 1
-                    await self._publish_telemetry(observation, safety_ctx, loop_time_ms)
+                    await self._publish_telemetry(observation, safety_ctx, prev_tick_ms)
                     # Tier C2 / C2.2 (Copilot MED follow-up): drive the
                     # mission lifecycle on the emergency-stop branch too
                     # so active missions keep accumulating progress/stall
@@ -528,7 +552,7 @@ class MouseDroidOrchestrator(
                     await self._hook_registry.run_phase(HookPhase.POST_TICK, ctx)
                     return
 
-            action = self._select_action(safety_ctx, observation, loop_time_ms)
+            action = self._select_action(safety_ctx, observation, prev_tick_ms)
             # Tier C2 / C2.1 — geometric safety projection seam. Wrapping
             # at the ``tick()`` call site (NOT inside ``_select_action``)
             # ensures all four return sites in ``_select_action`` — cognitive,
@@ -563,18 +587,22 @@ class MouseDroidOrchestrator(
             # already zeroed.
             ctx.proposed_action = action
             await self._hook_registry.run_phase(HookPhase.PRE_ACTION, ctx)
+            mark = self._mark_phase("plan", mark)
 
             action = executable
             await self._execute_action(action)
             ctx.executed_action = action
             await self._hook_registry.run_phase(HookPhase.POST_ACTION, ctx)
+            mark = self._mark_phase("act", mark)
 
             self._log_experience(observation, action)
             await self._voice_observe(observation, safety_ctx)
             await self._update_face(safety_ctx=safety_ctx, action=action)
+            mark = self._mark_phase("learn", mark)
 
             self._tick_count += 1
-            await self._publish_telemetry(observation, safety_ctx, loop_time_ms)
+            await self._publish_telemetry(observation, safety_ctx, prev_tick_ms)
+            mark = self._mark_phase("telemetry", mark)
 
             if self._task_tracker is not None:
                 await self._task_tracker.evaluate_active(ctx)
@@ -613,10 +641,12 @@ class MouseDroidOrchestrator(
             await self._maybe_export_memory(mission_completed=mission_completed)
             self._maybe_reset_curiosity(mission_completed=mission_completed)
             self._maybe_rearm_latent_sink(mission_completed=mission_completed)
+            self._mark_phase("post", mark)
+            ok = True
 
             _log.debug(
                 "tick_complete",
-                loop_time_ms=loop_time_ms,
+                loop_time_ms=prev_tick_ms,
                 emergency=safety_ctx.is_emergency,
             )
         except Exception as exc:
@@ -626,3 +656,10 @@ class MouseDroidOrchestrator(
             # propagate (default: warn-and-continue).
             await self._hook_registry.run_phase(HookPhase.ON_ERROR, ctx)
             raise
+        finally:
+            # Latch the true duration on EVERY exit path — success, the
+            # emergency branch's early return, and the error path. A tick that
+            # is chronically slow because it keeps failing must not stay
+            # invisible to the next tick's interlock just because it never
+            # reached the end of the method.
+            self._finish_tick_timing(loop_start, ok=ok)
