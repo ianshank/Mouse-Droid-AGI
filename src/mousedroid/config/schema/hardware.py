@@ -14,6 +14,21 @@ from pydantic import Field, model_validator
 
 from mousedroid.config.schema._primitives import ESP32CommandSetLiteral, Self, StrictBaseModel
 
+#: Inclusive bounds for a Broadcom (BCM) GPIO pin number.
+#:
+#: A property of the SoC's pin numbering, not a tunable — there is no
+#: deployment in which BCM 28 or BCM -1 is a legal pin — so these are module
+#: constants rather than config fields. Bounding the pin fields means an
+#: operator typo surfaces at config-load time with the field name attached,
+#: instead of at GPIO-setup time on the rover as an opaque library error.
+_BCM_PIN_MIN: Final[int] = 0
+_BCM_PIN_MAX: Final[int] = 27
+
+#: Pin value meaning "nothing wired here". Both ultrasonic pins set to this
+#: is the long-standing sentinel used by mock-mode fixtures, so the
+#: distinct-pins rule exempts that pair specifically.
+_BCM_PIN_UNWIRED: Final[int] = 0
+
 
 class CameraConfig(StrictBaseModel):
     """Raspberry Pi AI Camera (IMX500) configuration."""
@@ -417,8 +432,22 @@ class LidarConfig(StrictBaseModel):
 class UltrasonicConfig(StrictBaseModel):
     """HC-SR04 ultrasonic distance sensor configuration."""
 
-    trigger_pin: int = Field(..., description="GPIO trigger pin (BCM numbering)")
-    echo_pin: int = Field(..., description="GPIO echo pin (BCM numbering)")
+    trigger_pin: int = Field(
+        ...,
+        ge=_BCM_PIN_MIN,
+        le=_BCM_PIN_MAX,
+        description=(
+            f"GPIO trigger pin (BCM numbering, {_BCM_PIN_MIN}-{_BCM_PIN_MAX}). "
+            "Bounded because an out-of-range pin fails at GPIO-setup time on "
+            "the rover, long after the config that caused it was accepted."
+        ),
+    )
+    echo_pin: int = Field(
+        ...,
+        ge=_BCM_PIN_MIN,
+        le=_BCM_PIN_MAX,
+        description=f"GPIO echo pin (BCM numbering, {_BCM_PIN_MIN}-{_BCM_PIN_MAX})",
+    )
     max_range_m: float = Field(4.0, gt=0, description="Maximum detection range (m)")
     min_range_m: float = Field(0.02, gt=0, description="Minimum detection range (m)")
     timeout_s: float = Field(0.1, gt=0, description="Echo timeout (s)")
@@ -429,6 +458,28 @@ class UltrasonicConfig(StrictBaseModel):
         """Validate max_range_m > min_range_m."""
         if self.max_range_m <= self.min_range_m:
             msg = "max_range_m must be > min_range_m"
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def distinct_pins(self) -> Self:
+        """Reject a trigger and echo wired to the same GPIO.
+
+        Individually both values are valid pins, so nothing else catches this;
+        the symptom on hardware is a sensor that never returns a reading, which
+        reads as a dead sensor rather than a config error.
+
+        ``trigger_pin == echo_pin == 0`` is exempt: that pair is the
+        established "no ultrasonic wired" sentinel used by mock-mode fixtures
+        and factory tests, and rejecting it would break existing configs
+        (CLAUDE.md invariant 6). Only a *non-zero* collision — a real pin
+        genuinely assigned twice — is a misconfiguration.
+        """
+        if self.trigger_pin == self.echo_pin != _BCM_PIN_UNWIRED:
+            msg = (
+                f"trigger_pin and echo_pin must differ (both are {self.trigger_pin}); "
+                f"use {_BCM_PIN_UNWIRED}/{_BCM_PIN_UNWIRED} to declare no sensor wired"
+            )
             raise ValueError(msg)
         return self
 
