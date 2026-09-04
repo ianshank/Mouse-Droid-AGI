@@ -42,20 +42,106 @@ class MouseDroidSafetyMonitor:
         # and this runs on every 30 Hz evaluation. Warn once per episode,
         # DEBUG thereafter; cleared by the next plausible reading.
         self._battery_missing_warned = False
+        # Loop-overrun debounce state. ``_last_counted_tick_index`` dedupes the
+        # second ``evaluate`` call the orchestrator makes on the sensor-recovery
+        # path within a single tick — without it a naive streak counter would
+        # double-increment and trip at half the configured threshold.
+        self._loop_overrun_streak = 0
+        self._last_counted_tick_index: int | None = None
+        self._ticks_seen = 0
 
     # -- SafetyMonitorProtocol ---------------------------------------------
+
+    def _evaluate_loop_timing(self, loop_time_ms: float, tick_index: int | None) -> bool:
+        """Return ``True`` when loop timing warrants an emergency stop.
+
+        Extracted from :meth:`evaluate` because that method sits at C901 = 14
+        against a ceiling of 15: the debounce and warm-up branches below would
+        not fit inside it.
+
+        Two guards separate a genuine overrun from an expected one:
+
+        * **Warm-up** (``loop_overrun_warmup_ticks``) — a Jetson's first ticks
+          pay lazy CUDA context creation and TensorRT/ONNX kernel warm-up and
+          routinely exceed the threshold. Overruns there are logged and
+          counted but never escalate, so the rover does not emergency-stop at
+          every boot.
+        * **Debounce** (``loop_overrun_consecutive_ticks``) — an isolated GC
+          pause or page fault is not a control-loop failure. Default 1
+          preserves the historical single-sample trip exactly.
+
+        ``tick_index`` dedupes repeated calls within one tick: the orchestrator
+        evaluates twice when sensor recovery fires, and counting both would
+        trip at half the configured streak. ``None`` means "caller does not
+        track ticks", which counts every call — today's exact semantics.
+
+        Args:
+            loop_time_ms: Measured loop duration for the tick being judged.
+            tick_index: Monotonic tick counter, or ``None``.
+
+        Returns:
+            ``True`` if this overrun should raise an emergency stop.
+        """
+        cfg = self._cfg
+        first_call_this_tick = tick_index is None or tick_index != self._last_counted_tick_index
+        if first_call_this_tick:
+            self._last_counted_tick_index = tick_index
+            self._ticks_seen += 1
+
+        if loop_time_ms <= cfg.max_loop_time_ms:
+            if first_call_this_tick:
+                self._loop_overrun_streak = 0
+            return False
+
+        if first_call_this_tick:
+            self._loop_overrun_streak += 1
+
+        if self._ticks_seen <= cfg.loop_overrun_warmup_ticks:
+            _log.info(
+                "loop_overrun_warmup",
+                loop_time_ms=loop_time_ms,
+                max_ms=cfg.max_loop_time_ms,
+                tick=self._ticks_seen,
+                warmup_ticks=cfg.loop_overrun_warmup_ticks,
+            )
+            return False
+
+        if self._loop_overrun_streak < cfg.loop_overrun_consecutive_ticks:
+            _log.warning(
+                "loop_overrun_debounced",
+                loop_time_ms=loop_time_ms,
+                max_ms=cfg.max_loop_time_ms,
+                streak=self._loop_overrun_streak,
+                required=cfg.loop_overrun_consecutive_ticks,
+            )
+            return False
+
+        _log.error(
+            "loop_overrun",
+            loop_time_ms=loop_time_ms,
+            max_ms=cfg.max_loop_time_ms,
+            streak=self._loop_overrun_streak,
+        )
+        return True
 
     def evaluate(
         self,
         observation: ObservationProtocol,
         loop_time_ms: float,
+        *,
+        tick_index: int | None = None,
     ) -> SafetyContext:
         """Evaluate safety state from the current observation.
 
         Args:
             observation: Fused sensor bundle for this tick.
-            loop_time_ms: Wall-clock duration of the last loop iteration
-                in milliseconds.
+            loop_time_ms: Wall-clock duration of the loop iteration being
+                judged, in milliseconds.
+            tick_index: Monotonic tick counter, used to dedupe the repeated
+                call the orchestrator makes on the sensor-recovery path.
+                Keyword-only with a default so every existing caller, test
+                double and ``SafetyMonitorProtocol`` implementation keeps
+                working unchanged.
 
         Returns:
             A frozen :class:`SafetyContext` with all fields populated.
@@ -148,13 +234,7 @@ class MouseDroidSafetyMonitor:
             is_emergency = True
 
         # -- Loop timing ---------------------------------------------------
-        max_loop_time_ms = self._cfg.max_loop_time_ms
-        if loop_time_ms > max_loop_time_ms:
-            _log.error(
-                "loop_overrun",
-                loop_time_ms=loop_time_ms,
-                max_ms=max_loop_time_ms,
-            )
+        if self._evaluate_loop_timing(loop_time_ms, tick_index):
             is_emergency = True
 
         # -- LiDAR 360-degree clearance ------------------------------------

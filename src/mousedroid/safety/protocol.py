@@ -16,6 +16,13 @@ class SafetyMonitorProtocol(Protocol):
         self,
         observation: ObservationProtocol,
         loop_time_ms: float,
+        *,
+        tick_index: int | None = None,
     ) -> SafetyContext:
-        """Evaluate safety state from current observation."""
+        """Evaluate safety state from current observation.
+
+        ``tick_index`` is keyword-only with a default so an implementation that
+        predates loop-overrun debouncing still satisfies this protocol, and so
+        existing two-positional-argument call sites keep working.
+        """
         ...
