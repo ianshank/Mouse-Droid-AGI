@@ -8,6 +8,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Model card accuracy and BDI weight initialisation (2026-09-05)
+
+Found while attempting to train and publish weights to `ianshank/mousedroid-weights`.
+**No weights were published** — the pipeline does not currently produce any that beat a
+trivial baseline, and the evidence is recorded below so the next attempt starts informed.
+
+- **The HuggingFace model card advertised files that were never uploaded**
+  (`training/upload_weights.py`). `_create_model_card` emitted a fixed component table —
+  `rssm/final.pt`, `mcts/policy_init.npz`, all four BDI files, `policy.npz`, `value.npz` —
+  regardless of what was on disk, so a partial run published a public claim that weights
+  existed which were not in the commit. The Jetson-side `HuggingFaceWeightUpdatePoller`
+  reads that repo. The table is now built from the actual upload list, passed in from
+  `upload_weights` rather than re-globbed so the card cannot describe a different set than
+  the push; unrecognised files are listed rather than dropped, and an empty upload says so.
+  A test asserting an *empty* directory produced "RSSM World Model" had pinned the old
+  behaviour and is replaced. The card's `Trained on Jetson Orin Nano (8 GB)` line is also
+  gone — nothing in the upload path knows the training platform.
+- **`WEIGHT_INIT_SCALE` caused vanishing activations in the BDI trainers**
+  (`training/train_bdi.py`). One fixed scalar (`0.01`) applied regardless of fan-in.
+  Measured through the belief autoencoder's 256→128→128→256 stack: `h1.std=0.094`,
+  `h2.std=0.0072`, `recon.std=0.00096`. The reconstruction is numerically zero, its MSE
+  (0.998926) is indistinguishable from predicting zero (0.998919), and the loss moved
+  0.000159 across 80 epochs — training began at the trivial solution and stayed. The
+  trainers now scale by `sqrt(2 / fan_in)`. Kept local to training on purpose:
+  `WEIGHT_INIT_SCALE` is also used at runtime by `cognitive/bdi_model.py` and
+  `cognitive/constitutional_rl.py`, and a training fix must not move a shared production
+  constant as a side effect.
+
+### Known issues — BDI training does not converge (2026-09-05)
+
+The initialisation fix above is **necessary but not sufficient**. Two independent problems
+remain, and they need different owners:
+
+- **Belief autoencoder is an optimiser problem.** Plateaus at MSE 1.00006, marginally worse
+  than predicting the mean (0.999399), while PCA puts a rank-128 bottleneck at 0.456604
+  (54.3% of variance). The structure is there; plain SGD at `training.learning_rate` is not
+  finding it.
+- **Intention predictor is a data problem that training cannot fix.** Cross-entropy 2.0823
+  against a marginal-predictor baseline of 1.0050 — worse than a constant emitting the
+  label frequencies. A linear probe from observations to labels scores 0.5722 accuracy and
+  the majority-class baseline scores 0.5722, identical: the synthetic annotations carry no
+  observation-dependent signal. `training/collect_annotations.py` is where this has to be
+  addressed. The labels are also degenerate — 6 of 10 classes across 25,000 samples, one
+  class at 58%, two classes with 6 and 5 samples.
+
+Desire (0.002165) and affect (0.311238) converge, but train on features from the broken
+belief encoder.
+
 ### Fixed — Emergency-stop path, tick instrumentation, CI wiring (2026-09-04 standards audit)
 
 - **The loop-overrun interlock was measuring the wrong interval**
