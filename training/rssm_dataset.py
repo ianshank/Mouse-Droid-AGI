@@ -53,9 +53,7 @@ def _normalize_episode(
         normalized.append(
             {
                 "vision": _coerce_step_tensor(step.get("vision"), model_cfg.vision_dim),
-                "ultrasonic": _coerce_step_tensor(
-                    step.get("ultrasonic"), model_cfg.ultrasonic_dim
-                ),
+                "ultrasonic": _coerce_step_tensor(step.get("ultrasonic"), model_cfg.ultrasonic_dim),
                 "motor_state": _coerce_step_tensor(
                     step.get("motor_state"), model_cfg.motor_state_dim
                 ),

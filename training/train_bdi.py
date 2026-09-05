@@ -37,24 +37,26 @@ _AFFECT_DIM = DEFAULT_AFFECT_DIM
 def _init_weights(rng: np.random.Generator, fan_in: int, fan_out: int) -> NDArray[Any]:
     """He-scaled initialisation for a ReLU layer.
 
-    ``WEIGHT_INIT_SCALE`` is a single fixed scalar (0.01) applied regardless of
-    fan-in. Through the belief autoencoder's 256 -> 128 -> 128 -> 256 stack that
-    shrinks the signal roughly 100x per layer: activations measured at
-    h1.std=0.094, h2.std=0.0072, recon.std=0.00096, so the reconstruction is
-    numerically zero and its MSE (0.9989) is indistinguishable from predicting
-    zero (0.9989). Gradients back through those near-zero activations are
-    proportionally tiny, so training never escapes -- the loss moved 0.000159
-    across 80 epochs. More epochs cannot fix an initialisation that starts at
-    the trivial solution.
+    Replaces ``WEIGHT_INIT_SCALE``, one fixed scalar (0.01) applied regardless
+    of fan-in, which shrank the signal about 100x per layer through the belief
+    autoencoder's 256 -> 128 -> 128 -> 256 stack until the reconstruction was
+    numerically zero. Scaling by ``sqrt(2 / fan_in)`` holds activation variance
+    roughly constant across depth instead.
 
-    Scaling by ``sqrt(2 / fan_in)`` keeps activation variance roughly constant
-    across depth, which is the standard result for ReLU networks.
+    Kept local to training on purpose: ``WEIGHT_INIT_SCALE`` is also used at
+    runtime by ``cognitive/bdi_model.py`` and ``cognitive/constitutional_rl.py``,
+    and a training fix should not change a shared production constant as a side
+    effect. Initialisation only matters while training -- loading trained
+    weights replaces it outright -- so the two need not agree.
 
-    This is deliberately local to training. ``WEIGHT_INIT_SCALE`` is also used
-    by ``cognitive/bdi_model.py`` and ``cognitive/constitutional_rl.py`` at
-    runtime, and changing a shared production constant is not a side effect a
-    training fix should have. Initialisation only matters while training --
-    loading trained weights replaces it outright -- so the two need not agree.
+    NOT SUFFICIENT ON ITS OWN. This removes one blocker, it does not make BDI
+    training converge: the belief autoencoder still plateaus around MSE 1.0,
+    marginally worse than predicting the mean, while PCA puts a rank-128
+    bottleneck at 0.46. The remaining gap is the optimiser (plain SGD, lr from
+    ``training.learning_rate``), and the intention head has a separate and
+    unrelated problem -- its labels carry no observation-dependent signal. Do
+    not read the presence of this function as evidence the trainer works; see
+    the PR that introduced it for the measurements.
 
     Args:
         rng: Seeded generator, so runs stay reproducible.

@@ -91,7 +91,7 @@ class TestCreateModelCard:
         assert "BDI Belief" in card
         assert "`bdi/belief.npz`" in card
         assert "BDI Affect" in card
-        # Trained in the same run, but never produced — must not be claimed.
+        # Absent from the directory, so absent from the card.
         assert "RSSM World Model" not in card
         assert "Constitutional RL Policy" not in card
 
