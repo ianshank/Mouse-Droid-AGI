@@ -22,7 +22,6 @@ from mousedroid.constants import (
     DEFAULT_GRADIENT_SCALE,
     DEFAULT_INTENTION_CLASSES,
     DEFAULT_VISION_DIM,
-    WEIGHT_INIT_SCALE,
 )
 
 _log = structlog.get_logger(__name__)
@@ -33,6 +32,43 @@ _BELIEF_DIM = DEFAULT_BELIEF_DIM
 _DESIRE_DIM = DEFAULT_DESIRE_DIM
 _INTENTION_CLASSES = DEFAULT_INTENTION_CLASSES
 _AFFECT_DIM = DEFAULT_AFFECT_DIM
+
+
+def _init_weights(rng: np.random.Generator, fan_in: int, fan_out: int) -> NDArray[Any]:
+    """He-scaled initialisation for a ReLU layer.
+
+    Replaces ``WEIGHT_INIT_SCALE``, one fixed scalar (0.01) applied regardless
+    of fan-in, which shrank the signal about 100x per layer through the belief
+    autoencoder's 256 -> 128 -> 128 -> 256 stack until the reconstruction was
+    numerically zero. Scaling by ``sqrt(2 / fan_in)`` holds activation variance
+    roughly constant across depth instead.
+
+    Kept local to training on purpose: ``WEIGHT_INIT_SCALE`` is also used at
+    runtime by ``cognitive/bdi_model.py`` and ``cognitive/constitutional_rl.py``,
+    and a training fix should not change a shared production constant as a side
+    effect. Initialisation only matters while training -- loading trained
+    weights replaces it outright -- so the two need not agree.
+
+    NOT SUFFICIENT ON ITS OWN. This removes one blocker, it does not make BDI
+    training converge: the belief autoencoder still plateaus around MSE 1.0,
+    marginally worse than predicting the mean, while PCA puts a rank-128
+    bottleneck at 0.46. The remaining gap is the optimiser (plain SGD, lr from
+    ``training.learning_rate``), and the intention head has a separate and
+    unrelated problem -- its labels carry no observation-dependent signal. Do
+    not read the presence of this function as evidence the trainer works; see
+    the PR that introduced it for the measurements.
+
+    Args:
+        rng: Seeded generator, so runs stay reproducible.
+        fan_in: Input dimension of the layer.
+        fan_out: Output dimension of the layer.
+
+    Returns:
+        A ``(fan_in, fan_out)`` float32 weight matrix.
+    """
+    scale = np.sqrt(2.0 / fan_in)
+    weights: NDArray[Any] = (rng.standard_normal((fan_in, fan_out)) * scale).astype(np.float32)
+    return weights
 
 
 def _save_weight_file(path: Path, weights: dict[str, NDArray[Any]]) -> None:
@@ -66,13 +102,13 @@ def train_belief_encoder(
     n = len(observations)
 
     # Encoder weights (256 → 128)
-    w1 = rng.standard_normal((_OBS_DIM, _BELIEF_DIM)).astype(np.float32) * WEIGHT_INIT_SCALE
+    w1 = _init_weights(rng, _OBS_DIM, _BELIEF_DIM)
     b1 = np.zeros(_BELIEF_DIM, dtype=np.float32)
     # Second encoder layer (128 → 128)
-    w2 = rng.standard_normal((_BELIEF_DIM, _BELIEF_DIM)).astype(np.float32) * WEIGHT_INIT_SCALE
+    w2 = _init_weights(rng, _BELIEF_DIM, _BELIEF_DIM)
     b2 = np.zeros(_BELIEF_DIM, dtype=np.float32)
     # Decoder weights (128 → 256)
-    w_dec = rng.standard_normal((_BELIEF_DIM, _OBS_DIM)).astype(np.float32) * WEIGHT_INIT_SCALE
+    w_dec = _init_weights(rng, _BELIEF_DIM, _OBS_DIM)
     b_dec = np.zeros(_OBS_DIM, dtype=np.float32)
 
     for epoch in range(1, epochs + 1):
@@ -142,10 +178,10 @@ def train_desire_encoder(
     beliefs = _relu(h1 @ belief_weights["w2"] + belief_weights["b2"])
 
     # Desire encoder weights (128 → 64)
-    w1 = rng.standard_normal((_BELIEF_DIM, _DESIRE_DIM)).astype(np.float32) * WEIGHT_INIT_SCALE
+    w1 = _init_weights(rng, _BELIEF_DIM, _DESIRE_DIM)
     b1 = np.zeros(_DESIRE_DIM, dtype=np.float32)
     # Decoder for training (64 → 128)
-    w_dec = rng.standard_normal((_DESIRE_DIM, _BELIEF_DIM)).astype(np.float32) * WEIGHT_INIT_SCALE
+    w_dec = _init_weights(rng, _DESIRE_DIM, _BELIEF_DIM)
     b_dec = np.zeros(_BELIEF_DIM, dtype=np.float32)
 
     for epoch in range(1, epochs + 1):
@@ -208,10 +244,7 @@ def train_intention_predictor(
     desires = _relu(beliefs @ desire_weights["w1"] + desire_weights["b1"])
 
     # Intention weights (64 → 10)
-    w1 = (
-        rng.standard_normal((_DESIRE_DIM, _INTENTION_CLASSES)).astype(np.float32)
-        * WEIGHT_INIT_SCALE
-    )
+    w1 = _init_weights(rng, _DESIRE_DIM, _INTENTION_CLASSES)
     b1 = np.zeros(_INTENTION_CLASSES, dtype=np.float32)
 
     for epoch in range(1, epochs + 1):
@@ -290,7 +323,7 @@ def train_affect_estimator(
     input_dim = _DESIRE_DIM + _INTENTION_CLASSES
 
     # Affect weights (72 → 2)
-    w1 = rng.standard_normal((input_dim, _AFFECT_DIM)).astype(np.float32) * WEIGHT_INIT_SCALE
+    w1 = _init_weights(rng, input_dim, _AFFECT_DIM)
     b1 = np.zeros(_AFFECT_DIM, dtype=np.float32)
 
     for epoch in range(1, epochs + 1):

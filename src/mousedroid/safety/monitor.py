@@ -73,7 +73,8 @@ class MouseDroidSafetyMonitor:
         ``tick_index`` dedupes repeated calls within one tick: the orchestrator
         evaluates twice when sensor recovery fires, and counting both would
         trip at half the configured streak. ``None`` means "caller does not
-        track ticks", which counts every call — today's exact semantics.
+        track ticks", and every call is then counted — the pre-debounce
+        behaviour, kept so callers predating ``tick_index`` still work.
 
         Args:
             loop_time_ms: Measured loop duration for the tick being judged.

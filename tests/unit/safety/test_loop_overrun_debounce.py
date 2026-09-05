@@ -1,10 +1,12 @@
 """Loop-overrun debounce, warm-up grace, and the recovery-path dedupe.
 
-``_evaluate_loop_timing`` exists because feeding the safety monitor a *real*
-tick duration (rather than the sensor-read segment it receives today) would
-otherwise emergency-stop the rover at every boot: a Jetson's first ticks pay
-lazy CUDA context creation and TensorRT/ONNX kernel warm-up and routinely
-exceed ``max_loop_time_ms``.
+``_evaluate_loop_timing`` exists because the safety monitor is now handed each
+tick's *real* measured duration rather than the sensor-read segment it used to
+receive. Without these guards that would emergency-stop the rover at every
+boot: a Jetson's first ticks pay lazy CUDA context creation and TensorRT/ONNX
+kernel warm-up and routinely exceed ``max_loop_time_ms``. This is not
+hypothetical — ``tests/integration/test_e2e_5sec_run.py`` tripped the interlock
+on a single 1.3 s MCTS plan before the guards were given non-zero defaults.
 
 The dedupe matters just as much. ``orchestrator.tick`` calls ``evaluate``
 twice when sensor recovery fires, so a naive streak counter would advance
@@ -164,7 +166,7 @@ class TestRecoveryPathDedupe:
         assert _emergencies(monitor, 3, _OVER_BUDGET_MS)[-1] is True
 
     def test_none_tick_index_counts_every_call(self) -> None:
-        """``None`` means 'caller does not track ticks' — today's semantics."""
+        """``None`` means 'caller does not track ticks': every call counts."""
         monitor = MouseDroidSafetyMonitor(_armed(consecutive=2))
         assert monitor.evaluate(_observation(), _OVER_BUDGET_MS).is_emergency is False
         assert monitor.evaluate(_observation(), _OVER_BUDGET_MS).is_emergency is True
