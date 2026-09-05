@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,22 @@ _CLOUD_TRAINER_UPLOAD_EXTENSIONS: tuple[str, ...] = (
     ".json",
     ".safetensors",
 )
+
+#: Display name and description for each weight file the pipeline can emit,
+#: keyed by path relative to the weights directory. Files absent from this map
+#: still appear in the model card, labelled as unrecognised — the card reports
+#: what was uploaded rather than only what this table anticipates.
+_COMPONENT_DOCS: dict[str, tuple[str, str]] = {
+    "rssm/final.pt": ("RSSM World Model", "Recurrent State-Space Model"),
+    "mcts/policy_init.npz": ("MCTS Policy Init", "Warm-started PolicyMLP"),
+    "mcts/tuned_config.json": ("MCTS Tuning", "Tuned UCB / rollout parameters"),
+    "bdi/belief.npz": ("BDI Belief", "Belief encoder weights"),
+    "bdi/desire.npz": ("BDI Desire", "Desire encoder weights"),
+    "bdi/intention.npz": ("BDI Intention", "Intention predictor weights"),
+    "bdi/affect.npz": ("BDI Affect", "Affect estimator weights"),
+    "policy.npz": ("Constitutional RL Policy", "PPO policy network"),
+    "value.npz": ("Constitutional RL Value", "PPO value network"),
+}
 
 _HF_AVAILABLE = False
 try:
@@ -103,7 +120,7 @@ def upload_weights(
         api = HfApi()
 
         # Create model card
-        model_card = _create_model_card(weights_dir, repo_id)
+        model_card = _create_model_card(weights_dir, repo_id, files_to_upload)
         card_path = weights_dir / "README.md"
         card_path.write_text(model_card, encoding="utf-8")
 
@@ -127,12 +144,26 @@ def upload_weights(
         return False
 
 
-def _create_model_card(weights_dir: Path, repo_id: str) -> str:
-    """Create a HuggingFace model card with training metadata.
+def _create_model_card(
+    weights_dir: Path,
+    repo_id: str,
+    files: Iterable[Path] | None = None,
+) -> str:
+    """Create a HuggingFace model card describing the files actually uploaded.
+
+    The component table is built from what is on disk, not from a fixed list.
+    A static table is a liability on a public model card: a partial run — BDI
+    only, or a cloud sync that produced just the ONNX export — would still
+    publish rows for ``rssm/final.pt`` and ``policy.npz``, telling operators
+    (and the Jetson-side ``HuggingFaceWeightUpdatePoller``) that weights exist
+    which were never uploaded.
 
     Args:
         weights_dir: Directory containing weight files.
         repo_id: HuggingFace repository ID.
+        files: The files being uploaded. ``None`` discovers them from
+            *weights_dir* using the default extension set, so callers that
+            only want a card still describe the real directory.
 
     Returns:
         Model card content as string.
@@ -143,6 +174,14 @@ def _create_model_card(weights_dir: Path, repo_id: str) -> str:
     if tuned_config.exists():
         with open(tuned_config) as f:
             metadata["mcts_tuning"] = json.load(f)
+
+    if files is None:
+        files = [
+            f
+            for f in weights_dir.rglob("*")
+            if f.is_file() and f.suffix in _DEFAULT_UPLOAD_EXTENSIONS
+        ]
+    relative = sorted(f.relative_to(weights_dir).as_posix() for f in files)
 
     card = f"""---
 tags:
@@ -159,21 +198,17 @@ library_name: pytorch
 Trained weights for MouseDroid autonomous navigation system.
 
 ## Components
-
-| Component | File | Description |
-|-----------|------|-------------|
-| RSSM World Model | `rssm/final.pt` | Recurrent State-Space Model |
-| MCTS Policy Init | `mcts/policy_init.npz` | Warm-started PolicyMLP |
-| BDI Belief | `bdi/belief.npz` | Belief encoder weights |
-| BDI Desire | `bdi/desire.npz` | Desire encoder weights |
-| BDI Intention | `bdi/intention.npz` | Intention predictor weights |
-| BDI Affect | `bdi/affect.npz` | Affect estimator weights |
-| Constitutional RL | `policy.npz`, `value.npz` | PPO policy + value networks |
-
-## Training
-
-Trained on Jetson Orin Nano (8 GB) using synthetic observation sequences.
 """
+    if relative:
+        card += "\n| Component | File | Description |\n|-----------|------|-------------|\n"
+        for rel in relative:
+            name, description = _COMPONENT_DOCS.get(rel, (rel, "Unrecognised weight file"))
+            card += f"| {name} | `{rel}` | {description} |\n"
+    else:
+        card += "\nNo weight files were present in this upload.\n"
+
+    card += "\n## Training\n\nTrained on synthetic observation sequences.\n"
+
     # Append training metadata as JSON, if available
     if metadata:
         metadata_json = json.dumps(metadata, indent=2, sort_keys=True)
