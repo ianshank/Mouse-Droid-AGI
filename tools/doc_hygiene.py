@@ -64,8 +64,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python tools/doc_hygiene.py",
         description=(
-            "Size/drift guard for planning docs "
-            "(WARN-only unless --strict; CI uses --strict)."
+            "Size/drift guard for planning docs (WARN-only unless --strict; CI uses --strict)."
         ),
     )
     parser.add_argument(

@@ -185,9 +185,7 @@ class RSSM(nn.Module):
                 ).unsqueeze(0)
 
         # Encode
-        obs_embed = self.encoder(
-            vision, ultrasonic, motor, mask, audio=audio, lidar=lidar, imu=imu
-        )
+        obs_embed = self.encoder(vision, ultrasonic, motor, mask, audio=audio, lidar=lidar, imu=imu)
 
         # GRU step
         gru_input = torch.cat([z, prev_action], dim=-1)
@@ -377,9 +375,7 @@ class RSSM(nn.Module):
         lidar = batch["lidar"][:, step] if lidar_enabled else None
         imu = batch["imu"][:, step] if imu_enabled else None
         vision = batch["vision"][:, step] if vision_enabled else None
-        obs_embed = self.encoder(
-            vision, ultra, motor[:, step], mask[:, step], lidar=lidar, imu=imu
-        )
+        obs_embed = self.encoder(vision, ultra, motor[:, step], mask[:, step], lidar=lidar, imu=imu)
 
         gru_in = torch.cat([z, actions[:, step]], dim=-1)
         h = self.gru(gru_in, h)

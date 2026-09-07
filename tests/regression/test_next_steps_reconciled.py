@@ -92,11 +92,7 @@ def test_done_catalog_ids_in_current_are_operator_leftovers() -> None:
     """A done F-id in Current Next Steps must be labelled leftover, not next work."""
     section = _current_next_steps_section(_NEXT_STEPS.read_text(encoding="utf-8"))
     catalog = yaml.safe_load((_REPO_ROOT / "features.yaml").read_text(encoding="utf-8"))
-    done = {
-        feat["id"]
-        for feat in catalog["features"]
-        if feat.get("status") == "done"
-    }
+    done = {feat["id"] for feat in catalog["features"] if feat.get("status") == "done"}
     offenders: list[str] = []
     for line in section.splitlines():
         ids = re.findall(r"\bF-\d{3}\b", line)

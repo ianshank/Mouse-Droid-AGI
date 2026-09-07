@@ -310,9 +310,7 @@ class TestValidMaskWidthNormalization:
         obs = _StubObservation(valid_mask=mask)
         packed = pack_observation(obs, cfg, device=torch.device("cpu"))
         assert packed.valid_mask.shape == (1, N_SENSOR_MODALITIES_WITH_IMU)
-        assert torch.allclose(
-            packed.valid_mask.flatten()[:5], torch.from_numpy(mask), atol=1e-6
-        )
+        assert torch.allclose(packed.valid_mask.flatten()[:5], torch.from_numpy(mask), atol=1e-6)
         assert packed.valid_mask[..., 5].item() == 0.0
 
     def test_six_wide_mask_passes_through_unchanged(self) -> None:
