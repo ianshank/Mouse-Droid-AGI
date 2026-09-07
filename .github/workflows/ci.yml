@@ -248,12 +248,14 @@ jobs:
                     --import-mode=importlib \
                     -v --tb=short --no-cov
 
-            # Functional / user-journey / security tiers ran in NO CI path at
-            # all until F-028 -- the same rot the smoke tier suffered before
-            # PR #178. These go in `test` (blocking), NOT the advisory
+            # Parked AutonomousOrchestrator (ADR-016) functional/user-journey
+            # plus security. F-028 wired the directories; F-038 relabels so
+            # this step is not read as production operator-path coverage.
+            # Production MouseDroidOrchestrator is already in e2e/integration/
+            # smoke. These go in `test` (blocking), NOT the advisory
             # `security` job: that job is continue-on-error and would swallow
             # every failure.
-            - name: Run functional + user-journey + security tiers
+            - name: Run parked-autonomous functional/user-journey + security tiers
               run: |
                   pytest tests/functional tests/user_journey tests/security \
                     -m "not hardware and not slow" \
@@ -394,8 +396,8 @@ jobs:
             - name: Subsystem boundary gate (Protocol-based DI, full tree)
               run: python scripts/check_subsystem_boundaries.py
 
-            - name: Doc hygiene (advisory, exits 0 unless --strict)
-              run: python tools/doc_hygiene.py NEXT_STEPS.md
+            - name: Doc hygiene (strict size/checkmark budget)
+              run: python tools/doc_hygiene.py NEXT_STEPS.md --strict
 
             - name: Ratchet budgets (advisory early warning, exits 0 unless --strict)
               run: python -m tools.ratchet_budgets

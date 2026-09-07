@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — CI/docs honesty for parked journeys and Current Next Steps (F-038)
+
+The CI step that runs `tests/functional` + `tests/user_journey` read as
+operator-path coverage; those modules uniquely prove parked
+`AutonomousOrchestrator` APIs (ADR-016). Relabelled parked-autonomous. Current
+Next Steps no longer carries LANDED rows; done catalog ids there are operator
+leftovers. `doc_hygiene.py --strict` is now a real CI gate. CHARTER §5 points
+at root `NEXT_STEPS.md` and splits M6 (RSSM soak) from Physical-AI Phase 6 LoRA.
+
 ### Fixed — HTTP LLM gateway + CLI probes always sanitise (F-037)
 
 `OpenAICompatibleLLMGateway` skipped `RegexInjectionFilter.sanitize()` when

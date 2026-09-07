@@ -58,11 +58,11 @@ echo "=== Docs Core Max Lines Check (DocsConfig.core_max_lines) ==="
 # Enforces that root CLAUDE.md stays under budget (F-026 / F-024 Phase 6).
 "$PYTHON_BIN" -m tools.claude_hooks.docs_trimmer
 
-echo "=== Doc Hygiene (advisory) ==="
-# WARN-only drift guard for the forward-looking planning doc (F-016). Exits 0
-# unless --strict; the hard post-reconciliation budget is pinned by
-# tests/regression/test_next_steps_reconciled.py in the regression stage.
-"$PYTHON_BIN" tools/doc_hygiene.py NEXT_STEPS.md
+echo "=== Doc Hygiene (strict) ==="
+# F-038: the size/checkmark budget is a real gate (F-016 made the helper;
+# advisory mode re-drifted LANDED rows into Current Next Steps). The LANDED
+# pin lives in tests/regression/test_next_steps_reconciled.py.
+"$PYTHON_BIN" tools/doc_hygiene.py NEXT_STEPS.md --strict
 
 echo "=== Ratchet Budgets (advisory early warning) ==="
 # WARN-only early-warning signal for this repo's ratchet-down-only budgets
@@ -113,12 +113,12 @@ echo "=== Smoke Tests ==="
 "$PYTHON_BIN" -m pytest tests/smoke -m "not hardware and not slow" \
     --import-mode=importlib --no-cov -v
 
-echo "=== Functional + User-Journey + Security Tiers ==="
-# Three tiers that ran in NO CI path at all until F-028 -- the same failure
-# mode the smoke tier had before PR #178. tests/security/ exercises the
-# pre-egress RegexInjectionFilter through the gateway seam; the filter's unit
-# coverage lives in tests/unit/security/test_injection_filter.py and already
-# ran, so this closes a wiring gap, not a coverage hole.
+echo "=== Parked-autonomous functional/user-journey + security tiers ==="
+# tests/functional + tests/user_journey cover parked AutonomousOrchestrator
+# (ADR-016), not production MouseDroidOrchestrator (F-038). tests/security/
+# exercises the pre-egress RegexInjectionFilter through the gateway seam;
+# the filter's unit coverage lives in tests/unit/security/test_injection_filter.py
+# and already ran, so F-028 closed a wiring gap, not a coverage hole.
 # Deliberately OUTSIDE the MOUSEDROID_CI_SLIM skip below: the whole set runs
 # in ~2.5s, so there is no memory-pressure case for dropping it.
 "$PYTHON_BIN" -m pytest tests/functional tests/user_journey tests/security \

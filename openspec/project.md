@@ -21,6 +21,7 @@ authoritative counterparts.
 
 | change-id | status | F-number | landed | authoritative artifacts |
 |---|---|---|---|---|
+| `mouse-droid-ci-docs-honesty` | active | F-038 | — | `.github/workflows/ci.yml` (parked-autonomous step + doc_hygiene --strict), `NEXT_STEPS.md`, `docs/CHARTER.md` §5, `tests/regression/test_f038_aqa.py`, `scripts/validations/F-038.sh`, `features.yaml` (F-038) |
 | `mouse-droid-http-sanitize-cli` | active | F-037 | — | `src/mousedroid/llm_gateway/openai_compatible.py`, `scripts/translate_mission.py`, `scripts/ask_rover.py`, `tests/regression/test_f037_aqa.py`, `scripts/validations/F-037.sh`, `features.yaml` (F-037) |
 | `mouse-droid-stock-imu-parse` | in progress | F-036 | — | `src/mousedroid/comms/protocol.py` (`EncoderReading` attitude + `heading_for_motor`), `src/mousedroid/comms/command_set.py` (`WaveshareStockCodec.parse_encoders`), `src/mousedroid/sensing/manager.py`, `tests/regression/test_f036_aqa.py`, `scripts/validations/F-036.sh`, `features.yaml` (F-036) |
 | `mouse-droid-deploy-repin` | implemented | F-035 | `24e3454` | `scripts/repin_tags.sh`, `tests/unit/scripts/test_repin_tags.py`, `scripts/validations/F-035.sh`, `.claude/skills/deploy-repin/SKILL.md`, `deployments/jetson-image.json` (corrected reachability notes), `features.yaml` (F-035) |

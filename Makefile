@@ -68,7 +68,7 @@ smoke: ## Sub-10s import/parse sanity tier
 regression: ## Regression + AQA tier
 	$(PYTHON) -m pytest tests/regression/ -m "not hardware" --import-mode=importlib -q
 
-behaviour: ## Functional + user-journey + security tiers (~2.5s, F-028)
+behaviour: ## Parked-autonomous functional/user-journey + security (~2.5s)
 	$(PYTHON) -m pytest tests/functional tests/user_journey tests/security \
 		-m "not hardware and not slow" --import-mode=importlib --no-cov -q
 

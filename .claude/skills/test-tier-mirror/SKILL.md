@@ -33,9 +33,11 @@ asks "is this tested at the right level?".
 Property and Performance are part of the mirror, not optional extras — both run
 in `scripts/ci.sh`. Functional, User Journey, and Security ran in no CI path at
 all until F-028 closed that gap (`.github/workflows/ci.yml`'s `test` job, the
-"Run functional + user-journey + security tiers" step) — they're blocking, not
-advisory, and gated by directory alone (no dedicated pytest marker, unlike
-`hardware`).
+"Run parked-autonomous functional/user-journey + security tiers" step).
+`tests/functional/` and `tests/user_journey/` cover parked
+`AutonomousOrchestrator` (ADR-016), not production `MouseDroidOrchestrator`.
+They're blocking, not advisory, and gated by directory alone (no dedicated
+pytest marker, unlike `hardware`).
 
 ## Choosing the tier
 

@@ -1117,3 +1117,30 @@ features:
       orchestrator already uses on the CLI probe path. The documented
       None-skip was a unit-test seam that operator CLIs actually hit.
 
+  - id: "F-038"
+    epic: "Hygiene"
+    name: "CI/docs honesty for parked journeys and Current Next Steps"
+    description: >-
+      Relabel the CI step and tests/functional + tests/user_journey as parked
+      AutonomousOrchestrator (ADR-016), not production operator-path coverage.
+      Pin that NEXT_STEPS Current Next Steps contains no LANDED token and that
+      done catalog ids there are operator leftovers. Invoke doc_hygiene.py
+      --strict in ci.sh and the local-gates job. Point CHARTER §5 at root
+      NEXT_STEPS.md, not the May-16 IMPLEMENTATION_PLAN.md. Catalog F-008 vs
+      smoke-report F-008 is named once (ADR-013).
+    category: "validation"
+    priority: "high"
+    status: "todo"
+    tier: "fast"
+    verification:
+      - "CI step name contains parked-autonomous"
+      - "functional/user_journey import build_autonomous_orchestrator only"
+      - "Current Next Steps has no LANDED; done F-ids are leftover-labelled"
+      - "ci.yml and ci.sh invoke doc_hygiene.py --strict"
+    validation_command: "bash scripts/validations/F-038.sh"
+    implemented_in: null
+    depends_on: ["F-016", "F-028"]
+    notes: >-
+      No CHARTER §3 carve-out: docs + CI labels only. Do not twin parked
+      journeys onto MouseDroidOrchestrator under mock_hardware.
+
