@@ -46,10 +46,9 @@ bench work, not a coding sprint.
 6. **[Bring-up — P1] Full rover bring-up + unified dashboard.**
    `docs/runbooks/jetson-full-bringup.md`. Probe-first motors;
    `MOUSEDROID_ESP32__ENABLED=false` if the board is unpowered.
-7. **[Sensing — P1] IMU attitude.** F-036 parses stock `r`/`p`/`y` onto
-   `EncoderReading` without an RSSM slot. F-040 (optional slot 5, `imu_dim=0`)
-   waits until that parse is real and preferably until F-008 has hardware
-   frames. Do not un-zero `battery_critical_v` by stealth.
+7. **[Ops leftover of F-036/F-040] IMU on hardware.** Software parse of stock
+   `r`/`p`/`y` and the default-off RSSM slot 5 are in tree. Chassis IMU
+   still waits on F-008 frames. Do not un-zero `battery_critical_v` by stealth.
 8. **[Ops leftover of F-018] Run `bash scripts/jetson_full_validation.sh`** on
    the rover with trend journaling.
 9. **[Ops leftover of F-019] Import `docs/grafana_dashboard.json`** and load
@@ -68,18 +67,14 @@ bench work, not a coding sprint.
 15. **[Hygiene — P3] Migrate 50 test-fixture `np.random.*` NPY002 call sites**
     off global state. `src/mousedroid` is clean; tests are baselined. Design
     decision first (shared Generator fixture vs per-file instance).
-16. **[Hygiene — P3] Enumerate `check_branch_coverage.py` factory/orchestrator
-    prefixes (F-042).** Unbounded `_ALLOWED_DIR_PREFIXES` exempt ~30% of
-    `src/mousedroid` from the changed-line gate. Keep gating
-    `factory/on_device_learning.py`, `mcp_harness.py`, `_replay_batch_helpers.py`.
-17. **[Testing — P3] ADR-017 mixin split gaps (latent).** Facade completeness
+16. **[Testing — P3] ADR-017 mixin split gaps (latent).** Facade completeness
     walks only `ast.Module.body`; no `factory/*.py` uses the nested-def pattern
     today. Optional: property-test orchestrator kwargs vs `_OrchestratorState`.
-18. **[Testing — parked, not missing] `tests/functional/` + `tests/user_journey/`
-    cover parked `AutonomousOrchestrator` (ADR-016), not production
-    `MouseDroidOrchestrator`.** Production is already in e2e / integration /
-    smoke. F-038 relabels the CI step; do not twin these under `mock_hardware`.
-19. **[Docs — P4, blocked by F-008] `arm/CLAUDE.md` still cites `mock_arm.py`**
+17. **[Ops leftover of F-038] Parked `tests/functional/` + `tests/user_journey/`**
+    cover `AutonomousOrchestrator` (ADR-016), not production
+    `MouseDroidOrchestrator`. Production is already in e2e / integration /
+    smoke. Do not twin these under `mock_hardware`.
+18. **[Docs — P4, blocked by F-008] `arm/CLAUDE.md` still cites `mock_arm.py`**
     (real: `hardware/mock_arm_driver.py`). Freeze stays until F-008 is `done`.
 
 ---
