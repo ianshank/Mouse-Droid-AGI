@@ -43,6 +43,7 @@ class _StubObservation:
     valid_mask: NDArray[np.float32] | None = None
     n_modalities: int = 5
     lidar_features: NDArray[np.float32] | None = None
+    imu_features: NDArray[np.float32] | None = None
 
     def __post_init__(self) -> None:
         if self.vision_features is None:
@@ -62,6 +63,7 @@ def _base_cfg(
     motor_state_dim: int = 4,
     audio_dim: int = 0,
     lidar_dim: int = 0,
+    imu_dim: int = 0,
 ) -> ModelConfig:
     """Minimal ModelConfig for packer tests. Ultrasonic on by default.
 
@@ -72,6 +74,7 @@ def _base_cfg(
     ultrasonic_proj = 4 if ultrasonic_dim > 0 else 0
     audio_proj = 4 if audio_dim > 0 else 0
     lidar_proj = 4 if lidar_dim > 0 else 0
+    imu_proj = 4 if imu_dim > 0 else 0
     return ModelConfig(
         vision_dim=vision_dim,
         ultrasonic_dim=ultrasonic_dim,
@@ -81,6 +84,8 @@ def _base_cfg(
         audio_proj_dim=audio_proj,
         lidar_dim=lidar_dim,
         lidar_proj_dim=lidar_proj,
+        imu_dim=imu_dim,
+        imu_proj_dim=imu_proj,
     )
 
 
@@ -111,7 +116,9 @@ class TestPackObservationShapes:
         cfg = _base_cfg()
         obs = _StubObservation(valid_mask=np.array([1.0, 1.0, 1.0, 0.0, 1.0], dtype=np.float32))
         packed = pack_observation(obs, cfg, device=torch.device("cpu"))
-        assert packed.valid_mask.shape == (1, 5)
+        from mousedroid.constants import N_SENSOR_MODALITIES_WITH_IMU
+
+        assert packed.valid_mask.shape == (1, N_SENSOR_MODALITIES_WITH_IMU)
 
 
 class TestPackObservationDisabledModalities:
@@ -136,6 +143,11 @@ class TestPackObservationDisabledModalities:
         obs = _StubObservation(lidar_features=None)
         packed = pack_observation(obs, cfg, device=torch.device("cpu"))
         assert packed.lidar is None
+
+    def test_imu_disabled_returns_none(self) -> None:
+        cfg = _base_cfg(imu_dim=0)
+        packed = pack_observation(_StubObservation(), cfg, device=torch.device("cpu"))
+        assert packed.imu is None
 
 
 class TestPackObservationAudioBuffer:
@@ -181,6 +193,30 @@ class TestPackObservationLidar:
         assert packed.lidar is not None
         assert packed.lidar.shape == (1, 12)
         assert torch.all(packed.lidar == 0.0)
+
+
+class TestPackObservationImu:
+    """IMU slot 5 — default-off, lidar-shaped."""
+
+    def test_imu_enabled_with_features(self) -> None:
+        cfg = _base_cfg(imu_dim=3)
+        feats = np.array([0.1, -0.2, 1.5], dtype=np.float32)
+        obs = _StubObservation(imu_features=feats)
+        packed = pack_observation(obs, cfg, device=torch.device("cpu"))
+        assert packed.imu is not None
+        assert packed.imu.shape == (1, 3)
+        assert torch.allclose(packed.imu.flatten(), torch.from_numpy(feats), atol=1e-6)
+
+    def test_imu_enabled_with_none_returns_zero_tensor(self) -> None:
+        from mousedroid.constants import SENSOR_SLOT_MAP
+
+        cfg = _base_cfg(imu_dim=3)
+        obs = _StubObservation(imu_features=None)
+        packed = pack_observation(obs, cfg, device=torch.device("cpu"))
+        assert packed.imu is not None
+        assert packed.imu.shape == (1, 3)
+        assert torch.all(packed.imu == 0.0)
+        assert packed.valid_mask[..., SENSOR_SLOT_MAP["imu"]].item() == 0.0
 
 
 class TestPackObservationDeviceDtype:
@@ -242,6 +278,7 @@ class TestPackedObservationDataclass:
         assert hasattr(packed, "ultrasonic")
         assert hasattr(packed, "audio")
         assert hasattr(packed, "lidar")
+        assert hasattr(packed, "imu")
 
 
 class TestValidMaskWidthNormalization:
@@ -252,41 +289,52 @@ class TestValidMaskWidthNormalization:
     shapes at runtime.
     """
 
-    def test_four_wide_mask_is_padded_to_five(self) -> None:
-        from mousedroid.constants import N_SENSOR_MODALITIES_WITH_LIDAR
+    def test_four_wide_mask_is_padded_to_packed_width(self) -> None:
+        from mousedroid.constants import N_SENSOR_MODALITIES_WITH_IMU
 
         cfg = _base_cfg()
         # Older sensing produces 4-wide masks (vision/ultrasonic/motor/audio).
         narrow_mask = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32)
         obs = _StubObservation(valid_mask=narrow_mask)
         packed = pack_observation(obs, cfg, device=torch.device("cpu"))
-        # Width is exactly the canonical N_SENSOR_MODALITIES_WITH_LIDAR.
-        assert packed.valid_mask.shape == (1, N_SENSOR_MODALITIES_WITH_LIDAR)
-        # First 4 slots preserved; padding slot is 0 (invalid).
+        assert packed.valid_mask.shape == (1, N_SENSOR_MODALITIES_WITH_IMU)
         assert torch.all(packed.valid_mask[..., :4] == 1.0)
         assert packed.valid_mask[..., 4].item() == 0.0
+        assert packed.valid_mask[..., 5].item() == 0.0
 
-    def test_five_wide_mask_passes_through_unchanged(self) -> None:
-        from mousedroid.constants import N_SENSOR_MODALITIES_WITH_LIDAR
+    def test_five_wide_mask_is_padded_with_imu_slot(self) -> None:
+        from mousedroid.constants import N_SENSOR_MODALITIES_WITH_IMU
 
         cfg = _base_cfg()
         mask = np.array([1.0, 0.0, 1.0, 0.0, 1.0], dtype=np.float32)
         obs = _StubObservation(valid_mask=mask)
         packed = pack_observation(obs, cfg, device=torch.device("cpu"))
-        assert packed.valid_mask.shape == (1, N_SENSOR_MODALITIES_WITH_LIDAR)
-        assert torch.allclose(packed.valid_mask.flatten(), torch.from_numpy(mask), atol=1e-6)
+        assert packed.valid_mask.shape == (1, N_SENSOR_MODALITIES_WITH_IMU)
+        assert torch.allclose(
+            packed.valid_mask.flatten()[:5], torch.from_numpy(mask), atol=1e-6
+        )
+        assert packed.valid_mask[..., 5].item() == 0.0
 
-    def test_wider_mask_is_truncated(self) -> None:
-        """6-wide mask (defensive — no current sensor emits this) is truncated."""
-        from mousedroid.constants import N_SENSOR_MODALITIES_WITH_LIDAR
+    def test_six_wide_mask_passes_through_unchanged(self) -> None:
+        from mousedroid.constants import N_SENSOR_MODALITIES_WITH_IMU
 
         cfg = _base_cfg()
         mask = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 0.5], dtype=np.float32)
         obs = _StubObservation(valid_mask=mask, n_modalities=6)
         packed = pack_observation(obs, cfg, device=torch.device("cpu"))
-        assert packed.valid_mask.shape == (1, N_SENSOR_MODALITIES_WITH_LIDAR)
-        # The trailing 0.5 is dropped — only the first 5 slots survive.
-        assert torch.all(packed.valid_mask[..., :5] == 1.0)
+        assert packed.valid_mask.shape == (1, N_SENSOR_MODALITIES_WITH_IMU)
+        assert torch.allclose(packed.valid_mask.flatten(), torch.from_numpy(mask), atol=1e-6)
+
+    def test_wider_mask_is_truncated(self) -> None:
+        """7-wide mask is truncated to the packed IMU width."""
+        from mousedroid.constants import N_SENSOR_MODALITIES_WITH_IMU
+
+        cfg = _base_cfg()
+        mask = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 0.5, 0.25], dtype=np.float32)
+        obs = _StubObservation(valid_mask=mask, n_modalities=7)
+        packed = pack_observation(obs, cfg, device=torch.device("cpu"))
+        assert packed.valid_mask.shape == (1, N_SENSOR_MODALITIES_WITH_IMU)
+        assert packed.valid_mask[..., 5].item() == pytest.approx(0.5)
 
 
 class TestMissingDataMaskZeroing:

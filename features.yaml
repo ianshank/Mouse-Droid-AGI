@@ -1080,7 +1080,7 @@ features:
       - "stock T=1001 r/p/y parse into attitude fields; heading_rad stays 0"
       - "heading_for_motor returns yaw when imu_valid else heading_rad"
       - "legacy codec and parse_encoder_reading leave imu_valid False"
-      - "SENSOR_SLOT_MAP has no imu key; N_SENSOR_MODALITIES_WITH_LIDAR stays 5"
+      - "motor_state_dim stays 4; IMU fusion slot is F-040 not this parse"
     validation_command: "bash scripts/validations/F-036.sh"
     implemented_in: null
     depends_on: ["F-025"]
@@ -1172,4 +1172,29 @@ features:
       No CHARTER §3 carve-out: default gcp.logging.enabled is False; this
       restores the fire-and-forget contract F-032 documented as accepted
       risk. Allowlist is a module frozenset, not YAML-widenable.
+
+  - id: "F-040"
+    epic: "World model"
+    name: "Optional IMU fusion slot 5, packer width 6, default imu_dim=0"
+    description: >-
+      Lidar-shaped IMU modality: SENSOR_SLOT_MAP["imu"]=5, imu_dim and
+      imu_proj_dim default 0/32, packer valid_mask width 6. Default path does
+      not change fused_dim or motor_state_dim. Enable with imu_dim=3 after
+      F-036 parse exists. Does not close F-008.
+    category: "functional"
+    priority: "medium"
+    status: "todo"
+    tier: "fast"
+    verification:
+      - "imu_dim FieldInfo default is 0; motor_state_dim stays 4"
+      - "SENSOR_SLOT_MAP imu is 5; packed mask width is 6"
+      - "default MultimodalEncoder has no imu_proj; fused_dim unchanged"
+      - "imu_dim=3 adds imu_proj and packer emits (1, 3) imu tensor"
+    validation_command: "bash scripts/validations/F-040.sh"
+    implemented_in: null
+    depends_on: ["F-036"]
+    notes: >-
+      No CHARTER §3 carve-out: imu_dim defaults 0 so existing YAML and
+      checkpoints stay byte-identical on the fusion weights. Hardware
+      frames still wait on F-008.
 

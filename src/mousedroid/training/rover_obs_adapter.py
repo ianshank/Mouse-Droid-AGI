@@ -7,10 +7,10 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from mousedroid.constants import N_SENSOR_MODALITIES_WITH_LIDAR, SENSOR_SLOT_MAP
+from mousedroid.constants import N_SENSOR_MODALITIES_WITH_IMU, SENSOR_SLOT_MAP
 
 _VISION_SLOT = SENSOR_SLOT_MAP["vision"]
-_N_SLOTS = N_SENSOR_MODALITIES_WITH_LIDAR  # [vision, ultrasonic, motor, audio, lidar]
+_N_SLOTS = N_SENSOR_MODALITIES_WITH_IMU  # [vision, ultrasonic, motor, audio, lidar, imu]
 
 
 class RoverObsAdapter:
@@ -47,7 +47,7 @@ class RoverObsAdapter:
                 the vision slot stays 0 and no vision key is emitted.
 
         Returns:
-            Dict with ``motor`` (4,), ``ultrasonic`` (1,), ``valid_mask`` (5,),
+            Dict with ``motor`` (4,), ``ultrasonic`` (1,), ``valid_mask`` (6,),
             ``lidar`` (N,) when the rover exposes a lidar, and ``vision``
             (feature_dim,) when ``vision_features`` is provided.
         """
@@ -64,6 +64,9 @@ class RoverObsAdapter:
         # Vision present only when features are supplied — set the slot up front so
         # the mask is final before it is inserted into the output dict.
         mask[_VISION_SLOT] = 1.0 if vision_features is not None else 0.0
+        # IMU is F-040 optional last slot; this adapter does not emit imu tensors
+        # (rover env "imu" is a 6-DoF state, not the 3-float attitude RSSM slot).
+        mask[SENSOR_SLOT_MAP["imu"]] = 0.0
 
         out: dict[str, NDArray[np.float32]] = {
             "motor": motor,

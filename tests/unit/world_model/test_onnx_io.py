@@ -20,6 +20,7 @@ from mousedroid.world_model.onnx_io import (
     OBSERVE_STEP_BATCH_DIM_NAME,
     OBSERVE_STEP_INPUT_AUDIO,
     OBSERVE_STEP_INPUT_H,
+    OBSERVE_STEP_INPUT_IMU,
     OBSERVE_STEP_INPUT_LIDAR,
     OBSERVE_STEP_INPUT_MOTOR,
     OBSERVE_STEP_INPUT_PREV_ACTION,
@@ -38,7 +39,7 @@ from mousedroid.world_model.onnx_io import (
 )
 
 
-def _cfg(*, ultrasonic: bool, audio: bool, lidar: bool) -> ModelConfig:
+def _cfg(*, ultrasonic: bool, audio: bool, lidar: bool, imu: bool = False) -> ModelConfig:
     """Build a ModelConfig with the requested optional modalities enabled."""
     return ModelConfig(
         ultrasonic_dim=1 if ultrasonic else 0,
@@ -47,6 +48,8 @@ def _cfg(*, ultrasonic: bool, audio: bool, lidar: bool) -> ModelConfig:
         audio_proj_dim=4 if audio else 0,
         lidar_dim=12 if lidar else 0,
         lidar_proj_dim=4 if lidar else 0,
+        imu_dim=3 if imu else 0,
+        imu_proj_dim=4 if imu else 0,
         # cfc_hidden_dim > 0 so the DualStreamRSSM path is exercised.
         cfc_hidden_dim=16,
         cfc_backbone_units=32,
@@ -86,13 +89,14 @@ class TestOptionalInputNames:
         optional = optional_input_names_for_cfg(cfg)
         assert optional == (OBSERVE_STEP_INPUT_ULTRASONIC,)
 
-    def test_all_enabled_returns_three_in_order(self) -> None:
-        cfg = _cfg(ultrasonic=True, audio=True, lidar=True)
+    def test_all_enabled_returns_four_in_order(self) -> None:
+        cfg = _cfg(ultrasonic=True, audio=True, lidar=True, imu=True)
         optional = optional_input_names_for_cfg(cfg)
         assert optional == (
             OBSERVE_STEP_INPUT_ULTRASONIC,
             OBSERVE_STEP_INPUT_AUDIO,
             OBSERVE_STEP_INPUT_LIDAR,
+            OBSERVE_STEP_INPUT_IMU,
         )
 
     def test_lidar_only_skips_ultrasonic_audio(self) -> None:

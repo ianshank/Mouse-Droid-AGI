@@ -1,10 +1,10 @@
-"""AQA pins for F-036 stock IMU parse (no RSSM slot widen).
+"""AQA pins for F-036 stock IMU parse (no motor-vector widen).
 
 Pins the dataclass/protocol surface rather than a new Pydantic field:
 legacy ``EncoderReading`` construction still works, new attitude fields
 default to the pre-feature zeros, and ``heading_for_motor`` is a real
-method. SENSOR_SLOT_MAP must stay width-5 so this cannot silently grow
-into F-040.
+method. F-040 owns ``SENSOR_SLOT_MAP["imu"]``; this file pins that
+``motor_state_dim`` stays 4.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from __future__ import annotations
 import inspect
 
 from mousedroid.comms.protocol import EncoderReading
-from mousedroid.constants import N_SENSOR_MODALITIES_WITH_LIDAR, SENSOR_SLOT_MAP
+from mousedroid.constants import DEFAULT_MOTOR_STATE_DIM
 
 
 def test_encoder_reading_attitude_fields_default_inert() -> None:
@@ -44,8 +44,6 @@ def test_legacy_positional_construction_still_works() -> None:
     assert reading.heading_for_motor() == 0.3
 
 
-def test_sensor_slot_map_does_not_gain_an_imu_key() -> None:
-    """F-036 must not widen the ONNX-stable mask; that is F-040."""
-    assert "imu" not in SENSOR_SLOT_MAP
-    assert N_SENSOR_MODALITIES_WITH_LIDAR == 5
-    assert set(SENSOR_SLOT_MAP) == {"vision", "ultrasonic", "motor", "audio", "lidar"}
+def test_sensor_slot_map_keeps_motor_state_dim_four() -> None:
+    """F-036 must not widen motor_state_dim; the IMU fusion slot is F-040."""
+    assert DEFAULT_MOTOR_STATE_DIM == 4

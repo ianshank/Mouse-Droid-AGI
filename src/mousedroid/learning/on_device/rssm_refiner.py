@@ -79,6 +79,7 @@ def build_sequence_batch(
     * ``ultrasonic`` ``(B, T, ultrasonic_dim)`` — when ``encoder.ultrasonic_enabled``;
     * ``lidar`` ``(B, T, lidar_dim)`` — when ``encoder.lidar_enabled`` (zero-filled:
       replay records carry no lidar features);
+    * ``imu`` ``(B, T, imu_dim)`` — when ``encoder.imu_enabled`` (zero-filled);
     * ``vision`` ``(B, T, vision_dim)`` — when ``encoder.vision_enabled``; ``(B, T, 0)``
       otherwise (matching the pretrainer's vision-off shape).
 
@@ -116,6 +117,7 @@ def build_sequence_batch(
     mask_rows: list[list[NDArray[np.float32]]] = []
     ultra_rows: list[list[NDArray[np.float32]]] = []
     lidar_rows: list[list[NDArray[np.float32]]] = []
+    imu_rows: list[list[NDArray[np.float32]]] = []
     vision_rows: list[list[NDArray[np.float32]]] = []
 
     for episode in range(n_episodes):
@@ -128,6 +130,8 @@ def build_sequence_batch(
             ultra_rows.append([np.asarray([r.distance_m], dtype=np.float32) for r in window])
         if encoder.lidar_enabled:
             lidar_rows.append([np.zeros(cfg_model.lidar_dim, dtype=np.float32) for _ in window])
+        if encoder.imu_enabled:
+            imu_rows.append([np.zeros(cfg_model.imu_dim, dtype=np.float32) for _ in window])
         if encoder.vision_enabled:
             vision_rows.append(
                 [_vision_vector(r.vision_features, cfg_model.vision_dim) for r in window]
@@ -145,6 +149,8 @@ def build_sequence_batch(
         batch["ultrasonic"] = _stack(ultra_rows)
     if encoder.lidar_enabled:
         batch["lidar"] = _stack(lidar_rows)
+    if encoder.imu_enabled:
+        batch["imu"] = _stack(imu_rows)
     # ``vision`` is always assembled (shape (B, T, 0) when disabled) to mirror the
     # pretrainer's ``_to_device``; ``train_sequence`` only reads it when enabled.
     if encoder.vision_enabled:

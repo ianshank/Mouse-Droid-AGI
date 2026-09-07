@@ -31,17 +31,24 @@ N_SENSOR_MODALITIES: int = 4
 N_SENSOR_MODALITIES_WITH_LIDAR: int = 5
 """Number of sensor modalities when LiDAR is active (adds slot [4])."""
 
+N_SENSOR_MODALITIES_WITH_IMU: int = 6
+"""Packed valid-mask width including optional IMU slot [5] (F-040)."""
+
 SENSOR_SLOT_MAP: dict[str, int] = {
     "vision": 0,
     "ultrasonic": 1,
     "motor": 2,
     "audio": 3,
     "lidar": 4,
+    "imu": 5,
 }
 """Stable valid-mask slot assignment for encoder and sensing components."""
 
 DEFAULT_LIDAR_FEATURE_DIM: int = 36
 """Default LiDAR feature vector dimension (36 sectors of 10 degrees)."""
+
+DEFAULT_IMU_FEATURE_DIM: int = 3
+"""IMU attitude vector ``[roll_rad, pitch_rad, yaw_rad]`` when ``imu_dim>0``."""
 
 DEFAULT_LIDAR_MAX_RANGE_M: float = 12.0
 """Default FHL-LD19 maximum detection range in metres."""

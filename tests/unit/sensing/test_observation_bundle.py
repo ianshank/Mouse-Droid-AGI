@@ -100,6 +100,17 @@ def test_lidar_features_custom():
     np.testing.assert_array_equal(obs.lidar_features, lidar)
 
 
+def test_imu_features_default_none():
+    obs = MouseDroidObservationBundle()
+    assert obs.imu_features is None
+
+
+def test_imu_features_custom():
+    imu = np.array([0.1, 0.2, 0.3], dtype=np.float32)
+    obs = MouseDroidObservationBundle(_imu_features=imu)
+    np.testing.assert_array_equal(obs.imu_features, imu)
+
+
 def test_n_modalities_with_5_element_mask():
     """Construct with 5-element valid_mask, verify n_modalities == 5."""
     mask = np.ones(5, dtype=np.float32)

@@ -51,6 +51,7 @@ from mousedroid.world_model.observation_packer import pack_observation
 from mousedroid.world_model.onnx_io import (
     OBSERVE_STEP_INPUT_AUDIO,
     OBSERVE_STEP_INPUT_H,
+    OBSERVE_STEP_INPUT_IMU,
     OBSERVE_STEP_INPUT_LIDAR,
     OBSERVE_STEP_INPUT_MOTOR,
     OBSERVE_STEP_INPUT_PREV_ACTION,
@@ -242,6 +243,8 @@ class DualStreamRSSMOnnx:
             feeds[OBSERVE_STEP_INPUT_AUDIO] = packed.audio.detach().cpu().numpy()
         if packed.lidar is not None:
             feeds[OBSERVE_STEP_INPUT_LIDAR] = packed.lidar.detach().cpu().numpy()
+        if packed.imu is not None:
+            feeds[OBSERVE_STEP_INPUT_IMU] = packed.imu.detach().cpu().numpy()
 
         start = time.perf_counter()
         with torch.no_grad():

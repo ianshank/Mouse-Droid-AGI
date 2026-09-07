@@ -92,7 +92,7 @@ class TestRSSMReplayDataset:
         assert batch["vision"].shape == (4, 256)
         assert batch["ultrasonic"].shape == (4, 1)
         assert batch["motor_state"].shape == (4, 4)
-        assert batch["valid_mask"].shape == (4, 5)
+        assert batch["valid_mask"].shape == (4, 6)
         assert batch["lidar"].shape == (4, 36)
         assert batch["actions"].shape == (4, 3)
         assert torch.all(batch["lidar"] == 0.0)
@@ -133,4 +133,4 @@ class TestRSSMReplayDataset:
         replay_batch = dataset[1]
         assert torch.all(synthetic_batch["actions"][0] == -1.0)
         assert torch.all(replay_batch["actions"][0] == 5.0)
-        assert replay_batch["valid_mask"].shape[-1] == 5
+        assert replay_batch["valid_mask"].shape[-1] == 6

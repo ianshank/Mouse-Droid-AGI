@@ -341,3 +341,33 @@ def test_lidar_enabled_none_input_uses_zeros() -> None:
     out = enc(vision, ultrasonic, motor, mask, lidar=None)
     assert out.shape == (batch, cfg.obs_dim)
     assert torch.isfinite(out).all()
+
+
+def test_imu_disabled_has_no_proj_and_default_obs_dim() -> None:
+    """imu_dim=0 must not grow fused_dim (checkpoint-compatible default)."""
+    cfg = ModelConfig()
+    enc = MultimodalEncoder(cfg)
+    assert enc.imu_enabled is False
+    assert not hasattr(enc, "imu_proj")
+    batch = 2
+    vision = torch.randn(batch, cfg.vision_dim)
+    ultrasonic = torch.randn(batch, cfg.ultrasonic_dim)
+    motor = torch.randn(batch, cfg.motor_state_dim)
+    mask = torch.ones(batch, 6)
+    out = enc(vision, ultrasonic, motor, mask, imu=torch.randn(batch, 3))
+    assert out.shape == (batch, cfg.obs_dim)
+
+
+def test_imu_enabled_forward() -> None:
+    cfg = ModelConfig(imu_dim=3, imu_proj_dim=8)
+    enc = MultimodalEncoder(cfg)
+    assert enc.imu_enabled is True
+    batch = 4
+    vision = torch.randn(batch, cfg.vision_dim)
+    ultrasonic = torch.randn(batch, cfg.ultrasonic_dim)
+    motor = torch.randn(batch, cfg.motor_state_dim)
+    imu = torch.randn(batch, 3)
+    mask = torch.ones(batch, 6)
+    out = enc(vision, ultrasonic, motor, mask, imu=imu)
+    assert out.shape == (batch, cfg.obs_dim)
+    assert torch.isfinite(out).all()

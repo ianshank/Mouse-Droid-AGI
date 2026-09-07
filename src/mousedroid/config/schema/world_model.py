@@ -170,6 +170,20 @@ class ModelConfig(StrictBaseModel):
     audio_proj_dim: int = Field(32, ge=0, description="Audio projection dim (0=disabled)")
     lidar_dim: int = Field(0, ge=0, description="LiDAR feature input dim (0=disabled)")
     lidar_proj_dim: int = Field(32, ge=0, description="LiDAR projection dim (0=disabled)")
+    imu_dim: int = Field(
+        0,
+        ge=0,
+        description=(
+            "IMU attitude input dim (0=disabled). Default off so existing "
+            "YAML and ONNX fusion weights stay byte-identical; set to 3 "
+            "for [roll, pitch, yaw] after F-036 parse exists."
+        ),
+    )
+    imu_proj_dim: int = Field(
+        32,
+        ge=0,
+        description="IMU projection dim (0=disabled; ignored while imu_dim is 0)",
+    )
     belief_dim: int = Field(128, gt=0, description="BDI belief latent dim")
     desire_dim: int = Field(64, gt=0, description="BDI desire latent dim")
     intention_classes: int = Field(10, gt=0, description="BDI intention classes")
@@ -239,6 +253,7 @@ class ModelConfig(StrictBaseModel):
             "ultrasonic": (self.ultrasonic_dim, self.ultrasonic_proj_dim),
             "audio": (self.audio_dim, self.audio_proj_dim),
             "lidar": (self.lidar_dim, self.lidar_proj_dim),
+            "imu": (self.imu_dim, self.imu_proj_dim),
         }
         for modality_name, (input_dim, proj_dim) in modality_dims.items():
             if input_dim > 0 and proj_dim == 0:

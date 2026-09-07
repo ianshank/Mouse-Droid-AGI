@@ -15,7 +15,8 @@ Two pieces:
   the ``valid_mask`` is SYNTHESIZED from the live encoder's enabled flags (see
   :func:`build_valid_mask`).
 * :func:`build_valid_mask` — synthesize the per-modality validity mask from the
-  LIVE encoder's enabled flags, length 4 (no lidar) or 5 (with lidar).
+  LIVE encoder's enabled flags, length 4 (no lidar), 5 (with lidar),
+  or 6 (with IMU).
 """
 
 from __future__ import annotations
@@ -67,11 +68,11 @@ def build_valid_mask(
     """Synthesize a ``valid_mask`` from the LIVE encoder's enabled modalities.
 
     The length + slot order are derived from the encoder's ``*_enabled`` flags
-    (NOT a literal): slots ``[vision, ultrasonic, motor, audio, (lidar)]`` per
-    :data:`~mousedroid.constants.SENSOR_SLOT_MAP`. The mask is length 4 when the
-    encoder has no lidar branch and length 5 when it does — matching the
-    4-or-5 contract the encoder gates safely (a 4-slot mask never indexes the
-    lidar slot).
+    (NOT a literal): slots ``[vision, ultrasonic, motor, audio, (lidar), (imu)]``
+    per :data:`~mousedroid.constants.SENSOR_SLOT_MAP`. The mask is length 4 when
+    the encoder has no lidar/IMU branch, 5 when lidar is on, and 6 when IMU is
+    on — matching the encoder's short-mask gate (a 4-slot mask never indexes
+    later slots).
 
     Slot values:
 
@@ -89,9 +90,13 @@ def build_valid_mask(
         encoder: The live world-model multimodal encoder.
 
     Returns:
-        A ``float32`` mask of length 4 (no lidar) or 5 (with lidar).
+        A ``float32`` mask of length 4, 5, or 6.
     """
-    last_slot = SENSOR_SLOT_MAP["lidar"] if encoder.lidar_enabled else SENSOR_SLOT_MAP["audio"]
+    last_slot = SENSOR_SLOT_MAP["audio"]
+    if encoder.lidar_enabled:
+        last_slot = SENSOR_SLOT_MAP["lidar"]
+    if encoder.imu_enabled:
+        last_slot = SENSOR_SLOT_MAP["imu"]
     mask = np.zeros(last_slot + 1, dtype=np.float32)
 
     # Motor is always present.
@@ -102,7 +107,7 @@ def build_valid_mask(
         mask[SENSOR_SLOT_MAP["ultrasonic"]] = 1.0
     if encoder.audio_enabled:
         mask[SENSOR_SLOT_MAP["audio"]] = 1.0
-    # Lidar slot (index 4) stays 0.0 — replay records never carry lidar features.
+    # Lidar / IMU slots stay 0.0 — replay records never carry those features.
     return mask
 
 

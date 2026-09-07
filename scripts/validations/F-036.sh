@@ -22,4 +22,4 @@ if ! "$PY_BIN" -m pytest \
   exit 1
 fi
 
-echo "F-036 OK: stock T=1001 r/p/y parsed; SENSOR_SLOT_MAP unchanged; legacy IMU-inert"
+echo "F-036 OK: stock T=1001 r/p/y parsed; motor_state_dim=4; legacy IMU-inert"

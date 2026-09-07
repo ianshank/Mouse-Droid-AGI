@@ -47,7 +47,7 @@ def test_batch_tensor_shapes() -> None:
     batch = _gen(n=2, t=5).generate()
     assert batch.motor.shape == (2, 5, 4)
     assert batch.action.shape == (2, 5, 3)
-    assert batch.valid_mask.shape == (2, 5, 5)
+    assert batch.valid_mask.shape == (2, 5, 6)
     assert batch.lidar.shape == (2, 5, 16)
     assert batch.reward.shape == (2, 5)
     assert batch.vision.shape == (2, 5, 0)  # no extractor -> empty vision

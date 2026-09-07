@@ -21,6 +21,7 @@ authoritative counterparts.
 
 | change-id | status | F-number | landed | authoritative artifacts |
 |---|---|---|---|---|
+| `mouse-droid-imu-fusion-slot` | active | F-040 | — | `src/mousedroid/constants.py` (`SENSOR_SLOT_MAP["imu"]`, `N_SENSOR_MODALITIES_WITH_IMU`), `src/mousedroid/config/schema/world_model.py` (`imu_dim`), `src/mousedroid/world_model/encoder.py`, `src/mousedroid/world_model/observation_packer.py`, `tests/regression/test_f040_aqa.py`, `scripts/validations/F-040.sh`, `features.yaml` (F-040) |
 | `mouse-droid-cloud-log-queue` | active | F-039 | — | `src/mousedroid/cloud/logging_sink.py`, `src/mousedroid/config/schema/gcp_cloud.py` (`queue_maxsize`), `tests/unit/cloud/test_logging_sink.py`, `tests/unit/cloud/test_logging_sink_tick_level.py`, `tests/regression/test_f039_aqa.py`, `scripts/validations/F-039.sh`, `features.yaml` (F-039) |
 | `mouse-droid-ci-docs-honesty` | active | F-038 | — | `.github/workflows/ci.yml` (parked-autonomous step + doc_hygiene --strict), `NEXT_STEPS.md`, `docs/CHARTER.md` §5, `tests/regression/test_f038_aqa.py`, `scripts/validations/F-038.sh`, `features.yaml` (F-038) |
 | `mouse-droid-http-sanitize-cli` | active | F-037 | — | `src/mousedroid/llm_gateway/openai_compatible.py`, `scripts/translate_mission.py`, `scripts/ask_rover.py`, `tests/regression/test_f037_aqa.py`, `scripts/validations/F-037.sh`, `features.yaml` (F-037) |

@@ -35,6 +35,7 @@ class MouseDroidObservationBundle:
         * ``[2]`` — motor / ESP32
         * ``[3]`` — audio / microphone
         * ``[4]`` — LiDAR (when present)
+        * ``[5]`` — IMU attitude (when ``imu_valid``)
 
     Implements :class:`~mousedroid.sensing.protocol.ObservationProtocol`.
     """
@@ -62,6 +63,9 @@ class MouseDroidObservationBundle:
 
     _lidar_features: NDArray[np.float32] | None = None
     """LiDAR sector-binned features, shape ``(lidar_dim,)``, or ``None``."""
+
+    _imu_features: NDArray[np.float32] | None = None
+    """IMU attitude ``[roll, pitch, yaw]`` radians, or ``None``."""
 
     _lidar_n_points: int = 0
     """Number of raw points in the last LiDAR scan (``0`` when no scan)."""
@@ -102,6 +106,11 @@ class MouseDroidObservationBundle:
     def lidar_features(self) -> NDArray[np.float32] | None:
         """LiDAR sector-binned features, or ``None`` if LiDAR not configured."""
         return self._lidar_features
+
+    @property
+    def imu_features(self) -> NDArray[np.float32] | None:
+        """IMU attitude ``[roll, pitch, yaw]`` radians, or ``None``."""
+        return self._imu_features
 
     @property
     def lidar_n_points(self) -> int:

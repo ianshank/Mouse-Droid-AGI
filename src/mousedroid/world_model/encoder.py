@@ -34,6 +34,7 @@ class MultimodalEncoder(nn.Module):
         self._ultrasonic_enabled = cfg.ultrasonic_dim > 0 and cfg.ultrasonic_proj_dim > 0
         self._audio_enabled = cfg.audio_dim > 0 and cfg.audio_proj_dim > 0
         self._lidar_enabled = cfg.lidar_dim > 0 and cfg.lidar_proj_dim > 0
+        self._imu_enabled = cfg.imu_dim > 0 and cfg.imu_proj_dim > 0
 
         # Construction order preserves the original (vision -> motor -> ...) so the
         # seeded weight init is byte-identical for the default (vision-on) config.
@@ -52,6 +53,9 @@ class MultimodalEncoder(nn.Module):
         if self._lidar_enabled:
             self.lidar_proj = nn.Linear(cfg.lidar_dim, cfg.lidar_proj_dim)
             fused_dim += cfg.lidar_proj_dim
+        if self._imu_enabled:
+            self.imu_proj = nn.Linear(cfg.imu_dim, cfg.imu_proj_dim)
+            fused_dim += cfg.imu_proj_dim
 
         self.fusion = nn.Linear(fused_dim, cfg.obs_dim)
         self.act = nn.ReLU()
@@ -67,6 +71,8 @@ class MultimodalEncoder(nn.Module):
             audio_enabled=self._audio_enabled,
             lidar_proj=cfg.lidar_proj_dim if self._lidar_enabled else 0,
             lidar_enabled=self._lidar_enabled,
+            imu_proj=cfg.imu_proj_dim if self._imu_enabled else 0,
+            imu_enabled=self._imu_enabled,
             fused_dim=fused_dim,
             obs_dim=cfg.obs_dim,
         )
@@ -91,6 +97,11 @@ class MultimodalEncoder(nn.Module):
         """Whether LiDAR modality is active."""
         return self._lidar_enabled
 
+    @property
+    def imu_enabled(self) -> bool:
+        """Whether IMU modality is active."""
+        return self._imu_enabled
+
     @staticmethod
     def _gate_projection(projected: Tensor, valid_mask: Tensor, modality_name: str) -> Tensor:
         """Gate a projected modality by its valid-mask slot."""
@@ -107,6 +118,7 @@ class MultimodalEncoder(nn.Module):
         valid_mask: Tensor,
         audio: Tensor | None = None,
         lidar: Tensor | None = None,
+        imu: Tensor | None = None,
     ) -> Tensor:
         """Encode multimodal observation into a single embedding.
 
@@ -116,11 +128,13 @@ class MultimodalEncoder(nn.Module):
             ultrasonic: Ultrasonic reading, shape ``(batch, ultrasonic_dim)``.
             motor_state: Motor state, shape ``(batch, motor_state_dim)``.
             valid_mask: Per-modality validity, shape ``(batch, n_modalities)``.
-                Supports 3-element (legacy), 4-element, and 5-element masks.
+                Supports 3- through 6-element masks (IMU occupies slot 5).
             audio: Optional audio features, shape ``(batch, audio_dim)``.
                 Ignored when audio is disabled (``audio_dim=0``).
             lidar: Optional LiDAR features, shape ``(batch, lidar_dim)``.
                 Ignored when LiDAR is disabled (``lidar_dim=0``).
+            imu: Optional IMU attitude, shape ``(batch, imu_dim)``.
+                Ignored when IMU is disabled (``imu_dim=0``).
 
         Returns:
             Fused observation embedding, shape ``(batch, obs_dim)``.
@@ -176,7 +190,6 @@ class MultimodalEncoder(nn.Module):
             if lidar is not None:
                 el = self.act(self.lidar_proj(lidar))
             else:
-                # LiDAR enabled but no data provided — use zeros.
                 el = torch.zeros(
                     ref.shape[0],
                     self.lidar_proj.out_features,
@@ -184,6 +197,18 @@ class MultimodalEncoder(nn.Module):
                     dtype=ref.dtype,
                 )
             parts.append(self._gate_projection(el, valid_mask, "lidar"))
+
+        if self._imu_enabled:
+            if imu is not None:
+                ei = self.act(self.imu_proj(imu))
+            else:
+                ei = torch.zeros(
+                    ref.shape[0],
+                    self.imu_proj.out_features,
+                    device=ref.device,
+                    dtype=ref.dtype,
+                )
+            parts.append(self._gate_projection(ei, valid_mask, "imu"))
 
         fused: Tensor = self.fusion(torch.cat(parts, dim=-1))
         return fused

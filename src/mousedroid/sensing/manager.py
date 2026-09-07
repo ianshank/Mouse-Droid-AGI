@@ -111,6 +111,8 @@ class SensorManager:
         self._cached_motor_state: NDArray[np.float32] = np.zeros(
             DEFAULT_MOTOR_STATE_DIM, dtype=np.float32
         )
+        self._cached_imu_features: NDArray[np.float32] | None = None
+        self._cached_imu_ok: bool = False
 
         # Determine lidar feature size for zero-fill on failure.
         if lidar_feature_extractor is not None:
@@ -276,23 +278,16 @@ class SensorManager:
         )
 
         # Build validity mask: vision=0, ultrasonic=1, motor=2, audio=3,
-        # lidar=4 (only when lidar is configured).
-        if self._lidar is not None:
-            valid_mask = np.array(
-                [
-                    float(vision_ok),
-                    float(distance_ok),
-                    float(motor_ok),
-                    float(audio_ok),
-                    float(lidar_ok),
-                ],
-                dtype=np.float32,
-            )
-        else:
-            valid_mask = np.array(
-                [float(vision_ok), float(distance_ok), float(motor_ok), float(audio_ok)],
-                dtype=np.float32,
-            )
+        # lidar=4 (when lidar is configured), imu=5 (when the stock IMU
+        # parsed on this tick).
+        valid_mask = self._compose_valid_mask(
+            vision_ok=vision_ok,
+            distance_ok=distance_ok,
+            motor_ok=motor_ok,
+            audio_ok=audio_ok,
+            lidar_ok=lidar_ok,
+            imu_ok=self._cached_imu_ok,
+        )
 
         # Store in ring buffers.
         self._vision_buf.append(vision_result)
@@ -319,10 +314,34 @@ class SensorManager:
             _motor_state=motor_result,
             _audio_chunk=audio_result,
             _lidar_features=lidar_result if self._lidar is not None else None,
+            _imu_features=self._cached_imu_features if self._cached_imu_ok else None,
             _valid_mask=valid_mask,
         )
 
     # -- Private helpers ---------------------------------------------------
+
+    def _compose_valid_mask(
+        self,
+        *,
+        vision_ok: bool,
+        distance_ok: bool,
+        motor_ok: bool,
+        audio_ok: bool,
+        lidar_ok: bool,
+        imu_ok: bool,
+    ) -> NDArray[np.float32]:
+        """Build the fused validity mask, extending only for live extra slots."""
+        slots = [
+            float(vision_ok),
+            float(distance_ok),
+            float(motor_ok),
+            float(audio_ok),
+        ]
+        if self._lidar is not None or imu_ok:
+            slots.append(float(lidar_ok) if self._lidar is not None else 0.0)
+        if imu_ok:
+            slots.append(1.0)
+        return np.array(slots, dtype=np.float32)
 
     @staticmethod
     async def _safe_read(
@@ -374,6 +393,7 @@ class SensorManager:
         if self._motor_degraded:
             if now - self._motor_last_probe < self._motor_degraded_interval:
                 # Probe interval not elapsed: return stale cached data, mark invalid.
+                self._cached_imu_ok = False
                 return self._cached_motor_state, False
             # Probe interval elapsed: attempt a real read.
             self._motor_last_probe = now
@@ -392,6 +412,15 @@ class SensorManager:
                 ],
                 dtype=np.float32,
             )
+            if encoders.imu_valid:
+                self._cached_imu_features = np.array(
+                    [encoders.roll_rad, encoders.pitch_rad, encoders.yaw_rad],
+                    dtype=np.float32,
+                )
+                self._cached_imu_ok = True
+            else:
+                self._cached_imu_features = None
+                self._cached_imu_ok = False
             # Success: reset failure tracking and cache state.
             self._motor_consecutive_failures = 0
             if self._motor_degraded:
@@ -409,6 +438,7 @@ class SensorManager:
                 self._motor_degraded = True
                 self._motor_last_probe = time.monotonic()
                 _log.warning("motor_entered_degraded", failures=self._motor_consecutive_failures)
+            self._cached_imu_ok = False
             return self._cached_motor_state, False
 
     async def _safe_audio_read(self) -> tuple[NDArray[np.float32], bool]:

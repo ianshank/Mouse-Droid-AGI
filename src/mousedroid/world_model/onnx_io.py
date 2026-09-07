@@ -47,6 +47,7 @@ OBSERVE_STEP_INPUT_Z: Final[str] = "z"
 OBSERVE_STEP_INPUT_ULTRASONIC: Final[str] = "ultrasonic"
 OBSERVE_STEP_INPUT_AUDIO: Final[str] = "audio"
 OBSERVE_STEP_INPUT_LIDAR: Final[str] = "lidar"
+OBSERVE_STEP_INPUT_IMU: Final[str] = "imu"
 
 # ---------------------------------------------------------------------------
 # Output names — order matches DualStreamRSSM.observe_step_traceable's
@@ -95,7 +96,7 @@ def optional_input_names_for_cfg(cfg: ModelConfig) -> tuple[str, ...]:
     """Return the modality-conditional input names enabled by ``cfg``.
 
     The order matches the order operators see in the export script:
-    ``ultrasonic`` -> ``audio`` -> ``lidar``. Disabled modalities
+    ``ultrasonic`` -> ``audio`` -> ``lidar`` -> ``imu``. Disabled modalities
     (``cfg.<modality>_dim == 0``) are omitted, mirroring
     :func:`mousedroid.world_model.observation_packer.pack_observation`.
 
@@ -113,6 +114,8 @@ def optional_input_names_for_cfg(cfg: ModelConfig) -> tuple[str, ...]:
         names.append(OBSERVE_STEP_INPUT_AUDIO)
     if cfg.lidar_dim > 0:
         names.append(OBSERVE_STEP_INPUT_LIDAR)
+    if cfg.imu_dim > 0:
+        names.append(OBSERVE_STEP_INPUT_IMU)
     return tuple(names)
 
 

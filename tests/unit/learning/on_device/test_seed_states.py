@@ -134,6 +134,31 @@ def test_mask_length_equals_modality_count_with_lidar() -> None:
     assert mask[4] == 0.0
 
 
+def test_mask_length_equals_modality_count_with_imu() -> None:
+    """Mask length == 6 when the live encoder has IMU enabled; replay IMU stays 0."""
+    from mousedroid.learning.on_device.seed_states import build_valid_mask
+
+    torch.manual_seed(0)
+    cfg = ModelConfig(
+        vision_dim=0,
+        vision_proj_dim=0,
+        hidden_dim=8,
+        latent_dim=4,
+        action_dim=3,
+        obs_dim=8,
+        imu_dim=3,
+        imu_proj_dim=4,
+    )
+    wm = RSSM(cfg)
+    wm.eval()
+    assert wm.encoder.imu_enabled
+    rec = _make_records(1)[0]
+    mask = build_valid_mask(rec, wm.encoder)
+
+    assert mask.shape == (6,)
+    assert mask[5] == 0.0
+
+
 def test_mask_vision_slot_zero_for_empty_vision() -> None:
     """Vision slot is 0 when ``vision_features`` is empty (record default)."""
     from mousedroid.learning.on_device.seed_states import build_valid_mask

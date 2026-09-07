@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Optional IMU fusion slot, default off (F-040)
+
+RSSM `valid_mask` is width 6 with `SENSOR_SLOT_MAP["imu"]=5`. `imu_dim`
+defaults 0 so fusion weights and `motor_state_dim=4` stay checkpoint-compatible.
+Enable with `imu_dim: 3` once F-036 parse and a talking ESP32 exist.
+
 ### Fixed — Cloud Logging queue + allowlist (F-039)
 
 `CloudLoggingSink` claimed fire-and-forget while calling sync `log_struct`

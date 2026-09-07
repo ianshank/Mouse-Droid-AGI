@@ -212,6 +212,7 @@ class DualStreamRSSM(nn.Module):
             ultrasonic=packed.ultrasonic,
             audio=packed.audio,
             lidar=packed.lidar,
+            imu=packed.imu,
             prev_action=prev_action,
             h=h,
             z=z,
@@ -231,6 +232,7 @@ class DualStreamRSSM(nn.Module):
         ultrasonic: Tensor | None = None,
         audio: Tensor | None = None,
         lidar: Tensor | None = None,
+        imu: Tensor | None = None,
     ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         """Tensor-only variant of :meth:`observe_step` — ONNX-traceable.
 
@@ -253,6 +255,8 @@ class DualStreamRSSM(nn.Module):
                 ``None`` when ``cfg.audio_dim == 0``.
             lidar: Optional LiDAR features, shape ``(batch, cfg.lidar_dim)``;
                 ``None`` when ``cfg.lidar_dim == 0``.
+            imu: Optional IMU attitude, shape ``(batch, cfg.imu_dim)``;
+                ``None`` when ``cfg.imu_dim == 0``.
             prev_action: Previous action, shape ``(batch, cfg.action_dim)``.
             h: Previous combined hidden state, shape ``(batch, combined_dim)``.
             z: Previous latent sample, shape ``(batch, cfg.latent_dim)``.
@@ -268,6 +272,7 @@ class DualStreamRSSM(nn.Module):
             valid_mask,
             audio=audio,
             lidar=lidar,
+            imu=imu,
         )
 
         # Split combined hidden state.

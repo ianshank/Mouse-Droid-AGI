@@ -82,6 +82,10 @@ async def test_read_all_uses_imu_yaw_when_stock_frame_is_valid() -> None:
     bundle = await mgr.read_all()
     np.testing.assert_allclose(bundle.motor_state, [0.4, 0.5, 1.25, 11.8], atol=1e-6)
     assert bundle.valid_mask[2] == 1.0
+    assert bundle.valid_mask.shape == (6,)
+    assert bundle.valid_mask[5] == 1.0
+    assert bundle.imu_features is not None
+    np.testing.assert_allclose(bundle.imu_features, [0.0, 0.0, 1.25], atol=1e-6)
 
 
 async def test_read_all_keeps_odometry_heading_when_imu_absent() -> None:
@@ -95,6 +99,8 @@ async def test_read_all_keeps_odometry_heading_when_imu_absent() -> None:
     esp32.get_battery_voltage.return_value = 12.0
     bundle = await mgr.read_all()
     np.testing.assert_allclose(bundle.motor_state, [0.1, 0.2, 0.3, 12.0], atol=1e-6)
+    assert bundle.imu_features is None
+    assert bundle.valid_mask.shape == (4,)
 
 
 async def test_read_all_microphone_none_backwards_compat():
