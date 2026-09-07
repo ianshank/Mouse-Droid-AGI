@@ -1225,4 +1225,29 @@ features:
       laptop only. Do not publish to HuggingFace until
       passes_bdi_publish_bars is true on the operator dataset.
 
+  - id: "F-042"
+    epic: "Hygiene"
+    name: "Enumerate factory/orchestrator branch-coverage exemptions"
+    description: >-
+      Replace unbounded factory/ and orchestrator/_ prefixes in
+      check_branch_coverage.py with an enumerated file allowlist. Keep
+      gating factory/on_device_learning.py, mcp_harness.py, and
+      _replay_batch_helpers.py (algorithmic, not pure DI). Schema,
+      telemetry, and validation/runtime prefixes stay.
+    category: "infrastructure"
+    priority: "medium"
+    status: "todo"
+    tier: "fast"
+    verification:
+      - "factory/ and orchestrator/_ are not directory prefixes"
+      - "enumerated DI factory files and orchestrator mixins stay exempt"
+      - "on_device_learning, mcp_harness, _replay_batch_helpers are gated"
+      - "a hypothetical factory/new_builder.py is not exempt"
+    validation_command: "bash scripts/validations/F-042.sh"
+    implemented_in: null
+    depends_on: []
+    notes: >-
+      No CHARTER §3 carve-out: CI gate honesty only. Does not lower the
+      coverage threshold. Do not re-open factory/ as a prefix.
+
 

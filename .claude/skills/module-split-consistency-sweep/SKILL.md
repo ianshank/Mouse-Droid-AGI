@@ -143,8 +143,10 @@ Run all eight after the mechanical split, before opening the PR:
    rather than lowering the gate threshold or leaving it failing:
    `ALLOWED_DIR_PREFIXES/ALLOWED_FILES` in
    `scripts/check_no_hardcoded_values.py`, and
-   `_ALLOWED_DIR_PREFIXES`/`_is_exempted_from_branch_gate` in
-   `scripts/check_branch_coverage.py`. Both keep the real percentage
+   `_ALLOWED_DIR_PREFIXES`/`_ALLOWED_FILES`/`_is_exempted_from_branch_gate` in
+   `scripts/check_branch_coverage.py`. Factory and orchestrator exemptions
+   are enumerated files (F-042), not directory prefixes — do not re-open
+   `src/mousedroid/factory/` as a prefix. Both keep the real percentage
    visible in output — exemption suppresses the failure, never the number.
 
 7. **Facade / class-surface characterization tests — both directions.** For

@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Enumerate factory/orchestrator coverage exemptions (F-042)
+
+`check_branch_coverage.py` treated every file under `factory/` and every
+`orchestrator/_*` path as split products. A new factory module inherited
+the exemption. The allowlist is now enumerated files. Algorithmic
+`on_device_learning.py`, `mcp_harness.py`, and `_replay_batch_helpers.py`
+stay on the changed-line gate. Schema/telemetry/validation prefixes are
+unchanged.
+
 ### Fixed — BDI Adam trainer and causal intention features (F-041)
 
 Belief AE used plain SGD after He init and still plateaued at predict-zero.
