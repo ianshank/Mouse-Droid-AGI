@@ -1090,3 +1090,30 @@ features:
       legacy so existing YAML loads unchanged. Hardware validation of the
       chassis IMU still waits on F-008; this feature does not close F-008.
 
+  - id: "F-037"
+    epic: "Security"
+    name: "HTTP gateway + CLI probes always sanitise before LLM egress"
+    description: >-
+      OpenAICompatibleLLMGateway self-builds RegexInjectionFilter from
+      cfg.injection_patterns when injection_filter is None (same constructor
+      symmetry as Anthropic / llama_cpp). scripts/translate_mission.py and
+      scripts/ask_rover.py pass build_injection_filter so they share the
+      orchestrator envelope. Parked arm/.../anthropic_backend.py is frozen
+      until F-008 is done.
+    category: "functional"
+    priority: "high"
+    status: "todo"
+    tier: "fast"
+    verification:
+      - "no-arg OpenAICompatibleLLMGateway constructor stores RegexInjectionFilter"
+      - "default patterns reject ignore-previous without an HTTP call"
+      - "CLIs pass build_injection_filter into build_llm_gateway"
+      - "explicit factory filter instance is still stored unchanged"
+    validation_command: "bash scripts/validations/F-037.sh"
+    implemented_in: null
+    depends_on: ["F-005"]
+    notes: >-
+      No CHARTER §3 carve-out: restoring the pre-egress filter the
+      orchestrator already uses on the CLI probe path. The documented
+      None-skip was a unit-test seam that operator CLIs actually hit.
+

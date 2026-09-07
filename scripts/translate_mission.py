@@ -8,7 +8,9 @@ when the ESP32 / drivetrain is detached.
 
 It builds the gateway through the real factory (``build_llm_gateway``), so it
 honours whatever ``llm:`` config the rover runs (cloud Claude when reachable,
-local llama_cpp fallback when off-network). The tier that actually served and
+local llama_cpp fallback when off-network). The probe also passes
+``build_injection_filter(settings)`` so CHARTER §3 pre-egress sanitisation
+matches the orchestrator path (F-037). The tier that actually served and
 the composite's degraded state are printed so an operator can confirm which
 path answered.
 
@@ -60,7 +62,7 @@ structlog.configure(
 )
 
 from mousedroid.config.loader import load_settings  # noqa: E402
-from mousedroid.factory import build_llm_gateway  # noqa: E402
+from mousedroid.factory import build_injection_filter, build_llm_gateway  # noqa: E402
 from mousedroid.llm_gateway.protocol import LLMGatewayProtocol  # noqa: E402
 from mousedroid.logging.setup import get_logger  # noqa: E402
 from mousedroid.validation.runtime import resolve_runtime_config_paths  # noqa: E402
@@ -162,7 +164,8 @@ def main(argv: list[str] | None = None) -> int:
         return _EXIT_CONFIG_ERROR
 
     try:
-        gateway = build_llm_gateway(settings)
+        injection_filter = build_injection_filter(settings)
+        gateway = build_llm_gateway(settings, injection_filter=injection_filter)
     except Exception:
         _log.exception("translate_mission_build_error")
         return _EXIT_RUNTIME_ERROR

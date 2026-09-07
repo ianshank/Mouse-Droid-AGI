@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — HTTP LLM gateway + CLI probes always sanitise (F-037)
+
+`OpenAICompatibleLLMGateway` skipped `RegexInjectionFilter.sanitize()` when
+the caller passed `None`. The orchestrator already threaded a filter, but
+`scripts/translate_mission.py` and `scripts/ask_rover.py` did not — the
+runbook probe path could egress unsanitised NL. The HTTP constructor now
+self-builds the filter (Anthropic / llama_cpp symmetry) and both CLIs pass
+`build_injection_filter`. Frozen `arm/**` is unchanged.
+
 ### Added — Stock IMU attitude parse without RSSM slot widen (F-036)
 
 WAVE ROVER `FEEDBACK_BASE_INFO` frames already carry `r`/`p`/`y`; the stock

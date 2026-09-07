@@ -35,6 +35,7 @@ from mousedroid.constants import MILLISECONDS_PER_SECOND
 from mousedroid.llm_gateway._telemetry import extract_token_pair, record_round_trip_metrics
 from mousedroid.llm_gateway.protocol import GoalVector
 from mousedroid.logging.setup import get_logger
+from mousedroid.security.injection_filter import RegexInjectionFilter
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import LLMConfig
@@ -90,19 +91,14 @@ class OpenAICompatibleLLMGateway:
                 ``request_timeout_s`` / prompts).
             injection_filter: Optional shared
                 :class:`PromptInjectionFilterProtocol`. When supplied (the
-                production default via :func:`build_orchestrator`),
-                ``translate_mission`` calls ``injection_filter.sanitize(nl)``
-                before sending the user content to the upstream LLM —
-                mirroring the local llama-cpp gateway's behaviour at
-                :meth:`LLMGateway._sanitize_command` so both backends apply
-                the same guardrails. The previous Tier-C2.3 implementation
-                discarded this argument on the HTTP path (factory.py:627-629
-                commented "upstream provider expected to enforce its own
-                guardrails"); the f006-remote-llm sprint closes that gap so
-                operator-supplied mission text from probes / dashboards /
-                voice intent can't bypass the local rejection envelope.
-                When ``None`` (legacy default), the gateway skips local
-                sanitisation — backwards-compatible.
+                production default via :func:`build_orchestrator`), that
+                instance is reused so REST + MCP + LLM ingress share one
+                rejection envelope. When ``None`` the gateway self-builds a
+                :class:`RegexInjectionFilter` from ``cfg.injection_patterns``
+                and ``cfg.max_command_len`` — the same constructor symmetry
+                as :class:`AnthropicLLMGateway` / :class:`LLMGateway`, so a
+                forgetful caller (CLI probes that used to omit the filter)
+                cannot skip CHARTER §3 pre-egress sanitisation.
             metrics: Optional shared :class:`MetricsRegistry`. When supplied,
                 every ``/v1/chat/completions`` round-trip records latency,
                 token usage (from the response ``usage`` block), and a
@@ -113,7 +109,12 @@ class OpenAICompatibleLLMGateway:
         self._session: aiohttp.ClientSession | None = None
         self._ready = False
         self._degraded = False
-        self._injection_filter = injection_filter
+        if injection_filter is None:
+            injection_filter = RegexInjectionFilter(
+                cfg.injection_patterns,
+                max_len=cfg.max_command_len,
+            )
+        self._injection_filter: PromptInjectionFilterProtocol = injection_filter
         self._metrics = metrics
 
     @property
@@ -202,29 +203,27 @@ class OpenAICompatibleLLMGateway:
     async def translate_mission(self, nl_command: str) -> GoalVector:
         """POST to ``/v1/chat/completions`` and parse a GoalVector from the body.
 
-        Applies the prompt-injection filter (when one was injected) BEFORE
-        the command leaves the rover, mirroring the local llama-cpp gateway's
-        ``_sanitize_command`` (``gateway.py:148``) so operator-supplied
-        mission text from probes / dashboards / voice intent cannot bypass
-        the local rejection envelope. Backwards-compat: when no filter was
-        injected the raw ``nl_command`` is sent through unchanged. On any
-        sanitiser exception the gateway short-circuits to a neutral
-        :class:`GoalVector` WITHOUT touching the upstream LLM (a misbehaving
-        filter must never DoS the host).
+        Applies the prompt-injection filter BEFORE the command leaves the
+        rover, mirroring the local llama-cpp gateway's ``_sanitize_command``
+        so operator-supplied mission text from probes / dashboards / voice
+        intent cannot bypass the local rejection envelope. The constructor
+        always installs a filter (self-built when the caller passed
+        ``None``). On any sanitiser exception the gateway short-circuits to
+        a neutral :class:`GoalVector` WITHOUT touching the upstream LLM (a
+        misbehaving filter must never DoS the host).
 
         Returns a neutral :class:`GoalVector` on any failure path
         (gateway not started, network error, non-200, non-JSON content,
         missing fields). Never raises.
         """
-        if self._injection_filter is not None:
-            try:
-                nl_command = self._injection_filter.sanitize(nl_command)
-            except Exception as exc:  # boundary catch — never crash orchestrator
-                _log.warning(
-                    "llm_gateway_http_sanitize_failed",
-                    error=f"{type(exc).__name__}:{exc}",
-                )
-                return GoalVector()
+        try:
+            nl_command = self._injection_filter.sanitize(nl_command)
+        except Exception as exc:  # boundary catch — never crash orchestrator
+            _log.warning(
+                "llm_gateway_http_sanitize_failed",
+                error=f"{type(exc).__name__}:{exc}",
+            )
+            return GoalVector()
 
         content = await self._chat_completion(
             self._cfg.system_prompt, nl_command, self._cfg.max_tokens
@@ -241,16 +240,11 @@ class OpenAICompatibleLLMGateway:
         ``cfg.query_max_tokens`` so the response is prose rather than the JSON
         GoalVector. Runs OUTSIDE the 30 Hz control loop — operator Q&A only.
 
-        Applies the prompt-injection filter (when one was injected) BEFORE
-        the query leaves the rover, exactly like :meth:`translate_mission`
-        and mirroring the local llama-cpp gateway's ``_sanitize_command``
-        (``gateway.py:204``), which sanitises both paths — free-text
-        operator questions can smuggle an injection payload to a cloud
-        backend just as easily as mission text can. Backwards-compat: when
-        no filter was injected the raw ``query`` is sent through unchanged.
-        On any sanitiser exception the gateway short-circuits to ``""``
-        WITHOUT touching the upstream LLM (a misbehaving filter must never
-        DoS the host).
+        Applies the prompt-injection filter BEFORE the query leaves the
+        rover, exactly like :meth:`translate_mission`. The constructor
+        always installs a filter. On any sanitiser exception the gateway
+        short-circuits to ``""`` WITHOUT touching the upstream LLM (a
+        misbehaving filter must never DoS the host).
 
         Args:
             query: Natural language question. Must be non-empty.
@@ -267,15 +261,14 @@ class OpenAICompatibleLLMGateway:
         if not query.strip():
             msg = "query must be non-empty"
             raise ValueError(msg)
-        if self._injection_filter is not None:
-            try:
-                query = self._injection_filter.sanitize(query)
-            except Exception as exc:  # boundary catch — never crash orchestrator
-                _log.warning(
-                    "llm_gateway_http_sanitize_failed",
-                    error=f"{type(exc).__name__}:{exc}",
-                )
-                return ""
+        try:
+            query = self._injection_filter.sanitize(query)
+        except Exception as exc:  # boundary catch — never crash orchestrator
+            _log.warning(
+                "llm_gateway_http_sanitize_failed",
+                error=f"{type(exc).__name__}:{exc}",
+            )
+            return ""
         content = await self._chat_completion(
             self._cfg.query_system_prompt, query, self._cfg.query_max_tokens
         )
