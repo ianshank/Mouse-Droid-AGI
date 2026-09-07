@@ -387,7 +387,7 @@ class SensorManager:
                 [
                     encoders.left_velocity_mps,
                     encoders.right_velocity_mps,
-                    encoders.heading_rad,
+                    encoders.heading_for_motor(),
                     battery_v,
                 ],
                 dtype=np.float32,

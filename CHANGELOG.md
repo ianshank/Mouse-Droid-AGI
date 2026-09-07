@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Stock IMU attitude parse without RSSM slot widen (F-036)
+
+WAVE ROVER `FEEDBACK_BASE_INFO` frames already carry `r`/`p`/`y`; the stock
+codec left them on the floor and zeroed `heading_rad`. `EncoderReading` now
+has explicit `roll_rad`/`pitch_rad`/`yaw_rad`/`imu_valid` (defaults keep the
+legacy path byte-identical). Sensing fills the existing 4-float motor
+heading slot via `heading_for_motor()` so the encoder-less chassis can
+report yaw without adding `SENSOR_SLOT_MAP["imu"]` (that remains F-040).
+
 ### Fixed — Model card accuracy and BDI weight initialisation (2026-09-05)
 
 Found while attempting to train and publish weights to `ianshank/mousedroid-weights`.

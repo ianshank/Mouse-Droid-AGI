@@ -68,6 +68,35 @@ async def test_read_all_handles_motor_failure():
     assert bundle.valid_mask[2] == 0.0
 
 
+async def test_read_all_uses_imu_yaw_when_stock_frame_is_valid() -> None:
+    """F-036 sensing consumer: IMU yaw fills motor slot 2, not odometry heading."""
+    mgr, _, _, esp32 = _make_manager()
+    esp32.read_encoders.return_value = EncoderReading(
+        left_velocity_mps=0.4,
+        right_velocity_mps=0.5,
+        heading_rad=0.0,
+        yaw_rad=1.25,
+        imu_valid=True,
+    )
+    esp32.get_battery_voltage.return_value = 11.8
+    bundle = await mgr.read_all()
+    np.testing.assert_allclose(bundle.motor_state, [0.4, 0.5, 1.25, 11.8], atol=1e-6)
+    assert bundle.valid_mask[2] == 1.0
+
+
+async def test_read_all_keeps_odometry_heading_when_imu_absent() -> None:
+    """Legacy EncoderReading (imu_valid False) still uses heading_rad."""
+    mgr, _, _, esp32 = _make_manager()
+    esp32.read_encoders.return_value = EncoderReading(
+        left_velocity_mps=0.1,
+        right_velocity_mps=0.2,
+        heading_rad=0.3,
+    )
+    esp32.get_battery_voltage.return_value = 12.0
+    bundle = await mgr.read_all()
+    np.testing.assert_allclose(bundle.motor_state, [0.1, 0.2, 0.3, 12.0], atol=1e-6)
+
+
 async def test_read_all_microphone_none_backwards_compat():
     """SensorManager with microphone=None still returns a 4-element valid_mask."""
     mgr, _, _, _ = _make_manager()

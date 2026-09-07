@@ -908,14 +908,14 @@ features:
     implemented_in: "24e34542b9ad98af03a020a005e916220dd28075"
     depends_on: []
     notes: >-
-      Ships with the deploy-repin skill (the F-036 half that backtick-references
+      Ships with the deploy-repin skill (the skill half that backtick-references
       scripts/repin_tags.sh, so the two must land together or the skill-command
       validator fails on a dead path reference). No dependency on F-034: disjoint
       files. A real --push run is an operator action requiring separate explicit
       confirmation -- this feature covers building and dry-running the script
       only, so the tags it would create do not exist yet. implemented_in stays
       null until the dedicated closeout PR, per the F-030/F-031/F-032/F-034
-      convention.
+      convention. Catalog id F-036 is reserved for stock IMU parse, not this skill.
 
   - id: "F-034"
     epic: "Training Observability"
@@ -1058,3 +1058,35 @@ features:
       silently-discarding values; .dockerignore missing the mlflow.db*
       entries .gitignore got; and the runbook's POSIX-only "4 slashes"
       sqlite guidance plus a missing file-backend migration section.
+
+  # F-033 is intentionally SKIPPED: progress.md used that id informally for
+  # "chassis safety sensors" and it was never catalogued. Reusing it would
+  # collide the same way F-009..F-014 collided with SMOKE_REPORT findings
+  # (ADR-013). The catalog continues at F-036 (F-034 and F-035 already landed).
+  - id: "F-036"
+    epic: "Rover bring-up"
+    name: "Stock FEEDBACK_BASE_INFO IMU parse without RSSM slot widen"
+    description: >-
+      Consume Waveshare FEEDBACK_BASE_INFO keys r/p/y into EncoderReading
+      attitude fields (roll_rad/pitch_rad/yaw_rad, imu_valid). Sensing
+      copies yaw into the existing 4-float motor observation via
+      heading_for_motor(). Default command_set=legacy stays IMU-inert.
+      Does NOT add SENSOR_SLOT_MAP["imu"] (that is F-040).
+    category: "functional"
+    priority: "high"
+    status: "todo"
+    tier: "fast"
+    verification:
+      - "stock T=1001 r/p/y parse into attitude fields; heading_rad stays 0"
+      - "heading_for_motor returns yaw when imu_valid else heading_rad"
+      - "legacy codec and parse_encoder_reading leave imu_valid False"
+      - "SENSOR_SLOT_MAP has no imu key; N_SENSOR_MODALITIES_WITH_LIDAR stays 5"
+    validation_command: "bash scripts/validations/F-036.sh"
+    implemented_in: null
+    depends_on: ["F-025"]
+    notes: >-
+      Audit R4 software half. No CHARTER §3 carve-out: (1) no actuation;
+      (2) no LLM/training in the hot loop; (3) default command_set remains
+      legacy so existing YAML loads unchanged. Hardware validation of the
+      chassis IMU still waits on F-008; this feature does not close F-008.
+

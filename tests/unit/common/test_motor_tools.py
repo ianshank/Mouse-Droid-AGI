@@ -12,18 +12,32 @@ from mousedroid.common.tools.registry import ToolRegistry
 from mousedroid.config.schema import Settings
 
 
-def _encoder_reading(**overrides: float) -> Any:
+def _encoder_reading(**overrides: Any) -> Any:
     """Build a stub EncoderReading-shaped object."""
-    defaults = {
+    defaults: dict[str, Any] = {
         "left_velocity_mps": 0.1,
         "right_velocity_mps": 0.1,
         "odometry_x_m": 0.0,
         "odometry_y_m": 0.0,
         "heading_rad": 0.0,
         "timestamp": 1.0,
+        "roll_rad": 0.0,
+        "pitch_rad": 0.0,
+        "yaw_rad": 0.0,
+        "imu_valid": False,
     }
     defaults.update(overrides)
-    return type("Enc", (), defaults)()
+
+    class Enc:
+        def heading_for_motor(self) -> float:
+            if bool(self.imu_valid):
+                return float(self.yaw_rad)
+            return float(self.heading_rad)
+
+    obj = Enc()
+    for key, value in defaults.items():
+        setattr(obj, key, value)
+    return obj
 
 
 @pytest.fixture
@@ -111,8 +125,13 @@ class TestReadEncoders:
             "odometry_y_m",
             "heading_rad",
             "timestamp",
+            "roll_rad",
+            "pitch_rad",
+            "yaw_rad",
+            "imu_valid",
         }
-        assert all(isinstance(v, float) for v in result.values())
+        assert result["imu_valid"] is False
+        assert all(isinstance(v, float) for k, v in result.items() if k != "imu_valid")
 
 
 class TestRegistration:

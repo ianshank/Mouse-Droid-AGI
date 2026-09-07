@@ -326,17 +326,21 @@ class WaveshareStockCodec:
         return _coerce_float(data.get("v"))
 
     def parse_encoders(self, data: Mapping[str, Any]) -> EncoderReading:
-        """Map ``L``/``R`` wheel speeds; odometry/heading stay zero.
+        """Map ``L``/``R`` wheel speeds and IMU ``r``/``p``/``y``.
 
         WAVE ROVER is encoder-less — ``L``/``R`` echo commanded speed, and
-        the chassis has no odometry source. IMU-derived heading (keys
-        ``r``/``p``/``y`` in the same frame) is deliberately NOT consumed
-        here; that is the audit-R4 sensing feature, not a comms concern.
+        the chassis has no odometry source, so ``odometry_*`` and
+        ``heading_rad`` stay zero. Attitude is copied from the same
+        T=1001 frame (vendor keys ``r``/``p``/``y``, stored as radians to
+        match ``heading_rad``) and ``imu_valid`` is set so sensing can
+        fill the motor-observation heading slot without widening the
+        RSSM mask. That is the F-025 split: the codec parses; sensing
+        consumes via :meth:`EncoderReading.heading_for_motor`.
 
         ``_is_base_info`` gates only the ``T`` key, so a well-typed 1001
-        frame can still carry a malformed wheel speed. Both fields go
-        through :func:`_coerce_float` for that reason — a raise here would
-        propagate out of the 30 Hz sensor read.
+        frame can still carry a malformed wheel speed or IMU field. Every
+        numeric key goes through :func:`_coerce_float` — a raise here
+        would propagate out of the 30 Hz sensor read.
         """
         from mousedroid.comms.protocol import EncoderReading  # deferred: circular at import
 
@@ -344,9 +348,16 @@ class WaveshareStockCodec:
             return EncoderReading()
         left = _coerce_float(data.get("L"))
         right = _coerce_float(data.get("R"))
+        roll = _coerce_float(data.get("r"))
+        pitch = _coerce_float(data.get("p"))
+        yaw = _coerce_float(data.get("y"))
         return EncoderReading(
             left_velocity_mps=0.0 if left is None else left,
             right_velocity_mps=0.0 if right is None else right,
+            roll_rad=0.0 if roll is None else roll,
+            pitch_rad=0.0 if pitch is None else pitch,
+            yaw_rad=0.0 if yaw is None else yaw,
+            imu_valid=True,
         )
 
     def connect_commands(self, cfg: ESP32Config) -> list[Mapping[str, float]]:
