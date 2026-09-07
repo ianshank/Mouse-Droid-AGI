@@ -35,7 +35,6 @@ from mousedroid.constants import MILLISECONDS_PER_SECOND
 from mousedroid.llm_gateway._telemetry import extract_token_pair, record_round_trip_metrics
 from mousedroid.llm_gateway.protocol import GoalVector
 from mousedroid.logging.setup import get_logger
-from mousedroid.security.injection_filter import RegexInjectionFilter
 
 if TYPE_CHECKING:
     from mousedroid.config.schema import LLMConfig
@@ -110,6 +109,11 @@ class OpenAICompatibleLLMGateway:
         self._ready = False
         self._degraded = False
         if injection_filter is None:
+            # Function-scoped: a module-level import trips
+            # check_subsystem_boundaries.py. Anthropic / llama_cpp are on the
+            # documented allowlist; HTTP must not grow that ratchet.
+            from mousedroid.security.injection_filter import RegexInjectionFilter
+
             injection_filter = RegexInjectionFilter(
                 cfg.injection_patterns,
                 max_len=cfg.max_command_len,
