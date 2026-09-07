@@ -77,6 +77,7 @@ def test_translate_prints_goalvector_and_exits_zero(
     gw = _fake_gateway(GoalVector(vx_target=0.4, vy_target=0.0, omega_target=-0.2))
     with (
         patch.object(cli, "load_settings", return_value=SimpleNamespace()),
+        patch.object(cli, "build_injection_filter", return_value=MagicMock()),
         patch.object(cli, "build_llm_gateway", return_value=gw),
     ):
         rc = cli.main(["--mission", "patrol left then stop"])
@@ -97,6 +98,7 @@ def test_single_gateway_degraded_tier_reported(
     gw = _fake_gateway(GoalVector(), degraded=True)
     with (
         patch.object(cli, "load_settings", return_value=SimpleNamespace()),
+        patch.object(cli, "build_injection_filter", return_value=MagicMock()),
         patch.object(cli, "build_llm_gateway", return_value=gw),
     ):
         rc = cli.main(["--mission", "stop"])
@@ -112,6 +114,7 @@ def test_composite_secondary_tier_reported(
     gw = _fake_composite(GoalVector(vx_target=0.1), primary_degraded=True)
     with (
         patch.object(cli, "load_settings", return_value=SimpleNamespace()),
+        patch.object(cli, "build_injection_filter", return_value=MagicMock()),
         patch.object(cli, "build_llm_gateway", return_value=gw),
     ):
         rc = cli.main(["--mission", "creep forward"])
@@ -135,6 +138,7 @@ def test_composite_tier_captured_before_stop_clears_degraded(
     )
     with (
         patch.object(cli, "load_settings", return_value=SimpleNamespace()),
+        patch.object(cli, "build_injection_filter", return_value=MagicMock()),
         patch.object(cli, "build_llm_gateway", return_value=gw),
     ):
         rc = cli.main(["--mission", "hold position"])
@@ -151,6 +155,7 @@ def test_composite_primary_tier_reported(
     gw = _fake_composite(GoalVector(vx_target=0.3), primary_degraded=False)
     with (
         patch.object(cli, "load_settings", return_value=SimpleNamespace()),
+        patch.object(cli, "build_injection_filter", return_value=MagicMock()),
         patch.object(cli, "build_llm_gateway", return_value=gw),
     ):
         rc = cli.main(["--mission", "go forward"])
@@ -166,6 +171,7 @@ def test_composite_both_degraded_tier_reported(
     gw = _fake_composite(GoalVector(), primary_degraded=True, both_degraded=True)
     with (
         patch.object(cli, "load_settings", return_value=SimpleNamespace()),
+        patch.object(cli, "build_injection_filter", return_value=MagicMock()),
         patch.object(cli, "build_llm_gateway", return_value=gw),
     ):
         rc = cli.main(["--mission", "stop"])
@@ -188,6 +194,7 @@ def test_explicit_config_is_passed_to_load_settings(cli: ModuleType) -> None:
 
     with (
         patch.object(cli, "load_settings", side_effect=_capture),
+        patch.object(cli, "build_injection_filter", return_value=MagicMock()),
         patch.object(cli, "build_llm_gateway", return_value=gw),
     ):
         rc = cli.main(["--mission", "go", "--config", "/etc/mousedroid/jetson_production.yaml"])
@@ -211,6 +218,7 @@ def test_env_config_resolved_when_no_cli_flag(
     monkeypatch.setenv("MOUSEDROID_CONFIG", "/etc/mousedroid/jetson_production.yaml")
     with (
         patch.object(cli, "load_settings", side_effect=_capture),
+        patch.object(cli, "build_injection_filter", return_value=MagicMock()),
         patch.object(cli, "build_llm_gateway", return_value=gw),
     ):
         rc = cli.main(["--mission", "go"])
@@ -232,6 +240,7 @@ def test_build_error_exits_1(cli: ModuleType) -> None:
     """A gateway-build failure exits 1 (runtime error)."""
     with (
         patch.object(cli, "load_settings", return_value=SimpleNamespace()),
+        patch.object(cli, "build_injection_filter", return_value=MagicMock()),
         patch.object(cli, "build_llm_gateway", side_effect=RuntimeError("build failed")),
     ):
         rc = cli.main(["--mission", "go"])
@@ -244,6 +253,7 @@ def test_runtime_error_exits_1_and_still_stops(cli: ModuleType) -> None:
     gw.translate_mission = AsyncMock(side_effect=RuntimeError("network down"))
     with (
         patch.object(cli, "load_settings", return_value=SimpleNamespace()),
+        patch.object(cli, "build_injection_filter", return_value=MagicMock()),
         patch.object(cli, "build_llm_gateway", return_value=gw),
     ):
         rc = cli.main(["--mission", "go"])
@@ -257,6 +267,7 @@ def test_start_failure_still_stops(cli: ModuleType) -> None:
     gw.start = AsyncMock(side_effect=RuntimeError("start boom"))
     with (
         patch.object(cli, "load_settings", return_value=SimpleNamespace()),
+        patch.object(cli, "build_injection_filter", return_value=MagicMock()),
         patch.object(cli, "build_llm_gateway", return_value=gw),
     ):
         rc = cli.main(["--mission", "go"])
@@ -269,3 +280,21 @@ def test_missing_mission_arg_exits_nonzero(cli: ModuleType) -> None:
     with pytest.raises(SystemExit) as exc:
         cli.main([])
     assert exc.value.code != 0
+
+
+def test_cli_passes_shared_injection_filter_to_factory(cli: ModuleType) -> None:
+    """F-037: probe must thread ``build_injection_filter`` into ``build_llm_gateway``."""
+    gw = _fake_gateway(GoalVector())
+    settings = SimpleNamespace()
+    injection_filter = MagicMock(name="shared_filter")
+    with (
+        patch.object(cli, "load_settings", return_value=settings),
+        patch.object(cli, "build_injection_filter", return_value=injection_filter) as filt,
+        patch.object(cli, "build_llm_gateway", return_value=gw) as build,
+    ):
+        rc = cli.main(["--mission", "go"])
+    assert rc == 0
+    filt.assert_called_once_with(settings)
+    build.assert_called_once()
+    assert build.call_args.args == (settings,)
+    assert build.call_args.kwargs["injection_filter"] is injection_filter

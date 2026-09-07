@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from importlib import resources
 
-from mousedroid.constants import N_SENSOR_MODALITIES, N_SENSOR_MODALITIES_WITH_LIDAR
+from mousedroid.constants import N_SENSOR_MODALITIES, N_SENSOR_MODALITIES_WITH_IMU
 from mousedroid.telemetry import frame_builder
 from mousedroid.telemetry.protocol import TelemetryFrame
 
@@ -30,9 +30,9 @@ def test_modality_names_match_bundle_slot_order() -> None:
         "motor",
         "audio",
         "lidar",
+        "imu",
     )
-    # Length covers both mask variants (4 without lidar, 5 with).
-    assert len(frame_builder._MODALITY_NAMES) == N_SENSOR_MODALITIES_WITH_LIDAR
+    assert len(frame_builder._MODALITY_NAMES) == N_SENSOR_MODALITIES_WITH_IMU
     assert N_SENSOR_MODALITIES == 4
 
 

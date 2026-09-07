@@ -8,6 +8,68 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Enumerate factory/orchestrator coverage exemptions (F-042)
+
+`check_branch_coverage.py` treated every file under `factory/` and every
+`orchestrator/_*` path as split products. A new factory module inherited
+the exemption. The allowlist is now enumerated files. Algorithmic
+`on_device_learning.py`, `mcp_harness.py`, and `_replay_batch_helpers.py`
+stay on the changed-line gate. Schema/telemetry/validation prefixes are
+unchanged.
+
+### Fixed — BDI Adam trainer and causal intention features (F-041)
+
+Belief AE used plain SGD after He init and still plateaued at predict-zero.
+Intention labels never depended on the vision X that `collect_annotations`
+saved. Trainers now use Adam. The npz stores `intention_features` matching
+`label_intention`. HuggingFace publish stays blocked until
+`passes_bdi_publish_bars` (AE MSE < PCA-128 and accuracy > majority).
+OTA poller remains `ianshank/mousedroid-policy-v2`. Runtime
+`WEIGHT_INIT_SCALE` is unchanged.
+
+### Added — Optional IMU fusion slot, default off (F-040)
+
+RSSM `valid_mask` is width 6 with `SENSOR_SLOT_MAP["imu"]=5`. `imu_dim`
+defaults 0 so fusion weights and `motor_state_dim=4` stay checkpoint-compatible.
+Enable with `imu_dim: 3` once F-036 parse and a talking ESP32 exist.
+
+### Fixed — Cloud Logging queue + allowlist (F-039)
+
+`CloudLoggingSink` claimed fire-and-forget while calling sync `log_struct`
+on the caller thread. `__call__` now queues an allowlisted copy
+(`GCPLoggingConfig.queue_maxsize`, default 256) and never talks to the SDK.
+Mission/NL keys are redacted. Drain/get timeouts are
+`drain_timeout_s` (5.0) and `queue_get_timeout_s` (0.2). Default INFO
+overlays still drop `tick_complete`; the stall test only fires when both
+log levels are DEBUG.
+
+### Fixed — CI/docs honesty for parked journeys and Current Next Steps (F-038)
+
+The CI step that runs `tests/functional` + `tests/user_journey` read as
+operator-path coverage; those modules uniquely prove parked
+`AutonomousOrchestrator` APIs (ADR-016). Relabelled parked-autonomous. Current
+Next Steps no longer carries LANDED rows; done catalog ids there are operator
+leftovers. `doc_hygiene.py --strict` is now a real CI gate. CHARTER §5 points
+at root `NEXT_STEPS.md` and splits M6 (RSSM soak) from Physical-AI Phase 6 LoRA.
+
+### Fixed — HTTP LLM gateway + CLI probes always sanitise (F-037)
+
+`OpenAICompatibleLLMGateway` skipped `RegexInjectionFilter.sanitize()` when
+the caller passed `None`. The orchestrator already threaded a filter, but
+`scripts/translate_mission.py` and `scripts/ask_rover.py` did not — the
+runbook probe path could egress unsanitised NL. The HTTP constructor now
+self-builds the filter (Anthropic / llama_cpp symmetry) and both CLIs pass
+`build_injection_filter`. Frozen `arm/**` is unchanged.
+
+### Added — Stock IMU attitude parse without RSSM slot widen (F-036)
+
+WAVE ROVER `FEEDBACK_BASE_INFO` frames already carry `r`/`p`/`y`; the stock
+codec left them on the floor and zeroed `heading_rad`. `EncoderReading` now
+has explicit `roll_rad`/`pitch_rad`/`yaw_rad`/`imu_valid` (defaults keep the
+legacy path byte-identical). Sensing fills the existing 4-float motor
+heading slot via `heading_for_motor()` so the encoder-less chassis can
+report yaw without adding `SENSOR_SLOT_MAP["imu"]` (that remains F-040).
+
 ### Fixed — Model card accuracy and BDI weight initialisation (2026-09-05)
 
 Found while attempting to train and publish weights to `ianshank/mousedroid-weights`.

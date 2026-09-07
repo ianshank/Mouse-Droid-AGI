@@ -15,6 +15,14 @@ class EncoderReading:
     """Wheel encoder data from ESP32.
 
     All velocities in robot frame (m/s). Odometry in metres from session start.
+
+    Attitude fields (``roll_rad`` / ``pitch_rad`` / ``yaw_rad``) are the
+    stock-firmware IMU on ``FEEDBACK_BASE_INFO`` (keys ``r`` / ``p`` /
+    ``y``). They stay 0.0 with ``imu_valid=False`` on the legacy protocol
+    so existing YAML and the default ``command_set="legacy"`` path remain
+    byte-identical. ``heading_rad`` is odometry heading and is *not* the
+    same quantity as IMU yaw — :meth:`heading_for_motor` is the sensing
+    seam that picks which one fills the 4-float motor observation.
     """
 
     left_velocity_mps: float = 0.0
@@ -23,6 +31,26 @@ class EncoderReading:
     odometry_y_m: float = 0.0
     heading_rad: float = 0.0
     timestamp: float = 0.0
+    roll_rad: float = 0.0
+    pitch_rad: float = 0.0
+    yaw_rad: float = 0.0
+    imu_valid: bool = False
+
+    def heading_for_motor(self) -> float:
+        """Heading consumed by the 4-float motor observation vector.
+
+        Stock WAVE ROVER frames carry IMU yaw and no wheel odometry.
+        Legacy frames carry odometry heading and no IMU. Prefer IMU yaw
+        when ``imu_valid`` so the encoder-less chassis is not stuck at
+        heading 0.0; otherwise keep the historical ``heading_rad`` slot.
+
+        Returns:
+            Yaw in radians when a stock T=1001 frame was parsed, else
+            odometry heading.
+        """
+        if self.imu_valid:
+            return self.yaw_rad
+        return self.heading_rad
 
 
 @runtime_checkable

@@ -1,4 +1,9 @@
-"""User journey tests simulating operator mission workflows and adversarial interactions."""
+"""Parked AutonomousOrchestrator user-journey tests (ADR-016), not production.
+
+These exercise ``build_autonomous_orchestrator`` / ``execute_mission_step``.
+Production ``MouseDroidOrchestrator`` coverage lives in e2e / integration /
+smoke. Relabelled by F-038 so CI cannot be read as operator-path coverage.
+"""
 
 from __future__ import annotations
 

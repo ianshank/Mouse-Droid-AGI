@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 import numpy as np
-from training.collect_annotations import INTENTION_LABELS, label_intention
+import pytest
+from training.collect_annotations import (
+    INTENTION_FEATURE_DIM,
+    INTENTION_FEATURE_NAMES,
+    INTENTION_LABELS,
+    intention_feature_vector,
+    label_intention,
+)
 
 from mousedroid.sensing.bundle import MouseDroidObservationBundle
 
@@ -110,3 +117,36 @@ class TestLabelIntentionPaths:
             human_dist_m=0.2,
         )
         assert result == 8  # protect_human, not charge
+
+
+class TestIntentionFeatureVector:
+    def test_feature_dim_matches_names(self) -> None:
+        assert len(INTENTION_FEATURE_NAMES) == INTENTION_FEATURE_DIM
+        assert INTENTION_FEATURE_DIM == 10
+
+    def test_features_copy_label_intention_inputs(self) -> None:
+        action = np.array([0.4, -0.1, 0.2], dtype=np.float32)
+        obs = _obs(distance_m=1.5, battery_v=11.0)
+        feats = intention_feature_vector(
+            action,
+            obs,
+            human_detected=True,
+            human_dist_m=0.4,
+            commanded_action=action,
+        )
+        assert feats.shape == (INTENTION_FEATURE_DIM,)
+        assert feats[0] == pytest.approx(0.4)
+        assert feats[5] == pytest.approx(1.5)
+        assert feats[6] == pytest.approx(11.0)
+        assert feats[7] == 1.0
+        assert feats[9] == 1.0
+        assert (
+            label_intention(
+                action,
+                obs,
+                human_detected=True,
+                human_dist_m=0.4,
+                commanded_action=action,
+            )
+            == 8
+        )

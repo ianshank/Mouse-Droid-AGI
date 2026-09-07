@@ -16,7 +16,11 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from mousedroid.constants import MOTOR_STATE_BATTERY_INDEX
+from mousedroid.constants import (
+    MOTOR_STATE_BATTERY_INDEX,
+    N_SENSOR_MODALITIES_WITH_IMU,
+    N_SENSOR_MODALITIES_WITH_LIDAR,
+)
 from mousedroid.telemetry.protocol import TelemetryFrame
 
 if TYPE_CHECKING:
@@ -27,11 +31,18 @@ if TYPE_CHECKING:
     from mousedroid.telemetry.sensor_liveness import SensorLivenessTracker
 
 # Fixed per-modality slot order of ``MouseDroidObservationBundle.valid_mask``
-# (see ``sensing/bundle.py``). ``lidar`` only occupies a slot when the rover
-# runs with lidar enabled, so the mask is length 4 (no lidar) or 5 (with lidar).
-# We zip these names against the ACTUAL mask length — never index a fixed slot —
-# so a 4-element mask never raises.
-_MODALITY_NAMES: tuple[str, ...] = ("vision", "ultrasonic", "motor", "audio", "lidar")
+# (see ``sensing/bundle.py``). Extra slots appear only when that sensor is
+# live: length 4 (base), 5 (LiDAR), or 6 (IMU). We zip these names against
+# the ACTUAL mask length — never index a fixed slot — so a short mask never
+# raises.
+_MODALITY_NAMES: tuple[str, ...] = (
+    "vision",
+    "ultrasonic",
+    "motor",
+    "audio",
+    "lidar",
+    "imu",
+)
 
 
 def _build_fused_summary(
@@ -43,11 +54,11 @@ def _build_fused_summary(
     """Summarise the fused observation for the dashboard fusion panel.
 
     Pure function of values already computed for the frame — adds no sensor
-    reads and no hot-loop cost. Handles both mask lengths (4 without lidar,
-    5 with) by zipping :data:`_MODALITY_NAMES` against the actual length.
+    reads and no hot-loop cost. Handles mask lengths 4 (base), 5 (LiDAR),
+    and 6 (IMU) by zipping :data:`_MODALITY_NAMES` against the actual length.
 
     Args:
-        valid_mask: Per-modality validity flags (length 4 or 5).
+        valid_mask: Per-modality validity flags (length 4, 5, or 6).
         vision_norm: L2 norm of the vision feature vector.
         audio_rms: RMS of the audio chunk.
 
@@ -56,11 +67,12 @@ def _build_fused_summary(
     """
     n_modalities = len(valid_mask)
     modalities = {name: bool(flag) for name, flag in zip(_MODALITY_NAMES, valid_mask, strict=False)}
-    lidar_present = n_modalities >= len(_MODALITY_NAMES)
+    lidar_present = n_modalities >= N_SENSOR_MODALITIES_WITH_LIDAR
+    imu_present = n_modalities >= N_SENSOR_MODALITIES_WITH_IMU
     if not lidar_present:
-        # Surface the slot explicitly as False so dashboards can render a
-        # stable tile set regardless of the lidar build.
         modalities.setdefault("lidar", False)
+    if not imu_present:
+        modalities.setdefault("imu", False)
     # Bounded "active continuous-signal magnitude" — the two true feature
     # magnitudes. Range readings (distance / lidar-min) are shown separately
     # on the dashboard, so they are deliberately excluded here.

@@ -437,6 +437,9 @@ def test_branch_coverage_dir_exemptions_are_pinned() -> None:
     branch-coverage average no longer hides an under-tested function once
     it lands in its own much-smaller file). A new entry silencing an
     unrelated finding should fail this test until deliberately added here.
+
+    F-042 removed ``src/mousedroid/factory/`` and ``src/mousedroid/orchestrator/_``
+    from this tuple: those packages are enumerated in ``_ALLOWED_FILES``.
     """
     mod = _load_coverage_script_module()
     assert mod._ALLOWED_DIR_PREFIXES == (  # type: ignore[attr-defined]
@@ -444,9 +447,41 @@ def test_branch_coverage_dir_exemptions_are_pinned() -> None:
         "src/mousedroid/telemetry/metrics/",
         "src/mousedroid/telemetry/server/",
         "src/mousedroid/validation/runtime/",
-        "src/mousedroid/factory/",
-        "src/mousedroid/orchestrator/_",
     )
+    assert "src/mousedroid/factory/" not in mod._ALLOWED_DIR_PREFIXES  # type: ignore[attr-defined]
+    assert "src/mousedroid/orchestrator/_" not in mod._ALLOWED_DIR_PREFIXES  # type: ignore[attr-defined]
+
+
+def test_branch_coverage_file_exemptions_are_pinned() -> None:
+    """Growing ``_ALLOWED_FILES`` is a reviewed decision, not a silent prefix."""
+    mod = _load_coverage_script_module()
+    assert sorted(mod._ALLOWED_FILES) == [  # type: ignore[attr-defined]
+        "src/mousedroid/factory/__init__.py",
+        "src/mousedroid/factory/arm.py",
+        "src/mousedroid/factory/autonomous.py",
+        "src/mousedroid/factory/cloud.py",
+        "src/mousedroid/factory/cognitive.py",
+        "src/mousedroid/factory/growth.py",
+        "src/mousedroid/factory/hardware.py",
+        "src/mousedroid/factory/health.py",
+        "src/mousedroid/factory/learning.py",
+        "src/mousedroid/factory/llm_gateway.py",
+        "src/mousedroid/factory/memory_curiosity.py",
+        "src/mousedroid/factory/mission.py",
+        "src/mousedroid/factory/orchestrator.py",
+        "src/mousedroid/factory/safety.py",
+        "src/mousedroid/factory/telemetry.py",
+        "src/mousedroid/factory/voice.py",
+        "src/mousedroid/factory/world_model.py",
+        "src/mousedroid/orchestrator/_action_mixin.py",
+        "src/mousedroid/orchestrator/_background_cadence_mixin.py",
+        "src/mousedroid/orchestrator/_lifecycle_mixin.py",
+        "src/mousedroid/orchestrator/_mission_mixin.py",
+        "src/mousedroid/orchestrator/_state.py",
+        "src/mousedroid/orchestrator/_telemetry_experience_mixin.py",
+        "src/mousedroid/orchestrator/_voice_face_mixin.py",
+        "src/mousedroid/orchestrator/_world_model_state_mixin.py",
+    ]
 
 
 def test_is_exempted_from_branch_gate_matches_prefix_precisely() -> None:
@@ -462,11 +497,11 @@ def test_is_exempted_from_branch_gate_matches_prefix_precisely() -> None:
     this exemption was added (ADR-017), confirming the predicate covers
     the real gate failures it exists for. ``orchestrator/_state.py`` is
     pinned too even though it never flagged a gate failure on its own
-    (it has almost no coverage-bearing lines) -- it matches the
-    ``"orchestrator/_"`` prefix exactly like the 7 mixins and was found,
-    during review, riding that exemption undocumented; pinning it here
-    makes the coverage this file's edits are deliberately not asserted
-    against instead of an accidental byproduct.
+    (it has almost no coverage-bearing lines).
+
+    F-042: a new factory module or mixin does not inherit the exemption.
+    Algorithmic factory modules stay on the gate. ``orchestrator/__init__.py``
+    is not exempt — the old ``orchestrator/_`` prefix matched it accidentally.
     """
     mod = _load_coverage_script_module()
     assert mod._is_exempted_from_branch_gate(  # type: ignore[attr-defined]
@@ -477,6 +512,24 @@ def test_is_exempted_from_branch_gate_matches_prefix_precisely() -> None:
     )
     assert mod._is_exempted_from_branch_gate(  # type: ignore[attr-defined]
         "src/mousedroid/orchestrator/_state.py"
+    )
+    assert not mod._is_exempted_from_branch_gate(  # type: ignore[attr-defined]
+        "src/mousedroid/factory/on_device_learning.py"
+    )
+    assert not mod._is_exempted_from_branch_gate(  # type: ignore[attr-defined]
+        "src/mousedroid/factory/mcp_harness.py"
+    )
+    assert not mod._is_exempted_from_branch_gate(  # type: ignore[attr-defined]
+        "src/mousedroid/factory/_replay_batch_helpers.py"
+    )
+    assert not mod._is_exempted_from_branch_gate(  # type: ignore[attr-defined]
+        "src/mousedroid/factory/new_builder.py"
+    )
+    assert not mod._is_exempted_from_branch_gate(  # type: ignore[attr-defined]
+        "src/mousedroid/orchestrator/_new_mixin.py"
+    )
+    assert not mod._is_exempted_from_branch_gate(  # type: ignore[attr-defined]
+        "src/mousedroid/orchestrator/__init__.py"
     )
     assert not mod._is_exempted_from_branch_gate(  # type: ignore[attr-defined]
         "src/mousedroid/orchestrator/autonomous.py"
@@ -503,7 +556,7 @@ def test_evaluate_branch_coverage_exempts_low_coverage_only_for_split_files() ->
     """
     mod = _load_coverage_script_module()
     changed_files = [
-        "src/mousedroid/factory/health.py",  # exempted prefix, 50% covered
+        "src/mousedroid/factory/health.py",  # exempted file, 50% covered
         "src/mousedroid/safety/monitor.py",  # not exempted, also 50% covered
     ]
     # Both files: lines 1-2 changed, only line 1 executed -> 50% each.
@@ -530,6 +583,29 @@ def test_evaluate_branch_coverage_exempts_low_coverage_only_for_split_files() ->
     reported = {rel_path: (pct, exempted) for rel_path, pct, _scope, exempted in report_rows}
     assert reported["src/mousedroid/factory/health.py"] == (50.0, True)
     assert reported["src/mousedroid/safety/monitor.py"] == (50.0, False)
+
+
+def test_evaluate_branch_coverage_gates_algorithmic_factory_modules() -> None:
+    """F-042: on_device_learning.py at 50% must fail; health.py at 50% must not."""
+    mod = _load_coverage_script_module()
+    changed_files = [
+        "src/mousedroid/factory/health.py",
+        "src/mousedroid/factory/on_device_learning.py",
+        "src/mousedroid/factory/mcp_harness.py",
+        "src/mousedroid/factory/_replay_batch_helpers.py",
+    ]
+    coverage_by_path = {path: {"executed": {1}, "missing": {2}} for path in changed_files}
+    line_map = {path: {1, 2} for path in changed_files}
+
+    _report_rows, failures = mod._evaluate_branch_coverage(  # type: ignore[attr-defined]
+        changed_files, coverage_by_path, line_map, 90.0
+    )
+    failed_paths = {rel_path for rel_path, _pct in failures}
+    assert failed_paths == {
+        "src/mousedroid/factory/on_device_learning.py",
+        "src/mousedroid/factory/mcp_harness.py",
+        "src/mousedroid/factory/_replay_batch_helpers.py",
+    }
 
 
 def test_evaluate_branch_coverage_passes_when_above_threshold() -> None:

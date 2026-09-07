@@ -34,6 +34,16 @@ def test_vision_omitted_mask_has_vision_slot_zero() -> None:
     assert "vision" not in out
 
 
+def test_valid_mask_is_six_wide_with_imu_slot_zero() -> None:
+    """Packed RSSM width is 6; IMU stays invalid until a 3-float attitude exists."""
+    adp = RoverObsAdapter(battery_v=12.0)
+    out = adp.adapt(_obs(), info={"vx_body_mps": 0.0, "omega_rads": 0.0})
+    mask = out["valid_mask"]
+    assert mask.shape == (6,)
+    assert mask[SENSOR_SLOT_MAP["imu"]] == 0.0
+    assert "imu" not in out
+
+
 def test_lidar_and_range_passed_through() -> None:
     adp = RoverObsAdapter(battery_v=12.0)
     out = adp.adapt(_obs(), info={"vx_body_mps": 0.0, "omega_rads": 0.0})

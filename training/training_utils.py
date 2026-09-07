@@ -74,6 +74,66 @@ def sgd_step(
         weights[key] -= lr * grad
 
 
+class AdamOptimizer:
+    """In-place Adam for a dict of numpy parameter arrays.
+
+    Mutates the same arrays held in *weights* so training loops can keep
+    using local names (``w1``, ``b1``, …) after wrapping them in a dict.
+    """
+
+    def __init__(
+        self,
+        weights: dict[str, NDArray[Any]],
+        *,
+        lr: float,
+        beta1: float = 0.9,
+        beta2: float = 0.999,
+        eps: float = 1e-8,
+    ) -> None:
+        """Initialise first/second moment buffers.
+
+        Args:
+            weights: Parameter dict. Arrays are updated in-place by :meth:`step`.
+            lr: Step size.
+            beta1: Exponential decay for the first moment.
+            beta2: Exponential decay for the second moment.
+            eps: Numerical floor under the RMS denominator.
+        """
+        self._weights = weights
+        self._m = {name: np.zeros_like(value) for name, value in weights.items()}
+        self._v = {name: np.zeros_like(value) for name, value in weights.items()}
+        self._lr = float(lr)
+        self._beta1 = float(beta1)
+        self._beta2 = float(beta2)
+        self._eps = float(eps)
+        self._t = 0
+
+    def step(self, grads: dict[str, NDArray[Any]]) -> None:
+        """Apply one Adam update to the wrapped parameter dict.
+
+        Args:
+            grads: Mapping of parameter name to gradient. Extra keys raise
+                ``KeyError`` (same contract as :func:`sgd_step`).
+
+        Raises:
+            KeyError: A gradient name is not in the wrapped weights.
+        """
+        unknown_keys = grads.keys() - self._weights.keys()
+        if unknown_keys:
+            raise KeyError(f"Gradient provided for unknown parameter(s): {sorted(unknown_keys)}")
+        self._t += 1
+        beta1_correction = 1.0 - self._beta1**self._t
+        beta2_correction = 1.0 - self._beta2**self._t
+        for name, grad in grads.items():
+            self._m[name] *= self._beta1
+            self._m[name] += (1.0 - self._beta1) * grad
+            self._v[name] *= self._beta2
+            self._v[name] += (1.0 - self._beta2) * (grad * grad)
+            m_hat = self._m[name] / beta1_correction
+            v_hat = self._v[name] / beta2_correction
+            self._weights[name] -= self._lr * m_hat / (np.sqrt(v_hat) + self._eps)
+
+
 def log_epoch_loss(
     log_fn: Any,
     event: str,

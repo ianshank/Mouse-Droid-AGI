@@ -28,12 +28,12 @@ Architecture invariants (per CLAUDE.md):
   prompt-injection hit — still raises :class:`ValueError`, matching the
   in-process gateway contract; that is a caller error, not a backend
   failure.)
-* **Prompt-injection filtering** — unlike the OpenAI-compatible backend
-  (which trusts the upstream provider's guardrails), the Anthropic backend
-  runs the shared :class:`PromptInjectionFilterProtocol` locally before the
-  command leaves the rover, because the command is being forwarded to a
-  third-party cloud endpoint. The factory wires the same filter instance
-  shared with the OpenClaw mission dispatcher.
+* **Prompt-injection filtering** — the Anthropic backend runs the shared
+  :class:`PromptInjectionFilterProtocol` locally before the command leaves
+  the rover (CHARTER §3). The OpenAI-compatible HTTP backend does the same
+  (F-037 constructor self-build when the caller omitted the filter). The
+  factory wires the same filter instance shared with the OpenClaw mission
+  dispatcher.
 * **Secret hygiene** — the API key is read from ``cfg.llm.api_key``
   (:class:`~pydantic.SecretStr`) via ``get_secret_value()`` only at client
   construction time and is never logged.

@@ -174,8 +174,18 @@ class RSSM(nn.Module):
                     device=device,
                 ).unsqueeze(0)
 
+        imu: Tensor | None = None
+        if self.encoder.imu_enabled:
+            imu_data = getattr(observation, "imu_features", None)
+            if imu_data is not None and len(imu_data) > 0:
+                imu = torch.as_tensor(
+                    imu_data,
+                    dtype=torch.float32,
+                    device=device,
+                ).unsqueeze(0)
+
         # Encode
-        obs_embed = self.encoder(vision, ultrasonic, motor, mask, audio=audio, lidar=lidar)
+        obs_embed = self.encoder(vision, ultrasonic, motor, mask, audio=audio, lidar=lidar, imu=imu)
 
         # GRU step
         gru_input = torch.cat([z, prev_action], dim=-1)
@@ -247,9 +257,15 @@ class RSSM(nn.Module):
         motor = batch["motor"]
         ultra = batch["ultrasonic"][:, step] if self.encoder.ultrasonic_enabled else None
         lidar = batch["lidar"][:, step] if self.encoder.lidar_enabled else None
+        imu = batch["imu"][:, step] if self.encoder.imu_enabled else None
         vision = batch["vision"][:, step] if self.encoder.vision_enabled else None
         obs_embed = self.encoder(
-            vision, ultra, motor[:, step], batch["valid_mask"][:, step], lidar=lidar
+            vision,
+            ultra,
+            motor[:, step],
+            batch["valid_mask"][:, step],
+            lidar=lidar,
+            imu=imu,
         )
         new_h: Tensor = self.gru(torch.cat([z, batch["action"][:, step]], dim=-1), h)
         new_z, _, _ = self._sample_gaussian(self.posterior(torch.cat([new_h, obs_embed], dim=-1)))
@@ -352,12 +368,14 @@ class RSSM(nn.Module):
         device = motor.device
         range_enabled = self.encoder.ultrasonic_enabled
         lidar_enabled = self.encoder.lidar_enabled
+        imu_enabled = self.encoder.imu_enabled
         vision_enabled = self.encoder.vision_enabled
 
         ultra = batch["ultrasonic"][:, step] if range_enabled else None
         lidar = batch["lidar"][:, step] if lidar_enabled else None
+        imu = batch["imu"][:, step] if imu_enabled else None
         vision = batch["vision"][:, step] if vision_enabled else None
-        obs_embed = self.encoder(vision, ultra, motor[:, step], mask[:, step], lidar=lidar)
+        obs_embed = self.encoder(vision, ultra, motor[:, step], mask[:, step], lidar=lidar, imu=imu)
 
         gru_in = torch.cat([z, actions[:, step]], dim=-1)
         h = self.gru(gru_in, h)
@@ -391,6 +409,8 @@ class RSSM(nn.Module):
             recon = _add(recon, nn.functional.mse_loss(decoders.decode_range(hz), ultra))
         if lidar_enabled and lidar is not None:
             recon = _add(recon, nn.functional.mse_loss(decoders.decode_lidar(hz), lidar))
+        if imu_enabled and imu is not None:
+            recon = _add(recon, nn.functional.mse_loss(decoders.decode_imu(hz), imu))
         if decoders.vision_enabled and vision is not None:
             # The vision target is the L2-normalised MeanPool feature vector;
             # MSE here is an auxiliary alignment signal (not the primary
@@ -591,6 +611,9 @@ class RawModalityDecoders(nn.Module):
         self.lidar_enabled = cfg.lidar_dim > 0
         if self.lidar_enabled:
             self.decode_lidar = nn.Linear(feat, cfg.lidar_dim)
+        self.imu_enabled = cfg.imu_dim > 0
+        if self.imu_enabled:
+            self.decode_imu = nn.Linear(feat, cfg.imu_dim)
         self.vision_enabled = cfg.vision_dim > 0
         if self.vision_enabled:
             self.decode_vision = nn.Linear(feat, cfg.vision_dim)

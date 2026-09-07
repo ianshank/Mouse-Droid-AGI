@@ -4,6 +4,33 @@ Reverse chronological (newest on top). Set the date with `date +%F`; never copy 
 literal date. Rotation: keep ~10 sessions; move older entries to
 `progress-archive/YYYY-QN.md`. See HARNESS_SPEC.md §11.
 
+## 2026-09-07 — Next software program (F-036–F-042)
+
+**Context.** F-008 remains the hardware next feature (`select_next.py` is
+correct). This session coded the software holes that stay reachable while
+the ESP32 bench is operator-blocked, ranked by activation-distance ×
+blast-radius.
+
+**Landed.**
+
+- F-036 `85a726d` — stock `FEEDBACK_BASE_INFO` `r`/`p`/`y` onto
+  `EncoderReading` attitude fields; sensing uses `heading_for_motor()`.
+  No RSSM slot widen.
+- F-037 `a0519cc` — HTTP gateway self-builds `RegexInjectionFilter`;
+  `translate_mission.py` / `ask_rover.py` pass `build_injection_filter`.
+- F-038 `fe1842a` — parked-autonomous CI label; Current Next Steps cannot
+  contain LANDED; `doc_hygiene.py --strict` is a real gate.
+- F-039 `2899184` — Cloud Logging queues allowlisted scalars; stall test
+  only fires when both log levels are DEBUG.
+- F-040 `4c1fe97` — optional IMU fusion slot 5, packer width 6, `imu_dim=0`.
+- F-041 `c6a779e` — Adam BDI trainer + causal intention features; no HF
+  publish until bars are beaten.
+- F-042 `32e4f1e` — enumerated factory/orchestrator coverage allowlist;
+  algorithmic factory modules stay gated.
+
+No CHARTER §3 carve-out. F-008 stays hardware `todo`. Do not wire
+`meta/`/`scaling/`. Do not un-zero `battery_critical_v`.
+
 ## 2026-08-30 — Session 013
 
 **Context.** Continuation of the god-files decomposition (`factory.py` → `factory/`

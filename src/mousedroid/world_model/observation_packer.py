@@ -14,13 +14,14 @@ Tensor shapes returned by :func:`pack_observation`:
 
 * ``vision``       — ``(1, cfg.vision_dim)``                       ``float32``
 * ``motor``        — ``(1, cfg.motor_state_dim)``                  ``float32``
-* ``valid_mask``   — ``(1, N_SENSOR_MODALITIES_WITH_LIDAR)`` = 5   ``float32``
+* ``valid_mask``   — ``(1, N_SENSOR_MODALITIES_WITH_IMU)`` = 6   ``float32``
 * ``ultrasonic``   — ``(1, cfg.ultrasonic_dim)`` *or* ``None`` when ``cfg.ultrasonic_dim == 0``
 * ``audio``        — ``(1, cfg.audio_dim)``     *or* ``None`` when ``cfg.audio_dim == 0``
 * ``lidar``        — ``(1, cfg.lidar_dim)``     *or* ``None`` when ``cfg.lidar_dim == 0``
+* ``imu``          — ``(1, cfg.imu_dim)``       *or* ``None`` when ``cfg.imu_dim == 0``
 
 The ``valid_mask`` width is normalised to
-:data:`mousedroid.constants.N_SENSOR_MODALITIES_WITH_LIDAR` regardless of how
+:data:`mousedroid.constants.N_SENSOR_MODALITIES_WITH_IMU` regardless of how
 many slots the source observation populates. Observations that arrive narrower
 (e.g. 4-wide masks from non-LiDAR deployments) are right-padded with zeros so
 disabled slots count as invalid. This pins the ONNX-side ``valid_mask`` shape
@@ -56,7 +57,7 @@ from numpy.typing import NDArray
 from torch import Tensor
 
 from mousedroid.config.schema import ModelConfig
-from mousedroid.constants import N_SENSOR_MODALITIES_WITH_LIDAR, SENSOR_SLOT_MAP
+from mousedroid.constants import N_SENSOR_MODALITIES_WITH_IMU, SENSOR_SLOT_MAP
 from mousedroid.sensing.protocol import ObservationProtocol
 
 # No module-level logger here on purpose: the packer is a pure stateless
@@ -69,17 +70,18 @@ from mousedroid.sensing.protocol import ObservationProtocol
 class PackedObservation:
     """Typed container for the packer output — one tensor per modality.
 
-    ``ultrasonic``, ``audio``, and ``lidar`` are ``None`` when the
+    ``ultrasonic``, ``audio``, ``lidar``, and ``imu`` are ``None`` when the
     corresponding ``cfg.<modality>_dim == 0`` (modality disabled).
 
     Attributes:
         vision: Vision features, shape ``(1, cfg.vision_dim)``.
         motor: Motor state, shape ``(1, cfg.motor_state_dim)``.
         valid_mask: Per-modality validity scores,
-            shape ``(1, observation.n_modalities)``.
+            shape ``(1, N_SENSOR_MODALITIES_WITH_IMU)``.
         ultrasonic: Optional ultrasonic reading, shape ``(1, cfg.ultrasonic_dim)``.
         audio: Optional audio samples, shape ``(1, cfg.audio_dim)``.
         lidar: Optional LiDAR feature vector, shape ``(1, cfg.lidar_dim)``.
+        imu: Optional IMU attitude vector, shape ``(1, cfg.imu_dim)``.
     """
 
     vision: Tensor
@@ -88,6 +90,7 @@ class PackedObservation:
     ultrasonic: Tensor | None
     audio: Tensor | None
     lidar: Tensor | None
+    imu: Tensor | None = None
 
 
 def _as_tensor(
@@ -106,7 +109,7 @@ def _normalised_valid_mask(
 ) -> Tensor:
     """Right-pad/truncate ``raw`` to a fixed-width valid_mask of shape ``(1, N)``.
 
-    ``N = N_SENSOR_MODALITIES_WITH_LIDAR`` regardless of how many slots the
+    ``N = N_SENSOR_MODALITIES_WITH_IMU`` regardless of how many slots the
     incoming observation actually populated. Older sensor bundles produce
     4-wide masks (vision/ultrasonic/motor/audio) on non-LiDAR deployments;
     the ONNX-side ``valid_mask`` shape must be deployment-independent so
@@ -119,12 +122,12 @@ def _normalised_valid_mask(
     """
     tensor = _as_tensor(raw, device=device)
     width = tensor.shape[-1]
-    if width == N_SENSOR_MODALITIES_WITH_LIDAR:
+    if width == N_SENSOR_MODALITIES_WITH_IMU:
         return tensor
-    if width > N_SENSOR_MODALITIES_WITH_LIDAR:
-        return tensor[..., :N_SENSOR_MODALITIES_WITH_LIDAR]
+    if width > N_SENSOR_MODALITIES_WITH_IMU:
+        return tensor[..., :N_SENSOR_MODALITIES_WITH_IMU]
     padding = torch.zeros(
-        (1, N_SENSOR_MODALITIES_WITH_LIDAR - width),
+        (1, N_SENSOR_MODALITIES_WITH_IMU - width),
         dtype=torch.float32,
         device=device,
     )
@@ -150,6 +153,26 @@ def _zero_valid_mask_slot(mask: Tensor, modality: str) -> Tensor:
     return mask
 
 
+def _pack_optional_vector(
+    data: NDArray[Any] | None,
+    *,
+    dim: int,
+    slot: str,
+    valid_mask: Tensor,
+    device: torch.device,
+) -> tuple[Tensor | None, Tensor]:
+    """Pack a vector modality or return ``None`` when ``dim == 0``.
+
+    Missing data (``None`` or empty) yields zeros and zeros the mask slot.
+    """
+    if dim <= 0:
+        return None, valid_mask
+    if data is not None and len(data) > 0:
+        return _as_tensor(data, device=device), valid_mask
+    zeros = torch.zeros((1, dim), dtype=torch.float32, device=device)
+    return zeros, _zero_valid_mask_slot(valid_mask, slot)
+
+
 def pack_observation(
     observation: ObservationProtocol,
     cfg: ModelConfig,
@@ -162,7 +185,7 @@ def pack_observation(
         observation: Sensor bundle implementing :class:`ObservationProtocol`.
         cfg: Model configuration — single source of truth for which
             modalities are enabled (``ultrasonic_dim``, ``audio_dim``,
-            ``lidar_dim``).
+            ``lidar_dim``, ``imu_dim``).
         device: Target device for all returned tensors. The orchestrator
             passes ``cfg.world_model.device`` here; the ONNX runtime passes
             ``cpu`` because ``onnxruntime`` consumes numpy arrays.
@@ -204,17 +227,21 @@ def pack_observation(
     else:
         audio = None
 
-    lidar: Tensor | None
-    if cfg.lidar_dim > 0:
-        lidar_data = observation.lidar_features
-        if lidar_data is not None and len(lidar_data) > 0:
-            lidar = _as_tensor(lidar_data, device=device)
-        else:
-            # See audio branch above for the rationale on zeroing the mask.
-            lidar = torch.zeros((1, cfg.lidar_dim), dtype=torch.float32, device=device)
-            valid_mask = _zero_valid_mask_slot(valid_mask, "lidar")
-    else:
-        lidar = None
+    lidar, valid_mask = _pack_optional_vector(
+        observation.lidar_features,
+        dim=cfg.lidar_dim,
+        slot="lidar",
+        valid_mask=valid_mask,
+        device=device,
+    )
+    imu_data = getattr(observation, "imu_features", None)
+    imu, valid_mask = _pack_optional_vector(
+        imu_data,
+        dim=cfg.imu_dim,
+        slot="imu",
+        valid_mask=valid_mask,
+        device=device,
+    )
 
     return PackedObservation(
         vision=vision,
@@ -223,4 +250,5 @@ def pack_observation(
         ultrasonic=ultrasonic,
         audio=audio,
         lidar=lidar,
+        imu=imu,
     )

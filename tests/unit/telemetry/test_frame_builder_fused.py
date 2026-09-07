@@ -29,6 +29,7 @@ def test_fused_summary_no_lidar_is_length_four() -> None:
         "motor": True,
         "audio": False,
         "lidar": False,  # surfaced as False even though the slot is absent
+        "imu": False,
     }
     assert fused["fused_norm"] == pytest.approx(5.0)  # sqrt(3^2 + 4^2)
 
@@ -40,7 +41,21 @@ def test_fused_summary_with_lidar_is_length_five() -> None:
     assert fused["n_valid"] == 4
     assert fused["modalities"]["lidar"] is True
     assert fused["modalities"]["ultrasonic"] is False
+    assert fused["modalities"]["imu"] is False
     assert fused["fused_norm"] == pytest.approx(0.0)
+
+
+def test_fused_summary_with_imu_is_length_six() -> None:
+    fused = _build_fused_summary(
+        [1.0, 1.0, 1.0, 0.0, 0.0, 1.0],
+        vision_norm=0.0,
+        audio_rms=0.0,
+    )
+    assert fused["n_modalities"] == 6
+    assert fused["lidar_present"] is True
+    assert fused["modalities"]["imu"] is True
+    assert fused["modalities"]["lidar"] is False
+    assert fused["n_valid"] == 4
 
 
 def test_fused_summary_all_invalid() -> None:
@@ -54,6 +69,7 @@ def test_fused_summary_four_mask_never_indexerrors() -> None:
     # raise when the builder maps the fixed 5-name modality tuple.
     fused = _build_fused_summary([1.0, 1.0, 1.0, 1.0], vision_norm=1.0, audio_rms=0.0)
     assert "lidar" in fused["modalities"]
+    assert "imu" in fused["modalities"]
 
 
 # --------------------------------------------------------------------------- #

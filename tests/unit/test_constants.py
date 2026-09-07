@@ -20,6 +20,7 @@ from mousedroid.constants import (
     LIDAR_SCAN_TIMEOUT_MULTIPLIER,
     MILLISECONDS_PER_SECOND,
     N_SENSOR_MODALITIES,
+    N_SENSOR_MODALITIES_WITH_IMU,
     N_SENSOR_MODALITIES_WITH_LIDAR,
     POLICY_MLP_SEED,
     VALUE_MLP_SEED,
@@ -79,6 +80,15 @@ def test_seeds_are_non_negative():
 def test_n_sensor_modalities_with_lidar():
     """N_SENSOR_MODALITIES_WITH_LIDAR should be 5."""
     assert N_SENSOR_MODALITIES_WITH_LIDAR == 5
+
+
+def test_n_sensor_modalities_with_imu():
+    """Packed mask width includes IMU as slot 5."""
+    from mousedroid.constants import SENSOR_SLOT_MAP
+
+    assert N_SENSOR_MODALITIES_WITH_IMU == 6
+    assert SENSOR_SLOT_MAP["imu"] == 5
+    assert SENSOR_SLOT_MAP["lidar"] == 4
 
 
 def test_lidar_header_byte():

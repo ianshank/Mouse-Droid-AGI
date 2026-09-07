@@ -1,4 +1,9 @@
-"""Functional tests for mission dispatch and safety interlock triggers."""
+"""Parked AutonomousOrchestrator functional tests (ADR-016), not production.
+
+``execute_mission_step`` + ``MockLiDAR.set_scan`` are APIs the production
+orchestrator does not have. Relabelled by F-038; do not silently retarget
+these at ``build_orchestrator``.
+"""
 
 from __future__ import annotations
 

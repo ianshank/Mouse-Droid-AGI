@@ -127,6 +127,37 @@ class TestSgdStep:
 
 
 # ---------------------------------------------------------------------------
+# AdamOptimizer
+# ---------------------------------------------------------------------------
+
+
+class TestAdamOptimizer:
+    def test_updates_weights_in_place(self) -> None:
+        from training.training_utils import AdamOptimizer
+
+        weights = {"w": np.ones((2, 2), dtype=np.float32)}
+        opt = AdamOptimizer(weights, lr=0.1)
+        opt.step({"w": np.ones((2, 2), dtype=np.float32)})
+        assert float(weights["w"].mean()) < 1.0
+
+    def test_unknown_grad_key_raises(self) -> None:
+        from training.training_utils import AdamOptimizer
+
+        opt = AdamOptimizer({"w": np.zeros(2)}, lr=0.01)
+        with pytest.raises(KeyError, match="unknown"):
+            opt.step({"nope": np.zeros(2)})
+
+    def test_repeated_steps_descend_quadratic(self) -> None:
+        from training.training_utils import AdamOptimizer
+
+        weights = {"w": np.array([4.0, -3.0], dtype=np.float32)}
+        opt = AdamOptimizer(weights, lr=0.2)
+        for _ in range(40):
+            opt.step({"w": weights["w"].copy()})
+        assert float(np.linalg.norm(weights["w"])) < 1.0
+
+
+# ---------------------------------------------------------------------------
 # log_epoch_loss
 # ---------------------------------------------------------------------------
 

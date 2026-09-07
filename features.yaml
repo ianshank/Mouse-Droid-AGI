@@ -908,14 +908,14 @@ features:
     implemented_in: "24e34542b9ad98af03a020a005e916220dd28075"
     depends_on: []
     notes: >-
-      Ships with the deploy-repin skill (the F-036 half that backtick-references
+      Ships with the deploy-repin skill (the skill half that backtick-references
       scripts/repin_tags.sh, so the two must land together or the skill-command
       validator fails on a dead path reference). No dependency on F-034: disjoint
       files. A real --push run is an operator action requiring separate explicit
       confirmation -- this feature covers building and dry-running the script
       only, so the tags it would create do not exist yet. implemented_in stays
       null until the dedicated closeout PR, per the F-030/F-031/F-032/F-034
-      convention.
+      convention. Catalog id F-036 is reserved for stock IMU parse, not this skill.
 
   - id: "F-034"
     epic: "Training Observability"
@@ -1058,3 +1058,196 @@ features:
       silently-discarding values; .dockerignore missing the mlflow.db*
       entries .gitignore got; and the runbook's POSIX-only "4 slashes"
       sqlite guidance plus a missing file-backend migration section.
+
+  # F-033 is intentionally SKIPPED: progress.md used that id informally for
+  # "chassis safety sensors" and it was never catalogued. Reusing it would
+  # collide the same way F-009..F-014 collided with SMOKE_REPORT findings
+  # (ADR-013). The catalog continues at F-036 (F-034 and F-035 already landed).
+  - id: "F-036"
+    epic: "Rover bring-up"
+    name: "Stock FEEDBACK_BASE_INFO IMU parse without RSSM slot widen"
+    description: >-
+      Consume Waveshare FEEDBACK_BASE_INFO keys r/p/y into EncoderReading
+      attitude fields (roll_rad/pitch_rad/yaw_rad, imu_valid). Sensing
+      copies yaw into the existing 4-float motor observation via
+      heading_for_motor(). Default command_set=legacy stays IMU-inert.
+      Does NOT add SENSOR_SLOT_MAP["imu"] (that is F-040).
+    category: "functional"
+    priority: "high"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "stock T=1001 r/p/y parse into attitude fields; heading_rad stays 0"
+      - "heading_for_motor returns yaw when imu_valid else heading_rad"
+      - "legacy codec and parse_encoder_reading leave imu_valid False"
+      - "motor_state_dim stays 4; IMU fusion slot is F-040 not this parse"
+    validation_command: "bash scripts/validations/F-036.sh"
+    implemented_in: "85a726da7235cb7b154c2561269f62d02a49ef11"
+    depends_on: ["F-025"]
+    notes: >-
+      Audit R4 software half. No CHARTER §3 carve-out: (1) no actuation;
+      (2) no LLM/training in the hot loop; (3) default command_set remains
+      legacy so existing YAML loads unchanged. Hardware validation of the
+      chassis IMU still waits on F-008; this feature does not close F-008.
+
+  - id: "F-037"
+    epic: "Security"
+    name: "HTTP gateway + CLI probes always sanitise before LLM egress"
+    description: >-
+      OpenAICompatibleLLMGateway self-builds RegexInjectionFilter from
+      cfg.injection_patterns when injection_filter is None (same constructor
+      symmetry as Anthropic / llama_cpp). scripts/translate_mission.py and
+      scripts/ask_rover.py pass build_injection_filter so they share the
+      orchestrator envelope. Parked arm/.../anthropic_backend.py is frozen
+      until F-008 is done.
+    category: "functional"
+    priority: "high"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "no-arg OpenAICompatibleLLMGateway constructor stores RegexInjectionFilter"
+      - "default patterns reject ignore-previous without an HTTP call"
+      - "CLIs pass build_injection_filter into build_llm_gateway"
+      - "explicit factory filter instance is still stored unchanged"
+    validation_command: "bash scripts/validations/F-037.sh"
+    implemented_in: "a0519cccb2faa48630c06d480ed63ebb62a4c119"
+    depends_on: ["F-005"]
+    notes: >-
+      No CHARTER §3 carve-out: restoring the pre-egress filter the
+      orchestrator already uses on the CLI probe path. The documented
+      None-skip was a unit-test seam that operator CLIs actually hit.
+
+  - id: "F-038"
+    epic: "Hygiene"
+    name: "CI/docs honesty for parked journeys and Current Next Steps"
+    description: >-
+      Relabel the CI step and tests/functional + tests/user_journey as parked
+      AutonomousOrchestrator (ADR-016), not production operator-path coverage.
+      Pin that NEXT_STEPS Current Next Steps contains no LANDED token and that
+      done catalog ids there are operator leftovers. Invoke doc_hygiene.py
+      --strict in ci.sh and the local-gates job. Point CHARTER §5 at root
+      NEXT_STEPS.md, not the May-16 IMPLEMENTATION_PLAN.md. Catalog F-008 vs
+      smoke-report F-008 is named once (ADR-013).
+    category: "validation"
+    priority: "high"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "CI step name contains parked-autonomous"
+      - "functional/user_journey import build_autonomous_orchestrator only"
+      - "Current Next Steps has no LANDED; done F-ids are leftover-labelled"
+      - "ci.yml and ci.sh invoke doc_hygiene.py --strict"
+    validation_command: "bash scripts/validations/F-038.sh"
+    implemented_in: "fe1842a08e89b21c3dd204af21ebcd9b73dd00b8"
+    depends_on: ["F-016", "F-028"]
+    notes: >-
+      No CHARTER §3 carve-out: docs + CI labels only. Do not twin parked
+      journeys onto MouseDroidOrchestrator under mock_hardware.
+
+  - id: "F-039"
+    epic: "GCP Digital Twin"
+    name: "Cloud Logging queue + allowlist (dormant footgun, not a default stall)"
+    description: >-
+      CloudLoggingSink.__call__ no longer calls the SDK. It allowlists
+      operational keys, redacts mission/NL fields, and put_nowait-drops onto
+      a bounded queue (GCPLoggingConfig.queue_maxsize, default 256). Drain
+      is an asyncio task started in start(); the SDK runs in asyncio.to_thread.
+      Tests prove tick_complete is dropped at default INFO and only reaches
+      the sink when LoggingConfig.level and GCPLoggingConfig.min_level are
+      both DEBUG. Do not claim a 30 Hz stall on default overlays.
+    category: "infrastructure"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "default INFO levels drop debug tick_complete before log_struct"
+      - "both-DEBUG overlay forwards tick_complete after flush"
+      - "__call__ does not block when log_struct sleeps"
+      - "nl_command/mission/query never appear in the Cloud Logging payload"
+      - "queue_maxsize defaults 256 and existing YAML still loads"
+    validation_command: "bash scripts/validations/F-039.sh"
+    implemented_in: "28991843c2e58595bfd6b1a9ab24d34bbe58c71a"
+    depends_on: ["F-032"]
+    notes: >-
+      No CHARTER §3 carve-out: default gcp.logging.enabled is False; this
+      restores the fire-and-forget contract F-032 documented as accepted
+      risk. Allowlist is a module frozenset, not YAML-widenable.
+
+  - id: "F-040"
+    epic: "World model"
+    name: "Optional IMU fusion slot 5, packer width 6, default imu_dim=0"
+    description: >-
+      Lidar-shaped IMU modality: SENSOR_SLOT_MAP["imu"]=5, imu_dim and
+      imu_proj_dim default 0/32, packer valid_mask width 6. Default path does
+      not change fused_dim or motor_state_dim. Enable with imu_dim=3 after
+      F-036 parse exists. Does not close F-008.
+    category: "functional"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "imu_dim FieldInfo default is 0; motor_state_dim stays 4"
+      - "SENSOR_SLOT_MAP imu is 5; packed mask width is 6"
+      - "default MultimodalEncoder has no imu_proj; fused_dim unchanged"
+      - "imu_dim=3 adds imu_proj and packer emits (1, 3) imu tensor"
+    validation_command: "bash scripts/validations/F-040.sh"
+    implemented_in: "4c1fe970ab62967ae14825aedfdc49e14ae01213"
+    depends_on: ["F-036"]
+    notes: >-
+      No CHARTER §3 carve-out: imu_dim defaults 0 so existing YAML and
+      checkpoints stay byte-identical on the fusion weights. Hardware
+      frames still wait on F-008.
+
+  - id: "F-041"
+    epic: "Cognitive pillars"
+    name: "BDI Adam trainer + causal intention features (portfolio, no HF publish)"
+    description: >-
+      Belief autoencoder uses Adam instead of plain SGD. collect_annotations
+      stores intention_features aligned with label_intention (action, range,
+      battery, Law 1/2 flags) so the 10-class claim has a causal X. Publish
+      stays blocked until belief MSE beats PCA-128 and intention accuracy
+      beats majority class. Runtime WEIGHT_INIT_SCALE and NeuralBDI random
+      fallback are unchanged. OTA poller remains ianshank/mousedroid-policy-v2.
+    category: "functional"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "He init is sqrt(2/fan_in) and does not import WEIGHT_INIT_SCALE"
+      - "train_belief_encoder uses AdamOptimizer, not w -= lr * grad"
+      - "intention_features columns match label_intention inputs"
+      - "causal MLP head beats majority class; train_bdi does not upload"
+    validation_command: "bash scripts/validations/F-041.sh"
+    implemented_in: "c6a779e47273d5710cda587d069eba6b92f8cc63"
+    depends_on: []
+    notes: >-
+      Portfolio, not rover-blocking. No CHARTER §3 carve-out: training
+      laptop only. Do not publish to HuggingFace until
+      passes_bdi_publish_bars is true on the operator dataset.
+
+  - id: "F-042"
+    epic: "Hygiene"
+    name: "Enumerate factory/orchestrator branch-coverage exemptions"
+    description: >-
+      Replace unbounded factory/ and orchestrator/_ prefixes in
+      check_branch_coverage.py with an enumerated file allowlist. Keep
+      gating factory/on_device_learning.py, mcp_harness.py, and
+      _replay_batch_helpers.py (algorithmic, not pure DI). Schema,
+      telemetry, and validation/runtime prefixes stay.
+    category: "infrastructure"
+    priority: "medium"
+    status: "done"
+    tier: "fast"
+    verification:
+      - "factory/ and orchestrator/_ are not directory prefixes"
+      - "enumerated DI factory files and orchestrator mixins stay exempt"
+      - "on_device_learning, mcp_harness, _replay_batch_helpers are gated"
+      - "a hypothetical factory/new_builder.py is not exempt"
+    validation_command: "bash scripts/validations/F-042.sh"
+    implemented_in: "32e4f1ec1449e378ffc0845a39f2c2958aa1e1f1"
+    depends_on: []
+    notes: >-
+      No CHARTER §3 carve-out: CI gate honesty only. Does not lower the
+      coverage threshold. Do not re-open factory/ as a prefix.
+
+

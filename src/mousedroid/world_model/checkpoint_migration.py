@@ -70,6 +70,8 @@ def _infer_old_parts(sd: StateDict) -> list[tuple[str, int]]:
         parts.append(("audio", int(sd["encoder.audio_proj.weight"].shape[0])))
     if "encoder.lidar_proj.weight" in sd:
         parts.append(("lidar", int(sd["encoder.lidar_proj.weight"].shape[0])))
+    if "encoder.imu_proj.weight" in sd:
+        parts.append(("imu", int(sd["encoder.imu_proj.weight"].shape[0])))
     return parts
 
 
@@ -93,6 +95,8 @@ def _build_new_parts(cfg: ModelConfig) -> list[tuple[str, int]]:
         parts.append(("audio", cfg.audio_proj_dim))
     if cfg.lidar_dim > 0 and cfg.lidar_proj_dim > 0:
         parts.append(("lidar", cfg.lidar_proj_dim))
+    if cfg.imu_dim > 0 and cfg.imu_proj_dim > 0:
+        parts.append(("imu", cfg.imu_proj_dim))
     return parts
 
 
@@ -169,6 +173,7 @@ def _new_proj_tensors(cfg: ModelConfig, modality: str) -> dict[str, Tensor]:
     dim_map: dict[str, tuple[int, int]] = {
         "vision": (cfg.vision_proj_dim, cfg.vision_dim),
         "lidar": (cfg.lidar_proj_dim, cfg.lidar_dim),
+        "imu": (cfg.imu_proj_dim, cfg.imu_dim),
         "ultrasonic": (cfg.ultrasonic_proj_dim, cfg.ultrasonic_dim),
         "audio": (cfg.audio_proj_dim, cfg.audio_dim),
     }

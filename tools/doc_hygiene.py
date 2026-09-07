@@ -1,15 +1,15 @@
-"""Advisory size/drift guard for forward-looking planning docs (F-016).
+"""Size/drift guard for forward-looking planning docs (F-016 / F-038).
 
 NEXT_STEPS.md has a documented failure mode: landed work accretes as ✅ marks
 until the file is a changelog (the 2026-07-03 reconciliation moved 37 KB /
-72 ✅ into CHANGELOG.md). This guard keeps the drift visible without turning
-prose edits into red PRs:
+72 ✅ into CHANGELOG.md).
 
-* default mode prints ``WARN:`` lines and **always exits 0** (the repo's
-  report-only-script convention — there is deliberately no warn-in-pytest
-  pattern here);
-* ``--strict`` flips warnings into a non-zero exit for callers that want a
-  hard gate (e.g. the regression test pins the post-reconciliation budget).
+* default mode prints ``WARN:`` lines and **always exits 0** (handy for a
+  local draft);
+* ``--strict`` flips warnings into a non-zero exit. CI (``scripts/ci.sh`` and
+  the ``local-gates`` job) invokes ``--strict`` so the budget is a real gate
+  (F-038). The LANDED-row pin for the Current Next Steps section lives in
+  ``tests/regression/test_next_steps_reconciled.py``.
 
 Thresholds live in the module constants below (single definition point) and
 are operator-tunable per invocation via CLI flags — no other call site may
@@ -63,7 +63,9 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entry point — returns the process exit code."""
     parser = argparse.ArgumentParser(
         prog="python tools/doc_hygiene.py",
-        description="Advisory size/drift guard for planning docs (WARN-only unless --strict).",
+        description=(
+            "Size/drift guard for planning docs (WARN-only unless --strict; CI uses --strict)."
+        ),
     )
     parser.add_argument(
         "paths",

@@ -164,9 +164,14 @@ function that trips the complexity gate; do not re-open a `src/` per-file ignore
 
 ## 5. Long-term Roadmap
 
-The roadmap uses the Physical-AI phase numbering (the repo also carries a legacy
-v0.3.0 execution-plan numbering; where they differ, `docs/planning/IMPLEMENTATION_PLAN.md`
-is authoritative). Statuses reflect the roadmap docs at time of ratification.
+The roadmap uses the Physical-AI phase numbering. Day-to-day priorities live in
+root [`NEXT_STEPS.md`](../NEXT_STEPS.md). `docs/planning/IMPLEMENTATION_PLAN.md`
+(May-16) and `docs/planning/NEXT_STEPS.md` are snapshots, not current. The repo
+also carries a legacy v0.3.0 execution-plan numbering in those snapshots; where
+they differ from this section, this section plus root `NEXT_STEPS.md` win.
+CHARTER **M6** below is between-cloud-cycle RSSM refinement (default-OFF,
+soak-gated). NEXT_STEPS "Phase 6" LoRA co-training is a later stretch and must
+not be read as M6. Statuses reflect the roadmap docs at time of ratification.
 
 - **M1 — Self-Healing Core Resilience (Phase 2)** ✅ — circuit breaker + retry
   wrappers, a resilient ESP32 driver, and sensor-staleness detection, all
@@ -188,7 +193,8 @@ is authoritative). Statuses reflect the roadmap docs at time of ratification.
   NumPy kinematic sim, with the RSSM dynamics core pretrained on its episodes.
 - **M6 — On-Device Incremental Learning (Phase 6)** 🔜 ACTIVE — between-cloud-cycle
   RSSM refinement on a gated, integrity-checked weight slot with auto-revert;
-  functional, default-OFF, and soak-gated (§3 carve-out).
+  functional, default-OFF, and soak-gated (§3 carve-out). Distinct from the
+  NEXT_STEPS Physical-AI "Phase 6 LoRA co-training" stretch.
 - **Cognitive-pillar integration** 🔬 — `meta/` (MAML + in-context adaptation) and
   `scaling/` (MoE + adaptive compute) are implemented and unit-tested
   (`tests/unit/{meta,scaling}/`) but not yet instantiated by `factory/` / the orchestrator.

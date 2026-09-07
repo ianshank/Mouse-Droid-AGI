@@ -175,12 +175,12 @@ def build_llm_gateway(
     Args:
         cfg: Root settings.
         injection_filter: Optional shared :class:`PromptInjectionFilterProtocol`.
-            When ``None``, each filter-aware gateway constructs its own filter
-            from ``cfg.llm.injection_patterns`` (legacy behaviour) and the
-            ``openai_compatible`` gateway skips local sanitisation; when
-            supplied (the default in :func:`build_orchestrator`), the same
-            filter is reused by all three backends + the OpenClaw mission
-            dispatcher.
+            When ``None``, every backend (including ``openai_compatible``)
+            self-builds a :class:`RegexInjectionFilter` from
+            ``cfg.llm.injection_patterns`` / ``cfg.llm.max_command_len``.
+            When supplied (the default in :func:`build_orchestrator` and
+            the operator CLIs), the same filter is reused by all three
+            backends + the OpenClaw mission dispatcher.
         metrics: Optional shared :class:`MetricsRegistry`, forwarded to both
             tiers (every backend records latency/token/budget metrics; the
             composite additionally records the per-tier served counter).

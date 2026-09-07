@@ -112,6 +112,36 @@ class GCPLoggingConfig(StrictBaseModel):
     )
     log_name: str = Field("mousedroid", description="Cloud Logging log name")
     min_level: str = Field("INFO", description="Minimum log level to forward to cloud")
+    queue_maxsize: int = Field(
+        256,
+        ge=1,
+        le=10_000,
+        description=(
+            "Bounded Cloud Logging queue depth. The sink put_nowait-drops "
+            "when full so the 30 Hz tick never blocks on the SDK. Default "
+            "256 absorbs an INFO burst without hiding a DEBUG flood."
+        ),
+    )
+    drain_timeout_s: float = Field(
+        5.0,
+        gt=0.0,
+        le=60.0,
+        description=(
+            "Seconds to wait for the Cloud Logging drain task during close() "
+            "before cancelling it. Default 5.0 is long enough to flush a "
+            "full queue without stalling orchestrator shutdown."
+        ),
+    )
+    queue_get_timeout_s: float = Field(
+        0.2,
+        gt=0.0,
+        le=5.0,
+        description=(
+            "Seconds the drain loop blocks on queue.get before re-checking "
+            "the stop event. Default 0.2 keeps close() responsive without "
+            "busy-spinning."
+        ),
+    )
 
 
 class GCPMonitoringConfig(StrictBaseModel):

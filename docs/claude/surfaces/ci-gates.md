@@ -22,8 +22,8 @@
 8. **Stage 3b-win** *(advisory)* — `test-windows`: cross-platform lint/typecheck/fast-test
    subset.
 9. **Stage 3c** — `local-gates`: dedicated `--cov=tools/claude_hooks` coverage gate plus the
-   deterministic `scripts/ci.sh`-only checks (settings identity, skill validator, doc hygiene,
-   ratchet budgets, hardcoded-value gate, subsystem-boundary gate).
+   deterministic `scripts/ci.sh`-only checks (settings identity, skill validator,
+   `doc_hygiene.py --strict`, ratchet budgets, hardcoded-value gate, subsystem-boundary gate).
 10. **Stage 4** — `prometheus-check`: metrics format + alert-rule validation via `promtool`
     (graceful skip if unavailable).
 11. **Stage 4b** — `vla-extras`: VLA-only test suite (blocking, Tier C3.1).

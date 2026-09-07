@@ -38,44 +38,71 @@ _DEFAULT_FALLBACK_BASE_REF: Final[str] = "origin/main"
 # (same set, same reasoning, as check_no_hardcoded_values.py's
 # ALLOWED_DIR_PREFIXES): config/schema.py -> config/schema/, telemetry/metrics.py
 # -> telemetry/metrics/, telemetry/server.py -> telemetry/server/,
-# validation/runtime.py -> validation/runtime/, factory.py -> factory/ (ADR-017).
-# A 1-file-to-many split has no git rename correspondence, so EVERY relocated
-# line reads as newly "changed" against the pre-split base — but a large file's
-# blended branch-coverage average silently hid any one under-tested function
-# inside it; splitting exposes that SAME pre-existing gap as a much larger
-# percentage swing in the now-much-smaller file it landed in. No new code is
-# less tested than before the split; the split only changed which denominator
-# an old numerator gets divided by. Exempted here from the GATE only (coverage
-# is still computed and printed, just never fails the build) -- growing this
-# list requires updating test_branch_coverage_dir_exemptions_are_pinned.
+# validation/runtime.py -> validation/runtime/. A 1-file-to-many split has no
+# git rename correspondence, so EVERY relocated line reads as newly "changed"
+# against the pre-split base — but a large file's blended branch-coverage
+# average silently hid any one under-tested function inside it; splitting
+# exposes that SAME pre-existing gap as a much larger percentage swing in the
+# now-much-smaller file it landed in. No new code is less tested than before
+# the split; the split only changed which denominator an old numerator gets
+# divided by. Exempted here from the GATE only (coverage is still computed
+# and printed, just never fails the build) -- growing this list requires
+# updating test_branch_coverage_dir_exemptions_are_pinned.
 #
-# orchestrator/orchestrator.py -> orchestrator/ (also ADR-017) is deliberately
-# NOT a directory-prefix entry: that split landed inside an EXISTING package
-# directory holding unrelated, pre-existing files (autonomous.py,
-# face_controller.py, llm_replanner.py, mission_dispatcher.py,
-# mission_lifecycle.py) never part of this split. Its 7 `_*_mixin.py` files
-# plus `_state.py` (the shared cross-mixin type-declaration module, see
-# orchestrator/_state.py's own docstring) all start with `_`; no pre-existing
-# sibling does, so "orchestrator/_" is precise without exempting unrelated
-# files. `_state.py` is intentionally covered by this prefix too: it is
-# almost entirely bare attribute declarations and `raise NotImplementedError`
-# stubs with no coverage-bearing branches, so exempting it costs nothing real
-# -- but it rides the prefix match the same as the 7 mixins, not by a
-# separate rule, so both are pinned together in
-# test_is_exempted_from_branch_gate_matches_prefix_precisely.
+# F-042: factory.py -> factory/ and orchestrator.py -> orchestrator/_ mixins
+# are enumerated files in `_ALLOWED_FILES`, not directory prefixes. A prefix
+# of `src/mousedroid/factory/` silently exempted every future factory module
+# (~30% of src/mousedroid on the changed-line gate). Keep gating the
+# algorithmic factory modules (on_device_learning.py, mcp_harness.py,
+# _replay_batch_helpers.py). Do not re-open those prefixes. Growing
+# `_ALLOWED_FILES` requires updating test_branch_coverage_file_exemptions_are_pinned.
 _ALLOWED_DIR_PREFIXES: Final[tuple[str, ...]] = (
     "src/mousedroid/config/schema/",
     "src/mousedroid/telemetry/metrics/",
     "src/mousedroid/telemetry/server/",
     "src/mousedroid/validation/runtime/",
-    "src/mousedroid/factory/",
-    "src/mousedroid/orchestrator/_",
+)
+
+# ADR-017 factory.py split products that are pure DI wiring, plus the
+# orchestrator mixin/_state split products. Algorithmic factory modules
+# stay off this set so the changed-line gate still applies to them.
+_ALLOWED_FILES: Final[frozenset[str]] = frozenset(
+    {
+        "src/mousedroid/factory/__init__.py",
+        "src/mousedroid/factory/arm.py",
+        "src/mousedroid/factory/autonomous.py",
+        "src/mousedroid/factory/cloud.py",
+        "src/mousedroid/factory/cognitive.py",
+        "src/mousedroid/factory/growth.py",
+        "src/mousedroid/factory/hardware.py",
+        "src/mousedroid/factory/health.py",
+        "src/mousedroid/factory/learning.py",
+        "src/mousedroid/factory/llm_gateway.py",
+        "src/mousedroid/factory/memory_curiosity.py",
+        "src/mousedroid/factory/mission.py",
+        "src/mousedroid/factory/orchestrator.py",
+        "src/mousedroid/factory/safety.py",
+        "src/mousedroid/factory/telemetry.py",
+        "src/mousedroid/factory/voice.py",
+        "src/mousedroid/factory/world_model.py",
+        "src/mousedroid/orchestrator/_action_mixin.py",
+        "src/mousedroid/orchestrator/_background_cadence_mixin.py",
+        "src/mousedroid/orchestrator/_lifecycle_mixin.py",
+        "src/mousedroid/orchestrator/_mission_mixin.py",
+        "src/mousedroid/orchestrator/_state.py",
+        "src/mousedroid/orchestrator/_telemetry_experience_mixin.py",
+        "src/mousedroid/orchestrator/_voice_face_mixin.py",
+        "src/mousedroid/orchestrator/_world_model_state_mixin.py",
+    }
 )
 
 
 def _is_exempted_from_branch_gate(rel_path: str) -> bool:
-    """True when `rel_path` is a same-PR-module-split product (see `_ALLOWED_DIR_PREFIXES`)."""
-    return rel_path.startswith(_ALLOWED_DIR_PREFIXES)
+    """True when `rel_path` is a reviewed split product (prefix or file)."""
+    posix = rel_path.replace("\\", "/")
+    if posix in _ALLOWED_FILES:
+        return True
+    return posix.startswith(_ALLOWED_DIR_PREFIXES)
 
 
 def _fallback_base_ref() -> str:
@@ -463,7 +490,7 @@ def _evaluate_branch_coverage(
     Returns `(report_rows, failures)`: `report_rows` is every changed file's
     `(rel_path, pct, scope, exempted)` for display (exempted files still
     report their real percentage -- transparency over silence, per
-    `_ALLOWED_DIR_PREFIXES`'s own module comment); `failures` is the subset
+    `_ALLOWED_DIR_PREFIXES` / `_ALLOWED_FILES`); `failures` is the subset
     that actually fails the gate.
     """
     report_rows: list[tuple[str, float, str, bool]] = []
@@ -627,7 +654,11 @@ def main() -> int:
     )
     print("\nChanged-line coverage:")
     for rel_path, pct, scope, exempted in report_rows:
-        suffix = " (exempt: same-PR module split, see _ALLOWED_DIR_PREFIXES)" if exempted else ""
+        suffix = (
+            " (exempt: reviewed split product, see _ALLOWED_FILES / _ALLOWED_DIR_PREFIXES)"
+            if exempted
+            else ""
+        )
         print(f"  {rel_path}: {pct:.2f}% ({scope}){suffix}")
 
     if failures:

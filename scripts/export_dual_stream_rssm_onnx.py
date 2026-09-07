@@ -41,13 +41,14 @@ import torch.nn as nn
 from torch import Tensor
 
 from mousedroid.config.schema import ModelConfig
-from mousedroid.constants import N_SENSOR_MODALITIES_WITH_LIDAR
+from mousedroid.constants import N_SENSOR_MODALITIES_WITH_IMU
 from mousedroid.logging.setup import get_logger
 from mousedroid.world_model.dual_stream_rssm import DualStreamRSSM
 from mousedroid.world_model.onnx_io import (
     OBSERVE_STEP_BATCH_DIM_NAME,
     OBSERVE_STEP_INPUT_AUDIO,
     OBSERVE_STEP_INPUT_H,
+    OBSERVE_STEP_INPUT_IMU,
     OBSERVE_STEP_INPUT_LIDAR,
     OBSERVE_STEP_INPUT_MOTOR,
     OBSERVE_STEP_INPUT_PREV_ACTION,
@@ -91,6 +92,7 @@ class _ObserveStepExportShim(nn.Module):
         self._ultrasonic_enabled = cfg.ultrasonic_dim > 0
         self._audio_enabled = cfg.audio_dim > 0
         self._lidar_enabled = cfg.lidar_dim > 0
+        self._imu_enabled = cfg.imu_dim > 0
 
     def forward(
         self,
@@ -103,6 +105,7 @@ class _ObserveStepExportShim(nn.Module):
         ultrasonic: Tensor | None = None,
         audio: Tensor | None = None,
         lidar: Tensor | None = None,
+        imu: Tensor | None = None,
     ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         """Run one observe step on tensors only.
 
@@ -116,6 +119,7 @@ class _ObserveStepExportShim(nn.Module):
             ultrasonic: ``(batch, cfg.ultrasonic_dim)`` when enabled.
             audio: ``(batch, cfg.audio_dim)`` when enabled.
             lidar: ``(batch, cfg.lidar_dim)`` when enabled.
+            imu: ``(batch, cfg.imu_dim)`` when enabled.
 
         Returns:
             ``(new_h, new_z, obs_embed, surprise)`` — all ``Tensor``.
@@ -129,6 +133,7 @@ class _ObserveStepExportShim(nn.Module):
             ultrasonic=ultrasonic if self._ultrasonic_enabled else None,
             audio=audio if self._audio_enabled else None,
             lidar=lidar if self._lidar_enabled else None,
+            imu=imu if self._imu_enabled else None,
             prev_action=prev_action,
             h=h,
             z=z,
@@ -176,11 +181,11 @@ def build_example_inputs(
     combined_h_dim = cfg.hidden_dim + cfg.cfc_hidden_dim
     # Modality slot count in the valid_mask vector. Single source of truth
     # lives in ``mousedroid.constants.SENSOR_SLOT_MAP`` / the explicit
-    # ``N_SENSOR_MODALITIES_WITH_LIDAR`` constant so the export contract
+    # ``N_SENSOR_MODALITIES_WITH_IMU`` constant so the export contract
     # tracks the encoder's slot layout automatically — operators adding a
     # new modality update one place. Note this is SLOTS, not enabled count:
     # disabled modalities still occupy their slot for stable ordering.
-    n_modalities = N_SENSOR_MODALITIES_WITH_LIDAR
+    n_modalities = N_SENSOR_MODALITIES_WITH_IMU
     inputs: dict[str, Tensor] = {
         OBSERVE_STEP_INPUT_VISION: torch.zeros(
             batch_size, cfg.vision_dim, dtype=torch.float32, device=device
@@ -212,6 +217,10 @@ def build_example_inputs(
     if cfg.lidar_dim > 0:
         inputs[OBSERVE_STEP_INPUT_LIDAR] = torch.zeros(
             batch_size, cfg.lidar_dim, dtype=torch.float32, device=device
+        )
+    if cfg.imu_dim > 0:
+        inputs[OBSERVE_STEP_INPUT_IMU] = torch.zeros(
+            batch_size, cfg.imu_dim, dtype=torch.float32, device=device
         )
     return inputs
 

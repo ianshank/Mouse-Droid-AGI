@@ -163,6 +163,21 @@ def test_parse_encoder_reading_returns_floats():
     assert isinstance(reading.right_velocity_mps, float)
 
 
+def test_parse_encoder_reading_legacy_zeros_imu_fields() -> None:
+    """F-036: the legacy parser must not invent IMU attitude.
+
+    Existing YAML keeps ``command_set="legacy"``. If this path started
+    setting ``imu_valid``, sensing would swap odometry heading for yaw 0.
+    """
+    reading = parse_encoder_reading({"lv": 1, "rv": 2, "ox": 3, "oy": 4, "h": 5, "ts": 6})
+    assert reading.heading_rad == pytest.approx(5.0)
+    assert reading.roll_rad == 0.0
+    assert reading.pitch_rad == 0.0
+    assert reading.yaw_rad == 0.0
+    assert reading.imu_valid is False
+    assert reading.heading_for_motor() == pytest.approx(5.0)
+
+
 # ---------------------------------------------------------------------------
 # Protocol constants sanity checks
 # ---------------------------------------------------------------------------
@@ -414,9 +429,13 @@ class TestWaveshareStockTelemetry:
         reading = WAVESHARE_STOCK_CODEC.parse_encoders(frame)
         assert reading.left_velocity_mps == pytest.approx(0.22)
         assert reading.right_velocity_mps == pytest.approx(-0.11)
-        # Encoder-less chassis: odometry/heading stay structurally zero.
+        # Encoder-less chassis: odometry heading stays structurally zero.
+        # Attitude is a separate field (F-036); this frame omitted r/p/y.
         assert reading.odometry_x_m == 0.0
         assert reading.heading_rad == 0.0
+        assert reading.imu_valid is True
+        assert reading.yaw_rad == 0.0
+        assert reading.heading_for_motor() == 0.0
 
     def test_encoder_parse_rejects_wrong_frame_type(self) -> None:
         from mousedroid.comms.command_set import WAVESHARE_STOCK_CODEC
@@ -424,6 +443,8 @@ class TestWaveshareStockTelemetry:
         reading = WAVESHARE_STOCK_CODEC.parse_encoders({"T": 1002, "L": 5.0})
         assert reading.left_velocity_mps == 0.0
         assert reading.right_velocity_mps == 0.0
+        assert reading.imu_valid is False
+        assert reading.yaw_rad == 0.0
 
     def test_encoder_parse_survives_malformed_wheel_speeds(self) -> None:
         """UART noise in ``L``/``R`` must not raise out of the 30 Hz read.
@@ -446,6 +467,48 @@ class TestWaveshareStockTelemetry:
         reading = WAVESHARE_STOCK_CODEC.parse_encoders({"T": 1001, "L": 0.3, "R": None})
         assert reading.left_velocity_mps == pytest.approx(0.3)
         assert reading.right_velocity_mps == 0.0
+
+    def test_encoder_parse_maps_imu_rpy_without_touching_odometry_heading(self) -> None:
+        """F-036: stock T=1001 ``r``/``p``/``y`` fill attitude, not heading_rad.
+
+        ``heading_rad`` stays the odometry slot (always 0 on this chassis).
+        Sensing reads yaw through ``heading_for_motor`` so the 4-float
+        motor vector changes without a SENSOR_SLOT_MAP widen.
+        """
+        from mousedroid.comms.command_set import (
+            WAVESHARE_FEEDBACK_BASE_INFO,
+            WAVESHARE_STOCK_CODEC,
+        )
+
+        frame = {
+            "T": WAVESHARE_FEEDBACK_BASE_INFO,
+            "L": 0.1,
+            "R": 0.2,
+            "r": 0.05,
+            "p": -0.02,
+            "y": 1.57,
+            "v": 12.1,
+        }
+        reading = WAVESHARE_STOCK_CODEC.parse_encoders(frame)
+        assert reading.roll_rad == pytest.approx(0.05)
+        assert reading.pitch_rad == pytest.approx(-0.02)
+        assert reading.yaw_rad == pytest.approx(1.57)
+        assert reading.imu_valid is True
+        assert reading.heading_rad == 0.0
+        assert reading.heading_for_motor() == pytest.approx(1.57)
+
+    def test_encoder_parse_survives_malformed_imu_fields(self) -> None:
+        """UART junk in ``r``/``p``/``y`` must not raise out of the 30 Hz read."""
+        from mousedroid.comms.command_set import WAVESHARE_STOCK_CODEC
+
+        reading = WAVESHARE_STOCK_CODEC.parse_encoders(
+            {"T": 1001, "L": 0.1, "R": 0.1, "r": "n/a", "p": [0.1], "y": None}
+        )
+        assert reading.imu_valid is True
+        assert reading.roll_rad == 0.0
+        assert reading.pitch_rad == 0.0
+        assert reading.yaw_rad == 0.0
+        assert reading.heading_for_motor() == 0.0
 
 
 class TestWaveshareStockHeartbeat:

@@ -1,1 +1,1 @@
-"""User journey test suite for MouseDroid."""
+"""User journey test suite — parked AutonomousOrchestrator (ADR-016)."""

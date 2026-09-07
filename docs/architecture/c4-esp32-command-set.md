@@ -26,7 +26,7 @@ flowchart TB
     subgraph Codec["src/mousedroid/comms/command_set.py"]
         Proto["ESP32CommandCodec (runtime_checkable Protocol)\nbuild_velocity / build_stop / battery_query /\nencoder_query / parse_battery / parse_encoders /\nconnect_commands / supports_lateral"]
         Legacy["LEGACY_CODEC (stateless singleton)\npure _utils delegation\nT=1 PWM velocity, T=0 stop, T=2 battery\ngolden wire-JSON strings pinned"]
-        Stock["WAVESHARE_STOCK_CODEC (stateless singleton)\nT=13 CMD_ROS_CTRL {X,Z} physical units (clamped)\nstop = zero-velocity T=13 (stock has NO e-stop cmd)\nT=130 CMD_BASE_FEEDBACK poll (a READ)\nparse T-gated 1001 FEEDBACK_BASE_INFO frame\nT=136 CMD_HEART_BEAT_SET armed at connect"]
+        Stock["WAVESHARE_STOCK_CODEC (stateless singleton)\nT=13 CMD_ROS_CTRL {X,Z} physical units (clamped)\nstop = zero-velocity T=13 (stock has NO e-stop cmd)\nT=130 CMD_BASE_FEEDBACK poll (a READ)\nparse T-gated 1001 FEEDBACK_BASE_INFO frame\nL/R wheels + r/p/y IMU (F-036)\nT=136 CMD_HEART_BEAT_SET armed at connect"]
         Helpers["worst_case_command_gap_s(cfg)\nmax(1/keepalive_hz, command_timeout_s,\n    degraded_poll_interval_s)\nheartbeat_window_ms(cfg) = ceil(gap * multiple),\n  floored at MIN_HEARTBEAT_WINDOW_MS\ncommand_set_supports_lateral(cfg)\nresolve_command_codec(cfg)"]
     end
 

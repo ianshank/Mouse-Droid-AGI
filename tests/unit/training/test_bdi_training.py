@@ -7,6 +7,12 @@ from pathlib import Path
 import numpy as np
 from training.collect_annotations import INTENTION_LABELS, label_intention
 from training.train_bdi import (
+    _init_weights,
+    belief_reconstruction_mse,
+    linear_classifier_accuracy,
+    majority_class_accuracy,
+    passes_bdi_publish_bars,
+    pca_reconstruction_mse,
     train_affect_estimator,
     train_belief_encoder,
     train_desire_encoder,
@@ -34,6 +40,103 @@ class TestBeliefEncoder:
         assert "w1" in weights
         assert "b1" in weights
         assert weights["w1"].shape == (256, 128)
+
+
+class TestHeInitAndAdam:
+    def test_he_init_std_matches_sqrt_2_over_fan_in(self) -> None:
+        from mousedroid.constants import WEIGHT_INIT_SCALE
+
+        rng = np.random.default_rng(0)
+        fan_in, fan_out = 256, 128
+        weights = _init_weights(rng, fan_in, fan_out)
+        expected = float(np.sqrt(2.0 / fan_in))
+        assert abs(float(weights.std()) - expected) < 0.04
+        assert not np.isclose(expected, WEIGHT_INIT_SCALE)
+
+    def test_belief_ae_beats_mean_predictor(self) -> None:
+        """Adam must move off the documented SGD predict-zero plateau."""
+        rng = np.random.default_rng(7)
+        obs = rng.standard_normal((128, 256)).astype(np.float32)
+        weights = train_belief_encoder(obs, lr=3e-3, epochs=40, batch_size=32)
+        ae_mse = belief_reconstruction_mse(obs, weights)
+        mean_mse = float(np.mean((obs - obs.mean(axis=0)) ** 2))
+        assert ae_mse < 0.75 * mean_mse
+
+    def test_publish_bars_require_pca_and_majority(self) -> None:
+        assert passes_bdi_publish_bars(
+            belief_mse=0.3,
+            pca_mse=0.4,
+            intention_acc=0.5,
+            majority_acc=0.2,
+        )
+        assert not passes_bdi_publish_bars(
+            belief_mse=0.5,
+            pca_mse=0.4,
+            intention_acc=0.5,
+            majority_acc=0.2,
+        )
+        assert not passes_bdi_publish_bars(
+            belief_mse=0.3,
+            pca_mse=0.4,
+            intention_acc=0.2,
+            majority_acc=0.2,
+        )
+
+    def test_pca_helper_is_below_mean_on_low_rank_data(self) -> None:
+        rng = np.random.default_rng(1)
+        z = rng.standard_normal((64, 8)).astype(np.float32)
+        w = rng.standard_normal((8, 32)).astype(np.float32)
+        x = z @ w
+        assert pca_reconstruction_mse(x, rank=8) < 1e-5
+
+
+class TestCausalIntention:
+    def test_causal_features_beat_majority_class(self) -> None:
+        from training.collect_annotations import (
+            _sample_label_context,
+            intention_feature_vector,
+            label_intention,
+        )
+
+        rng = np.random.default_rng(11)
+        rows = []
+        labels = []
+        for _ in range(400):
+            action = np.tanh(rng.standard_normal(3).astype(np.float32))
+            obs, human_detected, human_dist, commanded = _sample_label_context(rng, action)
+            rows.append(
+                intention_feature_vector(
+                    action,
+                    obs,
+                    human_detected=human_detected,
+                    human_dist_m=human_dist,
+                    commanded_action=commanded,
+                )
+            )
+            labels.append(
+                label_intention(
+                    action,
+                    obs,
+                    human_detected=human_detected,
+                    human_dist_m=human_dist,
+                    commanded_action=commanded,
+                )
+            )
+        features = np.stack(rows)
+        y = np.array(labels, dtype=np.int64)
+        weights = train_intention_predictor(
+            np.zeros((len(y), 256), dtype=np.float32),
+            y,
+            lr=1e-2,
+            epochs=40,
+            batch_size=32,
+            features=features,
+        )
+        acc = linear_classifier_accuracy(features, y, weights)
+        majority = majority_class_accuracy(y)
+        assert acc > majority
+        assert weights["w1"].shape[0] == features.shape[1]
+        assert "w2" in weights
 
     def test_saves_loadable_npz(self, tmp_path: Path) -> None:
         obs, _ = _make_dummy_data(100)

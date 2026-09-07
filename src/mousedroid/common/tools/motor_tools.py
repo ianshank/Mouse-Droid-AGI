@@ -98,8 +98,12 @@ def register_motor_tools(registry: ToolRegistry, deps: MotorToolDeps) -> None:
             "right_velocity_mps": float(reading.right_velocity_mps),
             "odometry_x_m": float(reading.odometry_x_m),
             "odometry_y_m": float(reading.odometry_y_m),
-            "heading_rad": float(reading.heading_rad),
+            "heading_rad": float(reading.heading_for_motor()),
             "timestamp": float(reading.timestamp),
+            "roll_rad": float(reading.roll_rad),
+            "pitch_rad": float(reading.pitch_rad),
+            "yaw_rad": float(reading.yaw_rad),
+            "imu_valid": bool(reading.imu_valid),
         }
 
     async def _emergency_stop() -> dict[str, str]:
