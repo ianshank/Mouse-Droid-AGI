@@ -170,7 +170,7 @@ class CloudLoggingSink:
     async def _await_drain(self, drain: asyncio.Task[None]) -> None:
         """Wait for the drain task; cancel it if it hangs."""
         try:
-            await asyncio.wait_for(drain, timeout=5.0)
+            await asyncio.wait_for(drain, timeout=self._log_cfg.drain_timeout_s)
         except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
             drain.cancel()
             try:
@@ -198,7 +198,11 @@ class CloudLoggingSink:
         """Pull queued entries until :meth:`close` sets the stop event."""
         while not self._stop.is_set():
             try:
-                item = await asyncio.to_thread(self._queue.get, True, 0.2)
+                item = await asyncio.to_thread(
+                    self._queue.get,
+                    True,
+                    self._log_cfg.queue_get_timeout_s,
+                )
             except queue.Empty:
                 continue
             if item is _QUEUE_STOP:

@@ -38,8 +38,10 @@ Enable with `imu_dim: 3` once F-036 parse and a talking ESP32 exist.
 `CloudLoggingSink` claimed fire-and-forget while calling sync `log_struct`
 on the caller thread. `__call__` now queues an allowlisted copy
 (`GCPLoggingConfig.queue_maxsize`, default 256) and never talks to the SDK.
-Mission/NL keys are redacted. Default INFO overlays still drop
-`tick_complete`; the stall test only fires when both log levels are DEBUG.
+Mission/NL keys are redacted. Drain/get timeouts are
+`drain_timeout_s` (5.0) and `queue_get_timeout_s` (0.2). Default INFO
+overlays still drop `tick_complete`; the stall test only fires when both
+log levels are DEBUG.
 
 ### Fixed — CI/docs honesty for parked journeys and Current Next Steps (F-038)
 

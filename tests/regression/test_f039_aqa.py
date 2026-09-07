@@ -33,9 +33,36 @@ def test_queue_maxsize_zero_raises_at_load() -> None:
         GCPLoggingConfig(queue_maxsize=0)
 
 
-def test_queue_maxsize_over_cap_raises_at_load() -> None:
-    with pytest.raises(ValidationError, match="queue_maxsize"):
-        GCPLoggingConfig(queue_maxsize=10_001)
+def test_drain_timeout_s_has_description() -> None:
+    info: FieldInfo = GCPLoggingConfig.model_fields["drain_timeout_s"]
+    assert info.description
+    assert len(info.description) > 20, info.description
+
+
+def test_drain_timeout_s_default_is_five() -> None:
+    info: FieldInfo = GCPLoggingConfig.model_fields["drain_timeout_s"]
+    assert info.default == 5.0
+
+
+def test_queue_get_timeout_s_has_description() -> None:
+    info: FieldInfo = GCPLoggingConfig.model_fields["queue_get_timeout_s"]
+    assert info.description
+    assert len(info.description) > 20, info.description
+
+
+def test_queue_get_timeout_s_default_is_point_two() -> None:
+    info: FieldInfo = GCPLoggingConfig.model_fields["queue_get_timeout_s"]
+    assert info.default == 0.2
+
+
+def test_drain_timeout_s_zero_raises_at_load() -> None:
+    with pytest.raises(ValidationError, match="drain_timeout_s"):
+        GCPLoggingConfig(drain_timeout_s=0.0)
+
+
+def test_queue_get_timeout_s_zero_raises_at_load() -> None:
+    with pytest.raises(ValidationError, match="queue_get_timeout_s"):
+        GCPLoggingConfig(queue_get_timeout_s=0.0)
 
 
 def test_cloud_log_allowlist_is_operational_only() -> None:

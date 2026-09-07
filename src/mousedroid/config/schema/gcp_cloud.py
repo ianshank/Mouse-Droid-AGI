@@ -122,6 +122,26 @@ class GCPLoggingConfig(StrictBaseModel):
             "256 absorbs an INFO burst without hiding a DEBUG flood."
         ),
     )
+    drain_timeout_s: float = Field(
+        5.0,
+        gt=0.0,
+        le=60.0,
+        description=(
+            "Seconds to wait for the Cloud Logging drain task during close() "
+            "before cancelling it. Default 5.0 is long enough to flush a "
+            "full queue without stalling orchestrator shutdown."
+        ),
+    )
+    queue_get_timeout_s: float = Field(
+        0.2,
+        gt=0.0,
+        le=5.0,
+        description=(
+            "Seconds the drain loop blocks on queue.get before re-checking "
+            "the stop event. Default 0.2 keeps close() responsive without "
+            "busy-spinning."
+        ),
+    )
 
 
 class GCPMonitoringConfig(StrictBaseModel):

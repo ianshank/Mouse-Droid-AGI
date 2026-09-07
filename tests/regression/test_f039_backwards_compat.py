@@ -17,6 +17,8 @@ def test_queue_maxsize_default_keeps_legacy_logging_block_valid() -> None:
     """A pre-F-039 logging block (enabled + min_level only) still constructs."""
     cfg = GCPLoggingConfig(enabled=False, min_level="INFO")
     assert cfg.queue_maxsize == 256
+    assert cfg.drain_timeout_s == 5.0
+    assert cfg.queue_get_timeout_s == 0.2
 
 
 def test_settings_without_gcp_still_loads() -> None:
@@ -34,6 +36,8 @@ def test_existing_gcp_yaml_overlay_loads() -> None:
     settings = Settings.model_validate({**raw, "mock_hardware": True})
     assert settings.gcp is not None
     assert settings.gcp.logging.queue_maxsize == 256
+    assert settings.gcp.logging.drain_timeout_s == 5.0
+    assert settings.gcp.logging.queue_get_timeout_s == 0.2
     assert settings.gcp.logging.min_level == "INFO"
 
 
@@ -41,6 +45,8 @@ def test_gcp_config_partial_block_still_defaults_logging_off() -> None:
     cfg = GCPConfig(project_id="some-project")
     assert cfg.logging.enabled is False
     assert cfg.logging.queue_maxsize == 256
+    assert cfg.logging.drain_timeout_s == 5.0
+    assert cfg.logging.queue_get_timeout_s == 0.2
 
 
 @pytest.mark.parametrize(
@@ -59,3 +65,5 @@ def test_shipped_overlays_still_load(overlay: str) -> None:
     if cfg.gcp is None:
         return
     assert cfg.gcp.logging.queue_maxsize == 256
+    assert cfg.gcp.logging.drain_timeout_s == 5.0
+    assert cfg.gcp.logging.queue_get_timeout_s == 0.2
