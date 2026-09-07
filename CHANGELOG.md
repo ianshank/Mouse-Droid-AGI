@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — BDI Adam trainer and causal intention features (F-041)
+
+Belief AE used plain SGD after He init and still plateaued at predict-zero.
+Intention labels never depended on the vision X that `collect_annotations`
+saved. Trainers now use Adam. The npz stores `intention_features` matching
+`label_intention`. HuggingFace publish stays blocked until
+`passes_bdi_publish_bars` (AE MSE < PCA-128 and accuracy > majority).
+OTA poller remains `ianshank/mousedroid-policy-v2`. Runtime
+`WEIGHT_INIT_SCALE` is unchanged.
+
 ### Added — Optional IMU fusion slot, default off (F-040)
 
 RSSM `valid_mask` is width 6 with `SENSOR_SLOT_MAP["imu"]=5`. `imu_dim`

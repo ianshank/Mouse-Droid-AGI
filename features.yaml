@@ -1198,3 +1198,31 @@ features:
       checkpoints stay byte-identical on the fusion weights. Hardware
       frames still wait on F-008.
 
+  - id: "F-041"
+    epic: "Cognitive pillars"
+    name: "BDI Adam trainer + causal intention features (portfolio, no HF publish)"
+    description: >-
+      Belief autoencoder uses Adam instead of plain SGD. collect_annotations
+      stores intention_features aligned with label_intention (action, range,
+      battery, Law 1/2 flags) so the 10-class claim has a causal X. Publish
+      stays blocked until belief MSE beats PCA-128 and intention accuracy
+      beats majority class. Runtime WEIGHT_INIT_SCALE and NeuralBDI random
+      fallback are unchanged. OTA poller remains ianshank/mousedroid-policy-v2.
+    category: "functional"
+    priority: "medium"
+    status: "todo"
+    tier: "fast"
+    verification:
+      - "He init is sqrt(2/fan_in) and does not import WEIGHT_INIT_SCALE"
+      - "train_belief_encoder uses AdamOptimizer, not w -= lr * grad"
+      - "intention_features columns match label_intention inputs"
+      - "causal MLP head beats majority class; train_bdi does not upload"
+    validation_command: "bash scripts/validations/F-041.sh"
+    implemented_in: null
+    depends_on: []
+    notes: >-
+      Portfolio, not rover-blocking. No CHARTER §3 carve-out: training
+      laptop only. Do not publish to HuggingFace until
+      passes_bdi_publish_bars is true on the operator dataset.
+
+
