@@ -1144,3 +1144,32 @@ features:
       No CHARTER §3 carve-out: docs + CI labels only. Do not twin parked
       journeys onto MouseDroidOrchestrator under mock_hardware.
 
+  - id: "F-039"
+    epic: "GCP Digital Twin"
+    name: "Cloud Logging queue + allowlist (dormant footgun, not a default stall)"
+    description: >-
+      CloudLoggingSink.__call__ no longer calls the SDK. It allowlists
+      operational keys, redacts mission/NL fields, and put_nowait-drops onto
+      a bounded queue (GCPLoggingConfig.queue_maxsize, default 256). Drain
+      is an asyncio task started in start(); the SDK runs in asyncio.to_thread.
+      Tests prove tick_complete is dropped at default INFO and only reaches
+      the sink when LoggingConfig.level and GCPLoggingConfig.min_level are
+      both DEBUG. Do not claim a 30 Hz stall on default overlays.
+    category: "infrastructure"
+    priority: "medium"
+    status: "todo"
+    tier: "fast"
+    verification:
+      - "default INFO levels drop debug tick_complete before log_struct"
+      - "both-DEBUG overlay forwards tick_complete after flush"
+      - "__call__ does not block when log_struct sleeps"
+      - "nl_command/mission/query never appear in the Cloud Logging payload"
+      - "queue_maxsize defaults 256 and existing YAML still loads"
+    validation_command: "bash scripts/validations/F-039.sh"
+    implemented_in: null
+    depends_on: ["F-032"]
+    notes: >-
+      No CHARTER §3 carve-out: default gcp.logging.enabled is False; this
+      restores the fire-and-forget contract F-032 documented as accepted
+      risk. Allowlist is a module frozenset, not YAML-widenable.
+

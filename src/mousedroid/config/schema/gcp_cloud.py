@@ -112,6 +112,16 @@ class GCPLoggingConfig(StrictBaseModel):
     )
     log_name: str = Field("mousedroid", description="Cloud Logging log name")
     min_level: str = Field("INFO", description="Minimum log level to forward to cloud")
+    queue_maxsize: int = Field(
+        256,
+        ge=1,
+        le=10_000,
+        description=(
+            "Bounded Cloud Logging queue depth. The sink put_nowait-drops "
+            "when full so the 30 Hz tick never blocks on the SDK. Default "
+            "256 absorbs an INFO burst without hiding a DEBUG flood."
+        ),
+    )
 
 
 class GCPMonitoringConfig(StrictBaseModel):

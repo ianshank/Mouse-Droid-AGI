@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Cloud Logging queue + allowlist (F-039)
+
+`CloudLoggingSink` claimed fire-and-forget while calling sync `log_struct`
+on the caller thread. `__call__` now queues an allowlisted copy
+(`GCPLoggingConfig.queue_maxsize`, default 256) and never talks to the SDK.
+Mission/NL keys are redacted. Default INFO overlays still drop
+`tick_complete`; the stall test only fires when both log levels are DEBUG.
+
 ### Fixed — CI/docs honesty for parked journeys and Current Next Steps (F-038)
 
 The CI step that runs `tests/functional` + `tests/user_journey` read as
