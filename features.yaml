@@ -1261,7 +1261,7 @@ features:
       validation_command asserts pytest passed>0 (skip-all is not done).
     category: "infrastructure"
     priority: "high"
-    status: "in_progress"
+    status: "done"
     tier: "fast"
     verification:
       - "RoverIsaacSimConfig FieldInfo defaults match pre-F-043 literals"
@@ -1269,12 +1269,12 @@ features:
       - "build_rover_env docstring does not mention NotImplementedError"
       - "scripts/validations/F-043.sh reports passed>0"
     validation_command: "bash scripts/validations/F-043.sh"
-    implemented_in: null
+    implemented_in: "3b5278925169701cca6f1d7cb6116481608c85cc"
     depends_on: ["F-002"]
     notes: >-
       No CHARTER §3 carve-out. Do not add isaac keys to config/default.yaml.
       Runtime Settings.harness stays None. F-008 remains the hardware next
-      feature; this is in_progress so select_next resumes Isaac coding.
+      feature. Isaac coding sessions resumed this id while it was in_progress.
 
   - id: "F-044"
     epic: "Isaac Lab workstation"
@@ -1287,7 +1287,7 @@ features:
       6-DoF IMU into RSSM imu_dim.
     category: "functional"
     priority: "high"
-    status: "todo"
+    status: "done"
     tier: "fast"
     verification:
       - "Fake IMU/pose/lidar readers produce configured shapes"
@@ -1295,7 +1295,7 @@ features:
       - "info contains vx_body_mps and omega_rads"
       - "RoverObsAdapter still zeros SENSOR_SLOT_MAP imu"
     validation_command: "bash scripts/validations/F-044.sh"
-    implemented_in: null
+    implemented_in: "3b5278925169701cca6f1d7cb6116481608c85cc"
     depends_on: ["F-043"]
     notes: >-
       Live Isaac Sim stays skip-gated inside methods, not the Golden Rule
@@ -1310,14 +1310,14 @@ features:
       imported only inside the translator when isaaclab is present.
     category: "functional"
     priority: "high"
-    status: "todo"
+    status: "done"
     tier: "fast"
     verification:
       - "apply_domain_params no-ops when domain_randomization.enabled is False"
       - "duck-typed articulation writer is invoked when DR is on"
       - "SimEpisodeGenerator + MockRoverEnv still rolls without mujoco"
     validation_command: "bash scripts/validations/F-045.sh"
-    implemented_in: null
+    implemented_in: "3b5278925169701cca6f1d7cb6116481608c85cc"
     depends_on: ["F-043"]
     notes: >-
       Do not invent a second DR schema. Do not parallel this with F-044
@@ -1335,7 +1335,7 @@ features:
       rover.sim.battery_voltage_const_v.
     category: "functional"
     priority: "medium"
-    status: "todo"
+    status: "done"
     tier: "slow"
     verification:
       - "mock + rssm_pretrain_enabled still skips"
@@ -1343,7 +1343,7 @@ features:
       - "lidar_dim follows observation.lidar_num_sectors for isaac_lab"
       - "vision fine-tune still skips for isaac_lab"
     validation_command: "bash scripts/validations/F-046.sh"
-    implemented_in: null
+    implemented_in: "3b5278925169701cca6f1d7cb6116481608c85cc"
     depends_on: ["F-044", "F-045"]
     notes: >-
       Default-OFF flags unchanged. Do not hot-load PPO into the 30 Hz loop.
@@ -1378,7 +1378,7 @@ features:
       Closeout SHAs are hex, not branch names.
     category: "infrastructure"
     priority: "high"
-    status: "todo"
+    status: "done"
     tier: "fast"
     verification:
       - "HARNESS_SPEC documents F-043+ workstation Isaac"
@@ -1386,7 +1386,7 @@ features:
       - "Settings.harness is None"
       - "/metrics unused render has no isaac family"
     validation_command: "bash scripts/validations/F-048.sh"
-    implemented_in: null
+    implemented_in: "3b5278925169701cca6f1d7cb6116481608c85cc"
     depends_on: ["F-043"]
     notes: >-
       Do not add LANDED rows to Current Next Steps (doc_hygiene --strict).

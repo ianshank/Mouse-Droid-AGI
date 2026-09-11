@@ -11,17 +11,17 @@ as an opt-in workstation training backend (F-043+) so `select_next` can resume
 schema/seam work without replacing F-008. Runtime `Settings.harness` stays
 None.
 
-**Landed (implementation; catalog closeout SHA in follow-up commit).**
+**Landed.**
 
-- F-043 nested `RoverIsaacSimConfig`; shared `battery_voltage_const_v`;
+- F-043 `3b52789` — nested `RoverIsaacSimConfig`; shared `battery_voltage_const_v`;
   `num_envs` wired when `SimulationCfg` accepts it; factory docstring no longer
   claims mujoco `NotImplementedError`. Validation asserts `passed > 0`.
-- F-044 duck-typed IMU/pose/LiDAR readers; shared kinematics `to_body_action`;
+- F-044 `3b52789` — duck-typed IMU/pose/LiDAR readers; shared kinematics `to_body_action`;
   `vx_body_mps` / `omega_rads` info. Does not map 6-DoF IMU into RSSM `imu_dim`.
-- F-045 `apply_domain_params` on Isaac; Replicator stays behind the translator.
-- F-046 `_train_rssm` accepts `{mujoco, isaac_lab}`; lidar_dim from
+- F-045 `3b52789` — `apply_domain_params` on Isaac; Replicator stays behind the translator.
+- F-046 `3b52789` — `_train_rssm` accepts `{mujoco, isaac_lab}`; lidar_dim from
   observation sectors; vision fine-tune stays mujoco-only.
-- F-048 HARNESS_SPEC §16 + C4 / ADR-009 addenda. No Prometheus Isaac family.
+- F-048 `3b52789` — HARNESS_SPEC §16 + C4 / ADR-009 addenda. No Prometheus Isaac family.
 - F-047 / F-049 remain `deferred` (PPO hot-load / Cosmos).
 
 No CHARTER §3 carve-out. Do not add `config/*.yaml` Isaac keys. Do not un-zero

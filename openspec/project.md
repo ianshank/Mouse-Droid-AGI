@@ -21,7 +21,7 @@ authoritative counterparts.
 
 | change-id | status | F-number | landed | authoritative artifacts |
 |---|---|---|---|---|
-| `mouse-droid-isaac-lab-sensor-parity` | in progress | F-043 | — | `src/mousedroid/config/schema/sim.py` (`RoverIsaacSimConfig`), `src/mousedroid/sim/isaaclab/rover_env.py`, `src/mousedroid/factory/world_model.py`, `src/mousedroid/training/pipeline_orchestrator.py`, `features.yaml` (F-043–F-049), `scripts/validations/F-043.sh` |
+| `mouse-droid-isaac-lab-sensor-parity` | implemented | F-043 | `3b52789` | `src/mousedroid/config/schema/sim.py` (`RoverIsaacSimConfig`), `src/mousedroid/sim/isaaclab/rover_env.py`, `src/mousedroid/factory/world_model.py`, `src/mousedroid/training/pipeline_orchestrator.py`, `features.yaml` (F-043–F-049), `scripts/validations/F-043.sh` |
 | `mouse-droid-coverage-allowlist` | implemented | F-042 | `32e4f1e` | `scripts/check_branch_coverage.py` (`_ALLOWED_FILES`), `tests/regression/test_f042_aqa.py`, `scripts/validations/F-042.sh`, `features.yaml` (F-042) |
 | `mouse-droid-bdi-portfolio` | implemented | F-041 | `c6a779e` | `training/train_bdi.py` (`AdamOptimizer`, `passes_bdi_publish_bars`), `training/collect_annotations.py` (`intention_feature_vector`), `tests/regression/test_f041_aqa.py`, `scripts/validations/F-041.sh`, `features.yaml` (F-041) |
 | `mouse-droid-imu-fusion-slot` | implemented | F-040 | `4c1fe97` | `src/mousedroid/constants.py` (`SENSOR_SLOT_MAP["imu"]`, `N_SENSOR_MODALITIES_WITH_IMU`), `src/mousedroid/config/schema/world_model.py` (`imu_dim`), `src/mousedroid/world_model/encoder.py`, `src/mousedroid/world_model/observation_packer.py`, `tests/regression/test_f040_aqa.py`, `scripts/validations/F-040.sh`, `features.yaml` (F-040) |
