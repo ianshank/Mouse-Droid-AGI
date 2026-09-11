@@ -19,6 +19,15 @@ prim, and USD knobs without new YAML keys. Isaac now emits `vx_body_mps` /
 stays MuJoCo. PPO/ONNX hot-load and Cosmos are catalog-deferred (F-047,
 F-049). No Prometheus Isaac family; runtime `Settings.harness` stays None.
 
+### Fixed — Isaac RSSM skip without reward; hygiene (F-043–F-048 follow-up)
+
+Default YAML leaves `rover.reward` unset, so live Isaac `build()` would
+crash `_train_rssm`. The orchestrator now skips with
+`reason=isaac_reward_block_required` and runs `env.build()` inside
+`asyncio.to_thread`. Live `build()` is documented as contact-only; Replicator
+is a present-check. Generated `*.usd` is gitignored. Workstation skill
+`isaac-lab-workstation` plus `make install-isaac` are operator-only.
+
 ### Fixed — Enumerate factory/orchestrator coverage exemptions (F-042)
 
 `check_branch_coverage.py` treated every file under `factory/` and every

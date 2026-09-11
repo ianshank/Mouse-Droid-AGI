@@ -123,6 +123,17 @@ Two flags decide whether code talks to real hardware:
 of hardware is missing, add a schema-driven `enabled` toggle — don't
 sprinkle `try/except` around the driver calls.
 
+## Isaac Lab workstation (F-043+)
+
+Opt-in extra (`pip install -e ".[isaac]"` / `make install-isaac`). Nested
+`RoverIsaacSimConfig` — do **not** add keys to `config/*.yaml`. Live
+`build()` wires contact only; IMU/LiDAR via duck-typed readers. RSSM
+pretrain skips when `rover.reward is None`
+(`reason=isaac_reward_block_required`). Frozen arm skills stay MuJoCo-only.
+Runtime `Settings.harness` stays None. Dispatch `config-guardian` +
+`test-engineer` on Isaac diffs. Skill:
+`.claude/skills/isaac-lab-workstation/SKILL.md`.
+
 ## Subagent dispatch
 
 When delegating to a subagent (`peer-reviewer`, `test-engineer`, `config-guardian`, or any of the other five in `.claude/agents/`):

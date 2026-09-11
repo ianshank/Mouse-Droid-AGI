@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import inspect
 
+import pytest
+from pydantic import ValidationError
 from pydantic.fields import FieldInfo
 
 from mousedroid.config.schema import (
@@ -12,6 +14,7 @@ from mousedroid.config.schema import (
     RoverSimConfig,
 )
 from mousedroid.factory.world_model import build_rover_env
+from mousedroid.training.pipeline_orchestrator import PipelineOrchestrator
 
 
 def _desc(model: type, name: str) -> FieldInfo:
@@ -63,6 +66,32 @@ def test_isaac_field_defaults_match_pre_f043_literals() -> None:
 def test_shared_battery_default_is_twelve() -> None:
     assert _desc(RoverSimConfig, "battery_voltage_const_v").default == 12.0
     assert _desc(RoverObservationConfig, "lidar_max_range_m").default == 4.0
+
+
+def test_lidar_max_range_rejects_non_positive() -> None:
+    with pytest.raises(ValidationError):
+        RoverObservationConfig(lidar_max_range_m=0.0)
+    with pytest.raises(ValidationError):
+        RoverObservationConfig(lidar_max_range_m=-1.0)
+
+
+def test_parent_battery_rejects_non_positive() -> None:
+    with pytest.raises(ValidationError):
+        RoverSimConfig(battery_voltage_const_v=0.0)
+    with pytest.raises(ValidationError):
+        RoverSimConfig(battery_voltage_const_v=-1.0)
+
+
+def test_parent_battery_is_independent_of_mujoco_nested() -> None:
+    cfg = RoverSimConfig(battery_voltage_const_v=11.1)
+    assert cfg.battery_voltage_const_v == 11.1
+    assert cfg.mujoco.battery_voltage_const_v == 12.0
+
+
+def test_pipeline_rssm_reads_parent_battery_field() -> None:
+    src = inspect.getsource(PipelineOrchestrator._train_rssm)
+    assert "rover.sim.battery_voltage_const_v" in src
+    assert "mujoco.battery_voltage_const_v" not in src
 
 
 def test_build_rover_env_docstring_does_not_claim_mujoco_unimplemented() -> None:

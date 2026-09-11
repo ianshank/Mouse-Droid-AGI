@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 
 import numpy as np
 
@@ -34,3 +35,17 @@ def test_adapter_still_zeros_rssm_imu_slot() -> None:
     )
     assert out["valid_mask"][SENSOR_SLOT_MAP["imu"]] == 0.0
     assert "imu" not in out
+
+
+def test_constants_do_not_claim_imusensor_attach() -> None:
+    text = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "mousedroid"
+        / "sim"
+        / "isaaclab"
+        / "constants.py"
+    ).read_text(encoding="utf-8")
+    assert "IMUSensorCfg" not in text
+    assert "CameraSensorCfg" not in text
+    assert "duck-typed readers" in text

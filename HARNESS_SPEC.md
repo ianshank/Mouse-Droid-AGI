@@ -336,15 +336,19 @@ It is **not** on the Jetson, not in hosted CI, and not the runtime rover harness
 (`Settings.harness` stays `None`). CHARTER M5 physics for CI remains MuJoCo.
 
 Catalog ids F-043–F-049 live in `features.yaml`. F-008 remains the operator
-hardware next-feature (`critical` / `todo`). Isaac coding sessions set F-043
-`in_progress` so `select_next` resumes it instead of losing to F-008.
+hardware next-feature (`critical` / `todo`). F-043–F-046 and F-048 are
+`done`; `select_next` returns F-008. Do not flip a done Isaac id back to
+`in_progress`.
 
 - **F-043** nested `RoverIsaacSimConfig`; no new `config/*.yaml` keys.
 - **F-044** fake-injectable readers + `to_body_action` + `vx_body_mps` /
   `omega_rads`. Does not map 6-DoF IMU into RSSM `imu_dim`.
-- **F-045** `apply_domain_params` on Isaac; Replicator stays behind that method.
+- **F-045** `apply_domain_params` on Isaac. Replicator is a best-effort
+  import present-check; this slice does not write Omniverse attributes.
 - **F-046** `_train_rssm` accepts `{mujoco, isaac_lab}`; vision fine-tune stays
-  mujoco-only until `render_rgb` exists. Default mock still skips.
+  mujoco-only until `render_rgb` exists. Default mock still skips. Isaac skips
+  when `rover.reward is None` (`reason=isaac_reward_block_required`) because
+  live `build()` requires the reward block.
 - **F-047** PPO ONNX **deferred** — never `vla/policy.py` / 3-DoF TensorRT.
 - **F-048** this section + C4 / ADR-009 addenda. Training metrics stay on
   existing MLflow (F-034). Do not add a rover Prometheus scrape family for

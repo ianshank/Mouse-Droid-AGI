@@ -36,6 +36,29 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+_UNSUPPORTED_RSSM_BACKEND_REASON = "unsupported_rssm_backend"
+_ISAAC_REWARD_BLOCK_REASON = "isaac_reward_block_required"
+
+
+def _rssm_pretrain_skip_reason(rover: RoverConfig | None) -> str | None:
+    """Return why physics RSSM pretrain must skip, or ``None`` to run.
+
+    Isaac Lab ``build()`` raises when ``rover.reward`` is missing (schema
+    default). Skipping here keeps default YAML + ``backend=isaac_lab``
+    from crashing the orchestrator.
+
+    Args:
+        rover: Optional rover block from ``Settings``.
+
+    Returns:
+        Structured-log ``reason`` when pretrain must not run.
+    """
+    if rover is None or rover.sim.backend not in ROVER_RSSM_PHYSICS_BACKENDS:
+        return _UNSUPPORTED_RSSM_BACKEND_REASON
+    if rover.sim.backend == "isaac_lab" and rover.reward is None:
+        return _ISAAC_REWARD_BLOCK_REASON
+    return None
+
 
 def _maybe_build_rover_env(env: Any) -> None:
     """Call ``build()`` when the backend uses lazy Isaac construction.
@@ -43,9 +66,13 @@ def _maybe_build_rover_env(env: Any) -> None:
     MuJoCo and mock construct in ``__init__``. Isaac Lab requires an
     explicit ``env.build()`` before ``reset``/``step``. Missing the
     method is a no-op so existing backends stay byte-identical.
+
+    Call this from the ``asyncio.to_thread`` worker, not the event loop:
+    live Isaac ``build()`` is a blocking syscall.
     """
     build = getattr(env, "build", None)
     if callable(build):
+        logger.debug("rover_env_build_invoked", env_type=type(env).__name__)
         build()
 
 
@@ -277,10 +304,11 @@ class PipelineOrchestrator:
         # consume the freshly written checkpoint. The two flags are independent —
         # vision fine-tune must NOT short-circuit pretraining.
         if tcfg.rssm_pretrain_enabled:
-            if rover is None or rover.sim.backend not in ROVER_RSSM_PHYSICS_BACKENDS:
+            reason = _rssm_pretrain_skip_reason(rover)
+            if reason is not None or rover is None:
                 logger.info(
                     "rssm_training_skipped",
-                    reason="unsupported_rssm_backend",
+                    reason=reason or _UNSUPPORTED_RSSM_BACKEND_REASON,
                     backend=None if rover is None else rover.sim.backend,
                 )
             else:
@@ -375,8 +403,9 @@ class PipelineOrchestrator:
         Builds the obs adapter + episode generator, runs the synchronous torch
         loop in a worker thread (so the orchestrator event loop + thermal-pause
         check are not blocked), closes the env, and logs ``{event_prefix}_started``
-        / ``{event_prefix}_done``. Centralising this prevents the two phases from
-        silently diverging on shared knobs.
+        / ``{event_prefix}_done``. ``env.build()`` (Isaac lazy construction) runs
+        inside that worker, not on the event loop. Centralising this prevents the
+        two phases from silently diverging on shared knobs.
         """
         import torch  # local import keeps cold-start light
 
@@ -387,7 +416,6 @@ class PipelineOrchestrator:
 
         tcfg = self._settings.training
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        _maybe_build_rover_env(env)
         adapter = RoverObsAdapter(battery_v=battery_v)
         generator = SimEpisodeGenerator(
             env,
@@ -402,6 +430,7 @@ class PipelineOrchestrator:
         )
 
         def _run() -> list[float]:
+            _maybe_build_rover_env(env)
             batch = generator.generate()
             trainer = RSSMPretrainer(
                 model,

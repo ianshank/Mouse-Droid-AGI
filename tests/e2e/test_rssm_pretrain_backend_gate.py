@@ -8,6 +8,7 @@ import pytest
 
 from mousedroid.config.schema import (
     RoverConfig,
+    RoverRewardConfig,
     RoverSimConfig,
     Settings,
     TrainingConfig,
@@ -59,12 +60,27 @@ async def test_e2e_isaac_lab_gate_invokes_training_runner(
     monkeypatch.setattr(PipelineOrchestrator, "_run_rssm_training", _fake_run)
     cfg = Settings(
         mock_hardware=True,
-        rover=RoverConfig(sim=RoverSimConfig(backend="isaac_lab")),
+        rover=RoverConfig(
+            sim=RoverSimConfig(backend="isaac_lab"),
+            reward=RoverRewardConfig(),
+        ),
         training=TrainingConfig(rssm_pretrain_enabled=True, weights_dir=str(tmp_path)),
     )
     orch = _orch(cfg, tmp_path)
     await orch._train_rssm(batch_size=2)
     assert ran["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_e2e_isaac_lab_skips_without_reward_block(tmp_path: Path) -> None:
+    cfg = Settings(
+        mock_hardware=True,
+        rover=RoverConfig(sim=RoverSimConfig(backend="isaac_lab")),
+        training=TrainingConfig(rssm_pretrain_enabled=True, weights_dir=str(tmp_path)),
+    )
+    orch = _orch(cfg, tmp_path)
+    await orch._train_rssm(batch_size=2)
+    assert not (tmp_path / cfg.training.rssm_checkpoint_name).exists()
 
 
 def test_e2e_physics_backends_include_mujoco() -> None:

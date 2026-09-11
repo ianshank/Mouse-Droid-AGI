@@ -81,6 +81,7 @@ Detailed operational guidelines and subsystem contracts live in partitioned surf
 
 ### Cross-Cutting Operational Surfaces
 
+- [Isaac Lab workstation](file:///docs/architecture/c4-rssm-sim-pretraining.md) — opt-in training backend (`.[isaac]`); not on Jetson; `Settings.harness` stays None.
 - [CI Gates & Quality Ladders](file:///docs/claude/surfaces/ci-gates.md) — 17-job CI matrix, advisory promotion ladder.
 - [On-Device Full Validation](file:///docs/claude/surfaces/full-validation.md) — Cold-then-warm validation methodology and commands.
 - [USB-C Discovery Protocol](file:///docs/claude/surfaces/usbc-smoke.md) — Dynamic endpoint resolution and hardware enumeration.

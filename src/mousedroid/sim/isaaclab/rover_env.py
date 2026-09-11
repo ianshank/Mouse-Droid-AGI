@@ -1,11 +1,13 @@
 """Isaac Lab environment for the 4WD MSE-6 rover (Tier C4 body wiring).
 
-Phase A landed the import-safe stub; Tier C4 fills in the three
-``TODO(Phase B)`` markers in :meth:`build`, :meth:`reset`, and
-:meth:`step` with real Isaac Lab :class:`ManagerBasedRLEnv`-style
-wiring while preserving every architectural invariant from
-``CLAUDE.md`` (lazy import, no hardcoded values, structured logging,
-``mypy --strict``-clean, backwards-compatible defaults).
+Phase A landed the import-safe stub; Tier C4 + F-043+ fill
+:meth:`build`, :meth:`reset`, and :meth:`step` with Isaac Lab
+:class:`ManagerBasedRLEnv`-style wiring while preserving every
+architectural invariant from ``CLAUDE.md`` (lazy import, no
+hardcoded values, structured logging, ``mypy --strict``-clean,
+backwards-compatible defaults). Live ``build()`` constructs the
+articulation plus a chassis contact sensor; IMU/LiDAR are duck-typed
+readers, not IMUSensorCfg/RayCaster/Camera attach in this slice.
 
 Operator validation lives on Linux + Isaac Sim per ADR-009; CI hosts
 without ``isaaclab`` get a clean ``ImportError`` from the ``build``
@@ -158,10 +160,11 @@ class RoverIsaacLabEnv:
         """Initialise the Isaac Lab simulation context, articulation, and sensors.
 
         Wires the URDF-derived USD asset at ``cfg.sim.urdf_path`` into a
-        :class:`ManagerBasedRLEnv`-style scene with sensors attached to
-        the three :data:`ROVER_SENSOR_LINK_NAMES` (``imu_link``,
-        ``lidar_link``, ``camera_link``) and actuators on the four
-        :data:`ROVER_WHEEL_JOINT_NAMES` continuous wheel joints.
+        :class:`ManagerBasedRLEnv`-style scene with actuators on the four
+        :data:`ROVER_WHEEL_JOINT_NAMES` continuous wheel joints and a
+        chassis :class:`ContactSensor`. IMU / LiDAR / camera handles stay
+        ``None`` unless an operator (or a test) injects them; readers are
+        duck-typed and return zeros when unwired.
 
         Raises:
             IsaacLabUnavailableError: When ``isaaclab`` cannot be imported.
@@ -644,11 +647,11 @@ class RoverIsaacLabEnv:
             return False
         data = getattr(contact, "data", None)
         net_forces = getattr(data, "net_forces_w", None) if data is not None else None
-        if net_forces is None:  # pragma: no cover - exercised on Linux
+        if net_forces is None:
             return False
         # ``net_forces_w`` is shape ``(num_envs, num_bodies, 3)`` in the
         # >=0.20 Isaac Lab API; any non-zero magnitude reports contact.
-        return bool(np.any(np.asarray(net_forces) != 0.0))  # pragma: no cover
+        return bool(np.any(np.asarray(net_forces) != 0.0))
 
     def _read_observation(
         self, wheel_velocities: NDArray[np.float32]

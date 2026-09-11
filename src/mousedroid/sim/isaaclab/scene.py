@@ -46,6 +46,12 @@ def resolve_usd_path(urdf_path: str, usd_path: str | None) -> str:
         Filesystem path string for ``UsdFileCfg``.
     """
     if usd_path is not None:
+        suffix_ok = usd_path.endswith((".usd", ".usda", ".usdc"))
+        if not suffix_ok:
+            _log.debug(
+                "isaac_lab_usd_override_nonstandard_suffix",
+                usd_path=usd_path,
+            )
         return usd_path
     return urdf_path.replace(".urdf", ".usd")
 

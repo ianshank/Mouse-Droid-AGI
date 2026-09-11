@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# F-045 — Isaac apply_domain_params (CI fakes; Replicator stays behind the method).
+# F-045 — Isaac apply_domain_params (CI fakes; Replicator is a present-check).
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."

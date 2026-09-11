@@ -9,4 +9,5 @@ bash scripts/validations/_run_always_on_pytest.sh F-044 \
   tests/unit/sim/test_rover_env_isaaclab.py \
   tests/unit/sim/test_kinematics.py \
   tests/unit/sim/test_isaaclab_sensors.py \
-  tests/property/test_rover_kinematics_property.py
+  tests/property/test_rover_kinematics_property.py \
+  tests/integration/test_isaac_lab_factory_fakes.py

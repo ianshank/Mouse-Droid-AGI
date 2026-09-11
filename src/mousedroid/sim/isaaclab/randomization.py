@@ -73,8 +73,8 @@ def apply_isaac_episode_extras(extras: Mapping[str, float]) -> None:
     """Log non-chassis DR channels (latency, vision noise, pushes).
 
     These do not have a first-class Isaac Lab write in this slice; the
-    structured event is the CI-observable contract. Live Replicator vision
-    noise stays behind :func:`_try_replicator_write`.
+    structured event is the CI-observable contract. Replicator is a
+    present-check only (:func:`_try_replicator_write` does not write).
 
     Args:
         extras: Extra sampled fields (``uart_latency_ms``, ``push_force_n``,
@@ -93,7 +93,12 @@ def _try_replicator_write(
     friction: float,
     mass_kg: float,
 ) -> None:
-    """Best-effort Omniverse Replicator import; skip when the extra is absent."""
+    """Best-effort Omniverse Replicator *import* check; this slice does not write.
+
+    A successful import only logs ``isaac_lab_replicator_present``. Chassis
+    mass/friction writes stay on the duck-typed
+    ``apply_chassis_domain_params`` / PhysX mass path above.
+    """
     if not module_importable("isaaclab"):
         return
     try:

@@ -74,6 +74,12 @@ models/
 *.trt
 *.plan
 
+# Isaac Sim / Omniverse generated USD (operator-local — never commit)
+*.usd
+*.usda
+*.usdc
+.nvidia-omniverse/
+
 # Coverage / test artifacts
 .coverage
 .coverage.*

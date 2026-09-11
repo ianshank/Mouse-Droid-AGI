@@ -114,9 +114,11 @@ Full C4 diagrams (Context → Container → Component → Code) live in [`docs/a
 # Install (choose extras as needed)
 pip install -e .                    # base
 pip install -e ".[hardware,jetson]" # Jetson drivers + TensorRT
-pip install -e ".[dev]"             # pytest, coverage, ruff, mypy
+pip install -e ".[dev,telemetry,mcp]" # CI extras (pytest, ruff, mypy, Pillow, MCP)
+pip install -e ".[isaac]"            # workstation Isaac Lab (Linux + Isaac Sim; not CI)
 
 # Run in mock mode (no hardware required)
+# rover.sim.backend defaults to mock (NumPy, no physics)
 MOUSEDROID_MOCK_HARDWARE=true mousedroid
 
 # Health check

@@ -106,7 +106,7 @@ def test_build_via_factory_returns_isaaclab_env():
 
 @pytest.mark.skipif(not _isaaclab_available(), reason="Isaac Lab not installed")
 def test_build_succeeds_when_isaaclab_installed():
-    env = _make_env()
+    env = _make_env(with_reward=True)
     env.build()  # should not raise
     obs, info = env.reset(seed=0)
     assert isinstance(obs, dict)
@@ -232,6 +232,43 @@ def test_step_reads_collision_flag_from_contact_sensor(monkeypatch):
     assert info["is_colliding"] is True
     # collision_weight * 1 is subtracted from the forward-velocity term.
     assert reward == pytest.approx(-RoverRewardConfig().collision_weight)
+
+
+def test_step_collision_flag_missing_net_forces_is_false(monkeypatch):
+    """A contact handle without ``net_forces_w`` reports no collision."""
+    from types import SimpleNamespace
+
+    from mousedroid.sim.isaaclab.constants import ROVER_CONTACT_SENSOR_NAME
+
+    monkeypatch.setattr(rover_env_module, "_isaaclab_available", lambda: True)
+    env = _make_env(with_reward=True)
+    env._built = True
+    env._sensors = {ROVER_CONTACT_SENSOR_NAME: SimpleNamespace(data=SimpleNamespace())}
+    env.reset(seed=0)
+    _, _, _, _, info = env.step(np.zeros(2, dtype=np.float32))
+    assert info["is_colliding"] is False
+
+
+def test_reset_samples_domain_when_dr_on_without_pending(monkeypatch):
+    """DR-on reset without a pending sample still fills chassis params."""
+    from mousedroid.config.schema import DomainRandomizationConfig
+
+    monkeypatch.setattr(rover_env_module, "_isaaclab_available", lambda: True)
+    cfg = RoverConfig(
+        sim=RoverSimConfig(backend="isaac_lab"),
+        reward=RoverRewardConfig(),
+    )
+    env = RoverIsaacLabEnv(
+        cfg,
+        wheel_radius_m=0.042,
+        track_width_m=0.20,
+        domain_randomization=DomainRandomizationConfig(enabled=True),
+    )
+    env._built = True
+    _, info = env.reset(seed=0)
+    assert env._pending_domain is not None
+    assert "friction" in env._pending_domain
+    assert info["dr_enabled"] is True
 
 
 def test_step_collision_flag_zero_forces_means_no_collision(monkeypatch):

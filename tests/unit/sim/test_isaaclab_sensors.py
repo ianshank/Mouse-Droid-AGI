@@ -86,6 +86,17 @@ def test_read_lidar_missing_is_zeros() -> None:
     np.testing.assert_array_equal(lidar, np.zeros(16, dtype=np.float32))
 
 
+def test_read_lidar_zero_when_max_range_non_positive() -> None:
+    raw = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    handle = SimpleNamespace(data=SimpleNamespace(ray_distance=raw))
+    lidar = read_rover_lidar(
+        sensors={ROVER_SENSOR_LINK_NAMES[1]: handle},
+        n_sectors=4,
+        max_range_m=0.0,
+    )
+    np.testing.assert_array_equal(lidar, np.zeros(4, dtype=np.float32))
+
+
 def test_read_lidar_from_hit_points() -> None:
     hits = np.array([[[4.0, 0.0, 0.0], [0.0, 2.0, 0.0]]], dtype=np.float32)
     origin = np.array([[0.0, 0.0, 0.0]], dtype=np.float32)

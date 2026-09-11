@@ -1,7 +1,7 @@
 # ADR-009 — Isaac Lab Phase B (Real-Env Wiring for the Rover)
 
-**Status:** Accepted (foundation + Tier C4 body wired; operator-on-Linux
-validation remains the Phase 5 gate)
+**Status:** Accepted (F-043+ workstation seams landed; CHARTER M5 CI physics
+remains MuJoCo; operator-on-Linux validation remains for live Isaac Sim)
 **Date:** 2026-05-16 (Tier C4 amendment)
 **Sprint:** Tier B Track B3 (foundation), Tier C Track C4 (body wiring)
 
@@ -19,8 +19,7 @@ validation remains the Phase 5 gate)
 The rover (MSE-6 4WD chassis, `assets/rover/mse6_4wd.urdf`) trains in a
 sim-to-real loop. Phase A (already merged) shipped a Phase-A stub at
 [`src/mousedroid/sim/isaaclab/rover_env.py`](../../src/mousedroid/sim/isaaclab/rover_env.py)
-with three `TODO(Phase B)` markers — `build()`, `reset()`, `step()` — all
-returning mock data. The orchestrator can swap between the mock backend
+with stub `build()`, `reset()`, and `step()` returning mock data. The orchestrator can swap between the mock backend
 ([`MockRoverEnv`](../../src/mousedroid/sim/mock_rover_env.py)) and the
 Isaac Lab backend via factory dispatch on `cfg.rover.sim.backend`.
 
@@ -55,7 +54,7 @@ assets/rover/mse6_4wd.urdf  ← committed (human-readable source of truth)
         │
         ▼ scripts/convert_urdf_to_usd.py (one-shot, requires Isaac Sim)
         │
-assets/rover/mse6_4wd.usd   ← committed (binary, ~few-MB, regenerable)
+assets/rover/mse6_4wd.usd   ← operator-local, gitignored (ADR-009 F-043+ addendum)
         │
         ▼ ArticulationCfg(usd_path=...) in RoverIsaacLabEnv.build()
         │
@@ -63,9 +62,9 @@ assets/rover/mse6_4wd.usd   ← committed (binary, ~few-MB, regenerable)
    Isaac Lab ManagerBasedRLEnv scene
 ```
 
-The `.usd` is committed (not generated on the fly) so CI runs without
-Isaac Sim don't need to re-import. Operators re-run
-`scripts/convert_urdf_to_usd.py` after any URDF change.
+> **Superseded by the F-043+ addendum (2026-09-11):** generated `.usd` stays
+> operator-local and gitignored. Do not commit `assets/rover/mse6_4wd.usd`.
+> The 2026-05-16 playbook's "commit the produced .usd" step is historical.
 
 ### Action space
 
@@ -202,7 +201,7 @@ operator-on-Linux validation remains the gate for Phase 5.
 
 | Sub-task | Owner |
 |---|---|
-| Commit `assets/rover/mse6_4wd.usd` (run conversion script once) | Operator |
+| Commit `assets/rover/mse6_4wd.usd` (run conversion script once) | **Superseded** — keep USD gitignored |
 | Run all 9 unit tests under live `isaaclab` on Linux + Isaac Sim 4.5+ | Operator |
 | Confirm `test_random_rollout_produces_finite_observations` PASS (no NaN/Inf in obs over 50 steps) | Operator |
 
@@ -223,9 +222,7 @@ python -c "import isaaclab; print(isaaclab.__version__)"
 python scripts/convert_urdf_to_usd.py \
     --urdf assets/rover/mse6_4wd.urdf \
     --output assets/rover/mse6_4wd.usd
-# 4. Commit the produced .usd
-git add assets/rover/mse6_4wd.usd
-git commit -m "feat(sim): commit converted mse6_4wd.usd (B3 Story 1)"
+# 4. Keep the produced .usd operator-local (gitignored). Do not commit it.
 # 5. Run the smoke test (will no longer skip)
 pytest tests/unit/sim/isaaclab/test_urdf_to_usd.py -m slow -v
 ```
@@ -279,8 +276,8 @@ python -m pytest \
 - **Linux-only path.** Windows users (the primary dev workstation in
   this repo) cannot validate end-to-end. Mitigated by the
   `pytest.importorskip` skip semantics so CI passes everywhere.
-- **`.usd` binary in git history.** Single-file, ~few MB. Accepted
-  trade-off; revisit if asset library grows (Git LFS).
+- **`.usd` stays gitignored.** Generated Omniverse assets are operator-local
+  (F-043+ addendum). Do not commit them.
 - **Phase B reward is a baseline.** Sufficient for sim-to-real
   validation but not for solving complex tasks. Phase 5 ships the
   richer reward shaper.
@@ -294,13 +291,20 @@ replace CHARTER M5 (MuJoCo is the CI-trainable physics backend).
 
 - Nested `RoverIsaacSimConfig` holds device/prim/USD/contact knobs. Headless
   still selects `device_headless` (`cuda:0`); GUI stays `device_gui` (`cpu`).
+- Live `build()` wires the chassis contact sensor only. IMU/LiDAR come from
+  duck-typed readers when handles are present. Camera / `render_rgb` is out of
+  this slice.
 - `RoverIsaacLabEnv` exposes `to_body_action` (shared kinematics) and
   `apply_domain_params`. `step`/`reset` info includes `vx_body_mps` and
   `omega_rads` so `RoverObsAdapter` can train motor state. Forward-velocity
   reward still uses `forward_velocity_mps`.
+- Replicator is a present-check only; this slice does not write Omniverse
+  attributes.
 - LiDAR sectors/range come from `RoverObservationConfig`, not `LidarConfig`.
-- RSSM pretrain may roll Isaac when `rssm_pretrain_enabled` (default false).
-  Vision fine-tune stays MuJoCo until `render_rgb` exists.
+- RSSM pretrain may roll Isaac when `rssm_pretrain_enabled` (default false)
+  **and** `rover.reward` is set. Missing reward skips with
+  `reason=isaac_reward_block_required`. Vision fine-tune stays MuJoCo until
+  `render_rgb` exists.
 - PPO export is **out of scope** (catalog F-047 deferred). Do not hot-load
   a PPO graph into `vla/policy.py` or the 3-DoF world-model engine.
 - Do not add `MetricsConfig.track_isaac_sim`. Do not commit `.usd`.
@@ -315,7 +319,7 @@ replace CHARTER M5 (MuJoCo is the CI-trainable physics backend).
   original draft of this ADR but the artifact lives outside this repo —
   the linked planning docs hold the current source of truth).
 - Phase A stub: [`src/mousedroid/sim/isaaclab/rover_env.py`](../../src/mousedroid/sim/isaaclab/rover_env.py)
-  (3 `TODO(Phase B)` markers at lines 108, 146, 180)
+  (`build` / `reset` / `step` are implemented; live Sim validation remains operator-side)
 - Mock backend (reference contract):
   [`src/mousedroid/sim/mock_rover_env.py`](../../src/mousedroid/sim/mock_rover_env.py)
 - Constants module (joint / link names):

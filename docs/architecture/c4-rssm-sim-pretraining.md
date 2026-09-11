@@ -16,7 +16,8 @@ Container_Boundary(train, "Offline training (PipelineOrchestrator rssm phase)") 
 
     Component_Boundary(sim, "Simulation (sim/)") {
         Component(env, "RoverEnvProtocol", "mujoco | isaac_lab", "Skid-steer physics; obs-parity with MockRoverEnv; Isaac optional")
-        Component(mjcf, "mse6_4wd.xml", "MJCF asset", "Chassis + 4 wheels + walls + accel/gyro + N-sector rangefinder + camera")
+        Component(mjcf, "mse6_4wd.xml", "MJCF asset", "MuJoCo chassis + 4 wheels + walls + rangefinder + camera")
+        Component(usd, "mse6_4wd.usd", "USD (operator-local)", "Isaac Lab articulation; generated, gitignored")
         Component(render, "render_rgb()", "mujoco.Renderer", "Lazy offscreen RGB (vision fine-tune only)")
         Component(dr, "DomainRandomizer", "config ranges", "Per-episode friction/slip/mass/motor_gain")
     }
@@ -41,7 +42,8 @@ Component(factory, "factory/world_model.py", "DI", "build_rover_env / build_rssm
 ComponentDb(ckpt, "Checkpoints", "weights_dir", "rssm_pretrained.pt / rssm_vision_finetuned.pt")
 
 Rel(factory, env, "builds (backend=mujoco or isaac_lab)")
-Rel(env, mjcf, "loads + splices lidar fan")
+Rel(env, mjcf, "loads when backend=mujoco")
+Rel(env, usd, "loads when backend=isaac_lab")
 Rel(env, render, "exposes")
 Rel(gen, env, "reset/step")
 Rel(gen, render, "renders (vision)")
@@ -106,6 +108,11 @@ skips (byte-identical). Vision-on fine-tune stays MuJoCo until Isaac grows
 
 Isaac `lidar_dim` is sized from `RoverObservationConfig.lidar_num_sectors`,
 not hardware `LidarConfig`. Battery voltage for the adapter is
-`rover.sim.battery_voltage_const_v`. Training metrics stay on MLflow; there is
-no Prometheus `track_isaac_sim` family.
+`rover.sim.battery_voltage_const_v` (parent field; the nested MuJoCo
+`battery_voltage_const_v` stays at 12.0 for YAML compat and is unused by
+the adapter). Isaac RSSM skips when `rover.reward is None`
+(`reason=isaac_reward_block_required`). Training metrics stay on MLflow;
+there is no Prometheus `track_isaac_sim` family. Live `build()` wires
+contact only; IMU/LiDAR are duck-typed readers. Replicator is a
+present-check, not a write.
 

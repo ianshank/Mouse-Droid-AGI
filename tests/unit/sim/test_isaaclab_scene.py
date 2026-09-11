@@ -38,6 +38,12 @@ def test_usd_path_override_wins() -> None:
     assert resolve_usd_path("a.urdf", "/tmp/custom.usd") == "/tmp/custom.usd"
 
 
+def test_usd_path_override_keeps_nonstandard_suffix() -> None:
+    """Operator override is trusted; a non-.usd suffix is not jailed."""
+    assert resolve_usd_path("a.urdf", "/tmp/custom.usda") == "/tmp/custom.usda"
+    assert resolve_usd_path("a.urdf", "/tmp/custom.bin") == "/tmp/custom.bin"
+
+
 class _CfgWithNumEnvs:
     def __init__(self, dt: float, device: str, num_envs: int = 1) -> None:
         self.dt = dt

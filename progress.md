@@ -24,6 +24,11 @@ None.
 - F-048 `3b52789` — HARNESS_SPEC §16 + C4 / ADR-009 addenda. No Prometheus Isaac family.
 - F-047 / F-049 remain `deferred` (PPO hot-load / Cosmos).
 
+**Follow-up (same day).** RSSM skips Isaac when `rover.reward is None`
+(`isaac_reward_block_required`); `env.build()` moved into `asyncio.to_thread`.
+Honest contact-only `build()` docs; Replicator present-check; `*.usd`
+gitignored; `.claude/skills/isaac-lab-workstation/SKILL.md`.
+
 No CHARTER §3 carve-out. Do not add `config/*.yaml` Isaac keys. Do not un-zero
 `battery_critical_v`.
 

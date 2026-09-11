@@ -7,7 +7,11 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from mousedroid.sim.kinematics import body_velocity_to_wheels, wheels_to_body_velocity
+from mousedroid.sim.kinematics import (
+    body_velocity_to_wheels,
+    policy_action_to_body,
+    wheels_to_body_velocity,
+)
 
 _finite = st.floats(min_value=-30.0, max_value=30.0, allow_nan=False, allow_infinity=False)
 _radius = st.floats(min_value=0.01, max_value=0.2, allow_nan=False, allow_infinity=False)
@@ -32,8 +36,18 @@ def test_body_wheels_round_trip(vx: float, omega: float, radius: float, track: f
     assert omega2 == pytest.approx(omega, rel=1e-5, abs=1e-6)
 
 
-@given(left=_finite, right=_finite)
+@given(left=_finite, right=_finite, radius=_radius, track=_track)
 @settings(max_examples=40)
-def test_policy_clip_fan_out_is_finite(left: float, right: float) -> None:
+def test_policy_clip_fan_out_is_finite(
+    left: float, right: float, radius: float, track: float
+) -> None:
     action = np.array([left, right], dtype=np.float32)
-    assert np.isfinite(action).all()
+    body = policy_action_to_body(
+        action,
+        mode="differential",
+        wheel_radius_m=radius,
+        track_width_m=track,
+    )
+    assert np.isfinite(body).all()
+    assert body.shape == (3,)
+    assert body[1] == pytest.approx(0.0)

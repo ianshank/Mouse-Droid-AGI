@@ -26,9 +26,13 @@ This is not optional and it is not the same as `pip install -e ".[dev]"`.
 
 The `test` job in `.github/workflows/ci.yml` installs `[dev,telemetry,mcp]`.
 A bare `[dev]` environment is missing Pillow (`[telemetry]`) and the MCP SDK
-(`[mcp]`), which produces dozens of failures and several `mypy` errors that do
-not exist on CI and are not defects in your change. Chasing them is pure lost
-time. If a gate is red, confirm the extras before reading the traceback.
+(`[mcp]`), which produces dozens of failures and several `mypy` errors that
+do not exist on CI and are not defects in your change. Chasing them is pure
+lost time. If a gate is red, confirm the extras before reading the traceback.
+
+`make install-isaac` adds the `[isaac]` extra for a Linux + Isaac Sim
+workstation. **Do not** use it on CI or the Jetson. Hosted CI never installs
+Isaac Lab; always-on fakes + `passed > 0` are the Golden Rule.
 
 The one-shot equivalent of everything below is `bash scripts/ci.sh`. Run the
 ladder by hand when you want to fail fast; run the script when you want the

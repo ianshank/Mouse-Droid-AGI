@@ -22,6 +22,9 @@ freeze:
     # extend the freeze; no code change is required.
     frozen_paths:
         - src/mousedroid/arm/**
+    # Isaac Lab (`src/mousedroid/sim/isaaclab/**`) is an opt-in workstation
+    # training extra, not frozen. Do not add it here — F-008 freeze is arm
+    # hardware readiness, not sim.
     override_env: MOUSEDROID_WORKFORCE_ALLOW_FROZEN
 
 # Edit-time secret scan. Reuses the repository's existing scanner and its

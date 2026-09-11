@@ -1320,8 +1320,9 @@ features:
     implemented_in: "3b5278925169701cca6f1d7cb6116481608c85cc"
     depends_on: ["F-043"]
     notes: >-
-      Do not invent a second DR schema. Do not parallel this with F-044
-      on two worktrees — both land in rover_env.py.
+      Do not invent a second DR schema. Replicator is a present-check;
+      this slice does not write Omniverse attributes. Do not parallel
+      this with F-044 on two worktrees — both land in rover_env.py.
 
   - id: "F-046"
     epic: "Isaac Lab workstation"
@@ -1339,14 +1340,17 @@ features:
     tier: "slow"
     verification:
       - "mock + rssm_pretrain_enabled still skips"
-      - "isaac_lab + enabled invokes the training runner (factory env, no live Sim)"
+      - "isaac_lab + enabled + reward invokes the training runner (factory env, no live Sim)"
+      - "isaac_lab without rover.reward skips (isaac_reward_block_required)"
       - "lidar_dim follows observation.lidar_num_sectors for isaac_lab"
       - "vision fine-tune still skips for isaac_lab"
     validation_command: "bash scripts/validations/F-046.sh"
     implemented_in: "3b5278925169701cca6f1d7cb6116481608c85cc"
     depends_on: ["F-044", "F-045"]
     notes: >-
-      Default-OFF flags unchanged. Do not hot-load PPO into the 30 Hz loop.
+      Default-OFF flags unchanged. Isaac without rover.reward skips.
+      env.build() runs inside asyncio.to_thread. Do not hot-load PPO
+      into the 30 Hz loop.
 
   - id: "F-047"
     epic: "Isaac Lab workstation"

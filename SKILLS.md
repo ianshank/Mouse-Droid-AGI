@@ -777,6 +777,7 @@ repeated here.
 | `evidence-commit` | active | Committing evidence artifacts to `reports/` and linking them from `features.yaml` |
 | `gate-ladder` | active | Running the pre-push gate ladder in `scripts/ci.sh` order with the correct extras installed |
 | `jetson-smoke` | active | Tiered Jetson smoke testing with operator consent gates for live actuation |
+| `isaac-lab-workstation` | active | Opt-in Isaac Lab rover training backend — nested schema, fakes, RSSM gates, no YAML keys, no USD commits |
 | `mcp-audit` | active | Auditing MCP server configuration, secretless expansion, or worktree state |
 | `module-split-consistency-sweep` | active | After splitting a god file into a package or a god class into mixins — catching MRO-shadowed dead code, wrong `mock.patch` targets, wholesale-copied dead imports, stale doc references, and coverage/hardcoded-value gate dilution |
 | `narrative-correction-sweep` | active | Correcting a false claim across every live prose surface via a whole-file, whitespace-normalized `git ls-files` sweep, proven against the original wording |
